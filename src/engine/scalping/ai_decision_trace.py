@@ -280,14 +280,15 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
         lock_ms = (write_started - lock_started) * 1000
         descriptor = -1
         entry_name = generation.logical.name
-        key_field = next((field for prefix, field in (
+        index_field = next((field for prefix, field in (
             ('ai_decision_payloads_', 'request_envelope_sha256'),
             ('ai_decision_prompts_', 'prompt_sha256'),
             ('ai_decision_requests_', 'request_id'),
             ('ai_decision_trace_', 'decision_trace_id'),
             ('ai_decision_outcomes_', 'label_id'),
             ('ai_canonical_context_candidates_', 'candidate_sha256'))
-            if path.name.startswith(prefix) and payload.get(field)), None)
+            if path.name.startswith(prefix)), None)
+        key_field = index_field if index_field and payload.get(index_field) else None
         try:
             if key_field:
                 from src.engine.scalping import trace_dedup
@@ -337,8 +338,10 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
             if created:
                 generation.fsync_parent()
                 generation.assert_name_identity(entry_name, final_identity)
-            if key_field:
-                trace_dedup.appended(path, key_field, payload, generation, descriptor)
+            if index_field:
+                from src.engine.scalping import trace_dedup
+                trace_dedup.appended(path, index_field, payload, descriptor,
+                    previous_identity=opened_identity, encoded=encoded)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)

@@ -17,6 +17,7 @@ from src.engine.scalping import reversal_extended_union as A
 from src.engine.scalping.continuous_reversal_postclose import digest, file_hash
 
 SCHEMA = 'continuous_reversal_policy_v6'
+CODE_REFRESH_AUTHORITY = 'reviewed_identical_policy_code_refresh'
 
 
 def contract_modules():
@@ -202,7 +203,199 @@ def _validate_sources(bundle, data_root, *, code_root=None):
             p=Path(record['path'])
             if N._source_hash(str(p),N._signature(p))!=record['sha256']:
                 raise ValueError('v6_actual_response_source_changed')
+    if f.get('code_refresh') is not None:
+        _validate_code_refresh(bundle, data_root)
     return bundle
+
+
+def _behavioral_family(family):
+    """Code/reseal identities may change; all trading and evidence fields stay."""
+    value = copy.deepcopy(family)
+    for key in ('contract_file_sha256', 'execution_code_sha256', 'release_commit',
+                'family_sha256', 'machine_report_sha256', 'auxiliary_report_sha256',
+                'report_file_sha256', 'execution_manifest_hash', 'code_refresh'):
+        value.pop(key, None)
+    native = value.pop('native_parent_bundle', None)
+    if native is not None:
+        value['native_parent_family'] = _behavioral_family(native['continuous_reversal'])
+    for cell in value['machine_cells'].values():
+        for route in cell['routes'].values():
+            route.pop('scope_execution_hash', None)
+    return value
+
+
+def _validate_code_refresh(bundle, data_root):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    f = bundle['continuous_reversal']; proof = f['code_refresh']
+    if (f['effective_mode'] != 'next_session'
+            or proof.get('schema') != 'main_identical_policy_code_refresh_v1'
+            or proof.get('authority') != CODE_REFRESH_AUTHORITY
+            or proof.get('policy_reselected') is not False
+            or proof.get('provider_called') is not False or not proof.get('reason')
+            or not re.fullmatch('[0-9a-f]{64}', str(proof.get('source_bundle_sha256')))
+            or not re.fullmatch('[0-9a-f]{40}', str(proof.get('activation_parent_origin_commit')))
+            or not Path(str(proof.get('activation_parent_origin_root',''))).is_absolute()):
+        raise ValueError('v6_code_refresh_proof_invalid')
+    p = N.root(Path(data_root))/'generations'/(proof['source_bundle_sha256']+'.json')
+    N._signature(p)
+    original = N._read(p)
+    N.validate(original, target_date=bundle['target_date'])
+    if (original['bundle_sha256'] != proof['source_bundle_sha256']
+            or _behavioral_family(original['continuous_reversal']) != _behavioral_family(f)):
+        raise ValueError('v6_code_refresh_policy_changed')
+    allowed = {'continuous_reversal', 'generated_at', 'source_file_sha256',
+               'source_artifact_sha256', 'bundle_sha256'}
+    if ({k:v for k,v in bundle.items() if k not in allowed}
+            != {k:v for k,v in original.items() if k not in allowed}):
+        raise ValueError('v6_code_refresh_bundle_changed')
+    return original
+
+
+def _write_refreshed_bundle(original, data_root, *, release_commit, proof):
+    """Private, immutable generation builder after origin attestation."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    root = N.root(Path(data_root))
+    bundle = copy.deepcopy(original); f = bundle['continuous_reversal']
+    if f['schema'] not in {V4.SCHEMA, SCHEMA}:
+        raise ValueError('v6_code_refresh_schema_unsupported')
+    if f['schema'] == SCHEMA:
+        f['native_parent_bundle'] = _write_refreshed_bundle(
+            f['native_parent_bundle'], data_root, release_commit=release_commit, proof=None)
+        f['code_refresh'] = proof
+    modules = contract_modules() if f['schema'] == SCHEMA else V4.contract_modules()
+    f['contract_file_sha256'] = {Path(m.__file__).name:file_hash(m.__file__) for m in modules}
+    f['release_commit'] = release_commit
+    if f['schema'] == SCHEMA:
+        f['execution_code_sha256'] = digest(f['contract_file_sha256'])
+        for key, route in scopes():
+            cell = f['machine_cells'][key]['routes'][route]
+            ids = [b['branch_id'] for b in cell['payload']['branches']]
+            cell['scope_execution_hash'] = scope_hash(ids, f['auxiliary_cells'][key]['routes'][route]['payload'],
+                                                     cell['backend'], f['execution_code_sha256'])
+        f['execution_manifest_hash'] = digest({scope_id(k,r):f['machine_cells'][k]['routes'][r]['scope_execution_hash'] for k,r in scopes()})
+    for name in ('machine','auxiliary'):
+        old_path = root/'sources'/('reversal-'+original['continuous_reversal'][name+'_report_sha256']+'.json')
+        report = copy.deepcopy(N._read(old_path))
+        old_sha = file_hash(old_path)
+        if old_sha != original['continuous_reversal']['report_file_sha256'][name]:
+            raise ValueError('v6_code_refresh_report_changed')
+        report['source_receipts'] = report.get('source_receipts',[]) + [dict(path=str(old_path.resolve()),sha256=old_sha)]
+        report['cells'] = [copy.deepcopy(f[name+'_cells'][c['key']]) for c in report['cells']]
+        if f['schema'] == SCHEMA and name == 'machine':
+            report['execution_code_sha256'] = f['execution_code_sha256']
+        if name == 'auxiliary':report['machine_report_sha256'] = f['machine_report_sha256']
+        report['artifact_content_sha256'] = digest({k:v for k,v in report.items() if k!='artifact_content_sha256'})
+        path = root/'sources'/('reversal-'+report['artifact_content_sha256']+'.json')
+        N._atomic_write_json(path,report)
+        f[name+'_report_sha256'] = report['artifact_content_sha256']
+        f['report_file_sha256'][name] = file_hash(path)
+    f['family_sha256'] = digest({k:v for k,v in f.items() if k!='family_sha256'})
+    source = dict(schema=f['schema'],source_date=bundle['source_date'],target_date=bundle['target_date'],
+                  continuous_reversal=f,artifact_content_sha256=digest(f))
+    provisional = root/'sources'/(digest(source)+'.json')
+    N._atomic_write_json(provisional,source)
+    source_path = root/'sources'/(file_hash(provisional)+'.json')
+    N._atomic_write_json(source_path,source)
+    bundle.update(generated_at=datetime.now(K.KST).isoformat(),source_file_sha256=file_hash(source_path),
+                  source_artifact_sha256=digest(f))
+    bundle['bundle_sha256'] = digest({k:v for k,v in bundle.items() if k!='bundle_sha256'})
+    N.validate(bundle,target_date=bundle['target_date'])
+    N._validate_bundle_sources(bundle,Path(data_root))
+    N._atomic_write_json(root/'generations'/(bundle['bundle_sha256']+'.json'),bundle)
+    return bundle
+
+
+def _attested_activation_parent(data_root, target_date, *, origin_root, origin_commit):
+    """Validate the unchanged active bundle in the previous reviewed release.
+
+    A policy may have outlived several code-only deployments. Its complete
+    strict validator, not the policy's old release label, proves unchanged pins.
+    This path is exclusive to staging/activating an explicit code refresh.
+    """
+    import os
+    import subprocess
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure.runtime_release_router import _release_identity
+    origin = Path(origin_root).resolve(strict=True)
+    identity = _release_identity(Path(data_root).resolve().parent,str(origin/'src'),
+                                 'code_refresh_activation_parent',origin_commit)
+    if identity['source_integrity'] != 'git_commit_and_clean_runtime_source':
+        raise ValueError('v6_code_refresh_activation_origin_unattested')
+    script = ('import sys; from pathlib import Path; '
+              'from src.engine.scalping import mechanistic_entry_runtime_policy as N; '
+              'b=N._load_current_uncached(Path(sys.argv[1]),sys.argv[2]); '
+              'print(b["bundle_sha256"] if b else "none")')
+    result = subprocess.run([str(origin/'.venv/bin/python'),'-c',script,str(Path(data_root).resolve()),target_date],
+        text=True,check=True,capture_output=True,timeout=120,cwd=origin,env={**os.environ,'PYTHONPATH':str(origin)})
+    ident = result.stdout.strip()
+    if not re.fullmatch('[0-9a-f]{64}',ident):
+        raise ValueError('v6_code_refresh_activation_parent_missing')
+    bundle = N._read(N.root(Path(data_root))/'generations'/(ident+'.json'))
+    N.validate(bundle,target_date=bundle['target_date'])
+    if bundle['bundle_sha256'] != ident:
+        raise ValueError('v6_code_refresh_activation_parent_changed')
+    return bundle
+
+
+def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
+                       origin_root, activation_parent_origin_root, activation_parent_origin_commit, release_commit,
+                       reason, confirm, now=None):
+    """Rebind an issued next-session candidate; no activation or reselection.
+
+    The current pointer, dates, memberships, thresholds, auxiliary evidence and
+    registration authority are unchanged. A sealed successor replaces only
+    the exact candidate after both immutable predecessors have been verified.
+    """
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure.runtime_release_router import _release_identity
+    if (confirm != CODE_REFRESH_AUTHORITY or not str(reason).strip()
+            or not re.fullmatch('[0-9a-f]{40}',str(release_commit))
+            or not re.fullmatch('[0-9a-f]{40}',str(activation_parent_origin_commit))):
+        raise ValueError('v6_code_refresh_authority_required')
+    clock = now or datetime.now(K.KST)
+    if clock.tzinfo is None or target_date <= clock.astimezone(K.KST).date().isoformat():
+        raise ValueError('v6_code_refresh_future_candidate_required')
+    data_root = Path(data_root).absolute(); root = N.root(data_root)
+    code_root = Path(__file__).resolve().parents[3]
+    identity = _release_identity(data_root.resolve().parent,str(code_root/'src'),
+                                 'code_refresh_candidate',release_commit)
+    if identity['source_integrity'] != 'git_commit_and_clean_runtime_source':
+        raise ValueError('v6_code_refresh_release_unattested')
+    with (root/'publisher.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        path = root/'candidates'/('policy_'+target_date+'.json')
+        original = N._read(path); f = original['continuous_reversal']
+        N.validate(original,target_date=target_date)
+        if (original['bundle_sha256'] != expected_bundle_sha256 or f['schema'] != SCHEMA
+                or f['effective_mode'] != 'next_session'):
+            raise ValueError('v6_code_refresh_candidate_cas_failed')
+        current = N._read(root/'current.json')
+        if current['bundle_sha256'] != f['parent_bundle_sha256']:
+            raise ValueError('v6_code_refresh_activation_parent_changed')
+        current_pins = {Path(m.__file__).name:file_hash(m.__file__) for m in contract_modules()}
+        if f['release_commit'] == release_commit and f['contract_file_sha256'] == current_pins:
+            N._validate_bundle_sources(original,data_root)
+            return original
+        N._validate_bundle_sources(original,data_root,historical_code_root=origin_root)
+        active = _attested_activation_parent(data_root,target_date,origin_root=activation_parent_origin_root,
+                                             origin_commit=activation_parent_origin_commit)
+        if active is None or active['bundle_sha256'] != current['bundle_sha256']:
+            raise ValueError('v6_code_refresh_activation_parent_changed')
+        proof = dict(schema='main_identical_policy_code_refresh_v1',authority=confirm,
+            source_bundle_sha256=expected_bundle_sha256,origin_root=str(Path(origin_root).resolve()),
+            activation_parent_origin_root=str(Path(activation_parent_origin_root).resolve()),
+            activation_parent_origin_commit=activation_parent_origin_commit,
+            reason=reason,policy_reselected=False,provider_called=False)
+        # Keep the attested original generations addressable after the pointer
+        # moves. Do not modify the active pointer or any original source bytes.
+        generation = root/'generations'/(original['bundle_sha256']+'.json')
+        if not generation.is_file() or N._read(generation) != original:
+            raise ValueError('v6_code_refresh_original_generation_missing')
+        successor = _write_refreshed_bundle(original,data_root,release_commit=release_commit,proof=proof)
+        if N._read(root/'current.json') != current or N._read(path) != original:
+            raise ValueError('v6_code_refresh_parent_changed_during_stage')
+        N._atomic_write_json(path,successor)
+        return successor
 
 
 def assess(family, snapshot, *, symbol, session):
@@ -321,7 +514,17 @@ def activate(data_root,target_date,*,now=None,intraday_evidence=None):
                     or _identity(e['pid_identity']['pid'])!=e['pid_identity'] or e['pid_identity']['cwd']!=str(selected/'src')
                     or file_hash(e['consumed_path'])!=e.get('consumed_sha256')):
                 raise ValueError('v6_intraday_code_pid_not_verified')
-        parent = N.load_effective(data_root=Path(data_root),target_date=target_date)
+        try:
+            parent = N.load_effective(data_root=Path(data_root),target_date=target_date)
+        except ValueError as exc:
+            proof = f.get('code_refresh')
+            if not proof or not str(exc).startswith(('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:')):
+                raise
+            # Only an explicitly staged identical-policy successor can cross
+            # this boundary. Runtime loads never use historical validation.
+            _validate_code_refresh(bundle, data_root)
+            parent = _attested_activation_parent(Path(data_root),target_date,
+                origin_root=proof['activation_parent_origin_root'],origin_commit=proof['activation_parent_origin_commit'])
         if parent and parent['bundle_sha256'] == bundle['bundle_sha256']:
             return dict(status='already_active',bundle_sha256=bundle['bundle_sha256'])
         if not parent or parent['bundle_sha256'] != f['parent_bundle_sha256']:

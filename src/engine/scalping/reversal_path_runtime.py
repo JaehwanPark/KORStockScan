@@ -336,7 +336,7 @@ def restore_session_anchors(data_root, day):
                                 or not 0 <= received.timestamp()-exchanged.timestamp() <= 5
                                 or type(r['sequence_epoch']) is not int or type(r['series_sequence']) is not int or r['series_sequence'] <= 0):
                             continue
-                        from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+                        from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                         if item.split('_',1)[0] != code or _explicit_item_venue(item) != venue:
                             continue
                         key = code, venue, item, K.market_bucket(r['session_bucket']), day
@@ -360,7 +360,7 @@ def observe_normalized(symbol, session, envelope):
     venue = 'SOR' if envelope.get('market_route') == 'krx_nxt_integrated' else envelope.get('effective_venue')
     if venue not in C.ROUTES.get(K.market_bucket(session), ()):
         return
-    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
     item = envelope.get('item')
     if not isinstance(item,str) or item.split('_',1)[0] != symbol or _explicit_item_venue(item) != venue:
         return

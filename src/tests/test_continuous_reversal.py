@@ -167,6 +167,8 @@ def test_reversal_reports_reach_runtime_summary_and_nextday_projection(tmp_path,
     monkeypatch.setattr(consumer, 'REPORT_DIR', tmp_path / 'report/main_ai_prompt_consumer')
     consumer_report = consumer.build_report('2026-10-06', write=True)
     assert consumer_report['status'] == 'ready_continuous_reversal_handoff'
+    assert consumer_report['compact_auxiliary']['contract_scope_count'] == 12
+    assert consumer_report['compact_auxiliary']['operating_scope_count'] is None
     assert consumer_report['primary_decision_metric'] == 'actual_raw_PASS_win_fraction'
     assert consumer_report['sample_floor'] is None
     assert consumer_report['provider_call_performed'] is consumer_report['actual_pid_consumed'] is False
@@ -245,11 +247,14 @@ def test_final_detector_consumes_reversal_native_reports_without_legacy_gates(tm
         (native.root(data) / 'policy_2026-10-07.json').write_text('{}')
     fn = detector._machine_result_semantics if component == 'machine' else detector._auxiliary_result_semantics
     result = fn(tmp_path, '2026-10-06')
-    expected = 'unobservable' if defect == 'running' else 'source_invalid' if defect else 'cumulative_winrate_selected'
+    expected = 'unobservable' if defect == 'running' else 'source_invalid' if defect else 'published_policy'
     assert result['status'] == expected
     if not defect:
         assert result['findings'] == [] and len(result['cells']) == 12
         assert result['realized_profit_assessed'] is result['runtime_effect'] is False
+        # This historical fixture has no comparison-complete receipt. Valid
+        # publication proves handoff, not comparison-selected adoption.
+        assert result['policy_states']['adoption_basis'] == 'not_applicable'
     elif defect != 'running':
         assert detector._semantic_alerts(result.get('stage_id', 'main_machine_policy'), result, '2026-10-06')
 

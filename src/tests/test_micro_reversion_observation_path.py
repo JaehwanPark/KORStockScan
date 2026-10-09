@@ -192,7 +192,7 @@ def test_nonblocking_writer_records_queue_drop(tmp_path: Path, monkeypatch) -> N
     entered = threading.Event()
     release = threading.Event()
 
-    def blocked_append(path, points):
+    def blocked_append(path, points, *, encoded=None):
         entered.set()
         release.wait(timeout=2)
 
@@ -227,7 +227,7 @@ def test_close_does_not_depend_on_queue_shutdown_marker(
     release = threading.Event()
     close_errors: list[Exception] = []
 
-    def blocked_append(path, points):
+    def blocked_append(path, points, *, encoded=None):
         entered.set()
         release.wait(timeout=2)
 

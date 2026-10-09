@@ -144,14 +144,20 @@ def _record_market_weakness_health(
     observation = _effective_market_weakness_observation(report_file, report)
     source_ready = (observation.get("notifier_source_gate") or {}).get("passed") is True
     ready = source_ready and status not in MARKET_WEAKNESS_UNHEALTHY_STATUSES
-    latch = state.get("market_weakness") or {}
+    latch = state.get("market_weakness")
+    latch = latch if isinstance(latch, dict) else {}
+    if latch:
+        _refresh_market_weakness_pending(latch, observation if ready else {})
+        state["market_weakness"] = latch
     observation_as_of = str(observation.get("as_of") or "")
     observation_id = str(observation.get("observation_id") or "")
+    accepted_gate = latch.get("last_source_gate")
+    accepted_gate = accepted_gate if isinstance(accepted_gate, dict) else {}
     accepted = bool(
         ready
         and latch.get("last_observation_id") == observation_id
         and latch.get("last_observation_as_of") == observation_as_of
-        and (latch.get("last_source_gate") or {}).get("passed") is True
+        and accepted_gate.get("passed") is True
     )
     health = {
         "schema": MARKET_WEAKNESS_HEALTH_SCHEMA,
@@ -279,8 +285,12 @@ def _parse_iso_timestamp(value: object) -> float | None:
     try:
         from datetime import datetime
 
-        return datetime.fromisoformat(text).timestamp()
-    except (TypeError, ValueError):
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            # The local panic report uses KST even on a UTC host.
+            parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        return parsed.timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
         return None
 
 
@@ -431,6 +441,7 @@ def _fmt_pct(value: object) -> str:
 
 
 def _market_weakness_message(observation: dict, transition: str, state: dict) -> str:
+    active_markets = _normalized_markets(state.get("active_markets"))
     evidence = (
         observation.get("evidence")
         if isinstance(observation.get("evidence"), dict)
@@ -443,54 +454,41 @@ def _market_weakness_message(observation: dict, transition: str, state: dict) ->
     )
     activation_required = _safe_int(state.get("activation_unique_observations"), 2)
     release_required = _safe_int(state.get("release_unique_observations"), 3)
-    bridge_active = bool(
-        str(state.get("phase") or "") in {"active", "release_pending"}
-        and state.get("active_markets")
-    )
     if transition == "release":
-        title = "✅ 시장 약세 관찰 해제"
+        title = "✅ 시장 약세 관찰 회복"
         body = (
             "약세 임계치에서 충분히 벗어난 회복 근거가 "
             f"{release_required}회 연속 확인되었습니다."
         )
     elif transition == "update":
-        if len(state.get("active_markets") or []) == 2:
-            title = "🔄 시장 전반 약세로 확산"
-            body = "두 시장의 약세가 각각 확인되어 적용 범위가 확대되었습니다."
+        if len(active_markets) == 2:
+            title = "🔄 시장 약세 관찰 범위 확대"
+            body = "두 시장의 약세가 각각 확인되어 관찰 범위가 확대되었습니다."
         else:
-            title = "🔄 시장 약세 적용 범위 변경"
-            body = "시장별 약세·회복 확인 결과에 따라 적용 범위가 변경되었습니다."
+            title = "🔄 시장 약세 관찰 범위 변경"
+            body = "시장별 약세·회복 확인 결과에 따라 관찰 범위가 변경되었습니다."
     elif transition == "status":
         title = "ℹ️ 시장 약세 관찰 상태"
         body = "현재 source-only 시장 약세 관찰 상태입니다."
-    elif len(state.get("active_markets") or []) == 2:
-        title = "🟠 시장 전반 약세 지속"
+    elif len(active_markets) == 2:
+        title = "🟠 시장 약세 관찰 활성"
         body = (
             "지수와 시장 breadth의 약세가 "
             f"{activation_required}회 연속 확인되었습니다."
         )
     else:
-        title = "⚠️ 한쪽 시장 약세 지속 관찰"
+        title = "⚠️ 한쪽 시장 약세 관찰 활성"
         body = (
             "한쪽 시장 약세와 이를 뒷받침하는 하락 breadth가 "
             f"{activation_required}회 연속 확인되었습니다."
-        )
-    if bridge_active:
-        bridge_response = (
-            "- 실행 bridge: 해당 시장 위젯·에피소드 신규·추가 매수 차단 · "
-            "exact-owner 미체결 BUY는 broker 대사 후 잔량 취소"
-        )
-    else:
-        bridge_response = (
-            "- 실행 bridge: 위젯·에피소드 매수 차단 해제 · 유효 신호 재평가"
         )
     return "\n".join(
         [
             title,
             body,
             (
-                "- 적용 시장: "
-                + (", ".join(state.get("active_markets") or []) or "해제/확인중")
+                "- 관찰 시장: "
+                + (", ".join(active_markets) or "해제/확인중")
             ),
             f"- 지수: KOSPI {_fmt_pct(indices.get('KOSPI'))} / KOSDAQ {_fmt_pct(indices.get('KOSDAQ'))}",
             (
@@ -507,11 +505,64 @@ def _market_weakness_message(observation: dict, transition: str, state: dict) ->
                 f"{_safe_int(state.get('recovery_streak'))}/"
                 f"{_safe_int(state.get('release_unique_observations'), 3)}회"
             ),
-            "- 관찰 owner: source-only 상태·반사실 수집",
-            bridge_response,
-            "- 비영향: 메인봇·보유·매도·목표 주문 변경 없음",
+            "- 관찰 owner: source-only 시장 상태 관찰",
+            "- 활용: 기존 자료의 장후 연구 대상",
+            "- 매매 영향 없음: 신규·추가 매수·주문 취소·보유·매도 자동 변경 없음",
         ]
     )
+
+
+def _refresh_market_weakness_pending(current: dict, observation: dict) -> bool:
+    """Rebuild pending copy from qualified current evidence, never saved text.
+
+    Mutate only the existing state object; callers persist on their existing
+    delivery/health write path, including duplicate and failed-source calls.
+    """
+    current["runtime_effect"] = False
+    current["allowed_runtime_apply"] = False
+    current["execution_bridge_runtime_effect"] = False
+    pending = current.get("pending_notification")
+    if not isinstance(pending, dict):
+        current.pop("pending_notification", None)
+        return False
+    transition = pending.get("transition")
+    phase = current.get("phase")
+    accepted_gate = current.get("last_source_gate")
+    accepted_gate = accepted_gate if isinstance(accepted_gate, dict) else {}
+    source_gate = observation.get("notifier_source_gate")
+    source_gate = source_gate if isinstance(source_gate, dict) else {}
+    active = bool(_normalized_markets(current.get("active_markets")))
+    observed_at = _parse_iso_timestamp(observation.get("as_of"))
+    accepted_at = _parse_iso_timestamp(current.get("last_observation_as_of"))
+    valid = bool(
+        source_gate.get("passed") is True
+        and accepted_gate.get("passed") is True
+        and _previous_session_key(current) == observation.get("target_date")
+        and current.get("last_observation_id")
+        and observed_at is not None
+        and accepted_at is not None
+        and accepted_at <= observed_at
+        and isinstance(transition, str)
+        and transition in {"start", "update", "release", "status"}
+        and isinstance(phase, str)
+        and phase in {"active", "release_pending", "released", "activation_pending"}
+        and (
+            transition not in {"start", "update"}
+            or (active and phase in {"active", "release_pending"})
+        )
+        and (transition != "release" or (not active and phase == "released"))
+    )
+    if not valid:
+        current.pop("pending_notification", None)
+        return False
+    if observation.get("observation_id") != current.get("last_observation_id"):
+        # A too-close snapshot did not advance the latch. Do not portray an old
+        # activation/recovery transition as confirmed by this newer snapshot.
+        transition = "status"
+        pending["transition"] = transition
+    pending["message"] = _market_weakness_message(observation, transition, current)
+    pending["state"] = observation.get("raw_state")
+    return True
 
 
 def _deliver_market_weakness_pending(
@@ -520,6 +571,7 @@ def _deliver_market_weakness_pending(
     state_file: Path,
     audience: str,
     now: float,
+    observation: dict,
 ) -> str | None:
     current = state.get("market_weakness")
     if not isinstance(current, dict):
@@ -527,6 +579,8 @@ def _deliver_market_weakness_pending(
     pending = current.get("pending_notification")
     if not isinstance(pending, dict):
         return None
+    if not _refresh_market_weakness_pending(current, observation):
+        return "pending_notification_discarded"
     token, admin_id = _load_telegram_config()
     if not token:
         return "missing_config"
@@ -657,7 +711,8 @@ def _notify_market_weakness_from_report(
             _write_state(state_file, state)
         pending_status = (
             _deliver_market_weakness_pending(
-                state, state_file=state_file, audience=audience, now=now
+                state, state_file=state_file, audience=audience, now=now,
+                observation=observation,
             )
             if notification_enabled
             else None
@@ -687,7 +742,8 @@ def _notify_market_weakness_from_report(
             return "source_quality_blocked"
         pending_status = (
             _deliver_market_weakness_pending(
-                state, state_file=state_file, audience=audience, now=now
+                state, state_file=state_file, audience=audience, now=now,
+                observation=observation,
             )
             if notification_enabled
             else None
@@ -824,7 +880,7 @@ def _notify_market_weakness_from_report(
         "report_file": str(report_file),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
-        "execution_bridge_runtime_effect": True,
+        "execution_bridge_runtime_effect": False,
         "state_replay_contract": STATE_REPLAY_CONTRACT,
     }
     if isinstance(previous.get("last_notification"), dict):
@@ -849,7 +905,8 @@ def _notify_market_weakness_from_report(
     if not notification_enabled:
         return "state_updated_notify_disabled"
     pending_status = _deliver_market_weakness_pending(
-        state, state_file=state_file, audience=audience, now=now
+        state, state_file=state_file, audience=audience, now=now,
+        observation=observation,
     )
     if pending_status is not None:
         return pending_status

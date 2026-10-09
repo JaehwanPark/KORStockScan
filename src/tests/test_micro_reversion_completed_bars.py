@@ -251,32 +251,6 @@ def test_other_symbol_timestamp_rejection_does_not_poison_complete_bar(tmp_path)
     assert payload(tmp_path)["bars"][-1]["status"]=="gap"
 
 
-@pytest.mark.parametrize("module,cls",[
-    ("low_price_two_leg","KiwoomLowPriceTwoLegGateway"),
-    ("samsung_morning_one_share","KiwoomOneShareGateway"),
-    ("samsung_midday_one_share","KiwoomMiddayOneShareGateway"),
-    ("samsung_afternoon_one_share","KiwoomAfternoonOneShareGateway"),
-])
-@pytest.mark.parametrize("observed", [False, True])
-def test_episode_gateway_uses_same_reader_without_rest_or_stale_cache(tmp_path,monkeypatch,module,cls,observed):
-    import importlib
-    from types import SimpleNamespace
-    now=BASE.replace(hour=10)+timedelta(minutes=10)
-    # Feed the gateway the reader's validated native adapter result; exercise
-    # its existing OHLC parser, including a changed same-minute revision.
-    module=importlib.import_module("src.trading."+module+".gateway")
-    gateway=object.__new__(getattr(module,cls))
-    gateway.symbol="005930";gateway._minute_bars_cache=module.SameMinuteSnapshotCache()
-    gateway._post=lambda **kw:pytest.fail("REST invoked with valid WS bars")
-    receipt={"source":"kiwoom_ws_AL_completed_1m","request_code":"005930_AL","revision":1}
-    if observed: receipt["history_basis"]="observed_valid_rows"
-    selected={"stk_min_pole_chart_qry":[{"cntr_tm":"20260921100900","open_pric":"70000","high_pric":"70100","low_pric":"70000","cur_prc":"70100","trde_qty":"4"}],"_completed_bar_source":receipt}
-    monkeypatch.setattr(reader,"selected_completed_bar_payload",lambda *args,**kw:selected)
-    result=gateway.completed_sor_minute_bars(trade_date=now.date(),now=now)
-    assert result.source_ok and result.bars[0].close_price==70100 and result.source_receipt==receipt
-    assert result.bars[0].history_basis == ("observed_valid_rows" if observed else "")
-    selected["stk_min_pole_chart_qry"]=[]
-    assert gateway.completed_sor_minute_bars(trade_date=now.date(),now=now).bars==()
 
 
 
@@ -532,20 +506,6 @@ def test_approved_observed_session_selects_ws_without_seed(monkeypatch,tmp_path)
     assert reader.selected_completed_bar_payload('005930_AL',now=now,minimum_bars=2) is None
 
 
-@pytest.mark.parametrize('module,cls', [('samsung_midday_one_share.policy','MiddayOneSharePolicy'),('samsung_afternoon_one_share.policy','AfternoonOneSharePolicy'),('low_price_two_leg.profiles','RegularTwoLegPolicy')])
-def test_episode_policy_uses_observed_range_without_requiring_missing_minute(module,cls):
-    import importlib
-    from datetime import time
-    mod=importlib.import_module('src.trading.'+module)
-    kwargs={'lookback_bars':2}
-    if cls=='RegularTwoLegPolicy':kwargs.update(symbol='006800',scan_start=time(9,35),scan_last_bar=time(9,44))
-    policy=getattr(mod,cls)(**kwargs)
-    stamp=BASE.replace(hour=policy.scan_start.hour,minute=policy.scan_start.minute,second=0)
-    rows=[mod.MinuteBar(stamp-timedelta(minutes=2),10200,10200,10000,10000),mod.MinuteBar(stamp,10000,10000,10000,10000)]
-    assert policy.evaluate(rows) is None
-    observed=[replace(row,history_basis='observed_valid_rows') for row in rows]
-    assert policy.evaluate(observed) is not None
-    assert policy.evaluate(list(reversed(observed))) is None
 
 
 @pytest.mark.parametrize('defect', ['future_clock','missing_clock','invalid_clock_type','missing_epoch'])

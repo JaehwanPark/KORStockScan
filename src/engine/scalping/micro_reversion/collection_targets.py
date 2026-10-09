@@ -1,9 +1,8 @@
-"""Bounded next-session collection feedback for machine microstructure gaps.
+"""Historical collection metadata utilities for isolated archive comparison.
 
-This module turns explicit attribution gaps into an exact-date market-data
-observation set.  It never creates a trading target and never reads the manual
-control exclusion list: manual control is an order boundary, not a research
-data boundary.
+No Main runtime producer imports this module. Boot and WS reject its retired
+feedback commands; these helpers cannot confer subscription or order authority.
+Kept for reading and reproducing immutable historical metadata only.
 """
 
 from __future__ import annotations

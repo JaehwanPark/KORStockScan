@@ -236,9 +236,13 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "dashboard_db_archive",
         "log": "logs/dashboard_db_archive_cron.log",
         "window_start": (20, 50),
-        "window_end": (21, 0),
+        # The producer may wait 90 minutes for exact-date EOD, then compress.
+        # Keep the 22:35 detector cron after this completion deadline.
+        "window_end": (22, 30),
         "mode": "once",
         "critical": False,
+        "trading_day_only": True,
+        "terminal_error_immediate": True,
     },
     {
         "id": "log_rotation_cleanup",

@@ -87,9 +87,6 @@ from src.engine.scalping.position_sizing_allocator import (
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.ai.holding_exit_vote import restore_buy_fill_receipt
-from src.engine.scalping.micro_reversion.collection_targets import (
-    load_exact_date_collection_targets,
-)
 from src.engine.scalping.scanner_runtime_scheduler import (
     SCANNER_DEADLINE_SCHEDULER_VERSION,
     ScannerLane,
@@ -1314,9 +1311,6 @@ def _is_ok_response(res):
     return sniper_trade_utils.is_ok_response(res)
 
 
-def _ws_subscription_is_pinned_observation(code):
-    checker = getattr(WS_MANAGER, "is_pinned_observation_subscription", None)
-    return bool(callable(checker) and checker(code))
 
 
 def _prune_ws_subscriptions_for_inactive_targets(targets):
@@ -1347,15 +1341,6 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
         # normal micro-reversion demotion, which may replace plain/_NX/_AL and
         # silently break the post-sell observer's executable route contract.
         if should_retain_ws_subscription(norm, now_ts=now_ts):
-            continue
-        if _ws_subscription_is_pinned_observation(norm):
-            demote = getattr(
-                WS_MANAGER,
-                "retain_micro_reversion_as_observation_only",
-                None,
-            )
-            if callable(demote):
-                demote(norm)
             continue
         if _is_scanner_promotion_pending_attach(norm, now_ts=now_ts):
             continue
@@ -6099,7 +6084,6 @@ def _expire_scalping_watch_budget_targets(
         code
         for code in sorted(set(expired_codes))
         if code not in active_codes
-        and not _ws_subscription_is_pinned_observation(code)
         and not should_retain_ws_subscription(code)
         and not sniper_state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
             code
@@ -6122,73 +6106,6 @@ def _expire_scalping_watch_budget_targets(
     return expired_targets
 
 
-def _micro_reversion_observer_enabled():
-    return str(
-        os.getenv("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", "") or ""
-    ).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
-
-
-def _publish_micro_reversion_collection_target_set(
-    *, now=None, protected_runtime_codes=()
-):
-    """Publish exact-date observation items without creating runtime targets."""
-
-    current = now or datetime.now().astimezone()
-    target_date = current.date().isoformat()
-    if not _micro_reversion_observer_enabled():
-        return {
-            "status": "observer_disabled",
-            "effective_date": target_date,
-            "registration_items": [],
-        }
-    loaded = load_exact_date_collection_targets(target_date)
-    if loaded.get("status") != "loaded":
-        log_info(
-            "[MICRO_COLLECTION_FEEDBACK] exact-date source-only target not loaded "
-            f"date={target_date} status={loaded.get('status')} "
-            f"path={loaded.get('path')}"
-        )
-        return loaded
-    registration_items = list(loaded.get("registration_items") or ())
-    protected_codes = sorted(
-        {
-            str(code or "").strip()[:6]
-            for code in protected_runtime_codes or ()
-            if len(str(code or "").strip()[:6]) == 6
-            and str(code or "").strip()[:6].isdigit()
-        }
-    )
-    protected_items = sorted(
-        {
-            str(item or "").strip().upper()
-            for item in protected_runtime_codes or ()
-            if str(item or "").strip().upper()
-        }
-    )
-    event_bus.publish(
-        COMMAND_MICRO_REVERSION_OBSERVATION_SET,
-        {
-            "effective_date": target_date,
-            "registration_items": registration_items,
-            "protected_runtime_codes": protected_codes,
-            "protected_runtime_items": protected_items,
-            "source": "machine_microstructure_gap_collection_feedback",
-            "decision_authority": "next_session_market_data_observation_only",
-            "runtime_effect": False,
-            "market_data_subscription_effect": True,
-            "trading_runtime_effect": False,
-            "trading_decision_effect": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "manual_control_exclusion_applied": False,
-        },
-    )
-    log_info(
-        "[MICRO_COLLECTION_FEEDBACK] exact-date source-only target published "
-        f"date={target_date} item_count={len(registration_items)} "
-        f"items={','.join(registration_items) or '-'}"
-    )
-    return loaded
 
 
 def _initial_ws_registration_groups(targets, now_ts=None):
@@ -12996,9 +12913,6 @@ def run_sniper(is_test_mode=False):
             "COMMAND_WS_REG",
             {"codes": scanner_boot_codes, "source": "scanner_boot_hot_ws_budget"},
         )
-    _publish_micro_reversion_collection_target_set(
-        protected_runtime_codes=boot_priority_items + scanner_boot_codes
-    )
 
     last_msg_min = -1
     scanner_ws_reg_last_emit_ts: dict[tuple[str, str], float] = {}

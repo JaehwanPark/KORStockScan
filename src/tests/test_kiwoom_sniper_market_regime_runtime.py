@@ -5733,37 +5733,11 @@ def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch, tmp_p
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
-def test_micro_collection_feedback_publishes_exact_date_source_only_set(monkeypatch):
-    published = []
-    monkeypatch.setenv("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", "true")
-    monkeypatch.setattr(
-        kiwoom_sniper_v2,
-        "load_exact_date_collection_targets",
-        lambda effective_date: {
-            "status": "loaded",
-            "effective_date": effective_date,
-            "registration_items": ["111111_AL", "222222_NX"],
-        },
-    )
-    monkeypatch.setattr(
-        kiwoom_sniper_v2.event_bus,
-        "publish",
-        lambda topic, payload: published.append((topic, payload)),
-    )
-
-    result = kiwoom_sniper_v2._publish_micro_reversion_collection_target_set(
-        now=datetime(2026, 8, 18, 8, 30),
-        protected_runtime_codes=["111111", "333333_AL", "bad"],
-    )
-
-    assert result["status"] == "loaded"
-    assert published[0][0] == "COMMAND_MICRO_REVERSION_OBSERVATION_SET"
-    assert published[0][1]["effective_date"] == "2026-08-18"
-    assert published[0][1]["registration_items"] == ["111111_AL", "222222_NX"]
-    assert published[0][1]["protected_runtime_codes"] == ["111111", "333333"]
-    assert published[0][1]["trading_runtime_effect"] is False
-    assert published[0][1]["market_data_subscription_effect"] is True
-    assert published[0][1]["manual_control_exclusion_applied"] is False
+def test_main_boot_no_longer_imports_or_publishes_retired_collection_targets():
+    import inspect
+    source = inspect.getsource(kiwoom_sniper_v2)
+    assert "load_exact_date_collection_targets" not in source
+    assert "_publish_micro_reversion_collection_target_set" not in source
 
 
 def test_swing_watching_default_off_excludes_ws_and_runtime(monkeypatch):
@@ -11446,7 +11420,7 @@ def test_zero_base_probe_lease_survives_main_ws_prune(monkeypatch):
     assert set(published[0][1]["codes"]) == {"123450", "123460"}
 
 
-def test_ws_prune_retains_widget_price_comparison_subscription(monkeypatch):
+def test_ws_prune_ignores_retired_widget_pinned_hint(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS", "005930_AL")
     published = []
     monkeypatch.setattr(
@@ -11467,7 +11441,7 @@ def test_ws_prune_retains_widget_price_comparison_subscription(monkeypatch):
 
     kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
 
-    assert published == []
+    assert published == [("COMMAND_WS_UNREG", {"codes": ["005930"]})]
 
 
 def test_ws_prune_preserves_post_sell_exact_route_before_observation_demotion(

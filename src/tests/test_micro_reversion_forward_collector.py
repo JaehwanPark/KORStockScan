@@ -117,7 +117,7 @@ def _collector(
             writer_flush_interval_sec=0.01,
             worker_poll_interval_sec=0.01,
         ),
-        detector=detector,
+        detector=detector or MultiHorizonShockDetector(),
     )
     collector.start()
     return collector
@@ -604,14 +604,14 @@ def test_runtime_snapshot_percentiles_do_not_hold_producer_metrics_lock(
     percentile_started = threading.Event()
     release_percentile = threading.Event()
     increment_completed = threading.Event()
-    original_percentile = collector_module._percentile
+    original_percentile = collector_module._percentiles
 
     def slow_percentile(values, percentile):
         percentile_started.set()
         assert release_percentile.wait(timeout=1.0)
         return original_percentile(values, percentile)
 
-    monkeypatch.setattr(collector_module, "_percentile", slow_percentile)
+    monkeypatch.setattr(collector_module, "_percentiles", slow_percentile)
     snapshot_thread = threading.Thread(target=collector.runtime_snapshot)
     snapshot_thread.start()
     assert percentile_started.wait(timeout=1.0)
@@ -1418,6 +1418,7 @@ def test_shutdown_reconciliation_detects_orphan_and_unreferenced_segments(
     tmp_path,
 ) -> None:
     collector = ForwardObservationCollector(
+        detector=MultiHorizonShockDetector(),
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
     )
@@ -1453,6 +1454,7 @@ def test_shutdown_reconciliation_detects_orphan_and_unreferenced_segments(
 
 def test_shutdown_reconciliation_counts_duplicate_references(tmp_path) -> None:
     collector = ForwardObservationCollector(
+        detector=MultiHorizonShockDetector(),
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
     )
@@ -1487,6 +1489,7 @@ def test_shutdown_reconciliation_counts_duplicate_references(tmp_path) -> None:
 
 def test_shutdown_reconciliation_reads_all_rotated_path_shards(tmp_path) -> None:
     collector = ForwardObservationCollector(
+        detector=MultiHorizonShockDetector(),
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
     )
@@ -1529,6 +1532,7 @@ def test_shutdown_reconciliation_reads_all_rotated_path_shards(tmp_path) -> None
 
 def test_canonical_reference_without_stream_is_reported_as_orphan(tmp_path) -> None:
     collector = ForwardObservationCollector(
+        detector=MultiHorizonShockDetector(),
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
     )
@@ -1573,6 +1577,7 @@ def test_canonical_reference_without_stream_is_reported_as_orphan(tmp_path) -> N
 
 def test_canonical_reconciliation_fails_closed_on_authority_drift(tmp_path) -> None:
     collector = ForwardObservationCollector(
+        detector=MultiHorizonShockDetector(),
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
     )

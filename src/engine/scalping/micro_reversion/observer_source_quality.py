@@ -87,13 +87,13 @@ def closed_pre_enqueue_epoch_quarantine_validation(
         or guard.get("stop_reasons") != []
         or guard.get("raw_row_exclusion_required") is not True
         or collector.get("collector_lifecycle") != "closed"
-        or collector.get("reference_reconciliation_completed") is not True
+        or not source_close_verified(collector)
         or collector.get("broker_order_forbidden") is not True
         or any(collector.get(k) is not False for k in CANARY_FORBIDDEN_TRUE_FIELDS)
     ):
         return rejected
     for field in (
-        *CANARY_LOSS_COUNTERS,
+        *source_loss_counters(collector),
         "stale_sequence_epoch_envelope_count",
         "path_exchange_timestamp_regression_count",
         "path_exchange_timestamp_regression_exceeded_count",
@@ -197,7 +197,7 @@ def timestamp_regression_row_quarantine_validation(
         }
     if (
         collector.get("collector_lifecycle") != "closed"
-        or collector.get("reference_reconciliation_completed") is not True
+        or not source_close_verified(collector)
     ):
         return {
             **base,
@@ -228,7 +228,7 @@ def timestamp_regression_row_quarantine_validation(
             "quarantined_row_count": quarantined_count,
         }
     invalid_loss_fields = [
-        field for field in CANARY_LOSS_COUNTERS if exact_nonnegative_int(field) != 0
+        field for field in source_loss_counters(collector) if exact_nonnegative_int(field) != 0
     ]
     if invalid_loss_fields:
         return {
@@ -329,3 +329,72 @@ def timestamp_regression_row_quarantine_validation(
         "quarantined_row_count": quarantined_count,
         "invalid_loss_fields": [],
     }
+
+
+MAIN_SOURCE_CONTRACT = "main_market_source_v1"
+LEGACY_REFERENCE_COUNTERS = frozenset({
+    "event_reference_error_count", "orphan_reference_count", "unreferenced_segment_count",
+    "duplicate_event_reference_count", "duplicate_event_id_count", "duplicate_path_reference_pair_count",
+    "reference_reconciliation_error_count", "event_symbol_mismatch_count",
+})
+
+
+def source_close_verified(collector: Mapping[str, Any]) -> bool:
+    contract = collector.get("source_contract")
+    if contract == MAIN_SOURCE_CONTRACT:
+        return (collector.get("raw_reconciliation_completed") is True
+                and type(collector.get("raw_reconciliation_error_count")) is int
+                and collector["raw_reconciliation_error_count"] == 0)
+    if contract is not None:
+        return False
+    return collector.get("reference_reconciliation_completed") is True
+
+
+def source_loss_counters(collector: Mapping[str, Any]) -> tuple[str, ...]:
+    if collector.get("source_contract") == MAIN_SOURCE_CONTRACT:
+        return tuple(k for k in CANARY_LOSS_COUNTERS if k not in LEGACY_REFERENCE_COUNTERS) + ("raw_reconciliation_error_count",)
+    return CANARY_LOSS_COUNTERS
+
+
+def main_raw_epoch_validation(payload: Mapping[str, Any], *, source_date: str) -> dict[str, Any]:
+    """Closed, hash-receipted Main collector segments only.
+
+    Caller binds these bytes/hash and excludes unrelated collector epochs. A
+    reconciled reconnect remains distinct; ingress quarantine keeps its narrower
+    current-epoch scope. Legacy raw retains its original row contract.
+    """
+    c = payload.get("collector_snapshot") or {};g = payload.get("canary_guard") or {}
+    rejected = {"eligible": False, "status": "main_raw_epoch_contract_invalid", "allowed_sequence_epoch": None}
+    if not isinstance(g,Mapping):return rejected
+    if not isinstance(c, Mapping) or c.get("source_contract") != MAIN_SOURCE_CONTRACT:
+        return {**rejected, "status": "legacy_row_contract" if isinstance(c,Mapping) and c.get("source_contract") is None else "unsupported_source_contract"}
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        generated = datetime.fromisoformat(payload["generated_at"])
+        if generated.tzinfo is None or generated.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat() != source_date:
+            return {**rejected, "status": "source_date_mismatch"}
+    except (KeyError, TypeError, ValueError):
+        return rejected
+    if (c.get("collector_lifecycle") != "closed" or not source_close_verified(c)
+        or g.get("status") != "stopped_clean" or g.get("stop_required") is not False
+        or g.get("stop_reasons") not in ([], ()) or c.get("broker_order_forbidden") is not True
+        or any(c.get(k) is not False for k in CANARY_FORBIDDEN_TRUE_FIELDS)):
+        return rejected
+    for key in source_loss_counters(c):
+        if type(c.get(key)) is not int or c[key] != 0:
+            return {**rejected, "status": "source_loss:" + key}
+    ingress_epoch=None
+    if g.get("raw_row_exclusion_required") is not False:
+        quarantine = timestamp_regression_row_quarantine_validation(g,c)
+        ingress = closed_pre_enqueue_epoch_quarantine_validation(g,c)
+        if not (quarantine.get("eligible") is True or ingress.get("eligible") is True):
+            return {**rejected,"status":"unaccounted_raw_row_exclusion"}
+        if ingress.get('eligible') is True:ingress_epoch=ingress['allowed_sequence_epoch']
+    epoch = c.get("sequence_epoch")
+    if type(epoch) is not int or epoch <= 0:return rejected
+    epochs=c.get('reconciled_sequence_epochs',[epoch])
+    if not isinstance(epochs,(list,tuple)) or not epochs or epoch not in epochs or any(type(e) is not int or e<=0 for e in epochs):return rejected
+    if ingress_epoch is not None:epochs=[ingress_epoch]
+    return {"eligible": True, "status": "closed_main_raw_epoch", "allowed_sequence_epoch": epoch,
+            "allowed_sequence_epochs":sorted(set(epochs)), "whole_date_approval": False}

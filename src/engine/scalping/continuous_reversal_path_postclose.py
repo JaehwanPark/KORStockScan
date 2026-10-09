@@ -73,7 +73,7 @@ def begin_run(data_root,day,publication,parent_bundle,source):
     contract=dict(source_date=day,publication_date=publication,effective_date=publication,
         applied_census_sha256=P.digest(history),completed_bar_receipts=[r['sha256'] for r in frozen],
         parent_bundle_sha256=parent_bundle['bundle_sha256'],
-        registry_sha256=C.SHA256,code=code,label=C.LABEL,source_manifest_sha256=source['artifact_content_sha256'],
+        registry_sha256=C.SHA256,code=code,label=C.LABEL,source_manifest_sha256=source['artifact_content_sha256'],source_manifest_receipt=P.population_receipt(source),
         normalized_sources=source['normalized_sources'])
     run=P.digest(contract);_RUNS[str(base.resolve())]=run
     code_receipts=[]
@@ -291,7 +291,7 @@ def population(data_root,day,*,source=None):
                         point=json.loads(line);old_points[point['canonical_id']]=point
                 census.update(old['census'])
             with gzip.open(tmp,'wt') as handle:
-                from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+                from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                 for symbol,rows in sorted(raw.items()):
                     items={r[9] for r in rows if isinstance(r[9],str) and r[9].split('_',1)[0]==symbol and _explicit_item_venue(r[9])==rec['venue']}
                     for item in sorted(items):
@@ -341,7 +341,9 @@ def population(data_root,day,*,source=None):
         if value['fingerprint']!=fingerprint or P.file_hash(dst)!=value['sha256']:raise ValueError('registered_partition_cache_changed')
         partitions.append(dict(path=str(dst.resolve()),**value)); receipts.append(dict(path=rec['path'],sha256=rec['sha256']))
         receipts.append(dict(path=str(dst.resolve()),sha256=value['sha256']))
-    report=P.seal(dict(schema=SCHEMA,source_date=day,status='completed',source_manifest_sha256=source['artifact_content_sha256'],
+    manifest_receipt=P.population_receipt(source)
+    if manifest_receipt:receipts.append(manifest_receipt)
+    report=P.seal(dict(schema=SCHEMA,source_date=day,status='completed',source_manifest_sha256=source['artifact_content_sha256'],source_manifest_receipt=manifest_receipt,
                        registry_sha256=C.SHA256,partitions=partitions,source_receipts=receipts,**P.AUTH))
     path=out/'frozen'/('population-'+report['artifact_content_sha256']+'.json');P.write(path,report)
     return report,path
@@ -404,7 +406,7 @@ def source_quality(data_root, day, population):
         if value['artifact_content_sha256']!=P.seal(value)['artifact_content_sha256']:
             raise ValueError('registered_row_quality_changed')
         return value,path
-    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
     scopes=defaultdict(Counter);partitions=[];total=Counter()
     for part in population['partitions']:
         rec=part['normalized_source'];raw=json.loads(gzip.decompress(Path(rec['path']).read_bytes()))['symbols'];counts=Counter()
@@ -501,7 +503,7 @@ def machine_report(data_root,day,publication,parent_bundle,*,source=None,publish
     P.write(source_path,source)
     report=P.seal(dict(schema=SCHEMA,source_date=day,target_date=day,publication_date=publication,status='completed',
         report_scope='main_mechanistic_entry',cells=cells,baseline_cells=list(old.values()),baseline_auxiliary_cells=list(aux.values()),
-        parent_bundle_sha256=parent_bundle['bundle_sha256'],source_manifest_sha256=value['source_manifest_sha256'],
+        parent_bundle_sha256=parent_bundle['bundle_sha256'],source_manifest_sha256=value['source_manifest_sha256'],source_manifest_receipt=value.get('source_manifest_receipt'),
         population_path=str(path.resolve()),source_receipts=value['source_receipts']+[dict(path=str(source_path.resolve()),sha256=P.file_hash(source_path)),dict(path=str(path.resolve()),sha256=P.file_hash(path)),dict(path=str(quality_path.resolve()),sha256=P.file_hash(quality_path))]+registration_receipts(data_root,day)+history_receipts,
         source_row_exclusions=quality['totals'],
         label_contract=C.LABEL,selection_basis='cumulative_raw_win_fraction',registry_sha256=C.SHA256,

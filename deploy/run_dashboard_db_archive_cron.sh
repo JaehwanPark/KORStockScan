@@ -8,6 +8,13 @@ VENV_PY="$PROJECT_DIR/.venv/bin/python"
 RETENTION_DAYS="${1:-1}"
 TARGET_DATE="${TARGET_DATE:-$(TZ=Asia/Seoul date +%F)}"
 
+source_calendar_state="$(postclose_source_calendar_state "$PROJECT_DIR" "$VENV_PY" "$TARGET_DATE")"
+if [[ "$source_calendar_state" == "non_trading" ]]; then
+  printf '[SKIP] dashboard_db_archive target_date=%s reason=non_trading_source_date no_archive_mutation=true\n' "$TARGET_DATE"
+  exit 0
+fi
+[[ "$source_calendar_state" == "trading" ]] || exit 2
+
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"

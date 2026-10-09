@@ -3,6 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+if [[ "${1:-}" == "--market-weakness-research-only" ]]; then
+  shift
+  cd "$PROJECT_DIR"
+  export PYTHONPATH="$PROJECT_DIR"
+  exec "$PROJECT_DIR/.venv/bin/python" -m src.engine.automation.main_market_weakness_research \
+    --data-root "$PROJECT_DIR/data" --workspace "$PROJECT_DIR" --configure-optional-cron "$@"
+fi
 TMP_CRON="$(mktemp)"
 trap 'rm -f "$TMP_CRON"' EXIT
 

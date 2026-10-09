@@ -103,12 +103,56 @@ def completed_bars(data_root,day,*,snapshot_sink=None):
     return {key:kernel.Bars(list(rows.values())) for key,rows in sources.items()},receipts
 
 
-def ensure_population(data_root,day):
-    out=directory(data_root,day);path=out/'source.json'
-    if path.is_file():return json.loads(path.read_text())
+def _validated_population(path, *, day, expected_sha256=None):
+    content=Path(path).read_bytes();source=json.loads(content)
+    if (source.get('source_date')!=day or source.get('artifact_content_sha256')!=seal(source)['artifact_content_sha256']
+        or expected_sha256 is not None and source.get('artifact_content_sha256')!=expected_sha256):
+        raise ValueError('continuous_reversal_source_manifest_invalid')
+    for field in ('normalized_sources','reviewed_events'):
+        records=source[field].get('partitions',[]) if field=='normalized_sources' else source[field]
+        for record in records:
+            if file_hash(record['path'])!=record['sha256']:raise ValueError('continuous_reversal_frozen_source_changed')
+    return source
+
+
+def population_receipt(source):
+    """Bind a selected immutable generation to a run without resealing it."""
+    path=source.get('source_manifest_path')
+    if not path:return None  # Historical/synthetic manifests retain their pins.
+    verified=_validated_population(path,day=source['source_date'],expected_sha256=source['artifact_content_sha256'])
+    if verified!=source:raise ValueError('continuous_reversal_selected_source_changed')
+    return dict(path=str(Path(path).resolve()),sha256=file_hash(path),
+                artifact_content_sha256=source['artifact_content_sha256'],
+                source_generation=source.get('source_generation'))
+
+
+def ensure_population(data_root,day, *, source_generation=None, expected_sha256=None):
+    """Resume one immutable source; explicit generations never fall back.
+
+    An explicit missing generation with an expected hash is a read-only resume
+    failure. Creation without an expected hash builds an isolated generation.
+    Already published source bytes/Provider identities are never overwritten.
+    """
+    import re
+    base=directory(data_root,day)
+    if source_generation is not None and not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}',source_generation):
+        raise ValueError('continuous_reversal_source_generation_invalid')
+    out=base if source_generation is None else base/'source-generations'/source_generation
+    path=out/'source.json'
+    if expected_sha256 is not None and not path.is_file():raise ValueError('continuous_reversal_source_generation_missing')
+    out.mkdir(parents=True,exist_ok=True)
+    with (out/'source-generation.lock').open('a') as handle:
+        fcntl.flock(handle,fcntl.LOCK_EX)
+        if path.is_file():return _validated_population(path,day=day,expected_sha256=expected_sha256)
+        return _build_population(data_root,day,out)
+
+
+def _build_population(data_root,day,out):
+    path=out/'source.json'
+
     from src.engine.scalping.continuous_reversal_source import freeze_normalized_sources
     out.mkdir(parents=True,exist_ok=True)
-    previous=[p for p in sorted(out.parent.glob('????-??-??/source.json')) if '2026-06-05'<=p.parent.name<day]
+    previous=[p for p in sorted(directory(data_root,day).parent.glob('????-??-??/source.json')) if '2026-06-05'<=p.parent.name<day]
     parent=json.loads(previous[-1].read_text()) if previous else None
     if parent and parent['artifact_content_sha256']!=digest({k:v for k,v in parent.items() if k!='artifact_content_sha256'}):
         raise ValueError('cumulative_reversal_parent_invalid')
@@ -138,13 +182,14 @@ def ensure_population(data_root,day):
                     handle.write(json.dumps(event,allow_nan=False,separators=(',',':'))+'\n');count+=1
         events.append(dict(day=day,venue=source['venue'],session=source['session'],path=str(output.resolve()),sha256=file_hash(output),events=count))
     manifest=seal(dict(schema=SCHEMA,source_date=day,generated_at=datetime.now(KST).isoformat(),
+        source_manifest_path=str(path.resolve()),source_generation=out.name if out.parent.name=='source-generations' else None,
         normalized_sources=dict(partitions=(parent or {}).get('normalized_sources',{}).get('partitions',[])+normalized),
         reviewed_events=(parent or {}).get('reviewed_events',[])+events,
         selected_routes={**(parent or {}).get('selected_routes',{}),**selected},
         completed_bar_receipts=bar_receipts,parent_manifest_sha256=(parent or {}).get('artifact_content_sha256'),
         code_sha256=file_hash(kernel.__file__),machine_decisions_used=False,new_raw_partition_count=len(normalized),**AUTH))
     write(path,manifest)
-    return manifest
+    return _validated_population(path,day=day)
 
 
 def prepare_auxiliary_points(data_root,day):
@@ -215,21 +260,23 @@ def prepare_research(data_root, day, seed):
     return manifest
 
 
-def machine_report(data_root, day, publication):
+def machine_report(data_root, day, publication, *, source=None):
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
     current=operating.active(data_root,publication)
     if current:
-        return operating.machine_report(data_root,day,publication,current)
+        return operating.machine_report(data_root,day,publication,current,source=source)
     from src.engine.scalping import continuous_reversal_registered_postclose as registered
     from src.engine.scalping import continuous_reversal_path_postclose as paths
     if paths.active(data_root,publication):registered=paths
     current=registered.active(data_root,publication)
-    if current:return registered.machine_report(data_root,day,publication,current)
+    if current:return registered.machine_report(data_root,day,publication,current,source=source)
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
     parent=branch.active_v2(data_root,publication)
-    if parent:return branch.machine_report(data_root,day,publication,parent)
+    if parent:
+        if source is not None:raise ValueError("explicit_source_generation_requires_registered_family")
+        return branch.machine_report(data_root,day,publication,parent)
     out = directory(data_root, day)
-    source = ensure_population(data_root,day)
+    source = source if source is not None else ensure_population(data_root,day)
     if source['artifact_content_sha256'] != digest({k:v for k,v in source.items() if k != 'artifact_content_sha256'}):
         raise ValueError('reversal_manifest_changed')
     agg = defaultdict(Counter)
@@ -261,10 +308,12 @@ def machine_report(data_root, day, publication):
         cells.append(dict(key=key, payload=dict(rule=selected) if selected else None,
                           local_metrics=candidates.get(selected), candidates=candidates, inherited_from=None))
     inherit(cells, previous_cells(data_root, day, 'machine'))
+    manifest_receipt=population_receipt(source)
     report = seal(dict(schema=SCHEMA, report_scope='main_mechanistic_entry', source_date=day,
         target_date=day, publication_date=publication, generated_at=datetime.now(KST).isoformat(),
         status='completed', selection_basis='cumulative_raw_win_fraction', population='all_continuous_price_turns',
-        input_turn_count=total, source_manifest_sha256=source['artifact_content_sha256'],
+        input_turn_count=total, source_manifest_sha256=source['artifact_content_sha256'],source_manifest_receipt=manifest_receipt,
+        source_receipts=[manifest_receipt] if manifest_receipt else [],
         kernel_sha256=file_hash(kernel.__file__), cells=cells,
         label_contract=dict(target_net_pct=.4, stop_net_pct=-3., cost_rate=.0023, horizon_seconds=1800), **AUTH))
     write(out/'machine.json',report)
@@ -486,20 +535,30 @@ def main(argv=None):
     parser.add_argument('--date',required=True)
     parser.add_argument('--publication-date')
     parser.add_argument('--data-root',type=Path,default=Path('data'))
+    parser.add_argument('--source-generation')
+    parser.add_argument('--source-sha256')
     parser.add_argument('--seed-research',type=Path)
     parser.add_argument('--actual-inputs',type=Path)
     parser.add_argument('--evaluate-only',action='store_true')
     parser.add_argument('--mode',choices=['machine','prepare-inputs','auxiliary','calls'],default='machine')
     args=parser.parse_args(argv)
+    if (args.source_generation or args.source_sha256) and args.mode != 'machine':
+        parser.error('source selection is only valid at the machine run boundary')
+    if args.source_sha256 and not args.source_generation:
+        parser.error('explicit source hash requires source generation')
     if args.evaluate_only and args.mode != 'auxiliary':
         parser.error('--evaluate-only is supported only for auxiliary; use an isolated data root for machine research')
+    if args.source_generation and args.seed_research:
+        parser.error('source generation cannot be combined with mutable research seeding')
+    selected_source = (ensure_population(args.data_root,args.date,source_generation=args.source_generation,expected_sha256=args.source_sha256)
+                       if args.source_generation else None)
     if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
     publication=args.publication_date or args.date
     current=operating.active(args.data_root,publication)
     if current:
         if args.mode=='machine':
-            result=operating.machine_report(args.data_root,args.date,publication,current)
+            result=operating.machine_report(args.data_root,args.date,publication,current,source=selected_source)
         else:
             machine=json.loads((operating.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
             if args.mode in {'prepare-inputs','auxiliary'} and not args.evaluate_only:
@@ -524,7 +583,7 @@ def main(argv=None):
         elif args.mode=='prepare-inputs':
             parser.error('--mode prepare-inputs requires an active v3/v4 family')
         else:execute_calls(args.data_root,args.date,args.actual_inputs)
-    elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date)))
+    elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date,source=selected_source)))
     else:
         from src.engine.scalping import continuous_reversal_registered_postclose as registered
         from src.engine.scalping import continuous_reversal_path_postclose as paths

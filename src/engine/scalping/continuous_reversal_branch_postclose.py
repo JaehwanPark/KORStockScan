@@ -302,7 +302,7 @@ def daily_population(data_root,day):
         if value!=P.seal(value):raise ValueError('branch_daily_cache_changed')
         return value,cache
     points=[];receipts=[];partitions={(r['day'],r['venue'],r['session']):r for r in source['normalized_sources']['partitions']}
-    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
     routes={};quality=Counter()
     for rec in partitions.values():
         if P.file_hash(rec['path'])!=rec['sha256']:raise ValueError('branch_daily_normalized_changed')

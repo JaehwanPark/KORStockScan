@@ -777,3 +777,27 @@ def _resolve_post_effective_session(
         source_quality=SOURCE_QUALITY_PARTIAL,
         blocker=None,
     )
+
+
+def market_source_partition_venue(item: str) -> str:
+    """Return the legacy storage partition, never an execution venue claim."""
+
+    raw = str(item or "").strip().upper()
+    if raw.endswith("_AL"):
+        # Existing journals use SOR as the integrated-route compatibility
+        # partition. The canonical route/actual-venue identity is validated
+        # separately by registration_item_market_data_identity().
+        return "SOR"
+    if raw.endswith("_NX"):
+        return "NXT"
+    return "KRX" if raw else ""
+
+
+def market_source_session_bucket(venue: str, clock: dt_time) -> str:
+    if not isinstance(clock, dt_time):
+        raise TypeError('clock must be a time')
+    # Preserve wall-clock boundaries without constructing time objects.
+    minute=clock.hour*60+clock.minute
+    prefix=venue if venue in {'NXT','SOR'} else 'KRX'
+    suffix='PREMARKET' if minute<540 else 'REGULAR_OVERLAP' if minute<930 and prefix=='NXT' else 'REGULAR' if minute<930 else 'AFTERMARKET'
+    return prefix+'_'+suffix

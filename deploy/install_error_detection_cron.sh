@@ -21,8 +21,9 @@ fi
 cat >> "$TMP_CRON" <<EOF
 */5 7-20 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh error-detection # ERROR_DETECTION_FULL
 0-50/5 21 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh error-detection # ERROR_DETECTION_FULL
+35 22 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh error-detection # ERROR_DETECTION_FULL_ARCHIVE_TERMINAL
 EOF
 
 crontab "$TMP_CRON"
-echo "[INSTALL] error detection cron installed: */5 07:00-21:50; finalization owner preserved"
+echo "[INSTALL] error detection cron installed: */5 07:00-21:50 and 22:35 archive terminal check; finalization owner preserved"
 crontab -l | grep -E 'ERROR_DETECTION_FULL'

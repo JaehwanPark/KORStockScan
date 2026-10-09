@@ -154,6 +154,78 @@ def test_trace_two_writers_one_durable_identity_and_partial_tail_not_hidden(tmp_
     assert 'next' not in path.read_text()
 
 
+@pytest.mark.parametrize('prepared', [False, True])
+def test_machine_first_payload_keeps_request_capture_index_ready(tmp_path, prepared):
+    path = tmp_path/'ai_decision_payloads_2026-10-09.jsonl'
+    field = 'request_envelope_sha256'
+    if prepared:
+        with jsonl_artifact_generation_lock(path, exclusive=False) as generation:
+            assert D.prepare(path, field, generation).ready
+    T._append_jsonl(path, dict(machine_observation_sha256='machine', source={'ask': 100}))
+    assert T._load_seen(path, field) == set()
+    request = dict(request_envelope_sha256='request', payload_sha256='payload', prompt_sha256='prompt')
+    T._append_jsonl(path, request)
+    T._append_jsonl(path, request)
+    assert T._load_seen(path, field) == {'request'}
+    assert len(path.read_text().splitlines()) == 2
+
+
+def test_large_mixed_payload_append_does_not_rescan_or_lose_existing_keys(tmp_path, monkeypatch):
+    path = tmp_path/'ai_decision_payloads_2026-10-09.jsonl'
+    first = dict(request_envelope_sha256='first', payload_sha256='a')
+    T._append_jsonl(path, first)
+    calls = []
+    pread = D.os.pread
+    monkeypatch.setattr(D.os, 'pread', lambda *a: (calls.append(a[1:]), pread(*a))[1])
+    T._append_jsonl(path, dict(machine_observation_sha256='machine', source='x'*150_000))
+    T._append_jsonl(path, dict(first, request_envelope_sha256='second'))
+    T._append_jsonl(path, first)
+    assert calls == []
+    assert T._load_seen(path, 'request_envelope_sha256') == {'first', 'second'}
+    assert len(path.read_text().splitlines()) == 3
+
+
+@pytest.mark.parametrize('change', ['cold', 'replacement', 'external_append'])
+def test_keyless_append_never_skips_unverified_predecessor(tmp_path, change):
+    path = tmp_path/'ai_decision_payloads_2026-10-09.jsonl'
+    row = dict(request_envelope_sha256='historical', payload_sha256='a')
+    if change != 'cold':
+        T._append_jsonl(path, dict(row, request_envelope_sha256='old'))
+    if change == 'replacement':
+        replaced = path.with_suffix('.replacement')
+        replaced.write_text(json.dumps(row)+'\n')
+        replaced.replace(path)
+    else:
+        with path.open('a') as stream:
+            stream.write(json.dumps(row)+'\n')
+    T._append_jsonl(path, dict(machine_observation_sha256='machine'))
+    with pytest.raises(D.IndexNotReady, match='preparation_pending'):
+        T._load_seen(path, 'request_envelope_sha256')
+    with jsonl_artifact_generation_lock(path, exclusive=False) as generation:
+        assert D.prepare(path, 'request_envelope_sha256', generation).ready
+    size = path.stat().st_size
+    T._append_jsonl(path, row)
+    assert path.stat().st_size == size
+
+
+def test_complete_suffix_before_partial_tail_cannot_admit_request_append(tmp_path):
+    path = tmp_path/'ai_decision_requests_2026-10-09.jsonl'
+    row = dict(request_id='first', request_envelope_sha256='a')
+    T._append_jsonl(path, row)
+    with path.open('a') as stream:
+        stream.write(json.dumps(dict(row, request_id='external'))+'\n{"request_id":')
+    before = path.read_bytes()
+    with pytest.raises(D.IndexNotReady, match='partial_or_oversized'):
+        T._append_jsonl(path, dict(row, request_id='next'))
+    assert path.read_bytes() == before
+    with path.open('a') as stream:
+        stream.write('"finished"}\n')
+    with jsonl_artifact_generation_lock(path, exclusive=False) as generation:
+        assert D.prepare(path, 'request_id', generation).ready
+    T._append_jsonl(path, dict(row, request_id='next'))
+    assert len(path.read_text().splitlines()) == 4
+
+
 def test_trace_background_releases_generation_before_writer_mutex(tmp_path, monkeypatch):
     paths={}
     for name in ('_payload_path','_prompt_path','_request_path','_trace_path','_outcome_path','_context_candidate_path'):
@@ -163,7 +235,9 @@ def test_trace_background_releases_generation_before_writer_mutex(tmp_path, monk
     prepared=threading.Event()
     original=D.prepare
     def prepare(*args,**kwargs):
-        value=original(*args,**kwargs);prepared.set();return value
+        value=original(*args,**kwargs)
+        prepared.set()
+        return value
     monkeypatch.setattr(D,'prepare',prepare)
     worker=threading.Thread(target=lambda:T.prepare_ai_request_capture('2026-10-08'),daemon=True)
     acquired=False
@@ -175,8 +249,10 @@ def test_trace_background_releases_generation_before_writer_mutex(tmp_path, monk
             while time.monotonic()<until:
                 try:
                     with jsonl_artifact_generation_lock(paths['_payload_path'],exclusive=True,blocking=False):
-                        acquired=True;break
-                except BlockingIOError:time.sleep(.001)
+                        acquired=True
+                        break
+                except BlockingIOError:
+                    time.sleep(.001)
             assert acquired, 'background cannot hold file lease while waiting on writer mutex'
     finally:
         worker.join(2)

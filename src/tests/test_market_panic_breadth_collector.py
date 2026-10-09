@@ -525,8 +525,22 @@ def test_market_weakness_observation_requires_recovery_margin():
     assert collector.market_weakness_observation_contract_errors(recovered) == []
     assert (
         recovered["response_research_contract"]["status"]
-        == "source_only_counterfactual_collection"
+        == "source_only_observation_no_execution_bridge"
     )
+    contract = recovered["response_research_contract"]
+    assert contract["owner_isolation_required"] == []
+    assert contract["candidate_arms"] == []
+    assert contract["required_outcomes"] == []
+    assert "episode_entry_block" in recovered["forbidden_uses"]
+    original_identity = recovered["observation_id"]
+    contract.update(status="source_only_counterfactual_collection",
+                    owner_isolation_required=["main", "episode"],
+                    candidate_arms=["skip_new_entry_during_confirmed_weakness"],
+                    required_outcomes=["cost_adjusted_ev_pct"])
+    assert collector.market_weakness_observation_contract_errors(recovered) == []
+    assert collector.market_weakness_observation_id(recovered) == original_identity
+    contract["status"] = "source_only_observation_no_execution_bridge"
+    assert "observation_only_response_contract_invalid" in collector.market_weakness_observation_contract_errors(recovered)
 
 
 def test_market_weakness_observation_binds_exact_date_reviewed_hysteresis(

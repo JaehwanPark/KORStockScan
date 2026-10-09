@@ -66,8 +66,8 @@ def test_error_cron_installer_preserves_unrelated_auth_and_finalizer(tmp_path):
     result = cron.read_text()
     assert original.splitlines()[0] in result
     assert original.splitlines()[1] in result
-    assert result.count("# ERROR_DETECTION_FULL") == 2
-    assert result.count(" error-detection ") == 2
+    assert result.count("# ERROR_DETECTION_FULL") == 3
+    assert result.count(" error-detection ") == 3
 
 
 def test_release_shares_operator_flag_and_docs(release):

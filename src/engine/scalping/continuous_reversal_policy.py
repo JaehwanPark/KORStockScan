@@ -376,8 +376,14 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
                        machine_list_policy='explicit_operating_registration',
                        new_policy_application_claimed=False)
     from src.engine.scalping.reversal_policy_status import report_state, operating_scope
-    handoff.update(policy_states=report_state(report),contract_scope_count=sum(len(c['routes']) for c in family['machine_cells'].values()),
-        operating_scope_count=sum(operating_scope(k+'|'+r) for k,c in family['machine_cells'].items() for r in c['routes']))
+    routed=family['schema'] in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4',
+                                'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}
+    # V1/V2 were market cells before explicit route registration. Do not infer
+    # execution routes or erase the immutable historical handoff on read.
+    contract_count=sum(len(c['routes']) for c in family['machine_cells'].values()) if routed else len(family['machine_cells'])
+    operating_count=sum(operating_scope(k+'|'+r) for k,c in family['machine_cells'].items() for r in c['routes']) if routed else None
+    handoff.update(policy_states=report_state(report),contract_scope_count=contract_count,
+        operating_scope_count=operating_count)
     return handoff
 
 

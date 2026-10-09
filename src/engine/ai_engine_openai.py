@@ -9666,7 +9666,7 @@ class GPTSniperEngine:
                 if reversal_family:
                     from src.engine.scalping.continuous_reversal import current_snapshot
                     from src.engine.scalping.continuous_reversal_policy import assess
-                    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+                    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                     item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
                     snapshot_now=time.time()
                     if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:

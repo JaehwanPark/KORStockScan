@@ -60,6 +60,7 @@ MARKET_WEAKNESS_RELEASE_SEVERE_MARGIN_PCT = 5.0
 MARKET_WEAKNESS_RELEASE_STOCK_MARGIN_PCT = 10.0
 MARKET_WEAKNESS_MIN_MARKET_INDEX_COUNT = 2
 MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT = 3
+MARKET_WEAKNESS_RESPONSE_CONTRACT_STATUS = "source_only_observation_no_execution_bridge"
 EMPTY_MARKET_RESPONSE_MAX_ATTEMPTS = 2
 KST = ZoneInfo("Asia/Seoul")
 
@@ -183,6 +184,13 @@ def market_weakness_observation_contract_errors(
         and response_contract.get("control") == "current_owner_behavior_unchanged"
     ):
         errors.append("response_research_contract_invalid")
+    elif response_contract.get("status") == MARKET_WEAKNESS_RESPONSE_CONTRACT_STATUS:
+        # Current observations carry no research arms or adoption metrics.
+        # Historical static metadata remains readable, without execution use.
+        if any(response_contract.get(field) != [] for field in (
+            "owner_isolation_required", "candidate_arms", "required_outcomes"
+        )):
+            errors.append("observation_only_response_contract_invalid")
     if not (
         observation.get("decision_authority") == "source_quality_observation_only"
         and observation.get("runtime_effect") is False
@@ -1196,28 +1204,19 @@ def build_market_weakness_observation(
         "hysteresis_policy": hysteresis.observation_contract(),
         "history_path": str(history_path),
         "response_research_contract": {
-            "status": "source_only_counterfactual_collection",
+            "status": MARKET_WEAKNESS_RESPONSE_CONTRACT_STATUS,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
-            "owner_isolation_required": ["main", "episode"],
+            "owner_isolation_required": [],
             "control": "current_owner_behavior_unchanged",
-            "candidate_arms": [
-                "delay_new_entry_until_recovery_confirmed",
-                "skip_new_entry_during_confirmed_weakness",
-                "relative_strength_and_liquidity_exception",
-            ],
-            "required_outcomes": [
-                "cost_adjusted_ev_pct",
-                "adverse_first_rate_pct",
-                "missed_upside_pct",
-                "fill_feasibility_pct",
-                "capital_occupation_minutes",
-            ],
+            "candidate_arms": [],
+            "required_outcomes": [],
             "guards": [
                 "no_change_to_existing_target_orders",
                 "no_forced_exit_or_stop_change",
                 "no_quantity_or_price_mutation",
-                "owner_specific_evaluation_only",
+                "no_runtime_execution_bridge",
+                "postclose_research_contract_separate",
             ],
         },
     }

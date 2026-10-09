@@ -283,6 +283,10 @@ class MarketStreamPoint:
     # Optional additive lineage: old rows remain readable but cannot establish
     # cumulative-volume continuity for a WS-completed minute.
     source_item: str = ""
+    native_transport_epoch: int | None = None
+    native_route_sequence: int | None = None
+    native_receive_session: str | None = None
+    source_contract: str | None = None
     cumulative_volume_raw: str | None = None
     trade_volume_raw: str | None = None
     best_bid: float | None = None
@@ -389,6 +393,10 @@ class MarketDepthPoint:
     realtime_type: str = "0D"
     schema: str = MARKET_DEPTH_SCHEMA
     recorded_inputs: dict | None = None
+    native_transport_epoch: int | None = None
+    native_route_sequence: int | None = None
+    native_receive_session: str | None = None
+    source_contract: str | None = None
 
     def __post_init__(self) -> None:
         symbol = normalize_symbol(self.symbol)
@@ -883,7 +891,8 @@ class NonBlockingPathJournalWriter:
                         with self._lock:
                             self._storage_self_disabled = True
                         raise OSError("critical disk watermark reached")
-                    projected_bytes = _encoded_size(batch)
+                    encoded_batch = _encode_points(batch)
+                    projected_bytes = len(encoded_batch)
                     if projected_bytes > self._storage_policy.max_partition_bytes:
                         raise OSError("batch exceeds path shard size limit")
                     if (
@@ -922,6 +931,7 @@ class NonBlockingPathJournalWriter:
                         write_metrics = _append_market_path_points_locked(
                             active_path,
                             batch,
+                            encoded=encoded_batch,
                         )
                         if manifest_needs_refresh:
                             manifest_needs_refresh = not self._refresh_manifest(
@@ -1062,15 +1072,12 @@ def append_market_path_points(
 def _append_market_path_points_locked(
     path: Path,
     points: Iterable[PathJournalPoint],
+    *, encoded: bytes | None = None,
 ) -> PathAppendMetrics:
     materialized = tuple(points)
     _validate_batch_order(materialized)
-    encoded = b"".join(
-        (json.dumps(point.as_dict(), ensure_ascii=False, sort_keys=True) + "\n").encode(
-            "utf-8"
-        )
-        for point in materialized
-    )
+    if encoded is None:
+        encoded = _encode_points(materialized)
     target = Path(path)
     _assert_no_symlink_ancestors(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1382,12 +1389,12 @@ def _validate_positive_optional(value: float | None, *, field_name: str) -> None
         raise ValueError(f"{field_name} must be positive")
 
 
-def _encoded_size(points: Iterable[PathJournalPoint]) -> int:
-    return sum(
-        len(
-            (
-                json.dumps(point.as_dict(), ensure_ascii=False, sort_keys=True) + "\n"
-            ).encode("utf-8")
-        )
+def _encode_points(points: Iterable[PathJournalPoint]) -> bytes:
+    return b"".join(
+        (json.dumps(point.as_dict(), ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
         for point in points
     )
+
+
+def _encoded_size(points: Iterable[PathJournalPoint]) -> int:
+    return len(_encode_points(points))

@@ -351,7 +351,6 @@ class KiwoomWSManager:
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
         self._recent_reg_request_ts = {}
-        self._micro_reversion_deferred_reg_codes = {}
         self._alternate_route_request_ts = {}
         self._persistent_repair_request_ts = {}
         self._persistent_repair_window_epochs = deque()
@@ -374,7 +373,6 @@ class KiwoomWSManager:
         self._micro_reversion_observation_route_data = {}
         self._micro_reversion_registration_receipt = {}
         self._micro_reversion_observation_only_codes = set()
-        self._micro_reversion_observation_notice_codes = set()
         self._market_data_transport_epoch = 0
         self._route_realtime_sequence = {}
         # Most subscriptions can be considered live after any quote packet.
@@ -1209,18 +1207,8 @@ class KiwoomWSManager:
         return len(registered) + len(uncertain)
 
     def is_pinned_observation_subscription(self, code):
-        normalized = self._normalize_code(code)
-        if not normalized:
-            return False
-        with self.lock:
-            registered_items = tuple(
-                self._registered_items_by_code.get(normalized) or ()
-            )
-            micro_observation = bool(
-                normalized in self.subscribed_codes
-                and normalized in self._micro_reversion_observation_items_by_code
-            )
-        return micro_observation
+        """Retired manifests cannot pin Main subscriptions."""
+        return False
 
     def is_micro_reversion_observation_only_subscription(self, code):
         normalized = self._normalize_code(code)
@@ -1230,44 +1218,8 @@ class KiwoomWSManager:
             return normalized in self._micro_reversion_observation_only_codes
 
     def retain_micro_reversion_as_observation_only(self, code):
-        """Demote an inactive runtime code back to its exact source-only role."""
-
-        normalized = self._normalize_code(code)
-        if not normalized:
-            return False
-        with self.lock:
-            registered_items = tuple(
-                self._registered_items_by_code.get(normalized) or ()
-            )
-            desired_item = self._micro_reversion_observation_items_by_code.get(
-                normalized
-            )
-            desired_items = (
-                (desired_item,)
-                if isinstance(desired_item, str)
-                else tuple(desired_item or ())
-            )
-            if not desired_items:
-                return False
-            already_observation_only = (
-                normalized in self._micro_reversion_observation_only_codes
-                and all(
-                    item in self._micro_reversion_observation_only_items
-                    for item in desired_items
-                )
-            )
-            self._micro_reversion_observation_only_codes.add(normalized)
-            self._micro_reversion_observation_only_items.update(desired_items)
-        if not already_observation_only:
-            self.execute_subscribe(
-                list(desired_items),
-                force=True,
-                source="micro_reversion_collection_feedback_demotion",
-                remove_before_reg=True,
-                realtime_types=("0B", "0D"),
-                observation_only=True,
-            )
-        return True
+        """Retired manifest demotion never replaces a Main exact route."""
+        return False
 
     def _items_by_code(self, normalized_codes, register_items):
         items_by_code = {}
@@ -2353,6 +2305,8 @@ class KiwoomWSManager:
                         "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
                     }
                     frame_captured_at = time.time()
+                registration_receipt_snapshot = self._finish_main_source_registration_receipt(
+                    registration_receipt_snapshot, set(shared_transport_producer["registered_items"]))
                 realtime_snapshot = {k:self._finish_snapshot(v, dashboard_only=True) for k,v in realtime_snapshot.items()}
                 observation_route_snapshot = {k:self._finish_snapshot(v, dashboard_only=True) for k,v in observation_route_snapshot.items()}
                 collector = self._micro_reversion_forward_collector
@@ -2575,6 +2529,8 @@ class KiwoomWSManager:
             return
         try:
             normalized_type = str(realtime_type or "").strip()
+            # Per-packet ticks already contain native identity. Do not copy
+            # the whole frame or resolve its exact route a second time.
             if normalized_type == "0B":
                 collector.observe_kiwoom_0b(code, data, realtime_type="0B")
             elif normalized_type == "0D":
@@ -3159,7 +3115,7 @@ class KiwoomWSManager:
                     observation_items,
                     replace_existing=not bool(trading_items),
                     realtime_types=("0B", "0D"),
-                    source="micro_reversion_collection_feedback_reconnect",
+                    source="main_source_lease_reconnect",
                     observation_only=True,
                 )
 
@@ -4673,7 +4629,7 @@ class KiwoomWSManager:
                                         # Consumer of the existing normalized envelope only.
                                         # No broker parsing, provider calls, disk replay or orders.
                                         from src.engine.scalping.reversal_current_backend import observe_normalized
-                                        from src.engine.scalping.micro_reversion.forward_collector import _session_bucket, _explicit_item_venue
+                                        from src.trading.market.session_contract import market_source_session_bucket as _session_bucket, market_source_partition_venue as _explicit_item_venue
                                         observed_clock = datetime.fromtimestamp(now_update_ts, KST).timetz()
                                         reversal_session = _session_bucket(_explicit_item_venue(realtime_snapshot['item']), observed_clock)
                                         observe_normalized(item_code[:6], reversal_session, realtime_snapshot)
@@ -4839,6 +4795,7 @@ class KiwoomWSManager:
             self._micro_reversion_observation_only_codes.discard(code)
         self._registered_item_epochs.pop(item, None)
         self._registered_item_types.pop(item, None)
+        (self._micro_reversion_registration_receipt.get('items') or {}).pop(item, None)
         self._micro_reversion_observation_only_items.discard(item)
         self._micro_reversion_observation_route_data.pop(item, None)
         return True
@@ -5038,6 +4995,7 @@ class KiwoomWSManager:
                         getattr(self, "_exact_probe_item_leases", {}).pop(item, None)
                         getattr(self, "_registered_item_epochs", {}).pop(item, None)
                         getattr(self, "_registered_item_types", {}).pop(item, None)
+                        (self._micro_reversion_registration_receipt.get('items') or {}).pop(item, None)
                 now_ts = time.time()
                 with self.lock:
                     for code in normalized_codes:
@@ -5086,6 +5044,8 @@ class KiwoomWSManager:
         dispatch_guard=None,
         observation_only=False,
     ):
+        if str(source or "").startswith(("micro_reversion_collection_feedback", "machine_microstructure_gap_collection_feedback")):
+            return None
         try:
             if dispatch_guard is not None and not dispatch_guard():
                 return
@@ -5316,6 +5276,7 @@ class KiwoomWSManager:
                                     and not remove_before_reg and code not in replacement_code_set else ())
                                 self._registered_item_types[item] = tuple(sorted(set(prior_types) | set(requested_realtime_types)))
                                 self._registered_item_epochs[item] = self._market_data_transport_epoch
+                                self._record_main_source_registration_locked(item, self._registered_item_types[item], source=source)
                             target = self._ensure_target_defaults(code)
                             if "0w" in requested_realtime_types:
                                 target["program_subscription_requested_at"] = (
@@ -5344,172 +5305,10 @@ class KiwoomWSManager:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
 
-    def _release_deferred_micro_registration(self, codes, dispatch_token):
-        # Caller holds self.lock. Old callbacks cannot clear a newer dispatch.
-        for code in codes:
-            if self._micro_reversion_deferred_reg_codes.get(code) is dispatch_token:
-                self._micro_reversion_deferred_reg_codes.pop(code, None)
 
     def _defer_missing_micro_registration(self, codes, *, source):
-        """Retain one source-only route request through the existing REG cooldown."""
-        dispatch_token = object()
-        with self.lock:
-            receipt = self._micro_reversion_registration_receipt
-            effective_date = receipt.get("effective_date")
-            epoch = self._market_data_transport_epoch
-            desired_by_code = {}
-            for code in codes:
-                desired = set(
-                    self._micro_reversion_observation_items_by_code.get(code) or ()
-                )
-                registered = set(self._registered_items_by_code.get(code) or ())
-                if (
-                    desired - registered
-                    and code not in self._micro_reversion_deferred_reg_codes
-                ):
-                    self._micro_reversion_deferred_reg_codes[code] = dispatch_token
-                    desired_by_code[code] = sorted(desired)
-            pending = list(desired_by_code)
-            if not pending:
-                return
-            delay = (
-                max(
-                    max(
-                        0.0,
-                        self._recent_reg_ttl_sec()
-                        - (
-                            time.time()
-                            - float(self._recent_reg_request_ts.get(code) or 0)
-                        ),
-                    )
-                    for code in pending
-                )
-                + 0.05
-            )
-
-        def invalid_reason():
-            if self._stop_event.is_set() or not self._started:
-                return "process_stopping"
-            with self.lock:
-                if (
-                    self._market_data_transport_epoch != epoch
-                    or self._micro_reversion_registration_receipt is not receipt
-                    or receipt.get("effective_date") != effective_date
-                    or datetime.now(KST).date().isoformat() != effective_date
-                ):
-                    return "generation_changed"
-                if any(
-                    self._micro_reversion_deferred_reg_codes.get(code)
-                    is not dispatch_token
-                    or set(
-                        self._micro_reversion_observation_items_by_code.get(code) or ()
-                    )
-                    != set(items)
-                    for code, items in desired_by_code.items()
-                ):
-                    return "target_changed"
-            return ""
-
-        def mark(status, selected_codes=None):
-            with self.lock:
-                # Keep this dispatch's history even if the canonical receipt was
-                # replaced, but never overwrite its successor's rows or status.
-                for code in pending if selected_codes is None else selected_codes:
-                    if (
-                        self._micro_reversion_registration_receipt is receipt
-                        and self._micro_reversion_deferred_reg_codes.get(code)
-                        is not dispatch_token
-                    ):
-                        continue
-                    for item in desired_by_code[code]:
-                        row = receipt.get("items", {}).get(item)
-                        if isinstance(row, dict):
-                            row["registration_dispatch_status"] = status
-
-        async def deferred():
-            try:
-                await asyncio.sleep(delay)
-                reason = invalid_reason()
-                if reason:
-                    mark("deferred_cancelled_" + reason)
-                    return
-                with self.lock:
-                    missing = {
-                        code: sorted(
-                            set(items)
-                            - set(self._registered_items_by_code.get(code) or ())
-                        )
-                        for code, items in desired_by_code.items()
-                    }
-                allowed, blocked = self._filter_recent_reg_targets(
-                    [code for code, items in missing.items() if items]
-                )
-                if allowed:
-                    await self._send_reg(
-                        [item for code in allowed for item in desired_by_code[code]],
-                        replace_existing=False,
-                        enforce_item_budget=True,
-                        remove_before_reg=False,
-                        source=source,
-                        realtime_types=("0B", "0D"),
-                        dispatch_guard=lambda: not invalid_reason(),
-                    )
-                reason = invalid_reason()
-                if reason:
-                    mark("deferred_cancelled_" + reason)
-                    return
-                # Per-code local dispatch is not acknowledgement or first data.
-                for code, items in missing.items():
-                    with self.lock:
-                        outstanding = set(items) - set(
-                            self._registered_items_by_code.get(code) or ()
-                        )
-                    mark(
-                        (
-                            "deferred_terminal_gap"
-                            if code in blocked or outstanding
-                            else "deferred_dispatched_first_data_pending"
-                        ),
-                        [code],
-                    )
-            except (asyncio.CancelledError, concurrent.futures.CancelledError):
-                mark("deferred_cancelled")
-                raise
-            except Exception:
-                mark("deferred_failed")
-                raise
-            finally:
-                with self.lock:
-                    self._release_deferred_micro_registration(pending, dispatch_token)
-
-        mark("deferred_existing_reg_cooldown")
-        coroutine = deferred()
-        try:
-            future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
-        except Exception:
-            coroutine.close()
-            mark("deferred_schedule_failed")
-            with self.lock:
-                self._release_deferred_micro_registration(pending, dispatch_token)
-            raise
-        with self._pending_future_lock:
-            self._pending_loop_futures.add(future)
-
-        def completed(fut):
-            with self._pending_future_lock:
-                self._pending_loop_futures.discard(fut)
-            try:
-                fut.result()
-            except (asyncio.CancelledError, concurrent.futures.CancelledError):
-                mark("deferred_cancelled")
-            except Exception as exc:
-                mark("deferred_failed")
-                log_error(f"[WS] source-only deferred REG failed: {type(exc).__name__}")
-            finally:
-                with self.lock:
-                    self._release_deferred_micro_registration(pending, dispatch_token)
-
-        future.add_done_callback(completed)
+        """Retired target feedback cannot schedule a deferred REG."""
+        return None
 
     def execute_subscribe(
         self,
@@ -5524,6 +5323,8 @@ class KiwoomWSManager:
         realtime_types=None,
         observation_only=False,
     ):
+        if str(source or "").startswith(("micro_reversion_collection_feedback", "machine_microstructure_gap_collection_feedback")):
+            return None
         if not codes:
             return
         if isinstance(codes, str):
@@ -5784,28 +5585,6 @@ class KiwoomWSManager:
             codes = [codes]
 
         normalized_codes = set(self._normalize_subscribe_codes(codes))
-        with self.lock:
-            micro_retained_codes = normalized_codes.intersection(
-                self._micro_reversion_observation_items_by_code
-            )
-            retained_codes = micro_retained_codes
-        normalized_codes.difference_update(retained_codes)
-        if micro_retained_codes:
-            for code in sorted(micro_retained_codes):
-                self.retain_micro_reversion_as_observation_only(code)
-            with self.lock:
-                first_notice_codes = micro_retained_codes.difference(
-                    self._micro_reversion_observation_notice_codes
-                )
-                self._micro_reversion_observation_notice_codes.update(
-                    micro_retained_codes
-                )
-            if first_notice_codes:
-                print(
-                    "📌 [WS] micro-reversion source-only 관측 구독 REMOVE 생략: "
-                    f"codes={sorted(first_notice_codes)} "
-                    "authority=next_session_market_data_observation_only"
-                )
         if not normalized_codes:
             return
 
@@ -5829,6 +5608,8 @@ class KiwoomWSManager:
         with self.lock:
             for code in normalized_codes:
                 self._recent_reg_request_ts.pop(code, None)
+                for item in self._registered_items_by_code.get(code, ()):
+                    (self._micro_reversion_registration_receipt.get("items") or {}).pop(item, None)
                 self._registered_items_by_code.pop(code, None)
                 self.realtime_data.pop(code, None)
                 self._persistent_repair_request_ts.pop(code, None)
@@ -5837,7 +5618,6 @@ class KiwoomWSManager:
                 self._persistent_repair_overflow_codes.pop(code, None)
                 self._required_realtime_types_by_code.pop(code, None)
                 self._micro_reversion_observation_only_codes.discard(code)
-                self._micro_reversion_observation_notice_codes.discard(code)
         if self.loop and self.loop.is_running() and not self._stop_event.is_set():
             future = asyncio.run_coroutine_threadsafe(
                 self._send_remove(
@@ -5870,91 +5650,7 @@ class KiwoomWSManager:
             future.add_done_callback(on_complete)
             return future
 
-    def _normalize_micro_reversion_observation_items(self, items):
-        normalized: OrderedDict[str, list[str]] = OrderedDict()
-        for raw_item in items or ():
-            item = str(raw_item or "").strip().upper()
-            code = self._normalize_code(item)
-            if (
-                len(code) != 6
-                or not code.isdigit()
-                or item not in {code, f"{code}_NX", f"{code}_AL"}
-            ):
-                return None
-            code_items = normalized.setdefault(code, [])
-            if item in code_items:
-                return None
-            code_items.append(item)
-        return {code: tuple(code_items) for code, code_items in normalized.items()}
 
-    def _initialize_micro_reversion_registration_receipt(
-        self, *, items, effective_date, source
-    ):
-        now_ts = time.time()
-        # A replacement manifest must be able to schedule its missing routes;
-        # old futures remain bounded and fail their generation guard.
-        self._micro_reversion_deferred_reg_codes.clear()
-        existing = self._micro_reversion_registration_receipt
-        existing_items = (
-            existing.get("items")
-            if isinstance(existing, dict)
-            and existing.get("effective_date") == effective_date
-            and isinstance(existing.get("items"), dict)
-            else {}
-        )
-        item_rows = {}
-        for item in sorted(set(items)):
-            previous = existing_items.get(item)
-            row = dict(previous) if isinstance(previous, dict) else {}
-            row.pop("registration_dispatch_status", None)
-            row.setdefault("required_realtime_types", ["0B", "0D"])
-            row.setdefault("received_realtime_types", [])
-            row.setdefault("receipt_count_by_type", {})
-            row.setdefault("first_received_at_epoch_by_type", {})
-            row.setdefault("first_received_at_epoch", None)
-            row.setdefault("last_received_at_epoch", None)
-            row.setdefault("max_interarrival_gap_sec", 0.0)
-            row.setdefault("transport_epochs", [])
-            item_rows[item] = row
-        complete_count = sum(
-            set(row.get("received_realtime_types") or ()) >= {"0B", "0D"}
-            for row in item_rows.values()
-        )
-        self._micro_reversion_registration_receipt = {
-            "schema": "scalp_micro_reversion_registration_receipt_v1",
-            "effective_date": effective_date,
-            "configured_at_epoch": now_ts,
-            "configured_at": datetime.fromtimestamp(now_ts, KST).isoformat(),
-            "source": source,
-            "decision_authority": "market_data_source_quality_only",
-            "runtime_effect": False,
-            "trading_runtime_effect": False,
-            "trading_decision_effect": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "requested_registration_items": sorted(item_rows),
-            "required_realtime_types": ["0B", "0D"],
-            "registration_transport_epoch": int(self._market_data_transport_epoch),
-            "items": item_rows,
-            "summary": {
-                "requested_item_count": len(item_rows),
-                "complete_item_count": complete_count,
-                "incomplete_item_count": max(0, len(item_rows) - complete_count),
-                "exact_route_receipt_complete": bool(
-                    item_rows and complete_count == len(item_rows)
-                ),
-                "max_interarrival_gap_sec": round(
-                    max(
-                        (
-                            self._safe_float(value.get("max_interarrival_gap_sec"), 0.0)
-                            for value in item_rows.values()
-                        ),
-                        default=0.0,
-                    ),
-                    6,
-                ),
-            },
-        }
 
     def _record_micro_reversion_registration_receipt(
         self, *, item, realtime_type, observed_at_epoch
@@ -5966,6 +5662,8 @@ class KiwoomWSManager:
         rows = receipt.get("items")
         row = rows.get(normalized_item) if isinstance(rows, dict) else None
         if not isinstance(row, dict) or realtime_type not in {"0B", "0D"}:
+            return
+        if row.get('registration_transport_epoch') != self._market_data_transport_epoch:
             return
         previous_at = self._safe_float(row.get("last_received_at_epoch"), 0.0)
         observed_at = float(observed_at_epoch)
@@ -5997,31 +5695,46 @@ class KiwoomWSManager:
         transport_epochs = set(row.get("transport_epochs") or ())
         transport_epochs.add(int(self._market_data_transport_epoch))
         row["transport_epochs"] = sorted(transport_epochs)
-        item_rows = receipt.get("items") or {}
-        complete_count = sum(
-            set(value.get("received_realtime_types") or ()) >= {"0B", "0D"}
-            for value in item_rows.values()
-            if isinstance(value, dict)
-        )
-        receipt["summary"] = {
-            "requested_item_count": len(item_rows),
-            "complete_item_count": complete_count,
-            "incomplete_item_count": max(0, len(item_rows) - complete_count),
-            "exact_route_receipt_complete": bool(
-                item_rows and complete_count == len(item_rows)
-            ),
-            "max_interarrival_gap_sec": round(
-                max(
-                    (
-                        self._safe_float(value.get("max_interarrival_gap_sec"), 0.0)
-                        for value in item_rows.values()
-                        if isinstance(value, dict)
-                    ),
-                    default=0.0,
-                ),
-                6,
-            ),
-        }
+    def _record_main_source_registration_locked(self, item, realtime_types, *, source):
+        """One REG transition updates one bounded receipt; caller owns lock."""
+        today = datetime.now(KST).date().isoformat()
+        receipt = self._micro_reversion_registration_receipt
+        if receipt.get("schema") != "main_market_source_registration_v1" or receipt.get("effective_date") != today:
+            receipt = {"schema": "main_market_source_registration_v1", "effective_date": today,
+                       "registration_basis": "local_sent_registry_not_broker_ack", "broker_ack_observed": None,
+                       "items": {}, "decision_authority": "market_data_source_quality_only", "runtime_effect": False,
+                       "trading_runtime_effect": False, "actual_order_submitted": False, "broker_order_forbidden": True}
+            self._micro_reversion_registration_receipt = receipt
+        rows = receipt["items"];row = rows.get(item)
+        epoch = self._market_data_transport_epoch
+        if row is None or row.get("registration_transport_epoch") != epoch:
+            row = {"received_realtime_types": [], "receipt_count_by_type": {}, "first_received_at_epoch_by_type": {},
+                   "transport_epochs": [], "first_received_at_epoch": None, "last_received_at_epoch": None,
+                   "max_interarrival_gap_sec": 0.0}
+            rows[item] = row
+        row.update(registration_transport_epoch=epoch, registration_sent_at_epoch=time.time(),
+                   required_realtime_types=sorted(set(realtime_types) & {"0B", "0D"}), source=source)
+
+    @staticmethod
+    def _finish_main_source_registration_receipt(receipt, registered_items):
+        if receipt.get("schema") != "main_market_source_registration_v1":return receipt
+        rows = receipt.get("items") or {}
+        # Historical receipt rows retain their receive evidence; released rows
+        # are not active expectations and cannot renew an exact lease.
+        complete = 0
+        for item,row in rows.items():
+            row["active_expectation"] = item in registered_items
+            required = set(row.get("required_realtime_types") or ())
+            row["source_status"] = ("released" if item not in registered_items else
+                "received" if required <= set(row.get("received_realtime_types") or ()) else "awaiting_first_type")
+            complete += int(row["source_status"] == "received")
+        receipt["summary"] = {"active_item_count": len(registered_items), "received_item_count": complete,
+            "connection_rate": None if not registered_items else complete / len(registered_items),
+            "ack_count": None, "metric_role": "source_quality_gate", "decision_authority": "report_only",
+            "window_policy": "exact_item_current_transport_epoch", "sample_floor": "none",
+            "primary_decision_metric": "source_status", "source_quality_gate": "exact_item_type_epoch_receipts",
+            "forbidden_uses": ["order_authority", "policy_promotion", "execution_venue_claim", "economic_claim"]}
+        return receipt
 
     def _configure_micro_reversion_observation_items(
         self,
@@ -6032,151 +5745,12 @@ class KiwoomWSManager:
         protected_runtime_codes=(),
         protected_runtime_items=(),
     ):
-        new_items_by_code = self._normalize_micro_reversion_observation_items(items)
-        if new_items_by_code is None:
-            log_error(
-                "[WS] micro-reversion observation set rejected: invalid or "
-                "duplicate registration item"
-            )
-            return False
-        protected_codes = set(
-            self._normalize_subscribe_codes(protected_runtime_codes or ())
-        )
-        protected_items = {
-            str(item or "").strip().upper()
-            for item in protected_runtime_items or ()
-            if self._explicit_ws_item(item, self._normalize_code(item))
-        }
-        protected_codes.update(self._normalize_subscribe_codes(protected_items))
-
-        with self.lock:
-            old_items_by_code = {
-                code: ((items,) if isinstance(items, str) else tuple(items or ()))
-                for code, items in self._micro_reversion_observation_items_by_code.items()
-            }
-            old_observation_only_items = set(
-                self._micro_reversion_observation_only_items
-            )
-            retired_or_changed = {
-                code
-                for code, old_items in old_items_by_code.items()
-                if new_items_by_code.get(code) != old_items
-            }
-            removable_codes = retired_or_changed.intersection(
-                self._micro_reversion_observation_only_codes
-            )
-            for code in retired_or_changed:
-                self._micro_reversion_observation_items_by_code.pop(code, None)
-                self._micro_reversion_observation_only_codes.discard(code)
-                self._micro_reversion_observation_notice_codes.discard(code)
-
-        if removable_codes:
-            self.execute_unsubscribe(sorted(removable_codes))
-
-        with self.lock:
-            self._micro_reversion_observation_items_by_code.update(new_items_by_code)
-            desired_items = {
-                item for code_items in new_items_by_code.values() for item in code_items
-            }
-            registered_items = {
-                item
-                for code_items in self._registered_items_by_code.values()
-                for item in tuple(code_items or ())
-            }
-            trading_items = registered_items.difference(
-                self._micro_reversion_observation_only_items
-            )
-            trading_items.update(protected_items)
-            retained_stale_items = {
-                item
-                for item in old_observation_only_items.difference(desired_items)
-                if self._normalize_code(item) not in removable_codes
-            }
-            self._micro_reversion_observation_only_items = (
-                desired_items.difference(trading_items) | retained_stale_items
-            )
-            subscribe_items = [
-                item
-                for code, code_items in new_items_by_code.items()
-                for item in code_items
-                if item not in registered_items and item not in protected_items
-            ]
-            desired_codes = set(new_items_by_code)
-            self._micro_reversion_observation_only_codes = {
-                code
-                for code in desired_codes
-                if all(
-                    item in self._micro_reversion_observation_only_items
-                    for item in new_items_by_code[code]
-                )
-                and not any(
-                    item in trading_items
-                    for item in tuple(self._registered_items_by_code.get(code) or ())
-                )
-                and code not in protected_codes
-            }
-            for code in removable_codes:
-                for item in old_items_by_code.get(code) or ():
-                    self._micro_reversion_observation_route_data.pop(item, None)
-            self._initialize_micro_reversion_registration_receipt(
-                items=desired_items,
-                effective_date=str(
-                    effective_date or datetime.now(KST).date().isoformat()
-                ),
-                source=source,
-            )
-
-        if subscribe_items:
-            self.execute_subscribe(
-                subscribe_items,
-                force=True,
-                source=source,
-                realtime_types=("0B", "0D"),
-                observation_only=True,
-                remove_before_reg=False,
-            )
-        print(
-            "📌 [WS] micro-reversion source-only 관측 집합 반영: "
-            f"requested_symbols={len(new_items_by_code)} "
-            f"requested_items={sum(len(value) for value in new_items_by_code.values())} "
-            f"dispatch_requested_items={len(subscribe_items)} "
-            f"retired={len(retired_or_changed)} "
-            f"runtime_protected={len(set(new_items_by_code) & protected_codes)} "
-            "trading_runtime_effect=false"
-        )
-        return True
+        """Compatibility rejection for already queued retired commands."""
+        return False
 
     def _handle_micro_reversion_observation_set(self, payload):
-        if self._stop_event.is_set() or not isinstance(payload, dict):
-            return
-        effective_date = str(payload.get("effective_date") or "")
-        today = datetime.now(KST).date().isoformat()
-        valid_authority = bool(
-            effective_date == today
-            and payload.get("decision_authority")
-            == "next_session_market_data_observation_only"
-            and payload.get("runtime_effect") is False
-            and payload.get("market_data_subscription_effect") is True
-            and payload.get("trading_runtime_effect") is False
-            and payload.get("trading_decision_effect") is False
-            and payload.get("actual_order_submitted") is False
-            and payload.get("broker_order_forbidden") is True
-            and payload.get("manual_control_exclusion_applied") is False
-        )
-        if not valid_authority:
-            log_error(
-                "[WS] micro-reversion observation set rejected: "
-                f"effective_date={effective_date or '-'} today={today} "
-                "reason=stale_or_authority_contract"
-            )
-            return
-        self._configure_micro_reversion_observation_items(
-            payload.get("registration_items") or (),
-            source=str(payload.get("source") or "micro_reversion_collection_feedback"),
-            effective_date=effective_date,
-            protected_runtime_codes=payload.get("protected_runtime_codes") or (),
-            protected_runtime_items=payload.get("protected_runtime_items") or (),
-        )
+        """Reject historical feedback without REG/REMOVE or ownership changes."""
+        return False
 
     def _handle_reg_event(self, payload):
         if self._stop_event.is_set():

@@ -1,3 +1,7 @@
+"""Archive-only collection metadata regressions and permanent retirement fence.
+
+The explicit historical owner fixture never enables a runtime WS producer.
+"""
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -14,6 +18,18 @@ from src.engine.scalping.micro_reversion.collection_targets import (
 KST = ZoneInfo("Asia/Seoul")
 
 
+@pytest.fixture(autouse=True)
+def historical_owner_fixture(request, monkeypatch):
+    # Reproduce immutable historical metadata only. Current Main/WS ownership
+    # is checked independently without this fixture below and in WS tests.
+    if not request.node.name.startswith("test_archive_"):
+        return
+    from src.engine.scalping.micro_reversion import collection_targets as targets
+    from src.trading.config import owner_retirement
+    monkeypatch.setattr(targets, "new_entry_retired", lambda *args: False)
+    monkeypatch.setattr(owner_retirement, "new_entry_retired", lambda *args: False)
+
+
 def _report(gaps):
     return {
         "schema": "machine_microstructure_attribution_v1",
@@ -22,7 +38,7 @@ def _report(gaps):
     }
 
 
-def test_exact_probe_conflict_augments_only_next_session_observation_route(tmp_path):
+def test_archive_exact_probe_conflict_augments_only_next_session_observation_route(tmp_path):
     source_date = "2026-09-30"
     source_sha = "a" * 64
     rows = [
@@ -104,7 +120,7 @@ def test_exact_probe_conflict_augments_only_next_session_observation_route(tmp_p
     ]
 
 
-def test_unobserved_symbols_become_bounded_next_trading_day_targets():
+def test_archive_unobserved_symbols_become_bounded_next_trading_day_targets():
     payload = build_collection_targets(
         _report(
             [
@@ -151,7 +167,7 @@ def test_unobserved_symbols_become_bounded_next_trading_day_targets():
     )
 
 
-def test_duplicate_profile_gaps_merge_to_one_symbol_target():
+def test_archive_duplicate_profile_gaps_merge_to_one_symbol_target():
     payload = build_collection_targets(
         _report(
             [
@@ -183,7 +199,7 @@ def test_duplicate_profile_gaps_merge_to_one_symbol_target():
     ]
 
 
-def test_dynamic_machine_universe_continues_bounded_policy_sample_collection():
+def test_archive_dynamic_machine_universe_continues_bounded_policy_sample_collection():
     report = _report([])
     report["consumers"] = {"episode_machine_postclose_tuning": {"profiles": {
         "samsung": dict(symbol="005930", scope="active_episode_owner", expected_venues=["KRX"]),
@@ -200,7 +216,7 @@ def test_dynamic_machine_universe_continues_bounded_policy_sample_collection():
     }
 
 
-def test_episode_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
+def test_archive_episode_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
     report = _report([])
     report["consumers"] = {"episode_machine_postclose_tuning": {"profiles": {
         "research:111111:KRX_REGULAR": dict(symbol="111111", scope="prospective_episode_research",
@@ -219,7 +235,7 @@ def test_episode_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
     assert all(not row["gap_classes"] for row in payload["selected_targets"])
 
 
-def test_actual_episode_execution_gap_keeps_active_owner_collection_priority():
+def test_archive_actual_episode_execution_gap_keeps_active_owner_collection_priority():
     payload = build_collection_targets(
         _report(
             [
@@ -244,7 +260,7 @@ def test_actual_episode_execution_gap_keeps_active_owner_collection_priority():
     assert target["expected_venue"] == "KRX"
 
 
-def test_exact_date_loader_rejects_stale_or_authority_mutation(tmp_path):
+def test_archive_exact_date_loader_rejects_stale_or_authority_mutation(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -277,7 +293,7 @@ def test_exact_date_loader_rejects_stale_or_authority_mutation(tmp_path):
     assert rejected["registration_items"] == []
 
 
-def test_exact_date_loader_rejects_top_level_runtime_authority_mutation(tmp_path):
+def test_archive_exact_date_loader_rejects_top_level_runtime_authority_mutation(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -303,7 +319,7 @@ def test_exact_date_loader_rejects_top_level_runtime_authority_mutation(tmp_path
     assert rejected["registration_items"] == []
 
 
-def test_exact_date_loader_rejects_non_adjacent_source_date(tmp_path):
+def test_archive_exact_date_loader_rejects_non_adjacent_source_date(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -327,7 +343,7 @@ def test_exact_date_loader_rejects_non_adjacent_source_date(tmp_path):
     assert rejected["registration_items"] == []
 
 
-def test_malformed_symbol_is_not_silently_truncated_into_a_target():
+def test_archive_malformed_symbol_is_not_silently_truncated_into_a_target():
     payload = build_collection_targets(
         _report(
             [
@@ -347,7 +363,7 @@ def test_malformed_symbol_is_not_silently_truncated_into_a_target():
     assert payload["status"] == "no_repairable_gap"
 
 
-def test_non_trading_source_date_cannot_overwrite_next_session_targets():
+def test_archive_non_trading_source_date_cannot_overwrite_next_session_targets():
     report = _report([])
     report["target_date"] = "2026-08-15"
 
@@ -357,7 +373,7 @@ def test_non_trading_source_date_cannot_overwrite_next_session_targets():
         build_collection_targets(report)
 
 
-def test_loader_rejects_non_trading_source_date_even_for_next_trading_day(
+def test_archive_loader_rejects_non_trading_source_date_even_for_next_trading_day(
     tmp_path,
 ):
     payload = build_collection_targets(
@@ -384,7 +400,7 @@ def test_loader_rejects_non_trading_source_date_even_for_next_trading_day(
     assert rejected["registration_items"] == []
 
 
-def test_active_owner_symbols_are_not_delayed_by_research_rotation_budget():
+def test_archive_active_owner_symbols_are_not_delayed_by_research_rotation_budget():
     gaps = [
         {
             "owner": "episode",
@@ -414,7 +430,7 @@ def test_active_owner_symbols_are_not_delayed_by_research_rotation_budget():
     assert observed == {"111111", "222222", "333333", "444444", "555555", "666666"}
 
 
-def test_active_multi_venue_symbol_collects_all_exact_routes_each_day():
+def test_archive_active_multi_venue_symbol_collects_all_exact_routes_each_day():
     gap = {
         "owner": "episode",
         "scope_id": "multi_venue",
@@ -432,7 +448,7 @@ def test_active_multi_venue_symbol_collects_all_exact_routes_each_day():
         assert target["registration_items"] == ["111111", "111111_NX", "111111_AL"]
 
 
-def test_active_symbol_routes_do_not_compete_for_research_rotation_budget():
+def test_archive_active_symbol_routes_do_not_compete_for_research_rotation_budget():
     symbols = ("111111", "222222", "333333")
     gaps = [
         {
@@ -467,7 +483,7 @@ def test_active_symbol_routes_do_not_compete_for_research_rotation_budget():
         )
 
 
-def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
+def test_archive_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
     payload = build_collection_targets(
         _report(
             [
@@ -495,7 +511,7 @@ def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
     assert [row["symbol"] for row in payload["selected_targets"]] == ["111111", "222222"]
 
 
-def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
+def test_archive_active_owner_full_coverage_precedes_prospective_rotation_budget():
     gaps = [
         {
             "owner": "episode",
@@ -536,7 +552,7 @@ def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
     assert payload["overflow_targets"] == []
 
 
-def test_actual_episode_execution_priority_does_not_drop_other_active_owner():
+def test_archive_actual_episode_execution_priority_does_not_drop_other_active_owner():
     payload = build_collection_targets(
         _report(
             [
@@ -568,7 +584,7 @@ def test_actual_episode_execution_priority_does_not_drop_other_active_owner():
     assert payload["selected_targets"][0]["actual_execution_observed"] is False
 
 
-def test_loader_rejects_false_active_owner_full_coverage_claim(tmp_path):
+def test_archive_loader_rejects_false_active_owner_full_coverage_claim(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -592,7 +608,7 @@ def test_loader_rejects_false_active_owner_full_coverage_claim(tmp_path):
     assert rejected["registration_items"] == []
 
 
-def test_loader_rejects_active_owner_hidden_in_prospective_overflow(tmp_path):
+def test_archive_loader_rejects_active_owner_hidden_in_prospective_overflow(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -629,7 +645,7 @@ def test_loader_rejects_active_owner_hidden_in_prospective_overflow(tmp_path):
 
 
 @pytest.mark.parametrize("invalid_value", [None, 0, 1, "true", "false"])
-def test_loader_rejects_non_boolean_selected_active_owner(tmp_path, invalid_value):
+def test_archive_loader_rejects_non_boolean_selected_active_owner(tmp_path, invalid_value):
     payload = build_collection_targets(
         _report(
             [
@@ -653,7 +669,7 @@ def test_loader_rejects_non_boolean_selected_active_owner(tmp_path, invalid_valu
     assert rejected["registration_items"] == []
 
 
-def test_loader_rejects_overflow_count_mismatch(tmp_path):
+def test_archive_loader_rejects_overflow_count_mismatch(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -678,7 +694,7 @@ def test_loader_rejects_overflow_count_mismatch(tmp_path):
     assert rejected["registration_items"] == []
 
 
-def test_loader_rejects_selected_prospective_count_above_research_budget(tmp_path):
+def test_archive_loader_rejects_selected_prospective_count_above_research_budget(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -709,7 +725,7 @@ def test_loader_rejects_selected_prospective_count_above_research_budget(tmp_pat
     assert rejected["registration_items"] == []
 
 
-def test_active_owner_capacity_excess_fails_instead_of_silent_overflow():
+def test_archive_active_owner_capacity_excess_fails_instead_of_silent_overflow():
     gaps = [
         {
             "owner": "episode",
@@ -728,7 +744,7 @@ def test_active_owner_capacity_excess_fails_instead_of_silent_overflow():
         build_collection_targets(_report(gaps), max_symbols=1)
 
 
-def test_loader_remains_compatible_with_exact_date_v1_artifact(tmp_path):
+def test_archive_loader_remains_compatible_with_exact_date_v1_artifact(tmp_path):
     payload = build_collection_targets(
         _report(
             [
@@ -752,7 +768,7 @@ def test_loader_remains_compatible_with_exact_date_v1_artifact(tmp_path):
     assert loaded["registration_items"] == ["555555"]
 
 
-def test_independent_prospective_budget_round_trip_and_legacy_contract(tmp_path):
+def test_archive_independent_prospective_budget_round_trip_and_legacy_contract(tmp_path):
     report = _report([
         {"owner": "episode", "scope_id": "active", "scope_kind": "active_episode_owner", "symbol": "111111", "expected_venues": ["SOR"], "gap_class": "micro_symbol_not_observed"},
         {"owner": "episode", "scope_id": "research", "scope_kind": "prospective_episode_research", "symbol": "222222", "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed"},
@@ -772,7 +788,7 @@ def test_independent_prospective_budget_round_trip_and_legacy_contract(tmp_path)
     assert load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)["status"] == "loaded"
 
 
-def test_prospective_budget_respects_remaining_registration_capacity(tmp_path):
+def test_archive_prospective_budget_respects_remaining_registration_capacity(tmp_path):
     gaps = [
         {"owner": "episode", "scope_id": f"active_{index}",
          "scope_kind": "active_episode_owner", "symbol": f"{index:06d}",
@@ -794,10 +810,40 @@ def test_prospective_budget_respects_remaining_registration_capacity(tmp_path):
 
 
 @pytest.mark.parametrize("budget", [None, "invalid", [1], 4, True])
-def test_loader_rejects_non_object_budget_without_registering(tmp_path, budget):
+def test_archive_loader_rejects_non_object_budget_without_registering(tmp_path, budget):
     payload = build_collection_targets(_report([]))
     payload["budget"] = budget
     write_collection_targets(payload, root=tmp_path)
     result = load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)
     assert result["status"] == "invalid_budget_contract"
     assert result["registration_items"] == []
+
+
+@pytest.mark.parametrize("owner", ["episode", "widget_auto_trade"])
+def test_current_retirement_excludes_old_collection_producers(owner):
+    report = _report([dict(owner=owner, symbol="111111", scope_id="old",
+        scope_kind="active_episode_owner", expected_venues=["SOR"],
+        gap_class="micro_symbol_not_observed")])
+    payload = build_collection_targets(report)
+    assert payload["selected_targets"] == []
+    assert payload["overflow_targets"] == []
+    assert payload["authority"]["trading_runtime_effect"] is False
+
+
+def test_current_reader_keeps_historical_rows_without_registering_retired_owner(tmp_path, monkeypatch):
+    from src.engine.scalping.micro_reversion import collection_targets as targets
+    from src.trading.config import owner_retirement
+    report = _report([dict(owner="episode", symbol="111111", scope_id="old",
+        scope_kind="active_episode_owner", expected_venues=["SOR"],
+        gap_class="micro_symbol_not_observed")])
+    with monkeypatch.context() as historical:
+        historical.setattr(targets, "new_entry_retired", lambda *args: False)
+        historical.setattr(owner_retirement, "new_entry_retired", lambda *args: False)
+        payload = build_collection_targets(report)
+    path = write_collection_targets(payload, root=tmp_path)
+    original = path.read_bytes()
+    result = load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)
+    assert result["status"] == "loaded"
+    assert result["registration_items"] == []
+    assert result["payload"]["selected_targets"] == payload["selected_targets"]
+    assert path.read_bytes() == original

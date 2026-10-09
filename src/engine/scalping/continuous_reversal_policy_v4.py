@@ -18,10 +18,11 @@ SCHEMA = 'continuous_reversal_policy_v4'
 
 
 def contract_modules():
+    from src.trading.market import session_contract as SESSION
     from src.engine.scalping import continuous_reversal_path_postclose as PC
     from src.engine.scalping import reversal_policy_backend as D
     from src.engine.scalping import continuous_reversal_policy_v3 as PREVIOUS
-    return (K,B,A,V1,C,R,PC,D,A.OLD,C.OLD,R.OLD,PREVIOUS,__import__(__name__,fromlist=['*']))
+    return (SESSION,K,B,A,V1,C,R,PC,D,A.OLD,C.OLD,R.OLD,PREVIOUS,__import__(__name__,fromlist=['*']))
 
 
 def migrate(family):
@@ -89,13 +90,26 @@ def validate_sources(bundle, data_root, *, code_root=None):
     f = bundle['continuous_reversal']; validate_family(f)
     from src.engine.scalping import continuous_reversal_path_postclose as PC
     if code_root is not None:
+        import os
+        import subprocess
         from src.engine.infrastructure.runtime_release_router import _release_identity
-        identity=_release_identity(Path(data_root).resolve().parent,str(Path(code_root)/'src'),
+        origin=Path(code_root).resolve(strict=True)
+        identity=_release_identity(Path(data_root).resolve().parent,str(origin/'src'),
                                    'reversal_transition_parent',f['release_commit'])
         if identity['source_integrity']!='git_commit_and_clean_runtime_source':
             raise ValueError('v4_transition_parent_code_unattested')
+        # The origin owns its pin inventory as well as the pinned bytes. A new
+        # common module is not retroactively required by a sealed old family.
+        # Current runtime validation below remains strict and never falls back.
+        script=('import json,sys; from pathlib import Path; '
+                'from src.engine.scalping.continuous_reversal_policy_v4 import validate_sources; '
+                'validate_sources(json.load(sys.stdin),Path(sys.argv[1]))')
+        subprocess.run([str(origin/'.venv/bin/python'),'-c',script,str(Path(data_root).resolve())],
+            input=json.dumps(bundle),text=True,check=True,capture_output=True,timeout=120,cwd=origin,
+            env={**os.environ,'PYTHONPATH':str(origin)})
+        return bundle
     for m in contract_modules():
-        path = Path(code_root)/'src/engine/scalping'/Path(m.__file__).name if code_root else Path(m.__file__)
+        path = Path(m.__file__)
         if N._source_hash(str(path),N._signature(path)) != f['contract_file_sha256'].get(path.name):
             raise ValueError('v4_contract_code_changed:'+path.name)
     for name in ('machine','auxiliary'):

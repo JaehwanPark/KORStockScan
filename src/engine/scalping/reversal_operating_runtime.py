@@ -108,7 +108,7 @@ def observe_normalized(symbol, session, envelope):
     market = K.market_bucket(session)
     if venue not in C.ROUTES.get(market, ()):
         return
-    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
     item = envelope.get('item')
     if not isinstance(item,str) or item.split('_',1)[0] != symbol or _explicit_item_venue(item) != venue:
         return
@@ -150,7 +150,7 @@ def observe_native(symbol, session, envelope):
         return R.observe_normalized(symbol,session,envelope)
     venue='SOR' if envelope.get('market_route')=='krx_nxt_integrated' else envelope.get('effective_venue')
     market=K.market_bucket(session)
-    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
     item=envelope.get('item')
     if venue not in C.ROUTES.get(market,()) or not isinstance(item,str) or item.split('_',1)[0]!=symbol or _explicit_item_venue(item)!=venue:return
     try:

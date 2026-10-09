@@ -135,6 +135,8 @@ class RawMarketObservation:
     # Optional additive lineage: old rows remain readable but cannot establish
     # cumulative-volume continuity for a WS-completed minute.
     source_item: str = ""
+    native_transport_epoch: int | None = None
+    native_route_sequence: int | None = None
     cumulative_volume_raw: str | None = None
     trade_volume_raw: str | None = None
     best_bid: float | None = None
@@ -162,14 +164,12 @@ class RawMarketObservation:
             raise ValueError("source_sequence must equal series_sequence")
         if self.sequence_epoch <= 0:
             raise ValueError("sequence_epoch must be positive")
-        _validate_aware_timestamp(self.exchange_timestamp, "exchange_timestamp")
-        _validate_aware_timestamp(
+        # Parse strict aware strings once instead of reparsing for the delta.
+        exchange_at = _validate_aware_timestamp(self.exchange_timestamp, "exchange_timestamp")
+        receive_at = _validate_aware_timestamp(
             self.local_receive_timestamp, "local_receive_timestamp"
         )
-        if (
-            _timestamp_delta_ms(self.exchange_timestamp, self.local_receive_timestamp)
-            < 0
-        ):
+        if receive_at < exchange_at:
             raise ValueError(
                 "local_receive_timestamp must not precede exchange_timestamp"
             )
@@ -351,14 +351,16 @@ class ObserverRuntimeMetrics:
             dropped_envelope_count = self._dropped
             invalid_envelope_count = self._invalid
             isolated_error_count = self._isolated_error
+        callback_quantiles = _percentiles(callback, (50, 95, 99))
+        enqueue_quantiles = _percentiles(enqueue, (50, 95, 99))
         return ObserverRuntimeSnapshot(
             producer_callback_count=callback_count,
-            producer_callback_latency_p50_ms=_percentile(callback, 50),
-            producer_callback_latency_p95_ms=_percentile(callback, 95),
-            producer_callback_latency_p99_ms=_percentile(callback, 99),
-            enqueue_latency_p50_ms=_percentile(enqueue, 50),
-            enqueue_latency_p95_ms=_percentile(enqueue, 95),
-            enqueue_latency_p99_ms=_percentile(enqueue, 99),
+            producer_callback_latency_p50_ms=callback_quantiles[0],
+            producer_callback_latency_p95_ms=callback_quantiles[1],
+            producer_callback_latency_p99_ms=callback_quantiles[2],
+            enqueue_latency_p50_ms=enqueue_quantiles[0],
+            enqueue_latency_p95_ms=enqueue_quantiles[1],
+            enqueue_latency_p99_ms=enqueue_quantiles[2],
             exchange_to_receive_latency_p95_ms=_percentile(exchange_to_receive, 95),
             quote_age_p95_ms=_percentile(quote_age, 95),
             queue_high_water=queue_high_water,
@@ -438,10 +440,12 @@ class ObservationAdapter:
             )
 
 
-def _validate_aware_timestamp(value: str, field_name: str) -> None:
+def _validate_aware_timestamp(value: str, field_name: str):
     from datetime import datetime
 
-    text = str(value or "").strip()
+    if not isinstance(value,str):
+        raise ValueError(f"{field_name} must be an ISO-8601 string")
+    text = value
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     try:
@@ -450,6 +454,7 @@ def _validate_aware_timestamp(value: str, field_name: str) -> None:
         raise ValueError(f"{field_name} must be ISO-8601") from exc
     if parsed.tzinfo is None:
         raise ValueError(f"{field_name} must include timezone")
+    return parsed
 
 
 def _timestamp_delta_ms(start: str, end: str) -> float:
@@ -463,8 +468,12 @@ def _timestamp_delta_ms(start: str, end: str) -> float:
 
 
 def _percentile(values: tuple[float, ...], percentile: int) -> float:
+    return _percentiles(values, (percentile,))[0]
+
+
+def _percentiles(values: tuple[float, ...], percentiles: tuple[int, ...]) -> tuple[float, ...]:
+    """Sort a bounded snapshot once, retaining the original rank and rounding."""
     if not values:
-        return 0.0
+        return (0.0,) * len(percentiles)
     ordered = sorted(values)
-    index = round((len(ordered) - 1) * percentile / 100)
-    return round(ordered[index], 6)
+    return tuple(round(ordered[round((len(ordered)-1)*p/100)], 6) for p in percentiles)

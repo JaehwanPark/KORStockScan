@@ -1,5 +1,6 @@
 """Main source replay readers transferred from retired episode attribution."""
 from __future__ import annotations
+from src.engine.scalping.micro_reversion.observer_source_quality import source_close_verified, MAIN_SOURCE_CONTRACT, source_loss_counters, main_raw_epoch_validation
 import gzip
 import hashlib
 import json
@@ -459,10 +460,10 @@ def _closed_ingress_receipt_loss(
         and timestamp.get("exact_rejected_row_exclusion_proven") is False
         and timestamp.get("rejection_stage") == "before_observer_enqueue"
         and collector.get("collector_lifecycle") == "closed"
-        and collector.get("reference_reconciliation_completed") is True
+        and source_close_verified(collector)
         and all(
             type(collector.get(key)) is int and collector[key] == 0
-            for key in CANARY_LOSS_COUNTERS
+            for key in source_loss_counters(collector)
         )
         and all(collector.get(key) is False for key in CANARY_FORBIDDEN_TRUE_FIELDS)
         and collector.get("broker_order_forbidden") is True
@@ -510,6 +511,7 @@ def _micro_context(
         excluded_scopes = set()
         exclusion_manifest_status = "missing_or_invalid"
 
+    canary_payload = None
     canary_status = "not_requested"
     allowed_canary_epoch: int | None = None
     unverified_epoch_row_counts: Counter[str] = Counter()
@@ -566,7 +568,7 @@ def _micro_context(
             guard.get("status") == "stopped_clean"
             and isinstance(collector, dict)
             and collector.get("collector_lifecycle") == "closed"
-            and collector.get("reference_reconciliation_completed") is True
+            and source_close_verified(collector)
         )
         row_quarantine_validation = _timestamp_regression_row_quarantine_validation(
             guard, collector
@@ -690,7 +692,29 @@ def _micro_context(
             ),
         }
 
+    # Main raw rows need their own closed epoch evidence. A legacy or latest
+    # receipt cannot retroactively approve unrelated collector generations.
+    allowed_main_epochs=set()
+    if canary_payload and (canary_payload.get('collector_snapshot') or {}).get('source_contract')==MAIN_SOURCE_CONTRACT:
+        main_validation=main_raw_epoch_validation(canary_payload,source_date=target_date)
+        allowed_main_epochs.update(main_validation.get('allowed_sequence_epochs',[]))
+        from src.engine.scalping.continuous_reversal_source import _source_quality_receipt
+        quality=_source_quality_receipt(observation_root.parents[1],target_date)
+        allowed_main_epochs.update(quality.get('allowed_sequence_epochs',[]))
+        allowed_main_epochs.difference_update(quality.get('denied_sequence_epochs',[]))
+        canary_source['main_raw_source_quality_receipt']=quality
+        canary_source['main_raw_epoch_validation']=main_validation
+        canary_valid=canary_valid and bool(allowed_main_epochs)
+        if not allowed_main_epochs:canary_source['status']='main_raw_closed_epoch_unverified'
+
     def is_excluded(payload: dict[str, Any]) -> bool:
+        contract=payload.get('source_contract')
+        if contract is not None and contract != MAIN_SOURCE_CONTRACT:
+            unverified_epoch_row_counts['unsupported_source_contract'] += 1
+            return True
+        if payload.get('source_contract')==MAIN_SOURCE_CONTRACT and (type(payload.get('sequence_epoch')) is not int or payload['sequence_epoch'] not in allowed_main_epochs):
+            unverified_epoch_row_counts[str(payload.get('sequence_epoch'))] += 1
+            return True
         if allowed_canary_epoch is not None:
             epoch = payload.get("sequence_epoch")
             if type(epoch) is not int or epoch != allowed_canary_epoch:
@@ -990,7 +1014,7 @@ def _micro_context(
                         adaptive_source_rows["depth"] += 1
 
     for payload in _iter_relevant_rows(
-        ref_paths, symbols, diagnostics=read_diagnostics
+        (() if (canary_payload or {}).get("collector_snapshot", {}).get("source_contract") == MAIN_SOURCE_CONTRACT else ref_paths), symbols, diagnostics=read_diagnostics
     ):
         symbol = str(payload.get("symbol"))
         if not _physical_scope_matches_row(payload):

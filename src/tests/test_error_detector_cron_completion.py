@@ -21,6 +21,37 @@ def test_finalization_detector_window_precedes_preopen_scanner():
     assert jobs["log_rotation_cleanup"]["window_end"] == (6, 50)
 
 
+@pytest.mark.parametrize('trading,clock,marker,expected', [
+    (False, (21, 5), 'START', 'skip_non_trading_day'),
+    (True, (21, 5), 'START', 'in_progress'),
+    (True, (22, 20), 'START', 'in_progress'),
+    (True, (22, 35), 'START', 'fail'),
+    (True, (21, 5), 'FAIL', 'fail'),
+    (True, (21, 5), 'DONE', 'pass'),
+    (True, (22, 35), 'OLD_DONE', 'fail'),
+])
+def test_dashboard_archive_calendar_eod_wait_and_terminal_failure(
+    monkeypatch, tmp_path, trading, clock, marker, expected,
+):
+    import src.engine.error_detectors.cron_completion as cc
+
+    day = '2026-10-08' if trading else '2026-10-09'
+    log = tmp_path / 'logs/dashboard_db_archive_cron.log'
+    log.parent.mkdir()
+    marker_day = '2026-10-07' if marker == 'OLD_DONE' else day
+    log.write_text(f'[{marker.removeprefix("OLD_")}] dashboard_db_archive target_date={marker_day}\n')
+    monkeypatch.setattr(cc, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(cc, '_today_kst', lambda: day)
+    monkeypatch.setattr(cc, '_kst_time_tuple', lambda: clock)
+    monkeypatch.setattr(cc, 'is_krx_trading_day', lambda _: trading)
+    monkeypatch.setattr(cc, 'CRON_JOB_REGISTRY', [dict(job) for job in CRON_JOB_REGISTRY
+                                               if job['id'] == 'dashboard_db_archive'])
+    monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '50 20 * * 1-5 # DASHBOARD_DB_ARCHIVE_2050')
+    result = CronCompletionDetector(dry_run=True).check()
+    assert result.details['dashboard_db_archive_status'] == expected
+    assert result.severity == ('fail' if expected == 'fail' else 'pass')
+
+
 @pytest.mark.parametrize(
     ("finalized_at", "cleaned_at", "expected_status", "expected_severity"),
     [
@@ -285,7 +316,9 @@ def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_p
                        env=env, check=True, capture_output=True, text=True)
         lines = state.read_text().splitlines()
         assert lines.count(finalizer) == 1
-        assert sum("# ERROR_DETECTION_FULL" in line for line in lines) == 2
+        assert sum("# ERROR_DETECTION_FULL" in line for line in lines) == 3
+        assert sum(line.startswith("35 22 ") and "ERROR_DETECTION_FULL_ARCHIVE_TERMINAL" in line
+                   for line in lines) == 1
 
 
 @pytest.mark.parametrize(

@@ -146,49 +146,40 @@ def test_required_report_is_bound_to_this_wrapper_run(
     )
 
 
-def test_latch_and_freshness_match_source_hypothesis_at_ttl_boundary(tmp_path):
-    from src.engine.monitoring.machine_market_weakness_response import (
-        _market_timelines,
-        _state_at,
-    )
-    from src.engine.risk.market_weakness_entry_guard import (
-        evaluate_market_weakness_entry_guard,
-    )
+def test_observer_latch_and_healthy_source_freshness_at_ttl_boundary(tmp_path):
+    from src.engine.risk.market_weakness_state import observation_freshness
 
     report_path = tmp_path / "report.json"
     state_path = tmp_path / "state.json"
-    observations = []
-    for minute in (0, 1, 2, 4, 15, 17, 19):
-        state = "SINGLE_MARKET_WEAKNESS" if minute < 15 else "RECOVERY_EVIDENCE"
-        report = _weakness_report(state, minute)
+    expected_active = {0: False, 1: False, 2: False, 4: True,
+                       15: True, 17: True, 19: False}
+    for minute, active in expected_active.items():
+        classification = "SINGLE_MARKET_WEAKNESS" if minute < 15 else "RECOVERY_EVIDENCE"
+        report = _weakness_report(classification, minute)
         if minute == 1:
             report["market_weakness_observation"]["source_quality_ready"] = False
             _refresh_weakness_identity(report)
         report_path.write_text(json.dumps(report))
         mod.notify_from_report(
-            report_path,
-            kind="market_weakness",
-            state_file=state_path,
+            report_path, kind="market_weakness", state_file=state_path,
             send_enabled=False,
         )
-        observation = report["market_weakness_observation"]
-        observations.append(
-            {**observation, "as_of": datetime.fromisoformat(observation["as_of"])}
+        saved = json.loads(state_path.read_text())
+        assert saved["market_weakness"]["market_states"]["KOSPI"]["active"] is active
+        health = saved["market_weakness_observer_health"]
+        assert health["ready"] is (minute != 1)
+        healthy_minute = 0 if minute == 1 else minute
+        healthy_at = datetime.fromisoformat(
+            f"2026-08-28T10:{healthy_minute:02d}:00+09:00"
         )
-        timeline = _market_timelines(
-            observations, activation_observations=2, release_observations=3
-        )["KOSPI"]
-        for elapsed in (1, 300, 301, 600):
-            now = observations[-1]["as_of"] + timedelta(seconds=elapsed)
-            replay, _ = _state_at(timeline, now)
-            live = evaluate_market_weakness_entry_guard(
-                symbol="005930",
-                owner="episode",
-                listing_market="KOSPI",
-                now=now,
-                state_path=state_path,
+        assert datetime.fromisoformat(health["last_healthy_observation_as_of"]) == healthy_at
+        for elapsed, expected_fresh in ((-31, False), (-30, True),
+                                         (0, True), (300, True), (301, False)):
+            fresh, age = observation_freshness(
+                healthy_at, healthy_at + timedelta(seconds=elapsed)
             )
-            assert live.blocked == replay["active"]
+            assert fresh is expected_fresh
+            assert age == elapsed
 
 
 def _refresh_weakness_identity(report: dict) -> dict:
@@ -976,13 +967,14 @@ def test_market_weakness_requires_two_unique_observations(tmp_path, monkeypatch)
         == "sent"
     )
     assert len(sent) == 1
-    assert "한쪽 시장 약세 지속 관찰" in sent[0][1]
-    assert "관찰 owner: source-only 상태·반사실 수집" in sent[0][1]
-    assert "실행 bridge: 해당 시장 위젯·에피소드 신규·추가 매수 차단" in sent[0][1]
-    assert "비영향: 메인봇·보유·매도·목표 주문 변경 없음" in sent[0][1]
+    assert "한쪽 시장 약세 관찰 활성" in sent[0][1]
+    assert "관찰 owner: source-only 시장 상태 관찰" in sent[0][1]
+    assert "매매 영향 없음" in sent[0][1]
+    assert "장후 연구 대상" in sent[0][1]
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["market_weakness"]["phase"] == "active"
     assert saved["market_weakness"]["weak_streak"] == 2
+    assert saved["market_weakness"]["execution_bridge_runtime_effect"] is False
 
 
 def test_market_weakness_notifier_consumes_observation_bound_reviewed_thresholds(
@@ -1201,8 +1193,8 @@ def test_broad_raw_observation_does_not_overstate_partially_confirmed_scope(
 
     saved = json.loads(state.read_text(encoding="utf-8"))["market_weakness"]
     assert saved["active_markets"] == ["KOSPI"]
-    assert "한쪽 시장 약세 지속 관찰" in sent[0]
-    assert "시장 전반 약세 지속" not in sent[0]
+    assert "한쪽 시장 약세 관찰 활성" in sent[0]
+    assert "🟠 시장 약세 관찰 활성" not in sent[0]
 
 
 def test_single_market_latch_releases_on_same_market_recovery(tmp_path, monkeypatch):
@@ -1493,8 +1485,8 @@ def test_market_weakness_release_needs_three_margin_passes(tmp_path, monkeypatch
         == "sent"
     )
     assert len(sent) == 2
-    assert "시장 전반 약세 지속" in sent[0][1]
-    assert "시장 약세 관찰 해제" in sent[1][1]
+    assert "🟠 시장 약세 관찰 활성" in sent[0][1]
+    assert "시장 약세 관찰 회복" in sent[1][1]
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["market_weakness"]["phase"] == "released"
     assert saved["market_weakness"]["recovery_streak"] == 3
@@ -1608,8 +1600,8 @@ def test_market_weakness_single_market_escalates_to_broad(tmp_path, monkeypatch)
         == "sent"
     )
     assert len(sent) == 2
-    assert "한쪽 시장 약세 지속 관찰" in sent[0][1]
-    assert "시장 전반 약세로 확산" in sent[1][1]
+    assert "한쪽 시장 약세 관찰 활성" in sent[0][1]
+    assert "시장 약세 관찰 범위 확대" in sent[1][1]
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["market_weakness"]["active_scope"] == "BROAD_WEAKNESS"
 
@@ -1729,3 +1721,150 @@ def test_identical_carry_source_handoff_preserves_live_latch(tmp_path, prior_cou
     assert current["market_states"]["KOSPI"]["recovery_streak"] == (1 if prior_count == 2 else 0)
     assert current["hysteresis_policy"] == carry
     assert after["market_weakness_observer_health"]["ready"] is True
+
+
+@pytest.mark.parametrize("branch", ["duplicate", "too_close", "invalid_source", "inconsistent_transition"])
+def test_legacy_pending_never_replays_retired_execution_claims(tmp_path, monkeypatch, branch):
+    report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
+    for minute in (1, 2):
+        report = _weakness_report("SINGLE_MARKET_WEAKNESS", minute)
+        report_path.write_text(json.dumps(report))
+        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+    saved = json.loads(state_path.read_text())
+    before = saved["market_weakness"]["market_states"]
+    saved["market_weakness"]["execution_bridge_runtime_effect"] = True
+    saved["market_weakness"]["pending_notification"]["message"] = "실행 bridge: 위젯·에피소드 신규 매수 차단 및 잔량 취소"
+    if branch == "inconsistent_transition":
+        saved["market_weakness"]["pending_notification"]["transition"] = "release"
+    state_path.write_text(json.dumps(saved))
+    if branch == "too_close":
+        report["as_of"] = "2026-08-28T10:02:30+09:00"
+        report["market_weakness_observation"]["as_of"] = report["as_of"]
+        _refresh_weakness_identity(report)
+    if branch == "invalid_source":
+        report["market_weakness_observation"]["source_quality_ready"] = False
+        _refresh_weakness_identity(report)
+    report_path.write_text(json.dumps(report))
+    sent = []
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("fake-token", "admin"))
+    monkeypatch.setattr(mod, "_target_chat_ids", lambda *_args: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda _token, _chat, message: sent.append(message))
+    mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+    current = json.loads(state_path.read_text())["market_weakness"]
+    assert current["execution_bridge_runtime_effect"] is False
+    assert "pending_notification" not in current
+    if branch in {"duplicate", "too_close"}:
+        assert len(sent) == 1
+        assert "매매 영향 없음" in sent[0]
+        assert "장후 연구 대상" in sent[0]
+        assert not any(word in sent[0] for word in ("실행 bridge", "위젯", "에피소드", "잔량 취소"))
+        assert current["market_states"] == before
+    else:
+        assert sent == []
+
+
+def test_naive_panic_report_clock_is_kst_independent_of_host_timezone(monkeypatch):
+    import time
+    try:
+        with monkeypatch.context() as clock:
+            clock.setenv("TZ", "UTC")
+            time.tzset()
+            assert mod._parse_iso_timestamp("2026-08-28T10:02:00") == mod._parse_iso_timestamp("2026-08-28T10:02:00+09:00")
+    finally:
+        time.tzset()
+
+
+@pytest.mark.parametrize("status", sorted(mod.MARKET_WEAKNESS_UNHEALTHY_STATUSES))
+def test_failed_health_check_discards_pending_on_existing_single_write(tmp_path, monkeypatch, status):
+    report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
+    for minute in (1, 2):
+        report = _weakness_report("SINGLE_MARKET_WEAKNESS", minute)
+        report_path.write_text(json.dumps(report))
+        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+    before = json.loads(state_path.read_text())
+    before["market_weakness"]["execution_bridge_runtime_effect"] = True
+    before["market_weakness"]["last_notification"] = {"sent_count": 1, "sent_at_ts": 123}
+    state_path.write_text(json.dumps(before))
+    writes = []
+    write = mod._write_state
+    monkeypatch.setattr(mod, "_write_state", lambda path, value: (writes.append(path), write(path, value)))
+    mod._record_market_weakness_health(
+        state_file=state_path, report_file=report_path, report=report,
+        status=status, now_ts=1000,
+    )
+    after = json.loads(state_path.read_text())
+    assert writes == [state_path]
+    assert "pending_notification" not in after["market_weakness"]
+    assert after["market_weakness"]["execution_bridge_runtime_effect"] is False
+    assert after["market_weakness"]["market_states"] == before["market_weakness"]["market_states"]
+    assert after["market_weakness"]["last_notification"] == before["market_weakness"]["last_notification"]
+    assert after["market_weakness_observer_health"]["ready"] is False
+    assert after["market_weakness_observer_health"]["last_healthy_observation_id"] == before["market_weakness_observer_health"]["last_healthy_observation_id"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("last_source_gate", "broken"), ("phase", ["active"]),
+    ("transition", ["start"]), ("pending_notification", "old execution bridge"),
+])
+def test_malformed_pending_is_discarded_before_transport(tmp_path, monkeypatch, field, value):
+    report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
+    for minute in (1, 2):
+        report = _weakness_report("SINGLE_MARKET_WEAKNESS", minute)
+        report_path.write_text(json.dumps(report))
+        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+    state = json.loads(state_path.read_text())
+    current = state["market_weakness"]
+    if field == "transition":
+        current["pending_notification"][field] = value
+    else:
+        current[field] = value
+    state_path.write_text(json.dumps(state))
+    config_reads = []
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: config_reads.append(True))
+    mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+    assert config_reads == []
+    assert "pending_notification" not in json.loads(state_path.read_text())["market_weakness"]
+
+
+def test_too_close_weak_snapshot_does_not_replay_pending_recovery(tmp_path, monkeypatch):
+    report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
+    for minute in (1, 2, 3, 4, 5):
+        raw = "SINGLE_MARKET_WEAKNESS" if minute <= 2 else "RECOVERY_EVIDENCE"
+        report = _weakness_report(raw, minute)
+        report_path.write_text(json.dumps(report))
+        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path)
+    before = json.loads(state_path.read_text())
+    assert before["market_weakness"]["pending_notification"]["transition"] == "release"
+    report = _weakness_report("SINGLE_MARKET_WEAKNESS", 5)
+    report["as_of"] = "2026-08-28T10:05:30+09:00"
+    report["market_weakness_observation"]["as_of"] = report["as_of"]
+    _refresh_weakness_identity(report)
+    report_path.write_text(json.dumps(report))
+    sent, writes = [], []
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("fake-token", "admin"))
+    monkeypatch.setattr(mod, "_target_chat_ids", lambda *_args: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda _token, _chat, message: sent.append(message))
+    write = mod._write_state
+    monkeypatch.setattr(mod, "_write_state", lambda path, value: (writes.append(path), write(path, value)))
+    assert mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path) == "sent"
+    after = json.loads(state_path.read_text())
+    assert len(sent) == 1
+    assert "시장 약세 관찰 상태" in sent[0]
+    assert "회복 근거가" not in sent[0]
+    assert after["market_weakness"]["last_notification"]["transition"] == "status"
+    assert after["market_weakness"]["market_states"] == before["market_weakness"]["market_states"]
+    assert writes == [state_path, state_path]  # Existing send + health writes only.
+
+
+def test_notice_scope_ignores_corrupt_or_unsupported_market_values():
+    message = mod._market_weakness_message(
+        _weakness_report("BROAD_WEAKNESS", 2)["market_weakness_observation"],
+        "status", {"active_markets": ["KOSPI", "KOSPI", None, 123, "OTHER"]},
+    )
+    assert "- 관찰 시장: KOSPI\n" in message
+    assert "OTHER" not in message
+    assert "매매 영향 없음" in message

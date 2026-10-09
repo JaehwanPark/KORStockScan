@@ -302,7 +302,14 @@ def evaluate_canary_snapshot(
     isolated_error = str(snapshot.get("isolated_error_type") or "").strip()
     if isolated_error:
         reasons.append(f"isolated_error_type:{isolated_error}")
-    for field in _ZERO_STOP_COUNTERS:
+    from .observer_source_quality import LEGACY_REFERENCE_COUNTERS, MAIN_SOURCE_CONTRACT, source_close_verified
+    contract = snapshot.get("source_contract")
+    if contract is not None and contract != MAIN_SOURCE_CONTRACT:
+        reasons.append("unsupported_source_contract")
+    counters = _ZERO_STOP_COUNTERS
+    if contract == MAIN_SOURCE_CONTRACT:
+        counters = tuple(k for k in counters if k not in LEGACY_REFERENCE_COUNTERS) + ("raw_reconciliation_error_count",)
+    for field in counters:
         value = _nonnegative_float(snapshot.get(field))
         if value is None:
             reasons.append(f"missing_or_invalid_metric:{field}")
@@ -369,7 +376,7 @@ def evaluate_canary_snapshot(
     elif lifecycle in {"closing", "close_failed", "closed"}:
         if (
             lifecycle == "closed"
-            and snapshot.get("reference_reconciliation_completed") is not True
+            and not source_close_verified(snapshot)
         ):
             reasons.append("reconciliation_not_completed_after_close")
     else:
@@ -511,6 +518,19 @@ def write_canary_runtime_snapshot(
             encoding="utf-8",
         )
         temporary.replace(destination)
+        from .observer_source_quality import MAIN_SOURCE_CONTRACT
+        if (collector_snapshot.get('source_contract') == MAIN_SOURCE_CONTRACT
+                and collector_snapshot.get('collector_lifecycle') == 'closed'):
+            # A subsequent boot may replace latest.json. Preserve this closed
+            # collector receipt once, without rewriting historical generations.
+            epoch=collector_snapshot.get('sequence_epoch')
+            if type(epoch) is not int or epoch<=0:raise ValueError('invalid_closed_source_epoch')
+            closed=destination.parent/'closed'
+            closed.mkdir(exist_ok=True)
+            receipt=closed/f'{generated_at.astimezone(KST).date().isoformat()}-{epoch}.json'
+            temporary.write_text(encoded,encoding='utf-8')
+            try:os.link(temporary,receipt)
+            except FileExistsError:pass
     finally:
         try:
             temporary.unlink(missing_ok=True)

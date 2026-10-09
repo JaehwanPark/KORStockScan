@@ -159,7 +159,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                 raw=json.loads(gzip.decompress(Path(rec['path']).read_bytes()))['symbols']
                 records=[];masks=[];local_coverage=defaultdict(Counter)
                 for symbol,rows_all in sorted(raw.items()):
-                    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+                    from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                     for item in sorted({r[9] for r in rows_all if isinstance(r[9],str) and r[9].split('_',1)[0]==symbol and _explicit_item_venue(r[9])==route}):
                         rows=[r[:] for r in rows_all]
                         for row in rows:
@@ -228,11 +228,13 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
     with N.source_anchor(data_root):
         source_receipts += [dict(path=str(N.source_path(r['path']).absolute()),sha256=r['sha256'])
                             for r in source['normalized_sources']['partitions']]
+    manifest_receipt=P.population_receipt(source)
+    if manifest_receipt:source_receipts.append(manifest_receipt)
     report=P.seal(dict(schema=SCHEMA,source_date=day,target_date=day,publication_date=publication,status='completed',
         parent_bundle_sha256=parent['bundle_sha256'],operating_manifest=manifest,execution_code_sha256=execution_code,
         cells=list(copy.deepcopy(parent['continuous_reversal']['machine_cells']).values()),
         membership_status='pending_exact_union_auxiliary_pair',
-        source_manifest_sha256=source['artifact_content_sha256'],source_receipts=source_receipts,label_contract=C.LABEL,
+        source_manifest_sha256=source['artifact_content_sha256'],source_manifest_receipt=manifest_receipt,source_receipts=source_receipts,label_contract=C.LABEL,
         registration_change=change,policy_schema=V5.SCHEMA,
         population='all_retained_native_ticks',observation_mode='confirmation_replay',actual_trades_claimed=False,
         input_census=dict(input_counts),quarantined_conflicts=sorted(conflicts),partitions=partitions,compressed_coverage_masks=all_masks,

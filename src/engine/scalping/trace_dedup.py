@@ -124,28 +124,46 @@ def prepare(path, field, generation, *, max_bytes=4 * 1024 * 1024, hot=False):
             value.tail = new_tail
             value.mtime_ns = st.st_mtime_ns
             value.ready = new_offset == st.st_size
+        if hot and not value.ready:
+            raise IndexNotReady('ai_trace_dedup_partial_or_oversized_row')
         return value
     finally:
         os.close(fd)
 
 
-def appended(path, field, row, generation, descriptor):
-    """Advance only after the durable file append, including a new inode."""
+def appended(path, field, row, descriptor, *, previous_identity, encoded):
+    """Advance the verified prefix for every row in a mixed append-only stream.
+
+    An empty predecessor or an index covering the exact predecessor is required.
+    Keyless observations move the file cursor without inventing request keys.
+    The already-written bytes supply the tail; this adds no file read or ledger.
+    """
     st = os.fstat(descriptor)
     key = _key(path, field)
     with _LOCK:
         value = _INDEXES.get(key)
-        if value is None:
+        if ((st.st_dev, st.st_ino) != previous_identity[:2]
+                or st.st_size != previous_identity[2] + len(encoded)):
+            _INDEXES.pop(key, None)
+            raise OSError('ai_trace_dedup_append_generation_changed')
+        if previous_identity[2] == 0:
+            value = Index((st.st_dev, st.st_ino))
+            _INDEXES[key] = value
+        elif (value is None or not value.ready
+              or value.inode != previous_identity[:2]
+              or value.offset != previous_identity[2]
+              or value.mtime_ns != previous_identity[3]):
+            # Never skip an unseen suffix or mark a replacement file prepared.
+            _INDEXES.pop(key, None)
             return
+        _INDEXES.move_to_end(key)
+        while len(_INDEXES) > MAX_INDEXES:
+            _INDEXES.popitem(last=False)
         value.inode = (st.st_dev, st.st_ino)
         value.offset = st.st_size
         value.mtime_ns = st.st_mtime_ns
-        value.keys.add(str(row[field]))
-        value.digests[str(row[field])] = semantic_digest(row, field)
+        if row.get(field):
+            value.keys.add(str(row[field]))
+            value.digests[str(row[field])] = semantic_digest(row, field)
         value.ready = True
-        # The caller's append descriptor is write-only.
-        fd = generation.open_name(generation.logical.name, os.O_RDONLY)
-        try:
-            value.tail = os.pread(fd, min(st.st_size, 1024), max(0, st.st_size-1024))
-        finally:
-            os.close(fd)
+        value.tail = encoded[-1024:] if len(encoded) >= 1024 else (value.tail + encoded)[-1024:]

@@ -50209,7 +50209,7 @@ def _resolve_watching_state_change_refresh(
             return source_refresh
     if isinstance(ws_data, dict) and isinstance(stock, dict):
         from src.engine.scalping.continuous_reversal import current_snapshot
-        from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+        from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
         item=(ws_data.get('last_realtime_type_item') or {}).get('0B')
         session=stock.get('market_session_bucket') or ws_data.get('market_session_bucket') or ws_data.get('session_bucket')
         try:

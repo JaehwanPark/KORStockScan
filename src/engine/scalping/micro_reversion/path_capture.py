@@ -23,6 +23,7 @@ from typing import Any, Iterable
 
 from .multi_horizon import MultiHorizonShockEvent
 from .observation_adapter import RawMarketObservation
+from src.trading.market.session_contract import market_source_session_bucket
 from .path_journal import (
     AggressorSide,
     MarketPathPoint,
@@ -169,6 +170,7 @@ class PreEventRingBuffer:
         max_age_ms: int = 30_000,
         max_points_per_series: int = 20_000,
         max_exchange_timestamp_regression_ms: int = 1_000,
+        retain_observations: bool = True,
     ) -> None:
         if max_age_ms < 20_000 or max_age_ms > 30_000:
             raise ValueError("pre-event max_age_ms must be between 20s and 30s")
@@ -181,6 +183,7 @@ class PreEventRingBuffer:
         self.max_age_ms = max_age_ms
         self.max_points_per_series = max_points_per_series
         self.max_exchange_timestamp_regression_ms = max_exchange_timestamp_regression_ms
+        self.retain_observations = retain_observations
         self._points: dict[
             tuple[str, str, str], deque[tuple[int, RawMarketObservation]]
         ] = defaultdict(deque)
@@ -277,9 +280,14 @@ class PreEventRingBuffer:
             self._last_sequence[key] = envelope.source_sequence
             self._last_timestamp_ms[key] = observed_ms
             self._last_receive_timestamp_ms[key] = receive_ms
+            self._accepted += 1
+            if not self.retain_observations:
+                # Main raw consumers use durable rows and native state, not
+                # the retired detector's pre-event envelopes. Keep every
+                # ordering watermark and quality counter above unchanged.
+                return True
             points = self._points[key]
             points.append((observed_ms, envelope))
-            self._accepted += 1
             cutoff = observed_ms - self.max_age_ms
             while points and (
                 points[0][0] < cutoff or len(points) > self.max_points_per_series
@@ -364,10 +372,10 @@ class PreEventRingBuffer:
         """Discard buffered observations and ordering state for one symbol."""
 
         with self._lock:
-            keys = [key for key in self._points if key[0] == symbol]
-            removed = sum(len(self._points[key]) for key in keys)
+            keys = [key for key in self._last_sequence.keys() | self._points.keys() if key[0] == symbol]
+            removed = sum(len(self._points.get(key, ())) for key in keys)
             for key in keys:
-                del self._points[key]
+                self._points.pop(key, None)
                 self._last_sequence.pop(key, None)
                 self._last_timestamp_ms.pop(key, None)
                 self._last_receive_timestamp_ms.pop(key, None)
@@ -707,6 +715,7 @@ def to_market_stream_point(
     *,
     path_order_status: PathEnvelopeOrderStatus = PathEnvelopeOrderStatus.ACCEPT,
     exchange_timestamp_regression_ms: int = 0,
+    source_contract: str | None = None,
 ) -> MarketStreamPoint:
     return MarketStreamPoint(
         symbol=envelope.symbol,
@@ -721,6 +730,10 @@ def to_market_stream_point(
         trade_price=envelope.trade_price,
         trade_qty=envelope.trade_qty,
         source_item=envelope.source_item,
+        native_transport_epoch=envelope.native_transport_epoch,
+        native_route_sequence=envelope.native_route_sequence,
+        native_receive_session=(market_source_session_bucket(envelope.venue,datetime.fromisoformat(envelope.local_receive_timestamp).timetz()) if source_contract else None),
+        source_contract=source_contract,
         cumulative_volume_raw=envelope.cumulative_volume_raw,
         trade_volume_raw=envelope.trade_volume_raw,
         best_bid=envelope.best_bid,

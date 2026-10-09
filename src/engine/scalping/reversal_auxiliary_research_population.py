@@ -78,7 +78,7 @@ def build(data_root,parent,machine,*,seed,excluded,per_scope=6):
                 keys=[C.cell_key(symbol,market,1)] if C.group(symbol)=='samsung' else [f'{C.group(symbol)}|{market}|{b}' for b in C.BANDS]
                 sids=[key+'|'+route for key in keys]
                 if not set(sids)&changed:continue
-                from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+                from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                 for item in sorted({r[9] for r in source_rows if isinstance(r[9],str) and r[9].split('_',1)[0]==symbol and _explicit_item_venue(r[9])==route}):
                     rows=[r[:] for r in source_rows]
                     for row in rows:
