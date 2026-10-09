@@ -1568,3 +1568,21 @@ def _machine_micro_approval_report(
             "broker_order_forbidden": True,
         },
     }
+
+
+@pytest.mark.parametrize("defect", [False, True])
+def test_holding_repair_uses_one_stable_owner_without_reopening_natural_cost_wait(tmp_path, monkeypatch, defect):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-10-08"
+    summary = _direct_summary(day)
+    summary["holding_exit_threshold_lineage"] = {"source_contract_repair": {
+        "owner": "HoldingProfitExitSourceContractRepair", "repair_required": defect,
+        "identified_defects": ["selection_forward_window_invalid"] if defect else [],
+        "actual_cost_status_counts": {"cost_source_unavailable": 10}}}
+    _write_json(mod._direct_summary_path(day), summary)
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text()
+    assert text.count("[HoldingProfitExitSourceContractRepair]") == int(defect)
+    second = mod.build_next_stage2_checklist(day)
+    assert Path(second["path"]).read_text().count("[HoldingProfitExitSourceContractRepair]") == int(defect)

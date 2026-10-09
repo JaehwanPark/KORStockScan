@@ -2192,6 +2192,7 @@ def _main_lifecycle_exit_economics_fields(
         "main_lifecycle_realized_net_pnl_krw": round(realized_net_pnl_krw, 4),
         "main_lifecycle_cost_basis_source": "configured_trade_cost_rate",
         "main_lifecycle_broker_actual_fees_taxes_krw": None,
+        "main_lifecycle_actual_cost_status": "cost_source_unavailable",
     }
     implied_fees_taxes_krw = gross_pnl_krw - realized_net_pnl_krw
     if implied_fees_taxes_krw >= -0.01:
@@ -2801,6 +2802,8 @@ def _holding_path_terminal_lineage_fields(
         "holding_path_terminal_signal_binding": "same_position_buy_generation",
         "holding_path_signal_id": signal["signal_id"],
         "holding_path_signal_at": signal.get("signal_at"),
+        "holding_path_position_key": signal.get("position_key"),
+        "holding_path_buy_fill_identity": signal.get("buy_fill_identity"),
         "holding_path_policy_bundle_sha256": signal.get("policy_bundle_sha256"),
     }
 

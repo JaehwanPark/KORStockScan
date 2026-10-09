@@ -16,7 +16,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.trading.market import session_contract
-from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
+from src.engine.scalping.trailing_exit_decision import (
+    evaluate_trailing_take_profit, evaluate_exit_deferral,
+)
 from src.engine.scalping.trailing_mechanical_strength import (
     _ofi, CONFIG_DEFAULTS, normalize_config,
 )
@@ -522,6 +524,74 @@ def prepare_position(trade: dict) -> dict:
     return result
 
 
+def _exit_permission(trade: dict, first: dict, actual_signal_at: float) -> tuple[float | None, str | None]:
+    """Prove AI permission separately from the first mechanical crossing."""
+    from src.engine.ai.holding_exit_vote import PATH_POLICY_BY_MARKET, input_snapshot_id
+    timeline = trade.get("timeline") or []
+    snapshots = [event.get("fields") or {} for event in timeline
+                 if event.get("stage") == "holding_path_signal_snapshot"
+                 and (event.get("fields") or {}).get("path_id") == "EXIT_TRAILING_TP"
+                 and _number((event.get("fields") or {}).get("signal_at")) == first["_at"]]
+    if not snapshots:
+        return ((first["_at"], None) if abs(first["_at"] - actual_signal_at) <= 1
+                else (None, "source_gap_exit_permission_receipt_missing"))
+    if len(snapshots) != 1:
+        return None, "source_gap_exit_permission_snapshot_conflict"
+    snapshot = snapshots[0]
+    policy = PATH_POLICY_BY_MARKET.get(("EXIT_TRAILING_TP", snapshot.get("market")))
+    if (not policy or snapshot.get("policy_sha256") != input_snapshot_id(policy)
+            or snapshot.get("market") != first["_market"]
+            or snapshot.get("position_key") != f"record:{trade.get('id')}"
+            or len(str(snapshot.get("buy_fill_identity") or "")) != 64):
+        return None, "source_gap_exit_permission_policy"
+    if snapshot.get("decision") in {"PASS", "INSUFFICIENT"}:
+        permission = _number(((trade.get("exit_signal") or {}).get("fields") or {}).get("holding_path_exit_permission_at"))
+        if permission is not None:
+            if not first["_at"] <= permission <= actual_signal_at + 1:
+                return None, "source_gap_exit_permission_clock_invalid"
+            return permission, None
+        return first["_at"], None
+    if snapshot.get("decision") != "VETO":
+        return None, "source_gap_exit_permission_decision"
+    releases = [event for event in timeline
+                if event.get("stage") == "holding_path_exit_veto_deferred"
+                and (event.get("fields") or {}).get("phase") == "released"
+                and (event.get("fields") or {}).get("signal_id") == snapshot.get("signal_id")
+                and 0 < (_number((event.get("fields") or {}).get("permission_at")) or 0)
+                        <= actual_signal_at + 1]
+    if len(releases) != 1:
+        return None, "source_gap_veto_release_receipt_missing_or_conflicting"
+    fields = releases[0]["fields"]
+    try:
+        now = _number(fields.get("permission_at"))
+        if (fields.get("position_key") != snapshot.get("position_key")
+                or fields.get("buy_fill_identity") != snapshot.get("buy_fill_identity")
+                or snapshot.get("position_key") != f"record:{trade.get('id')}"
+                or len(str(snapshot.get("buy_fill_identity") or "")) != 64
+                or _number(fields.get("max_defer_sec")) <= 0
+                or _number(fields.get("max_defer_sec")) > policy["max_defer_sec"]
+                or _number(fields.get("max_worsen_pct")) != 0.40):
+            raise ValueError("release_identity_or_limits")
+        resolved = evaluate_exit_deferral(
+            decision="VETO", now=now, signal_at=first["_at"],
+            started_at=_number(fields.get("started_at")),
+            anchor_profit=_number(fields.get("anchor_profit_rate")),
+            profit=_number(fields.get("profit_rate")),
+            max_defer_sec=_number(fields.get("max_defer_sec")), max_worsen_pct=0.40,
+            quote_fresh=_flag(fields.get("quote_fresh")) is True,
+            safety=_flag(fields.get("safety_priority")) is True,
+            same_market=market_type_at(now) == snapshot.get("market"),
+            same_generation=_flag(fields.get("same_generation", True)) is True,
+            policy_valid=_flag(fields.get("policy_valid", True)) is True,
+        )
+        if (not resolved.proceeds or resolved.reason == "clock_invalid"
+                or resolved.reason != fields.get("release_reason")):
+            raise ValueError("release_not_reproduced")
+        return now, None
+    except (TypeError, ValueError):
+        return None, "source_gap_veto_release_not_reproduced"
+
+
 def replay_vector(
     trade: dict, prepared: dict, candidate: dict[str, dict],
     *, actual_exit_rule: str, candidate_rows: list[dict] | None = None,
@@ -587,8 +657,16 @@ def replay_vector(
         prepared["_incumbent_signal"] = _signal(rows, prepared["incumbent"])[0]
     incumbent = prepared["_incumbent_signal"]
     is_tp = actual_exit_rule == "scalp_trailing_take_profit"
-    if is_tp and (incumbent is None or abs(incumbent["_at"] - signal_at) > 1):
-        return {"status": "source_gap", "source_gap": "source_gap_incumbent_trigger_not_reproduced"}
+    if is_tp:
+        if incumbent is None:
+            return {"status": "source_gap", "source_gap": "source_gap_incumbent_trigger_not_reproduced"}
+        permission_at, permission_gap = _exit_permission(trade, incumbent, signal_at)
+        if permission_gap:
+            return {"status": "source_gap", "source_gap": permission_gap}
+        observed_permission = _number((signal.get("fields") or {}).get("holding_path_exit_permission_at"))
+        if (permission_at is None or permission_at > signal_at + 1
+                or (abs(permission_at - signal_at) > 1 and observed_permission != permission_at)):
+            return {"status": "source_gap", "source_gap": "source_gap_incumbent_trigger_not_reproduced"}
     if not is_tp and incumbent and incumbent["_at"] < signal_at - 1:
         return {"status": "source_gap", "source_gap": "source_gap_competing_exit_order"}
     actual_pnl = _number(trade.get("realized_pnl_krw"))
@@ -602,13 +680,22 @@ def replay_vector(
             return {"status": "source_gap", "source_gap": "source_gap_classifier_candidate_rows"}
         candidate_rows = [row for row in candidate_rows if row["_at"] <= signal_at + 1]
     first, arm_at = _signal(candidate_rows if candidate_rows is not None else rows, candidate)
+    same_incumbent = candidate == prepared["incumbent"] and candidate_rows is None
+    has_auxiliary = any(event.get("stage") == "holding_path_signal_snapshot"
+                        and (event.get("fields") or {}).get("path_id") == "EXIT_TRAILING_TP"
+                        for event in trade.get("timeline") or [])
+    unobserved_vote = (has_auxiliary and not same_incumbent
+                       and first is not None and first["_at"] < signal_at - 1)
     state = "same_observed_exit"
     modeled = actual_pnl
     gap = None
     censor_reason = None
     candidate_execution: dict[str, Any] | None = None
     modeled_slippage_pnl: tuple[float, ...] = ()
-    if first is not None and first["_at"] < signal_at - 1:
+    if unobserved_vote:
+        modeled, state = None, "censored_auxiliary_input_unobserved"
+        censor_reason = "candidate_input_has_no_independent_pre_crossing_vote_receipt"
+    elif first is not None and first["_at"] < signal_at - 1 and not (is_tp and same_incumbent):
         qty = _number(trade.get("buy_filled_qty"))
         bid_qty = _number(first.get("executable_bid_qty"))
         cost = _number(trade.get("effective_cost_rate"))
@@ -686,6 +773,7 @@ def replay_vector(
         "evidence_grade": terminal_grade,
         "first_arm_at_epoch": arm_at,
         "first_trigger_at_epoch": first["_at"] if first else None,
+        "observed_exit_permission_at_epoch": permission_at if is_tp else None,
         "first_trigger_market": first["_market"] if first else None,
         "first_trigger_bid": first["_bid"] if first else None,
         "start_minus_active_limit_pct": (

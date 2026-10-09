@@ -21,7 +21,7 @@ from src.engine.automation.postclose_finalization_generation import (
 )
 from src.engine.scalping.trailing_mechanical_policy import (
     CLASSIFIER_VERSION, SELECTED_SCHEMA, START_MARKETS, classifier_hash,
-    market_values_hash, selected_policy_env,
+    market_values_hash, selected_policy_env, verify_forward_window,
 )
 from src.utils.constants import DATA_DIR
 
@@ -94,6 +94,11 @@ def build_selection(target_date: str) -> dict[str, Any]:
         return result
     result.update(source_date=source_date, source_report_sha256=_sha(report_bytes),
                   source_manifest_sha256=manifest_sha)
+    try:
+        verify_forward_window(report, source_date)
+    except ValueError as exc:
+        result.update(status="hold_source_gap", reason=str(exc))
+        return result
     research = report.get("trailing_mechanical_market_tuning") or {}
     candidate = research.get("research_candidate") or {}
     if (not (report.get("mechanical_population_quality") or {}).get("complete")

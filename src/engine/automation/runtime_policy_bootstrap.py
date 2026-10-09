@@ -250,6 +250,47 @@ def verify_path(target_date: str, *, output_dir: Path | None = None) -> Path:
     return (BOOTSTRAP_DIR if output_dir is None else Path(output_dir)) / f"runtime_policy_bootstrap_verify_{target_date}.json"
 
 
+def _archive_holding_profit_pid_verification(target_date: str, verification: dict, manifest: dict) -> Path:
+    """Retain the first proven TP generation per PID across same-day restarts."""
+    if (verification.get("passed") is not True or verification.get("pid_passed") is not True
+            or verification.get("pid_env_available") is not True
+            or type(verification.get("pid")) is not int or verification["pid"] <= 0
+            or verification.get("target_date") != target_date
+            or verification.get("manifest_sha256") != manifest.get("manifest_sha256")
+            or manifest.get("target_date") != target_date):
+        raise ValueError("holding_profit_pid_archive_source_mismatch")
+    body = {"schema": "holding_profit_pid_verification_v1", "target_date": target_date,
+            "pid": verification["pid"], "verified_at": verification["verified_at"],
+            "manifest_sha256": manifest["manifest_sha256"],
+            "mechanical_policy_receipt": manifest["scalp_trailing_mechanical_policy_receipt"]}
+    receipt = {**body, "receipt_sha256": _digest_json(body)}
+    path = BOOTSTRAP_DIR / "verified_holding_profit_pid" / target_date / (
+        f"holding_profit_pid_{body['pid']}_{body['manifest_sha256']}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".holding-profit-pid-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            # Publish the complete receipt without overwriting the first proof.
+            os.link(temporary_name, path)
+        except FileExistsError:
+            if path.is_symlink() or path.stat().st_size > 32768:
+                raise ValueError("holding_profit_pid_archive_path_or_size_invalid")
+            prior = _load_json(path)
+            prior_body = {k: v for k, v in prior.items() if k != "receipt_sha256"}
+            if (prior.get("receipt_sha256") != _digest_json(prior_body)
+                    or {k: v for k, v in prior_body.items() if k != "verified_at"}
+                       != {k: v for k, v in body.items() if k != "verified_at"}):
+                raise ValueError("holding_profit_pid_archive_conflict")
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+    return path
+
+
 def _archive_initial_quantity_pid_verification(
     target_date: str, verification: dict[str, Any], manifest: dict[str, Any],
 ) -> Path | None:
@@ -1883,6 +1924,7 @@ def verify_bootstrap(
         _publish(verify_path(target_date, output_dir=output_dir), json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         if passed and pid is not None:
             _archive_initial_quantity_pid_verification(target_date, result, manifest)
+            _archive_holding_profit_pid_verification(target_date, result, manifest)
     return result
 
 

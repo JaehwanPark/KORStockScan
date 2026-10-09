@@ -2152,6 +2152,20 @@ def _project_direct_tasks(
                 "PolicyHandoff": "policy_handoff_repair",
             }[role]
 
+    holding_repair = ((summary.get("holding_exit_threshold_lineage") or {}).get("source_contract_repair") or {})
+    if holding_repair.get("repair_required") is True:
+        task_id = "HoldingProfitExitSourceContractRepair"
+        tasks_by_owner[task_id] = GeneratedTask(
+            task_id=task_id, title="Main 보유 익절 원천·재생·의미 계약 수리",
+            slot="IMPLEMENTATION", time_window="09:00~23:59", track="RuntimeStability",
+            source=f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
+            lines=(
+                f"식별 결함: {json.dumps(holding_repair.get('identified_defects') or [], ensure_ascii=False)}",
+                "완료 기준: 기간·정산 세대·first crossing/유예·signal별 lifecycle/as-of의 producer→consumer 회귀 검증.",
+                "비용 원천 부재·자연 표본 0은 코드 결함과 분리하며 신규 EV gate·SELL/retry·재기동 권한을 만들지 않는다.",
+            ),
+        )
+        action_by_owner[task_id] = "producer_contract_repair"
     preopen = (
         summary.get("preopen_consumption_receipt")
         if isinstance(summary.get("preopen_consumption_receipt"), dict)

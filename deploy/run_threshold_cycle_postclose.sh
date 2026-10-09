@@ -2061,6 +2061,13 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
     "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.md" \
     "rising_missed_classifier_prior"
 fi
+wait_for_postclose_resources "holding_broker_cost_source"
+# Read-only official costs. Missing/ambiguous costs remain unknown and cannot
+# block protection/exit or become a new initial-policy approval gate.
+if ! run_postclose_cmd timeout 180 env PYTHONPATH=. "$VENV_PY" \
+  -m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE"; then
+  echo "[WARN] official holding costs unavailable; preserve source gap date=$TARGET_DATE" >&2
+fi
 wait_for_postclose_resources "scalp_trailing_postclose_exit_snapshot"
 scalp_exit_snapshot_started_epoch="$(date +%s)"
 scalp_exit_snapshot_manifest="$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit.json"
@@ -2090,8 +2097,11 @@ import sys
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR
+from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
 
 target_date, started = sys.argv[1], int(sys.argv[2])
+if verified_postclose_exit_snapshot_manifest(target_date) is None:
+    raise SystemExit("postclose_exit_cost_or_projection_generation_invalid")
 directory = DATA_DIR / "report" / "monitor_snapshots"
 manifest_path = (directory / "manifests"
                  / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json")

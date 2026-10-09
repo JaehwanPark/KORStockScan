@@ -11,7 +11,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy, policy_refresh_start_date,
+)
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import (
     COMPLETED_CENSUS_CONTRACT_FROM, verify_completed_census_manifest,
@@ -201,8 +203,8 @@ def _analysis_window_start(
     """Resolve the report window without silently reverting to a month-only view.
 
     ``month_start`` remains an explicit, audit-oriented override for existing
-    callers. The normal producer instead starts at the active clean-tuning
-    baseline, so a quiet new month cannot hide mature post-sell evidence.
+    callers. The normal producer uses the forward policy-refresh boundary;
+    prior BUY basis remains custody evidence rather than old tuning evidence.
     """
 
     policy = clean_baseline_policy()
@@ -211,7 +213,8 @@ def _analysis_window_start(
     ).strip()
     explicit_start = str(month_start or "").strip()
     clean_baseline_enabled = bool(policy.get("enabled", True))
-    default_start = baseline_date if clean_baseline_enabled else f"{target_date[:7]}-01"
+    forward_start = policy_refresh_start_date(target_date)
+    default_start = forward_start if clean_baseline_enabled else f"{target_date[:7]}-01"
     start_date = explicit_start or default_start
     return start_date, {
         "start_date": start_date,
@@ -220,13 +223,16 @@ def _analysis_window_start(
             "explicit_month_start_audit_override"
             if explicit_start
             else (
-                "clean_tuning_baseline_default"
+                "policy_refresh_forward_default"
                 if clean_baseline_enabled
                 else "calendar_month_policy_disabled"
             )
         ),
         "clean_tuning_baseline_date": baseline_date,
         "clean_tuning_baseline_enabled": clean_baseline_enabled,
+        "policy_refresh_start_date": forward_start,
+        "evaluation_start_date": max(start_date, forward_start),
+        "eligible_for_successor_selection": not bool(explicit_start),
         "pre_baseline_decision": policy.get("pre_baseline_decision"),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -307,12 +313,17 @@ def _load_saved_snapshots(
     return snapshots, paths
 
 
-def _verified_trade_review_projection(path: Path, target_date: str) -> dict | None:
+def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path = DATA_DIR) -> dict | None:
     sidecar = path.with_suffix(".completed_projection.json")
     if not sidecar.is_file():
         return None
     try:
         projected = _read_json(sidecar)
+        from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+        costs = source_generation(data_root, target_date)
+        recorded_costs = (projected.get("meta") or {}).get("actual_cost_source_generation")
+        if recorded_costs != costs and (recorded_costs is not None or costs["count"] or costs.get("official_source_sha256")):
+            return None
         declared = projected.get("artifact_sha256")
         content = {key: value for key, value in projected.items()
                    if key != "artifact_sha256"}
@@ -488,6 +499,7 @@ def _collect_completed_trade_rows(
 
 def _mechanical_completed_cohort(
     main_rows: list[dict], strict_rows: list[dict], completed_gaps: list[dict],
+    *, target_date: str | None = None,
 ) -> tuple[list[dict], dict]:
     """Seal the M1 entry cohort without inheriting pre-M1 census gaps.
 
@@ -518,7 +530,14 @@ def _mechanical_completed_cohort(
         and valid_day(row.get("rec_date")) is not None
         and str(row.get("rec_date") or "")[:10] >= "2026-06-05"
     })
-    start_day = first_days[0] if first_days else None
+    source_day = target_date or max(
+        (valid_day(row.get("completion_observed_date"))
+         or valid_day(row.get("rec_date")) or "2026-06-05"
+         for row in main_rows), default="2026-06-05",
+    )
+    forward_start = policy_refresh_start_date(source_day)
+    start_day = (max(first_days[0], forward_start) if first_days else
+                 forward_start if not main_rows and source_day >= forward_start else None)
     cohort_rows = [row for row in main_rows
                    if start_day and valid_day(row.get("rec_date"))
                    and str(row.get("rec_date") or "")[:10] >= start_day]
@@ -549,7 +568,8 @@ def _mechanical_completed_cohort(
         "schema": "mechanical_completed_entry_cohort_v1",
         "classifier_version": SCALP_TRAILING_MECHANICAL_CLASSIFIER_VERSION,
         "start_entry_day": start_day,
-        "entry_day_basis": "first_observed_v2_transition_in_sealed_completed_projection",
+        "entry_day_basis": "verified_classifier_generation_and_policy_refresh_floor",
+        "policy_refresh_start_date": forward_start,
         "complete": bool(start_day and not gaps and not unplaced_ids
                          and valid_identity),
         "source_gap_dates": gaps,
@@ -1468,6 +1488,8 @@ def _build_position_outcomes(
                 "sell_order_no": trade.get("sell_order_no"),
                 "sell_execution_no": trade.get("sell_execution_no"),
                 "sell_quantity_conserved": trade.get("sell_quantity_conserved"),
+                "actual_cost_reconciliation": trade.get("actual_cost_reconciliation"),
+                "holding_path_buy_fill_identity": trade.get("holding_path_buy_fill_identity"),
                 "exact_sell_fill_time": exact_fill_time or None,
                 "exit_rule": exit_rule,
                 "exit_rule_provenance": "inferred" if inferred else "observed",
@@ -1618,6 +1640,7 @@ def _build_position_outcomes(
                 "sell_time_precision": trade.get("sell_time_precision"),
                 "post_sell_ids": [row["post_sell_id"] for row in matching],
                 "post_sell_status": post_sell_status,
+                "post_sell_observed_at": matching[0].get("evaluated_at") if len(matching) == 1 else None,
                 "post_sell_reference_venue": (
                     "KRX" if sor_krx_override_applied else None
                 ),
@@ -2648,7 +2671,7 @@ def build_holding_exit_observation_report(
     ]
     strict_exclusions = {
         _trade_id(row): _strict_completed_reasons(
-            row, clean_start=analysis_window["clean_tuning_baseline_date"][:10]
+            row, clean_start=analysis_window["evaluation_start_date"]
         )
         for row in valid_trades
     }
@@ -2715,7 +2738,11 @@ def build_holding_exit_observation_report(
     four_axis_tuning["status"] = "legacy_ai_policy_retired"
     mechanical_trades, mechanical_population_quality = _mechanical_completed_cohort(
         main_completed_rows, strict_trades, completed_gaps,
+        target_date=safe_date,
     )
+    if not analysis_window["eligible_for_successor_selection"]:
+        mechanical_population_quality["complete"] = False
+        mechanical_population_quality["selection_blocked_reason"] = "explicit_audit_window"
     mechanical_ids = {_trade_id(row) for row in mechanical_trades}
     mechanical_tuning = summarize_mechanical(
         mechanical_trades,
@@ -2766,7 +2793,7 @@ def build_holding_exit_observation_report(
     report = {
         "date": safe_date,
         # Kept for compatibility with existing readers. New readers should
-        # consume analysis_window, whose default is the clean baseline rather
+        # consume analysis_window, whose default is the policy refresh floor rather
         # than the first day of the current calendar month.
         "month_start": safe_month_start,
         "analysis_window": analysis_window,
@@ -2891,6 +2918,7 @@ def build_holding_exit_observation_report(
         "meta": {
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now().isoformat(),
+            "knowledge_cutoff": datetime.now().astimezone().isoformat(),
             "basis": "main-only, normal_only, post_fallback_deprecation",
             "profit_basis": "strict broker BUY and SELL filled completed positions with fee aware PnL",
             "post_fallback_cutoff": POST_FALLBACK_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2912,6 +2940,13 @@ def build_holding_exit_observation_report(
         "decision_economic_eligible_ids"
     ] = decision_economic_eligible_ids
     report["cost_input_complete"] = cost_input_complete
+    report["actual_cost_status_counts"] = dict(sorted(Counter(
+        (row.get("actual_cost_reconciliation") or {}).get("status", "cost_source_unavailable")
+        for row in main_completed_rows).items()))
+    report["actual_cost_source_generations"] = {
+        str(snapshot.get("date")): (snapshot.get("meta") or {}).get("actual_cost_source_generation")
+        for snapshot in trade_snapshots
+    }
     economic_input_complete = bool(
         cost_input_complete
         and len(decision_economic_eligible_ids) == len(strict_trades)

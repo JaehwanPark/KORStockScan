@@ -510,3 +510,42 @@ def test_save_monitor_snapshots_for_date_includes_expected_snapshot_sources(
     assert manifest_payload["target_date"] == "2026-04-09"
     assert "trade_review" in manifest_payload["snapshot_paths"]
     assert "add_blocked_lock" not in manifest_payload["snapshot_paths"]
+
+
+def test_cost_only_revision_invalidates_sidecar_and_manifest_without_pipeline_changes(tmp_path, monkeypatch):
+    from src.engine import holding_exit_observation_report as holding
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation, receipt_path
+    directory = tmp_path / "report/monitor_snapshots"
+    directory.mkdir(parents=True)
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", directory)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", directory / "manifests")
+    day = "2026-10-08"
+    def save():
+        trade = {"date": day, "code": None, "since": None,
+            "meta": {"warnings": [], "snapshot_profile": "postclose_exit", "sell_completed_event_ids": [],
+                     "actual_cost_source_generation": source_generation(tmp_path, day)},
+            "metrics": {"canonical_completed_trades": 0},
+            "sections": {"completed_trade_projection": [], "open_scalp_position_projection": []}}
+        trade["meta"]["completed_census_manifest"] = completed_census_manifest(trade)
+        paths = {"trade_review": service.save_monitor_snapshot("trade_review", day, trade)}
+        for kind in ("post_sell_feedback", "missed_entry_counterfactual", "holding_exit_observation"):
+            paths[kind] = service.save_monitor_snapshot(kind, day, {"date": day, "meta": {"snapshot_profile": "postclose_exit"},
+                "actual_cost_source_generations": {day: source_generation(tmp_path, day)}})
+        manifest = service.save_monitor_snapshot_manifest(day, profile="postclose_exit",
+            snapshots={kind: str(path) for kind, path in paths.items()})
+        return paths, manifest
+    paths, manifest = save()
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == manifest
+    cost_path = receipt_path(tmp_path, day, "1")
+    cost_path.parent.mkdir(parents=True)
+    cost_path.write_text('{"revision":1}')
+    assert holding._verified_trade_review_projection(paths["trade_review"], day, data_root=tmp_path) is None
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
+    with pytest.raises(ValueError):
+        service.save_monitor_snapshot_manifest(day, profile="postclose_exit", snapshots={k: str(v) for k,v in paths.items()})
+    paths, manifest = save()
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == manifest
+    cost_path.write_text('{"revision":2}')
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None

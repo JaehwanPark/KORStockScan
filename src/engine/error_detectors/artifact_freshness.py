@@ -58,13 +58,53 @@ def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, An
         semantics = report.get("profit_exit_semantics") or {}
         if (report.get("target_date") != source_date
                 or semantics.get("target_date") != source_date
-                or semantics.get("schema") != "holding_profit_exit_semantics_v1"
+                or semantics.get("schema") not in {"holding_profit_exit_semantics_v1", "holding_profit_exit_semantics_v2"}
                 or semantics.get("status") not in {
                     "pass", "valid_empty", "source_gap", "policy_binding_gap",
                     "runtime_not_consumed", "pending_terminal", "economics_null",
-                    "semantic_contract_invalid",
+                    "semantic_contract_invalid", "pending_submit",
                 }):
             raise ValueError("semantic_receipt_missing_or_invalid")
+        if semantics["schema"] == "holding_profit_exit_semantics_v2":
+            from src.engine.scalping.holding_profit_exit_semantics import LIFECYCLE_STATES, ECONOMICS_STATES
+            states = {"pass", "valid_empty", "source_gap", "policy_binding_gap",
+                      "runtime_not_consumed", "semantic_contract_invalid"}
+            generation = semantics.get("source_generation")
+            semantic_as_of = datetime.fromisoformat(str(semantics.get("as_of")))
+            report_as_of = datetime.fromisoformat(str(report.get("as_of")))
+            if report_as_of.tzinfo is None:
+                report_as_of = report_as_of.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+            if (semantics.get("semantic_status") not in states
+                    or semantics.get("economics_status") not in ECONOMICS_STATES
+                    or not isinstance(semantics.get("lifecycle"), list)
+                    or not isinstance(generation, str) or len(generation) != 64
+                    or any(c not in "0123456789abcdef" for c in generation)
+                    or report.get("source_generation") != generation
+                    or semantic_as_of.tzinfo is None
+                    or semantic_as_of.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat() != source_date
+                    or report_as_of.timestamp() != semantic_as_of.timestamp()):
+                raise ValueError("semantic_v2_generation_or_state_invalid")
+            identities = set()
+            for row in semantics["lifecycle"]:
+                identity = (row.get("position_key"), row.get("buy_fill_identity"), row.get("signal_id"))
+                if (row.get("lifecycle_state") not in LIFECYCLE_STATES
+                        or row.get("economics_status") not in ECONOMICS_STATES
+                        or not all(isinstance(key, str) and key for key in identity)
+                        or len(identity[1]) != 64 or identity in identities
+                        or (row.get("economics_status") == "verified" and row.get("lifecycle_state") != "completed")):
+                    raise ValueError("semantic_v2_lifecycle_invalid")
+                identities.add(identity)
+            expected_status = semantics["semantic_status"]
+            if expected_status == "pass":
+                expected_status = ("pending_submit" if any(row["lifecycle_state"] == "pending_submit" for row in semantics["lifecycle"]) else
+                                   "pending_terminal" if any(row["lifecycle_state"] == "pending_terminal" for row in semantics["lifecycle"]) else "pass")
+            expected_economics = ("unavailable" if any(row["economics_status"] == "unavailable" for row in semantics["lifecycle"]) else
+                                  "pending" if not identities or any(row["economics_status"] == "pending" for row in semantics["lifecycle"]) else "verified")
+            if (semantics.get("status") != expected_status
+                    or semantics["economics_status"] != expected_economics
+                    or (semantics["semantic_status"] == "valid_empty" and identities)
+                    or semantics.get("decision_authority") != "report_only_no_order_or_policy_mutation"):
+                raise ValueError("semantic_v2_status_inconsistent")
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         return {"status": "source_invalid", "findings": [str(exc)]}
     status = semantics["status"]
@@ -78,6 +118,10 @@ def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, An
         "signal_count": (semantics.get("funnel") or {}).get("tp_signal_snapshots", 0),
         "source_gap_count": len(semantics.get("source_gaps") or []),
         "invalid_count": len(semantics.get("findings") or []),
+        "semantic_status": semantics.get("semantic_status", status),
+        "lifecycle_counts": dict(Counter(row.get("lifecycle_state") for row in semantics.get("lifecycle", []))),
+        "economics_status": semantics.get("economics_status", "unavailable"),
+        "lifecycle_verified": semantics.get("schema") == "holding_profit_exit_semantics_v2",
     }
 
 

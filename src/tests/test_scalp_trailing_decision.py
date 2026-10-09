@@ -1,3 +1,5 @@
+import pytest
+
 from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
 
 
@@ -50,3 +52,26 @@ def test_strong_score_uses_wider_drawdown_than_weak_score():
     assert weak.triggered is True
     assert strong.triggered is False
     assert strong.threshold_key == "SCALP_TRAILING_LIMIT_STRONG"
+
+
+@pytest.mark.parametrize("changes,proceeds,reason", [
+    ({"decision": "PASS"}, True, "decision_proceeds"),
+    ({"decision": "INSUFFICIENT"}, True, "decision_proceeds"),
+    ({}, False, "veto_deferred"),
+    ({"now": 145}, True, "defer_timeout"),
+    ({"profit": 0.59}, True, "profit_worsened"),
+    ({"quote_fresh": False}, True, "quote_unavailable"),
+    ({"safety": True}, True, "safety_priority"),
+    ({"same_generation": False}, True, "generation_changed"),
+    ({"same_market": False}, True, "market_changed"),
+    ({"now": 99}, True, "clock_invalid"),
+    ({"started_at": 101}, True, "clock_invalid"),
+    ({"now": float("nan")}, True, "clock_invalid"),
+])
+def test_exit_deferral_permission_is_bounded_and_fail_safe(changes, proceeds, reason):
+    from src.engine.scalping.trailing_exit_decision import evaluate_exit_deferral
+    args = {"decision": "VETO", "now": 110, "signal_at": 100, "started_at": 100,
+            "anchor_profit": 1, "profit": 1, "max_defer_sec": 45, "max_worsen_pct": 0.4}
+    result = evaluate_exit_deferral(**{**args, **changes})
+    assert result.proceeds is proceeds
+    assert result.reason == reason

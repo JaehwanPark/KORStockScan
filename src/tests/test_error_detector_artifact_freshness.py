@@ -2444,3 +2444,30 @@ def test_cancel_wait_consumer_error_preserves_known_reuse_finding(tmp_path, monk
     result = detector._entry_cancel_wait_result_semantics(tmp_path,'2026-10-02')
     assert result['status'] == 'source_invalid'
     assert set(result['findings']) == {'cancel_wait_reuse_generation_invalid', 'cancel_wait_consumer_projection_invalid'}
+
+
+@pytest.mark.parametrize("defect", [None, "enum", "generation", "cutoff", "missing"])
+def test_holding_semantics_v2_pending_submit_is_valid_and_malformed_contract_rejected(tmp_path, defect):
+    from src.tests.test_holding_exit_sentinel import _semantic_flow
+    from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
+    event, mechanical, rows, lineage, at = _semantic_flow()
+    rows.append(event(2, "exit_signal", lineage))
+    semantics = audit_profit_exit_flow(rows, target_date="2026-10-09", load_votes=lambda _: [],
+                                      mechanical_policy_receipt=mechanical, consumed_pid=42)
+    report = {"target_date": "2026-10-09", "as_of": semantics["as_of"],
+              "source_generation": semantics["source_generation"], "profit_exit_semantics": semantics}
+    if defect == "enum": semantics["lifecycle"][0]["lifecycle_state"] = "silent_success"
+    if defect == "generation": report["source_generation"] = "b" * 64
+    if defect == "cutoff": semantics["as_of"] = "2026-10-10T10:00:00+09:00"
+    if defect == "missing": semantics.pop("economics_status")
+    path = tmp_path / "data/report/holding_exit_sentinel/holding_exit_sentinel_2026-10-09.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(report))
+    result = _holding_profit_exit_semantics(tmp_path, "2026-10-09")
+    if defect:
+        assert result["status"] == "source_invalid"
+    else:
+        assert result["status"] == "pending_submit"
+        assert result["findings"] == []
+        assert result["lifecycle_verified"] is True
+        assert result["lifecycle_counts"] == {"pending_submit": 1}

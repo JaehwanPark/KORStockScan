@@ -873,3 +873,31 @@ def test_scanner_gzip_lineage_reaches_report_fallback_consumer(monkeypatch, tmp_
     assert len(scanner) == 1
     assert scanner[0]["scanner_discovery_type"] == "price_jump_acceleration"
     assert scanner[0]["provenance_matched_count"] == 1
+
+
+def test_fact_consumer_preserves_actual_cost_revision_and_configured_rate_separately(monkeypatch):
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    day = "2026-10-08"
+    row = {"id": 1, "rec_date": day, "code": "123456", "status": "COMPLETED",
+        "strategy": "SCALPING", "position_tag": "SCALP_BASE", "profit_rate": 0.8,
+        "buy_price": 10000, "buy_qty": 2, "buy_time": day + " 10:00:00",
+        "sell_price": 10100, "sell_time": day + " 10:01:01"}
+    projected = {**row, "completion_observed_date": day, "terminal_population_scope": "real_record_bound",
+        "strict_completion_status": "eligible", "broker_actual_cost_observed": True,
+        "broker_actual_fees_taxes_krw": 10, "realized_pnl_krw": 190, "profit_rate": 0.95,
+        "realized_pnl_krw_source": "broker_actual_fee_reconciled",
+        "actual_cost_reconciliation": {"status": "actual_cost_reconciled", "revision": 2},
+        "exit_signal": {"inferred": False, "binding_status": "same_order_generation"}}
+    generation = {"sha256": "b" * 64, "count": 1}
+    report = {"date": day, "meta": {"warnings": [], "sell_completed_event_ids": [1],
+        "actual_cost_source_generation": generation}, "metrics": {"canonical_completed_trades": 1},
+        "sections": {"recent_trades": [row], "completed_trade_projection": [projected]}}
+    report["meta"]["completed_census_manifest"] = completed_census_manifest(report)
+    monkeypatch.setattr(report_mod, "build_trade_review_report", lambda **_kw: report)
+    facts, warnings = report_mod._build_trade_fact_rows(day)
+    assert warnings == []
+    assert facts[0]["realized_pnl_krw"] == 190
+    assert facts[0]["profit_rate"] == 0.95
+    assert facts[0]["actual_cost_reconciliation_status"] == "actual_cost_reconciled"
+    assert facts[0]["actual_cost_source_generation"] == generation
+    assert row["profit_rate"] == 0.8

@@ -744,6 +744,11 @@ def _build_trade_fact_rows(
                     if economics_complete else None
                 ),
                 "economics_source_status": economics_source_status,
+                "actual_cost_reconciliation_status": (
+                    (completed_source.get("actual_cost_reconciliation") or {}).get("status", "cost_source_unavailable")
+                    if main_completion and identity_bound else None
+                ),
+                "actual_cost_source_generation": (census.get("actual_cost_source_generation") if main_completion else None),
                 "completion_census_run_id": census.get("run_id") if main_completion else None,
                 "completion_census_projection_sha256": (
                     census.get("projection_sha256") if main_completion else None
@@ -1324,6 +1329,11 @@ def _sync_status_payload(
             str(fact.get("economics_source_status") or "unobserved")
             for fact in completed
         )),
+        "actual_cost_status_counts": dict(Counter(
+            str(fact.get("actual_cost_reconciliation_status") or "unassessed")
+            for fact in completed
+        )),
+        "actual_cost_source_generation": (completion_census_quality or {}).get("actual_cost_source_generation"),
         "completed_census_run_ids": (
             [str(completion_census_quality["run_id"])]
             if completion_census_quality and completion_census_quality.get("run_id")

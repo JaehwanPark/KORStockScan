@@ -961,3 +961,48 @@ def test_mechanical_publisher_requires_sealed_postclose_report_and_one_market(
     held = scalp_publisher.build_selection("2026-09-28")
     assert held["status"] == "hold_source_gap"
     assert held["allowed_runtime_apply"] is False
+
+
+def test_holding_profit_pid_archive_is_idempotent_and_keeps_original_verification_time(tmp_path, monkeypatch):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+    from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path)
+    receipt = baseline_receipt({}, source="operator_directed_m1_baseline")
+    manifest = {"target_date": "2026-10-09", "manifest_sha256": "a" * 64,
+                "scalp_trailing_mechanical_policy_receipt": receipt}
+    verification = {"target_date": "2026-10-09", "pid": 42, "passed": True, "pid_passed": True, "pid_env_available": True,
+                    "manifest_sha256": "a" * 64, "verified_at": "2026-10-09T09:00:00+09:00"}
+    path = bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+    before = path.read_bytes()
+    verification["verified_at"] = "2026-10-09T09:10:00+09:00"
+    assert bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest) == path
+    assert path.read_bytes() == before
+    assert len(list(path.parent.glob("*.json"))) == 1
+    verification["pid"] = 43
+    bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+    assert len(list(path.parent.glob("*.json"))) == 2
+
+
+def test_holding_profit_pid_archive_failed_publish_can_retry_without_partial_receipt(tmp_path, monkeypatch):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+    from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path)
+    manifest = {"target_date": "2026-10-09", "manifest_sha256": "a" * 64,
+                "scalp_trailing_mechanical_policy_receipt": baseline_receipt({}, source="operator_directed_m1_baseline")}
+    verification = {"target_date": "2026-10-09", "pid": 42, "passed": True, "pid_passed": True,
+                    "pid_env_available": True, "manifest_sha256": "a" * 64,
+                    "verified_at": "2026-10-09T09:00:00+09:00"}
+    with monkeypatch.context() as publication:
+        def fail_link(*_args):
+            raise OSError("publication_unavailable")
+        publication.setattr(bootstrap.os, "link", fail_link)
+        with pytest.raises(OSError, match="publication_unavailable"):
+            bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+    directory = tmp_path / "verified_holding_profit_pid" / "2026-10-09"
+    assert list(directory.iterdir()) == []
+    path = bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)
+    assert json.loads(path.read_text())["pid"] == 42
+    assert list(directory.iterdir()) == [path]
+    verification["target_date"] = "2026-10-08"
+    with pytest.raises(ValueError, match="source_mismatch"):
+        bootstrap._archive_holding_profit_pid_verification("2026-10-09", verification, manifest)

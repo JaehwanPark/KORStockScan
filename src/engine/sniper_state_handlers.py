@@ -363,7 +363,7 @@ from src.engine.scalping.scale_in_split_order_plan import (
 )
 from src.trading.order.split_execution_math import scale_in_leg_ttl_seconds
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
-from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
+from src.engine.scalping.trailing_exit_decision import EXIT_WAIT_STAGES, evaluate_trailing_take_profit
 from src.engine.scalping.trailing_mechanical_policy import (
     CLASSIFIER_ENV_KEY as SCALP_TRAILING_CLASSIFIER_ENV_KEY,
     classifier_hash as scalp_trailing_classifier_hash,
@@ -20220,7 +20220,7 @@ def _exit_signal_submission_fields(stock: dict, code: str, fields: dict) -> dict
 
 
 def _log_holding_pipeline(stock, code, stage, **fields):
-    if (stage in {"exit_signal", "sell_order_sent", "sell_completed"}
+    if (stage in {"exit_signal", "sell_order_sent", "sell_completed"} | EXIT_WAIT_STAGES
             and str(fields.get("exit_rule") or stock.get("last_exit_rule") or "")
                 == "scalp_trailing_take_profit"):
         signal = stock.get("holding_path_latest_tp_signal") or {}
@@ -20228,8 +20228,15 @@ def _log_holding_pipeline(stock, code, stage, **fields):
                 and signal.get("buy_fill_identity") == buy_fill_identity_from_runtime(stock)):
             fields.setdefault("holding_path_signal_id", signal.get("signal_id"))
             fields.setdefault("holding_path_signal_at", signal.get("signal_at"))
+            fields.setdefault("holding_path_position_key", signal.get("position_key"))
+            fields.setdefault("holding_path_buy_fill_identity", signal.get("buy_fill_identity"))
             fields.setdefault("holding_path_policy_bundle_sha256",
                               signal.get("policy_bundle_sha256"))
+            resolution = stock.get("holding_path_exit_resolution") or {}
+            if (resolution.get("signal_id") == signal.get("signal_id")
+                    and resolution.get("buy_fill_identity") == signal.get("buy_fill_identity")):
+                fields.setdefault("holding_path_exit_permission_at", resolution.get("permission_at"))
+                fields.setdefault("holding_path_release_reason", resolution.get("release_reason"))
     lineage = stock.get("_scale_in_applied_policy_lineage") or {}
     if lineage and stage in {"sell_completed", "add_buy_execution", "scale_in_submitted"}:
         fields.update({"scale_in_applied_" + key: value for key, value in lineage.items()})
@@ -54862,6 +54869,9 @@ def _holding_path_signal_decision(
             "baseline_policy_expired" if policy_expired
             else _HOLDING_PATH_POLICY_RECEIPT.get("status")
         )
+        if path_id == "EXIT_TRAILING_TP":
+            snapshot["mechanical_policy_receipt"] = _scalp_trailing_policy_observation_fields()
+            snapshot["runtime_pid"] = os.getpid()
         snapshot["signal_snapshot_ms"] = int(
             (time.perf_counter() - snapshot_started) * 1000
         )
@@ -54871,7 +54881,10 @@ def _holding_path_signal_decision(
         stock["holding_path_signal_snapshots"] = dict(list(snapshots.items())[-32:])
     try:
         _log_holding_pipeline(stock, code, "holding_path_signal_snapshot",
-                              signal_id=signal_id, **snapshot,
+                              signal_id=signal_id, **{
+                                  key: json.dumps(value, sort_keys=True) if key == "mechanical_policy_receipt" else value
+                                  for key, value in snapshot.items()
+                              },
                               actual_order_submitted=False)
     except Exception as exc:
         log_error(f"holding_path_signal_snapshot_log_failed:{type(exc).__name__}")
@@ -54892,6 +54905,8 @@ def _holding_path_exit_proceeds(
     ws_data: dict, signal_at: float,
 ) -> bool:
     """Only a mature path-specific VETO may defer a soft SELL briefly."""
+    from src.engine.scalping.trailing_exit_decision import evaluate_exit_deferral
+
     path_id = _HOLDING_PATH_RULES.get(str(exit_rule or ""))
     if path_id is None:
         return True
@@ -54899,6 +54914,7 @@ def _holding_path_exit_proceeds(
         stock.pop("holding_path_exit_hold", None)
         return True
     position_key = _scalp_holding_source_position_key(stock, code)
+    buy_identity = buy_fill_identity_from_runtime(stock)
     if path_id == "EXIT_TRAILING_TP":
         first = stock.get("scalp_trailing_first_crossing") or {}
         if _safe_float(first.get("at_epoch"), None) is None:
@@ -54909,13 +54925,14 @@ def _holding_path_exit_proceeds(
         frozen_signal_at = signal_at
         previous = stock.get("holding_path_exit_candidate") or {}
         if (previous.get("position_key") == position_key
-                and previous.get("exit_rule") == exit_rule):
+                and previous.get("exit_rule") == exit_rule
+                and previous.get("buy_fill_identity") == buy_identity):
             signal_id = str(previous.get("signal_id") or "")
         else:
             signal_id = f"{exit_rule}:{signal_at:.6f}"
             stock["holding_path_exit_candidate"] = {
                 "position_key": position_key, "exit_rule": exit_rule,
-                "signal_id": signal_id,
+                "signal_id": signal_id, "buy_fill_identity": buy_identity,
             }
     snapshot = _holding_path_signal_decision(
         stock, code, path_id=path_id, signal_id=signal_id,
@@ -54923,60 +54940,93 @@ def _holding_path_exit_proceeds(
     )
     if snapshot.get("decision") != "VETO":
         stock.pop("holding_path_exit_hold", None)
+        stock["holding_path_exit_resolution"] = {
+            "position_key": position_key, "buy_fill_identity": buy_identity,
+            "signal_id": signal_id, "signal_at": frozen_signal_at,
+            "permission_at": time.time(), "release_reason": "decision_proceeds",
+        }
         return True
     market = scalp_trailing_market_type_at(frozen_signal_at)
     policy = _holding_path_policy_for(path_id, market)
-    if not validate_path_policy(policy):
-        return True
     now_actual = time.time()
     receipt = ws_quote_source_receipt(ws_data or {}, now_ts=now_actual)
     quote_at = _safe_float(receipt.get("observed_epoch"), None)
-    if (quote_at is None or not 0 <= now_actual - quote_at <= 3.0
-            or not _pre_submit_input_snapshot_has_usable_quote(ws_data)):
-        return True
+    fresh = bool(quote_at is not None and 0 <= now_actual - quote_at <= 3.0
+                 and _pre_submit_input_snapshot_has_usable_quote(ws_data))
     protect_pct = _safe_float(stock.get("protect_profit_pct"), None)
-    if (profit_rate <= _rule_float("SCALP_HARD_STOP", -2.5)
-            or profit_rate <= _rule_float("SCALP_PROTECT_TRAILING_EMERGENCY_PCT", -2.0)
-            or (protect_pct is not None and profit_rate <= protect_pct)
-            or stock.get("exit_requested") or _has_active_sell_order_pending(stock)):
-        return True
+    safety = bool(
+        profit_rate <= _rule_float("SCALP_HARD_STOP", -2.5)
+        or profit_rate <= _rule_float("SCALP_PROTECT_TRAILING_EMERGENCY_PCT", -2.0)
+        or (protect_pct is not None and profit_rate <= protect_pct)
+        or stock.get("exit_requested") or _has_active_sell_order_pending(stock)
+    )
     hold = stock.get("holding_path_exit_hold") or {}
-    if hold.get("signal_id") != signal_id or hold.get("path_id") != path_id:
+    new_hold = hold.get("signal_id") != signal_id or hold.get("path_id") != path_id
+    if new_hold:
         started_at = frozen_signal_at
         if path_id != "EXIT_TRAILING_TP":
-            for field in ("soft_stop_micro_grace_started_at",
-                          "soft_stop_dynamic_grace_started_at"):
+            for field in ("soft_stop_micro_grace_started_at", "soft_stop_dynamic_grace_started_at"):
                 prior_start = _safe_float(stock.get(field), None)
                 if prior_start is not None and 0 < prior_start <= now_actual:
                     started_at = min(started_at, prior_start)
         hold = {
-            "signal_id": signal_id, "path_id": path_id,
-            "started_at": started_at, "anchor_profit_rate": profit_rate,
-            "market": market,
+            "signal_id": signal_id, "path_id": path_id, "started_at": started_at,
+            "anchor_profit_rate": profit_rate, "market": market,
+            "position_key": position_key, "buy_fill_identity": buy_identity,
         }
-        stock["holding_path_exit_hold"] = hold
-    elapsed = max(0.0, now_actual - _safe_float(hold.get("started_at"), now_actual))
-    worsen = (_safe_float(hold.get("anchor_profit_rate"), profit_rate)
-              - profit_rate)
-    max_defer = min(
-        float(_rule_int("HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90)),
-        90.0, _safe_float(policy.get("max_defer_sec"), 0.0),
-    )
+    max_defer = min(float(_rule_int("HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90)),
+                    90.0, _safe_float((policy or {}).get("max_defer_sec"), 0.0))
     max_worsen = (0.40 if path_id == "EXIT_TRAILING_TP"
                   else _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80))
-    if (hold.get("market") != market or elapsed >= max_defer
-            or worsen >= max_worsen):
-        stock.pop("holding_path_exit_hold", None)
-        return True
-    _log_holding_pipeline(
-        stock, code, "holding_path_exit_veto_deferred",
-        exit_rule=exit_rule, path_id=path_id, signal_id=signal_id,
-        elapsed_sec=elapsed, max_defer_sec=max_defer,
-        profit_worsen_pct=worsen, max_worsen_pct=max_worsen,
-        vote_count=snapshot.get("vote_count"),
-        actual_order_submitted=False,
+    decision = evaluate_exit_deferral(
+        decision=str(snapshot.get("decision")), now=now_actual, signal_at=frozen_signal_at,
+        started_at=_safe_float(hold.get("started_at"), float("nan")),
+        anchor_profit=_safe_float(hold.get("anchor_profit_rate"), float("nan")),
+        profit=profit_rate, max_defer_sec=max_defer, max_worsen_pct=max_worsen,
+        policy_valid=validate_path_policy(policy), quote_fresh=fresh, safety=safety,
+        same_generation=(hold.get("position_key") == position_key
+                         and hold.get("buy_fill_identity") == buy_identity),
+        same_market=(hold.get("market") == market
+                     and scalp_trailing_market_type_at(now_actual) == market),
     )
-    return False
+    resolution = {
+        "position_key": position_key, "buy_fill_identity": buy_identity,
+        "signal_id": signal_id, "signal_at": frozen_signal_at,
+        "permission_at": now_actual if decision.proceeds else None,
+        "started_at": hold.get("started_at"), "anchor_profit_rate": hold.get("anchor_profit_rate"),
+        "profit_rate": profit_rate, "release_reason": decision.reason,
+        "max_defer_sec": max_defer, "max_worsen_pct": max_worsen,
+        "quote_fresh": fresh, "safety_priority": safety, "market": market,
+        "same_generation": (hold.get("position_key") == position_key
+                            and hold.get("buy_fill_identity") == buy_identity),
+        "policy_valid": validate_path_policy(policy),
+    }
+    prior_resolution = stock.get("holding_path_exit_resolution") or {}
+    already_released = bool(
+        decision.proceeds and prior_resolution.get("permission_at") is not None
+        and prior_resolution.get("position_key") == position_key
+        and prior_resolution.get("buy_fill_identity") == buy_identity
+        and prior_resolution.get("signal_id") == signal_id
+    )
+    if already_released:
+        resolution = prior_resolution
+    if decision.proceeds:
+        stock.pop("holding_path_exit_hold", None)
+    else:
+        stock["holding_path_exit_hold"] = hold
+    stock["holding_path_exit_resolution"] = resolution
+    # Observation failure cannot add a SELL veto or retry authority.
+    if snapshot.get("decision") == "VETO" and not already_released:
+        try:
+            _log_holding_pipeline(
+                stock, code, "holding_path_exit_veto_deferred", exit_rule=exit_rule,
+                path_id=path_id, phase="released" if decision.proceeds else "deferred",
+                elapsed_sec=decision.elapsed_sec, profit_worsen_pct=decision.profit_worsen_pct,
+                vote_count=snapshot.get("vote_count"), actual_order_submitted=False, **resolution,
+            )
+        except Exception as exc:
+            log_error(f"holding_path_exit_resolution_log_failed:{type(exc).__name__}")
+    return decision.proceeds
 
 
 def _arm_smoothing_source_only_path(

@@ -1588,6 +1588,11 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
         paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
         paths['direct_tower'] = project / 'src/engine/automation/tuning_performance_control_tower.py'
         paths['runtime_approval_summary'] = project / 'src/engine/runtime_approval_summary.py'
+        paths['holding_profit_semantics'] = project / 'src/engine/scalping/holding_profit_exit_semantics.py'
+        paths['holding_profit_freshness'] = project / 'src/engine/error_detectors/artifact_freshness.py'
+        paths['holding_profit_forward_window'] = project / 'src/engine/scalping/trailing_mechanical_policy.py'
+        paths['holding_broker_cost_source'] = project / 'src/engine/lifecycle/broker_cost_source.py'
+        paths['holding_broker_cost_reconciliation'] = project / 'src/engine/lifecycle/broker_cost_reconciliation.py'
     if stage == 'main_machine_policy':
         if not legacy_main_machine:
             paths['main_fixed_watch_research'] = project / 'src/engine/monitoring/main_fixed_watch_policy_research.py'

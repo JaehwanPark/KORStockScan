@@ -787,3 +787,40 @@ def test_same_0d_quote_cannot_create_a_new_ws_crossing_after_0b_peak():
         bid_source="fresh_ws_executable_bid",
     )
     assert next_quote.triggered
+
+
+def test_veto_permission_replay_preserves_first_crossing_and_observed_exit():
+    from src.engine.ai.holding_exit_vote import PATH_POLICY_BY_MARKET, input_snapshot_id
+    from src.engine.scalping.trailing_exit_decision import evaluate_exit_deferral
+    position, vector, base = _batched_position()
+    first_at = (base + 100) / 1000
+    later_at = first_at + 45
+    policy = PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]
+    position["exit_signal"] = {"timestamp": datetime.fromtimestamp(later_at, ZoneInfo("Asia/Seoul")).isoformat()}
+    for leg in position["sell_fill_legs"]:
+        leg["at"] = datetime.fromtimestamp(later_at + 1, ZoneInfo("Asia/Seoul")).isoformat()
+    snapshot = {"path_id": "EXIT_TRAILING_TP", "signal_at": first_at,
+        "signal_id": "first", "market": "REGULAR", "decision": "VETO",
+        "position_key": "record:1", "buy_fill_identity": "a" * 64,
+        "policy_sha256": input_snapshot_id(policy)}
+    release = {"phase": "released", "signal_id": "first", "permission_at": later_at,
+        "position_key": "record:1", "buy_fill_identity": "a" * 64,
+        "started_at": first_at, "anchor_profit_rate": 1, "profit_rate": 1,
+        "max_defer_sec": policy["max_defer_sec"], "max_worsen_pct": 0.4,
+        "quote_fresh": True, "safety_priority": False, "release_reason": "max_defer_elapsed"}
+    decision = evaluate_exit_deferral(decision="VETO", now=later_at, signal_at=first_at,
+        started_at=first_at, anchor_profit=1, profit=1, max_defer_sec=policy["max_defer_sec"], max_worsen_pct=0.4)
+    release["release_reason"] = decision.reason
+    position["timeline"] += [{"stage": "holding_path_signal_snapshot", "fields": snapshot},
+                             {"stage": "holding_path_exit_veto_deferred", "fields": release}]
+    prepared = prepare_position(position)
+    assert prepared["source_gap"] is None
+    prepared["rows"][-1]["_at"] = later_at
+    result = replay_vector(position, prepared, vector, actual_exit_rule="scalp_trailing_take_profit")
+    assert result["status"] == "same_observed_exit", result
+    assert result["first_trigger_at_epoch"] == first_at
+    assert result["observed_exit_permission_at_epoch"] == later_at
+    assert result["paired_delta_pnl_krw"] == 0
+    position["timeline"][-1]["fields"]["release_reason"] = "fabricated"
+    result = replay_vector(position, prepare_position(position), vector, actual_exit_rule="scalp_trailing_take_profit")
+    assert result["status"] == "source_gap"

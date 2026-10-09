@@ -1313,6 +1313,32 @@ def build_runtime_approval_summary(
         ),
         "decision_authority": "optional_source_only_no_candidate_or_runtime_apply",
     }
+    from src.engine.scalping.trailing_mechanical_policy import verify_forward_window
+    window_issue = None
+    if not trailing_error and trailing_payload.get("date") == target_date:
+        try:
+            verify_forward_window(trailing_payload, target_date)
+        except ValueError as exc:
+            window_issue = str(exc)
+    from src.engine.error_detectors.artifact_freshness import _holding_profit_exit_semantics
+    semantic = _holding_profit_exit_semantics(DATA_DIR.parent, target_date)
+    code_defects = ([window_issue] if window_issue else []) + (
+        semantic.get("findings", []) if semantic.get("status") in {
+            "source_invalid", "semantic_contract_invalid", "policy_binding_gap"} else [])
+    trailing_lineage["source_contract_repair"] = {
+        "owner": "HoldingProfitExitSourceContractRepair",
+        "repair_required": bool(code_defects), "identified_defects": code_defects,
+        "code_closure": "requires_validation_receipt",
+        "analysis_window": trailing_payload.get("analysis_window"),
+        "semantic_status": semantic.get("semantic_status", semantic.get("status")),
+        "lifecycle_counts": semantic.get("lifecycle_counts", {}),
+        "economics_status": semantic.get("economics_status", "unavailable"),
+        "actual_cost_status_counts": trailing_payload.get("actual_cost_status_counts", {}),
+        "actual_cost_source_generations": trailing_payload.get("actual_cost_source_generations", {}),
+        "terminal_cost_verified": trailing_payload.get("cost_input_complete") is True,
+        "economic_accepted": False, "automatic_successor_vote_tuning": False,
+        "decision_authority": "report_only_no_new_activation_gate",
+    }
     exact_manifest_path = (DATA_DIR / "runtime" / "policy_bootstrap"
                            / f"runtime_policy_bootstrap_{target_date}.json")
     exact_verify_path = (DATA_DIR / "runtime" / "policy_bootstrap"

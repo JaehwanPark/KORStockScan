@@ -133,6 +133,7 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
             "warnings", "snapshot_profile", "completed_census_manifest",
             "sell_completed_event_ids", "completion_event_id_count",
             "trailing_event_source_receipts", "completed_census_input_sha256",
+            "actual_cost_source_generation", "knowledge_cutoff",
         )},
         "metrics": {key: (payload.get("metrics") or {}).get(key) for key in (
             "canonical_completed_trades", "completed_trades",
@@ -184,10 +185,39 @@ def save_monitor_snapshot_manifest(
             for key, path in tracked_paths.items()
         },
     }
+    if profile == "postclose_exit" and target_date >= "2026-09-28":
+        from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+        payload["actual_cost_source_generation"] = source_generation(DATA_DIR, target_date)
+        from src.engine.holding_exit_observation_report import _verified_trade_review_projection
+        trade_path = Path(tracked_paths.get("trade_review", ""))
+        projection = _verified_trade_review_projection(trade_path, target_date, data_root=DATA_DIR)
+        if projection is None:
+            raise ValueError("postclose_exit_trade_projection_generation_invalid")
+        projected_costs = (projection.get("meta") or {}).get("actual_cost_source_generation")
+        if (projected_costs != payload["actual_cost_source_generation"]
+                and (projected_costs is not None or payload["actual_cost_source_generation"]["count"]
+                     or payload["actual_cost_source_generation"].get("official_source_sha256"))):
+            raise ValueError("postclose_exit_actual_cost_generation_changed")
+        holding_path = Path(tracked_paths.get("holding_exit_observation", ""))
+        if holding_path.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError("postclose_exit_holding_report_size_invalid")
+        holding = json.loads(holding_path.read_text())
+        holding_costs = (holding.get("actual_cost_source_generations") or {}).get(target_date)
+        if (holding_costs != payload["actual_cost_source_generation"]
+                and (holding_costs is not None or payload["actual_cost_source_generation"]["count"]
+                     or payload["actual_cost_source_generation"].get("official_source_sha256"))):
+            raise ValueError("postclose_exit_holding_cost_generation_changed")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    fd, name = tempfile.mkstemp(prefix=f".{manifest_path.name}.", suffix=".tmp", dir=manifest_path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, manifest_path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return manifest_path
 
 
@@ -209,6 +239,11 @@ def verified_postclose_exit_snapshot_manifest(target_date: str, *, data_root: Pa
                 "holding_exit_observation"}
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+        costs = source_generation(data_root, target_date)
+        if (manifest.get("actual_cost_source_generation") != costs
+                and (costs["count"] or costs.get("official_source_sha256") or manifest.get("actual_cost_source_generation") is not None)):
+            return None
         if (manifest.get("target_date") != target_date
             or manifest.get("profile") != "postclose_exit"
             or set(manifest.get("snapshot_kinds") or []) != expected):
@@ -222,12 +257,24 @@ def verified_postclose_exit_snapshot_manifest(target_date: str, *, data_root: Pa
                 return None
             if _sha256_file(path) != (manifest.get("snapshot_sha256") or {}).get(kind):
                 return None
-        if _verified_trade_review_projection(directory / f"trade_review_{target_date}.json",
-                                             target_date) is None:
+        projection = _verified_trade_review_projection(
+            directory / f"trade_review_{target_date}.json", target_date, data_root=Path(data_root))
+        if projection is None:
             return None
-        holding = json.loads((directory / f"holding_exit_observation_{target_date}.json").read_text())
+        recorded_costs = (projection.get("meta") or {}).get("actual_cost_source_generation")
+        if recorded_costs != costs and (costs["count"] or costs.get("official_source_sha256") or recorded_costs is not None):
+            return None
+        holding_path = directory / f"holding_exit_observation_{target_date}.json"
+        if holding_path.stat().st_size > 64 * 1024 * 1024:
+            return None
+        holding = json.loads(holding_path.read_text())
         if (holding.get("date") != target_date
             or (holding.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
+            return None
+        holding_costs = (holding.get("actual_cost_source_generations") or {}).get(target_date)
+        if holding_costs != costs and (holding_costs is not None or costs["count"] or costs.get("official_source_sha256")):
+            return None
+        if source_generation(data_root, target_date) != costs:
             return None
         return manifest_path
     except (OSError, ValueError, TypeError, KeyError):

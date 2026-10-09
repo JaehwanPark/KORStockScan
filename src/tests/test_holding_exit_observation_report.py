@@ -1042,7 +1042,10 @@ def test_holding_exit_observation_defaults_to_clean_baseline_window(
     assert report["analysis_window"] == {
         "start_date": "2026-06-05",
         "end_date": "2026-06-06",
-        "selection": "clean_tuning_baseline_default",
+        "selection": "policy_refresh_forward_default",
+        "policy_refresh_start_date": "2026-06-05",
+        "evaluation_start_date": "2026-06-05",
+        "eligible_for_successor_selection": True,
         "clean_tuning_baseline_date": "2026-06-05",
         "clean_tuning_baseline_enabled": True,
         "pre_baseline_decision": "decision_disqualified_archive_only",
@@ -1118,3 +1121,40 @@ def test_target_pipeline_summary_streams_large_rows(monkeypatch, tmp_path):
     assert paths == [
         str(tmp_path / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
     ]
+
+
+def test_forward_refresh_window_excludes_old_generation_without_erasing_old_cost_rows():
+    from src.engine.scalping.trailing_mechanical_strength import VERSION
+    start, window = report_mod._analysis_window_start(target_date="2026-10-08", month_start=None)
+    assert start == "2026-09-29"
+    assert window["evaluation_start_date"] == "2026-09-29"
+    _, audit = report_mod._analysis_window_start(target_date="2026-10-08", month_start="2026-09-01")
+    assert audit["start_date"] == "2026-09-01"
+    assert audit["evaluation_start_date"] == "2026-09-29"
+    assert audit["eligible_for_successor_selection"] is False
+    old = _trade(1, rec_date="2026-09-23", sell_time="2026-10-08 10:00:00")
+    old["timeline"].append({"stage": "scalp_trailing_input_transition", "fields": {"classifier_version": VERSION}})
+    current = _trade(2, rec_date="2026-10-08")
+    current["timeline"].append({"stage": "scalp_trailing_input_transition", "fields": {"classifier_version": VERSION}})
+    rows, quality = report_mod._mechanical_completed_cohort([old, current], [old, current],
+        [{"date": "2026-09-28", "reason": "legacy_missing"}], target_date="2026-10-08")
+    assert quality["complete"] is True
+    assert quality["start_entry_day"] == "2026-09-29"
+    assert [row["id"] for row in rows] == [2]
+    assert old["buy_price"] == 10000
+    assert old["sell_time"] == "2026-10-08 10:00:00"
+
+
+def test_publisher_and_bootstrap_share_forward_window_guard():
+    from src.engine.scalping.trailing_mechanical_policy import verify_forward_window, CLASSIFIER_VERSION
+    import pytest
+    report = {"analysis_window": report_mod._analysis_window_start(target_date="2026-10-08", month_start=None)[1],
+              "mechanical_population_quality": {"policy_refresh_start_date": "2026-09-29",
+                 "start_entry_day": "2026-09-29", "classifier_version": CLASSIFIER_VERSION}}
+    verify_forward_window(report, "2026-10-08")
+    report["analysis_window"]["start_date"] = "2026-06-05"
+    with pytest.raises(ValueError, match="selection_forward_window_invalid"):
+        verify_forward_window(report, "2026-10-08")
+    report["analysis_window"] = report_mod._analysis_window_start(target_date="2026-10-08", month_start="2026-09-01")[1]
+    with pytest.raises(ValueError, match="selection_forward_window_invalid"):
+        verify_forward_window(report, "2026-10-08")

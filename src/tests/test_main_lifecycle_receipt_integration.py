@@ -2706,6 +2706,7 @@ def test_exit_economics_uses_exact_decision_price_or_omits_slippage() -> None:
         "main_lifecycle_fees_taxes_krw": 8.0,
         "main_lifecycle_configured_fee_estimate_krw": 8.0,
         "main_lifecycle_broker_actual_fees_taxes_krw": None,
+        "main_lifecycle_actual_cost_status": "cost_source_unavailable",
         "main_lifecycle_cost_basis_source": "configured_trade_cost_rate",
         "main_lifecycle_realized_net_pnl_krw": 12,
         "main_lifecycle_slippage_krw": 20.0,

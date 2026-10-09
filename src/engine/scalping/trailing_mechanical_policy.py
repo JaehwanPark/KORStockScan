@@ -242,6 +242,31 @@ def baseline_receipt(env: Mapping[str, Any], *, source: str) -> dict[str, Any]:
     }
 
 
+def verify_forward_window(report: Mapping[str, Any], source_date: str) -> None:
+    """A historical audit is never a successor-policy evaluation population."""
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date, clean_baseline_policy
+    floor = policy_refresh_start_date(source_date)
+    # Preserve pre-refresh historical receipts under their original contract.
+    if floor == clean_baseline_policy()["clean_tuning_baseline_date"]:
+        return
+    window = report.get("analysis_window") or {}
+    cohort = report.get("mechanical_population_quality") or {}
+    if (window.get("selection") != "policy_refresh_forward_default"
+            or window.get("eligible_for_successor_selection") is not True
+            or window.get("policy_refresh_start_date") != floor
+            or window.get("start_date") != floor
+            or window.get("evaluation_start_date") != floor
+            or window.get("end_date") != source_date
+            or cohort.get("policy_refresh_start_date") != floor
+            or not floor <= str(cohort.get("start_entry_day") or "") <= source_date
+            or cohort.get("classifier_version") != CLASSIFIER_VERSION):
+        raise ValueError("selection_forward_window_invalid")
+    research = report.get("trailing_mechanical_market_tuning") or {}
+    for day in [*(research.get("train_days") or []), *(research.get("holdout_days") or [])]:
+        if not isinstance(day, str) or not floor <= day <= source_date:
+            raise ValueError("selection_forward_split_date_invalid")
+
+
 def selected_policy_env(
     policy: Mapping[str, Any], report: Mapping[str, Any], *,
     target_date: str, report_sha256: str,
@@ -268,6 +293,7 @@ def selected_policy_env(
             or (report.get("meta") or {}).get("snapshot_profile") != "postclose_exit"
             or (report.get("mechanical_population_quality") or {}).get("complete") is not True):
         raise ValueError("source_report_binding_invalid")
+    verify_forward_window(report, source_date)
     research = report.get("trailing_mechanical_market_tuning") or {}
     candidate = research.get("research_candidate") or {}
     evidence = research.get("joint_selection_evidence") or {}

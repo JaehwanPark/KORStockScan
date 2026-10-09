@@ -5811,6 +5811,7 @@ def _fetch_kiwoom_api_continuous_transport(
                 break
 
         if cont_yn != "Y":
+            meta["continuous_terminal_received"] = cont_yn == "N"
             break  # 더 이상 페이지가 없으면 탈출
         if not next_key:
             meta["continuous_next_key_missing"] = True

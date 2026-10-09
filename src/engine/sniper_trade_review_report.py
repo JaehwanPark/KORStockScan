@@ -191,6 +191,7 @@ def _decode_threshold_json_fields(fields: dict) -> dict:
         "operational_threshold_values",
         "operational_threshold_sources",
         "first_crossing",
+        "mechanical_policy_receipt",
     ):
         if key not in fields or fields[key] == "-":
             continue
@@ -2036,7 +2037,6 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
             continue
         if (str(fields.get("receipt_quantity_contract_complete")).lower() != "true"
                 or str(fields.get("receipt_unit_fill_consistent")).lower() != "true"
-                or str(fields.get("receipt_economics_complete")).lower() != "true"
                 or str(fields.get("actual_order_submitted")).lower() != "true"
                 or str(fields.get("broker_order_forbidden")).lower() != "false"
                 or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"):
@@ -2052,6 +2052,8 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
             "qty": delta,
             "price": price,
             "amount_krw": delta * price,
+            "route": fields.get("broker_route") or fields.get("broker_order_route")
+            or fields.get("main_lifecycle_route"),
         })
         buy_amount += delta * price
         buy_quality.add(str(fields.get("fill_quality") or "unknown").lower())
@@ -2129,18 +2131,18 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
             "sell_receipt_unit_fill_consistent",
             fields.get("sell_execution_receipt_unit_fill_consistent"),
         )
-        if (str(economics_complete).lower() != "true"
-                or str(quantity_complete).lower() != "true"
-                or str(unit_consistent).lower() != "true"
-                or fee < 0 or not math.isfinite(net_pnl)):
+        if (str(quantity_complete).lower() != "true"
+                or str(unit_consistent).lower() != "true"):
             reasons.append("source_gap_sell_leg_cost_or_quantity")
             continue
+        if str(economics_complete).lower() != "true" or fee < 0 or not math.isfinite(net_pnl):
+            reasons.append("source_gap_sell_leg_configured_cost")
         sell_orders[order] = sell_orders.get(order, 0) + delta
         sell_order_numbers.add(order)
         sell_qty += delta
         sell_amount += delta * price
-        sell_fee_amount += fee
-        sell_leg_net_pnl += net_pnl
+        sell_fee_amount += max(0, fee)
+        sell_leg_net_pnl += net_pnl if math.isfinite(net_pnl) else 0
         sell_fill_legs.append({
             "at": event.timestamp,
             "order_no": order,
@@ -2149,6 +2151,8 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
             "price": price,
             "fees_taxes_krw": fee,
             "net_pnl_krw": net_pnl,
+            "route": fields.get("broker_route") or fields.get("broker_order_route")
+            or fields.get("main_lifecycle_route"),
         })
         if sell_qty > sum(qty for at, qty in accepted_buy_fills
                           if at <= event.timestamp):
@@ -2182,8 +2186,8 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         "buy_fill_amount": buy_amount if buy_qty else None,
         "sell_filled_qty": sell_qty,
         "sell_fill_amount": sell_amount if sell_qty else None,
-        "sell_fill_fees_taxes_krw": sell_fee_amount if sell_qty else None,
-        "sell_leg_net_pnl_krw": sell_leg_net_pnl if sell_qty else None,
+        "sell_fill_fees_taxes_krw": sell_fee_amount if sell_qty and "source_gap_sell_leg_configured_cost" not in reasons else None,
+        "sell_leg_net_pnl_krw": sell_leg_net_pnl if sell_qty and "source_gap_sell_leg_configured_cost" not in reasons else None,
         "position_residual_qty": buy_qty - sell_qty,
         "buy_fill_quality": (
             "partial_fill" if "partial_fill" in buy_quality
@@ -2275,7 +2279,9 @@ def _sell_balance_reconciliation_generation_status(
 
 
 def _completed_trade_projection(
-    trade: dict, events: list[HoldingEvent], compiled: dict
+    trade: dict, events: list[HoldingEvent], compiled: dict,
+    *, cost_receipt: dict | None = None, knowledge_cutoff: float | None = None,
+    broker_cost_source: dict | None = None, cost_custody_rows=(), cost_peer_records=(),
 ) -> dict | None:
     """Keep the full canonical completion census separate from display recovery."""
     if str(trade.get("status") or "").upper() != "COMPLETED":
@@ -2357,21 +2363,48 @@ def _completed_trade_projection(
     )
     if not configured_receipt or not math.isfinite(configured_pnl):
         configured_pnl = None
-    # The existing terminal's fee fields come from get_trade_cost_rate().
-    # No current broker receipt supplies independently charged fees/taxes.
-    broker_actual_fee = None
-    exact_pnl = None
+    from src.engine.lifecycle.broker_cost_reconciliation import digest, reconcile
+    completed_at = _parse_dt(terminal.timestamp) if terminal else None
+    if completed_at is not None and completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+    actual_cost = reconcile(
+        cost_receipt, context={
+            "position_key": f"record:{trade.get('id')}",
+            "symbol": str(trade.get("code") or "")[:6],
+            "owner": terminal_fields.get("holding_cost_owner"),
+            "account_scope_sha256": terminal_fields.get("holding_cost_account_scope_sha256"),
+            "buy_fill_identity": digest(ledger["buy_fill_legs"]),
+            "completion_observed_date": completion_observed_date,
+            "completed_at": completed_at.timestamp() if completed_at else None,
+        }, buy_legs=ledger["buy_fill_legs"], sell_legs=ledger["sell_fill_legs"],
+        knowledge_cutoff=knowledge_cutoff,
+    )
+    if cost_receipt is None and broker_cost_source is not None:
+        from src.engine.lifecycle.broker_cost_source import reconcile_position
+        actual_cost = reconcile_position(
+            broker_cost_source, target_date=completion_observed_date,
+            record_id=trade.get("id"), stock_code=str(trade.get("code") or "")[:6],
+            buy_legs=ledger["buy_fill_legs"], sell_legs=ledger["sell_fill_legs"],
+            custody_rows=cost_custody_rows, peer_records=cost_peer_records,
+            knowledge_cutoff=knowledge_cutoff)
+    broker_actual_fee = actual_cost["actual_fees_taxes_krw"]
+    exact_pnl = actual_cost["exact_pnl_krw"]
+    actual_reconciled = actual_cost["status"] == "actual_cost_reconciled"
     strict_reasons = list(ledger["strict_completion_reasons"])
-    if not rate_reconciled:
+    if actual_reconciled:
+        strict_reasons = [reason for reason in strict_reasons
+                          if reason != "source_gap_sell_leg_configured_cost"]
+    if not rate_reconciled and not actual_reconciled:
         strict_reasons.append("source_gap_profit_rate_unreconciled")
-    if not fill_cost_reconciled or configured_pnl is None:
+    if not actual_reconciled and (not fill_cost_reconciled or configured_pnl is None):
         strict_reasons.append("source_gap_exact_cost_missing")
-    strict_reasons.append("source_gap_broker_actual_cost_missing")
+    if not actual_reconciled:
+        strict_reasons.append("source_gap_broker_actual_cost_missing")
     if terminal_fields.get("decision_authority") == "broker_balance_reconciliation_only":
         strict_reasons.append("source_gap_sell_balance_reconciliation_only")
     if terminal_fields.get("decision_authority") != "broker_sell_fill_observation_only":
         strict_reasons.append("source_gap_final_sell_authority")
-    if terminal_fields.get("trade_review_economics_reconciled"):
+    if terminal_fields.get("trade_review_economics_reconciled") and not actual_reconciled:
         strict_reasons.append("source_gap_terminal_db_economics_conflict")
     occurrence_source = str(
         terminal_fields.get("main_lifecycle_execution_occurrence_time_source") or ""
@@ -2381,7 +2414,7 @@ def _completed_trade_projection(
     )
     exact_fill_time = (
         occurrence_time
-        if configured_receipt
+        if (configured_receipt or actual_reconciled)
         and occurrence_source == "official_fid_908"
         and _parse_dt(occurrence_time) is not None
         else None
@@ -2538,7 +2571,11 @@ def _completed_trade_projection(
         ),
         "configured_fee_estimate_krw": configured_fee,
         "broker_actual_fees_taxes_krw": broker_actual_fee,
-        "broker_actual_cost_observed": False,
+        "broker_actual_cost_observed": actual_reconciled,
+        "actual_cost_reconciliation": actual_cost,
+        "holding_path_buy_fill_identity": terminal_fields.get("holding_path_buy_fill_identity"),
+        "economics_status": actual_cost["status"],
+        "canonical_configured_profit_rate": profit,
         "configured_cost_estimated_pnl_krw": (
             int(round(configured_pnl)) if configured_pnl is not None else None
         ),
@@ -2547,9 +2584,10 @@ def _completed_trade_projection(
         **ledger,
         "strict_completion_status": "excluded" if strict_reasons else "eligible",
         "strict_completion_reasons": sorted(set(strict_reasons)),
-        "terminal_profit_rate_reconciled": rate_reconciled,
+        "terminal_profit_rate_reconciled": rate_reconciled or actual_reconciled,
         "fill_cost_reconciled": fill_cost_reconciled,
         "cost_basis": (
+            "broker_actual_fee_reconciled" if actual_reconciled else
             "broker_fill_prices_configured_cost_rate"
             if fill_cost_reconciled else "source_gap_cost_provenance"
         ),
@@ -2565,7 +2603,7 @@ def _completed_trade_projection(
             "terminal_event" if terminal_observed_date else "db_sell_time_only"
         ),
         "exact_sell_fill_time": exact_fill_time,
-        "profit_rate": profit,
+        "profit_rate": actual_cost["exact_profit_rate"] if actual_reconciled else profit,
         "realized_pnl_krw": int(round(exact_pnl)) if exact_pnl is not None else None,
         "realized_pnl_krw_source": (
             "broker_actual_fee_reconciled"
@@ -3149,6 +3187,7 @@ def completed_census_manifest(report: dict) -> dict:
         ),
         "source_receipts_sha256": source_sha,
         "input_generation_sha256": meta.get("completed_census_input_sha256"),
+        "actual_cost_source_generation": meta.get("actual_cost_source_generation"),
         "projection_sha256": output_sha,
         "run_id": _completed_census_sha256({
             "date": report.get("date"), "source": source_sha,
@@ -3329,6 +3368,15 @@ def build_trade_review_report(
     )
     per_stage = Counter(event.stage for event in events)
 
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    actual_cost_source_generation = source_generation(DATA_DIR, target_date)
+    from src.engine.lifecycle.broker_cost_source import load_source
+    broker_cost_source = None
+    try:
+        broker_cost_source = load_source(DATA_DIR, target_date)
+    except (OSError, ValueError, TypeError, KeyError):
+        warnings.append("Official broker cost source contract invalid; actual costs excluded")
+    knowledge_cutoff = datetime.now(ZoneInfo("Asia/Seoul")).timestamp()
     compiled_rows = []
     completed_projection = []
     open_projection = []
@@ -3344,7 +3392,26 @@ def build_trade_review_report(
             matched.sort(key=_event_sort_key)
         compiled = _build_trade_row(trade, matched)
         compiled_rows.append(compiled)
-        projected = _completed_trade_projection(trade, matched, compiled)
+        from src.engine.lifecycle.broker_cost_reconciliation import load_receipt
+        cost_receipt = None
+        cost_source_error = None
+        try:
+            cost_receipt = load_receipt(DATA_DIR, target_date, str(trade.get("id") or ""))
+        except (OSError, ValueError, TypeError) as exc:
+            cost_source_error = str(exc)
+        projected = _completed_trade_projection(trade, matched, compiled,
+                                               cost_receipt=cost_receipt,
+                                               knowledge_cutoff=knowledge_cutoff,
+                                               broker_cost_source=broker_cost_source,
+                                               cost_custody_rows=(buy_parent_handoff.get("rows", [])
+                                                   if trailing_source_status == "structured_partition_read" else []),
+                                               cost_peer_records=[r.get("id") for r in trade_rows
+                                                   if str(r.get("code") or "")[:6] == str(trade.get("code") or "")[:6]
+                                                   and _safe_float(r.get("buy_qty"), 0) > 0])
+        if projected is not None and cost_source_error:
+            projected["actual_cost_reconciliation"]["reason"] = cost_source_error
+            projected["actual_cost_reconciliation"]["status"] = "actual_cost_invalid"
+            projected["economics_status"] = "actual_cost_invalid"
         if (
             projected is not None
             and projected.get("completion_observed_date") == target_date
@@ -3427,6 +3494,8 @@ def build_trade_review_report(
             }
         )
 
+    if source_generation(DATA_DIR, target_date) != actual_cost_source_generation:
+        raise ValueError("actual_cost_generation_changed_during_report")
     report = {
         "date": target_date,
         "code": normalized_code,
@@ -3435,6 +3504,7 @@ def build_trade_review_report(
         "has_data": bool(visible_rows or events),
         "meta": {
             "warnings": warnings,
+            "official_broker_cost_source_sha256": (broker_cost_source or {}).get("source_sha256"),
             "sell_completed_event_ids": sorted(sell_completed_event_ids),
             "completion_event_id_count": len(completion_event_ids),
             "completion_event_unresolved_id_count": len(unresolved_completion_ids),
@@ -3442,6 +3512,7 @@ def build_trade_review_report(
             "log_paths": [str(path) for path in log_paths],
             "trailing_event_source_receipts": trailing_source_receipts,
             "completed_census_input_sha256": _completed_census_sha256({
+                "actual_cost_source_generation": actual_cost_source_generation,
                 "source_date": target_date,
                 "db_completed_rows": [row for row in trade_rows
                                       if str(row.get("status") or "").upper()
@@ -3455,6 +3526,8 @@ def build_trade_review_report(
                 }],
                 "structured_source_receipts": trailing_source_receipts,
             }),
+            "actual_cost_source_generation": actual_cost_source_generation,
+            "knowledge_cutoff": datetime.fromtimestamp(knowledge_cutoff, ZoneInfo("Asia/Seoul")).isoformat(),
         },
         "metrics": {
             "total_trades": len(visible_rows),

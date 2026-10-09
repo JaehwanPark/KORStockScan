@@ -891,6 +891,8 @@ def test_final_sell_snapshot_preserves_tp_signal_and_buy_fill_generation():
         "holding_path_terminal_signal_binding": "same_position_buy_generation",
         "holding_path_signal_id": "tp-first-7",
         "holding_path_signal_at": 20.0,
+        "holding_path_position_key": "record:7",
+        "holding_path_buy_fill_identity": BUY_IDENTITY,
         "holding_path_policy_bundle_sha256": "b" * 64,
     }
     frozen["_entry_receipt_executions_by_order_no"]["BUY-1"]["FILL-1"][
@@ -898,3 +900,28 @@ def test_final_sell_snapshot_preserves_tp_signal_and_buy_fill_generation():
     assert receipts._holding_path_terminal_lineage_fields(frozen, 7) == {
         "holding_path_terminal_signal_binding": "source_gap_generation_mismatch",
     }
+
+
+def test_runtime_pass_keeps_immediate_path_and_veto_observation_failure_cannot_block_safety(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+    start = datetime(2026, 9, 25, 9, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    stock = _receipt_stock(id=7, status="HOLDING", strategy="SCALPING",
+        scalp_trailing_first_crossing={"at_epoch": start, "threshold_key": "SCALP_TRAILING_LIMIT_WEAK"})
+    monkeypatch.setattr(handlers.time, "time", lambda: start + 1)
+    monkeypatch.setattr(handlers, "_holding_path_signal_decision", lambda *_a, **_kw: {"decision": "PASS"})
+    monkeypatch.setattr(handlers, "ws_quote_source_receipt", lambda *_a, **_kw:
+        (_ for _ in ()).throw(AssertionError("PASS must not wait on extra quote checks")))
+    assert handlers._holding_path_exit_proceeds(stock, "005930", exit_rule="scalp_trailing_take_profit",
+        profit_rate=1, ws_data={}, signal_at=start + 1)
+    monkeypatch.setattr(handlers, "_holding_path_signal_decision", lambda *_a, **_kw: {"decision": "VETO"})
+    monkeypatch.setattr(handlers, "ws_quote_source_receipt", lambda *_a, **_kw: {"observed_epoch": start + 1})
+    monkeypatch.setattr(handlers, "_pre_submit_input_snapshot_has_usable_quote", lambda _: True)
+    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda _: True)
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *_a, **_kw:
+        (_ for _ in ()).throw(OSError("fixture observer failed")))
+    monkeypatch.setattr(handlers, "log_error", lambda *_a: None)
+    stock.pop("holding_path_exit_resolution", None)
+    assert handlers._holding_path_exit_proceeds(stock, "005930", exit_rule="scalp_trailing_take_profit",
+        profit_rate=1, ws_data={}, signal_at=start + 1)
+    assert stock["holding_path_exit_resolution"]["release_reason"] == "safety_priority"
+    assert "holding_path_exit_hold" not in stock

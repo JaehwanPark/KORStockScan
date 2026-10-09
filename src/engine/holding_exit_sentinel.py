@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
 from src.engine.ai.holding_exit_vote import (
@@ -25,7 +26,7 @@ from src.engine.scalping.holding_path_vote_policy import (
     policy_path as holding_vote_policy_path,
     verify_source_handoff as verify_holding_vote_source_handoff,
 )
-from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
+from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow, event_generation
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.market_day import is_krx_trading_day
@@ -261,7 +262,12 @@ def load_observation_report(target_date: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        raw = path.read_bytes()
+        if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
+            return None
+        with path.open("rb") as handle:
+            raw = handle.read(64 * 1024 * 1024 + 1)
+        if len(raw) > 64 * 1024 * 1024:
+            return None
         payload = json.loads(raw)
         if not isinstance(payload, dict) or payload.get("date") != target_date:
             return None
@@ -1159,6 +1165,71 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime) -> tuple[dict | None, dict[int, dict]]:
+    """Consume a bounded, exact-date verified receipt; do not inspect or alter a PID."""
+    from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
+    from src.engine.automation.runtime_policy_bootstrap import _digest_json
+    root = DATA_DIR / "runtime/policy_bootstrap"
+    try:
+        paths = [root / f"runtime_policy_bootstrap{suffix}_{target_date}.json"
+                 for suffix in ("", "_verify")]
+        if any(path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024
+               for path in paths):
+            return None, {}
+        manifest, verification = [json.loads(path.read_text()) for path in paths]
+        receipt = manifest["scalp_trailing_mechanical_policy_receipt"]
+        verified_at = datetime.fromisoformat(verification["verified_at"])
+        if verified_at.tzinfo is None:
+            return None, {}
+        if (manifest.get("target_date") != target_date or verification.get("target_date") != target_date
+                or manifest.get("manifest_sha256") != _digest_json({
+                    k: v for k, v in manifest.items() if k != "manifest_sha256"})
+                or verification.get("manifest_sha256") != manifest["manifest_sha256"]
+                or verification.get("passed") is not True
+                or verified_at.timestamp() > as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+                or receipt != baseline_receipt(manifest["env_overrides"], source=receipt["source"])):
+            return None, {}
+        pid = verification.get("pid")
+        consumed = (pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+                    and verification.get("pid_passed") is True
+                    and verification.get("pid_env_available") is True else None)
+        consumed_pids = {consumed: receipt} if consumed is not None else {}
+        conflicted_pids = set()
+        archives = []
+        for path in (root / "verified_holding_profit_pid" / target_date).glob("*.json"):
+            if len(archives) >= 256:
+                return receipt, consumed_pids
+            archives.append(path)
+        for path in sorted(archives):
+            try:
+                if path.is_symlink() or path.stat().st_size > 32768:
+                    continue
+                prior = json.loads(path.read_text())
+                prior_body = {k: v for k, v in prior.items() if k != "receipt_sha256"}
+                prior_at = datetime.fromisoformat(prior["verified_at"])
+                if (prior.get("schema") == "holding_profit_pid_verification_v1"
+                        and prior.get("receipt_sha256") == _digest_json(prior_body)
+                        and prior.get("target_date") == target_date
+                        and path.name == f"holding_profit_pid_{prior['pid']}_{prior['manifest_sha256']}.json"
+                        and isinstance(prior.get("mechanical_policy_receipt"), dict)
+                        and type(prior.get("pid")) is int and prior["pid"] > 0
+                        and prior_at.tzinfo is not None
+                        and prior_at.timestamp() <= as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()):
+                    if prior["pid"] in conflicted_pids:
+                        continue
+                    if prior["pid"] in consumed_pids and consumed_pids[prior["pid"]] != prior["mechanical_policy_receipt"]:
+                        # A process cannot consume two pinned bootstrap vectors.
+                        consumed_pids.pop(prior["pid"], None)
+                        conflicted_pids.add(prior["pid"])
+                        continue
+                    consumed_pids[prior["pid"]] = prior["mechanical_policy_receipt"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return receipt, consumed_pids
+    except (OSError, ValueError, TypeError, KeyError):
+        return None, {}
+
+
 def build_holding_exit_sentinel_report(
     target_date: str,
     *,
@@ -1173,6 +1244,14 @@ def build_holding_exit_sentinel_report(
             as_of = events[-1].emitted_at
         else:
             as_of = datetime.now()
+    if as_of.tzinfo is not None:
+        as_of = as_of.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+    # All consumers use the same knowledge boundary, including scope partitioning.
+    events = [event for event in events
+              if (event.emitted_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+                  if event.emitted_at.tzinfo else event.emitted_at).date().isoformat() == target_date
+              and (event.emitted_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+                   if event.emitted_at.tzinfo else event.emitted_at) <= as_of]
 
     session_start = datetime.combine(_parse_target_date(target_date), SESSION_START)
     session_summary = _summarize_events(events, start_at=session_start, end_at=as_of)
@@ -1212,6 +1291,7 @@ def build_holding_exit_sentinel_report(
             vote_policy_status = "estimated_provisional_verified"
         except (OSError, ValueError, TypeError, KeyError):
             vote_policy_status = "policy_binding_gap"
+    mechanical_receipt, consumed_pids = _profit_exit_bootstrap_binding(target_date, as_of)
     profit_semantics = audit_profit_exit_flow(
         events, target_date=target_date,
         load_votes=lambda position_key: load_path_events_file(
@@ -1219,11 +1299,15 @@ def build_holding_exit_sentinel_report(
         ),
         observation=observation, policies=vote_policies,
         policy_bundle_sha256=vote_policy_bundle_sha,
+        as_of=as_of, source_generation=event_generation(events),
+        mechanical_policy_receipt=mechanical_receipt, consumed_pids=list(consumed_pids),
+        mechanical_receipts_by_pid=consumed_pids,
     )
     profit_semantics["policy_status"] = vote_policy_status
     profit_semantics["policy_bundle_sha256"] = vote_policy_bundle_sha
     if vote_policy_status == "policy_binding_gap":
         profit_semantics["status"] = "policy_binding_gap"
+        profit_semantics["semantic_status"] = "policy_binding_gap"
     global_classification = _classify(
         session_summary, baseline_summary, obs_metrics, as_of=as_of
     )
@@ -1309,6 +1393,7 @@ def build_holding_exit_sentinel_report(
         "report_type": "holding_exit_sentinel",
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
+        "source_generation": profit_semantics["source_generation"],
         "dry_run": bool(dry_run),
         "event_load": {
             "cache_enabled": bool(use_cache),
@@ -1411,6 +1496,9 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- soft_stop rebound above sell 10m: `{obs.get('soft_stop_rebound_above_sell_10m_rate', 0.0)}%`",
         f"- trailing missed-upside: `{obs.get('trailing_missed_upside_rate', 0.0)}%`",
         f"- profit exit semantics: `{(report.get('profit_exit_semantics') or {}).get('status', 'not_assessed')}`",
+        f"- profit exit semantic/lifecycle/economics: `{(report.get('profit_exit_semantics') or {}).get('semantic_status', 'unassessed')}` / "
+        f"`{dict(Counter(row.get('lifecycle_state') for row in (report.get('profit_exit_semantics') or {}).get('lifecycle', [])))}` / "
+        f"`{(report.get('profit_exit_semantics') or {}).get('economics_status', 'unavailable')}`",
         f"- profit exit policy: `{(report.get('profit_exit_semantics') or {}).get('policy_status', 'not_assessed')}`",
         f"- profit exit signal/submit/complete: `{(report.get('profit_exit_semantics') or {}).get('funnel', {}).get('tp_signal_snapshots', 0)}` / "
         f"`{(report.get('profit_exit_semantics') or {}).get('funnel', {}).get('tp_sell_submitted', 0)}` / "
