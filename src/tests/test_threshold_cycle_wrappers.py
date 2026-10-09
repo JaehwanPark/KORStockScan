@@ -71,23 +71,30 @@ def test_postclose_prepares_isolated_preopen_and_start_requires_day_of_completio
     assert 'verify_exact_preopen_completion "$RUNTIME_TARGET_DATE" || exit 1' in launcher
 
 
-def test_initial_quantity_refresh_runs_before_summary_handoff():
-    from src.engine.automation.postclose_summary_handoff import source_paths
+def test_initial_quantity_refresh_runs_before_summary_handoff(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    # This ordering contract must not depend on a live policy in ROOT/data.
+    monkeypatch.setattr(handoff, '_initial_quantity_refresh_due', lambda *a: True)
+    report_dir = tmp_path / 'data/report'
 
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     producer = script.index('--parent-current "$INITIAL_QUANTITY_CURRENT"')
     terminal = script.index("initial_quantity_refresh_stage_${TARGET_DATE}.json")
     summary = script.index("src.engine.runtime_approval_summary", producer)
     assert producer < terminal < summary
-    path = source_paths(ROOT / "data/report", "2026-09-28", "tower")
+    path = handoff.source_paths(report_dir, "2026-09-28", "tower")
     assert "initial_quantity_refresh_stage" in path
     assert path["initial_quantity_refresh_stage"].name == (
         "initial_quantity_refresh_stage_2026-09-28.json")
     # The selected policy's effective lower bound owns the handoff, not a
     # hardcoded rollout date in either producer or consumer.
     assert '"$TARGET_DATE" > "2026-09-27"' not in script
-    assert "initial_quantity_refresh_stage" in source_paths(
-        ROOT / "data/report", "2026-09-27", "tower")
+    assert "initial_quantity_refresh_stage" in handoff.source_paths(
+        report_dir, "2026-09-27", "tower")
+    monkeypatch.setattr(handoff, '_initial_quantity_refresh_due', lambda *a: False)
+    assert "initial_quantity_refresh_stage" not in handoff.source_paths(
+        report_dir, "2026-09-28", "tower")
 
 
 def test_async_policy_stages_finish_before_summary_and_checklist_hashing():

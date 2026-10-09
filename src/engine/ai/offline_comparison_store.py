@@ -112,9 +112,31 @@ CREATE TABLE IF NOT EXISTS aliases(source TEXT NOT NULL,request_id INTEGER NOT N
 CREATE TABLE IF NOT EXISTS checkpoints(name TEXT PRIMARY KEY,value_obj INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS snapshots(hash TEXT PRIMARY KEY,manifest_obj INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS validations(identity TEXT PRIMARY KEY,result_obj INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS attempt_budgets(attempt TEXT PRIMARY KEY,budget_key TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS attempt_budgets(attempt TEXT NOT NULL,budget_key TEXT NOT NULL,
+ PRIMARY KEY(attempt,budget_key)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS attempt_budget_key ON attempt_budgets(budget_key);
 """
+
+
+def _migrate_attempt_budgets(db):
+    """Preserve every prior charge while allowing execution and source budgets."""
+    columns = db.execute('PRAGMA table_info(attempt_budgets)').fetchall()
+    if [row[1] for row in columns] != ['attempt', 'budget_key']:
+        raise ValueError('comparison_call_budget_schema_invalid')
+    primary = [row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5]]
+    if primary == ['attempt', 'budget_key']:
+        return
+    if primary != ['attempt']:
+        raise ValueError('comparison_call_budget_schema_invalid')
+    with db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('''CREATE TABLE attempt_budgets_migrating(
+            attempt TEXT NOT NULL,budget_key TEXT NOT NULL,
+            PRIMARY KEY(attempt,budget_key)) WITHOUT ROWID''')
+        db.execute('INSERT INTO attempt_budgets_migrating SELECT attempt,budget_key FROM attempt_budgets')
+        db.execute('DROP TABLE attempt_budgets')
+        db.execute('ALTER TABLE attempt_budgets_migrating RENAME TO attempt_budgets')
+        db.execute('CREATE INDEX attempt_budget_key ON attempt_budgets(budget_key)')
 
 
 class Store:
@@ -139,8 +161,11 @@ class Store:
                 self.db.execute('PRAGMA journal_mode=WAL')
                 self.db.execute('PRAGMA synchronous=FULL')
                 self.db.executescript(SCHEMA)
+                _migrate_attempt_budgets(self.db)
             self.db.execute('PRAGMA cache_size=-32768')
         except BaseException:
+            if getattr(self, 'db', None) is not None:
+                self.db.close()
             if self._guard:
                 self._guard.__exit__(None, None, None)
             raise
@@ -352,9 +377,9 @@ class Store:
             JOIN partition_members pm ON pm.member_id=m.id
             JOIN generation_parts gp ON gp.partition_id=pm.partition_id
             WHERE gp.generation=? AND a.source='provider' AND a.created>=?
-            AND (? IS NULL OR NOT EXISTS (
+            AND NOT EXISTS (
                 SELECT 1 FROM attempt_budgets ab WHERE ab.attempt=a.attempt
-                AND substr(ab.budget_key,1,length(?))=? AND ab.budget_key<>?))''',
+                AND (? IS NULL OR (substr(ab.budget_key,1,length(?))=? AND ab.budget_key<>?)))''',
             (budget_key,generation,since_epoch,exclude_assigned_prefix,
              exclude_assigned_prefix,exclude_assigned_prefix,budget_key))
         self.commit()

@@ -309,6 +309,24 @@ def resolve_session_candle_request_code(
     )
 
 
+def entry_history_requirement(*, now, session, requested_limit):
+    """Describe real feature windows; raw fetch size is not an entry veto."""
+    start_hour = 8 if 'premarket' in session else 16 if 'aftermarket' in session else 9
+    anchor = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    elapsed = max(0, int((now-anchor).total_seconds()//60))
+    return dict(schema='main_entry_history_requirement_v1', consumer='entry_probe_mtf',
+        feature_version=LOCAL_BREAKOUT_VERSION, session=session,
+        session_anchor=anchor.isoformat(), requested_completed_cutoff=now.replace(second=0,microsecond=0).isoformat(),
+        legacy_raw_limit=max(int(requested_limit), SOURCE_BAR_LIMIT),
+        decision_continuity_minutes=DECISION_CONTINUITY_HORIZON_MINUTES,
+        minimum_completed_for_full_recent_window=min(elapsed, DECISION_CONTINUITY_HORIZON_MINUTES+1),
+        mtf_max_bars_per_interval=20, mtf_intervals_minutes=[3,5,15],
+        session_anchor_required_for=['vwap', 'opening_range', 'session_extrema'],
+        forming='fresh_separate_partial_optional_observation',
+        shortage_policy='existing_field_level_quality_and_opening_sample_mode',
+        adjustment='ka10080:upd_stkpc_tp=1', ws_equivalence='unproven')
+
+
 def fetch_entry_candles_with_meta(
     token: str | None,
     code: str,
@@ -361,11 +379,13 @@ def fetch_entry_candles_with_meta(
         request_purpose["request_class"] = request_class
     from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
     from src.utils.kiwoom_transport_telemetry import demand
-    required_bars = max(max(1,int(limit)), SOURCE_BAR_LIMIT)
-    selection = {}
+    requirement = entry_history_requirement(now=now, session=session_value, requested_limit=limit)
+    required_bars = requirement['legacy_raw_limit']
+    selection = {'consumer_requirement': requirement}
     demand('ka10080','entry_logical_demand')
     selected = selected_completed_bar_payload(request_code,now=now,consumer='main',
-        minimum_bars=required_bars,history_scope='session',selection_receipt=selection)
+        minimum_bars=max(1, requirement['minimum_completed_for_full_recent_window']),
+        history_scope='session',selection_receipt=selection,required_adjustment='adjusted_1')
     if selected is None:
         candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
             token, request_code, limit=required_bars, explicit_request_code=True, **request_purpose)
@@ -390,6 +410,17 @@ def fetch_entry_candles_with_meta(
             "entry_candle_request_session": session_value,
             "entry_candle_request_broker_route": planned_broker_route,
             "multi_timeframe_auxiliary_fetch": True,
+            "history_consumer_requirement": requirement,
+            "history_consumer_receipt": {
+                'schema': 'main_entry_history_consumption_v1',
+                'request_code': request_code, 'consumer': requirement['consumer'],
+                'required_window': requirement,
+                'selected_revision': (source_meta or {}).get('shared_history_revision_sha256'),
+                'source_method': (source_meta or {}).get('shared_history_source_method', 'native_rest_or_ws'),
+                'original_rest_received_ts_ms': (source_meta or {}).get('rest_received_ts_ms'),
+                'selected_at': now.timestamp(), 'returned_raw_count': len(candles or []),
+                'forming_count': sum(str(row.get('source_timestamp', '')) == now.strftime('%Y%m%d%H%M00') for row in candles or []),
+            },
         }
     )
     if type(transport_epoch) is int and transport_epoch > 0:

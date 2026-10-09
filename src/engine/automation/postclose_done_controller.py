@@ -293,14 +293,19 @@ def main(argv: list[str] | None = None) -> int:
                               policy_publication=False, preparation=False)))
         return 0
     from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY, stage_path, _stage_main
-    if not args.dry_run and os.environ.get('POSTCLOSE_STAGE_WORKER') != '1' and any(stage_path(DATA_DIR / 'report', args.date, s).exists() for s in STAGE_REGISTRY):
-        return _stage_main(['--stage', 'summary_handoff', '--date', args.date])
+    predecessor_ready = True
     if not args.dry_run and not args.summary_handoff_only:
-        _wait_for_predecessor_succeeded(
+        predecessor_ready = _wait_for_predecessor_succeeded(
             args.date,
             wait_sec=args.predecessor_wait_sec,
             timeout_sec=args.predecessor_timeout_sec,
         )
+    # Existing receipts may belong to the failed run being recovered. Wait for
+    # Main to refresh them before dispatching the independent summary worker.
+    if (not args.dry_run and not args.summary_handoff_only and predecessor_ready
+            and os.environ.get('POSTCLOSE_STAGE_WORKER') != '1'
+            and any(stage_path(DATA_DIR / 'report', args.date, s).exists() for s in STAGE_REGISTRY)):
+        return _stage_main(['--stage', 'summary_handoff', '--date', args.date])
     report = build_postclose_done_controller(
         args.date,
         max_attempts=args.max_attempts,

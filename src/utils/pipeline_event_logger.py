@@ -468,7 +468,7 @@ def _project_fields_for_compact_stream(
 ) -> dict[str, str]:
     if stage in LOSSLESS_ORDER_STAGES:
         return fields
-    if stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
+    if stage in {"entry_async_disposition", "zero_base_probe_result", "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
                  "entry_ai_economic_decision_available", "entry_machine_watch_terminal",
                  "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
                  "entry_quantity_leg_four_arm_evaluation", "order_leg_sent",

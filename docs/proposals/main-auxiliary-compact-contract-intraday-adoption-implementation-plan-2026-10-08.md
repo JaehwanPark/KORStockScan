@@ -11,6 +11,7 @@
 - 우선 계약: 사용자가 승인한 실제 ask·비용 .0023·30분 이내 비용 후 +.4%·soft −3% 선도달의 W/F/U와 누적 PASS 승률. EV·손익비·최소 표본/일수·holdout·기존 제출 통과 조건을 새 채택 요건으로 붙이지 않는다.
 - 기계의 정책 목록·독립 탐지·확인점·가격/수량/보유·청산 정책은 이 작업의 변경 대상이 아니다. `ENTER_NOW` 이후 보조판정 경로만 변경한다. 보호조건과 TTL은 현재 계약을 유지한다.
 - REST/WS 절감, 평가루프 지연 개선, 원천 진단, episode 영구 OFF의 별도 작업을 보존한다. Main 배포가 퇴역 widget/episode 서비스를 복원하거나 중지된 자동 관리를 재개해서는 안 된다.
+- 15시 관측에서 확인한 Main caller/coordinator 누락·AI 실패 오분류는 [병목 상세 개선계획](main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md)의 B1/B2가 소유한다. AC2/AC5는 같은 `ai_engine_openai.py`·trace/outbox의 최종 통합 경로를 검증하고, AC6 발행 전에 해당 결함이 닫혔는지 확인한다. B3~B6 전체 성능 개선이나 자연 표본 수를 compact 채택의 추가 경제적 조건으로 붙이지 않는다.
 
 ## 2. 적용 후보와 출발 증거
 
@@ -158,6 +159,16 @@
 
 ### AC6. 정식 배포·재기동·장중 활성화
 
+공통 실행 경로 선행 확인: [병목 계획 B7](main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md#11-b7--compact-통합검증배포-인계)에 따라 실제 Main caller→async context→원 보조 binding→provider envelope→raw/decode→outer-loop 완료 수집→Main commit을 v1/v2 각각 fake transport로 검증한다. 별도 dirty 변경을 묵시적으로 포함하지 않으며, B1/B2 코드 gate와 현재 reader 호환성을 닫은 뒤 아래 순서를 수행한다. AI가 disable된 PID의 짧은 루프나 첫 자연 요청 부재를 정상 소비 증거로 쓰지 않는다.
+
+추가 통합 반례는 다음과 같다. 이미 완료한 compact 연구/codec 회귀는 보존하고 새 공통 경로 결함과 변경된 의존성만 검증한다.
+
+- 실제 Main을 두 outer iteration 실행하여 worker 완료가 scanner 전용 target 검색에서 폐기되지 않고 원 fixed-watch claim으로 한 번 소비되는지 검사한다. 새 분석 cooldown 중에도 완료를 처리하며 target 제거·만료·교체는 reject/ack한다. caller 인자 전달만으로 성공 처리하지 않는다.
+- fixed-watch commit은 원 canonical quote receipt와 현재 effective freshness 설정을 재검증한다. scanner 공통 helper의 2초 transport-age 조건이나 2초 성능 목표를 새 fixed-watch 차단 조건으로 도입하지 않는다. 원 5초 claim 및 수동/원천/주문 보호는 유지한다.
+- `assessment.event.epoch`의 원 확인점에서 선택한 binding을 고정한다. v1 확인 뒤 v2 발행/늦은 enqueue는 v1, 발행 뒤 새 확인점은 v2다. 무관 scope 교체는 원 유효 claim을 보존하며 해당 scope 철회는 native validator로 차단한다. worker 시작 시점의 latest overlay로 바꾸지 않는다.
+- 예약·adapter 진입·physical 전송·응답을 구분하여 native 종료와 실제 provider 실패 집계를 검사한다. `provider_attempted`만으로 전송을 입증하거나 `transmission_uncertain` 예약/예산을 풀지 않는다.
+- source 영향 목록을 대조하여 실제 reader/codec 계약이 변경된 자료만 호환 검증·필요한 준비를 갱신한다. caller/AI 파일 수정만으로 기존 157쌍 연구나 전체 registry/report를 재생성하지 않는다. 최종 checklist 바이트의 기존 strict/장중 인계 영향은 별도 검증한다.
+
 1. 리뷰가 끝난 코드와 최종 문서 바이트를 불변 릴리스로 준비한다. 동일 파일을 다른 작업이 수정했다면 최종 통합 diff에서 겹치는 producer/consumer를 다시 검토한다. 미검토된 전체 작업본을 묵시적으로 함께 배포하지 않는다.
 2. 기존 reader 호환 영수증으로 새 릴리스가 **현재 정책을 그대로 읽을 수 있음**을 실제 실행 cwd와 data anchor에서 먼저 검증한다. 이 상태에서 기존 정책을 유지한 채 정식 장중 release handoff를 준비한다.
 3. Main 배포·재기동은 기존 승인 범위와 현재 bootstrap/기동 조건을 승계한다. 기존 PID·outbox·진행 요청을 인계하고 중복 Main PID가 생기지 않게 한다. episode/widget 영구 OFF·mask·별도 보유 처리 상태를 건드리지 않는다.
@@ -234,6 +245,12 @@
 후속 문서 검증: 로컬 링크 31개 정상, 연구 네 경로/14점·완료 157쌍과 registry/evaluation 일치, 공백 검사 통과. print-only parser는 21개 항목·현재 실행 owner 1개·경고 0건이다. 이번 리뷰에서는 코드 테스트·추가 AI 호출·정책 발행·배포·재기동을 실행하지 않았다.
 
 
+### 6.2 지연 개선계획과 공통 호출 경로 재리뷰 — 2026-10-08
+
+[병목 상세계획의 후속 리뷰](main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md#131-후속-리뷰에서-보완한-결손)에서 Main 완료 수집의 scanner 전용 조회, fixed-watch로 유입되는 transport-age 2초 조건, 준비 단계별 deadline 전달 공백, 예약과 물리 전송 flag의 차이를 확인했다. AC6의 최종 통합 회귀에 원 확인점 binding·철회·단일 commit을 추가했다. Telegram session factory/실제 retry와 계측 eviction 보완은 각각 B6/B0의 소유 범위다.
+
+별도 작업의 Main caller/AI 수정과 §7의 승인된 compact 구현은 보존한다. 이번 리뷰는 해당 코드의 배포/PID 소비 완료를 주장하지 않고, 이미 끝난 연구/회귀를 포괄 재실행하는 조건도 추가하지 않는다. 문서 링크·권한·단일 owner·원 AUTO 블록과 print-only parser 검증 결과는 병목 상세계획 §13에 함께 남긴다.
+
 ## 7. 승인된 구현 실행 — 2026-10-08
 
 후속 사용자 지시로 구현·리뷰·배포·재기동을 실행한다. 배포와 재기동의 하한은 **2026-10-08 15:00 KST**이며, 그 이후 검증이 끝나면 즉시 수행한다. 위 계획 작성 당시의 “문서만 검증/운영 미실행” 문구는 당시 이력이다.
@@ -241,3 +258,11 @@
 공통 codec/v2 registry, 실제 SDK 입력과 원본/해독 응답 분리, exact-source v1 reader 호환, 다중 평가 원자 전환, 경로별 복구와 다음 날짜 상속을 구현했다. 새 모듈은 기존 보조정책 소유 패키지 `src/engine/scalping`에 두며 engine root는 확장하지 않는다. 구형 outbox·기계정책의 고정 코드는 보존하고 별도 해독 영수증이 원본 outbox의 응답 binding을 참조한다.
 
 검증·배포 결과는 [실행 리뷰](../audits/main-auxiliary-compact-intraday-adoption-review-2026-10-08.md)를 따른다. 다음 장후 생성과 다음 기동의 자연 소비는 해당 시점의 증빙이며 코드 회귀와 혼동하지 않는다. 다음 대상 영업일은 저장소 달력 기준 2026-10-12다.
+
+### 7.1 AI PASS 이후 실행 소비 보완과의 연결
+
+19:41 조사 PID의 PASS 4건은 기존 v1 union 경로에서 응답 수신 후 intent 생성으로 연결되지 않았다. [지연 개선 계획 §15](main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md#15-최신-pid의-ai-pass-이후-제출-병목-보완계획)의 PB0~PB4가 완료 결과 우선 소비·첫 trace/outcome 인덱스 준비·exact terminal·감시 소비·배포 인계를 소유한다. 이번 사용자 지시는 그 보완계획 리뷰·수정이며 추가 연구 호출·정책 발행·재기동을 실행하지 않는다.
+
+완료한 codec/registry/연구 157쌍은 보존한다. AC2/AC5/AC6의 영향받은 실제 v1/v2 공통 경로만 fake transport와 원 확인점 binding으로 회귀한다. raw 응답/outbox·decoded 결과·Main accepted·intent·broker submit을 각각 연결하며 `PASS`와 `response_received`를 실행 완료로 읽지 않는다. 현행 기계 128경로·보조 네 scope와 부모/hash 계약을 유지하고 cold 비용 수리 때문에 offline 공유 원장을 live 저장소로 전용하거나 배포별 복제 원장을 만들지 않는다. 새 compact-v2 네 scope의 자연 호출은 미관측이면 그대로 남기며, 이 실행 연결 수리에 새 경제/표본/연구 적격성 gate를 추가하지 않는다.
+
+후속 리뷰에서 원 결과의 key/claim과 공통 WATCHING 후속 처리를 보존하고, quote/source의 기존 최종 거절을 새 대기로 바꾸지 않도록 범위를 확정했다. 초기 index 구축은 요청/응답 경로 밖으로 분리하되 Main 완료 소비·보유 보호를 지연시키지 않아야 한다. v1/v2 각각의 decoded PASS→Main 소비와 accepted 이후 가격/수량 guard 결과를 별도 집계하며, 전이 기록은 원 객체의 신원을 사용한다. 상세 수정·반례는 [§15.8 리뷰 기록](main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md#158-후속-계획-리뷰에서-수정한-구현-공백)을 따른다.

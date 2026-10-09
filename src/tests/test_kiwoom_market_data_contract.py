@@ -761,7 +761,10 @@ def test_strength_shadow_feedback_uses_first_ask_level_as_best_ask(monkeypatch):
 
 def test_minute_wire_cache_reuses_different_slices_without_clock_extension(monkeypatch):
     kiwoom_utils._MARKET_DATA_CACHE.clear()
-    clock, calls = [601.0], []
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    start = datetime(2026, 9, 21, 10, 0, 1, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+    clock, calls = [start], []
     monkeypatch.setattr(kiwoom_utils.time, "time", lambda: clock[0])
     def transport(**kwargs):
         calls.append(kwargs)
@@ -775,10 +778,10 @@ def test_minute_wire_cache_reuses_different_slices_without_clock_extension(monke
     clock[0] += 1
     b, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 20, explicit_request_code=True)
     assert len(a) == 10 and len(b) == 20 and len(calls) == 1
-    assert meta["rest_received_ts_ms"] == 601000
+    assert meta["rest_received_ts_ms"] == int(start*1000)
     assert meta["read_response_cache_status"] == "hit"
     assert meta["read_singleflight_caller_http_attempt_count"] == 0
-    clock[0] = 604.1
+    clock[0] = start+3.1
     kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 20, explicit_request_code=True)
     assert len(calls) == 2  # normalized cache cannot extend raw response expiry
     kiwoom_utils._MARKET_DATA_CACHE.clear()

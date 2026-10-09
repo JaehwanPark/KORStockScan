@@ -161,7 +161,21 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(replay,monkeypatch)
             trade_price=price,transport_epoch=1,route_sequence=i+1,inline_best_bid=price-.01,inline_best_ask=price+.01,
             trade_qty=10,aggressor_side='BUY',item='005930_NX',market_route='nxt',effective_venue='NXT'))
     monkeypatch.setattr(DIAG.time,'time',lambda:T+122)
-    claim=DIAG.claim_snapshot_with_receipt('005930','NXT','NXT_PREMARKET',now=T+122,item='005930_NX',family_sha256=new['continuous_reversal']['family_sha256'])
+    before_claims = copy.deepcopy(runtime._CLAIMS)
+    before_ready = [[r['claimed'] for r in s.ready] for s in runtime._STATES.values()]
+    observed, receipt = DIAG.observe_snapshot('005930','NXT','NXT_PREMARKET',now=T+122,
+        item='005930_NX',family_sha256=new['continuous_reversal']['family_sha256'])
+    again, _ = DIAG.observe_snapshot('005930','NXT','NXT_PREMARKET',now=T+122,
+        item='005930_NX',family_sha256=new['continuous_reversal']['family_sha256'])
+    assert receipt['reason'] == 'ready' and again == observed
+    assert runtime._CLAIMS == before_claims
+    assert before_ready == [[r['claimed'] for r in s.ready] for s in runtime._STATES.values()]
+    expected=dict(snapshot=observed, family_sha256=new['continuous_reversal']['family_sha256'], snapshot_sha256='a'*64)
+    wrong=copy.deepcopy(expected);wrong['snapshot'][0]['native_sequence'] += 1
+    assert DIAG.claim_expected_snapshot(wrong, live_clock=False, now=T+122) is None
+    assert runtime._CLAIMS == before_claims
+    claim=DIAG.claim_expected_snapshot(expected, live_clock=False, now=T+122)
+    assert claim['snapshot'] == observed
     assert claim['backend']=='operating_v6'
     assert 'manual_extended_f9a43c88911fdc0b' in claim['snapshot'][0]['branch_signals']
     assert DIAG.verified_registration(claim,claim['source_registration_receipt'])

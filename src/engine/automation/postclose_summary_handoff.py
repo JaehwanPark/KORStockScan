@@ -1587,6 +1587,7 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
     if stage == 'summary_handoff':
         paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
         paths['direct_tower'] = project / 'src/engine/automation/tuning_performance_control_tower.py'
+        paths['runtime_approval_summary'] = project / 'src/engine/runtime_approval_summary.py'
     if stage == 'main_machine_policy':
         if not legacy_main_machine:
             paths['main_fixed_watch_research'] = project / 'src/engine/monitoring/main_fixed_watch_policy_research.py'
@@ -1611,6 +1612,9 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
     if stage == 'main_auxiliary_policy':
         paths['shared_comparison_adapter'] = project/'src/engine/scalping/continuous_reversal_shared_ledger.py'
         paths['offline_comparison_store'] = project/'src/engine/ai/offline_comparison_store.py'
+        for name in ('reversal_auxiliary_registry', 'reversal_auxiliary_tuning',
+                     'reversal_auxiliary_intraday', 'reversal_auxiliary_wire'):
+            paths[name] = project/f'src/engine/scalping/{name}.py'
     return _stage_digest(_stage_sources(paths))
 
 

@@ -730,7 +730,7 @@ def test_cancelled_queued_preparation_never_calls_source(monkeypatch):
         coordinator.shutdown(wait=True)
 
 
-def test_consumed_result_notification_is_bounded_until_drained(monkeypatch):
+def test_consumed_result_releases_notification_capacity_and_prevents_duplicate(monkeypatch):
     from src.engine.scalping import scanner_async_eval as module
     monkeypatch.setattr(module, "_MAX_READY_RESULTS", 2)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
@@ -743,9 +743,8 @@ def test_consumed_result_notification_is_bounded_until_drained(monkeypatch):
                 time.sleep(.005)
             ctx = request.context
             assert coordinator.take_completed(generation_id=ctx.generation.generation_id, cache_key=ctx.cache_key)
-        assert coordinator.submit(requests[0]).reason == "completed_notification_pending_drain"
-        assert coordinator.submit(requests[2]).reason == "market_preparation_capacity_deferred"
-        assert len(coordinator.drain_completed(limit=1)) == 1
+        assert coordinator.submit(requests[0]).reason == "result_already_consumed"
+        assert coordinator.drain_completed(limit=1) == []
         assert coordinator.submit(requests[2]).accepted
     finally:
         coordinator.shutdown(wait=True)

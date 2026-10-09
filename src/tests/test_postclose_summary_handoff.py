@@ -1210,6 +1210,17 @@ def test_unchanged_stage_accepts_exact_selected_release_code_hash(stage_environm
     assert h.stage_receipt_issues(report, day, 'legacy_machine_report', code_hash='repaired-code') == []
 
 
+def test_auxiliary_stage_hash_binds_tuner_implementation(tmp_path):
+    from src.engine.automation import postclose_summary_handoff as h
+    commands=h.stage_commands('main_auxiliary_policy','2026-10-08','2026-10-08')
+    source=tmp_path/'src/engine/scalping/reversal_auxiliary_tuning.py'
+    source.parent.mkdir(parents=True)
+    source.write_text('# prior tuner\n')
+    previous=h._stage_code('main_auxiliary_policy',commands,tmp_path)
+    source.write_text('# repaired tuner\n')
+    assert h._stage_code('main_auxiliary_policy',commands,tmp_path)!=previous
+
+
 def test_stage_stop_cleans_child_and_preserves_checkpoint(stage_environment, monkeypatch, tmp_path):
     import sys, threading
     h, day, report, run, produce = stage_environment

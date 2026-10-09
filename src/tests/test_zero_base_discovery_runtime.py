@@ -1,5 +1,8 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import time
+import threading
+import pytest
 
 from src.scanners.zero_base_discovery_runtime import (
     MAX_CONCURRENT_PROBES,
@@ -21,6 +24,9 @@ class Bus:
     def subscribe(self, event, callback):
         self.callbacks.setdefault(event, []).append(callback)
 
+    def unsubscribe(self, event, callback):
+        self.callbacks[event].remove(callback)
+
     def publish(self, event, payload):
         self.events.append((event, payload))
         for callback in self.callbacks.get(event, []):
@@ -34,6 +40,66 @@ def _panel(_token):
         "source_kind": "activity",
         "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
     }]}
+
+
+def test_claim_persist_failure_does_not_strand_unstarted_physical_lease(tmp_path, monkeypatch):
+    bus=Bus()
+    runtime=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
+    persist=runtime._persist
+    monkeypatch.setattr(runtime, '_persist', lambda: (_ for _ in ()).throw(OSError('disk full')))
+    with pytest.raises(OSError):
+        runtime.scan_once('token', fetcher=_panel, now_epoch=T0+1)
+    assert runtime.queue.in_flight_count() == 0
+    assert not bus.events
+    monkeypatch.setattr(runtime, '_persist', persist)
+    assert runtime.dispatch_due_probes(now_epoch=T0+2)['probe_requested_count'] == 1
+
+
+@pytest.mark.parametrize('expired_after_persist', [False, True])
+def test_result_persist_retry_is_once_and_original_native_deadline_bound(tmp_path, monkeypatch, expired_after_persist):
+    from src.engine.scalping import reversal_source_diagnostics as D
+    from src.scanners.zero_base_discovery_runtime import HANDOFF_ACK_EVENT
+    bus=Bus()
+    runtime=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
+    runtime.scan_once('token',fetcher=_panel,now_epoch=T0+1)
+    request=next(p for event,p in bus.events if event==PROBE_REQUEST_EVENT)
+    expected=dict(snapshot=[{'epoch':T0}], deadline_epoch=T0+5, deadline_perf=time.perf_counter()+5,
+        observer_pid=D.os.getpid(), observer_start_ticks=D._PROCESS_START_TICKS)
+    result=dict(**request,result='assessed',machine_action='ENTER_NOW', machine_bundle_sha256='b'*64,
+        result_epoch=T0+2, native_observation=expected,
+        physical_probe_lease_id=request['claim']['physical_probe_lease_id'])
+    bus.publish(PROBE_RESULT_EVENT,result)
+    persist=runtime._persist
+    monkeypatch.setattr(runtime,'_persist',lambda: (_ for _ in ()).throw(OSError('disk full')))
+    with pytest.raises(OSError):runtime.drain_results(now_epoch=T0+2)
+    assert not any(e==MACHINE_ENTER_EVENT for e,_ in bus.events)
+    monkeypatch.setattr(runtime,'_persist',persist)
+    runtime.drain_results(now_epoch=T0+(6 if expired_after_persist else 3))
+    runtime.drain_results(now_epoch=T0+4)
+    assert sum(e==MACHINE_ENTER_EVENT for e,_ in bus.events) == int(not expired_after_persist)
+    assert runtime.queue.in_flight_count() == 1
+    ack=dict(handoff_closed=True,claim=request['claim'],ws_handoff_id=request['claim']['physical_probe_lease_id'])
+    bus.publish(HANDOFF_ACK_EVENT,ack);bus.publish(HANDOFF_ACK_EVENT,ack)
+    runtime.drain_results(now_epoch=T0+7)
+    assert runtime.queue.in_flight_count() == 0
+
+
+def test_pending_panel_transport_does_not_block_result_control_thread(tmp_path):
+    bus=Bus()
+    runtime=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
+    runtime.scan_once('token',fetcher=_panel,now_epoch=T0+1)
+    request=next(p for event,p in bus.events if event==PROBE_REQUEST_EVENT)
+    started,finish=threading.Event(),threading.Event()
+    def slow(_):
+        started.set();finish.wait(2)
+        return dict(panels=[],observations=[])
+    try:
+        assert runtime.start_scan('token',fetcher=slow) and started.wait(1)
+        bus.publish(PROBE_RESULT_EVENT,dict(**request,result='assessed',machine_action='RECHECK'))
+        assert len(runtime.drain_results(now_epoch=T0+2)) == 1
+        assert not runtime._panel_future.done()
+    finally:
+        finish.set();runtime.close()
 
 
 def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path):
@@ -105,7 +171,7 @@ def test_lost_probe_is_reclaimed_but_old_enter_cannot_promote(tmp_path):
     )
     runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
     first = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
-    summary = runtime.scan_once("token", fetcher=lambda _token: {"panels": [], "observations": []}, now_epoch=T0 + 62)
+    summary = runtime.scan_once("token", fetcher=lambda _token: {"panels": [], "observations": []}, now_epoch=first["claim"]["residence_deadline_epoch"] + 1)
     assert summary["probe_timeout_count"] == 1
     bus.publish(PROBE_RESULT_EVENT, {
         **first, "result": "assessed", "machine_action": "ENTER_NOW",
@@ -245,7 +311,9 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     }
     emitted = []
     monkeypatch.setattr(scanner, "ZeroBaseDiscoveryRuntime", lambda **_kwargs: type(
-        "Runtime", (), {"drain_results": lambda self: [result]})())
+        "Runtime", (), {"drain_results": lambda self: [result],
+            "finish_scan": lambda self: None,
+            "wait": lambda self, seconds: (_ for _ in ()).throw(StopScanner())})())
     monkeypatch.setattr(scanner, "DATA_DIR", tmp_path)
     monkeypatch.setattr(scanner, "_active_scalping_buy_window", lambda _now: None)
     monkeypatch.setattr(process_health, "write_heartbeat", lambda _name: None)

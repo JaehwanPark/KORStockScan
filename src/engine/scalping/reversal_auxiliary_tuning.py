@@ -61,8 +61,53 @@ def configure(data_root, *, candidate, scopes, seed, max_pairs=50):
                        scopes=sorted(set(scopes)), seed=seed, max_pairs=max_pairs))
     if type(max_pairs) is not int or not 1 <= max_pairs <= 100 or not scopes or not seed:
         raise ValueError('auxiliary_tuning_config_invalid')
-    P.write(root(data_root)/'tuning.json', body)
+    import fcntl
+    folder = root(data_root)
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder/'tuning-config.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        P.write(folder/'tuning.json', body)
     return body
+
+
+def rebind_candidate_input(data_root, *, input_version, expected_config_sha256):
+    """Explicit source-only repair of an unchanged prompt's typed binding.
+
+    Never translate wording, reset budgets, change scope or select a live arm.
+    A different shared prompt contract requires a separately reviewed candidate.
+    """
+    import fcntl
+    folder = root(data_root)
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder/'tuning-config.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        previous = config(data_root)
+        if previous is None or previous['artifact_content_sha256'] != expected_config_sha256:
+            raise ValueError('auxiliary_tuning_config_parent_changed')
+        value = G.load(data_root, previous['candidate_registry'])
+        old, new = G.projector(value['input_version']), G.projector(input_version)
+        if (value['schema'] != G.SCHEMA or old.VERSION == new.VERSION
+                or old.PROMPT != new.PROMPT or old.ARM_SUFFIXES != new.ARM_SUFFIXES
+                or not value['prompt'].startswith(old.PROMPT)
+                or old.VERSION in value['prompt']):
+            raise ValueError('auxiliary_candidate_prompt_contract_rebind_unsupported')
+        replacement = G.definition(value['base_arm'], prompt=value['prompt'],
+            hypothesis=value['hypothesis'], development_keys=value['development_keys'],
+            input_version=input_version)
+        G.register(data_root, replacement)
+        updated = P.seal(dict(previous, candidate_registry=replacement['registry_sha256']))
+        receipt = P.seal(dict(schema='main_auxiliary_input_rebinding_v1',
+            previous_config=previous, successor_config=updated,
+            unchanged_fields=['prompt','base_arm','hypothesis','development_keys','scopes','seed','max_pairs'],
+            previous_registry=value['registry_sha256'], successor_registry=replacement['registry_sha256'],
+            previous_input_version=old.VERSION, successor_input_version=new.VERSION,
+            budget_reset=False, live_policy_changed=False, **P.AUTH))
+        path = folder/'input-rebindings'/(receipt['artifact_content_sha256']+'.json')
+        if path.exists() and read(path) != receipt:
+            raise ValueError('auxiliary_input_rebinding_receipt_conflict')
+        P.write(path, receipt)
+        P.write(folder/'tuning.json', updated)
+        return receipt
 
 
 def prepare(data_root, day, machine, parent, *, research=None):
@@ -426,9 +471,11 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
         overlay=I.current(data_root,parent,day=day)
         measured=I.independent_scopes(data_root,parent,overlay)
         measured.update(s for s,v in evaluated['scopes'].items() if v['paired_points']>0)
+        promoted=[]
         for sid,metrics in evaluated['scopes'].items():
             if bindings.get(sid)==metrics['current_registry'] and metrics['improved']:
                 bindings[sid]=metrics['candidate_registry']
+                promoted.append(sid)
         # Inheritance retains independent measured PRE/AFTER policies.
         f=parent['continuous_reversal']
         for sid in list(bindings):
@@ -460,6 +507,9 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
             source_receipts=machine['source_receipts']+receipts,scope_pending=pending))
         auxiliary=P.seal(dict(schema=O.SCHEMA,source_date=day,target_date=day,publication_date=publication,
             status=issued['status'],cells=list(ac.values()),machine_report_sha256=issued['artifact_content_sha256'],
+            registration_state='registered',
+            adoption_basis='comparison_selected' if promoted else 'carried',
+            comparison_promoted_scopes=sorted(promoted),
             results_sources=[dict(path=str(evidence.resolve()),sha256=P.file_hash(evidence))],source_receipts=receipts,
             comparison_complete=evaluated['request_completion'],paired_metrics_ready=evaluated['paired_metrics_ready'],
             comparison_contract=SCHEMA,comparison_metrics=evaluated['scopes'],auxiliary_registry_bindings=bindings,
@@ -490,7 +540,9 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root',type=Path,required=True)
     parser.add_argument('--date')
-    parser.add_argument('--mode',choices=['configure','prepare','calls','evaluate'],required=True)
+    parser.add_argument('--mode',choices=['configure','rebind-input','prepare','calls','evaluate'],required=True)
+    parser.add_argument('--input-version')
+    parser.add_argument('--expected-config-sha256')
     parser.add_argument('--candidate')
     parser.add_argument('--scope',action='append',default=[])
     parser.add_argument('--seed')
@@ -498,6 +550,9 @@ def main(argv=None):
     args=parser.parse_args(argv)
     if args.mode=='configure':
         result=configure(args.data_root,candidate=args.candidate,scopes=args.scope,seed=args.seed,max_pairs=args.max_pairs)
+    elif args.mode=='rebind-input':
+        result=rebind_candidate_input(args.data_root,input_version=args.input_version,
+                                      expected_config_sha256=args.expected_config_sha256)
     elif not args.date:parser.error('--date required for comparison')
     elif args.mode=='prepare':
         from src.engine.scalping import continuous_reversal_operating_postclose as O

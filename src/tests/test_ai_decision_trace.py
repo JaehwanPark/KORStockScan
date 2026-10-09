@@ -72,14 +72,14 @@ def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, 
     monkeypatch.setattr(trace, "_load_seen", load)
     day = trace._date_text()
     assert trace.prepare_ai_request_capture(day)["ai_trace_dedup_init_ms"] >= 0
-    assert len(calls) == 3
-    assert trace.prepare_ai_request_capture(day) == {}
+    assert len(calls) == 0
+    assert trace.prepare_ai_request_capture(day)["ai_trace_dedup_init_ms"] >= 0
     kwargs = dict(prompt="JSON only", user_input={"stock_code": "005930"},
                   endpoint_name="analyze_target", symbol="005930", request_id="warm",
                   model="test", schema_name="entry_v1", require_json=True)
     first = trace.capture_ai_request(**kwargs)
     trace.capture_ai_request(**kwargs)
-    assert len(calls) == 3  # No history scan inside the actual request.
+    assert len(calls) == 6  # Prepared lookups only; no history scan.
     assert len(_rows(trace._payload_path(day))) == 1
     assert len(_rows(trace._request_path(day))) == 1
     assert first["ai_trace_dedup_init_ms"] == 0

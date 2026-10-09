@@ -10,10 +10,11 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from math import isfinite
 import re
+import uuid
 from zoneinfo import ZoneInfo
 
 
-SCHEMA = "zero_base_discovery_queue_v1"
+SCHEMA = "zero_base_discovery_queue_v2"
 ROUTES = {"krx_only", "nxt_only", "krx_nxt_integrated"}
 RESULTS = {
     "source_unavailable", "required_feature_insufficient", "policy_unavailable",
@@ -45,6 +46,9 @@ class Candidate:
     source_kind: str = ""
     claimed_observed_epoch: float = 0.0
     claimed_source_sha256: str = ""
+    residence_deadline_epoch: float = 0.0
+    lease_phase: str = 'closed'
+    handoff_id: str = ''
 
 
 class DiscoveryQueue:
@@ -209,6 +213,12 @@ class DiscoveryQueue:
             candidate.in_flight = True
             candidate.claimed_observed_epoch = candidate.observed_epoch
             candidate.claimed_source_sha256 = candidate.source_sha256
+            candidate.residence_deadline_epoch = 0.0
+            long_used = sum(r.in_flight and r.residence_deadline_epoch-r.last_claim_epoch > 60
+                            for r in self._candidates.values())
+            candidate.residence_deadline_epoch = now_epoch + (150 if long_used < 2 else 60)
+            candidate.lease_phase = 'observing'
+            candidate.handoff_id = uuid.uuid4().hex
         self._claim_sequence += len(ready)
         return [
             {
@@ -225,6 +235,8 @@ class DiscoveryQueue:
                 "source_kind": row.source_kind,
                 "claim_count": row.claim_count,
                 "last_claim_epoch": row.last_claim_epoch,
+                "residence_deadline_epoch": row.residence_deadline_epoch,
+                "physical_probe_lease_id": row.handoff_id,
             }
             for row in ready
         ]
@@ -234,7 +246,12 @@ class DiscoveryQueue:
             raise ValueError("invalid probe timeout")
         abandoned = 0
         for row in self._candidates.values():
-            if row.in_flight and now_epoch - row.last_claim_epoch >= timeout_sec:
+            if row.in_flight and now_epoch >= (row.residence_deadline_epoch or row.last_claim_epoch+timeout_sec):
+                if row.handoff_id:
+                    if row.lease_phase != 'cleanup_pending':
+                        row.lease_phase = 'cleanup_pending'
+                        abandoned += 1
+                    continue  # Physical release acknowledgement owns capacity.
                 row.in_flight = False
                 row.claim_count += 1  # Invalidate any later result for the old claim.
                 row.claimed_observed_epoch = 0.0
@@ -242,6 +259,7 @@ class DiscoveryQueue:
                 row.last_result = "probe_capacity_deferred"
                 row.machine_action = ""
                 row.next_due_epoch = now_epoch
+                row.lease_phase = 'cleanup_pending'
                 abandoned += 1
         return abandoned
 
@@ -264,6 +282,7 @@ class DiscoveryQueue:
         result: str,
         next_due_epoch: float,
         machine_action: str = "",
+        handoff_id: str = '',
     ) -> bool:
         """Bind an assessment to the exact claimed generation."""
         if result not in RESULTS or (result == "assessed") != (machine_action in ACTIONS):
@@ -281,19 +300,38 @@ class DiscoveryQueue:
             return False
         if (
             not row.in_flight
+            or row.lease_phase in {'handoff_pending', 'cleanup_pending'}
+            or (handoff_id and row.handoff_id and handoff_id != row.handoff_id)
             or row.last_claim_epoch <= 0
             or not isfinite(next_due_epoch)
             or next_due_epoch < row.last_claim_epoch
         ):
             return False
         row.last_result = result
+        row.lease_phase = 'closed'
         row.machine_action = machine_action
         row.next_due_epoch = next_due_epoch
         if row.observed_epoch > row.claimed_observed_epoch and result == "assessed":
             row.next_due_epoch = min(row.next_due_epoch, row.last_seen_epoch)
+        row.handoff_id = handoff_id
+        if handoff_id:
+            row.lease_phase = 'handoff_pending'
+            return True
         row.in_flight = False
         row.claimed_observed_epoch = 0.0
         row.claimed_source_sha256 = ""
+        return True
+
+    def close_handoff(self, claim, handoff_id):
+        row = self._candidates.get((claim.get('code'), claim.get('route')))
+        if (row is None or not handoff_id or row.handoff_id != handoff_id
+                or row.claim_count != claim.get('claim_count') or not row.in_flight):
+            return False
+        row.in_flight = False
+        row.lease_phase = 'closed'
+        row.handoff_id = ''
+        row.claimed_observed_epoch = 0.0
+        row.claimed_source_sha256 = ''
         return True
 
     def snapshot(self) -> dict:
@@ -312,7 +350,7 @@ class DiscoveryQueue:
     @classmethod
     def restore(cls, snapshot: dict, *, session_date: str) -> "DiscoveryQueue":
         queue = cls(session_date)
-        if snapshot.get("schema") != SCHEMA or snapshot.get("session_date") != queue.session_date:
+        if snapshot.get("schema") not in {SCHEMA, 'zero_base_discovery_queue_v1'} or snapshot.get("session_date") != queue.session_date:
             raise ValueError("queue snapshot date or schema mismatch")
         sequence = snapshot.get("claim_sequence", 0)
         if type(sequence) is not int or sequence < 0:
@@ -333,6 +371,10 @@ class DiscoveryQueue:
                 or row.discovery_volume < 0
                 or not isfinite(row.claimed_observed_epoch)
                 or row.claimed_observed_epoch < 0
+                or not isfinite(row.residence_deadline_epoch)
+                or row.residence_deadline_epoch < 0
+                or row.lease_phase not in {'closed', 'observing', 'handoff_pending', 'cleanup_pending'}
+                or not isinstance(row.handoff_id, str)
                 or (row.claimed_source_sha256 and re.fullmatch(
                     r"[0-9a-f]{64}", row.claimed_source_sha256,
                 ) is None)
@@ -373,5 +415,8 @@ class DiscoveryQueue:
                 row.next_due_epoch = min(row.next_due_epoch, row.last_claim_epoch)
                 row.claimed_observed_epoch = 0.0
                 row.claimed_source_sha256 = ""
+            row.lease_phase = 'closed'
+            row.handoff_id = ''
+            row.residence_deadline_epoch = 0.0
             queue._candidates[key] = row
         return queue

@@ -85,16 +85,16 @@ def test_stale_optional_policy_blocks_only_family_handoff(monkeypatch, tmp_path)
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
     _write(
-        summary_mod._paths(target)["low_price_expansion_policy"],
+        summary_mod._paths(target)["entry_split_policy"],
         {"source_date": "2026-09-18", "allowed_runtime_apply": True},
     )
     summary = summary_mod.build_runtime_approval_summary(target)
 
     report = mod.build_threshold_cycle_postclose_verification(target)
 
-    assert summary["sources"]["low_price_expansion"]["economic_evidence"]["policy_handoff_state"] == "blocked"
+    assert summary["sources"]["entry_split"]["economic_evidence"]["policy_handoff_state"] == "blocked"
     assert report["status"] == "pass"
-    assert "direct_source_date_mismatch:low_price_expansion_policy" not in report["issues"]
+    assert "direct_source_date_mismatch:entry_split_policy" not in report["issues"]
 
 
 def test_missing_postclose_terminal_fails_closed(monkeypatch, tmp_path):
@@ -223,7 +223,7 @@ def test_whole_chain_verification_rejects_failed_stage_with_current_marker(monke
 
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
-    stage = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
+    stage = handoff.stage_path(mod.REPORT_DIR, target, "outcome_labels")
     _write(stage, {"source_date": target, "run_id": "failed-1", "status": "failed", "exit_code": 2})
     _build_direct_checklist(monkeypatch, tmp_path, target)
 
@@ -231,7 +231,7 @@ def test_whole_chain_verification_rejects_failed_stage_with_current_marker(monke
         target, require_summary_handoff=True, require_whole_native_chain=True
     )
     assert report["status"] == "fail"
-    assert "postclose_stage_invalid:research_capacity" in report["issues"]
+    assert "postclose_stage_invalid:outcome_labels" in report["issues"]
     assert report["whole_native_chain_done_claimed"] is False
 
 
@@ -240,7 +240,7 @@ def test_persisted_strict_receipt_detects_summary_and_stage_rewrite(monkeypatch,
 
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
-    stage = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
+    stage = handoff.stage_path(mod.REPORT_DIR, target, "outcome_labels")
     _write(stage, {"source_date": target, "run_id": "off-1", "status": "off",
                    "off_reason": "explicit_schedule_disabled", "exit_code": 0})
     _build_direct_checklist(monkeypatch, tmp_path, target)
@@ -260,7 +260,7 @@ def test_persisted_strict_receipt_detects_summary_and_stage_rewrite(monkeypatch,
     summary_path.write_bytes(original_summary)
 
     _write(stage, {"source_date": target, "run_id": "retry-2", "status": "failed", "exit_code": 2})
-    assert "strict_stage_generation_stale:research_capacity" in mod.current_strict_receipt_issues(attempt, target)
+    assert "strict_stage_generation_stale:outcome_labels" in mod.current_strict_receipt_issues(attempt, target)
 
 
 def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypatch, tmp_path):
@@ -306,25 +306,25 @@ def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypa
     snapshot.write_bytes(original_bytes)
     checklist_path.write_bytes(original_bytes)
 
-    capacity = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
+    capacity = handoff.stage_path(mod.REPORT_DIR, target, "outcome_labels")
     handoff._stage_write(capacity, {
-        "schema": handoff.STAGE_SCHEMA, "stage_id": "research_capacity",
+        "schema": handoff.STAGE_SCHEMA, "stage_id": "outcome_labels",
         "source_date": target, "run_id": "retry-failed",
         "status": "failed", "exit_code": 2,
     })
-    assert "strict_stage_generation_stale:research_capacity" in mod.current_strict_receipt_issues(
+    assert "strict_stage_generation_stale:outcome_labels" in mod.current_strict_receipt_issues(
         old_attempt, target, require_whole_native_chain=True
     )
-    assert "strict_stage_generation_stale:research_capacity" in mod.current_strict_receipt_issues(
+    assert "strict_stage_generation_stale:outcome_labels" in mod.current_strict_receipt_issues(
         old_attempt, target, require_whole_native_chain=True, generation_only=True
     )
     _build_direct_checklist(monkeypatch, tmp_path, target)
-    assert "postclose_stage_invalid:research_capacity" in mod.build_threshold_cycle_postclose_verification(
+    assert "postclose_stage_invalid:outcome_labels" in mod.build_threshold_cycle_postclose_verification(
         target, require_summary_handoff=True, require_whole_native_chain=True
     )["issues"]
 
     handoff._stage_write(capacity, {
-        "schema": handoff.STAGE_SCHEMA, "stage_id": "research_capacity",
+        "schema": handoff.STAGE_SCHEMA, "stage_id": "outcome_labels",
         "source_date": target, "run_id": "retry-off",
         "status": "off", "off_reason": "explicit_schedule_disabled", "exit_code": 0,
     })

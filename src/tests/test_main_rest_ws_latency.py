@@ -402,7 +402,7 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
         assert '_fixed_watch_async_claim' not in stock
         assert not coordinator.has_completed_result()
         assert len(provider_calls)==1
-        assert len(coordinator.drain_completed())==(0 if outer_drain else 1)
+        assert coordinator.drain_completed()==[]
         assert coordinator.drain_completed()==[]
     finally:coordinator.shutdown()
 
@@ -537,7 +537,8 @@ def test_main_full_history_retains_rest_before_dead_projection_binding(monkeypat
             venue='KRX_NXT_INTEGRATED',session='krx_regular',limit=40,now_ts=now,
             broker_route='SOR',allow_integrated_sor_execution_view=True)
         assert calls==[('005930_AL',{'limit':430,'explicit_request_code':True})]
-        assert meta['completed_bar_selection']['reason']=='requested_history_exceeds_projection_scope'
+        assert meta['completed_bar_selection']['reason']=='price_basis_equivalence_unproven'
+        assert meta['history_consumer_requirement']['minimum_completed_for_full_recent_window'] == 61
 
 
 @pytest.mark.parametrize('mode,floor',[('ws_when_ready',10),('ws',430)])

@@ -1087,6 +1087,64 @@ def economic_evidence(fields, stock_code=None):
     return result
 
 
+def async_disposition_coverage(events, as_of):
+    """Count exact retained PASS attempts per PID/start; never infer missing finals."""
+    now = stamp(as_of)
+    attempts = {}
+    for event in events:
+        emitted = stamp(event.emitted_at)
+        if event.stage != 'entry_async_disposition' or now is None or emitted is None or emitted > now:
+            continue
+        f = event.fields
+        identity = tuple(str(f.get(k) or '') for k in
+                         ('async_producer_pid', 'async_producer_start_ticks', 'async_request_id'))
+        if any(v.lower().strip() in {'', '-', 'none', 'null', 'unknown', '0'} for v in identity):
+            continue
+        row = attempts.setdefault(identity, {'events': {}, 'conflict': False})
+        eid = f.get('async_disposition_event_id')
+        content = (f.get('async_disposition'), f.get('async_disposition_reason'),
+                   f.get('async_machine_action'), f.get('async_auxiliary_status'),
+                   f.get('async_auxiliary_verdict'), f.get('async_provider_called'),
+                   f.get('async_origin_deadline_epoch'), f.get('ai_decision_trace_id'),
+                   f.get('evaluation_attempt_id'), f.get('scanner_generation_id'))
+        if not eid or eid in row['events'] and row['events'][eid] != content:
+            row['conflict'] = True
+        row['events'][eid] = content
+        row['pass'] = row.get('pass', False) or (
+            str(f.get('async_machine_action')).upper() == 'ENTER_NOW'
+            and str(f.get('async_auxiliary_status')).lower() == 'pass'
+            and str(f.get('async_auxiliary_verdict')).upper() == 'PASS'
+            and str(f.get('async_provider_called')).lower() == 'true')
+        row['deadline'] = f.get('async_origin_deadline_epoch')
+    by_producer = {}
+    for identity, row in attempts.items():
+        if not row.get('pass'):
+            continue
+        counts = by_producer.setdefault(':'.join(identity[:2]),
+            dict(pass_count=0, accepted=0, rejected=0, pending=0, unobservable=0))
+        states = {entry[0] for entry in row['events'].values()}
+        finals = states & {'accepted_to_entry_path', 'rejected', 'terminal_nonexecution'}
+        if row['conflict'] or len(finals) > 1:
+            status = 'unobservable'
+        elif finals:
+            status = 'accepted' if 'accepted_to_entry_path' in finals else 'rejected'
+        else:
+            try:
+                deadline = float(row['deadline'])
+                status = 'pending' if math.isfinite(deadline) and now.timestamp() < deadline else 'unobservable'
+            except (TypeError, ValueError):
+                status = 'unobservable'
+        counts['pass_count'] += 1
+        counts[status] += 1
+    return dict(schema='main_async_disposition_coverage_v1', by_producer=by_producer,
+        metric_role='source_quality_gate', decision_authority='report_only',
+        primary_decision_metric='pass_to_main_disposition_coverage',
+        window_policy='current_pid_exact_attempt_with_carry_in_out', sample_floor='none',
+        source_quality_gate='exact_pid_start_request_and_validated_pass',
+        coverage='loaded_evidence_only_full_denominator_unobservable',
+        forbidden_uses=['order_authority', 'policy_promotion', 'economics'])
+
+
 def snapshot(events, as_of):
     """Reuse already loaded events and the existing identity/terminal owner."""
     from src.engine.buy_funnel_sentinel import (
@@ -1236,6 +1294,7 @@ def snapshot(events, as_of):
                     break
     return {
         "schema": SCHEMA, "as_of": now.isoformat(),
+        "async_disposition_coverage": async_disposition_coverage(events, as_of),
         "latest_event_at": max((stamp(e.emitted_at) for e in recent), default=now - timedelta(days=1)).isoformat(),
         "auxiliary_ai_semantic_status_counts": funnel.get("auxiliary_ai_semantic_status_counts", {}),
         "auxiliary_ai_semantic_issue_counts": funnel.get("auxiliary_ai_semantic_issue_counts", {}),

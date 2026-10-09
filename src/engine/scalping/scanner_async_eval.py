@@ -8,10 +8,13 @@ from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
 import math
+import hashlib
+import os
 import threading
 import time
 from types import MappingProxyType
 from typing import Any
+from pathlib import Path
 
 from src.engine.ai.hot_path_ai_dispatcher import (
     HotPathAIDispatcher,
@@ -22,6 +25,58 @@ from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 SCANNER_ASYNC_EVAL_VERSION = "scanner_async_eval_commit_v1"
 _MAX_READY_RESULTS = 128
 _MAX_CANCELLED_GENERATIONS = 256
+try:
+    _PROCESS_START = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
+except (OSError, IndexError):
+    _PROCESS_START = None
+
+
+def record_async_disposition(result, disposition, reason):
+    """Use the existing compact pipeline; never alter provider outbox state."""
+    try:
+        from src.utils.pipeline_event_logger import emit_pipeline_event
+        event = (result.native_claim.get('snapshot') or [{}])[0]
+        payload = result.ai_payload
+        identity = f'{os.getpid()}|{_PROCESS_START}|{result.request_id}|{disposition}'
+        receipt = emit_pipeline_event('ENTRY_PIPELINE', result.code, result.code,
+            'entry_async_disposition', fields=dict(
+                async_disposition_event_id=hashlib.sha256(identity.encode()).hexdigest(),
+                async_disposition=disposition, async_disposition_reason=str(reason),
+                async_request_id=result.request_id, scanner_generation_id=result.generation_id,
+                evaluation_attempt_id=payload.get('evaluation_attempt_id'),
+                ai_decision_trace_id=payload.get('ai_decision_trace_id'),
+                async_origin_snapshot_id=payload.get('ai_decision_snapshot_id') or payload.get('ai_market_snapshot_id'),
+                async_machine_action=payload.get('entry_mechanistic_action'),
+                async_auxiliary_status=payload.get('entry_ai_screen_status'),
+                async_auxiliary_verdict=payload.get('entry_ai_risk_verdict'),
+                async_provider_called=payload.get('provider_called'),
+                async_producer_start_ticks=_PROCESS_START,
+                async_release=os.getenv('KORSTOCKSCAN_RUNTIME_GIT_COMMIT'),
+                **dict(result.origin_fields),
+                native_event_id=event.get('event_id'), native_signal_id=event.get('signal_id'),
+                effective_venue=result.venue,
+                async_origin_deadline_epoch=result.deadline_epoch,
+                async_worker_completed_epoch=result.completed_epoch,
+                async_disposition_epoch=time.time(), async_producer_pid=os.getpid(),
+                metric_role='source_quality_gate', decision_authority='report_only',
+                window_policy='current_pid_exact_attempt_with_carry_in_out', sample_floor='none',
+                primary_decision_metric='pass_to_main_disposition_coverage',
+                forbidden_uses='policy_promotion,broker_order,economics',
+                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False))
+        success = isinstance(receipt, dict) and receipt.get('structured_append_succeeded') is True
+        if (not success or receipt.get('structured_append_status') != 'raw_appended'
+                or receipt.get('structured_compact_append_succeeded') is False):
+            from src.engine.monitoring.runtime_performance import failure
+            failure('async_disposition', (receipt or {}).get('structured_append_status', 'writer_unobservable')
+                    if isinstance(receipt, dict) else 'writer_unobservable')
+        return success
+    except Exception as exc:
+        try:
+            from src.engine.monitoring.runtime_performance import failure
+            failure('async_disposition', type(exc).__name__)
+        except Exception:
+            pass
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +158,7 @@ class ScannerAsyncEvalContext:
         stock_snapshot: Mapping[str, Any],
         ws_snapshot: Mapping[str, Any],
         state_version: str,
+        caller_deadline_perf: float | None = None,
     ) -> "ScannerAsyncEvalContext":
         if not isinstance(generation, (ScannerGeneration, FixedWatchGeneration)):
             raise TypeError("async context requires scanner or native fixed-watch identity")
@@ -117,6 +173,12 @@ class ScannerAsyncEvalContext:
         ):
             raise ValueError("scanner async context requires future deadline")
         perf = time.perf_counter()
+        if caller_deadline_perf is not None and (
+            isinstance(caller_deadline_perf, bool)
+            or not math.isfinite(float(caller_deadline_perf))
+            or float(caller_deadline_perf) <= 0
+        ):
+            raise ValueError('invalid original monotonic deadline')
         return cls(
             generation=generation,
             cache_key=str(cache_key or "").strip() or generation.generation_id,
@@ -126,7 +188,8 @@ class ScannerAsyncEvalContext:
             ws_snapshot=_immutable_mapping(ws_snapshot),
             state_version=str(state_version or "-"),
             submitted_perf=perf,
-            deadline_perf=perf+max(0.0, deadline-time.time()),
+            deadline_perf=min(perf+max(0.0, deadline-time.time()),
+                              float(caller_deadline_perf) if caller_deadline_perf is not None else float('inf')),
         )
 
     def expired(self):
@@ -179,6 +242,9 @@ class ScannerAsyncEvalResult:
     deadline_perf: float = 0.0
     generation_kind: str = "scanner"
     native_claim: Mapping[str, Any] = field(default_factory=dict)
+    deadline_epoch: float = 0.0
+    original_generation: Any = None
+    origin_fields: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +287,7 @@ class ScannerAsyncEvalCoordinator:
         self._completed: OrderedDict[str, ScannerAsyncEvalResult] = OrderedDict()
         self._ready: dict[str, ScannerAsyncEvalResult] = {}
         self._undrained_request_ids: set[str] = set()
+        self._consumed = OrderedDict()
         self._cancelled_generations: set[str] = set()
         self._closed = False
         self._preparation_queue = OrderedDict()
@@ -246,6 +313,8 @@ class ScannerAsyncEvalCoordinator:
                     request_id=request_id,
                     pending_count=len(self._requests),
                 )
+            if request_id in self._consumed:
+                return ScannerAsyncSubmitDecision(False, 'result_already_consumed', request_id, len(self._requests))
             if request_id in self._requests:
                 return ScannerAsyncSubmitDecision(
                     accepted=False,
@@ -569,9 +638,16 @@ class ScannerAsyncEvalCoordinator:
             error_message=error_message,
             deadline_perf=context.deadline_perf,
             generation_kind="fixed_watch" if isinstance(context.generation, FixedWatchGeneration) else "scanner",
-            native_claim=_immutable_mapping(context.stock_snapshot.get('_continuous_reversal_pending_claim'))
-                if isinstance(context.generation, FixedWatchGeneration) else _immutable_mapping({}),
+            native_claim=_immutable_mapping(context.stock_snapshot.get('_continuous_reversal_pending_claim')),
+            deadline_epoch=context.deadline_epoch,
+            original_generation=context.generation,
+            origin_fields=_immutable_mapping({key: context.stock_snapshot.get(key) for key in
+                ('id', 'watch_admission_id', 'watch_generation_id', 'scanner_promotion_id',
+                 'entry_machine_bundle_sha256', 'entry_auxiliary_policy_sha256')}),
         )
+        record_async_disposition(result, 'worker_completed', status)
+        terminal_reason = None
+        evicted = []
         with self._lock:
             if self._requests.get(context.request_id) is not request:
                 return
@@ -579,15 +655,25 @@ class ScannerAsyncEvalCoordinator:
             self._preparation_futures.pop(context.request_id, None)
             self._prepared.pop(context.request_id, None)
             self._preparation_timings.pop(context.request_id, None)
-            self._ready[context.request_id] = result
-            self._undrained_request_ids.add(context.request_id)
-            while len(self._ready) > _MAX_READY_RESULTS:
-                oldest_request_id = next(iter(self._ready))
-                self._ready.pop(oldest_request_id, None)
-                self._completed.pop(oldest_request_id, None)
-                self._undrained_request_ids.discard(oldest_request_id)
-            self._completed[context.request_id] = result
-            self.completion_event.set()
+            if self._closed:
+                terminal_reason = 'coordinator_shutdown'
+            else:
+                if context.generation.generation_id in self._cancelled_generations:
+                    terminal_reason = 'generation_invalidated'
+                else:
+                    self._ready[context.request_id] = result
+                self._undrained_request_ids.add(context.request_id)
+                while len(self._ready) > _MAX_READY_RESULTS:
+                    oldest_request_id = next(iter(self._ready))
+                    evicted.append(self._ready.pop(oldest_request_id))
+                    self._completed.pop(oldest_request_id, None)
+                    self._undrained_request_ids.discard(oldest_request_id)
+                self._completed[context.request_id] = result
+                self.completion_event.set()
+        if terminal_reason:
+            record_async_disposition(result, 'terminal_nonexecution', terminal_reason)
+        for old in evicted:
+            record_async_disposition(old, 'terminal_nonexecution', 'result_retention_overflow')
 
     def drain_completed(
         self, *, limit: int | None = None
@@ -610,7 +696,19 @@ class ScannerAsyncEvalCoordinator:
             f"{str(generation_id or '').strip()}:{str(cache_key or '').strip()}"
         )
         with self._lock:
-            return self._ready.pop(request_id, None)
+            self._completed.pop(request_id, None)
+            self._undrained_request_ids.discard(request_id)
+            result = self._ready.pop(request_id, None)
+            if result is not None:
+                self._consumed[request_id] = None
+                while len(self._consumed) > 256:
+                    self._consumed.popitem(last=False)
+            return result
+
+    def peek_completed(self, *, generation_id: str, cache_key: str):
+        self.poll()
+        with self._lock:
+            return self._ready.get(f"{generation_id}:{cache_key}")
 
     def discard_completed(
         self, *, generation_id: str, cache_key: str
@@ -619,7 +717,31 @@ class ScannerAsyncEvalCoordinator:
             f"{str(generation_id or '').strip()}:{str(cache_key or '').strip()}"
         )
         with self._lock:
-            return self._ready.pop(request_id, None)
+            self._completed.pop(request_id, None)
+            self._undrained_request_ids.discard(request_id)
+            result = self._ready.pop(request_id, None)
+            if result is not None:
+                self._consumed[request_id] = None
+                while len(self._consumed) > 256:
+                    self._consumed.popitem(last=False)
+            return result
+
+    def wait_for_completion(self, timeout: float) -> bool:
+        """A consumed wake always causes another loop before sleeping.
+
+        The dispatcher and inbox also set this event. Clearing just before a
+        blocking wait would lose their notifications because they do not own
+        the coordinator lock.
+        """
+        if self.completion_event.is_set():
+            self.completion_event.clear()
+            self.poll()
+            return True
+        self.poll()
+        with self._lock:
+            if self._undrained_request_ids:
+                return True
+        return self.completion_event.wait(timeout)
 
     def is_pending(self, *, generation_id: str, cache_key: str) -> bool:
         request_id = (
@@ -672,6 +794,8 @@ class ScannerAsyncEvalCoordinator:
     def invalidate_generation(self, generation_id: str) -> None:
         normalized = str(generation_id or "").strip()
         if normalized:
+            futures = []
+            discarded = []
             with self._lock:
                 self._cancelled_generations.add(normalized)
                 while len(self._cancelled_generations) > _MAX_CANCELLED_GENERATIONS:
@@ -683,14 +807,20 @@ class ScannerAsyncEvalCoordinator:
                 for request_id, future in list(self._preparation_futures.items()):
                     request = self._requests.get(request_id)
                     if request and request.context.generation.generation_id == normalized:
-                        future.cancel()
+                        futures.append(future)
                 stale_ready_ids = [
                     request_id
                     for request_id, result in self._ready.items()
                     if result.generation_id == normalized
                 ]
                 for request_id in stale_ready_ids:
-                    self._ready.pop(request_id, None)
+                    result = self._ready.pop(request_id, None)
+                    discarded.append(result)
+            # Cancellation callbacks and evidence I/O must not hold the lock.
+            for future in futures:
+                future.cancel()
+            for result in discarded:
+                record_async_disposition(result, 'terminal_nonexecution', 'generation_invalidated')
 
     def reactivate_generation(self, generation_id: str) -> bool:
         """Release a fully quiesced generation for one scheduler-owned retry.
@@ -734,6 +864,13 @@ class ScannerAsyncEvalCoordinator:
         self._preparation_executor.shutdown(wait=wait, cancel_futures=True)
         if self.owns_ai_dispatcher:
             self.ai_dispatcher.shutdown(wait=wait)
+        with self._lock:
+            retained = list(self._ready.values())
+            self._ready.clear()
+            self._completed.clear()
+            self._undrained_request_ids.clear()
+        for result in retained:
+            record_async_disposition(result, 'terminal_nonexecution', 'coordinator_shutdown')
 
 
 def validate_scanner_async_commit(
@@ -776,7 +913,8 @@ def validate_scanner_async_commit(
     reason = "commit_allowed"
     if result.status != "completed" or result.observation_only:
         reason = "result_not_commit_eligible"
-    elif result.deadline_perf > 0 and time.perf_counter() >= result.deadline_perf:
+    elif ((result.deadline_epoch > 0 and float(now_epoch) >= result.deadline_epoch)
+          or (result.deadline_perf > 0 and time.perf_counter() >= result.deadline_perf)):
         reason = "result_deadline_expired"
     elif current_generation is None:
         reason = "current_generation_missing"

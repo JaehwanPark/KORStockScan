@@ -4,6 +4,7 @@ import sys
 import json
 import time
 import math
+import sqlite3
 import threading
 import hashlib
 import re
@@ -19,6 +20,18 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 _ENTRY_SOURCE_BUDGET = ContextVar('kiwoom_entry_source_budget', default=None)
+
+
+def _entry_read_budget(api_id, request_class, request_owner):
+    # Capacity preparation is the only account read owned by the entry worker.
+    # Mandatory sizing, protection and order reads retain their own budgets.
+    if api_id.startswith('ka') or (
+        api_id == 'kt00011'
+        and request_class == REQUEST_CLASS_SOURCE_ONLY
+        and request_owner == 'entry_capacity_prefetch'
+    ):
+        return _ENTRY_SOURCE_BUDGET.get()
+    return None
 
 
 @contextmanager
@@ -206,6 +219,8 @@ def _cache_set(namespace, key, value, ttl_sec):
     cache_key = (namespace, key)
     now = time.time()
     expires_at = now + float(ttl_sec)
+    if namespace == 'ka10080_minutes_with_meta' and meta.get('rest_received_ts_ms'):
+        expires_at = min(expires_at, float(meta['rest_received_ts_ms'])/1000 + 3.0)
     if meta.get("read_response_cache_expires_at") is not None:
         expires_at = min(expires_at, float(meta["read_response_cache_expires_at"]))
     with _MARKET_DATA_CACHE_LOCK:
@@ -2505,6 +2520,7 @@ def _fetch_kiwoom_api_continuous_with_meta(**kwargs):
             raise
         fallback_kwargs = dict(kwargs)
         fallback_kwargs.pop("max_pages", None)
+        fallback_kwargs.pop("minimum_rows", None)
         results = fetch_kiwoom_api_continuous(**fallback_kwargs)
         meta = _empty_kiwoom_source_meta(kwargs.get("api_id"))
         meta["page_count"] = len(results or [])
@@ -5041,6 +5057,7 @@ def get_minute_candles_ka10080_with_meta(
     base_dt=None,
     request_owner=None,
     request_class=None,
+    include_forming=True,
 ):
     """
     [REST API] ka10080: 주식분봉차트조회
@@ -5057,11 +5074,26 @@ def get_minute_candles_ka10080_with_meta(
         raise ValueError("base_dt must use YYYYMMDD")
     # The latest completed-minute cutoff is part of the source contract. A
     # five-second cache must not cross a new completed bar or a clock rollback.
-    cache_key = (str(req_code), int(limit), request_base_dt, int(time.time() // 60))
+    cache_key = (str(req_code), int(limit), request_base_dt, int(time.time() // 60), bool(include_forming))
     cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10080_minutes_with_meta", cache_key)
     if cached is not None:
-        return cached
+        rows, meta = cached
+        meta.update(read_response_cache_status='hit',
+                    read_response_cache_caller_http_attempt_count=0,
+                    read_singleflight_caller_http_attempt_count=0)
+        if meta.get('shared_history_revision_sha256'):
+            meta['shared_history_reused'] = True
+        return rows, meta
+
+    from src.trading.market import completed_history
+    from src.trading.market.session_contract import resolve_market_session
+    history_key = completed_history.key(_market_data_cache_scope(token), str(req_code), request_base_dt,
+        resolve_market_session(datetime.fromtimestamp(time.time(), _KST)).session_regime)
+    shared = completed_history.read(DATA_DIR, history_key, now=time.time(),
+                                    limit=int(limit), include_forming=include_forming)
+    if shared is not None:
+        return shared
 
     url = get_api_url("/api/dostk/chart")
     payload = {
@@ -5072,6 +5104,8 @@ def get_minute_candles_ka10080_with_meta(
     }
 
     page_size = 900
+    # Keep the existing bounded continuation fallback for a short first page;
+    # stop as soon as the requested window is present, not after another page.
     max_pages = max(1, int((max(1, int(limit or 1)) + page_size - 1) / page_size) + 1)
     purpose = {}
     if request_owner is not None:
@@ -5085,6 +5119,7 @@ def get_minute_candles_ka10080_with_meta(
         payload=payload,
         use_continuous=True,
         max_pages=max_pages,
+        minimum_rows=int(limit or 1) + (0 if include_forming else 1),
         **purpose,
     )
     source_meta = _normalize_kiwoom_source_meta(
@@ -5111,8 +5146,7 @@ def get_minute_candles_ka10080_with_meta(
                 ],
                 default=None,
             ),
-            "truncated_window": len(all_candles) < int(limit or 0)
-            or bool(source_meta.get("continuous_page_limit_reached")),
+            "truncated_window": len(all_candles) < int(limit or 0),
         }
     )
 
@@ -5120,7 +5154,7 @@ def get_minute_candles_ka10080_with_meta(
         recent_candles = sorted(
             all_candles,
             key=lambda item: _normalize_ka10080_time((item or {}).get("cntr_tm"))[0],
-        )[-int(limit or len(all_candles)) :]
+        )[-max(int(limit or len(all_candles)), completed_history.MAX_ROWS) :]
         for candle in recent_candles:
             raw_time = str(candle.get("cntr_tm", ""))
             source_timestamp, formatted_time = _normalize_ka10080_time(raw_time)
@@ -5138,6 +5172,20 @@ def get_minute_candles_ka10080_with_meta(
                 }
             )
 
+    if refined_candles and not (source_meta.get('continuous_next_key_missing')
+            or source_meta.get('rate_limit_detected')
+            or source_meta.get('read_rate_control_status') == 'deferred'):
+        try:
+            published = completed_history.publish(DATA_DIR, history_key,
+                refined_candles[-completed_history.MAX_ROWS:], source_meta, now=time.time(),
+                consumption_receipt=source_meta)
+            source_meta['shared_history_publication'] = 'published' if published else 'not_eligible'
+        except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
+            source_meta['shared_history_publication'] = 'unavailable:' + type(exc).__name__
+    if not include_forming:
+        cutoff = datetime.fromtimestamp(time.time(), _KST).strftime('%Y%m%d%H%M00')
+        refined_candles = [r for r in refined_candles if r['source_timestamp'] < cutoff]
+    refined_candles = refined_candles[-int(limit or len(refined_candles) or 1):]
     if (not refined_candles or source_meta.get('truncated_window')
             or source_meta.get('continuous_next_key_missing') or source_meta.get('rate_limit_detected')
             or source_meta.get('read_rate_control_status') == 'deferred'):
@@ -5210,13 +5258,14 @@ def fetch_kiwoom_api_continuous(
     read_rate_max_wait_sec: float | None = None,
     read_rate_coordinator=None,
     request_timeout: float | tuple[float, float] | None = None,
+    minimum_rows: int | None = None,
 ) -> list:
     """Reuse only in-flight market reads with identical wire/priority/bounds.
 
     Fresh execution-critical, account, quote, authentication and broker writes
     always retain their existing independent request path.
     """
-    budget = _ENTRY_SOURCE_BUDGET.get() if api_id.startswith('ka') else None
+    budget = _entry_read_budget(api_id, request_class, request_owner)
     if budget is not None:
         budget.require()
     kwargs = dict(
@@ -5234,6 +5283,7 @@ def fetch_kiwoom_api_continuous(
         read_rate_max_wait_sec=read_rate_max_wait_sec,
         read_rate_coordinator=read_rate_coordinator,
         request_timeout=request_timeout,
+        minimum_rows=minimum_rows,
     )
     if (
         not return_meta
@@ -5263,6 +5313,7 @@ def fetch_kiwoom_api_continuous(
         "max_retries": max_retries,
         "use_continuous": use_continuous,
         "max_pages": max_pages,
+        "minimum_rows": minimum_rows,
         "request_timeout": request_timeout,
         "read_rate_max_wait_sec": read_rate_max_wait_sec,
         "coordinator": id(read_rate_coordinator or _DEFAULT_KIWOOM_READ_COORDINATOR),
@@ -5385,6 +5436,7 @@ def _fetch_kiwoom_api_continuous_transport(
     read_rate_max_wait_sec: float | None = None,
     read_rate_coordinator=None,
     request_timeout: float | tuple[float, float] | None = None,
+    minimum_rows: int | None = None,
 ) -> list:
     """
     키움 오픈API 공통 호출 함수 (연속조회 지원)
@@ -5419,7 +5471,7 @@ def _fetch_kiwoom_api_continuous_transport(
     pending_failed_token = ""
     body_rate_limit_retry_count = 0
     coordinator = read_rate_coordinator or _DEFAULT_KIWOOM_READ_COORDINATOR
-    budget = _ENTRY_SOURCE_BUDGET.get() if api_id.startswith('ka') else None
+    budget = _entry_read_budget(api_id, request_class, request_owner)
 
     while True:
         retry_count = 0
@@ -5749,6 +5801,14 @@ def _fetch_kiwoom_api_continuous_transport(
             meta["cont_yn_seen"] = True
         if next_key:
             meta["next_key_seen"] = True
+
+        if api_id == 'ka10080' and minimum_rows is not None:
+            observed = {str(row.get('cntr_tm')) for page in all_results
+                        for row in page.get('stk_min_pole_chart_qry', [])
+                        if isinstance(row, dict) and row.get('cntr_tm')}
+            if len(observed) >= max(1, int(minimum_rows)):
+                meta['continuous_requested_window_satisfied'] = True
+                break
 
         if cont_yn != "Y":
             break  # 더 이상 페이지가 없으면 탈출

@@ -33,6 +33,8 @@ def isolate_module_logs(tmp_path, monkeypatch):
     # handler tests intentionally exercise real logging paths, so keep JSONL and
     # threshold compact events inside the pytest temp dir.
     monkeypatch.setattr(pipeline_event_logger, "DATA_DIR", tmp_path / "data")
+    from src.utils import kiwoom_utils
+    monkeypatch.setattr(kiwoom_utils, "DATA_DIR", tmp_path / "data")
     # Probe circuit trips persist across process restarts. Every test must use
     # its own state file, including tests that reach the circuit indirectly.
     monkeypatch.setattr(

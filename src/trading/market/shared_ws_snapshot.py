@@ -298,7 +298,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
 
 
-def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None):
+def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None, required_adjustment=None):
     mode = completed_bar_mode(request_code, consumer=consumer)
     selection = selection_receipt if selection_receipt is not None else {}
     selection.update(mode=mode, minimum_bars=minimum_bars, history_scope=history_scope)
@@ -322,8 +322,21 @@ def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_f
                              reason="requested_history_exceeds_projection_scope",
                              maximum_session_bars=session_capacity)
             return None
+        # The current writer is explicitly raw_same_day. No approved same-day
+        # adjusted-price equivalence exists, so do not consult it for that view.
+        if required_adjustment not in {None, 'raw_same_day'}:
+            if mode == 'ws_when_ready':
+                selection.update(status='rest_retained', reason='price_basis_equivalence_unproven')
+                return None
+            raise ValueError('price_basis_equivalence_unproven')
         partial = False if consumer == "main" else observed_completed_bar_history_enabled()
         result = read_shared_completed_bars(item, now=now, **({"allow_partial_history": True} if partial else {}))
+        if (required_adjustment is not None
+                and result['_completed_bar_source'].get('adjustment') != required_adjustment):
+            if mode == 'ws_when_ready':
+                selection.update(status='rest_retained', reason='price_basis_equivalence_unproven')
+                return None
+            raise ValueError('price_basis_equivalence_unproven')
         selection.update(available_bars=len(result["stk_min_pole_chart_qry"]),
                          source_content_sha256=result["_completed_bar_source"].get("content_sha256"))
         if history_scope == "session" and not partial and not result["_completed_bar_source"]["complete_session_prefix"]:

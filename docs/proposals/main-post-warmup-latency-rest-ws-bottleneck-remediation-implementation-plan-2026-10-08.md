@@ -1,10 +1,14 @@
 # Main 워밍업 이후 평가 지연·REST/WS 병목 개선 상세 구현계획 — 2026-10-08
 
+**2026-10-08 후속 구현 상태:** PASS 소비·잔여 병목·430봉·비상시감시를 통합 구현하고 반복 리뷰·회귀를 수행했다. 10/8 구현 완료 때는 배포를 보류했으며, **10/9 후속 사용자 지시로 전체 미커밋 통합 배포가 승인됐다**. 현재 배포·준비 검증 상태는 [통합 배포 리뷰](../audits/main-integrated-uncommitted-deployment-review-2026-10-09.md)에서 확인한다. H4의 수정주가/WS 동등성 미입증 범위는 REST를 유지한다. [구현·검증·한계 기록](../audits/main-pass-residual-history-nonfixed-implementation-review-2026-10-08.md)을 현재 실행 결과로 사용하며 아래의 계획 작성 당시 승인·미실행 문구는 그 시점의 이력이다.
+
 ## 1. 결정·범위·실행 owner
 
 실제 상시감시 caller의 비동기 연결과 AI 실패 집계를 먼저 수정한다. 이어 소유권 저널의 반복 계산, WS 공유 lock의 복사, 분봉 REST 반복 조회, Telegram에 유입된 전역 HTTP 캐시를 개선한다. 각 변경은 같은 원천·정책·안전 계약에서 처리 비용을 줄이고 정상 `ENTER_NOW → 보조판정 → Main 최종 검증` 경로를 복구하는 작업이다.
 
 최초 작성은 **상세계획 리뷰·보완**이었다. 이후 사용자가 compact 계획과 함께 구현·반복 코드리뷰·수정보완 및 완료 후 배포·재기동을 승인했다. 실행 결과는 [통합 구현 리뷰](../audits/main-post-warmup-bottleneck-compact-integration-review-2026-10-08.md)에 구분하여 남긴다. 이미 받은 승인을 다시 요구하지 않으며, 입증되지 않은 REST/WS source 의미 동등성을 추정하지 않는다.
+
+**후속 계획은 §15의 AI PASS→Main 소비·제출 연결과 §16의 비상시감시 신호 관측·소비 보완이다.** PID 381039에서 확인한 별개의 처리 경계를 같은 실행 owner에 인계하며, B0~B7의 구현 이력을 되돌리거나 compact 연구를 재실행하지 않는다. 이번 사용자 지시는 상세계획 수립이며 §15/§16의 코드 구현·배포를 이 문서 수정과 함께 실행하지 않는다.
 
 실행 owner는 [오늘 체크리스트](../checklists/2026-10-08-stage2-todo-checklist.md)의 `DirectFamilySourceRepairMainMechanisticEntry` 하나다. B0~B7은 그 안의 구현 단계이며 새 OPEN 항목이나 전략 family가 아니다. 다음 문서의 역할을 유지한다.
 
@@ -83,7 +87,7 @@ metric role·authority는 LP7/RW0의 기존 diagnostic 선언을 승계한다. �
 
 ### 5.1 완료 수집부터 마지막 소비자까지 연결
 
-현재 `run_sniper`의 outer-loop `drain_completed()`는 모든 완료를 꺼낸 뒤 `scanner_generation_id`와 `_is_scanner_watching_target()`으로만 target을 찾는다. fixed-watch 결과는 `fixed-watch:<원 claim token>` identity이므로 해당 scanner 검색으로 연결되지 않아 `target_or_generation_missing`으로 `discard_completed()`될 수 있다. caller 인자 추가만으로 B1을 닫지 않는다.
+최초 계획 시점의 `run_sniper` outer-loop `drain_completed()`는 모든 완료를 꺼낸 뒤 `scanner_generation_id`와 `_is_scanner_watching_target()`으로만 target을 찾았다. fixed-watch 결과는 `fixed-watch:<원 claim token>` identity이므로 해당 scanner 검색으로 연결되지 않아 `target_or_generation_missing`으로 `discard_completed()`될 수 있었다. 이 분기 수리는 §14에 구현 인계됐으며, 그 이후 발견된 완료 소비 순서·terminal 결손은 §15에서 다룬다. caller 인자 추가만으로 B1을 닫지 않는다.
 
 - 준비 context→결과→Main 수집에 검증된 fixed-watch/scanner 종류와 원 admission/generation·claim·request identity를 유지한다. symbol이나 접두사만으로 권한을 추정하거나 scanner generation을 합성하지 않는다.
 - Main 수집부가 fixed-watch 결과를 정확한 현재 admission/원 claim에 연결하고 기존 fixed-watch Main commit 한 곳에서 소비하게 한다. generic drain과 handler의 `take_completed()`가 경쟁하여 결과를 버리거나 두 번 commit하지 않도록 ready/ack 소유권을 명시한다.
@@ -151,6 +155,8 @@ commit의 현재 clock으로 quote 수신 시각·route/epoch·결손·future cl
 
 ## 9. B5 — 분봉 REST 절감의 두 단계
 
+10/8 19:30 관측 이후의 후속 구현은 [잔여 네 병목 통합 개선계획](main-residual-capacity-budget-pass-history-bottleneck-implementation-plan-2026-10-08.md)을 따른다. 무신호 `kt00011` 예약·원 5초 예산·PASS의 Main 소비를 먼저 보완하고, 이 B5의 새 source 계약은 [430봉 상세계획 H0~H5](main-430-bar-shared-history-and-incremental-refresh-implementation-plan-2026-10-08.md)로 구체화한다. 이미 완료한 B0~B6 구현과 당시 배포 증거는 아래 이력대로 보존한다. 새 계획은 추가 구현·배포 영수증이 아니다.
+
 ### B5a. 현행 homogeneous source의 중복 제거
 
 owner는 [entry candle context](../../src/engine/scalping/entry_candle_context.py), [공통 분봉 source](../../src/trading/market/shared_ws_snapshot.py), 기존 `kiwoom_utils` cache/transport, [zero-base probe](../../src/engine/scalping/zero_base_probe.py)다.
@@ -172,6 +178,8 @@ logical demand가 생긴 시점의 목적, item/route/session, adjustment, candl
 5. 원천 의미가 충돌하면 해당 composition만 `unsupported/source_gap`으로 남기고 기존 bounded REST를 유지한다. 다른 B 단계는 계속할 수 있다. source contract에 맞는 적용 범위가 확인된 뒤 기존 source 선택 owner로 인계하며 새 전략/가격/수량 판단 권한을 만들지 않는다.
 
 현행 WS의 `raw_same_day`와 REST seed의 `adjusted_1`은 동일 의미라는 증거 없이 합치지 않는다. 역사 prefix의 원 수신 시각/epoch와 현재 tail의 live producer/transport identity를 segment별로 검증한다. 오래된 REST 수신 시각을 현재 WS epoch로 덮거나 cache hit를 freshness 승인으로 취급하지 않는다. 최종 reader의 coverage·수정주가·완료시각 검증까지 닫혀야 composition 선택을 허용한다.
+
+후속 H0/H3는 430 raw 요청과 실제 필요한 완료봉/세션 구간을 구분한다. 현재 MTF는 다른 날짜·세션을 제외하므로 모든 소비자에 전일 prefix를 강제로 합성하지 않는다. 초기 adapter는 현행 입력을 보존하고, 필수 특징·quality·판정 parity가 확인된 consumer부터 명시적 필요 window로 selector를 보완한다. 동일 REST 이력 공유·분 단위 갱신은 raw/adjusted WS 합성 입증과 독립하여 진행할 수 있다.
 
 종료 증거는 430봉·파생값 parity, 원 provenance 보존, `ws_selected_http0` 또는 새 버전 composition 선택의 실제 consumer receipt와 수요당 physical attempts 감소다. 분봉 절감에는 경제적 입증을 추가하지 않는다. 자연 source 표본이 없으면 코드 검증과 자연 대체 확인을 별도로 보고한다.
 
@@ -291,3 +299,156 @@ SOR 보완 후 관측한 59.550초 warm loop는 추가 실패 증거로 보존�
 
 
 최종 구현·배포는 `main-bottleneck-compact-20261008-v9` / code `7edeffe34cdca018b87fe981d24e4d61f91911a3` / Main PID 346886으로 완료했다. 활성 회귀 1,834건과 base/auxiliary 실제 소비를 확인했다. 최종 JSON stage 선택은 큰 AI 증빙 본문의 동일 문구를 사건으로 세지 않는다. 당일 5종목의 AFTER `_AL`·SOR admission/generation도 확인했다. 준비 이후 제한된 자연 창 144회는 모두 5초 미만이었으며, PID warm 누적 p99 2.693초·초기 원천 복원 9.102초와 미관측 provider/submit 단계는 위 통합 리뷰에 별도 남긴다. B5b 미지원과 과거 cron 지연 복구 warning을 전체 성공으로 바꾸지 않는다.
+
+## 15. 최신 PID의 AI PASS 이후 제출 병목 보완계획
+
+후속 사용자 요청의 네 병목 전체(무신호 용량·신호 예산·PASS 소비·430봉)는 [통합 개선계획 R0~R5](main-residual-capacity-budget-pass-history-bottleneck-implementation-plan-2026-10-08.md)에서 다룬다. 본 절 PB0~PB4는 그 안의 PASS 처리 세부 명세로 재사용하며, 구현·worker·terminal writer·배포를 중복 수행하지 않는다.
+
+### 15.1 결정·기준선·범위
+
+목표는 **정상 ENTER_NOW+PASS가 원 유효기간 안에 기존 Main 주문 경로로 한 번 전달되고, 전달하지 못한 판정도 정확한 종료 사유가 남도록 하는 것**이다. 정책 승률 재비교·새 prompt 연구·AI 호출 한도 변경은 이 수리의 선행 조건이 아니다. 기존 실행 owner `DirectFamilySourceRepairMainMechanisticEntry`와 B1/B2/B7 안에서 후속 P0 수리로 수행한다. 새 strategy family나 OPEN stable ID를 만들지 않는다.
+
+기준은 [19:41:57 판정별 원천 대조](../../data/report/auxiliary_compact_adoption/2026-10-08/pass-submit-bottleneck-381039-194157.json)와 [19:30까지 자연 관찰](../audits/main-latest-release-post-warmup-rest-ws-monitoring-2026-10-08-1930.md)이다. 선택 릴리스 `main-retired-postclose-cleanup-20261008-v1`, commit `0c1f68968906395f12c121862876704afadc1e83`, PID `381039` / start ticks `3597010`, 재기동 18:48이다. 이 값들은 조사 기준이며 구현 시 실제 최신 selector/PID로 다시 고정한다.
+
+| PASS 시도 | trace 생성 시 원 5초 잔여 | 확인한 결손·한계 |
+| --- | ---: | --- |
+| 주성 `aims-7793fcc0b31449c3d864` | 0.124초 | 첫 응답 후 검증·기록 4.422초. Provider 응답은 이미 신호 후 4.629초여서 원 예산 내 반환 불가. `_load_seen`의 당일 대형 trace 전체 해독은 유력 세부 원인이며 전 구간 귀속은 미확정 |
+| 알테오젠 `aims-29c09add92d32848e9d9` | 0.739초 | outbox `response_received`, 실행 intent 미관측. 정확한 reject terminal 결손 |
+| 알테오젠 `aims-d37f15a4907ddb798fad` | −0.100초 | trace 생성 시 이미 만료. 이후 native 종료 사유의 영구 연결 결손 |
+| 알테오젠 `aims-a2bf764066d21c596b7f` | 0.143초 | 19:18:48.192 Main의 `trade_tick_quiet` 조기 반환 관측. worker 완료 시각과 최종 reject의 exact 연결이 없어 유일 원인으로 단정하지 않음 |
+
+현재 PID의 정확한 ENTER_NOW→AI 시도는 8, PASS 4, transport timeout 4다. PASS outbox 4개는 모두 `response_received`, `intent_assigned`는 없고 주문 physical API 시작·submit guard 표본은 0이다. Main commit metric 3건을 PASS 3건 소비로 읽지 않는다. `decision_ts`는 trace 함수 진입 시각이며 worker 완료 시각이 아니다. 기존 보조 v2 네 scope의 자연 호출은 별도 미관측이고 위 4건은 v1 union 경로다.
+
+현재 코드에는 worker 완료 event로 Main wait를 깨우는 연결이 이미 있다. wake-up을 새로 추가하는 것만으로 수리됐다고 하지 않는다. 문제는 wake-up 이후 fixed-watch를 WATCHING handler에 맡기는 순서, 그 앞의 새 평가/source gate, 원 claim 만료 처리와 기록, 첫 응답 후처리다. 이미 완료된 B1 caller 연결·quote 계약·provider 실패 분류는 보존한다.
+
+### 15.2 구현 단위와 우선순위
+
+| 단계 | 변경 owner | 결과물 | 선행·닫힘 조건 |
+| --- | --- | --- | --- |
+| PB0 원 시도 재현 | 기존 async/trace 테스트와 위 증거 | 4개 시도의 clock·identity를 축소 fixture로 구성; response clock/worker 완료/Main 소비 구분 | 원 본문 복제·실제 Provider 호출 없이 기존 실패 경로 재현 |
+| PB1 완료 결과 우선 소비 | `kiwoom_sniper_v2`, `sniper_state_handlers`, `scanner_async_eval` | 완료 결과를 새 분석 gate보다 먼저 단일 Main owner로 전달 | PB0; 유효 PASS→기존 실행 owner 1회, 무효 결과의 명시 종료 |
+| PB2 첫 응답 cold 비용 제거 | `ai_decision_trace`, 기존 기동/준비 owner, `ai_engine_openai` | trace/outcome 인덱스 사전 준비와 증분 재사용, 응답 경로 full scan 제거 | PB0; 첫 요청·자정·재기동, 공유 lock·Main 보호 처리 지연까지 검증 |
+| PB3 exact terminal·consumer 연결 | 기존 pipeline/lifecycle writer, `buy_funnel_sentinel`, `submission_bottleneck_monitor` | 원 attempt별 소비 상태와 원인·시각을 작은 기존 전이로 연결 | PB1과 동시 구현; accepted 이후 주문 미진입은 별도 집계, 원 custody 유지 |
+| PB4 통합 회귀·배포 인계 | B7·AC6 기존 owner | 불변 release, 호환 handoff, 새 PID·자연 결과 검증 | PB1~PB3 리뷰/반례 종료; 실제 주문 수를 코드 배포 조건으로 두지 않음 |
+
+PB1과 PB3는 한 변경 단위다. PB2는 독립 검증할 수 있으나 첫 응답을 다시 잃는 상태를 남겨 전체 PASS 연결 수리 완료로 표시하지 않는다. 무신호 `kt00011` 반복 조회 축소는 기존 B5a의 별도 P1 후속이며 PB0~PB4 완료를 그 작업이나 B5b의 WS 역사 동등성에 묶지 않는다.
+
+### 15.3 PB1 — 완료 결과의 소유권과 소비 순서
+
+1. **완료 결과 조회에는 유효 claim 생성자를 선행시키지 않는다.** 저장된 원 request ID / generation / cache key / claim token으로 완료 객체부터 찾는다. `FixedWatchGeneration.from_claim()`가 TTL 검사에서 예외를 낸 뒤 결과를 무기록 폐기하는 현재 순서를 바꾼다. 현재 `_scanner_async_entry_cache_key()`는 같은 generation이면 저장된 key를 재사용한다. 이 동작을 보존하고 완료 소비 시 새 trigger/last-AI-time으로 key를 재생성하지 않는다. 원 identity가 없거나 충돌하면 가까운 symbol/시각으로 맞추지 않고 결손으로 기록한다. 결과를 찾았다는 사실은 BUY 권한이 아니다.
+2. 일반 scanner와 fixed-watch 결과를 기존 coordinator에서 구분하고, 원 target ID·watch admission·source registration·policy/binding·PID identity에 결속한다. symbol만 같은 후속 target, 다른 claim 또는 다른 session에 결과를 적용하지 않는다. 이전 결과 정리는 이전 request 필드만 대상으로 한다.
+3. fast exit/holding/SELL/cancel/체결·계좌 reconciliation의 기존 우선 처리를 보존한 뒤, 신규 평가용 cooldown·모멘텀/거래대금 gate와 신규 source 준비 전에 완료 결과의 disposition을 처리한다. `AI_WATCHING_COOLDOWN`의 새 분석 제한과 commit의 `COOLDOWNS[code]` 주문 제한은 구분하며 후자는 그대로 검증한다. worker/callback은 실행 상태를 변경하거나 주문하지 않는다. 기존 completion event·coordinator 용량을 쓰고 polling·worker·Provider 동시성을 올리지 않는다.
+4. Main이 결과 소유권을 받은 뒤 **현재 시각의 원 epoch·monotonic deadline, target/state/manual veto, route/session/item/transport epoch, native branch 생존·정책 철회, canonical quote, 계좌·주문·수량·자본·cooldown**을 기존 경계에서 검증한다. pre-AI gate에 섞인 진짜 source 안전 조건도 없어지면 안 된다. 중복 검사만 분리하고 기존 안전 판단의 참조 입력·거절 의미는 보존한다.
+5. 유효 결과는 기존 WATCHING 후속 실행·가격·수량 owner로 한 번 전달한다. async 결과와 inline 결과가 합류하는 **동일 후속 처리**를 사용한다. 원 prepared context·raw/decoded binding·검증 결과·last-AI/provenance 기록·후속 가격/수량 guard를 누락한 별도 BUY 경로를 만들지 않는다. 완료 소비 후 같은 loop에서 새 분석 분기로 다시 들어가거나 수량/주문 계산을 두 번 실행하지 않는다. `Main accepted`는 주문 intent/physical submit/fill과 별개다. AI PASS만으로 `ai_confirmed`, intent 또는 주문 성공 영수증을 합성하지 않는다.
+6. **새 source 대기·재시도 기능은 이 수리에서 제외한다.** 현 `validate_scanner_async_commit()`의 `quote_stale_or_missing`, `cooldown_active`, state/route/native 불일치는 최종 거절이다. 이를 fresh quote를 기다리는 재검증으로 바꾸지 않는다. `deferred`는 아직 Main 차례를 기다리는 원 완료 객체의 관측 상태로만 사용한다. Main이 가져오면 기존 검증으로 accepted/rejected를 정하고, 원 deadline 만료는 즉시 expired 처리한다. 새 claim·AI 재호출·TTL 연장·타이머를 만들지 않는다. 기존 scanner recheck의 별도 계약도 fixed-watch에 새로 이식하지 않는다.
+7. outer drain의 알림 큐, coordinator `_ready`, handler `take_completed`, orphan 정리가 동일 결과를 중복 소비하거나 먼저 삭제하지 않도록 소유권을 고정한다. `take_completed()`는 pop이므로 가져온 객체의 request/token과 현재 stock의 request/token을 비교한 뒤 **그 요청의 필드만** 정리한다. 후속 claim을 원 객체 대신 ack하거나 지우지 않는다. 별도 무제한 Main pending 저장소를 만들지 않으며 이관 중인 결과도 기존 미처리 용량·동일 요청 재dispatch 금지에 포함한다. 소비/정리 예외와 ready eviction은 원 request로 gap을 기록하고, crash는 `unobservable`로 복구 대사한다. capacity/eviction을 늘려 문제를 숨기지 않는다.
+8. 원 **5초** 및 모든 최종 guard는 유지한다. 이미 만료된 과거 PASS를 새 PID에서 주문하거나 새 timestamp로 되살리지 않는다. fixture의 과거 PASS는 경로 검증 자료이고 실제 재전송 대상이 아니다.
+
+### 15.4 PB2 — 필수 저장을 유지하면서 첫 응답의 전체 원장 조회 제거
+
+현재 `prepare_ai_request_capture()`는 payload/prompt/request 인덱스를 준비하지만 `_SEEN_TRACE_IDS`, `_SEEN_OUTCOME_LABEL_IDS`는 첫 응답에서 `_load_seen()`으로 채운다. 아래 작업은 [원장 중복 제거·증분 계획](main-ai-comparison-ledger-dedup-and-incremental-storage-plan-2026-10-07.md)의 live/offline 분리·기존 객체 재사용 계약을 따른다.
+
+- 기존 준비 owner에서 response trace와 outcome index까지 신규 native claim 평가 전에 준비한다. **`prepare_ai_request_capture()`의 index 목록만 늘리는 구현은 불충분하다.** 이 함수는 Main loop 외에도 `capture_ai_request()`의 `_WRITE_LOCK` 안에서 호출된다. 요청/응답 저장의 readiness 확인과 대형 초기 구축을 분리해 fallback 호출이 원 요청 예산 안에서 전체 scan을 시작하지 않게 한다. 장중 모든 요청에서 대형 JSONL을 다시 읽거나 단순히 `seen=set()`으로 시작하지 않는다.
+- 현 Main loop의 사전 준비는 완료 수집·Main 보유 처리보다 앞에 있다. fast exit thread가 켜졌다는 사실만으로 모든 보호 처리가 보장됐다고 하지 않는다. 기동·자정·교체 후 구축은 기존 준비 owner의 bounded 작업으로 나누고 Main 완료 소비·보유/체결 처리 기회를 보존한다. 대형 파일을 읽는 동안 `ENTRY_LOCK`이나 공통 trace `_WRITE_LOCK`을 계속 점유하지 않는다. 재진입 가능한 준비를 위해 새 thread/Provider 동시성이나 별도 무한 작업자를 추가하지 않는다. 준비 중 관측된 신호의 실제 발생 시각/5초는 그대로이며 준비 완료 시각으로 새로 찍지 않는다.
+- 실행 중 응답 경로에서는 준비된 인덱스와 정상 append 이후 증분만 사용한다. 당일 전체 trace/outcome의 `_load_seen` 호출·전체 JSON decode 수는 **0**이어야 한다. 최초 index 구축이 필요하면 새 entry claim 밖의 기존 준비 단계에서 한 번 수행하며, 초기화 중 이미 보유한 포지션의 보호와 callback을 멈추지 않는다.
+- KST 날짜 전환, file replacement/truncate/rotation, 재기동, concurrent append, partial 마지막 행과 lock 경계를 정의한다. index의 source path·date·inode/generation·소비 offset이 맞아야 재사용하고 크기만 같다는 이유로 신뢰하지 않는다. lock 밖에서 읽은 snapshot은 기존 writer의 동기화 경계에서 generation과 append 증분을 다시 대조한 뒤 게시한다. partial tail은 마지막 완결 행의 offset에서 재개한다. 읽기/권한/형식 오류와 확인된 빈 파일을 구분한다. 현 `_load_seen()`의 오류 시 부분 set 반환을 완성 index로 게시하지 않는다. 다음 날 준비 실패를 조용한 empty index나 매 응답 full scan으로 우회하지 않는다.
+- 추가 영속 index가 필요한지는 기존 저장 계약을 먼저 대조한다. 필요한 경우 기존 trace 소유 위치의 **재구축 가능한 key/offset index 한 개/일자**로 제한하고 본문·후행 라벨·AI 응답을 복제하지 않는다. offline 비교 ledger나 opportunity outbox를 live trace dedup index로 전용하지 않는다. 배포마다 새 비교 원장을 만들지 않는다.
+- 영속 index를 채택하면 trace ID와 outcome label ID의 namespace를 분리하고 **원 행의 정상 append 후에만** index를 전진시킨다. 원 행 저장 후 index 저장 전 crash는 마지막 검증 offset 이후만 복원한다. trace 성공/outcome 실패는 각자의 상태를 보존해 outcome 누락을 완료로 오인하지 않는다. 재시작은 과거 epoch를 참조하되 이전 PID의 monotonic 값을 새 PID deadline으로 사용하지 않는다. 일자별 메모리 cache도 진행 중 요청의 날짜 참조를 보존하면서 만료 일자를 회수하며, 세대별 복제 cache를 계속 쌓지 않는다.
+- 현재 필수 request/source 본문, 원 AI 응답, decoder/validator 결과, trace와 outcome seed의 저장·동일 ID 중복 방지·권한/파일 교체 방어를 유지한다. 기록을 생략하거나 미완료 append를 성공으로 표시해 시간을 줄이지 않는다. index/저장 오류의 기존 처리 의미를 보존하고 새 전역 거래 차단을 임의 추가하지 않는다.
+- `response_received_epoch`, `validation_started/completed`, `trace_append_completed`, `worker_completed`, `main_take`, `main_disposition`을 구분하여 기존 bounded 성능 계측에 연결한다. trace의 기존 `decision_ts` 의미를 과거와 다르게 재정의하지 않는다. 첫 응답 4.422초 전체를 특정 함수 한 개에 사전 귀속하지 않는다.
+
+PB2의 기능 종료는 첫 응답에도 full-scan 0, 원문/ID 동등성과 cold/warm 경로의 동일 성공·거절 계약이다. 부하 fixture의 정량 결과는 전후 같은 입력/clock/분모로 보고한다. provider 도착 clock·후처리 부하와 모든 기존 guard 통과를 고정한 정상 fixture에서는 후처리·Main 소비까지 원 deadline 안에서 닫힘을 검증한다. 마감 직전 응답을 모두 제출한다는 보장이 아니며 처리 중 원 예산을 넘은 응답도 올바르게 거절되어야 한다. 공유 lock 대기·최대 준비 chunk·Main 보호 처리 간격도 전후 비교하며 비용이 단순히 응답에서 Main 앞부분으로 이동한 결과를 개선으로 인정하지 않는다. 이는 구현 성능 검증이고 새 0.x초 거래 제한이나 정책 진입 gate가 아니다.
+
+### 15.5 PB3 — 종료 영수증·기존 감시 소비 연결
+
+현재 `reversal_operating_outbox`의 `response_received → intent_assigned`는 전송·주문 custody 계약이다. 이 상태 전이를 되감거나 `expired/rejected`를 억지로 추가해 기존 정책 hash·replay·불확실 예약을 변경하지 않는다. **AI 원 응답은 outbox에 보존하고 실행 소비 결과는 기존 ENTRY_PIPELINE/lifecycle 경로의 작은 전이 기록으로 연결**한다. 새 per-attempt 원장 파일·본문 복제·별도 무한 수집기를 만들지 않는다.
+
+영수증은 원 `evaluation_attempt_id`, `decision_trace_id`, `opportunity_key`, native signal/claim/request identity, target/watch generation, PID/start ticks/release, machine/auxiliary hash를 결속한다. 해당 단계에서 아직 생성되지 않은 ID는 null+원인으로 남기고 가짜 ID를 만들지 않는다. **소비/거절 전이의 신원은 꺼낸 immutable 결과가 소유한다.** 현재 stock의 `last_watching_ai_machine_primary_fields`나 새 claim을 기본값으로 합쳐 이전 결과의 원인을 바꾸지 않는다. 현재 guard가 본 원천은 별도 참조로 기록한다. 필드는 기존 pipeline의 문자열/JSON projection 규칙에 맞춰 publisher와 reader를 함께 검증한다. 고정 allowlist의 ID·시각·검사값·이유와 원문 참조/hash만 기록하며, `_log_entry_pipeline`의 기본 enrichment가 전체 WS snapshot·AI payload·보조 binding 본문을 다시 붙이지 않도록 실제 writer 크기를 검사한다.
+
+| 관측 전이 | 기록할 의미 | 금지되는 해석 |
+| --- | --- | --- |
+| worker 완료 | 응답·의미 검증·필수 기록을 마친 실제 완료 시각과 원 deadline | trace 생성 시각을 worker 완료로 대체 |
+| Main accepted | 원 결과를 기존 Main 실행 owner에 한 번 전달 | intent/submit/fill 성공으로 집계 |
+| Main deferred | 완료 객체가 Main 차례를 기다리는 상태, 원 소유자·만료시각 | 거절된 quote/source의 새 재검증 또는 새 5초 승인 |
+| Main rejected/expired/orphan | 정확한 원 검사 결과·남은 예산·source receipt, 정리한 request | 다른 시도의 최근 source block을 원인으로 붙이기 |
+| intent·submit·broker terminal | 기존 주문 owner의 실제 ID·영수증과 연결 | 미호출을 broker 거절로 집계 |
+
+원 request/생산 PID/전이 종류에 결속된 결정적 event ID를 사용한다. worker 완료와 Main disposition은 다른 전이이며, 반복 polling으로 같은 전이를 복제하지 않는다. **주문 실행의 단일 소유권과 진단 행의 중복 제거는 별개**다. 재읽기·재기동 후 같은 진단 행이 재관측되어도 reader가 같은 전이로 합친다. 서로 충돌하는 최종 전이는 최신 시각으로 덮지 않고 해당 attempt의 증빙 결손으로 남긴다. `emit_pipeline_event()`의 `structured_append_succeeded`를 확인하고 raw/companion/summary 실패를 구분한다. 파일 append 반환은 crash 이후 영구 보존이나 broker 완료 증거가 아니다. writer failure·queue full·process crash에서는 기록 성공을 가정하지 않고 bounded 기존 health/오류 counter로 gap을 남긴다. 진단 기록 실패가 이미 허용된 주문을 되돌리거나 주문 재시도를 유발하지 않게 하며, 기존 필수 source/outbox 저장 실패 규칙은 그대로 둔다. 무기록을 피하려고 Main에서 대형 파일 재스캔·새 무제한 동기 I/O를 추가하지 않는다. custody 예약은 해제하지 않으므로 기록 손실이 AI·주문 재전송 권한으로 이어지지 않는다.
+
+소비 연결은 아래 기존 owner에서 닫는다. 새 전이를 모두 주문 stage로 등록하거나 전체 payload를 projection whitelist에 추가하는 방식은 쓰지 않는다.
+
+| 기존 owner | 수정·검증 경계 |
+| --- | --- |
+| `sniper_state_handlers._log_entry_pipeline` / `_MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES` | 원 결과의 명시 신원을 보존하는 작은 전이 경로; 현재 stock enrichment와 본문 중복 배제 |
+| `scalping/main_lifecycle_journal.PIPELINE_STAGE_MAP` | `scanner_async_result_commit`의 기존 scanner 매핑과 fixed-watch 완료 소비 의미를 대조; 소비를 submit/fill로 매핑하지 않음 |
+| `utils/pipeline_event_logger.emit_pipeline_event` / `_project_fields_for_compact_stream` | raw·compact·기존 summary에서 원 event/attempt/clock/상태 참조 보존과 각각의 append 결과 확인 |
+| `engine/buy_funnel_sentinel`의 machine funnel·slim cache → `monitoring/submission_bottleneck_monitor.snapshot` | exact PASS 모집단·상호배타적 disposition·accepted 이후 기존 제출 funnel 연결, cache 재읽기 parity |
+
+예산 만료/정상 native 종료는 API 원천 결손과 구분하며, fixed-watch를 scanner promotion 결손으로 다시 분류하지 않는다. 새 알림 채널을 만들지 않고 기존 보고/알림 owner가 exact event를 의미 기반 중복 제거해 소비한다. bounded 읽기 범위·cache 세대가 모집단을 덮지 못하면 coverage를 partial/unobservable로 보고한다. 전체 대형 원장을 다시 읽어 0건을 증명하거나 잘린 tail을 결손 0으로 보고하지 않는다.
+
+판정 분모는 current PID의 exact ENTER_NOW+PASS attempt다. **PASS = accepted + final rejected + pending + unobservable**를 같은 원 attempt·as-of에서 검증한다. 이는 전이 로그 수가 아니라 attempt별 상태 한 개의 합이다. accepted 뒤 최종 수량/가격 guard가 거절해도 소비 집계는 accepted 한 건이며 해당 미진입 사유는 별도 하위 funnel에 둔다. 소비 전 reject/expired/orphan은 final rejected이고, 원 deadline 안에서 실제 미처리 owner가 확인된 경우만 pending이다. deadline 이후 terminal이 없거나 최종 증빙이 충돌/유실된 경우는 unobservable이며 만료됐다는 사실만으로 reject를 합성하지 않는다. timeout/VETO/RECHECK, source-only probe, 과거 PID, 같은 attempt의 반복 로그를 PASS 분모에 섞지 않는다. 관측 창 전후 carry-in/out을 같은 규칙으로 표시하고 raw AI 응답만 있는 사건을 검증된 PASS로 승격하지 않는다.
+
+새 진단 필드는 `metric_role=source_quality_gate`, `decision_authority=report_only`, `window_policy=current_pid_exact_attempt_with_carry_in_out`, `sample_floor=none`, `primary_decision_metric=pass_to_main_disposition_coverage`, `source_quality_gate=exact_identity_and_clock`, `forbidden_uses=policy_or_order_authority,economic_success_inference`를 선언한다. 진단 수치는 정책 채택·주문 권한을 만들지 않는다.
+
+### 15.6 필수 반례와 리뷰 종료 기준
+
+기존 `src/tests/test_scanner_async_entry_bridge.py`, `test_scanner_async_eval.py`, `test_hot_path_ai_dispatcher.py`, `test_ai_decision_trace.py`, `test_fixed_watch_submit_source_repair.py`, `test_submission_bottleneck_monitor.py`와 실제 변경 소비자의 기존 회귀를 확장한다. 새 runtime 모듈이 필요하면 `src/engine/scalping` 또는 기존 monitoring/lifecycle 소유 위치를 먼저 검토하고 engine root를 늘리지 않는다.
+
+| 검증 | 필수 결과 |
+| --- | --- |
+| 실제 outer drain→일반 WATCHING 두 iteration, native/scanner 혼합 | 실제 소비·guard·WATCHING 후속 합류는 mock으로 대체하지 않음; 유효 ENTER_NOW+PASS는 기존 실행 owner 1회, 중복 callback/두 소비자 경쟁으로 intent 증가 0 |
+| 새 분석 cooldown·거래대금/모멘텀 분기가 닫힌 동안 완료 | 완료 결과는 disposition 단계에 도달; 실제 source/quote/native/계좌 안전 위반은 기존 이유로 거절 |
+| 잔여 0.739/0.143초, 이미 −0.100초, 첫 검증 4.422초 재현 | trace 시각·실제 완료·Main take를 구분; 원 5초 경계 4.999/5.000/5.001 보존, 늦은 BUY 0 |
+| 처리 중 만료·target 제거·claim 교체·last-AI/trigger 변경·manual veto·정책 철회 | 저장된 원 요청으로 조회/ack, 후속 claim 필드·다른 owner 삭제 0; 새 평가 진입·동일 결과 재실행 0 |
+| 완료 큐 대기→Main 소비 / stale quote 최종 거절 후 fresh quote | 동일 결과 disposition 1개; 거절된 결과를 되살리는 재검증·Provider 재호출·deadline 갱신 0 |
+| cold 416MB 상당 trace, warm 재사용, 자정·restart·rotation·partial tail | 실제 운영 원본을 복제하지 않는 격리 fixture; 응답 경로 full scan 0, 중복/소실/무검증 empty-index 0, 첫 비용 별도 보고 |
+| 요청 안의 준비 fallback·준비 중 holding/완료 소비·동시 append·trace 성공/outcome 실패 | 대형 scan의 응답/요청 경로 재유입 0; 공유 lock/보호 처리 간격 측정, 이전 offset·namespace 보존, 부분 index를 ready로 게시하지 않음 |
+| 저장/queue 실패·단계별 crash·late callback·ready capacity/eviction | 원 예약/custody 보존, 기록 gap 명시, 존재하지 않는 terminal 성공 합성 0, 자동 재전송 0 |
+| v1/v2 wire, 원 확인점 전후 overlay 전환 | 논리 판정·raw/decoded binding·부모·scope 유지; codec/prompt 재연구 없이 영향받은 호출 경로 검증 |
+| 새 terminal의 writer→projection/cache→monitor→기존 notification 상태 | accepted 후 guard reject·중복/역순 event·충돌 terminal·tail 누락에도 attempt별 상호배타적 보존식; 정상 만료의 API 오분류·반복 알림 0 |
+
+fake clock/transport와 격리된 data root를 쓰며 실계좌·Provider 호출로 테스트 표본을 만들지 않는다. broad test를 먼저 돌리지 않고 위 변경 owner의 targeted pytest→compile→`git diff --check`를 수행한다. 리뷰→수정→반례 회귀→재리뷰에서 in-scope finding 0 후 배포 후보를 만든다. 수리된 경로는 같은 원 입력과 시간에서 비교하고 단지 주문 수가 늘었다는 이유로 guard 동등성 PASS를 선언하지 않는다.
+
+### 15.7 배포·복구·자연 수용 인계
+
+1. 실행 단계에서 최신 dirty diff·선택 release·PID·기계 128경로/보조 overlay·진행 중 Provider/주문 상태를 다시 고정한다. 새 연구·비교 원장을 생성하거나 현재 정책을 재발행하는 것이 이 코드 수리의 기본 절차가 아니다.
+2. PB1~PB3와 영향받은 v1/v2 reader/기동 경로를 함께 검증한 immutable release로 인계한다. 실제 실행 지시와 기존 승인 범위에 따라 배포하며 이번 문서 작성은 배포 실행이 아니다. hard-safety·원 예산을 바꾸는 추가 정책안은 섞지 않는다.
+3. graceful drain·실제 물리 작업 terminal/uncertain custody를 보존하고 원 응답/intent를 읽을 수 있는 rollback release만 준비한다. 이전 PASS를 재전송하지 않는다. 프로세스 restart 후 메모리 pending이 사라진 사건은 원 영수증의 unknown/reconciliation 상태로 인계하고 성공/실패를 추정하지 않는다.
+4. 최종 코드 hash가 바뀌는 기존 정책 reader/호환 evidence와 장중 handoff를 재검증한다. 현재 checklist와 원 AUTO strict 블록은 유지한다. 실제 영향이 있으면 기존 owner 절차로 필요한 준비만 갱신하고 `strict_checklist_generation_stale`를 과거 PASS 복사·EOD/연구 전수 재생성으로 덮지 않는다. 예정 20:10 장후가 실행 중이면 같은 producer를 중복 실행하거나 중간 release를 섞지 않는다.
+5. 새 PID에서 5종목의 session admission, exact machine/auxiliary 소비, 첫 자연 응답의 후처리, 모든 PASS의 disposition·intent/submit을 확인한다. **첫 cold 응답과 warm 응답을 모두 분리 관찰**하고 없으면 해당 항목은 `not_observed`로 남긴다. 삼성과 비삼성, compact-v2 네 scope와 기존 v1 scope를 나눠 표기한다.
+6. 자연 종료 기준은 원 claim deadline을 지난 관측 PASS의 Main disposition 누락 0, 중복 execution/Provider 0, 유효 정상 fixture의 기존 제출 경로 연결, 원천·주문 안전 위반 0이다. accepted 이후 주문의 정상 미체결/진행 상태와 Main 결과 소비의 pending을 구분하며 30분 경제 outcome 성숙을 이 코드 수리의 조건으로 두지 않는다. 실제 PASS가 guard에서 정당하게 종료돼 주문 0일 수 있으며 이를 코드 실패 또는 경제성 성공으로 바꾸지 않는다. natural 표본을 만들기 위한 AI 호출·주문은 수행하지 않는다.
+
+결과 보고는 코드 리뷰/배포/PID/자연 accepted·rejected/실제 intent·submit·fill/경제성을 분리한다. 현재 4건의 결손 terminal을 사후 추정값으로 보충하지 않는다. 이 계획은 구현 가능한 수리·검증·배포 순서를 정한 상태이며 PB0~PB4 완료 영수증은 후속 실행에서 작성한다.
+
+### 15.8 후속 계획 리뷰에서 수정한 구현 공백
+
+| 발견한 계획 공백 | 확정한 보완과 닫힘 근거 |
+| --- | --- |
+| quote/source 거절을 새 대기로 바꿀 여지 | 기존 commit validator의 최종 거절 유지. deferred는 완료 큐 대기의 관측만 하며 stale 거절 후 fresh quote로 재실행하지 않는 회귀 추가 |
+| 소비 위치만 옮기면 기존 WATCHING 후속 처리·후속 claim 정리가 달라질 수 있음 | 원 key 재사용, immutable 결과 기준 신원/ack, 공통 후속 합류, token 비교 정리와 단일 용량 소유권을 명시 |
+| 준비 함수의 index 목록 확장만으로 요청 안 scan·Main/holding 지연이 재발할 수 있음 | 요청 내 fallback과 준비 owner 분리, bounded 구축·짧은 게시 lock, 완료/보호 처리 간격과 정상 원 예산 fixture 검증 |
+| 부분 index·날짜/파일 교체·append 중 crash의 상태가 불명확 | 완결 offset·generation·ID namespace, trace/outcome 개별 성공, 원문 이후 index 전진, 날짜 cache 회수 요건 확정 |
+| 새 stage가 현재 stock 신원을 잘못 붙이거나 compact/cache에서 유실될 수 있음 | 원 객체 신원의 작은 전이와 writer→lifecycle/projection→Sentinel→monitor의 실제 owner 명시; append 상태·tail coverage 검증 |
+| accepted 후 주문 guard 거절과 소비 전 거절이 중복될 수 있음 | attempt별 상호배타적 소비 상태와 별도 제출 funnel; 중복·역순·충돌·기록 실패 반례 추가 |
+
+이 표는 계획 공백의 보완 기록이다. 실제 4건의 미진입 원인을 추가 확정하거나 PB0~PB4 구현 완료를 뜻하지 않는다. 캐시 key는 현 코드가 같은 generation에서 재사용하고 있음을 확인했으며, 그 자체를 새로 발견한 운영 결함으로 집계하지 않는다.
+
+재리뷰 뒤 두 변경 계획의 로컬 링크/anchor **55개**, print-only parser **22항목·현재 Main owner 1개·경고 0**, `git diff --check`를 검증했다. checklist SHA `4aee28ee1c0fa26d34d8f7f7ecac25432e6680ab226ec805c59b635bb11b48ed`와 현재 handoff의 frozen 입력 경계는 유지했다. 코드 회귀·성능 수용은 PB0~PB4 실행 단계의 미완료 검증이며 문서 검증으로 대체하지 않는다. 이번 작업에서는 문서 두 개만 수정했으며 pytest·AI/broker 호출·배포·재기동·장후 재실행을 수행하지 않았다.
+
+## 16. 비상시감시 no_current_operating_signal 후속 개선계획
+
+[비상시감시 상세계획 NS0~NS5](main-nonfixed-native-signal-observation-and-consumption-remediation-plan-2026-10-08.md)를 기존 Main owner와 통합 R2b에 인계한다. 이번 범위는 상세계획이며 §15의 PASS 이후 수리와 구현·주문 owner를 중복 생성하지 않는다.
+
+PID 381039의 18:49~19:40 비상시감시 37종목·71회는 snapshot 부재로 반환됐다. 보존자료 재현에서는 실제 가격대의 알루코 4건·에스엠벡셀 1건이 조회 시 이미 8.836~16.631초였다. 15~20초 probe 원천 대기 뒤 신호를 한 번 조회하는 경계와 일부 branch의 60/120초 관측 부족을 보완한다. 이는 실제 주문 기회 5건 누락의 확정 증거가 아니며, 전체 71건을 같은 원인으로 분류하지 않는다.
+
+구현은 원천 사전 준비·비소비 machine-only snapshot 조회·Main의 단일 실행 claim 연결을 먼저 닫는다. 장기관측은 5개 probe 상한 안의 공정 배분·기존 60초 watchdog·exact lease 해제/편입과 함께 검증한다. 신호/result/관측 lease의 시계를 구분하여 원 5초 TTL·native 생존·원천/주문 guard를 유지한다. raw-ready의 다른 가격대/backend와 실제 selected-ready를 구분하고 기존 diagnostics/monitor에 원인 영수증을 연결한다.
+
+실제 구현 위치·단계·반례·성능 분모·복구는 NS 상세계획이 소유한다. 현재 checklist 봉인과 동일 stable ID를 유지하며 B0~B7 완료 이력·기존 §15 PB 수리·R4 430봉·compact 연구는 각각의 상태를 보존한다.
+
+후속 계획 리뷰에서 NS의 결과 전달 구간을 보완했다. scanner의 동기 panel REST와 결과 drain을 분리하고 EventBus의 실제 callback thread→Main inbox를 명시한다. 기존 단일 exact lease의 `adopted/removing`·ACK와 관측 interval을 보존하며 expected event의 원자적 claim·원 monotonic deadline을 연결한다. P0에는 이 짧은 lease의 인계 수리까지 포함하고, 60/120초 장기관측 확대만 NS1에 분리한다. pinned 기계 파일 수정은 일반 handoff만으로 해결되지 않으므로 NS §9.1의 loader/code-pin 계약을 따른다. 별도 구현·runtime 변경은 이번 문서 리뷰에 포함하지 않는다.
+
+## 17. PASS 후속 통합 구현 결과
+
+PB1의 완료 결과 우선 소비·요청별 단일 종료, PB2의 원장 사전 인덱스 준비/증분 append, PB3의 기존 compact→Sentinel→monitor 연결을 구현했다. 늦은 결과·삭제/교체된 generation도 원 ID로 꺼내 종료하고 새 요청의 상태를 지우지 않는다. accepted는 기존 실행 경로 인계이며 주문 성공이 아니다. PB4의 작업본 검증과 배포 이후 자연 수용은 분리한다.
+
+검증 수치·수정한 반례·공식 API SHA·배포 보류 경계는 [통합 실행 리뷰](../audits/main-pass-residual-history-nonfixed-implementation-review-2026-10-08.md)에 한 번 기록한다. 실행 owner는 기존 `DirectFamilySourceRepairMainMechanisticEntry`를 유지하며 이번 작업은 checklist 봉인/현행 정책을 재발행하지 않는다.

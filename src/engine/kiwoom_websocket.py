@@ -4677,6 +4677,8 @@ class KiwoomWSManager:
                                         observed_clock = datetime.fromtimestamp(now_update_ts, KST).timetz()
                                         reversal_session = _session_bucket(_explicit_item_venue(realtime_snapshot['item']), observed_clock)
                                         observe_normalized(item_code[:6], reversal_session, realtime_snapshot)
+                                        from src.engine.scalping.reversal_source_diagnostics import notify_observation
+                                        notify_observation(realtime_snapshot['item'])
                                         try:
                                             from src.engine.scalping.reversal_current_backend import backend
                                             from src.engine.monitoring.runtime_performance import record_native_ready
@@ -4877,11 +4879,13 @@ class KiwoomWSManager:
                     valid = (self._registered_item_epochs.get(item) == epoch
                              and {"0B", "0D"}.issubset(self._registered_item_types.get(item, ())))
                     return {**receipt, "registered": valid, "created": bool(existing),
+                            "interval_started_epoch": (existing or {}).get('interval_started_epoch'),
                             "reason": "existing_exact_item" if valid else "existing_exact_item_invalid"}
                 if (not socket or not self._session_ready.is_set() or epoch <= 0
                         or self._registered_item_count_locked() >= self._max_registered_item_count()):
                     return {**receipt, "reason": "exact_probe_session_or_item_budget_unavailable"}
-                self._exact_probe_item_leases[item] = {"lease_id": lease_id, "epoch": epoch}
+                self._exact_probe_item_leases[item] = {"lease_id": lease_id, "epoch": epoch,
+                                                      "interval_started_epoch": time.time()}
                 self._micro_reversion_observation_only_items.add(item)
                 self._micro_reversion_observation_route_data.pop(item, None)
                 if code not in self.subscribed_codes:
@@ -4899,6 +4903,7 @@ class KiwoomWSManager:
                          and self._registered_item_epochs.get(item) == epoch)
                 # Keep custody on uncertain sends; the caller must attempt exact REMOVE.
             result = {**receipt, "created": True, "registered": valid,
+                      "interval_started_epoch": self._exact_probe_item_leases.get(item, {}).get('interval_started_epoch'),
                       "reason": "additive_exact_item" if valid else "exact_probe_registration_unconfirmed"}
             print("[ZERO_BASE_EXACT_WS_LEASE] " + json.dumps(result, sort_keys=True))
             return result
@@ -4933,6 +4938,8 @@ class KiwoomWSManager:
             with self.lock:
                 self._registered_item_epochs.pop(item, None)
                 self._registered_item_types.pop(item, None)
+            from src.engine.scalping.reversal_source_diagnostics import invalidate_observation_interval
+            invalidate_observation_interval(item)
             await self.websocket.send(json.dumps(packet))
             with self.lock:
                 self._discard_exact_probe_item_locked(item, lease_id)

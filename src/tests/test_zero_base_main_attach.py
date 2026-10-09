@@ -13,6 +13,11 @@ from src.engine import kiwoom_orders
 from src.trading.market import session_contract
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cleanup_retries(monkeypatch):
+    monkeypatch.setattr(main, '_ZERO_BASE_CLEANUP_RETRIES', {})
+
+
 class _Session:
     def __init__(self, rows):
         self.rows = rows
@@ -94,6 +99,41 @@ def test_enter_now_commits_only_matching_attached_watching_row(monkeypatch):
     assert "zero_base_pending_db" not in targets[0]
     assert main.handle_zero_base_machine_enter(_result()) is False
     assert len(rows) == 1
+
+
+def test_invalid_db_admission_does_not_consume_native_claim(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    targets.append(dict(id=7, code='123456', status='WATCHING'))
+    from src.engine.scalping import reversal_source_diagnostics as D
+    monkeypatch.setattr(main, '_zero_base_native_handoff_valid', lambda p: True)
+    claims = []
+    monkeypatch.setattr(D, 'claim_expected_snapshot', lambda p: claims.append(p))
+    payload = dict(record_id=7, code='123456', native_observation={'deadline_perf':time.perf_counter()+5})
+    assert not main._zero_base_finalize_candidate_record(payload, attached=True)
+    assert claims == []
+    rows[7] = _Record(stock_code='123456',status='PROBE_READY',scanner_source_signature='ZERO_BASE_DISCOVERY:a')
+    monkeypatch.setattr(D, 'claim_expected_snapshot', lambda p: {'token':'native'})
+    assert main._zero_base_finalize_candidate_record(payload, attached=True)
+    assert targets[0]['_continuous_reversal_pending_claim']['token'] == 'native'
+
+
+def test_db_commit_failure_closes_consumed_claim(monkeypatch):
+    from src.engine.scalping import reversal_source_diagnostics as D, reversal_current_backend as B
+    rows, targets = _prepare(monkeypatch)
+    targets.append(dict(id=7, code='123456', status='WATCHING'))
+    rows[7] = _Record(stock_code='123456',status='PROBE_READY',scanner_source_signature='ZERO_BASE_DISCOVERY:a')
+    class FailedCommit(_Session):
+        def __exit__(self, *_):
+            raise OSError('commit failed')
+    monkeypatch.setattr(main, 'DB', SimpleNamespace(get_session=lambda: FailedCommit(rows)))
+    monkeypatch.setattr(main, '_zero_base_native_handoff_valid', lambda p: True)
+    monkeypatch.setattr(D, 'claim_expected_snapshot', lambda p: {'token':'native'})
+    closed=[]
+    monkeypatch.setattr(B, 'acknowledge_any', lambda claim, **kwargs: closed.append((claim,kwargs)))
+    assert not main._zero_base_finalize_candidate_record(dict(record_id=7,code='123456',
+        native_observation={'deadline_perf':time.perf_counter()+5}), attached=True)
+    assert closed == [({'token':'native'}, {'status':'main_attach_commit_failed'})]
+    assert '_continuous_reversal_pending_claim' not in targets[0]
 
 
 def test_integrated_aftermarket_attaches_integrated_cohort_and_sor(monkeypatch):
@@ -285,13 +325,16 @@ def test_recheck_reuses_probe_lease_then_publishes_only_final_assessment(
     assert [call["ws_wait_timeout_sec"] for call in calls] == [15.0, 6.0]
     assert [call["ws_wait_empty_timeout_sec"] for call in calls] == [10.0, 5.0]
     assert released == [("123456", "123456_AL")]
-    assert len(published) == 1
+    assert len(published) == (1 if release_raises else 2)
+    if not release_raises:
+        assert published[1][0] == 'ZERO_BASE_HANDOFF_CLOSED'
     assert published[0][1]["machine_action"] == expected_action
     assert published[0][1]["recheck_attempts"] == 2
     assert published[0][1]["recheck_followup_result"] == followup_result
     assert published[0][1]["recheck_followup_ws_observation"]["wait_ms"] == 6000
-    assert slots.acquire(blocking=False)
-    slots.release()
+    assert slots.acquire(blocking=False) is not release_raises
+    if not release_raises:
+        slots.release()
 
 
 @pytest.mark.parametrize("regime", [
@@ -611,8 +654,13 @@ def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(
     assert not slots.acquire(blocking=False)
     slots.release()
     remove_completion.set_result(remove_sent)
-    assert "123456" not in main._ZERO_BASE_PROBE_IN_FLIGHT
+    assert ("123456" not in main._ZERO_BASE_PROBE_IN_FLIGHT) is remove_sent
     assert bool(errors) is not remove_sent
+    if not remove_sent:
+        monkeypatch.setattr(main, '_zero_base_release_probe_ws', lambda *_args: True)
+        monkeypatch.setattr(main.time, 'monotonic', lambda: float('inf'))
+        main._retry_zero_base_cleanup()
+        assert "123456" not in main._ZERO_BASE_PROBE_IN_FLIGHT
     assert slots.acquire(blocking=False)
     assert slots.acquire(blocking=False)
     assert not slots.acquire(blocking=False)

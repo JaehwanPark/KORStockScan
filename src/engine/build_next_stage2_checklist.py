@@ -610,8 +610,12 @@ def _validate_direct_summary(
     ]
     if len(required_rows) != payload["required_source_count"]:
         raise RuntimeError("direct runtime summary required source census mismatch")
+    # Labels include historical owners for reading sealed older summaries.
+    # Mandatory current owners belong to the summary producer, not that map.
+    from src.engine.runtime_approval_summary import PRIMARY_DIRECT_OWNERS
+
     missing_primary_owners = sorted(
-        set(DIRECT_OWNER_TASK_LABEL) - set(payload["sources"])
+        set(PRIMARY_DIRECT_OWNERS) - set(payload["sources"])
     )
     if missing_primary_owners:
         raise RuntimeError(

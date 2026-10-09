@@ -293,3 +293,7 @@ admission·key/lock 대기·capture·예약·connect/read·이미 허용된 retr
 ## 2026-10-08 승인 구현·리뷰 인계
 
 사용자가 구현·반복 리뷰/보완·배포·재기동을 승인하여 위 계획의 생존 Main 경로를 구현했다. [구현/검증 기록](../audits/main-rest-ws-latency-implementation-review-2026-10-08.md)에 단계별 실제 소비·제외 근거·공식 원천과 성능을 연결한다. 원 5초/native claim·현재 v6/보조·Main-only/cap/quota/최종 주문 보호는 유지한다. WS 분봉은 430봉·전체 prefix가 부족하면 REST를 유지하며, terminal 원문 compaction은 exact attempt 소비 계약 때문에 제외했다. 신규 AI 비교 원장·provider/broker 검증 호출은 생성하지 않았다. 코드 종료와 배포/PID/자연 성능·경제성을 각각 확인한다.
+
+## 2026-10-08 15시 관측 후 상세 수리 인계
+
+[PID 206123 관측](../audits/main-pid-206123-post-warmup-latency-rest-ws-monitoring-2026-10-08.md)에서 워밍업 제외 849회 중 11회가 5초를 넘었고, 실제 fixed-watch Main caller의 coordinator 전달 누락과 native path 변경의 provider 실패 합산으로 14:43:58 Entry AI 비활성화를 확인했다. 앞 절의 구현/리뷰 기록은 당시 증거로 보존하고 이 새 결함은 [상세 개선계획](main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md)의 B0~B7로 보완한다. B1/B2 실제 caller·실패 책임을 먼저 닫고 B3/B4/B6 반복 journal·WS 복사·전역 cache 비용을 개선한다. LP7~LP12의 원 deadline·Main commit·필수 저장·수용 계약과 기존 실행 owner를 유지한다. 이 인계는 계획이며 코드/배포/PID 정상화 완료를 뜻하지 않는다.

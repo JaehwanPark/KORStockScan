@@ -41,7 +41,8 @@ import math
 import numpy as np
 import json
 import traceback
-from queue import Empty
+from queue import Empty, Queue, Full
+import copy
 from sqlalchemy import text
 
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
@@ -335,6 +336,47 @@ _ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(
 _ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_PROBES)
 _ZERO_BASE_PROBE_IN_FLIGHT = set()
 _ZERO_BASE_PROBE_LOCK = threading.Lock()
+_ZERO_BASE_HANDOFFS = {}
+_ZERO_BASE_CLEANUP_RETRIES = {}
+_ZERO_BASE_MAIN_INBOX = Queue(maxsize=MAX_CONCURRENT_PROBES)
+_ZERO_BASE_MAIN_PENDING = set()
+
+
+def enqueue_zero_base_machine_enter(result):
+    """Scanner callback: only an immutable message and a Main wakeup."""
+    try:
+        with _ZERO_BASE_PROBE_LOCK:
+            handoff_id = (result or {}).get('ws_handoff_id')
+            if handoff_id and handoff_id in _ZERO_BASE_MAIN_PENDING:
+                return True
+            _ZERO_BASE_MAIN_INBOX.put_nowait(copy.deepcopy(result))
+            if handoff_id:
+                _ZERO_BASE_MAIN_PENDING.add(handoff_id)
+    except Full:
+        # The worker owns terminal evidence and lease cleanup. The callback
+        # only acknowledges refusal; it must not perform disk or DB I/O.
+        with _ZERO_BASE_PROBE_LOCK:
+            handoff = _ZERO_BASE_HANDOFFS.get((result or {}).get('ws_handoff_id'))
+            if handoff is not None:
+                handoff.update(outcome='rejected', reason='main_inbox_full')
+                handoff['event'].set()
+        return False
+    coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
+    if coordinator is not None:
+        coordinator.completion_event.set()
+    return True
+
+
+def _drain_zero_base_main_inbox(limit=2):
+    for _ in range(limit):
+        try:
+            result = _ZERO_BASE_MAIN_INBOX.get_nowait()
+        except Empty:
+            break
+        try:
+            handle_zero_base_machine_enter(result)
+        except Exception:
+            _zero_base_attach_receipt(result, outcome='rejected', reason='main_attach_exception')
 
 global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
@@ -2772,6 +2814,7 @@ def _scanner_runtime_handoff_updates(payload, *, source, existing=None):
         else time.time()
     )
     return {
+        **{key: copy.deepcopy(payload[key]) for key in ('native_observation', 'ws_handoff_id') if key in payload},
         "scanner_runtime_handoff_epoch": round(float(handoff_epoch), 6),
         "scanner_runtime_handoff_source": str(source),
         "scanner_runtime_handoff_promotion_id": promotion_id,
@@ -8621,6 +8664,13 @@ def _zero_base_probe_result(request, result, reason):
 
 
 def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None):
+    if outcome in {'attached', 'rejected'}:
+        with _ZERO_BASE_PROBE_LOCK:
+            _ZERO_BASE_MAIN_PENDING.discard((result or {}).get('ws_handoff_id'))
+            handoff = _ZERO_BASE_HANDOFFS.get((result or {}).get('ws_handoff_id'))
+            if handoff is not None:
+                handoff['outcome'] = outcome
+                handoff['event'].set()
     claim = (result or {}).get("claim") or {}
     try:
         emit_pipeline_event(
@@ -8657,6 +8707,7 @@ def _zero_base_inbox_attach_receipt(payload, *, outcome, reason):
             "machine_bundle_sha256": (payload or {}).get(
                 "zero_base_probe_machine_bundle_sha256"
             ),
+            "ws_handoff_id": (payload or {}).get('ws_handoff_id'),
             "machine_observation_sha256": (payload or {}).get(
                 "zero_base_probe_machine_observation_sha256"
             ),
@@ -8680,6 +8731,19 @@ def _zero_base_release_probe_ws(code, item, lease_id=None):
         item in current_items or not current_items
     ):
         return manager.execute_unsubscribe([code])
+
+
+def _retry_zero_base_cleanup():
+    """Retry only original lease cleanup; five occupied slots bound this set."""
+    now = time.monotonic()
+    with _ZERO_BASE_PROBE_LOCK:
+        due = [key for key, (at, _) in _ZERO_BASE_CLEANUP_RETRIES.items() if at <= now]
+        callbacks = [_ZERO_BASE_CLEANUP_RETRIES.pop(key)[1] for key in due]
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception as exc:
+            log_error('[ZERO_BASE_PROBE_RELEASE] retry:' + type(exc).__name__)
 
 
 def _zero_base_probe_observation_profile(session_regime):
@@ -8745,11 +8809,23 @@ def handle_zero_base_probe_requested(request):
         _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
 
     def worker():
-        probe_lease_id = uuid.uuid4().hex
+        probe_lease_id = claim.get('physical_probe_lease_id') or uuid.uuid4().hex
         deferred_cleanup = False
         retained_ws = False
         slot_released = False
         release_pending = False
+        result_published = False
+        closed_published = False
+
+        def publish_closed():
+            nonlocal closed_published
+            with _ZERO_BASE_PROBE_LOCK:
+                if not slot_released or not result_published or closed_published:
+                    return
+                closed_published = True
+            from src.scanners.zero_base_discovery_runtime import HANDOFF_ACK_EVENT
+            event_bus.publish(HANDOFF_ACK_EVENT, dict(handoff_closed=True,
+                claim=claim, ws_handoff_id=probe_lease_id))
 
         def release_slot():
             nonlocal slot_released
@@ -8757,35 +8833,48 @@ def handle_zero_base_probe_requested(request):
                 if not slot_released:
                     _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
                     _ZERO_BASE_PROBE_SLOTS.release()
+                    _ZERO_BASE_CLEANUP_RETRIES.pop(probe_lease_id, None)
                     slot_released = True
+            publish_closed()
 
         def release_probe_ws(release_code, release_item, lease_id=None):
             nonlocal release_pending
+            release_pending = True
+            def retry():
+                with _ZERO_BASE_PROBE_LOCK:
+                    _ZERO_BASE_CLEANUP_RETRIES[probe_lease_id] = (time.monotonic()+5,
+                        lambda: release_probe_ws(release_code, release_item, lease_id))
             def on_remove_complete(future):
                 try:
                     if future.result() is not True:
                         log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":ws_remove_unconfirmed")
+                        retry()
+                        return
                 except Exception as exc:
                     log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__)
-                finally:
-                    release_slot()
+                    retry()
+                    return
+                release_slot()
 
             try:
                 completion = (_zero_base_release_probe_ws(release_code, release_item, lease_id)
                               if lease_id else _zero_base_release_probe_ws(release_code, release_item))
             except Exception:
-                release_slot()
+                retry()
                 raise
             if callable(getattr(completion, "add_done_callback", None)):
                 release_pending = True
                 try:
                     completion.add_done_callback(on_remove_complete)
                 except Exception:
-                    release_pending = False
-                    release_slot()
+                    retry()
                     raise
             else:
-                release_slot()
+                if completion is True or (completion is None and lease_id is None):
+                    release_slot()
+                else:
+                    log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":ws_remove_unconfirmed")
+                    retry()
 
         try:
             try:
@@ -8805,6 +8894,7 @@ def handle_zero_base_probe_requested(request):
                         ws_wait_partial_extension_sec=profile["partial_extension_sec"],
                         retain_ws_on_recheck=retain_on_recheck,
                         ws_lease_id=probe_lease_id,
+                        native_wait_deadline_epoch=claim.get('residence_deadline_epoch'),
                     )
 
                 result = observe_once(
@@ -8823,7 +8913,7 @@ def handle_zero_base_probe_requested(request):
                             warmup_sec=profile["recheck_warmup_sec"],
                             timeout_sec=profile["recheck_timeout_sec"],
                             empty_timeout_sec=profile["recheck_empty_timeout_sec"],
-                            retain_on_recheck=False,
+                            retain_on_recheck=True,
                         )
                     except Exception as exc:
                         followup = {
@@ -8862,7 +8952,28 @@ def handle_zero_base_probe_requested(request):
                 }
             deferred_cleanup = bool(result.pop("_ws_cleanup_deferred", False))
             result["result_epoch"] = time.time()
+            result['physical_probe_lease_id'] = probe_lease_id
+            handoff_id = None
+            if retained_ws and result.get('machine_action') == 'ENTER_NOW' and result.get('native_observation'):
+                handoff_id = probe_lease_id
+                result['ws_handoff_id'] = handoff_id
+                with _ZERO_BASE_PROBE_LOCK:
+                    _ZERO_BASE_HANDOFFS[handoff_id] = dict(event=threading.Event(), outcome=None,
+                        code=code, route=claim.get('route'), lease_id=probe_lease_id)
             event_bus.publish(PROBE_RESULT_EVENT, result)
+            result_published = True
+            publish_closed()
+            if handoff_id:
+                with _ZERO_BASE_PROBE_LOCK:
+                    handoff = _ZERO_BASE_HANDOFFS[handoff_id]
+                bound = result['native_observation']
+                handoff['event'].wait(max(0, min(bound['deadline_epoch']-time.time(),
+                                               bound['deadline_perf']-time.perf_counter())))
+                if handoff.get('outcome') is None or handoff.get('reason'):
+                    _zero_base_attach_receipt(result, outcome='rejected',
+                        reason=handoff.get('reason') or 'original_native_handoff_expired')
+                with _ZERO_BASE_PROBE_LOCK:
+                    _ZERO_BASE_HANDOFFS.pop(handoff_id, None)
         finally:
             try:
                 if retained_ws and not deferred_cleanup:
@@ -8884,11 +8995,38 @@ def handle_zero_base_probe_requested(request):
         _zero_base_probe_result(request, "probe_capacity_deferred", "probe_executor_unavailable")
 
 
+def _zero_base_native_handoff_valid(payload):
+    expected = (payload or {}).get('native_observation')
+    if expected is None:
+        return not (payload or {}).get('ws_handoff_id')  # Legacy non-native lane.
+    from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
+    if not observation_binding_valid(expected):
+        return False
+    with _ZERO_BASE_PROBE_LOCK:
+        pending = _ZERO_BASE_HANDOFFS.get(payload.get('ws_handoff_id'))
+        if pending is None or pending.get('outcome') is not None:
+            return False
+    try:
+        event = expected['snapshot'][0]
+        item = event['source_item']
+        with WS_MANAGER.lock:
+            epoch = WS_MANAGER._market_data_transport_epoch
+            lease = getattr(WS_MANAGER, '_exact_probe_item_leases', {}).get(item)
+            return bool(epoch == event['native_epoch']
+                and WS_MANAGER._registered_item_epochs.get(item) == epoch
+                and {'0B','0D'}.issubset(WS_MANAGER._registered_item_types.get(item, ()))
+                and (lease is None or (lease.get('lease_id') == payload.get('ws_handoff_id')
+                                       and not lease.get('removing'))))
+    except (AttributeError, KeyError, TypeError):
+        return False
+
+
 def _zero_base_finalize_candidate_record(payload, *, attached):
     record_id = (payload or {}).get("record_id")
     code = str((payload or {}).get("code") or "").strip()[:6]
     if not record_id or not code:
         return False
+    native_claim = None
     try:
         with ENTRY_LOCK:
             attached_target = next(
@@ -8899,6 +9037,7 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
             )
             if attached and attached_target is None:
                 return False
+            expected = (payload or {}).get('native_observation')
             with DB.get_session() as session:
                 row = session.get(RecommendationHistory, int(record_id))
                 if (
@@ -8910,11 +9049,29 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
                     )
                 ):
                     return False
+                # Validate durable admission before consuming the single-use
+                # native claim. A missing/stale row has no claim authority.
+                if attached and expected is not None:
+                    if not _zero_base_native_handoff_valid(payload):
+                        return False
+                    from src.engine.scalping.reversal_source_diagnostics import claim_expected_snapshot
+                    native_claim = claim_expected_snapshot(expected)
+                    if native_claim is None:
+                        return False
                 row.status = "WATCHING" if attached else "EXPIRED"
             if attached_target is not None and attached:
                 attached_target.pop("zero_base_pending_db", None)
+                if native_claim is not None:
+                    attached_target['_continuous_reversal_pending_claim'] = native_claim
+                    attached_target['_entry_native_deadline_binding'] = {
+                        'claim_token': native_claim['token'],
+                        'deadline_perf': expected['deadline_perf'],
+                    }
             return True
     except Exception as exc:
+        if native_claim is not None:
+            from src.engine.scalping.reversal_current_backend import acknowledge_any
+            acknowledge_any(native_claim, status='main_attach_commit_failed')
         log_error("[ZERO_BASE_ATTACH_DB] finalize failed: " + type(exc).__name__)
         return False
 
@@ -8949,6 +9106,15 @@ def handle_zero_base_machine_enter(result):
     code = str(claim.get("code") or "")
     route = str(claim.get("route") or "")
     now_epoch = time.time()
+    expected = result.get('native_observation')
+    from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
+    if ((result.get('physical_probe_lease_id') and expected is None)
+            or (expected is not None and not observation_binding_valid(expected, now=now_epoch))):
+        _zero_base_attach_receipt(result, outcome='rejected', reason='original_native_deadline_expired')
+        return False
+    if expected is not None and not _zero_base_native_handoff_valid(result):
+        _zero_base_attach_receipt(result, outcome='rejected', reason='native_handoff_lease_unavailable')
+        return False
     if (
         not _zero_base_runtime_enabled()
         or result.get("result") != "assessed"
@@ -9001,6 +9167,7 @@ def handle_zero_base_machine_enter(result):
         f"{int(claim.get('claim_count') or 0)}"
     )
     payload = {
+        **{key: copy.deepcopy(result[key]) for key in ('native_observation', 'ws_handoff_id') if key in result},
         "code": code,
         "name": candidate.get("name") or code,
         "strategy": "SCALPING",
@@ -12317,6 +12484,13 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
     def _worker() -> None:
         next_maintenance = time.monotonic() + 1.0
         while not stop_event.wait(0.1):
+            _retry_zero_base_cleanup()
+            try:
+                from src.engine.scalping.ai_decision_trace import prepare_ai_request_capture
+                prepare_ai_request_capture()
+            except Exception as exc:
+                from src.engine.monitoring.runtime_performance import failure
+                failure('trace_dedup_prepare', type(exc).__name__)
             capacity_result = sniper_state_handlers.prepare_pending_entry_capacity()
             if capacity_result.get("status") != "idle":
                 run_sniper.entry_economic_capacity_preparation_receipt = capacity_result
@@ -12524,7 +12698,7 @@ def run_sniper(is_test_mode=False):
         event_bus.subscribe("CONDITION_MATCHED", handle_condition_matched)
         event_bus.subscribe("CONDITION_UNMATCHED", handle_condition_unmatched)
         event_bus.subscribe(PROBE_REQUEST_EVENT, handle_zero_base_probe_requested)
-        event_bus.subscribe(MACHINE_ENTER_EVENT, handle_zero_base_machine_enter)
+        event_bus.subscribe(MACHINE_ENTER_EVENT, enqueue_zero_base_machine_enter)
         event_bus.subscribe(
             "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
             handle_scalping_scanner_promotion_batch_pending,
@@ -12886,16 +13060,6 @@ def run_sniper(is_test_mode=False):
             )
         while True:
             loop_work_started = time.perf_counter()
-            # Daily trace indexes are maintenance, before fresh input capture
-            # and the AI request deadline. Warm once per date, also on rollover.
-            if ai_engine is not None:
-                from src.engine.scalping.ai_decision_trace import prepare_ai_request_capture
-                try:
-                    trace_preparation = prepare_ai_request_capture()
-                    if trace_preparation:
-                        log_info(f"[AI_TRACE_PREPARED] {trace_preparation}")
-                except Exception as exc:
-                    log_error(f"[AI_TRACE_PREPARATION_FAILED] {type(exc).__name__}")
             now_ts = time.time()
             now = datetime.now()
             now_t = now.time()
@@ -14534,6 +14698,7 @@ def run_sniper(is_test_mode=False):
             runtime_scheduler_forced_target_ids = set()
 
             def _admit_runtime_live_attaches():
+                _drain_zero_base_main_inbox()
                 nonlocal runtime_work_queue, scanner_heavy_eval_flushed
                 runtime_work_queue, scheduler_continuations = (
                     _runtime_requeue_pending_scanner_scheduler_targets(
@@ -14715,6 +14880,16 @@ def run_sniper(is_test_mode=False):
                     )
                 else:
                     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                if (status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock)
+                        and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+                        and async_coordinator.has_completed(
+                            generation_id=stock.get('_scanner_async_generation_id', ''),
+                            cache_key=stock.get('_scanner_async_cache_key', ''))):
+                    sniper_state_handlers.handle_watching_state(stock, code, ws_data or {}, admin_id,
+                        now_ts=time.time(), now_dt=datetime.now(), radar=radar, ai_engine=ai_engine,
+                        scanner_async_eval_coordinator=async_coordinator,
+                        scanner_async_commit_phase=True)
+                    continue
                 if status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
                     if not main_fixed_watch.symbol_enabled(code):
                         continue
@@ -16267,8 +16442,7 @@ def run_sniper(is_test_mode=False):
 
             coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
             if coordinator is not None:
-                coordinator.completion_event.wait(_sleep_ms / 1000.0)
-                coordinator.completion_event.clear()
+                coordinator.wait_for_completion(_sleep_ms / 1000.0)
             else:
                 time.sleep(_sleep_ms / 1000.0)
 

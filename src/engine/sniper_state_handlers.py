@@ -3050,6 +3050,17 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False,
         if source_only and wait_budget > 0:
             bounds["source_read_rate_max_wait_sec"] = wait_budget
         fetch_started = True
+        if source_only and preparation_deadline_epoch is not None:
+            from src.engine.scalping.entry_deadline import EntryDeadline
+            parent = kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
+            budget = EntryDeadline.create(
+                caller_epoch=preparation_deadline_epoch,
+                caller_perf=parent.perf if parent else None)
+            with kiwoom_utils.entry_source_budget(budget):
+                result = kiwoom_utils.get_orderable_by_margin_kt00011(
+                    KIWOOM_TOKEN, code, unit_price=price, request_purpose=purpose,
+                    read_meta=read_meta, **bounds)
+                return result
         return kiwoom_utils.get_orderable_by_margin_kt00011(
             KIWOOM_TOKEN, code, unit_price=price, request_purpose=purpose,
             read_meta=read_meta, **bounds)
@@ -3179,16 +3190,20 @@ def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch,
             return {"status": "source_gap", "reason": "capacity_preparation_deadline_deferred"}
         if _entry_capacity_receipt_valid(receipt, code, price, time.time()):
             return {"status": "ready", "reuse_status": receipt.get("capacity_reuse_status")}
-        if receipt.get("error") == "capacity_source_inflight_other_frame":
-            _request_entry_capacity_preparation({}, code, {"curr": price})
         return {"status": "source_gap", "reason": receipt.get("error") or "kt00011_empty"}
     except Exception as exc:
+        if time.time() >= float(deadline_epoch):
+            return {"status": "source_gap", "reason": "capacity_preparation_deadline_deferred"}
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
 
-def _request_entry_capacity_preparation(stock, code, ws_data):
-    """Nonblocking legacy preparation; no evaluation result is ever backfilled."""
+def _request_entry_capacity_preparation(stock, code, ws_data, *, context=None):
+    """Reserve only an existing, unexpired evaluation demand; never invent TTL."""
     try:
+        if not isinstance(context, ScannerAsyncEvalContext) or context.expired():
+            return False
+        if context.generation.code != code or context.state_version != _scanner_async_entry_state_version(stock):
+            return False
         price = _safe_int((ws_data or {}).get("curr"), 0)
         if (price <= 0 or _safe_int(stock.get("buy_qty"), 0) > 0
                 or _is_any_simulated_position(stock, stock.get("strategy"))):
@@ -3206,14 +3221,17 @@ def _request_entry_capacity_preparation(stock, code, ws_data):
             # Coalesce a changed quote for the same symbol instead of spending
             # the existing worker on obsolete prices. No historical backfill.
             obsolete_keys = [k for k, v in _ENTRY_CAPACITY_PENDING.items()
-                             if v[0] == code and k != key]
+                             if v[0] == code and k != key and v[3].request_id == context.request_id]
+            if any(v[0] == code and v[3].request_id != context.request_id
+                   for v in _ENTRY_CAPACITY_PENDING.values()):
+                return False
             if (key not in _ENTRY_CAPACITY_PENDING
                     and len(_ENTRY_CAPACITY_PENDING)-len(obsolete_keys) >= 8):
                 return False
             for obsolete in obsolete_keys:
                 _ENTRY_CAPACITY_PENDING.pop(obsolete)
             if key not in _ENTRY_CAPACITY_PENDING:
-                _ENTRY_CAPACITY_PENDING[key] = (code, price, now_ts + 5.0)
+                _ENTRY_CAPACITY_PENDING[key] = (code, price, context.deadline_epoch, context, stock)
                 created = True
             deadline = _ENTRY_CAPACITY_PENDING[key][2]
         if created:
@@ -3238,18 +3256,23 @@ def prepare_pending_entry_capacity():
         if not _ENTRY_CAPACITY_PENDING:
             return {"status": "idle"}
         key = next(iter(_ENTRY_CAPACITY_PENDING))
-        code, price, deadline = _ENTRY_CAPACITY_PENDING.pop(key)
+        code, price, deadline, context, stock = _ENTRY_CAPACITY_PENDING.pop(key)
     try:
-        if time.time() >= deadline or key != _entry_capacity_receipt_key(code, price):
+        if (context.expired() or context.state_version != _scanner_async_entry_state_version(stock)
+                or key != _entry_capacity_receipt_key(code, price)):
             return {"status": "skipped", "reason": "expired_or_changed_scope"}
-        return _prefetch_entry_capacity_for_async_evaluation(code, {"curr": price}, deadline,
-            correlation_id=hashlib.sha256(repr((key, deadline)).encode()).hexdigest())
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        with kiwoom_utils.entry_source_budget(EntryDeadline.create(
+                caller_epoch=deadline, caller_perf=context.deadline_perf)):
+            return _prefetch_entry_capacity_for_async_evaluation(code, {"curr": price}, deadline,
+                correlation_id=context.request_id)
     except Exception as exc:
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
 
 def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount, *, source_only=False,
-                                      reuse_only=False, purpose=None, correlation_id=None, diagnostic_context=None):
+                                      reuse_only=False, purpose=None, correlation_id=None, diagnostic_context=None,
+                                      preparation_deadline_epoch=None):
     fallback = max(0, _safe_int(fallback_orderable_amount, 0))
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
     kt00001_floor_applied = bool(deposit_meta.get("minimum_floor_applied", False))
@@ -3283,6 +3306,8 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
             code, _safe_int(unit_price, 0), source_only=source_only,
             purpose=purpose, correlation_id=correlation_id,
             diagnostic_context=diagnostic_context,
+            **({'preparation_deadline_epoch': preparation_deadline_epoch}
+               if preparation_deadline_epoch is not None else {}),
             **({"reuse_only": True} if source_only and reuse_only else {}),
         )
     except Exception as exc:
@@ -12400,8 +12425,12 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         source['entry_economic_original_stop_receipt'] = {**original_stop, 'sha256': digest(original_stop)}
         # Preserve every machine anchor; non-entry economics may use an exact
         # existing receipt but cannot issue another synchronous account read.
+        original_budget = kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
         budget = _resolve_scalp_cash_budget_context(code, current, 0, source_only=True,
-            reuse_only=assessment.get("action") != "ENTER_NOW",
+            reuse_only=(assessment.get("action") != "ENTER_NOW" or original_budget is None
+                        or original_budget.remaining() <= 0),
+            purpose='entry_capacity_prefetch',
+            preparation_deadline_epoch=original_budget.epoch if original_budget is not None else None,
             correlation_id=capture.get("evaluation_attempt_id"),
             diagnostic_context={"broker_route": broker_route, "effective_venue": venue,
                 "session_bucket": identity["market_session_bucket"], "mechanistic_action": assessment.get("action")})
@@ -12528,6 +12557,9 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if isinstance(stock, dict) and isinstance(stock.get('_async_consumption_guard'), dict):
+        stock['_async_consumption_guard'].update(stage=stage,
+            reason=fields.get('reason') or fields.get('skip_reason') or stage)
     if stage == 'order_leg_request' and isinstance(stock, dict):
         from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
         mark_signal(machine_signal_id(stock.get('last_watching_ai_machine_primary_fields')), 'guard_done')
@@ -61572,6 +61604,7 @@ def _discard_orphaned_fixed_watch_result(coordinator, result, targets):
                stage='async_completed_manual_veto', now_ts=time.time()) for s in owned):
         return False
     coordinator.discard_completed(generation_id=result.generation_id, cache_key=result.cache_key)
+    _record_async_disposition(result, 'terminal_nonexecution', 'target_removed_or_state_changed')
     claim = thaw_scanner_async_value(result.native_claim)
     if claim:
         from src.engine.scalping.reversal_current_backend import acknowledge_any
@@ -61583,6 +61616,39 @@ def _discard_orphaned_fixed_watch_result(coordinator, result, targets):
         if (s.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
             s.pop('_continuous_reversal_pending_claim', None)
     return True
+
+
+def _record_async_disposition(result, disposition, reason):
+    """Small original-result receipt; diagnostic failure grants no execution."""
+    from src.engine.scalping.scanner_async_eval import record_async_disposition
+    return record_async_disposition(result, disposition, reason)
+
+
+def _native_handoff_deadline_perf(stock, claim):
+    """Only the original native claim inherits its observation clock."""
+    binding = stock.get('_entry_native_deadline_binding') or {}
+    if (claim or {}).get('token') and binding.get('claim_token') == claim['token']:
+        return binding.get('deadline_perf')
+    return None
+
+
+def _clear_scanner_async_identity(stock, *, generation_id, cache_key, claim=None,
+                                  clear_recheck=False):
+    """A completed attempt must not erase a successor's preparation or claim."""
+    with ENTRY_LOCK:
+        if (stock.get('_scanner_async_generation_id') == generation_id
+                and stock.get('_scanner_async_cache_key') == cache_key):
+            for key in ('_scanner_async_generation_id', '_scanner_async_cache_key',
+                        '_scanner_async_state_version', '_scanner_async_submitted_at'):
+                stock.pop(key, None)
+            if clear_recheck:
+                stock.pop('_scanner_async_expired_response_recheck_until_epoch', None)
+                stock.pop('_scanner_async_expired_parent_snapshot_id', None)
+        token = (claim or {}).get('token')
+        if token and (stock.get('_fixed_watch_async_claim') or {}).get('token') == token:
+            stock.pop('_fixed_watch_async_claim', None)
+        if token and (stock.get('_entry_native_deadline_binding') or {}).get('claim_token') == token:
+            stock.pop('_entry_native_deadline_binding', None)
 
 
 def _resolve_scanner_async_entry_ai(
@@ -61602,11 +61668,23 @@ def _resolve_scanner_async_entry_ai(
     from src.engine.scalping.entry_deadline import claim_deadline_epoch
     coordinator = runtime.get("scanner_async_eval_coordinator")
     generation = runtime.get("scanner_async_generation")
+    origin_generation_id = stock.get('_scanner_async_generation_id')
+    origin_cache_key = stock.get('_scanner_async_cache_key')
     scope_epoch = time.time()
     fixed_route = _fixed_watch_entry_source_route(stock, scope_epoch)
     fixed_watch = bool(fixed_route)
     claim = copy.deepcopy(stock.get('_fixed_watch_async_claim') or stock.get('_continuous_reversal_pending_claim'))
-    if fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and not claim:
+    retained = (coordinator.peek_completed(
+        generation_id=stock.get('_scanner_async_generation_id', ''),
+        cache_key=stock.get('_scanner_async_cache_key', ''))
+        if isinstance(coordinator, ScannerAsyncEvalCoordinator) else None)
+    if retained is not None:
+        # Consume by the immutable request identity even after its signal expires.
+        claim = thaw_scanner_async_value(retained.native_claim) or claim
+        generation = retained.original_generation or generation
+        if retained.generation_kind == 'fixed_watch':
+            fixed_watch = True
+    if retained is None and fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and not claim:
         # A registered native scope remains enabled while it has no signal.
         # Falling back to inline REST here blocks Main before any eligible
         # claim exists. Other backends keep their original preparation path.
@@ -61621,9 +61699,8 @@ def _resolve_scanner_async_entry_ai(
             cell = (family.get('machine_cells', {}).get(key, {}).get('routes', {})
                     .get(fixed_route['broker_route'], {}))
             if cell.get('backend') in {'union_v5', 'union_v6'}:
-                _request_entry_capacity_preparation(stock, code, ws_data)
                 return {'status': 'waiting_native_signal', 'reason': 'native_signal_not_ready'}
-    if fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and claim:
+    if retained is None and fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and claim:
         try:
             generation = FixedWatchGeneration.from_claim(code, claim)
             if (fixed_route['item'] != claim['snapshot'][0].get('source_item')
@@ -61637,18 +61714,15 @@ def _resolve_scanner_async_entry_ai(
                     return {"status":"pending", "reason":"invalid_claim_physical_work_draining"}
             from src.engine.scalping.reversal_current_backend import acknowledge_any
             acknowledge_any(claim, status='async_commit_rejected')
-            for key in ('_scanner_async_generation_id', '_scanner_async_cache_key',
-                        '_scanner_async_state_version', '_scanner_async_submitted_at'):
-                stock.pop(key, None)
+            _clear_scanner_async_identity(stock, generation_id=origin_generation_id,
+                cache_key=origin_cache_key, claim=claim)
             if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
                 stock.pop('_continuous_reversal_pending_claim', None)
-            stock.pop('_fixed_watch_async_claim', None)
             return {"status":"commit_rejected", "reason":str(exc)}
     if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(generation, (ScannerGeneration, FixedWatchGeneration)):
-        _request_entry_capacity_preparation(stock, code, ws_data)
         return {"status": "not_enabled"}
 
-    cache_key = _scanner_async_entry_cache_key(
+    cache_key = retained.cache_key if retained is not None else _scanner_async_entry_cache_key(
         stock,
         generation=generation,
         trigger_reason=trigger_reason,
@@ -61668,16 +61742,19 @@ def _resolve_scanner_async_entry_ai(
         now_epoch = time.time()
         commit_started = time.perf_counter()
         native_valid = True
-        if fixed_watch:
+        if claim:
             try:
                 from src.engine.scalping.reversal_current_backend import backend
                 from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
                 validate_claim_with_receipt(claim, backend()._GENERATION, now=now_epoch, live_clock=True)
+                if fixed_watch and (not fixed_route or fixed_route['item'] != claim['snapshot'][0].get('source_item')
+                        or fixed_route['broker_route'] != generation.venue):
+                    native_valid = False
             except ValueError:
                 native_valid = False
         decision = validate_scanner_async_commit(
             result,
-            current_generation=generation,
+            current_generation=(generation if fixed_watch else runtime.get('scanner_async_generation')),
             current_status=stock.get("status") or "",
             current_venue=(generation.venue if fixed_watch and native_valid else stock.get("effective_venue"))
             or stock.get("venue")
@@ -61685,7 +61762,7 @@ def _resolve_scanner_async_entry_ai(
             current_source_signature=(generation.source_signature if fixed_watch and native_valid else stock.get("source_signature"))
             or stock.get("scanner_source_signature")
             or "",
-            venue_resolution_valid=(native_valid if fixed_watch else bool(
+            venue_resolution_valid=(native_valid if fixed_watch else native_valid and bool(
                 str(stock.get("venue_resolution") or "").strip()
                 and not any(
                     token in str(stock.get("venue_resolution") or "").strip().lower()
@@ -61762,26 +61839,13 @@ def _resolve_scanner_async_entry_ai(
             and decision.allowed
             and stock.get("_scanner_async_expired_parent_snapshot_id")
         )
-        _mutate_stock_state(
-            stock,
-            pop_fields=[
-                "_scanner_async_generation_id",
-                "_scanner_async_cache_key",
-                "_scanner_async_state_version",
-                "_scanner_async_submitted_at",
-                *(
-                    [
-                        "_scanner_async_expired_response_recheck_until_epoch",
-                        "_scanner_async_expired_parent_snapshot_id",
-                    ]
-                    if completed_after_expired_recheck
-                    else []
-                ),
-            ],
-        )
-        stock.pop("_fixed_watch_async_claim", None)
+        _record_async_disposition(result,
+            'accepted_to_entry_path' if decision.allowed else 'rejected', decision.reason)
+        _clear_scanner_async_identity(stock, generation_id=result.generation_id,
+            cache_key=result.cache_key, claim=claim,
+            clear_recheck=completed_after_expired_recheck)
         if not decision.allowed:
-            if fixed_watch and claim:
+            if claim:
                 from src.engine.scalping.reversal_current_backend import acknowledge_any
                 acknowledge_any(claim, status='async_commit_rejected')
                 if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
@@ -61804,6 +61868,7 @@ def _resolve_scanner_async_entry_ai(
             "ai_decision": thaw_scanner_async_value(result.ai_payload),
             "reversal_signal_claim": copy.deepcopy(claim),
             "completed_epoch": result.completed_epoch,
+            "original_result": result,
         }
 
     if coordinator.is_pending(
@@ -61824,6 +61889,7 @@ def _resolve_scanner_async_entry_ai(
         stock_snapshot={**stock, '_continuous_reversal_pending_claim':claim} if claim else stock,
         ws_snapshot=ws_data,
         state_version=state_version,
+        caller_deadline_perf=_native_handoff_deadline_perf(stock, claim),
     )
 
     def prepare_sources(
@@ -62130,9 +62196,8 @@ def _handle_watching_strategy_branch(
         if pos_tag in {"VCP_CANDID", "VCP_SHOOTING", "VCP_NEXT"}:
             return False
 
-        opening_rotation_handled = _handle_watching_opening_rotation(
-            stock, code, ws_data, runtime, config
-        )
+        opening_rotation_handled = (False if runtime.get("completed_async_resolution") else
+            _handle_watching_opening_rotation(stock, code, ws_data, runtime, config))
         if opening_rotation_handled:
             return True
         opening_rotation_handoff_defers_baseline = (
@@ -62186,7 +62251,7 @@ def _handle_watching_strategy_branch(
         big_bite_confirmed = False
         big_bite_info = {}
         rising_missed_normal_buy_bridge_fields = {}
-        entry_arm = _get_live_entry_arm(stock, code)
+        entry_arm = None if runtime.get("completed_async_resolution") else _get_live_entry_arm(stock, code)
 
         if entry_arm:
             current_ai_score = float(
@@ -62218,881 +62283,905 @@ def _handle_watching_strategy_branch(
             )
             is_trigger = True
         else:
-            _reset_scalp_pre_ai_gate_context(stock, ws_data)
-            ws_data, pre_ai_ws_refresh_fields = _pre_ai_refresh_quote_ws_snapshot(
-                code,
-                ws_data,
-                strategy,
-            )
-            if (
-                pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied")
-                or pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_reason")
-                == "input_snapshot_fresh"
-            ):
-                curr_price = _safe_int(ws_data.get("curr"), curr_price) or curr_price
-                current_vpw = _safe_float(ws_data.get("v_pw"), current_vpw)
-                fluctuation = _safe_float(
-                    ws_data.get("fluctuation", ws_data.get("fluctuation_rate")),
-                    fluctuation,
-                )
-                ask_tot = _safe_int(ws_data.get("ask_tot"), ask_tot)
-                bid_tot = _safe_int(ws_data.get("bid_tot"), bid_tot)
-                liquidity_totals_present = "ask_tot" in ws_data and "bid_tot" in ws_data
-                liquidity_missing_fields = (
-                    ",".join(
-                        field
-                        for field in ("ask_tot", "bid_tot")
-                        if field not in ws_data
-                    )
-                    or "-"
-                )
-                open_price = float(ws_data.get("open", open_price) or open_price)
-                intraday_surge = (
-                    ((curr_price - open_price) / open_price) * 100
-                    if open_price > 0
-                    else fluctuation
-                )
-                liquidity_value = (ask_tot + bid_tot) * curr_price
-                runtime["liquidity_value"] = int(liquidity_value)
-                runtime["scalp_liquidity_value"] = int(liquidity_value)
-                runtime["scalp_liquidity_source_quality"] = (
-                    "valid_orderbook_totals"
-                    if liquidity_totals_present
-                    else "missing_orderbook_totals"
-                )
-            if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
-                overbought_best_ask, overbought_best_bid = _get_best_levels_from_ws(
-                    ws_data
-                )
-                overbought_bbo_valid = bool(
-                    overbought_best_ask > 0
-                    and overbought_best_bid > 0
-                    and overbought_best_ask >= overbought_best_bid
-                    and pre_ai_ws_refresh_fields.get(
-                        "pre_ai_ws_snapshot_refresh_reason"
-                    )
-                    in {"input_snapshot_fresh", "latest_ws_snapshot_fresh"}
-                )
-                overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
-                overbought_risk = _classify_overbought_risk(
-                    overlap_snapshot,
-                    intraday_surge=intraday_surge,
-                    max_intraday_surge=max_intraday_surge,
-                )
-                overbought_context = _register_scalp_pre_ai_gate_context(
-                    stock,
+            completed_resolution = runtime.get("completed_async_resolution")
+            if completed_resolution is None:
+                _reset_scalp_pre_ai_gate_context(stock, ws_data)
+                ws_data, pre_ai_ws_refresh_fields = _pre_ai_refresh_quote_ws_snapshot(
+                    code,
                     ws_data,
-                    "overbought",
-                    {
-                        **overbought_risk,
-                        "threshold_family": "overbought_pullback_guard_p1",
-                        "gate_action": "risk_context_only",
-                        "legacy_blocked_stage": "blocked_overbought",
-                        "fluctuation": f"{fluctuation:.2f}",
-                        "intraday_surge": f"{intraday_surge:.2f}",
-                        "max_surge": f"{max_surge:.2f}",
-                        "max_intraday_surge": f"{max_intraday_surge:.2f}",
-                    },
-                )
-                _mutate_stock_state(
-                    stock, set_fields={"last_ai_overlap_snapshot": overlap_snapshot}
-                )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_overbought",
-                    **_build_pre_ai_gate_contract_fields(
-                        "overbought_pullback_guard_p1",
-                        gate_action="risk_context_only",
-                    ),
-                    fluctuation=f"{fluctuation:.2f}",
-                    intraday_surge=f"{intraday_surge:.2f}",
-                    max_surge=f"{max_surge:.2f}",
-                    max_intraday_surge=f"{max_intraday_surge:.2f}",
-                    marcap=marcap,
-                    cap_bucket=scalp_limits.get("bucket_label"),
-                    risk_state=overbought_context.get("risk_state"),
-                    risk_bucket=overbought_context.get("risk_bucket"),
-                    curr_price=int(curr_price),
-                    open_price=f"{open_price:.2f}",
-                    counterfactual_entry_executable_best_ask=(
-                        overbought_best_ask if overbought_bbo_valid else 0
-                    ),
-                    counterfactual_entry_executable_best_bid=(
-                        overbought_best_bid if overbought_bbo_valid else 0
-                    ),
-                    counterfactual_entry_price_source=(
-                        "fresh_ws_snapshot_executable_bbo_ask"
-                        if overbought_bbo_valid
-                        else "missing_fresh_executable_bbo"
-                    ),
-                    counterfactual_entry_bbo_source_quality=(
-                        "pass" if overbought_bbo_valid else "blocked"
-                    ),
-                    **_pre_ai_blocked_gate_quality_fields(
-                        gate_name="overbought",
-                        ws_data=ws_data,
-                        refresh_fields=pre_ai_ws_refresh_fields,
-                    ),
-                    **_merge_entry_pipeline_field_groups(
-                        _build_ai_input_not_evaluated_fields("pre_ai_overbought_gate"),
-                        _build_ai_overlap_log_fields(
-                            stock=stock,
-                            ai_score=current_ai_score,
-                            momentum_tag=stock.get("entry_momentum_tag"),
-                            threshold_profile=stock.get("entry_threshold_profile"),
-                            overbought_blocked=True,
-                            blocked_stage="blocked_overbought",
-                            overlap_snapshot=overlap_snapshot,
-                        ),
-                    ),
-                )
-                _append_trade_quality_block_history(
-                    stock,
-                    stage="blocked_overbought",
-                    risk_state=overbought_context.get("risk_state"),
-                )
-                overbought_baseline_would_block = not _rule_bool(
-                    "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                    strategy,
                 )
                 if (
-                    overbought_baseline_would_block
-                    and not opening_rotation_handoff_defers_baseline
+                    pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied")
+                    or pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_reason")
+                    == "input_snapshot_fresh"
                 ):
-                    return False
-                if (
-                    opening_rotation_handoff_defers_baseline
-                    and overbought_baseline_would_block
-                ):
-                    _record_opening_rotation_pre_ai_baseline_deferral(
-                        stock,
-                        code,
-                        runtime,
-                        gate="overbought",
-                        reason=overbought_context.get("risk_state"),
+                    curr_price = _safe_int(ws_data.get("curr"), curr_price) or curr_price
+                    current_vpw = _safe_float(ws_data.get("v_pw"), current_vpw)
+                    fluctuation = _safe_float(
+                        ws_data.get("fluctuation", ws_data.get("fluctuation_rate")),
+                        fluctuation,
                     )
-
-            try:
-                tick_data = build_tick_data_from_ws(ws_data)
-                big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
-                    stock=stock,
-                    code=code,
-                    ws_data=ws_data,
-                    tick_data=tick_data,
-                    runtime_state=BIG_BITE_STATE,
-                )
-                big_bite_confirmed, confirm_info = confirm_big_bite_follow_through(
-                    stock=stock,
-                    code=code,
-                    ws_data=ws_data,
-                    runtime_state=BIG_BITE_STATE,
-                )
-                big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
-            except Exception as exc:
-                log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
-
-            _mutate_stock_state(
-                stock,
-                set_fields={
-                    "big_bite_confirmed": bool(big_bite_confirmed),
-                    "big_bite_info": big_bite_info or {},
-                    "big_bite_triggered": bool(big_bite_armed),
-                },
-            )
-
-            gate_tags = config["BIG_BITE_HARD_GATE_TAGS_SCALPING"]
-            hard_gate_required = bool(
-                config["BIG_BITE_HARD_GATE_ENABLED"]
-                and gate_tags
-                and any(tag in pos_tag for tag in gate_tags)
-            )
-            _mutate_stock_state(
-                stock,
-                set_fields={
-                    "big_bite_hard_gate_required": hard_gate_required,
-                    "big_bite_hard_gate_blocked": bool(
-                        hard_gate_required and not big_bite_confirmed
-                    ),
-                    "big_bite_hard_gate_tags": gate_tags,
-                },
-            )
-
-            if hard_gate_required and not big_bite_confirmed:
-                _mutate_stock_state(
-                    stock, set_fields={"big_bite_block_reason": "hard_gate"}
-                )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_big_bite_hard_gate",
-                    required=hard_gate_required,
-                    triggered=big_bite_armed,
-                    confirmed=big_bite_confirmed,
-                    position_tag=pos_tag,
-                )
-                return False
-
-            if radar is None:
-                _log_entry_pipeline(
-                    stock, code, "blocked_missing_radar", strategy=strategy
-                )
-                return False
-
-            observe_only = bool(_rule("SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
-            if not pre_ai_ws_refresh_fields.get(
-                "pre_ai_ws_snapshot_refresh_applied"
-            ):
-                ws_data, pre_ai_ws_refresh_fields = (
-                    _pre_ai_refresh_strength_momentum_ws_snapshot(
-                        code,
-                        ws_data,
-                        strategy,
+                    ask_tot = _safe_int(ws_data.get("ask_tot"), ask_tot)
+                    bid_tot = _safe_int(ws_data.get("bid_tot"), bid_tot)
+                    liquidity_totals_present = "ask_tot" in ws_data and "bid_tot" in ws_data
+                    liquidity_missing_fields = (
+                        ",".join(
+                            field
+                            for field in ("ask_tot", "bid_tot")
+                            if field not in ws_data
+                        )
+                        or "-"
                     )
-                )
-            if pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied"):
-                curr_price = (
-                    _safe_int(ws_data.get("curr"), curr_price) or curr_price
-                )
-                current_vpw = _safe_float(ws_data.get("v_pw"), current_vpw)
-            momentum_ws_data = dict(ws_data or {})
-            momentum_ws_data["_position_tag"] = pos_tag
-            momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
-            momentum_gate.update(pre_ai_ws_refresh_fields)
-            _mutate_stock_state(
-                stock,
-                set_fields={
-                    "entry_momentum_tag": momentum_gate.get("position_tag"),
-                    "entry_threshold_profile": momentum_gate.get(
-                        "threshold_profile"
-                    ),
-                },
-            )
-            if momentum_gate.get("enabled"):
-                _log_strength_momentum_observation(stock, code, momentum_gate)
-                if not momentum_gate.get("allowed"):
-                    source_quality_block_reason = (
-                        _strength_momentum_source_quality_block_reason(
-                            ws_data, momentum_gate
-                        )
+                    open_price = float(ws_data.get("open", open_price) or open_price)
+                    intraday_surge = (
+                        ((curr_price - open_price) / open_price) * 100
+                        if open_price > 0
+                        else fluctuation
                     )
-                    strength_gate_quality_fields = (
-                        _pre_ai_blocked_gate_quality_fields(
-                            gate_name="strength_momentum",
-                            ws_data=ws_data,
-                            gate_result=momentum_gate,
-                            refresh_fields=pre_ai_ws_refresh_fields,
-                        )
+                    liquidity_value = (ask_tot + bid_tot) * curr_price
+                    runtime["liquidity_value"] = int(liquidity_value)
+                    runtime["scalp_liquidity_value"] = int(liquidity_value)
+                    runtime["scalp_liquidity_source_quality"] = (
+                        "valid_orderbook_totals"
+                        if liquidity_totals_present
+                        else "missing_orderbook_totals"
                     )
-                    stability_recheck = (
-                        _strength_momentum_stability_recheck_decision(
-                            stock,
-                            ws_data,
-                            momentum_gate,
-                            strength_gate_quality_fields,
-                            source_quality_block_reason=source_quality_block_reason,
-                            now_ts=now_ts,
-                        )
+                if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
+                    overbought_best_ask, overbought_best_bid = _get_best_levels_from_ws(
+                        ws_data
                     )
-                    if stability_recheck.get("pending"):
-                        recheck_count = _safe_int(
-                            stability_recheck.get("recheck_attempt_count"), 0
+                    overbought_bbo_valid = bool(
+                        overbought_best_ask > 0
+                        and overbought_best_bid > 0
+                        and overbought_best_ask >= overbought_best_bid
+                        and pre_ai_ws_refresh_fields.get(
+                            "pre_ai_ws_snapshot_refresh_reason"
                         )
-                        recheck_after = _safe_float(
-                            stability_recheck.get("recheck_after_epoch"), 0.0
-                        )
-                        _mutate_stock_state(
-                            stock,
-                            set_fields={
-                                "entry_strength_momentum_recheck_pending": True,
-                                "entry_strength_momentum_recheck_reason": momentum_gate.get(
-                                    "reason"
-                                )
-                                or "-",
-                                "entry_strength_momentum_recheck_source_quality_block_reason": source_quality_block_reason
-                                or "-",
-                                "entry_strength_momentum_recheck_count": recheck_count,
-                                "entry_strength_momentum_recheck_after_epoch": recheck_after,
-                                "entry_strength_momentum_recheck_requested_at": now_ts,
-                                "_scanner_last_full_eval_epoch": 0.0,
-                            },
-                        )
-                        pending_context = _register_scalp_pre_ai_gate_context(
-                            stock,
-                            ws_data,
-                            "strength_momentum",
-                            {
-                                "risk_state": "strength_momentum_stability_pending",
-                                "reason": momentum_gate.get("reason"),
-                                "threshold_family": "strength_momentum_soft_gate_p1",
-                                "gate_action": "stability_recheck_pending",
-                                "legacy_blocked_stage": "strength_momentum_stability_recheck_pending",
-                                "vpw_delta": f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                                "window_buy_value": int(
-                                    momentum_gate.get("window_buy_value", 0) or 0
-                                ),
-                                "window_buy_ratio": f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                                "window_exec_buy_ratio": f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                                "window_net_buy_qty": int(
-                                    momentum_gate.get("window_net_buy_qty", 0) or 0
-                                ),
-                            },
-                        )
-                        _log_entry_pipeline(
-                            stock,
-                            code,
-                            "strength_momentum_stability_recheck_pending",
-                            **_build_pre_ai_gate_contract_fields(
-                                "strength_momentum_soft_gate_p1",
-                                gate_action="stability_recheck_pending",
-                            ),
-                            reason=momentum_gate.get("reason"),
-                            source_quality_block_reason=source_quality_block_reason
-                            or "-",
-                            risk_state=pending_context.get("risk_state"),
-                            recheck_reason=stability_recheck.get("reason"),
-                            recheck_after_epoch=stability_recheck.get(
-                                "recheck_after_epoch"
-                            ),
-                            recheck_delay_sec=stability_recheck.get(
-                                "recheck_delay_sec"
-                            ),
-                            recheck_attempt_count=stability_recheck.get(
-                                "recheck_attempt_count"
-                            ),
-                            recheck_max_attempts=stability_recheck.get(
-                                "recheck_max_attempts"
-                            ),
-                            window_buy_value=int(
-                                momentum_gate.get("window_buy_value", 0) or 0
-                            ),
-                            window_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                            window_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                            window_net_buy_qty=int(
-                                momentum_gate.get("window_net_buy_qty", 0) or 0
-                            ),
-                            strength_momentum_reason=momentum_gate.get("reason"),
-                            **strength_gate_quality_fields,
-                            **pre_ai_ws_refresh_fields,
-                        )
-                        if (
-                            source_quality_block_reason
-                            or not opening_rotation_handoff_defers_baseline
-                        ):
-                            return False
-                        _record_opening_rotation_pre_ai_baseline_deferral(
-                            stock,
-                            code,
-                            runtime,
-                            gate="strength_momentum_stability_recheck",
-                            reason=momentum_gate.get("reason"),
-                        )
-                    _mutate_stock_state(
-                        stock,
-                        set_fields={
-                            "entry_strength_momentum_recheck_pending": False,
-                        },
-                        pop_fields=[
-                            "entry_strength_momentum_recheck_after_epoch",
-                            "entry_strength_momentum_recheck_requested_at",
-                            "entry_strength_momentum_recheck_source_quality_block_reason",
-                        ],
+                        in {"input_snapshot_fresh", "latest_ws_snapshot_fresh"}
                     )
                     overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
-                    _mutate_stock_state(
-                        stock,
-                        set_fields={"last_ai_overlap_snapshot": overlap_snapshot},
+                    overbought_risk = _classify_overbought_risk(
+                        overlap_snapshot,
+                        intraday_surge=intraday_surge,
+                        max_intraday_surge=max_intraday_surge,
                     )
-                    scanner_rising_override = (
-                        _resolve_scanner_rising_strength_momentum_override(
-                            stock, momentum_gate
-                        )
-                        if source_quality_block_reason
-                        in {"", "extreme_sell_dominant"}
-                        else {
-                            "allowed": False,
-                            "skip_reason": "source_quality_hard_block",
-                        }
-                    )
-                    if scanner_rising_override.get("allowed"):
-                        strength_context = _register_scalp_pre_ai_gate_context(
-                            stock,
-                            ws_data,
-                            "strength_momentum",
-                            {
-                                "risk_state": "scanner_rising_ai_recheck_override",
-                                "reason": scanner_rising_override.get(
-                                    "override_reason"
-                                ),
-                                "original_reason": scanner_rising_override.get(
-                                    "original_reason"
-                                ),
-                                "threshold_family": "scanner_rising_strength_ai_recheck_override_p1",
-                                "gate_action": "operator_ai_recheck_override",
-                                "legacy_blocked_stage": "scanner_rising_strength_override",
-                                "scanner_promotion_reason": scanner_rising_override.get(
-                                    "scanner_promotion_reason"
-                                ),
-                                "source_signature": scanner_rising_override.get(
-                                    "source_signature"
-                                ),
-                                "scanner_context_source": scanner_rising_override.get(
-                                    "scanner_context_source"
-                                ),
-                                "scanner_context_emitted_epoch": scanner_rising_override.get(
-                                    "scanner_context_emitted_epoch"
-                                ),
-                                "price_delta_since_first_seen_pct": scanner_rising_override.get(
-                                    "price_delta_since_first_seen_pct"
-                                ),
-                                "vpw_delta": f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                                "window_buy_value": int(
-                                    momentum_gate.get("window_buy_value", 0) or 0
-                                ),
-                                "window_buy_ratio": f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                                "window_exec_buy_ratio": f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                                "window_net_buy_qty": int(
-                                    momentum_gate.get("window_net_buy_qty", 0) or 0
-                                ),
-                            },
-                        )
-                        _log_entry_pipeline(
-                            stock,
-                            code,
-                            "strength_momentum_scanner_rising_override",
-                            **_scanner_rising_strength_override_contract_fields(),
-                            override_reason=scanner_rising_override.get(
-                                "override_reason"
-                            ),
-                            original_reason=scanner_rising_override.get(
-                                "original_reason"
-                            ),
-                            scanner_promotion_reason=scanner_rising_override.get(
-                                "scanner_promotion_reason"
-                            ),
-                            source_signature=scanner_rising_override.get(
-                                "source_signature"
-                            ),
-                            scanner_context_source=scanner_rising_override.get(
-                                "scanner_context_source"
-                            ),
-                            scanner_context_emitted_epoch=scanner_rising_override.get(
-                                "scanner_context_emitted_epoch"
-                            ),
-                            price_delta_since_first_seen_pct=scanner_rising_override.get(
-                                "price_delta_since_first_seen_pct"
-                            ),
-                            min_price_delta_pct=scanner_rising_override.get(
-                                "min_price_delta_pct"
-                            ),
-                            risk_state=strength_context.get("risk_state"),
-                            delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                            buy_value=int(
-                                momentum_gate.get("window_buy_value", 0) or 0
-                            ),
-                            buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                            exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                            net_buy_qty=int(
-                                momentum_gate.get("window_net_buy_qty", 0) or 0
-                            ),
-                            **pre_ai_ws_refresh_fields,
-                            **_build_ai_overlap_log_fields(
-                                stock=stock,
-                                ai_score=current_ai_score,
-                                momentum_tag=momentum_gate.get("position_tag"),
-                                threshold_profile=momentum_gate.get(
-                                    "threshold_profile"
-                                ),
-                                overbought_blocked=False,
-                                blocked_stage="strength_momentum_scanner_rising_override",
-                                overlap_snapshot=overlap_snapshot,
-                            ),
-                        )
-                        momentum_gate = {
-                            **momentum_gate,
-                            "allowed": True,
-                            "reason": scanner_rising_override.get(
-                                "override_reason"
-                            ),
-                            "scanner_rising_override": True,
-                        }
-                    else:
-                        gate_action = (
-                            "source_quality_block"
-                            if source_quality_block_reason
-                            else "risk_context_only"
-                        )
-                        strength_context = _register_scalp_pre_ai_gate_context(
-                            stock,
-                            ws_data,
-                            "strength_momentum",
-                            {
-                                "risk_state": source_quality_block_reason
-                                or "weak_momentum_context",
-                                "reason": momentum_gate.get("reason"),
-                                "threshold_family": "strength_momentum_soft_gate_p1",
-                                "gate_action": gate_action,
-                                "legacy_blocked_stage": "blocked_strength_momentum",
-                                "vpw_delta": f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                                "window_buy_value": int(
-                                    momentum_gate.get("window_buy_value", 0) or 0
-                                ),
-                                "window_buy_ratio": f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                                "window_exec_buy_ratio": f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                                "window_net_buy_qty": int(
-                                    momentum_gate.get("window_net_buy_qty", 0) or 0
-                                ),
-                            },
-                        )
-                        _log_entry_pipeline(
-                            stock,
-                            code,
-                            "blocked_strength_momentum",
-                            **_build_pre_ai_gate_contract_fields(
-                                "strength_momentum_soft_gate_p1",
-                                gate_action=gate_action,
-                            ),
-                            reason=momentum_gate.get("reason"),
-                            source_quality_block_reason=source_quality_block_reason
-                            or "-",
-                            risk_state=strength_context.get("risk_state"),
-                            delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                            buy_value=int(
-                                momentum_gate.get("window_buy_value", 0) or 0
-                            ),
-                            window_buy_value=int(
-                                momentum_gate.get("window_buy_value", 0) or 0
-                            ),
-                            buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                            window_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                            exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                            window_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                            net_buy_qty=int(
-                                momentum_gate.get("window_net_buy_qty", 0) or 0
-                            ),
-                            window_net_buy_qty=int(
-                                momentum_gate.get("window_net_buy_qty", 0) or 0
-                            ),
-                            strength_momentum_reason=momentum_gate.get("reason"),
-                            **_strength_momentum_zero_context_fields(
-                                momentum_gate,
-                                source_quality_block_reason,
-                            ),
-                            **strength_gate_quality_fields,
-                            **pre_ai_ws_refresh_fields,
-                            **_build_ai_overlap_log_fields(
-                                stock=stock,
-                                ai_score=current_ai_score,
-                                momentum_tag=momentum_gate.get("position_tag"),
-                                threshold_profile=momentum_gate.get(
-                                    "threshold_profile"
-                                ),
-                                overbought_blocked=False,
-                                blocked_stage="blocked_strength_momentum",
-                                overlap_snapshot=overlap_snapshot,
-                            ),
-                        )
-                        _append_trade_quality_block_history(
-                            stock,
-                            stage="blocked_strength_momentum",
-                            risk_state=strength_context.get("risk_state"),
-                        )
-                        strength_baseline_would_block = bool(
-                            not observe_only
-                            and not _rule_bool(
-                                "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
-                            )
-                        )
-                        if source_quality_block_reason or (
-                            not opening_rotation_handoff_defers_baseline
-                            and strength_baseline_would_block
-                        ):
-                            return False
-                        if (
-                            opening_rotation_handoff_defers_baseline
-                            and strength_baseline_would_block
-                        ):
-                            _record_opening_rotation_pre_ai_baseline_deferral(
-                                stock,
-                                code,
-                                runtime,
-                                gate="strength_momentum",
-                                reason=momentum_gate.get("reason"),
-                            )
-                else:
-                    _mutate_stock_state(
-                        stock,
-                        set_fields={
-                            "entry_strength_momentum_recheck_pending": False
-                        },
-                        pop_fields=[
-                            "entry_strength_momentum_recheck_after_epoch",
-                            "entry_strength_momentum_recheck_requested_at",
-                            "entry_strength_momentum_recheck_source_quality_block_reason",
-                        ],
-                    )
-
-            if current_vpw < config["VPW_SCALP_LIMIT"]:
-                shadow_candidate = None
-                scanner_rising_strength_override = bool(
-                    momentum_gate.get("scanner_rising_override")
-                )
-                if momentum_gate.get("allowed"):
-                    if observe_only and not scanner_rising_strength_override:
-                        shadow_candidate = record_shadow_candidate(
-                            stock, code, ws_data, momentum_gate
-                        )
-                        if shadow_candidate:
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "shadow_candidate_recorded",
-                                shadow_id=shadow_candidate.get("shadow_id"),
-                                signal_price=shadow_candidate.get("signal_price"),
-                                dynamic_delta=f"{float(shadow_candidate.get('dynamic_delta', 0.0) or 0.0):.1f}",
-                                dynamic_buy_value=int(
-                                    shadow_candidate.get(
-                                        "dynamic_window_buy_value", 0
-                                    )
-                                    or 0
-                                ),
-                                dynamic_buy_ratio=f"{float(shadow_candidate.get('dynamic_window_buy_ratio', 0.0) or 0.0):.2f}",
-                            )
-                    else:
-                        gate_action = (
-                            "operator_ai_recheck_override"
-                            if scanner_rising_strength_override
-                            else "risk_context_only"
-                        )
-                        _log_entry_pipeline(
-                            stock,
-                            code,
-                            "dynamic_vpw_override_pass",
-                            **_build_pre_ai_gate_contract_fields(
-                                (
-                                    "scanner_rising_strength_ai_recheck_override_p1"
-                                    if scanner_rising_strength_override
-                                    else "strength_momentum_soft_gate_p1"
-                                ),
-                                gate_action=gate_action,
-                            ),
-                            current_vpw=f"{current_vpw:.1f}",
-                            threshold=config["VPW_SCALP_LIMIT"],
-                            dynamic_reason=momentum_gate.get("reason"),
-                            dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                            dynamic_buy_value=int(
-                                momentum_gate.get("window_buy_value", 0) or 0
-                            ),
-                            dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                            dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                            dynamic_net_buy_qty=int(
-                                momentum_gate.get("window_net_buy_qty", 0) or 0
-                            ),
-                            dynamic_profile=momentum_gate.get("threshold_profile"),
-                            scanner_rising_override=scanner_rising_strength_override,
-                            **pre_ai_ws_refresh_fields,
-                        )
-                        shadow_candidate = None
-                if not (
-                    momentum_gate.get("allowed")
-                    and (not observe_only or scanner_rising_strength_override)
-                ):
-                    overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
-                    _mutate_stock_state(
-                        stock,
-                        set_fields={"last_ai_overlap_snapshot": overlap_snapshot},
-                    )
-                    vpw_context = _register_scalp_pre_ai_gate_context(
+                    overbought_context = _register_scalp_pre_ai_gate_context(
                         stock,
                         ws_data,
-                        "strength_momentum",
+                        "overbought",
                         {
-                            "risk_state": "below_static_vpw_context",
-                            "reason": momentum_gate.get("reason"),
-                            "threshold_family": "strength_momentum_soft_gate_p1",
+                            **overbought_risk,
+                            "threshold_family": "overbought_pullback_guard_p1",
                             "gate_action": "risk_context_only",
-                            "legacy_blocked_stage": "blocked_vpw",
-                            "current_vpw": f"{current_vpw:.1f}",
-                            "vpw_threshold": config["VPW_SCALP_LIMIT"],
+                            "legacy_blocked_stage": "blocked_overbought",
+                            "fluctuation": f"{fluctuation:.2f}",
+                            "intraday_surge": f"{intraday_surge:.2f}",
+                            "max_surge": f"{max_surge:.2f}",
+                            "max_intraday_surge": f"{max_intraday_surge:.2f}",
                         },
+                    )
+                    _mutate_stock_state(
+                        stock, set_fields={"last_ai_overlap_snapshot": overlap_snapshot}
                     )
                     _log_entry_pipeline(
                         stock,
                         code,
-                        "blocked_vpw",
+                        "blocked_overbought",
                         **_build_pre_ai_gate_contract_fields(
-                            "strength_momentum_soft_gate_p1",
+                            "overbought_pullback_guard_p1",
                             gate_action="risk_context_only",
                         ),
-                        current_vpw=f"{current_vpw:.1f}",
-                        threshold=config["VPW_SCALP_LIMIT"],
-                        dynamic_allowed=momentum_gate.get("allowed"),
-                        dynamic_reason=momentum_gate.get("reason"),
-                        risk_state=vpw_context.get("risk_state"),
-                        dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                        dynamic_buy_value=int(
-                            momentum_gate.get("window_buy_value", 0) or 0
+                        fluctuation=f"{fluctuation:.2f}",
+                        intraday_surge=f"{intraday_surge:.2f}",
+                        max_surge=f"{max_surge:.2f}",
+                        max_intraday_surge=f"{max_intraday_surge:.2f}",
+                        marcap=marcap,
+                        cap_bucket=scalp_limits.get("bucket_label"),
+                        risk_state=overbought_context.get("risk_state"),
+                        risk_bucket=overbought_context.get("risk_bucket"),
+                        curr_price=int(curr_price),
+                        open_price=f"{open_price:.2f}",
+                        counterfactual_entry_executable_best_ask=(
+                            overbought_best_ask if overbought_bbo_valid else 0
                         ),
-                        dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                        dynamic_net_buy_qty=int(
-                            momentum_gate.get("window_net_buy_qty", 0) or 0
+                        counterfactual_entry_executable_best_bid=(
+                            overbought_best_bid if overbought_bbo_valid else 0
                         ),
-                        shadow_recorded=bool(shadow_candidate),
+                        counterfactual_entry_price_source=(
+                            "fresh_ws_snapshot_executable_bbo_ask"
+                            if overbought_bbo_valid
+                            else "missing_fresh_executable_bbo"
+                        ),
+                        counterfactual_entry_bbo_source_quality=(
+                            "pass" if overbought_bbo_valid else "blocked"
+                        ),
                         **_pre_ai_blocked_gate_quality_fields(
-                            gate_name="vpw",
+                            gate_name="overbought",
                             ws_data=ws_data,
-                            gate_result=momentum_gate,
                             refresh_fields=pre_ai_ws_refresh_fields,
                         ),
-                        **_build_ai_overlap_log_fields(
-                            stock=stock,
-                            ai_score=current_ai_score,
-                            momentum_tag=momentum_gate.get("position_tag"),
-                            threshold_profile=momentum_gate.get(
-                                "threshold_profile"
+                        **_merge_entry_pipeline_field_groups(
+                            _build_ai_input_not_evaluated_fields("pre_ai_overbought_gate"),
+                            _build_ai_overlap_log_fields(
+                                stock=stock,
+                                ai_score=current_ai_score,
+                                momentum_tag=stock.get("entry_momentum_tag"),
+                                threshold_profile=stock.get("entry_threshold_profile"),
+                                overbought_blocked=True,
+                                blocked_stage="blocked_overbought",
+                                overlap_snapshot=overlap_snapshot,
                             ),
-                            overbought_blocked=False,
-                            blocked_stage="blocked_vpw",
-                            overlap_snapshot=overlap_snapshot,
                         ),
                     )
                     _append_trade_quality_block_history(
                         stock,
-                        stage="blocked_vpw",
-                        risk_state=vpw_context.get("risk_state"),
+                        stage="blocked_overbought",
+                        risk_state=overbought_context.get("risk_state"),
                     )
-                    vpw_baseline_would_block = not _rule_bool(
+                    overbought_baseline_would_block = not _rule_bool(
                         "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
                     )
                     if (
-                        vpw_baseline_would_block
+                        overbought_baseline_would_block
                         and not opening_rotation_handoff_defers_baseline
                     ):
                         return False
                     if (
                         opening_rotation_handoff_defers_baseline
-                        and vpw_baseline_would_block
+                        and overbought_baseline_would_block
                     ):
                         _record_opening_rotation_pre_ai_baseline_deferral(
                             stock,
                             code,
                             runtime,
-                            gate="vpw",
-                            reason="below_static_vpw_context",
+                            gate="overbought",
+                            reason=overbought_context.get("risk_state"),
                         )
 
-            if liquidity_value < min_liquidity:
-                liquidity_risk_state = (
-                    "liquidity_source_unavailable"
-                    if not liquidity_totals_present
-                    else "below_min_liquidity"
-                )
-                liquidity_context = _register_scalp_pre_ai_gate_context(
+                try:
+                    tick_data = build_tick_data_from_ws(ws_data)
+                    big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
+                        stock=stock,
+                        code=code,
+                        ws_data=ws_data,
+                        tick_data=tick_data,
+                        runtime_state=BIG_BITE_STATE,
+                    )
+                    big_bite_confirmed, confirm_info = confirm_big_bite_follow_through(
+                        stock=stock,
+                        code=code,
+                        ws_data=ws_data,
+                        runtime_state=BIG_BITE_STATE,
+                    )
+                    big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
+                except Exception as exc:
+                    log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
+
+                _mutate_stock_state(
                     stock,
-                    ws_data,
-                    "liquidity",
-                    {
-                        "risk_state": liquidity_risk_state,
-                        "reason": liquidity_risk_state,
-                        "threshold_family": "liquidity_pre_submit_guard_p1",
-                        "gate_action": "risk_context_only",
-                        "legacy_blocked_stage": "blocked_liquidity",
-                        "liquidity_value": int(liquidity_value),
-                        "min_liquidity": min_liquidity,
-                        "liquidity_source_quality_state": (
-                            "missing" if not liquidity_totals_present else "fresh"
-                        ),
-                        "liquidity_missing_fields": liquidity_missing_fields,
+                    set_fields={
+                        "big_bite_confirmed": bool(big_bite_confirmed),
+                        "big_bite_info": big_bite_info or {},
+                        "big_bite_triggered": bool(big_bite_armed),
                     },
                 )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_liquidity",
-                    **_build_pre_ai_gate_contract_fields(
-                        "liquidity_pre_submit_guard_p1",
-                        gate_action="risk_context_only",
-                    ),
-                    liquidity_value=int(liquidity_value),
-                    min_liquidity=min_liquidity,
-                    ask_tot=ask_tot,
-                    bid_tot=bid_tot,
-                    liquidity_orderbook_source_quality=runtime.get(
-                        "scalp_liquidity_source_quality"
-                    ),
-                    liquidity_source_quality_state=(
-                        "missing" if not liquidity_totals_present else "fresh"
-                    ),
-                    liquidity_missing_fields=liquidity_missing_fields,
-                    marcap=marcap,
-                    cap_bucket=scalp_limits.get("bucket_label"),
-                    risk_state=liquidity_context.get("risk_state"),
-                    **_pre_ai_blocked_gate_quality_fields(
-                        gate_name="liquidity",
-                        ws_data=ws_data,
-                        gate_result=momentum_gate,
-                        refresh_fields=pre_ai_ws_refresh_fields,
-                        liquidity_totals_present=liquidity_totals_present,
-                    ),
-                    **_build_ai_input_not_evaluated_fields("pre_ai_liquidity_gate"),
-                )
-                liquidity_baseline_would_block = not _rule_bool(
-                    "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
-                )
-                if (
-                    liquidity_baseline_would_block
-                    and not opening_rotation_handoff_defers_baseline
-                ):
-                    return False
-                if (
-                    opening_rotation_handoff_defers_baseline
-                    and liquidity_baseline_would_block
-                ):
-                    _record_opening_rotation_pre_ai_baseline_deferral(
-                        stock,
-                        code,
-                        runtime,
-                        gate="liquidity",
-                        reason=liquidity_risk_state,
-                    )
 
-            scanner_price = stock.get("buy_price") or 0
-            if scanner_price > 0:
-                gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 1.5:
+                gate_tags = config["BIG_BITE_HARD_GATE_TAGS_SCALPING"]
+                hard_gate_required = bool(
+                    config["BIG_BITE_HARD_GATE_ENABLED"]
+                    and gate_tags
+                    and any(tag in pos_tag for tag in gate_tags)
+                )
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "big_bite_hard_gate_required": hard_gate_required,
+                        "big_bite_hard_gate_blocked": bool(
+                            hard_gate_required and not big_bite_confirmed
+                        ),
+                        "big_bite_hard_gate_tags": gate_tags,
+                    },
+                )
+
+                if hard_gate_required and not big_bite_confirmed:
+                    _mutate_stock_state(
+                        stock, set_fields={"big_bite_block_reason": "hard_gate"}
+                    )
                     _log_entry_pipeline(
                         stock,
                         code,
-                        "blocked_gap_from_scan",
-                        **_build_observation_contract_fields(
-                            "baseline_prior_feature"
-                        ),
-                        gate_action="risk_context_only",
-                        gap_pct=f"{gap_pct:.1f}",
-                        scanner_price=int(scanner_price),
-                        curr_price=curr_price,
+                        "blocked_big_bite_hard_gate",
+                        required=hard_gate_required,
+                        triggered=big_bite_armed,
+                        confirmed=big_bite_confirmed,
+                        position_tag=pos_tag,
                     )
+                    return False
 
-            current_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
-            target_buy_price, used_drop_pct = radar.get_smart_target_price(
-                curr_price,
-                v_pw=current_vpw,
-                ai_score=75.0,
-                ask_tot=ask_tot,
-                bid_tot=bid_tot,
-            )
+                if radar is None:
+                    _log_entry_pipeline(
+                        stock, code, "blocked_missing_radar", strategy=strategy
+                    )
+                    return False
 
+                observe_only = bool(_rule("SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
+                if not pre_ai_ws_refresh_fields.get(
+                    "pre_ai_ws_snapshot_refresh_applied"
+                ):
+                    ws_data, pre_ai_ws_refresh_fields = (
+                        _pre_ai_refresh_strength_momentum_ws_snapshot(
+                            code,
+                            ws_data,
+                            strategy,
+                        )
+                    )
+                if pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied"):
+                    curr_price = (
+                        _safe_int(ws_data.get("curr"), curr_price) or curr_price
+                    )
+                    current_vpw = _safe_float(ws_data.get("v_pw"), current_vpw)
+                momentum_ws_data = dict(ws_data or {})
+                momentum_ws_data["_position_tag"] = pos_tag
+                momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
+                momentum_gate.update(pre_ai_ws_refresh_fields)
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "entry_momentum_tag": momentum_gate.get("position_tag"),
+                        "entry_threshold_profile": momentum_gate.get(
+                            "threshold_profile"
+                        ),
+                    },
+                )
+                if momentum_gate.get("enabled"):
+                    _log_strength_momentum_observation(stock, code, momentum_gate)
+                    if not momentum_gate.get("allowed"):
+                        source_quality_block_reason = (
+                            _strength_momentum_source_quality_block_reason(
+                                ws_data, momentum_gate
+                            )
+                        )
+                        strength_gate_quality_fields = (
+                            _pre_ai_blocked_gate_quality_fields(
+                                gate_name="strength_momentum",
+                                ws_data=ws_data,
+                                gate_result=momentum_gate,
+                                refresh_fields=pre_ai_ws_refresh_fields,
+                            )
+                        )
+                        stability_recheck = (
+                            _strength_momentum_stability_recheck_decision(
+                                stock,
+                                ws_data,
+                                momentum_gate,
+                                strength_gate_quality_fields,
+                                source_quality_block_reason=source_quality_block_reason,
+                                now_ts=now_ts,
+                            )
+                        )
+                        if stability_recheck.get("pending"):
+                            recheck_count = _safe_int(
+                                stability_recheck.get("recheck_attempt_count"), 0
+                            )
+                            recheck_after = _safe_float(
+                                stability_recheck.get("recheck_after_epoch"), 0.0
+                            )
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    "entry_strength_momentum_recheck_pending": True,
+                                    "entry_strength_momentum_recheck_reason": momentum_gate.get(
+                                        "reason"
+                                    )
+                                    or "-",
+                                    "entry_strength_momentum_recheck_source_quality_block_reason": source_quality_block_reason
+                                    or "-",
+                                    "entry_strength_momentum_recheck_count": recheck_count,
+                                    "entry_strength_momentum_recheck_after_epoch": recheck_after,
+                                    "entry_strength_momentum_recheck_requested_at": now_ts,
+                                    "_scanner_last_full_eval_epoch": 0.0,
+                                },
+                            )
+                            pending_context = _register_scalp_pre_ai_gate_context(
+                                stock,
+                                ws_data,
+                                "strength_momentum",
+                                {
+                                    "risk_state": "strength_momentum_stability_pending",
+                                    "reason": momentum_gate.get("reason"),
+                                    "threshold_family": "strength_momentum_soft_gate_p1",
+                                    "gate_action": "stability_recheck_pending",
+                                    "legacy_blocked_stage": "strength_momentum_stability_recheck_pending",
+                                    "vpw_delta": f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                    "window_buy_value": int(
+                                        momentum_gate.get("window_buy_value", 0) or 0
+                                    ),
+                                    "window_buy_ratio": f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                    "window_exec_buy_ratio": f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                    "window_net_buy_qty": int(
+                                        momentum_gate.get("window_net_buy_qty", 0) or 0
+                                    ),
+                                },
+                            )
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "strength_momentum_stability_recheck_pending",
+                                **_build_pre_ai_gate_contract_fields(
+                                    "strength_momentum_soft_gate_p1",
+                                    gate_action="stability_recheck_pending",
+                                ),
+                                reason=momentum_gate.get("reason"),
+                                source_quality_block_reason=source_quality_block_reason
+                                or "-",
+                                risk_state=pending_context.get("risk_state"),
+                                recheck_reason=stability_recheck.get("reason"),
+                                recheck_after_epoch=stability_recheck.get(
+                                    "recheck_after_epoch"
+                                ),
+                                recheck_delay_sec=stability_recheck.get(
+                                    "recheck_delay_sec"
+                                ),
+                                recheck_attempt_count=stability_recheck.get(
+                                    "recheck_attempt_count"
+                                ),
+                                recheck_max_attempts=stability_recheck.get(
+                                    "recheck_max_attempts"
+                                ),
+                                window_buy_value=int(
+                                    momentum_gate.get("window_buy_value", 0) or 0
+                                ),
+                                window_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                window_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                window_net_buy_qty=int(
+                                    momentum_gate.get("window_net_buy_qty", 0) or 0
+                                ),
+                                strength_momentum_reason=momentum_gate.get("reason"),
+                                **strength_gate_quality_fields,
+                                **pre_ai_ws_refresh_fields,
+                            )
+                            if (
+                                source_quality_block_reason
+                                or not opening_rotation_handoff_defers_baseline
+                            ):
+                                return False
+                            _record_opening_rotation_pre_ai_baseline_deferral(
+                                stock,
+                                code,
+                                runtime,
+                                gate="strength_momentum_stability_recheck",
+                                reason=momentum_gate.get("reason"),
+                            )
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                "entry_strength_momentum_recheck_pending": False,
+                            },
+                            pop_fields=[
+                                "entry_strength_momentum_recheck_after_epoch",
+                                "entry_strength_momentum_recheck_requested_at",
+                                "entry_strength_momentum_recheck_source_quality_block_reason",
+                            ],
+                        )
+                        overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={"last_ai_overlap_snapshot": overlap_snapshot},
+                        )
+                        scanner_rising_override = (
+                            _resolve_scanner_rising_strength_momentum_override(
+                                stock, momentum_gate
+                            )
+                            if source_quality_block_reason
+                            in {"", "extreme_sell_dominant"}
+                            else {
+                                "allowed": False,
+                                "skip_reason": "source_quality_hard_block",
+                            }
+                        )
+                        if scanner_rising_override.get("allowed"):
+                            strength_context = _register_scalp_pre_ai_gate_context(
+                                stock,
+                                ws_data,
+                                "strength_momentum",
+                                {
+                                    "risk_state": "scanner_rising_ai_recheck_override",
+                                    "reason": scanner_rising_override.get(
+                                        "override_reason"
+                                    ),
+                                    "original_reason": scanner_rising_override.get(
+                                        "original_reason"
+                                    ),
+                                    "threshold_family": "scanner_rising_strength_ai_recheck_override_p1",
+                                    "gate_action": "operator_ai_recheck_override",
+                                    "legacy_blocked_stage": "scanner_rising_strength_override",
+                                    "scanner_promotion_reason": scanner_rising_override.get(
+                                        "scanner_promotion_reason"
+                                    ),
+                                    "source_signature": scanner_rising_override.get(
+                                        "source_signature"
+                                    ),
+                                    "scanner_context_source": scanner_rising_override.get(
+                                        "scanner_context_source"
+                                    ),
+                                    "scanner_context_emitted_epoch": scanner_rising_override.get(
+                                        "scanner_context_emitted_epoch"
+                                    ),
+                                    "price_delta_since_first_seen_pct": scanner_rising_override.get(
+                                        "price_delta_since_first_seen_pct"
+                                    ),
+                                    "vpw_delta": f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                    "window_buy_value": int(
+                                        momentum_gate.get("window_buy_value", 0) or 0
+                                    ),
+                                    "window_buy_ratio": f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                    "window_exec_buy_ratio": f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                    "window_net_buy_qty": int(
+                                        momentum_gate.get("window_net_buy_qty", 0) or 0
+                                    ),
+                                },
+                            )
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "strength_momentum_scanner_rising_override",
+                                **_scanner_rising_strength_override_contract_fields(),
+                                override_reason=scanner_rising_override.get(
+                                    "override_reason"
+                                ),
+                                original_reason=scanner_rising_override.get(
+                                    "original_reason"
+                                ),
+                                scanner_promotion_reason=scanner_rising_override.get(
+                                    "scanner_promotion_reason"
+                                ),
+                                source_signature=scanner_rising_override.get(
+                                    "source_signature"
+                                ),
+                                scanner_context_source=scanner_rising_override.get(
+                                    "scanner_context_source"
+                                ),
+                                scanner_context_emitted_epoch=scanner_rising_override.get(
+                                    "scanner_context_emitted_epoch"
+                                ),
+                                price_delta_since_first_seen_pct=scanner_rising_override.get(
+                                    "price_delta_since_first_seen_pct"
+                                ),
+                                min_price_delta_pct=scanner_rising_override.get(
+                                    "min_price_delta_pct"
+                                ),
+                                risk_state=strength_context.get("risk_state"),
+                                delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                buy_value=int(
+                                    momentum_gate.get("window_buy_value", 0) or 0
+                                ),
+                                buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                net_buy_qty=int(
+                                    momentum_gate.get("window_net_buy_qty", 0) or 0
+                                ),
+                                **pre_ai_ws_refresh_fields,
+                                **_build_ai_overlap_log_fields(
+                                    stock=stock,
+                                    ai_score=current_ai_score,
+                                    momentum_tag=momentum_gate.get("position_tag"),
+                                    threshold_profile=momentum_gate.get(
+                                        "threshold_profile"
+                                    ),
+                                    overbought_blocked=False,
+                                    blocked_stage="strength_momentum_scanner_rising_override",
+                                    overlap_snapshot=overlap_snapshot,
+                                ),
+                            )
+                            momentum_gate = {
+                                **momentum_gate,
+                                "allowed": True,
+                                "reason": scanner_rising_override.get(
+                                    "override_reason"
+                                ),
+                                "scanner_rising_override": True,
+                            }
+                        else:
+                            gate_action = (
+                                "source_quality_block"
+                                if source_quality_block_reason
+                                else "risk_context_only"
+                            )
+                            strength_context = _register_scalp_pre_ai_gate_context(
+                                stock,
+                                ws_data,
+                                "strength_momentum",
+                                {
+                                    "risk_state": source_quality_block_reason
+                                    or "weak_momentum_context",
+                                    "reason": momentum_gate.get("reason"),
+                                    "threshold_family": "strength_momentum_soft_gate_p1",
+                                    "gate_action": gate_action,
+                                    "legacy_blocked_stage": "blocked_strength_momentum",
+                                    "vpw_delta": f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                    "window_buy_value": int(
+                                        momentum_gate.get("window_buy_value", 0) or 0
+                                    ),
+                                    "window_buy_ratio": f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                    "window_exec_buy_ratio": f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                    "window_net_buy_qty": int(
+                                        momentum_gate.get("window_net_buy_qty", 0) or 0
+                                    ),
+                                },
+                            )
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "blocked_strength_momentum",
+                                **_build_pre_ai_gate_contract_fields(
+                                    "strength_momentum_soft_gate_p1",
+                                    gate_action=gate_action,
+                                ),
+                                reason=momentum_gate.get("reason"),
+                                source_quality_block_reason=source_quality_block_reason
+                                or "-",
+                                risk_state=strength_context.get("risk_state"),
+                                delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                buy_value=int(
+                                    momentum_gate.get("window_buy_value", 0) or 0
+                                ),
+                                window_buy_value=int(
+                                    momentum_gate.get("window_buy_value", 0) or 0
+                                ),
+                                buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                window_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                window_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                net_buy_qty=int(
+                                    momentum_gate.get("window_net_buy_qty", 0) or 0
+                                ),
+                                window_net_buy_qty=int(
+                                    momentum_gate.get("window_net_buy_qty", 0) or 0
+                                ),
+                                strength_momentum_reason=momentum_gate.get("reason"),
+                                **_strength_momentum_zero_context_fields(
+                                    momentum_gate,
+                                    source_quality_block_reason,
+                                ),
+                                **strength_gate_quality_fields,
+                                **pre_ai_ws_refresh_fields,
+                                **_build_ai_overlap_log_fields(
+                                    stock=stock,
+                                    ai_score=current_ai_score,
+                                    momentum_tag=momentum_gate.get("position_tag"),
+                                    threshold_profile=momentum_gate.get(
+                                        "threshold_profile"
+                                    ),
+                                    overbought_blocked=False,
+                                    blocked_stage="blocked_strength_momentum",
+                                    overlap_snapshot=overlap_snapshot,
+                                ),
+                            )
+                            _append_trade_quality_block_history(
+                                stock,
+                                stage="blocked_strength_momentum",
+                                risk_state=strength_context.get("risk_state"),
+                            )
+                            strength_baseline_would_block = bool(
+                                not observe_only
+                                and not _rule_bool(
+                                    "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                                )
+                            )
+                            if source_quality_block_reason or (
+                                not opening_rotation_handoff_defers_baseline
+                                and strength_baseline_would_block
+                            ):
+                                return False
+                            if (
+                                opening_rotation_handoff_defers_baseline
+                                and strength_baseline_would_block
+                            ):
+                                _record_opening_rotation_pre_ai_baseline_deferral(
+                                    stock,
+                                    code,
+                                    runtime,
+                                    gate="strength_momentum",
+                                    reason=momentum_gate.get("reason"),
+                                )
+                    else:
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                "entry_strength_momentum_recheck_pending": False
+                            },
+                            pop_fields=[
+                                "entry_strength_momentum_recheck_after_epoch",
+                                "entry_strength_momentum_recheck_requested_at",
+                                "entry_strength_momentum_recheck_source_quality_block_reason",
+                            ],
+                        )
+
+                if current_vpw < config["VPW_SCALP_LIMIT"]:
+                    shadow_candidate = None
+                    scanner_rising_strength_override = bool(
+                        momentum_gate.get("scanner_rising_override")
+                    )
+                    if momentum_gate.get("allowed"):
+                        if observe_only and not scanner_rising_strength_override:
+                            shadow_candidate = record_shadow_candidate(
+                                stock, code, ws_data, momentum_gate
+                            )
+                            if shadow_candidate:
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "shadow_candidate_recorded",
+                                    shadow_id=shadow_candidate.get("shadow_id"),
+                                    signal_price=shadow_candidate.get("signal_price"),
+                                    dynamic_delta=f"{float(shadow_candidate.get('dynamic_delta', 0.0) or 0.0):.1f}",
+                                    dynamic_buy_value=int(
+                                        shadow_candidate.get(
+                                            "dynamic_window_buy_value", 0
+                                        )
+                                        or 0
+                                    ),
+                                    dynamic_buy_ratio=f"{float(shadow_candidate.get('dynamic_window_buy_ratio', 0.0) or 0.0):.2f}",
+                                )
+                        else:
+                            gate_action = (
+                                "operator_ai_recheck_override"
+                                if scanner_rising_strength_override
+                                else "risk_context_only"
+                            )
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "dynamic_vpw_override_pass",
+                                **_build_pre_ai_gate_contract_fields(
+                                    (
+                                        "scanner_rising_strength_ai_recheck_override_p1"
+                                        if scanner_rising_strength_override
+                                        else "strength_momentum_soft_gate_p1"
+                                    ),
+                                    gate_action=gate_action,
+                                ),
+                                current_vpw=f"{current_vpw:.1f}",
+                                threshold=config["VPW_SCALP_LIMIT"],
+                                dynamic_reason=momentum_gate.get("reason"),
+                                dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                dynamic_buy_value=int(
+                                    momentum_gate.get("window_buy_value", 0) or 0
+                                ),
+                                dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                dynamic_net_buy_qty=int(
+                                    momentum_gate.get("window_net_buy_qty", 0) or 0
+                                ),
+                                dynamic_profile=momentum_gate.get("threshold_profile"),
+                                scanner_rising_override=scanner_rising_strength_override,
+                                **pre_ai_ws_refresh_fields,
+                            )
+                            shadow_candidate = None
+                    if not (
+                        momentum_gate.get("allowed")
+                        and (not observe_only or scanner_rising_strength_override)
+                    ):
+                        overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={"last_ai_overlap_snapshot": overlap_snapshot},
+                        )
+                        vpw_context = _register_scalp_pre_ai_gate_context(
+                            stock,
+                            ws_data,
+                            "strength_momentum",
+                            {
+                                "risk_state": "below_static_vpw_context",
+                                "reason": momentum_gate.get("reason"),
+                                "threshold_family": "strength_momentum_soft_gate_p1",
+                                "gate_action": "risk_context_only",
+                                "legacy_blocked_stage": "blocked_vpw",
+                                "current_vpw": f"{current_vpw:.1f}",
+                                "vpw_threshold": config["VPW_SCALP_LIMIT"],
+                            },
+                        )
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "blocked_vpw",
+                            **_build_pre_ai_gate_contract_fields(
+                                "strength_momentum_soft_gate_p1",
+                                gate_action="risk_context_only",
+                            ),
+                            current_vpw=f"{current_vpw:.1f}",
+                            threshold=config["VPW_SCALP_LIMIT"],
+                            dynamic_allowed=momentum_gate.get("allowed"),
+                            dynamic_reason=momentum_gate.get("reason"),
+                            risk_state=vpw_context.get("risk_state"),
+                            dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                            dynamic_buy_value=int(
+                                momentum_gate.get("window_buy_value", 0) or 0
+                            ),
+                            dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                            dynamic_net_buy_qty=int(
+                                momentum_gate.get("window_net_buy_qty", 0) or 0
+                            ),
+                            shadow_recorded=bool(shadow_candidate),
+                            **_pre_ai_blocked_gate_quality_fields(
+                                gate_name="vpw",
+                                ws_data=ws_data,
+                                gate_result=momentum_gate,
+                                refresh_fields=pre_ai_ws_refresh_fields,
+                            ),
+                            **_build_ai_overlap_log_fields(
+                                stock=stock,
+                                ai_score=current_ai_score,
+                                momentum_tag=momentum_gate.get("position_tag"),
+                                threshold_profile=momentum_gate.get(
+                                    "threshold_profile"
+                                ),
+                                overbought_blocked=False,
+                                blocked_stage="blocked_vpw",
+                                overlap_snapshot=overlap_snapshot,
+                            ),
+                        )
+                        _append_trade_quality_block_history(
+                            stock,
+                            stage="blocked_vpw",
+                            risk_state=vpw_context.get("risk_state"),
+                        )
+                        vpw_baseline_would_block = not _rule_bool(
+                            "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                        )
+                        if (
+                            vpw_baseline_would_block
+                            and not opening_rotation_handoff_defers_baseline
+                        ):
+                            return False
+                        if (
+                            opening_rotation_handoff_defers_baseline
+                            and vpw_baseline_would_block
+                        ):
+                            _record_opening_rotation_pre_ai_baseline_deferral(
+                                stock,
+                                code,
+                                runtime,
+                                gate="vpw",
+                                reason="below_static_vpw_context",
+                            )
+
+                if liquidity_value < min_liquidity:
+                    liquidity_risk_state = (
+                        "liquidity_source_unavailable"
+                        if not liquidity_totals_present
+                        else "below_min_liquidity"
+                    )
+                    liquidity_context = _register_scalp_pre_ai_gate_context(
+                        stock,
+                        ws_data,
+                        "liquidity",
+                        {
+                            "risk_state": liquidity_risk_state,
+                            "reason": liquidity_risk_state,
+                            "threshold_family": "liquidity_pre_submit_guard_p1",
+                            "gate_action": "risk_context_only",
+                            "legacy_blocked_stage": "blocked_liquidity",
+                            "liquidity_value": int(liquidity_value),
+                            "min_liquidity": min_liquidity,
+                            "liquidity_source_quality_state": (
+                                "missing" if not liquidity_totals_present else "fresh"
+                            ),
+                            "liquidity_missing_fields": liquidity_missing_fields,
+                        },
+                    )
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_liquidity",
+                        **_build_pre_ai_gate_contract_fields(
+                            "liquidity_pre_submit_guard_p1",
+                            gate_action="risk_context_only",
+                        ),
+                        liquidity_value=int(liquidity_value),
+                        min_liquidity=min_liquidity,
+                        ask_tot=ask_tot,
+                        bid_tot=bid_tot,
+                        liquidity_orderbook_source_quality=runtime.get(
+                            "scalp_liquidity_source_quality"
+                        ),
+                        liquidity_source_quality_state=(
+                            "missing" if not liquidity_totals_present else "fresh"
+                        ),
+                        liquidity_missing_fields=liquidity_missing_fields,
+                        marcap=marcap,
+                        cap_bucket=scalp_limits.get("bucket_label"),
+                        risk_state=liquidity_context.get("risk_state"),
+                        **_pre_ai_blocked_gate_quality_fields(
+                            gate_name="liquidity",
+                            ws_data=ws_data,
+                            gate_result=momentum_gate,
+                            refresh_fields=pre_ai_ws_refresh_fields,
+                            liquidity_totals_present=liquidity_totals_present,
+                        ),
+                        **_build_ai_input_not_evaluated_fields("pre_ai_liquidity_gate"),
+                    )
+                    liquidity_baseline_would_block = not _rule_bool(
+                        "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                    )
+                    if (
+                        liquidity_baseline_would_block
+                        and not opening_rotation_handoff_defers_baseline
+                    ):
+                        return False
+                    if (
+                        opening_rotation_handoff_defers_baseline
+                        and liquidity_baseline_would_block
+                    ):
+                        _record_opening_rotation_pre_ai_baseline_deferral(
+                            stock,
+                            code,
+                            runtime,
+                            gate="liquidity",
+                            reason=liquidity_risk_state,
+                        )
+
+                scanner_price = stock.get("buy_price") or 0
+                if scanner_price > 0:
+                    gap_pct = (curr_price - scanner_price) / scanner_price * 100
+                    if gap_pct >= 1.5:
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "blocked_gap_from_scan",
+                            **_build_observation_contract_fields(
+                                "baseline_prior_feature"
+                            ),
+                            gate_action="risk_context_only",
+                            gap_pct=f"{gap_pct:.1f}",
+                            scanner_price=int(scanner_price),
+                            curr_price=curr_price,
+                        )
+
+                current_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
+                target_buy_price, used_drop_pct = radar.get_smart_target_price(
+                    curr_price,
+                    v_pw=current_vpw,
+                    ai_score=75.0,
+                    ask_tot=ask_tot,
+                    bid_tot=bid_tot,
+                )
+
+            else:
+                if radar is None:
+                    _log_entry_pipeline(stock, code, 'blocked_missing_radar', strategy=strategy)
+                    return False
+                gate_tags = config['BIG_BITE_HARD_GATE_TAGS_SCALPING']
+                if config['BIG_BITE_HARD_GATE_ENABLED'] and any(tag in pos_tag for tag in gate_tags):
+                    try:
+                        big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
+                            stock=stock, code=code, ws_data=ws_data,
+                            tick_data=build_tick_data_from_ws(ws_data), runtime_state=BIG_BITE_STATE)
+                        big_bite_confirmed, _ = confirm_big_bite_follow_through(
+                            stock=stock, code=code, ws_data=ws_data, runtime_state=BIG_BITE_STATE)
+                    except Exception:
+                        big_bite_confirmed = False
+                    if not big_bite_confirmed:
+                        _log_entry_pipeline(stock, code, 'blocked_big_bite_hard_gate', required=True)
+                        return False
+                target_buy_price = _safe_int(stock.get("target_buy_price"), curr_price)
+                used_drop_pct = 0.0
+                momentum_gate = {}
+                pre_ai_ws_refresh_fields = {}
             last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
             time_elapsed = now_ts - last_ai_time
             is_vip_target = (target_buy_price > 0) and (
                 curr_price <= target_buy_price * 1.015
             )
-            watching_state_refresh = _resolve_watching_state_change_refresh(
+            watching_state_refresh = ({"allowed": True, "reason": "completed_result"}
+                if completed_resolution is not None else _resolve_watching_state_change_refresh(
                 stock,
                 ws_data,
                 now_ts=now_ts,
                 last_ai_time=last_ai_time,
                 cooldown_sec=config["AI_WATCHING_COOLDOWN"],
-            )
+            ))
             if watching_state_refresh.get("suppress_normal_refresh"):
                 # An unresolved input is not permission to reuse an earlier
                 # BUY. Stop before both REST/AI preparation and submit logic.
@@ -63195,7 +63284,7 @@ def _handle_watching_strategy_branch(
             ):
                 try:
                     entry_recheck_claim = None
-                    async_resolution = _resolve_scanner_async_entry_ai(
+                    async_resolution = completed_resolution or _resolve_scanner_async_entry_ai(
                         stock,
                         code,
                         ws_data,
@@ -82927,6 +83016,43 @@ def _maybe_auto_exclude_open_loss_holding(
 
 
 def handle_watching_state(
+    stock, code, ws_data, admin_id, *, now_ts=None, now_dt=None, radar=None,
+    ai_engine=None, skip_rising_missed_hook=False, scout_upgrade_entry=False,
+    scanner_async_eval_coordinator=None, scanner_async_generation=None,
+    scanner_async_commit_phase=False,
+):
+    """Main owns completed output before any new observation or AI preparation."""
+    resolution = None
+    coordinator = scanner_async_eval_coordinator
+    if isinstance(coordinator, ScannerAsyncEvalCoordinator) and coordinator.has_completed(
+        generation_id=stock.get('_scanner_async_generation_id', ''),
+        cache_key=stock.get('_scanner_async_cache_key', ''),
+    ):
+        resolution = _resolve_scanner_async_entry_ai(stock, code, ws_data, ai_engine,
+            dict(scanner_async_eval_coordinator=coordinator,
+                 scanner_async_generation=scanner_async_generation,
+                 scanner_async_commit_phase=True),
+            trigger_reason='completed_result', last_ai_time=0, current_ai_score=0)
+        if resolution.get('status') != 'completed':
+            return
+        stock['_async_consumption_guard'] = {}
+    try:
+        return _handle_watching_state_impl(stock, code, ws_data, admin_id,
+            now_ts=now_ts, now_dt=now_dt, radar=radar, ai_engine=ai_engine,
+            skip_rising_missed_hook=skip_rising_missed_hook,
+            scout_upgrade_entry=scout_upgrade_entry,
+            scanner_async_eval_coordinator=coordinator,
+            scanner_async_generation=scanner_async_generation,
+            scanner_async_commit_phase=scanner_async_commit_phase,
+            _completed_async_resolution=resolution)
+    finally:
+        if resolution and resolution.get('original_result') is not None:
+            guard = stock.pop('_async_consumption_guard', {})
+            _record_async_disposition(resolution['original_result'], 'entry_path_returned',
+                guard.get('reason') or 'entry_path_returned_without_terminal_evidence')
+
+
+def _handle_watching_state_impl(
     stock,
     code,
     ws_data,
@@ -82941,6 +83067,7 @@ def handle_watching_state(
     scanner_async_eval_coordinator=None,
     scanner_async_generation=None,
     scanner_async_commit_phase=False,
+    _completed_async_resolution=None,
 ):
     """
     [WATCHING 상태] 진입 타점 감시 및 AI 교차 검증
@@ -83332,6 +83459,7 @@ def handle_watching_state(
         "scanner_async_eval_coordinator": scanner_async_eval_coordinator,
         "scanner_async_generation": scanner_async_generation,
         "scanner_async_commit_phase": bool(scanner_async_commit_phase),
+        "completed_async_resolution": _completed_async_resolution,
     }
     config = {
         "MAX_SCALP_SURGE_PCT": MAX_SCALP_SURGE_PCT,

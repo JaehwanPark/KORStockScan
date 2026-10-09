@@ -457,7 +457,7 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(monk
         ws_wait_min_exact_0b_count=0,
     )
     assert result["reason"] != "route_snapshot_missing"
-    assert reads == [("123456", "123456_AL")] * 3
+    assert reads == [("123456", "123456_AL")] * 4
 
 
 @pytest.mark.parametrize("fault", ["empty", "wrong_route", "stale"])

@@ -323,9 +323,12 @@ def run_zero_base_probe(
     ws_wait_min_exact_0b_count: int = 5,
     retain_ws_on_recheck: bool = False,
     ws_lease_id: str | None = None,
+    native_wait_deadline_epoch: float | None = None,
 ) -> dict:
     """Observe one candidate. The caller owns bounded WS REG/REMOVE leases."""
     claim = dict(request.get("claim") or {})
+    residence_perf = (time.perf_counter() + max(0, native_wait_deadline_epoch-now())
+                      if native_wait_deadline_epoch is not None else None)
     candidate = dict(request.get("candidate") or {})
     code, route = claim.get("code"), claim.get("route")
     result = {
@@ -401,6 +404,8 @@ def run_zero_base_probe(
                         result["reason"] = (lease_receipt.get("reason", "ws_registration_unconfirmed")
                                             if isinstance(lease_receipt, dict) else "ws_registration_unconfirmed")
                         return result
+                    if lease_receipt.get('interval_started_epoch'):
+                        registered_epoch = float(lease_receipt['interval_started_epoch'])
             except FutureTimeoutError:
                 if exact_lease or callable(release_ws):
                     registration.add_done_callback(
@@ -419,24 +424,8 @@ def run_zero_base_probe(
             if registration_reason:
                 result["reason"] = registration_reason
                 return result
-        ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
-            ws_manager, code=code, route=route, after_epoch=registered_epoch,
-            now=now, timeout_sec=ws_wait_timeout_sec,
-            empty_timeout_sec=ws_wait_empty_timeout_sec,
-            min_warmup_sec=ws_min_warmup_sec,
-            partial_extension_sec=ws_wait_partial_extension_sec,
-            min_exact_0b_count=ws_wait_min_exact_0b_count,
-        )
-        result["ws_observation"] = observation
-        if not ws_data:
-            registration_reason = (
-                probe_registration_receipt(ws_manager, code=code, item=item)
-                if source_reason == "route_snapshot_missing"
-                and hasattr(ws_manager, "_registered_item_epochs")
-                else ""
-            )
-            result["reason"] = registration_reason or source_reason
-            return result
+        # Existing chart preparation overlaps native WS collection on this worker.
+        ws_data = probe_ws_snapshot(ws_manager, code=code, route=route) or {}
         tick_fetcher = tick_fetcher or kiwoom_utils.get_tick_history_ka10003
         candle_fetcher = candle_fetcher or fetch_entry_candles_with_meta
         context_builder = context_builder or build_entry_candle_context
@@ -452,6 +441,24 @@ def run_zero_base_probe(
                 request_owner="zero_base_machine_probe",
                 request_class=REQUEST_CLASS_SOURCE_ONLY,
             )
+            ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
+                ws_manager, code=code, route=route, after_epoch=registered_epoch,
+                now=now, timeout_sec=ws_wait_timeout_sec,
+                empty_timeout_sec=ws_wait_empty_timeout_sec,
+                min_warmup_sec=max(0, ws_min_warmup_sec-(now()-registered_epoch)),
+                partial_extension_sec=ws_wait_partial_extension_sec,
+                min_exact_0b_count=ws_wait_min_exact_0b_count,
+            )
+            result["ws_observation"] = observation
+            if not ws_data:
+                registration_reason = (
+                    probe_registration_receipt(ws_manager, code=code, item=item)
+                    if source_reason == "route_snapshot_missing"
+                    and hasattr(ws_manager, "_registered_item_epochs")
+                    else ""
+                )
+                result["reason"] = registration_reason or source_reason
+                return result
             if not candles:
                 result["result"] = "required_feature_insufficient"
                 result["reason"] = "candle_source_missing"
@@ -523,6 +530,29 @@ def run_zero_base_probe(
             result["result"] = "required_feature_insufficient"
             result["reason"] = "candle_context_missing"
             return result
+        native_budget = None
+        if native_wait_deadline_epoch is not None:
+            from src.engine.scalping.reversal_source_diagnostics import (
+                observe_snapshot, observation_sequence, wait_observation)
+            from src.engine.scalping.reversal_current_backend import backend
+            absolute_perf = residence_perf
+            while True:
+                sequence = observation_sequence(item)
+                family = backend()._GENERATION
+                native_snapshot, native_receipt = observe_snapshot(code,
+                    'NXT' if route == 'nxt_only' else 'SOR', session,
+                    now=now(), item=item, family_sha256=family)
+                result['native_observation_receipt'] = native_receipt
+                if native_snapshot is not None:
+                    from src.engine.scalping.entry_deadline import EntryDeadline
+                    native_budget = EntryDeadline.create(caller_epoch=native_snapshot[0]['epoch']+5)
+                    break
+                remaining = min(native_wait_deadline_epoch-now(), absolute_perf-time.perf_counter())
+                if remaining <= 0:
+                    result['result'] = 'required_feature_insufficient'
+                    result['reason'] = 'native_observation_residence_exhausted'
+                    return result
+                wait_observation(item, sequence, min(remaining, 1.0))
         refreshed_snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
         result["ws_observation_pre_machine"] = probe_ws_observation(
             refreshed_snapshot or {}, code=code, route=route,
@@ -535,6 +565,30 @@ def run_zero_base_probe(
         if not ws_data:
             result["reason"] = "pre_machine_" + source_reason
             return result
+        if native_budget is not None:
+            # Residence may span several minutes. Keep the event's original
+            # five-second budget when refreshing the prepared chart/context.
+            try:
+                with kiwoom_utils.entry_source_budget(native_budget):
+                    native_budget.require()
+                    candles, candle_meta = candle_fetcher(
+                        token, code, ws_data, venue=venue, session=session, limit=40,
+                        now_ts=now(), allow_integrated_sor_execution_view=True,
+                        request_owner='zero_base_machine_probe',
+                        request_class=REQUEST_CLASS_SOURCE_ONLY)
+                    source_issue = exact_probe_rest_source_issue([], candle_meta,
+                        request_code=request_code, now_epoch=now(), allow_empty_ticks=True)
+                    if not candles or source_issue:
+                        result['reason'] = source_issue or 'candle_refresh_empty'
+                        return result
+                    context = context_builder(token, code, ws_data, venue=venue,
+                        session=session, limit=40, model_bar_limit=20, now_ts=now(),
+                        recent_candles=candles, source_meta=dict(candle_meta,
+                            multi_timeframe_auxiliary_fetch=False), include_investor_source=False)
+                    native_budget.require()
+            except Exception as exc:
+                result['reason'] = 'native_context_refresh_failed:' + type(exc).__name__
+                return result
         if result.get("tick_read_source") == "ws_exact_route":
             _, current_tick_source, _ = _select_recent_ticks_with_source(
                 ws_data, [], now=now(),
@@ -548,6 +602,8 @@ def run_zero_base_probe(
             machine = ai_engine.analyze_target(
                 candidate.get("name") or code, ws_data, ticks, candles,
                 strategy="SCALPING", prompt_profile="watching", machine_only=True,
+                **({'entry_input_deadline_epoch': native_budget.epoch,
+                    'entry_input_deadline_perf': native_budget.perf} if native_budget is not None else {}),
                 metadata_extra={
                     "position_tag": "SCANNER",
                     "source_event_stage": "zero_base_probe_machine_only_v1",
@@ -563,7 +619,7 @@ def run_zero_base_probe(
         action = str(machine.get("entry_mechanistic_action") or "").upper()
         # Preserve the producer's exact receipt even when preflight prevented
         # assessment. These fields never admit a candidate or change retries.
-        for field in ("evaluation_attempt_id", "machine_evaluation_status",
+        for field in ("evaluation_attempt_id", "native_observation", "machine_evaluation_status",
                       "machine_capture_status", "machine_observation_sha256",
                       "machine_bundle_sha256"):
             if machine.get(field) is not None:
@@ -619,7 +675,7 @@ def run_zero_base_probe(
     finally:
         if (lease_requested or not was_subscribed) and not deferred_release and (exact_lease or callable(release_ws)):
             if (retain_ws_on_recheck and result["result"] == "assessed"
-                    and result["machine_action"] == "RECHECK"):
+                    and result["machine_action"] in {"RECHECK", "ENTER_NOW"}):
                 result["_ws_lease_retained"] = True
             else:
                 release()

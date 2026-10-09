@@ -41,7 +41,61 @@ class _FakeAI:
         return {"action": "BUY", "score": 77, "reason": "fresh continuation"}
 
 
-def test_legacy_entry_bridge_requests_nonblocking_capacity_without_enabling_async(monkeypatch):
+def test_completed_output_reaches_common_decision_consumer_without_fresh_preparation(monkeypatch):
+    from collections import defaultdict
+    class ReachedConsumer(BaseException):
+        pass
+    def no_new(*a, **k):
+        raise AssertionError('completed output must not prepare or call again')
+    monkeypatch.setattr(handlers, '_pre_ai_refresh_quote_ws_snapshot', no_new)
+    monkeypatch.setattr(handlers, '_resolve_scanner_async_entry_ai', no_new)
+    monkeypatch.setattr(handlers, '_handle_watching_opening_rotation', no_new)
+    monkeypatch.setattr(handlers, '_resolve_stock_marcap', lambda *a: 1000000000000)
+    monkeypatch.setattr(handlers, '_resolve_early_accel_recheck', lambda *a, **k: {})
+    monkeypatch.setattr(handlers, '_extract_ai_overlap_snapshot', lambda **k: {})
+    monkeypatch.setattr(handlers, '_update_ai_quote_freshness_fields', lambda *a: None)
+    monkeypatch.setattr(handlers, 'LAST_AI_CALL_TIMES', {})
+    def consumed(payload):
+        assert payload['ai_decision_trace_id'] == 'original-trace'
+        raise ReachedConsumer()
+    monkeypatch.setattr(handlers, '_entry_ai_contract_status', consumed)
+    stock=dict(code='123456', name='TEST', strategy='SCALPING', status='WATCHING', position_tag='SCANNER')
+    resolution=dict(status='completed',prepared_context=dict(recent_ticks=[{'price':10000}],
+        recent_candles=[{'close':10000}],candle_context={}),
+        ai_decision=dict(action='BUY',score=77,ai_decision_trace_id='original-trace'))
+    runtime=dict(strategy='SCALPING',pos_tag='SCANNER',now_ts=time.time(),curr_price=10000,
+        current_vpw=100,fluctuation=0,cooldowns={},event_bus=None,is_trigger=False,msg='',
+        ratio=.1,liquidity_value=10000000,current_ai_score=50,ai_prob=.5,buy_threshold=75,strong_vpw=100,
+        completed_async_resolution=resolution)
+    config=defaultdict(lambda:1, BIG_BITE_HARD_GATE_ENABLED=False, BIG_BITE_HARD_GATE_TAGS_SCALPING=())
+    with pytest.raises(ReachedConsumer):
+        handlers._handle_watching_strategy_branch(stock,'123456',
+            dict(curr=10000,ask_tot=100000,bid_tot=100000,orderbook={'ask':10001,'bid':9999}),
+            object(), object(), runtime, config)
+
+
+def test_completed_result_common_wrapper_still_applies_operator_veto(monkeypatch):
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    consumed=[];guards=[]
+    monkeypatch.setattr(coordinator,'has_completed',lambda **k: True)
+    monkeypatch.setattr(handlers,'_resolve_scanner_async_entry_ai',lambda *a,**k:
+        (consumed.append('consumed') or dict(status='completed',original_result=object())))
+    for name in ('_observe_post_sell_smoothing_source_only_paths','_observe_entry_cancel_wait_counterfactuals',
+                 '_maybe_emit_entry_ai_price_skip_followup','_log_watching_state_debug'):
+        monkeypatch.setattr(handlers,name,lambda *a,**k:None)
+    monkeypatch.setattr(handlers,'_manual_control_exclusion_blocked',lambda *a,**k: (guards.append('manual') or True))
+    monkeypatch.setattr(handlers,'emit_scanner_watching_runtime_skip',lambda *a,**k:None)
+    monkeypatch.setattr(handlers,'_record_async_disposition',lambda *a:guards.append(a[1]))
+    try:
+        handlers.handle_watching_state(dict(code='123456',status='WATCHING'),'123456',dict(curr=10000),1,
+            scanner_async_eval_coordinator=coordinator)
+    finally:
+        coordinator.shutdown()
+    assert consumed == ['consumed']
+    assert guards == ['manual','entry_path_returned']
+
+
+def test_legacy_entry_bridge_does_not_create_capacity_demand_without_evaluation(monkeypatch):
     calls = []
     monkeypatch.setattr(handlers, "_request_entry_capacity_preparation",
                         lambda *args: calls.append(args))
@@ -49,7 +103,7 @@ def test_legacy_entry_bridge_requests_nonblocking_capacity_without_enabling_asyn
     result = handlers._resolve_scanner_async_entry_ai(stock, "005930", ws, _FakeAI(), {},
         trigger_reason="first_call", last_ai_time=0, current_ai_score=50)
     assert result == {"status": "not_enabled"}
-    assert calls == [(stock, "005930", ws)]
+    assert calls == []
 
 
 def _generation(venue="KRX"):
@@ -64,6 +118,38 @@ def _generation(venue="KRX"):
         observed_price=1000,
         source_signature="VALUE_TOP",
     )
+
+
+@pytest.mark.parametrize('replacement', ['missing','new_generation'])
+def test_retained_scanner_result_is_rejected_once_after_generation_disappears(monkeypatch,replacement):
+    generation=_generation()
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    now=time.time()
+    stock=dict(code='005930',status='WATCHING',effective_venue='KRX',venue_resolution='explicit',
+        source_signature='VALUE_TOP',_scanner_async_generation_id=generation.generation_id,
+        _scanner_async_cache_key='key')
+    result=ScannerAsyncEvalResult(request_id=generation.generation_id+':key',generation_id=generation.generation_id,
+        code='005930',venue='KRX',cache_key='key',state_version=handlers._scanner_async_entry_state_version(stock),
+        status='completed',submitted_epoch=now,preparation_started_epoch=now,preparation_completed_epoch=now,
+        ai_started_epoch=now,completed_epoch=now,preparation_wait_sec=0,preparation_service_sec=0,
+        ai_dispatch_wait_sec=0,ai_response_sec=0,observation_only=False,original_generation=generation,
+        deadline_epoch=now+5,deadline_perf=time.perf_counter()+5)
+    coordinator._ready[result.request_id]=result
+    monkeypatch.setattr(handlers,'_fixed_watch_entry_source_route',lambda *a:None)
+    monkeypatch.setattr(handlers,'_scanner_async_quote_is_fresh',lambda *a,**k:True)
+    monkeypatch.setattr(handlers,'_has_open_pending_entry_orders',lambda *a:False)
+    monkeypatch.setattr(handlers,'_log_entry_pipeline',lambda *a,**k:None)
+    events=[]
+    monkeypatch.setattr(handlers,'_record_async_disposition',lambda *a:events.append(a[1:]))
+    try:
+        outcome=handlers._resolve_scanner_async_entry_ai(stock,'005930',{},_FakeAI(),
+            dict(scanner_async_eval_coordinator=coordinator,scanner_async_commit_phase=True,
+                scanner_async_generation=None if replacement=='missing' else replace(generation,revision=2)),
+            trigger_reason='completed_result',last_ai_time=0,current_ai_score=0)
+        assert outcome['status']=='commit_rejected'
+        assert events == [('rejected','current_generation_missing' if replacement=='missing' else 'generation_superseded')]
+        assert not coordinator.has_completed(generation_id=generation.generation_id,cache_key='key')
+    finally:coordinator.shutdown()
 
 
 def test_clean_profit_rising_missed_exit_records_short_confirmation_window(

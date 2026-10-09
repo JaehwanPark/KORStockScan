@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from queue import Empty, SimpleQueue
+from collections import OrderedDict
+from copy import deepcopy
 import re
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 from src.trading.market import session_contract
 
@@ -19,9 +22,12 @@ from src.scanners.zero_base_discovery_source import fetch_discovery_panels
 PROBE_REQUEST_EVENT = "ZERO_BASE_PROBE_REQUESTED"
 PROBE_RESULT_EVENT = "ZERO_BASE_PROBE_RESULT"
 MACHINE_ENTER_EVENT = "ZERO_BASE_MACHINE_ENTER"
+HANDOFF_ACK_EVENT = 'ZERO_BASE_HANDOFF_CLOSED'
 MAX_CONCURRENT_PROBES = 5
 MAX_CLAIMS_PER_CYCLE = MAX_CONCURRENT_PROBES
 MAX_DISCOVERY_OBSERVATION_AGE_SEC = 120
+# One physical panel worker per process, including a session-date rollover.
+_PANEL_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='discovery_panel')
 
 
 class ZeroBaseDiscoveryRuntime:
@@ -31,8 +37,15 @@ class ZeroBaseDiscoveryRuntime:
         self.state_path = Path(state_path)
         self.claim_receipt_emitter = claim_receipt_emitter
         self.queue = self._restore(session_date)
-        self._results = SimpleQueue()
+        self._results = OrderedDict()
+        self._closed = False
+        self._wake_lock = threading.Lock()
+        self.wakeup = threading.Event()
+        self._panel_future = None
+        self._pending_promotions = []
+        self._dirty = False
         self.event_bus.subscribe(PROBE_RESULT_EVENT, self._receive_result)
+        self.event_bus.subscribe(HANDOFF_ACK_EVENT, self._receive_result)
 
     def _restore(self, session_date: str) -> DiscoveryQueue:
         if not self.state_path.exists():
@@ -64,22 +77,68 @@ class ZeroBaseDiscoveryRuntime:
             temporary.unlink(missing_ok=True)
 
     def _receive_result(self, result):
-        if isinstance(result, dict):
-            self._results.put(dict(result))
+        with self._wake_lock:
+            if not self._closed and isinstance(result, dict):
+                claim = result.get('claim') or {}
+                row = self.queue._candidates.get((claim.get('code'), claim.get('route')))
+                if (row is None or not row.in_flight or row.claim_count != claim.get('claim_count')
+                        or row.claimed_source_sha256 != claim.get('source_sha256')):
+                    return
+                key = (row.code, row.route, row.claim_count, bool(result.get('handoff_closed')))
+                # At most RESULT + CLOSED for each of five physical leases.
+                # Replayed notifications do not grow the callback inbox.
+                self._results.setdefault(key, deepcopy(result))
+                self.wakeup.set()
 
     def close(self):
+        with self._wake_lock:
+            self._closed = True
         self.event_bus.unsubscribe(PROBE_RESULT_EVENT, self._receive_result)
+        self.event_bus.unsubscribe(HANDOFF_ACK_EVENT, self._receive_result)
+        if self._panel_future is not None:
+            self._panel_future.cancel()
+        self.wakeup.set()
+
+    def wait(self, timeout):
+        with self._wake_lock:
+            if self._results or (self._panel_future and self._panel_future.done()):
+                return
+            self.wakeup.clear()
+        self.wakeup.wait(timeout)
+
+    def start_scan(self, token, *, fetcher=fetch_discovery_panels):
+        if self._closed or self._panel_future is not None:
+            return False
+        self._panel_future = _PANEL_EXECUTOR.submit(fetcher, token)
+        def notify(_):
+            with self._wake_lock:
+                self.wakeup.set()
+        self._panel_future.add_done_callback(notify)
+        return True
+
+    def finish_scan(self, *, now_epoch=None):
+        future = self._panel_future
+        if self._closed or future is None or not future.done():
+            return None
+        self._panel_future = None
+        return self._apply_panel(future.result(), now_epoch=now_epoch)
 
     def drain_results(self, *, now_epoch=None) -> list[dict]:
         now_epoch = time.time() if now_epoch is None else float(now_epoch)
+        drain_started = time.perf_counter()
         accepted = []
-        promotions = []
+        promotions = self._pending_promotions
+        ack_changed = False
         while True:
-            try:
-                result = self._results.get_nowait()
-            except Empty:
-                break
+            with self._wake_lock:
+                if not self._results:
+                    break
+                _, result = self._results.popitem(last=False)
             claim = result.get("claim")
+            if result.get('handoff_closed') and isinstance(claim, dict):
+                if self.queue.close_handoff(claim, result.get('ws_handoff_id')):
+                    ack_changed = True
+                continue
             candidate = result.get("candidate")
             status = str(result.get("result") or "")
             machine_action = str(result.get("machine_action") or "")
@@ -104,6 +163,7 @@ class ZeroBaseDiscoveryRuntime:
                 result=status,
                 machine_action=machine_action,
                 next_due_epoch=now_epoch + due_sec,
+                handoff_id=result.get('physical_probe_lease_id') or result.get('ws_handoff_id', ''),
             ):
                 continue
             accepted.append(result)
@@ -116,9 +176,21 @@ class ZeroBaseDiscoveryRuntime:
                     and re.fullmatch(r"[0-9a-f]{64}", result["machine_bundle_sha256"])
                 ):
                     promotions.append(result)
-        if accepted:
+        self._dirty = self._dirty or bool(accepted or promotions or ack_changed)
+        if self._dirty:
             self._persist()
-        for result in promotions:
+            self._dirty = False
+        while promotions:
+            result = promotions.pop(0)
+            expected = result.get('native_observation')
+            if result.get('physical_probe_lease_id') and expected is None:
+                continue
+            if expected is not None:
+                from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
+                # Persistence/retry is part of the original five seconds.
+                if not observation_binding_valid(expected,
+                        now=now_epoch + time.perf_counter() - drain_started):
+                    continue
             self.event_bus.publish(MACHINE_ENTER_EVENT, result)
         return accepted
 
@@ -137,6 +209,7 @@ class ZeroBaseDiscoveryRuntime:
             }
             else set()
         )
+        before_admission = deepcopy(self.queue)
         abandoned = self.queue.abandon_expired_claims(
             now_epoch=now_epoch, timeout_sec=60,
         )
@@ -153,7 +226,13 @@ class ZeroBaseDiscoveryRuntime:
                 else 3
             ),
         )
-        self._persist()  # Persist claims before an asynchronous callback can arrive.
+        try:
+            self._persist()  # No worker is admitted before its durable claim.
+        except Exception:
+            with self._wake_lock:
+                self.queue = before_admission
+            self._dirty = True
+            raise
         for claim in claims:
             if self.claim_receipt_emitter is not None:
                 self.claim_receipt_emitter(
@@ -184,6 +263,9 @@ class ZeroBaseDiscoveryRuntime:
 
     def scan_once(self, token, *, fetcher=fetch_discovery_panels, now_epoch=None) -> dict:
         panel = fetcher(token)
+        return self._apply_panel(panel, now_epoch=now_epoch)
+
+    def _apply_panel(self, panel, *, now_epoch=None):
         observed = 0
         for row in panel.get("observations") or []:
             status = self.queue.observe(

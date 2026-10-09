@@ -381,7 +381,7 @@ def _payload_to_cache_row(
         or stage in AI_TERMINAL_ATTRIBUTION_STAGES
         or stage in AI_TRACE_RESULT_STAGES
         or stage in ENTRY_ASYNC_WAIT_STAGES
-        or stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}
+        or stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap", "entry_async_disposition"}
         or stage in ENTRY_CALL_FINISH_STAGES
         or stage in BLOCKER_STAGES
         or stage in UPSTREAM_BLOCK_STAGES

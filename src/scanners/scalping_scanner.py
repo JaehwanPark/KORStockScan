@@ -6884,6 +6884,11 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_source_sha256": claim.get("source_sha256"),
                     "zero_base_source_kind": claim.get("source_kind") or "unknown",
                     "zero_base_claim_count": claim.get("claim_count"),
+                    "native_observation_receipt": result.get('native_observation_receipt'),
+                    "native_observation_reference": {
+                        key: value for key, value in (result.get('native_observation') or {}).items()
+                        if key != 'snapshot'},
+                    "physical_probe_lease_id": result.get('physical_probe_lease_id'),
                     "zero_base_probe_result": result.get("result"),
                     "zero_base_probe_reason": result.get("reason"),
                     "zero_base_rest_source_gap_detail": result.get("rest_source_gap_detail"),
@@ -6921,8 +6926,15 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
             )
         active_window = _active_scalping_buy_window(now)
         if (active_window is not None or is_test_mode) and time.time() >= next_scan_epoch:
+            if runtime.start_scan(token):
+                next_scan_epoch = time.time() + min(60, _resolve_scan_interval_sec(now.time()))
+        try:
+            summary = runtime.finish_scan()
+        except Exception as exc:
+            log_error("[ZERO_BASE_SCANNER] panel failed: " + type(exc).__name__)
+            summary = None
+        if summary is not None:
             try:
-                summary = runtime.scan_once(token)
                 _zero_base_log_event(
                     "zero_base_discovery_cycle",
                     fields={
@@ -6957,7 +6969,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
             except Exception as exc:
                 log_error("[ZERO_BASE_SCANNER] probe dispatch failed: " + type(exc).__name__)
             next_probe_epoch = time.time() + 10
-        time.sleep(0.5)
+        runtime.wait(0.5)
 
 
 # ==========================================

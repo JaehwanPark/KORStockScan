@@ -233,3 +233,64 @@ def test_daily_budget_legacy_seed_is_idempotent_and_exhaustion_does_not_reserve(
     with S.Store(tmp_path) as store:
         with pytest.raises(ValueError,match='budget_exhausted'):
             store.reserve(ids[2],'test',budget_key='day1',call_limit=1)
+
+
+def test_legacy_budget_migration_retains_charges_and_cross_day_limits(tmp_path):
+    root = S.store_root(tmp_path)
+    root.mkdir(parents=True)
+    with sqlite3.connect(root / 'metadata.sqlite3') as db:
+        db.execute('CREATE TABLE attempt_budgets(attempt TEXT PRIMARY KEY,budget_key TEXT NOT NULL)')
+        db.executemany('INSERT INTO attempt_budgets VALUES(?,?)',
+                       [('uncertain-old', 'postclose_auxiliary:2026-10-07'),
+                        ('completed-old', 'postclose_auxiliary:2026-10-08')])
+    with S.Store(tmp_path) as store:
+        activate(store)
+        assert set(store.db.execute('SELECT * FROM attempt_budgets')) == {
+            ('uncertain-old', 'postclose_auxiliary:2026-10-07'),
+            ('completed-old', 'postclose_auxiliary:2026-10-08'),
+        }
+        rid, _ = store.add_request(request())
+        attempt = store.reserve(rid, 'test', budget_key='postclose_auxiliary:2026-10-08',
+                                additional_budget_keys=['postclose_auxiliary:2026-10-07'], call_limit=2)
+        store.finish(attempt, {'error_type': 'timeout'})
+        for day in ('2026-10-07', '2026-10-08'):
+            assert store.budget_used('postclose_auxiliary:' + day) == 2
+    # Reopening does not replenish either budget or retry the uncertain request.
+    with S.Store(tmp_path) as store:
+        assert store.db.execute('SELECT state FROM requests WHERE id=?', (rid,)).fetchone()[0] == 'reserved'
+        rid2, _ = store.add_request(request(2))
+        with pytest.raises(ValueError, match='budget_exhausted'):
+            store.reserve(rid2, 'test', budget_key='postclose_auxiliary:2026-10-09',
+                          additional_budget_keys=['postclose_auxiliary:2026-10-07'], call_limit=2)
+        assert store.db.execute('SELECT state FROM requests WHERE id=?', (rid2,)).fetchone()[0] == 'planned'
+        assert store.budget_used('postclose_auxiliary:2026-10-09') == 0
+
+
+def test_cross_day_seed_does_not_reassign_prior_postclose_charges(tmp_path):
+    with S.Store(tmp_path) as store:
+        activate(store)
+        rid, _ = store.add_request(request())
+        member = store.add_member('c', 'o', 'a', rid, 'WIN')
+        store.bind_generation('g', {'p': [member]}, {'generation': 'g'}, 1)
+        store.reserve(rid, 'test', budget_key='postclose_auxiliary:2026-10-08',
+                      additional_budget_keys=['postclose_auxiliary:2026-10-07'], call_limit=100)
+        store.seed_call_budget('g', 'postclose_auxiliary:2026-10-09', since_epoch=0,
+                               exclude_assigned_prefix='postclose_auxiliary:')
+        assert store.budget_used('postclose_auxiliary:2026-10-09') == 0
+        assert store.budget_used('postclose_auxiliary:2026-10-08') == 1
+        assert store.budget_used('postclose_auxiliary:2026-10-07') == 1
+
+
+def test_invalid_legacy_budget_migration_rolls_back_and_releases_writer(tmp_path):
+    root = S.store_root(tmp_path)
+    root.mkdir(parents=True)
+    with sqlite3.connect(root / 'metadata.sqlite3') as db:
+        db.execute('CREATE TABLE attempt_budgets(attempt TEXT PRIMARY KEY,budget_key TEXT NOT NULL)')
+        db.execute('INSERT INTO attempt_budgets VALUES(NULL,?)', ('keep-invalid-charge',))
+    with pytest.raises(sqlite3.IntegrityError):
+        S.Store(tmp_path)
+    with sqlite3.connect(root / 'metadata.sqlite3') as db:
+        assert db.execute('SELECT * FROM attempt_budgets').fetchall() == [(None, 'keep-invalid-charge')]
+        assert not db.execute("SELECT name FROM sqlite_master WHERE name='attempt_budgets_migrating'").fetchall()
+    with S.writer_lock(tmp_path):
+        pass

@@ -81,6 +81,83 @@ DEFAULT_CLOSURE_OWNER = {
 }
 
 
+def _current_strategy_receipt(data_root: Path, policy: dict[str, Any]) -> dict[str, Any]:
+    """Legacy strategy activation does not describe the native family contract."""
+    if policy.get('continuous_reversal'):
+        return dict(status='legacy_strategy_receipt_not_applicable',
+                    family_schema=policy['continuous_reversal'].get('schema'),
+                    reason='native_family_consumption_requires_exact_pid_receipt',
+                    actual_pid_consumed=False)
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    return native.current_strategy_receipt(data_root=data_root)
+
+
+def _reversal_component(data_root: Path, policy: dict[str, Any], owner: str) -> dict[str, Any]:
+    """Read the exact immutable component already validated by direct handoff."""
+    from src.engine.scalping import continuous_reversal_policy as reversal
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    family = policy['continuous_reversal']
+    name = 'machine' if owner == 'main_mechanistic_entry' else 'auxiliary'
+    expected = family[name + '_report_sha256']
+    if family.get('schema') in {
+        'continuous_reversal_policy_v2', 'continuous_reversal_policy_v3',
+        'continuous_reversal_policy_v4', 'continuous_reversal_policy_v5',
+        'continuous_reversal_policy_v6',
+    }:
+        path = native.root(data_root) / 'sources' / f'reversal-{expected}.json'
+    else:
+        path = reversal.directory(data_root, family['source_date']) / f'{name}.json'
+    report = _load_json(path)
+    if (report.get('artifact_content_sha256') != expected
+            or reversal.digest({k: v for k, v in report.items() if k != 'artifact_content_sha256'}) != expected):
+        raise ValueError('continuous_reversal_component_changed')
+    return report
+
+
+def _reversal_comparison_disposition(handoff: dict[str, Any], *,
+                                    component: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Policy readiness is independent of a completed challenger comparison."""
+    state = handoff.get('policy_states') or {}
+    comparison_complete = handoff.get('comparison_complete')
+    if component is not None:
+        from src.engine.scalping.reversal_policy_status import report_state
+        state = report_state(component)
+        comparison_complete = component.get('comparison_complete')
+    comparison = state.get('comparison_state')
+    if comparison == 'source_gap':
+        return dict(comparison_status='source_gap', candidate_count=0,
+                    policy_handoff_state='incumbent_preserved',
+                    resolution_mode='verified_policy_carry_comparison_source_gap',
+                    first_blocker='reversal_comparison_source_gap', comparison_complete=False)
+    promoted = (component or {}).get('comparison_promoted_scopes') or []
+    if state.get('adoption_basis') == 'comparison_selected' and promoted:
+        metrics = component.get('comparison_metrics') or {}
+        if (not isinstance(promoted, list) or not all(isinstance(sid, str) for sid in promoted)
+                or len(set(promoted)) != len(promoted)
+                or not isinstance(metrics, dict)
+                or any(not isinstance(metrics.get(sid), dict)
+                       or metrics.get(sid, {}).get('improved') is not True
+                       or type(metrics.get(sid, {}).get('paired_points')) is not int
+                       or metrics[sid]['paired_points'] <= 0 for sid in promoted)):
+            raise ValueError('continuous_reversal_promoted_scope_evidence_invalid')
+        return dict(comparison_status='cumulative_winrate_selected', candidate_count=len(promoted),
+                    comparison_complete=comparison_complete is True,
+                    comparison_selected_scopes=promoted,
+                    resolution_mode='scoped_comparison_selected' if comparison_complete is True
+                    else 'scoped_comparison_selected_remaining_incomplete')
+    if (comparison_complete is False
+            or comparison in {'incomplete', 'completed_unresolved', 'valid_empty'}):
+        return dict(comparison_status='insufficient_sample', candidate_count=0,
+                    policy_handoff_state='incumbent_preserved',
+                    resolution_mode='verified_policy_carry_comparison_incomplete',
+                    comparison_complete=False)
+    if state.get('adoption_basis') in {'carried', 'operator_designated'}:
+        return dict(comparison_status='identical_policy', candidate_count=0,
+                    policy_handoff_state='incumbent_preserved',
+                    resolution_mode='verified_registered_policy_carry')
+    return {}
+
+
 def summary_paths(target_date: str) -> tuple[Path, Path]:
     base = REPORT_DIR / f"runtime_approval_summary_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
@@ -1018,7 +1095,7 @@ def build_runtime_approval_summary(
             source_payload = _load_json(Path(str(row.get("path") or "")))
             machine_source = policy_payload.get("machine_evaluation_source") or {}
             try:
-                row['current_strategy_generation'] = machine_policy.current_strategy_receipt(data_root=DATA_DIR)
+                row['current_strategy_generation'] = _current_strategy_receipt(DATA_DIR, policy_payload)
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 row['current_strategy_generation'] = dict(status='active_generation_invalid', reason=str(exc), actual_pid_consumed=False)
                 policy_receipt_valid = False
@@ -1145,6 +1222,8 @@ def build_runtime_approval_summary(
                             scope_pending=handoff['scope_pending'],
                             comparison_complete=handoff['comparison_complete'],
                             new_policy_application_claimed=False)
+                    component = _reversal_component(DATA_DIR, policy_payload, owner)
+                    row['economic_evidence'].update(_reversal_comparison_disposition(handoff, component=component))
                 except (OSError,ValueError,KeyError,TypeError):
                     policy_receipt_valid=False
                     row['economic_evidence'].update(comparison_status='source_gap',

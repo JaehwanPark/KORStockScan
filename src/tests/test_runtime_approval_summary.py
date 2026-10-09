@@ -8,6 +8,83 @@ import pytest
 from src.engine import runtime_approval_summary as mod
 
 
+@pytest.mark.parametrize('comparison', ['incomplete','completed_unresolved','valid_empty'])
+def test_registered_readiness_does_not_claim_completed_comparison(comparison):
+    result=mod._reversal_comparison_disposition(dict(comparison_complete=False,
+        policy_states=dict(adoption_basis='carried',comparison_state=comparison)))
+    assert result['comparison_status']=='insufficient_sample'
+    assert result['candidate_count']==0
+    assert result['comparison_complete'] is False
+
+
+def test_registered_carry_keeps_comparison_source_gap_visible():
+    result=mod._reversal_comparison_disposition(dict(comparison_complete=False,
+        policy_states=dict(adoption_basis='carried',comparison_state='source_gap')))
+    assert result['comparison_status']=='source_gap'
+    assert result['candidate_count']==0
+
+
+def test_completed_registered_carry_does_not_claim_new_selection():
+    assert mod._reversal_comparison_disposition(dict(comparison_complete=True,
+        policy_states=dict(adoption_basis='carried',comparison_state='complete')))['comparison_status']=='identical_policy'
+    assert mod._reversal_comparison_disposition(dict(comparison_complete=True,
+        policy_states=dict(adoption_basis='comparison_selected',comparison_state='complete')))=={}
+
+
+def test_machine_component_is_not_labeled_as_auxiliary_selection():
+    handoff=dict(comparison_complete=True,policy_states=dict(adoption_basis='comparison_selected',comparison_state='complete'))
+    machine=dict(status='completed',adoption_basis='carried',comparison_state='complete')
+    result=mod._reversal_comparison_disposition(handoff,component=machine)
+    assert result['comparison_status']=='identical_policy'
+    assert result['candidate_count']==0
+
+
+def test_native_family_does_not_require_legacy_strategy_activation(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    monkeypatch.setattr(native,'current_strategy_receipt',lambda **kw: (_ for _ in ()).throw(
+        KeyError('strategy_activation')))
+    result=mod._current_strategy_receipt(tmp_path,dict(continuous_reversal=dict(schema='continuous_reversal_policy_v6')))
+    assert result['status']=='legacy_strategy_receipt_not_applicable'
+    assert result['actual_pid_consumed'] is False
+    with pytest.raises(KeyError,match='strategy_activation'):
+        mod._current_strategy_receipt(tmp_path,{})
+
+
+def test_partial_auxiliary_selection_retains_selected_scope_and_pending_population():
+    sid='samsung|REGULAR|ALL|SOR'
+    component=dict(status='completed',adoption_basis='comparison_selected',comparison_complete=False,
+                   comparison_promoted_scopes=[sid],comparison_metrics={sid:dict(improved=True,paired_points=3)})
+    result=mod._reversal_comparison_disposition(dict(comparison_complete=False),component=component)
+    assert result['comparison_status']=='cumulative_winrate_selected'
+    assert result['candidate_count']==1
+    assert result['comparison_selected_scopes']==[sid]
+    assert result['comparison_complete'] is False
+    assert result['resolution_mode']=='scoped_comparison_selected_remaining_incomplete'
+    component['comparison_metrics'][sid]['paired_points']=0
+    with pytest.raises(ValueError,match='promoted_scope_evidence_invalid'):
+        mod._reversal_comparison_disposition({},component=component)
+    component['comparison_metrics'][sid]=[]
+    with pytest.raises(ValueError,match='promoted_scope_evidence_invalid'):
+        mod._reversal_comparison_disposition({},component=component)
+
+
+def test_exact_component_reader_rejects_rewritten_policy_source(tmp_path):
+    from src.engine.scalping import continuous_reversal_postclose as producer
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    machine=producer.seal(dict(status='completed',adoption_basis='carried'))
+    auxiliary=producer.seal(dict(status='completed',adoption_basis='comparison_selected'))
+    family=dict(schema='continuous_reversal_policy_v6',source_date='2026-10-08',
+                machine_report_sha256=machine['artifact_content_sha256'],auxiliary_report_sha256=auxiliary['artifact_content_sha256'])
+    for report in (machine,auxiliary):
+        path=native.root(tmp_path)/'sources'/('reversal-'+report['artifact_content_sha256']+'.json')
+        _write(path,report)
+    policy=dict(continuous_reversal=family)
+    assert mod._reversal_component(tmp_path,policy,'main_mechanistic_entry')==machine
+    assert mod._reversal_component(tmp_path,policy,'compact_auxiliary')==auxiliary
+    _write(native.root(tmp_path)/'sources'/('reversal-'+machine['artifact_content_sha256']+'.json'),dict(machine,adoption_basis='comparison_selected'))
+    with pytest.raises(ValueError,match='component_changed'):
+        mod._reversal_component(tmp_path,policy,'main_mechanistic_entry')
+
 def _write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")

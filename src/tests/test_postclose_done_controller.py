@@ -161,6 +161,62 @@ def test_controller_predecessor_wait_times_out_without_mutation(monkeypatch, tmp
     assert not (data / "report" / "threshold_cycle_postclose_status").exists()
 
 
+def test_cli_waits_before_dispatching_summary_with_previous_receipts(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.delenv("POSTCLOSE_STAGE_WORKER", raising=False)
+    _write(handoff.stage_path(tmp_path / "report", "2026-10-08", "main_machine_policy"),
+           {"status": "succeeded", "run_id": "previous"})
+    events = []
+
+    def wait(day, **kwargs):
+        events.append("main_wait")
+        return True
+
+    def dispatch(argv):
+        assert events == ["main_wait"]
+        assert argv == ["--stage", "summary_handoff", "--date", "2026-10-08"]
+        events.append("summary_dispatch")
+        return 0
+
+    monkeypatch.setattr(mod, "_wait_for_predecessor_succeeded", wait)
+    monkeypatch.setattr(handoff, "_stage_main", dispatch)
+    assert mod.main(["--date", "2026-10-08"]) == 0
+    assert events == ["main_wait", "summary_dispatch"]
+
+
+def test_cli_timeout_does_not_dispatch_stale_summary(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report/postclose_done_controller")
+    monkeypatch.delenv("POSTCLOSE_STAGE_WORKER", raising=False)
+    _write(handoff.stage_path(tmp_path / "report", "2026-10-08", "main_machine_policy"),
+           {"status": "succeeded", "run_id": "previous"})
+    monkeypatch.setattr(mod, "_wait_for_predecessor_succeeded", lambda *a, **k: False)
+    monkeypatch.setattr(handoff, "_stage_main", lambda *a: (_ for _ in ()).throw(
+        AssertionError("stale summary dispatched")))
+    assert mod.main(["--date", "2026-10-08"]) == 1
+    report = json.loads(mod._control_paths("2026-10-08")[0].read_text())
+    assert report["status"] == "blocked_predecessor_not_succeeded"
+    assert report["actions"] == []
+
+
+def test_cli_summary_worker_does_not_wait_or_redispatch(monkeypatch):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    monkeypatch.delenv("POSTCLOSE_STAGE_WORKER", raising=False)
+    monkeypatch.setattr(mod, "_wait_for_predecessor_succeeded", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("summary worker waited on Main")))
+    monkeypatch.setattr(handoff, "_stage_main", lambda *a: (_ for _ in ()).throw(
+        AssertionError("summary worker recursively dispatched")))
+    monkeypatch.setattr(mod, "build_postclose_done_controller", lambda day, **kwargs: {
+        "status": "summary_verified", "date": day,
+    })
+    assert mod.main(["--date", "2026-10-08", "--summary-handoff-only"]) == 0
+
+
 def test_finalizer_requires_fresh_whole_chain_done_attempt_receipt(tmp_path, monkeypatch):
     from datetime import datetime
 

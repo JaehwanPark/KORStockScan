@@ -48,6 +48,43 @@ def test_registry_immutable_ascii_and_historical_request_parity(setup):
     with pytest.raises(ValueError):G.load(root,'../x')
 
 
+def test_explicit_input_rebind_preserves_prompt_scope_and_budget(setup):
+    root,b,m,sid,v=setup
+    from src.engine.scalping import reversal_extended_union as E
+    original=T.config(root)
+    with S.Store(root) as store:
+        store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)', ('already-spent','postclose_auxiliary:2026-10-07'))
+        store.commit()
+        budget_before=store.db.execute('SELECT * FROM attempt_budgets ORDER BY 1,2').fetchall()
+    receipt=T.rebind_candidate_input(root,input_version=E.VERSION,
+        expected_config_sha256=original['artifact_content_sha256'])
+    updated=T.config(root);replacement=G.load(root,updated['candidate_registry'])
+    assert replacement['input_version']==E.VERSION
+    for key in ('prompt','hypothesis','development_keys','base_arm'):
+        assert replacement[key]==v[key]
+    for key in ('scopes','seed','max_pairs'):
+        assert updated[key]==original[key]
+    assert G.load(root,v['registry_sha256'])==v
+    assert receipt['budget_reset'] is receipt['live_policy_changed'] is False
+    assert receipt['runtime_effect'] is receipt['allowed_runtime_apply'] is False
+    with S.Store(root) as store:
+        assert store.db.execute('SELECT * FROM attempt_budgets ORDER BY 1,2').fetchall()==budget_before
+    with pytest.raises(ValueError,match='parent_changed'):
+        T.rebind_candidate_input(root,input_version=E.VERSION,
+            expected_config_sha256=original['artifact_content_sha256'])
+
+
+def test_input_rebind_rejects_different_prompt_contract(setup,monkeypatch):
+    root,b,m,sid,v=setup
+    from src.engine.scalping import reversal_extended_union as E
+    original=T.config(root)
+    monkeypatch.setattr(E,'PROMPT',E.PROMPT+'Changed shared rule.\n')
+    with pytest.raises(ValueError,match='rebind_unsupported'):
+        T.rebind_candidate_input(root,input_version=E.VERSION,
+            expected_config_sha256=original['artifact_content_sha256'])
+    assert T.config(root)==original
+
+
 def test_prepare_reuses_shared_requests_and_ignores_unrelated_arms(setup):
     root,b,m,sid,v=setup
     c=T.prepare(root,'2026-10-07',m,b)
@@ -82,6 +119,22 @@ def test_zero_budget_has_no_transport_and_no_false_winrate(setup):
     # A cached old-date attempt is not a new-date call just because it ran
     # after midnight. Its original cap still prevents retrying old requests.
     assert later['call_budget']['used_after']==0
+
+
+def test_later_evaluation_charges_both_dates_without_repeating_calls(setup):
+    root,b,m,sid,v=setup
+    next_machine=P.seal(dict(m,source_date='2026-10-08',publication_date='2026-10-08'))
+    campaign=T.prepare(root,'2026-10-08',next_machine,b)
+    assert campaign['expected_pairs']>0
+    result=T.calls(root,'2026-10-08',transport=transport)
+    assert result['new_calls']>0
+    assert result['call_budget']['used_after']>=result['new_calls']
+    assert result['observation_date_budgets']['postclose_auxiliary:2026-10-07']>=result['new_calls']
+    assert T.evaluate(root,'2026-10-08')['paired_metrics_ready']
+    cached=T.calls(root,'2026-10-08',transport=lambda *a,**kw:pytest.fail('repeated completed call'))
+    assert cached['new_calls']==0
+    assert cached['call_budget']['used_after']==result['call_budget']['used_after']
+    assert cached['observation_date_budgets']==result['observation_date_budgets']
 
 
 def test_sampling_ignores_label_and_excludes_development(setup):

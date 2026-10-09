@@ -168,3 +168,7 @@ metric contract는 `metric_role=runtime_transport_diagnostic`, `decision_authori
 ## 2026-10-08 승인 구현·리뷰 인계
 
 사용자가 구현·반복 리뷰/보완·배포·재기동을 승인하여 위 계획의 생존 Main 경로를 구현했다. [구현/검증 기록](../audits/main-rest-ws-latency-implementation-review-2026-10-08.md)에 단계별 실제 소비·제외 근거·공식 원천과 성능을 연결한다. 원 5초/native claim·현재 v6/보조·Main-only/cap/quota/최종 주문 보호는 유지한다. WS 분봉은 430봉·전체 prefix가 부족하면 REST를 유지하며, terminal 원문 compaction은 exact attempt 소비 계약 때문에 제외했다. 신규 AI 비교 원장·provider/broker 검증 호출은 생성하지 않았다. 코드 종료와 배포/PID/자연 성능·경제성을 각각 확인한다.
+
+## 2026-10-08 15시 관측 후 상세 수리 인계
+
+[PID 206123 관측](../audits/main-pid-206123-post-warmup-latency-rest-ws-monitoring-2026-10-08.md)에서 physical HTTP 1,097회 중 분봉 516회(probe 400/Main 116), logical demand 256건의 REST 유지, WS lock 잔여 복사 비용을 확인했다. [상세 개선계획](main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md) B4/B5/B7에서 RW 계약을 구체화한다. selector는 session capacity PRE50/REGULAR390/AFTER240보다 큰 430봉 요구를 명시적으로 REST 유지하므로 시간이 지나면 자동 대체된다고 기대하지 않는다. B5a는 현행 homogeneous source의 유효 중복만 줄이고, B5b는 현재 금지된 REST/WS 혼합을 임의 허용하지 않은 채 역사 prefix·완료봉의 새 source 계약과 parity를 먼저 검증한다. 기존 fixed-watch 밖 probe 전체를 WS 전환 가능량으로 계산하지 않는다. 공식 gate·원 430봉 요구·bounded fallback·현재 실행 owner를 유지하며 이번 인계는 계획이다.

@@ -928,6 +928,51 @@ def test_direct_summary_accepts_pre_submit_delay_as_independent_owner():
     assert mod.DIRECT_OWNER_TASK_LABEL["pre_submit_delay"] == "PreSubmitDelay"
 
 
+def _main_only_summary():
+    payload = _direct_summary("2026-10-08")
+    payload["sources"]["main_mechanistic_entry"] = payload["sources"].pop("ai_outcome")
+    for owner in ("machine_entry", "low_price_two_leg", "low_price_expansion"):
+        payload["sources"].pop(owner)
+    payload["required_source_count"] = payload["available_required_source_count"] = 9
+    return payload
+
+
+def test_direct_summary_accepts_current_main_only_census():
+    payload = _main_only_summary()
+    assert mod._validate_direct_summary(payload, "2026-10-08") == payload
+
+
+@pytest.mark.parametrize('owner', ['main_mechanistic_entry','compact_auxiliary'])
+@pytest.mark.parametrize('complete', [True, False])
+def test_actual_registered_carry_projection_matches_checklist_contract(owner, complete):
+    from src.engine import runtime_approval_summary as producer
+    payload = _main_only_summary()
+    row = _direct_source(owner, comparison_status='cumulative_winrate_selected',
+                         policy_handoff_state='verified', policy_valid=True)
+    row['economic_evidence']['selection_metric']='cumulative_raw_win_fraction'
+    component=dict(status='completed',adoption_basis='carried',comparison_complete=complete)
+    row['economic_evidence'].update(producer._reversal_comparison_disposition(
+        dict(comparison_complete=complete),component=component))
+    payload['sources'][owner]=row
+    assert row['economic_evidence']['policy_handoff_state']=='incumbent_preserved'
+    assert row['policy_receipt']['valid'] is True
+    assert row['economic_evidence']['policy_apply_allowed'] is False
+    assert mod._validate_direct_summary(payload,'2026-10-08')==payload
+
+
+@pytest.mark.parametrize("owner", [
+    "source_quality", "entry_cancel_wait", "entry_split", "pre_submit_delay",
+    "scale_in_split", "ws_freshness", "main_mechanistic_entry",
+    "compact_auxiliary", "rising_missed",
+])
+def test_main_only_summary_still_rejects_missing_active_owner(owner):
+    payload = _main_only_summary()
+    payload["sources"].pop(owner)
+    payload["required_source_count"] = payload["available_required_source_count"] = 8
+    with pytest.raises(RuntimeError, match="primary source census incomplete: " + owner):
+        mod._validate_direct_summary(payload, "2026-10-08")
+
+
 @pytest.mark.parametrize("defect", [None, "receipt", "authority", "metric", "owner", "status"])
 def test_winrate_handoff_is_verified_without_economic_or_runtime_authority(defect):
     owner = "entry_split" if defect == "owner" else "compact_auxiliary"

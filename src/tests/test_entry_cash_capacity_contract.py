@@ -219,6 +219,19 @@ def test_nonentry_five_second_receipt_reaches_budget_with_original_clock(monkeyp
         handlers._reset_entry_capacity_receipts()
 
 
+def _capacity_context(stock, code):
+    import time
+    from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalContext
+    from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
+    generation = ScannerGeneration(code=code, promotion_id='test', revision=1,
+        record_id=1, venue='SOR', promotion_epoch=time.time(), attach_epoch=time.time(),
+        observed_price=10000, source_signature='fixture')
+    return ScannerAsyncEvalContext.create(generation=generation, cache_key='source',
+        submitted_epoch=time.time(), deadline_epoch=time.time()+5,
+        stock_snapshot=stock, ws_snapshot={'curr': 10000},
+        state_version=handlers._scanner_async_entry_state_version(stock))
+
+
 def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
     handlers._reset_entry_capacity_receipts()
     clock = [1000.0]
@@ -229,7 +242,9 @@ def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
     monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (generation[0], code, price))
     monkeypatch.setattr(handlers, "_prefetch_entry_capacity_for_async_evaluation",
                         lambda *args, **kwargs: reads.append(args) or {"status": "ready"})
-    request = handlers._request_entry_capacity_preparation
+    def request(stock, code, ws):
+        return handlers._request_entry_capacity_preparation(stock, code, ws,
+            context=_capacity_context(stock, code))
     try:
         assert not request({"sim": True}, "005930", {"curr": 10000})
         assert not request({"buy_qty": 1}, "005930", {"curr": 10000})
@@ -262,8 +277,8 @@ def test_pending_preparation_replaces_obsolete_price_even_at_queue_capacity(monk
     monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
     try:
         for code in range(8):
-            assert handlers._request_entry_capacity_preparation({}, str(code), {"curr": 10000})
-        assert handlers._request_entry_capacity_preparation({}, '0', {"curr": 10001})
+            assert handlers._request_entry_capacity_preparation({}, str(code), {"curr": 10000}, context=_capacity_context({}, str(code)))
+        assert handlers._request_entry_capacity_preparation({}, '0', {"curr": 10001}, context=_capacity_context({}, '0'))
         assert len(handlers._ENTRY_CAPACITY_PENDING) == 8
         assert ('0', 10000) not in handlers._ENTRY_CAPACITY_PENDING
         assert ('0', 10001) in handlers._ENTRY_CAPACITY_PENDING
@@ -435,7 +450,7 @@ def test_preparation_join_and_frozen_observer_use_one_http(monkeypatch, capacity
     assert not handlers._ENTRY_CAPACITY_EVENTS and not handlers._ENTRY_CAPACITY_SOURCE_INFLIGHT
 
 
-def test_changed_price_preparation_queues_latest_without_second_parallel_http(monkeypatch, capacity_runtime):
+def test_changed_price_without_demand_does_not_queue_second_http(monkeypatch, capacity_runtime):
     import threading,time
     entered,release=threading.Event(),threading.Event();calls=[]
     def fetch(token,code,unit_price=None,**kw):
@@ -447,10 +462,10 @@ def test_changed_price_preparation_queues_latest_without_second_parallel_http(mo
     t.start();assert entered.wait(1)
     new=handlers._prefetch_entry_capacity_for_async_evaluation("005930",{"curr":10001},time.time()+2)
     assert new["status"]=="source_gap" and calls==[10000]
-    assert ("005930",10001) in handlers._ENTRY_CAPACITY_PENDING
+    assert ("005930",10001) not in handlers._ENTRY_CAPACITY_PENDING
     release.set();t.join(2)
-    assert handlers.prepare_pending_entry_capacity()["status"]=="ready"
-    assert calls==[10000,10001]
+    assert handlers.prepare_pending_entry_capacity()["status"]=="idle"
+    assert calls==[10000]
 
 
 def test_required_read_never_joins_or_reuses_source_preparation(monkeypatch, capacity_runtime):

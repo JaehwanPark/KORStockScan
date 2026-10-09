@@ -9672,11 +9672,37 @@ class GPTSniperEngine:
                     if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                         from src.engine.scalping.reversal_source_diagnostics import (
                             claim_snapshot_with_receipt as claim_snapshot, validate_claim_with_receipt)
-                        claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
-                            now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'],live_clock=True)
-                        snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,
-                            evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
-                            machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],live_clock=True) if claim else None
+                        if machine_only:
+                            from src.engine.scalping.reversal_source_diagnostics import observe_snapshot, _PROCESS_START_TICKS
+                            snapshot, observation = observe_snapshot(symbol, _explicit_item_venue(item),
+                                machine_exact['session_bucket'], now=snapshot_now, item=item,
+                                family_sha256=reversal_family['family_sha256'], live_clock=True)
+                            claim = None
+                            machine_exact['evaluation_role'] = 'probe_observation'
+                            machine_exact['native_observation_receipt'] = observation
+                            if snapshot:
+                                entry_budget = EntryDeadline.create(
+                                    caller_epoch=snapshot[0]['epoch']+5,
+                                    caller_perf=entry_input_deadline_perf)
+                                entry_input_deadline_epoch = entry_budget.epoch
+                                entry_input_deadline_perf = entry_budget.perf
+                                entry_setup_live_policy['native_observation'] = dict(
+                                    family_sha256=reversal_family['family_sha256'],
+                                    snapshot=[copy.deepcopy(snapshot[0]), {}],
+                                    snapshot_sha256=__import__('hashlib').sha256(json.dumps(snapshot,
+                                        sort_keys=True, default=str).encode()).hexdigest(),
+                                    deadline_epoch=entry_budget.epoch, deadline_perf=entry_budget.perf,
+                                    observer_pid=os.getpid(), observer_start_ticks=_PROCESS_START_TICKS)
+                        else:
+                            claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
+                                now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'],live_clock=True)
+                            snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,
+                                evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
+                                machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],live_clock=True) if claim else None
+                            machine_exact['evaluation_role'] = 'main_live'
+                            if claim and claim.get('observer_snapshot_sha256'):
+                                machine_exact['parent_observation_snapshot_sha256'] = claim['observer_snapshot_sha256']
+                                machine_exact['observation_subset_changed'] = claim.get('observation_subset_changed', False)
                         entry_setup_live_policy['continuous_reversal_claim']=claim
                         if claim and entry_budget is None:
                             entry_budget = EntryDeadline.create(claim, entry_input_deadline_epoch, entry_input_deadline_perf)
@@ -9797,6 +9823,7 @@ class GPTSniperEngine:
                         "mechanistic_entry_assessment": machine_assessment,
                         "machine_bundle_sha256": entry_setup_live_policy["machine_bundle_sha256"],
                         "machine_evaluation_status": "assessed",
+                        "native_observation": entry_setup_live_policy.get('native_observation'),
                         **machine_capture,
                         "provider_called": False,
                         "ai_decision_outcome_eligible": False,

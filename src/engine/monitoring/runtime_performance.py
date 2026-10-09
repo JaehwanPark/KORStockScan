@@ -27,6 +27,8 @@ _OVER5 = {name: 0 for name in _NAMES}
 _UNDER5 = {name: 0 for name in _NAMES}
 _AT_MOST2 = {name: 0 for name in _NAMES}
 _READY = OrderedDict()
+_SELECTED_READY = OrderedDict()
+_SELECTED_EVICTED = {'claimed': 0, 'expired_before_claim': 0, 'unobservable': 0}
 _COVERAGE = {kind: {'ready':0,'claimed':0} for kind in ('fixed_watch','other')}
 _TIMELINES = deque(maxlen=128)
 _GENERATION = None
@@ -155,6 +157,13 @@ def snapshot():
         generation, started = _GENERATION, _STARTED
         circuit = dict(_CIRCUIT)
         failures = [dict(stage=k[0], reason=k[1], count=v[0]) for k, v in _FAILURES.items()]
+        selected = [dict(v) for v in _SELECTED_READY.values()]
+        selected_counts = dict(_SELECTED_EVICTED, pending=0)
+    selected_as_of = time.time()
+    for row in selected:
+        state = ('claimed' if row['claimed'] else 'expired_before_claim'
+                 if selected_as_of >= row['epoch']+5 else 'pending')
+        selected_counts[state] += 1
     metrics = {}
     for name, values in samples.items():
         values.sort()
@@ -186,6 +195,9 @@ def snapshot():
         ai_circuit=circuit,
         ready_coverage=coverage, ready_coverage_basis='native_ready_seen_at_ingress_not_all_market_opportunities',
         ready_coverage_window='process_lifetime',
+        selected_native_coverage=dict(count=sum(selected_counts.values()), **selected_counts,
+            as_of=selected_as_of, retained=len(selected), scope='selected_backend_price_band_generation',
+            coverage='process_ingress_only_not_all_market_opportunities'),
         recent_terminal_timelines=timelines, retained_signal_timelines=inflight)
 
 
@@ -205,6 +217,7 @@ def record_native_ready(B, symbol, venue, item, market, epoch):
     """Peek sealed native ready membership, before Main claim admission."""
     day = __import__('datetime').datetime.fromtimestamp(epoch, __import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
     records = []
+    selected = []
     for native in (B, getattr(B, 'R', None)):
         if native is None or not hasattr(native, '_STATES'):
             continue
@@ -219,6 +232,22 @@ def record_native_ready(B, symbol, venue, item, market, epoch):
                             dict(symbol=symbol, venue=venue, item=item, market=market, day=day,
                                  native_epoch=event.get('native_epoch'), epoch=event['epoch'],
                                  scope_execution_hash=getattr(state,'generation',None))))
+                        family = getattr(B, '_FAMILY', None) or {}
+                        if family.get('schema') in {'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+                            from src.engine.scalping.reversal_extended_catalog import cell_key
+                            band = cell_key(symbol, market, event['confirmation_price'])
+                            cell = family['machine_cells'][band]['routes'][venue]
+                            expected_backend = cell['backend']
+                            selected_scope = ((native is B and scope[-1] == band
+                                and expected_backend in {'union_v5','union_v6'}
+                                and state.generation == cell['scope_execution_hash'])
+                                or (native is not B and expected_backend == 'registered_v4'
+                                    and state.generation == native._GENERATION))
+                            if selected_scope:
+                                branches = set(event.get('branch_signals', {})) & {
+                                    b['branch_id'] for b in cell['payload']['branches']}
+                                if branches:
+                                    selected.append((event, family['family_sha256'], band))
     with _LOCK:
         for identity,record in records:
             if identity and identity not in _READY:
@@ -228,6 +257,26 @@ def record_native_ready(B, symbol, venue, item, market, epoch):
                 _READY[identity]=record
                 if len(_READY)>4096:
                     _READY.popitem(last=False)
+        for event, family, band in selected:
+            identity = (symbol, item, event.get('signal_id') or event['event_id'])
+            if identity in _SELECTED_READY:
+                continue
+            _SELECTED_READY[identity] = dict(epoch=event['epoch'], family_sha256=family,
+                scope=band, claimed=False, native_event_id=event['event_id'])
+            if len(_SELECTED_READY) > 4096:
+                _, old = _SELECTED_READY.popitem(last=False)
+                state = ('claimed' if old['claimed'] else 'expired_before_claim'
+                         if epoch >= old['epoch']+5 else 'unobservable')
+                _SELECTED_EVICTED[state] += 1
+
+
+def record_selected_native_claim(claim):
+    event = claim['snapshot'][0]
+    key = (event['symbol'], event['source_item'], event.get('signal_id') or event['event_id'])
+    with _LOCK:
+        row = _SELECTED_READY.get(key)
+        if row is not None:
+            row['claimed'] = True
 
 
 def response_reserve():

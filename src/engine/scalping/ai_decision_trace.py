@@ -280,7 +280,23 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
         lock_ms = (write_started - lock_started) * 1000
         descriptor = -1
         entry_name = generation.logical.name
+        key_field = next((field for prefix, field in (
+            ('ai_decision_payloads_', 'request_envelope_sha256'),
+            ('ai_decision_prompts_', 'prompt_sha256'),
+            ('ai_decision_requests_', 'request_id'),
+            ('ai_decision_trace_', 'decision_trace_id'),
+            ('ai_decision_outcomes_', 'label_id'),
+            ('ai_canonical_context_candidates_', 'candidate_sha256'))
+            if path.name.startswith(prefix) and payload.get(field)), None)
         try:
+            if key_field:
+                from src.engine.scalping import trace_dedup
+                index = trace_dedup.prepare(path, key_field, generation,
+                    max_bytes=64 * 1024, hot=True)
+                if str(payload[key_field]) in index.keys:
+                    if index.digests[str(payload[key_field])] != trace_dedup.semantic_digest(payload, key_field):
+                        raise ValueError('ai_trace_dedup_identity_conflict')
+                    return {"ai_trace_file_lock_wait_ms": lock_ms, "ai_trace_write_ms": 0.0}
             generation.chmod_parent(0o700)
             existing = generation.stat_name(entry_name)
             if existing is not None and not stat.S_ISREG(existing.st_mode):
@@ -313,8 +329,7 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
                 if count <= 0:
                     raise OSError(f"short write for trace file: {path}")
                 written += count
-            if created:
-                os.fsync(descriptor)
+            os.fsync(descriptor)
             final_identity = generation.assert_open_descriptor_name_identity(
                 descriptor,
                 entry_name,
@@ -322,6 +337,8 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
             if created:
                 generation.fsync_parent()
                 generation.assert_name_identity(entry_name, final_identity)
+            if key_field:
+                trace_dedup.appended(path, key_field, payload, generation, descriptor)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -330,60 +347,41 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
 
 
 def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, float]:
-    """Warm request dedup indexes before the live evaluation budget starts."""
+    """One bounded maintenance step, outside Main and the entry budget."""
     if not trace_enabled():
         return {}
     day = target_date or _date_text()
     indexes = ((_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
                (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
-               (_SEEN_REQUEST_IDS, _request_path, "request_id"))
-    if all(day in cache for cache, _, _ in indexes):
-        return {}
+               (_SEEN_REQUEST_IDS, _request_path, "request_id"),
+               (_SEEN_TRACE_IDS, _trace_path, "decision_trace_id"),
+               (_SEEN_OUTCOME_LABEL_IDS, _outcome_path, "label_id"),
+               (_SEEN_CONTEXT_CANDIDATE_HASHES, _context_candidate_path, "candidate_sha256"))
     started = time.perf_counter()
-    with _WRITE_LOCK:
-        for cache, path, field in indexes:
-            if day not in cache:
-                cache[day] = _load_seen(path(day), field)
+    from src.engine.scalping import trace_dedup
+    for cache, path, field in indexes:
+        try:
+            with jsonl_artifact_generation_lock(path(day), exclusive=False, blocking=False) as generation:
+                index = trace_dedup.prepare(path(day), field, generation)
+                if not index.ready:
+                    return {"ai_trace_dedup_preparation_pending": True}
+            # Writers acquire _WRITE_LOCK before the file generation lease.
+            # Release the reader lease before taking that lock to avoid ABBA.
+            with _WRITE_LOCK:
+                cache[day] = index.keys
+                for old in sorted(cache)[:-3]:
+                    cache.pop(old, None)
+        except (BlockingIOError, trace_dedup.IndexNotReady):
+            return {"ai_trace_dedup_preparation_pending": True}
     return {"ai_trace_dedup_init_ms": (time.perf_counter() - started) * 1000}
 
 
 def _load_seen(path: Path, field: str) -> set[str]:
-    values: set[str] = set()
-    if not path.exists():
-        return values
-    parent_descriptor = -1
-    descriptor = -1
-    try:
-        parent_flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            parent_flags |= os.O_DIRECTORY
-        if hasattr(os, "O_NOFOLLOW"):
-            parent_flags |= os.O_NOFOLLOW
-        parent_descriptor = os.open(path.parent, parent_flags)
-        os.fchmod(parent_descriptor, 0o700)
-        flags = os.O_RDONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            descriptor = -1
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                value = str((row or {}).get(field) or "").strip()
-                if value:
-                    values.add(value)
-    except Exception:
-        return values
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if parent_descriptor >= 0:
-            os.close(parent_descriptor)
-    return values
+    """Only a prepared index or a bounded append suffix is eligible on hot paths."""
+    from src.engine.scalping import trace_dedup
+    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=False) as generation:
+        value = trace_dedup.prepare(path, field, generation, max_bytes=64 * 1024, hot=True)
+        return value.keys
 
 
 def _sanitize_text(value: str) -> tuple[str, bool]:
@@ -1023,9 +1021,8 @@ def capture_canonical_context_candidate(
                 path = _context_candidate_path(target_date)
                 seen = _load_seen(path, "candidate_sha256")
                 _SEEN_CONTEXT_CANDIDATE_HASHES[target_date] = seen
-            if candidate_sha256 not in seen:
-                _append_jsonl(_context_candidate_path(target_date), row)
-                seen.add(candidate_sha256)
+            _append_jsonl(_context_candidate_path(target_date), row)
+            seen.add(candidate_sha256)
         return {
             "ai_context_candidate_sha256": candidate_sha256,
             "ai_context_candidate_status": row["validation_only_status"],
@@ -1110,6 +1107,8 @@ def capture_machine_observation(
         }
     )
     capture_identity = {
+        "evaluation_role": exact_payload.get('evaluation_role', 'unspecified_legacy'),
+        "parent_observation_snapshot_sha256": exact_payload.get('parent_observation_snapshot_sha256'),
         "evaluation_attempt_id": context.get("evaluation_attempt_id"),
         "evaluation_attempt_identity_source": (
             "caller_evaluation_attempt_id"
@@ -1190,6 +1189,8 @@ def capture_machine_observation(
     redacted = redacted or context_redacted or lineage_redacted
     body = {
         "schema": "mechanistic_entry_observation_v1",
+        "evaluation_role": capture_identity['evaluation_role'],
+        "parent_observation_snapshot_sha256": capture_identity['parent_observation_snapshot_sha256'],
         **lineage,
         "runtime_consumption": dict(pid=os.getpid(), cwd=str(Path.cwd()),
             process_start_ticks=Path('/proc/self/stat').read_text().split(') ', 1)[1].split()[19],
@@ -1228,7 +1229,9 @@ def capture_machine_observation(
             'process_start_ticks': body['runtime_consumption']['process_start_ticks'],
             'captured_at': now.isoformat(),
             'provider_request_observed': False,
-            'provider_state': ('eligible_not_yet_requested' if assessment.get('action') == 'ENTER_NOW'
+            'evaluation_role': capture_identity['evaluation_role'],
+            'provider_state': ('probe_observation_provider_forbidden' if capture_identity['evaluation_role'] == 'probe_observation'
+                               else 'eligible_not_yet_requested' if assessment.get('action') == 'ENTER_NOW'
                                else 'not_requested_machine_nonentry'),
         }
         body['redacted'] = redacted or native_redacted
@@ -1521,21 +1524,22 @@ def capture_ai_request(
         lock_started = time.perf_counter()
         with _WRITE_LOCK:
             timings["ai_trace_lock_wait_ms"] = (time.perf_counter() - lock_started) * 1000
-            timings.update(prepare_ai_request_capture(target_date))
+            for cache, path, field in (
+                (_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
+                (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
+                (_SEEN_REQUEST_IDS, _request_path, "request_id")):
+                cache[target_date] = _load_seen(path(target_date), field)
             seen = _SEEN_PAYLOAD_HASHES[target_date]
-            if request_envelope_sha256 not in seen:
-                persist(_payload_path(target_date), payload_row)
-                seen.add(request_envelope_sha256)
+            persist(_payload_path(target_date), payload_row)
+            seen.add(request_envelope_sha256)
             seen_prompts = _SEEN_PROMPT_HASHES[target_date]
-            if prompt_sha256 not in seen_prompts:
-                persist(_prompt_path(target_date), prompt_row)
-                seen_prompts.add(prompt_sha256)
+            persist(_prompt_path(target_date), prompt_row)
+            seen_prompts.add(prompt_sha256)
             # Commit the request ledger last. A request row must never point at
             # payload/prompt content that failed to persist.
             seen_requests = _SEEN_REQUEST_IDS[target_date]
-            if trace_id not in seen_requests:
-                persist(_request_path(target_date), request_row)
-                seen_requests.add(trace_id)
+            persist(_request_path(target_date), request_row)
+            seen_requests.add(trace_id)
         return {
             **timings,
             "ai_trace_capture_ms": (time.perf_counter() - started) * 1000,
@@ -3007,18 +3011,17 @@ def record_ai_decision_trace(
                 path = _trace_path(target_date)
                 seen = _load_seen(path, "decision_trace_id")
                 _SEEN_TRACE_IDS[target_date] = seen
-            if trace_id not in seen:
-                if trace_row.get("entry_economic_plan_sha256"):
-                    from src.utils.pipeline_event_logger import emit_pipeline_event
-                    emit_pipeline_event("ENTRY_PIPELINE", str(trace_row.get("stock_code") or ""),
-                        str(trace_row.get("stock_code") or ""), "entry_ai_economic_decision_available",
-                        fields={"evaluation_attempt_id": trace_row.get("evaluation_attempt_id"),
-                            "entry_economic_plan_sha256": trace_row["entry_economic_plan_sha256"],
-                            "entry_economic_decision_available_at": trace_row["decision_ts"],
-                            "decision_trace_id": trace_id, "actual_order_submitted": False,
-                            "broker_order_forbidden": True, "runtime_effect": False, "allowed_runtime_apply": False})
-                _append_jsonl(_trace_path(target_date), trace_row)
-                seen.add(trace_id)
+            if trace_row.get("entry_economic_plan_sha256"):
+                from src.utils.pipeline_event_logger import emit_pipeline_event
+                emit_pipeline_event("ENTRY_PIPELINE", str(trace_row.get("stock_code") or ""),
+                    str(trace_row.get("stock_code") or ""), "entry_ai_economic_decision_available",
+                    fields={"evaluation_attempt_id": trace_row.get("evaluation_attempt_id"),
+                        "entry_economic_plan_sha256": trace_row["entry_economic_plan_sha256"],
+                        "entry_economic_decision_available_at": trace_row["decision_ts"],
+                        "decision_trace_id": trace_id, "actual_order_submitted": False,
+                        "broker_order_forbidden": True, "runtime_effect": False, "allowed_runtime_apply": False})
+            _append_jsonl(_trace_path(target_date), trace_row)
+            seen.add(trace_id)
             if trace_row["outcome_label_eligible"]:
                 seen_outcomes = _SEEN_OUTCOME_LABEL_IDS.get(target_date)
                 if seen_outcomes is None:
@@ -3026,9 +3029,8 @@ def record_ai_decision_trace(
                     seen_outcomes = _load_seen(outcome_path, "label_id")
                     _SEEN_OUTCOME_LABEL_IDS[target_date] = seen_outcomes
                 label_id = str(pending_row["label_id"])
-                if label_id not in seen_outcomes:
-                    _append_jsonl(_outcome_path(target_date), pending_row)
-                    seen_outcomes.add(label_id)
+                _append_jsonl(_outcome_path(target_date), pending_row)
+                seen_outcomes.add(label_id)
         return {
             "ai_decision_trace_schema": TRACE_SCHEMA,
             "ai_decision_trace_id": trace_id,

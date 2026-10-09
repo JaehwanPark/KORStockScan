@@ -1,13 +1,15 @@
-"""Read-only diagnostics for the pinned normalized reversal kernel.
+"""Source observation and handoff adapters for the pinned reversal kernel.
 
 Runtime source projection owns this module, independently of research kernel
-and auxiliary input contracts. No price, feature, policy or decision mutation.
+and auxiliary input contracts. Policy/FSM definitions remain in pinned owners.
 """
 from datetime import datetime
 from copy import deepcopy
 import math
 import time
 import os
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from contextlib import ExitStack
 
@@ -17,6 +19,197 @@ except (OSError, IndexError):
     _PROCESS_START_TICKS = None
 
 from src.engine.scalping import continuous_reversal as K
+
+_CHANGE = threading.Condition()
+_SEQUENCES = OrderedDict()
+
+
+def observation_sequence(item):
+    with _CHANGE:
+        return _SEQUENCES.get(item, 0)
+
+
+def notify_observation(item):
+    """A wakeup only. Readers must inspect the producer under its own lock."""
+    with _CHANGE:
+        _SEQUENCES[item] = _SEQUENCES.get(item, 0) + 1
+        _SEQUENCES.move_to_end(item)
+        while len(_SEQUENCES) > 512:
+            _SEQUENCES.popitem(last=False)
+        _CHANGE.notify_all()
+
+
+def wait_observation(item, sequence, timeout):
+    with _CHANGE:
+        _CHANGE.wait_for(lambda: _SEQUENCES.get(item, 0) != sequence, timeout=max(0, timeout))
+
+
+def invalidate_observation_interval(item):
+    """End a known last-owner collection interval without faking a trade tick."""
+    from src.engine.scalping.reversal_current_backend import backend
+    B = backend()
+    owners = [B]
+    if getattr(B, 'R', None) is not None:
+        owners.append(B.R)
+    for owner in owners:
+        with owner._LOCK:
+            for key in list(owner._STATES):
+                if len(key) > 2 and key[2] == item:
+                    owner._STATES.pop(key)
+    notify_observation(item)
+
+
+def observe_snapshot(symbol, venue, session, *, now, item, family_sha256,
+                     live_clock=False):
+    """Read the next eligible native snapshot without consuming any ready/claim.
+
+    Uses the pinned producer's snapshot and FIRST filter on copies. Selector
+    parity is tested against its real claim owner. No policy or FSM is changed.
+    """
+    from src.engine.scalping.reversal_current_backend import backend
+    B = backend()
+    with ExitStack() as locks:
+        locks.enter_context(B._LOCK)
+        carried = getattr(B, 'R', None)
+        if carried is not None:
+            locks.enter_context(carried._LOCK)
+        stamp = time.time() if live_clock else now
+        return _observe_snapshot_locked(B, symbol, venue, session, stamp, item, family_sha256)
+
+
+def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256):
+    stream = symbol, venue, item, K.market_bucket(session), str(datetime.fromtimestamp(now, K.KST).date())
+    receipt = dict(schema='native_observation_selection_v1', observed_epoch=now,
+        evaluation_role='probe_observation', process_pid=os.getpid(),
+        process_start_ticks=_PROCESS_START_TICKS, item=item, venue=venue,
+        family_sha256=family_sha256, reason='state_absent', runtime_effect=False)
+    if not family_sha256 or B._GENERATION != family_sha256:
+        return None, dict(receipt, reason='scope_or_generation_mismatch')
+    candidates = []
+    raw_states = [state for key, state in B._STATES.items() if key[:5] == stream]
+    receipt['raw_ready_count'] = sum(len(s.ready) for s in raw_states)
+    receipt['selected_ready_count'] = 0
+    operating = B.__name__.endswith(('reversal_extended_runtime', 'reversal_operating_runtime'))
+    if operating:
+        from src.engine.scalping import reversal_extended_catalog as C
+        for key, state in B._STATES.items():
+            if key[:5] != stream:
+                continue
+            last = getattr(state.legacy, 'last', None)
+            if last and C.cell_key(symbol, session, last[3]) == key[-1]:
+                cell = B._FAMILY['machine_cells'][key[-1]]['routes'][venue]
+                ids = [b['branch_id'] for b in cell['payload']['branches']]
+                truth = {bid: getattr(state, 'coverage_snapshot', {}).get(bid, 'UNKNOWN') for bid in ids}
+                receipt.update(selected_scope=key[-1], scope_execution_hash=state.generation,
+                    selected_branch_truth=truth, native_epoch=last[1], native_sequence=last[2],
+                    observed_seconds=max(0, last[0]-state.legacy.segment_start),
+                    reason='no_matching_pattern' if truth and all(v=='FALSE' for v in truth.values())
+                           else 'required_window_incomplete')
+            for ready in state.ready:
+                e = ready['event']
+                if C.cell_key(symbol, session, e['confirmation_price']) != key[-1]:
+                    continue
+                if ready['claimed']:
+                    receipt['reason'] = 'already_claimed'; continue
+                if not 0 <= now-e['epoch'] <= 5:
+                    receipt['reason'] = 'signal_expired'; continue
+                candidates.append((e['epoch'], e['native_sequence'], state, ready))
+        receipt['selected_ready_count'] = len({(e[3]['event']['event_id'], e[3]['event']['signal_id']) for e in candidates})
+        for _, _, state, ready in sorted(candidates, key=lambda x: x[:2]):
+            event, source = B.snapshot(state, ready)
+            confirmed = sorted(event['branch_signals'])
+            B._filter_first(event, source, state)
+            if not event['branch_signals']:
+                receipt['reason'] = 'native_path_changed'; continue
+            event['confirmed_set'] = confirmed
+            event['opportunity_key'] = B.A.opportunity(event)
+            return (event, source), dict(receipt, reason='ready',
+                native_event_id=event['event_id'], signal_id=event['signal_id'],
+                native_deadline_epoch=event['epoch']+5,
+                scope_execution_hash=state.generation)
+        parent = B._FAMILY['native_parent_bundle']['continuous_reversal']['family_sha256']
+        snapshot, native_receipt = _observe_snapshot_locked(B.R, symbol, venue, session, now, item, parent)
+        if snapshot:
+            event = snapshot[0]
+            cell = B._FAMILY['machine_cells'][C.cell_key(symbol, session, event['confirmation_price'])]['routes'][venue]
+            if cell['backend'] != 'registered_v4':
+                return None, receipt
+            return snapshot, dict(native_receipt, family_sha256=family_sha256)
+        return None, receipt
+    state = B._STATES.get(stream)
+    if state is None:
+        return None, receipt
+    receipt['reason'] = 'required_window_incomplete'
+    for ready in state.ready:
+        event = ready['event']
+        if ready['claimed']:
+            receipt['reason'] = 'already_claimed'; continue
+        if not 0 <= now-event['epoch'] <= 5:
+            receipt['reason'] = 'signal_expired'; continue
+        snapshot = state.snapshot(ready)
+        if not isinstance(snapshot, tuple):
+            snapshot = tuple(snapshot)
+        event, source = snapshot
+        selected = None
+        if getattr(B, '_FAMILY', None) and hasattr(B, 'C'):
+            cell = B._FAMILY['machine_cells'][B.C.cell_key(symbol, session, event['confirmation_price'])]['routes'][venue]
+            selected = {b['branch_id'] for b in cell['payload']['branches']}
+        for bid, signal in list(event['branch_signals'].items()):
+            if ((selected is not None and bid not in selected) or
+                (signal['decision_phase'] == 'FIRST_UPTICK' and
+                 (not state.legacy.turn or state.legacy.turn['event_id'] != event['event_id']))):
+                event['branch_signals'].pop(bid); source['branch_inputs'].pop(bid)
+        if event['branch_signals']:
+            return snapshot, dict(receipt, reason='ready', native_event_id=event['event_id'],
+                signal_id=event['signal_id'], native_deadline_epoch=event['epoch']+5)
+        receipt['reason'] = 'native_path_changed'
+    return None, receipt
+
+
+def claim_expected_snapshot(expected, *, live_clock=True, now=None):
+    """Compare the original event and claim under the same producer locks."""
+    from src.engine.scalping.reversal_current_backend import backend
+    B = backend()
+    with ExitStack() as locks:
+        locks.enter_context(B._LOCK)
+        if getattr(B, 'R', None) is not None:
+            locks.enter_context(B.R._LOCK)
+        stamp = time.time() if live_clock else now
+        event = expected['snapshot'][0]
+        snapshot, _ = _observe_snapshot_locked(B, event['symbol'], event['venue'],
+            event['market'], stamp, event['source_item'], expected['family_sha256'])
+        if not snapshot or any(snapshot[0].get(k) != event.get(k) for k in
+                ('event_id', 'signal_id', 'native_epoch', 'native_sequence', 'epoch')):
+            return None
+        current_signals = snapshot[0].get('branch_signals') or {}
+        original_signals = event.get('branch_signals') or {}
+        if not set(current_signals).issubset(original_signals) or any(
+                signal != original_signals[bid] for bid, signal in current_signals.items()):
+            return None
+        claim = claim_snapshot_with_receipt(event['symbol'], event['venue'], event['market'],
+            now=stamp, item=event['source_item'], family_sha256=expected['family_sha256'])
+        if claim is not None:
+            claim['observer_snapshot_sha256'] = expected.get('snapshot_sha256')
+            claim['observer_branch_ids'] = sorted(original_signals)
+            claim['live_branch_ids'] = sorted(current_signals)
+            claim['observation_subset_changed'] = set(current_signals) != set(original_signals)
+        return claim
+
+
+def observation_binding_valid(expected, *, now=None):
+    """Validate the local immutable observation's original clocks and producer."""
+    try:
+        stamp = time.time() if now is None else now
+        event = expected['snapshot'][0]
+        epoch, deadline, perf = event['epoch'], expected['deadline_epoch'], expected['deadline_perf']
+        return (all(type(v) in (int, float) and math.isfinite(v) and v > 0
+                    for v in (epoch, deadline, perf, stamp))
+                and epoch <= stamp < deadline <= epoch+5
+                and time.perf_counter() < perf
+                and expected['observer_pid'] == os.getpid()
+                and expected.get('observer_start_ticks') == _PROCESS_START_TICKS)
+    except (KeyError, TypeError, IndexError):
+        return False
 
 
 def claim_snapshot_with_receipt(*args, **kwargs):
@@ -33,6 +226,11 @@ def claim_snapshot_with_receipt(*args, **kwargs):
             kwargs['now'] = time.time()
         claim = B.claim_snapshot(*args, **kwargs)
         if claim:
+            try:
+                from src.engine.monitoring.runtime_performance import record_selected_native_claim
+                record_selected_native_claim(claim)
+            except (KeyError, TypeError, ValueError):
+                pass  # Diagnostic joins cannot revoke the native claim.
             if live_clock:
                 from src.engine.monitoring.runtime_performance import observe, mark_signal
                 observe('confirmed_to_claim', kwargs['now'] - claim['snapshot'][0]['epoch'])

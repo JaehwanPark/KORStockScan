@@ -191,7 +191,7 @@ def test_refreshed_inflight_claim_timeout_still_rejects_late_result():
     )
     refreshed = restored.claim(now_epoch=T0 + 7, limit=1)[0]
     assert refreshed["source_sha256"] == HASH_B
-    assert restored.abandon_expired_claims(now_epoch=T0 + 68, timeout_sec=60) == 1
+    assert restored.abandon_expired_claims(now_epoch=refreshed["residence_deadline_epoch"], timeout_sec=60) == 1
     assert not restored.resolve(
         refreshed, result="assessed", machine_action="ENTER_NOW", next_due_epoch=T0 + 80,
     )
