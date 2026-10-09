@@ -4,9 +4,9 @@
 
 사용자 지시에 따라 **관찰기 결함을 먼저 수리하고, 장중 로깅 없이 기존 자료를 장후에 연결하여 약세에 따른 Main 매매 조정 후보를 누적 연구**한다. 연결 정확도·표본 완전성을 일부 포기하더라도 장중 성능에 새 부담을 만들지 않는다. 충분히 일관된 조정 수치가 나오면 텔레그램으로 근거와 함께 안내한다.
 
-이번 요청은 **구현계획 작성·리뷰**다. 이 문서 작성으로 코드 수리, 장후 재생성, cron 등록, provider 호출, 텔레그램 전송, 정책 발행, 배포·재기동을 실행하지 않는다. 아래 단계는 후속 구현의 실행 순서이며 별도 compact/지연 개선 작업에 주어진 승인을 이 기능에 전용하지 않는다.
+10/8 계획 작성, 10/9 MW0–MW1 수리와 MW2–MW5 구현 이후, 사용자가 **반복 코드 리뷰·결함 수리 및 배포**를 승인했다. 이번 후속은 발견된 기존 AI 기록 인덱스 결함을 포함한 수리, 검증한 약세 관찰·장후 연구 코드의 immutable release 배포, optional 야간 예약 설치와 다음 예약기동 준비다. 신규 정책 발행·장중 연구 hook·강제 봇 기동·수동 연구 재생성은 포함하지 않는다. 코드/배포와 MW6 자연 실행·실제 송달 수용은 구분한다.
 
-- 현재 실행 인계 owner: [10/8 체크리스트](../checklists/2026-10-08-stage2-todo-checklist.md)의 `MainMarketWeaknessPostcloseObservation1008`. 기존 보조 튜닝·지연 개선 owner와 분리한다.
+- 현재 실행 인계 owner: [10/9 체크리스트](../checklists/2026-10-09-stage2-todo-checklist.md)의 `MainMarketWeaknessPostcloseObservation1008`. [10/8 체크리스트](../checklists/2026-10-08-stage2-todo-checklist.md)의 같은 stable ID·Acceptance를 인계하며 기존 보조 튜닝·지연 개선 owner와 분리한다. 역사 10/8 기록과 미래 10/12 봉인을 수정하지 않는다.
 - 최우선 불변식: **새 장중 hook·로깅·메타데이터 필드·파일 읽기·해시 계산·큐·thread·daemon·REST/WS 구독·AI 호출을 추가하지 않는다.** 기존 trace를 더 자주/더 자세히 쓰거나 보존 정책을 장중에 바꾸는 것도 제외한다.
 - P0 관찰기 수리는 기존 독립 관찰기의 잘못된 문구·상태 의미·검증을 고치는 범위다. 기존 실행 횟수·요청량·저장 횟수·원천 계약을 늘리지 않으며 Main/WS/AI hot path에 연결하지 않는다.
 - 기계 목록·탐지·확인점·보조 입력/문구/응답·compact codec·운영 호출 수·주문/가격/수량·holding/exit·provider·bot state는 유지한다. 새 후단 live 평가도 만들지 않는다.
@@ -14,6 +14,8 @@
 - 연구 판정은 현행 실제 ask·비용률 `0.0023`·1800초 이내 비용 후 `+0.4%`와 soft `−3%` 선도달의 W/F/U 및 누적 raw 승률을 따른다. 실제 손익·체결·경제성은 별도 표시한다. 기존 Main 채택에 EV·손익비·최소 일수/표본·holdout·제출 보존 gate를 추가하지 않는다.
 
 ## 2. 확인한 결함과 재사용 경로
+
+아래 표는 10/8 계획 검토 당시 결함과 경로다. 10/9 MW1 코드 수리 상태와 현재 검증은 §12에 구분하여 기록한다.
 
 | 대상 | 확인한 사실 | 계획상 처리 |
 |---|---|---|
@@ -155,7 +157,7 @@ raw snapshot으로 2/3회 latch를 재구성할 수는 있지만 notifier의 실
 
 ## 7. 저장·증분 처리
 
-예정 출력 namespace는 `data/report/main_market_weakness_research/<source_date>/<generation>/`이며 `source_manifest.json`, 작은 `joined_observations` partition, `daily.json/md`, `candidate_comparison.json`, `terminal.json`을 둔다. 누적 manifest는 일별 불변 partition을 참조하며 원 trace·AI 본문·snapshot 복사본을 만들지 않는다.
+일별 출력 namespace는 `data/report/main_market_weakness_research/<source_date>/<generation>/`이며 `source_manifest.json`, `daily.json/md`, `terminal.json`을 둔다. 작은 content-addressed partition은 동일 연구 namespace의 `objects/`에서 참조하고, 누적 `candidate_comparison.json`과 manifest는 `cumulative/<generation>/`에 둔다. 누적 manifest는 일별 불변 partition을 참조하며 원 trace·AI 본문·snapshot 복사본을 만들지 않는다.
 
 - 기본 처리 key: 원 source identity/hash + source date + projection/join/label/research version. 요청 ID와 기회 ID는 원래 의미를 유지한다. research namespace 때문에 동일 요청을 다시 저장/호출하지 않는다.
 - trace JSONL은 1회 streaming으로 필요한 열만 추출한다. 정상 newline offset까지만 읽고 미완성 tail은 다음 허용 야간 처리로 남긴다. 날짜/원천별 완료 offset·파일 identity·prefix 검증을 장후 원장에 기록한다. cutoff·읽기 전후 identity/크기/수정 상태와 읽은 범위의 digest를 묶고, cutoff 안의 rewrite를 검증할 수 없으면 해당 세대를 봉인하지 않는다. truncate/rotation/내용 변경은 영향 partition만 새 generation으로 재계산한다. 전체 과거 대용량 파일을 매일 재해시하지 않고 기존 producer 세대/manifest와 변경된 원천만 점검하며, 원천 삭제 후 재검증 불가도 명시한다.
@@ -179,8 +181,8 @@ raw snapshot으로 2/3회 latch를 재구성할 수는 있지만 notifier의 실
 
 ### 8.2 현재 chain과의 연결
 
-- 예정 CLI owner는 `src/engine/automation/main_market_weakness_research.py`, 순수 연결/집계 owner는 `src/engine/scalping/market_weakness_research.py`, 순수 알림/outbox owner는 `src/engine/automation/main_market_weakness_research_notify.py`다. 이들은 **아직 존재하지 않는 계획 경로**다. source/test 생성 시 역할·기존 유사 구현을 다시 확인하고 engine root 새 모듈은 만들지 않는다.
-- 예정 wrapper `deploy/run_main_market_weakness_research_postclose.sh`와 [기존 운영 cron installer](../../deploy/install_stage2_ops_cron.sh)에 owner tag `MAIN_MARKET_WEAKNESS_RESEARCH_NIGHT` 한 개, 기본 `40 0-5,21-23 * * *` 한 줄을 등록한다. host cron의 timezone을 확인하고 실제 KST 슬롯을 검증한다. 설치 시 이미 알려진 더 이른 Main 준비 시각 이후 슬롯은 제외하고 실행 시에도 deadline을 재확인한다. installer 재실행은 해당 tag만 교체하며 다른 cron/퇴역 상태를 바꾸지 않는다. 현재 구현/설치된 것으로 표시하지 않는다. [release router](../../src/engine/infrastructure/runtime_release_router.py)의 검증된 selected release 실행 규칙을 연결하고 한 실행 중 release/code를 교체하지 않는다. root cron과 user cron, systemd 중 실제 등록 위치를 하나로 고정하며 이중 예약을 검사한다.
+- 예정 CLI owner는 `src/engine/automation/main_market_weakness_research.py`, 순수 연결/집계 owner는 `src/engine/scalping/market_weakness_research.py`, 순수 알림/outbox owner는 `src/engine/automation/main_market_weakness_research_notify.py`다. 이들은 §13에서 구현한 역할별 코드 경로다. source/test 생성 시 역할·기존 유사 구현을 다시 확인하고 engine root 새 모듈은 만들지 않는다.
+- 예정 wrapper `deploy/run_main_market_weakness_research_postclose.sh`와 [기존 운영 cron installer](../../deploy/install_stage2_ops_cron.sh)에 owner tag `MAIN_MARKET_WEAKNESS_RESEARCH_NIGHT` 한 개, 기본 `40 0-5,21-23 * * *` 한 줄을 등록한다. host cron의 timezone을 확인하고 실제 KST 슬롯을 검증한다. 설치 시 이미 알려진 더 이른 Main 준비 시각 이후 슬롯은 제외하고 실행 시에도 deadline을 재확인한다. installer 재실행은 해당 tag만 교체하며 다른 cron/퇴역 상태를 바꾸지 않는다. 구현 상태는 §13으로 확인하고 실제 설치/선택 release 소비는 별도 receipt로 확인한다. [release router](../../src/engine/infrastructure/runtime_release_router.py)의 검증된 selected release 실행 규칙을 연결하고 한 실행 중 release/code를 교체하지 않는다. root cron과 user cron, systemd 중 실제 등록 위치를 하나로 고정하며 이중 예약을 검사한다.
 - router의 기존 `CRON_TARGETS`는 `REQUIRED_CRON_TARGETS`와 같으므로 여기에 연구를 단순 추가하지 않는다. 연구 실행 경로·설치 확인은 optional owner로 분리하여 미설치/OFF/지연이 기존 start/restart/PREOPEN의 필수 cron 검증 실패가 되지 않도록 한다. 연구의 비활성화/롤백은 자체 예약·보고 current에 한정하고 퇴역 consumer를 복원하지 않는다.
 - `main_market_weakness_research`는 **별도 report-only catalog/terminal**로 두고, 현행 mandatory `STAGE_REGISTRY`에 단순 추가하지 않는다. 마지막 소비는 자체 야간 요약·notification disposition이다. 기존 controller/summary가 상태를 표시할 경우 그 실행 시점의 비차단 참고값으로만 읽고 strict/finalization 입력 hash·필수 완료 판정에는 넣지 않는다. 늦게 나온 연구 때문에 봉인된 controller/요약/과거 체크리스트를 다시 생성하지 않는다. 기존 main machine/auxiliary 정책 stage의 필수 선행 단계나 PREOPEN 후보로 넣지 않는다. 설치일부터 enabled 상태·스케줄을 명시하여 이전 날짜에 absent 실패를 소급 생성하지 않는다.
 - scheduler는 설치일 이후의 완료 거래일에서 미처리 날짜와 영속 pending cursor를 장후에 대조한다. wall-clock 오늘만 처리하지 않으며 자정/휴일에도 저장한 source date를 유지한다. 야간 전체 10분 예산 내 현재 날짜와 오래된 pending을 번갈아 한 chunk씩 진행하여 한 결손 날짜가 후속 날짜를 영구 막지 않게 한다. 이미 완료된 **같은 원천 세대**에는 재계산/재전송하지 않으며 upstream 세대 변경은 §7에 따라 처리한다. 동일 namespace lock은 선점 실패 시 대기열 없이 종료한다.
@@ -264,3 +266,39 @@ raw snapshot으로 2/3회 latch를 재구성할 수는 있지만 notifier의 실
 | 코드 버전/날짜로 같은 수치를 중복 안내하거나 옛 parent 추천을 현행처럼 발송할 수 있음 | 의미 기반 recommendation ID·현재 parent 확인·전송 claim/불확실 보존·정정/철회/후보 교체 구분 |
 
 보완 후 문서 검증: 로컬 링크 20개 정상, print-only backlog 22개 중 `MainMarketWeaknessPostcloseObservation1008` owner 1개, 기존 AUTO 블록 SHA256 일치, 이번 인계 section 밖 checklist 바이트 보존, 공백 검사 통과. 계획/체크리스트 두 문서만 수정했으며 Python/거래 테스트·provider·장후 작업·예약 설치·Telegram 전송·외부 동기화는 실행하지 않았다. 후속 코드 구현에서 필수 검증을 통과하기 전에는 이 표를 실제 결함 수리 완료 증거로 사용하지 않는다.
+
+## 12. 10/9 MW1 코드 리뷰·수리 결과
+
+기존 독립 관찰기의 문구·상태·pending 공통 전송 경로와 정적 원천 계약을 수리했다. 원천 미검증·정책 불일치·역순·report 결손이면 pending을 기존 health 저장 경로에서 폐기하고 마지막 정상 latch/발송 이력은 보존한다. duplicate와 60초 미만 재호출도 저장된 과거 문구를 직접 보내지 않는다. 아직 latch에 반영되지 않은 새 관측으로 과거 활성/회복 알림을 재작성할 때는 상태 안내로 낮추어 새 전이가 확인된 것처럼 표시하지 않는다.
+
+naive KST report 시각을 UTC host에서도 KST로 읽어 source lag의 거짓 실패를 방지했다. 신규 원천의 정적 연구 계약은 episode·구 후보 arms·EV 필수 결과를 제거하고 source-only임을 명시한다. 과거 정적 계약과 원천 ID는 보존하며 `episode_entry_block` 등 기존 금지 항목은 삭제하지 않는다. 삭제된 구 연구 모듈을 다시 설치하지 않고 관찰기 TTL 회귀를 현재 순수 상태 계약으로 교체했다.
+
+최종 관련 회귀 **161건 통과**. API 요청/응답 함수·원천 ID 함수·module import, 상태 전이/임계치/구 guard/selected wrapper 바이트 불변을 확인했다. Main hot path 연결이나 추가 API/AI 호출·저장 경로를 만들지 않았다. 자세한 재현·반복 수리·검증과 남은 수용은 [코드 리뷰 기록](../audits/main-market-weakness-observer-code-review-2026-10-09.md)에 둔다.
+
+MW1의 리뷰 지적 수리와 코드 검증이 완료된 상태이며, **배포·다음 자연 observer 소비·MW2–MW5 연구 구현·MW6 자연 수용은 미완료**다. 이번 코드 수리를 전체 연구 완료 또는 실제 Main 매매 적용으로 표시하지 않는다.
+
+
+## 13. 10/9 MW2–MW5 구현·반복 리뷰
+
+- 순수 연구 owner: [market_weakness_research.py](../../src/engine/scalping/market_weakness_research.py). 자연 trace·확인 replay·실제 저장 AI 응답을 별도 cohort로 집계한다. 상장시장과 실행 venue/session을 분리하고, trace-only·미호출·미연결·U를 유지한다. 관찰 원천을 날짜당 한 번 검증한 시간 index로 300초 범위만 연결한다. raw snapshot·재구성 latch·실제 가용 증빙을 구분하며, 60/180초 연결은 공통 비교 기회에 한정한다.
+- 독립 실행 owner: [main_market_weakness_research.py](../../src/engine/automation/main_market_weakness_research.py). 기존 봉인 운용 comparison·정규화 원천·공유 object를 읽고, 기존 봉인 `auxiliary.json`이 참조하는 actual-response export를 읽는다. 저장 AI 입력의 정확 ID·확인 시각·ask·venue·목표/비용·실제 response ID·prompt/decoder 계약이 맞는 경우에만 연결한다. compact는 기존 순수 projector/decoder로 원 snapshot을 확인하고 본문을 새로 보관하지 않는다. exact binding 없는 legacy 행은 결손으로 제외하고 원 producer를 재실행하지 않는다.
+- 저장: immutable compact objects → cursor/manifest 원자 commit → 일별 terminal → 누적 manifest/비교 → immutable notification disposition → supervisor receipt/야간 요약의 단방향 연결이다. 정상 newline의 원행 범위 digest·device/inode/size/mtime/ctime·안정 cutoff를 보존한다. rewrite/truncate/원천 삭제·새 관찰/상장 metadata·사용 shared pack 변경을 재검증하고 영향 일자만 무효화한다. 동일 완료 세대는 `delta=0`이고 누적은 작은 일별 aggregate cache를 재사용한다. 수정 전/후 같은 날짜를 동시에 더하지 않는다. DB/object 원장은 read-only이며 AI 본문·원 membership·정책 current는 쓰지 않는다.
+- 후보: 이전 봉인 일자의 feature 분위값을 scope별 최대 6개 고정하고 해당 scope의 다음 날짜부터 전향 비교한다. 초기 빈 scope를 영구 고정하지 않으며 새로운 scope만 추가한다. 전체 누적의 기술 통계와 후보 고정 후 안내 창을 별도 산출한다. 기존 숫자 축의 `baseline_prior/bounded_tunable` 선언이 확인되지 않는 기계 scope는 `numeric_adjustment_unidentifiable`로 둔다. 이를 대신하여 새 기계 조건을 만들지 않는다.
+- 예약: [독립 wrapper](../../deploy/run_main_market_weakness_research_postclose.sh)는 공유 selector로 검증된 immutable release만 실행한다. [cron installer](../../deploy/install_stage2_ops_cron.sh)의 `--market-weakness-research-only`는 자기 tag만 교체하고 일반 설치 흐름은 실행하지 않는다. 설치 시 UTC/KST, 더 이른 Main 준비 시각, 다른 user/root/systemd의 중복 여부와 선택 release 코드 일치를 확인한다. 다른 예약 scope를 읽을 수 없으면 설치를 완료로 표시하지 않는다. 필요한 경우 설치 관리자가 `--cron-user ubuntu`로 한 user scope를 지정할 수 있다. 설정의 설치 code hash·uid·calendar/hash·정확 tag/슬롯을 실행 시 재확인한다. 이 코드는 **아직 설치/배포되지 않았다**.
+- 예산: `night_id`는 시작 KST 날짜로 유지한다. 최대 9회, 총 예약 wall 600초 이하(현재 회당 60초, 9회는 540초), 감독자 포함 RSS 512MiB 한도, worker 1개, namespace lock 선점 실패 즉시 defer다. 알 수 없는 crash 예약을 환급하지 않는다. EOD/일반 장후 경합·개장·Main 준비 deadline 전 종료하고 전체 자식 group을 종료/회수한다. 자기 scratch crash 잔재만 lock 아래 정리한다. 기존 mandatory stage/cron/strict/finalization/PREOPEN 계약은 변경하지 않았다.
+- 알림 owner: [main_market_weakness_research_notify.py](../../src/engine/automation/main_market_weakness_research_notify.py). 숫자 적격·scope winner·최신 누적 원천·현행 scope parent/보조 binding을 전송 직전 재검증한다. 의미 ID에 날짜/보고 세대/코드 버전을 넣지 않는다. durable sending claim·message ID·확정 실패/429·불확실 배송을 보존한다. 불확실 전송은 자동 재시도하지 않는다. 정정/철회는 이전 sent receipt에 결속하고 옛 parent가 비활성이라는 이유로 차단하지 않는다. 같은 의미 후보 재안내와 폐기된 철회 재전송을 방지하며 대체 시 한 scope의 현재 추천은 하나다. 설치 기본값은 preview이며 허용된 실운영 설치 단계에서 `--notify-enabled`를 지정하면 §9의 관리자 안내를 활성화한다. 이는 정책 채택 gate를 추가하는 의미가 아니다.
+
+반복 리뷰에서는 원천/pack 삭제 후 낡은 누적 재사용, 충돌의 전체 scope 전파, 첫 빈 manifest 영구 고정, partial tail 중복 저장, 자정 예산 reset, 자식 잔존, exit 0의 잘못된 완료 해석, 실패 알림의 완료 표시, pending 철회와 회복 충돌, 코드/날짜 중복 알림, 같은 관찰을 매 행 전량 재검증하는 비용을 수리했다. [구현 리뷰 기록](../audits/main-market-weakness-postclose-research-implementation-review-2026-10-09.md)에 검증과 잔여 경계를 남긴다.
+
+**잔여 원천 결함:** 확장한 기존 live codec 테스트에서 `ai_trace_dedup_preparation_pending` 5건을 재현했다. 첫 pre-AI machine observation이 mixed payload 파일을 생성하지만 request-key 인덱스에는 반영하지 않아, 이후 actual AI request capture가 첫 새 inode를 준비되지 않은 것으로 처리한다. 기존 source writer 자체의 별도 결함이며 신규 연구가 호출하지 않는 경로다. 단독 기존 테스트에서도 동일하고 startup 준비 함수 호출만 추가해도 해결되지 않는다. 이번의 장중 기록 경로 유지 계약 때문에 해당 writer를 변경하지 않았다. 연구는 actual capture가 없는 행을 U/미평가로 두며 이 원천의 수리·자연 기록 수용을 연구 코드 PASS로 갈음하지 않는다. 후속 closure는 해당 writer의 mixed-row 인덱스 계약을 수리하고 기존 5개 회귀와 실제 첫 기록을 확인하는 것이다.
+
+MW2–MW5 신규 연구 코드의 구현·자체 반복 리뷰는 완료했다. **배포/예약 설치/실제 장후 생성/실제 알림/선택 release 소비/MW6 자연 수용과 위 기존 writer 결함의 수리는 별도 잔여**다. 실제 연구 수치가 없으므로 새 정책 추천·Main 자동 적용·수익 개선을 선언하지 않는다.
+
+
+## 14. 후속 반복 리뷰와 승인된 배포 — 2026-10-09
+
+사용자의 후속 수리·배포 지시에 따라 §13의 기존 writer 결함을 이번 범위에서 닫는다. `ai_decision_trace`의 같은 payload 파일에 기계 관측이 먼저 기록될 때 request 인덱스가 준비 해제되는 경로를 수리했다. key 없는 행도 **검증된 직전 파일 구간**만 이어가고, 빈 신규 파일은 정확히 자신이 기록한 행부터 준비한다. 기록한 bytes로 짧은 tail을 갱신하여 별도 원장·본문 복사·파일 재읽기·추가 AI 호출을 만들지 않는다. 미검증 과거·외부 append·파일 교체·부분 JSONL은 cold 준비/원천 결손으로 남기며 통과로 표시하지 않는다. 정책 판정·입력·응답·기록 횟수·주문 권한은 유지한다.
+
+root 관리자가 ubuntu 예약을 설치할 때 연구 디렉터리와 설정의 소유권을 맞추고, 실제 cron 재조회가 일치해야 설치 완료로 표시한다. 배포는 현행 selected release를 부모로 하는 **약세 관찰·독립 연구·AI 기록 수리의 명시 파일 목록**으로 만들고 별도 보유청산 작업본은 보존한다. 기존 필수 cron·controller·봉인 checklist를 변경하지 않으며, 새 release에 맞는 10/12 준비 영수증을 재생성·검증한다. Main 현재 프로세스와 자연 소비는 별도로 확인한다.
+
+최종 코드·배포 검증과 잔여 자연 수용은 [후속 배포 리뷰](../audits/main-market-weakness-review-deployment-2026-10-09.md)에 기록한다. §12–§13의 미배포·기존 실패 수치는 앞선 회차의 역사다.

@@ -1133,3 +1133,10 @@ The [eight-symbol transition](proposals/jeju-episode-retirement-hpsp-alteogen-ma
 The existing `main_machine_policy` stage generates and validates separate source-date reports for Doosan, HPSP, Alteogen and Jusung. Each freezes at most ten candidates and its own symbol/source/parent/kernel hashes. Mutating a threshold rebinds the original admission recipe's parent hash without changing its parameters. Missing native opportunities are `source_gap`, with actual profit null. No research output is an initial runtime qualification or policy publisher. WS snapshot publication reports native research-worker status separately from transport freshness and singleton ownership.
 
 The October 6 standing-authority successor applies from October 7 to the 15-symbol native owner scope with unchanged account, expiry and PREOPEN window. The consumed October 6 policy/PREOPEN generation remains immutable. Code, installed deletion, restart/PID and natural source/economic evidence are separate receipts in the execution audit and the current checklist owner.
+
+
+### Main 보유청산 공식 비용 원천
+
+`deploy/run_threshold_cycle_postclose.sh`는 `postclose_exit` 스냅샷 앞에서 `src.engine.lifecycle.broker_cost_source --date SOURCE_DATE`를 최대 180초 실행한다. `ka00001` 토큰 계좌 확인과 `ka10170`, `kt00015` 매수/매도, 당일만 `ka10076`의 최대 4페이지 완결 조회를 사용한다. 기존 인증·read-rate control을 소비하고 매매/소유권/정책 권한을 만들지 않는다. 같은 닫힌 날짜·계좌·앱 관측은 재사용하고 실패는 비용 source gap이며 보호청산이나 초기정책의 새 차단 조건이 아니다.
+
+일자별 `data/runtime/holding_broker_cost_sources/YYYY-MM-DD.json` → trade review의 검증된 Main 단일 전체 포지션 대사 → completed census/projection → holding report → postclose manifest 순서로 연결한다. source hash 변경은 비용 cache를 무효화한다. 실제 비용과 configured 추정 비용을 구분하며, 혼합 소유권/복수 포지션/부분 배분·익일 보유의 미확정 비용을 0이나 임의 비례 값으로 만들지 않는다. `kt00015`의 거래일·체결일·거래번호는 서로 다른 의미로 보존한다. 후일 결제 자료의 원 날짜 재조회는 명시적 `--refresh`이며 자동으로 과거 봉인 보고서나 과거 가용 시각을 소급 수정하지 않는다. 수집 상태는 `data/report/holding_broker_cost_source/YYYY-MM-DD.json`과 [HP2 owner 계획](proposals/main-holding-profit-exit-runtime-and-postclose-remediation-plan-2026-10-09.md)이 소유한다.

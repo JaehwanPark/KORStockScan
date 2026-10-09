@@ -1,12 +1,12 @@
 # Main 보유청산·익절 런타임 및 장후작업 결함 보완계획
 
-작성·원천 확인 및 보완 리뷰: 2026-10-09 KST. 상태: **계획 보완 및 읽기 전용 재현 완료, 구현 미실행**.
+작성·원천 확인 및 보완 리뷰: 2026-10-09 KST. 상태: **HP0–HP5 구현과 HP2 공식 비용 수집·소비 보완의 반복 리뷰·검증을 완료하고 보유·청산 포함 통합 릴리스를 선택했다**. 초기 이력은 [구현 리뷰 기록](../audits/holding-profit-exit-runtime-and-postclose-implementation-review-2026-10-09.md), 현행 배포·다음 기동 준비와 비용 귀속의 지원 범위는 [후속 리뷰](../audits/holding-profit-exit-official-cost-source-integration-deployment-review-2026-10-09.md)를 따른다.
 
 ## 1. 목표·범위·권한
 
 Main의 `scalp_trailing_take_profit`과 기존 보유청산 경로를 `런타임 판단 → 신호/주문/체결 → 실제 비용 → 장후 재생 → 정책/장전 → PID → 자연 결과`로 연결한다. 입력 결손을 정상 무신호·수익 0·경제성 실패로 바꾸지 않고, 기존 정상 청산을 장후가 재현하지 못하거나 감시기가 완료로 오인하는 계약 결함을 먼저 고친다. 새로운 익절 전략이나 더 느슨한 손절을 만드는 계획이 아니다.
 
-이번 요청의 실행 범위는 이 계획 문서의 작성·리뷰·보완·문서 파서 검증이다. 코드 변경, 원천 재수집, 모델/브로커 호출, 정책 발행, 장후 재실행, release 선택, PREOPEN 재생성, 프로세스 재기동 및 주문은 실행하지 않는다. 이후 구현과 운영 단계의 권한은 해당 요청과 당시 checklist로 확인한다.
+후속 사용자 지시로 이번 실행 범위가 코드 구현·리뷰·수정보완·표적 검증으로 확장됐다. 원천 재수집, 모델/브로커 호출, 정책 발행, 장후 재실행, release 선택, PREOPEN 재생성, 프로세스 재기동 및 주문은 실행하지 않았다. 이후 운영 단계의 권한은 해당 요청과 당시 checklist로 확인한다.
 
 - 일반 익절의 기계식 강약 분류, 최초 crossing 고정, 실행 가능한 bid 사용과 기존 3시장 구분을 유지한다. 승인된 초기 `+0.4% / WEAK 0.4% / STRONG 0.8%` 및 별도 운영자 override를 기본값으로 덮지 않는다.
 - 하드스탑·보호·비상·상한가·종료구간·계좌·브로커·주문·수량·cooldown·시세 freshness와 Main/manual custody·operator veto를 유지한다. preset 손절과 일반 SCALPING 손절을 하나의 임계값으로 합치지 않는다.
@@ -18,13 +18,13 @@ Main의 `scalp_trailing_take_profit`과 기존 보유청산 경로를 `런타임
 
 원칙은 [Plan Rebase §1–§8](../plan-korStockScanPerformanceOptimization.rebase.md), 원천 경계는 [clean baseline/refresh owner](../../src/engine/automation/source_quality_clean_baseline.py), 프로토콜 변경 절차는 [Kiwoom Official Reference Gate](../kiwoom-api-data-contract.md#official-kiwoom-reference-gate)를 따른다. 앞선 [기계식 익절 폐루프 계획](scalp-trailing-mechanical-strength-closed-loop-tuning-plan-2026-09-25.md)과 [보유 투표·의미 감시 계획](holding-profit-exit-estimated-policy-and-semantic-closed-loop-plan-2026-09-26.md)은 설계 이력이다. 그 문서의 당시 미구현·PID·표본 숫자를 현재 상태로 사용하지 않는다. 이미 구현된 loader·publisher·비동기 투표 수집은 유지하고 아래 재현 결함만 후속 보완한다.
 
-2026-10-09 일일 checklist는 없다. [2026-10-12 checklist](../checklists/2026-10-12-stage2-todo-checklist.md)의 목적·강제 규칙과 관련 owner를 확인했지만 미래 문서를 오늘의 실행 owner로 대신하지 않는다. 그 문서는 이미 postclose summary 세대에 결속되어 있으므로 이번 계획으로 수정하지 않는다.
+계획 작성 당시 10/9 checklist가 없었으며, 구현 착수 때 기존 오늘 owner의 부재를 확인하고 [2026-10-09 checklist](../checklists/2026-10-09-stage2-todo-checklist.md)에 `HoldingProfitExitSourceContractRepair` 하나를 등록했다. 아래 HP0–HP6는 해당 owner의 내부 단계이며 별도 OPEN 항목이 아니다. 코드 검증과 HP2 원천 미확정 후속 조건을 같은 owner에 기록한다. generator는 식별된 원천 계약 결함만 같은 ID로 인계하며 비용 미관측·자연 표본 0만으로 코드 결함을 재발급하지 않는다.
 
-현재 확인한 10/12 목록에는 보유청산 원천 수리의 독립 OPEN owner가 없다. 구현 착수 시 **당시 현재 checklist의 기존 보유청산 owner를 먼저 재검색**한다. 없을 때만 제안 stable ID `HoldingProfitExitSourceContractRepair` 하나를 등록한다. 아래 HP0–HP6는 해당 owner의 내부 단계이며 별도 OPEN 항목이 아니다. 등록 시 실제 Due/Slot/TimeWindow/Track와 본 계획의 수용 조건을 기재하고, generator가 다음 checklist로 같은 ID·원천·수용 이력을 이관하는지 확인한다. 장전 적용 확인은 기존 `DirectFamilyPreopenPolicyHandoff`를 재사용한다. 문서가 존재한다는 사실은 자동 구현·매매 권한이 아니다.
+[2026-10-12 checklist](../checklists/2026-10-12-stage2-todo-checklist.md)는 이미 postclose summary 세대에 결속되어 있어 수정하지 않았다. 미래 문서를 오늘의 실행 owner로 대신하지 않으며, 장전 적용 확인은 기존 `DirectFamilyPreopenPolicyHandoff`를 재사용한다. 문서가 존재한다는 사실은 자동 구현·매매 권한이 아니다.
 
 ## 3. 확인 기준과 결함 목록
 
-### 3.1 현재 코드·산출물
+### 3.1 구현 전 확인한 코드·산출물
 
 2026-10-09 00:43 KST 확인한 selector는 `main-integrated-bottlenecks-20261009-v1`, commit `f36b306cbd69ba8fbefdc7bc48f09b10144bdf44`다. [selector](../../data/runtime/runtime_release_selection.json)는 `actual_pid_consumed=false`, `awaiting_scheduled_main_start_20261012`를 기록한다. 이는 선택 영수증이며 현재 PID 소비 증거가 아니다. 앞선 대화에서 확인한 postclose 전용 v5 선택은 이 시점의 현재 selector가 아니다.
 
@@ -155,7 +155,7 @@ F3–F5는 메모리상의 최소 합성 입력으로 기존 순수 함수를 �
 - **경제 완료:** 적격 실제 비용·기존 forward window·독립 비교·기존 family guard가 충족된 경우에만 판정한다. `null`, 검열, source unavailable은 경제 실패나 0 EV가 아니다.
 - **즉시 중단/복원 조건:** hard/protect/emergency 지연, 중복 주문·수량/owner 침범, stale/conflict 허용, 영수증 위조/세대 불일치, unbounded hot-path 대기. 해당 변경을 검증된 이전 source/consumer 세대로 되돌리되 퇴역 executor를 되살리지 않는다. source-gap나 표본 부족만으로 운영자 lock을 해제하지 않는다.
 
-## 8. 이번 문서의 검토·검증 기록
+## 8. 구현 전 계획 검토·검증 기록
 
 - 최초 검토에서 실제 비용 미생산(F2), live VETO와 replay 시간축 불일치(F3)를 단순 표본 부족과 분리했다.
 - 추가 검토에서 semantic start 하드코딩(F4), pending-submit PASS(F5)를 합성 재현하고 계획에 반영했다. 이는 운영 청산 실패가 자연 발생했다는 증거가 아니다.
@@ -163,3 +163,29 @@ F3–F5는 메모리상의 최소 합성 입력으로 기존 순수 함수를 �
 - 이번 보완 리뷰: F7의 cutoff 불일치를 메모리 fixture로 재현하고, HP2의 `log_archive_service`/census/sidecar/manifest 재사용 경로·비용 정정 시점과 완료일 분리·큰 원본 재파싱 금지·중간 실패 검증을 추가했다. F5를 실제 주문 장애가 아닌 상태 전달 계약으로 명확히 하고 signal/attempt별 진행 상태와 v1/v2 호환을 명세했다. HP3에는 fast/normal·pending/retry·관측 실패 회귀를 보강했다.
 - 보완판 검증: print-only parser exit 0·기존 backlog 20개, 로컬 링크 33개·기존 테스트 파일 20개 경로 확인, `git diff --check`와 untracked 계획의 별도 whitespace 검사 통과. `DirectFamilyPreopenPolicyHandoff`는 10/12 checklist에 1개, 제안 `HoldingProfitExitSourceContractRepair`는 0개다. 10/9 checklist 부재와 미래 checklist 비수정을 재확인했으며 과거 reference 항목을 현재 실행 owner로 채택하지 않았다. 첫 검증에서 잘못 쓴 freshness 테스트 파일명을 실제 경로로 보완한 이력은 유지한다.
 - 10/12 checklist SHA256 `6a5428aaa23200c9a7d71ff6ac47286908237d29dfcab6d55d1dd36cb69751b9` 유지 확인. 이번 변경 파일은 이 계획 하나다. trading/provider pytest·compile, 브로커/API 호출, 보고서 재생성, 외부 Project/Calendar sync는 문서 작업 범위 밖이므로 실행하지 않았다. 합성 함수 재현은 운영/PID·실제 비용 원천 검증을 대신하지 않는다.
+
+## 9. 10/9 구현·수정보완 결과와 운영 계약
+
+HP1의 forward 경계를 보고서·선택기·bootstrap에 연결하고, HP3의 최초 crossing·동결 AI 판단·유예 해제·실제 SELL 허용 시각을 분리했다. HP4는 `holding_profit_exit_semantics_v2`로 전환해 정책 vector/classifier·날짜·PID와 signal/buy generation별 진행·경제 상태를 검사한다. 현재 manifest와 PID별 최초 검증 영수증을 함께 소비하며, 같은 PID/manifest 검증을 반복해도 영수증 복제본을 만들지 않는다. 기존 매도 대기 stage만 명시 목록으로 연결하고 주문·수량·기존 retry 권한은 바꾸지 않았다.
+
+HP2는 [체결 후 비용 대사 모듈](../../src/engine/lifecycle/broker_cost_reconciliation.py)과 trade review→census/projection→holding report→장후 manifest→wrapper/성과 보고 소비 경로를 구현했다. 공식 참조 revision `953e5dbff123f437ab4d11a78a95191a685eb51f`의 일별 비용/FID만으로 체결별 비용 배분을 확정할 수 없어 실제 계좌 호출 adapter는 활성화하지 않았다. 비용 경로가 없으면 `cost_source_unavailable`; 완전한 exact-execution 영수증이 들어온 경우에만 실제 비용·exact PnL 성공 분기를 연다. 이 계약의 HP2 생산 원천 확정은 미완료다.
+
+장후 운영 순서는 기존 exact-date snapshot 순서를 유지한다. 비용 revision이 변하면 원래 완료일의 trade review/census/sidecar와 holding report/manifest를 같은 새 세대로 생성해야 한다. `postclose_exit` wrapper의 후검사는 현재 비용 source generation과 projection 봉인을 다시 검증하며 `postclose_exit_cost_or_projection_generation_invalid`일 때 해당 stage 성공을 거부한다. 봉인 manifest는 임시 파일→fsync→원자적 교체로 발행한다. 이 검증 때문에 비용 정정 후 이전 PASS를 재사용할 수 없으며, 원본 크기 제한을 우회하거나 이번 코드 검증에서 운영 재생성을 실행하지 않았다.
+
+새 비용 파일은 파일당 256 KiB, 완료일당 10,000개·총 읽기 32 MiB 한도를 갖는다. PID 영수증 소비는 파일당 32 KiB·당일 최대 256개이며 대형 원장을 복제하지 않는다. summary handoff의 code pin은 변경된 의미 감시·forward 검증 consumer를 포함한다. 초기 보유 AI 15셀과 HP6 후속 자동 최적화의 별도 경계를 유지한다.
+
+최종 통합 회귀 **1,846건 통과**, 마지막 비용 합산/읽기 한도 보완 뒤 관련 소비 경로 **251건 통과**, PID 영수증 원자 발행/목록 한도 보완 뒤 관련 **137건 통과**. 변경 Python 30개 compile·wrapper `bash -n`·diff 및 문서 검증 결과는 [구현 리뷰 기록](../audits/holding-profit-exit-runtime-and-postclose-implementation-review-2026-10-09.md)에 기록한다. 범위 내 코드 리뷰 지적은 수정·재검증했다. 실제 비용 수집, 자연 latency/체결/경제성, 새 릴리스/PID 소비는 미완료·미관측으로 남긴다.
+
+
+## 후속 HP2 공식 원천 수집과 통합 배포
+
+사용자의 공식 키움 재확인·원천결손 해소·반복 코드리뷰·미커밋 통합 배포 지시를 반영한다. 앞선 “공식 실제 비용 수집 원천 미확정”은 검토 범위가 불충분했던 초기 상태다. 추가로 확인한 `ka10076`은 주문번호와 비용 필드를, `kt00015`는 거래번호·체결일·결제 거래일·수수료·세금·정산금액을, `ka10170`은 특정일 종목별 매수/매도 대금과 실제 비용을 제공한다. [공식 참조와 실제 조회 근거](../../data/report/holding_profit_exit_deployment/2026-10-09/official-cost-followup-review.json).
+
+- 수집 owner: `src.engine.lifecycle.broker_cost_source`. 기존 장후 wrapper가 `postclose_exit` 앞에서 `--date SOURCE_DATE`로 실행한다. 같은 날짜의 닫힌 동일 계좌/앱 관측은 호출·쓰기 없이 재사용한다. API별 최대 4페이지와 전체 180초를 적용하고, 마지막 페이지 미확인·조회 실패·계좌 변경을 성공으로 표시하지 않는다. 현재 토큰 계좌는 `ka00001`로 확인하되 계좌번호·토큰을 비용 원장에 저장하지 않는다.
+- 저장·소비: `data/runtime/holding_broker_cost_sources/YYYY-MM-DD.json`의 원자 발행 관측을 trade review→완료 census/projection→보유 보고서→봉인 manifest가 읽는다. 공식 원천 hash가 바뀌면 오래된 비용 projection 재사용을 거부한다. 수집 상태는 `data/report/holding_broker_cost_source/YYYY-MM-DD.json`이다. 새 원장은 일자별 작은 원천이며 대형 AI 비교 원장을 복제하지 않는다.
+- 비용 대사: 검증된 Main 소유권과 한 종목/일자의 단일 전량 완료 포지션에 대해 모든 실제 매수·매도 대금/수량을 대사한다. 당일에는 전체 주문 coverage와 `ka10170` 금액을, 결제 후에는 `kt00015`의 전체 종목/체결일 거래 집합과 정산금액을 확인한다. 공식 총비용을 포지션 총비용으로 쓰며 체결별 임의 배분을 만들지 않는다. 동일 종목의 복수 포지션·수동/퇴역 보유 혼합·익일 보유·미확정 배분은 원천 관측을 보존하고 실제 포지션 손익은 null로 남긴다. 지정 source date의 후일 결제 자료 재조회는 동일 CLI의 명시적 `--refresh`로 수행하며 미래 자료를 과거 knowledge cutoff에 적용하지 않는다.
+- 기존 v1 exact-execution 영수증 소비는 보존한다. 생산되지 않던 terminal의 임의 비용 필드를 채워 성공을 합성하지 않고, 실제 entry owner/체결 원장 및 공식 조회를 결속하는 별도 전체 포지션 대사를 사용한다. 설정 비용 손익은 별도 보존한다.
+- 실제 확인: 10/8 SK이터닉스 매수 20주·926,500원·공식 비용 130원, 매도 0주를 조회했다. Main 완료 포지션 비용이나 실제 Main 수익으로 전환하지 않는다. 10/8 결제 거래내역은 아직 비어 있으며 결손을 0 비용으로 보충하지 않는다.
+- 배포에는 기존 HP0–HP5, 이번 수집·소비 보완, 앞선 승인된 시장원천/약세 연구/archive 수리를 통합한다. 신규 비용 수집·대사 회귀와 기존 통합 회귀, immutable release 검증, 영향받은 source 10/8 보고/strict/controller/finalization 및 10/12 PREOPEN을 순서대로 확인한다. 휴장일 강제 Main 기동·정책 재선정·초기 정책 추가 경제성 gate는 없다.
+
+후속 통합 완료: `main-holding-profit-exit-20261009-v4` (`70945c531813`)에 보유청산·공식 비용 수집·테스트 격리를 통합했다. 작업본/최종 릴리스 통합 회귀 각각 2,238건 및 source 10/8 최종화, 10/12 PREOPEN 전체 계약 검증을 통과했다. 검토 범위 코드 지적은 해소했으며 혼합/복수/익일 보유의 미확정 비용 배분, 다음 PID의 실제 소비와 자연 경제성은 별도다. 현행 근거는 위 후속 리뷰와 오늘 stable owner를 따른다.
