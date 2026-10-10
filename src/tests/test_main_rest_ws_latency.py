@@ -637,7 +637,8 @@ def test_native_fixed_scope_without_signal_cannot_fall_back_inline(monkeypatch,b
                       and ast.unparse(n.test)=='scanner_async_enabled')
             function=ast.FunctionDef(name='consume',args=ast.arguments(posonlyargs=[],args=[],
                 kwonlyargs=[],kw_defaults=[],defaults=[]),decorator_list=[],body=[node])
-            namespace=dict(scanner_async_enabled=True,async_resolution=result,stock=stock)
+            namespace=dict(scanner_async_enabled=True,async_resolution=result,stock=stock,
+                           _set_async_terminal=H._set_async_terminal)
             exec(compile(ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[])),
                          '<actual-native-wait-consumer>','exec'),namespace)
             assert namespace['consume']() is False
@@ -692,7 +693,7 @@ def test_orphaned_native_result_drains_only_its_request(monkeypatch,change):
         '_scanner_async_generation_id':'fixed-watch:new' if change=='replacement' else 'fixed-watch:old',
         '_scanner_async_cache_key':'new' if change=='replacement' else 'old',
         '_fixed_watch_async_claim':{'token':'new' if change=='replacement' else 'old'}}
-    assert H._discard_orphaned_fixed_watch_result(SimpleNamespace(discard_completed=lambda **kw:discard.append(kw)),
+    assert H._discard_orphaned_fixed_watch_result(SimpleNamespace(discard_completed=lambda **kw:(discard.append(kw) or result)),
         result,[] if change=='removed' else [target])
     assert len(ack)==len(discard)==1
     if change=='replacement':assert target['_fixed_watch_async_claim']['token']=='new'

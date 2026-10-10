@@ -270,6 +270,9 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         + "\n"
     )
+    from src.engine.scalping.trace_dedup import MAX_ROW_BYTES
+    if len(line.encode('utf-8')) > MAX_ROW_BYTES:
+        raise ValueError('ai_trace_dedup_row_size_exceeded')
     lock_started = time.perf_counter()
     with jsonl_artifact_generation_lock(
         path,
@@ -362,20 +365,28 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
                (_SEEN_CONTEXT_CANDIDATE_HASHES, _context_candidate_path, "candidate_sha256"))
     started = time.perf_counter()
     from src.engine.scalping import trace_dedup
+    pending = False
     for cache, path, field in indexes:
         try:
             with jsonl_artifact_generation_lock(path(day), exclusive=False, blocking=False) as generation:
                 index = trace_dedup.prepare(path(day), field, generation)
-                if not index.ready:
-                    return {"ai_trace_dedup_preparation_pending": True}
             # Writers acquire _WRITE_LOCK before the file generation lease.
             # Release the reader lease before taking that lock to avoid ABBA.
             with _WRITE_LOCK:
-                cache[day] = index.keys
+                if index.ready:
+                    cache[day] = index.keys
+                else:
+                    pending = True
+                    cache.pop(day, None)
                 for old in sorted(cache)[:-3]:
                     cache.pop(old, None)
         except (BlockingIOError, trace_dedup.IndexNotReady):
-            return {"ai_trace_dedup_preparation_pending": True}
+            pending = True
+            with _WRITE_LOCK:
+                cache.pop(day, None)
+            continue
+    if pending:
+        return {"ai_trace_dedup_preparation_pending": True}
     return {"ai_trace_dedup_init_ms": (time.perf_counter() - started) * 1000}
 
 
@@ -1466,6 +1477,9 @@ def capture_ai_request(
             **OBSERVATION_CONTRACT,
         }
         request_row = {
+            **{key: metadata_row.get(key) for key in (
+                'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
+                'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id')},
             "schema": REQUEST_SCHEMA,
             "captured_at": now.isoformat(),
             "request_id": trace_id,
@@ -1544,6 +1558,9 @@ def capture_ai_request(
             persist(_request_path(target_date), request_row)
             seen_requests.add(trace_id)
         return {
+            **{key: metadata_row.get(key) for key in (
+                'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
+                'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id')},
             **timings,
             "ai_trace_capture_ms": (time.perf_counter() - started) * 1000,
             "ai_decision_trace_id": trace_id,
@@ -1926,6 +1943,12 @@ def record_ai_decision_trace(
             or "-"
         ).strip()
         trace_row = {
+            **{key: _optional(merged, key) for key in (
+                'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
+                'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id',
+                'entry_machine_bundle_sha256', 'entry_auxiliary_policy_sha256')},
+            'entry_machine_bundle_sha256': _optional(merged,'entry_machine_bundle_sha256','machine_bundle_sha256'),
+            'entry_auxiliary_policy_sha256': _optional(merged,'entry_auxiliary_policy_sha256','entry_ai_component_sha256'),
             **microstructure_delivery_fields(merged),
             "schema": TRACE_SCHEMA,
             "decision_trace_id": trace_id,

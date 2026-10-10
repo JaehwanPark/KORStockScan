@@ -5,6 +5,7 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,6 +40,313 @@ def _isolate_runtime_source_files(monkeypatch, tmp_path):
 class _FakeAI:
     def analyze_target(self, *args, **kwargs):
         return {"action": "BUY", "score": 77, "reason": "fresh continuation"}
+
+
+def _retained_fixture(stock):
+    generation = _generation()
+    now = time.time()
+    result = ScannerAsyncEvalResult(request_id=generation.generation_id+':key',
+        generation_id=generation.generation_id, code='005930', venue='KRX', cache_key='key',
+        state_version=handlers._scanner_async_entry_state_version(stock), status='completed',
+        submitted_epoch=now, preparation_started_epoch=now, preparation_completed_epoch=now,
+        ai_started_epoch=now, completed_epoch=now, preparation_wait_sec=0, preparation_service_sec=0,
+        ai_dispatch_wait_sec=0, ai_response_sec=0, observation_only=False,
+        original_generation=generation, deadline_epoch=now+5, deadline_perf=time.perf_counter()+5)
+    stock.update(_scanner_async_generation_id=generation.generation_id, _scanner_async_cache_key='key')
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    coordinator._ready[result.request_id] = result
+    return coordinator, generation, result
+
+
+@pytest.mark.parametrize('operation,reason', [('discard','target_removed'),
+    ('invalidate','generation_invalidated'), ('shutdown','coordinator_shutdown')])
+def test_coordinator_removal_records_original_terminal_once(monkeypatch, operation, reason):
+    coordinator, generation, result = _retained_fixture({})
+    from src.engine.scalping import scanner_async_eval as A
+    events=[]
+    monkeypatch.setattr(A,'record_async_disposition',lambda *a,**k:events.append(a))
+    try:
+        for _ in range(2):
+            if operation=='discard':
+                coordinator.discard_completed(generation_id=result.generation_id, cache_key=result.cache_key, reason=reason)
+            elif operation=='invalidate':
+                coordinator.invalidate_generation(result.generation_id)
+            else:
+                coordinator.shutdown()
+        assert events==[(result,'terminal_nonexecution',reason)]
+        assert coordinator.take_completed(generation_id=result.generation_id,cache_key=result.cache_key) is None
+    finally:
+        coordinator.shutdown()
+
+
+def test_take_exception_terminalizes_original_and_preserves_successor(monkeypatch):
+    stock = dict(code='005930', status='WATCHING', effective_venue='KRX',
+                 venue_resolution='explicit', source_signature='VALUE_TOP')
+    coordinator, generation, result = _retained_fixture(stock)
+    events = []
+    from src.engine.scalping import scanner_async_eval as module
+    monkeypatch.setattr(module, 'record_async_disposition', lambda *a, **k: events.append((a[0], a[1], a[2])))
+    def broken(*a, **k):
+        stock.update(_scanner_async_generation_id='successor', _scanner_async_cache_key='next',
+                     _fixed_watch_async_claim={'token': 'new'},
+                     _continuous_reversal_pending_claim={'token': 'new'})
+        raise RuntimeError('commit_validator_failed')
+    monkeypatch.setattr(handlers, 'validate_scanner_async_commit', broken)
+    try:
+        with pytest.raises(RuntimeError, match='commit_validator_failed'):
+            handlers.handle_watching_state(stock, '005930', {}, 1,
+                scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
+        assert events == [(result, 'terminal_nonexecution', 'entry_execution_exception_or_uncertain')]
+        assert stock['_scanner_async_generation_id'] == 'successor'
+        assert stock['_continuous_reversal_pending_claim']['token'] == 'new'
+        assert not coordinator.has_completed(generation_id=result.generation_id, cache_key='key')
+    finally:
+        coordinator.shutdown()
+
+
+def test_original_result_owner_never_leaks_into_stock_snapshot(monkeypatch):
+    stock=dict(code='005930', status='WATCHING', effective_venue='KRX',
+               venue_resolution='explicit', source_signature='VALUE_TOP')
+    coordinator,generation,result=_retained_fixture(stock)
+    from src.engine.scalping import scanner_async_eval as A
+    from copy import deepcopy
+    monkeypatch.setattr(A,'record_async_disposition',lambda *a,**k:True)
+    monkeypatch.setattr(handlers,'_resolve_scanner_async_entry_ai',lambda *a,**k:dict(status='completed',
+        original_result=coordinator.take_completed(generation_id=result.generation_id,cache_key=result.cache_key)))
+    def apply(*a,**k):
+        assert A.ASYNC_CONSUMPTION.get()['original_result'] is result
+        assert stock['_async_consumption_guard']=={}
+        assert deepcopy(stock)==stock
+        snapshot=A.ScannerAsyncEvalContext.create(generation=generation,cache_key='next',
+            submitted_epoch=result.submitted_epoch,deadline_epoch=result.deadline_epoch,
+            stock_snapshot=stock,ws_snapshot={},state_version='v')
+        assert '_async_consumption_guard' not in snapshot.stock_snapshot
+    monkeypatch.setattr(handlers,'_handle_watching_state_impl',apply)
+    try:
+        handlers.handle_watching_state(stock,'005930',{},1,
+            scanner_async_eval_coordinator=coordinator,scanner_async_generation=generation)
+        assert '_async_consumption_guard' not in stock and A.ASYNC_CONSUMPTION.get() is None
+    finally:
+        coordinator.shutdown()
+
+
+def test_accepted_zero_base_pending_has_direct_reason_not_last_log(monkeypatch):
+    stock = dict(code='005930', status='WATCHING', effective_venue='KRX',
+        venue_resolution='explicit', source_signature='VALUE_TOP', zero_base_pending_db=True)
+    coordinator, generation, result = _retained_fixture(stock)
+    from src.engine.scalping import scanner_async_eval as module
+    events=[]
+    monkeypatch.setattr(module, 'record_async_disposition', lambda *a, **k: events.append(a[1:]))
+    monkeypatch.setattr(handlers, '_fixed_watch_entry_source_route', lambda *a:None)
+    monkeypatch.setattr(handlers, '_scanner_async_quote_is_fresh', lambda *a, **k:True)
+    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **k:None)
+    try:
+        handlers.handle_watching_state(stock, '005930', {}, 1,
+            scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
+        assert events == [('accepted_to_entry_path', 'commit_allowed'),
+                          ('entry_path_returned', 'zero_base_pending_db')]
+    finally:
+        coordinator.shutdown()
+
+
+def test_native_ack_exception_is_before_acceptance_and_cleans_only_original(monkeypatch):
+    stock=dict(code='005930',status='WATCHING',effective_venue='KRX',
+        venue_resolution='explicit',source_signature='VALUE_TOP')
+    coordinator,generation,result=_retained_fixture(stock)
+    result=replace(result,native_claim={'token':'old','snapshot':[{'event_id':'original'}]})
+    coordinator._ready[result.request_id]=result
+    stock.update(_fixed_watch_async_claim={'token':'old'},_continuous_reversal_pending_claim={'token':'old'})
+    from src.engine.scalping import scanner_async_eval as A,reversal_current_backend as N,reversal_source_diagnostics as D
+    events=[];ack=[]
+    monkeypatch.setattr(A,'record_async_disposition',lambda r,kind,reason,**k:events.append((kind,reason)))
+    monkeypatch.setattr(N,'backend',lambda:SimpleNamespace(_GENERATION='fixture'))
+    monkeypatch.setattr(D,'validate_claim_with_receipt',lambda *a,**k:None)
+    monkeypatch.setattr(handlers,'_fixed_watch_entry_source_route',lambda *a:None)
+    monkeypatch.setattr(handlers,'_scanner_async_quote_is_fresh',lambda *a,**k:True)
+    monkeypatch.setattr(handlers,'_log_entry_pipeline',lambda *a,**k:None)
+    def broken(claim,**kw):
+        ack.append(claim['token'])
+        stock['_continuous_reversal_pending_claim']={'token':'successor'}
+        raise RuntimeError('native_ack_failed')
+    monkeypatch.setattr(N,'acknowledge_any',broken)
+    try:
+        with pytest.raises(RuntimeError,match='native_ack_failed'):
+            handlers.handle_watching_state(stock,'005930',{},1,
+                scanner_async_eval_coordinator=coordinator,scanner_async_generation=generation)
+        assert events==[('terminal_nonexecution','entry_execution_exception_or_uncertain')]
+        assert ack==['old'] and '_fixed_watch_async_claim' not in stock
+        assert stock['_continuous_reversal_pending_claim']['token']=='successor'
+        assert not coordinator.has_completed(generation_id=result.generation_id,cache_key='key')
+    finally:
+        coordinator.shutdown()
+
+
+@pytest.mark.parametrize('origin', ['scanner', 'fixed_watch'])
+@pytest.mark.parametrize('compact', ['v1', 'v2'])
+@pytest.mark.parametrize('outcome', ['accepted', 'no_response', 'exception', 'final_deadline'])
+def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monkeypatch, origin, compact, outcome):
+    """Real resolver, WATCHING, receipt/sizing/price/final guards; no network."""
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.tests.test_sniper_scale_in import _DummyDB, _fresh_submit_micro_fields, _trusted_orderbook_touch_ticks, _micro_vwap_candles
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.utils.constants import TRADING_RULES
+    from types import SimpleNamespace
+    clock = datetime(2026, 9, 14, 13, 55, tzinfo=policy.KST).timestamp()
+    bundle = initial(tmp_path)
+    if compact == 'v1':
+        from src.engine.scalping import ai_action_outcome_calibration as calibration
+        bundle['ai_policy'].update(prompt_version=policy.LEGACY_COMPACT_AI_VERSION,
+            variant=policy.LEGACY_COMPACT_AI_VARIANT, system_prompt=policy.compact_auxiliary_prompt(
+                prompt_version=policy.LEGACY_COMPACT_AI_VERSION))
+        bundle['ai_policy']['system_prompt_sha256'] = policy.digest(bundle['ai_policy']['system_prompt'])
+        bundle['bundle_sha256'] = policy.digest({k:v for k,v in bundle.items() if k!='bundle_sha256'})
+        calibration._atomic_write_json(policy.root(tmp_path)/'policy_2026-09-14.json', bundle)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime.fromtimestamp(clock, policy.KST)
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+    monkeypatch.setattr(handlers, 'datetime', Clock)
+    monkeypatch.setattr(policy, 'datetime', Clock)
+    monkeypatch.setattr(time, 'time', lambda:clock)
+    monkeypatch.setattr(handlers, 'TRADING_RULES', replace(TRADING_RULES, SCALP_SIM_PANIC_FORCE_NOOP=True))
+    for key, value in dict(COOLDOWNS={}, ALERTED_STOCKS=set(), ACTIVE_TARGETS=[], HIGHEST_PRICES={},
+                           LAST_AI_CALL_TIMES={}, LAST_LOG_TIMES={}, DB=_DummyDB(), KIWOOM_TOKEN='fixture-token').items():
+        monkeypatch.setattr(handlers, key, value)
+    monkeypatch.setenv('KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH', str(tmp_path/'owners.jsonl'))
+    monkeypatch.setenv('KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE', str(tmp_path/'no-owner-policy.json'))
+    excluded = tmp_path/'excluded.txt'; excluded.write_text('')
+    monkeypatch.setenv('KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE', str(excluded))
+    monkeypatch.delenv('KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES', raising=False)
+    monkeypatch.setattr(handlers, 'EVENT_BUS', SimpleNamespace(publish=lambda *a, **k:None))
+    monkeypatch.setattr(handlers, '_publish_buy_signal_submission_notice', lambda *a, **k:None)
+    stages=[]
+    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda s, c, stage, **k:stages.append((stage,k)))
+    # External account/source facts are fixed; execution validators stay real.
+    monkeypatch.setattr(handlers.kiwoom_orders, 'get_deposit', lambda *a, **k:1000000)
+    monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_meta', lambda:dict(source='fixture',account_deposit=1000000))
+    monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_errors', lambda:[])
+    monkeypatch.setattr(handlers.kiwoom_orders, 'describe_buy_capacity', lambda *a, **k:(100000,100000,10,1.0))
+    monkeypatch.setattr(handlers, '_read_entry_capacity_snapshot', lambda *a, **k:dict(
+        deposit=1000000, cash_only_orderable_amount=1000000, cash_only_orderable_qty=100,
+        applied_orderable_amount=1000000, applied_orderable_qty=100, applied_margin_rate=100))
+    monkeypatch.setattr(handlers.kiwoom_utils, 'get_tick_history_ka10003', lambda *a, **k:_trusted_orderbook_touch_ticks(price=10000,hhmm='13:55'))
+    monkeypatch.setattr(handlers.kiwoom_utils, 'get_minute_candles_ka10080', lambda *a, **k:_micro_vwap_candles(price=10000))
+    stock=dict(id=7, code='005930', name='fixture', status='WATCHING', strategy='SCALPING',
+        position_tag='SCANNER', scanner_promotion_id='PROMO-ASYNC', prob=.9, rt_ai_prob=.9,
+        effective_venue='KRX', venue_resolution='explicit', source_signature='VALUE_TOP')
+    coordinator, generation, original = _retained_fixture(stock)
+    if origin == 'fixed_watch':
+        from src.engine.scalping import continuous_reversal_branches as native
+        from src.engine.scalping import reversal_current_backend
+        from src.engine.scalping.scanner_async_eval import FixedWatchGeneration
+        monkeypatch.setattr(native, '_STATES', {})
+        monkeypatch.setattr(native, '_CLAIMS', {})
+        monkeypatch.setattr(native, '_GENERATION', None)
+        monkeypatch.setattr(native, '_V2', True)
+        native.configure(bundle['bundle_sha256'], v2=True)
+        state=native.BranchState(generation=bundle['bundle_sha256'])
+        for i, price in enumerate([10000]*120+[9900,10000]):
+            state.legacy.observe([clock-121+i,1,i+1,price,price-10,price+10,10,1,1,'005930_AL',0],
+                symbol='005930',venue='SOR',session='KRX_REGULAR')
+        native._STATES[('005930','SOR','005930_AL','REGULAR','2026-09-14')]=state
+        claim=native.claim_snapshot('005930','SOR','KRX_REGULAR',now=clock,item='005930_AL',
+                                    family_sha256=bundle['bundle_sha256'])
+        assert claim
+        claim['source_registration_receipt']={'sha256':'a'*64}
+        monkeypatch.setattr(reversal_current_backend, 'backend', lambda *a:native)
+        generation=FixedWatchGeneration.from_claim('005930',claim)
+        coordinator._ready.clear()
+        stock.pop('scanner_promotion_id')
+        from src.engine.scalping import main_fixed_watch
+        route = main_fixed_watch.session_route(clock, '005930')
+        stock.update(watch_origin='MAIN_FIXED_WATCH', watch_admission_id=main_fixed_watch.new_admission_id(clock, route),
+            watch_generation_id=main_fixed_watch.generation_id(clock, route),
+            market_data_route=route['route'], broker_route='SOR', position_tag='SCALP_BASE', market_session_bucket='KRX_REGULAR',
+            _scanner_async_generation_id=generation.generation_id)
+        original=replace(original, request_id=generation.generation_id+':key',
+            generation_id=generation.generation_id, original_generation=generation,
+            generation_kind='fixed_watch', venue='SOR', native_claim=claim)
+    payload=dict(action='BUY',score=90,reason='fixture', ai_result_source='live',ai_parse_ok=True,
+        entry_primary_decision_owner='mechanistic_entry_adjudicator', entry_mechanistic_action='ENTER_NOW',
+        entry_mechanistic_policy_version=bundle['machine_policy'].get('version', 'mechanistic_entry_threshold_policy_v1'),
+        entry_mechanistic_policy_sha256=policy.digest(bundle['machine_policy']),
+        entry_ai_screen_status='pass', entry_ai_screen_pass=True, entry_ai_risk_verdict='PASS',provider_called=True,
+        ai_prompt_version=bundle['ai_policy']['prompt_version'], ai_prompt_sha256='d'*64,
+        evaluation_attempt_id='eval-original', ai_decision_trace_id='trace-original',
+        scanner_promotion_id='PROMO-ASYNC', machine_bundle_sha256=bundle['bundle_sha256'],
+        policy_bundle_hash=bundle['bundle_sha256'], effective_venue='KRX', market_session_bucket='KRX_REGULAR',
+        **_fresh_submit_micro_fields())
+    if origin == 'fixed_watch':
+        payload.pop('scanner_promotion_id')
+        payload.update(watch_origin=stock['watch_origin'],watch_admission_id=stock['watch_admission_id'],
+            watch_generation_id=stock['watch_generation_id'])
+        from src.engine.scalping import ai_decision_trace as trace
+        monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED', '1')
+        monkeypatch.setattr(trace, 'DATA_DIR', tmp_path)
+        monkeypatch.setattr(trace, '_now', lambda:Clock.now(policy.KST))
+        capture=trace.capture_machine_observation(exact_payload=payload,
+            setup_evidence={}, assessment={'action':'ENTER_NOW'}, bundle_sha256=bundle['bundle_sha256'])
+        assert capture['machine_capture_status'] == 'captured'
+        trace.bind_machine_observation_revision(stock, capture, symbol='005930',bundle_sha256=bundle['bundle_sha256'])
+        payload.update(capture)
+    original=replace(original,state_version=handlers._scanner_async_entry_state_version(stock))
+    original=replace(original, ai_payload=payload, prepared_context=dict(
+        recent_ticks=_trusted_orderbook_touch_ticks(price=10000,hhmm='13:55'),
+        recent_candles=_micro_vwap_candles(price=10000), candle_context={}))
+    coordinator._ready[original.request_id]=original
+    coordinator._completed[original.request_id]=original
+    coordinator._undrained_request_ids.add(original.request_id)
+    ws=dict(curr=10000, v_pw=120, ask_tot=100000,bid_tot=100000,open=9950,fluctuation=1,
+        last_ws_update_ts=clock, tick_acceleration_ratio=1.25, curr_vs_micro_vwap_bp=5,
+        buy_pressure_10t=72, **_fresh_submit_micro_fields(),
+        orderbook=dict(asks=[dict(price=10010,volume=100)],bids=[dict(price=10000,volume=100)]))
+    calls=[]
+    def adapter(*args, **kwargs):
+        calls.append((args, kwargs))
+        assert kwargs['owner_context'].owner_type == 'main_scalping'
+        if outcome == 'no_response':
+            return None
+        if outcome == 'exception':
+            raise RuntimeError('controlled broker transport uncertainty')
+        return dict(return_code='0', ord_no='0000001', broker_route='SOR')
+    monkeypatch.setattr(handlers.kiwoom_orders, 'send_buy_order', adapter)
+    if outcome == 'final_deadline':
+        real_owner_context = handlers.main_owner_context
+        def late_owner(*args, **kwargs):
+            nonlocal clock
+            result = real_owner_context(*args, **kwargs)
+            clock = original.deadline_epoch
+            return result
+        monkeypatch.setattr(handlers, 'main_owner_context', late_owner)
+    class NoNewAI:
+        def analyze_target(self, *a, **k):
+            pytest.fail('retained PASS must not request another AI evaluation')
+    try:
+        assert coordinator.drain_completed() == [original] # actual outer notification drain retains executable result
+        def consume():
+            handlers.handle_watching_state(stock,'005930',ws,1, radar=SimpleNamespace(
+                get_smart_target_price=lambda price, **k:(price,0)), ai_engine=NoNewAI(),
+                scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
+        if outcome == 'exception':
+            with pytest.raises(RuntimeError, match='controlled broker'):
+                consume()
+        else:
+            consume()
+        expected = 0 if outcome == 'final_deadline' else 1
+        if len(calls) != expected:
+            pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in ('reason','skip_reason','block_reason','submit_call_outcome','sizing_block_reason')}) for s,f in stages[-12:]]))
+        if calls:
+            assert calls[0][0][0] == '005930' and calls[0][0][1] > 0
+        if outcome == 'accepted':
+            assert any(stage=='order_bundle_submitted' for stage,_ in stages)
+        assert stock['last_watching_ai_machine_primary_fields']['evaluation_attempt_id'] == 'eval-original'
+        assert not coordinator.has_completed(generation_id=original.generation_id, cache_key='key')
+        handlers.handle_watching_state(stock,'005930',ws,1,ai_engine=NoNewAI(),
+            scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)
+        assert len(calls) == expected
+    finally:
+        coordinator.shutdown()
 
 
 def test_completed_output_reaches_common_decision_consumer_without_fresh_preparation(monkeypatch):

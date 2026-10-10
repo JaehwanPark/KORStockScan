@@ -114,6 +114,7 @@ SUMMARY_STAGES = frozenset(
     }
 )
 EXECUTION_SUMMARY_STAGES = frozenset({
+    "entry_async_disposition", "scanner_async_result_commit",
     "pre_submit_delay_committed", "pre_submit_delay_quote_observed",
     "pre_submit_delay_intent_terminal",
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",

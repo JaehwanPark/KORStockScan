@@ -24,11 +24,27 @@ class Index:
     digests: dict = field(default_factory=dict)
     ready: bool = False
     tail: bytes = b''
+    pending: bytes = b''
+    observed_identity: tuple | None = None
+    pending_reason: str = ''
+    pending_verified_bytes: int = 0
+    pending_verification_identity: tuple | None = None
 
 
 _LOCK = threading.RLock()
 _INDEXES = OrderedDict()
 MAX_INDEXES = 32
+MAX_ROW_BYTES = 32 * 1024 * 1024
+MAX_PENDING_BYTES = 64 * 1024 * 1024
+
+
+def _reserve_pending(value, raw):
+    # Caller holds _LOCK. Partial assembly has a process-wide bound, in
+    # addition to the writer/reader's common per-row limit.
+    total = sum(len(index.pending) for index in _INDEXES.values() if index is not value)
+    if total + len(raw) > MAX_PENDING_BYTES:
+        raise IndexNotReady('ai_trace_dedup_pending_memory_budget')
+    value.pending = raw
 
 
 def semantic_digest(row, key_field):
@@ -57,8 +73,13 @@ def _state(path, field, st):
     with _LOCK:
         value = _INDEXES.get(key)
         if (value is None or value.inode != inode or (st and (
-                st.st_size < value.offset or (st.st_size == value.offset
+                st.st_size < value.offset + len(value.pending) or (st.st_size == value.offset
                 and value.mtime_ns != st.st_mtime_ns)))):
+            if value is not None:
+                # External caches hold these set objects, not independent proof.
+                value.keys.clear()
+                value.digests.clear()
+                value.ready = False
             value = Index(inode)
             _INDEXES[key] = value
         _INDEXES.move_to_end(key)
@@ -76,26 +97,77 @@ def prepare(path, field, generation, *, max_bytes=4 * 1024 * 1024, hot=False):
         return value
     with _LOCK:
         offset, tail, ready = value.offset, value.tail, value.ready
+        pending = value.pending
+        identity_now = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
         if offset == st.st_size and ready:
             return value
         if hot and (not ready or st.st_size - offset > max_bytes):
             raise IndexNotReady('ai_trace_dedup_preparation_pending')
+        if value.pending_reason and value.observed_identity == identity_now:
+            raise IndexNotReady(value.pending_reason)
     fd = generation.open_name(generation.logical.name, os.O_RDONLY)
     try:
         generation.assert_open_descriptor_name_identity(fd, generation.logical.name)
         if tail and os.pread(fd, len(tail), max(0, offset-len(tail))) != tail:
             with _LOCK:
+                value.keys.clear()
+                value.digests.clear()
+                value.ready = False
                 _INDEXES.pop(_key(path, field), None)
             raise IndexNotReady('ai_trace_dedup_prefix_changed')
-        raw = os.pread(fd, max_bytes, offset)
+        if pending and value.observed_identity != identity_now:
+            # An append/rewrite between maintenance leases must verify ALL
+            # assembled bytes, in bounded steps, before reusing that prefix.
+            with _LOCK:
+                if value.pending_verification_identity != identity_now:
+                    value.pending_verified_bytes = 0
+                    value.pending_verification_identity = identity_now
+                verified = value.pending_verified_bytes
+            size = min(max_bytes, len(pending)-verified)
+            if os.pread(fd, size, offset+verified) != pending[verified:verified+size]:
+                with _LOCK:
+                    value.keys.clear()
+                    value.digests.clear()
+                    value.ready = False
+                    _INDEXES.pop(_key(path, field), None)
+                raise IndexNotReady('ai_trace_dedup_prefix_changed')
+            if generation.assert_open_descriptor_name_identity(fd, generation.logical.name) != identity_now:
+                raise IndexNotReady('ai_trace_dedup_generation_changed')
+            with _LOCK:
+                if (_INDEXES.get(_key(path, field)) is not value or value.offset != offset
+                        or value.pending != pending
+                        or value.pending_verification_identity != identity_now):
+                    raise IndexNotReady('ai_trace_dedup_checkpoint_changed')
+                value.pending_verified_bytes = verified+size
+            max_bytes -= size
+            if verified+size < len(pending) or max_bytes == 0:
+                raise IndexNotReady('ai_trace_dedup_preparation_pending')
+        raw = pending + os.pread(fd, min(max_bytes, MAX_ROW_BYTES+1-len(pending)), offset + len(pending))
         end = raw.rfind(b'\n') + 1
         if not end:
-            raise IndexNotReady('ai_trace_dedup_partial_or_oversized_row')
+            reason = ('ai_trace_dedup_row_size_exceeded' if len(raw) > MAX_ROW_BYTES
+                      else 'ai_trace_dedup_partial_row' if offset+len(raw) == st.st_size
+                      else 'ai_trace_dedup_preparation_pending')
+            if generation.assert_open_descriptor_name_identity(fd, generation.logical.name) != identity_now:
+                raise IndexNotReady('ai_trace_dedup_generation_changed')
+            with _LOCK:
+                if (_INDEXES.get(_key(path, field)) is not value or value.offset != offset
+                        or value.pending != pending):
+                    raise IndexNotReady('ai_trace_dedup_checkpoint_changed')
+                _reserve_pending(value, raw if len(raw) <= MAX_ROW_BYTES else b'')
+                value.pending_verified_bytes = 0
+                value.pending_verification_identity = None
+                value.observed_identity = identity_now
+                value.pending_reason = reason if offset+len(raw) == st.st_size or len(raw)>MAX_ROW_BYTES else ''
+                value.ready = False
+            raise IndexNotReady(reason)
         keys = set()
         digests = {}
         for line in raw[:end].splitlines():
             if not line.strip():
                 continue
+            if len(line)+1 > MAX_ROW_BYTES:
+                raise IndexNotReady('ai_trace_dedup_row_size_exceeded')
             try:
                 row = json.loads(line)
                 if not isinstance(row, dict):
@@ -116,11 +188,17 @@ def prepare(path, field, generation, *, max_bytes=4 * 1024 * 1024, hot=False):
         new_offset = offset + end
         new_tail = os.pread(fd, min(new_offset, 1024), max(0, new_offset-1024))
         with _LOCK:
-            if _INDEXES.get(_key(path, field)) is not value or value.offset != offset:
+            if (_INDEXES.get(_key(path, field)) is not value or value.offset != offset
+                    or value.pending != pending):
                 raise IndexNotReady('ai_trace_dedup_checkpoint_changed')
+            _reserve_pending(value, raw[end:])
             value.keys.update(keys)
             value.digests.update(digests)
             value.offset = new_offset
+            value.pending_verified_bytes = 0
+            value.pending_verification_identity = None
+            value.pending_reason = ''
+            value.observed_identity = identity_now
             value.tail = new_tail
             value.mtime_ns = st.st_mtime_ns
             value.ready = new_offset == st.st_size
@@ -166,4 +244,8 @@ def appended(path, field, row, descriptor, *, previous_identity, encoded):
             value.keys.add(str(row[field]))
             value.digests[str(row[field])] = semantic_digest(row, field)
         value.ready = True
+        value.pending = b''
+        value.pending_reason = ''
+        value.pending_verified_bytes = 0
+        value.pending_verification_identity = None
         value.tail = encoded[-1024:] if len(encoded) >= 1024 else (value.tail + encoded)[-1024:]

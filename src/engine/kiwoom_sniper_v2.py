@@ -396,6 +396,10 @@ ACCOUNT_RECONCILIATION_INTERVAL_SEC = 90.0
 _SCANNER_OBSERVATION_EXECUTOR = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="scanner_observation"
 )
+from src.utils.pipeline_event_logger import BoundedObservationQueue
+_SCANNER_OBSERVATION_QUEUE = BoundedObservationQueue(_SCANNER_OBSERVATION_EXECUTOR)
+from src.engine.monitoring.runtime_performance import set_observation_health
+set_observation_health(_SCANNER_OBSERVATION_QUEUE.snapshot)
 _SCANNER_RUNTIME_INSTANCE_ID = (
     f"scanner-runtime-{os.getpid()}-{int(time.time() * 1000)}"
 )
@@ -2844,30 +2848,10 @@ def _emit_scanner_scheduler_event(
         **dict(fields or {}),
     }
 
-    def _emit_observation():
-        try:
-            emit_pipeline_event(
-                "ENTRY_PIPELINE",
-                stock_name,
-                stock_code,
-                stage_name,
-                record_id=record_id,
-                fields=event_fields,
-            )
-        except Exception as exc:
-            log_error(
-                "[SCANNER_SCHEDULER_OBSERVATION] "
-                f"event sink failed stage={stage_name} code={stock_code}: {exc}"
-            )
-
-    try:
-        _SCANNER_OBSERVATION_EXECUTOR.submit(_emit_observation)
-    except RuntimeError as exc:
-        # Instrumentation shutdown must never abort scanner state handling.
-        log_error(
-            "[SCANNER_SCHEDULER_OBSERVATION] "
-            f"event submit failed stage={stage_name} code={stock_code}: {exc}"
-        )
+    # Arguments are frozen by the finite queue, including existing callers.
+    _SCANNER_OBSERVATION_QUEUE.submit(emit_pipeline_event,
+        "ENTRY_PIPELINE", stock_name, stock_code, stage_name,
+        record_id=record_id, fields=event_fields)
 
 
 def _resolve_scanner_runtime_record_id(payload, code, strategy):
@@ -10456,13 +10440,22 @@ def _restore_scanner_async_commit_transport(target, async_result):
     }
 
 
+def _scanner_async_result_owns_target_slot(target, async_result):
+    generation = str(getattr(async_result, 'generation_id', '') or '')
+    key = str(getattr(async_result, 'cache_key', '') or '')
+    return bool(isinstance(target, dict) and generation and key
+        and str(target.get('scanner_generation_id') or '') == generation
+        and str(target.get('_scanner_async_generation_id') or generation) == generation
+        and str(target.get('_scanner_async_cache_key') or key) == key)
+
+
 def _arm_scanner_async_rejected_result_recheck(target, async_result, *, now_epoch):
     """Arm a no-submit fresh-snapshot retry before scheduler discard."""
 
     status = str(getattr(async_result, "status", "") or "").strip()
     cache_key = str(getattr(async_result, "cache_key", "") or "").strip()
     if (
-        not isinstance(target, dict)
+        not _scanner_async_result_owns_target_slot(target, async_result)
         or status != "expired_after_response"
         or not cache_key.startswith("watching:")
     ):
@@ -12775,6 +12768,7 @@ def run_sniper(is_test_mode=False):
                 run_sniper.scanner_async_eval_coordinator = ScannerAsyncEvalCoordinator(
                     ai_dispatcher=run_sniper.hot_path_ai_dispatcher,
                     owns_ai_dispatcher=False,
+                    observation_sink=_SCANNER_OBSERVATION_QUEUE.submit,
                 )
                 log_info(
                     "[SCANNER_ASYNC] initialized "
@@ -13351,9 +13345,11 @@ def run_sniper(is_test_mode=False):
                         async_coordinator.discard_completed(
                             generation_id=async_result.generation_id,
                             cache_key=async_result.cache_key,
+                            reason=async_transport.get('reason') if async_target else 'target_removed',
                         )
                         if async_target is not None:
                             with ENTRY_LOCK:
+                                async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
                                 async_recheck_fields = (
                                     _arm_scanner_async_rejected_result_recheck(
                                         async_target,
@@ -13361,48 +13357,22 @@ def run_sniper(is_test_mode=False):
                                         now_epoch=time.time(),
                                     )
                                 )
-                                if (
-                                    str(
-                                        async_target.get("_scanner_async_cache_key")
-                                        or ""
-                                    ).strip()
-                                    == async_result.cache_key
-                                ):
-                                    for async_key in (
-                                        "_scanner_async_generation_id",
-                                        "_scanner_async_cache_key",
-                                        "_scanner_async_state_version",
-                                        "_scanner_async_submitted_at",
-                                    ):
-                                        async_target.pop(async_key, None)
-                                if (
-                                    str(
-                                        async_target.get(
-                                            "_scanner_opening_rotation_async_cache_key"
-                                        )
-                                        or ""
-                                    ).strip()
-                                    == async_result.cache_key
-                                ):
-                                    for async_key in (
-                                        "_scanner_opening_rotation_async_generation_id",
-                                        "_scanner_opening_rotation_async_cache_key",
-                                        "_scanner_opening_rotation_async_state_version",
-                                        "_scanner_opening_rotation_async_submitted_at",
-                                    ):
-                                        async_target.pop(async_key, None)
-                            async_park_reason = (
-                                "async_preparation_deadline_expired_"
-                                "generation_warm_parked"
-                                if async_result.status == "preparation_deadline_expired"
-                                else "async_result_rejected_generation_warm_parked"
-                            )
-                            _scanner_scheduler_park_target_generation(
-                                run_sniper.scanner_runtime_scheduler,
-                                async_target,
-                                now_epoch=time.time(),
-                                reason=async_park_reason,
-                            )
+                                sniper_state_handlers._clear_scanner_async_identity(async_target,
+                                    generation_id=async_result.generation_id,
+                                    cache_key=async_result.cache_key)
+                                async_park_reason = (
+                                    "async_preparation_deadline_expired_"
+                                    "generation_warm_parked"
+                                    if async_result.status == "preparation_deadline_expired"
+                                    else "async_result_rejected_generation_warm_parked"
+                                )
+                                if async_slot_owned:
+                                    _scanner_scheduler_park_target_generation(
+                                        run_sniper.scanner_runtime_scheduler,
+                                        async_target,
+                                        now_epoch=time.time(),
+                                        reason=async_park_reason,
+                                    )
                         _emit_scanner_scheduler_event(
                             payload={
                                 "code": async_result.code,
@@ -13511,45 +13481,20 @@ def run_sniper(is_test_mode=False):
                         async_coordinator.discard_completed(
                             generation_id=async_result.generation_id,
                             cache_key=async_result.cache_key,
+                            reason='async_commit_enqueue_rejected',
                         )
                         with ENTRY_LOCK:
-                            if (
-                                str(
-                                    async_target.get("_scanner_async_cache_key") or ""
-                                ).strip()
-                                == async_result.cache_key
-                            ):
-                                for async_key in (
-                                    "_scanner_async_generation_id",
-                                    "_scanner_async_cache_key",
-                                    "_scanner_async_state_version",
-                                    "_scanner_async_submitted_at",
-                                ):
-                                    async_target.pop(async_key, None)
-                            if (
-                                str(
-                                    async_target.get(
-                                        "_scanner_opening_rotation_async_cache_key"
-                                    )
-                                    or ""
-                                ).strip()
-                                == async_result.cache_key
-                            ):
-                                for async_key in (
-                                    "_scanner_opening_rotation_async_generation_id",
-                                    "_scanner_opening_rotation_async_cache_key",
-                                    "_scanner_opening_rotation_async_state_version",
-                                    "_scanner_opening_rotation_async_submitted_at",
-                                ):
-                                    async_target.pop(async_key, None)
-                        _scanner_scheduler_park_target_generation(
-                            run_sniper.scanner_runtime_scheduler,
-                            async_target,
-                            now_epoch=time.time(),
-                            reason=(
-                                "async_commit_enqueue_rejected_generation_warm_parked"
-                            ),
-                        )
+                            async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
+                            sniper_state_handlers._clear_scanner_async_identity(async_target,
+                                generation_id=async_result.generation_id,
+                                cache_key=async_result.cache_key)
+                            if async_slot_owned:
+                                _scanner_scheduler_park_target_generation(
+                                    run_sniper.scanner_runtime_scheduler,
+                                    async_target,
+                                    now_epoch=time.time(),
+                                    reason="async_commit_enqueue_rejected_generation_warm_parked",
+                                )
             queue_context = _runtime_queue_context(targets, now_ts=now_ts)
             active_scanner_watch_codes = {
                 str(t.get("code", "")).strip()[:6]
@@ -13617,16 +13562,10 @@ def run_sniper(is_test_mode=False):
                 events = list(deferred_scanner_pipeline_events)
                 deferred_scanner_pipeline_events.clear()
 
-                def _emit_batch(batch):
-                    for stock_value, code_value, stage, fields in batch:
-                        sniper_state_handlers._log_entry_pipeline(
-                            stock_value,
-                            code_value,
-                            stage,
-                            **fields,
-                        )
-
-                _SCANNER_OBSERVATION_EXECUTOR.submit(_emit_batch, events)
+                for stock_value, code_value, stage, fields in events:
+                    _SCANNER_OBSERVATION_QUEUE.submit(
+                        sniper_state_handlers._log_entry_pipeline,
+                        stock_value, code_value, stage, **fields)
 
             def _defer_emit_scanner_fast_precheck(
                 stock_value,
@@ -13834,15 +13773,10 @@ def run_sniper(is_test_mode=False):
                 events = list(deferred_scanner_skip_events)
                 deferred_scanner_skip_events.clear()
 
-                def _emit_batch(batch):
-                    for stock_value, code_value, kwargs in batch:
-                        sniper_state_handlers.emit_scanner_watching_runtime_skip(
-                            stock_value,
-                            code_value,
-                            **kwargs,
-                        )
-
-                _SCANNER_OBSERVATION_EXECUTOR.submit(_emit_batch, events)
+                for stock_value, code_value, kwargs in events:
+                    _SCANNER_OBSERVATION_QUEUE.submit(
+                        sniper_state_handlers.emit_scanner_watching_runtime_skip,
+                        _scanner_pipeline_stock_snapshot(stock_value), code_value, **kwargs)
 
             def _queue_scanner_ws_reg(code_value, source):
                 norm_code = str(code_value or "").strip()[:6]
@@ -15162,19 +15096,12 @@ def run_sniper(is_test_mode=False):
                                                 scheduler_generation.generation_id
                                             ),
                                             cache_key=async_cache_key,
+                                            reason='async_commit_branch_closed',
                                         )
-                                    with ENTRY_LOCK:
-                                        for async_key in (
-                                            "_scanner_async_generation_id",
-                                            "_scanner_async_cache_key",
-                                            "_scanner_async_state_version",
-                                            "_scanner_async_submitted_at",
-                                            "_scanner_opening_rotation_async_generation_id",
-                                            "_scanner_opening_rotation_async_cache_key",
-                                            "_scanner_opening_rotation_async_state_version",
-                                            "_scanner_opening_rotation_async_submitted_at",
-                                        ):
-                                            stock.pop(async_key, None)
+                                    if scheduler_generation is not None and async_cache_key:
+                                        sniper_state_handlers._clear_scanner_async_identity(stock,
+                                            generation_id=scheduler_generation.generation_id,
+                                            cache_key=async_cache_key)
                                 scheduler_claim = (
                                     _scanner_scheduler_refresh_claim_after_expiry(
                                         scheduler,
@@ -15342,18 +15269,9 @@ def run_sniper(is_test_mode=False):
                                         cache_key=async_cache_key,
                                     )
                                     if unused_result is not None:
-                                        with ENTRY_LOCK:
-                                            for async_key in (
-                                                "_scanner_async_generation_id",
-                                                "_scanner_async_cache_key",
-                                                "_scanner_async_state_version",
-                                                "_scanner_async_submitted_at",
-                                                "_scanner_opening_rotation_async_generation_id",
-                                                "_scanner_opening_rotation_async_cache_key",
-                                                "_scanner_opening_rotation_async_state_version",
-                                                "_scanner_opening_rotation_async_submitted_at",
-                                            ):
-                                                stock.pop(async_key, None)
+                                        sniper_state_handlers._clear_scanner_async_identity(stock,
+                                            generation_id=unused_result.generation_id,
+                                            cache_key=unused_result.cache_key)
                                         _emit_scanner_scheduler_event(
                                             payload=stock,
                                             target=stock,
@@ -16414,6 +16332,7 @@ def run_sniper(is_test_mode=False):
                 log_error(f"hot path AI dispatcher stop failed: {e}")
             finally:
                 run_sniper.hot_path_ai_dispatcher = None
+        _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
         if WS_MANAGER:
             try:
                 WS_MANAGER.stop()

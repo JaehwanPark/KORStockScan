@@ -8595,7 +8595,7 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping import entry_candle_context as candles
     from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
-    from src.trading.market import micro_confirmation, entry_adverse_flow
+    from src.trading.market import micro_confirmation, main_entry_micro_window as entry_adverse_flow
     import copy
 
     engine = _build_engine()
@@ -8683,3 +8683,24 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
         new_bar = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
             recent_ticks=[], recent_candles=[{"timestamp": 1900, "close": 9950}], candle_meta={}, now_ts=2001)
         assert new_bar["source_signal_id"] != result["source_signal_id"]
+
+
+def test_local_async_capture_binding_survives_provider_metadata_limit(monkeypatch,tmp_path):
+    from src.engine.scalping import ai_decision_trace as trace
+    engine=_build_engine();wire=[]
+    engine.client=SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs:
+        (wire.append(kwargs) or SimpleNamespace(output_text='{"action":"WAIT","score":50}'))))
+    monkeypatch.setattr(openai_module,'TRADING_RULES',replace(openai_module.TRADING_RULES,
+        OPENAI_TRANSPORT_MODE='http'))
+    monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED','1')
+    monkeypatch.setattr(trace,'DATA_DIR',tmp_path)
+    binding=dict(async_request_id='g:key',async_producer_pid=123,async_producer_start_ticks='456',
+        async_origin_deadline_epoch=1791412205.,async_order_venue='SOR',scanner_generation_id='g')
+    metadata={**{f'diagnostic_{i}':i for i in range(32)},**binding}
+    engine._call_openai_safe('fixture','{}',require_json=True,context_name='offline',
+        endpoint_name='analyze_target',symbol='005930',metadata_extra=metadata)
+    assert len(wire)==1 and len(wire[0]['metadata'])<=16
+    row=json.loads(trace._request_path(trace._date_text()).read_text().splitlines()[-1])
+    for key,value in binding.items():assert row[key]==value
+    receipt=engine._consume_last_transport_meta()
+    for key,value in binding.items():assert receipt[key]==value

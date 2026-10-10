@@ -41,7 +41,8 @@ def stamp(value):
         return None
 
 
-def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES, window_sec=SOURCE_WINDOW_SEC):
+def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES,
+                        window_sec=SOURCE_WINDOW_SEC, allow_adjacent_date=False):
     """Read a bounded, complete JSONL suffix; never equate a partial tail to zero gaps."""
     source = {"status": "unobservable", "tail_truncated": False,
               "window_covered": False, "recent_count": 0}
@@ -74,7 +75,7 @@ def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES, 
             if not isinstance(row, dict):
                 raise ValueError("source_row_not_object")
             at = stamp(row.get(time_field))
-            if at is None or at.date() != now.date() or at > now:
+            if at is None or (not allow_adjacent_date and at.date() != now.date()) or at > now:
                 continue
             first_at = at if first_at is None else min(first_at, at)
             if (now - at).total_seconds() <= window_sec:
@@ -375,6 +376,47 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
 
     trace_rows, sources["trace"] = _recent_source_rows(
         paths["trace"][0], now, time_field=paths["trace"][1], tail_bytes=tail_bytes)
+    # Only the adjacent partition required by the same bounded observation
+    # window is read. Physical append dates never replace occurrence clocks.
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if (now-midnight).total_seconds() < SOURCE_WINDOW_SEC:
+        previous = (now-timedelta(days=1)).date().isoformat()
+        for kind, rows in (('probe', probe_rows), ('trace', trace_rows)):
+            prior_path = paths[kind][0].with_name(paths[kind][0].name.replace(day, previous))
+            prior_rows, receipt = _recent_source_rows(prior_path, now,
+                time_field=paths[kind][1], tail_bytes=tail_bytes, allow_adjacent_date=True)
+            rows.extend(prior_rows)
+            sources[kind]['adjacent_partition'] = receipt
+            if receipt['status'] != 'complete':
+                sources[kind]['status'] = 'partial'
+    pass_projection = []
+    unmapped_pass_count = 0
+    for row in trace_rows:
+        if (row.get('decision_stage') == 'entry_screen'
+                and row.get('decision_evaluation_status') == 'evaluated'
+                and row.get('entry_mechanistic_action') == 'ENTER_NOW'
+                and row.get('entry_ai_screen_status') == 'pass'
+                and row.get('entry_ai_risk_verdict') == 'PASS'
+                and row.get('provider_called') is True):
+            if (not all(str(row.get(key) or '').strip().lower() not in
+                    {'', '-', 'none', 'null', 'unknown', '0'} for key in (
+                        'async_request_id', 'decision_trace_id', 'evaluation_attempt_id',
+                        'async_producer_pid', 'async_producer_start_ticks'))
+                    or not str(row.get('stock_code') or '').isdigit()
+                    or len(str(row.get('stock_code'))) != 6):
+                unmapped_pass_count += 1
+                continue
+            fields = {k: row.get(k) for k in ('async_request_id', 'async_producer_pid',
+                'async_producer_start_ticks', 'async_origin_deadline_epoch', 'scanner_generation_id',
+                'evaluation_attempt_id', 'effective_venue', 'async_order_venue', 'entry_machine_bundle_sha256',
+                'entry_auxiliary_policy_sha256', 'watch_origin', 'watch_admission_id', 'watch_generation_id',
+                'scanner_promotion_id')}
+            fields.update(ai_decision_trace_id=row['decision_trace_id'],
+                async_disposition='validated_pass_trace',
+                async_disposition_event_id='pass-trace:' + row['decision_trace_id'],
+                async_machine_action='ENTER_NOW', async_auxiliary_status='pass',
+                async_auxiliary_verdict='PASS', async_provider_called=True)
+            pass_projection.append(dict(emitted_at=row['decision_ts'], stock_code=row['stock_code'], fields=fields))
     for row in trace_rows:
         if row.get("decision_stage") != "entry_screen":
             continue
@@ -528,6 +570,15 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
         "forbidden_uses": ["order_authority", "threshold_or_provider_change", "missing_as_zero_ev",
                            "actual_trade_failure_claim", "historical_source_repair_claim"],
         "sources": sources, "observed": dict(observed), "issues": dict(sorted(issues.items())),
+        "async_pass_projection": pass_projection[-128:],
+        "async_pass_unmapped_count": unmapped_pass_count,
+        "async_transition_projection": [dict(emitted_at=row.get('emitted_at'),
+            stock_code=row.get('stock_code'), fields=row.get('fields') or {})
+            for row in probe_rows if row.get('stage') == 'entry_async_disposition'][-1024:],
+        "async_transition_projection_coverage": ('complete' if sources['probe']['status'] == 'complete'
+            and sum(row.get('stage') == 'entry_async_disposition' for row in probe_rows) <= 1024 else 'partial'),
+        "async_pass_projection_coverage": ('complete' if len(pass_projection) <= 128
+            and not unmapped_pass_count and sources['trace']['status'] == 'complete' else 'partial'),
         "diagnostics": dict(sorted(diagnostics.items())),
         "issues_by_scope": dict(sorted(issue_scopes.items())),
         "diagnostics_by_scope": dict(sorted(diagnostic_scopes.items())),
@@ -545,6 +596,14 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
 def attach_source_gap_semantics(result, semantics):
     """Persist fresh source incidents; lack of a complete window cannot resolve one."""
     result["source_gap_semantics"] = semantics
+    from types import SimpleNamespace
+    current = result.get('async_disposition_coverage') or {}
+    retained = [SimpleNamespace(stage='entry_async_disposition', **row)
+                for row in (current.get('attempt_projection') or [])
+                    + (semantics.get('async_transition_projection') or [])]
+    result['async_disposition_coverage'] = async_disposition_coverage(retained, result['as_of'],
+        pass_projections=semantics.get('async_pass_projection') or [],
+        source_coverage=semantics.get('async_pass_projection_coverage'))
     key = "machine_auxiliary_intraday_source_gap"
     old = result["incidents"].get(key, {})
     issues = semantics.get("issues") or {}
@@ -1087,26 +1146,65 @@ def economic_evidence(fields, stock_code=None):
     return result
 
 
-def async_disposition_coverage(events, as_of):
+def async_disposition_coverage(events, as_of, *, pass_projections=(), source_coverage=None):
     """Count exact retained PASS attempts per PID/start; never infer missing finals."""
     now = stamp(as_of)
     attempts = {}
-    for event in events:
+    retained = []
+    retained_fingerprints = set()
+    identity_fields = ('evaluation_attempt_id', 'ai_decision_trace_id', 'scanner_generation_id',
+        'native_event_id', 'native_signal_id', 'effective_venue', 'async_order_venue', 'async_origin_snapshot_id',
+        'entry_machine_bundle_sha256', 'entry_auxiliary_policy_sha256',
+        'watch_origin', 'watch_admission_id', 'watch_generation_id', 'scanner_promotion_id',
+        'async_origin_deadline_epoch')
+    missing = {'', '-', 'none', 'null', 'unknown'}
+    from types import SimpleNamespace
+    sources = list(events) + [SimpleNamespace(stage='entry_async_disposition',
+        emitted_at=p.get('emitted_at'), stock_code=p.get('stock_code'), fields=p.get('fields') or {})
+        for p in pass_projections]
+    for event in sources:
         emitted = stamp(event.emitted_at)
         if event.stage != 'entry_async_disposition' or now is None or emitted is None or emitted > now:
             continue
         f = event.fields
+        occurred = f.get('async_disposition_epoch')
+        try:
+            at = datetime.fromtimestamp(float(occurred), tz=now.tzinfo) if occurred not in (None, '') else emitted
+        except (ValueError, TypeError, OverflowError, OSError):
+            continue
+        if at > now or (now-at).total_seconds() > SOURCE_WINDOW_SEC:
+            continue
         identity = tuple(str(f.get(k) or '') for k in
                          ('async_producer_pid', 'async_producer_start_ticks', 'async_request_id'))
         if any(v.lower().strip() in {'', '-', 'none', 'null', 'unknown', '0'} for v in identity):
             continue
-        row = attempts.setdefault(identity, {'events': {}, 'conflict': False})
+        row = attempts.setdefault(identity, {'events': {}, 'conflict': False, 'binding': {},
+                                              'post_entry': {}})
+        for key in (*identity_fields, 'stock_code'):
+            value = event.stock_code if key == 'stock_code' else f.get(key)
+            if str(value or '').strip().lower() in missing:
+                continue  # Early unavailable IDs never borrow current stock IDs.
+            if key == 'async_origin_deadline_epoch':
+                try:
+                    value = float(value)
+                    if not math.isfinite(value):
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    row['conflict'] = True
+                    continue
+            value = str(value)
+            if key in row['binding'] and row['binding'][key] != value:
+                row['conflict'] = True
+            row['binding'][key] = value
         eid = f.get('async_disposition_event_id')
         content = (f.get('async_disposition'), f.get('async_disposition_reason'),
                    f.get('async_machine_action'), f.get('async_auxiliary_status'),
                    f.get('async_auxiliary_verdict'), f.get('async_provider_called'),
                    f.get('async_origin_deadline_epoch'), f.get('ai_decision_trace_id'),
-                   f.get('evaluation_attempt_id'), f.get('scanner_generation_id'))
+                   f.get('evaluation_attempt_id'), f.get('scanner_generation_id'),
+                   f.get('async_disposition_epoch'), f.get('async_entry_submit_attempt_id'),
+                   f.get('async_entry_broker_attempts'), f.get('async_entry_broker_accepted'),
+                   f.get('async_entry_submit_outcome'))
         if not eid or eid in row['events'] and row['events'][eid] != content:
             row['conflict'] = True
         row['events'][eid] = content
@@ -1115,13 +1213,33 @@ def async_disposition_coverage(events, as_of):
             and str(f.get('async_auxiliary_status')).lower() == 'pass'
             and str(f.get('async_auxiliary_verdict')).upper() == 'PASS'
             and str(f.get('async_provider_called')).lower() == 'true')
-        row['deadline'] = f.get('async_origin_deadline_epoch')
+        row['deadline'] = row['binding'].get('async_origin_deadline_epoch')
+        if f.get('async_disposition') == 'entry_path_returned':
+            post_entry = {k: f.get(k) for k in (
+                'async_disposition_reason', 'async_entry_submit_attempt_id',
+                'async_entry_broker_attempts', 'async_entry_broker_accepted', 'async_entry_submit_outcome')}
+            if row['post_entry'] and row['post_entry'] != post_entry:
+                row['conflict'] = True
+            row['post_entry'] = post_entry
+        projection = dict(emitted_at=event.emitted_at, stock_code=event.stock_code,
+            fields={k: f.get(k) for k in (*identity_fields,
+                'async_producer_pid', 'async_producer_start_ticks', 'async_request_id',
+                'async_disposition_event_id', 'async_disposition', 'async_disposition_reason',
+                'async_disposition_epoch', 'async_machine_action', 'async_auxiliary_status',
+                'async_auxiliary_verdict', 'async_provider_called',
+                'async_entry_submit_attempt_id', 'async_entry_broker_attempts',
+                'async_entry_broker_accepted', 'async_entry_submit_outcome')})
+        fingerprint = json.dumps(projection, sort_keys=True, default=str)
+        if fingerprint not in retained_fingerprints:
+            retained_fingerprints.add(fingerprint)
+            retained.append(projection)
     by_producer = {}
     for identity, row in attempts.items():
         if not row.get('pass'):
             continue
         counts = by_producer.setdefault(':'.join(identity[:2]),
-            dict(pass_count=0, accepted=0, rejected=0, pending=0, unobservable=0))
+            dict(pass_count=0, accepted=0, rejected=0, pending=0, unobservable=0,
+                 accepted_submit_observed=0, accepted_direct_guard=0, accepted_post_entry_unobservable=0))
         states = {entry[0] for entry in row['events'].values()}
         finals = states & {'accepted_to_entry_path', 'rejected', 'terminal_nonexecution'}
         if row['conflict'] or len(finals) > 1:
@@ -1136,12 +1254,24 @@ def async_disposition_coverage(events, as_of):
                 status = 'unobservable'
         counts['pass_count'] += 1
         counts[status] += 1
+        if status == 'accepted':
+            post = row['post_entry']
+            if str(post.get('async_entry_broker_attempts') or '0').isdigit() and int(post.get('async_entry_broker_attempts') or 0) > 0:
+                counts['accepted_submit_observed'] += 1
+            elif post.get('async_disposition_reason') not in (None, '',
+                    'entry_path_returned_without_terminal_evidence', 'entry_execution_exception_or_uncertain'):
+                counts['accepted_direct_guard'] += 1
+            else:
+                counts['accepted_post_entry_unobservable'] += 1
     return dict(schema='main_async_disposition_coverage_v1', by_producer=by_producer,
         metric_role='source_quality_gate', decision_authority='report_only',
         primary_decision_metric='pass_to_main_disposition_coverage',
         window_policy='current_pid_exact_attempt_with_carry_in_out', sample_floor='none',
         source_quality_gate='exact_pid_start_request_and_validated_pass',
-        coverage='loaded_evidence_only_full_denominator_unobservable',
+        coverage=('bounded_trace_projection_complete' if source_coverage == 'complete'
+                  and len(retained) <= 1024 else 'loaded_evidence_only_full_denominator_unobservable'),
+        denominator_partial=source_coverage != 'complete' or len(retained) > 1024,
+        attempt_projection=retained[-1024:],
         forbidden_uses=['order_authority', 'policy_promotion', 'economics'])
 
 
@@ -2102,6 +2232,7 @@ def evaluate(report, state, now):
     prior = state if state.get("date") == today and state.get("schema") == SCHEMA else {}
     incidents = dict(prior.get("incidents") or {})
     result = {"schema": SCHEMA, "date": today, "as_of": now.isoformat(),
+              "async_disposition_coverage": source.get('async_disposition_coverage') or {},
               "runtime_effect": False, "status": "unobservable", "blocker": None,
               "notification_status": "idle",
               "incidents": incidents, "notification_pending": [], "scopes": {},

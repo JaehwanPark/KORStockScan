@@ -760,7 +760,7 @@ def test_replay_anchor_uses_plan_issue_clock_without_refreshing_original_quote()
 
 def test_before_ai_observation_is_not_a_submit_pass_and_keeps_frozen_seed():
     from src.engine.sniper_missed_entry_counterfactual import _price_ready_plan, EntryEvent, _load_entry_events
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.engine.scalping.strategy_owner_components import digest
     clock = datetime.fromisoformat('2026-09-18T10:00:00+09:00').timestamp()
     order = _priced({'qty': 10, 'price': 10000, 'order_type_code': '00'})
     order.update(entry_price_current_price=10020, entry_price_captured_at=clock)
@@ -826,13 +826,6 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     from src.engine.scalping import entry_split_order_plan as split
     from src.engine.scalping import strategy_owner_replay as replay
     from src.engine.scalping import avg_down_replay_capture as capture_owner
-    from src.engine.monitoring import machine_microstructure_attribution as micro
-    # The injected native loader must not compare concurrently growing live
-    # source generations. Keep the real generation validator on fixture paths.
-    monkeypatch.setattr(micro, 'OBSERVATION_ROOT', tmp_path / 'native_observations')
-    monkeypatch.setattr(micro, 'DEFAULT_SOURCE_EXCLUSION_MANIFEST', tmp_path / 'exclusions.json')
-    monkeypatch.setattr(micro, 'DEFAULT_CANARY_SNAPSHOT_PATH', tmp_path / 'canary.json')
-    monkeypatch.setattr(micro, 'CANARY_DAILY_SNAPSHOT_DIR', tmp_path / 'canary_daily')
     from src.engine.sniper_missed_entry_counterfactual import _load_entry_events, _price_ready_plan
     from src.tests.test_pipeline_event_logger import _reset_logger_state
     from src.utils import pipeline_event_logger as logger
@@ -919,7 +912,8 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     assert {k:v for k,v in stock.items() if k != '_machine_observation_revision'} == before
     assert stock['_machine_observation_revision']['digest'] == 'c'*64
     assert requests == [('005930',10020,0,{'source_only':True,
-        'reuse_only': machine_action != 'ENTER_NOW', 'correlation_id': 'pre-ai-live',
+        'reuse_only': True, 'purpose':'entry_capacity_prefetch',
+        'preparation_deadline_epoch':None, 'correlation_id': 'pre-ai-live',
         'diagnostic_context': {'broker_route': broker_route, 'effective_venue': venue,
             'session_bucket': session, 'mechanistic_action': machine_action}})]
     logger.flush_pipeline_event_producer_summary()
@@ -1030,6 +1024,13 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         # holding interpreter. Only account and native market sources are
         # controlled; there is no manually fabricated operating-arm result.
         from src.tests.test_strategy_owner_replay import entry_native_path
+        from src.engine.lifecycle import avg_down_policy_replay as full_replay
+        original_replay = full_replay.isolated_replay
+        def checked_replay(*args, **kwargs):
+            answer = original_replay(*args, **kwargs)
+            assert 'adapter_error' not in answer, answer
+            return answer
+        monkeypatch.setattr(full_replay, 'isolated_replay', checked_replay)
         from src.utils.pipeline_event_logger import emit_pipeline_event
         available_at = frozen_clock.isoformat()
         emit_pipeline_event('ENTRY_PIPELINE','TEST','005930','entry_ai_economic_decision_available',

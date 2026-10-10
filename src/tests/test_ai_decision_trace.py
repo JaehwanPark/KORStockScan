@@ -28,6 +28,28 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
+def test_async_request_binding_survives_capture_return_and_actual_trace(monkeypatch,tmp_path):
+    _enable(monkeypatch,tmp_path)
+    binding=dict(async_request_id='generation:key',async_producer_pid=123,
+        async_producer_start_ticks='456',async_origin_deadline_epoch=1791412205.,
+        async_order_venue='SOR',scanner_generation_id='generation')
+    captured=trace.capture_ai_request(prompt='fixture',user_input={'stock_code':'005930','evaluation_attempt_id':'eval'},
+        endpoint_name='analyze_target',symbol='005930',request_id='provider-request',metadata=binding,
+        model='fixture',schema_name='fixture',require_json=True)
+    for key,value in binding.items():
+        assert captured[key] == value
+        assert _rows(trace._request_path(trace._date_text()))[0][key] == value
+    trace.record_ai_decision_trace(dict(action='BUY',score=90,evaluation_attempt_id='eval',
+        entry_mechanistic_action='ENTER_NOW',entry_ai_screen_status='pass',entry_ai_risk_verdict='PASS',
+        machine_bundle_sha256='b'*64,entry_ai_component_sha256='c'*64),
+        prompt_type='scalping_entry',prompt_version='continuous_reversal_auxiliary_production_v2',
+        result_source='live',input_contract_fields=captured,provider_called=True)
+    row=_rows(trace._trace_path(trace._date_text()))[0]
+    for key,value in binding.items(): assert row[key]==value
+    assert row['entry_machine_bundle_sha256']=='b'*64
+    assert row['entry_auxiliary_policy_sha256']=='c'*64
+
+
 @pytest.mark.parametrize('schema', ['continuous_reversal_claim_source_receipt_v1',
                                    'continuous_reversal_claim_source_receipt_v2',
                                    'continuous_reversal_claim_source_receipt_v3',

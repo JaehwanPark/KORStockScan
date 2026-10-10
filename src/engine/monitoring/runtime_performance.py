@@ -18,7 +18,8 @@ _NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare', 'ws_loc
           'provider_response', 'machine_to_provider_response', 'provider_response_to_pre_submit',
           'preparation_queue', 'preparation_service', 'source_prepare', 'capacity_prepare',
           'provider_key_wait', 'provider_transport', 'response_validate', 'main_commit', 'submit_guard',
-          'capture_append', 'provider_reserve', 'order_acknowledgement', 'pipeline_source_replay')
+          'capture_append', 'provider_reserve', 'order_acknowledgement', 'pipeline_source_replay',
+          'observation_queue_wait')
 _SAMPLES = {name: deque(maxlen=_LIMIT) for name in _NAMES}
 _TOTAL = {name: 0 for name in _NAMES}
 _BOUNDS = (.01, .05, .1, .25, .5, 1., 1.5, 2., 3., 5., 10., float('inf'))
@@ -36,6 +37,12 @@ _STARTED = time.time()
 _SIGNALS = OrderedDict()
 _FAILURES = OrderedDict()
 _CIRCUIT = {'state':'not_observed'}
+_OBSERVATION_HEALTH = None
+
+
+def set_observation_health(provider):
+    global _OBSERVATION_HEALTH
+    _OBSERVATION_HEALTH = provider
 
 
 def observe_ai_circuit(*, failures, disabled):
@@ -44,7 +51,7 @@ def observe_ai_circuit(*, failures, disabled):
                         consecutive_failures=int(failures), observed_epoch=time.time())
 
 
-def failure(stage, reason):
+def failure(stage, reason, *, emit_log=True):
     """Bounded failure evidence; never convert source-invalid into success."""
     key = (str(stage)[:48], str(reason)[:160])
     with _LOCK:
@@ -54,7 +61,7 @@ def failure(stage, reason):
         if key not in _FAILURES and len(_FAILURES) >= 16:
             _FAILURES.popitem(last=False)
         _FAILURES[key] = (count + 1, now if emit else last)
-    if emit:
+    if emit and emit_log:
         from src.utils.logger import log_info
         log_info('[RUNTIME_PREPARATION_FAILURE] ' + json.dumps(dict(stage=key[0], reason=key[1], pid=os.getpid(), decision_authority='none')))
 
@@ -192,6 +199,7 @@ def snapshot():
         forbidden_uses='policy_promotion_order_authority_or_economic_claim',
         signal_denominator='native_ready_seen_at_ingress_and_claimed_missing_joins_not_inferred',
         metrics=metrics, preparation_failures=failures,
+        observation_queue=_OBSERVATION_HEALTH() if _OBSERVATION_HEALTH else {'status': 'not_installed'},
         ai_circuit=circuit,
         ready_coverage=coverage, ready_coverage_basis='native_ready_seen_at_ingress_not_all_market_opportunities',
         ready_coverage_window='process_lifetime',

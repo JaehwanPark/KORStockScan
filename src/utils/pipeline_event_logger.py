@@ -10,6 +10,8 @@ import os
 import re
 import stat
 import threading
+import time
+from collections import deque
 from datetime import date, datetime
 from pathlib import Path
 
@@ -29,6 +31,112 @@ _COMPACTOR_LOCK = threading.RLock()
 _PRODUCER_COMPACTOR: ProducerSummaryCompactor | None = None
 _RETIRING_COMPACTORS: list[ProducerSummaryCompactor] = []
 _TERMINATION_DRAIN_ACTIVE = False
+
+
+class BoundedObservationQueue:
+    """Finite report-only handoff using an existing executor; no fallback I/O.
+
+    The producer supplies immutable, small arguments. One drain is scheduled,
+    including the running job in both limits. Enqueue is not append success.
+    """
+    def __init__(self, executor, *, max_items=1024, max_bytes=4*1024*1024,
+                 max_item_bytes=64*1024):
+        self.executor = executor
+        self.max_items, self.max_bytes = max_items, max_bytes
+        self.max_item_bytes = max_item_bytes
+        self._condition = threading.Condition()
+        self._jobs = deque()
+        self._scheduled = self._closed = False
+        self._items = self._bytes = 0
+        self._stats = dict(queued=0, completed=0, append_confirmed=0,
+                           completed_without_append_receipt=0, failed=0, unavailable=0,
+                           peak_items=0, peak_bytes=0)
+
+    def submit(self, callback, *args, **kwargs):
+        try:
+            # Copy at admission, never retain a live stock or an AI payload.
+            encoded = json.dumps([args, kwargs], ensure_ascii=True,
+                                 separators=(',', ':'), allow_nan=False).encode()
+            size = len(encoded)
+        except (TypeError, ValueError):
+            return self._unavailable('observation_envelope_invalid')
+        with self._condition:
+            if (self._closed or size > self.max_item_bytes
+                    or self._items >= self.max_items or self._bytes + size > self.max_bytes):
+                return self._unavailable('observation_queue_unavailable')
+            self._jobs.append((callback, encoded, time.perf_counter()))
+            self._items += 1
+            self._bytes += size
+            if not self._scheduled:
+                self._scheduled = True
+                try:
+                    self.executor.submit(self._drain)
+                except Exception:
+                    self._jobs.pop()
+                    self._items -= 1
+                    self._bytes -= size
+                    self._scheduled = False
+                    return self._unavailable('observation_executor_unavailable')
+            self._stats['queued'] += 1
+            self._stats['peak_items'] = max(self._stats['peak_items'], self._items)
+            self._stats['peak_bytes'] = max(self._stats['peak_bytes'], self._bytes)
+            return {'status': 'queued', 'structured_append_succeeded': False}
+
+    def _unavailable(self, reason):
+        with self._condition:
+            self._stats['unavailable'] += 1
+        from src.engine.monitoring.runtime_performance import failure
+        failure('observation_queue', reason, emit_log=False)
+        return {'status': 'unavailable', 'reason': reason,
+                'structured_append_succeeded': False}
+
+    def _drain(self):
+        from src.engine.monitoring.runtime_performance import observe, failure
+        while True:
+            with self._condition:
+                if not self._jobs:
+                    self._scheduled = False
+                    self._condition.notify_all()
+                    return
+                callback, encoded, queued_at = self._jobs.popleft()
+            try:
+                observe('observation_queue_wait', time.perf_counter() - queued_at)
+                args, kwargs = json.loads(encoded)
+                outcome = callback(*args, **kwargs)
+                if outcome is False or (isinstance(outcome, dict) and (
+                        outcome.get('structured_append_succeeded') is False
+                        or outcome.get('structured_compact_append_succeeded') is False)):
+                    raise OSError('observation_append_unconfirmed')
+                with self._condition:
+                    self._stats['completed'] += 1
+                    if isinstance(outcome, dict) and outcome.get('structured_append_succeeded') is True:
+                        self._stats['append_confirmed'] += 1
+                    else:
+                        self._stats['completed_without_append_receipt'] += 1
+            except Exception as exc:
+                failure('observation_append', type(exc).__name__, emit_log=False)
+                with self._condition:
+                    self._stats['failed'] += 1
+            finally:
+                with self._condition:
+                    self._items -= 1
+                    self._bytes -= len(encoded)
+                    self._condition.notify_all()
+
+    def snapshot(self):
+        with self._condition:
+            return {**self._stats, 'pending_items': self._items,
+                    'pending_bytes': self._bytes, 'closed': self._closed}
+
+    def close(self, *, timeout=1.0):
+        deadline = time.monotonic() + max(0, timeout)
+        with self._condition:
+            self._closed = True
+            while self._items and time.monotonic() < deadline:
+                self._condition.wait(max(0, deadline-time.monotonic()))
+            if self._items:
+                self._unavailable('observation_shutdown_drain_timeout')
+            return self._items == 0
 
 _TEXT_INFO_STAGE_KEYWORDS = (
     "order_submitted",

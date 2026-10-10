@@ -12557,9 +12557,6 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
-    if isinstance(stock, dict) and isinstance(stock.get('_async_consumption_guard'), dict):
-        stock['_async_consumption_guard'].update(stage=stage,
-            reason=fields.get('reason') or fields.get('skip_reason') or stage)
     if stage == 'order_leg_request' and isinstance(stock, dict):
         from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
         mark_signal(machine_signal_id(stock.get('last_watching_ai_machine_primary_fields')), 'guard_done')
@@ -61350,7 +61347,8 @@ def _resolve_scanner_async_opening_rotation_context(
             ),
             now_epoch=now_epoch,
         )
-        _log_entry_pipeline(
+        _log_async_commit(
+            coordinator, result,
             stock,
             code,
             "opening_rotation_async_context_commit",
@@ -61362,19 +61360,14 @@ def _resolve_scanner_async_opening_rotation_context(
                 result.prepared_context.get("context_fetch_state") or "-"
             ),
         )
-        _mutate_stock_state(
-            stock,
-            pop_fields=[
-                "_scanner_opening_rotation_async_generation_id",
-                "_scanner_opening_rotation_async_cache_key",
-                "_scanner_opening_rotation_async_state_version",
-                "_scanner_opening_rotation_async_submitted_at",
-            ],
-        )
+        _clear_scanner_async_identity(stock,generation_id=result.generation_id,cache_key=result.cache_key)
         if not decision.allowed:
+            _record_async_disposition(result,'rejected',decision.reason)
             return {"status": "commit_rejected", "reason": decision.reason}
         prepared = thaw_scanner_async_value(result.prepared_context)
         if not prepared.get("context_ready"):
+            _record_async_disposition(result,'terminal_nonexecution',
+                prepared.get('context_fetch_state') or 'context_missing')
             return {
                 "status": "context_unavailable",
                 "reason": prepared.get("context_fetch_state") or "context_missing",
@@ -61401,6 +61394,7 @@ def _resolve_scanner_async_opening_rotation_context(
                     "_opening_rotation_freshness_envelope_stored_at": now_epoch,
                 },
             )
+        _record_async_disposition(result,'terminal_nonexecution','opening_rotation_context_consumed')
         return {
             "status": "completed",
             "feature_packet": dict(prepared.get("feature_packet") or {}),
@@ -61653,25 +61647,92 @@ def _discard_orphaned_fixed_watch_result(coordinator, result, targets):
            and not _manual_control_exclusion_blocked(s, result.code, pipeline='entry',
                stage='async_completed_manual_veto', now_ts=time.time()) for s in owned):
         return False
-    coordinator.discard_completed(generation_id=result.generation_id, cache_key=result.cache_key)
-    _record_async_disposition(result, 'terminal_nonexecution', 'target_removed_or_state_changed')
-    claim = thaw_scanner_async_value(result.native_claim)
-    if claim:
-        from src.engine.scalping.reversal_current_backend import acknowledge_any
-        acknowledge_any(claim, status='async_target_removed_or_state_changed')
-    for s in owned:
-        for key in ('_scanner_async_generation_id', '_scanner_async_cache_key',
-                    '_scanner_async_state_version', '_scanner_async_submitted_at', '_fixed_watch_async_claim'):
-            s.pop(key, None)
-        if (s.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
-            s.pop('_continuous_reversal_pending_claim', None)
+    taken = coordinator.discard_completed(generation_id=result.generation_id,
+        cache_key=result.cache_key, reason='target_removed_or_state_changed')
+    if taken is None:
+        return False
+    claim = thaw_scanner_async_value(taken.native_claim)
+    try:
+        if claim:
+            from src.engine.scalping.reversal_current_backend import acknowledge_any
+            acknowledge_any(claim, status='async_target_removed_or_state_changed')
+    finally:
+        for s in owned:
+            _clear_scanner_async_identity(s, generation_id=taken.generation_id,
+                                         cache_key=taken.cache_key, claim=claim)
     return True
 
 
-def _record_async_disposition(result, disposition, reason):
+def _record_async_disposition(result, disposition, reason, **facts):
     """Small original-result receipt; diagnostic failure grants no execution."""
-    from src.engine.scalping.scanner_async_eval import record_async_disposition
-    return record_async_disposition(result, disposition, reason)
+    from src.engine.scalping.scanner_async_eval import record_async_disposition, ASYNC_CONSUMPTION
+    owner = ASYNC_CONSUMPTION.get()
+    if owner is not None and owner.get('original_result') is result:
+        if disposition in {'accepted_to_entry_path', 'rejected', 'terminal_nonexecution'}:
+            owner['disposition'] = disposition
+    try:
+        return record_async_disposition(result, disposition, reason, **facts)
+    except Exception as exc:
+        from src.engine.monitoring.runtime_performance import failure
+        failure('async_disposition', type(exc).__name__, emit_log=False)
+        return False
+
+
+def _set_async_terminal(stock, reason, **facts):
+    """Direct return-site facts, never the last arbitrary diagnostic message."""
+    guard = stock.get('_async_consumption_guard') if isinstance(stock, dict) else None
+    if isinstance(guard, dict):
+        guard.setdefault('reason', str(reason))
+        guard.update(facts)
+
+
+def _async_entry_deadline_expired(stock):
+    from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION
+    owner = ASYNC_CONSUMPTION.get() or {}
+    original = owner.get('original_result')
+    if original is not None:
+        epoch, perf = original.deadline_epoch, original.deadline_perf
+    else:
+        bound = stock.get('_async_entry_decision_deadline') or {}
+        current = stock.get('last_watching_ai_machine_primary_fields') or {}
+        if (not bound.get('evaluation_attempt_id')
+                or bound.get('evaluation_attempt_id') != current.get('evaluation_attempt_id')
+                or not bound.get('ai_decision_trace_id')
+                or bound.get('ai_decision_trace_id') != stock.get('last_watching_ai_decision_trace_id')):
+            return False
+        epoch, perf = bound['deadline_epoch'], bound['deadline_perf']
+    return bool((epoch > 0 and time.time() >= epoch)
+                or (perf > 0 and time.perf_counter() >= perf))
+
+
+def _log_async_commit(coordinator, result, stock, code, stage, **fields):
+    # This report-only stage has no state or order side effects. Do not queue
+    # _log_entry_pipeline's mutable stock and its execution-stage hooks.
+    try:
+        from src.utils.pipeline_event_logger import emit_pipeline_event
+        fields.update(async_request_id=result.request_id, async_disposition_epoch=time.time(),
+                      ai_decision_trace_id=result.ai_payload.get('ai_decision_trace_id'),
+                      evaluation_attempt_id=result.ai_payload.get('evaluation_attempt_id'),
+                      **dict(result.origin_fields))
+        if coordinator.observation_sink is None:
+            return _log_entry_pipeline(stock, code, stage, **fields)
+        return coordinator.observation_sink(emit_pipeline_event,
+            'ENTRY_PIPELINE', str(stock.get('name') or code), code, stage,
+            record_id=result.origin_fields.get('id'), fields=fields)
+    except Exception as exc:
+        from src.engine.monitoring.runtime_performance import failure
+        failure('async_commit_observation', type(exc).__name__, emit_log=False)
+        return False
+
+
+def _acknowledge_async_claim(claim, status):
+    """Attempt the original native acknowledgement once, before handoff."""
+    from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION
+    owner = ASYNC_CONSUMPTION.get()
+    if owner is not None:
+        owner['native_ack_attempted'] = True
+    from src.engine.scalping.reversal_current_backend import acknowledge_any
+    acknowledge_any(claim, status=status)
 
 
 def _native_handoff_deadline_perf(stock, claim):
@@ -61686,6 +61747,10 @@ def _clear_scanner_async_identity(stock, *, generation_id, cache_key, claim=None
                                   clear_recheck=False):
     """A completed attempt must not erase a successor's preparation or claim."""
     with ENTRY_LOCK:
+        if (stock.get('_scanner_opening_rotation_async_generation_id') == generation_id
+                and stock.get('_scanner_opening_rotation_async_cache_key') == cache_key):
+            for suffix in ('generation_id', 'cache_key', 'state_version', 'submitted_at'):
+                stock.pop('_scanner_opening_rotation_async_' + suffix, None)
         if (stock.get('_scanner_async_generation_id') == generation_id
                 and stock.get('_scanner_async_cache_key') == cache_key):
             for key in ('_scanner_async_generation_id', '_scanner_async_cache_key',
@@ -61699,6 +61764,8 @@ def _clear_scanner_async_identity(stock, *, generation_id, cache_key, claim=None
             stock.pop('_fixed_watch_async_claim', None)
         if token and (stock.get('_entry_native_deadline_binding') or {}).get('claim_token') == token:
             stock.pop('_entry_native_deadline_binding', None)
+        if token and (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == token:
+            stock.pop('_continuous_reversal_pending_claim', None)
 
 
 def _resolve_scanner_async_entry_ai(
@@ -61760,14 +61827,13 @@ def _resolve_scanner_async_entry_ai(
             # Drain late evidence, never renew a fixed-watch claim budget.
             if stock.get('_scanner_async_generation_id') and stock.get('_scanner_async_cache_key'):
                 old_result = coordinator.take_completed(generation_id=stock['_scanner_async_generation_id'], cache_key=stock['_scanner_async_cache_key'])
+                if old_result is not None:
+                    _record_async_disposition(old_result, 'rejected', str(exc))
                 if old_result is None and coordinator.is_pending(generation_id=stock['_scanner_async_generation_id'], cache_key=stock['_scanner_async_cache_key']):
                     return {"status":"pending", "reason":"invalid_claim_physical_work_draining"}
-            from src.engine.scalping.reversal_current_backend import acknowledge_any
-            acknowledge_any(claim, status='async_commit_rejected')
+            _acknowledge_async_claim(claim, 'async_commit_rejected')
             _clear_scanner_async_identity(stock, generation_id=origin_generation_id,
                 cache_key=origin_cache_key, claim=claim)
-            if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
-                stock.pop('_continuous_reversal_pending_claim', None)
             return {"status":"commit_rejected", "reason":str(exc)}
     if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(generation, (ScannerGeneration, FixedWatchGeneration)):
         return {"status": "not_enabled"}
@@ -61849,7 +61915,8 @@ def _resolve_scanner_async_entry_ai(
             if result.status == "expired_after_response"
             else {}
         )
-        _log_entry_pipeline(
+        _log_async_commit(
+            coordinator, result,
             stock,
             code,
             "scanner_async_result_commit",
@@ -61889,30 +61956,23 @@ def _resolve_scanner_async_entry_ai(
             and decision.allowed
             and stock.get("_scanner_async_expired_parent_snapshot_id")
         )
-        _record_async_disposition(result,
-            'accepted_to_entry_path' if decision.allowed else 'rejected', decision.reason)
         _clear_scanner_async_identity(stock, generation_id=result.generation_id,
             cache_key=result.cache_key, claim=claim,
             clear_recheck=completed_after_expired_recheck)
         if not decision.allowed:
+            _record_async_disposition(result, 'rejected', decision.reason)
             if claim:
-                from src.engine.scalping.reversal_current_backend import acknowledge_any
-                acknowledge_any(claim, status='async_commit_rejected')
-                if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
-                    stock.pop('_continuous_reversal_pending_claim', None)
+                _acknowledge_async_claim(claim, 'async_commit_rejected')
             return {"status": "commit_rejected", "reason": decision.reason}
-        if claim and result.ai_payload.get('entry_mechanistic_policy_decision'):
-            from src.engine.scalping.reversal_current_backend import acknowledge_any
-            if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim['token']:
-                stock.pop('_continuous_reversal_pending_claim',None)
+        if claim:
             stock['_continuous_reversal_last_requested_id']=claim['snapshot'][0]['event_id']
-            acknowledge_any(claim,status='evaluated')
+            _acknowledge_async_claim(claim, 'evaluated')
         revision = thaw_scanner_async_value(result.ai_payload.get('_entry_observation_revision') or {})
         if isinstance(revision, dict) and revision:
             stock['_machine_observation_revision'] = thaw_scanner_async_value(revision)
         from src.engine.monitoring.runtime_performance import observe
         observe('main_commit', time.perf_counter()-commit_started)
-        return {
+        resolved = {
             "status": "completed",
             "prepared_context": thaw_scanner_async_value(result.prepared_context),
             "ai_decision": thaw_scanner_async_value(result.ai_payload),
@@ -61920,6 +61980,13 @@ def _resolve_scanner_async_entry_ai(
             "completed_epoch": result.completed_epoch,
             "original_result": result,
         }
+        with ENTRY_LOCK:
+            stock['_async_entry_decision_deadline'] = dict(request_id=result.request_id,
+                evaluation_attempt_id=result.ai_payload.get('evaluation_attempt_id'),
+                ai_decision_trace_id=result.ai_payload.get('ai_decision_trace_id'),
+                deadline_epoch=result.deadline_epoch, deadline_perf=result.deadline_perf)
+        _record_async_disposition(result, 'accepted_to_entry_path', decision.reason)
+        return resolved
 
     if coordinator.is_pending(
         generation_id=generation.generation_id,
@@ -62108,6 +62175,7 @@ def _resolve_scanner_async_entry_ai(
         async_context: ScannerAsyncEvalContext,
         prepared: dict,
     ) -> dict:
+        from src.engine.scalping.scanner_async_eval import async_request_binding
         if not prepared.get("source_quality_ok"):
             return {
                 "action": "WAIT",
@@ -62130,6 +62198,7 @@ def _resolve_scanner_async_entry_ai(
                 reversal_signal_claim=stock_snapshot.get("_continuous_reversal_pending_claim"),
                 prompt_profile="watching",
                 metadata_extra={
+                    **async_request_binding(async_context),
                     **_scanner_promotion_correlation_fields(stock_snapshot),
                     **machine_source_recovery_trace_fields(stock_snapshot),
                     "record_id": stock_snapshot.get("id"),
@@ -62547,12 +62616,14 @@ def _handle_watching_strategy_branch(
                         confirmed=big_bite_confirmed,
                         position_tag=pos_tag,
                     )
+                    _set_async_terminal(stock, 'blocked_big_bite_hard_gate')
                     return False
 
                 if radar is None:
                     _log_entry_pipeline(
                         stock, code, "blocked_missing_radar", strategy=strategy
                     )
+                    _set_async_terminal(stock, 'blocked_missing_radar')
                     return False
 
                 observe_only = bool(_rule("SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
@@ -63201,6 +63272,7 @@ def _handle_watching_strategy_branch(
             else:
                 if radar is None:
                     _log_entry_pipeline(stock, code, 'blocked_missing_radar', strategy=strategy)
+                    _set_async_terminal(stock, 'blocked_missing_radar')
                     return False
                 gate_tags = config['BIG_BITE_HARD_GATE_TAGS_SCALPING']
                 if config['BIG_BITE_HARD_GATE_ENABLED'] and any(tag in pos_tag for tag in gate_tags):
@@ -63214,6 +63286,7 @@ def _handle_watching_strategy_branch(
                         big_bite_confirmed = False
                     if not big_bite_confirmed:
                         _log_entry_pipeline(stock, code, 'blocked_big_bite_hard_gate', required=True)
+                        _set_async_terminal(stock, 'blocked_big_bite_hard_gate')
                         return False
                 target_buy_price = _safe_int(stock.get("target_buy_price"), curr_price)
                 used_drop_pct = 0.0
@@ -63244,6 +63317,7 @@ def _handle_watching_strategy_branch(
                     decision_authority="input_recovery_wait_only",
                     actual_order_submitted=False, broker_order_forbidden=True,
                 )
+                _set_async_terminal(stock, 'entry_machine_source_wait')
                 return False
             early_accel_recheck = _resolve_early_accel_recheck(
                 stock,
@@ -63356,6 +63430,7 @@ def _handle_watching_strategy_branch(
                                 "pending",
                             }:
                                 stock.pop("ai_wait_rebound_recheck_pending", None)
+                            _set_async_terminal(stock, async_resolution.get('reason') or async_resolution.get('status'))
                             return False
                         stock.pop("ai_wait_rebound_recheck_pending", None)
                         prepared_context = dict(
@@ -64661,6 +64736,7 @@ def _handle_watching_strategy_branch(
                             blocked_reason="big_bite_not_confirmed",
                             ai_engine=ai_engine,
                         )
+                        _set_async_terminal(stock, 'first_ai_wait')
                         return False
 
             # Big-Bite is a separate feature guard. It cannot modify the
@@ -64891,6 +64967,7 @@ def _handle_watching_strategy_branch(
                     blocked_reason="entry_policy_no_buy_score_prior",
                     ai_engine=ai_engine,
                 )
+                _set_async_terminal(stock, 'blocked_ai_score')
                 return False
             if (
                 wait6579_probe_entry_unlocked
@@ -64981,6 +65058,7 @@ def _handle_watching_strategy_branch(
     elif strategy in ["KOSDAQ_ML", "KOSPI_ML"]:
         if radar is None:
             _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
+            _set_async_terminal(stock, 'blocked_missing_radar')
             return False
 
         marcap = _resolve_stock_marcap(stock, code)
@@ -65864,6 +65942,10 @@ def _handle_watching_strategy_branch(
 
 def _observe_entry_submit_finished(stock, code, outcome):
     attempt_fields = submit_attempt_fields(stock, code)
+    _set_async_terminal(stock, 'entry_path_returned_without_terminal_evidence',
+        async_entry_submit_attempt_id=attempt_fields.get('entry_submit_attempt_id'),
+        async_entry_broker_accepted=bool(attempt_fields.get('entry_submit_attempt_broker_accepted')),
+        async_entry_submit_outcome=outcome)
     delayed = stock.pop("_pre_submit_delay_due", None) if isinstance(stock, dict) else None
     zero_intent = stock.pop("_pre_submit_delay_zero_intent", None) if isinstance(stock, dict) else None
     delay_intent = delayed if isinstance(delayed, dict) else zero_intent
@@ -66126,6 +66208,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False, broker_order_forbidden=True,
             runtime_effect=True,
         )
+        _set_async_terminal(stock, 'initial_quantity_sequential_dispatcher_missing')
         return False
     pending_delay = stock.get("_pre_submit_delay_pending")
     if isinstance(pending_delay, dict):
@@ -66136,6 +66219,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if pending_delay.get("promotion_id"):
             stock["_pre_submit_delay_last_terminal_parent"] = pending_delay["promotion_id"]
         if runtime.get("strategy") != "SCALPING":
+            _set_async_terminal(stock, 'pre_submit_delay_due_recheck_blocked')
             return False
     retired_scout_intent = any(
         _truthy_field(source.get(key))
@@ -66153,12 +66237,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         for source in (runtime, stock)
     )
     if retired_scout_intent:
+        _set_async_terminal(stock, 'retired_scout_intent')
         return False
     if any(
         _truthy_field(source.get(key))
         for source in (runtime, stock)
         for key in ("entry_opportunity_recheck_armed", "entry_opportunity_recheck_pending")
     ):
+        _set_async_terminal(stock, 'retired_entry_opportunity_recheck')
         return False
     bind_submit_attempt_machine_lineage(
         stock,
@@ -66175,12 +66261,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     strategy = runtime["strategy"]
     if strategy == "SCALPING":
         receipt = submit_attempt_machine_lineage(stock, code)
+        prior_async_submit = stock.get('_async_entry_submission_identity') or {}
+        if (prior_async_submit.get('evaluation_attempt_id')
+                and prior_async_submit.get('evaluation_attempt_id') == receipt.get('evaluation_attempt_id')
+                and prior_async_submit.get('ai_decision_trace_id')
+                == stock.get('last_watching_ai_decision_trace_id')):
+            # A physical attempt already consumed this retained PASS. Its
+            # uncertain response belongs to existing broker/intent recovery,
+            # not another send using the cached AI decision.
+            _set_async_terminal(stock, 'original_async_result_already_submitted')
+            _log_entry_pipeline(stock, code, 'original_async_result_already_submitted',
+                async_request_id=prior_async_submit.get('request_id'),
+                actual_order_submitted=False, broker_order_forbidden=True)
+            return False
         if receipt and not _machine_submit_revision_is_current(stock, receipt):
             _log_entry_pipeline(stock, code, "machine_observation_revision_recheck",
                 expected_machine_observation_sha256=receipt.get("machine_observation_sha256"),
                 latest_machine_observation_sha256=(
                     (stock.get("_machine_observation_revision") or {}).get("digest")),
                 actual_order_submitted=False, broker_order_forbidden=True)
+            _set_async_terminal(stock, 'machine_observation_revision_recheck')
             return False
     ratio = runtime["ratio"]
     curr_price = runtime["curr_price"]
@@ -66226,6 +66326,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "broker_guard_bypass|order_identity_inference|owner_or_custody_transfer"
             ),
         )
+        _set_async_terminal(stock, 'entry_submit_identity_reconciliation_blocked')
         return False
     opening_rotation_active = bool(
         runtime.get("opening_rotation_1pct_live")
@@ -66270,6 +66371,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "provider_or_bot_change,quantity_or_cap_change,guard_bypass"
             ),
         )
+        _set_async_terminal(stock, 'opening_rotation_retired_entry_blocked')
         return False
     scout_upgrade_entry = False
     forced_rising_missed_one_share = False
@@ -66312,6 +66414,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             submit_stage=True,
         )
+        _set_async_terminal(stock, 'opening_rotation_competing_entry_block')
         return False
     exit_authority_conflicts = _entry_exit_authority_conflict_fields(stock)
     if exit_authority_conflicts:
@@ -66339,6 +66442,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "provider_route_change|order_price_or_quantity_change"
             ),
         )
+        _set_async_terminal(stock, 'entry_submit_blocked_exit_authority_conflict')
         return False
 
 
@@ -66360,6 +66464,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             **upper_limit_block,
         )
+        _set_async_terminal(stock, 'upper_limit_entry_proximity_block')
         return False
 
     if not admin_id:
@@ -66375,6 +66480,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 evidence_quality="blocked_stage_intraday_probe",
                 extra_fields={"block_reason": "no_admin"},
             )
+        _set_async_terminal(stock, 'blocked_no_admin')
         return False
 
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
@@ -66662,6 +66768,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "budget_cap": budget_cap if budget_cap_applied else "-",
                 },
             )
+        _set_async_terminal(stock, zero_qty_stage)
         return False
 
     _log_entry_pipeline(
@@ -66776,6 +66883,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
                     rebound_bypass_block_reason=rebound_bypass.get("reason", "-"),
                 )
+                _set_async_terminal(stock, 'scalp_same_symbol_loss_reentry_pre_submit_blocked')
                 return False
         (
             sizing_context,
@@ -66867,6 +66975,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "would_qty": real_buy_qty,
                 },
             )
+            _set_async_terminal(stock, 'swing_same_symbol_loss_reentry_blocked')
             return False
 
     if strategy == "SCALPING":
@@ -67479,6 +67588,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **swing_entry_micro_fields,
                 },
             )
+        _set_async_terminal(stock, 'latency_block')
         return False
 
     requested_qty = int(real_buy_qty or 0)
@@ -67697,6 +67807,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **block_fields,
                 },
             )
+            _set_async_terminal(stock, 'entry_mechanistic_price_contract_block')
             return False
     elif real_entry_panic_gap_subject and not planned_orders and requested_qty > 0:
         clear_signal_reference(stock)
@@ -67716,6 +67827,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "mechanistic_entry_price_no_order_plan"
             ),
         )
+        _set_async_terminal(stock, 'entry_price_order_contract_gap')
         return False
     panic_context = None
     if real_entry_panic_gap_subject and _rule_bool(
@@ -67831,6 +67943,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=pre_submit_micro_unavailable_guard,
         )
+        _set_async_terminal(stock, 'pre_submit_micro_unavailable_block')
         return False
     weak_ai_micro_entry_block = (
         {
@@ -67966,6 +68079,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=weak_ai_micro_entry_block,
         )
+        _set_async_terminal(stock, 'real_weak_ai_micro_entry_block')
         return False
     weak_micro_reentry_block = (
         _evaluate_rising_missed_same_symbol_weak_micro_reentry_block(
@@ -68106,6 +68220,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=rising_missed_tick_speed_guard,
         )
+        _set_async_terminal(stock, 'rising_missed_tick_speed_entry_block')
         return False
     if rising_missed_tick_speed_guard.get(
         "rising_missed_tick_absolute_throughput_relief_applied"
@@ -68203,6 +68318,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=rising_missed_reversal_pre_submit_guard,
         )
+        _set_async_terminal(stock, 'rising_missed_reversal_pre_submit_block')
         return False
     observed_mark_gap_fields = _build_observed_mark_gap_guard_fields(
         ws_data,
@@ -68581,6 +68697,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **observed_mark_gap_fields,
             },
         )
+        _set_async_terminal(stock, 'entry_submit_revalidation_block')
         return False
 
     if _is_passive_probe_stale_submit_block(submit_revalidation_fields):
@@ -68617,6 +68734,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             actual_order_submitted=False,
             broker_order_forbidden=True,
         )
+        _set_async_terminal(stock, 'entry_submit_revalidation_block')
         return False
 
     if _is_caution_overbought_stale_submit_block(
@@ -68663,6 +68781,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **real_pre_submit_guard_fields,
             },
         )
+        _set_async_terminal(stock, 'entry_submit_revalidation_block')
         return False
 
     if _is_standard_stale_submit_block(submit_revalidation_fields):
@@ -68703,6 +68822,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **real_pre_submit_guard_fields,
             },
         )
+        _set_async_terminal(stock, 'entry_submit_revalidation_block')
         return False
 
     caution_stale_negative_micro_block = (
@@ -68796,6 +68916,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **caution_stale_negative_micro_block,
             },
         )
+        _set_async_terminal(stock, 'entry_submit_revalidation_block')
         return False
 
     caution_weak_liquidity_block = _evaluate_caution_weak_liquidity_entry_block(
@@ -68855,6 +68976,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=caution_weak_liquidity_block,
         )
+        _set_async_terminal(stock, 'caution_weak_liquidity_entry_block')
         return False
     if caution_weak_liquidity_block.get("rising_missed_liquidity_observation_only"):
         real_pre_submit_guard_fields.update(
@@ -68997,6 +69119,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     broker_order_forbidden=True,
                     **retry_fields,
                 )
+                _set_async_terminal(stock, 'pre_submit_entry_ai_authority_async_pending')
                 return False
         else:
             retry_fields = _retry_entry_ai_submit_authority_before_block(
@@ -69091,6 +69214,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=entry_ai_submit_authority,
         )
+        _set_async_terminal(stock, 'pre_submit_entry_ai_authority_guard_block')
         return False
 
     # Rising-missed candidate selection may precede the final Entry AI call.
@@ -69189,6 +69313,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=block_fields,
         )
+        _set_async_terminal(stock, 'krx_direct_canary_live_ai_wait_submit_block')
         return False
 
     post_ai_hard_negative_block = (
@@ -69269,6 +69394,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=block_fields,
         )
+        _set_async_terminal(stock, 'rising_missed_post_ai_hard_negative_submit_block')
         return False
 
     if is_buy_side_paused():
@@ -69288,6 +69414,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 evidence_quality="blocked_stage_intraday_probe",
                 extra_fields={"pause_state": get_pause_state_label()},
             )
+        _set_async_terminal(stock, 'blocked_pause')
         return False
 
     greenfield_active = greenfield_authority_active()
@@ -69424,6 +69551,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **real_pre_submit_guard_fields,
                 },
             )
+            _set_async_terminal(stock, 'pre_submit_liquidity_guard_block')
             return False
 
     overbought_guard_would_block = bool(
@@ -69501,6 +69629,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **real_pre_submit_guard_fields,
                 },
             )
+            _set_async_terminal(stock, 'pre_submit_overbought_pullback_guard_block')
             return False
 
     lifecycle_submit_decision = resolve_lifecycle_decision(
@@ -69625,6 +69754,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields=weak_pullback_block_verdict,
         )
+        _set_async_terminal(stock, 'real_weak_pullback_entry_block')
         return False
 
     big_bite_summary = ""
@@ -69954,6 +70084,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 **final_price_sizing_fields,
             )
+            _set_async_terminal(stock, final_zero_reason)
             return False
 
         if opening_rotation_active:
@@ -70018,6 +70149,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         "broker_order_forbidden": True,
                     },
                 )
+                _set_async_terminal(stock, 'opening_rotation_one_share_pre_submit_block')
                 return False
             requested_qty = 1
             final_price = int(best_bid_at_submit)
@@ -70087,6 +70219,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     entry_orderbook_micro_fields,
                 ),
             )
+            _set_async_terminal(stock, 'greenfield_unpromoted_entry_block')
             return False
         if entry_greenfield_decision.active:
             _publish_greenfield_stage_notice(
@@ -70137,6 +70270,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     entry_orderbook_micro_fields,
                 ),
             )
+            _set_async_terminal(stock, 'greenfield_unpromoted_submit_block')
             return False
 
     if stock.get("_pre_submit_delay_due") and (
@@ -70147,6 +70281,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             reason="execution_owner_or_plan_changed",
             actual_order_submitted=False, broker_order_forbidden=True,
             runtime_effect=True)
+        _set_async_terminal(stock, 'pre_submit_delay_due_recheck_blocked')
         return False
     if strategy == "SCALPING" and not opening_rotation_active and planned_orders and requested_qty > 0:
         from src.engine.scalping.pre_submit_delay_tuning import (
@@ -70180,6 +70315,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     delay_intent_id=due_delay["id"], reason="frozen_intent_or_policy_changed",
                     actual_order_submitted=False, broker_order_forbidden=True,
                     runtime_effect=True)
+                _set_async_terminal(stock, 'pre_submit_delay_due_recheck_blocked')
                 return False
             due_delay["resolved_machine_attempt_id"] = machine_key[0]
             due_delay["resolved_machine_observation_sha256"] = machine_key[1]
@@ -70196,6 +70332,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     policy_sha256=delay_policy["policy_sha256"],
                     actual_order_submitted=False, broker_order_forbidden=True,
                     runtime_effect=True)
+                _set_async_terminal(stock, 'pre_submit_delay_intent_invalid')
                 return False
             committed_at = time.time()
             delay_id = uuid4().hex
@@ -70252,11 +70389,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             if not armed_recorded:
                 stock.pop("_pre_submit_delay_pending", None)
                 stock.pop("_pre_submit_delay_observation", None)
+                _set_async_terminal(stock, 'pre_submit_delay_observation_unavailable')
                 return False
             try:
                 observe_pre_submit_delay_quote(stock, code, ws_data, now_ts=committed_at)
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
                 log_error(f"[PRE_SUBMIT_DELAY_OBSERVATION] code={code} error={type(exc).__name__}")
+            _set_async_terminal(stock, 'pre_submit_delay_pending')
             return False
         if (str(machine_fields.get("entry_mechanistic_action") or "").upper() == "ENTER_NOW"
             and all(machine_key)
@@ -70322,10 +70461,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             _log_entry_pipeline(stock, code, "auxiliary_binding_submit_recheck", reason=str(exc),
                 actual_order_submitted=False, broker_order_forbidden=True)
+            _set_async_terminal(stock, 'auxiliary_binding_submit_recheck')
             return False
         if (bound_receipt and not _machine_submit_revision_is_current(stock, bound_receipt)):
             _log_entry_pipeline(stock, code, "machine_observation_revision_recheck",
                 actual_order_submitted=False, broker_order_forbidden=True)
+            _set_async_terminal(stock, 'machine_observation_revision_recheck')
             return False
         if (split_probe_config["enabled"] and requested_qty > 1
                 and (stock.get("last_watching_ai_machine_primary_fields") or {}).get("continuous_reversal_applied")):
@@ -70337,6 +70478,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     entry_ai_submit_authority_ttl_sec=split_probe_config["timeout_sec"],
                     next_action="fresh_machine_auxiliary_retry_existing_submit_path",
                     actual_order_submitted=False, broker_order_forbidden=True)
+                _set_async_terminal(stock, 'entry_ai_authority_expired_during_submit')
                 return False
         operating_context = freeze_entry_operating_context(sys.modules[__name__], stock, sizing_context,
             now_ts=time.time(), capacity_receipt=budget_context)
@@ -70379,6 +70521,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 reason=str(exc)[:160], actual_order_submitted=False,
                 broker_order_forbidden=True, runtime_effect=True,
             )
+            _set_async_terminal(stock, 'initial_quantity_sequential_plan_block')
             return False
         if sequential_plan is not None:
             planned_orders, entry_split_fields = sequential_plan
@@ -70508,6 +70651,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 **entry_execution_sizing_fields,
             )
+            _set_async_terminal(stock, 'entry_execution_sizing_plan_block')
             return False
         cap_observed_at = time.time()
         cap_attempt_id = submit_attempt_fields(stock, code).get(
@@ -70584,6 +70728,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 **entry_split_fields,
             )
+            _set_async_terminal(stock, 'pre_submit_ai_wait_probe_required_block')
             return False
     elif strategy == "SCALPING":
         entry_split_fields = {
@@ -70704,6 +70849,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             # new signal instead of resuming the old arm past its 1.2 s clock.
             _clear_entry_arm(stock)
             clear_signal_reference(stock)
+            _set_async_terminal(stock, 'entry_split_probe_first_deferred')
             return False
         if (entry_split_fields.get("entry_split_order_probe_first_applied")
                 and entry_split_fields.get("entry_split_order_policy_mode")
@@ -70725,6 +70871,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     runtime_effect=True,
                     **_entry_split_probe_observation_contract_fields(stock),
                 )
+                _set_async_terminal(stock, 'residual_blocked')
                 return False
             probe_submitting_at = time.time()
             _mutate_stock_state(
@@ -71492,6 +71639,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     _log_entry_pipeline(stock, code, 'machine_policy_generation_recheck',
                         **generation_guard, actual_order_submitted=False, broker_order_forbidden=True)
                     break
+        if _async_entry_deadline_expired(stock):
+            _set_async_terminal(stock,'result_deadline_expired')
+            break
         broker_submit_attempt_count += 1
         wait_submission = {}
         sequential_first = isinstance(
@@ -71573,7 +71723,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         "cancel_wait_source_gap": (
                             "sequential_first_context_capture_failed:"
                             + type(exc).__name__)}
+        if _async_entry_deadline_expired(stock):
+            # Preserve any already-recorded intent for its existing owner;
+            # no physical call, fabricated broker response, or resubmission.
+            _set_async_terminal(stock,'result_deadline_expired')
+            break
         try:
+            guard = stock.get('_async_consumption_guard')
+            if isinstance(guard, dict):
+                guard['async_entry_broker_attempts'] = guard.get('async_entry_broker_attempts', 0) + 1
+                from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION
+                original = (ASYNC_CONSUMPTION.get() or {}).get('original_result')
+                if (original is not None and original.ai_payload.get('evaluation_attempt_id')
+                        and original.ai_payload.get('ai_decision_trace_id')):
+                    with ENTRY_LOCK:
+                        stock['_async_entry_submission_identity'] = dict(
+                            request_id=original.request_id, generation_id=original.generation_id,
+                            evaluation_attempt_id=original.ai_payload.get('evaluation_attempt_id'),
+                            ai_decision_trace_id=original.ai_payload.get('ai_decision_trace_id'))
             res = kiwoom_orders.send_buy_order(
                 code,
                 qty,
@@ -72202,6 +72369,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **swing_entry_micro_fields,
                 },
             )
+        _set_async_terminal(stock, 'order_bundle_failed')
         return False
 
     if swing_order_dry_run:
@@ -72258,6 +72426,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
         )
         clear_signal_reference(stock)
+        _set_async_terminal(stock, 'swing_sim_order_bundle_assumed_filled')
         return False
 
     # The submit function intentionally returns False after handing control
@@ -72563,6 +72732,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
 
     clear_signal_reference(stock)
+    _set_async_terminal(stock, 'order_bundle_submitted')
     return False
 
 
@@ -83072,21 +83242,31 @@ def handle_watching_state(
     scanner_async_commit_phase=False,
 ):
     """Main owns completed output before any new observation or AI preparation."""
+    from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION, ScannerAsyncEvalResult
+    owner = {}
+    token = ASYNC_CONSUMPTION.set(owner)
     resolution = None
     coordinator = scanner_async_eval_coordinator
-    if isinstance(coordinator, ScannerAsyncEvalCoordinator) and coordinator.has_completed(
-        generation_id=stock.get('_scanner_async_generation_id', ''),
-        cache_key=stock.get('_scanner_async_cache_key', ''),
-    ):
-        resolution = _resolve_scanner_async_entry_ai(stock, code, ws_data, ai_engine,
-            dict(scanner_async_eval_coordinator=coordinator,
-                 scanner_async_generation=scanner_async_generation,
-                 scanner_async_commit_phase=True),
-            trigger_reason='completed_result', last_ai_time=0, current_ai_score=0)
-        if resolution.get('status') != 'completed':
-            return
-        stock['_async_consumption_guard'] = {}
+    previous_guard = stock.get('_async_consumption_guard')
+    # Keep the opaque result/queue owner in call-local context. Stock snapshots
+    # and existing deepcopy callers must see only small scalar execution facts.
+    guard = {}
+    stock['_async_consumption_guard'] = guard
     try:
+        if isinstance(coordinator, ScannerAsyncEvalCoordinator) and coordinator.has_completed(
+            generation_id=stock.get('_scanner_async_generation_id', ''),
+            cache_key=stock.get('_scanner_async_cache_key', ''),
+        ):
+            resolution = _resolve_scanner_async_entry_ai(stock, code, ws_data, ai_engine,
+                dict(scanner_async_eval_coordinator=coordinator,
+                     scanner_async_generation=scanner_async_generation,
+                     scanner_async_commit_phase=True),
+                trigger_reason='completed_result', last_ai_time=0, current_ai_score=0)
+            if resolution.get('original_result') is not None:
+                owner.setdefault('original_result', resolution['original_result'])
+            if resolution.get('status') != 'completed':
+                return
+            owner.setdefault('disposition', 'accepted_to_entry_path')
         return _handle_watching_state_impl(stock, code, ws_data, admin_id,
             now_ts=now_ts, now_dt=now_dt, radar=radar, ai_engine=ai_engine,
             skip_rising_missed_hook=skip_rising_missed_hook,
@@ -83095,11 +83275,44 @@ def handle_watching_state(
             scanner_async_generation=scanner_async_generation,
             scanner_async_commit_phase=scanner_async_commit_phase,
             _completed_async_resolution=resolution)
+    except BaseException:
+        guard['reason'] = 'entry_execution_exception_or_uncertain'
+        raise
     finally:
-        if resolution and resolution.get('original_result') is not None:
-            guard = stock.pop('_async_consumption_guard', {})
-            _record_async_disposition(resolution['original_result'], 'entry_path_returned',
-                guard.get('reason') or 'entry_path_returned_without_terminal_evidence')
+        try:
+            result = owner.get('original_result')
+            if result is not None:
+                if not owner.get('disposition'):
+                    _record_async_disposition(result, 'terminal_nonexecution',
+                        guard.get('reason') or 'commit_resolution_unobservable')
+                elif owner['disposition'] == 'accepted_to_entry_path':
+                    _record_async_disposition(result, 'entry_path_returned',
+                        guard.get('reason') or 'entry_path_returned_without_terminal_evidence',
+                        **{k: v for k, v in guard.items() if k.startswith('async_entry_')})
+                # Even a native ack/validation exception cannot erase a
+                # successor. Cleanup is checked under the entry mutex.
+                if isinstance(result, ScannerAsyncEvalResult):
+                    claim = None
+                    try:
+                        claim = thaw_scanner_async_value(result.native_claim)
+                        _clear_scanner_async_identity(stock,
+                            generation_id=result.generation_id, cache_key=result.cache_key, claim=claim)
+                    except Exception as exc:
+                        from src.engine.monitoring.runtime_performance import failure
+                        failure('async_cleanup', type(exc).__name__, emit_log=False)
+                    if claim and not owner.get('native_ack_attempted'):
+                        try:
+                            _acknowledge_async_claim(claim, 'async_commit_unobservable')
+                        except Exception as exc:
+                            from src.engine.monitoring.runtime_performance import failure
+                            failure('async_native_ack', type(exc).__name__, emit_log=False)
+        finally:
+            if stock.get('_async_consumption_guard') is guard:
+                if previous_guard is None:
+                    stock.pop('_async_consumption_guard', None)
+                else:
+                    stock['_async_consumption_guard'] = previous_guard
+            ASYNC_CONSUMPTION.reset(token)
 
 
 def _handle_watching_state_impl(
@@ -83127,6 +83340,7 @@ def _handle_watching_state_impl(
     # A zero-base candidate is persisted as provisional until Main confirms
     # both the DB row and the WATCHING attach. Never evaluate it in between.
     if stock.get("zero_base_pending_db"):
+        _set_async_terminal(stock, 'zero_base_pending_db')
         return
 
     # Test/offline startup paths can construct WATCHING before the shared
@@ -83178,6 +83392,7 @@ def _handle_watching_state_impl(
             now_ts=now_ts,
             ws_data=ws_data,
         )
+        _set_async_terminal(stock, 'operator_manual_control_excluded_symbol')
         return
 
     if is_buy_side_paused():
@@ -83196,6 +83411,7 @@ def _handle_watching_state_impl(
             ws_data=ws_data,
             pause_state=get_pause_state_label(),
         )
+        _set_async_terminal(stock, 'buy_side_paused')
         return
 
     MAX_SCALP_SURGE_PCT = _rule_float("MAX_SCALP_SURGE_PCT", 20.0)
@@ -83261,6 +83477,7 @@ def _handle_watching_state_impl(
                     else "not_applicable_next_buy_window_recheck_epoch"
                 ),
             )
+            _set_async_terminal(stock, block_reason)
             return
     else:
         strategy_start = TIME_09_05
@@ -83273,6 +83490,7 @@ def _handle_watching_state_impl(
                 ws_data=ws_data,
                 strategy_start=strategy_start.isoformat(),
             )
+            _set_async_terminal(stock, 'before_strategy_start')
             return
 
     # Opening Rotation context preparation is context-only and its worker has
@@ -83374,6 +83592,7 @@ def _handle_watching_state_impl(
                         **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
                         rebound_bypass_block_reason=rebound_bypass.get("reason", "-"),
                     )
+                _set_async_terminal(stock, 'scalp_same_symbol_loss_reentry_blocked')
                 return
     if (
         code in cooldowns
@@ -83459,6 +83678,7 @@ def _handle_watching_state_impl(
             ),
             **ai_wait_rebound_recheck,
         )
+        _set_async_terminal(stock, 'entry_cooldown_active')
         return
 
     if code in alerted_stocks:
@@ -83469,6 +83689,7 @@ def _handle_watching_state_impl(
             now_ts=now_ts,
             ws_data=ws_data,
         )
+        _set_async_terminal(stock, 'already_alerted_stock')
         return
 
     if curr_price <= 0:
@@ -83479,6 +83700,7 @@ def _handle_watching_state_impl(
             now_ts=now_ts,
             ws_data=ws_data,
         )
+        _set_async_terminal(stock, 'invalid_ws_curr_in_handler')
         return
     current_vpw = float(ws_data.get("v_pw", 0) or 0)
     fluctuation = float(ws_data.get("fluctuation", 0.0) or 0.0)
@@ -83575,11 +83797,13 @@ def _handle_watching_state_impl(
         expire_untriggered_pre_submit_delay(
             stock, code, reason="watching_branch_no_longer_ready"
         )
+        _set_async_terminal(stock, 'watching_branch_no_longer_ready')
         return
 
     pending_delay = stock.get("_pre_submit_delay_pending")
     if (isinstance(pending_delay, dict)
             and time.monotonic() < pending_delay["due_monotonic"]):
+        _set_async_terminal(stock, 'pre_submit_delay_pending')
         return
 
     if runtime["is_trigger"]:

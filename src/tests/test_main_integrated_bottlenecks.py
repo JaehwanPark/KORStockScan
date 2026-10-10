@@ -287,6 +287,271 @@ def test_async_disposition_writer_failure_records_health_without_authority(monke
     assert failures == [('async_disposition','raw_append_failed')]
 
 
+def test_observation_queue_is_finite_and_freezes_producer_arguments():
+    from src.utils.pipeline_event_logger import BoundedObservationQueue
+    class Executor:
+        def submit(self, fn):
+            self.drain = fn
+    executor = Executor()
+    queue = BoundedObservationQueue(executor, max_items=2, max_bytes=100)
+    seen = []
+    source = {'reason': 'original'}
+    assert queue.submit(seen.append, source)['status'] == 'queued'
+    source['reason'] = 'successor'
+    assert queue.submit(seen.append, {'reason': 'second'})['status'] == 'queued'
+    assert queue.submit(seen.append, {})['status'] == 'unavailable'
+    assert queue.snapshot()['peak_items'] == 2
+    executor.drain()
+    assert seen == [{'reason': 'original'}, {'reason': 'second'}]
+    assert queue.close(timeout=0)
+    assert queue.submit(seen.append, {})['status'] == 'unavailable'
+
+
+def test_observation_running_job_counts_towards_limit_and_failure_never_blocks():
+    from src.utils.pipeline_event_logger import BoundedObservationQueue
+    gate = threading.Event()
+    started = threading.Event()
+    def slow(_):
+        started.set()
+        gate.wait(2)
+        raise OSError('disk')
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        queue = BoundedObservationQueue(executor, max_items=1)
+        assert queue.submit(slow, {})['status'] == 'queued'
+        assert started.wait(1)
+        assert queue.submit(slow, {})['status'] == 'unavailable'
+        assert not queue.close(timeout=0)
+        gate.set()
+    assert queue.snapshot()['failed'] == 1
+    assert queue.snapshot()['pending_bytes'] == 0
+
+
+def test_big_trace_row_preparation_advances_without_publishing_unverified_keys(tmp_path):
+    path = tmp_path/'large.jsonl'
+    path.write_text(json.dumps(dict(request_id='large', body='x'*(4*1024*1024)))+'\n')
+    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=True) as generation:
+        with pytest.raises(D.IndexNotReady, match='preparation_pending'):
+            D.prepare(path, 'request_id', generation)
+        index = D._INDEXES[D._key(path, 'request_id')]
+        assert index.offset == 0 and not index.keys and len(index.pending) == 4*1024*1024
+        index = D.prepare(path, 'request_id', generation)
+        assert index.ready and index.keys == {'large'}
+    # Replacement invalidates externally held ready sets as well as the cursor.
+    path.unlink(); path.write_text('{"request_id":"new"}\n')
+    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=True) as generation:
+        assert D.prepare(path, 'request_id', generation).keys == {'new'}
+    assert not index.ready and not index.keys
+
+
+def test_partial_trace_tail_is_not_reread_until_generation_changes(tmp_path, monkeypatch):
+    path = tmp_path/'partial.jsonl'; path.write_text('{"request_id":')
+    calls=[]; original=D.os.pread
+    monkeypatch.setattr(D.os, 'pread', lambda *a: (calls.append(a) or original(*a)))
+    for _ in range(4):
+        with jsonl_artifact_generation_lock(path, exclusive=False, blocking=True) as generation:
+            with pytest.raises(D.IndexNotReady, match='partial_row'):
+                D.prepare(path, 'request_id', generation)
+    assert len(calls) == 1
+    with path.open('a') as stream: stream.write('"complete"}\n')
+    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=True) as generation:
+        assert D.prepare(path, 'request_id', generation).keys == {'complete'}
+
+
+def test_trace_maintenance_continues_other_indexes_after_large_row(tmp_path, monkeypatch):
+    monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED', '1')
+    monkeypatch.setattr(T, 'DATA_DIR', tmp_path)
+    # Path owners create these directories, not a second research ledger.
+    big = T._payload_path('2026-10-08'); big.parent.mkdir(parents=True, exist_ok=True)
+    big.write_text(json.dumps(dict(request_envelope_sha256='big', body='x'*(4*1024*1024)))+'\n')
+    small = T._request_path('2026-10-08'); small.parent.mkdir(parents=True, exist_ok=True)
+    small.write_text('{"request_id":"small"}\n')
+    assert T.prepare_ai_request_capture('2026-10-08')['ai_trace_dedup_preparation_pending']
+    assert T._load_seen(small, 'request_id') == {'small'}
+
+
+def test_partial_assembly_checks_entire_prefix_before_reusing_after_append(tmp_path):
+    path = tmp_path/'partial-rewrite.jsonl'
+    body=json.dumps(dict(request_id='old', body='x'*(4*1024*1024))).encode()
+    path.write_bytes(body[:4*1024*1024])
+    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=True) as generation:
+        with pytest.raises(D.IndexNotReady, match='partial_row'):
+            D.prepare(path,'request_id',generation)
+    # Mutate the start while retaining the final 1 KiB of the assembled prefix.
+    changed=body.replace(b'"old"',b'"new"',1)+b'\n'
+    path.write_bytes(changed)
+    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=True) as generation:
+        with pytest.raises(D.IndexNotReady, match='prefix_changed'):
+            D.prepare(path,'request_id',generation)
+    with jsonl_artifact_generation_lock(path, exclusive=False, blocking=True) as generation:
+        with pytest.raises(D.IndexNotReady, match='preparation_pending'):
+            D.prepare(path,'request_id',generation)
+        assert D.prepare(path,'request_id',generation).keys == {'new'}
+
+
+@pytest.mark.parametrize('clock', ['epoch','perf'])
+@pytest.mark.parametrize('elapsed', [4.999,5.000,5.001])
+def test_original_five_second_commit_boundary_on_both_clocks(monkeypatch, clock, elapsed):
+    from dataclasses import replace
+    from src.tests.test_scanner_async_entry_bridge import _retained_fixture
+    from src.engine.scalping.scanner_async_eval import validate_scanner_async_commit
+    stock=dict(code='005930',status='WATCHING',effective_venue='KRX',source_signature='VALUE_TOP')
+    coordinator,generation,result=_retained_fixture(stock)
+    result=replace(result, deadline_epoch=NOW+5, deadline_perf=105)
+    monkeypatch.setattr(time,'perf_counter',lambda:100+elapsed if clock=='perf' else 100)
+    try:
+        decision=validate_scanner_async_commit(result,current_generation=generation,
+            current_status='WATCHING',current_venue='KRX',current_source_signature='VALUE_TOP',
+            venue_resolution_valid=True,current_state_version=result.state_version,quote_fresh=True,
+            position_or_pending_order_present=False,cooldown_active=False,
+            now_epoch=NOW+elapsed if clock=='epoch' else NOW)
+        assert decision.allowed is (elapsed<5)
+        assert result.deadline_epoch == NOW+5 and result.deadline_perf == 105
+    finally:
+        coordinator.shutdown()
+
+
+def test_finish_publishes_ready_before_slow_diagnostic_and_retains_original_deadline(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as A
+    from src.tests.test_scanner_async_eval import _generation
+    from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
+    from src.utils.pipeline_event_logger import BoundedObservationQueue
+    class Executor:
+        def submit(self, fn): self.drain=fn
+    executor=Executor();queue=BoundedObservationQueue(executor)
+    clock=[NOW];monkeypatch.setattr(time,'time',lambda:clock[0])
+    writes=[]
+    def slow(code,fields):
+        clock[0]+=.2;writes.append(fields)
+        return dict(structured_append_succeeded=True,structured_append_status='raw_appended')
+    monkeypatch.setattr(A,'_append_async_disposition',slow)
+    context=A.ScannerAsyncEvalContext.create(generation=_generation(),cache_key='diagnostic',
+        submitted_epoch=NOW-4.9,deadline_epoch=NOW+.1,stock_snapshot={},ws_snapshot={},state_version='v')
+    request=A.ScannerAsyncEvalRequest(context=context,prepare=lambda _: {},evaluate=lambda *a: {})
+    coordinator=A.ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1),
+                                             observation_sink=queue.submit)
+    coordinator._requests[context.request_id]=request
+    try:
+        coordinator._finish(request,status='completed',preparation_started_epoch=NOW,
+            preparation_completed_epoch=NOW,completed_epoch=NOW,observation_only=False)
+        result=coordinator.take_completed(generation_id=context.generation.generation_id,cache_key=context.cache_key)
+        assert clock[0] == NOW and writes == []
+        assert result.deadline_epoch == NOW+.1
+        executor.drain()
+        assert clock[0] > result.deadline_epoch
+        assert writes[0]['async_disposition_epoch'] == NOW
+        assert queue.snapshot()['append_confirmed'] == 1
+    finally:
+        coordinator.shutdown();queue.close(timeout=0)
+
+
+def test_delayed_midnight_append_preserves_occurrence_and_request_day(tmp_path, monkeypatch):
+    from src.engine.scalping import scanner_async_eval as A
+    from src.engine.monitoring import submission_bottleneck_monitor as M
+    from src.utils import pipeline_event_logger as P
+    from src.tests.test_pipeline_event_logger import _reset_logger_state
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(P, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(P, 'TRADING_RULES', SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True))
+    monkeypatch.setattr(P, 'log_info', lambda *a, **k: None)
+    before = datetime(2026,10,10,23,59,59,tzinfo=KST).timestamp()
+    physical = datetime(2026,10,11,0,0,3,tzinfo=KST)
+    class PhysicalClock(datetime):
+        @classmethod
+        def now(cls, tz=None): return physical.astimezone(tz) if tz else physical
+    monkeypatch.setattr(P, 'datetime', PhysicalClock)
+    monkeypatch.setattr(A.time, 'time', lambda: before)
+    monkeypatch.setattr(A, '_PROCESS_START', '456')
+    class Executor:
+        def submit(self, fn): self.drain=fn
+    executor=Executor();queue=P.BoundedObservationQueue(executor)
+    result=SimpleNamespace(request_id='request', generation_id='original', code='005930',
+        native_claim={}, origin_fields={}, venue='SOR', deadline_epoch=before+1,
+        submitted_epoch=before-4, completed_epoch=before, observation_sink=queue.submit,
+        ai_payload=dict(evaluation_attempt_id='attempt', ai_decision_trace_id='trace',
+            entry_mechanistic_action='ENTER_NOW', entry_ai_screen_status='pass',
+            entry_ai_risk_verdict='PASS', provider_called=True))
+    assert A.record_async_disposition(result,'accepted_to_entry_path','commit_allowed')['status']=='queued'
+    executor.drain();assert queue.close(timeout=0)
+    raw=next((tmp_path/'pipeline_events').glob('*.jsonl'))
+    row=json.loads(raw.read_text().splitlines()[0])
+    assert raw.name == 'pipeline_events_2026-10-11.jsonl'
+    assert row['fields']['async_request_source_date']=='2026-10-10'
+    assert float(row['fields']['async_disposition_epoch'])==before
+    event=SimpleNamespace(stage=row['stage'],emitted_at=row['emitted_at'],stock_code=row['stock_code'],fields=row['fields'])
+    assert not M.async_disposition_coverage([event], datetime.fromtimestamp(before,KST))['by_producer']
+    counts=M.async_disposition_coverage([event],physical)['by_producer']
+    assert next(iter(counts.values()))['accepted']==1
+    assert not M.async_disposition_coverage([event],datetime.fromtimestamp(before+601,KST))['by_producer']
+    P.flush_pipeline_event_producer_summary()
+
+
+def test_reordered_repeated_transitions_do_not_overflow_bounded_projection():
+    from src.engine.monitoring.submission_bottleneck_monitor import async_disposition_coverage
+    fields=dict(async_producer_pid=123,async_producer_start_ticks=456,async_request_id='request',
+        async_disposition='accepted_to_entry_path',async_disposition_event_id='accepted',
+        async_origin_deadline_epoch=NOW+5,async_machine_action='ENTER_NOW',
+        async_auxiliary_status='pass',async_auxiliary_verdict='PASS',async_provider_called=True)
+    event=SimpleNamespace(stage='entry_async_disposition',stock_code='005930',
+                          emitted_at=datetime.fromtimestamp(NOW,KST).isoformat(),fields=fields)
+    result=async_disposition_coverage([event]*1100,datetime.fromtimestamp(NOW+6,KST),source_coverage='complete')
+    assert result['by_producer']['123:456']['accepted']==1
+    assert not result['denominator_partial'] and len(result['attempt_projection'])==1
+
+
+@pytest.mark.parametrize('field,value', [('ai_decision_trace_id','other'),
+    ('evaluation_attempt_id','other'), ('scanner_generation_id','other'),
+    ('native_signal_id','other'), ('entry_machine_bundle_sha256','b'*64),
+    ('effective_venue','NXT'), ('async_origin_deadline_epoch',NOW+10)])
+def test_async_transitions_with_different_identity_never_count_accepted(field, value):
+    from src.engine.monitoring.submission_bottleneck_monitor import async_disposition_coverage
+    base = dict(async_producer_pid=123, async_producer_start_ticks=456, async_request_id='request',
+        async_origin_deadline_epoch=NOW+5, async_disposition_epoch=NOW,
+        async_machine_action='ENTER_NOW', async_auxiliary_status='pass', async_auxiliary_verdict='PASS',
+        async_provider_called=True, ai_decision_trace_id='trace', evaluation_attempt_id='attempt',
+        scanner_generation_id='generation', native_signal_id='signal',
+        entry_machine_bundle_sha256='a'*64, effective_venue='KRX')
+    def event(kind, updates):
+        return SimpleNamespace(stage='entry_async_disposition', stock_code='005930',
+            emitted_at=datetime.fromtimestamp(NOW,KST).isoformat(), fields=dict(base,
+                async_disposition=kind, async_disposition_event_id=kind, **updates))
+    rows = [event('worker_completed',{}),event('accepted_to_entry_path',{field:value})]
+    for events in (rows, rows[::-1], rows+rows):
+        count=async_disposition_coverage(events, datetime.fromtimestamp(NOW+6,KST))['by_producer']['123:456']
+        assert count['pass_count'] == count['unobservable'] == 1 and count['accepted'] == 0
+
+
+def test_pass_trace_denominator_survives_missing_all_transition_receipts():
+    from src.engine.monitoring.submission_bottleneck_monitor import async_disposition_coverage
+    row = dict(emitted_at=datetime.fromtimestamp(NOW,KST).isoformat(), stock_code='005930',
+        fields=dict(async_producer_pid=123,async_producer_start_ticks=456,async_request_id='request',
+            async_disposition='validated_pass_trace', async_disposition_event_id='trace',
+            async_origin_deadline_epoch=NOW+5, async_machine_action='ENTER_NOW',
+            async_auxiliary_status='pass', async_auxiliary_verdict='PASS', async_provider_called=True))
+    outcome=async_disposition_coverage([], datetime.fromtimestamp(NOW+6,KST), pass_projections=[row],
+                                      source_coverage='complete')
+    assert outcome['by_producer']['123:456']['unobservable'] == 1
+    assert outcome['denominator_partial'] is False
+
+
+@pytest.mark.parametrize('duplicate_id', [False, True])
+def test_conflicting_post_entry_physical_facts_are_unobservable(duplicate_id):
+    from src.engine.monitoring.submission_bottleneck_monitor import async_disposition_coverage
+    base=dict(async_producer_pid=123, async_producer_start_ticks=456, async_request_id='request',
+        async_disposition_epoch=NOW, async_origin_deadline_epoch=NOW+5,
+        async_machine_action='ENTER_NOW', async_auxiliary_status='pass',
+        async_auxiliary_verdict='PASS', async_provider_called=True)
+    def event(kind, identity, **facts):
+        return SimpleNamespace(stage='entry_async_disposition', stock_code='005930',
+            emitted_at=datetime.fromtimestamp(NOW,KST).isoformat(),fields=dict(base,
+                async_disposition=kind,async_disposition_event_id=identity,**facts))
+    rows=[event('accepted_to_entry_path','accepted'),
+        event('entry_path_returned','return',async_entry_broker_attempts=0),
+        event('entry_path_returned','return' if duplicate_id else 'another',async_entry_broker_attempts=1)]
+    for source in (rows, rows[::-1]):
+        count=async_disposition_coverage(source,datetime.fromtimestamp(NOW+6,KST))['by_producer']['123:456']
+        assert count['unobservable']==1 and count['accepted']==0
+
+
 def test_async_disposition_compact_cache_reader_preserves_exact_pass_and_conflicts():
     from src.engine import buy_funnel_sentinel as S
     from src.engine.monitoring import submission_bottleneck_monitor as M
@@ -306,7 +571,7 @@ def test_async_disposition_compact_cache_reader_preserves_exact_pass_and_conflic
     assert len(event.fields) == len(fields)
     def counts(events, at=NOW+1):
         return M.async_disposition_coverage(events, datetime.fromtimestamp(at,KST))['by_producer']['123:456']
-    assert counts([event,event]) == dict(pass_count=1, accepted=0, rejected=0, pending=1, unobservable=0)
+    assert {k: counts([event,event])[k] for k in ('pass_count', 'accepted', 'rejected', 'pending', 'unobservable')} == dict(pass_count=1, accepted=0, rejected=0, pending=1, unobservable=0)
     assert counts([event], NOW+6)['unobservable'] == 1
     final = read(dict(async_disposition_event_id='accepted', async_disposition='accepted_to_entry_path'))
     assert counts([event,final])['accepted'] == 1

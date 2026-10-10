@@ -10,6 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 THRESHOLD_STAGE_FAMILY_MAP = {
+    # Exact report-only Main handoff receipts; no new tuning/order authority.
+    "entry_async_disposition": "entry_mechanical_momentum",
+    "scanner_async_result_commit": "entry_mechanical_momentum",
     "pre_submit_delay_committed": "pre_submit_delay",
     "pre_submit_delay_quote_observed": "pre_submit_delay",
     "pre_submit_delay_intent_terminal": "pre_submit_delay",

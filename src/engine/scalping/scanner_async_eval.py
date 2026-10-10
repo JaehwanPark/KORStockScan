@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from collections import OrderedDict
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import math
 import hashlib
 import os
@@ -25,21 +28,37 @@ from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 SCANNER_ASYNC_EVAL_VERSION = "scanner_async_eval_commit_v1"
 _MAX_READY_RESULTS = 128
 _MAX_CANCELLED_GENERATIONS = 256
+
+# Main's invocation owns a result from the instant take removes it, including
+# exceptions before the resolver has constructed its return dictionary.
+ASYNC_CONSUMPTION = ContextVar('main_async_consumption', default=None)
+
+
+def async_request_binding(context):
+    return dict(async_request_id=context.request_id, async_producer_pid=os.getpid(),
+        async_producer_start_ticks=_PROCESS_START,
+        async_origin_deadline_epoch=context.deadline_epoch,
+        async_order_venue=context.generation.venue,
+        scanner_generation_id=context.generation.generation_id)
 try:
     _PROCESS_START = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
 except (OSError, IndexError):
     _PROCESS_START = None
 
 
-def record_async_disposition(result, disposition, reason):
+def _append_async_disposition(code, fields):
+    from src.utils.pipeline_event_logger import emit_pipeline_event
+    return emit_pipeline_event('ENTRY_PIPELINE', code, code,
+                               'entry_async_disposition', fields=fields)
+
+
+def record_async_disposition(result, disposition, reason, **facts):
     """Use the existing compact pipeline; never alter provider outbox state."""
     try:
-        from src.utils.pipeline_event_logger import emit_pipeline_event
         event = (result.native_claim.get('snapshot') or [{}])[0]
         payload = result.ai_payload
         identity = f'{os.getpid()}|{_PROCESS_START}|{result.request_id}|{disposition}'
-        receipt = emit_pipeline_event('ENTRY_PIPELINE', result.code, result.code,
-            'entry_async_disposition', fields=dict(
+        fields = dict(
                 async_disposition_event_id=hashlib.sha256(identity.encode()).hexdigest(),
                 async_disposition=disposition, async_disposition_reason=str(reason),
                 async_request_id=result.request_id, scanner_generation_id=result.generation_id,
@@ -52,17 +71,28 @@ def record_async_disposition(result, disposition, reason):
                 async_provider_called=payload.get('provider_called'),
                 async_producer_start_ticks=_PROCESS_START,
                 async_release=os.getenv('KORSTOCKSCAN_RUNTIME_GIT_COMMIT'),
-                **dict(result.origin_fields),
+                **{k:v for k,v in result.origin_fields.items() if k not in (
+                    'effective_venue','entry_machine_bundle_sha256','entry_auxiliary_policy_sha256')},
                 native_event_id=event.get('event_id'), native_signal_id=event.get('signal_id'),
-                effective_venue=result.venue,
+                effective_venue=payload.get('effective_venue') or result.origin_fields.get('effective_venue') or result.venue,
+                async_order_venue=result.venue,
+                entry_machine_bundle_sha256=payload.get('machine_bundle_sha256') or result.origin_fields.get('entry_machine_bundle_sha256'),
+                entry_auxiliary_policy_sha256=payload.get('entry_ai_component_sha256') or result.origin_fields.get('entry_auxiliary_policy_sha256'),
                 async_origin_deadline_epoch=result.deadline_epoch,
                 async_worker_completed_epoch=result.completed_epoch,
                 async_disposition_epoch=time.time(), async_producer_pid=os.getpid(),
+                async_request_source_date=datetime.fromtimestamp(
+                    getattr(result, 'submitted_epoch', result.completed_epoch),
+                    ZoneInfo('Asia/Seoul')).date().isoformat(),
                 metric_role='source_quality_gate', decision_authority='report_only',
                 window_policy='current_pid_exact_attempt_with_carry_in_out', sample_floor='none',
                 primary_decision_metric='pass_to_main_disposition_coverage',
                 forbidden_uses='policy_promotion,broker_order,economics',
-                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False))
+                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False,
+                **facts)
+        if getattr(result, 'observation_sink', None) is not None:
+            return result.observation_sink(_append_async_disposition, result.code, fields)
+        receipt = _append_async_disposition(result.code, fields)
         success = isinstance(receipt, dict) and receipt.get('structured_append_succeeded') is True
         if (not success or receipt.get('structured_append_status') != 'raw_appended'
                 or receipt.get('structured_compact_append_succeeded') is False):
@@ -73,7 +103,7 @@ def record_async_disposition(result, disposition, reason):
     except Exception as exc:
         try:
             from src.engine.monitoring.runtime_performance import failure
-            failure('async_disposition', type(exc).__name__)
+            failure('async_disposition', type(exc).__name__, emit_log=False)
         except Exception:
             pass
         return False
@@ -184,7 +214,8 @@ class ScannerAsyncEvalContext:
             cache_key=str(cache_key or "").strip() or generation.generation_id,
             submitted_epoch=submitted,
             deadline_epoch=deadline,
-            stock_snapshot=_immutable_mapping(stock_snapshot),
+            stock_snapshot=_immutable_mapping({k:v for k,v in stock_snapshot.items()
+                if k != '_async_consumption_guard'}),
             ws_snapshot=_immutable_mapping(ws_snapshot),
             state_version=str(state_version or "-"),
             submitted_perf=perf,
@@ -245,6 +276,7 @@ class ScannerAsyncEvalResult:
     deadline_epoch: float = 0.0
     original_generation: Any = None
     origin_fields: Mapping[str, Any] = field(default_factory=dict)
+    observation_sink: Any = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,11 +302,13 @@ class ScannerAsyncEvalCoordinator:
         *,
         ai_dispatcher: HotPathAIDispatcher,
         owns_ai_dispatcher: bool = True,
+        observation_sink=None,
     ) -> None:
         if not isinstance(ai_dispatcher, HotPathAIDispatcher):
             raise TypeError("scanner async coordinator requires AI dispatcher")
         self.ai_dispatcher = ai_dispatcher
         self.owns_ai_dispatcher = bool(owns_ai_dispatcher)
+        self.observation_sink = observation_sink
         self._preparation_executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="scanner_market_prepare",
@@ -642,10 +676,11 @@ class ScannerAsyncEvalCoordinator:
             deadline_epoch=context.deadline_epoch,
             original_generation=context.generation,
             origin_fields=_immutable_mapping({key: context.stock_snapshot.get(key) for key in
-                ('id', 'watch_admission_id', 'watch_generation_id', 'scanner_promotion_id',
+                ('id', 'watch_origin', 'watch_admission_id', 'watch_generation_id', 'scanner_promotion_id',
+                 'effective_venue', 'market_session_bucket',
                  'entry_machine_bundle_sha256', 'entry_auxiliary_policy_sha256')}),
+            observation_sink=self.observation_sink,
         )
-        record_async_disposition(result, 'worker_completed', status)
         terminal_reason = None
         evicted = []
         with self._lock:
@@ -662,14 +697,17 @@ class ScannerAsyncEvalCoordinator:
                     terminal_reason = 'generation_invalidated'
                 else:
                     self._ready[context.request_id] = result
+                # Superseded output is still an observation notification,
+                # never a retained executable result or a second terminal.
                 self._undrained_request_ids.add(context.request_id)
+                self._completed[context.request_id] = result
+                self.completion_event.set()
                 while len(self._ready) > _MAX_READY_RESULTS:
                     oldest_request_id = next(iter(self._ready))
                     evicted.append(self._ready.pop(oldest_request_id))
                     self._completed.pop(oldest_request_id, None)
                     self._undrained_request_ids.discard(oldest_request_id)
-                self._completed[context.request_id] = result
-                self.completion_event.set()
+        record_async_disposition(result, 'worker_completed', status)
         if terminal_reason:
             record_async_disposition(result, 'terminal_nonexecution', terminal_reason)
         for old in evicted:
@@ -700,6 +738,9 @@ class ScannerAsyncEvalCoordinator:
             self._undrained_request_ids.discard(request_id)
             result = self._ready.pop(request_id, None)
             if result is not None:
+                owner = ASYNC_CONSUMPTION.get()
+                if owner is not None:
+                    owner['original_result'] = result
                 self._consumed[request_id] = None
                 while len(self._consumed) > 256:
                     self._consumed.popitem(last=False)
@@ -711,7 +752,7 @@ class ScannerAsyncEvalCoordinator:
             return self._ready.get(f"{generation_id}:{cache_key}")
 
     def discard_completed(
-        self, *, generation_id: str, cache_key: str
+        self, *, generation_id: str, cache_key: str, reason='unused_result'
     ) -> ScannerAsyncEvalResult | None:
         request_id = (
             f"{str(generation_id or '').strip()}:{str(cache_key or '').strip()}"
@@ -724,7 +765,9 @@ class ScannerAsyncEvalCoordinator:
                 self._consumed[request_id] = None
                 while len(self._consumed) > 256:
                     self._consumed.popitem(last=False)
-            return result
+        if result is not None:
+            record_async_disposition(result, 'terminal_nonexecution', reason)
+        return result
 
     def wait_for_completion(self, timeout: float) -> bool:
         """A consumed wake always causes another loop before sleeping.
@@ -815,6 +858,8 @@ class ScannerAsyncEvalCoordinator:
                 ]
                 for request_id in stale_ready_ids:
                     result = self._ready.pop(request_id, None)
+                    self._completed.pop(request_id, None)
+                    self._undrained_request_ids.discard(request_id)
                     discarded.append(result)
             # Cancellation callbacks and evidence I/O must not hold the lock.
             for future in futures:

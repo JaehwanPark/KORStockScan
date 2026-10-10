@@ -16,6 +16,30 @@ def _reset_logger_state(monkeypatch):
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
 
 
+def test_bounded_queue_normal_load_preserves_raw_and_compact_transitions(tmp_path, monkeypatch):
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(logger_mod, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(logger_mod, 'TRADING_RULES', SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True))
+    monkeypatch.setattr(logger_mod, 'log_info', lambda *a, **k: None)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        queue = logger_mod.BoundedObservationQueue(executor)
+        for i in range(32):
+            assert queue.submit(logger_mod.emit_pipeline_event, 'ENTRY_PIPELINE', 'TEST', '005930',
+                'entry_async_disposition', fields={'async_disposition_event_id': str(i),
+                'async_disposition': 'entry_path_returned', 'metric_role': 'source_quality_gate'})['status'] == 'queued'
+        assert queue.close(timeout=5)
+    logger_mod.flush_pipeline_event_producer_summary()
+    stats = queue.snapshot()
+    assert stats['append_confirmed'] == stats['completed'] == 32
+    assert stats['failed'] == stats['unavailable'] == stats['pending_bytes'] == 0
+    def identities(base):
+        return [row['fields']['async_disposition_event_id']
+            for path in base.glob('*.jsonl') for line in path.read_text().splitlines()
+            if (row := json.loads(line)).get('stage') == 'entry_async_disposition']
+    assert sorted(identities(tmp_path/'pipeline_events')) == sorted(map(str, range(32)))
+    assert sorted(identities(tmp_path/'threshold_cycle')) == sorted(map(str, range(32)))
+
+
 @pytest.mark.parametrize("failure", ["construct", "submit"])
 def test_summary_failure_never_prevents_raw_or_threshold_companion(
     monkeypatch, tmp_path, failure

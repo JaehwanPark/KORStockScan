@@ -452,3 +452,11 @@ PID 381039의 18:49~19:40 비상시감시 37종목·71회는 snapshot 부재로 
 PB1의 완료 결과 우선 소비·요청별 단일 종료, PB2의 원장 사전 인덱스 준비/증분 append, PB3의 기존 compact→Sentinel→monitor 연결을 구현했다. 늦은 결과·삭제/교체된 generation도 원 ID로 꺼내 종료하고 새 요청의 상태를 지우지 않는다. accepted는 기존 실행 경로 인계이며 주문 성공이 아니다. PB4의 작업본 검증과 배포 이후 자연 수용은 분리한다.
 
 검증 수치·수정한 반례·공식 API SHA·배포 보류 경계는 [통합 실행 리뷰](../audits/main-pass-residual-history-nonfixed-implementation-review-2026-10-08.md)에 한 번 기록한다. 실행 owner는 기존 `DirectFamilySourceRepairMainMechanisticEntry`를 유지하며 이번 작업은 checklist 봉인/현행 정책을 재발행하지 않는다.
+
+### 17.1 10/10 배포 상태 대조와 후속 재점검
+
+위 배포 보류는 10/8 구현 당시 기록이다. [10/9 통합 배포](../audits/main-integrated-uncommitted-deployment-review-2026-10-09.md)를 거쳐 현재 선택된 `main-holding-profit-exit-20261009-v4`에는 해당 개선과 mixed-row 후속 수리가 반영돼 있다. 10/10 확인 시 Main은 다음 예약기동 대기이며 `actual_pid_consumed=false`이므로 자연 PASS의 제출 병목 해소는 아직 확인되지 않았다.
+
+[10/10 재점검·보완계획](main-pass-submit-recheck-and-latency-remediation-plan-2026-10-10.md)은 기존 관련 회귀 164건 통과와 별도로 결과 pop 이후 예외 처리, 제출 함수까지의 통합 검증, 전이 간 판정 신원 검증, 동기 진단 기록 지연을 보완한다. 이는 과거 PASS 4건의 직접 원인을 새로 확정한 결과가 아니다. 후속 구현은 이 계획 S1~S4를 따르며 기존 PB의 원 deadline·단일 실행·필수 원천 저장 계약을 유지한다. 10/10 checklist는 없어 과거 owner를 오늘 실행 owner로 대체하지 않고, 봉인된 10/12 checklist도 이번 계획 수정에서는 보존했다.
+
+같은 날 후속 계획 리뷰에서는 결과 인수 context와 모든 폐기 caller, 제출 함수 본문·intent를 통과하는 adapter 경계 검증, 기존 관측 executor의 유한 접수와 raw 저장 성공 구분까지 명시했다. 원 판정 발생/물리 기록 시각과 구버전·자정 관측창을 보존하며 정상 경로 수리를 추가 진단 분류보다 먼저 닫는다. 구체적 구현 경계와 리뷰 보완표는 후속 계획 §3.1/§4.1/§5~§6/§9가 소유한다.

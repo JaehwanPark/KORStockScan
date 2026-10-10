@@ -237,3 +237,11 @@ capacity 예산은 `prefetch 성공→가격 변경→observer cache miss`, `pen
 R1은 무신호/미지원 경로의 선행 계좌 예약을 제거하고 실제 평가 context와 최초 deadline에 kt00011 source-only 준비를 묶었다. R2는 완료 결과/비상시감시 신호를 Main에 전달하며 R3의 중복 인덱스는 기존 준비 worker에서 최대 4MiB씩 생성한다. R4는 완료봉 공유·revision pin·필요 이력 descriptor로 연결했다. R5 코드 회귀는 완료했으며 실제 배포/PID/장중 성능 검증은 보류한다.
 
 검증 수치·수정한 반례·공식 API SHA·배포 보류 경계는 [통합 실행 리뷰](../audits/main-pass-residual-history-nonfixed-implementation-review-2026-10-08.md)에 한 번 기록한다. 실행 owner는 기존 `DirectFamilySourceRepairMainMechanisticEntry`를 유지하며 이번 작업은 checklist 봉인/현행 정책을 재발행하지 않는다.
+
+### 11.1 10/10 배포 상태 대조와 잔여 결함 계획
+
+위 배포 보류는 10/8 구현 당시 기록이며 이후 [10/9 통합 배포](../audits/main-integrated-uncommitted-deployment-review-2026-10-09.md)가 완료됐다. 현재 선택된 `main-holding-profit-exit-20261009-v4`와 작업본의 관련 6개 source가 일치한다. 다만 Main의 새 코드 소비는 `actual_pid_consumed=false`로 다음 예약기동 대기이므로 R5의 자연 PASS·장중 성능 검증까지 완료한 것은 아니다.
+
+R2/R3/R5의 후속 범위는 [10/10 재점검·보완계획 S1~S4](main-pass-submit-recheck-and-latency-remediation-plan-2026-10-10.md)에 연결한다. 결과 인수 이후 예외·직접 미제출 이유·판정 신원 충돌·동기 기록 지연과 원장 준비의 큰 행 경계를 점검했으며, 우선 정상 PASS 한 건을 실제 기존 제출 함수까지 연결하는 격리 검증을 보강한다. 기존 관련 회귀 164건의 성공만으로 이 후단 검증을 대체하지 않는다. 이번 변경은 계획이며 새 코드 수리·정책 적용·배포·재기동을 수행하지 않았다. 10/10 checklist 부재와 봉인된 10/12 입력 보존은 후속 계획 §1의 인계 조건을 따른다.
+
+후속 계획 리뷰에서 정상 경로 검증의 끝을 고수준 제출 함수 호출에서 함수 내부 guard·intent를 거친 주문 adapter까지 확장했다. 기존 bool 반환과 호출 후 uncertain 상태, 공용 관측 executor의 backlog·종료·저장 성공 계약, 큰 원장 행의 읽기/검증 offset 분리를 함께 보완한다. 이는 계획의 구체화이며 164건의 과거 통과나 현재 배포를 새 검증의 완료로 전용하지 않는다.

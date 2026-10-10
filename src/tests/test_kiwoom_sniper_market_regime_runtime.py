@@ -235,6 +235,7 @@ def test_expired_scanner_ai_result_arms_recheck_before_scheduler_discard():
     target = {"scanner_generation_id": "005930:promotion:r1"}
     result = SimpleNamespace(
         status="expired_after_response",
+        generation_id="005930:promotion:r1",
         cache_key="watching:expired",
         ai_payload={
             "ai_decision_snapshot_id": "aims-expired-scheduler",
@@ -256,9 +257,19 @@ def test_expired_scanner_ai_result_arms_recheck_before_scheduler_discard():
     assert (
         fields["scanner_async_expired_response_recheck_actual_order_submitted"] is False
     )
-    assert (
-        fields["scanner_async_expired_response_recheck_broker_order_forbidden"] is True
-    )
+    assert fields["scanner_async_expired_response_recheck_broker_order_forbidden"] is True
+
+
+@pytest.mark.parametrize('changed', [dict(scanner_generation_id='successor'),
+    dict(_scanner_async_generation_id='successor'), dict(_scanner_async_cache_key='successor')])
+def test_expired_scanner_result_never_arms_successor_recheck(changed):
+    target = dict(scanner_generation_id='original', **changed) if 'scanner_generation_id' not in changed else changed.copy()
+    original = target.copy()
+    result = SimpleNamespace(status='expired_after_response', generation_id='original',
+                             cache_key='watching:original', ai_payload={})
+    assert not kiwoom_sniper_v2._scanner_async_result_owns_target_slot(target, result)
+    assert kiwoom_sniper_v2._arm_scanner_async_rejected_result_recheck(target, result, now_epoch=1000) == {}
+    assert target == original
 
 
 def test_scanner_market_data_enrichment_candidate_accepts_rising_source_marker(
@@ -1711,6 +1722,9 @@ def test_scheduler_event_sink_snapshots_action_for_observation_executor(monkeypa
         "_SCANNER_OBSERVATION_EXECUTOR",
         _InlineExecutor(),
     )
+    from src.utils.pipeline_event_logger import BoundedObservationQueue
+    monkeypatch.setattr(kiwoom_sniper_v2, '_SCANNER_OBSERVATION_QUEUE',
+        BoundedObservationQueue(kiwoom_sniper_v2._SCANNER_OBSERVATION_EXECUTOR))
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "emit_pipeline_event",
@@ -1757,6 +1771,9 @@ def test_scheduler_event_sink_shutdown_cannot_abort_runtime(monkeypatch):
         "_SCANNER_OBSERVATION_EXECUTOR",
         _ClosedExecutor(),
     )
+    from src.utils.pipeline_event_logger import BoundedObservationQueue
+    queue = BoundedObservationQueue(kiwoom_sniper_v2._SCANNER_OBSERVATION_EXECUTOR)
+    monkeypatch.setattr(kiwoom_sniper_v2, '_SCANNER_OBSERVATION_QUEUE', queue)
     monkeypatch.setattr(kiwoom_sniper_v2, "log_error", errors.append)
 
     kiwoom_sniper_v2._emit_scanner_scheduler_event(
@@ -1765,8 +1782,8 @@ def test_scheduler_event_sink_shutdown_cannot_abort_runtime(monkeypatch):
         fields={"scheduler_action": "dispatch"},
     )
 
-    assert len(errors) == 1
-    assert "event submit failed" in errors[0]
+    assert errors == []
+    assert queue.snapshot()['unavailable'] == 1
 
 
 def test_fresh_canonical_generation_releases_boot_restore_isolation(
@@ -6268,7 +6285,7 @@ def test_run_sniper_defers_scanner_skip_event_emits_until_loop_tail():
     )
     final_flush_idx = source.rindex("_flush_deferred_scanner_skip_events()")
     executor_submit_idx = source.index(
-        "_SCANNER_OBSERVATION_EXECUTOR.submit", defer_def_idx
+        "_SCANNER_OBSERVATION_QUEUE.submit", defer_def_idx
     )
     prune_idx = source.index("targets[:] = [", final_flush_idx)
     direct_emit_after_defer = source.find(

@@ -5310,7 +5310,16 @@ class GPTSniperEngine:
                 temperature=selected_request.temperature,
                 max_output_tokens=selected_request.max_output_tokens,
                 reasoning_effort=selected_request.reasoning_effort,
-                metadata=dict(selected_request.metadata,**{k:v for k,v in (metadata_extra or {}).items() if k in ('machine_observation_sha256','continuous_reversal_consumption')},auxiliary_wire_envelope=dict(contract=auxiliary_envelope['contract'],hashes=auxiliary_envelope['hashes'])) if auxiliary_envelope else selected_request.metadata,
+                # Local source binding must survive the provider's 16-field
+                # metadata limit. This does not change wire metadata/prompt.
+                metadata={**dict(selected_request.metadata),
+                    **{k:v for k,v in (metadata_extra or {}).items() if k in (
+                        'async_request_id','async_producer_pid','async_producer_start_ticks',
+                        'async_origin_deadline_epoch','async_order_venue','scanner_generation_id')},
+                    **({**{k:v for k,v in (metadata_extra or {}).items() if k in (
+                        'machine_observation_sha256','continuous_reversal_consumption')},
+                        'auxiliary_wire_envelope':dict(contract=auxiliary_envelope['contract'],
+                            hashes=auxiliary_envelope['hashes'])} if auxiliary_envelope else {})},
                 replay_context=replay_context,
             )
 
