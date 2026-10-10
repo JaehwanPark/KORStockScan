@@ -685,6 +685,14 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     try:
         stat_before = raw_path.stat()
         same_file = (previous.get("device"), previous.get("inode")) == (stat_before.st_dev, stat_before.st_ino)
+        # Inode/size alone do not identify a raw generation. A same-size
+        # rewrite (including restored mtime) invalidates retained observations.
+        if same_file and (previous.get('source_size') is None or (
+            stat_before.st_size == previous.get('source_size') and
+            (stat_before.st_mtime_ns, stat_before.st_ctime_ns) !=
+            (previous.get('source_mtime_ns'), previous.get('source_ctime_ns')))):
+            same_file = False
+            diagnostics['raw_generation_rewritten_or_legacy_cursor'] += 1
         if same_file and 0 <= previous.get("offset", -1) <= stat_before.st_size:
             cursor.update({key: previous.get(key) for key in
                            ("offset", "coverage_started_at", "minutes", "delay_events")})
@@ -694,7 +702,9 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                 f"{day}T00:00:00+09:00" if not reset_generation and stat_before.st_size <= DELAY_RAW_BUDGET
                 else now.isoformat())
             cursor["offset"] = 0 if stat_before.st_size <= DELAY_RAW_BUDGET else stat_before.st_size - DELAY_RAW_BUDGET
-        cursor.update(device=stat_before.st_dev, inode=stat_before.st_ino)
+        cursor.update(device=stat_before.st_dev, inode=stat_before.st_ino,
+                      source_size=stat_before.st_size, source_mtime_ns=stat_before.st_mtime_ns,
+                      source_ctime_ns=stat_before.st_ctime_ns)
         start = cursor["offset"]
         end = min(stat_before.st_size, start + DELAY_RAW_BUDGET)
         with raw_path.open("rb") as handle:
@@ -703,6 +713,10 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
         stat_after = raw_path.stat()
         if (stat_before.st_dev, stat_before.st_ino) != (stat_after.st_dev, stat_after.st_ino) or stat_after.st_size < end:
             raise ValueError("raw_generation_changed")
+        if (stat_after.st_size == stat_before.st_size
+                and (stat_after.st_mtime_ns, stat_after.st_ctime_ns)
+                    != (stat_before.st_mtime_ns, stat_before.st_ctime_ns)):
+            raise ValueError('raw_generation_changed')
         if start and not same_file:
             if b"\n" not in payload:
                 raise ValueError("raw_tail_boundary_missing")
@@ -2059,9 +2073,18 @@ def entry_execution_tuning_semantics(data_root, now):
         delay_report_date, delay_report = _latest_dated_json(
             data_root / "report/pre_submit_delay_tuning", "pre_submit_delay_tuning_", day
         )
+        from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths, REPORT_SCHEMA as DELAY_V2, _read as read_initial
+        pointers = sorted((data_root / 'threshold_cycle/pre_submit_delay_policy').glob('committed_????-??-??.json'), reverse=True)
+        if len(pointers) > 370:
+            raise ValueError('delay_generation_inventory_unbounded')
+        latest = next((p for p in pointers if p.stem[-10:] <= day), None)
+        if latest is not None and (delay_report_date is None or latest.stem[-10:] >= delay_report_date):
+            delay_report_date = latest.stem[-10:]
+            report_file, _, _, _ = committed_paths(data_root, delay_report_date)
+            delay_report = read_initial(report_file)
         if delay_report is not None:
             report_identity_valid = (
-                delay_report.get("schema") == "pre_submit_delay_tuning_v1"
+                delay_report.get("schema") in {"pre_submit_delay_tuning_v1", DELAY_V2}
                 and delay_report.get("source_date") == delay_report_date
                 and delay_report.get("analysis_axis") == "pre_submit_delay"
             )
@@ -2071,7 +2094,13 @@ def entry_execution_tuning_semantics(data_root, now):
                     result["examples"].append({"axis": "pre_submit_delay", "reason": "report_identity_invalid", "source_date": delay_report_date})
             delay_grid = delay_report.get("candidate_grid") or []
             from src.engine.scalping.pre_submit_delay_tuning import price_pattern_projection
-            price_analysis = price_pattern_projection(delay_report)
+            if delay_report.get('schema') == DELAY_V2:
+                price_analysis = {key:delay_report.get(key) for key in (
+                    'status', 'metric_role', 'price_ready_pair_n', 'census', 'cells', 'default_delay_sec', 'source_sha256')}
+                price_analysis.update(runtime_apply_allowed=False, economic_approval=False,
+                    actual_fill_proven=False, analysis_complete=delay_report['status'] != 'blocked')
+            else:
+                price_analysis = price_pattern_projection(delay_report)
             if price_analysis["status"] == "source_invalid":
                 issues["pre_submit_delay_price_pattern_invalid"] += 1
             delay.update(
@@ -2116,7 +2145,7 @@ def entry_execution_tuning_semantics(data_root, now):
                 result["examples"].append({"axis": "pre_submit_delay", "reason": "bootstrap_env_mismatch"})
         status = expected_handoff.get("status")
         delay.update(
-            status=("verified_policy_bound" if status in {"verified_candidate", "verified_carried_candidate"} and env_match is True
+            status=("verified_policy_bound" if status in {"verified_candidate", "verified_carried_candidate", "verified_initial_timing_policy"} and env_match is True
                     else "source_gap" if status == "no_validated_candidate_source_gap"
                     else "not_evaluated" if status == "no_validated_candidate_not_evaluated"
                     else "unpublished" if status == "not_published"

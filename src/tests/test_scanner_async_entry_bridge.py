@@ -183,7 +183,7 @@ def test_native_ack_exception_is_before_acceptance_and_cleans_only_original(monk
 
 @pytest.mark.parametrize('origin', ['scanner', 'fixed_watch'])
 @pytest.mark.parametrize('compact', ['v1', 'v2'])
-@pytest.mark.parametrize('outcome', ['accepted', 'no_response', 'exception', 'final_deadline'])
+@pytest.mark.parametrize('outcome', ['accepted', 'no_response', 'exception', 'final_deadline', 'delay_capacity', 'delay_armed'])
 def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monkeypatch, origin, compact, outcome):
     """Real resolver, WATCHING, receipt/sizing/price/final guards; no network."""
     from src.tests.test_mechanistic_entry_runtime_policy import initial
@@ -222,6 +222,19 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
     monkeypatch.setattr(handlers, '_publish_buy_signal_submission_notice', lambda *a, **k:None)
     stages=[]
     monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda s, c, stage, **k:stages.append((stage,k)))
+    if outcome.startswith('delay_'):
+        from collections import OrderedDict, Counter
+        from src.engine.scalping import pre_submit_delay_tuning as delay, pre_submit_delay_observation as observation
+        for key,value in {'_ACTIVE':{},'_HEAPS':{},'_EXPIRIES':[], '_RECENT':OrderedDict(), '_COUNTERS':Counter()}.items():
+            monkeypatch.setattr(observation,key,value)
+        def sink(fn,pipeline,name,code,stage,*,fields,**kwargs):
+            stages.append((stage,fields))
+            return {'status':'queued'}
+        monkeypatch.setattr(observation,'_SINK',sink)
+        if outcome=='delay_capacity':
+            monkeypatch.setattr(observation,'register',lambda *a,**k:False)
+        monkeypatch.setattr(delay,'load_runtime_policy',lambda **k:{'status':'loaded','delay_sec':30,
+            'schema':'pre_submit_delay_policy_v2','policy_sha256':'f'*64})
     # External account/source facts are fixed; execution validators stay real.
     monkeypatch.setattr(handlers.kiwoom_orders, 'get_deposit', lambda *a, **k:1000000)
     monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_meta', lambda:dict(source='fixture',account_deposit=1000000))
@@ -277,10 +290,14 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
         scanner_promotion_id='PROMO-ASYNC', machine_bundle_sha256=bundle['bundle_sha256'],
         policy_bundle_hash=bundle['bundle_sha256'], effective_venue='KRX', market_session_bucket='KRX_REGULAR',
         **_fresh_submit_micro_fields())
+    if outcome.startswith('delay_'):
+        payload['entry_ai_effective_assessment']={'effective_verdict':'PASS'}
+        payload['entry_ai_soft_policy_sha256']=policy.digest(bundle['ai_policy'])
     if origin == 'fixed_watch':
         payload.pop('scanner_promotion_id')
         payload.update(watch_origin=stock['watch_origin'],watch_admission_id=stock['watch_admission_id'],
             watch_generation_id=stock['watch_generation_id'])
+    if origin == 'fixed_watch' or outcome.startswith('delay_'):
         from src.engine.scalping import ai_decision_trace as trace
         monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED', '1')
         monkeypatch.setattr(trace, 'DATA_DIR', tmp_path)
@@ -290,6 +307,8 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
         assert capture['machine_capture_status'] == 'captured'
         trace.bind_machine_observation_revision(stock, capture, symbol='005930',bundle_sha256=bundle['bundle_sha256'])
         payload.update(capture)
+    if outcome.startswith('delay_'):
+        stock['market_session_bucket']='KRX_REGULAR'
     original=replace(original,state_version=handlers._scanner_async_entry_state_version(stock))
     original=replace(original, ai_payload=payload, prepared_context=dict(
         recent_ticks=_trusted_orderbook_touch_ticks(price=10000,hhmm='13:55'),
@@ -301,6 +320,11 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
         last_ws_update_ts=clock, tick_acceleration_ratio=1.25, curr_vs_micro_vwap_bp=5,
         buy_pressure_10t=72, **_fresh_submit_micro_fields(),
         orderbook=dict(asks=[dict(price=10010,volume=100)],bids=[dict(price=10000,volume=100)]))
+    if outcome.startswith('delay_'):
+        ws.update(market_data_transport_epoch=1, realtime_type_snapshots_by_route={
+            '_AL|KRX_NXT_INTEGRATED':{'0D':{'market_route':'KRX_NXT_INTEGRATED',
+                'item':'005930_AL','transport_epoch':1,'received_at_ms':int(clock*1000),'observed_epoch':clock,
+                'orderbook':ws['orderbook']}}})
     calls=[]
     def adapter(*args, **kwargs):
         calls.append((args, kwargs))
@@ -333,14 +357,25 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
                 consume()
         else:
             consume()
-        expected = 0 if outcome == 'final_deadline' else 1
+        expected = 0 if outcome == 'final_deadline' or outcome.startswith('delay_') else 1
         if len(calls) != expected:
             pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in ('reason','skip_reason','block_reason','submit_call_outcome','sizing_block_reason')}) for s,f in stages[-12:]]))
         if calls:
             assert calls[0][0][0] == '005930' and calls[0][0][1] > 0
         if outcome == 'accepted':
             assert any(stage=='order_bundle_submitted' for stage,_ in stages)
-        assert stock['last_watching_ai_machine_primary_fields']['evaluation_attempt_id'] == 'eval-original'
+        if outcome=='delay_armed':
+            if '_pre_submit_delay_pending' not in stock:
+                pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in (
+                    'reason','scanner_async_commit_reason','skip_reason')}) for s,f in stages[-8:]]))
+            assert stock['_pre_submit_delay_pending']['schema']=='pre_submit_delay_policy_v2'
+            assert stock['_pre_submit_delay_pending']['planned_qty']>0
+            assert any(stage=='pre_submit_delay_intent_armed' for stage,_ in stages)
+        if outcome=='delay_capacity':
+            assert '_pre_submit_delay_pending' not in stock
+            assert observation.health()['active']==0
+        if not outcome.startswith('delay_'):
+            assert stock['last_watching_ai_machine_primary_fields']['evaluation_attempt_id'] == 'eval-original'
         assert not coordinator.has_completed(generation_id=original.generation_id, cache_key='key')
         handlers.handle_watching_state(stock,'005930',ws,1,ai_engine=NoNewAI(),
             scanner_async_eval_coordinator=coordinator, scanner_async_generation=generation)

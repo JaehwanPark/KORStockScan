@@ -959,6 +959,13 @@ def test_type_selected_delay_never_spills_into_another_type(tmp_path, monkeypatc
     now = datetime(2026, 9, 24, 10, tzinfo=timezone(timedelta(hours=9)))
     assert delay.load_runtime_policy(now=now, decision_type=selected_type)["delay_sec"] == 30.0
     assert delay.load_runtime_policy(now=now, decision_type=other_type)["delay_sec"] == 0.0
+    with monkeypatch.context() as prepared_context:
+        prepared_context.setattr(delay, '_PREPARED_DELAY_KEY', None)
+        prepared_context.setattr(delay, '_PREPARED_DELAY_POLICY', None)
+        assert delay.prepare_runtime_policy(now=now)['status'] == 'prepared'
+        prepared_context.setattr(delay.json, 'loads', lambda *a, **k: pytest.fail('warm legacy JSON decode'))
+        assert delay.load_runtime_policy(now=now, decision_type=selected_type)['delay_sec'] == 30
+        assert delay.load_runtime_policy(now=now, decision_type=other_type)['delay_sec'] == 0
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     assert bootstrap._pre_submit_delay_handoff(effective)[1]["status"] == "verified_candidate"

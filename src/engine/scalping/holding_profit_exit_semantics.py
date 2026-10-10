@@ -55,6 +55,26 @@ def _mechanical_check(transition: dict, snapshot: dict, receipt: dict | None,
         if isinstance(observed_vector, str):
             observed_vector = json.loads(observed_vector)
         vector_sha = market_values_hash(vector, classifier)
+        effective = vector[market]
+        typed_sha = transition.get('effective_trailing_policy_sha256')
+        if typed_sha:
+            from src.engine.scalping.trailing_situation_policy import PreparedTrailingPolicy, PreparedPin
+            policy = receipt.get('situation_policy')
+            if not isinstance(policy, dict) or policy.get('policy_sha256') != typed_sha:
+                return 'tp_situation_policy_receipt_missing'
+            prepared = PreparedTrailingPolicy.prepare(policy, target_date=target_date, parent_sha256=vector_sha)
+            raw_pin = transition.get('trailing_situation_pin')
+            raw_pin = json.loads(raw_pin) if isinstance(raw_pin, str) else raw_pin
+            position_key = transition.get('position_key')
+            pin = PreparedPin.prepare(raw_pin, position_key)
+            snapshot_pin = snapshot.get('trailing_situation_pin')
+            snapshot_pin = json.loads(snapshot_pin) if isinstance(snapshot_pin, str) else snapshot_pin
+            if (transition.get('classification_origin_hash') != pin.classification_origin_hash
+                    or snapshot.get('position_key') != position_key
+                    or snapshot_pin != raw_pin
+                    or snapshot.get('effective_trailing_policy_sha256') != typed_sha):
+                return 'tp_situation_origin_or_snapshot_unbound'
+            effective = prepared.effective(market, pin, position_key=pin.position_key, target_date=target_date)
         if (receipt["market_values_sha256"] != vector_sha
                 or receipt["classifier_version"] != CLASSIFIER_VERSION
                 or receipt["classifier_sha256"] != classifier_hash(classifier)
@@ -63,11 +83,11 @@ def _mechanical_check(transition: dict, snapshot: dict, receipt: dict | None,
                 or transition.get("scalp_trailing_policy_date") != target_date
                 or transition.get("classifier_version") != CLASSIFIER_VERSION
                 or transition.get("classifier_sha256") != receipt["classifier_sha256"]
-                or _float(transition.get("trailing_start_pct")) != vector[market]["SCALP_TRAILING_START_PCT"]):
+                or _float(transition.get("trailing_start_pct")) != effective["SCALP_TRAILING_START_PCT"]):
             return "tp_mechanical_policy_generation_mismatch"
         crossing = _first_crossing_fields(transition)
         if (_float(transition.get("raw_limit_pct", transition.get("trailing_limit_pct")))
-                != vector[market][crossing["threshold_key"]]):
+                != effective[crossing["threshold_key"]]):
             return "tp_mechanical_policy_width_mismatch"
         pinned = snapshot.get("mechanical_policy_receipt")
         if isinstance(pinned, str):

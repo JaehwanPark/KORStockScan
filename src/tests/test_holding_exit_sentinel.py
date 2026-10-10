@@ -23,6 +23,30 @@ MECHANICAL_FIELDS = {
 }
 
 
+def test_typed_semantics_pins_actual_position_and_current_effective_receipt():
+    from src.engine.scalping import holding_profit_exit_semantics as semantics
+    from src.engine.scalping import trailing_situation_policy as typed
+    bundle=typed.initial_bundle(MECHANICAL['market_values'],
+        parent_sha256=MECHANICAL['market_values_sha256'], source_date='2026-09-25',target_date='2026-09-28',
+        parent_classifier_parameters=MECHANICAL['classifier_parameters'])
+    pin=typed.pin_context(None,position_key='record:7',entry_at=1)
+    transition={**MECHANICAL_FIELDS,'position_key':'record:7', 'trailing_situation_pin':json.dumps(pin),
+        'classification_origin_hash':pin['classification_origin_hash'],
+        'effective_trailing_policy_sha256':bundle['policy_sha256'],
+        'trailing_start_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_START_PCT'],
+        'raw_limit_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_LIMIT_WEAK'],
+        'first_crossing':{'threshold_key':'SCALP_TRAILING_LIMIT_WEAK'}}
+    snapshot={**MECHANICAL_FIELDS, 'position_key':'record:7','trailing_situation_pin':json.dumps(pin),
+              'effective_trailing_policy_sha256':bundle['policy_sha256']}
+    receipt={**MECHANICAL,'situation_policy':bundle}
+    assert semantics._mechanical_check(transition,snapshot,receipt,'PREMARKET','2026-09-28') is None
+    foreign=typed.pin_context(None,position_key='record:8',entry_at=1)
+    assert semantics._mechanical_check({**transition,'trailing_situation_pin':foreign},snapshot,receipt,
+        'PREMARKET','2026-09-28')=='tp_mechanical_policy_contract_invalid'
+    assert semantics._mechanical_check(transition,{**snapshot,'position_key':'record:8'},receipt,
+        'PREMARKET','2026-09-28')=='tp_situation_origin_or_snapshot_unbound'
+
+
 def _event(
     target_date: str,
     hhmmss: str,

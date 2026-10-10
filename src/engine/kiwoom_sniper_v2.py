@@ -12460,6 +12460,14 @@ def run_sniper(is_test_mode=False):
     from src.utils.logger import log_error, log_info
 
     log_info(f"[DEBUG] run_sniper started at {datetime.now()}")
+    from src.engine.scalping.pre_submit_delay_tuning import prepare_runtime_policy
+    run_sniper.pre_submit_delay_preparation = prepare_runtime_policy()
+    from src.engine.scalping.pre_submit_delay_observation import configure_sink
+    configure_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    from src.engine.scalping.trailing_situation_policy import prepare_runtime as prepare_trailing_situations
+    run_sniper.trailing_situation_preparation = prepare_trailing_situations(env=os.environ,
+        parent_sha256=os.getenv('KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256'),
+        target_date=os.getenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE') or datetime.now().date().isoformat())
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
     run_sniper.last_broker_snapshot_refresh_time = 0
@@ -12969,6 +12977,8 @@ def run_sniper(is_test_mode=False):
         while True:
             loop_work_started = time.perf_counter()
             now_ts = time.time()
+            from src.engine.scalping.pre_submit_delay_observation import prune as prune_delay_observations
+            prune_delay_observations(now_ts)
             now = datetime.now()
             now_t = now.time()
             run_sniper.runtime_pause_state = is_buy_side_paused()
@@ -14668,20 +14678,6 @@ def run_sniper(is_test_mode=False):
                 runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]
                 status = stock.get("status")
-                if sniper_state_handlers.pre_submit_delay_observation_due(
-                    stock, now_ts=time.time()
-                ):
-                    try:
-                        delay_ws = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-                        sniper_state_handlers.observe_pre_submit_delay_quote(
-                            stock, code, delay_ws or {}, now_ts=time.time()
-                        )
-                    except Exception as exc:
-                        log_error(
-                            f"[PRE_SUBMIT_DELAY_OBSERVATION] source-only code={code} "
-                            f"error={type(exc).__name__}"
-                        )
-
                 if (
                     scanner_precheck_seen
                     and not scanner_heavy_eval_flushed
@@ -14706,6 +14702,9 @@ def run_sniper(is_test_mode=False):
                             pending_sell_ws_data or {},
                             now_ts=now_ts,
                         )
+                        if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
+                            sniper_state_handlers.observe_pre_submit_delay_quote(stock, code,
+                                pending_sell_ws_data or {}, now_ts=time.time())
                     except Exception as exc:
                         log_error(
                             "[SMOOTHING_SELL_ORDERED] source-only observer failed "
@@ -14728,6 +14727,12 @@ def run_sniper(is_test_mode=False):
                     )
                 else:
                     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
+                    try:
+                        sniper_state_handlers.observe_pre_submit_delay_quote(stock, code, ws_data or {}, now_ts=time.time())
+                    except (ValueError, TypeError, KeyError, AttributeError):
+                        from src.engine.monitoring.runtime_performance import failure
+                        failure('pre_submit_delay_observation', 'source_unobservable', emit_log=False)
                 if (status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock)
                         and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
                         and async_coordinator.has_completed(
@@ -16332,6 +16337,8 @@ def run_sniper(is_test_mode=False):
                 log_error(f"hot path AI dispatcher stop failed: {e}")
             finally:
                 run_sniper.hot_path_ai_dispatcher = None
+        from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
+        close_delay_observations()
         _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
         if WS_MANAGER:
             try:

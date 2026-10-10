@@ -1,6 +1,6 @@
 # 첫 BUY 제출 시점의 가격 패턴 계산 보완구현 계획
 
-작성일: 2026-10-02 KST. 상태: 추가 리뷰·보완·불변 배포·승인 재기동·Main PID 소비 수용 완료, 자연 가격 분석 산출물 수용 `not_observed`.
+작성일: 2026-10-02 KST. 상태: 추가 리뷰·보완·불변 배포·승인 재기동·Main PID 소비 수용 완료. 10/10 후속 점검에서 10/8 자연 가격 분석 `partial` 산출을 확인했으며 초기 자동 정책은 미선정이다(§9).
 실행 소유자: [당일 checklist](../checklists/2026-10-02-stage2-todo-checklist.md)의 `PreSubmitDelayPricePatternRemediation1002`.
 
 ## 1. 목적과 범위
@@ -134,8 +134,14 @@ pair 계산은 intent를 한 번 index하고 고정 5개 horizon을 비교하는
 
 문서 self review에서 후보의 공통 모집단이 비는 경우, 즉시 제출 추천의 검증, 1개 표본의 분할/quantile 및 baseline에 존재하지 않는 새 계산값의 검증 기준을 추가 보완했다. 재리뷰는 가격 계산의 실체결 전제 제거와 현행 policy 소비의 권한 보존을 각각 확인한다.
 
-`PreSubmitDelayPricePatternRemediation1002`는 이 가격 계산/패턴/consumer 보완의 단일 OPEN owner다. 계좌 원천 조회 계획 및 기존 `MainEntryEconomicLineageRepair1002`의 자연 capacity/guard/residual 수용을 대체하지 않는다. 기계·compact 선정 계획의 source/정책 권한도 유지한다.
+계획 수립 당시 `PreSubmitDelayPricePatternRemediation1002`는 이 가격 계산/패턴/consumer 보완의 단일 OPEN owner였다. 계좌 원천 조회 계획 및 기존 `MainEntryEconomicLineageRepair1002`의 자연 capacity/guard/residual 수용을 대체하지 않는다. 기계·compact 선정 계획의 source/정책 권한도 유지한다. 후속 초기정책 계획 기록은 §9의 10/10 owner를 따른다.
 
 구현·self review·보완·재리뷰·표적 회귀를 완료했다. 가격 계산·검증의 최종 7개 영향 suite 423 PASS와 summary Markdown 추가 회귀 32 PASS, 수정 Python 7파일 compile PASS, 신규 F/E9 lint finding 0건이다. 마지막 계획 대조에서 고정 후보의 validation coverage/tail과 전체 기회 수 대비 검증 count 결속을 보완했다. 512기회/3,072 events 고정 입력의 baseline/candidate 각 3회 측정에서 wall/CPU ×1.07011/×1.08033, RSS +864 KiB로 수용 기준을 통과했다. 구현 범위의 미해결 결함은 0건이며 상세 근거와 기존 lint 한계는 [구현 수용 기록](../audits/pre-submit-delay-price-pattern-implementation-review-2026-10-02.md)에 남긴다.
 
-가격 계산의 코드 수용은 완료했다. 후속 사용자 승인으로 추가 의미 계약을 보완하고 `c61fefcf` 부모의 불변 `820c7c42`를 배포했다. 9개 영향 suite 작업본/격리 후보/불변 root 모두 523 PASS·F/E9 finding 0건과 최신 동일 입력 성능 수용을 확인했다. 기존 graceful restart 후 ubuntu Main PID 2957878의 source clean·당일 runtime env/native consumed·process health·WS 수신과 정책 5파일·독립 pin 416개·cron 보존을 확인했다. 상세 상태는 구현 수용 기록이 소유한다. 당일 단일 owner는 후속 자연 가격 산출물 수용 때문에 OPEN이며 현재 상태는 `not_observed`다. 보고서의 비싼 자연 원천 재생성·external sync·실제 거래/순익 수용은 실행하지 않았다. 실제 체결·청산을 가격 계산 완료의 전제로 다시 추가하지 않는다.
+가격 계산의 코드 수용은 완료했다. 후속 사용자 승인으로 추가 의미 계약을 보완하고 `c61fefcf` 부모의 불변 `820c7c42`를 배포했다. 9개 영향 suite 작업본/격리 후보/불변 root 모두 523 PASS·F/E9 finding 0건과 최신 동일 입력 성능 수용을 확인했다. 기존 graceful restart 후 ubuntu Main PID 2957878의 source clean·당일 runtime env/native consumed·process health·WS 수신과 정책 5파일·독립 pin 416개·cron 보존을 확인했다. 상세 상태는 구현 수용 기록이 소유한다. 10/2 당시 단일 owner는 후속 자연 가격 산출물 수용 때문에 OPEN이었고 자연 분석은 `not_observed`였다. 당시 보고서의 비싼 자연 원천 재생성·external sync·실제 거래/순익 수용은 실행하지 않았다. 실제 체결·청산을 가격 계산 완료의 전제로 다시 추가하지 않는다.
+
+## 9. 10/10 현재 결과 점검과 초기정책 후속 계획
+
+[10/8 가격 분석](../../data/report/pre_submit_delay_tuning/pre_submit_delay_tuning_2026-10-08.json)은 누적 commit 31건·적격 29건·유효 P0 6기회에서 30초 6쌍 및 60/120/180초 각 5쌍을 계산했다. `analysis_complete=true`, 상태는 `partial`이며 21쌍은 21개의 독립 기회를 뜻하지 않는다. 10/8 당일 ledger의 `valid_empty`와 누적 계산을 구분한다. report/policy/summary 결속과 기존 영향 회귀 56 PASS를 확인했지만 현재 선택 지연은 null이고 runtime 적용은 허용되지 않았다.
+
+현 생산자는 가격 연구 뒤 초기정책을 선택하는 경로가 없고 v1 정책은 기존 비용모형 계약만 지원한다. source-invalid P0가 시간순 split에 참여하는 문제, 전체 PASS 이전의 관측 공백과 상황 특징 확장은 [상황별 초기정책·장후 재생성 상세 계획](pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md)으로 구체화했다. 10/10 `PreSubmitDelayInitialPolicyPlan1010`은 그 문서 수립·검증 기록이며 후속 구현·정책 발행 완료를 뜻하지 않는다. 기존 report-only 추천은 새 v2 생산자·검증·runtime 계약이 구현되기 전까지 실행 정책으로 승격하지 않는다.

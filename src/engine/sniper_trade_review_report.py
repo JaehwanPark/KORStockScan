@@ -2390,6 +2390,13 @@ def _completed_trade_projection(
     broker_actual_fee = actual_cost["actual_fees_taxes_krw"]
     exact_pnl = actual_cost["exact_pnl_krw"]
     actual_reconciled = actual_cost["status"] == "actual_cost_reconciled"
+    main_parents = [row for row in cost_custody_rows
+                    if str(row.get('record_id')) == str(trade.get('id'))]
+    automatic_custody = bool(main_parents and all(
+        not row.get('source_quality_reasons') and row.get('state') in {'full', 'partial_terminal'}
+        and row.get('owner_type') == 'main_scalping'
+        and row.get('owner_id') == 'main_scalping:' + str(trade.get('id'))
+        for row in main_parents) and sum(_safe_int(row.get('filled_qty'), 0) for row in main_parents) == ledger['buy_filled_qty'])
     strict_reasons = list(ledger["strict_completion_reasons"])
     if actual_reconciled:
         strict_reasons = [reason for reason in strict_reasons
@@ -2573,6 +2580,8 @@ def _completed_trade_projection(
         "broker_actual_fees_taxes_krw": broker_actual_fee,
         "broker_actual_cost_observed": actual_reconciled,
         "actual_cost_reconciliation": actual_cost,
+        "main_automatic_management_allowed": automatic_custody,
+        "main_custody_source_sha256": digest(main_parents) if automatic_custody else None,
         "holding_path_buy_fill_identity": terminal_fields.get("holding_path_buy_fill_identity"),
         "economics_status": actual_cost["status"],
         "canonical_configured_profit_rate": profit,

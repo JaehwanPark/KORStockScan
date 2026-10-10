@@ -177,3 +177,9 @@ worker는 종료 시 새 접수를 닫고 원 request의 남은 진단을 기존
 최초 구현 지시는 구현·리뷰·수정보완까지였으며 봉인된 10/12 checklist를 변경하지 않았다. 후속 사용자 지시로 재리뷰 후 배포와 다음 영업일 정상기동 점검이 승인됐다. 같은 10/10 owner에서 불변 릴리스 배포, 동일 정책 코드 결속, 10/12 격리 PREOPEN 준비·전체 계약 및 예약 경로를 검증한다. 10/12 자연 PID·PASS 수용은 기존 DirectFamilyPreopenPolicyHandoff가 소유한다.
 
 승인 배포를 `main-pass-submit-20261010-v1` / `b26aae701314d91a75056fac576b5f460beb3c06`으로 완료했다. 재리뷰 2,424건·릴리스 326건 통과, [최종 기동 준비](../../data/report/main_pass_submit_deployment/2026-10-10/final-readiness.json)의 10/12 전체 계약 PASS·finalization 결손 0·예약 8개 routing PASS를 확인했다. 기계/보조 정책 계약 코드가 그대로여서 code-refresh 후보를 새로 발행할 필요가 없었고 기존 정책·원 장후 결과·봉인 checklist를 보존했다. 웹은 같은 릴리스로 재기동했으며 Main은 10/12 07:55 예약기동 전으로 실제 PID·자연 PASS 수용을 주장하지 않는다.
+
+## 11. Pre-submit delay 초기정책 후속 설계
+
+후속 사용자 요청에 따라 [상황별 초기정책·장후 재생성 상세 계획](pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md)을 작성했다. 전체 `ENTER_NOW + PASS`와 후행 호가, 기존 주문 준비 기준 원천, 상황 유형·시간순 검증·v2 초기정책 및 장후→PREOPEN 인계가 대상이다. 이 문서의 S1–S4 구현·배포 완료는 그 가격 시점 정책의 생성 완료를 뜻하지 않는다.
+
+양수 지연 실행은 원 5초 PASS를 연장하지 않고 due 시 기존 Main 재평가의 새로운 유효 증빙과 최종 제출 guard에 연결하도록 설계했다. 계획 작성은 10/10 checklist의 `PreSubmitDelayInitialPolicyPlan1010`으로 기록한다. 이번 연결에서 코드·선택 release·기존 정책·10/12 봉인 세대는 변경하지 않았다.

@@ -212,7 +212,7 @@ def _paths(target_date: str) -> dict[str, Path]:
         if machine_policies
         else DATA_DIR / "runtime/mechanistic_entry_policy" / "policy_missing.json"
     )
-    return {
+    paths = {
         "source_quality": report / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
         "entry_cancel_wait": report / "entry_cancel_wait_tuning" / f"entry_cancel_wait_tuning_{target_date}.json",
         "entry_cancel_wait_policy": report / "entry_cancel_wait_tuning" / f"entry_cancel_wait_policy_{target_date}.json",
@@ -234,6 +234,12 @@ def _paths(target_date: str) -> dict[str, Path]:
         "runtime_bootstrap": DATA_DIR / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{target_date}.json",
         "runtime_bootstrap_verify": DATA_DIR / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_verify_{target_date}.json",
     }
+    if (threshold / "pre_submit_delay_policy" / f"committed_{target_date}.json").exists():
+        from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths
+        report_file, policy_file, pointer, _ = committed_paths(DATA_DIR, target_date)
+        paths.update(pre_submit_delay=report_file, pre_submit_delay_policy=policy_file,
+                     pre_submit_delay_committed_manifest=pointer)
+    return paths
 
 
 def _postclose_status_path(target_date: str) -> Path:
@@ -657,6 +663,14 @@ def _first_blocker(owner: str, payload: dict[str, Any]) -> str | None:
 
 
 def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None) -> dict[str, Any]:
+    if owner == "pre_submit_delay" and payload.get("schema") == "pre_submit_delay_tuning_v2":
+        return {"comparison_status": "not_applicable", "resolution_mode": "initial_quote_timing_estimate",
+                "metric_role": "initial_entry_price_timing_estimate", "policy_apply_allowed": False,
+                "policy_handoff_state": "initial_policy_requires_bound_receipt",
+                "candidate_count": 0, "paired_sample_count": payload.get("price_ready_pair_n"),
+                "paired_delta_ev_pct": None, "candidate_cost_adjusted_ev_pct": None,
+                "actual_net_profit_improvement": None, "source_day_count": None,
+                "first_blocker": None, "initial_policy_contract": payload.get("status")}
     economic = _economic_section(owner, payload)
     status = _comparison_status(owner, payload)
     reconciliation = None
@@ -1009,8 +1023,11 @@ def build_runtime_approval_summary(
                 })
                 row["policy_owner"] = None
         if owner == "pre_submit_delay":
-            from src.engine.scalping.pre_submit_delay_tuning import price_pattern_projection
-            row["price_pattern_analysis"] = price_pattern_projection(payload)
+            from src.engine.scalping.pre_submit_delay_tuning import price_pattern_projection, initial_policy_projection
+            initial = initial_policy_projection(payload)
+            row["price_pattern_analysis"] = initial or price_pattern_projection(payload)
+            if initial:
+                row["initial_timing_policy"] = initial
             if row["price_pattern_analysis"]["status"] == "source_invalid":
                 row["error"] = error = "price_pattern_contract_invalid"
         sources[owner] = row
@@ -1078,6 +1095,17 @@ def build_runtime_approval_summary(
             from src.engine.scalping.pre_submit_delay_tuning import _digest
             policy_payload = _load_json(Path(str(policy.get("path") or "")))
             source_payload = _load_json(Path(str(row.get("path") or "")))
+            initial_valid = False
+            if policy_payload.get("schema") == "pre_submit_delay_policy_v2":
+                from src.engine.scalping.pre_submit_delay_initial_policy import validate, verify_source, code_contract
+                try:
+                    validate(policy_payload, source_payload)
+                    verify_source(DATA_DIR, source_payload)
+                    if policy_payload.get('code_contract_sha256') != code_contract():
+                        raise ValueError('initial_delay_code_contract_changed')
+                    initial_valid = policy_payload.get("source_date") == target_date
+                except (OSError, ValueError, TypeError, KeyError):
+                    initial_valid = False
             policy_receipt_valid = bool(
                 policy_payload.get("schema") == "pre_submit_delay_policy_v1"
                 and source_payload.get("schema") == "pre_submit_delay_tuning_v1"
@@ -1087,7 +1115,10 @@ def build_runtime_approval_summary(
                 == _digest({k: v for k, v in source_payload.items() if k != "policy_sha256"})
                 and source_payload.get("policy_sha256") == policy_payload.get("policy_sha256")
                 and policy_payload.get("source_date") == target_date
-            )
+            ) or initial_valid
+            if initial_valid:
+                row["initial_timing_policy"]["runtime_contract_validated"] = True
+                row["economic_evidence"]["policy_handoff_state"] = "initial_quote_timing_policy_published"
         if owner == "main_mechanistic_entry" and policy_receipt_valid:
             from src.engine.scalping import mechanistic_entry_runtime_policy as machine_policy
 
@@ -1318,6 +1349,8 @@ def build_runtime_approval_summary(
     if not trailing_error and trailing_payload.get("date") == target_date:
         try:
             verify_forward_window(trailing_payload, target_date)
+            from src.engine.lifecycle.holding_window_generation import verify_window
+            verify_window(DATA_DIR, trailing_payload.get('input_window_dependencies'))
         except ValueError as exc:
             window_issue = str(exc)
     from src.engine.error_detectors.artifact_freshness import _holding_profit_exit_semantics

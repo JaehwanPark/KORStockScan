@@ -848,7 +848,14 @@ def stage_artifacts(report_dir, day, stage):
     paths['research_native_capacity'] = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / f'capacity_source_{day}.json'
     paths['pre_submit_delay_tuning'] = Path(report_dir) / 'pre_submit_delay_tuning' / f'pre_submit_delay_tuning_{day}.json'
     paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
+    if stage == 'pre_submit_delay' and (Path(report_dir).parent / 'threshold_cycle/pre_submit_delay_policy' / f'committed_{day}.json').exists():
+        from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths
+        report_file, policy_file, pointer, _ = committed_paths(Path(report_dir).parent, day)
+        paths.update(pre_submit_delay_tuning=report_file, pre_submit_delay_policy=policy_file,
+                     pre_submit_delay_committed_manifest=pointer)
     outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
+    if stage == 'pre_submit_delay' and 'pre_submit_delay_committed_manifest' in paths:
+        outputs['pre_submit_delay_committed_manifest'] = paths['pre_submit_delay_committed_manifest']
     if day >= '2026-10-06' and stage in {'main_machine_policy','main_auxiliary_policy'}:
         owned=Path(report_dir)/'continuous_reversal'/day
         if stage=='main_machine_policy':outputs['reversal_source_manifest']=owned/'source.json'
@@ -1516,6 +1523,19 @@ def _stage_output_issues(report_dir, day, stage):
         paths = stage_artifacts(report_dir, day, stage)
         report = _load_json(paths['pre_submit_delay_tuning'])
         policy = _load_json(paths['pre_submit_delay_policy'])
+        if policy.get('schema') == 'pre_submit_delay_policy_v2':
+            from src.engine.scalping.pre_submit_delay_initial_policy import validate, code_contract, verify_source
+            try:
+                validate(policy, report)
+                verify_source(Path(report_dir).parent, report)
+                if report.get('source_date') != day or policy.get('code_contract_sha256') != code_contract():
+                    raise ValueError('source_date_or_release_code_changed')
+                ledger_path = stage_input_paths(report_dir, day, stage)['pre_submit_delay_source_ledger']
+                if ledger_path.exists() and _load_json(ledger_path).get('compact_source_sha256') != report.get('source_sha256'):
+                    raise ValueError('source_ledger_generation_changed')
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                errors.append(f'{stage}:v2_contract_invalid:{exc}')
+            return errors
         if (report.get('schema') != 'pre_submit_delay_tuning_v1'
             or policy.get('schema') != 'pre_submit_delay_policy_v1'
             or report.get('source_date') != day or policy.get('source_date') != day
@@ -1562,7 +1582,9 @@ def stage_commands(stage, day, publication, *, recovery=False):
                         '--publication-date', publication)] + fixed_watch_commands()
     if stage == 'pre_submit_delay':
         return [command('scalping.pre_submit_delay_tuning', '--date', day,
-                        '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger')]
+                        '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger',
+                        *(['--initial-policy-v2', '--publication-date', publication]
+                          if publication >= '2026-10-10' and day >= '2026-09-29' else []))]
     if stage == 'legacy_machine_report':
         return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication,
                         *(['--report-only'] if reversal_enabled else ['--activate-now']))]

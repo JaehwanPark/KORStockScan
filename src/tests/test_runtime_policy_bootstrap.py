@@ -117,6 +117,7 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
             "env_overrides": {
                 "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED": "true",
                 "KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED": "true",
+                "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256": "a" * 64,
             },
             "selected_families": ["score65_74_recovery_probe", "limit_down_watch"],
         },
@@ -183,6 +184,7 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
     assert manifest["env_overrides"]["KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED"] == "false"
     assert "limit_down_watch" not in manifest["selected_families"]
     assert "KORSTOCKSCAN_EXPIRED_SHOULD_NOT_LOAD" not in manifest["env_overrides"]
+    assert "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256" not in manifest["env_overrides"]
     assert manifest["direct_family_receipts"][0]["family"] == "direct_family"
     assert any(
         row.get("reason") == "outside_active_window"

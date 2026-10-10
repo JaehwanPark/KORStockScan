@@ -194,6 +194,12 @@ def test_pre_submit_monitor_separates_unobservable_sources_from_count_mismatch(t
     healthy = monitor.pre_submit_delay_source_semantics(tmp_path, now)
     assert healthy["status"] == "observed_no_gap"
     assert healthy["healthy_by_scope"]["producer_summary_unobservable_with_raw|scalping_scanner_fast_precheck"] == 1
+    previous_stat=raw.stat()
+    raw.write_text(raw.read_text().replace('355390','355391'))
+    os.utime(raw,ns=(previous_stat.st_atime_ns,previous_stat.st_mtime_ns))
+    rewritten=monitor.pre_submit_delay_source_semantics(tmp_path,now,healthy['cursor'])
+    assert rewritten['diagnostics']['raw_generation_rewritten_or_legacy_cursor']==1
+    assert rewritten['sources']['raw']=='partial'
     raw.write_text("")
     reset = monitor.pre_submit_delay_source_semantics(tmp_path, now, healthy["cursor"])
     assert reset["sources"]["raw"] == "partial"

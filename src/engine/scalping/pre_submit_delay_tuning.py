@@ -15,6 +15,7 @@ import os
 import tempfile
 import time
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,14 @@ _QUOTE_SOURCE_KEYS = (
     "ws_last_0d_epoch", "quote_consistency_state",
     "quote_valid", "quote_source_reason", "route_depth_source_sha256",
 )
+MAX_V2_SCAN_BYTES = 2 * 1024 * 1024 * 1024
+MAX_V2_RECORD_BYTES = 64 * 1024
+_V2_SOURCE_FIELDS = frozenset(_DECISION_SOURCE_KEYS + _QUOTE_SOURCE_KEYS + (
+    'decision_source_sha256','quote_source_sha256','original_evaluation_attempt_id',
+    'evaluation_attempt_id','request_id','ai_decision_trace_id','anchor_contract_version',
+    'anchor_kind','entry_mechanistic_policy_sha256','entry_ai_soft_policy_sha256',
+    'primary_branch_id','matched_branch_ids','entry_action','auxiliary_effective_action',
+))
 
 
 def _digest(payload: Any) -> str:
@@ -63,7 +72,13 @@ def _digest(payload: Any) -> str:
 
 def decision_source_sha256(fields: dict[str, Any]) -> str:
     """Logical generation shared by the observer and its first reader."""
-    return _digest({key: str(fields.get(key)) for key in _DECISION_SOURCE_KEYS})
+    keys = _DECISION_SOURCE_KEYS
+    if fields.get('anchor_contract_version') == 2:
+        keys += ('anchor_contract_version', 'anchor_kind', 'evaluation_attempt_id',
+                 'request_id', 'ai_decision_trace_id', 'entry_mechanistic_policy_sha256',
+                 'entry_ai_soft_policy_sha256', 'primary_branch_id', 'entry_action',
+                 'auxiliary_effective_action')
+    return _digest({key: str(fields.get(key)) for key in keys})
 
 
 def quote_source_sha256(fields: dict[str, Any]) -> str:
@@ -75,7 +90,7 @@ def expected_route_for_session(session: Any) -> str | None:
     bucket = str(session or "").strip().upper()
     if not bucket or bucket in {"CLOSED", "SESSION_TRANSITION", "UNKNOWN"}:
         return None
-    return "NXT_ONLY" if "PREMARKET" in bucket else "KRX_NXT_INTEGRATED"
+    return "NXT_ONLY" if "PREMARKET" in bucket or bucket == 'PRE' else "KRX_NXT_INTEGRATED"
 
 
 def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | None:
@@ -128,7 +143,15 @@ def policy_path(target_date: str) -> Path:
 
 def _source_rows(target_date: str, *, data_root: Path | None = None,
                  allowed_current_ids: set[str] | None = None,
-                 strict_projection: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                 strict_projection: bool = False, source_snapshot=None,
+                 v2_minimal=False, resident_claim=None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if source_snapshot is not None:
+        source_snapshot.verify(target_date, data_root or DATA_DIR)
+        rows = source_snapshot.rows
+        if allowed_current_ids is not None:
+            rows = [row for row in rows if row.get("emitted_date") != target_date
+                    or row.get("execution_source_event_sha256") in allowed_current_ids]
+        return rows, dict(source_snapshot.source)
     from src.engine.pipeline_event_summary import execution_projection_identity
     strict_projection = strict_projection or target_date >= "2026-09-29"
     baseline = policy_refresh_start_date(target_date)
@@ -148,6 +171,8 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
                 continue
     source_partitions.sort()
     paths = [path for _, path in source_partitions]
+    if resident_claim is not None:
+        resident_claim.grow(len(paths) * 1024)
     rows: list[dict[str, Any]] = []
     source_hash = hashlib.sha256()
     total_bytes = 0
@@ -158,17 +183,23 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
     duplicate_identities: set[str] = set()
     stage_counts = Counter()
     source_dates: set[str] = set()
+    partition_generations = {}
+    cumulative_generations = {}
     for source_date, path in source_partitions:
         source_dates.add(source_date)
         before = path.stat()
-        if path.is_symlink() or before.st_size > 64 * 1024 * 1024:
+        partition_digest = hashlib.sha256()
+        if (path.is_symlink() or not path.resolve().is_relative_to(root.resolve())
+                or any(parent.is_symlink() for parent in path.parents) or before.st_size > 64 * 1024 * 1024):
             raise ValueError("delay_partition_invalid_or_unbounded")
         with path.open(encoding="utf-8") as handle:
-            for line in handle:
+            for line in iter(lambda:handle.readline(MAX_V2_RECORD_BYTES+1) if v2_minimal else handle.readline(), ''):
                 total_bytes += len(line.encode())
-                if total_bytes > 64 * 1024 * 1024 or not line.endswith("\n"):
+                if (total_bytes > (MAX_V2_SCAN_BYTES if v2_minimal else 64 * 1024 * 1024)
+                        or not line.endswith("\n") or v2_minimal and len(line.encode())>MAX_V2_RECORD_BYTES):
                     raise ValueError("delay_partition_decoded_budget_or_partial_line")
                 source_hash.update(line.encode())
+                partition_digest.update(line.encode())
                 row = json.loads(line)
                 if row.get("emitted_date") != source_date or row.get("family") != FAMILY:
                     raise ValueError("delay_partition_date_or_family_mismatch")
@@ -186,11 +217,23 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
                 if identity in seen and seen[identity] != content_sha:
                     raise ValueError("delay_partition_identity_collision")
                 if identity not in seen:
+                    retained = row
+                    if v2_minimal:
+                        fields = row.get('fields')
+                        if not isinstance(fields,dict):
+                            raise ValueError('delay_projection_fields_invalid')
+                        # Original identity is checked before this projection.
+                        # Full-field digest preserves conflicts in unused fields.
+                        retained = {key:value for key,value in row.items() if key!='fields'}
+                        retained['fields'] = {key:value for key,value in fields.items() if key in _V2_SOURCE_FIELDS}
+                        retained['fields']['_source_fields_sha256'] = _digest(fields)
+                    if resident_claim is not None:
+                        resident_claim.grow(len(json.dumps(retained,allow_nan=False).encode())*8+512)
                     if (allowed_current_ids is not None and source_date == target_date
                             and identity not in allowed_current_ids):
                         isolated_event_count += 1
                     else:
-                        rows.append(row)
+                        rows.append(retained)
                     seen[identity] = content_sha
                 else:
                     duplicate_event_count += 1
@@ -200,6 +243,9 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
             after.st_ino, after.st_size, after.st_mtime_ns
         ):
             raise ValueError("delay_partition_changed_during_read")
+        partition_generations[str(path)] = {"size": before.st_size, "sha256": partition_digest.hexdigest()}
+        cumulative_generations[source_date] = {'sha256':source_hash.hexdigest(),
+            'paths':list(partition_generations)}
     current_partitions = sorted(
         (source_date, path)
         for source_date, directory in (
@@ -220,6 +266,8 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
                           "no_matched_delay_source_events" if isolated_event_count else
                           "clean_baseline_delay_observations_missing"),
         "paths": [str(path) for path in paths],
+        "partition_generations": partition_generations,
+        "cumulative_generations": cumulative_generations,
         "window_policy": ("selected_policy_forward_through_target_date"
                           if baseline != "2026-06-05" else
                           "clean_baseline_cumulative_through_target_date"),
@@ -236,7 +284,65 @@ def _source_rows(target_date: str, *, data_root: Path | None = None,
         "isolated_current_event_count": isolated_event_count,
         "raw_stage_counts": dict(stage_counts),
         "sha256": source_hash.hexdigest() if paths else None,
+        **({'source_projection':'v2_minimal_fields_original_identity_verified',
+             'resident_claim_bytes':resident_claim.size} if v2_minimal and resident_claim is not None else {}),
     }
+
+
+@dataclass
+class SourceSnapshot:
+    """One decode per family run; independent verification still hashes bytes."""
+    target_date: str
+    data_root: Path
+    rows: list
+    source: dict
+    budget_claim: object = None
+
+    @classmethod
+    def load(cls, target_date, data_root, *, v2_minimal=False):
+        from src.engine.lifecycle.research_input_budget import Claim
+        root = Path(data_root).resolve()
+        floor = policy_refresh_start_date(target_date)
+        size = sum(path.stat().st_size for directory in (root / 'threshold_cycle').glob('date=*/family=' + FAMILY)
+                   if floor <= directory.parent.name.removeprefix('date=') <= target_date
+                   for path in directory.glob('part-execution-*.jsonl'))
+        if v2_minimal and size > MAX_V2_SCAN_BYTES:
+            raise ValueError('delay_scan_job_partition_resume_required')
+        claim = Claim(0 if v2_minimal else size * 8)
+        try:
+            if v2_minimal:
+                with Claim(MAX_V2_RECORD_BYTES*8):
+                    rows, source = _source_rows(target_date,data_root=root,v2_minimal=True,resident_claim=claim)
+            else:
+                rows, source = _source_rows(target_date, data_root=root)
+            if source['bytes_read'] != size:
+                raise ValueError('delay_source_changed_during_budget_admission')
+        except Exception:
+            claim.close()
+            raise
+        return cls(target_date, Path(data_root).resolve(), rows, source, claim)
+
+    def verify(self, target_date, data_root):
+        if target_date != self.target_date or Path(data_root).resolve() != self.data_root:
+            raise ValueError("delay_snapshot_date_or_root_changed")
+        current = sorted(str(path) for directory in (self.data_root / "threshold_cycle").glob(
+            "date=*/family=" + FAMILY) if policy_refresh_start_date(target_date)
+            <= directory.parent.name.removeprefix("date=") <= target_date
+            for path in directory.glob("part-execution-*.jsonl"))
+        if current != sorted(self.source["paths"]):
+            raise ValueError("delay_snapshot_inventory_changed")
+        for name, generation in self.source["partition_generations"].items():
+            path = Path(name)
+            from src.engine.lifecycle.holding_window_generation import source_stat
+            before = path.stat()
+            if path.is_symlink() or path.stat().st_size != generation["size"]:
+                raise ValueError("delay_snapshot_generation_changed")
+            hasher = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(64 * 1024), b""):
+                    hasher.update(chunk)
+            if hasher.hexdigest() != generation["sha256"] or source_stat(path.stat()) != source_stat(before):
+                raise ValueError("delay_snapshot_generation_changed")
 
 
 def _number(value: Any) -> float | None:
@@ -460,7 +566,7 @@ def family_source_ledger_path(data_root: Path, target_date: str) -> Path:
     return Path(data_root) / "pipeline_event_summaries" / f"pre_submit_delay_source_ledger_{target_date}.json"
 
 
-def seal_family_source_ledger(data_root: Path, target_date: str) -> dict[str, Any]:
+def seal_family_source_ledger(data_root: Path, target_date: str, *, source_snapshot=None) -> dict[str, Any]:
     """Bind exact raw/compact overlap without requiring unrelated summary stages."""
     from src.engine.pipeline_event_summary import _producer_raw_ledger, load_summary_rows, producer_summary_paths
 
@@ -470,7 +576,8 @@ def seal_family_source_ledger(data_root: Path, target_date: str) -> dict[str, An
         raise ValueError("raw_source_missing")
     if raw["source_quality_reasons"].get("invalid_json") or raw["source_quality_reasons"].get("incomplete_line"):
         raise ValueError("unidentifiable_raw_source_quarantine")
-    compact_rows, compact = _source_rows(target_date, data_root=data_root, strict_projection=True)
+    source_snapshot = source_snapshot or SourceSnapshot.load(target_date, data_root)
+    compact_rows, compact = _source_rows(target_date, data_root=data_root, strict_projection=True, source_snapshot=source_snapshot)
     raw_counts = Counter(identity for ids in raw["selected_execution_identities"].values() for identity in ids)
     compact_counts = Counter(str(row.get("execution_source_event_sha256") or "")
                              for row in compact_rows if row.get("emitted_date") == target_date)
@@ -523,13 +630,13 @@ def seal_family_source_ledger(data_root: Path, target_date: str) -> dict[str, An
     }
     ledger["ledger_sha256"] = _digest(ledger)
     _atomic_json(family_source_ledger_path(data_root, target_date), ledger)
-    issues = family_source_ledger_issues(data_root, target_date)
+    issues = family_source_ledger_issues(data_root, target_date, source_snapshot=source_snapshot)
     if issues:
         raise ValueError(",".join(issues))
     return ledger
 
 
-def family_source_ledger_issues(data_root: Path, target_date: str) -> list[str]:
+def family_source_ledger_issues(data_root: Path, target_date: str, *, source_snapshot=None) -> list[str]:
     from src.engine.pipeline_event_summary import _part_snapshot_stamp, _source_part_path
 
     data_root = Path(data_root)
@@ -553,7 +660,11 @@ def family_source_ledger_issues(data_root: Path, target_date: str) -> list[str]:
                 or Path(str(_source_part_path(raw_dir, target_date, "late")) + ".gz").exists()) != any(
                     part["partition"] == "late" for part in ledger["raw_parts"]):
             return ["raw_generation_changed"]
-        _, compact = _source_rows(target_date, data_root=data_root, strict_projection=True)
+        if source_snapshot is not None and target_date < source_snapshot.target_date:
+            source_snapshot.verify(source_snapshot.target_date, data_root)
+            compact = source_snapshot.source.get('cumulative_generations', {}).get(target_date, {})
+        else:
+            _, compact = _source_rows(target_date, data_root=data_root, strict_projection=True, source_snapshot=source_snapshot)
         if compact["sha256"] != ledger["compact_source_sha256"] or compact["paths"] != ledger["compact_paths"]:
             return ["compact_generation_changed"]
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
@@ -949,22 +1060,24 @@ def price_pattern_projection(report: dict[str, Any]) -> dict[str, Any]:
 
 def build_report(
     target_date: str, *, effective_date: str, write: bool = True,
-    require_family_ledger: bool = False,
+    require_family_ledger: bool = False, source_snapshot=None, input_root=None, output_root=None,
 ) -> dict[str, Any]:
     date.fromisoformat(target_date)
     if date.fromisoformat(effective_date) <= date.fromisoformat(target_date):
         raise ValueError("delay_effective_date_not_after_source_date")
     started = time.monotonic()
+    data_root = Path(input_root) if input_root is not None else DATA_DIR
+    source_snapshot = source_snapshot or SourceSnapshot.load(target_date, data_root)
     allowed_ids = None
     family_ledger = None
     if require_family_ledger:
-        issues = family_source_ledger_issues(DATA_DIR, target_date)
+        issues = family_source_ledger_issues(data_root, target_date, source_snapshot=source_snapshot)
         if issues:
             raise ValueError("delay_family_source_invalid:" + ",".join(issues))
-        family_ledger = json.loads(family_source_ledger_path(DATA_DIR, target_date).read_text(encoding="utf-8"))
+        family_ledger = json.loads(family_source_ledger_path(data_root, target_date).read_text(encoding="utf-8"))
         allowed_ids = set(family_ledger["matched_event_ids"])
-    rows, source = _source_rows(target_date, allowed_current_ids=allowed_ids,
-                                strict_projection=require_family_ledger)
+    rows, source = _source_rows(target_date, data_root=data_root, allowed_current_ids=allowed_ids,
+                                strict_projection=require_family_ledger, source_snapshot=source_snapshot)
     if family_ledger is not None:
         if family_ledger["status"] == "valid_empty" and not rows:
             source["status"] = "valid_empty"
@@ -972,7 +1085,8 @@ def build_report(
         source["family_source_ledger_sha256"] = family_ledger["ledger_sha256"]
         source["raw_only_event_count"] = len(family_ledger["raw_only_event_ids"])
         source["compact_only_event_count"] = len(family_ledger["compact_only_event_ids"])
-    existing_quote_census = _existing_quote_census(target_date)
+    existing_quote_census = (_existing_quote_census(target_date) if write and input_root is None
+                            and output_root is None else {"status": "not_evaluated_diagnostic"})
     commits: dict[str, dict[str, Any]] = {}
     samples: dict[str, dict[float, dict[str, Any]]] = defaultdict(dict)
     terminals: dict[str, dict[str, Any]] = {}
@@ -1331,13 +1445,18 @@ def build_report(
     policy["policy_sha256"] = _digest(policy)
     report["policy_sha256"] = policy["policy_sha256"]
     if write:
-        _atomic_json(report_path(target_date), report)
-        _atomic_json(policy_path(target_date), policy)
+        source_snapshot.verify(target_date, data_root)
+        report_file = (Path(output_root) / "report/pre_submit_delay_tuning" / report_path(target_date).name
+                       if output_root is not None else report_path(target_date))
+        policy_file = (Path(output_root) / "threshold_cycle/pre_submit_delay_policy" / policy_path(target_date).name
+                       if output_root is not None else policy_path(target_date))
+        _atomic_json(report_file, report)
+        _atomic_json(policy_file, policy)
     return report
 
 
-def load_runtime_policy(*, now: datetime | None = None,
-                        decision_type: dict[str, Any] | None = None) -> dict[str, Any]:
+def _load_legacy_runtime_policy(*, now: datetime | None = None,
+                        decision_type: dict[str, Any] | None = None, _preloaded=None) -> dict[str, Any]:
     """Return zero unless an exact-date, economic-valid independent policy loads."""
     fallback = {
         "delay_sec": 0.0,
@@ -1352,7 +1471,7 @@ def load_runtime_policy(*, now: datetime | None = None,
     if not path.is_file() or path.stat().st_size > 1024 * 1024:
         return {**fallback, "status": "policy_missing_or_unbounded"}
     try:
-        policy = json.loads(path.read_text(encoding="utf-8"))
+        policy = dict(_preloaded[0]) if _preloaded is not None else json.loads(path.read_text(encoding="utf-8"))
         now_date = (now or datetime.now(KST)).astimezone(KST).date().isoformat()
         digest = policy.pop("policy_sha256")
         valid = (
@@ -1366,7 +1485,7 @@ def load_runtime_policy(*, now: datetime | None = None,
         report_file = report_path(str(policy.get("source_date") or ""))
         if not report_file.is_file() or report_file.stat().st_size > 1024 * 1024:
             return {**fallback, "status": "policy_report_missing_or_unbounded"}
-        report = json.loads(report_file.read_text(encoding="utf-8"))
+        report = dict(_preloaded[1]) if _preloaded is not None else json.loads(report_file.read_text(encoding="utf-8"))
         report_policy_digest = report.pop("policy_sha256", None)
         if (
             report_policy_digest != digest
@@ -1437,14 +1556,212 @@ def load_runtime_policy(*, now: datetime | None = None,
         return {**fallback, "status": "policy_parse_invalid"}
 
 
+_PREPARED_DELAY_POLICY = None
+_PREPARED_DELAY_KEY = None
+
+
+def _runtime_preparation_key(day):
+    # Include every mutable environment input used by preparation. A same-path
+    # enable/date/manifest change must not reuse another activation's cache.
+    return (os.getpid(), day,
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256"),
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE"),
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower(),
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"))
+
+
+def prepare_runtime_policy(*, now=None):
+    """Called by the existing preparation owner, never from warm submission."""
+    global _PREPARED_DELAY_POLICY, _PREPARED_DELAY_KEY
+    from .pre_submit_delay_initial_policy import PreparedPolicy, POLICY_SCHEMA as V2, committed_paths
+    day = (now or datetime.now(KST)).astimezone(KST).date().isoformat()
+    key = _runtime_preparation_key(day)
+    if key == _PREPARED_DELAY_KEY:
+        return {"status": "prepared_reused"}
+    _PREPARED_DELAY_POLICY = None
+    _PREPARED_DELAY_KEY = None
+    if os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {"1", "true", "on", "yes"}:
+        _PREPARED_DELAY_KEY = key
+        return {"status": "disabled"}
+    path = Path(os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE") or "")
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError("policy_unbounded")
+        policy = json.loads(path.read_text())
+        if policy.get("schema") == V2:
+            from .pre_submit_delay_initial_policy import code_contract, verify_source
+            if policy.get('code_contract_sha256') != code_contract():
+                raise ValueError('initial_delay_code_contract_changed')
+            report_file, policy_file, pointer, manifest = committed_paths(DATA_DIR, policy["source_date"])
+            prepared_report = json.loads(report_file.read_text())
+            verify_source(DATA_DIR, prepared_report)
+            if (policy_file.resolve() != path.resolve()
+                or manifest["manifest_sha256"] != key[2]
+                or os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE") != day):
+                raise ValueError("committed_policy_binding_invalid")
+            _PREPARED_DELAY_POLICY = PreparedPolicy.from_artifacts(policy, prepared_report, target_date=day)
+        else:
+            # Preserve legacy economics and selectors, but decode/validate at
+            # preparation once. Warm selection never rebuilds the full tree.
+            report_file = report_path(str(policy.get('source_date') or ''))
+            if report_file.stat().st_size > 1024*1024:
+                raise ValueError('legacy_delay_report_unbounded')
+            legacy_report = json.loads(report_file.read_text())
+            types, scopes = policy.get('type_policies') or {}, policy.get('scope_policies') or {}
+            first_key = next(iter(types), next(iter(scopes), '') + '|PREPARE')
+            result = _load_legacy_runtime_policy(now=now, decision_type={
+                'schema':'pre_submit_delay_decision_type_v1', 'type_key':first_key},
+                _preloaded=(policy, legacy_report))
+            if result.get('status') == 'loaded':
+                from types import MappingProxyType
+                _PREPARED_DELAY_POLICY = {'_legacy_maps':True, 'policy_sha256':policy['policy_sha256'],
+                    'default_delay_sec':policy.get('selected_delay_sec'),
+                    'types':MappingProxyType({k:v['selected_delay_sec'] for k,v in types.items()}),
+                    'scopes':MappingProxyType({k:v['selected_delay_sec'] for k,v in scopes.items()})}
+        _PREPARED_DELAY_KEY = key
+        return {"status": "prepared" if _PREPARED_DELAY_POLICY else "not_applicable"}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {"status": "preparation_invalid"}
+
+
+def load_runtime_policy(*, now=None, decision_type=None):
+    from .pre_submit_delay_initial_policy import PreparedPolicy
+    day = (now or datetime.now(KST)).astimezone(KST).date().isoformat()
+    enabled = os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() in {"1", "true", "on", "yes"}
+    key = _runtime_preparation_key(day)
+    if not enabled or _PREPARED_DELAY_KEY != key:
+        # v1 compatibility is retained only without a v2 manifest. Existing
+        # legacy installations keep their original validation semantics.
+        if enabled and not key[2] and day < '2026-10-10':
+            return _load_legacy_runtime_policy(now=now, decision_type=decision_type)
+        return {"delay_sec": 0, "status": "policy_not_prepared_existing_submit_behavior", "policy_sha256": None}
+    if isinstance(_PREPARED_DELAY_POLICY, PreparedPolicy):
+        fields = decision_type or {}
+        return _PREPARED_DELAY_POLICY.lookup(target_date=day, market=fields.get("session_bucket"),
+                                           kind=fields.get("machine_situation", "UNKNOWN"),
+                                           parents=fields.get("parent_compatibility"))
+    if isinstance(_PREPARED_DELAY_POLICY, dict) and _PREPARED_DELAY_POLICY.get('_legacy_maps'):
+        cache, fields = _PREPARED_DELAY_POLICY, decision_type or {}
+        if (cache['types'] or cache['scopes']) and fields.get('schema') != 'pre_submit_delay_decision_type_v1':
+            return {'delay_sec':0, 'status':'decision_type_missing', 'policy_sha256':None}
+        kind = str(fields.get('type_key') or '')
+        scope = '|'.join(kind.split('|')[:2]) if kind.count('|') == 2 else ''
+        selected = cache['types'].get(kind, cache['scopes'].get(scope, cache['default_delay_sec']))
+        return {'delay_sec':selected or 0, 'status':'loaded' if selected else 'policy_type_uncovered',
+                'policy_sha256':cache['policy_sha256'] if selected else None,
+                'selected_type_key':kind if kind in cache['types'] else None,
+                'selected_scope_key':scope if kind not in cache['types'] and scope in cache['scopes'] else None}
+    return dict(_PREPARED_DELAY_POLICY or {"delay_sec": 0,
+                "status": "no_validated_delay_policy_existing_submit_behavior", "policy_sha256": None})
+
+
+def initial_policy_projection(report):
+    from .pre_submit_delay_initial_policy import REPORT_SCHEMA as V2
+    if report.get("schema") != V2:
+        return None
+    return {key: report.get(key) for key in ("schema", "status", "census", "price_ready_pair_n", "source_sha256",
+            "policy_sha256", "code_contract_sha256", "metric_role", "decision_authority")}
+
+
+def initial_cached_projection(root, output, day, *, contract):
+    """Reuse sealed minimal opportunities; verify source bytes independently."""
+    from .pre_submit_delay_initial_policy import committed_paths, _read, verify_source, projection_contract
+    pointer = Path(output) / 'threshold_cycle/pre_submit_delay_policy' / f'committed_{day}.json'
+    if not pointer.exists():
+        return None
+    try:
+        report_file, _, _, _ = committed_paths(output, day, validate_selection=False)
+        saved = _read(report_file)
+        if saved.get('source_projection_contract_sha256') != projection_contract():
+            return None
+        verify_source(root, saved)
+        rows = [{**row,'pairs':{int(k):v for k,v in row['pairs'].items()}} for row in saved['qualified_projection']]
+        return saved, rows
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
     parser.add_argument("--effective-date", required=True)
     parser.add_argument("--require-family-ledger", action="store_true")
+    parser.add_argument("--input-root", type=Path)
+    parser.add_argument("--output-root", type=Path)
+    parser.add_argument("--initial-policy-v2", action="store_true")
+    parser.add_argument("--publication-date")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if args.initial_policy_v2:
+        from .pre_submit_delay_initial_policy import build_initial, publish, code_contract, verify_source
+        root = args.input_root or DATA_DIR
+        output = args.output_root or DATA_DIR
+        contract = code_contract()
+        cached = initial_cached_projection(root, output, args.date, contract=contract)
+        if cached is not None:
+            saved, projection = cached
+            report, policy = build_initial([], source_date=args.date,
+                publication_date=args.publication_date or datetime.now(KST).date().isoformat(),
+                effective_date=args.effective_date, source_sha256=saved['source_sha256'], code_contract_sha256=contract,
+                _projected=(projection, saved['census']), source_receipt=saved['source_receipt'])
+            def verify_cached():
+                verify_source(root, report)
+                if code_contract() != contract:
+                    raise ValueError('delay_code_changed_during_research')
+            verify_cached()
+            if not args.dry_run:
+                from .pre_submit_delay_initial_policy import committed_paths
+                incumbent = committed_paths(output, args.date, validate_selection=False)[3]['manifest_sha256']
+                publish(output, report, policy, expected_incumbent=incumbent, source_verifier=verify_cached)
+            print(json.dumps({**initial_policy_projection(report), 'source_decode_passes':0,
+                              'minimal_projection_reused':True}))
+            return 0 if policy['runtime_apply_allowed'] else 2
+        snapshot = SourceSnapshot.load(args.date, root, v2_minimal=True)
+        rows = snapshot.rows
+        ledger_generations, excluded_dates = {}, {}
+        if args.require_family_ledger:
+            matched_by_date = {}
+            from src.engine.lifecycle.holding_window_generation import byte_generation
+            for day in snapshot.source['source_dates']:
+                issues = family_source_ledger_issues(root, day, source_snapshot=snapshot)
+                if issues:
+                    excluded_dates[day] = issues
+                    continue
+                path = family_source_ledger_path(root, day)
+                before = byte_generation(path)
+                ledger = json.loads(path.read_text())
+                if byte_generation(path) != before:
+                    raise ValueError('delay_family_ledger_changed_during_read')
+                ledger_generations[day] = before
+                matched_by_date[day] = set(ledger['matched_event_ids'])
+            rows = [row for row in rows if row.get('execution_source_event_sha256') in
+                    matched_by_date.get(row.get('emitted_date'), set())]
+        report, policy = build_initial(rows, source_date=args.date,
+            publication_date=args.publication_date or datetime.now(KST).date().isoformat(),
+            effective_date=args.effective_date, source_sha256=snapshot.source["sha256"], code_contract_sha256=contract,
+            source_receipt={'schema':'pre_submit_delay_input_generation_v1',
+                'through_date':args.date, 'partition_generations':snapshot.source['partition_generations'],
+                'ledger_generations':ledger_generations, 'isolated_dates':excluded_dates})
+        snapshot.verify(args.date, root)
+        def verify_inputs():
+            snapshot.verify(args.date, root)
+            verify_source(root, report)
+            if code_contract() != contract:
+                raise ValueError('delay_code_changed_during_research')
+        if not args.dry_run:
+            if policy["runtime_apply_allowed"]:
+                from .pre_submit_delay_initial_policy import committed_paths
+                pointer = output / "threshold_cycle/pre_submit_delay_policy" / f"committed_{args.date}.json"
+                incumbent = committed_paths(output, args.date, validate_selection=False)[3]["manifest_sha256"] if pointer.exists() else None
+                publish(output, report, policy, expected_incumbent=incumbent,
+                        source_verifier=verify_inputs)
+            else:
+                _atomic_json(output / "report/pre_submit_delay_tuning" / f"initial_policy_blocked_{args.date}.json", report)
+        print(json.dumps(initial_policy_projection(report)))
+        return 0 if policy["runtime_apply_allowed"] else 2
     result = build_report(args.date, effective_date=args.effective_date,
-                          require_family_ledger=args.require_family_ledger)
+                          require_family_ledger=args.require_family_ledger, write=not args.dry_run,
+                          input_root=args.input_root, output_root=args.output_root)
     print(json.dumps({
         "status": result["status"],
         "price_analysis": price_pattern_projection(result),

@@ -6,6 +6,7 @@ import atexit
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -14,6 +15,7 @@ import time
 from collections import deque
 from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error, log_info
@@ -48,11 +50,16 @@ class BoundedObservationQueue:
         self._jobs = deque()
         self._scheduled = self._closed = False
         self._items = self._bytes = 0
+        self._category_items = {}
+        self._category_bytes = {}
         self._stats = dict(queued=0, completed=0, append_confirmed=0,
                            completed_without_append_receipt=0, failed=0, unavailable=0,
                            peak_items=0, peak_bytes=0)
 
     def submit(self, callback, *args, **kwargs):
+        category = kwargs.pop('observation_category', 'default')
+        if category not in {'default', 'pre_submit_delay'}:
+            return self._unavailable('observation_category_invalid')
         try:
             # Copy at admission, never retain a live stock or an AI payload.
             encoded = json.dumps([args, kwargs], ensure_ascii=True,
@@ -64,9 +71,16 @@ class BoundedObservationQueue:
             if (self._closed or size > self.max_item_bytes
                     or self._items >= self.max_items or self._bytes + size > self.max_bytes):
                 return self._unavailable('observation_queue_unavailable')
-            self._jobs.append((callback, encoded, time.perf_counter()))
+            if category == 'pre_submit_delay' and (
+                self._category_items.get(category, 0) >= min(256, self.max_items // 4)
+                or self._category_bytes.get(category, 0) + size > self.max_bytes // 4
+            ):
+                return self._unavailable('observation_category_budget_exceeded')
+            self._jobs.append((callback, encoded, time.perf_counter(), category))
             self._items += 1
             self._bytes += size
+            self._category_items[category] = self._category_items.get(category, 0) + 1
+            self._category_bytes[category] = self._category_bytes.get(category, 0) + size
             if not self._scheduled:
                 self._scheduled = True
                 try:
@@ -75,6 +89,8 @@ class BoundedObservationQueue:
                     self._jobs.pop()
                     self._items -= 1
                     self._bytes -= size
+                    self._category_items[category] -= 1
+                    self._category_bytes[category] -= size
                     self._scheduled = False
                     return self._unavailable('observation_executor_unavailable')
             self._stats['queued'] += 1
@@ -92,13 +108,22 @@ class BoundedObservationQueue:
 
     def _drain(self):
         from src.engine.monitoring.runtime_performance import observe, failure
+        started, processed = time.perf_counter(), 0
         while True:
             with self._condition:
                 if not self._jobs:
                     self._scheduled = False
                     self._condition.notify_all()
                     return
-                callback, encoded, queued_at = self._jobs.popleft()
+                if processed >= 8 or (processed and time.perf_counter() - started >= .004):
+                    try:
+                        self.executor.submit(self._drain)
+                        return
+                    except Exception:
+                        # Continue as the sole drain owner; no sync producer
+                        # fallback and no abandoned accepted observations.
+                        processed, started = 0, time.perf_counter()
+                callback, encoded, queued_at, category = self._jobs.popleft()
             try:
                 observe('observation_queue_wait', time.perf_counter() - queued_at)
                 args, kwargs = json.loads(encoded)
@@ -121,12 +146,17 @@ class BoundedObservationQueue:
                 with self._condition:
                     self._items -= 1
                     self._bytes -= len(encoded)
+                    self._category_items[category] -= 1
+                    self._category_bytes[category] -= len(encoded)
+                    processed += 1
                     self._condition.notify_all()
 
     def snapshot(self):
         with self._condition:
             return {**self._stats, 'pending_items': self._items,
-                    'pending_bytes': self._bytes, 'closed': self._closed}
+                    'pending_bytes': self._bytes, 'closed': self._closed,
+                    'category_items': dict(self._category_items),
+                    'category_bytes': dict(self._category_bytes)}
 
     def close(self, *, timeout=1.0):
         deadline = time.monotonic() + max(0, timeout)
@@ -319,14 +349,15 @@ _HIGH_VOLUME_COMPACT_FIELD_LIMIT = 96
 _MAIN_LIFECYCLE_IDENTITY_SCHEMA = "main_scalping_lifecycle_pipeline_identity_v1"
 
 
-def _event_dir() -> Path:
+def _event_dir(*, ensure_exists: bool = True) -> Path:
     path = DATA_DIR / "pipeline_events"
-    path.mkdir(parents=True, exist_ok=True)
+    if ensure_exists:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _event_path(target_date: str) -> Path:
-    return _event_dir() / f"pipeline_events_{target_date}.jsonl"
+    return _event_dir(ensure_exists=False) / f"pipeline_events_{target_date}.jsonl"
 
 
 def _event_storage_partition_date(fields: dict[str, str], *, emitted_date: str) -> str:
@@ -365,14 +396,15 @@ def _summary_dir() -> Path:
     return path
 
 
-def _threshold_cycle_dir() -> Path:
+def _threshold_cycle_dir(*, ensure_exists: bool = True) -> Path:
     path = DATA_DIR / "threshold_cycle"
-    path.mkdir(parents=True, exist_ok=True)
+    if ensure_exists:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _threshold_cycle_event_path(target_date: str) -> Path:
-    return _threshold_cycle_dir() / f"threshold_events_{target_date}.jsonl"
+    return _threshold_cycle_dir(ensure_exists=False) / f"threshold_events_{target_date}.jsonl"
 
 
 def _compaction_mode() -> str:
@@ -711,24 +743,30 @@ def _pipeline_event_partition_lock_path(path: Path) -> Path:
 
 
 def _prepare_jsonl_parent(path: Path) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Validate every append, but only create a missing parent. Repeated mkdir
+    # also performs an is_dir/stat round trip on an existing directory.
+    parent = path.parent
     try:
-        parent_metadata = path.parent.lstat()
+        try:
+            parent_metadata = parent.lstat()
+        except FileNotFoundError:
+            parent.mkdir(parents=True, exist_ok=True)
+            parent_metadata = parent.lstat()
     except OSError as exc:
-        raise OSError(f"pipeline event parent is unavailable: {path.parent}") from exc
+        raise OSError(f"pipeline event parent is unavailable: {parent}") from exc
     if not stat.S_ISDIR(parent_metadata.st_mode):
-        raise OSError(f"pipeline event parent is not a real directory: {path.parent}")
+        raise OSError(f"pipeline event parent is not a real directory: {parent}")
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     directory_flags |= getattr(os, "O_CLOEXEC", 0)
     directory_flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path.parent, directory_flags)
+    descriptor = os.open(parent, directory_flags)
     opened_metadata = os.fstat(descriptor)
     if not stat.S_ISDIR(opened_metadata.st_mode) or (
         opened_metadata.st_dev,
         opened_metadata.st_ino,
     ) != (parent_metadata.st_dev, parent_metadata.st_ino):
         os.close(descriptor)
-        raise OSError(f"pipeline event parent changed before open: {path.parent}")
+        raise OSError(f"pipeline event parent changed before open: {parent}")
     return descriptor
 
 
@@ -869,6 +907,7 @@ def emit_pipeline_event(
     *,
     record_id=None,
     fields: dict | None = None,
+    observed_at_epoch: float | None = None,
 ) -> dict:
     """Emit legacy text plus a structured event and return persistence outcome.
 
@@ -881,6 +920,15 @@ def emit_pipeline_event(
     safe_name = str(name or "").strip() or "-"
     safe_code = str(code or "").strip()[:6] or "-"
     safe_stage = str(stage or "").strip() or "-"
+
+    emitted_dt = datetime.now()
+    if observed_at_epoch is not None:
+        if isinstance(observed_at_epoch, bool):
+            raise ValueError('pipeline_observation_clock_invalid')
+        observed = float(observed_at_epoch)
+        if not math.isfinite(observed) or observed <= 0 or observed > time.time() + .5:
+            raise ValueError('pipeline_observation_clock_invalid')
+        emitted_dt = datetime.fromtimestamp(observed, ZoneInfo('Asia/Seoul'))
 
     normalized_fields = {str(key): str(value) for key, value in (fields or {}).items()}
     merged_fields = {}
@@ -899,7 +947,6 @@ def emit_pipeline_event(
     if _should_emit_text_info(safe_stage, normalized_fields):
         log_info(text_payload)
 
-    emitted_dt = datetime.now()
     emitted_date = emitted_dt.strftime("%Y-%m-%d")
     storage_partition_date = _event_storage_partition_date(
         normalized_fields,
@@ -996,7 +1043,7 @@ def emit_pipeline_event(
                 if safe_stage in LOSSLESS_ORDER_STAGES:
                     # The existing family projection receives exact low-volume
                     # owner inputs directly; it no longer requires a raw backfill.
-                    family_dir = _threshold_cycle_dir() / ("date=" + emitted_date) / ("family=" + threshold_family)
+                    family_dir = _threshold_cycle_dir(ensure_exists=False) / ("date=" + emitted_date) / ("family=" + threshold_family)
                     minute = re.sub(r"[^0-9]", "", event_payload["emitted_at"][:16])
                     part = family_dir / ("part-execution-" + minute + ".jsonl")
                     _append_partition_jsonl(family_dir / ".execution-compact.jsonl", part,

@@ -122,13 +122,16 @@ class PositionPeakRuntimeLedger:
                 "updated_at_epoch": float(observed_at),
                 "update_reason": str(reason or "peak_update"),
             }
-            if abs(_safe_float(previous.get("average_price"), 0.0) - average_price) <= 0.01:
-                for key in (
-                    "trailing_arm_at_epoch", "trailing_arm_market",
-                    "trailing_arm_start_pct", "trailing_arm_policy_sha256",
-                ):
-                    if key in previous:
-                        row[key] = previous[key]
+            # First-BUY classification belongs to the position cycle, and ADD
+            # must not replace it when the average cost changes.
+            if 'trailing_situation_pin' in previous:
+                row['trailing_situation_pin'] = previous['trailing_situation_pin']
+            for key in (
+                "trailing_arm_at_epoch", "trailing_arm_market",
+                "trailing_arm_start_pct", "trailing_arm_policy_sha256",
+            ):
+                if key in previous:
+                    row[key] = previous[key]
             if row == previous:
                 return dict(row)
             rows[cycle_id] = row
@@ -167,6 +170,24 @@ class PositionPeakRuntimeLedger:
             rows[cycle_id] = row
             self._write(rows)
             return dict(row)
+
+    def record_situation_pin(self, stock, pin):
+        from .trailing_situation_policy import validate_pin
+        cycle_id = position_cycle_id(stock)
+        if not validate_pin(pin, cycle_id):
+            return False
+        with self._lock:
+            rows = self.load()
+            row = dict(rows.get(cycle_id) or {})
+            if not row:
+                return False
+            previous = row.get('trailing_situation_pin')
+            if previous is not None:
+                return previous == pin
+            row['trailing_situation_pin'] = pin
+            rows[cycle_id] = row
+            self._write(rows)
+            return True
 
     def restore_peak(self, stock: dict[str, Any]) -> tuple[int, str]:
         row = self.get_for_stock(stock)

@@ -162,6 +162,11 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
+    # Dependency consumers need the sealed metadata, not another decode of
+    # every timeline. This receipt is emitted by the verified projection
+    # producer and bound to the independently verifiable exact file bytes.
+    from src.engine.lifecycle.holding_window_generation import seal_dependency_receipt
+    seal_dependency_receipt(destination, body)
     return destination
 
 
@@ -202,6 +207,13 @@ def save_monitor_snapshot_manifest(
         if holding_path.stat().st_size > 64 * 1024 * 1024:
             raise ValueError("postclose_exit_holding_report_size_invalid")
         holding = json.loads(holding_path.read_text())
+        from src.engine.lifecycle.holding_window_generation import verify_window
+        window = holding.get("input_window_dependencies")
+        verify_window(DATA_DIR, window)
+        if holding.get("input_window_generation_sha256") != window["input_window_generation_sha256"]:
+            raise ValueError("window_dependency_report_binding_invalid")
+        payload["input_window_dependencies"] = window
+        payload["input_window_generation_sha256"] = window["input_window_generation_sha256"]
         holding_costs = (holding.get("actual_cost_source_generations") or {}).get(target_date)
         if (holding_costs != payload["actual_cost_source_generation"]
                 and (holding_costs is not None or payload["actual_cost_source_generation"]["count"]
@@ -268,6 +280,13 @@ def verified_postclose_exit_snapshot_manifest(target_date: str, *, data_root: Pa
         if holding_path.stat().st_size > 64 * 1024 * 1024:
             return None
         holding = json.loads(holding_path.read_text())
+        from src.engine.lifecycle.holding_window_generation import verify_window
+        window = holding.get("input_window_dependencies")
+        verify_window(data_root, window)
+        if (manifest.get("input_window_dependencies") != window
+            or manifest.get("input_window_generation_sha256") != window["input_window_generation_sha256"]
+            or holding.get("input_window_generation_sha256") != window["input_window_generation_sha256"]):
+            return None
         if (holding.get("date") != target_date
             or (holding.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
             return None

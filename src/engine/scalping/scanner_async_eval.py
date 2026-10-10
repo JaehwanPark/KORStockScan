@@ -708,6 +708,12 @@ class ScannerAsyncEvalCoordinator:
                     self._completed.pop(oldest_request_id, None)
                     self._undrained_request_ids.discard(oldest_request_id)
         record_async_disposition(result, 'worker_completed', status)
+        try:
+            from .pre_submit_delay_observation import register_pass_result
+            register_pass_result(result)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            from src.engine.monitoring.runtime_performance import failure
+            failure('pre_submit_delay_pass_capture', 'source_unobservable', emit_log=False)
         if terminal_reason:
             record_async_disposition(result, 'terminal_nonexecution', terminal_reason)
         for old in evicted:

@@ -283,7 +283,7 @@ def test_runtime_replays_batched_0d_first_crossing_before_latest_quote(
     batch, _ = classify_ws_history(_snapshot(depths, trades), previous,
                                    now_ms=base + second_offset_ms, max_quote_age_ms=700)
     monkeypatch.setattr(handlers, "_scalp_trailing_values_for_evaluation",
-                        lambda at: (dict(DEFAULTS), "REGULAR"))
+                        lambda at, stock=None: (dict(DEFAULTS), "REGULAR"))
     monkeypatch.setattr(handlers, "_scalp_trailing_arm_was_latched",
                         lambda stock: False)
     monkeypatch.setattr(handlers, "_scalp_trailing_latch_arm",
@@ -673,7 +673,7 @@ def test_pre_arm_fast_monitor_updates_classifier_without_rest(monkeypatch):
     monkeypatch.setattr(handlers, "calculate_net_profit_rate",
                         lambda buy, price: (price / buy - 1) * 100)
     monkeypatch.setattr(handlers, "_scalp_trailing_values_for_evaluation",
-                        lambda now: (dict(DEFAULTS), "REGULAR"))
+                        lambda now, stock=None: (dict(DEFAULTS), "REGULAR"))
     monkeypatch.setattr(handlers, "_scalp_trailing_arm_was_latched", lambda stock: False)
     monkeypatch.setattr(handlers, "_build_quote_consistency_fields",
                         lambda *args, **kwargs: ({"quote_consistency_state": "ok"},

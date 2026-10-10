@@ -66,9 +66,11 @@ def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_
 
 def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_path, monkeypatch):
     from src.engine.sniper_trade_review_report import completed_census_manifest
+    from src.engine.lifecycle.holding_window_generation import capture_window
 
     directory = tmp_path / "report" / "monitor_snapshots"
     directory.mkdir(parents=True)
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", directory)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", directory / "manifests")
     day = "2026-09-30"
@@ -84,8 +86,12 @@ def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_
     paths = {"trade_review": service.save_monitor_snapshot("trade_review", day, trade)}
     for kind in ("post_sell_feedback", "missed_entry_counterfactual",
                  "holding_exit_observation"):
-        paths[kind] = service.save_monitor_snapshot(
-            kind, day, {"date": day, "meta": {"snapshot_profile": "postclose_exit"}})
+        body = {"date": day, "meta": {"snapshot_profile": "postclose_exit"}}
+        if kind == "holding_exit_observation":
+            window = capture_window(tmp_path, [day])
+            body.update(input_window_dependencies=window,
+                        input_window_generation_sha256=window["input_window_generation_sha256"])
+        paths[kind] = service.save_monitor_snapshot(kind, day, body)
     pipeline = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     pipeline.parent.mkdir()
     pipeline.write_text('{}\n')
@@ -516,6 +522,7 @@ def test_cost_only_revision_invalidates_sidecar_and_manifest_without_pipeline_ch
     from src.engine import holding_exit_observation_report as holding
     from src.engine.sniper_trade_review_report import completed_census_manifest
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation, receipt_path
+    from src.engine.lifecycle.holding_window_generation import capture_window
     directory = tmp_path / "report/monitor_snapshots"
     directory.mkdir(parents=True)
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
@@ -531,8 +538,13 @@ def test_cost_only_revision_invalidates_sidecar_and_manifest_without_pipeline_ch
         trade["meta"]["completed_census_manifest"] = completed_census_manifest(trade)
         paths = {"trade_review": service.save_monitor_snapshot("trade_review", day, trade)}
         for kind in ("post_sell_feedback", "missed_entry_counterfactual", "holding_exit_observation"):
-            paths[kind] = service.save_monitor_snapshot(kind, day, {"date": day, "meta": {"snapshot_profile": "postclose_exit"},
-                "actual_cost_source_generations": {day: source_generation(tmp_path, day)}})
+            body = {"date": day, "meta": {"snapshot_profile": "postclose_exit"},
+                    "actual_cost_source_generations": {day: source_generation(tmp_path, day)}}
+            if kind == "holding_exit_observation":
+                window = capture_window(tmp_path, [day])
+                body.update(input_window_dependencies=window,
+                            input_window_generation_sha256=window["input_window_generation_sha256"])
+            paths[kind] = service.save_monitor_snapshot(kind, day, body)
         manifest = service.save_monitor_snapshot_manifest(day, profile="postclose_exit",
             snapshots={kind: str(path) for kind, path in paths.items()})
         return paths, manifest

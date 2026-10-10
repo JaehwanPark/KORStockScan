@@ -514,6 +514,32 @@ def test_pipeline_event_writer_pins_parent_directory_across_path_swap(
     assert not (outside_dir / logical_path.name).exists()
 
 
+def test_append_revalidates_existing_parent_without_repeated_mkdir(monkeypatch, tmp_path):
+    from pathlib import Path
+    original = Path.mkdir
+    created = []
+
+    def mkdir(path, *args, **kwargs):
+        created.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'mkdir', mkdir)
+    monkeypatch.setattr(logger_mod, 'DATA_DIR', tmp_path)
+    path = logger_mod._event_path('2026-10-10')
+    assert not created
+    logger_mod._append_jsonl(path, '{"first":true}\n')
+    assert created == [path.parent]
+    logger_mod._append_jsonl(path, '{"second":true}\n')
+    assert created == [path.parent]
+    # A warm writer still validates a replaced parent on its next append.
+    saved = tmp_path / 'saved'
+    path.parent.rename(saved)
+    path.parent.symlink_to(saved, target_is_directory=True)
+    with pytest.raises(OSError, match='not a real directory'):
+        logger_mod._append_jsonl(path, '{"redirected":true}\n')
+    assert (saved / path.name).read_text() == '{"first":true}\n{"second":true}\n'
+
+
 def test_emit_pipeline_event_writes_text_and_jsonl(monkeypatch, tmp_path):
     monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
     _reset_logger_state(monkeypatch)
@@ -1608,3 +1634,29 @@ def test_repeated_failed_handover_has_two_bounded_owners(monkeypatch, tmp_path):
             assert logger_mod._PRODUCER_COMPACTOR is current
     logger_mod.drain_pipeline_event_summary_before_termination()
     assert not old._groups and not current._groups
+
+
+def test_delay_category_reserves_capacity_and_drain_yields_to_existing_executor():
+    import threading
+    entered,released=threading.Event(),threading.Event()
+    order=[]
+    def append(identity):
+        if identity==0:
+            entered.set();assert released.wait(5)
+        order.append(identity)
+        return {'structured_append_succeeded':True}
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        queue=logger_mod.BoundedObservationQueue(executor,max_items=32,max_bytes=128*1024)
+        assert queue.submit(append,0,observation_category='pre_submit_delay')['status']=='queued'
+        assert entered.wait(5)
+        for n in range(1,8):
+            assert queue.submit(append,n,observation_category='pre_submit_delay')['status']=='queued'
+        assert queue.submit(append,8,observation_category='pre_submit_delay')['status']=='unavailable'
+        for n in range(8,32):
+            assert queue.submit(append,n)['status']=='queued'
+        urgent=executor.submit(lambda:order.append('main'))
+        released.set();assert queue.close(timeout=5);urgent.result(timeout=5)
+    assert order.index('main')<=8
+    assert sorted(v for v in order if isinstance(v,int))==list(range(32))
+    stats=queue.snapshot()
+    assert stats['append_confirmed']==32 and stats['failed']==stats['pending_bytes']==0

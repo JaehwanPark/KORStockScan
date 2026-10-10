@@ -7,6 +7,8 @@ import hashlib
 import json
 import math
 from collections import Counter, defaultdict
+from contextlib import ExitStack
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,7 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 SCHEMA_VERSION = 2
+_INPUT_BUDGET = ContextVar('holding_report_input_budget', default=None)
 SOR_KRX_POST_SELL_USER_OVERRIDE = "user_2026_09_27_sor_krx_reference_postclose"
 POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
 TARGET_EXIT_RULES = (
@@ -240,9 +243,21 @@ def _analysis_window_start(
 
 
 def _read_json(path: Path) -> dict:
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
-        payload = json.load(handle)
+    from src.engine.lifecycle.research_input_budget import Claim
+    maximum = 4 * 1024 * 1024
+    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+        raise ValueError('holding_input_path_invalid')
+    if path.stat().st_size > maximum:
+        raise ValueError('holding_input_partition_required')
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rb') as handle:
+        raw = handle.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError('holding_input_partition_required')
+    budget = _INPUT_BUDGET.get()
+    if budget is not None:
+        budget.enter_context(Claim(len(raw) * 8))
+    payload = json.loads(raw)
     return payload if isinstance(payload, dict) else {}
 
 
@@ -282,16 +297,20 @@ def _load_saved_snapshot(snapshot_kind: str, target_date: str) -> dict | None:
         return None
     try:
         return _read_json(path)
-    except Exception:
+    except Exception as exc:
+        if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+            raise
         return None
 
 
 def _load_saved_snapshots(
-    snapshot_kind: str, dates: list[str]
+    snapshot_kind: str, dates: list[str], *, excluded_dates=()
 ) -> tuple[list[dict], list[str]]:
     snapshots: list[dict] = []
     paths: list[str] = []
     for target_date in dates:
+        if target_date in excluded_dates:
+            continue
         path = _monitor_snapshot_path(snapshot_kind, target_date)
         if path is None:
             continue
@@ -304,11 +323,13 @@ def _load_saved_snapshots(
                     continue
                 # Unsealed multi-gigabyte inputs are an explicit source gap;
                 # parsing them can OOM the whole postclose chain.
-                if path.stat().st_size > 256 * 1024 * 1024:
+                if path.stat().st_size > 32 * 1024 * 1024:
                     continue
             snapshots.append(_read_json(path))
             paths.append(str(path))
-        except Exception:
+        except Exception as exc:
+            if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+                raise
             continue
     return snapshots, paths
 
@@ -345,7 +366,9 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
                 "open_scalp_position_projection"), list)):
             return None
         return projected
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+            raise
         return None
 
 
@@ -2605,6 +2628,17 @@ def _build_load_distribution_evidence(
 
 
 def build_holding_exit_observation_report(
+    *, target_date: str, month_start: str | None = None,
+) -> dict:
+    with ExitStack() as budget:
+        token = _INPUT_BUDGET.set(budget)
+        try:
+            return _build_holding_exit_observation_report(target_date=target_date, month_start=month_start)
+        finally:
+            _INPUT_BUDGET.reset(token)
+
+
+def _build_holding_exit_observation_report(
     *,
     target_date: str,
     month_start: str | None = None,
@@ -2624,7 +2658,10 @@ def build_holding_exit_observation_report(
         return guarded
 
     dates = _date_range(safe_month_start, safe_date)
-    trade_snapshots, trade_snapshot_paths = _load_saved_snapshots("trade_review", dates)
+    from src.engine.lifecycle.holding_window_generation import capture_window, verify_window
+    input_window = capture_window(DATA_DIR, dates)
+    isolated_dates = [day for day,row in input_window['dependencies'].items() if row['status'] == 'source_gap']
+    trade_snapshots, trade_snapshot_paths = _load_saved_snapshots('trade_review', dates, excluded_dates=isolated_dates)
     performance_snapshot = _load_saved_snapshot("performance_tuning", safe_date)
     performance_paths = []
     perf_path = _monitor_snapshot_path("performance_tuning", safe_date)
@@ -2632,6 +2669,8 @@ def build_holding_exit_observation_report(
         performance_paths.append(str(perf_path))
 
     completed_rows, completed_gaps = _collect_completed_trade_rows(trade_snapshots)
+    completed_gaps.extend({'date':day, 'reason':'input_window_source_gap',
+                           'detail':input_window['dependencies'][day]['reason']} for day in isolated_dates)
     census_receipts = [
         item for snapshot in trade_snapshots
         if isinstance(item := (snapshot.get("meta") or {}).get(
@@ -2750,6 +2789,25 @@ def build_holding_exit_observation_report(
          if str(row.get("record_id") or "") in mechanical_ids],
         population_complete=mechanical_population_quality["complete"],
     )
+    from src.engine.scalping.universal_trailing_replay import completed_census
+    bootstrap_path = DATA_DIR / 'runtime/policy_bootstrap' / f'runtime_policy_bootstrap_{safe_date}.json'
+    parent_manifest = _read_json(bootstrap_path) if bootstrap_path.is_file() and bootstrap_path.stat().st_size <= 4*1024*1024 else {}
+    if (parent_manifest.get('target_date') != safe_date or parent_manifest.get('manifest_sha256') !=
+            hashlib.sha256(json.dumps({k:v for k,v in parent_manifest.items() if k != 'manifest_sha256'},
+                sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest()):
+        parent_manifest = {}
+    parent_receipt = parent_manifest.get('scalp_trailing_mechanical_policy_receipt') or {}
+    from src.engine.scalping.trailing_mechanical_policy import market_values_hash
+    try:
+        if (parent_receipt.get('source') not in {'operator_directed_m1_baseline', 'reviewed_selected_candidate', 'rollback_incumbent'}
+                or market_values_hash(parent_receipt['market_values'], parent_receipt['classifier_parameters'])
+                != parent_receipt.get('market_values_sha256')):
+            raise ValueError('approved_parent_receipt_invalid')
+        universal_parent = {'market_values':parent_receipt['market_values'],
+                            'classifier_parameters':parent_receipt['classifier_parameters']}
+    except (KeyError, TypeError, ValueError):
+        universal_parent = None
+    universal_replay = completed_census(main_completed_rows, incumbent=universal_parent)
     operational_input_replay = summarize_operational_input_replay(
         strict_trades, position_outcomes,
         population_complete=not completed_gaps and census_id_contract_ok,
@@ -2791,6 +2849,7 @@ def build_holding_exit_observation_report(
         ),
     }
     report = {
+        'universal_trailing_replay': universal_replay,
         "date": safe_date,
         # Kept for compatibility with existing readers. New readers should
         # consume analysis_window, whose default is the policy refresh floor rather
@@ -2947,6 +3006,9 @@ def build_holding_exit_observation_report(
         str(snapshot.get("date")): (snapshot.get("meta") or {}).get("actual_cost_source_generation")
         for snapshot in trade_snapshots
     }
+    verify_window(DATA_DIR, input_window)
+    report["input_window_dependencies"] = input_window
+    report["input_window_generation_sha256"] = input_window["input_window_generation_sha256"]
     economic_input_complete = bool(
         cost_input_complete
         and len(decision_economic_eligible_ids) == len(strict_trades)

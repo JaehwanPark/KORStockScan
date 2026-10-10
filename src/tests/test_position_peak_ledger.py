@@ -79,7 +79,7 @@ def test_completed_cycle_is_removed_without_touching_new_cycle(tmp_path):
     assert ledger.restore_peak(new) == (1150, "ledger_peak_restored")
 
 
-def test_trailing_arm_is_durable_for_same_cycle_and_cleared_on_new_cost_basis(tmp_path):
+def test_trailing_arm_is_durable_for_same_cycle_and_add_cost_basis(tmp_path):
     ledger = PositionPeakRuntimeLedger(tmp_path / "position_peak.json")
     stock = _dongyang_stock()
     ledger.record(stock, peak_price=1140, observed_at=1.0, reason="peak")
@@ -92,7 +92,7 @@ def test_trailing_arm_is_durable_for_same_cycle_and_cleared_on_new_cost_basis(tm
     assert ledger.get_for_stock(_dongyang_stock())["trailing_arm_market"] == "REGULAR"
     new_basis = _dongyang_stock(buy_price=1130)
     ledger.record(new_basis, peak_price=1150, observed_at=4.0, reason="scale_in")
-    assert "trailing_arm_at_epoch" not in ledger.get_for_stock(new_basis)
+    assert ledger.get_for_stock(new_basis)['trailing_arm_at_epoch'] == 2.0
     different_cycle = _dongyang_stock(id=118)
     assert ledger.record_trailing_arm(
         different_cycle, observed_at=5.0, market="REGULAR",

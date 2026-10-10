@@ -68,6 +68,7 @@ PRE_SUBMIT_DELAY_ENV_KEYS = (
     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED",
     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE",
     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE",
+    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256",
 )
 HOLDING_VOTE_ENV_KEYS = (HOLDING_VOTE_ENV_PATH, HOLDING_VOTE_ENV_SHA,
                          HOLDING_VOTE_ENV_DATE)
@@ -115,6 +116,36 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
     )
 
     directory = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
+    from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths, validate as validate_initial, code_contract, verify_source
+    committed = sorted(directory.glob("committed_????-??-??.json"), reverse=True)
+    if len(committed) > 370:
+        return {}, {"status": "invalid_generation_inventory", "target_date": target_date}
+    for pointer in committed:
+        source_day = pointer.stem.removeprefix("committed_")
+        if source_day >= target_date:
+            continue
+        try:
+            report_file, policy_file, _, manifest = committed_paths(DATA_DIR, source_day)
+            verify_source(DATA_DIR, _load_json(report_file))
+            if manifest.get('code_contract_sha256') != code_contract():
+                raise ValueError('initial_delay_code_contract_changed')
+            initial_policy, initial_report = _load_json(policy_file), _load_json(report_file)
+            if not initial_policy["effective_from"] <= target_date <= initial_policy["expires_on"]:
+                continue
+            validate_initial(initial_policy, initial_report, target_date=target_date)
+            return {"KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
+                    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(policy_file.resolve()),
+                    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256": manifest["manifest_sha256"],
+                    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE": target_date}, {
+                    "status": "verified_initial_timing_policy", "target_date": target_date,
+                    "source_date": source_day, "effective_from": initial_policy["effective_from"],
+                    "policy_sha256": initial_policy["policy_sha256"],
+                    "manifest_sha256": manifest["manifest_sha256"],
+                    "code_contract_sha256": initial_policy["code_contract_sha256"],
+                    "policy_path": str(policy_file.resolve()), "source_report": str(report_file.resolve()),
+                    "evidence_grade": "estimated_provisional", "actual_pid_consumed": False}
+        except (OSError, ValueError, TypeError, KeyError):
+            return {}, {"status": "invalid_committed_generation", "target_date": target_date}
     matches: list[tuple[str, str, Path, dict[str, Any]]] = []
     for path in directory.glob("pre_submit_delay_policy_????-??-??.json"):
         if path.is_symlink() or path.stat().st_size > 1024 * 1024:
@@ -262,7 +293,9 @@ def _archive_holding_profit_pid_verification(target_date: str, verification: dic
     body = {"schema": "holding_profit_pid_verification_v1", "target_date": target_date,
             "pid": verification["pid"], "verified_at": verification["verified_at"],
             "manifest_sha256": manifest["manifest_sha256"],
-            "mechanical_policy_receipt": manifest["scalp_trailing_mechanical_policy_receipt"]}
+            "mechanical_policy_receipt": {**manifest["scalp_trailing_mechanical_policy_receipt"],
+                'situation_policy':json.loads((manifest.get('env_overrides') or {}).get(
+                    'KORSTOCKSCAN_TRAILING_SITUATION_POLICY_JSON', 'null'))}}
     receipt = {**body, "receipt_sha256": _digest_json(body)}
     path = BOOTSTRAP_DIR / "verified_holding_profit_pid" / target_date / (
         f"holding_profit_pid_{body['pid']}_{body['manifest_sha256']}.json")
@@ -1165,6 +1198,22 @@ def build_manifest(
             values[key] = "0.4"
             env_owners[key] = "operator_directed_2026_09_25"
     trailing_receipt = scalp_trailing_bootstrap_receipt(values, source=trailing_source)
+    from src.engine.scalping.trailing_situation_policy import initial_bundle, ENV_KEY as TRAILING_SITUATION_ENV, PreparedTrailingPolicy
+    typed_parent = initial_bundle(trailing_receipt['market_values'],
+        parent_sha256=trailing_receipt['market_values_sha256'], source_date=target_date, target_date=target_date,
+        parent_classifier_parameters=trailing_receipt['classifier_parameters'])
+    typed_path = DATA_DIR / 'threshold_cycle/scalp_trailing_situation' / f'initial_policy_{target_date}.json'
+    if typed_path.exists():
+        if typed_path.is_symlink() or typed_path.stat().st_size > 64 * 1024:
+            raise ValueError('trailing_situation_initial_policy_path_invalid')
+        candidate_typed = _load_json(typed_path)
+        PreparedTrailingPolicy.prepare(candidate_typed, target_date=target_date,
+            parent_sha256=trailing_receipt['market_values_sha256'])
+        typed_parent = candidate_typed
+    # This baseline is an exact parent-equivalence expansion, not a tuning
+    # approval. A qualified override requires the existing real selector.
+    values[TRAILING_SITUATION_ENV] = json.dumps(typed_parent, sort_keys=True, separators=(',', ':'))
+    env_owners[TRAILING_SITUATION_ENV] = 'scalp_trailing_mechanical_policy_receipt'
     trailing_selection_lineage = (
         {"origin_target_date": target_date,
          "origin_receipt": selected_direct["source_receipt"],
@@ -1841,6 +1890,13 @@ def verify_bootstrap(
         if any(f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}" in manifest_env
                for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")):
             findings.append("legacy_ai_tp_market_override_present")
+        from src.engine.scalping.trailing_situation_policy import ENV_KEY as TYPED_ENV, PreparedTrailingPolicy
+        if TYPED_ENV in manifest_env:
+            try:
+                PreparedTrailingPolicy.prepare(json.loads(manifest_env[TYPED_ENV]), target_date=target_date,
+                    parent_sha256=trailing_receipt['market_values_sha256'])
+            except (ValueError, KeyError, TypeError):
+                findings.append('trailing_situation_policy_generation_invalid')
     if target_date >= "2026-09-23":
         current_delay_env, current_delay_handoff = _pre_submit_delay_handoff(target_date)
         if manifest.get("pre_submit_delay_handoff") != current_delay_handoff:
