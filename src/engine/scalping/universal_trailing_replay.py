@@ -177,8 +177,8 @@ def quote_projection(ws_data, **kwargs):
         return {'status':'source_gap', 'reason':'shared_quote_projection_contract_invalid'}
 
 
-def completed_census(trades, *, incumbent):
-    """Every completed Main ID remains visible, including unallocated costs."""
+def completed_sources(trades):
+    """Normalize exact completed Main source; no replay or publication."""
     positions, paths = [], {}
     for trade in trades:
         identity = str(trade.get('id') or trade.get('record_id') or '')
@@ -260,6 +260,12 @@ def completed_census(trades, *, incumbent):
         positions[-1].update(entry_context=entry_context, situation_pin=entry_pin,
                              completion_at=max(sell_clocks) if sell_clocks else None)
         paths[identity] = events
+    return positions, paths
+
+
+def completed_census(trades, *, incumbent):
+    """Every completed Main ID remains visible, including unallocated costs."""
+    positions, paths = completed_sources(trades)
     if incumbent is None:
         body = {'schema':SCHEMA, 'status':'source_gap', 'reason':'approved_parent_receipt_missing',
                 'population_ids':sorted(row['position_key'] for row in positions),
@@ -277,6 +283,7 @@ class PreparedPath:
     classifier_sha256: str
     pair_stream: object = None
     observation_end_at: float | None = None
+    last_add_known_at: float | None = None
 
     def __len__(self):
         return len(self.events)
@@ -307,7 +314,8 @@ def prepare_path(events, *, classifier_config=None):
             except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
                 strength = None
         features.append((market, permission, strength))
-    return PreparedPath(tuple(events), tuple(features), classifier_hash(classifier_config))
+    return PreparedPath(tuple(events), tuple(features), classifier_hash(classifier_config),
+        last_add_known_at=max((number(e.get('known_at')) or 0 for e in events if e.get('kind')=='ADD'), default=0))
 
 
 def replay(position, events, vector, *, typed_policy=None, classifier_config=None):
@@ -322,7 +330,72 @@ def replay(position, events, vector, *, typed_policy=None, classifier_config=Non
                     actual_order_submitted=False, allowed_runtime_apply=False)
 
 
+def _invalid_replay(position, exc):
+    return dict(identity=str(position.get('position_key') or position.get('opportunity_id') or ''),
+        evidence_kind=position.get('evidence_kind'), status='source_gap',
+        reason='replay_row_contract_invalid:' + type(exc).__name__, actual_pnl_krw=None,
+        modeled_net_pnl_krw=None, actual_order_submitted=False, allowed_runtime_apply=False)
+
+
+def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_config=None):
+    """One feature traversal with independent candidate state and bounded dedup.
+
+    The disposable index remembers duplicate source keys across closed-session
+    gaps. It stores no raw quotes and has the same bounded cache/disk admission
+    as other research indexes. Finished candidates do not restart or reread.
+    """
+    from contextlib import nullcontext
+    from src.engine.lifecycle import research_storage as storage
+    import tempfile
+    results, cursors = {}, {}
+    with tempfile.TemporaryDirectory(prefix='trailing-seen-') as scratch:
+        manager = storage.index(scratch) if prepared.pair_stream is not None else nullcontext(None)
+        with manager as db:
+            memo = [None, None, False]
+            def duplicate(ordinal, key):
+                if memo[0] == ordinal:
+                    if memo[1] != key:
+                        raise ValueError('replay_shared_source_identity_changed')
+                    return memo[2]
+                identity = str(key[0])+':'+str(key[1])
+                existed = db.execute('SELECT 1 FROM records WHERE id=?',(identity,)).fetchone() is not None
+                if not existed: storage.put(db,identity,{})
+                memo[:] = [ordinal,key,existed]
+                return existed
+            def advance(name, cursor, pair, *, initial=False):
+                try:
+                    next(cursor) if initial else cursor.send(pair)
+                    return True
+                except StopIteration as stopped:
+                    results[name] = stopped.value
+                except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
+                    results[name] = _invalid_replay(position,exc)
+                return False
+            for name, vector in vectors.items():
+                cursor = _replay_cursor(position,prepared,vector,typed_policy=typed_policy,
+                    classifier_config=classifier_config,duplicate=duplicate if db is not None else None)
+                if advance(name,cursor,None,initial=True): cursors[name]=cursor
+            try:
+                for pair in prepared.pairs():
+                    for name,cursor in list(cursors.items()):
+                        if not advance(name,cursor,pair): cursors.pop(name)
+                    if not cursors: break
+                for name,cursor in cursors.items(): advance(name,cursor,None)
+            except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
+                for name in cursors:
+                    results[name] = _invalid_replay(position,exc)
+            finally:
+                for cursor in cursors.values(): cursor.close()
+    return results
+
+
 def _replay(position, events, vector, *, typed_policy=None, classifier_config=None):
+    prepared = events if isinstance(events,PreparedPath) else prepare_path(events,classifier_config=classifier_config)
+    return replay_many(position,prepared,{'one':vector},typed_policy=typed_policy,
+        classifier_config=classifier_config)['one']
+
+
+def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_config=None, duplicate=None):
     """First crossing, current session permission, partial execution, censoring."""
     identity = str(position.get("position_key") or position.get("opportunity_id") or "")
     evidence = position.get("evidence_kind")
@@ -350,7 +423,7 @@ def _replay(position, events, vector, *, typed_policy=None, classifier_config=No
         or not position.get("execution_plan_sha256") or not position.get("entry_depth_verified")
     ):
         return stop("exact_enter_pass_plan_or_cf_entry_missing")
-    if len(events) > MAX_EVENTS or set(vector) != set(START_MARKETS):
+    if (len(prepared) > MAX_EVENTS and prepared.pair_stream is None) or set(vector) != set(START_MARKETS):
         return stop("replay_input_budget_or_market_contract_invalid")
     vector = {market: normalize_values(vector[market]) for market in START_MARKETS}
     if evidence == "actual_completed":
@@ -370,11 +443,16 @@ def _replay(position, events, vector, *, typed_policy=None, classifier_config=No
         pin = pin_context(None, position_key=identity, entry_at=entry)
     pin = PreparedPin.prepare(pin, identity)
     full_quantity, full_basis = qty, basis
-    prepared = events if isinstance(events, PreparedPath) else prepare_path(events, classifier_config=classifier_config)
     if prepared.classifier_sha256 != classifier_hash(classifier_config):
         return stop('m1_prepared_classifier_generation_changed')
     last_quote_at = None
-    for event, (market, permission, strength) in prepared.pairs():
+    ordinal = 0
+    while True:
+        pair = yield
+        if pair is None:
+            break
+        event, (market, permission, strength) = pair
+        ordinal += 1
         at, known = number(event.get("event_at")), number(event.get("known_at"))
         if at is None or known is None or at > known or known < entry:
             return stop("source_clock_invalid")
@@ -412,9 +490,13 @@ def _replay(position, events, vector, *, typed_policy=None, classifier_config=No
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
             return stop("source_sequence_invalid")
         source_key = (epoch, sequence)
-        if source_key in used:
+        if duplicate is not None:
+            repeated = duplicate(ordinal, source_key)
+        else:
+            repeated = source_key in used
+            used.add(source_key)
+        if repeated:
             return stop("source_identity_duplicate")
-        used.add(source_key)
         closed_gap = (last_quote_at is not None and known - last_quote_at < 14 * 86400
                       and closed_exit_gap(last_quote_at, known))
         if last_quote_at is not None and known - last_quote_at > 2 and not closed_gap:
@@ -513,8 +595,9 @@ def _replay(position, events, vector, *, typed_policy=None, classifier_config=No
         result.update(modeled_sold_qty=full_quantity - remaining, modeled_residual_qty=remaining,
                       modeled_partial_proceeds_krw=proceeds, last_sell_permission_at=known)
         if remaining == 0:
-            if any(other.get('kind') == 'ADD' and (number(other.get('known_at')) or 0) > known
-                   for other in prepared.events):
+            if prepared.last_add_known_at is None:
+                raise ValueError('streaming_future_add_census_missing')
+            if prepared.last_add_known_at > known:
                 return stop('candidate_exit_changes_observed_add_path', status='censored')
             modeled = proceeds - full_basis - allocated_cost
             result.update(status="modeled_full_exit", reason=None, modeled_net_pnl_krw=modeled,
@@ -568,7 +651,7 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
         if invalid_path:
             events, variants = [], None
         primary = next(iter(variants.values())) if variants else events
-        if len(primary) > MAX_EVENTS:
+        if len(primary) > MAX_EVENTS and not (isinstance(primary, PreparedPath) and primary.pair_stream is not None):
             raise ValueError('universal_replay_path_budget_exceeded')
         prepared_paths = {}
         context[identity] = {key:position.get(key) for key in (
@@ -583,6 +666,7 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
             (number(event.get('known_at')) or 0 for event in events), default=number(position.get('entry_at')) or 0))
         # No candidate x event details retained. Each candidate state is local.
         minimal[identity] = {}
+        groups = {}
         for sha, (vector, config) in vectors.items():
             feature_sha = classifier_hash(config)
             if feature_sha not in prepared_paths:
@@ -591,16 +675,19 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
                         raise ValueError('universal_prepared_classifier_missing')
                     prepared_paths[feature_sha] = variants[feature_sha]
                 else:
-                    prepared_paths[feature_sha] = prepare_path(events, classifier_config=config)
-            outcome = replay(position, prepared_paths[feature_sha], vector, typed_policy=typed_policy,
-                             classifier_config=config)
-            if invalid_path:
-                outcome.update(status='source_gap', reason='identified_event_path_contract_invalid',
-                               modeled_net_pnl_krw=None, actual_pnl_krw=None)
-            minimal[identity][sha] = {key: outcome.get(key) for key in (
-                "status", "reason", "evidence_kind", "modeled_net_pnl_krw", "modeled_profit_rate_pct",
-                "actual_pnl_krw", "slippage_net_pnl_krw", "modeled_residual_qty")}
-            counters[outcome["status"]] += 1
+                    prepared_paths[feature_sha] = prepare_path(events,classifier_config=config)
+            groups.setdefault(feature_sha,{'config':config,'vectors':{}})['vectors'][sha] = vector
+        for feature_sha, group in groups.items():
+            outcomes = replay_many(position,prepared_paths[feature_sha],group['vectors'],
+                typed_policy=typed_policy,classifier_config=group['config'])
+            for sha,outcome in outcomes.items():
+                if invalid_path:
+                    outcome.update(status='source_gap',reason='identified_event_path_contract_invalid',
+                        modeled_net_pnl_krw=None,actual_pnl_krw=None)
+                minimal[identity][sha] = {key:outcome.get(key) for key in (
+                    'status','reason','evidence_kind','modeled_net_pnl_krw','modeled_profit_rate_pct',
+                    'actual_pnl_krw','slippage_net_pnl_krw','modeled_residual_qty')}
+                counters[outcome['status']] += 1
     common = sorted(identity for identity, rows in minimal.items()
                     if all(row["modeled_net_pnl_krw"] is not None for row in rows.values()))
     body = {"schema": SCHEMA, "population_ids": sorted(seen), "common_ids": common,

@@ -3,11 +3,56 @@ import os
 import json
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 import pytest
 
 from src.engine.infrastructure import runtime_release_router as router
+
+
+def test_isolated_filename_router_loads_only_exact_guard_files(tmp_path):
+    repo = Path(__file__).resolve().parents[2]
+    workspace = tmp_path / 'project'
+    for name in ('infrastructure/runtime_release_router.py',
+                 'infrastructure/research_release_transition.py',
+                 'lifecycle/research_admission.py'):
+        target = workspace / 'src/engine' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / 'src/engine' / name, target)
+    runtime = workspace / 'data/runtime'
+    runtime.mkdir(parents=True)
+    (runtime / 'runtime_release_selection.json').write_text('{}')
+    poison = tmp_path / 'poison'
+    (poison / 'src').mkdir(parents=True)
+    marker = tmp_path / 'poison-imported'
+    (poison / 'src/__init__.py').write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    result = subprocess.run([sys.executable, '-I',
+        str(workspace / 'src/engine/infrastructure/runtime_release_router.py'),
+        'start', '2026-10-12', '--print-plan'], cwd=poison,
+        env={**os.environ, 'PYTHONPATH': str(poison)},
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode == 2
+    assert 'release_selection_schema_invalid' in result.stderr
+    assert 'ImportError' not in result.stderr
+    assert not marker.exists()
+    body = {'schema': 'research_release_transition_v1', 'transition_id': 'blocked',
+            'state': 'publishing', 'owner_pid': os.getpid()}
+    body['manifest_sha256'] = hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    fence = runtime / 'research_release_transition/current.json'
+    fence.parent.mkdir()
+    fence.write_text(json.dumps(body))
+    blocked = subprocess.run([sys.executable, '-I',
+        str(workspace / 'src/engine/infrastructure/runtime_release_router.py'),
+        'start', '2026-10-12', '--print-plan'], cwd=poison,
+        env={**os.environ, 'PYTHONPATH': str(poison)},
+        capture_output=True, text=True, timeout=10)
+    assert blocked.returncode == 2
+    assert 'research_release_transition_incomplete' in blocked.stderr
+    assert 'ImportError' not in blocked.stderr
+    assert not marker.exists()
 
 
 @pytest.fixture

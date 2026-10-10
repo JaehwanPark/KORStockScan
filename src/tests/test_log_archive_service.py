@@ -29,6 +29,27 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     assert not list(snapshot_dir.glob(".trade_review_2026-04-06.json.*.tmp"))
 
 
+@pytest.mark.parametrize('transactional', [False, True])
+def test_snapshot_date_header_survives_sorted_payload_roundtrip(tmp_path, monkeypatch, transactional):
+    from src.engine.automation.postclose_finalization_generation import _snapshot_date
+    from src.engine.infrastructure.research_release_transition import Transition
+    snapshot_dir = tmp_path / 'data/report/monitor_snapshots'
+    monkeypatch.setattr(service, 'MONITOR_SNAPSHOT_DIR', snapshot_dir)
+    payload = {'a_large': 'x' * 5000, 'date': '2026-10-08'}
+    saved = []
+    def write():
+        saved.append(service.save_monitor_snapshot('holding_exit_observation', '2026-10-08', payload))
+    if transactional:
+        tx = Transition(tmp_path, 'date_header')
+        with tx.owner():
+            tx.execute([write], verify=lambda: None)
+    else:
+        write()
+    assert _snapshot_date(saved[0], compressed=False) == '2026-10-08'
+    assert json.loads(saved[0].read_bytes()) == payload
+    assert next(iter(payload)) == 'a_large'
+
+
 def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_path, monkeypatch):
     from src.engine import holding_exit_observation_report as holding
     from src.engine.sniper_trade_review_report import completed_census_manifest

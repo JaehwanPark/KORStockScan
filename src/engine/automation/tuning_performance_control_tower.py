@@ -148,8 +148,9 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     assert_sources_unchanged(handoff_receipt, handoff_paths)
     assert_sources_unchanged(observed_runtime_receipt, observed_runtime_paths)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    md_path.write_text(
+    from src.engine.runtime_approval_summary import _atomic_write
+    _atomic_write(json_path,json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    _atomic_write(md_path,
         "\n".join([
             f"# Tuning control tower - {target_date}", "",
             f"- status: `{report['status']}`",
@@ -157,7 +158,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             f"- direct source status: `{report['summary']['direct_source_status']}`",
             f"- verifier status: `{report['summary']['postclose_verifier_status']}`",
             f"- runtime bootstrap verification: `{report['selected_runtime']['verification_status']}`", "",
-        ]), encoding="utf-8"
+        ])
     )
     return report
 

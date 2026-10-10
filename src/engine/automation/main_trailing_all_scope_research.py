@@ -33,7 +33,15 @@ MAX_POSITIONS = 20000
 MAX_SHARED_BYTES = 64 * 1024 * 1024
 CODE_PATHS = ('automation/main_trailing_all_scope_research.py', 'lifecycle/holding_window_generation.py',
               'automation/main_trailing_path_projection.py',
-              'lifecycle/research_input_budget.py',
+              'lifecycle/research_input_budget.py', 'lifecycle/research_admission.py',
+              'lifecycle/research_storage.py', 'automation/main_trailing_source_assembler.py',
+              'lifecycle/research_json_stream.py',
+              'lifecycle/research_disk_budget.py',
+              'automation/main_trailing_population_aggregation.py', 'automation/main_trailing_partitioned_research.py',
+              'automation/main_trailing_situation_aggregation.py',
+              'automation/main_trailing_research_handoff.py',
+              'automation/scalp_trailing_mechanical_policy_apply.py',
+              'infrastructure/research_release_transition.py',
               'scalping/main_exit_scope.py', 'scalping/universal_trailing_replay.py',
               'scalping/trailing_situation_policy.py', 'scalping/trailing_mechanical_strength.py',
               'scalping/trailing_exit_decision.py', 'scalping/trailing_threshold_policy.py',
@@ -103,9 +111,9 @@ def _sealed(path, expected=None, generations=None):
     return value
 
 
-def preflight(manifest_path, input_root, generations=None, *, scope_budget=None):
-    manifest = _sealed(Path(manifest_path), generations=generations)
-    if (manifest.get('schema') != INPUT_SCHEMA or len(manifest.get('partitions', [])) > MAX_PARTITIONS
+def preflight_header(manifest, input_root, generations=None, *, scope_budget=None):
+    if (manifest.get('schema') not in {INPUT_SCHEMA,'main_all_scope_exit_input_manifest_v2'}
+            or len(manifest.get('partitions', [])) > MAX_PARTITIONS
             or not '2026-06-05' <= manifest['source_date'] <= manifest['target_date']
             or date.fromisoformat(manifest['source_date']).isoformat() != manifest['source_date']
             or date.fromisoformat(manifest['target_date']).isoformat() != manifest['target_date']):
@@ -135,6 +143,12 @@ def preflight(manifest_path, input_root, generations=None, *, scope_budget=None)
     scope = build_scope(manifest['universe'], as_of=manifest['as_of'],
         universe_source_sha256=manifest['universe_source_sha256'], operating=manifest.get('operating'),
         coverage=manifest.get('coverage'), custody=manifest.get('custody'))
+    return scope
+
+
+def preflight(manifest_path, input_root, generations=None, *, scope_budget=None):
+    manifest = _sealed(Path(manifest_path), generations=generations)
+    scope = preflight_header(manifest,input_root,generations,scope_budget=scope_budget)
     inventory = []
     for part in manifest['partitions']:
         path = _source_path(Path(input_root), part['path'])
@@ -146,6 +160,10 @@ def preflight(manifest_path, input_root, generations=None, *, scope_budget=None)
 
 
 def run(manifest_path, *, input_root, output_root=None, dry_run=True, resume=False):
+    manifest=_sealed(Path(manifest_path))
+    if manifest.get('schema')=='main_all_scope_exit_input_manifest_v2':
+        from src.engine.automation.main_trailing_partitioned_research import run as run_partitioned
+        return run_partitioned(manifest_path,input_root=input_root,output_root=output_root,dry_run=dry_run,resume=resume)
     with ExitStack() as budget:
         budget.enter_context(Claim(Path(manifest_path).stat().st_size * 8))
         return _run(manifest_path, input_root=input_root, output_root=output_root,
@@ -424,8 +442,14 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args(argv)
-    report = run(args.input_manifest, input_root=args.input_root, output_root=args.output_root,
-                 dry_run=args.dry_run or args.output_root is None, resume=args.resume)
+    from src.engine.lifecycle.research_admission import direct_job
+    if args.output_root is None:
+        report = run(args.input_manifest, input_root=args.input_root)
+    else:
+        day = _sealed(args.input_manifest)['source_date']
+        with direct_job(args.input_root, 'main_trailing_all_scope', day):
+            report = run(args.input_manifest, input_root=args.input_root, output_root=args.output_root,
+                         dry_run=args.dry_run, resume=args.resume)
     print(json.dumps({key:report.get(key) for key in ('status','source_date','target_date','counters','missing_population_ids')}))
     return 0 if report['status'] in {'complete','preflight_only'} else 2
 

@@ -23,6 +23,40 @@ TYPES = ("HIGH_VARIABILITY", "TREND_CONTINUATION", "REBOUND_RANGE", "BASE")
 FEATURES = ("range_pct", "return_pct", "trend_efficiency", "vwap_distance_pct", "spread_pct", "rebound_pct")
 
 
+def registered_research_grid(parent_values, parent_classifier_parameters):
+    """Small fixed offline grid; no runtime values or AI calls are changed.
+
+    Numeric neighbors come from the existing mechanical family's axes. Each
+    vector changes one market and one value; M1 stays at the approved parent.
+    The threshold hypotheses use the shared 120-bar entry projection and are
+    frozen before the chronological train/holdout split.
+    """
+    from copy import deepcopy
+    from .trailing_mechanical_replay import GRID
+    parent={market:normalize_values(parent_values[market]) for market in START_MARKETS}
+    candidates={}
+    for market in START_MARKETS:
+        for key,choices in GRID.items():
+            anchor=parent[market][key]
+            neighbors=[max((v for v in choices if v<anchor),default=None),
+                       min((v for v in choices if v>anchor),default=None)]
+            for value in neighbors:
+                if value is None:continue
+                vector=deepcopy(parent);vector[market][key]=value
+                try:normalize_values(vector[market])
+                except ValueError:continue
+                candidates[f'{market}:{key}:{value}']={
+                    'market_values':vector,'classifier_parameters':deepcopy(parent_classifier_parameters)}
+    grid=[]
+    for width in (1.0,2.0):
+        classifier=dict(schema=CLASSIFIER_SCHEMA,window_bars=120,trained_through=0,
+            thresholds=dict(range_min=width,spread_min=.5,trend_return_min=.2,
+                trend_efficiency_min=.5,vwap_min=0,rebound_min=.5))
+        classifier['classifier_sha256']=digest(classifier)
+        grid.append(validate_classifier(classifier))
+    return candidates,grid
+
+
 def entry_features(bars, *, anchor_at, ask, bid, session_vwap, source_sha256, expected_route):
     """Only supplied shared completed bars; never a fresh history/API query."""
     if (number(anchor_at) is None or number(anchor_at) <= 0
@@ -329,7 +363,7 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
                 labels[identity] = (market_type_at(row['entry_at']), pin['situation_type'], pin['reason'])
             return labels
         def stats(identities, name, evidence):
-            deltas, stress, adverse = [], [], []
+            deltas, stress, adverse, stress_net = [], [], [], []
             notional, pnl = 0., 0.
             days = {}
             for identity in identities:
@@ -341,6 +375,7 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
                 delta = candidate['modeled_net_pnl_krw'] - reference
                 deltas.append(delta / amount * 100); pnl += delta; notional += amount
                 worst = candidate['slippage_net_pnl_krw'][2] - reference
+                stress_net.append(worst)
                 stress.append(worst / amount * 100)
                 if delta < 0:
                     adverse.append(identity)
@@ -350,6 +385,7 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
                     days.setdefault(day, []).append(worst / amount * 100)
             return dict(n=len(identities), equal_weight_avg_profit_pct=math.fsum(deltas)/len(deltas) if deltas else None,
                 notional_weighted_ev_pct=100*pnl/notional if notional else None, paired_delta_net_krw=pnl if deltas else None,
+                worst_slippage_delta_net_krw=math.fsum(stress_net) if stress_net else None,
                 worst_paired_delta_pct=min(deltas) if deltas else None, worsened_ids=adverse,
                 worst_slippage_ev_pct=math.fsum(stress)/len(stress) if stress else None,
                 worst_slippage_min_day_ev_pct=min(math.fsum(v)/len(v) for v in days.values()) if days else None,
@@ -389,10 +425,11 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
                     train = [i for i in cohort['train_ids'] if training_labels[i][:2]==(market,kind)]
                     holdout = [i for i in cohort['holdout_ids'] if holdout_labels[i][:2]==(market,kind)]
                     tr, ho = stats(train,winner,evidence), stats(holdout,winner,evidence)
-                    compatible = all(context[i].get('operating_ai_required') is True
+                    compatible = all(context[i].get('operating_ai_required') is False or
+                        (context[i].get('operating_ai_required') is True
                         and validate_pin(context[i].get('situation_pin'),i)
                         and context[i]['situation_pin']['classifier_sha256']==frozen['classifier_sha256']
-                        and context[i]['situation_pin']['situation_type']==kind for i in train+holdout)
+                        and context[i]['situation_pin']['situation_type']==kind) for i in train+holdout)
                     qualified = (evidence=='actual_completed' and winner!='incumbent'
                         and len(set(tr['verified_days']+ho['verified_days']))>=7 and tr['n']>=30 and ho['n']>=10
                         and len(ho['verified_days'])>=2 and tr['completion_clock_verified'] and ho['completion_clock_verified']

@@ -38,6 +38,13 @@ CONTRACT_PATHS = (
     'src/engine/automation/postclose_summary_handoff.py',
     'src/engine/runtime_approval_summary.py',
     'src/engine/lifecycle/research_input_budget.py',
+    'src/engine/lifecycle/research_admission.py',
+    'src/engine/lifecycle/research_storage.py',
+    'src/engine/lifecycle/research_disk_budget.py',
+    'src/engine/lifecycle/research_jsonl_jobs.py',
+    'src/engine/automation/pre_submit_delay_source_ledger.py',
+    'src/engine/infrastructure/research_release_transition.py',
+    'src/engine/automation/pre_submit_delay_partitioned_research.py',
     'src/engine/monitoring/submission_bottleneck_monitor.py',
 )
 
@@ -52,7 +59,8 @@ def projection_contract():
     import inspect
     from . import pre_submit_delay_tuning as owner
     from .reversal_registered_catalog import MANIFEST
-    functions = (project_rows, number, digest, session, situation, owner._source_rows,
+    from src.engine.automation.pre_submit_delay_partitioned_research import project as partitioned_project
+    functions = (project_rows, partitioned_project, number, digest, session, situation, owner._source_rows,
                  owner._number, owner._digest, owner.decision_source_sha256,
                  owner.quote_source_sha256, owner._quote_source_issue)
     return digest({'functions':{f.__module__+'.'+f.__name__:inspect.getsource(f) for f in functions},
@@ -150,7 +158,7 @@ def project_rows(rows):
                 if horizon in quotes[identity] and quotes[identity][horizon] != fields:
                     conflicts.add((identity, horizon))
                 quotes[identity][horizon] = fields
-    result, seen = [], set()
+    result, canonical_rows, canonical_conflicts = [], {}, set()
     for identity, fields in commits.items():
         if len(result) >= MAX_OPPORTUNITIES:
             raise ValueError("initial_delay_projection_budget_exceeded")
@@ -186,11 +194,7 @@ def project_rows(rows):
         # are never merged merely because the symbol or primary branch matches.
         native = fields.get('original_evaluation_attempt_id') or fields.get('evaluation_attempt_id') or fields.get('request_id')
         native_bound = isinstance(native, str) and 0 < len(native) <= 512 and native.strip() == native
-        canonical = digest([identity[0], identity[1], machine, native, parent, anchor])
-        if canonical in seen:
-            reasons["duplicate_opportunity_alias"] += 1
-            continue
-        seen.add(canonical)
+        canonical = digest([identity[0], identity[1], machine, native if native_bound else list(identity), parent, anchor])
         valid = {}
         for horizon, quote in quotes.get(identity, {}).items():
             ask, bid, depth = (number(quote.get(key)) for key in ("ask_price", "best_bid", "ask_qty"))
@@ -206,13 +210,28 @@ def project_rows(rows):
         pairs = {int(horizon): (float(zero["ask_price"]) - float(quote["ask_price"]))
                  / float(zero["ask_price"]) * 10000 for horizon, quote in valid.items()
                  if horizon and zero}
-        result.append({"identity": canonical, "alias": list(identity), "anchor_kind": anchor,
+        opportunity = {"identity": canonical, "alias": list(identity), "anchor_kind": anchor,
                        "session": market, "parent_compatibility": list(parent),
                        "native_evaluation_bound":native_bound,
                        "committed_at": stamp, "observation_end_at": stamp + 183,
                        "p0_valid": zero is not None, "pairs": pairs,
                        "situation": situation(fields), "execution_context": "ALL",
-                       "decision_source_sha256": fields["decision_source_sha256"]})
+                       "decision_source_sha256": fields["decision_source_sha256"]}
+        # A retry is an alias only when its native evaluation and immutable
+        # anchor/outcomes agree. Late conflicts invalidate every alias.
+        semantic = digest({k:v for k,v in opportunity.items() if k not in {'alias','decision_source_sha256'}})
+        previous = canonical_rows.get(canonical)
+        if previous is not None:
+            if previous[0] != semantic:
+                canonical_conflicts.add(canonical)
+                reasons['canonical_opportunity_conflict'] += 1
+            else:
+                reasons['duplicate_opportunity_alias'] += 1
+                if tuple(opportunity['alias']) < tuple(previous[1]['alias']):
+                    canonical_rows[canonical] = semantic, opportunity
+        else:
+            canonical_rows[canonical] = semantic, opportunity
+    result = [row for key, (_,row) in canonical_rows.items() if key not in canonical_conflicts]
     return result, {"raw_commit_n": len(commits), "qualified_pass_n": len(result),
                     "p0_valid_n": sum(row["p0_valid"] for row in result),
                     "native_evaluation_unverified_n":sum(not row['native_evaluation_bound'] for row in result),
@@ -330,6 +349,9 @@ def build_initial(rows, *, source_date, publication_date, effective_date, source
 
 
 def validate(policy, report, *, target_date=None):
+    if policy.get('storage_schema') or report.get('storage_schema'):
+        from src.engine.automation.pre_submit_delay_partitioned_research import validate as validate_sharded
+        return validate_sharded(policy, report, target_date=target_date)
     if policy.get("schema") != POLICY_SCHEMA or report.get("schema") != REPORT_SCHEMA:
         raise ValueError("initial_delay_schema_invalid")
     sha = policy.get("policy_sha256")
@@ -388,12 +410,17 @@ def validate(policy, report, *, target_date=None):
 
 
 def _read(path):
+    path = Path(path)
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents) or path.stat().st_size > MAX_BYTES:
         raise ValueError("initial_delay_artifact_path_or_budget_invalid")
     raw = path.read_bytes()
     if len(raw) > MAX_BYTES:
         raise ValueError("initial_delay_artifact_budget_invalid")
-    return json.loads(raw)
+    value = json.loads(raw)
+    if isinstance(value,dict) and value.get('storage_schema'):
+        from src.engine.automation.pre_submit_delay_partitioned_research import EvidenceDocument
+        return EvidenceDocument(value, path.parent)
+    return value
 
 
 def verify_source(data_root, report):
@@ -451,29 +478,35 @@ def verify_source(data_root, report):
 
 
 def _atomic(path, value):
+    from src.engine.lifecycle.research_disk_budget import atomic
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
         raise ValueError('initial_delay_artifact_path_or_budget_invalid')
     path.parent.mkdir(parents=True, exist_ok=True)
     data = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
     if len(data) > MAX_BYTES:
         raise ValueError("initial_delay_artifact_budget_invalid")
-    fd, name = tempfile.mkstemp(prefix="." + path.name, dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(name, path)
-        directory = os.open(path.parent, os.O_DIRECTORY)
+    from src.engine.infrastructure.research_release_transition import journal_write
+    if journal_write(path,data):return
+    with atomic(path,len(data)):
+        fd, name = tempfile.mkstemp(prefix="." + path.name, dir=path.parent)
         try:
-            os.fsync(directory)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(name, path)
+            directory = os.open(path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         finally:
-            os.close(directory)
-    finally:
-        Path(name).unlink(missing_ok=True)
+            Path(name).unlink(missing_ok=True)
 
 
 def committed_paths(data_root, source_date, *, validate_selection=True):
+    from src.engine.infrastructure.research_release_transition import assert_readable
+    assert_readable(data_root)
     directory = Path(data_root).resolve() / "threshold_cycle/pre_submit_delay_policy"
     pointer = directory / f"committed_{source_date}.json"
     manifest = _read(pointer)
@@ -527,6 +560,9 @@ def publish(data_root, report, policy, *, expected_incumbent, source_verifier=No
             source_verifier()
         generation = digest([report, policy])
         base = directory / "generations" / generation
+        if report.get('storage_schema'):
+            from src.engine.automation.pre_submit_delay_partitioned_research import copy_evidence
+            copy_evidence(report,base)
         for key, value in (("report", report), ("policy", policy)):
             path = base / (key + ".json")
             if path.exists() and _read(path) != value:
@@ -561,11 +597,31 @@ class PreparedPolicy:
     code_contract_sha256: str
 
     @classmethod
-    def from_artifacts(cls, policy, report, *, target_date):
+    def from_artifacts(cls, policy, report, *, target_date, active_parents=None):
         validate(policy, report, target_date=target_date)
+        source_cells = policy.get('cells')
+        if policy.get('storage_schema'):
+            from src.engine.lifecycle.research_storage import iter_tree
+            # Research can exceed this population. An active map cannot exceed
+            # its existing explicit preparation budget or silently truncate.
+            source_cells = {}
+            for row in iter_tree(policy.evidence_root,policy['cells_ref']):
+                if row['value']['anchor_kind'] != 'price_ready':
+                    continue
+                # Zero and unverified cells use the existing immediate path.
+                # They do not consume resident positive-policy map capacity.
+                if not row['value'].get('delay_sec') or row['value'].get('runtime_apply_allowed') is False:
+                    continue
+                if active_parents is not None and tuple(row['value']['parent_compatibility']) not in active_parents:
+                    continue
+                if len(source_cells)>=MAX_CELLS:
+                    raise ValueError('initial_delay_active_preparation_budget_exceeded')
+                if row['key'] in source_cells:
+                    raise ValueError('initial_delay_cell_key_conflict')
+                source_cells[row['key']] = row['value']
         cells = MappingProxyType({key: MappingProxyType({k: tuple(cell[k]) if k == 'parent_compatibility' else cell.get(k) for k in (
             "delay_sec", "selection_basis", "fallback_key", "parent_compatibility", "runtime_apply_allowed")})
-            for key, cell in policy["cells"].items() if cell["anchor_kind"] == "price_ready"})
+            for key, cell in source_cells.items() if cell["anchor_kind"] == "price_ready"})
         return cls(policy["policy_sha256"], policy["effective_from"], policy["expires_on"], cells,
                    policy["code_contract_sha256"])
 

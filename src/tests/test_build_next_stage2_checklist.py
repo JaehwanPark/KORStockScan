@@ -60,6 +60,37 @@ def _direct_source(
     return row
 
 
+def test_initial_delay_v2_summary_retains_checklist_closure_contract():
+    from src.engine.runtime_approval_summary import _economic_projection
+    row = _direct_source("pre_submit_delay")
+    row["economic_evidence"] = _economic_projection("pre_submit_delay", {
+        "schema": "pre_submit_delay_tuning_v2",
+        "status": "initial_baseline_immediate", "price_ready_pair_n": 21,
+    })
+    row["initial_timing_policy"] = {"schema": "pre_submit_delay_tuning_v2"}
+    summary = _direct_summary("2026-10-08", sources={"pre_submit_delay": row})
+    from src.engine.runtime_approval_summary import PRIMARY_DIRECT_OWNERS
+    summary["sources"] = {
+        owner: row if owner == "pre_submit_delay" else _direct_source(owner)
+        for owner in PRIMARY_DIRECT_OWNERS
+    }
+    required = [r for r in summary["sources"].values() if r["required"]]
+    summary["required_source_count"] = len(required)
+    summary["available_required_source_count"] = len(required)
+    mod._validate_direct_summary(summary, "2026-10-08")
+    row["economic_evidence"]["policy_handoff_state"] = "initial_quote_timing_policy_published"
+    with pytest.raises(RuntimeError, match="initial timing handoff contract invalid"):
+        mod._validate_direct_summary(summary, "2026-10-08")
+    row["initial_timing_policy"]["runtime_contract_validated"] = True
+    row["policy_receipt"] = {"valid": True, "target_date_matches": True}
+    mod._validate_direct_summary(summary, "2026-10-08")
+    evidence = row["economic_evidence"]
+    assert evidence["closure_owner"] == "pre_submit_delay_tuning"
+    assert evidence["closure_test"] == "bound_initial_quote_pairs_policy_loader_and_guard"
+    assert evidence["policy_apply_allowed"] is False
+    assert evidence["actual_net_profit_improvement"] is None
+
+
 def _direct_summary(
     day: str,
     *,

@@ -1524,8 +1524,9 @@ def _stage_output_issues(report_dir, day, stage):
         report = _load_json(paths['pre_submit_delay_tuning'])
         policy = _load_json(paths['pre_submit_delay_policy'])
         if policy.get('schema') == 'pre_submit_delay_policy_v2':
-            from src.engine.scalping.pre_submit_delay_initial_policy import validate, code_contract, verify_source
+            from src.engine.scalping.pre_submit_delay_initial_policy import validate, code_contract, verify_source, _read
             try:
+                policy, report = _read(paths['pre_submit_delay_policy']), _read(paths['pre_submit_delay_tuning'])
                 validate(policy, report)
                 verify_source(Path(report_dir).parent, report)
                 if report.get('source_date') != day or policy.get('code_contract_sha256') != code_contract():
@@ -1736,18 +1737,6 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
                     'issues':['source_quality_preflight_changed_before_consumption'],
                     'policy_disposition':'source_quality_blocked', 'finished_at':now()})
-        if stage == 'pre_submit_delay':
-            from src.engine.scalping.pre_submit_delay_tuning import seal_family_source_ledger, family_source_ledger_issues
-            try:
-                source_manifest = seal_family_source_ledger(Path(report_dir).parent, day)
-                source_issues = family_source_ledger_issues(Path(report_dir).parent, day)
-                if source_issues:
-                    raise ValueError(','.join(source_issues))
-                value['pipeline_source_generation_sha256'] = source_manifest['ledger_sha256']
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
-                    'issues':[f'pipeline_source_quality:{exc}'], 'policy_disposition':'source_gap',
-                    'finished_at':now()})
         if not execute:
             # Review-only intake is explicit: validates existing artifacts, never
             # claims that their calculation was executed by this new runner.
@@ -1759,34 +1748,56 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
         # Host-wide admission shared across independent scheduled wrappers.
         slots = Path(report_dir).parent / 'runtime' / 'postclose_stage_slots'; slots.mkdir(parents=True, exist_ok=True)
+        from src.engine.lifecycle.research_admission import acquire
         slot = None; admission_started = time.monotonic(); deadline = admission_started + timeout
         while slot is None and time.monotonic() < deadline:
             if stop_event is not None and stop_event.is_set():
                 return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['stage_interrupted_at_saved_checkpoint']})
-            for n in range(2):
-                handle = (slots / f'{n}.lock').open('a')
-                try: fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB); slot = handle; break
-                except BlockingIOError: handle.close()
+            slot = acquire(Path(report_dir).parent, stage, day)
             if slot is None:
                 _stage_write(path, {**value, 'status':'pending', 'heartbeat_at':now(), 'reason':'resource_admission'})
-                time.sleep(1)
+                time.sleep(min(1, max(0, deadline-time.monotonic())))
         if slot is None:
             return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['resource_admission_timeout']})
         try:
             value['resource_admission_wait_sec'] = round(time.monotonic() - admission_started, 3)
             value.update(status='running', heartbeat_at=now()); _stage_write(path, value)
+            # Raw/compact reconciliation is part of the heavy calculation.
+            # Reserve both host slots before scanning, including in this parent.
+            if stage == 'pre_submit_delay':
+                from src.engine.scalping.pre_submit_delay_tuning import seal_family_source_ledger, family_source_ledger_issues
+                try:
+                    source_manifest = seal_family_source_ledger(Path(report_dir).parent, day, partitioned=True)
+                    source_issues = family_source_ledger_issues(Path(report_dir).parent, day)
+                    if source_issues:
+                        raise ValueError(','.join(source_issues))
+                    value['pipeline_source_generation_sha256'] = source_manifest['ledger_sha256']
+                    value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
+                        'issues':[f'pipeline_source_quality:{exc}'], 'policy_disposition':'source_gap',
+                        'finished_at':now()})
+            if time.monotonic() >= deadline:
+                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
+                    'issues':['stage_deadline_after_source_reconciliation'], 'finished_at':now()})
             env = {**os.environ, 'PYTHONPATH':str(project), 'POSTCLOSE_STAGE_WORKER':'1', 'POSTCLOSE_SOURCE_DATE':day,
                 'POSTCLOSE_POLICY_PUBLICATION_DATE':publication,
                 'POSTCLOSE_STAGE_DEADLINE_EPOCH':str(time.time()+max(0,deadline-time.monotonic())),
                 'POSTCLOSE_PREPARED_EFFECTIVE_DATE':value.get('prepared_effective_date', effective)}
+            env.update(slot.environment())
             rc = 0
             child = None
             for command in commands:
                 if runner:
-                    rc = runner(command, env=env, cwd=project)
+                    value['execution_mode']='synchronous_producer_adapter'
+                    with slot.worker():
+                        rc = runner(command, env=env, cwd=project)
+                    if time.monotonic() >= deadline:
+                        rc=75
+                        value['synchronous_deadline_expired']=True
                 else:
                     with path.with_suffix('.log').open('a') as log:
-                        child = subprocess.Popen(command, env=env, cwd=project, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                        child = subprocess.Popen(command, env=env, cwd=project, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, pass_fds=slot.pass_fds)
                         while child.poll() is None:
                             if stop_event is not None and stop_event.is_set():
                                 raise InterruptedError('stage_interrupted_at_saved_checkpoint')
@@ -1848,6 +1859,11 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             return _stage_write(path, value)
         except (OSError, ValueError, TypeError, KeyError, InterruptedError) as exc:
             return _stage_write(path, {**value, 'status':'failed', 'exit_code':1, 'issues':[str(exc)], 'finished_at':now()})
+        except Exception as exc:
+            # Unexpected internal failures must leave a terminal failure, not
+            # a durable running receipt after the child/slot has disappeared.
+            return _stage_write(path, {**value, 'status':'failed', 'exit_code':1,
+                'issues':[f'stage_internal_error:{type(exc).__name__}:{exc}'], 'finished_at':now()})
         finally:
             if 'child' in locals() and child is not None and child.poll() is None:
                 import signal

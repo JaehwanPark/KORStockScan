@@ -486,6 +486,8 @@ def _render(report: dict[str, Any]) -> str:
 
 
 def _atomic_write(path: Path, content: str) -> None:
+    from src.engine.infrastructure.research_release_transition import journal_write
+    if journal_write(path,content.encode('utf-8')):return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
         temporary = Path(handle.name)

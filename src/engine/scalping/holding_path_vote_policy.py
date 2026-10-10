@@ -45,7 +45,7 @@ def source_quality_from_observation(observation: dict[str, Any]) -> dict[str, An
     """Keep the summary producer and strict consumer on one cohort projection."""
     population = observation.get("completed_population_quality") or {}
     replay = observation.get("holding_path_vote_replay") or {}
-    return {
+    quality = {
         "strict_population_count": replay.get("strict_population_count"),
         "completed_population_complete": population.get("complete"),
         "main_completed_ids": population.get("db_completed_main_ids") or [],
@@ -55,6 +55,15 @@ def source_quality_from_observation(observation: dict[str, Any]) -> dict[str, An
         "vote_replay_excluded_by_id": replay.get("excluded_by_position_id") or {},
         "source_gap_date_count": len(population.get("source_gap_dates") or []),
     }
+    if replay.get('source_status') == 'source_gap_partitioned_vote_inputs_unavailable':
+        quality.update(
+            completed_population_complete=False,
+            replay_cohort_status='source_gap_partitioned_vote_inputs_unavailable',
+            main_completed_ids_role='vote_eligible_subset',
+            available_actual_population_ids_ref=population.get('db_completed_main_ids_ref'),
+            available_actual_population_count=population.get('canonical_main_completed_rows'),
+        )
+    return quality
 
 
 def _scenario_decisions(path_id: str, policy: dict[str, Any]) -> dict[str, str]:

@@ -114,9 +114,11 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
     from src.engine.scalping.pre_submit_delay_tuning import (
         DELAYS_SEC, _digest, _number, _validated_candidate, report_path,
     )
+    from src.engine.infrastructure.research_release_transition import assert_readable
+    assert_readable(DATA_DIR)
 
     directory = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
-    from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths, validate as validate_initial, code_contract, verify_source
+    from src.engine.scalping.pre_submit_delay_initial_policy import committed_paths, validate as validate_initial, code_contract, verify_source, _read
     committed = sorted(directory.glob("committed_????-??-??.json"), reverse=True)
     if len(committed) > 370:
         return {}, {"status": "invalid_generation_inventory", "target_date": target_date}
@@ -126,10 +128,10 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
             continue
         try:
             report_file, policy_file, _, manifest = committed_paths(DATA_DIR, source_day)
-            verify_source(DATA_DIR, _load_json(report_file))
+            verify_source(DATA_DIR, _read(report_file))
             if manifest.get('code_contract_sha256') != code_contract():
                 raise ValueError('initial_delay_code_contract_changed')
-            initial_policy, initial_report = _load_json(policy_file), _load_json(report_file)
+            initial_policy, initial_report = _read(policy_file), _read(report_file)
             if not initial_policy["effective_from"] <= target_date <= initial_policy["expires_on"]:
                 continue
             validate_initial(initial_policy, initial_report, target_date=target_date)
@@ -413,6 +415,8 @@ def _file_receipt(path: Path) -> dict[str, Any]:
 
 
 def _publish(path: Path, content: str) -> None:
+    from src.engine.infrastructure.research_release_transition import journal_write
+    if journal_write(path,content.encode('utf-8')):return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
@@ -1203,12 +1207,23 @@ def build_manifest(
         parent_sha256=trailing_receipt['market_values_sha256'], source_date=target_date, target_date=target_date,
         parent_classifier_parameters=trailing_receipt['classifier_parameters'])
     typed_path = DATA_DIR / 'threshold_cycle/scalp_trailing_situation' / f'initial_policy_{target_date}.json'
+    typed_publication = typed_path.with_suffix('.publication.json')
+    if typed_publication.exists():
+        from .main_trailing_all_scope_research import _sealed
+        publication = _sealed(typed_publication)
+        if publication.get('state') != 'verified' or not typed_path.exists():
+            raise ValueError('main_trailing_initial_publication_incomplete')
     if typed_path.exists():
         if typed_path.is_symlink() or typed_path.stat().st_size > 64 * 1024:
             raise ValueError('trailing_situation_initial_policy_path_invalid')
         candidate_typed = _load_json(typed_path)
         PreparedTrailingPolicy.prepare(candidate_typed, target_date=target_date,
             parent_sha256=trailing_receipt['market_values_sha256'])
+        typed_receipt = typed_path.with_suffix('.receipt.json')
+        if typed_receipt.exists() or typed_path.with_suffix('.publication.json').exists():
+            from .main_trailing_research_handoff import verify_initial
+            verify_initial(DATA_DIR,candidate_typed,target_date=target_date,
+                parent_sha256=trailing_receipt['market_values_sha256'])
         typed_parent = candidate_typed
     # This baseline is an exact parent-equivalence expansion, not a tuning
     # approval. A qualified override requires the existing real selector.

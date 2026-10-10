@@ -129,7 +129,9 @@ def test_postclose_consumer_uses_source_day_not_next_application_day(tmp_path):
     errors=handoff._stage_output_issues(report_dir,'2026-10-06','main_machine_policy')
     assert not any('main_fixed_watch' in error or 'fixed_watch_research' in error for error in errors)
     commands=handoff.stage_commands('main_machine_policy','2026-10-06','2026-10-06',recovery=True)
-    assert len(commands)==4 and commands[0][2]=='src.engine.monitoring.main_fixed_watch_policy_research'
+    assert len(commands)==1 and commands[0][2]=='src.engine.scalping.continuous_reversal_postclose'
+    assert commands[0][commands[0].index('--date')+1]=='2026-10-06'
+    assert commands[0][commands[0].index('--mode')+1]=='machine'
     assert handoff.stage_commands('main_machine_policy','2026-10-02','2026-10-02',recovery=True)==[]
 
 

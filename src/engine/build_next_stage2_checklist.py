@@ -682,6 +682,8 @@ def _validate_direct_summary(
             "incumbent_preserved",
             "not_applicable",
             "verified",
+            "initial_policy_requires_bound_receipt",
+            "initial_quote_timing_policy_published",
         }:
             raise RuntimeError(
                 f"direct runtime summary policy handoff state invalid: {owner}"
@@ -702,7 +704,29 @@ def _validate_direct_summary(
                         "direct runtime summary policy receipt "
                         f"{receipt_bool} invalid: {owner}"
                     )
-        if evidence.get("comparison_status") == "cumulative_winrate_selected":
+        if handoff_state in {
+            "initial_policy_requires_bound_receipt",
+            "initial_quote_timing_policy_published",
+        }:
+            initial = row.get("initial_timing_policy") or {}
+            if (
+                owner != "pre_submit_delay"
+                or evidence.get("comparison_status") != "not_applicable"
+                or evidence.get("resolution_mode") != "initial_quote_timing_estimate"
+                or evidence.get("metric_role") != "initial_entry_price_timing_estimate"
+                or evidence.get("policy_apply_allowed") is not False
+                or initial.get("schema") != "pre_submit_delay_tuning_v2"
+                or (handoff_state == "initial_quote_timing_policy_published" and (
+                    initial.get("runtime_contract_validated") is not True
+                    or not isinstance(receipt, dict)
+                    or receipt.get("valid") is not True
+                    or receipt.get("target_date_matches") is not True
+                ))
+            ):
+                raise RuntimeError(
+                    f"direct runtime summary initial timing handoff contract invalid: {owner}"
+                )
+        elif evidence.get("comparison_status") == "cumulative_winrate_selected":
             if (
                 owner not in {"main_mechanistic_entry", "compact_auxiliary"}
                 or handoff_state != "verified"
@@ -1915,6 +1939,8 @@ def _checklist_write_lock(target_path: Path) -> Iterator[None]:
 
 
 def _atomic_write_checklist(path: Path, content: str) -> None:
+    from src.engine.infrastructure.research_release_transition import journal_write
+    if journal_write(path,content.encode('utf-8')):return
     path.parent.mkdir(parents=True, exist_ok=True)
     existing_mode = path.stat().st_mode & 0o777 if path.exists() else 0o664
     temporary_path: Path | None = None

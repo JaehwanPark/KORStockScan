@@ -2,9 +2,11 @@
 
 작성일: 2026-10-10 KST
 
-상태: 공통 코드 구현·반복 리뷰 및 승인된 코드 배포를 완료했다. **전체 계획 수용은 미완료**이며 `MainAllScopeTrailingReplay`를 OPEN으로 유지한다. 전수 원천 연결·상한 초과 분할·전체 연구 성능과 S6 신규 정책 발행/장후 재생성은 남아 있다. 아래 기존 문서 검증 기록은 작성 당시 이력이며 현행 코드·배포 근거는 후속 기록을 따른다.
+상태: **AT0–AT7·TP1–TP7와 잔여 W0–W5의 구현·반복 리뷰·정식 발행·승인 배포·기동 준비를 완료했다.** `MainAllScopeTrailingReplay`는 완료다. 최종 릴리스는 `main-trailing-delay-residual-20261010-v6` / `78f2c1d784fd5043d5b5bc0fedd7b963f8fe42d4`이며 [실행 감사](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)와 [최종 준비 영수증](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json)을 따른다. 10/12 실제 PID 소비와 실현 경제성은 미관측이며 기존 적용일 owner에서 확인한다. 아래 이전 문서·부분 배포 기록은 당시 이력이다.
 
-후속 승인 배포(10/10): 검증된 공통 코드와 부모 동등 초기 구성은 `main-trailing-delay-20261010-v1` / `d61b36b00696865ca9dd13a466d8544a886e2e28`로 배포했다. 10/12 PREOPEN 전체 계약·예약경로·최종화 세대는 PASS다. 신규 제출 지연 v2 정책 발행 및 전수 연구/대용량/전체 연구 성능 수용은 OPEN이며 상세 상태는 [후속 리뷰·배포 기록](../audits/main-all-scope-trailing-and-pre-submit-delay-implementation-review-2026-10-10.md)을 따른다.
+구현 순서·owner·완료 검사는 [잔여작업 완료계획 W0–W6](main-trailing-delay-residual-work-completion-plan-2026-10-10.md)을 따른다. 자동 전수 source producer, 초과 입력의 분할·재개·전역 집계, 전체 성능 및 formal 장후/PREOPEN 인계를 검증했다. 초기 부모 계승은 추가 경제 gate 없이 수용했으며 W6 자연 PID 관측은 적용일의 별도 수용이다.
+
+후속 승인 배포 이력(10/10, 잔여 구현 전): 검증된 공통 코드와 부모 동등 초기 구성은 `main-trailing-delay-20261010-v1` / `d61b36b00696865ca9dd13a466d8544a886e2e28`로 배포했다. 10/12 PREOPEN 전체 계약·예약경로·최종화 세대는 PASS다. 신규 제출 지연 v2 정책 발행 및 전수 연구/대용량/전체 연구 성능 수용은 OPEN이며 상세 상태는 [후속 리뷰·배포 기록](../audits/main-all-scope-trailing-and-pre-submit-delay-implementation-review-2026-10-10.md)을 따른다.
 
 
 대상: Main 보유청산의 트레일링 시작률, weak/strong 되돌림폭, 상황 분류, 실제 완료 거래와 ENTER_NOW+PASS 후행 경로를 이용하는 장후 계산·오프라인 재생.
@@ -41,7 +43,7 @@
 | 기존 장후 최적화 | [holding report](../../src/engine/holding_exit_observation_report.py) → [mechanical replay](../../src/engine/scalping/trailing_mechanical_replay.py)는 엄격한 실제 완료 거래 cohort를 소비한다. | 실제 경제 원장은 유지하고 ENTER_NOW+PASS 기회 재생을 별도 cohort로 추가한다. |
 | 기존 기회 재생 | [first-signal 연구](../../src/engine/scalping/entry_first_signal_exit_research.py), [M1 연구](../../src/engine/scalping/entry_mechanical_exit_research.py)에 비삼성·KRX 정규장·60분/15:30 제한이 있다. | 과거 연구의 의미를 보존하면서 공통 재생 엔진과 전체 범위 adapter로 확장한다. |
 | 비용 원천 | [수집·배분](../../src/engine/lifecycle/broker_cost_source.py), [대사](../../src/engine/lifecycle/broker_cost_reconciliation.py). 현재 공식 일별 비용의 자동 배분 성공은 단일 Main position의 당일 완전 왕복과 전량 귀속 입증에 제한된다. | 모든 보유를 census에 넣고 복수 position·분할·익일 보유의 exact 배분 가능성을 각각 검증한다. 불명확한 비용은 결손으로 남긴다. |
-| 구현과 운영 | 현재 선택 release는 `main-pass-submit-20261010-v1` / `b26aae701314d91a75056fac576b5f460beb3c06`; 준비 index는 10/12를 가리킨다. | 이 dated 확인을 새 코드의 배포/PID 증거로 재사용하지 않는다. 현재 준비와 새 계획 적용은 별도다. |
+| 구현과 운영 | 계획 작성 당시 선택 release는 `main-pass-submit-20261010-v1` / `b26aae701314d91a75056fac576b5f460beb3c06`이었다. 후속 선택은 §1 앞의 10/10 배포 기록과 실제 selector를 따른다. | 이 dated 확인을 새 코드의 배포/PID 증거로 재사용하지 않는다. 현재 준비와 전체 계획 적용은 별도다. |
 
 선행 점검의 관련 14개 suite 475건 통과는 기존 코드의 표적 회귀 결과다. 아래 신규 결함이나 전체 시장 재생 지원을 이미 검증했다는 뜻이 아니다.
 
@@ -318,6 +320,8 @@ cache는 source 증거를 대체하지 않는다. producer에서 한 번 확인�
 
 S0/AT0에서 한 개의 `performance_budget` manifest를 함께 참조한다. host/선택 baseline code, 전체 universe·기회·event 수와 burst schedule, queue/event/bytes 상한, process별 및 **합산** RSS/CPU/I/O/temp disk, worker 수, postclose/다음 PREOPEN 가용 시간창, source/candidate hash·측정 표본/해상도를 고정한다. 수치는 현재 상한·baseline 측정으로 채우고 미정인 상태에서 전체 확대를 완료 처리하지 않는다. 두 모듈에 같은 메모리 여유분을 각각 배정하지 않는다.
 
+후속 실제 코드 대조에서 `research_input_budget.Claim`은 process-local이고 stage dispatcher는 두 자식을 허용함을 확인했다. [잔여작업 W2](main-trailing-delay-residual-work-completion-plan-2026-10-10.md#5-w2-상한-초과를-처리하는-분할재개)의 기존 slot 가중 접수·heavy job 순차 실행으로 합산 예산을 구현한다. scope 6개 disposition, 기회/실제 거래 장부, shard의 논리 digest/물리 hash를 구분하고 cache뿐 아니라 정렬/결과/old-new 세대 공존의 peak disk를 측정한다. 최종 source bundle은 실제 profile snapshot→holding report caller에서 생성하고 W5의 전환 세트·실패 복구 및 당일 selector 순서까지 검증한다.
+
 기존 admission/scheduler/단일 writer를 사용한다. 두 family가 같은 source를 요구하면 봉인 projection을 공유하고 필요하면 기존 순차 stage에서 실행 순서를 조정한다. 새 worker·process pool·cron으로 비용을 떠넘기지 않는다. due 재평가의 실제 AI 호출 수·기존 entry/exit queue wait도 합산하며 cap/deadline·Provider 예산을 늘려 통과시키지 않는다. 일정/동시성 변경이 필요하면 그 구현 변경에서 운영 owner·문서·회귀를 함께 갱신한다.
 
 입력이 기존 읽기 상한을 넘으면 상한 우회·최근 기간 절단 대신 제한된 partition/job 단위로 재개 가능한 처리를 구현한다. 기존 pre-submit compact의 64MiB 전체 decode 상한은 현재 코드의 제약이며, 더 큰 모집단 지원에는 분할 작업·전역 census validator·전체 run 예산을 함께 바꾸는 명시적 구현이 필요하다. 단순히 파일당 64MiB로 재해석하지 않는다. 메모리에 남는 index·중복 set·candidate bitmap·cache·spool을 모두 합산한다. 아직 처리하지 않은 partition은 `resource_deferred/in_progress`이고, 모든 범위의 disposition과 필수 계산이 닫히기 전 전체 재생 완료/경제 후보를 발행하지 않는다. preview sampling 산출물은 전체 초기정책 선택의 입력이 아니다.
@@ -412,3 +416,7 @@ AT-F7–AT-F10을 추가하고 TP1–TP7을 실제 loader·observer·classifier�
 - 두 상세계획의 로컬 링크 52개(앵커 포함 링크 6개) 결손 0, 참조 테스트 경로·fence·공백 검사 통과. print-only parser exit 0·backlog 20개, `git diff --check`와 신규 문서 개별 whitespace 검사 통과. 기존 10/12 handoff owner 1개를 유지하며 새로운 실행 owner를 등록하지 않았다.
 - 작업 시작 시 고정한 기존 PASS 계획·10/2 delay 계획과 10/12 봉인 checklist는 불변이다. 병행 작업의 10/10 checklist 성능 리뷰 기록을 재독·보존했다. 이번 직접 보완은 이 문서와 제출 지연 계획의 전체 scope/분할·합산 자원/gate 연결이며 병행 수정 내용을 덮어쓰지 않았다.
 - 코드 pytest/compile·성능 실측·장후 재생성·정책 발행/배포·외부 sync는 문서 리뷰 범위 밖이라 수행하지 않았다. 수치 예산과 실측 결과는 AT0/AT7 후속 수용이며 구조적 절감 목표를 현재 성능 개선 실적으로 보고하지 않는다.
+
+## 잔여 구현 실행 기록 — 2026-10-10
+
+[반복 리뷰·실제 원천·성능 근거](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)를 따른다. 전수 streaming/shard·전역 중복/split·부모 승계와 0초 초기값·정식 writer/consumer 연결을 구현했다. 코드 수용과 W5 발행/chain, 10/12 자연 PID 수용을 분리한다. 최종 v6 발행·native finalization DONE·10/12 `current_full_contract=pass`까지 수용했다. 실제 적용일 PID·경제 결과만 별도 자연 관측으로 남는다.

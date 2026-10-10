@@ -272,10 +272,16 @@ def selected_policy_env(
     target_date: str, report_sha256: str,
 ) -> dict[str, str]:
     """A later tuned policy needs direct M1 holdout, review and rollback."""
+    if 'all_scope_type_source' in report:
+        from src.engine.automation.scalp_trailing_mechanical_policy_apply import verify_type_view
+        verify_type_view(report,target_date=target_date)
     if target_date >= '2026-10-10':
         from src.engine.lifecycle.holding_window_generation import verify_window
         from src.utils.constants import DATA_DIR
         verify_window(DATA_DIR, report.get('input_window_dependencies'))
+    if 'all_scope_trailing_research' in report:
+        from src.engine.automation.main_trailing_research_handoff import verify_extension
+        verify_extension(report,target_date=target_date)
 
     if (policy.get("schema") != SELECTED_SCHEMA
             or policy.get("family") != "scalp_trailing_mechanical_three_axis_selector"

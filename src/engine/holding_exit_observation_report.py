@@ -12,6 +12,7 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy, policy_refresh_start_date,
@@ -52,6 +53,11 @@ from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 SCHEMA_VERSION = 2
 _INPUT_BUDGET = ContextVar('holding_report_input_budget', default=None)
+_SOURCE_ROOT = ContextVar('holding_report_source_root', default=None)
+
+
+def _data_root():
+    return _SOURCE_ROOT.get() or DATA_DIR
 SOR_KRX_POST_SELL_USER_OVERRIDE = "user_2026_09_27_sor_krx_reference_postclose"
 POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
 TARGET_EXIT_RULES = (
@@ -282,7 +288,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def _monitor_snapshot_path(snapshot_kind: str, target_date: str) -> Path | None:
-    snapshot_dir = DATA_DIR / "report" / "monitor_snapshots"
+    snapshot_dir = _data_root() / "report" / "monitor_snapshots"
     safe_kind = str(snapshot_kind or "").strip().lower().replace("-", "_")
     for suffix in (".json", ".json.gz"):
         candidate = snapshot_dir / f"{safe_kind}_{target_date}{suffix}"
@@ -334,10 +340,22 @@ def _load_saved_snapshots(
     return snapshots, paths
 
 
-def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path = DATA_DIR) -> dict | None:
+def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path | None = None,
+                                      metadata_only: bool = False) -> dict | None:
+    data_root = _data_root() if data_root is None else data_root
     sidecar = path.with_suffix(".completed_projection.json")
     if not sidecar.is_file():
         return None
+    if metadata_only and sidecar.stat().st_size > 4 * 1024 * 1024:
+        from src.engine.lifecycle.holding_window_generation import _capture_day
+        try:
+            dependency=_capture_day(Path(data_root),path.parent,target_date)
+            if not dependency['census_sha256'] or dependency['profile']!='postclose_exit':return None
+            return dict(date=target_date,meta=dict(snapshot_profile=dependency['profile'],
+                actual_cost_source_generation=dependency['cost_generation'],
+                knowledge_cutoff=dependency['knowledge_cutoff']),
+                normalized_projection_reference=dependency['projection'])
+        except (OSError,ValueError,KeyError,TypeError):return None
     try:
         projected = _read_json(sidecar)
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
@@ -827,11 +845,11 @@ def _build_cohorts(valid_trades: list[dict]) -> dict:
 
 
 def _post_sell_candidate_path(target_date: str) -> Path:
-    return DATA_DIR / "post_sell" / f"post_sell_candidates_{target_date}.jsonl"
+    return _data_root() / "post_sell" / f"post_sell_candidates_{target_date}.jsonl"
 
 
 def _post_sell_evaluation_path(target_date: str) -> Path:
-    return DATA_DIR / "post_sell" / f"post_sell_evaluations_{target_date}.jsonl"
+    return _data_root() / "post_sell" / f"post_sell_evaluations_{target_date}.jsonl"
 
 
 def _load_post_sell_rows(dates: list[str]) -> tuple[list[dict], list[str]]:
@@ -894,7 +912,7 @@ def _trailing_policy_manifest_binding(
     except (TypeError, ValueError):
         return {"status": "source_gap_policy_date_missing"}
     path = (
-        DATA_DIR
+        _data_root()
         / "runtime"
         / "policy_bootstrap"
         / f"runtime_policy_bootstrap_{policy_date}.json"
@@ -1002,7 +1020,7 @@ def _operational_manifest_binding(
     if not isinstance(values, dict) or not isinstance(sources, dict):
         return {"status": "source_gap_operational_values_or_sources"}
     path = (
-        DATA_DIR / "runtime" / "policy_bootstrap"
+        _data_root() / "runtime" / "policy_bootstrap"
         / f"runtime_policy_bootstrap_{policy_date}.json"
     )
     try:
@@ -2464,7 +2482,7 @@ def _build_same_symbol_reentry(valid_trades: list[dict]) -> dict:
 
 def _pipeline_event_paths(dates: list[str]) -> list[Path]:
     paths: list[Path] = []
-    base = DATA_DIR / "pipeline_events"
+    base = _data_root() / "pipeline_events"
     for target_date in dates:
         for suffix in (".jsonl", ".jsonl.gz"):
             path = base / f"pipeline_events_{target_date}{suffix}"
@@ -2600,7 +2618,7 @@ def _build_load_distribution_evidence(
     post_sell_rows: int,
     pipeline_rows: int,
 ) -> dict:
-    manifest_dir = DATA_DIR / "report" / "monitor_snapshots" / "manifests"
+    manifest_dir = _data_root() / "report" / "monitor_snapshots" / "manifests"
     manifest_paths = [
         str(path)
         for path in (
@@ -2628,14 +2646,117 @@ def _build_load_distribution_evidence(
 
 
 def build_holding_exit_observation_report(
-    *, target_date: str, month_start: str | None = None,
+    *, target_date: str, month_start: str | None = None, input_root=None,
+    all_scope_research=False, research_output_root=None,research_input_root=None,
 ) -> dict:
-    with ExitStack() as budget:
-        token = _INPUT_BUDGET.set(budget)
-        try:
-            return _build_holding_exit_observation_report(target_date=target_date, month_start=month_start)
-        finally:
-            _INPUT_BUDGET.reset(token)
+    """Normal postclose profile assembles sources; ordinary observers stay light.
+
+    An explicit root is task-local, so isolated recovery cannot change another
+    report's source root. Legacy report claims end before the research replay.
+    """
+    root_token = _SOURCE_ROOT.set(Path(input_root).resolve() if input_root is not None else None)
+    try:
+        with ExitStack() as budget:
+            token = _INPUT_BUDGET.set(budget)
+            try:
+                try:
+                    report = _build_holding_exit_observation_report(target_date=target_date, month_start=month_start)
+                except ValueError as exc:
+                    if not all_scope_research or not str(exc).startswith((
+                        'holding_input_partition_required','shared_research_budget_partition_resume_required')):
+                        raise
+                    report = None
+            finally:
+                _INPUT_BUDGET.reset(token)
+        if all_scope_research:
+            from src.engine.automation.main_trailing_source_assembler import assemble
+            from src.engine.automation.main_trailing_all_scope_research import run
+            from src.engine.lifecycle.research_admission import direct_job
+            from src.engine.lifecycle.research_disk_budget import use
+            from src.engine.lifecycle.holding_window_generation import byte_generation
+            from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+            root=_data_root().resolve()
+            out=Path(research_output_root).resolve() if research_output_root is not None else root/'report/main_all_scope_trailing'/target_date
+            # Input and output are sibling generations outside canonical raw
+            # sources; neither reads the holding report being constructed.
+            assembly=(Path(research_input_root).resolve() if research_input_root is not None
+                else root.parent/(root.name+'-research-inputs')/'main_trailing'/target_date)
+            with direct_job(root,'main_trailing_all_scope',target_date), use(out):
+                manifest=assemble(root,assembly,source_date=target_date,target_date=_next_krx_trading_day(target_date),
+                    start_date=month_start or '2026-09-29',immutable=True)
+                assembly=manifest.parent
+                if research_output_root is None:
+                    out=out/'generations'/assembly.name
+                result=run(manifest,input_root=assembly,output_root=out,dry_run=False,resume=True)
+                if report is None:
+                    report=_partitioned_holding_report(target_date,month_start,result,out,assembly)
+            path=out/f'research_{target_date}.json'
+            report['all_scope_trailing_research']={
+                'schema':result['schema'],'status':result['status'],'report_path':str(path),
+                'report_generation':byte_generation(path),'input_window_generation_sha256':result['input_window_generation_sha256'],
+                'initial_policy_sha256':result['initial_policy']['policy_sha256'],
+                'scope_count':result['scope']['scope_count'],'source_census':result['assembly_census'],
+                'allowed_runtime_apply':False}
+        return report
+    finally:
+        _SOURCE_ROOT.reset(root_token)
+
+
+def _partitioned_holding_report(target_date,month_start,result,out,assembly):
+    """Keep the complete actual cohort as sealed refs, never an empty list.
+
+    Large legacy display diagnostics cannot select values. The universal
+    producer, its existing selector authority and verified bootstrap retain
+    their distinct roles; a size limit does not invent missing economics.
+    """
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.automation.main_trailing_all_scope_research import _sealed
+    manifest=_sealed(assembly/'manifest.json')
+    start,window=_analysis_window_start(target_date=target_date,month_start=month_start)
+    def actual_ids():
+        for part in storage.iter_tree(assembly,manifest['partitions_ref']):
+            payload=_sealed(assembly/part['path'])
+            for position in payload['positions']:
+                if position['evidence_kind']=='actual_completed':yield position['position_key']
+    actual_ref=storage.write_tree(out,actual_ids())
+    from src.engine.lifecycle.holding_window_generation import capture_window
+    dependency=capture_window(_data_root(),manifest['consumed_dates'])
+    source_gaps=result['assembly_census'].get('source_gaps',{})
+    census_complete=not any(source_gaps.get(key,0) for key in (
+        'completed_snapshot_source_gap','completed_snapshot_missing','completed_snapshot_unverified'))
+    # Universal outcome refs do not contain the original vote signal ledger.
+    # Keep that consumer's baseline-prior contract, with an explicit missing
+    # replay cohort; never relabel universal outcomes as observed AI votes.
+    votes = summarize_holding_path_votes(
+        [], load_events=lambda _: [],
+        model=str(getattr(TRADING_RULES, 'OPENAI_HOLDING_EXIT_VOTE_MODEL',
+                          'gpt-5.4-nano') or 'gpt-5.4-nano'),
+    )
+    votes.update(source_status='source_gap_partitioned_vote_inputs_unavailable',
+                 available_actual_population_ids_ref=actual_ref,
+                 economic_replay_observed=False)
+    return dict(date=target_date,month_start=start,analysis_window=window,
+        completed_population_quality=dict(complete=census_complete,storage_schema='main_holding_cohort_reference_v2',
+            canonical_main_completed_rows=actual_ref['count'],db_completed_main_ids_ref=actual_ref,
+            source_gap_counts=source_gaps,
+            whole_census_economics_complete=None),
+        mechanical_population_quality=dict(complete=census_complete,start_entry_day=window['policy_refresh_start_date'],
+            entry_day_basis='verified_forward_source_window',
+            policy_refresh_start_date=window['policy_refresh_start_date'],
+            classifier_version=manifest['approved_parent_receipt']['classifier_version']),
+        cohorts=dict(actual_completed=dict(population_ids_ref=actual_ref,n=actual_ref['count'])),
+        position_outcomes_ref=result['partition_results_ref'],
+        holding_path_vote_replay=votes,
+        trailing_mechanical_market_tuning=dict(status='partitioned_research_reference',population_complete=census_complete,
+            research_candidate=None,decision_authority='existing_mechanical_selector',
+            universal_evaluation=result['common_population_evaluation']),
+        input_window_dependencies=dependency,input_window_generation_sha256=dependency['input_window_generation_sha256'],
+        actual_cost_source_generations={d:v['cost_generation'] for d,v in dependency['dependencies'].items()},
+        cost_input_complete=None,readiness=dict(status='partitioned_source_verified'),
+        meta=dict(schema_version=SCHEMA_VERSION,storage_schema='main_holding_cohort_reference_v2',
+            basis='main-only, normal_only, post_fallback_deprecation',
+            legacy_display_diagnostics='partitioned',
+            knowledge_cutoff=datetime.fromtimestamp(manifest['as_of'],ZoneInfo('Asia/Seoul')).isoformat()))
 
 
 def _build_holding_exit_observation_report(
@@ -2659,7 +2780,7 @@ def _build_holding_exit_observation_report(
 
     dates = _date_range(safe_month_start, safe_date)
     from src.engine.lifecycle.holding_window_generation import capture_window, verify_window
-    input_window = capture_window(DATA_DIR, dates)
+    input_window = capture_window(_data_root(), dates)
     isolated_dates = [day for day,row in input_window['dependencies'].items() if row['status'] == 'source_gap']
     trade_snapshots, trade_snapshot_paths = _load_saved_snapshots('trade_review', dates, excluded_dates=isolated_dates)
     performance_snapshot = _load_saved_snapshot("performance_tuning", safe_date)
@@ -2790,7 +2911,7 @@ def _build_holding_exit_observation_report(
         population_complete=mechanical_population_quality["complete"],
     )
     from src.engine.scalping.universal_trailing_replay import completed_census
-    bootstrap_path = DATA_DIR / 'runtime/policy_bootstrap' / f'runtime_policy_bootstrap_{safe_date}.json'
+    bootstrap_path = _data_root() / 'runtime/policy_bootstrap' / f'runtime_policy_bootstrap_{safe_date}.json'
     parent_manifest = _read_json(bootstrap_path) if bootstrap_path.is_file() and bootstrap_path.stat().st_size <= 4*1024*1024 else {}
     if (parent_manifest.get('target_date') != safe_date or parent_manifest.get('manifest_sha256') !=
             hashlib.sha256(json.dumps({k:v for k,v in parent_manifest.items() if k != 'manifest_sha256'},
@@ -2820,7 +2941,7 @@ def _build_holding_exit_observation_report(
     holding_path_vote_replay = summarize_holding_path_votes(
         strict_trades,
         load_events=lambda position_key: load_path_events_file(
-            path_vote_store_path(DATA_DIR, position_key), position_key,
+            path_vote_store_path(_data_root(), position_key), position_key,
         ),
         model=str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
                           "gpt-5.4-nano") or "gpt-5.4-nano"),
@@ -3006,7 +3127,7 @@ def _build_holding_exit_observation_report(
         str(snapshot.get("date")): (snapshot.get("meta") or {}).get("actual_cost_source_generation")
         for snapshot in trade_snapshots
     }
-    verify_window(DATA_DIR, input_window)
+    verify_window(_data_root(), input_window)
     report["input_window_dependencies"] = input_window
     report["input_window_generation_sha256"] = input_window["input_window_generation_sha256"]
     economic_input_complete = bool(

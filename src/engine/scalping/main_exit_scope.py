@@ -32,7 +32,9 @@ def build_scope(universe, *, as_of, universe_source_sha256, coverage=None, opera
     rows, excluded, seen = [], [], set()
     for source in universe:
         code = str(source.get("symbol") or source.get("code") or "")
-        if not re.fullmatch(r"\d{6}", code) or code in seen:
+        # Verified master identifiers include newer six-character equity codes.
+        # This research namespace grants no API/registration authority.
+        if not re.fullmatch(r"[0-9A-Z]{6}", code) or code in seen:
             raise ValueError("main_exit_scope_universe_identity_invalid")
         seen.add(code)
         known = number(source.get("known_at"))

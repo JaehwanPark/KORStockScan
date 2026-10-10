@@ -78,8 +78,16 @@ def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
 
 
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
+    from src.engine.infrastructure.research_release_transition import journal_active
+    if kind=='trade_review' and journal_active():
+        raise ValueError('transition_trade_snapshot_regeneration_forbidden')
     if not isinstance(payload, dict):
         raise TypeError("monitor_snapshot_payload_must_be_object")
+    # Finalization reads the bounded date header. JSON round trips can reorder
+    # keys, so preserve the supplied date as the first key without inventing it.
+    if 'date' in payload:
+        payload = {'date': payload['date'],
+                   **{key: value for key, value in payload.items() if key != 'date'}}
     if (kind == "trade_review" and isinstance(
         (payload.get("meta") or {}).get("completed_census_manifest"), dict
     )):
@@ -89,6 +97,9 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
             completed_census_manifest(payload)
         )
     path = _snapshot_path(kind, target_date)
+    from src.engine.infrastructure.research_release_transition import journal_json
+    if journal_json(path,payload,ensure_ascii=False,indent=2):
+        return path
     path.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -195,7 +206,7 @@ def save_monitor_snapshot_manifest(
         payload["actual_cost_source_generation"] = source_generation(DATA_DIR, target_date)
         from src.engine.holding_exit_observation_report import _verified_trade_review_projection
         trade_path = Path(tracked_paths.get("trade_review", ""))
-        projection = _verified_trade_review_projection(trade_path, target_date, data_root=DATA_DIR)
+        projection = _verified_trade_review_projection(trade_path, target_date, data_root=DATA_DIR,metadata_only=True)
         if projection is None:
             raise ValueError("postclose_exit_trade_projection_generation_invalid")
         projected_costs = (projection.get("meta") or {}).get("actual_cost_source_generation")
@@ -220,6 +231,9 @@ def save_monitor_snapshot_manifest(
                      or payload["actual_cost_source_generation"].get("official_source_sha256"))):
             raise ValueError("postclose_exit_holding_cost_generation_changed")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    from src.engine.infrastructure.research_release_transition import journal_json
+    if journal_json(manifest_path,payload,ensure_ascii=False,indent=2):
+        return manifest_path
     fd, name = tempfile.mkstemp(prefix=f".{manifest_path.name}.", suffix=".tmp", dir=manifest_path.parent)
     temporary = Path(name)
     try:
@@ -270,7 +284,7 @@ def verified_postclose_exit_snapshot_manifest(target_date: str, *, data_root: Pa
             if _sha256_file(path) != (manifest.get("snapshot_sha256") or {}).get(kind):
                 return None
         projection = _verified_trade_review_projection(
-            directory / f"trade_review_{target_date}.json", target_date, data_root=Path(data_root))
+            directory / f"trade_review_{target_date}.json", target_date, data_root=Path(data_root),metadata_only=True)
         if projection is None:
             return None
         recorded_costs = (projection.get("meta") or {}).get("actual_cost_source_generation")
@@ -475,6 +489,7 @@ def save_monitor_snapshots_for_date_with_profile(
             "holding_exit_observation",
             lambda: build_holding_exit_observation_report(
                 target_date=target_date,
+                all_scope_research=normalized_profile == 'postclose_exit',
             ),
         ),
     )

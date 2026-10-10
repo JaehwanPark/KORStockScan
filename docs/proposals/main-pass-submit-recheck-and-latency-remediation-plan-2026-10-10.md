@@ -182,4 +182,6 @@ worker는 종료 시 새 접수를 닫고 원 request의 남은 진단을 기존
 
 후속 사용자 요청에 따라 [상황별 초기정책·장후 재생성 상세 계획](pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md)을 작성했다. 전체 `ENTER_NOW + PASS`와 후행 호가, 기존 주문 준비 기준 원천, 상황 유형·시간순 검증·v2 초기정책 및 장후→PREOPEN 인계가 대상이다. 이 문서의 S1–S4 구현·배포 완료는 그 가격 시점 정책의 생성 완료를 뜻하지 않는다.
 
+두 후속 계획의 전수 입력·분할·전체 성능·정식 정책 인계 잔여는 [잔여작업 완료계획](main-trailing-delay-residual-work-completion-plan-2026-10-10.md)에서 수행한다. 이 계획의 완료 owner는 유지하며 연결 변경에 영향받는 PASS/claim/deadline/guard 회귀만 재검증한다. 적용일 자연 PID·PASS 수용은 기존 `DirectFamilyPreopenPolicyHandoff`로 분리한다.
+
 양수 지연 실행은 원 5초 PASS를 연장하지 않고 due 시 기존 Main 재평가의 새로운 유효 증빙과 최종 제출 guard에 연결하도록 설계했다. 계획 작성은 10/10 checklist의 `PreSubmitDelayInitialPolicyPlan1010`으로 기록한다. 이번 연결에서 코드·선택 release·기존 정책·10/12 봉인 세대는 변경하지 않았다.

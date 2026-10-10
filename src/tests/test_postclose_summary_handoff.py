@@ -1315,3 +1315,15 @@ def test_one_stage_barrier_waits_without_waiting_for_later_consumers(monkeypatch
     path.write_text(json.dumps({'status':'failed'}))
     assert h._stage_main(['--stage','wait','--wait-stage','main_machine_policy','--date',day])==0
     assert h._stage_main(['--stage','main_machine_policy','--check','--date',day])==1
+
+
+def test_synchronous_native_completion_after_original_deadline_is_deferred(stage_environment,monkeypatch):
+    import time
+    h,day,report,run,produce=stage_environment
+    clock=[0.0]
+    monkeypatch.setattr(time,'monotonic',lambda:clock[0])
+    def late(command,**kwargs):
+        produce(command,**kwargs);clock[0]=11.0;return 0
+    terminal=h.run_stage('main_machine_policy',day,report_dir=report,project=report.parents[1],runner=late,timeout=10)
+    assert terminal['status']=='deferred' and terminal['exit_code']==75
+    assert terminal['synchronous_deadline_expired'] is True

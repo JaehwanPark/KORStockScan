@@ -314,6 +314,8 @@ def _date_matches(payload: dict[str, Any], target_date: str) -> bool:
 
 
 def _atomic_write(path: Path, content: str) -> None:
+    from src.engine.infrastructure.research_release_transition import journal_write
+    if journal_write(path,content.encode('utf-8')):return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
         temporary = Path(handle.name)
@@ -665,6 +667,8 @@ def _first_blocker(owner: str, payload: dict[str, Any]) -> str | None:
 def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None) -> dict[str, Any]:
     if owner == "pre_submit_delay" and payload.get("schema") == "pre_submit_delay_tuning_v2":
         return {"comparison_status": "not_applicable", "resolution_mode": "initial_quote_timing_estimate",
+                "closure_owner": DEFAULT_CLOSURE_OWNER[owner],
+                "closure_test": "bound_initial_quote_pairs_policy_loader_and_guard",
                 "metric_role": "initial_entry_price_timing_estimate", "policy_apply_allowed": False,
                 "policy_handoff_state": "initial_policy_requires_bound_receipt",
                 "candidate_count": 0, "paired_sample_count": payload.get("price_ready_pair_n"),
@@ -1097,8 +1101,10 @@ def build_runtime_approval_summary(
             source_payload = _load_json(Path(str(row.get("path") or "")))
             initial_valid = False
             if policy_payload.get("schema") == "pre_submit_delay_policy_v2":
-                from src.engine.scalping.pre_submit_delay_initial_policy import validate, verify_source, code_contract
+                from src.engine.scalping.pre_submit_delay_initial_policy import validate, verify_source, code_contract, _read as read_initial_delay
                 try:
+                    policy_payload = read_initial_delay(Path(str(policy.get('path') or '')))
+                    source_payload = read_initial_delay(Path(str(row.get('path') or '')))
                     validate(policy_payload, source_payload)
                     verify_source(DATA_DIR, source_payload)
                     if policy_payload.get('code_contract_sha256') != code_contract():

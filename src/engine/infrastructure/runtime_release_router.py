@@ -434,8 +434,40 @@ def _validate_retired_surfaces(workspace: Path, root: Path) -> None:
         raise ValueError("release_restores_permanently_retired_widget")
 
 
+def _assert_research_transition_readable(workspace: Path) -> None:
+    if __package__:
+        from .research_release_transition import assert_readable
+        assert_readable(workspace / 'data')
+        return
+    # The installed wrapper runs this file with -I. Load only its exact
+    # siblings, without importing packages from cwd or PYTHONPATH.
+    import importlib.util
+    engine = Path(__file__).resolve().parents[1]
+    admission_name = 'src.engine.lifecycle.research_admission'
+    if admission_name in sys.modules:
+        raise ValueError('isolated_router_guard_module_already_loaded')
+    def load(name: str, path: Path):
+        if path.is_symlink():
+            raise ValueError('isolated_router_guard_source_alias_invalid')
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ValueError('isolated_router_guard_source_unavailable')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    admission = load(admission_name, engine / 'lifecycle/research_admission.py')
+    sys.modules[admission_name] = admission
+    try:
+        guard = load('isolated_router_transition_guard',
+                     engine / 'infrastructure/research_release_transition.py')
+        guard.assert_readable(workspace / 'data')
+    finally:
+        sys.modules.pop(admission_name, None)
+
+
 def selected_release(workspace: Path) -> tuple[Path, str]:
     workspace = workspace.resolve(strict=True)
+    _assert_research_transition_readable(workspace)
     selection = json.loads(
         (workspace / "data/runtime/runtime_release_selection.json").read_text()
     )

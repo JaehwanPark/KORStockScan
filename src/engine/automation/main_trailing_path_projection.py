@@ -29,6 +29,24 @@ MAX_PIECES = 4096
 MAX_TEMP_BYTES = 64 * 1024 * 1024
 
 
+def stream_pairs(events, config):
+    """Same causal feature state for disk shards and resident path inputs."""
+    state = None
+    for event in events:
+        known = number(event.get('known_at'))
+        market = market_type_at(known) if known is not None else None
+        permission = resolve_market_session(datetime.fromtimestamp(known,ZoneInfo('Asia/Seoul'))) if known is not None else None
+        strength, age = None, number(event.get('max_quote_age_sec'))
+        if event.get('kind')=='QUOTE' and known is not None and age is not None and 0<age<=.7 and event.get('ws_data') is not None:
+            try:
+                strength,state = classify_ws_history(expand_ws(event['ws_data']),state,now_ms=int(known*1000),
+                    max_quote_age_ms=int(age*1000),market=market,config=(config or {}).get(market))
+            except (ValueError,TypeError,KeyError,AttributeError,OverflowError):
+                strength = None
+        yield event,[market,{'exit_allowed_by_clock':permission.exit_allowed_by_clock,'blocker':permission.blocker}
+                         if permission else None,asdict(strength) if strength else None]
+
+
 def source_contract():
     root = Path(__file__).resolve().parents[1]
     names = ('automation/main_trailing_path_projection.py', 'scalping/universal_trailing_replay.py',
@@ -94,7 +112,7 @@ def prepared(root, description):
         if total != description['event_count']:
             raise ValueError('trailing_projection_event_census_invalid')
     return PreparedPath(EventSequence(pairs, description['event_count']), (), description['classifier_sha256'],
-                        pairs, description['observation_end_at'])
+                        pairs, description['observation_end_at'], description.get('last_add_known_at'))
 
 
 def _events(source, root, generations, as_of, counters, source_date):
@@ -140,7 +158,7 @@ def _events(source, root, generations, as_of, counters, source_date):
 
 
 def _spool(events, config, out, *, used_bytes):
-    state, records, size, references, count, end = {}, [], 0, [], 0, 0
+    state, records, size, references, count, end, last_add = {}, [], 0, [], 0, 0, 0
     sha = classifier_hash(config)
     def flush():
         nonlocal records, size
@@ -162,19 +180,10 @@ def _spool(events, config, out, *, used_bytes):
     # This conservative claim bounds Python expansion of the output buffer;
     # source segment claims stay held independently until their iterator exits.
     with Claim(PIECE_BYTES*8):
-        for event in events:
-            known = number(event.get('known_at'))
-            market = market_type_at(known) if known is not None else None
-            permission = resolve_market_session(datetime.fromtimestamp(known,ZoneInfo('Asia/Seoul'))) if known is not None else None
-            strength, age = None, number(event.get('max_quote_age_sec'))
-            if event.get('kind')=='QUOTE' and known is not None and age is not None and 0<age<=.7 and event.get('ws_data') is not None:
-                try:
-                    strength,state = classify_ws_history(expand_ws(event['ws_data']),state,now_ms=int(known*1000),
-                        max_quote_age_ms=int(age*1000),market=market,config=(config or {}).get(market))
-                except (ValueError,TypeError,KeyError,AttributeError,OverflowError):
-                    strength = None
-            feature = [market,{'exit_allowed_by_clock':permission.exit_allowed_by_clock,'blocker':permission.blocker}
-                       if permission else None,asdict(strength) if strength else None]
+        for event, feature in stream_pairs(events,config):
+            known=number(event.get('known_at'))
+            if event.get('kind') == 'ADD':
+                last_add = max(last_add, known or 0)
             row = [event,feature]
             row_size = len(json.dumps(row,allow_nan=False).encode())
             if row_size>64*1024:
@@ -183,7 +192,8 @@ def _spool(events, config, out, *, used_bytes):
                 flush()
             records.append(row);size+=row_size;count+=1;end=max(end,known or 0)
         flush()
-    return {'pieces':references,'event_count':count,'classifier_sha256':sha,'observation_end_at':end}
+    return {'pieces':references,'event_count':count,'classifier_sha256':sha,
+            'observation_end_at':end,'last_add_known_at':last_add}
 
 
 def load_or_build(path, *, root, out, expected, as_of, source_date, configs, counters, resume, used_bytes):

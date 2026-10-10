@@ -1,8 +1,8 @@
 # Pre-submit delay 상황별 초기정책·장후 재생성 상세 개선계획
 
-작성일: 2026-10-10 KST. 상태: 공통 코드 구현·반복 리뷰 및 승인된 코드 배포를 완료했다. **전체 계획 수용은 미완료**이며 `PreSubmitDelaySituationImplementation1010`를 OPEN으로 유지한다. 전수 원천 연결·상한 초과 분할·전체 연구 성능과 S6 신규 정책 발행/장후 재생성은 남아 있다. 아래 기존 문서 검증 기록은 작성 당시 이력이며 현행 코드·배포 근거는 후속 기록을 따른다.
+작성일: 2026-10-10 KST. 상태: **S0–S6와 잔여 W0–W5의 구현·반복 리뷰·정식 v2 발행·승인 배포·기동 준비를 완료했다.** `PreSubmitDelaySituationImplementation1010`는 완료다. 최종 릴리스는 `main-trailing-delay-residual-20261010-v6` / `78f2c1d784fd5043d5b5bc0fedd7b963f8fe42d4`이며 [실행 감사](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)와 [최종 준비 영수증](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json)을 따른다. 유효 가격쌍 21개로 0초 baseline을 발행했고 적격 양수 cell은 0이다. 10/12 실제 PID 소비와 실현 경제성은 별도 미관측이다. 아래 이전 문서·부분 배포 기록은 당시 이력이다.
 
-후속 승인 배포(10/10): 검증된 공통 코드와 부모 동등 초기 구성은 `main-trailing-delay-20261010-v1` / `d61b36b00696865ca9dd13a466d8544a886e2e28`로 배포했다. 10/12 PREOPEN 전체 계약·예약경로·최종화 세대는 PASS다. 신규 제출 지연 v2 정책 발행 및 전수 연구/대용량/전체 연구 성능 수용은 OPEN이며 상세 상태는 [후속 리뷰·배포 기록](../audits/main-all-scope-trailing-and-pre-submit-delay-implementation-review-2026-10-10.md)을 따른다.
+후속 승인 배포 이력(10/10, 잔여 구현 전): 검증된 공통 코드와 부모 동등 초기 구성은 `main-trailing-delay-20261010-v1` / `d61b36b00696865ca9dd13a466d8544a886e2e28`로 배포했다. 10/12 PREOPEN 전체 계약·예약경로·최종화 세대는 PASS다. 신규 제출 지연 v2 정책 발행 및 전수 연구/대용량/전체 연구 성능 수용은 OPEN이며 상세 상태는 [후속 리뷰·배포 기록](../audits/main-all-scope-trailing-and-pre-submit-delay-implementation-review-2026-10-10.md)을 따른다.
 
 계획 기록 owner: [10/10 checklist](../checklists/2026-10-10-stage2-todo-checklist.md)의 `PreSubmitDelayInitialPolicyPlan1010`.
 후속 리뷰: 장중 지연·공유 queue·정책 로딩·장후 스캔/캐시·성능 적용 기준을 보완했다. 성능 수치는 구현 단계에서 측정하며 이번 문서는 측정 결과가 아니다.
@@ -10,6 +10,8 @@
 현재 v2 원천 구현은 원 record identity를 검증한 뒤 필요한 필드와 full-field conflict SHA만 보관한다. scan-job 2GiB/record 64KiB의 상한과 두 family가 함께 쓰는 resident-data 64MiB budget을 적용한다. 이는 2GiB 전체 decode나 자동 저장 확대가 아니다. 최종 기회/index/artifact 상한을 넘는 전역 census·split·발행은 아직 OPEN이며 legacy v1 상한을 무단 확대하지 않는다. 격리 실자료 계산·원천/consumer 세대 재사용과 실제 성능 수치는 연결된 구현 리뷰를 현재 근거로 사용한다.
 
 ## 1. 목표와 완료 산출물
+
+미완료 S0/S2 대용량 처리·S5 전체 성능·S6 정식 발행은 [잔여작업 완료계획 W0–W6](main-trailing-delay-residual-work-completion-plan-2026-10-10.md)의 순서로 닫는다. 기존 `PreSubmitDelaySituationImplementation1010` owner를 유지하며 공통 코드 배포를 전체 완료로 대체하지 않는다. 사용자 승인 범위를 유지하고 이 문서 보완에서는 실행하지 않는다.
 
 검증된 Main `ENTER_NOW + PASS` 기회와 그 후행 가격을 활용해 **상황별 첫 BUY 제출 지연 초기정책을 기존 장후 작업에서 생성하고, 다음 영업일 PREOPEN loader가 읽을 수 있게 한다.** 제출·체결하지 않은 기회도 가격 분석 모집단에 포함한다. 최종 목적은 진입 시점 개선이며, 초기정책 근거는 실제 체결·순익과 구별되는 호가 비교 추정치다.
 
@@ -128,6 +130,8 @@ S0는 파일 목록·크기·schema·기존 index를 먼저 읽는다. 당일 �
 
 전체 scope와 향후 대용량 지원은 [보유청산 계획의 범위 계약](main-all-symbol-all-market-trailing-and-replay-improvement-plan-2026-10-10.md#3-전체-종목시장-범위-계약) 및 [합산 예산·분할 재개 계약](main-all-symbol-all-market-trailing-and-replay-improvement-plan-2026-10-10.md#103-계층-cache와-두-계획의-합산-자원)을 함께 따른다. 삼성/비삼성·고정 감시/scanner·모든 지원 세션의 PASS를 코드 whitelist 없이 처리하고, universe enumeration은 세대 변경에서 한 번 수행한다. 거래 불가·현재 비운영·무기회·무관측을 구분하며 기존 entry 허용 범위는 유지한다. 64MiB를 넘는 전체 범위 지원에는 bounded partition 작업과 전역 분모·완료 검증을 함께 구현해야 하며 상한만 올리거나 미처리 scope를 지워 완료하지 않는다.
 
+[잔여작업 W1/W2](main-trailing-delay-residual-work-completion-plan-2026-10-10.md)는 실제 process-local 예산과 host-wide stage 접수를 연결하고, shard 간 conflict/dedup·전역 시간순 split·논리 digest와 물리 hash·출력 peak disk를 명시한다. 64MiB 검사 하나를 cross-process 총량 보장으로 보지 않는다. 기존 코드가 상한에서 실패한 시간은 신규 전수 처리의 성능 baseline으로 사용하지 않는다.
+
 Kiwoom request/response/FID/REG/REMOVE/recovery 수정이 필요하면 구현 전에 [공식 API reference gate](../kiwoom-api-data-contract.md#official-kiwoom-reference-gate)를 수행하고 upstream SHA·경로·조회 시각을 기록한다. 원천 projection/기존 snapshot 소비만으로 해결되는 부분은 wire 변경을 추가하지 않는다.
 
 ## 5. 가격 비교·분할·상황별 초기 선정
@@ -196,6 +200,8 @@ report+policy+manifest는 기존 family 아래의 불변 generation 경로에 �
 
 실제 구현에서는 [traceability](../report-based-automation-traceability.md)의 family 계약과 [운영 runbook](../time-based-operations-runbook.md)의 정책·감시 의미, 필요한 Plan Rebase 축을 변경된 코드와 함께 의도적으로 갱신한다. 지금은 제안 문서이며 현행 v1 권한이 이미 변경됐다고 보고하지 않는다.
 
+family의 committed pointer 교체는 release/summary/checklist/PREOPEN 전체의 원자 전환을 뜻하지 않는다. [잔여작업 W5](main-trailing-delay-residual-work-completion-plan-2026-10-10.md#8-w5w6-최종-배포장후-인계기동)에 따라 old/new 참조 세트·전환 상태·CAS·각 경계 중단/복구를 검증한다. bootstrap이 invalid committed generation을 만났을 때 남아 있는 v1 파일로 자동 복구된다고 가정하지 않는다. source-valid price_ready pair가 있는 0초 전역 baseline과 개별 미검증 cell의 실행 불가도 별도 검사한다.
+
 ### 6.2 대기와 만료된 PASS의 처리
 
 - 0초 cell은 현재 제출 경로를 그대로 거친다. 양수 cell은 `price_ready`에서 기존 비차단 pending intent에 원 기회·정책 cell·cap·확정 수량·due monotonic을 결속한다. 가격/분할/수량 owner를 새로 만들지 않는다.
@@ -237,13 +243,13 @@ due가 몰려도 별도 provider request를 기회마다 강제 생성하지 않
 이 절은 **후속 구현 검증 후 사용할 절차**다. 현재 계획 작성에서 아래 명령을 실행하지 않는다.
 
 1. **원 세대 고정:** 선택 release·실행 중 stage/lock/PID·기존 10/8 report/policy/summary/strict/finalization 및 10/12 PREOPEN/checklist hash를 manifest에 기록한다. 원 bytes는 보존한다. 최신 처리일이 바뀌었으면 owner와 target을 다시 정한다.
-2. **격리 입력 준비:** 원 파일은 읽기 전용으로 참조하고 새 bounded projection/report/policy만 task root에 쓴다. 기존 `pre_submit_delay_tuning` CLI에 명시적인 input/output root 옵션을 추가할 필요가 있으면 같은 모듈에 구현하고 시험한다. 현재 `build_report(write=False)` 내부의 quote census cache 쓰기까지 점검해 격리 실행이 운영 경로에 부수 write를 남기지 않게 한다.
+2. **격리 입력 준비:** 원 파일은 읽기 전용으로 참조하고 새 bounded projection/report/policy만 task root에 쓴다. 구현된 `pre_submit_delay_tuning` CLI의 명시적 input/output root와 dry-run을 사용하고, W2 sharded 입력/consumer 변경도 같은 격리 계약으로 검증한다. 기존 v1 `build_report(write=False)` 및 v2 warm/cache 경계까지 점검해 격리 실행이 운영 경로에 부수 write를 남기지 않게 한다.
 3. **원천 대사와 복원:** S0의 한 번 scan/index로 exact-linked PASS·특징·호가만 연결한다. 복원/신규 projection/제외/원래 유효 pair를 별도로 보고한다. 복구 불가능한 과거 P0나 30초 호가는 그대로 제외하고 그 원장을 반복 생성하지 않는다.
 4. **격리 재생 1회:** 동일 동결 원천으로 기존 계산과 v2 계산을 비교한다. 원래 유효 21쌍의 값/근거를 보존하고 새 anchor/복원 기회는 추가분으로 구분한다. 유형별 초기 선정값·지원 N·검증·fallback·0초/양수 cell 수를 산출한다. 독립 손계산과 loader dry-run을 대조한다.
 5. **최종 리뷰:** producer→projection→publisher→loader→due recheck→guard/adapter와 summary 소비를 재리뷰한다. 새 결함이면 수정·영향 회귀 후 해당 격리 계산만 갱신한다. 입력·알고리즘이 같은 실패 generation은 반복하지 않는다.
 6. **정식 family 재실행:** 실행 권한이 있는 후속 작업에서 기존 closed-target recovery/단일 writer 잠금을 사용한다. S5에서 검증한 불변 코드로 producer를 실행하고 그 release/contract hash를 generation에 봉인한다. 현재 dispatcher는 `--stage pre_submit_delay --date 2026-10-08 --publication-date <실제 재생일> --recover-closed-target --launch` 경로를 제공한다. `<실제 재생일>`은 설명용 자리표시자이며 실행 전 날짜로 치환한다. `--check`/stage receipt로 실제 완료를 확인하고 launch의 exit 0만으로 끝내지 않는다. 전체 Main wrapper는 bot stop 부작용이 있으므로 family 계산을 위해 수동 재실행하지 않는다.
 7. **후행 영향 갱신:** 변경된 family의 직접 projection/summary→tower→다음 checklist→strict `--require-summary-handoff`→controller/finalization을 원 target date와 같은 generation으로 닫는다. 기계·보조·수량·청산 정책 연구를 다시 돌리지 않는다. 원천/consumer hash가 달라져 재사용 불가한 후행 산출물만 재생성한다. cleanup/detector는 운영 지침의 predecessor 검증으로 재사용 가능한 범위를 구분하며, 최종화 전체에 이전 PASS를 복사하지 않는다.
-8. **새 PREOPEN 준비:** 초기정책은 정책 내용 변경이므로 이전 same-policy code-refresh 영수증을 재사용하지 않는다. 현재 선택된 `main-pass-submit-20261010-v1`에는 v2 loader가 없으므로 workspace 계산만으로 인계를 완료할 수 없다. 후속 배포 범위에서 S5의 v2 대응 불변 release를 정식 선택하고 selector·bootstrap·예약기동 cwd가 같은 코드를 소비하도록 결속한다. 기계/보조 등 변경하지 않은 정책은 기존 bytes를 보존하고 필요한 코드 결속만 각 owner의 정식 절차로 갱신한다. 실제 발행일 기준 다음 적격일의 신규 prepared generation을 만들고 v2 정책·코드·source hash와 전체 계약을 검증한다. 기존 봉인된 10/12 세대는 기록으로 보존하고, 후속 실행이 새 세대를 발행하는 경우 정식 인계 절차로 successor를 연결한다. 10/10의 이전 작업에 있던 ‘동일 정책만 갱신’ 권한을 본 초기정책 선정 권한으로 오해하지 않는다.
+8. **새 PREOPEN 준비:** 초기정책은 정책 내용 변경이므로 이전 same-policy code-refresh 영수증을 재사용하지 않는다. 계획 작성 당시 `main-pass-submit-20261010-v1`에는 v2 loader가 없었으나, 후속 `main-trailing-delay-20261010-v1`에는 loader가 포함됐고 v2 운영 정책은 미선택이다. W5에서는 W4 전체 검증을 통과한 최종 불변 release와 정식 정책을 결속하여 selector·bootstrap·예약기동 cwd가 같은 코드를 소비하도록 한다. 기계/보조 등 변경하지 않은 정책은 기존 bytes를 보존하고 필요한 코드 결속만 각 owner의 정식 절차로 갱신한다. 실제 발행일 기준 다음 적격일의 신규 prepared generation을 만들고 v2 정책·코드·source hash와 전체 계약을 검증한다. 기존 봉인된 10/12 세대와 checklist는 기록으로 보존하고, 필요한 successor를 정식 인계 절차로 연결한 뒤 strict/finalization/PREOPEN을 다시 봉인한다. 사용자에게 이미 주어진 두 상세계획 구현·배포 승인을 유지하며 당시 공통 코드 배포의 좁은 설명을 새로운 승인 대기 조건으로 만들지 않는다.
 9. **종료:** 생성된 정책·발행 경로·선정근거·coverage·최종 chain 상태를 보고한다. 현재 PID 적용을 주장하려면 별도 실제 소비 영수증이 필요하다. 아직 도래하지 않은 예약기동/자연 주문은 `future_due/not_observed`다.
 
 현재 등록 CLI의 실행 골격은 다음과 같다. 실제 구현에서 schema migration과 root 격리를 먼저 닫은 뒤 재검증한다.
@@ -352,3 +358,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.automation.postclose_summary_handoff
 - 보완 범위는 이 계획과 기존 10/10 계획 기록이다. 이번 문서 리뷰의 미해결 in-scope finding은 0이며, 수치 budget 확정·신규 코드/통합 시험·성능 실측·장후 재생성·정책 발행·배포는 S0–S6 후속 작업으로 남아 있다. 계획 검증을 성능 개선 실적으로 보고하지 않는다.
 
 보유청산 계획과의 후속 연결 리뷰에서는 §4.5에 전체 종목·시장 scope 및 상한 초과 시 분할/재개·전역 완료 검증을, §9.3에 두 family의 공통 예산·결합 부하 gate를 추가했다. 각각의 가격/경제 owner와 기존 수용 조건은 유지한다. 두 상세계획 로컬 링크 52개(앵커 포함 6개)·참조 테스트 경로·공백/fence 및 print-only parser 20항목을 재검증했다. 이 연결 보완도 코드·실측·정책 실행을 수행하지 않은 문서 변경이다.
+
+## 잔여 구현 실행 기록 — 2026-10-10
+
+[반복 리뷰·실제 원천·성능 근거](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)를 따른다. 전수 streaming/shard·전역 중복/split·부모 승계와 0초 초기값·정식 writer/consumer 연결을 구현했다. 코드 수용과 W5 발행/chain, 10/12 자연 PID 수용을 분리한다. 최종 v6 발행·native finalization DONE·10/12 `current_full_contract=pass`까지 수용했다. 실제 적용일 PID·경제 결과만 별도 자연 관측으로 남는다.
