@@ -452,8 +452,9 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     if any(dependency_stats[name]!=value for name,value in input_stat_identity.items()):
         raise ValueError('stop_source_changed_during_research')
     research=dict(schema='main_stop_research_v1',source_date=day,target_date=target,source_sha256=source_sha,
-        vote_selection_mode='baseline_only_unidentified_counterfactual_votes',
-        protect_line_generator_status='source_gap_no_active_main_generator',
+        vote_selection_mode='separate_holding_vote_family_parent_carry',
+        protect_line_generator_status='conditional_existing_line_provenance_only',
+        protect_line_authority='existing_main_trailing_owner_no_new_line_strategy',
         parent_receipt=parent_receipt,snapshot_receipt=snapshot_receipt,code_sha256=algorithm_sha,
         source_inventory=inventory,source_catalog_sha256=source_catalog_sha,
         vote_source_inventory=vote_sources,vote_watch_sha256=vote_watch_sha,

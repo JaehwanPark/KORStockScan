@@ -1420,6 +1420,11 @@ def sync_balance_with_db():
     """Reconcile broker inventory with active HOLDING/partial-SELL records at boot."""
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
 
+    from src.engine.scalping.main_custody_checkpoint import journal_generation
+    try:
+        custody_query_generation = journal_generation()
+    except (OSError, ValueError):
+        custody_query_generation = None
     try:
         from src.engine import sniper_execution_receipts as _receipt_handlers
 
@@ -1503,6 +1508,7 @@ def sync_balance_with_db():
         unfilled_snapshot_ok = False
         log_error(f"🚨 [초기 동기화] 미체결 스냅샷 조회 실패: {exc}")
     publish_broker_account_snapshot(
+        query_registry_generation=custody_query_generation,
         inventory=real_inventory,
         successful_exchanges=successful_exchanges,
         open_orders=unfilled_rows,
@@ -2329,6 +2335,11 @@ def refresh_broker_account_snapshot_read_only() -> bool:
     """
 
     global KIWOOM_TOKEN
+    from src.engine.scalping.main_custody_checkpoint import journal_generation
+    try:
+        custody_query_generation = journal_generation()
+    except (OSError, ValueError):
+        custody_query_generation = None
     if not KIWOOM_TOKEN:
         log_error(
             "🚨 [broker snapshot refresh] token missing; read-only refresh skipped"
@@ -2385,6 +2396,7 @@ def refresh_broker_account_snapshot_read_only() -> bool:
         log_error(f"🚨 [broker snapshot refresh] open-orders request failed: {exc}")
 
     publish_broker_account_snapshot(
+        query_registry_generation=custody_query_generation,
         inventory=inventory,
         successful_exchanges=successful_exchanges,
         open_orders=open_orders,
@@ -2482,6 +2494,11 @@ def periodic_account_sync():
     # terminal receipt in SELL_ORDERED until process restart.  Retry its exact
     # durable journal before any account snapshot can remove or reinterpret the
     # runtime target.
+    from src.engine.scalping.main_custody_checkpoint import journal_generation
+    try:
+        custody_query_generation = journal_generation()
+    except (OSError, ValueError):
+        custody_query_generation = None
     _retry_pending_final_sell_receipts_in_process()
 
     if not KIWOOM_TOKEN:
@@ -2625,6 +2642,7 @@ def periodic_account_sync():
         elif side in {"매도", "SELL", "S", "1"}:
             summary["open_sell_qty"] += remaining_qty
     publish_broker_account_snapshot(
+        query_registry_generation=custody_query_generation,
         inventory=real_inventory,
         successful_exchanges=successful_exchanges,
         open_orders=unfilled_rows,

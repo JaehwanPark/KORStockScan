@@ -309,10 +309,10 @@ def audit_profit_exit_flow(
                     and fields.get("policy_bundle_sha256") != policy_bundle_sha256):
                 add(policy_gaps, record_id, "tp_signal_bundle_hash_mismatch")
             elif (policy_bundle_sha256 is not None
-                  and fields.get("policy_load_status") != "estimated_provisional_loaded"):
+                  and fields.get("policy_load_status") not in {"estimated_provisional_loaded","validated_successor_loaded","verified_incumbent_loaded"}):
                 add(runtime_gaps, record_id, "tp_runtime_policy_load_unproven")
             elif (policy_bundle_sha256 is None
-                  and fields.get("policy_load_status") == "estimated_provisional_loaded"):
+                  and fields.get("policy_load_status") in {"estimated_provisional_loaded","validated_successor_loaded","verified_incumbent_loaded"}):
                 add(policy_gaps, record_id, "tp_loaded_policy_bundle_missing")
             crossing_rows = [row for row in transitions
                              if _epoch(row.emitted_at) <= _epoch(event.emitted_at)

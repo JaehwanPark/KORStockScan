@@ -1,6 +1,7 @@
 """Summarize family-owned postclose evidence and direct runtime handoffs."""
 
 from __future__ import annotations
+from src.engine.scalping.holding_path_vote_policy import publication_status as holding_vote_publication_status
 
 import argparse
 import hashlib
@@ -432,6 +433,9 @@ def _large_companion(
             and byte_sha_matches
             and semantic_contract_matches
         )
+        if verified:
+            payload['lookup_attention_generation'] = _read_top_level_sections(
+                path, {'lookup_attention_generation'}).get('lookup_attention_generation')
         return payload, {
             "path": str(companion_path),
             "sha256": _sha(companion_path),
@@ -640,6 +644,10 @@ def _comparison_status(owner: str, payload: dict[str, Any]) -> str:
         return "validated_edge"
     if "source_gap" in joined or "contract_block" in joined or "missing_source" in joined:
         return "source_gap"
+    if "structurally_blocked" in joined:
+        return "structurally_blocked"
+    if "unrankable" in joined:
+        return "unrankable"
     if "unsupported" in joined:
         return "unsupported_scope"
     if "evaluated_no_edge" in joined or "no_edge" in joined or "negative_edge" in joined or "hold_no_edge" in joined:
@@ -677,11 +685,12 @@ def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None)
                 "first_blocker": None, "initial_policy_contract": payload.get("status")}
     economic = _economic_section(owner, payload)
     status = _comparison_status(owner, payload)
+    research = payload.get("research_economic_evaluation") or {}
     reconciliation = None
     if owner == "entry_cancel_wait":
         from src.engine.automation.entry_cancel_wait_tuning import validated_reconciliation_view
         reconciliation = validated_reconciliation_view(payload, data_root=data_root)
-        if reconciliation.get("findings") or reconciliation.get("status") == "unobservable" or reconciliation.get("historical_state") == "source_gap":
+        if reconciliation.get("findings") or reconciliation.get("status") == "unobservable" or (reconciliation.get("historical_state") == "source_gap" and reconciliation.get("economic_population_status") != "eligible_population_partitioned"):
             status = "source_gap"
         elif reconciliation.get("historical_state") == "waiting_outcome":
             status = "pending_maturity"
@@ -693,6 +702,11 @@ def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None)
             status = "pending_maturity"
         elif reconciliation.get("evaluation_status") == "source_only_sequential_excluded":
             status = "unsupported_scope"
+    if reconciliation and reconciliation.get("economic_population_status")=="eligible_population_partitioned" and not reconciliation.get("findings"):
+        state=research.get("status")
+        status={"economic_improvement_validated":"validated_edge","model_unvalidated":"pending_maturity",
+                "waiting_outcome":"pending_maturity","no_submitted_orders":"insufficient_sample",
+                "source_gap":"source_gap"}.get(state,state or status)
     recommended = _dict_value(payload, "recommended_policy")
     policy_allowed_values = (
         (
@@ -742,8 +756,6 @@ def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None)
         economic.get("future_source_contract_verified"),
         economic.get("producer_consumer_contract_verified"),
     ) is True
-    if reconciliation and reconciliation.get("status") in {"incumbent_carry", "candidate_selected"}:
-        future_contract_verified = True
     if reconciliation and reconciliation.get("findings"):
         first_blocker = reconciliation["findings"][0]
     elif reconciliation and reconciliation.get("status") == "unobservable":
@@ -774,7 +786,7 @@ def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None)
         resolution_mode = "measured_no_edge"
     elif status in {"pending_maturity", "insufficient_sample"}:
         resolution_mode = "natural_maturity" if future_contract_verified else "producer_contract_review"
-    elif status in {"source_gap", "unsupported_scope", "mixed"}:
+    elif status in {"source_gap", "unsupported_scope", "mixed", "structurally_blocked", "unrankable"}:
         resolution_mode = (
             "historical_unrecoverable"
             if any("irrecoverable" in value for value in _status_texts(owner, payload))
@@ -791,13 +803,16 @@ def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None)
         handoff = "candidate_published"
     elif status in {"measured_no_edge", "identical_policy", "pending_maturity", "insufficient_sample"}:
         handoff = "incumbent_preserved"
-    elif status in {"source_gap", "unsupported_scope", "mixed"}:
+    elif status in {"source_gap", "unsupported_scope", "mixed", "structurally_blocked", "unrankable"}:
         handoff = "blocked"
     else:
         handoff = "not_applicable"
     return {
         **({"cancel_wait_reconciliation": reconciliation} if reconciliation is not None else {}),
         "comparison_status": status,
+        "historical_reconciliation_status": (reconciliation or {}).get("historical_state"),
+        "research_comparison_status": research.get("status"),
+        "current_custody": (reconciliation or {}).get("current_custody"),
         "diagnostic_terminal_proxy": economic.get("diagnostic_terminal_proxy"),
         "diagnostic_machine_selection": economic.get("diagnostic_machine_selection"),
         "future_contract_state": "verified_supported_scope" if future_contract_verified else "unverified_requires_owner_evidence",
@@ -1034,6 +1049,17 @@ def build_runtime_approval_summary(
                 row["initial_timing_policy"] = initial
             if row["price_pattern_analysis"]["status"] == "source_invalid":
                 row["error"] = error = "price_pattern_contract_invalid"
+        if owner == 'ws_freshness':
+            from src.engine.scalping.scanner_lookup_attention_resource import summary_projection, canonical_sha256
+            lookup = payload.get('lookup_attention_generation')
+            if isinstance(lookup, dict) and lookup.get('schema') == 'lookup_attention_summary_v1':
+                if (lookup.get('projection_sha256') != canonical_sha256(
+                        {k:v for k,v in lookup.items() if k != 'projection_sha256'})
+                        or lookup.get('target_date') != target_date):
+                    lookup = summary_projection(None)
+            else:
+                lookup = summary_projection(_dict_value(payload, 'scanner_unique_funnel', 'economic_cohorts', 'lookup_attention_selection'))
+            row['lookup_attention_generation'] = lookup
         sources[owner] = row
         if required and error:
             blockers.append(f"{owner}:{error}")
@@ -1489,7 +1515,7 @@ def build_runtime_approval_summary(
                 _atomic_write(policy_file, json.dumps(bundle, ensure_ascii=False,
                                                     indent=2, sort_keys=True) + "\n")
                 holding_vote_policy_receipt = {
-                    "status": "estimated_provisional_published",
+                    "status": holding_vote_publication_status(bundle),
                     "source_date": target_date, "target_date": policy_target_date,
                     "path": str(policy_file),
                     "bundle_sha256": bundle["bundle_sha256"],
@@ -1518,6 +1544,7 @@ def build_runtime_approval_summary(
             stop_receipt.update(status='source_gap',reason=str(exc),allowed_runtime_apply=False)
             blockers.append('main_stop_confirmation:native_handoff_invalid')
             direct_state='incomplete';status=DIRECT_EVIDENCE_INCOMPLETE
+    from src.engine.monitoring.policy_generation_contract import observations as generation_observations
     report = {
         "schema_version": 3, "report_type": "runtime_approval_summary", "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "status": status,
@@ -1529,6 +1556,9 @@ def build_runtime_approval_summary(
         "preopen_consumption_receipt": preopen_receipt,
         "holding_exit_threshold_lineage": trailing_lineage,
         "holding_path_vote_policy": holding_vote_policy_receipt,
+        "holding_vote_numeric_research": holding_path_votes.get("vote_numeric_research"),
+        "holding_vote_generation_capability": holding_path_votes.get("policy_generation"),
+        "policy_generation_capabilities": generation_observations(DATA_DIR.parent,target_date,data_root=DATA_DIR),
         "main_stop_confirmation": stop_receipt,
         "holding_path_vote_lineage": holding_path_vote_lineage,
         "policy_handoff_state": (

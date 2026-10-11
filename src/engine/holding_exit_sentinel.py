@@ -1288,7 +1288,7 @@ def build_holding_exit_sentinel_report(
                 for path, market in PATH_POLICY_BY_MARKET
             }
             vote_policy_bundle_sha = vote_policy_bundle["bundle_sha256"]
-            vote_policy_status = "estimated_provisional_verified"
+            vote_policy_status = ("validated_successor_verified" if vote_policy_bundle.get("selection_mode")=="validated_successor" else "verified_incumbent_carried" if vote_policy_bundle.get("schema")=="holding_path_vote_selected_policy_v2" else "estimated_provisional_verified")
         except (OSError, ValueError, TypeError, KeyError):
             vote_policy_status = "policy_binding_gap"
     mechanical_receipt, consumed_pids = _profit_exit_bootstrap_binding(target_date, as_of)

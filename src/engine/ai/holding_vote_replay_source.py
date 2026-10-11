@@ -252,14 +252,16 @@ class PreparedVotes:
             self.db.execute('INSERT INTO votes VALUES (?,?)',(row['requested_at'],storage.encoded(row).decode()))
         self.db.execute('CREATE INDEX vote_clock ON votes(at)')
 
-    def snapshot(self, source, signal_at, *, market, route, epoch, entry_at):
+    def snapshot(self, source, signal_at, *, market, route, epoch, entry_at, candidate_policy=None):
         if (self.db is None or not isinstance(source,dict) or source.get('schema')!=SCHEMA
             or source.get('position_key')!=self.reference['original_position_key']
             or source.get('coverage_complete') is not True
             or not validate_path_policy(source.get('policy'),path_id=source.get('path_id','EXIT_TRAILING_TP'))
             or source.get('policy_sha256')!=input_snapshot_id(source['policy'])
             or source.get('market')!=market):raise ValueError('holding_vote_coverage_missing')
-        policy=source['policy']
+        policy=candidate_policy or source['policy']
+        if not validate_path_policy(policy,path_id=source.get('path_id','EXIT_TRAILING_TP')):
+            raise ValueError('holding_vote_candidate_policy_invalid')
         start,checked=source.get('coverage_started_at'),source.get('coverage_checked_at')
         observed=source.get('observed_at')
         if (any(not isinstance(clock,(int,float)) or isinstance(clock,bool) or not math.isfinite(clock)
@@ -271,10 +273,10 @@ class PreparedVotes:
         window=(signal_at-policy['window_sec'],signal_at)
         size,count=self.db.execute('SELECT COALESCE(SUM(length(body)),0),COUNT(*) FROM votes WHERE at>=? AND at<?',window).fetchone()
         with Claim(size*8+count*1024):
-            return self._snapshot_window(source,signal_at,market,route,epoch,window)
+            return self._snapshot_window(source,signal_at,market,route,epoch,window,candidate_policy=policy)
 
-    def _snapshot_window(self,source,signal_at,market,route,epoch,window):
-        policy=source['policy']
+    def _snapshot_window(self,source,signal_at,market,route,epoch,window,*,candidate_policy=None):
+        policy=candidate_policy or source['policy']
         rows=[json.loads(body) for body, in self.db.execute(
             'SELECT body FROM votes WHERE at>=? AND at<? ORDER BY at',window)]
         applicable=[r for r in rows if r['market']==market and r['buy_fill_identity']==source['buy_fill_identity']
@@ -289,7 +291,8 @@ class PreparedVotes:
             buy_fill_identity=source['buy_fill_identity'],market=market,
             session_key=__import__('datetime').datetime.fromtimestamp(signal_at,
                 __import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat(),
-            path_id=source.get('path_id','EXIT_TRAILING_TP'),model=source['model'],signal_at=signal_at,policy=policy)
+            path_id=source.get('path_id','EXIT_TRAILING_TP'),model=source['model'],signal_at=signal_at,policy=policy,
+            source_policy_sha256=source['policy_sha256'])
         return {**decision,'max_defer_sec':policy['max_defer_sec']}
 
     def close(self):

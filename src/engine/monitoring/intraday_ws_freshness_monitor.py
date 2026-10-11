@@ -5833,7 +5833,10 @@ def build_report(
             "native_event_count": len(scanner_funnel_state.get("lookup_attention_native_events") or {}),
         }
 
+    from src.engine.scalping.scanner_lookup_attention_resource import summary_projection
+    lookup_summary = summary_projection(scanner_unique_funnel.get('economic_cohorts', {}).get('lookup_attention_selection'))
     summary = {
+        "lookup_attention_generation": lookup_summary,
         "target_date": target_date,
         "generated_at": generated_at or datetime.now(tz=KST).isoformat(),
         "report_type": REPORT_TYPE,
@@ -6164,6 +6167,9 @@ def write_report(
                 "effective_date": payload["prepared_effective_date"],
                 "source_evaluation_date": payload["source_evaluation_date"],
                 "policy_artifact_sha256": payload["artifact_sha256"]}
+        from src.engine.scalping.scanner_lookup_attention_resource import summary_projection
+        report['lookup_attention_generation'] = summary_projection(
+            report.get('scanner_unique_funnel', {}).get('economic_cohorts', {}).get('lookup_attention_selection'))
         write_json_object_generation_safe(monitor_json, report, sort_keys=True,
             trailing_newline=True, generation=generation)
         monitor_md.write_text(_render_monitor_markdown(report), encoding="utf-8")
@@ -6208,6 +6214,8 @@ def _run_once(args: argparse.Namespace) -> dict[str, Any]:
             predecessor=cohorts.get("lookup_attention_selection"),
             migration=_read_json(Path(args.lookup_migration_receipt)) if args.lookup_migration_receipt else migration)
         cohorts["lookup_attention_selection"] = section
+        from src.engine.scalping.scanner_lookup_attention_resource import summary_projection
+        report['lookup_attention_generation'] = summary_projection(section)
         if args.write:
             write_report(report, monitor_only=True, publication={
                 "publication_date": args.lookup_publication_date, "policy_date": args.lookup_policy_date,

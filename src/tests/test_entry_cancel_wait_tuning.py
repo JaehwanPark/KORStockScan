@@ -867,3 +867,75 @@ def test_latest_untrusted_predecessor_is_not_silently_skipped(tmp_path,monkeypat
             handle.truncate(mod.MAX_RECONCILIATION_METADATA_BYTES + 1)
     with pytest.raises(ValueError,match='predecessor_path_or_size_invalid'):
         mod._previous_state('2026-10-02')
+
+
+@pytest.mark.parametrize('owner,quantity,expected',[(None,0,'verified_empty'),('episode',5,'verified_empty'),('main_scalping',5,'known_open')])
+def test_native_custody_checkpoint_qualifies_main_and_retired_independently(tmp_path,monkeypatch,owner,quantity,expected):
+    import hashlib
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import main_custody_checkpoint as checkpoint
+    from src.trading.order import owner_custody_registry as custody
+    data=tmp_path/'data';path=data/'runtime/order_owner_registry.jsonl';path.parent.mkdir(parents=True)
+    rows=[]
+    if owner:
+        row=dict(schema=custody.REGISTRY_SCHEMA,event='FILL_RECORDED',intent_id='buy1',account_key='fixture',owner_type=owner,
+            symbol='123456',position_id='position1',side='BUY',action='NEW',state='ORDER_TERMINAL',filled_qty=quantity,previous_hash='0'*64)
+        row['event_hash']=hashlib.sha256(('0'*64).encode()+custody.OrderOwnerRegistry._canonical(row)).hexdigest();rows=[row]
+    path.write_text(''.join(json.dumps(r)+'\n' for r in rows));path.with_suffix('.jsonl.lock').touch()
+    registry=custody.OrderOwnerRegistry(path)
+    monkeypatch.setattr(checkpoint,'DATA_DIR',data);monkeypatch.setattr(custody,'broker_account_key',lambda:'fixture')
+    monkeypatch.setattr(custody,'default_order_owner_registry',lambda:registry)
+    snapshot=dict(captured_at=datetime(2026,10,2,15,31,tzinfo=ZoneInfo('Asia/Seoul')).timestamp(),successful_exchanges={'KRX','NXT'},
+        inventory_rows_valid=True,open_order_rows_valid=True,open_orders_request_succeeded=True,unverified_open_order_codes=set(),
+        inventory_by_code={'123456':dict(qty=quantity)} if owner else {},open_qty_by_code={})
+    native=checkpoint.publish(snapshot,query_generation=checkpoint.journal_generation())
+    ledger={'2026-09-30':dict(coverage_verified=False,unclassified_identities=['historical-missing']),
+        '2026-10-02':dict(coverage_verified=True,unclassified_identities=[])}
+    result=checkpoint.view(native,registry.verified_events_snapshot(),ledger,day='2026-10-02',current_generation=checkpoint.journal_generation())
+    assert result['status']==expected
+    assert native['historical_terminal_or_profit_inferred'] is False
+    assert (data/'runtime/main_custody_checkpoints'/f"2026-10-02.{native['sha256']}.json").exists()
+    bad=json.loads(json.dumps(native));bad['registry_tail_hash']='f'*64;bad['sha256']=checkpoint.digest({k:v for k,v in bad.items() if k!='sha256'})
+    assert checkpoint.view(bad,rows,ledger,day='2026-10-02',current_generation=checkpoint.journal_generation())['status']=='unknown'
+
+
+def test_custody_capture_is_bounded_queued_and_never_writes_synchronously(tmp_path,monkeypatch):
+    from src.engine.scalping import main_custody_checkpoint as checkpoint
+    saved=[]
+    monkeypatch.setattr(checkpoint,'_SOURCE_SINK',lambda *a,**kw:saved.append((a,kw)) or {'status':'queued'})
+    snapshot={'inventory_by_code':{'123456':{'qty':1}}}
+    def forbidden(*a,**kw):raise AssertionError('synchronous source write')
+    monkeypatch.setattr(checkpoint,'publish',forbidden)
+    assert checkpoint.enqueue(snapshot,query_generation=[1,2,3,4])=='queued'
+    snapshot['inventory_by_code']['123456']['qty']=10
+    assert saved[0][0][1]['inventory_by_code']['123456']['qty']==1
+    monkeypatch.setattr(checkpoint,'_SOURCE_SINK',lambda *a,**kw:{'status':'rejected'})
+    assert checkpoint.enqueue(snapshot,query_generation=[1,2,3,4])=='source_gap'
+
+
+def test_complete_future_population_can_select_while_history_gap_is_preserved():
+    scope=['KRX','KRX_REGULAR','KRX','standard']
+    actual=[]
+    for day in ('2026-09-30','2026-10-01'):
+        for i in range(10):
+            actual.append(dict(parent_id=f'actual:{day}:{i}',source_date=day,completion_date=day,
+                scope=scope,fill_class='full' if i%2 else 'no_fill',complete=True,model_identity='fixture-model',
+                net_error_pct=0.,cancel_ack_delay_sec=1.,late_fill_window_sec=1.,capital_error_minutes=0.,reserve_error_minutes=0.))
+    model=mod._fit_model(actual,'fixture-model');assert model['validated']
+    rows=[]
+    for day in ('2026-10-02','2026-10-05'):
+        arms={str(t):dict(status='completed_source_only',net_pnl_krw=100. if t==90 else 0.,stress_net_pnl_krw=90. if t==90 else 0.,
+            capital_krw_minutes=1000.,reserve_krw_minutes=1000.,modeled_filled_qty=1 if t==90 else 0,
+            modeled_exit_at=day+'T10:02:00+09:00',behavior_sha256=str(t)) for t in (30,60,90)}
+        rows.append(dict(parent_id='cf:'+day,source_date=day,scope=scope,fill_class='no_fill',requested_qty=1,
+            notional_krw=1000.,budget_krw=10000.,incumbent_timeout_sec=60,submitted_at=day+'T10:00:00+09:00',arms=arms))
+    ledger={'2026-09-29':dict(coverage_verified=False,unclassified_identities=['original-missing']),
+        **{r['source_date']:dict(coverage_verified=True,unclassified_identities=[]) for r in rows}}
+    result=mod._economic_research(rows+[dict(parent_id='bad',source_date='2026-09-29')],model,
+        {'2026-09-29':1,'2026-10-02':1,'2026-10-05':1},ledger)
+    assert result['status']=='economic_improvement_validated'
+    assert result['selected']['timeout_sec']==90 and result['delta_ev_pct']>0
+    assert ledger['2026-09-29']['coverage_verified'] is False
+    rows[-1]['arms']['90']['net_pnl_krw']=-100.
+    assert mod._economic_research(rows,model,{'2026-10-02':1,'2026-10-05':1},ledger)['status']=='holdout_rejected'

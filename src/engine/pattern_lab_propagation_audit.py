@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.utils.constants import DATA_DIR
 
 REPORT_DIR = DATA_DIR / "report"
@@ -183,7 +182,8 @@ def build_pattern_lab_propagation_audit(
         return retired_status("claude_scalping_pattern_lab")
     swing_path, _ = swing_pattern_lab_automation_report_paths(target_date)
     currentness_path, _ = currentness_report_paths(target_date)
-    workorder_path, _ = code_improvement_workorder_paths(target_date)
+    # Historical path lookup must not import the retired 9,000-line producer.
+    workorder_path = REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json"
     runtime_path, _ = runtime_summary_paths(target_date)
 
     swing = _load_json(swing_path) if include_swing else {}

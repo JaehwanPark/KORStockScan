@@ -338,7 +338,7 @@ def _invalid_replay(position, exc):
         modeled_net_pnl_krw=None, actual_order_submitted=False, allowed_runtime_apply=False)
 
 
-def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_config=None):
+def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_config=None, vote_policies=None):
     """One feature traversal with independent candidate state and bounded dedup.
 
     The disposable index remembers duplicate source keys across closed-session
@@ -376,7 +376,8 @@ def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_co
                     results[name] = _invalid_replay(position,exc)
                 return False
             for name, vector in vectors.items():
-                cursor = _replay_cursor(position,prepared,vector,typed_policy=typed_policy,
+                arm_position={**position,"_candidate_vote_policy":(vote_policies or {}).get(name)}
+                cursor = _replay_cursor(arm_position,prepared,vector,typed_policy=typed_policy,
                     classifier_config=classifier_config,duplicate=duplicate if db is not None else None)
                 if advance(name,cursor,None,initial=True): cursors[name]=cursor
             try:
@@ -443,6 +444,7 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
         return stop('original_holding_ai_mode_unobserved', status='censored')
     remaining, proceeds, allocated_cost, peak, armed = qty, 0.0, buy_cost, basis / qty, False
     crossing, deferred = None, None
+    worst_profit = 0.0
     used, last_clock, last_sequence, last_epoch = set(), entry, None, None
     strength_counts = Counter()
     pin = position.get("situation_pin")
@@ -524,6 +526,7 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
             return stop("executable_depth_or_peak_missing")
         peak = max(peak, mark)
         profit = round(100 * ((bid * full_quantity * (1 - sell_rate) - full_basis - allocated_cost) / full_basis), 2)
+        worst_profit = min(worst_profit, profit)
         peak_profit = round(100 * ((peak * full_quantity * (1 - sell_rate) - full_basis - allocated_cost) / full_basis), 2)
         if event.get("ws_data") is None:
             return stop("m1_raw_source_missing", status="censored")
@@ -548,6 +551,15 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
         if typed_policy is not None:
             values = typed_policy.effective(market, pin, position_key=identity,
                 target_date=datetime.fromtimestamp(known, ZoneInfo("Asia/Seoul")).date().isoformat())
+        if position.get('original_trailing_source_required'):
+            original=event.get('original_trailing_source') or {}
+            if (original.get('schema')!='original_trailing_decision_source_v1'
+                or original.get('sha256')!=digest({k:v for k,v in original.items() if k!='sha256'})
+                or original.get('observed_at')!=known or original.get('market')!=market
+                or original.get('owner')!='scalp_trailing_take_profit'
+                or original.get('classifier_sha256')!=prepared.classifier_sha256):
+                return stop('original_trailing_decision_source_missing',status='censored')
+            values=normalize_values(original['values'])
         decision = evaluate_trailing_take_profit(peak_price=peak, executable_bid=bid,
             peak_profit_pct=peak_profit, start_pct=values["SCALP_TRAILING_START_PCT"],
             strong=strength.state == "STRONG", weak_limit_pct=values["SCALP_TRAILING_LIMIT_WEAK"],
@@ -571,7 +583,8 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
             source = crossing['holding_source']
             try:
                 vote = position['_prepared_holding_votes'].snapshot(source, crossing['at'],
-                    market=crossing['market'], route=event['route'], epoch=event['transport_epoch'],entry_at=entry)
+                    market=crossing['market'], route=event['route'], epoch=event['transport_epoch'],entry_at=entry,
+                    candidate_policy=position.get('_candidate_vote_policy'))
             except (ValueError, OSError, TypeError, KeyError):
                 return stop('pre_signal_holding_vote_source_unobserved', status='censored')
             gate = evaluate_exit_deferral(decision=vote['decision'], now=known,
@@ -624,6 +637,7 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
                 return stop('candidate_exit_changes_observed_add_path', status='censored')
             modeled = proceeds - full_basis - allocated_cost
             result.update(status="modeled_full_exit", reason=None, modeled_net_pnl_krw=modeled,
+                          mae_pct=worst_profit, exposure_sec=known-entry,
                           strength_counts=dict(strength_counts), deferred_reason=deferred,
                           modeled_profit_rate_pct=100 * modeled / full_basis,
                           slippage_net_pnl_krw=[modeled - proceeds * bps / 10000 for bps in SLIPPAGE_BPS])

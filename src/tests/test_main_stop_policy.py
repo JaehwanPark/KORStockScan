@@ -10,6 +10,25 @@ from src.engine.automation import main_stop_postclose as post
 from src.engine.scalping.position_peak_ledger import PositionPeakRuntimeLedger, position_cycle_id
 
 
+def test_retired_pyramid_cannot_create_or_replace_a_protect_line():
+    from src.engine.sniper_execution_receipts import _apply_scale_in_protection
+    before = dict(buy_price=10000, trailing_stop_price=10050, protect_profit_pct=.2,
+        soft_stop_micro_grace_started_at=100, soft_stop_micro_grace_extension_used=True)
+    retired = dict(before)
+    assert _apply_scale_in_protection(retired, 'PYRAMID') is False
+    assert retired == before
+    average = dict(before)
+    assert _apply_scale_in_protection(average, 'AVG_DOWN') is True
+    assert average['trailing_stop_price'] == before['trailing_stop_price']
+    assert average['protect_profit_pct'] == before['protect_profit_pct']
+    assert 'soft_stop_micro_grace_started_at' not in average
+    assert average['soft_stop_reset_after_avg_down'] is True
+    assert p.protect_line_origin({}) == 'not_applicable_no_active_line'
+    assert p.protect_line_origin(dict(before, manual_control_exclusion_blocked=True)) == 'manual_existing'
+    assert p.protect_line_origin(dict(before, pyramid_count=1)) == 'legacy_retired'
+    assert p.protect_line_origin(before) == 'unverified_existing'
+
+
 def baseline():
     return p.StopValues(-3.,60,20,8,3,.67,1.,-5.,-4.,-2.,-.3)
 

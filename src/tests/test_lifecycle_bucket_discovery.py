@@ -1,37 +1,10 @@
 import json
 
-from src.engine import lifecycle_bucket_discovery as mod
-from src.engine import lifecycle_decision_matrix as ldm_mod
+from src.engine.lifecycle.archive import lifecycle_bucket_discovery_readers as mod
+from src.engine.lifecycle.archive import lifecycle_decision_matrix_readers as ldm_mod
 from src.engine.lifecycle.bucket_taxonomy import normalize_lifecycle_bucket
 
 
-def test_main_print_summary_omits_candidates(monkeypatch, capsys, tmp_path):
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
-    monkeypatch.setattr(
-        mod,
-        "write_lifecycle_bucket_discovery_report",
-        lambda target_date, **kwargs: {
-            "report_type": "lifecycle_bucket_discovery",
-            "date": target_date,
-            "target_date": target_date,
-            "runtime_effect": False,
-            "summary": {
-                "status": "pass",
-                "candidate_count": 324,
-                "surfaced_candidate_count": 2,
-                "sim_auto_approved_count": 0,
-                "live_auto_apply_ready_count": 0,
-            },
-            "warnings": [],
-            "candidates": [{"large": "payload"}],
-        },
-    )
-
-    assert mod.main(["--date", "2026-07-31", "--print-summary"]) == 0
-    output = json.loads(capsys.readouterr().out)
-
-    assert output["status"] == "retired"
-    assert output["runtime_effect"] is False
 
 
 def _ai_keep_response():
@@ -1249,15 +1222,7 @@ def test_sim_auto_approval_separates_positive_and_nonpositive_ev(monkeypatch, tm
     assert summary["sim_auto_nonpositive_ev_top"][0]["bucket_id"] == "entry:avoid"
 
     mod._write_sim_auto_approval(report)
-    payload = json.loads(
-        (tmp_path / "lifecycle_bucket_sim_auto_approval_2026-06-01.json").read_text()
-    )
-
-    assert payload["approved_bucket_count"] == 2
-    assert payload["positive_ev_approved_bucket_count"] == 1
-    assert payload["nonpositive_ev_approved_bucket_count"] == 1
-    assert payload["positive_ev_bucket_rows"][0]["bucket_id"] == "entry:positive"
-    assert payload["nonpositive_ev_bucket_rows"][0]["bucket_id"] == "entry:avoid"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_sim_auto_approval_does_not_treat_cooldown_seed_as_approval(
@@ -1286,15 +1251,7 @@ def test_sim_auto_approval_does_not_treat_cooldown_seed_as_approval(
     }
 
     mod._write_sim_auto_approval(report)
-    payload = json.loads(
-        (tmp_path / "lifecycle_bucket_sim_auto_approval_2026-06-01.json").read_text()
-    )
-
-    assert payload["active_sim_priority_seed_count"] == 1
-    assert payload["active_sim_priority_active_seed_count"] == 0
-    assert payload["approved"] is False
-    assert payload["source_quality_status"] == "empty"
-    assert payload["blocked_reasons"] == ["sim_auto_approved_bucket_missing"]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():
@@ -1802,25 +1759,6 @@ def test_scale_in_source_dimension_unknowns_are_observation_rollups():
     assert summary["actionable_unknown_gap_count"] == 0
 
 
-def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_keep_response(),
-    )
-    assert report["status"] == "retired"
 
 
 def test_wait6579_enriched_entry_dimension_remains_source_only() -> None:
@@ -1846,210 +1784,10 @@ def test_wait6579_enriched_entry_dimension_remains_source_only() -> None:
     assert grade["transition_target"] == "entry_dimension_provenance_only"
 
 
-def test_lifecycle_bucket_discovery_assigns_live_family_to_avg_down_arm(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    ldm_path = ldm_dir / "lifecycle_decision_matrix_2026-05-22.json"
-    _write_ldm(ldm_path)
-    payload = json.loads(ldm_path.read_text(encoding="utf-8"))
-    payload["scale_in_bucket_attribution"]["buckets"].append(
-        {
-            "bucket_type": "arm",
-            "bucket_key": "AVG_DOWN",
-            "sample": 12,
-            "joined_sample": 12,
-            "join_rate": 1.0,
-            "source_quality_gate": "pass",
-            "source_quality_adjusted_ev_pct": -1.4,
-            "recommended_route": "candidate_tighten_or_exclude",
-            "scale_in_ev_coverage_state": "v2_ready",
-            "scale_in_ev_label_version": "incremental_counterfactual_v2",
-            "primary_decision_metric": "incremental_notional_ev_pct",
-            "runtime_authority_ready": True,
-        }
-    )
-    ldm_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_keep_response(),
-    )
-    assert report["status"] == "retired"
 
 
-def test_lifecycle_bucket_discovery_blocks_scale_in_arm_without_v2_coverage(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    ldm_path = ldm_dir / "lifecycle_decision_matrix_2026-05-22.json"
-    _write_ldm(ldm_path)
-    payload = json.loads(ldm_path.read_text(encoding="utf-8"))
-    payload["scale_in_bucket_attribution"]["buckets"].append(
-        {
-            "bucket_type": "arm",
-            "bucket_key": "AVG_DOWN",
-            "sample": 12,
-            "joined_sample": 12,
-            "join_rate": 1.0,
-            "source_quality_gate": "pass",
-            "source_quality_adjusted_ev_pct": -1.4,
-            "recommended_route": "candidate_tighten_or_exclude",
-            "runtime_authority_ready": True,
-        }
-    )
-    ldm_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_keep_response(),
-    )
-    assert report["status"] == "retired"
 
 
-def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-
-    def _flow_bucket(score, submit, holding, exit_bucket, *, sample, ev, route, sim_id):
-        return {
-            "lifecycle_flow_bucket_id": f"lifecycle_flow:combo_lifecycle_flow:{sim_id}",
-            "bucket_type": "combo_lifecycle_flow",
-            "bucket_key": (
-                f"entry=entry:combo_entry_spot:{score}|"
-                f"submit={submit}|"
-                f"holding={holding}|"
-                "scale_in=scale_in:none|"
-                f"exit={exit_bucket}"
-            ),
-            "sample": sample,
-            "joined_sample": sample,
-            "real_joined_sample": sample,
-            "real_submitted_count": sample,
-            "join_rate": 1.0,
-            "complete_flow_count": sample,
-            "incomplete_flow_count": 0,
-            "source_quality_gate": "pass",
-            "source_quality_adjusted_ev_pct": ev,
-            "recommended_route": route,
-            "metric_scope": "lifecycle_bundle_ev",
-            "entry_bucket_id": f"entry:combo_entry_spot:{score}",
-            "submit_bucket_id": submit,
-            "holding_bucket_id": holding,
-            "exit_bucket_id": exit_bucket,
-            "child_bucket_ids": {
-                "entry": f"entry:combo_entry_spot:{score}",
-                "submit": submit,
-                "holding": holding,
-                "scale_in": [],
-                "exit": exit_bucket,
-            },
-            "stage_contract": {
-                "entry": {"contract_state": "present"},
-                "submit": {"contract_state": "present"},
-                "holding": {"contract_state": "present"},
-                "exit": {"contract_state": "present"},
-            },
-            "attribution_key": f"sim_record_id:{sim_id}",
-        }
-
-    flow_buckets = []
-    parent_submit = "submit:combo_submit_quality:revalidation_ok"
-    parent_holding = "holding:combo_holding_flow:baseline_hold"
-    parent_exit = "exit:combo_exit_result:take_profit"
-    for score, ev, sim_id in (
-        ("score_66_69", 1.4, "SIM-A"),
-        ("score_70_74", 1.2, "SIM-B"),
-    ):
-        flow_buckets.append(
-            _flow_bucket(
-                score,
-                parent_submit,
-                parent_holding,
-                parent_exit,
-                sample=5,
-                ev=ev,
-                route="candidate_recovery_or_relax",
-                sim_id=sim_id,
-            )
-        )
-    score_variants = ["score_lt60", "score_60_62", "score_76_80", "score_90p"]
-    submit_variants = [
-        "submit:combo_submit_quality:missing",
-        "submit:combo_submit_quality:stale_context_or_quote",
-        "submit:combo_submit_quality:price_guard_would_block",
-        "submit:combo_submit_quality:observed_other",
-    ]
-    exit_variants = [
-        "exit:combo_exit_result:missed_upside",
-        "exit:combo_exit_result:soft_stop_loss",
-        "exit:combo_exit_result:neutral",
-        "exit:combo_exit_result:missing",
-        "exit:combo_exit_result:observed_other",
-    ]
-    sibling_index = 0
-    for score in score_variants:
-        for submit in submit_variants:
-            for exit_bucket in exit_variants:
-                if len(flow_buckets) >= 31:
-                    break
-                sibling_index += 1
-                flow_buckets.append(
-                    _flow_bucket(
-                        score,
-                        submit,
-                        f"holding:combo_holding_flow:baseline_hold_variant_{sibling_index}",
-                        exit_bucket,
-                        sample=1,
-                        ev=0.2,
-                        route="hold_sample",
-                        sim_id=f"SIM-SIB-{sibling_index}",
-                    )
-                )
-            if len(flow_buckets) >= 31:
-                break
-        if len(flow_buckets) >= 31:
-            break
-    (ldm_dir / "lifecycle_decision_matrix_2026-05-22.json").write_text(
-        json.dumps(
-            {
-                "date": "2026-05-22",
-                "lifecycle_flow_bucket_attribution": {"buckets": flow_buckets},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_keep_response(),
-    )
-    assert report["status"] == "retired"
 
 
 def test_score_family_without_separator_rolls_up_to_parent_group():
@@ -2397,129 +2135,14 @@ def test_lifecycle_flow_source_only_blocker_overrides_live_runtime_metadata():
     assert item["auto_promotion_contract"]["deterministic_contract_components"] == []
 
 
-def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    quarantine_dir = tmp_path / "quarantine"
-    ldm_dir.mkdir()
-    quarantine_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    monkeypatch.setattr(mod, "CONTAMINATION_WINDOW_DIR", quarantine_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-28.json")
-    (quarantine_dir / "lifecycle_bucket_quarantine_2026-05-28.json").write_text(
-        json.dumps(
-            {
-                "quarantine_id": "scale_in_policy_2026-05-28",
-                "reason": "contaminated_scale_in_policy",
-                "exclude_live_auto_apply": True,
-                "affected_families": [mod.SCALE_IN_LIVE_AUTO_FAMILY],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    report = mod.build_lifecycle_bucket_discovery_report(
-        "2026-05-28",
-        ai_raw_response=_ai_keep_response(),
-    )
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_disabled(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22", ai_review_provider="none"
-    )
-    assert report["status"] == "retired"
 
 
-def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidate(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_block_response(
-            "effect is only about 1 percent and confidence is low",
-            bucket_id="scale_in:arm:pyramid",
-        ),
-    )
-    assert report["status"] == "retired"
 
 
-def test_lifecycle_bucket_discovery_compares_deterministic_and_ai_taxonomy_proposals(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    bucket_id = "scale_in:blocker_reason:pnl_out_of_range_0_32"
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_hybrid_taxonomy_response(bucket_id),
-    )
-    assert report["status"] == "retired"
 
 
-def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparison(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_proposal_without_comparison_response(
-            "scale_in:blocker_reason:pnl_out_of_range_0_32"
-        ),
-    )
-    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
@@ -2535,95 +2158,10 @@ def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
     assert f"ai_review_selected_evidence_authority_violation:{bucket_id}" in warnings
 
 
-def test_lifecycle_bucket_discovery_rejects_legacy_ai_response_without_dual_taxonomy_fields(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_legacy_ai_response_without_dual_taxonomy_fields(),
-    )
-    assert report["status"] == "retired"
 
 
-def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_candidate(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_block_response(
-            "env mapping and post-apply attribution contract are missing",
-            bucket_id="scale_in:arm:pyramid",
-        ),
-    )
-    assert report["status"] == "retired"
 
 
-def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    report_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    (report_dir / "lifecycle_bucket_discovery_2026-05-21.json").write_text(
-        json.dumps(
-            {
-                "date": "2026-05-21",
-                "source_contract": {
-                    "schema_version": "lifecycle_source_contract_snapshot_v1",
-                    "source_keys": ["removed_source"],
-                    "sections": {
-                        "entry_bucket_attribution": {
-                            "bucket_fields": [
-                                "bucket_type",
-                                "bucket_key",
-                                "removed_field",
-                            ],
-                            "bucket_types": ["combo_entry_spot"],
-                            "dimension_keys": ["score"],
-                        }
-                    },
-                    "policy_fields": [],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_keep_response(),
-    )
-    assert report["status"] == "retired"
 
 
 def test_previous_report_uses_canonical_daily_not_rolling_variant(
@@ -2650,52 +2188,6 @@ def test_previous_report_uses_canonical_daily_not_rolling_variant(
     assert mod._previous_report("2026-05-22") == daily
 
 
-def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_contract_removal(
-    tmp_path, monkeypatch
-):
-    ldm_dir = tmp_path / "ldm"
-    report_dir = tmp_path / "report"
-    catalog_dir = tmp_path / "catalog"
-    sim_dir = tmp_path / "sim"
-    ldm_dir.mkdir()
-    report_dir.mkdir()
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
-    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
-    (report_dir / "lifecycle_bucket_discovery_2026-05-21.json").write_text(
-        json.dumps(
-            {
-                "date": "2026-05-21",
-                "source_contract": {
-                    "schema_version": "lifecycle_source_contract_snapshot_v1",
-                    "source_keys": [],
-                    "sections": {
-                        "overnight_bucket_attribution": {
-                            "present": True,
-                            "bucket_count": 21,
-                            "bucket_fields": [
-                                "bucket_type",
-                                "bucket_key",
-                                "next_day_mfe_pct",
-                            ],
-                            "bucket_types": ["combo_overnight_decision"],
-                            "dimension_keys": ["action"],
-                        }
-                    },
-                    "policy_fields": [],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
-
-    report = mod.write_lifecycle_bucket_discovery_report(
-        "2026-05-22",
-        ai_raw_response=_ai_keep_response(),
-    )
-    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_accepts_legacy_daily_source_split_alias():
@@ -3151,7 +2643,7 @@ def test_parent_conflict_resolution_children_same_direction_absorbed():
 
 
 def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_gap():
-    from src.engine.lifecycle_bucket_discovery import (
+    from src.engine.lifecycle.archive.lifecycle_bucket_discovery_readers import (
         _policy_stage_candidates,
         _source_dimension_gap_summary,
     )
@@ -3264,3 +2756,14 @@ def test_entry_bucket_nonpositive_ev_cannot_enter_sim_auto_handoff():
     assert live_family is None
     assert grade["transition_target"] == "source_only_keep_collecting"
     assert grade["grade_reason"] == "sim_policy_nonpositive_ev_not_approved"
+
+
+def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+    import importlib
+    current=importlib.import_module('src.engine.lifecycle_bucket_discovery')
+    prior=tmp_path/"prior.json";prior.write_text("original")
+    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
+    monkeypatch.setattr(type(prior),"write_text",forbidden)
+    monkeypatch.setattr(type(prior),"read_text",forbidden)
+    result=current.build_lifecycle_bucket_discovery_report("2026-10-12")
+    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False

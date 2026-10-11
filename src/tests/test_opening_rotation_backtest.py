@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 from src.engine.scalping.opening_rotation import POSITION_TAG, WINDOW_VERSION
-from src.engine.scalping import opening_rotation_backtest as backtest
-from src.engine.scalping.opening_rotation_backtest import build_report, write_report
+from src.engine.lifecycle.archive import opening_rotation_backtest_readers as backtest
+from src.engine.lifecycle.archive.opening_rotation_backtest_readers import build_report
 
 
 def _write_events(root: Path, target_date: str, rows: list[dict]) -> None:
@@ -758,24 +758,11 @@ def test_post_sell_inventory_keeps_sim_and_real_separate(tmp_path):
     assert inventory["legacy_rows_used_as_exact_outcomes"] == 0
 
 
-def test_write_report_creates_json_and_markdown(tmp_path):
-    report = {
-        "start_date": "2026-07-13",
-        "end_date": "2026-07-16",
-        "status": "source_quality_limited_no_completed_opening_rotation_trade",
-        "summary": {},
-        "real_performance": {},
-        "source_quality": {},
-        "auxiliary_post_sell_inventory": {},
-    }
-    json_path, md_path = write_report(report, tmp_path)
-    assert (
-        json.loads(json_path.read_text(encoding="utf-8"))["status"] == report["status"]
-    )
-    assert json_path.name.endswith("_legacy.json")
-    markdown = md_path.read_text(encoding="utf-8")
-    assert "OPENING_ROTATION_1PCT" in markdown
-    assert "평가 불가" in markdown
+def test_write_report_creates_json_and_markdown(tmp_path,monkeypatch):
+    from src.engine.scalping import opening_rotation_backtest as retired
+    def forbidden(*args,**kwargs):raise AssertionError("retired publisher performed I/O")
+    monkeypatch.setattr(type(tmp_path),"write_text",forbidden)
+    assert retired.write_report({})["status"]=="retired"
 
 
 @pytest.mark.parametrize(
@@ -813,5 +800,4 @@ def test_report_identity_pins_config_and_versioned_filename(tmp_path):
     assert identity["opening_rotation_window_version"] == WINDOW_VERSION
     assert len(identity["config_fingerprint"]) == 12
 
-    json_path, _ = write_report(report, tmp_path / "report")
-    assert identity["config_fingerprint"] in json_path.name
+    assert identity["config_fingerprint"] == backtest._config_fingerprint(identity["entry_config"])

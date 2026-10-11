@@ -211,7 +211,8 @@ def test_unsupported_candidate_does_not_erase_healthy_pairs_and_true_loss_is_dis
     assert first in replay.common_evaluation([part])['strata']['enter_pass_opportunity_cf']['metrics']['candidate']['train']['large_loss_worsened_ids']
 
 
-def test_holding_original_requests_pre_signal_replay_and_segment_rollover(tmp_path,monkeypatch):
+@pytest.mark.parametrize('verdict',["PASS","VETO"])
+def test_holding_original_requests_pre_signal_replay_and_segment_rollover(tmp_path,monkeypatch,verdict):
     from src.engine.ai import holding_exit_vote as vote
     from src.engine.ai import holding_vote_replay_source as evidence
     from src.engine.scalping import ai_decision_trace as writer
@@ -221,7 +222,7 @@ def test_holding_original_requests_pre_signal_replay_and_segment_rollover(tmp_pa
     monkeypatch.setattr(writer,'DATA_DIR',root);monkeypatch.setattr(writer,'trace_enabled',lambda:True)
     clock=at('2026-10-08T09:00:00')
     monkeypatch.setattr(writer,'_now',lambda:datetime.fromtimestamp(clock,__import__('zoneinfo').ZoneInfo('Asia/Seoul')))
-    rows=_events('EXIT_TRAILING_TP','REGULAR',position_key='main:1',session_key='2026-10-08',base_at=clock+2)
+    rows=_events('EXIT_TRAILING_TP','REGULAR',verdicts=(verdict,verdict),position_key='main:1',session_key='2026-10-08',base_at=clock+2)
     path=vote.path_vote_store_path(root,'main:1')
     for index,row in enumerate(rows):
         payload=dict(input_schema=vote.PATH_PROMPT_VERSION,requested_paths=['EXIT_TRAILING_TP'],
@@ -258,16 +259,31 @@ def test_holding_original_requests_pre_signal_replay_and_segment_rollover(tmp_pa
     alias=evidence.assemble_votes(root,alias_root,source,{})
     assert alias['status']=='source_bound'
     assert all(r['actual_input_verified'] for r in storage.iter_tree(alias_root,alias['events_ref']))
-    quotes=[quote(i+1,'2026-10-08T09:00:'+f'{i:02d}',bid=100,peak=100) for i in range(30)]
-    quotes.append(quote(31,'2026-10-08T09:00:30'))
+    quotes=[quote(i+1,datetime.fromtimestamp(clock+i,__import__('zoneinfo').ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%dT%H:%M:%S'),bid=100 if i<30 else 100.5-(i-30)*.002,peak=100 if i<30 else 101) for i in range(90)]
     for event in quotes:
         event['holding_vote_source']={**source,'coverage_checked_at':event['known_at'],'observed_at':event['known_at']}
         event['source_sha256']=replay.quote_source_digest(event)
     pos={**position(),'operating_ai_required':True,'holding_vote_replay_ref':reference}
     result=replay._replay(pos,quotes,vector())
     assert result['status']=='modeled_full_exit',result
-    late=deepcopy(quotes);late[-1]['holding_vote_source']['coverage_complete']=False
-    late[-1]['source_sha256']=replay.quote_source_digest(late[-1])
+    # Same original request/response bytes, one feature stream, bounded numeric arms.
+    prepared=replay.prepare_path(quotes)
+    base=source['policy'];candidate={**base,'max_defer_sec':base['max_defer_sec']/2}
+    paired=replay.replay_many(pos,prepared,{'parent':vector(),'candidate':vector()},vote_policies={'parent':base,'candidate':candidate})
+    assert all(r['status']=='modeled_full_exit' for r in paired.values()),paired
+    if verdict=='VETO':
+        assert paired['candidate']['last_sell_permission_at'] < paired['parent']['last_sell_permission_at']
+        assert paired['candidate']['modeled_net_pnl_krw'] > paired['parent']['modeled_net_pnl_krw']
+    receipt=dict(schema='original_trailing_decision_source_v1',owner='scalp_trailing_take_profit',runtime_effect=False,allowed_runtime_apply=False)
+    original=deepcopy(quotes)
+    for q in original:
+        native=dict(receipt,observed_at=q['known_at'],market='REGULAR',values=vector()['REGULAR'],classifier_sha256=prepared.classifier_sha256)
+        native['sha256']=replay.digest(native);q['original_trailing_source']=native;q['source_sha256']=replay.quote_source_digest(q)
+    frozen=replay.prepare_path(original)
+    strict=replay.replay_many(dict(pos,original_trailing_source_required=True),frozen,{'parent':vector(),'candidate':vector()},vote_policies={'parent':base,'candidate':candidate})
+    assert all(r['status']=='modeled_full_exit' for r in strict.values()),strict
+    late=deepcopy(quotes);late[30]['holding_vote_source']['coverage_complete']=False
+    late[30]['source_sha256']=replay.quote_source_digest(late[30])
     assert replay._replay(pos,late,vector())['status']=='censored'
     # Crossing uses original full bytes, never dedup equivalence alone.
     original=next((root/'ai_decision_payloads').glob('*.jsonl'))

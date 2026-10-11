@@ -143,7 +143,7 @@ def test_completed_mismatch_takes_precedence_over_pending_tail(monkeypatch, tmp_
     assert result["parity"]["producer_pending_flush"] is True
     assert result["parity"]["completed_window_mismatch"] is True
     assert result["state"] == "v2_shadow_parity_fail"
-    from src.engine.build_code_improvement_workorder import (
+    from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import (
         _pipeline_event_verbosity_followup_orders,
     )
 
@@ -173,7 +173,7 @@ def test_expired_tail_creates_repair_workorder(monkeypatch, tmp_path):
         day, as_of=datetime(2026, 9, 8, 10, 7, 1)
     )
     assert result["state"] == "v2_shadow_flush_timeout"
-    from src.engine.build_code_improvement_workorder import (
+    from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import (
         _pipeline_event_verbosity_followup_orders,
     )
 
@@ -348,7 +348,7 @@ def test_same_size_raw_rewrite_invalidates_parity_cache(monkeypatch, tmp_path):
 
 
 def test_historical_suppress_workorder_cannot_reopen_raw_discard():
-    from src.engine.build_code_improvement_workorder import (
+    from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import (
         _pipeline_event_verbosity_followup_orders,
     )
 

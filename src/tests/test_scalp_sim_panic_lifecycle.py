@@ -4,8 +4,8 @@ from datetime import date, datetime
 
 import pytest
 
-from src.engine import lifecycle_decision_matrix_runtime as runtime
-from src.engine import lifecycle_decision_matrix as matrix
+from src.engine.lifecycle import neutral_decision_context as runtime
+from src.engine.lifecycle.archive import lifecycle_decision_matrix_readers as matrix
 from src.engine import sniper_state_handlers as state_handlers
 from src.utils.constants import TRADING_RULES as CONFIG
 

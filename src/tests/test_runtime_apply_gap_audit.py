@@ -177,7 +177,6 @@ def test_runtime_apply_gap_audit_surfaces_direct_preopen_policy_families(
         for row in rows.values()
         if row["family"] == "position_sizing_dynamic_formula"
     )
-    krx = rows["post_probe_winner_recovery:2026-05-22:KRX"]
     assert entry["preopen_apply_state"] == "consumed_by_next_preopen"
     assert entry["final_disposition"] == "live_auto_apply_ready"
     assert entry["bridge_state"] == "not_required_direct_preopen_owner"
@@ -186,16 +185,11 @@ def test_runtime_apply_gap_audit_surfaces_direct_preopen_policy_families(
     assert sizing["primary_ev"] == 0.18
     assert sizing["sample"] == 31
     assert sizing["preopen_apply_state"] == "consumed_by_next_preopen"
-    assert krx["primary_ev"] == 0.12
-    assert krx["preopen_apply_state"] == "consumed_by_next_preopen"
-    assert (
-        rows["post_probe_winner_recovery:2026-05-22:NXT"]["preopen_apply_state"]
-        == "pending_next_preopen"
-    )
-    assert report["runtime_uptake_kpi"]["candidate_count"] == 4
-    assert report["runtime_uptake_kpi"]["live_auto_apply_ready_count"] == 3
-    assert report["runtime_uptake_kpi"]["preopen_selected_count"] == 3
-    assert report["runtime_uptake_kpi"]["post_apply_evidence_pending_count"] == 3
+    assert not any(row["family"] == "post_probe_winner_recovery" for row in rows.values())
+    assert report["runtime_uptake_kpi"]["candidate_count"] == 2
+    assert report["runtime_uptake_kpi"]["live_auto_apply_ready_count"] == 2
+    assert report["runtime_uptake_kpi"]["preopen_selected_count"] == 2
+    assert report["runtime_uptake_kpi"]["post_apply_evidence_pending_count"] == 2
     assert report["summary"]["bridge_blocker_ledger_count"] == 0
 
 

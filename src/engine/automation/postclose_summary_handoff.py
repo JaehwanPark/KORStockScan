@@ -5,6 +5,7 @@ not source hashes: binding their changing generation would create a verification
 """
 
 from __future__ import annotations
+from src.engine.scalping.holding_path_vote_policy import publication_status as holding_vote_publication_status
 
 import hashlib
 import json
@@ -538,7 +539,7 @@ def verify_summary_handoff(
                 report_dir.parent, target_policy_date,
                 source_report_sha256=observation_sha,
             )
-            if (receipt.get("status") != "estimated_provisional_published"
+            if (receipt.get("status") != holding_vote_publication_status(bundle)
                     or receipt.get("source_date") != target_date
                     or receipt.get("target_date") != target_policy_date
                     or receipt.get("bundle_sha256") != bundle["bundle_sha256"]

@@ -304,3 +304,29 @@ def test_registered_live_provider_payload_matches_offline_contract(setup,monkeyp
         symbol='005930',cache_key='-',submitted_at_perf=0,timeout_ms=5000,
         metadata={'auxiliary_registry_sha256':v['registry_sha256']})
     with pytest.raises(ValueError,match='rewrite_forbidden'):engine._build_invalid_prompt_retry_request(request)
+
+
+
+def test_terminal_source_resolution_preserves_campaign_and_durable_budget(setup):
+    root,b,m,sid,v=setup
+    revised=copy.deepcopy(m)
+    with S.Store(root) as store:
+        for part in revised['partitions']:
+            points=copy.deepcopy(store.get(part['records_object']))
+            eligible=[p for p in points if p['scope']==sid]
+            if len(eligible)>1:eligible[0]['outcome']={'status':'SOURCE_GAP','reason':'path_end_before_horizon'}
+            part['records_object']=store.put(points);part['records_sha256']=P.digest(points)
+    revised=P.seal(revised)
+    campaign=T.prepare(root,'2026-10-07',revised,b)
+    before=(T.directory(root,'2026-10-07')/'latest-campaign.json').read_bytes()
+    T.calls(root,'2026-10-07',transport=transport)
+    with S.Store(root) as store:spent=store.db.execute('SELECT * FROM attempt_budgets ORDER BY 1,2').fetchall()
+    result=T.evaluate(root,'2026-10-07')
+    revision=json.loads((T.directory(root,'2026-10-07')/'resolutions'/(result['resolution_sha256']+'.json')).read_text())
+    dead=[r for r in revision['rows'] if r['label_state']=='irrecoverable_frozen_source']
+    assert dead and all(s in {'completed','excluded_before_attempt'} for r in dead for s in r['request_accounting'].values())
+    assert result['request_accounting_complete'] and result['comparison_complete']
+    assert T.calls(root,'2026-10-07',transport=lambda *a,**kw:pytest.fail('terminal campaign recalled provider'))['new_calls']==0
+    assert T.evaluate(root,'2026-10-07')['artifact_content_sha256']==result['artifact_content_sha256']
+    with S.Store(root) as store:assert store.db.execute('SELECT * FROM attempt_budgets ORDER BY 1,2').fetchall()==spent
+    assert (T.directory(root,'2026-10-07')/'latest-campaign.json').read_bytes()==before

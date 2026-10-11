@@ -1673,6 +1673,9 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'main_stop_confirmation': 'MainStopLossRetirementRuntimeTuning1010',
     }
     owner = mapping.get(alert['stage'])
+    if alert['stage']=='policy_generation':
+        from src.engine.monitoring.policy_generation_contract import OWNERS
+        owner=OWNERS.get(alert.get('scope'))
     alert.update(producer_owner=alert['owner'], historical_owner=alert['owner'],
                      owner=owner if owner in current_owners else 'UNRESOLVED_CURRENT_OWNER:' + str(owner),
                      owner_status='current_open' if owner in current_owners else 'unresolved',
@@ -2206,15 +2209,6 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "allow_missing_after_window_while_cron_in_progress": True,
     },
     {
-        "id": "code_improvement_workorder",
-        "path_template": "docs/code-improvement-workorders/code_improvement_workorder_{date}.md",
-        "max_staleness_sec": 3600,
-        "critical": False,
-        "trading_day_only": True,
-        "window_start": (20, 10),
-        "window_end": (21, 40),
-    },
-    {
         "id": "pipeline_event_verbosity_report",
         "path_template": "data/report/pipeline_event_verbosity/pipeline_event_verbosity_{date}.md",
         "max_staleness_sec": 3600,
@@ -2695,6 +2689,23 @@ class ArtifactFreshnessDetector(BaseDetector):
         alerts = []
         bindings = []
         observations = []
+        from src.engine.monitoring.policy_generation_contract import observations as generation_observations, retirement_dispositions
+        details['policy_generation_retirements']=retirement_dispositions(PROJECT_ROOT)
+        details['policy_generation_semantics']=[]
+        for semantic_day in semantic_days:
+            for observed in generation_observations(PROJECT_ROOT,semantic_day):
+                details['policy_generation_semantics'].append(observed)
+                observations.append(dict(stage='policy_generation',semantics=observed))
+                bindings.append(dict(stage='policy_generation',source_date=semantic_day,
+                    target_date=None,as_of_date=_today_kst_str(now_dt),
+                    generation=observed.get('report_sha256'),status=observed['status']))
+                for reason in observed['findings']:
+                    alerts.append(dict(stage='policy_generation',scope=observed['family'],source_date=semantic_day,
+                        target_date=None,reason=reason,severity='warning',owner=observed.get('repair_owner') or 'UNRESOLVED_CURRENT_OWNER',
+                        artifact=observed['artifact'],generation=observed.get('contract_sha256'),
+                        source_generation=observed.get('source_generation'),code_sha256=observed.get('code_sha256'),
+                        closure_test=observed.get('closure_test'),decision_authority='report_only'))
+                    warnings.append('policy_generation:'+observed['family']+':'+reason)
         for semantic_day in semantic_days:
             machine_semantics = _machine_result_semantics(PROJECT_ROOT, semantic_day)
             details["machine_result_semantics"] = machine_semantics

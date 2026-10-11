@@ -40,7 +40,7 @@ IMPLEMENTATION_PATHS = (
     "src/engine/sniper_scale_in.py",
     "src/engine/sniper_execution_receipts.py",
     "src/engine/holding_exit_matrix_runtime.py",
-    "src/engine/lifecycle_decision_matrix_runtime.py",
+    "src/engine/lifecycle/neutral_decision_context.py",
     "src/engine/lifecycle/avg_down_policy_replay.py",
     "src/engine/lifecycle/avg_down_replay.py",
     "src/engine/lifecycle/retirement.py",
@@ -51,6 +51,8 @@ IMPLEMENTATION_PATHS = (
     "src/engine/scalping/micro_estimator_state.py",
     "src/engine/scalping/strategy_owner_components.py",
     "src/engine/scalping/strategy_owner_replay.py",
+    "src/engine/scalping/main_stop_policy.py",
+    "src/engine/scalping/position_peak_ledger.py",
 )
 _KST = timezone(timedelta(hours=9))
 
@@ -128,6 +130,8 @@ def loaded_code_identity(handlers) -> dict:
 
     importlib.import_module("src.engine.scalping.strategy_owner_components")
     importlib.import_module("src.engine.scalping.strategy_owner_replay")
+    importlib.import_module("src.engine.scalping.main_stop_policy")
+    importlib.import_module("src.engine.scalping.position_peak_ledger")
     identities = {
         name: _code_digest(getattr(handlers, name).__code__)
         for name in (
@@ -182,6 +186,10 @@ def _json_value(value: Any) -> Any:
         if isinstance(value, (set, frozenset)):
             values.sort(key=lambda item: json.dumps(item, sort_keys=True))
         return {"__replay_collection__": type(value).__name__, "items": values}
+    from src.engine.scalping.main_stop_policy import StopValues
+    if isinstance(value, StopValues):
+        from dataclasses import asdict
+        return {'__replay_main_stop_values__': asdict(value)}
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             raise ValueError("non_string_snapshot_key")
@@ -199,6 +207,9 @@ def _json_value(value: Any) -> Any:
 
 def thaw(value: Any) -> Any:
     if isinstance(value, dict):
+        if set(value) == {'__replay_main_stop_values__'}:
+            from src.engine.scalping.main_stop_policy import StopValues
+            return StopValues.parse(value['__replay_main_stop_values__'])
         if set(value) == {"__replay_decimal__"}:
             return Decimal(value["__replay_decimal__"])
         if set(value) == {"__replay_deque__", "maxlen"}:
@@ -520,7 +531,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     phase = _install_effect_guard()
     from src.engine import sniper_state_handlers as handlers
     from src.engine import sniper_execution_receipts as receipts
-    from src.engine import lifecycle_decision_matrix_runtime as ldm
+    from src.engine.lifecycle import neutral_decision_context as ldm
     from src.engine.scalping.avg_down_replay_capture import AI_STATE_FIELDS
     from src.engine.lifecycle.avg_down_replay import replay_exit_paths
     from src.engine.ai.hot_path_ai_symbol_budget import HotPathAISymbolBudget
@@ -533,6 +544,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     import threading
     import time
     import uuid
+    from src.engine.scalping.position_peak_ledger import PositionPeakRuntimeLedger
 
     phase["importing"] = False
 
@@ -671,6 +683,19 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
         ReplayInputGap("offline_thread_dispatch_forbidden")
     )
     FrozenFiles(snapshot["files"]).install()
+    original_peak_ledger = handlers.POSITION_PEAK_LEDGER
+
+    class ReplayPeakLedger(PositionPeakRuntimeLedger):
+        """Same native ledger methods, per-arm memory persistence only."""
+        def __init__(self, rows):
+            super().__init__(original_peak_ledger.path)
+            self.rows = deepcopy(rows)
+
+        def load(self):
+            return deepcopy(self.rows)
+
+        def _write(self, rows):
+            self.rows = deepcopy(rows)
     time.time = lambda: current["epoch"]
     time.monotonic = lambda: current["epoch"]
     time.perf_counter = lambda: current["epoch"]
@@ -712,6 +737,12 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
         current["input_digest"] = input_digest
         current["uuid_ordinal"] = 0
         context = state["policy_state"]
+        # Explicitly recorded absence is valid; an unrecorded file still fails
+        # in FrozenFiles. Each arm restores its own saved ledger generation.
+        initial_peak = context.get('position_peak_ledger_state')
+        replay_peak = ReplayPeakLedger(thaw(initial_peak) if initial_peak is not None
+            else original_peak_ledger.load())
+        handlers.POSITION_PEAK_LEDGER = replay_peak
         if context.get("schema") != "avg_down_holding_state_v1":
             raise ReplayInputGap("full_holding_state_schema_invalid")
         stock = thaw(deepcopy(context["stock"]))
@@ -1147,6 +1178,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
                 "call_path": gap.call_path,
             }
         after = deepcopy(context)
+        after['position_peak_ledger_state'] = _json_value(replay_peak.load())
         after["filled_add_qty"] = state["filled_add_qty"]
         after["ldm_promote_counter"] = _json_value(ldm._PROMOTE_COUNTER)
         if ai_engine.recorded_state_ready:

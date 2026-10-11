@@ -223,7 +223,7 @@ def holding_state(handlers, stock: dict) -> dict:
         }
     # Stock is copied under its normal owner lock by the caller. An unsupported
     # object is a snapshot gap; stringifying it would erase decision semantics.
-    from src.engine import lifecycle_decision_matrix_runtime as ldm
+    from src.engine.lifecycle import neutral_decision_context as ldm
 
     with _LOCK:
         ai_state = deepcopy(_AI_STATE.get(str(stock.get("code", ""))[:6]))

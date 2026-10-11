@@ -397,8 +397,16 @@ def evaluate(data_root, day, *, campaign_path=None):
     c, out, canonical = load_campaign(data_root,day,campaign_path)
     per=defaultdict(lambda:dict(current=[],candidate=[],excluded=Counter(),changes=Counter()))
     pairs=[]
+    resolution_rows=[]
     with S.Store(data_root) as store:
         rows=validate_campaign(store,c)
+        grant=None
+        if c.get('research'):
+            from src.engine.scalping import reversal_auxiliary_research as R
+            grant=R.validate_campaign(data_root,c)
+        budget_key=grant['budget_key'] if grant else 'postclose_auxiliary:'+day
+        budget_limit=grant['call_limit'] if grant else LIMIT
+        budget_used=store.budget_used(budget_key)
         owner={(r[1],r[2]):r for r in rows}
         for pair in c['pairs']:
             sid=pair['scope']; value=per[sid]; verdicts={}; reasons=[]
@@ -422,6 +430,36 @@ def evaluate(data_root, day, *, campaign_path=None):
                 for role in verdicts:value[role].append((outcome,verdicts[role]))
                 if (verdicts['current']=='PASS') != (verdicts['candidate']=='PASS'):
                     value['changes'][('added_' if verdicts['candidate']=='PASS' else 'removed_')+outcome]+=1
+            label_reason = pair['outcome'].get('reason') or pair['outcome'].get('blocked_reason')
+            # A sealed campaign is immutable: waiting cannot extend its frozen
+            # price path. Only an exact-source successor campaign can repair it.
+            label_state = ('resolved' if outcome in {'WIN','FAIL_STOP','FAIL_TIMEOUT'} else
+                           'irrecoverable_frozen_source' if label_reason == 'path_end_before_horizon' else
+                           'unresolved_source')
+            request_states = {role: owner[pair['opportunity_key'],role][4]
+                              for role in ('current','candidate')}
+            response_state = ('invalid_terminal' if any(x.endswith(':invalid_response') for x in reasons)
+                              else 'uncertain_transport' if any(v in {'reserved','failed'} for v in request_states.values())
+                              else 'complete' if all(v == 'completed' for v in request_states.values())
+                              else 'pending_budget_or_request')
+            origin_used=store.budget_used('postclose_auxiliary:'+pair['day']) if not grant else None
+            exhausted=(budget_used>=budget_limit or (origin_used is not None and origin_used>=LIMIT))
+            accounting={role:('excluded_before_attempt' if state=='planned' and label_state=='irrecoverable_frozen_source'
+                else 'budget_exhausted_before_attempt' if state=='planned' and exhausted else state)
+                for role,state in request_states.items()}
+            resolution_rows.append(dict(opportunity_key=pair['opportunity_key'], scope=sid,
+                snapshot_obj=pair['snapshot_obj'], requests=pair['requests'],
+                source_outcome_sha256=P.digest(pair['outcome']), label_state=label_state,
+                label_reason=label_reason, request_states=request_states,
+                response_state=response_state, request_accounting=accounting, comparison_eligible=not reasons,
+                comparison_terminal_exclusion=(
+                    'invalid_completed_response' if response_state=='invalid_terminal'
+                        and all(s=='completed' for s in request_states.values()) else
+                    'not_sampled_budget' if any(s=='budget_exhausted_before_attempt' for s in accounting.values())
+                        and all(s in {'completed','budget_exhausted_before_attempt'} for s in accounting.values()) else
+                    'irrecoverable_frozen_source' if label_state=='irrecoverable_frozen_source'
+                        and all(s in {'completed','excluded_before_attempt'} for s in accounting.values()) else None),
+                excluded=reasons))
             pairs.append(dict(pair,verdicts=verdicts,excluded=reasons))
         states=store.states(c['artifact_content_sha256'])
     scopes={}
@@ -433,7 +471,24 @@ def evaluate(data_root, day, *, campaign_path=None):
                         expected_pairs=sum(p['scope']==sid for p in c['pairs']), exclusions=dict(v['excluded']),
                         pass_changes=dict(v['changes']),improved=improves(current,challenger),
                         machine_win_rate=sum(o=='WIN' for o,_ in v['current'])/len(v['current']) if v['current'] else None)
+    resolution=P.seal(dict(schema='reversal_auxiliary_resolution_v1',source_date=day,
+        campaign_sha256=c['artifact_content_sha256'], rows=resolution_rows,
+        code_sha256=P.file_hash(__file__), budget_ledger_mutated=False,
+        budget=dict(key=budget_key,limit=budget_limit,used=budget_used,remaining=max(0,budget_limit-budget_used),
+                    funding_sha256=grant.get('funding_sha256',grant['artifact_content_sha256']) if grant else None),
+        request_accounting_complete=bool(resolution_rows) and all(
+            state in {'completed','excluded_before_attempt','budget_exhausted_before_attempt'}
+            for row in resolution_rows for state in row['request_accounting'].values()),
+        comparison_complete=any(r['comparison_eligible'] for r in resolution_rows)
+            and all(r['comparison_eligible'] or r['comparison_terminal_exclusion'] is not None
+                for r in resolution_rows)
+            and not c['eligible_census'].get('typed_candidate_incompatible'), **P.AUTH))
+    P.write(out/'resolutions'/(resolution['artifact_content_sha256']+'.json'),resolution)
     result=P.seal(dict(schema=SCHEMA,source_date=day,campaign_sha256=c['artifact_content_sha256'],
+        resolution_sha256=resolution['artifact_content_sha256'],
+        resolution_states=dict(Counter(r['label_state']+'|'+r['response_state'] for r in resolution_rows)),
+        request_accounting_complete=resolution['request_accounting_complete'],
+        comparison_complete=resolution['comparison_complete'],
         parent_bundle_sha256=c['parent_bundle_sha256'],detector_manifest_hash=c['detector_manifest_hash'],
         scopes=scopes,pairs=pairs,request_completion=not c['eligible_census'].get('typed_candidate_incompatible') and not any(states.get(k) for k in ('planned','reserved','failed')),
         paired_metrics_ready=any(v['paired_points'] for v in scopes.values()),
@@ -441,6 +496,12 @@ def evaluate(data_root, day, *, campaign_path=None):
         eligible_census=c['eligible_census'],not_sampled_budget=c['not_sampled_budget'],
         state='evaluated',call_limit=c['call_limit'],
         **(dict(research=c['research'],campaign_path=str(canonical.resolve())) if c.get('research') else {}),**P.AUTH))
+    from src.engine.monitoring.policy_generation_contract import native
+    result.pop('artifact_content_sha256',None)
+    result['policy_generation']=native(result,family='auxiliary',day=day,data_root=data_root,
+        source_state='partitioned',comparison_state='complete' if result['comparison_complete'] else 'incomplete',
+        handoff_state='research_only_no_policy_change')
+    result=P.seal(result)
     P.write(out/'evaluations'/(result['artifact_content_sha256']+'.json'),result)
     P.write(out/'evaluation.json',result)
     return result
@@ -511,7 +572,8 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
             adoption_basis='comparison_selected' if promoted else 'carried',
             comparison_promoted_scopes=sorted(promoted),
             results_sources=[dict(path=str(evidence.resolve()),sha256=P.file_hash(evidence))],source_receipts=receipts,
-            comparison_complete=evaluated['request_completion'],paired_metrics_ready=evaluated['paired_metrics_ready'],
+            comparison_complete=evaluated['comparison_complete'],request_accounting_complete=evaluated['request_accounting_complete'],
+            resolution_sha256=evaluated['resolution_sha256'],paired_metrics_ready=evaluated['paired_metrics_ready'],
             comparison_contract=SCHEMA,comparison_metrics=evaluated['scopes'],auxiliary_registry_bindings=bindings,
             auxiliary_independent_scopes=sorted(measured),auxiliary_reader_code_hashes=I.code_hashes(),operating_day=day,generated_at=datetime.now(I.K.KST).isoformat(),
             evaluated_overlay_parent=(overlay or {}).get('artifact_content_sha256'),evaluated_base_bundle=parent['bundle_sha256'],

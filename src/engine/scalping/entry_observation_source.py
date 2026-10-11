@@ -1,12 +1,12 @@
 """Entry observations for dedicated gate/replay owners, without matrix policy.
 
-The legacy module retains the shared event normalization and identity helpers;
+The scalping event owner retains shared normalization and identity helpers;
 this adapter never reads matrix artifacts, builds buckets, or writes reports.
 """
 
 from typing import Any
 
-from src.engine import scalp_entry_action_decision_matrix as observations
+from src.engine.scalping import entry_observation_events as observations
 
 
 def load_entry_observations(target_date: str) -> dict[str, Any]:
@@ -48,3 +48,6 @@ def load_entry_observations(target_date: str) -> dict[str, Any]:
         "decision_authority": "source_only",
         "allowed_runtime_apply": False,
     }
+
+
+WAIT6579_ENTRY_BUCKET_KEY = 'score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown'

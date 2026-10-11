@@ -1227,6 +1227,24 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     return result
 
 
+def summary_projection(section):
+    """Small native diagnostic; never turn missing economics into approval."""
+    if not isinstance(section, dict) or not section:
+        return {'status': 'unobservable', 'reason': 'lookup_attention_native_missing',
+                'runtime_effect': False, 'allowed_runtime_apply': False}
+    if section.get('artifact_sha256') != canonical_sha256(
+            {k:v for k,v in section.items() if k != 'artifact_sha256'}):
+        return {'status': 'unobservable', 'reason': 'lookup_attention_native_hash_invalid',
+                'runtime_effect': False, 'allowed_runtime_apply': False}
+    value = {key:section.get(key) for key in ('target_date', 'status', 'selection_disposition',
+        'primary_economics', 'source_quality', 'official_symbol_master', 'first_blocker',
+        'source_gap_owner', 'closure_test', 'lineage')}
+    value.update(schema='lookup_attention_summary_v1', source_section_sha256=section['artifact_sha256'],
+                 runtime_effect=False, allowed_runtime_apply=False)
+    value['projection_sha256'] = canonical_sha256(value)
+    return value
+
+
 def validate_integrated_selection(section, policy, *, target):
     """Shared publisher/PREOPEN/verifier predicate for the supported contract.
 

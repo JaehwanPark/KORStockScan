@@ -753,7 +753,7 @@ def load(report_dir, day, *, require_current=True, require_terminal=True):
 
 def materialize(day, report_dir):
     """Called only by the existing postclose CLI, never by a live/PREOPEN loader."""
-    from src.engine.monitoring.scalping_avg_down_recovery_calibration import (
+    from src.engine.lifecycle.avg_down_event_source import (
         _events_paths_for_date,
         _iter_events,
     )

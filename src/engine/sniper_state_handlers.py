@@ -242,7 +242,7 @@ from src.engine.sniper_post_sell_feedback import (
 from src.engine.holding_exit_matrix_runtime import (
     resolve_holding_exit_matrix_scale_in_bias,
 )
-from src.engine.lifecycle_decision_matrix_runtime import (
+from src.engine.lifecycle.neutral_decision_context import (
     resolve_lifecycle_decision,
     resolve_panic_risk_regime_context,
 )
@@ -254,7 +254,7 @@ from src.engine.lifecycle.greenfield_authority import (
     greenfield_stage_telegram_enabled,
 )
 from src.engine.lifecycle.bucket_taxonomy import normalize_entry_source_parent
-from src.engine.lifecycle_bucket_discovery import WAIT6579_ENTRY_BUCKET_KEY
+from src.engine.scalping.entry_observation_source import WAIT6579_ENTRY_BUCKET_KEY
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -12086,7 +12086,9 @@ def _initial_quantity_cap_research_context(
                     and depth.get("transport_epoch") == quote.get("transport_epoch")
                     and item and quote.get("item") == item
                     and quote.get("market_route") == route
-                    and binding is not None and venue in binding['fill_venues']
+                    and binding is not None and (venue in binding['fill_venues']
+                        or venue == 'KRX_NXT_INTEGRATED' and binding['order_route'] == 'SOR'
+                        or venue == 'PREMARKET_KRX_LIKE' and binding['order_route'] == 'NXT')
                     and isinstance(asks, list)):
                 levels = []
                 for level in asks[:5]:
@@ -13352,6 +13354,61 @@ def _rising_missed_submit_safety_filter_fields(*, blocked: bool) -> dict[str, An
     )
 
 
+def _capture_tp1_quantity_capital_source(stock, code, fields, ws_data, at):
+    """Read the shared exact-price cache at the blocked decision; never fetch."""
+    from src.engine.scalping import tp1_capital_replay as model
+    from src.engine.trade_profit import get_trade_cost_rate
+    from src.trading.order.owner_custody_registry import broker_account_key
+    result = dict(schema=model.SCHEMA, status="source_gap",
+                  evaluation_id=fields.get("rising_missed_tp1_evaluation_id"),
+                  blocker="shared_quantity_capital_snapshot_missing")
+    try:
+        price = _safe_int((ws_data or {}).get("curr"), 0)
+        budget = _resolve_scalp_cash_budget_context(code, price, 0,
+            source_only=True, reuse_only=True, purpose="entry_operating_observation")
+        if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
+            raise ValueError("exact_cached_capacity_missing")
+        venue = fields.get('decision_market_scope') or stock.get('decision_market_scope') or fields.get("rising_missed_effective_venue") or stock.get("rising_missed_effective_venue") or fields.get("effective_venue")
+        session = fields.get("rising_missed_market_session_bucket") or stock.get("rising_missed_market_session_bucket") or fields.get("market_session_bucket")
+        context = ScalpingSizingContext(allocation_stage="initial_entry",
+            reference_time=datetime.fromtimestamp(at, _KST), effective_venue=venue,
+            source_signature=stock.get("source_signature") or stock.get("scanner_source_signature"),
+            budget_base_krw=budget["budget_base"], price_krw=price,
+            safety_ratio=_rule_float("BUY_BUDGET_SAFETY_RATIO", .95),
+            absolute_budget_cap_krw=int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0),
+            current_position_qty=_safe_int(stock.get("buy_qty"),0),
+            max_position_qty_cap=max_position_qty_cap_from_budget(budget["budget_base"],price,
+                _rule_float("MAX_POSITION_PCT", .20)),
+            cash_orderable_qty_cap=budget["cash_orderable_qty_cap"],market_session_bucket=session)
+        sizing = resolve_scalping_allocation(context)
+        receipt = _initial_quantity_cap_research_context(context,sizing,ws_data=ws_data,now_ts=at)
+        depth = (receipt or {}).get("ask_depth_source") or {}
+        if (not result["evaluation_id"] or context.current_position_qty != 0
+            or not depth.get("levels")
+            or budget.get("kt00011_requested_unit_price") != price
+            or not budget.get("kt00011_capacity_source_sha256")):
+            raise ValueError("exact_initial_quantity_depth_or_capacity_missing")
+        result.update(status="complete",blocker=None,stock_code=str(code),venue=venue,decision_market_scope=venue,session=session,
+            observed_at=budget["kt00011_capacity_observed_at"],decision_at=datetime.fromtimestamp(at,_KST).isoformat(),
+            route=depth["order_route"],transport_epoch=depth["transport_epoch"],
+            inventory_sha256=_scale_in_budget_inventory_signature(),
+            account_scope_sha256=model.digest(broker_account_key()),
+            capacity_source_sha256=budget["kt00011_capacity_source_sha256"],
+            policy_sha256=sizing.policy_sha256 or model.digest([sizing.formula_version,sizing.ratio]),
+            budget_base_krw=budget["budget_base"], available_cash_krw=budget["cash_orderable_amount"],
+            account_deposit_krw=budget["account_deposit"], price_krw=depth['levels'][0]['price_krw'],allocation_price_krw=price,
+            ratio=sizing.ratio,safety_ratio=context.safety_ratio,absolute_cap_krw=context.absolute_budget_cap_krw,
+            quantity_caps=[v for v in (context.max_position_qty_cap,context.cash_orderable_qty_cap) if v is not None],
+            min_one_share_floor_enabled=context.min_one_share_floor_enabled,
+            entry_ask_qty=depth["levels"][0]["quantity"],
+            other_guards_passed=fields.get("rising_missed_tp1_counterfactual_submit_safety_action")=="NO_CURRENT_VETO_EVIDENCE",
+            guard_scope="original_tp1_recheck_only_runtime_guards_remain_authoritative",
+            cost_rate=get_trade_cost_rate(),cost_known_at=datetime.fromtimestamp(at,_KST).isoformat())
+    except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        result["blocker"] = str(exc)
+    return {**result,"sha256":model.digest(result)}
+
+
 def _log_rising_missed_tp1_counterfactual_submit_safety(
     stock: dict | None,
     code: str | None,
@@ -13377,8 +13434,11 @@ def _log_rising_missed_tp1_counterfactual_submit_safety(
             now_ts=(time.time() if now_ts is None else float(now_ts)),
         )
     decision_fields = dict(getattr(tp1_decision, "log_fields", None) or {})
+    quantity_source = _capture_tp1_quantity_capital_source(stock or {},str(code or ""),
+        decision_fields,ws_data,time.time() if now_ts is None else float(now_ts))
     projection_fields = {
         **decision_fields,
+        "tp1_quantity_capital_source": json.dumps(quantity_source,sort_keys=True,separators=(",",":")),
         "source_stage": str(source_stage or "rising_missed_tp1_candidate_blocked"),
         "selector_reason": str(
             getattr(tp1_decision, "reason", "not_evaluated") or "not_evaluated"
@@ -15009,6 +15069,18 @@ def observe_rising_missed_nxt_post_block_samplers(
                 )
             emitted_sampler = dict(sampler)
 
+        # Reuse the adopted native 0D receipt; no additional WS/REST read.
+        from src.trading.market.quote_consistency import ws_quote_source_receipt
+        from src.engine.scalping.initial_quantity_cap_observation import quote_route_binding
+        native_quote = ws_quote_source_receipt(snapshot, now_ts=observed_ts)
+        native_depth = native_quote.get('depth_receipt') or {}
+        native_binding = quote_route_binding(quote_item, quote_route)
+        depth_bound = bool(quote_proxy_fresh and native_quote.get('source_type') == '0D'
+            and native_binding and native_quote.get('best_bid') == best_bid
+            and native_quote.get('best_ask') == best_ask
+            and native_depth.get('item') == quote_item
+            and native_depth.get('market_route') == quote_route
+            and native_depth.get('transport_epoch') == native_quote.get('transport_epoch'))
         sample_fields = {
             "rising_missed_nxt_post_block_price_observation_state": observation_state,
             "rising_missed_nxt_post_block_price_source": price_source,
@@ -15037,6 +15109,11 @@ def observe_rising_missed_nxt_post_block_samplers(
             "rising_missed_nxt_post_block_ws_0d_route": quote_route,
             "rising_missed_nxt_post_block_ws_0d_best_bid": best_bid,
             "rising_missed_nxt_post_block_ws_0d_best_ask": best_ask,
+            "rising_missed_nxt_post_block_ws_0d_best_bid_qty": snapshot.get('best_bid_qty') if depth_bound else None,
+            "rising_missed_nxt_post_block_ws_0d_best_bid_qty_source_valid": bool(depth_bound and snapshot.get('best_bid_qty_source_valid') is True),
+            "rising_missed_nxt_post_block_ws_0d_order_route": native_binding['order_route'] if depth_bound else None,
+            "rising_missed_nxt_post_block_ws_0d_transport_epoch": native_depth.get('transport_epoch') if depth_bound else None,
+            "rising_missed_nxt_post_block_ws_0d_observed_epoch": native_depth.get('observed_epoch') if depth_bound else None,
             "rising_missed_nxt_post_block_ws_0d_quote_proxy_applied": quote_proxy_fresh,
             "rising_missed_nxt_post_block_rest_fallback_enabled": bool(
                 rest_observation.get("enabled")
@@ -20383,6 +20460,13 @@ def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
 
 
 def _scalp_trailing_values_for_evaluation(now_ts: float, stock=None) -> tuple[dict[str, float | int], str | None]:
+    values,market=_resolve_scalp_trailing_values(now_ts,stock)
+    if isinstance(stock,dict):
+        stock['_observed_trailing_values']={'at':now_ts,'market':market,'values':dict(values)}
+    return values,market
+
+
+def _resolve_scalp_trailing_values(now_ts: float, stock=None) -> tuple[dict[str, float | int], str | None]:
     """Apply a score-free, hash-bound market vector in either TP evaluator."""
 
     scalar = {
@@ -29250,9 +29334,24 @@ def _observe_scalp_trailing_input_transition(
                 policy=_holding_path_policy_for("EXIT_SOFT_STOP", market_type),
                 data_root=DATA_DIR, model=str(getattr(TRADING_RULES,"OPENAI_HOLDING_EXIT_VOTE_MODEL","gpt-5.4-nano")),
                 path_id="EXIT_SOFT_STOP")
+            post_add_vote_source = runtime_source(stock,
+                position_key=_scalp_holding_source_position_key(stock, code),
+                buy_fill_identity=buy_fill_identity_from_runtime(stock),
+                market=market_type, now=now_ts,
+                policy=_holding_path_policy_for('EXIT_POST_ADD_FAIL', market_type),
+                data_root=DATA_DIR, model=vote_source['model'], path_id='EXIT_POST_ADD_FAIL')
+            features=stock.get('last_reversal_features') or {}
+            post_add_inputs=dict(active=stock.get('reversal_add_state')=='POST_ADD_EVAL',
+                executed_at=stock.get('reversal_add_executed_at'),
+                floor=float(stock.get('reversal_add_profit_floor',-1.0)),
+                eval_sec=_rule_int('REVERSAL_ADD_POST_EVAL_SEC',25),
+                feature_usable=not bool(reversal_feature_source_quality(features).get('reversal_feature_stale')) if features else True,
+                large_sell_print=features.get('large_sell_print_detected',False),
+                tick_acceleration=features.get('tick_acceleration_ratio',1.0))
             row = source_row(stock, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
                 quote=quote_receipt, coverage_complete=grid_source_complete,
                 cost_model=stock.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
+                post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
                 decision_profit_pct=holding_profit_rate_at_eval,
                 automatic_management_allowed=not bool(stock.get("manual_control_exclusion_blocked")
                     or stock.get("manual_control_hard_stop_handoff_pending")
@@ -29480,6 +29579,18 @@ def _observe_scalp_trailing_input_transition(
         policy=_holding_path_policy_for('EXIT_TRAILING_TP', scalp_trailing_market_type_at(now_ts)),
         data_root=DATA_DIR, model=str(getattr(TRADING_RULES,'OPENAI_HOLDING_EXIT_VOTE_MODEL','gpt-5.4-nano')))
     universal_quote['holding_vote_source'] = holding_source
+    original=stock.get('_observed_trailing_values') or {}
+    if original.get('at')==now_ts:
+        from src.engine.scalping.main_stop_policy import digest as source_digest
+        original=dict(schema='original_trailing_decision_source_v1',
+            observed_at=now_ts,market=original['market'],values=original['values'],
+            classifier_sha256=policy_fields.get('scalp_trailing_classifier_sha256'),
+            typed_policy_sha256=stock.get('effective_trailing_policy_sha256'),
+            owner='scalp_trailing_take_profit',
+            decision={key:getattr(decision,key) for key in ('armed','triggered','threshold_pct','drawdown_pct')},
+            runtime_effect=False,allowed_runtime_apply=False)
+        original['sha256']=source_digest(original)
+        universal_quote['original_trailing_source']=original
     from src.engine.scalping.universal_trailing_replay import quote_source_digest
     if universal_quote.get('kind') == 'QUOTE':
         universal_quote['source_sha256'] = quote_source_digest(universal_quote)
@@ -53392,7 +53503,7 @@ _HOLDING_VOTE_INFLIGHT_LOCK = threading.Lock()
 def _holding_path_policy_for(path_id: str, market: str | None) -> dict[str, Any]:
     """A long-lived process cannot keep yesterday's selected vote policy."""
     key = (path_id, market)
-    loaded = _HOLDING_PATH_POLICY_RECEIPT.get("status") == "estimated_provisional_loaded"
+    loaded = _HOLDING_PATH_POLICY_RECEIPT.get("status") in {"estimated_provisional_loaded","validated_successor_loaded","verified_incumbent_loaded"}
     target = _HOLDING_PATH_POLICY_RECEIPT.get("target_date")
     today = datetime.now(_KST).date().isoformat()
     if loaded and target != today:
@@ -53864,7 +53975,7 @@ def _holding_path_signal_decision(
             holding_path_policy_hash(policy) if isinstance(policy, dict) else None
         )
         policy_expired = (
-            _HOLDING_PATH_POLICY_RECEIPT.get("status") == "estimated_provisional_loaded"
+            _HOLDING_PATH_POLICY_RECEIPT.get("status") in {"estimated_provisional_loaded","validated_successor_loaded","verified_incumbent_loaded"}
             and _HOLDING_PATH_POLICY_RECEIPT.get("target_date")
             != datetime.now(_KST).date().isoformat()
         )
@@ -72666,7 +72777,20 @@ def _rising_missed_nxt_observation_fields(
         effective_venue = "KRX"
     else:
         effective_venue = "OFF_SESSION"
+    # Legacy venue diagnostics above also feed live NXT safety gates. Keep
+    # them intact and record the policy population on its own axis. An
+    # integrated quote is not evidence of the eventual physical fill venue.
+    decision_scope = effective_venue
+    if session_bucket == "krx_regular" or session_bucket.startswith("nxt_"):
+        decision_scope = (
+            "KRX_NXT_INTEGRATED"
+            if ws_0d_route == "krx_nxt_integrated"
+            else "UNKNOWN"
+        )
     return {
+        "decision_market_scope": decision_scope,
+        "market_data_route": ws_0d_route if route_known else "unknown",
+        "actual_execution_venue": "UNKNOWN",
         "rising_missed_market_session_bucket": session_bucket,
         "rising_missed_market_session_state": raw_ws.get("market_session_state") or "-",
         "rising_missed_market_session_remaining": (

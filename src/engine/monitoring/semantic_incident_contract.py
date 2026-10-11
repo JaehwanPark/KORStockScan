@@ -14,17 +14,18 @@ STAGE_HOOKS = {
     "holding_profit_exit": "holding_profit_exit_semantics",
     "initial_quantity": "initial_quantity_semantics",
     "main_stop_confirmation": "main_stop_confirmation_semantics",
+    "policy_generation": "policy_generation_semantics",
 }
 RECOVERY_STATES = frozenset({
     "pass", "warning", "source_gap", "review_required", "incumbent_carry",
     "candidate_selected", "cumulative_winrate_selected", "done",
     "operator_initial_registered", "verified_carried", "published_policy",
     "valid_empty", "policy_selected", "journal_terminal_observed",
-    "pending_submit", "pending_terminal",
+    "pending_submit", "pending_terminal", "verified",
 })
 NATIVE_BOUND_STATES = frozenset({
     "operator_initial_registered", "verified_carried", "published_policy",
-    "cumulative_winrate_selected",
+    "cumulative_winrate_selected", "verified",
 })
 IDENTITY_KEYS = ("source_date", "target_date", "stage", "scope", "reason")
 METRIC_CONTRACT = dict(
@@ -42,6 +43,9 @@ def fingerprint(incident):
     # An owner transfer is not a new incident. Missing hashes keep a stable
     # expected-path identity; observation time and run ID never enter this key.
     fields = [incident.get(k) for k in IDENTITY_KEYS]
+    if incident.get('stage')=='policy_generation':
+        fields += [incident.get('source_generation'),incident.get('code_sha256'),incident.get('artifact')]
+        return hashlib.sha256(json.dumps(fields,separators=(',',':')).encode()).hexdigest()
     fields += [incident.get("generation"), incident.get("artifact")]
     return hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
@@ -49,8 +53,11 @@ def fingerprint(incident):
 def bound_observation(details, incident, report_date):
     observed = next((r.get("semantics") or {} for r in details.get("semantic_observations", [])
                      if isinstance(r, dict) and r.get("stage") == incident.get("stage")
+                     and (incident.get('stage')!='policy_generation' or (r.get('semantics') or {}).get('family')==incident.get('scope'))
                      and (r.get("semantics") or {}).get("source_date") == incident.get("source_date")),
                     details.get(STAGE_HOOKS.get(incident.get("stage"))) or {})
+    if not isinstance(observed, dict):
+        return {}, False
     bound = any(isinstance(b, dict) and b.get("as_of_date") == report_date
                 and b.get("stage") == incident.get("stage")
                 and all(b.get(k) == observed.get(k) for k in ("source_date", "target_date", "status"))
@@ -95,6 +102,9 @@ def closure_verified(incident, observed, bound):
             return False
         if reason in {"cancel_wait_execution_failed", "cancel_wait_completed_report_missing"} and (observed.get("execution") or {}).get("command_status") != "succeeded":
             return False
+    if incident.get('stage')=='policy_generation' and (observed.get('status')!='verified'
+            or not bound or observed.get('native_validated') is not True):
+        return False
     return True
 
 
@@ -104,6 +114,12 @@ def reconcile(state, details, report_date, incoming, *, source_matches):
         if not isinstance(incident, dict):
             continue
         key = fingerprint(incident)
+        retired=(details.get('policy_generation_retirements') or {}).get(incident.get('stage'))
+        if (isinstance(retired,dict) and retired.get('disposition')=='retired_no_longer_expected'
+            and retired.get('selected_code_sha256') and retired.get('selected_release')
+            and retired.get('effective_date','9999')<=report_date):
+            history.append(dict(incident,**retired))
+            continue
         observed, bound = bound_observation(details, incident, report_date)
         stale_generation = any(all(old.get(k) == incident.get(k) for k in IDENTITY_KEYS)
             and old.get('generation') == observed.get('report_sha256')

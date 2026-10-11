@@ -48,7 +48,7 @@ from src.engine.holding_exit_matrix_runtime import (
     build_holding_exit_matrix_runtime_context,
     merge_holding_exit_matrix_result_fields,
 )
-from src.engine.lifecycle_ai_context import (
+from src.engine.ai.retired_lifecycle_context import (
     build_lifecycle_ai_runtime_context,
     merge_lifecycle_ai_context_fields,
 )

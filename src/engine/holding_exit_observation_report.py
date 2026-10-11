@@ -2749,6 +2749,12 @@ def _partitioned_holding_report(target_date,month_start,result,out,assembly):
     votes.update(source_status='source_gap_partitioned_vote_inputs_unavailable',
                  available_actual_population_ids_ref=actual_ref,
                  economic_replay_observed=False)
+    from src.engine.scalping.holding_vote_experiment import native_research
+    votes['vote_numeric_research']=native_research(_data_root(),target_date,trailing_assembly=assembly)
+    from src.engine.monitoring.policy_generation_contract import native
+    votes['policy_generation']=native(votes,family='holding_vote',day=target_date,data_root=_data_root(),
+        source_state=votes['source_status'],comparison_state=votes['vote_numeric_research']['status'],
+        handoff_state='pending_publication' if votes['vote_numeric_research'].get('selected_cells') else 'incumbent_carried')
     return dict(date=target_date,month_start=start,analysis_window=window,
         completed_population_quality=dict(complete=census_complete,storage_schema='main_holding_cohort_reference_v2',
             canonical_main_completed_rows=actual_ref['count'],db_completed_main_ids_ref=actual_ref,
@@ -2958,6 +2964,12 @@ def _build_holding_exit_observation_report(
         model=str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
                           "gpt-5.4-nano") or "gpt-5.4-nano"),
     )
+    from src.engine.scalping.holding_vote_experiment import native_research
+    holding_path_vote_replay['vote_numeric_research']=native_research(_data_root(),target_date)
+    from src.engine.monitoring.policy_generation_contract import native
+    holding_path_vote_replay['policy_generation']=native(holding_path_vote_replay,family='holding_vote',day=target_date,data_root=_data_root(),
+        source_state='partitioned',comparison_state=holding_path_vote_replay['vote_numeric_research']['status'],
+        handoff_state='pending_publication' if holding_path_vote_replay['vote_numeric_research'].get('selected_cells') else 'incumbent_carried')
     historical_source_availability = {
         "schema": "scalp_trailing_historical_source_availability_v1",
         "decision_authority": "source_inventory_only_no_threshold_apply",

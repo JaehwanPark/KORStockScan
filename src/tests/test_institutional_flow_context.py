@@ -1,7 +1,7 @@
 import gzip
 import json
 
-from src.engine import institutional_flow_context as mod
+from src.engine.lifecycle.archive import institutional_flow_context_readers as mod
 
 
 def _write_gzip_jsonl(path, rows):
@@ -38,75 +38,16 @@ def test_normalize_institutional_flow_context_builds_source_only_features():
     assert context["decision_authority"] == "archive_offline_source_only"
 
 
-def test_resolver_uses_kiwoom_helpers_and_handles_token_error(monkeypatch):
-    called = []
-
-    def fake_daily(token, code, base_dt=None):
-        called.append(("ka10059", token, code, base_dt))
-        return {"smart_money_net": 10}
-
-    def fake_period(token, code, start_dt, end_dt):
-        called.append(("ka10061", token, code, start_dt, end_dt))
-        return {"foreign_net": 4, "inst_net": 6}
-
-    monkeypatch.setattr(
-        mod.kiwoom_utils, "get_investor_flow_summary_ka10059", fake_daily
-    )
-    monkeypatch.setattr(
-        mod.kiwoom_utils, "get_investor_period_total_ka10061", fake_period
-    )
-
-    no_token = mod.resolve_institutional_flow_context(
-        "005930", token=None, target_date="2026-05-20"
-    )
-    assert no_token["institutional_flow_status"] == "TOKEN_ERROR"
-    assert called == []
-
-    context = mod.resolve_institutional_flow_context(
-        "005930", token="T", target_date="2026-05-20"
-    )
-    assert context["institutional_flow_status"] == "OK"
-    assert context["smart_money_net"] == 10
-    assert [item[0] for item in called] == ["ka10059", "ka10061"]
-
-
-def test_build_report_writes_artifact(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "REPORT_DIR_PATH", tmp_path)
-    monkeypatch.setattr(mod.kiwoom_utils, "get_kiwoom_token", lambda: "T")
-    monkeypatch.setattr(
-        mod,
-        "resolve_institutional_flow_context",
-        lambda code, **kwargs: {
-            "stock_code": code,
-            "smart_money_net": 100,
-            "foreign_net_roll5": 50,
-            "inst_net_roll5": 50,
-            "institutional_flow_regime": "DUAL_ACCUMULATION",
-            "institutional_flow_source": "ka10059+ka10061",
-            "institutional_flow_status": "OK",
-            "runtime_effect": False,
-            "decision_authority": "archive_offline_source_only",
-        },
-    )
-
-    report = mod.build_institutional_flow_context_report(
-        "2026-05-20", codes=["005930", "005930", "000660"]
-    )
-
-    assert report["summary"]["row_count"] == 2
-    assert report["summary"]["ok_count"] == 2
-    assert report["runtime_effect"] is False
-    assert report["scheduled_producer"] is False
-    assert report["consumer_status"] == "retired_with_scalping_adm_ldm"
-    assert report["summary"]["source_success_rate_pct"] == 100.0
-    assert report["summary"]["join_rate_semantics"].startswith("deprecated_alias")
-    assert (tmp_path / "institutional_flow_context_2026-05-20.json").exists()
-    payload = json.loads(
-        (tmp_path / "institutional_flow_context_2026-05-20.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert payload["rows"][0]["decision_authority"] == "archive_offline_source_only"
+def test_retired_resolver_never_collects_with_or_without_token(monkeypatch):
+    from src.utils import kiwoom_utils
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retired resolver attempted REST collection")
+    for name in ("get_investor_flow_summary_ka10059", "get_investor_period_total_ka10061"):
+        monkeypatch.setattr(kiwoom_utils, name, forbidden)
+    for token in (None, "T"):
+        result = mod.resolve_institutional_flow_context("005930", token=token, target_date="2026-10-12")
+        assert result["institutional_flow_status"] == "RETIRED_NO_COLLECTION"
+        assert result["runtime_effect"] is False
 
 
 def test_load_pipeline_event_codes_reads_gzip_sibling(tmp_path, monkeypatch):
@@ -121,3 +62,14 @@ def test_load_pipeline_event_codes_reads_gzip_sibling(tmp_path, monkeypatch):
     )
 
     assert mod._load_pipeline_event_codes("2026-05-20") == ["005930", "000660"]
+
+
+def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+    import importlib
+    current=importlib.import_module('src.engine.institutional_flow_context')
+    prior=tmp_path/"prior.json";prior.write_text("original")
+    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
+    monkeypatch.setattr(type(prior),"write_text",forbidden)
+    monkeypatch.setattr(type(prior),"read_text",forbidden)
+    result=current.build_institutional_flow_context_report("2026-10-12")
+    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False

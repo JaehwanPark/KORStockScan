@@ -32,7 +32,13 @@ SOURCE_LABELS = ("code_improvement_workorder",)
 
 
 def active_source_labels(target_date):
-    return SOURCE_LABELS
+    # Keep archived readers available, but never require the retired aggregate
+    # producer for a current generation. Only native recommendation producers.
+    if target_date < "2026-10-11":
+        return SOURCE_LABELS
+    return ("rising_missed_classifier_prior", "rising_missed_intraday_feedback",
+            "producer_gap_discovery", "pattern_lab_currentness_audit",
+            "pattern_lab_ai_review", "swing_pattern_lab_automation")
 
 IMPLEMENT = {"implement_now", "code_patch_required", "already_implemented"}
 COMPLETED = {"already_implemented_verified", "implemented_pass1", "implemented_pass2"}

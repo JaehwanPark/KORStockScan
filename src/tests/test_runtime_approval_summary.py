@@ -1025,7 +1025,8 @@ def test_cancel_wait_summary_preserves_history_gap_and_daily_empty(monkeypatch, 
     from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
     report, _, _, _ = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
     evidence = mod._economic_projection('entry_cancel_wait', report)
-    assert evidence['comparison_status'] == 'source_gap'
+    assert evidence['comparison_status'] == 'insufficient_sample'
+    assert evidence['cancel_wait_reconciliation']['historical_state'] == 'source_gap'
     assert evidence['policy_apply_allowed'] is False
     assert evidence['cancel_wait_reconciliation']['daily_zero_is_verified'] is True
     assert evidence['cancel_wait_reconciliation']['unresolved_prior_custody_count'] is None

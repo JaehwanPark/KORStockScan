@@ -198,7 +198,7 @@ def test_live_adapters_are_noops_even_with_advisory_true(monkeypatch):
     from src.engine import scalp_entry_adm_runtime as entry
     from src.engine import holding_exit_matrix_runtime as holding
     from src.engine import lifecycle_ai_context as context
-    from src.engine import lifecycle_decision_matrix_runtime as matrix
+    from src.engine.lifecycle import neutral_decision_context as matrix
 
     def forbidden(*args, **kwargs):
         pytest.fail("retired runtime read a matrix")
@@ -257,11 +257,7 @@ def test_source_adapter_uses_raw_normalization_without_matrix_or_sim_outcomes(
     monkeypatch.setattr(
         source.observations, "_iter_relevant_events", lambda day: iter([raw])
     )
-    monkeypatch.setattr(
-        source.observations,
-        "build_scalp_entry_action_decision_matrix_report",
-        lambda day: pytest.fail("matrix builder called"),
-    )
+    assert not hasattr(source.observations,"build_scalp_entry_action_decision_matrix_report")
     result = source.load_entry_observations("2026-09-04")
     assert result["rows"][0]["record_id"] == "r1"
     assert result["rows"][0]["ai_score"] == 67
@@ -278,7 +274,8 @@ def test_wrapper_has_no_retired_producer_commands():
     assert 'ENTRY_AI_GATE_BACKTEST_SCHEDULE="on_demand"' in script
     assert "RUN_ENTRY_AI_GATE_BACKTEST=false" in script
     assert "entry AI gate diagnostic skipped" in script
-    assert "-m src.engine.monitoring.samsung_machine_entry_tuning" in script
+    assert "-m src.engine.monitoring.samsung_machine_entry_tuning" not in script
+    assert "RUN_SAMSUNG_MACHINE_ENTRY_TUNING=false" in script
     assert "RUN_INSTITUTIONAL_FLOW_CONTEXT=false" in script
     assert "THRESHOLD_CYCLE_RUN_INSTITUTIONAL_FLOW_CONTEXT" not in script
     assert "-m src.engine.lifecycle.scale_in_incremental_counterfactual" not in script
@@ -287,7 +284,7 @@ def test_wrapper_has_no_retired_producer_commands():
 
 
 def test_scale_in_counterfactual_report_is_archive_but_avg_down_math_survives():
-    from src.engine.lifecycle.scale_in_incremental_counterfactual import (
+    from src.engine.lifecycle.archive.scale_in_incremental_counterfactual_readers import (
         compute_fixed_exit_incremental_economics,
     )
 

@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine.lifecycle_decision_matrix_runtime import (
+from src.engine.lifecycle.neutral_decision_context import (
     apply_lifecycle_decision_to_payload,
     resolve_lifecycle_decision,
 )

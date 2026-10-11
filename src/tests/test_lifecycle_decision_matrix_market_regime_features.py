@@ -1,5 +1,5 @@
-from src.engine import lifecycle_decision_matrix as ldm
-from src.engine import scalp_entry_action_decision_matrix as entry_adm
+from src.engine.lifecycle.archive import lifecycle_decision_matrix_readers as ldm
+from src.engine.lifecycle.archive import scalp_entry_action_decision_matrix_readers as entry_adm
 
 
 def test_market_regime_continuous_fields_are_runtime_features_not_labels():

@@ -161,6 +161,7 @@ def publish_broker_account_snapshot(
     open_orders: list[dict[str, Any]] | None = None,
     open_orders_request_succeeded: bool = False,
     captured_at: float | None = None,
+    query_registry_generation: list | None = None,
 ) -> None:
     """Publish one read-only broker reconciliation snapshot for AI contexts.
 
@@ -239,6 +240,15 @@ def publish_broker_account_snapshot(
         "unverified_open_order_codes": unverified_open_order_codes,
         "open_orders_request_succeeded": bool(open_orders_request_succeeded),
     }
+    if query_registry_generation is not None:
+        try:
+            if not isinstance(inventory,list) or not isinstance(open_orders,list):
+                raise ValueError("custody_checkpoint_native_list_missing")
+            from src.engine.scalping.main_custody_checkpoint import enqueue
+            snapshot["postclose_custody_checkpoint_status"]=enqueue(snapshot,query_generation=query_registry_generation)
+        except (OSError,ValueError,TypeError) as exc:
+            snapshot["postclose_custody_checkpoint_status"]="source_gap"
+            snapshot["postclose_custody_checkpoint_reason"]=str(exc)
     with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
         _BROKER_ACCOUNT_SNAPSHOT.clear()
         _BROKER_ACCOUNT_SNAPSHOT.update(snapshot)

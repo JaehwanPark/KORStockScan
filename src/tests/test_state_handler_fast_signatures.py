@@ -10,7 +10,6 @@ from src.engine.sniper_state_handlers import (
     SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY,
     _apply_initial_entry_qty_cap,
     _apply_wait6579_probe_canary,
-    _build_soft_stop_whipsaw_confirmation_decision,
     _build_ai_overlap_log_fields,
     _build_ai_ops_log_fields,
     _build_observation_contract_fields,
@@ -7039,60 +7038,12 @@ def test_apply_wait6579_probe_canary_allows_unlimited_qty_cap():
     assert adjusted[0]["qty"] == 4
 
 
-def test_soft_stop_whipsaw_confirmation_respects_emergency_and_one_time_cap(
-    monkeypatch,
-):
-    rules = replace(
-        TRADING_RULES,
-        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=True,
-        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC=60,
-        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT=0.20,
-        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT=0.30,
-    )
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-
-    decision = _build_soft_stop_whipsaw_confirmation_decision(
-        {},
-        now_ts=1000.0,
-        profit_rate=-1.55,
-        dynamic_stop_pct=-1.50,
-        emergency_pct=-2.0,
-        grace_elapsed_sec=20,
-        grace_sec=20,
-        curr_price=9850,
-        buy_price=10000,
-    )
-    assert decision["should_confirm"] is True
-    assert decision["rebound_above_sell"] is True
-    assert decision["rebound_above_buy"] is False
-    assert decision["threshold_family"] == "soft_stop_whipsaw_confirmation"
-    assert "confirm_sec=60" in decision["threshold_applied_value"]
-
-    emergency = _build_soft_stop_whipsaw_confirmation_decision(
-        {},
-        now_ts=1000.0,
-        profit_rate=-2.10,
-        dynamic_stop_pct=-1.50,
-        emergency_pct=-2.0,
-        grace_elapsed_sec=20,
-        grace_sec=20,
-        curr_price=9790,
-        buy_price=10000,
-    )
-    assert emergency["should_confirm"] is False
-
-    used = _build_soft_stop_whipsaw_confirmation_decision(
-        {"soft_stop_whipsaw_confirmation_used": True},
-        now_ts=1000.0,
-        profit_rate=-1.55,
-        dynamic_stop_pct=-1.50,
-        emergency_pct=-2.0,
-        grace_elapsed_sec=20,
-        grace_sec=20,
-        curr_price=9850,
-        buy_price=10000,
-    )
-    assert used["should_confirm"] is False
+def test_retired_whipsaw_does_not_replace_shared_single_grace():
+    from src.engine.scalping.main_stop_policy import soft_decision
+    from src.tests.test_main_stop_policy import baseline
+    assert not hasattr(handlers,'_build_soft_stop_whipsaw_confirmation_decision')
+    assert soft_decision(baseline(),profit_pct=-3.2,now=100).due_at==160
+    assert soft_decision(baseline(),profit_pct=-5.1,now=101,touch_at=100).rule=='scalp_hard_stop_pct'
 
 
 def test_apply_initial_entry_qty_cap_limits_total_qty_without_reordering():

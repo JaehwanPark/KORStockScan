@@ -77,7 +77,7 @@ def test_direct_paired_evaluator_measures_negative_support_relaxation(monkeypatc
         "unavailable_quantity_and_capital_constraints_missing"
     )
     assert support["disposition"] == "measured_no_edge"
-    assert all(row["disposition"] == "identical_policy" for row in report["economic_evaluation"]["candidates"][1:])
+    assert all(row["disposition"] == "unsupported_scope" for row in report["economic_evaluation"]["candidates"][1:])
     assert report["code_improvement_orders"] == []
 
 

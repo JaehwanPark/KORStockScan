@@ -219,6 +219,9 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "market_data_effective_best_ask",
         "market_data_effective_best_bid",
         "market_data_effective_best_ask_qty",
+        "market_data_effective_order_route",
+        "market_data_effective_transport_epoch",
+        "market_data_effective_depth_observed_epoch",
         "market_data_effective_best_bid_qty",
         "market_data_effective_best_ask_qty_source_valid",
         "market_data_effective_best_bid_qty_source_valid",
@@ -269,6 +272,11 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "rising_missed_nxt_post_block_ws_0d_best_ask",
         "rising_missed_nxt_post_block_ws_0d_best_bid",
         "rising_missed_nxt_post_block_ws_0d_age_ms",
+        "rising_missed_nxt_post_block_ws_0d_best_bid_qty",
+        "rising_missed_nxt_post_block_ws_0d_best_bid_qty_source_valid",
+        "rising_missed_nxt_post_block_ws_0d_order_route",
+        "rising_missed_nxt_post_block_ws_0d_transport_epoch",
+        "rising_missed_nxt_post_block_ws_0d_observed_epoch",
         "rising_missed_nxt_post_block_exact_ws_0d_status",
         "rising_missed_nxt_post_block_exact_ws_0d_best_bid",
         "rising_missed_nxt_post_block_exact_ws_0d_best_ask",
@@ -439,6 +447,15 @@ def _event_price_with_source(row: dict[str, Any]) -> tuple[float | None, str]:
 
 def _event_price(row: dict[str, Any]) -> float | None:
     return _event_price_with_source(row)[0]
+
+
+def _tp1_quantity_source(fields):
+    value=fields.get("tp1_quantity_capital_source")
+    if isinstance(value,dict):return value
+    try:
+        decoded=json.loads(value or "null")
+        return decoded if isinstance(decoded,dict) else None
+    except (ValueError,TypeError):return None
 
 
 def _event_executable_bbo(
@@ -3217,6 +3234,8 @@ def _tp1_effective_venue(fields: dict[str, Any]) -> str:
         .strip()
         .upper()
     )
+    if value == "KRX_NXT":
+        value = "KRX_NXT_INTEGRATED"
     return (
         value
         if value in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
@@ -3324,6 +3343,8 @@ def _tp1_post_block_horizon_measurements(
             "first_hit_price_source": None,
             "max_move_pct": None,
             "min_move_pct": None,
+            "terminal_execution_quote": None,
+            "first_hit_execution_quote": None,
             "terminal_executable_ts": None,
             "terminal_executable_move_pct": None,
             "terminal_executable_price_source": None,
@@ -3433,6 +3454,23 @@ def _tp1_post_block_horizon_measurements(
                 if measurement["min_move_pct"] is None
                 else min(float(measurement["min_move_pct"]), move_pct)
             )
+            qfields=_fields(subsequent)
+            qty=qfields.get("market_data_effective_best_bid_qty")
+            verified=_boolish(qfields.get("market_data_effective_best_bid_qty_source_valid"))
+            execution_quote=dict(exit_at=_event_ts(subsequent),exit_bid_krw=executable_bid,
+                exit_bid_qty=_safe_int(qty) if verified else None,
+                route=qfields.get("market_data_effective_order_route"),
+                transport_epoch=qfields.get("market_data_effective_transport_epoch"),
+                observed_epoch=qfields.get("market_data_effective_depth_observed_epoch"),
+                source_sha256=hashlib.sha256(json.dumps(subsequent,sort_keys=True,default=str).encode()).hexdigest())
+            if bbo_source == 'nxt_post_block_ws_0d_bbo':
+                prefix='rising_missed_nxt_post_block_ws_0d_'
+                execution_quote.update(
+                    exit_bid_qty=_safe_int(qfields.get(prefix+'best_bid_qty')) if _boolish(qfields.get(prefix+'best_bid_qty_source_valid')) else None,
+                    route=qfields.get(prefix+'order_route'),
+                    transport_epoch=qfields.get(prefix+'transport_epoch'),
+                    observed_epoch=qfields.get(prefix+'observed_epoch'))
+            measurement["terminal_execution_quote"]=execution_quote
             measurement["terminal_executable_ts"] = _event_ts(subsequent)
             measurement["terminal_executable_move_pct"] = move_pct
             measurement["terminal_executable_price_source"] = price_source
@@ -3442,6 +3480,7 @@ def _tp1_post_block_horizon_measurements(
                 elif move_pct <= TP1_ADVERSE_STOP_PCT:
                     measurement["first_hit_label"] = "adverse_stop_first"
                 if measurement["first_hit_label"] is not None:
+                    measurement["first_hit_execution_quote"]=execution_quote
                     measurement["first_hit_ts"] = _event_ts(subsequent)
                     measurement["first_hit_move_pct"] = move_pct
                     measurement["first_hit_price_source"] = price_source
@@ -3530,6 +3569,8 @@ def _tp1_post_block_horizon_measurements(
                     if measurement["min_move_pct"] is not None
                     else None
                 ),
+                "first_hit_execution_quote": measurement["first_hit_execution_quote"],
+                "terminal_execution_quote": measurement["terminal_execution_quote"],
                 "terminal_executable_ts": measurement["terminal_executable_ts"],
                 "terminal_executable_move_pct": (
                     round(float(measurement["terminal_executable_move_pct"]), 4)
@@ -4087,6 +4128,7 @@ def _build_tp1_counterfactual_submit_safety(
                 "record_id": row.get("record_id"),
                 "evaluation_id": fields.get("rising_missed_tp1_evaluation_id"),
                 "source_stage": fields.get("source_stage"),
+                "quantity_capital_source": _tp1_quantity_source(fields),
                 "selector_reason": selector_reason,
                 "selector_deferred": _boolish(fields.get("selector_deferred")),
                 "candidate_lane": fields.get("rising_missed_tp1_candidate_lane"),
@@ -4308,6 +4350,7 @@ def _build_tp1_counterfactual_first_hit_labels(
                 "selector_deferred": _boolish(fields.get("selector_deferred")),
                 **_tp1_market_axes(fields),
                 "venue_resolution": _tp1_venue_resolution(fields),
+                "quantity_capital_source": _tp1_quantity_source(fields),
                 "counterfactual_action": fields.get(
                     "rising_missed_tp1_counterfactual_submit_safety_action"
                 ),

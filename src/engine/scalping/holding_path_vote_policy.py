@@ -101,6 +101,12 @@ def create_bundle(
         raise ValueError("holding_vote_source_or_target_invalid")
     if replay.get("schema") != "holding_path_vote_postclose_replay_v1":
         raise ValueError("holding_vote_replay_schema_invalid")
+    numeric=replay.get('vote_numeric_research') or {}
+    if numeric.get('parent'):
+        return create_successor(source_date=source_date,target_date=target_date,
+            source_report_sha256=source_report_sha256,replay=replay,source_quality=source_quality or {})
+    if numeric.get('status')=='incumbent_unverified' and source_date>='2026-10-12':
+        raise ValueError('holding_vote_actual_incumbent_unverified')
     source_cells = replay.get("path_market")
     expected_keys = {f"{path}|{market}" for path in PATH_IDS for market in MARKETS}
     legacy_keys = {f"EXIT_BAD_ENTRY_REFINED|{m}" for m in MARKETS}
@@ -198,6 +204,8 @@ def validate_bundle(
 ) -> dict[str, Any]:
     if not isinstance(bundle, dict):
         raise ValueError("holding_vote_policy_invalid")
+    if bundle.get('schema')==SUCCESSOR_SCHEMA:
+        return validate_successor(bundle,target_date=target_date,source_report_sha256=source_report_sha256)
     unsigned = {key: value for key, value in bundle.items() if key != "bundle_sha256"}
     try:
         valid_dates = (
@@ -300,8 +308,10 @@ def load_bundle(
                            source_report_sha256=source_report_sha256)
 
 
-def verify_source_handoff(data_root: Path, bundle: dict[str, Any]) -> None:
+def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_depth: int = 0) -> None:
     """Require report bytes, summary receipt and terminal strict handoff."""
+    if _parent_depth >= 370:
+        raise ValueError('holding_vote_parent_chain_bound_exceeded')
     root = Path(data_root)
     source_date = bundle["source_date"]
     source_file = (root / "report" / "monitor_snapshots" /
@@ -321,6 +331,14 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any]) -> None:
     observation = json.loads(source_file.read_text(encoding="utf-8"))
     if not isinstance(observation, dict) or observation.get("date") != source_date:
         raise ValueError("holding_vote_source_report_date_mismatch")
+    if bundle.get('schema')==SUCCESSOR_SCHEMA:
+        research_root=(root/'report/holding_path_vote_research'/source_date).resolve()
+        for cell in bundle['cells'].values():
+            proof=cell.get('comparison_receipt')
+            if proof and (not Path(proof['root']).resolve().is_relative_to(research_root)
+                    or Path(proof['root']).is_symlink()
+                    or not Path(proof['contract']['performance_receipt']['path']).resolve().is_relative_to((root/'report/holding_path_vote_research').resolve())):
+                raise ValueError('holding_vote_research_native_path_invalid')
     expected = create_bundle(
         source_date=source_date, target_date=bundle["target_date"],
         source_report_sha256=bundle["source_report_sha256"],
@@ -333,9 +351,35 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any]) -> None:
         for key, cell in expected["cells"].items():
             if cell != bundle["cells"].get(key):
                 raise ValueError("holding_vote_legacy_active_cell_mismatch")
+    if bundle.get('schema')==SUCCESSOR_SCHEMA:
+        native=load_bundle(root,source_date)
+        verify_source_handoff(root,native, _parent_depth=_parent_depth + 1)
+        parent=bundle['parent']
+        if (parent['path']!=str(policy_path(root,source_date))
+            or hashlib.sha256(Path(parent['path']).read_bytes()).hexdigest()!=parent['byte_sha256']
+            or native['bundle_sha256']!=parent['bundle_sha256']
+            or parent.get('native_policy_set_sha256',native['policy_set_sha256'])!=native['policy_set_sha256']
+            or {k:c['policy'] for k,c in native['cells'].items() if not k.startswith('EXIT_BAD_ENTRY_REFINED|')}!=parent['cells']):
+            raise ValueError('holding_vote_native_parent_changed')
+        from src.engine.lifecycle.holding_window_generation import byte_generation
+        from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+        if bundle.get('selection_mode') == 'validated_successor' and not bundle.get('contract_file_path'):
+            raise ValueError('holding_vote_native_experiment_missing')
+        if bundle.get('contract_file_path'):
+            from .main_stop_policy import bounded_object
+            frozen_path = root/'runtime/research/holding_path_vote'/f'experiments_{source_date}.json'
+            if (bundle['contract_file_path'] != str(frozen_path)
+                    or bounded_object(frozen_path)[1] != bundle.get('contract_file_sha256')):
+                raise ValueError('holding_vote_native_experiment_changed')
+        if any(source_generation(root,d)!=g for d,g in bundle['cost_generations'].items()):
+            raise ValueError('holding_vote_native_cost_generation_changed')
+        for name,generation in {**bundle['source_inventory'],**bundle['vote_source_inventory']}.items():
+            if not Path(name).resolve().is_relative_to(root.resolve()):
+                raise ValueError('holding_vote_native_source_path_invalid')
+            if byte_generation(Path(name))!=generation:raise ValueError('holding_vote_native_source_changed')
     receipt = (json.loads(summary_file.read_text(encoding="utf-8"))
                .get("holding_path_vote_policy") or {})
-    if (receipt.get("status") != "estimated_provisional_published"
+    if (receipt.get("status") != publication_status(bundle)
             or receipt.get("source_date") != source_date
             or receipt.get("target_date") != bundle["target_date"]
             or receipt.get("bundle_sha256") != bundle["bundle_sha256"]
@@ -380,7 +424,108 @@ def runtime_policy_from_env(
                           "reason": str(exc)}
     selected = {(path, market): dict(bundle["cells"][f"{path}|{market}"]["policy"])
                 for path in PATH_IDS for market in MARKETS}
-    return selected, {"status": "estimated_provisional_loaded",
+    return selected, {"status": ("validated_successor_loaded" if bundle.get("selection_mode")=="validated_successor" else "verified_incumbent_loaded" if bundle.get("schema")==SUCCESSOR_SCHEMA else "estimated_provisional_loaded"),
                       "target_date": target_date,
                       "bundle_sha256": bundle["bundle_sha256"],
                       "source_date": bundle["source_date"]}
+
+
+SUCCESSOR_SCHEMA='holding_path_vote_selected_policy_v2'
+
+
+def publication_status(bundle):
+    return ('validated_successor_published' if bundle.get('selection_mode')=='validated_successor'
+            else 'verified_incumbent_carried' if bundle.get('schema')==SUCCESSOR_SCHEMA
+            else 'estimated_provisional_published')
+
+
+def create_successor(*,source_date,target_date,source_report_sha256,replay,source_quality):
+    """Carry all original cells, changing only a verified numerical EXIT cell."""
+    from .holding_vote_experiment import grid,verify_receipt,code_sha
+    numeric=replay['vote_numeric_research'];parent=numeric['parent']
+    expected={f'{path}|{market}' for path in PATH_IDS for market in MARKETS}
+    if (parent.get('target_date')!=source_date or set(parent.get('cells',{}))!=expected
+        or not START_DATE<=source_date<target_date or len(source_report_sha256)!=64
+        or numeric.get('code_sha256')!=code_sha()):
+        raise ValueError('holding_vote_successor_parent_invalid')
+    selected=numeric.get('selected_cells') or {};cells={}
+    for key in sorted(expected):
+        path,market=key.split('|');original=parent['cells'][key]
+        if not validate_path_policy(original,path_id=path):raise ValueError('holding_vote_parent_cell_invalid')
+        policy=dict(original);receipt=None
+        if key in selected:
+            if path=='ADD_REBOUND':raise ValueError('holding_vote_add_authority_forbidden')
+            row=selected[key];receipt=row['receipt']
+            verified=verify_receipt(receipt,parent=original,source_sha=numeric['source_sha256'],cell=key)
+            if (receipt['contract']['parent_sha256']!=parent['bundle_sha256']
+                or verified['status']!='selected' or grid(path,original).get(verified['selected'])!=row['policy']):
+                raise ValueError('holding_vote_successor_comparison_invalid')
+            policy=dict(row['policy'])
+        cells[key]=dict(path_id=path,market=market,policy=policy,policy_sha256=input_snapshot_id(policy),
+            rollback_policy_sha256=input_snapshot_id(original),
+            selection_reason='validated_successor' if receipt else 'incumbent_carry',comparison_receipt=receipt,
+            realized_paired_ev_krw=None,estimated_paired_ev_krw=(receipt['aggregates'][receipt['selected']]['holdout']['mean_delta_krw'] if receipt else None))
+    value=dict(schema=SUCCESSOR_SCHEMA,source_date=source_date,target_date=target_date,valid_until=target_date,
+        source_report_sha256=source_report_sha256,source_quality=source_quality,model='gpt-5.4-nano',
+        prompt_version=PATH_PROMPT_VERSION,selection_mode='validated_successor' if selected else 'incumbent_carry',
+        evidence_grade='validated_counterfactual_successor' if selected else 'verified_incumbent_carry',
+        selection_authority='frozen_holding_vote_numeric_exit_experiment',allowed_runtime_apply=True,
+        validated_realized_edge=False,realized_paired_ev_krw=None,actual_profit_verified=False,
+        parent=parent,code_sha256=code_sha(),source_inventory=numeric.get('source_inventory',{}),
+        contract_file_path=numeric.get('contract_file_path'),contract_file_sha256=numeric.get('contract_file_sha256'),
+        vote_source_inventory=numeric.get('vote_source_inventory',{}),source_sha256=numeric.get('source_sha256'),cost_generations=numeric.get('cost_generations',{}),
+        policy_set_sha256=digest({key:row['policy_sha256'] for key,row in cells.items()}),
+        rollback_policy_set_sha256=digest({key:input_snapshot_id(policy) for key,policy in parent['cells'].items()}),cells=cells)
+    value['bundle_sha256']=digest(value)
+    return validate_successor(value,target_date=target_date,source_report_sha256=source_report_sha256)
+
+
+def validate_successor(bundle, *,target_date,source_report_sha256=None):
+    from .holding_vote_experiment import code_sha,grid,verify_receipt,source_generation_sha
+    if (bundle.get('schema')!=SUCCESSOR_SCHEMA or bundle.get('bundle_sha256')!=digest({k:v for k,v in bundle.items() if k!='bundle_sha256'})
+        or date.fromisoformat(bundle['source_date']).isoformat()!=bundle['source_date']
+        or date.fromisoformat(target_date).isoformat()!=target_date
+        or not START_DATE<=bundle['source_date']<target_date or bundle.get('target_date')!=target_date
+        or bundle.get('valid_until')!=target_date or bundle.get('code_sha256')!=code_sha()
+        or bundle.get('selection_authority')!='frozen_holding_vote_numeric_exit_experiment'
+        or bundle.get('allowed_runtime_apply') is not True or bundle.get('validated_realized_edge') is not False
+        or bundle.get('actual_profit_verified') is not False or bundle.get('realized_paired_ev_krw') is not None
+        or bundle.get('model')!='gpt-5.4-nano' or bundle.get('prompt_version')!=PATH_PROMPT_VERSION
+        or not isinstance(bundle.get('source_report_sha256'),str) or len(bundle['source_report_sha256'])!=64
+        or any(c not in '0123456789abcdef' for c in bundle['source_report_sha256'])
+        or (source_report_sha256 is not None and bundle['source_report_sha256']!=source_report_sha256)):
+        raise ValueError('holding_vote_successor_header_invalid')
+    if bundle.get('source_sha256') is not None and bundle['source_sha256'] != source_generation_sha(
+            bundle.get('source_inventory'), bundle.get('cost_generations'), bundle.get('vote_source_inventory')):
+        raise ValueError('holding_vote_successor_source_binding_invalid')
+    parent=bundle['parent'];cells=bundle['cells']
+    expected={f'{path}|{market}' for path in PATH_IDS for market in MARKETS}
+    if (parent.get('target_date')!=bundle['source_date'] or set(parent['cells'])!=expected or set(cells)!=expected
+        or parent.get('policy_set_sha256')!=digest({k:input_snapshot_id(v) for k,v in parent['cells'].items()})
+        or bundle.get('rollback_policy_set_sha256')!=parent['policy_set_sha256']):
+        raise ValueError('holding_vote_successor_parent_invalid')
+    selected=False
+    for key,cell in cells.items():
+        path,market=key.split('|');original=parent['cells'][key];policy=cell['policy']
+        if (not validate_path_policy(original,path_id=path) or not validate_path_policy(policy,path_id=path)
+            or cell.get('path_id')!=path or cell.get('market')!=market
+            or cell.get('policy_sha256')!=input_snapshot_id(policy)
+            or cell.get('rollback_policy_sha256')!=input_snapshot_id(original)
+            or cell.get('realized_paired_ev_krw') is not None):raise ValueError('holding_vote_successor_cell_invalid')
+        receipt=cell.get('comparison_receipt')
+        if receipt:
+            if path=='ADD_REBOUND' or receipt['contract']['parent_sha256']!=parent['bundle_sha256']:
+                raise ValueError('holding_vote_successor_authority_invalid')
+            proof=verify_receipt(receipt,parent=original,source_sha=bundle['source_sha256'],cell=key)
+            if (proof['status']!='selected' or grid(path,original).get(proof['selected'])!=policy
+                or cell.get('selection_reason')!='validated_successor'
+                or cell.get('estimated_paired_ev_krw')!=proof['aggregates'][proof['selected']]['holdout']['mean_delta_krw']):
+                raise ValueError('holding_vote_successor_proof_invalid')
+            selected=True
+        elif (policy!=original or cell.get('selection_reason')!='incumbent_carry'
+              or cell.get('estimated_paired_ev_krw') is not None):raise ValueError('holding_vote_unproved_change')
+    if (bundle.get('selection_mode')!=('validated_successor' if selected else 'incumbent_carry')
+        or bundle.get('evidence_grade')!=('validated_counterfactual_successor' if selected else 'verified_incumbent_carry')
+        or bundle.get('policy_set_sha256')!=digest({k:c['policy_sha256'] for k,c in cells.items()})):
+        raise ValueError('holding_vote_successor_set_invalid')
+    return bundle

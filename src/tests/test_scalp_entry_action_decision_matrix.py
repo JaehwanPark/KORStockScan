@@ -3,32 +3,11 @@ import json
 from dataclasses import replace
 from datetime import datetime
 
-from src.engine import scalp_entry_action_decision_matrix as mod
+from src.engine.lifecycle.archive import scalp_entry_action_decision_matrix_readers as mod
 from src.engine import scalp_entry_adm_runtime as runtime_mod
 from src.engine.scalping import entry_ai_gate as entry_gate_mod
 
 
-def test_main_print_summary_omits_full_rows(monkeypatch, capsys, tmp_path):
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", tmp_path)
-    monkeypatch.setattr(
-        mod,
-        "build_scalp_entry_action_decision_matrix_report",
-        lambda target_date: {
-            "report_type": "scalp_entry_action_decision_matrix",
-            "date": target_date,
-            "status": "warning",
-            "runtime_effect": False,
-            "summary": {"total_candidates": 17, "joined_sample": 6},
-            "warnings": ["sample_floor"],
-            "rows": [{"large": "payload"}],
-        },
-    )
-
-    assert mod.main(["--date", "2026-07-31", "--print-summary"]) == 0
-    output = json.loads(capsys.readouterr().out)
-
-    assert output["status"] == "retired"
-    assert output["runtime_effect"] is False
 
 
 def _write_jsonl(path, rows):
@@ -113,257 +92,10 @@ def test_entry_adm_excludes_early_accel_recheck_retry_rows(tmp_path, monkeypatch
     assert rows[0]["stock_code"] == "222222"
 
 
-def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    threshold_dir = tmp_path / "threshold_cycle"
-    snapshot_dir = threshold_dir / "snapshots"
-    post_sell_dir = tmp_path / "post_sell"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", snapshot_dir)
-    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "blocked_ai_score",
-                "stock_code": "111111",
-                "stock_name": "A",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {"ai_score": "62", "quote_age_ms": "100"},
-            },
-            {
-                "stage": "entry_submit_revalidation_warning",
-                "stock_code": "222222",
-                "record_id": "R2",
-                "emitted_at": "2026-05-18T09:11:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "entry_submit_revalidation_warning": True,
-                    "quote_age_ms": "1500",
-                },
-            },
-            {
-                "stage": "entry_submit_revalidation_block",
-                "stock_code": "333333",
-                "record_id": "R3",
-                "emitted_at": "2026-05-18T09:12:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "entry_submit_revalidation_block": True,
-                    "quote_stale": True,
-                },
-            },
-            {
-                "stage": "pre_submit_liquidity_guard_block",
-                "stock_code": "444444",
-                "record_id": "R4",
-                "emitted_at": "2026-05-18T09:13:00",
-                "emitted_date": "2026-05-18",
-                "fields": {"blocked_reason": "below_min_liquidity"},
-            },
-            {
-                "stage": "scalp_sim_buy_order_virtual_pending",
-                "stock_code": "555555",
-                "record_id": "R5P",
-                "emitted_at": "2026-05-18T09:13:30",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "sim_record_id": "SIM1",
-                    "best_ask": "1000",
-                    "would_limit_fill": False,
-                },
-            },
-            {
-                "stage": "scalp_sim_buy_order_assumed_filled",
-                "stock_code": "555555",
-                "record_id": "R5",
-                "emitted_at": "2026-05-18T09:14:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "sim_record_id": "SIM1",
-                    "best_ask": "1000",
-                    "would_limit_fill": False,
-                },
-            },
-            {
-                "stage": "scalp_sim_entry_ai_price_skip_order",
-                "stock_code": "777777",
-                "record_id": "R7",
-                "emitted_at": "2026-05-18T09:14:30",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "sim_record_id": "SIM2",
-                    "entry_adm_candidate_id": "ADM-SIM2",
-                    "broker_order_forbidden": True,
-                    "actual_order_submitted": False,
-                    "decision_authority": "sim_observation_only",
-                    "runtime_effect": "simulated_order_skipped",
-                },
-            },
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "666666",
-                "record_id": "R6",
-                "emitted_at": "2026-05-18T09:15:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "candidate_id": "ADM2",
-                    "chosen_action": "BUY_DEFENSIVE",
-                    "entry_adm_prompt_applied": True,
-                    "entry_adm_runtime_bias_applied": True,
-                    "entry_adm_runtime_effect": "buy_defensive_bias",
-                    "entry_adm_forced_action": "BUY",
-                    "entry_adm_runtime_reason": "matrix_buy_defensive",
-                },
-            },
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "888888",
-                "record_id": "R8",
-                "emitted_at": "2026-05-18T09:16:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "candidate_id": "ADM3",
-                    "source_stage": "order_bundle_submitted",
-                    "chosen_action": "NO_BUY_AI",
-                    "actual_order_submitted": True,
-                    "price_resolution_reason": "defensive_order_price",
-                },
-            },
-        ],
-    )
-    _write_jsonl(
-        post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl",
-        [
-            {
-                "sim_record_id": "SIM1",
-                "profit_rate": 1.25,
-                "exit_rule": "tp",
-                "outcome": "MISSED_UPSIDE",
-                "metrics_10m": {"mfe_pct": 1.5, "mae_pct": -0.2, "close_ret_pct": 0.8},
-                "metrics_30m": {"mfe_pct": 2.0, "mae_pct": -0.2, "close_ret_pct": 1.1},
-                "metrics_60m": {"mfe_pct": 2.4, "mae_pct": -0.2, "close_ret_pct": 1.2},
-            },
-            {
-                "candidate_id": "ADM2",
-                "profit_rate": -1.0,
-                "exit_rule": "stop",
-                "outcome": "GOOD_EXIT",
-                "metrics_10m": {"mfe_pct": 0.1, "mae_pct": -1.5, "close_ret_pct": -0.8},
-                "metrics_30m": {"mfe_pct": 0.2, "mae_pct": -1.8, "close_ret_pct": -1.0},
-                "metrics_60m": {"mfe_pct": 0.3, "mae_pct": -2.0, "close_ret_pct": -1.2},
-            },
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggregates(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    threshold_dir = tmp_path / "threshold_cycle"
-    snapshot_dir = threshold_dir / "snapshots"
-    post_sell_dir = tmp_path / "post_sell"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", snapshot_dir)
-    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "candidate_id": "ADM-NUMERIC",
-                    "chosen_action": "NO_BUY_AI",
-                    "ai_reason_numeric_inconsistency": True,
-                    "source_quality_gate": "ai_numeric_consistency_review_required",
-                },
-            },
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "222222",
-                "record_id": "R2",
-                "emitted_at": "2026-05-18T09:11:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "candidate_id": "ADM-CLEAN",
-                    "chosen_action": "NO_BUY_AI",
-                    "source_stage": "ai_confirmed",
-                },
-            },
-        ],
-    )
-    _write_jsonl(post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl", [])
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_report_explains_zero_join_when_keys_do_not_overlap(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    threshold_dir = tmp_path / "threshold_cycle"
-    post_sell_dir = tmp_path / "post_sell"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
-    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "candidate_id": "ADM-NOT-IN-EVAL",
-                    "chosen_action": "NO_BUY_AI",
-                    "entry_adm_prompt_applied": True,
-                },
-            }
-        ],
-    )
-    _write_jsonl(
-        post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl",
-        [
-            {
-                "candidate_id": "OTHER-ADM",
-                "profit_rate": 1.25,
-                "outcome": "MISSED_UPSIDE",
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
@@ -441,37 +173,6 @@ def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(
     ]
 
 
-def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    threshold_dir = tmp_path / "threshold_cycle"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "chosen_action": "NO_BUY_AI",
-                    "entry_adm_bucket_token": "score_unknown|risk_unknown|stale_unknown",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
@@ -996,46 +697,6 @@ def test_scalp_entry_adm_runtime_strength_bucket_still_works_without_pressure_pr
     )
 
 
-def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-    monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "ai_confirmed",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "ai_score": "78",
-                    "action": "BUY",
-                    "latest_strength": "150",
-                    "quote_age_ms": "300",
-                    "best_ask": "1000",
-                    "trade_value_krw": "300000000",
-                    "intraday_range_pct": "5.0",
-                    "market_regime_continuous_label": "RISK_ON",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeypatch):
@@ -1124,165 +785,12 @@ def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(
     assert context["prompt_context"] == ""
 
 
-def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "chosen_action": "BUY_NOW",
-                    "entry_adm_score_bucket": "score75_84",
-                    "entry_adm_risk_context_bucket": "strong_strength_momentum",
-                    "entry_adm_stale_bucket": "fresh",
-                    "entry_adm_price_resolution_bucket": "quote_based",
-                    "entry_adm_liquidity_bucket": "liquidity_high",
-                    "entry_adm_overbought_bucket": "overbought_normal",
-                    "entry_adm_bucket_token": "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000",
-                    "best_ask": "1000",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_falls_back_to_raw_when_adm_fields_missing(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "ai_confirmed",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "ai_score": "78",
-                    "action": "BUY",
-                    "latest_strength": "150",
-                    "quote_age_ms": "300",
-                    "best_ask": "1000",
-                    "trade_value_krw": "300000000",
-                    "intraday_range_pct": "5.0",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_uses_current_ai_score_as_score_source(tmp_path, monkeypatch):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "ai_confirmed",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "current_ai_score": "66",
-                    "action": "BUY",
-                    "latest_strength": "120",
-                    "quote_age_ms": "300",
-                    "best_ask": "1000",
-                    "trade_value_krw": "300000000",
-                    "intraday_range_pct": "5.0",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_available(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "chosen_action": "NO_BUY_AI",
-                    "entry_adm_score_bucket": "score_unknown",
-                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
-                    "entry_adm_stale_bucket": "stale_not_available",
-                    "entry_adm_price_resolution_bucket": "quote_based",
-                    "entry_adm_liquidity_bucket": "liquidity_high",
-                    "entry_adm_overbought_bucket": "overbought_normal",
-                    "entry_adm_bucket_token": "score_unknown|risk_unknown|-|stale_not_available|-|-|-|-",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_unknown_bucket_summary_splits_context_root_causes():
@@ -1506,40 +1014,6 @@ def test_scalp_entry_adm_non_actionable_context_unknown_does_not_create_source_q
     }
 
 
-def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "source_stage": "latency_block",
-                    "ai_score": 66,
-                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_explicit_runtime_block_context_is_not_available():
@@ -1563,329 +1037,16 @@ def test_scalp_entry_adm_explicit_runtime_block_context_is_not_available():
     assert summary["not_available_dimension_counts"]["risk_context_bucket"] == 1
 
 
-def test_scalp_entry_adm_post_entry_missing_score_is_not_available(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_sim_sell_order_assumed_filled",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T10:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "chosen_action": "WAIT_REQUOTE",
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
-                    "entry_adm_stale_bucket": "fresh",
-                    "entry_adm_price_resolution_bucket": "quote_based",
-                    "entry_adm_liquidity_bucket": "liquidity_high",
-                    "entry_adm_overbought_bucket": "overbought_normal",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_pre_submit_missing_score_backfills_from_nearby_entry_event(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "blocked_ai_score",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "ai_score": 66,
-                    "chosen_action": "NO_BUY_AI",
-                },
-            },
-            {
-                "stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
-                "stock_code": "111111",
-                "record_id": "R2",
-                "emitted_at": "2026-05-18T09:10:30",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "source_stage": "entry_pre_submit",
-                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
-                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
-                    "entry_adm_stale_bucket": "fresh",
-                    "entry_adm_price_resolution_bucket": "quote_based",
-                    "entry_adm_liquidity_bucket": "below_min_liquidity",
-                    "entry_adm_overbought_bucket": "overbought_normal",
-                },
-            },
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_score_backfill_does_not_use_future_event(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "source_stage": "entry_pre_submit",
-                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
-                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
-                    "entry_adm_stale_bucket": "fresh",
-                    "entry_adm_price_resolution_bucket": "quote_based",
-                    "entry_adm_liquidity_bucket": "below_min_liquidity",
-                    "entry_adm_overbought_bucket": "overbought_normal",
-                },
-            },
-            {
-                "stage": "blocked_ai_score",
-                "stock_code": "111111",
-                "record_id": "R2",
-                "emitted_at": "2026-05-18T09:10:30",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "ai_score": 66,
-                    "chosen_action": "NO_BUY_AI",
-                },
-            },
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_score_backfill_prefers_exact_key_over_nearer_stock_event(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "blocked_ai_score",
-                "stock_code": "111111",
-                "record_id": "NEAR",
-                "emitted_at": "2026-05-18T09:10:10",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "ai_score": 60,
-                    "chosen_action": "NO_BUY_AI",
-                },
-            },
-            {
-                "stage": "blocked_ai_score",
-                "stock_code": "111111",
-                "record_id": "SCORE",
-                "emitted_at": "2026-05-18T09:09:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "candidate_id": "C1",
-                    "ai_score": 72,
-                    "chosen_action": "NO_BUY_AI",
-                },
-            },
-            {
-                "stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
-                "stock_code": "111111",
-                "record_id": "TARGET",
-                "emitted_at": "2026-05-18T09:10:30",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "candidate_id": "C1",
-                    "source_stage": "entry_pre_submit",
-                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
-                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
-                    "entry_adm_stale_bucket": "fresh",
-                    "entry_adm_price_resolution_bucket": "quote_based",
-                    "entry_adm_liquidity_bucket": "below_min_liquidity",
-                    "entry_adm_overbought_bucket": "overbought_normal",
-                },
-            },
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_price_skip_backfills_score_from_exact_parent_lineage(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-07-31.jsonl",
-        [
-            {
-                "stage": "ai_confirmed",
-                "stock_code": "008700",
-                "record_id": "25643",
-                "emitted_at": "2026-07-31T09:50:07",
-                "emitted_date": "2026-07-31",
-                "fields": {"ai_score": 68, "action": "BUY"},
-            },
-            {
-                "stage": "ai_confirmed",
-                "stock_code": "999999",
-                "record_id": "25643",
-                "emitted_at": "2026-07-31T09:50:07.500000",
-                "emitted_date": "2026-07-31",
-                "fields": {"ai_score": 21, "action": "WAIT"},
-            },
-            {
-                "stage": "scalp_sim_entry_ai_price_skip_order",
-                "stock_code": "008700",
-                "record_id": "SCALPSIM-008700-1",
-                "emitted_at": "2026-07-31T09:50:08",
-                "emitted_date": "2026-07-31",
-                "fields": {
-                    "sim_record_id": "SCALPSIM-008700-1",
-                    "sim_parent_record_id": "25643",
-                    "entry_adm_candidate_id": "ADM-008700-25643-1",
-                    "ai_entry_price_canary_action": "SKIP",
-                },
-            },
-            {
-                "stage": "entry_ai_price_canary_skip_followup",
-                "stock_code": "008700",
-                "record_id": "25643",
-                "emitted_at": "2026-07-31T09:50:38",
-                "emitted_date": "2026-07-31",
-                "fields": {
-                    "sim_record_id": "SCALPSIM-008700-1",
-                    "sim_parent_record_id": "25643",
-                    "entry_adm_candidate_id": "ADM-008700-25643-1",
-                    "elapsed_sec": 30,
-                    "mark_price": 10_000,
-                    "followup_price": 10_050,
-                    "max_price": 10_100,
-                    "min_price": 9_980,
-                    "mfe_bps": 100,
-                    "mae_bps": -20,
-                },
-            },
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-07-31")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
-def test_scalp_entry_adm_price_skip_does_not_temporally_borrow_other_attempt_score(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(
-        mod,
-        "ADM_REPORT_DIR",
-        tmp_path / "report" / "scalp_entry_action_decision_matrix",
-    )
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-07-31.jsonl",
-        [
-            {
-                "stage": "ai_confirmed",
-                "stock_code": "008700",
-                "record_id": "OTHER-ATTEMPT",
-                "emitted_at": "2026-07-31T09:50:07",
-                "emitted_date": "2026-07-31",
-                "fields": {"ai_score": 68, "action": "BUY"},
-            },
-            {
-                "stage": "scalp_sim_entry_ai_price_skip_order",
-                "stock_code": "008700",
-                "record_id": "SCALPSIM-008700-1",
-                "emitted_at": "2026-07-31T09:50:08",
-                "emitted_date": "2026-07-31",
-                "fields": {
-                    "sim_record_id": "SCALPSIM-008700-1",
-                    "sim_parent_record_id": "TARGET-ATTEMPT",
-                    "entry_adm_candidate_id": "ADM-008700-TARGET-1",
-                },
-            },
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-07-31")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
 def test_entry_price_skip_followup_cumulative_uses_clean_daily_reports(
@@ -1986,45 +1147,6 @@ def test_scalp_entry_adm_runtime_pre_submit_missing_context_is_not_available():
     )
 
 
-def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_dimensions(
-    tmp_path, monkeypatch
-):
-    pipeline_dir = tmp_path / "pipeline_events"
-    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
-    monkeypatch.setattr(
-        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
-    )
-    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
-    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
-
-    _write_jsonl(
-        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
-        [
-            {
-                "stage": "scalp_entry_action_decision_snapshot",
-                "stock_code": "111111",
-                "record_id": "R1",
-                "emitted_at": "2026-05-18T09:10:00",
-                "emitted_date": "2026-05-18",
-                "fields": {
-                    "chosen_action": "NO_BUY_AI",
-                    "entry_adm_score_bucket": "score_unknown",
-                    "entry_adm_risk_context_bucket": "weak_strength_momentum",
-                    "entry_adm_stale_bucket": "fresh",
-                    "entry_adm_price_resolution_bucket": "quote_based",
-                    "entry_adm_liquidity_bucket": "liquidity_high",
-                    "entry_adm_overbought_bucket": "overbought_normal",
-                    "entry_adm_bucket_token": "score_unknown|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000",
-                },
-            }
-        ],
-    )
-
-    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    assert report["status"] == "retired"
-    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monkeypatch):
@@ -2111,7 +1233,7 @@ def test_adm_bucket_lookup_status_no_payload():
 
 
 def test_adm_lookup_none_is_classified_for_advisory_only_stage():
-    from src.engine.scalp_entry_action_decision_matrix import (
+    from src.engine.lifecycle.archive.scalp_entry_action_decision_matrix_readers import (
         _classify_adm_lookup_not_applicable,
     )
 
@@ -2140,7 +1262,7 @@ def test_adm_lookup_none_is_classified_for_advisory_only_stage():
 
 
 def test_adm_lookup_closure_splits_new_bucket_and_producer_context_missing():
-    from src.engine.scalp_entry_action_decision_matrix import (
+    from src.engine.lifecycle.archive.scalp_entry_action_decision_matrix_readers import (
         _adm_lookup_closure_summary,
     )
 
@@ -2175,3 +1297,14 @@ def test_adm_lookup_closure_splits_new_bucket_and_producer_context_missing():
         "price_not_available_pre_submit": 1,
         "liquidity_not_available": 1,
     }
+
+
+def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+    import importlib
+    current=importlib.import_module('src.engine.scalp_entry_action_decision_matrix')
+    prior=tmp_path/"prior.json";prior.write_text("original")
+    def forbidden(*a,**kw):raise AssertionError("retired producer accessed storage")
+    monkeypatch.setattr(type(prior),"write_text",forbidden)
+    monkeypatch.setattr(type(prior),"read_text",forbidden)
+    result=current.build_scalp_entry_action_decision_matrix_report("2026-10-12")
+    assert result["status"]=="retired" and result["allowed_runtime_apply"] is False

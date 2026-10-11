@@ -416,74 +416,7 @@ def succession_reason(
             and str(value).lower() in {"false", "0"}
         ):
             return "explicit_operator_off_veto"
-    if family in {PYRAMID, AVG_DOWN}:
-        key = (
-            "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT"
-            if family == PYRAMID
-            else "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
-        )
-        before = float(candidate.get("current_value"))
-        after = float(candidate.get("recommended_value"))
-        bounds = candidate.get("bounds") or {}
-        if not all(
-            math.isfinite(v)
-            for v in (
-                before,
-                after,
-                float(current.get(key)),
-                float(bounds.get("min")),
-                float(bounds.get("max")),
-            )
-        ):
-            return "nonfinite_economic_values"
-        if before != float(current[key]):
-            return "economic_baseline_differs_from_effective_lock"
-        if not float(bounds["min"]) <= after <= float(bounds["max"]) or abs(
-            after - before
-        ) > float(candidate.get("max_step_per_day", 0)):
-            return "family_bounded_step_invalid"
-        if candidate.get(
-            "runtime_update_mode"
-        ) != "single_cumulative_quality_update" or not candidate.get("evidence_digest"):
-            return "family_cumulative_evidence_missing"
-        window = candidate.get("cumulative_quality_window") or {}
-        dates = window.get("source_dates") or []
-        if (
-            window.get("window_policy") != "clean_baseline_cumulative"
-            or not dates
-            or any(
-                not date(2026, 6, 5)
-                <= date.fromisoformat(d)
-                < date.fromisoformat(target_date)
-                for d in dates
-            )
-            or window.get("end_date") >= target_date
-        ):
-            return "family_cumulative_window_invalid"
-        if candidate.get("source_quality_gate") not in {
-            "pass",
-            "pass_with_row_exclusions",
-        }:
-            return "family_source_quality_not_ready"
-        if family == PYRAMID and candidate.get("decision_evidence_gate") != "pass":
-            return "family_economics_not_ready"
-        if family == PYRAMID:
-            from src.engine.monitoring.scalping_pyramid_quality_calibration import (
-                _profit_grid_decision,
-            )
-
-            grid = (candidate.get("source_metrics") or {}).get("profit_threshold_grid")
-            decision = _profit_grid_decision(
-                candidate.get("current_values") or {}, grid
-            )
-            if (
-                decision.get("status") not in {"adjust_up", "adjust_down"}
-                or decision.get("selected_min_profit_pct") != after
-            ):
-                return "family_economic_replay_not_ready"
-    else:
-        return "successor_owner_not_registered"
-    return ""
+    return "successor_owner_not_registered"
 
 
 def validate_receipt(manifest, runtime_dir, lock_dir):

@@ -254,6 +254,18 @@ def _outcome_return(row: dict[str, Any]) -> tuple[float | None, str, dict[str, A
     return round(gross - cost_pct, 8), "paired_cost_adjusted", cost
 
 
+def _execution_model(label, source):
+    if not isinstance(source,dict):return None
+    horizon=_primary_horizon(label)
+    quote=(horizon.get("first_hit_execution_quote") if label.get("gross_first_hit_label") in
+           {"gross_target_first","adverse_stop_first"} else horizon.get("terminal_execution_quote"))
+    if not isinstance(quote,dict):return None
+    return dict(quote,status="full_depth_model",route=quote.get("route"),
+        buy_cost_rate=0.0,sell_cost_rate=source.get("cost_rate"),
+        cost_known_at=source.get("cost_known_at"),
+        cost_source_sha256=_sha_json([source.get("policy_sha256"),source.get("cost_rate"),source.get("cost_known_at")]))
+
+
 def _joined_rows(payloads: list[tuple[dict[str, Any], dict[str, Any]]]) -> tuple[list[dict[str, Any]], Counter[str]]:
     rows: list[dict[str, Any]] = []
     exclusions: Counter[str] = Counter()
@@ -303,6 +315,8 @@ def _joined_rows(payloads: list[tuple[dict[str, Any], dict[str, Any]]]) -> tuple
                     "outcome_label": label.get("gross_first_hit_label"),
                     "net_return_pct": net_return,
                     "outcome_state": outcome_state,
+                    "quantity_capital_source": support.get("quantity_capital_source"),
+                    "counterfactual_execution": _execution_model(label,support.get("quantity_capital_source")),
                     "cost_contract": cost,
                     "evidence_mode": "counterfactual",
                 }
@@ -345,7 +359,14 @@ def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
     daily_return_sum_pct: dict[str, float] = defaultdict(float)
     for row in usable:
         daily_return_sum_pct[row["source_date"]] += float(row["net_return_pct"])
+    from src.engine.scalping.tp1_capital_replay import replay
+    capital=replay(selected)
+    daily=capital.get("daily_net_profit_krw")
+    if daily is not None:
+        returns=[r["challenger_net_krw"]/r["buy_notional_krw"]*100 if r["buy_notional_krw"] else 0.0
+                 for r in capital["rows"]]
     return {
+        "capital_replay": capital,
         "paired_sample_count": len(usable),
         "distinct_day_count": len({row["source_date"] for row in usable}),
         "censored_count": len(selected) - len(usable),
@@ -353,10 +374,10 @@ def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
         "baseline_cost_adjusted_ev_pct": 0.0 if usable else None,
         "challenger_cost_adjusted_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
         "paired_delta_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
-        "baseline_daily_net_profit_krw": None,
-        "challenger_daily_net_profit_krw": None,
-        "paired_delta_daily_net_profit_krw": None,
-        "worst_day_net_profit_krw": None,
+        "baseline_daily_net_profit_krw": 0.0 if daily else None,
+        "challenger_daily_net_profit_krw": sum(daily.values())/len(daily) if daily else None,
+        "paired_delta_daily_net_profit_krw": sum(daily.values())/len(daily) if daily else None,
+        "worst_day_net_profit_krw": min(daily.values()) if daily else None,
         "paired_delta_daily_return_sum_pct": (
             round(sum(daily_return_sum_pct.values()) / len(daily_return_sum_pct), 8)
             if daily_return_sum_pct
@@ -368,7 +389,7 @@ def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
             else None
         ),
         "model_notional_per_attempt_krw": None,
-        "daily_net_profit_authority": "unavailable_quantity_and_capital_constraints_missing",
+        "daily_net_profit_authority": "modeled_same_capital_v2" if daily else "unavailable_quantity_and_capital_constraints_missing",
     }
 
 
@@ -388,7 +409,10 @@ def _evaluate_candidate(rows: list[dict[str, Any]], axis: str, value: float | in
         holdout["paired_sample_count"] >= HOLDOUT_SAMPLE_FLOOR
         and holdout["distinct_day_count"] >= HOLDOUT_DAY_FLOOR
     )
-    if not distinct:
+    if not (axis == "positive_support_min" and int(value) < BASELINE_POLICY[axis]):
+        disposition = "unsupported_scope"
+        blocker = "selector_axis_has_no_identified_changed_population"
+    elif not distinct:
         disposition = "identical_policy"
         blocker = "no_causally_identified_decision_change"
     elif not calibration_floor or not holdout_floor:
@@ -646,6 +670,10 @@ def build_report(
         "forbidden_uses": FORBIDDEN_USES,
         "code_improvement_orders": [],
     }
+    from src.engine.monitoring.policy_generation_contract import native
+    report['policy_generation']=native(report,family='rising_missed',day=target_date,data_root=DATA_DIR,
+        source_state='valid_empty' if not rows else 'partitioned',comparison_state=report['status'],
+        handoff_state='pending_publication' if report['status']=='validated_edge' else 'incumbent_carried')
     report["artifact_sha256"] = _sha_json(
         {key: value for key, value in report.items() if key != "artifact_sha256"}
     )

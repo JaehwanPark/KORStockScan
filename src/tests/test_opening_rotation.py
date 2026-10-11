@@ -1,5 +1,6 @@
 from datetime import datetime
 import inspect
+from dataclasses import replace
 from threading import Event, Thread
 from types import SimpleNamespace
 
@@ -7,7 +8,6 @@ import pandas as pd
 import pytest
 
 from src.engine.scalping.opening_rotation import (
-    EntryConfig,
     ExitConfig,
     OpeningRotationRuntimePolicy,
     POSITION_TAG,
@@ -15,8 +15,6 @@ from src.engine.scalping.opening_rotation import (
     entry_time_bucket,
     entry_time_bucket_labels,
     entry_window_version,
-    evaluate_entry as _evaluate_entry_impl,
-    evaluate_exit,
     is_krx_regular_scope,
     is_watch_candidate,
     is_watch_source_scope,
@@ -25,7 +23,7 @@ from src.engine.scalping.opening_rotation import (
 from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_execution_receipts
 from src.engine import sniper_sync
-from src.engine.scalping import opening_rotation_backtest as rotation_backtest
+from src.engine.lifecycle.archive import opening_rotation_backtest_readers as rotation_backtest
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.utils import kiwoom_utils
 
@@ -44,10 +42,12 @@ def _active_krx_opening_policy_for_runtime_unit_tests(monkeypatch):
     """Keep legacy unit fixtures explicit about the reviewed PREOPEN state."""
 
     monkeypatch.setattr(handlers, "OPENING_ROTATION_RETIRED", False)
+    monkeypatch.setattr(handlers, "evaluate_opening_rotation_entry", _evaluate_entry_impl)
+    monkeypatch.setattr(handlers, "evaluate_opening_rotation_exit", evaluate_exit)
     monkeypatch.setattr(
         handlers,
         "load_active_opening_rotation_runtime_policy",
-        lambda: OpeningRotationRuntimePolicy(),
+        lambda: OpeningRotationRuntimePolicy(entry=EntryConfig()),
     )
     original = _ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS
 
@@ -3806,211 +3806,12 @@ def _install_opening_sell_owner(monkeypatch, stock, *, target_id):
     )
 
 
-def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
-    submitted = []
-    logs = []
-    stock = {
-        "id": 7,
-        "name": "테스트",
-        "position_tag": POSITION_TAG,
-        "opening_rotation_episode_id": "OREP-1",
-        "opening_rotation_episode_promotion_id": "PROMO-1",
-        "opening_rotation_profile_id": "profile-1",
-        "opening_rotation_policy_hash": "hash-1",
-        "opening_rotation_policy_schema_version": "opening_rotation_runtime_policy_v2",
-        "opening_rotation_margin_one_share_authorized": True,
-        "opening_rotation_margin_authority_reason": (
-            "kt00011_applied_margin_tier_one_share_confirmed"
-        ),
-        "opening_rotation_margin_rate": 40,
-        "opening_rotation_margin_orderable_amount": 1_200_000,
-        "opening_rotation_margin_orderable_qty_cap": 120,
-        "opening_rotation_margin_requested_unit_price": 10_010,
-        "opening_rotation_margin_cash_guard_bypassed": True,
-        "opening_rotation_margin_order_api": "kt10000",
-        "opening_rotation_margin_credit_order_api_used": False,
-    }
-    _install_opening_sell_owner(monkeypatch, stock, target_id=7)
-    monkeypatch.setattr(
-        sniper_execution_receipts.kiwoom_utils,
-        "get_tick_size",
-        lambda _price: 10,
-    )
-    monkeypatch.setattr(
-        sniper_execution_receipts,
-        "get_trade_cost_rate",
-        lambda: 0.0023,
-    )
-    monkeypatch.setattr(
-        "src.engine.kiwoom_orders.send_sell_order_market",
-        lambda **kwargs: (
-            submitted.append(kwargs) or {"return_code": "0", "ord_no": "0000001"}
-        ),
-    )
-    monkeypatch.setattr(
-        sniper_execution_receipts,
-        "_log_holding_pipeline",
-        lambda *args, **kwargs: logs.append((args, kwargs)),
-    )
-
-    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
-        stock,
-        code="005930",
-        buy_fill_price=10_000,
-        filled_qty=1,
-    )
-    # A duplicated BUY receipt must reuse the confirmed target ownership.
-    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
-        stock,
-        code="005930",
-        buy_fill_price=10_000,
-        filled_qty=1,
-    )
-
-    assert len(submitted) == 1
-    assert submitted[0]["qty"] == 1
-    assert submitted[0]["price"] == 10_070
-    assert submitted[0]["order_type"] == "00"
-    assert submitted[0]["dmst_stex_tp"] == "KRX"
-    target_log = next(
-        fields
-        for args, fields in logs
-        if args[3] == "opening_rotation_profit_target_ordered"
-    )
-    assert target_log["opening_rotation_margin_one_share_authorized"] is True
-    assert target_log["opening_rotation_margin_rate"] == 40
-    assert target_log["opening_rotation_margin_cash_guard_bypassed"] is True
-    assert target_log["opening_rotation_margin_order_api"] == "kt10000"
-    assert target_log["opening_rotation_margin_credit_order_api_used"] is False
-    assert stock["opening_rotation_profit_target_order_no"] == "0000001"
-    assert stock["preset_tp_ord_no"] == "0000001"
-    assert logs[-1][0][3] == "opening_rotation_profit_target_ordered"
 
 
-def test_concurrent_buy_receipts_claim_one_target_submission(monkeypatch):
-    entered = Event()
-    release = Event()
-    submitted = []
-    results = []
-    stock = {
-        "name": "테스트",
-        "position_tag": POSITION_TAG,
-        "opening_rotation_episode_id": "OREP-CONCURRENT",
-    }
-    _install_opening_sell_owner(monkeypatch, stock, target_id=8)
-    monkeypatch.setattr(
-        sniper_execution_receipts.kiwoom_utils,
-        "get_tick_size",
-        lambda _price: 10,
-    )
-    monkeypatch.setattr(
-        sniper_execution_receipts, "get_trade_cost_rate", lambda: 0.0023
-    )
-    monkeypatch.setattr(
-        sniper_execution_receipts,
-        "_log_holding_pipeline",
-        lambda *args, **kwargs: None,
-    )
-
-    def _submit(**kwargs):
-        submitted.append(kwargs)
-        entered.set()
-        assert release.wait(timeout=2.0)
-        return {"return_code": "0", "ord_no": "0000002"}
-
-    monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", _submit)
-
-    first = Thread(
-        target=lambda: results.append(
-            sniper_execution_receipts._submit_opening_rotation_profit_order(
-                stock,
-                code="005930",
-                buy_fill_price=10_000,
-                filled_qty=1,
-            )
-        )
-    )
-    first.start()
-    assert entered.wait(timeout=2.0)
-    second_result = sniper_execution_receipts._submit_opening_rotation_profit_order(
-        stock,
-        code="005930",
-        buy_fill_price=10_000,
-        filled_qty=1,
-    )
-    release.set()
-    first.join(timeout=2.0)
-
-    assert not first.is_alive()
-    assert results == [True]
-    assert second_result is True
-    assert len(submitted) == 1
-    assert stock["opening_rotation_profit_target_order_no"] == "0000002"
 
 
-def test_target_order_notice_without_exact_receipt_never_wins_response_race(
-    monkeypatch,
-):
-    stock = {
-        "name": "테스트",
-        "position_tag": POSITION_TAG,
-        "opening_rotation_episode_id": "OREP-NOTICE-RACE",
-    }
-    _install_opening_sell_owner(monkeypatch, stock, target_id=9)
-    monkeypatch.setattr(
-        sniper_execution_receipts.kiwoom_utils,
-        "get_tick_size",
-        lambda _price: 10,
-    )
-    monkeypatch.setattr(
-        sniper_execution_receipts, "get_trade_cost_rate", lambda: 0.0023
-    )
-    monkeypatch.setattr(
-        sniper_execution_receipts,
-        "_log_holding_pipeline",
-        lambda *args, **kwargs: None,
-    )
-
-    def _submit(**_kwargs):
-        stock["opening_rotation_profit_target_order_no"] = "0000003"
-        return {"return_code": "-1", "return_msg": "response_late_after_notice"}
-
-    monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", _submit)
-
-    assert not sniper_execution_receipts._submit_opening_rotation_profit_order(
-        stock,
-        code="005930",
-        buy_fill_price=10_000,
-        filled_qty=1,
-    )
-    assert "opening_rotation_profit_target_order_no" not in stock
-    assert stock["opening_rotation_profit_order_protection_failed"] is True
-    assert stock["opening_rotation_episode_phase"] == "TARGET_SUBMIT_FAILED"
 
 
-def test_failed_target_submit_blocks_reentry_and_arms_protection_exit(monkeypatch):
-    stock = {"name": "테스트", "position_tag": POSITION_TAG}
-    _install_opening_sell_owner(monkeypatch, stock, target_id=10)
-    monkeypatch.setattr(
-        sniper_execution_receipts.kiwoom_utils,
-        "get_tick_size",
-        lambda _price: 10,
-    )
-    monkeypatch.setattr(
-        "src.engine.kiwoom_orders.send_sell_order_market",
-        lambda **kwargs: {"return_code": "-1", "return_msg": "rejected"},
-    )
-
-    assert not sniper_execution_receipts._submit_opening_rotation_profit_order(
-        stock,
-        code="005930",
-        buy_fill_price=10_000,
-        filled_qty=1,
-    )
-    assert stock["opening_rotation_profit_order_protection_failed"] is True
-    assert stock["opening_rotation_new_episode_blocked"] is True
-    holding_source = inspect.getsource(handlers.handle_holding_state)
-    assert "opening_rotation_target_protection_failure_exit" in holding_source
 
 
 def test_holding_ai_handoff_is_called_once_and_cannot_choose_buy(monkeypatch):
@@ -4130,3 +3931,19 @@ def test_ratchet_is_shadow_only_and_recorded_once_on_fresh_trusted_trend(
     assert stock["opening_rotation_ratchet_real_order_enabled"] is False
     assert len(logs) == 1
     assert logs[0][1]["real_order_changed"] is False
+
+from src.engine.lifecycle.archive.opening_rotation_readers import EntryConfig,evaluate_entry as _evaluate_entry_impl,evaluate_exit
+
+
+@pytest.mark.parametrize("filled_qty", [0, 1, 2])
+def test_retired_rotation_target_never_submits_or_rewrites_manual_custody(monkeypatch, filled_qty):
+    import copy
+    stock = dict(position_tag=POSITION_TAG, buy_qty=filled_qty,
+        trailing_stop_price=10100, opening_rotation_profit_target_order_no="historical")
+    before = copy.deepcopy(stock)
+    def forbidden(**kwargs):
+        raise AssertionError("retired opening target attempted automatic SELL")
+    monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", forbidden)
+    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
+        stock, code="005930", buy_fill_price=10000, filled_qty=filled_qty) is False
+    assert stock == before

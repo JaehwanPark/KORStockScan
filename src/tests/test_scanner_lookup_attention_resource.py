@@ -712,9 +712,15 @@ def execution_frame(day, ordinal=0, *, outgoing=.2, incoming=1.):
         replay = row["owner_replay"]
         seed = replay["seed"]
         seed.update({k: row[k] for k in ("stock_code", "scanner_promotion_id", "evaluation_attempt_id")})
+        context = seed['operating_contract']
+        decision = context['entry_decision_version_receipt']
+        decision['evaluation_attempt_id'] = seed['evaluation_attempt_id']
+        decision['sha256'] = compact.digest({k:v for k,v in decision.items() if k != 'sha256'})
+        context['sha256'] = compact.digest({k:v for k,v in context.items() if k != 'sha256'})
         seed["seed_sha256"] = compact.digest({k:v for k,v in seed.items() if k != "seed_sha256"})
         for arm in replay["operating_arms"].values():
             arm.update(net_return_pct=rate, stress_net_return_pct=rate-.05,
+                contract_sha256=context['sha256'],
                 net_pnl_krw=rate / 100 * arm["budget_krw"],stress_net_pnl_krw=(rate-.05) / 100 * arm["budget_krw"])
             arm["sha256"] = compact.digest({k:v for k,v in arm.items() if k != "sha256"})
         replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
@@ -771,6 +777,11 @@ def test_no_effect_skips_execution_and_missing_changed_arm_stays_null():
 
 def test_ready_native_proof_publication_source_date_preopen_and_scanner_bonus(monkeypatch,tmp_path):
     import json
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026,9,18,21,0,tzinfo=ZoneInfo('Asia/Seoul')).astimezone(tz)
+    monkeypatch.setattr(resource,'datetime',FrozenDatetime)
     from src.tests.test_scanner_lookup_attention_tuning import _passing_rows
     tuning = integrated_fixture(monkeypatch)
     rows, inputs = execution_population([("2026-09-14",0),("2026-09-14",2),("2026-09-16",0)])
@@ -779,7 +790,7 @@ def test_ready_native_proof_publication_source_date_preopen_and_scanner_bonus(mo
     monkeypatch.setattr(tuning,"join_completed_outcomes",lambda *args,**kwargs: (outcomes,{}))
     learning = resource.integrated_selection_evaluation(date(2026,9,18),{},migration={"resource_pair_rows":rows})
     assert learning["status"] == "forward_holdout_armed"
-    assert learning["independent_holdout"]["learning_cutoff"] >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    assert learning["independent_holdout"]["learning_cutoff"] == '2026-09-18'
     assert resource.integrated_selection_evaluation(date(2026,9,18),{},predecessor=learning,
         migration={"resource_pair_rows":rows}) is learning
     future, values = execution_population([("2026-09-21",0),("2026-09-21",2),("2026-09-22",0)])
@@ -961,3 +972,27 @@ def test_supported_sor_scope_and_unselected_ai_are_separate_contracts():
     # SOR is not permission to change the original observation venue.
     inputs[next(iter(inputs))]["row"]["effective_venue"] = "NXT"
     assert resource.selection_execution_book(rows, inputs)["paired_delta_ev_pct"] is None
+
+
+def test_native_source_gap_remains_visible_in_summary_and_late_capture(monkeypatch, tmp_path):
+    from src.engine import runtime_approval_summary as summary
+    from src.engine.scalping import scanner_lookup_attention_resource as resource
+    section=dict(target_date='2026-10-12',status='source_gap',selection_disposition='source_gap',
+        primary_economics=dict(status='source_gap',paired_ev_krw=None),
+        source_quality=dict(status='gap'),official_symbol_master=dict(status='pass'),
+        first_blocker='partition_member_missing',source_gap_owner='scanner_selection_pair_source')
+    section['artifact_sha256']=resource.canonical_sha256(section)
+    projection=resource.summary_projection(section)
+    assert projection['status']=='source_gap'
+    assert projection['primary_economics']['paired_ev_krw'] is None
+    assert projection['source_section_sha256']==section['artifact_sha256']
+    assert projection['allowed_runtime_apply'] is False
+    monkeypatch.setattr(summary,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(summary,'_owner_requirements',lambda _:({},{}))
+    path=summary._paths('2026-10-12')['ws_freshness'];path.parent.mkdir(parents=True)
+    import json
+    path.write_text(json.dumps(dict(target_date='2026-10-12',lookup_attention_generation=projection)))
+    result=summary.build_runtime_approval_summary('2026-10-12',include_swing=False,include_producer_gap=False)
+    assert result['sources']['ws_freshness']['lookup_attention_generation']['status']=='source_gap'
+    section['first_blocker']='changed_without_reseal'
+    assert resource.summary_projection(section)['status']=='unobservable'

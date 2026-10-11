@@ -2,7 +2,7 @@ import json
 from dataclasses import replace
 from datetime import datetime
 
-from src.engine import lifecycle_decision_matrix_runtime as mod
+from src.engine.lifecycle import neutral_decision_context as mod
 
 
 def _write_policy(

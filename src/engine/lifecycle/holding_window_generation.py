@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import json
 import io
+from functools import lru_cache
 from pathlib import Path
 
 from .broker_cost_reconciliation import digest, source_generation
@@ -41,6 +42,32 @@ def byte_generation(path):
     if source_stat(path.stat()) != source_stat(before) or size != before.st_size:
         raise ValueError('window_dependency_changed_during_read')
     return {'path': path.name, 'size': size, 'sha256': sha.hexdigest()}
+
+
+@lru_cache(maxsize=128)
+def _code_file_generation(name, stat):
+    path = Path(name)
+    value = byte_generation(path)['sha256']
+    if source_stat(path.stat()) != stat:
+        raise ValueError('code_generation_changed_during_read')
+    return value
+
+
+@lru_cache(maxsize=16)
+def _code_generation(signature):
+    return tuple((name, _code_file_generation(name, stat)) for name, stat in signature)
+
+
+def cached_code_generation(paths):
+    """Bounded code-only cache; source/cost receipts remain independently read."""
+    paths = tuple(Path(path) for path in paths)
+    if any(p.is_symlink() or any(parent.is_symlink() for parent in p.parents) for p in paths):
+        raise ValueError('code_generation_path_invalid')
+    signature = tuple((str(p), source_stat(p.stat())) for p in paths)
+    value = dict(_code_generation(signature))
+    if signature != tuple((str(p), source_stat(p.stat())) for p in paths):
+        raise ValueError('code_generation_changed_during_read')
+    return value
 
 
 def seal_dependency_receipt(sidecar, payload):

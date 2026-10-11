@@ -26,7 +26,7 @@ from src.engine.ai.postclose_structured_review_provider import (
     _extract_openai_response_text,
     _load_threshold_ai_openai_keys,
 )
-from src.engine.runtime_apply_bridge import (
+from src.engine.lifecycle.archive.runtime_apply_bridge_readers import (
     GREENFIELD_REAL_ENV_FAMILY,
     validate_greenfield_policy_file,
 )

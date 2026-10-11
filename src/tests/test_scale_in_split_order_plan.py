@@ -1960,7 +1960,7 @@ def test_daily_partition_cannot_supply_another_source_date(monkeypatch, tmp_path
 
 
 def test_unattributed_split_provenance_has_source_only_workorder():
-    from src.engine.build_code_improvement_workorder import (
+    from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import (
         _scale_in_split_order_plan_followup_orders,
     )
 

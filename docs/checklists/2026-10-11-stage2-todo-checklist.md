@@ -2,7 +2,7 @@
 
 ## 오늘 목표
 
-- 완료된 수량 배포 인계를 보존하고 의미적 감시기·Main 손절 구현과 반복 리뷰를 진행한다.
+- 완료된 수량 배포 인계를 보존하며 의미적 감시기·Main 손절과 장후 정책 생성 구조의 보완·리뷰를 진행한다.
 
 ## 오늘 강제 규칙
 
@@ -12,6 +12,17 @@
 - Project/Calendar 동기화는 실행하지 않고 print-only parser로 현행 owner를 검증한다.
 
 ## 실행 항목
+
+- [ ] `[PostcloseStructuralPolicyCompletion1011] 장후 정책 생성 구조 보완·퇴역 잔재 정리` (`Due: 2026-10-12`, `Slot: IMPLEMENTATION`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [상세 보완계획 P0–P9](../proposals/postclose-policy-generation-structural-completion-and-retirement-remediation-plan-2026-10-11.md), [10/11 전수 감사](../audits/postclose-structural-policy-and-retired-code-audit-2026-10-11.md).
+  - 현재 범위: 사용자의 계획 실행·반복 코드리뷰 요청에 따라 P1–P8 작업트리 구현과 영향 검증을 수행한다. [구현 검토](../audits/postclose-structural-policy-completion-implementation-review-2026-10-11.md)에 원천·계산·소비자·퇴역 이전·리뷰 보완 근거를 기록한다. P9의 전체 결합 성능·불변 release/native 운영 인계는 OPEN이다. 위 일정은 체크리스트 슬롯이며 cron·자동 실행을 설치하지 않는다.
+  - 소유: rising-missed 수량·자본 모델, WS/공통 원천 지원, 퇴역 고립 코드·공통 helper 이전 및 교차 수용만 담당한다. cancel-wait/보조/entry-split의 10/12 `DirectFamilySourceRepair*`, 현행 `MainStopLossRetirementRuntimeTuning1010`·`SemanticMonitorLatestReleaseRepair1010`, 자연 수용 `DirectFamilyPreopenPolicyHandoff`를 중복 인수하지 않는다.
+  - 수용: 완전 원천의 후보 생성→선정→발행→reader 양성 경로와 missing/stale/권한 음성 회귀, 역사/현재 custody·실제/CF·정산/비교 상태 분리, 퇴역 caller migration, 영향 기능/성능·불변 release/native 인계 증거를 각 owner와 대사한다. 원천 NULL을 0으로 바꾸거나 보조 0-PASS 비교 규칙·예산을 완화하지 않는다.
+  - 경계: Main/manual 수탁·hard safety·기존 trailing/delay/수량·등록 정책을 보존한다. ADD vote/퇴역 PYRAMID/MFE 보호선·episode/widget 실행을 복원하지 않는다. 봉인된 10/12 checklist/PREOPEN은 이번 구현에서 보존하며 정식 인계는 기존 native CAS/승인 범위를 따른다. 이번 검증에서 배포·재기동·실계좌/provider/주문 호출을 실행하지 않는다.
+  - 구현 검증: 취소의 역사/현재 custody 분리, TP1 실제 수량·자본·원 allocation/executable ask와 통합시장 축, auxiliary 원천/transport 정산, 숫자 EXIT/v2 parent carry, 공통 원 ledger 메모리 재생, native capability·semantic/intake, 퇴역 writer/주문 helper를 보완했다. 58모듈 2,109 passed·마지막 producer-hash 영향 379 passed(중복)·별도 strict 소비자 62 passed, 검토 범위의 미해결 코드 finding 0. compile/shell/diff·print-only parser와 보호된 release/PREOPEN/수량/delay 참조를 검증했다. 제한된 benchmark는 전체 runtime/P9 수용을 대신하지 않는다.
+  - 추가 재리뷰: EXIT 원 투표·요청 bytes의 frozen source 결합, 파싱 불가 원천 census, 계약 타입 오류, 완료 metadata 중복/충돌, 입력 해석 코드 hash를 보완했다. 15모듈 364 passed(앞선 검증과 중복)와 native assembly→선정·정정 차단을 확인했다. [구현 검토 §3·§5](../audits/postclose-structural-policy-completion-implementation-review-2026-10-11.md)에 기록했으며 전체 성능·정식 운영 인계는 계속 OPEN이다.
+  - 후속 승인 배포 완료: [구현 검토 §7–§8](../audits/postclose-structural-policy-completion-implementation-review-2026-10-11.md). 영향 성능·불변625개 회귀 후 실제 구형15cell/현재12cell hash 호환 결함을 발견해 첫 CAS rollback·구 PREOPEN PASS로 복구했다. 수정 workspace203·불변본203개 회귀를 통과하고 `main-postclose-structural-20261011-v2` / `5106ddaef` 배포·선택, native finalization15:58:07 DONE·target10/12 PREOPEN 전체 계약PASS·필수cron8 경로PASS를 확인했다. 기존 정책값을 유지했으며 인증 기동/PID 격리 회귀6개도 통과했다. 원천10/8 일봉3종목 결손과10/9 인증 로그 경고는 별도 기록했다. 10/12 07:35 PREOPEN·07:55 Main의 실제 소비는 기존 `DirectFamilyPreopenPolicyHandoff`가 수용하며 전체 숫자 EXIT 실험·자연 수용은 OPEN이다.
+  - 계획 리뷰: 2차례 PR1–PR12로 현재 custody 독립 증명, rising 실제 지원 축·차단 시점 원천, 비용/자본·holdout 누출, ADD cell/POST_ADD·vote window/실험 계약, source 제외/transport 정산, 퇴역 intake·caller와 A–F 독립 수용을 보완했다. 최종 문서 검증은 계획 §15에 기록한다. 계획 검증은 코드·자연 정책·경제 개선의 완료 근거가 아니다.
 
 - [x] `[InitialQuantityProducerConsumerRepair1010] 최초 매수 수량 런타임·장후 생산자/소비자 결손 보완` (`Due: 2026-10-11`, `Slot: IMPLEMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - 재개 10/11: 새 코드리뷰에서 정확 시도별 capture queue/clock 결손의 후보 소비 누락과 캐시 읽기 상한/전이 reader 해시 결손을 확인했다. 이전 승인·완료 근거를 보존하고 이 신규 결함만 보완·재검증 후 successor 배포/10/12 PREOPEN을 갱신한다.

@@ -1,30 +1,34 @@
-"""Runtime resolver for lifecycle decision matrix policies."""
+"""Historical read-only helpers; no active policy publisher or CLI.
+
+Only existing forensic consumers retain these calculations. Live callers use
+their native role owners and permanent retirement fences.
+"""
 
 from __future__ import annotations
 
+
 import json
-import re
+
+
 from datetime import date, datetime, timedelta
+
+
 from pathlib import Path
+
+
 from typing import Any
+
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
-MATRIX_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
-MATRIX_FILE_RE = re.compile(r"lifecycle_decision_matrix_(\d{4}-\d{2}-\d{2})\.json$")
+
 PANIC_SELL_DEFENSE_DIR = DATA_DIR / "report" / "panic_sell_defense"
+
+
 MARKET_PANIC_BREADTH_DIR = DATA_DIR / "report" / "market_panic_breadth"
 
+
 _PROMOTE_COUNTER: dict[str, int] = {}
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -34,50 +38,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
-
-
-def _truthy(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-    return bool(value)
-
-
-def _session_cutoff_source_date(now: datetime) -> date:
-    if now.hour >= 16:
-        return now.date()
-    return now.date() - timedelta(days=1)
-
-
-def _latest_matrix_path_on_or_before(target_date: date) -> Path | None:
-    explicit = str(
-        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_POLICY_FILE", "") or ""
-    ).strip()
-    if explicit:
-        path = Path(explicit)
-        if path.exists():
-            return path
-    best_date: date | None = None
-    best_path: Path | None = None
-    if not MATRIX_DIR.exists():
-        return None
-    for path in MATRIX_DIR.glob("lifecycle_decision_matrix_*.json"):
-        match = MATRIX_FILE_RE.match(path.name)
-        if not match:
-            continue
-        try:
-            current_date = date.fromisoformat(match.group(1))
-        except ValueError:
-            continue
-        if current_date > target_date:
-            continue
-        if best_date is None or current_date > best_date:
-            best_date = current_date
-            best_path = path
-    return best_path
 
 
 def _read_payload(path: Path | None) -> dict[str, Any]:
@@ -367,54 +327,6 @@ def resolve_panic_risk_regime_context(
     }
 
 
-def _policy_for_stage(payload: dict[str, Any], stage: str) -> dict[str, Any]:
-    entries = (
-        payload.get("policy_entries")
-        if isinstance(payload.get("policy_entries"), list)
-        else []
-    )
-    for entry in entries:
-        if isinstance(entry, dict) and str(entry.get("stage") or "") == stage:
-            return entry
-    return {}
-
-
-def _has_hard_safety_veto(context: dict[str, Any]) -> bool:
-    for key in (
-        "hard_safety_veto",
-        "safety_veto",
-        "broker_guard_block",
-        "broker_submit_blocked",
-        "stale_quote_submit_block",
-        "price_freshness_block",
-        "hard_stop",
-        "protect_stop",
-        "emergency_stop",
-        "account_guard_block",
-        "order_guard_block",
-        "cooldown_guard_block",
-        "qty_guard_block",
-    ):
-        if bool(context.get(key)):
-            return True
-    reason = str(
-        context.get("blocked_reason")
-        or context.get("source_quality_block_reason")
-        or ""
-    ).lower()
-    return any(
-        token in reason
-        for token in ("hard_stop", "emergency", "broker", "receipt_missing")
-    )
-
-
-def _counter_key(now: datetime) -> str:
-    version = str(
-        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION", "") or "-"
-    )
-    return f"{now.date().isoformat()}|{version}"
-
-
 def reset_lifecycle_decision_matrix_promote_counter() -> None:
     _PROMOTE_COUNTER.clear()
 
@@ -444,39 +356,6 @@ def resolve_lifecycle_decision(
         "lifecycle_matrix_policy_key_gap_classification": "policy_key_not_applicable_matrix_disabled",
         "risk_regime_context": (context or {}).get("risk_regime_context") or {},
     }
-
-
-def _classify_policy_key_gap(result: dict[str, Any], ctx: dict[str, Any]) -> str:
-    policy_key = str(result.get("lifecycle_matrix_policy_key") or "-")
-    if policy_key != "-":
-        return "policy_key_provided"
-    if result.get("lifecycle_matrix_safety_passthrough"):
-        return "policy_key_not_applicable_hard_safety_passthrough"
-    if not result.get("lifecycle_matrix_enabled"):
-        return "policy_key_not_applicable_matrix_disabled"
-    reason = str(result.get("lifecycle_matrix_runtime_reason") or "")
-    if reason in ("policy_missing", "stage_policy_missing", "disabled"):
-        return "policy_key_not_applicable_matrix_missing"
-    ctx_actual_order = _truthy(ctx.get("actual_order_submitted"))
-    ctx_broker_forbidden = _truthy(ctx.get("broker_order_forbidden"))
-    ctx_sim = ctx.get("simulation_book") or ctx.get("simulation_owner") or False
-    ctx_probe = ctx.get("probe_id") or ctx.get("probe_origin_stage") or False
-    ctx_virtual = _truthy(ctx.get("simulated_order")) or _truthy(
-        ctx.get("virtual_pending")
-    )
-    if (
-        ctx_sim
-        or ctx_probe
-        or ctx_virtual
-        or (ctx_broker_forbidden and not ctx_actual_order)
-    ):
-        return "policy_key_not_required_context_row"
-    if not result.get("lifecycle_matrix_runtime_effect_enabled"):
-        return "policy_key_not_required_effect_disabled"
-    stage = str(result.get("lifecycle_matrix_stage") or "")
-    if stage not in ("entry", "submit", "holding", "scale_in", "exit"):
-        return "policy_key_not_required_non_actionable_stage"
-    return "policy_key_required_missing"
 
 
 def apply_lifecycle_decision_to_payload(

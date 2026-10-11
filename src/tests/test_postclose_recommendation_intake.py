@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +9,7 @@ from src.engine.automation import postclose_recommendation_intake as mod
 from src.engine.automation import postclose_summary_handoff as handoff
 from src.engine.automation import postclose_workorder_contract as contract
 from src.engine.automation.tuning_performance_control_tower import _selected_runtime
-from src.engine.build_code_improvement_workorder import _previous_workorder_lineage
+from src.engine.lifecycle.archive.build_code_improvement_workorder_readers import _previous_workorder_lineage
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
 
 DATE = "2026-09-09"
@@ -445,29 +446,12 @@ def test_direct_tower_reads_summary_and_verifier(tmp_path, monkeypatch):
     assert result["summary"]["common_tuning_search_retired"] is True
 
 
-def test_current_producer_emits_complete_contract_and_render_failure_preserves_prior(
-    tmp_path, monkeypatch
-):
+def test_retired_aggregate_producer_does_not_publish_or_replace_prior(tmp_path,monkeypatch):
     from src.engine import build_code_improvement_workorder as producer
-    monkeypatch.setattr(producer, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "inputs/ev")
-    monkeypatch.setattr(
-        producer, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "output"
-    )
-    monkeypatch.setattr(producer, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
-    write(producer.threshold_ev_report_path(DATE), {"date": DATE})
-    result = producer.build_code_improvement_workorder(DATE, include_swing=False)
-    assert contract.contract_issues(result, DATE) == []
-    assert result["generation_phase"] == "manual_final_direct_family"
-    assert result["semantic_source_hash"] == result["source_hash"]
-    json_path, md_path = producer.code_improvement_workorder_paths(DATE)
-    original = (json_path.read_bytes(), md_path.read_bytes())
-
-    def fail_render(report):
-        raise ValueError("fixture render failure")
-
-    monkeypatch.setattr(
-        producer, "render_code_improvement_workorder_markdown", fail_render
-    )
-    with pytest.raises(ValueError, match="fixture render"):
-        producer.build_code_improvement_workorder(DATE, include_swing=False)
-    assert (json_path.read_bytes(), md_path.read_bytes()) == original
+    def forbidden(*args,**kwargs):raise AssertionError("retired aggregate performed I/O")
+    monkeypatch.setattr(Path,"read_text",forbidden)
+    monkeypatch.setattr(Path,"write_text",forbidden)
+    result=producer.build_code_improvement_workorder("2026-10-12",include_swing=False)
+    assert result["status"]=="retired"
+    assert result["allowed_runtime_apply"] is False
+    assert "code_improvement_workorder" not in mod.active_source_labels("2026-10-12")

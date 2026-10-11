@@ -273,7 +273,8 @@ def _implementation():
     root=Path(__file__).resolve().parents[3]
     paths=(Path(__file__).resolve(),root/'src/engine/scalping/entry_cancel_wait_runtime.py',
         root/'src/engine/scalping/entry_split_order_plan.py',root/'src/engine/scalping/strategy_owner_replay.py',
-        root/'src/engine/pipeline_event_summary.py',root/'src/utils/pipeline_event_logger.py')
+        root/'src/engine/pipeline_event_summary.py',root/'src/utils/pipeline_event_logger.py',
+        root/'src/engine/scalping/main_custody_checkpoint.py')
     return {str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
@@ -906,9 +907,7 @@ def _reconcile_history(target_date, events, registry, parents, outcomes, source,
     custody = {}
     unresolved = _unresolved_prior_custody(target_date, registry, parents, outcomes, details=custody)
     registry_valid = source['registry'].get('status') == 'verified'
-    predecessor_gap = (source.get('predecessor', {}).get('status') == 'source_gap'
-                       or (predecessor.get('submission_reconciliation') or {}).get(
-                           'predecessor_source_gap') is True)
+    predecessor_gap = source.get('predecessor', {}).get('status') == 'source_gap'
     coverage = registry_valid and not missing and not predecessor_gap and not unknown
     status = ('source_gap' if not coverage else 'waiting_outcome' if unresolved else 'verified_empty')
     history = dict(contract_version=RECONCILIATION_VERSION, history_scope_start=floor,
@@ -1053,6 +1052,15 @@ def _replay_parents(parents, outcomes, events, model):
     return rows,models,bindings
 
 
+def _economic_research(rows, model, counts, by_date, consumed_holdouts=()):
+    """Only complete identified dates enter the existing economic selector."""
+    from src.engine.scalping.entry_cancel_wait_runtime import evaluate_economic_search
+    eligible={d for d,r in by_date.items() if r.get('coverage_verified') is True
+              and not r.get('unclassified_identities')}
+    return evaluate_economic_search([r for r in rows if r['source_date'] in eligible],model,
+        {d:n for d,n in counts.items() if d in eligible},consumed_holdouts=consumed_holdouts)
+
+
 def build_report(target_date: str) -> dict[str, Any]:
     if date.fromisoformat(target_date).isoformat()!=target_date or target_date<'2026-06-05':raise ValueError('clean_source_date_required')
     if target_date < EXECUTABLE_EVIDENCE_DATE:return _build_legacy_report(target_date)
@@ -1136,8 +1144,32 @@ def build_report(target_date: str) -> dict[str, Any]:
                   and source['projection'].get('status') == 'ready'
                   and source['registry'].get('status') == 'verified'
                   and source['source_quality'].get('tuning_input_allowed') is True)
+    from src.engine.scalping import main_custody_checkpoint as custody_source
+    checkpoint_path=DATA_DIR/'runtime/main_custody_checkpoints'/f'{target_date}.json'
+    try:
+        if checkpoint_path.is_symlink() or checkpoint_path.stat().st_size>2*1024*1024:
+            raise ValueError('custody_checkpoint_path_invalid')
+        checkpoint=json.loads(checkpoint_path.read_text())
+        checkpoint_path=checkpoint_path.with_name(f'{target_date}.{checkpoint["sha256"]}.json')
+        if checkpoint_path.is_symlink() or json.loads(checkpoint_path.read_text())!=checkpoint:
+            raise ValueError("custody_checkpoint_immutable_generation_missing")
+        current_custody=custody_source.view(checkpoint,registry,ledger['by_date'],day=target_date,
+            current_generation=custody_source.journal_generation(DATA_DIR/'runtime/order_owner_registry.jsonl'))
+    except (OSError,ValueError,TypeError):
+        checkpoint=None;current_custody=dict(status='unknown',known_open_count=None,
+            blocker='verified_current_custody_checkpoint_missing')
+    eligible_dates={d for d,row in ledger['by_date'].items()
+        if row['coverage_verified'] and not row['unclassified_identities']}
+    economic_parents=[p for p in parents if p['source_date'] in eligible_dates]
+    economic_population=dict(schema='entry_cancel_wait_economic_population_v2',
+        eligible_dates=sorted(eligible_dates),
+        excluded_dates=[dict(source_date=d,reason=row['blocker']) for d,row in ledger['by_date'].items()
+                        if d not in eligible_dates],
+        parent_identities=sorted(p['parent_id'] for p in economic_parents),
+        custody_checkpoint=checkpoint,custody_checkpoint_path=str(checkpoint_path) if checkpoint else None,current_custody=current_custody)
     # Do not retain old raw reads or silently treat unavailable windows as zero.
-    identity=entry_operating_model_identity();model=_fit_model(predecessor.get('model_rows',[]),identity)
+    identity=entry_operating_model_identity();model=_fit_model(
+        [row for row in predecessor.get('model_rows',[]) if row.get('source_date') in eligible_dates],identity)
     from src.engine.scalping import native_packet_validation as micro
     native_generation={d:micro._source_generation_contract({},extra_paths=[
         micro.OBSERVATION_ROOT/f'trade_date={d}',micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
@@ -1147,7 +1179,7 @@ def build_report(target_date: str) -> dict[str, Any]:
     preflight=_digest(dict(source=source,native=native_generation,historical_quality={d:entry._source_quality_summary(d) for d in native_generation},
         previous=previous,incumbent_source=incumbent_source,predecessor=predecessor.get('sha256'),model=identity,
         implementation=_implementation(),selection=SELECTION_RULE,
-        reconciliation=ledger,historical_reconciliation=history))
+        reconciliation=ledger,historical_reconciliation=history,economic_population=economic_population))
     current_path=report_paths(target_date)[0];receipt_path=current_path.with_suffix('.reuse-contract.json')
     if current_path.is_file() and receipt_path.is_file() and not current_path.is_symlink():
         cached=json.loads(current_path.read_text());receipt=json.loads(receipt_path.read_text())
@@ -1160,37 +1192,42 @@ def build_report(target_date: str) -> dict[str, Any]:
             and not validated_reconciliation_view(cached).get('findings')):
             return cached
     rows=[];model_rows=[];native={}
-    if parents and source['projection'].get('status')=='ready':
+    if economic_parents:
         try:
-            rows,model_rows,native=_replay_parents(parents,outcomes,events,model)
+            rows,model_rows,native=_replay_parents(economic_parents,outcomes,events,model)
             fitted=_fit_model(model_rows,identity)
             if fitted!=model:
                 model=fitted
-                if model.get('validated'):rows,model_rows,native=_replay_parents(parents,outcomes,events,model)
+                if model.get('validated'):rows,model_rows,native=_replay_parents(economic_parents,outcomes,events,model)
         except (OSError,ValueError,KeyError,TypeError) as exc:
             state='source_gap';blocker='cancel_wait_replay_source:'+str(exc)
     economic_counts={day:sum(p['source_date']==day and p.get('economic_eligible',True)
-        for p in parents) for day in counts}
-    evaluation=evaluate_economic_search(rows,model,economic_counts,consumed_holdouts=predecessor.get('consumed_holdouts',[])) if rows and not unclassified else dict(status=state,selected=None,paired_count=0,consumed_holdouts=predecessor.get('consumed_holdouts',[]))
+        for p in economic_parents) for day in counts if day in eligible_dates}
+    evaluation=_economic_research(rows,model,economic_counts,ledger['by_date'],predecessor.get('consumed_holdouts',[])) if rows else dict(status=state,selected=None,paired_count=0,consumed_holdouts=predecessor.get('consumed_holdouts',[]))
+    research_evaluation=json.loads(json.dumps(evaluation))
     if state=='source_gap' or unclassified:evaluation.update(status='source_gap',selected=None,blocker=blocker)
-    elif counts.get(target_date)==0:evaluation.update(status='no_submitted_orders',selected=None)
+    elif counts.get(target_date)==0 and evaluation.get('status')!='economic_improvement_validated':
+        evaluation.update(status='no_submitted_orders',selected=None)
     state=evaluation['status'];selected=evaluation.get('selected');ready=state=='economic_improvement_validated'
     for key in ('incumbent_ev_pct','candidate_ev_pct','delta_ev_pct','mean_day_delta_krw',
                 'delta_ev_lower_bound_pct','day_delta_lower_bound_krw'):
         evaluation.setdefault(key,None)
-    if daily_zero or history['status'] != 'verified_empty':
+    if (daily_zero and not ready) or (history['status'] != 'verified_empty' and current_custody['status']!='verified_empty'):
         evaluation.update({key:None for key in ('incumbent_ev_pct','candidate_ev_pct',
             'delta_ev_pct','mean_day_delta_krw','delta_ev_lower_bound_pct','day_delta_lower_bound_krw')})
     unresolved=_unresolved_prior_custody(target_date,registry,parents,outcomes)
-    if history['status']=='source_gap':
+    if history['status']=='source_gap' and current_custody['status']!='verified_empty':
         state='source_gap';ready=False;blocker=history['blocker']
         evaluation.update(status=state,selected=None,blocker=blocker)
-    elif unresolved:
+    elif unresolved and current_custody['status']!='verified_empty':
         state='waiting_outcome';ready=False;blocker='prior_custody_or_completed_cost_unresolved'
         evaluation.update(status=state,selected=None,blocker=blocker)
     elif state=='model_unvalidated' and any(not c['terminal_reconciled'] for p in parents
         if p.get('economic_eligible',True) for c in p['children'].values()):
         state='waiting_outcome';evaluation.update(status=state,blocker='actual_order_terminal_reconciliation_pending')
+    if ready and current_custody['status']!='verified_empty':
+        ready=False;state='apply_blocked';blocker=current_custody['blocker']
+        evaluation.update(status=state,selected=None,blocker=blocker)
     scopes=list(incumbent_source.get('previous_scope_overrides') or [])
     if ready:
         scopes=[s for s in scopes if s['scope']!=selected['scope']]+[dict(scope=selected['scope'],timeout_sec=selected['timeout_sec'],
@@ -1228,6 +1265,7 @@ def build_report(target_date: str) -> dict[str, Any]:
             unresolved_prior_custody_count=history['unresolved_prior_custody_count'],
             zero_is_verified=daily_zero),
         historical_reconciliation=history,
+        economic_population=economic_population,research_economic_evaluation=research_evaluation,
         evidence_summary=dict(state=state,registered_count=len(parents),completed_candidate_count=evaluation.get('paired_count',0),
             daily_state='no_submitted_orders' if daily_zero else
                 'source_gap' if counts.get(target_date) is None else 'submitted_orders_observed',
@@ -1240,6 +1278,10 @@ def build_report(target_date: str) -> dict[str, Any]:
         scope_overrides=scopes)
     body['input_fingerprint']=_digest(dict(source=source,previous=previous,incumbent_source=incumbent_source,predecessor=predecessor.get('sha256'),model=identity,
         implementation=_implementation(),selection=SELECTION_RULE,reconciliation=ledger))
+    from src.engine.monitoring.policy_generation_contract import native
+    body['policy_generation']=native(body,family='entry_cancel_wait',day=target_date,data_root=DATA_DIR,
+        source_state='eligible_population_partitioned',comparison_state=research_evaluation['status'],
+        handoff_state='pending_publication' if ready else 'incumbent_carried')
     body['proof_sha256']=_digest({k:v for k,v in body.items() if k not in ('generated_at','proof_sha256')})
     return body
 
@@ -1344,6 +1386,9 @@ def _reconciliation_metadata_generation(data_root, by_date):
     for day, row in sorted(by_date.items()):
         if row['coverage_verified']:
             paths.extend(producer_summary_paths(Path(data_root)/'pipeline_event_summaries',day))
+    for d in by_date:
+        checkpoint=Path(data_root)/'runtime/main_custody_checkpoints'/f'{d}.json'
+        if checkpoint.exists() or checkpoint.is_symlink():paths.append(checkpoint)
     generation = []
     for path in paths:
         stat = path.lstat()
@@ -1483,12 +1528,14 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             or payload['evidence_summary'].get('threshold_change_supported') is not payload['economic_tuning_input_allowed']
             or payload['evidence_summary'].get('carry_forward_applied') is not (not payload['economic_tuning_input_allowed'])):
             findings.append('cancel_wait_evidence_projection_invalid')
-        if not coverage and (payload.get('economic_tuning_input_allowed') is not False
+        split_population=payload.get('economic_population')
+        independent_custody=isinstance(split_population,dict) and split_population.get('schema')=='entry_cancel_wait_economic_population_v2' and (split_population.get('current_custody') or {}).get('status')=='verified_empty'
+        if not coverage and not independent_custody and (payload.get('economic_tuning_input_allowed') is not False
             or economic.get('status') != 'source_gap' or economic.get('selected') is not None):
             findings.append('cancel_wait_history_gap_erased')
         if payload.get('economic_tuning_input_allowed') is True and not _candidate_evidence_valid(payload):
             findings.append('cancel_wait_selected_without_economic_evidence')
-        if unresolved and payload.get('economic_tuning_input_allowed') is not False:
+        if unresolved and not independent_custody and payload.get('economic_tuning_input_allowed') is not False:
             findings.append('cancel_wait_unresolved_custody_promoted')
         if zero and (payload.get('economic_tuning_input_allowed') is not False
             or economic.get('selected') is not None or any(economic.get(key) is not None for key in (
@@ -1512,6 +1559,13 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                 or policy.get('scope_overrides') != payload.get('scope_overrides')
                 or policy.get('disposition') != ('validated_scope_candidate' if allowed else 'incumbent_preserved')):
                 findings.append('cancel_wait_policy_binding_invalid')
+        if isinstance(split_population,dict):
+            eligible=sorted(d for d,r in by_date.items() if r['coverage_verified'] and not r['unclassified_identities'])
+            expected=sorted(p['parent_id'] for p in state['parents'] if p['source_date'] in eligible)
+            if (split_population.get('schema')!='entry_cancel_wait_economic_population_v2'
+                or split_population.get('eligible_dates')!=eligible or split_population.get('parent_identities')!=expected
+                or payload.get('economic_tuning_input_allowed') is True and not independent_custody):
+                findings.append('cancel_wait_economic_population_or_current_custody_invalid')
         cache_key = None
         if data_root is not None:
             generation = _reconciliation_metadata_generation(data_root,by_date)
@@ -1537,6 +1591,14 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                     findings.append('cancel_wait_history_source_binding_missing')
                 if reader(path)[0] != manifest:
                     raise ValueError('semantic_generation_changed_during_read')
+            if isinstance(split_population,dict) and split_population.get('custody_checkpoint') is not None:
+                directory=Path(data_root)/'runtime/main_custody_checkpoints'
+                path=Path(split_population.get('custody_checkpoint_path') or '')
+                expected=directory/f"{day}.{split_population['custody_checkpoint']['sha256']}.json"
+                if path!=expected:raise ValueError('cancel_wait_custody_checkpoint_native_path_invalid')
+                native_checkpoint,_=reader(path)
+                if native_checkpoint!=split_population['custody_checkpoint']:
+                    findings.append('cancel_wait_stale_custody_checkpoint')
             # An unrelated append does not invalidate a verified ancestor tail.
             from src.trading.order.owner_custody_registry import OrderOwnerRegistry
             path = Path(data_root)/'runtime/order_owner_registry.jsonl'
@@ -1547,8 +1609,17 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             after = path.stat()
             if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
                 raise ValueError('semantic_generation_changed_during_read')
+            report_tail=payload['source_contract']['registry'].get('tail_hash')
+            hashes=[e.get('event_hash') for e in registry]
+            ancestor=registry[:hashes.index(report_tail)+1] if report_tail in hashes else []
+            if isinstance(split_population,dict) and split_population.get('custody_checkpoint') is not None:
+                from src.engine.scalping import main_custody_checkpoint as custody_source
+                verified=custody_source.view(split_population['custody_checkpoint'],ancestor,by_date,day=day,
+                    current_generation=custody_source.journal_generation(path))
+                if verified!=split_population.get('current_custody'):
+                    findings.append('cancel_wait_current_custody_not_reconciled')
             expected_unresolved = sorted(_digest(key) for key in _unresolved_prior_custody(
-                day, registry, state['parents'], state['actual_outcomes']))
+                day, ancestor, state['parents'], state['actual_outcomes']))
             if expected_unresolved != unresolved:
                 findings.append('cancel_wait_false_historical_zero')
             tail = payload['source_contract']['registry'].get('tail_hash')
@@ -1567,6 +1638,9 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             historical_zero_is_verified=coverage and not unresolved, unresolved_prior_custody_count=total,
             unclassified_submission_count=len(unknown), known_unresolved_custody_count=len(unresolved),
             **(ledger.get('custody_counts') or {}),
+            economic_population_status=('eligible_population_partitioned' if isinstance(split_population,dict) else 'legacy_coupled'),
+            research_evaluation_status=(payload.get('research_economic_evaluation') or {}).get('status'),
+            current_custody=(split_population or {}).get('current_custody'),
             missing_dates=missing, evaluation_status=payload['evidence_summary']['state'],
             economic_tuning_input_allowed=payload['economic_tuning_input_allowed'])
         if cache_key is not None and not findings:

@@ -25,7 +25,7 @@ def candidates(parent):
     return result
 
 
-def replay(rows, values, *, vote_reader=None):
+def replay(rows, values, *, vote_reader=None, post_add_generation=False):
     """First crossing on actual supplied receipts, bounded memory per position.
 
     A changed exit is a modeled full-depth alternative, never an actual fill.
@@ -52,6 +52,8 @@ def replay(rows, values, *, vote_reader=None):
                 or row.get('source_sha256') != digest({k:v for k,v in row.items() if k!='source_sha256'})):
             return dict(result, status='source_gap', reason='quote_or_position_source_invalid')
         current_identity = tuple(row.get(k) for k in ('position_key','pin_sha256','role','market','item','route','transport_epoch','quantity','buy_basis_krw','capture_rejected_count'))
+        if post_add_generation:
+            current_identity += ((row.get('post_add_generation') or {}).get('sha256'),)
         try:
             original = StopValues.parse(row['source_stop_values'])
             if digest(asdict(original)) != row.get('parent_values_sha256'):
@@ -72,7 +74,18 @@ def replay(rows, values, *, vote_reader=None):
                 or qty <= 0 or int(qty)!=qty or basis<=0 or buy_cost<0 or not 0<=sell_rate<.05
                 or model['known_at']>at or not model.get('source_sha256')):
             return dict(result,status='source_gap',reason='cost_model_source_missing')
-        if row.get('add_count',0) or row.get('partial_fill') or row.get('other_exit'):
+        if post_add_generation:
+            aggregate=row.get('post_add_generation') or {}
+            if (aggregate.get('schema')!='verified_post_add_generation_v1'
+                or aggregate.get('sha256')!=digest({k:v for k,v in aggregate.items() if k!='sha256'})
+                or aggregate.get('position_key')!=row['position_key']
+                or aggregate.get('quantity')!=qty or aggregate.get('buy_basis_krw')!=basis
+                or aggregate.get('cost_source_sha256')!=model['source_sha256']
+                or not finite(aggregate.get('completed_at')) or aggregate['completed_at']>at
+                or not aggregate.get('add_receipt_sha256') or aggregate.get('pending_add') is not False
+                or aggregate.get('partial_fill') is not False or row.get('pending_add')):
+                return dict(result,status='source_gap',reason='post_add_aggregate_generation_unverified')
+        if (row.get('add_count',0) and not post_add_generation) or row.get('pending_add') or row.get('partial_fill') or row.get('other_exit'):
             return dict(result,reason='alternative_lifecycle_unidentified')
         quote_at = row.get('quote_at')
         if not finite(quote_at) or not 0 <= at - quote_at <= 3:
@@ -91,17 +104,28 @@ def replay(rows, values, *, vote_reader=None):
             # database number alone cannot prove custody/arm/monotonicity for
             # this experiment. Runtime safety still honors the existing line.
             return dict(result,status='source_gap',reason='protect_line_producer_unidentified')
-        if count == 1 and (profit <= values.soft_stop_pct or
+        if count == 1 and not post_add_generation and (profit <= values.soft_stop_pct or
                            (finite(line) and line > 0 and bid <= line)):
             return dict(result, reason='pre_crossing_source_missing')
         worst = min(worst, profit)
         samples, quality = append_sample(samples,at=at,price=bid)
         if quality == 'capacity_censored':return dict(result,reason='sample_capacity_censored')
         decision = soft_decision(values,profit_pct=profit,now=at,touch_at=touch,
-                                 enabled=row.get('grace_enabled',True),after_add=False)
+                                 enabled=row.get('grace_enabled',True),after_add=post_add_generation)
         touch = decision.touch_at
-        if decision.rule == 'soft_recovered': vote_hold = None
+        if decision.rule == 'soft_recovered' and not post_add_generation: vote_hold = None
         rule = decision.rule if decision.disposition=='exit_candidate' else None
+        if post_add_generation and rule != 'scalp_hard_stop_pct':
+            from .holding_vote_exit_models import post_add_failure
+            inputs=row.get('post_add_failure_inputs') or {}
+            if (any(not finite(inputs.get(k)) for k in ('executed_at','floor','eval_sec','tick_acceleration'))
+                or any(type(inputs.get(k)) is not bool for k in ('active','feature_usable','large_sell_print'))
+                or inputs['executed_at']>at or inputs['eval_sec']<=0):
+                return dict(result,status='source_gap',reason='post_add_failure_inputs_missing')
+            rule='reversal_add_post_eval_fail' if inputs['active'] and post_add_failure(
+                profit=profit,floor=inputs['floor'],elapsed=at-inputs['executed_at'],
+                eval_sec=inputs['eval_sec'],feature_usable=inputs['feature_usable'],
+                large_sell_print=inputs['large_sell_print'],tick_acceleration=inputs['tick_acceleration']) else None
         if finite(line) and line>0 and bid<=line:
             confirmed,_ = protect_confirmed(values,samples,now=at,price_line=line,profit_pct=profit,
                                             enabled=row.get('protect_enabled',True))

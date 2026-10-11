@@ -148,6 +148,23 @@ def test_existing_fast_policy_reaches_virtual_exit_without_order_transport():
     assert result["outcomes"]["85"]["exit_price"] == 9500
 
 
+def test_missing_peak_ledger_capture_cannot_become_successful_virtual_exit():
+    observation, frames = exit_fixture()
+    snapshot = observation['policy_snapshot']
+    removed = [name for name in snapshot['files'] if name.endswith('scalp_position_peak_state.json')]
+    assert removed
+    for name in removed:
+        del snapshot['files'][name]
+    observation['exit_policy_version'] = policy.snapshot_version(snapshot)
+    for frame in frames:
+        frame['exit_policy_version'] = observation['exit_policy_version']
+    result = policy.isolated_replay(observation, frames)
+    assert result['blockers'] and all(
+        reason.startswith('unrecorded_file_read:') for reason in result['blockers'].values()
+    ), result
+    assert result.get('state') != 'paired_exit_complete_source_only'
+
+
 def test_virtual_add_receipt_then_actual_exit_preserves_independent_quantities():
     observation, frames = exit_fixture()
     observation["route_replay"]["80"].update(

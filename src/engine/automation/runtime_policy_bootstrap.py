@@ -92,7 +92,7 @@ def _holding_vote_handoff(target_date: str) -> tuple[dict[str, str], dict[str, A
         receipt["reason"] = str(exc)
         return {}, receipt
     receipt.update({
-        "status": "estimated_provisional_verified",
+        "status": ("validated_successor_verified" if bundle.get("selection_mode")=="validated_successor" else "verified_incumbent_carried" if bundle.get("schema")=="holding_path_vote_selected_policy_v2" else "estimated_provisional_verified"),
         "source_date": source_date,
         "source_report_sha256": bundle["source_report_sha256"],
         "bundle_sha256": bundle["bundle_sha256"],

@@ -39,7 +39,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "lifecycle_ai_context.py",
     "lifecycle_bucket_discovery.py",
     "lifecycle_decision_matrix.py",
-    "lifecycle_decision_matrix_runtime.py",
     "log_archive_service.py",
     "macro_briefing_complete.py",
     "market_panic_breadth_collector.py",

@@ -334,8 +334,17 @@ def pin_values(value, position_key):
     return StopValues.parse(value.get("values"))
 
 
+def protect_line_origin(stock):
+    line=stock.get('trailing_stop_price')
+    if not finite(line) or line<=0:return 'not_applicable_no_active_line'
+    if stock.get('manual_control_exclusion_blocked'):return 'manual_existing'
+    if stock.get('pyramid_count') or stock.get('last_add_type')=='PYRAMID':return 'legacy_retired'
+    return 'unverified_existing'
+
+
 def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model, vote_source,
-               automatic_management_allowed=False, runtime_flags=None, decision_profit_pct=None, seal=True):
+               automatic_management_allowed=False, runtime_flags=None, decision_profit_pct=None, seal=True,
+               post_add_vote_source=None, post_add_inputs=None):
     """Project the already supplied holding snapshot; no I/O or new collection."""
     value = stock.get('main_stop_policy_pin') or {}
     from .position_peak_ledger import position_cycle_id
@@ -363,7 +372,11 @@ def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model,
         cost_model=cost_model,holding_ai_required=vote_source is not None,
         holding_vote_source=vote_source,manual=bool(stock.get('manual_control_exclusion_blocked')),
         pending_exit=bool(stock.get('exit_requested')),add_count=stock.get('add_count',0),
-        protect_line=stock.get('trailing_stop_price'),coverage_complete=bool(coverage_complete),
+        pending_add=bool(stock.get('pending_add_qty') or stock.get('pending_add_ord_no') or stock.get('pending_add_ord_nos')),
+        protect_line=stock.get('trailing_stop_price'),protect_line_origin=protect_line_origin(stock),
+        post_add_generation=stock.get('post_add_economic_generation'),
+        post_add_vote_source=post_add_vote_source,post_add_failure_inputs=post_add_inputs,
+        coverage_complete=bool(coverage_complete),
         capture_rejected_count=stock.get('main_stop_source_rejected_count',0),
         partial_fill=bool(stock.get('entry_partial_fill_deferred_notice')))
     flags = runtime_flags or {}
@@ -406,6 +419,8 @@ def defer_source_capture():
 def configure_source_sink(sink):
     global _SOURCE_SINK
     _SOURCE_SINK=sink
+    from .main_custody_checkpoint import configure_sink
+    configure_sink(sink)
 
 
 def _append_source(code,name,record_id,row):
