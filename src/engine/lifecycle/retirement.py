@@ -298,7 +298,7 @@ def retirement_shell_commands(environ: Mapping[str, str] | None = None) -> str:
 
     source = os.environ if environ is None else environ
     retired_keys = sorted(
-        key for key in source if str(key).startswith(RETIRED_ENV_PREFIXES)
+        key for key in source if str(key).startswith(RETIRED_ENV_PREFIXES + RETIRED_STOP_ENV_PREFIXES)
     )
     commands = [f"unset -- {shlex.quote(key)}" for key in retired_keys]
     commands.extend(
@@ -308,8 +308,10 @@ def retirement_shell_commands(environ: Mapping[str, str] | None = None) -> str:
     return "\n".join(commands)
 
 
+RETIRED_STOP_ENV_PREFIXES = ('KORSTOCKSCAN_SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_', 'KORSTOCKSCAN_SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_', 'KORSTOCKSCAN_SCALP_TIME_LIMIT_MIN', 'KORSTOCKSCAN_MIN_PROFIT_PRESERVE', 'KORSTOCKSCAN_SCALP_COMMON_HARD_TIME_STOP_SHADOW_', 'KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_', 'KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE', 'KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_', 'KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_ABSORPTION_', 'KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_', 'KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_')
+
 def without_retired_env(values: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in values.items() if not k.startswith(RETIRED_ENV_PREFIXES)}
+    return {k: v for k, v in values.items() if not k.startswith(RETIRED_ENV_PREFIXES + RETIRED_STOP_ENV_PREFIXES)}
 
 
 def main(argv: list[str] | None = None) -> int:

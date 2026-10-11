@@ -24,7 +24,7 @@ def aggregate(partitions, *, output_root):
             if aliases!=part['candidate_aliases']: raise ValueError('universal_candidate_generation_changed_between_partitions')
             for identity,context in part['population_context'].items():
                 value={'context':context,'outcomes':part['minimal_results'][identity],
-                       'common':identity in part['common_ids']}
+                       'common':identity in part.get('eligible_ids',part['common_ids'])}
                 value=storage.compact_outcomes(output_root,value)
                 storage.put(db,identity,value,content_sha=digest(storage.logical_value(value)))
         if aliases is None: return {'status':'valid_empty','strata':{},'allowed_runtime_apply':False}
@@ -79,17 +79,21 @@ def aggregate(partitions, *, output_root):
                             if amount is None or amount<=0:
                                 raise ValueError('universal_notional_unverified')
                             row,base=json.loads(candidate_body),json.loads(parent_body)
+                            if row['modeled_net_pnl_krw'] is None or base['modeled_net_pnl_krw'] is None: continue
                             reference=max(base['modeled_net_pnl_krw'],row['actual_pnl_krw']) if evidence=='actual_completed' else base['modeled_net_pnl_krw']
                             yield (identity,(row['modeled_net_pnl_krw']-reference)/amount*100,
-                                   [(v-reference)/amount*100 for v in row['slippage_net_pnl_krw']])
-                    count=cohort_ref['count']
-                    mean=math.fsum(v for _,v,_ in deltas())/count if count else None
-                    worst=min((v for _,v,_ in deltas()),default=None)
-                    adverse=storage.write_tree(output_root,(i for i,v,_ in deltas() if v<0))
-                    stress={str(bps):math.fsum(v[n] for _,_,v in deltas())/count if count else None
+                                   [(v-reference)/amount*100 for v in row['slippage_net_pnl_krw']],row['modeled_net_pnl_krw'])
+                    paired=storage.write_tree(output_root,(i for i,_,_,_ in deltas()))
+                    count=paired['count']
+                    mean=math.fsum(v for _,v,_,_ in deltas())/count if count else None
+                    worst=min((v for _,v,_,_ in deltas()),default=None)
+                    adverse=storage.write_tree(output_root,(i for i,v,_,_ in deltas() if v<0))
+                    stress={str(bps):math.fsum(v[n] for _,_,v,_ in deltas())/count if count else None
                             for n,bps in enumerate(SLIPPAGE_BPS)}
                     metrics[name][cohort]={'n':count,'paired_ev_pct':mean,'worst_paired_delta_pct':worst,
-                                           'worsened_ids_ref':adverse,'slippage_ev_pct':stress}
+                                           'worsened_ids_ref':adverse,'paired_ids_ref':paired,
+                                           'large_loss_worsened_ids_ref':storage.write_tree(output_root,(i for i,d,_,p in deltas() if d<0 and p<0)),
+                                           'slippage_ev_pct':stress}
             strata[evidence]={'common_ids_ref':qualified,'train_ids_ref':train,'holdout_ids_ref':held,'purged_ids_ref':purged,
                 'train_days':train_days,'holdout_days':holdout_days,'metrics':metrics,'completion_date_verified':verified,
                 'existing_selector_sample_floor_met':evidence=='actual_completed' and verified and len(days)>=7
@@ -99,6 +103,7 @@ def aggregate(partitions, *, output_root):
         population=storage.write_tree(output_root,(i for i,_,_ in storage.records(db)))
         conflicts=storage.write_tree(output_root,({'identity':i,'reason':'global_population_conflict'}
                                                   for i,_,_ in storage.records(db,conflicts=True)))
-        return {'status':'evaluated' if common['count'] else 'source_gap','common_ids_ref':common,'population_ids_ref':population,
+        return {'status':'evaluated' if common['count'] else 'source_gap','common_ids_ref':common,'eligible_ids_ref':common,
+            'population_algorithm':'candidate_parent_pairs_v2','population_ids_ref':population,
             'conflicts_ref':conflicts,'strata':strata,'storage_schema':'main_trailing_sharded_evaluation_v2',
             'decision_authority':'research_only_existing_selector_review_required','allowed_runtime_apply':False}

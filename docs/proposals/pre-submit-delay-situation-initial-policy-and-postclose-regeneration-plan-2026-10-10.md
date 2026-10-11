@@ -1,5 +1,7 @@
 # Pre-submit delay 상황별 초기정책·장후 재생성 상세 개선계획
 
+최신 수용 정정(10/10 21:27 KST): [정책 생성 구조 재점검](../audits/main-trailing-delay-policy-generation-structural-review-2026-10-10.md)의 DG1–DG4는 미해결이다. 아래 완료는 0초 초기 baseline 발행·분할 처리·검증된 운영 준비의 이력이다. 현행 continuous-reversal 결과의 보조정책 SHA/PASS 형식과 두 anchor 연결, 미검증 native 행의 셀 전체 차단을 수리하지 않으면 정상 가격쌍이 늘어도 양수 지연 정책 생성이 막힌다. **0초 발행을 신규 timing 학습 경로의 전체 구현 완료로 해석하지 않는다.** 희소 horizon의 공통 모집단 소거도 별도 coverage 보완 대상으로 남긴다. 보완 순서·종료 검사는 위 감사와 잔여계획의 최신 상태를 따른다.
+
 작성일: 2026-10-10 KST. 상태: **S0–S6와 잔여 W0–W5의 구현·반복 리뷰·정식 v2 발행·승인 배포·기동 준비를 완료했다.** `PreSubmitDelaySituationImplementation1010`는 완료다. 최종 릴리스는 `main-trailing-delay-residual-20261010-v6` / `78f2c1d784fd5043d5b5bc0fedd7b963f8fe42d4`이며 [실행 감사](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)와 [최종 준비 영수증](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json)을 따른다. 유효 가격쌍 21개로 0초 baseline을 발행했고 적격 양수 cell은 0이다. 10/12 실제 PID 소비와 실현 경제성은 별도 미관측이다. 아래 이전 문서·부분 배포 기록은 당시 이력이다.
 
 후속 승인 배포 이력(10/10, 잔여 구현 전): 검증된 공통 코드와 부모 동등 초기 구성은 `main-trailing-delay-20261010-v1` / `d61b36b00696865ca9dd13a466d8544a886e2e28`로 배포했다. 10/12 PREOPEN 전체 계약·예약경로·최종화 세대는 PASS다. 신규 제출 지연 v2 정책 발행 및 전수 연구/대용량/전체 연구 성능 수용은 OPEN이며 상세 상태는 [후속 리뷰·배포 기록](../audits/main-all-scope-trailing-and-pre-submit-delay-implementation-review-2026-10-10.md)을 따른다.

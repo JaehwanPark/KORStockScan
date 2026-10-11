@@ -3527,6 +3527,13 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="source_quality_only",
     ),
+    "main_stop_source": StageContract(
+        required_fields=("main_stop_source", "threshold_family",
+            "actual_order_submitted", "allowed_runtime_apply", "broker_order_forbidden"),
+        decision_authority="source_quality_only",
+    ),
+    # Historical attribution only. The runtime emitter, family collection and
+    # recommendation owner were retired; absence is never a recovery request.
     "soft_stop_whipsaw_confirmation": StageContract(
         required_fields=(
             "threshold_family",
@@ -3536,7 +3543,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "flow_state",
             "exit_rule_candidate",
         ),
-        decision_authority="source_quality_only",
+        decision_authority="historical_diagnostic",
     ),
     "blocked_gatekeeper_reject": StageContract(
         required_fields=("action", "cooldown_policy"),

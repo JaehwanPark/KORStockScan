@@ -294,12 +294,26 @@ def compose(response,policy):
         errors=validate_response(response,inp,complete_source_only=arm==ARMS[-1]) if action=='ENTER_NOW' else []
     verdict=response.get('risk_verdict') if isinstance(response,dict) else None
     passed=action=='ENTER_NOW' and not errors and verdict=='PASS'
+    identity = policy.get('entry_auxiliary_policy_identity')
+    if identity is not None:
+        from src.engine.scalping.reversal_auxiliary_registry import validate_identity
+        try:
+            identity = copy.deepcopy(validate_identity(identity))
+        except (ValueError, TypeError):
+            # Diagnostic identity loss does not acquire a new submit veto.
+            identity = None
     final='BUY' if passed else 'DROP' if action=='BLOCK' or (not errors and verdict=='VETO') else 'WAIT'
     return dict(action=final,action_v2=final,score=0,reason=assessment['reason'] if action!='ENTER_NOW' else 'continuous_reversal_ai_'+str(verdict or 'invalid').lower(),
         entry_primary_decision_owner='mechanistic_entry_adjudicator',entry_ai_role='auxiliary_risk_screen_pass_veto_no_promotion',
         entry_decision_role_contract=dict(MECHANISTIC_PRIMARY_ROLE_CONTRACT),entry_mechanistic_action=action,
         entry_mechanistic_policy_decision=assessment,entry_mechanistic_policy_version=assessment.get('policy_version',kernel.VERSION),
         entry_mechanistic_policy_sha256=assessment.get('machine_component_sha256'),
+        entry_ai_soft_policy_sha256=identity['identity_sha256'] if identity else None,
+        entry_auxiliary_policy_identity=identity,
+        entry_auxiliary_policy_identity_version=identity['schema'] if identity else None,
+        entry_ai_effective_assessment=dict(effective_verdict='PASS' if passed else
+            'VETO' if not errors and verdict=='VETO' else 'INSUFFICIENT',
+            assessment_source='continuous_reversal_validated_screen', contract_valid=not errors),
         entry_ai_raw_risk_verdict=verdict,entry_ai_risk_verdict=verdict,entry_ai_advisory_verdict=verdict,
         entry_ai_risk_codes=response.get('risk_codes',[]) if isinstance(response,dict) else [],
         entry_ai_advisory_contract_valid=not errors,entry_ai_advisory_contract_errors=errors,

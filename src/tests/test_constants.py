@@ -225,13 +225,10 @@ def test_avg_down_market_on_stop_touch_runtime_env_override(monkeypatch):
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED is True
-    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED is False
-    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC == 4
-    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT == 0.25
-    assert (
-        reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT
-        == -5.5
-    )
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT')
 
 
 def test_stop_loss_runtime_env_overrides(monkeypatch):
@@ -254,7 +251,7 @@ def test_stop_loss_runtime_env_overrides(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_STOP == -3.0
     assert reloaded.TRADING_RULES.SCALP_HARD_STOP == -5.0
     assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT == -4.0
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT == -5.6
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT')
     assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_PCT == -1.4
     assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT == -2.4
     assert reloaded.TRADING_RULES.KOSDAQ_STOP == -5.0
@@ -985,13 +982,13 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     assert reloaded.TRADING_RULES.DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED is True
     assert reloaded.TRADING_RULES.ENTRY_PRICE_LIVE_TUNING_SELECTED is True
     assert reloaded.TRADING_RULES.ENTRY_STAGE_LIVE_TUNING_SELECTED is True
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED is True
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC == 20
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC == 45
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC == 90
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE == 65
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT == -2.8
-    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT == 0.30
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT')
     assert reloaded.TRADING_RULES.HOLDING_EXIT_LIVE_TUNING_SELECTED is True
 
 
@@ -1251,7 +1248,7 @@ def test_trading_rules_profit_stagnation_exit_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_SEC == 180
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT == 0.15
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT == 0.10
-    assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE == 45
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_PROFIT_STAGNATION_MIN_AI_SCORE')
     assert reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED is True
     assert (
         reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT
@@ -1392,14 +1389,12 @@ def test_pre_submit_quote_refresh_env_override(monkeypatch):
 def test_trading_rules_runtime_shadow_defaults_are_off(monkeypatch):
     reloaded = importlib.reload(constants)
 
-    assert reloaded.TRADING_RULES.SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY is False
-    assert (
-        reloaded.TRADING_RULES.SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED
-        is False
-    )
-    assert reloaded.TRADING_RULES.SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED is False
-    assert reloaded.TRADING_RULES.SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED is False
-    assert reloaded.TRADING_RULES.SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED is True
+    for key in ('SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY',
+                'SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED',
+                'SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED', 'SCALP_TIME_LIMIT_MIN', 'MIN_PROFIT_PRESERVE'):
+        assert not hasattr(reloaded.TRADING_RULES,key)
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED')
+    assert not hasattr(reloaded.TRADING_RULES, 'SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED')
     assert reloaded.TRADING_RULES.OPENAI_DUAL_PERSONA_SHADOW_MODE is False
 
 

@@ -535,7 +535,7 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["action", "score", "reason"],
     },
-    "holding_path_vote_v10": {
+    "holding_path_vote_v11": {
         "type": "object",
         "properties": {
             "input_snapshot_id": {"type": "string"},
@@ -547,7 +547,6 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                         "path_id": {"type": "string", "enum": [
                             "EXIT_TRAILING_TP", "EXIT_SOFT_STOP",
                             "EXIT_POST_ADD_FAIL",
-                            "EXIT_BAD_ENTRY_REFINED",
                             "ADD_REBOUND",
                         ]},
                         "verdict": {"type": "string", "enum": ["PASS", "VETO"]},

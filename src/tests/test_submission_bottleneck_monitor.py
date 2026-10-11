@@ -2046,3 +2046,24 @@ def test_cancel_wait_intraday_projection_preserves_null_without_duplicate_alert(
     assert cancel['unresolved_prior_custody_count'] is None
     assert cancel['notification_owner'] == 'artifact_freshness'
     assert not any('cancel_wait' in key for key in result['issues'])
+
+
+def test_selected_delay_missing_is_distinct_from_unselected_observation(tmp_path):
+    day='2026-09-29'
+    raw=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl';raw.parent.mkdir()
+    base=dict(event_type='pipeline_event',pipeline='ENTRY_PIPELINE',stock_name='test',
+        emitted_at=day+'T10:00:00',emitted_date=day,stock_code='005930',record_id=1)
+    commit={**base,'stage':'pre_submit_delay_committed','fields':dict(delay_intent_id='one',
+        selected_delay_sec=30,market_session_bucket='krx_regular')}
+    raw.write_text(json.dumps(commit)+'\n')
+    observed=monitor.pre_submit_delay_source_semantics(tmp_path,datetime(2026,9,29,10,4))
+    assert observed['issues']['selected_due_completion_missing']==1
+    commit['fields']['selected_delay_sec']=0
+    raw.write_text(json.dumps(commit)+'\n')
+    observed=monitor.pre_submit_delay_source_semantics(tmp_path,datetime(2026,9,29,10,4))
+    assert not observed['issues'].get('selected_due_completion_missing')
+    commit['fields']['selected_delay_sec']=30
+    terminal={**base,'stage':'pre_submit_delay_intent_terminal','fields':dict(delay_intent_id='one',terminal_reason='deadline_expired')}
+    raw.write_text(json.dumps(commit)+'\n'+json.dumps(terminal)+'\n')
+    observed=monitor.pre_submit_delay_source_semantics(tmp_path,datetime(2026,9,29,10,4))
+    assert not observed['issues'].get('selected_due_completion_missing')

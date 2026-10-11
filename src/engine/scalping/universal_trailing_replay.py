@@ -255,9 +255,10 @@ def completed_sources(trades):
             route=trade.get('entry_quote_route') or first_quote.get('route'),
             item=trade.get('entry_quote_item') or first_quote.get('item'),
             terminal_status=trade.get('status'), actual_cost_reconciliation=trade.get('actual_cost_reconciliation'),
-            operating_ai_required=trade.get('holding_ai_required', True),
+            operating_ai_required=trade.get('holding_ai_required'),
             holding_ai_policy_sha256=trade.get('holding_ai_policy_sha256')))
-        positions[-1].update(entry_context=entry_context, situation_pin=entry_pin,
+        positions[-1].update(holding_vote_source=trade.get('holding_vote_source') or first_quote.get('holding_vote_source'),
+            entry_context=entry_context, situation_pin=entry_pin,
                              completion_at=max(sell_clocks) if sell_clocks else None)
         paths[identity] = events
     return positions, paths
@@ -351,6 +352,9 @@ def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_co
     with tempfile.TemporaryDirectory(prefix='trailing-seen-') as scratch:
         manager = storage.index(scratch) if prepared.pair_stream is not None else nullcontext(None)
         with manager as db:
+            from src.engine.ai.holding_vote_replay_source import PreparedVotes
+            with_votes = PreparedVotes(position.get('holding_vote_replay_ref'), scratch)
+            position = {**position, '_prepared_holding_votes':with_votes}
             memo = [None, None, False]
             def duplicate(ordinal, key):
                 if memo[0] == ordinal:
@@ -386,6 +390,7 @@ def replay_many(position, prepared, vectors, *, typed_policy=None, classifier_co
                     results[name] = _invalid_replay(position,exc)
             finally:
                 for cursor in cursors.values(): cursor.close()
+                with_votes.close()
     return results
 
 
@@ -434,6 +439,8 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
             or not actual.get('receipt_sha256') or not actual.get('raw_sha256')):
             return stop("actual_completed_cost_or_terminal_unverified")
         result["actual_pnl_krw"] = number(actual["exact_pnl_krw"])
+    if 'operating_ai_required' in position and position['operating_ai_required'] is None:
+        return stop('original_holding_ai_mode_unobserved', status='censored')
     remaining, proceeds, allocated_cost, peak, armed = qty, 0.0, buy_cost, basis / qty, False
     crossing, deferred = None, None
     used, last_clock, last_sequence, last_epoch = set(), entry, None, None
@@ -548,8 +555,9 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
         armed = decision.armed
         if crossing is None and decision.triggered:
             crossing = {"at": known, "market": market, "profit": profit,
-                        "policy_values": dict(values), "source_sha256": event["source_sha256"]}
-            if position.get('operating_ai_required'):
+                        "policy_values": dict(values), "source_sha256": event["source_sha256"],
+                        'holding_source':event.get('holding_vote_source')}
+            if position.get('operating_ai_required') and not position.get('holding_vote_replay_ref'):
                 crossing['input_context_sha256'] = holding_ai_context_digest(
                     identity=identity, crossing_at=known, event=event, market=market,
                     values=values, classifier_config=classifier_config, strength=strength,
@@ -559,7 +567,22 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
             result["first_crossing"] = crossing
         if crossing is None:
             continue
-        if position.get("operating_ai_required"):
+        if position.get('operating_ai_required') and position.get('holding_vote_replay_ref'):
+            source = crossing['holding_source']
+            try:
+                vote = position['_prepared_holding_votes'].snapshot(source, crossing['at'],
+                    market=crossing['market'], route=event['route'], epoch=event['transport_epoch'],entry_at=entry)
+            except (ValueError, OSError, TypeError, KeyError):
+                return stop('pre_signal_holding_vote_source_unobserved', status='censored')
+            gate = evaluate_exit_deferral(decision=vote['decision'], now=known,
+                signal_at=crossing['at'], started_at=crossing['at'],
+                anchor_profit=crossing['profit'], profit=profit,
+                max_defer_sec=min(90., vote['max_defer_sec']), max_worsen_pct=.40,
+                same_market=market==crossing['market'])
+            if not gate.proceeds:
+                deferred = gate.reason
+                continue
+        elif position.get("operating_ai_required"):
             vote = event.get("holding_ai") or {}
             if (vote.get("signal_at") != crossing["at"] or vote.get("input_source_sha256") != crossing["source_sha256"]
                 or vote.get('input_context_sha256') != crossing['input_context_sha256']
@@ -692,6 +715,8 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
                     if all(row["modeled_net_pnl_krw"] is not None for row in rows.values()))
     body = {"schema": SCHEMA, "population_ids": sorted(seen), "common_ids": common,
             "excluded_ids": sorted(seen - set(common)), "candidate_aliases": aliases,
+            "eligible_ids": sorted(i for i,r in minimal.items() if r[aliases["incumbent"]]["modeled_net_pnl_krw"] is not None),
+            "population_algorithm": "candidate_parent_pairs_v2",
             "unique_candidate_count": len(vectors), "minimal_results": minimal,
             'population_context':context,
             "status_counts": dict(counters), "runtime_effect": False, "allowed_runtime_apply": False}
@@ -722,7 +747,7 @@ def common_evaluation(partitions):
     strata = {}
     context = {identity:row for part in partitions for identity,row in part['population_context'].items()}
     results = {identity:row for part in partitions for identity,row in part['minimal_results'].items()}
-    common = sorted(identity for part in partitions for identity in part['common_ids'])
+    common = sorted(identity for part in partitions for identity in part.get('eligible_ids',part['common_ids']))
     for evidence in ('actual_completed', 'actual_entry_alternative_exit', 'enter_pass_opportunity_cf'):
         ids = sorted((identity for identity in common if context[identity]['evidence_kind'] == evidence),
                      key=lambda identity:(context[identity]['entry_at'], identity))
@@ -739,11 +764,14 @@ def common_evaluation(partitions):
         metrics = {}
         for name, sha in aliases.items():
             def metric(cohort):
-                values, adverse = [], []
+                values, adverse, loss, paired = [], [], [], []
                 stress = {str(bps):[] for bps in SLIPPAGE_BPS}
                 for identity in cohort:
                     row = results[identity][sha]
                     base = results[identity][aliases['incumbent']]
+                    if row['modeled_net_pnl_krw'] is None or base['modeled_net_pnl_krw'] is None:
+                        continue
+                    paired.append(identity)
                     notional = number(context[identity]['buy_basis_krw'])
                     if notional is None or notional <= 0:
                         raise ValueError('universal_notional_unverified')
@@ -752,9 +780,10 @@ def common_evaluation(partitions):
                     values.append(delta / notional * 100)
                     if delta < 0:
                         adverse.append(identity)
+                        if row['modeled_net_pnl_krw'] < 0: loss.append(identity)
                     for index,bps in enumerate(SLIPPAGE_BPS):
                         stress[str(bps)].append((row['slippage_net_pnl_krw'][index] - reference) / notional * 100)
-                return {'n':len(cohort), 'paired_ev_pct':math.fsum(values)/len(values) if values else None,
+                return {'n':len(paired), 'paired_ids':paired, 'large_loss_worsened_ids':loss, 'paired_ev_pct':math.fsum(values)/len(values) if values else None,
                         'worst_paired_delta_pct':min(values) if values else None,
                         'worsened_ids':adverse, 'slippage_ev_pct':{key:math.fsum(v)/len(v) if v else None for key,v in stress.items()}}
             metrics[name] = {'train':metric(train), 'holdout':metric(holdout)}
@@ -765,7 +794,8 @@ def common_evaluation(partitions):
                            'completion_date_verified':completion_verified,
                            'existing_selector_sample_floor_met':eligible,
                            'candidate_review_required':True, 'allowed_runtime_apply':False}
-    return {'status':'evaluated' if common else 'source_gap', 'common_ids':common, 'strata':strata,
+    return {'status':'evaluated' if common else 'source_gap', 'common_ids':common, 'eligible_ids':common,
+            'population_algorithm':'candidate_parent_pairs_v2', 'strata':strata,
             'decision_authority':'research_only_existing_selector_review_required', 'allowed_runtime_apply':False}
 
 
@@ -788,7 +818,7 @@ def _stream_evaluation_bounded(partitions, retained):
         retained.grow(len(part['population_context']) * 2560
                       + len(part['common_ids']) * len(set(aliases.values())) * 160)
         context.update(part['population_context'])
-        common.update(part['common_ids'])
+        common.update(part.get('eligible_ids',part['common_ids']))
         if len(context) > MAX_POSITIONS:
             raise ValueError('universal_replay_position_budget_exceeded')
     if aliases is None:
@@ -819,7 +849,7 @@ def _aggregate_streamed_evaluation(partitions, aliases, context, common, unique)
             for i in identities:
                 membership[i] = (evidence, cohort)
             for sha in unique:
-                accumulators[evidence,cohort,sha] = {'values':[], 'adverse':[], 'stress':[[],[],[]]}
+                accumulators[evidence,cohort,sha] = {'values':[], 'adverse':[], 'loss':[], 'ids':[], 'stress':[[],[],[]]}
         strata[evidence] = {'common_ids':ids, 'train_ids':train, 'holdout_ids':holdout,
             'purged_ids':purged, 'train_days':train_days, 'holdout_days':holdout_days,
             'completion_date_verified':all(receipt[1] for receipt in day_receipts.values()),
@@ -840,12 +870,15 @@ def _aggregate_streamed_evaluation(partitions, aliases, context, common, unique)
             base = rows[aliases['incumbent']]
             for sha in unique:
                 row = rows[sha]
+                if row['modeled_net_pnl_krw'] is None or base['modeled_net_pnl_krw'] is None: continue
                 reference = max(base['modeled_net_pnl_krw'], row['actual_pnl_krw']) if evidence=='actual_completed' else base['modeled_net_pnl_krw']
                 delta = row['modeled_net_pnl_krw'] - reference
                 acc = accumulators[evidence,cohort,sha]
                 acc['values'].append(delta / notional * 100)
+                acc['ids'].append(identity)
                 if delta < 0:
                     acc['adverse'].append(identity)
+                    if row['modeled_net_pnl_krw'] < 0: acc['loss'].append(identity)
                 for index in range(3):
                     acc['stress'][index].append((row['slippage_net_pnl_krw'][index]-reference)/notional*100)
     for evidence, record in strata.items():
@@ -854,11 +887,12 @@ def _aggregate_streamed_evaluation(partitions, aliases, context, common, unique)
             for cohort in ('train','holdout'):
                 acc = accumulators[evidence,cohort,sha]
                 values = acc['values']
-                record['metrics'][name][cohort] = {'n':len(values),
+                record['metrics'][name][cohort] = {'n':len(values), 'paired_ids':acc['ids'], 'large_loss_worsened_ids':acc['loss'],
                     'paired_ev_pct':math.fsum(values)/len(values) if values else None,
                     'worst_paired_delta_pct':min(values) if values else None,
                     'worsened_ids':sorted(acc['adverse'], key=lambda i:(context[i]['entry_at'], i)),
                     'slippage_ev_pct':{str(bps):math.fsum(v)/len(v) if v else None
                                        for bps,v in zip(SLIPPAGE_BPS,acc['stress'])}}
-    return {'status':'evaluated' if common else 'source_gap', 'common_ids':sorted(common), 'strata':strata,
+    return {'status':'evaluated' if common else 'source_gap', 'common_ids':sorted(common), 'eligible_ids':sorted(common),
+        'population_algorithm':'candidate_parent_pairs_v2', 'strata':strata,
         'decision_authority':'research_only_existing_selector_review_required', 'allowed_runtime_apply':False}

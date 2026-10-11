@@ -1494,36 +1494,6 @@ def _legacy_entry_score_role_gate(stock, ws_data, current_ai_score):
     return gate
 
 
-def _legacy_holding_score_role_context(stock, current_ai_score, *, is_critical_zone):
-    now_ts = time.time()
-    ctx = sniper_state_handlers._holding_score_runtime_context(
-        stock if isinstance(stock, dict) else {},
-        current_ai_score=current_ai_score,
-        now_ts=now_ts,
-        is_critical_zone=is_critical_zone,
-    )
-    if isinstance(stock, dict):
-        stock["legacy_holding_score_role_gate"] = ctx.get(
-            "holding_score_role_gate", "unknown"
-        )
-        stock["legacy_holding_score_negative_exit_usable"] = bool(
-            ctx.get("usable_for_negative_exit", False)
-        )
-        stock["legacy_holding_score_negative_exit_excluded_reason"] = ctx.get(
-            "negative_exit_excluded_reason",
-            "-",
-        )
-        stock["legacy_holding_score_role_source"] = ctx.get("source", "-")
-        stock["legacy_holding_score_role_data_quality"] = ctx.get("data_quality", "-")
-        stock["holding_score_role_gate"] = ctx.get("holding_score_role_gate", "unknown")
-        stock["holding_score_negative_exit_usable"] = bool(
-            ctx.get("usable_for_negative_exit", False)
-        )
-        stock["holding_score_negative_exit_excluded_reason"] = ctx.get(
-            "negative_exit_excluded_reason",
-            "-",
-        )
-    return ctx
 
 
 def check_watching_conditions(
@@ -12117,142 +12087,34 @@ def _restore_holding_runtime_state(targets):
                 stock.setdefault("exit_order_type", None)
                 stock.setdefault("exit_order_time", None)
 
+        if strategy == "SCALPING" and not stock.get("manual_control_exclusion_blocked"):
+            stock["main_stop_restoring_position"] = True
+            try:
+                sniper_state_handlers._main_stop_values(stock, time.time())
+            finally:
+                stock.pop("main_stop_restoring_position", None)
         restored += 1
 
     if restored:
         log_info(f"[BOOT_RESTORE] HOLDING runtime rehydrated count={restored}")
 
 
-def evaluate_scalping_exit(
-    stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit
-):
-    base_stop_pct = getattr(TRADING_RULES, "SCALP_STOP", -1.5)
-    hard_stop_pct = getattr(TRADING_RULES, "SCALP_HARD_STOP", -2.5)
-    momentum_decay_score_limit = int(
-        getattr(TRADING_RULES, "SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT", 45) or 45
-    )
-    momentum_decay_min_hold_sec = int(
-        getattr(TRADING_RULES, "SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC", 90) or 90
-    )
-    safe_profit_pct = getattr(TRADING_RULES, "SCALP_SAFE_PROFIT", 0.5)
-    trailing_start_pct = getattr(TRADING_RULES, "SCALP_TRAILING_START_PCT", 0.4)
-    strong_trailing_ai_score = getattr(
-        TRADING_RULES, "SCALP_TRAILING_STRONG_AI_SCORE", 75
-    )
-    weak_trailing = getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_WEAK", 0.4)
-    strong_trailing = getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_STRONG", 0.8)
-    current_ai_score_raw = _legacy_current_ai_score(stock)
-    current_vpw = float(ws_data.get("v_pw", 0) or 0.0)
+def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit):
+    """Read-only explanation using the live stop algebra; no legacy score exit."""
+    from src.engine.scalping.main_stop_policy import StopValues, pin_values, soft_decision
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    try:
+        value = stock.get("main_stop_policy_pin")
+        values = pin_values(value, position_cycle_id(stock)) if value else StopValues.from_rules(
+            lambda key: getattr(TRADING_RULES, key, None))
+    except (ValueError, TypeError):
+        return "손절 정책 원천 확인 필요"
+    result = soft_decision(values, profit_pct=profit_rate, now=time.time(),
+        touch_at=stock.get("soft_stop_micro_grace_started_at"),
+        enabled=bool(getattr(TRADING_RULES,"SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)),
+        after_add=bool(stock.get("reversal_add_used")))
+    return result.rule if result.disposition == "exit_candidate" else None
 
-    # v_pw 히스토리 관리
-    recent_vpw = stock.get("recent_vpw_values", [])
-    recent_vpw.append(current_vpw)
-    if len(recent_vpw) > 6:
-        recent_vpw = recent_vpw[-6:]
-    stock["recent_vpw_values"] = recent_vpw
-    avg_vpw = sum(recent_vpw) / len(recent_vpw) if recent_vpw else current_vpw
-
-    weak_vpw_count = int(stock.get("weak_vpw_count", 0) or 0)
-    if current_vpw < 100:
-        weak_vpw_count += 1
-    else:
-        weak_vpw_count = max(0, weak_vpw_count - 1)
-    stock["weak_vpw_count"] = weak_vpw_count
-
-    # 시간 가치(Time Decay)
-    held_seconds = resolve_holding_elapsed_sec(stock)
-    is_critical_zone = (
-        abs(profit_rate - safe_profit_pct) <= 0.20
-        or profit_rate >= safe_profit_pct
-        or profit_rate < 0
-    )
-    holding_score_ctx = _legacy_holding_score_role_context(
-        stock,
-        current_ai_score_raw,
-        is_critical_zone=is_critical_zone,
-    )
-    current_ai_score = _safe_float(holding_score_ctx.get("score"), 50.0)
-    holding_score_negative_exit_usable = bool(
-        holding_score_ctx.get("usable_for_negative_exit", False)
-    )
-    last_peak_update = stock.get("last_peak_update_at")
-    if last_peak_update is None:
-        stock["last_peak_update_at"] = datetime.now()
-        last_peak_update = stock["last_peak_update_at"]
-    elif not isinstance(last_peak_update, datetime):
-        try:
-            last_peak_update = datetime.fromisoformat(str(last_peak_update))
-        except Exception:
-            last_peak_update = datetime.now()
-        stock["last_peak_update_at"] = last_peak_update
-
-    if held_seconds >= 90:
-        if profit_rate < 0.2 and peak_profit < 0.4 and avg_vpw < 105:
-            return "시간가치 소진(90s+ 미미수익 & v_pw 둔화)"
-    if held_seconds >= 180:
-        peak_age_sec = resolve_elapsed_sec(last_peak_update)
-        no_peak = peak_age_sec is not None and peak_age_sec >= 60
-        if abs(profit_rate) < 0.2 and peak_profit < 0.5 and (avg_vpw < 105 or no_peak):
-            return "시간가치 소진(180s+ 정체 & 고점갱신 부재)"
-
-    # Volume Power Crash
-    if weak_vpw_count >= 2 and current_vpw < 100:
-        avg_drop_ok = len(recent_vpw) >= 3 and (avg_vpw - current_vpw) >= 8
-        if profit_rate < 1.0 or avg_drop_ok:
-            return f"매수세 급락(v_pw={current_vpw:.0f})"
-
-    # Hard/Soft Stop 정렬: hard는 더 깊은 손실, soft는 완충 손절
-    soft_stop_pct = max(base_stop_pct, hard_stop_pct)
-    hard_stop_pct = min(base_stop_pct, hard_stop_pct)
-    if profit_rate <= hard_stop_pct:
-        return f"하드스탑 도달 (profit_rate={profit_rate:.2f}% <= {hard_stop_pct}%)"
-
-    if profit_rate <= soft_stop_pct:
-        return (
-            f"소프트 손절선 도달 (profit_rate={profit_rate:.2f}% <= {soft_stop_pct}%)"
-        )
-
-    # Dynamic Trailing (peak 확보 이후만)
-    if peak_profit >= trailing_start_pct and profit_rate >= safe_profit_pct:
-        drawdown = (
-            (highest_prices[code] - curr_p) / highest_prices[code] * 100
-            if highest_prices[code] > 0
-            else 0
-        )
-        if (
-            holding_score_negative_exit_usable
-            and current_ai_score < momentum_decay_score_limit
-            and held_seconds >= momentum_decay_min_hold_sec
-        ):
-            return (
-                f"AI 모멘텀 둔화 확인유예 후 익절 "
-                f"(score={current_ai_score:.0f}, hold={int(held_seconds)}s)"
-            )
-        if (
-            holding_score_negative_exit_usable
-            and current_ai_score >= strong_trailing_ai_score
-            and current_vpw >= 110
-        ):
-            trailing_limit = strong_trailing
-        elif (
-            holding_score_negative_exit_usable
-            and current_ai_score >= 65
-            and current_vpw >= 105
-        ):
-            trailing_limit = (weak_trailing + strong_trailing) / 2
-        else:
-            trailing_limit = weak_trailing
-        if drawdown >= trailing_limit:
-            return f"고점 대비 밀림 (drawdown={drawdown:.2f}%)"
-
-    # 장 마감 전 현금화 (기존 보존)
-    now_t = datetime.now().time()
-    if now_t >= TIME_15_30 and profit_rate >= getattr(
-        TRADING_RULES, "MIN_FEE_COVER", 0.1
-    ):
-        return "장 마감 전 현금화"
-
-    return None
 
 
 def evaluate_swing_exit(
@@ -12464,6 +12326,10 @@ def run_sniper(is_test_mode=False):
     run_sniper.pre_submit_delay_preparation = prepare_runtime_policy()
     from src.engine.scalping.pre_submit_delay_observation import configure_sink
     configure_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
+    configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
+    configure_stop_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.trailing_situation_policy import prepare_runtime as prepare_trailing_situations
     run_sniper.trailing_situation_preparation = prepare_trailing_situations(env=os.environ,
         parent_sha256=os.getenv('KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256'),
@@ -16339,6 +16205,10 @@ def run_sniper(is_test_mode=False):
                 run_sniper.hot_path_ai_dispatcher = None
         from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
         close_delay_observations()
+        from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
+        configure_quantity_sink(None)
+        from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
+        configure_stop_sink(None)
         _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
         if WS_MANAGER:
             try:

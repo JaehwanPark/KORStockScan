@@ -2216,6 +2216,9 @@ def _project_direct_tasks(
                     f"{owner}(valid={receipt.get('valid') is True}, "
                     f"handoff={evidence.get('policy_handoff_state')})"
                 )
+        stop_receipt = summary.get('main_stop_confirmation') or {}
+        if stop_receipt.get('target_date') == target_date and stop_receipt.get('status') == 'published_policy':
+            due.append('main_stop_confirmation(policy=' + str(stop_receipt.get('policy_sha256')) + ', pid_unobserved)')
         tasks_by_owner["__preopen__"] = GeneratedTask(
             task_id="DirectFamilyPreopenPolicyHandoff",
             title="direct family 날짜별 정책·bootstrap 장전 소비 확인",

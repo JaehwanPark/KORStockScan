@@ -103,6 +103,31 @@ def _verify_report(path, *, target_date, parent_sha256, memo_budget):
         elif isinstance(value,list):
             for child in value:graph(child)
     graph(report['common_population_evaluation']);graph(report['trailing_situation_research'])
+    # Sealed trees prove bytes, not arithmetic or candidate selection. Rebuild
+    # metrics from the complete minimal checkpoints with the same global split.
+    # This verifier copies no raw quotes, prompts or provider comparison ledger.
+    import tempfile
+    from .main_trailing_partitioned_research import checkpoint_results
+    from .main_trailing_population_aggregation import aggregate
+    from .main_trailing_situation_aggregation import research
+    def partitions():
+        for reference in storage.iter_tree(path.parent,report['partition_results_ref']):
+            checkpoint=_sealed(storage.safe_path(path.parent,reference['path']))
+            yield from checkpoint_results(checkpoint,path.parent)
+    with tempfile.TemporaryDirectory(prefix='.trailing-verify-',dir=path.parent) as scratch:
+        from src.engine.lifecycle.research_disk_budget import use
+        with use(scratch),storage.compact_trees():
+            evaluated=aggregate(partitions,output_root=scratch)
+            parent_receipt=manifest['approved_parent_receipt']
+            typed=research(partitions,grid=manifest.get('situation_classifier_grid'),
+                candidates=manifest.get('candidates') or {},parent_values=parent_receipt['market_values'],
+                parent_classifier_parameters=parent_receipt['classifier_parameters'],
+                evaluation=evaluated,output_root=scratch)
+            if (storage.logical_value(evaluated)!=storage.logical_value(report['common_population_evaluation'])
+                or storage.logical_value(typed)!=storage.logical_value(report['trailing_situation_research'])):
+                raise ValueError('main_trailing_research_pair_metrics_invalid')
+    if report.get('evidence_root') not in (None,str(path.parent)):
+        raise ValueError('main_trailing_research_evidence_root_invalid')
     policy=report['initial_policy'];parent=parent_sha256 or manifest['approved_parent_receipt']['market_values_sha256']
     PreparedTrailingPolicy.prepare(policy,target_date=target_date,parent_sha256=parent)
     if any(cell['disposition']!='parent_carry' for cell in policy['cells'].values()):

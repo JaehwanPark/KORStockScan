@@ -1,5 +1,7 @@
 # Main trailing/delay 잔여 구현·반복 리뷰 — 2026-10-10
 
+**후속 정정 — 10/10 21:27 KST:** [정책 생성 구조 재점검](main-trailing-delay-policy-generation-structural-review-2026-10-10.md)에서 정상 holding-AI 원천 연결·classifier 인과성·대용량 numeric 후보 전달·현재 PASS/보조 부모 연결 및 결손 격리에 새 결함을 재현했다. 아래 부모/0초 발행·성능·인계 영수증은 당시 범위의 기록으로 보존한다. 그러나 “신규 경제 적격 0·양수 지연 0은 구현 누락이 아니다”라는 포괄 결론은 철회한다. 이전 양수 회귀의 AI 불필요 fixture와 producer를 분리한 단위 검증으로 실제 정상 경로의 생성 가능성을 대신한 한계를 명시한다. 시간과 자료 증가만으로 새 정책이 생성될 것이라는 근거로 이 완료 기록을 사용하지 않는다.
+
 Source는 2026-10-08, publication은 2026-10-10, 적용일은 2026-10-12다. [W0–W6 실행계획](../proposals/main-trailing-delay-residual-work-completion-plan-2026-10-10.md)의 **W0–W5 구현·반복 리뷰·정식 발행·배포·기동 준비를 완료했다.** 정책 계산·코드 수용·정식 chain·미래 PID·실현손익은 별도 판정한다. W6와 실현 경제성은 미관측이다.
 
 ## 구현과 리뷰

@@ -1,6 +1,10 @@
 # Main 트레일링·제출 지연 잔여작업 완료계획 — 2026-10-10
 
-상태: **W0–W5의 구현·반복 리뷰·성능 검증·정식 정책 발행·승인 배포·장후 최종화·10/12 PREOPEN 준비를 완료했다.** [실행 감사](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)와 [최종 준비 영수증](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json)을 따른다. W6 자연 기동/PID 소비는 10/12 예약 시점에 기존 `DirectFamilyPreopenPolicyHandoff`가 확인한다.
+상태: **W0–W5의 부모 계승·0초 초기 정책 발행·배포·장후 최종화·10/12 PREOPEN 준비는 완료했지만, 신규 학습 정책 생성의 정상 원천 경로에는 구조적 결함이 남아 있다.** 10/10 21:27 KST [생성 가능성 재점검](../audits/main-trailing-delay-policy-generation-structural-review-2026-10-10.md)에서 TG1–TG4/DG1–DG4를 확인했다. 앞선 [실행 감사](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)의 전체 구현 finding 0은 정상 AI 증빙·classifier 인과성·현재 PASS 부모 연결의 도달 가능성까지 검증한 결론으로 사용하지 않는다. [기존 최종 준비 영수증](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json)은 당시 부모/0초 준비의 근거이며 W6 자연 기동/PID 소비는 10/12 기존 `DirectFamilyPreopenPolicyHandoff`가 확인한다.
+
+이번 재점검은 코드·격리 진단 및 문서 정정이다. 데이터 증가만으로 해결되지 않는 quote/holding-AI 연결, 새 classifier SHA를 과거 pin에 요구하는 순환, 대용량 시장 후보 미전달, 현재 PASS/AI 부모 누락과 결손 셀 전역 차단을 별도 수리 대상으로 남긴다. 후속 구현 착수 시 두 기존 stable ID의 완료 이력을 유지해 현재 checklist에서 재개하고 정상 producer→후보→selector/lookup의 도달·결손 격리 시험을 종료 조건에 추가한다. 현재 정책·선택 릴리스·봉인 10/12 checklist를 이번 진단에서 변경하지 않는다.
+
+다섯 단계의 상세 수정 계약·원천/소비 경계·정상/실패 시험은 [정책 생성 구조 보완계획 P1–P5](main-trailing-delay-policy-generation-structural-remediation-plan-2026-10-10.md)를 따른다. 현재 PASS/해시→pre-signal holding-AI→classifier 인과성→결손 격리/대용량 연결→일반 악화/horizon 조건을 이 순서로 수리한다. 최초 수량·손절·감시기 개선은 해당 상세계획 범위에 포함하지 않는다.
 
 ## 1. 결정과 완료 범위
 

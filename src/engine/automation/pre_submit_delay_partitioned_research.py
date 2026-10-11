@@ -193,7 +193,7 @@ def _stats(db, where, args, horizon, denominator):
         improved_n=signs.get(1,0), worsened_n=signs.get(-1,0), equal_n=signs.get(0,0))
 
 
-def _select(db, base, args):
+def _select_legacy(db, base, args):
     train, validation = base+" AND split='train'", base+" AND split='validation'"
     train_n = db.execute('SELECT count(*) FROM population WHERE '+train,args).fetchone()[0]
     validation_n = db.execute('SELECT count(*) FROM population WHERE '+validation,args).fetchone()[0]
@@ -218,10 +218,37 @@ def _select(db, base, args):
         'validation_ids_sha256':_ids_digest(db,validation+f' AND p{best} IS NOT NULL',args)}
 
 
-def _populate(db, projected):
+def _select(db, base, args):
+    train, validation = base+" AND split='train'", base+" AND split='validation'"
+    train_n = db.execute('SELECT count(*) FROM population WHERE '+train,args).fetchone()[0]
+    validation_n = db.execute('SELECT count(*) FROM population WHERE '+validation,args).fetchone()[0]
+    candidates = [d for d in initial.HORIZONS[1:] if db.execute(
+        f'SELECT 1 FROM population WHERE {train} AND p{d} IS NOT NULL LIMIT 1',args).fetchone()]
+    metrics = {d:_stats(db,train,args,d,train_n) for d in candidates}
+    empty = dict(delay_sec=None,selection_basis='unsupported',runtime_apply_allowed=False,
+        train=initial._stats([],train_n),validation=initial._stats([],validation_n),
+        candidate_delays_sec=candidates,comparison_delay_sec=None,
+        candidate_train_stats={str(d):s for d,s in metrics.items()},
+        population_role='candidate_same_opportunity_p0_pairs')
+    if not candidates: return empty
+    best = min(candidates,key=lambda d:(-metrics[d]['mean_bp'],d))
+    holdout = _stats(db,validation,args,best,validation_n)
+    if not holdout['n']:
+        return {**empty,'comparison_delay_sec':best,'train':metrics[best]}
+    basis = ('paired_quote_initial' if metrics[best]['mean_bp']>0 and holdout['mean_bp']>0 else
+        'paired_quote_immediate' if metrics[best]['mean_bp']<=0 and holdout['mean_bp']<=0 else
+        'incumbent_on_unconfirmed_pattern')
+    return {**empty,'delay_sec':best if basis=='paired_quote_initial' else 0,
+        'selection_basis':basis,'runtime_apply_allowed':True,'comparison_delay_sec':best,
+        'train':metrics[best],'validation':holdout,
+        'train_ids_sha256':_ids_digest(db,train+f' AND p{best} IS NOT NULL',args),
+        'validation_ids_sha256':_ids_digest(db,validation+f' AND p{best} IS NOT NULL',args)}
+
+
+def _populate(db, projected, *, effective_date, algorithm):
     db.execute('CREATE TABLE population (id TEXT PRIMARY KEY, body TEXT, gid TEXT, anchor TEXT, '
         'market TEXT, parents TEXT, kind TEXT, at REAL, end REAL, native INTEGER, p0 INTEGER, '
-        'p30 REAL,p60 REAL,p120 REAL,p180 REAL,split TEXT) WITHOUT ROWID')
+        'p30 REAL,p60 REAL,p120 REAL,p180 REAL,split TEXT,eligible INTEGER) WITHOUT ROWID')
     for row in projected:
         parents = row.get('parent_compatibility')
         pairs = row.get('pairs')
@@ -240,23 +267,24 @@ def _populate(db, projected):
             raise ValueError('initial_delay_projection_invalid')
         group = [row['anchor_kind'],row['session'],row['parent_compatibility']]
         pairs = row['pairs']
-        db.execute('INSERT INTO population VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        db.execute('INSERT INTO population VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (row['identity'],storage.encoded(row).decode(),initial.digest(group),row['anchor_kind'],
              row['session'],storage.encoded(row['parent_compatibility']).decode(),row['situation'],
              row['committed_at'],row['observation_end_at'],int(row['native_evaluation_bound']),int(row['p0_valid']),
-             *(pairs.get(str(d),pairs.get(d)) for d in initial.HORIZONS[1:]), 'unqualified'))
+             *(pairs.get(str(d),pairs.get(d)) for d in initial.HORIZONS[1:]), 'unqualified',
+             int(row['p0_valid'] and (algorithm==initial.LEGACY_ALGORITHM or initial.lineage_eligible(row,effective_date)))))
     db.execute('CREATE INDEX population_time ON population(gid,at,id)')
     db.execute('CREATE INDEX population_cells ON population(gid,kind,split)')
-    for group,count in db.execute('SELECT gid,count(*) FROM population WHERE p0=1 GROUP BY gid ORDER BY gid'):
+    for group,count in db.execute('SELECT gid,count(*) FROM population WHERE eligible=1 GROUP BY gid ORDER BY gid'):
         split = min(count-1,max(1,int(count*.7))) if count>1 else count
-        boundary = db.execute('SELECT at,id FROM population WHERE gid=? AND p0=1 ORDER BY at,id LIMIT 1 OFFSET ?',
+        boundary = db.execute('SELECT at,id FROM population WHERE gid=? AND eligible=1 ORDER BY at,id LIMIT 1 OFFSET ?',
                               (group,split)).fetchone()
         if boundary:
             at, identity = boundary
             db.execute("UPDATE population SET split=CASE WHEN at>? OR (at=? AND id>=?) THEN 'validation' "
-                       "WHEN end>=? THEN 'purged' ELSE 'train' END WHERE gid=? AND p0=1",(at,at,identity,at,group))
+                       "WHEN end>=? THEN 'purged' ELSE 'train' END WHERE gid=? AND eligible=1",(at,at,identity,at,group))
         else:
-            db.execute("UPDATE population SET split='train' WHERE gid=? AND p0=1",(group,))
+            db.execute("UPDATE population SET split='train' WHERE gid=? AND eligible=1",(group,))
 
 
 def _group_rows(db, root):
@@ -271,7 +299,7 @@ def _group_rows(db, root):
         yield body
 
 
-def _cell_rows(db, effective):
+def _cell_rows(db, effective, algorithm):
     for group,anchor,market,parents in db.execute('SELECT DISTINCT gid,anchor,market,parents FROM population '
                                                  'WHERE p0=1 ORDER BY anchor,market,parents'):
         parent = json.loads(parents)
@@ -281,11 +309,15 @@ def _cell_rows(db, effective):
         for kind in kinds:
             base,args = 'gid=? AND p0=1',(group,)
             if kind != 'ALL': base += ' AND kind=?'; args += (kind,)
-            selected = _select(db,base,args)
+            selected = (_select_legacy if algorithm==initial.LEGACY_ALGORITHM else _select)(db,base,args)
+            if algorithm==initial.ALGORITHM and not db.execute(
+                    'SELECT 1 FROM population WHERE gid=? AND eligible=1 LIMIT 1',(group,)).fetchone():
+                selected = {**selected,'delay_sec':0,'selection_basis':'unverified_lineage_immediate_default',
+                            'runtime_apply_allowed':False}
             unverified = any(len(p)!=64 or any(c not in '0123456789abcdef' for c in p) for p in parent)
             unverified = unverified or bool(db.execute('SELECT 1 FROM population WHERE '+base+
                 " AND split IN ('train','validation') AND native=0 LIMIT 1",args).fetchone())
-            if effective >= '2026-10-10' and unverified:
+            if algorithm==initial.LEGACY_ALGORITHM and effective >= '2026-10-10' and unverified:
                 selected = {**selected,'delay_sec':0,'selection_basis':'unverified_lineage_immediate_default',
                             'runtime_apply_allowed':False}
             key = initial.cell_key(anchor,market,kind,parents=parent)
@@ -296,13 +328,16 @@ def _cell_rows(db, effective):
 
 
 def build(projected, census, *, output_root, source_date, publication_date, effective_date,
-          source_sha256, code_contract_sha256, source_receipt):
+          source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None):
+    algorithm = _algorithm or initial.ALGORITHM
+    if algorithm not in (initial.ALGORITHM,initial.LEGACY_ALGORITHM):
+        raise ValueError('initial_delay_algorithm_invalid')
     from datetime import date
     if not date.fromisoformat(source_date) <= date.fromisoformat(publication_date) < date.fromisoformat(effective_date):
         raise ValueError('initial_delay_dates_invalid')
     root = Path(output_root)
     with storage.index(root) as db:
-        _populate(db,projected)
+        _populate(db,projected,effective_date=effective_date,algorithm=algorithm)
         observed = {'qualified_pass_n':0,'p0_valid_n':0,'native_evaluation_unverified_n':0,
                     'parent_compatibility_unverified_n':0}
         for body, in db.execute('SELECT body FROM population'):
@@ -315,7 +350,7 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
             raise ValueError('initial_delay_global_census_invalid')
         projection_ref = storage.write_tree(root,(json.loads(b) for b, in db.execute('SELECT body FROM population ORDER BY id')))
         partitions_ref = storage.write_tree(root,_group_rows(db,root))
-        cells_ref = storage.write_tree(root,_cell_rows(db,effective_date))
+        cells_ref = storage.write_tree(root,_cell_rows(db,effective_date,algorithm))
         price_pairs = db.execute('SELECT sum((p30 IS NOT NULL)+(p60 IS NOT NULL)+(p120 IS NOT NULL)+(p180 IS NOT NULL)) '
             "FROM population WHERE anchor='price_ready'").fetchone()[0] or 0
     positive_n = sum(int(row['value']['anchor_kind']=='price_ready' and (row['value']['delay_sec'] or 0)>0)
@@ -324,8 +359,8 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
     report = EvidenceDocument(dict(schema=initial.REPORT_SCHEMA,storage_schema=STORAGE_SCHEMA,
         analysis_axis='pre_submit_delay',source_date=source_date,publication_date=publication_date,effective_date=effective_date,
         source_sha256=source_sha256,code_contract_sha256=code_contract_sha256,
-        source_projection_contract_sha256=initial.projection_contract(),source_receipt=source_receipt,
-        algorithm=initial.ALGORITHM,mapping_version=initial.MAPPING_VERSION,
+        source_projection_contract_sha256=_projection_contract or initial.projection_contract(),source_receipt=source_receipt,
+        algorithm=algorithm,mapping_version=initial.MAPPING_VERSION,
         status='blocked' if blocked else 'initial_timing_policy_selected' if positive_n else 'initial_baseline_immediate',
         census=census,price_ready_pair_n=price_pairs,partitions_ref=partitions_ref,cells_ref=cells_ref,
         qualified_projection_ref=projection_ref,default_delay_sec=0,runtime_effect=False,actual_order_submitted=False,
@@ -350,7 +385,9 @@ def validate(policy, report, *, target_date=None):
             or policy.get('report_sha256')!=initial.digest({k:v for k,v in report.items() if k!='policy_sha256'})
             or policy.get('runtime_apply_allowed') is not True or report.get('price_ready_pair_n',0)<1
             or policy.get('cells_ref')!=report.get('cells_ref') or policy.get('default_delay_sec')!=0
-            or report.get('schema')!=initial.REPORT_SCHEMA or policy.get('schema')!=initial.POLICY_SCHEMA):
+            or report.get('schema')!=initial.REPORT_SCHEMA or policy.get('schema')!=initial.POLICY_SCHEMA
+            or policy.get('algorithm') not in (initial.ALGORITHM,initial.LEGACY_ALGORITHM)
+            or policy.get('algorithm')!=report.get('algorithm')):
         raise ValueError('initial_delay_sharded_contract_invalid')
     root = getattr(report,'evidence_root',None)
     if root is None or getattr(policy,'evidence_root',None)!=root:
@@ -369,7 +406,8 @@ def validate(policy, report, *, target_date=None):
             report['census'],output_root=scratch,source_date=report['source_date'],
             publication_date=report['publication_date'],effective_date=report['effective_date'],
             source_sha256=report['source_sha256'],code_contract_sha256=report['code_contract_sha256'],
-            source_receipt=report.get('source_receipt'))
+            source_receipt=report.get('source_receipt'),_algorithm=report['algorithm'],
+            _projection_contract=report.get('source_projection_contract_sha256') if report['algorithm']==initial.LEGACY_ALGORITHM else None)
         # Physical layout belongs to its own verified generation. Selection and
         # split must match by canonical semantic digests, independently of it.
         for key in ('qualified_projection_ref','partitions_ref','cells_ref'):

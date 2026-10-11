@@ -13,6 +13,81 @@ from src.engine.scalping import continuous_reversal_postclose as P
 
 SCHEMA = 'main_auxiliary_prompt_registry_v1'
 SCHEMA_V2 = 'main_auxiliary_prompt_registry_v2'
+IDENTITY_SCHEMA = 'entry_auxiliary_policy_identity_v1'
+
+
+def identity_json(value):
+    """The async carrier freezes nested maps; log canonical JSON, never repr."""
+    from collections.abc import Mapping
+    import json
+    def thaw(item):
+        if isinstance(item, Mapping):return {k:thaw(v) for k,v in item.items()}
+        if isinstance(item, (list,tuple)):return [thaw(v) for v in item]
+        return item
+    if isinstance(value,str):value=json.loads(value)
+    return json.dumps(thaw(value),sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False)
+
+
+def provider_identity(payload, context):
+    """Freeze actual request semantics without request-specific fact enums.
+
+    Dynamic schema bytes and input stay in provenance. Projector/validator code
+    owns the allowlist semantics; registry research notes are not policy inputs.
+    """
+    from src.engine.scalping.mechanistic_entry_runtime_policy import _source_hash, _signature
+    modules = {
+        'continuous_reversal_policy_v1': 'reversal_auxiliary_contract',
+        'continuous_reversal_policy_v2': 'reversal_auxiliary_phases',
+        'continuous_reversal_policy_v3': 'reversal_auxiliary_phases',
+        'continuous_reversal_policy_v4': 'reversal_path_auxiliary',
+        'continuous_reversal_policy_v5': 'reversal_operating_auxiliary',
+        'continuous_reversal_policy_v6': 'reversal_extended_union',
+    }
+    version = context.get('policy_version')
+    if version not in modules or not isinstance(payload.get('instructions'), str):
+        raise ValueError('auxiliary_identity_definition_missing')
+    paths = [Path(__file__).with_name(name + '.py') for name in
+             sorted(set((modules[version], 'reversal_auxiliary_contract', 'continuous_reversal_policy')))]
+    if context.get('registry_sha256'):
+        paths.append(Path(__file__).with_name('reversal_auxiliary_wire.py'))
+    def schema_shape(value, path=()):
+        if isinstance(value,dict):
+            return {k:(['SOURCE_FACT_ID'] if k=='enum' and any(p in {'supporting_fact_ids','contradicting_fact_ids','fact_ids'} for p in path) else schema_shape(v,path+(k,))) for k,v in value.items()}
+        if isinstance(value,list):return [schema_shape(v,path) for v in value]
+        return value
+    semantic = dict(schema=IDENTITY_SCHEMA, provider='openai',
+        prompt=payload['instructions'], model=payload['model'],
+        response_contract=schema_shape(payload.get('text')),
+        options={k:payload[k] for k in ('max_output_tokens','temperature','reasoning') if k in payload},
+        input_contract=version, normalizer_version='continuous_reversal_effective_screen_v1',
+        projector_validator_sha256={p.name:_source_hash(str(p), _signature(p)) for p in paths})
+    identity = dict(schema=IDENTITY_SCHEMA, semantic=semantic, identity_sha256=P.digest(semantic),
+        provenance={k:context.get(k) for k in ('registry_sha256','overlay_sha256','bundle_sha256')})
+    identity['provenance'].update(request_payload_sha256=P.digest(payload),
+        response_schema_sha256=P.digest(payload.get('text')))
+    return identity
+
+
+def validate_identity(value):
+    if (not isinstance(value, dict) or value.get('schema') != IDENTITY_SCHEMA
+            or not isinstance(value.get('semantic'), dict)
+            or value['semantic'].get('schema') != IDENTITY_SCHEMA
+            or value.get('identity_sha256') != P.digest(value['semantic'])
+            or not isinstance(value.get('provenance'), dict)):
+        raise ValueError('auxiliary_identity_contract_invalid')
+    semantic=value['semantic']; provenance=value['provenance']
+    if (semantic.get('provider')!='openai' or not isinstance(semantic.get('prompt'),str)
+        or not semantic['prompt'].isascii() or not semantic['prompt'].strip()
+        or not isinstance(semantic.get('model'),str) or not semantic['model']
+        or not isinstance(semantic.get('options'),dict)
+        or semantic.get('normalizer_version')!='continuous_reversal_effective_screen_v1'
+        or not isinstance(semantic.get('projector_validator_sha256'),dict)
+        or not semantic['projector_validator_sha256']
+        or any(not re.fullmatch('[a-f0-9]{64}',str(v)) for v in semantic['projector_validator_sha256'].values())
+        or any(not re.fullmatch('[a-f0-9]{64}',str(provenance.get(k)))
+               for k in ('request_payload_sha256','response_schema_sha256'))):
+        raise ValueError('auxiliary_identity_definition_invalid')
+    return value
 
 
 def projector(version=None):

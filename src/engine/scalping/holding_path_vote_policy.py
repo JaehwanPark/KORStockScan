@@ -103,7 +103,8 @@ def create_bundle(
         raise ValueError("holding_vote_replay_schema_invalid")
     source_cells = replay.get("path_market")
     expected_keys = {f"{path}|{market}" for path in PATH_IDS for market in MARKETS}
-    if not isinstance(source_cells, dict) or set(source_cells) != expected_keys:
+    legacy_keys = {f"EXIT_BAD_ENTRY_REFINED|{m}" for m in MARKETS}
+    if not isinstance(source_cells, dict) or set(source_cells) not in (expected_keys, expected_keys | legacy_keys):
         raise ValueError("holding_vote_replay_cells_invalid")
     quality = source_quality or {}
     if (not isinstance(quality, dict)
@@ -211,7 +212,7 @@ def validate_bundle(
             or bundle.get("valid_until") != target_date
             or bundle.get("assumption_version") != "unidentified_v1"
             or bundle.get("model") != "gpt-5.4-nano"
-            or bundle.get("prompt_version") != PATH_PROMPT_VERSION
+            or bundle.get("prompt_version") not in {PATH_PROMPT_VERSION, "holding_path_vote_v10"}
             or bundle.get("evidence_grade") != "estimated_provisional"
             or bundle.get("selection_authority") != "operator_directed_initial_baseline_2026_09_26"
             or bundle.get("allowed_runtime_apply") is not True
@@ -228,6 +229,9 @@ def validate_bundle(
         raise ValueError("holding_vote_policy_header_invalid")
     cells = bundle.get("cells")
     expected = {f"{path}|{market}" for path in PATH_IDS for market in MARKETS}
+    legacy = bundle.get("prompt_version") == "holding_path_vote_v10"
+    if legacy:
+        expected |= {f"EXIT_BAD_ENTRY_REFINED|{m}" for m in MARKETS}
     if not isinstance(cells, dict) or set(cells) != expected:
         raise ValueError("holding_vote_policy_cells_invalid")
     quality = bundle.get("source_quality") or {}
@@ -266,6 +270,18 @@ def validate_bundle(
                        for row in cell["candidate_census"])):
             raise ValueError("holding_vote_policy_evidence_invalid")
         hashes[key] = cell["policy_sha256"]
+    if legacy:
+        # Validate archived cells without granting them a consumer or a prompt.
+        for market in MARKETS:
+            key = "EXIT_BAD_ENTRY_REFINED|" + market
+            value = dict(PATH_POLICY_BY_MARKET[("EXIT_SOFT_STOP", market)], max_defer_sec=30.0)
+            cell = cells[key]
+            if (cell.get("policy") != value or cell.get("policy_sha256") != input_snapshot_id(value)
+                    or cell.get("rollback_policy_sha256") != input_snapshot_id(value)
+                    or cell.get("realized_paired_ev_krw") is not None
+                    or cell.get("estimated_paired_ev_krw") is not None):
+                raise ValueError("holding_vote_legacy_retired_cell_invalid")
+            hashes[key] = cell["policy_sha256"]
     if (bundle.get("policy_set_sha256") != digest(hashes)
             or bundle.get("rollback_policy_set_sha256") != digest(hashes)):
         raise ValueError("holding_vote_policy_set_hash_invalid")
@@ -311,8 +327,12 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any]) -> None:
         replay=observation.get("holding_path_vote_replay") or {},
         source_quality=source_quality_from_observation(observation),
     )
-    if bundle != expected:
+    if bundle.get("prompt_version") == PATH_PROMPT_VERSION and bundle != expected:
         raise ValueError("holding_vote_policy_source_semantics_mismatch")
+    if bundle.get("prompt_version") == "holding_path_vote_v10":
+        for key, cell in expected["cells"].items():
+            if cell != bundle["cells"].get(key):
+                raise ValueError("holding_vote_legacy_active_cell_mismatch")
     receipt = (json.loads(summary_file.read_text(encoding="utf-8"))
                .get("holding_path_vote_policy") or {})
     if (receipt.get("status") != "estimated_provisional_published"

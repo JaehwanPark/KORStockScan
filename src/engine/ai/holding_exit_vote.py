@@ -337,16 +337,15 @@ PATH_SCHEMA = "holding_path_vote_v10"
 PATH_SNAPSHOT_SCHEMA = "holding_path_vote_signal_v10"
 PATH_IDS = frozenset({
     "EXIT_TRAILING_TP", "EXIT_SOFT_STOP", "EXIT_POST_ADD_FAIL",
-    "EXIT_BAD_ENTRY_REFINED", "ADD_REBOUND",
+    "ADD_REBOUND",
 })
 PATH_REASON_PREFIX = {
     "EXIT_TRAILING_TP": "exit_tp_",
     "EXIT_SOFT_STOP": "exit_soft_",
     "EXIT_POST_ADD_FAIL": "exit_post_add_",
-    "EXIT_BAD_ENTRY_REFINED": "exit_bad_entry_",
     "ADD_REBOUND": "add_rebound_",
 }
-PATH_PROMPT_VERSION = "holding_path_vote_v10"
+PATH_PROMPT_VERSION = "holding_path_vote_v11"
 PATH_MAX_EVENTS = 192
 PATH_MAX_STORE_BYTES = 16 * 1024 * 1024
 
@@ -494,11 +493,6 @@ def path_vote_input_gaps(payload: dict[str, Any]) -> dict[str, tuple[str, ...]]:
             ))
         ):
             reasons.append("post_add_fill_evidence_missing")
-        if path == "EXIT_BAD_ENTRY_REFINED" and not any(
-            (flow.get("position_lifecycle") or {}).get(key) is not None
-            for key in ("never_green", "mae_pct")
-        ):
-            reasons.append("bad_entry_lifecycle_missing")
         if path == "ADD_REBOUND":
             if not payload.get("last_candles"):
                 reasons.append("rebound_candle_evidence_missing")
@@ -710,7 +704,7 @@ PATH_POLICY_BY_MARKET = {
         "max_defer_sec": (
             45.0 if path == "EXIT_TRAILING_TP" else
             10.0 if path == "EXIT_POST_ADD_FAIL" else
-            30.0 if path == "EXIT_BAD_ENTRY_REFINED" else 90.0
+            90.0
         ),
     }
     for path in sorted(PATH_IDS)
@@ -1169,44 +1163,54 @@ def append_path_events_file(
     ):
         return [], "invalid_events"
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "r+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            prior = _read_path_events(handle, position_key)
-            identities = {_path_event_identity(item) for item in prior}
-            if any(_path_event_identity(item) in identities for item in events):
-                return prior, "duplicate_generation"
-            if len({_path_event_identity(item) for item in events}) != len(events):
-                return prior, "duplicate_path"
-            if prior and min(float(item["requested_at"]) for item in events) < max(
-                float(item["requested_at"]) for item in prior
-            ):
-                return prior, "out_of_order"
-            persisted_at = __import__("time").time()
-            if any(float(item["received_at"]) > persisted_at for item in events):
-                return prior, "future_response"
-            to_write = [{**item, "persisted_at": persisted_at} for item in events]
-            handle.seek(0, os.SEEK_END)
-            handle.write("".join(json.dumps(item, sort_keys=True, ensure_ascii=True) + "\n"
-                                 for item in to_write))
-            handle.flush()
-            os.fsync(handle.fileno())
-            return (prior + to_write)[-PATH_MAX_EVENTS:], "appended"
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    lock_fd = os.open(str(path)+'.lock', os.O_RDWR | os.O_CREAT | getattr(os,'O_NOFOLLOW',0), 0o600)
+    with os.fdopen(lock_fd,'r+') as lock:
+        fcntl.flock(lock.fileno(),fcntl.LOCK_EX)
+        prior = _load_path_events_unlocked(path, position_key, tail=True)
+        identities = {_path_event_identity(item) for item in prior}
+        if any(_path_event_identity(item) in identities for item in events):return prior,'duplicate_generation'
+        if len({_path_event_identity(item) for item in events})!=len(events):return prior,'duplicate_path'
+        if prior and min(float(i['requested_at']) for i in events)<max(float(i['requested_at']) for i in prior):
+            return prior,'out_of_order'
+        persisted_at=time.time()
+        if any(float(i['received_at'])>persisted_at for i in events):return prior,'future_response'
+        to_write=[{**item,'persisted_at':persisted_at} for item in events]
+        raw=(''.join(json.dumps(item,sort_keys=True,ensure_ascii=True)+'\n' for item in to_write)).encode()
+        if len(raw)>PATH_MAX_STORE_BYTES:raise ValueError('path_vote_batch_oversize')
+        size=path.stat().st_size if path.exists() else 0
+        if size+len(raw)>PATH_MAX_STORE_BYTES:
+            # Prior sealed segments are immutable evidence, never discarded.
+            segment=Path(str(path)+'.segment-'+str(time.time_ns()))
+            os.replace(path,segment)
+            directory=os.open(path.parent,os.O_RDONLY)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_APPEND|getattr(os,'O_NOFOLLOW',0),0o600)
+        with os.fdopen(fd,'ab') as handle:
+            handle.write(raw);handle.flush();os.fsync(handle.fileno())
+        if size==0 or size+len(raw)>PATH_MAX_STORE_BYTES:
+            directory=os.open(path.parent,os.O_RDONLY)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        return (prior+to_write)[-PATH_MAX_EVENTS:],'appended'
 
 
-def _read_path_events(handle, position_key: str) -> list[dict[str, Any]]:
+def _iter_path_events(handle, position_key: str):
     if os.fstat(handle.fileno()).st_size > PATH_MAX_STORE_BYTES:
         raise ValueError("path_vote_store_oversize")
     handle.seek(0)
-    events = []
-    for line in handle:
+    while True:
+        line = handle.readline(PATH_MAX_STORE_BYTES + 1)
+        if not line: break
+        if len(line.encode('utf-8')) > PATH_MAX_STORE_BYTES:
+            raise ValueError('path_vote_record_oversize')
         try:
             item = json.loads(line)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("path_vote_store_json_corrupt") from exc
+        if (isinstance(item, dict) and item.get('path_id') == 'EXIT_BAD_ENTRY_REFINED'
+                and item.get('prompt_version') == 'holding_path_vote_v10'):
+            continue  # Original bytes remain intact; the retired path has no consumer.
         if (not isinstance(item, dict) or item.get("schema") != PATH_SCHEMA
                 or item.get("position_key") != position_key
                 or item.get("path_id") not in PATH_IDS
@@ -1242,21 +1246,41 @@ def _read_path_events(handle, position_key: str) -> list[dict[str, Any]]:
                     or item.get("conviction") not in CONVICTIONS
                 ))):
             raise ValueError("path_vote_store_contract_corrupt")
-        events.append(item)
-    return events
+        yield item
 
 
-def load_path_events_file(path: Path, position_key: str) -> list[dict[str, Any]]:
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        return []
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+
+def _read_path_events(handle, position_key):
+    return list(_iter_path_events(handle, position_key))
+
+
+def iter_path_events_file(path, position_key):
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(fd, 'r', encoding='utf-8') as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         try:
-            return _read_path_events(handle, position_key)
+            yield from _iter_path_events(handle, position_key)
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+def _load_path_events_unlocked(path: Path, position_key: str, *, tail=False, since=None) -> list[dict[str, Any]]:
+    """Default preserves the full research ledger; runtime may request a tail."""
+    from collections import deque
+    events=deque(maxlen=PATH_MAX_EVENTS) if tail else []
+    segments=sorted(path.parent.glob(path.name+'.segment-*'))
+    if tail:segments=segments[-1:]
+    for source in segments+([path] if path.exists() else []):
+        for event in iter_path_events_file(source,position_key):
+            if since is None or event['requested_at']>=since:events.append(event)
+    return list(events)
+
+
+def load_path_events_file(path: Path, position_key: str, *, tail=False, since=None):
+    if not path.parent.exists():return []
+    fd=os.open(str(path)+'.lock',os.O_RDWR|os.O_CREAT|getattr(os,'O_NOFOLLOW',0),0o600)
+    with os.fdopen(fd,'r+') as lock:
+        fcntl.flock(lock.fileno(),fcntl.LOCK_SH)
+        return _load_path_events_unlocked(path,position_key,tail=tail,since=since)
 
 
 def validate_path_policy(policy: Any, *, path_id: str | None = None) -> bool:

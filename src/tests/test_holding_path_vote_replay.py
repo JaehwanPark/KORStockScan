@@ -105,7 +105,7 @@ def test_zero_natural_votes_publish_source_bound_estimated_baseline(tmp_path):
         source_report_sha256=source_sha, replay=replay,
         source_quality=EMPTY_SOURCE_QUALITY,
     )
-    assert len(bundle["cells"]) == 15
+    assert len(bundle["cells"]) == len(PATH_IDS) * len(MARKETS)
     assert bundle["realized_paired_ev_krw"] is None
     assert bundle["evidence_grade"] == "estimated_provisional"
     assert bundle["cells"]["EXIT_TRAILING_TP|PREMARKET"]["scenario_decisions"][
@@ -167,7 +167,7 @@ def test_estimated_policy_strict_handoff_and_bootstrap_consume_same_hash(
         "bundle_sha256": bundle["bundle_sha256"],
         "policy_set_sha256": bundle["policy_set_sha256"],
         "source_report_sha256": source_sha,
-        "cell_count": 15, "allowed_runtime_apply": True,
+        "cell_count": len(PATH_IDS) * len(MARKETS), "allowed_runtime_apply": True,
     }
     summary_file = report_dir / "runtime_approval_summary" / (
         f"runtime_approval_summary_{source_date}.json")
@@ -669,7 +669,7 @@ def test_runtime_exit_veto_has_first_crossing_and_bounded_lifetime(monkeypatch):
     for row in rows:
         for field in ("requested_at", "received_at", "persisted_at"):
             row[field] += start
-    monkeypatch.setattr(handlers, "load_path_events_file", lambda *_a: rows)
+    monkeypatch.setattr(handlers, "load_path_events_file", lambda *_a, **_kw: rows)
     stock = _receipt_stock(id=7, strategy="SCALPING", status="HOLDING",
              scalp_trailing_first_crossing={
                  "at_epoch": start + 20.0,
@@ -862,9 +862,9 @@ def test_frozen_three_market_all_path_replay_matrix():
     report = summarize_holding_path_votes(
         trades, load_events=ledgers.__getitem__, model="gpt-5.4-nano",
     )
-    assert report["strict_population_count"] == expected_per_cell * 15
+    assert report["strict_population_count"] == expected_per_cell * len(PATH_IDS) * len(MARKETS)
     assert report["excluded_by_position_id"] == {}
-    assert len(report["path_market"]) == 15
+    assert len(report["path_market"]) == len(PATH_IDS) * len(MARKETS)
     assert all(cell["eligible_signal_count"] == expected_per_cell
                and cell["runtime_decisions"]["PASS"] == expected_per_cell
                and cell["cost_after_paired_ev_krw"] is None
@@ -925,3 +925,24 @@ def test_runtime_pass_keeps_immediate_path_and_veto_observation_failure_cannot_b
         profit_rate=1, ws_data={}, signal_at=start + 1)
     assert stock["holding_path_exit_resolution"]["release_reason"] == "safety_priority"
     assert "holding_path_exit_hold" not in stock
+
+
+def test_retired_path_is_absent_from_live_prompt_and_provider_schema():
+    from src.engine.ai_prompt_contracts import SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT
+    from src.engine.ai_response_contracts import resolve_ai_response_schema
+    assert 'EXIT_BAD_ENTRY_REFINED' not in SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT
+    schema=resolve_ai_response_schema(PATH_PROMPT_VERSION)
+    assert set(schema['properties']['votes']['items']['properties']['path_id']['enum'])==PATH_IDS
+
+
+def test_retired_historical_vote_is_read_without_new_runtime_authority(tmp_path):
+    from src.engine.ai.holding_exit_vote import iter_path_events_file
+    active=_events('EXIT_SOFT_STOP','REGULAR')[0]
+    retired={**active,'path_id':'EXIT_BAD_ENTRY_REFINED','prompt_version':'holding_path_vote_v10'}
+    path=tmp_path/'history.jsonl';path.write_text(json.dumps(retired)+'\n'+json.dumps(active)+'\n')
+    before=path.read_bytes()
+    assert list(iter_path_events_file(path,'record:7'))==[active]
+    assert path.read_bytes()==before
+    retired['prompt_version']=PATH_PROMPT_VERSION
+    path.write_text(json.dumps(retired)+'\n')
+    with pytest.raises(ValueError,match='contract_corrupt'):list(iter_path_events_file(path,'record:7'))

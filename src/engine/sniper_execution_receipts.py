@@ -1022,6 +1022,11 @@ _EXIT_DECISION_RESET_KEYS = (
     "exit_decision_quote_reason",
 )
 _POSITION_PEAK_RESET_KEYS = (
+    "main_stop_policy_pin", "main_stop_new_fill", "main_stop_pin_persistence",
+    "main_stop_clock_unobserved", "main_stop_restoring_position",
+    "_main_stop_typed_values", "_main_stop_position_key", "main_stop_source_at",
+    "main_stop_source_rejected_count", "main_stop_source_gap",
+    "soft_stop_micro_grace_started_at",
     "position_peak_cycle_id",
     "position_peak_persisted_price",
     "position_peak_persisted_at",
@@ -11835,6 +11840,9 @@ def _handle_entry_buy_execution(
                 filled_qty=int(new_qty or 0),
             )
 
+    if strategy == "SCALPING" and not target_stock.get("main_stop_policy_pin"):
+        target_stock["main_stop_new_fill"] = True
+
     if strategy == "SCALPING" and is_default_position_tag(strategy, pos_tag):
         target_stock["exit_mode"] = "SCALP_PRESET_TP"
 
@@ -12143,6 +12151,9 @@ def _handle_entry_buy_execution(
         target_stock.pop("pending_buy_msg", None)
 
     _persist_buy_fill_receipt_or_block(target_stock, code)
+    if strategy == "SCALPING" and target_stock.get("main_stop_new_fill"):
+        from src.engine.sniper_state_handlers import _main_stop_values
+        _main_stop_values(target_stock, time.time())
     threading.Thread(
         target=_update_db_for_buy,
         args=(target_id, exec_price, now, buy_receipt_snapshot),

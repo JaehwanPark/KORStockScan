@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -15,11 +16,11 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "error_detection_telegram_notify_state.json"
 
-SEMANTIC_ALERT_STAGES = frozenset({
-    "legacy_machine_report", "main_machine_policy", "main_auxiliary_policy",
-    "postclose_handoff", "entry_cancel_wait_tuning",
-    "samsung_frozen_validation",
-})
+from src.engine.monitoring.semantic_incident_contract import (
+    STAGE_HOOKS, fingerprint as semantic_fingerprint, reconcile,
+)
+
+SEMANTIC_ALERT_STAGES = frozenset(STAGE_HOOKS)
 
 
 def _load_telegram_config() -> tuple[str, str]:
@@ -46,19 +47,36 @@ def _send_telegram(token: str, admin_id: str, message: str) -> None:
 
 
 def _load_report(path: Path) -> dict:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    # A damaged/partial report must not become an empty successful observation.
+    limit = 32 * 1024 * 1024
+    if path.is_symlink() or path.stat().st_size > limit:
+        raise ValueError("notifier_report_untrusted")
+    with path.open("rb") as handle:
+        before = os.fstat(handle.fileno())
+        raw = handle.read(limit + 1)
+        after = os.fstat(handle.fileno())
+    identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    if len(raw) > limit or identity(before) != identity(after) or identity(after) != identity(path.stat()):
+        raise ValueError("notifier_report_changed")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise ValueError("notifier_report_contract_invalid")
+    return payload
 
 
 def _load_state(path: Path) -> dict:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    if not path.exists():
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if path.is_symlink() or path.stat().st_size > 2 * 1024 * 1024:
+        raise ValueError("notifier_state_untrusted")
+    with path.open("rb") as handle:
+        raw = handle.read(2 * 1024 * 1024 + 1)
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("notifier_state_oversize")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict) or not isinstance(payload.get("semantic_incidents", {}), dict):
+        raise ValueError("notifier_state_contract_invalid")
+    return payload
 
 
 def _write_state(path: Path, state: dict) -> None:
@@ -122,7 +140,8 @@ def _alert_results(report: dict) -> list[dict]:
         for value in (item.get("details") or {}).get("semantic_alerts", []):
             if (not isinstance(value, dict) or not _semantic_source_matches(report, item, value)
                 or value.get("stage") not in SEMANTIC_ALERT_STAGES
-                or value.get("status") in {"not_assessed", "unobservable", "historical_diagnostic", "off", "future_due"}
+                or value.get("status") in {"not_assessed", "historical_diagnostic", "off", "future_due", "retired"}
+                or (value.get("status") == "unobservable" and not value.get("expected_overdue"))
                 or not value.get("reason") or not value.get("owner")):
                 continue
             alerts.append({"detector_id": "artifact_freshness", "severity": "warning",
@@ -161,8 +180,7 @@ def _normalize_incident_summary(value: object) -> str:
 def _incident_fingerprint(item: dict) -> str:
     semantic = item.get("semantic_incident")
     if isinstance(semantic, dict):
-        return hashlib.sha256(json.dumps([semantic.get(k) for k in (
-            "owner", "source_date", "target_date", "stage", "scope", "reason", "generation")], separators=(",", ":")).encode()).hexdigest()
+        return semantic_fingerprint(semantic)
     payload = {
         "detector_id": str(item.get("detector_id") or ""),
         "severity": str(item.get("severity") or "").lower(),
@@ -222,7 +240,7 @@ def _build_message(
     return "\n".join(lines)
 
 
-def notify_from_report(
+def _notify_from_report_locked(
     report_file: Path,
     *,
     mode: str,
@@ -241,105 +259,45 @@ def notify_from_report(
     }:
         return "disabled"
 
-    report = _load_report(report_file)
+    try:
+        report = _load_report(report_file)
+    except (OSError, ValueError, TypeError):
+        return "report_invalid"
     fail_results = _alert_results(report)
     now = time.time() if now_ts is None else now_ts
     state = _load_state(state_file)
-    semantic_state = state.get("semantic_incidents")
-    semantic_state = semantic_state if isinstance(semantic_state, dict) else {}
+    # A delayed detector result must not clear a newer failure or replace its
+    # delivery receipt. Use the producer clock, never this sender's wall clock.
+    if report.get('timestamp'):
+        from datetime import datetime
+        try:
+            stamp = datetime.fromisoformat(report['timestamp'])
+            if stamp.tzinfo is None:
+                return 'report_clock_invalid'
+            report_epoch = stamp.timestamp()
+        except (ValueError, TypeError, OverflowError):
+            return 'report_clock_invalid'
+        if report_epoch < state.get('last_observation_epoch', 0):
+            return 'stale_report'
+        state['last_observation_epoch'] = report_epoch
+    # Migrate delivered fingerprints without treating an owner rename as a
+    # recurrence. Delivery receipts and unresolved observations remain distinct.
+    migration = {old: semantic_fingerprint(row) for old, row in
+                 (state.get("semantic_incidents") or {}).items() if isinstance(row, dict)}
+    if "active_incident_fingerprints" in state:
+        state["active_incident_fingerprints"] = [migration.get(k, k) for k in state["active_incident_fingerprints"]]
+    delivered = set(state.get("notified_incident_fingerprints",
+                              state.get("active_incident_fingerprints", [])))
+    delivered = {migration.get(k, k) for k in delivered}
     details = next((r.get("details") or {} for r in report.get("results", [])
                     if isinstance(r, dict) and r.get("detector_id") == "artifact_freshness"), {})
-    names = {"legacy_machine_report": "machine_result_semantics",
-             "main_machine_policy": "machine_result_semantics",
-             "main_auxiliary_policy": "auxiliary_result_semantics",
-             "postclose_handoff": "postclose_handoff_semantics",
-             "entry_cancel_wait_tuning": "entry_cancel_wait_result_semantics",
-             "episode_policy": "episode_policy_semantics",
-             "samsung_frozen_validation": "samsung_frozen_validation_semantics",
-             "episode_startup": "episode_startup_semantics"}
-    unresolved = {}
-    history = list(state.get("historical_semantic_incidents") or [])
-    for fingerprint, incident in semantic_state.items():
-        if not isinstance(incident, dict):
-            continue
-        observed = next((r.get('semantics') or {} for r in details.get('semantic_observations', [])
-                         if r.get('stage') == incident.get('stage')
-                         and (r.get('semantics') or {}).get('source_date') == incident.get('source_date')),
-                        details.get(names.get(incident.get("stage"))) or {})
-        bound = any(b.get('as_of_date') == report.get('target_date')
-                    and b.get('stage') == incident.get('stage')
-                    and b.get('source_date') == incident.get('source_date')
-                    for b in details.get('semantic_source_bindings', []) if isinstance(b, dict))
-        native_day = incident.get('source_date') if bound else (observed.get("source_date") if incident.get("stage") == "entry_cancel_wait_tuning"
-            and _semantic_source_matches(report, {"details":details}, incident)
-            and (observed.get("execution") or {}).get("source_date") == observed.get("source_date")
-            else report.get("target_date"))
-        if incident.get("source_date") != native_day:
-            history.append({**incident, "disposition": "historical_unrecovered"})
-        elif (observed.get('status') in {'off', 'historical_diagnostic'}
-              and observed.get('source_date') == incident.get('source_date')
-              and observed.get('report_sha256')
-              and any(isinstance(b, dict) and b.get('as_of_date') == report.get('target_date')
-                      and b.get('stage') == incident.get('stage')
-                      and b.get('source_date') == observed.get('source_date')
-                      and b.get('target_date') == observed.get('target_date')
-                      and b.get('generation') == observed.get('report_sha256')
-                      and b.get('status') == observed.get('status')
-                      for b in details.get('semantic_source_bindings', []))):
-            history.append({**incident, 'disposition': observed['status'] + '_unrecovered',
-                            'classification_generation': observed['report_sha256']})
-        elif (observed.get("source_date") != incident.get("source_date")
-              or observed.get("status") not in {
-                  "pass", "warning", "source_gap", "review_required",
-                  "incumbent_carry", "candidate_selected", "cumulative_winrate_selected", "done"}
-              or (incident.get("target_date") is not None
-                  and observed.get("target_date") != incident.get("target_date"))
-              or (observed.get('status') == 'cumulative_winrate_selected'
-                  and not any(isinstance(b, dict) and b.get('as_of_date') == report.get('target_date')
-                      and b.get('stage') == incident.get('stage')
-                      and b.get('source_date') == observed.get('source_date')
-                      and b.get('target_date') == observed.get('target_date')
-                      and b.get('generation') == observed.get('report_sha256')
-                      and b.get('status') == observed.get('status')
-                      for b in details.get('semantic_source_bindings', [])))
-              or not observed.get("report_sha256")
-              or (incident.get("scope") not in {None, "report"}
-                  and incident.get("scope") not in (observed.get("scopes") or {}))
-              or (incident.get("stage") == "entry_cancel_wait_tuning"
-                  and incident.get("reason") == "cancel_wait_consumer_projection_invalid"
-                  and (observed.get("consumers") or {}).get("status") != "verified")
-              or (incident.get("stage") == "entry_cancel_wait_tuning"
-                  and incident.get("reason") in {"cancel_wait_execution_failed", "cancel_wait_completed_report_missing"}
-                  and (observed.get("execution") or {}).get("command_status") != "succeeded")
-              or incident.get("reason") in (observed.get("findings") or [])):
-            unresolved[fingerprint] = incident
-        elif incident.get('stage') in {'main_machine_policy', 'main_auxiliary_policy'}:
-            scope = (observed.get('scopes') or {}).get(incident.get('scope'), observed)
-            if scope.get('findings') or observed.get('findings'):
-                unresolved[fingerprint] = incident
-            else:
-                history.append({**incident, 'disposition': 'native_recovered',
-                                'recovery_generation': observed.get('report_sha256')})
-    for item in fail_results:
-        if isinstance(item.get("semantic_incident"), dict):
-            incoming = item['semantic_incident']
-            keys = ('owner', 'source_date', 'target_date', 'stage', 'scope', 'reason')
-            for fingerprint, previous in list(unresolved.items()):
-                if all(previous.get(k) == incoming.get(k) for k in keys) and previous.get('generation') != incoming.get('generation'):
-                    history.append({**previous, 'disposition': 'superseded_generation_unrecovered'})
-                    del unresolved[fingerprint]
-            unresolved[_incident_fingerprint(item)] = incoming
-    state.update(semantic_incidents=dict(list(unresolved.items())[-128:]),
-                 historical_semantic_incidents=history[-128:])
+    state = reconcile(state, details, report.get("target_date"),
+        [r["semantic_incident"] for r in fail_results if isinstance(r.get("semantic_incident"), dict)],
+        source_matches=lambda i: _semantic_source_matches(report, {"details": details}, i))
+    unresolved = state["semantic_incidents"]
     if not fail_results:
-        if state.get("active_incident_fingerprints"):
-            _write_active_incident_state(
-                state_file,
-                state,
-                fingerprints=list(unresolved),
-                report=report,
-                now=now,
-            )
+        state["notified_incident_fingerprints"] = sorted(delivered.intersection(unresolved))
+        _write_active_incident_state(state_file, state, fingerprints=list(unresolved), report=report, now=now)
         return "no_alert"
 
     sig = _signature(report, fail_results)
@@ -348,11 +306,7 @@ def notify_from_report(
     ]
     current_fingerprints = [fingerprint for fingerprint, _ in fingerprinted_results]
     current_fingerprints.extend(unresolved)
-    previous_fingerprints = {
-        str(value)
-        for value in state.get("active_incident_fingerprints", [])
-        if str(value)
-    }
+    previous_fingerprints = delivered
     if previous_fingerprints:
         new_results = [
             item
@@ -384,13 +338,21 @@ def notify_from_report(
 
     token, admin_id = _load_telegram_config()
     if not token or not admin_id:
+        _write_state(state_file, state)
         return "missing_config"
 
-    # Do not mark undisplayed incidents as notified. Persist only after every
-    # bounded message succeeds; transport failure remains retryable.
-    for offset in range(0, len(new_results), 3):
-        message = _build_message(report, new_results[offset:offset + 3], mode=mode, log_file=log_file)
-        _send_telegram(token, admin_id, message)
+    # Persist each successfully delivered batch; retry only undisplayed incidents.
+    try:
+        for offset in range(0, len(new_results), 3):
+            message = _build_message(report, new_results[offset:offset + 3], mode=mode, log_file=log_file)
+            _send_telegram(token, admin_id, message)
+            delivered.update(_incident_fingerprint(item) for item in new_results[offset:offset + 3])
+            state['notified_incident_fingerprints'] = sorted(delivered)
+            _write_state(state_file, state)
+    except Exception:
+        state["last_delivery_status"] = "failed_retryable"
+        _write_state(state_file, state)
+        raise
     _write_state(
         state_file,
         {
@@ -398,6 +360,10 @@ def notify_from_report(
             "signature": sig,
             "active_incident_fingerprints": sorted(set(current_fingerprints)),
             "active_incident_count": len(set(current_fingerprints)),
+            "notified_incident_fingerprints": sorted(
+                delivered.intersection(current_fingerprints)
+                | {fingerprint for fingerprint, _ in fingerprinted_results}),
+            "last_delivery_status": "sent",
             "sent_at_ts": now,
             "sent_at": report.get("timestamp") or "",
             "last_seen_at_ts": now,
@@ -407,6 +373,25 @@ def notify_from_report(
         },
     )
     return "sent"
+
+
+def notify_from_report(report_file: Path, *, mode: str, log_file: str,
+                       state_file: Path = DEFAULT_STATE_FILE, cooldown_sec: int = 600,
+                       now_ts: float | None = None) -> str:
+    """Serialize only notifier state, including direct CLI invocations."""
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    with state_file.with_suffix(state_file.suffix + ".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "state_busy"
+        try:
+            _load_state(state_file)
+        except (OSError, ValueError, TypeError):
+            # Preserve damaged original bytes; a blank state would invent recovery.
+            return "state_invalid"
+        return _notify_from_report_locked(report_file, mode=mode, log_file=log_file,
+            state_file=state_file, cooldown_sec=cooldown_sec, now_ts=now_ts)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -12,7 +12,7 @@ from . import research_storage as storage
 TRADE_FIELDS=frozenset(('id','record_id','strategy','stock_code','code','status',
     'main_automatic_management_allowed','first_buy_at_epoch','buy_fill_quantity','buy_fill_amount',
     'trailing_replay_cost_model','actual_cost_reconciliation','entry_quote_route','entry_quote_item',
-    'holding_ai_required','holding_ai_policy_sha256','trailing_entry_context','trailing_situation_pin'))
+    'holding_ai_required','holding_vote_source','holding_ai_policy_sha256','trailing_entry_context','trailing_situation_pin'))
 
 
 class Reader:
@@ -132,7 +132,9 @@ def completed_rows(path,output_root):
                         if event.get('stage')!='scalp_trailing_input_transition':continue
                         fields=event.get('fields') or {};quote=fields.get('universal_trailing_quote')
                         if isinstance(quote,str):quote=json.loads(quote)
-                        if isinstance(quote,dict) and quote.get('kind')=='QUOTE':yield quote
+                        if isinstance(quote,dict) and quote.get('kind')=='QUOTE':
+                            if body.get('holding_vote_source') is None:body['holding_vote_source']=quote.get('holding_vote_source')
+                            yield quote
                         for name in ('trailing_entry_context','trailing_situation_pin'):
                             context=fields.get(name)
                             if isinstance(context,str):context=json.loads(context)

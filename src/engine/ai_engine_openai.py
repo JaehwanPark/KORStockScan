@@ -5144,6 +5144,7 @@ class GPTSniperEngine:
         auxiliary_registry_sha256=None,
         caller_deadline_perf=None,
         transport_observation=None,
+        auxiliary_identity_context=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         if transport_observation is not None:
@@ -5288,6 +5289,17 @@ class GPTSniperEngine:
             ),
         }
 
+        if auxiliary_identity_context is not None:
+            from src.engine.scalping.reversal_auxiliary_registry import provider_identity
+            try:
+                transport_meta['entry_auxiliary_policy_identity'] = provider_identity(
+                    request.build_provider_payload(use_schema_registry=response_schema_registry_used),
+                    auxiliary_identity_context)
+            except (ValueError,TypeError,KeyError,OSError) as exc:
+                # Evidence failure is local to research, never a new BUY veto.
+                transport_meta['entry_auxiliary_policy_identity'] = None
+                transport_meta['entry_auxiliary_identity_source_gap'] = type(exc).__name__
+
         if auxiliary_envelope:
             payload=request.build_provider_payload(use_schema_registry=True)
             transport_meta['auxiliary_provider_request']=dict(
@@ -5313,6 +5325,9 @@ class GPTSniperEngine:
                 # Local source binding must survive the provider's 16-field
                 # metadata limit. This does not change wire metadata/prompt.
                 metadata={**dict(selected_request.metadata),
+                    **({'holding_provider_contract': {k:v for k,v in selected_request.build_provider_payload(
+                        use_schema_registry=response_schema_registry_used).items() if k != 'input'}}
+                       if selected_request.endpoint_name == 'holding_path_vote' else {}),
                     **{k:v for k,v in (metadata_extra or {}).items() if k in (
                         'async_request_id','async_producer_pid','async_producer_start_ticks',
                         'async_origin_deadline_epoch','async_order_venue','scanner_generation_id')},
@@ -5326,6 +5341,10 @@ class GPTSniperEngine:
         capture_started = time.perf_counter()
         capture_meta = capture_request(request)
         transport_meta.update(capture_meta)
+        if transport_meta.get('entry_auxiliary_policy_identity'):
+            transport_meta['entry_auxiliary_policy_identity']['provenance'].update(
+                request_id=request.request_id,
+                request_capture_sha256=capture_meta.get('ai_request_envelope_sha256'))
         transport_meta["ai_trace_capture_ms"] = (time.perf_counter() - capture_started) * 1000
         bedrock_primary_payload = (
             None
@@ -10754,6 +10773,12 @@ class GPTSniperEngine:
                 caller_deadline_perf=entry_budget.perf if entry_budget is not None else None,
                 **({'transport_observation': transport_observation} if transport_observation is not None else {}),
                 replay_context=replay_context,
+                **({'auxiliary_identity_context': dict(
+                    policy_version=entry_setup_live_policy['continuous_reversal_assessment'].get('policy_version','continuous_reversal_policy_v1'),
+                    registry_sha256=entry_setup_live_policy['continuous_reversal_assessment'].get('auxiliary_registry_sha256'),
+                    overlay_sha256=entry_setup_live_policy['continuous_reversal_assessment'].get('auxiliary_overlay_sha256'),
+                    bundle_sha256=entry_setup_live_policy.get('machine_bundle_sha256'))}
+                   if entry_setup_live_policy.get('continuous_reversal_input') else {}),
                 **({'response_schema_override': reversal_schema,
                     'auxiliary_registry_sha256': entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('auxiliary_registry_sha256')}
                    if entry_setup_live_policy.get('continuous_reversal_input') else {}),
@@ -10794,8 +10819,17 @@ class GPTSniperEngine:
             v2_14_transport_meta = {}
             if decision_quality_v2_14_selected:
                 v2_14_transport_meta = self._consume_last_transport_meta()
+                entry_setup_live_policy['entry_auxiliary_policy_identity'] = (
+                    v2_14_transport_meta.get('entry_auxiliary_policy_identity'))
             else:
                 result = self._merge_last_transport_meta(result)
+                entry_setup_live_policy['entry_auxiliary_policy_identity'] = (
+                    result.get('entry_auxiliary_policy_identity') if isinstance(result,dict) else None)
+            identity_receipt=entry_setup_live_policy.get('entry_auxiliary_policy_identity')
+            if isinstance(identity_receipt,dict):
+                original_transport=v2_14_transport_meta if decision_quality_v2_14_selected else result
+                identity_receipt['provenance'].update(response_sha256=original_transport.get('openai_response_sha256'),
+                    response_id=original_transport.get('openai_response_id'))
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
                 if decision_quality_v2_7_selected:
@@ -12226,6 +12260,17 @@ class GPTSniperEngine:
             event["ai_decision_trace_id"] = (
                 result.get("ai_decision_trace_id") if isinstance(result, dict) else None
             )
+            event['actual_request_reference'] = ({
+                'schema':'holding_actual_request_reference_v1',
+                'date':result.get('ai_input_payload_store_date'),
+                'request_id':result.get('ai_decision_trace_id'),
+                'request_envelope_sha256':result.get('ai_request_envelope_sha256'),
+                'prompt_sha256':result.get('ai_prompt_sha256'),
+                'payload_sha256':result.get('ai_input_payload_sha256'),
+                'replay_exact':result.get('ai_input_payload_replay_exact') is True
+                    and result.get('ai_prompt_replay_exact') is True,
+                'response_sha256':result.get('openai_response_sha256'),
+            } if isinstance(result,dict) else None)
             if failure is not None:
                 event["excluded_reason"] = failure
         return events

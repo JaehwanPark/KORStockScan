@@ -2382,7 +2382,7 @@ def _build_soft_stop_rebound(
     if rebound_buy_rate >= 50.0:
         recommendation = "cooldown live 금지, threshold/AI 재판정 후보"
     elif whipsaw_signal:
-        recommendation = "soft_stop whipsaw confirmation canary 후보"
+        recommendation = "Main stop confirmation source review; retired whipsaw is not a candidate"
     elif (
         rebound_sell_rate >= 50.0
         and rebound_buy_rate < 50.0
@@ -2724,6 +2724,20 @@ def _partitioned_holding_report(target_date,month_start,result,out,assembly):
     source_gaps=result['assembly_census'].get('source_gaps',{})
     census_complete=not any(source_gaps.get(key,0) for key in (
         'completed_snapshot_source_gap','completed_snapshot_missing','completed_snapshot_unverified'))
+    eligible_complete=result.get('eligible_evaluation_complete',result['status']=='complete')
+    from src.engine.automation.scalp_trailing_mechanical_policy_apply import _type_view
+    research=result.get('trailing_situation_research') or {}
+    market=research.get('train_selected_market')
+    kinds=[(key.split('|')[-1],cell) for key,cell in research.get('cells',{}).items()
+        if key.startswith('actual_completed|'+str(market)+'|') and not key.endswith('|BASE')]
+    winner=min(kinds,key=lambda item:(-(item[1]['train'].get('paired_delta_net_krw') or 0),item[0])) if kinds else None
+    view=_type_view(result,result['artifact_sha256'],report_path=out/f'research_{target_date}.json',
+        market=market,kind=winner[0]) if winner else None
+    market_tuning=view['trailing_mechanical_market_tuning'] if view else dict(
+        status='partitioned_research_hold_sample_or_edge',population_complete=eligible_complete,
+        research_candidate=None,decision_authority='existing_mechanical_selector')
+    market_tuning.update(raw_census_complete=census_complete,eligible_evaluation_complete=eligible_complete,
+                         universal_evaluation=result['common_population_evaluation'])
     # Universal outcome refs do not contain the original vote signal ledger.
     # Keep that consumer's baseline-prior contract, with an explicit missing
     # replay cohort; never relabel universal outcomes as observed AI votes.
@@ -2740,16 +2754,14 @@ def _partitioned_holding_report(target_date,month_start,result,out,assembly):
             canonical_main_completed_rows=actual_ref['count'],db_completed_main_ids_ref=actual_ref,
             source_gap_counts=source_gaps,
             whole_census_economics_complete=None),
-        mechanical_population_quality=dict(complete=census_complete,start_entry_day=window['policy_refresh_start_date'],
+        mechanical_population_quality=dict(complete=eligible_complete,raw_census_complete=census_complete,start_entry_day=window['policy_refresh_start_date'],
             entry_day_basis='verified_forward_source_window',
             policy_refresh_start_date=window['policy_refresh_start_date'],
             classifier_version=manifest['approved_parent_receipt']['classifier_version']),
         cohorts=dict(actual_completed=dict(population_ids_ref=actual_ref,n=actual_ref['count'])),
         position_outcomes_ref=result['partition_results_ref'],
         holding_path_vote_replay=votes,
-        trailing_mechanical_market_tuning=dict(status='partitioned_research_reference',population_complete=census_complete,
-            research_candidate=None,decision_authority='existing_mechanical_selector',
-            universal_evaluation=result['common_population_evaluation']),
+        trailing_mechanical_market_tuning=market_tuning,
         input_window_dependencies=dependency,input_window_generation_sha256=dependency['input_window_generation_sha256'],
         actual_cost_source_generations={d:v['cost_generation'] for d,v in dependency['dependencies'].items()},
         cost_input_complete=None,readiness=dict(status='partitioned_source_verified'),

@@ -2,6 +2,8 @@
 
 작성일: 2026-10-10 KST
 
+최신 수용 정정(10/10 21:27 KST): [정책 생성 구조 재점검](../audits/main-trailing-delay-policy-generation-structural-review-2026-10-10.md)의 TG1–TG4는 미해결이다. 아래 완료는 부모 계승 발행·분할 처리·검증된 운영 준비의 이력이다. 정상 완료 adapter의 원 holding-AI 증빙 누락, 신규 classifier SHA와 과거 pin의 순환 일치 조건, 대용량 시장 후보 미전달 및 일반 악화 전수 veto를 검증하지 못했으므로 **신규 학습 정책 생성까지 전체 구현 완료로 해석하지 않는다. 데이터 축적만으로 닫을 수 없다.** 보완 우선순위·종료 검사는 위 감사와 잔여계획의 최신 상태를 따른다.
+
 상태: **AT0–AT7·TP1–TP7와 잔여 W0–W5의 구현·반복 리뷰·정식 발행·승인 배포·기동 준비를 완료했다.** `MainAllScopeTrailingReplay`는 완료다. 최종 릴리스는 `main-trailing-delay-residual-20261010-v6` / `78f2c1d784fd5043d5b5bc0fedd7b963f8fe42d4`이며 [실행 감사](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)와 [최종 준비 영수증](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json)을 따른다. 10/12 실제 PID 소비와 실현 경제성은 미관측이며 기존 적용일 owner에서 확인한다. 아래 이전 문서·부분 배포 기록은 당시 이력이다.
 
 구현 순서·owner·완료 검사는 [잔여작업 완료계획 W0–W6](main-trailing-delay-residual-work-completion-plan-2026-10-10.md)을 따른다. 자동 전수 source producer, 초과 입력의 분할·재개·전역 집계, 전체 성능 및 formal 장후/PREOPEN 인계를 검증했다. 초기 부모 계승은 추가 경제 gate 없이 수용했으며 W6 자연 PID 관측은 적용일의 별도 수용이다.

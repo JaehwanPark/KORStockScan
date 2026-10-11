@@ -89,8 +89,9 @@ def test_runtime_mechanical_market_vector_is_atomic_and_score_does_not_select_tp
         _at("2026-09-25 10:00:00"))
     assert market == "REGULAR" and effective["SCALP_TRAILING_LIMIT_WEAK"] == 0.5
     assert set(effective) == set(TP_KEYS)
-    assert not handlers._holding_strong_trailing_enabled(
-        {"usable_for_negative_exit": False}, 99, threshold=80)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE", "99")
+    assert handlers._scalp_trailing_values_for_evaluation(
+        _at("2026-09-25 10:00:00"))[0] == effective
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_LIMIT_WEAK_REGULAR", "0.7")
     effective, _ = handlers._scalp_trailing_values_for_evaluation(_at("2026-09-25 10:00:00"))
     assert effective["SCALP_TRAILING_LIMIT_WEAK"] == 0.5

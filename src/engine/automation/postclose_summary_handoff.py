@@ -179,10 +179,9 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
                 report_dir.parent, _next_krx_trading_day(target_date),
             )
         if _initial_quantity_refresh_due(report_dir, target_date):
-            paths["initial_quantity_refresh_stage"] = (
-                report_dir / "initial_entry_quantity_type_policy"
-                / f"refresh_postclose_{target_date}"
-                / f"initial_quantity_refresh_stage_{target_date}.json")
+            from src.engine.scalping.initial_quantity_policy import committed_refresh_stage_path
+            paths["initial_quantity_refresh_stage"] = committed_refresh_stage_path(
+                report_dir / "initial_entry_quantity_type_policy" / f"refresh_postclose_{target_date}", target_date)
         if any(stage_path(report_dir, target_date, s).exists() for s in STAGE_REGISTRY):
             paths.update({f'stage_{stage}':stage_path(report_dir, target_date, stage)
                 for stage in active_stage_names(target_date) if stage != 'summary_handoff'})
@@ -802,6 +801,7 @@ STAGE_SCHEMA = 'postclose_stage_terminal_v3'
 FAMILY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 STAGE_REGISTRY = {
     'main_machine_policy': ((), ('machine_policy', 'machine_policy_terminal')),
+    'main_stop_confirmation': ((), ('main_stop_research', 'main_stop_committed')),
     'pre_submit_delay': ((), ('pre_submit_delay_tuning', 'pre_submit_delay_policy')),
     'legacy_machine_report': ((), ('ai_decision_action_outcome_calibration',)),
     'main_auxiliary_policy': (('outcome_labels', 'legacy_machine_report'), ('compact_auxiliary_paired_economic',)),
@@ -813,7 +813,8 @@ STAGE_REGISTRY = {
 def active_stage_names(day):
     """A new mandatory family must not retroactively invalidate old dates."""
     return tuple(stage for stage in STAGE_REGISTRY
-                 if stage != 'pre_submit_delay' or day >= '2026-09-23')
+                 if (stage != 'pre_submit_delay' or day >= '2026-09-23')
+                 and (stage != 'main_stop_confirmation' or day >= '2026-10-12'))
 STAGE_OWNER_GROUPS = {'machine': ('main_machine_policy', 'main_auxiliary_policy', 'legacy_machine_report', 'outcome_labels')}
 
 
@@ -853,6 +854,9 @@ def stage_artifacts(report_dir, day, stage):
         report_file, policy_file, pointer, _ = committed_paths(Path(report_dir).parent, day)
         paths.update(pre_submit_delay_tuning=report_file, pre_submit_delay_policy=policy_file,
                      pre_submit_delay_committed_manifest=pointer)
+    from src.engine.automation.main_stop_postclose import report_path, committed_path
+    paths['main_stop_research'] = report_path(Path(report_dir).parent, day)
+    paths['main_stop_committed'] = committed_path(Path(report_dir).parent, day)
     outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
     if stage == 'pre_submit_delay' and 'pre_submit_delay_committed_manifest' in paths:
         outputs['pre_submit_delay_committed_manifest'] = paths['pre_submit_delay_committed_manifest']
@@ -1148,6 +1152,8 @@ def stage_input_paths(report_dir, day, stage):
     if stage == 'summary_handoff':
         paths.update({s:stage_path(report_dir, day, s) for s in active_stage_names(day)
                       if s != 'summary_handoff'})
+    if stage == 'main_stop_confirmation':
+        paths['postclose_exit_snapshot'] = Path(report_dir)/'monitor_snapshots/manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
     if stage == 'pre_submit_delay':
         paths['pre_submit_delay_source_ledger'] = Path(report_dir).parent / 'pipeline_event_summaries' / f'pre_submit_delay_source_ledger_{day}.json'
     if stage in {'outcome_labels'}:
@@ -1340,6 +1346,11 @@ def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_ro
 def _stage_output_issues(report_dir, day, stage):
     from src.engine.automation.postclose_recommendation_intake import _report_date
     errors = []
+    if stage == 'main_stop_confirmation':
+        from src.engine.automation.main_stop_postclose import read_committed
+        try: read_committed(Path(report_dir).parent, day)
+        except (ValueError, OSError, KeyError, TypeError): return ['main_stop_confirmation:committed_generation_invalid']
+        return []
     reversal_source=Path(report_dir)/'continuous_reversal'/day/'source.json'
     if reversal_source.is_file() and stage in {'main_machine_policy','main_auxiliary_policy'}:
         from src.engine.scalping.continuous_reversal_postclose import SCHEMA, digest, expected_cells
@@ -1581,6 +1592,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
         return [command('scalping.ai_action_outcome_calibration', *date_args,
                         '--winrate-policy-only', '--admission-recipe', 'pullback_p60_v0',
                         '--publication-date', publication)] + fixed_watch_commands()
+    if stage == 'main_stop_confirmation':
+        return [command('automation.main_stop_postclose', '--date', day, '--target', _next_krx_trading_day(publication), '--publication-date', publication)]
     if stage == 'pre_submit_delay':
         return [command('scalping.pre_submit_delay_tuning', '--date', day,
                         '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger',
@@ -1607,6 +1620,9 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
             paths[module] = project / (module.replace('.', '/') + '.py')
         elif cmd[0] == '/bin/bash':
             paths[cmd[1]] = project / cmd[1]
+    if stage == 'main_stop_confirmation':
+        for name in ('main_stop_policy', 'main_stop_replay'):
+            paths[name] = project/f'src/engine/scalping/{name}.py'
     if stage == 'summary_handoff':
         paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
         paths['direct_tower'] = project / 'src/engine/automation/tuning_performance_control_tower.py'

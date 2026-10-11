@@ -70,6 +70,22 @@ class DBManager:
         """프로그램 기동 시 테이블이 없으면 생성합니다."""
         Base.metadata.create_all(bind=self.engine)
 
+        # Economic lineage is required by the fact consumer. Fail the startup
+        # migration transaction instead of silently claiming a usable schema.
+        if self.engine.dialect.name == "postgresql":
+            with self.engine.begin() as conn:
+                for name, sql_type in (
+                    ("economics_source_status", "TEXT"),
+                    ("actual_cost_reconciliation_status", "TEXT"),
+                    ("actual_cost_source_generation", "TEXT"),
+                    ("completion_census_run_id", "TEXT"),
+                    ("completion_census_projection_sha256", "TEXT"),
+                    ("broker_actual_fees_taxes_krw", "DOUBLE PRECISION"),
+                ):
+                    conn.execute(text(
+                        f"ALTER TABLE trade_performance_facts ADD COLUMN IF NOT EXISTS {name} {sql_type}"
+                    ))
+
         # 💡 [자동 마이그레이션] users 테이블에 신규 컬럼이 없으면 자동 추가 (PostgreSQL)
         try:
             with self.engine.begin() as conn:

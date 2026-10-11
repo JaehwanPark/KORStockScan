@@ -36,7 +36,7 @@ def _today_kst_str(now_kst: datetime | None = None) -> str:
     return (now_kst or datetime.now()).strftime("%Y-%m-%d")
 
 
-def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, Any]:
+def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Check the sentinel's exact-date semantic receipt separately from freshness."""
     # The vote/terminal semantic payload was introduced for the next natural
     # trading session. Older sentinel files are audit history, not malformed
@@ -45,16 +45,26 @@ def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, An
         return {"status": "not_required_before_introduction", "findings": []}
     path = (root / "data/report/holding_exit_sentinel" /
             f"holding_exit_sentinel_{source_date}.json")
+    meta = dict(source_date=source_date, target_date=source_date, artifact=str(path),
+                report_sha256=None, native_validated=False, observation_complete=False)
     if not path.exists() and not path.is_symlink():
         markdown = path.with_suffix(".md")
         if markdown.exists() or markdown.is_symlink():
-            return {"status": "source_invalid", "findings": [
-                "holding_semantic_json_missing_with_markdown_report"]}
-        return {"status": "not_assessed", "findings": []}
+            return dict(meta, status="source_invalid", findings=["holding_semantic_json_missing_with_markdown_report"])
+        if now is None:
+            return dict(meta, status="not_assessed", findings=[])
+        registry = next((r for r in ARTIFACT_REGISTRY if r["id"] == "holding_exit_sentinel_premarket_report"), None)
+        if registry is None:
+            return dict(meta, status="not_installed", findings=[])
+        start = datetime.fromisoformat(source_date).replace(tzinfo=now.tzinfo, hour=registry["window_start"][0], minute=registry["window_start"][1])
+        overdue = now >= start + timedelta(seconds=registry.get("window_grace_sec", 0))
+        return dict(meta, status="unobservable" if overdue else "future_due",
+                    expected_overdue=overdue, findings=["holding_semantic_receipt_missing_after_due"] if overdue else [])
     try:
         if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
             raise ValueError("untrusted_path_or_size")
-        report = json.loads(path.read_text(encoding="utf-8"))
+        report, raw_sha = _semantic_object(path, limit=8 * 1024 * 1024)
+        meta["report_sha256"] = raw_sha
         semantics = report.get("profit_exit_semantics") or {}
         if (report.get("target_date") != source_date
                 or semantics.get("target_date") != source_date
@@ -106,9 +116,14 @@ def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, An
                     or semantics.get("decision_authority") != "report_only_no_order_or_policy_mutation"):
                 raise ValueError("semantic_v2_status_inconsistent")
     except (OSError, ValueError, TypeError, AttributeError) as exc:
-        return {"status": "source_invalid", "findings": [str(exc)]}
+        return dict(meta, **_semantic_failure(exc))
     status = semantics["status"]
     return {
+        **meta, "native_validated": True, "observation_complete": True,
+        "source_generation": semantics.get("source_generation"), "observed_at": report.get("as_of"),
+        "source_gap_examples": (semantics.get("source_gaps") or [])[:16],
+        "native_finding_examples": (semantics.get("findings") or [])[:16],
+        "lifecycle_examples": (semantics.get("lifecycle") or [])[:16],
         "status": status,
         "findings": ([status] if status in {
             "source_gap", "policy_binding_gap", "runtime_not_consumed",
@@ -125,8 +140,40 @@ def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, An
     }
 
 
-def _initial_quantity_semantics(
-    root: Path, source_date: str, *, now_epoch: float | None = None,
+def _main_stop_semantics(root, source_date, *, now):
+    from src.engine.automation.main_stop_postclose import read_committed, committed_path, START_DATE
+    path = committed_path(root / "data", source_date)
+    meta = dict(source_date=source_date, target_date=None, artifact=str(path),
+        report_sha256=None, native_validated=False, observation_complete=False, findings=[])
+    if not path.exists():
+        if source_date < START_DATE:
+            return dict(meta, status="not_installed")
+        overdue = source_date < now.date().isoformat()
+        return dict(meta, status="unobservable" if overdue else "future_due",
+            expected_overdue=overdue, findings=["main_stop_committed_missing_after_due"] if overdue else [])
+    try:
+        _, before = _semantic_object(path, limit=1024*1024)
+        bundle, report, pointer, _ = read_committed(root / "data", source_date)
+        from src.engine.automation.main_stop_postclose import runtime_consumption
+        consumed = runtime_consumption(root / 'data', bundle)
+        if _semantic_object(path, limit=1024*1024)[1] != before:
+            return dict(meta, status="unobservable", generation_changed=True)
+        comparison = ('source_gap' if any(c['status']=='source_gap'
+            or any(n and (key.startswith('source_gap:') or key=='actual_cost_or_terminal_gap')
+                   for key,n in c.get('source_census',{}).items()) for c in bundle['cells'].values())
+            else 'baseline_carry' if all(c['status']!='selected' for c in bundle['cells'].values()) else 'selected')
+        return dict(meta, status="published_policy", report_sha256=before,
+            target_date=bundle["target_date"], policy_sha256=bundle["policy_sha256"],
+            native_generation=pointer["generation"], native_validated=True,
+            observation_complete=True, actual_pid_consumed=consumed['actual_pid_consumed'],
+            runtime_consumption=consumed, findings=consumed['findings'],
+            comparison_state=comparison,policy_states=dict(comparison_state=comparison))
+    except (OSError, ValueError, TypeError, KeyError):
+        return dict(meta, status="source_invalid", findings=["main_stop_committed_binding_invalid"])
+
+
+def _initial_quantity_semantics_native(
+    root: Path, source_date: str, *, now_epoch: float | None = None, read=None,
 ) -> dict[str, Any]:
     """Read-only quantity, sequential leg, and post-start timeout checks."""
     if source_date < "2026-09-28":
@@ -153,7 +200,7 @@ def _initial_quantity_semantics(
             if current_path in seen_current or len(seen_current) >= 32:
                 raise ValueError("current_parent_cycle")
             seen_current.add(current_path)
-            current = json.loads(current_path.read_text(encoding="utf-8"))
+            current = read(current_path)
             effective = str(current.get("effective_from") or "")
             selected_initial_quantity_env(current_path, effective)
             if effective <= source_date:
@@ -168,11 +215,27 @@ def _initial_quantity_semantics(
                 raise ValueError("current_parent_untrusted")
         env = selected_initial_quantity_env(current_path, source_date)
         policy_path = Path(env[ENV_FILE])
-        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy = read(policy_path)
         policy_sha = env[ENV_SHA]
         rows = policy["type_policies"]
         if not isinstance(rows, dict) or not rows:
             raise ValueError("policy_types_missing")
+        # Intraday successors do not rewrite policies pinned by earlier BUYs or
+        # earlier PIDs. Only the native verified ancestry is admissible.
+        verified_policies = {policy_sha: (policy_path, policy)}
+        ancestor = current
+        ancestors_seen = set()
+        while ancestor.get("parent_current_file"):
+            ancestor_path = Path(ancestor["parent_current_file"])
+            if ancestor_path in ancestors_seen or len(ancestors_seen) >= 32:
+                raise ValueError("initial_quantity_ancestor_cycle_or_oversize")
+            ancestors_seen.add(ancestor_path)
+            ancestor = read(ancestor_path)
+            ancestor_env = selected_initial_quantity_env(ancestor_path, source_date)
+            ancestor_policy_path = Path(ancestor_env[ENV_FILE])
+            ancestor_policy = read(ancestor_policy_path)
+            verified_policies[ancestor_env[ENV_SHA]] = (ancestor_policy_path, ancestor_policy)
+
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         return {"status": "source_invalid", "findings": [
             "initial_quantity_current_binding_invalid:" + type(exc).__name__]}
@@ -194,14 +257,18 @@ def _initial_quantity_semantics(
         "open_bundle_count": 0,
         "quantity_lineage_status": "not_observed",
     }
-    stage_path = (root / "data/report/initial_entry_quantity_type_policy" /
-                  f"refresh_postclose_{source_date}" /
-                  f"initial_quantity_refresh_stage_{source_date}.json")
+    from src.engine.scalping.initial_quantity_policy import committed_refresh_stage_path
+    try:
+        stage_path = committed_refresh_stage_path(root / "data/report/initial_entry_quantity_type_policy" / f"refresh_postclose_{source_date}", source_date)
+    except (OSError, ValueError, KeyError, TypeError):
+        details["findings"].append("initial_quantity_stage_reference_invalid")
+        details["postclose_stage_status"] = "source_invalid"
+        return details
     if stage_path.exists() or stage_path.is_symlink():
         try:
             if stage_path.is_symlink() or stage_path.stat().st_size > 1024 * 1024:
                 raise ValueError("stage_untrusted_or_oversize")
-            stage = json.loads(stage_path.read_text(encoding="utf-8"))
+            stage = read(stage_path)
             if not refresh_quantity_stage_terminal_valid(stage):
                 raise ValueError("stage_contract_invalid")
             count = stage["all_completed_initial_trades"]
@@ -233,23 +300,24 @@ def _initial_quantity_semantics(
                 if (receipt_path.is_symlink()
                         or receipt_path.stat().st_size > 1024 * 1024):
                     raise ValueError("pid_receipt_untrusted_or_oversize")
-                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt = read(receipt_path)
                 body = {k: v for k, v in receipt.items()
                         if k != "receipt_content_sha256"}
                 digest = hashlib.sha256(json.dumps(
                     body, ensure_ascii=True, allow_nan=False, sort_keys=True,
                     separators=(",", ":")).encode()).hexdigest()
                 verification = receipt.get("verification") or {}
+                pinned_path, pinned_policy = verified_policies.get(receipt.get("policy_file_sha256"), (None, {}))
                 if (receipt.get("schema_version") !=
                         "initial_quantity_pid_verification_v1"
                         or receipt.get("target_date") != source_date
                         or receipt_path.name != (
                             f"initial_quantity_pid_{receipt.get('pid')}_"
                             f"{str(receipt.get('receipt_content_sha256') or '')[:12]}.json")
-                        or receipt.get("policy_file_sha256") != policy_sha
-                        or receipt.get("policy_file") != str(policy_path.resolve())
+                        or pinned_path is None
+                        or receipt.get("policy_file") != str(pinned_path.resolve())
                         or receipt.get("policy_content_sha256") !=
-                        policy.get("policy_content_sha256")
+                        pinned_policy.get("policy_content_sha256")
                         or receipt.get("receipt_content_sha256") != digest
                         or verification.get("target_date") != source_date
                         or verification.get("status") != "pass"
@@ -275,7 +343,7 @@ def _initial_quantity_semantics(
         try:
             if latest_pid_path.stat().st_size > 1024 * 1024:
                 raise ValueError("pid_verify_oversize")
-            latest = json.loads(latest_pid_path.read_text(encoding="utf-8"))
+            latest = read(latest_pid_path)
             if (latest.get("target_date") == source_date
                     and latest.get("pid_passed") is True):
                 details["findings"].append("initial_quantity_pid_archive_missing")
@@ -295,7 +363,7 @@ def _initial_quantity_semantics(
             try:
                 if path.is_symlink() or path.stat().st_size > 1024 * 1024:
                     raise ValueError("bundle_untrusted_or_oversize")
-                bundle = json.loads(path.read_text(encoding="utf-8"))
+                bundle = read(path)
                 schedule = bundle.get("schedule") or {}
                 belongs_to_date = (
                     str(schedule.get("order_start_at") or "")[:10] == source_date)
@@ -329,11 +397,12 @@ def _initial_quantity_semantics(
                        if item["state"].startswith("TERMINAL_")):
                     details["findings"].append(
                         "initial_quantity_leg_terminal_after_slot")
-                if bundle["policy_sha256"] != policy_sha:
+                bundle_policy = verified_policies.get(bundle["policy_sha256"])
+                if bundle_policy is None:
                     details["findings"].append(
                         "initial_quantity_bundle_policy_mismatch")
                 else:
-                    row = rows.get(schedule["quantity_type"]) or {}
+                    row = bundle_policy[1]["type_policies"].get(schedule["quantity_type"]) or {}
                     shape = row.get("selected_shape")
                     expected = (2 if str(shape).startswith("two_leg_") else
                                 3 if str(shape).startswith("three_leg_") else 0)
@@ -369,6 +438,42 @@ def _initial_quantity_semantics(
             "journal_terminal_observed" if not details["open_bundle_count"] else
             "pending_terminal")
     return details
+
+
+def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None):
+    references = []
+    read_bytes = 0
+    def read(path):
+        nonlocal read_bytes
+        read_bytes += path.stat().st_size
+        if read_bytes > 32 * 1024 * 1024:
+            raise ValueError("semantic_read_budget_oversize")
+        value, sha = _semantic_object(path, limit=1024 * 1024)
+        stat = path.stat()
+        references.append((path, sha, (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)))
+        return value
+    result = _initial_quantity_semantics_native(root, source_date, now_epoch=now_epoch, read=read)
+    result.update(source_date=source_date, target_date=source_date,
+        artifact=str(root / "data/runtime/initial_quantity/current.json"),
+        report_sha256=None, native_validated=False, observation_complete=False)
+    try:
+        for path, sha, before in references:
+            st = path.stat()
+            if before != (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns):
+                raise ValueError("semantic_generation_changed_during_read")
+        complete = not any("oversize" in x for x in result.get("findings", []))
+        result.update(native_validated=complete, observation_complete=complete,
+            observation_generation=hashlib.sha256(json.dumps([(str(p), sha) for p, sha, _ in references], separators=(",", ":")).encode()).hexdigest(),
+            source_reference_count=len(references),
+            source_references=[dict(artifact=str(p), byte_sha256=sha) for p, sha, _ in references[:16]])
+        if references:
+            # The policy pointer bytes are an artifact hash, not the composite digest.
+            result["report_sha256"] = references[0][1]
+        if not complete:
+            result.update(status="unobservable", expected_overdue=True)
+    except (OSError, ValueError):
+        result.update(status="unobservable", findings=[], generation_changed=True)
+    return result
 
 
 def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
@@ -491,7 +596,7 @@ def _continuous_reversal_result_semantics(root, source_date, component):
         if states['comparison_state']=='source_gap':semantic='source_gap'
         try:runtime=current_view(root/'data')
         except (OSError,ValueError,KeyError,TypeError):runtime={'status':'not_observed'}
-        return dict(status=semantic, policy_states=states, current_policy_status=runtime, findings=[], stage_id=stage_id,
+        return dict(status=semantic, native_validated=True, observation_complete=True, policy_states=states, current_policy_status=runtime, findings=[], stage_id=stage_id,
                     source_date=source_date, target_date=handoff['effective_date'],
                     artifact=str(report_path), report_sha256=report_sha,
                     selection_metric=handoff['selection_metric'],
@@ -1535,6 +1640,8 @@ def _current_semantic_owners(root, day):
     from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
     owners = Counter()
     path = root / 'docs/checklists' / (day + '-stage2-todo-checklist.md')
+    if not path.is_file():
+        raise ValueError('current_checklist_missing')
     for task in parse_checklist_tasks(current_path=path):
         if Path(task.source).resolve() != path.resolve():
             continue
@@ -1556,11 +1663,14 @@ def _semantic_alerts(name, semantics, source_date, *, current_owners=None, as_of
 def _project_semantic_owner(alert, current_owners, as_of_date):
     mapping = {
         'main_machine_policy': 'DirectFamilySourceRepairMainMechanisticEntry',
-        'main_auxiliary_policy': 'DirectFamilySourceRepairMainMechanisticEntry',
+        'main_auxiliary_policy': 'DirectFamilySourceRepairCompactAuxiliary',
         'postclose_handoff': 'DirectFamilyPreopenPolicyHandoff',
         'entry_cancel_wait_tuning': 'DirectFamilySourceRepairEntryCancelWait',
         'samsung_frozen_validation': 'SemanticMonitorProducerConsumerRefresh1007',
-        'legacy_machine_report': 'SemanticMonitorProducerConsumerRefresh1007',
+        'legacy_machine_report': 'DirectFamilySourceRepairMainMechanisticEntry',
+        'holding_profit_exit': 'HoldingProfitExitSourceContractRepair',
+        'initial_quantity': 'InitialQuantityProducerConsumerRepair1010',
+        'main_stop_confirmation': 'MainStopLossRetirementRuntimeTuning1010',
     }
     owner = mapping.get(alert['stage'])
     alert.update(producer_owner=alert['owner'], historical_owner=alert['owner'],
@@ -1572,6 +1682,22 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
 def _semantic_alert_candidates(name, semantics, source_date):
     if semantics.get('status') in {'off', 'historical_diagnostic'}:
         return []
+    if name in {"holding_profit_exit", "initial_quantity", "main_stop_confirmation"}:
+        if semantics.get("status") in {"future_due", "not_assessed", "not_required_before_introduction"}:
+            return []
+        if semantics.get("status") == "unobservable" and not semantics.get("expected_overdue"):
+            return []
+        return [dict(source_date=source_date, target_date=semantics.get("target_date"),
+            stage=name, scope="report", reason=reason, status=semantics.get("status"),
+            expected_overdue=semantics.get("expected_overdue", False),
+            artifact=semantics.get("artifact"), generation=semantics.get("report_sha256"),
+            source_generation=semantics.get("source_generation"),
+            observation_generation=semantics.get("observation_generation"),
+            policy_hash=semantics.get("policy_file_sha256"),
+            owner="holding_exit_sentinel" if name == "holding_profit_exit" else name,
+            closure_test="native_complete_exact_date_scope_binding_and_original_reason_resolved")
+            for reason in sorted(set(semantics.get("findings") or []))
+            if reason != "economics_null"]
     if name == 'samsung_frozen_validation':
         if semantics.get('status') in {'not_assessed', 'unobservable', 'waiting_producer', 'future_due'}:
             return []
@@ -2556,7 +2682,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if cancel_wait["findings"]:
                 warnings.append("entry_cancel_wait_result_semantics: " + ", ".join(cancel_wait["findings"]))
         if trading_day:
-            holding_semantics = _holding_profit_exit_semantics(PROJECT_ROOT, today)
+            holding_semantics = _holding_profit_exit_semantics(PROJECT_ROOT, today, now=now_dt)
             details["holding_profit_exit_semantics"] = holding_semantics
             if holding_semantics["findings"]:
                 warnings.append("holding_profit_exit_semantics: " + ", ".join(
@@ -2583,7 +2709,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             details["postclose_handoff_semantics"] = handoff
             if handoff["findings"]:
                 warnings.append("postclose_handoff_semantics: " + ", ".join(handoff["findings"]))
-            family_results = []
+            family_results = [("main_stop_confirmation", _main_stop_semantics(PROJECT_ROOT, semantic_day, now=now_dt))]
             family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(
                 PROJECT_ROOT, semantic_day, current_main=machine_semantics.get('selection_metric') == 'cumulative_raw_win_fraction')))
             for name, result in family_results:
@@ -2607,28 +2733,35 @@ class ArtifactFreshnessDetector(BaseDetector):
                 target_date=selection['target_date'], as_of_date=_today_kst_str(now_dt),
                 generation=selection.get('report_sha256'), status=selection['status']))
             warnings.append('completed_semantic_source: ' + ', '.join(selection['findings']))
+        if trading_day:
+            quantity_semantics = _initial_quantity_semantics(PROJECT_ROOT, today, now_epoch=now_ts)
+            details["initial_quantity_semantics"] = quantity_semantics
+            for name, semantics in (("holding_profit_exit", holding_semantics), ("initial_quantity", quantity_semantics)):
+                observations.append(dict(stage=name, semantics=semantics))
+                bindings.append(dict(stage=name, source_date=today, target_date=semantics.get("target_date"),
+                    as_of_date=_today_kst_str(now_dt), generation=semantics.get("report_sha256"), status=semantics.get("status")))
+                alerts.extend(_semantic_alerts(name, semantics, today))
+                if semantics.get("findings"):
+                    warnings.append(name + "_semantics: " + ", ".join(sorted(set(semantics["findings"]))))
         details['semantic_source_bindings'] = bindings
         details['semantic_observations'] = observations
         if cancel_wait is not None:
             alerts.extend(_semantic_alerts('entry_cancel_wait_tuning', cancel_wait, cancel_wait_day))
         details['semantic_alerts'] = alerts
-        current_owners = _current_semantic_owners(PROJECT_ROOT, today)
-        # Apply one exact-date owner projection to every semantic hook,
-        # including startup and cancel-wait hooks outside the stage loop.
+        owner_day = _today_kst_str(now_dt)
+        try:
+            current_owners = _current_semantic_owners(PROJECT_ROOT, owner_day)
+            owner_error = None
+        except (OSError, ValueError, TypeError) as exc:
+            current_owners, owner_error = set(), type(exc).__name__ + ':' + str(exc)
         for alert in alerts:
-            _project_semantic_owner(alert, current_owners, today)
-        details['semantic_owner_projection'] = dict(as_of_date=today, open_ids=sorted(current_owners))
+            _project_semantic_owner(alert, current_owners, owner_day)
+        details['semantic_owner_projection'] = dict(as_of_date=owner_day, open_ids=sorted(current_owners), error=owner_error)
         from src.engine.monitoring.error_detector_coverage import validate_semantic_coverage
-        coverage = validate_semantic_coverage(today)
+        coverage = validate_semantic_coverage(owner_day, active_alerts=alerts, owner_error=owner_error)
         details['functional_semantic_coverage'] = coverage
-        issues.extend('semantic_coverage: ' + finding for finding in coverage['findings'])
-        if trading_day:
-            quantity_semantics = _initial_quantity_semantics(
-                PROJECT_ROOT, today, now_epoch=now_ts)
-            details["initial_quantity_semantics"] = quantity_semantics
-            if quantity_semantics["findings"]:
-                warnings.append("initial_quantity_semantics: " + ", ".join(
-                    sorted(set(quantity_semantics["findings"]))))
+        for finding in coverage['findings']:
+            (warnings if 'current_owner' in finding else issues).append('semantic_coverage: ' + finding)
 
         severity, summary = self._classify(issues, warnings)
         return DetectionResult(

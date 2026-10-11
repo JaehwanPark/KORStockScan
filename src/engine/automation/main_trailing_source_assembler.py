@@ -27,9 +27,11 @@ def input_inventory(root,days,master_path,parent_path):
     if not days: raise ValueError('all_scope_assembly_date_window_empty')
     paths={Path(master_path),Path(parent_path)}
     for day in days:
-        for namespace,stem in (('ai_decision_trace','ai_decision_trace'),('ai_decision_payloads','ai_decision_payloads')):
+        for namespace,stem in (('ai_decision_trace','ai_decision_trace'),('ai_decision_payloads','ai_decision_payloads'),('ai_decision_prompts','ai_decision_prompts'),
+                               ('ai_decision_requests','ai_decision_requests')):
             paths.update((Path(root)/namespace).glob(stem+'_'+day+'.jsonl*'))
         paths.update((Path(root)/'report/monitor_snapshots').glob('trade_review_'+day+'*.json'))
+    paths.update((Path(root)/'runtime/holding_path_votes').glob('*.jsonl*'))
     paths.update((Path(root)/'runtime/mechanistic_entry_policy/decisions'/days[-1]).glob('*/*.json'))
     return [{'path':str(p.resolve()),'generation':byte_generation(p)} for p in sorted(paths) if p.is_file()]
 
@@ -404,7 +406,13 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
             for trade,position,events in cohort:
                 if str(trade.get('strategy') or '').upper() not in {'SCALP','SCALPING'}:
                     gaps['non_main_trade']+=1;continue
+                from src.engine.ai.holding_vote_replay_source import assemble_votes
                 event_ref=storage.write_tree(output,iter(events))
+                first = next(storage.iter_tree(output,event_ref), {})
+                source = position.get('holding_vote_source') or first.get('holding_vote_source')
+                if source is not None:
+                    position['operating_ai_required'] = source.get('required')
+                    position['holding_vote_replay_ref'] = assemble_votes(root,output,source,sources)
                 yield position,event_ref
                 alternative={**position,'position_key':'alternative:'+position['position_key'],
                     'evidence_kind':'actual_entry_alternative_exit','actual_cost_reconciliation':None,'situation_pin':None}

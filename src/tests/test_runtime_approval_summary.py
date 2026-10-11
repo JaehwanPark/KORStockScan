@@ -241,7 +241,7 @@ def test_summary_publishes_estimated_holding_vote_policy_without_realized_ev(
     assert receipt["realized_paired_ev_krw"] is None
     bundle = load_bundle(data, target_date)
     assert bundle["bundle_sha256"] == receipt["bundle_sha256"]
-    assert len(bundle["cells"]) == 15
+    assert len(bundle["cells"]) == 12
 
 
 def test_main_mechanistic_report_flags_do_not_prove_future_owner_support():

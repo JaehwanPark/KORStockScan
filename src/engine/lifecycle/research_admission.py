@@ -14,7 +14,7 @@ import time
 from contextvars import ContextVar
 
 ENV_KEY = 'POSTCLOSE_RESEARCH_RESERVATION'
-HEAVY_STAGES = frozenset({'pre_submit_delay', 'main_trailing_all_scope'})
+HEAVY_STAGES = frozenset({'pre_submit_delay', 'main_trailing_all_scope', 'initial_entry_quantity_refresh', 'main_stop_confirmation'})
 _LOCAL_OWNER=ContextVar('postclose_research_reservation_owner',default=None)
 
 

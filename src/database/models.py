@@ -253,6 +253,13 @@ class TradePerformanceFact(Base):
     ai_review_headline = Column(Text)
     gatekeeper_action = Column(Text)
     gatekeeper_allow_entry = Column(Boolean)
+    # NULL means unobserved. Provenance is additive; old rows are not inferred.
+    economics_source_status = Column(Text)
+    actual_cost_reconciliation_status = Column(Text)
+    actual_cost_source_generation = Column(Text)
+    completion_census_run_id = Column(Text)
+    completion_census_projection_sha256 = Column(Text)
+    broker_actual_fees_taxes_krw = Column(Float)
     synced_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
 
     def __repr__(self):

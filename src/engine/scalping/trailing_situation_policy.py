@@ -301,6 +301,19 @@ def initial_bundle(parent_values, *, parent_sha256, source_date, target_date, cl
     return {**body, "policy_sha256": digest(body)}
 
 
+def training_generation(classifier, records, scores):
+    """Bind only the fixed training records; original holding pins stay intact."""
+    import hashlib
+    from src.engine.lifecycle import research_storage as storage
+    source=hashlib.sha256()
+    count=0
+    for identity,context,outcomes in records:
+        source.update(storage.encoded([identity,digest(context),digest(outcomes)]));source.update(b'\n')
+        count+=1
+    return digest(dict(schema='trailing_classifier_generation_v1',classifier=classifier,
+        training_records_sha256=source.hexdigest(),training_n=count,train_grid_scores=scores))
+
+
 def research_registered_grid(partitions, *, grid, candidates, parent_values,
                              parent_classifier_parameters, evaluation):
     """Train a registered finite entry-type grid on minimal replay results.
@@ -346,7 +359,7 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
             context.update(part['population_context'])
             if len(context) > 20000:
                 raise ValueError('trailing_situation_partition_resume_required')
-            for identity in part['common_ids']:
+            for identity in part.get('eligible_ids',part['common_ids']):
                 rows[identity] = {name:part['minimal_results'][identity][aliases[name]] for name in eligible}
         strata = evaluation.get('strata') or {}
         training_kind = next((kind for kind in ('actual_completed', 'actual_entry_alternative_exit',
@@ -363,12 +376,14 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
                 labels[identity] = (market_type_at(row['entry_at']), pin['situation_type'], pin['reason'])
             return labels
         def stats(identities, name, evidence):
-            deltas, stress, adverse, stress_net = [], [], [], []
+            deltas, stress, adverse, stress_net, loss, paired = [], [], [], [], [], []
             notional, pnl = 0., 0.
             days = {}
             for identity in identities:
                 amount = number(context[identity]['buy_basis_krw'])
                 candidate, incumbent = rows[identity][name], rows[identity]['incumbent']
+                if candidate['modeled_net_pnl_krw'] is None or incumbent['modeled_net_pnl_krw'] is None: continue
+                paired.append(identity)
                 if amount is None or amount <= 0:
                     raise ValueError('trailing_situation_notional_unverified')
                 reference = max(incumbent['modeled_net_pnl_krw'], candidate['actual_pnl_krw']) if evidence == 'actual_completed' else incumbent['modeled_net_pnl_krw']
@@ -379,17 +394,18 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
                 stress.append(worst / amount * 100)
                 if delta < 0:
                     adverse.append(identity)
+                    if candidate['modeled_net_pnl_krw'] < 0: loss.append(identity)
                 clock = number(context[identity].get('completion_at')) if evidence == 'actual_completed' else context[identity]['entry_at']
                 if clock is not None:
                     day = datetime.fromtimestamp(clock, ZoneInfo('Asia/Seoul')).date().isoformat()
                     days.setdefault(day, []).append(worst / amount * 100)
-            return dict(n=len(identities), equal_weight_avg_profit_pct=math.fsum(deltas)/len(deltas) if deltas else None,
+            return dict(n=len(paired), paired_ids=paired, large_loss_worsened_ids=loss, equal_weight_avg_profit_pct=math.fsum(deltas)/len(deltas) if deltas else None,
                 notional_weighted_ev_pct=100*pnl/notional if notional else None, paired_delta_net_krw=pnl if deltas else None,
                 worst_slippage_delta_net_krw=math.fsum(stress_net) if stress_net else None,
                 worst_paired_delta_pct=min(deltas) if deltas else None, worsened_ids=adverse,
                 worst_slippage_ev_pct=math.fsum(stress)/len(stress) if stress else None,
                 worst_slippage_min_day_ev_pct=min(math.fsum(v)/len(v) for v in days.values()) if days else None,
-                verified_days=sorted(days), completion_clock_verified=len(identities)==sum(map(len, days.values())))
+                verified_days=sorted(days), completion_clock_verified=len(paired)==sum(map(len, days.values())))
         train_ids = strata[training_kind]['train_ids']
         grid_scores, trained = {}, {}
         for config in grid:
@@ -425,28 +441,35 @@ def research_registered_grid(partitions, *, grid, candidates, parent_values,
                     train = [i for i in cohort['train_ids'] if training_labels[i][:2]==(market,kind)]
                     holdout = [i for i in cohort['holdout_ids'] if holdout_labels[i][:2]==(market,kind)]
                     tr, ho = stats(train,winner,evidence), stats(holdout,winner,evidence)
+                    # Research assignments do not repin an existing holding or
+                    # change its AI payload. Replay itself verified original votes.
                     compatible = all(context[i].get('operating_ai_required') is False or
                         (context[i].get('operating_ai_required') is True
-                        and validate_pin(context[i].get('situation_pin'),i)
-                        and context[i]['situation_pin']['classifier_sha256']==frozen['classifier_sha256']
-                        and context[i]['situation_pin']['situation_type']==kind) for i in train+holdout)
+                         and validate_pin(context[i].get('situation_pin'),i))
+                        for i in tr['paired_ids']+ho['paired_ids'])
                     qualified = (evidence=='actual_completed' and winner!='incumbent'
                         and len(set(tr['verified_days']+ho['verified_days']))>=7 and tr['n']>=30 and ho['n']>=10
                         and len(ho['verified_days'])>=2 and tr['completion_clock_verified'] and ho['completion_clock_verified']
                         and all((x or 0)>0 for x in (tr['equal_weight_avg_profit_pct'],ho['equal_weight_avg_profit_pct'],
                             ho['worst_slippage_ev_pct'],ho['worst_slippage_min_day_ev_pct']))
-                        and not tr['worsened_ids'] and not ho['worsened_ids'] and compatible)
+                        and not tr['large_loss_worsened_ids'] and not ho['large_loss_worsened_ids'] and compatible)
                     cells[evidence+'|'+key] = {'train_selected_candidate':winner, 'train':tr, 'holdout':ho,
                         'candidate_values':eligible[winner][market], 'effective_initial_values':eligible['incumbent'][market],
                         'disposition':'research_candidate_requires_existing_selector_review' if qualified else 'parent_carry',
                         'parent_values':eligible['incumbent'][market], 'holdout_reselected':False,
                         'operating_ai_type_input_compatible':compatible,
                         'training_evidence_kind':training_kind, 'allowed_runtime_apply':False}
+        market_scores={m:math.fsum(max(0.,cells[training_kind+'|'+m+'|'+k]['train']['paired_delta_net_krw'] or 0) for k in TYPES) for m in START_MARKETS}
         body = dict(schema='main_trailing_situation_research_v1',status='research_complete',
-            classifier=frozen, grid_sha256=digest(grid), train_grid_scores=grid_scores,
+            train_selected_market=min(market_scores,key=lambda m:(-market_scores[m],m)),
+            train_market_scores=market_scores,
+            classifier=frozen, grid_sha256=digest(grid), classifier_semantic_sha256=digest({k:v for k,v in frozen.items() if k not in {'classifier_sha256','trained_through'}}),
+            assignment_role='research_only_original_pin_preserved', train_grid_scores=grid_scores,
             train_winner_hypothesis_sha256=winning_sha, cells=cells,
             fixed_m1_classifier_sha256=parent_m1, rejected_m1_candidates=rejected,
             input_common_ids_sha256=digest(sorted(rows)), allowed_runtime_apply=False)
+        body['classifier_generation_sha256']=training_generation(frozen,
+            ((i,context[i],rows[i]) for i in sorted(train_ids)),grid_scores)
         return {**body,'artifact_sha256':digest(body)}
 
 

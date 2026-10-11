@@ -5887,7 +5887,9 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
     from src.engine.scalping import strategy_owner_replay
 
     monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
-    monkeypatch.setattr(strategy_owner_replay, 'freeze_entry_operating_context', lambda *a, **k: {})
+    # The native optional source producer returns None on capture failure;
+    # an empty dict is not a valid frozen operating context.
+    monkeypatch.setattr(strategy_owner_replay, 'freeze_entry_operating_context', lambda *a, **k: None)
     source = ast.parse(Path(handlers.__file__).read_text())
     function = next(n for n in source.body if isinstance(n, ast.FunctionDef)
                     and n.name == '_submit_watching_triggered_entry')

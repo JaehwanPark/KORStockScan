@@ -17,17 +17,10 @@
 
 ## 실행 항목
 
-- [ ] `[InitialQuantityProducerConsumerRepair1010] 최초 매수 수량 런타임·장후 생산자/소비자 결손 보완` (`Due: 2026-10-10`, `Slot: DOCUMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
-  - Source: [상세 보완계획 Q0–Q8](../proposals/initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md), [최초 수량 계획의 사용자 결정](../proposals/scalping-initial-entry-quantity-type-policy-closed-loop-plan-2026-09-26.md).
-  - 현재 범위: 계획 수립·재리뷰·문서 검증이다. IQ-F1–F7/IQ-D1 및 IQ-R1–R8의 구현·DB 복원·장후 재생·정책 변경·배포는 이번 문서 작성에서 실행하지 않는다. 후속 실행일에 동일 stable ID·수용·잔여 단계를 이전하고 current parsed owner는 하나로 유지한다.
-  - 수용: 비용 NULL/누적 실제 비용 세대, 런타임/재생의 probe·수량·가격 의미·시간표와 주문 시작 기준 수집, epoch wire/보수적 부분 체결, forward 경계·경제/진단 모수·표본/PID 분리, 행별 결손 격리, 결합 후보 train 확정 후 독립 holdout, 버전 reader·동일 날짜 successor·정규 발행/감시 인계를 교차 회귀로 닫는다.
-  - 실행 순서: Q0 실패 fixture·성능 기준 고정→Q1 비용 원천/저장→Q2·Q3 공통 실행/체결→Q4·Q5 창·선정→Q6·Q7 인계/전수 결과·성능→Q8 기존 승인 범위의 배포·PREOPEN/자연 수용. Q6 구 평가 reader/신규 세대 참조는 Q0 뒤에 선행 준비하고 각 단계에서 성능을 대사한다. 단계별 구현→리뷰→보완→재검증을 반복한다.
-  - 성능 필수 수용: IQ-P1–P8의 장중 결정/기록/취소 비악화, 동일 전수·후보 cold 예산 준수, warm/비용 정정·증분의 중복 작업 및 wall/CPU 절감, 검증/PREOPEN 기한, 수량 wrapper/직접 CLI의 공통 admission·합산 RSS/디스크 예산을 입증한다. 기능 수리 기준본과 최적화본의 결과 동등성을 먼저 검증하며 빠른 0건 실행·일부 microbenchmark로 전체 성능을 대신하지 않는다.
-  - 경계: 유효 최초 정책에 우월성·자연소비를 새 선행조건으로 붙이지 않는다. T≤1200초·실제 주문 시작 기준·probe 포함 순차 구간과 취소/확인 시간, Main/manual 수탁·전체 퇴역 경계를 보존한다. 수량 native 수리와 SemanticMonitorLatestReleaseRepair1010의 알림/복구 소유를 구분한다.
-  - 종료: 미해결 구현 finding 0·실자료/실제 wire·ORM 연결 회귀·단독/결합 성능과 승인된 정식 인계 근거를 기록한다. 과거 회복 불가·표본 0·미래 PID/자연 terminal은 별도 상태이며 계획/코드/배포/경제성을 혼합하지 않는다. 봉인된 10/12 checklist/준비는 이번 계획 단계에서 변경하지 않는다.
-  - 계획 검증: 7개 결함·PID 진단의 단계/소유자/종료 조건과 6개 실행 지시문을 작성했다. 재리뷰에서 IQ-R1–R8의 수집 시계·누적 비용·분모/격리·과거 reader·stage 승계·공통 자원 연결을 보완하고 IQ-P1–P8 성능 보호/개선 및 Q0 선행 기준을 추가했다. 관련 4문서 로컬 링크 109개 결손 0, 공백·diff·print-only parser PASS, parsed 항목 25개 중 현행 수량 owner 1건을 확인했다. 문서 수용이며 구현·성능 실측·배포는 이 기록으로 완료 처리하지 않는다.
+- [x] `[InitialQuantityProducerConsumerRepair1010] 최초 수량 보완 작업의 10/11 이전` (`Due: 2026-10-10`, `Slot: IMPLEMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - 자정에 같은 ID·Q0–Q8 수용·미완료 상태를 [10/11 현행 owner](2026-10-11-stage2-todo-checklist.md)로 이전했다. 이 체크는 작업 완료가 아닌 이전 완료다.
 
-- [ ] `[SemanticMonitorLatestReleaseRepair1010] 의미적 감시기 최신 릴리스 연계 보완` (`Due: 2026-10-10`, `Slot: DOCUMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+- [x] `[SemanticMonitorLatestReleaseRepair1010] 의미적 감시기 최신 릴리스 연계 보완` (`Due: 2026-10-10`, `Slot: DOCUMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [상세 보완계획 M0–M8](../proposals/semantic-monitor-latest-release-followup-repair-plan-2026-10-10.md).
   - 현재 범위: 상세 계획 수립·문서 검증만 수행한다. 감시 코드 구현·정책 발행·장후 재실행·Telegram 발송·배포·재기동은 이번 요청에 포함하지 않는다. 구현 착수 시 같은 stable ID와 수용을 실제 실행일로 이전하고 current parsed owner는 하나로 유지한다.
   - 수용: 청산/초기수량 구조화 알림, 정책 등록·승계의 정확 복구, 현행 담당 작업 연결, 상태별 producer→notifier→recovery 교차 회귀를 닫는다. 원천·lifecycle·경제성 및 역사적 미복구를 분리하고 state 삭제·가짜 종결·추가 매매 gate를 금지한다.
@@ -36,7 +29,9 @@
   - 계획 검증: 생산자/마지막 소비자 10경로·M0–M8·알림/복구 상태·owner 이전·성능/배포 수용을 재리뷰했다. 보조 AI의 기존 10/12 owner와 기계 owner 부재를 구분하고 유효 ancestor pin을 보존하도록 보완했다. 로컬 링크 23개 결손 0, 공백 검사·print-only parser PASS, 현재 owner 1건. 코드/운영 수리는 미착수다.
   - 계획 재리뷰 보완: R1–R6로 findings 공백과 비교 source gap 분리, 기한 후 관측 불능, 비기계 stage 복구·state 128건 상한, 필요 incident에만 current owner 요구, 읽기 세대·결손 identity를 구체화했다. 즉시 수리 A와 기능 연계 B의 성능/배포 gate를 분리해 전체 W4·미래 표본이 알림 수리를 막지 않도록 했으며, 기존 봉인·권한·퇴역 경계를 유지한다.
 
-- [ ] `[MainStopLossRetirementRuntimeTuning1010] Main 손절 퇴역 제거·런타임 보완·정책화 및 장후 튜닝 후속 구현` (`Due: 2026-10-10`, `Slot: IMPLEMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - 이전: 10/11 같은 stable ID의 현행 OPEN으로 수용·역사를 이전했다. 구현 완료 표시는 아니다.
+
+- [x] `[MainStopLossRetirementRuntimeTuning1010] Main 손절 퇴역 제거·런타임 보완·정책화 및 장후 튜닝 후속 구현` (`Due: 2026-10-10`, `Slot: IMPLEMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [손절 구현·보완 및 연구계획 SL0–SL8](../proposals/main-stop-loss-retirement-runtime-policy-and-postclose-tuning-plan-2026-10-10.md).
   - 현재 범위: 계획 수립·문서 검증만 수행한다. 후속 구현 요청 전에는 코드 삭제·정책 발행·장후 재생·배포·기동을 실행하지 않는다. 실제 착수일에 같은 stable ID와 수용·진척을 이전하고 current parsed owner는 하나로 유지한다.
   - 수용: holding score 손절·기타 OFF 전용 코드·whipsaw 실행/관측/추천/정책 의존을 전수 제거하고, fast/normal 수동 인계·role별 기준·quote/clock·pin/claim 결함을 보완한다. 기본 False지만 관측 계산 ON인 기능을 실매도와 구분하고 Main/manual 수탁·hard/protect/emergency 안전을 보존한다.
@@ -45,6 +40,8 @@
   - 누락 재점검: 계획 §5.1의 17개 임계치 묶음·§5.2 실효 우선권·§6.5 생산/소비 이행표를 따른다. vote replay의 경제값 null/기본값 전용 publisher, preset·fast 차이, 선행 crossing/30초 원천, defensive unfilled no-op 잔여와 관측 ON 오해를 SL-F10–SL-F15로 반영한다. 새 stop stage/발행/strict/bootstrap/lookup이 현재 설치됐다고 간주하지 않는다.
   - 계획 검증: 후속 재점검의 임계치 17개 묶음·로컬 링크 62개 결손 0·공백/문서 재리뷰·diff·print-only parser PASS, 손절 현재 owner 1건. 계획 보완 완료이며 손절 코드 구현·정책 발행·성능 실측은 미착수다.
   - 종료: 삭제·consumer migration·런타임 회귀·단독/결합 성능·반복 리뷰의 미해결 구현 finding 0. 초기 부모 계승에 추가 경제 gate를 붙이지 않으며 정식 인계·실제 PID·자연 terminal/경제성은 각각 증거를 기록한다. 기존 trailing/delay owner의 승인·완료 범위를 소급 변경하지 않는다.
+
+  - 이전: 10/11 같은 stable ID의 현행 OPEN으로 수용·역사를 이전했다. 구현 완료 표시는 아니다.
 
 - [x] `[MainAllScopeTrailingReplay] Main 전체 종목·시장 trailing 및 replay 구현·반복 리뷰` (`Due: 2026-10-10`, `Slot: IMPLEMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [전체 범위 구현계획 AT0–AT7](../proposals/main-all-symbol-all-market-trailing-and-replay-improvement-plan-2026-10-10.md), [잔여작업 W0–W5](../proposals/main-trailing-delay-residual-work-completion-plan-2026-10-10.md).
@@ -59,6 +56,10 @@
   - 잔여계획 재리뷰: 실제 profile snapshot→holding report→selector caller, process-local 예산/2-slot heavy admission, 6개 scope disposition·기회/실제 거래 분모, 논리/물리 hash, 참조 중 cache/old-new 출력 peak, W5 전체 전환 세트·실패 복구를 필수 구현·시험 대사표에 포함한다. 기존 실패 시간으로 전체 성공 작업의 성능을 판정하지 않는다.
   - 완료: [실제 구현·반복 리뷰](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md). 전수 자동 source/tree·초과 분할/재개·전역 cohort·부모/0초·기존 selector/due와 전체 성능을 검증했다. 통합 1,371 passed(이전 릴리스에서도 실패한 historical 2건 제외), 최종 불변 릴리스 영향 215 passed. `main-trailing-delay-residual-20261010-v6` / `78f2c1d784fd5043d5b5bc0fedd7b963f8fe42d4`의 정식 발행과 native finalization DONE을 완료했다. [최종 준비](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json): source 10/8, target 10/12, PREOPEN `current_full_contract=pass`, finalization issues=[], 설치 cron 8경로 PASS. 기계/보조 원본·EOD bytes 보존, Main은 10/12 07:55 future_due다. W6는 봉인된 10/12 기존 `DirectFamilyPreopenPolicyHandoff` 한 owner가 확인한다.
 
+  - 구조 결함 재개: P1–P5 상세계획의 현재 PASS/identity·pre-signal holding-AI·classifier 인과성·후보별 적격 pair/대용량 bridge·일반 악화/horizon 조건을 구현→리뷰→보완→회귀로 수리한다. 위 완료 기록은 당시 부모/0초 발행 근거로 보존한다. 10/12 봉인 checklist는 변경하지 않는다.
+  - 후속 운영 승인 완료: source 10/8·publication 10/10·effective 10/12로 [운영 장후 재생성·정식 인계](../audits/main-trailing-delay-structural-implementation-review-2026-10-10.md)를 수행했다. `main-trailing-delay-structural-20261010-v1` / `c66488df8d428ecda57ee3c052c630c3e68f74b2` 선택, 불변 릴리스 114 passed, summary/strict/controller·23:33:47 native finalization DONE·[PREOPEN 전체 계약 PASS](../../data/report/main_trailing_delay_deployment/2026-10-10/final-structural-readiness.json), cron 8경로와 웹 ubuntu/PID 227302/HTTP 200을 확인했다. trailing 12 cell 부모·지연 0초이며 EOD·원 기계/보조 bytes 불변, 원 봉인 checklist는 snapshot 보존/정식 successor 인계다. 이번 코드 수리·정식 운영 인계는 완료하며, Main은 중지 상태를 유지해 10/12 기존 DirectFamilyPreopenPolicyHandoff에서 자연 PID 소비를 확인한다. 새 자료·성과와 전체 운영 성능은 별도 미측정 수용이다. 기존 독립 warning은 숨기지 않고 audit에 기록한다.
+  - 구조 수리 코드 완료 당시 기록: [P1–P5 구현·반복 리뷰](../audits/main-trailing-delay-structural-implementation-review-2026-10-10.md). 통합 606 passed, alias/normalizer 보완 후 215 passed, 최종 train generation 결속 후 71 passed. 새 anchor v3·지연 pair 알고리즘 v3·원 holding 요청/coverage·원 pin 불변·후보별 pair/대용량 bridge·기존 손실 guard를 검증했다. 운영 재생성·배포·PREOPEN·자연 PID 소비는 미실행이며 OPEN을 유지한다. 이전 v6 발행 기록과 봉인 10/12 owner는 보존한다.
+
 - [x] `[PreSubmitDelaySituationImplementation1010] Main pre-submit delay v2 초기정책·관측·due 재점검 구현` (`Due: 2026-10-10`, `Slot: IMPLEMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [제출 지연 상세계획 S0–S6](../proposals/pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md), [잔여작업 W0–W5](../proposals/main-trailing-delay-residual-work-completion-plan-2026-10-10.md).
   - 수용: 원 PASS 관측·두 anchor·shared split/purge·cell/fallback·committed generation·준비된 lookup·현재 scheduler successor·단일 decode/증분 감시를 연결한다. v1 의미·원 deadline·주문 guard와 Main/manual 경계를 보존하고 격리 재생·반복 리뷰·단독/결합 성능을 검증한다. S6 정식 정책 발행·장후 인계·PREOPEN까지 수행하고 실제 PID 자연 수용만 적용일의 별도 단계로 분리한다.
@@ -70,6 +71,10 @@
   - 종료: 유효 가격 비교와 근거가 정확한 0초 baseline도 정식 발행 가능. 전체 원천 무효는 blocked family/owner/artifact/다음 조건을 남기고 기존 즉시 동작을 유지한다. 자연 주문을 만들기 위한 호출·주문 및 원 PASS TTL 연장은 금지한다. 현재 선택 release에 v2 loader가 없다는 과거 설명은 적용하지 않으며 full-plan 완료는 W4/W5 근거로 판정한다.
   - 잔여계획 재리뷰: shard 간 뒤늦은 conflict의 전역 무효화, price_ready pair와 signal_ready 진단 구분, 전역 0초 baseline/개별 cell 실행 불가, successor 자체 deadline과 due+budget을 검증한다. release만 복구하고 신규 committed pointer를 남기는 실패를 W5 주입시험으로 잡고 source/정책/준비 세트 전체로 복구한다.
   - 완료: [실제 구현·반복 리뷰](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md). 전수 자동 source/tree·초과 분할/재개·전역 cohort·부모/0초·기존 selector/due와 전체 성능을 검증했다. 통합 1,371 passed(이전 릴리스에서도 실패한 historical 2건 제외), 최종 불변 릴리스 영향 215 passed. `main-trailing-delay-residual-20261010-v6` / `78f2c1d784fd5043d5b5bc0fedd7b963f8fe42d4`의 정식 발행과 native finalization DONE을 완료했다. [최종 준비](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json): source 10/8, target 10/12, PREOPEN `current_full_contract=pass`, finalization issues=[], 설치 cron 8경로 PASS. 기계/보조 원본·EOD bytes 보존, Main은 10/12 07:55 future_due다. W6는 봉인된 10/12 기존 `DirectFamilyPreopenPolicyHandoff` 한 owner가 확인한다.
+
+  - 구조 결함 재개: P1–P5 상세계획의 현재 PASS/identity·pre-signal holding-AI·classifier 인과성·후보별 적격 pair/대용량 bridge·일반 악화/horizon 조건을 구현→리뷰→보완→회귀로 수리한다. 위 완료 기록은 당시 부모/0초 발행 근거로 보존한다. 10/12 봉인 checklist는 변경하지 않는다.
+  - 후속 운영 승인 완료: source 10/8·publication 10/10·effective 10/12로 [운영 장후 재생성·정식 인계](../audits/main-trailing-delay-structural-implementation-review-2026-10-10.md)를 수행했다. `main-trailing-delay-structural-20261010-v1` / `c66488df8d428ecda57ee3c052c630c3e68f74b2` 선택, 불변 릴리스 114 passed, summary/strict/controller·23:33:47 native finalization DONE·[PREOPEN 전체 계약 PASS](../../data/report/main_trailing_delay_deployment/2026-10-10/final-structural-readiness.json), cron 8경로와 웹 ubuntu/PID 227302/HTTP 200을 확인했다. trailing 12 cell 부모·지연 0초이며 EOD·원 기계/보조 bytes 불변, 원 봉인 checklist는 snapshot 보존/정식 successor 인계다. 이번 코드 수리·정식 운영 인계는 완료하며, Main은 중지 상태를 유지해 10/12 기존 DirectFamilyPreopenPolicyHandoff에서 자연 PID 소비를 확인한다. 새 자료·성과와 전체 운영 성능은 별도 미측정 수용이다. 기존 독립 warning은 숨기지 않고 audit에 기록한다.
+  - 구조 수리 코드 완료 당시 기록: [P1–P5 구현·반복 리뷰](../audits/main-trailing-delay-structural-implementation-review-2026-10-10.md). 통합 606 passed, alias/normalizer 보완 후 215 passed, 최종 train generation 결속 후 71 passed. 새 anchor v3·지연 pair 알고리즘 v3·원 holding 요청/coverage·원 pin 불변·후보별 pair/대용량 bridge·기존 손실 guard를 검증했다. 운영 재생성·배포·PREOPEN·자연 PID 소비는 미실행이며 OPEN을 유지한다. 이전 v6 발행 기록과 봉인 10/12 owner는 보존한다.
 
 - [x] `[MainPassSubmitRecheckLatency1010] Main PASS 인수·제출 연결 및 진단 지연 보완·승인 배포` (`Due: 2026-10-10`, `Slot: IMPLEMENTATION`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [구현계획 S1–S4](../proposals/main-pass-submit-recheck-and-latency-remediation-plan-2026-10-10.md).

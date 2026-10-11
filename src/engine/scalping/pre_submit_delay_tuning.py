@@ -61,6 +61,7 @@ _V2_SOURCE_FIELDS = frozenset(_DECISION_SOURCE_KEYS + _QUOTE_SOURCE_KEYS + (
     'evaluation_attempt_id','request_id','ai_decision_trace_id','anchor_contract_version',
     'anchor_kind','entry_mechanistic_policy_sha256','entry_ai_soft_policy_sha256',
     'primary_branch_id','matched_branch_ids','entry_action','auxiliary_effective_action',
+    'entry_auxiliary_policy_identity','entry_auxiliary_policy_identity_version',
 ))
 
 
@@ -73,12 +74,21 @@ def _digest(payload: Any) -> str:
 def decision_source_sha256(fields: dict[str, Any]) -> str:
     """Logical generation shared by the observer and its first reader."""
     keys = _DECISION_SOURCE_KEYS
-    if fields.get('anchor_contract_version') == 2:
+    if fields.get('anchor_contract_version') == 2 or str(fields.get('anchor_contract_version')) == '3':
         keys += ('anchor_contract_version', 'anchor_kind', 'evaluation_attempt_id',
                  'request_id', 'ai_decision_trace_id', 'entry_mechanistic_policy_sha256',
                  'entry_ai_soft_policy_sha256', 'primary_branch_id', 'entry_action',
                  'auxiliary_effective_action')
-    return _digest({key: str(fields.get(key)) for key in keys})
+    if fields.get('entry_auxiliary_policy_identity_version') not in (None,'','None','null'):
+        keys += ('entry_auxiliary_policy_identity_version','entry_auxiliary_policy_identity')
+    proof = fields.get('entry_auxiliary_policy_identity')
+    if isinstance(proof, str):
+        try:
+            proof = json.loads(proof)
+        except (ValueError, TypeError):
+            proof = None
+    return _digest({key: (_digest(proof) if key == 'entry_auxiliary_policy_identity'
+                         else str(fields.get(key))) for key in keys})
 
 
 def quote_source_sha256(fields: dict[str, Any]) -> str:

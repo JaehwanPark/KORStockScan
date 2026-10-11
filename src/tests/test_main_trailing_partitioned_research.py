@@ -49,6 +49,19 @@ def test_v2_replay_resume_and_source_pin(tmp_path,monkeypatch):
     assert not (tmp_path/'bad'/'initial_policy_2026-10-12.json').exists()
 
 
+def test_independent_handoff_recomputes_pair_metrics_not_just_tree_bytes(tmp_path):
+    from src.engine.automation.main_trailing_research_handoff import verify_report
+    root,out=sharded(tmp_path)
+    owner.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False)
+    path=out/'research_2026-10-08.json'
+    report,_=verify_report(path,target_date='2026-10-12')
+    report.pop('artifact_sha256')
+    report['common_population_evaluation']['strata']['actual_completed']['metrics']['incumbent']['train']['paired_ev_pct']=999
+    write(path,report)
+    with pytest.raises(ValueError,match='pair_metrics_invalid'):
+        verify_report(path,target_date='2026-10-12')
+
+
 def minimal(n=12):
     aliases={'incumbent':'a'*64,'candidate':'b'*64}
     context={};outcomes={}
@@ -75,8 +88,8 @@ def test_external_metrics_equal_whole_reference_and_late_conflict(tmp_path):
         assert list(storage.iter_tree(tmp_path,cohort[split+'_ids_ref']))==old[split+'_ids']
         for name in ('incumbent','candidate'):
             for key,value in old['metrics'][name][split].items():
-                if key=='worsened_ids':
-                    assert list(storage.iter_tree(tmp_path,cohort['metrics'][name][split]['worsened_ids_ref']))==value
+                if key in {'worsened_ids','paired_ids','large_loss_worsened_ids'}:
+                    assert list(storage.iter_tree(tmp_path,cohort['metrics'][name][split][key+'_ref']))==value
                 else: assert cohort['metrics'][name][split][key]==value
     conflict=json.loads(json.dumps(full));identity=next(iter(conflict['population_context']))
     conflict['minimal_results'][identity]['b'*64]['modeled_net_pnl_krw']+=1
@@ -137,7 +150,9 @@ def test_registered_grid_external_train_winner_and_holdout_equal_reference(tmp_p
         assert current['train_selected_candidate']==cell['train_selected_candidate']
         assert current['disposition']==cell['disposition']
         for split in ('train','holdout'):
-            expanded=dict(current[split]);expanded['worsened_ids']=list(storage.iter_tree(tmp_path,expanded.pop('worsened_ids_ref')))
+            expanded=dict(current[split])
+            for field in ('worsened_ids','paired_ids','large_loss_worsened_ids'):
+                expanded[field]=list(storage.iter_tree(tmp_path,expanded.pop(field+'_ref')))
             assert expanded==cell[split]
 
 
@@ -251,7 +266,8 @@ def test_typed_global_training_evidence_reaches_existing_selector_without_holdou
     monkeypatch.setattr(constants,'DATA_DIR',tmp_path/'source')
     manifest=tmp_path/'manifest.json';write(manifest,dict(source_data_root=str(tmp_path/'source'),consumed_dates=days,
         approved_parent_receipt=parent,candidates={'a':{'market_values':a,'classifier_parameters':cfg}}))
-    report=dict(source_date='2026-10-08',target_date='2026-10-12',status='complete',input_manifest_path=str(manifest),trailing_situation_research=grid)
+    report=dict(source_date='2026-10-08',target_date='2026-10-12',status='complete',input_manifest_path=str(manifest),
+        evidence_root=str(tmp_path/'stats'),trailing_situation_research=grid)
     # This unit isolates the existing economic selector from the separate
     # full report byte/source verifier, which has its own corruption tests.
     generation={'path':'research.json','sha256':'a'*64,'size':1}

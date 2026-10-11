@@ -506,7 +506,7 @@ def test_artifact_detector_surfaces_initial_quantity_semantic_findings(
     monkeypatch.setattr(mod, "load_installed_crontab", lambda: "")
     for name in ("_holding_profit_exit_semantics", "_machine_result_semantics",
                  "_auxiliary_result_semantics"):
-        monkeypatch.setattr(mod, name, lambda *_: {"status": "not_assessed",
+        monkeypatch.setattr(mod, name, lambda *_, **__: {"status": "not_assessed",
                                                   "findings": []})
     monkeypatch.setattr(mod, "_initial_quantity_semantics", lambda *_, **__: {
         "status": "pending_terminal",

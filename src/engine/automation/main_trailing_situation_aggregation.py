@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from src.engine.lifecycle import research_storage as storage
 from src.engine.scalping.pre_submit_delay_initial_policy import digest, number
 from src.engine.scalping.trailing_situation_policy import (
-    TYPES, START_MARKETS, validate_classifier, pin_context, validate_pin,
+    TYPES, START_MARKETS, validate_classifier, pin_context, validate_pin, training_generation,
 )
 from src.engine.scalping.trailing_mechanical_policy import classifier_hash, normalize_values
 from src.engine.scalping.trailing_threshold_policy import market_type_at
@@ -82,6 +82,7 @@ def research(partitions, *, grid, candidates, parent_values, parent_classifier_p
                     context=json.loads(body)['context'];amount=number(context['buy_basis_krw'])
                     if amount is None or amount<=0: raise ValueError('trailing_situation_notional_unverified')
                     candidate,base=json.loads(candidate_body),json.loads(parent_body)
+                    if candidate['modeled_net_pnl_krw'] is None or base['modeled_net_pnl_krw'] is None: continue
                     reference=max(base['modeled_net_pnl_krw'],candidate['actual_pnl_krw']) if evidence=='actual_completed' else base['modeled_net_pnl_krw']
                     delta=candidate['modeled_net_pnl_krw']-reference
                     stress=(candidate['slippage_net_pnl_krw'][2]-reference)/amount*100
@@ -90,24 +91,25 @@ def research(partitions, *, grid, candidates, parent_values, parent_classifier_p
                     compatible=(context.get('operating_ai_required') is False or
                         (config is not None and context.get('operating_ai_required') is True
                         and validate_pin(context.get('situation_pin'),identity)
-                        and context['situation_pin']['classifier_sha256']==config['classifier_sha256']
-                        and context['situation_pin']['situation_type']==kind))
-                    yield identity,delta,amount,stress,day,compatible
-            n=db.execute('SELECT count(*) FROM membership WHERE evidence=? AND split=? AND market=? AND kind=?',where).fetchone()[0]
-            total=math.fsum(d for _,d,_,_,_,_ in values());notional=math.fsum(a for _,_,a,_,_,_ in values())
+                        ))
+                    yield identity,delta,amount,stress,day,compatible,candidate['modeled_net_pnl_krw']
+            paired=storage.write_tree(output_root,(i for i,_,_,_,_,_,_ in values()))
+            n=paired['count']
+            total=math.fsum(d for _,d,_,_,_,_,_ in values());notional=math.fsum(a for _,_,a,_,_,_,_ in values())
             days={};compatible=True;clock_n=0
-            for _,_,_,stress,day,ok in values():
+            for _,_,_,stress,day,ok,_ in values():
                 compatible=compatible and ok
                 if day is not None:
                     # fsum per day is delegated to another streaming pass below.
                     days[day]=days.get(day,0)+1;clock_n+=1
-            worst_day=min((math.fsum(s for _,_,_,s,d,_ in values() if d==day)/count for day,count in days.items()),default=None)
-            adverse=storage.write_tree(output_root,(i for i,d,_,_,_,_ in values() if d<0))
-            return dict(n=n,equal_weight_avg_profit_pct=math.fsum(d/a*100 for _,d,a,_,_,_ in values())/n if n else None,
+            worst_day=min((math.fsum(s for _,_,_,s,d,_,_ in values() if d==day)/count for day,count in days.items()),default=None)
+            adverse=storage.write_tree(output_root,(i for i,d,_,_,_,_,_ in values() if d<0))
+            loss=storage.write_tree(output_root,(i for i,d,_,_,_,_,p in values() if d<0 and p<0))
+            return dict(n=n,paired_ids_ref=paired,large_loss_worsened_ids_ref=loss,equal_weight_avg_profit_pct=math.fsum(d/a*100 for _,d,a,_,_,_,_ in values())/n if n else None,
                 notional_weighted_ev_pct=100*total/notional if notional else None,paired_delta_net_krw=total if n else None,
-                worst_slippage_delta_net_krw=math.fsum(s*a/100 for _,_,a,s,_,_ in values()) if n else None,
-                worst_paired_delta_pct=min((d/a*100 for _,d,a,_,_,_ in values()),default=None),worsened_ids_ref=adverse,
-                worst_slippage_ev_pct=math.fsum(s for _,_,_,s,_,_ in values())/n if n else None,
+                worst_slippage_delta_net_krw=math.fsum(s*a/100 for _,_,a,s,_,_,_ in values()) if n else None,
+                worst_paired_delta_pct=min((d/a*100 for _,d,a,_,_,_,_ in values()),default=None),worsened_ids_ref=adverse,
+                worst_slippage_ev_pct=math.fsum(s for _,_,_,s,_,_,_ in values())/n if n else None,
                 worst_slippage_min_day_ev_pct=worst_day,verified_days=sorted(days),completion_clock_verified=n==clock_n),compatible
         scores,trained={},{}
         for config in grid:
@@ -137,7 +139,7 @@ def research(partitions, *, grid, candidates, parent_values, parent_classifier_p
                         and len(set(tr['verified_days']+ho['verified_days']))>=7 and tr['n']>=30 and ho['n']>=10
                         and len(ho['verified_days'])>=2 and tr['completion_clock_verified'] and ho['completion_clock_verified']
                         and all((v or 0)>0 for v in (tr['equal_weight_avg_profit_pct'],ho['equal_weight_avg_profit_pct'],ho['worst_slippage_ev_pct'],ho['worst_slippage_min_day_ev_pct']))
-                        and not tr['worsened_ids_ref']['count'] and not ho['worsened_ids_ref']['count'] and compatible)
+                        and not tr['large_loss_worsened_ids_ref']['count'] and not ho['large_loss_worsened_ids_ref']['count'] and compatible)
                     cells[evidence+'|'+key]={'train_selected_candidate':winner,'train':tr,'holdout':ho,
                         'candidate_values':eligible[winner][market],'effective_initial_values':eligible['incumbent'][market],
                         'disposition':'research_candidate_requires_existing_selector_review' if qualified else 'parent_carry',
@@ -150,8 +152,18 @@ def research(partitions, *, grid, candidates, parent_values, parent_classifier_p
             for market in START_MARKETS}
         train_market=min(train_market_scores,key=lambda m:(-train_market_scores[m],m))
         body=dict(schema='main_trailing_situation_research_v1',storage_schema='main_trailing_sharded_situation_v2',
-            status='research_complete',classifier=frozen,grid_sha256=digest(grid),train_grid_scores=scores,
+            status='research_complete',classifier=frozen,
+            classifier_semantic_sha256=digest({k:v for k,v in frozen.items() if k not in {'classifier_sha256','trained_through'}}),
+            assignment_role='research_only_original_pin_preserved',grid_sha256=digest(grid),train_grid_scores=scores,
             train_winner_hypothesis_sha256=winning,cells=cells,fixed_m1_classifier_sha256=parent_m1,
             train_selected_market=train_market,train_market_scores=train_market_scores,
             rejected_m1_candidates=rejected,input_common_ids_sha256=evaluation['common_ids_ref']['logical_sha256'],allowed_runtime_apply=False)
+        def training_records():
+            for identity,encoded in db.execute('SELECT m.id,r.body FROM membership m JOIN records r ON r.id=m.id '
+                    'WHERE m.evidence=? AND m.split=? ORDER BY m.id',(training_kind,'train')):
+                context=json.loads(encoded)['context']
+                outcomes={name:json.loads(value) for name,value in db.execute(
+                    'SELECT candidate,body FROM outcomes WHERE id=? ORDER BY candidate',(identity,))}
+                yield identity,context,outcomes
+        body['classifier_generation_sha256']=training_generation(frozen,training_records(),scores)
         return {**body,'artifact_sha256':digest(body)}

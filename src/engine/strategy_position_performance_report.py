@@ -168,9 +168,9 @@ def _write_status(target_date: str, payload: dict[str, Any]) -> dict[str, Any]:
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "cost_basis": {
-            "kind": "fixed_comparison_cost_model",
-            "trade_cost_rate": get_trade_cost_rate(),
-            "broker_cost_reconciled": False,
+            "kind": "per_row_source_status",
+            "comparison_trade_cost_rate": get_trade_cost_rate(),
+            "broker_cost_reconciled": "see_economics_source_status_counts",
         },
         **payload,
     }
@@ -1262,7 +1262,11 @@ def _build_report_payload(
 
 def _trade_fact_db_payload(fact: dict[str, Any]) -> dict[str, Any]:
     allowed = {column.name for column in TradePerformanceFact.__table__.columns}
-    return {key: value for key, value in fact.items() if key in allowed}
+    payload={key: value for key, value in fact.items() if key in allowed}
+    generation=payload.get('actual_cost_source_generation')
+    if isinstance(generation,dict):
+        payload['actual_cost_source_generation']=json.dumps(generation,sort_keys=True,separators=(',',':'),allow_nan=False)
+    return payload
 
 
 def _summary_db_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -1443,6 +1447,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
                     {**_trade_fact_db_payload(fact), "synced_at": synced_at}
                     for fact in facts
                 ],
+                render_nulls=True,
             )
         if summary_rows:
             session.bulk_insert_mappings(
@@ -1451,7 +1456,21 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
                     {**_summary_db_payload(row), "synced_at": synced_at}
                     for row in summary_rows
                 ],
+                render_nulls=True,
             )
+
+        # Reconcile persisted NULLs and lineage before this transaction commits.
+        saved = {row.recommendation_id:row for row in session.query(TradePerformanceFact).filter(TradePerformanceFact.rec_date == rec_date)}
+        if set(saved) != {fact["recommendation_id"] for fact in facts}:
+            raise FactSyncSourceError("fact_persisted_census_mismatch")
+        for fact in facts:
+            row = saved[fact["recommendation_id"]]
+            for key in ("profit_rate", "realized_pnl_krw", "economics_source_status",
+                        "actual_cost_reconciliation_status", "actual_cost_source_generation",
+                        "completion_census_run_id", "completion_census_projection_sha256",
+                        "broker_actual_fees_taxes_krw"):
+                if getattr(row,key) != _trade_fact_db_payload(fact).get(key):
+                    raise FactSyncSourceError("fact_persisted_economics_or_lineage_mismatch:"+key)
 
     _DB.analyze_performance_tables()
     receipt = _write_status(

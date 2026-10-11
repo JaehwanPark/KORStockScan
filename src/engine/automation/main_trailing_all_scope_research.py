@@ -31,7 +31,8 @@ INPUT_SCHEMA = 'main_all_scope_exit_input_manifest_v1'
 MAX_PARTITIONS = 1024
 MAX_POSITIONS = 20000
 MAX_SHARED_BYTES = 64 * 1024 * 1024
-CODE_PATHS = ('automation/main_trailing_all_scope_research.py', 'lifecycle/holding_window_generation.py',
+CODE_PATHS = ('ai/holding_exit_vote.py','ai/holding_vote_replay_source.py',
+              'scalping/ai_decision_trace.py','ai_engine_openai.py','sniper_state_handlers.py','automation/main_trailing_all_scope_research.py', 'lifecycle/holding_window_generation.py',
               'automation/main_trailing_path_projection.py',
               'lifecycle/research_input_budget.py', 'lifecycle/research_admission.py',
               'lifecycle/research_storage.py', 'automation/main_trailing_source_assembler.py',
@@ -46,7 +47,7 @@ CODE_PATHS = ('automation/main_trailing_all_scope_research.py', 'lifecycle/holdi
               'scalping/trailing_situation_policy.py', 'scalping/trailing_mechanical_strength.py',
               'scalping/trailing_exit_decision.py', 'scalping/trailing_threshold_policy.py',
               'scalping/trailing_mechanical_policy.py', 'scalping/pre_submit_delay_initial_policy.py',
-              'sniper_state_handlers.py', 'sniper_trade_review_report.py', 'holding_exit_observation_report.py',
+              'sniper_trade_review_report.py', 'holding_exit_observation_report.py',
               'scalping/position_peak_ledger.py', 'scalping/holding_profit_exit_semantics.py',
               'lifecycle/broker_cost_source.py', 'lifecycle/broker_cost_reconciliation.py',
               '../utils/pipeline_event_logger.py',
@@ -76,6 +77,7 @@ def _cost_revision_result(previous):
                     slippage_net_pnl_krw=None, modeled_residual_qty=None)
     result['common_ids'] = sorted(identity for identity, values in result['minimal_results'].items()
                                  if all(row['modeled_net_pnl_krw'] is not None for row in values.values()))
+    result['eligible_ids'] = sorted(i for i,r in result['minimal_results'].items() if r[result['candidate_aliases']['incumbent']]['modeled_net_pnl_krw'] is not None)
     result['excluded_ids'] = sorted(set(result['population_ids']) - set(result['common_ids']))
     result['status_counts'] = dict(Counter(row['status'] for values in result['minimal_results'].values()
                                          for row in values.values()))
@@ -402,7 +404,8 @@ def _run(manifest_path, *, input_root, output_root, dry_run, resume, budget):
     if code_contract() != contract:
         raise ValueError('all_scope_code_changed_during_research')
     body = {'schema':SCHEMA, 'source_date':manifest['source_date'], 'target_date':manifest['target_date'],
-        'status':'complete' if not missing and not gaps else 'source_gap', 'scope':scope,
+        'status':'complete' if not missing else 'source_gap',
+        'eligible_evaluation_complete':not missing, 'raw_census_complete':not gaps, 'scope':scope,
         'population_ids':sorted(seen), 'missing_population_ids':missing, 'source_gaps':gaps,
         'partition_results':global_results, 'cost_influence_graph':influence,
         'common_population_evaluation':evaluation,

@@ -1,6 +1,8 @@
 # 최초 매수 수량 유형별 정책 폐루프 구현계획 — 2026-09-26
 
-상태: **최초 행동 동등 정책과 장후 source-only 코드를 포함한 불변 메인 릴리스 `c0d88893`을 선택했다. 변경 수량·분할·총시간의 통합 정책 발행과 실주문 순차 실행은 미완료다.** 실제 PID 소비·자연 주문·비용 성과는 각 코드 배포 후 별도 수용하며 최초 배포의 선행 조건으로 요구하지 않는다. 범위는 메인 `SCALPING/SCALP`의 **최초 진입 총수량**이다. 실행 기준은 [Plan Rebase §5·§7·§8](../plan-korStockScanPerformanceOptimization.rebase.md)이다. 2026-09-27 체크리스트 파일은 현재 없고, [9/28 체크리스트](../checklists/2026-09-28-stage2-todo-checklist.md)의 `[InitialQuantityClosedLoop0928]`이 이 문서 §23의 현재 실행 소유자다. 기존 `[DirectFamilySourceRepairEntrySplit]`은 별도 family 원천 수리 소유자다. 이 문서만으로 PID 적용을 주장하지 않는다.
+후속 기준(2026-10-10): [수량 런타임·장후 생산자/소비자 상세 보완계획 Q0–Q8](initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md)이 새 결함 7건·진단 보완과 현재 실행 범위를 소유한다. 현행 담당 작업은 [10/11 체크리스트](../checklists/2026-10-11-stage2-todo-checklist.md)의 `InitialQuantityProducerConsumerRepair1010`이다. 아래의 릴리스·미완료·기동 예정 상태는 각 절 작성 당시 기록이며, 최신 선택 릴리스/실제 PID 상태로 재사용하지 않는다. 최초 정책에 우월성·자연소비를 선행 조건으로 요구하지 않는 사용자 결정은 계속 유효하다.
+
+9월 당시 상태: **최초 행동 동등 정책과 장후 source-only 코드를 포함한 불변 메인 릴리스 `c0d88893`을 선택했다. 변경 수량·분할·총시간의 통합 정책 발행과 실주문 순차 실행은 당시 미완료였다.** 이후 진행은 각 날짜의 후속 절에 기록했다. 범위는 메인 `SCALPING/SCALP`의 **최초 진입 총수량**이며 실행 기준은 [Plan Rebase §5·§7·§8](../plan-korStockScanPerformanceOptimization.rebase.md)이다. [9/28 체크리스트](../checklists/2026-09-28-stage2-todo-checklist.md)의 `[InitialQuantityClosedLoop0928]`과 기존 `[DirectFamilySourceRepairEntrySplit]`은 당시 실행 소유 기록이다. 이 문서만으로 PID 적용을 주장하지 않는다.
 
 ## 1. 현 상태와 목표 계약
 
@@ -366,11 +368,16 @@
 
 ## 28. 유형별 cap 후보의 체결 가정 확정과 기동 전 수용
 
-- 사용자 결정(9/27): 10/15/20% cap 후보의 추가 수량은 **당시 호가 잔량과 후행 틱을 보수적으로 재생**한다. 근거로 채우지 못한 수량은 `partial_unfilled`로 남겨 정책 선정에서 제외한다. 이 결정은 §26의 답변 대기 문구를 대체한다. 최초 기본정책과 적용 후 갱신에 같은 체결·비용 모델을 쓰되, 최초 생성에 갱신용 우월성·자연 적용 표본 허들을 요구하지 않는다.
+- 사용자 결정(9/27, 10/10 해석 정정): 10/15/20% cap 후보의 추가 수량은 **당시 호가 잔량과 후행 틱을 보수적으로 재생**하고 부족분은 미체결로 처리한다. 유효하게 모델링한 `partial_unfilled`의 비용 후 성과는 평가에 남긴다. 필수 원천 결손/검열은 별도 분리한다. 종전 문서의 "부분 미체결이면 일괄 선정 제외"는 사용자 결정에 없던 추가 제한으로, [후속 IQ-F6/Q3·Q5](initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md)에서 수정한다. 최초 기본정책과 적용 후 갱신에 같은 체결·비용 모델을 쓰되, 최초 생성에 갱신용 우월성·자연 적용 표본 허들을 요구하지 않는다.
 - 생산자: 실제 최초 진입의 최종 allocator 예산·단가·안전계수·상한·tier/ratio와 동일 route/종목/transport epoch의 신선한 0D 매도 호가 잔량을 `entry_execution_sizing_plan`에 source-only 기록한다. 실제 주문 attempt·계획 SHA에 결속된 0B 매수 주도 체결 틱은 최초 주문 뒤 최대 1200초 동안 관찰한다. 이 이벤트는 주문량·가격·타임아웃을 바꾸지 않는다.
 - 공식 원천 대조: 2026-09-27 18:35 KST에 `Kiwoom-Securities/Kiwoom-REST-API` commit `953e5dbff123f437ab4d11a78a95191a685eb51f`의 `kiwoom/_data/kiwoom_api_spec.json`(0B 체결량 FID 15의 부호, 0D 매도호가 가격/잔량 FID 41/61), `kiwoom/realtime/decoders.py`, `kiwoom/specs.py`를 확인했다. 신규 wire/FID 매핑·구독·주문 API는 만들지 않고 기존 정규화된 WS 영수증만 소비한다. 해당 upstream revision에는 `kiwoom_docs` 디렉터리가 없어 패키지 spec과 local 정규화 계약으로 검증했다.
-- 장후 소비자: 실제 broker 체결 ledger를 후보 수량의 앞부분으로 사용한다. 초과 수량은 같은 route/epoch·호가 가격의 가용 잔량과 이후 0B 체결량 양쪽을 넘지 않는 범위에서만 재생한다. 원주문의 소비량을 차감하고 청산 뒤 틱·중복 틱·근거 없는 잔량을 제외한다. 수수료/세금은 동일한 정규 비용 모델로 후보 매도금액에 적용한다. 부분 미체결 후보는 수치와 검열 사유를 기록하지만 승격 근거로 세지 않는다. 이는 **조건부 반사실**이며 broker 체결 증명이 아니다.
+- 장후 소비자: 실제 broker 체결 ledger를 후보 수량의 앞부분으로 사용한다. 초과 수량은 같은 route/epoch·호가 가격의 가용 잔량과 이후 0B 체결량 양쪽을 넘지 않는 범위에서만 재생한다. 원주문의 소비량을 차감하고 청산 뒤 틱·중복 틱·근거 없는 잔량을 제외한다. 수수료/세금은 같은 비교 비용 모델로 부모와 후보에 적용하고 실제 실적 비용은 따로 보존한다. 유효 부분 체결은 미체결 잔량과 함께 평가하며 원천 결손/검열과 구별한다. 이는 **조건부 반사실**이며 broker 체결 증명이 아니다. 10/10에 확인한 실제 비용/직렬화/평가 결손의 수정 계약은 후속 Q1–Q5를 따른다.
 - 유형별 정책: 익절 거래의 실현 순이익 원화 가중 성과를 형상·시간·cap 선택 지표로 두고, 손실 거래는 전체 비용 후 EV·원화 순이익·일별 위험 분모에 유지한다. 후속 갱신은 최소 표본·원천 coverage·독립 날짜·비용 후 개선·검증된 정책/PID/terminal·strict 영수증을 추가 요구한다. `SAFE_UNKNOWN`은 부모 cap 고정이다. 선택한 ratio는 단일 갱신 후보→검증 stage→current CAS→다음 PREOPEN→실제 Main PID 소비로 이어진다.
 - 기동 전 코드 수용: 0D/0B 원천 결속, 실제 부분 체결/미체결·비용·손실·변조 방지, ratio-only 후보→runtime v2/갱신 loader→allocator 소비, 실주문 순차 bundle·취소 terminal, 정규 장후 wrapper/summary/strict 경로의 범위별 회귀를 통과시킨다. 클린 기준 완료 거래 전수의 원모수·유형·초기 형상·wall/CPU/RSS/I/O를 다시 측정하고, 빈 적용 세대는 `carry_parent`로 확인한다. 불변 코드 릴리스 선택·release-set·cron·9/28 PREOPEN/start print-plan을 확인한다.
 - **다음 영업일 사후 수용:** 정상 PREOPEN에서 새 manifest/env/verify를 발행한 후 실제 Main PID가 선택된 파일 SHA를 읽었는지 확인한다. 자연 주문·취소/terminal과 9/28 정규 장후 전체 체인 시간/원천/strict/CAS는 발생 뒤에만 수용한다. 기동 전 코드 선택이나 과거 격리 재생을 이 미래 영수증으로 표시하지 않는다.
 - **기동 전 코드 선택 결과:** [cap 재생 재리뷰·전수 성능 영수증](../audit-reports/2026-09-27-initial-quantity-cap-depth-replay-review.md)의 불변 릴리스 `50ffc08ee976fb0cabb6cc23aae355ccfd8d7b02`를 메인 selector에 선택했다. 영향 238건과 선택 릴리스의 정책·주문 94건/진입 수량 64건/원천 표적 2건 PASS, 387건 replay validator·모수·6유형 부모 형상 유지, 9/27 빈 갱신 stage `carry_parent`/validator PASS다. release-set·cron 8경로·9/28 PREOPEN/start print-plan PASS, `current.json` 및 최초 v2 정책 파일 SHA 불변이다. Main PID·자연 주문·정규 9/28 장후 전체 chain 성능은 아직 관측 전이다.
+
+
+## 2026-10-11 갱신 운영 계약
+
+후속 Q0–Q7은 [실행 리뷰](../audits/initial-quantity-producer-consumer-implementation-review-2026-10-11.md)를 따른다. 현행 최초 정책은 계속 유효하며 v1 pin은 frozen reader로 읽는다. 신규 갱신은 실제 비용과 공통 비교 비용, native quote route와 주문/체결 시장을 분리하고 cap×shape×T train 승자 하나의 독립 holdout만 평가한다. wrapper·summary·의미 감시기는 날짜별 고정 stage 대신 `refresh_postclose_<date>/committed_stage.json`의 불변 generation/CAS 참조를 읽는다. 직접 CLI와 wrapper는 기존 공통 두 슬롯/64MiB resident/4GiB 저장 budget에 묶이며 관측은 기존 bounded observation executor를 이용한다. 큰 과거 snapshot의 원 bounded native projection 부재는 날짜별 source gap으로 격리한다. 운영 재생은 `--as-of <source> --parent-current data/runtime/initial_quantity/current.json --output-dir data/report/initial_entry_quantity_type_policy/refresh_postclose_<source>`의 기존 producer를 사용하고 summary/checklist/strict/finalization/PREOPEN을 정식 successor로 닫는다. 원 EOD와 퇴역 실행은 재생하지 않는다.

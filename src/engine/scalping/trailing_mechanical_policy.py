@@ -171,6 +171,15 @@ def _loaded_policy_vector(
     return values, classifier_values, classifier_digest, digest
 
 
+@lru_cache(maxsize=8)
+def _unsealed_policy_vector(scalar_items, environment_items, classifier_digest):
+    """Memoize pure projection only; every effective input is part of the key."""
+    values = market_values_from_env(dict(environment_items), dict(scalar_items))
+    digest = market_values_hash_with_classifier_digest(values, classifier_digest)
+    # Never expose a mutable cached policy to an observation consumer.
+    return tuple((market, tuple(cell.items())) for market, cell in values.items()), digest
+
+
 def runtime_policy_vector_snapshot(
     scalar: Mapping[str, Any],
 ) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, int | float]], str, str]:
@@ -184,10 +193,17 @@ def runtime_policy_vector_snapshot(
             str(os.getenv("KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE") or ""),
             scalar_items,
         )
-    values = market_values_from_env(os.environ, scalar)
     classifier_values, classifier_digest = runtime_classifier_snapshot()
-    return (values, classifier_values, classifier_digest,
-            market_values_hash_with_classifier_digest(values, classifier_digest))
+    environment_items = tuple(
+        (key, os.environ[key]) for keys in MARKET_ENV_KEYS.values()
+        for key in keys.values() if key in os.environ
+    )
+    cells, digest = _unsealed_policy_vector(
+        tuple(sorted(normalize_values(scalar).items())), environment_items,
+        classifier_digest,
+    )
+    return ({market: dict(cell) for market, cell in cells},
+            classifier_values, classifier_digest, digest)
 
 
 def value_hash(values: Mapping[str, Any]) -> str:

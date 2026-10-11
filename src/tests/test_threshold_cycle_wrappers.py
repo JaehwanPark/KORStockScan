@@ -80,7 +80,7 @@ def test_initial_quantity_refresh_runs_before_summary_handoff(monkeypatch, tmp_p
 
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     producer = script.index('--parent-current "$INITIAL_QUANTITY_CURRENT"')
-    terminal = script.index("initial_quantity_refresh_stage_${TARGET_DATE}.json")
+    terminal = script.index("$INITIAL_QUANTITY_REFRESH_DIR/committed_stage.json")
     summary = script.index("src.engine.runtime_approval_summary", producer)
     assert producer < terminal < summary
     path = handoff.source_paths(report_dir, "2026-09-28", "tower")

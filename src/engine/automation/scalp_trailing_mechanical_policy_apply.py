@@ -229,9 +229,10 @@ def _type_view(report, generation, *, report_path, market, kind):
     _,window=_analysis_window_start(target_date=report['source_date'],month_start=None)
     from src.engine.lifecycle.holding_window_generation import capture_window
     dependency=capture_window(Path(manifest['source_data_root']),manifest['consumed_dates'])
+    from src.engine.lifecycle import research_storage as storage
     def metrics(row):
         return dict(n=row['n'],paired_ev_pct=row['equal_weight_avg_profit_pct'],
-            large_loss_worsened_ids=['sealed_adverse_population'] if row['worsened_ids_ref']['count'] else [],
+            large_loss_worsened_ids=list(storage.iter_tree(Path(report.get('evidence_root',str(Path(report_path).parent))),row['large_loss_worsened_ids_ref'])),
             execution_slippage_sensitivity={'100':{'paired_ev_pct':row['worst_slippage_ev_pct']}})
     return dict(date=report['source_date'],meta={'snapshot_profile':'postclose_exit'},analysis_window=window,
         mechanical_population_quality=dict(complete=report['status']=='complete',start_entry_day=window['start_date'],

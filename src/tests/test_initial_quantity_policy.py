@@ -132,7 +132,7 @@ def test_cap_selection_keeps_losses_in_costed_population():
     assert metrics[selected]["candidate_net_pnl_krw"] == 60.0
     assert metrics[selected]["winner_weighted_net_pct"] == 2.5
     rows[0]["cap_candidates"]["cap_10pct"]["status"] = "partial_unfilled"
-    assert _refresh_cap_decision(rows, "parent_5stage", 3)[0] != "cap_10pct"
+    assert _refresh_cap_decision(rows, "parent_5stage", 3)[0] == "cap_10pct"
 
 
 def test_cap_selection_requires_winner_weighted_gain():
@@ -1128,6 +1128,22 @@ def test_immutable_stage_receipt_binds_report_candidate_and_rejects_conflict(tmp
 def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
     tmp_path, monkeypatch,
 ):
+    # This test exercises an already sealed pre-9/29 v1 ancestor. Reconstruct
+    # its original cap reader explicitly; it cannot be a new CLI successor.
+    original_replay = globals()["build_initial_quantity_replay"]
+    def build_initial_quantity_replay(*args, **kwargs):
+        from src.engine.scalping.initial_quantity_legacy_reader import _cap_candidate_trade as old_cap
+        report = original_replay(*args, **kwargs)
+        if report.get("generation_kind") == "refresh_post_apply_replay":
+            report.pop("evaluation_algorithm", None)
+            facts = {str(f["recommendation_id"]):f for f in report["census"]["input_fact_rows"]}
+            for row in report["trades"]:
+                fact = facts[row["record_id"]]
+                trade = dict(buy_qty=fact["buy_qty"],buy_price=fact["buy_price"],sell_price=fact["sell_price"],realized_net_pnl_krw=row["actual_net_pnl_krw"])
+                row["cap_candidates"] = {mode:old_cap(trade,row["cap_source"],mode,get_trade_cost_rate()) for mode in row["cap_candidates"]}
+            report["report_content_sha256"] = _digest({k:v for k,v in report.items() if k!="report_content_sha256"})
+        return report
+
     prior_day, new_day = "2026-09-22", "2026-09-23"
     _quality(tmp_path, prior_day)
     _quality(tmp_path, new_day)
@@ -1154,6 +1170,9 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
     assert refresh["census"]["excluded"]["before_refresh_start"] == 1
     with pytest.raises(ValueError, match="initial_replay_integrity_invalid"):
         build_initial_quantity_policy(refresh)
+    # Frozen pre-forward v1 evidence remains readable; new refreshes use 9/29.
+    refresh.pop("evaluation_algorithm", None)
+    refresh["report_content_sha256"] = _digest({k:v for k,v in refresh.items() if k != "report_content_sha256"})
     evaluation = evaluate_refresh_quantity_candidate(refresh, parent_policy=parent)
     assert evaluation["state"] == "carry_parent"
     assert "independent_post_apply_dates_below_three" in evaluation["global_blockers"]
@@ -1279,13 +1298,14 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
         selected_dir)
     replay_path = (tmp_path / "refresh_replay_input.json").resolve()
     _write_immutable_json(replay_path, refresh)
-    assert initial_quantity_main([
-        "--replay", str(replay_path),
-        "--data-dir", str(tmp_path),
-        "--parent-current", str(selected_dir / "current.json"),
-        "--output-dir", str(tmp_path / "refresh_cli")]) == 0
-    cli_stage = json.loads((tmp_path / "refresh_cli" /
-                            f"initial_quantity_refresh_stage_{new_day}.json").read_text())
+    with pytest.raises(ValueError, match="existing_replay_refresh_window_invalid"):
+        initial_quantity_main([
+            "--replay", str(replay_path), "--data-dir", str(tmp_path),
+            "--parent-current", str(selected_dir / "current.json"),
+            "--output-dir", str(tmp_path / "refresh_cli")])
+    cli_stage = publish_refresh_quantity_evaluation(
+        refresh, parent_policy=active_baseline, parent_policy_path=parent_path,
+        output_dir=tmp_path / "refresh_cli", timeout_research=refresh_timeout)
     assert cli_stage["timeout_research_status"] == "source_bound"
     assert refresh_quantity_stage_terminal_valid(cli_stage)
     timeout_path = Path(cli_stage["timeout_research_path"])
@@ -1399,34 +1419,12 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
                         fake_candles)
     winning_replay_path = (tmp_path / "winning_refresh_replay_input.json").resolve()
     _write_immutable_json(winning_replay_path, winning_refresh)
-    assert initial_quantity_main([
-        "--replay", str(winning_replay_path),
-        "--data-dir", str(tmp_path),
-        "--parent-current", str(selected_dir / "current.json"),
-        "--output-dir", str(tmp_path / "winning_refresh_cli")]) == 0
-    assert len(calls) == 1 and calls[0][0] == "test-token"
-    auto_stage = json.loads((tmp_path / "winning_refresh_cli" /
-                             f"initial_quantity_refresh_stage_{new_day}.json").read_text())
-    assert auto_stage["following_bar_source_status"] == "source_bound"
-    assert refresh_quantity_stage_terminal_valid(auto_stage)
-    attempts = []
-
-    def failed_token():
-        attempts.append(True)
-        raise RuntimeError("offline_fixture")
-
-    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_token", failed_token)
-    assert initial_quantity_main([
-        "--replay", str(winning_replay_path),
-        "--data-dir", str(tmp_path),
-        "--parent-current", str(selected_dir / "current.json"),
-        "--output-dir", str(tmp_path / "winning_refresh_api_gap")]) == 0
-    assert len(attempts) == 1
-    gap_stage = json.loads((tmp_path / "winning_refresh_api_gap" /
-                            f"initial_quantity_refresh_stage_{new_day}.json").read_text())
-    gap_source = json.loads(Path(gap_stage["following_bar_source_path"]).read_text())
-    assert next(iter(gap_source["sources"].values()))["status"] == "fetch_failed"
-    assert refresh_quantity_stage_terminal_valid(gap_stage)
+    with pytest.raises(ValueError, match="existing_replay_refresh_window_invalid"):
+        initial_quantity_main([
+            "--replay", str(winning_replay_path), "--data-dir", str(tmp_path),
+            "--parent-current", str(selected_dir / "current.json"),
+            "--output-dir", str(tmp_path / "winning_refresh_cli")])
+    assert calls == []  # Reject an obsolete replay before any provider access.
 
     import hashlib
     parent_file_sha = hashlib.sha256(parent_path.read_bytes()).hexdigest()

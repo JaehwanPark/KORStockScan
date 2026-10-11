@@ -1503,6 +1503,21 @@ def build_runtime_approval_summary(
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 holding_vote_policy_receipt["status"] = "source_gap_policy_invalid"
                 holding_vote_policy_receipt["reason"] = type(exc).__name__
+    stop_receipt = dict(status='not_installed',source_date=target_date,actual_pid_consumed=False)
+    from src.engine.automation.main_stop_postclose import START_DATE as STOP_START, read_committed as read_stop
+    if target_date >= STOP_START:
+        try:
+            stop_bundle, stop_report, stop_pointer, stop_directory = read_stop(DATA_DIR,target_date)
+            stop_receipt.update(status='published_policy',target_date=stop_bundle['target_date'],
+                policy_sha256=stop_bundle['policy_sha256'],generation=stop_pointer['generation'],
+                path=str(stop_directory/'policy.json'),report_sha256=stop_report['report_sha256'],
+                cell_count=len(stop_bundle['cells']),opportunity_count=stop_report['opportunity_census']['count'],
+                cell_states={key:cell['status'] for key,cell in stop_bundle['cells'].items()},
+                allowed_runtime_apply=False, decision_authority='native_receipt_only_preopen_required')
+        except (OSError,ValueError,TypeError,KeyError) as exc:
+            stop_receipt.update(status='source_gap',reason=str(exc),allowed_runtime_apply=False)
+            blockers.append('main_stop_confirmation:native_handoff_invalid')
+            direct_state='incomplete';status=DIRECT_EVIDENCE_INCOMPLETE
     report = {
         "schema_version": 3, "report_type": "runtime_approval_summary", "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "status": status,
@@ -1514,6 +1529,7 @@ def build_runtime_approval_summary(
         "preopen_consumption_receipt": preopen_receipt,
         "holding_exit_threshold_lineage": trailing_lineage,
         "holding_path_vote_policy": holding_vote_policy_receipt,
+        "main_stop_confirmation": stop_receipt,
         "holding_path_vote_lineage": holding_path_vote_lineage,
         "policy_handoff_state": (
             "candidate_published" if handoff_states.get("candidate_published")

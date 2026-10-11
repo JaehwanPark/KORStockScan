@@ -58,7 +58,7 @@ class BoundedObservationQueue:
 
     def submit(self, callback, *args, **kwargs):
         category = kwargs.pop('observation_category', 'default')
-        if category not in {'default', 'pre_submit_delay'}:
+        if category not in {'default', 'pre_submit_delay', 'initial_quantity', 'main_stop'}:
             return self._unavailable('observation_category_invalid')
         try:
             # Copy at admission, never retain a live stock or an AI payload.
@@ -74,6 +74,11 @@ class BoundedObservationQueue:
             if category == 'pre_submit_delay' and (
                 self._category_items.get(category, 0) >= min(256, self.max_items // 4)
                 or self._category_bytes.get(category, 0) + size > self.max_bytes // 4
+            ):
+                return self._unavailable('observation_category_budget_exceeded')
+            if category in {'initial_quantity','main_stop'} and (
+                self._category_items.get(category,0)>=min(128,max(1,self.max_items//8))
+                or self._category_bytes.get(category,0)+size>self.max_bytes//8
             ):
                 return self._unavailable('observation_category_budget_exceeded')
             self._jobs.append((callback, encoded, time.perf_counter(), category))
@@ -665,6 +670,10 @@ def _project_fields_for_compact_stream(
 
 
 def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, str]:
+    if stage == 'main_stop_source':
+        # The structured source is stored once; diagnostics carry its identity.
+        return {key:value for key,value in fields.items() if key!='main_stop_source'} | {
+            'text_field_projection':'main_stop_source_reference_only_v1'}
     if stage in {
         "scalping_scanner_source_fetch_census",
         "scalping_scanner_candidate_pool_census",

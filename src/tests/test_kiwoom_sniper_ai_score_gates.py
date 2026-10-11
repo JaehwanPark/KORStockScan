@@ -122,71 +122,15 @@ def _patch_holding_rules(monkeypatch):
     monkeypatch.setattr(kiwoom_sniper_v2, "TIME_15_30", dt_time(23, 59), raising=False)
 
 
-def test_legacy_scalping_exit_rejects_stale_low_score_for_momentum_decay(monkeypatch):
+def test_holding_exit_diagnostic_is_score_independent_and_read_only(monkeypatch):
     _patch_holding_rules(monkeypatch)
-    code = "005930"
-    kiwoom_sniper_v2.highest_prices = {code: 10100}
-    stock = _holding_stock(
-        holding_score_data_quality="stale",
-        holding_score_effective_usable=False,
-        holding_score_excluded_reason="holding_score_data_quality_stale",
-    )
-
-    reason = kiwoom_sniper_v2.evaluate_scalping_exit(
-        stock,
-        code,
-        {"v_pw": 110},
-        curr_p=10080,
-        buy_p=9960,
-        profit_rate=1.20,
-        peak_profit=1.40,
-    )
-
-    assert reason is None
-    assert stock["legacy_holding_score_negative_exit_usable"] is False
-    assert stock["holding_score_negative_exit_usable"] is False
-    assert stock["legacy_holding_score_negative_exit_excluded_reason"] != "-"
-    assert stock["holding_score_negative_exit_excluded_reason"] != "-"
-
-
-def test_legacy_scalping_exit_allows_fresh_low_score_for_momentum_decay(monkeypatch):
-    _patch_holding_rules(monkeypatch)
-    code = "005930"
-    kiwoom_sniper_v2.highest_prices = {code: 10100}
-    stock = _holding_stock()
-
-    reason = kiwoom_sniper_v2.evaluate_scalping_exit(
-        stock,
-        code,
-        {"v_pw": 110},
-        curr_p=10080,
-        buy_p=9960,
-        profit_rate=1.20,
-        peak_profit=1.40,
-    )
-
-    assert reason.startswith("AI 모멘텀 둔화")
-    assert stock["legacy_holding_score_negative_exit_usable"] is True
-
-
-def test_legacy_scalping_exit_uses_fresh_high_score_for_strong_trailing(monkeypatch):
-    _patch_holding_rules(monkeypatch)
-    code = "005930"
-    kiwoom_sniper_v2.highest_prices = {code: 10100}
-    stock = _holding_stock(
-        rt_ai_prob=0.80,
-        holding_score_effective=80.0,
-    )
-
-    reason = kiwoom_sniper_v2.evaluate_scalping_exit(
-        stock,
-        code,
-        {"v_pw": 111},
-        curr_p=10050,
-        buy_p=9900,
-        profit_rate=1.52,
-        peak_profit=2.02,
-    )
-
-    assert reason is None
-    assert stock["legacy_holding_score_negative_exit_usable"] is True
+    for score, quality in ((0., 'fresh'), (50., 'unknown'), (100., 'stale')):
+        stock = _holding_stock(holding_score_effective=score,holding_score_data_quality=quality)
+        before = dict(stock)
+        assert kiwoom_sniper_v2.evaluate_scalping_exit(stock, '005930', {'v_pw':110},
+            curr_p=10080,buy_p=9960,profit_rate=1.2,peak_profit=1.4) is None
+        assert stock == before
+        reason = kiwoom_sniper_v2.evaluate_scalping_exit(stock, '005930', {'v_pw':110},
+            curr_p=9400,buy_p=10000,profit_rate=-6.,peak_profit=1.4)
+        assert reason is not None and 'hard_stop' in reason
+        assert stock == before

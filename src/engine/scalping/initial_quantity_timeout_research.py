@@ -21,6 +21,7 @@ from src.engine.scalping.initial_quantity_policy import (
     _exit_at, _quantity_parts,
     _type_from_decision_receipt, _write_immutable_json,
     _paired_candidate, completed_trade_fact_census, join_post_fill_paths,
+    trade_source_allowed,
 )
 from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
 from src.engine.scalping.initial_quantity_type import QUANTITY_TYPES, kst_timestamp
@@ -40,6 +41,9 @@ def _unique_fills(path: dict[str, Any]) -> list[dict[str, Any]]:
         key = ((fill.get("order_no"), fill.get("execution_no"))
                if fill.get("order_no") and fill.get("execution_no") else
                (fill["at"].isoformat(), fill.get("price"), fill.get("qty")))
+        prior = unique.get(key)
+        if prior is not None and any(prior.get(k)!=fill.get(k) for k in ('at','qty','price','venue')):
+            return []
         unique[key] = fill
     return sorted(unique.values(), key=lambda row: row["at"])
 
@@ -160,9 +164,10 @@ def _timeout_case(
     probe_applied = bool(order_start.get("probe_applied"))
     if probe_applied and first["qty"] != 1:
         return {"status": "probe_first_fill_quantity_mismatch"}
-    parts = ([1, *_quantity_parts(trade["buy_qty"] - 1, shape)]
-             if probe_applied and trade["buy_qty"] > 1 else
-             _quantity_parts(trade["buy_qty"], shape))
+    try:
+        parts = _quantity_parts(trade["buy_qty"], shape, probe_first=probe_applied)
+    except ValueError:
+        return {"status": "quantity_too_small"}
     if min(parts) <= 0:
         return {"status": "quantity_too_small"}
     if horizon_sec / len(parts) <= reserve_sec:
@@ -170,8 +175,7 @@ def _timeout_case(
     anchor = first["price"]
     if not float(anchor).is_integer() or int(anchor) % get_tick_size(anchor):
         return {"status": "anchor_tick_invalid"}
-    offsets = ([float(anchor), *_prices(int(anchor), shape)]
-               if probe_applied else _prices(int(anchor), shape))
+    offsets = _prices(int(anchor), shape)[:len(parts)]
     if any(price <= 0 for price in offsets) or any(
             later > earlier or (later == earlier and not (probe_applied and index == 0))
             for index, (earlier, later) in enumerate(zip(offsets, offsets[1:]))):
@@ -286,6 +290,7 @@ def build_timeout_research(
     reserves: tuple[int, ...] = CANCEL_CONFIRM_RESERVES_SEC,
     path_cache: dict[str, Any] | None = None,
     performance: dict[str, Any] | None = None,
+    replay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Scan the whole completed-trade manifest once for all timeout arms."""
     started = time.perf_counter()
@@ -294,11 +299,7 @@ def build_timeout_research(
     trades, census = completed_trade_fact_census(
         as_of, fact_rows=fact_rows, data_dir=data_dir,
         entry_on_or_after=entry_on_or_after)
-    eligible = [trade for trade in trades
-                if census["source_quality_by_entry_date"][trade["entry_date"]]
-                ["tuning_input_allowed"]
-                and census["source_quality_by_exit_date"][trade["exit_date"]]
-                ["tuning_input_allowed"]]
+    eligible = [trade for trade in trades if trade_source_allowed(census,trade)]
     scan_seconds: dict[str, float] = {}
     sources: dict[str, Any] = {}
     if path_cache is None:
@@ -318,9 +319,12 @@ def build_timeout_research(
             raise ValueError("timeout_research_shared_source_mismatch")
         paths = cached_paths
         sources = path_cache["pipeline_source_receipts"]
+    # Timing is diagnostic only. Do not retain N x candidate timings as the
+    # economic cohort grows; all outcomes still enter the exact aggregates.
     case_seconds = []
+    case_count = 0
     counts = Counter()
-    paired: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    paired = defaultdict(dict)
     first_lower_by_type: dict[str, list[float]] = defaultdict(list)
     winning_first_lower_by_type: dict[str, list[tuple[float, float]]] = defaultdict(list)
     verified_lower_by_type = Counter()
@@ -331,9 +335,7 @@ def build_timeout_research(
     policy_hash = "0" * 64  # fixed research identity; never an active policy hash
     for trade in trades:
         path = paths.get(trade["trade_id"])
-        quality_allowed = bool(
-            census["source_quality_by_entry_date"][trade["entry_date"]]["tuning_input_allowed"]
-            and census["source_quality_by_exit_date"][trade["exit_date"]]["tuning_input_allowed"])
+        quality_allowed = trade_source_allowed(census,trade)
         actual_type = "SAFE_UNKNOWN"
         if path:
             actual_type = _paired_candidate(trade, path, "parent")["quantity_type"]
@@ -373,13 +375,27 @@ def build_timeout_research(
                               if path else {"status": (
                                   "path_join_missing" if quality_allowed else
                                   "source_quality_blocked")})
-                    case_seconds.append(time.perf_counter() - case_started)
+                    elapsed = time.perf_counter() - case_started
+                    case_count += 1
+                    if len(case_seconds) < 4096:
+                        case_seconds.append(elapsed)
                     counts[f"{key}:{result['status']}"] += 1
                     if (result["status"] == "modeled"
                             and result["quantity_type"] == actual_type):
-                        paired[actual_type][key].append({**result,
-                                                         "trade_id": trade["trade_id"],
-                                                         "entry_date": trade["entry_date"]})
+                        value=paired[actual_type].setdefault(key,dict(count=0,delta_net=0.,delta_conservative_net=0.,delta_ev=0.,delta_conservative_ev=0.,weighted_delta=0.,winner_count=0,probe_count=0,sources=Counter(),max_window=0.,conditional=0,verified=0,missed=0,daily=defaultdict(float)))
+                        value['count']+=1
+                        for target,candidate,parent in (('delta_net','candidate_net_pnl_krw','parent_net_pnl_krw'),('delta_conservative_net','conservative_net_pnl_krw','parent_net_pnl_krw'),('delta_ev','candidate_net_pct','parent_net_pct'),('delta_conservative_ev','conservative_net_pct','parent_net_pct')):
+                            value[target]+=result[candidate]-result[parent]
+                        winner=trade['realized_net_pnl_krw']>0 and trade['profit_rate']>0
+                        value['winner_count']+=int(winner)
+                        if winner:value['weighted_delta']+=trade['realized_net_pnl_krw']*(result['conservative_net_pct']-result['parent_net_pct'])
+                        value['probe_count']+=int(result['probe_included_in_leg_count'])
+                        value['sources'][result['order_start_clock_source']]+=1
+                        value['max_window']=max(value['max_window'],result['order_start_window_sec'])
+                        value['conditional']+=int(result['conditional_crossed_leg_count']>0)
+                        value['verified']+=int(result['verified_route_epoch_price_cross_count']>0)
+                        value['missed']+=int(result['fill_state']=='primary_missed')
+                        value['daily'][trade['entry_date']]+=result['conservative_net_pnl_krw']-result['parent_net_pnl_krw']
     selections = {}
     for quantity_type in QUANTITY_TYPES:
         source_rows = type_trades[quantity_type]
@@ -403,51 +419,31 @@ def build_timeout_research(
             for reserve in reserves:
                 for horizon in horizons:
                     key = f"{shape}:{reserve}:{horizon}"
-                    values = paired[quantity_type][key]
-                    delta_net = sum(row["candidate_net_pnl_krw"] - row["parent_net_pnl_krw"]
-                                    for row in values)
-                    delta_conservative_net = sum(
-                        row["conservative_net_pnl_krw"] - row["parent_net_pnl_krw"]
-                        for row in values)
-                    delta_ev = sum(row["candidate_net_pct"] - row["parent_net_pct"]
-                                   for row in values)
-                    delta_conservative_ev = sum(
-                        row["conservative_net_pct"] - row["parent_net_pct"]
-                        for row in values)
-                    weighted_winner_delta = sum(
-                        winner_weights[row["trade_id"]] * (
-                            row["conservative_net_pct"] - row["parent_net_pct"])
-                        for row in values if row["trade_id"] in winner_weights)
-                    daily_conservative_delta = defaultdict(float)
-                    for row in values:
-                        daily_conservative_delta[row["entry_date"]] += (
-                            row["conservative_net_pnl_krw"] -
-                            row["parent_net_pnl_krw"])
+                    value=paired[quantity_type].get(key,{})
+                    count=value.get('count',0)
+                    delta_net=value.get('delta_net',0.)
+                    delta_conservative_net=value.get('delta_conservative_net',0.)
+                    delta_ev=value.get('delta_ev',0.)
+                    delta_conservative_ev=value.get('delta_conservative_ev',0.)
+                    weighted_winner_delta=value.get('weighted_delta',0.)
+                    daily_conservative_delta=value.get('daily',{})
                     # Parent profit_rate is the canonical costed rate. PnL
                     # delta is reported separately to avoid false EV claims.
                     candidates[key] = {
-                        "modeled_count": len(values),
-                        "winner_modeled_count": sum(
-                            row["trade_id"] in winner_weights for row in values),
+                        "modeled_count": count,
+                        "winner_modeled_count": value.get('winner_count',0),
                         "winner_weighted_conservative_ev_pct": (
                             round(winner_parent_ev + weighted_winner_delta /
                                   winner_weight, 6) if winner_weight else None),
-                        "probe_first_modeled_count": sum(
-                            row["probe_included_in_leg_count"] for row in values),
-                        "order_start_source_counts": dict(sorted(Counter(
-                            row["order_start_clock_source"] for row in values).items())),
+                        "probe_first_modeled_count": value.get('probe_count',0),
+                        "order_start_source_counts": dict(sorted(value.get('sources',{}).items())),
                         "max_order_start_window_sec": (
-                            max(row["order_start_window_sec"] for row in values)
-                            if values else None),
-                        "coverage_of_all_completed": (round(len(values) / len(trades), 6)
+                            value.get('max_window') if count else None),
+                        "coverage_of_all_completed": (round(count / len(trades), 6)
                                                       if trades else 0.0),
-                        "conditional_cross_count": sum(
-                            row["conditional_crossed_leg_count"] > 0 for row in values),
-                        "verified_cross_count": sum(
-                            row["verified_route_epoch_price_cross_count"] > 0
-                            for row in values),
-                        "primary_missed_count": sum(
-                            row["fill_state"] == "primary_missed" for row in values),
+                        "conditional_cross_count": value.get('conditional',0),
+                        "verified_cross_count": value.get('verified',0),
+                        "primary_missed_count": value.get('missed',0),
                         "estimated_net_pnl_krw": round(parent_net + delta_net, 3),
                         "conservative_net_pnl_krw": round(
                             parent_net + delta_conservative_net, 3),
@@ -528,6 +524,28 @@ def build_timeout_research(
             "quantity_type_counts": dict(sorted(type_counts.items())),
             "classifier_mismatch_trade_ids": sorted(classifier_mismatch_trade_ids),
             "selections": selections}
+    if entry_on_or_after:
+        from src.engine.scalping.initial_quantity_refresh_evaluation import execution_case, VERSION
+        from src.engine.scalping.initial_quantity_policy import build_initial_quantity_replay, _CAP_MODES
+        if replay is None:
+            shared = {"census":census, "paths":paths, "pipeline_source_receipts":sources,
+                      "date_scan_seconds":scan_seconds, "price_horizon_seconds":max(horizons)}
+            replay = build_initial_quantity_replay(as_of, data_dir=data_dir, fact_rows=census["input_fact_rows"],
+                entry_on_or_after=entry_on_or_after, path_cache=shared)
+        if replay.get("census") != census:
+            raise ValueError("joint_replay_census_mismatch")
+        grid = {f"{mode}:{shape}:{h}": {"mode":mode,"shape":shape,"horizon":h,"reserve":5}
+                for mode in ("parent_5stage", *_CAP_MODES) for shape in _SHAPES for h in (None,*horizons)}
+        from src.engine.lifecycle import research_storage as storage
+        joint_root = data_dir / "report/initial_entry_quantity_type_policy/joint_evidence"
+        rows = {r["trade_id"]:r for r in replay["trades"]}
+        from src.engine.scalping.initial_quantity_source_cache import joint_records
+        reference = storage.write_tree(joint_root, joint_records(trades,paths,rows,grid,
+                                       data_dir=data_dir,cost_rate=census['cost_rate']))
+        body.update(evaluation_algorithm=VERSION, joint_grid=grid, joint_outcomes_ref=reference,
+                    joint_evidence_root=str(joint_root.resolve()), joint_data_root=str(data_dir.resolve()),
+                    joint_replay_content_sha256=replay["report_content_sha256"])
+
     if performance is not None:
         usage = resource.getrusage(resource.RUSAGE_SELF)
         wait_end = _block_io_wait_ms()
@@ -546,14 +564,16 @@ def build_timeout_research(
                                        if ordered else None),
             "case_evaluation_p99_ms": (round(ordered[math.ceil(len(ordered)*.99)-1]*1000, 3)
                                        if ordered else None),
-            "candidate_case_count": len(case_seconds),
+            "candidate_case_count": case_count,
+            "case_timing_sample_count": len(case_seconds),
+            "case_timing_sample_policy": "first_4096_diagnostic_only",
             "date_scan_seconds": scan_seconds,
             "shared_pipeline_scan_reused": path_cache is not None,
         })
     return {**body, "report_content_sha256": _digest(body)}
 
 
-def timeout_research_valid(report: Any) -> bool:
+def timeout_research_valid(report: Any, *, replay=None) -> bool:
     """Reject incomplete or self-inconsistent source-only timeout research."""
     if not isinstance(report, dict):
         return False
@@ -644,12 +664,15 @@ def timeout_research_valid(report: Any) -> bool:
                                        (round(modeled / total, 6) if total else 0.0)) > 1e-6
                                 or selection["policy_selected_total_wait_sec"] is not None):
                             return False
+        if report.get("evaluation_algorithm") == "initial_quantity_execution_cost_split_v2":
+            from src.engine.scalping.initial_quantity_refresh_evaluation import joint_evidence_valid
+            return joint_evidence_valid(report, replay=replay)
         return True
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return False
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--as-of", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -669,6 +692,17 @@ def main(argv: list[str] | None = None) -> int:
                       "all_completed_initial_trades": report["census"]["all_completed_initial_trades"],
                       "performance": performance}))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    from src.engine.lifecycle.research_admission import direct_job
+    from src.engine.lifecycle.research_disk_budget import use
+    parser=argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--as-of',required=True)
+    parser.add_argument('--output-dir',type=Path,required=True)
+    args,_=parser.parse_known_args(argv)
+    with direct_job(DATA_DIR,'initial_entry_quantity_refresh',args.as_of), use(args.output_dir), use(DATA_DIR/'report/initial_entry_quantity_type_policy'):
+        return _main_impl(argv)
 
 
 if __name__ == "__main__":

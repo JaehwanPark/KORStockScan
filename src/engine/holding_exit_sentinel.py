@@ -1142,8 +1142,8 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
         }
     if primary == "SOFT_STOP_WHIPSAW":
         return {
-            "route": "soft_stop_whipsaw_calibration_review",
-            "owner": "soft_stop_whipsaw_confirmation",
+            "route": "main_stop_confirmation_source_review",
+            "owner": "MainStopLossRetirementRuntimeTuning1010",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
             "next_artifact": "observation_source_quality_audit",

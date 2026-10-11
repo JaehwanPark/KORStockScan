@@ -62,7 +62,8 @@ def checkpoint_results(checkpoint,root):
             if value['common']!=all(r['modeled_net_pnl_krw'] is not None for r in outcomes.values()):
                 raise ValueError('all_scope_checkpoint_cohort_invalid')
             yield {'candidate_aliases':aliases,'population_context':{identity:value['context']},
-                'minimal_results':{identity:outcomes},'common_ids':[identity] if value['common'] else []}
+                'minimal_results':{identity:outcomes},'eligible_ids': [identity] if outcomes[aliases['incumbent']]['modeled_net_pnl_krw'] is not None else [],
+                'common_ids':[identity] if value['common'] else []}
 
 def run(manifest_path,*,input_root,output_root=None,dry_run=True,resume=False):
     from . import main_trailing_all_scope_research as owner
@@ -232,7 +233,10 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
             for _ in storage.iter_tree(root,reference): pass
     if owner.code_contract()!=contract: raise ValueError('all_scope_code_changed_during_research')
     body=dict(schema=SCHEMA,source_date=manifest['source_date'],target_date=manifest['target_date'],
-        status='complete' if missing['count']==0 else 'source_gap',scope=scope_summary,partition_results_ref=refs,
+        status='complete' if missing['count']==0 else 'source_gap',
+        eligible_evaluation_complete=missing['count']==0,
+        raw_census_complete=not any(manifest['assembly_census'].get('source_gaps',{}).values()),
+        evidence_root=str(out.resolve()),scope=scope_summary,partition_results_ref=refs,
         missing_population_ids_ref=missing,common_population_evaluation=evaluation,trailing_situation_research=type_research,
         assembly_census=manifest['assembly_census'],input_window_generation_sha256=window['input_window_generation_sha256'],
         code_contract_sha256=contract,input_manifest_path=str(manifest_path),

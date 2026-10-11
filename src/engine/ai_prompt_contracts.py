@@ -342,10 +342,6 @@ VETO suggests bounded deferral of that SELL.
 Use the completed scale-in fill, time since that fill, executable PnL and
 post-add flow. If the scale-in fill or post-add state is unproven, mark input
 insufficient. Do not treat a submitted but unfilled ADD as a completed fill.
-EXIT_BAD_ENTRY_REFINED: PASS permits only an existing mechanical bad-entry SELL
-signal. VETO suggests bounded deferral of that SELL.
-Use time since entry, never-green/MAE evidence, executable PnL and current
-tape. Do not use entry-time support as fresh holding support.
 ADD_REBOUND: PASS permits only an existing mechanical Main rebound ADD candidate
 to proceed to separate order and safety guards. VETO blocks that ADD candidate.
 Use fresh rebound candles, tape, executable ask/depth and flow. A PASS requires
@@ -358,8 +354,7 @@ flow and provenance. Never infer missing inputs or use an old score as a prior.
 Use FIRM only with fresh independent evidence; otherwise use TENTATIVE.
 Give 1-6 lowercase underscore reason_codes per path. Prefix each code with
 exit_tp_ for EXIT_TRAILING_TP, exit_soft_ for EXIT_SOFT_STOP,
-exit_post_add_ for EXIT_POST_ADD_FAIL, exit_bad_entry_ for
-EXIT_BAD_ENTRY_REFINED, and add_rebound_ for ADD_REBOUND.
+exit_post_add_ for EXIT_POST_ADD_FAIL, and add_rebound_ for ADD_REBOUND.
 This prefix is mandatory even when evidence is missing or conflicting.
 For example, use exit_tp_input_insufficient for EXIT_TRAILING_TP and
 add_rebound_input_insufficient for ADD_REBOUND. Never use a reason code from

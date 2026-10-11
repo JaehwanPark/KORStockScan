@@ -443,7 +443,7 @@ def test_cancel_wait_finished_previous_run_warning_and_recovery_keep_identity(tm
     assert notify() == 'no_alert'
     value = json.loads(state.read_text())
     assert value['active_incident_count'] == 0
-    assert value['historical_semantic_incidents'] == []
+    assert value['historical_semantic_incidents'][-1]['disposition'] == 'native_recovered'
     assert len(sent) == 1
 
 
@@ -469,3 +469,143 @@ def test_cancel_wait_execution_incident_needs_current_command_success_to_recover
     observed['execution']['command_status'] = 'succeeded'
     assert notify() == 'no_alert'
     assert json.loads(state.read_text())['active_incident_count'] == 0
+
+
+def test_new_native_states_and_nonmachine_recovery_are_persisted(tmp_path, monkeypatch):
+    from src.engine.monitoring.semantic_incident_contract import fingerprint
+    monkeypatch.setattr(notifier, '_load_telegram_config', lambda: ('token', 'admin'))
+    monkeypatch.setattr(notifier, '_send_telegram', lambda *_: None)
+    for stage, status in [('main_machine_policy', 'operator_initial_registered'),
+                          ('main_auxiliary_policy', 'verified_carried'),
+                          ('main_machine_policy', 'published_policy'),
+                          ('holding_profit_exit', 'pending_terminal'),
+                          ('initial_quantity', 'valid_empty')]:
+        alert = dict(stage=stage, source_date='2026-10-08', target_date='2026-10-12', scope='report',
+                     reason='policy_binding_gap', status='source_invalid', owner='old', generation=None, artifact='/native/report')
+        state = tmp_path / (stage + status + '.json')
+        state.write_text(json.dumps({'semantic_incidents': {'legacy': alert}}))
+        obs = dict(source_date=alert['source_date'], target_date=alert['target_date'], status=status,
+                   findings=[], native_validated=True, observation_complete=True, report_sha256='a'*64)
+        details = dict(semantic_observations=[dict(stage=stage, semantics=obs)], semantic_source_bindings=[
+            dict(stage=stage, as_of_date='2026-10-11', generation=obs['report_sha256'],
+                 **{k: obs[k] for k in ['source_date', 'target_date', 'status']})])
+        report = tmp_path/'report.json'
+        report.write_text(json.dumps(dict(target_date='2026-10-11', results=[dict(detector_id='artifact_freshness', details=details)])))
+        assert notifier.notify_from_report(report, mode='full', log_file='', state_file=state) == 'no_alert'
+        result = json.loads(state.read_text())
+        assert result['semantic_incidents'] == {}
+        assert result['historical_semantic_incidents'][-1]['disposition'] == 'native_recovered'
+        assert fingerprint(alert) == fingerprint(dict(alert, owner='new'))
+
+
+def test_comparison_source_gap_and_partial_read_do_not_recover():
+    from src.engine.monitoring.semantic_incident_contract import closure_verified
+    incident = dict(stage='main_auxiliary_policy', source_date='2026-10-08', scope='report', reason='auxiliary_outcome_label_source_gap')
+    obs = dict(source_date='2026-10-08', status='source_gap', report_sha256='a'*64, findings=[],
+               policy_states={'comparison_state': 'source_gap'}, observation_complete=True)
+    assert not closure_verified(incident, obs, True)
+    # Structure may recover independently of incomplete economic comparison.
+    incident['reason'] = 'policy_binding_gap'
+    assert closure_verified(incident, obs, True)
+    obs['observation_complete'] = False
+    assert not closure_verified(incident, obs, True)
+
+
+def test_overflow_and_corrupt_state_are_explicit(tmp_path):
+    from src.engine.monitoring.semantic_incident_contract import reconcile
+    rows = [dict(stage='initial_quantity', source_date='2026-10-11', scope=str(n), reason='source_gap', artifact='/native') for n in range(135)]
+    state = reconcile({}, {}, '2026-10-11', rows, source_matches=lambda _: True)
+    assert len(state['semantic_incidents']) == 128
+    assert state['semantic_state_complete'] is False
+    assert state['semantic_overflow']['unresolved_omitted_count'] == 7
+    path = tmp_path/'state.json'; path.write_text('{damaged')
+    assert notifier.notify_from_report(tmp_path/'absent', mode='full', log_file='', state_file=path) == 'state_invalid'
+    assert path.read_text() == '{damaged'
+
+
+def test_notification_lock_and_failed_delivery_are_retryable(tmp_path, monkeypatch):
+    import fcntl
+    report, state = tmp_path/'report.json', tmp_path/'state.json'
+    _write_report(report)
+    with state.with_suffix('.json.lock').open('a') as locked:
+        fcntl.flock(locked, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert notifier.notify_from_report(report, mode='full', log_file='', state_file=state) == 'state_busy'
+    monkeypatch.setattr(notifier, '_load_telegram_config', lambda: ('token', 'admin'))
+    def fail(*_): raise OSError('transport')
+    monkeypatch.setattr(notifier, '_send_telegram', fail)
+    import pytest
+    with pytest.raises(OSError): notifier.notify_from_report(report, mode='full', log_file='', state_file=state)
+    value = json.loads(state.read_text())
+    assert not value.get('sent_at')
+    assert value['last_delivery_status'] == 'failed_retryable'
+    monkeypatch.setattr(notifier, '_send_telegram', lambda *_: None)
+    assert notifier.notify_from_report(report, mode='full', log_file='', state_file=state) == 'sent'
+
+
+def test_delayed_old_report_cannot_clear_new_failure(tmp_path,monkeypatch):
+    report,state=tmp_path/'report.json',tmp_path/'state.json'
+    _write_report(report)
+    payload=json.loads(report.read_text());payload['timestamp']='2026-10-11T10:00:00+09:00'
+    report.write_text(json.dumps(payload))
+    monkeypatch.setattr(notifier,'_load_telegram_config',lambda:('token','admin'))
+    monkeypatch.setattr(notifier,'_send_telegram',lambda *_:None)
+    assert notifier.notify_from_report(report,mode='full',log_file='',state_file=state)=='sent'
+    before=state.read_bytes()
+    payload.update(timestamp='2026-10-11T09:59:00+09:00',results=[])
+    report.write_text(json.dumps(payload))
+    assert notifier.notify_from_report(report,mode='full',log_file='',state_file=state)=='stale_report'
+    assert state.read_bytes()==before
+
+
+def test_failed_delivery_survives_unobservable_round_trip(tmp_path,monkeypatch):
+    import pytest
+    report,state=tmp_path/'report.json',tmp_path/'state.json'
+    _write_report(report)
+    original=report.read_bytes()
+    monkeypatch.setattr(notifier,'_load_telegram_config',lambda:('token','admin'))
+    monkeypatch.setattr(notifier,'_send_telegram',lambda *_:(_ for _ in ()).throw(OSError('offline')))
+    with pytest.raises(OSError):notifier.notify_from_report(report,mode='full',log_file='',state_file=state)
+    report.write_text(json.dumps(dict(target_date='2026-10-11',results=[])))
+    assert notifier.notify_from_report(report,mode='full',log_file='',state_file=state)=='no_alert'
+    report.write_bytes(original)
+    monkeypatch.setattr(notifier,'_send_telegram',lambda *_:None)
+    assert notifier.notify_from_report(report,mode='full',log_file='',state_file=state)=='sent'
+
+
+def test_corrupt_report_preserves_incident_state(tmp_path):
+    report,state=tmp_path/'report.json',tmp_path/'state.json'
+    state.write_text(json.dumps({'semantic_incidents':{'old':{'stage':'initial_quantity'}}}))
+    before=state.read_bytes()
+    for value in ('{incomplete', '[]', '{}', '{"results":null}'):
+        report.write_text(value)
+        assert notifier.notify_from_report(report,mode='full',log_file='',state_file=state)=='report_invalid'
+        assert state.read_bytes()==before
+
+
+def test_verified_scope_recovers_without_clearing_other_scope():
+    from src.engine.monitoring.semantic_incident_contract import closure_verified
+    incident=dict(stage='initial_quantity',source_date='2026-10-12',scope='A',reason='policy_binding')
+    observation=dict(source_date='2026-10-12',status='source_gap',report_sha256='a'*64,
+        native_validated=True,observation_complete=True,findings=['scope_B_unobserved'],
+        scopes={'A':dict(native_validated=True,observation_complete=True,report_sha256='a'*64,findings=[])})
+    assert closure_verified(incident,observation,True)
+    assert not closure_verified(dict(incident,scope='B'),observation,True)
+    observation['scopes']['A']['report_sha256']='b'*64
+    assert not closure_verified(incident,observation,True)
+
+
+def test_partial_delivery_retries_only_failed_batch(tmp_path,monkeypatch):
+    import pytest
+    report,state=tmp_path/'report.json',tmp_path/'state.json'
+    payload=dict(target_date='2026-10-12',results=[dict(detector_id='distinct_'+c,severity='fail',summary=c) for c in 'abcd'])
+    report.write_text(json.dumps(payload))
+    monkeypatch.setattr(notifier,'_load_telegram_config',lambda:('token','admin'))
+    messages=[]
+    def send(*args):
+        messages.append(args[-1])
+        if len(messages)==2:raise OSError('second batch failed')
+    monkeypatch.setattr(notifier,'_send_telegram',send)
+    with pytest.raises(OSError):notifier.notify_from_report(report,mode='full',log_file='',state_file=state)
+    assert len(json.loads(state.read_text())['notified_incident_fingerprints'])==3
+    assert notifier.notify_from_report(report,mode='full',log_file='',state_file=state)=='sent'
+    assert 'distinct_d' in messages[-1] and 'distinct_a' not in messages[-1]

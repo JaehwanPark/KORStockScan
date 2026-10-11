@@ -1012,9 +1012,25 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
             elif group["terminal"] is not None:
                 healthy["intent_terminal_missing"] += 1
                 healthy_scopes[f"intent_terminal_missing|{committed_route or 'UNKNOWN'}"] += 1
+            try:
+                selected = float(commit.get('selected_delay_sec'))
+                if not math.isfinite(selected) or selected not in (0,30,60,120,180):
+                    raise ValueError('selected_delay_invalid')
+            except (ValueError,TypeError):
+                selected = None
+                diagnostics['selected_due_instrumentation_gap'] += 1
             for horizon in (30, 60, 120, 180):
                 if age >= horizon + 30 and horizon not in group["quotes"]:
-                    diagnostics[f"due_horizon_unobserved:{horizon}"] += 1
+                    if horizon == selected and group['terminal'] is None:
+                        issues['selected_due_completion_missing'] += 1
+                        issue_scopes[f"selected_due_completion_missing|{committed_route or 'UNKNOWN'}"] += 1
+                        if len(examples) < 3:
+                            examples.append(dict(reason='selected_due_completion_missing',
+                                delay_intent_id=identity[2], stock_code=identity[0], record_id=identity[1],
+                                selected_delay_sec=selected, original_commit_at=commit['at'],
+                                source_request_status='instrumentation_gap'))
+                    else:
+                        diagnostics[f"due_horizon_unobserved:{horizon}"] += 1
     elif summary_status == "complete" and any(
             stamp(key.split("|", 1)[0]) >= now - timedelta(seconds=DELAY_WINDOW_SEC)
             for key in summary_minutes):

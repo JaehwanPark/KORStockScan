@@ -103,7 +103,7 @@ def validate_detector_coverage(
     }
 
 
-def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=None):
+def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=None, active_alerts=(), owner_error=None):
     """Check functional bindings in existing registries without running jobs."""
     from src.engine.automation import postclose_summary_handoff as native
     from src.engine.error_detectors import artifact_freshness as artifacts
@@ -116,6 +116,9 @@ def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=Non
         'main_machine_policy': artifacts._continuous_reversal_result_semantics,
         'main_auxiliary_policy': artifacts._auxiliary_result_semantics,
         'postclose_handoff': artifacts._postclose_handoff_semantics,
+        'holding_profit_exit': artifacts._holding_profit_exit_semantics,
+        'initial_quantity': artifacts._initial_quantity_semantics,
+        'main_stop_confirmation': artifacts._main_stop_semantics,
         'submission_bottleneck_monitor': submission.machine_semantics,
     } if hooks is None else hooks
     findings, bindings = [], {}
@@ -134,16 +137,29 @@ def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=Non
             terminal_consumer='strict_controller_prepared',
             expected_disposition='installed_stage_or_explicit_off',
             notifier_expected=stage in {'main_machine_policy', 'main_auxiliary_policy'})
-    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'postclose_handoff'):
+    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'postclose_handoff', 'holding_profit_exit', 'initial_quantity', 'main_stop_confirmation'):
         if stage not in allowed:
             findings.append(stage + ':notifier_unbound')
     for stage in ('main_machine_policy', 'main_auxiliary_policy', 'postclose_handoff',
-                  'submission_bottleneck_monitor'):
+                  'submission_bottleneck_monitor', 'holding_profit_exit', 'initial_quantity', 'main_stop_confirmation'):
         if not callable(functions.get(stage)):
             findings.append(stage + ':native_semantic_hook_unbound')
     for stage in native.STAGE_REGISTRY.keys() - stage_registry.keys():
         findings.append(stage + ':stage_unregistered')
-    return dict(status='pass' if not findings else 'source_invalid', findings=sorted(findings),
+    from src.engine.monitoring.semantic_incident_contract import STAGE_HOOKS, RECOVERY_STATES, METRIC_CONTRACT
+    for stage in allowed:
+        if stage not in STAGE_HOOKS:
+            findings.append(stage + ':recovery_unbound')
+    for state in ('operator_initial_registered', 'verified_carried', 'published_policy', 'valid_empty', 'pending_terminal'):
+        if state not in RECOVERY_STATES:
+            findings.append(state + ':native_state_recovery_unbound')
+    if active_alerts and owner_error:
+        findings.append('current_owner_lookup:' + owner_error)
+    for alert in active_alerts:
+        if alert.get('owner_status') == 'unresolved':
+            findings.append(str(alert.get('stage')) + ':actionable_current_owner_unresolved')
+    return dict(status='pass' if not findings else 'source_invalid', findings=sorted(set(findings)),
+                metric_contract=METRIC_CONTRACT, coverage_kind='static_contract_bindings_not_delivery_receipt',
                 stages=bindings, native_stage_count=len(bindings), decision_authority='report_only',
                 historical_main='audit_only', retired_widget='retired_not_expected',
                 surviving_episode='retired_not_expected')

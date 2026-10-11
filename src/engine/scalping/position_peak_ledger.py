@@ -126,6 +126,9 @@ class PositionPeakRuntimeLedger:
             # must not replace it when the average cost changes.
             if 'trailing_situation_pin' in previous:
                 row['trailing_situation_pin'] = previous['trailing_situation_pin']
+            if 'main_stop_policy_pin' in previous:
+                row['main_stop_policy_pin'] = previous['main_stop_policy_pin']
+                row['main_stop_touch_at'] = previous.get('main_stop_touch_at')
             for key in (
                 "trailing_arm_at_epoch", "trailing_arm_market",
                 "trailing_arm_start_pct", "trailing_arm_policy_sha256",
@@ -186,6 +189,40 @@ class PositionPeakRuntimeLedger:
                 return previous == pin
             row['trailing_situation_pin'] = pin
             rows[cycle_id] = row
+            self._write(rows)
+            return True
+
+    def record_stop_pin(self, stock, pin):
+        from .main_stop_policy import pin_values
+        cycle_id = position_cycle_id(stock)
+        pin_values(pin, cycle_id)
+        with self._lock:
+            rows = self.load()
+            row = dict(rows.get(cycle_id) or {})
+            if not row:
+                return False
+            previous = row.get('main_stop_policy_pin')
+            if previous is not None:
+                return previous == pin
+            row['main_stop_policy_pin'] = pin
+            row['main_stop_touch_at'] = None
+            rows[cycle_id] = row
+            self._write(rows)
+            return True
+
+    def record_stop_clock(self, stock, touch):
+        from .main_stop_policy import finite
+        if touch is not None and (not finite(touch) or touch <= 0):
+            raise ValueError("stop_touch_clock_invalid")
+        key = position_cycle_id(stock)
+        with self._lock:
+            rows = self.load()
+            row = rows.get(key)
+            if not row or row.get("main_stop_policy_pin") != stock.get("main_stop_policy_pin"):
+                return False
+            if row.get("main_stop_touch_at") == touch:
+                return True
+            row["main_stop_touch_at"] = touch
             self._write(rows)
             return True
 

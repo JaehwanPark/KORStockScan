@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 THRESHOLD_STAGE_FAMILY_MAP = {
+    "main_stop_source": "main_stop_confirmation",
     # Exact report-only Main handoff receipts; no new tuning/order authority.
     "entry_async_disposition": "entry_mechanical_momentum",
     "scanner_async_result_commit": "entry_mechanical_momentum",
@@ -144,7 +145,6 @@ SMOOTHING_SOURCE_ONLY_PATH_STAGES = frozenset(
 )
 SMOOTHING_SOURCE_ONLY_FAMILIES = frozenset(
     {
-        "soft_stop_whipsaw_confirmation",
         "holding_flow_ofi_smoothing",
     }
 )

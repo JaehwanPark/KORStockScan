@@ -1571,7 +1571,18 @@ def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch,
     from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
     ledger = json.loads(family_source_ledger_path(tmp_path / "data", day).read_text())
     assert sum(part["raw_count"] for part in ledger["raw_parts"]) == 4
-    assert ledger["summary_diagnostic"]["raw_summary_gap_by_stage"] == {}
+    if ledger['schema']=='pre_submit_delay_family_source_ledger_v2':
+        # Scanner timing is summary telemetry; v2 selects only committed
+        # same-intent delay observations into its economic source ledger.
+        assert ledger['raw_event_id_n']==0
+        assert ledger['matched_event_ids_ref']['count']==0
+        assert ledger['raw_only_event_count']==ledger['compact_only_event_count']==0
+        from src.engine.pipeline_event_summary import producer_summary_paths,load_summary_rows
+        summary_path,_=producer_summary_paths(tmp_path/'data/pipeline_event_summaries',day)
+        stages={row['stage']:row['event_count'] for row in load_summary_rows(summary_path,strict=True)}
+        assert stages=={row['stage']:1 for row in [first,*late]}
+    else:
+        assert ledger["summary_diagnostic"]["raw_summary_gap_by_stage"] == {}
 
     logger_mod.emit_pipeline_event(
         "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
@@ -1660,3 +1671,11 @@ def test_delay_category_reserves_capacity_and_drain_yields_to_existing_executor(
     assert sorted(v for v in order if isinstance(v,int))==list(range(32))
     stats=queue.snapshot()
     assert stats['append_confirmed']==32 and stats['failed']==stats['pending_bytes']==0
+
+
+def test_main_stop_source_keeps_one_structured_body_and_text_reference():
+    from src.utils.pipeline_event_logger import _project_fields_for_text, _project_fields_for_compact_stream
+    fields={'main_stop_source':'{"source":"full"}','position_key':'record:1','stop_source_sha256':'a'*64}
+    assert _project_fields_for_compact_stream('main_stop_source',fields)==fields
+    diagnostic=_project_fields_for_text('main_stop_source',fields)
+    assert 'main_stop_source' not in diagnostic and diagnostic['stop_source_sha256']=='a'*64

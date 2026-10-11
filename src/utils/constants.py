@@ -126,12 +126,6 @@ class TradingConfig:
     SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED: bool = (
         False  # 실매매 SCALPING AVG_DOWN 손절선 터치 시 시장가 전환
     )
-    SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED: bool = (
-        False  # soft stop AVG_DOWN price-improvement wait; PREOPEN env only
-    )
-    SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC: int = 3
-    SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT: float = 0.20
-    SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT: float = -5.0
     SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED: bool = True
     SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT: float = 70.0
     SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE: float = 60.0
@@ -166,18 +160,6 @@ class TradingConfig:
     SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT: float = 4.0
     SCALP_LOSS_REENTRY_REBOUND_MAX_WS_AGE_SEC: float = 3.0
     SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY: int = 1
-    SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED: bool = False
-    SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC: int = 30
-    SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT: float = -6.5
-    SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED: bool = True
-    SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC: int = 90
-    SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT: float = -5.0
-    SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED: bool = (
-        False  # live loss reentry cooldown 전환 후 shadow 기본 OFF
-    )
-    SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC: int = (
-        600  # historical/replay 전용 기준
-    )
     SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED: bool = (
         True  # broker reject burst 방지용 sell retry backoff
     )
@@ -369,10 +351,8 @@ class TradingConfig:
     # 💡 [변경] 스윙 트레일링 룰
     TRAILING_START_PCT: float = 2.5  # 🏆 스윙 트레일링 시작 수익률
     TRAILING_DRAWDOWN_PCT: float = 0.5  # 🏆 스윙 고점 대비 허용 되밀림 폭 (%)
-    MIN_PROFIT_PRESERVE: float = 1.5  # DEPRECATED: 런타임 미사용 (과거 최소 수익 보존)
 
     # 💡 [신규] 초단타 스캐너 설정
-    SCALP_TIME_LIMIT_MIN: int = 60  # DEPRECATED: 런타임 미사용 (과거 스캘핑 시간 제한)
     MIN_FEE_COVER: float = 0.3  # 세금(0.2%) + 수수료 보존용 최소 익절선 (0.3%)
     TRADE_COST_RATE: float = (
         0.0023  # 실체결 수익률/손익 계산에 쓰는 보수적 거래비용 비율
@@ -452,47 +432,6 @@ class TradingConfig:
     SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT: float = (
         -2.0
     )  # 유예 중에도 즉시 청산하는 손실폭
-    SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED: bool = (
-        False  # 예비 파라미터: threshold 근처 1회 추가 확인유예
-    )
-    SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC: int = 10  # 추가 확인유예 최대 초
-    SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT: float = (
-        0.20  # soft stop 기준선 아래 추가 유예 허용폭
-    )
-    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED: bool = (
-        False  # soft_stop whipsaw 확인 canary 기본 OFF
-    )
-    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC: int = (
-        60  # soft_stop grace 종료 후 최대 확인 시간
-    )
-    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT: float = (
-        0.20  # soft stop 기준선 아래 허용 악화폭
-    )
-    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT: float = (
-        0.30  # 확인 중 추가 악화 허용폭
-    )
-    SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED: bool = (
-        False  # 2026-04-30 same-day v2 수집 종료: 다음 승인 전 기본 OFF
-    )
-    SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT: str = ""  # env override로만 재개
-    SCALP_SOFT_STOP_ABSORPTION_EXTENSION_SEC: int = (
-        20  # orderbook absorption 확인유예(초)
-    )
-    SCALP_SOFT_STOP_ABSORPTION_MIN_SCORE: int = 3  # absorption 조건 최소 충족 개수
-    SCALP_SOFT_STOP_ABSORPTION_MAX_EXTENSIONS: int = 1  # 포지션당 absorption 유예 1회
-    SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE: float = 55.0
-    SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL: float = 0.95
-    SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP: float = -5.0
-    SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO: float = 1.35
-    SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED: bool = (
-        False  # real SCALPING operator override; PREOPEN env로만 ON
-    )
-    SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC: int = 20
-    SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC: int = 45
-    SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC: int = 90
-    SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE: int = 65
-    SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT: float = -2.8
-    SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT: float = 0.30
     NEVER_GREEN_DEFER_CLAMP_ENABLED: bool = (
         False  # real SCALPING holding-flow defer clamp; PREOPEN env only
     )
@@ -516,7 +455,6 @@ class TradingConfig:
     SCALP_PROFIT_STAGNATION_MIN_SEC: int = 180
     SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT: float = 0.15
     SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT: float = 0.10
-    SCALP_PROFIT_STAGNATION_MIN_AI_SCORE: int = 45
     SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED: bool = (
         False  # real SCALPING low adjusted-profit hard time exit
     )
@@ -524,15 +462,6 @@ class TradingConfig:
     SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT: float = 1.00
     SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC: int = 1800
     SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS: float = 15.0
-    SCALP_LATE_LOSS_AVG_DOWN_ENABLED: bool = (
-        True  # real SCALPING final loss-sell intercept
-    )
-    SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT: float = 0.60
-    SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT: float = 0.55
-    SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT: float = 1.50
-    SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC: int = 30
-    SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE: int = 60
-    SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION: int = 3
     DEEP_RECOVERY_AVG_DOWN_ENABLED: bool = True
     DEEP_RECOVERY_AVG_DOWN_PNL_MIN: float = -4.00
     DEEP_RECOVERY_AVG_DOWN_PNL_MAX: float = -3.25
@@ -918,27 +847,6 @@ class TradingConfig:
     SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL: float = (
         0.03  # exec_buy_ratio 부족 허용폭
     )
-    SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY: bool = (
-        False  # shadow-only hard time stop 기본 OFF
-    )
-    SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES: tuple = (
-        3,
-        5,
-        7,
-    )  # 공통 hard time stop shadow 후보 분(실전 미적용)
-    SCALP_COMMON_HARD_TIME_STOP_SHADOW_MIN_LOSS_PCT: float = (
-        -0.7
-    )  # shadow 후보 기록 최소 손실폭
-    SCALP_COMMON_HARD_TIME_STOP_SHADOW_MAX_PEAK_PCT: float = (
-        0.20  # shadow 후보 기록 최대 고점수익(never-green 기준)
-    )
-    SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED: bool = (
-        False  # partial-only timeout shadow 기본 OFF
-    )
-    SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC: int = 180  # historical/replay 전용 기준
-    SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT: float = (
-        0.20  # historical/replay 전용 기준
-    )
     SCALP_TRAILING_START_PCT: float = 0.4  # 고점의 비용 후 순수익 트레일링 시작률
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
@@ -1040,17 +948,6 @@ class TradingConfig:
     SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT: float = 0.20
     SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT: int = 45
     SCALP_BAD_ENTRY_BLOCK_LOG_INTERVAL_SEC: int = 30
-    SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED: bool = (
-        False  # 2026-05-04 postclose rollback: sell_order_failed/flow-defer 혼입으로 OFF
-    )
-    SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED: bool = (
-        True  # canary OFF 이후 refined counterfactual 후보는 report-only로 유지
-    )
-    SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC: int = 180
-    SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT: float = -1.16
-    SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT: float = 0.05
-    SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT: int = 45
-    SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX: float = 0.30
 
     # 💡 [신규] 코스닥 스캐너 설정
     KOSDAQ_TARGET: float = 4.0  # 코스닥은 조금 더 높게 목표 (예: 4.0%)
@@ -2745,65 +2642,8 @@ def _build_trading_rules() -> TradingConfig:
     env_bad_entry_observe_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED"
     )
-    env_bad_entry_refined_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED"
-    )
-    env_bad_entry_refined_min_hold = _env_int(
-        "KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC"
-    )
-    env_bad_entry_refined_min_loss = _env_float(
-        "KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT"
-    )
-    env_bad_entry_refined_max_peak = _env_float(
-        "KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT"
-    )
-    env_bad_entry_refined_ai_limit = _env_int(
-        "KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT"
-    )
-    env_bad_entry_refined_recovery_max = _env_float(
-        "KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX"
-    )
-    env_soft_stop_expert_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED"
-    )
-    env_soft_stop_expert_activate_at = _env_str(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT"
-    )
     env_soft_stop_micro_grace_sec = _env_int(
         "KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_SEC"
-    )
-    env_soft_stop_whipsaw_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"
-    )
-    env_soft_stop_whipsaw_sec = _env_int(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC"
-    )
-    env_soft_stop_whipsaw_buffer = _env_float(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT"
-    )
-    env_soft_stop_whipsaw_worsen = _env_float(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT"
-    )
-    env_soft_stop_dynamic_grace_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED"
-    )
-    env_soft_stop_dynamic_grace_weak_sec = _env_int(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC"
-    )
-    env_soft_stop_dynamic_grace_base_sec = _env_int(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC"
-    )
-    env_soft_stop_dynamic_grace_strong_sec = _env_int(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC"
-    )
-    env_soft_stop_dynamic_grace_min_ai = _env_int(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE"
-    )
-    env_soft_stop_dynamic_grace_emergency = _env_float(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT"
-    )
-    env_soft_stop_dynamic_grace_max_worsen = _env_float(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT"
     )
     env_never_green_defer_clamp_enabled = _env_bool(
         "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_ENABLED"
@@ -2849,9 +2689,6 @@ def _build_trading_rules() -> TradingConfig:
     env_profit_stagnation_max_peak = _env_float(
         "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT"
     )
-    env_profit_stagnation_min_ai = _env_int(
-        "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE"
-    )
     env_low_profit_stagnation_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED"
     )
@@ -2866,27 +2703,6 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_low_profit_stagnation_slippage_bps = _env_float(
         "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS"
-    )
-    env_late_loss_avg_down_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_ENABLED"
-    )
-    env_late_loss_avg_down_min_peak = _env_float(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT"
-    )
-    env_late_loss_avg_down_min_giveback = _env_float(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT"
-    )
-    env_late_loss_avg_down_min_abs_loss = _env_float(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT"
-    )
-    env_late_loss_avg_down_min_hold = _env_int(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC"
-    )
-    env_late_loss_avg_down_min_ai = _env_int(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE"
-    )
-    env_late_loss_avg_down_max_per_position = _env_int(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION"
     )
     env_deep_recovery_avg_down_enabled = _env_bool(
         "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_ENABLED"
@@ -2929,18 +2745,6 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_deep_recovery_avg_down_emergency = _env_float(
         "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT"
-    )
-    env_stop_line_avg_down_defer_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED"
-    )
-    env_stop_line_avg_down_defer_max_sec = _env_int(
-        "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC"
-    )
-    env_stop_line_avg_down_extra_dip_pct = _env_float(
-        "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT"
-    )
-    env_stop_line_avg_down_defer_emergency_pct = _env_float(
-        "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT"
     )
     env_first_touch_avgdown_decision_gate_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED"
@@ -3105,26 +2909,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_reversal_add_size_ratio is not None
         or env_reversal_add_min_qty_floor_enabled is not None
         or env_bad_entry_observe_enabled is not None
-        or env_bad_entry_refined_enabled is not None
-        or env_bad_entry_refined_min_hold is not None
-        or env_bad_entry_refined_min_loss is not None
-        or env_bad_entry_refined_max_peak is not None
-        or env_bad_entry_refined_ai_limit is not None
-        or env_bad_entry_refined_recovery_max is not None
-        or env_soft_stop_expert_enabled is not None
-        or env_soft_stop_expert_activate_at is not None
         or env_soft_stop_micro_grace_sec is not None
-        or env_soft_stop_whipsaw_enabled is not None
-        or env_soft_stop_whipsaw_sec is not None
-        or env_soft_stop_whipsaw_buffer is not None
-        or env_soft_stop_whipsaw_worsen is not None
-        or env_soft_stop_dynamic_grace_enabled is not None
-        or env_soft_stop_dynamic_grace_weak_sec is not None
-        or env_soft_stop_dynamic_grace_base_sec is not None
-        or env_soft_stop_dynamic_grace_strong_sec is not None
-        or env_soft_stop_dynamic_grace_min_ai is not None
-        or env_soft_stop_dynamic_grace_emergency is not None
-        or env_soft_stop_dynamic_grace_max_worsen is not None
         or env_never_green_defer_clamp_enabled is not None
         or env_never_green_defer_clamp_max_peak_profit_pct is not None
         or env_never_green_defer_clamp_min_defer_count is not None
@@ -3137,23 +2922,11 @@ def _build_trading_rules() -> TradingConfig:
         or env_profit_stagnation_min_sec is not None
         or env_profit_stagnation_max_move is not None
         or env_profit_stagnation_max_peak is not None
-        or env_profit_stagnation_min_ai is not None
         or env_low_profit_stagnation_enabled is not None
         or env_low_profit_stagnation_min_adjusted_profit is not None
         or env_low_profit_stagnation_max_adjusted_profit is not None
         or env_low_profit_stagnation_min_hold is not None
         or env_low_profit_stagnation_slippage_bps is not None
-        or env_late_loss_avg_down_enabled is not None
-        or env_late_loss_avg_down_min_peak is not None
-        or env_late_loss_avg_down_min_giveback is not None
-        or env_late_loss_avg_down_min_abs_loss is not None
-        or env_late_loss_avg_down_min_hold is not None
-        or env_late_loss_avg_down_min_ai is not None
-        or env_late_loss_avg_down_max_per_position is not None
-        or env_stop_line_avg_down_defer_enabled is not None
-        or env_stop_line_avg_down_defer_max_sec is not None
-        or env_stop_line_avg_down_extra_dip_pct is not None
-        or env_stop_line_avg_down_defer_emergency_pct is not None
         or env_protect_trailing_smooth_enabled is not None
         or env_protect_trailing_smooth_window is not None
         or env_protect_trailing_smooth_min_span is not None
@@ -4054,105 +3827,10 @@ def _build_trading_rules() -> TradingConfig:
                 if env_bad_entry_observe_enabled is not None
                 else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED
             ),
-            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=(
-                env_bad_entry_refined_enabled
-                if env_bad_entry_refined_enabled is not None
-                else config.SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED
-            ),
-            SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC=(
-                env_bad_entry_refined_min_hold
-                if env_bad_entry_refined_min_hold is not None
-                else config.SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC
-            ),
-            SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT=(
-                env_bad_entry_refined_min_loss
-                if env_bad_entry_refined_min_loss is not None
-                else config.SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT
-            ),
-            SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT=(
-                env_bad_entry_refined_max_peak
-                if env_bad_entry_refined_max_peak is not None
-                else config.SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT
-            ),
-            SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT=(
-                env_bad_entry_refined_ai_limit
-                if env_bad_entry_refined_ai_limit is not None
-                else config.SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT
-            ),
-            SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX=(
-                env_bad_entry_refined_recovery_max
-                if env_bad_entry_refined_recovery_max is not None
-                else config.SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX
-            ),
-            SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=(
-                env_soft_stop_expert_enabled
-                if env_soft_stop_expert_enabled is not None
-                else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED
-            ),
-            SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT=(
-                env_soft_stop_expert_activate_at
-                if env_soft_stop_expert_activate_at is not None
-                else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT
-            ),
             SCALP_SOFT_STOP_MICRO_GRACE_SEC=(
                 env_soft_stop_micro_grace_sec
                 if env_soft_stop_micro_grace_sec is not None
                 else config.SCALP_SOFT_STOP_MICRO_GRACE_SEC
-            ),
-            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=(
-                env_soft_stop_whipsaw_enabled
-                if env_soft_stop_whipsaw_enabled is not None
-                else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED
-            ),
-            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC=(
-                env_soft_stop_whipsaw_sec
-                if env_soft_stop_whipsaw_sec is not None
-                else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC
-            ),
-            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT=(
-                env_soft_stop_whipsaw_buffer
-                if env_soft_stop_whipsaw_buffer is not None
-                else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT
-            ),
-            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT=(
-                env_soft_stop_whipsaw_worsen
-                if env_soft_stop_whipsaw_worsen is not None
-                else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT
-            ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED=(
-                env_soft_stop_dynamic_grace_enabled
-                if env_soft_stop_dynamic_grace_enabled is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED
-            ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC=(
-                env_soft_stop_dynamic_grace_weak_sec
-                if env_soft_stop_dynamic_grace_weak_sec is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC
-            ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC=(
-                env_soft_stop_dynamic_grace_base_sec
-                if env_soft_stop_dynamic_grace_base_sec is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC
-            ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC=(
-                env_soft_stop_dynamic_grace_strong_sec
-                if env_soft_stop_dynamic_grace_strong_sec is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC
-            ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE=(
-                env_soft_stop_dynamic_grace_min_ai
-                if env_soft_stop_dynamic_grace_min_ai is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE
-            ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT=(
-                env_soft_stop_dynamic_grace_emergency
-                if env_soft_stop_dynamic_grace_emergency is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT
-            ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT=(
-                env_soft_stop_dynamic_grace_max_worsen
-                if env_soft_stop_dynamic_grace_max_worsen is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT
             ),
             NEVER_GREEN_DEFER_CLAMP_ENABLED=(
                 env_never_green_defer_clamp_enabled
@@ -4234,11 +3912,6 @@ def _build_trading_rules() -> TradingConfig:
                 if env_profit_stagnation_max_peak is not None
                 else config.SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT
             ),
-            SCALP_PROFIT_STAGNATION_MIN_AI_SCORE=(
-                env_profit_stagnation_min_ai
-                if env_profit_stagnation_min_ai is not None
-                else config.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE
-            ),
             SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=(
                 env_low_profit_stagnation_enabled
                 if env_low_profit_stagnation_enabled is not None
@@ -4263,41 +3936,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_low_profit_stagnation_slippage_bps
                 if env_low_profit_stagnation_slippage_bps is not None
                 else config.SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_ENABLED=(
-                env_late_loss_avg_down_enabled
-                if env_late_loss_avg_down_enabled is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_ENABLED
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT=(
-                env_late_loss_avg_down_min_peak
-                if env_late_loss_avg_down_min_peak is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT=(
-                env_late_loss_avg_down_min_giveback
-                if env_late_loss_avg_down_min_giveback is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT=(
-                env_late_loss_avg_down_min_abs_loss
-                if env_late_loss_avg_down_min_abs_loss is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC=(
-                env_late_loss_avg_down_min_hold
-                if env_late_loss_avg_down_min_hold is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE=(
-                env_late_loss_avg_down_min_ai
-                if env_late_loss_avg_down_min_ai is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=(
-                env_late_loss_avg_down_max_per_position
-                if env_late_loss_avg_down_max_per_position is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION
             ),
             DEEP_RECOVERY_AVG_DOWN_ENABLED=(
                 env_deep_recovery_avg_down_enabled
@@ -4368,26 +4006,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_deep_recovery_avg_down_emergency
                 if env_deep_recovery_avg_down_emergency is not None
                 else config.DEEP_RECOVERY_AVG_DOWN_EMERGENCY_PCT
-            ),
-            SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=(
-                env_stop_line_avg_down_defer_enabled
-                if env_stop_line_avg_down_defer_enabled is not None
-                else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED
-            ),
-            SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=(
-                env_stop_line_avg_down_defer_max_sec
-                if env_stop_line_avg_down_defer_max_sec is not None
-                else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC
-            ),
-            SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=(
-                env_stop_line_avg_down_extra_dip_pct
-                if env_stop_line_avg_down_extra_dip_pct is not None
-                else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT
-            ),
-            SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT=(
-                env_stop_line_avg_down_defer_emergency_pct
-                if env_stop_line_avg_down_defer_emergency_pct is not None
-                else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT
             ),
             SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED=(
                 env_first_touch_avgdown_decision_gate_enabled
@@ -4849,24 +4467,6 @@ def _build_trading_rules() -> TradingConfig:
     env_loss_reentry_rebound_force_qty = _env_int(
         "KORSTOCKSCAN_SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY"
     )
-    env_defensive_avg_down_unfilled_recheck_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED"
-    )
-    env_defensive_avg_down_unfilled_recheck_sec = _env_int(
-        "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC"
-    )
-    env_defensive_avg_down_unfilled_recheck_emergency = _env_float(
-        "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT"
-    )
-    env_late_loss_quote_recovery_defer_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED"
-    )
-    env_late_loss_quote_recovery_defer_sec = _env_int(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC"
-    )
-    env_late_loss_quote_recovery_emergency = _env_float(
-        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT"
-    )
     env_sell_order_failure_retry_backoff_enabled = _env_bool(
         "KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED"
     )
@@ -4977,9 +4577,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_loss_reentry_rebound_min_delta is not None
         or env_loss_reentry_rebound_max_ws_age is not None
         or env_loss_reentry_rebound_force_qty is not None
-        or env_defensive_avg_down_unfilled_recheck_enabled is not None
-        or env_defensive_avg_down_unfilled_recheck_sec is not None
-        or env_defensive_avg_down_unfilled_recheck_emergency is not None
         or env_sell_order_failure_retry_backoff_enabled is not None
         or env_sell_order_failure_retry_backoff_sec is not None
         or env_scalping_buy_windows is not None
@@ -5648,36 +5245,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_loss_reentry_rebound_force_qty
                 if env_loss_reentry_rebound_force_qty is not None
                 else config.SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY
-            ),
-            SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED=(
-                env_defensive_avg_down_unfilled_recheck_enabled
-                if env_defensive_avg_down_unfilled_recheck_enabled is not None
-                else config.SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED
-            ),
-            SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC=(
-                env_defensive_avg_down_unfilled_recheck_sec
-                if env_defensive_avg_down_unfilled_recheck_sec is not None
-                else config.SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC
-            ),
-            SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT=(
-                env_defensive_avg_down_unfilled_recheck_emergency
-                if env_defensive_avg_down_unfilled_recheck_emergency is not None
-                else config.SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED=(
-                env_late_loss_quote_recovery_defer_enabled
-                if env_late_loss_quote_recovery_defer_enabled is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC=(
-                env_late_loss_quote_recovery_defer_sec
-                if env_late_loss_quote_recovery_defer_sec is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC
-            ),
-            SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT=(
-                env_late_loss_quote_recovery_emergency
-                if env_late_loss_quote_recovery_emergency is not None
-                else config.SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT
             ),
             SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED=(
                 env_sell_order_failure_retry_backoff_enabled
@@ -6540,13 +6107,11 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_soft_stop_micro_grace_emergency = _env_float(
         "KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT"
     )
-    env_scalp_soft_stop_dynamic_grace_emergency = _env_float(
-        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT"
-    )
     env_scalp_preset_hard_stop = _env_float("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_PCT")
     env_scalp_preset_hard_stop_emergency = _env_float(
         "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_EMERGENCY_PCT"
     )
+    env_scalp_preset_grace = _env_int("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_GRACE_SEC")
     env_kosdaq_stop = _env_float("KORSTOCKSCAN_KOSDAQ_STOP")
     if (
         env_stop_loss_bull is not None
@@ -6556,10 +6121,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_stop is not None
         or env_scalp_hard_stop is not None
         or env_scalp_soft_stop_micro_grace_emergency is not None
-        or env_scalp_soft_stop_dynamic_grace_emergency is not None
         or env_scalp_preset_hard_stop is not None
         or env_scalp_preset_hard_stop_emergency is not None
         or env_kosdaq_stop is not None
+        or env_scalp_preset_grace is not None
     ):
         config = replace(
             config,
@@ -6596,11 +6161,6 @@ def _build_trading_rules() -> TradingConfig:
                 if env_scalp_soft_stop_micro_grace_emergency is not None
                 else config.SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT
             ),
-            SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT=(
-                env_scalp_soft_stop_dynamic_grace_emergency
-                if env_scalp_soft_stop_dynamic_grace_emergency is not None
-                else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT
-            ),
             SCALP_PRESET_HARD_STOP_PCT=(
                 env_scalp_preset_hard_stop
                 if env_scalp_preset_hard_stop is not None
@@ -6611,6 +6171,7 @@ def _build_trading_rules() -> TradingConfig:
                 if env_scalp_preset_hard_stop_emergency is not None
                 else config.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT
             ),
+            SCALP_PRESET_HARD_STOP_GRACE_SEC=(max(0, env_scalp_preset_grace) if env_scalp_preset_grace is not None else config.SCALP_PRESET_HARD_STOP_GRACE_SEC),
             KOSDAQ_STOP=(
                 env_kosdaq_stop if env_kosdaq_stop is not None else config.KOSDAQ_STOP
             ),

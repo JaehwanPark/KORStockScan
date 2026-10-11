@@ -1271,6 +1271,15 @@ def build_manifest(
     holding_vote_env, holding_vote_receipt = _holding_vote_handoff(target_date)
     values.update(holding_vote_env)
     env_owners.update({key: "holding_path_vote_policy" for key in holding_vote_env})
+    from src.engine.automation.main_stop_postclose import handoff as stop_handoff
+    from src.engine.scalping.main_stop_policy import ENV_FILE, ENV_SHA, ENV_DATE
+    for key in (ENV_FILE, ENV_SHA, ENV_DATE):
+        values.pop(key, None); env_owners.pop(key, None)
+    stop_env, stop_receipt = stop_handoff(DATA_DIR, target_date, effective_env=values, require_terminal=True)
+    if stop_receipt.get('status') == 'policy_selected' and trailing_selection_lineage and trailing_selection_lineage.get('status') == 'newly_selected':
+        raise ValueError('holding_exit_stage_multiple_new_axes')
+    values.update(stop_env)
+    env_owners.update({key: "main_stop_confirmation" for key in stop_env})
     selected_families = sorted(
         str(item)
         for item in incumbent.get("selected_families") or []
@@ -1327,6 +1336,7 @@ def build_manifest(
         "scalp_trailing_selection_lineage": trailing_selection_lineage,
         "holding_path_vote_baseline_receipt": path_policy_baseline_receipt(),
         "holding_path_vote_policy_receipt": holding_vote_receipt,
+        "main_stop_confirmation_receipt": stop_receipt,
         "env_overrides": dict(sorted(values.items())),
         "retired_key_scrubbed": sorted(
             retired_keys | (set(incumbent_values) - set(without_retired_env(incumbent_values)))
@@ -1863,6 +1873,17 @@ def verify_bootstrap(
         findings.append("holding_path_vote_policy_env_mismatch")
     if not expected_vote_env and any(key in manifest_env for key in HOLDING_VOTE_ENV_KEYS):
         findings.append("holding_path_vote_policy_stale_env")
+    from src.engine.automation.main_stop_postclose import handoff as stop_handoff
+    from src.engine.scalping.main_stop_policy import ENV_FILE, ENV_SHA, ENV_DATE
+    try:
+        stop_env, stop_receipt = stop_handoff(DATA_DIR, target_date, effective_env=manifest_env, require_terminal=True)
+        if stop_env or manifest.get("main_stop_confirmation_receipt"):
+            if manifest.get("main_stop_confirmation_receipt") != stop_receipt:
+                findings.append("main_stop_confirmation_receipt_mismatch")
+        if any(manifest_env.get(k) != stop_env.get(k) for k in (ENV_FILE, ENV_SHA, ENV_DATE)):
+            findings.append("main_stop_confirmation_env_mismatch")
+    except (ValueError, OSError, TypeError, KeyError):
+        findings.append("main_stop_confirmation_invalid")
     if trailing_receipt is None:
         findings.append("scalp_trailing_mechanical_policy_receipt_missing")
     else:

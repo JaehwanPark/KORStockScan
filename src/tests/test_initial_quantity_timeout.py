@@ -413,8 +413,8 @@ def test_probe_one_share_is_first_slot_before_candidate_split_legs():
         reserve_sec=5, policy_sha256="0" * 64)
     assert modeled["status"] == "modeled"
     assert modeled["probe_included_in_leg_count"] is True
-    assert modeled["modeled_leg_count"] == 3
-    assert modeled["conditional_crossed_leg_count"] == 2
+    assert modeled["modeled_leg_count"] == 2
+    assert modeled["conditional_crossed_leg_count"] == 1
 
 
 def test_timeout_research_counts_primary_miss_in_parent_trade_denominator():

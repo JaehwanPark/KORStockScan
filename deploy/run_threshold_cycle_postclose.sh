@@ -1646,8 +1646,8 @@ then
     --parent-current "$INITIAL_QUANTITY_CURRENT" \
     --output-dir "$INITIAL_QUANTITY_REFRESH_DIR"
   wait_for_json_artifact \
-    "$INITIAL_QUANTITY_REFRESH_DIR/initial_quantity_refresh_stage_${TARGET_DATE}.json" \
-    "initial_quantity_refresh_stage"
+    "$INITIAL_QUANTITY_REFRESH_DIR/committed_stage.json" \
+    "initial_quantity_refresh_stage_reference"
 else
   INITIAL_QUANTITY_REFRESH_STATUS=$?
   if [ "$INITIAL_QUANTITY_REFRESH_STATUS" -ne 1 ]; then
@@ -2129,6 +2129,12 @@ if (report.get("date") != target_date
         or (report.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
     raise SystemExit("postclose_exit_report_generation_invalid")
 PY
+# The stop confirmation producer consumes the verified exit snapshot and the
+# shared research reservation. No additional cron or background worker.
+if [[ "$TARGET_DATE" > "2026-10-11" ]]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+    --stage main_stop_confirmation --date "$TARGET_DATE"
+fi
 # Wait for asynchronous policy producers and consumers before hashing their
 # source generations into the runtime summary and next-day checklist.
 if [[ -f "$PROJECT_DIR/data/runtime/research/samsung_tick_transition/consumer-contract-v2.json" ]]; then
@@ -2247,7 +2253,13 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification_final"
 if [ -n "$INITIAL_QUANTITY_REFRESH_DIR" ]; then
-  INITIAL_QUANTITY_REFRESH_STAGE="$INITIAL_QUANTITY_REFRESH_DIR/initial_quantity_refresh_stage_${TARGET_DATE}.json"
+  INITIAL_QUANTITY_REFRESH_STAGE="$(env PYTHONPATH=. "$VENV_PY" - "$INITIAL_QUANTITY_REFRESH_DIR" "$TARGET_DATE" <<'PYREF'
+import sys
+from pathlib import Path
+from src.engine.scalping.initial_quantity_policy import committed_refresh_stage_path
+print(committed_refresh_stage_path(Path(sys.argv[1]), sys.argv[2]))
+PYREF
+)"
   INITIAL_QUANTITY_REFRESH_DECISION="$(env PYTHONPATH=. "$VENV_PY" - "$INITIAL_QUANTITY_REFRESH_STAGE" <<'PY'
 import json
 import sys

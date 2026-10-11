@@ -558,8 +558,8 @@ def test_observation_flags_soft_stop_and_trailing(monkeypatch, tmp_path):
     assert report["classification"]["primary"] == "SOFT_STOP_WHIPSAW"
     assert "TRAILING_EARLY_EXIT" in report["classification"]["secondary"]
     assert report["followup"] == {
-        "route": "soft_stop_whipsaw_calibration_review",
-        "owner": "soft_stop_whipsaw_confirmation",
+        "route": "main_stop_confirmation_source_review",
+        "owner": "MainStopLossRetirementRuntimeTuning1010",
         "operator_action_required": False,
         "runtime_effect": "report_only_no_mutation",
         "next_artifact": "observation_source_quality_audit",
