@@ -34,11 +34,12 @@ TAGS = {
     "THRESHOLD_CYCLE_POSTCLOSE": "postclose",
     "POSTCLOSE_DONE_CONTROLLER": "controller",
     "TUNING_MONITORING_POSTCLOSE": "tuning",
-    "POSTCLOSE_FINALIZATION_0500": "finalize",
+    "POSTCLOSE_FINALIZATION_0535": "finalize",
     "UPDATE_KOSPI_EOD_2005": "eod",
     "DASHBOARD_DB_ARCHIVE_2050": "archive",
 }
 LEGACY_TAGS = {
+    "POSTCLOSE_FINALIZATION_0500": "finalize",
     "POSTCLOSE_FINALIZATION_2155": "finalize",
     "POSTCLOSE_FINALIZATION_0600": "finalize",
 }
@@ -771,11 +772,11 @@ def render_crontab(original: str, workspace: Path) -> str:
         elif op == "start" and comment.strip() != "RUNTIME_RELEASE_START":
             raise ValueError("cron_start_marker_unrecognized")
         if op == "finalize":
-            schedule = "0 5 * * * "
+            schedule = "35 5 * * * "
             redirections = arguments
             line = (
                 schedule + prefix + desired + " --resolve-effective-today" + redirections.rstrip()
-                + " # POSTCLOSE_FINALIZATION_0500"
+                + " # POSTCLOSE_FINALIZATION_0535"
             )
         else:
             line = schedule + prefix + desired + tail

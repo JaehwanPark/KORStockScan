@@ -247,7 +247,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "log_rotation_cleanup",
         "log": "logs/log_rotation_cleanup_cron.log",
-        "window_start": (5, 0),
+        "window_start": (5, 35),
         "window_end": (6, 50),
         "mode": "once",
         "critical": False,
@@ -257,7 +257,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "postclose_finalization",
         "log": "logs/postclose_finalization_cron.log",
-        "window_start": (5, 0),
+        "window_start": (5, 35),
         "window_end": (6, 50),
         "mode": "once",
         "critical": True,

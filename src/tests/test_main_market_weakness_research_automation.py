@@ -345,6 +345,45 @@ def test_disabled_schedule_reads_no_sources(tmp_path, monkeypatch):
     assert A.scheduled(tmp_path)["status"] == "disabled_or_not_installed"
 
 
+@pytest.mark.parametrize("position", ["first", "middle", "last"])
+def test_installed_calendar_accepts_reordered_owner_line(tmp_path, monkeypatch, position):
+    from types import SimpleNamespace
+    import os
+
+    base = "35 7 * * 1-5 bash /preopen # THRESHOLD_CYCLE_PREOPEN\n0 12 * * * bash /eod # EOD\n"
+    rendered = A.render_optional_cron(base, tmp_path, "Asia/Seoul")
+    line = rendered.splitlines()[-1]
+    others = base.splitlines()
+    others.insert({"first": 0, "middle": 1, "last": 2}[position], line)
+    installed = "\n".join(others) + "\n"
+    config = dict(uid=os.geteuid(), installation_code_sha256=A.code_hash(),
+                  cron_zone="Asia/Seoul", workspace=str(tmp_path),
+                  **A.calendar_signature(base, "Asia/Seoul"))
+    monkeypatch.setattr(A, "host_cron_zone", lambda: "Asia/Seoul")
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=installed))
+    assert A.verify_installed_calendar(config)
+
+
+@pytest.mark.parametrize("change", ["duplicate", "time", "command", "main_time", "code"])
+def test_installed_calendar_rejects_actual_owner_or_binding_drift(tmp_path, monkeypatch, change):
+    from types import SimpleNamespace
+    import os
+
+    base = "35 7 * * 1-5 bash /preopen # THRESHOLD_CYCLE_PREOPEN\n"
+    installed = A.render_optional_cron(base, tmp_path, "Asia/Seoul")
+    config = dict(uid=os.geteuid(), installation_code_sha256=A.code_hash(),
+                  cron_zone="Asia/Seoul", workspace=str(tmp_path),
+                  **A.calendar_signature(base, "Asia/Seoul"))
+    if change == "duplicate": installed += installed.splitlines()[-1] + "\n"
+    elif change == "time": installed = installed.replace("40 0-5", "41 0-5")
+    elif change == "command": installed = installed.replace("run_main_market_weakness_research_postclose.sh", "unexpected.sh")
+    elif change == "main_time": installed = installed.replace("35 7", "30 7")
+    else: config["installation_code_sha256"] = "changed"
+    monkeypatch.setattr(A, "host_cron_zone", lambda: "Asia/Seoul")
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=installed))
+    assert not A.verify_installed_calendar(config)
+
+
 def test_worker_cli_cannot_bypass_supervisor(tmp_path, capsys):
     data = tmp_path / "data"
     A.atomic(
@@ -843,6 +882,10 @@ def test_wrapper_routes_to_selected_immutable_root_without_main_start(tmp_path):
                 repo / "deploy/run_main_market_weakness_research_postclose.sh"
             ).read_bytes()
         )
+    (release / "deploy/run_with_owned_log.sh").write_bytes(
+        (repo / "deploy/run_with_owned_log.sh").read_bytes()
+    )
+    (release / "deploy/run_owned_log_rotation.sh").write_text("#!/bin/bash\nexit 0\n")
     (workspace / ".venv/bin/python").write_text(
         '#!/bin/bash\nprintf "%s\\n" "' + str(release) + '"\n'
     )
@@ -851,7 +894,7 @@ def test_wrapper_routes_to_selected_immutable_root_without_main_start(tmp_path):
         + str(release)
         + '"; else printf "%s\\n" "$PWD" "$PYTHONPATH" "$@" > "'
         + str(marker)
-        + '"; fi\n'
+        + '"; printf "%s\\n" "scheduled-disposition"; fi\n'
     )
     for root in (workspace, release):
         (root / ".venv/bin/python").chmod(0o755)
@@ -871,3 +914,6 @@ def test_wrapper_routes_to_selected_immutable_root_without_main_start(tmp_path):
     assert A.MODULE in output
     assert "--scheduled" in output
     assert "bot" not in output
+    assert "scheduled-disposition" in (
+        release / "logs/main_market_weakness_research_cron.log"
+    ).read_text()

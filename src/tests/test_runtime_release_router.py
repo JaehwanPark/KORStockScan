@@ -410,12 +410,22 @@ def test_cron_preserves_unrelated_env_schedule_date_and_logs(tmp_path):
     assert after.count("$(TZ=Asia/Seoul date +\\%F)") == len(router.OWNED) - 1
     assert "0 6 * * * KEEP_POLICY_ENV=true bash " not in after
     assert "run_runtime_release.sh finalize --resolve-effective-today" in after
-    assert "POSTCLOSE_FINALIZATION_0500" in after
-    assert "0 5 * * * KEEP_POLICY_ENV=true bash " in after
+    assert "POSTCLOSE_FINALIZATION_0535" in after
+    assert "35 5 * * * KEEP_POLICY_ENV=true bash " in after
+    assert "POSTCLOSE_FINALIZATION_0500" not in after
     assert "POSTCLOSE_FINALIZATION_2155" not in after
     assert "POSTCLOSE_FINALIZATION_0600" not in after
     assert after.count(">> /preserved.log 2>&1") == len(router.TAGS)
     assert router.render_crontab(after, tmp_path) == after
+
+
+def test_old_five_am_finalization_migrates_without_changing_other_jobs(tmp_path):
+    current = router.render_crontab(original_cron(tmp_path), tmp_path)
+    old = current.replace("35 5 * * *", "0 5 * * *").replace(
+        "POSTCLOSE_FINALIZATION_0535", "POSTCLOSE_FINALIZATION_0500"
+    )
+    assert router.render_crontab(old, tmp_path) == current
+
 
 
 @pytest.mark.parametrize("mode", ["missing", "duplicate", "unexpected_command"])

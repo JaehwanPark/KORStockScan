@@ -1635,6 +1635,12 @@ def verify_installed_calendar(config):
         old = subprocess.run(
             ["crontab", "-l"], capture_output=True, text=True, check=True, timeout=5
         ).stdout
+        # Other installers may append their own lines after this owner. Only
+        # this owner's exact command and its bound Main preparation calendar
+        # determine validity; its position in the whole crontab is immaterial.
+        rendered = render_optional_cron(old, config["workspace"], config["cron_zone"])
+        installed_lines = [line for line in old.splitlines() if TAG in line]
+        expected_lines = [line for line in rendered.splitlines() if TAG in line]
         return (
             config.get("uid") == os.geteuid()
             and config.get("installation_code_sha256") == code_hash()
@@ -1642,8 +1648,7 @@ def verify_installed_calendar(config):
             and calendar_signature(old, config["cron_zone"])["calendar_sha256"]
             == config.get("calendar_sha256")
             and old.count(TAG) == 1
-            and render_optional_cron(old, config["workspace"], config["cron_zone"])
-            == old
+            and installed_lines == expected_lines
         )
     except (OSError, ValueError, subprocess.SubprocessError, KeyError):
         return False

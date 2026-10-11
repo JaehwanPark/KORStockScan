@@ -15,10 +15,24 @@ from src.engine.error_detectors.cron_completion import CRON_JOB_REGISTRY, CronCo
 
 def test_finalization_detector_window_precedes_preopen_scanner():
     jobs = {job["id"]: job for job in CRON_JOB_REGISTRY}
-    assert jobs["postclose_finalization"]["window_start"] == (5, 0)
+    assert jobs["postclose_finalization"]["window_start"] == (5, 35)
     assert jobs["postclose_finalization"]["window_end"] == (6, 50)
-    assert jobs["log_rotation_cleanup"]["window_start"] == (5, 0)
+    assert jobs["log_rotation_cleanup"]["window_start"] == (5, 35)
     assert jobs["log_rotation_cleanup"]["window_end"] == (6, 50)
+
+
+@pytest.mark.parametrize("clock,expected", [((5, 34), "not_yet_due"), ((5, 35), "warning")])
+def test_finalization_schedule_does_not_report_missing_before_0535(monkeypatch, tmp_path, clock, expected):
+    import src.engine.error_detectors.cron_completion as cc
+
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-10-12")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: clock)
+    monkeypatch.setattr(cc, "CRON_JOB_REGISTRY", [dict(job) for job in CRON_JOB_REGISTRY
+                                                 if job["id"] == "postclose_finalization"])
+    monkeypatch.setattr(cc, "load_installed_crontab", lambda: "35 5 * * * # POSTCLOSE_FINALIZATION_0535")
+    result = cc.CronCompletionDetector(dry_run=True).check()
+    assert result.details["postclose_finalization_status"] == expected
 
 
 @pytest.mark.parametrize('trading,clock,marker,expected', [
@@ -235,7 +249,7 @@ def test_explicit_previous_source_date_keeps_morning_window_open(
     log_path.write_text("")
     monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
-    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (5, 10))
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (5, 40))
     monkeypatch.setattr(
         cc, "CRON_JOB_REGISTRY",
         [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "log_rotation_cleanup"],

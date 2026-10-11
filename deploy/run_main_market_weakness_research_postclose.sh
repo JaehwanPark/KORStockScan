@@ -22,5 +22,8 @@ if [[ "$REVIEWED_ROOT" != "$EXECUTION_ROOT" ]]; then
 fi
 cd "$REVIEWED_ROOT"
 export PYTHONPATH="$REVIEWED_ROOT"
-exec "$REVIEWED_ROOT/.venv/bin/python" -m src.engine.automation.main_market_weakness_research \
+exec bash "$REVIEWED_ROOT/deploy/run_with_owned_log.sh" \
+  --owner main_market_weakness_research_cron \
+  --log "$REVIEWED_ROOT/logs/main_market_weakness_research_cron.log" \
+  "$REVIEWED_ROOT/.venv/bin/python" -m src.engine.automation.main_market_weakness_research \
   --data-root "$REVIEWED_ROOT/data" --scheduled
