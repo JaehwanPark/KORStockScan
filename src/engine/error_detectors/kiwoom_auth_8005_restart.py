@@ -6,6 +6,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.engine.error_detectors.base import (
     BaseDetector,
@@ -182,6 +183,25 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             details["new_files_baselined"] = baselined_new_files
 
         runtime_identity = _current_runtime_identity()
+        historical_cutoff = _historical_auth_cutoff()
+        historical_matches = []
+        current_matches = []
+        for match in matches:
+            observed = match.get("observed_ts")
+            if isinstance(observed, (int, float)) and observed < historical_cutoff:
+                historical_matches.append(match)
+            else:
+                current_matches.append(match)
+        if historical_matches:
+            details["historical_auth_8005_count"] = len(historical_matches)
+            details["historical_auth_8005_samples"] = historical_matches[:5]
+            details["historical_auth_cutoff_ts"] = historical_cutoff
+            matches = current_matches
+            recovery_events = [
+                event for event in recovery_events
+                if not isinstance(event.get("observed_ts"), (int, float))
+                or event["observed_ts"] >= historical_cutoff
+            ]
         if runtime_identity:
             details["current_runtime_pid"] = runtime_identity["pid"]
             details["current_runtime_start_ts"] = runtime_identity["start_ts"]
@@ -207,6 +227,14 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         if not matches:
             if not self.dry_run:
                 self._save_state(state)
+            if details.get("historical_auth_8005_count"):
+                details.update(restart_requested=False, token_cache_invalidated=False,
+                               runtime_effect="none")
+                return DetectionResult(
+                    detector_id=self.id, category=self.category, severity="pass",
+                    summary="Historical Kiwoom auth 8005 entries predating today's boot/session were consumed; no current auth failure was detected.",
+                    details=details, recommended_action="",
+                )
             if details.get("prior_runtime_auth_8005_count"):
                 return DetectionResult(
                     detector_id=self.id,
@@ -548,6 +576,21 @@ def _current_runtime_identity() -> dict | None:
     if clock_ticks <= 0:
         return None
     return {"pid": pid, "start_ts": boot_time + (start_ticks / clock_ticks)}
+
+
+def _historical_auth_cutoff() -> float:
+    now = datetime.fromtimestamp(_now_ts(), ZoneInfo("Asia/Seoul"))
+    cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    try:
+        boot_line = next(line for line in (PROC_ROOT / "stat").read_text().splitlines()
+                         if line.startswith("btime "))
+        boot = int(boot_line.split()[1])
+        if 0 < boot <= now.timestamp():
+            # Preserve same-second startup errors at one-second log precision.
+            cutoff = max(cutoff, boot - 1.0)
+    except (OSError, StopIteration, ValueError, IndexError):
+        pass
+    return cutoff
 
 
 def _split_prior_runtime_matches(

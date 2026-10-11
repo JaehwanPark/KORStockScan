@@ -50,6 +50,60 @@ class TestKiwoomAuth8005RestartDetector:
         state = json.loads(self._scan_state_path.read_text(encoding="utf-8"))
         assert state["files"]["bot_history.log"]["position"] == initial_size
 
+    def test_unread_preboot_error_without_main_does_not_request_restart(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as module
+
+        invalidations = []
+        cutoff = datetime.fromisoformat("2026-10-12T05:30:52+09:00").timestamp()
+        monkeypatch.setattr(module, "_historical_auth_cutoff", lambda: cutoff)
+        monkeypatch.setattr(module, "_current_runtime_identity", lambda: None)
+        monkeypatch.setattr(module.kiwoom_utils, "invalidate_kiwoom_token_cache",
+                            lambda reason="": invalidations.append(reason) or True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log = Path(tmpdir) / "kiwoom_utils_info.log"
+            log.write_text("old ok\n")
+            self._write_state(log, restart_count=0, last_restart_ts=0)
+            _append(log, "[2026-10-09 22:36:36] [ka10080] API auth failure 8005 Token invalid\n")
+            with _mock_logs_dir(Path(tmpdir)):
+                result = KiwoomAuth8005RestartDetector().check()
+        assert result.severity == "pass"
+        assert result.details["historical_auth_8005_count"] == 1
+        assert result.details["restart_requested"] is False
+        assert result.details["token_cache_invalidated"] is False
+        assert invalidations == [] and not self._restart_flag_path.exists()
+        state = json.loads(self._scan_state_path.read_text())
+        assert state["restart_count"] == 0
+
+    def test_mixed_history_and_current_error_preserves_current_recovery(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as module
+
+        cutoff = datetime.fromisoformat("2026-10-12T05:30:52+09:00").timestamp()
+        monkeypatch.setattr(module, "_historical_auth_cutoff", lambda: cutoff)
+        monkeypatch.setattr(module.kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log = Path(tmpdir) / "kiwoom_utils_info.log"
+            log.write_text("old ok\n")
+            self._write_state(log, restart_count=0, last_restart_ts=0)
+            _append(log, "[2026-10-09 22:36:36] [ka10080] auth 8005 Token invalid\n")
+            _append(log, "[2026-10-12 07:00:00] [ka10080] auth 8005 Token invalid\n")
+            with _mock_logs_dir(Path(tmpdir)):
+                result = KiwoomAuth8005RestartDetector().check()
+        assert result.details["historical_auth_8005_count"] == 1
+        assert result.details["fresh_auth_8005_count"] == 1
+        assert result.details["restart_requested"] is True
+
+    def test_history_cutoff_uses_kst_day_and_preserves_boot_second(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as module
+
+        now = datetime.fromisoformat("2026-10-12T07:00:00+09:00").timestamp()
+        boot = int(datetime.fromisoformat("2026-10-12T05:30:53+09:00").timestamp())
+        (tmp_path / "stat").write_text(f"btime {boot}\n")
+        monkeypatch.setattr(module, "PROC_ROOT", tmp_path)
+        monkeypatch.setattr(module, "_now_ts", lambda: now)
+        assert module._historical_auth_cutoff() == boot - 1
+        (tmp_path / "stat").write_text("btime invalid\n")
+        assert module._historical_auth_cutoff() == datetime.fromisoformat("2026-10-12T00:00:00+09:00").timestamp()
+
     def test_fresh_8005_touches_restart_flag(self, monkeypatch):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
 
