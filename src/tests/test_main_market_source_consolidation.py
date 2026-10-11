@@ -57,7 +57,8 @@ def next_session_v6(replay, monkeypatch):
     return root, old, candidate
 
 
-def test_v6_code_refresh_preserves_issued_policy_and_current_until_exact_activation(next_session_v6, monkeypatch):
+@pytest.mark.parametrize('failed_preopen', [False, True])
+def test_v6_code_refresh_preserves_issued_policy_and_current_until_exact_activation(next_session_v6, monkeypatch, failed_preopen):
     from types import SimpleNamespace
     from datetime import datetime
     from src.engine.scalping import continuous_reversal_policy_v6 as V6, mechanistic_entry_runtime_policy as N
@@ -91,6 +92,12 @@ def test_v6_code_refresh_preserves_issued_policy_and_current_until_exact_activat
         V6.stage_code_refresh(root,'2026-10-12',**dict(kwargs,confirm='invalid'))
     with pytest.raises(ValueError, match='future_candidate_required'):
         V6.stage_code_refresh(root,'2026-10-12',**dict(kwargs,now=datetime.fromisoformat('2026-10-12T07:30:00+09:00')))
+    if failed_preopen:
+        from src.engine.automation import next_preopen_readiness as readiness
+        kwargs.update(now=datetime.fromisoformat('2026-10-12T07:40:00+09:00'),recover_failed_preopen=True)
+        with pytest.raises(ValueError,match='lease_invalid'):
+            V6.stage_code_refresh(root,'2026-10-12',**kwargs)
+        monkeypatch.setattr(readiness,'require_failed_preopen_recovery',lambda *a,**k:{} )
     source_path = N.root(root)/'sources'/(original['source_file_sha256']+'.json')
     source_bytes = source_path.read_bytes()
     source_path.write_bytes(b'{}\n')

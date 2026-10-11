@@ -339,7 +339,7 @@ def _attested_activation_parent(data_root, target_date, *, origin_root, origin_c
 
 def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
                        origin_root, activation_parent_origin_root, activation_parent_origin_commit, release_commit,
-                       reason, confirm, now=None):
+                       reason, confirm, now=None, recover_failed_preopen=False):
     """Rebind an issued next-session candidate; no activation or reselection.
 
     The current pointer, dates, memberships, thresholds, auxiliary evidence and
@@ -353,7 +353,10 @@ def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
             or not re.fullmatch('[0-9a-f]{40}',str(activation_parent_origin_commit))):
         raise ValueError('v6_code_refresh_authority_required')
     clock = now or datetime.now(K.KST)
-    if clock.tzinfo is None or target_date <= clock.astimezone(K.KST).date().isoformat():
+    if recover_failed_preopen:
+        from src.engine.automation.next_preopen_readiness import require_failed_preopen_recovery
+        require_failed_preopen_recovery(data_root, target_date, now=clock)
+    elif clock.tzinfo is None or target_date <= clock.astimezone(K.KST).date().isoformat():
         raise ValueError('v6_code_refresh_future_candidate_required')
     data_root = Path(data_root).absolute(); root = N.root(data_root)
     code_root = Path(__file__).resolve().parents[3]

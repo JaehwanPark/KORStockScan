@@ -10,6 +10,9 @@ import argparse
 import hashlib
 import json
 import subprocess
+import fcntl
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,79 @@ from src.utils.market_day import is_krx_trading_day
 KST = ZoneInfo("Asia/Seoul")
 PREPARED_DIR = DATA_DIR / "runtime" / "policy_bootstrap" / "prepared"
 PREOPEN_START = time(7, 35)
+RECOVERY_AUTHORITY = 'APPROVED_FAILED_PREOPEN_POLICY_PRESERVING_RECOVERY'
+_RECOVERY = ContextVar('failed_preopen_recovery', default=None)
+
+
+@contextmanager
+def failed_preopen_recovery(target_date, *, confirm, now=None):
+    """Lease an unactivated failed PREOPEN; never fabricate its completion."""
+    current = (now or datetime.now(KST)).astimezone(KST)
+    if (confirm != RECOVERY_AUTHORITY or target_date != current.date().isoformat()
+            or not is_krx_trading_day(current.date())
+            or not PREOPEN_START <= current.time().replace(tzinfo=None) < time(8, 40)):
+        raise ValueError('failed_preopen_recovery_window_or_authority_invalid')
+    data = DATA_DIR.resolve()
+    with (data.parent / 'logs/runtime_policy_preopen.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        path = data / 'report/threshold_cycle_preopen_status' / f'threshold_cycle_preopen_{target_date}.status.json'
+        status = _read(path)
+        updated = datetime.fromisoformat(status.get('updated_at', ''))
+        if (status.get('status') != 'failed' or status.get('target_date') != target_date
+                or not isinstance(status.get('exit_code'), int) or status['exit_code'] == 0
+                or updated.tzinfo is None or updated.astimezone(KST).date() != current.date()
+                or updated > current or status.get('runtime_env_exists') is not False
+                or (data / 'runtime/policy_bootstrap' / f'runtime_policy_bootstrap_{target_date}.env').exists()):
+            raise ValueError('failed_preopen_recovery_not_unactivated_failure')
+        from src.engine.scalping import mechanistic_entry_runtime_policy as native
+        active = _read(native.root(data) / 'current.json')
+        if active.get('effective_date', '') >= target_date:
+            raise ValueError('failed_preopen_recovery_policy_already_activated')
+        for proc in Path('/proc').iterdir():
+            if not proc.name.isdecimal():
+                continue
+            try:
+                argv = (proc / 'cmdline').read_bytes().split(b'\0')
+            except FileNotFoundError:
+                continue
+            if any(arg.endswith(b'bot_main.py') for arg in argv):
+                raise ValueError('failed_preopen_recovery_main_running')
+        receipt = dict(data_root=str(data), target_date=target_date,
+                       status_path=str(path), status_sha256=_sha(path))
+        token = _RECOVERY.set(receipt)
+        try:
+            yield receipt
+        finally:
+            _RECOVERY.reset(token)
+
+
+def require_failed_preopen_recovery(data_root, target_date, *, now=None):
+    receipt = _RECOVERY.get()
+    current = (now or datetime.now(KST)).astimezone(KST)
+    if (not receipt or receipt['data_root'] != str(Path(data_root).resolve())
+            or receipt['target_date'] != target_date or target_date != current.date().isoformat()
+            or current.time().replace(tzinfo=None) >= time(8, 40)
+            or _sha(Path(receipt['status_path'])) != receipt['status_sha256']):
+        raise ValueError('failed_preopen_recovery_lease_invalid')
+    return receipt
+
+
+def _activation_candidate_receipt(target_date, commit, *, generation_only=False):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    path = native.preparation_path(DATA_DIR, target_date)
+    if not path.is_file():
+        return None
+    bundle = native._read(path)
+    family = bundle.get('continuous_reversal') or {}
+    if family.get('schema') != 'continuous_reversal_policy_v6':
+        return None
+    if family.get('release_commit') != commit:
+        raise ValueError('prepared_activation_release_mismatch')
+    native.validate(bundle, target_date=target_date)
+    if not generation_only:
+        native._validate_bundle_sources(bundle, DATA_DIR)
+    return dict(path=str(path), sha256=_sha(path), bundle_sha256=bundle['bundle_sha256'],
+                release_commit=commit)
 
 
 def _next_trading_day(day: date) -> date:
@@ -129,12 +205,18 @@ def _generation_dir(source_date: str, target_date: str, controller_sha: str, com
 
 
 def prepare(source_date: str, *, target_date: str | None = None,
-            now: datetime | None = None) -> dict[str, Any]:
+            now: datetime | None = None, recover_failed_preopen: bool = False) -> dict[str, Any]:
     expected = target_after_postclose(source_date, now=now)
+    if recover_failed_preopen:
+        require_failed_preopen_recovery(DATA_DIR, target_date, now=now)
+        if _next_trading_day(date.fromisoformat(source_date)).isoformat() != target_date:
+            raise ValueError('failed_preopen_recovery_source_target_invalid')
+        expected = target_date
     target_date = target_date or expected
     if target_date != expected:
         raise ValueError("preopen_target_not_next_operating_day")
     _, selection_path, commit = _selected_release()
+    activation_candidate = _activation_candidate_receipt(target_date, commit)
     source = _source_receipts(source_date, target_date)
     output_dir = _generation_dir(source_date, target_date, source["controller_sha256"], commit)
     manifest = bootstrap.write_bootstrap(target_date, output_dir=output_dir)
@@ -163,6 +245,7 @@ def prepare(source_date: str, *, target_date: str | None = None,
         "actual_pid_consumed": False,
         "runtime_effect": False,
         "day_of_activation_required": True,
+        "activation_candidate": activation_candidate,
     }
     receipt_file = output_dir / "readiness.json"
     bootstrap._publish(receipt_file, json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
@@ -224,6 +307,10 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
             **({"checklist_snapshot": Path(snapshot['path'])} if snapshot else {}))
         if any(expected_source.get(key) != value for key, value in source.items()):
             raise ValueError("prepared_source_or_release_changed")
+        if not release_changed and 'activation_candidate' in receipt:
+            if receipt['activation_candidate'] != _activation_candidate_receipt(
+                    target_date, commit, generation_only=generation_only):
+                raise ValueError('prepared_activation_candidate_changed')
         output_dir = receipt_path.parent
         for key, path in (
             ("manifest_file_sha256", bootstrap.manifest_path(target_date, output_dir=output_dir)),

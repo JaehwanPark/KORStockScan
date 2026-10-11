@@ -52,13 +52,12 @@ failed() {
 }
 
 trap 'failed "$?"' ERR
-write_status running started 0
 exec 9>"$PROJECT_DIR/logs/runtime_policy_preopen.lock"
 if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
-  write_status skipped lock_busy 0
   echo "[SKIP] runtime-policy preopen already running target_date=$TARGET_DATE"
   exit 0
 fi
+write_status running started 0
 cd "$PROJECT_DIR"
 
 echo "[START] runtime-policy preopen target_date=$TARGET_DATE"

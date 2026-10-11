@@ -417,3 +417,17 @@ def test_scoped_final_verification_respects_disabled_machine_schedule():
     script=(Path(__file__).resolve().parents[2]/'deploy/run_threshold_cycle_postclose.sh').read_text()
     final=script[script.index('--stage wait --date'):]
     assert final.index('if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION"') < final.index('for stage in legacy_machine_report main_auxiliary_policy')
+def test_busy_preopen_preserves_exact_current_producer_status(tmp_path):
+    import fcntl, os, subprocess
+    from pathlib import Path
+    project=Path(__file__).resolve().parents[2]
+    logs=tmp_path/'logs';logs.mkdir()
+    status=tmp_path/'data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-10-12.status.json'
+    status.parent.mkdir(parents=True);status.write_bytes(b'{"status":"failed","original_attempt":true}\n')
+    before=status.read_bytes()
+    with (logs/'runtime_policy_preopen.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        result=subprocess.run(['bash',str(project/'deploy/run_threshold_cycle_preopen.sh'),'2026-10-12'],
+            env={**os.environ,'PROJECT_DIR':str(tmp_path),'VENV_PY':'/must-not-execute'},capture_output=True,text=True,timeout=10)
+    assert result.returncode==0 and '[SKIP]' in result.stdout
+    assert status.read_bytes()==before

@@ -11,6 +11,55 @@ from src.engine.automation import next_preopen_readiness as readiness
 KST = ZoneInfo("Asia/Seoul")
 
 
+@pytest.mark.parametrize('damage', [None, 'running', 'activated', 'env', 'main', 'lock', 'expired'])
+def test_failed_preopen_recovery_requires_unactivated_terminal_failure_and_exclusive_lease(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    data = tmp_path / 'data'; (tmp_path / 'logs').mkdir()
+    monkeypatch.setattr(readiness, 'DATA_DIR', data)
+    day = '2026-10-12'; now = datetime.fromisoformat('2026-10-12T07:40:00+09:00')
+    path = data / 'report/threshold_cycle_preopen_status' / f'threshold_cycle_preopen_{day}.status.json'
+    _json(path, dict(status='running' if damage == 'running' else 'failed', target_date=day,
+                    exit_code=1, runtime_env_exists=False, updated_at='2026-10-12T07:35:33+09:00'))
+    _json(native.root(data) / 'current.json', dict(effective_date=day if damage == 'activated' else '2026-10-08'))
+    if damage == 'env':
+        p=data/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{day}.env';p.parent.mkdir(parents=True);p.write_text('existing')
+    proc=tmp_path/'proc';proc.mkdir();process=proc/'123';process.mkdir()
+    (process/'cmdline').write_bytes(b'python\0bot_main.py\0' if damage == 'main' else b'python\0other.py\0')
+    path_class = readiness.Path
+    monkeypatch.setattr(readiness, 'Path', lambda p: proc if p == '/proc' else path_class(p))
+    import fcntl
+    lock=(tmp_path/'logs/runtime_policy_preopen.lock').open('a')
+    if damage == 'lock':fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    if damage == 'expired':now=datetime.fromisoformat('2026-10-12T08:40:00+09:00')
+    try:
+        if damage:
+            with pytest.raises((ValueError, BlockingIOError)):
+                with readiness.failed_preopen_recovery(day,confirm=readiness.RECOVERY_AUTHORITY,now=now):
+                    pytest.fail('unsafe recovery admitted')
+        else:
+            with readiness.failed_preopen_recovery(day,confirm=readiness.RECOVERY_AUTHORITY,now=now) as receipt:
+                assert readiness.require_failed_preopen_recovery(data,day,now=now)==receipt
+                path.write_text('{}')
+                with pytest.raises(ValueError,match='lease_invalid'):
+                    readiness.require_failed_preopen_recovery(data,day,now=now)
+            with pytest.raises(ValueError,match='lease_invalid'):
+                readiness.require_failed_preopen_recovery(data,day,now=now)
+    finally:lock.close()
+
+
+def test_prepared_activation_gate_detects_release_mismatch_before_bootstrap(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    monkeypatch.setattr(readiness,'DATA_DIR',tmp_path)
+    path = native.root(tmp_path)/'candidates/policy_2026-10-12.json'
+    _json(path,dict(continuous_reversal=dict(schema='continuous_reversal_policy_v6',
+           effective_mode='next_session',release_commit='a'*40),bundle_sha256='b'*64))
+    monkeypatch.setattr(native,'validate',lambda *a,**k:None)
+    monkeypatch.setattr(native,'_validate_bundle_sources',lambda *a,**k:None)
+    with pytest.raises(ValueError,match='prepared_activation_release_mismatch'):
+        readiness._activation_candidate_receipt('2026-10-12','c'*40)
+    assert readiness._activation_candidate_receipt('2026-10-12','a'*40)['sha256']==readiness._sha(path)
+
+
 @pytest.mark.parametrize('clock,recovery,expected', [
     ('2026-10-06T07:34:59+09:00', True, 'prepare_exact_effective_date'),
     ('2026-10-06T07:35:00+09:00', True, 'historical_recovery_no_prepare'),
@@ -121,6 +170,7 @@ def test_selected_release_requires_router_validated_root_and_commit(monkeypatch,
 
 
 def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp_path):
+    monkeypatch.setattr(readiness, 'DATA_DIR', tmp_path)
     native_selection = readiness._selected_release
     source, target = "2026-09-30", "2026-10-02"
     monkeypatch.setattr(readiness, "PREPARED_DIR", tmp_path / "prepared")

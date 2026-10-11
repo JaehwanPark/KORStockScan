@@ -1615,7 +1615,13 @@ def _postclose_handoff_semantics(root, source_date, now):
         target = _semantic_due_target(now)
         result['target_date'] = target
         index = root / "data/runtime/policy_bootstrap/prepared" / target / "latest.json"
-        if index.exists() or index.is_symlink():
+        if source_date >= target:
+            # Today's unclosed postclose source does not own this morning's
+            # prepared generation from the preceding completed session.
+            result['prepared'] = {'status': 'future_due', 'target_date': target,
+                                  'reason': 'source_not_before_target',
+                                  'consumption': 'not_observed'}
+        elif index.exists() or index.is_symlink():
             _semantic_object(index, limit=1024 * 1024)
             check = readiness.verify_prepared(target, generation_only=True)
             result["prepared"] = check

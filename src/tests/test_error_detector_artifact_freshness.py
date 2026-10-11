@@ -254,6 +254,15 @@ def test_prepared_semantics_does_not_claim_future_pid_or_ignore_stale_release(tm
     assert result["consumption"] == "not_observed"
 
 
+def test_current_morning_source_does_not_relabel_previous_prepared_failure(tmp_path, monkeypatch):
+    from src.engine.automation import next_preopen_readiness as readiness
+    index=tmp_path/'data/runtime/policy_bootstrap/prepared/2026-10-12/latest.json'
+    index.parent.mkdir(parents=True);index.write_text('{}')
+    monkeypatch.setattr(readiness,'verify_prepared',lambda *a,**k:pytest.fail('wrong source owns prepared check'))
+    result=_postclose_handoff_semantics(tmp_path,'2026-10-12',datetime.fromisoformat('2026-10-12T07:10:00+09:00'))
+    assert result['findings']==[] and result['prepared']['reason']=='source_not_before_target'
+
+
 @pytest.mark.parametrize('damage', [None, 'handoff', 'other_generation'])
 def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tmp_path, monkeypatch, damage):
     from src.engine.automation import intraday_release_handoff as handoff
