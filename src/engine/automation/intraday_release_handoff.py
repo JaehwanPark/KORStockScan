@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import subprocess
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,6 +22,8 @@ from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 CONFIRM = "APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF"
+_STOPPED_PREPARATION = ContextVar('intraday_stopped_preparation', default=None)
+_OBSERVER_CUSTODY = ContextVar('intraday_observer_custody', default=None)
 
 
 def _sha(path):
@@ -154,7 +157,10 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         raise ValueError('entry_consumer_family_invalid')
     current_path, _ = _paths(day, commit)
     if current_path.exists():
-        checked = verify(day, commit)
+        # Only the read-only historical observer's nested policy validation may
+        # use the already-consumed sealed document. Public startup stays strict.
+        checked = (_verify_handoff(day, commit, historical_observer=True)
+                   if _OBSERVER_CUSTODY.get() == (day, commit) else verify(day, commit))
         if checked.get('status') != 'pass':
             raise ValueError('entry_consumer_handoff_invalid')
     else:
@@ -165,7 +171,8 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         if (selection.get('approved_by') != 'user'
                 or selection.get('approval_scope') not in {
                     'machine_auxiliary_path_repair_deploy_and_restart',
-                    'entry_input_deadline_repair_deploy_and_restart'}
+                    'entry_input_deadline_repair_deploy_and_restart',
+                    'ordered_intraday_deploy_and_restart'}
                 or prior.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
                 or prior.get('authority') != CONFIRM or prior.get('status') != 'prepared_verified'
                 or prior.get('target_date') != day or prior.get('selected_release_commit') != previous
@@ -178,9 +185,11 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
                 or consumed.get('manifest_sha256') != manifest.get('manifest_sha256')):
             raise ValueError('entry_consumer_predecessor_invalid')
         identity = consumed.get('pid_identity') or {}
+        stopped = _STOPPED_PREPARATION.get() == (day, identity.get('pid'), prior['release_root'])
         if (not identity.get('start_ticks')
                 or identity.get('cwd') != str(Path(prior['release_root']) / 'src')
-                or _identity(identity.get('pid')) != identity):
+                or (Path('/proc', str(identity.get('pid'))).exists() if stopped
+                    else _identity(identity.get('pid')) != identity)):
             raise ValueError('entry_consumer_predecessor_pid_changed')
         required = (bootstrap.manifest_path(day), bootstrap.env_path(day), _preopen_path(day))
         if any(prior.get('frozen_files', {}).get(str(p)) != _sha(p) for p in required):
@@ -242,6 +251,18 @@ def _checked_bootstrap(day, pid):
 
 def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_source=False,
             previous_stopped=False):
+    token = _STOPPED_PREPARATION.set(
+        (day, int(old_pid), str(Path(previous_root).resolve())) if previous_stopped else None)
+    try:
+        return _prepare(day, old_pid=old_pid, previous_root=previous_root, confirm=confirm,
+                        now=now, reseal_postclose_source=reseal_postclose_source,
+                        previous_stopped=previous_stopped)
+    finally:
+        _STOPPED_PREPARATION.reset(token)
+
+
+def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_source=False,
+             previous_stopped=False):
     current = _today(day, now)
     if confirm != CONFIRM:
         raise ValueError("intraday_handoff_explicit_authority_required")
@@ -567,7 +588,11 @@ def _historical_checklist_for_observer(project, source_date, *, now=None):
             or identity.get('cwd') != str(root / 'src')
             or _identity(identity['pid']) != identity):
         raise ValueError('intraday_observer_current_pid_not_bound')
-    bootstrap_check = _checked_bootstrap(day, identity['pid'])
+    token = _OBSERVER_CUSTODY.set((day, commit))
+    try:
+        bootstrap_check = _checked_bootstrap(day, identity['pid'])
+    finally:
+        _OBSERVER_CUSTODY.reset(token)
     if (consumed.get('manifest_sha256') != bootstrap_check.get('manifest_sha256')
             or _identity(identity['pid']) != identity
             or _sha(handoff_path) != handoff_sha
@@ -649,4 +674,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Nested policy readers import the canonical module. Running prepare on a
+    # second __main__ copy would give them different ContextVar instances.
+    from src.engine.automation.intraday_release_handoff import main as canonical_main
+    raise SystemExit(canonical_main())

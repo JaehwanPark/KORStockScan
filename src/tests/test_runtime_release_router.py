@@ -245,6 +245,18 @@ def test_bad_selection_rejected(release, key, value):
         router.selected_release(workspace)
 
 
+def test_candidate_validation_does_not_publish_or_require_candidate_selection(release):
+    workspace, root, manifest, selection = release
+    original = manifest.read_bytes()
+    # Candidate validation uses the same full immutable-release contract and
+    # does not depend on publishing this identity for live readers first.
+    manifest.write_text('{"unpublished": true}')
+    before = manifest.read_bytes()
+    assert router.validate_release(workspace, selection) == (root, selection['git_commit'])
+    assert manifest.read_bytes() == before
+    manifest.write_bytes(original)
+
+
 @pytest.mark.parametrize("payload", ["[]", "null", "{invalid"])
 def test_bad_json_rejected(release, payload):
     workspace, _, manifest, _ = release

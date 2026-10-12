@@ -641,8 +641,9 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
 
 
 @pytest.mark.parametrize('consumer,approval', [('sniper_state_handlers.py','machine_auxiliary_path_repair_deploy_and_restart'), ('ai_engine_openai.py','entry_input_deadline_repair_deploy_and_restart')])
+@pytest.mark.parametrize('identity_mode', ['live', 'stopped', 'unbound_stopped', 'stopped_still_alive'])
 @pytest.mark.parametrize('fault', [None, 'authority', 'consumed', 'pid', 'manifest', 'policy', 'producer', 'other_function', 'verifier'])
-def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_sources(fixture, monkeypatch, fault, consumer, approval):
+def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_sources(fixture, monkeypatch, fault, consumer, approval, identity_mode):
     import hashlib
     data, previous, selected, _ = fixture
     monkeypatch.setattr(handoff, '_today', lambda *a: NOW)
@@ -677,14 +678,66 @@ def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_so
     consumed=dict(schema='intraday_policy_preserving_consumption_v1',status='pass',actual_pid_consumed=fault!='consumed',
         target_date=DAY,selected_release_commit=OLD,release_root=str(previous),manifest_sha256='sealed-manifest',
         handoff_sha256=handoff._sha(prior_path),pid_identity=handoff._identity(1))
-    if fault=='pid':consumed['pid_identity']['start_ticks']='changed'
+    if fault=='pid':consumed['pid_identity']['pid']=99
     _json(consumed_path,consumed)
     if fault=='manifest':handoff.bootstrap.env_path(DAY).write_text('mutated')
     kwargs=dict(family='pre_submit_delay',policy_sha='wrong' if fault=='policy' else 'policy',
         expected=expected,paths={name:name},actual='new')
-    if fault:
-        with pytest.raises(ValueError):handoff.verify_entry_consumer_code(DAY,**kwargs)
-    else:
-        proof=handoff.verify_entry_consumer_code(DAY,**kwargs)
-        assert proof['policy_effect']=='unchanged' and proof['changed_consumer_paths']==[name]
-        assert not handoff._paths(DAY,NEW)[0].exists()
+    token = handoff._STOPPED_PREPARATION.set(
+        (DAY, 1, str(previous)) if identity_mode in {'stopped', 'stopped_still_alive'} else None)
+    exists=Path.exists
+    monkeypatch.setattr(Path,'exists',lambda p:
+        identity_mode=='stopped_still_alive' if str(p)=='/proc/1' else exists(p))
+    if identity_mode != 'live':
+        def dead(pid):raise ValueError('predecessor_not_live')
+        monkeypatch.setattr(handoff,'_identity',dead)
+    try:
+        if fault or identity_mode in {'unbound_stopped','stopped_still_alive'}:
+            with pytest.raises(ValueError):handoff.verify_entry_consumer_code(DAY,**kwargs)
+        else:
+            proof=handoff.verify_entry_consumer_code(DAY,**kwargs)
+            assert proof['policy_effect']=='unchanged' and proof['changed_consumer_paths']==[name]
+            assert not handoff._paths(DAY,NEW)[0].exists()
+    finally:
+        handoff._STOPPED_PREPARATION.reset(token)
+
+
+def test_stopped_preparation_context_cannot_escape_success_or_failure(fixture, monkeypatch):
+    _, previous, _, _=fixture
+    def check(*args,**kw):
+        assert handoff._STOPPED_PREPARATION.get()==(DAY,1,str(previous))
+        return {'status':'pass'}
+    monkeypatch.setattr(handoff,'_prepare',check)
+    assert handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,
+                           previous_stopped=True)['status']=='pass'
+    assert handoff._STOPPED_PREPARATION.get() is None
+    def reject(*args,**kw):
+        check();raise ValueError('prepare_failure')
+    monkeypatch.setattr(handoff,'_prepare',reject)
+    with pytest.raises(ValueError,match='prepare_failure'):
+        handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,previous_stopped=True)
+    assert handoff._STOPPED_PREPARATION.get() is None
+
+
+def test_observer_context_never_relaxes_public_launch_verification(fixture, monkeypatch):
+    calls=[]
+    def verify(*a,**kw):
+        calls.append(kw.get('historical_observer',False));return {'status':'fail'}
+    monkeypatch.setattr(handoff,'_verify_handoff',verify)
+    token=handoff._OBSERVER_CUSTODY.set((DAY,NEW))
+    try:
+        assert handoff.verify(DAY,NEW)['status']=='fail'
+        assert calls==[False]
+    finally:handoff._OBSERVER_CUSTODY.reset(token)
+
+
+def test_cli_and_nested_policy_readers_share_canonical_context(monkeypatch):
+    import runpy
+    import sys
+    called=[]
+    monkeypatch.setattr(sys,'argv',['intraday-release-handoff'])
+    monkeypatch.setattr(handoff,'main',lambda:called.append('canonical') or 0)
+    with pytest.warns(RuntimeWarning,match='found in sys.modules'):
+        with pytest.raises(SystemExit) as result:
+            runpy.run_module(handoff.__name__,run_name='__main__')
+    assert result.value.code==0 and called==['canonical']

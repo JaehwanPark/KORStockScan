@@ -472,6 +472,12 @@ def selected_release(workspace: Path) -> tuple[Path, str]:
     selection = json.loads(
         (workspace / "data/runtime/runtime_release_selection.json").read_text()
     )
+    return validate_release(workspace, selection)
+
+
+def validate_release(workspace: Path, selection: dict) -> tuple[Path, str]:
+    """Validate an immutable candidate without publishing it to live readers."""
+    workspace = workspace.resolve(strict=True)
     if (
         not isinstance(selection, dict)
         or selection.get("schema") != "runtime_release_selection_v1"
