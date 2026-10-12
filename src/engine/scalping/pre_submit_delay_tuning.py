@@ -1617,6 +1617,18 @@ def _runtime_preparation_key(day):
             os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"))
 
 
+def _verify_runtime_code_contract(policy, day):
+    """Preserve only a sealed same-day policy through the reviewed entry repair."""
+    from .pre_submit_delay_initial_policy import code_contract, CONTRACT_PATHS
+    actual = code_contract()
+    if actual == policy.get('code_contract_sha256'):
+        return {'status': 'exact_code_contract', 'code_contract_sha256': actual}
+    from src.engine.automation.intraday_release_handoff import verify_entry_consumer_code
+    return verify_entry_consumer_code(day, family='pre_submit_delay',
+        policy_sha=policy.get('policy_sha256'), expected=policy.get('code_contract_sha256'),
+        paths={name: name for name in CONTRACT_PATHS}, actual=actual)
+
+
 def prepare_runtime_policy(*, now=None):
     """Called by the existing preparation owner, never from warm submission."""
     global _PREPARED_DELAY_POLICY, _PREPARED_DELAY_KEY
@@ -1632,13 +1644,13 @@ def prepare_runtime_policy(*, now=None):
         return {"status": "disabled"}
     path = Path(os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE") or "")
     try:
+        code_compatibility = None
         if path.stat().st_size > 1024 * 1024:
             raise ValueError("policy_unbounded")
         policy = json.loads(path.read_text())
         if policy.get("schema") == V2:
-            from .pre_submit_delay_initial_policy import code_contract, verify_source, _read
-            if policy.get('code_contract_sha256') != code_contract():
-                raise ValueError('initial_delay_code_contract_changed')
+            from .pre_submit_delay_initial_policy import verify_source, _read
+            code_compatibility = _verify_runtime_code_contract(policy, day)
             report_file, policy_file, pointer, manifest = committed_paths(DATA_DIR, policy["source_date"])
             policy, prepared_report = _read(policy_file), _read(report_file)
             verify_source(DATA_DIR, prepared_report)
@@ -1666,7 +1678,8 @@ def prepare_runtime_policy(*, now=None):
                     'types':MappingProxyType({k:v['selected_delay_sec'] for k,v in types.items()}),
                     'scopes':MappingProxyType({k:v['selected_delay_sec'] for k,v in scopes.items()})}
         _PREPARED_DELAY_KEY = key
-        return {"status": "prepared" if _PREPARED_DELAY_POLICY else "not_applicable"}
+        return {"status": "prepared" if _PREPARED_DELAY_POLICY else "not_applicable",
+                **({'code_compatibility': code_compatibility} if code_compatibility else {})}
     except (OSError, ValueError, TypeError, KeyError):
         return {"status": "preparation_invalid"}
 

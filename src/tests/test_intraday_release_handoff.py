@@ -638,3 +638,51 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
             dict(pid=pid, start_ticks='reused-pid', cwd=str(second/'src')))
         with pytest.raises(ValueError, match='intraday_observer_current_pid_not_bound'):
             handoff.historical_checklist_for_observer(data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
+
+
+@pytest.mark.parametrize('fault', [None, 'authority', 'consumed', 'pid', 'manifest', 'policy', 'producer', 'other_function', 'verifier'])
+def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_sources(fixture, monkeypatch, fault):
+    import hashlib
+    data, previous, selected, _ = fixture
+    monkeypatch.setattr(handoff, '_today', lambda *a: NOW)
+    name = 'src/engine/sniper_state_handlers.py'
+    own = 'src/engine/automation/intraday_release_handoff.py'
+    original = b'def _get_live_entry_arm():\n return 1\ndef hard_guard():\n return False\n'
+    revised = original.replace(b'return 1', b'return 2')
+    if fault == 'other_function': revised = revised.replace(b'return False', b'return True')
+    if fault == 'producer': name = 'src/engine/producer.py'
+    for n, raw in [(name, revised), (own, b'# reviewed verifier\n')]:
+        p = selected/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+    monkeypatch.setattr(handoff, '__file__', str(selected/own))
+    if fault == 'verifier':(selected/own).write_bytes(b'# dirty verifier\n')
+    def git(cmd, **kw):
+        rev, path = cmd[-1].split(':',1)
+        return b'# reviewed verifier\n' if path == own else original if rev == OLD else revised
+    monkeypatch.setattr(handoff.subprocess, 'check_output', git)
+    expected = hashlib.sha256(json.dumps({name: hashlib.sha256(original).hexdigest()},
+        sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    manifest = dict(selected_release_sha=OLD, manifest_sha256='sealed-manifest',
+        pre_submit_delay_handoff=dict(policy_sha256='policy',code_contract_sha256=expected,target_date=DAY))
+    _json(handoff.bootstrap.manifest_path(DAY), manifest)
+    selection = dict(previous_git_commit=OLD,previous_release_root=str(previous),approved_by='user',
+        approval_scope='wrong' if fault=='authority' else 'machine_auxiliary_path_repair_deploy_and_restart')
+    _json(data/'runtime/runtime_release_selection.json',selection)
+    prior_path, consumed_path=handoff._paths(DAY,OLD)
+    prior=dict(schema='intraday_policy_preserving_release_handoff_v1',status='prepared_verified',authority=handoff.CONFIRM,
+        target_date=DAY,selected_release_commit=OLD,release_root=str(previous),frozen_files={str(p):handoff._sha(p)
+            for p in [handoff.bootstrap.manifest_path(DAY),handoff.bootstrap.env_path(DAY),handoff._preopen_path(DAY)]})
+    _json(prior_path,prior)
+    consumed=dict(schema='intraday_policy_preserving_consumption_v1',status='pass',actual_pid_consumed=fault!='consumed',
+        target_date=DAY,selected_release_commit=OLD,release_root=str(previous),manifest_sha256='sealed-manifest',
+        handoff_sha256=handoff._sha(prior_path),pid_identity=handoff._identity(1))
+    if fault=='pid':consumed['pid_identity']['start_ticks']='changed'
+    _json(consumed_path,consumed)
+    if fault=='manifest':handoff.bootstrap.env_path(DAY).write_text('mutated')
+    kwargs=dict(family='pre_submit_delay',policy_sha='wrong' if fault=='policy' else 'policy',
+        expected=expected,paths={name:name},actual='new')
+    if fault:
+        with pytest.raises(ValueError):handoff.verify_entry_consumer_code(DAY,**kwargs)
+    else:
+        proof=handoff.verify_entry_consumer_code(DAY,**kwargs)
+        assert proof['policy_effect']=='unchanged' and proof['changed_consumer_paths']==[name]
+        assert not handoff._paths(DAY,NEW)[0].exists()

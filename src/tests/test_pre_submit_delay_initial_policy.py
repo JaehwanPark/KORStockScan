@@ -266,3 +266,47 @@ def test_positive_current_policy_requires_typed_original_native_identity(tmp_pat
         effective_date='2026-10-12',source_sha256=snapshot.source['sha256'],code_contract_sha256=initial.code_contract())
     assert report['census']['native_evaluation_unverified_n'] == (0 if bound else 3)
     assert all(cell['delay_sec'] == (30 if bound else 0) for cell in policy['cells'].values())
+
+
+@pytest.mark.parametrize('fault', [None, 'handoff', 'origin', 'producer', 'other_function', 'dirty', 'source_missing'])
+def test_same_day_consumer_compatibility_keeps_producers_and_original_policy_bound(tmp_path, monkeypatch, fault):
+    import hashlib
+    import subprocess
+    from src.engine.automation import intraday_release_handoff as handoff
+    a='src/engine/sniper_state_handlers.py';b='src/engine/scalping/pre_submit_delay_tuning.py';c='src/engine/scalping/pre_submit_delay_initial_policy.py'
+    old={a:b'def _get_live_entry_arm():\n return 1\ndef safety():\n return False\n',
+         b:b'def prepare_runtime_policy():\n return 1\ndef select():\n return 30\n',c:b'LABEL = 1\n'}
+    new={**old,a:old[a].replace(b'return 1',b'return 2'),b:old[b]+b'def _verify_runtime_code_contract():\n return True\n'}
+    if fault=='producer':new[c]=b'LABEL = 2\n'
+    if fault=='other_function':new[a]=new[a].replace(b'return False',b'return True')
+    expected=initial.digest({p:hashlib.sha256(v).hexdigest() for p,v in old.items()})
+    for p,v in new.items():
+        path=tmp_path/p;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(v)
+    if fault=='dirty':(tmp_path/a).write_bytes(new[a]+b'# uncommitted\n')
+    monkeypatch.setattr(initial,'CONTRACT_PATHS',tuple(old))
+    monkeypatch.setattr(initial,'code_contract',lambda: 'new-hash')
+    monkeypatch.setattr(handoff,'__file__',str(tmp_path/'src/engine/automation/intraday_release_handoff.py'))
+    verifier=tmp_path/'src/engine/automation/intraday_release_handoff.py'
+    verifier.parent.mkdir(parents=True,exist_ok=True);verifier.write_bytes(b'# verifier\n')
+    monkeypatch.setattr(handoff,'_today',lambda *a: None)
+    monkeypatch.setattr(handoff,'_paths',lambda *a: (verifier, verifier))
+    monkeypatch.setattr(handoff,'_selection',lambda **kw: (tmp_path,'new'))
+    monkeypatch.setattr(handoff,'verify',lambda *a: {'status':'fail' if fault=='handoff' else 'pass'})
+    bound=dict(code_contract_sha256=expected,policy_sha256='policy',source_date='2026-10-08',target_date='2026-10-12')
+    monkeypatch.setattr(handoff,'_read',lambda p: {'selected_release_sha':'old','pre_submit_delay_handoff':bound})
+    monkeypatch.setattr(handoff,'_preopen',lambda day: {'selected_release_commit':'wrong' if fault=='origin' else 'old'})
+    def read_git(cmd,**kw):
+        if fault=='source_missing':raise subprocess.CalledProcessError(1,cmd)
+        rev,path=cmd[-1].split(':',1)
+        if path=='src/engine/automation/intraday_release_handoff.py':return b'# verifier\n'
+        return (old if rev=='old' else new)[path]
+    monkeypatch.setattr(subprocess,'check_output',read_git)
+    policy=dict(code_contract_sha256=expected,policy_sha256='policy',source_date='2026-10-08')
+    if fault:
+        with pytest.raises(ValueError):legacy._verify_runtime_code_contract(policy,'2026-10-12')
+    else:
+        receipt=legacy._verify_runtime_code_contract(policy,'2026-10-12')
+        assert receipt['status']=='verified_intraday_consumer_repair'
+        assert receipt['policy_effect']=='unchanged'
+        assert receipt['changed_consumer_paths']==[a,b]
+        assert receipt['code_contract_sha256']==expected

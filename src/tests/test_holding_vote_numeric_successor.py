@@ -886,3 +886,63 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
     rejected = experiment.native_research(tmp_path, "2026-10-08")
     assert rejected["status"] == "source_gap" and rejected["selected_cells"] == {}
     assert rejected["blocker"] == "holding_vote_frozen_contract_invalid"
+
+
+@pytest.mark.parametrize('mode', ['carry', 'carry_unverified', 'successor'])
+def test_consumer_repair_preserves_only_verified_same_day_incumbent(tmp_path, monkeypatch, mode):
+    from src.engine.automation import intraday_release_handoff as handoff
+    _, _, _, _, _, _, numeric = fixture(tmp_path)
+    if mode != 'successor':numeric['selected_cells'] = {}
+    bundle=policy.create_successor(source_date='2026-10-08',target_date='2026-10-12',
+        source_report_sha256='a'*64,replay={'vote_numeric_research':numeric},source_quality=EMPTY_SOURCE_QUALITY)
+    original=copy.deepcopy(bundle)
+    monkeypatch.setattr(experiment,'code_sha',lambda:'new-generation')
+    seen=[]
+    def verify(day, **kw):
+        seen.append((day,kw))
+        if mode=='carry_unverified':raise ValueError('unverified')
+        assert kw['expected']==original['code_sha256'] and kw['policy_sha']==original['bundle_sha256']
+        assert kw['family']=='holding_vote'
+        assert kw['paths']['sniper_state_handlers.py']=='src/engine/sniper_state_handlers.py'
+    monkeypatch.setattr(handoff,'verify_entry_consumer_code',verify)
+    if mode=='carry':
+        assert policy.validate_successor(bundle,target_date='2026-10-12')==original
+        assert len(seen)==1
+    else:
+        with pytest.raises(ValueError):policy.validate_successor(bundle,target_date='2026-10-12')
+        assert len(seen)==(0 if mode=='successor' else 1)
+
+
+def test_consumer_compatible_incumbent_still_reconstructs_exact_source(tmp_path, monkeypatch):
+    from src.engine.automation import intraday_release_handoff as handoff, postclose_summary_handoff as summary
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+    _, _, _, _, _, _, numeric = fixture(tmp_path)
+    numeric['selected_cells']={}
+    replay=summarize_holding_path_votes([],load_events=lambda _:[],model='gpt-5.4-nano')
+    replay['vote_numeric_research']=numeric
+    observation=dict(date='2026-10-08',holding_path_vote_replay=replay,completed_population_quality=dict(
+        complete=False,db_completed_main_ids=[],strict_completed_position_ids=[],source_gap_ids=[],
+        excluded_all_reasons={},source_gap_dates=[]))
+    source=write(tmp_path/'report/monitor_snapshots/holding_exit_observation_2026-10-08.json',observation)
+    bundle=policy.create_bundle(source_date='2026-10-08',target_date='2026-10-12',source_report_sha256=source['sha256'],
+        replay=replay,source_quality=policy.source_quality_from_observation(observation))
+    write(policy.policy_path(tmp_path,'2026-10-12'),bundle)
+    write(tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json',dict(
+        holding_path_vote_policy=dict(status=policy.publication_status(bundle),source_date='2026-10-08',
+        target_date='2026-10-12',bundle_sha256=bundle['bundle_sha256'],policy_set_sha256=bundle['policy_set_sha256'],
+        source_report_sha256=source['sha256'],cell_count=12)))
+    monkeypatch.setattr(summary,'stage_receipt_issues',lambda *a,**kw:[])
+    monkeypatch.setattr(handoff,'verify_entry_consumer_code',lambda *a,**kw:{'status':'verified_intraday_consumer_repair'})
+    monkeypatch.setattr(experiment,'code_sha',lambda:'new-generation')
+    monkeypatch.setattr(bootstrap,'DATA_DIR',tmp_path)
+    env,receipt=bootstrap._holding_vote_handoff('2026-10-12')
+    assert receipt['status']=='verified_incumbent_carried' and env[policy.ENV_SHA]==bundle['bundle_sha256']
+    selected,loaded=policy.runtime_policy_from_env(env,data_root=tmp_path,active_date='2026-10-12')
+    assert loaded['status']=='verified_incumbent_loaded' and selected
+    mutated=copy.deepcopy(bundle);mutated['source_quality']['strict_population_count']=123
+    mutated['bundle_sha256']=policy.digest({k:v for k,v in mutated.items() if k!='bundle_sha256'})
+    with pytest.raises(ValueError,match='source_semantics_mismatch'):
+        policy.verify_source_handoff(tmp_path,mutated)
+    Path(source['path']).write_text('{}')
+    with pytest.raises(ValueError,match='source_report_hash_mismatch'):
+        policy.verify_source_handoff(tmp_path,bundle)

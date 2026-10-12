@@ -124,6 +124,110 @@ def _preopen(day):
     return value
 
 
+def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actual):
+    """Verify frozen policy custody and a narrow, immutable entry-only code delta.
+
+    This also works before prepare seals its own handoff: the predecessor must
+    have consumed the original manifest and still be the exact live process.
+    No policy bytes, producer selection or research acceptance are rewritten.
+    """
+    import ast
+    _today(day, None)
+    root, commit = _selection(require_selected_cwd=False)
+    if Path(__file__).resolve().parents[3] != root:
+        raise ValueError('entry_consumer_release_mismatch')
+    manifest = _read(bootstrap.manifest_path(day))
+    original = _preopen(day)
+    origin = manifest.get('selected_release_sha')
+    if not origin or origin != original.get('selected_release_commit'):
+        raise ValueError('entry_consumer_origin_invalid')
+    if family == 'pre_submit_delay':
+        bound = manifest.get('pre_submit_delay_handoff') or {}
+        if (bound.get('policy_sha256') != policy_sha
+                or bound.get('code_contract_sha256') != expected or bound.get('target_date') != day):
+            raise ValueError('entry_consumer_policy_binding_invalid')
+    elif family == 'holding_vote':
+        bound = manifest.get('holding_path_vote_policy_receipt') or {}
+        if bound.get('bundle_sha256') != policy_sha or bound.get('target_date') != day:
+            raise ValueError('entry_consumer_policy_binding_invalid')
+    else:
+        raise ValueError('entry_consumer_family_invalid')
+    current_path, _ = _paths(day, commit)
+    if current_path.exists():
+        checked = verify(day, commit)
+        if checked.get('status') != 'pass':
+            raise ValueError('entry_consumer_handoff_invalid')
+    else:
+        selection = _read(DATA_DIR / 'runtime/runtime_release_selection.json')
+        previous = selection.get('previous_git_commit')
+        prior_path, consumed_path = _paths(day, previous)
+        prior, consumed = _read(prior_path), _read(consumed_path)
+        if (selection.get('approved_by') != 'user'
+                or selection.get('approval_scope') != 'machine_auxiliary_path_repair_deploy_and_restart'
+                or prior.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+                or prior.get('authority') != CONFIRM or prior.get('status') != 'prepared_verified'
+                or prior.get('target_date') != day or prior.get('selected_release_commit') != previous
+                or prior.get('release_root') != selection.get('previous_release_root')
+                or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+                or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+                or consumed.get('target_date') != day or consumed.get('selected_release_commit') != previous
+                or consumed.get('handoff_sha256') != _sha(prior_path)
+                or consumed.get('release_root') != prior.get('release_root')
+                or consumed.get('manifest_sha256') != manifest.get('manifest_sha256')):
+            raise ValueError('entry_consumer_predecessor_invalid')
+        identity = consumed.get('pid_identity') or {}
+        if (not identity.get('start_ticks')
+                or identity.get('cwd') != str(Path(prior['release_root']) / 'src')
+                or _identity(identity.get('pid')) != identity):
+            raise ValueError('entry_consumer_predecessor_pid_changed')
+        required = (bootstrap.manifest_path(day), bootstrap.env_path(day), _preopen_path(day))
+        if any(prior.get('frozen_files', {}).get(str(p)) != _sha(p) for p in required):
+            raise ValueError('entry_consumer_original_generation_changed')
+    allowed = {
+        'src/engine/sniper_state_handlers.py': {'_resolve_watching_state_change_refresh', '_get_live_entry_arm'},
+        'src/engine/scalping/pre_submit_delay_tuning.py': {'_verify_runtime_code_contract', 'prepare_runtime_policy'},
+        'src/engine/automation/runtime_policy_bootstrap.py': {'_pre_submit_delay_handoff'},
+        'src/engine/scalping/holding_vote_experiment.py': {'_code_paths', 'code_sha'},
+        'src/engine/scalping/holding_path_vote_policy.py': {'validate_successor', 'verify_source_handoff'},
+    }
+    def revision_bytes(revision, name):
+        try:
+            return subprocess.check_output(['git', '-C', str(root), 'show', revision + ':' + name],
+                                           stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError('entry_consumer_code_source_missing') from exc
+    own_name = 'src/engine/automation/intraday_release_handoff.py'
+    if (root / own_name).read_bytes() != revision_bytes(commit, own_name):
+        raise ValueError('entry_consumer_dirty_verifier')
+    original_hashes, changed = {}, []
+    for key, name in paths.items():
+        before = revision_bytes(origin, name)
+        after = (root / name).read_bytes()
+        if after != revision_bytes(commit, name):
+            raise ValueError('entry_consumer_dirty_release')
+        original_hashes[key] = hashlib.sha256(before).hexdigest()
+        if before == after:
+            continue
+        if name not in allowed:
+            raise ValueError('entry_consumer_producer_changed:' + name)
+        def projection(raw):
+            tree = ast.parse(raw)
+            tree.body = [node for node in tree.body if not (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in allowed[name])]
+            return ast.dump(tree, include_attributes=False)
+        if projection(before) != projection(after):
+            raise ValueError('entry_consumer_unreviewed_change:' + name)
+        changed.append(name)
+    original_digest = hashlib.sha256(json.dumps(original_hashes, sort_keys=True,
+        separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode('ascii')).hexdigest()
+    if original_digest != expected:
+        raise ValueError('entry_consumer_original_code_contract_invalid')
+    return dict(status='verified_intraday_consumer_repair', target_date=day,
+        policy_sha256=policy_sha, origin_commit=origin, release_commit=commit,
+        code_contract_sha256=expected, runtime_code_contract_sha256=actual,
+        changed_consumer_paths=changed, policy_effect='unchanged')
+
+
 def _checked_bootstrap(day, pid):
     check = bootstrap.verify_bootstrap(day, pid=pid, write=False)
     if check.get("status") != "pass":

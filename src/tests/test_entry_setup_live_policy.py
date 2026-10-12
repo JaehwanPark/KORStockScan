@@ -1645,3 +1645,33 @@ def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tm
     if parent_state == "current":
         assert projection["threshold_policy"]["thresholds"]["minimum_micro_net_aggressive_delta_10t"] == 7.0
         assert projection["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
+
+
+def test_initial_resolver_uses_validated_readonly_components(monkeypatch, tmp_path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    _pin_auto_promotion(monkeypatch, tmp_path)
+    bundle = native._freeze(dict(source_date=SOURCE_DATE, target_date=TARGET_DATE,
+        bundle_sha256='b'*64, adoption_basis='operator_initial', machine_disposition='selected',
+        ai_policy=dict(prompt_version=native.AI_VERSION, system_prompt='prompt',
+                       system_prompt_sha256='p'*64, variant=native.AI_VARIANT),
+        machine_policy={'thresholds': {'same': 1}}, historical_context={},
+        continuous_reversal={'auxiliary_cells': {'unchanged': []}}))
+    calls=[]
+    def load(**kw):
+        calls.append(kw)
+        assert kw['_immutable'] is True
+        return bundle
+    monkeypatch.setattr(native, 'load_effective', load)
+    result = policy.resolve_live_prompt_policy(
+        configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue='KRX', session_bucket='KRX_REGULAR', position_tag='SCANNER', strategy='SCALPING',
+        now=datetime(2026,8,7,10,0,tzinfo=policy.KST))
+    assert result['enabled'] is True
+    assert len(calls)==1
+    assert result['continuous_reversal'] is bundle['continuous_reversal']
+    with pytest.raises(TypeError, match='immutable'):
+        result['continuous_reversal']['auxiliary_cells']['unchanged'].append('mutation')
+    result['continuous_reversal_assessment'] = {'action':'BLOCK'}
+    assert 'continuous_reversal_assessment' not in bundle

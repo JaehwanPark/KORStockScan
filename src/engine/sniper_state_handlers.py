@@ -49377,6 +49377,14 @@ def _resolve_watching_state_change_refresh(
         except (ValueError,TypeError,KeyError,OSError) as exc:
             from src.engine.monitoring.runtime_performance import failure
             failure('policy_refresh', type(exc).__name__ + ':' + str(exc))
+    prior_machine = (stock or {}).get('last_watching_ai_machine_primary_fields') or {}
+    if (str(prior_machine.get('entry_mechanistic_policy_version') or '').startswith(
+            'continuous_reversal_policy_v') and _async_entry_deadline_expired(stock)):
+        # An old PASS cannot authorize another submission pass while waiting
+        # for the next native signal. The fresh-claim branch above remains the
+        # only acceleration path; do not renew the original deadline/cooldown.
+        return {"allowed": False, "reason": "expired_entry_decision_wait_native_signal",
+                "suppress_normal_refresh": True, "signature": {}}
     if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
         return {"allowed": False, "reason": "disabled", "signature": {}}
     if last_ai_time <= 0:
@@ -72533,7 +72541,7 @@ def _get_live_entry_arm(stock, code):
         return None
     expires_at = float(stock.get("entry_armed_until", 0) or 0)
     now_ts = time.time()
-    if expires_at <= now_ts:
+    if expires_at <= now_ts or _async_entry_deadline_expired(stock):
         armed_at = float(stock.get("entry_armed_at", 0) or 0)
         resume_count = int(stock.get("entry_armed_resume_count", 0) or 0)
         waited_sec = max(0.0, now_ts - armed_at) if armed_at > 0 else 0.0

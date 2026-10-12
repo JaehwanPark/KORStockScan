@@ -339,12 +339,31 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_de
                     or Path(proof['root']).is_symlink()
                     or not Path(proof['contract']['performance_receipt']['path']).resolve().is_relative_to((root/'report/holding_path_vote_research').resolve())):
                 raise ValueError('holding_vote_research_native_path_invalid')
+    replay = observation.get("holding_path_vote_replay") or {}
+    preserved_code = None
+    if bundle.get('schema') == SUCCESSOR_SCHEMA:
+        from .holding_vote_experiment import code_sha
+        current_code = code_sha()
+        if bundle.get('code_sha256') != current_code:
+            validate_successor(bundle, target_date=bundle['target_date'])
+            numeric = replay.get('vote_numeric_research') or {}
+            if (bundle.get('selection_mode') != 'incumbent_carry'
+                    or numeric.get('code_sha256') != bundle.get('code_sha256')
+                    or numeric.get('selected_cells')):
+                raise ValueError('holding_vote_consumer_source_code_invalid')
+            preserved_code = bundle['code_sha256']
+            # Reconstruct with the current unchanged selector, then restore
+            # only the verified original code identity for exact comparison.
+            replay = {**replay, 'vote_numeric_research': {**numeric, 'code_sha256': current_code}}
     expected = create_bundle(
         source_date=source_date, target_date=bundle["target_date"],
         source_report_sha256=bundle["source_report_sha256"],
-        replay=observation.get("holding_path_vote_replay") or {},
+        replay=replay,
         source_quality=source_quality_from_observation(observation),
     )
+    if preserved_code:
+        expected['code_sha256'] = preserved_code
+        expected['bundle_sha256'] = digest({k:v for k,v in expected.items() if k != 'bundle_sha256'})
     if bundle.get("prompt_version") == PATH_PROMPT_VERSION and bundle != expected:
         raise ValueError("holding_vote_policy_source_semantics_mismatch")
     if bundle.get("prompt_version") == "holding_path_vote_v10":
@@ -482,11 +501,22 @@ def create_successor(*,source_date,target_date,source_report_sha256,replay,sourc
 
 def validate_successor(bundle, *,target_date,source_report_sha256=None):
     from .holding_vote_experiment import code_sha,grid,verify_receipt,source_generation_sha
+    current_code = code_sha()
+    if bundle.get('code_sha256') != current_code:
+        # Only the already-consumed incumbent is preserved; new research and
+        # numerical successor comparisons still require their exact code.
+        if bundle.get('selection_mode') != 'incumbent_carry':
+            raise ValueError('holding_vote_successor_code_changed')
+        from .holding_vote_experiment import _code_paths
+        from src.engine.automation.intraday_release_handoff import verify_entry_consumer_code
+        verify_entry_consumer_code(target_date, family='holding_vote',
+            policy_sha=bundle.get('bundle_sha256'), expected=bundle.get('code_sha256'),
+            paths={name: 'src/engine/' + name for name in _code_paths()}, actual=current_code)
     if (bundle.get('schema')!=SUCCESSOR_SCHEMA or bundle.get('bundle_sha256')!=digest({k:v for k,v in bundle.items() if k!='bundle_sha256'})
         or date.fromisoformat(bundle['source_date']).isoformat()!=bundle['source_date']
         or date.fromisoformat(target_date).isoformat()!=target_date
         or not START_DATE<=bundle['source_date']<target_date or bundle.get('target_date')!=target_date
-        or bundle.get('valid_until')!=target_date or bundle.get('code_sha256')!=code_sha()
+        or bundle.get('valid_until')!=target_date
         or bundle.get('selection_authority')!='frozen_holding_vote_numeric_exit_experiment'
         or bundle.get('allowed_runtime_apply') is not True or bundle.get('validated_realized_edge') is not False
         or bundle.get('actual_profit_verified') is not False or bundle.get('realized_paired_ev_krw') is not None

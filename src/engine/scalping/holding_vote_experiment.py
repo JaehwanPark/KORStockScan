@@ -35,8 +35,7 @@ NUMERIC_KEYS = {
 }
 
 
-def code_sha():
-    engine = Path(__file__).parents[1]
+def _code_paths():
     names = (
         "scalping/holding_vote_experiment.py",
         "scalping/holding_vote_exit_models.py",
@@ -56,9 +55,13 @@ def code_sha():
         "lifecycle/broker_cost_reconciliation.py",
         "lifecycle/research_storage.py",
     )
-    from src.engine.lifecycle.holding_window_generation import cached_code_generation
+    return names + ("lifecycle/holding_window_generation.py",)
 
-    names += ("lifecycle/holding_window_generation.py",)
+
+def code_sha():
+    engine = Path(__file__).parents[1]
+    names = _code_paths()
+    from src.engine.lifecycle.holding_window_generation import cached_code_generation
     values = cached_code_generation([engine / name for name in names])
     return digest({name: values[str(engine / name)] for name in names})
 

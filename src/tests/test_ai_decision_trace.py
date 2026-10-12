@@ -2912,3 +2912,36 @@ def test_strategy_capture_exemption_does_not_allow_credentials(wrapper):
         safe, redacted = trace.sanitize_ai_trace_value({wrapper: {"strategy_raw_input": {
             "runtime_context": {"entry_adm": {"cache_token": "entry_adm:v1:public"}}}}})
         assert redacted is True
+
+
+@pytest.mark.parametrize('errors', [['union_pass_support_invalid'], ['reversal_all_requested_signals_invalidated']])
+def test_native_auxiliary_rejection_retains_exact_errors_without_legacy_adapter(monkeypatch, tmp_path, errors):
+    _enable(monkeypatch, tmp_path)
+    fields = dict(entry_ai_contract_valid=False, entry_ai_contract_errors=errors,
+                  entry_ai_advisory_contract_valid=False, entry_ai_advisory_contract_errors=errors)
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='native-rejection', action='WAIT',
+        provider_called=True, entry_ai_raw_risk_verdict='PASS',
+        entry_ai_screen_status='response_invalid', continuous_reversal_applied=True,
+        semantic_validation_status='rejected', **fields),
+        prompt_type='scalping_entry', prompt_version='continuous_reversal_union_auxiliary_v3',
+        result_source='live', provider_called=True)
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    pending = _rows(trace._outcome_path(trace._date_text()))[0]
+    for key, value in fields.items():
+        assert row[key] == pending[key] == value
+    assert row['action'] == 'WAIT'
+    assert row['entry_ai_screen_status'] == 'response_invalid'
+
+
+def test_native_rejection_errors_are_redacted_before_trace_and_pending(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    secret='sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='native-rejection-redacted', action='WAIT',
+        provider_called=True, entry_ai_contract_errors=['provider echo '+secret],
+        entry_ai_screen_status='response_invalid', continuous_reversal_applied=True),
+        prompt_type='scalping_entry', prompt_version='continuous_reversal_union_auxiliary_v3',
+        result_source='live', provider_called=True)
+    row=_rows(trace._trace_path(trace._date_text()))[0]
+    pending=_rows(trace._outcome_path(trace._date_text()))[0]
+    assert secret not in json.dumps(row) and secret not in json.dumps(pending)
+    assert row['trace_storage_redacted'] is True

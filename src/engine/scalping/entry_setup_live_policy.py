@@ -2207,7 +2207,13 @@ def resolve_live_prompt_policy(
 
             try:
                 initial = for_cohort(
-                    load_effective(data_root=DATA_DIR, target_date=target_date), cohort
+                    # Resolve against the validated immutable view. Only the
+                    # small result envelope is mutable; policy components are
+                    # read-only, as in the existing verified_evaluation scope.
+                    # Avoid copying every market's historical policy graph
+                    # on the machine-to-AI deadline.
+                    load_effective(data_root=DATA_DIR, target_date=target_date,
+                                   _immutable=True), cohort
                 )
             except (ValueError, OSError, TypeError, KeyError) as exc:
                 result.update(

@@ -130,7 +130,8 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
             report_file, policy_file, _, manifest = committed_paths(DATA_DIR, source_day)
             verify_source(DATA_DIR, _read(report_file))
             if manifest.get('code_contract_sha256') != code_contract():
-                raise ValueError('initial_delay_code_contract_changed')
+                from src.engine.scalping.pre_submit_delay_tuning import _verify_runtime_code_contract
+                _verify_runtime_code_contract(_read(policy_file), target_date)
             initial_policy, initial_report = _read(policy_file), _read(report_file)
             if not initial_policy["effective_from"] <= target_date <= initial_policy["expires_on"]:
                 continue

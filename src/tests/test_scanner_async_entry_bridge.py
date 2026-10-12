@@ -1986,3 +1986,88 @@ def test_scanner_entry_events_inherit_registered_canonical_venue(monkeypatch):
         emitted[-1]["fields"]["venue_resolution"]
         == "consistent_explicit:payload.effective_venue"
     )
+
+
+def _expired_bound_pass():
+    return dict(code='036930', status='WATCHING',
+        last_watching_ai_decision_trace_id='old-pass',
+        last_watching_ai_machine_primary_fields={'evaluation_attempt_id': 'old-attempt',
+            'entry_mechanistic_policy_version': 'continuous_reversal_policy_v6'},
+        _async_entry_decision_deadline=dict(evaluation_attempt_id='old-attempt',
+            ai_decision_trace_id='old-pass', deadline_epoch=time.time()-1,
+            deadline_perf=time.perf_counter()-1))
+
+
+def test_expired_pass_waits_for_native_signal_without_reusing_buy(monkeypatch):
+    from src.engine.scalping import reversal_evaluation_context as context
+    from src.engine.scalping import continuous_reversal as reversal
+    monkeypatch.setattr(context, 'prepare', lambda **kw: None)
+    monkeypatch.setattr(reversal, 'current_snapshot', lambda *a, **kw: None)
+    stock = _expired_bound_pass()
+    stock['last_watching_ai_action'] = 'BUY'
+    result = handlers._resolve_watching_state_change_refresh(
+        stock, {}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
+    assert result['suppress_normal_refresh'] is True
+    assert result['reason'] == 'expired_entry_decision_wait_native_signal'
+    assert stock['last_watching_ai_action'] == 'BUY'  # Original evidence retained.
+    stock['last_watching_ai_machine_primary_fields'] = {'evaluation_attempt_id': 'successor'}
+    assert not handlers._async_entry_deadline_expired(stock)
+
+
+def test_expired_pass_does_not_suppress_fresh_native_signal(monkeypatch):
+    from src.engine.scalping import reversal_evaluation_context as context
+    from src.engine.scalping import continuous_reversal as reversal
+    monkeypatch.setattr(context, 'prepare', lambda **kw: {'continuous_reversal': {'schema': 'continuous_reversal_policy_v1'}})
+    monkeypatch.setattr(reversal, 'current_snapshot', lambda *a, **kw: ({'event_id':'new'}, {}))
+    result = handlers._resolve_watching_state_change_refresh(
+        _expired_bound_pass(), {'last_realtime_type_item': {'0B': '036930_AL'}},
+        now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
+    assert result['allowed'] and result['event_id'] == 'new'
+    assert not result.get('suppress_normal_refresh')
+
+
+def test_entry_arm_cannot_outlive_bound_machine_pass(monkeypatch):
+    stock = _expired_bound_pass()
+    stock.update(entry_armed=True, entry_armed_until=time.time()+20,
+                 entry_armed_at=time.time()-1, historical_custody='preserved')
+    events=[]
+    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **kw: events.append((a,kw)))
+    assert handlers._get_live_entry_arm(stock, '036930') is None
+    assert not stock.get('entry_armed')
+    assert stock['historical_custody'] == 'preserved'
+    assert stock['last_watching_ai_decision_trace_id'] == 'old-pass'
+    assert len(events) == 1
+
+
+def test_expired_pass_allows_new_v6_claim_without_changing_deadline(monkeypatch):
+    from src.engine.scalping import reversal_evaluation_context as context
+    from src.engine.scalping import reversal_source_diagnostics as diagnostics
+    monkeypatch.setattr(context, 'prepare', lambda **kw: {
+        'continuous_reversal': {'schema': 'continuous_reversal_policy_v6', 'family_sha256': 'f'*64}})
+    claim = {'token':'new', 'snapshot': ({'event_id':'new-v6'}, {})}
+    monkeypatch.setattr(diagnostics, 'claim_snapshot_with_receipt', lambda *a, **kw: claim)
+    stock=_expired_bound_pass()
+    bound=dict(stock['_async_entry_decision_deadline'])
+    r=handlers._resolve_watching_state_change_refresh(stock,
+        {'last_realtime_type_item': {'0B': '036930_AL'}}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
+    assert r['allowed'] and stock['_continuous_reversal_pending_claim'] is claim
+    assert stock['_async_entry_decision_deadline'] == bound
+
+
+def test_expired_non_native_decision_keeps_legacy_refresh(monkeypatch):
+    from src.engine.scalping import reversal_evaluation_context as context
+    from src.engine.scalping import continuous_reversal as reversal
+    monkeypatch.setattr(context, 'prepare', lambda **kw: None)
+    monkeypatch.setattr(reversal, 'current_snapshot', lambda *a, **kw: None)
+    stock=_expired_bound_pass()
+    stock['last_watching_ai_machine_primary_fields'].pop('entry_mechanistic_policy_version')
+    r=handlers._resolve_watching_state_change_refresh(stock, {}, now_ts=time.time(), last_ai_time=0, cooldown_sec=60)
+    assert not r.get('suppress_normal_refresh')
+
+
+def test_live_bound_pass_keeps_original_arm(monkeypatch):
+    stock=_expired_bound_pass()
+    stock['_async_entry_decision_deadline'].update(deadline_epoch=time.time()+5, deadline_perf=time.perf_counter()+5)
+    stock.update(entry_armed=True, entry_armed_until=time.time()+20, entry_armed_ai_score=75)
+    assert handlers._get_live_entry_arm(stock,'036930')['ai_score']==75
+    assert stock['entry_armed']
