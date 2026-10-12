@@ -122,6 +122,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (15, 20),
         "mode": "recurring",
         "owner_terminal_recovery": True,
+        "owner_log_labels": ("buy_funnel_sentinel", "buy funnel sentinel"),
         "interval_min": 5,
         "critical": False,
         "trading_day_only": True,
@@ -495,7 +496,7 @@ class CronCompletionDetector(BaseDetector):
             else:
                 if not has_matching_date:
                     details[f"{jid}_status"] = "unknown"
-                elif job.get("owner_terminal_recovery") and (recovery_state := self._recurring_owner_recovery(today_lines, jid)):
+                elif job.get("owner_terminal_recovery") and (recovery_state := self._recurring_owner_recovery(today_lines, job.get("owner_log_labels", (jid,)))):
                     details[f"{jid}_status"] = recovery_state
                     details[f"{jid}_recovery_note"] = "latest owner DONE supersedes earlier failures; newer START remains in progress"
                     details[f"{jid}_historical_errors_preserved"] = has_error
@@ -799,9 +800,11 @@ class CronCompletionDetector(BaseDetector):
         )
 
     @staticmethod
-    def _recurring_owner_recovery(today_lines: str, owner: str) -> str | None:
+    def _recurring_owner_recovery(today_lines: str, owner: str | tuple[str, ...]) -> str | None:
         """Only a real owner DONE closes earlier failures; SKIP never does."""
-        pattern = re.compile(rf"^\[(DONE|OK|SUCCESS|COMPLETED|FAIL|ERROR|CRITICAL|START|BEGIN)\]\s+{re.escape(owner)}\b", re.IGNORECASE)
+        labels = (owner,) if isinstance(owner, str) else owner
+        owner_pattern = "(?:" + "|".join(re.escape(label) for label in labels) + ")"
+        pattern = re.compile(rf"^\[(DONE|OK|SUCCESS|COMPLETED|FAIL|ERROR|CRITICAL|START|BEGIN)\]\s+{owner_pattern}\b", re.IGNORECASE)
         lines = today_lines.splitlines()
         markers = [(i, match.group(1).upper()) for i, line in enumerate(lines)
                    if (match := pattern.search(line))]

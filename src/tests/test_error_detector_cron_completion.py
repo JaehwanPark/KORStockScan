@@ -30,13 +30,14 @@ def test_finalization_detector_window_precedes_preopen_scanner():
     (['FAIL', 'DONE', 'GENERIC_ERROR'], 'warning'),
     (['START'], 'unknown'),
 ])
-def test_buy_funnel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected):
+@pytest.mark.parametrize('label', ['buy_funnel_sentinel', 'buy funnel sentinel'])
+def test_buy_funnel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected, label):
     import src.engine.error_detectors.cron_completion as cc
     job = next(dict(job) for job in CRON_JOB_REGISTRY if job['id'] == 'buy_funnel_sentinel')
     log = tmp_path / job['log']; log.parent.mkdir()
     lines = []
     for marker in markers:
-        owner = 'other_job' if marker == 'OTHER_DONE' else 'buy_funnel_sentinel'
+        owner = 'other_job' if marker == 'OTHER_DONE' else label
         kind = 'DONE' if marker == 'OTHER_DONE' else 'ERROR' if marker == 'GENERIC_ERROR' else marker
         lines.append(f'[{kind}] {owner} target_date=2026-10-12')
     log.write_text('\n'.join(lines)+'\n')
