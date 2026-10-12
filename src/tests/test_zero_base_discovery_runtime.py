@@ -16,6 +16,14 @@ from src.scanners.zero_base_discovery_runtime import (
 T0 = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
 
 
+@pytest.fixture(autouse=True)
+def _selected_fixture_requirements(monkeypatch):
+    # These are orchestration tests; real selected definitions are exercised
+    # separately by the native source/readiness contract tests.
+    from src.engine.scalping import reversal_source_diagnostics as D
+    monkeypatch.setattr(D, 'residence_requirements', lambda *a: {'minimum_seconds': 0})
+
+
 class Bus:
     def __init__(self, *, consumer=True):
         # Existing orchestration fixtures model an admitted local worker.
@@ -33,6 +41,9 @@ class Bus:
 
     def has_subscribers(self, event):
         return bool(self.callbacks.get(event))
+
+    def consumer_readiness(self, event):
+        return {'ready': self.has_subscribers(event), 'reason': 'fixture_ready'}
 
     def publish_with_dispatch_count(self, event, payload):
         self.events.append((event, payload))
@@ -58,13 +69,16 @@ def test_real_bus_startup_without_consumer_never_reserves_physical_capacity(tmp_
     assert runtime.queue.in_flight_count() == 0
     assert runtime.queue.snapshot()['candidates'][0]['handoff_id'] == ''
     requests = []
-    bus.subscribe(PROBE_REQUEST_EVENT, requests.append)
+    receiver = lambda payload: requests.append(payload)
+    receiver.runtime_readiness = lambda: {'ready': True, 'reason': 'fixture_ready'}
+    bus.subscribe(PROBE_REQUEST_EVENT, receiver)
     assert runtime.dispatch_due_probes(now_epoch=T0+2)['probe_requested_count'] == 1
     assert len(requests) == runtime.queue.in_flight_count() == 1
 
 
 def test_consumer_disappearing_during_persist_closes_only_unstarted_claim(tmp_path, monkeypatch):
     bus = _isolated_bus(); receiver = lambda payload: pytest.fail('removed consumer ran')
+    receiver.runtime_readiness = lambda: {'ready': True, 'reason': 'fixture_ready'}
     bus.subscribe(PROBE_REQUEST_EVENT, receiver)
     runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
     persist = runtime._persist

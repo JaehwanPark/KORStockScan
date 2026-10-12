@@ -12,6 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import math
 import hashlib
+import json
 import os
 import threading
 import time
@@ -80,6 +81,8 @@ def record_async_disposition(result, disposition, reason, **facts):
                 entry_auxiliary_policy_sha256=payload.get('entry_ai_component_sha256') or result.origin_fields.get('entry_auxiliary_policy_sha256'),
                 async_origin_deadline_epoch=result.deadline_epoch,
                 async_worker_completed_epoch=result.completed_epoch,
+                entry_local_stage_clocks=json.dumps(thaw_scanner_async_value(payload.get('entry_local_stage_clocks') or {}),
+                    sort_keys=True, separators=(',', ':')),
                 async_disposition_epoch=time.time(), async_producer_pid=os.getpid(),
                 async_request_source_date=datetime.fromtimestamp(
                     getattr(result, 'submitted_epoch', result.completed_epoch),

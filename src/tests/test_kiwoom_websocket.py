@@ -578,6 +578,13 @@ def test_micro_observer_preserves_trusted_trade_ingress_clock(
         assert latency['provider_to_packet_ms'] == (-2000 if trusted else None)
         assert route['observed_epoch'] == (now - 2 if trusted else now)
     assert "micro_observer_packet_received_at_ms" not in manager.realtime_data["005930"]
+    route = snapshot['realtime_type_snapshots_by_route']['KRX|krx_only'][realtime_type]
+    latency = route['market_source_latency']
+    assert latency['item'] == '005930' and latency['route_sequence'] == route['route_sequence']
+    assert latency['packet_to_normalization_ms'] == (2000 if trusted else None)
+    if realtime_type == '0D':
+        assert latency['provider_to_packet_ms'] is None
+        assert 'native_ingest_returned_epoch' not in latency
 
 
 def test_raw_observation_is_lossless_while_dispatch_keeps_full_latest_history(

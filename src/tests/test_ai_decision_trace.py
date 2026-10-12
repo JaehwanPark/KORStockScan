@@ -71,6 +71,22 @@ def test_decision_trace_keeps_existing_input_stage_timing_with_exact_attempt(mon
     assert row['actual_order_submitted'] is False
 
 
+@pytest.mark.parametrize('source,cache_hit', [('live',False),('timeout',False),('exception',False),('cache',True)])
+def test_local_stage_clocks_keep_exact_failure_identity_and_reject_untrusted_fields(monkeypatch,tmp_path,source,cache_hit):
+    _enable(monkeypatch,tmp_path)
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='failure-clock',action='WAIT',score=50,
+        evaluation_attempt_id='attempt-clock',cache_hit=cache_hit,
+        entry_local_stage_clocks={'analysis_started_perf':100.,'provider_started_perf':101.,
+            'provider_call_seconds':2.7,'failure_observed_perf':103.7,'token':'must-not-be-stored',
+            'response_processing_seconds':float('nan'),'pre_provider_seconds':True}),
+        prompt_type='scalping_entry',prompt_version='fixture',result_source=source,provider_called=True)
+    row=_rows(trace._trace_path(trace._date_text()))[0]
+    assert row['evaluation_attempt_id']=='attempt-clock'
+    assert row['entry_local_stage_clocks']==({} if cache_hit else
+        {'analysis_started_perf':100.,'provider_started_perf':101.,'provider_call_seconds':2.7,'failure_observed_perf':103.7})
+    assert 'must-not-be-stored' not in json.dumps(row)
+
+
 @pytest.mark.parametrize('schema', ['continuous_reversal_claim_source_receipt_v1',
                                    'continuous_reversal_claim_source_receipt_v2',
                                    'continuous_reversal_claim_source_receipt_v3',

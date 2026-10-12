@@ -214,7 +214,13 @@ class ZeroBaseDiscoveryRuntime:
             now_epoch=now_epoch, timeout_sec=60,
         )
         active_claims = self.queue.in_flight_count()
-        consumer_ready = self.event_bus.has_subscribers(PROBE_REQUEST_EVENT)
+        check = getattr(self.event_bus, 'consumer_readiness', None)
+        readiness = (check(PROBE_REQUEST_EVENT) if callable(check) else
+                     {'ready': False, 'reason': 'consumer_readiness_unobserved'})
+        if self._closed:
+            readiness = dict(readiness, ready=False, reason='discovery_runtime_closed')
+        consumer_ready = readiness.get('ready') is True
+        from src.engine.scalping.reversal_source_diagnostics import residence_requirements
         available_slots = max(0, MAX_CONCURRENT_PROBES - active_claims) if consumer_ready else 0
         claims = self.queue.claim(
             now_epoch=now_epoch,
@@ -222,6 +228,7 @@ class ZeroBaseDiscoveryRuntime:
             min_interval_sec=5,
             max_observation_age_sec=MAX_DISCOVERY_OBSERVATION_AGE_SEC,
             eligible_routes=eligible_routes,
+            residence_requirements=residence_requirements,
             activity_claims_per_gainer=(
                 7 if regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
                 else 3
@@ -250,7 +257,7 @@ class ZeroBaseDiscoveryRuntime:
                 )
             attempted = self.event_bus.publish_with_dispatch_count(
                 PROBE_REQUEST_EVENT,
-                {"claim": claim, "candidate": claim},
+                {"claim": claim, "candidate": claim, "consumer_readiness": readiness},
             )
             if attempted:
                 dispatched += 1
@@ -267,6 +274,8 @@ class ZeroBaseDiscoveryRuntime:
         return {
             "probe_requested_count": dispatched,
             "probe_consumer_ready": consumer_ready,
+            "probe_readiness": readiness,
+            "probe_residence_deferred": dict(getattr(self.queue, 'residence_deferred', {})),
             "probe_no_consumer_count": not_dispatched,
             "probe_capacity_limit": MAX_CONCURRENT_PROBES,
             "probe_claims_in_flight_count": self.queue.in_flight_count(),

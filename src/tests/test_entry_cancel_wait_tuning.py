@@ -899,6 +899,8 @@ def test_native_custody_checkpoint_qualifies_main_and_retired_independently(tmp_
             assert checkpoint.enqueue(snapshot, query_generation=checkpoint.journal_generation()) == 'queued'
             assert queue.close(timeout=2)
         assert queue.snapshot()['completed'] == 1
+        assert queue.snapshot()['append_confirmed'] == 1
+        assert queue.snapshot()['append_unobservable'] == 0
         assert queue.snapshot()['unavailable'] == queue.snapshot()['failed'] == 0
         native = json.loads((data/'runtime/main_custody_checkpoints/2026-10-02.json').read_text())
     else:

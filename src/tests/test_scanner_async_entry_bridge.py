@@ -2071,3 +2071,40 @@ def test_live_bound_pass_keeps_original_arm(monkeypatch):
     stock.update(entry_armed=True, entry_armed_until=time.time()+20, entry_armed_ai_score=75)
     assert handlers._get_live_entry_arm(stock,'036930')['ai_score']==75
     assert stock['entry_armed']
+
+
+def test_main_native_rejection_keeps_compact_source_even_if_ack_fails(monkeypatch):
+    stock = dict(code='005930', status='WATCHING', effective_venue='KRX',
+                 venue_resolution='explicit', source_signature='VALUE_TOP')
+    coordinator, generation, result = _retained_fixture(stock)
+    claim = {'token': 'old', 'snapshot': [{'event_id': 'original'}]}
+    result = replace(result, native_claim=claim)
+    coordinator._ready[result.request_id] = result
+    from src.engine.scalping import scanner_async_eval as A, reversal_current_backend as N, reversal_source_diagnostics as D
+    events = []
+    monkeypatch.setattr(A, 'record_async_disposition', lambda r,kind,reason,**facts: events.append((kind,reason,facts)))
+    monkeypatch.setattr(N, 'backend', lambda: SimpleNamespace(_GENERATION='family'))
+    monkeypatch.setattr(handlers, '_fixed_watch_entry_source_route', lambda *a: None)
+    monkeypatch.setattr(handlers, '_scanner_async_quote_is_fresh', lambda *a,**k: True)
+    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a,**k: None)
+    def invalid(*args, receipt_out, **kwargs):
+        receipt_out.update(status='observed', failed_predicates=['ready_membership_present'],
+                           registration_sha256='original-registration', stage='commit_revalidation')
+        raise ValueError('reversal_signal_path_changed')
+    monkeypatch.setattr(D, 'validate_claim_with_receipt', invalid)
+    def broken(*args, **kwargs):
+        stock['_continuous_reversal_pending_claim'] = {'token': 'successor'}
+        raise RuntimeError('ack_failed')
+    monkeypatch.setattr(N, 'acknowledge_any', broken)
+    try:
+        response = handlers._resolve_scanner_async_entry_ai(stock, '005930', {}, None,
+            {'scanner_async_eval_coordinator': coordinator, 'scanner_async_generation': generation,
+             'scanner_async_commit_phase': True}, trigger_reason='fixture', last_ai_time=0, current_ai_score=0)
+        assert response == {'status': 'commit_rejected', 'reason': 'reversal_signal_path_changed'}
+        assert events[0][:2] == ('rejected', 'reversal_signal_path_changed')
+        capsule = json.loads(events[0][2]['native_commit_revalidation'])
+        assert capsule['failed_predicates'] == ['ready_membership_present']
+        assert stock['_continuous_reversal_pending_claim']['token'] == 'successor'
+        assert coordinator.take_completed(generation_id=result.generation_id, cache_key=result.cache_key) is None
+    finally:
+        coordinator.shutdown()

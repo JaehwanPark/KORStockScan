@@ -49,6 +49,7 @@ class Candidate:
     residence_deadline_epoch: float = 0.0
     lease_phase: str = 'closed'
     handoff_id: str = ''
+    residence_wait_since_epoch: float = 0.0
 
 
 class DiscoveryQueue:
@@ -154,6 +155,7 @@ class DiscoveryQueue:
         max_observation_age_sec: float | None = None,
         eligible_routes: set[str] | None = None,
         activity_claims_per_gainer: int = 3,
+        residence_requirements=None,
     ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
         if limit < 0 or min_interval_sec < 0:
@@ -190,7 +192,30 @@ class DiscoveryQueue:
                 row.code,
             ))
         ready = []
+        requirements = {}
+        long_used = sum(r.in_flight and r.residence_deadline_epoch-r.last_claim_epoch > 60
+                        for r in self._candidates.values())
+        allocation = {}
+        self.residence_deferred = {}
         while len(ready) < limit:
+            for rows in ready_by_cohort.values():
+                while rows:
+                    row = rows[0]
+                    key = (row.code, row.route)
+                    if key not in requirements:
+                        requirements[key] = (residence_requirements(row, now_epoch)
+                            if residence_requirements else {'minimum_seconds': 0})
+                    needed = requirements[key].get('minimum_seconds')
+                    valid_requirement = type(needed) in (float, int) and isfinite(needed) and needed >= 0
+                    if (not valid_requirement or needed >= 150
+                            or (needed >= 60 and long_used >= 2)):
+                        reason = ('requirement_unobservable' if not valid_requirement
+                                  else 'beyond_residence_limit' if needed >= 150 else 'long_slot_wait')
+                        row.residence_wait_since_epoch = row.residence_wait_since_epoch or now_epoch
+                        self.residence_deferred[reason] = self.residence_deferred.get(reason, 0)+1
+                        rows.pop(0)
+                    else:
+                        break
             available = [key for key, rows in ready_by_cohort.items() if rows]
             if not available:
                 break
@@ -205,7 +230,12 @@ class DiscoveryQueue:
             preferred = [key for key in available if key[2] == preferred_kind]
             cohort = min(preferred or available,
                          key=lambda key: (cohort_claims[key], key))
-            ready.append(ready_by_cohort[cohort].pop(0))
+            row = ready_by_cohort[cohort].pop(0)
+            ready.append(row)
+            needed = requirements[(row.code, row.route)]['minimum_seconds']
+            residence = 150 if long_used < 2 and (needed >= 60 or residence_requirements is None) else 60
+            allocation[(row.code, row.route)] = residence
+            long_used += int(residence > 60)
             cohort_claims[cohort] += 1
         for candidate in ready:
             candidate.last_claim_epoch = now_epoch
@@ -214,13 +244,11 @@ class DiscoveryQueue:
             candidate.claimed_observed_epoch = candidate.observed_epoch
             candidate.claimed_source_sha256 = candidate.source_sha256
             candidate.residence_deadline_epoch = 0.0
-            long_used = sum(r.in_flight and r.residence_deadline_epoch-r.last_claim_epoch > 60
-                            for r in self._candidates.values())
-            candidate.residence_deadline_epoch = now_epoch + (150 if long_used < 2 else 60)
+            candidate.residence_deadline_epoch = now_epoch + allocation[(candidate.code, candidate.route)]
             candidate.lease_phase = 'observing'
             candidate.handoff_id = uuid.uuid4().hex
         self._claim_sequence += len(ready)
-        return [
+        claims = [
             {
                 "code": row.code,
                 "route": row.route,
@@ -237,9 +265,15 @@ class DiscoveryQueue:
                 "last_claim_epoch": row.last_claim_epoch,
                 "residence_deadline_epoch": row.residence_deadline_epoch,
                 "physical_probe_lease_id": row.handoff_id,
+                "observation_requirements": requirements[(row.code, row.route)],
+                "residence_wait_seconds": max(0, now_epoch-row.residence_wait_since_epoch)
+                    if row.residence_wait_since_epoch else 0,
             }
             for row in ready
         ]
+        for row in ready:
+            row.residence_wait_since_epoch = 0.0
+        return claims
 
     def abandon_expired_claims(self, *, now_epoch: float, timeout_sec: float) -> int:
         if timeout_sec <= 0:
@@ -389,6 +423,7 @@ class DiscoveryQueue:
                         row.last_seen_epoch,
                         row.next_due_epoch,
                         row.last_claim_epoch,
+                        row.residence_wait_since_epoch,
                     )
                 )
                 or row.claim_count < 0

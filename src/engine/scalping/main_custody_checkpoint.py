@@ -41,7 +41,7 @@ def enqueue(snapshot, *, query_generation):
     frozen = {k: sorted(v) if isinstance(v, set) else copy.deepcopy(v)
               for k, v in snapshot.items()}
     answer = _SOURCE_SINK(
-        publish,
+        publish_observation,
         frozen,
         query_generation=query_generation,
         observation_category="main_stop",
@@ -51,6 +51,15 @@ def enqueue(snapshot, *, query_generation):
         if isinstance(answer, dict) and answer.get("status") == "queued"
         else "source_gap"
     )
+
+
+def publish_observation(snapshot, *, query_generation):
+    """Confirm the durable writer result without altering the hashed document."""
+    import os
+    result = publish(snapshot, query_generation=query_generation)
+    return dict(structured_append_succeeded=True, artifact_sha256=result['sha256'],
+        source_date=result['source_date'], producer_pid=os.getpid(),
+        source_status=result['status'], runtime_effect=False)
 
 
 def digest(value):

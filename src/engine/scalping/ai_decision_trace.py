@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -2250,6 +2251,17 @@ def record_ai_decision_trace(
                     "openai_http_timeout_budget_exhausted",
                 )
                 if key in merged
+            },
+            "entry_local_stage_clocks": {
+                key: value for key, value in (
+                    merged.get('entry_local_stage_clocks', {}).items()
+                    if isinstance(merged.get('entry_local_stage_clocks'), dict) else ())
+                if key in {'analysis_started_perf', 'provider_started_perf', 'pre_provider_seconds',
+                    'provider_returned_perf', 'provider_call_seconds', 'annotation_started_perf',
+                    'response_processing_seconds', 'failure_observed_perf', 'failure_processing_seconds',
+                    'analysis_return_perf', 'annotation_and_cache_seconds'}
+                and type(value) in (int, float) and math.isfinite(value)
+                and not bool(merged.get('cache_hit'))
             },
             "response_ms": _safe_number(
                 _optional(

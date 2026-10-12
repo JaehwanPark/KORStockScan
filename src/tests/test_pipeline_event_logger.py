@@ -1679,3 +1679,19 @@ def test_main_stop_source_keeps_one_structured_body_and_text_reference():
     assert _project_fields_for_compact_stream('main_stop_source',fields)==fields
     diagnostic=_project_fields_for_text('main_stop_source',fields)
     assert 'main_stop_source' not in diagnostic and diagnostic['stop_source_sha256']=='a'*64
+
+
+def test_append_outcomes_conserve_completed_and_bound_owner_diagnostics():
+    def confirmed(): return {'structured_append_succeeded': True}
+    def skipped(): return {'status': 'intentionally_not_written', 'reason': 'throttled'}
+    def absent(): return None
+    def failed(): return {'structured_append_succeeded': False}
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        queue = logger_mod.BoundedObservationQueue(executor)
+        for callback in (confirmed, skipped, absent, failed):
+            assert queue.submit(callback)['status'] == 'queued'
+        assert queue.close(timeout=3)
+    stats = queue.snapshot()
+    assert stats['completed'] == stats['append_confirmed'] + stats['intentionally_not_written'] + stats['append_unobservable'] == 3
+    assert stats['queued'] == stats['completed'] + stats['append_failed'] + stats['pending_items'] == 4
+    assert stats['failed'] == 1 and len(stats['outcomes_by_owner']) == 4

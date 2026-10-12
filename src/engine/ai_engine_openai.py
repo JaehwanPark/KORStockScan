@@ -2140,6 +2140,9 @@ class GPTSniperEngine:
     ):
         payload = dict(result or {})
         if cache_hit:
+            # Monotonic timings belong to the original invocation, not this
+            # cache delivery. Parent trace remains the source of those clocks.
+            payload.pop('entry_local_stage_clocks', None)
             parent_trace_id = payload.get("ai_decision_trace_id")
             for trace_key in (
                 "ai_decision_trace_id",
@@ -8806,6 +8809,7 @@ class GPTSniperEngine:
             prompt_profile = "watching"
         economic_source_fields = {}
         analysis_started = time.perf_counter()
+        local_stage_clocks = dict(analysis_started_perf=analysis_started)
         transport_observation = None
         from src.engine.scalping.entry_deadline import EntryDeadline
         entry_budget = EntryDeadline.create(reversal_signal_claim, entry_input_deadline_epoch, entry_input_deadline_perf)
@@ -10759,6 +10763,9 @@ class GPTSniperEngine:
                 entry_budget.require()
             provider_attempted = True
             provider_started_monotonic = time.perf_counter()
+            local_stage_clocks = dict(analysis_started_perf=analysis_started,
+                provider_started_perf=provider_started_monotonic,
+                pre_provider_seconds=provider_started_monotonic-analysis_started)
             result = self._call_openai_safe(
                 prompt,
                 formatted_data,
@@ -10809,6 +10816,9 @@ class GPTSniperEngine:
                    if entry_setup_live_policy.get('continuous_reversal_input') else {}),
             )
             from src.engine.monitoring.runtime_performance import observe as observe_performance
+            local_stage_clocks['provider_returned_perf'] = time.perf_counter()
+            local_stage_clocks['provider_call_seconds'] = (
+                local_stage_clocks['provider_returned_perf']-provider_started_monotonic)
             observe_performance('provider_response', time.perf_counter() - provider_started_monotonic)
             if entry_setup_live_policy.get('continuous_reversal_input'):
                 from src.engine.monitoring.runtime_performance import mark_signal
@@ -10956,6 +10966,12 @@ class GPTSniperEngine:
             result = _merge_runtime_fields(result)
             result["openai_min_interval_wait_ms"] = min_interval_wait_ms
             self._mark_successful_ai_call()
+            local_stage_clocks['annotation_started_perf'] = time.perf_counter()
+            local_stage_clocks['response_processing_seconds'] = (
+                local_stage_clocks['annotation_started_perf']-local_stage_clocks['provider_returned_perf'])
+            # Annotation owns trace/outcome writes; capture its own interval
+            # separately from native/semantic response validation.
+            result['entry_local_stage_clocks'] = dict(local_stage_clocks)
             result = self._annotate_analysis_result(
                 result,
                 prompt_type=prompt_type,
@@ -10981,9 +10997,19 @@ class GPTSniperEngine:
                     result,
                     self._resolve_analysis_cache_ttl(cache_profile),
                 )
+            local_stage_clocks['analysis_return_perf'] = time.perf_counter()
+            local_stage_clocks['annotation_and_cache_seconds'] = (
+                local_stage_clocks['analysis_return_perf']-local_stage_clocks['annotation_started_perf'])
+            result['entry_local_stage_clocks'] = dict(local_stage_clocks)
             return result
 
         except Exception as e:
+            failure_perf = time.perf_counter()
+            provider_start = local_stage_clocks.get('provider_started_perf')
+            if provider_start is not None and 'provider_returned_perf' not in local_stage_clocks:
+                local_stage_clocks['provider_returned_perf'] = failure_perf
+                local_stage_clocks['provider_call_seconds'] = failure_perf-provider_start
+            local_stage_clocks['failure_observed_perf'] = failure_perf
             stage_fields = transport_observation.fields() if transport_observation is not None else {}
             unsent_entry_timeout = (transport_observation is not None
                 and stage_fields['provider_adapter_entered'] and not stage_fields['provider_sdk_started']
@@ -10993,6 +11019,7 @@ class GPTSniperEngine:
                 return {"action":"WAIT", "score":50, "reason":str(e),
                         "provider_called":bool(provider_attempted),
                         "ai_result_source":"entry_deadline_expired",
+                        "entry_local_stage_clocks":dict(local_stage_clocks),
                         "actual_order_submitted":False, "broker_order_forbidden":True,
                         **machine_capture, **stage_fields}
             failure_count = self._record_failure_and_maybe_disable(
@@ -11135,7 +11162,10 @@ class GPTSniperEngine:
                 fallback_score_50 = float(fallback_payload.get("score")) == 50.0
             except Exception:
                 fallback_score_50 = False
-            return self._annotate_analysis_result(
+            local_stage_clocks['annotation_started_perf'] = time.perf_counter()
+            local_stage_clocks['failure_processing_seconds'] = local_stage_clocks['annotation_started_perf']-failure_perf
+            fallback_payload['entry_local_stage_clocks'] = dict(local_stage_clocks)
+            result = self._annotate_analysis_result(
                 fallback_payload,
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
@@ -11148,6 +11178,10 @@ class GPTSniperEngine:
                 result_source=result_source,
                 input_contract_fields=input_contract_fields,
             )
+            local_stage_clocks['analysis_return_perf'] = time.perf_counter()
+            local_stage_clocks['annotation_and_cache_seconds'] = local_stage_clocks['analysis_return_perf']-local_stage_clocks['annotation_started_perf']
+            result['entry_local_stage_clocks'] = dict(local_stage_clocks)
+            return result
         finally:
             self.lock.release()
 

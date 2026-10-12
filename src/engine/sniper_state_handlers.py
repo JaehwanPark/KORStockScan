@@ -17232,11 +17232,13 @@ def emit_scanner_watching_runtime_skip(
     now_ts: float | None = None,
     ws_data=None,
     throttle_sec: int = 60,
+    observation_receipt: bool = False,
     **extra,
-) -> bool:
+) -> bool | dict:
     """Log scanner WATCHING skip causes that otherwise hide before downstream gates."""
     if not _is_scanner_watching_runtime_observation_target(stock):
-        return False
+        return ({'status': 'intentionally_not_written', 'reason': 'not_scanner_target'}
+                if observation_receipt else False)
     now_value = time.time() if now_ts is None else float(now_ts)
     _capture_rising_missed_entry_turn_bbo(
         stock,
@@ -17266,7 +17268,8 @@ def emit_scanner_watching_runtime_skip(
         stock["_scanner_watching_runtime_skip_logged"] = logged
     last_logged = _safe_float(logged.get(throttle_key), 0.0)
     if throttle > 0 and now_value - last_logged < throttle:
-        return False
+        return ({'status': 'intentionally_not_written', 'reason': 'observation_throttled'}
+                if observation_receipt else False)
     logged[throttle_key] = now_value
     scanner_ws_stale_backoff_fields = _record_scanner_ws_stale_backoff(
         stock,
@@ -17284,7 +17287,7 @@ def emit_scanner_watching_runtime_skip(
         now_ts=now_value,
         ws_data=ws_data,
     )
-    _log_entry_pipeline(
+    receipt = _log_entry_pipeline(
         stock,
         code,
         "scalping_scanner_watching_runtime_skip",
@@ -17296,7 +17299,7 @@ def emit_scanner_watching_runtime_skip(
             **extra,
         ),
     )
-    return True
+    return receipt if observation_receipt else True
 
 
 def _scanner_runtime_queue_lag_fields(
@@ -61029,11 +61032,13 @@ def _resolve_scanner_async_entry_ai(
         commit_started = time.perf_counter()
         native_valid = True
         native_validation_error = None
+        revalidation = {}
         if claim:
             try:
                 from src.engine.scalping.reversal_current_backend import backend
                 from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
-                validate_claim_with_receipt(claim, backend()._GENERATION, now=now_epoch, live_clock=True)
+                validate_claim_with_receipt(claim, backend()._GENERATION, now=now_epoch,
+                    live_clock=True, receipt_out=revalidation)
                 if fixed_watch and (not fixed_route or fixed_route['item'] != claim['snapshot'][0].get('source_item')
                         or fixed_route['broker_route'] != generation.venue):
                     native_valid = False
@@ -61041,6 +61046,12 @@ def _resolve_scanner_async_entry_ai(
             except ValueError as exc:
                 native_valid = False
                 native_validation_error = str(exc)
+        try:
+            revalidation_fields = {'native_commit_revalidation': json.dumps(revalidation,
+                sort_keys=True, separators=(',', ':'), allow_nan=False)} if revalidation else {}
+        except (TypeError, ValueError):
+            revalidation_fields = {'native_commit_revalidation': '{"status":"unobservable","reason":"projection_invalid"}'}
+        now_epoch = time.time()
         decision = validate_scanner_async_commit(
             result,
             current_generation=(generation if fixed_watch else runtime.get('scanner_async_generation')),
@@ -61134,9 +61145,14 @@ def _resolve_scanner_async_entry_ai(
             cache_key=result.cache_key, claim=claim,
             clear_recheck=completed_after_expired_recheck)
         if not decision.allowed:
-            _record_async_disposition(result, 'rejected', decision.reason)
+            _record_async_disposition(result, 'rejected', decision.reason, **revalidation_fields)
             if claim:
-                _acknowledge_async_claim(claim, 'async_commit_rejected')
+                try:
+                    _acknowledge_async_claim(claim, 'async_commit_rejected')
+                except Exception as exc:
+                    # The primary native rejection remains the terminal reason.
+                    from src.engine.monitoring.runtime_performance import failure
+                    failure('native_rejection_ack', type(exc).__name__, emit_log=False)
             return {"status": "commit_rejected", "reason": decision.reason}
         if claim:
             stock['_continuous_reversal_last_requested_id']=claim['snapshot'][0]['event_id']
@@ -61159,7 +61175,7 @@ def _resolve_scanner_async_entry_ai(
                 evaluation_attempt_id=result.ai_payload.get('evaluation_attempt_id'),
                 ai_decision_trace_id=result.ai_payload.get('ai_decision_trace_id'),
                 deadline_epoch=result.deadline_epoch, deadline_perf=result.deadline_perf)
-        _record_async_disposition(result, 'accepted_to_entry_path', decision.reason)
+        _record_async_disposition(result, 'accepted_to_entry_path', decision.reason, **revalidation_fields)
         from src.engine.scalping.trailing_situation_policy import freeze_shared_entry_context
         original_context = resolved['prepared_context']
         if _safe_int(stock.get('buy_qty'), 0) <= 0:

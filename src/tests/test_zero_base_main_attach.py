@@ -16,6 +16,7 @@ from src.trading.market import session_contract
 @pytest.fixture(autouse=True)
 def _isolate_cleanup_retries(monkeypatch):
     monkeypatch.setattr(main, '_ZERO_BASE_CLEANUP_RETRIES', {})
+    monkeypatch.setattr(main, '_zero_base_consumer_readiness', lambda: {'ready': True, 'runtime_generation': 'fixture'})
 
 
 class _Session:
@@ -317,7 +318,7 @@ def test_recheck_reuses_probe_lease_then_publishes_only_final_assessment(
                                    "exact_0b_count": 0 if followup_result != "assessed" else 5}}
 
     monkeypatch.setattr(main, "run_zero_base_probe", probe_once)
-    main.handle_zero_base_probe_requested(request)
+    main.handle_zero_base_probe_requested(dict(request, consumer_readiness={'ready': True, 'runtime_generation': 'fixture'}))
     assert futures[0].exception() is None
     assert bool(errors) is release_raises
     assert len(calls) == 2
@@ -390,6 +391,7 @@ def test_probe_worker_hard_cap_is_five_in_every_buy_session(
         claim = {"code": code, "route": route, "source_sha256": "b" * 64}
         main.handle_zero_base_probe_requested({
             "claim": claim, "candidate": dict(claim),
+            "consumer_readiness": {"ready": True, "runtime_generation": "fixture"},
         })
     assert len(tasks) == 5
     assert len(main._ZERO_BASE_PROBE_IN_FLIGHT) == 5
@@ -641,12 +643,12 @@ def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(
         main, "_zero_base_release_probe_ws", lambda *_args: remove_completion,
     )
     request = {"claim": _result()["claim"], "candidate": _result()["candidate"]}
-    main.handle_zero_base_probe_requested(request)
+    main.handle_zero_base_probe_requested(dict(request, consumer_readiness={'ready': True, 'runtime_generation': 'fixture'}))
     assert "123456" in main._ZERO_BASE_PROBE_IN_FLIGHT
     assert slots.acquire(blocking=False)
     assert not slots.acquire(blocking=False)
     slots.release()
-    main.handle_zero_base_probe_requested(request)
+    main.handle_zero_base_probe_requested(dict(request, consumer_readiness={'ready': True, 'runtime_generation': 'fixture'}))
     assert events[-1][1]["reason"] == "same_code_probe_in_flight"
     callbacks[0]("123456", "123456")
     assert "123456" in main._ZERO_BASE_PROBE_IN_FLIGHT

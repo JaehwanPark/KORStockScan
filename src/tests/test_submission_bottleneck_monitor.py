@@ -2192,3 +2192,11 @@ def test_native_no_match_uses_final_native_window_not_initial_warmup_target():
     row['fields'].update(zero_base_ws_exact_0b_count='3', zero_base_ws_signed_0b_count='3',
                          zero_base_ws_sample_target='5', zero_base_ws_sample_target_met='False')
     assert monitor._probe_verified_no_match(row) is True
+
+
+def test_explicit_native_no_match_reason_keeps_strict_truth_contract():
+    row = _native_no_match_probe(START+timedelta(minutes=10), receipt_format='dict')
+    row['fields']['zero_base_probe_reason'] = 'native_observation_no_matching_pattern'
+    assert monitor._probe_verified_no_match(row)
+    row['fields']['native_observation_receipt']['selected_branch_truth']['G2'] = 'UNKNOWN'
+    assert not monitor._probe_verified_no_match(row)

@@ -63,6 +63,7 @@ def test_micro_cache_hit_never_recounts_prior_computation_or_delivery(monkeypatc
         "microstructure_reaction_context_consumed": True,
         "microstructure_provider_delivery_status": "response_received",
         "ai_decision_trace_id": "trace-1",
+        "entry_local_stage_clocks": {"provider_call_seconds": 2.5},
     }
     cached = _build_engine()._annotate_analysis_result(
         payload,
@@ -81,6 +82,7 @@ def test_micro_cache_hit_never_recounts_prior_computation_or_delivery(monkeypatc
     assert cached["microstructure_reaction_context_consumed"] is False
     assert cached["microstructure_reaction_context_reused"] is True
     assert cached["ai_decision_parent_trace_id"] == "trace-1"
+    assert 'entry_local_stage_clocks' not in cached
     assert cached["microstructure_reaction_parent_context_id"] == "context-1"
 
 

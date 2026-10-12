@@ -4561,27 +4561,6 @@ class KiwoomWSManager:
                                                 ),
                                             }
                                         )
-                                        normalized_epoch = time.time()
-                                        packet_epoch = (packet_received_at.timestamp()
-                                            if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
-                                            else None)
-                                        provider_epoch = realtime_snapshot.get("provider_trade_epoch")
-                                        realtime_snapshot["market_source_latency"] = {
-                                            "schema": "market_source_latency_v1",
-                                            "item": str(raw_item_code or ""),
-                                            "transport_epoch": int(self._market_data_transport_epoch),
-                                            "route_sequence": route_sequence,
-                                            "receive_time_source": packet_receive_time_source,
-                                            "packet_received_epoch": packet_epoch,
-                                            "dispatch_started_epoch": dispatch_started_epoch,
-                                            "normalized_epoch": normalized_epoch,
-                                            "provider_to_packet_ms": (
-                                                round((packet_epoch - provider_epoch) * 1000, 3)
-                                                if packet_epoch is not None and provider_epoch is not None else None),
-                                            "packet_to_normalization_ms": (
-                                                round((normalized_epoch - packet_epoch) * 1000, 3)
-                                                if packet_epoch is not None else None),
-                                        }
                                     elif real_type == "0D":
                                         current_orderbook = target.get("orderbook")
                                         current_orderbook = (
@@ -4624,6 +4603,27 @@ class KiwoomWSManager:
                                                     or ""
                                                 )
                                             )
+                                    normalized_epoch = time.time()
+                                    packet_epoch = (packet_received_at.timestamp()
+                                        if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+                                        else None)
+                                    provider_epoch = realtime_snapshot.get("provider_trade_epoch")
+                                    realtime_snapshot["market_source_latency"] = {
+                                        "schema": "market_source_latency_v1",
+                                        "item": str(raw_item_code or ""),
+                                        "transport_epoch": int(self._market_data_transport_epoch),
+                                        "route_sequence": route_sequence,
+                                        "receive_time_source": packet_receive_time_source,
+                                        "packet_received_epoch": packet_epoch,
+                                        "dispatch_started_epoch": dispatch_started_epoch,
+                                        "normalized_epoch": normalized_epoch,
+                                        "provider_to_packet_ms": (
+                                            round((packet_epoch - provider_epoch) * 1000, 3)
+                                            if packet_epoch is not None and provider_epoch is not None else None),
+                                        "packet_to_normalization_ms": (
+                                            round((normalized_epoch - packet_epoch) * 1000, 3)
+                                            if packet_epoch is not None else None),
+                                    }
                                     route_snapshot[real_type] = realtime_snapshot
                                     if real_type == '0B':
                                         # Consumer of the existing normalized envelope only.
@@ -4633,6 +4633,7 @@ class KiwoomWSManager:
                                         observed_clock = datetime.fromtimestamp(now_update_ts, KST).timetz()
                                         reversal_session = _session_bucket(_explicit_item_venue(realtime_snapshot['item']), observed_clock)
                                         observe_normalized(item_code[:6], reversal_session, realtime_snapshot)
+                                        realtime_snapshot['market_source_latency']['native_ingest_returned_epoch'] = time.time()
                                         from src.engine.scalping.reversal_source_diagnostics import notify_observation
                                         notify_observation(realtime_snapshot['item'])
                                         try:

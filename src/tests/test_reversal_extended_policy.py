@@ -163,6 +163,8 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(replay,monkeypatch)
     monkeypatch.setattr(DIAG.time,'time',lambda:T+122)
     before_claims = copy.deepcopy(runtime._CLAIMS)
     before_ready = [[r['claimed'] for r in s.ready] for s in runtime._STATES.values()]
+    from src.engine.monitoring.runtime_performance import record_native_ready
+    record_native_ready(runtime, '005930', 'NXT', '005930_NX', 'PRE', T+122)
     observed, receipt = DIAG.observe_snapshot('005930','NXT','NXT_PREMARKET',now=T+122,
         item='005930_NX',family_sha256=new['continuous_reversal']['family_sha256'])
     again, _ = DIAG.observe_snapshot('005930','NXT','NXT_PREMARKET',now=T+122,

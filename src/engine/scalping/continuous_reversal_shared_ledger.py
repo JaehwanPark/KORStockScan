@@ -35,6 +35,117 @@ def enabled(data_root):
     return True
 
 
+def native_lifecycle_outcomes(records, *, window_reader):
+    """Source-only comparison over indexed native windows, never live orders.
+
+    window_reader receives an existing exact source reference and returns its
+    normalized rows plus identity and label contract. Missing indexes remain
+    excluded; this function never scans/clones the daily raw/comparison ledger.
+    Work is bounded to 4096 opportunities and 200000 rows per indexed window.
+    """
+    identity_keys = ('source_date', 'process_pid', 'process_start_ticks', 'symbol',
+        'source_item', 'venue', 'market', 'native_epoch', 'family_sha256', 'scope_execution_hash')
+    contract = dict(cost_rate=K.COST, target_net_pct=K.TARGET*100,
+                    stop_net_pct=K.STOP*100, horizon_seconds=1800)
+    output, unique, groups, branch_groups = [], {}, {}, {}
+    paired = Counter()
+    input_count = 0
+    for number, record in enumerate(records):
+        if number >= 4096:
+            raise ValueError('native_lifecycle_research_population_budget_exceeded')
+        input_count += 1
+        record = record if isinstance(record, dict) else {}
+        identity = record.get('identity') if isinstance(record.get('identity'), dict) else {}
+        event = record.get('event') if isinstance(record.get('event'), dict) else {}
+        key = tuple(identity.get(k) for k in identity_keys)+(event.get('signal_id'),)
+        invalid_identity = any(type(v) not in (str, int, float) or v == ''
+            or (isinstance(v, float) and not math.isfinite(v)) for v in key)
+        if invalid_identity:
+            key = ('unjoinable_row', number)
+        if key in unique:
+            unique[key]['conflict'] |= unique[key]['record'] != record
+        else:
+            unique[key] = dict(record=record, identity=identity, event=event,
+                               invalid_identity=invalid_identity, conflict=False)
+    for source in unique.values():
+        record, identity, event = source['record'], source['identity'], source['event']
+        row = dict(identity=identity, signal_id=event.get('signal_id'),
+            evaluation_attempt_id=record.get('evaluation_attempt_id'),
+            auxiliary_verdict=record.get('auxiliary_verdict'),
+            branch_ids=sorted(str(k) for k in event.get('branch_signals', {}))
+                if isinstance(event.get('branch_signals'), dict) else [],
+            symbol_type=record.get('symbol_type', 'unobservable'),
+            cohort=record.get('cohort', 'unobservable'), source_ref=record.get('source_ref'),
+            status='EXCLUDED', reason='indexed_source_missing')
+        try:
+            if source['conflict']:
+                raise ValueError('duplicate_opportunity_conflict')
+            if source['invalid_identity']:
+                raise ValueError('exact_identity_missing')
+            if record.get('label_contract') != contract:
+                raise ValueError('native_label_contract_mismatch')
+            window = window_reader(record.get('source_ref')) if record.get('source_ref') else None
+            if window is not None:
+                if window.get('identity') != identity or window.get('label_contract') != contract:
+                    raise ValueError('indexed_window_identity_or_contract_mismatch')
+                rows = window.get('rows')
+                if not isinstance(rows, list) or not 0 < len(rows) <= 200000:
+                    raise ValueError('indexed_window_size_invalid')
+                if window.get('rows_sha256') != P.digest(rows):
+                    raise ValueError('indexed_window_hash_invalid')
+                anchor = next((i for i,r in enumerate(rows) if
+                    r[0] == event.get('epoch') and r[1] == identity['native_epoch']
+                    and r[2] == event.get('native_sequence')), None)
+                if anchor is None or rows[anchor][5] != event.get('entry_ask') or not K.good_quote(rows[anchor]):
+                    raise ValueError('native_entry_ask_missing_or_changed')
+                path = rows[anchor:]
+                times = [r[0] for r in path]
+                if any(b <= a for a,b in zip(times,times[1:])):
+                    raise ValueError('quote_order_ambiguous')
+                _, ends, valid = K.segments(path, quote=True)
+                tree = K.Tree([r[4] if K.good_quote(r) else None for r in path])
+                outcome = K.label(path, times, tree, ends, valid, 0, event['entry_ask'])
+                row.update(outcome)
+                if outcome['status'] == 'UNRESOLVED':
+                    row['status'] = 'EXCLUDED'
+                else:
+                    row.pop('reason', None)
+                # Later hits are explicitly secondary; native segments still
+                # forbid crossing an epoch, bad quote or sequence gap.
+                if times[-1] > times[0]+1800:
+                    row['late_outcome'] = K.label(path, times, tree, ends, valid, 0, event['entry_ask'], horizon=3600)
+        except (OSError, KeyError, IndexError, TypeError, ValueError) as exc:
+            row.update(status='EXCLUDED', reason=str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+        output.append(row)
+        group = ('samsung' if identity.get('symbol') == '005930' else 'non_samsung',
+                 str(identity.get('market')), str(identity.get('symbol')), str(row['cohort']),
+                 str(row['symbol_type']))
+        counts = groups.setdefault(group, Counter())
+        counts[row['status']] += 1
+        for bid in row['branch_ids']:
+            branch_groups.setdefault(group+(bid,), Counter())[row['status']] += 1
+        if row['status'] in {'WIN', 'FAIL_STOP', 'FAIL_TIMEOUT'} and row['auxiliary_verdict'] in {'PASS', 'VETO'}:
+            verdict, win = row['auxiliary_verdict'], row['status'] == 'WIN'
+            paired['count'] += 1
+            paired['labeled_winners'] += win
+            paired['pass_winners'] += win and verdict == 'PASS'
+            paired['false_negative'] += win and verdict == 'VETO'
+            paired['false_positive'] += not win and verdict == 'PASS'
+    def rate(counts):
+        total = counts['WIN']+counts['FAIL_STOP']+counts['FAIL_TIMEOUT']
+        return counts['WIN']/total if total else None
+    return dict(schema='native_lifecycle_outcome_research_v1', runtime_effect=False,
+        provider_calls=0, actual_order_submitted=False, outcomes=output,
+        input_count=input_count, duplicate_count=input_count-len(unique),
+        paired=dict(paired, winner_retention=(paired['pass_winners']/paired['labeled_winners']
+            if paired['labeled_winners'] else None)),
+        branch_groups=[dict(samsung_group=k[0], market=k[1], symbol=k[2], cohort=k[3], symbol_type=k[4], branch_id=k[5],
+            counts=dict(v), win_rate=rate(v)) for k,v in branch_groups.items()],
+        label_contract=contract, groups=[dict(samsung_group=k[0], market=k[1], symbol=k[2], cohort=k[3],
+            symbol_type=k[4],
+            counts=dict(v), win_rate=rate(v)) for k,v in groups.items()])
+
+
 class Adapter:
     def __init__(self, backend):
         self.backend = backend

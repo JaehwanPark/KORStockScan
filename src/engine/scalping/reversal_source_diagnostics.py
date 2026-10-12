@@ -12,6 +12,7 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 from contextlib import ExitStack
+from functools import lru_cache
 
 try:
     _PROCESS_START_TICKS = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
@@ -42,6 +43,168 @@ def notify_observation(item):
 def wait_observation(item, sequence, timeout):
     with _CHANGE:
         _CHANGE.wait_for(lambda: _SEQUENCES.get(item, 0) != sequence, timeout=max(0, timeout))
+
+
+def branch_required_seconds(definition):
+    """Lower bound on native history, not a promise that a pattern will fire."""
+    root = definition.get('root_contract') or {}
+    filters = definition.get('filters') or {}
+    required = float(root.get('warmup_seconds') or 0)
+    if (definition.get('return_60s_min_pct') is not None or definition.get('higher_low')
+            or root.get('return_60s_min_pct') is not None):
+        required = max(required, 60.)
+    if any(k.startswith(('ret_', 'vwap_')) or k in {'structure', 'low_rising'} for k in filters):
+        required = max(required, 60.)
+    if (any(k.startswith('volume_') for k in filters)
+            or definition.get('rule') in {'VOLUME_RATIO_GE_1_5', 'DROP_0_4_VOL_UP', 'DD5_0_8_VOL_UP'}):
+        required = max(required, 120.)
+    return required + float(root.get('hold_seconds') or 0)
+
+
+@lru_cache(maxsize=512)
+def _branch_descriptor(registry_sha256, bid):
+    from src.engine.scalping import reversal_extended_catalog as C
+    from src.engine.scalping.continuous_reversal_postclose import digest
+    d = C.definition(bid)
+    root, filters = d.get('root_contract') or {}, d.get('filters') or {}
+    phase = C.branch(bid).get('decision_phase')
+    hold = float(root.get('hold_seconds') or 0)
+    seconds = branch_required_seconds(d)
+    fields = set()
+    for name in filters:
+        for feature in ('ret', 'vwap', 'volume', 'buy10', 'dd', 'session', 'structure', 'low_rising'):
+            if name == feature or name.startswith(feature+'_'):
+                fields.add(feature)
+    if root.get('return_60s_min_pct') is not None:
+        fields.add('ret')
+    if d.get('rule') in {'VOLUME_RATIO_GE_1_5', 'DROP_0_4_VOL_UP', 'DD5_0_8_VOL_UP'}:
+        fields.add('volume')
+    if d.get('return_60s_min_pct') is not None:
+        fields.add('ret')
+    if d.get('higher_low'):
+        fields.add('low_rising')
+    return dict(branch_id=bid, definition_sha256=digest(d), registry_sha256=registry_sha256,
+        backward_window_seconds=seconds-hold, minimum_seconds=seconds,
+        hold_seconds=hold, decision_phase=phase,
+        confirmation_window_seconds=d.get('confirmation_seconds') or root.get('maximum_wait_seconds'),
+        predecessor_required='ret' in fields or bool(d.get('return_60s_min_pct')),
+        minimum_trade_count=10 if 'buy10' in fields else None,
+        known_side_required='buy10' in fields,
+        positive_quantity_required=bool(fields & {'buy10', 'vwap', 'volume'}),
+        transition_required=phase in {'MOMENTUM_CROSS', 'MOMENTUM_HOLD', 'HIGH_BREAKOUT'},
+        feature_fields=sorted(fields), root_contract=deepcopy(root))
+
+
+def residence_requirements(candidate, now, *, actual_price=None):
+    """Use selected definitions only. Never stitch histories across leases."""
+    from src.engine.scalping.reversal_current_backend import backend
+    from src.engine.scalping import reversal_extended_catalog as C
+    from src.trading.market import session_contract
+    B = backend()
+    route = {'nxt_only': 'NXT', 'krx_only': 'KRX', 'krx_nxt_integrated': 'SOR'}.get(candidate.route)
+    market = K.market_bucket(session_contract.resolve_market_session(
+        datetime.fromtimestamp(now, K.KST)).session_regime)
+    with B._LOCK:
+        family = getattr(B, '_FAMILY', None) or {}
+        key = C.cell_key(candidate.code, market,
+                         candidate.discovery_price if actual_price is None else actual_price)
+        cell = family.get('machine_cells', {}).get(key, {}).get('routes', {}).get(route, {})
+        branches = tuple(b['branch_id'] for b in cell.get('payload', {}).get('branches', ()))
+        generation = family.get('family_sha256')
+        scope_hash = cell.get('scope_execution_hash')
+    if not branches:
+        return dict(status='unobservable', reason='selected_branches_missing', minimum_seconds=None)
+    try:
+        descriptors = {bid: deepcopy(_branch_descriptor(C.SHA256, bid)) for bid in branches}
+        requirements = {bid: row['minimum_seconds'] for bid, row in descriptors.items()}
+    except (KeyError, TypeError, ValueError):
+        return dict(status='unobservable', reason='branch_requirement_unknown', minimum_seconds=None)
+    return dict(schema='native_branch_residence_requirements_v2', status='observed',
+        minimum_seconds=min(requirements.values()), branch_descriptors=descriptors,
+        policy_scope=key, price_basis='tentative_discovery' if actual_price is None else 'exact_native_trade',
+        branch_required_seconds=requirements, family_sha256=generation, scope_execution_hash=scope_hash,
+        history_reuse='none_without_exact_lease_interval', runtime_effect=False)
+
+
+def branch_readiness(candidate, *, now, deadline, original_requirements=None):
+    """Project detector-owned scalar coverage, never replay or manufacture truth."""
+    from src.engine.scalping.reversal_current_backend import backend
+    from src.engine.scalping import reversal_extended_catalog as C
+    from src.trading.market import session_contract as S
+    B = backend()
+    venue = {'nxt_only': 'NXT', 'krx_only': 'KRX', 'krx_nxt_integrated': 'SOR'}.get(candidate.route)
+    market = K.market_bucket(S.resolve_market_session(datetime.fromtimestamp(now, K.KST)).session_regime)
+    item = candidate.code + {'SOR': '_AL', 'NXT': '_NX', 'KRX': ''}.get(venue, '')
+    stream = (candidate.code, venue, item, market, str(datetime.fromtimestamp(now, K.KST).date()))
+    facts = None
+    with ExitStack() as locks:
+        locks.enter_context(B._LOCK)
+        if getattr(B, 'R', None) is not None:
+            locks.enter_context(B.R._LOCK)
+        for owner in (B, getattr(B, 'R', None)):
+            if owner is None:
+                continue
+            for key, state in owner._STATES.items():
+                last = getattr(getattr(state, 'legacy', None), 'last', None)
+                if key[:5] != stream or not last:
+                    continue
+                if type(last[3]) not in (int, float) or not math.isfinite(last[3]) or last[3] <= 0:
+                    continue
+                cell_key = C.cell_key(candidate.code, market, last[3])
+                cell = (getattr(B, '_FAMILY', None) or {}).get('machine_cells', {}).get(cell_key, {}).get('routes', {}).get(venue, {})
+                if ((owner is B and (key[-1] != cell_key or cell.get('backend') == 'registered_v4'))
+                        or (owner is not B and cell.get('backend') != 'registered_v4')):
+                    continue
+                expected_generation = cell.get('scope_execution_hash') if owner is B else owner._GENERATION
+                if state.generation != expected_generation:
+                    continue
+                facts = dict(last=tuple(last), start=state.legacy.segment_start,
+                    coverage=dict(getattr(state, 'coverage_snapshot', {})),
+                    root=dict(getattr(state, 'root_previous', {}), **getattr(state, 'extended_previous', {})),
+                    features=dict(getattr(state, '_feature_values', None) or {}),
+                    feature_identity=getattr(state, '_feature_key', None),
+                    coverage_identity=getattr(state, 'coverage_identity', None),
+                    family_sha256=getattr(B, '_GENERATION', None),
+                    pending={p.get('bid'): p.get('epoch') for p in getattr(state, 'path_pending', {}).values()
+                             if p.get('bid')})
+                break
+            if facts:
+                break
+    if not facts:
+        return dict(status='unobservable', reason='native_interval_unobserved',
+                    remaining_seconds=max(0, deadline-now), decision_authority='none')
+    last = facts['last']
+    desc = residence_requirements(candidate, now, actual_price=last[3])
+    if desc.get('status') != 'observed':
+        return dict(desc, remaining_seconds=max(0, deadline-now), decision_authority='none')
+    if desc.get('family_sha256') != facts['family_sha256']:
+        return dict(status='unobservable', reason='policy_changed_during_projection', decision_authority='none')
+    valid = bool(last[8] and 0 <= now-last[0] <= 3)
+    covered = max(0, last[0]-facts['start']) if valid and facts['start'] is not None else None
+    desc.update(interval_start_epoch=facts['start'], interval_end_epoch=last[0],
+        continuous_covered_seconds=covered, native_epoch=last[1], native_sequence=last[2],
+        item=item, route=candidate.route, remaining_seconds=max(0, deadline-now),
+        scope_changed=any((original_requirements or {}).get(k) != desc.get(k)
+                          for k in ('policy_scope', 'scope_execution_hash', 'family_sha256')),
+        decision_authority='none')
+    feature_bound = facts['feature_identity'] == tuple(last[:3])
+    coverage_bound = facts['coverage_identity'] == tuple(last[:3])
+    for bid, row in desc.get('branch_descriptors', {}).items():
+        missing = [field for field in row['feature_fields']
+                   if not feature_bound or facts['features'].get(field) is None]
+        if covered is None:
+            missing.append('continuous_source_interval')
+        elif covered < row['backward_window_seconds']:
+            missing.append('backward_window')
+        condition = facts['root'].get(bid)
+        # Root predicate value is not the FALSE->TRUE event or its hold outcome.
+        row.update(detector_truth=facts['coverage'].get(bid, 'UNKNOWN') if valid and coverage_bound else 'UNKNOWN',
+            root_condition_truth=('TRUE' if condition is True else 'FALSE' if condition is False else 'UNKNOWN') if valid else 'UNKNOWN',
+            feature_availability='complete' if not missing else 'incomplete', missing_inputs=missing,
+            pending_confirmation_epoch=facts['pending'].get(bid),
+            window_fits_remaining=covered is not None and
+                max(0, row['backward_window_seconds']-covered)+row['hold_seconds'] < desc['remaining_seconds'])
+    return desc
 
 
 def invalidate_observation_interval(item):
@@ -99,9 +262,11 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
             if last and C.cell_key(symbol, session, last[3]) == key[-1]:
                 cell = B._FAMILY['machine_cells'][key[-1]]['routes'][venue]
                 ids = [b['branch_id'] for b in cell['payload']['branches']]
-                truth = {bid: getattr(state, 'coverage_snapshot', {}).get(bid, 'UNKNOWN') for bid in ids}
+                fresh = bool(last[8] and 0 <= now-last[0] <= 3)
+                truth = {bid: getattr(state, 'coverage_snapshot', {}).get(bid, 'UNKNOWN') if fresh else 'UNKNOWN' for bid in ids}
                 receipt.update(selected_scope=key[-1], scope_execution_hash=state.generation,
                     selected_branch_truth=truth, native_epoch=last[1], native_sequence=last[2],
+                    native_last_received_epoch=last[0], native_source_current=fresh,
                     observed_seconds=max(0, last[0]-state.legacy.segment_start),
                     reason='no_matching_pattern' if truth and all(v=='FALSE' for v in truth.values())
                            else 'required_window_incomplete')
@@ -224,11 +389,19 @@ def claim_snapshot_with_receipt(*args, **kwargs):
     with B._LOCK:
         if live_clock:
             kwargs['now'] = time.time()
+        try:
+            from src.engine.monitoring.runtime_performance import record_native_visit
+            symbol = args[0] if args else kwargs['symbol']
+            venue = args[1] if len(args) > 1 else kwargs['venue']
+            session = args[2] if len(args) > 2 else kwargs['session']
+            record_native_visit(symbol, venue, kwargs['item'], K.market_bucket(session), kwargs['now'])
+        except (KeyError, TypeError, ValueError, IndexError):
+            pass
         claim = B.claim_snapshot(*args, **kwargs)
         if claim:
             try:
                 from src.engine.monitoring.runtime_performance import record_selected_native_claim
-                record_selected_native_claim(claim)
+                record_selected_native_claim(claim, family_sha256=kwargs.get('family_sha256'), now=kwargs['now'])
             except (KeyError, TypeError, ValueError):
                 pass  # Diagnostic joins cannot revoke the native claim.
             if live_clock:
@@ -280,7 +453,7 @@ def verified_registration(claim, proof):
 
 def validate_claim_with_receipt(claim, family_sha256, *, now,
                                 evaluation_attempt_id=None, machine_bundle_sha256=None,
-                                live_clock=False):
+                                live_clock=False, receipt_out=None):
     """Run the unchanged guard and retain its exact source on rejection.
 
     Inspection and validation share the ingestion lock. Live callers acquire
@@ -293,7 +466,13 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
         if live_clock:
             now = time.time()
         try:
-            return B.validate_claim(claim, family_sha256, now=now)
+            result = B.validate_claim(claim, family_sha256, now=now)
+            if receipt_out is not None:
+                try:
+                    receipt_out.update(compact_claim_state(B, claim, family_sha256, now, 'valid'))
+                except Exception:
+                    receipt_out.update(status='unobservable', validation_error='diagnostic_projection_failed')
+            return result
         except ValueError as exc:
             try:
                 receipt = _claim_failure_receipt(B, claim, family_sha256, now, str(exc))
@@ -305,7 +484,67 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
             receipt.update(evaluation_attempt_id=evaluation_attempt_id,
                            machine_bundle_sha256=machine_bundle_sha256)
             exc.reversal_source_receipt = receipt
+            if receipt_out is not None:
+                try:
+                    receipt_out.update(compact_claim_state(B, claim, family_sha256, now, str(exc)))
+                except Exception:
+                    receipt_out.update(status='unobservable', validation_error=str(exc))
             raise
+
+
+def compact_claim_state(B, claim, family_sha256, now, reason):
+    """Called under the native lock. Scalars only; no raw input duplication."""
+    if claim.get('backend') == 'registered_v4' and getattr(B, 'R', None):
+        with B.R._LOCK:
+            result = compact_claim_state(B.R, claim, B.R._GENERATION, now, reason)
+        result['envelope_family_sha256'] = family_sha256
+        from src.engine.scalping.reversal_extended_catalog import cell_key
+        event = claim['snapshot'][0]
+        cell = (B._FAMILY.get('machine_cells', {}).get(cell_key(event['symbol'], event['market'],
+            event['confirmation_price']), {}).get('routes', {}).get(event['venue'], {}))
+        result['envelope_scope_execution_hash'] = cell.get('scope_execution_hash')
+        return result
+    original = B._CLAIMS.get(claim.get('token')) or {}
+    event = (claim.get('snapshot') or [{}])[0]
+    scope = original.get('scope')
+    state = B._STATES.get(scope) if scope else None
+    legacy = getattr(state, 'legacy', None)
+    last = getattr(legacy, 'last', None)
+    turn = (getattr(legacy, 'turn', None) or {}).get('event_id')
+    branches = event.get('branch_signals') or {}
+    survivors = {bid: (signal.get('decision_phase') != 'FIRST_UPTICK'
+                       or turn == signal.get('event_id', event.get('event_id')))
+                 for bid, signal in branches.items()}
+    from src.engine.scalping.reversal_extended_catalog import cell_key
+    band = cell_key(event['symbol'], event['market'], event['confirmation_price']) if event.get('confirmation_price') else None
+    cell = ((getattr(B, '_FAMILY', None) or {}).get('machine_cells', {})
+            .get(band, {}).get('routes', {}).get(event.get('venue'), {}))
+    predicates = dict(registered_claim_present=bool(original), native_state_present=state is not None,
+        latest_source_valid=bool(last[8]) if last else None,
+        latest_quote_valid=K.good_quote(last) if last else None,
+        native_epoch_matches=last[1] == event.get('native_epoch') if last else None,
+        scope_generation_matches=getattr(state, 'generation', None) == claim.get('generation') if state else None,
+        ready_membership_present=any(r['event'].get('signal_id') == event.get('signal_id')
+                                     for r in state.ready) if state else None,
+        any_branch_survives=any(survivors.values()) if branches else None,
+        original_deadline_valid=0 <= now-event['epoch'] <= 5 if event.get('epoch') else None)
+    return dict(schema='native_commit_revalidation_v1', stage='commit_revalidation', status='observed',
+        validation_epoch=now, validation_perf=time.perf_counter(), validation_error=reason,
+        process_pid=os.getpid(), process_start_ticks=_PROCESS_START_TICKS,
+        claim_backend=claim.get('backend'), envelope_family_sha256=family_sha256,
+        claim_generation=claim.get('generation'), active_generation=B._GENERATION,
+        scope_execution_hash=cell.get('scope_execution_hash'),
+        registration_sha256=(claim.get('source_registration_receipt') or {}).get('sha256'),
+        signal_id=event.get('signal_id'), native_event_id=event.get('event_id'),
+        source_item=event.get('source_item'), venue=event.get('venue'), market=event.get('market'),
+        native_epoch=event.get('native_epoch'), native_sequence=event.get('native_sequence'),
+        signal_epoch=event.get('epoch'), original_deadline=event.get('epoch', now)+5,
+        remaining_seconds=event.get('epoch', now)+5-now,
+        branch_survival=survivors, current_turn_id=turn,
+        latest_native_epoch=last[1] if last else None, latest_native_sequence=last[2] if last else None,
+        latest_price=last[3] if last else None, latest_received_epoch=last[0] if last else None,
+        predicates=predicates, failed_predicates=[k for k,v in predicates.items() if v is False],
+        runtime_effect=False)
 
 
 def _claim_failure_receipt(B, claim, family_sha256, now, reason):

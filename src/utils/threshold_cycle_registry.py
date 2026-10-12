@@ -13,6 +13,8 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "main_stop_source": "main_stop_confirmation",
     # Exact report-only Main handoff receipts; no new tuning/order authority.
     "entry_async_disposition": "entry_mechanical_momentum",
+    "native_signal_lifecycle": "entry_mechanical_momentum",
+    "zero_base_probe_result": "entry_mechanical_momentum",
     "scanner_async_result_commit": "entry_mechanical_momentum",
     "pre_submit_delay_committed": "pre_submit_delay",
     "pre_submit_delay_quote_observed": "pre_submit_delay",

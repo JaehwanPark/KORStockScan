@@ -6887,6 +6887,18 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_source_kind": claim.get("source_kind") or "unknown",
                     "zero_base_claim_count": claim.get("claim_count"),
                     "native_observation_receipt": result.get('native_observation_receipt'),
+                    "zero_base_observation_requirements": result.get('observation_requirements'),
+                    "zero_base_branch_readiness": result.get('branch_readiness'),
+                    "zero_base_first_data_branch_readiness": result.get('first_data_branch_readiness'),
+                    "zero_base_consumer_readiness": result.get('consumer_readiness'),
+                    "zero_base_consumer_readiness_at_callback": result.get('consumer_readiness_at_callback'),
+                    "zero_base_consumer_readiness_at_worker": result.get('consumer_readiness_at_worker'),
+                    "zero_base_residence_wait_seconds": claim.get('residence_wait_seconds'),
+                    "zero_base_source_diagnostic_error": result.get('source_diagnostic_error'),
+                    "zero_base_ws_registration": result.get('ws_registration'),
+                    "zero_base_residence_reserved_epoch": result.get('residence_reserved_epoch'),
+                    "zero_base_residence_deadline_epoch": result.get('residence_deadline_epoch'),
+                    "zero_base_residence_remaining_seconds": result.get('residence_remaining_seconds'),
                     "native_observation_reference": {
                         key: value for key, value in (result.get('native_observation') or {}).items()
                         if key != 'snapshot'},
@@ -6917,6 +6929,10 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     **{
                         "zero_base_ws_pre_machine_" + key: value
                         for key, value in (result.get("ws_observation_pre_machine") or {}).items()
+                    },
+                    **{
+                        "zero_base_ws_terminal_" + key: value
+                        for key, value in (result.get("ws_observation_terminal") or {}).items()
                     },
                     "entry_mechanistic_action": result.get("machine_action") or "-",
                     "machine_bundle_sha256": result.get("machine_bundle_sha256") or "-",

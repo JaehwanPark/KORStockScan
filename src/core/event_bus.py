@@ -48,6 +48,27 @@ class EventBus:
         with self._sub_lock:
             return bool(self._subscribers.get(event_type))
 
+    def consumer_readiness(self, event_type: str) -> dict:
+        """Read explicit consumer readiness outside the subscription lock."""
+        with self._sub_lock:
+            callbacks = tuple(self._subscribers.get(event_type, ()))
+        if not callbacks:
+            return {'ready': False, 'reason': 'consumer_absent'}
+        # Probe work has exactly one authority. Multiple receivers could start
+        # the same physical lease twice and cannot count as ready.
+        if len(callbacks) != 1:
+            return {'ready': False, 'reason': 'consumer_ambiguous'}
+        check = getattr(callbacks[0], 'runtime_readiness', None)
+        if not callable(check):
+            return {'ready': False, 'reason': 'consumer_readiness_unobserved'}
+        try:
+            result = check()
+            if isinstance(result, dict) and type(result.get('ready')) is bool:
+                return dict(result, subscriber_present=True)
+        except Exception:
+            pass
+        return {'ready': False, 'reason': 'consumer_readiness_failed'}
+
     def publish_with_dispatch_count(self, event_type: str, payload: dict = None) -> int:
         """Count attempted callbacks, never provider/WS/order acceptance.
 

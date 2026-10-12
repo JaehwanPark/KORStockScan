@@ -4478,6 +4478,12 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
     assert result["entry_ai_followup_disposition"] == ("ai_unavailable_bounded_recheck")
     assert result["entry_ai_full_entry_forbidden"] is True
     assert result["openai_transport_fail_closed"] is True
+    clocks = result['entry_local_stage_clocks']
+    assert clocks['provider_started_perf'] >= clocks['analysis_started_perf']
+    assert clocks['provider_returned_perf'] >= clocks['provider_started_perf']
+    assert clocks['failure_observed_perf'] == clocks['provider_returned_perf']
+    assert clocks['analysis_return_perf'] >= clocks['annotation_started_perf']
+    assert clocks['failure_processing_seconds'] >= 0
     assert result["machine_observation_sha256"] == "c" * 64
     assert result["entry_cost_source_status"] == "exact_pre_provider_replay"
     assert result["entry_conservative_execution_cost_pct"] > 0

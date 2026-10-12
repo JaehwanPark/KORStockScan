@@ -357,7 +357,7 @@ def test_recovery_detector_active_lock_is_not_terminal_success(tmp_path):
             timeout=10,
         )
     assert result.returncode == 75
-    assert "already running" in result.stdout
+    assert "holds lock" in result.stdout
     assert "[DONE]" not in result.stdout
 
 

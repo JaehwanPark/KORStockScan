@@ -291,7 +291,8 @@ def _probe_verified_no_match(row):
     try:
         fields = row['fields']
         if (fields.get('zero_base_probe_result') != 'required_feature_insufficient'
-                or fields.get('zero_base_probe_reason') != 'native_observation_residence_exhausted'
+                or fields.get('zero_base_probe_reason') not in {
+                    'native_observation_residence_exhausted', 'native_observation_no_matching_pattern'}
                 or fields.get('zero_base_ws_wait_reason') != 'ready'):
             return False
         receipt = fields.get('native_observation_receipt')

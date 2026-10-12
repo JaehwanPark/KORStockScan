@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import time
 import uuid
+import os
+import threading
+import math
+import bisect
+from types import SimpleNamespace
+from datetime import datetime
+from urllib.parse import urlsplit
 from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from src.engine.scalping.entry_candle_context import (
@@ -147,7 +154,7 @@ def exact_probe_ws_data(
 
 
 def probe_ws_observation(snapshot: dict, *, code: str, route: str,
-                         after_epoch: float) -> dict:
+                         after_epoch: float, now_epoch=None) -> dict:
     """Describe exact-route arrivals without promoting them to decision evidence."""
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     key = _ROUTE_KEY[route]
@@ -157,6 +164,7 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
     transport = snapshot.get("market_data_transport_epoch")
     transport = transport if type(transport) is int and transport > 0 else None
     item = probe_item(code, route)
+    stamp = time.time() if now_epoch is None else now_epoch
     observed = {}
     for kind in ("0B", "0D"):
         source = typed.get(kind)
@@ -164,7 +172,7 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
         epoch = source.get("observed_epoch")
         observed[kind] = (
             round((epoch - after_epoch) * 1000)
-            if isinstance(epoch, (int, float)) and epoch >= after_epoch
+            if type(epoch) in (int, float) and math.isfinite(epoch) and after_epoch <= epoch <= stamp
             and source.get("item") == item
             and source.get("market_route") == route
             and transport is not None and source.get("transport_epoch") == transport
@@ -174,29 +182,66 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
         buffers = snapshot.get(buffer_name)
         rows = buffers.get(key) if isinstance(buffers, dict) else None
         rows = rows if isinstance(rows, (list, tuple)) else []
-        return sorted((
-            (int(row["received_at_ms"] - after_epoch * 1000), row)
-            for row in rows if isinstance(row, dict)
-            and isinstance(row.get("received_at_ms"), (int, float))
-            and row["received_at_ms"] >= after_epoch * 1000
-            and row.get("item") == item
-            and transport is not None and row.get("transport_epoch") == transport
-        ), key=lambda arrival: arrival[0])
+        count, first, signed_first = 0, [], []
+        signed_count = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            received = row.get('received_at_ms')
+            if (type(received) not in (int, float) or not math.isfinite(received)
+                    or not after_epoch*1000 <= received <= stamp*1000
+                    or row.get('item') != item or row.get('market_route') != route
+                    or transport is None or row.get('transport_epoch') != transport):
+                continue
+            count += 1
+            delay = int(received-after_epoch*1000)
+            bisect.insort(first, delay)
+            del first[5:]
+            if (row.get('aggressor_source') == 'kiwoom_0b_signed_trade_volume'
+                    and row.get('aggressor_side') in {'BUY', 'SELL'}):
+                signed_count += 1
+                bisect.insort(signed_first, delay)
+                del signed_first[5:]
+        return count, first, signed_count, signed_first
     trades = arrivals("recent_trade_ticks_by_route")
     depths = arrivals("recent_depth_ticks_by_route")
-    signed = [delay for delay, row in trades
-              if row.get("aggressor_source") == "kiwoom_0b_signed_trade_volume"
-              and row.get("aggressor_side") in {"BUY", "SELL"}]
+    clocks = {}
+    for kind in ('0B', '0D'):
+        source = typed.get(kind) or {}
+        exact = (source.get('item') == item and source.get('market_route') == route
+                 and transport is not None and source.get('transport_epoch') == transport
+                 and observed[kind] is not None)
+        latency = source.get('market_source_latency') or {}
+        bound = exact and all(latency.get(k) == source.get(k)
+                              for k in ('item', 'transport_epoch', 'route_sequence'))
+        def number(value):
+            return value if type(value) in (int, float) and math.isfinite(value) else None
+        received = number(source.get('observed_epoch')) if exact else None
+        clocks[kind] = dict(item=item, route=route, transport_epoch=transport,
+            route_sequence=source.get('route_sequence') if exact else None,
+            provider_epoch=number(source.get('provider_trade_epoch')) if exact else None,
+            received_epoch=received, read_epoch=stamp,
+            age_ms=round((stamp-received)*1000, 3) if received is not None else None,
+            packet_received_epoch=number(latency.get('packet_received_epoch')) if bound else None,
+            callback_started_epoch=number(latency.get('dispatch_started_epoch')) if bound else None,
+            normalized_epoch=number(latency.get('normalized_epoch')) if bound else None,
+            native_ingest_returned_epoch=number(latency.get('native_ingest_returned_epoch')) if bound else None,
+            first_unobserved_boundary=('exact_normalized_snapshot' if not exact else
+                'packet_receive_clock' if not bound or number(latency.get('packet_received_epoch')) is None else
+                'native_ingest_receipt' if kind == '0B' else None),
+            cause='unobservable' if not exact else 'exact_normalized_source_observed')
     return {
-        "first_0b_ms": trades[0][0] if trades else None,
-        "first_0d_ms": depths[0][0] if depths else None,
+        'source_clocks': clocks,
+        'first_data_basis': 'earliest_retained_exact_interval_row_not_guaranteed_first_packet',
+        "first_0b_ms": trades[1][0] if trades[1] else None,
+        "first_0d_ms": depths[1][0] if depths[1] else None,
         "latest_0b_ms": observed["0B"],
         "latest_0d_ms": observed["0D"],
-        "exact_0b_count": len(trades),
-        "exact_0d_count": len(depths),
-        "signed_0b_count": len(signed),
-        "fifth_0b_ms": trades[4][0] if len(trades) >= 5 else None,
-        "fifth_signed_0b_ms": signed[4] if len(signed) >= 5 else None,
+        "exact_0b_count": trades[0],
+        "exact_0d_count": depths[0],
+        "signed_0b_count": trades[2],
+        "fifth_0b_ms": trades[1][4] if len(trades[1]) >= 5 else None,
+        "fifth_signed_0b_ms": trades[3][4] if len(trades[3]) >= 5 else None,
     }
 
 
@@ -223,7 +268,7 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
             now_epoch=now(),
         )
         observation = probe_ws_observation(
-            snapshot, code=code, route=route, after_epoch=after_epoch,
+            snapshot, code=code, route=route, after_epoch=after_epoch, now_epoch=now(),
         )
         if (ws_data and observation["exact_0b_count"] >= min_exact_0b_count
                 and time.monotonic() - started >= min_warmup_sec):
@@ -305,6 +350,78 @@ def exact_probe_rest_source_issue(ticks, candle_meta, *, request_code, now_epoch
     return ""
 
 
+_READINESS_LOCK = threading.Lock()
+_READINESS_IDENTITY = None
+_READINESS_GENERATION = None
+
+
+def consumer_readiness(*, ws_manager, ai_engine, token, enabled, family_sha256,
+                       now_epoch=None):
+    """Inspect existing normalized runtime state; no auth or WS operation."""
+    ready_event = getattr(ws_manager, '_session_ready', None)
+    stopped = getattr(ws_manager, '_stop_event', None)
+    epoch = getattr(ws_manager, '_market_data_transport_epoch', 0)
+    from src.engine.scalping.reversal_source_diagnostics import _PROCESS_START_TICKS
+    from src.trading.market import session_contract as S
+    stamp = time.time() if now_epoch is None else now_epoch
+    session = S.resolve_market_session(datetime.fromtimestamp(stamp, S.KST)).session_regime
+    route = ('nxt_only' if session == S.MARKET_SESSION_REGIME_LEGACY_PREMARKET else
+             'krx_nxt_integrated' if session in {S.MARKET_SESSION_REGIME_KRX_REGULAR,
+                 S.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET} else None)
+    # Compare existing configuration only, without reading or refreshing auth.
+    rest_host = urlsplit(kiwoom_utils.KIWOOM_BASE_URL).hostname
+    ws_host = urlsplit(str(getattr(ws_manager, 'uri', ''))).hostname
+    environment_matches = rest_host == ws_host and rest_host in {'api.kiwoom.com', 'mockapi.kiwoom.com'}
+    checks = (
+        ('runtime_disabled', bool(enabled)),
+        ('ws_manager_missing', ws_manager is not None),
+        ('ws_session_not_ready', bool(getattr(ws_manager, 'websocket', None))
+            and ready_event is not None and ready_event.is_set()
+            and not (stopped is not None and stopped.is_set())),
+        ('ws_epoch_missing', type(epoch) is int and epoch > 0),
+        ('machine_consumer_missing', bool(family_sha256)),
+        ('ai_consumer_missing', ai_engine is not None),
+        ('auth_missing', bool(token)),
+        ('auth_environment_mismatch', environment_matches),
+        ('market_session_closed', route is not None),
+    )
+    reason = next((name for name, valid in checks if not valid), 'ready')
+    day = str(datetime.fromtimestamp(stamp, S.KST).date())
+    # References are compared locally; no credential or credential digest leaves
+    # this owner. One generation per process, never an expanding auth ledger.
+    identity = (os.getpid(), day, session, route, epoch, family_sha256,
+                ws_manager, getattr(ws_manager, 'websocket', None),
+                ai_engine, token, getattr(ws_manager, 'token', None), reason)
+    global _READINESS_IDENTITY, _READINESS_GENERATION
+    with _READINESS_LOCK:
+        if identity != _READINESS_IDENTITY:
+            _READINESS_IDENTITY = identity
+            _READINESS_GENERATION = uuid.uuid4().hex
+        generation = _READINESS_GENERATION
+    return dict(schema='zero_base_consumer_readiness_v2', ready=reason == 'ready',
+        reason=reason, first_missing_dependency=None if reason == 'ready' else reason,
+        runtime_generation=generation, process_pid=os.getpid(), process_start_ticks=_PROCESS_START_TICKS,
+        date=day, session=session, route=route, transport_epoch=epoch,
+        consumer_open=not bool(stopped and stopped.is_set()), ws_manager_present=ws_manager is not None,
+        ws_session_ready=checks[2][1], ai_engine_present=ai_engine is not None,
+        token_present=bool(token), auth_environment_matches=environment_matches,
+        machine_policy_ready=bool(family_sha256),
+        machine_family_sha256=family_sha256, auth_present=bool(token),
+        observed_epoch=stamp, runtime_effect=False)
+
+
+def readiness_issue(expected, current):
+    if current.get('ready') is not True:
+        return current.get('reason') or 'consumer_not_ready'
+    if not isinstance(expected, dict) or not expected.get('runtime_generation'):
+        return 'consumer_readiness_receipt_missing'
+    if any(expected.get(k) != current.get(k) for k in (
+            'runtime_generation', 'process_pid', 'process_start_ticks', 'date',
+            'session', 'route', 'transport_epoch', 'machine_family_sha256')):
+        return 'consumer_readiness_generation_changed'
+    return ''
+
+
 def run_zero_base_probe(
     request: dict,
     *,
@@ -333,6 +450,10 @@ def run_zero_base_probe(
     code, route = claim.get("code"), claim.get("route")
     result = {
         "schema": RESULT_SCHEMA,
+        "observation_requirements": claim.get('observation_requirements'),
+        "consumer_readiness": request.get('consumer_readiness'),
+        "residence_reserved_epoch": claim.get('last_claim_epoch'),
+        "residence_deadline_epoch": native_wait_deadline_epoch,
         "claim": claim,
         "candidate": candidate,
         "result": "source_unavailable",
@@ -342,6 +463,8 @@ def run_zero_base_probe(
         "broker_order_forbidden": True,
     }
     item = probe_item(code or "", route or "")
+    descriptor_candidate = SimpleNamespace(code=code, route=route,
+        discovery_price=candidate.get('discovery_price') or 0)
     if not item or candidate.get("code") != code or candidate.get("route") != route:
         result["reason"] = "candidate_claim_identity_mismatch"
         return result
@@ -454,6 +577,11 @@ def run_zero_base_probe(
                 )
                 result["reason"] = registration_reason or source_reason
                 return result
+            if native_wait_deadline_epoch is not None:
+                from src.engine.scalping.reversal_source_diagnostics import branch_readiness
+                result['first_data_branch_readiness'] = branch_readiness(descriptor_candidate,
+                    now=now(), deadline=native_wait_deadline_epoch,
+                    original_requirements=claim.get('observation_requirements'))
             candles, candle_meta = candle_fetcher(
                 token, code, ws_data, venue=venue, session=session, limit=40,
                 now_ts=now(), allow_integrated_sor_execution_view=True,
@@ -534,7 +662,7 @@ def run_zero_base_probe(
         native_budget = None
         if native_wait_deadline_epoch is not None:
             from src.engine.scalping.reversal_source_diagnostics import (
-                observe_snapshot, observation_sequence, wait_observation)
+                observe_snapshot, observation_sequence, wait_observation, branch_readiness)
             from src.engine.scalping.reversal_current_backend import backend
             absolute_perf = residence_perf
             while True:
@@ -544,21 +672,38 @@ def run_zero_base_probe(
                     'NXT' if route == 'nxt_only' else 'SOR', session,
                     now=now(), item=item, family_sha256=family)
                 result['native_observation_receipt'] = native_receipt
+                result['residence_remaining_seconds'] = max(0, native_wait_deadline_epoch-now())
                 if native_snapshot is not None:
                     from src.engine.scalping.entry_deadline import EntryDeadline
                     native_budget = EntryDeadline.create(caller_epoch=native_snapshot[0]['epoch']+5)
                     break
                 remaining = min(native_wait_deadline_epoch-now(), absolute_perf-time.perf_counter())
                 if remaining <= 0:
+                    result['branch_readiness'] = branch_readiness(descriptor_candidate, now=now(),
+                        deadline=native_wait_deadline_epoch, original_requirements=claim.get('observation_requirements'))
                     result['result'] = 'required_feature_insufficient'
-                    result['reason'] = 'native_observation_residence_exhausted'
+                    truth = native_receipt.get('selected_branch_truth') or {}
+                    result['reason'] = ('native_observation_no_matching_pattern'
+                        if truth and all(v == 'FALSE' for v in truth.values()) else 'feature_window_incomplete')
                     return result
                 wait_observation(item, sequence, min(remaining, 1.0))
         refreshed_snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
         result["ws_observation_pre_machine"] = probe_ws_observation(
             refreshed_snapshot or {}, code=code, route=route,
-            after_epoch=registered_epoch,
+            after_epoch=registered_epoch, now_epoch=now(),
         )
+        if native_wait_deadline_epoch is not None:
+            result['branch_readiness'] = branch_readiness(descriptor_candidate, now=now(),
+                deadline=native_wait_deadline_epoch, original_requirements=claim.get('observation_requirements'))
+            clock = result['ws_observation_pre_machine']['source_clocks']['0B']
+            native = result.get('native_observation_receipt') or {}
+            clock['native_last_sequence'] = native.get('native_sequence')
+            clock['native_observed_epoch'] = native.get('observed_epoch')
+            clock['native_sequence_matches'] = (clock['route_sequence'] is not None
+                and native.get('native_epoch') == clock['transport_epoch']
+                and native.get('native_sequence') == clock['route_sequence'])
+            if clock['native_sequence_matches'] and clock['first_unobserved_boundary'] == 'native_ingest_receipt':
+                clock['first_unobserved_boundary'] = None
         ws_data, source_reason = exact_probe_ws_data(
             refreshed_snapshot, code=code, route=route,
             after_epoch=registered_epoch, now_epoch=now(),
@@ -674,6 +819,14 @@ def run_zero_base_probe(
             result["result"] = "policy_unavailable"
             result["reason"] = "machine_action_unknown"
     finally:
+        # Reuse the last exact read with its original clocks. Only failures
+        # before that boundary need a terminal memory read. Never skip cleanup.
+        try:
+            result['ws_observation_terminal'] = result.get('ws_observation_pre_machine') or probe_ws_observation(
+                    probe_ws_snapshot(ws_manager, code=code, route=route), code=code,
+                    route=route, after_epoch=registered_epoch, now_epoch=now())
+        except Exception as exc:
+            result['source_diagnostic_error'] = type(exc).__name__
         if (lease_requested or not was_subscribed) and not deferred_release and (exact_lease or callable(release_ws)):
             if (retain_ws_on_recheck and result["result"] == "assessed"
                     and result["machine_action"] in {"RECHECK", "ENTER_NOW"}):

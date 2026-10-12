@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import fcntl
+import math
 import os
 import re
+import stat
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +24,7 @@ SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_kiwoom_auth_8005_state.
 RESTART_FLAG_PATH = PROJECT_ROOT / "restart.flag"
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 PROC_ROOT = Path("/proc")
+_STATE_LOCK_WAIT_SEC = 2.0
 
 _EXPLICIT_LOG_NAMES = {
     "bot_history.log",
@@ -124,10 +129,37 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
     category = "runtime_auth"
 
     def check(self) -> DetectionResult:
+        if self.dry_run:
+            return self._check_state()
+        # Cron and the daemon share this cursor and recovery counters. The
+        # wrapper's cron lock alone does not serialize the in-process detector.
+        lock_path = SCAN_STATE_PATH.with_name(SCAN_STATE_PATH.name + '.lock')
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open('a') as lock:
+            deadline = time.monotonic() + _STATE_LOCK_WAIT_SEC
+            while True:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        return DetectionResult(
+                            detector_id=self.id, category=self.category, severity='warning',
+                            summary='Kiwoom auth detector state is busy; check deferred without recovery actions.',
+                            details=dict(state_lock_busy=True, restart_requested=False,
+                                token_cache_invalidated=False, runtime_effect='none'),
+                            recommended_action='Verify the concurrent detector finishes and the next check completes.')
+                    time.sleep(.01)
+            try:
+                return self._check_state()
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def _check_state(self) -> DetectionResult:
         state = self._load_state()
         log_files = _get_target_log_files()
         files_state = state.setdefault("files", {})
-        state_load_error = bool(state.pop("_state_load_error", False))
+        state_load_error = state.pop("_state_load_error", None)
         details: dict = {
             "target_logs": [path.name for path in log_files],
             "restart_flag_path": str(RESTART_FLAG_PATH),
@@ -141,6 +173,9 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             details["baseline_initialized"] = True
             if state_load_error:
                 details["state_load_error"] = True
+                details["state_load_error_kind"] = state_load_error
+                details.update(restart_requested=False, token_cache_invalidated=False,
+                               runtime_effect='none')
             if not self.dry_run:
                 self._save_state(state)
             if state_load_error:
@@ -441,19 +476,49 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
 
     @staticmethod
     def _load_state() -> dict:
-        if not SCAN_STATE_PATH.exists():
-            return {}
         try:
-            return json.loads(SCAN_STATE_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {"_state_load_error": True}
+            state = json.loads(SCAN_STATE_PATH.read_text(encoding="utf-8"))
+            if not isinstance(state, dict) or not isinstance(state.get('files', {}), dict):
+                raise ValueError('state_shape_invalid')
+            for row in state.get('files', {}).values():
+                if (not isinstance(row, dict) or type(row.get('position')) is not int
+                        or row['position'] < 0):
+                    raise ValueError('state_cursor_invalid')
+            count, last = state.get('restart_count', 0), state.get('last_restart_ts', 0)
+            if (type(count) is not int or count < 0 or type(last) not in (int, float)
+                    or not math.isfinite(last) or last < 0):
+                raise ValueError('state_recovery_counter_invalid')
+            return state
+        except FileNotFoundError:
+            return {}
+        except (ValueError, UnicodeError, OSError, OverflowError) as exc:
+            # Never include state bytes or credential-bearing log lines.
+            detail = dict(error_type=type(exc).__name__, errno=getattr(exc, 'errno', None))
+            if isinstance(exc, json.JSONDecodeError):
+                detail.update(line=exc.lineno, column=exc.colno)
+            elif str(exc) in {'state_shape_invalid', 'state_cursor_invalid', 'state_recovery_counter_invalid'}:
+                detail['reason'] = str(exc)
+            return {"_state_load_error": detail}
 
     @staticmethod
     def _save_state(state: dict) -> None:
         SCAN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SCAN_STATE_PATH.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        # Serialize before opening any file; a failed write keeps the previous
+        # valid generation. Unique same-directory temp files support replace.
+        payload = json.dumps(state, ensure_ascii=False, indent=2, allow_nan=False)
+        fd, name = tempfile.mkstemp(prefix='.' + SCAN_STATE_PATH.name + '.',
+                                    suffix='.tmp', dir=SCAN_STATE_PATH.parent)
+        temporary = Path(name)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                if SCAN_STATE_PATH.exists():
+                    os.fchmod(handle.fileno(), stat.S_IMODE(SCAN_STATE_PATH.stat().st_mode))
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, SCAN_STATE_PATH)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _extract_log_timestamp(line: str) -> float | None:

@@ -54,7 +54,9 @@ class BoundedObservationQueue:
         self._category_items = {}
         self._category_bytes = {}
         self._last_rejection = None
+        self._outcomes = {}
         self._stats = dict(queued=0, completed=0, append_confirmed=0,
+                           intentionally_not_written=0, append_unobservable=0, append_failed=0,
                            completed_without_append_receipt=0, failed=0, unavailable=0,
                            peak_items=0, peak_bytes=0)
 
@@ -168,22 +170,34 @@ class BoundedObservationQueue:
                 observe('observation_queue_wait', time.perf_counter() - queued_at)
                 args, kwargs = json.loads(encoded)
                 outcome = callback(*args, **kwargs)
-                if outcome is False or (isinstance(outcome, dict) and (
+                intentional = (isinstance(outcome, dict)
+                    and outcome.get('status') == 'intentionally_not_written'
+                    and bool(outcome.get('reason')))
+                if not intentional and (outcome is False or (isinstance(outcome, dict) and (
                         outcome.get('structured_append_succeeded') is False
-                        or outcome.get('structured_compact_append_succeeded') is False)):
+                        or outcome.get('structured_compact_append_succeeded') is False))):
                     raise OSError('observation_append_unconfirmed')
+                state = ('intentionally_not_written' if intentional else 'append_confirmed'
+                         if isinstance(outcome, dict) and outcome.get('structured_append_succeeded') is True
+                         else 'append_unobservable')
                 with self._condition:
                     self._stats['completed'] += 1
-                    if isinstance(outcome, dict) and outcome.get('structured_append_succeeded') is True:
-                        self._stats['append_confirmed'] += 1
-                    else:
+                    self._stats[state] += 1
+                    if state == 'append_unobservable':
                         self._stats['completed_without_append_receipt'] += 1
             except Exception as exc:
+                state = 'append_failed'
                 failure('observation_append', type(exc).__name__, emit_log=False)
                 with self._condition:
                     self._stats['failed'] += 1
+                    self._stats['append_failed'] += 1
             finally:
                 with self._condition:
+                    owner = category + ':' + str(getattr(callback, '__qualname__', type(callback).__name__))[:96]
+                    if owner not in self._outcomes and len(self._outcomes) >= 32:
+                        owner = 'overflow'
+                    counters = self._outcomes.setdefault(owner, {})
+                    counters[state] = counters.get(state, 0) + 1
                     self._items -= 1
                     self._bytes -= len(encoded)
                     self._category_items[category] -= 1
@@ -196,6 +210,7 @@ class BoundedObservationQueue:
             return {**self._stats, 'pending_items': self._items,
                     'pending_bytes': self._bytes, 'closed': self._closed,
                     'last_rejection': dict(self._last_rejection) if self._last_rejection else None,
+                    'outcomes_by_owner': {k: dict(v) for k,v in self._outcomes.items()},
                     'category_items': dict(self._category_items),
                     'category_bytes': dict(self._category_bytes)}
 
@@ -706,6 +721,20 @@ def _project_fields_for_compact_stream(
 
 
 def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, str]:
+    if stage == 'zero_base_probe_result':
+        # Full capsules remain in the canonical structured execution record.
+        return {k:v for k,v in fields.items() if k not in {
+            'zero_base_branch_readiness', 'zero_base_first_data_branch_readiness',
+            'zero_base_observation_requirements', 'zero_base_consumer_readiness',
+            'zero_base_ws_registration',
+            'zero_base_consumer_readiness_at_callback', 'zero_base_consumer_readiness_at_worker',
+            'zero_base_ws_source_clocks', 'zero_base_ws_pre_machine_source_clocks',
+            'zero_base_ws_terminal_source_clocks', 'zero_base_recheck_followup_ws_source_clocks'}} | {
+                'text_field_projection': 'probe_diagnostic_reference_only_v1'}
+    if stage in {'native_signal_lifecycle', 'entry_async_disposition'}:
+        return {k:v for k,v in fields.items()
+                if k not in {'native_signal_lifecycle', 'native_commit_revalidation', 'entry_local_stage_clocks'}} | {
+                    'text_field_projection': 'native_diagnostic_reference_only_v1'}
     if stage == 'main_stop_source':
         # The structured source is stored once; diagnostics carry its identity.
         return {key:value for key,value in fields.items() if key!='main_stop_source'} | {

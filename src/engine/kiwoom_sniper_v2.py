@@ -400,6 +400,8 @@ from src.utils.pipeline_event_logger import BoundedObservationQueue
 _SCANNER_OBSERVATION_QUEUE = BoundedObservationQueue(_SCANNER_OBSERVATION_EXECUTOR)
 from src.engine.monitoring.runtime_performance import set_observation_health
 set_observation_health(_SCANNER_OBSERVATION_QUEUE.snapshot)
+from src.engine.monitoring.runtime_performance import set_lifecycle_sink
+set_lifecycle_sink(_SCANNER_OBSERVATION_QUEUE.submit)
 _SCANNER_RUNTIME_INSTANCE_ID = (
     f"scanner-runtime-{os.getpid()}-{int(time.time() * 1000)}"
 )
@@ -8642,6 +8644,14 @@ def _zero_base_probe_observation_profile(session_regime):
     }
 
 
+def _zero_base_consumer_readiness():
+    from src.engine.scalping.zero_base_probe import consumer_readiness
+    from src.engine.scalping.reversal_current_backend import backend
+    return consumer_readiness(ws_manager=WS_MANAGER, ai_engine=AI_ENGINE,
+        token=KIWOOM_TOKEN, enabled=_zero_base_runtime_enabled(),
+        family_sha256=getattr(backend(), '_GENERATION', None))
+
+
 def handle_zero_base_probe_requested(request):
     request = dict(request or {})
     claim = request.get("claim") or {}
@@ -8677,6 +8687,14 @@ def handle_zero_base_probe_requested(request):
         return
     if evaluate_main_bot_control_exclusion(code).excluded:
         _zero_base_probe_result(request, "active_conflict", "manual_control_exclusion")
+        return
+    readiness = _zero_base_consumer_readiness()
+    from src.engine.scalping.zero_base_probe import readiness_issue
+    issue = readiness_issue(request.get('consumer_readiness'), readiness)
+    if issue:
+        # Callback began, but no executor/physical lease has been started.
+        request['consumer_readiness_at_callback'] = readiness
+        _zero_base_probe_result(request, 'policy_unavailable', issue)
         return
     if not _ZERO_BASE_PROBE_SLOTS.acquire(blocking=False):
         _zero_base_probe_result(request, "probe_capacity_deferred", "probe_worker_capacity")
@@ -8762,6 +8780,13 @@ def handle_zero_base_probe_requested(request):
 
                 def observe_once(*, warmup_sec, timeout_sec, empty_timeout_sec,
                                  retain_on_recheck):
+                    # Executor queue residence is another race boundary. No
+                    # physical REG is attempted with a replaced consumer.
+                    current = _zero_base_consumer_readiness()
+                    issue = readiness_issue(request.get('consumer_readiness'), current)
+                    if issue:
+                        return dict(request, result='policy_unavailable', reason=issue,
+                                    consumer_readiness_at_worker=current, machine_action='')
                     return run_zero_base_probe(
                         request,
                         ws_manager=WS_MANAGER,
@@ -12375,6 +12400,8 @@ def run_sniper(is_test_mode=False):
     run_sniper.scanner_scheduler_venues = configured_scheduler_venues
     run_sniper.hot_path_ai_dispatcher = None
     run_sniper.scanner_async_eval_coordinator = None
+    from src.engine.monitoring.runtime_performance import set_native_ready_event
+    set_native_ready_event(None)
     run_sniper.scanner_runtime_scheduler = ScannerRuntimeScheduler(
         max_active=_scalping_fifo_base_max_active()
     )
@@ -12490,6 +12517,7 @@ def run_sniper(is_test_mode=False):
         event_bus.subscribe("ORDER_EXECUTED", handle_real_execution)
         event_bus.subscribe("CONDITION_MATCHED", handle_condition_matched)
         event_bus.subscribe("CONDITION_UNMATCHED", handle_condition_unmatched)
+        handle_zero_base_probe_requested.runtime_readiness = _zero_base_consumer_readiness
         event_bus.subscribe(PROBE_REQUEST_EVENT, handle_zero_base_probe_requested)
         event_bus.subscribe(MACHINE_ENTER_EVENT, enqueue_zero_base_machine_enter)
         event_bus.subscribe(
@@ -12653,6 +12681,8 @@ def run_sniper(is_test_mode=False):
                     owns_ai_dispatcher=False,
                     observation_sink=_SCANNER_OBSERVATION_QUEUE.submit,
                 )
+                from src.engine.monitoring.runtime_performance import set_native_ready_event
+                set_native_ready_event(run_sniper.scanner_async_eval_coordinator.completion_event)
                 log_info(
                     "[SCANNER_ASYNC] initialized "
                     f"workers={run_sniper.hot_path_ai_dispatcher.max_workers} "
@@ -13664,7 +13694,8 @@ def run_sniper(is_test_mode=False):
                         kwargs.get("ws_data"))
                     _SCANNER_OBSERVATION_QUEUE.submit(
                         sniper_state_handlers.emit_scanner_watching_runtime_skip,
-                        _scanner_pipeline_stock_snapshot(stock_value), code_value, **kwargs)
+                        _scanner_pipeline_stock_snapshot(stock_value), code_value,
+                        observation_receipt=True, **kwargs)
 
             def _queue_scanner_ws_reg(code_value, source):
                 norm_code = str(code_value or "").strip()[:6]
@@ -16208,6 +16239,8 @@ def run_sniper(is_test_mode=False):
             except Exception as e:
                 log_error(f"scanner async coordinator stop failed: {e}")
             finally:
+                from src.engine.monitoring.runtime_performance import set_native_ready_event
+                set_native_ready_event(None)
                 run_sniper.scanner_async_eval_coordinator = None
         if isinstance(hot_path_dispatcher, HotPathAIDispatcher):
             try:
