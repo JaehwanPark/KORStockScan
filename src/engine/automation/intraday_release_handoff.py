@@ -30,6 +30,10 @@ _OBSERVER_CUSTODY = ContextVar('intraday_observer_custody', default=None)
 # and safety guards retain the original contract; any further byte change
 # requires another review. Evidence: docs/audits/machine-auxiliary-signal-delivery-review-2026-10-12.md.
 REVIEWED_ENTRY_CONSUMER_SOURCES = {
+    # Report-only route coverage; see route-coverage-source-review-2026-10-12.md.
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '26300fee49e3ca28568b07db2b0b7030e577c8070a78bef2477340f34dfba981',
+        '941f337d49346bdf881e2619af604704bc63c6b1733f45abaf7fcf617e1820cb'),
     'src/engine/kiwoom_sniper_v2.py': (
         '4cbd06363b1156761fd748c51ac9fbb4f54e69b64771f9f86e6770bba5ce177c',
         '9fc97110fd8f9eb3fa6f1d8a2216860db58754111f67f9b8a8cea440e0b5d385'),

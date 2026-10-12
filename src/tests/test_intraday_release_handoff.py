@@ -15,10 +15,11 @@ NEW = "b" * 40
 NATIVE_SELECTION = handoff._selection
 
 
+@pytest.mark.parametrize('name', ['src/engine/kiwoom_sniper_v2.py',
+                                  'src/engine/monitoring/submission_bottleneck_monitor.py'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
-def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage):
+def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name):
     import hashlib
-    name = 'src/engine/kiwoom_sniper_v2.py'
     own = 'src/engine/automation/intraday_release_handoff.py'
     before, after = b'def runtime(): return 1\n', b'def runtime(): return 2\n'
     pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())

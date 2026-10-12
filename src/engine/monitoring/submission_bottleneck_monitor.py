@@ -285,6 +285,67 @@ def _reversal_lifecycle_diagnostic(row):
     return None
 
 
+def _probe_verified_no_match(row):
+    """A native FALSE observation proves coverage, never machine/AI acceptance."""
+    import ast
+    try:
+        fields = row['fields']
+        if (fields.get('zero_base_probe_result') != 'required_feature_insufficient'
+                or fields.get('zero_base_probe_reason') != 'native_observation_residence_exhausted'
+                or fields.get('zero_base_ws_wait_reason') != 'ready'):
+            return False
+        receipt = fields.get('native_observation_receipt')
+        # Pipeline fields historically serialize dicts as Python literals.
+        # Read only this bounded producer field; never evaluate arbitrary code.
+        if isinstance(receipt, str):
+            if len(receipt) > 8192:
+                return False
+            try:
+                receipt = json.loads(receipt)
+            except ValueError:
+                receipt = ast.literal_eval(receipt)
+        if not isinstance(receipt, dict):
+            return False
+        route = fields['zero_base_route']
+        suffix, venue = {'krx_only': ('', 'KRX'), 'nxt_only': ('_NX', 'NXT'),
+                         'krx_nxt_integrated': ('_AL', 'SOR')}[route]
+        code = row['stock_code']
+        truth = receipt.get('selected_branch_truth')
+        at = stamp(row.get('emitted_at'))
+        epoch = receipt.get('observed_epoch')
+        return (
+            isinstance(code, str) and len(code) == 6 and code.isdigit()
+            and receipt.get('schema') == 'native_observation_selection_v1'
+            and receipt.get('evaluation_role') == 'probe_observation'
+            and receipt.get('runtime_effect') is False
+            and receipt.get('reason') == 'no_matching_pattern'
+            and receipt.get('item') == code + suffix and receipt.get('venue') == venue
+            and type(receipt.get('process_pid')) is int and receipt['process_pid'] > 0
+            and str(receipt['process_pid']) == str(fields.get('zero_base_producer_pid'))
+            and str(receipt.get('process_start_ticks') or '').isdigit()
+            and int(receipt['process_start_ticks']) > 0
+            and at is not None and type(epoch) in (int, float) and math.isfinite(epoch)
+            and 0 <= at.timestamp() - epoch <= 5
+            and all(isinstance(receipt.get(k), str) and len(receipt[k]) == 64
+                    and all(c in '0123456789abcdef' for c in receipt[k])
+                    for k in ('family_sha256', 'scope_execution_hash'))
+            and bool(receipt.get('selected_scope'))
+            and isinstance(truth, dict) and bool(truth)
+            and all(isinstance(k, str) and k and v == 'FALSE' for k, v in truth.items())
+            and all(type(receipt.get(k)) is int and receipt[k] == 0
+                    for k in ('raw_ready_count', 'selected_ready_count'))
+            and all(type(receipt.get(k)) is int and receipt[k] > 0
+                    for k in ('native_epoch', 'native_sequence'))
+            and type(receipt.get('observed_seconds')) in (int, float)
+            and math.isfinite(receipt['observed_seconds']) and receipt['observed_seconds'] > 0
+            and int(fields.get('zero_base_ws_exact_0b_count', 0)) > 0
+            and int(fields.get('zero_base_ws_signed_0b_count', 0)) > 0
+            and int(fields.get('zero_base_ws_exact_0d_count', 0)) > 0
+        )
+    except (KeyError, TypeError, ValueError, SyntaxError, RecursionError, OverflowError):
+        return False
+
+
 def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
     """Observe source causes before and after machine assessment without trading authority."""
     now = stamp(now)
@@ -299,6 +360,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
     issue_examples, diagnostic_examples = [], []
     seen = set()
     probe_by_route, assessed_by_route = Counter(), Counter()
+    covered_by_route, no_match_by_route, seen_probes = Counter(), Counter(), set()
 
     def record(stage, reason, row, *, diagnostic=False, code=None, route=None, attempt=None):
         if stage == "machine_probe" and not attempt:
@@ -350,6 +412,13 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
         result = str(fields.get("zero_base_probe_result") or "")
         reason = str(fields.get("zero_base_probe_reason") or "")
         route = fields.get("zero_base_route")
+        lease = str(fields.get('physical_probe_lease_id') or '')
+        identity = (str(fields.get('zero_base_producer_pid') or ''), str(row.get('stock_code')),
+                    str(route), lease if lease.lower() not in {'', '-', 'none', 'null'} else
+                    (str(row.get('emitted_at')), result, reason))
+        if identity in seen_probes:
+            continue
+        seen_probes.add(identity)
         observed["probe_results"] += 1
         if result in {"assessed", "required_feature_insufficient", "source_unavailable"} or (
                 result == "policy_unavailable" and reason != "zero_base_runtime_disabled"):
@@ -364,8 +433,18 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
                 record("machine_probe", "capture_receipt_missing_or_invalid", row,
                        code=row.get("stock_code"), route=route)
             else:
+                covered_by_route[str(route or 'UNKNOWN')] += 1
                 healthy("machine_probe", row, route)
         elif result == "required_feature_insufficient":
+            if _probe_verified_no_match(row):
+                covered_by_route[str(route or 'UNKNOWN')] += 1
+                no_match_by_route[str(route or 'UNKNOWN')] += 1
+                observed['probe_native_no_match'] += 1
+                # This cannot recover a missing machine capture or AI receipt.
+                # It contributes only to the route source-coverage numerator.
+                record('machine_probe', 'native_no_matching_pattern', row,
+                       diagnostic=True, code=row.get('stock_code'), route=route)
+                continue
             kind = str(fields.get("zero_base_machine_source_gap_kind") or "").strip("- ")
             kind = kind or (reason if reason in {
                 "tick_or_candle_missing", "candle_source_missing", "candle_context_missing",
@@ -400,8 +479,9 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
     for route, count in probe_by_route.items():
         if sources["probe"]["status"] != "complete" or count < 10:
             continue
-        if assessed_by_route[route] * 5 < count:
-            # This is degraded admission coverage, not proof of a Kiwoom fault.
+        if covered_by_route[route] * 5 < count:
+            # Source coverage includes validated native FALSE observations.
+            # Pattern absence and AI admission are not transport failures.
             issues[f"machine_probe:coverage_degraded:{route}"] += 1
             issue_scopes[f"route:{route}|machine_probe:coverage_degraded"] += 1
         else:
@@ -618,7 +698,10 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
         "healthy_by_scope": dict(sorted(healthy_scopes.items())),
         "probe_route_counts": dict(sorted(probe_by_route.items())),
         "probe_route_assessed_counts": dict(sorted(assessed_by_route.items())),
-        "coverage_alert_floor": "10_same_route_source_eligible_probes_below_20pct_assessed",
+        "probe_route_source_covered_counts": dict(sorted(covered_by_route.items())),
+        "probe_route_native_no_match_counts": dict(sorted(no_match_by_route.items())),
+        "coverage_alert_floor": "10_same_route_unique_probes_below_20pct_source_covered",
+        "coverage_success_contract": "valid_machine_capture_or_exact_native_all_false_receipt",
         "remediation": remediation,
         "examples": issue_examples + diagnostic_examples, "runtime_effect": False,
         "next_action": ("inspect_exact_attempt_source_then_use_existing_bounded_source_only_repair" if issues

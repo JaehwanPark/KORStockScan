@@ -2067,3 +2067,128 @@ def test_selected_delay_missing_is_distinct_from_unselected_observation(tmp_path
     raw.write_text(json.dumps(commit)+'\n'+json.dumps(terminal)+'\n')
     observed=monitor.pre_submit_delay_source_semantics(tmp_path,datetime(2026,9,29,10,4))
     assert not observed['issues'].get('selected_due_completion_missing')
+
+
+def _native_no_match_probe(now, *, receipt_format='literal'):
+    row = _probe_source_row(now, 'required_feature_insufficient',
+                            'native_observation_residence_exhausted')
+    receipt = dict(schema='native_observation_selection_v1',
+        evaluation_role='probe_observation', observed_epoch=monitor.stamp(now).timestamp()-.1,
+        runtime_effect=False, reason='no_matching_pattern', item='005930_AL', venue='SOR',
+        process_pid=123, process_start_ticks='456', family_sha256='a'*64,
+        scope_execution_hash='b'*64, selected_scope='samsung|REGULAR|ALL',
+        selected_branch_truth={'G1': 'FALSE', 'G2': 'FALSE'}, native_epoch=2,
+        native_sequence=200, observed_seconds=149.5, raw_ready_count=0, selected_ready_count=0)
+    row['fields'].update(zero_base_producer_pid='123', physical_probe_lease_id='lease-1',
+        zero_base_ws_wait_reason='ready', zero_base_ws_exact_0b_count='8',
+        zero_base_ws_signed_0b_count='8', zero_base_ws_exact_0d_count='15',
+        native_observation_receipt=(repr(receipt) if receipt_format == 'literal'
+            else json.dumps(receipt) if receipt_format == 'json' else receipt))
+    return row
+
+
+@pytest.mark.parametrize('receipt_format', ['literal', 'json', 'dict'])
+def test_native_all_false_is_source_coverage_without_machine_admission(tmp_path, receipt_format):
+    now = START + timedelta(minutes=10)
+    rows = [_probe_source_row(now-timedelta(seconds=i), 'source_unavailable',
+                             '0B_missing') for i in range(8)]
+    for i in range(2):
+        row = _native_no_match_probe(now-timedelta(seconds=20+i), receipt_format=receipt_format)
+        row['fields']['physical_probe_lease_id'] = f'lease-{i}'
+        rows.append(row)
+    _source_gap_files(tmp_path, now, probes=rows)
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result['issues'] == {}
+    assert result['probe_route_counts'] == {'krx_nxt_integrated': 10}
+    assert result['probe_route_source_covered_counts'] == {'krx_nxt_integrated': 2}
+    assert result['probe_route_native_no_match_counts'] == {'krx_nxt_integrated': 2}
+    assert result['probe_route_assessed_counts'] == {}
+    assert result['diagnostics']['machine_probe:0B_missing'] == 8
+    assert result['diagnostics']['machine_probe:native_no_matching_pattern'] == 2
+    assert result['healthy_by_scope'] == {'route:krx_nxt_integrated|machine_probe:coverage_degraded': 1}
+    state = {'as_of': now.isoformat(), 'incidents': {}, 'notification_pending': []}
+    gap = {**result, 'issues': {'machine_probe:coverage_degraded:krx_nxt_integrated': 1},
+        'issues_by_scope': {'route:krx_nxt_integrated|machine_probe:coverage_degraded': 1}}
+    monitor.attach_source_gap_semantics(state, gap)
+    monitor.attach_source_gap_semantics(state, result)
+    assert state['incidents']['machine_auxiliary_intraday_source_gap']['status'] == 'recovered'
+    assert state['incidents']['machine_auxiliary_intraday_source_gap']['historical_source_repaired'] is False
+
+
+@pytest.mark.parametrize('key,value', [
+    ('reason', 'required_window_incomplete'), ('item', '005930_NX'), ('venue', 'NXT'),
+    ('process_pid', 124), ('process_start_ticks', ''), ('family_sha256', '-'),
+    ('scope_execution_hash', 'g'*64), ('selected_scope', ''),
+    ('selected_branch_truth', {'G1': 'UNKNOWN'}), ('selected_branch_truth', {'G1': 'TRUE'}),
+    ('selected_branch_truth', {}), ('runtime_effect', True), ('observed_epoch', 0),
+    ('observed_epoch', float('nan')), ('native_epoch', False), ('native_sequence', 0),
+    ('observed_seconds', float('inf')), ('raw_ready_count', 1), ('raw_ready_count', False),
+    ('selected_ready_count', 1), ('schema', 'other'), ('evaluation_role', 'claim'),
+])
+def test_native_no_match_requires_exact_complete_receipt(key, value):
+    row = _native_no_match_probe(START, receipt_format='dict')
+    row['fields']['native_observation_receipt'][key] = value
+    assert monitor._probe_verified_no_match(row) is False
+
+
+@pytest.mark.parametrize('key,value', [
+    ('zero_base_route', 'krx_only'), ('zero_base_producer_pid', '124'),
+    ('zero_base_ws_wait_reason', '0B_age_exceeded'), ('zero_base_ws_exact_0b_count', '0'),
+    ('zero_base_ws_signed_0b_count', '0'), ('zero_base_ws_exact_0d_count', '0'),
+    ('native_observation_receipt', 'x'*8193), ('native_observation_receipt', '{}'),
+    ('native_observation_receipt', 'not-a-literal'),
+    ('zero_base_probe_result', 'source_unavailable'),
+])
+def test_native_no_match_rejects_missing_or_conflicting_outer_source(key, value):
+    row = _native_no_match_probe(START)
+    row['fields'][key] = value
+    assert monitor._probe_verified_no_match(row) is False
+
+
+def test_probe_coverage_deduplicates_physical_lease_not_distinct_attempts(tmp_path):
+    now = START + timedelta(minutes=10)
+    row = _native_no_match_probe(now)
+    rows = [json.loads(json.dumps(row)) for _ in range(12)]
+    for i, copy in enumerate(rows):
+        copy['emitted_at'] = (now+timedelta(milliseconds=i)).isoformat()
+    _source_gap_files(tmp_path, now, probes=rows)
+    result = monitor.source_gap_semantics(tmp_path, now+timedelta(seconds=1))
+    assert result['observed']['probe_results'] == 1
+    assert result['probe_route_source_covered_counts'] == {'krx_nxt_integrated': 1}
+    assert not result['healthy_by_scope']  # Below route recovery floor.
+
+
+def test_missing_capture_does_not_count_as_source_coverage(tmp_path):
+    now = START + timedelta(minutes=10)
+    rows = [_probe_source_row(now-timedelta(seconds=i), 'assessed', 'machine_assessed')
+            for i in range(10)]
+    for row in rows:
+        row['fields']['machine_capture_status'] = 'failed'
+    _source_gap_files(tmp_path, now, probes=rows)
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result['probe_route_assessed_counts'] == {'krx_nxt_integrated': 10}
+    assert not result['probe_route_source_covered_counts']
+    assert result['issues']['machine_probe:capture_receipt_missing_or_invalid'] == 10
+    assert result['issues']['machine_probe:coverage_degraded:krx_nxt_integrated'] == 1
+
+
+def test_native_no_match_does_not_recover_missing_machine_capture(tmp_path):
+    now = START + timedelta(minutes=10)
+    rows = [_native_no_match_probe(now-timedelta(seconds=i)) for i in range(10)]
+    for i, row in enumerate(rows):
+        row['fields']['physical_probe_lease_id'] = f'lease-{i}'
+    _source_gap_files(tmp_path, now, probes=rows)
+    result = monitor.source_gap_semantics(tmp_path, now)
+    state = {'as_of': now.isoformat(), 'incidents': {
+        'machine_auxiliary_intraday_source_gap': {'status': 'active',
+          'issues_by_scope': {'route:krx_nxt_integrated|machine_probe:capture_receipt_missing_or_invalid': 1}}},
+        'notification_pending': []}
+    monitor.attach_source_gap_semantics(state, result)
+    assert state['incidents']['machine_auxiliary_intraday_source_gap']['status'] == 'historical_unresolved'
+
+
+def test_native_no_match_uses_final_native_window_not_initial_warmup_target():
+    row = _native_no_match_probe(START)
+    row['fields'].update(zero_base_ws_exact_0b_count='3', zero_base_ws_signed_0b_count='3',
+                         zero_base_ws_sample_target='5', zero_base_ws_sample_target_met='False')
+    assert monitor._probe_verified_no_match(row) is True
