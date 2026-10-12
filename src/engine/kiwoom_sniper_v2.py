@@ -8568,6 +8568,13 @@ def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None):
                 "zero_base_machine_bundle_sha256": (result or {}).get("machine_bundle_sha256"),
                 "machine_observation_sha256": (result or {}).get("machine_observation_sha256"),
                 "record_id": record_id,
+                "zero_base_finalize_receipt": json.dumps(
+                    (result or {}).get('_zero_base_finalize_receipt') or {}, sort_keys=True),
+                "zero_base_handoff_id": (result or {}).get('ws_handoff_id'),
+                "zero_base_physical_probe_lease_id": (result or {}).get('physical_probe_lease_id'),
+                "zero_base_attach_pid": os.getpid(),
+                "zero_base_attach_process_start_ticks": __import__(
+                    'src.engine.monitoring.runtime_performance',fromlist=['process_identity_fields']).process_identity_fields()['process_start_ticks'],
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
             },
@@ -8593,6 +8600,8 @@ def _zero_base_inbox_attach_receipt(payload, *, outcome, reason):
             "machine_observation_sha256": (payload or {}).get(
                 "zero_base_probe_machine_observation_sha256"
             ),
+            "physical_probe_lease_id": (payload or {}).get('physical_probe_lease_id'),
+            "_zero_base_finalize_receipt": (payload or {}).get('_zero_base_finalize_receipt'),
         },
         outcome=outcome, reason=reason, record_id=(payload or {}).get("record_id"),
     )
@@ -8929,8 +8938,29 @@ def _zero_base_native_handoff_valid(payload):
 def _zero_base_finalize_candidate_record(payload, *, attached):
     record_id = (payload or {}).get("record_id")
     code = str((payload or {}).get("code") or "").strip()[:6]
+    def finish(accepted, reason, **fields):
+        try:
+            if isinstance(payload, dict):
+                expected = payload.get('native_observation') or {}
+                from src.engine.monitoring.runtime_performance import process_identity_fields
+                identity=process_identity_fields()
+                payload['_zero_base_finalize_receipt'] = dict(schema='zero_base_finalize_receipt_v1',
+                    finalized=accepted, attached=bool(attached), reason=reason, record_id=record_id,
+                    code=code, **identity, observed_epoch=time.time(),
+                    ws_handoff_id=payload.get('ws_handoff_id'),
+                    physical_probe_lease_id=payload.get('physical_probe_lease_id'),
+                    machine_observation_sha256=payload.get('zero_base_probe_machine_observation_sha256')
+                        or payload.get('machine_observation_sha256'),
+                    native_signal_id=expected.get('signal_id') or expected.get('event_id'),
+                    native_snapshot_sha256=expected.get('snapshot_sha256'),
+                    original_deadline_perf=expected.get('deadline_perf'),
+                    decision_authority='observation_only', actual_order_submitted=False, **fields)
+        except Exception as exc:
+            try:log_error("[ZERO_BASE_FINALIZE_RECEIPT] " + type(exc).__name__)
+            except Exception:pass
+        return accepted
     if not record_id or not code:
-        return False
+        return finish(False, 'record_identity_missing')
     native_claim = None
     try:
         with ENTRY_LOCK:
@@ -8941,7 +8971,7 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
                 None,
             )
             if attached and attached_target is None:
-                return False
+                return finish(False, 'watching_target_missing')
             expected = (payload or {}).get('native_observation')
             with DB.get_session() as session:
                 row = session.get(RecommendationHistory, int(record_id))
@@ -8953,16 +8983,17 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
                         "ZERO_BASE_DISCOVERY:"
                     )
                 ):
-                    return False
+                    return finish(False, 'durable_probe_admission_mismatch',
+                        observed_row_state=getattr(row, 'status', None))
                 # Validate durable admission before consuming the single-use
                 # native claim. A missing/stale row has no claim authority.
                 if attached and expected is not None:
                     if not _zero_base_native_handoff_valid(payload):
-                        return False
+                        return finish(False, 'native_handoff_invalid')
                     from src.engine.scalping.reversal_source_diagnostics import claim_expected_snapshot
                     native_claim = claim_expected_snapshot(expected)
                     if native_claim is None:
-                        return False
+                        return finish(False, 'expected_native_claim_unavailable')
                 row.status = "WATCHING" if attached else "EXPIRED"
             if attached_target is not None and attached:
                 attached_target.pop("zero_base_pending_db", None)
@@ -8972,13 +9003,13 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
                         'claim_token': native_claim['token'],
                         'deadline_perf': expected['deadline_perf'],
                     }
-            return True
+            return finish(True, 'watching_finalized' if attached else 'probe_expired')
     except Exception as exc:
         if native_claim is not None:
             from src.engine.scalping.reversal_current_backend import acknowledge_any
             acknowledge_any(native_claim, status='main_attach_commit_failed')
         log_error("[ZERO_BASE_ATTACH_DB] finalize failed: " + type(exc).__name__)
-        return False
+        return finish(False, 'db_finalize_exception', exception_type=type(exc).__name__)
 
 
 def _zero_base_rollback_uncommitted_target(payload):
@@ -12296,7 +12327,10 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
                 prepare_ai_request_capture()
             except Exception as exc:
                 from src.engine.monitoring.runtime_performance import failure
-                failure('trace_dedup_prepare', type(exc).__name__)
+                reason = type(exc).__name__
+                if isinstance(exc, OSError):
+                    reason += ':errno=' + str(exc.errno) + ':file=' + Path(str(exc.filename or '')).name
+                failure('trace_dedup_prepare', reason)
             capacity_result = sniper_state_handlers.prepare_pending_entry_capacity()
             if capacity_result.get("status") != "idle":
                 run_sniper.entry_economic_capacity_preparation_receipt = capacity_result

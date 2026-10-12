@@ -604,6 +604,12 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     # frozen policy too (getattr defaults are often intentionally undeclared).
     Rules = SimpleNamespace
 
+    # Runtime diagnostics initialize PID/start telemetry from /proc. Load that
+    # observation-only module before the frozen data namespace is installed;
+    # offline policy evaluation never treats current process metadata as an
+    # original trade input and must not emit samples into live diagnostics.
+    from src.engine.monitoring import runtime_performance as diagnostics
+
     original_modules = [
         module
         for name, module in list(sys.modules.items())
@@ -647,6 +653,10 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
 
     def quiet(*args, **kwargs):
         return None
+
+    diagnostics.observe = quiet
+    diagnostics.failure = quiet
+    diagnostics.mark_signal = quiet
 
     # Only telemetry is elided. Trading/quote/matrix/safety decisions are not
     # replaced with preselected outcomes.

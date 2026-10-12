@@ -8960,6 +8960,39 @@ def _raw_source_writer_active(target_date: str, raw_path: Path) -> bool:
     return is_today and age_sec <= grace_sec
 
 
+def _raw_exclusion_source_snapshot(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {name: getattr(stat, f'st_{name}') for name in
+            ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns')}
+
+
+def _fresh_exclusion_still_owns_source(
+    target_date: str, raw_path: Path, manifest: dict[str, Any] | None,
+) -> bool:
+    """A fresh quarantine replacement is not evidence of a live append.
+
+    Only the locally returned manifest may qualify. Later append, replacement,
+    same-size correction, or missing ownership evidence keeps the writer guard.
+    The producer sealer independently checks its full input generation.
+    """
+    if (not isinstance(manifest, dict)
+            or manifest.get('target_date') != target_date
+            or manifest.get('source_path') != str(raw_path)
+            or manifest.get('audit_contract_version') != RAW_ROW_EXCLUSION_CONTRACT_VERSION
+            or manifest.get('application_state') != 'applied'
+            or manifest.get('raw_mutation_applied') is not True):
+        return False
+    expected = manifest.get('applied_source_snapshot')
+    if (not isinstance(expected, dict)
+            or set(expected) != {'dev', 'ino', 'size', 'mtime_ns', 'ctime_ns'}
+            or any(type(value) is not int for value in expected.values())):
+        return False
+    try:
+        return expected == _raw_exclusion_source_snapshot(raw_path)
+    except OSError:
+        return False
+
+
 def _pending_raw_row_exclusion_manifest(
     target_date: str,
     report: dict[str, Any],
@@ -9139,7 +9172,12 @@ def _exclude_hard_blocking_rows_from_raw(
         exclusions_by_line,
         target_date=target_date,
     )
+    replacement_snapshot = _raw_exclusion_source_snapshot(tmp_path)
     tmp_path.replace(raw_path)
+    applied_snapshot = _raw_exclusion_source_snapshot(raw_path)
+    if any(applied_snapshot[key] != replacement_snapshot[key]
+           for key in ('dev', 'ino', 'size', 'mtime_ns')):
+        applied_snapshot = None
     manifest = {
         "report_type": "raw_row_exclusion",
         "target_date": target_date,
@@ -9151,6 +9189,7 @@ def _exclude_hard_blocking_rows_from_raw(
         "deferred_writer_active": False,
         "manifest_path": str(manifest_path),
         "source_path": str(raw_path),
+        "applied_source_snapshot": applied_snapshot,
         "backup_path": str(backup_path),
         "excluded_row_count": len(excluded_payloads),
         **exclusion_summary,
@@ -9338,15 +9377,26 @@ def write_report(target_date: str, *, audit_phase: str = "manual", verified_proj
         # This existing source owner runs after native bot isolation and raw-row
         # quarantine, before atomic sizing readers require a sealed generation.
         try:
-            if _raw_source_writer_active(target_date, raw_path):
+            owns_fresh_exclusion = (
+                not writer_active
+                and _fresh_exclusion_still_owns_source(target_date, raw_path, exclusion_manifest)
+            )
+            if _raw_source_writer_active(target_date, raw_path) and not owns_fresh_exclusion:
                 raise ValueError("producer_source_writer_active")
+            seal_options = {}
+            if owns_fresh_exclusion:
+                snapshot = exclusion_manifest['applied_source_snapshot']
+                seal_options['expected_raw_generation'] = {
+                    'path': str(raw_path),
+                    'stamp': [snapshot[key] for key in ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns')],
+                }
             try:
-                producer = seal_producer_summary_source(DATA_DIR, target_date)
+                producer = seal_producer_summary_source(DATA_DIR, target_date, **seal_options)
             except ValueError as exc:
                 if not str(exc).startswith(("producer_raw_summary_count_mismatch",
                                             "producer_raw_summary_identity_mismatch")):
                     raise
-                producer = rebuild_producer_summary_source(DATA_DIR, target_date)
+                producer = rebuild_producer_summary_source(DATA_DIR, target_date, **seal_options)
             _, producer_path = producer_summary_paths(DATA_DIR / "pipeline_event_summaries", target_date)
             report["producer_source_ledger"] = {
                 "status": "ready", "path": str(producer_path),

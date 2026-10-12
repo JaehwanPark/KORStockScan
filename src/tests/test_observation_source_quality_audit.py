@@ -9098,6 +9098,64 @@ def test_preflight_repairs_only_retained_raw_summary_parity(tmp_path, monkeypatc
         assert report["producer_source_ledger"]["status"] == "source_gap"
 
 
+@pytest.mark.parametrize('after_exclusion', ['unchanged', 'append', 'replace'])
+def test_preflight_seals_own_quarantine_only_while_its_exact_file_is_unchanged(
+    tmp_path, monkeypatch, after_exclusion
+):
+    from src.engine import pipeline_event_summary as producer
+    monkeypatch.setattr(audit, 'DATA_DIR', tmp_path)
+    day = '2026-10-12'
+    _write_events(tmp_path, day, [_event('unrelated_stage', {})])
+    raw = tmp_path / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+    original_inode = raw.stat().st_ino
+    built = []
+    native_build = audit.build_observation_source_quality_audit
+    def build(*args, **kwargs):
+        built.append(True)
+        if len(built) == 2:
+            if after_exclusion == 'append':
+                with raw.open('a') as output:
+                    output.write(json.dumps(_event('unrelated_stage', {})) + '\n')
+            elif after_exclusion == 'replace':
+                replacement = raw.with_suffix('.replacement')
+                replacement.write_bytes(raw.read_bytes())
+                replacement.replace(raw)
+        report = native_build(*args, **kwargs)
+        report['hard_blocking_row_exclusions'] = [] if len(built) > 1 else [
+            {'line_no': 1, 'stage': 'unrelated_stage',
+             'exclusion_reasons': ['invalid_label']}]
+        return report
+    monkeypatch.setattr(audit, 'build_observation_source_quality_audit', build)
+    monkeypatch.setattr(audit, '_write_markdown', lambda report, path: path.write_text('audit\n'))
+    # A closed file was quiet before quarantine. The newly replaced inode has
+    # a recent mtime, reproducing the real preflight's false writer detection.
+    monkeypatch.setattr(audit, '_raw_source_writer_active',
+                        lambda *_args: raw.stat().st_ino != original_inode)
+    calls = []
+    def seal(*args, **kwargs):
+        calls.append('seal')
+        snapshot = audit._raw_exclusion_source_snapshot(raw)
+        assert kwargs['expected_raw_generation'] == {
+            'path': str(raw),
+            'stamp': [snapshot[key] for key in ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns')],
+        }
+        _, path = producer.producer_summary_paths(tmp_path / 'pipeline_event_summaries', day)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{}\n')
+        return {'raw_source_ledger': {'ledger_sha256': 'a' * 64}}
+    monkeypatch.setattr(producer, 'seal_producer_summary_source', seal)
+    report = audit.write_report(day, audit_phase='preflight')
+    assert report['raw_row_exclusion']['raw_mutation_applied'] is True
+    if after_exclusion == 'unchanged':
+        assert calls == ['seal']
+        assert report['producer_source_ledger']['status'] == 'ready'
+    else:
+        assert calls == []
+        assert report['producer_source_ledger'] == {
+            'status': 'source_gap', 'reason': 'producer_source_writer_active',
+            'runtime_effect': False}
+
+
 def test_stdout_summary_omits_large_stage_contracts():
     report = {
         "report_type": "observation_source_quality_audit",

@@ -946,3 +946,59 @@ def test_consumer_compatible_incumbent_still_reconstructs_exact_source(tmp_path,
     Path(source['path']).write_text('{}')
     with pytest.raises(ValueError,match='source_report_hash_mismatch'):
         policy.verify_source_handoff(tmp_path,bundle)
+
+
+def test_offline_parent_carry_does_not_require_a_new_live_handoff(tmp_path, monkeypatch):
+    from src.engine.automation import intraday_release_handoff as handoff, postclose_summary_handoff as summary
+    _, _, _, _, _, _, numeric = fixture(tmp_path)
+    numeric['selected_cells'] = {}
+    replay = summarize_holding_path_votes([], load_events=lambda _: [], model='gpt-5.4-nano')
+    replay['vote_numeric_research'] = numeric
+    observation = dict(date='2026-10-08', holding_path_vote_replay=replay,
+        completed_population_quality=dict(complete=False, db_completed_main_ids=[],
+        strict_completed_position_ids=[], source_gap_ids=[], excluded_all_reasons={}, source_gap_dates=[]))
+    source = write(tmp_path/'report/monitor_snapshots/holding_exit_observation_2026-10-08.json', observation)
+    parent = policy.create_bundle(source_date='2026-10-08', target_date='2026-10-12',
+        source_report_sha256=source['sha256'], replay=replay,
+        source_quality=policy.source_quality_from_observation(observation))
+    write(policy.policy_path(tmp_path, '2026-10-12'), parent)
+    write(tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json', dict(
+        holding_path_vote_policy=dict(status=policy.publication_status(parent), source_date='2026-10-08',
+        target_date='2026-10-12', bundle_sha256=parent['bundle_sha256'],
+        policy_set_sha256=parent['policy_set_sha256'], source_report_sha256=source['sha256'], cell_count=12)))
+    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
+    def missing_live_handoff(*a, **kw):
+        raise ValueError('new_live_handoff_missing')
+    monkeypatch.setattr(handoff, 'verify_entry_consumer_code', missing_live_handoff)
+    monkeypatch.setattr(experiment, 'code_sha', lambda: 'f'*64)
+    with pytest.raises(ValueError, match='new_live_handoff_missing'):
+        policy.load_bundle(tmp_path, '2026-10-12')
+    verified = policy.load_bundle(tmp_path, '2026-10-12', require_current_code=False)
+    policy.verify_source_handoff(tmp_path, verified, require_current_code=False)
+    current = experiment.native_research(tmp_path, '2026-10-12')
+    assert current['status'] == 'experiment_not_armed'
+    assert current['parent']['bundle_sha256'] == parent['bundle_sha256']
+    assert current['selected_cells'] == {}
+    assert current['parent']['cells'] == {k:v['policy'] for k,v in parent['cells'].items()}
+    successor = policy.create_successor(source_date='2026-10-12', target_date='2026-10-13',
+        source_report_sha256='a'*64, replay={'vote_numeric_research':current},
+        source_quality=EMPTY_SOURCE_QUALITY)
+    assert successor['code_sha256'] == 'f'*64 and successor['selection_mode'] == 'incumbent_carry'
+    assert all(c['policy'] == parent['cells'][k]['policy'] for k,c in successor['cells'].items())
+    # Historical mode still requires original source bytes and terminal proof.
+    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: ['terminal_missing'])
+    assert experiment.native_research(tmp_path, '2026-10-12')['status'] == 'incumbent_unverified'
+    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
+    Path(source['path']).write_text('{}')
+    assert experiment.native_research(tmp_path, '2026-10-12')['status'] == 'incumbent_unverified'
+
+
+def test_historical_mode_cannot_migrate_a_numerical_successor(tmp_path, monkeypatch):
+    *_, numeric = fixture(tmp_path)
+    bundle = policy.create_successor(source_date='2026-10-08', target_date='2026-10-12',
+        source_report_sha256='a'*64, replay={'vote_numeric_research':numeric},
+        source_quality=EMPTY_SOURCE_QUALITY)
+    assert bundle['selection_mode'] == 'validated_successor'
+    monkeypatch.setattr(experiment, 'code_sha', lambda: 'f'*64)
+    with pytest.raises(ValueError, match='holding_vote_successor_code_changed'):
+        policy.validate_successor(bundle, target_date='2026-10-12', require_current_code=False)

@@ -90,6 +90,8 @@ def write_heartbeat(
         now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
         if component == "main_loop":
             state["main_loop"] = {"last_beat": now_iso, "pid": os.getpid()}
+            from src.engine.monitoring.runtime_performance import circuit_snapshot
+            state['ai_circuit'] = circuit_snapshot()
         else:
             threads = state.setdefault("threads", {})
             previous = threads.get(component, {})
@@ -114,6 +116,27 @@ def write_heartbeat(
             threads[component] = heartbeat
         tmp_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp_path, HEARTBEAT_PATH)
+
+
+def _current_ai_circuit_health(pid, now_ts):
+    """Same heartbeat/PID/start only. This observation never resets the engine."""
+    if not pid:
+        return dict(status='not_applicable', decision_authority='none')
+    try:
+        state = json.loads(HEARTBEAT_PATH.read_text())
+        receipt = state.get('ai_circuit') or {}
+        ticks = Path(f'/proc/{int(pid)}/stat').read_text().rsplit(')', 1)[1].split()[19]
+        age = now_ts-float(receipt['snapshot_epoch'])
+        if (receipt.get('pid') != pid or receipt.get('process_start_ticks') != ticks
+                or not 0 <= age <= 120):
+            raise ValueError('circuit_identity_or_clock_mismatch')
+        entry = receipt.get('entry_transport') or {}
+        blocked = receipt.get('state') == 'disabled' or entry.get('state') in {'OPEN', 'HALF_OPEN'}
+        return dict(status='blocked' if blocked else 'observed', receipt=receipt,
+                    decision_authority='none', automatic_recovery_forbidden=True)
+    except (OSError, ValueError, TypeError, KeyError, IndexError):
+        return dict(status='unobservable', reason='exact_pid_circuit_receipt_unavailable',
+                    decision_authority='none')
 
 
 @register_detector
@@ -162,6 +185,12 @@ class ProcessHealthDetector(BaseDetector):
             now_ts=now_ts,
             samsung_morning=samsung_morning,
         )
+        circuit = _current_ai_circuit_health(result.details.get('main_loop_pid'), now_ts)
+        result.details['ai_circuit'] = circuit
+        if circuit.get('status') == 'blocked' and result.severity == 'pass':
+            result.severity = 'warning'
+            result.summary += ' Auxiliary evaluation is blocked by its failure circuit.'
+            result.recommended_action = 'Inspect exact PID circuit evidence and natural recovery; detector has no reset authority.'
         result.details["samsung_morning_runtime"] = samsung_morning
         retirement = _retirement_expected_set(PROJECT_ROOT, now)
         result.details['retired_owner_runtime'] = retirement

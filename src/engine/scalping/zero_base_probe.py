@@ -178,12 +178,14 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
             and transport is not None and source.get("transport_epoch") == transport
             else None
         )
+    arrival_quality={}
     def arrivals(buffer_name):
         buffers = snapshot.get(buffer_name)
         rows = buffers.get(key) if isinstance(buffers, dict) else None
         rows = rows if isinstance(rows, (list, tuple)) else []
         count, first, signed_first = 0, [], []
         signed_count = 0
+        unique={};conflicts=set();missing=0;duplicates=0
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -193,6 +195,18 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
                     or row.get('item') != item or row.get('market_route') != route
                     or transport is None or row.get('transport_epoch') != transport):
                 continue
+            sequence=row.get('route_sequence')
+            if type(sequence) is not int or sequence<=0:
+                missing+=1;continue
+            if sequence in unique:
+                duplicates+=1
+                if unique[sequence]!=row:conflicts.add(sequence)
+                continue
+            unique[sequence]=row
+        arrival_quality[buffer_name]=dict(identity_missing=missing,duplicates=duplicates,conflicts=len(conflicts))
+        for sequence,row in unique.items():
+            if sequence in conflicts:continue
+            received=row['received_at_ms']
             count += 1
             delay = int(received-after_epoch*1000)
             bisect.insort(first, delay)
@@ -232,6 +246,7 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
             cause='unobservable' if not exact else 'exact_normalized_source_observed')
     return {
         'source_clocks': clocks,
+        'arrival_quality':arrival_quality,
         'first_data_basis': 'earliest_retained_exact_interval_row_not_guaranteed_first_packet',
         "first_0b_ms": trades[1][0] if trades[1] else None,
         "first_0d_ms": depths[1][0] if depths[1] else None,

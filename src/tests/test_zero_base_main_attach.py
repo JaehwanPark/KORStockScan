@@ -112,10 +112,14 @@ def test_invalid_db_admission_does_not_consume_native_claim(monkeypatch):
     payload = dict(record_id=7, code='123456', native_observation={'deadline_perf':time.perf_counter()+5})
     assert not main._zero_base_finalize_candidate_record(payload, attached=True)
     assert claims == []
+    assert payload['_zero_base_finalize_receipt']['reason']=='durable_probe_admission_mismatch'
+    assert payload['_zero_base_finalize_receipt']['pid']==__import__('os').getpid()
+    assert payload['_zero_base_finalize_receipt']['process_start_ticks']
     rows[7] = _Record(stock_code='123456',status='PROBE_READY',scanner_source_signature='ZERO_BASE_DISCOVERY:a')
     monkeypatch.setattr(D, 'claim_expected_snapshot', lambda p: {'token':'native'})
     assert main._zero_base_finalize_candidate_record(payload, attached=True)
     assert targets[0]['_continuous_reversal_pending_claim']['token'] == 'native'
+    assert payload['_zero_base_finalize_receipt']['reason']=='watching_finalized'
 
 
 def test_db_commit_failure_closes_consumed_claim(monkeypatch):
@@ -135,6 +139,21 @@ def test_db_commit_failure_closes_consumed_claim(monkeypatch):
         native_observation={'deadline_perf':time.perf_counter()+5}), attached=True)
     assert closed == [({'token':'native'}, {'status':'main_attach_commit_failed'})]
     assert '_continuous_reversal_pending_claim' not in targets[0]
+
+
+def test_finalize_diagnostic_failure_does_not_change_committed_admission(monkeypatch):
+    from src.engine.scalping import reversal_source_diagnostics as D
+    from src.engine.monitoring import runtime_performance as R
+    rows,targets=_prepare(monkeypatch)
+    targets.append(dict(id=7,code='123456',status='WATCHING',zero_base_pending_db=True))
+    rows[7]=_Record(stock_code='123456',status='PROBE_READY',scanner_source_signature='ZERO_BASE_DISCOVERY:a')
+    monkeypatch.setattr(main,'_zero_base_native_handoff_valid',lambda p:True)
+    monkeypatch.setattr(D,'claim_expected_snapshot',lambda p:{'token':'native'})
+    monkeypatch.setattr(R,'process_identity_fields',lambda:(_ for _ in ()).throw(OSError('diagnostic only')))
+    payload=dict(record_id=7,code='123456',native_observation={'deadline_perf':time.perf_counter()+5})
+    assert main._zero_base_finalize_candidate_record(payload,attached=True)
+    assert rows[7].status=='WATCHING' and targets[0]['_continuous_reversal_pending_claim']['token']=='native'
+    assert '_zero_base_finalize_receipt' not in payload
 
 
 def test_integrated_aftermarket_attaches_integrated_cohort_and_sor(monkeypatch):

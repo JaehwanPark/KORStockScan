@@ -2596,6 +2596,8 @@ class KiwoomWSManager:
         combined_bid = unsigned_int(values.get("125"), None)
         return {
             "item": str(raw_item_code or ""),
+            "market_route": KiwoomWSManager._ws_item_route(raw_item_code),
+            "market_suffix": KiwoomWSManager._ws_item_market_suffix(raw_item_code),
             "orderbook_time_raw": str(values.get("21") or "").strip(),
             "received_at_ms": int(time.time() * 1000),
             "ask_levels": ask_levels,

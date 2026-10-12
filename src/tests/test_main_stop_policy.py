@@ -29,6 +29,63 @@ def test_retired_pyramid_cannot_create_or_replace_a_protect_line():
     assert p.protect_line_origin(before) == 'unverified_existing'
 
 
+@pytest.mark.parametrize('namespace', ['ai_decision_payloads', 'ai_decision_prompts', 'ai_decision_requests'])
+def test_vote_watch_ignores_unused_compression_companion_but_detects_source_changes(tmp_path, namespace):
+    import gzip
+    directory=tmp_path/namespace;directory.mkdir()
+    raw=directory/(namespace+'_2026-10-08.jsonl');raw.write_bytes(b'{"source":1}\n')
+    before=post.vote_watch(tmp_path,'2026-10-12')
+    compressed=raw.with_suffix('.jsonl.gz')
+    compressed.write_bytes(gzip.compress(b'{"unused":2}\n'))
+    assert post.vote_watch(tmp_path,'2026-10-12')==before
+    raw.write_bytes(b'{"source":3,"changed":true}\n')
+    changed=post.vote_watch(tmp_path,'2026-10-12')
+    assert changed!=before
+    raw.unlink()
+    compressed_only=post.vote_watch(tmp_path,'2026-10-12')
+    assert compressed_only!=changed
+    compressed.write_bytes(gzip.compress(b'{"source":4}\n'))
+    assert post.vote_watch(tmp_path,'2026-10-12')!=compressed_only
+
+
+def test_vote_watch_does_not_hide_gzip_behind_foreign_symlink(tmp_path):
+    import gzip
+    directory=tmp_path/'ai_decision_payloads';directory.mkdir()
+    foreign=tmp_path/'foreign.jsonl';foreign.write_bytes(b'{}\n')
+    raw=directory/'ai_decision_payloads_2026-10-08.jsonl';raw.symlink_to(foreign)
+    before=post.vote_watch(tmp_path,'2026-10-12')
+    raw.with_suffix('.jsonl.gz').write_bytes(gzip.compress(b'{}\n'))
+    assert post.vote_watch(tmp_path,'2026-10-12')!=before
+
+
+def test_holding_request_index_and_watch_share_original_compression_contract(tmp_path):
+    import gzip
+    from src.engine.ai.holding_vote_replay_source import _request_index
+    namespaces={'ai_decision_payloads':('request_envelope_sha256','payload'),
+        'ai_decision_prompts':('prompt_sha256','prompt'),
+        'ai_decision_requests':('request_id','request')}
+    raws=[]
+    for namespace,(key,identity) in namespaces.items():
+        directory=tmp_path/namespace;directory.mkdir()
+        raw=directory/(namespace+'_2026-10-08.jsonl')
+        raw.write_text(json.dumps({'endpoint':'holding_path_vote',key:identity})+'\n')
+        raws.append(raw)
+    output=tmp_path/'index';output.mkdir();sources={}
+    db=_request_index(tmp_path,output,'2026-10-08',sources)
+    assert db.execute('SELECT count(*) FROM original').fetchone()[0]==3;db.close()
+    before=post.vote_watch(tmp_path,'2026-10-12')
+    for raw in raws:
+        raw.with_suffix('.jsonl.gz').write_bytes(gzip.compress(b'{"endpoint":"holding_path_vote","request_id":"unused"}\n'))
+    assert post.vote_watch(tmp_path,'2026-10-12')==before
+    db=_request_index(tmp_path,output,'2026-10-08',sources)
+    assert db.execute('SELECT count(*) FROM original').fetchone()[0]==3;db.close()
+    assert set(sources)=={str(path) for path in raws}
+    raws[-1].unlink()
+    assert post.vote_watch(tmp_path,'2026-10-12')!=before
+    with pytest.raises(ValueError,match='holding_request_index_stale'):
+        _request_index(tmp_path,output,'2026-10-08',sources)
+
+
 def baseline():
     return p.StopValues(-3.,60,20,8,3,.67,1.,-5.,-4.,-2.,-.3)
 
@@ -510,6 +567,68 @@ def test_budget_interruption_preserves_committed_pointer_and_records_resume(tmp_
     assert pointer.read_bytes()==before
     receipt=json.loads((tmp_path/'report/main_stop_confirmation/resume_2026-10-12.json').read_text())
     assert receipt['status']=='incomplete' and receipt['target_policy_published'] is False
+
+
+@pytest.mark.parametrize('compressed,terminated', [(False, True), (True, True), (False, False)])
+def test_oversized_source_record_is_isolated_and_later_rows_remain_visible(tmp_path, compressed, terminated):
+    from collections import Counter
+    import gzip
+    oversized = json.dumps({'stage': 'unknown', 'body': 'x' * (2 * 1024 * 1024 + 64)})
+    valid = json.dumps({'stage': 'main_stop_source', 'fields': {'main_stop_source': next(iter(rows()))}})
+    body = (oversized + '\n' + valid + '\n') if terminated else oversized
+    path = tmp_path / ('raw.jsonl.gz' if compressed else 'raw.jsonl')
+    if compressed:
+        with gzip.open(path, 'wt') as stream:
+            stream.write(body)
+    else:
+        path.write_text(body)
+    census = Counter()
+    result = list(post.source_events(path, census, references=True))
+    assert census['oversized_raw_rows'] == 1
+    assert census['unidentifiable_raw_rows'] == 1
+    assert census['oversized_raw_bytes'] == len((oversized + ('\n' if terminated else '')).encode())
+    assert census['oversized_unterminated_raw_rows'] == (0 if terminated else 1)
+    assert len(result) == (1 if terminated else 0)
+    if terminated:
+        assert result[0][0]['stage'] == 'main_stop_source'
+        assert result[0][2] == hashlib.sha256((valid + '\n').encode()).hexdigest()
+    assert any(key.startswith('oversized_raw_record:') and key.endswith(
+        hashlib.sha256((oversized + ('\n' if terminated else '')).encode()).hexdigest()) for key in census)
+
+
+def test_oversized_source_publishes_explicit_gap_carry_with_unchanged_parent(tmp_path):
+    _, report, parent, source = publication(tmp_path)
+    with source.open('a') as stream:
+        stream.write(json.dumps({'stage': 'main_stop_source', 'fields': {'unreadable': 'x' * (2 * 1024 * 1024)}}) + '\n')
+    bundle, successor = post.publish(tmp_path, '2026-10-12', '2026-10-13',
+        parents={f'{r}|{m}': baseline() for r in p.ROLES for m in p.MARKETS},
+        parent_receipt=parent, source_paths=[source], snapshot_receipt=report['snapshot_receipt'])
+    assert successor['census']['oversized_raw_rows'] == 1
+    assert successor['actual_profit_verified'] is False
+    assert all(cell['status'] == 'source_gap' and cell['values'] == asdict(baseline())
+               and not cell['authority'] for cell in bundle['cells'].values())
+    actual, saved, _, _ = post.read_committed(tmp_path, '2026-10-12', verify_full=True)
+    assert actual == bundle and saved == successor
+
+
+def test_stop_source_index_invalidates_when_native_decoder_code_changes(tmp_path, monkeypatch):
+    from collections import Counter
+    from src.engine.automation import main_stop_source_index as idx
+    source = tmp_path / 'source.jsonl'
+    source.write_text(json.dumps({'stage': 'main_stop_source', 'fields': {
+        'main_stop_source': next(iter(rows()))}}) + '\n')
+    inventory = {str(source): post.byte_generation(source)}
+    first = idx.prepare(tmp_path / 'index', inventory, post.source_events, Counter())
+    read_bytes = Path.read_bytes
+    decoder = Path(post.__file__).resolve()
+    def changed_code(path):
+        value = read_bytes(path)
+        return value + b'\n# changed native decoder\n' if path.resolve() == decoder else value
+    monkeypatch.setattr(Path, 'read_bytes', changed_code)
+    second = idx.prepare(tmp_path / 'index', inventory, post.source_events, Counter())
+    assert first[0][0] != second[0][0]
+    assert first[0][1]['generation'] == second[0][1]['generation']
+    assert second[0][1]['census']['raw'] == 1
 
 
 def test_historical_parent_values_can_migrate_but_old_code_cannot_load_live(tmp_path,monkeypatch):

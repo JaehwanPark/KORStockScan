@@ -51,6 +51,70 @@ def test_fixed_watch_pass_reaches_sizing_without_scanner_identity():
     assert submit_attempt_machine_lineage(stock, '403870') == {}
 
 
+@pytest.mark.parametrize('session', ['krx_like_premarket','krx_regular','krx_nxt_aftermarket'])
+def test_case_only_market_capture_projects_binds_revision_and_original_sizing(session):
+    from src.engine.monitoring.entry_attempt_identity import submit_attempt_lineage_rejection
+    from src.engine.scalping.entry_execution_sizing_plan import compose_entry_execution_sizing_plan
+    from src.tests.test_entry_execution_sizing_plan import _priced
+    stock,raw=fixed();stock['market_session_bucket']=session.upper();raw['market_session_bucket']=session
+    receipt=H._machine_primary_entry_provenance_fields(raw)
+    receipt.update(machine_capture_status='captured')
+    stock['_machine_observation_revision']=dict(digest='a'*64,
+        key=[stock['watch_admission_id'],raw['evaluation_attempt_id'],'403870','KRX',session,'b'*64,os.getpid()])
+    @observe_submit_attempt
+    def run(stock,code):
+        assert bind_submit_attempt_machine_lineage(stock,code,receipt)
+        bound=submit_attempt_machine_lineage(stock,code)
+        assert bound['market_session_bucket']==session
+        assert H._machine_submit_revision_is_current(stock,bound)
+        orders,fields=compose_entry_execution_sizing_plan([_priced(dict(qty=10,price=10000))],
+            expected_total_qty=10,action_receipt=bound,quantity_policy_version='initial-v2',split_policy_version='initial-v2')
+        assert fields['entry_execution_sizing_valid'] and sum(o['qty'] for o in orders)==10
+        assert not submit_attempt_lineage_rejection(stock,code)
+    run(stock,'403870')
+
+
+def test_submit_caller_stops_with_exact_binding_failure_before_other_guards(monkeypatch):
+    stock,receipt=fixed();receipt['market_session_bucket']='krx_nxt_aftermarket_close_only'
+    events=[];terminals=[]
+    monkeypatch.setattr(H,'_log_entry_pipeline',lambda *a,**k:events.append((a,k)))
+    monkeypatch.setattr(H,'_set_async_terminal',lambda s,r:terminals.append(r))
+    assert H._submit_watching_triggered_entry(stock,'403870',{},None,
+        dict(strategy='SCALPING',machine_primary_entry_provenance=receipt)) is False
+    assert terminals==['machine_submit_lineage_rejected:fixed_watch_parent_or_market_mismatch']
+    assert events[0][1]['actual_order_submitted'] is False
+
+
+def test_actual_capture_and_projection_preserve_case_through_call_local_sizing(monkeypatch,tmp_path):
+    from src.engine.scalping import ai_decision_trace as trace
+    from src.tests.test_ai_decision_trace import _enable
+    from src.engine.scalping.entry_execution_sizing_plan import compose_entry_execution_sizing_plan
+    from src.tests.test_entry_execution_sizing_plan import _priced
+    _enable(monkeypatch,tmp_path)
+    stock,fields=fixed()
+    stock['market_session_bucket']='KRX_NXT_AFTERMARKET'
+    stock['effective_venue']='KRX_NXT_INTEGRATED'
+    captured=trace.capture_machine_observation(exact_payload=dict(stock_code='403870',
+        evaluation_attempt_id=fields['evaluation_attempt_id'],session_bucket='krx_nxt_aftermarket',
+        effective_venue=stock['effective_venue'],watch_origin=stock['watch_origin'],
+        watch_admission_id=stock['watch_admission_id'],watch_generation_id=stock['watch_generation_id'],
+        best_ask=10000),setup_evidence={},assessment=dict(action='ENTER_NOW'),bundle_sha256='b'*64)
+    assert captured['machine_capture_status']=='captured'
+    receipt=H._machine_primary_entry_provenance_fields({**fields,**captured})
+    stock['_machine_observation_revision']=dict(digest=captured['machine_observation_sha256'],
+        key=[stock['watch_admission_id'],receipt['evaluation_attempt_id'],'403870',stock['effective_venue'],
+             captured['market_session_bucket'],'b'*64,os.getpid()])
+    @observe_submit_attempt
+    def run(stock,code):
+        assert bind_submit_attempt_machine_lineage(stock,code,receipt)
+        bound=submit_attempt_machine_lineage(stock,code)
+        assert H._machine_submit_revision_is_current(stock,bound)
+        orders,evidence=compose_entry_execution_sizing_plan([_priced(dict(qty=10,price=10000))],
+            expected_total_qty=10,action_receipt=bound,quantity_policy_version='initial-v2',split_policy_version='initial-v2')
+        assert evidence['entry_execution_sizing_valid'] and orders[0]['qty']==10
+    run(stock,'403870')
+
+
 @pytest.mark.parametrize('key,value', [
     ('watch_origin', 'SCANNER'), ('watch_admission_id', 'FIXED-other'),
     ('watch_generation_id', 'e'*64), ('watch_generation_id', None),

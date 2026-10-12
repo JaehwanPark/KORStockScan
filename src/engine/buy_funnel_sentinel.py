@@ -97,6 +97,7 @@ BROKER_SUBMIT_FAILURE_STAGES = {
 }
 BLOCKER_STAGE_PREFIXES = ("blocked_",)
 BLOCKER_STAGES = {
+    "machine_submit_lineage_rejected",
     "latency_block",
     "entry_armed_expired",
     "entry_armed_expired_after_wait",

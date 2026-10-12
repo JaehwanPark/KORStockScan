@@ -85,7 +85,8 @@ def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_
     assert holding._verified_trade_review_projection(path, day) is None
 
 
-def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_path, monkeypatch):
+@pytest.mark.parametrize('day', ['2026-09-30', '2026-10-12'])
+def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_path, monkeypatch, day):
     from src.engine.sniper_trade_review_report import completed_census_manifest
     from src.engine.lifecycle.holding_window_generation import capture_window
 
@@ -94,7 +95,6 @@ def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", directory)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", directory / "manifests")
-    day = "2026-09-30"
     trade = {"date": day, "code": None, "since": None,
              "meta": {"warnings": [], "snapshot_profile": "postclose_exit",
                       "sell_completed_event_ids": [],
@@ -112,6 +112,10 @@ def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_
             window = capture_window(tmp_path, [day])
             body.update(input_window_dependencies=window,
                         input_window_generation_sha256=window["input_window_generation_sha256"])
+            if day >= '2026-10-12':
+                from src.engine.scalping.holding_vote_experiment import code_sha
+                body['holding_path_vote_replay'] = {'vote_numeric_research': {
+                    'status': 'experiment_not_armed', 'code_sha256': code_sha()}}
         paths[kind] = service.save_monitor_snapshot(kind, day, body)
     pipeline = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     pipeline.parent.mkdir()
@@ -120,6 +124,22 @@ def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_
         day, profile="postclose_exit",
         snapshots={kind: str(path.resolve()) for kind, path in paths.items()})
     assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == manifest
+    if day >= '2026-10-12':
+        from src.engine.scalping import holding_vote_experiment as experiment
+        with monkeypatch.context() as patch:
+            patch.setattr(experiment, 'code_sha', lambda: 'changed-code')
+            assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
+        holding = paths['holding_exit_observation']
+        body = json.loads(holding.read_bytes())
+        body['holding_path_vote_replay']['vote_numeric_research']['status'] = 'incumbent_unverified'
+        service.save_monitor_snapshot('holding_exit_observation', day, body)
+        service.save_monitor_snapshot_manifest(day, profile='postclose_exit',
+            snapshots={kind: str(path.resolve()) for kind, path in paths.items()})
+        assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
+        body['holding_path_vote_replay']['vote_numeric_research']['status'] = 'experiment_not_armed'
+        service.save_monitor_snapshot('holding_exit_observation', day, body)
+        service.save_monitor_snapshot_manifest(day, profile='postclose_exit',
+            snapshots={kind: str(path.resolve()) for kind, path in paths.items()})
     paths["post_sell_feedback"].write_text('{}')
     assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
     service.save_monitor_snapshot(

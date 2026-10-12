@@ -82,6 +82,9 @@ def intake(data_root,research_dir,parent,*,confirm,publication):
 
 
 def pending(data_root,parent,target_date):
+    from src.engine.scalping import reversal_manual_registration as M
+    residual=M.pending(data_root,parent,target_date)
+    if residual is not None:return residual
     path=pending_path(data_root)
     if not path.exists():return None
     r=N._read(path)
@@ -159,7 +162,9 @@ def initial_reports(data_root,day,publication,parent,machine,*,publish_policy=Tr
     for ident in sorted(set(bindings.values())|set(current_bindings.values())):
         path=G.directory(data_root)/(ident+'.json')
         comparison_receipts.append(dict(path=str(path.resolve()),sha256=P.file_hash(path)))
-    receipts=machine['source_receipts']+change['source_receipts']+comparison_receipts+[dict(path=str(pending_path(data_root).resolve()),sha256=P.file_hash(pending_path(data_root)))]
+    from src.engine.scalping import reversal_manual_registration as M
+    request_path=M.pending_path(data_root) if change['operator_receipt']==M.AUTHORITY else pending_path(data_root)
+    receipts=machine['source_receipts']+change['source_receipts']+comparison_receipts+[dict(path=str(request_path.resolve()),sha256=P.file_hash(request_path))]
     issued=P.seal(dict(machine,cells=list(mc.values()),status='completed',source_receipts=receipts,
         membership_status='registered',registration_state='registered',adoption_basis='operator_designated',comparison_state='incomplete',scope_pending=[]))
     # Keep the comparison result distinct; registration never asserts provider PASS.

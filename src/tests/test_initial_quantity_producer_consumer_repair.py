@@ -166,6 +166,65 @@ def test_v2_same_date_successors_and_consumer_pointer(tmp_path):
     with pytest.raises(ValueError,match='quantity_stage_reference_invalid'):policy.committed_refresh_stage_path(base,day)
 
 
+def test_refresh_publication_accepts_only_the_known_release_data_link(tmp_path, monkeypatch):
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    shared = tmp_path / 'shared'
+    shared.mkdir()
+    release = tmp_path / 'release'
+    release.mkdir()
+    (release / 'data').symlink_to(shared, target_is_directory=True)
+    monkeypatch.setattr(policy, 'PROJECT_ROOT', release)
+    monkeypatch.setattr(policy, 'DATA_DIR', shared)
+    parent, parent_path = parent_fixture(shared)
+    day = '2026-10-08'
+    report = policy.build_initial_quantity_replay(day, data_dir=shared, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent))
+    timeout = build_timeout_research(day, data_dir=shared, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent), replay=report)
+    base = release / 'data' / 'refresh'
+    stage = policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+        parent_policy_path=parent_path, output_dir=base, timeout_research=timeout,
+        terminal_receipt=policy._natural_refresh_terminal_receipt(report))
+    assert policy.refresh_quantity_stage_terminal_valid(stage)
+    path = policy.committed_refresh_stage_path(base, day)
+    assert path.is_relative_to(shared) and json.loads(path.read_bytes()) == stage
+    assert stage['decision'] == 'carry_parent'
+    assert stage['runtime_apply_allowed'] is False
+    assert stage['actual_order_submitted'] is False
+    assert policy._write_immutable_json(path, stage) == policy._file_sha256(path)
+    with pytest.raises(ValueError, match='immutable_artifact_conflict'):
+        policy._write_immutable_json(path, {'changed': True})
+
+
+@pytest.mark.parametrize('kind', ['foreign_root', 'data_child', 'output_file', 'wrong_data_mount', 'parent_escape'])
+def test_quantity_publication_rejects_unowned_links_before_creating_output(tmp_path, monkeypatch, kind):
+    release = tmp_path / 'release'
+    shared = tmp_path / 'shared'
+    foreign = tmp_path / 'foreign'
+    for root in (release, shared, foreign):
+        root.mkdir()
+    monkeypatch.setattr(policy, 'PROJECT_ROOT', release)
+    monkeypatch.setattr(policy, 'DATA_DIR', shared)
+    (release / 'data').symlink_to(foreign if kind == 'wrong_data_mount' else shared,
+                                target_is_directory=True)
+    if kind == 'foreign_root':
+        (tmp_path / 'alias').symlink_to(foreign, target_is_directory=True)
+        path = tmp_path / 'alias' / 'created' / 'report.json'
+    elif kind == 'data_child':
+        (shared / 'child').symlink_to(foreign, target_is_directory=True)
+        path = release / 'data' / 'child' / 'created' / 'report.json'
+    elif kind == 'output_file':
+        (shared / 'report.json').symlink_to(foreign / 'report.json')
+        path = release / 'data' / 'report.json'
+    elif kind == 'parent_escape':
+        path = release / 'data' / '..' / 'created' / 'report.json'
+    else:
+        path = release / 'data' / 'created' / 'report.json'
+    with pytest.raises(ValueError, match='quantity_output_path_invalid'):
+        policy._write_immutable_json(path, {'value': 1})
+    assert list(foreign.iterdir()) == []
+
+
 def test_recent_replay_missing_cost_is_not_no_real_trade_or_no_pid(tmp_path):
     from src.engine.scalping.initial_quantity_refresh_evaluation import evaluate
     parent,path=parent_fixture(tmp_path)

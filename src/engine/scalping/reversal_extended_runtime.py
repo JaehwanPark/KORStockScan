@@ -131,7 +131,7 @@ def observe_normalized(symbol, session, envelope):
                 state = _STATES.get(key)
                 if state is None:
                     state = _STATES[key] = EXTENDED.State(branch_ids=[b['branch_id'] for b in cell['payload']['branches']],
-                        registry_sha256=C.SHA256,
+                        registry_sha256=_FAMILY['registry_sha256'],
                         session_anchor=R._ANCHORS.get(stream), generation=cell['scope_execution_hash'])
                 state.observe(row,symbol=symbol,venue=venue,session=session)
             for key in list(_STATES):
@@ -223,6 +223,11 @@ def claim_snapshot(symbol, venue, session, *, now, item, family_sha256):
 def _filter_first(event, source, state):
     for bid, signal in list(event['branch_signals'].items()):
         if signal['decision_phase'] == B.FIRST and (not state.legacy.turn or state.legacy.turn['event_id'] != signal['event_id']):
+            event['branch_signals'].pop(bid)
+            source['branch_inputs'].pop(bid)
+        elif signal['decision_phase']=='FIRST_PRICE_HOLD' and not any(
+                ready['event']['signal_id']==event['signal_id']
+                and bid in ready['event']['branch_signals'] for ready in state.ready):
             event['branch_signals'].pop(bid)
             source['branch_inputs'].pop(bid)
 

@@ -771,9 +771,13 @@ def _validate_direct_summary(
         raise RuntimeError("direct runtime summary validated edge census mismatch")
     if policy_candidate_count != payload["policy_candidate_count"]:
         raise RuntimeError("direct runtime summary policy candidate census mismatch")
+    # Native policy validation can block a summary even when every report is
+    # present. Preserve that producer failure instead of treating it as corrupt
+    # census data or publishing a complete handoff.
     expected_state = (
         "complete"
         if available_rows == payload["required_source_count"]
+        and not payload["blocking_reasons"]
         else "incomplete"
     )
     if payload["direct_evidence_state"] != expected_state or payload["status"] != (

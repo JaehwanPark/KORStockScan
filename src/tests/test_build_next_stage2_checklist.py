@@ -91,6 +91,25 @@ def test_initial_delay_v2_summary_retains_checklist_closure_contract():
     assert evidence["actual_net_profit_improvement"] is None
 
 
+def test_direct_summary_preserves_native_handoff_blocker_with_all_sources():
+    summary = _direct_summary("2026-10-12")
+    summary["blocking_reasons"] = ["main_stop_confirmation:native_handoff_invalid"]
+    summary["main_stop_confirmation"] = {
+        "status": "source_gap", "reason": "stop_code_generation_changed",
+        "allowed_runtime_apply": False, "actual_pid_consumed": False,
+    }
+    summary["direct_evidence_state"] = "incomplete"
+    summary["status"] = "direct_evidence_incomplete"
+    validated = mod._validate_direct_summary(summary, "2026-10-12")
+    assert validated["blocking_reasons"] == summary["blocking_reasons"]
+    assert validated["direct_evidence_state"] == "incomplete"
+    assert validated["allowed_runtime_apply"] is False
+    summary["direct_evidence_state"] = "complete"
+    summary["status"] = "direct_evidence_complete"
+    with pytest.raises(RuntimeError, match="completion state mismatch"):
+        mod._validate_direct_summary(summary, "2026-10-12")
+
+
 def _direct_summary(
     day: str,
     *,

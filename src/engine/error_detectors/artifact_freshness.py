@@ -142,7 +142,8 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
 
 def _main_stop_semantics(root, source_date, *, now):
     from src.engine.automation.main_stop_postclose import read_committed, committed_path, START_DATE
-    path = committed_path(root / "data", source_date)
+    data_root = (Path(root) / "data").resolve()
+    path = committed_path(data_root, source_date)
     meta = dict(source_date=source_date, target_date=None, artifact=str(path),
         report_sha256=None, native_validated=False, observation_complete=False, findings=[])
     if not path.exists():
@@ -153,9 +154,9 @@ def _main_stop_semantics(root, source_date, *, now):
             expected_overdue=overdue, findings=["main_stop_committed_missing_after_due"] if overdue else [])
     try:
         _, before = _semantic_object(path, limit=1024*1024)
-        bundle, report, pointer, _ = read_committed(root / "data", source_date)
+        bundle, report, pointer, _ = read_committed(data_root, source_date)
         from src.engine.automation.main_stop_postclose import runtime_consumption
-        consumed = runtime_consumption(root / 'data', bundle)
+        consumed = runtime_consumption(data_root, bundle)
         if _semantic_object(path, limit=1024*1024)[1] != before:
             return dict(meta, status="unobservable", generation_changed=True)
         comparison = ('source_gap' if any(c['status']=='source_gap'
@@ -1311,7 +1312,7 @@ def _cancel_wait_native_execution(root, data_root, source_date):
 def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_root=None):
     from src.engine.automation import entry_cancel_wait_tuning as owner
     root = Path(root)
-    data_root = Path(data_root) if data_root is not None else root/'data'
+    data_root = (Path(data_root) if data_root is not None else root/'data').resolve()
     directory = data_root/'report/entry_cancel_wait_tuning'
     path = directory/f'entry_cancel_wait_tuning_{source_date}.json'
     policy_path = directory/f'entry_cancel_wait_policy_{source_date}.json'
@@ -2699,7 +2700,8 @@ class ArtifactFreshnessDetector(BaseDetector):
         details['policy_generation_retirements']=retirement_dispositions(PROJECT_ROOT)
         details['policy_generation_semantics']=[]
         for semantic_day in semantic_days:
-            for observed in generation_observations(PROJECT_ROOT,semantic_day):
+            for observed in generation_observations(PROJECT_ROOT,semantic_day,
+                    data_root=(PROJECT_ROOT/'data').resolve()):
                 details['policy_generation_semantics'].append(observed)
                 observations.append(dict(stage='policy_generation',semantics=observed))
                 bindings.append(dict(stage='policy_generation',source_date=semantic_day,

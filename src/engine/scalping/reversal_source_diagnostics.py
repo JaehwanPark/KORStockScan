@@ -112,16 +112,19 @@ def residence_requirements(candidate, now, *, actual_price=None):
         branches = tuple(b['branch_id'] for b in cell.get('payload', {}).get('branches', ()))
         generation = family.get('family_sha256')
         scope_hash = cell.get('scope_execution_hash')
+        registry_hash = family.get('registry_sha256') or C.registry_for(branches)
     if not branches:
         return dict(status='unobservable', reason='selected_branches_missing', minimum_seconds=None)
     try:
-        descriptors = {bid: deepcopy(_branch_descriptor(C.SHA256, bid)) for bid in branches}
+        descriptors = {bid: deepcopy(_branch_descriptor(registry_hash, bid)) for bid in branches}
         requirements = {bid: row['minimum_seconds'] for bid, row in descriptors.items()}
     except (KeyError, TypeError, ValueError):
         return dict(status='unobservable', reason='branch_requirement_unknown', minimum_seconds=None)
     return dict(schema='native_branch_residence_requirements_v2', status='observed',
-        minimum_seconds=min(requirements.values()), branch_descriptors=descriptors,
+        minimum_seconds=min(requirements.values()), any_branch_minimum_seconds=min(requirements.values()),
+        full_input_requirement_seconds=max(requirements.values()), branch_descriptors=descriptors,
         policy_scope=key, price_basis='tentative_discovery' if actual_price is None else 'exact_native_trade',
+        registry_sha256=registry_hash,
         branch_required_seconds=requirements, family_sha256=generation, scope_execution_hash=scope_hash,
         history_reuse='none_without_exact_lease_interval', runtime_effect=False)
 
@@ -515,6 +518,11 @@ def compact_claim_state(B, claim, family_sha256, now, reason):
     survivors = {bid: (signal.get('decision_phase') != 'FIRST_UPTICK'
                        or turn == signal.get('event_id', event.get('event_id')))
                  for bid, signal in branches.items()}
+    for bid,signal in branches.items():
+        if signal.get('decision_phase')=='FIRST_PRICE_HOLD':
+            survivors[bid]=bool(state and any(
+                r['event'].get('signal_id')==event.get('signal_id')
+                and bid in r['event'].get('branch_signals',{}) for r in state.ready))
     from src.engine.scalping.reversal_extended_catalog import cell_key
     band = cell_key(event['symbol'], event['market'], event['confirmation_price']) if event.get('confirmation_price') else None
     cell = ((getattr(B, '_FAMILY', None) or {}).get('machine_cells', {})

@@ -11,12 +11,12 @@ from src.engine.scalping.continuous_reversal_postclose import digest
 
 VERSION = 'continuous_extended_path_auxiliary_v1'
 PHASES = frozenset({FIRST,'PEAK_RECLAIM','MOMENTUM_CROSS','MOMENTUM_HOLD','HIGH_BREAKOUT',
-                    'RETEST_RECLAIM_FIRST','RETEST_RECLAIM_PEAK'})
+                    'RETEST_RECLAIM_FIRST','RETEST_RECLAIM_PEAK','FIRST_PRICE_HOLD'})
 FEATURES = ('confirmation_price','entry_ask','spread_pct','drawdown_5m_pct',
             'volume_ratio_60s','return_60s_pct','session_return_pct','vs_vwap_60s_pct',
             'buy_pressure_10t','buy_pressure_30s','return_10t_pct')
 PROOF_FIELDS = frozenset({'epoch','price','threshold','return_60s_pct','previous_condition','prior_high',
-                         'low','peak','reclaim','minimum_price','touch_epoch','touch_price','native_epoch','native_sequence','touch_sequence','root_contract'})
+                         'low','peak','reclaim','minimum_price','touch_epoch','touch_price','native_epoch','native_sequence','touch_sequence','root_contract','confirmation_sequence'})
 PROMPT = '''Assess the supplied machine-observed signal at its actual confirmation ask.
 Judge net +0.4% within 1800 seconds before net -3%, with cost 0.23% once.
 Judge event likelihood, never expected PnL, payoff ratio or a desired PASS quota.
@@ -62,7 +62,7 @@ def validate_input_signal(inp,event):
 
 def validate_signal(event):
     bid=event.get('extended_definition_id')
-    if bid not in C.NEW_DEFINITIONS:return ORIGINAL.validate_signal(event)
+    if bid not in C.EXTENDED_DEFINITIONS:return ORIGINAL.validate_signal(event)
     root=C.definition(bid)['root_contract'];p=event.get('signal_proof') or {};phase=C.PHASES[bid]
     if (event.get('decision_phase')!=phase or event.get('signal_kind')!=phase
             or p.get('root_contract')!=root or event.get('branch_definition_sha256')!=C.branch(bid)['definition_sha256']
@@ -73,7 +73,11 @@ def validate_signal(event):
             or min(event['confirmation_price'],p['price'])<=0
             or p['native_epoch']!=event['native_epoch'] or p['native_sequence']>event['native_sequence'] or p['epoch']>event['epoch']):
         raise ValueError('extended_signal_timeline_invalid')
-    if root['signal']=='MOMENTUM':
+    if root['signal']=='BREAKOUT':
+        valid=(p.get('previous_condition') is False and finite(p.get('prior_high'))
+            and p['price']>p['prior_high'] and p['epoch']==event['epoch']
+            and p['native_sequence']==event['native_sequence'] and p['price']==event['confirmation_price'])
+    elif root['signal']=='MOMENTUM':
         valid=(p.get('previous_condition') is False and p.get('threshold')==root['return_60s_min_pct']
             and finite(p.get('return_60s_pct')) and p['return_60s_pct']>=p['threshold']
             and p['epoch']==event['epoch'] and p['native_sequence']==event['native_sequence'] and p['price']==event['confirmation_price'])
@@ -83,6 +87,11 @@ def validate_signal(event):
         kind=root['confirmation']
         if kind=='immediate':
             valid=valid and p['epoch']==event['epoch'] and p['native_sequence']==event['native_sequence'] and p['price']==event['confirmation_price']
+        elif kind=='FIRST_PRICE_HOLD':
+            valid=(valid and event['epoch']>=p['epoch']+root['hold_seconds']
+                and p['minimum_price']>=p['price'] and event['confirmation_price']>=p['price']
+                and p.get('confirmation_sequence')==event['native_sequence']
+                and p['native_sequence']<event['native_sequence'])
         else:
             reclaim=p['peak'] if kind in {'PEAK','RETEST_PEAK'} else p['price']
             valid=valid and (p.get('reclaim')==reclaim and event['confirmation_price']>=reclaim

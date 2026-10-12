@@ -285,6 +285,24 @@ def test_source_clocks_do_not_reuse_depth_freshness_or_unbound_packet_clock():
     assert clocks['0B']['cause'] == 'unobservable' and clocks['0B']['age_ms'] is None
 
 
+def test_native_depth_builder_to_probe_counts_exact_unique_receipts_only(monkeypatch):
+    from src.engine.kiwoom_websocket import KiwoomWSManager
+    from src.engine.scalping.zero_base_probe import probe_ws_observation
+    monkeypatch.setattr(__import__('src.engine.kiwoom_websocket',fromlist=['time']).time,'time',lambda:T)
+    depth=KiwoomWSManager._build_micro_reversion_depth_tick('123456_AL',{'41':'100','61':'10','51':'99','71':'10'})
+    depth.update(transport_epoch=1,route_sequence=2)
+    key='_AL|krx_nxt_integrated'
+    snap=dict(market_data_transport_epoch=1,recent_depth_ticks_by_route={key:[depth,dict(depth)]})
+    result=probe_ws_observation(snap,code='123456',route='krx_nxt_integrated',after_epoch=T-1,now_epoch=T+1)
+    assert result['exact_0d_count']==1
+    assert result['arrival_quality']['recent_depth_ticks_by_route']['duplicates']==1
+    snap['recent_depth_ticks_by_route'][key][1]['received_at_ms']+=1
+    assert probe_ws_observation(snap,code='123456',route='krx_nxt_integrated',after_epoch=T-1,now_epoch=T+1)['exact_0d_count']==0
+    depth.pop('market_route')
+    snap['recent_depth_ticks_by_route'][key][1].pop('market_route')
+    assert probe_ws_observation(snap,code='123456',route='krx_nxt_integrated',after_epoch=T-1,now_epoch=T+1)['exact_0d_count']==0
+
+
 def test_long_wait_does_not_starve_short_cohort_and_retains_original_wait():
     queue = DiscoveryQueue('2026-10-12')
     for i in range(6):

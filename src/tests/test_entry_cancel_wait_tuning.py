@@ -631,7 +631,7 @@ def _reconciliation_fixture(tmp_path, monkeypatch, *, unknown_history=False):
         projection=projection(day)[1], registry=contract, actual_outcomes={'status':'missing'},
         source_quality={'tuning_input_allowed':True})))
     report = mod.build_report('2026-10-02')
-    monkeypatch.setattr(mod, 'build_report', lambda _day: report)
+    monkeypatch.setattr(mod, 'build_report', lambda _day, **_kwargs: report)
     policy, policy_path = mod.prepare_policy(report, '2026-10-06', publication_date='2026-10-02')
     report_path = directory/'entry_cancel_wait_tuning_2026-10-02.json'
     report_path.write_text(json.dumps(report))
@@ -758,11 +758,34 @@ def test_incumbent_revalidation_accepts_only_unrelated_registry_append(tmp_path,
     current['input_fingerprint'] = 'b'*64
     current['preflight_fingerprint'] = 'c'*64
     _reseal_reconciliation(current)
-    monkeypatch.setattr(mod, 'build_report', lambda _day: current)
+    monkeypatch.setattr(mod, 'build_report', lambda _day, **_kwargs: current)
     assert mod.verify_report(report) == (True,None)
     current['previous_thresholds']['standard'] += 1
     _reseal_reconciliation(current)
     assert mod.verify_report(report)[0] is False
+
+
+def test_native_generation_revalidation_freezes_only_the_artifact_clock(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    native_build = mod.build_report
+    report, _, _, _ = _reconciliation_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, 'build_report', native_build)
+    class LaterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(hours=1)
+    monkeypatch.setattr(mod, 'datetime', LaterClock)
+    assert mod.verify_report(report) == (True, None)
+    frozen = mod.build_report(report['date'], artifact_as_of=report['generated_at'])
+    assert frozen['generated_at'] == report['generated_at']
+    assert frozen['policy_generation']['as_of'] == report['policy_generation']['as_of']
+    assert frozen['proof_sha256'] == report['proof_sha256']
+    incumbent = mod._incumbent
+    def changed_incumbent(day):
+        thresholds, source = incumbent(day)
+        return {**thresholds, 'standard': thresholds['standard'] + 1}, source
+    monkeypatch.setattr(mod, '_incumbent', changed_incumbent)
+    assert mod.verify_report(report) == (False, 'cancel_wait_source_or_metric_revalidation_failed')
 
 
 def test_external_sealed_census_rejects_coherently_resealed_empty_history(tmp_path, monkeypatch):

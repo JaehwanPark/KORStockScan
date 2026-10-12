@@ -2480,3 +2480,55 @@ def test_holding_semantics_v2_pending_submit_is_valid_and_malformed_contract_rej
         assert result["findings"] == []
         assert result["lifecycle_verified"] is True
         assert result["lifecycle_counts"] == {"pending_submit": 1}
+
+
+def test_cancel_wait_semantics_accepts_attested_shared_data_mount(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as mod
+    workspace=tmp_path/'workspace';workspace.mkdir()
+    _cancel_wait_consumer_fixture(workspace,monkeypatch)
+    release=tmp_path/'release';release.mkdir()
+    (release/'data').symlink_to(workspace/'data',target_is_directory=True)
+    (release/'docs').symlink_to(workspace/'docs',target_is_directory=True)
+    result=mod._entry_cancel_wait_result_semantics(release,'2026-10-02')
+    assert result['findings']==[]
+    assert result['runtime_effect'] is False
+
+
+def test_main_stop_semantics_uses_physical_data_without_changing_code_root(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as mod
+    from src.engine.automation import main_stop_postclose as stop
+    data=tmp_path/'workspace/data';data.mkdir(parents=True)
+    release=tmp_path/'release';release.mkdir();(release/'data').symlink_to(data,target_is_directory=True)
+    path=stop.committed_path(data,'2026-10-12');path.parent.mkdir(parents=True);path.write_text('{}')
+    seen=[]
+    def read(root,day):
+        seen.append(root)
+        assert root==data.resolve()
+        return {'target_date':'2026-10-13','policy_sha256':'a'*64,'cells':{'c':{'status':'incumbent_carry'}}},{},{'generation':'b'*64},path.parent
+    monkeypatch.setattr(stop,'read_committed',read)
+    monkeypatch.setattr(stop,'runtime_consumption',lambda root,bundle:{'actual_pid_consumed':False,'findings':[]})
+    result=mod._main_stop_semantics(release,'2026-10-12',now=datetime(2026,10,13,tzinfo=ZoneInfo('Asia/Seoul')))
+    assert seen==[data.resolve()]
+    assert result['status']=='published_policy' and result['findings']==[]
+    assert result['actual_pid_consumed'] is False
+
+
+def test_generation_detector_preserves_release_code_root_and_canonical_data(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as mod
+    from src.engine.monitoring import policy_generation_contract as generation
+    data=tmp_path/'workspace/data';data.mkdir(parents=True)
+    release=tmp_path/'release';release.mkdir();(release/'data').symlink_to(data,target_is_directory=True)
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None):return cls(2026,10,13,6,25,tzinfo=ZoneInfo('Asia/Seoul'))
+    monkeypatch.setattr(mod,'datetime',Clock)
+    monkeypatch.setattr(mod,'PROJECT_ROOT',release)
+    monkeypatch.setattr(mod,'ARTIFACT_REGISTRY',[])
+    monkeypatch.setattr(mod,'is_krx_trading_day',lambda *_:True)
+    monkeypatch.setattr(mod,'load_installed_crontab',lambda:'')
+    seen=[]
+    def observe(root,day,*,data_root=None):
+        seen.append((root,data_root));return []
+    monkeypatch.setattr(generation,'observations',observe)
+    mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert seen and all(root==release and actual==data.resolve() for root,actual in seen)

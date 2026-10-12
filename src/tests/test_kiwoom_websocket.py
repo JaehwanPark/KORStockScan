@@ -3603,6 +3603,9 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently(m
     integrated_depth = manager.realtime_data["039490"]["recent_depth_ticks_by_route"][
         "_AL|krx_nxt_integrated"
     ][0]
+    assert integrated_depth['market_route']=='krx_nxt_integrated'
+    assert integrated_depth['market_suffix']=='_AL'
+    assert integrated_depth['route_sequence']>0
     assert snapshots["_AL|krx_nxt_integrated"]["0D"]["observed_epoch"] == (
         integrated_depth["received_at_ms"] / 1000
     )

@@ -1061,7 +1061,12 @@ def _economic_research(rows, model, counts, by_date, consumed_holdouts=()):
         {d:n for d,n in counts.items() if d in eligible},consumed_holdouts=consumed_holdouts)
 
 
-def build_report(target_date: str) -> dict[str, Any]:
+def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict[str, Any]:
+    # Revalidation recomputes live source/metrics at the original artifact
+    # clock. Only the output clock is frozen; custody/source checks stay live.
+    if artifact_as_of is not None:
+        if not isinstance(artifact_as_of, str) or datetime.fromisoformat(artifact_as_of).tzinfo is None:
+            raise ValueError('cancel_wait_artifact_clock_invalid')
     if date.fromisoformat(target_date).isoformat()!=target_date or target_date<'2026-06-05':raise ValueError('clean_source_date_required')
     if target_date < EXECUTABLE_EVIDENCE_DATE:return _build_legacy_report(target_date)
     from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA,SELECTION_RULE,evaluate_economic_search
@@ -1242,7 +1247,7 @@ def build_report(target_date: str) -> dict[str, Any]:
         reconciliation_contract_version=RECONCILIATION_VERSION,
         runtime_family=RUNTIME_FAMILY,policy_version=POLICY_VERSION,selection_rule_version=SELECTION_RULE,
         implementation_sha256s=_implementation(),
-        generated_at=datetime.now().astimezone().isoformat(timespec='seconds'),enabled=True,automatic_off_allowed=False,
+        generated_at=artifact_as_of or datetime.now().astimezone().isoformat(timespec='seconds'),enabled=True,automatic_off_allowed=False,
         standalone_operational_family=True,runtime_effect=False,allowed_runtime_apply=True,
         decision_authority='next_preopen_bounded_entry_cancel_wait_policy',metric_role='primary_ev',
         primary_decision_metric='notional_weighted_ev_pct_and_same_capital_daily_net_delta',
@@ -1675,7 +1680,7 @@ def verify_report(payload, *, recompute=True):
     view=validated_reconciliation_view(payload)
     if view.get('findings'):return False,view['findings'][0]
     if recompute:
-        current=build_report(payload['date'])
+        current=build_report(payload['date'], artifact_as_of=payload.get('generated_at'))
         if current['proof_sha256']!=payload['proof_sha256']:
             unrelated_append=(payload.get('economic_tuning_input_allowed') is False
                 and current.get('economic_tuning_input_allowed') is False

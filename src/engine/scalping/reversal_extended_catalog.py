@@ -450,15 +450,15 @@ MANIFEST=dict(schema=VERSION,parent_registry_sha256=OLD.SHA256,definitions=DEFIN
 SHA256=digest(MANIFEST)
 
 def definition(bid):
-    return copy.deepcopy(NEW_DEFINITIONS[bid]) if bid in NEW_DEFINITIONS else OLD.definition(bid)
+    return copy.deepcopy(EXTENDED_DEFINITIONS[bid]) if bid in EXTENDED_DEFINITIONS else OLD.definition(bid)
 
 def branch(bid):
-    if bid not in NEW_DEFINITIONS:return OLD.branch(bid)
+    if bid not in EXTENDED_DEFINITIONS:return OLD.branch(bid)
     return dict(branch_id=bid,kind='registered_pattern',definition_sha256=digest(definition(bid)),decision_phase=PHASES[bid])
 
 def applicable(bid,key,route):
-    if bid not in NEW_DEFINITIONS:return OLD.applicable(bid,key,route)
-    g,m,b=key.split('|');d=NEW_DEFINITIONS[bid]
+    if bid not in EXTENDED_DEFINITIONS:return OLD.applicable(bid,key,route)
+    g,m,b=key.split('|');d=EXTENDED_DEFINITIONS[bid]
     return (g,m,route)==(d['symbol_group'],d['market'],d['route']) and d['price_band'] in ('ALL',b)
 
 def validate_payload(p,key,route):
@@ -470,13 +470,225 @@ def validate_payload(p,key,route):
         raise ValueError('extended_definition_or_scope_invalid')
 
 def matches(bid,event,features):
-    if bid not in NEW_DEFINITIONS:return OLD.matches(bid,event,features)
-    d=NEW_DEFINITIONS[bid]
+    if bid not in EXTENDED_DEFINITIONS:return OLD.matches(bid,event,features)
+    d=EXTENDED_DEFINITIONS[bid]
     if (not applicable(bid,cell_key(event['symbol'],event['market'],event['confirmation_price']),event['venue'])
             or event.get('source_item')!=event['symbol']+('_NX' if d['market']=='PRE' else '_AL')):return False
-    values=dict(features);results=[]
+    values=dict(features);values.setdefault('spread', event.get('spread_pct'));results=[]
     for name,bound in d['filters'].items():
         op=next((s for s in ('_min_exclusive','_max_exclusive','_min','_max') if name.endswith(s)),None)
         value=values.get(name[:-len(op)] if op else name)
         results.append(None if value is None else value>bound if op=='_min_exclusive' else value<bound if op=='_max_exclusive' else value>=bound if op=='_min' else value<=bound if op=='_max' else value==bound)
     return False if False in results else None if None in results else True
+
+
+# Explicit 2026-10-13 successor. Frozen base MANIFEST/SHA256 stay addressable.
+ADDITIONAL_DEFINITIONS = {'manual_residual_0d7e29b0230e5b49': {'definition_version': 1,
+                                      'feature_contract': {'buy10': '10 native known-side quantity weighted '
+                                                                    'trades',
+                                                           'dd': '100*(prior_300s_high/current_trade-1)',
+                                                           'ret': '60s backward predecessor trade',
+                                                           'session': 'first valid observed session trade',
+                                                           'structure': 'current_30s vs preceding_30s '
+                                                                        'high/low; 60s warmup',
+                                                           'volume': 'current_60s/prior_60s qty; 120s '
+                                                                     'warmup'},
+                                      'feature_time': 'actual_confirmation_received_prefix',
+                                      'filters': {'dd_max': 1.2, 'dd_min': 0.4, 'spread_max': 0.1},
+                                      'item_rule': 'symbol_NX',
+                                      'kind': 'manual_path_pattern',
+                                      'label_contract': {'cost_rate': 0.0023,
+                                                         'horizon_seconds': 1800,
+                                                         'stop_net_pct': -3.0,
+                                                         'target_net_pct': 0.4},
+                                      'market': 'PRE',
+                                      'price_band': 'GE_100000',
+                                      'root_confirmation': 'FIRST_HOLD1',
+                                      'root_contract': {'comparison': 'greater_or_equal_original_first_price',
+                                                        'confirmation': 'FIRST_PRICE_HOLD',
+                                                        'confirmation_tick': 'first_received_at_or_after_hold',
+                                                        'hold_seconds': 1,
+                                                        'maximum_wait_seconds': None,
+                                                        'pending_limit': 'existing_MAX_PENDING',
+                                                        'signal': 'native_first_turn',
+                                                        'source_continuity': 'same_native_interval_and_epoch'},
+                                      'route': 'NXT',
+                                      'symbol_group': 'other_non_fixed'},
+ 'manual_residual_29b499784843baed': {'definition_version': 1,
+                                      'feature_contract': {'buy10': '10 native known-side quantity weighted '
+                                                                    'trades',
+                                                           'dd': '100*(prior_300s_high/current_trade-1)',
+                                                           'ret': '60s backward predecessor trade',
+                                                           'session': 'first valid observed session trade',
+                                                           'structure': 'current_30s vs preceding_30s '
+                                                                        'high/low; 60s warmup',
+                                                           'volume': 'current_60s/prior_60s qty; 120s '
+                                                                     'warmup'},
+                                      'feature_time': 'actual_confirmation_received_prefix',
+                                      'filters': {'buy10_min': 60,
+                                                  'ret_max_exclusive': 0.2,
+                                                  'ret_min': 0,
+                                                  'session_max_exclusive': -0.4,
+                                                  'vwap_min': 0},
+                                      'item_rule': 'symbol_NX',
+                                      'kind': 'manual_path_pattern',
+                                      'label_contract': {'cost_rate': 0.0023,
+                                                         'horizon_seconds': 1800,
+                                                         'stop_net_pct': -3.0,
+                                                         'target_net_pct': 0.4},
+                                      'market': 'PRE',
+                                      'price_band': 'LT_20000',
+                                      'root_confirmation': 'FIRST_HOLD3',
+                                      'root_contract': {'comparison': 'greater_or_equal_original_first_price',
+                                                        'confirmation': 'FIRST_PRICE_HOLD',
+                                                        'confirmation_tick': 'first_received_at_or_after_hold',
+                                                        'hold_seconds': 3,
+                                                        'maximum_wait_seconds': None,
+                                                        'pending_limit': 'existing_MAX_PENDING',
+                                                        'signal': 'native_first_turn',
+                                                        'source_continuity': 'same_native_interval_and_epoch'},
+                                      'route': 'NXT',
+                                      'symbol_group': 'other_non_fixed'},
+ 'manual_residual_410caad162a07c2c': {'definition_version': 1,
+                                      'feature_contract': {'buy10': '10 native known-side quantity weighted '
+                                                                    'trades',
+                                                           'dd': '100*(prior_300s_high/current_trade-1)',
+                                                           'ret': '60s backward predecessor trade',
+                                                           'session': 'first valid observed session trade',
+                                                           'structure': 'current_30s vs preceding_30s '
+                                                                        'high/low; 60s warmup',
+                                                           'volume': 'current_60s/prior_60s qty; 120s '
+                                                                     'warmup'},
+                                      'feature_time': 'actual_confirmation_received_prefix',
+                                      'filters': {'buy10_min': 60,
+                                                  'dd_max_exclusive': 0.4,
+                                                  'ret_max_exclusive': 0.2,
+                                                  'ret_min': -0.2,
+                                                  'session_min': -0.4,
+                                                  'vwap_min': 0},
+                                      'item_rule': 'symbol_NX',
+                                      'kind': 'manual_path_pattern',
+                                      'label_contract': {'cost_rate': 0.0023,
+                                                         'horizon_seconds': 1800,
+                                                         'stop_net_pct': -3.0,
+                                                         'target_net_pct': 0.4},
+                                      'market': 'PRE',
+                                      'price_band': 'GE_100000',
+                                      'root_confirmation': 'FIRST_HOLD1',
+                                      'root_contract': {'comparison': 'greater_or_equal_original_first_price',
+                                                        'confirmation': 'FIRST_PRICE_HOLD',
+                                                        'confirmation_tick': 'first_received_at_or_after_hold',
+                                                        'hold_seconds': 1,
+                                                        'maximum_wait_seconds': None,
+                                                        'pending_limit': 'existing_MAX_PENDING',
+                                                        'signal': 'native_first_turn',
+                                                        'source_continuity': 'same_native_interval_and_epoch'},
+                                      'route': 'NXT',
+                                      'symbol_group': '196170'},
+ 'manual_residual_503ffaf24ebfe783': {'definition_version': 1,
+                                      'feature_contract': {'buy10': '10 native known-side quantity weighted '
+                                                                    'trades',
+                                                           'dd': '100*(prior_300s_high/current_trade-1)',
+                                                           'ret': '60s backward predecessor trade',
+                                                           'session': 'first valid observed session trade',
+                                                           'structure': 'current_30s vs preceding_30s '
+                                                                        'high/low; 60s warmup',
+                                                           'volume': 'current_60s/prior_60s qty; 120s '
+                                                                     'warmup'},
+                                      'feature_time': 'actual_confirmation_received_prefix',
+                                      'filters': {'buy10_min': 60,
+                                                  'ret_max_exclusive': 0.2,
+                                                  'ret_min': 0,
+                                                  'session_max_exclusive': -0.4,
+                                                  'vwap_min': 0},
+                                      'item_rule': 'symbol_AL',
+                                      'kind': 'manual_path_pattern',
+                                      'label_contract': {'cost_rate': 0.0023,
+                                                         'horizon_seconds': 1800,
+                                                         'stop_net_pct': -3.0,
+                                                         'target_net_pct': 0.4},
+                                      'market': 'AFTER',
+                                      'price_band': 'LT_20000',
+                                      'root_confirmation': 'FIRST_HOLD3',
+                                      'root_contract': {'comparison': 'greater_or_equal_original_first_price',
+                                                        'confirmation': 'FIRST_PRICE_HOLD',
+                                                        'confirmation_tick': 'first_received_at_or_after_hold',
+                                                        'hold_seconds': 3,
+                                                        'maximum_wait_seconds': None,
+                                                        'pending_limit': 'existing_MAX_PENDING',
+                                                        'signal': 'native_first_turn',
+                                                        'source_continuity': 'same_native_interval_and_epoch'},
+                                      'route': 'SOR',
+                                      'symbol_group': 'other_non_fixed'},
+ 'manual_residual_536f6d1c9b207d1d': {'definition_version': 1,
+                                      'feature_contract': {'buy10': '10 native known-side quantity weighted '
+                                                                    'trades',
+                                                           'dd': '100*(prior_300s_high/current_trade-1)',
+                                                           'ret': '60s backward predecessor trade',
+                                                           'session': 'first valid observed session trade',
+                                                           'structure': 'current_30s vs preceding_30s '
+                                                                        'high/low; 60s warmup',
+                                                           'volume': 'current_60s/prior_60s qty; 120s '
+                                                                     'warmup'},
+                                      'feature_time': 'actual_confirmation_received_prefix',
+                                      'filters': {'dd_max': 0.2,
+                                                  'ret_max_exclusive': 0.4,
+                                                  'ret_min': 0,
+                                                  'spread_max': 0.1,
+                                                  'structure': 'RISING'},
+                                      'item_rule': 'symbol_NX',
+                                      'kind': 'manual_path_pattern',
+                                      'label_contract': {'cost_rate': 0.0023,
+                                                         'horizon_seconds': 1800,
+                                                         'stop_net_pct': -3.0,
+                                                         'target_net_pct': 0.4},
+                                      'market': 'PRE',
+                                      'price_band': 'GE_100000',
+                                      'root_confirmation': 'BREAKOUT60',
+                                      'root_contract': {'comparison': 'strict_greater',
+                                                        'condition_trigger': 'known_false_to_known_true',
+                                                        'confirmation': 'HIGH_BREAKOUT',
+                                                        'prior_high_window_seconds': 60,
+                                                        'signal': 'BREAKOUT',
+                                                        'warmup_seconds': 60},
+                                      'route': 'NXT',
+                                      'symbol_group': 'other_non_fixed'},
+ 'manual_residual_bac0e83e966ed3ea': {'definition_version': 1,
+                                      'feature_contract': {'buy10': '10 native known-side quantity weighted '
+                                                                    'trades',
+                                                           'dd': '100*(prior_300s_high/current_trade-1)',
+                                                           'ret': '60s backward predecessor trade',
+                                                           'session': 'first valid observed session trade',
+                                                           'structure': 'current_30s vs preceding_30s '
+                                                                        'high/low; 60s warmup',
+                                                           'volume': 'current_60s/prior_60s qty; 120s '
+                                                                     'warmup'},
+                                      'feature_time': 'actual_confirmation_received_prefix',
+                                      'filters': {'dd_max': 1.2, 'dd_min': 0.4, 'spread_max': 0.1},
+                                      'item_rule': 'symbol_NX',
+                                      'kind': 'manual_path_pattern',
+                                      'label_contract': {'cost_rate': 0.0023,
+                                                         'horizon_seconds': 1800,
+                                                         'stop_net_pct': -3.0,
+                                                         'target_net_pct': 0.4},
+                                      'market': 'PRE',
+                                      'price_band': 'LT_20000',
+                                      'root_confirmation': 'FIRST_HOLD1',
+                                      'root_contract': {'comparison': 'greater_or_equal_original_first_price',
+                                                        'confirmation': 'FIRST_PRICE_HOLD',
+                                                        'confirmation_tick': 'first_received_at_or_after_hold',
+                                                        'hold_seconds': 1,
+                                                        'maximum_wait_seconds': None,
+                                                        'pending_limit': 'existing_MAX_PENDING',
+                                                        'signal': 'native_first_turn',
+                                                        'source_continuity': 'same_native_interval_and_epoch'},
+                                      'route': 'NXT',
+                                      'symbol_group': 'other_non_fixed'}}
+EXTENDED_DEFINITIONS = dict(NEW_DEFINITIONS, **ADDITIONAL_DEFINITIONS)
+DEFINITIONS = dict(DEFINITIONS, **ADDITIONAL_DEFINITIONS)
+PHASES = dict(PHASES, **{b: ('HIGH_BREAKOUT' if d['root_contract']['signal']=='BREAKOUT' else 'FIRST_PRICE_HOLD') for b,d in ADDITIONAL_DEFINITIONS.items()})
+SUCCESSOR_MANIFEST = dict(schema='main_residual_session_catalog_v1', parent_registry_sha256=SHA256, additions=ADDITIONAL_DEFINITIONS)
+SUCCESSOR_SHA256 = digest(SUCCESSOR_MANIFEST)
+
+def registry_for(branch_ids):
+    return SUCCESSOR_SHA256 if any(b in ADDITIONAL_DEFINITIONS for b in branch_ids) else SHA256

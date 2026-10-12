@@ -85,6 +85,64 @@ def test_producer_reconstruction_refuses_live_writer_before_mutation(tmp_path, m
         owner.rebuild_producer_summary_source(tmp_path, "2026-10-02")
 
 
+@pytest.mark.parametrize('mutation', ['unchanged', 'before_seal', 'during_seal'])
+def test_sealer_binds_the_exact_quarantine_generation_before_publication(
+    tmp_path, monkeypatch, mutation
+):
+    from src.engine import pipeline_event_summary as owner
+    day = '2026-09-08'
+    raw = tmp_path / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+    raw.parent.mkdir()
+    event = {**_review_event(1), 'emitted_date': day}
+    raw.write_text(json.dumps(event) + '\n')
+    collector = ProducerSummaryCompactor(summary_dir=tmp_path / 'pipeline_event_summaries', mode='shadow')
+    collector.submit(event)
+    collector.flush()
+    collector.close()
+    _, manifest = owner.producer_summary_paths(tmp_path / 'pipeline_event_summaries', day)
+    original = manifest.read_bytes()
+    expected = {'path': str(raw), 'stamp': owner._part_snapshot_stamp(raw)}
+    if mutation == 'before_seal':
+        raw.write_bytes(raw.read_bytes() + b' ')
+    elif mutation == 'during_seal':
+        digest = owner._logical_body_digest
+        def changed_after_raw_read(path):
+            result = digest(path)
+            raw.write_bytes(raw.read_bytes() + b' ')
+            return result
+        monkeypatch.setattr(owner, '_logical_body_digest', changed_after_raw_read)
+    if mutation == 'unchanged':
+        sealed = owner.seal_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
+        assert sealed['raw_source_ledger']['valid_count'] == 1
+        assert owner.producer_source_ledger_issues(tmp_path, day) == []
+    else:
+        with pytest.raises(ValueError, match='producer_raw_expected_generation_changed'):
+            owner.seal_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
+        assert manifest.read_bytes() == original
+
+
+def test_reconstruction_uses_pinned_quarantine_without_adopting_later_source(tmp_path, monkeypatch):
+    from src.engine import pipeline_event_summary as owner
+    from src.engine import observation_source_quality_audit as audit
+    day = '2026-09-08'
+    raw = tmp_path / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+    raw.parent.mkdir()
+    events = [{**_review_event(i), 'emitted_date': day} for i in [1, 2]]
+    raw.write_text(''.join(json.dumps(event) + '\n' for event in events))
+    collector = ProducerSummaryCompactor(summary_dir=tmp_path / 'pipeline_event_summaries', mode='shadow')
+    collector.submit(events[0])
+    collector.flush()
+    collector.close()
+    monkeypatch.setattr(audit, '_raw_source_writer_active', lambda *_: True)
+    expected = {'path': str(raw), 'stamp': owner._part_snapshot_stamp(raw)}
+    recovered = owner.rebuild_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
+    assert recovered['summary_event_count'] == 2
+    assert owner.producer_source_ledger_issues(tmp_path, day) == []
+    raw.write_bytes(raw.read_bytes() + b' ')
+    with pytest.raises(ValueError, match='producer_raw_expected_generation_changed'):
+        owner.rebuild_producer_summary_source(tmp_path, day, expected_raw_generation=expected)
+
+
 def test_producer_source_ledger_binds_raw_summary_and_rejects_drift(tmp_path):
     from src.engine.pipeline_event_summary import (
         seal_producer_summary_source,

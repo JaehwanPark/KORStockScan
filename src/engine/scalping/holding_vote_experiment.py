@@ -386,10 +386,10 @@ def _native_research(root, day, *, trailing_assembly=None, skip_experiment=False
 
     root = Path(root)
     try:
-        parent = load_bundle(root, day)
+        parent = load_bundle(root, day, require_current_code=False)
         from .holding_path_vote_policy import verify_source_handoff
 
-        verify_source_handoff(root, parent)
+        verify_source_handoff(root, parent, require_current_code=False)
     except (OSError, ValueError, KeyError, TypeError):
         return dict(
             schema=RESULT_SCHEMA,

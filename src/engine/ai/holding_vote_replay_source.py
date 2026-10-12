@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -101,6 +102,19 @@ def _records(path):
                 line_sha256=hashlib.sha256(line.encode()).hexdigest())
 
 
+def request_source_shadowed(path):
+    """A surviving regular original owns its optional compression companion."""
+    path=Path(path)
+    if not path.name.endswith('.jsonl.gz'):return False
+    try:return stat.S_ISREG(path.with_suffix('').stat(follow_symlinks=False).st_mode)
+    except FileNotFoundError:return False
+
+
+def original_request_paths(root, namespace, day):
+    return tuple(path for path in sorted((Path(root)/namespace).glob(namespace+'_'+day+'.jsonl*'))
+        if not request_source_shadowed(path))
+
+
 def _request_index(root, output, day, sources):
     """One disposable, bounded disk index per original request date."""
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',str(day)): raise ValueError('holding_request_date_invalid')
@@ -113,7 +127,7 @@ def _request_index(root, output, day, sources):
         originals=[]
         for namespace,stem in (('ai_decision_payloads','ai_decision_payloads'),
             ('ai_decision_prompts','ai_decision_prompts'),('ai_decision_requests','ai_decision_requests')):
-            for original in sorted((root/namespace).glob(stem+'_'+day+'.jsonl*')):
+            for original in original_request_paths(root,namespace,day):
                 if str(original) not in sources:sources[str(original)]=byte_generation(original)
                 originals.append((str(original),sources[str(original)]))
         generation=input_snapshot_id(originals)
@@ -124,7 +138,7 @@ def _request_index(root, output, day, sources):
                 ('ai_decision_payloads','ai_decision_payloads','payload','request_envelope_sha256'),
                 ('ai_decision_prompts','ai_decision_prompts','prompt','prompt_sha256'),
                 ('ai_decision_requests','ai_decision_requests','request','request_id')):
-                for original in sorted((root/namespace).glob(stem+'_'+day+'.jsonl*')):
+                for original in original_request_paths(root,namespace,day):
                     before=sources[str(original)]
                     for row, pointer in _records(original):
                         if row.get('endpoint')!='holding_path_vote':continue

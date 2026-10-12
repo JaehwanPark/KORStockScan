@@ -110,6 +110,13 @@ def vote_watch(root, day):
                     if directory.name!='holding_path_votes':
                         stem=entry.name[len(directory.name)+1:][:10]
                         if not '2026-09-29'<=stem<=day:continue
+                        if entry.name.endswith('.jsonl.gz'):
+                            # The request reader prefers the surviving original.
+                            # Cleanup may add an unused gzip companion without
+                            # changing any consumed source. A gzip-only source,
+                            # original mutation or removal still invalidates.
+                            from src.engine.ai.holding_vote_replay_source import request_source_shadowed
+                            if request_source_shadowed(Path(entry.path)):continue
                     value=policy.digest([entry.name,list(source_stat(entry.stat(follow_symlinks=False)))])
                     total=(total+int(value,16))%(1<<256);count+=1
         digest.update(policy.digest([str(directory),count,f'{total:064x}']).encode())
@@ -165,7 +172,25 @@ def source_events(path, census, *, references=False):
             offset=handle.tell()
             line=handle.readline(2*1024*1024+1)
             if not line:break
-            if len(line.encode())>2*1024*1024:raise ValueError('stop_source_record_unbounded')
+            if len(line.encode())>2*1024*1024:
+                # Isolate this physical record without retaining its full body.
+                # Its role is unverified, so numeric selection stays fail-closed;
+                # a source-gap carry can still preserve the verified incumbent.
+                digest=hashlib.sha256(line.encode());size=len(line.encode())
+                complete=line.endswith('\n')
+                while not complete:
+                    checkpoint()
+                    tail=handle.readline(65536)
+                    if not tail:break
+                    raw=tail.encode();digest.update(raw);size+=len(raw)
+                    complete=tail.endswith('\n')
+                census['oversized_raw_rows']+=1
+                census['oversized_raw_bytes']+=size
+                census['unidentifiable_raw_rows']+=1
+                if not complete:census['oversized_unterminated_raw_rows']+=1
+                if census['oversized_raw_rows']<=8:
+                    census[f'oversized_raw_record:{path}:{offset}:{digest.hexdigest()}']+=1
+                continue
             if not line.strip():continue
             try:row=json.loads(line)
             except ValueError:

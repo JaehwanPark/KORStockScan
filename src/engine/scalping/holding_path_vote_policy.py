@@ -201,11 +201,13 @@ def create_bundle(
 
 def validate_bundle(
     bundle: Any, *, target_date: str, source_report_sha256: str | None = None,
+    require_current_code: bool = True,
 ) -> dict[str, Any]:
     if not isinstance(bundle, dict):
         raise ValueError("holding_vote_policy_invalid")
     if bundle.get('schema')==SUCCESSOR_SCHEMA:
-        return validate_successor(bundle,target_date=target_date,source_report_sha256=source_report_sha256)
+        return validate_successor(bundle,target_date=target_date,source_report_sha256=source_report_sha256,
+                                  require_current_code=require_current_code)
     unsigned = {key: value for key, value in bundle.items() if key != "bundle_sha256"}
     try:
         valid_dates = (
@@ -299,16 +301,19 @@ def validate_bundle(
 def load_bundle(
     data_root: Path, target_date: str, *,
     source_report_sha256: str | None = None,
+    require_current_code: bool = True,
 ) -> dict[str, Any]:
     path = policy_path(data_root, target_date)
     if path.is_symlink() or path.stat().st_size > MAX_BYTES:
         raise ValueError("holding_vote_policy_file_invalid")
     return validate_bundle(json.loads(path.read_text(encoding="utf-8")),
                            target_date=target_date,
-                           source_report_sha256=source_report_sha256)
+                           source_report_sha256=source_report_sha256,
+                           require_current_code=require_current_code)
 
 
-def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_depth: int = 0) -> None:
+def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_depth: int = 0,
+                          require_current_code: bool = True) -> None:
     """Require report bytes, summary receipt and terminal strict handoff."""
     if _parent_depth >= 370:
         raise ValueError('holding_vote_parent_chain_bound_exceeded')
@@ -345,7 +350,8 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_de
         from .holding_vote_experiment import code_sha
         current_code = code_sha()
         if bundle.get('code_sha256') != current_code:
-            validate_successor(bundle, target_date=bundle['target_date'])
+            validate_successor(bundle, target_date=bundle['target_date'],
+                               require_current_code=require_current_code)
             numeric = replay.get('vote_numeric_research') or {}
             if (bundle.get('selection_mode') != 'incumbent_carry'
                     or numeric.get('code_sha256') != bundle.get('code_sha256')
@@ -371,8 +377,11 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_de
             if cell != bundle["cells"].get(key):
                 raise ValueError("holding_vote_legacy_active_cell_mismatch")
     if bundle.get('schema')==SUCCESSOR_SCHEMA:
-        native=load_bundle(root,source_date)
-        verify_source_handoff(root,native, _parent_depth=_parent_depth + 1)
+        # A parent's original code/bytes are historical lineage, not a claim
+        # that the current release consumed that old policy in a live PID.
+        native=load_bundle(root,source_date,require_current_code=False)
+        verify_source_handoff(root,native, _parent_depth=_parent_depth + 1,
+                              require_current_code=False)
         parent=bundle['parent']
         if (parent['path']!=str(policy_path(root,source_date))
             or hashlib.sha256(Path(parent['path']).read_bytes()).hexdigest()!=parent['byte_sha256']
@@ -499,7 +508,7 @@ def create_successor(*,source_date,target_date,source_report_sha256,replay,sourc
     return validate_successor(value,target_date=target_date,source_report_sha256=source_report_sha256)
 
 
-def validate_successor(bundle, *,target_date,source_report_sha256=None):
+def validate_successor(bundle, *,target_date,source_report_sha256=None,require_current_code=True):
     from .holding_vote_experiment import code_sha,grid,verify_receipt,source_generation_sha
     current_code = code_sha()
     if bundle.get('code_sha256') != current_code:
@@ -507,11 +516,12 @@ def validate_successor(bundle, *,target_date,source_report_sha256=None):
         # numerical successor comparisons still require their exact code.
         if bundle.get('selection_mode') != 'incumbent_carry':
             raise ValueError('holding_vote_successor_code_changed')
-        from .holding_vote_experiment import _code_paths
-        from src.engine.automation.intraday_release_handoff import verify_entry_consumer_code
-        verify_entry_consumer_code(target_date, family='holding_vote',
-            policy_sha=bundle.get('bundle_sha256'), expected=bundle.get('code_sha256'),
-            paths={name: 'src/engine/' + name for name in _code_paths()}, actual=current_code)
+        if require_current_code:
+            from .holding_vote_experiment import _code_paths
+            from src.engine.automation.intraday_release_handoff import verify_entry_consumer_code
+            verify_entry_consumer_code(target_date, family='holding_vote',
+                policy_sha=bundle.get('bundle_sha256'), expected=bundle.get('code_sha256'),
+                paths={name: 'src/engine/' + name for name in _code_paths()}, actual=current_code)
     if (bundle.get('schema')!=SUCCESSOR_SCHEMA or bundle.get('bundle_sha256')!=digest({k:v for k,v in bundle.items() if k!='bundle_sha256'})
         or date.fromisoformat(bundle['source_date']).isoformat()!=bundle['source_date']
         or date.fromisoformat(target_date).isoformat()!=target_date

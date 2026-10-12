@@ -40,6 +40,25 @@ def test_unseen_candidates_rotate_and_recheck_does_not_starve_them():
     assert queue.claim(now_epoch=T0 + 6, limit=1) == []  # prior claim is in flight
 
 
+def test_mixed_branches_keep_short_admission_and_rotate_two_long_slots():
+    queue=DiscoveryQueue(DAY)
+    for i in range(1,6):_observe(queue,f'{i:06d}')
+    requirement=lambda *args:dict(minimum_seconds=0,full_input_requirement_seconds=120)
+    seen=set()
+    for round in range(3):
+        now=T0+2+round*160
+        claims=queue.claim(now_epoch=now,limit=5,residence_requirements=requirement)
+        assert len(claims)==5
+        long=[r for r in claims if r['residence_deadline_epoch']-now==150]
+        assert len(long)==2
+        seen.update(r['code'] for r in long)
+        for claim in claims:
+            assert queue.resolve(claim,result='assessed',machine_action='RECHECK',next_due_epoch=now+150,
+                                 handoff_id=claim['physical_probe_lease_id'])
+            assert queue.close_handoff(claim,claim['physical_probe_lease_id'])
+    assert len(seen)==5
+
+
 def test_same_age_unseen_candidates_use_liquidity_as_tie_breaker():
     queue = DiscoveryQueue(DAY)
     _observe(queue, "000001", volume=10)

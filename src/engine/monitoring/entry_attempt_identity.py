@@ -110,6 +110,24 @@ def _watch_identity(stock):
                  ("watch_origin", "watch_admission_id", "watch_generation_id"))
 
 
+def same_market_session_name(left, right):
+    """Compare spelling case only; retain exact raw native revision fields."""
+    from src.trading.market import session_contract as S
+    known={v.casefold() for k,v in vars(S).items() if k.startswith('MARKET_SESSION_REGIME_') and isinstance(v,str)}
+    known |= {'premarket_krx_like','nxt_premarket','nxt_regular_overlap','nxt_aftermarket'}
+    return (isinstance(left, str) and isinstance(right, str)
+            and left.casefold() in known
+            and ":" not in left and left.casefold() == right.casefold())
+
+
+def submit_attempt_lineage_rejection(stock, code):
+    value = _ATTEMPT.get()
+    if (not isinstance(value, dict) or value.get("record_id") != str(stock.get("id") or "")
+            or value.get("code") != str(code)):
+        return {}
+    return dict(value.get("machine_lineage_rejection") or {})
+
+
 def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing=False):
     """Bind trusted diagnostic lineage to the current submit invocation only.
 
@@ -119,17 +137,23 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
     """
 
     value = _ATTEMPT.get()
+    def reject(reason, **fields):
+        current = _ATTEMPT.get()
+        if isinstance(current, dict) and current is value:
+            _ATTEMPT.set({**current, "machine_lineage": {}, "machine_lineage_rejection": dict(
+                reason=reason, **fields)})
+        return False
     if (
         not isinstance(value, dict)
         or value.get("record_id") != str(stock.get("id") or "")
         or value.get("code") != str(code)
         or not isinstance(source, dict)
     ):
-        return False
+        return reject("submit_context_or_identity_mismatch")
     if replace_existing:
         # A real in-call AI retry is a new evaluation. Incomplete retry
         # provenance must never borrow the prior evaluation's terminal.
-        value = {**value, "machine_lineage": {}}
+        value = {**value, "machine_lineage": {}, "machine_lineage_rejection": {}}
         _ATTEMPT.set(value)
     lineage = {
         key: source[key]
@@ -147,7 +171,7 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
         "entry_ai_screen_pass",
     }
     if not required <= lineage.keys():
-        return False
+        return reject("machine_lineage_required_fields_missing", missing_fields=sorted(required-lineage.keys()))
     fixed = value.get("watch_identity", ("",))[0] == "MAIN_FIXED_WATCH"
     if fixed:
         parent = value["watch_identity"]
@@ -156,19 +180,20 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
                 or not re.match(r"FIXED-\d{4}-\d{2}-\d{2}-" + re.escape(str(code)[:6]) + "-", parent[1])
                 or str(stock.get("code") or "")[:6] != str(code)[:6]
                 or str(source.get("effective_venue")).upper() != str(stock.get("effective_venue")).upper()
-                or source.get("market_session_bucket") != stock.get("market_session_bucket")):
-            return False
+                or not same_market_session_name(source.get("market_session_bucket"), stock.get("market_session_bucket"))):
+            return reject("fixed_watch_parent_or_market_mismatch",
+                source_session=source.get("market_session_bucket"), stock_session=stock.get("market_session_bucket"))
         if (lineage.get("machine_capture_status") != "captured"
                 or not re.fullmatch(r"[0-9a-f]{64}", str(lineage.get("machine_observation_sha256") or ""))):
-            return False
+            return reject("machine_capture_unverified")
         # A fixed watch is admitted by its native watch ID, never a fabricated
         # scanner promotion. Reject ambiguous simultaneous origin claims.
         if _promotion_id(source) or _promotion_id(stock):
-            return False
+            return reject("ambiguous_scanner_and_fixed_origin")
         lineage.pop("scanner_promotion_id", None)
     elif (_watch_identity(source)[0] == "MAIN_FIXED_WATCH"
           or not _promotion_id(source)):
-        return False
+        return reject("scanner_parent_missing_or_fixed_origin")
     if (
         str(lineage["entry_primary_decision_owner"]) != "mechanistic_entry_adjudicator"
         or str(lineage["effective_venue"]).upper()
@@ -181,11 +206,11 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
             and lineage.get("entry_ai_screen_pass") is not True
         )
     ):
-        return False
+        return reject("machine_action_or_market_contract_invalid")
     expected_parent = _promotion_id(stock) if replace_existing else value.get("promotion_id")
     if not fixed and expected_parent and str(lineage["scanner_promotion_id"]) != str(expected_parent):
-        return False
-    updated = {**value, "machine_lineage": lineage}
+        return reject("scanner_parent_mismatch")
+    updated = {**value, "machine_lineage": lineage, "machine_lineage_rejection": {}}
     if not fixed and not updated.get("promotion_id"):
         updated["promotion_id"] = str(lineage["scanner_promotion_id"])
     _ATTEMPT.set(updated)

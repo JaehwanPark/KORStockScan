@@ -1067,13 +1067,18 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         assert computed['counts']['unique_retained']==1
         assert computed['rows'][0]['status']=='completed_source_only', computed['rows'][0]
         operating=next(iter(computed['rows'][0]['operating_arms'].values()))
-        if position_tag == 'SCANNER':
-            # This default-preset fixture has no SCANNER REST quote receipt.
-            # Valid source binding must not manufacture a terminal cash result.
+        if position_tag == 'SCANNER' and venue == 'NXT':
+            # These NXT fixtures carry SOR snapshots without the independently
+            # required SCANNER REST receipt. Preserve that source gap; no
+            # synthetic quote or terminal cash may close it.
             assert operating['status'] == 'unsupported_scope', operating
             assert 'bounded_rest_quote_request_or_cutoff_gap' in operating['blocker']
             assert operating['net_pnl_krw'] is None
             return
+        # Native entry/holding may consume these exact, fresh WS snapshots for
+        # SCANNER too. A REST receipt is required only if the actual policy
+        # asks for it; RecordedServices still rejects every missing read.
+        # This modeled terminal remains separate from actual fill evidence.
         assert operating['status']=='completed_source_only', operating['blocker']
         assert operating['net_pnl_krw']<0
         assert operating['stress_net_pnl_krw']<=operating['net_pnl_krw']

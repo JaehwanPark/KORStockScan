@@ -118,10 +118,26 @@ def flush_lifecycle():
             failure('native_lifecycle', 'append_admission_failed', emit_log=False)
 
 
-def observe_ai_circuit(*, failures, disabled):
+def observe_ai_circuit(*, failures, disabled, entry=None, common=None, common_failure=None):
     with _LOCK:
         _CIRCUIT.update(state='disabled' if disabled else 'enabled',
                         consecutive_failures=int(failures), observed_epoch=time.time())
+        if entry is not None:
+            _CIRCUIT['entry_transport'] = dict(entry)
+        if common is not None:
+            _CIRCUIT['provider_common'] = dict(common)
+        if common_failure is not None:
+            _CIRCUIT['common_failure'] = dict(common_failure)
+
+
+def circuit_snapshot():
+    with _LOCK:
+        return dict(pid=os.getpid(), process_start_ticks=_PROCESS_START_TICKS,
+                    snapshot_epoch=time.time(), **dict(_CIRCUIT))
+
+
+def process_identity_fields():
+    return dict(pid=os.getpid(), process_start_ticks=_PROCESS_START_TICKS)
 
 
 def failure(stage, reason, *, emit_log=True):

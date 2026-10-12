@@ -28,7 +28,8 @@ def contract_modules():
     from src.engine.scalping import reversal_extended_registration as ER
     from src.engine.scalping import reversal_current_backend as D
     from src.engine.scalping import reversal_extended_intraday as INTRA
-    return (*V5.contract_modules(),C,A,R,T,E,ER,D,INTRA,__import__(__name__,fromlist=['*']))
+    from src.engine.scalping import reversal_manual_registration as MANUAL
+    return (*V5.contract_modules(),C,A,R,T,E,ER,D,INTRA,MANUAL,__import__(__name__,fromlist=['*']))
 
 
 def scopes():
@@ -69,8 +70,8 @@ def detector_manifest(parent, *, effective_date, changes=None):
             membership[sid]=sorted(result)
     manifest = dict(schema='main_operating_detector_manifest_v1', scopes=membership,
         definitions={bid: C.definition(bid) for bid in sorted({b for ids in membership.values() for b in ids})},
-        registry_sha256=C.SHA256, parent_manifest_sha256=old['detector_manifest_hash'] if old else None,
-        effective_date=effective_date, change_receipt=changes or dict(kind='INITIAL_ACTIVE_PLUS_EIGHT',
+        registry_sha256=C.registry_for(b for ids in membership.values() for b in ids), parent_manifest_sha256=old['detector_manifest_hash'] if old else None,
+        effective_date=effective_date, change_receipt=changes or (old or {}).get('change_receipt') or dict(kind='INITIAL_ACTIVE_PLUS_EIGHT',
             parent_bundle_sha256=parent['bundle_sha256'], additions=sorted(C.NEW_DEFINITIONS)))
     # Effective date, receipt and report lineage do not reset identical FSMs.
     manifest['detector_manifest_hash'] = digest({k: manifest[k] for k in ('schema','scopes','definitions','registry_sha256')})
@@ -83,10 +84,11 @@ def scope_hash(ids, auxiliary, backend, code):
 
 
 def validate_family(f):
+    registry = C.registry_for(b for ids in f.get('operating_manifest',{}).get('scopes',{}).values() for b in ids)
     if (f.get('schema') != SCHEMA or f.get('family_sha256') != digest({k:v for k,v in f.items() if k!='family_sha256'})
             or f.get('hard_guards_unchanged') is not True or f.get('actual_order_submitted') is not False
-            or f.get('registry_sha256') != C.SHA256 or f.get('label_contract') != C.LABEL
-            or f.get('branch_definition_sha256') != C.SHA256 or f.get('auxiliary_version') != A.VERSION
+            or f.get('registry_sha256') != registry or f.get('label_contract') != C.LABEL
+            or f.get('branch_definition_sha256') != registry or f.get('auxiliary_version') != A.VERSION
             or f.get('execution_code_sha256') != digest(f.get('contract_file_sha256'))
             or f.get('effective_mode') not in {'next_session','intraday'}
             or not f.get('source_date','') <= f.get('publication_date','') <= f.get('effective_date','')
@@ -98,7 +100,7 @@ def validate_family(f):
         from src.engine.scalping.reversal_extended_intraday import validate_activation
         validate_activation(f)
     m = f['operating_manifest']
-    if m.get('schema')!='main_operating_detector_manifest_v1' or m.get('registry_sha256')!=C.SHA256:
+    if m.get('schema')!='main_operating_detector_manifest_v1' or m.get('registry_sha256')!=registry:
         raise ValueError('v6_detector_registry_invalid')
     if m.get('detector_manifest_hash') != digest({k:m[k] for k in ('schema','scopes','definitions','registry_sha256')}):
         raise ValueError('v6_detector_manifest_changed')
@@ -109,6 +111,14 @@ def validate_family(f):
     for bid, definition in m['definitions'].items():
         if definition != C.definition(bid):
             raise ValueError('v6_operating_definition_changed')
+    if any(b in C.ADDITIONAL_DEFINITIONS for b in m['definitions']):
+        from src.engine.scalping import reversal_manual_registration as M
+        change=m.get('change_receipt') or {}
+        if (change.get('operator_receipt')!=M.AUTHORITY
+                or change.get('research_batch_sha256')!=M.PROPOSAL_SHA256
+                or change.get('scopes')!=M.approved_scopes()
+                or change.get('definition_hashes')!={b:digest(d) for b,d in C.ADDITIONAL_DEFINITIONS.items()}):
+            raise ValueError('v6_residual_membership_authority_missing')
     native = f['native_parent_bundle']['continuous_reversal']
     V4.validate_family(native)
     if any(set(f.get(n,{})) != set(C.cells()) for n in ('machine_cells','auxiliary_cells')):
@@ -131,8 +141,11 @@ def validate_family(f):
                 raise ValueError('v6_union_pair_invalid')
             if not aux.get('actual_response_evidence'):
                 from src.engine.scalping.reversal_extended_registration import AUTHORITY
+                from src.engine.scalping import reversal_manual_registration as M
                 proof=aux['initial_binding']
-                if (proof.get('operator_receipt')!=AUTHORITY or proof.get('research_batch_sha256')!=C.RESEARCH_BATCH_SHA256
+                approved=(proof.get('operator_receipt'),proof.get('research_batch_sha256')) in {
+                    (AUTHORITY,C.RESEARCH_BATCH_SHA256),(M.AUTHORITY,M.PROPOSAL_SHA256)}
+                if (not approved
                         or proof.get('comparison_result_required') is not False):
                     raise ValueError('v6_initial_registration_proof_invalid')
         elif backend == 'registered_v4':
@@ -205,6 +218,18 @@ def _validate_sources(bundle, data_root, *, code_root=None):
                 raise ValueError('v6_actual_response_source_changed')
     if f.get('code_refresh') is not None:
         _validate_code_refresh(bundle, data_root)
+    change=f['operating_manifest'].get('change_receipt') or {}
+    from src.engine.scalping import reversal_manual_registration as M
+    if change.get('operator_receipt')==M.AUTHORITY:
+        M.validate_request(change)
+    if f.get('registration_code_transition') is not None:
+        from src.engine.scalping import reversal_manual_registration as M
+        change=M.validate_request(N._read(M.pending_path(data_root)))
+        proof=f['registration_code_transition']
+        if (proof!=change or f['parent_bundle_sha256']!=change['parent_bundle_sha256']
+                or f['effective_date']!=change['target_date']
+                or f['operating_manifest']['change_receipt']!=change):
+            raise ValueError('v6_registration_code_transition_invalid')
     return bundle
 
 
@@ -447,7 +472,15 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
     root = N.root(Path(data_root)); root.mkdir(parents=True,exist_ok=True)
     with (root/'publisher.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        parent = N.load_effective(data_root=Path(data_root),target_date=publication)
+        try:
+            parent = N.load_effective(data_root=Path(data_root),target_date=publication)
+        except ValueError as exc:
+            from src.engine.scalping import reversal_manual_registration as M
+            change=machine.get('registration_change') or {}
+            if (change.get('operator_receipt')!=M.AUTHORITY or not str(exc).startswith(
+                    ('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:'))):
+                raise
+            parent=M.load_offline_parent(data_root,publication)
         if not parent or machine['parent_bundle_sha256'] != parent['bundle_sha256']:
             raise ValueError('v6_parent_cas_failed')
         for report in (machine,auxiliary):
@@ -462,8 +495,8 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             path = root/'sources'/('reversal-'+report['artifact_content_sha256']+'.json')
             N._atomic_write_json(path,report); hashes[name] = file_hash(path)
         native = parent['continuous_reversal'].get('native_parent_bundle', parent)
-        f = dict(schema=SCHEMA, kernel_version=K.VERSION, registry_sha256=C.SHA256,
-            branch_definition_sha256=C.SHA256, auxiliary_version=A.VERSION, label_contract=C.LABEL,
+        f = dict(schema=SCHEMA, kernel_version=K.VERSION, registry_sha256=machine['operating_manifest']['registry_sha256'],
+            branch_definition_sha256=machine['operating_manifest']['registry_sha256'], auxiliary_version=A.VERSION, label_contract=C.LABEL,
             source_date=day, publication_date=publication, effective_date=target_date, effective_mode=effective_mode,
             selection_metric='cumulative_raw_win_fraction', release_commit=release_commit,
             parent_bundle_sha256=parent['bundle_sha256'], native_parent_bundle=native,
@@ -474,6 +507,9 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             report_file_sha256=hashes, source_manifest_sha256=machine['source_manifest_sha256'],
             hard_guards_unchanged=True, actual_order_submitted=False)
         if effective_mode=='intraday':f['registration_activation']=registration_activation
+        if (machine.get('registration_change') or {}).get('operator_receipt') == __import__(
+                'src.engine.scalping.reversal_manual_registration',fromlist=['AUTHORITY']).AUTHORITY:
+            f['registration_code_transition']=machine['registration_change']
         f['execution_manifest_hash'] = digest({scope_id(k,r):f['machine_cells'][k]['routes'][r]['scope_execution_hash'] for k,r in scopes()})
         f['family_sha256'] = digest(f); validate_family(f)
         bundle = copy.deepcopy(parent)
@@ -521,13 +557,22 @@ def activate(data_root,target_date,*,now=None,intraday_evidence=None):
             parent = N.load_effective(data_root=Path(data_root),target_date=target_date)
         except ValueError as exc:
             proof = f.get('code_refresh')
-            if not proof or not str(exc).startswith(('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:')):
+            registration = f.get('registration_code_transition')
+            if registration and str(exc).startswith(('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:')):
+                from src.engine.scalping import reversal_manual_registration as M
+                M.validate_request(registration)
+                origin=registration['activation_parent_origin']
+                parent=_attested_activation_parent(Path(data_root),target_date,
+                    origin_root=origin['root'],origin_commit=origin['commit'])
+                proof=None
+            elif not proof or not str(exc).startswith(('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:')):
                 raise
             # Only an explicitly staged identical-policy successor can cross
             # this boundary. Runtime loads never use historical validation.
-            _validate_code_refresh(bundle, data_root)
-            parent = _attested_activation_parent(Path(data_root),target_date,
-                origin_root=proof['activation_parent_origin_root'],origin_commit=proof['activation_parent_origin_commit'])
+            if proof is not None:
+                _validate_code_refresh(bundle, data_root)
+                parent = _attested_activation_parent(Path(data_root),target_date,
+                    origin_root=proof['activation_parent_origin_root'],origin_commit=proof['activation_parent_origin_commit'])
         if parent and parent['bundle_sha256'] == bundle['bundle_sha256']:
             return dict(status='already_active',bundle_sha256=bundle['bundle_sha256'])
         if not parent or parent['bundle_sha256'] != f['parent_bundle_sha256']:

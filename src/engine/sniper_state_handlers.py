@@ -56,6 +56,8 @@ from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.monitoring.entry_attempt_identity import (
     bind_submit_attempt_machine_lineage,
+    same_market_session_name,
+    submit_attempt_lineage_rejection,
     mark_submit_attempt_broker_accepted,
     observe_submit_attempt,
     submit_attempt_fields,
@@ -33093,7 +33095,7 @@ def _machine_submit_revision_is_current(stock: dict, receipt: dict) -> bool:
                      and key[0] == receipt.get("watch_admission_id")
                      and key[2] == str(stock.get("code") or "")[:6]
                      and key[3] == receipt.get("effective_venue")
-                     and key[4] == receipt.get("market_session_bucket")
+                     and same_market_session_name(key[4], receipt.get("market_session_bucket"))
                      and key[5] == receipt.get("policy_bundle_hash")
                      and key[6] == os.getpid()
                      and stock.get("watch_admission_id") == receipt.get("watch_admission_id")
@@ -65509,20 +65511,29 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     ):
         _set_async_terminal(stock, 'retired_entry_opportunity_recheck')
         return False
-    bind_submit_attempt_machine_lineage(
+    lineage_bound = bind_submit_attempt_machine_lineage(
         stock,
         code,
         {
             **_scanner_runtime_event_venue_fields(stock),
             **(
-                runtime.get("machine_primary_entry_provenance")
-                or stock.get("last_watching_ai_machine_primary_fields")
-                or {}
+                (runtime.get("machine_primary_entry_provenance") or {})
+                if "machine_primary_entry_provenance" in runtime else
+                (stock.get("last_watching_ai_machine_primary_fields") or {})
             ),
         },
     )
     strategy = runtime["strategy"]
     if strategy == "SCALPING":
+        if not lineage_bound:
+            rejection = submit_attempt_lineage_rejection(stock, code)
+            reason = rejection.get("reason", "submit_context_unavailable")
+            _log_entry_pipeline(stock, code, "machine_submit_lineage_rejected",
+                machine_lineage_rejection_reason=reason,
+                machine_lineage_rejection=json.dumps(rejection, sort_keys=True),
+                actual_order_submitted=False, broker_order_forbidden=True)
+            _set_async_terminal(stock, "machine_submit_lineage_rejected:" + reason)
+            return False
         receipt = submit_attempt_machine_lineage(stock, code)
         prior_async_submit = stock.get('_async_entry_submission_identity') or {}
         if (prior_async_submit.get('evaluation_attempt_id')

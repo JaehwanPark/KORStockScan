@@ -25,6 +25,25 @@ _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT = (
 )
 
 
+@pytest.mark.parametrize('variant,expected',[('same','blocked'),('pid','unobservable'),('ticks','unobservable'),('stale','unobservable')])
+def test_ai_circuit_health_requires_exact_pid_start_and_current_heartbeat(tmp_path,monkeypatch,variant,expected):
+    from src.engine.monitoring import runtime_performance as R
+    from copy import deepcopy
+    path=tmp_path/'heartbeat.json'
+    monkeypatch.setattr(process_health_module,'HEARTBEAT_PATH',path)
+    monkeypatch.setattr(R,'_CIRCUIT',dict(state='enabled',observed_epoch=__import__('time').time(),
+        entry_transport=dict(state='OPEN',generation=1,reason='entry_transport_deadline',not_evaluated_count=36)))
+    write_heartbeat('main_loop')
+    body=json.loads(path.read_text());receipt=body['ai_circuit']
+    if variant=='pid':receipt['pid']=-1
+    if variant=='ticks':receipt['process_start_ticks']='foreign'
+    if variant=='stale':receipt['snapshot_epoch']-=121
+    path.write_text(json.dumps(body));before=path.read_bytes()
+    health=process_health_module._current_ai_circuit_health(os.getpid(),__import__('time').time())
+    assert health['status']==expected and health['decision_authority']=='none'
+    assert path.read_bytes()==before  # Observation has no reset or restart side effect.
+
+
 @pytest.mark.parametrize('leak', ['none', 'timer', 'process', 'buy', 'main', 'exit'])
 def test_registry_retirement_negative_census_preserves_main_and_exits(tmp_path, monkeypatch, leak):
     from src.engine.infrastructure import runtime_release_router as router

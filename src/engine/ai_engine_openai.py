@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from itertools import cycle
 from typing import Any
-from openai import OpenAI, RateLimitError, DefaultHttpxClient
+from openai import OpenAI, RateLimitError, DefaultHttpxClient, APITimeoutError, APIStatusError
 import httpx
 
 from src.engine.ai_response_contracts import (
@@ -1132,6 +1132,8 @@ class GPTSniperEngine:
         self.max_consecutive_failures = getattr(
             TRADING_RULES, "AI_MAX_CONSECUTIVE_FAILURES", 5
         )
+        from src.engine.ai.entry_transport_circuit import EntryTransportCircuit
+        self._entry_transport_circuit = EntryTransportCircuit(self.max_consecutive_failures)
         self.current_api_key_index = 0
 
         self.cache_lock = threading.RLock()
@@ -2249,13 +2251,39 @@ class GPTSniperEngine:
         return fields
 
     def _mark_successful_ai_call(self, *, update_last_call_time=True):
-        self.consecutive_failures = 0
+        if not self.ai_disabled:
+            self.consecutive_failures = 0
+            self._common_recoverable_chain = True
+            self._common_circuit().ordinary_success()
         from src.engine.monitoring.runtime_performance import observe_ai_circuit
         observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled)
         if update_last_call_time:
             self.last_call_time = time.time()
 
-    def _record_failure_and_maybe_disable(self, *, context_name):
+    def _record_failure_and_maybe_disable(self, *, context_name, error=None, recovery_ticket=None):
+        cause=getattr(error,'provider_common_error',None) or error
+        visited=set()
+        while cause is not None and not isinstance(cause,APIStatusError) and id(cause) not in visited:
+            visited.add(id(cause));cause=cause.__cause__
+        transient=isinstance(cause,APIStatusError) and (cause.status_code==429 or 500<=cause.status_code<=599)
+        self._common_recoverable_chain = (getattr(self,'_common_recoverable_chain',self.consecutive_failures==0)
+                                         and transient)
+        if transient:
+            circuit=self._common_circuit()
+            ticket=recovery_ticket or circuit.admit(None,eligible=False,deadline_remaining=1)
+            if ticket is not None:
+                wait=0
+                try:
+                    wait=float(cause.response.headers.get('retry-after') or 0)
+                    if not math.isfinite(wait) or wait<0:wait=0
+                except (ValueError,TypeError):
+                    from email.utils import parsedate_to_datetime
+                    try:
+                        limit=parsedate_to_datetime(cause.response.headers.get('retry-after') or '')
+                        wait=max(0,limit.timestamp()-time.time())
+                    except (ValueError,TypeError,OverflowError):wait=0
+                circuit.failed(ticket,reason='provider_http_'+str(cause.status_code),retry_after_seconds=wait,
+                    future=getattr(error,'provider_future',None))
         self.consecutive_failures += 1
         failure_count = self.consecutive_failures
         if failure_count >= self.max_consecutive_failures:
@@ -2265,8 +2293,38 @@ class GPTSniperEngine:
                 f"API키 인덱스 {self.current_api_key_index}, context={context_name})"
             )
         from src.engine.monitoring.runtime_performance import observe_ai_circuit
-        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled)
+        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled,
+            common=self._common_circuit().snapshot(),common_failure=dict(
+                error_type=type(error).__name__ if error else 'unobserved',
+                http_status=cause.status_code if isinstance(cause,APIStatusError) else None,
+                recovery_supported=self._common_recoverable_chain))
         return failure_count
+
+    def _common_circuit(self):
+        circuit=getattr(self,'_provider_common_circuit',None)
+        if circuit is None:
+            from src.engine.ai.entry_transport_circuit import EntryTransportCircuit
+            circuit=self._provider_common_circuit=EntryTransportCircuit(self.max_consecutive_failures,owner='provider_common')
+        return circuit
+
+    def _admit_common_recovery(self, identity, *, eligible, deadline_remaining):
+        if (not self.ai_disabled or not eligible or not all(isinstance(v,str) and bool(v) for v in identity)
+                or not getattr(self,'_common_recoverable_chain',False)
+                or self._common_circuit().snapshot()['state']!='OPEN'):
+            return None
+        return self._common_circuit().admit(identity,eligible=True,deadline_remaining=deadline_remaining)
+
+    def _entry_circuit(self):
+        circuit = getattr(self, '_entry_transport_circuit', None)
+        if circuit is None:
+            from src.engine.ai.entry_transport_circuit import EntryTransportCircuit
+            circuit = self._entry_transport_circuit = EntryTransportCircuit(self.max_consecutive_failures)
+        return circuit
+
+    def _observe_entry_circuit(self):
+        from src.engine.monitoring.runtime_performance import observe_ai_circuit
+        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled,
+                           entry=self._entry_circuit().snapshot(),common=self._common_circuit().snapshot())
 
     def _resolve_scalping_prompt(self, prompt_profile, *, prompt_version_override=None):
         profile = str(prompt_profile or "shared").strip().lower()
@@ -4874,10 +4932,12 @@ class GPTSniperEngine:
         wait_remaining = request.remaining_timeout_sec()
         if wait_remaining <= 0:
             cancelled = future.cancel()
-            raise OpenAIHTTPWallClockDeadlineError(
+            error = OpenAIHTTPWallClockDeadlineError(
                 "OpenAI HTTP wall-clock deadline exhausted while queueing provider call",
                 future_cancelled=cancelled,
             )
+            error.provider_future = future
+            raise error
         try:
             return future.result(timeout=wait_remaining)
         except TimeoutError as exc:
@@ -4887,11 +4947,13 @@ class GPTSniperEngine:
             if future.done():
                 raise
             cancelled = future.cancel()
-            raise OpenAIHTTPWallClockDeadlineError(
+            error = OpenAIHTTPWallClockDeadlineError(
                 "OpenAI HTTP wall-clock deadline exceeded: "
                 f"endpoint={request.endpoint_name}, budget_ms={int(request.timeout_ms)}",
                 future_cancelled=cancelled,
-            ) from exc
+            )
+            error.provider_future = future
+            raise error from exc
 
     def _call_openai_responses_http(self, request: OpenAIResponseRequest):
         use_schema_registry = self._should_use_openai_schema_registry(
@@ -4909,6 +4971,8 @@ class GPTSniperEngine:
         last_error_timeout_like = False
         last_wall_deadline_exceeded = False
         last_provider_future_cancelled = False
+        last_typed_error = None
+        provider_common_error = None
         for attempt in range(len(self.api_keys)):
             attempts_made = attempt + 1
             provider_started_at = time.perf_counter()
@@ -4970,6 +5034,8 @@ class GPTSniperEngine:
                     },
                 )
             except RateLimitError as e:
+                last_typed_error = e
+                provider_common_error = e
                 last_provider_ms = max(
                     0, int((time.perf_counter() - provider_started_at) * 1000)
                 )
@@ -4991,6 +5057,8 @@ class GPTSniperEngine:
                 time.sleep(min(0.8, max(0.0, remaining - 0.05)))
                 continue
             except Exception as e:
+                last_typed_error = e
+                if isinstance(e,APIStatusError):provider_common_error = e
                 last_provider_ms = max(
                     0, int((time.perf_counter() - provider_started_at) * 1000)
                 )
@@ -5078,7 +5146,7 @@ class GPTSniperEngine:
                 f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
             )
             log_error(fatal_msg)
-        raise OpenAIResponsesHTTPError(
+        error = OpenAIResponsesHTTPError(
             fatal_msg,
             timing_meta={
                 "openai_http_provider_ms": last_provider_ms,
@@ -5097,6 +5165,12 @@ class GPTSniperEngine:
                 ),
             },
         )
+        # Preserve a typed terminal cause; string matching never grants recovery.
+        if isinstance(last_typed_error, (OpenAIHTTPWallClockDeadlineError, APITimeoutError)):
+            error.entry_deadline_timeout = True
+            error.provider_future = getattr(last_typed_error, 'provider_future', None)
+        error.provider_common_error = provider_common_error
+        raise error from last_typed_error
 
     def _call_openai_responses_ws(self, request: OpenAIResponseRequest):
         pool = self._get_responses_ws_pool()
@@ -10111,6 +10185,8 @@ class GPTSniperEngine:
             )
 
         provider_attempted = False
+        entry_circuit_ticket = None
+        common_recovery_ticket = None
         try:
             cached_result = (
                 None
@@ -10135,13 +10211,22 @@ class GPTSniperEngine:
                     input_contract_fields=input_contract_fields,
                 )
 
-            if self.ai_disabled:
+            if self.ai_disabled and is_scalping_entry_call and entry_budget is not None:
+                recovery_identity=(machine_capture.get('evaluation_attempt_id'),machine_capture.get('machine_observation_sha256'))
+                eligible=(machine_first_context is not None and all(isinstance(v,str) and bool(v) for v in recovery_identity)
+                    and str((machine_first_context.get('assessment') or {}).get('action') or '').upper()=='ENTER_NOW')
+                common_recovery_ticket=self._admit_common_recovery(recovery_identity,
+                    eligible=eligible,deadline_remaining=entry_budget.remaining())
+                self._observe_entry_circuit()
+            if self.ai_disabled and common_recovery_ticket is None:
                 return self._annotate_analysis_result(
                     _merge_runtime_fields(
                         {
                             "action": "DROP",
                             "score": 0,
                             "reason": "AI 엔진 일시 중단 (연속 실패)",
+                            "entry_ai_screen_status": "not_evaluated_transport",
+                            "entry_ai_screen_pass": False,
                         }
                     ),
                     prompt_type=prompt_type,
@@ -10155,6 +10240,28 @@ class GPTSniperEngine:
                     result_source="engine_disabled",
                     input_contract_fields=input_contract_fields,
                 )
+
+            if is_scalping_entry_call and entry_budget is not None:
+                eligible = (machine_first_context is not None and
+                    str((machine_first_context.get('assessment') or {}).get('action') or '').upper() == 'ENTER_NOW')
+                identity = (machine_capture.get('evaluation_attempt_id'),
+                            machine_capture.get('machine_observation_sha256'))
+                eligible = eligible and all(isinstance(v,str) and bool(v) for v in identity)
+                entry_circuit_ticket = self._entry_circuit().admit(identity,
+                    eligible=eligible, deadline_remaining=entry_budget.remaining(),
+                    common_disabled=self.ai_disabled and common_recovery_ticket is None)
+                self._observe_entry_circuit()
+                if entry_circuit_ticket is None:
+                    return self._annotate_analysis_result(_merge_runtime_fields(dict(
+                        action='WAIT', score=50, reason='entry_transport_circuit_open',
+                        provider_called=False, entry_ai_screen_status='not_evaluated_transport',
+                        entry_ai_screen_pass=False, ai_circuit=self._entry_circuit().snapshot(),
+                        actual_order_submitted=False, broker_order_forbidden=True)),
+                        prompt_type=prompt_type, prompt_version=prompt_version,
+                        response_ms=int((time.perf_counter()-analysis_started)*1000),
+                        parse_ok=False, parse_fail=False, fallback_score_50=False,
+                        cache_hit=False, cache_mode='miss', result_source='entry_circuit_open',
+                        input_contract_fields=input_contract_fields)
 
             min_interval_wait_ms = 0
             min_interval_remaining = float(self.min_interval or 0.0) - (
@@ -10965,7 +11072,20 @@ class GPTSniperEngine:
 
             result = _merge_runtime_fields(result)
             result["openai_min_interval_wait_ms"] = min_interval_wait_ms
-            self._mark_successful_ai_call()
+            valid_transport=(result.get('semantic_validation_status')=='pass'
+                and result.get('openai_transport_fail_closed') is not True)
+            if entry_circuit_ticket is not None:
+                self._entry_circuit().succeeded(entry_circuit_ticket,
+                    deadline_remaining=entry_budget.remaining(),
+                    valid_response=valid_transport)
+                self._observe_entry_circuit()
+            common_recovered=(common_recovery_ticket is not None and self._common_circuit().succeeded(
+                common_recovery_ticket,deadline_remaining=entry_budget.remaining(),valid_response=valid_transport))
+            if common_recovered:
+                self.ai_disabled=False
+            if common_recovery_ticket is None or common_recovered:
+                self._mark_successful_ai_call()
+            self._observe_entry_circuit()
             local_stage_clocks['annotation_started_perf'] = time.perf_counter()
             local_stage_clocks['response_processing_seconds'] = (
                 local_stage_clocks['annotation_started_perf']-local_stage_clocks['provider_returned_perf'])
@@ -11022,9 +11142,32 @@ class GPTSniperEngine:
                         "entry_local_stage_clocks":dict(local_stage_clocks),
                         "actual_order_submitted":False, "broker_order_forbidden":True,
                         **machine_capture, **stage_fields}
-            failure_count = self._record_failure_and_maybe_disable(
-                context_name=f"{target_name}({strategy}:{prompt_type})"
-            )
+            owned_entry_timeout = (entry_circuit_ticket is not None and provider_attempted
+                and getattr(e,'provider_common_error',None) is None
+                and (isinstance(e, (OpenAIHTTPWallClockDeadlineError, APITimeoutError))
+                     or getattr(e, 'entry_deadline_timeout', False) is True))
+            local_contract_error = (isinstance(e, ValueError) and str(e) in {
+                'auxiliary_soft_policy_invalid_before_provider', 'machine_predecision_composer_disagreement',
+                'auxiliary_registered_model_mismatch', 'reversal_request_signal_set_changed_before_send',
+                'reversal_policy_changed_before_provider', 'registered_auxiliary_transport_contract_changed',
+                'entry_machine_transport_epoch_changed', 'entry_machine_quote_clock_conflict',
+                'entry_machine_quote_value_conflict'})
+            if owned_entry_timeout:
+                self._entry_circuit().failed(entry_circuit_ticket,
+                    future=getattr(e, 'provider_future', None))
+                if common_recovery_ticket is not None:
+                    self._common_circuit().failed(common_recovery_ticket,
+                        future=getattr(e,'provider_future',None),reason='recovery_entry_deadline')
+                self._observe_entry_circuit()
+                failure_count = self._entry_circuit().snapshot()['consecutive_failures']
+            elif local_contract_error:
+                from src.engine.monitoring.runtime_performance import failure
+                failure('entry_local_contract', str(e))
+                failure_count = self.consecutive_failures
+            else:
+                failure_count = self._record_failure_and_maybe_disable(
+                    context_name=f"{target_name}({strategy}:{prompt_type})",error=e,
+                    recovery_ticket=common_recovery_ticket)
             timeout_like = bool(
                 provider_attempted and self._is_openai_timeout_like_error(e)
             )
@@ -11183,6 +11326,11 @@ class GPTSniperEngine:
             result['entry_local_stage_clocks'] = dict(local_stage_clocks)
             return result
         finally:
+            if common_recovery_ticket is not None:
+                self._common_circuit().abandon(common_recovery_ticket)
+            if entry_circuit_ticket is not None:
+                self._entry_circuit().abandon(entry_circuit_ticket)
+                self._observe_entry_circuit()
             self.lock.release()
 
     # ==========================================

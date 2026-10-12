@@ -304,6 +304,12 @@ def verified_postclose_exit_snapshot_manifest(target_date: str, *, data_root: Pa
         if (holding.get("date") != target_date
             or (holding.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
             return None
+        if target_date >= '2026-10-12':
+            from src.engine.scalping.holding_vote_experiment import code_sha
+            numeric = (holding.get('holding_path_vote_replay') or {}).get('vote_numeric_research') or {}
+            if (numeric.get('status') == 'incumbent_unverified'
+                    or numeric.get('code_sha256') != code_sha()):
+                return None
         holding_costs = (holding.get("actual_cost_source_generations") or {}).get(target_date)
         if holding_costs != costs and (holding_costs is not None or costs["count"] or costs.get("official_source_sha256")):
             return None

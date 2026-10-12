@@ -550,12 +550,12 @@ def test_partial_aftermarket_receipt_extends_bounded_wait_for_exact_pair():
     partial = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     partial["realtime_type_snapshots_by_route"][key].pop("0D")
     partial["recent_trade_ticks_by_route"] = {key: [
-        {"received_at_ms": 10500, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3}
+        {"received_at_ms": 10500, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 1}
     ]}
     full = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     full["recent_trade_ticks_by_route"] = partial["recent_trade_ticks_by_route"]
     full["recent_depth_ticks_by_route"] = {key: [
-        {"received_at_ms": 10600, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3}
+        {"received_at_ms": 10600, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 1}
     ]}
     started = time.monotonic()
     ws = SimpleNamespace(get_latest_data=lambda *_args: (
@@ -715,13 +715,13 @@ def test_probe_observation_counts_only_exact_route_and_transport():
     key = "_AL|krx_nxt_integrated"
     snapshot["recent_trade_ticks_by_route"] = {key: [
         {"received_at_ms": 10500, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3,
-         "aggressor_source": "kiwoom_0b_signed_trade_volume", "aggressor_side": "BUY"},
-        {"received_at_ms": 10600, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3},
+         "aggressor_source": "kiwoom_0b_signed_trade_volume", "aggressor_side": "BUY", "route_sequence": 1},
+        {"received_at_ms": 10600, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 2},
         {"received_at_ms": 10700, "item": "123456", "market_route": "krx_nxt_integrated", "transport_epoch": 3},
         {"received_at_ms": 10800, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 2},
     ]}
     snapshot["recent_depth_ticks_by_route"] = {key: [
-        {"received_at_ms": 10400, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3},
+        {"received_at_ms": 10400, "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": 1},
     ]}
     ws = SimpleNamespace(get_latest_data=lambda *_args: snapshot)
     _data, observation, reason = wait_for_exact_probe_ws_data(
@@ -746,7 +746,7 @@ def test_probe_waits_for_five_exact_ticks_within_bounded_cap():
         current = dict(snapshot)
         current["recent_trade_ticks_by_route"] = {key: [
             {"received_at_ms": 10100 + index * 100,
-             "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3}
+             "item": "123456_AL", "market_route": "krx_nxt_integrated", "transport_epoch": 3, "route_sequence": index+1}
             for index in range(count)
         ]}
         return current

@@ -16,11 +16,11 @@ from src.engine.scalping.continuous_reversal_postclose import digest
 
 class State(OLD.State):
     def __init__(self, *, branch_ids, registry_sha256=None, **kwargs):
-        self.registry_sha256=registry_sha256 or (C.SHA256 if any(b in C.NEW_DEFINITIONS for b in branch_ids) else C.OLD.SHA256)
-        self.extended_ids=tuple(b for b in branch_ids if b in C.NEW_DEFINITIONS)
+        self.registry_sha256=registry_sha256 or (C.registry_for(branch_ids) if any(b in C.EXTENDED_DEFINITIONS for b in branch_ids) else C.OLD.SHA256)
+        self.extended_ids=tuple(b for b in branch_ids if b in C.EXTENDED_DEFINITIONS)
         self.extended_pending={};self.extended_previous={};self.extended_turn=None
         self.coverage_snapshot=MappingProxyType({});self.coverage_identity=None
-        super().__init__(branch_ids=[b for b in branch_ids if b not in C.NEW_DEFINITIONS],**kwargs)
+        super().__init__(branch_ids=[b for b in branch_ids if b not in C.EXTENDED_DEFINITIONS],**kwargs)
 
     def _reset_windows(self):
         super()._reset_windows()
@@ -49,9 +49,19 @@ class State(OLD.State):
         if previous and row==previous:return []
         self.prior_high.expire(row[0]-300)
         prior=self.prior_high.value() if previous and K.connected(previous,row) else None
+        self.prior_60_high.expire(row[0]-60)
+        prior60=self.prior_60_high.value() if previous and K.connected(previous,row) else None
         missing_before={b:self.counts[b+':missing'] for b in self.selected_ids}
         overload_before=sum(self.counts[k] for k in ('pending_overload','path_pending_overload','ready_overload','path_ready_overload'))
         old_ready=super().observe(row,symbol=symbol,venue=venue,session=session)
+        for ready in tuple(self.ready):
+            for bid, signal in tuple(ready['event']['branch_signals'].items()):
+                if (signal['decision_phase']=='FIRST_PRICE_HOLD'
+                        and row[3]<signal['signal_proof']['price']):
+                    ready['event']['branch_signals'].pop(bid)
+                    ready.get('path_inputs',{}).pop(bid,None)
+            if not ready['event']['branch_signals']:
+                self.ready.remove(ready)
         all_ids=(*self.selected_ids,*self.extended_ids)
         valid=bool(row[8] and self.legacy.last and self.legacy.last[8])
         known=bool(valid and previous and K.connected(previous,row))
@@ -65,6 +75,15 @@ class State(OLD.State):
         candidates=[]
         for identity,p in list(self.extended_pending.items()):
             bid=p['bid'];root=C.definition(bid)['root_contract']
+            if root['confirmation']=='FIRST_PRICE_HOLD':
+                if row[3]<p['price']:
+                    self.extended_pending.pop(identity);self.counts['extended_hold_breached']+=1;continue
+                p['minimum_price']=min(p['minimum_price'],row[3])
+                if t>=p['epoch']+root['hold_seconds']:
+                    self.extended_pending.pop(identity)
+                    p['confirmation_sequence']=row[2]
+                    candidates.append((bid,copy.deepcopy(p)))
+                continue
             if t>p['epoch']+root['maximum_wait_seconds'] or row[3]<p['low']*(1-root['allowed_below_original_low_pct']/100):
                 self.extended_pending.pop(identity);self.counts['extended_expired_or_breached']+=1;continue
             p['minimum_price']=min(p['minimum_price'],row[3])
@@ -86,6 +105,11 @@ class State(OLD.State):
                     anchor_event_id=turn['event_id'],low=turn['low_price'],peak=self.legacy.peak[3],minimum_price=row[3],
                     root_contract=copy.deepcopy(root))
                 if root['confirmation']=='immediate':candidates.append((bid,proof));continue
+                if root['confirmation']=='FIRST_PRICE_HOLD':
+                    if not self.offline and len(self.extended_pending)+len(self.path_pending)+len(self.pending)>=B.MAX_PENDING:
+                        self.counts['extended_pending_overload']+=1;truth[bid]='UNKNOWN';continue
+                    self.extended_pending[bid+':'+turn['event_id']]=proof
+                    continue
                 proof['reclaim']=proof['peak'] if root['confirmation'] in {'PEAK','RETEST_PEAK'} else row[3]
                 if root['confirmation']=='PEAK' and row[3]>=proof['reclaim']:
                     candidates.append((bid,proof));continue
@@ -94,6 +118,15 @@ class State(OLD.State):
                 self.extended_pending[bid+':'+turn['event_id']]=proof
         for bid in self.extended_ids:
             root=C.definition(bid)['root_contract']
+            if root['signal']=='BREAKOUT':
+                value=(row[3]>prior60 if prior60 is not None and t-self.legacy.segment_start>=60 else None)
+                previous_value=self.extended_previous.get(bid)
+                self.extended_previous[bid]=value
+                if value is None or previous_value is None:truth[bid]='UNKNOWN'
+                if value is True and previous_value is False:
+                    candidates.append((bid,dict(epoch=t,price=row[3],native_epoch=row[1],native_sequence=row[2],
+                        prior_high=prior60,previous_condition=False,root_contract=copy.deepcopy(root))))
+                continue
             if root['signal']!='MOMENTUM':continue
             value=f['ret']>=root['return_60s_min_pct'] if f['ret'] is not None else None
             previous_value=self.extended_previous.get(bid)

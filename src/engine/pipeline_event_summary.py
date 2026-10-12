@@ -524,7 +524,25 @@ def _logical_body_digest(path: Path) -> tuple[str | None, int]:
     return results[0]
 
 
-def rebuild_producer_summary_source(data_dir: Path, target_date: str) -> dict[str, Any]:
+def _assert_expected_raw_generation(data_dir: Path, target_date: str,
+                                    expected: dict[str, Any] | None) -> None:
+    if expected is None:
+        return
+    if (not isinstance(expected, dict) or set(expected) != {'path', 'stamp'}
+            or not isinstance(expected['path'], str)
+            or not isinstance(expected['stamp'], list) or len(expected['stamp']) != 5
+            or any(type(value) is not int for value in expected['stamp'])):
+        raise ValueError('producer_raw_expected_generation_invalid')
+    raw = _source_part_path(Path(data_dir) / 'pipeline_events', target_date, 'base')
+    path = Path(expected['path'])
+    if path.resolve() not in {raw.resolve(), Path(f'{raw}.gz').resolve()}:
+        raise ValueError('producer_raw_expected_generation_path_invalid')
+    if _part_snapshot_stamp(path) != expected['stamp']:
+        raise ValueError('producer_raw_expected_generation_changed')
+
+
+def rebuild_producer_summary_source(data_dir: Path, target_date: str,
+                                    *, expected_raw_generation: dict[str, Any] | None = None) -> dict[str, Any]:
     """Reconstruct a closed source profile from retained raw, preserving originals.
 
     This is source recovery, never a live producer timing or trading receipt.
@@ -537,7 +555,11 @@ def rebuild_producer_summary_source(data_dir: Path, target_date: str) -> dict[st
     summary, manifest_path = producer_summary_paths(directory, target_date)
     from src.engine.observation_source_quality_audit import _raw_source_writer_active
     raw_path = existing_or_gzip_path(data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
-    if _raw_source_writer_active(target_date, raw_path):
+    _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
+    if (expected_raw_generation is not None
+            and Path(expected_raw_generation['path']).resolve() != raw_path.resolve()):
+        raise ValueError('producer_raw_expected_generation_path_invalid')
+    if _raw_source_writer_active(target_date, raw_path) and expected_raw_generation is None:
         raise ValueError("producer_reconstruction_writer_active")
     if summary.is_symlink() or manifest_path.is_symlink():
         raise ValueError("producer_reconstruction_symlink")
@@ -589,6 +611,7 @@ def rebuild_producer_summary_source(data_dir: Path, target_date: str) -> dict[st
                         raise ValueError("producer_reconstruction_raw_changed")
             if summary.read_bytes() != before_summary or manifest_path.read_bytes() != before_manifest:
                 raise ValueError("producer_reconstruction_predecessor_changed")
+            _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
             backup = directory / "recovery" / target_date / hashlib.sha256(before_manifest).hexdigest()
             backup.mkdir(parents=True, exist_ok=True)
             for path, content in ((backup / summary.name, before_summary),
@@ -620,11 +643,13 @@ def rebuild_producer_summary_source(data_dir: Path, target_date: str) -> dict[st
                 summary.write_bytes(before_summary)
                 manifest_path.write_bytes(before_manifest)
                 raise
-    return seal_producer_summary_source(data_dir, target_date)
+    return seal_producer_summary_source(data_dir, target_date,
+                                       expected_raw_generation=expected_raw_generation)
 
 
 def seal_producer_summary_source(data_dir: Path, target_date: str,
-                                 *, explicit_valid_empty: bool = False) -> dict[str, Any]:
+                                 *, explicit_valid_empty: bool = False,
+                                 expected_raw_generation: dict[str, Any] | None = None) -> dict[str, Any]:
     """Seal one closed-date raw/profile generation before its first stage reader."""
     if date.fromisoformat(target_date).isoformat() != target_date:
         raise ValueError("source_date_invalid")
@@ -634,8 +659,10 @@ def seal_producer_summary_source(data_dir: Path, target_date: str,
     summary_path, manifest_path = producer_summary_paths(summary_dir, target_date)
     with manifest_path.with_suffix(".lock").open("a") as lock_handle:
         fcntl.flock(lock_handle, fcntl.LOCK_EX)
+        _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
         existing = _read_json(manifest_path)
         if existing.get("raw_source_ledger") and not producer_source_ledger_issues(data_dir, target_date):
+            _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
             return existing
         raw = _producer_raw_ledger(data_dir, target_date)
         if raw["duplicate_eligible_count"]:
@@ -701,6 +728,7 @@ def seal_producer_summary_source(data_dir: Path, target_date: str,
             {key: value for key, value in manifest.items() if key != "raw_source_ledger"}
         )
         raw["ledger_sha256"] = _stage_source_digest(raw)
+        _assert_expected_raw_generation(data_dir, target_date, expected_raw_generation)
         if manifest.get("raw_source_ledger") != raw:
             manifest["raw_source_ledger"] = raw
             _write_json(manifest_path, manifest)

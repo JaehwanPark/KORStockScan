@@ -28,7 +28,7 @@ from src.engine.scalping.initial_quantity_type import (
     finite_number as _number,
     kst_timestamp as _timestamp, type_from_decision_receipt as _type_from_decision_receipt,
 )
-from src.utils.constants import DATA_DIR
+from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
 BASELINE = date(2026, 6, 5)
@@ -1844,6 +1844,7 @@ def publish_refresh_quantity_evaluation(
     This receipt has no current-pointer or broker authority. A later reviewed
     policy publisher must consume it before any runtime change is possible.
     """
+    output_dir = _quantity_output_path(output_dir)
     from src.engine.scalping.initial_quantity_activation import (
         refresh_parent_policy_valid,
     )
@@ -2293,9 +2294,25 @@ def initial_quantity_policy_valid(
     return True
 
 
+def _quantity_output_path(path: Path) -> Path:
+    # Immutable releases share only the repository's top-level data directory.
+    # Canonicalize that known mount, without following any output subtree links.
+    path = path.absolute()
+    if ".." in path.parts:
+        raise ValueError("quantity_output_path_invalid")
+    release_data = PROJECT_ROOT / "data"
+    if (release_data.is_symlink() and path.is_relative_to(release_data)
+            and release_data.resolve() == DATA_DIR):
+        path = DATA_DIR / path.relative_to(release_data)
+    if path.is_symlink() or any(p.is_symlink() for p in path.parents):
+        raise ValueError("quantity_output_path_invalid")
+    return path
+
+
 def _write_immutable_json(path: Path, payload: dict[str, Any]) -> str:
     """Bounded streaming write; shared disk accounts for old/new coexistence."""
     from src.engine.lifecycle.research_disk_budget import atomic
+    path = _quantity_output_path(path)
     encoder = json.JSONEncoder(ensure_ascii=False, indent=2, allow_nan=False)
     def pieces():
         for piece in encoder.iterencode(payload):
@@ -2332,6 +2349,7 @@ def publish_initial_quantity_candidate(
     following_bars: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Bind the full replay and source-only seed to one immutable stage receipt."""
+    output_dir = _quantity_output_path(output_dir)
     policy = build_initial_quantity_policy(report, following_bars=following_bars)
     source_date = policy["source_date"]
     report_hash = report["report_content_sha256"]

@@ -50,6 +50,7 @@ class Candidate:
     lease_phase: str = 'closed'
     handoff_id: str = ''
     residence_wait_since_epoch: float = 0.0
+    long_residence_deferred_count: int = 0
 
 
 class DiscoveryQueue:
@@ -199,6 +200,11 @@ class DiscoveryQueue:
         self.residence_deferred = {}
         while len(ready) < limit:
             for rows in ready_by_cohort.values():
+                if long_used < 2:
+                    # Mixed branches retain short admission. Rotate scarce
+                    # long observation to candidates that previously missed it.
+                    rows.sort(key=lambda row: (-row.long_residence_deferred_count,
+                        row.last_claim_epoch, row.first_seen_epoch, -row.discovery_volume, row.code))
                 while rows:
                     row = rows[0]
                     key = (row.code, row.route)
@@ -233,7 +239,12 @@ class DiscoveryQueue:
             row = ready_by_cohort[cohort].pop(0)
             ready.append(row)
             needed = requirements[(row.code, row.route)]['minimum_seconds']
-            residence = 150 if long_used < 2 and (needed >= 60 or residence_requirements is None) else 60
+            full = requirements[(row.code, row.route)].get('full_input_requirement_seconds', needed)
+            wants_long = type(full) in (int, float) and isfinite(full) and 60 <= full < 150
+            residence = 150 if long_used < 2 and (needed >= 60 or wants_long or residence_requirements is None) else 60
+            if wants_long:
+                row.long_residence_deferred_count = (0 if residence > 60
+                    else row.long_residence_deferred_count + 1)
             allocation[(row.code, row.route)] = residence
             long_used += int(residence > 60)
             cohort_claims[cohort] += 1
@@ -266,6 +277,7 @@ class DiscoveryQueue:
                 "residence_deadline_epoch": row.residence_deadline_epoch,
                 "physical_probe_lease_id": row.handoff_id,
                 "observation_requirements": requirements[(row.code, row.route)],
+                "long_residence_deferred_count": row.long_residence_deferred_count,
                 "residence_wait_seconds": max(0, now_epoch-row.residence_wait_since_epoch)
                     if row.residence_wait_since_epoch else 0,
             }
@@ -432,6 +444,8 @@ class DiscoveryQueue:
                     )
                 )
                 or row.claim_count < 0
+                or type(row.long_residence_deferred_count) is not int
+                or row.long_residence_deferred_count < 0
                 or row.last_result not in {"queued", *RESULTS}
                 or (row.last_result == "assessed") != (row.machine_action in ACTIONS)
                 or row.first_seen_epoch > row.last_seen_epoch
