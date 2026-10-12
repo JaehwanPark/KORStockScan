@@ -115,6 +115,54 @@ def _panel(_token):
     }]}
 
 
+@pytest.mark.parametrize('defect', ['claim_clock', 'claim_scope', 'lease', 'candidate', 'action',
+                                  'claim_shape', 'code_shape', 'action_shape', 'ack_shape'])
+def test_invalid_result_cannot_occupy_exact_claim_inbox(tmp_path, defect):
+    from copy import deepcopy
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28',
+        state_path=tmp_path/'queue.json')
+    runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    request = next(p for event, p in bus.events if event == PROBE_REQUEST_EVENT)
+    valid = dict(request, result='assessed', machine_action='RECHECK',
+        physical_probe_lease_id=request['claim']['physical_probe_lease_id'])
+    invalid = deepcopy(valid)
+    if defect == 'claim_clock': invalid['claim']['observed_epoch'] -= 1
+    if defect == 'claim_scope': invalid['claim']['source_scope'] = 'foreign'
+    if defect == 'lease': invalid['physical_probe_lease_id'] = 'foreign'
+    if defect == 'candidate': invalid['candidate'] = {'code': '999999'}
+    if defect == 'action': invalid['machine_action'] = 'INVALID'
+    if defect == 'claim_shape': invalid['claim'] = ['invalid']
+    if defect == 'code_shape': invalid['claim']['code'] = ['123456']
+    if defect == 'action_shape': invalid['machine_action'] = {'value': 'RECHECK'}
+    if defect == 'ack_shape': invalid['handoff_closed'] = 1
+    bus.publish(PROBE_RESULT_EVENT, invalid)
+    bus.publish(PROBE_RESULT_EVENT, valid)
+    assert runtime.drain_results(now_epoch=T0+2) == [valid]
+    assert runtime.queue.in_flight_count() == 1  # actual release ACK still required
+
+
+@pytest.mark.parametrize('defect', ['lease', 'claim_clock', 'claim_scope'])
+def test_wrong_ack_cannot_hide_real_release_ack(tmp_path, defect):
+    from copy import deepcopy
+    from src.scanners.zero_base_discovery_runtime import HANDOFF_ACK_EVENT
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28',
+        state_path=tmp_path/'queue.json')
+    runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    request = next(p for event, p in bus.events if event == PROBE_REQUEST_EVENT)
+    valid = dict(handoff_closed=True, claim=request['claim'],
+        ws_handoff_id=request['claim']['physical_probe_lease_id'])
+    invalid = deepcopy(valid)
+    if defect == 'lease': invalid['ws_handoff_id'] = 'foreign'
+    if defect == 'claim_clock': invalid['claim']['observed_epoch'] -= 1
+    if defect == 'claim_scope': invalid['claim']['source_scope'] = 'foreign'
+    bus.publish(HANDOFF_ACK_EVENT, invalid)
+    bus.publish(HANDOFF_ACK_EVENT, valid)
+    runtime.drain_results(now_epoch=T0+2)
+    assert runtime.queue.in_flight_count() == 0
+
+
 def test_claim_persist_failure_does_not_strand_unstarted_physical_lease(tmp_path, monkeypatch):
     bus=Bus()
     runtime=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')

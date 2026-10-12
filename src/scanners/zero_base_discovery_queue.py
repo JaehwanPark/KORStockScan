@@ -309,6 +309,18 @@ class DiscoveryQueue:
         """Count all claimed probes, including prior-session claims awaiting expiry."""
         return sum(row.in_flight for row in self._candidates.values())
 
+    def matches_claim(self, claim: dict) -> bool:
+        """Check the original reservation before an inbox may deduplicate it."""
+        if not isinstance(claim, dict) or any(
+                not isinstance(claim.get(key), str) for key in ('code', 'route')):
+            return False
+        row = self._candidates.get((claim['code'], claim['route']))
+        return bool(row is not None and row.in_flight
+            and claim.get('observed_epoch') == row.claimed_observed_epoch
+            and claim.get('source_sha256') == row.claimed_source_sha256
+            and all(claim.get(field) == getattr(row, field)
+                    for field in ('source_scope', 'claim_count', 'last_claim_epoch')))
+
     def resolve(
         self,
         claim: dict,
@@ -321,17 +333,9 @@ class DiscoveryQueue:
         """Bind an assessment to the exact claimed generation."""
         if result not in RESULTS or (result == "assessed") != (machine_action in ACTIONS):
             raise ValueError("invalid assessment result")
-        key = (str(claim.get("code") or ""), str(claim.get("route") or ""))
-        row = self._candidates.get(key)
-        if row is None or (
-            claim.get("observed_epoch") != row.claimed_observed_epoch
-            or claim.get("source_sha256") != row.claimed_source_sha256
-            or any(
-                claim.get(field) != getattr(row, field)
-                for field in ("source_scope", "claim_count", "last_claim_epoch")
-            )
-        ):
+        if not self.matches_claim(claim):
             return False
+        row = self._candidates[(claim['code'], claim['route'])]
         if (
             not row.in_flight
             or row.lease_phase in {'handoff_pending', 'cleanup_pending'}
@@ -357,9 +361,10 @@ class DiscoveryQueue:
         return True
 
     def close_handoff(self, claim, handoff_id):
-        row = self._candidates.get((claim.get('code'), claim.get('route')))
-        if (row is None or not handoff_id or row.handoff_id != handoff_id
-                or row.claim_count != claim.get('claim_count') or not row.in_flight):
+        if not self.matches_claim(claim):
+            return False
+        row = self._candidates[(claim['code'], claim['route'])]
+        if not handoff_id or row.handoff_id != handoff_id:
             return False
         row.in_flight = False
         row.lease_phase = 'closed'

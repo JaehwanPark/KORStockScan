@@ -55,3 +55,16 @@ admission의 과거 prefix 재사용은 허용하지 않았다. 기존 shared-ow
 착수 기준 selected release는 `auxiliary-consumption-attestation-20261012-v1`, 실제 PID `1020707`/start `3378564`였다. [기준 해시](../../tmp/fixed-nonfixed-readiness-20261012/baseline.json)는 작업본/현재 PID와 역사 조사 PID를 구분한다. 운영 정책 발행·selector 변경·재기동·장후 재생성·Provider/broker 호출은 수행하지 않았다.
 
 현행 sealed checklist 바이트는 유지했다. [후보 checklist](../../tmp/fixed-nonfixed-readiness-20261012/2026-10-12-stage2-todo-checklist.md)는 선행 native/auth 보완을 이어받고 `MachineAuxiliarySignalDeliveryRepair1012`·`NonfixedDispatchReadinessReview1012`를 각각 한 번 유지한다. 최종 배포/PID 소비와 자연 신호 수용은 해당 owner의 후속 증거이며 이번 작업본 리뷰 완료와 구분한다.
+
+## 배포 후 추가 코드리뷰·결과 수신 보완
+
+위 구현 당시의 미배포 기록은 역사 증빙이다. 후속 `native-readiness-20261012-v1` 배포는 [통합 리뷰](main-native-readiness-deployment-review-2026-10-12.md)에서 확인한다. 이번 재리뷰는 해당 릴리스/PID `1171338`을 기준으로 시작했으며 사용자가 결함 보완·배포·재기동을 승인했다.
+
+- 추가 결함: 결과 inbox의 중복 제거가 claim 횟수·source hash만 확인했다. 원 claim 시각/scope·lease·candidate·판정 형식이 잘못된 응답이 먼저 들어오면 뒤의 정상 결과를 버렸다. 다른 lease의 해제 ACK가 먼저 들어오는 경우도 정상 ACK가 유실돼 슬롯이 남았다. 운영에서 이 순서가 발생했다고 추정하지 않으며, [6개 실패 재현](../../tmp/native-readiness-rereview-20261012/reproduction.txt)으로 코드 결함을 확인했다.
+- 보완: queue의 원 claim 매칭을 공유하고 inbox 저장 전에 해당 신원·결과 형식·명시된 lease를 검증한다. 해제 소비자도 동일 원 claim을 대조한다. 기존 pre-worker/legacy 무lease 응답은 보존하며 실제 lease가 있는 정상 결과는 정확한 해제 ACK까지 슬롯을 반환하지 않는다. 잘못된 자료가 정상 응답의 중복 키를 선점할 수 없게 한다.
+- 재리뷰: 신규 discovery가 진행 중 claim을 바꾸지 않는지, malformed payload/다른 claim/다른 lease 배제, 중복 정상 응답 단일 소비, 원 기한·persist 실패 재시도·물리 cleanup을 확인했다. 관련 10개 파일 **595 passed**, 기존 pandas_ta 경고 1개. [검증 로그](../../tmp/native-readiness-rereview-20261012/pytest-final.txt).
+- 적용 경계: Kiwoom 요청/응답·WS FID/REG/REMOVE/auth, 정책 선택·threshold·provider/model·5초·5슬롯/긴2·60/150초·Main/manual custody는 변경하지 않았다. 새 worker/원장/관측 범위를 만들지 않았다.
+
+배포는 기존 ordered 경로의 사전검증 → 원 PID/supervisor 정상 종료 → selector/checklist → native 인계·bootstrap·보조 호환성 → 새 PID 소비 확인으로 진행한다. 기존 `NonfixedDispatchReadinessReview1012`와 `OrderedIntradayDeploymentRepair1012`에 연결하고 원 최종화/PREOPEN/정책 바이트를 보존한다. 실제 완료 여부는 [최종 증빙](../../tmp/native-readiness-rereview-20261012/completion.json)으로 분리한다. 자연 신호·AI·주문 표본과 성능/경제성은 코드 회귀로 대신하지 않는다.
+
+17:08:11 KST 배포·재기동 완료. `native-readiness-20261012-v2` / `cf650549e7a07ed470cd95a500af43336d31232c`, ubuntu PID `1215171`/start `4182334`의 bootstrap·원 준비·장중 인계·기계/보조 소비 및 **128경로** 호환성 PASS. 불변 릴리스의 수신/queue 회귀 **43 passed**로 원 작업본과 대조했다(595건과 중복이므로 합산하지 않음). 17:08:25 자연 감시가 새 릴리스 소비를 확인했고 신규 log 오류·최종화 세대 오류는 없다. 이전 야간 최종화/log rotation의 `recovered_late`는 역사 사실로 남긴다. 판정·주문 효과나 성능 개선은 이번 재기동 검증 결과가 아니다.

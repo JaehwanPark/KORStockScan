@@ -15,7 +15,7 @@ import threading
 
 from src.trading.market import session_contract
 
-from src.scanners.zero_base_discovery_queue import DiscoveryQueue, RESULTS
+from src.scanners.zero_base_discovery_queue import ACTIONS, DiscoveryQueue, RESULTS
 from src.scanners.zero_base_discovery_source import fetch_discovery_panels
 
 
@@ -79,12 +79,32 @@ class ZeroBaseDiscoveryRuntime:
     def _receive_result(self, result):
         with self._wake_lock:
             if not self._closed and isinstance(result, dict):
-                claim = result.get('claim') or {}
-                row = self.queue._candidates.get((claim.get('code'), claim.get('route')))
-                if (row is None or not row.in_flight or row.claim_count != claim.get('claim_count')
-                        or row.claimed_source_sha256 != claim.get('source_sha256')):
+                if result.get('handoff_closed') is not None and type(result['handoff_closed']) is not bool:
                     return
-                key = (row.code, row.route, row.claim_count, bool(result.get('handoff_closed')))
+                claim = result.get('claim') or {}
+                if not self.queue.matches_claim(claim):
+                    return
+                row = self.queue._candidates[(claim['code'], claim['route'])]
+                closed = result.get('handoff_closed') is True
+                if closed:
+                    if not row.handoff_id or result.get('ws_handoff_id') != row.handoff_id:
+                        return
+                else:
+                    candidate = result.get('candidate')
+                    status, action = result.get('result'), result.get('machine_action', '')
+                    if (not isinstance(candidate, dict)
+                            or any(candidate.get(k) != claim.get(k)
+                                   for k in ('code', 'route', 'source_sha256'))
+                            or not isinstance(status, str) or status not in RESULTS
+                            or not isinstance(action, str)
+                            or (status == 'assessed') != (action in ACTIONS)):
+                        return
+                    # Preserve existing pre-worker/legacy no-lease responses.
+                    # Supplied lease fields must bind the physical owner.
+                    if any(result.get(k) and result[k] != row.handoff_id
+                           for k in ('physical_probe_lease_id', 'ws_handoff_id')):
+                        return
+                key = (row.code, row.route, row.claim_count, closed)
                 # At most RESULT + CLOSED for each of five physical leases.
                 # Replayed notifications do not grow the callback inbox.
                 self._results.setdefault(key, deepcopy(result))

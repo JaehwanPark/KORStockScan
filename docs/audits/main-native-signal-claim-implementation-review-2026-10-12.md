@@ -39,3 +39,9 @@ native/WS lock 안에는 scalar 관측만 두고 writer/hash/provider 작업을 
 현재 봉인된 checklist는 변경하지 않았다. [후보 checklist](../../tmp/native-signal-claim-repair-20261012/2026-10-12-stage2-todo-checklist.md)에 기존 `MachineAuxiliarySignalDeliveryRepair1012`·`NonfixedDispatchReadinessReview1012`의 이번 보완 범위를 준비하고 이전 완료 근거를 보존했다. 장후 owner `DirectFamilySourceRepairCompactAuxiliary`·`continuous_reversal_postclose`, 배포 owner `OrderedIntradayDeploymentRepair1012`는 유지한다.
 
 작업본 코드리뷰에서 미해결 결함은 없다. 배포 후 exact PID의 자연 lifecycle, 실제 PASS 재검증, writer→reader, 비상시 수신/feature 구간과 Main loop tail은 미관측이다. S2 scheduler 변경은 그 인과 증거가 확보되는 경우에만 진행한다. 원 5초·정책/FSM·호가/주문/custody/hard safety·episode/widget 퇴역 상태를 변경하지 않았다.
+
+## 후속 재리뷰 연결
+
+위 미배포/미관측 상태는 최초 구현 당시 기록이다. [통합 배포 리뷰](main-native-readiness-deployment-review-2026-10-12.md)의 배포 후 사용자가 재리뷰·결함 보완·배포·재기동을 승인했다. 원 claim/native 재검증과 scanner→Main 연결을 다시 대조해, 결과 inbox에서 잘못된 응답이 정상 결과/해제 ACK의 중복 키를 선점하는 결함을 확인했다. 원 claim의 시각·scope·원천 및 명시된 lease/판정 형식을 inbox 저장 전에 검사하고 정확한 해제 소비에도 같은 신원을 적용했다.
+
+[상시·비상시 재리뷰](main-fixed-nonfixed-readiness-implementation-review-2026-10-12.md#배포-후-추가-코드리뷰결과-수신-보완)에 6개 실패 재현과 보완 후 **595건 회귀**를 기록했다. Native policy/FSM/5초·물리 cleanup·원 PREOPEN/정책 파일은 보존하며, [후속 배포 증빙](../../tmp/native-readiness-rereview-20261012/completion.json)이 새 PID 소비와 운영 결과를 소유한다.
