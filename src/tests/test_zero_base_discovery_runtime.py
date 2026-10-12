@@ -17,8 +17,9 @@ T0 = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
 
 
 class Bus:
-    def __init__(self):
-        self.callbacks = {}
+    def __init__(self, *, consumer=True):
+        # Existing orchestration fixtures model an admitted local worker.
+        self.callbacks = {PROBE_REQUEST_EVENT: [lambda payload: None]} if consumer else {}
         self.events = []
 
     def subscribe(self, event, callback):
@@ -28,9 +29,67 @@ class Bus:
         self.callbacks[event].remove(callback)
 
     def publish(self, event, payload):
+        self.publish_with_dispatch_count(event, payload)
+
+    def has_subscribers(self, event):
+        return bool(self.callbacks.get(event))
+
+    def publish_with_dispatch_count(self, event, payload):
         self.events.append((event, payload))
-        for callback in self.callbacks.get(event, []):
+        callbacks = list(self.callbacks.get(event, []))
+        for callback in callbacks:
             callback(payload)
+        return len(callbacks)
+
+
+def _isolated_bus():
+    from src.core.event_bus import EventBus
+    class IsolatedBus(EventBus):
+        _instance = None
+        _lock = threading.Lock()
+    return IsolatedBus()
+
+
+def test_real_bus_startup_without_consumer_never_reserves_physical_capacity(tmp_path):
+    bus = _isolated_bus()
+    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
+    result = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    assert result['probe_requested_count'] == 0 and result['probe_consumer_ready'] is False
+    assert runtime.queue.in_flight_count() == 0
+    assert runtime.queue.snapshot()['candidates'][0]['handoff_id'] == ''
+    requests = []
+    bus.subscribe(PROBE_REQUEST_EVENT, requests.append)
+    assert runtime.dispatch_due_probes(now_epoch=T0+2)['probe_requested_count'] == 1
+    assert len(requests) == runtime.queue.in_flight_count() == 1
+
+
+def test_consumer_disappearing_during_persist_closes_only_unstarted_claim(tmp_path, monkeypatch):
+    bus = _isolated_bus(); receiver = lambda payload: pytest.fail('removed consumer ran')
+    bus.subscribe(PROBE_REQUEST_EVENT, receiver)
+    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
+    persist = runtime._persist
+    def remove_then_persist():
+        bus.unsubscribe(PROBE_REQUEST_EVENT, receiver)
+        persist()
+    monkeypatch.setattr(runtime, '_persist', remove_then_persist)
+    result = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    assert result['probe_requested_count'] == 0 and result['probe_no_consumer_count'] == 1
+    assert runtime.queue.in_flight_count() == 0
+    row = runtime.queue.snapshot()['candidates'][0]
+    assert row['lease_phase'] == 'closed' and row['handoff_id'] == ''
+    assert row['last_result'] == 'probe_capacity_deferred'
+
+
+def test_counted_publication_is_not_callback_success_or_order_authority(monkeypatch):
+    from src.core import event_bus as module
+    bus = _isolated_bus(); errors = []
+    monkeypatch.setattr(module, 'log_error', errors.append)
+    assert bus.publish_with_dispatch_count('event', {}) == 0
+    def uncertain(payload): raise RuntimeError('callback started work then failed')
+    bus.subscribe('event', uncertain)
+    assert bus.publish_with_dispatch_count('event', {}) == 1
+    assert bus.publish('event', {}) is None
+    assert len(errors) == 2
 
 
 def _panel(_token):

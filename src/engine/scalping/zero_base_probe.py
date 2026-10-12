@@ -424,7 +424,8 @@ def run_zero_base_probe(
             if registration_reason:
                 result["reason"] = registration_reason
                 return result
-        # Existing chart preparation overlaps native WS collection on this worker.
+        # Registration is not route provenance. The shared candle resolver
+        # needs actual exact-route WS rows before choosing an integrated chart.
         ws_data = probe_ws_snapshot(ws_manager, code=code, route=route) or {}
         tick_fetcher = tick_fetcher or kiwoom_utils.get_tick_history_ka10003
         candle_fetcher = candle_fetcher or fetch_entry_candles_with_meta
@@ -435,12 +436,6 @@ def run_zero_base_probe(
             code, venue=venue, session=session, ws_data=ws_data,
         )
         try:
-            candles, candle_meta = candle_fetcher(
-                token, code, ws_data, venue=venue, session=session, limit=40,
-                now_ts=now(), allow_integrated_sor_execution_view=True,
-                request_owner="zero_base_machine_probe",
-                request_class=REQUEST_CLASS_SOURCE_ONLY,
-            )
             ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
                 ws_manager, code=code, route=route, after_epoch=registered_epoch,
                 now=now, timeout_sec=ws_wait_timeout_sec,
@@ -459,6 +454,12 @@ def run_zero_base_probe(
                 )
                 result["reason"] = registration_reason or source_reason
                 return result
+            candles, candle_meta = candle_fetcher(
+                token, code, ws_data, venue=venue, session=session, limit=40,
+                now_ts=now(), allow_integrated_sor_execution_view=True,
+                request_owner="zero_base_machine_probe",
+                request_class=REQUEST_CLASS_SOURCE_ONLY,
+            )
             if not candles:
                 result["result"] = "required_feature_insufficient"
                 result["reason"] = "candle_source_missing"

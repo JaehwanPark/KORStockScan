@@ -152,3 +152,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## Buy Funnel 보고서 직렬화·복구 판정 코드리뷰
 
 - [x] Buy Funnel 판정 증빙 시각의 JSON 내보내기와 반복 크론 복구 판정 보완 (`ID: BuyFunnelSerializationRecovery1012`; Priority: P0; Track: report; Slot: intraday-code-review; TimeWindow: current-session). 사용자 구현·배포·재기동 승인 범위다. 시각 ISO 정밀도/시간대 보존, 전체/소형 보고서 원자 교체와 기존 reader 권한 보존, 최신 동일 owner DONE의 과거 FAIL 회복 및 재실패 검증을 완료했다. 이 체크는 코드리뷰 종료이며 배포·자연 크론 DONE·소비 보고서 경고 해소는 `tmp/buy-funnel-serialization-repair-20261012/completion.json`의 별도 현재 증빙으로 확인한다. 기존 trading policy·PREOPEN 원본·원천/증빙 해시·5초 기한·주문/provider 권한을 보존한다. Source: [운영 계약](../runtime-release-routing.md#buy-funnel-report-recovery).
+
+## 비상시감시 관측 요청 전달 코드리뷰
+
+- [x] 비상시감시 기동 시 수신자 없는 요청 예약·슬롯 고착 수리 (`ID: NonfixedDispatchReadinessReview1012`; Priority: P0; Track: RuntimeStability; Slot: intraday-code-review; TimeWindow: current-session). 사용자 점검·결함 수리·배포·재기동 승인 범위다. Main 초기 대사보다 먼저 발행된 probe가 EventBus에서 조용히 유실되고, 실제 작업이 없는 예약 5개가 cleanup 대기로 남는 경로를 재현했다. 수신자 준비 확인·callback 시도 수·수신자 0이 입증된 미실행 예약 해제와 원 신원/기한/물리 cleanup 경계를 검증했다. 이 완료 표시는 코드리뷰 종료이며 최종 배포/PID·자연 비상시 관측 결과는 `tmp/nonfixed-dispatch-readiness-repair-20261012/completion.json`의 별도 영수증으로 대사한다. 기존 OPEN family owner와 PREOPEN/정책·5초 기한·WS/worker 한도·주문/provider 권한을 보존한다. Source: [운영 계약](../runtime-release-routing.md#nonfixed-observation-dispatch-readiness).
+  - 자연 관측 후속: v1에서 실제 WS·결과·물리 해제/슬롯 순환은 복구됐으나 `candle_route_mismatch`가 추가 확인됐다. SOR 0B/0D 실제 원천 확보 전 차트 조회를 중지하고, 기존 shared resolver에 해당 원천을 전달한 뒤 조회하도록 순서를 보완한다. 공식 upstream `953e5dbff123f437ab4d11a78a95191a685eb51f`의 chart/tick/0B/0D spec·core·realtime·Postman을 확인했으며 API·parser·한도·판정/주문 계약은 변경하지 않는다. 최종 코드 검증과 새 PID 자연 기계판정 도달 여부는 동일 완료 영수증에 별도로 기록한다.

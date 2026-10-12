@@ -43,8 +43,17 @@ class EventBus:
             if not callbacks:
                 self._subscribers.pop(event_type, None)
 
-    def publish(self, event_type: str, payload: dict = None):
-        """이벤트를 발생시키고, 구독 중인 모든 콜백 함수에 데이터를 전달합니다."""
+    def has_subscribers(self, event_type: str) -> bool:
+        """Check local receiver availability without creating runtime authority."""
+        with self._sub_lock:
+            return bool(self._subscribers.get(event_type))
+
+    def publish_with_dispatch_count(self, event_type: str, payload: dict = None) -> int:
+        """Count attempted callbacks, never provider/WS/order acceptance.
+
+        Zero proves no callback ran. A raising callback may already have started
+        asynchronous work, so it still counts as an attempted dispatch.
+        """
         if payload is None:
             payload = {}
 
@@ -52,7 +61,7 @@ class EventBus:
             callbacks = self._subscribers.get(event_type, []).copy()
 
         if not callbacks:
-            return  # 구독자가 없으면 조용히 넘어감
+            return 0
 
         # 💡 각 콜백을 순차적으로 실행 (Subscriber 측에서 무거운 로직은 비동기/스레드로 분리해야 함)
         for callback in callbacks:
@@ -62,3 +71,8 @@ class EventBus:
                 log_error(
                     f"[EventBus] '{event_type}' 이벤트 처리 중 에러 발생 ({callback.__name__}): {e}"
                 )
+        return len(callbacks)
+
+    def publish(self, event_type: str, payload: dict = None):
+        """Keep the legacy publication API's None return value."""
+        self.publish_with_dispatch_count(event_type, payload)

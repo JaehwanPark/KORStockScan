@@ -214,7 +214,8 @@ class ZeroBaseDiscoveryRuntime:
             now_epoch=now_epoch, timeout_sec=60,
         )
         active_claims = self.queue.in_flight_count()
-        available_slots = max(0, MAX_CONCURRENT_PROBES - active_claims)
+        consumer_ready = self.event_bus.has_subscribers(PROBE_REQUEST_EVENT)
+        available_slots = max(0, MAX_CONCURRENT_PROBES - active_claims) if consumer_ready else 0
         claims = self.queue.claim(
             now_epoch=now_epoch,
             limit=min(MAX_CLAIMS_PER_CYCLE, available_slots),
@@ -233,6 +234,8 @@ class ZeroBaseDiscoveryRuntime:
                 self.queue = before_admission
             self._dirty = True
             raise
+        dispatched = 0
+        not_dispatched = 0
         for claim in claims:
             if self.claim_receipt_emitter is not None:
                 self.claim_receipt_emitter(
@@ -245,12 +248,26 @@ class ZeroBaseDiscoveryRuntime:
                         "zero_base_claim_observed_epoch": claim.get("observed_epoch"),
                     },
                 )
-            self.event_bus.publish(
+            attempted = self.event_bus.publish_with_dispatch_count(
                 PROBE_REQUEST_EVENT,
                 {"claim": claim, "candidate": claim},
             )
+            if attempted:
+                dispatched += 1
+            else:
+                # A subscriber can disappear during durable reservation I/O.
+                # Only zero attempted callbacks proves that no physical WS
+                # lease could have been requested by this publication.
+                if not self.queue.resolve(claim, result="probe_capacity_deferred",
+                        machine_action="", next_due_epoch=now_epoch + 10):
+                    raise RuntimeError("zero_base_unstarted_claim_resolution_failed")
+                not_dispatched += 1
+        if not_dispatched:
+            self._persist()
         return {
-            "probe_requested_count": len(claims),
+            "probe_requested_count": dispatched,
+            "probe_consumer_ready": consumer_ready,
+            "probe_no_consumer_count": not_dispatched,
             "probe_capacity_limit": MAX_CONCURRENT_PROBES,
             "probe_claims_in_flight_count": self.queue.in_flight_count(),
             "probe_timeout_count": abandoned,

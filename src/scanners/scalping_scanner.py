@@ -6843,6 +6843,8 @@ def _zero_base_log_event(stage, *, code="", name="", fields=None):
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 **dict(fields or {}),
+                "zero_base_producer_pid": os.getpid(),
+                "zero_base_producer_code_root": str(PROJECT_ROOT),
             },
         )
     except Exception as exc:
@@ -6940,6 +6942,8 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     fields={
                         "zero_base_observed_generation_count": summary["observed_new_generation_count"],
                         "zero_base_probe_requested_count": summary["probe_requested_count"],
+                        "zero_base_probe_consumer_ready": summary["probe_consumer_ready"],
+                        "zero_base_probe_no_consumer_count": summary["probe_no_consumer_count"],
                         "zero_base_probe_capacity_limit": summary["probe_capacity_limit"],
                         "zero_base_probe_claims_in_flight_count": summary["probe_claims_in_flight_count"],
                         "zero_base_probe_timeout_count": summary["probe_timeout_count"],
@@ -6959,6 +6963,8 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_probe_dispatch_cycle",
                     fields={
                         "zero_base_probe_requested_count": dispatch["probe_requested_count"],
+                        "zero_base_probe_consumer_ready": dispatch["probe_consumer_ready"],
+                        "zero_base_probe_no_consumer_count": dispatch["probe_no_consumer_count"],
                         "zero_base_probe_capacity_limit": dispatch["probe_capacity_limit"],
                         "zero_base_probe_claims_in_flight_count": dispatch["probe_claims_in_flight_count"],
                         "zero_base_probe_timeout_count": dispatch["probe_timeout_count"],

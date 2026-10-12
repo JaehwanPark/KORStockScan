@@ -1000,6 +1000,70 @@ def test_probe_fetches_short_lived_ticks_after_slow_candle_source(monkeypatch):
     assert result.get("rest_source_gap_detail") is None
 
 
+def test_integrated_chart_waits_for_actual_route_before_shared_resolution(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import entry_candle_context as charts
+    from src.trading.market import shared_ws_snapshot
+    import src.engine.scalping.zero_base_probe as module
+
+    epoch = datetime(2026, 10, 12, 10, 55, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    exact = _snapshot(route="krx_nxt_integrated", item="123456_AL", epoch=epoch)
+    exact.update(last_realtime_type_ts={"0B": epoch, "0D": epoch},
+                 last_realtime_type_market_suffix={"0B": "_AL", "0D": "_AL"})
+    reads = []
+
+    def read(*args):
+        reads.append("ws")
+        return {} if len(reads) == 1 else exact
+
+    calls = []
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "krx_regular")
+    monkeypatch.setattr(shared_ws_snapshot, "selected_completed_bar_payload", lambda *a, **k: None)
+
+    def native_chart(_token, request_code, **kwargs):
+        calls.append((request_code, kwargs))
+        assert len(reads) >= 2
+        return [{"close": 10000}], {"request_code": request_code,
+                                   "rest_received_ts_ms": int(epoch * 1000)}
+
+    monkeypatch.setattr(module.kiwoom_utils,
+                        "get_minute_candles_ka10080_with_meta", native_chart)
+    ws = SimpleNamespace(subscribed_codes={"123456"},
+                         _registered_items_by_code={"123456": ("123456_AL",)},
+                         get_exact_item_data=read)
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
+                   "observed_epoch": epoch - 1},
+         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        ws_manager=ws, ai_engine=SimpleNamespace(analyze_target=lambda *a, **k: {
+            "machine_evaluation_status": "assessed", "entry_mechanistic_action": "RECHECK"}),
+        token="token", now=lambda: epoch,
+        candle_fetcher=charts.fetch_entry_candles_with_meta,
+        tick_fetcher=lambda *a, **k: [{"request_code": "123456_AL",
+                                     "rest_received_ts_ms": int(epoch * 1000)}],
+        context_builder=lambda *a, **k: {"ready": True}, ws_wait_min_exact_0b_count=0,
+    )
+    assert [code for code, _ in calls] == ["123456_AL"]
+    assert calls[0][1]["explicit_request_code"] is True
+    assert result["result"] == "assessed"
+
+
+def test_missing_exact_ws_never_fetches_unbound_chart():
+    ws = SimpleNamespace(subscribed_codes={"123456"},
+                         get_latest_data=lambda *a: {})
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_only"}},
+        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        candle_fetcher=lambda *a, **k: pytest.fail("absent route cannot select a chart"),
+        tick_fetcher=lambda *a, **k: pytest.fail("absent route cannot select ticks"),
+        ws_wait_timeout_sec=0, ws_wait_empty_timeout_sec=0,
+    )
+    assert result["result"] == "source_unavailable"
+    assert result["reason"] == "route_snapshot_missing"
+
+
 def test_probe_uses_exact_ws_tick_when_rest_tick_history_is_empty(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
