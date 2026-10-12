@@ -21,6 +21,37 @@ def test_finalization_detector_window_precedes_preopen_scanner():
     assert jobs["log_rotation_cleanup"]["window_end"] == (6, 50)
 
 
+@pytest.mark.parametrize('markers,expected', [
+    (['FAIL', 'DONE'], 'pass'),
+    (['DONE', 'FAIL'], 'warning'),
+    (['FAIL', 'SKIP'], 'warning'),
+    (['FAIL', 'OTHER_DONE'], 'warning'),
+    (['FAIL', 'DONE', 'START'], 'in_progress'),
+    (['FAIL', 'DONE', 'GENERIC_ERROR'], 'warning'),
+    (['START'], 'unknown'),
+])
+def test_buy_funnel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected):
+    import src.engine.error_detectors.cron_completion as cc
+    job = next(dict(job) for job in CRON_JOB_REGISTRY if job['id'] == 'buy_funnel_sentinel')
+    log = tmp_path / job['log']; log.parent.mkdir()
+    lines = []
+    for marker in markers:
+        owner = 'other_job' if marker == 'OTHER_DONE' else 'buy_funnel_sentinel'
+        kind = 'DONE' if marker == 'OTHER_DONE' else 'ERROR' if marker == 'GENERIC_ERROR' else marker
+        lines.append(f'[{kind}] {owner} target_date=2026-10-12')
+    log.write_text('\n'.join(lines)+'\n')
+    monkeypatch.setattr(cc, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(cc, '_today_kst', lambda: '2026-10-12')
+    monkeypatch.setattr(cc, '_kst_time_tuple', lambda: (10, 30))
+    monkeypatch.setattr(cc, 'is_krx_trading_day', lambda day: True)
+    monkeypatch.setattr(cc, 'CRON_JOB_REGISTRY', [job])
+    monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '*/5 9-15 * * 1-5 # BUY_FUNNEL_SENTINEL_INTRADAY')
+    result = CronCompletionDetector(dry_run=True).check()
+    assert result.details['buy_funnel_sentinel_status'] == expected
+    assert result.severity == ('warning' if expected == 'warning' else 'pass')
+    assert log.read_text() == '\n'.join(lines)+'\n'
+
+
 @pytest.mark.parametrize("clock,expected", [((5, 34), "not_yet_due"), ((5, 35), "warning")])
 def test_finalization_schedule_does_not_report_missing_before_0535(monkeypatch, tmp_path, clock, expected):
     import src.engine.error_detectors.cron_completion as cc

@@ -11,6 +11,9 @@ import argparse
 import ast
 import hashlib
 import json
+import os
+import stat
+import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -5350,6 +5353,22 @@ def _entry_submit_drought_observation_breakdown(
     }
 
 
+def _submission_monitor_report_snapshot(events, as_of):
+    """Export the native bounded projection without Python-only clock objects.
+
+    The monitor's in-memory event API permits datetime clocks. The report owns
+    their JSON representation, preserving precision and timezone without changing
+    counts, attempt identity, evidence hashes or the policy-pinned monitor code.
+    """
+    from src.engine.monitoring.submission_bottleneck_monitor import snapshot
+
+    result = snapshot(events, as_of)
+    for row in (result.get("async_disposition_coverage") or {}).get("attempt_projection", []):
+        if isinstance(row.get("emitted_at"), datetime):
+            row["emitted_at"] = row["emitted_at"].isoformat()
+    return result
+
+
 def build_buy_funnel_sentinel_report(
     target_date: str,
     *,
@@ -5501,12 +5520,10 @@ def build_buy_funnel_sentinel_report(
         classification, selected_summary
     )
 
-    from src.engine.monitoring.submission_bottleneck_monitor import snapshot
-
     return {
         "schema_version": 6,
         "report_type": "buy_funnel_sentinel",
-        "submission_monitor": snapshot(events, as_of),
+        "submission_monitor": _submission_monitor_report_snapshot(events, as_of),
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
         "dry_run": bool(dry_run),
@@ -5722,21 +5739,43 @@ def build_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _write_report_text_atomic(path: Path, text: str) -> None:
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            if path.exists():
+                os.chmod(name, stat.S_IMODE(path.stat().st_mode))
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
     target_date = report["target_date"]
     report_dir = _report_dir()
     report_dir.mkdir(parents=True, exist_ok=True)
     json_path = report_dir / f"buy_funnel_sentinel_{target_date}.json"
     md_path = report_dir / f"buy_funnel_sentinel_{target_date}.md"
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(build_markdown(report), encoding="utf-8")
+    # Validate all projections before replacing any published predecessor.
+    json_text = json.dumps(report, ensure_ascii=False, indent=2)
+    markdown = build_markdown(report)
     # The notification consumer must never reload the large diagnostic report.
-    from src.engine.notify_error_detection_admin import _write_state
     monitor_path = report_dir / f"submission_bottleneck_source_{target_date}.json"
-    _write_state(monitor_path, {k: report.get(k) for k in (
-        "target_date", "dry_run", "submission_monitor")})
+    monitor_text = json.dumps({k: report.get(k) for k in (
+        "target_date", "dry_run", "submission_monitor")}, ensure_ascii=False, indent=2)
+    _write_report_text_atomic(json_path, json_text)
+    _write_report_text_atomic(md_path, markdown)
+    # The bounded consumer projection is the last publication, not a success
+    # receipt for a partially written diagnostic artifact.
+    _write_report_text_atomic(monitor_path, monitor_text)
     return {"json": str(json_path), "markdown": str(md_path), "submission_monitor": str(monitor_path)}
 
 

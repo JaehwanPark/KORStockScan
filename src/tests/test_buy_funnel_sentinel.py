@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from datetime import date
 
 import pytest
@@ -1072,6 +1073,73 @@ def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+@pytest.mark.parametrize('clock', ['2026-10-12T10:00:00.933801', '2026-10-12T10:00:00.933801+09:00', '2026-10-12T01:00:00.933801+00:00'])
+def test_submission_monitor_export_preserves_native_clock_and_attempt(clock):
+    from datetime import datetime, timedelta
+    value = datetime.fromisoformat(clock)
+    fields = dict(async_producer_pid=123, async_producer_start_ticks=456, async_request_id='exact-request',
+        async_disposition='accepted_to_entry_path', async_disposition_event_id='exact-terminal',
+        async_machine_action='ENTER_NOW', async_auxiliary_status='pass', async_auxiliary_verdict='PASS',
+        async_provider_called=True, async_origin_deadline_epoch=value.timestamp()+5)
+    event = sentinel.PipelineEvent(value, 'ENTRY_PIPELINE', 'entry_async_disposition', 'test', '005930', '1', fields)
+    result = sentinel._submission_monitor_report_snapshot([event], value+timedelta(seconds=1))
+    coverage = json.loads(json.dumps(result))['async_disposition_coverage']
+    assert coverage['attempt_projection'][0]['emitted_at'] == clock
+    assert coverage['attempt_projection'][0]['fields']['async_request_id'] == 'exact-request'
+    assert coverage['by_producer']['123:456']['accepted'] == 1
+    assert event.emitted_at is value
+
+
+def test_actual_report_with_async_datetime_publishes_full_and_bounded_json(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, 'DATA_DIR', tmp_path)
+    day = '2026-10-12'
+    fields = dict(async_producer_pid=123, async_producer_start_ticks=456, async_request_id='exact-request',
+        async_disposition='accepted_to_entry_path', async_disposition_event_id='exact-terminal',
+        async_machine_action='ENTER_NOW', async_auxiliary_status='pass', async_auxiliary_verdict='PASS',
+        async_provider_called=True, async_origin_deadline_epoch=1791766805)
+    _write_events(tmp_path, day, [_event(day, '10:00:00.933801', 'entry_async_disposition', fields=fields)])
+    report = sentinel.build_buy_funnel_sentinel_report(day, as_of=sentinel._parse_as_of(day, '10:00:03'))
+    paths = sentinel.save_report_artifacts(report)
+    full = json.loads(Path(paths['json']).read_text())
+    bounded = json.loads(Path(paths['submission_monitor']).read_text())
+    assert full == report
+    assert bounded['submission_monitor'] == full['submission_monitor']
+    projection = bounded['submission_monitor']['async_disposition_coverage']['attempt_projection'][0]
+    assert projection['emitted_at'] == '2026-10-12T10:00:00.933801'
+    assert bounded['dry_run'] is False
+    assert not list(sentinel._report_dir().glob('.*.tmp'))
+
+
+def test_report_validation_failure_keeps_published_predecessor(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, 'DATA_DIR', tmp_path)
+    day = '2026-10-12'
+    _write_events(tmp_path, day, [])
+    report = sentinel.build_buy_funnel_sentinel_report(day, as_of=sentinel._parse_as_of(day, '10:00:03'))
+    paths = sentinel.save_report_artifacts(report)
+    from pathlib import Path
+    before = {name: Path(path).read_bytes() for name, path in paths.items()}
+    report['unknown_object'] = object()
+    with pytest.raises(TypeError): sentinel.save_report_artifacts(report)
+    assert {name: Path(path).read_bytes() for name, path in paths.items()} == before
+
+
+def test_atomic_report_write_failure_keeps_predecessor_and_removes_temp(monkeypatch, tmp_path):
+    path = tmp_path / 'report.json'; path.write_text('previous')
+    def fail(*args): raise OSError('publication failed')
+    monkeypatch.setattr(sentinel.os, 'replace', fail)
+    with pytest.raises(OSError): sentinel._write_report_text_atomic(path, 'next')
+    assert path.read_text() == 'previous'
+    assert not list(tmp_path.glob('.*.tmp'))
+
+
+def test_atomic_report_replacement_preserves_reader_permissions(tmp_path):
+    import stat
+    path = tmp_path / 'report.json'; path.write_text('previous'); path.chmod(0o640)
+    sentinel._write_report_text_atomic(path, 'next')
+    assert path.read_text() == 'next'
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
 
 
 def test_previous_trading_day_skips_20260505_holiday(monkeypatch, tmp_path):

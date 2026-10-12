@@ -148,3 +148,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [원인·리뷰·복구 근거](../audits/preopen-activation-release-binding-repair-2026-10-12.md). 원07:35:33 failure는 보존하며 exact target12 후보를 신규 release에 동일정책 code refresh로 결속한다. 등록·threshold·AI·provider·주문 정책은 재선정하지 않는다.
   - 종료: 관련 회귀·wrapper 검증와 불변 release 검증, source8/publication11/effective12 CAS·strict/controller·prepared 재봉인으로 수용한다. native PREOPEN 실제 성공과07:55 Main/PID 소비는 기존 OPEN DirectFamilyPreopenPolicyHandoff에서 확인한다.
   - 선택 릴리스: `preopen-candidate-binding-20261012-v4` / `29118f4754e05c5672e6caaa48d736771cf27d6a`;05:35 최종화 예약은 유지한다.
+
+## Buy Funnel 보고서 직렬화·복구 판정 코드리뷰
+
+- [x] Buy Funnel 판정 증빙 시각의 JSON 내보내기와 반복 크론 복구 판정 보완 (`ID: BuyFunnelSerializationRecovery1012`; Priority: P0; Track: report; Slot: intraday-code-review; TimeWindow: current-session). 사용자 구현·배포·재기동 승인 범위다. 시각 ISO 정밀도/시간대 보존, 전체/소형 보고서 원자 교체와 기존 reader 권한 보존, 최신 동일 owner DONE의 과거 FAIL 회복 및 재실패 검증을 완료했다. 이 체크는 코드리뷰 종료이며 배포·자연 크론 DONE·소비 보고서 경고 해소는 `tmp/buy-funnel-serialization-repair-20261012/completion.json`의 별도 현재 증빙으로 확인한다. 기존 trading policy·PREOPEN 원본·원천/증빙 해시·5초 기한·주문/provider 권한을 보존한다. Source: [운영 계약](../runtime-release-routing.md#buy-funnel-report-recovery).

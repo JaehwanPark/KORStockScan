@@ -121,6 +121,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_start": (9, 5),
         "window_end": (15, 20),
         "mode": "recurring",
+        "owner_terminal_recovery": True,
         "interval_min": 5,
         "critical": False,
         "trading_day_only": True,
@@ -494,6 +495,10 @@ class CronCompletionDetector(BaseDetector):
             else:
                 if not has_matching_date:
                     details[f"{jid}_status"] = "unknown"
+                elif job.get("owner_terminal_recovery") and (recovery_state := self._recurring_owner_recovery(today_lines, jid)):
+                    details[f"{jid}_status"] = recovery_state
+                    details[f"{jid}_recovery_note"] = "latest owner DONE supersedes earlier failures; newer START remains in progress"
+                    details[f"{jid}_historical_errors_preserved"] = has_error
                 elif has_error:
                     warnings.append(f"{jid}: recent errors detected")
                     details[f"{jid}_status"] = "warning"
@@ -792,6 +797,21 @@ class CronCompletionDetector(BaseDetector):
             or _ERROR_MARKER.search(line)
             or _START_MARKER.search(line)
         )
+
+    @staticmethod
+    def _recurring_owner_recovery(today_lines: str, owner: str) -> str | None:
+        """Only a real owner DONE closes earlier failures; SKIP never does."""
+        pattern = re.compile(rf"^\[(DONE|OK|SUCCESS|COMPLETED|FAIL|ERROR|CRITICAL|START|BEGIN)\]\s+{re.escape(owner)}\b", re.IGNORECASE)
+        lines = today_lines.splitlines()
+        markers = [(i, match.group(1).upper()) for i, line in enumerate(lines)
+                   if (match := pattern.search(line))]
+        terminals = [(i, kind) for i, kind in markers if kind not in {"START", "BEGIN"}]
+        if not terminals or terminals[-1][1] not in {"DONE", "OK", "SUCCESS", "COMPLETED"}:
+            return None
+        done_index = terminals[-1][0]
+        if any(_ERROR_MARKER.search(line) for line in lines[done_index + 1:]):
+            return None
+        return "in_progress" if markers[-1][1] in {"START", "BEGIN"} else "pass"
 
     @staticmethod
     def _last_terminal_marker(today_lines: str) -> str:
