@@ -1392,7 +1392,8 @@ def build_holding_exit_sentinel_report(
         "schema_version": 3,
         "report_type": "holding_exit_sentinel",
         "target_date": target_date,
-        "as_of": as_of.isoformat(timespec="seconds"),
+        # Preserve the native cutoff's precision and timezone in both receipts.
+        "as_of": profit_semantics["as_of"],
         "source_generation": profit_semantics["source_generation"],
         "dry_run": bool(dry_run),
         "event_load": {

@@ -1217,6 +1217,62 @@ def test_sentinel_cutoff_and_semantic_generation_match_through_structured_cache(
     assert report["source_generation"] == report["profit_exit_semantics"]["source_generation"]
 
 
+@pytest.mark.parametrize("as_of", [
+    datetime(2026, 10, 12, 9, 5, 2, 494303),
+    datetime(2026, 10, 12, 9, 5, 2, 494303, tzinfo=ZoneInfo("Asia/Seoul")),
+    datetime(2026, 10, 12, 0, 5, 2, 494303, tzinfo=ZoneInfo("UTC")),
+    datetime(2026, 10, 12, 9, 5, 2, 999999),
+    datetime(2026, 10, 12, 9, 5, 2),
+])
+def test_sentinel_preserves_native_cutoff_and_consumer_rejects_time_tampering(
+    monkeypatch, tmp_path, as_of,
+):
+    from src.engine.error_detectors.artifact_freshness import _holding_profit_exit_semantics
+
+    day = "2026-10-12"
+    data = tmp_path / "data"
+    monkeypatch.setattr(sentinel, "DATA_DIR", data)
+    monkeypatch.setattr(sentinel, "_profit_exit_bootstrap_binding", lambda *_: (None, {}))
+    report = sentinel.build_holding_exit_sentinel_report(day, as_of=as_of)
+    semantics = report["profit_exit_semantics"]
+    expected = as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")) if as_of.tzinfo is None else as_of
+    assert report["as_of"] == semantics["as_of"]
+    assert datetime.fromisoformat(report["as_of"]).timestamp() == expected.timestamp()
+
+    path = data / "report/holding_exit_sentinel" / f"holding_exit_sentinel_{day}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(report), encoding="utf-8")
+    checked = _holding_profit_exit_semantics(tmp_path, day)
+    assert checked["native_validated"] is True
+    assert checked["status"] == "valid_empty"
+    assert checked["economics_status"] == "pending"
+    assert checked["findings"] == []
+
+    report["as_of"] = (datetime.fromisoformat(report["as_of"]) + timedelta(microseconds=1)).isoformat()
+    path.write_text(json.dumps(report), encoding="utf-8")
+    assert _holding_profit_exit_semantics(tmp_path, day)["findings"] == [
+        "semantic_v2_generation_or_state_invalid",
+    ]
+
+
+@pytest.mark.parametrize("use_cache", [False, True])
+def test_sentinel_fractional_cutoff_preserves_event_selection(monkeypatch, tmp_path, use_cache):
+    day = "2026-10-12"
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sentinel, "_profit_exit_bootstrap_binding", lambda *_: (None, {}))
+    _write_events(tmp_path, day, [
+        _event(day, "09:05:02.494302", "holding_ai_gate_pass"),
+        _event(day, "09:05:02.494303", "holding_ai_gate_pass"),
+        _event(day, "09:05:02.494304", "holding_ai_gate_pass"),
+    ])
+    report = sentinel.build_holding_exit_sentinel_report(
+        day, as_of=datetime(2026, 10, 12, 9, 5, 2, 494303), use_cache=use_cache,
+    )
+    assert report["current"]["session"]["stage_events"]["holding_ai_gate_pass"] == 2
+    assert report["source_generation"] == report["profit_exit_semantics"]["source_generation"]
+    assert report["as_of"] == report["profit_exit_semantics"]["as_of"]
+
+
 def test_semantics_uses_each_verified_pid_policy_after_same_day_restart():
     _, older, rows, _, _ = _semantic_flow(start=0.4)
     later = baseline_receipt({"KORSTOCKSCAN_SCALP_TRAILING_START_PCT": 0.5}, source="reviewed_selected_candidate")
