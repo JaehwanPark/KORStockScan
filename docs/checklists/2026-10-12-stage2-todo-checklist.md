@@ -122,6 +122,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 최종화 예약·야간 연구 계약 보완
 
+- [x] `[AuxiliaryReaderCompatibilityPreflight1012] 보조판정 호환성 증빙 준비·기동 사전검증 코드 보완` (`Due: 2026-10-12`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:25~10:00`, `Track: RuntimeStability`)
+  - Source: [코드 리뷰·현재 후보 검증](../../tmp/auxiliary-reader-preflight-20261012/review.json). PREOPEN 후보·장중 인계·Main spawn 이전에 native compatibility/registry 검증을 수행한다. 누락·변조·검증 중 변경·미래 후보에 현재 증빙 대입을 거부하며 provider/broker 호출과 정책값 변경은0이다.
+  - 코드 수용: 관련199회귀·compile·bash 문법·diff 검증 PASS. 실제 새 릴리스 배포/PID 소비는 [별도 운영 영수증](../../tmp/auxiliary-reader-preflight-20261012/completion.json)으로 확인하며 이 완료 표시는 코드 검증만 뜻한다. 기존 DirectFamilyPreopenPolicyHandoff와 원 PREOPEN/정책/기한은 보존한다.
+
 - [x] `[CronFinalizationScheduleRepair1012] 최종화05:35 예약·야간 연구 검증/로그 보완` (`Due: 2026-10-12`, `Slot: IMPLEMENTATION`, `TimeWindow: 06:55~07:35`, `Track: RuntimeStability`)
   - Source: [리뷰·적용 근거](../audits/cron-finalization-0535-and-night-research-repair-2026-10-12.md). 사용자 실제 예약 변경·결함 보완·배포 승인에 따라 cron/installer/router/감시 창을05:35로 일치시키고06:00·06:50 마감은 유지했다. owner 행 위치 오인과 MTA 부재 로그 유실을 보완하며 기존 연구 예산·알림·매매 경계를 유지한다.
   - 종료: workspace/불변 release282 passed·원천/정책값 보존·실제 설치 readback·native strict/controller/PREOPEN 재봉인으로 수용한다. 실제05:35 예약/야간 연구 실행은 아직 미관측이며 별도 자연 수용이다.

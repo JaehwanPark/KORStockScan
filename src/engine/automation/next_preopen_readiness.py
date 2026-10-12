@@ -19,6 +19,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.automation import runtime_policy_bootstrap as bootstrap
+from src.engine.automation.auxiliary_reader_readiness import verify_auxiliary_reader, verify_bound_sources
 from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
 from src.engine.infrastructure.runtime_release_router import selected_release
 from src.utils.constants import DATA_DIR
@@ -217,6 +218,7 @@ def prepare(source_date: str, *, target_date: str | None = None,
         raise ValueError("preopen_target_not_next_operating_day")
     _, selection_path, commit = _selected_release()
     activation_candidate = _activation_candidate_receipt(target_date, commit)
+    auxiliary_reader = verify_auxiliary_reader(target_date, data_root=DATA_DIR, preparation=True)
     source = _source_receipts(source_date, target_date)
     output_dir = _generation_dir(source_date, target_date, source["controller_sha256"], commit)
     manifest = bootstrap.write_bootstrap(target_date, output_dir=output_dir)
@@ -246,8 +248,11 @@ def prepare(source_date: str, *, target_date: str | None = None,
         "runtime_effect": False,
         "day_of_activation_required": True,
         "activation_candidate": activation_candidate,
+        "auxiliary_reader_readiness": auxiliary_reader,
     }
     receipt_file = output_dir / "readiness.json"
+    if auxiliary_reader is not None:
+        verify_bound_sources(auxiliary_reader)
     bootstrap._publish(receipt_file, json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
     index = {
         "schema": "next_preopen_readiness_index_v1",
@@ -312,6 +317,13 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
                     target_date, commit, generation_only=generation_only):
                 raise ValueError('prepared_activation_candidate_changed')
         output_dir = receipt_path.parent
+        auxiliary_reader = receipt.get('auxiliary_reader_readiness')
+        if auxiliary_reader is not None:
+            if auxiliary_reader.get('target_date') != target_date:
+                raise ValueError('prepared_auxiliary_reader_target_mismatch')
+            verify_bound_sources(auxiliary_reader)
+        if not generation_only:
+            verify_auxiliary_reader(target_date, data_root=DATA_DIR, preparation=not release_changed)
         for key, path in (
             ("manifest_file_sha256", bootstrap.manifest_path(target_date, output_dir=output_dir)),
             ("env_sha256", bootstrap.env_path(target_date, output_dir=output_dir)),

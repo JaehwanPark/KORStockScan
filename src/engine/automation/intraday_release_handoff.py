@@ -128,6 +128,8 @@ def _checked_bootstrap(day, pid):
     check = bootstrap.verify_bootstrap(day, pid=pid, write=False)
     if check.get("status") != "pass":
         raise ValueError("intraday_bootstrap_invalid:" + ",".join(check.get("findings") or []))
+    from src.engine.automation.auxiliary_reader_readiness import verify_auxiliary_reader
+    verify_auxiliary_reader(day, data_root=DATA_DIR)
     return check
 
 
