@@ -11,6 +11,29 @@ import pytest
 from src.engine.infrastructure import runtime_release_router as router
 
 
+@pytest.mark.parametrize('damage', [None, 'root', 'commit', 'invalid_selection'])
+def test_detector_rechecks_current_selection_after_wrapper_lock(tmp_path, monkeypatch, damage):
+    workspace = tmp_path / 'project'
+    (workspace / 'data').mkdir(parents=True)
+    root = tmp_path / 'release'
+    root.mkdir()
+    (root / 'data').symlink_to(workspace / 'data', target_is_directory=True)
+    def selected(actual_workspace):
+        assert actual_workspace == workspace
+        if damage == 'invalid_selection':
+            raise ValueError('release_git_commit_mismatch')
+        return (tmp_path / 'successor' if damage == 'root' else root, 'a' * 40)
+    monkeypatch.setattr(router, 'selected_release', selected)
+    if damage == 'invalid_selection':
+        with pytest.raises(ValueError, match='release_git_commit_mismatch'):
+            router.error_detector_release_is_current(root)
+    else:
+        commit = 'b' * 40 if damage == 'commit' else 'a' * 40
+        assert router.error_detector_release_is_current(root, commit) == (damage is None)
+        if damage is None:
+            assert router.error_detector_release_is_current(root)
+
+
 def test_isolated_filename_router_loads_only_exact_guard_files(tmp_path):
     repo = Path(__file__).resolve().parents[2]
     workspace = tmp_path / 'project'

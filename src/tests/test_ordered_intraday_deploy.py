@@ -1,10 +1,105 @@
 """Deployment automation contracts; no real processes, flags or policy calls."""
 import json
+import fcntl
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from src.engine.automation import ordered_intraday_deploy as D
+
+
+def _assert_detector_lock_held(workspace):
+    with (workspace / 'tmp/run_error_detection.lock').open('a') as other:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize('failure', [None, 'preflight', 'publish', 'attest'])
+def test_cli_holds_detector_lock_through_attestation_and_failure(tmp_path, monkeypatch, failure):
+    calls = []
+    class Driver:
+        def __getattr__(self, name):
+            def step(*args):
+                _assert_detector_lock_held(tmp_path)
+                calls.append(name)
+                if name == failure:
+                    raise ValueError(name)
+                return {'status': 'pass'}
+            return step
+    monkeypatch.setattr(D, 'Deployment', lambda *args: Driver())
+    rc = D.main(['--workspace', str(tmp_path), '--release-root', str(tmp_path),
+                 '--target-date', '2026-10-12', '--confirm', D.CONFIRM])
+    assert rc == (1 if failure else 0)
+    assert calls[-1] == ('fail' if failure else 'attest')
+    with D.detector_transition_lock(tmp_path, timeout=0):
+        _assert_detector_lock_held(tmp_path)
+
+
+def test_busy_detector_times_out_before_deployment_preflight(tmp_path, monkeypatch):
+    (tmp_path / 'tmp').mkdir()
+    lock_path = tmp_path / 'tmp/run_error_detection.lock'
+    with lock_path.open('a') as running:
+        fcntl.flock(running, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        inode = lock_path.stat().st_ino
+        monkeypatch.setattr(D, 'Deployment', lambda *a: pytest.fail('no deployment mutation'))
+        ticks = iter([0, 61])
+        monkeypatch.setattr(D.time, 'monotonic', lambda: next(ticks))
+        assert D.main(['--workspace', str(tmp_path), '--release-root', str(tmp_path),
+                       '--target-date', '2026-10-12', '--confirm', D.CONFIRM]) == 1
+        assert lock_path.stat().st_ino == inode
+        _assert_detector_lock_held(tmp_path)
+        assert not (tmp_path / 'data/runtime/operator_startup_hold.json').exists()
+        assert not (tmp_path / 'restart.flag').exists()
+
+
+def test_wait_for_existing_detector_completion_then_acquire(tmp_path, monkeypatch):
+    (tmp_path / 'tmp').mkdir()
+    with (tmp_path / 'tmp/run_error_detection.lock').open('a') as running:
+        fcntl.flock(running, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        waits = []
+        def finish_detector(seconds):
+            waits.append(seconds)
+            fcntl.flock(running, fcntl.LOCK_UN)
+        monkeypatch.setattr(D.time, 'sleep', finish_detector)
+        with D.detector_transition_lock(tmp_path):
+            assert waits == [0.25]
+            _assert_detector_lock_held(tmp_path)
+
+
+@pytest.mark.parametrize('explicit_source,expected_rc', [(False, 0), (True, 75)])
+def test_actual_detector_wrapper_yields_during_deployment(tmp_path, explicit_source, expected_rc):
+    project = Path(__file__).resolve().parents[2]
+    args = ['bash', str(project / 'deploy/run_error_detection.sh'), 'full']
+    if explicit_source:
+        args.append('2026-10-08')
+    with D.detector_transition_lock(tmp_path):
+        result = subprocess.run(args, env={**os.environ, 'PROJECT_DIR': str(tmp_path)},
+                                capture_output=True, text=True, timeout=10)
+        _assert_detector_lock_held(tmp_path)
+    assert result.returncode == expected_rc, result.stderr
+    assert 'ordered deployment holds lock' in result.stdout
+    assert '[START]' not in result.stdout
+    assert not (tmp_path / 'data').exists()
+
+
+@pytest.mark.parametrize('guard_rc,explicit_source,expected_rc', [(75, False, 0), (75, True, 75), (1, False, 1)])
+def test_wrapper_stale_reader_and_invalid_selection_never_publish(tmp_path, guard_rc, explicit_source, expected_rc):
+    project = Path(__file__).resolve().parents[2]
+    python = tmp_path / '.venv/bin/python'
+    python.parent.mkdir(parents=True)
+    python.write_text(f'#!/bin/sh\nexit {guard_rc}\n')
+    python.chmod(0o755)
+    args = ['bash', str(project / 'deploy/run_error_detection.sh'), 'full']
+    if explicit_source:
+        args.append('2026-10-08')
+    result = subprocess.run(args, env={**os.environ, 'PROJECT_DIR': str(tmp_path)},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == expected_rc, result.stderr
+    assert '[START]' not in result.stdout
+    assert not (tmp_path / 'data').exists()
+    assert not list((tmp_path / 'tmp').glob('error_detection_*.json'))
 
 
 @pytest.mark.parametrize('failure', [None, 'preflight', 'acquire_hold', 'drain', 'publish', 'prepare', 'start', 'attest'])

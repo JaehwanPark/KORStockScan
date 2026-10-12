@@ -13,6 +13,7 @@ import os
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +21,27 @@ from src.engine.automation import intraday_release_handoff as H
 from src.engine.infrastructure import runtime_release_router as R
 
 CONFIRM = 'APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART'
+
+
+@contextmanager
+def detector_transition_lock(workspace, timeout=60):
+    """Drain the existing detector before any deployment mutation.
+
+    Share the wrapper's inode, including publication/notification time. Never
+    unlink it; release automatically on success, timeout or failed deployment.
+    Python descriptors are non-inheritable so a launched Main cannot keep it.
+    """
+    path = Path(workspace) / 'tmp/run_error_detection.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a') as lock:
+        def acquire():
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            return True
+        _wait(acquire, timeout, 'deployment_error_detector_drain_timeout')
+        yield
 
 
 def _digest(raw):
@@ -318,7 +340,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         with R.runtime_release_set_lock(args.workspace):
-            result = execute(Deployment(args.workspace, args.release_root, args.target_date, args.confirm))
+            with detector_transition_lock(args.workspace):
+                result = execute(Deployment(args.workspace, args.release_root, args.target_date, args.confirm))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         print(json.dumps({'status': 'fail', 'findings': [str(exc)]}))
         return 1

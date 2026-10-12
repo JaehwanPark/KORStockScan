@@ -475,6 +475,19 @@ def selected_release(workspace: Path) -> tuple[Path, str]:
     return validate_release(workspace, selection)
 
 
+def error_detector_release_is_current(root: Path, expected_commit: str | None = None) -> bool:
+    """Recheck a routed reader after acquiring its shared deployment lock.
+
+    Invalid selection remains an error; a valid successor means this delayed
+    invocation must yield to the next scheduled reader, without publishing.
+    """
+    root = root.resolve(strict=True)
+    workspace = (root / 'data').resolve(strict=True).parent
+    selected_root, selected_commit = selected_release(workspace)
+    return (selected_root == root
+            and (expected_commit is None or selected_commit == expected_commit))
+
+
 def validate_release(workspace: Path, selection: dict) -> tuple[Path, str]:
     """Validate an immutable candidate without publishing it to live readers."""
     workspace = workspace.resolve(strict=True)

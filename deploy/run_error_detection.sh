@@ -29,11 +29,38 @@ fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-    echo "$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') [SKIP] error detection already running mode=${MODE}" | tee -a "$LOG_FILE"
+    echo "$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') [SKIP] error detection or ordered deployment holds lock mode=${MODE}" | tee -a "$LOG_FILE"
     if [[ -n "$POSTCLOSE_SOURCE_DATE" ]]; then
         exit 75
     fi
     exit 0
+fi
+
+# The router may have selected this root just before a deployment acquired the
+# lock. Recheck after acquiring it; never publish an old reader's observation.
+if env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" <<'PY'
+import os
+import sys
+from pathlib import Path
+from src.engine.infrastructure.runtime_release_router import error_detector_release_is_current
+
+try:
+    current = error_detector_release_is_current(
+        Path(sys.argv[1]), os.environ.get('KORSTOCKSCAN_RUNTIME_GIT_COMMIT'))
+except (OSError, ValueError) as exc:
+    print(f"[FAIL] error detection release validation failed: {exc}")
+    raise SystemExit(1)
+raise SystemExit(0 if current else 75)
+PY
+then
+    :
+else
+    selection_rc=$?
+    if [[ "$selection_rc" -eq 75 ]]; then
+        echo "[SKIP] error detection selected release changed before lock mode=${MODE}" | tee -a "$LOG_FILE"
+        [[ -z "$POSTCLOSE_SOURCE_DATE" ]] && exit 0
+    fi
+    exit "$selection_rc"
 fi
 
 bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "error_detection_internal" "$LOG_FILE" || \
