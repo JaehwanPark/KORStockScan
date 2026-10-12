@@ -158,6 +158,39 @@ def test_publication_refuses_unfinished_or_changed_predecessor(driver, monkeypat
     assert before==(d.selection.read_bytes(),d.checklist.read_bytes())
 
 
+@pytest.mark.parametrize('damage', [None, 'missing_consumption', 'pid_changed', 'selector_changed'])
+def test_completion_requires_exact_successor_consumption(driver, monkeypatch, damage):
+    d = driver
+    d.phase = 'starting'
+    identity = dict(pid=456, start_ticks='456', cwd=str(d.candidate / 'src'))
+    selected = dict(git_commit=d.commit, actual_pid_consumed=True, actual_pid_receipt={'pid': 456})
+    d.selection.write_text(json.dumps(selected))
+    monkeypatch.setattr(D.H, '_identity', lambda pid: dict(identity))
+    monkeypatch.setattr(D, '_main_pids', lambda: [456])
+    calls = []
+    def verify(root, module, *args):
+        calls.append((module, args))
+        if module.endswith('intraday_release_handoff'):
+            assert args == ('--verify', '--target-date', d.day, '--pid', '456')
+            if damage == 'missing_consumption':
+                raise ValueError('intraday_consumption_current_pid_not_bound')
+            if damage == 'pid_changed':
+                identity['start_ticks'] = '457'
+            if damage == 'selector_changed':
+                d.selection.write_text(json.dumps(dict(selected, git_commit='c' * 40)))
+        return {'status': 'pass'}
+    d.run_json = verify
+    if damage:
+        with pytest.raises(ValueError):
+            d.attest()
+        assert d.phase != 'complete'
+    else:
+        assert d.attest()['status'] == 'pass'
+        assert d.phase == 'complete'
+        assert d.state['successor_identity'] == identity
+    assert len(calls) == 2
+
+
 def test_drained_publication_preserves_policy_files_and_records_pending_consumption(driver, monkeypatch):
     d=driver; d.acquire_hold(); d.phase='drained'
     monkeypatch.setattr(D, '_main_pids', lambda: [])

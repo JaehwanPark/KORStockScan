@@ -94,6 +94,8 @@ record_threshold_runtime_env_pid_handoff() {
     fi
     PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.intraday_release_handoff \
         --consume --target-date "$target_date" --pid "$bot_pid" || return 1
+    PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.intraday_release_handoff \
+        --verify --target-date "$target_date" --pid "$bot_pid" || return 1
     echo "✅ threshold runtime env PID 소비 receipt 기록: target_date=$target_date pid=$bot_pid"
 }
 
@@ -356,17 +358,19 @@ export KORSTOCKSCAN_MAIN_FIXED_WATCH_036930_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_W
     # The pre-start verifier proves the frozen bootstrap.  Re-run the same
     # verifier against the actual child so later postclose acceptance cannot
     # confuse a generated policy file with PID consumption.
-    record_threshold_runtime_env_pid_handoff "$RUNTIME_TARGET_DATE" "$BOT_PID" || true
     # The tmux supervisor is not the trading process.  Attest the actual bot
-    # child only after it has inherited this selected release's src cwd.  A
-    # receipt failure is observable but must not turn a provenance write into
-    # a bot/process or policy-control authority.
-    RUNTIME_WORKSPACE="$(dirname "$(readlink -f "$PROJECT_DIR/data")")"
-    if ! /bin/bash "$RUNTIME_WORKSPACE/deploy/run_runtime_release.sh" \
-        --record-pid "$BOT_PID" \
-        --record-release-root "$PROJECT_DIR" \
-        --record-git-commit "$KORSTOCKSCAN_RUNTIME_GIT_COMMIT"; then
-        echo "⚠️ runtime PID 소비 receipt 기록 실패: pid=$BOT_PID release=$PROJECT_DIR"
+    # child only after native policy consumption binds to that same identity.
+    # A failed receipt cannot attest deployment success or authorize a kill.
+    if record_threshold_runtime_env_pid_handoff "$RUNTIME_TARGET_DATE" "$BOT_PID"; then
+        RUNTIME_WORKSPACE="$(dirname "$(readlink -f "$PROJECT_DIR/data")")"
+        if ! /bin/bash "$RUNTIME_WORKSPACE/deploy/run_runtime_release.sh" \
+            --record-pid "$BOT_PID" \
+            --record-release-root "$PROJECT_DIR" \
+            --record-git-commit "$KORSTOCKSCAN_RUNTIME_GIT_COMMIT"; then
+            echo "⚠️ runtime PID 소비 receipt 기록 실패: pid=$BOT_PID release=$PROJECT_DIR"
+        fi
+    else
+        echo "⚠️ native PID 소비 검증 실패: selector 성공 기록 생략 pid=$BOT_PID release=$PROJECT_DIR"
     fi
     wait "$BOT_PID"
 

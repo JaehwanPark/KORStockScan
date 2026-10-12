@@ -590,6 +590,54 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
             "handoff": payload, "actual_pid_consumed": False}
 
 
+def verify_pid_consumption(day, *, pid, now=None):
+    """Read-only proof of the selected release's exact live child consumption."""
+    try:
+        current = _today(day, now)
+        root, commit = _selection(require_selected_cwd=False)
+        identity = _identity(pid)
+        if identity['cwd'] != str(root / 'src'):
+            raise ValueError('intraday_consumption_pid_root_invalid')
+        path, consumed_path = _paths(day, commit)
+        frozen = {_preopen_path(day): _sha(_preopen_path(day)),
+                  bootstrap.env_path(day): _sha(bootstrap.env_path(day)),
+                  bootstrap.manifest_path(day): _sha(bootstrap.manifest_path(day))}
+        native = not path.exists()
+        if native:
+            if _preopen(day).get('selected_release_commit') != commit:
+                raise ValueError('intraday_consumption_handoff_missing')
+        else:
+            frozen.update({path: _sha(path), consumed_path: _sha(consumed_path)})
+            check = verify(day, commit, now=current)
+            if check['status'] != 'pass':
+                return check
+            consumed = _read(consumed_path)
+            if (consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+                    or consumed.get('status') != 'pass'
+                    or consumed.get('actual_pid_consumed') is not True
+                    or consumed.get('target_date') != day
+                    or consumed.get('selected_release_commit') != commit
+                    or consumed.get('release_root') != str(root)
+                    or consumed.get('handoff_sha256') != frozen[path]
+                    or consumed.get('pid_identity') != identity):
+                raise ValueError('intraday_consumption_current_pid_not_bound')
+        checked = _checked_bootstrap(day, pid)
+        manifest_sha = checked.get('manifest_sha256')
+        if not manifest_sha or (not native and consumed.get('manifest_sha256') != manifest_sha):
+            raise ValueError('intraday_consumption_manifest_mismatch')
+        if (any(_sha(p) != sha for p, sha in frozen.items())
+                or (native and path.exists())
+                or _identity(pid) != identity
+                or _selection(require_selected_cwd=False) != (root, commit)):
+            raise ValueError('intraday_consumption_generation_changed')
+        return dict(schema='intraday_pid_consumption_verification_v1', status='pass', findings=[],
+                    target_date=day, selected_release_commit=commit, release_root=str(root),
+                    basis='native_preopen' if native else 'intraday_policy_preserving_handoff',
+                    pid_identity=identity, actual_pid_consumed=True, manifest_sha256=manifest_sha)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+        return dict(status='fail', findings=[str(exc)], target_date=day, actual_pid_consumed=False)
+
+
 def consume(day, *, pid, now=None):
     _, commit = _selection()
     path, consumed_path = _paths(day, commit)
@@ -730,6 +778,8 @@ def main(argv=None):
             result=activate_main_v2(args.target_date,pid=args.pid,confirm=args.confirm)
         elif args.consume:
             result = consume(args.target_date, pid=args.pid)
+        elif args.pid is not None:
+            result = verify_pid_consumption(args.target_date, pid=args.pid)
         else:
             result = verify(args.target_date, _selection(require_selected_cwd=False)[1])
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:

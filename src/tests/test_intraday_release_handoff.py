@@ -94,6 +94,78 @@ def test_intraday_handoff_preserves_preopen_and_policy_files_then_binds_new_pid(
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(hours=2))["status"] == "pass"
 
 
+@pytest.mark.parametrize('damage', [None, 'absent', 'schema', 'status', 'pid', 'start_ticks',
+                                  'cwd', 'manifest', 'handoff', 'date', 'commit', 'root', 'actual'])
+def test_exact_pid_consumption_verifier_rejects_unbound_receipts(fixture, damage):
+    data, _, _, prepare = fixture
+    assert prepare()['status'] == 'pass'
+    receipt = handoff.consume(DAY, pid=2, now=NOW)
+    path = handoff._paths(DAY, NEW)[1]
+    if damage == 'absent':
+        path.unlink()
+    elif damage:
+        keys = {'manifest': 'manifest_sha256', 'handoff': 'handoff_sha256',
+                'date': 'target_date', 'commit': 'selected_release_commit',
+                'root': 'release_root', 'actual': 'actual_pid_consumed'}
+        if damage in {'pid', 'start_ticks', 'cwd'}:
+            receipt['pid_identity'][damage] = 3 if damage == 'pid' else 'wrong'
+        else:
+            receipt[keys.get(damage, damage)] = 'wrong'
+        _json(path, receipt)
+    before = {p: p.read_bytes() for p in data.rglob('*') if p.is_file()}
+    result = handoff.verify_pid_consumption(DAY, pid=2, now=NOW)
+    assert result['status'] == ('fail' if damage else 'pass'), result
+    if not damage:
+        assert result['pid_identity'] == handoff._identity(2)
+        assert result['actual_pid_consumed'] is True
+    assert before == {p: p.read_bytes() for p in data.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('change', ['identity', 'selection', 'receipt', 'manifest', 'preopen', 'env'])
+def test_exact_pid_verifier_rechecks_generation_after_bootstrap(fixture, monkeypatch, change):
+    _, _, selected, prepare = fixture
+    prepare(); handoff.consume(DAY, pid=2, now=NOW)
+    checked = handoff._checked_bootstrap
+    def mutate(day, pid):
+        result = checked(day, pid)
+        if change == 'identity':
+            monkeypatch.setattr(handoff, '_identity', lambda pid:
+                                dict(pid=pid, start_ticks='43', cwd=str(selected / 'src')))
+        elif change == 'selection':
+            monkeypatch.setattr(handoff, '_selection', lambda **kw: (selected, OLD))
+        else:
+            p = {'receipt': handoff._paths(DAY, NEW)[1],
+                 'manifest': handoff.bootstrap.manifest_path(DAY),
+                 'env': handoff.bootstrap.env_path(DAY),
+                 'preopen': handoff._preopen_path(DAY)}[change]
+            p.write_bytes(p.read_bytes() + b'\n')
+        return result
+    monkeypatch.setattr(handoff, '_checked_bootstrap', mutate)
+    result = handoff.verify_pid_consumption(DAY, pid=2, now=NOW)
+    assert result['status'] == 'fail'
+    assert result['findings'] == ['intraday_consumption_generation_changed']
+
+
+@pytest.mark.parametrize('native_commit', [OLD, NEW])
+def test_native_preopen_pid_verification_never_substitutes_for_code_handoff(fixture, native_commit):
+    data, _, _, _ = fixture
+    status = handoff._read(handoff._preopen_path(DAY))
+    _json(handoff._preopen_path(DAY), dict(status, selected_release_commit=native_commit))
+    before = {p: p.read_bytes() for p in data.rglob('*') if p.is_file()}
+    result = handoff.verify_pid_consumption(DAY, pid=2, now=NOW)
+    assert result['status'] == ('pass' if native_commit == NEW else 'fail')
+    assert before == {p: p.read_bytes() for p in data.rglob('*') if p.is_file()}
+
+
+def test_verify_cli_with_pid_uses_consumption_contract(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(handoff, 'verify_pid_consumption', lambda day, **kw:
+                        calls.append((day, kw['pid'])) or dict(status='fail', findings=['missing']))
+    assert handoff.main(['--verify', '--target-date', DAY, '--pid', '2']) == 1
+    assert calls == [(DAY, 2)]
+    assert json.loads(capsys.readouterr().out)['findings'] == ['missing']
+
+
 @pytest.mark.parametrize('damage', [None, 'alive', 'wrong_pid', 'changed_consumption'])
 def test_stopped_handoff_requires_prior_exact_consumption(fixture, monkeypatch, damage):
     data, _, selected, prepare = fixture

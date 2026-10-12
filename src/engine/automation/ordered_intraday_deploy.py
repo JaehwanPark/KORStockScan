@@ -308,7 +308,10 @@ class Deployment:
         self.run_json(self.candidate, 'src.engine.automation.runtime_policy_bootstrap', '--verify',
                       '--target-date', self.day, '--pid', str(identity['pid']))
         self.run_json(self.candidate, 'src.engine.automation.intraday_release_handoff',
-                      '--verify', '--target-date', self.day)
+                      '--verify', '--target-date', self.day, '--pid', str(identity['pid']))
+        if (H._identity(identity['pid']) != identity or _main_pids() != [identity['pid']]
+                or H._read(self.selection) != value):
+            raise ValueError('deployment_successor_changed_during_attestation')
         if any(H._sha(path) != sha for path, sha in self.frozen.items() if path != str(self.checklist)):
             raise ValueError('deployment_original_policy_generation_changed')
         self.checkpoint('complete', successor_identity=identity, status='pass')

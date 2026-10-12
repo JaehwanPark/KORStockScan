@@ -239,6 +239,57 @@ def test_launcher_fails_closed_on_bootstrap_and_verifies_before_bot():
     assert "threshold_cycle_preopen_apply" not in script
 
 
+@pytest.mark.parametrize('native_rc', [0, 1])
+def test_launcher_selector_receipt_requires_native_consumption(tmp_path, native_rc):
+    import os, subprocess
+    script = _text('src/run_bot.sh')
+    start = script.index('    if record_threshold_runtime_env_pid_handoff "$RUNTIME_TARGET_DATE" "$BOT_PID"; then')
+    end = script.index('    wait "$BOT_PID"', start)
+    project = tmp_path / 'release'; project.mkdir()
+    data = tmp_path / 'data'; data.mkdir(); (project / 'data').symlink_to(data)
+    router = tmp_path / 'deploy/run_runtime_release.sh'; router.parent.mkdir()
+    marker = tmp_path / 'recorded'
+    router.write_text('#!/bin/bash\nprintf "%s\\n" "$*" > "$MARKER"\n')
+    prefix = 'set -e\nrecord_threshold_runtime_env_pid_handoff() { return "$NATIVE_RC"; }\n'
+    result = subprocess.run(['bash', '-c', prefix + script[start:end]],
+        env={**os.environ, 'PROJECT_DIR': str(project), 'MARKER': str(marker),
+             'RUNTIME_TARGET_DATE': '2026-10-12', 'BOT_PID': '123',
+             'KORSTOCKSCAN_RUNTIME_GIT_COMMIT': 'a' * 40, 'NATIVE_RC': str(native_rc)},
+        capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert marker.exists() is (native_rc == 0)
+    if native_rc == 0:
+        assert '--record-pid 123' in marker.read_text()
+
+
+@pytest.mark.parametrize('failed_stage', ['none', 'bootstrap', 'consume', 'verify'])
+def test_launcher_native_receipt_checks_all_stages(tmp_path, failed_stage):
+    import os, subprocess
+    script = _text('src/run_bot.sh')
+    start = script.index('record_threshold_runtime_env_pid_handoff() {')
+    end = script.index('\napply_retired_runtime_policy_env()', start)
+    work = tmp_path / 'src'; work.mkdir()
+    python = tmp_path / '.venv/bin/python'; python.parent.mkdir(parents=True)
+    marker = tmp_path / 'stages'
+    python.write_text('''#!/bin/bash
+stage=verify
+[[ "$*" == *runtime_policy_bootstrap* ]] && stage=bootstrap
+[[ "$*" == *--consume* ]] && stage=consume
+echo "$stage" >> "$MARKER"
+[[ "$*" == *"--pid 123"* ]] || exit 2
+[[ "$stage" != "$FAILED_STAGE" ]]
+''')
+    python.chmod(0o755)
+    result = subprocess.run(['bash', '-c', script[start:end] +
+                             '\nrecord_threshold_runtime_env_pid_handoff 2026-10-12 123\n'],
+        cwd=work, env={**os.environ, 'MARKER': str(marker), 'FAILED_STAGE': failed_stage},
+        capture_output=True, text=True, timeout=5)
+    stages = ['bootstrap', 'consume', 'verify']
+    expected = stages if failed_stage == 'none' else stages[:stages.index(failed_stage) + 1]
+    assert marker.read_text().splitlines() == expected
+    assert result.returncode == (0 if failed_stage == 'none' else 1)
+
+
 def test_deleted_common_modules_have_no_wrapper_calls():
     scripts = _text("deploy/run_threshold_cycle_postclose.sh") + _text("deploy/run_threshold_cycle_preopen.sh")
     for name in (
