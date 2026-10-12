@@ -35,9 +35,14 @@ def enqueue(snapshot, *, query_generation):
 
     if _SOURCE_SINK is None:
         return "source_gap"
+    # Account snapshots own set-valued coverage facts. Normalize before the
+    # bounded JSON queue; doing this only in publish is too late to admit it.
+    # Keep all members (including unresolved order codes) and caller ownership.
+    frozen = {k: sorted(v) if isinstance(v, set) else copy.deepcopy(v)
+              for k, v in snapshot.items()}
     answer = _SOURCE_SINK(
         publish,
-        copy.deepcopy(snapshot),
+        frozen,
         query_generation=query_generation,
         observation_category="main_stop",
     )

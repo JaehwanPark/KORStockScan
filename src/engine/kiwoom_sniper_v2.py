@@ -6185,6 +6185,13 @@ def _runtime_iteration_targets(targets, now_ts):
         elif _is_real_holding_target(target):
             status_rank = 2 if deadline_scheduler_active else 1
             recency_key = 0.0
+        elif status == "WATCHING" and main_fixed_watch.is_fixed_watch(target):
+            # Native claims retain their original five-second deadline. Do
+            # not put them behind scanner REST recovery/heavy evaluation.
+            # Pending orders, real holdings and scanner COMMIT/FAST_PRECHECK
+            # retain their existing higher priorities.
+            status_rank = 2.5 if deadline_scheduler_active else 1.5
+            recency_key = _runtime_added_time_for_target(target, now_ts=now_ts)
         elif _is_scanner_watching_target(target):
             scheduler_lane = str(
                 (target or {}).get("_scanner_scheduler_lane") or ""
@@ -8434,6 +8441,8 @@ def _scanner_pipeline_stock_snapshot(stock_value):
         key: stock_value.get(key)
         for key in (
             "id",
+            "code",
+            "status",
             "name",
             "strategy",
             "position_tag",
@@ -13650,6 +13659,9 @@ def run_sniper(is_test_mode=False):
                 deferred_scanner_skip_events.clear()
 
                 for stock_value, code_value, kwargs in events:
+                    kwargs = dict(kwargs)
+                    kwargs["ws_data"] = sniper_state_handlers.scanner_skip_observation_snapshot(
+                        kwargs.get("ws_data"))
                     _SCANNER_OBSERVATION_QUEUE.submit(
                         sniper_state_handlers.emit_scanner_watching_runtime_skip,
                         _scanner_pipeline_stock_snapshot(stock_value), code_value, **kwargs)
@@ -14548,6 +14560,7 @@ def run_sniper(is_test_mode=False):
                     scanner_precheck_seen
                     and not scanner_heavy_eval_flushed
                     and not _is_scanner_watching_target(stock)
+                    and not main_fixed_watch.is_fixed_watch(stock)
                 ):
                     _flush_delayed_scanner_heavy_eval()
                     if scanner_async_commit_yield_requested:

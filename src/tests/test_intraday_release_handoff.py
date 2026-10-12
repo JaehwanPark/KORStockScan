@@ -15,6 +15,33 @@ NEW = "b" * 40
 NATIVE_SELECTION = handoff._selection
 
 
+@pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
+def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage):
+    import hashlib
+    name = 'src/engine/kiwoom_sniper_v2.py'
+    own = 'src/engine/automation/intraday_release_handoff.py'
+    before, after = b'def runtime(): return 1\n', b'def runtime(): return 2\n'
+    pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
+    monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_CONSUMER_SOURCES', {name: pair})
+    expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if damage == 'before': before += b'# altered baseline\n'
+    if damage == 'after': after += b'# unreviewed successor\n'
+    for path, body in ((name, after), (own, b'# verified verifier\n')):
+        p = tmp_path/path; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(body)
+    monkeypatch.setattr(handoff.subprocess, 'check_output', lambda command, **kw:
+        b'# verified verifier\n' if command[-1].endswith(':'+own)
+        else before if command[-1].startswith(OLD+':') else after)
+    if damage == 'dirty': (tmp_path/name).write_bytes(after+b'# dirty\n')
+    if damage == 'origin_digest': expected = '0'*64
+    frozen = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    if damage:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(tmp_path, NEW, OLD, {name: name}, expected)
+    else:
+        assert handoff._verify_entry_code_delta(tmp_path, NEW, OLD, {name: name}, expected) == [name]
+    assert frozen == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+
+
 def _json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))

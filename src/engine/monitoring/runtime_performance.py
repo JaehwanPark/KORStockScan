@@ -13,7 +13,8 @@ from threading import Lock
 
 _LOCK = Lock()
 _LIMIT = 4096
-_NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare', 'ws_lock_wait', 'ws_lock_hold',
+_NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare',
+          'policy_load', 'policy_release_check', 'policy_consumer_check', 'ws_lock_wait', 'ws_lock_hold',
           'ws_snapshot', 'confirmed_to_claim', 'claim_to_machine',
           'provider_response', 'machine_to_provider_response', 'provider_response_to_pre_submit',
           'preparation_queue', 'preparation_service', 'source_prepare', 'capacity_prepare',

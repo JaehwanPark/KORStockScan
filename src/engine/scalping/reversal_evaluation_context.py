@@ -38,19 +38,24 @@ def prepare(*, data_root, day):
     from src.engine.infrastructure.runtime_release_router import selected_release
     from src.engine.scalping import reversal_current_backend as D
     from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.monitoring.runtime_performance import observe
     started = time.perf_counter()
     with N.verified_evaluation(data_root=data_root, target_date=day) as bundle:
+        observe('policy_load', time.perf_counter() - started)
         if not bundle or bundle.get('continuous_reversal', {}).get('schema') not in {
                 'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
             return bundle
+        release_started = time.perf_counter()
         selected, commit = selected_release(Path(data_root).resolve().parent)
         identity = H._identity(os.getpid())
+        observe('policy_release_check', time.perf_counter() - release_started)
         if identity['cwd'] != str(selected / 'src'):
             raise ValueError('auxiliary_pid_release_mismatch')
         key = (str(Path(data_root).resolve()), day, bundle['bundle_sha256'],
                identity['pid'], identity['start_ticks'], identity['cwd'], commit)
         if not _LOCK.acquire(timeout=1.0):
             raise ValueError('machine_policy_configuration_in_progress')
+        consumer_started = time.perf_counter()
         try:
             configured = _CONFIGURED
             # Keep a strong reference: object identity cannot be recycled into
@@ -92,6 +97,6 @@ def prepare(*, data_root, day):
             return bundle
         finally:
             _LOCK.release()
-            from src.engine.monitoring.runtime_performance import observe
+            observe('policy_consumer_check', time.perf_counter() - consumer_started)
             observe('policy_prepare', time.perf_counter() - started,
                     generation=bundle['bundle_sha256'])

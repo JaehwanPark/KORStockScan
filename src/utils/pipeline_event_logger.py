@@ -12,6 +12,7 @@ import re
 import stat
 import threading
 import time
+from itertools import islice
 from collections import deque
 from datetime import date, datetime
 from pathlib import Path
@@ -52,6 +53,7 @@ class BoundedObservationQueue:
         self._items = self._bytes = 0
         self._category_items = {}
         self._category_bytes = {}
+        self._last_rejection = None
         self._stats = dict(queued=0, completed=0, append_confirmed=0,
                            completed_without_append_receipt=0, failed=0, unavailable=0,
                            peak_items=0, peak_bytes=0)
@@ -66,6 +68,13 @@ class BoundedObservationQueue:
                                  separators=(',', ':'), allow_nan=False).encode()
             size = len(encoded)
         except (TypeError, ValueError):
+            # Record types/paths only, never argument values, credentials or
+            # a stringified live object. Keep the strict finite JSON gate.
+            with self._condition:
+                self._last_rejection = {
+                    'callback': str(getattr(callback, '__qualname__', type(callback).__name__))[:96],
+                    **self._invalid_location([args, kwargs]),
+                }
             return self._unavailable('observation_envelope_invalid')
         with self._condition:
             if (self._closed or size > self.max_item_bytes
@@ -102,6 +111,32 @@ class BoundedObservationQueue:
             self._stats['peak_items'] = max(self._stats['peak_items'], self._items)
             self._stats['peak_bytes'] = max(self._stats['peak_bytes'], self._bytes)
             return {'status': 'queued', 'structured_append_succeeded': False}
+
+    @staticmethod
+    def _invalid_location(value):
+        pending, seen = [(value, '$', 0)], set()
+        for _ in range(1024):
+            if not pending:
+                break
+            item, path, depth = pending.pop()
+            if isinstance(item, float) and not math.isfinite(item):
+                return {'path': path[:160], 'type': 'nonfinite_float'}
+            if item is None or isinstance(item, (str, int, float, bool)):
+                continue
+            if not isinstance(item, (dict, list, tuple)):
+                return {'path': path[:160], 'type': type(item).__name__[:64]}
+            if id(item) in seen or depth >= 8:
+                continue
+            seen.add(id(item))
+            if isinstance(item, dict):
+                # Field names are local schema keys. Do not include map keys
+                # from large dynamic payloads or any field values.
+                children = list(islice(item.items(), min(128, max(0, 1024-len(pending)))))
+                pending.extend((v, path+'.'+str(k)[:48], depth+1) for k, v in children)
+            else:
+                pending.extend((v, path+'['+str(i)+']', depth+1)
+                               for i, v in enumerate(item[:min(128, max(0, 1024-len(pending)))]))
+        return {'path': '$', 'type': 'invalid_or_cyclic_envelope'}
 
     def _unavailable(self, reason):
         with self._condition:
@@ -160,6 +195,7 @@ class BoundedObservationQueue:
         with self._condition:
             return {**self._stats, 'pending_items': self._items,
                     'pending_bytes': self._bytes, 'closed': self._closed,
+                    'last_rejection': dict(self._last_rejection) if self._last_rejection else None,
                     'category_items': dict(self._category_items),
                     'category_bytes': dict(self._category_bytes)}
 

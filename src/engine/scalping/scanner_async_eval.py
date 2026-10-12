@@ -937,6 +937,7 @@ def validate_scanner_async_commit(
     position_or_pending_order_present: bool,
     cooldown_active: bool,
     now_epoch: float,
+    native_validation_error: str | None = None,
 ) -> ScannerAsyncCommitDecision:
     fields = {
         "metric_role": "runtime_scheduler_latency",
@@ -973,6 +974,10 @@ def validate_scanner_async_commit(
         reason = "generation_superseded"
     elif str(current_status or "").upper() != "WATCHING":
         reason = "target_not_watching"
+    elif native_validation_error:
+        # A failed native proof cannot be relabeled as a route conflict by
+        # comparing its SOR request with the stock's display venue (KRX).
+        reason = str(native_validation_error)
     elif str(current_venue or "").upper() != result.venue:
         reason = "venue_conflict"
     elif not venue_resolution_valid:
@@ -995,6 +1000,8 @@ def validate_scanner_async_commit(
     allowed = reason == "commit_allowed"
     fields["scanner_async_commit_allowed"] = allowed
     fields["scanner_async_commit_reason"] = reason
+    if native_validation_error:
+        fields['scanner_async_native_validation_error'] = str(native_validation_error)
     return ScannerAsyncCommitDecision(
         allowed=allowed,
         reason=reason,

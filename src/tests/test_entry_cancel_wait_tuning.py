@@ -869,8 +869,9 @@ def test_latest_untrusted_predecessor_is_not_silently_skipped(tmp_path,monkeypat
         mod._previous_state('2026-10-02')
 
 
+@pytest.mark.parametrize('queued', [False, True])
 @pytest.mark.parametrize('owner,quantity,expected',[(None,0,'verified_empty'),('episode',5,'verified_empty'),('main_scalping',5,'known_open')])
-def test_native_custody_checkpoint_qualifies_main_and_retired_independently(tmp_path,monkeypatch,owner,quantity,expected):
+def test_native_custody_checkpoint_qualifies_main_and_retired_independently(tmp_path,monkeypatch,owner,quantity,expected,queued):
     import hashlib
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -889,7 +890,19 @@ def test_native_custody_checkpoint_qualifies_main_and_retired_independently(tmp_
     snapshot=dict(captured_at=datetime(2026,10,2,15,31,tzinfo=ZoneInfo('Asia/Seoul')).timestamp(),successful_exchanges={'KRX','NXT'},
         inventory_rows_valid=True,open_order_rows_valid=True,open_orders_request_succeeded=True,unverified_open_order_codes=set(),
         inventory_by_code={'123456':dict(qty=quantity)} if owner else {},open_qty_by_code={})
-    native=checkpoint.publish(snapshot,query_generation=checkpoint.journal_generation())
+    if queued:
+        from concurrent.futures import ThreadPoolExecutor
+        from src.utils.pipeline_event_logger import BoundedObservationQueue
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            queue = BoundedObservationQueue(executor)
+            monkeypatch.setattr(checkpoint, '_SOURCE_SINK', queue.submit)
+            assert checkpoint.enqueue(snapshot, query_generation=checkpoint.journal_generation()) == 'queued'
+            assert queue.close(timeout=2)
+        assert queue.snapshot()['completed'] == 1
+        assert queue.snapshot()['unavailable'] == queue.snapshot()['failed'] == 0
+        native = json.loads((data/'runtime/main_custody_checkpoints/2026-10-02.json').read_text())
+    else:
+        native=checkpoint.publish(snapshot,query_generation=checkpoint.journal_generation())
     ledger={'2026-09-30':dict(coverage_verified=False,unclassified_identities=['historical-missing']),
         '2026-10-02':dict(coverage_verified=True,unclassified_identities=[])}
     result=checkpoint.view(native,registry.verified_events_snapshot(),ledger,day='2026-10-02',current_generation=checkpoint.journal_generation())
@@ -904,12 +917,18 @@ def test_custody_capture_is_bounded_queued_and_never_writes_synchronously(tmp_pa
     from src.engine.scalping import main_custody_checkpoint as checkpoint
     saved=[]
     monkeypatch.setattr(checkpoint,'_SOURCE_SINK',lambda *a,**kw:saved.append((a,kw)) or {'status':'queued'})
-    snapshot={'inventory_by_code':{'123456':{'qty':1}}}
+    snapshot={'inventory_by_code':{'123456':{'qty':1}}, 'successful_exchanges': {'NXT','KRX'},
+              'unverified_open_order_codes': {'123456'}}
     def forbidden(*a,**kw):raise AssertionError('synchronous source write')
     monkeypatch.setattr(checkpoint,'publish',forbidden)
     assert checkpoint.enqueue(snapshot,query_generation=[1,2,3,4])=='queued'
     snapshot['inventory_by_code']['123456']['qty']=10
+    snapshot['successful_exchanges'].clear()
+    snapshot['unverified_open_order_codes'].clear()
     assert saved[0][0][1]['inventory_by_code']['123456']['qty']==1
+    assert saved[0][0][1]['successful_exchanges']==['KRX','NXT']
+    assert saved[0][0][1]['unverified_open_order_codes']==['123456']
+    json.dumps(saved[0][0][1], allow_nan=False)
     monkeypatch.setattr(checkpoint,'_SOURCE_SINK',lambda *a,**kw:{'status':'rejected'})
     assert checkpoint.enqueue(snapshot,query_generation=[1,2,3,4])=='source_gap'
 

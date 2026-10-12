@@ -326,6 +326,93 @@ def test_observation_running_job_counts_towards_limit_and_failure_never_blocks()
     assert queue.snapshot()['pending_bytes'] == 0
 
 
+@pytest.mark.parametrize('value,kind', [({'0B'}, 'set'), (float('nan'), 'nonfinite_float')])
+def test_invalid_observation_reports_bounded_field_type_without_values(value, kind):
+    from src.utils.pipeline_event_logger import BoundedObservationQueue
+    queue = BoundedObservationQueue(None)
+    outcome = queue.submit(print, payload={'received_types': value, 'private': 'SECRET-VALUE'})
+    assert outcome['status'] == 'unavailable'
+    rejection = queue.snapshot()['last_rejection']
+    assert rejection['type'] == kind
+    assert rejection['path'].endswith('received_types')
+    assert 'SECRET-VALUE' not in str(rejection)
+    assert queue.snapshot()['pending_bytes'] == 0
+
+
+def test_deferred_skip_projection_preserves_fields_and_accepts_real_ws_containers(monkeypatch):
+    from collections import deque
+    from src.engine import sniper_state_handlers as H, kiwoom_sniper_v2 as M
+    from src.utils.pipeline_event_logger import BoundedObservationQueue
+    stock = dict(id=7, code='000037', name='test', status='WATCHING',
+                 strategy='SCALPING', position_tag='SCANNER',
+                 scanner_promotion_id='promotion', source_signature='VALUE_TOP',
+                 entry_armed_at_epoch=NOW-1)
+    depth = dict(effective_venue='KRX', market_route='krx_regular', item='000037',
+                 observed_epoch=NOW-.1, orderbook={'asks': [{'price': 101, 'volume': 10}],
+                                                 'bids': [{'price': 100, 'volume': 10}]})
+    source = dict(curr=100, received_types={'0B', '0D'}, top_of_book_cache=object(), market_data_transport_epoch=7,
+                  last_realtime_type_ts={'0B': NOW-.2, '0D': NOW-.1},
+                  last_realtime_type_market_route={'0D': 'krx_regular'},
+                  realtime_type_snapshots_by_route={'krx': {'0D': depth}},
+                  last_trade_tick={'ts': NOW-.2}, fluctuation=1.2,
+                  strength_momentum_history=deque([{'ts': NOW-1, 'strength': 10}, {'ts': NOW-.2}]),
+                  recent_trade_ticks=deque([{'price': 100}] * 2000))
+    kwargs = dict(skip_reason='scanner_scheduler_generation_warm_parked', now_ts=NOW)
+    projected = H.scanner_skip_observation_snapshot(source)
+    assert H._scanner_watching_runtime_skip_fields(stock, ws_data=source, **kwargs) == H._scanner_watching_runtime_skip_fields(stock, ws_data=projected, **kwargs)
+    assert H._opening_rotation_upstream_scope_fields(stock, source, now_ts=NOW) == H._opening_rotation_upstream_scope_fields(stock, projected, now_ts=NOW)
+    bbo = dict(code='000037', venue='KRX', session='krx_regular')
+    assert H._risky_micro_route_scoped_0d_bbo(source, **bbo) == H._risky_micro_route_scoped_0d_bbo(projected, **bbo)
+    seen = []
+    monkeypatch.setattr(H, '_log_entry_pipeline', lambda *a, **kw: seen.append((a, kw)))
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        queue = BoundedObservationQueue(executor)
+        assert queue.submit(H.emit_scanner_watching_runtime_skip,
+                            M._scanner_pipeline_stock_snapshot(stock), '000037',
+                            ws_data=projected, **kwargs)['status'] == 'queued'
+        assert queue.close(timeout=2)
+    assert queue.snapshot()['completed'] == 1
+    assert queue.snapshot()['unavailable'] == queue.snapshot()['failed'] == 0
+    emitted = next(kw for a, kw in seen if a[2] == 'scalping_scanner_watching_runtime_skip')
+    assert emitted['target_status'] == 'WATCHING'
+    assert emitted['ws_received_types'] == '0B,0D'
+    assert emitted['ws_strength_history_count'] == 2
+    assert source['received_types'] == {'0B', '0D'}
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'async_v1'])
+def test_fixed_watch_delivery_precedes_slow_recovery_without_displacing_safety(monkeypatch, mode):
+    import ast
+    import inspect
+    from src.engine import kiwoom_sniper_v2 as M
+    from src.engine.scalping import main_fixed_watch as F
+    monkeypatch.setattr(M.run_sniper, 'scanner_scheduler_mode', mode, raising=False)
+    monkeypatch.setattr(M.run_sniper, 'scanner_scheduler_venues', frozenset({'KRX'}), raising=False)
+    fixed = dict(id='fixed', code='005930', strategy='SCALPING', status='WATCHING',
+                 watch_origin=F.WATCH_ORIGIN, added_time=NOW)
+    recovery = dict(id='recovery', code='000001', strategy='SCALPING', status='WATCHING',
+                    position_tag='SCANNER', effective_venue='KRX',
+                    _scanner_scheduler_lane='recovery', _scanner_scheduler_deadline_epoch=NOW+5)
+    holding = dict(id='holding', code='000002', strategy='SCALPING', status='HOLDING', actual_order_submitted=True)
+    ordered = dict(id='order', code='000003', strategy='SCALPING', status='BUY_ORDERED')
+    targets = [recovery, fixed, holding, ordered]
+    result = M._runtime_iteration_targets(targets, now_ts=NOW)
+    assert [t['id'] for t in result] == ['order', 'holding', 'fixed', 'recovery']
+    assert len(result) == len(targets) and set(map(id, result)) == set(map(id, targets))
+    assert targets[0] is recovery
+    # Execute the actual loop condition: delayed heavy work must not jump
+    # ahead again after sorting, and ordinary WATCHING retains its old flush.
+    tree = ast.parse(inspect.getsource(M.run_sniper))
+    node = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
+                and 'scanner_precheck_seen' in ast.unparse(n.test)
+                and 'scanner_heavy_eval_flushed' in ast.unparse(n.test))
+    env = dict(scanner_precheck_seen=True, scanner_heavy_eval_flushed=False,
+               _is_scanner_watching_target=M._is_scanner_watching_target, main_fixed_watch=F)
+    test = compile(ast.Expression(node.test), '<actual-heavy-flush-condition>', 'eval')
+    assert not eval(test, {**env, 'stock': fixed})
+    assert eval(test, {**env, 'stock': dict(status='WATCHING')})
+
+
 def test_big_trace_row_preparation_advances_without_publishing_unverified_keys(tmp_path):
     path = tmp_path/'large.jsonl'
     path.write_text(json.dumps(dict(request_id='large', body='x'*(4*1024*1024)))+'\n')

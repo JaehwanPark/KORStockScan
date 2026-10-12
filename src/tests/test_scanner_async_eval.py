@@ -41,6 +41,24 @@ def _wait_for_result(coordinator, timeout=1.0):
     raise AssertionError("async result did not complete")
 
 
+@pytest.mark.parametrize('expired', [False, True])
+def test_native_invalidation_keeps_cause_without_bypassing_deadline(expired):
+    from types import SimpleNamespace
+    generation = _generation()
+    result = SimpleNamespace(status='completed', observation_only=False,
+        deadline_epoch=104 if expired else 106, deadline_perf=0,
+        completed_epoch=103, generation_id=generation.generation_id,
+        venue='SOR', state_version='WATCHING:0:0')
+    decision = validate_scanner_async_commit(result, current_generation=generation,
+        current_status='WATCHING', current_venue='KRX', current_source_signature='VALUE_TOP',
+        venue_resolution_valid=False, current_state_version='WATCHING:0:0',
+        quote_fresh=True, position_or_pending_order_present=False, cooldown_active=False,
+        now_epoch=105, native_validation_error='reversal_signal_path_changed')
+    assert not decision.allowed
+    assert decision.reason == ('result_deadline_expired' if expired else 'reversal_signal_path_changed')
+    assert decision.fields['scanner_async_native_validation_error'] == 'reversal_signal_path_changed'
+
+
 def test_async_execution_refresh_is_immutable_and_retained_for_commit():
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)

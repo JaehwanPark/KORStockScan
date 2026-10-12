@@ -25,6 +25,25 @@ CONFIRM = "APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF"
 _STOPPED_PREPARATION = ContextVar('intraday_stopped_preparation', default=None)
 _OBSERVER_CUSTODY = ContextVar('intraday_observer_custody', default=None)
 
+# Reviewed delivery/observation repair. Exact source pairs, not a blanket
+# exception for the large runtime functions. Policy generation, quote timing
+# and safety guards retain the original contract; any further byte change
+# requires another review. Evidence: docs/audits/machine-auxiliary-signal-delivery-review-2026-10-12.md.
+REVIEWED_ENTRY_CONSUMER_SOURCES = {
+    'src/engine/kiwoom_sniper_v2.py': (
+        '4cbd06363b1156761fd748c51ac9fbb4f54e69b64771f9f86e6770bba5ce177c',
+        '9fc97110fd8f9eb3fa6f1d8a2216860db58754111f67f9b8a8cea440e0b5d385'),
+    'src/engine/sniper_state_handlers.py': (
+        '4caaddc9d38008bd55968e2ec7b0553bd50e294c1f687eabf588f34a972c847d',
+        '0080d79e8b961a17b646621b78fd0db1aa01b60741b9a20da54c543e766200b7'),
+    'src/engine/scalping/scanner_async_eval.py': (
+        '89742c044a782e9058ab43f91cc3969f0910beff506b51218079225fb6a28220',
+        'a237d48e578e7c1d6daa3d699ace71bbf03ee0a53ac419fd19ffb85fc6ae4ee8'),
+    'src/utils/pipeline_event_logger.py': (
+        '35bc6825a1e6788a8cb876a6c7eb2774581bc7bc6771f90cb42d2cfe70fcfd1a',
+        'ae875f6d80edbc6a9d2fd8e3f47de060cbdc71542611afcc32dc36a243408d80'),
+}
+
 
 def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -232,6 +251,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             raise ValueError('entry_consumer_dirty_release')
         original_hashes[key] = hashlib.sha256(before).hexdigest()
         if before == after:
+            continue
+        pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
+        if REVIEWED_ENTRY_CONSUMER_SOURCES.get(name) == pair:
+            changed.append(name)
             continue
         if name not in allowed:
             raise ValueError('entry_consumer_producer_changed:' + name)

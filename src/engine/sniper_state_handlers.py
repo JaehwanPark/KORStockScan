@@ -17196,6 +17196,34 @@ def _scanner_watching_runtime_skip_fields(
     }
 
 
+def scanner_skip_observation_snapshot(ws_data):
+    """JSON-only inputs used by the deferred skip observer, never execution.
+
+    Live snapshots include sets, full histories and an opaque BBO cache. The
+    observer reads exact 0D records and freshness clocks instead. Preserve all
+    history timestamps/counts, route provenance and missing values; do not
+    stringify arbitrary objects or copy execution caches into the report queue.
+    """
+    source = ws_data if isinstance(ws_data, dict) else {}
+    result = {key: source[key] for key in (
+        'curr', 'fluctuation', 'fluctuation_rate', 'day_change_pct',
+        'last_realtime_type_ts', 'last_realtime_type_market_route', 'market_data_transport_epoch',
+    ) if key in source}
+    result['received_types'] = sorted(source.get('received_types') or ())
+    history = source.get('strength_momentum_history') or ()
+    result['strength_momentum_history'] = [
+        {'ts': row.get('ts')} if isinstance(row, dict) else None for row in history]
+    trade = source.get('last_trade_tick')
+    if isinstance(trade, dict):
+        result['last_trade_tick'] = {'ts': trade.get('ts')}
+    routes = source.get('realtime_type_snapshots_by_route')
+    if isinstance(routes, dict):
+        result['realtime_type_snapshots_by_route'] = {
+            key: {'0D': row['0D']} for key, row in routes.items()
+            if isinstance(row, dict) and isinstance(row.get('0D'), dict)}
+    return result
+
+
 def emit_scanner_watching_runtime_skip(
     stock,
     code,
@@ -61000,6 +61028,7 @@ def _resolve_scanner_async_entry_ai(
         now_epoch = time.time()
         commit_started = time.perf_counter()
         native_valid = True
+        native_validation_error = None
         if claim:
             try:
                 from src.engine.scalping.reversal_current_backend import backend
@@ -61008,8 +61037,10 @@ def _resolve_scanner_async_entry_ai(
                 if fixed_watch and (not fixed_route or fixed_route['item'] != claim['snapshot'][0].get('source_item')
                         or fixed_route['broker_route'] != generation.venue):
                     native_valid = False
-            except ValueError:
+                    native_validation_error = 'fixed_watch_claim_session_route_changed'
+            except ValueError as exc:
                 native_valid = False
+                native_validation_error = str(exc)
         decision = validate_scanner_async_commit(
             result,
             current_generation=(generation if fixed_watch else runtime.get('scanner_async_generation')),
@@ -61041,6 +61072,7 @@ def _resolve_scanner_async_entry_ai(
                 _safe_float((COOLDOWNS or {}).get(code), 0.0) > now_epoch
             ),
             now_epoch=now_epoch,
+            native_validation_error=native_validation_error,
         )
         result_snapshot_id = str(
             result.ai_payload.get("ai_decision_snapshot_id")
