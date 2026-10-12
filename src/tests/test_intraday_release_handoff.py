@@ -640,14 +640,16 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
             handoff.historical_checklist_for_observer(data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
 
 
+@pytest.mark.parametrize('consumer,approval', [('sniper_state_handlers.py','machine_auxiliary_path_repair_deploy_and_restart'), ('ai_engine_openai.py','entry_input_deadline_repair_deploy_and_restart')])
 @pytest.mark.parametrize('fault', [None, 'authority', 'consumed', 'pid', 'manifest', 'policy', 'producer', 'other_function', 'verifier'])
-def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_sources(fixture, monkeypatch, fault):
+def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_sources(fixture, monkeypatch, fault, consumer, approval):
     import hashlib
     data, previous, selected, _ = fixture
     monkeypatch.setattr(handoff, '_today', lambda *a: NOW)
-    name = 'src/engine/sniper_state_handlers.py'
+    name = 'src/engine/' + consumer
     own = 'src/engine/automation/intraday_release_handoff.py'
-    original = b'def _get_live_entry_arm():\n return 1\ndef hard_guard():\n return False\n'
+    function = '_get_live_entry_arm' if consumer=='sniper_state_handlers.py' else '_final_entry_machine_inputs'
+    original = ('def '+function+'():\n return 1\ndef hard_guard():\n return False\n').encode()
     revised = original.replace(b'return 1', b'return 2')
     if fault == 'other_function': revised = revised.replace(b'return False', b'return True')
     if fault == 'producer': name = 'src/engine/producer.py'
@@ -665,7 +667,7 @@ def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_so
         pre_submit_delay_handoff=dict(policy_sha256='policy',code_contract_sha256=expected,target_date=DAY))
     _json(handoff.bootstrap.manifest_path(DAY), manifest)
     selection = dict(previous_git_commit=OLD,previous_release_root=str(previous),approved_by='user',
-        approval_scope='wrong' if fault=='authority' else 'machine_auxiliary_path_repair_deploy_and_restart')
+        approval_scope='wrong' if fault=='authority' else approval)
     _json(data/'runtime/runtime_release_selection.json',selection)
     prior_path, consumed_path=handoff._paths(DAY,OLD)
     prior=dict(schema='intraday_policy_preserving_release_handoff_v1',status='prepared_verified',authority=handoff.CONFIRM,

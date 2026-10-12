@@ -1170,3 +1170,62 @@ def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
         )
         assert final["pre_submit_ws_snapshot_refresh_applied"] is False
         assert final["pre_submit_ws_snapshot_refresh_max_age_ms"] == 700
+
+
+def test_owned_final_revalidation_has_same_values_and_default_keeps_caller_isolation():
+    ws=_inline_quote_ws();context=_context();before=deepcopy((ws,context))
+    context['strategy_completed_bars']=[{'close':10000+i} for i in range(430)]
+    default=revalidate_entry_candle_snapshot(context,ws,now_ts=NOW+.01)
+    owned_ws,owned_context=deepcopy((ws,context))
+    result=revalidate_entry_candle_snapshot(owned_context,owned_ws,now_ts=NOW+.01,_owned_inputs=True)
+    assert result is owned_context and result == default
+    assert owned_ws == ws == before[0]
+    result['strategy_completed_bars'][0]['close']=1
+    assert context['strategy_completed_bars'][0]['close']==10000
+    default['strategy_completed_bars'][0]['close']=2
+    assert context['strategy_completed_bars'][0]['close']==10000
+
+
+def test_final_freeze_isolates_both_mutating_refresher_and_borrowed_return(monkeypatch):
+    from src.engine import ai_engine_openai as eng
+    original=(_inline_quote_ws(),[{'price':10000,'quantity':10}],_context())
+    before=deepcopy(original);borrowed=deepcopy(original);borrowed_before=deepcopy(borrowed)
+    monkeypatch.setattr(eng.time,'time',lambda:NOW)
+    def refresh(w,t,c):
+        w['orderbook']['bids'][0]['price']=1;t[0]['quantity']=0
+        c['ai_market_snapshot_v1']['sources'].clear()
+        return (*borrowed,{})
+    ws,ticks,context,fields=eng._final_entry_machine_inputs(*original,refresher=refresh,deadline_epoch=NOW+5)
+    assert 'entry_machine_input_error' not in fields and original==before and borrowed==borrowed_before
+    ws['orderbook']['asks'][0]['price']=1;ticks[0]['quantity']=0
+    context['ai_market_snapshot_v1']['sources'].clear()
+    assert original==before and borrowed==borrowed_before
+    assert fields['entry_machine_input_budget_at_freeze_ms']==5000
+    assert fields['entry_machine_input_budget_after_freeze_ms']==5000
+
+
+def test_copy_consuming_original_budget_does_not_start_local_refresh(monkeypatch):
+    from src.engine import ai_engine_openai as eng
+    original=(_ws(NOW),[],_context())
+    clock=[NOW];copy=eng.copy.deepcopy;calls=[]
+    monkeypatch.setattr(eng.time,'time',lambda:clock[0])
+    def slow_copy(*a,**kw):
+        result=copy(*a,**kw);clock[0]=NOW+5.083;return result
+    monkeypatch.setattr(eng.copy,'deepcopy',slow_copy)
+    *_,fields=eng._final_entry_machine_inputs(*original,
+        refresher=lambda *a:calls.append(True),deadline_epoch=NOW+5)
+    assert not calls and fields['entry_machine_input_error']=='entry_machine_input_deadline_expired'
+    assert fields['entry_machine_input_failure_phase']=='after_input_copy'
+    assert fields['entry_machine_input_budget_after_freeze_ms']==pytest.approx(-83,abs=.01)
+
+
+def test_refresh_error_still_records_elapsed_phase_and_keeps_original(monkeypatch):
+    from src.engine import ai_engine_openai as eng
+    monkeypatch.setattr(eng.time,'time',lambda:NOW)
+    def failed(w,t,c):
+        c.clear();raise ValueError('source_changed')
+    original=(_ws(NOW),[],_context());before=deepcopy(original)
+    *_,fields=eng._final_entry_machine_inputs(*original,refresher=failed,deadline_epoch=NOW+5)
+    assert original==before and fields['entry_machine_input_failure_phase']=='local_refresh'
+    assert fields['entry_machine_input_local_refresh_ms']>=0
+    assert fields['entry_machine_input_error']=='source_changed'

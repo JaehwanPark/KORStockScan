@@ -184,18 +184,32 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
     from src.engine.scalping.entry_candle_context import revalidate_entry_candle_snapshot
 
     started = time.perf_counter()
-    ws, ticks, context = copy.deepcopy((ws_data, recent_ticks, candle_context))
     fields = {}
+    phase = "before_input_copy"
     error = None
     try:
         if deadline_epoch is not None and (
             not math.isfinite(float(deadline_epoch)) or time.time() >= deadline_epoch
         ):
             raise ValueError("entry_machine_input_deadline_expired")
+        if deadline_epoch is not None:
+            fields['entry_machine_input_budget_at_freeze_ms'] = round((deadline_epoch - time.time()) * 1000, 3)
+        copy_started = time.perf_counter()
+        ws, ticks, context = copy.deepcopy((ws_data, recent_ticks, candle_context))
+        fields['entry_machine_input_initial_copy_ms'] = round((time.perf_counter() - copy_started) * 1000, 3)
+        phase = "after_input_copy"
+        if deadline_epoch is not None and time.time() >= deadline_epoch:
+            raise ValueError("entry_machine_input_deadline_expired")
+        phase = "local_refresh"
         refresh_started = time.perf_counter()
-        ws, ticks, context, refresh_fields = refresher(ws, ticks, context)
-        fields["entry_machine_input_local_refresh_ms"] = round((time.perf_counter() - refresh_started) * 1000, 3)
+        try:
+            ws, ticks, context, refresh_fields = refresher(ws, ticks, context)
+        finally:
+            fields["entry_machine_input_local_refresh_ms"] = round((time.perf_counter() - refresh_started) * 1000, 3)
+        phase = "refreshed_input_copy"
+        copy_started = time.perf_counter()
         ws, ticks, context = copy.deepcopy((ws, ticks, context))
+        fields['entry_machine_input_refreshed_copy_ms'] = round((time.perf_counter() - copy_started) * 1000, 3)
         fields.update({key.replace("entry_ai_final_", "entry_machine_input_", 1): value
                        for key, value in refresh_fields.items()})
         if refresh_fields.get("entry_ai_final_snapshot_revalidation_error"):
@@ -207,9 +221,13 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
         as_of = time.time()
         if deadline_epoch is not None and as_of >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
+        phase = "canonical_revalidation"
         revalidate_started = time.perf_counter()
-        context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of)
-        fields["entry_machine_input_canonical_revalidation_ms"] = round((time.perf_counter() - revalidate_started) * 1000, 3)
+        try:
+            context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of, _owned_inputs=True)
+        finally:
+            fields["entry_machine_input_canonical_revalidation_ms"] = round((time.perf_counter() - revalidate_started) * 1000, 3)
+        phase = "quote_consistency"
         from src.trading.market.quote_consistency import ws_quote_receive_age_ms, ws_quote_source_receipt
         bbo = (context.get("ai_market_snapshot_v1") or {}).get("sources", {}).get("bbo", {})
         canonical_age = bbo.get("age_ms")
@@ -239,12 +257,19 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             raise ValueError("entry_machine_input_deadline_expired")
     except Exception as exc:
         error = str(exc) or type(exc).__name__
+        fields["entry_machine_input_failure_phase"] = phase
         as_of = time.time()
         ws, ticks, context = copy.deepcopy((ws_data, recent_ticks, candle_context))
         ws = ws if isinstance(ws, dict) else {}
         context = context if isinstance(context, dict) else {}
     fields.update(entry_machine_input_as_of=as_of,
                   entry_machine_input_refresh_ms=round((time.perf_counter() - started) * 1000, 3))
+    if deadline_epoch is not None:
+        try:
+            remaining_ms = (float(deadline_epoch) - time.time()) * 1000
+            fields['entry_machine_input_budget_after_freeze_ms'] = round(remaining_ms, 3) if math.isfinite(remaining_ms) else None
+        except (ValueError, TypeError, OverflowError):
+            fields['entry_machine_input_budget_after_freeze_ms'] = None
     if isinstance(context, dict):
         snapshot = context.get("ai_market_snapshot_v1") or {}
         snapshot = snapshot if isinstance(snapshot, dict) else {}

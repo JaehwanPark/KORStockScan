@@ -163,7 +163,9 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         prior_path, consumed_path = _paths(day, previous)
         prior, consumed = _read(prior_path), _read(consumed_path)
         if (selection.get('approved_by') != 'user'
-                or selection.get('approval_scope') != 'machine_auxiliary_path_repair_deploy_and_restart'
+                or selection.get('approval_scope') not in {
+                    'machine_auxiliary_path_repair_deploy_and_restart',
+                    'entry_input_deadline_repair_deploy_and_restart'}
                 or prior.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
                 or prior.get('authority') != CONFIRM or prior.get('status') != 'prepared_verified'
                 or prior.get('target_date') != day or prior.get('selected_release_commit') != previous
@@ -184,6 +186,7 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         if any(prior.get('frozen_files', {}).get(str(p)) != _sha(p) for p in required):
             raise ValueError('entry_consumer_original_generation_changed')
     allowed = {
+        'src/engine/ai_engine_openai.py': {'_final_entry_machine_inputs'},
         'src/engine/sniper_state_handlers.py': {'_resolve_watching_state_change_refresh', '_get_live_entry_arm'},
         'src/engine/scalping/pre_submit_delay_tuning.py': {'_verify_runtime_code_contract', 'prepare_runtime_policy'},
         'src/engine/automation/runtime_policy_bootstrap.py': {'_pre_submit_delay_handoff'},

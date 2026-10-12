@@ -2195,6 +2195,12 @@ def record_ai_decision_trace(
                 key: merged[key]
                 for key in (
                     "entry_machine_input_preparation_ms",
+                    "entry_machine_input_initial_copy_ms",
+                    "entry_machine_input_refreshed_copy_ms",
+                    "entry_machine_input_feature_build_ms",
+                    "entry_machine_input_budget_at_freeze_ms",
+                    "entry_machine_input_budget_after_freeze_ms",
+                    "entry_machine_input_failure_phase",
                     "entry_machine_input_preparation_stages_ms",
                     "entry_machine_input_local_refresh_ms",
                     "entry_machine_input_canonical_revalidation_ms",

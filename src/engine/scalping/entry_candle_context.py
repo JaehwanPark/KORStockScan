@@ -1658,7 +1658,8 @@ def build_entry_candle_context(
 
 
 def revalidate_entry_candle_snapshot(
-    context: dict[str, Any], ws_data: dict[str, Any], *, now_ts: float
+    context: dict[str, Any], ws_data: dict[str, Any], *, now_ts: float,
+    _owned_inputs: bool = False,
 ) -> dict[str, Any]:
     """Rebind market inputs after preparation without fetching or restamping bars.
 
@@ -1684,7 +1685,9 @@ def revalidate_entry_candle_snapshot(
         or now_ts < captured.timestamp()
     ):
         raise ValueError("entry_context_revalidation_clock_invalid")
-    result = copy.deepcopy(context)
+    # The final machine freeze already owns a detached input graph. Public
+    # callers keep the original copy contract; only that owner opts in.
+    result = context if _owned_inputs else copy.deepcopy(context)
     source_route = str(context.get("ws_route") or "")
     if source_route == "unknown":
         source_route = ""
@@ -1700,7 +1703,9 @@ def revalidate_entry_candle_snapshot(
             raise ValueError("entry_context_candle_age_invalid")
         # Keep the bar's original observed time, including across minute rollover.
         result["latest_bar_age_sec"] = float(age) + elapsed
-    ws = copy.deepcopy(ws_data)
+    # Only top-level optional-source fields are added below. The snapshot
+    # builder reads nested WS values; it never mutates their source graph.
+    ws = dict(ws_data) if _owned_inputs else copy.deepcopy(ws_data)
     for name in ("investor", "program"):
         source = sources.get(name) or {}
         if name == "program" and (

@@ -55,7 +55,10 @@ def test_decision_trace_keeps_existing_input_stage_timing_with_exact_attempt(mon
     _enable(monkeypatch, tmp_path)
     timing = dict(entry_machine_input_preparation_ms=300.,
         entry_machine_input_preparation_stages_ms={'policy_resolve_ms': 120., 'runtime_context_ms': 30., 'other_preparation_ms': 150.},
-        entry_machine_input_local_refresh_ms=2., entry_machine_input_canonical_revalidation_ms=3.)
+        entry_machine_input_local_refresh_ms=2., entry_machine_input_canonical_revalidation_ms=3.,
+        entry_machine_input_initial_copy_ms=1.2, entry_machine_input_refreshed_copy_ms=1.4,
+        entry_machine_input_feature_build_ms=12.0, entry_machine_input_budget_at_freeze_ms=70.,
+        entry_machine_input_budget_after_freeze_ms=-3.0, entry_machine_input_failure_phase='canonical_revalidation')
     trace.record_ai_decision_trace(dict(ai_decision_trace_id='timed-request', action='WAIT', score=50,
         evaluation_attempt_id='timed-attempt', async_origin_deadline_epoch=1791761701.675653, **timing),
         prompt_type='scalping_entry', prompt_version='continuous_reversal_auxiliary_production_v2',
