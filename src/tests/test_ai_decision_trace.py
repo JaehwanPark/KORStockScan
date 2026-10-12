@@ -105,6 +105,47 @@ def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(monk
     assert row['outcome_label_eligible'] is False
 
 
+@pytest.mark.parametrize('damage', [None, 'wrong_hash', 'credential', 'foreign_path',
+                                  'unknown_schema', 'changed_snapshot'])
+def test_native_claim_digest_survives_only_exact_public_content_binding(monkeypatch, tmp_path, damage):
+    import hashlib
+    from copy import deepcopy
+    _enable(monkeypatch, tmp_path)
+    snapshot = [{'signal_id': 'public-native-event'}, {'price': 100}]
+    generation = 'a'*64
+    token = hashlib.sha256(json.dumps([generation, 'public-native-event', snapshot],
+        sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+    registration = dict(schema='continuous_reversal_claim_registration_v1',
+        generation=generation, snapshot=deepcopy(snapshot), claim_token=token)
+    receipt = dict(schema='continuous_reversal_claim_source_receipt_v4',
+        claim_generation=generation, snapshot=deepcopy(snapshot), claim_token=token,
+        source_registration_receipt=registration)
+    if damage in {'wrong_hash', 'credential'}:
+        receipt['claim_token'] = registration['claim_token'] = (
+            'c'*64 if damage == 'wrong_hash' else 'sk-test-secret-not-a-native-digest')
+    elif damage == 'unknown_schema':
+        receipt['schema'] = registration['schema'] = 'unknown'
+    elif damage == 'changed_snapshot':
+        receipt['snapshot'][1]['price'] = registration['snapshot'][1]['price'] = 101
+    source = dict(continuous_reversal_rejected_claim_receipt=receipt)
+    if damage == 'foreign_path':
+        source = dict(unrelated=source)
+    original = deepcopy(source)
+    safe, redacted = trace.sanitize_ai_trace_value(source)
+    target = safe.get('unrelated', safe)['continuous_reversal_rejected_claim_receipt']
+    expected = token if damage is None else '[REDACTED]'
+    assert target['claim_token'] == target['source_registration_receipt']['claim_token'] == expected
+    assert redacted is (damage is not None)
+    assert source == original
+    if damage is None:
+        trace.record_ai_decision_trace(dict(ai_decision_trace_id='public-claim',
+            action='DROP', score=0, **source), prompt_type='scalping_entry',
+            prompt_version='test', result_source='mechanistic_pre_adjudication_rejected',
+            provider_called=False)
+        stored = _rows(trace._trace_path(trace._date_text()))[0]
+        assert stored['continuous_reversal_rejected_claim_receipt'] == receipt
+
+
 def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     calls = []

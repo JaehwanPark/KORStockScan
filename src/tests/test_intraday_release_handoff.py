@@ -640,7 +640,7 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
             handoff.historical_checklist_for_observer(data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
 
 
-@pytest.mark.parametrize('consumer,approval', [('sniper_state_handlers.py','machine_auxiliary_path_repair_deploy_and_restart'), ('ai_engine_openai.py','entry_input_deadline_repair_deploy_and_restart')])
+@pytest.mark.parametrize('consumer,approval', [('sniper_state_handlers.py','machine_auxiliary_path_repair_deploy_and_restart'), ('ai_engine_openai.py','entry_input_deadline_repair_deploy_and_restart'), ('monitoring/submission_bottleneck_monitor.py','ordered_intraday_deploy_and_restart')])
 @pytest.mark.parametrize('identity_mode', ['live', 'stopped', 'unbound_stopped', 'stopped_still_alive'])
 @pytest.mark.parametrize('fault', [None, 'authority', 'consumed', 'pid', 'manifest', 'policy', 'producer', 'other_function', 'verifier'])
 def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_sources(fixture, monkeypatch, fault, consumer, approval, identity_mode):
@@ -649,7 +649,9 @@ def test_entry_consumer_repair_can_verify_before_own_handoff_without_relaxing_so
     monkeypatch.setattr(handoff, '_today', lambda *a: NOW)
     name = 'src/engine/' + consumer
     own = 'src/engine/automation/intraday_release_handoff.py'
-    function = '_get_live_entry_arm' if consumer=='sniper_state_handlers.py' else '_final_entry_machine_inputs'
+    function = {'sniper_state_handlers.py': '_get_live_entry_arm',
+                'ai_engine_openai.py': '_final_entry_machine_inputs',
+                'monitoring/submission_bottleneck_monitor.py': '_reversal_lifecycle_diagnostic'}[consumer]
     original = ('def '+function+'():\n return 1\ndef hard_guard():\n return False\n').encode()
     revised = original.replace(b'return 1', b'return 2')
     if fault == 'other_function': revised = revised.replace(b'return False', b'return True')
@@ -741,3 +743,41 @@ def test_cli_and_nested_policy_readers_share_canonical_context(monkeypatch):
         with pytest.raises(SystemExit) as result:
             runpy.run_module(handoff.__name__,run_name='__main__')
     assert result.value.code==0 and called==['canonical']
+
+
+@pytest.mark.parametrize('fault', [None, 'other_function', 'producer', 'dirty', 'verifier',
+                                   'hash', 'date', 'origin'])
+def test_candidate_delay_code_is_checked_without_selection_or_runtime_mutation(fixture, monkeypatch, fault):
+    import hashlib
+    from src.engine.scalping import pre_submit_delay_initial_policy as policy
+    data, _, selected, _ = fixture
+    monkeypatch.setattr(handoff, '_today', lambda *a: NOW)
+    name = 'src/engine/monitoring/submission_bottleneck_monitor.py'
+    own = 'src/engine/automation/intraday_release_handoff.py'
+    original = b'def _reversal_lifecycle_diagnostic(row):\n return None\ndef qualify_delay(row):\n return False\n'
+    revised = original.replace(b'return None', b'return "diagnostic"')
+    if fault == 'other_function': revised = revised.replace(b'return False', b'return True')
+    if fault == 'producer': name = 'src/engine/scalping/pre_submit_delay_initial_policy.py'
+    for path, content in ((name, revised), (own, b'# reviewed\n')):
+        f = selected/path; f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(content)
+    monkeypatch.setattr(handoff, '__file__', str(selected/own))
+    monkeypatch.setattr(policy, 'CONTRACT_PATHS', (name,))
+    monkeypatch.setattr(handoff, '_selection', lambda **kw: pytest.fail('must not select candidate'))
+    monkeypatch.setattr(handoff, '_identity', lambda *a: pytest.fail('must not touch process'))
+    monkeypatch.setattr(handoff.subprocess, 'check_output', lambda command, **kw:
+        b'# reviewed\n' if command[-1].endswith(':'+own) else original if command[-1].startswith(OLD+':') else revised)
+    expected = hashlib.sha256(json.dumps({name: hashlib.sha256(original).hexdigest()},
+        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    _json(handoff.bootstrap.manifest_path(DAY), dict(selected_release_sha=NEW if fault=='origin' else OLD,
+        pre_submit_delay_handoff=dict(status='verified_initial_timing_policy',
+            target_date='wrong' if fault=='date' else DAY, code_contract_sha256='wrong' if fault=='hash' else expected)))
+    if fault == 'dirty': (selected/name).write_bytes(revised+b'# uncommitted\n')
+    if fault == 'verifier': (selected/own).write_bytes(b'# uncommitted\n')
+    before = {p: p.read_bytes() for p in data.parent.parent.rglob('*') if p.is_file()}
+    if fault:
+        with pytest.raises(ValueError): handoff.verify_candidate_delay_code(DAY, selected, NEW)
+    else:
+        result = handoff.verify_candidate_delay_code(DAY, selected, NEW)
+        assert result['status'] == 'pass' and result['actual_pid_consumed'] is False
+        assert result['changed_consumer_paths'] == [name]
+    assert before == {p: p.read_bytes() for p in data.parent.parent.rglob('*') if p.is_file()}

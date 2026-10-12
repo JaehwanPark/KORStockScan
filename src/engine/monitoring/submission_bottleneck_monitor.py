@@ -162,6 +162,21 @@ def _reversal_lifecycle_diagnostic(row):
             or receipt.get("validation_error") != row.get("machine_contract_error")):
         return None
     try:
+        registration = receipt.get('source_registration_receipt')
+        if (receipt.get('claim_token') == '[REDACTED]' and isinstance(registration, dict)
+                and registration.get('claim_token') == '[REDACTED]'):
+            # Older trace writers masked this public content digest. Rebuild it
+            # only on local copies and require the original registration hash;
+            # no source bytes, native claim or order authority are changed.
+            from src.engine.scalping.reversal_source_diagnostics import verified_registration
+            snap = receipt['supplied_snapshot']
+            token = hashlib.sha256(json.dumps([receipt['claim_generation'], snap[0]['signal_id'], snap],
+                sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+            proof = dict(registration, claim_token=token)
+            if not verified_registration(dict(token=token, generation=receipt['claim_generation'],
+                    snapshot=snap, backend=receipt.get('claim_backend')), proof):
+                return None
+            receipt = dict(receipt, claim_token=token, source_registration_receipt=proof)
         snapshot = receipt["snapshot"]
         generation = receipt["stored_generation"]
         expired_registration = False
@@ -235,9 +250,27 @@ def _reversal_lifecycle_diagnostic(row):
                 and event.get('branch_signals')
                 and all(s.get('decision_phase') == 'FIRST_UPTICK'
                         for s in event['branch_signals'].values())
-                and receipt.get('current_turn_id') is None
-                and latest[0] > event['epoch'] and latest[3] < event['confirmation_price']):
-            return 'reversal_first_signal_invalidated'
+                and latest[0] > event['epoch']):
+            # The native FIRST owner also retires an anchor when another turn
+            # replaces it, or a retreat ends it at/above the original price.
+            # Require same-lock state predicates; a missing ready row alone is not
+            # evidence of an ordinary lifecycle transition.
+            expected = dict(native_state_present=True, legacy_last_present=True,
+                latest_source_valid=True, native_epoch_matches=True,
+                first_signal_turn_matches=False, scope_generation_matches=True,
+                ready_membership_present=False)
+            predicates = receipt.get('native_predicates')
+            turn = receipt.get('current_turn_id')
+            valid_turn = turn is None
+            if isinstance(turn, str):
+                prefix, sequence = turn.rsplit(':', 1)
+                old_prefix, old_sequence = event['event_id'].rsplit(':', 1)
+                valid_turn = (prefix == old_prefix and sequence.isdecimal()
+                              and int(old_sequence) < int(sequence) <= latest[2])
+            if (isinstance(predicates, dict)
+                    and all(predicates.get(k) is v for k, v in expected.items())
+                    and latest[2] > event['native_sequence'] and valid_turn):
+                return 'reversal_first_signal_invalidated'
         if (cause == "reversal_signal_expired" and age > 5
                 and (row["machine_contract_error"] == "reversal_signal_expired_or_changed"
                      or expired_registration)):

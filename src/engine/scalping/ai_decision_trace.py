@@ -503,6 +503,34 @@ def _is_sensitive_key(key: Any) -> bool:
     return exact_or_suffix or collapsed_match
 
 
+def _native_claim_digest_is_public(value: dict, path: tuple[str, ...]) -> bool:
+    """Retain only a recomputed native snapshot digest, never arbitrary tokens."""
+    owner = ("continuous_reversal_rejected_claim_receipt",)
+    if path not in {owner, (*owner, "source_registration_receipt")}:
+        return False
+    if value.get("schema") not in {
+        "continuous_reversal_claim_registration_v1",
+        "continuous_reversal_claim_source_receipt_v1",
+        "continuous_reversal_claim_source_receipt_v2",
+        "continuous_reversal_claim_source_receipt_v3",
+        "continuous_reversal_claim_source_receipt_v4",
+    }:
+        return False
+    token = value.get("claim_token")
+    if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
+        return False
+    try:
+        snapshot = value.get("snapshot") or value.get("supplied_snapshot")
+        generation = value.get("generation") or value.get("claim_generation")
+        if not isinstance(generation, str) or not re.fullmatch(r"[0-9a-f]{64}", generation):
+            return False
+        encoded = json.dumps([generation, snapshot[0]["signal_id"], snapshot],
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+        return hashlib.sha256(encoded).hexdigest() == token
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+        return False
+
+
 def _sanitize(
     value: Any,
     *,
@@ -522,6 +550,8 @@ def _sanitize(
             if key_redacted:
                 safe_key = f"[REDACTED_KEY_{index}]"
                 safe_value, child_redacted = "[REDACTED]", True
+            elif child_key == "claim_token" and _native_claim_digest_is_public(value, current_path):
+                safe_value, child_redacted = child_value, False
             else:
                 safe_value, child_redacted = _sanitize(
                     child_value,

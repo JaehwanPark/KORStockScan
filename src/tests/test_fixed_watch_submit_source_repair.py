@@ -217,6 +217,8 @@ def _native_reversal_claim(monkeypatch):
 @pytest.mark.parametrize('version', ['v5', 'v6'])
 @pytest.mark.parametrize('case,expected', [
     ('down', 'reversal_first_signal_invalidated'),
+    ('flat', 'reversal_first_signal_invalidated'),
+    ('replacement', 'reversal_first_signal_invalidated'),
     ('expire', 'reversal_signal_expired'),
     ('epoch', None), ('invalid_source', None), ('bad_quote', None),
 ])
@@ -259,10 +261,16 @@ def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeyp
             state.observe(tick, symbol='403870', venue='SOR', session='SOR_REGULAR')
     update = row(128 if case == 'expire' else 123, 99)
     update[9] = '403870_AL'
+    if case == 'flat': update[3:6] = [101, 101, 101]
     if case == 'epoch': update[1] += 1
     if case == 'invalid_source': update[8] = 0
     if case == 'bad_quote': update[4:6] = [101, 99]
     state.observe(update, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    if case in {'replacement', 'flat'}:
+        update = row(124, 100)
+        update[9] = '403870_AL'
+        state.observe(update, symbol='403870', venue='SOR', session='SOR_REGULAR')
+        now = at + 2
     monkeypatch.setattr(DIAG.time, 'time', lambda: now)
     before = deepcopy((claim, B._CLAIMS))
     with pytest.raises(ValueError) as native:
@@ -279,6 +287,28 @@ def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeyp
         machine_bundle_sha256='b'*64, machine_contract_error=str(measured.value),
         provider_called=False, continuous_reversal_rejected_claim_receipt=receipt)
     assert _reversal_lifecycle_diagnostic(trace) == expected
+    if case in {'down', 'flat', 'replacement'}:
+        from src.engine.scalping.ai_decision_trace import sanitize_ai_trace_value
+        stored, redacted = sanitize_ai_trace_value(trace)
+        assert not redacted
+        assert _reversal_lifecycle_diagnostic(stored) == expected
+        masked = deepcopy(trace)
+        masked_receipt = masked['continuous_reversal_rejected_claim_receipt']
+        masked_receipt['claim_token'] = '[REDACTED]'
+        masked_receipt['source_registration_receipt']['claim_token'] = '[REDACTED]'
+        preserved = deepcopy(masked)
+        assert _reversal_lifecycle_diagnostic(masked) == expected
+        assert masked == preserved
+        masked_receipt['source_registration_receipt']['sha256'] = 'c'*64
+        assert _reversal_lifecycle_diagnostic(masked) is None
+        for field in receipt['native_predicates']:
+            broken = deepcopy(receipt)
+            broken['native_predicates'].pop(field)
+            assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=broken)) is None
+        for turn in ['', 'foreign:1', claim['snapshot'][0]['event_id'],
+                     claim['snapshot'][0]['event_id'].rsplit(':', 1)[0]+':999999']:
+            broken = dict(receipt, current_turn_id=turn)
+            assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=broken)) is None
     clock = datetime.fromtimestamp(now+.1, B.K.KST)
     _source_gap_files(tmp_path, clock, traces=[trace])
     result = source_gap_semantics(tmp_path, clock)

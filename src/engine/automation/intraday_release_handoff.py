@@ -134,7 +134,6 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     have consumed the original manifest and still be the exact live process.
     No policy bytes, producer selection or research acceptance are rewritten.
     """
-    import ast
     _today(day, None)
     root, commit = _selection(require_selected_cwd=False)
     if Path(__file__).resolve().parents[3] != root:
@@ -194,7 +193,21 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         required = (bootstrap.manifest_path(day), bootstrap.env_path(day), _preopen_path(day))
         if any(prior.get('frozen_files', {}).get(str(p)) != _sha(p) for p in required):
             raise ValueError('entry_consumer_original_generation_changed')
+    changed = _verify_entry_code_delta(root, commit, origin, paths, expected)
+    return dict(status='verified_intraday_consumer_repair', target_date=day,
+        policy_sha256=policy_sha, origin_commit=origin, release_commit=commit,
+        code_contract_sha256=expected, runtime_code_contract_sha256=actual,
+        changed_consumer_paths=changed, policy_effect='unchanged')
+
+
+def _verify_entry_code_delta(root, commit, origin, paths, expected):
+    """Read-only code projection shared by pre-stop and selected handoff checks."""
+    import ast
+    root = Path(root)
     allowed = {
+        # Report-only lifecycle classification; delay qualification/selection
+        # and every other monitor function remain byte/AST bound.
+        'src/engine/monitoring/submission_bottleneck_monitor.py': {'_reversal_lifecycle_diagnostic'},
         'src/engine/ai_engine_openai.py': {'_final_entry_machine_inputs'},
         'src/engine/sniper_state_handlers.py': {'_resolve_watching_state_change_refresh', '_get_live_entry_arm'},
         'src/engine/scalping/pre_submit_delay_tuning.py': {'_verify_runtime_code_contract', 'prepare_runtime_policy'},
@@ -234,10 +247,35 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode('ascii')).hexdigest()
     if original_digest != expected:
         raise ValueError('entry_consumer_original_code_contract_invalid')
-    return dict(status='verified_intraday_consumer_repair', target_date=day,
-        policy_sha256=policy_sha, origin_commit=origin, release_commit=commit,
-        code_contract_sha256=expected, runtime_code_contract_sha256=actual,
-        changed_consumer_paths=changed, policy_effect='unchanged')
+    return changed
+
+
+def verify_candidate_delay_code(day, root, commit):
+    """Reject an incompatible delay consumer before the running Main is drained.
+
+    This does not select the candidate, publish receipts or authorize startup;
+    the normal custody and full bootstrap checks still run after selection.
+    The ordered caller verifies the incumbent bootstrap first.
+    """
+    _today(day, None)
+    root = Path(root).resolve(strict=True)
+    if Path(__file__).resolve().parents[3] != root:
+        raise ValueError('entry_consumer_candidate_code_mismatch')
+    manifest = _read(bootstrap.manifest_path(day))
+    origin = manifest.get('selected_release_sha')
+    if not origin or origin != _preopen(day).get('selected_release_commit'):
+        raise ValueError('entry_consumer_origin_invalid')
+    bound = manifest.get('pre_submit_delay_handoff') or {}
+    if bound.get('status') != 'verified_initial_timing_policy':
+        return dict(status='not_applicable', target_date=day)
+    if bound.get('target_date') != day or not bound.get('code_contract_sha256'):
+        raise ValueError('entry_consumer_policy_binding_invalid')
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    changed = _verify_entry_code_delta(root, commit, origin,
+        {name: name for name in CONTRACT_PATHS}, bound['code_contract_sha256'])
+    return dict(status='pass', target_date=day, origin_commit=origin,
+                release_commit=commit, changed_consumer_paths=changed,
+                policy_effect='unchanged', actual_pid_consumed=False)
 
 
 def _checked_bootstrap(day, pid):

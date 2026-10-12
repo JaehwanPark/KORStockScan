@@ -193,3 +193,40 @@ def test_supervisor_retry_only_while_session_and_child_absent(monkeypatch,damage
         assert len(calls)==(3 if damage=='all_fail' else 1)
     else:
         D._launch(dict(command=['tmux'],cwd='/unused'));assert len(calls)==2
+
+
+def test_incompatible_candidate_is_rejected_before_hold_or_restart(driver, monkeypatch):
+    d = driver
+    monkeypatch.setattr(D, '__file__', str(d.candidate/'src/engine/automation/ordered_intraday_deploy.py'))
+    monkeypatch.setattr(D.R, 'selected_release', lambda workspace: (d.previous, d.previous_commit))
+    monkeypatch.setattr(D.R, 'git', lambda *a: d.commit)
+    monkeypatch.setattr(D.R, 'validate_release', lambda *a: (d.candidate, d.commit))
+    monkeypatch.setattr(D.H, '_identity', lambda pid: d.identity)
+    monkeypatch.setattr(D, '_main_pids', lambda: [123])
+    read_text, read_bytes = Path.read_text, Path.read_bytes
+    def stat(path, *args, **kwargs):
+        if str(path) in ('/proc/123/stat', '/proc/124/stat'):
+            return '123 (python) ' + ' '.join(['S', '124'] + ['0']*17 + ['456'])
+        return read_text(path, *args, **kwargs)
+    def command(path, *args, **kwargs):
+        if str(path) == '/proc/124/cmdline':
+            return b'/bin/bash\0' + str(d.previous/'src/run_bot.sh').encode() + b'\0'
+        return read_bytes(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_text', stat)
+    monkeypatch.setattr(Path, 'read_bytes', command)
+    calls = []
+    def incumbent(root, module, *args, **kwargs):
+        calls.append(module)
+        return {'status': 'pass', 'handoff': {'frozen_files': d.frozen}}
+    d.run_json = incumbent
+    def incompatible(day, root, commit):
+        assert len(calls) == 2 and root == d.candidate and commit == d.commit
+        assert not d.hold.exists() and not d.flag.exists()
+        assert d.selection.read_bytes() == d.before
+        raise ValueError('entry_consumer_unreviewed_change:producer')
+    monkeypatch.setattr(D.H, 'verify_candidate_delay_code', incompatible)
+    with pytest.raises(ValueError, match='entry_consumer_unreviewed_change'):
+        D.execute(d)
+    assert d.state['failed_phase'] == 'preflight'
+    assert not d.hold.exists() and not d.flag.exists()
+    assert d.selection.read_bytes() == d.before and d.checklist.read_bytes() == d.document_before

@@ -175,6 +175,8 @@ class Deployment:
         self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
                       '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
         self.frozen = check['handoff']['frozen_files']
+        code_check = H.verify_candidate_delay_code(self.day, self.candidate, self.commit)
+        _atomic(self.directory / 'candidate-delay-code.json', _json_bytes(code_check))
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
         self.document_before = self.checklist.read_bytes()
         self.document_after = subprocess.check_output(['git', '-C', str(self.candidate), 'show',
