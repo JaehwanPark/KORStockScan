@@ -2194,6 +2194,10 @@ def record_ai_decision_trace(
             "transport_timing": {
                 key: merged[key]
                 for key in (
+                    "entry_machine_input_preparation_ms",
+                    "entry_machine_input_preparation_stages_ms",
+                    "entry_machine_input_local_refresh_ms",
+                    "entry_machine_input_canonical_revalidation_ms",
                     "ai_trace_prepare_ms",
                     "ai_trace_lock_wait_ms",
                     "ai_trace_dedup_init_ms",

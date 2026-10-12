@@ -50,6 +50,24 @@ def test_async_request_binding_survives_capture_return_and_actual_trace(monkeypa
     assert row['entry_auxiliary_policy_sha256']=='c'*64
 
 
+@pytest.mark.parametrize('provider_called,result_source', [(True, 'live'), (True, 'timeout'), (False, 'mechanistic_pre_adjudication_rejected')])
+def test_decision_trace_keeps_existing_input_stage_timing_with_exact_attempt(monkeypatch, tmp_path, provider_called, result_source):
+    _enable(monkeypatch, tmp_path)
+    timing = dict(entry_machine_input_preparation_ms=300.,
+        entry_machine_input_preparation_stages_ms={'policy_resolve_ms': 120., 'runtime_context_ms': 30., 'other_preparation_ms': 150.},
+        entry_machine_input_local_refresh_ms=2., entry_machine_input_canonical_revalidation_ms=3.)
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='timed-request', action='WAIT', score=50,
+        evaluation_attempt_id='timed-attempt', async_origin_deadline_epoch=1791761701.675653, **timing),
+        prompt_type='scalping_entry', prompt_version='continuous_reversal_auxiliary_production_v2',
+        result_source=result_source, provider_called=provider_called)
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row['transport_timing'] == timing
+    assert row['evaluation_attempt_id'] == 'timed-attempt'
+    assert row['async_origin_deadline_epoch'] == 1791761701.675653
+    assert row['provider_called'] is provider_called
+    assert row['actual_order_submitted'] is False
+
+
 @pytest.mark.parametrize('schema', ['continuous_reversal_claim_source_receipt_v1',
                                    'continuous_reversal_claim_source_receipt_v2',
                                    'continuous_reversal_claim_source_receipt_v3',

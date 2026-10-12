@@ -46,6 +46,47 @@ def test_one_evaluation_is_immutable_and_next_boundary_revalidates(loader):
     assert len(calls)==2
 
 
+def test_verified_copy_preserves_ownership_aliases_cycles_and_unknown_protocol():
+    class Custom:
+        def __deepcopy__(self, memo):
+            result = Custom()
+            memo[id(self)] = result
+            return result
+
+    child = N._FrozenList([1, "scalar", {"nested": [None, True, 1.25]}])
+    custom = Custom()
+    source = N._FrozenDict({"first": child, "alias": child, "custom": custom})
+    # Construct the cycle through the base method, like deepcopy's own memo
+    # protocol; ordinary verified consumers cannot mutate either container.
+    list.append(child, source)
+    owned = copy.deepcopy(source)
+    assert type(owned) is dict and type(owned["first"]) is list
+    assert owned["first"] is owned["alias"]
+    assert owned["first"][-1] is owned
+    assert owned["custom"] is not custom
+    owned["first"][2]["nested"].append("owned")
+    assert child[2]["nested"] == [None, True, 1.25]
+    with pytest.raises(TypeError):
+        source["other"] = 1
+
+
+def test_verified_copy_uses_scalar_fast_path_without_losing_full_policy(loader, monkeypatch):
+    root, path, calls = loader
+    N.load_effective(data_root=root, target_date='2026-10-08')
+    original = copy.deepcopy
+    dispatched = []
+    def checked(value, memo=None):
+        dispatched.append(type(value))
+        return original(value, memo)
+    monkeypatch.setattr(copy, 'deepcopy', checked)
+    first = N.load_effective(data_root=root, target_date='2026-10-08')
+    first['continuous_reversal']['cells'][0]['value'] = 99
+    second = N.load_effective(data_root=root, target_date='2026-10-08')
+    assert second['continuous_reversal']['cells'] == [{'value': 1}]
+    assert set(dispatched) == {N._FrozenDict}
+    assert len(calls) == 1
+
+
 def test_same_mtime_size_and_atomic_replacement_invalidate(loader):
     root,path,calls=loader
     N.load_effective(data_root=root,target_date='2026-10-08')

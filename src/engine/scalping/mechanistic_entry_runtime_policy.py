@@ -135,7 +135,7 @@ class _FrozenDict(dict):
 
     def __deepcopy__(self, memo):
         # Compatibility callers explicitly requesting a copy receive ownership.
-        return {copy.deepcopy(k, memo): copy.deepcopy(v, memo) for k, v in self.items()}
+        return _copy_verified_container(self, memo)
 
 
 class _FrozenList(list):
@@ -144,7 +144,43 @@ class _FrozenList(list):
     __setitem__ = __delitem__ = append = extend = insert = pop = remove = clear = sort = reverse = __iadd__ = __imul__ = _deny
 
     def __deepcopy__(self, memo):
-        return [copy.deepcopy(v, memo) for v in self]
+        return _copy_verified_container(self, memo)
+
+
+_POLICY_ATOMIC_TYPES = frozenset((str, int, float, bool, bytes, type(None)))
+
+
+def _copy_verified_container(value, memo):
+    """Materialize owned JSON containers without deepcopy dispatch per scalar.
+
+    No validation is skipped: the loader checks every dependency before issuing
+    a copy. Memo ownership preserves aliases/cycles and unknown objects retain
+    the complete deepcopy protocol. This also avoids sharing mutable children
+    with the verified cache at pre-provider and post-response boundaries.
+    """
+    kind = type(value)
+    if kind in _POLICY_ATOMIC_TYPES:
+        return value
+    ident = id(value)
+    if ident in memo:
+        return memo[ident]
+    if kind in (_FrozenDict, dict):
+        result = value.copy()
+        memo[ident] = result
+        for key, item in value.items():
+            if type(key) not in _POLICY_ATOMIC_TYPES:
+                del result[key]
+                result[_copy_verified_container(key, memo)] = _copy_verified_container(item, memo)
+            elif type(item) not in _POLICY_ATOMIC_TYPES:
+                result[key] = _copy_verified_container(item, memo)
+        return result
+    if kind in (_FrozenList, list):
+        result = []
+        memo[ident] = result
+        result.extend(item if type(item) in _POLICY_ATOMIC_TYPES else _copy_verified_container(item, memo)
+                      for item in value)
+        return result
+    return copy.deepcopy(value, memo)
 
 
 def _freeze(value):
