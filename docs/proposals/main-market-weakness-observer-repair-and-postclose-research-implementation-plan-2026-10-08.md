@@ -302,3 +302,9 @@ MW2–MW5 신규 연구 코드의 구현·자체 반복 리뷰는 완료했다. 
 root 관리자가 ubuntu 예약을 설치할 때 연구 디렉터리와 설정의 소유권을 맞추고, 실제 cron 재조회가 일치해야 설치 완료로 표시한다. 배포는 현행 selected release를 부모로 하는 **약세 관찰·독립 연구·AI 기록 수리의 명시 파일 목록**으로 만들고 별도 보유청산 작업본은 보존한다. 기존 필수 cron·controller·봉인 checklist를 변경하지 않으며, 새 release에 맞는 10/12 준비 영수증을 재생성·검증한다. Main 현재 프로세스와 자연 소비는 별도로 확인한다.
 
 최종 코드·배포 검증과 잔여 자연 수용은 [후속 배포 리뷰](../audits/main-market-weakness-review-deployment-2026-10-09.md)에 기록한다. §12–§13의 미배포·기존 실패 수치는 앞선 회차의 역사다.
+
+## 15. 10/13 새 연결 결함과 후속 계획
+
+10/13 결과 점검에서 실제 야간 일별·누적 생성과 optional 예약 소비를 확인했다. 점검 누적 10/7·10/8·10/12의 16,722개 기록은 전부 상장시장 미연결 UNKNOWN, 자연 trace 1,534개는 exact label 미연결 U, 조정 후보는 0개다. 종목 마스터와 자연 trace의 gzip-only 원천 누락, native 판정 본문의 기존 payload 연결 부족을 새 결함으로 확인했다. 날짜별 global hash로 인한 비교 cohort 단절 가능성과 기계 후보 미지원도 종료 범위를 구체화해야 한다. 과거 구현/배포 검증을 취소하거나 원천 부재를 no-edge로 바꾸지 않는다.
+
+후속 순서와 직접 consumer·압축/연결/누적/후보 회귀·자원·설치 code rebind·자연 수용은 [10/13 결함보완계획](main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md)의 WR0–WR5를 따른다. 현재 실행 인계는 10/13 checklist의 **동일** `MainMarketWeaknessPostcloseObservation1008`이며 §12–§14는 날짜별 역사다. 이번 후속 요청은 계획 수립이고 수리 코드·재생성·배포·예약 변경·Telegram 전송은 실행하지 않는다.
