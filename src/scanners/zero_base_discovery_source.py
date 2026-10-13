@@ -81,7 +81,7 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
             else:
                 rows, meta = fetcher(
                     token, mrkt_tp=mrkt_tp, trde_qty_cnd="0000",
-                    limit=MAX_ROWS_PER_PANEL, stex_tp=stex_tp, sort_tp="1",
+                    limit=MAX_ROWS_PER_PANEL, max_pages_limit=1, stex_tp=stex_tp, sort_tp="1",
                     stk_cnd="4", crd_cnd="0", updown_incls="1",
                     pric_cnd="0", trde_prica_cnd="0", pure_equity_only=True,
                     request_owner="zero_base_discovery_panel",

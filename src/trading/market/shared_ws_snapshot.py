@@ -158,7 +158,8 @@ def completed_bar_window_usable(bars):
     )
 
 
-def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=None, allow_partial_history=False):
+def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=None,
+                               allow_partial_history=False, require_fresh_snapshot=False):
     """Historical bar clocks are causal; no quote-age TTL and no recovery I/O."""
     from src.engine.scalping.micro_reversion.completed_bars import SCHEMA, digest, item_integrity
     if now.tzinfo is None or not re.fullmatch(r"[0-9]{6}_AL", request_code):
@@ -175,7 +176,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
         raise ValueError("completed_bar_live_binding_invalid") from exc
     snapshot_age = now.timestamp() - snapshot["generated_at_epoch"]
     if (not math.isfinite(snapshot_age) or snapshot_age < 0
-            or (not allow_partial_history and snapshot_age > 20)
+            or ((not allow_partial_history or require_fresh_snapshot) and snapshot_age > 20)
             or producer["connection_available"] is not True
             or producer["process"] != live_process
             or request_code not in producer["registered_items"]):
@@ -298,7 +299,9 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
 
 
-def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None, required_adjustment=None):
+def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_fetch=None,
+                                   minimum_bars=1, history_scope="rolling", selection_receipt=None,
+                                   required_adjustment=None, allow_partial_history=False):
     mode = completed_bar_mode(request_code, consumer=consumer)
     selection = selection_receipt if selection_receipt is not None else {}
     selection.update(mode=mode, minimum_bars=minimum_bars, history_scope=history_scope)
@@ -329,8 +332,10 @@ def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_f
                 selection.update(status='rest_retained', reason='price_basis_equivalence_unproven')
                 return None
             raise ValueError('price_basis_equivalence_unproven')
-        partial = False if consumer == "main" else observed_completed_bar_history_enabled()
-        result = read_shared_completed_bars(item, now=now, **({"allow_partial_history": True} if partial else {}))
+        partial = allow_partial_history if consumer == "main" else observed_completed_bar_history_enabled()
+        result = read_shared_completed_bars(item, now=now, **({
+            "allow_partial_history": True, "require_fresh_snapshot": True,
+        } if partial and consumer == "main" else {"allow_partial_history": True} if partial else {}))
         if (required_adjustment is not None
                 and result['_completed_bar_source'].get('adjustment') != required_adjustment):
             if mode == 'ws_when_ready':

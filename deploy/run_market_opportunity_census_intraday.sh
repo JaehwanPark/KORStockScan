@@ -70,6 +70,7 @@ capture_cmd=(
   --target-date "$TARGET_DATE"
   --capture
   --capture-only
+  --skip-executable-bbo
   --venues "$venues"
   --panels all,liquid_common
   --limit 200

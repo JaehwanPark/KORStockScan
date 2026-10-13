@@ -61301,6 +61301,7 @@ def _resolve_scanner_async_entry_ai(
             limit=40,
             now_ts=time.time(),
             allow_integrated_sor_execution_view=True,
+            reduced_inputs=True,
         )
         budget.require()
         from src.engine.monitoring.runtime_performance import observe
@@ -61339,7 +61340,7 @@ def _resolve_scanner_async_entry_ai(
             now_ts=time.time(),
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
-            include_investor_source=True,
+            include_investor_source=False,
             entry_budget=budget,
         )
         budget.require()
@@ -61382,24 +61383,10 @@ def _resolve_scanner_async_entry_ai(
                 refreshed.get("candle_context") or {},
             )
             budget.require()
-            # Prepare once for the final quote, not the earlier preparation price.
-            # This remains the existing worker and the same source-only budget.
+            # Capacity is demand-driven after the machine verdict, never for
+            # every prepared BLOCK/RECHECK observation.
             refreshed["entry_capacity_prefetch"] = {
-                "status": "skipped", "reason": "noninitial_or_nonreal_scope"}
-            stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
-            if (_safe_int(stock_snapshot.get("buy_qty"), 0) <= 0
-                    and not _is_any_simulated_position(stock_snapshot, stock_snapshot.get("strategy"))):
-                capacity_started = time.perf_counter()
-                budget.require()
-                refreshed["entry_capacity_prefetch"] = _prefetch_entry_capacity_for_async_evaluation(
-                    code, refreshed.get("ws_data") or {}, async_context.deadline_epoch,
-                    correlation_id=async_context.request_id,
-                    diagnostic_context={name: (refreshed.get("ws_data") or {}).get(name)
-                        or stock_snapshot.get(name) for name in (
-                            "broker_route", "effective_venue", "session_bucket")})
-                budget.require()
-                from src.engine.monitoring.runtime_performance import observe
-                observe("capacity_prepare",time.perf_counter()-capacity_started)
+                "status": "skipped", "reason": "awaiting_machine_enter_now"}
         return refreshed
 
     def refresh_before_evaluate(async_context, prepared):
@@ -61422,14 +61409,23 @@ def _resolve_scanner_async_entry_ai(
                 "ai_result_source": "fail_closed_before_provider",
             }
         stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        budget = EntryDeadline.create(caller_epoch=async_context.deadline_epoch,
+                                      caller_perf=async_context.deadline_perf)
+
+        def observe_economics(**facts):
+            with kiwoom_utils.entry_source_budget(budget):
+                return _observe_entry_economics_before_ai(
+                    stock_snapshot, code, facts.pop('observation_ws_data',
+                        thaw_scanner_async_value(prepared.get('ws_data') or {})), **facts)
+
         decision = dict(
             ai_engine.analyze_target(
                 stock_snapshot.get("name") or code,
                 thaw_scanner_async_value(prepared.get("ws_data") or {}),
                 thaw_scanner_async_value(prepared.get("recent_ticks") or []),
                 thaw_scanner_async_value(prepared.get("recent_candles") or []),
-                entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
-                    stock_snapshot, code, facts.pop('observation_ws_data', thaw_scanner_async_value(prepared.get('ws_data') or {})), **facts),
+                entry_economics_observer=observe_economics,
                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
                 entry_input_deadline_epoch=async_context.deadline_epoch,
                 entry_input_deadline_perf=async_context.deadline_perf,
@@ -62732,6 +62728,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=now_ts,
                                 broker_route=(fixed_source_route or {}).get("broker_route"),
                                 allow_integrated_sor_execution_view=True,
+                                reduced_inputs=True,
                             )
                         )
                     if ws_data.get("orderbook") and recent_ticks:
@@ -62769,7 +62766,7 @@ def _handle_watching_strategy_branch(
                                 recent_candles=recent_candles,
                                 source_meta=candle_source_meta,
                                 broker_route=(fixed_source_route or {}).get("broker_route"),
-                                include_investor_source=True,
+                                include_investor_source=False,
                             )
                             stock.pop("ai_wait_rebound_recheck_pending", None)
                             (

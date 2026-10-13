@@ -42,6 +42,8 @@ class SniperRadar:
     # ==========================================
     def _on_realtime_tick(self, payload):
         """웹소켓에서 'REALTIME_TICK_ARRIVED' 이벤트가 올 때마다 자동 실행됩니다."""
+        if not self.event_bus.has_subscribers("TRADE_SIGNAL_DETECTED"):
+            return
         code = payload.get("code")
         ws_data = payload.get("data")
 

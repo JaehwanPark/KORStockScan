@@ -686,6 +686,24 @@ def _request_broker_snapshot_refresh_after_execution(*, code: str, reason: str) 
     )
 
 
+def _periodic_broker_snapshot_required(targets):
+    """Optional context polling serves real positions/orders or watch admission."""
+    if getattr(_reconcile_main_fixed_watch, 'broker_refresh_needed', False):
+        return True
+    for target in targets:
+        if str(target.get('status') or '').upper() not in {'WATCHING', 'EXPIRED', 'COMPLETED'}:
+            return True  # Unknown state retains conservative reconciliation.
+        try:
+            quantity = float(str(target.get('buy_qty') or 0).replace(',', ''))
+            if not math.isfinite(quantity) or quantity != 0:
+                return True
+        except (TypeError, ValueError):
+            return True
+        if any(target.get(k) for k in ('buy_ord_no', 'sell_ord_no', 'pending_cancel_ord_no')):
+            return True
+    return False
+
+
 MARKET_REGIME = MarketRegimeService(refresh_minutes=15)
 bind_market_regime_dependencies(market_regime=MARKET_REGIME)
 bind_condition_dependencies(db=DB, event_bus=event_bus, active_targets=ACTIVE_TARGETS)
@@ -6151,6 +6169,11 @@ def _reconcile_main_fixed_watch(targets, *, now_ts, publish_reg):
                 log_info(f"[MAIN_FIXED_WATCH] code={code} admission waiting reason={outcome}")
                 waits[code] = (outcome, now_ts)
                 _reconcile_main_fixed_watch.waits = waits
+    _reconcile_main_fixed_watch.broker_refresh_needed = any(
+        reason in {'broker_snapshot_missing_or_stale', 'broker_exchange_census_incomplete',
+                   'broker_inventory_rows_invalid', 'broker_open_orders_unverified',
+                   'broker_open_order_rows_invalid'} for reason in
+        (value.rsplit(':', 1)[-1] for value in outcomes.values()))
     return outcomes.get(main_fixed_watch.SAMSUNG_CODE, "disabled")
 
 
@@ -13167,6 +13190,7 @@ def run_sniper(is_test_mode=False):
             elif (
                 now_ts - getattr(run_sniper, "last_broker_snapshot_refresh_time", 0)
                 > BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC
+                and _periodic_broker_snapshot_required(targets)
             ):
                 if _submit_account_task(
                     task_kind="broker_snapshot_read_only",

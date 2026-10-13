@@ -50,6 +50,7 @@ def test_integrated_panels_keep_unobserved_scope_and_shared_budget():
     assert all(call["request_class"] == REQUEST_CLASS_SOURCE_ONLY for call in calls)
     assert all(call["read_rate_max_wait_sec"] == 3.0 for call in calls)
     assert all(call["limit"] == 200 and call["trde_qty_cnd"] == "0000" for call in calls)
+    assert all(call['max_pages_limit'] == 1 for call in calls)
     assert len({row["source_sha256"] for row in result["observations"]}) == 2
 
 

@@ -111,6 +111,18 @@ REVIEWED_JOINT_CONSUMER_SOURCES = {
         '95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd'),
 }
 
+# Reviewed optional REST removal and completed-only initial entry inputs.
+# Exact original PREOPEN-to-candidate bytes; retain all earlier consumed pairs.
+# Evidence: docs/audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md.
+REVIEWED_REST_REDUCTION_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '5c0b5e1b97e50ed1bd80c4084795a40eaa430c62a8d52cb30b338dbbf7c574ca',
+        'b7435b6001fc5901f601879a08fa4e61b7c337187e1ac58db5e93984768beaa3'),
+    'src/engine/kiwoom_sniper_v2.py': (
+        '96319c0071dfce04980af151ff9e22b91352a704281bb727c8e68d604ee6aa20',
+        '6f1abc2ad7c532d693b832fb041ff519874ce141b52d2f1c724b445467440c0e'),
+}
+
 # Incumbent stop consumer compatibility only; numerical selection and research
 # remain pinned to the full current implementation generation.
 # Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
@@ -408,6 +420,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ENTRY_RESPONSE_SOURCES.get(name),
                     REVIEWED_ENTRY_STORAGE_SOURCES.get(name),
                     REVIEWED_JOINT_CONSUMER_SOURCES.get(name),
+                    REVIEWED_REST_REDUCTION_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
             changed.append(name)
             continue

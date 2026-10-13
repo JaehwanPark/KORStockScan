@@ -322,11 +322,18 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
     stock=dict(code='005930',name='Samsung',status='WATCHING',effective_venue='SOR',buy_qty=0,
                _continuous_reversal_pending_claim=claim)
     monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:{'item':'005930_AL','broker_route':'SOR'})
-    monkeypatch.setattr(H,'fetch_entry_candles_with_meta',lambda *a,**kw:([],{}))
-    monkeypatch.setattr(H,'build_entry_candle_context',lambda *a,**kw:{})
+    def candles(*args, **kwargs):
+        assert kwargs['reduced_inputs'] is True
+        return [], {}
+    def candle_context(*args, **kwargs):
+        assert kwargs['include_investor_source'] is False
+        return {}
+    monkeypatch.setattr(H,'fetch_entry_candles_with_meta',candles)
+    monkeypatch.setattr(H,'build_entry_candle_context',candle_context)
     monkeypatch.setattr(H,'_extract_ai_overlap_snapshot',lambda **kw:{})
     monkeypatch.setattr(H,'_refresh_prepared_entry_inputs',lambda code,ws,ticks,ctx:(ws,ticks,ctx,{}))
-    monkeypatch.setattr(H,'_prefetch_entry_capacity_for_async_evaluation',lambda *a,**kw:{'status':'test_cached'})
+    monkeypatch.setattr(H,'_prefetch_entry_capacity_for_async_evaluation',
+        lambda *a, **kw: pytest.fail('No capacity HTTP before machine verdict'))
     monkeypatch.setattr(H,'_scanner_async_quote_is_fresh',lambda *a,**kw:True)
     monkeypatch.setattr(H,'_log_entry_pipeline',lambda *a,**kw:None)
     monkeypatch.setattr(H,'_manual_control_exclusion_blocked',lambda *a,**kw:False)
@@ -334,6 +341,8 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
     monkeypatch.setattr(B,'acknowledge_any',lambda *a,**kw:None)
     monkeypatch.setattr(D,'validate_claim_with_receipt',lambda *a,**kw:claim['snapshot'])
     def observe(private,code,ws,**kw):
+        budget = H.kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
+        assert budget is not None and budget.epoch == claim['snapshot'][0]['epoch'] + 5
         private['_machine_observation_revision']={'test_receipt':'captured'}
         return {}
     monkeypatch.setattr(H,'_observe_entry_economics_before_ai',observe)

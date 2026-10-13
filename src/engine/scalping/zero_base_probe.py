@@ -7,6 +7,7 @@ import uuid
 import os
 import threading
 import math
+import re
 import bisect
 from types import SimpleNamespace
 from datetime import datetime
@@ -415,16 +416,30 @@ def exact_probe_rest_sources(ticks, candle_meta, *, request_code, now_epoch,
 
 
 def exact_probe_rest_source_issue(ticks, candle_meta, *, request_code, now_epoch,
-                                  allow_empty_ticks=False):
+                                  allow_empty_ticks=False, transport_epoch=None):
     """Identify the failed source field without retaining market data or credentials."""
     if (not isinstance(ticks, list) or (not ticks and not allow_empty_ticks)
         or not isinstance(candle_meta, dict)):
         return "source_shape_invalid"
     if candle_meta.get("request_code") != request_code:
         return "candle_route_mismatch"
-    candle_received = candle_meta.get("rest_received_ts_ms")
-    if not isinstance(candle_received, int) or not 0 <= now_epoch - candle_received / 1000 <= 120:
-        return "candle_receive_clock_invalid"
+    if candle_meta.get('api_id') == 'WS_0B_completed_1m':
+        source = candle_meta.get('completed_bar_source') or {}
+        generated = source.get('generated_at_epoch')
+        available = source.get('available_at_epoch')
+        if (source.get('request_code') != request_code
+                or source.get('adjustment') != 'raw_same_day'
+                or type(transport_epoch) is not int or transport_epoch <= 0
+                or source.get('transport_epoch') != transport_epoch
+                or not re.fullmatch(r'[0-9a-f]{64}', str(source.get('content_sha256', '')))):
+            return 'candle_ws_provenance_invalid'
+        if (type(generated) not in (int, float) or not 0 <= now_epoch - generated <= 20
+                or type(available) not in (int, float) or not 0 < available <= now_epoch):
+            return 'candle_ws_clock_invalid'
+    else:
+        candle_received = candle_meta.get("rest_received_ts_ms")
+        if not isinstance(candle_received, int) or not 0 <= now_epoch - candle_received / 1000 <= 120:
+            return "candle_receive_clock_invalid"
     for tick in ticks:
         if not isinstance(tick, dict) or tick.get("request_code") != request_code:
             return "tick_route_mismatch"
@@ -642,6 +657,7 @@ def run_zero_base_probe(
         request_code = resolve_entry_candle_request_code(
             code, venue=venue, session=session, ws_data=ws_data,
         )
+        ticks, candles, candle_meta, context = [], [], {}, {}
         try:
             def source_readiness_guard():
                 expected=request.get('consumer_readiness')
@@ -678,83 +694,85 @@ def run_zero_base_probe(
                 result['first_data_branch_readiness'] = branch_readiness(descriptor_candidate,
                     now=now(), deadline=native_wait_deadline_epoch,
                     original_requirements=claim.get('observation_requirements'))
-            candles, candle_meta = candle_fetcher(
-                token, code, ws_data, venue=venue, session=session, limit=40,
-                now_ts=now(), allow_integrated_sor_execution_view=True,
-                request_owner="zero_base_machine_probe",
-                request_class=REQUEST_CLASS_SOURCE_ONLY,
-            )
-            if not candles:
-                result["result"] = "required_feature_insufficient"
-                result["reason"] = "candle_source_missing"
-                result["machine_source_gap_kind"] = "candle_source_missing"
-                result["rest_source_gap_detail"] = str((candle_meta or {}).get(
-                    "read_rate_control_reason") or (candle_meta or {}).get(
-                    "source_error") or "candle_rows_missing")[:160]
-                return result
-            candle_issue = exact_probe_rest_source_issue(
-                [], candle_meta, request_code=request_code, now_epoch=now(),
-                allow_empty_ticks=True,
-            )
-            if candle_issue:
-                result["reason"] = "rest_route_or_receive_clock_invalid"
-                result["rest_source_gap_detail"] = candle_issue
-                return result
-            # Reuse exactly the machine feature owner's selection rule. Refresh
-            # after the chart read; a pre-read WS window may have aged/reconnected.
-            ws_data, source_reason = exact_probe_ws_data(
-                probe_ws_snapshot(ws_manager, code=code, route=route),
-                code=code, route=route, after_epoch=registered_epoch, now_epoch=now(),
-            )
-            if not ws_data:
-                result["reason"] = "pre_tick_" + source_reason
-                return result
-            _, tick_source, tick_selection_reason = _select_recent_ticks_with_source(
-                ws_data, [], now=now(),
-            )
-            result["tick_read_source"] = tick_source
-            result["tick_read_selection_reason"] = tick_selection_reason
-            # The tick clock has a 10-second bound. Fetch it last so a slow
-            # candle response cannot age a fresh tick before validation.
-            ticks = [] if tick_source == "ws_exact_route" else tick_fetcher(
-                token, request_code, limit=10,
-                request_owner="zero_base_machine_probe",
-                request_class=REQUEST_CLASS_SOURCE_ONLY,
-                explicit_request_code=True,
-            )
+            if native_wait_deadline_epoch is None:
+                candles, candle_meta = candle_fetcher(
+                    token, code, ws_data, venue=venue, session=session, limit=40,
+                    now_ts=now(), allow_integrated_sor_execution_view=True, reduced_inputs=True,
+                    request_owner="zero_base_machine_probe",
+                    request_class=REQUEST_CLASS_SOURCE_ONLY,
+                )
+                if not candles:
+                    result["result"] = "required_feature_insufficient"
+                    result["reason"] = "candle_source_missing"
+                    result["machine_source_gap_kind"] = "candle_source_missing"
+                    result["rest_source_gap_detail"] = str((candle_meta or {}).get(
+                        "read_rate_control_reason") or (candle_meta or {}).get(
+                        "source_error") or "candle_rows_missing")[:160]
+                    return result
+                candle_issue = exact_probe_rest_source_issue(
+                    [], candle_meta, request_code=request_code, now_epoch=now(),
+                    allow_empty_ticks=True, transport_epoch=ws_data.get("market_data_transport_epoch"),
+                )
+                if candle_issue:
+                    result["reason"] = "rest_route_or_receive_clock_invalid"
+                    result["rest_source_gap_detail"] = candle_issue
+                    return result
+                # Reuse exactly the machine feature owner's selection rule. Refresh
+                # after the chart read; a pre-read WS window may have aged/reconnected.
+                ws_data, source_reason = exact_probe_ws_data(
+                    probe_ws_snapshot(ws_manager, code=code, route=route),
+                    code=code, route=route, after_epoch=registered_epoch, now_epoch=now(),
+                )
+                if not ws_data:
+                    result["reason"] = "pre_tick_" + source_reason
+                    return result
+                _, tick_source, tick_selection_reason = _select_recent_ticks_with_source(
+                    ws_data, [], now=now(),
+                )
+                result["tick_read_source"] = tick_source
+                result["tick_read_selection_reason"] = tick_selection_reason
+                # The tick clock has a 10-second bound. Fetch it last so a slow
+                # candle response cannot age a fresh tick before validation.
+                ticks = [] if tick_source == "ws_exact_route" else tick_fetcher(
+                    token, request_code, limit=10,
+                    request_owner="zero_base_machine_probe",
+                    request_class=REQUEST_CLASS_SOURCE_ONLY,
+                    explicit_request_code=True,
+                )
         except Exception as exc:
             result["reason"] = "required_rest_source_failed:" + type(exc).__name__
             return result
-        exact_ws_ticks = ws_data.get("recent_trade_ticks") or []
-        if (not ticks and not exact_ws_ticks) or not candles:
-            result["result"] = "required_feature_insufficient"
-            result["reason"] = "tick_or_candle_missing"
-            return result
-        rest_source_issue = exact_probe_rest_source_issue(
-            ticks, candle_meta, request_code=request_code, now_epoch=now(),
-            allow_empty_ticks=bool(exact_ws_ticks),
-        )
-        if rest_source_issue:
-            result["reason"] = "rest_route_or_receive_clock_invalid"
-            result["rest_source_gap_detail"] = rest_source_issue
-            return result
-        # The probe owns only these two source-only REST reads. Do not let the
-        # shared context helper fan out into auxiliary index/investor requests.
-        probe_candle_meta = dict(candle_meta)
-        probe_candle_meta["multi_timeframe_auxiliary_fetch"] = False
-        try:
-            context = context_builder(
-                token, code, ws_data, venue=venue, session=session, limit=40,
-                model_bar_limit=20, now_ts=now(), recent_candles=candles,
-                source_meta=probe_candle_meta, include_investor_source=False,
+        if native_wait_deadline_epoch is None:
+            exact_ws_ticks = ws_data.get("recent_trade_ticks") or []
+            if (not ticks and not exact_ws_ticks) or not candles:
+                result["result"] = "required_feature_insufficient"
+                result["reason"] = "tick_or_candle_missing"
+                return result
+            rest_source_issue = exact_probe_rest_source_issue(
+                ticks, candle_meta, request_code=request_code, now_epoch=now(),
+                allow_empty_ticks=bool(exact_ws_ticks), transport_epoch=ws_data.get("market_data_transport_epoch"),
             )
-        except Exception as exc:
-            result["reason"] = "candle_context_failed:" + type(exc).__name__
-            return result
-        if not isinstance(context, dict):
-            result["result"] = "required_feature_insufficient"
-            result["reason"] = "candle_context_missing"
-            return result
+            if rest_source_issue:
+                result["reason"] = "rest_route_or_receive_clock_invalid"
+                result["rest_source_gap_detail"] = rest_source_issue
+                return result
+            # The probe owns only these two source-only REST reads. Do not let the
+            # shared context helper fan out into auxiliary index/investor requests.
+            probe_candle_meta = dict(candle_meta)
+            probe_candle_meta["multi_timeframe_auxiliary_fetch"] = False
+            try:
+                context = context_builder(
+                    token, code, ws_data, venue=venue, session=session, limit=40,
+                    model_bar_limit=20, now_ts=now(), recent_candles=candles,
+                    source_meta=probe_candle_meta, include_investor_source=False,
+                )
+            except Exception as exc:
+                result["reason"] = "candle_context_failed:" + type(exc).__name__
+                return result
+            if not isinstance(context, dict):
+                result["result"] = "required_feature_insufficient"
+                result["reason"] = "candle_context_missing"
+                return result
         native_budget = None
         if native_wait_deadline_epoch is not None:
             from src.engine.scalping.reversal_source_diagnostics import (
@@ -817,13 +835,35 @@ def run_zero_base_probe(
                     native_budget.require()
                     candles, candle_meta = candle_fetcher(
                         token, code, ws_data, venue=venue, session=session, limit=40,
-                        now_ts=now(), allow_integrated_sor_execution_view=True,
+                        now_ts=now(), allow_integrated_sor_execution_view=True, reduced_inputs=True,
                         request_owner='zero_base_machine_probe',
                         request_class=REQUEST_CLASS_SOURCE_ONLY)
                     source_issue = exact_probe_rest_source_issue([], candle_meta,
-                        request_code=request_code, now_epoch=now(), allow_empty_ticks=True)
+                        request_code=request_code, now_epoch=now(), allow_empty_ticks=True,
+                        transport_epoch=ws_data.get("market_data_transport_epoch"))
                     if not candles or source_issue:
                         result['reason'] = source_issue or 'candle_refresh_empty'
+                        return result
+                    ws_data, source_reason = exact_probe_ws_data(
+                        probe_ws_snapshot(ws_manager, code=code, route=route),
+                        code=code, route=route, after_epoch=registered_epoch, now_epoch=now())
+                    if not ws_data:
+                        result['reason'] = 'post_candle_' + source_reason
+                        return result
+                    _, tick_source, tick_reason = _select_recent_ticks_with_source(
+                        ws_data, [], now=now())
+                    result['tick_read_source'] = tick_source
+                    result['tick_read_selection_reason'] = tick_reason
+                    ticks = [] if tick_source == 'ws_exact_route' else tick_fetcher(
+                        token, request_code, limit=10,
+                        request_owner='zero_base_machine_probe',
+                        request_class=REQUEST_CLASS_SOURCE_ONLY, explicit_request_code=True)
+                    source_issue = exact_probe_rest_source_issue(ticks, candle_meta,
+                        request_code=request_code, now_epoch=now(),
+                        allow_empty_ticks=bool(ws_data.get('recent_trade_ticks')),
+                        transport_epoch=ws_data.get('market_data_transport_epoch'))
+                    if source_issue or (not ticks and not ws_data.get('recent_trade_ticks')):
+                        result['reason'] = source_issue or 'trusted_tape_source_insufficient'
                         return result
                     context = context_builder(token, code, ws_data, venue=venue,
                         session=session, limit=40, model_bar_limit=20, now_ts=now(),
