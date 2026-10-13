@@ -87,6 +87,65 @@ def test_direct_postclose_loads_native_custody_profile_without_shell_evaluation(
     assert not (tmp_path / 'unexpected').exists()
 
 
+def test_strict_resume_retains_native_ancestry_without_relabelling_commands(tmp_path):
+    import json, hashlib
+    n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
+    origin = status['run_id']; commit = status['code_commit']
+    parent = dict(schema='postclose_final_handoff_resume_v1', source_date=day,
+        origin_run_id=origin, origin_code_commit=commit, completed_command_receipts=metrics[:-1],
+        runtime_effect=False, allowed_runtime_apply=False, prior_scoped_resume=status['scoped_resume'])
+    parent_path = tmp_path / 'parent.json'; parent_path.write_text(json.dumps(parent))
+    status.update(run_id='next-native-run', code_commit='b'*40, exit_code=2,
+        scoped_resume=dict(path=str(parent_path),sha256=hashlib.sha256(parent_path.read_bytes()).hexdigest(),
+            origin_run_id=origin,resume_from='final_handoff'))
+    path.write_text(json.dumps(status));log.write_text('[PERF] '+json.dumps(dict(
+        run_id=status['run_id'],phase='command',producer_module='src.engine.verify_threshold_cycle_postclose_chain',exit_code=2))+'\n')
+    proof = n['final_handoff_resume'](tmp_path,day)
+    assert proof['completed_command_receipts'] == []
+    assert proof['inherited_command_receipts'] == metrics[:-1]
+    assert {m['run_id'] for m in proof['inherited_command_receipts']} == {origin}
+    prior.write_text('{}')
+    with pytest.raises(ValueError,match='final_resume_ancestry_changed'):
+        n['final_handoff_resume'](tmp_path,day)
+
+
+@pytest.mark.parametrize('mutated', [False, True])
+def test_storage_compaction_preserves_values_policy_and_original_bytes(tmp_path,monkeypatch,mutated):
+    import json, hashlib
+    from src.engine.scalping import entry_split_order_plan as native
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    program = script.split("<<'PY_ENTRY_STORAGE'\n",1)[1].split('\nPY_ENTRY_STORAGE',1)[0]
+    namespace={'__name__':'storage_test'};exec(compile(program,'entry_storage','exec'),namespace)
+    day='2026-06-07';directory=tmp_path/'data/report/entry_split_order_plan';directory.mkdir(parents=True)
+    policy_dir=tmp_path/'data/threshold_cycle/entry_split_order_policy';policy_dir.mkdir(parents=True)
+    report=dict(schema_version=native.SCHEMA_VERSION,date=day,recommended_policy=dict(policy_version='fixture'),
+        literal='  original spaces\n\\\\',values=[None,0,True,'끝'])
+    policy=dict(schema_version=native.POLICY_SCHEMA_VERSION,source_date=day,policy_version='fixture')
+    report,policy=native.bind_report_policy_generation(report,policy)
+    rp=directory/f'entry_split_order_plan_{day}.json';pp=policy_dir/f'entry_split_order_policy_{day}.json'
+    original=(json.dumps(report,ensure_ascii=False,sort_keys=True,indent=60)+'\n').encode();rp.write_bytes(original)
+    policy_raw=json.dumps(policy).encode();pp.write_bytes(policy_raw)
+    old_sha=hashlib.sha256(original).hexdigest();receipt=rp.with_name(rp.name+'.reuse-contract.json')
+    receipt.write_text(json.dumps(dict(schema='postclose_artifact_reuse_contract_v1',target_date=day,
+        artifact_path=str(rp),artifact_sha256=old_sha)))
+    compact_size=sum(len(line.strip()) for line in original.splitlines())+1
+    monkeypatch.setattr(native,'ENTRY_REPORT_MAX_BYTES',max(compact_size+1,len(original)//2+1))
+    if mutated:
+        policy['policy_version']='changed';pp.write_text(json.dumps(policy))
+        with pytest.raises(ValueError,match='entry_storage_generation_invalid'):
+            namespace['compact_entry_storage'](tmp_path,day)
+        assert rp.read_bytes()==original
+    else:
+        result=namespace['compact_entry_storage'](tmp_path,day)
+        assert json.loads(rp.read_bytes())==report
+        assert pp.read_bytes()==policy_raw
+        assert Path(result['original_path']).read_bytes()==original
+        assert native.validate_report_policy_generation(json.loads(rp.read_bytes()),policy)[0]
+        assert rp.stat().st_size<=native.ENTRY_REPORT_MAX_BYTES
+        assert json.loads(receipt.read_text())['artifact_sha256']==hashlib.sha256(rp.read_bytes()).hexdigest()
+        assert result['runtime_effect'] is result['allowed_runtime_apply'] is False
+
+
 def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     assert "src.engine.daily_threshold_cycle_report" not in script

@@ -41,3 +41,17 @@ Legacy stage는 23:11:47에 exit 0·issues 0으로 끝났다. 청산 snapshot 4�
 Wrapper가 정상 router와 동일한 승인 account/journal 설정을 native parser로 읽도록 보완했다. 파일을 shell source하거나 수정하지 않으며 assignment는 인용된 export로 전달한다. 실제 native tower failure 뒤에만 `--resume-from-final-handoff`가 원 completed command metrics·이전 source-only proof·전체 active analysis stage·청산 snapshot·초기 수량 terminal을 검증하고 실패를 보존한다. 완료 계산·bot action을 생략하고 최초 영향 consumer인 summary부터 tower/checklist/strict와 실제 Main terminal을 다시 실행한다. 수량 terminal은 후속 정상 처리에 그대로 전달한다.
 
 보완 self review·re-review finding 0. Admission·stage·wrapper 126 PASS, shell 문법·diff 검증 PASS다. 새 회귀는 다른 실패/실행 중/완료 근거 결손/이전 proof 변조/invalid stage·snapshot·quantity를 거부하고, 기존 profile 전달 및 assignment의 shell 치환 미실행을 확인한다. 분석·수량·정책 code contract는 변경하지 않아 완료된 delay/stop/legacy 계산을 다시 발행할 필요가 없다. 새 릴리스의 정확 코드/현재 정책 인계 및 다음 날짜 candidate binding은 별도 native 검증 뒤 기록한다.
+
+최종 수리 commit은 `8e0bd25f704271b1a890061f9099d9149f55060d`, 실행 root는 `/home/ubuntu/KORStockScan-runtime-releases/postclose-failed-stage-recovery-20261013-v3-8e0bd25f7`이다. 기존 native `reversal_code_handoff.issue`가 원 승인 parity(불일치 0·confirmation 614), 동일한 정책 계약 파일 33개·원천 787개와 그대로인 현재 bundle을 검증해 인계를 발행했다. `policy_reselected=false`, `provider_called=false`, `actual_pid_consumed=false`다. 원 v2 selector와 대기 queue의 exact PID/start/cwd 종료 근거를 `data/runtime/postclose_recovery/2026-10-13/8e0bd25f704271b1a890061f9099d9149f55060d/`에 보존했다. 새 Main이나 bot restart를 실행하지 않았다.
+
+승인된 joint 최초 등록의 다음 날짜 candidate를 native producer로 같은 source/publication에 재결속했고 bundle은 `2937d76dd1d2f08bfac005ee9d9339d4cbb3e34985efa9252a31cf30df73f638`이다. `actual_provider_calls=0`, `runtime_effect=false`이며 auxiliary stage도 새 출력 generation에서 exit 0·issues 0으로 검증했다. 23:45 관측에서는 final handoff 재개 전 stage/snapshot 해시 검증 중이고 승인된 custody 설정 전달을 실제 validator 프로세스에서 확인했다. 다음 Main START·terminal·strict/controller/준비 결과는 종료 후 추가한다.
+
+### Entry-split 저장 서식과 strict 재개 보완
+
+최종 handoff run `f343c03991b742f590431a3291bff03f`는 23:46:18에 START했다. 승인된 custody profile로 cancel-wait reconciliation과 tower가 일치했으나 23:48:42 family strict exit 2가 entry-split의 `semantic_unverified_large_source`와 해당 summary/checklist 결손을 거부했다. Native 보고서는 539,058,129 byte이며 512 MiB read bound(536,870,912 byte)를 넘었다. 내용이나 정책 generation 변조가 원인이라는 증거는 없다. 서식 공백만 제거한 계산 크기는 약 459,131,089 byte로 같은 기존 한도 안이다.
+
+완료 prefix를 재계산하거나 native 한도를 늘리지 않고 wrapper의 report publication adapter를 보완했다. 전체 compacted JSON을 원 native report/policy generation으로 검증해 모든 값과 policy bytes를 유지하고 원본 bytes를 보존한다. 새 byte hash만 reuse receipt에 결속한다. 다음 정상 entry-split 발행도 같은 adapter를 사용한다. 1 MiB physical line·원파일 2배 한도·파일/정책/receipt CAS와 archive hash를 확인하고, compacted 파일이 여전히 기존 한도를 넘으면 거부한다. 이벤트/원천/가격/비용/경제성/null/정책 값을 제거하거나 바꾸지 않는다.
+
+Final handoff guard는 실제 native strict exit 2도 수용하며 이전 scoped proof의 hash·source date·origin run/commit·완료 command와 최대 8단 ancestry를 검증한다. 원 계산의 ID를 새 실행 ID로 재라벨링하지 않는다. Storage/profile/ancestry 및 admission·stage·wrapper 회귀 129 PASS, shell 문법·diff 검증 PASS다. 10/14 현재 checklist 목적·강제 규칙도 확인했으며 source/publication은 10/13, effective date는 10/14로 보존한다. 새 bot·order·provider·threshold 권한을 추가하지 않는다.
+
+추가 provenance 점검에서 23:06:49 native broker-cost source는 직접 wrapper 호출의 기본 local account alias로 기록됐다. Raw provider response는 보존하며 승인된 account/journal alias의 비용 근거로 승계하지 않는다. 현재 비용/terminal 부족과 계정 결속 결손은 `source_gap`이고 `actual_profit_verified=false`·EV null을 유지한다. 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917`/cost producer가 원 provider/account binding과 다음 정상 수집을 수용해야 한다. 이 결손을 매매 수량/보호 가드 변경 또는 비용 후 성과로 바꾸지 않는다.

@@ -835,6 +835,82 @@ raise SystemExit(exit_code)
   return "$command_rc"
 }
 
+compact_entry_split_report_storage() {
+  "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_ENTRY_STORAGE'
+import hashlib, json, os, shutil, sys, tempfile
+from pathlib import Path
+from src.engine.scalping import entry_split_order_plan as native
+
+def compact_entry_storage(project, day):
+    report_root = (project / 'data').resolve() / 'report'
+    path = report_root / 'entry_split_order_plan' / f'entry_split_order_plan_{day}.json'
+    before = path.stat()
+    if before.st_size <= native.ENTRY_REPORT_MAX_BYTES:
+        return dict(status='not_required', source_date=day)
+    if path.is_symlink() or before.st_size > 2 * native.ENTRY_REPORT_MAX_BYTES:
+        raise ValueError('entry_storage_source_unbounded')
+    policy_path = report_root.parent / 'threshold_cycle/entry_split_order_policy' / f'entry_split_order_policy_{day}.json'
+    policy_raw = policy_path.read_bytes(); policy = json.loads(policy_raw)
+    receipt_path = path.with_name(path.name + '.reuse-contract.json')
+    receipt_raw = receipt_path.read_bytes(); receipt = json.loads(receipt_raw)
+    old_sha = native._entry_report_file_hash(path)
+    if (receipt.get('schema') != 'postclose_artifact_reuse_contract_v1'
+            or receipt.get('target_date') != day or receipt.get('artifact_sha256') != old_sha
+            or Path(receipt['artifact_path']).resolve() != path.resolve()):
+        raise ValueError('entry_storage_native_receipt_invalid')
+    fd, temp_name = tempfile.mkstemp(prefix='.entry_storage.', dir=path.parent)
+    temporary = Path(temp_name)
+    try:
+        with os.fdopen(fd, 'wb') as out, path.open('rb') as source:
+            while True:
+                line = source.readline(1024 * 1024 + 1)
+                if not line: break
+                if len(line) > 1024 * 1024:
+                    raise ValueError('entry_storage_line_unbounded')
+                out.write(line.strip())
+            out.write(b'\n'); out.flush(); os.fsync(out.fileno())
+        # Only formatting whitespace changes. Native canonical pair validation
+        # proves every JSON value and the exact policy generation are retained.
+        report, new_sha = native._read_entry_report(temporary)
+        valid, reason = native.validate_report_policy_generation(report, policy)
+        if not valid or report.get('date') != day:
+            raise ValueError('entry_storage_generation_invalid:' + reason)
+        after = path.stat()
+        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                or policy_path.read_bytes() != policy_raw or receipt_path.read_bytes() != receipt_raw):
+            raise ValueError('entry_storage_source_changed')
+        archive = path.parent / 'storage_originals' / (old_sha + '.json')
+        archive.parent.mkdir(exist_ok=True)
+        if not archive.exists(): shutil.copy2(path, archive)
+        if native._entry_report_file_hash(archive) != old_sha:
+            raise ValueError('entry_storage_original_invalid')
+        current = path.stat()
+        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+                or policy_path.read_bytes() != policy_raw or receipt_path.read_bytes() != receipt_raw):
+            raise ValueError('entry_storage_source_changed')
+        temporary.chmod(before.st_mode & 0o777)
+        proof = dict(schema='entry_split_storage_compaction_v1', source_date=day,
+            original_path=str(archive), original_byte_sha256=old_sha,
+            compacted_byte_sha256=new_sha, generation_id=report['artifact_generation_binding']['generation_id'],
+            report_content_sha256=report['artifact_generation_binding']['report_content_sha256'],
+            policy_byte_sha256=hashlib.sha256(policy_raw).hexdigest(),
+            original_size_bytes=before.st_size, compacted_size_bytes=temporary.stat().st_size,
+            policy_reselected=False, runtime_effect=False, allowed_runtime_apply=False)
+        native._write_json(path.with_name(path.name + '.storage-compaction.json'), proof)
+        os.replace(temporary, path)
+        native._write_json(receipt_path, {**receipt, 'artifact_sha256':new_sha,
+            'storage_compaction_original_sha256':old_sha})
+        return dict(status='compacted_values_and_policy_unchanged', **proof)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+if __name__ == '__main__':
+    print(json.dumps(compact_entry_storage(Path(sys.argv[1]), sys.argv[2])))
+PY_ENTRY_STORAGE
+}
+
 detect_postclose_recovery_reuse_mode
 if [[ "$RESUME_INITIAL_QUANTITY" == "true" ]]; then
   [[ "$POSTCLOSE_RECOVERY_REUSE_MODE" == "true" ]] || exit 2
@@ -853,6 +929,7 @@ PY_RESUME
 fi
 if [[ "$RESUME_FINAL_HANDOFF" == "true" ]]; then
   [[ "$POSTCLOSE_RECOVERY_REUSE_MODE" == "true" ]] || exit 2
+  compact_entry_split_report_storage
   POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT="$("$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_FINAL_RESUME'
 import hashlib, json, sys
 from pathlib import Path
@@ -867,7 +944,8 @@ def final_handoff_resume(project, day):
     status_path = report / 'threshold_cycle_postclose_status' / f'threshold_cycle_postclose_{day}.status.json'
     raw = status_path.read_bytes(); status = json.loads(raw)
     if (status.get('target_date') != day or status.get('status') != 'failed'
-            or status.get('reason') != 'command_failed' or status.get('exit_code') != 1):
+            or status.get('reason') not in {'command_failed', 'verify_threshold_cycle_postclose_chain_failed', 'verify_threshold_cycle_postclose_chain_final_failed'}
+            or status.get('exit_code') not in {1, 2}):
         raise ValueError('final_resume_requires_failed_native_main')
     log = project / 'logs/threshold_cycle_postclose_cron.log'
     with log.open('rb') as handle:
@@ -875,26 +953,48 @@ def final_handoff_resume(project, day):
         lines = handle.read().decode(errors='replace').splitlines()
     metrics = [json.loads(line[7:]) for line in lines if line.startswith('[PERF] ')]
     metrics = [m for m in metrics if m.get('run_id') == status['run_id'] and m.get('phase') == 'command']
-    if (not metrics or metrics[-1].get('producer_module') != 'src.engine.automation.tuning_performance_control_tower'
-            or metrics[-1].get('exit_code') != 1):
-        raise ValueError('final_resume_failed_command_not_tower')
+    if (not metrics or (metrics[-1].get('producer_module'), metrics[-1].get('exit_code')) not in {
+            ('src.engine.automation.tuning_performance_control_tower', 1),
+            ('src.engine.verify_threshold_cycle_postclose_chain', 2)}):
+        raise ValueError('final_resume_failed_command_not_handoff')
     completed = [m for m in metrics if m.get('exit_code') == 0
         and m.get('measurement_complete') is True and m.get('target_date') == day
         and m.get('code_commit') == status.get('code_commit')]
     required = {'src.engine.scalping.initial_quantity_policy', 'src.engine.runtime_approval_summary',
         'src.engine.observation_source_quality_audit', 'src.engine.monitoring.intraday_ws_freshness_monitor',
         'src.engine.pipeline_event_verbosity_report', 'src.engine.monitoring.rising_missed_classifier_prior'}
-    if not required <= {m.get('producer_module') for m in completed}:
-        raise ValueError('final_resume_native_prefix_incomplete')
     prior = status.get('scoped_resume')
-    if not isinstance(prior, dict) or prior.get('resume_from') != 'initial_quantity':
+    if not isinstance(prior, dict) or prior.get('resume_from') not in {'initial_quantity', 'final_handoff'}:
         raise ValueError('final_resume_verified_prefix_missing')
     proof_path = Path(prior['path']); proof_bytes = proof_path.read_bytes(); proof = json.loads(proof_bytes)
     if (hashlib.sha256(proof_bytes).hexdigest() != prior.get('sha256')
-            or proof.get('schema') != 'postclose_initial_quantity_resume_v1'
+            or proof.get('schema') not in {'postclose_initial_quantity_resume_v1', 'postclose_final_handoff_resume_v1'}
             or proof.get('source_date') != day or proof.get('origin_run_id') != prior.get('origin_run_id')
             or proof.get('runtime_effect') is not False or proof.get('allowed_runtime_apply') is not False):
         raise ValueError('final_resume_verified_prefix_changed')
+    def inherited_receipts(value, depth=0):
+        if depth > 8: raise ValueError('final_resume_ancestry_unbounded')
+        rows = list(value.get('completed_command_receipts', []))
+        if any(m.get('run_id') != value.get('origin_run_id')
+                or m.get('code_commit') != value.get('origin_code_commit')
+                or m.get('target_date') != day or m.get('exit_code') != 0
+                or m.get('measurement_complete') is not True for m in rows):
+            raise ValueError('final_resume_inherited_native_prefix_invalid')
+        ancestor = value.get('prior_scoped_resume')
+        if ancestor:
+            ancestor_path = Path(ancestor['path'])
+            if ancestor_path.stat().st_size > 4 * 1024 * 1024:
+                raise ValueError('final_resume_ancestry_unbounded')
+            encoded = ancestor_path.read_bytes(); parent = json.loads(encoded)
+            if (hashlib.sha256(encoded).hexdigest() != ancestor.get('sha256')
+                    or parent.get('source_date') != day or parent.get('origin_run_id') != ancestor.get('origin_run_id')
+                    or parent.get('runtime_effect') is not False or parent.get('allowed_runtime_apply') is not False):
+                raise ValueError('final_resume_ancestry_changed')
+            rows += inherited_receipts(parent, depth + 1)
+        return rows
+    inherited = inherited_receipts(proof)
+    if not required <= {m.get('producer_module') for m in completed + inherited}:
+        raise ValueError('final_resume_native_prefix_incomplete')
     for stage in active_stage_names(day):
         if stage == 'summary_handoff': continue
         issues = stage_receipt_issues(report, day, stage)
@@ -908,6 +1008,7 @@ def final_handoff_resume(project, day):
         origin_run_id=status['run_id'], origin_code_commit=status['code_commit'],
         origin_status_sha256=hashlib.sha256(raw).hexdigest(), prior_scoped_resume=prior,
         completed_command_receipts=completed,
+        inherited_command_receipts=inherited,
         sources=_stage_sources({'initial_quantity':quantity, 'exit_snapshot':snapshot,
             'custody_environment':report.parent/'config/native_owner_custody.env'}),
         runtime_effect=False, allowed_runtime_apply=False)
@@ -1729,6 +1830,7 @@ if [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_ENTRY_SPLIT_ORDER_PLAN"
   wait_for_json_artifact \
     "$PROJECT_DIR/data/threshold_cycle/entry_split_order_policy/entry_split_order_policy_${TARGET_DATE}.json" \
     "entry_split_order_policy"
+  compact_entry_split_report_storage
 fi
 if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "1" ]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
