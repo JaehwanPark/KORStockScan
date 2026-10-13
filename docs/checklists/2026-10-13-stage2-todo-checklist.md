@@ -141,3 +141,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 기존 `DirectFamilyPreopenPolicyHandoff`가 저장·freshness 후속 보완의 ordered 배포도 소유한다. 검증된 canonical append의 반복 ADM body만 원본 attempt/hash로 참조하고, economic proof/전체 row population을 유지한 streaming cache projection을 포함한다. report wrapper는 5분 cron·flock/명시 override를 보존하며 기본 cooldown0, freshness600초를 사용한다. 원 policy/PREOPEN·수량·주문·custody와5초는 유지한다. 과거 미검증 원장·활성/rollback release는 보존한다.
 
 기존 `AuxiliaryCircuitRecoveryRepair1012`는 verified immutable v6 view의 중복 static/configure 제거 후 source/PID/claim/ref/model/aux/end guard와 동일 attempt clocks를 수용한다. `NonfixedDispatchReadinessReview1012`는 자연 fixed/nonfixed 방문과 report DONE/freshness·row parity·저장 증가율을 확인한다. code/좁은 benchmark PASS는 전체 성능·provider 성공·경제성 완료가 아니다. [10:25 이후 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)에 원천·검증·실제 공간 회수를 기록한다.
+
+
+report 메모리 후속 보완도 기존 위 owner들이 수용한다. read-local bounded string pool은 동일 row/field/JSON 값·독립 container와 raw/cache bytes를 보존한다. decoded prefix의 RSS 감소와 CPU 비용 증가를 분리하고 실제 정규 report의 전체 분모·RSS·DONE/freshness를 검증한다. 별도 owner/주문 권한 또는5초 갱신은 없다.

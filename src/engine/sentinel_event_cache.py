@@ -13,6 +13,35 @@ from src.utils.jsonl_io import existing_or_gzip_path
 PayloadParser = Callable[[dict[str, Any]], dict[str, Any] | None]
 
 
+def _cache_object_decoder():
+    """Share bounded immutable strings without changing JSON values or rows.
+
+    A daily cache repeats the same field names and short enum values thousands
+    of times. Pools belong to this one read, never to runtime/policy state.
+    Unknown or large strings still decode normally; containers remain distinct.
+    """
+    keys: dict[str, str] = {}
+    values: dict[str, str] = {}
+
+    def decode(pairs):
+        result = {}
+        for key, value in pairs:
+            if len(key) <= 192:
+                if key in keys:
+                    key = keys[key]
+                elif len(keys) < 2048:
+                    keys[key] = key
+            if isinstance(value, str) and len(value) <= 192:
+                if value in values:
+                    value = values[value]
+                elif len(values) < 8192:
+                    values[value] = value
+            result[key] = value
+        return result
+
+    return decode
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -159,6 +188,7 @@ def update_and_load_cached_event_rows(
 
     rows: list[dict[str, Any]] = []
     row_count = 0
+    decode_object = _cache_object_decoder()
     projection_applied = meta.get('cache_projection_version')
     projection_skip = None
     rewrite = bool(project_loaded_payload and cache_projection_version
@@ -178,7 +208,7 @@ def update_and_load_cached_event_rows(
                     if not raw_line.strip():
                         continue
                     try:
-                        row = json.loads(raw_line)
+                        row = json.loads(raw_line, object_pairs_hook=decode_object)
                     except json.JSONDecodeError:
                         projection_skip = 'malformed_cached_row_preserved'
                         continue

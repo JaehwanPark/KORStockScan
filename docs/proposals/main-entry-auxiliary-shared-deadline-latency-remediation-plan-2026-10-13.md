@@ -217,3 +217,6 @@ canonical economic append가 성공한 동일 attempt의 반복 ADM snapshot에�
 최종 v6 guard의 중복 static/configure 재사용은 현재 loader-owned immutable view와 configure/consumed identity가 확인된 경로만 허용한다. fresh prepare와 기존 native claim·scope·requested ref/registry/model/overlay·end pointer 검증은 매번 실행한다. 판정 결과 cache 또는5초 갱신은 금지한다. current source/pointer 변경·cold/unverified 객체는 원 full guard로 돌아간다.
 
 검토한 exact code pair와 wrapper 계약을 같은 immutable candidate에 포함한다. 기존 `DirectFamilyPreopenPolicyHandoff`가 ordered 전환과 machine/auxiliary128경로 소비를, 기존 `AuxiliaryCircuitRecoveryRepair1012`가 같은 attempt의 provider 전·SDK/HTTP/settlement·Main 소비를 확인한다. 정상 cron DONE/report freshness와 cache row parity·바이트 증가율을 함께 확인하고, 전체 Main 성능이나 외부 timeout을 좁은 component benchmark로 완료 처리하지 않는다. EOD와 원10/12→10/13 policy/bootstrap는 재생성하지 않는다.
+
+
+추가 report 메모리 보완은 같은 read 안의 짧은 immutable key/value를 제한된 pool로 공유한다. 모든 행/필드/JSON 값·container 소유권·원본과 cache bytes를 보존하고 unknown/큰 값은 원 decode로 처리한다. 실제 예약 report RSS·DONE/freshness로 확인하며 CPU 비용 증가와 메모리 감소를 함께 기록한다. 이 표현 보완은 provider/정책/5초 변경이 아니다.

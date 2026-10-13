@@ -406,3 +406,22 @@ def test_guard_stages_survive_both_sentinel_cache_modes():
         for lossless in [False,True]:
             payload=_event('10:00:00',stage,fields={'reason':'quality_guard_block'})
             assert buy._payload_to_cache_row(payload,exclude_summary_stages=lossless)['stage']==stage
+
+
+def test_bounded_cache_decoder_preserves_json_semantics_and_container_isolation():
+    from src.engine.sentinel_event_cache import _cache_object_decoder
+    decoder = _cache_object_decoder()
+    text = '{"same_field_name":{"action":"WAIT","code":"005930","missing":null,"number":1.25,"enabled":false,"rows":[1,2]},"unicode":"한글","dup":1,"dup":2}'
+    first = json.loads(text, object_pairs_hook=decoder)
+    second = json.loads(text, object_pairs_hook=decoder)
+    assert first == second == json.loads(text)
+    assert next(iter(first)) is next(iter(second))
+    assert first['same_field_name']['action'] is second['same_field_name']['action']
+    assert first['same_field_name'] is not second['same_field_name']
+    assert first['same_field_name']['rows'] is not second['same_field_name']['rows']
+    first['same_field_name']['rows'].append(3)
+    assert second['same_field_name']['rows'] == [1, 2]
+    # Unique data cannot make the per-read pool unbounded or change any value.
+    for index in range(10000):
+        expected = {f'unique_field_{index}': f'unique_value_{index}', 'long': 'x' * 1000}
+        assert json.loads(json.dumps(expected), object_pairs_hook=decoder) == expected
