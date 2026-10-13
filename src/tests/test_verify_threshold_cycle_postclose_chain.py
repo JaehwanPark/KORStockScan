@@ -182,6 +182,25 @@ def test_required_summary_handoff_rejects_task_projection_drift(
     assert "direct_checklist_task_projection_mismatch" in report["issues"]
 
 
+def test_direct_projection_includes_native_holding_owner_and_ignores_unrelated_manual_task(monkeypatch,tmp_path):
+    target='2026-09-19';summary=_seed(monkeypatch,tmp_path,target)
+    summary['holding_exit_threshold_lineage']={'source_contract_repair':{
+        'repair_required':True,'identified_defects':['fixture_source_binding']}}
+    path=mod.REPORT_DIR/'runtime_approval_summary'/f'runtime_approval_summary_{target}.json'
+    _write(path,summary);checklist=_build_direct_checklist(monkeypatch,tmp_path,target)
+    original=checklist.read_text()
+    assert '[HoldingProfitExitSourceContractRepair]' in original
+    checklist.write_text(original+'\n- [ ] `[UnrelatedManualOwner] separate authorized work`\n')
+    view,issues=mod._direct_checklist_checks(target,summary,path)
+    assert issues==[]
+    assert view['actual_task_ids']==view['expected_task_ids']
+    assert 'HoldingProfitExitSourceContractRepair' in view['actual_task_ids']
+    checklist.write_text(original.replace(checklist_mod.AUTO_END,
+        '- [ ] `[UnexpectedGeneratedOwner] unowned projection`\n'+checklist_mod.AUTO_END))
+    _,issues=mod._direct_checklist_checks(target,summary,path)
+    assert 'direct_checklist_task_projection_mismatch' in issues
+
+
 def test_validated_reversal_preserves_one_manual_workflow_owner(monkeypatch, tmp_path):
     target = '2026-09-19'
     _seed(monkeypatch, tmp_path, target)

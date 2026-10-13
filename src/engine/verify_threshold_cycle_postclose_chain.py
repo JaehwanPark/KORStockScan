@@ -137,7 +137,7 @@ def _direct_checklist_checks(
     except OSError:
         checklist_text = ""
     task_matches = list(re.finditer(
-            r"^- \[[ xX]\] `\[(DirectFamily[A-Za-z0-9_:-]+)\]",
+            r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]",
             checklist_text,
             re.MULTILINE,
         ))
@@ -167,6 +167,11 @@ def _direct_checklist_checks(
     for match in task_matches:
         name = match.group(1)
         generated = auto_start >= 0 and auto_end >= auto_start and auto_start <= match.start() <= auto_end
+        # The native projection also owns holding/source repair tasks whose
+        # IDs do not use the DirectFamily prefix. Unrelated manual owners stay
+        # outside this projection, while every generated task is checked.
+        if name not in expected_ids and not name.startswith('DirectFamily') and not generated:
+            continue
         if (name in retained_workflow_ids and name not in expected_ids
                 and counts[name] == 1 and not generated):
             retained.append(name)
