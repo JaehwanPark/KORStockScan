@@ -141,6 +141,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 기존 `DirectFamilyPreopenPolicyHandoff`가 사용자 승인에 따른 지연 개선 코드의 ordered 배포·재기동을 소유한다. 원 10/12→10/13 정책·PREOPEN·bootstrap bytes를 유지하고 candidate code pin과 보조판정 128경로 호환성을 확인한 후 incumbent Main·supervisor 종료→selector/checklist 게시→native 인계→새 PID/start/cwd 소비를 검증한다. 원 strict checklist bytes는 native 역사 snapshot으로 보존하고 최종화 경고를 억제하지 않는다. [후속 구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)를 근거로 사용한다.
 
+### 10/13 REST 절감의 구현·잔여 호출 점검 인계
+
+[현재 점검](../audits/main-rest-call-reduction-implementation-performance-and-excessive-calls-audit-2026-10-13.md)과 [호출 제거·입력 간소화 계획](../proposals/main-rest-excessive-call-removal-and-input-quality-relaxation-plan-2026-10-13.md)을 기존 `DirectFamilySourceRepairMainMechanisticEntry`에 연결한다. 코드/실PID의 체결 WS HTTP0 소비는 확인했지만 분봉527 logical demand 모두 REST유지, 소비 없는 Radar·대상 검사 전 계좌 복구3조회·판정 전 capacity/investor·다중page discovery 및 외부 census BBO가 지속된다. CR0~CR8은 consumer 없는 조회 제거→선택 판정/발굴/관측 품질 축소→raw same-day/closed-only 이력 소비의 후속 명세다. 사용자 허용에 따라 과거 판정 parity·관측95%/전체 coverage를 새 제거 선행 gate로 만들지 않는다. Main/manual·실제 quote/account/order/수량/청산 hard safety와 퇴역 owner 자동 실행 금지를 보존한다. 이번 점검은 읽기/문서 결과이며 운영 코드/설정/호출 제거·배포/재기동을 실행하지 않았다. 기존 배포 승인과 AUTO/strict 역사 bytes를 전용하지 않으며 최종 checklist 변경 영향은 당시 handoff owner가 별도 검증한다. 새 중복 OPEN owner는 만들지 않는다.
+
 기존 `AuxiliaryCircuitRecoveryRepair1012`는 원 native5초·단일 lease·보호 exit·필수 저장을 유지한 상태에서 새로운 stage clock과 실제 caller timeout/SDK 종료·worker/Main 소비를 같은 attempt에서 검증한다. local p95 1.60초와 timeout 감소는 자연 표본이 없으면 미검증으로 남긴다. 기존 `NonfixedDispatchReadinessReview1012`는 WATCHING hint 재정렬의 전체 대상·HOLDING/주문/COMMIT 슬롯 보존과 fixed/nonfixed의 실제 경로 소비를 함께 확인한다. 코드·배포 PASS로 자연·경제성 수용을 완료하지 않는다.
 
 첫 native PREOPEN 기동 이후의 배포는 실행 중인 원 PID의 실제 bootstrap 소비를 확인해 immutable native-predecessor 증빙으로 보존한다. 종료 후 원 정책·PID/start/cwd·준비 원천을 재검증하며 이전 장중 consumed 영수증을 만들어내지 않는다. 원 PID가 살아 있거나 증빙 결손/변조가 있으면 새 기동은 차단한다.
