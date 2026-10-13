@@ -2757,6 +2757,7 @@ def record_ai_decision_trace(
             "entry_economic_guard_receipt": merged.get("entry_economic_guard_receipt"),
             "entry_economic_capacity_blocker": merged.get("entry_economic_capacity_blocker"),
             "entry_economic_capacity_receipt": merged.get("entry_economic_capacity_receipt"),
+            "entry_economic_stage_timings_ms": merged.get('entry_economic_stage_timings_ms'),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
             "outcome_label_eligible": not outcome_label_exclusion_reasons,
             "outcome_label_exclusion_reasons": outcome_label_exclusion_reasons,

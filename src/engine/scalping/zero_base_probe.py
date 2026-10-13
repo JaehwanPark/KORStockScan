@@ -24,7 +24,29 @@ from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
 from src.engine.scalping_feature_packet import _select_recent_ticks_with_source
 
 
-RESULT_SCHEMA = "zero_base_probe_result_v1"
+RESULT_SCHEMA = "zero_base_probe_result_v2"
+LEGACY_RESULT_SCHEMA = "zero_base_probe_result_v1"
+
+
+def native_wait_result(receipt, readiness):
+    """A censored observation is neither a source error nor a failed pattern."""
+    if receipt.get('reason')=='scope_or_generation_mismatch':
+        return 'policy_unavailable','scope_or_generation_mismatch'
+    if receipt.get('native_source_current') is False or receipt.get('reason')=='state_absent':
+        return 'source_unavailable','native_source_stale_or_absent'
+    if receipt.get('selected_pending_count',0):
+        return 'observation_incomplete','confirmation_pending_at_residence_end'
+    counts=receipt.get('selected_lifecycle_counts') or {}
+    if any(v.get('TRUE',0)>0 for v in counts.values()):
+        return 'observation_incomplete','native_confirmation_not_consumed_before_expiry'
+    if receipt.get('source_censored_count',0):
+        return 'source_unavailable','native_observation_source_censored'
+    truth=receipt.get('selected_branch_truth') or {}
+    if truth and all(v=='FALSE' and counts.get(b,{}).get('FALSE',0)>0 for b,v in truth.items()):
+        return 'pattern_not_matched','native_observation_no_matching_pattern'
+    if any(v.get('missing_inputs') for v in (readiness.get('branch_descriptors') or {}).values()):
+        return 'required_feature_insufficient','required_branch_feature_missing'
+    return 'observation_incomplete','feature_window_incomplete'
 _ROUTE_ITEM = {
     "krx_only": lambda code: code,
     "nxt_only": lambda code: code + "_NX",
@@ -267,7 +289,10 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
                                  min_warmup_sec: float = 0.0,
                                  partial_extension_sec: float = 0.0,
                                  poll_interval_sec: float = 0.05,
-                                 min_exact_0b_count: int = 0) -> tuple[dict, dict, str]:
+                                 min_exact_0b_count: int = 0,
+                                 residence_deadline_epoch: float | None = None,
+                                 required_window_sec: float = 0.0,
+                                 readiness_guard=None) -> tuple[dict, dict, str]:
     """Use one bounded lease for fresh 0B/0D and the machine's WS tick floor."""
     started = time.monotonic()
     deadline = started + max(0.0, timeout_sec)
@@ -276,8 +301,24 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
     source_reason = "route_snapshot_missing"
     partial_extension_applied = False
     empty_source_flushed = False
+    residence_wait = False
+    residence_deadline = (started + max(0., residence_deadline_epoch-now())
+                          if residence_deadline_epoch is not None else None)
+    if residence_deadline is not None:
+        deadline = min(deadline, residence_deadline)
+        empty_deadline = min(empty_deadline, residence_deadline)
+    expected_transport=getattr(ws_manager,'_market_data_transport_epoch',None)
     while True:
+        issue=readiness_guard() if readiness_guard is not None else ''
+        if issue:
+            ws_data={};source_reason=issue
+            break
         snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
+        transport=snapshot.get('market_data_transport_epoch')
+        if expected_transport is None and type(transport) is int:expected_transport=transport
+        if expected_transport is not None and transport not in (None,expected_transport):
+            ws_data={};source_reason='transport_changed_during_source_wait'
+            break
         ws_data, source_reason = exact_probe_ws_data(
             snapshot, code=code, route=route, after_epoch=after_epoch,
             now_epoch=now(),
@@ -298,16 +339,40 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
             empty_source_flushed = True
             break
         if time.monotonic() >= deadline:
+            first_ms = observation.get('first_0b_ms')
+            # Native ingestion already observes real prints during source wait;
+            # never restart its history at the fifth print or borrow a lease.
+            covered = (max(0., now()-after_epoch-first_ms/1000)
+                       if first_ms is not None else 0.)
+            window_left = max(0., required_window_sec-covered)
+            if (not residence_wait and residence_deadline is not None
+                    and (observation['exact_0b_count'] or observation['exact_0d_count'])
+                    and time.monotonic()+window_left < residence_deadline):
+                deadline = residence_deadline
+                residence_wait = True
+                continue
             one_sided = bool(observation["exact_0b_count"]) != bool(observation["exact_0d_count"])
-            if not partial_extension_applied and partial_extension_sec > 0 and one_sided:
+            if (not residence_wait and not partial_extension_applied
+                    and partial_extension_sec > 0 and one_sided):
                 deadline = started + max(0.0, timeout_sec) + min(2.0, partial_extension_sec)
+                if residence_deadline is not None:
+                    deadline = min(deadline, residence_deadline)
                 partial_extension_applied = True
             else:
                 break
         remaining = deadline - time.monotonic()
+        if (not observation['exact_0b_count'] and not observation['exact_0d_count']
+                and observation['latest_0b_ms'] is None and observation['latest_0d_ms'] is None):
+            remaining=min(remaining,empty_deadline-time.monotonic())
         if remaining > 0:
-            time.sleep(min(max(0.01, poll_interval_sec), remaining))
+            if residence_wait:
+                from src.engine.scalping.reversal_source_diagnostics import observation_sequence, wait_observation
+                item = probe_item(code, route)
+                wait_observation(item, observation_sequence(item), min(1., remaining))
+            else:
+                time.sleep(min(max(0.01, poll_interval_sec), remaining))
     elapsed = time.monotonic() - started
+    observation = probe_ws_observation(snapshot,code=code,route=route,after_epoch=after_epoch,now_epoch=now())
     if ws_data and elapsed < max(0.0, min_warmup_sec):
         ws_data, source_reason = {}, "warmup_timeout"
     observation["wait_ms"] = round(elapsed * 1000)
@@ -324,6 +389,10 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
     observation["sample_target_met"] = observation["exact_0b_count"] >= min_exact_0b_count
     observation["partial_extension_applied"] = partial_extension_applied
     observation["empty_source_flushed"] = empty_source_flushed
+    observation['residence_wait_applied'] = residence_wait
+    observation['residence_deadline_epoch'] = residence_deadline_epoch
+    if residence_wait:
+        observation['effective_wait_budget_ms'] = round((deadline-started)*1000)
     return ws_data, observation, source_reason
 
 
@@ -574,6 +643,13 @@ def run_zero_base_probe(
             code, venue=venue, session=session, ws_data=ws_data,
         )
         try:
+            def source_readiness_guard():
+                expected=request.get('consumer_readiness')
+                if expected is None:return ''  # Explicit legacy fixture surface.
+                from src.engine.scalping.reversal_current_backend import backend
+                current=consumer_readiness(ws_manager=ws_manager,ai_engine=ai_engine,
+                    token=token,enabled=True,family_sha256=backend()._GENERATION,now_epoch=now())
+                return readiness_issue(expected,current)
             ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
                 ws_manager, code=code, route=route, after_epoch=registered_epoch,
                 now=now, timeout_sec=ws_wait_timeout_sec,
@@ -581,6 +657,9 @@ def run_zero_base_probe(
                 min_warmup_sec=max(0, ws_min_warmup_sec-(now()-registered_epoch)),
                 partial_extension_sec=ws_wait_partial_extension_sec,
                 min_exact_0b_count=ws_wait_min_exact_0b_count,
+                residence_deadline_epoch=native_wait_deadline_epoch,
+                required_window_sec=(claim.get('observation_requirements') or {}).get('any_branch_minimum_seconds') or 0,
+                readiness_guard=source_readiness_guard,
             )
             result["ws_observation"] = observation
             if not ws_data:
@@ -591,6 +670,8 @@ def run_zero_base_probe(
                     else ""
                 )
                 result["reason"] = registration_reason or source_reason
+                if source_reason.startswith('consumer_readiness_'):
+                    result['result']='policy_unavailable'
                 return result
             if native_wait_deadline_epoch is not None:
                 from src.engine.scalping.reversal_source_diagnostics import branch_readiness
@@ -681,6 +762,10 @@ def run_zero_base_probe(
             from src.engine.scalping.reversal_current_backend import backend
             absolute_perf = residence_perf
             while True:
+                issue=source_readiness_guard()
+                if issue:
+                    result['result']='policy_unavailable';result['reason']=issue
+                    return result
                 sequence = observation_sequence(item)
                 family = backend()._GENERATION
                 native_snapshot, native_receipt = observe_snapshot(code,
@@ -696,10 +781,8 @@ def run_zero_base_probe(
                 if remaining <= 0:
                     result['branch_readiness'] = branch_readiness(descriptor_candidate, now=now(),
                         deadline=native_wait_deadline_epoch, original_requirements=claim.get('observation_requirements'))
-                    result['result'] = 'required_feature_insufficient'
-                    truth = native_receipt.get('selected_branch_truth') or {}
-                    result['reason'] = ('native_observation_no_matching_pattern'
-                        if truth and all(v == 'FALSE' for v in truth.values()) else 'feature_window_incomplete')
+                    readiness = result['branch_readiness'] or {}
+                    result['result'],result['reason']=native_wait_result(native_receipt,readiness)
                     return result
                 wait_observation(item, sequence, min(remaining, 1.0))
         refreshed_snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)

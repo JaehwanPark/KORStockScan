@@ -53,6 +53,7 @@ IMPLEMENTATION_PATHS = (
     "src/engine/scalping/strategy_owner_replay.py",
     "src/engine/scalping/main_stop_policy.py",
     "src/engine/scalping/position_peak_ledger.py",
+    "src/engine/lifecycle/policy_snapshot_reference.py",
 )
 _KST = timezone(timedelta(hours=9))
 
@@ -87,6 +88,10 @@ def implementation_identity() -> dict[str, str]:
 
 
 def snapshot_version(snapshot: dict) -> str:
+    from src.engine.lifecycle.policy_snapshot_reference import is_reference,validate
+    if is_reference(snapshot):
+        validate(snapshot)
+        return 'avg_down_exit_policy:'+snapshot['sha256']
     return "avg_down_exit_policy:" + canonical_digest(snapshot)
 
 
@@ -521,7 +526,8 @@ def _install_effect_guard():
 def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     # Import before freezing the input filesystem, but prohibit network and
     # writes even during imports. Import-time .pyc writes are disabled by -B.
-    snapshot = observation["policy_snapshot"]
+    from src.engine.lifecycle.policy_snapshot_reference import resolve
+    snapshot = resolve(observation["policy_snapshot"])
     if any(
         not key.startswith("KORSTOCKSCAN_") for key in snapshot.get("environment", {})
     ):
@@ -1301,7 +1307,8 @@ def isolated_replay(
 
 def _provider_worker(payload: dict) -> dict:
     """Only the existing AI transport, never a holding/broker handler."""
-    snapshot, request = payload["policy_snapshot"], payload["request"]
+    from src.engine.lifecycle.policy_snapshot_reference import resolve
+    snapshot, request = resolve(payload["policy_snapshot"]), payload["request"]
     if (
         request.get("call") != "ai_provider.current_prompt"
         or request.get("actual_order_submitted") is not False
@@ -1420,7 +1427,8 @@ def replay_with_current_policy_ai(
         if deadline is not None
         else time.monotonic() + 180
     )
-    snapshot = observation["policy_snapshot"]
+    from src.engine.lifecycle.policy_snapshot_reference import resolve
+    snapshot = resolve(observation["policy_snapshot"])
     records = []
     for row in cached_records or []:
         if (

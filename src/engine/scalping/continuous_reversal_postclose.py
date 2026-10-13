@@ -555,6 +555,20 @@ def main(argv=None):
     if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
     publication=args.publication_date or args.date
+    from src.engine.scalping import reversal_joint_registration as joint
+    if joint.pending_path(args.data_root).is_file():
+        registration=joint.validate_request(json.loads(joint.pending_path(args.data_root).read_text()))
+        if registration['publication_date']==publication:
+            parent=joint.load_offline_parent(args.data_root,publication)
+            if joint.pending(args.data_root,parent,registration['target_date']) is not None:
+                if args.actual_inputs or args.seed_research or args.source_generation:
+                    raise ValueError('joint_registration_frozen_input_override_forbidden')
+                if args.evaluate_only:
+                    print(json.dumps(dict(status='registered_pending',request_sha256=registration['artifact_content_sha256'],
+                        provider_calls=0,runtime_effect=False)))
+                    return 0
+                print(json.dumps(joint.run_postclose(args.data_root,args.date,publication,args.mode)))
+                return 0
     from src.engine.scalping import reversal_manual_registration as manual
     if manual.pending_path(args.data_root).is_file():
         registration=manual.validate_request(json.loads(manual.pending_path(args.data_root).read_text()))

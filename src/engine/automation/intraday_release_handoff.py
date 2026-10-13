@@ -87,6 +87,21 @@ REVIEWED_ENTRY_STORAGE_SOURCES = {
         '0afbd461d2ba0f60fa385179c0f03a7c0aaf0e3972e9b73401776012519783fb'),
 }
 
+# Reviewed joint/source diagnostics and compact replay context. The original
+# policy and every order guard remain bound; only these exact bytes qualify.
+# Evidence: docs/audits/main-joint-operating-and-source-repair-implementation-review-2026-10-13.md.
+REVIEWED_JOINT_CONSUMER_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '5c0b5e1b97e50ed1bd80c4084795a40eaa430c62a8d52cb30b338dbbf7c574ca',
+        'fd35f4ccd99ab3aa665737253c5209ec84755a6b67152b3ff0552ae5c4a8d52d'),
+    'src/engine/kiwoom_sniper_v2.py': (
+        '96319c0071dfce04980af151ff9e22b91352a704281bb727c8e68d604ee6aa20',
+        '51280b79c7eee85279c9d649c76888cb03954f73c18c1e0ba41a863c4ea8a0a1'),
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        'd08f8e220cf76f2b2b867e40eb5382bf17491391161277367acf407143e65a21',
+        '95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd'),
+}
+
 # Incumbent stop consumer compatibility only; numerical selection and research
 # remain pinned to the full current implementation generation.
 # Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
@@ -382,6 +397,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ENTRY_LATENCY_SOURCES.get(name),
                     REVIEWED_ENTRY_BOUNDARY_SOURCES.get(name),
                     REVIEWED_ENTRY_STORAGE_SOURCES.get(name),
+                    REVIEWED_JOINT_CONSUMER_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
             changed.append(name)
             continue

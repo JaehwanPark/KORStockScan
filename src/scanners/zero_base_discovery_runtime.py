@@ -174,6 +174,8 @@ class ZeroBaseDiscoveryRuntime:
             due_sec = {
                 "source_unavailable": 60,
                 "required_feature_insufficient": 60,
+                "pattern_not_matched": 60,
+                "observation_incomplete": 60,
                 "policy_unavailable": 120,
                 "active_conflict": 60,
                 "probe_capacity_deferred": 10,

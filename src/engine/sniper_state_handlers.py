@@ -12355,6 +12355,10 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
     from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
     from src.engine.scalping.strategy_owner_components import digest
     from src.engine.scalping.ai_decision_trace import bind_machine_observation_revision
+    timing_started=time.perf_counter();timing_phase=timing_started;timings={}
+    def mark_phase(name):
+        nonlocal timing_phase
+        current=time.perf_counter();timings[name]=round((current-timing_phase)*1000,3);timing_phase=current
     bind_machine_observation_revision(stock, capture, symbol=str(code)[:6],
                                       bundle_sha256=bundle_sha256)
     # The diagnostic revision is discarded by this observer. Exclude it before
@@ -12363,6 +12367,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
     snapshot = snapshot_without_fields(stock or {}, ('_machine_observation_revision',))
     # Process-local diagnostics are not an operating-policy replay input.
     snapshot.pop("_machine_observation_revision", None)
+    mark_phase('stock_source_clone')
     now_ts = time.time()
     source = {"entry_economic_source_status": "source_gap",
               "entry_economic_source_owner": "main_entry_execution_owners",
@@ -12433,6 +12438,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             correlation_id=capture.get("evaluation_attempt_id"),
             diagnostic_context={"broker_route": broker_route, "effective_venue": venue,
                 "session_bucket": identity["market_session_bucket"], "mechanistic_action": assessment.get("action")})
+        mark_phase('identity_route_capacity')
         source["entry_economic_capacity_receipt"] = copy.deepcopy(budget)
         if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
             source["entry_economic_capacity_blocker"] = budget.get("kt00011_error") or "cash_quantity_missing"
@@ -12488,11 +12494,13 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             best_ask=_safe_int((exact_payload.get("orderbook_top1") or {}).get("ask", {}).get("price"), 0))
         if not orders:
             raise ValueError("owner_price_or_final_sizing_missing")
+        mark_phase('sizing_price_guard')
         operating = freeze_entry_operating_context(sys.modules[__name__], snapshot, context,
             now_ts=time.time(), capacity_receipt=budget, strict=True)
         if not operating:
             raise ValueError("frozen_operating_contract_missing")
         source['entry_economic_operating_context'] = copy.deepcopy(operating)
+        mark_phase('operating_policy_state_freeze')
         orders, split = apply_entry_split_order_policy(orders, stock=snapshot,
             latency_gate=gate, operating_context=operating, observation_only=True)
         if isinstance(split.get('entry_split_order_observation_probe_contract'), dict):
@@ -12535,6 +12543,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         if fields['entry_opportunity_replay_seed'].get('schema') == 'entry_probe_conditional_plan_v1':
             source['entry_economic_plan_kind'] = 'conditional_probe'
             source['entry_economic_conditional_seed'] = fields['entry_opportunity_replay_seed']
+        mark_phase('split_ttl_atomic_plan')
         stage = "entry_ai_economic_plan_observed"
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         fields = {}
@@ -12542,9 +12551,12 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         if str(exc).startswith("unsupported_"):
             source["entry_economic_source_status"] = "unsupported_scope"
         stage = "entry_ai_economic_source_gap"
+    source['entry_economic_stage_timings_ms']=dict(timings)
     event = _log_entry_pipeline(snapshot, code, stage, **identity, **fields, **source,
         actual_order_submitted=False, broker_order_forbidden=True,
         runtime_effect=False, allowed_runtime_apply=False)
+    mark_phase('canonical_append')
+    source['entry_economic_stage_timings_ms']=dict(timings,total=round((time.perf_counter()-timing_started)*1000,3))
     if not isinstance(event, dict) or event.get("structured_append_succeeded") is not True:
         source.update(entry_economic_source_status="source_gap",
                       entry_economic_source_blocker="structured_pre_ai_observation_append_failed")

@@ -285,14 +285,15 @@ def _reversal_lifecycle_diagnostic(row):
     return None
 
 
-def _probe_verified_no_match(row):
+def _probe_verified_no_match(row, *, allow_incomplete=False):
     """A native FALSE observation proves coverage, never machine/AI acceptance."""
     import ast
     try:
         fields = row['fields']
-        if (fields.get('zero_base_probe_result') != 'required_feature_insufficient'
-                or fields.get('zero_base_probe_reason') not in {
-                    'native_observation_residence_exhausted', 'native_observation_no_matching_pattern'}
+        result=fields.get('zero_base_probe_result')
+        if (result not in ({'observation_incomplete'} if allow_incomplete else {'required_feature_insufficient','pattern_not_matched'})
+                or (not allow_incomplete and fields.get('zero_base_probe_reason') not in {
+                    'native_observation_residence_exhausted', 'native_observation_no_matching_pattern'})
                 or fields.get('zero_base_ws_wait_reason') != 'ready'):
             return False
         receipt = fields.get('native_observation_receipt')
@@ -307,6 +308,14 @@ def _probe_verified_no_match(row):
                 receipt = ast.literal_eval(receipt)
         if not isinstance(receipt, dict):
             return False
+        if result in {'pattern_not_matched','observation_incomplete'}:
+            if receipt.get('native_source_current') is not True:return False
+            if not allow_incomplete:
+                counts=receipt.get('selected_lifecycle_counts') or {}
+                if (receipt.get('selected_pending_count') or receipt.get('source_censored_count')
+                        or any(v.get('TRUE',0)>0 for v in counts.values())
+                        or any(counts.get(b,{}).get('FALSE',0)<=0 for b in receipt.get('selected_branch_truth',{}))):
+                    return False
         route = fields['zero_base_route']
         suffix, venue = {'krx_only': ('', 'KRX'), 'nxt_only': ('_NX', 'NXT'),
                          'krx_nxt_integrated': ('_AL', 'SOR')}[route]
@@ -319,7 +328,7 @@ def _probe_verified_no_match(row):
             and receipt.get('schema') == 'native_observation_selection_v1'
             and receipt.get('evaluation_role') == 'probe_observation'
             and receipt.get('runtime_effect') is False
-            and receipt.get('reason') == 'no_matching_pattern'
+            and (allow_incomplete or receipt.get('reason') == 'no_matching_pattern')
             and receipt.get('item') == code + suffix and receipt.get('venue') == venue
             and type(receipt.get('process_pid')) is int and receipt['process_pid'] > 0
             and str(receipt['process_pid']) == str(fields.get('zero_base_producer_pid'))
@@ -332,9 +341,10 @@ def _probe_verified_no_match(row):
                     for k in ('family_sha256', 'scope_execution_hash'))
             and bool(receipt.get('selected_scope'))
             and isinstance(truth, dict) and bool(truth)
-            and all(isinstance(k, str) and k and v == 'FALSE' for k, v in truth.items())
-            and all(type(receipt.get(k)) is int and receipt[k] == 0
+            and all(isinstance(k, str) and k and (allow_incomplete or v == 'FALSE') for k, v in truth.items())
+            and (allow_incomplete or all(type(receipt.get(k)) is int and receipt[k] == 0
                     for k in ('raw_ready_count', 'selected_ready_count'))
+                )
             and all(type(receipt.get(k)) is int and receipt[k] > 0
                     for k in ('native_epoch', 'native_sequence'))
             and type(receipt.get('observed_seconds')) in (int, float)
@@ -421,7 +431,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
             continue
         seen_probes.add(identity)
         observed["probe_results"] += 1
-        if result in {"assessed", "required_feature_insufficient", "source_unavailable"} or (
+        if result in {"assessed", "required_feature_insufficient", "source_unavailable", "pattern_not_matched", "observation_incomplete"} or (
                 result == "policy_unavailable" and reason != "zero_base_runtime_disabled"):
             probe_by_route[str(route or "UNKNOWN")] += 1
         if result == "assessed":
@@ -436,7 +446,13 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
             else:
                 covered_by_route[str(route or 'UNKNOWN')] += 1
                 healthy("machine_probe", row, route)
-        elif result == "required_feature_insufficient":
+        elif result == 'observation_incomplete':
+            observed['probe_observation_incomplete']+=1
+            if _probe_verified_no_match(row,allow_incomplete=True):
+                covered_by_route[str(route or 'UNKNOWN')]+=1
+            record('machine_probe','native_observation_incomplete',row,diagnostic=True,
+                   code=row.get('stock_code'),route=route)
+        elif result in {"required_feature_insufficient", "pattern_not_matched"}:
             if _probe_verified_no_match(row):
                 covered_by_route[str(route or 'UNKNOWN')] += 1
                 no_match_by_route[str(route or 'UNKNOWN')] += 1

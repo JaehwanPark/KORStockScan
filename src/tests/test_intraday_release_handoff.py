@@ -26,6 +26,7 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_ENTRY_LATENCY_SOURCES',
                                      'REVIEWED_ENTRY_BOUNDARY_SOURCES',
                                      'REVIEWED_ENTRY_STORAGE_SOURCES',
+                                     'REVIEWED_JOINT_CONSUMER_SOURCES',
                                      'REVIEWED_STOP_CONSUMER_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
@@ -37,6 +38,7 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_LATENCY_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_BOUNDARY_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_STORAGE_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_JOINT_CONSUMER_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_STOP_CONSUMER_SOURCES', {})
     monkeypatch.setattr(handoff, review_map, {name: pair})
     expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()

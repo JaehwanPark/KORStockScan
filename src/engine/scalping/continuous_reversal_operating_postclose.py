@@ -48,7 +48,13 @@ def enabled(data_root):
 
 def active(data_root,day):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
-    current=N.load_effective(data_root=Path(data_root),target_date=day)
+    try:
+        current=N.load_effective(data_root=Path(data_root),target_date=day)
+    except ValueError as exc:
+        from src.engine.scalping import reversal_joint_registration as J
+        if not J.pending_path(data_root).exists() or not str(exc).startswith(
+                ('v4_contract_code_changed:','v5_contract_code_changed:','v6_contract_code_changed:')):raise
+        current=J.load_offline_parent(data_root,day)
     if (current or {}).get('continuous_reversal',{}).get('schema') in {V5.SCHEMA,'continuous_reversal_policy_v6'} or (enabled(data_root) and (current or {}).get('continuous_reversal',{}).get('schema')==V4.SCHEMA):
         return current
     return None
@@ -61,17 +67,28 @@ def proposals(parent, manifest, *, catalog=C):
         sid=V5.scope_id(key,route)
         ids=sorted(b['branch_id'] for b in f['machine_cells'][key]['routes'][route]['payload']['branches'])
         values=dict(incumbent_native=ids,successor_same=ids,add_all=manifest['scopes'][sid])
+        group=(manifest.get('approved_variant_groups') or {}).get(sid)
+        if group:
+            values=dict(group['alternatives'],CURRENT_NATIVE=ids)
+            result[sid]=values
+            continue
         for alias,bid in C.ALIASES.items():
             if C.applicable(bid,key,route):values['add_'+alias]=sorted(set(ids)|{bid})
         result[sid]=values
     return result
 
 
+def comparison_ids(manifest,configs,sid):
+    if sid in (manifest.get('approved_variant_groups') or {}):
+        return sorted({b for variant in configs[sid].values() for b in variant})
+    return manifest['scopes'][sid]
+
+
 def request(snapshot, arm, *, incumbent=None):
     event,source=snapshot
     from src.engine.scalping import reversal_extended_catalog as EC
     from src.engine.scalping import reversal_extended_union as EA
-    UNION = EA if event.get("registry_sha256") in {EC.SHA256, EC.SUCCESSOR_SHA256} else globals()["UNION"]
+    UNION = EA if event.get("registry_sha256") in {EC.SHA256, EC.SUCCESSOR_SHA256, EC.JOINT_SHA256} else globals()["UNION"]
     if incumbent is not None:
         key=C.cell_key(event['symbol'],event['market'],event['confirmation_price']); route=event['venue']
         cell=incumbent['machine_cells'][key]['routes'][route]
@@ -150,7 +167,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                     return dest
                 bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink)
                 source_receipts+=bars[rec['day']][1]
-            fingerprint=P.digest([rec,manifest['detector_manifest_hash'],code,bars[rec['day']][1],C.LABEL,
+            fingerprint=P.digest([rec,manifest['detector_manifest_hash'],configs,code,bars[rec['day']][1],C.LABEL,
                                   P.file_hash(__file__),P.file_hash(A.__file__),P.file_hash(R.__file__)])
             cache=store.checkpoint('operating-replay:'+fingerprint)
             if cache:
@@ -165,14 +182,15 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                         for row in rows:
                             if row[9]!=item:row[8]=0
                         keys=[C.cell_key(symbol,market,1)] if C.group(symbol)=='samsung' else [f'{C.group(symbol)}|{market}|{b}' for b in C.BANDS]
-                        ids=sorted({b for key in keys for b in manifest['scopes'][V5.scope_id(key,route)]})
-                        state=R.State(branch_ids=ids,registry_sha256=C.SHA256,session_anchor=next((r for r in rows if r[8]),None),offline=True)
+                        ids=sorted({b for key in keys for b in comparison_ids(manifest,configs,V5.scope_id(key,route))})
+                        registry=C.registry_for(ids) if hasattr(C,'registry_for') else C.SHA256
+                        state=R.State(branch_ids=ids,registry_sha256=registry,session_anchor=next((r for r in rows if r[8]),None),offline=True)
                         points=[];previous=None;run=None
                         for index,row in enumerate(rows):
                             ready=state.observe(row,symbol=symbol,venue=route,session=rec['session'])
                             hits=set(ready[0]['event']['branch_signals']) if ready else set()
                             key=C.cell_key(symbol,market,row[3] or 1);sid=V5.scope_id(key,route)
-                            applicable=manifest['scopes'][sid]
+                            applicable=comparison_ids(manifest,configs,sid)
                             truth=A.coverage(state,row,applicable,hits,previous=previous)
                             for bid,value in truth.items():local_coverage[sid+'|'+bid][value]+=1
                             mask=(sid,tuple(sorted(b for b,v in truth.items() if v=='UNKNOWN')))
@@ -215,7 +233,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
             store.commit()
     input_counts['quarantined_conflicts']=len(conflicts)
     for p in canonical.values():
-        sid=p['scope'];ids=manifest['scopes'][sid];baseline=configs[sid]['successor_same'];status=p['outcome']['status']
+        sid=p['scope'];ids=manifest['scopes'][sid];baseline=configs[sid].get('CURRENT_NATIVE',configs[sid].get('successor_same'));status=p['outcome']['status']
         for counts in [totals[sid]]+([today[sid]] if p['day']==day else []):
             A.accumulate(counts['counters'],counts['individual'],counts['exclusive'],counts['unproven'],counts['leave'],p['truth'],status,ids,baseline)
         for name,selected in configs[sid].items():
@@ -244,6 +262,10 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
         proposal_common_range={k:_totals(v) for k,v in proposal_details.items()},
         research_period='retained_clean_baseline_to_source_cutoff',post_registration_observation='replay_not_PID_consumption',
         applied_version_census=PC.applied_census_raw(data_root,day),call_limit=None,**P.AUTH))
+    from src.engine.scalping import reversal_joint_registration as J
+    if not change:
+        report=J.apply_selection(report,parent)
+        manifest=report['operating_manifest']
     P.write(out/'machine-comparison.json',report)
     if publish_outputs:
         P.write(P.directory(data_root,day)/'machine.json',report)

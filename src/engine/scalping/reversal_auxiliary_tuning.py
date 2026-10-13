@@ -557,7 +557,13 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
             out=directory(data_root,day);(out/'frozen').mkdir(parents=True,exist_ok=True)
             evidence=L.response_evidence(store,out,snapshot)
             ownerstates=Counter(r[4] for r in store.owners(campaign['artifact_content_sha256']))
-        mc=copy.deepcopy(f['machine_cells']);ac=copy.deepcopy(f['auxiliary_cells']);pending=[]
+        # The machine selector owns membership. Effective auxiliary inheritance
+        # cannot silently replace its selected cells with the parent again.
+        # Older comparison reports contain comparison payloads without execution
+        # bindings. Only the new explicit selector's receipt can replace them.
+        mc=({c['key']:copy.deepcopy(c) for c in machine['cells']}
+            if machine.get('variant_selection') is not None else copy.deepcopy(f['machine_cells']))
+        ac=copy.deepcopy(f['auxiliary_cells']);pending=[]
         for key,route in V.scopes():
             cell=mc[key]['routes'][route]
             ids=[b['branch_id'] for b in cell['payload']['branches']]

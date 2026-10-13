@@ -50,6 +50,9 @@ def validate_request(request):
 
 
 def pending(data_root, parent, target_date):
+    from src.engine.scalping import reversal_joint_registration as J
+    joint=J.pending(data_root,parent,target_date)
+    if joint is not None:return joint
     path = pending_path(data_root)
     if not path.exists():
         return None

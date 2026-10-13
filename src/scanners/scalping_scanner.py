@@ -6904,6 +6904,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         if key != 'snapshot'},
                     "physical_probe_lease_id": result.get('physical_probe_lease_id'),
                     "zero_base_probe_result": result.get("result"),
+                    "zero_base_probe_result_schema": result.get('schema'),
                     "zero_base_probe_reason": result.get("reason"),
                     "zero_base_rest_source_gap_detail": result.get("rest_source_gap_detail"),
                     "zero_base_tick_read_source": result.get("tick_read_source") or "-",

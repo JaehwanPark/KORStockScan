@@ -47,6 +47,9 @@ def wait_observation(item, sequence, timeout):
 
 def branch_required_seconds(definition):
     """Lower bound on native history, not a promise that a pattern will fire."""
+    if definition.get('kind')=='composed_confirmation_refinement':
+        from src.engine.scalping import reversal_extended_catalog as C
+        return branch_required_seconds(C.definition(definition['original_definition_ref']['branch_id']))
     root = definition.get('root_contract') or {}
     filters = definition.get('filters') or {}
     required = float(root.get('warmup_seconds') or 0)
@@ -66,6 +69,11 @@ def _branch_descriptor(registry_sha256, bid):
     from src.engine.scalping import reversal_extended_catalog as C
     from src.engine.scalping.continuous_reversal_postclose import digest
     d = C.definition(bid)
+    original=d
+    optional_fields=[]
+    if d.get('kind')=='composed_confirmation_refinement':
+        optional_fields=[d['conditional_refinement']['feature']]
+        d=C.definition(d['original_definition_ref']['branch_id'])
     root, filters = d.get('root_contract') or {}, d.get('filters') or {}
     phase = C.branch(bid).get('decision_phase')
     hold = float(root.get('hold_seconds') or 0)
@@ -83,7 +91,7 @@ def _branch_descriptor(registry_sha256, bid):
         fields.add('ret')
     if d.get('higher_low'):
         fields.add('low_rising')
-    return dict(branch_id=bid, definition_sha256=digest(d), registry_sha256=registry_sha256,
+    return dict(branch_id=bid, definition_sha256=digest(original), registry_sha256=registry_sha256,
         backward_window_seconds=seconds-hold, minimum_seconds=seconds,
         hold_seconds=hold, decision_phase=phase,
         confirmation_window_seconds=d.get('confirmation_seconds') or root.get('maximum_wait_seconds'),
@@ -92,7 +100,7 @@ def _branch_descriptor(registry_sha256, bid):
         known_side_required='buy10' in fields,
         positive_quantity_required=bool(fields & {'buy10', 'vwap', 'volume'}),
         transition_required=phase in {'MOMENTUM_CROSS', 'MOMENTUM_HOLD', 'HIGH_BREAKOUT'},
-        feature_fields=sorted(fields), root_contract=deepcopy(root))
+        feature_fields=sorted(fields), optional_refinement_fields=optional_fields, root_contract=deepcopy(root))
 
 
 def residence_requirements(candidate, now, *, actual_price=None):
@@ -165,6 +173,8 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
                     coverage=dict(getattr(state, 'coverage_snapshot', {})),
                     root=dict(getattr(state, 'root_previous', {}), **getattr(state, 'extended_previous', {})),
                     features=dict(getattr(state, '_feature_values', None) or {}),
+                    diagnostic_features=deepcopy(getattr(state, 'diagnostic_features', {})),
+                    diagnostic_rolling=deepcopy(getattr(state, 'diagnostic_rolling', None)),
                     feature_identity=getattr(state, '_feature_key', None),
                     coverage_identity=getattr(state, 'coverage_identity', None),
                     family_sha256=getattr(B, '_GENERATION', None),
@@ -193,8 +203,13 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
     feature_bound = facts['feature_identity'] == tuple(last[:3])
     coverage_bound = facts['coverage_identity'] == tuple(last[:3])
     for bid, row in desc.get('branch_descriptors', {}).items():
+        actual = facts['diagnostic_features'].get(bid) or {}
+        rolling = facts['diagnostic_rolling'] or {}
+        projection = (actual if actual.get('identity') == tuple(last[:3]) else
+                      rolling if rolling.get('identity') == tuple(last[:3]) else {})
+        values = projection.get('values', facts['features'])
         missing = [field for field in row['feature_fields']
-                   if not feature_bound or facts['features'].get(field) is None]
+                   if not feature_bound or values.get(field) is None]
         if covered is None:
             missing.append('continuous_source_interval')
         elif covered < row['backward_window_seconds']:
@@ -202,6 +217,9 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
         condition = facts['root'].get(bid)
         # Root predicate value is not the FALSE->TRUE event or its hold outcome.
         row.update(detector_truth=facts['coverage'].get(bid, 'UNKNOWN') if valid and coverage_bound else 'UNKNOWN',
+            feature_basis='actual_branch_confirmation' if projection is actual and actual else 'prefix_context_no_confirmation',
+            feature_identity=tuple(last[:3]) if feature_bound else None,
+            feature_values={field: values.get(field) for field in row['feature_fields']},
             root_condition_truth=('TRUE' if condition is True else 'FALSE' if condition is False else 'UNKNOWN') if valid else 'UNKNOWN',
             feature_availability='complete' if not missing else 'incomplete', missing_inputs=missing,
             pending_confirmation_epoch=facts['pending'].get(bid),
@@ -273,6 +291,10 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
                     observed_seconds=max(0, last[0]-state.legacy.segment_start),
                     reason='no_matching_pattern' if truth and all(v=='FALSE' for v in truth.values())
                            else 'required_window_incomplete')
+                receipt['selected_pending_count']=sum(len(getattr(state,attr,{}))
+                    for attr in ('pending','path_pending','extended_pending'))
+                receipt['selected_lifecycle_counts']={b:dict(getattr(state,'coverage_counts',{}).get(b,{})) for b in ids}
+                receipt['source_censored_count']=getattr(state,'coverage_source_censored',0)
             for ready in state.ready:
                 e = ready['event']
                 if C.cell_key(symbol, session, e['confirmation_price']) != key[-1]:

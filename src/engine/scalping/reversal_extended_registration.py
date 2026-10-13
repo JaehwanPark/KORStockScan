@@ -118,6 +118,10 @@ def initial_reports(data_root,day,publication,parent,machine,*,publish_policy=Tr
     import gzip
     import subprocess
     change=pending(data_root,parent,N.next_target(publication))
+    from src.engine.scalping import reversal_joint_registration as J
+    if change and change.get('schema')==J.SCHEMA:
+        return J.initial_reports(data_root,day,publication,parent,machine,
+            publish_policy=publish_policy,output_directory=output_directory,effective_date=effective_date)
     if not change or machine.get('registration_change')!=change:
         raise ValueError('extended_registration_machine_binding_invalid')
     expected=V.detector_manifest(parent,effective_date=effective_date or change['target_date'],changes=change)

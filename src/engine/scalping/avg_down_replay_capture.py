@@ -259,11 +259,14 @@ def warm_policy_cache(handlers, *, now_ts: float) -> None:
         except (ValueError, TypeError, AttributeError, KeyError, OSError):
             pass  # Refresh changed dependencies; never prolong a stale receipt.
     snapshot = policy_snapshot(handlers, now_ts)
+    from src.engine.lifecycle.policy_snapshot_reference import persist
+    compact=persist(snapshot,DATA_DIR)
     with _LOCK:
         _POLICY_CACHE.update(
             snapshot=snapshot,
             warmed_at=now_ts,
             rules_identity=id(handlers.TRADING_RULES),
+            compact_snapshot=compact, compact_snapshot_identity=id(snapshot),
         )
 
 
@@ -325,6 +328,13 @@ def _cached_policy(handlers, now_ts):
             if row is not None:
                 raise ValueError("policy_file_removed_since_snapshot") from None
     return snapshot
+
+
+def compact_policy_snapshot(snapshot):
+    """No I/O here: only the warm owner may persist a policy blob."""
+    with _LOCK:
+        ref=_POLICY_CACHE.get('compact_snapshot') if _POLICY_CACHE.get('compact_snapshot_identity')==id(snapshot) else None
+    return deepcopy(ref) if ref is not None else snapshot
 
 
 def prepare(handlers, stock: dict, code: str, episode: str, *, now_ts: float, family: str = "AVG_DOWN") -> dict:
