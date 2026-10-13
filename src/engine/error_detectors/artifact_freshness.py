@@ -1681,6 +1681,9 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'main_stop_confirmation': 'MainStopLossRetirementRuntimeTuning1010',
     }
     owner = mapping.get(alert['stage'])
+    if (alert['stage'] == 'main_stop_confirmation' and owner not in current_owners
+            and 'DirectFamilyPreopenPolicyHandoff' in current_owners):
+        owner = 'DirectFamilyPreopenPolicyHandoff'
     if alert['stage']=='policy_generation':
         from src.engine.monitoring.policy_generation_contract import OWNERS
         owner=OWNERS.get(alert.get('scope'))
