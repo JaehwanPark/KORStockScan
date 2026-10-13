@@ -212,6 +212,37 @@ def test_existing_operator_hold_is_never_overwritten(driver):
     assert d.hold.read_text()=='operator_owned'
 
 
+@pytest.mark.parametrize('damage', [None, 'status', 'identity', 'manifest', 'generation'])
+def test_native_predecessor_seal_requires_live_verified_consumption(driver, monkeypatch, damage):
+    d=driver; data=d.workspace/'data'
+    monkeypatch.setattr(D.H,'DATA_DIR',data)
+    monkeypatch.setattr(D.H.bootstrap,'env_path',lambda day:data/'bootstrap.env')
+    monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda day:data/'manifest.json')
+    monkeypatch.setattr(D.H,'_preopen_path',lambda day:data/'preopen.json')
+    for p in [data/'bootstrap.env',data/'manifest.json',data/'preopen.json']:p.write_text('{}')
+    index=data/'runtime/policy_bootstrap/prepared'/d.day/'latest.json'
+    receipt=index.parent/'generation/readiness.json';receipt.parent.mkdir(parents=True)
+    receipt.write_text('{}');index.write_text(json.dumps(dict(receipt_path=str(receipt),receipt_sha256=D.H._sha(receipt))))
+    check=dict(schema='intraday_pid_consumption_verification_v1',status='pass',basis='native_preopen',
+        actual_pid_consumed=True,target_date=d.day,selected_release_commit=d.previous_commit,
+        release_root=str(d.previous),pid_identity=d.identity,manifest_sha256='verified')
+    if damage=='status':check['status']='fail'
+    if damage=='identity':check['pid_identity']=dict(d.identity,start_ticks='reused')
+    if damage=='manifest':check['manifest_sha256']=None
+    if damage=='generation':receipt.write_text('changed')
+    monkeypatch.setattr(D.H,'_identity',lambda pid:dict(d.identity))
+    monkeypatch.setattr(D.H,'preserve_checklist',lambda day:dict(path='strict-bound',sha256='original'))
+    if damage:
+        with pytest.raises(ValueError):d.seal_native_predecessor(check)
+        assert not (d.directory/'native-predecessor.json').exists()
+    else:
+        d.seal_native_predecessor(check)
+        assert d.native_sha==D.H._sha(d.native_path)
+        assert d.frozen[str(d.native_path)]==d.native_sha
+        assert json.loads(d.native_path.read_text())['verification']==check
+    assert not d.hold.exists() and not d.flag.exists()
+
+
 @pytest.mark.parametrize('damage', ['phase','selection','running','hold'])
 def test_start_refuses_unprepared_or_changed_generation(driver, monkeypatch, damage):
     d=driver; d.acquire_hold(); d.phase='drained'
@@ -323,8 +354,13 @@ def test_supervisor_retry_only_while_session_and_child_absent(monkeypatch,damage
         D._launch(dict(command=['tmux'],cwd='/unused'));assert len(calls)==2
 
 
-def test_incompatible_candidate_is_rejected_before_hold_or_restart(driver, monkeypatch):
+@pytest.mark.parametrize('family', ['delay', 'stop'])
+def test_incompatible_candidate_is_rejected_before_hold_or_restart(driver, monkeypatch, family):
     d = driver
+    monkeypatch.setattr(D.H, 'DATA_DIR', d.workspace/'data')
+    prior, _ = D.H._paths(d.day, d.previous_commit)
+    prior.parent.mkdir(parents=True)
+    prior.write_text(json.dumps({'frozen_files': d.frozen}))
     monkeypatch.setattr(D, '__file__', str(d.candidate/'src/engine/automation/ordered_intraday_deploy.py'))
     monkeypatch.setattr(D.R, 'selected_release', lambda workspace: (d.previous, d.previous_commit))
     monkeypatch.setattr(D.R, 'git', lambda *a: d.commit)
@@ -352,7 +388,8 @@ def test_incompatible_candidate_is_rejected_before_hold_or_restart(driver, monke
         assert not d.hold.exists() and not d.flag.exists()
         assert d.selection.read_bytes() == d.before
         raise ValueError('entry_consumer_unreviewed_change:producer')
-    monkeypatch.setattr(D.H, 'verify_candidate_delay_code', incompatible)
+    monkeypatch.setattr(D.H, 'verify_candidate_delay_code', incompatible if family=='delay' else lambda *a:dict(status='pass'))
+    monkeypatch.setattr(D.H, 'verify_candidate_stop_code', incompatible)
     with pytest.raises(ValueError, match='entry_consumer_unreviewed_change'):
         D.execute(d)
     assert d.state['failed_phase'] == 'preflight'

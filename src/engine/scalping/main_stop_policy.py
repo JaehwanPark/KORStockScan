@@ -46,14 +46,44 @@ def finite(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def implementation_sha():
-    engine=Path(__file__).parents[1]
-    names=('automation/main_stop_postclose.py','automation/main_stop_source_index.py',
+def implementation_paths():
+    return ('automation/main_stop_postclose.py','automation/main_stop_source_index.py',
         'scalping/main_stop_policy.py','scalping/main_stop_replay.py',
         'scalping/trailing_exit_decision.py','scalping/holding_path_vote_policy.py',
         'ai/holding_vote_replay_source.py','ai/holding_exit_vote.py','sniper_state_handlers.py',
         'ai_prompt_contracts.py','ai_response_contracts.py')
-    return digest({name:hashlib.sha256((engine/name).read_bytes()).hexdigest() for name in names})
+
+
+def implementation_sha():
+    engine=Path(__file__).parents[1]
+    return digest({name:hashlib.sha256((engine/name).read_bytes()).hexdigest() for name in implementation_paths()})
+
+
+def verify_runtime_code_contract(bundle, target):
+    """Preserve only the already-approved incumbent across a reviewed handoff.
+
+    Research/publication and selected numeric successors retain current code
+    requirements. Exact original-to-runtime source pairs, original policy,
+    native consumption and same-day authority are independently verified.
+    """
+    validate_bundle(bundle, target)
+    if any(cell['status'] == 'selected' for cell in bundle['cells'].values()):
+        raise ValueError('stop_bundle_code_generation_changed')
+    from src.engine.automation.intraday_release_handoff import verify_entry_consumer_code
+    try:
+        current = implementation_sha()
+        proof = verify_entry_consumer_code(target, family='main_stop', policy_sha=bundle['policy_sha256'],
+            expected=bundle['code_sha256'], actual=current,
+            paths={name:'src/engine/'+name for name in implementation_paths()})
+        if (proof.get('status') != 'verified_intraday_consumer_repair'
+                or proof.get('policy_effect') != 'unchanged'
+                or proof.get('policy_sha256') != bundle['policy_sha256']
+                or proof.get('code_contract_sha256') != bundle['code_sha256']
+                or proof.get('runtime_code_contract_sha256') != current):
+            raise ValueError('stop_intraday_consumer_proof_invalid')
+        return proof
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError('stop_bundle_code_generation_changed:' + str(exc)) from exc
 
 
 def bounded_object(path, limit=1024*1024):
@@ -252,7 +282,7 @@ def load_bundle(path, sha, target, *, require_current_code=True):
     if actual_sha != sha:
         raise ValueError("stop_bundle_byte_hash_invalid")
     if require_current_code and value.get('code_sha256')!=implementation_sha():
-        raise ValueError('stop_bundle_code_generation_changed')
+        verify_runtime_code_contract(value, target)
     return validate_bundle(value, target)
 
 

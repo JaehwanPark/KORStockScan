@@ -124,3 +124,13 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [잔여 병목·패턴 보완계획](../proposals/main-post-readiness-residual-bottleneck-and-unidentified-pattern-research-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md).
   - Acceptance: 슬롯5/long2·60/150초·원 lease deadline 보존, mixed branch 긴 관측 순환, exact item/route/epoch/sequence의 0D count·중복/신원 결손 분리, Main 편입 첫 실패와 capture/lease/record/PID/start 연결을 확인한다. 등록6정의/4scope의 registry·native root·OR 한 기회 소비를 실제 대상에서 확인하며 신호 미발생은 pending이다. PRE NXT와 AFTER SOR 범위를 REGULAR로 복사하지 않는다.
   - History: 10/12 완료 owner의 R1/R2/R4 새 결함 범위와 지정 등록의 자연 수용만 전달한다. 과거 원천의 route/count·미확정 손익을 소급 보충하지 않고 새 경제성/미래 날짜 gate를 추가하지 않는다.
+
+## 10/13 shared-deadline 지연 보완 배포 수용
+
+기존 `DirectFamilyPreopenPolicyHandoff`가 사용자 승인에 따른 지연 개선 코드의 ordered 배포·재기동을 소유한다. 원 10/12→10/13 정책·PREOPEN·bootstrap bytes를 유지하고 candidate code pin과 보조판정 128경로 호환성을 확인한 후 incumbent Main·supervisor 종료→selector/checklist 게시→native 인계→새 PID/start/cwd 소비를 검증한다. 원 strict checklist bytes는 native 역사 snapshot으로 보존하고 최종화 경고를 억제하지 않는다. [후속 구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)를 근거로 사용한다.
+
+기존 `AuxiliaryCircuitRecoveryRepair1012`는 원 native5초·단일 lease·보호 exit·필수 저장을 유지한 상태에서 새로운 stage clock과 실제 caller timeout/SDK 종료·worker/Main 소비를 같은 attempt에서 검증한다. local p95 1.60초와 timeout 감소는 자연 표본이 없으면 미검증으로 남긴다. 기존 `NonfixedDispatchReadinessReview1012`는 WATCHING hint 재정렬의 전체 대상·HOLDING/주문/COMMIT 슬롯 보존과 fixed/nonfixed의 실제 경로 소비를 함께 확인한다. 코드·배포 PASS로 자연·경제성 수용을 완료하지 않는다.
+
+첫 native PREOPEN 기동 이후의 배포는 실행 중인 원 PID의 실제 bootstrap 소비를 확인해 immutable native-predecessor 증빙으로 보존한다. 종료 후 원 정책·PID/start/cwd·준비 원천을 재검증하며 이전 장중 consumed 영수증을 만들어내지 않는다. 원 PID가 살아 있거나 증빙 결손/변조가 있으면 새 기동은 차단한다.
+
+기동 인계는 변경 없는 손절 incumbent의 manifest·원 code digest·정확한 consumer source 쌍도 종료 전에 확인한다. 손절값과 report/bundle 원문은 보존하며 숫자 successor와 장후 연구/게시의 current-code 검증은 유지한다.

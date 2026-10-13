@@ -12357,7 +12357,10 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
     from src.engine.scalping.ai_decision_trace import bind_machine_observation_revision
     bind_machine_observation_revision(stock, capture, symbol=str(code)[:6],
                                       bundle_sha256=bundle_sha256)
-    snapshot = copy.deepcopy(stock or {})
+    # The diagnostic revision is discarded by this observer. Exclude it before
+    # cloning; native claim, custody, sizing and all operating inputs remain.
+    from src.engine.infrastructure.snapshot_copy import snapshot_without_fields
+    snapshot = snapshot_without_fields(stock or {}, ('_machine_observation_revision',))
     # Process-local diagnostics are not an operating-policy replay input.
     snapshot.pop("_machine_observation_revision", None)
     now_ts = time.time()

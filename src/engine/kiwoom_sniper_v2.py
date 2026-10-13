@@ -14617,6 +14617,8 @@ def run_sniper(is_test_mode=False):
                 _admit_runtime_live_attaches()
                 if not runtime_work_queue:
                     break
+                from src.engine.monitoring.runtime_performance import prioritize_native_watches
+                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time())
                 stock = runtime_work_queue.pop(0)
                 runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]

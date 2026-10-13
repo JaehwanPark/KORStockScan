@@ -641,6 +641,49 @@ def test_historical_parent_values_can_migrate_but_old_code_cannot_load_live(tmp_
     assert parent['cells']['SCANNER|REGULAR']['values']==asdict(baseline())
 
 
+@pytest.mark.parametrize('fault', [None, 'missing', 'policy', 'code', 'status'])
+def test_reviewed_incumbent_stop_consumer_preserves_original_policy_and_full_research_pin(tmp_path, monkeypatch, fault):
+    from src.engine.automation import intraday_release_handoff as H
+    _,*_=publication(tmp_path)
+    env,_=post.handoff(tmp_path,'2026-10-13')
+    original=Path(env[p.ENV_FILE]).read_bytes()
+    bundle=json.loads(original)
+    monkeypatch.setattr(p,'implementation_sha',lambda:'e'*64)
+    calls=[]
+    def verify(day, **kw):
+        calls.append(kw)
+        assert day=='2026-10-13' and kw['family']=='main_stop'
+        assert kw['policy_sha']==bundle['policy_sha256'] and kw['expected']==bundle['code_sha256']
+        if fault=='missing':raise ValueError('native consumption missing')
+        return dict(status='fail' if fault=='status' else 'verified_intraday_consumer_repair',
+            policy_effect='unchanged', policy_sha256='changed' if fault=='policy' else kw['policy_sha'],
+            code_contract_sha256=kw['expected'],runtime_code_contract_sha256='changed' if fault=='code' else kw['actual'])
+    monkeypatch.setattr(H,'verify_entry_consumer_code',verify)
+    if fault:
+        with pytest.raises(ValueError,match='code_generation_changed'):
+            p.load_bundle(env[p.ENV_FILE],env[p.ENV_SHA],'2026-10-13')
+    else:
+        loaded=p.load_bundle(env[p.ENV_FILE],env[p.ENV_SHA],'2026-10-13')
+        assert loaded==bundle
+        post.read_committed(tmp_path,'2026-10-12')
+    called=len(calls)
+    with pytest.raises(ValueError,match='code_generation_changed'):
+        post.read_committed(tmp_path,'2026-10-12',verify_full=True)
+    assert len(calls)==called
+    assert Path(env[p.ENV_FILE]).read_bytes()==original
+
+
+def test_selected_stop_successor_cannot_use_incumbent_code_handoff(tmp_path, monkeypatch):
+    from src.engine.automation import intraday_release_handoff as H
+    bundle,*_=publication(tmp_path,experiment=True)
+    assert any(c['status']=='selected' for c in bundle['cells'].values())
+    env,_=post.handoff(tmp_path,'2026-10-13')
+    monkeypatch.setattr(p,'implementation_sha',lambda:'e'*64)
+    monkeypatch.setattr(H,'verify_entry_consumer_code',lambda *a,**kw:pytest.fail('selected policy cannot use incumbent proof'))
+    with pytest.raises(ValueError,match='code_generation_changed'):
+        p.load_bundle(env[p.ENV_FILE],env[p.ENV_SHA],'2026-10-13')
+
+
 def test_malformed_durable_pin_keeps_typed_hard_safety(monkeypatch):
     from src.engine import sniper_state_handlers as h
     from types import SimpleNamespace

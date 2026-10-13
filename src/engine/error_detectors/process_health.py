@@ -131,8 +131,16 @@ def _current_ai_circuit_health(pid, now_ts):
                 or not 0 <= age <= 120):
             raise ValueError('circuit_identity_or_clock_mismatch')
         entry = receipt.get('entry_transport') or {}
+        observation_epoch = entry.get('recovery_wait_observed_epoch', receipt.get('observed_epoch'))
+        observation_age = now_ts-float(observation_epoch) if observation_epoch is not None else None
+        due_epoch = entry.get('recovery_next_eligible_epoch')
+        remaining = (max(0., float(due_epoch)-now_ts)
+                     if due_epoch is not None and observation_age is not None and 0 <= observation_age <= 120 else None)
         blocked = receipt.get('state') == 'disabled' or entry.get('state') in {'OPEN', 'HALF_OPEN'}
         return dict(status='blocked' if blocked else 'observed', receipt=receipt,
+                    entry_observation_age_seconds=observation_age,
+                    recovery_wait_estimate_seconds_as_of_check=remaining,
+                    recovery_wait_estimate_is_admission_authority=False,
                     decision_authority='none', automatic_recovery_forbidden=True)
     except (OSError, ValueError, TypeError, KeyError, IndexError):
         return dict(status='unobservable', reason='exact_pid_circuit_receipt_unavailable',

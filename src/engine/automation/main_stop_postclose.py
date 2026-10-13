@@ -221,8 +221,12 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
         'research_sha256','status','policy_sha256','report_sha256'}}
     if policy.digest(research) != report['research_sha256']:
         raise ValueError('stop_research_binding_invalid')
-    if report.get('code_sha256')!=code_sha() or bundle.get('code_sha256')!=report['code_sha256']:
+    if bundle.get('code_sha256')!=report['code_sha256']:
         raise ValueError('stop_code_generation_changed')
+    if report.get('code_sha256')!=code_sha():
+        if verify_full:
+            raise ValueError('stop_code_generation_changed')
+        policy.verify_runtime_code_contract(bundle, bundle['target_date'])
     policy.validate_bundle(bundle,bundle['target_date'])
     if bundle.get('operator_sources') != operator_sources(root,bundle['target_date']):
         raise ValueError('stop_operator_sources_changed')

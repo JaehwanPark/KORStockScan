@@ -97,3 +97,23 @@ def snapshot_copy(value, memo=None):
                       for item in value)
         return result
     return copy.deepcopy(value, memo)
+
+
+def snapshot_without_fields(value, fields):
+    """Clone a root mapping except discarded fields, retaining root aliases.
+
+    This has the same ownership as deepcopy followed by root pop. It avoids
+    traversing data which the caller already discards, without projecting
+    nested operating inputs or replacing unknown objects' copy protocol.
+    """
+    if type(value) is not dict:
+        result = copy.deepcopy(value)
+        for key in fields:
+            result.pop(key, None)
+        return result
+    result = {}
+    memo = {id(value): result}
+    for key, item in value.items():
+        if key not in fields:
+            result[snapshot_copy(key, memo)] = snapshot_copy(item, memo)
+    return result

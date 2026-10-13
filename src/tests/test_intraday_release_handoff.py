@@ -16,14 +16,25 @@ NATIVE_SELECTION = handoff._selection
 
 
 @pytest.mark.parametrize('name', ['src/engine/kiwoom_sniper_v2.py',
-                                  'src/engine/monitoring/submission_bottleneck_monitor.py'])
+                                  'src/engine/monitoring/submission_bottleneck_monitor.py',
+                                  'src/engine/sniper_state_handlers.py',
+                                  'src/engine/scalping/scanner_async_eval.py',
+                                  'src/engine/ai_engine_openai.py',
+                                  'src/engine/scalping/main_stop_policy.py',
+                                  'src/engine/automation/main_stop_postclose.py'])
+@pytest.mark.parametrize('review_map', ['REVIEWED_ENTRY_CONSUMER_SOURCES',
+                                     'REVIEWED_ENTRY_LATENCY_SOURCES',
+                                     'REVIEWED_STOP_CONSUMER_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
-def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name):
+def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib
     own = 'src/engine/automation/intraday_release_handoff.py'
     before, after = b'def runtime(): return 1\n', b'def runtime(): return 2\n'
     pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-    monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_CONSUMER_SOURCES', {name: pair})
+    monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_CONSUMER_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_LATENCY_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_STOP_CONSUMER_SOURCES', {})
+    monkeypatch.setattr(handoff, review_map, {name: pair})
     expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if damage == 'before': before += b'# altered baseline\n'
     if damage == 'after': after += b'# unreviewed successor\n'
@@ -46,6 +57,72 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
 def _json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
+
+
+@pytest.mark.parametrize('damage', [None, 'proof_hash', 'authority', 'source', 'pid',
+                                   'still_alive', 'selection', 'outside_transition'])
+def test_first_native_preopen_can_drain_into_exact_consumed_handoff(fixture, monkeypatch, damage):
+    data, previous, selected, _ = fixture
+    monkeypatch.setattr(handoff, '_today', lambda *a: NOW)
+    manifest = dict(selected_release_sha=OLD, target_date=DAY, manifest_sha256='policy-unchanged')
+    _json(handoff.bootstrap.manifest_path(DAY), manifest)
+    index = data/'runtime/policy_bootstrap/prepared'/DAY/'latest.json'
+    ref = handoff._read(index); receipt = Path(ref['receipt_path'])
+    paths = [handoff.bootstrap.env_path(DAY), handoff.bootstrap.manifest_path(DAY),
+             handoff._preopen_path(DAY), index, receipt]
+    identity = handoff._identity(1)
+    original = dict(schema='runtime_release_selection_v1', actual_pid_consumed=True,
+        release_root=str(previous), git_commit=OLD, actual_pid_receipt={'pid': 1})
+    transition = data/'runtime/release_transitions'/DAY/NEW
+    before = transition/'selection-before.json'; _json(before, original)
+    proof_path = transition/'native-predecessor.json'
+    proof = dict(schema='native_preopen_predecessor_v1',
+        authority='APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART', candidate_commit=NEW,
+        verification=dict(schema='intraday_pid_consumption_verification_v1', status='pass',
+            basis='native_preopen', actual_pid_consumed=True, target_date=DAY,
+            selected_release_commit=OLD, release_root=str(previous),
+            pid_identity=identity, manifest_sha256='policy-unchanged'),
+        frozen_files={str(p): handoff._sha(p) for p in paths},
+        prepared_receipt_path=str(receipt), prepared_receipt_sha256=ref['receipt_sha256'],
+        selection_before_sha256=handoff._sha(before))
+    if damage=='authority': proof['authority']='unapproved'
+    if damage=='pid': proof['verification']['pid_identity']=dict(identity,pid=99)
+    if damage=='selection': before.write_text('{}')
+    if damage=='outside_transition': proof_path=data/'wrong.json'
+    _json(proof_path, proof)
+    sha=handoff._sha(proof_path)
+    if damage=='proof_hash': proof_path.write_text(proof_path.read_text()+' ')
+    if damage=='source': handoff.bootstrap.env_path(DAY).write_text('changed')
+    _json(data/'runtime/runtime_release_selection.json',dict(approved_by='user',
+        approval_scope='ordered_intraday_deploy_and_restart', git_commit=NEW,
+        previous_git_commit=OLD, previous_release_root=str(previous),
+        native_predecessor_path=str(proof_path),native_predecessor_sha256=sha))
+    exists=Path.exists
+    monkeypatch.setattr(Path,'exists',lambda p: damage=='still_alive' if str(p)=='/proc/1' else exists(p))
+    before_sources={str(p):p.read_bytes() for p in paths}
+    assert not handoff._paths(DAY,OLD)[0].exists()
+    if damage:
+        with pytest.raises(ValueError):
+            handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,
+                            previous_stopped=True)
+        assert not handoff._paths(DAY,NEW)[0].exists()
+    else:
+        result=handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,
+                               previous_stopped=True)
+        assert result['status']=='pass'
+        value=handoff._read(handoff._paths(DAY,NEW)[0])
+        assert value['previous_process_state']=='stopped_native_preopen_consumption_verified'
+        assert value['old_pid_identity']==identity
+        assert value['frozen_files'][str(proof_path)]==sha
+        consumed=handoff.consume(DAY,pid=2,now=NOW)
+        assert consumed['actual_pid_consumed'] is True
+        assert consumed['pid_identity']==handoff._identity(2)
+        proof_path.write_text(proof_path.read_text()+' ')
+        assert handoff.verify(DAY,NEW,now=NOW)['status']=='fail'
+    assert handoff._NATIVE_PREDECESSOR.get() is None
+    assert handoff._STOPPED_PREPARATION.get() is None
+    assert not handoff._paths(DAY,OLD)[1].exists()
+    assert before_sources=={str(p):p.read_bytes() for p in paths}
 
 
 @pytest.fixture
@@ -565,7 +642,8 @@ def test_v5_next_session_candidate_cannot_fall_through_to_intraday_v2(fixture,mo
  with pytest.raises(ValueError,match='requires_next_session_activation'):
   handoff.activate_main_v2(DAY,pid=2,confirm='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION',now=NOW)
 
-@pytest.mark.parametrize('damage', [None, 'git_bytes', 'snapshot', 'postclose_generated', 'generated_corrupt'])
+@pytest.mark.parametrize('damage', [None, 'git_bytes', 'snapshot', 'postclose_generated', 'generated_corrupt',
+                                   'git_missing', 'git_missing_without_snapshot', 'git_missing_corrupt_snapshot'])
 def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fixture, monkeypatch, damage):
     data, previous, _, _ = fixture
     source_day='2026-10-01'
@@ -584,12 +662,14 @@ def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fi
     _json(receipt, {'schema':'next_preopen_readiness_v1','status':'prepared_verified','target_date':DAY,
                    'source_date':source_day,'actual_pid_consumed':False,'policy_receipts':policies})
     _json(index_file, {'receipt_path':str(receipt),'receipt_sha256':handoff._sha(receipt)})
-    if damage in {'postclose_generated','generated_corrupt'}:
+    if damage in {'postclose_generated','generated_corrupt','git_missing','git_missing_corrupt_snapshot'}:
         checklist.write_bytes(original)
         preserved=handoff.preserve_checklist(DAY)
         checklist.write_text('current work added\n')
-        if damage=='generated_corrupt':Path(preserved['path']).write_text('corrupt')
+        if damage in {'generated_corrupt','git_missing_corrupt_snapshot'}:Path(preserved['path']).write_text('corrupt')
     def output(command, **kwargs):
+        if 'show' in command and str(damage).startswith('git_missing'):
+            raise handoff.subprocess.CalledProcessError(128,command)
         if 'show' in command:return b'wrong' if damage in {'git_bytes','postclose_generated','generated_corrupt'} else original
         return OLD+'\n' if 'rev-parse' in command else ''
     monkeypatch.setattr(handoff.subprocess,'check_output',output)
@@ -599,7 +679,7 @@ def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fi
         return {'controller_path':str(controller),'controller_sha256':handoff._sha(controller),
                 'summary_path':str(summary),'summary_sha256':handoff._sha(summary),'policy_receipts':policies}
     monkeypatch.setattr(readiness,'_source_receipts',source)
-    if damage in {'git_bytes','generated_corrupt'}:
+    if damage in {'git_bytes','generated_corrupt','git_missing_without_snapshot','git_missing_corrupt_snapshot'}:
         with pytest.raises(ValueError,match='git_generation_missing'):
             handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,now=NOW,reseal_postclose_source=True)
         return

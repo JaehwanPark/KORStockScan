@@ -22,6 +22,8 @@ def _extra_paths(data_root, day, commit):
     return [Path(data_root).resolve().parent / 'data/runtime/runtime_release_selection.json',
             I.root(data_root) / 'current.json', Path(I.__file__), Path(__file__),
             *H._paths(day, commit),
+            Path(data_root) / 'runtime/release_transitions' / day / commit / 'native-predecessor.json',
+            Path(data_root) / 'runtime/release_transitions' / day / commit / 'selection-before.json',
             N.root(data_root) / 'consumed' / day / (str(os.getpid()) + '.json'),
             I.root(data_root) / 'consumed' / day / (str(os.getpid()) + '.json')]
 
@@ -32,6 +34,23 @@ def _identities(paths):
 
 
 def prepare(*, data_root, day):
+    global _CONFIGURED, _CONSUMED
+    # Share ancestor resolution only inside this synchronous validation. Every
+    # file signature is still read, and the pass rechecks symlink/dir custody.
+    # Never extend the pass across provider I/O or the next evaluation boundary.
+    try:
+        with N.signature_pass():
+            return _prepare_verified(data_root=data_root, day=day)
+    except BaseException:
+        if _LOCK.acquire(blocking=False):
+            try:
+                _CONFIGURED = _CONSUMED = None
+            finally:
+                _LOCK.release()
+        raise
+
+
+def _prepare_verified(*, data_root, day):
     """Obtain one trusted immutable view and prepare its current consumer."""
     global _CONFIGURED, _CONSUMED
     from src.engine.automation import intraday_release_handoff as H

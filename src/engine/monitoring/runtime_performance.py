@@ -10,6 +10,8 @@ import time
 from collections import deque, OrderedDict
 from pathlib import Path
 from threading import Lock
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 _LOCK = Lock()
 _LIMIT = 4096
@@ -21,6 +23,97 @@ _NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare',
           'provider_key_wait', 'provider_transport', 'response_validate', 'main_commit', 'submit_guard',
           'capture_append', 'provider_reserve', 'order_acknowledgement', 'pipeline_source_replay',
           'observation_queue_wait')
+_NAMES += ('entry_refresh', 'entry_evaluation', 'entry_policy', 'entry_machine_assess',
+           'entry_machine_capture', 'entry_economics', 'entry_wire', 'entry_native_check',
+           'entry_annotation', 'entry_trace_prepare', 'entry_trace_append',
+           'entry_outcome_append', 'entry_error_processing')
+_ENTRY_TIMINGS = ContextVar('entry_local_stage_timings', default=None)
+_NATIVE_VISIT_HINTS = OrderedDict()
+_HTTP_SETTLEMENTS = deque(maxlen=128)
+_ENTRY_TIMING_GAPS = 0
+
+
+def record_entry_gap():
+    global _ENTRY_TIMING_GAPS
+    with _LOCK:
+        _ENTRY_TIMING_GAPS += 1
+
+
+def record_http_settlement(request_id, symbol, clocks, *, cancelled):
+    """Late SDK facts reach the existing diagnostics, never a result inbox."""
+    with _LOCK:
+        _HTTP_SETTLEMENTS.append(dict(request_id=str(request_id)[:160],
+            symbol=str(symbol)[:6], observed_epoch=time.time(),
+            stage_monotonic=dict(clocks), future_cancelled=bool(cancelled),
+            decision_authority='none'))
+
+
+@contextmanager
+def entry_timing_frame():
+    """Call-local durations only; neither an admission gate nor a new ledger."""
+    timings = {}
+    token = _ENTRY_TIMINGS.set(timings)
+    try:
+        yield timings
+    finally:
+        _ENTRY_TIMINGS.reset(token)
+
+
+@contextmanager
+def entry_stage(name):
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        record_entry_duration(name, max(0., time.perf_counter() - started))
+
+
+def entry_timings():
+    return dict(_ENTRY_TIMINGS.get() or {})
+
+
+def record_entry_duration(name, seconds):
+    try:
+        timings = _ENTRY_TIMINGS.get()
+        if name in _NAMES and math.isfinite(seconds) and seconds >= 0:
+            if timings is not None:
+                timings[name] = timings.get(name, 0.) + seconds * 1000
+            observe(name, seconds)
+    except Exception:
+        record_entry_gap()
+
+
+def timed_entry_call(name, function, *args, **kwargs):
+    with entry_stage(name):
+        return function(*args, **kwargs)
+
+
+def prioritize_native_watches(queue, *, now):
+    """Consume bounded wake hints between Main units; keep protected slots.
+
+    A hint only changes the next visit. The handler still owns native claim,
+    current source validation and every execution guard. No target is dropped.
+    """
+    with _LOCK:
+        for code, stamp in tuple(_NATIVE_VISIT_HINTS.items()):
+            if not 0 <= now - stamp < 5:
+                _NATIVE_VISIT_HINTS.pop(code, None)
+        indexes = [i for i, target in enumerate(queue)
+                   if target.get('status') == 'WATCHING'
+                   and str(target.get('_scanner_scheduler_lane') or '') != 'COMMIT']
+        hinted = {str(queue[i].get('code') or '')[:6]: _NATIVE_VISIT_HINTS.get(
+            str(queue[i].get('code') or '')[:6]) for i in indexes}
+        hinted = {code: stamp for code, stamp in hinted.items() if stamp is not None}
+        for code in hinted:
+            _NATIVE_VISIT_HINTS.pop(code, None)
+    if not hinted:
+        return queue
+    ordered = sorted((queue[i] for i in indexes), key=lambda target:
+                     (hinted.get(str(target.get('code') or '')[:6], float('inf'))))
+    result = list(queue)
+    for i, target in zip(indexes, ordered):
+        result[i] = target
+    return result
 _SAMPLES = {name: deque(maxlen=_LIMIT) for name in _NAMES}
 _TOTAL = {name: 0 for name in _NAMES}
 _BOUNDS = (.01, .05, .1, .25, .5, 1., 1.5, 2., 3., 5., 10., float('inf'))
@@ -42,7 +135,11 @@ def set_native_ready_event(event):
     """Existing Main wait event only; no callback, I/O, claim or new worker."""
     global _NATIVE_READY_EVENT
     with _LOCK:
+        if _NATIVE_READY_EVENT is not event:
+            _NATIVE_VISIT_HINTS.clear()
         _NATIVE_READY_EVENT = event
+        if event is None:
+            _NATIVE_VISIT_HINTS.clear()
 _ACTIVE_SELECTED = {}  # stream -> bounded active keys, never all-day scans per tick
 _LIFECYCLE_STATES = ('claimed', 'invalidated_before_claim', 'replaced_before_claim',
     'observed_valid_until_deadline_unclaimed', 'source_or_guard_blocked_before_claim',
@@ -213,6 +310,7 @@ def observe(name, seconds, *, generation=None):
         return
     with _LOCK:
         if generation is not None and generation != _GENERATION:
+            _NATIVE_VISIT_HINTS.clear()
             _SIGNALS.clear()
             for values in _SAMPLES.values():
                 values.clear()
@@ -252,6 +350,8 @@ def snapshot():
         inflight = {k:dict(v) for k,v in _SIGNALS.items()}
         generation, started = _GENERATION, _STARTED
         circuit = dict(_CIRCUIT)
+        settlements = list(_HTTP_SETTLEMENTS)
+        timing_gaps = _ENTRY_TIMING_GAPS
         failures = [dict(stage=k[0], reason=k[1], count=v[0]) for k, v in _FAILURES.items()]
         selected = [dict(v) for v in _SELECTED_READY.values()]
         selected_counts = dict(_SELECTED_EVICTED, pending=0)
@@ -294,6 +394,8 @@ def snapshot():
         metrics=metrics, preparation_failures=failures,
         observation_queue=_OBSERVATION_HEALTH() if _OBSERVATION_HEALTH else {'status': 'not_installed'},
         ai_circuit=circuit,
+        provider_attempt_settlements=settlements,
+        entry_timing_gap_count=timing_gaps,
         ready_coverage=coverage, ready_coverage_basis='native_ready_seen_at_ingress_not_all_market_opportunities',
         ready_coverage_window='process_lifetime',
         selected_native_coverage=dict(count=sum(selected_counts.values()), **selected_counts,
@@ -328,7 +430,13 @@ def record_native_ready(B, symbol, venue, item, market, epoch):
         if getattr(B, 'R', None) is not None:
             locks.enter_context(B.R._LOCK)
         notify = _record_native_ready_locked(B, symbol, venue, item, market, epoch)
-    event = _NATIVE_READY_EVENT
+    with _LOCK:
+        event = _NATIVE_READY_EVENT
+        if notify and event is not None:
+            _NATIVE_VISIT_HINTS[str(symbol)[:6]] = epoch
+            _NATIVE_VISIT_HINTS.move_to_end(str(symbol)[:6])
+            while len(_NATIVE_VISIT_HINTS) > 128:
+                _NATIVE_VISIT_HINTS.popitem(last=False)
     if notify and event is not None:
         event.set()
 
