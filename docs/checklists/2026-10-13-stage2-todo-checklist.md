@@ -189,3 +189,5 @@ report 메모리 후속 보완도 기존 위 owner들이 수용한다. read-loca
 ## 10/13 장후 실패 지점 복구 승인
 
 사용자가 실패 지점의 수리·재실행을 지시했다. 기존 `DirectFamilyPreopenPolicyHandoff`와 `DirectFamilySourceRepairMainMechanisticEntry`가 초기 수량의 두-slot 입장 대기 및 joint 등록의 실제 산출물·원천·stage 인계를 수용한다. 선택된 실행본을 부모로 격리해 수리·리뷰·표적 검증 뒤 불변 장후 실행본에서 동일10/13 source/publication으로 실패 단계와 직접 하류만 재개한다. 완료된 원천·보고서·라벨·delay는 원 receipt/hash를 검증해 재사용하고 원 실패를 보존한다. 매매 재기동·수동 env/lock/provider/threshold·주문 권한과 별도 IO/WR 구현 범위를 추가하지 않는다. 전체 acceptance는 최신 summary/checklist/strict/controller이며 초기 지정에 새 경제성 gate를 붙이지 않는다.
+
+직접 재개도 정상 release router의 승인된 account/journal 설정을 native parser로 읽는다. 실제 tower 실패 뒤에는 `--resume-from-final-handoff`의 원 native command·이전 scoped proof·전체 stage·청산 snapshot·수량 terminal 검증으로 완료 계산을 보존하고 summary부터 재생성한다. 기존 설정 파일이나 정책 값을 수동 변경하지 않는다. 같은 owner의 최신 strict/controller와 다음 날짜 준비·실제 PID 수용을 별도로 확인한다.

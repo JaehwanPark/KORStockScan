@@ -126,11 +126,31 @@ wrapper_snapshot=""
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
+# Direct recovery uses the same attested custody identity as the release router.
+# Read assignments through the native parser; never source or edit the env file.
+native_custody_assignments="$(env PYTHONPATH="$PROJECT_DIR" "$VENV_PY" - "$PROJECT_DIR" <<'PY_CUSTODY'
+import sys
+from pathlib import Path
+from src.engine.infrastructure.runtime_release_router import native_custody_environment
+workspace = (Path(sys.argv[1]) / 'data').resolve().parent
+for key, value in native_custody_environment(workspace).items():
+    if any(char in value for char in '\r\n'):
+        raise ValueError('postclose_custody_assignment_invalid')
+    print(key + '=' + value)
+PY_CUSTODY
+)"
+while IFS= read -r assignment; do
+  if [[ -n "$assignment" ]]; then export "$assignment"; fi
+done <<< "$native_custody_assignments"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 RESUME_INITIAL_QUANTITY=false
+RESUME_FINAL_HANDOFF=false
 unset POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT
+unset POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT
 if [[ "${2:-}" == "--resume-from-initial-quantity" && "$#" -eq 2 ]]; then
   RESUME_INITIAL_QUANTITY=true
+elif [[ "${2:-}" == "--resume-from-final-handoff" && "$#" -eq 2 ]]; then
+  RESUME_FINAL_HANDOFF=true
 elif [[ "$#" -gt 1 ]]; then
   echo "Unsupported postclose recovery boundary" >&2
   exit 2
@@ -343,16 +363,19 @@ if path.exists():
         payload = {}
 reuse_binding = None
 scoped_resume = None
-if status == "running" and os.environ.get("POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT"):
+proof_name = (os.environ.get("POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT")
+              or os.environ.get("POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT"))
+if status == "running" and proof_name:
     import hashlib
-    proof_path = Path(os.environ["POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT"])
+    proof_path = Path(proof_name)
     proof_bytes = proof_path.read_bytes(); proof = json.loads(proof_bytes)
-    assert proof["schema"] == "postclose_initial_quantity_resume_v1"
+    assert proof["schema"] in {"postclose_initial_quantity_resume_v1", "postclose_final_handoff_resume_v1"}
     assert proof["source_date"] == target_date and payload.get("status") == "failed"
     assert proof["origin_run_id"] == payload.get("run_id")
     assert proof["origin_status_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     scoped_resume = {"path": str(proof_path.resolve()), "sha256": hashlib.sha256(proof_bytes).hexdigest(),
-                     "origin_run_id": proof["origin_run_id"], "resume_from": "initial_quantity"}
+                     "origin_run_id": proof["origin_run_id"],
+                     "resume_from": "final_handoff" if proof["schema"] == "postclose_final_handoff_resume_v1" else "initial_quantity"}
 if status == "running" and os.environ.get("POSTCLOSE_REUSE_RECEIPT"):
     import hashlib
     receipt_path = Path(os.environ["POSTCLOSE_REUSE_RECEIPT"])
@@ -828,6 +851,75 @@ PY_RESUME
   )"
   export POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT
 fi
+if [[ "$RESUME_FINAL_HANDOFF" == "true" ]]; then
+  [[ "$POSTCLOSE_RECOVERY_REUSE_MODE" == "true" ]] || exit 2
+  POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT="$("$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_FINAL_RESUME'
+import hashlib, json, sys
+from pathlib import Path
+from src.engine.automation.postclose_summary_handoff import (
+    _stage_write, _stage_sources, active_stage_names, stage_receipt_issues)
+from src.engine.scalping.initial_quantity_policy import (
+    committed_refresh_stage_path, refresh_quantity_stage_terminal_valid)
+from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
+
+def final_handoff_resume(project, day):
+    report = (project / 'data').resolve() / 'report'
+    status_path = report / 'threshold_cycle_postclose_status' / f'threshold_cycle_postclose_{day}.status.json'
+    raw = status_path.read_bytes(); status = json.loads(raw)
+    if (status.get('target_date') != day or status.get('status') != 'failed'
+            or status.get('reason') != 'command_failed' or status.get('exit_code') != 1):
+        raise ValueError('final_resume_requires_failed_native_main')
+    log = project / 'logs/threshold_cycle_postclose_cron.log'
+    with log.open('rb') as handle:
+        handle.seek(max(0, log.stat().st_size - 16 * 1024 * 1024))
+        lines = handle.read().decode(errors='replace').splitlines()
+    metrics = [json.loads(line[7:]) for line in lines if line.startswith('[PERF] ')]
+    metrics = [m for m in metrics if m.get('run_id') == status['run_id'] and m.get('phase') == 'command']
+    if (not metrics or metrics[-1].get('producer_module') != 'src.engine.automation.tuning_performance_control_tower'
+            or metrics[-1].get('exit_code') != 1):
+        raise ValueError('final_resume_failed_command_not_tower')
+    completed = [m for m in metrics if m.get('exit_code') == 0
+        and m.get('measurement_complete') is True and m.get('target_date') == day
+        and m.get('code_commit') == status.get('code_commit')]
+    required = {'src.engine.scalping.initial_quantity_policy', 'src.engine.runtime_approval_summary',
+        'src.engine.observation_source_quality_audit', 'src.engine.monitoring.intraday_ws_freshness_monitor',
+        'src.engine.pipeline_event_verbosity_report', 'src.engine.monitoring.rising_missed_classifier_prior'}
+    if not required <= {m.get('producer_module') for m in completed}:
+        raise ValueError('final_resume_native_prefix_incomplete')
+    prior = status.get('scoped_resume')
+    if not isinstance(prior, dict) or prior.get('resume_from') != 'initial_quantity':
+        raise ValueError('final_resume_verified_prefix_missing')
+    proof_path = Path(prior['path']); proof_bytes = proof_path.read_bytes(); proof = json.loads(proof_bytes)
+    if (hashlib.sha256(proof_bytes).hexdigest() != prior.get('sha256')
+            or proof.get('schema') != 'postclose_initial_quantity_resume_v1'
+            or proof.get('source_date') != day or proof.get('origin_run_id') != prior.get('origin_run_id')
+            or proof.get('runtime_effect') is not False or proof.get('allowed_runtime_apply') is not False):
+        raise ValueError('final_resume_verified_prefix_changed')
+    for stage in active_stage_names(day):
+        if stage == 'summary_handoff': continue
+        issues = stage_receipt_issues(report, day, stage)
+        if issues: raise ValueError('final_resume_stage_invalid:' + stage + ':' + ','.join(issues))
+    snapshot = verified_postclose_exit_snapshot_manifest(day, data_root=report.parent)
+    if snapshot is None: raise ValueError('final_resume_exit_snapshot_invalid')
+    quantity = committed_refresh_stage_path(report / 'initial_entry_quantity_type_policy' / f'refresh_postclose_{day}', day)
+    if not refresh_quantity_stage_terminal_valid(json.loads(quantity.read_bytes())):
+        raise ValueError('final_resume_quantity_stage_invalid')
+    return dict(schema='postclose_final_handoff_resume_v1', source_date=day,
+        origin_run_id=status['run_id'], origin_code_commit=status['code_commit'],
+        origin_status_sha256=hashlib.sha256(raw).hexdigest(), prior_scoped_resume=prior,
+        completed_command_receipts=completed,
+        sources=_stage_sources({'initial_quantity':quantity, 'exit_snapshot':snapshot,
+            'custody_environment':report.parent/'config/native_owner_custody.env'}),
+        runtime_effect=False, allowed_runtime_apply=False)
+
+if __name__ == '__main__':
+    project=Path(sys.argv[1]); day=sys.argv[2]; proof=final_handoff_resume(project, day)
+    path=project/'data/report/threshold_cycle_postclose_status/attempts'/day/(proof['origin_run_id']+'.final-handoff-resume.json')
+    _stage_write(path, proof); print(path)
+PY_FINAL_RESUME
+  )"
+  export POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT
+fi
 POSTCLOSE_STAGE_RECOVERY_ARGS=()
 if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ]; then
   POSTCLOSE_STAGE_RECOVERY_ARGS+=(--recover-closed-target)
@@ -837,7 +929,7 @@ write_postclose_status running started 0 0
 emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
 wait_for_eod_terminal "$PROJECT_DIR" "$TARGET_DATE" threshold-cycle \
   "${THRESHOLD_CYCLE_EOD_WAIT_SEC:-5400}" "${THRESHOLD_CYCLE_EOD_WAIT_INTERVAL_SEC:-30}"
-if [[ "$RESUME_INITIAL_QUANTITY" != "true" ]]; then
+if [[ "$RESUME_INITIAL_QUANTITY" != "true" && "$RESUME_FINAL_HANDOFF" != "true" ]]; then
   stop_postclose_bot_if_requested
 fi
 
@@ -1495,7 +1587,7 @@ print(stage2_checklist_path(target_date))
 PY
 }
 
-if [[ "$RESUME_INITIAL_QUANTITY" != "true" ]]; then
+if [[ "$RESUME_INITIAL_QUANTITY" != "true" && "$RESUME_FINAL_HANDOFF" != "true" ]]; then
 for spec in "main_machine_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "legacy_machine_report:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "main_auxiliary_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "outcome_labels:$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION"; do
   stage="${spec%%:*}"; enabled="${spec#*:}"
   if [[ "$enabled" != "true" && "$enabled" != "1" ]]; then
@@ -1657,6 +1749,9 @@ fi
 fi # Native, verified prefix is preserved during explicit initial-quantity resume.
 INITIAL_QUANTITY_CURRENT="$PROJECT_DIR/data/runtime/initial_quantity/current.json"
 INITIAL_QUANTITY_REFRESH_DIR=""
+if [[ "$RESUME_FINAL_HANDOFF" == "true" ]]; then
+  INITIAL_QUANTITY_REFRESH_DIR="$PROJECT_DIR/data/report/initial_entry_quantity_type_policy/refresh_postclose_${TARGET_DATE}"
+else
 if env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$INITIAL_QUANTITY_CURRENT" <<'PY'
 import json
 import sys
@@ -2184,6 +2279,7 @@ if [[ -f "$PROJECT_DIR/data/runtime/research/samsung_tick_transition/consumer-co
 fi
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
   --stage wait --date "$TARGET_DATE" --timeout-sec 14400
+fi # Final handoff resume preserves the validated native analysis and snapshots.
 wait_for_postclose_resources "runtime_approval_summary"
 RUNTIME_APPROVAL_SCOPE_ARGS=("${POSTCLOSE_SWING_SCOPE_ARGS[@]}")
 if [[ "$RUN_PRODUCER_GAP_DISCOVERY" != "true" && "$RUN_PRODUCER_GAP_DISCOVERY" != "1" ]]; then

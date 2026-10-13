@@ -8,6 +8,85 @@ def _text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def _native_final_resume_fixture(tmp_path):
+    import json, hashlib
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    program = script.split("<<'PY_FINAL_RESUME'\n", 1)[1].split('\nPY_FINAL_RESUME', 1)[0]
+    namespace = {'__name__': 'native_resume_test'}
+    exec(compile(program, 'native_final_resume', 'exec'), namespace)
+    day = '2026-10-13'; run = 'native-failed-tower'; commit = 'a' * 40
+    report = tmp_path / 'data/report'; directory = report / 'threshold_cycle_postclose_status'
+    directory.mkdir(parents=True); (tmp_path / 'logs').mkdir()
+    prior = tmp_path / 'prior.json'; prior.write_text(json.dumps(dict(
+        schema='postclose_initial_quantity_resume_v1', source_date=day, origin_run_id='original',
+        runtime_effect=False, allowed_runtime_apply=False)))
+    status = dict(target_date=day, status='failed', reason='command_failed', exit_code=1,
+        run_id=run, code_commit=commit, scoped_resume=dict(path=str(prior),
+            sha256=hashlib.sha256(prior.read_bytes()).hexdigest(), origin_run_id='original',
+            resume_from='initial_quantity'))
+    status_path = directory / f'threshold_cycle_postclose_{day}.status.json'
+    status_path.write_text(json.dumps(status))
+    modules = ('scalping.initial_quantity_policy', 'runtime_approval_summary',
+        'observation_source_quality_audit', 'monitoring.intraday_ws_freshness_monitor',
+        'pipeline_event_verbosity_report', 'monitoring.rising_missed_classifier_prior')
+    metrics = [dict(run_id=run, phase='command', target_date=day, code_commit=commit,
+        measurement_complete=True, producer_module='src.engine.' + m, exit_code=0) for m in modules]
+    metrics.append(dict(run_id=run, phase='command', producer_module='src.engine.automation.tuning_performance_control_tower', exit_code=1))
+    log = tmp_path / 'logs/threshold_cycle_postclose_cron.log'
+    log.write_text(''.join('[PERF] ' + json.dumps(m) + '\n' for m in metrics))
+    quantity = tmp_path / 'quantity.json'; quantity.write_text('{}')
+    snapshot = tmp_path / 'snapshot.json'; snapshot.write_text('{}')
+    profile = tmp_path / 'data/config/native_owner_custody.env'; profile.parent.mkdir(); profile.write_text('fixture')
+    namespace.update(active_stage_names=lambda d: ('main_machine_policy','summary_handoff'),
+        stage_receipt_issues=lambda *a: [],
+        verified_postclose_exit_snapshot_manifest=lambda *a, **k: snapshot,
+        committed_refresh_stage_path=lambda *a: quantity,
+        refresh_quantity_stage_terminal_valid=lambda a: True)
+    return namespace, day, status_path, status, log, metrics, prior
+
+
+def test_final_resume_binds_native_prefix_and_preserves_previous_proof(tmp_path):
+    import hashlib
+    n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
+    proof = n['final_handoff_resume'](tmp_path, day)
+    assert proof['origin_status_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert proof['completed_command_receipts'] == metrics[:-1]
+    assert proof['prior_scoped_resume'] == status['scoped_resume']
+    assert proof['runtime_effect'] is proof['allowed_runtime_apply'] is False
+
+
+@pytest.mark.parametrize('defect', ['running','other_failure','prefix_missing','proof_changed','stage_invalid','snapshot_invalid','quantity_invalid'])
+def test_final_resume_refuses_incomplete_or_changed_native_prefix(tmp_path, defect):
+    import json
+    n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
+    if defect == 'running': status['status'] = 'running'; path.write_text(json.dumps(status))
+    if defect == 'other_failure': metrics[-1]['producer_module'] = 'other'; log.write_text(''.join('[PERF] '+json.dumps(m)+'\n' for m in metrics))
+    if defect == 'prefix_missing': metrics[0]['measurement_complete'] = False; log.write_text(''.join('[PERF] '+json.dumps(m)+'\n' for m in metrics))
+    if defect == 'proof_changed': prior.write_text('{}')
+    if defect == 'stage_invalid': n['stage_receipt_issues'] = lambda *a: ['source_changed']
+    if defect == 'snapshot_invalid': n['verified_postclose_exit_snapshot_manifest'] = lambda *a, **k: None
+    if defect == 'quantity_invalid': n['refresh_quantity_stage_terminal_valid'] = lambda *a: False
+    with pytest.raises(ValueError, match='final_resume_'):
+        n['final_handoff_resume'](tmp_path, day)
+
+
+def test_direct_postclose_loads_native_custody_profile_without_shell_evaluation(tmp_path):
+    import os, subprocess, sys
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    block = script[script.index('native_custody_assignments='):script.index('TARGET_DATE="${1:-')]
+    package = tmp_path / 'src/engine/infrastructure'; package.mkdir(parents=True)
+    (package / 'runtime_release_router.py').write_text(
+        "def native_custody_environment(workspace):\n"
+        " return {'KORSTOCKSCAN_BROKER_ACCOUNT_KEY': 'attested-account', 'KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH': '/native/journal $(touch unexpected)'}\n")
+    env = {**os.environ, 'PROJECT_DIR': str(tmp_path), 'VENV_PY': sys.executable,
+        'KORSTOCKSCAN_BROKER_ACCOUNT_KEY': 'wrong-account'}
+    result = subprocess.run(['bash', '-c', 'set -e\n'+block+'\nprintf "%s\\n" "$KORSTOCKSCAN_BROKER_ACCOUNT_KEY" "$KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH"'],
+        env=env, cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ['attested-account', '/native/journal $(touch unexpected)']
+    assert not (tmp_path / 'unexpected').exists()
+
+
 def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     assert "src.engine.daily_threshold_cycle_report" not in script
@@ -100,7 +179,7 @@ def test_initial_quantity_refresh_runs_before_summary_handoff(monkeypatch, tmp_p
 def test_async_policy_stages_finish_before_summary_and_checklist_hashing():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     wait = script.index('--stage wait --date "$TARGET_DATE" --timeout-sec 14400')
-    summary = script.index("src.engine.runtime_approval_summary")
+    summary = script.index('"$VENV_PY" -m src.engine.runtime_approval_summary')
     checklist = script.index("src.engine.build_next_stage2_checklist", summary)
     verifier = script.index("src.engine.verify_threshold_cycle_postclose_chain", checklist)
     assert wait < summary < checklist < verifier
