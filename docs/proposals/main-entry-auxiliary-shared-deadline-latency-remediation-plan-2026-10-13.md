@@ -1,6 +1,6 @@
 # Main 진입 보조판정 시간초과 상세 보완계획 — 2026-10-13
 
-상태: **구현·리뷰·수정 후 v4를 09:41 배포·재기동했고 PID2273857의 정책 128경로 소비를 검증했다. 이후 새 시간초과를 대조해 마지막 provider 전 검증의 전체 정책 복사 제거와 세부 계측을 보완했다.** [구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)에 코드·실제 배포·새 로그·776건 검증·격리 성능과 미측정 범위를 구분했다. 아래 계획 단계의 미실행 표시는 원 설계 시점의 기록이다. 10/13 08:07 원천 대조에서 확인한 신호 전달, AI 전처리, 결과 기록의 지연을 줄인다. 원 native 신호의 5초 안에서 보조판정과 Main 소비까지 완료하는 것이 목표다. OpenAI의 응답시간이나 과거 미진입의 복구를 보장하는 계획은 아니다.
+상태: **구현·리뷰·수정과 새 시간초과 후속 보완 후 최종 v5를 배포·재기동했다. 10:13 PID2343133/start10331968의 정책 128경로·원 bootstrap/PREOPEN 소비를 검증했다.** [구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)와 [배포 완료 증빙](../../tmp/entry-shared-deadline-deployment-20261013/deployment-completion-v5.json)에 코드·실제 배포·새 로그·776건 검증·격리 성능과 미측정 범위를 구분했다. **전체 지연 목표와 자연 timeout 감소는 미검증이며 기동 직후 긴 Main 루프 관측도 남는다.** 아래 계획 단계의 미실행 표시는 원 설계 시점의 기록이다. 10/13 08:07 원천 대조에서 확인한 신호 전달, AI 전처리, 결과 기록의 지연을 줄인다. 원 native 신호의 5초 안에서 보조판정과 Main 소비까지 완료하는 것이 목표다. OpenAI의 응답시간이나 과거 미진입의 복구를 보장하는 계획은 아니다.
 
 ## 1. 근거와 기존 작업의 경계
 
@@ -206,3 +206,14 @@ rollback은 duplicate claim/send, original deadline 연장, source/compatibility
 - 100개 측정 작업의 독립 표본 오해, 가상 clock과 실측 성능의 혼합, I/O mock 및 이전 회차 future로 인한 측정 오염을 제거했다.
 
 문서 검증과 해시·owner 확인 근거는 [후속 계획 리뷰 영수증](../../tmp/entry-timeout-diagnosis-20261013/plan-review-v2.json)에 남긴다. 실행 코드·운영 checksum·sealed checklist와 다른 작업의 감시 audit는 변경하지 않는다.
+
+
+## 저장 증가·보고서 freshness를 포함한 후속 구현 범위
+
+10/13 후속 실패와 저장 증가를 함께 재점검한 [구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)를 현행 실행 근거로 사용한다. 앞의 미실행 표기는 최초 계획 시점이다. 원5초·모델/prompt/schema·원천/계좌/주문/수량/custody guard는 유지한다.
+
+canonical economic append가 성공한 동일 attempt의 반복 ADM snapshot에서 경제 seed/operating context의 frozen code 중복만 attempt/hash 참조로 바꾼다. replay 원본과 failed append는 보존한다. Buy Funnel cache도 proof projection을 유지한 unused-body representation migration만 하며 source/row population·identity·atomic fsync와 변경 감지로 닫는다. 유지보수는 streaming/full census, report는 원 전체 population으로 수행한다. wrapper는 기본 cooldown0과 flock을 사용하고 명시 override 및600초 freshness는 유지한다. 현재/PID/rollback/policy/unique/unverified 원장을 삭제하지 않는다.
+
+최종 v6 guard의 중복 static/configure 재사용은 현재 loader-owned immutable view와 configure/consumed identity가 확인된 경로만 허용한다. fresh prepare와 기존 native claim·scope·requested ref/registry/model/overlay·end pointer 검증은 매번 실행한다. 판정 결과 cache 또는5초 갱신은 금지한다. current source/pointer 변경·cold/unverified 객체는 원 full guard로 돌아간다.
+
+검토한 exact code pair와 wrapper 계약을 같은 immutable candidate에 포함한다. 기존 `DirectFamilyPreopenPolicyHandoff`가 ordered 전환과 machine/auxiliary128경로 소비를, 기존 `AuxiliaryCircuitRecoveryRepair1012`가 같은 attempt의 provider 전·SDK/HTTP/settlement·Main 소비를 확인한다. 정상 cron DONE/report freshness와 cache row parity·바이트 증가율을 함께 확인하고, 전체 Main 성능이나 외부 timeout을 좁은 component benchmark로 완료 처리하지 않는다. EOD와 원10/12→10/13 policy/bootstrap는 재생성하지 않는다.

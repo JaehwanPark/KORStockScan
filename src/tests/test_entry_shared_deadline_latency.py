@@ -86,6 +86,83 @@ def request(**changes):
                                   'required': ['action'], 'additionalProperties': False}), **changes))
 
 
+@pytest.mark.parametrize('damage', [None, 'scope', 'backend', 'expired', 'path', 'unrequested'])
+def test_prepared_native_claim_matches_original_dynamic_validator(monkeypatch, tmp_path, damage):
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import reversal_current_backend as D
+    bid = 'legacy_dd5_ge_0_4_v1'
+    family = {'schema': V.SCHEMA, 'family_sha256': 'a' * 64, 'machine_cells': {
+        'scope': {'routes': {'SOR': {'scope_execution_hash': 'b' * 64, 'backend': 'union_v6'}}}}}
+    if damage == 'backend': family['machine_cells']['scope']['routes']['SOR']['backend'] = 'registered_v4'
+    active = E.N._freeze({'bundle_sha256': 'c' * 64, 'continuous_reversal': family})
+    policy = {'continuous_reversal_claim': {'token': 'native'}, 'continuous_reversal_assessment': {
+        'policy_version': V.SCHEMA, 'cell_key': 'scope', 'route': 'SOR',
+        'scope_execution_hash': ('0' if damage == 'scope' else 'b') * 64,
+        'matched_policy_refs': [] if damage == 'unrequested' else [bid + ':' + V.A.definition_hash(bid)]}}
+    calls = []
+    def native(claim, sha, *, now):
+        calls.append('native')
+        assert claim is policy['continuous_reversal_claim'] and sha == family['family_sha256']
+        if damage in {'expired', 'path'}:
+            raise ValueError('reversal_signal_expired_or_changed' if damage == 'expired' else 'reversal_signal_path_changed')
+        return ({'branch_signals': {bid: {}}}, {})
+    monkeypatch.setattr(V, 'validate_family', lambda f: calls.append('static'))
+    monkeypatch.setattr(D, 'configure_bundle', lambda *a, **kw: calls.append('configure'))
+    monkeypatch.setattr(D, 'validate_any_claim', native)
+    monkeypatch.setattr(D, 'backend', lambda: SimpleNamespace(_GENERATION=family['family_sha256']))
+    monkeypatch.setattr(E, '_CONFIGURED', ('verified', active))
+    monkeypatch.setattr(E, '_CONSUMED', ('verified', active, {}, {}))
+    monkeypatch.setattr(E, 'prepare', lambda **kw: calls.append('fresh_sources_and_pid') or active)
+    def result(fn):
+        try: return ('pass', fn())
+        except ValueError as exc: return ('fail', str(exc))
+    expected = result(lambda: V.validate_active_claim(policy, active, now=1000.))
+    assert 'static' in calls
+    calls.clear()
+    token = E.N._VERIFIED_EVALUATION.set((str(tmp_path.absolute()), '2026-10-13', active, 'pointer'))
+    try:
+        actual = result(lambda: E._prepared_v6_claim(policy, active, data_root=tmp_path, day='2026-10-13'))
+    finally: E.N._VERIFIED_EVALUATION.reset(token)
+    assert actual == expected and 'fresh_sources_and_pid' in calls
+    assert 'static' not in calls and 'configure' not in calls
+
+
+@pytest.mark.parametrize('damage', ['mutable', 'no_view', 'different_view', 'no_configuration', 'no_consumption'])
+def test_unverified_native_configuration_never_uses_the_fast_path(monkeypatch, tmp_path, damage):
+    from src.engine.scalping import reversal_evaluation_context as E
+    active = E.N._freeze({'bundle_sha256': 'a' * 64})
+    if damage == 'mutable': active = dict(active)
+    monkeypatch.setattr(E, '_CONFIGURED', None if damage == 'no_configuration' else ('key', active))
+    monkeypatch.setattr(E, '_CONSUMED', None if damage == 'no_consumption' else ('key', active, {}, {}))
+    monkeypatch.setattr(E, 'prepare', lambda **kw: pytest.fail('No unchecked preparation'))
+    view = None if damage == 'no_view' else (str(tmp_path.absolute()), '2026-10-13', {} if damage == 'different_view' else active, 'pointer')
+    token = E.N._VERIFIED_EVALUATION.set(view)
+    try: assert E._prepared_v6_claim({}, active, data_root=tmp_path, day='2026-10-13') is None
+    finally: E.N._VERIFIED_EVALUATION.reset(token)
+
+
+@pytest.mark.parametrize('appended', [True, False])
+def test_action_snapshot_references_only_successful_canonical_economic_append(monkeypatch, appended):
+    from src.engine import sniper_state_handlers as H
+    emitted = []
+    monkeypatch.setattr(H, '_log_entry_pipeline', lambda *a, **kw: emitted.append((a[2], kw)))
+    body = {'loaded_code': 'same frozen code' * 10000}
+    decision = {'action': 'WAIT', 'score': 50, 'evaluation_attempt_id': 'exact',
+        'machine_observation_sha256': 'm', 'ai_decision_trace_id': 'trace',
+        'entry_economic_conditional_seed': body, 'entry_economic_operating_context': body,
+        'entry_pre_ai_source_append_receipt': {'structured_append_succeeded': appended, 'capsule_sha256': 'a' * 64}}
+    H._emit_scalp_entry_adm_snapshot({'id': 1, 'name': 'TEST', 'strategy': 'SCALPING'}, '005930',
+                                   'ai_confirmed', ai_decision=decision)
+    fields = emitted[-1][1]
+    assert ('entry_economic_conditional_seed' in fields) is not appended
+    assert ('entry_economic_operating_context' in fields) is not appended
+    assert decision['entry_economic_operating_context'] is body  # Canonical input never mutated.
+    if appended:
+        assert fields['entry_economic_payload_reference']['evaluation_attempt_id'] == 'exact'
+        assert fields['entry_economic_payload_reference']['capsule_sha256'] == 'a' * 64
+
+
 def test_discarded_diagnostic_is_not_copied_but_cycles_and_operating_aliases_are():
     class Discarded:
         def __deepcopy__(self, memo):

@@ -79,6 +79,14 @@ REVIEWED_ENTRY_BOUNDARY_SOURCES = {
         '7a2d9795aa7501e0f510368f59282d849456c310c91b46d993d2d540867d678a'),
 }
 
+# Diagnostic state snapshots reference successfully appended canonical replay
+# evidence instead of echoing its frozen code. Older release pairs stay valid.
+REVIEWED_ENTRY_STORAGE_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '5c0b5e1b97e50ed1bd80c4084795a40eaa430c62a8d52cb30b338dbbf7c574ca',
+        '0afbd461d2ba0f60fa385179c0f03a7c0aaf0e3972e9b73401776012519783fb'),
+}
+
 # Incumbent stop consumer compatibility only; numerical selection and research
 # remain pinned to the full current implementation generation.
 # Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
@@ -373,6 +381,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if pair in (REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),
                     REVIEWED_ENTRY_LATENCY_SOURCES.get(name),
                     REVIEWED_ENTRY_BOUNDARY_SOURCES.get(name),
+                    REVIEWED_ENTRY_STORAGE_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
             changed.append(name)
             continue

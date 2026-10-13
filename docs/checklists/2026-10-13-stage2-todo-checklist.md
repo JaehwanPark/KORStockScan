@@ -136,3 +136,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 기동 인계는 변경 없는 손절 incumbent의 manifest·원 code digest·정확한 consumer source 쌍도 종료 전에 확인한다. 손절값과 report/bundle 원문은 보존하며 숫자 successor와 장후 연구/게시의 current-code 검증은 유지한다.
 
 10/13 새 PID 시간초과 후속은 마지막 provider 전 fresh immutable view·동기 signature pass와 load/claim/auxiliary 자식 계측을 포함한다. 기존 native·registry/model·철회·pointer/원천·Main/submit guard는 모두 실행한다. static 부분 p95 비교164.21ms→129.95ms는 전체 local1.60초 또는 timeout 감소의 수용 근거가 아니다. 키움 kt00011 source-only150ms·원5초·계좌/가격/수량·정확 receipt2초·필수 저장은 유지하며 source TR/AI timeout을 실제 실패로 남긴다. 후속 코드 리뷰·776건 검증은 위 구현 리뷰가 소유하며 새 ID와 원장/정책 세대를 만들지 않는다.
+
+
+기존 `DirectFamilyPreopenPolicyHandoff`가 저장·freshness 후속 보완의 ordered 배포도 소유한다. 검증된 canonical append의 반복 ADM body만 원본 attempt/hash로 참조하고, economic proof/전체 row population을 유지한 streaming cache projection을 포함한다. report wrapper는 5분 cron·flock/명시 override를 보존하며 기본 cooldown0, freshness600초를 사용한다. 원 policy/PREOPEN·수량·주문·custody와5초는 유지한다. 과거 미검증 원장·활성/rollback release는 보존한다.
+
+기존 `AuxiliaryCircuitRecoveryRepair1012`는 verified immutable v6 view의 중복 static/configure 제거 후 source/PID/claim/ref/model/aux/end guard와 동일 attempt clocks를 수용한다. `NonfixedDispatchReadinessReview1012`는 자연 fixed/nonfixed 방문과 report DONE/freshness·row parity·저장 증가율을 확인한다. code/좁은 benchmark PASS는 전체 성능·provider 성공·경제성 완료가 아니다. [10:25 이후 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)에 원천·검증·실제 공간 회수를 기록한다.

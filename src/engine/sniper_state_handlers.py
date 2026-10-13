@@ -19952,6 +19952,29 @@ def _emit_scalp_entry_adm_snapshot(
             "EV/live-auto/runtime-apply/threshold mutation/order guard mutation/"
             "provider change/bot_restart/broker order submit"
         )
+    # This repeated state snapshot is a diagnostic projection. Full economic
+    # replay inputs already belong to the pre-AI economic event and AI trace;
+    # preserve exact lineage and hashes instead of echoing frozen source code.
+    # Failed canonical append retains the original payload for investigation.
+    append_receipt = fields.get('entry_pre_ai_source_append_receipt')
+    if (isinstance(append_receipt, dict) and append_receipt.get('structured_append_succeeded') is True
+            and re.fullmatch('[a-f0-9]{64}', str(append_receipt.get('capsule_sha256') or ''))
+            and fields.get('evaluation_attempt_id')):
+        removed = [key for key in ('entry_economic_conditional_seed', 'entry_economic_operating_context')
+                   if key in fields]
+        if removed:
+            fields['entry_economic_payload_reference'] = {
+                'owner': 'entry_ai_economic_plan_observed_or_source_gap_and_ai_decision_trace',
+                'evaluation_attempt_id': fields.get('evaluation_attempt_id'),
+                'machine_observation_sha256': fields.get('machine_observation_sha256'),
+                'ai_decision_trace_id': fields.get('ai_decision_trace_id'),
+                'capsule_sha256': append_receipt.get('capsule_sha256'),
+                'plan_sha256': fields.get('entry_economic_plan_sha256'),
+                'referenced_fields': removed,
+                'runtime_effect': False,
+            }
+            for key in removed:
+                fields.pop(key)
     _log_entry_pipeline(
         stock,
         code,

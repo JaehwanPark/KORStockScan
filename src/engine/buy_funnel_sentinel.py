@@ -403,13 +403,14 @@ def _payload_to_cache_row(
         projection = economic_evidence(raw_field_dict, _safe_str(payload.get("stock_code"))[:6])
         raw_fields = {k: v for k, v in raw_field_dict.items() if k not in {
             "entry_opportunity_replay_seed", "entry_execution_sizing_plan",
-            "entry_economic_capacity_receipt", "entry_price_plan"}}
+            "entry_economic_capacity_receipt", "entry_price_plan",
+            "entry_economic_conditional_seed", "entry_economic_operating_context"}}
         raw_fields["economic_source_monitor_projection"] = json.dumps(projection, sort_keys=True)
     fields = {str(k): _safe_str(v) for k, v in raw_fields.items()}
     record_id = payload.get("record_id")
     if record_id in (None, "", 0):
         record_id = fields.get("id") or ""
-    return {
+    return _slim_economic_cache_row({
         "emitted_at": emitted_at.isoformat(),
         "pipeline": _safe_str(payload.get("pipeline")),
         "stage": stage,
@@ -417,7 +418,25 @@ def _payload_to_cache_row(
         "stock_code": _safe_str(payload.get("stock_code"))[:6],
         "record_id": _safe_str(record_id),
         "fields": fields,
-    }
+    })
+
+
+def _slim_economic_cache_row(row):
+    """Preserve all events and diagnostic fields, excluding unused code copies.
+
+    Canonical economic plans stay in the raw economic event and AI trace.
+    Their verified monitor projection already owns this cache's diagnosis.
+    """
+    if row.get('stage') not in {'scalp_entry_action_decision_snapshot',
+                               'entry_ai_economic_plan_observed', 'entry_ai_economic_source_gap'}:
+        return row
+    fields = row.get('fields')
+    if not isinstance(fields, dict):
+        return row
+    if row.get('stage') != 'scalp_entry_action_decision_snapshot' and not fields.get('economic_source_monitor_projection'):
+        return row  # Legacy/unverified economic diagnosis cannot lose its inputs.
+    return dict(row, fields={k: v for k, v in fields.items() if k not in {
+        'entry_economic_conditional_seed', 'entry_economic_operating_context'}})
 
 
 def _blocker_label_from_stage_fields(stage: str, fields: dict[str, str]) -> str:
@@ -531,6 +550,8 @@ def load_pipeline_events(
                 payload,
                 exclude_summary_stages=exclude_summary_stages,
             ),
+            project_loaded_payload=_slim_economic_cache_row,
+            cache_projection_version='economic_source_refs_v1',
         )
         events = [
             event for row in rows if (event := _event_from_cache_row(row)) is not None

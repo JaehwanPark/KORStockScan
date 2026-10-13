@@ -14,7 +14,10 @@ fi
 
 LOCK_FILE="${BUY_FUNNEL_SENTINEL_LOCK_FILE:-$PROJECT_DIR/tmp/run_buy_funnel_sentinel.lock}"
 COOLDOWN_STATE_FILE="${BUY_FUNNEL_SENTINEL_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp/run_buy_funnel_sentinel_success.state}"
-COOLDOWN_SEC="${BUY_FUNNEL_SENTINEL_COOLDOWN_SEC:-240}"
+# Cron already runs every five minutes and flock prevents overlapping writers.
+# A post-completion cooldown skips the next tick and can exceed the ten-minute
+# freshness contract even after a successful run. Explicit overrides remain.
+COOLDOWN_SEC="${BUY_FUNNEL_SENTINEL_COOLDOWN_SEC:-0}"
 LOG_FILE="${BUY_FUNNEL_SENTINEL_LOG_FILE:-$PROJECT_DIR/logs/run_buy_funnel_sentinel.log}"
 DRY_RUN="${BUY_FUNNEL_SENTINEL_DRY_RUN:-0}"
 USE_CACHE="${BUY_FUNNEL_SENTINEL_USE_CACHE:-1}"
@@ -38,7 +41,7 @@ validate_int() {
   fi
 }
 
-COOLDOWN_SEC="$(validate_int "$COOLDOWN_SEC" 240)"
+COOLDOWN_SEC="$(validate_int "$COOLDOWN_SEC" 0)"
 IONICE_CLASS="$(validate_int "$IONICE_CLASS" 2)"
 IONICE_LEVEL="$(validate_int "$IONICE_LEVEL" 7)"
 NICE_LEVEL="$(validate_int "$NICE_LEVEL" 12)"

@@ -16,6 +16,51 @@ _CONFIGURED = None
 _CONSUMED = None
 
 
+def _prepared_v6_claim(policy, active, *, data_root, day):
+    """Reuse verified static configuration; validate native eligibility anew.
+
+    None selects the original validator when no loader-owned, consumed view
+    exists. No native signal snapshot or decision is cached here.
+    """
+    from src.engine.scalping import reversal_current_backend as D
+    from src.engine.scalping import reversal_extended_union as A
+    view = N._VERIFIED_EVALUATION.get()
+    if (not isinstance(active, N._FrozenDict) or view is None
+            or view[:2] != (str(Path(data_root).absolute()), day) or view[2] is not active):
+        return None
+    with _LOCK:
+        eligible = (_CONFIGURED is not None and _CONSUMED is not None
+                    and _CONFIGURED[1] is active and _CONSUMED[1] is active
+                    and _CONFIGURED[0] == _CONSUMED[0])
+    if not eligible:
+        return None
+    # Recheck source dependencies, current selection, PID/start/cwd, handoff,
+    # auxiliary consumption and backend generation at this final boundary.
+    if prepare(data_root=data_root, day=day) is not active:
+        raise ValueError('reversal_scope_execution_changed')
+    with _LOCK:
+        if (_CONFIGURED is None or _CONSUMED is None or _CONFIGURED[1] is not active
+                or _CONSUMED[1] is not active or _CONFIGURED[0] != _CONSUMED[0]):
+            raise ValueError('reversal_scope_execution_changed')
+        family = active.get('continuous_reversal') or {}
+        if family.get('schema') != 'continuous_reversal_policy_v6':
+            return None
+        if getattr(D.backend(), '_GENERATION', None) != family['family_sha256']:
+            raise ValueError('reversal_scope_execution_changed')
+        assessment = policy['continuous_reversal_assessment']
+        cell = family['machine_cells'][assessment['cell_key']]['routes'][assessment['route']]
+        if (cell['scope_execution_hash'] != assessment['scope_execution_hash']
+                or cell['backend'] != 'union_v6'):
+            raise ValueError('reversal_scope_execution_changed')
+        snapshot = D.validate_any_claim(policy['continuous_reversal_claim'],
+                                        family['family_sha256'], now=time.time())
+        remaining = {bid + ':' + A.definition_hash(bid) for bid in snapshot[0]['branch_signals']}
+        valid = sorted(remaining.intersection(assessment['matched_policy_refs']))
+        if not valid:
+            raise ValueError('reversal_all_requested_signals_invalidated')
+        return valid
+
+
 def validate_before_provider(policy, *, data_root, model):
     """Fresh final guards on one loader-owned view, before any provider I/O.
 
@@ -47,8 +92,12 @@ def validate_before_provider(policy, *, data_root, model):
             registered = G.load(data_root, assessment['auxiliary_registry_sha256'])
             if model != registered['model']:
                 raise ValueError('auxiliary_registered_model_mismatch')
-        remaining = timed_entry_call('entry_native_claim', validate_active_claim,
-                                     policy, active, now=time.time())
+        remaining = (timed_entry_call('entry_native_claim', _prepared_v6_claim,
+                                      policy, active, data_root=data_root, day=day)
+                     if version == 'continuous_reversal_policy_v6' else None)
+        if remaining is None:
+            remaining = timed_entry_call('entry_native_claim', validate_active_claim,
+                                         policy, active, now=time.time())
         if set(remaining) != set(assessment['matched_policy_refs']):
             raise ValueError('reversal_request_signal_set_changed_before_send')
         timed_entry_call('entry_native_auxiliary', I.validate_decision,

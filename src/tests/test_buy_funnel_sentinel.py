@@ -7,6 +7,30 @@ import pytest
 from src.engine import buy_funnel_sentinel as sentinel
 
 
+@pytest.mark.parametrize('override,skipped', [(None, False), ('240', True)])
+def test_periodic_wrapper_runs_next_tick_and_preserves_explicit_cooldown(tmp_path, override, skipped):
+    import os
+    import shutil
+    import subprocess
+    root = Path(__file__).resolve().parents[2]
+    deploy = tmp_path/'deploy'; deploy.mkdir()
+    script = deploy/'run_buy_funnel_sentinel_intraday.sh'
+    shutil.copyfile(root/'deploy'/script.name, script)
+    shutil.copyfile(root/'deploy/cpu_affinity_profile.sh', deploy/'cpu_affinity_profile.sh')
+    python = tmp_path/'.venv/bin/python'; python.parent.mkdir(parents=True)
+    python.write_text('#!/bin/bash\ntouch "$PROJECT_DIR/called"\n')
+    python.chmod(0o755)
+    state = tmp_path/'recent-success'; state.touch()
+    env = dict(os.environ, PROJECT_DIR=str(tmp_path), BUY_FUNNEL_SENTINEL_DRY_RUN='1',
+               BUY_FUNNEL_SENTINEL_COOLDOWN_STATE_FILE=str(state), KORSTOCKSCAN_NPROC_OVERRIDE='1')
+    env.pop('BUY_FUNNEL_SENTINEL_COOLDOWN_SEC', None)
+    if override is not None: env['BUY_FUNNEL_SENTINEL_COOLDOWN_SEC'] = override
+    result = subprocess.run(['bash', str(script), '2026-10-13'], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path/'called').exists() is not skipped
+    assert ('cooldown active' in result.stdout) is skipped
+
+
 def _event(
     target_date: str,
     hhmmss: str,
