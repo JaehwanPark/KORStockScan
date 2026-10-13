@@ -16,6 +16,46 @@ _CONFIGURED = None
 _CONSUMED = None
 
 
+def validate_before_provider(policy, *, data_root, model):
+    """Fresh final guards on one loader-owned view, before any provider I/O.
+
+    This pass only shares ancestor resolution and avoids materializing a full
+    mutable bundle for read-only guards. Native claim, scope, registry, model,
+    overlay and revocation validators still run at this independent boundary.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from contextlib import ExitStack
+    from src.engine.monitoring.runtime_performance import entry_stage, timed_entry_call
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    assessment = policy['continuous_reversal_assessment']
+    version = assessment.get('policy_version')
+    if version == 'continuous_reversal_policy_v6':
+        from src.engine.scalping.continuous_reversal_policy_v6 import validate_active_claim
+    elif version == 'continuous_reversal_policy_v5':
+        from src.engine.scalping.continuous_reversal_policy_v5 import validate_active_claim
+    else:
+        raise ValueError('reversal_pre_provider_version_unsupported')
+    day = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
+    with N.signature_pass(), ExitStack() as boundary:
+        # Keep pointer and dependency checks at entry and exit. The immutable
+        # view and this synchronous pass never escape to SDK or order callers.
+        with entry_stage('entry_native_load'):
+            active = boundary.enter_context(N.verified_evaluation(data_root=data_root, target_date=day))
+        if assessment.get('auxiliary_registry_sha256'):
+            registered = G.load(data_root, assessment['auxiliary_registry_sha256'])
+            if model != registered['model']:
+                raise ValueError('auxiliary_registered_model_mismatch')
+        remaining = timed_entry_call('entry_native_claim', validate_active_claim,
+                                     policy, active, now=time.time())
+        if set(remaining) != set(assessment['matched_policy_refs']):
+            raise ValueError('reversal_request_signal_set_changed_before_send')
+        timed_entry_call('entry_native_auxiliary', I.validate_decision,
+                         data_root, policy, active, now=time.time())
+        return remaining
+
+
 def _extra_paths(data_root, day, commit):
     from src.engine.automation import intraday_release_handoff as H
     from src.engine.scalping import reversal_auxiliary_intraday as I

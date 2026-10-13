@@ -10872,25 +10872,11 @@ class GPTSniperEngine:
                 from src.engine.scalping.initial_quantity_bundle_state import reserve_reversal_signal
                 from src.utils.constants import DATA_DIR
                 assessment=entry_setup_live_policy['continuous_reversal_assessment']
-                from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
-                active=load_effective(data_root=DATA_DIR,target_date=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat())
                 if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
-                    from src.engine.scalping.continuous_reversal_policy_v5 import validate_active_claim
-                    if assessment.get('policy_version')=='continuous_reversal_policy_v6':
-                        from src.engine.scalping.continuous_reversal_policy_v6 import validate_active_claim
-                    from src.engine.scalping.reversal_auxiliary_intraday import validate_decision
-                    if assessment.get('auxiliary_registry_sha256'):
-                        from src.engine.scalping.reversal_auxiliary_registry import load as load_auxiliary_registry
-                        registered=load_auxiliary_registry(DATA_DIR,assessment['auxiliary_registry_sha256'])
-                        if target_model != registered['model']:
-                            raise ValueError('auxiliary_registered_model_mismatch')
+                    from src.engine.scalping.reversal_evaluation_context import validate_before_provider
                     try:
-                        remaining=timed_entry_call('entry_native_check', validate_active_claim,
-                            entry_setup_live_policy,active,now=time.time())
-                        if set(remaining)!=set(assessment['matched_policy_refs']):
-                            raise ValueError('reversal_request_signal_set_changed_before_send')
-                        timed_entry_call('entry_native_check', validate_decision,
-                            DATA_DIR, entry_setup_live_policy, active, now=time.time())
+                        timed_entry_call('entry_native_check', validate_before_provider,
+                            entry_setup_live_policy, data_root=DATA_DIR, model=target_model)
                     except ValueError as exc:
                         # Only native eligibility endings from this validator
                         # are neutral to the provider circuit. Unknown errors,
@@ -10922,6 +10908,8 @@ class GPTSniperEngine:
                             cache_hit=False, cache_mode='miss', result_source='native_signal_invalidated',
                             input_contract_fields=input_contract_fields)
                 else:
+                    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+                    active=load_effective(data_root=DATA_DIR,target_date=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat())
                     if not active or active['bundle_sha256']!=entry_setup_live_policy['machine_bundle_sha256']:
                         raise ValueError('reversal_policy_changed_before_provider')
                     validate_claim(entry_setup_live_policy.get('continuous_reversal_claim'),assessment['family_sha256'],now=time.time())

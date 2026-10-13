@@ -25,6 +25,7 @@ _NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare',
           'observation_queue_wait')
 _NAMES += ('entry_refresh', 'entry_evaluation', 'entry_policy', 'entry_machine_assess',
            'entry_machine_capture', 'entry_economics', 'entry_wire', 'entry_native_check',
+           'entry_native_load', 'entry_native_claim', 'entry_native_auxiliary',
            'entry_annotation', 'entry_trace_prepare', 'entry_trace_append',
            'entry_outcome_append', 'entry_error_processing')
 _ENTRY_TIMINGS = ContextVar('entry_local_stage_timings', default=None)

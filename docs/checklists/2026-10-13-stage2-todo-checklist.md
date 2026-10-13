@@ -134,3 +134,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 첫 native PREOPEN 기동 이후의 배포는 실행 중인 원 PID의 실제 bootstrap 소비를 확인해 immutable native-predecessor 증빙으로 보존한다. 종료 후 원 정책·PID/start/cwd·준비 원천을 재검증하며 이전 장중 consumed 영수증을 만들어내지 않는다. 원 PID가 살아 있거나 증빙 결손/변조가 있으면 새 기동은 차단한다.
 
 기동 인계는 변경 없는 손절 incumbent의 manifest·원 code digest·정확한 consumer source 쌍도 종료 전에 확인한다. 손절값과 report/bundle 원문은 보존하며 숫자 successor와 장후 연구/게시의 current-code 검증은 유지한다.
+
+10/13 새 PID 시간초과 후속은 마지막 provider 전 fresh immutable view·동기 signature pass와 load/claim/auxiliary 자식 계측을 포함한다. 기존 native·registry/model·철회·pointer/원천·Main/submit guard는 모두 실행한다. static 부분 p95 비교164.21ms→129.95ms는 전체 local1.60초 또는 timeout 감소의 수용 근거가 아니다. 키움 kt00011 source-only150ms·원5초·계좌/가격/수량·정확 receipt2초·필수 저장은 유지하며 source TR/AI timeout을 실제 실패로 남긴다. 후속 코드 리뷰·776건 검증은 위 구현 리뷰가 소유하며 새 ID와 원장/정책 세대를 만들지 않는다.

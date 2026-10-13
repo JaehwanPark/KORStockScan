@@ -71,6 +71,14 @@ REVIEWED_ENTRY_LATENCY_SOURCES = {
         '34332f4541b381184ca47d371ecc6598b6f2e10534085bf3893c76fef553c7f2'),
 }
 
+# Final synchronous provider-boundary repair; previous consumed pairs remain
+# valid for their immutable releases. Exact source pair, no broader exemption.
+REVIEWED_ENTRY_BOUNDARY_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        '4d5ff0cc0451365f17feb8ed8f6a113f984abf416f24ac7bd5cb24f2ca596eed',
+        '7a2d9795aa7501e0f510368f59282d849456c310c91b46d993d2d540867d678a'),
+}
+
 # Incumbent stop consumer compatibility only; numerical selection and research
 # remain pinned to the full current implementation generation.
 # Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
@@ -364,6 +372,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if pair in (REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),
                     REVIEWED_ENTRY_LATENCY_SOURCES.get(name),
+                    REVIEWED_ENTRY_BOUNDARY_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
             changed.append(name)
             continue

@@ -21,6 +21,62 @@ from src.engine.ai_engine_openai import (
 )
 
 
+@pytest.mark.parametrize('version', ['v5', 'v6'])
+@pytest.mark.parametrize('failure', [None, 'model', 'claim', 'changed_refs', 'auxiliary', 'exit'])
+def test_final_native_boundary_keeps_all_guards_and_closes_before_provider(monkeypatch, version, failure):
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    V = __import__('src.engine.scalping.continuous_reversal_policy_' + version, fromlist=['unused'])
+    calls = []
+    active = E.N._freeze({'bundle_sha256': 'a' * 64, 'nested': {'policy': ['original']}})
+    policy = {'continuous_reversal_assessment': {
+        'policy_version': 'continuous_reversal_policy_' + version,
+        'auxiliary_registry_sha256': 'b' * 64, 'matched_policy_refs': ['original']}}
+    @contextmanager
+    def view(**kwargs):
+        assert E.N._SIGNATURE_PASS.get() is not None
+        calls.append('load')
+        try:
+            yield active
+        finally:
+            calls.append('exit')
+            if failure == 'exit':
+                raise ValueError('pointer changed')
+    def registry(*args):
+        calls.append('model')
+        return {'model': 'changed' if failure == 'model' else 'gpt-5.4-nano'}
+    def claim(actual_policy, actual_bundle, *, now):
+        assert actual_policy is policy and actual_bundle is active
+        with pytest.raises(TypeError):
+            actual_bundle['nested']['policy'].append('mutated')
+        calls.append('claim')
+        if failure == 'claim':
+            raise ValueError('reversal_signal_expired_or_changed')
+        return ['changed'] if failure == 'changed_refs' else ['original']
+    def auxiliary(root, actual_policy, actual_bundle, *, now):
+        assert actual_policy is policy and actual_bundle is active
+        calls.append('auxiliary')
+        if failure == 'auxiliary':
+            raise ValueError('auxiliary_decision_generation_revoked')
+    monkeypatch.setattr(E.N, 'verified_evaluation', view)
+    monkeypatch.setattr(G, 'load', registry)
+    monkeypatch.setattr(V, 'validate_active_claim', claim)
+    monkeypatch.setattr(I, 'validate_decision', auxiliary)
+    with R.entry_timing_frame() as frame:
+        if failure:
+            with pytest.raises(ValueError):
+                E.validate_before_provider(policy, data_root='fixture', model='gpt-5.4-nano')
+        else:
+            assert E.validate_before_provider(policy, data_root='fixture', model='gpt-5.4-nano') == ['original']
+        assert 'entry_native_load' in frame
+    assert calls[0:2] == ['load', 'model'] and calls[-1] == 'exit'
+    assert ('claim' in calls) == (failure != 'model')
+    assert ('auxiliary' in calls) == (failure not in {'model', 'claim', 'changed_refs'})
+    assert E.N._SIGNATURE_PASS.get() is None and E.N._VERIFIED_EVALUATION.get() is None
+
+
+
 def request(**changes):
     return OpenAIResponseRequest(**dict(dict(prompt='fixture', user_input='{}', require_json=True,
         context_name='fixture', model_name='gpt-5.4-nano', temperature=None,

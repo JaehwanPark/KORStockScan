@@ -1,6 +1,6 @@
 # Main 진입 보조판정 시간초과 상세 보완계획 — 2026-10-13
 
-상태: **후속 승인에 따라 작업본 구현·리뷰·수정·표적 검증을 완료했다. 배포·재기동·운영 정책 재생성·추가 AI 호출은0이다.** [구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)에 변경·검증·격리 성능과 미측정 범위를 기록했다. 아래 계획 단계의 미실행 표시는 원 설계 시점의 기록이다. 10/13 08:07 원천 대조에서 확인한 신호 전달, AI 전처리, 결과 기록의 지연을 줄인다. 원 native 신호의 5초 안에서 보조판정과 Main 소비까지 완료하는 것이 목표다. OpenAI의 응답시간이나 과거 미진입의 복구를 보장하는 계획은 아니다.
+상태: **구현·리뷰·수정 후 v4를 09:41 배포·재기동했고 PID2273857의 정책 128경로 소비를 검증했다. 이후 새 시간초과를 대조해 마지막 provider 전 검증의 전체 정책 복사 제거와 세부 계측을 보완했다.** [구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)에 코드·실제 배포·새 로그·776건 검증·격리 성능과 미측정 범위를 구분했다. 아래 계획 단계의 미실행 표시는 원 설계 시점의 기록이다. 10/13 08:07 원천 대조에서 확인한 신호 전달, AI 전처리, 결과 기록의 지연을 줄인다. 원 native 신호의 5초 안에서 보조판정과 Main 소비까지 완료하는 것이 목표다. OpenAI의 응답시간이나 과거 미진입의 복구를 보장하는 계획은 아니다.
 
 ## 1. 근거와 기존 작업의 경계
 
@@ -35,6 +35,8 @@ HTTP lock wait 0ms는 HTTP executor queue wait 0ms를 증명하지 않는다. AI
 2. 기계 ENTER_NOW만 현재 compact AI로 전달한다. model `gpt-5.4-nano`, prompt/schema/semantic 판정, transport·provider·key retry·실제 호출한도·inflight 제한을 보존한다. 이번 계획은 timeout 확대나 추가 호출을 해결책으로 사용하지 않는다.
 3. source/item/route/session/epoch/sequence, 정책·registry·compatibility·PID/start/release 결속을 전송 직전과 Main 소비에서 검증한다. PRE NXT, REGULAR의 실제 경로, 통합 AFTER SOR를 서로 대체하지 않는다.
 4. 주문·가격·수량·자금·custody·operator veto·cooldown·hard/protect/emergency와 보유/청산 우선순위를 유지한다. 과거 PASS 재사용, 원천 결손 보간, 퇴역 episode/widget 복원은 없다.
+
+10/13 후속 검증은 마지막 provider 전 검증의 fresh immutable view와 짧은 signature pass까지만 공유한다. native claim·scope·registry/model·overlay/revocation·current-pointer/path 검사를 모두 실행하고 provider 전에 닫는다. `entry_native_load/claim/auxiliary`는 aggregate `entry_native_check`의 자식 구간이며 서로 p95를 합쳐 전체 비용으로 계산하지 않는다. 키움 source-only150ms·rate reserve·계좌/가격 증빙·2초 entry freshness·normal sizing과 필수 저장은 유지한다. 확인된 SDK timeout과 source TR timeout은 계속 실제 실패로 기록한다.
 
 아래 수치는 **구현 후 성능 목표**다. 목표 미달 신호를 버리는 신규 entry gate나 provider 최소잔여시간 gate가 아니다.
 
