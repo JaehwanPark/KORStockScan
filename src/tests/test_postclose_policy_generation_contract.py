@@ -205,3 +205,86 @@ def test_native_observation_requires_matching_source_code_and_scope(tmp_path):
     assert not incidents.closure_verified(
         dict(incident, scope="auxiliary"), native, True
     )
+
+
+def holding_rebinding_fixture(tmp_path, monkeypatch):
+    from src.engine.scalping import holding_vote_experiment as vote
+    monkeypatch.setattr(vote, 'code_sha', lambda: 'b' * 64)
+    day = '2026-10-13'
+    replay = dict(vote_numeric_research=dict(schema='holding_vote_numeric_research_v1',
+        status='experiment_not_armed', code_sha256='a' * 64, selected_cells={}, cells={},
+        allowed_runtime_apply=False, actual_profit_verified=False, parent={'values': {'min_votes': 2}}),
+        cost_after_paired_ev_krw=None, allowed_runtime_apply=False)
+    replay['policy_generation'] = generation.native(replay, family='holding_vote', day=day,
+        data_root=tmp_path, source_state='source_gap', comparison_state='experiment_not_armed',
+        handoff_state='incumbent_carried')
+    original = dict(date=day, meta={'snapshot_profile': 'postclose_exit'}, holding_path_vote_replay=replay)
+    current = copy.deepcopy(original)
+    current['holding_path_vote_replay']['vote_numeric_research']['code_sha256'] = 'b' * 64
+    original_path = tmp_path / 'original.json'
+    original_path.write_text(json.dumps(original))
+    path = tmp_path / 'report/monitor_snapshots' / f'holding_exit_observation_{day}.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(current))
+    return day, original_path, path
+
+
+def test_unarmed_code_rebinding_preserves_snapshot_and_never_verifies_fixture(tmp_path, monkeypatch):
+    day, original, path = holding_rebinding_fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    assert generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]['reason'] == 'policy_generation_native_generation_mismatch'
+    receipt = generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+    observed = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
+    assert path.read_bytes() == before
+    assert observed['status'] == 'unverified' and observed['native_validated'] is False
+    assert observed['findings'] == ['policy_generation_unverified']
+    assert observed['source_state'] == 'source_gap' and observed['realized_profit'] is None
+    assert observed['allowed_runtime_apply'] is False
+    assert observed['binding_repair']['sha256'] == receipt['sha256']
+    assert generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path) == receipt
+
+
+@pytest.mark.parametrize('change', ['selected', 'armed', 'profit', 'parent', 'meta', 'unknown_code', 'unsealed_original'])
+def test_unarmed_code_rebinding_rejects_source_economics_or_policy_changes(tmp_path, monkeypatch, change):
+    day, original, path = holding_rebinding_fixture(tmp_path, monkeypatch)
+    current = json.loads(path.read_text())
+    numeric = current['holding_path_vote_replay']['vote_numeric_research']
+    if change == 'selected': numeric['selected_cells'] = {'cell': {'value': 1}}
+    elif change == 'armed': numeric['status'] = 'selected'
+    elif change == 'profit': current['holding_path_vote_replay']['cost_after_paired_ev_krw'] = 0
+    elif change == 'parent': numeric['parent']['values']['min_votes'] = 1
+    elif change == 'meta': current['meta']['snapshot_profile'] = 'full'
+    elif change == 'unknown_code': numeric['code_sha256'] = 'c' * 64
+    else:
+        previous = json.loads(original.read_text())
+        previous['holding_path_vote_replay']['vote_numeric_research']['parent']['values']['min_votes'] = 3
+        original.write_text(json.dumps(previous))
+    path.write_text(json.dumps(current))
+    with pytest.raises(ValueError):
+        generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+
+
+@pytest.mark.parametrize('change', ['seal', 'runtime', 'contract', 'symlink', 'source_changed'])
+def test_rebinding_reader_fails_closed_for_changed_or_unsafe_receipts(tmp_path, monkeypatch, change):
+    from pathlib import Path
+    day, original, source = holding_rebinding_fixture(tmp_path, monkeypatch)
+    reference = generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+    path = Path(reference['path'])
+    if change == 'symlink':
+        moved = path.with_suffix('.original')
+        path.rename(moved)
+        path.symlink_to(moved)
+    elif change == 'source_changed':
+        current = json.loads(source.read_text())
+        current['holding_path_vote_replay']['cost_after_paired_ev_krw'] = 0
+        source.write_text(json.dumps(current))
+    else:
+        body = json.loads(path.read_text())
+        if change == 'seal': body['receipt_sha256'] = '0' * 64
+        elif change == 'runtime': body['runtime_effect'] = True
+        else: body['contract']['source_state'] = 'complete'
+        if change != 'seal': body['receipt_sha256'] = generation.digest({k:v for k,v in body.items() if k != 'receipt_sha256'})
+        path.write_text(json.dumps(body))
+    observed = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
+    assert observed['status'] == 'unobservable' and observed['native_validated'] is False
+    assert observed['findings'] == ['policy_generation_contract_invalid']

@@ -6,6 +6,8 @@ proves a selected release, PID consumption, realized profit, or startup safety.
 
 from __future__ import annotations
 import hashlib
+import copy
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -242,6 +244,97 @@ def inspect(contract, *, family, day, payload=None, data_root=None):
     )
 
 
+def _holding_code_rebinding(original, current, day, data):
+    """Only an unarmed numeric projection's code identity may differ."""
+    from src.engine.scalping.holding_vote_experiment import code_sha
+
+    if original.get('date') != day or current.get('date') != day:
+        raise ValueError('holding_generation_rebinding_date_invalid')
+    before = original.get('holding_path_vote_replay') or {}
+    after = current.get('holding_path_vote_replay') or {}
+    numeric = after.get('vote_numeric_research') or {}
+    if (numeric.get('schema') != 'holding_vote_numeric_research_v1'
+            or numeric.get('status') != 'experiment_not_armed'
+            or numeric.get('selected_cells') != {} or numeric.get('cells') != {}
+            or numeric.get('allowed_runtime_apply') is not False
+            or numeric.get('actual_profit_verified') is not False
+            or numeric.get('code_sha256') != code_sha()):
+        raise ValueError('holding_generation_rebinding_not_unarmed_code_only')
+    prior = inspect(before.get('policy_generation'), family='holding_vote',
+                    day=day, payload=before, data_root=data)
+    if prior.get('status') != 'unverified' or before['policy_generation'].get('fixture_receipt'):
+        raise ValueError('holding_generation_rebinding_original_contract_invalid')
+    expected = copy.deepcopy(original)
+    expected['holding_path_vote_replay']['vote_numeric_research']['code_sha256'] = numeric['code_sha256']
+    if expected != current or before['vote_numeric_research']['code_sha256'] == numeric['code_sha256']:
+        raise ValueError('holding_generation_rebinding_changed_source_or_policy')
+    contract = native(after, family='holding_vote', day=day, data_root=data,
+                      source_state=prior['source_state'], comparison_state=prior['comparison_state'],
+                      handoff_state=prior['handoff_state'])
+    if contract.get('fixture_receipt'):
+        raise ValueError('holding_generation_rebinding_cannot_add_fixture_verification')
+    return contract
+
+
+def _holding_rebinding_path(data, day, report_sha):
+    from datetime import date
+    if (date.fromisoformat(day).isoformat() != day or len(report_sha) != 64
+            or any(c not in '0123456789abcdef' for c in report_sha)):
+        raise ValueError('holding_generation_rebinding_date_invalid')
+    path = Path(data).resolve() / 'report/policy_generation_rebindings/holding_vote' / day / (report_sha + '.json')
+    if path.parent.resolve() != path.parent or path.is_symlink():
+        raise ValueError('holding_generation_rebinding_path_invalid')
+    return path
+
+
+def publish_holding_code_rebinding(day, *, original_path, data_root):
+    """Publish report-only metadata custody without rewriting live source bytes."""
+    from src.engine.scalping.main_stop_policy import bounded_object
+    from src.utils.jsonl_io import write_json_object_generation_safe, json_artifact_generation_lock
+    data = Path(data_root).resolve()
+    current_path = data / 'report/monitor_snapshots' / f'holding_exit_observation_{day}.json'
+    current, current_sha = bounded_object(current_path, 8 * 1024 * 1024)
+    original, original_sha = bounded_object(original_path, 8 * 1024 * 1024)
+    contract = _holding_code_rebinding(original, current, day, data)
+    body = dict(schema='holding_unarmed_code_generation_rebinding_v1', source_date=day,
+                report_sha256=current_sha, original_report_sha256=original_sha,
+                original_report=original, contract=contract,
+                runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False,
+                realized_profit=None)
+    body['receipt_sha256'] = digest(body)
+    if len(json.dumps(body, ensure_ascii=True, allow_nan=False).encode()) > 8 * 1024 * 1024:
+        raise ValueError('holding_generation_rebinding_receipt_too_large')
+    path = _holding_rebinding_path(data, day, current_sha)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with json_artifact_generation_lock(path, exclusive=True, blocking=True) as lease:
+        if path.exists():
+            if bounded_object(path, 8 * 1024 * 1024)[0] != body:
+                raise ValueError('holding_generation_rebinding_immutable_conflict')
+        else:
+            write_json_object_generation_safe(path, body, generation=lease)
+    if bounded_object(current_path, 8 * 1024 * 1024)[1] != current_sha:
+        raise ValueError('holding_generation_rebinding_source_changed')
+    return dict(path=str(path), sha256=bounded_object(path, 8 * 1024 * 1024)[1],
+                status='unverified', runtime_effect=False)
+
+
+def _read_holding_code_rebinding(data, day, report_sha, payload):
+    from src.engine.scalping.main_stop_policy import bounded_object
+    path = _holding_rebinding_path(data, day, report_sha)
+    body, receipt_sha = bounded_object(path, 8 * 1024 * 1024)
+    if (body.get('schema') != 'holding_unarmed_code_generation_rebinding_v1'
+            or body.get('source_date') != day or body.get('report_sha256') != report_sha
+            or body.get('receipt_sha256') != digest({k: v for k, v in body.items() if k != 'receipt_sha256'})
+            or body.get('runtime_effect') is not False or body.get('allowed_runtime_apply') is not False
+            or body.get('actual_pid_consumed') is not False or body.get('realized_profit') is not None):
+        raise ValueError('holding_generation_rebinding_receipt_invalid')
+    expected = _holding_code_rebinding(body['original_report'], payload, day, data)
+    if body.get('contract') != expected:
+        raise ValueError('holding_generation_rebinding_contract_changed')
+    return body['contract'], dict(path=str(path), sha256=receipt_sha,
+                                 disposition='unarmed_code_metadata_only')
+
+
 def observations(root, day, *, data_root=None):
     """Bounded native receipts; never regenerate reports or evaluate a grid."""
     from src.engine.scalping.main_stop_policy import bounded_object
@@ -274,8 +367,15 @@ def observations(root, day, *, data_root=None):
                 if family == "holding_vote"
                 else payload
             )
+            contract = native_payload.get('policy_generation')
+            binding_repair = None
+            if (family == 'holding_vote' and contract
+                    and contract.get('source_generation') != digest(source_body(native_payload))):
+                repair_path = _holding_rebinding_path(data, day, report_sha)
+                if repair_path.exists() or repair_path.is_symlink():
+                    contract, binding_repair = _read_holding_code_rebinding(data, day, report_sha, payload)
             projection = inspect(
-                native_payload.get("policy_generation"),
+                contract,
                 family=family,
                 day=day,
                 payload=native_payload,
@@ -286,6 +386,8 @@ def observations(root, day, *, data_root=None):
                 report_sha256=report_sha,
                 native_validated=projection["status"] == "verified",
             )
+            if binding_repair is not None:
+                scoped['binding_repair'] = binding_repair
             items.append(
                 dict(
                     scoped,
