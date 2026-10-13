@@ -1365,12 +1365,19 @@ def _new_aggregate(
 
 
 def _load_summary_rows(
-    summary_path: Path, *, include_samples: bool = True, strict: bool = False
+    summary_path: Path, *, include_samples: bool = True, strict: bool = False,
+    _projection_reuse: bool = False,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     summary_path = existing_or_gzip_path(summary_path)
     if not summary_path.exists():
         return rows
+    if not include_samples and _projection_reuse:
+        from src.engine.monitoring.sentinel_compact_store import slim_summary_projection
+        contract = hashlib.sha256(Path(__file__).read_bytes()).hexdigest() + ':' + str(strict)
+        return slim_summary_projection(summary_path,
+            lambda: _load_summary_rows(summary_path, include_samples=False, strict=strict,
+                                      _projection_reuse=False), contract=contract)
     with open_text_auto(summary_path, errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.strip()
@@ -1470,6 +1477,7 @@ def update_and_load_pipeline_event_summaries(
     incremental_rollup: bool = False,
     allow_bootstrap: bool = False,
     observer_contract: str | None = None,
+    reuse_small_projection: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     summary_profile = _safe_str(summary_profile) or "default"
     raw_path = existing_or_gzip_path(raw_path).resolve()
@@ -1634,7 +1642,8 @@ def update_and_load_pipeline_event_summaries(
         else:
             rows = merge_identity_rows(previous, new_rows)
     else:
-        rows = _load_summary_rows(publish_path, include_samples=include_samples)
+        rows = _load_summary_rows(publish_path, include_samples=include_samples,
+                                  _projection_reuse=reuse_small_projection)
     backup_path = summary_path.with_name(f"{summary_path.name}.previous.{os.getpid()}")
     if stale_summary:
         if summary_path.exists():

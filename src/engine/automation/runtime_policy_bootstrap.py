@@ -14,6 +14,10 @@ import os
 import shlex
 import subprocess
 import tempfile
+import copy
+import threading
+import time
+import stat as stat_module
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -109,7 +113,175 @@ def _holding_vote_handoff(target_date: str) -> tuple[dict[str, str], dict[str, A
     }, receipt
 
 
-def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[str, Any]]:
+_DELAY_OBSERVER_LOCK = threading.Lock()
+_DELAY_OBSERVER_CACHE: dict = {}
+_DELAY_OBSERVER_METRICS: dict = {}
+
+
+def _observer_thread_io():
+    try:
+        values = dict(line.split(':', 1) for line in Path('/proc/thread-self/io').read_text().splitlines())
+        return {k: int(values[k]) for k in ('rchar', 'wchar', 'read_bytes', 'write_bytes')}
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def _delay_observer_signature(source_day, target_date):
+    """Metadata-only custody inventory; no raw body or evidence leaf decode.
+
+    Only the observer uses this signature, after a successful native verifier.
+    Directory membership catches new compact/late parts and replaced leaves.
+    Publication, preparation, startup and live guards retain full verification.
+    """
+    from src.engine.scalping import pre_submit_delay_initial_policy as initial
+    from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
+    root = DATA_DIR.resolve()
+    directory = root / 'threshold_cycle/pre_submit_delay_policy'
+    pointer = directory / f'committed_{source_day}.json'
+    manifest = initial._read(pointer)
+    generation = str(manifest.get('generation', ''))
+    if len(generation) != 64 or any(c not in '0123456789abcdef' for c in generation):
+        raise ValueError('observer_delay_generation_invalid')
+    base = directory / 'generations' / generation
+    report = initial._read(base / 'report.json')
+    receipt = report.get('source_receipt') or {}
+    paths = {pointer, base, base.parent, directory, base / 'report.json', base / 'policy.json'}
+    paths.update(base.glob('shards/*.json'))
+    for name in receipt.get('partition_generations', {}):
+        paths.add(Path(name))
+    for family in (root / 'threshold_cycle').glob('date=*/family=pre_submit_delay'):
+        if '2026-09-29' <= family.parent.name.removeprefix('date=') <= source_day:
+            paths.add(family)
+            paths.update(family.glob('part-execution-*.jsonl'))
+    for day in receipt.get('ledger_generations', {}):
+        path = family_source_ledger_path(root, day)
+        paths.add(path)
+        ledger = initial._read(path)
+        for part in ledger.get('raw_parts', []):
+            for representation in part.get('representations', []):
+                paths.add(Path(representation['path']))
+        # Include absent aliases and late files: appearance invalidates reuse.
+        from src.engine.pipeline_event_summary import _source_part_path
+        for partition in ('base', 'late'):
+            raw = _source_part_path(root / 'pipeline_events', day, partition)
+            paths.update((raw, Path(str(raw) + '.gz')))
+        if ledger.get('matched_event_ids_ref'):
+            paths.update((path.parent / 'shards').glob('*.json'))
+    code_root = Path(__file__).resolve().parents[3]
+    paths.update(code_root / name for name in initial.CONTRACT_PATHS)
+    if len(paths) > 20000:
+        raise ValueError('observer_delay_inventory_budget')
+    stamps = []
+    for path in sorted(paths):
+        try:
+            st = path.stat()
+            lst = path.lstat()
+            is_dir = stat_module.S_ISDIR(st.st_mode)
+            stamps.append((str(path), str(path.resolve()), st.st_dev, st.st_ino,
+                           None if is_dir else st.st_size,
+                           None if is_dir else st.st_mtime_ns,
+                           None if is_dir else st.st_ctime_ns, st.st_mode,
+                           st.st_uid, st.st_gid, lst.st_ino,
+                           None if is_dir else lst.st_ctime_ns))
+        except FileNotFoundError:
+            stamps.append((str(path), None))
+    return os.getpid(), str(root), source_day, target_date, tuple(stamps)
+
+
+def _observer_delay_generation(source_day, target_date):
+    """Single-flight, process-local native success reuse for health only."""
+    from src.engine.scalping import pre_submit_delay_initial_policy as initial
+    from src.engine.infrastructure.research_release_transition import assert_readable
+    started = time.monotonic()
+    io_before = _observer_thread_io()
+    if not _DELAY_OBSERVER_LOCK.acquire(timeout=1):
+        raise ValueError('observer_delay_validation_in_progress')
+    try:
+        assert_readable(DATA_DIR)
+        _DELAY_OBSERVER_METRICS.update(mode='inventory', full_validation=False)
+        before = _delay_observer_signature(source_day, target_date)
+        cached = _DELAY_OBSERVER_CACHE.get('entry')
+        if cached and cached['signature'] == before:
+            if 'error' in cached:
+                if time.monotonic() < cached['retry_after']:
+                    _DELAY_OBSERVER_METRICS.update(mode='failed_generation_backoff', full_validation=False)
+                    raise ValueError(cached['error'])
+            else:
+                _DELAY_OBSERVER_METRICS.update(mode='reuse', source_date=source_day,
+                    target_date=target_date, full_validation=False)
+                _DELAY_OBSERVER_METRICS['reuse_count'] = _DELAY_OBSERVER_METRICS.get('reuse_count', 0) + 1
+                return copy.deepcopy(cached['value'])
+        _DELAY_OBSERVER_CACHE.clear()
+        _DELAY_OBSERVER_METRICS.update(mode='full', source_date=source_day,
+            target_date=target_date, full_validation=True)
+        _DELAY_OBSERVER_METRICS['full_count'] = _DELAY_OBSERVER_METRICS.get('full_count', 0) + 1
+        try:
+            report_path, policy_path, _, manifest = initial.committed_paths(
+                DATA_DIR, source_day, validate_selection=False)
+            report, policy = initial._read(report_path), initial._read(policy_path)
+            initial.validate(policy, report)
+            initial.verify_source(DATA_DIR, report)
+            value = (report_path, policy_path, manifest, policy, report)
+            cacheable = _observer_canonical_tree_layout(report_path.parent, report, policy)
+            if before != _delay_observer_signature(source_day, target_date):
+                raise ValueError('observer_delay_generation_changed_during_validation')
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            # A repeated failure remains a failure, never a cached success.
+            _DELAY_OBSERVER_CACHE['entry'] = dict(signature=before,
+                error='observer_delay_validation_failed:' + type(exc).__name__,
+                retry_after=time.monotonic() + 300)
+            raise
+        if cacheable:
+            _DELAY_OBSERVER_CACHE['entry'] = dict(signature=before, value=copy.deepcopy(value))
+        else:
+            _DELAY_OBSERVER_METRICS['mode'] = 'full_noncanonical_tree'
+        return value
+    finally:
+        _DELAY_OBSERVER_METRICS['wall_ms'] = round((time.monotonic() - started) * 1000, 3)
+        io_after = _observer_thread_io()
+        _DELAY_OBSERVER_METRICS['thread_io_delta'] = (
+            {k: io_after[k] - io_before[k] for k in io_before}
+            if io_before and io_after else None)
+        _DELAY_OBSERVER_METRICS['pid'] = os.getpid()
+        _DELAY_OBSERVER_METRICS['thread_id'] = threading.get_native_id()
+        _DELAY_OBSERVER_LOCK.release()
+
+
+def _observer_canonical_tree_layout(base, report, policy):
+    """Eligibility only: native valid noncanonical trees keep full verification.
+
+    Audit every immutable shard once, after native verification. Only the
+    writer's flat content-addressed layout is covered by the warm inventory.
+    This prevents a valid nested/external relative leaf from escaping it.
+    """
+    from src.engine.scalping import pre_submit_delay_initial_policy as initial
+    from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
+
+    def canonical(value):
+        if isinstance(value, dict):
+            if {'path', 'sha256', 'size', 'count'} <= value.keys():
+                if value['path'] != 'shards/' + str(value['sha256']) + '.json':
+                    return False
+            return all(canonical(v) for v in value.values())
+        if isinstance(value, list):
+            return all(canonical(v) for v in value)
+        return True
+
+    roots = {base}
+    documents = [report, policy]
+    for day in (report.get('source_receipt') or {}).get('ledger_generations', {}):
+        path = family_source_ledger_path(DATA_DIR.resolve(), day)
+        ledger = initial._read(path)
+        if ledger.get('matched_event_ids_ref'):
+            documents.append(ledger['matched_event_ids_ref'])
+            roots.add(path.parent)
+    if not all(canonical(value) for value in documents):
+        return False
+    return all(canonical(initial._read(path)) for root in roots
+               for path in (root / 'shards').glob('*.json'))
+
+
+def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tuple[dict[str, str], dict[str, Any]]:
     """Carry the newest validated positive delay policy until superseded."""
     from src.engine.scalping.pre_submit_delay_tuning import (
         DELAYS_SEC, _digest, _number, _validated_candidate, report_path,
@@ -127,15 +299,20 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
         if source_day >= target_date:
             continue
         try:
-            report_file, policy_file, _, manifest = committed_paths(DATA_DIR, source_day)
-            verify_source(DATA_DIR, _read(report_file))
+            if observer_reuse:
+                report_file, policy_file, manifest, initial_policy, initial_report = (
+                    _observer_delay_generation(source_day, target_date))
+            else:
+                report_file, policy_file, _, manifest = committed_paths(DATA_DIR, source_day)
+                verify_source(DATA_DIR, _read(report_file))
+                initial_policy, initial_report = _read(policy_file), _read(report_file)
             if manifest.get('code_contract_sha256') != code_contract():
                 from src.engine.scalping.pre_submit_delay_tuning import _verify_runtime_code_contract
                 _verify_runtime_code_contract(_read(policy_file), target_date)
-            initial_policy, initial_report = _read(policy_file), _read(report_file)
             if not initial_policy["effective_from"] <= target_date <= initial_policy["expires_on"]:
                 continue
-            validate_initial(initial_policy, initial_report, target_date=target_date)
+            if not observer_reuse:
+                validate_initial(initial_policy, initial_report, target_date=target_date)
             return {"KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
                     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(policy_file.resolve()),
                     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256": manifest["manifest_sha256"],
@@ -1791,8 +1968,10 @@ def bootstrap_source_receipt_issues(manifest: dict[str, Any], *, max_source_byte
 
 def verify_bootstrap(
     target_date: str, *, pid: int | None = None, write: bool = True,
-    output_dir: Path | None = None,
+    output_dir: Path | None = None, observer_reuse: bool = False,
 ) -> dict[str, Any]:
+    if observer_reuse and (write or output_dir is not None):
+        raise ValueError('observer_reuse_is_read_only_current_bootstrap_only')
     if output_dir is not None and pid is not None:
         raise ValueError("prepared_bootstrap_cannot_claim_pid")
     findings: list[str] = []
@@ -1935,7 +2114,9 @@ def verify_bootstrap(
             except (ValueError, KeyError, TypeError):
                 findings.append('trailing_situation_policy_generation_invalid')
     if target_date >= "2026-09-23":
-        current_delay_env, current_delay_handoff = _pre_submit_delay_handoff(target_date)
+        current_delay_env, current_delay_handoff = (
+            _pre_submit_delay_handoff(target_date, observer_reuse=True)
+            if observer_reuse else _pre_submit_delay_handoff(target_date))
         if manifest.get("pre_submit_delay_handoff") != current_delay_handoff:
             findings.append("pre_submit_delay_generation_changed")
         for key, value in current_delay_env.items():
@@ -2013,6 +2194,8 @@ def verify_bootstrap(
         "unverified_selected_family_count": 0,
         "verified_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
+    if observer_reuse:
+        result['delay_observer_validation'] = dict(_DELAY_OBSERVER_METRICS)
     if write:
         _publish(verify_path(target_date, output_dir=output_dir), json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         if passed and pid is not None:
