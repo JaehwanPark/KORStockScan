@@ -3060,6 +3060,33 @@ class GPTSniperEngine:
     ):
         if isinstance(live_policy, dict) and live_policy.get('continuous_reversal_assessment'):
             from src.engine.scalping.continuous_reversal_policy import compose
+            if live_policy['continuous_reversal_assessment'].get('policy_version') == 'continuous_reversal_policy_v6':
+                # New boundary after provider I/O: share only the loader-owned
+                # immutable view, never the earlier signal or source validity.
+                from src.engine.scalping import mechanistic_entry_runtime_policy as native
+                from src.utils.constants import DATA_DIR
+                day = datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+                try:
+                    with native.signature_pass(), native.verified_evaluation(
+                            data_root=DATA_DIR, target_date=day):
+                        return compose(result, live_policy)
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    # Preserve the completed provider result as a transport
+                    # fact, but never retry a failed execution boundary to BUY.
+                    return dict(action='WAIT', action_v2='WAIT', score=50,
+                        reason='entry_post_response_source_invalid',
+                        continuous_reversal_applied=True,
+                        entry_mechanistic_action=live_policy['continuous_reversal_assessment']['action'],
+                        entry_mechanistic_policy_decision=live_policy['continuous_reversal_assessment'],
+                        machine_bundle_sha256=live_policy.get('machine_bundle_sha256'),
+                        entry_ai_screen_required=True, entry_ai_screen_pass=False,
+                        entry_ai_screen_status='response_invalid',
+                        entry_ai_advisory_contract_errors=[str(exc)],
+                        entry_ai_contract_errors=[str(exc)],
+                        entry_ai_contract_valid=False, entry_ai_advisory_contract_valid=False,
+                        decision_quality_contract_status='rejected',
+                        entry_machine_pass_submit_candidate=False,
+                        actual_order_submitted=False, broker_order_forbidden=True)
             return compose(result, live_policy)
         payload = dict(result or {}) if isinstance(result, dict) else {}
         normalized_prompt_version = (
@@ -10262,6 +10289,7 @@ class GPTSniperEngine:
             )
 
         provider_attempted = False
+        frozen_auxiliary_response_errors = None
         entry_circuit_ticket = None
         common_recovery_ticket = None
         try:
@@ -10991,6 +11019,8 @@ class GPTSniperEngine:
             )
             from src.engine.monitoring.runtime_performance import observe as observe_performance
             local_stage_clocks['provider_returned_perf'] = time.perf_counter()
+            provider_returned_deadline_remaining = (
+                entry_budget.remaining() if entry_budget is not None else None)
             local_stage_clocks['provider_call_seconds'] = (
                 local_stage_clocks['provider_returned_perf']-provider_started_monotonic)
             observe_performance('provider_response', time.perf_counter() - provider_started_monotonic)
@@ -11023,6 +11053,19 @@ class GPTSniperEngine:
                 decoded_receipt=record_decoded_response(DATA_DIR,auxiliary_assessment,request_identity,raw_result,result,registered)
                 received_meta['auxiliary_decoded_receipt_sha256']=decoded_receipt['artifact_content_sha256']
                 self._set_last_transport_meta(received_meta)
+            if auxiliary_assessment.get('policy_version') in {
+                    'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+                # Validate the received model result against its issued input
+                # before the composer independently rechecks live eligibility.
+                # A changed price path cannot make transport failures consecutive.
+                if auxiliary_assessment['policy_version'] == 'continuous_reversal_policy_v6':
+                    from src.engine.scalping.reversal_extended_union import validate_response
+                else:
+                    from src.engine.scalping.reversal_operating_auxiliary import validate_response
+                frozen_auxiliary_response_errors = validate_response(
+                    result, entry_setup_live_policy['continuous_reversal_input'],
+                    arm=entry_setup_live_policy['continuous_reversal_arm'],
+                    phase=auxiliary_assessment.get('decision_phase', 'FIRST_UPTICK'))
             # Transport/timing metadata is generated locally and must not be
             # mistaken for model output by the strict semantic validator.
             v2_14_transport_meta = {}
@@ -11141,10 +11184,21 @@ class GPTSniperEngine:
             result["openai_min_interval_wait_ms"] = min_interval_wait_ms
             valid_transport=(result.get('semantic_validation_status')=='pass'
                 and result.get('openai_transport_fail_closed') is not True)
+            if frozen_auxiliary_response_errors is not None:
+                result['entry_auxiliary_response_contract_valid'] = not frozen_auxiliary_response_errors
+                result['entry_auxiliary_response_contract_errors'] = frozen_auxiliary_response_errors
+                result['entry_post_response_execution_valid'] = valid_transport
             if entry_circuit_ticket is not None:
                 self._entry_circuit().succeeded(entry_circuit_ticket,
-                    deadline_remaining=entry_budget.remaining(),
-                    valid_response=valid_transport)
+                    # CLOSED transport health uses the actual response clock.
+                    # Local validation may exhaust the execution budget after
+                    # an on-time reply; recovery still needs a live deadline.
+                    deadline_remaining=(entry_budget.remaining()
+                        if entry_circuit_ticket['recovery'] else
+                        provider_returned_deadline_remaining),
+                    valid_response=(not frozen_auxiliary_response_errors
+                                    if frozen_auxiliary_response_errors is not None else valid_transport),
+                    execution_valid=valid_transport)
                 self._observe_entry_circuit()
             common_recovered=(common_recovery_ticket is not None and self._common_circuit().succeeded(
                 common_recovery_ticket,deadline_remaining=entry_budget.remaining(),valid_response=valid_transport))

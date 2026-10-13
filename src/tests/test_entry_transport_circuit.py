@@ -141,6 +141,35 @@ def test_normal_transport_success_resets_preopen_failure_chain_without_early_ope
     assert c.snapshot()['state']=='CLOSED'
 
 
+def test_native_path_changes_do_not_accumulate_nonconsecutive_transport_timeouts(circuit):
+    c, _ = circuit
+    # Observed sequence: on-time model replies alternate with HTTP timeouts;
+    # each reply loses live native eligibility before the final order guard.
+    for i in range(8):
+        failed = c.admit('timeout-' + str(i), eligible=True, deadline_remaining=3)
+        assert c.failed(failed)
+        replied = c.admit('reply-' + str(i), eligible=True, deadline_remaining=3)
+        assert c.succeeded(replied, deadline_remaining=.2,
+                           valid_response=True, execution_valid=False)
+        assert c.snapshot()['state'] == 'CLOSED'
+        assert c.snapshot()['consecutive_failures'] == 0
+
+
+@pytest.mark.parametrize('remaining,response_valid,execution_valid', [
+    (0, True, True), (1, False, True), (1, True, False)])
+def test_recovery_cannot_use_a_late_malformed_or_native_invalid_reply(
+        circuit, remaining, response_valid, execution_valid):
+    c, now = circuit
+    open_circuit(c)
+    now[0] += 30
+    ticket = c.admit('new', eligible=True, deadline_remaining=5)
+    assert not c.succeeded(ticket, deadline_remaining=remaining,
+                           valid_response=response_valid, execution_valid=execution_valid)
+    assert c.snapshot()['state'] == 'HALF_OPEN'
+    c.abandon(ticket)
+    assert c.snapshot()['state'] == 'OPEN'
+
+
 def test_late_success_cannot_restore_recovery_after_auth_error(monkeypatch):
     import httpx
     from openai import APIStatusError

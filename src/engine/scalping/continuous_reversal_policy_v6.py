@@ -672,6 +672,11 @@ def validate_active_claim(policy, active, *, now):
     from src.utils.constants import DATA_DIR
     if not active or active.get('continuous_reversal',{}).get('schema') != SCHEMA:
         raise ValueError('reversal_policy_changed_after_provider')
+    from src.engine.scalping.reversal_evaluation_context import _prepared_v6_claim
+    prepared = _prepared_v6_claim(policy, active, data_root=DATA_DIR,
+        day=datetime.fromtimestamp(now,K.KST).date().isoformat())
+    if prepared is not None:
+        return prepared
     f = active['continuous_reversal']; validate_family(f)
     a = policy['continuous_reversal_assessment']
     cell = f['machine_cells'][a['cell_key']]['routes'][a['route']]

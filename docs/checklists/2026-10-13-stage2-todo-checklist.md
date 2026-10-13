@@ -164,3 +164,10 @@ report 메모리 후속 보완도 기존 위 owner들이 수용한다. read-loca
 기존 `DirectFamilyPreopenPolicyHandoff`가 최종 불변 release의 commit/code/reader 재결속·기계/보조128경로·exact2scope delta·strict/PREOPEN 인계를 검증한다. 아직 배포/재기동/당일 활성화는 실행하지 않았다. 10/14 실제 실행 때 기존 stable ID와 Acceptance/History를 대상일 checklist로 이전하며 과거07:35~08:05의 권한이나 완료를 미래 실행으로 전용하지 않는다. 원 AUTO 봉인·다른 OPEN owner는 보존한다.
 
 기존 `NonfixedDispatchReadinessReview1012`는 첫 실제 stream anchor·restart/재등록·late restore의 union 전달, phase별 진단/UNKNOWN·no-match/미완료 result v2·queue v3/legacy restore, 같은60/150초 lease/slots5/long2·5번째 체결15초 이후·generation/cleanup/borrowed REMOVE를 자연 수용한다. `AuxiliaryCircuitRecoveryRepair1012`는 같은 attempt에서 새 경제성 substage clock·원5초·실제 provider/응답/Main 소비·canonical append를 확인한다. 좁은 replay/encoding 측정을 전체 loop 성능·HTTP 성공·주문·경제성 완료로 표시하지 않는다. source index/정책 parts는 필수 소비/rollback ref census 없이 정리하지 않는다.
+
+
+## 10/13 응답·시간초과 구조 수리 배포 수용
+
+사용자의 반복 코드리뷰·수정보완 후 배포·재기동 승인에 따라 기존 `DirectFamilyPreopenPolicyHandoff`가 이번 불변 코드 전환을 소유한다. [구조 수리 리뷰](../audits/main-restart-machine-monitoring-and-timeout-structural-repair-review-2026-10-13.md)의 원 응답 계약/실행 판정 분리, 실제 응답 시각, fresh post-response 검증, 저장 잠금 경합과 경고 원인·날짜 수리를 적용한다. 당일 정책·PREOPEN·원 소비 bytes와 보호 가드는 유지하고 active code handoff 및 기존 10/14 후보의 동일정책 code refresh만 결속한다. incumbent 종료 뒤 이 문서를 발행하며 새 PID/start/cwd·128 scope 소비를 확인한다.
+
+`AuxiliaryCircuitRecoveryRepair1012`는 정상 응답 사이 시간초과가 누적되지 않는지, 원 기한·단일 recovery lease·미종결 Future 및 최종 실행 가드가 유지되는지 자연 attempt로 수용한다. `NonfixedDispatchReadinessReview1012`는 상시5종목과 비상시 큐 전수·실제 source/native terminal·cleanup을 별도로 확인한다. source gap과 자연 무표본은 OPEN이며 코드·배포 성공으로 주문·경제성을 완료하지 않는다. 기존 stable ID와 Acceptance를 보존하며 신규 OPEN·Provider replay·정책 재선택·주문 권한은 만들지 않는다.

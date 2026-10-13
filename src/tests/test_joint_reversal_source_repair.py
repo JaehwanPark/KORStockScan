@@ -418,6 +418,51 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
     assert frozen=={p:p.read_bytes() for p in frozen}
 
 
+@pytest.mark.parametrize('damage',[None,'selection_changed','observed_selection_changed'])
+def test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(tmp_path,monkeypatch,damage):
+    import json
+    from pathlib import Path
+    from src.engine.scalping import reversal_code_handoff as H, continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N, continuous_reversal_postclose as P
+    from src.engine.infrastructure import runtime_release_router as router
+    data=tmp_path/'data';origin=tmp_path/'old';root=tmp_path/'new';root.mkdir();origin.mkdir()
+    day=datetime.now(P.KST).date().isoformat();commit='b'*40
+    code=root/'src/engine/scalping/reversal_code_handoff.py';code.parent.mkdir(parents=True);code.write_text('reviewed')
+    pointer=N.root(data)/'current.json';pointer.parent.mkdir(parents=True);pointer.write_text('{"bundle_sha256":"bundle"}')
+    bundle={'bundle_sha256':'bundle','target_date':day,'continuous_reversal':{'operating_manifest':{'definitions':{}}}}
+    N._atomic_write_json(N.root(data)/'generations/bundle.json',bundle)
+    selector=data/'runtime/runtime_release_selection.json';selector.write_text(json.dumps(dict(git_commit='a'*40,release_root=str(origin))))
+    source=data/'policy.json';source.write_text('frozen policy');initial_sha=P.file_hash(selector)
+    parity=tmp_path/'parity.json';parity.write_text(json.dumps(dict(status='pass',mismatches=0,parent_bundle_sha256='bundle',
+        contract_file_sha256={code.name:P.file_hash(code)},confirmation_parity={'hits':1})))
+    monkeypatch.setattr(H,'__file__',str(code));monkeypatch.setattr(H,'code_hashes',lambda:{str(code):P.file_hash(code)})
+    monkeypatch.setattr(V,'contract_modules',lambda:[SimpleNamespace(__file__=str(code))])
+    monkeypatch.setattr(N,'validate',lambda *a,**kw:None)
+    selected=[origin,'a'*40]
+    monkeypatch.setattr(router,'selected_release',lambda *a:tuple(selected))
+    monkeypatch.setattr(router,'validate_release',lambda *a:None);monkeypatch.setattr(router,'git',lambda *a:commit)
+    def inspect(*args,**kwargs):
+        if damage=='selection_changed':selector.write_text('{}')
+        return json.dumps(dict(bundle_sha256='bundle',source_hashes={str(source):P.file_hash(source),
+            str(selector):'0'*64 if damage=='observed_selection_changed' else initial_sha}))
+    monkeypatch.setattr(H.subprocess,'check_output',inspect)
+    if damage:
+        with pytest.raises(ValueError,match='parent_changed|selection_changed'):
+            H.issue(data,day,origin_root=origin,release_root=root,parity_path=parity,confirm=H.AUTHORITY)
+        assert not H.path(data,day,commit,'bundle').exists()
+        return
+    receipt=H.issue(data,day,origin_root=origin,release_root=root,parity_path=parity,confirm=H.AUTHORITY)
+    assert receipt['origin_selection_sha256']==initial_sha and str(selector) not in receipt['source_hashes']
+    assert receipt['source_hashes'][str(source)]==P.file_hash(source)
+    # The actual authorized selection changes, including the PID attestation;
+    # the receipt must bind its current root/commit, not the predecessor bytes.
+    selected[:]=[root,commit];selector.write_text(json.dumps(dict(git_commit=commit,release_root=str(root),actual_pid_consumed=True)))
+    assert H.validate(bundle,data,original_error=ValueError('code_changed')) is bundle
+    selector.write_text(json.dumps(dict(git_commit='c'*40,release_root=str(root))))
+    with pytest.raises(ValueError,match='selection_changed'):
+        H.validate(bundle,data,original_error=ValueError('code_changed'))
+
+
 @pytest.mark.parametrize('anchor,expected',[(10200,'TRUE'),(9900,'FALSE'),(None,'UNKNOWN')])
 def test_general_pre_refinement_applies_only_at_original_volume_confirmation(anchor,expected):
     base='legacy_dd5_0_8_vol_up_v1';bid=J.ALIASES['general_pre_refined']

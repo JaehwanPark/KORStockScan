@@ -70,9 +70,13 @@ class EntryTransportCircuit:
                 self.next_probe = self.clock() + max(delay, retry_after_seconds)
             return True
 
-    def succeeded(self, ticket, *, deadline_remaining, valid_response):
+    def succeeded(self, ticket, *, deadline_remaining, valid_response, execution_valid=True):
         with self._lock:
-            if not self._current(ticket) or deadline_remaining <= 0 or not valid_response:
+            # A valid on-time response ends a CLOSED transport failure chain,
+            # even when the native signal changed while the provider worked.
+            # Recovery still requires the original live execution validation.
+            if (not self._current(ticket) or deadline_remaining <= 0 or not valid_response
+                    or (ticket['recovery'] and not execution_valid)):
                 return False
             self.state = 'CLOSED'
             self.generation += 1  # Late callbacks cannot close a successor circuit.

@@ -79,6 +79,15 @@ REVIEWED_ENTRY_BOUNDARY_SOURCES = {
         '7a2d9795aa7501e0f510368f59282d849456c310c91b46d993d2d540867d678a'),
 }
 
+# Response transport health and fresh post-response validation. Exact reviewed
+# bytes only; preserve every previously consumed source pair.
+# Evidence: docs/audits/main-restart-machine-monitoring-and-timeout-structural-repair-review-2026-10-13.md.
+REVIEWED_ENTRY_RESPONSE_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        '4d5ff0cc0451365f17feb8ed8f6a113f984abf416f24ac7bd5cb24f2ca596eed',
+        'dabda2cb9fee6fd17263465f38866d90ec66f62b7305a2b5bb7a8dd9fc9a1671'),
+}
+
 # Diagnostic state snapshots reference successfully appended canonical replay
 # evidence instead of echoing its frozen code. Older release pairs stay valid.
 REVIEWED_ENTRY_STORAGE_SOURCES = {
@@ -396,6 +405,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if pair in (REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),
                     REVIEWED_ENTRY_LATENCY_SOURCES.get(name),
                     REVIEWED_ENTRY_BOUNDARY_SOURCES.get(name),
+                    REVIEWED_ENTRY_RESPONSE_SOURCES.get(name),
                     REVIEWED_ENTRY_STORAGE_SOURCES.get(name),
                     REVIEWED_JOINT_CONSUMER_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name)):

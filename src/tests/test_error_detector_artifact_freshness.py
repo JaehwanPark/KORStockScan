@@ -80,6 +80,26 @@ def test_semantic_generation_race_is_unobservable_not_corruption(tmp_path, monke
     assert _semantic_alerts(owner, result, day) == []
 
 
+@pytest.mark.parametrize('component,stage', [
+    ('machine', 'main_machine_policy'), ('auxiliary', 'main_auxiliary_policy')])
+def test_missing_reversal_execution_is_not_report_hash_corruption(tmp_path, component, stage):
+    from src.engine.scalping import continuous_reversal_postclose as reports
+    from src.engine.scalping import continuous_reversal_operating_postclose as operating
+    from src.engine.error_detectors import artifact_freshness as detector
+    day = '2026-10-13'
+    path = tmp_path / 'data/report/continuous_reversal' / day / (component + '.json')
+    path.parent.mkdir(parents=True)
+    value = reports.seal(dict(schema=operating.SCHEMA, source_date=day, status='completed'))
+    path.write_text(json.dumps(value))
+    result = detector._continuous_reversal_result_semantics(tmp_path, day, component)
+    reason = 'continuous_reversal_execution_not_completed:main_machine_policy'
+    assert result['findings'] == [reason]
+    alerts = _semantic_alerts(stage, result, day)
+    assert [a['reason'] for a in alerts] == [reason]
+    assert alerts[0]['artifact'] == str(path)
+    assert alerts[0]['generation'] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def test_auxiliary_v4_frozen_same_day_contract_and_cost_isolation():
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
     day, scope = "2026-10-02", "KRX|KRX_REGULAR"

@@ -387,7 +387,15 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
                     cache.pop(day, None)
                 for old in sorted(cache)[:-3]:
                     cache.pop(old, None)
-        except (BlockingIOError, trace_dedup.IndexNotReady):
+        except (OSError, trace_dedup.IndexNotReady) as exc:
+            # The generation lease wraps nonblocking flock contention in an
+            # OSError. Only its typed cause and exact lease marker are pending;
+            # descriptor/parent changes, permission and disk errors still fail.
+            if isinstance(exc, OSError) and not (
+                    isinstance(exc, BlockingIOError)
+                    or (isinstance(exc.__cause__, BlockingIOError)
+                        and str(exc).startswith('jsonl_generation_lock_busy:'))):
+                raise
             pending = True
             with _WRITE_LOCK:
                 cache.pop(day, None)
@@ -2815,6 +2823,9 @@ def record_ai_decision_trace(
                     "entry_setup_live_policy_scope_authority",
                     "entry_ai_advisory_verdict",
                     "entry_ai_advisory_contract_errors",
+                    "entry_auxiliary_response_contract_valid",
+                    "entry_auxiliary_response_contract_errors",
+                    "entry_post_response_execution_valid",
                     "entry_ai_raw_risk_codes",
                     "entry_ai_raw_supporting_fact_ids",
                     "entry_ai_raw_contradicting_fact_ids",
@@ -2908,6 +2919,9 @@ def record_ai_decision_trace(
                 "entry_ai_contract_errors",
                 "entry_ai_advisory_contract_valid",
                 "entry_ai_advisory_contract_errors",
+                "entry_auxiliary_response_contract_valid",
+                "entry_auxiliary_response_contract_errors",
+                "entry_post_response_execution_valid",
                 "entry_ai_followup_disposition",
                 "entry_ai_followup_authority",
                 "entry_setup_live_policy_scope_authority",

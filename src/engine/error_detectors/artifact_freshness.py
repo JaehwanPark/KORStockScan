@@ -556,6 +556,7 @@ def _continuous_reversal_result_semantics(root, source_date, component):
         except (OSError, ValueError, TypeError, KeyError):
             return dict(status='source_invalid', findings=['continuous_reversal_dated_policy_invalid'],
                         source_date=source_date, artifact=str(dated))
+    report_sha = None
     try:
         from src.engine.scalping import continuous_reversal_postclose as reports
         from src.engine.scalping import continuous_reversal_policy as policy
@@ -610,7 +611,7 @@ def _continuous_reversal_result_semantics(root, source_date, component):
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         return dict(_semantic_failure(exc), source_date=source_date,
                     stage_id='main_machine_policy' if component == 'machine' else 'main_auxiliary_policy',
-                    artifact=str(report_path))
+                    artifact=str(report_path), report_sha256=report_sha)
 
 
 def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
@@ -1760,7 +1761,8 @@ def _semantic_alert_candidates(name, semantics, source_date):
     """.split())
     if semantics.get("status") in {"not_assessed", "unobservable"}:
         return []
-    reasons = [reason for reason in semantics.get("findings", []) if reason in actionable]
+    reasons = [reason for reason in semantics.get("findings", [])
+               if reason in actionable or reason.startswith('continuous_reversal_execution_not_completed:')]
     if not reasons and semantics.get("status") == "source_invalid":
         reasons = ["postclose_handoff_contract_invalid" if name == "postclose_handoff"
                    else "auxiliary_stage_report_contract_invalid" if name == "main_auxiliary_policy"
@@ -2714,13 +2716,17 @@ class ArtifactFreshnessDetector(BaseDetector):
                         source_generation=observed.get('source_generation'),code_sha256=observed.get('code_sha256'),
                         closure_test=observed.get('closure_test'),decision_authority='report_only'))
                     warnings.append('policy_generation:'+observed['family']+':'+reason)
+        details['machine_result_semantics_by_source_date'] = {}
+        details['auxiliary_result_semantics_by_source_date'] = {}
         for semantic_day in semantic_days:
             machine_semantics = _machine_result_semantics(PROJECT_ROOT, semantic_day)
             details["machine_result_semantics"] = machine_semantics
+            details['machine_result_semantics_by_source_date'][semantic_day] = machine_semantics
             if machine_semantics["findings"]:
                 warnings.append("machine_result_semantics: " + ", ".join(machine_semantics["findings"]))
             auxiliary_semantics = _auxiliary_result_semantics(PROJECT_ROOT, semantic_day)
             details["auxiliary_result_semantics"] = auxiliary_semantics
+            details['auxiliary_result_semantics_by_source_date'][semantic_day] = auxiliary_semantics
             if auxiliary_semantics["findings"]:
                 warnings.append("auxiliary_result_semantics: " + ", ".join(
                     auxiliary_semantics["findings"]))

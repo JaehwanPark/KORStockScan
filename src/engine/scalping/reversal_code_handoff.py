@@ -100,6 +100,9 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm):
     selected,previous=selected_release(workspace)
     if selected!=origin_root or release_root!=Path(__file__).resolve().parents[3]:
         raise ValueError('active_policy_code_handoff_origin_changed')
+    selection_path=workspace/'data/runtime/runtime_release_selection.json'
+    selection_before=selection_path.read_bytes()
+    selection_sha=P.file_hash(selection_path)
     commit=git(release_root,'rev-parse','HEAD')
     validate_release(workspace,dict(schema='runtime_release_selection_v1',workspace=str(workspace),release_root=str(release_root),git_commit=commit))
     pointer=N.root(Path(data_root))/'current.json';before=pointer.read_bytes();ptr=json.loads(before)
@@ -116,14 +119,24 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm):
     output=subprocess.check_output([str(origin_root/'.venv/bin/python'),'-B','-c',_ORIGIN_SCRIPT,str(Path(data_root).resolve()),day],
         cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=120)
     checked=json.loads(output)
-    if checked['bundle_sha256']!=bundle['bundle_sha256'] or pointer.read_bytes()!=before:
+    if (checked['bundle_sha256']!=bundle['bundle_sha256'] or pointer.read_bytes()!=before
+            or selection_path.read_bytes()!=selection_before):
         raise ValueError('active_policy_code_handoff_parent_changed')
-    sources=checked['source_hashes'];sources[str(Path(parity_path).resolve())]=P.file_hash(parity_path)
+    sources=dict(checked['source_hashes'])
+    # A successor of a code-only release observes its predecessor selector.
+    # This is transition provenance, not an immutable policy input: validate()
+    # independently binds the current selector to this exact candidate root
+    # and commit. All policy/source and prior receipt hashes remain frozen.
+    observed_selection=sources.pop(str(selection_path.resolve()),None)
+    if observed_selection is not None and observed_selection!=selection_sha:
+        raise ValueError('active_policy_code_handoff_selection_changed')
+    sources[str(Path(parity_path).resolve())]=P.file_hash(parity_path)
     for row in parity.get('targeted_validation',[]):
         if P.file_hash(row['path'])!=row['sha256']:raise ValueError('active_policy_code_handoff_test_evidence_changed')
         sources[row['path']]=row['sha256']
     r=P.seal(dict(schema=SCHEMA,authority=confirm,target_date=day,release_commit=commit,release_root=str(release_root),
         origin_root=str(origin_root),origin_commit=previous,bundle_sha256=bundle['bundle_sha256'],
+        origin_selection_sha256=selection_sha,
         current_pointer_sha256=P.file_hash(pointer),source_hashes=sources,code_hashes=codes,
         policy_reselected=False,provider_called=False,actual_pid_consumed=False,source_semantics_repair=True))
     dest=path(data_root,day,commit,bundle['bundle_sha256']);dest.parent.mkdir(parents=True,exist_ok=True)

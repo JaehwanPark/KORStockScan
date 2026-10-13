@@ -190,6 +190,29 @@ def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, 
     assert len(calls) == 6
 
 
+def test_request_preparation_defers_wrapped_generation_lock_contention(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    day = trace._date_text()
+    path = trace._payload_path(day)
+    # Use real flock behavior: the common lease deliberately wraps its typed
+    # BlockingIOError, rather than raising BlockingIOError directly.
+    with trace.jsonl_artifact_generation_lock(path, exclusive=True):
+        result = trace.prepare_ai_request_capture(day)
+        assert result == {'ai_trace_dedup_preparation_pending': True}
+        assert day not in trace._SEEN_PAYLOAD_HASHES
+        assert day in trace._SEEN_PROMPT_HASHES  # Other indexes still progress.
+    assert 'ai_trace_dedup_init_ms' in trace.prepare_ai_request_capture(day)
+
+
+def test_request_preparation_does_not_hide_other_os_errors(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    def broken(*args, **kwargs):
+        raise OSError('jsonl_generation_parent_changed:fixture')
+    monkeypatch.setattr(trace, 'jsonl_artifact_generation_lock', broken)
+    with pytest.raises(OSError, match='parent_changed'):
+        trace.prepare_ai_request_capture(trace._date_text())
+
+
 @pytest.mark.parametrize('mismatch', [False, True])
 def test_native_reversal_request_capture_binds_actual_bytes_without_claiming_execution(monkeypatch, tmp_path, mismatch):
     import hashlib
@@ -3005,3 +3028,22 @@ def test_native_rejection_errors_are_redacted_before_trace_and_pending(monkeypat
     pending=_rows(trace._outcome_path(trace._date_text()))[0]
     assert secret not in json.dumps(row) and secret not in json.dumps(pending)
     assert row['trace_storage_redacted'] is True
+
+
+def test_valid_provider_reply_and_invalid_execution_remain_separate_in_trace(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    fields = dict(entry_auxiliary_response_contract_valid=True,
+                  entry_auxiliary_response_contract_errors=[],
+                  entry_post_response_execution_valid=False)
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='native-changed-after-reply',
+        action='WAIT', provider_called=True, entry_ai_raw_risk_verdict='PASS',
+        entry_ai_screen_status='response_invalid', entry_ai_screen_pass=False,
+        entry_ai_contract_errors=['reversal_signal_path_changed'],
+        continuous_reversal_applied=True, **fields), prompt_type='scalping_entry',
+        prompt_version='continuous_reversal_union_auxiliary_v3',
+        result_source='live', provider_called=True)
+    stored = _rows(trace._trace_path(trace._date_text()))[0]
+    pending = _rows(trace._outcome_path(trace._date_text()))[0]
+    for key, value in fields.items():
+        assert stored[key] == pending[key] == value
+    assert stored['action'] == 'WAIT' and stored['entry_ai_screen_pass'] is False
