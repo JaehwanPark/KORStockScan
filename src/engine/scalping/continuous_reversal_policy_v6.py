@@ -29,7 +29,11 @@ def contract_modules():
     from src.engine.scalping import reversal_current_backend as D
     from src.engine.scalping import reversal_extended_intraday as INTRA
     from src.engine.scalping import reversal_manual_registration as MANUAL
-    return (*V5.contract_modules(),C,A,R,T,E,ER,D,INTRA,MANUAL,__import__(__name__,fromlist=['*']))
+    from src.engine.scalping import reversal_joint_catalog as JOINT
+    from src.engine.scalping import reversal_joint_registration as JOINT_REG
+    from src.engine.scalping import reversal_anchor_index as ANCHORS
+    from src.engine.scalping import reversal_code_handoff as CODE_HANDOFF
+    return (*V5.contract_modules(),C,A,R,T,E,ER,D,INTRA,MANUAL,JOINT,JOINT_REG,ANCHORS,CODE_HANDOFF,__import__(__name__,fromlist=['*']))
 
 
 def scopes():
@@ -73,6 +77,21 @@ def detector_manifest(parent, *, effective_date, changes=None):
         registry_sha256=C.registry_for(b for ids in membership.values() for b in ids), parent_manifest_sha256=old['detector_manifest_hash'] if old else None,
         effective_date=effective_date, change_receipt=changes or (old or {}).get('change_receipt') or dict(kind='INITIAL_ACTIVE_PLUS_EIGHT',
             parent_bundle_sha256=parent['bundle_sha256'], additions=sorted(C.NEW_DEFINITIONS)))
+    if changes and changes.get('schema')=='main_joint_registration_request_v1':
+        from src.engine.scalping import reversal_joint_registration as J
+        J.validate_request(changes)
+        ancestry=copy.deepcopy((old or {}).get('registration_receipts',[]))
+        for receipt in ((old or {}).get('change_receipt'),changes):
+            if receipt and receipt not in ancestry:ancestry.append(copy.deepcopy(receipt))
+        manifest['registration_receipts']=ancestry
+        manifest['approved_variant_groups']=copy.deepcopy(changes['variant_groups'])
+        manifest['selection_authority']=changes.get('selection_authority')
+    elif old and old.get('registration_receipts'):
+        manifest['registration_receipts']=copy.deepcopy(old['registration_receipts'])
+        manifest['approved_variant_groups']=copy.deepcopy(old.get('approved_variant_groups',{}))
+        manifest['selection_authority']=old.get('selection_authority')
+        if old.get('variant_selection_receipt'):
+            manifest['variant_selection_receipt']=copy.deepcopy(old['variant_selection_receipt'])
     # Effective date, receipt and report lineage do not reset identical FSMs.
     manifest['detector_manifest_hash'] = digest({k: manifest[k] for k in ('schema','scopes','definitions','registry_sha256')})
     return manifest
@@ -108,17 +127,54 @@ def validate_family(f):
         raise ValueError('v6_operating_scope_coverage_invalid')
     if set(m['definitions']) != {b for ids in m['scopes'].values() for b in ids}:
         raise ValueError('v6_definition_coverage_invalid')
+    if m.get('approved_variant_groups'):
+        from src.engine.scalping import reversal_joint_registration as J
+        approvals=m.get('registration_receipts',[])+[m.get('change_receipt') or {}]
+        approved=next((v for v in approvals if v.get('operator_receipt')==J.AUTHORITY
+            and v.get('schema')==J.SCHEMA and v.get('scopes')==C.JOINT.changes()
+            and v.get('research_batch_sha256')==C.JOINT.RESEARCH_RESULT),None)
+        if not approved or m['approved_variant_groups']!=approved.get('variant_groups') or m.get('selection_authority')!=J.SELECTION_AUTHORITY:
+            raise ValueError('v6_joint_variant_authority_missing')
+        receipt=m.get('variant_selection_receipt')
+        if receipt and (receipt.get('artifact_content_sha256')!=digest({k:v for k,v in receipt.items() if k!='artifact_content_sha256'})
+                or receipt.get('authority')!=J.SELECTION_AUTHORITY
+                or receipt.get('memberships')!={s:m['scopes'][s] for s in m['approved_variant_groups']}):
+            raise ValueError('v6_joint_variant_selection_receipt_invalid')
+        for sid,group in m['approved_variant_groups'].items():
+            if m['scopes'][sid] not in group['alternatives'].values():
+                raise ValueError('v6_joint_unapproved_variant_membership')
+            if m['scopes'][sid]!=group['alternatives']['JOINT_BALANCED'] and not receipt:
+                raise ValueError('v6_joint_variant_selection_receipt_missing')
     for bid, definition in m['definitions'].items():
         if definition != C.definition(bid):
             raise ValueError('v6_operating_definition_changed')
     if any(b in C.ADDITIONAL_DEFINITIONS for b in m['definitions']):
         from src.engine.scalping import reversal_manual_registration as M
-        change=m.get('change_receipt') or {}
-        if (change.get('operator_receipt')!=M.AUTHORITY
-                or change.get('research_batch_sha256')!=M.PROPOSAL_SHA256
-                or change.get('scopes')!=M.approved_scopes()
-                or change.get('definition_hashes')!={b:digest(d) for b,d in C.ADDITIONAL_DEFINITIONS.items()}):
+        ancestry=m.get('registration_receipts',[])+[m.get('change_receipt') or {}]
+        approved=[change for change in ancestry if (change.get('operator_receipt')==M.AUTHORITY
+                and change.get('research_batch_sha256')==M.PROPOSAL_SHA256
+                and change.get('scopes')==M.approved_scopes()
+                and change.get('definition_hashes')=={b:digest(d) for b,d in C.ADDITIONAL_DEFINITIONS.items()})]
+        if not approved:
             raise ValueError('v6_residual_membership_authority_missing')
+    if any(b in C.JOINT_DEFINITIONS for b in m['definitions']):
+        from src.engine.scalping import reversal_joint_catalog as J
+        ancestry=m.get('registration_receipts',[])+[m.get('change_receipt') or {}]
+        approved=[change for change in ancestry if (change.get('operator_receipt')==J.AUTHORITY
+                and change.get('research_batch_sha256')==J.RESEARCH_RESULT
+                and change.get('scopes')==J.changes()
+                and change.get('definition_hashes')=={b:digest(d) for b,d in J.DEFINITIONS.items()})]
+        if not approved:
+            raise ValueError('v6_joint_membership_authority_missing')
+        if (m.get('approved_variant_groups')!=approved[-1].get('variant_groups')
+                or m.get('selection_authority')!=approved[-1].get('selection_authority')):
+            raise ValueError('v6_joint_variant_authority_changed')
+        # Definitions carry immutable dependency hashes; dependencies are not
+        # union members or a second source of AI/intent opportunities.
+        for bid in set(m['definitions']) & set(J.COMPOSED):
+            ref=J.COMPOSED[bid]['original_definition_ref']
+            if ref['definition_sha256']!=digest(C.definition(ref['branch_id'])):
+                raise ValueError('v6_joint_dependency_changed')
     native = f['native_parent_bundle']['continuous_reversal']
     V4.validate_family(native)
     if any(set(f.get(n,{})) != set(C.cells()) for n in ('machine_cells','auxiliary_cells')):
@@ -144,7 +200,8 @@ def validate_family(f):
                 from src.engine.scalping import reversal_manual_registration as M
                 proof=aux['initial_binding']
                 approved=(proof.get('operator_receipt'),proof.get('research_batch_sha256')) in {
-                    (AUTHORITY,C.RESEARCH_BATCH_SHA256),(M.AUTHORITY,M.PROPOSAL_SHA256)}
+                    (AUTHORITY,C.RESEARCH_BATCH_SHA256),(M.AUTHORITY,M.PROPOSAL_SHA256),
+                    (C.JOINT.AUTHORITY,C.JOINT.RESEARCH_RESULT)}
                 if (not approved
                         or proof.get('comparison_result_required') is not False):
                     raise ValueError('v6_initial_registration_proof_invalid')
@@ -166,7 +223,14 @@ def validate_family(f):
 def validate_sources(bundle, data_root, *, code_root=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     with N.source_anchor(data_root):
-        return _validate_sources(bundle,Path(data_root).absolute(),code_root=code_root)
+        try:
+            return _validate_sources(bundle,Path(data_root).absolute(),code_root=code_root)
+        except ValueError as exc:
+            if code_root is not None or not str(exc).startswith(
+                    ('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:')):
+                raise
+            from src.engine.scalping.reversal_code_handoff import validate as compatible
+            return compatible(bundle, Path(data_root).absolute(), original_error=exc)
 
 
 def _validate_sources(bundle, data_root, *, code_root=None):
@@ -222,10 +286,14 @@ def _validate_sources(bundle, data_root, *, code_root=None):
     from src.engine.scalping import reversal_manual_registration as M
     if change.get('operator_receipt')==M.AUTHORITY:
         M.validate_request(change)
+    from src.engine.scalping import reversal_joint_registration as J
+    for receipt in f['operating_manifest'].get('registration_receipts',[]):
+        if receipt.get('operator_receipt')==J.AUTHORITY:J.validate_request(receipt)
     if f.get('registration_code_transition') is not None:
         from src.engine.scalping import reversal_manual_registration as M
-        change=M.validate_request(N._read(M.pending_path(data_root)))
         proof=f['registration_code_transition']
+        owner=J if proof.get('schema')==J.SCHEMA else M
+        change=owner.validate_request(proof)
         if (proof!=change or f['parent_bundle_sha256']!=change['parent_bundle_sha256']
                 or f['effective_date']!=change['target_date']
                 or f['operating_manifest']['change_receipt']!=change):
@@ -476,11 +544,12 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             parent = N.load_effective(data_root=Path(data_root),target_date=publication)
         except ValueError as exc:
             from src.engine.scalping import reversal_manual_registration as M
+            from src.engine.scalping import reversal_joint_registration as J
             change=machine.get('registration_change') or {}
-            if (change.get('operator_receipt')!=M.AUTHORITY or not str(exc).startswith(
+            if (change.get('operator_receipt') not in {M.AUTHORITY,J.AUTHORITY} or not str(exc).startswith(
                     ('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:'))):
                 raise
-            parent=M.load_offline_parent(data_root,publication)
+            parent=(J if change.get('operator_receipt')==J.AUTHORITY else M).load_offline_parent(data_root,publication)
         if not parent or machine['parent_bundle_sha256'] != parent['bundle_sha256']:
             raise ValueError('v6_parent_cas_failed')
         for report in (machine,auxiliary):
@@ -495,6 +564,12 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             path = root/'sources'/('reversal-'+report['artifact_content_sha256']+'.json')
             N._atomic_write_json(path,report); hashes[name] = file_hash(path)
         native = parent['continuous_reversal'].get('native_parent_bundle', parent)
+        if (machine.get('registration_change') or {}).get('operator_receipt')==C.JOINT.AUTHORITY:
+            # The old attested generation remains immutable. Rebind its carried
+            # implementation inside a new generation, with source repairs
+            # disclosed by the registration transition instead of an identical-
+            # behavior assertion.
+            native=_write_refreshed_bundle(native,data_root,release_commit=release_commit,proof=None)
         f = dict(schema=SCHEMA, kernel_version=K.VERSION, registry_sha256=machine['operating_manifest']['registry_sha256'],
             branch_definition_sha256=machine['operating_manifest']['registry_sha256'], auxiliary_version=A.VERSION, label_contract=C.LABEL,
             source_date=day, publication_date=publication, effective_date=target_date, effective_mode=effective_mode,
@@ -507,8 +582,9 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             report_file_sha256=hashes, source_manifest_sha256=machine['source_manifest_sha256'],
             hard_guards_unchanged=True, actual_order_submitted=False)
         if effective_mode=='intraday':f['registration_activation']=registration_activation
-        if (machine.get('registration_change') or {}).get('operator_receipt') == __import__(
-                'src.engine.scalping.reversal_manual_registration',fromlist=['AUTHORITY']).AUTHORITY:
+        if (machine.get('registration_change') or {}).get('operator_receipt') in {
+                __import__('src.engine.scalping.reversal_manual_registration',fromlist=['AUTHORITY']).AUTHORITY,
+                C.JOINT.AUTHORITY}:
             f['registration_code_transition']=machine['registration_change']
         f['execution_manifest_hash'] = digest({scope_id(k,r):f['machine_cells'][k]['routes'][r]['scope_execution_hash'] for k,r in scopes()})
         f['family_sha256'] = digest(f); validate_family(f)
@@ -560,7 +636,8 @@ def activate(data_root,target_date,*,now=None,intraday_evidence=None):
             registration = f.get('registration_code_transition')
             if registration and str(exc).startswith(('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:')):
                 from src.engine.scalping import reversal_manual_registration as M
-                M.validate_request(registration)
+                from src.engine.scalping import reversal_joint_registration as J
+                (J if registration.get('schema') == J.SCHEMA else M).validate_request(registration)
                 origin=registration['activation_parent_origin']
                 parent=_attested_activation_parent(Path(data_root),target_date,
                     origin_root=origin['root'],origin_commit=origin['commit'])
@@ -595,6 +672,11 @@ def validate_active_claim(policy, active, *, now):
     from src.utils.constants import DATA_DIR
     if not active or active.get('continuous_reversal',{}).get('schema') != SCHEMA:
         raise ValueError('reversal_policy_changed_after_provider')
+    from src.engine.scalping.reversal_evaluation_context import _prepared_v6_claim
+    prepared = _prepared_v6_claim(policy, active, data_root=DATA_DIR,
+        day=datetime.fromtimestamp(now,K.KST).date().isoformat())
+    if prepared is not None:
+        return prepared
     f = active['continuous_reversal']; validate_family(f)
     a = policy['continuous_reversal_assessment']
     cell = f['machine_cells'][a['cell_key']]['routes'][a['route']]

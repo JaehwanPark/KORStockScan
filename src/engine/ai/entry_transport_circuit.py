@@ -70,9 +70,13 @@ class EntryTransportCircuit:
                 self.next_probe = self.clock() + max(delay, retry_after_seconds)
             return True
 
-    def succeeded(self, ticket, *, deadline_remaining, valid_response):
+    def succeeded(self, ticket, *, deadline_remaining, valid_response, execution_valid=True):
         with self._lock:
-            if not self._current(ticket) or deadline_remaining <= 0 or not valid_response:
+            # A valid on-time response ends a CLOSED transport failure chain,
+            # even when the native signal changed while the provider worked.
+            # Recovery still requires the original live execution validation.
+            if (not self._current(ticket) or deadline_remaining <= 0 or not valid_response
+                    or (ticket['recovery'] and not execution_valid)):
                 return False
             self.state = 'CLOSED'
             self.generation += 1  # Late callbacks cannot close a successor circuit.
@@ -99,10 +103,14 @@ class EntryTransportCircuit:
 
     def snapshot(self):
         with self._lock:
+            remaining = max(0, self.next_probe-self.clock())
+            observed_epoch = time.time()
             return dict(schema='entry_transport_circuit_v1', state=self.state,
                 generation=self.generation, consecutive_failures=self.failures,
                 failure_threshold=self.threshold, reason=self.reason,
-                recovery_wait_seconds=max(0, self.next_probe-self.clock()),
+                recovery_wait_seconds=remaining,
+                recovery_wait_observed_epoch=observed_epoch,
+                recovery_next_eligible_epoch=observed_epoch+remaining if self.state == 'OPEN' else None,
                 recovery_lease_active=self.lease is not None,
                 not_evaluated_count=self.not_evaluated,
                 unsettled_future_count=sum(not f.done() for f in self.futures),

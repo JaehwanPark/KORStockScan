@@ -27,6 +27,8 @@ class State(OLD.State):
         self.last_path_turn = None
         self._feature_key = None
         self._feature_values = None
+        self.diagnostic_features = {}
+        self.diagnostic_rolling = None
         super().__init__(branch_ids=[b for b in branch_ids if b not in C.NEW_DEFINITIONS],
                          session_anchor=session_anchor, generation=generation)
 
@@ -41,13 +43,21 @@ class State(OLD.State):
         self.last_path_turn = None
         self._feature_key = None
         self._feature_values = None
+        self.diagnostic_features.clear()
+        self.diagnostic_rolling = None
 
     def features(self,row):
         identity=tuple(row[:3])
         if identity!=self._feature_key:
+            self.diagnostic_features.clear()
+            self.diagnostic_rolling = None
             self._feature_values=super().features(row)
             self._feature_key=identity
         return self._feature_values.copy()
+
+    def record_diagnostic_features(self, bid, event, values):
+        self.diagnostic_features[bid] = dict(identity=tuple(self.legacy.last[:3]),
+            phase=event['decision_phase'], values=dict(values))
 
     def _observe_legacy(self, row, *, symbol, venue, session):
         last = self.legacy.last
@@ -99,6 +109,9 @@ class State(OLD.State):
             self.anchor_state = 'condition_not_met'
             for bid in self.branch_ids:
                 match = C.OLD.matches(bid, turn, f)
+                self.record_diagnostic_features(bid, turn, dict(f,
+                    dd=turn.get('drawdown_5m_pct'), volume=turn.get('volume_ratio_60s'),
+                    spread=turn.get('spread_pct')))
                 self.counts[bid+(':missing' if match is None else ':matched' if match else ':miss')] += 1
                 if match is None:
                     self.anchor_state = 'required_feature_missing'
@@ -260,6 +273,7 @@ class State(OLD.State):
         for bid,proof in candidates:
             event = proof if C.PHASES[bid]==B.FIRST else self._event(bid,row,symbol,venue,session,f,proof)
             matched = C.matches(bid,event,event['branch_features'])
+            self.record_diagnostic_features(bid,event,event['branch_features'])
             self.counts[bid+(':missing' if matched is None else ':matched' if matched else ':miss')] += 1
             if not matched:continue
             if event.get('entry_ask') is None:
@@ -299,6 +313,7 @@ class State(OLD.State):
 
 _LOCK = threading.RLock()
 _STATES = {}; _ANCHORS = {}; _RESTORED_DAYS = set(); _EMPTY_PREFIX_DAYS = set()
+_ANCHOR_CURSORS={};_ANCHOR_ROOTS={};_ANCHOR_GAPS=set()
 _CLAIMS = {}; _GENERATION = None; _FAMILY = None
 
 
@@ -314,19 +329,47 @@ def configure(family):
         _GENERATION = family['family_sha256']; _FAMILY = family
 
 
-def restore_session_anchors(data_root, day):
+def restore_session_anchors(data_root, day, *, max_bytes=None, max_seconds=None):
     from src.engine.scalping.continuous_reversal_source import discover
+    from src.engine.scalping import reversal_anchor_index as I
     with _LOCK:
         if day in _RESTORED_DAYS:
-            return
-    specs = discover(data_root, day); anchors = {}
+            return dict(status='restored',bytes_read=0)
+    budget=min(I.LIMIT,max_bytes or I.LIMIT)
+    started=__import__('time').monotonic()
+    specs = discover(data_root, day); anchors = {};cursors={};gaps=set();complete=True
+    consumed=0
+    cached=I.load(data_root,day)
+    if cached is not None:anchors,cursors,gaps=cached
     for spec in specs:
         for source in spec['files']:
             path = Path(source['path']); opener = gzip.open if path.suffix == '.gz' else open
+            signature=(path.stat().st_ino,path.stat().st_size)
+            cursor=cursors.get(str(path)) or {}
+            offset=cursor.get('offset',0) if (cursor.get('inode')==signature[0]
+                and signature[1]>=cursor.get('physical_bytes_at_cursor',0)) else 0
+            if cursor.get('inode')==signature[0] and cursor.get('bytes')==signature[1]:continue
             with opener(path, 'rt') as handle:
-                for line in handle:
+                if offset:handle.seek(offset)
+                file_complete=True
+                while True:
+                    line_start=handle.tell()
+                    if consumed>=budget or (max_seconds is not None and __import__('time').monotonic()-started>=max_seconds):
+                        file_complete=False;complete=False;break
+                    line=handle.readline(budget-consumed+1)
+                    if not line:break
+                    consumed+=handle.tell()-line_start
+                    if consumed>budget or not line.endswith('\n'):
+                        handle.seek(line_start);file_complete=False;complete=False;break
+                    candidate_key=None
                     try:
                         r = json.loads(line)
+                        item=r.get('source_item');code=r.get('symbol');venue=r.get('venue')
+                        candidate_key=None
+                        if (r.get('path_consumer_eligible') is True and r.get('path_order_status')=='accept'
+                                and isinstance(code,str) and isinstance(item,str) and isinstance(venue,str)
+                                and item.split('_',1)[0]==code and isinstance(r.get('session_bucket'),str)):
+                            candidate_key=(code,venue,item,K.market_bucket(r['session_bucket']),day)
                         received = datetime.fromisoformat(r['local_receive_timestamp']); exchanged = datetime.fromisoformat(r['exchange_timestamp'])
                         p = r['trade_price']; item = r['source_item']; code = r['symbol']; venue = r['venue']
                         if (r.get('schema') != 'scalp_micro_reversion_market_stream_point_v3' or not received.tzinfo or not exchanged.tzinfo
@@ -334,24 +377,52 @@ def restore_session_anchors(data_root, day):
                                 or r.get('path_consumer_eligible') is not True or r.get('path_order_status') != 'accept'
                                 or type(p) not in (int,float) or not math.isfinite(p) or p <= 0
                                 or not 0 <= received.timestamp()-exchanged.timestamp() <= 5
-                                or type(r['sequence_epoch']) is not int or type(r['series_sequence']) is not int or r['series_sequence'] <= 0):
+                                or type(r['sequence_epoch']) is not int or r['sequence_epoch']<=0
+                                or type(r['series_sequence']) is not int or r['series_sequence'] <= 0):
+                            if candidate_key is not None and candidate_key not in anchors:gaps.add(candidate_key)
                             continue
                         from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                         if item.split('_',1)[0] != code or _explicit_item_venue(item) != venue:
                             continue
                         key = code, venue, item, K.market_bucket(r['session_bucket']), day
-                        row = [received.timestamp(), r['sequence_epoch'], r['series_sequence'], p]
+                        ep=r.get('native_transport_epoch',r['sequence_epoch'])
+                        seq=r.get('native_route_sequence',r['series_sequence'])
+                        row = [received.timestamp(), ep, seq, p]
+                        if not I.valid(key,row,day):
+                            if key not in anchors:gaps.add(key)
+                            continue
+                        if key in gaps:continue
                         if key not in anchors or tuple(row[:3]) < tuple(anchors[key][:3]):
                             anchors[key] = row
-                    except (ValueError, KeyError, TypeError, OverflowError):
+                    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+                        if candidate_key is not None and candidate_key not in anchors:gaps.add(candidate_key)
                         continue
+                position=handle.tell()
+                cursors[str(path)]=dict(inode=signature[0],bytes=signature[1] if file_complete else -1,
+                    physical_bytes_at_cursor=signature[1],offset=position)
     with _LOCK:
         _ANCHORS.update(anchors)
+        _ANCHOR_GAPS.update(gaps)
+        _ANCHOR_CURSORS[day]=cursors;_ANCHOR_ROOTS[day]=Path(data_root)
         if not specs:
             _EMPTY_PREFIX_DAYS.add(day)
         for key, state in _STATES.items():
-            state.session_anchor = _ANCHORS.get(key)
-        _RESTORED_DAYS.add(day)
+            anchor=_ANCHORS.get(key)
+            if state.session_anchor!=anchor:
+                state.session_anchor=anchor
+                state._feature_key=None;state.diagnostic_features.clear();state.diagnostic_rolling=None
+        if complete:_RESTORED_DAYS.add(day)
+        frozen={k:list(v) for k,v in _ANCHORS.items() if k[4]==day}
+    I.save(data_root,day,frozen,cursors,unobservable_streams=_ANCHOR_GAPS)
+    return dict(status='restored' if complete else 'prefix_incomplete',bytes_read=consumed)
+
+
+def prepare_anchor_source_step(data_root,day):
+    """Resume a cold prefix on the existing detached preparation cadence."""
+    if _FAMILY is None:return dict(status='not_configured')
+    with _LOCK:
+        if day in _RESTORED_DAYS:return dict(status='restored',bytes_read=0)
+    return restore_session_anchors(data_root,day,max_bytes=4*1024*1024,max_seconds=.1)
 
 
 def observe_normalized(symbol, session, envelope):
@@ -373,8 +444,19 @@ def observe_normalized(symbol, session, envelope):
                int(math.isfinite(t) and math.isfinite(price) and price > 0 and type(ex) in (int,float) and 0 <= t-ex <= 5), envelope['item'], 0]
         key = symbol, venue, row[9], K.market_bucket(session), datetime.fromtimestamp(t,K.KST).date().isoformat()
         with _LOCK:
-            if key[4] in _EMPTY_PREFIX_DAYS and row[8] and key not in _ANCHORS:
+            # Restoration completes the earlier accepted prefix. A different
+            # symbol's source file must not prevent this stream's first fact.
+            from src.engine.scalping import reversal_anchor_index as I
+            if key[4] in _RESTORED_DAYS and row[8] and I.valid(key,row[:4],key[4]) and key not in _ANCHORS and key not in _ANCHOR_GAPS:
                 _ANCHORS[key] = row[:4]
+                root=_ANCHOR_ROOTS.get(key[4])
+                if root is not None:
+                    from src.engine.scalping import reversal_anchor_index as I
+                    if not I.enqueue(root,key[4],__import__(__name__,fromlist=['*'])):
+                        # Keep the real fact in memory; source restoration will
+                        # reconstruct it after restart. Surface persistence loss.
+                        state=_STATES.get(key)
+                        if state is not None:state.counts['anchor_persistence_unavailable']+=1
             cell = _FAMILY['machine_cells'][C.cell_key(symbol, session, price)]['routes'][venue]
             # Track selected definitions across bands; filter at the actual confirmation.
             ids = tuple(dict.fromkeys(b['branch_id'] for band in C.BANDS

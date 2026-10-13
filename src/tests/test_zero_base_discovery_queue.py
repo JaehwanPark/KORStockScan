@@ -185,6 +185,7 @@ def test_source_gap_is_not_machine_block_and_restart_reclaims_inflight():
 @pytest.mark.parametrize("result", [
     "source_unavailable", "required_feature_insufficient", "policy_unavailable",
     "active_conflict", "probe_capacity_deferred",
+    "pattern_not_matched", "observation_incomplete",
 ])
 def test_new_discovery_does_not_cancel_non_assessed_retry(result):
     queue = DiscoveryQueue(DAY)

@@ -16,10 +16,17 @@ from src.engine.scalping.continuous_reversal_postclose import digest
 
 class State(OLD.State):
     def __init__(self, *, branch_ids, registry_sha256=None, **kwargs):
+        from src.engine.scalping import reversal_joint_catalog as J
+        self.operating_ids=tuple(branch_ids)
+        self.composed_ids=tuple(b for b in branch_ids if b in J.COMPOSED)
+        dependencies=[J.COMPOSED[b]['original_definition_ref']['branch_id'] for b in self.composed_ids]
+        branch_ids=tuple(dict.fromkeys((*branch_ids,*dependencies)))
         self.registry_sha256=registry_sha256 or (C.registry_for(branch_ids) if any(b in C.EXTENDED_DEFINITIONS for b in branch_ids) else C.OLD.SHA256)
-        self.extended_ids=tuple(b for b in branch_ids if b in C.EXTENDED_DEFINITIONS)
+        self.extended_ids=tuple(b for b in branch_ids if b in C.EXTENDED_DEFINITIONS and b not in J.COMPOSED)
         self.extended_pending={};self.extended_previous={};self.extended_turn=None
         self.coverage_snapshot=MappingProxyType({});self.coverage_identity=None
+        self.coverage_counts={b:{'TRUE':0,'FALSE':0,'UNKNOWN':0} for b in self.operating_ids}
+        self.coverage_source_censored=0
         super().__init__(branch_ids=[b for b in branch_ids if b not in C.EXTENDED_DEFINITIONS],**kwargs)
 
     def _reset_windows(self):
@@ -62,16 +69,24 @@ class State(OLD.State):
                     ready.get('path_inputs',{}).pop(bid,None)
             if not ready['event']['branch_signals']:
                 self.ready.remove(ready)
-        all_ids=(*self.selected_ids,*self.extended_ids)
+        all_ids=(*self.selected_ids,*self.extended_ids,*self.composed_ids)
         valid=bool(row[8] and self.legacy.last and self.legacy.last[8])
         known=bool(valid and previous and K.connected(previous,row))
         truth={b:'FALSE' if known and K.good_quote(row) else 'UNKNOWN' for b in all_ids}
         self.coverage_identity=tuple(row[:3])
         if not valid:
+            self.coverage_source_censored+=1
+            self._record_coverage(truth)
             self.coverage_snapshot=MappingProxyType(truth);return old_ready
+        if previous and not K.connected(previous,row):
+            # Fresh endpoint prints do not prove the interval between native
+            # epochs/sequences. Keep the lost interval in terminal coverage.
+            self.coverage_source_censored+=1
         t=row[0];f=self.features(row);prior_qty=self.q120.qty-self.q60.qty
         f.update(dd=100*(prior/row[3]-1) if prior else None,
                  volume=self.q60.qty/prior_qty if t-self.legacy.segment_start>=120 and not self.q120.bad and prior_qty>0 else None)
+        # A context projection is distinct from low-based, frozen FIRST values.
+        self.diagnostic_rolling = dict(identity=tuple(row[:3]), values=f)
         candidates=[]
         for identity,p in list(self.extended_pending.items()):
             bid=p['bid'];root=C.definition(bid)['root_contract']
@@ -138,9 +153,30 @@ class State(OLD.State):
         signals=copy.deepcopy(old_ready[0]['event']['branch_signals']) if old_ready else {}
         inputs=copy.deepcopy(old_ready[0].get('path_inputs',{})) if old_ready else {}
         lineage=copy.deepcopy(old_ready[0]['event']['anchor_lineage']) if old_ready else {}
+        from src.engine.scalping import reversal_joint_catalog as J
+        composed_evaluated=set()
+        for bid in self.composed_ids:
+            dependency=J.COMPOSED[bid]['original_definition_ref']['branch_id']
+            base=signals.get(dependency)
+            if base is None:
+                truth[bid]=truth.get(dependency,'UNKNOWN')
+                continue
+            event=J.compose(bid,base,f,epoch=row[0],sequence=row[2])
+            composed_evaluated.add(bid)
+            self.record_diagnostic_features(bid,base,f)
+            truth[bid]='FALSE' if event is None else 'TRUE'
+            if event is not None:
+                signals[bid]=event;inputs[bid]=self._source(event,row)
+                lineage[bid]=copy.deepcopy(lineage.get(dependency,[base['event_id']]))
+        # Internal dependency confirmations are consumed even when F vetoes.
+        # They are not operating OR members and cannot leak into a later tick.
+        signals={b:e for b,e in signals.items() if b in self.operating_ids}
+        inputs={b:e for b,e in inputs.items() if b in self.operating_ids}
+        lineage={b:e for b,e in lineage.items() if b in self.operating_ids}
         for bid,proof in candidates:
             event=self._extended_event(bid,row,symbol,venue,session,f,proof)
             matched=C.matches(bid,event,f)
+            self.record_diagnostic_features(bid, event, dict(f, spread=event.get('spread_pct')))
             truth[bid]='UNKNOWN' if matched is None else 'FALSE'
             self.counts[bid+(':missing' if matched is None else ':matched' if matched else ':miss')]+=1
             if matched and event['entry_ask'] is not None:
@@ -158,10 +194,14 @@ class State(OLD.State):
             if sum(self.counts[k] for k in ('pending_overload','path_pending_overload','ready_overload','path_ready_overload'))>overload_before:
                 truth[bid]='UNKNOWN'
         for bid in signals:truth[bid]='TRUE'
+        for bid in self.composed_ids:
+            if bid not in composed_evaluated:
+                truth[bid]=truth.get(J.COMPOSED[bid]['original_definition_ref']['branch_id'],'UNKNOWN')
         if not K.good_quote(row):truth={b:'UNKNOWN' for b in all_ids}
-        self.coverage_snapshot=MappingProxyType(truth)
-        if not signals:return []
+        self.coverage_snapshot=MappingProxyType({b:truth.get(b,'UNKNOWN') for b in self.operating_ids})
+        self._record_coverage(self.coverage_snapshot)
         if old_ready:self.ready.remove(old_ready[0])
+        if not signals:return []
         if not self.offline and len(self.ready)>=B.MAX_READY:
             self.counts['extended_ready_overload']+=1;return []
         event=copy.deepcopy(next(iter(signals.values())))
@@ -169,3 +209,8 @@ class State(OLD.State):
             canonical_opportunity_id=digest([str(datetime.fromtimestamp(t,K.KST).date()),symbol,K.market_bucket(session),venue,row[9],row[1],row[2]]))
         ready=dict(event=event,row=row,claimed=False,path_inputs=inputs)
         self.ready.append(ready);return [ready]
+
+    def _record_coverage(self,truth):
+        for bid in self.operating_ids:
+            counts=self.coverage_counts[bid]
+            counts[truth.get(bid,'UNKNOWN')]+=1

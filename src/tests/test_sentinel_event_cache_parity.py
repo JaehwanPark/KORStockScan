@@ -1,10 +1,69 @@
 import json
+import pytest
 
 from src.engine import buy_funnel_sentinel as buy
 from src.engine import holding_exit_sentinel as holding
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
 
 TARGET_DATE = "2026-05-06"
+
+
+@pytest.mark.parametrize('damage', [None, 'malformed', 'drop', 'identity'])
+def test_cache_projection_preserves_population_raw_and_failure_evidence(tmp_path, damage):
+    raw = _raw_path(tmp_path)
+    payload = _event('10:00:00', 'scalp_entry_action_decision_snapshot', fields={
+        'source_quality_status': 'pass', 'evaluation_attempt_id': 'exact',
+        'entry_economic_operating_context': 'frozen_code' * 10000,
+        'entry_economic_conditional_seed': 'frozen_seed' * 10000})
+    _write_lines(raw, [payload])
+    args = dict(raw_path=raw, cache_dir=tmp_path/'cache', cache_name='projection',
+                target_date=TARGET_DATE, schema_version=1, parse_payload=lambda x: x)
+    _, before = update_and_load_cached_event_rows(**args)
+    cache = tmp_path/'cache'/('projection_'+TARGET_DATE+'.jsonl')
+    if damage == 'malformed':
+        with cache.open('a') as f: f.write('{malformed}\n')
+    frozen_raw, frozen_cache = raw.read_bytes(), cache.read_bytes()
+    def project(row):
+        if damage == 'drop': return None
+        if damage == 'identity': return dict(row, stock_code='changed')
+        return buy._slim_economic_cache_row(row)
+    projected = dict(args, project_loaded_payload=project, cache_projection_version='economic_source_refs_v1')
+    if damage in {'drop', 'identity'}:
+        with pytest.raises(ValueError, match='projection_population_changed'):
+            update_and_load_cached_event_rows(**projected)
+        assert cache.read_bytes() == frozen_cache
+    else:
+        rows, after = update_and_load_cached_event_rows(**projected)
+        assert len(rows) == 1 and after['raw_offset'] == before['raw_offset']
+        assert rows[0]['fields'] == {'source_quality_status': 'pass', 'evaluation_attempt_id': 'exact'}
+        if damage == 'malformed':
+            assert cache.read_bytes() == frozen_cache and after['cache_projection_skip_reason']
+        else:
+            assert cache.stat().st_size < len(frozen_cache) / 10
+            once = cache.read_bytes()
+            update_and_load_cached_event_rows(**projected)
+            assert cache.read_bytes() == once
+    assert raw.read_bytes() == frozen_raw
+    assert not list((tmp_path/'cache').glob('.sentinel-projection-*'))
+
+
+def test_legacy_economic_cache_without_projection_retains_unverified_inputs():
+    row = {'stage': 'entry_ai_economic_plan_observed', 'fields': {
+        'entry_economic_conditional_seed': 'legacy', 'entry_economic_operating_context': 'required'}}
+    assert buy._slim_economic_cache_row(row) is row
+
+
+def test_maintenance_streaming_does_not_change_report_population(tmp_path):
+    raw = _raw_path(tmp_path)
+    _write_lines(raw, [_event('10:00:00', 'blocked_ai_score'), _event('10:01:00', 'ai_confirmed')])
+    args = dict(raw_path=raw, cache_dir=tmp_path/'cache', cache_name='stream',
+                target_date=TARGET_DATE, schema_version=1, parse_payload=lambda x: x,
+                project_loaded_payload=buy._slim_economic_cache_row, cache_projection_version='economic_source_refs_v1')
+    rows, maintenance = update_and_load_cached_event_rows(**args, load_rows=False)
+    assert rows == [] and maintenance['cache_event_count'] == 2 and maintenance['materialized_event_count'] == 0
+    rows, normal = update_and_load_cached_event_rows(**args)
+    assert len(rows) == normal['cache_event_count'] == normal['materialized_event_count'] == 2
+    assert normal['appended_cache_rows'] == 0
 
 
 def _event(
@@ -347,3 +406,22 @@ def test_guard_stages_survive_both_sentinel_cache_modes():
         for lossless in [False,True]:
             payload=_event('10:00:00',stage,fields={'reason':'quality_guard_block'})
             assert buy._payload_to_cache_row(payload,exclude_summary_stages=lossless)['stage']==stage
+
+
+def test_bounded_cache_decoder_preserves_json_semantics_and_container_isolation():
+    from src.engine.sentinel_event_cache import _cache_object_decoder
+    decoder = _cache_object_decoder()
+    text = '{"same_field_name":{"action":"WAIT","code":"005930","missing":null,"number":1.25,"enabled":false,"rows":[1,2]},"unicode":"한글","dup":1,"dup":2}'
+    first = json.loads(text, object_pairs_hook=decoder)
+    second = json.loads(text, object_pairs_hook=decoder)
+    assert first == second == json.loads(text)
+    assert next(iter(first)) is next(iter(second))
+    assert first['same_field_name']['action'] is second['same_field_name']['action']
+    assert first['same_field_name'] is not second['same_field_name']
+    assert first['same_field_name']['rows'] is not second['same_field_name']['rows']
+    first['same_field_name']['rows'].append(3)
+    assert second['same_field_name']['rows'] == [1, 2]
+    # Unique data cannot make the per-read pool unbounded or change any value.
+    for index in range(10000):
+        expected = {f'unique_field_{index}': f'unique_value_{index}', 'long': 'x' * 1000}
+        assert json.loads(json.dumps(expected), object_pairs_hook=decoder) == expected

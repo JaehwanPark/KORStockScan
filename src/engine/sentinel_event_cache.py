@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -9,6 +11,35 @@ from typing import Any, Callable
 from src.utils.jsonl_io import existing_or_gzip_path
 
 PayloadParser = Callable[[dict[str, Any]], dict[str, Any] | None]
+
+
+def _cache_object_decoder():
+    """Share bounded immutable strings without changing JSON values or rows.
+
+    A daily cache repeats the same field names and short enum values thousands
+    of times. Pools belong to this one read, never to runtime/policy state.
+    Unknown or large strings still decode normally; containers remain distinct.
+    """
+    keys: dict[str, str] = {}
+    values: dict[str, str] = {}
+
+    def decode(pairs):
+        result = {}
+        for key, value in pairs:
+            if len(key) <= 192:
+                if key in keys:
+                    key = keys[key]
+                elif len(keys) < 2048:
+                    keys[key] = key
+            if isinstance(value, str) and len(value) <= 192:
+                if value in values:
+                    value = values[value]
+                elif len(values) < 8192:
+                    values[value] = value
+            result[key] = value
+        return result
+
+    return decode
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -52,12 +83,17 @@ def update_and_load_cached_event_rows(
     schema_version: int,
     parse_payload: PayloadParser,
     verified_schema_migration: dict[str, Any] | None = None,
+    project_loaded_payload: PayloadParser | None = None,
+    cache_projection_version: str | None = None,
+    load_rows: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Maintain a slim append-only cache for sentinel pipeline-event scans.
 
     The raw pipeline stream is lossless and can be very large intraday. Sentinels
     only need a filtered subset of fields, so this cache parses new raw bytes
     since the previous run and rereads the slimmer sentinel-owned cache.
+    Maintenance may use load_rows=False: no rows are materialized, while the
+    metadata still records the full population. Report callers use the default.
     """
 
     raw_path = existing_or_gzip_path(raw_path)
@@ -151,30 +187,80 @@ def update_and_load_cached_event_rows(
                     break
 
     rows: list[dict[str, Any]] = []
-    if cache_path.exists():
-        with cache_path.open("r", encoding="utf-8", errors="replace") as cache_handle:
-            for raw_line in cache_handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(row, dict):
-                    rows.append(row)
+    row_count = 0
+    decode_object = _cache_object_decoder()
+    projection_applied = meta.get('cache_projection_version')
+    projection_skip = None
+    rewrite = bool(project_loaded_payload and cache_projection_version
+                   and projection_applied != cache_projection_version)
+    temporary = None
+    try:
+        before_cache = cache_path.stat()
+        writer = None
+        if rewrite:
+            fd, temporary = tempfile.mkstemp(prefix='.sentinel-projection-', dir=cache_path.parent)
+            writer = os.fdopen(fd, 'w', encoding='utf-8')
+        try:
+            with cache_path.open('r', encoding='utf-8', errors='replace') as cache_handle:
+                for raw_line in cache_handle:
+                    if '\ufffd' in raw_line:
+                        projection_skip = 'unverified_cache_encoding_preserved'
+                    if not raw_line.strip():
+                        continue
+                    try:
+                        row = json.loads(raw_line, object_pairs_hook=decode_object)
+                    except json.JSONDecodeError:
+                        projection_skip = 'malformed_cached_row_preserved'
+                        continue
+                    if not isinstance(row, dict):
+                        projection_skip = 'nonobject_cached_row_preserved'
+                        continue
+                    if project_loaded_payload is not None:
+                        original = row
+                        row = project_loaded_payload(row)
+                        if (not isinstance(row, dict) or any(row.get(key) != value
+                                for key, value in original.items() if key != 'fields')):
+                            raise ValueError('sentinel_cache_projection_population_changed')
+                    row_count += 1
+                    if load_rows:
+                        rows.append(row)
+                    if writer is not None:
+                        writer.write(json.dumps(row, ensure_ascii=False, separators=(',', ':')) + '\n')
+            if writer is not None:
+                writer.flush()
+                os.fsync(writer.fileno())
+        finally:
+            if writer is not None:
+                writer.close()
+        after_cache = cache_path.stat()
+        if project_loaded_payload is not None and any(getattr(before_cache, key) != getattr(after_cache, key)
+                for key in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')):
+            raise ValueError('sentinel_cache_changed_during_projection')
+        # Validate migration and raw custody before replacing an optional cache.
+        if schema_migrated and row_count != int(meta.get('cache_event_count') or 0) + appended_cache_rows:
+            raise ValueError('verified_cache_schema_population_changed')
+        if migration and not forward:
+            current = raw_path.stat()
+            if generation != {'device': current.st_dev, 'inode': current.st_ino, 'size_bytes': current.st_size,
+                              'mtime_ns': current.st_mtime_ns, 'ctime_ns': current.st_ctime_ns}:
+                raise ValueError('verified_cache_schema_source_changed')
+        if forward:
+            current = raw_path.stat()
+            if current.st_dev != stat.st_dev or current.st_ino != raw_inode or current.st_size < last_good_offset:
+                raise ValueError('forward_cache_schema_source_changed')
+        if rewrite and projection_skip is None:
+            os.chmod(temporary, before_cache.st_mode & 0o777)
+            os.replace(temporary, cache_path)
+            projection_applied = cache_projection_version
+            directory = os.open(cache_path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
 
-    if schema_migrated and len(rows) != int(meta.get("cache_event_count") or 0) + appended_cache_rows:
-        raise ValueError("verified_cache_schema_population_changed")
-    if migration and not forward:
-        current = raw_path.stat()
-        if generation != {"device": current.st_dev, "inode": current.st_ino, "size_bytes": current.st_size,
-                          "mtime_ns": current.st_mtime_ns, "ctime_ns": current.st_ctime_ns}:
-            raise ValueError("verified_cache_schema_source_changed")
-    if forward:
-        current = raw_path.stat()
-        if current.st_dev != stat.st_dev or current.st_ino != raw_inode or current.st_size < last_good_offset:
-            raise ValueError("forward_cache_schema_source_changed")
     final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
     final_raw_size = (
         max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
@@ -186,12 +272,15 @@ def update_and_load_cached_event_rows(
         "raw_offset": last_good_offset,
         "raw_size": final_raw_size,
         "cache_path": str(cache_path),
-        "cache_event_count": len(rows),
+        "cache_event_count": row_count,
+        "materialized_event_count": len(rows),
         "appended_raw_lines": appended_raw_lines,
         "appended_cache_rows": appended_cache_rows,
         "decode_errors": decode_errors,
         "rebuilt": stale_cache,
         "schema_migration_receipt": migration if schema_migrated else meta.get("schema_migration_receipt"),
+        "cache_projection_version": projection_applied,
+        "cache_projection_skip_reason": projection_skip,
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
     _write_json(meta_path, new_meta)

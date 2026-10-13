@@ -1914,6 +1914,7 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
     from src.engine.trade_profit import get_trade_cost_rate
+    timings={};phase=time.perf_counter()
     try:
         if handlers._is_any_simulated_position(stock, stock.get('strategy')):
             raise ValueError('unsupported_simulated_initial_position')
@@ -1923,6 +1924,8 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
         if not _finite(budget, positive=True):
             raise ValueError('initial_operating_budget_invalid')
         snapshot = capture._cached_policy(handlers, now_ts)
+        point=time.perf_counter();timings['cached_policy_verify']=round((point-phase)*1000,3);phase=point
+        compact_snapshot = capture.compact_policy_snapshot(snapshot)
         from types import SimpleNamespace
         from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields
         initial_exit = initial_main_entry_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
@@ -1932,6 +1935,7 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
         nxt_enabled, nxt_owner = handlers._holding_sell_nxt_enabled_status(stock, stock.get("code", ""))
         initial_state = capture.holding_state(handlers, {k:v for k,v in stock.items() if k not in
             {"entry_split_initial_entry_seed", "entry_split_initial_entry_lineage_conflict"}})
+        point=time.perf_counter();timings['initial_owner_state_freeze']=round((point-phase)*1000,3);phase=point
         initial_state["stock"]["is_nxt"] = nxt_enabled
         from src.engine.scalping.entry_cancel_wait_runtime import resolve_profile
         value = dict(schema=ENTRY_OPERATING_SCHEMA,
@@ -1944,7 +1948,7 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
             initial_fill_exit_state=initial_exit,
             initial_micro_estimator_state=capture.micro_state(handlers, stock.get('code', '')),
             frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
-            policy_snapshot=snapshot, exit_policy_version=snapshot_version(snapshot),
+            policy_snapshot=compact_snapshot, exit_policy_version=snapshot_version(compact_snapshot),
             initial_policy_state=initial_state,
             budget_krw=budget, cost_rate=get_trade_cost_rate(),
             model_implementation_sha256=entry_operating_model_identity(),
@@ -1955,6 +1959,8 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
         if capacity_receipt is not None:
             value['capital_source'] = freeze_entry_capital_source(
                 capacity_receipt, sizing_context, now_ts=now_ts)
+        timings['context_build']=round((time.perf_counter()-phase)*1000,3)
+        value['pre_ai_stage_timings_ms']=timings
         return {**value, 'sha256': owner.digest(value)}
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         if strict:

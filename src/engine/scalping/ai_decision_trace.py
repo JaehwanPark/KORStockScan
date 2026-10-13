@@ -268,12 +268,14 @@ def _json_bytes(value: Any) -> bytes:
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
-    line = (
+    serialization_started = time.perf_counter()
+    encoded = (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         + "\n"
-    )
+    ).encode('utf-8')
+    serialization_ms = (time.perf_counter() - serialization_started) * 1000
     from src.engine.scalping.trace_dedup import MAX_ROW_BYTES
-    if len(line.encode('utf-8')) > MAX_ROW_BYTES:
+    if len(encoded) > MAX_ROW_BYTES:
         raise ValueError('ai_trace_dedup_row_size_exceeded')
     lock_started = time.perf_counter()
     with jsonl_artifact_generation_lock(
@@ -302,7 +304,8 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
                 if str(payload[key_field]) in index.keys:
                     if index.digests[str(payload[key_field])] != trace_dedup.semantic_digest(payload, key_field):
                         raise ValueError('ai_trace_dedup_identity_conflict')
-                    return {"ai_trace_file_lock_wait_ms": lock_ms, "ai_trace_write_ms": 0.0}
+                    return {"ai_trace_file_lock_wait_ms": lock_ms, "ai_trace_write_ms": 0.0,
+                            "ai_trace_serialization_ms": serialization_ms, "ai_trace_fsync_ms": 0.0}
             generation.chmod_parent(0o700)
             existing = generation.stat_name(entry_name)
             if existing is not None and not stat.S_ISREG(existing.st_mode):
@@ -328,14 +331,15 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
             ):
                 raise OSError(f"trace file changed before append: {generation.logical}")
             os.fchmod(descriptor, 0o600)
-            encoded = line.encode("utf-8")
             written = 0
             while written < len(encoded):
                 count = os.write(descriptor, encoded[written:])
                 if count <= 0:
                     raise OSError(f"short write for trace file: {path}")
                 written += count
+            fsync_started = time.perf_counter()
             os.fsync(descriptor)
+            fsync_ms = (time.perf_counter() - fsync_started) * 1000
             final_identity = generation.assert_open_descriptor_name_identity(
                 descriptor,
                 entry_name,
@@ -351,7 +355,8 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
             if descriptor >= 0:
                 os.close(descriptor)
     return {"ai_trace_file_lock_wait_ms": lock_ms,
-            "ai_trace_write_ms": (time.perf_counter() - write_started) * 1000}
+            "ai_trace_write_ms": (time.perf_counter() - write_started) * 1000,
+            "ai_trace_serialization_ms": serialization_ms, "ai_trace_fsync_ms": fsync_ms}
 
 
 def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, float]:
@@ -382,7 +387,15 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
                     cache.pop(day, None)
                 for old in sorted(cache)[:-3]:
                     cache.pop(old, None)
-        except (BlockingIOError, trace_dedup.IndexNotReady):
+        except (OSError, trace_dedup.IndexNotReady) as exc:
+            # The generation lease wraps nonblocking flock contention in an
+            # OSError. Only its typed cause and exact lease marker are pending;
+            # descriptor/parent changes, permission and disk errors still fail.
+            if isinstance(exc, OSError) and not (
+                    isinstance(exc, BlockingIOError)
+                    or (isinstance(exc.__cause__, BlockingIOError)
+                        and str(exc).startswith('jsonl_generation_lock_busy:'))):
+                raise
             pending = True
             with _WRITE_LOCK:
                 cache.pop(day, None)
@@ -1863,6 +1876,7 @@ def record_ai_decision_trace(
     """Append the immutable final decision and create its pending outcome row."""
     if not trace_enabled():
         return {}
+    preparation_started = time.perf_counter()
     try:
         if str(prompt_type or "") not in _STAGE_BY_PROMPT_TYPE:
             return {}
@@ -2241,6 +2255,8 @@ def record_ai_decision_trace(
                     "ai_trace_file_lock_wait_ms",
                     "ai_trace_write_ms",
                     "ai_trace_capture_ms",
+                    "ai_trace_serialization_ms",
+                    "ai_trace_fsync_ms",
                     "openai_local_pre_http_ms",
                     "openai_http_lock_wait_ms",
                     "openai_http_provider_ms",
@@ -2252,6 +2268,17 @@ def record_ai_decision_trace(
                 )
                 if key in merged
             },
+            "entry_local_stage_timings_ms": {
+                key: value for key, value in (merged.get('entry_local_stage_timings_ms') or {}).items()
+                if isinstance(key, str) and key.startswith('entry_')
+                and type(value) in (int, float) and math.isfinite(value) and value >= 0
+            } if isinstance(merged.get('entry_local_stage_timings_ms'), dict) else {},
+            "provider_stage_monotonic": {
+                key: value for key, value in (merged.get('provider_stage_monotonic') or {}).items()
+                if key in {'reserved', 'adapter_entered', 'executor_enqueued', 'executor_started',
+                           'sdk_started', 'sdk_finished', 'response_received', 'caller_adapter_finished', 'future_settled'}
+                and type(value) in (int, float) and math.isfinite(value)
+            } if isinstance(merged.get('provider_stage_monotonic'), dict) else {},
             "entry_local_stage_clocks": {
                 key: value for key, value in (
                     merged.get('entry_local_stage_clocks', {}).items()
@@ -2738,6 +2765,7 @@ def record_ai_decision_trace(
             "entry_economic_guard_receipt": merged.get("entry_economic_guard_receipt"),
             "entry_economic_capacity_blocker": merged.get("entry_economic_capacity_blocker"),
             "entry_economic_capacity_receipt": merged.get("entry_economic_capacity_receipt"),
+            "entry_economic_stage_timings_ms": merged.get('entry_economic_stage_timings_ms'),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
             "outcome_label_eligible": not outcome_label_exclusion_reasons,
             "outcome_label_exclusion_reasons": outcome_label_exclusion_reasons,
@@ -2795,6 +2823,9 @@ def record_ai_decision_trace(
                     "entry_setup_live_policy_scope_authority",
                     "entry_ai_advisory_verdict",
                     "entry_ai_advisory_contract_errors",
+                    "entry_auxiliary_response_contract_valid",
+                    "entry_auxiliary_response_contract_errors",
+                    "entry_post_response_execution_valid",
                     "entry_ai_raw_risk_codes",
                     "entry_ai_raw_supporting_fact_ids",
                     "entry_ai_raw_contradicting_fact_ids",
@@ -2888,6 +2919,9 @@ def record_ai_decision_trace(
                 "entry_ai_contract_errors",
                 "entry_ai_advisory_contract_valid",
                 "entry_ai_advisory_contract_errors",
+                "entry_auxiliary_response_contract_valid",
+                "entry_auxiliary_response_contract_errors",
+                "entry_post_response_execution_valid",
                 "entry_ai_followup_disposition",
                 "entry_ai_followup_authority",
                 "entry_setup_live_policy_scope_authority",
@@ -3092,6 +3126,8 @@ def record_ai_decision_trace(
                 "pre_ai_append_receipt": trace_row.get("entry_pre_ai_source_append_receipt"),
                 "raw_response_sha256": capsule_digest({k: v for k, v in trace_row.items() if k.startswith("entry_ai_raw_")}),
                 "response_trace_append_contract": "presence_in_trace_file_is_append_evidence"})
+        from src.engine.monitoring.runtime_performance import record_entry_duration, timed_entry_call
+        record_entry_duration('entry_trace_prepare', time.perf_counter() - preparation_started)
         with _WRITE_LOCK:
             seen = _SEEN_TRACE_IDS.get(target_date)
             if seen is None:
@@ -3107,7 +3143,7 @@ def record_ai_decision_trace(
                         "entry_economic_decision_available_at": trace_row["decision_ts"],
                         "decision_trace_id": trace_id, "actual_order_submitted": False,
                         "broker_order_forbidden": True, "runtime_effect": False, "allowed_runtime_apply": False})
-            _append_jsonl(_trace_path(target_date), trace_row)
+            timed_entry_call('entry_trace_append', _append_jsonl, _trace_path(target_date), trace_row)
             seen.add(trace_id)
             if trace_row["outcome_label_eligible"]:
                 seen_outcomes = _SEEN_OUTCOME_LABEL_IDS.get(target_date)
@@ -3116,7 +3152,7 @@ def record_ai_decision_trace(
                     seen_outcomes = _load_seen(outcome_path, "label_id")
                     _SEEN_OUTCOME_LABEL_IDS[target_date] = seen_outcomes
                 label_id = str(pending_row["label_id"])
-                _append_jsonl(_outcome_path(target_date), pending_row)
+                timed_entry_call('entry_outcome_append', _append_jsonl, _outcome_path(target_date), pending_row)
                 seen_outcomes.add(label_id)
         return {
             "ai_decision_trace_schema": TRACE_SCHEMA,

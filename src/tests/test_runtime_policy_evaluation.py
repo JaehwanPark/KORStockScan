@@ -448,3 +448,74 @@ def test_activation_oversize_row_uses_verified_uncached_read(activation,monkeypa
     assert registry.policy_activation_matches(**args)
     assert registry.policy_activation_matches(**args)
     assert len(calls)==2 and args['activation_event_hash'] not in registry._activation_rows
+
+
+@pytest.mark.parametrize('damage', [None, 'native_invalid', 'source_changed', 'backend_changed'])
+def test_post_response_prepared_claim_rechecks_source_and_native_eligibility(loader, monkeypatch, damage):
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import reversal_current_backend as D, reversal_extended_union as A
+    from src.utils import constants
+    root, pointer, _ = loader
+    family = dict(schema=V.SCHEMA, release_commit='commit', family_sha256='family',
+                  machine_cells={'cell': {'routes': {'SOR': {
+                      'scope_execution_hash': 'scope', 'backend': 'union_v6'}}}})
+    def load(*args):
+        N._read(pointer)  # Retain the loader's actual pointer dependency.
+        return {'bundle_sha256': 'bundle', 'continuous_reversal': family}
+    monkeypatch.setattr(N, '_load_current_uncached', load)
+    seen = []
+    backend = SimpleNamespace(_GENERATION='family')
+    monkeypatch.setattr(D, 'backend', lambda: backend)
+    def validate(claim, generation, *, now):
+        seen.append((claim, generation, now))
+        if damage == 'native_invalid':
+            raise ValueError('reversal_signal_path_changed')
+        return ({'branch_signals': {'legacy_dd5_ge_0_4_v1': {}}}, {})
+    monkeypatch.setattr(D, 'validate_any_claim', validate)
+    monkeypatch.setattr(V, 'validate_family', lambda *a: pytest.fail('static family was already verified'))
+    monkeypatch.setattr(E.time, 'time', lambda: 10.)
+    monkeypatch.setattr(constants, 'DATA_DIR', root)
+    now = __import__('datetime').datetime.fromisoformat('2026-10-08T12:00:00+09:00').timestamp()
+    ref = 'legacy_dd5_ge_0_4_v1:' + A.definition_hash('legacy_dd5_ge_0_4_v1')
+    policy = {'continuous_reversal_claim': {'token': 'original'},
+              'continuous_reversal_assessment': {'cell_key': 'cell', 'route': 'SOR',
+                  'scope_execution_hash': 'scope', 'matched_policy_refs': [ref]}}
+    with N.verified_evaluation(data_root=root, target_date='2026-10-08') as active:
+        E._CONFIGURED = E._CONSUMED = (('same-pid-consumer',), active)
+        def prepare(**kw):
+            assert kw == {'data_root': root, 'day': '2026-10-08'}
+            if damage == 'source_changed': return {}
+            if damage == 'backend_changed': backend._GENERATION = 'other'
+            return active
+        monkeypatch.setattr(E, 'prepare', prepare)
+        if damage:
+            with pytest.raises(ValueError, match='path_changed|scope_execution_changed'):
+                V.validate_active_claim(policy, active, now=now)
+        else:
+            assert V.validate_active_claim(policy, active, now=now) == [ref]
+            assert seen == [({'token': 'original'}, 'family', 10.)]
+
+
+@pytest.mark.parametrize('mutation', [False, True])
+def test_engine_post_response_boundary_preserves_wait_and_rejects_source_race(loader, monkeypatch, mutation):
+    from src.tests.test_ai_engine_openai_transport import _build_engine
+    from src.engine.scalping import continuous_reversal_policy as P
+    from src.utils import constants
+    root, path, _ = loader
+    monkeypatch.setattr(constants, 'DATA_DIR', root)
+    day = __import__('datetime').datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+    policy = dict(continuous_reversal_assessment={
+        'policy_version': 'continuous_reversal_policy_v6', 'action': 'ENTER_NOW'},
+        machine_bundle_sha256='bundle')
+    def compose(response, issued):
+        assert N._VERIFIED_EVALUATION.get()[:2] == (str(root), day)
+        if mutation: path.write_text(path.read_text().replace(': 1', ': 2'))
+        return dict(action='WAIT', entry_ai_screen_pass=False)
+    monkeypatch.setattr(P, 'compose', compose)
+    result = _build_engine()._normalize_decision_quality_entry_result(
+        {'risk_verdict': 'PASS'}, exact_payload={}, live_policy=policy)
+    assert result['action'] == 'WAIT' and result['entry_ai_screen_pass'] is False
+    if mutation:
+        assert result['reason'] == 'entry_post_response_source_invalid'
+        assert result['entry_machine_pass_submit_candidate'] is False
+    assert N._VERIFIED_EVALUATION.get() is None

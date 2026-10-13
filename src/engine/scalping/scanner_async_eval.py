@@ -558,6 +558,20 @@ class ScannerAsyncEvalCoordinator:
     def _evaluate_prepared(
         self, request: ScannerAsyncEvalRequest, prepared: Mapping[str, Any]
     ) -> Mapping[str, Any]:
+        from src.engine.monitoring.runtime_performance import entry_timing_frame, entry_stage
+        with entry_timing_frame() as timings:
+            with entry_stage('entry_evaluation'):
+                result = self._evaluate_prepared_frame(request, prepared)
+            result = dict(result)
+            clocks = dict(result.get('entry_local_stage_clocks') or {})
+            clocks['stage_durations_ms'] = dict(timings)
+            clocks['stage_duration_basis'] = 'nested_same_pid_monotonic_not_additive'
+            result['entry_local_stage_clocks'] = clocks
+            return result
+
+    def _evaluate_prepared_frame(
+        self, request: ScannerAsyncEvalRequest, prepared: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
         """Pin the exact execution frame for both evaluation and final commit."""
         request_id = request.context.request_id
         if request.context.expired():
@@ -571,7 +585,9 @@ class ScannerAsyncEvalCoordinator:
             ):
                 raise RuntimeError("scanner_async_superseded_before_evaluation")
         if request.refresh_before_evaluate is not None:
-            refreshed = request.refresh_before_evaluate(request.context, prepared)
+            from src.engine.monitoring.runtime_performance import entry_stage
+            with entry_stage('entry_refresh'):
+                refreshed = request.refresh_before_evaluate(request.context, prepared)
             if not isinstance(refreshed, Mapping):
                 raise TypeError("scanner_async_refreshed_frame_must_be_mapping")
             prepared = _immutable_mapping(refreshed)

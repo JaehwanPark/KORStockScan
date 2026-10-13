@@ -193,18 +193,59 @@ class Deployment:
         _atomic(self.directory / 'selection-before.json', self.before)
         self.checkpoint('preflight')
         check = self.run_json(self.previous, 'src.engine.automation.intraday_release_handoff',
-                              '--verify', '--target-date', self.day)
+                              '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
         self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
                       '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
-        self.frozen = check['handoff']['frozen_files']
+        if check.get('basis') == 'native_preopen':
+            self.seal_native_predecessor(check)
+        else:
+            path, _ = H._paths(self.day, self.previous_commit)
+            self.frozen = H._read(path)['frozen_files']
         code_check = H.verify_candidate_delay_code(self.day, self.candidate, self.commit)
         _atomic(self.directory / 'candidate-delay-code.json', _json_bytes(code_check))
+        stop_check = H.verify_candidate_stop_code(self.day, self.candidate, self.commit)
+        _atomic(self.directory / 'candidate-stop-code.json', _json_bytes(stop_check))
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
         self.document_before = self.checklist.read_bytes()
         self.document_after = subprocess.check_output(['git', '-C', str(self.candidate), 'show',
             self.commit + ':docs/checklists/' + self.checklist.name], timeout=10)
         _atomic(self.directory / 'checklist-before.md', self.document_before)
         self.assert_unchanged()
+
+    def seal_native_predecessor(self, check):
+        """Capture verified LIVE native consumption before requesting drain."""
+        if (check.get('schema') != 'intraday_pid_consumption_verification_v1'
+                or check.get('status') != 'pass' or check.get('basis') != 'native_preopen'
+                or check.get('actual_pid_consumed') is not True
+                or check.get('target_date') != self.day
+                or check.get('selected_release_commit') != self.previous_commit
+                or check.get('release_root') != str(self.previous)
+                or check.get('pid_identity') != self.identity
+                or not check.get('manifest_sha256')):
+            raise ValueError('deployment_native_predecessor_unverified')
+        index = H.DATA_DIR / 'runtime/policy_bootstrap/prepared' / self.day / 'latest.json'
+        ref = H._read(index)
+        receipt = Path(ref['receipt_path'])
+        if receipt.resolve().parent.parent != index.parent.resolve() or H._sha(receipt) != ref['receipt_sha256']:
+            raise ValueError('deployment_native_prepared_generation_invalid')
+        paths = [H.bootstrap.env_path(self.day), H.bootstrap.manifest_path(self.day),
+                 H._preopen_path(self.day), index, receipt]
+        self.frozen = {str(p): H._sha(p) for p in paths}
+        self.assert_unchanged()
+        if H._identity(self.identity['pid']) != self.identity:
+            raise ValueError('deployment_native_predecessor_changed')
+        # PREOPEN can generate today's checklist after this release's Git
+        # commit. Preserve its strict-bound bytes before document publication.
+        checklist_snapshot = H.preserve_checklist(self.day)
+        self.native_path = self.directory / 'native-predecessor.json'
+        _atomic(self.native_path, _json_bytes(dict(
+            schema='native_preopen_predecessor_v1', authority=CONFIRM,
+            candidate_commit=self.commit, verification=check, frozen_files=self.frozen,
+            original_checklist_snapshot=checklist_snapshot,
+            prepared_receipt_path=str(receipt), prepared_receipt_sha256=ref['receipt_sha256'],
+            selection_before_sha256=_digest(self.before))))
+        self.native_sha = H._sha(self.native_path)
+        self.frozen[str(self.native_path)] = self.native_sha
 
     def assert_unchanged(self):
         if self.selection.read_bytes() != self.before:
@@ -264,6 +305,12 @@ class Deployment:
             actual_pid_consumption_status='drained_awaiting_verified_start',
             deployment_transition=str(self.directory / 'status.json'))
         value.pop('source_validation', None)
+        if hasattr(self, 'native_path'):
+            value.update(native_predecessor_path=str(self.native_path),
+                         native_predecessor_sha256=self.native_sha)
+        else:
+            value.pop('native_predecessor_path', None)
+            value.pop('native_predecessor_sha256', None)
         self.published = _json_bytes(value)
         with (self.workspace / 'data/runtime/runtime_release_selection.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

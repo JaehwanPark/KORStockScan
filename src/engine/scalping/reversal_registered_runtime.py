@@ -257,7 +257,7 @@ def observe_normalized(symbol, session, envelope):
                int(math.isfinite(t) and math.isfinite(price) and price > 0 and type(ex) in (int,float) and 0 <= t-ex <= 5), envelope['item'], 0]
         key = symbol, venue, row[9], K.market_bucket(session), datetime.fromtimestamp(t,K.KST).date().isoformat()
         with _LOCK:
-            if key[4] in _EMPTY_PREFIX_DAYS and row[8] and key not in _ANCHORS:
+            if key[4] in _RESTORED_DAYS and row[8] and key not in _ANCHORS:
                 _ANCHORS[key] = row[:4]
             cell = _FAMILY['machine_cells'][C.cell_key(symbol, session, price)]['routes'][venue]
             ids = tuple(b['branch_id'] for b in cell['payload']['branches'])

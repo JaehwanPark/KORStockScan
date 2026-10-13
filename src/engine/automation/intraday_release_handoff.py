@@ -23,6 +23,7 @@ from src.utils.market_day import is_krx_trading_day
 KST = ZoneInfo("Asia/Seoul")
 CONFIRM = "APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF"
 _STOPPED_PREPARATION = ContextVar('intraday_stopped_preparation', default=None)
+_NATIVE_PREDECESSOR = ContextVar('intraday_native_predecessor', default=None)
 _OBSERVER_CUSTODY = ContextVar('intraday_observer_custody', default=None)
 
 # Reviewed delivery/observation repair. Exact source pairs, not a blanket
@@ -52,6 +53,76 @@ REVIEWED_ENTRY_CONSUMER_SOURCES = {
         'b1c79f0fdce031b947280b3472101c5b87797dedc1b7a183eb64a973bbbeb5ae'),
 }
 
+# Source-exact shared-deadline latency repair; retain the older reviewed pairs
+# above for their already-consumed handoffs. This is no function-wide exemption.
+# Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
+REVIEWED_ENTRY_LATENCY_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '5c0b5e1b97e50ed1bd80c4084795a40eaa430c62a8d52cb30b338dbbf7c574ca',
+        '903cd8b37e9e60ecfe51a454a1933484f08d0c3c1c7629f7e55e369608770425'),
+    'src/engine/kiwoom_sniper_v2.py': (
+        '96319c0071dfce04980af151ff9e22b91352a704281bb727c8e68d604ee6aa20',
+        'd19c471856511889cf9728a3fee7f13c4bcdfce29566dbea80ae5b581d9e8777'),
+    'src/engine/scalping/scanner_async_eval.py': (
+        'bfb445c6d44d717ae1fa0cbac6bef5774daadff06199128dcec22c12f7998239',
+        '54d8584efa5350575d687b92486e205702f94cfde7a87da0acda46d1f3522748'),
+    'src/engine/ai_engine_openai.py': (
+        '4d5ff0cc0451365f17feb8ed8f6a113f984abf416f24ac7bd5cb24f2ca596eed',
+        '34332f4541b381184ca47d371ecc6598b6f2e10534085bf3893c76fef553c7f2'),
+}
+
+# Final synchronous provider-boundary repair; previous consumed pairs remain
+# valid for their immutable releases. Exact source pair, no broader exemption.
+REVIEWED_ENTRY_BOUNDARY_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        '4d5ff0cc0451365f17feb8ed8f6a113f984abf416f24ac7bd5cb24f2ca596eed',
+        '7a2d9795aa7501e0f510368f59282d849456c310c91b46d993d2d540867d678a'),
+}
+
+# Response transport health and fresh post-response validation. Exact reviewed
+# bytes only; preserve every previously consumed source pair.
+# Evidence: docs/audits/main-restart-machine-monitoring-and-timeout-structural-repair-review-2026-10-13.md.
+REVIEWED_ENTRY_RESPONSE_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        '4d5ff0cc0451365f17feb8ed8f6a113f984abf416f24ac7bd5cb24f2ca596eed',
+        'dabda2cb9fee6fd17263465f38866d90ec66f62b7305a2b5bb7a8dd9fc9a1671'),
+}
+
+# Diagnostic state snapshots reference successfully appended canonical replay
+# evidence instead of echoing its frozen code. Older release pairs stay valid.
+REVIEWED_ENTRY_STORAGE_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '5c0b5e1b97e50ed1bd80c4084795a40eaa430c62a8d52cb30b338dbbf7c574ca',
+        '0afbd461d2ba0f60fa385179c0f03a7c0aaf0e3972e9b73401776012519783fb'),
+}
+
+# Reviewed joint/source diagnostics and compact replay context. The original
+# policy and every order guard remain bound; only these exact bytes qualify.
+# Evidence: docs/audits/main-joint-operating-and-source-repair-implementation-review-2026-10-13.md.
+REVIEWED_JOINT_CONSUMER_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '5c0b5e1b97e50ed1bd80c4084795a40eaa430c62a8d52cb30b338dbbf7c574ca',
+        'fd35f4ccd99ab3aa665737253c5209ec84755a6b67152b3ff0552ae5c4a8d52d'),
+    'src/engine/kiwoom_sniper_v2.py': (
+        '96319c0071dfce04980af151ff9e22b91352a704281bb727c8e68d604ee6aa20',
+        '51280b79c7eee85279c9d649c76888cb03954f73c18c1e0ba41a863c4ea8a0a1'),
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        'd08f8e220cf76f2b2b867e40eb5382bf17491391161277367acf407143e65a21',
+        '95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd'),
+}
+
+# Incumbent stop consumer compatibility only; numerical selection and research
+# remain pinned to the full current implementation generation.
+# Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
+REVIEWED_STOP_CONSUMER_SOURCES = {
+    'src/engine/scalping/main_stop_policy.py': (
+        '70fde9e700d3a56d873029ddde2824d4f166d31301199833da87dc3c02e6216f',
+        'c444f74e9da0339b564543322da389bcbe38552c4ed56531e8ebf5c21676752e'),
+    'src/engine/automation/main_stop_postclose.py': (
+        'efb6eefeeca91b6a91891dffee06cfff996f47095ef70aa637d9afb0f0613a7d',
+        '68628fd7c9758946344c5841b90d8073929665d2b61eba40041c74fabc843255'),
+}
+
 
 def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -62,6 +133,56 @@ def _read(path):
     if not isinstance(value, dict):
         raise ValueError("intraday_handoff_object_required")
     return value
+
+
+def _native_predecessor(day, commit, previous, previous_commit, identity, path, sha):
+    """Verify immutable evidence captured while the native Main was alive.
+
+    This never infers old consumption from a stopped process or writes a fake
+    intraday consumed receipt. The ordered transition owns the original proof.
+    """
+    expected = DATA_DIR / 'runtime/release_transitions' / day / commit / 'native-predecessor.json'
+    if str(path) != str(expected) or expected.is_symlink() or _sha(expected) != sha:
+        raise ValueError('intraday_native_predecessor_hash_invalid')
+    value = _read(expected)
+    proof = value.get('verification') or {}
+    before = expected.parent / 'selection-before.json'
+    selection = _read(before)
+    manifest = _read(bootstrap.manifest_path(day))
+    index = DATA_DIR / 'runtime/policy_bootstrap/prepared' / day / 'latest.json'
+    ref = _read(index)
+    receipt = Path(ref['receipt_path'])
+    required = {str(p) for p in [bootstrap.env_path(day), bootstrap.manifest_path(day),
+                                _preopen_path(day), index, receipt]}
+    if (value.get('schema') != 'native_preopen_predecessor_v1'
+            or value.get('authority') != 'APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART'
+            or value.get('candidate_commit') != commit
+            or proof.get('schema') != 'intraday_pid_consumption_verification_v1'
+            or proof.get('status') != 'pass' or proof.get('basis') != 'native_preopen'
+            or proof.get('actual_pid_consumed') is not True or proof.get('target_date') != day
+            or proof.get('pid_identity') != identity or not identity.get('start_ticks')
+            or identity.get('cwd') != str(Path(previous) / 'src')
+            or proof.get('selected_release_commit') != previous_commit
+            or proof.get('release_root') != str(previous)
+            or proof.get('manifest_sha256') != manifest.get('manifest_sha256')
+            or manifest.get('target_date') != day
+            or manifest.get('selected_release_sha') != previous_commit
+            or _preopen(day).get('selected_release_commit') != previous_commit
+            or selection.get('actual_pid_consumed') is not True
+            or selection.get('schema') != 'runtime_release_selection_v1'
+            or selection.get('git_commit') != previous_commit
+            or selection.get('release_root') != str(previous)
+            or (selection.get('actual_pid_receipt') or {}).get('pid') != identity.get('pid')
+            or value.get('selection_before_sha256') != _sha(before)
+            or receipt.resolve().parent.parent != index.parent.resolve()
+            or value.get('prepared_receipt_path') != str(receipt)
+            or value.get('prepared_receipt_sha256') != ref.get('receipt_sha256')
+            or _sha(receipt) != ref.get('receipt_sha256')
+            or set(value.get('frozen_files', {})) != required
+            or any(_sha(p) != s for p, s in value['frozen_files'].items())):
+        raise ValueError('intraday_native_predecessor_binding_invalid')
+    return dict(path=str(expected), sha256=sha, identity=identity, verification=proof,
+                frozen_files=value['frozen_files'])
 
 
 def preserve_checklist(day):
@@ -179,6 +300,11 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         bound = manifest.get('holding_path_vote_policy_receipt') or {}
         if bound.get('bundle_sha256') != policy_sha or bound.get('target_date') != day:
             raise ValueError('entry_consumer_policy_binding_invalid')
+    elif family == 'main_stop':
+        bound = manifest.get('main_stop_confirmation_receipt') or {}
+        if (bound.get('policy_sha256') != policy_sha or bound.get('target_date') != day
+                or bound.get('status') != 'verified_carried'):
+            raise ValueError('entry_consumer_policy_binding_invalid')
     else:
         raise ValueError('entry_consumer_family_invalid')
     current_path, _ = _paths(day, commit)
@@ -190,6 +316,21 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         if checked.get('status') != 'pass':
             raise ValueError('entry_consumer_handoff_invalid')
     else:
+        native = _NATIVE_PREDECESSOR.get()
+        if native is not None:
+            proof = native['verification']
+            identity = native['identity']
+            if (_STOPPED_PREPARATION.get() != (day, identity['pid'], proof['release_root'])
+                    or proof['selected_release_commit'] != origin
+                    or Path('/proc', str(identity['pid'])).exists()):
+                raise ValueError('entry_consumer_native_predecessor_not_stopped')
+            _native_predecessor(day, commit, proof['release_root'], origin, identity,
+                                native['path'], native['sha256'])
+            changed = _verify_entry_code_delta(root, commit, origin, paths, expected)
+            return dict(status='verified_intraday_consumer_repair', target_date=day,
+                policy_sha256=policy_sha, origin_commit=origin, release_commit=commit,
+                code_contract_sha256=expected, runtime_code_contract_sha256=actual,
+                changed_consumer_paths=changed, policy_effect='unchanged')
         selection = _read(DATA_DIR / 'runtime/runtime_release_selection.json')
         previous = selection.get('previous_git_commit')
         prior_path, consumed_path = _paths(day, previous)
@@ -261,7 +402,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if REVIEWED_ENTRY_CONSUMER_SOURCES.get(name) == pair:
+        if pair in (REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),
+                    REVIEWED_ENTRY_LATENCY_SOURCES.get(name),
+                    REVIEWED_ENTRY_BOUNDARY_SOURCES.get(name),
+                    REVIEWED_ENTRY_RESPONSE_SOURCES.get(name),
+                    REVIEWED_ENTRY_STORAGE_SOURCES.get(name),
+                    REVIEWED_JOINT_CONSUMER_SOURCES.get(name),
+                    REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:
@@ -309,6 +456,35 @@ def verify_candidate_delay_code(day, root, commit):
                 policy_effect='unchanged', actual_pid_consumed=False)
 
 
+def verify_candidate_stop_code(day, root, commit):
+    """Pre-stop source-exact stop-code check; never select/rewrite a policy."""
+    _today(day, None)
+    root = Path(root).resolve(strict=True)
+    if Path(__file__).resolve().parents[3] != root:
+        raise ValueError('entry_consumer_candidate_code_mismatch')
+    manifest = _read(bootstrap.manifest_path(day))
+    origin = manifest.get('selected_release_sha')
+    if not origin or origin != _preopen(day).get('selected_release_commit'):
+        raise ValueError('entry_consumer_origin_invalid')
+    from src.engine.scalping import main_stop_policy as S
+    env = manifest.get('env_overrides') or {}
+    if not env.get(S.ENV_FILE):
+        return dict(status='pass', applicability='not_installed', target_date=day)
+    bundle = S.load_bundle(env[S.ENV_FILE], env[S.ENV_SHA], day, require_current_code=False)
+    bound = manifest.get('main_stop_confirmation_receipt') or {}
+    if bound.get('policy_sha256') != bundle['policy_sha256'] or bound.get('target_date') != day:
+        raise ValueError('entry_consumer_policy_binding_invalid')
+    if bundle['code_sha256'] == S.implementation_sha():
+        changed = []
+    else:
+        if any(c['status'] == 'selected' for c in bundle['cells'].values()):
+            raise ValueError('stop_bundle_code_generation_changed')
+        changed = _verify_entry_code_delta(root, commit, origin,
+            {name:'src/engine/'+name for name in S.implementation_paths()}, bundle['code_sha256'])
+    return dict(status='pass', target_date=day, origin_commit=origin, release_commit=commit,
+                changed_consumer_paths=changed, policy_effect='unchanged', actual_pid_consumed=False)
+
+
 def _checked_bootstrap(day, pid):
     check = bootstrap.verify_bootstrap(day, pid=pid, write=False)
     if check.get("status") != "pass":
@@ -322,11 +498,13 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
             previous_stopped=False):
     token = _STOPPED_PREPARATION.set(
         (day, int(old_pid), str(Path(previous_root).resolve())) if previous_stopped else None)
+    native_token = _NATIVE_PREDECESSOR.set(None)
     try:
         return _prepare(day, old_pid=old_pid, previous_root=previous_root, confirm=confirm,
                         now=now, reseal_postclose_source=reseal_postclose_source,
                         previous_stopped=previous_stopped)
     finally:
+        _NATIVE_PREDECESSOR.reset(native_token)
         _STOPPED_PREPARATION.reset(token)
 
 
@@ -343,17 +521,34 @@ def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose
     old_commit = subprocess.check_output(["git", "-C", str(previous), "rev-parse", "HEAD"], text=True).strip()
     dirty = subprocess.check_output(["git", "-C", str(previous), "status", "--porcelain", "--", "src", "deploy", "restart.sh"], text=True).strip()
     original = _preopen(day)
+    if previous_stopped and original.get('selected_release_commit') == old_commit:
+        selection = _read(DATA_DIR / 'runtime/runtime_release_selection.json')
+        if (selection.get('approved_by') != 'user'
+                or selection.get('approval_scope') != 'ordered_intraday_deploy_and_restart'
+                or selection.get('previous_release_root') != str(Path(previous_root).resolve())
+                or Path('/proc', str(int(old_pid))).exists()):
+            raise ValueError('intraday_native_predecessor_not_stopped')
+        path = selection.get('native_predecessor_path')
+        identity = (_read(path).get('verification') or {}).get('pid_identity') or {}
+        if identity.get('pid') != int(old_pid):
+            raise ValueError('intraday_native_predecessor_pid_invalid')
+        native = _native_predecessor(day, selection['git_commit'], previous_root,
+            selection['previous_git_commit'], identity, path, selection.get('native_predecessor_sha256'))
+        _NATIVE_PREDECESSOR.set(native)
+    native_predecessor = _NATIVE_PREDECESSOR.get()
     if previous_stopped:
         # Explicit recovery of an attested but terminated predecessor. Never
         # fabricate live PID consumption from a historical bootstrap receipt.
         if Path('/proc', str(int(old_pid))).exists():
             raise ValueError('intraday_previous_pid_still_exists')
-        previous_consumed_path = _paths(day, old_commit)[1]
+        previous_consumed_path = (Path(native_predecessor['path']) if native_predecessor
+                                  else _paths(day, old_commit)[1])
         previous_consumed_sha = _sha(previous_consumed_path)
-        old_identity = _read(previous_consumed_path).get('pid_identity') or {}
+        old_identity = (native_predecessor['identity'] if native_predecessor
+                        else _read(previous_consumed_path).get('pid_identity') or {})
         if old_identity.get('pid') != int(old_pid) or not old_identity.get('start_ticks'):
             raise ValueError('intraday_stopped_identity_unattested')
-        if original.get('selected_release_commit') == old_commit:
+        if original.get('selected_release_commit') == old_commit and not native_predecessor:
             raise ValueError('intraday_stopped_consumed_handoff_required')
     else:
         old_identity = _identity(old_pid)
@@ -387,6 +582,8 @@ def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose
             or _sha(receipt_path) != prepared.get("receipt_sha256")):
         raise ValueError("intraday_original_prepared_invalid")
     frozen = [bootstrap.env_path(day), bootstrap.manifest_path(day), _preopen_path(day), prepared_index, receipt_path]
+    if native_predecessor:
+        frozen.append(previous_consumed_path)
     if original.get('selected_release_commit') != old_commit:
         if (consumed.get('manifest_sha256') != check.get('manifest_sha256')
                 or prior.get('prepared_receipt_path') != str(receipt_path)
@@ -428,7 +625,15 @@ def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose
                 if inherited:
                     historical_prior, predecessor = _historical_predecessor(day, old_commit, expected)
                     origin_commit = historical_prior['git_commit']
-            original_bytes = subprocess.check_output(['git', '-C', str(previous), 'show', origin_commit + ':' + relative])
+            try:
+                original_bytes = subprocess.check_output(
+                    ['git', '-C', str(previous), 'show', origin_commit + ':' + relative],
+                    stderr=subprocess.DEVNULL)
+            except subprocess.CalledProcessError:
+                # A PREOPEN-generated document may not exist in the earlier
+                # release tree. Only the exact strict-bound snapshot below can
+                # replace missing Git bytes; current edited docs cannot.
+                original_bytes = b''
             original_basis='original_whole_chain_checklist_generation'
             if hashlib.sha256(original_bytes).hexdigest() != expected:
                 # Native postclose writes the checklist after the release was
@@ -484,8 +689,11 @@ def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose
     if reseal is not None:
         payload['postclose_source_reseal'] = reseal
     if previous_stopped:
-        payload['previous_process_state'] = 'stopped_historical_consumption_verified'
+        payload['previous_process_state'] = ('stopped_native_preopen_consumption_verified'
+            if native_predecessor else 'stopped_historical_consumption_verified')
         payload['previous_consumption_sha256'] = previous_consumed_sha
+        if native_predecessor:
+            payload['native_predecessor_path'] = str(previous_consumed_path)
     path, _ = _paths(day, commit)
     path.parent.mkdir(parents=True, exist_ok=True)
     # A receipt is immutable. Repeating preparation cannot silently replace it.
@@ -518,16 +726,25 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
                 or payload.get("release_root") != str(root) or payload.get("actual_pid_consumed") is not False):
             raise ValueError("intraday_handoff_identity_invalid")
         _preopen(day)
+        native_predecessor = None
         if payload.get('previous_process_state'):
-            predecessor = _paths(day, payload['previous_release_commit'])[1]
-            if (payload['previous_process_state'] != 'stopped_historical_consumption_verified'
+            if payload['previous_process_state'] == 'stopped_native_preopen_consumption_verified':
+                native_predecessor = _native_predecessor(day, commit,
+                    payload['previous_release_root'], payload['previous_release_commit'],
+                    payload['old_pid_identity'], payload.get('native_predecessor_path'),
+                    payload.get('previous_consumption_sha256'))
+            else:
+                predecessor = _paths(day, payload['previous_release_commit'])[1]
+                if (payload['previous_process_state'] != 'stopped_historical_consumption_verified'
                     or _sha(predecessor) != payload.get('previous_consumption_sha256')
                     or _read(predecessor).get('pid_identity') != payload.get('old_pid_identity')):
-                raise ValueError('intraday_stopped_predecessor_changed')
+                    raise ValueError('intraday_stopped_predecessor_changed')
         frozen = payload["frozen_files"]
         required = {str(bootstrap.env_path(day)), str(bootstrap.manifest_path(day)), str(_preopen_path(day)),
                     str(DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"),
                     payload["prepared_receipt_path"]}
+        if native_predecessor:
+            required.add(native_predecessor['path'])
         reseal = payload.get('postclose_source_reseal')
         if reseal is not None:
             prepared_receipt = _read(payload['prepared_receipt_path'])

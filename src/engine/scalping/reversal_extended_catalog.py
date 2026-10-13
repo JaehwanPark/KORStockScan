@@ -470,6 +470,10 @@ def validate_payload(p,key,route):
         raise ValueError('extended_definition_or_scope_invalid')
 
 def matches(bid,event,features):
+    if bid in JOINT.COMPOSED:
+        if not applicable(bid,cell_key(event['symbol'],event['market'],event['confirmation_price']),event['venue']):return False
+        JOINT.validate_composed(event)
+        return True
     if bid not in EXTENDED_DEFINITIONS:return OLD.matches(bid,event,features)
     d=EXTENDED_DEFINITIONS[bid]
     if (not applicable(bid,cell_key(event['symbol'],event['market'],event['confirmation_price']),event['venue'])
@@ -690,5 +694,16 @@ PHASES = dict(PHASES, **{b: ('HIGH_BREAKOUT' if d['root_contract']['signal']=='B
 SUCCESSOR_MANIFEST = dict(schema='main_residual_session_catalog_v1', parent_registry_sha256=SHA256, additions=ADDITIONAL_DEFINITIONS)
 SUCCESSOR_SHA256 = digest(SUCCESSOR_MANIFEST)
 
+from src.engine.scalping import reversal_joint_catalog as JOINT
+JOINT_DEFINITIONS = JOINT.DEFINITIONS
+EXTENDED_DEFINITIONS = dict(EXTENDED_DEFINITIONS, **JOINT_DEFINITIONS)
+DEFINITIONS = dict(DEFINITIONS, **JOINT_DEFINITIONS)
+PHASES = dict(PHASES, **JOINT.PHASES)
+JOINT_MANIFEST = dict(schema=JOINT.VERSION,parent_registry_sha256=SUCCESSOR_SHA256,
+    additions=JOINT_DEFINITIONS)
+JOINT_SHA256 = digest(JOINT_MANIFEST)
+
 def registry_for(branch_ids):
-    return SUCCESSOR_SHA256 if any(b in ADDITIONAL_DEFINITIONS for b in branch_ids) else SHA256
+    ids=tuple(branch_ids)
+    if any(b in JOINT_DEFINITIONS for b in ids):return JOINT_SHA256
+    return SUCCESSOR_SHA256 if any(b in ADDITIONAL_DEFINITIONS for b in ids) else SHA256

@@ -73,7 +73,8 @@ def test_live_sdk_exact_contract(tmp_path,monkeypatch):
 
 @pytest.mark.parametrize('response_kind',['completed','incomplete','truncated','unknown_alias','refusal',
     'native_path','native_expired','native_generation','native_all_invalid','unknown_native','provider_error',
-    'unsent_budget','timeout_native_mix','revoked'])
+    'unsent_budget','timeout_native_mix','revoked','native_changed_after_response',
+    'native_changed_after_validation_deadline'])
 def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,response_kind):
     """Controlled native machine source; exercise the real entry/provider consumer."""
     import time
@@ -109,7 +110,7 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
     monkeypatch.setattr(I,'validate_decision',lambda *args,**kw:None)
     monkeypatch.setattr(N,'load_effective',lambda **kw:{'bundle_sha256':'b'*64})
     monkeypatch.setattr(V,'validate_active_claim',lambda *args,**kw:a['matched_policy_refs'])
-    engine=_build_engine();calls=[]
+    engine=_build_engine();calls=[];response_arrived=[False]
     raw=dict(assessed={env['citation_map'][s['ref']]:True for s in inp['signals']},screen=dict(verdict='PASS',risk='NO_BLOCKING_RISK',fact=env['citation_map']['observed_machine_signal']),confidence=55)
     def create(**kwargs):
         calls.append(kwargs)
@@ -119,6 +120,7 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
         if response_kind=='truncated':output='{"assessed":'
         if response_kind=='refusal':output=''
         if response_kind=='unknown_alias':output=json.dumps(dict(raw,screen=dict(verdict='PASS',risk='NO_BLOCKING_RISK',fact='unknown')))
+        response_arrived[0]=True
         return SimpleNamespace(output_text=output,id='integration-response',status='incomplete' if response_kind=='incomplete' else 'completed')
     engine.client=SimpleNamespace(responses=SimpleNamespace(create=create))
     native_errors={'native_path':'reversal_signal_path_changed',
@@ -144,15 +146,43 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
             if sequence[step[0]]=='native':raise ValueError('reversal_signal_path_changed')
             return a['matched_policy_refs']
         monkeypatch.setattr(V,'validate_active_claim',mixed)
-    count=4 if response_kind=='unknown_native' else 5 if response_kind in native_errors or response_kind in {'provider_error','unsent_budget','timeout_native_mix','revoked'} else 1
+    native_changed_after_reply = response_kind in {
+        'native_changed_after_response', 'native_changed_after_validation_deadline'}
+    if native_changed_after_reply:
+        def changed_after_reply(*args,**kw):
+            if response_arrived[0]:
+                if response_kind=='native_changed_after_validation_deadline':
+                    from src.engine.scalping.entry_deadline import EntryDeadline
+                    monkeypatch.setattr(EntryDeadline,'remaining',lambda self:0.)
+                raise ValueError('reversal_signal_path_changed')
+            return a['matched_policy_refs']
+        monkeypatch.setattr(V,'validate_active_claim',changed_after_reply)
+    from src.engine.scalping.entry_deadline import EntryDeadline
+    original_remaining=EntryDeadline.remaining
+    count=4 if response_kind=='unknown_native' else 5 if response_kind in native_errors or response_kind in {'provider_error','unsent_budget','timeout_native_mix','revoked'} or native_changed_after_reply else 1
     for index in range(count):
         step[0]=index
+        response_arrived[0]=False
+        if native_changed_after_reply:
+            monkeypatch.setattr(EntryDeadline,'remaining',original_remaining)
         snap[0]['epoch']=time.time()
-        if response_kind in {'provider_error','unsent_budget','timeout_native_mix'}:
+        if response_kind in {'provider_error','unsent_budget','timeout_native_mix'} or native_changed_after_reply:
             a['opportunity_key']=P.digest(['independent_test_point',index])
             a['signal_id']=P.digest(['independent_test_signal',index])
+        if native_changed_after_reply:
+            circuit=engine._entry_circuit()
+            circuit.failed(circuit.admit('preceding-timeout-'+str(index),eligible=True,deadline_remaining=3))
         result=engine.analyze_target('test',_sample_ws_data(),_sample_ticks(),_sample_candles(),strategy='SCALPING',prompt_profile='watching',
             candle_context=_allowed_entry_candle_context(),reversal_signal_claim={'snapshot':snap,'token':'native-test'})
+        if native_changed_after_reply:
+            assert result['action']=='WAIT' and result['entry_ai_screen_pass'] is False
+            assert result['entry_auxiliary_response_contract_valid'] is True
+            assert result['entry_post_response_execution_valid'] is False
+            assert circuit.snapshot()['state']=='CLOSED'
+            assert circuit.snapshot()['consecutive_failures']==0
+    if native_changed_after_reply:
+        assert len(calls)==5 and not engine.ai_disabled
+        return
     if response_kind in {'unsent_budget','timeout_native_mix','revoked'}:
         assert result['action']!='BUY' and not engine.ai_disabled
         assert engine.consecutive_failures==(2 if response_kind=='timeout_native_mix' else 1)

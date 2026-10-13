@@ -129,6 +129,10 @@ def observe_normalized(symbol, session, envelope):
                     continue
                 key = stream + (cell_key,)
                 state = _STATES.get(key)
+                anchor=R._ANCHORS.get(stream)
+                if state is not None and state.session_anchor!=anchor:
+                    state.session_anchor=anchor;state._feature_key=None
+                    state.diagnostic_features.clear();state.diagnostic_rolling=None
                 if state is None:
                     state = _STATES[key] = EXTENDED.State(branch_ids=[b['branch_id'] for b in cell['payload']['branches']],
                         registry_sha256=_FAMILY['registry_sha256'],
@@ -162,7 +166,7 @@ def observe_native(symbol, session, envelope):
             int(math.isfinite(t) and math.isfinite(price) and price>0 and type(ex) in (int,float) and 0<=t-ex<=5),item,0]
         key=symbol,venue,item,market,str(datetime.fromtimestamp(t,K.KST).date())
         with R._LOCK:
-            if key[4] in R._EMPTY_PREFIX_DAYS and row[8] and key not in R._ANCHORS:R._ANCHORS[key]=row[:4]
+            if key[4] in R._RESTORED_DAYS and row[8] and key not in R._ANCHORS and key not in R._ANCHOR_GAPS:R._ANCHORS[key]=row[:4]
             ids=[b['branch_id'] for b in R._FAMILY['machine_cells'][C.cell_key(symbol,market,price)]['routes'][venue]['payload']['branches']]
             state=R._STATES.get(key)
             if state is None:state=R._STATES[key]=R.State(branch_ids=ids,session_anchor=R._ANCHORS.get(key),generation=R._GENERATION)

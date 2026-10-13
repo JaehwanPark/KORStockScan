@@ -2200,3 +2200,16 @@ def test_explicit_native_no_match_reason_keeps_strict_truth_contract():
     assert monitor._probe_verified_no_match(row)
     row['fields']['native_observation_receipt']['selected_branch_truth']['G2'] = 'UNKNOWN'
     assert not monitor._probe_verified_no_match(row)
+
+
+def test_new_native_results_require_lifecycle_and_keep_incomplete_distinct():
+    row=_native_no_match_probe(START+timedelta(minutes=10),receipt_format='dict')
+    row['fields'].update(zero_base_probe_result='pattern_not_matched',zero_base_probe_reason='native_observation_no_matching_pattern')
+    receipt=row['fields']['native_observation_receipt'];receipt['native_source_current']=True
+    assert not monitor._probe_verified_no_match(row)
+    receipt['selected_lifecycle_counts']={b:{'FALSE':10} for b in receipt['selected_branch_truth']}
+    assert monitor._probe_verified_no_match(row)
+    receipt['selected_pending_count']=1
+    assert not monitor._probe_verified_no_match(row)
+    row['fields']['zero_base_probe_result']='observation_incomplete'
+    assert monitor._probe_verified_no_match(row,allow_incomplete=True)

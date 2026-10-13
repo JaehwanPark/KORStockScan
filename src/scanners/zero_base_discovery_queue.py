@@ -14,11 +14,12 @@ import uuid
 from zoneinfo import ZoneInfo
 
 
-SCHEMA = "zero_base_discovery_queue_v2"
+SCHEMA = "zero_base_discovery_queue_v3"
 ROUTES = {"krx_only", "nxt_only", "krx_nxt_integrated"}
 RESULTS = {
     "source_unavailable", "required_feature_insufficient", "policy_unavailable",
     "active_conflict", "probe_capacity_deferred", "assessed",
+    "pattern_not_matched", "observation_incomplete",
 }
 ACTIONS = {"ENTER_NOW", "RECHECK", "BLOCK"}
 
@@ -401,7 +402,7 @@ class DiscoveryQueue:
     @classmethod
     def restore(cls, snapshot: dict, *, session_date: str) -> "DiscoveryQueue":
         queue = cls(session_date)
-        if snapshot.get("schema") not in {SCHEMA, 'zero_base_discovery_queue_v1'} or snapshot.get("session_date") != queue.session_date:
+        if snapshot.get("schema") not in {SCHEMA, 'zero_base_discovery_queue_v1', 'zero_base_discovery_queue_v2'} or snapshot.get("session_date") != queue.session_date:
             raise ValueError("queue snapshot date or schema mismatch")
         sequence = snapshot.get("claim_sequence", 0)
         if type(sequence) is not int or sequence < 0:

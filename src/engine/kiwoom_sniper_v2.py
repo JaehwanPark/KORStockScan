@@ -8534,7 +8534,7 @@ def _zero_base_probe_result(request, result, reason):
         PROBE_RESULT_EVENT,
         {
             **dict(request or {}),
-            "schema": "zero_base_probe_result_v1",
+            "schema": "zero_base_probe_result_v2",
             "result": result,
             "reason": reason,
             "machine_action": "",
@@ -8857,7 +8857,7 @@ def handle_zero_base_probe_requested(request):
             except Exception as exc:
                 result = {
                     **request,
-                    "schema": "zero_base_probe_result_v1",
+                    "schema": "zero_base_probe_result_v2",
                     "result": "source_unavailable",
                     "reason": "probe_exception:" + type(exc).__name__,
                     "machine_action": "",
@@ -12337,6 +12337,13 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
             if time.monotonic() < next_maintenance:
                 continue
             next_maintenance = time.monotonic() + 1.0
+            try:
+                from src.engine.scalping.reversal_path_runtime import prepare_anchor_source_step
+                run_sniper.session_anchor_preparation_receipt=prepare_anchor_source_step(
+                    Path(PROJECT_ROOT)/'data',datetime.now(session_contract.KST).date().isoformat())
+            except Exception as exc:
+                from src.engine.monitoring.runtime_performance import failure
+                failure('session_anchor_preparation',type(exc).__name__,emit_log=False)
             # Source-only policy preparation shares the existing detached
             # cadence, never the entry/submit thread or retired capture loop.
             from src.engine.scalping.avg_down_replay_capture import (
@@ -12398,6 +12405,8 @@ def run_sniper(is_test_mode=False):
     configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
     configure_stop_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
+    configure_anchor_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.trailing_situation_policy import prepare_runtime as prepare_trailing_situations
     run_sniper.trailing_situation_preparation = prepare_trailing_situations(env=os.environ,
         parent_sha256=os.getenv('KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256'),
@@ -14617,6 +14626,8 @@ def run_sniper(is_test_mode=False):
                 _admit_runtime_live_attaches()
                 if not runtime_work_queue:
                     break
+                from src.engine.monitoring.runtime_performance import prioritize_native_watches
+                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time())
                 stock = runtime_work_queue.pop(0)
                 runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]
@@ -16289,6 +16300,8 @@ def run_sniper(is_test_mode=False):
         configure_quantity_sink(None)
         from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
         configure_stop_sink(None)
+        from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
+        configure_anchor_sink(None)
         _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
         if WS_MANAGER:
             try:

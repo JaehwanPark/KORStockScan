@@ -1,10 +1,12 @@
 # Main 보조판정 회로 복구·제출 증빙 연결 상세 보완계획 — 2026-10-12
 
-상태: **10/12 18:30 원 계획의 리뷰 완료 후, 10/13 후속 승인으로 P0-A/B/P1 구현·코드 검증·배포를 실행했다. 최신 장후 인계·복구 최종화07:00:37 종료와 target13 기동 준비 전체 계약을 확인했다. 실제07:35/07:55 수용은 미래 Acceptance다.** 우선 정상 PASS의 제출 증빙 연결을 고치고, 같은 배포에서 AI 회로가 기한 소진으로 영구 중단되는 문제를 보완한다. 원 native 신호의 5초, 기존 정책·프롬프트·주문 안전 조건은 유지한다.
+상태(10/13 07:00:37까지의 구현 기록): **10/12 18:30 원 계획의 리뷰 완료 후, 10/13 후속 승인으로 P0-A/B/P1 구현·코드 검증·배포를 실행했다. 장후 인계·복구 최종화07:00:37 종료와 target13 기동 준비 전체 계약을 확인했다. 그 시점의 실제07:35/07:55 수용은 미래 Acceptance였다.** 우선 정상 PASS의 제출 증빙 연결을 고치고, 같은 배포에서 AI 회로가 기한 소진으로 영구 중단되는 문제를 보완한다. 원 native 신호의 5초, 기존 정책·프롬프트·주문 안전 조건은 유지한다.
 
 ## 2026-10-13 승인 구현의 리뷰 보완
 
-사용자의 후속 구현·등록·배포 승인에 따라 P0-A/B/P1을 구현했다. 본문의 미실행 표시는 원 계획 당시 기록이다. 현재 Main은 10/12 native EOD stop 이후 OFF이며 승인 구현 릴리스가 선택됐다. 실제 릴리스·회귀·장후·13 준비 영수증은 [후속 구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md)에 기록한다. 13 준비와 05:35 최종화까지 다시 검증한다.
+10/13 08:07에 같은 v6 PID의 정상 entry recovery는 실행됐으나 실제 호출6건 모두 timeout인 새 지연 결손을 확인했다. 신호 전달·AI 전처리·결과 기록의 후속 설계는 [5초 공유기한 지연 상세 보완계획](main-entry-auxiliary-shared-deadline-latency-remediation-plan-2026-10-13.md)에 분리했다. 후속 승인으로 작업본 구현·리뷰·수정을 완료했으며 [후속 구현 리뷰](../audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md)에 근거를 남겼다. 미배포 상태와 자연 회복 미측정을 구분하며, 아래 회로·binder 구현 완료 기록을 자연 recovery 성공으로 바꾸지 않는다.
+
+사용자의 후속 구현·등록·배포 승인에 따라 P0-A/B/P1을 구현했다. 본문의 미실행 표시는 원 계획 당시 기록이다. 해당 구현·배포 기록 당시 Main은 10/12 native EOD stop 이후 OFF였으며 승인 구현 릴리스가 선택됐다. 실제 릴리스·회귀·장후·13 준비 영수증은 [후속 구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md)에 기록한다. 당시 13 준비와 05:35 최종화를 검증했으며 이후 새 지연 결손은 위 후속 계획으로 구분한다.
 
 - P0-A의 비교 정규화는 같은 시장 이름의 대소문자만 허용하고 raw revision/receipt는 유지한다. binder bool 호환 API에 call-local 실패 receipt를 추가하여 실제 submit caller가 첫 결손을 남긴다. ContextVar 밖에서 identity를 합성하지 않는다.
 - P0-B는 원 entry deadline의 typed SDK timeout만 entry 회로에 귀속한다. 인증/권한·429·5xx·unknown은 기존 공통 fail-closed 처리에서 빠지지 않는다. allowlisted native/local 종료만 provider 실패에서 분리한다. endpoint circuit은 engine lock 안에서 단일 generation lease를 발급하고 같은 호출만 복구한다. 글로벌 `ai_disabled=False`로 복구하지 않는다.
