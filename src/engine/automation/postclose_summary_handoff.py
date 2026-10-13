@@ -892,7 +892,7 @@ def stage_artifacts(report_dir, day, stage):
 
 def validate_initial_quantity_resume(project, day):
     """Bind a failed native prefix before resuming its first unfinished command."""
-    project = Path(project); report = project / 'data/report'
+    project = Path(project); report = (project / 'data').resolve() / 'report'
     status_path = report / 'threshold_cycle_postclose_status' / f'threshold_cycle_postclose_{day}.status.json'
     status = _load_json(status_path)
     if (status.get('target_date') != day or status.get('status') != 'failed'

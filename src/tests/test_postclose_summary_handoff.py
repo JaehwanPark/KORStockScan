@@ -1448,6 +1448,18 @@ def test_initial_quantity_resume_binds_native_prefix_and_rejects_changed_artifac
     monkeypatch.setattr(mod,'_machine_source_preflight_issue',lambda *a,**k:None)
     proof=mod.validate_initial_quantity_resume(tmp_path,day)
     assert proof['origin_run_id']=='native' and proof['runtime_effect'] is False
+    alias=tmp_path/'release';alias.mkdir()
+    for name in ['data','logs','src']:
+        (alias/name).symlink_to(tmp_path/name,target_is_directory=True)
+    def canonical_stage(report_dir, *args):
+        assert report_dir == report.resolve()
+        return []
+    def canonical_preflight(report_dir, *args, **kwargs):
+        assert report_dir == report.resolve()
+        return None
+    monkeypatch.setattr(mod,'stage_receipt_issues',canonical_stage)
+    monkeypatch.setattr(mod,'_machine_source_preflight_issue',canonical_preflight)
+    assert mod.validate_initial_quantity_resume(alias,day)['origin_run_id']=='native'
     artifact=report/f'entry_split_order_plan/entry_split_order_plan_{day}.json'
     artifact.write_text('{"changed":true}')
     with pytest.raises(ValueError,match='resume_artifact_changed'):
