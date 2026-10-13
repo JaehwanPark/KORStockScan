@@ -2603,7 +2603,9 @@ def main(argv: list[str] | None = None) -> int:
     if not day:
         return _main_impl(argv)
     root = args.output_dir or args.data_dir / "report/initial_entry_quantity_type_policy"
-    with direct_job(args.data_dir, "initial_entry_quantity_refresh", day), use(root), use(args.data_dir / "report/initial_entry_quantity_type_policy"):
+    # Match the existing dispatcher admission deadline. Another heavy owner
+    # legitimately reserves both slots for longer than the direct CLI's 60s.
+    with direct_job(args.data_dir, "initial_entry_quantity_refresh", day, timeout=14400), use(root), use(args.data_dir / "report/initial_entry_quantity_type_policy"):
         return _main_impl(argv)
 
 

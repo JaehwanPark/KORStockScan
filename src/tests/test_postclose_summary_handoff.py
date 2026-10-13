@@ -1327,3 +1327,128 @@ def test_synchronous_native_completion_after_original_deadline_is_deferred(stage
     terminal=h.run_stage('main_machine_policy',day,report_dir=report,project=report.parents[1],runner=late,timeout=10)
     assert terminal['status']=='deferred' and terminal['exit_code']==75
     assert terminal['synchronous_deadline_expired'] is True
+
+
+def _joint_stage_fixture(tmp_path, monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    from src.engine.scalping import reversal_joint_registration as joint
+    from src.engine.scalping.reversal_registered_catalog import cells, ROUTES
+    h = mod; day = '2026-10-13'; report = tmp_path / 'report'
+    source = tmp_path / 'frozen-source.json'; source.write_text('{"original":true}')
+    request = {'schema':joint.SCHEMA, 'publication_date':day, 'target_date':'2026-10-14'}
+    pending = joint.pending_path(tmp_path); pending.parent.mkdir(parents=True)
+    pending.write_text(json.dumps(request))
+    def checked(value):
+        if value != request: raise ValueError('changed authority fixture')
+        return value
+    monkeypatch.setattr(joint, 'validate_request', checked)
+    machine = p.seal(dict(schema='continuous_reversal_operating_comparison_v1',
+        source_date=day, target_date=day, publication_date=day, status='completed',
+        adoption_basis='operator_designated', registration_state='registered', comparison_complete=False,
+        registration_change=request, source_receipts=[{'path':str(source), 'sha256':p.file_hash(source)}],
+        cells=[{'key':key, 'routes':{r:{} for r in ROUTES[key.split('|')[1]]}} for key in cells()],
+        **p.AUTH))
+    owned = report / 'continuous_reversal' / day; owned.mkdir(parents=True)
+    (owned / 'machine.json').write_text(json.dumps(machine))
+    paths = h.stage_artifacts(report, day, 'main_machine_policy')
+    paths['machine_policy'].parent.mkdir(parents=True)
+    paths['machine_policy'].write_text(json.dumps(machine))
+    terminal = p.seal(dict(schema=machine['schema'], source_date=day, target_date=day,
+        status='completed', report_sha256=machine['artifact_content_sha256'], **p.AUTH))
+    paths['machine_policy_terminal'].write_text(json.dumps(terminal))
+    return h, day, report, machine, source
+
+
+def test_joint_initial_stage_succeeds_without_legacy_reports_and_pins_sources(tmp_path, monkeypatch):
+    h, day, report, machine, source = _joint_stage_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(h, '_stage_code', lambda *a:'fixture-code')
+    monkeypatch.setattr(h, '_machine_source_preflight_issue', lambda *a, **k:None)
+    audit = report / 'observation_source_quality_audit' / f'observation_source_quality_audit_{day}.json'
+    audit.parent.mkdir(); audit.write_text('{"audit_phase":"preflight"}')
+    Path(str(audit)+'.final-contract.json').write_text(json.dumps({'artifact_sha256':hashlib.sha256(audit.read_bytes()).hexdigest()}))
+    monkeypatch.setattr(h, 'stage_commands', lambda *a, **k:[['fixture']])
+    terminal = h.run_stage('main_machine_policy', day, report_dir=report, project=tmp_path,
+        runner=lambda *a, **k:0)
+    assert terminal['status']=='succeeded' and terminal['computation_executed'] is True
+    assert 'reversal_source_manifest' not in terminal['sources']
+    assert terminal['sources']['joint_source_0']['sha256']==hashlib.sha256(source.read_bytes()).hexdigest()
+    assert h.stage_receipt_issues(report, day, 'main_machine_policy', code_hash='fixture-code')==[]
+    source.write_text('{"original":false}')
+    assert h.stage_receipt_issues(report, day, 'main_machine_policy', code_hash='fixture-code')
+
+
+@pytest.mark.parametrize('field,value', [('runtime_effect',True), ('source_date','2026-10-12')])
+def test_joint_initial_stage_rejects_resealed_authority_or_date_change(tmp_path, monkeypatch, field, value):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    h, day, report, machine, source = _joint_stage_fixture(tmp_path, monkeypatch)
+    changed = p.seal({**machine, field:value})
+    (report / 'continuous_reversal' / day / 'machine.json').write_text(json.dumps(changed))
+    h.stage_artifacts(report, day, 'main_machine_policy')['machine_policy'].write_text(json.dumps(changed))
+    assert h._stage_output_issues(report, day, 'main_machine_policy')
+
+
+def test_initial_quantity_resume_refuses_running_main(tmp_path):
+    path=tmp_path/'data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_2026-10-13.status.json'
+    path.parent.mkdir(parents=True);path.write_text(json.dumps({'target_date':'2026-10-13','status':'running'}))
+    with pytest.raises(ValueError,match='requires_failed_native_main'):
+        mod.validate_initial_quantity_resume(tmp_path,'2026-10-13')
+
+
+def test_initial_quantity_resume_refuses_other_failed_command(tmp_path):
+    day='2026-10-13';path=tmp_path/f'data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{day}.status.json'
+    path.parent.mkdir(parents=True);path.write_text(json.dumps({'target_date':day,'status':'failed','exit_code':1,'reason':'command_failed','run_id':'native'}))
+    log=tmp_path/'logs/threshold_cycle_postclose_cron.log';log.parent.mkdir()
+    log.write_text('[PERF] '+json.dumps({'run_id':'native','phase':'command','producer_module':'other','exit_code':1}))
+    with pytest.raises(ValueError,match='failed_command_not_initial_quantity'):
+        mod.validate_initial_quantity_resume(tmp_path,day)
+
+
+def test_initial_quantity_resume_binds_native_prefix_and_rejects_changed_artifact(tmp_path, monkeypatch):
+    day='2026-10-13';report=tmp_path/'data/report'
+    paths={
+        'src.engine.monitoring.rising_missed_intraday_feedback':'rising_missed_intraday_feedback',
+        'src.engine.observation_source_quality_audit':'observation_source_quality_audit',
+        'src.engine.scalping.entry_split_order_plan':'entry_split_order_plan',
+        'src.engine.automation.entry_cancel_wait_tuning':'entry_cancel_wait_tuning'}
+    contracts={name:'code' for name in ['src/trading/market/session_contract.py',
+        'src/trading/market/aftermarket_eligibility.py','src/trading/order/aftermarket_reconciliation.py',
+        'src/engine/monitoring/market_opportunity_census.py','src/engine/observation_source_quality_audit.py']}
+    def write(path,value):
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value));return path
+    for name in contracts:
+        path=write(tmp_path/name,{'code':name});contracts[name]=hashlib.sha256(path.read_bytes()).hexdigest()
+    metrics=[]
+    for module,kind in paths.items():
+        artifact=write(report/kind/f'{kind}_{day}.json',{'target_date':day,'status':'pass'})
+        md=artifact.with_suffix('.md');md.write_text('native')
+        write(Path(str(artifact)+'.reuse-contract.json'),dict(schema='postclose_artifact_reuse_contract_v1',
+            target_date=day,artifact_path=str(artifact),artifact_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            markdown_path=str(md),markdown_sha256=hashlib.sha256(md.read_bytes()).hexdigest(),aftermarket_contract_sha256s=contracts))
+        metrics.append(dict(run_id='native',phase='command',producer_module=module,exit_code=0,
+            measurement_complete=True,target_date=day,code_commit='origin'))
+    for module,kind,name in [('src.engine.market_panic_breadth_collector','market_panic_breadth','market_panic_breadth'),
+                            ('src.engine.strategy_position_performance_report','strategy_position_fact_sync','strategy_position_fact_sync'),
+                            ('src.engine.scalping.scale_in_split_order_plan','scale_in_split_order_plan','scale_in_split_order_plan')]:
+        suffix='.status.json' if kind=='strategy_position_fact_sync' else '.json'
+        write(report/kind/f'{name}_{day}{suffix}',{'target_date':day,'status':'pass'})
+        metrics.append(dict(run_id='native',phase='command',producer_module=module,exit_code=0,
+            measurement_complete=True,target_date=day,code_commit='origin'))
+    for path in [tmp_path/f'data/threshold_cycle/scale_in_split_order_policy/scale_in_split_order_policy_{day}.json',
+                 tmp_path/f'data/threshold_cycle/entry_split_order_policy/entry_split_order_policy_{day}.json',
+                 report/f'entry_cancel_wait_tuning/entry_cancel_wait_policy_{day}.json']:
+        write(path,{'target_date':day})
+    metrics.append(dict(run_id='native',phase='command',producer_module='src.engine.scalping.initial_quantity_policy',exit_code=1))
+    log=tmp_path/'logs/threshold_cycle_postclose_cron.log';log.parent.mkdir()
+    log.write_text('\n'.join('[PERF] '+json.dumps(v) for v in metrics))
+    write(report/f'threshold_cycle_postclose_status/threshold_cycle_postclose_{day}.status.json',
+          dict(target_date=day,status='failed',exit_code=1,reason='command_failed',run_id='native',code_commit='origin'))
+    write(tmp_path/f'data/runtime/update_kospi_status/update_kospi_{day}.json',
+          dict(target_date=day,status='completed',db_state={'latest_quote_date':day,'rows_on_latest_date':1}))
+    monkeypatch.setattr(mod,'stage_receipt_issues',lambda *a:[])
+    monkeypatch.setattr(mod,'_machine_source_preflight_issue',lambda *a,**k:None)
+    proof=mod.validate_initial_quantity_resume(tmp_path,day)
+    assert proof['origin_run_id']=='native' and proof['runtime_effect'] is False
+    artifact=report/f'entry_split_order_plan/entry_split_order_plan_{day}.json'
+    artifact.write_text('{"changed":true}')
+    with pytest.raises(ValueError,match='resume_artifact_changed'):
+        mod.validate_initial_quantity_resume(tmp_path,day)

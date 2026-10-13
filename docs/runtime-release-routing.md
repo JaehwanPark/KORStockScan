@@ -191,3 +191,8 @@ Prepare the reviewed code-preserving release with these wrapper/consumer contrac
 
 
 The sentinel cache reader also shares bounded, short immutable field names and string values within one read. It keeps at most 2048 key strings and 8192 value strings of at most192 characters. Containers, JSON types, field values, row population, cache bytes and raw source remain unchanged; larger/unique values decode normally. This reduces repeated-object memory at some CPU cost. Verify peak RSS, full report completion and freshness under the ordinary scheduled workload; a prefix decoder benchmark is not whole-Main performance evidence.
+
+
+## Scoped recovery from initial quantity
+
+After explicit recovery authorization, `deploy/run_threshold_cycle_postclose.sh SOURCE_DATE --resume-from-initial-quantity` resumes only a native `initial_quantity_policy` command failure. It verifies the original run metrics, completed artifact reuse receipts and byte hashes, unchanged aftermarket contracts, exact EOD/preflight and successful machine/delay/label stages before START. It preserves the failed attempt and binds a scoped resume receipt. This path skips the completed prefix and bot actions, then executes the failed quantity stage and ordinary downstream consumers. The existing two-slot heavy admission is retained with the dispatcher four-hour admission deadline. Joint initial registration binds its real machine/auxiliary, operator request and frozen sources; it does not require legacy research/call ledgers or additional economics for initial designation. Strict/controller closure, future PREOPEN/PID and economics remain separate.

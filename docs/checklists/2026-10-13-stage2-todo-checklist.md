@@ -184,3 +184,8 @@ report 메모리 후속 보완도 기존 위 owner들이 수용한다. read-loca
 사용자가 CR0~CR8 구현·반복 리뷰 후 배포와 재기동을 승인했다. 기존 `DirectFamilyPreopenPolicyHandoff`가 실제 실행본을 기준으로 REST 변경만 추가한 불변 릴리스와 정상 종료→선택→native 인계→기동→새 PID/start/cwd·128 scope 소비 검증을 소유한다. [구현 리뷰](../audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md)의 배포 증빙은 `tmp/rest-removal-deployment-20261013/completion.json`과 ordered transition에 별도 기록한다. 원 PREOPEN/정책/env·active pointer·원5초·quote/account/order/quantity·Main/manual custody·퇴역 가드를 유지하며 active code handoff와 이미 있는 10/14 후보의 동일정책 code refresh만 결속한다. 기존 봉인의 정확한 Git 체크리스트와 최신 편집본을 모두 보존하고 incumbent 종료 뒤 이 최종 문서를 발행한다.
 
 `DirectFamilySourceRepairMainMechanisticEntry`는 제거 목적별 actual attempts·valid/unknown·coverage tradeoff·loop/WS 소비를 기존 PID별 원천으로 수용한다. `NonfixedDispatchReadinessReview1012`와 `AuxiliaryCircuitRecoveryRepair1012`의 자연 신호·cleanup·응답/제출 Acceptance는 유지하며 코드·배포 성공으로 주문/성과를 완료하지 않는다. 예정된 입력/발굴 completeness 감소는 허용하되 stale/epoch/route 위반이나 부족한 CF 경제성을 정상값으로 합성하지 않는다. 신규 OPEN ID·Provider replay·정책 재선택·주문 권한·별도 약세 연구 WR0~WR5 구현/연구는 이번 승인 범위에 추가하지 않는다.
+
+
+## 10/13 장후 실패 지점 복구 승인
+
+사용자가 실패 지점의 수리·재실행을 지시했다. 기존 `DirectFamilyPreopenPolicyHandoff`와 `DirectFamilySourceRepairMainMechanisticEntry`가 초기 수량의 두-slot 입장 대기 및 joint 등록의 실제 산출물·원천·stage 인계를 수용한다. 선택된 실행본을 부모로 격리해 수리·리뷰·표적 검증 뒤 불변 장후 실행본에서 동일10/13 source/publication으로 실패 단계와 직접 하류만 재개한다. 완료된 원천·보고서·라벨·delay는 원 receipt/hash를 검증해 재사용하고 원 실패를 보존한다. 매매 재기동·수동 env/lock/provider/threshold·주문 권한과 별도 IO/WR 구현 범위를 추가하지 않는다. 전체 acceptance는 최신 summary/checklist/strict/controller이며 초기 지정에 새 경제성 gate를 붙이지 않는다.

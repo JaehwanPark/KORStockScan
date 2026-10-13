@@ -127,6 +127,14 @@ wrapper_snapshot=""
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+RESUME_INITIAL_QUANTITY=false
+unset POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT
+if [[ "${2:-}" == "--resume-from-initial-quantity" && "$#" -eq 2 ]]; then
+  RESUME_INITIAL_QUANTITY=true
+elif [[ "$#" -gt 1 ]]; then
+  echo "Unsupported postclose recovery boundary" >&2
+  exit 2
+fi
 source_calendar_state="$(postclose_source_calendar_state "$PROJECT_DIR" "$VENV_PY" "$TARGET_DATE")"
 if [[ "$source_calendar_state" == "non_trading" ]]; then
   printf '[SKIP] threshold-cycle postclose target_date=%s reason=non_trading_source_date no_policy_publication=true\n' "$TARGET_DATE"
@@ -334,6 +342,17 @@ if path.exists():
     except Exception:
         payload = {}
 reuse_binding = None
+scoped_resume = None
+if status == "running" and os.environ.get("POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT"):
+    import hashlib
+    proof_path = Path(os.environ["POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT"])
+    proof_bytes = proof_path.read_bytes(); proof = json.loads(proof_bytes)
+    assert proof["schema"] == "postclose_initial_quantity_resume_v1"
+    assert proof["source_date"] == target_date and payload.get("status") == "failed"
+    assert proof["origin_run_id"] == payload.get("run_id")
+    assert proof["origin_status_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    scoped_resume = {"path": str(proof_path.resolve()), "sha256": hashlib.sha256(proof_bytes).hexdigest(),
+                     "origin_run_id": proof["origin_run_id"], "resume_from": "initial_quantity"}
 if status == "running" and os.environ.get("POSTCLOSE_REUSE_RECEIPT"):
     import hashlib
     receipt_path = Path(os.environ["POSTCLOSE_REUSE_RECEIPT"])
@@ -371,7 +390,7 @@ if status == "running":
         history.mkdir(parents=True, exist_ok=True)
         import uuid
         (history / f"{uuid.uuid4().hex}.json").write_text(json.dumps(payload), encoding="utf-8")
-    payload = {"reused_steps_receipt": reuse_binding}
+    payload = {"reused_steps_receipt": reuse_binding, "scoped_resume": scoped_resume}
 payload.update(
     {
         "schema_version": 2,
@@ -794,6 +813,21 @@ raise SystemExit(exit_code)
 }
 
 detect_postclose_recovery_reuse_mode
+if [[ "$RESUME_INITIAL_QUANTITY" == "true" ]]; then
+  [[ "$POSTCLOSE_RECOVERY_REUSE_MODE" == "true" ]] || exit 2
+  POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT="$("$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_RESUME'
+import json, sys
+from pathlib import Path
+from src.engine.automation.postclose_summary_handoff import validate_initial_quantity_resume, _stage_write
+project=Path(sys.argv[1]); day=sys.argv[2]
+proof=validate_initial_quantity_resume(project, day)
+path=project/'data/report/threshold_cycle_postclose_status/attempts'/day/(proof['origin_run_id']+'.initial-quantity-resume.json')
+_stage_write(path, proof)
+print(path)
+PY_RESUME
+  )"
+  export POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT
+fi
 POSTCLOSE_STAGE_RECOVERY_ARGS=()
 if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ]; then
   POSTCLOSE_STAGE_RECOVERY_ARGS+=(--recover-closed-target)
@@ -803,7 +837,9 @@ write_postclose_status running started 0 0
 emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
 wait_for_eod_terminal "$PROJECT_DIR" "$TARGET_DATE" threshold-cycle \
   "${THRESHOLD_CYCLE_EOD_WAIT_SEC:-5400}" "${THRESHOLD_CYCLE_EOD_WAIT_INTERVAL_SEC:-30}"
-stop_postclose_bot_if_requested
+if [[ "$RESUME_INITIAL_QUANTITY" != "true" ]]; then
+  stop_postclose_bot_if_requested
+fi
 
 verified_reused_module() {
   local reuse_rc=0
@@ -1459,6 +1495,7 @@ print(stage2_checklist_path(target_date))
 PY
 }
 
+if [[ "$RESUME_INITIAL_QUANTITY" != "true" ]]; then
 for spec in "main_machine_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "legacy_machine_report:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "main_auxiliary_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "outcome_labels:$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION"; do
   stage="${spec%%:*}"; enabled="${spec#*:}"
   if [[ "$enabled" != "true" && "$enabled" != "1" ]]; then
@@ -1617,6 +1654,7 @@ if [[ "$TARGET_DATE" > "2026-09-16" ]]; then
     "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.md" \
     "entry_cancel_wait_policy"
 fi
+fi # Native, verified prefix is preserved during explicit initial-quantity resume.
 INITIAL_QUANTITY_CURRENT="$PROJECT_DIR/data/runtime/initial_quantity/current.json"
 INITIAL_QUANTITY_REFRESH_DIR=""
 if env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$INITIAL_QUANTITY_CURRENT" <<'PY'

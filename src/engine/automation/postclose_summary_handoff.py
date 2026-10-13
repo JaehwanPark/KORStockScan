@@ -861,6 +861,19 @@ def stage_artifacts(report_dir, day, stage):
     outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
     if stage == 'pre_submit_delay' and 'pre_submit_delay_committed_manifest' in paths:
         outputs['pre_submit_delay_committed_manifest'] = paths['pre_submit_delay_committed_manifest']
+    initial_registration = (_joint_initial_machine(report_dir, day)
+        if stage in {'main_machine_policy', 'main_auxiliary_policy'} else {})
+    if stage in {'main_machine_policy', 'main_auxiliary_policy'} and initial_registration:
+        owned = Path(report_dir) / 'continuous_reversal' / day
+        outputs['reversal_machine'] = owned / 'machine.json'
+        if stage == 'main_auxiliary_policy':
+            outputs['reversal_auxiliary'] = owned / 'auxiliary.json'
+        outputs['joint_registration_request'] = (Path(report_dir).parent / 'runtime'
+            / 'mechanistic_entry_policy' / 'joint-registration.json')
+        for index, receipt in enumerate(initial_registration.get('source_receipts', [])):
+            if isinstance(receipt, dict) and isinstance(receipt.get('path'), str):
+                outputs[f'joint_source_{index}'] = Path(receipt['path'])
+        return outputs
     if day >= '2026-10-06' and stage in {'main_machine_policy','main_auxiliary_policy'}:
         owned=Path(report_dir)/'continuous_reversal'/day
         if stage=='main_machine_policy':outputs['reversal_source_manifest']=owned/'source.json'
@@ -875,6 +888,104 @@ def stage_artifacts(report_dir, day, stage):
             if spec.episode_entry_forbidden:
                 outputs['main_fixed_watch_policy_research_' + spec.symbol] = Path(report_dir) / 'main_fixed_watch_policy_research' / f'main_fixed_watch_policy_research_{spec.symbol}_{day}.json'
     return outputs
+
+
+def validate_initial_quantity_resume(project, day):
+    """Bind a failed native prefix before resuming its first unfinished command."""
+    project = Path(project); report = project / 'data/report'
+    status_path = report / 'threshold_cycle_postclose_status' / f'threshold_cycle_postclose_{day}.status.json'
+    status = _load_json(status_path)
+    if (status.get('target_date') != day or status.get('status') != 'failed'
+            or status.get('exit_code') != 1 or status.get('reason') != 'command_failed'):
+        raise ValueError('resume_requires_failed_native_main')
+    log = project / 'logs/threshold_cycle_postclose_cron.log'
+    with log.open('rb') as handle:
+        handle.seek(max(0, log.stat().st_size - 16 * 1024 * 1024))
+        lines = handle.read().decode(errors='replace').splitlines()
+    metrics = []
+    for line in lines:
+        if line.startswith('[PERF] '):
+            value = json.loads(line[7:])
+            if value.get('run_id') == status['run_id'] and value.get('phase') == 'command':
+                metrics.append(value)
+    if (not metrics or metrics[-1].get('producer_module') != 'src.engine.scalping.initial_quantity_policy'
+            or metrics[-1].get('exit_code') != 1):
+        raise ValueError('resume_failed_command_not_initial_quantity')
+    completed = {v['producer_module']:v for v in metrics if v.get('exit_code') == 0
+                 and v.get('measurement_complete') is True and v.get('target_date') == day
+                 and v.get('code_commit') == status.get('code_commit')}
+    artifacts = {
+        'src.engine.monitoring.rising_missed_intraday_feedback':report / 'rising_missed_intraday_feedback' / f'rising_missed_intraday_feedback_{day}.json',
+        'src.engine.observation_source_quality_audit':report / 'observation_source_quality_audit' / f'observation_source_quality_audit_{day}.json',
+        'src.engine.scalping.entry_split_order_plan':report / 'entry_split_order_plan' / f'entry_split_order_plan_{day}.json',
+        'src.engine.automation.entry_cancel_wait_tuning':report / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{day}.json',
+    }
+    contract_names = {'src/trading/market/session_contract.py',
+        'src/trading/market/aftermarket_eligibility.py',
+        'src/trading/order/aftermarket_reconciliation.py',
+        'src/engine/monitoring/market_opportunity_census.py',
+        'src/engine/observation_source_quality_audit.py'}
+    bindings = {}
+    for module, artifact in artifacts.items():
+        if module not in completed: raise ValueError('resume_completed_command_missing:' + module)
+        receipt_path = Path(str(artifact) + '.reuse-contract.json')
+        receipt = _load_json(receipt_path)
+        if (receipt.get('schema') != 'postclose_artifact_reuse_contract_v1'
+                or receipt.get('target_date') != day
+                or Path(receipt.get('artifact_path', '')).resolve() != artifact.resolve()
+                or set(receipt.get('aftermarket_contract_sha256s', {})) != contract_names):
+            raise ValueError('resume_artifact_receipt_invalid:' + module)
+        for field, sha_field in [('artifact_path','artifact_sha256'), ('markdown_path','markdown_sha256')]:
+            if _stage_sources({'source':receipt[field]})['source']['sha256'] != receipt[sha_field]:
+                raise ValueError('resume_artifact_changed:' + module)
+        for path, sha in receipt['aftermarket_contract_sha256s'].items():
+            if _stage_sources({'code':project/path})['code']['sha256'] != sha:
+                raise ValueError('resume_contract_code_changed:' + path)
+        bindings[module] = {'receipt_sha256':_stage_sources({'receipt':receipt_path})['receipt']['sha256'],
+                            'artifact_sha256':receipt['artifact_sha256']}
+    from src.engine.automation.postclose_recommendation_intake import _report_date
+    for module, artifact in {
+        'src.engine.market_panic_breadth_collector':report / 'market_panic_breadth' / f'market_panic_breadth_{day}.json',
+        'src.engine.strategy_position_performance_report':report / 'strategy_position_fact_sync' / f'strategy_position_fact_sync_{day}.status.json',
+        'src.engine.scalping.scale_in_split_order_plan':report / 'scale_in_split_order_plan' / f'scale_in_split_order_plan_{day}.json',
+    }.items():
+        value = _load_json(artifact)
+        if (module not in completed or _report_date(value) != day
+                or value.get('status') in {'failed', 'pending', 'running', 'error'}):
+            raise ValueError('resume_prefix_artifact_invalid:' + module)
+        bindings[module] = {'artifact_sha256':_stage_sources({'artifact':artifact})['artifact']['sha256']}
+    for artifact in (Path(report).parent / 'threshold_cycle/scale_in_split_order_policy' / f'scale_in_split_order_policy_{day}.json',
+                     Path(report).parent / 'threshold_cycle/entry_split_order_policy' / f'entry_split_order_policy_{day}.json',
+                     report / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_policy_{day}.json'):
+        if _report_date(_load_json(artifact)) != day:
+            raise ValueError('resume_prefix_policy_date_invalid')
+        bindings[str(artifact)] = {'artifact_sha256':_stage_sources({'artifact':artifact})['artifact']['sha256']}
+    for stage in ('main_machine_policy', 'pre_submit_delay', 'outcome_labels'):
+        issues = stage_receipt_issues(report, day, stage)
+        if issues: raise ValueError('resume_predecessor_invalid:' + ','.join(issues))
+    issue = _machine_source_preflight_issue(report, day, recovery=True)
+    if issue: raise ValueError('resume_preflight_invalid:' + issue)
+    eod = _load_json(project / 'data/runtime/update_kospi_status' / f'update_kospi_{day}.json')
+    if (eod.get('status') not in {'completed', 'completed_with_warnings'}
+            or eod.get('target_date') != day or eod.get('db_state', {}).get('latest_quote_date') != day
+            or not eod.get('db_state', {}).get('rows_on_latest_date')):
+        raise ValueError('resume_eod_not_current')
+    return dict(schema='postclose_initial_quantity_resume_v1', source_date=day,
+        origin_run_id=status['run_id'], origin_code_commit=status['code_commit'],
+        origin_status_sha256=_stage_sources({'status':status_path})['status']['sha256'],
+        reused_artifacts=bindings, runtime_effect=False, allowed_runtime_apply=False)
+
+
+def _joint_initial_machine(report_dir, day):
+    """Select the issued initial-registration contract, never infer empty research."""
+    value = _load_json(Path(report_dir) / 'continuous_reversal' / day / 'machine.json')
+    registration = value.get('registration_change')
+    if (value.get('schema') == 'continuous_reversal_operating_comparison_v1'
+            and isinstance(registration, dict) and registration.get('schema')
+                == 'main_joint_registration_request_v1'
+            and registration.get('publication_date') == day):
+        return value
+    return {}
 
 
 def _stage_digest(value):
@@ -1344,9 +1455,74 @@ def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_ro
     return False
 
 
+def _joint_initial_output_issues(report_dir, day, stage, machine):
+    """Validate operator registration and its frozen sources without legacy ledgers."""
+    from src.engine.scalping import continuous_reversal_postclose as p
+    from src.engine.scalping import reversal_joint_registration as joint
+    from src.engine.scalping.reversal_registered_catalog import cells, ROUTES
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    try:
+        request = joint.validate_request(machine['registration_change'])
+        if (request['publication_date'] != day
+                or request['target_date'] != _next_krx_trading_day(day)
+                or _load_json(joint.pending_path(Path(report_dir).parent)) != request):
+            raise ValueError('registration_source_or_date_changed')
+        paths = stage_artifacts(report_dir, day, stage)
+        reports = [machine]
+        if stage == 'main_auxiliary_policy':
+            auxiliary = _load_json(paths['reversal_auxiliary'])
+            compact = _load_json(paths['compact_auxiliary_paired_economic'])
+            if (auxiliary.get('initial_registration') != request
+                    or auxiliary.get('machine_report_sha256') != machine['artifact_content_sha256']
+                    or compact.get('machine_report_sha256') != machine['artifact_content_sha256']
+                    or compact.get('initial_registration') != request):
+                raise ValueError('auxiliary_generation_changed')
+            reports.extend([auxiliary, compact])
+        else:
+            report = _load_json(paths['machine_policy'])
+            terminal = _load_json(paths['machine_policy_terminal'])
+            if (report != machine or terminal.get('report_sha256') != machine['artifact_content_sha256']
+                    or terminal.get('status') != 'completed'
+                    or terminal.get('source_date') != day or terminal.get('target_date') != day
+                    or terminal.get('schema') != machine['schema']
+                    or terminal.get('artifact_content_sha256') != p.seal(terminal)['artifact_content_sha256']
+                    or any(terminal.get(k) != v for k, v in p.AUTH.items())):
+                raise ValueError('machine_terminal_generation_changed')
+        for value in reports:
+            if (value.get('schema') != 'continuous_reversal_operating_comparison_v1'
+                    or value.get('source_date') != day or value.get('target_date') != day
+                    or value.get('publication_date') != day
+                    or value.get('status') != 'completed'
+                    or value.get('adoption_basis') != 'operator_designated'
+                    or value.get('registration_state') != 'registered'
+                    or value.get('comparison_complete') is not False
+                    or value.get('artifact_content_sha256') != p.seal(value)['artifact_content_sha256']
+                    or any(value.get(k) != v for k, v in p.AUTH.items())
+                    or {c['key'] for c in value['cells']} != set(cells())
+                    or len(value['cells']) != len(cells())
+                    or any(set(c.get('routes', {})) != set(ROUTES[c['key'].split('|')[1]])
+                           for c in value['cells'])
+                    or not value.get('source_receipts')):
+                raise ValueError('initial_registration_report_invalid')
+            for receipt in value['source_receipts']:
+                source = Path(receipt['path'])
+                if not source.is_absolute() or p.file_hash(source) != receipt['sha256']:
+                    raise ValueError('initial_registration_source_changed')
+        if stage == 'main_auxiliary_policy':
+            from src.engine.scalping.continuous_reversal_policy import scoped_verification
+            return scoped_verification(Path(report_dir).parent, day)['issues']
+        return []
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return [f'{stage}:joint_initial_registration_contract_invalid']
+
+
 def _stage_output_issues(report_dir, day, stage):
     from src.engine.automation.postclose_recommendation_intake import _report_date
     errors = []
+    if stage in {'main_machine_policy', 'main_auxiliary_policy'}:
+        initial = _joint_initial_machine(report_dir, day)
+        if initial:
+            return _joint_initial_output_issues(report_dir, day, stage, initial)
     if stage == 'main_stop_confirmation':
         from src.engine.automation.main_stop_postclose import read_committed
         try: read_committed(Path(report_dir).parent, day)
