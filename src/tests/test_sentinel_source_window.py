@@ -38,7 +38,7 @@ def _prepared(tmp_path, monkeypatch):
         cache_name=buy.EVENT_CACHE_NAME,target_date='2026-10-14',schema_version=18,
         parse_payload=lambda row:buy._payload_to_cache_row(row,exclude_summary_stages=True),
         project_loaded_payload=buy._slim_economic_cache_row,
-        cache_projection_version='economic_source_refs_v1',compact_index=True,load_rows=False)
+        cache_projection_version='economic_source_refs_v1',compact_index=True,load_rows=True)
     _, before = update_and_load_cached_event_rows(**args)
     receipt = window.prepare(tmp_path)
     assert receipt['prior_raw_offset']==receipt['raw_offset']==before['raw_offset']
@@ -168,9 +168,137 @@ def test_preparation_catches_up_in_bounded_owned_batches(tmp_path,monkeypatch):
     result=window.prepare(tmp_path)
     assert 1 < result['batches'] <= 4
     assert result['prior_raw_offset']==before['raw_offset']
+    assert len(result['native_index_batches']) == result['batches']
+    assert all(0 < row['appended_cache_bytes'] <= 2048
+               for row in result['native_index_batches'])
     assert result['raw_offset']==raw.stat().st_size
     rows,_=window.read(tmp_path,AT+timedelta(seconds=600),lower_epoch=AT.timestamp())
     assert len(rows)==3
+
+
+def _native_state(cache):
+    with sqlite3.connect(f'file:{cache.with_suffix(".compact.sqlite")}?mode=ro', uri=True) as conn:
+        return json.loads(conn.execute('SELECT body FROM state WHERE id=1').fetchone()[0])
+
+
+def test_preparation_keeps_native_index_current_without_repacking_history(tmp_path, monkeypatch):
+    from src.engine.monitoring import sentinel_compact_store as compact
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    packed = []
+    original = compact._pack
+    def track(row):
+        packed.append(row['stage'])
+        return original(row)
+    monkeypatch.setattr(compact, '_pack', track)
+    _append(raw, _event(1), _event(2, 'entry_async_disposition'))
+    receipt = window.prepare(tmp_path)
+    meta = json.loads(cache.with_suffix('.meta.json').read_bytes())
+    assert _native_state(cache)['generation'] == meta['cache_generation']
+    assert _native_state(cache)['count'] == meta['cache_event_count']
+    assert packed == ['zero_base_probe_result', 'entry_async_disposition']
+    assert receipt['native_index_batches'][0]['count'] == meta['cache_event_count']
+    _append(raw, _event(3))
+    update_and_load_cached_event_rows(**args)
+    assert packed == ['zero_base_probe_result', 'entry_async_disposition', 'zero_base_probe_result']
+
+
+@pytest.mark.parametrize('damage', ['missing_file', 'missing_state', 'contract', 'generation',
+                                    'offset', 'count', 'boolean_count', 'array', 'oversized'])
+def test_preparation_rejects_unverified_native_index_before_cache_mutation(tmp_path, monkeypatch, damage):
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    index = cache.with_suffix('.compact.sqlite')
+    if damage == 'missing_file':
+        index.unlink()
+    else:
+        state = _native_state(cache)
+        if damage in {'contract', 'generation', 'offset', 'count', 'boolean_count'}:
+            key = 'count' if damage == 'boolean_count' else damage
+            state[key] = {'contract':'bad', 'generation':[], 'offset':-1,
+                          'count':-1, 'boolean_count':True}[damage]
+        body = ('[]' if damage == 'array' else 'x' * (1024 * 1024 + 1)
+                if damage == 'oversized' else json.dumps(state))
+        with sqlite3.connect(index) as conn:
+            if damage == 'missing_state':
+                conn.execute('DELETE FROM state')
+            else:
+                conn.execute('UPDATE state SET body=? WHERE id=1', (body,))
+    _append(raw, _event(1))
+    meta = cache.with_suffix('.meta.json')
+    before = (cache.read_bytes(), meta.read_bytes())
+    with pytest.raises(ValueError, match='native_index_unverified'):
+        window.prepare(tmp_path)
+    assert (cache.read_bytes(), meta.read_bytes()) == before
+    if damage == 'missing_file':
+        assert not index.exists()
+
+
+def test_preparation_closes_native_iterator_after_first_row(tmp_path, monkeypatch):
+    from src.engine.monitoring import sentinel_compact_store as compact
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    original = compact.indexed_rows
+    seen, closed = [], []
+    def tracked(*args, **kwargs):
+        iterator = original(*args, **kwargs)
+        try:
+            for row in iterator:
+                seen.append(row)
+                yield row
+        finally:
+            iterator.close()
+            closed.append(True)
+    monkeypatch.setattr(compact, 'indexed_rows', tracked)
+    _append(raw, _event(1), _event(2))
+    window.prepare(tmp_path)
+    assert len(seen) == 1 and closed == [True]
+
+
+def test_preparation_requires_native_owner_commit_before_success(tmp_path, monkeypatch):
+    from src.engine.monitoring import sentinel_compact_store as compact
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    _append(raw, _event(1))
+    def omitted(*args, **kwargs):
+        yield from ()
+    monkeypatch.setattr(compact, 'indexed_rows', omitted)
+    with pytest.raises(ValueError, match='native_index_unverified'):
+        window.prepare(tmp_path)
+
+
+def test_native_commit_failure_leaves_gap_fail_closed_on_preparation_retry(tmp_path, monkeypatch):
+    from src.engine.monitoring import sentinel_compact_store as compact
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    prior = _native_state(cache)
+    _append(raw, _event(1))
+    def interrupted(*args, **kwargs):
+        raise OSError('fixture interrupted before native commit')
+        yield
+    monkeypatch.setattr(compact, 'indexed_rows', interrupted)
+    with pytest.raises(OSError, match='fixture interrupted'):
+        window.prepare(tmp_path)
+    meta = cache.with_suffix('.meta.json')
+    before_retry = (cache.read_bytes(), meta.read_bytes())
+    assert _native_state(cache) == prior
+    assert prior['generation'] != json.loads(meta.read_bytes())['cache_generation']
+    with pytest.raises(ValueError, match='native_index_unverified'):
+        window.prepare(tmp_path)
+    assert (cache.read_bytes(), meta.read_bytes()) == before_retry
+
+
+def test_preparation_bounds_actual_cache_append_before_native_owner(tmp_path, monkeypatch):
+    from src.engine import sentinel_event_cache as event_cache
+    from src.engine.monitoring import sentinel_compact_store as compact
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    original = event_cache._update_and_load_cached_event_rows
+    monkeypatch.setattr(window, 'LIMIT', 1024)
+    def oversized(**kwargs):
+        rows, meta = original(**kwargs)
+        with cache.open('ab') as stream:
+            stream.write(b' ' * 1025)
+        meta['cache_generation'] = compact.stamp(cache)
+        return rows, meta
+    monkeypatch.setattr(event_cache, '_update_and_load_cached_event_rows', oversized)
+    monkeypatch.setattr(compact, 'indexed_rows', lambda *a, **k: pytest.fail('native owner exceeds append budget'))
+    with pytest.raises(ValueError, match='native_append_budget_invalid'):
+        window.prepare(tmp_path)
 
 
 def test_preparation_never_advances_past_an_incomplete_raw_line(tmp_path,monkeypatch):

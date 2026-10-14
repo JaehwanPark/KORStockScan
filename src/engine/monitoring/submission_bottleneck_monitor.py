@@ -941,13 +941,19 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
         row_at = stamp(row.get('emitted_at'))
         context = session_contract.resolve_market_session(row_at) if row_at else None
         if (reason == 'session_generation_mismatch' and context is not None
-                and context.session_regime == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION
                 and context.entry_allowed_by_clock is False
                 and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
                 and isinstance(row.get('stock_code'), str) and row['stock_code'] in fixed_symbols
                 and fields.get('venue_source_quality_status') == 'pass'
-                and fields.get('effective_venue') == 'KRX'
-                and fields.get('market_session_bucket') == 'krx_regular'
+                and isinstance(fields.get('effective_venue'), str)
+                and isinstance(fields.get('market_session_bucket'), str)
+                and (context.session_regime, fields.get('effective_venue'), fields.get('market_session_bucket')) in {
+                    (session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION, 'KRX', 'krx_regular'),
+                    (session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+                     'KRX_NXT_INTEGRATED', session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET),
+                    (session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+                     'KRX_NXT_INTEGRATED', session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET),
+                }
                 and (fields.get('actual_order_submitted') is False or fields.get('actual_order_submitted') == 'False')
                 and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
             boundary_waits += 1

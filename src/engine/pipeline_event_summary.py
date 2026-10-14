@@ -1539,6 +1539,18 @@ def update_and_load_pipeline_event_summaries(
     raw_size = max(int(stat.st_size), raw_offset) if is_gzip_raw else int(stat.st_size)
     archived_summary_path = Path(f"{summary_path}.gz")
     summary_exists = summary_path.exists() or archived_summary_path.exists()
+    parser_contract = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    callback_changed = bool(manifest.get("callback_contract") and manifest["callback_contract"] != callback_contract)
+    parser_changed = bool(manifest.get("parser_contract") and manifest["parser_contract"] != parser_contract)
+    contract_migration = None
+    if (callback_changed or parser_changed) and not allow_bootstrap:
+        from src.engine.monitoring.sentinel_summary_contract import verify_predecessor
+        contract_migration = verify_predecessor(
+            manifest=manifest, manifest_path=manifest_path, raw_path=raw_path,
+            summary_path=actual_summary, callbacks=(reason_labeler, ignore_payload),
+            callback_contract=callback_contract, parser_path=Path(__file__),
+            parser_contract=parser_contract,
+        )
     stale_summary = (
         force_rebuild
         or int(manifest.get("schema_version") or 0) != SUMMARY_SCHEMA_VERSION
@@ -1550,12 +1562,17 @@ def update_and_load_pipeline_event_summaries(
             or manifest.get("raw_ctime_ns", stat.st_ctime_ns) != stat.st_ctime_ns))
         or (raw_observer is not None and "raw_volume" not in manifest)
         or (raw_observer is not None and manifest.get("observer_contract") != observer_contract)
-        or (manifest.get("callback_contract") and manifest["callback_contract"] != callback_contract)
-        or (manifest.get("parser_contract") and manifest["parser_contract"] != hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        or (callback_changed and contract_migration is None)
+        or (parser_changed and contract_migration is None)
         or raw_offset > raw_size
         or not summary_exists
         or (incremental_rollup and not is_gzip_raw and not raw_path.with_name(f".{raw_path.name}.partition.lock").is_file())
     )
+    if contract_migration is not None:
+        if stale_summary:
+            raise RuntimeError("summary_contract_migration_source_guard_failed")
+        from src.engine.monitoring.sentinel_summary_contract import archive_predecessor
+        contract_migration = archive_predecessor(contract_migration, manifest_path)
     if stale_summary:
         raw_offset = 0
     if not summary_path.exists() and not archived_summary_path.exists():
@@ -1576,7 +1593,13 @@ def update_and_load_pipeline_event_summaries(
         raw_handle.seek(raw_offset)
         while True:
             line_start = raw_handle.tell()
-            raw_bytes = raw_handle.readline()
+            if contract_migration is not None:
+                remaining = contract_migration["raw_read_end"] - line_start
+                if remaining <= 0:
+                    break
+                raw_bytes = raw_handle.readline(remaining)
+            else:
+                raw_bytes = raw_handle.readline()
             if not raw_bytes:
                 break
             appended_raw_lines += 1
@@ -1618,6 +1641,13 @@ def update_and_load_pipeline_event_summaries(
             last_good_offset = line_end
             if last_good_offset <= line_start:
                 break
+
+    if contract_migration is not None and last_good_offset != contract_migration["raw_read_end"]:
+        raise RuntimeError("summary_contract_migration_incomplete_source_prefix")
+
+    if contract_migration is not None:
+        from src.engine.monitoring.sentinel_summary_contract import verify_before_publication
+        verify_before_publication(contract_migration, raw_path, actual_summary)
 
     new_rows = [groups[key].to_row(target_date=target_date, summary_detail_level=summary_detail_level)
                 for key in sorted(groups)]
@@ -1695,7 +1725,11 @@ def update_and_load_pipeline_event_summaries(
     new_manifest["summary_stamp"] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
     new_manifest["callback_contract"] = callback_contract
     new_manifest["observer_contract"] = observer_contract
-    new_manifest["parser_contract"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    new_manifest["parser_contract"] = parser_contract
+    if contract_migration is not None:
+        new_manifest["contract_migration"] = contract_migration
+    elif "contract_migration" in manifest:
+        new_manifest["contract_migration"] = manifest["contract_migration"]
     new_manifest["checkpoint_digest"] = checkpoint_digest(new_manifest)
     try:
         _write_json(manifest_path, new_manifest)

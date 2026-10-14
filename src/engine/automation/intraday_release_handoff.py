@@ -456,6 +456,17 @@ REVIEWED_SUBMISSION_TIMEOUT_SOURCES = {
 }
 
 
+# Exact original PREOPEN-to-reviewed report-only terminal-session census.
+# Earlier consumed source pairs remain valid; no machine/entry policy changes.
+# Evidence: docs/audits/main-submission-crisis-timeout-implementation-review-2026-10-14.md.
+REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -505,7 +516,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES.get(name),
                     REVIEWED_STARTUP_OBSERVER_SOURCES.get(name),
                     REVIEWED_OBSERVER_HEALTH_SOURCES.get(name),
-                    REVIEWED_SUBMISSION_TIMEOUT_SOURCES.get(name)):
+                    REVIEWED_SUBMISSION_TIMEOUT_SOURCES.get(name),
+                    REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

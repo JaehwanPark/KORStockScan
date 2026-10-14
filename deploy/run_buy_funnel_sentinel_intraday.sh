@@ -91,6 +91,13 @@ run_bounded() {
   [[ "$remaining" -gt 0 ]] || return 75
   timeout --signal=TERM --kill-after=5s "${remaining}s" "${priority[@]}" "$@"
 }
+run_sentinel() {
+  # Keep 40 seconds for the observer and five for this child's TERM grace.
+  # The final five-second cleanup reserve and shared 180-second limit remain.
+  local remaining=$((180 - SECONDS + run_started_seconds - 5 - 40 - 5))
+  [[ "$remaining" -gt 0 ]] || return 75
+  timeout --signal=TERM --kill-after=5s "${remaining}s" "${priority[@]}" "$@"
+}
 run_monitor() {
   local remaining=$((180 - SECONDS + run_started_seconds - 5))
   [[ "$remaining" -ge 20 ]] || return 75
@@ -103,7 +110,7 @@ run_monitor() {
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
 echo "[START] buy funnel sentinel target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN} use_cache=${USE_CACHE} use_summary=${USE_SUMMARY}" | tee -a "$LOG_FILE"
 
-if run_bounded "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+if run_sentinel "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   if [[ "$DRY_RUN" != "1" ]]; then
     if run_monitor 2>&1 | tee -a "$LOG_FILE"; then
       :

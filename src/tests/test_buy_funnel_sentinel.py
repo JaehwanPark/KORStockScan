@@ -31,6 +31,77 @@ def test_periodic_wrapper_runs_next_tick_and_preserves_explicit_cooldown(tmp_pat
     assert ('cooldown active' in result.stdout) is skipped
 
 
+@pytest.mark.parametrize(
+    'first_exit,after_first,monitor_exit,dry_run,expected_exit,monitor_budget',
+    [(0, 2, 0, False, 0, 120),
+     (0, 130, 0, False, 0, 45),
+     (124, 135, 0, False, 124, 40),
+     (137, 135, 0, False, 137, 40),
+     (7, 2, 0, False, 7, 120),
+     (0, 130, 75, False, 75, 45),
+     (124, 135, 75, False, 124, 40),
+     (0, 130, 0, True, 0, None)],
+)
+def test_wrapper_reserves_observer_time_and_preserves_stage_terminals(
+    tmp_path, first_exit, after_first, monitor_exit, dry_run, expected_exit, monitor_budget
+):
+    import os
+    import subprocess
+
+    project = Path(__file__).resolve().parents[2]
+    clock = tmp_path / 'clock'
+    clock.write_text('0\n')
+    # Bash's existing SECONDS clock advances at owned-child completion. No real
+    # trading/report process or long wall-clock sleep is needed for the boundary.
+    environment = tmp_path / 'bash-clock'
+    environment.write_text(
+        'set -T\n'
+        '__test_clock_tick() { local value; read -r value < "$TEST_CLOCK"; SECONDS="$value"; }\n'
+        'trap __test_clock_tick DEBUG\n'
+    )
+    executable = tmp_path / 'bin/timeout'
+    executable.parent.mkdir()
+    executable.write_text(
+        '#!/bin/bash\n'
+        'printf "%s\\n" "$*" >> "$TEST_TIMEOUT_CALLS"\n'
+        'if [[ "$*" == *"src.engine.buy_funnel_sentinel"* ]]; then\n'
+        '  printf "%s\\n" "$TEST_AFTER_FIRST" > "$TEST_CLOCK"\n'
+        '  exit "$TEST_FIRST_EXIT"\n'
+        'fi\n'
+        'exit "$TEST_MONITOR_EXIT"\n'
+    )
+    executable.chmod(0o755)
+    calls = tmp_path / 'timeout-calls'
+    env = {**os.environ, 'PROJECT_DIR': str(tmp_path),
+           'PATH': str(executable.parent) + os.pathsep + os.environ['PATH'],
+           'BASH_ENV': str(environment), 'TEST_CLOCK': str(clock),
+           'TEST_TIMEOUT_CALLS': str(calls), 'TEST_AFTER_FIRST': str(after_first),
+           'TEST_FIRST_EXIT': str(first_exit), 'TEST_MONITOR_EXIT': str(monitor_exit),
+           'BUY_FUNNEL_SENTINEL_DRY_RUN': str(int(dry_run)),
+           'BUY_FUNNEL_SENTINEL_COOLDOWN_SEC': '0', 'KORSTOCKSCAN_NPROC_OVERRIDE': '1'}
+    result = subprocess.run(
+        ['bash', str(project / 'deploy/run_buy_funnel_sentinel_intraday.sh'), '2026-10-14'],
+        env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == expected_exit, result.stdout + result.stderr
+    invocations = calls.read_text().splitlines()
+    assert '--signal=TERM --kill-after=5s 130s ' in invocations[0]
+    assert 'src.engine.buy_funnel_sentinel' in invocations[0]
+    assert len(invocations) == (1 if dry_run else 2)
+    if not dry_run:
+        monitor = invocations[1]
+        assert 'src.engine.monitoring.submission_bottleneck_monitor' in monitor
+        assert f'--budget-seconds {monitor_budget}' in monitor
+        assert ('--source-only' in monitor) is bool(first_exit)
+        assert f'--kill-after=5s {175-after_first}s ' in monitor
+    assert (tmp_path / 'tmp/run_buy_funnel_sentinel_success.state').exists() is (expected_exit == 0)
+    assert ('[DONE]' in result.stdout) is (expected_exit == 0)
+    if first_exit:
+        assert f'exit_code={first_exit}' in result.stdout
+    elif monitor_exit and not dry_run:
+        assert f'reason=monitor_incomplete exit_code={monitor_exit}' in result.stdout
+
+
 def _event(
     target_date: str,
     hhmmss: str,

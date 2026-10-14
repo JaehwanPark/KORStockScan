@@ -11,6 +11,7 @@ import math
 import os
 import sqlite3
 import zlib
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -244,6 +245,33 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
             conn.close()
 
 
+def _native_index_state(cache, generation, expected_count):
+    """Verify the existing native index without creating or repairing it."""
+    from src.engine.monitoring import sentinel_compact_store as compact
+    if (type(expected_count) is not int or expected_count < 0
+            or compact.stamp(cache) != generation):
+        raise ValueError('source_window_prepare_native_index_unverified')
+    path = cache.with_suffix('.compact.sqlite')
+    try:
+        with closing(sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=1)) as conn:
+            conn.execute('PRAGMA query_only=ON')
+            saved = conn.execute('SELECT length(CAST(body AS BLOB)), '
+                                 'substr(CAST(body AS BLOB), 1, 1048577) '
+                                 'FROM state WHERE id=1').fetchone()
+            if not saved or saved[0] > 1024 * 1024:
+                raise ValueError('source_window_prepare_native_index_unverified')
+            state = _object(saved[1])
+    except (sqlite3.DatabaseError, OSError, TypeError, ValueError) as exc:
+        raise ValueError('source_window_prepare_native_index_unverified') from exc
+    contract = hashlib.sha256(Path(compact.__file__).read_bytes()).hexdigest()
+    if (state.get('contract') != contract or state.get('generation') != generation
+            or type(state.get('offset')) is not int or state['offset'] != generation[2]
+            or type(state.get('count')) is not int or state['count'] != expected_count
+            or compact.stamp(cache) != generation):
+        raise ValueError('source_window_prepare_native_index_unverified')
+    return state
+
+
 def prepare(data_root, *, max_batches=4):
     """Initialize the forward projection after drain and before Main starts.
 
@@ -254,7 +282,7 @@ def prepare(data_root, *, max_batches=4):
     import fcntl
     from src.engine import buy_funnel_sentinel as buy
     from src.engine.sentinel_event_cache import _update_and_load_cached_event_rows
-    from src.engine.monitoring.sentinel_compact_store import stamp
+    from src.engine.monitoring.sentinel_compact_store import stamp, indexed_rows
     data_root = Path(data_root).resolve()
     if type(max_batches) is not int or not 1 <= max_batches <= 4:
         raise ValueError('source_window_prepare_batch_budget_invalid')
@@ -284,7 +312,11 @@ def prepare(data_root, *, max_batches=4):
                 population_proof='forward_only_stage_extension',
                 historical_stage_coverage='not_backfilled_before_raw_offset')
         previous_offset = meta['raw_offset']
+        batch_meta = meta
+        native_batches = []
         for batch in range(max_batches):
+            prior_generation = batch_meta['cache_generation']
+            _native_index_state(cache, prior_generation, batch_meta['cache_event_count'])
             _, updated = _update_and_load_cached_event_rows(raw_path=raw,cache_dir=cache_dir,
                 cache_name=buy.EVENT_CACHE_NAME,target_date=day,schema_version=schema,
                 parse_payload=lambda row:buy._payload_to_cache_row(row,exclude_summary_stages=schema==20),
@@ -292,6 +324,25 @@ def prepare(data_root, *, max_batches=4):
                 project_loaded_payload=buy._slim_economic_cache_row,
                 cache_projection_version='economic_source_refs_v1',load_rows=False,compact_index=True,
                 max_append_bytes=LIMIT)
+            generation = stamp(cache)
+            delta = generation[2] - prior_generation[2]
+            if (generation != updated['cache_generation']
+                    or generation[:2] != prior_generation[:2] or not 0 <= delta <= LIMIT):
+                raise ValueError('source_window_prepare_native_append_budget_invalid')
+            # The native owner commits and verifies its complete generation
+            # before yielding its first row. Close immediately: preparation
+            # needs its bounded append transaction, not all historical rows.
+            rows = indexed_rows(cache, previous_stamp=prior_generation,
+                                expected_count=updated['cache_event_count'])
+            try:
+                next(rows, None)
+            finally:
+                rows.close()
+            native = _native_index_state(cache, generation, updated['cache_event_count'])
+            native_batches.append(dict(prior_generation=prior_generation,
+                generation=generation, appended_cache_bytes=delta,
+                count=native['count'], contract=native['contract']))
+            batch_meta = updated
             if updated['raw_offset'] == updated['raw_size']:
                 break
             if updated['raw_offset'] <= previous_offset:
@@ -303,4 +354,5 @@ def prepare(data_root, *, max_batches=4):
             prior_raw_offset=meta['raw_offset'],raw_offset=updated['raw_offset'],
             prior_cache_generation=meta['cache_generation'],cache_generation=updated['cache_generation'],
             projection=updated['source_window_projection'],runtime_effect=False,batches=batch+1,
+            native_index_batches=native_batches,
             historical_stage_coverage='not_backfilled_before_cache_offset')

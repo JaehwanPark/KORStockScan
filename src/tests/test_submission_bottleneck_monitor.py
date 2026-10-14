@@ -572,6 +572,101 @@ def test_existing_probe_read_censuses_excluded_waits_without_hiding_actionable_f
     assert semantics['runtime_effect'] is False
 
 
+@pytest.mark.parametrize('when,flags,boundary', [
+    ('19:39:59', {}, False),
+    ('19:40:00', {}, True),
+    ('19:44:59', {}, True),
+    ('19:45:00', {}, True),
+    ('19:59:59', {}, True),
+    ('20:00:00', {}, False),
+    ('16:36:00', {}, False),
+    ('15:36:00', {}, False),
+    ('19:46:00', {'effective_venue': 'KRX'}, False),
+    ('19:46:00', {'effective_venue': 'UNKNOWN'}, False),
+    ('19:46:00', {'effective_venue': []}, False),
+    ('19:46:00', {'effective_venue': {}}, False),
+    ('19:46:00', {'market_session_bucket': 'krx_regular'}, False),
+    ('19:46:00', {'market_session_bucket': None}, False),
+    ('19:46:00', {'market_session_bucket': []}, False),
+    ('19:46:00', {'market_session_bucket': {}}, False),
+    ('19:46:00', {'venue_source_quality_status': None}, False),
+    ('19:46:00', {'venue_source_quality_status': 'blocked'}, False),
+    ('19:46:00', {'source_quality_reason': 'route_snapshot_missing'}, False),
+    ('19:46:00', {'source_quality_reason': 'fixed_watch_post_receipt_warmup'}, False),
+    ('19:46:00', {'watch_origin': 'SCANNER_PROMOTION'}, False),
+    ('19:46:00', {'_stock_code': '999999'}, False),
+    ('19:46:00', {'actual_order_submitted': True}, False),
+    ('19:46:00', {'actual_order_submitted': 0}, False),
+    ('19:46:00', {'broker_order_forbidden': False}, False),
+    ('19:46:00', {'broker_order_forbidden': 1}, False),
+    ('19:46:00', {'broker_order_forbidden': None}, False),
+])
+def test_aftermarket_boundary_wait_requires_exact_closed_entry_clock_route_and_safety(
+        tmp_path, when, flags, boundary):
+    now = monitor.stamp('2026-10-14T' + when + '+09:00')
+    flags = dict(flags)
+    symbol = flags.pop('_stock_code', '005930')
+    fields = dict(watch_origin='MAIN_FIXED_WATCH', source_quality_reason='session_generation_mismatch',
+        venue_source_quality_status='pass', effective_venue='KRX_NXT_INTEGRATED',
+        market_session_bucket='KRX_NXT_AFTERMARKET', actual_order_submitted=False,
+        broker_order_forbidden=True)
+    fields.update(flags)
+    row = dict(pipeline='ENTRY_PIPELINE', stage='main_fixed_watch_observation_wait',
+        stock_code=symbol, emitted_at=now.isoformat(), fields=fields)
+    _source_gap_files(tmp_path, now, probes=[row])
+    semantics = monitor.source_gap_semantics(tmp_path, now)
+    census = semantics['fixed_watch_waits']
+    assert census['count'] == 1
+    assert census['session_boundary_wait_count'] == int(boundary)
+    assert census['unclassified_or_actionable_wait_count'] == int(not boundary)
+    assert semantics['observed'] == {} and semantics['status'] == 'unobservable'
+    assert semantics['runtime_effect'] is False
+
+
+@pytest.mark.parametrize('row_clock', [
+    '2026-10-14T19:57:00+09:00', '2026-10-13T19:56:00+09:00', 'invalid',
+])
+def test_terminal_boundary_does_not_admit_future_prior_date_or_malformed_row_clock(tmp_path, row_clock):
+    now = monitor.stamp('2026-10-14T19:56:20+09:00')
+    fields = dict(watch_origin='MAIN_FIXED_WATCH', source_quality_reason='session_generation_mismatch',
+        venue_source_quality_status='pass', effective_venue='KRX_NXT_INTEGRATED',
+        market_session_bucket='KRX_NXT_AFTERMARKET', actual_order_submitted=False,
+        broker_order_forbidden=True)
+    row = dict(pipeline='ENTRY_PIPELINE', stage='main_fixed_watch_observation_wait',
+        stock_code='005930', emitted_at=row_clock, fields=fields)
+    _source_gap_files(tmp_path, now, probes=[row])
+    semantics = monitor.source_gap_semantics(tmp_path, now)
+    assert semantics['fixed_watch_waits']['count'] == 0
+    assert semantics['fixed_watch_waits']['session_boundary_wait_count'] == 0
+    assert semantics['status'] == 'unobservable'
+
+
+def test_terminal_boundary_census_keeps_unknown_actor_pending_source_incident(tmp_path):
+    now = monitor.stamp('2026-10-14T19:56:20.472471+09:00')
+    fields = dict(watch_origin='MAIN_FIXED_WATCH', source_quality_reason='session_generation_mismatch',
+        venue_source_quality_status='pass', effective_venue='KRX_NXT_INTEGRATED',
+        market_session_bucket='KRX_NXT_AFTERMARKET', actual_order_submitted='False',
+        broker_order_forbidden='True')
+    row = dict(pipeline='ENTRY_PIPELINE', stage='main_fixed_watch_observation_wait',
+        stock_code='005930', emitted_at=(now-timedelta(seconds=1)).isoformat(), fields=fields)
+    _source_gap_files(tmp_path, now, probes=[row])
+    semantics = monitor.source_gap_semantics(tmp_path, now)
+    incident = dict(status='pending', first_seen='2026-10-14T18:21:44.960015+09:00',
+        last_seen='2026-10-14T18:21:44.960015+09:00',
+        issues={'machine_probe:coverage_degraded:krx_nxt_integrated': 1},
+        issues_by_scope={'route:krx_nxt_integrated|machine_probe:coverage_degraded': 1},
+        examples=[{'occurred_at': '2026-10-14T18:18:51.659169', 'reason': 'route_snapshot_missing'}])
+    original = json.dumps(incident, sort_keys=True)
+    result = dict(as_of=now.isoformat(), source_as_of='2026-10-14T19:15:13.589614+09:00',
+        incidents={'machine_auxiliary_intraday_source_gap': incident}, notification_pending=[])
+    monitor.attach_source_gap_semantics(result, semantics)
+    assert json.dumps(result['incidents']['machine_auxiliary_intraday_source_gap'], sort_keys=True) == original
+    assert result['source_as_of'] == '2026-10-14T19:15:13.589614+09:00'
+    assert result['notification_pending'] == []
+    assert semantics['fixed_watch_waits']['session_boundary_wait_count'] == 1
+    assert semantics['status'] == 'unobservable' and semantics['async_pass_projection'] == []
+
+
 def test_monitor_consumes_pre_submit_prices_separately_from_terminal_and_pid(tmp_path, monkeypatch):
     from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
@@ -2699,6 +2794,14 @@ def test_source_only_monitor_runs_when_sentinel_report_is_absent(tmp_path, monke
     assert saved["status"] == "unobservable"
     assert saved["source_gap_semantics"]["status"] == "gap_observed"
     assert saved["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "pending"
+    assert saved["execution_status"] == "completed"
+    assert saved["execution_mode"] == "source_only"
+    assert saved["blocker"] == "missing_stale_or_noncurrent_sentinel_evidence"
+    assert saved["source_as_of"] is None
+    assert saved["observation_health"]["status"] == "not_eligible"
+    assert saved["observation_health"]["current_observation_verified"] is False
+    assert saved["observation_health"]["full_coverage_proven"] is False
+    assert "monitor_state_not_quiet_full_observation" in saved["observation_health"]["unmet_conditions"]
 
 
 def test_intraday_source_alert_names_cause_without_order_claim():

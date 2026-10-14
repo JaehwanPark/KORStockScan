@@ -504,6 +504,16 @@ Main 기동 시 entry worker보다 먼저 `ka10099`의 코스피·코스닥 전�
 
 응답의 NXT `Y`/`N` 이외 값, continuation 누락·페이지 한도·오류·당일 자료 부재는 unknown을 유지한다. KRX 시간외 자격은 이 API로 추정하지 않으며 raw `PARTIAL`과 `krx_aftermarket_eligibility_unknown`을 보존한다. 명시적 NXT 경로의 별도 소비 계약만 검증된 NXT 축을 사용할 수 있고 SOR 승인·수량·가격·deadline·기존 hard safety는 그대로 적용한다. 수집 성공은 주문·체결 또는 경제 성과의 증거가 아니다.
 
+### Observer source-window 배포 준비
+
+observer source-window 배포 준비는 기존 Sentinel cache lock 아래에서 검증된 raw/cache cursor와 native compact index의 contract/generation/offset/count를 먼저 대사한다. 각 최대32MiB append 뒤 기존 index writer의 commit과 새 generation을 확인하여 source projection만 전진하고 native index가 남는 인계를 금지한다. 최대4 batch를 넘거나 원 index가 불일치하면 준비를 실패로 기록하며 전체 재구축·cursor 강제수정·과거 source gap 보충을 실행하지 않는다. 준비 PASS와 실제 정규 Sentinel/observer 발행·후속 artifact detector 수용은 별개다.
+
+summary parser/callback 계약 변경은 정확히 검토된 predecessor와 현재 코드의 동등성 증거가 있을 때만 기존 producer의 bounded append로 인계한다. 원 manifest/checkpoint·raw/summary generation·callback 의존 정의를 확인하고 이전 manifest를 보존한다. 알려지지 않은 코드쌍·원천 변조·한도 초과를 과거 summary 재사용이나 장시간 raw 재스캔으로 덮지 않는다. 실패 receipt와 첫 정규 발행/후속 detector를 별도로 확인한다.
+
+observer의 fixed-watch session boundary는 native resolver가 확인한 시각·진입 금지·정확한 venue/session 및 실제 source pass·Main fixed owner·주문 없음·broker 금지 증거가 모두 있을 때만 인정한다. CLOSE_ONLY/TERMINAL_EXIT의 정상 대기도 이 조건으로 검증하며 CLOSED 등 다른 세션에 일반화하지 않는다. 과거 incident와 stale source cursor는 유지하고 bounded observation warning을 full semantic validation이나 원천 회복으로 보고하지 않는다.
+
+Sentinel wrapper는 전체180초/최종 cleanup5초를 유지하면서 observer40초와 첫 child의 TERM→KILL 여유5초를 예약한다. 첫 Sentinel은 최대130초이고 실제 경과시간에 따라 더 줄어든다. 빠른 성공은 기존 full observer, 실패는 남은 시간의 source-only 진단으로 이어지며 원 실패 종료코드를 보존한다. source-only 발행은 현재 원천 진단이며 full 건강 판정·제출 성공이 아니다. 승인된 배포의 정규 시간 외 검증은 알림 없이 같은 한도와 원 producer/consumer를 사용하고 수동 receipt를 자연 정규 슬롯으로 집계하지 않는다.
+
 ### 장중 운영 override 기준
 
 장중 운영 override는 사용자가 명시적으로 지시한 경우에만 적용한다. 기본 원칙은 장중 threshold/runtime mutation 금지다.

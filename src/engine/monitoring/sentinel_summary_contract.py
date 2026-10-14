@@ -1,0 +1,232 @@
+"""Exact predecessor proof for native report-summary contract migration.
+
+This owner permits only reviewed source-equivalent parser/callback transitions.
+It never changes policy, rewrites an old checkpoint, or reads the raw prefix.
+"""
+from __future__ import annotations
+
+import ast
+import hashlib
+import inspect
+import json
+import os
+import stat
+from pathlib import Path
+
+PREVIOUS_PARSER = '1ddc6f33db48db5fec69ec36297119741caebf42444f95e5a6d2e67f4795eeb2'
+CURRENT_PARSER = 'b1b1e59a99c09c79304d9db7cfd731fe47deb1afb9926303c7ba7d1d9ea03116'
+PREVIOUS_BUY_OWNER = '83d8b3d9e41f496e7f868789d635472fd5ebd994489f3db31bbb1f670565f468'
+CURRENT_BUY_OWNER = 'd487b4041fff24f690f78bef9bbfea1bdbf6dedd59c70095585b23e9fe1005e7'
+LIMIT = 32 * 1024 * 1024
+SUMMARY_LIMIT = 128 * 1024 * 1024
+DEFINITIONS = {
+    'buy:_blocker_label_from_stage_fields': '9aae9e21e776ae83e227bd4998a5b178479b5c0daf2efeafdef3aef538c12129',
+    'buy:_is_ignored_event': 'ff8adb687774f710cf74668dc962dcba42a3c468790c89db3413fa6d7371fa44',
+    'buy:_safe_str': '68672915d00e452b0f495d7d394698c576d020f65fa35c0fc3f9e647fa9df206',
+    'parser:default_reason_label': 'eb7e1ccd546f853c7f85512431f2128c7b46e31cd45af338df6258015723e6e9',
+    'parser:_first_field': '5baf01cc3bcc6e97ab65ad86f4b4ef182cf0170239b4bcb34187a257cc54ac30',
+    'parser:_safe_str': '68672915d00e452b0f495d7d394698c576d020f65fa35c0fc3f9e647fa9df206',
+}
+
+
+def _fail(reason):
+    raise RuntimeError('summary_contract_migration_' + reason)
+
+
+def _stamp(path):
+    s = Path(path).stat()
+    return [s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
+
+
+def _read(path, limit):
+    with Path(path).open('rb') as f:
+        before = os.fstat(f.fileno())
+        if before.st_size > limit:
+            _fail('artifact_read_budget_exceeded')
+        value = f.read(limit + 1)
+        after = os.fstat(f.fileno())
+    if len(value) > limit or (before.st_dev, before.st_ino, before.st_size,
+            before.st_mtime_ns, before.st_ctime_ns) != (after.st_dev, after.st_ino,
+            after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        _fail('artifact_changed_during_read')
+    return value
+
+
+def _definition(function, expected):
+    if getattr(function, '__closure__', None):
+        _fail('callback_closure_changed')
+    try:
+        node = ast.parse(inspect.getsource(function)).body[0]
+        actual = hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
+    except (OSError, TypeError, SyntaxError, IndexError):
+        _fail('callback_definition_unverified')
+    if actual != expected:
+        _fail('callback_definition_changed')
+
+
+def _parser_dependencies(parser):
+    for name in ('default_reason_label', '_first_field', '_safe_str'):
+        _definition(getattr(parser, name), DEFINITIONS['parser:' + name])
+    if (parser.default_reason_label.__globals__.get('_first_field') is not parser._first_field
+            or parser._first_field.__globals__.get('_safe_str') is not parser._safe_str):
+        _fail('parser_dependency_changed')
+
+
+def _callback_predecessors(callbacks, parser_path):
+    from src.engine import pipeline_event_summary as parser
+    _parser_dependencies(parser)
+    original, parser_only, funnel_old = [], [], []
+    funnel = tuple(getattr(f, '__name__', None) for f in callbacks) == (
+        '_blocker_label_from_stage_fields', '_is_ignored_event')
+    for callback in callbacks:
+        if callback is None:
+            continue
+        if getattr(callback, '__closure__', None):
+            _fail('callback_closure_changed')
+        source = inspect.getsource(callback)
+        owner = Path(inspect.getsourcefile(callback)).resolve()
+        owner_sha = hashlib.sha256(_read(owner, LIMIT)).hexdigest()
+        prior_owner = PREVIOUS_PARSER if owner == parser_path else owner_sha
+        if owner == parser_path and callback is not parser.default_reason_label:
+            _fail('parser_callback_not_reviewed')
+        if funnel:
+            if owner_sha != CURRENT_BUY_OWNER or callback.__module__ != 'src.engine.buy_funnel_sentinel':
+                _fail('funnel_owner_changed')
+            _definition(callback, DEFINITIONS['buy:' + callback.__name__])
+            globals_ = callback.__globals__
+            _definition(globals_['_safe_str'], DEFINITIONS['buy:_safe_str'])
+            if (globals_['MANUAL_EXCLUDED_STOCKS'] != {('제룡전기', '033100')}
+                    or globals_['IGNORED_STOCK_NAMES'] != {'TEST', 'DUMMY', 'MOCK'}
+                    or globals_['default_reason_label'] is not parser.default_reason_label):
+                _fail('funnel_dependency_changed')
+        original.extend((source, owner_sha))
+        parser_only.extend((source, prior_owner))
+        funnel_old.extend((source, PREVIOUS_BUY_OWNER if funnel else prior_owner))
+    digest = lambda parts: hashlib.sha256('\n'.join(parts).encode()).hexdigest()
+    return digest(original), {digest(parser_only), digest(funnel_old)}
+
+
+def _verify_predecessor(*, manifest, manifest_path, raw_path, summary_path,
+                       callbacks, callback_contract, parser_path, parser_contract):
+    """Validate an exact old contract before the native owner appends at its cursor."""
+    from src.engine.pipeline_event_summary import checkpoint_digest
+    parser_path = Path(parser_path).resolve()
+    if (parser_contract != CURRENT_PARSER
+            or hashlib.sha256(_read(parser_path, LIMIT)).hexdigest() != CURRENT_PARSER
+            or manifest.get('parser_contract') != PREVIOUS_PARSER):
+        _fail('parser_predecessor_unverified')
+    actual_callback, predecessors = _callback_predecessors(callbacks, parser_path)
+    if actual_callback != callback_contract or manifest.get('callback_contract') not in predecessors:
+        _fail('callback_predecessor_unverified')
+    original = _read(manifest_path, LIMIT)
+    if json.loads(original) != manifest or manifest.get('checkpoint_digest') != checkpoint_digest(manifest):
+        _fail('checkpoint_unverified')
+    raw_path, summary_path = Path(raw_path).resolve(), Path(summary_path).resolve()
+    raw, summary = _stamp(raw_path), _stamp(summary_path)
+    offset = manifest.get('raw_offset')
+    if (raw_path.suffix == '.gz' or summary_path.suffix == '.gz'
+            or manifest.get('raw_path') != str(raw_path)
+            or manifest.get('summary_path') != str(summary_path)
+            or type(offset) is not int or not 0 <= offset <= raw[2]
+            or manifest.get('complete_through_raw_offset') != offset
+            or manifest.get('incomplete_tail') or manifest.get('decode_errors')
+            or manifest.get('raw_inode') != raw[1]
+            or not offset <= int(manifest.get('raw_size', -1)) <= raw[2]
+            or manifest.get('summary_stamp') != summary[1:]
+            or (manifest.get('raw_size') == raw[2] and
+                [manifest.get('raw_mtime_ns'), manifest.get('raw_ctime_ns')] != raw[3:])):
+        _fail('source_prefix_unverified')
+    if raw[2] - offset > LIMIT:
+        _fail('append_budget_exceeded')
+    body = _read(summary_path, SUMMARY_LIMIT)
+    if _stamp(summary_path) != summary or _stamp(raw_path)[:2] != raw[:2]:
+        _fail('source_generation_changed')
+    return dict(schema='native_summary_contract_migration_v1',
+        from_parser=manifest['parser_contract'], to_parser=parser_contract,
+        from_callback=manifest['callback_contract'], to_callback=callback_contract,
+        original_checkpoint=manifest['checkpoint_digest'],
+        original_manifest_sha256=hashlib.sha256(original).hexdigest(),
+        original_summary_sha256=hashlib.sha256(body).hexdigest(),
+        original_summary_generation=summary, raw_generation=raw,
+        raw_read_start=offset, raw_read_end=raw[2],
+        verification_owner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        decision_authority='report_only', runtime_effect=False,
+        historical_rebuild_performed=False)
+
+
+def verify_predecessor(**arguments):
+    try:
+        return _verify_predecessor(**arguments)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise RuntimeError('summary_contract_migration_evidence_unavailable') from exc
+
+
+def _archive_predecessor(receipt, manifest_path):
+    """The native writer preserves exact old bytes before publishing a successor."""
+    manifest_path = Path(manifest_path)
+    original = _read(manifest_path, LIMIT)
+    digest = receipt['original_manifest_sha256']
+    if hashlib.sha256(original).hexdigest() != digest:
+        _fail('predecessor_changed_before_archive')
+    directory = manifest_path.parent / 'contract_migrations'
+    directory.mkdir(exist_ok=True)
+    name = manifest_path.name + '.' + digest + '.json'
+    path = directory / name
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        directory_stat = os.fstat(directory_fd)
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory_fd)
+        except FileExistsError:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=directory_fd)
+            with os.fdopen(fd, 'rb') as stream:
+                archived_stat = os.fstat(stream.fileno())
+                if not stat.S_ISREG(archived_stat.st_mode) or archived_stat.st_size > LIMIT:
+                    _fail('predecessor_archive_not_regular')
+                if stream.read(LIMIT + 1) != original:
+                    _fail('predecessor_archive_conflict')
+        else:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(original)
+                stream.flush()
+                os.fsync(stream.fileno())
+                archived_stat = os.fstat(stream.fileno())
+        current_directory = directory.lstat()
+        current_archive = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if (not stat.S_ISDIR(current_directory.st_mode)
+                or (current_directory.st_dev, current_directory.st_ino) !=
+                   (directory_stat.st_dev, directory_stat.st_ino)
+                or not stat.S_ISREG(current_archive.st_mode)
+                or (current_archive.st_dev, current_archive.st_ino, current_archive.st_size,
+                    current_archive.st_mtime_ns, current_archive.st_ctime_ns) !=
+                   (archived_stat.st_dev, archived_stat.st_ino, archived_stat.st_size,
+                    archived_stat.st_mtime_ns, archived_stat.st_ctime_ns)):
+            _fail('predecessor_archive_generation_changed')
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return {**receipt, 'original_manifest_archive': str(path.absolute())}
+
+
+def archive_predecessor(receipt, manifest_path):
+    try:
+        return _archive_predecessor(receipt, manifest_path)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise RuntimeError('summary_contract_migration_archive_failed') from exc
+
+
+def _verify_before_publication(receipt, raw_path, summary_path):
+    before, current = receipt['raw_generation'], _stamp(raw_path)
+    if (current[:2] != before[:2] or current[2] < before[2]
+            or (current[2] == before[2] and current != before)
+            or _stamp(summary_path) != receipt['original_summary_generation']):
+        _fail('source_changed_before_publication')
+
+
+def verify_before_publication(receipt, raw_path, summary_path):
+    try:
+        return _verify_before_publication(receipt, raw_path, summary_path)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise RuntimeError('summary_contract_migration_source_unavailable_before_publication') from exc

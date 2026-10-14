@@ -10,6 +10,8 @@
 
 ## 2. 이미 배포된 보완과 남은 범위
 
+첫 구현은 `7c517c9206437cfb1c84a8206f6a2a6de12839a9`로 배포했고, 19:21:44 receipt의 PID1157212/start3720079가 소비했다. 아래 f71 분모는 착수 시점의 고정 증거다. 새 PID의 종목 원천은 3906건/시장별 물리 HTTP 1회로 완료했으며, 고정5 중 주성·HPSP의 원천 NXT 자격은 false다. 두 종목은 새 원천으로도 해당 경로에서 차단되어야 한다. 새 자연 AI 표본이 없는 상태를 timeout 개선이나 제출 성공으로 기록하지 않는다. 첫 정규 observer의 19:25·19:30·19:35·19:40 실행은 각각 175초 제한으로 실패했으므로 배포 수용을 완료하지 않고 아래 후속 수리를 수행한다.
+
 | 항목 | 최신 f71 기준 판단 | 이번 범위 |
 | --- | --- | --- |
 | Main ready hint/방문 | 실제 방문 ACK·token 보존·WATCHING bounded 재방문·phase clocks 반영 | 중복 queue/wake를 추가하지 않고 남은 요청 내 중복 검증 제거 |
@@ -122,3 +124,21 @@ NXT 수리로 native 계약 module33개 중 `session_contract.py`1개가 바뀐�
 배포 후 commit/PID/start/cwd·native bundle·auxiliary registry/manifest 실제 소비, 위기 daemon/heartbeat 부재, startup health와 정규 예약 observer를 확인한다. `DirectFamilyPreopenPolicyHandoff`가 배포 소비, `AuxiliaryCircuitRecoveryRepair1012`가 다음 정상 시도의 응답→Main→budget/intent/submit·broker receipt, `NonfixedDispatchReadinessReview1012`가 전체 fixed/nonfixed·source·정규5분3슬롯을 소유한다. 기존 stable ID·Due/Slot/TimeWindow·Acceptance/History/AUTO를 보존하고 새 OPEN을 중복 생성하지 않는다.
 
 코드·계약 수리 종료는 실제 자연 주문·positive EV를 요구하지 않는다. 자연 유효 PASS가 없으면 과차단 가설은 pending, 미래 scheduled source는 not_yet_due, fill/terminal·비용 후 성과는 null/미입증이다. source_gap·정상 no-match·표본 부재는 자동 rollback 사유가 아니다. 계약 실패 시 검증된 code+sealed registry/overlay 조합으로 기존 rollback owner를 사용하며 퇴역 위기 daemon을 복원하지 않는다. 외부 Project/Calendar sync·검증용 주문/provider replay·광범위 보고 재생성은 이 검증에 포함하지 않는다.
+
+## 10. 첫 배포 후 Sentinel 실행 실패의 추가 보완
+
+[첫 배포 observer 검증](../../tmp/submit-crisis-timeout-20261014/postrestart-observer-verification.json)의19:25/19:30/19:35/19:40 정규 실행은175초 제한을 소진했다. 준비 단계가 source cache만 전진시킨 인덱스 불일치를 수리하며, 그 하나로 첫 두 실행 실패 전체를 설명하지 않는다.19:35 자연 실행의 `/proc` 읽기에서는 전일7,394,107,688B raw pipeline_events 원천을 다시 읽는 것을 확인했다. 원 콜백 두 함수의 AST는 동일하지만 소속 `buy_funnel_sentinel.py` 전체 파일 hash가 바뀌어 summary 계약이 달라졌고, 동일 계약 불일치가 반복 재구축 경로를 열었다.19:35 자연 프로세스의 전일 raw 읽기는 FD로 직접 확인했지만 슬롯별 전체 읽기량은 측정하지 않았다. [계약 진단](../../tmp/submit-crisis-timeout-20261014/sentinel-summary-callback-rebuild-diagnosis.json)을 원 실행 실패 증거로 보존한다.
+
+기존 summary producer 안에서 정확히 검토한 이전 parser/callback 계약을 현재 계약으로 이행한다. 별도 monitoring helper가 exact source hash와 callback의 전이 의존 함수·상수 동등성을 검증하며, 원 manifest/checkpoint·raw identity/offset·summary generation 검사를 그대로 적용한다. 현재일과 전일 모두 동일 producer가 bounded append를 수행하고 이전 manifest를 보존한다. 알 수 없는 계약·변조·한도 초과는 실패이며 원천 재스캔이나 제한시간 증액으로 덮지 않는다. native compact index 구현과 Main/AI/native 정책 계약은 바꾸지 않는다.
+
+후속 변경은 분리된 `tmp/submit-crisis-timeout-20261014/observer-prepare-followup`에서 리뷰·시험·배포 receipt를 남기며 첫 배포 증거를 덮어쓰지 않는다. 새 PID와 정규 보고서/후속 detector까지 검증한 뒤 코드·배포 수용을 구분해 기록한다. 새 자연 AI/주문 표본이 없는 경우 timeout 개선율·실제 제출·체결·경제성은 미판정으로 남긴다.
+
+[19:50 후속 검증](../../tmp/submit-crisis-timeout-20261014/postrestart-observer-successor-1950.json)은 기본 Sentinel이 약174.6초 뒤 성공했지만 observer 최소20초가 남지 않아 wrapper가75로 종료했음을 확인한다. 기존 총180초/최종 cleanup5초 안에서 첫 Sentinel 단계에 최대130초를 부여하고 observer40초와 첫 child 종료여유5초를 먼저 확보한다. 빠른 성공은 full observer로, 첫 단계 실패는 원 실패코드를 보존한 source-only 진단으로 이어진다. source-only의 현재 원천 진단 발행을 full Main semantic PASS로 승격하지 않는다.
+
+최종 검증이 정규 슬롯 종료 뒤에 끝나면, 승인된 배포 검증으로 기존 보고 생산자의 현재 PID·세대 결속과 출력 계약만 동일한 시간 상한에서 확인할 수 있다. 검증용 알림·주문·AI 호출은 수행하지 않고 수동 검증을 자연 정규 슬롯 수용으로 세지 않는다. 기존 자연3슬롯 owner와 원 결손·경제성 미판정은 유지한다.
+
+[19:55 자연 후속](../../tmp/submit-crisis-timeout-20261014/postrestart-observer-successor-1955.json)은 실행과 현재7c/PID의 발행은 완료했지만 의미 검증은 partial이었다. 정규 completed publication1회와 full coverage 수용0회를 구분한다. 정확한 terminal-session 원천 및 고정 watch 경계·기존 incident를 추가 대사하며 이 관찰만으로 경보 해소를 선언하지 않는다.
+
+[정확한290행 대사](../../tmp/submit-crisis-timeout-20261014/natural1955-observer-diagnosis.json)에서 원천은 최근600초를 완전히 덮었으며 모두 Main fixed-watch의 정상 진입 금지 대기였다. 기존15:30–16:00 경계에 더해 native resolver가 확정한19:40–19:45 CLOSE_ONLY와19:45–20:00 TERMINAL_EXIT만 정확한 venue/session 조합으로 인정한다. MAIN_FIXED_WATCH·고정종목·source quality pass·entry_allowed_by_clock=false·actual_order_submitted=false·broker_order_forbidden=true를 모두 요구한다. 잘못된 필드형·세션·시각·venue·owner·주문 증거는 계속 거부하며20:00 이후 CLOSED를 일반 허용하지 않는다.
+
+이는 원천 검증의290개 정상 대기 오분류만 수리한다. 회수한18:36:19 보고서와 동일한 과거 incident 객체 및 source_as_of19:15:13은 그대로 보존한다. 원 fixture의 semantic partial·current_observation_verified=false·full_coverage=false·runtime apply 금지를 유지하고 건강 판정만 bounded source-quality observation의 warning_pending으로 바뀐다. 과거 결손 회복·현재 AI 판단·자연 주문을 합성하지 않는다. 최종 monitor90388bc7와 기존 PREOPEN 원천의 exact pair를 인계 owner에 추가하며 기존 허용쌍을 보존한다. 후속 배포는 보호80개 중 검토한 H/monitor2쌍만 변경하고 나머지78개·native33개·보호 정책12개의 동일 bytes를 확인한다.
