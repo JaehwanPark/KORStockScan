@@ -197,3 +197,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 같은 기존 기동 owner는 현재 PID의 검증된 birth 하한·실제 유효600초/수명 읽기 범위·기동 전 historical 분리를 수용하고, 원10분/allPID의 실패/partial은 보존한다. exact 초기 수신 guard/native confirmation pending은 원 UNKNOWN/censored를 유지한 WARNING이며 성공 판정으로 전용하지 않는다. current unknown·증빙 손상·읽기 미완전·실제 계약 오류는 FAIL이다.
 
 같은 owner의 최종 보고서 건강 수용은 엄격한 완전 관측 검증과 별도로 bounded_source_quality_observation WARNING을 검증한다. fresh/current/정상 발행·정확한 actor/native/정책/schema/count·clean bounded reader·현재 issues0이 필수다. 원 source quality/AI invalid·timeout·미확인 PASS/소비·partial/uncovered를 보존하며 full validation/복구/매매 권한으로 전용하지 않는다. malformed/IO·변조·실제 계약 issues는 FAIL이다.
+
+기존 동일 기동/observer owner는 f25 첫 진단 PASS와 정규 semantic 실패를 보존하고, 최종 notify/세대 봉인 이후 건강 계산→실제 main 발행 dict의 재계산 equality를 추가 수용한다. 세대 교체 시 미발행, 정식 fixed_watch_post_receipt_warmup 대기의 원 typed/native/주문금지 계약도 검증한다. 정책/권한/OPEN/AUTO는 보존하며 data/report/observer_publication_order_deployment/2026-10-14의 실제 정규 보고서와 후속 daemon에서 닫는다.

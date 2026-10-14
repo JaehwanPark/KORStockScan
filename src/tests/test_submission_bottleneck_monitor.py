@@ -3006,7 +3006,7 @@ def test_pure_projection_requires_identical_generation_birth_and_complete_lifeti
     assert monitor.observation_health_projection(result)['status']=='not_eligible'
 
 
-@pytest.mark.parametrize('reason', ['post_receipt_observation_warmup','exact_0B_missing'])
+@pytest.mark.parametrize('reason', ['post_receipt_observation_warmup','fixed_watch_post_receipt_warmup','exact_0B_missing'])
 @pytest.mark.parametrize('bad', [False,True])
 def test_active_session_known_fixed_source_waits_are_warning_only_with_exact_safety(tmp_path,monkeypatch,reason,bad):
     now=monitor.stamp('2026-10-14T16:45:00+09:00')
@@ -3214,6 +3214,93 @@ def _observer_selection_fixture(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True); path.write_text(json.dumps(selection))
     path.with_suffix(".lock").write_text("")
     return root, path, selection, code
+
+
+@pytest.mark.parametrize('with_notify,change_selection',[(False,False),(True,False),(True,True)])
+def test_real_main_seals_final_generation_and_notification_before_health_publication(
+        tmp_path,monkeypatch,capsys,with_notify,change_selection):
+    """Exercise parser/evaluate/attach/lease/two finishes/notify/real atomic writes.
+
+    Expensive semantic readers use small deterministic receipts; birth proof is
+    read from the current test process's native kernel identity. No live report,
+    provider, Telegram or trading process is accessed.
+    """
+    import os
+    from copy import deepcopy
+    from pathlib import Path
+    root,selector,selection,_=_observer_selection_fixture(tmp_path,monkeypatch)
+    release=Path(selection['release_root']);(release/'src').mkdir()
+    monkeypatch.chdir(release/'src')
+    ticks=(Path('/proc')/str(os.getpid())/'stat').read_text().split(') ',1)[1].split()[19]
+    actor=[str(os.getpid()),ticks]
+    selection['actual_pid_receipt'].update(pid=os.getpid(),start_ticks=ticks)
+    selector.write_text(json.dumps(selection))
+    now=datetime.now(monitor.KST)
+    fixture=_observation_health_fixture(); old=monitor.stamp(fixture['as_of']);delta=now-old
+    def shift(value):
+        if isinstance(value,dict):return {k:shift(v) for k,v in value.items()}
+        if isinstance(value,list):return [shift(v) for v in value]
+        if isinstance(value,str) and len(value)>10 and value[10]=='T' and monitor.stamp(value):
+            return (monitor.stamp(value)+delta).isoformat()
+        return value
+    fixture=shift(fixture)
+    from src.trading.market import session_contract
+    context=session_contract.resolve_market_session(now)
+    fixture['source_gap_semantics']['fixed_watch_waits'].update(count=0,session_boundary_wait_count=0,
+        reason_counts={},native_session_regime=context.session_regime,native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+    # Real evaluate receives the same current input contract as the fixture.
+    inp=fixture['input_provenance']
+    raw=root/'source.json';raw.write_text(json.dumps(dict(target_date=now.date().isoformat(),dry_run=False,
+        submission_monitor=dict(schema=monitor.SCHEMA,as_of=inp['snapshot_as_of'],latest_event_at=inp['latest_event_at'],
+            rows=[],identity_missing_events=0,auxiliary_ai_semantic_issue_counts={}))))
+    class Clock(datetime):
+        calls=0
+        @classmethod
+        def now(cls,tz=None):
+            value=now+timedelta(seconds=cls.calls);cls.calls+=1
+            return value if tz else value.replace(tzinfo=None)
+    monkeypatch.setattr(monitor,'datetime',Clock)
+    monkeypatch.setattr(monitor,'PROJECT_ROOT',root)
+    for key in ('source_gap_semantics','machine_semantics','entry_execution_tuning_semantics'):
+        def reader(*args,_key=key):
+            result=deepcopy(fixture[_key])
+            if _key!='entry_execution_tuning_semantics':
+                result['current_health_cohort']=monitor._health_cohort(deepcopy(result),actor,now)
+            return result
+        monkeypatch.setattr(monitor,key,reader)
+    finishes=[];finish=monitor._finish_observer_generation
+    def recorded_finish(*args,**kwargs):
+        result=finish(*args,**kwargs);finishes.append(deepcopy(result));return result
+    monkeypatch.setattr(monitor,'_finish_observer_generation',recorded_finish)
+    def fake_notify(result,path):
+        assert len(finishes)==1
+        result['notification_status']='fake_sent_no_network'
+        result['last_notification_at']=now.isoformat()
+        result['incidents']['notification_fixture']=dict(status='recovered',last_seen=now.isoformat(),issues={})
+        if change_selection:selector.write_text(json.dumps({**selection,'actual_pid_consumed':False}))
+    monkeypatch.setattr(monitor,'notify',fake_notify)
+    projections=[];project=monitor.observation_health_projection
+    def project_after_final(result):
+        assert len(finishes)==2
+        generation=result['observer_generation']
+        assert generation==finishes[-1] and generation['sha256']==monitor._observer_seal(generation)
+        assert generation['actor_birth_proof']['status']=='verified'
+        if with_notify:assert result['notification_status']=='fake_sent_no_network'
+        value=project(result);projections.append(deepcopy(value));return value
+    monkeypatch.setattr(monitor,'observation_health_projection',project_after_final)
+    argv=['--report',str(raw)]+(['--notify'] if with_notify else [])
+    assert monitor.main(argv)==(75 if change_selection else 0)
+    terminal=json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    output=root/'data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json'
+    if change_selection:
+        assert not output.exists() and terminal['publication']=={} and projections==[]
+        return
+    latest=json.loads(output.read_text());state=json.loads((root/'tmp/submission_bottleneck_monitor_state.json').read_text())
+    dated=json.loads(output.with_name('submission_bottleneck_monitor_'+now.date().isoformat()+'.json').read_text())
+    assert latest==state==dated and latest['observation_health']==project(latest)==projections[0]
+    assert latest['observation_health']['status']=='warning_pending',latest['observation_health']
+    assert latest['observer_generation']['completed_at']==finishes[-1]['completed_at']
+    assert terminal['publication']==dict(state=True,latest=True,dated=True)
 
 
 def test_observer_generation_seals_selected_bytes_code_and_reported_pid(tmp_path, monkeypatch):

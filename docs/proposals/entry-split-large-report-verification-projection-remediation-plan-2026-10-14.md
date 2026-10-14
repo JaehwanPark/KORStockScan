@@ -324,3 +324,9 @@ startup_consumption_state는 정확한 읽기 CAS 경합만 pending으로 되돌
 최종 진단은 두 경로다. 첫 경로는 기존 엄격한 관측/보호/종료 증빙을 검증한다. 두 번째 bounded_source_quality_observation은 정상 발행·fresh/current generation·정확한 live actor/출생·입력 시각/schema/count/정책/native bootstrap/split/delay 증빙이 유효하고 현재 stage issues가 없을 때만 제한 관측을 WARNING/pending으로 표시한다. 허용된 읽기 부족은 명시적 tail_truncated·window_covered=false와 실제 bytes/source identity가 있는 clean bounded tail뿐이다. malformed/시각 누락/미완성 행/읽기 IO오류·신원/해시/정책 변조·실제 current 계약 issues는 FAIL이다. 미분류 진단은 임의로 허용하지 않는다.
 
 이 두 번째 경로에서는 원 semantic partial, 원 uncovered 범위·unmet_conditions·source_gaps·AI invalid/timeout·미확인 PASS/소비/사건 수치를 보존한다. current_observation_verified/full_coverage_proven은 false이며 PASS/복구/정책·주문 권한을 발행하지 않는다. AI 응답·Main 소비의 실제 guard는 원래대로 실패/보류하며 각 원천 품질 알림도 유지한다. 앞 절의 미확인 결과/깨끗한 bounded coverage 자체를 artifact FAIL로 취급하던 초기 기준은 이 경계로 보완한다. 실제로 없는 과거 결과나 source receipt는 만들지 않는다.
+
+## 20. 실제 main 발행 순서와 최종 projection 일치
+
+f25d3282d의17:19:54 기동/첫 진단 순서는 통과했지만17:20 정규 보고서의 건강 projection은 실패했다. main이 최종 observer_generation을 붙이기 전에 건강을 계산해 발행 후 재계산과 달라진 실제 결함이다. notify 전후에 generation을 두 번 확인하므로 단순히 첫 확인 뒤로 옮기는 것으로는 부족하다. 최종 세대 재확인과 알림 상태 갱신이 끝난 직후, 세 canonical 파일을 쓰기 직전에 건강을 계산한다. 같은 발행 dict에서 선언값과 재계산값이 일치해야 하며 세대 변경은 publication 없이 deferred다. 실제 정식 대기명 fixed_watch_post_receipt_warmup도 동일한 기존 typed/native scope/금지 주문 flags 계약으로 구분한다.
+
+회귀는 helper 조립 fixture만으로 닫지 않고 실제 main() parser→stage attach→notify→마지막 generation→projection→write 경로를 실행한다. optional notify 뒤 두 번째 generation 시각 변경, 실제 발행 dict 재계산 equality, 선택 세대 변경 시 미발행을 확인한다. provider/실원천 재계산·정책/매매 권한을 만들지 않는다. 원 f25 첫 진단 PASS와 자연 semantic 실패는 그대로 보존한다. 새 배포와 실제 첫 정규 보고서/후속 진단의 수용 owner는 data/report/observer_publication_order_deployment/2026-10-14다.

@@ -932,7 +932,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
                 and (fields.get('actual_order_submitted') is False or fields.get('actual_order_submitted') == 'False')
                 and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
             boundary_waits += 1
-        elif (reason in {'post_receipt_observation_warmup', 'exact_0B_missing'} and context is not None
+        elif (reason in {'post_receipt_observation_warmup', 'fixed_watch_post_receipt_warmup', 'exact_0B_missing'} and context is not None
                 and context.entry_allowed_by_clock is True
                 and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
                 and isinstance(row.get('stock_code'), str) and row['stock_code'] in fixed_symbols
@@ -3217,7 +3217,8 @@ def observation_health_projection(result):
             and count(waits.get('unclassified_or_actionable_wait_count'), maximum=0)
             and count(known_waits) and waits.get('count') == waits.get('session_boundary_wait_count')+known_waits
             and len(reasons) <= 16 and all(count(value, minimum=1) for value in reasons.values())
-            and set(reasons) <= {'session_generation_mismatch', 'post_receipt_observation_warmup', 'exact_0B_missing'}
+            and set(reasons) <= {'session_generation_mismatch', 'post_receipt_observation_warmup',
+                                'fixed_watch_post_receipt_warmup', 'exact_0B_missing'}
             and reasons.get('session_generation_mismatch', 0) == waits.get('session_boundary_wait_count')
             and sum(v for k,v in reasons.items() if k != 'session_generation_mismatch') == known_waits
             and context is not None and waits.get('native_session_regime') == context.session_regime
@@ -4484,8 +4485,6 @@ def main(argv=None):
                                          and not args.source_only and not args.delay_source_only)
                                          or any(_incomplete_semantics(result[name]) for name,_,_ in stages)
                                          else "validated")
-            if not args.delay_source_only:
-                result['observation_health'] = observation_health_projection(result)
             with (_observer_publication_lease(PROJECT_ROOT) if observer_generation is not None else nullcontext()):
                 if observer_generation is not None:
                     result["observer_generation"] = _finish_observer_generation(
@@ -4514,6 +4513,8 @@ def main(argv=None):
                         observer_generation=result["observer_generation"],
                         source_gap_status=(result.get("source_gap_semantics") or {}).get("status"))
                     raise ValidationDeferred(result["observer_generation"].get("reason") or "observer_generation_unavailable")
+                if not args.delay_source_only:
+                    result['observation_health'] = observation_health_projection(result)
                 for label, path in (("state", state_path), ("latest", output),
                                     ("dated", output.with_name(f"{name}_{result['date']}.json"))):
                     _write_state(path, result)
