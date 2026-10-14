@@ -139,6 +139,7 @@ def driver(tmp_path):
     d.before = D._json_bytes(d.old); d.selection.write_bytes(d.before)
     d.directory = runtime / 'transition'; d.directory.mkdir()
     d.state = {}; d.phase = 'preflight'; d.hold_bytes = None
+    d.validation_session = '1' * 32
     d.checklist = tmp_path / 'checklist.md'; d.checklist.write_text('original')
     d.document_before = b'original'; d.document_after = b'reviewed candidate'
     d.frozen = {str(d.checklist): D._digest(d.document_before)}
@@ -259,7 +260,7 @@ def test_start_refuses_unprepared_or_changed_generation(driver, monkeypatch, dam
 def test_launch_failure_restores_only_own_startup_hold(driver, monkeypatch):
     d=driver; d.acquire_hold();d.phase='drained'
     monkeypatch.setattr(D,'_main_pids',lambda:[]);d.publish();d.phase='prepared'
-    monkeypatch.setattr(D.R,'make_plan',lambda *a:dict(command=['no_launch'],cwd=str(d.workspace)))
+    monkeypatch.setattr(D.R,'make_plan',lambda *a:dict(command=['tmux','/usr/bin/env /bin/bash no_launch'],cwd=str(d.workspace)))
     monkeypatch.setattr(D,'_session_absent',lambda:True)
     def fail(*a,**kw):raise OSError('launch_failed')
     monkeypatch.setattr(D.subprocess,'run',fail)

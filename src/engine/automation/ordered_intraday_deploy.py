@@ -12,6 +12,8 @@ import json
 import os
 import subprocess
 import tempfile
+import uuid
+import shlex
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -134,8 +136,14 @@ class Deployment:
         self.flag = self.workspace / 'restart.flag'
         self.phase = 'new'
         self.hold_bytes = None
+        self.validation_session = uuid.uuid4().hex
 
     def run_json(self, root, module, *args, timeout=120):
+        # Predecessors may predate this opt-in CLI. Their native full path stays.
+        if root == self.candidate and module in {
+                'src.engine.automation.intraday_release_handoff',
+                'src.engine.automation.runtime_policy_bootstrap'}:
+            args = (*args, '--validation-session', self.validation_session)
         result = subprocess.run([str(root / '.venv/bin/python'), '-B', '-m', module, *args],
             cwd=root, env={**os.environ, 'PYTHONPATH': str(root)}, capture_output=True, text=True, timeout=timeout)
         if hasattr(self, 'directory'):
@@ -336,8 +344,13 @@ class Deployment:
         self.assert_hold()
         if self.phase != 'prepared' or self.selection.read_bytes() != self.published or _main_pids():
             raise ValueError('deployment_start_generation_changed')
-        self.hold.unlink()
         plan = R.make_plan(self.workspace, self.candidate, self.commit, 'start', self.day)
+        child = shlex.split(plan['command'][-1])
+        if child[0] != '/usr/bin/env':
+            raise ValueError('deployment_launcher_environment_contract_changed')
+        child.insert(1, 'KORSTOCKSCAN_VALIDATION_SESSION_ID=' + self.validation_session)
+        plan['command'][-1] = shlex.join(child)
+        self.hold.unlink()
         _launch(plan)
         self.checkpoint('starting')
 

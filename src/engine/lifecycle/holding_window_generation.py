@@ -33,6 +33,12 @@ def byte_generation(path):
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
         raise ValueError('window_dependency_path_invalid')
     before = path.stat()
+    from src.engine.infrastructure.validation_digest_session import reused_digest
+    reused = reused_digest(path)
+    if reused is not None:
+        if source_stat(path.stat()) != source_stat(before):
+            raise ValueError('window_dependency_changed_during_read')
+        return {'path': path.name, 'size': before.st_size, 'sha256': reused}
     sha = hashlib.sha256()
     size = 0
     with path.open('rb') as handle:

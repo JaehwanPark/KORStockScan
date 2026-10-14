@@ -3053,6 +3053,17 @@ class ArtifactFreshnessDetector(BaseDetector):
             details[f"{aid}_content_status"] = "invalid_json"
             return f"{aid}: invalid status JSON ({exc})"
 
+        if aid == 'submission_bottleneck_monitor' and isinstance(payload, dict) and 'execution_status' in payload:
+            details[f'{aid}_execution_status'] = payload.get('execution_status')
+            details[f'{aid}_semantic_status'] = payload.get('semantic_status')
+            details[f'{aid}_run_id'] = payload.get('run_id')
+            if (not re.fullmatch('[0-9a-f]{32}', str(payload.get('run_id', '')))
+                    or payload.get('execution_status') != 'completed'
+                    or payload.get('semantic_status') not in {'validated', 'partial'}):
+                return f'{aid}: observer execution incomplete or invalid'
+            if payload.get('semantic_status') == 'partial':
+                return f'{aid}: observer semantic coverage partial; publication is not full validation'
+
         current: Any = payload
         for part in str(status_field).split("."):
             if isinstance(current, dict) and part in current:

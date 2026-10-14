@@ -130,6 +130,13 @@ REVIEWED_IO_OBSERVER_SOURCES = {
         '0df0b5d81707fe66bd38f140a3bcb3c40d7d526d9afa55755a87b8dc8123d5a8'),
 }
 
+# Exact original PREOPEN to reviewed digest/observer bytes. No policy verdict reuse.
+# Evidence: docs/audits/main-io-residual-implementation-review-2026-10-14.md.
+REVIEWED_IO_DIGEST_SOURCES = {'src/engine/automation/runtime_policy_bootstrap.py': ('0df0b5d81707fe66bd38f140a3bcb3c40d7d526d9afa55755a87b8dc8123d5a8',
+                                                       '7a2e67d6d537ccc0a322bbbde8935f96de74869bc48e456bd13071225dd84b56'),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
+                                                            'fa572589c6b2f0ceedd943f16195ac43573d02d285438fd6c28d23e4a1157be9')}
+
 # Incumbent stop consumer compatibility only; numerical selection and research
 # remain pinned to the full current implementation generation.
 # Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
@@ -429,6 +436,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_JOINT_CONSUMER_SOURCES.get(name),
                     REVIEWED_REST_REDUCTION_SOURCES.get(name),
                     REVIEWED_IO_OBSERVER_SOURCES.get(name),
+                    REVIEWED_IO_DIGEST_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
             changed.append(name)
             continue
@@ -1007,27 +1015,35 @@ def main(argv=None):
     group.add_argument('--activate-main-v2',action='store_true')
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--old-pid", type=int)
+    parser.add_argument("--validation-session", help="internal transition digest scope; no verdict reuse")
     parser.add_argument("--pid", type=int)
     parser.add_argument("--previous-root")
     parser.add_argument("--confirm")
     parser.add_argument('--reseal-postclose-source', action='store_true')
     parser.add_argument('--previous-stopped', action='store_true')
     args = parser.parse_args(argv)
+    if args.validation_session and args.activate_main_v2:
+        parser.error("validation session cannot wrap policy activation")
+    from src.engine.infrastructure.validation_digest_session import transition_session, ValidationDeferred
+    session = None
     try:
-        if args.prepare:
-            result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root,
-                             confirm=args.confirm, reseal_postclose_source=args.reseal_postclose_source,
-                             previous_stopped=args.previous_stopped)
-        elif args.activate_main_v2:
-            result=activate_main_v2(args.target_date,pid=args.pid,confirm=args.confirm)
-        elif args.consume:
-            result = consume(args.target_date, pid=args.pid)
-        elif args.pid is not None:
-            result = verify_pid_consumption(args.target_date, pid=args.pid)
-        else:
-            result = verify(args.target_date, _selection(require_selected_cwd=False)[1])
-    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+        with transition_session(DATA_DIR, args.target_date, args.validation_session, args.pid) as session:
+            if args.prepare:
+                result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root,
+                                 confirm=args.confirm, reseal_postclose_source=args.reseal_postclose_source,
+                                 previous_stopped=args.previous_stopped)
+            elif args.activate_main_v2:
+                result=activate_main_v2(args.target_date,pid=args.pid,confirm=args.confirm)
+            elif args.consume:
+                result = consume(args.target_date, pid=args.pid)
+            elif args.pid is not None:
+                result = verify_pid_consumption(args.target_date, pid=args.pid)
+            else:
+                result = verify(args.target_date, _selection(require_selected_cwd=False)[1])
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, ValidationDeferred) as exc:
         result = {"status": "fail", "findings": [str(exc)]}
+    if session is not None:
+        result['validation_io'] = session.stats
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "pass" else 1
 

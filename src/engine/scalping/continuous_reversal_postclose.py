@@ -34,6 +34,10 @@ def digest(value):
 
 
 def file_hash(path):
+    from src.engine.infrastructure.validation_digest_session import reused_digest
+    reused = reused_digest(path)
+    if reused is not None:
+        return reused
     with Path(path).open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 

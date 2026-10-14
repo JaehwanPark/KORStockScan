@@ -27,6 +27,13 @@ readonly LAUNCHER_SOURCE_RUN_BOT_SHA256
 # shellcheck source=../deploy/cpu_affinity_profile.sh
 . "$PROJECT_DIR/deploy/cpu_affinity_profile.sh"
 DEFAULT_BOT_CPU_AFFINITY="$(korstockscan_default_cpu_affinity bot)"
+# Opaque digest namespace only. Every native policy/PID check still runs.
+VALIDATION_SESSION_ID="${KORSTOCKSCAN_VALIDATION_SESSION_ID:-$(tr -d '-' </proc/sys/kernel/random/uuid)}"
+if [[ ! "$VALIDATION_SESSION_ID" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "invalid validation session identity" >&2
+    exit 1
+fi
+unset KORSTOCKSCAN_VALIDATION_SESSION_ID
 
 wait_for_threshold_runtime_env() {
     local env_path="$1"
@@ -63,7 +70,7 @@ verify_threshold_runtime_env_handoff() {
     local verify_output
     if ! verify_output="$(
         PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.runtime_policy_bootstrap \
-            --verify --target-date "$target_date" 2>&1
+            --verify --target-date "$target_date" --validation-session "$VALIDATION_SESSION_ID" 2>&1
     )"; then
         echo "❌ threshold runtime env handoff 검증 실패: target_date=$target_date"
         printf '%s\n' "$verify_output"
@@ -86,16 +93,16 @@ record_threshold_runtime_env_pid_handoff() {
     if ! verify_output="$(
         PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.runtime_policy_bootstrap \
             --verify --target-date "$target_date" --pid "$bot_pid" \
-            --write-verify-artifact 2>&1
+            --write-verify-artifact --validation-session "$VALIDATION_SESSION_ID" 2>&1
     )"; then
         echo "⚠️ threshold runtime env PID 소비 receipt 기록 실패: target_date=$target_date pid=$bot_pid"
         printf '%s\n' "$verify_output"
         return 1
     fi
     PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.intraday_release_handoff \
-        --consume --target-date "$target_date" --pid "$bot_pid" || return 1
+        --consume --target-date "$target_date" --pid "$bot_pid" --validation-session "$VALIDATION_SESSION_ID" || return 1
     PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.intraday_release_handoff \
-        --verify --target-date "$target_date" --pid "$bot_pid" || return 1
+        --verify --target-date "$target_date" --pid "$bot_pid" --validation-session "$VALIDATION_SESSION_ID" || return 1
     echo "✅ threshold runtime env PID 소비 receipt 기록: target_date=$target_date pid=$bot_pid"
 }
 

@@ -74,37 +74,55 @@ if [[ "$USE_SUMMARY" == "1" ]]; then
   cmd+=(--use-summary)
 fi
 
+priority=()
 if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
-  cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
+  priority+=(taskset -c "$CPU_AFFINITY")
 fi
-
 if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then
-  cmd=(ionice -c "$IONICE_CLASS" -n "$IONICE_LEVEL" -t "${cmd[@]}")
+  priority+=(ionice -c "$IONICE_CLASS" -n "$IONICE_LEVEL" -t)
 fi
-
 if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
-  cmd=("$NICE_COMMAND" -n "$NICE_LEVEL" "${cmd[@]}")
+  priority+=("$NICE_COMMAND" -n "$NICE_LEVEL")
 fi
+# One budget for Sentinel, fallback, observer and owned-child cleanup.
+run_started_seconds=$SECONDS
+run_bounded() {
+  local remaining=$((180 - SECONDS + run_started_seconds - 5))
+  [[ "$remaining" -gt 0 ]] || return 75
+  timeout --signal=TERM --kill-after=5s "${remaining}s" "${priority[@]}" "$@"
+}
+run_monitor() {
+  local remaining=$((180 - SECONDS + run_started_seconds - 5))
+  [[ "$remaining" -ge 20 ]] || return 75
+  [[ "$remaining" -le 120 ]] || remaining=120
+  run_bounded env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.submission_bottleneck_monitor \
+    --report "$PROJECT_DIR/data/report/buy_funnel_sentinel/submission_bottleneck_source_${TARGET_DATE}.json" \
+    --notify --reuse-validation-digests --budget-seconds "$remaining" "$@"
+}
 
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
 echo "[START] buy funnel sentinel target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN} use_cache=${USE_CACHE} use_summary=${USE_SUMMARY}" | tee -a "$LOG_FILE"
 
-if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+if run_bounded "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   if [[ "$DRY_RUN" != "1" ]]; then
-    PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.submission_bottleneck_monitor \
-      --report "$PROJECT_DIR/data/report/buy_funnel_sentinel/submission_bottleneck_source_${TARGET_DATE}.json" --notify
+    if run_monitor 2>&1 | tee -a "$LOG_FILE"; then
+      :
+    else
+      exit_code=$?
+      echo "[FAIL] buy funnel sentinel target_date=${TARGET_DATE} reason=monitor_incomplete exit_code=${exit_code}" | tee -a "$LOG_FILE"
+      exit "$exit_code"
+    fi
   fi
   touch "$COOLDOWN_STATE_FILE"
   finished_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
-  echo "[DONE] buy funnel sentinel target_date=${TARGET_DATE} finished_at=${finished_at}" | tee -a "$LOG_FILE"
+  echo "[DONE] buy funnel sentinel target_date=${TARGET_DATE} finished_at=${finished_at} execution_status=completed semantic_status=see_monitor_terminal" | tee -a "$LOG_FILE"
 else
   exit_code=$?
   # The source-gap observer reads its own current-day bounded raw receipts.
   # Sentinel failure makes its funnel evidence unobservable, not its independent
   # probe/trace/pending receipts.
   if [[ "$DRY_RUN" != "1" ]]; then
-    if ! PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.submission_bottleneck_monitor \
-      --report "$PROJECT_DIR/data/report/buy_funnel_sentinel/submission_bottleneck_source_${TARGET_DATE}.json" --source-only --notify; then
+    if ! run_monitor --source-only 2>&1 | tee -a "$LOG_FILE"; then
       echo "[WARN] source-gap observer also failed target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
     fi
   fi

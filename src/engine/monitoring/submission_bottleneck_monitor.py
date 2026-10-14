@@ -7,6 +7,9 @@ import hashlib
 import json
 import math
 import os
+import time
+import uuid
+from contextlib import nullcontext
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -2333,10 +2336,37 @@ def entry_execution_tuning_semantics(data_root, now):
     return result
 
 
+def _incomplete_semantics(semantics):
+    statuses = {'unobservable', 'partial_unobservable', 'validation_deferred'}
+    sources = semantics.get('sources') or {}
+    return (semantics.get('status') in statuses
+            or bool(semantics.get('selection_status') or semantics.get('source_status'))
+            or any((value.get('status') if isinstance(value, dict) else value)
+                   not in {'complete', 'valid_empty', 'not_applicable'} for value in sources.values())
+            or any(isinstance(semantics.get(key), dict) and semantics[key].get('status') in statuses
+                   for key in ('bootstrap', 'entry_split', 'pre_submit_delay')))
+
+
+def _retain_unobserved_incident(result, semantics, key):
+    if not _incomplete_semantics(semantics):
+        return False
+    old = result['incidents'].get(key, {})
+    if semantics.get('issues'):
+        # Aggregate incident keys cannot discharge an unobserved old scope.
+        semantics['issues'] = {**old.get('issues', {}), **semantics['issues']}
+        return False
+    if old.get('status') == 'active' and old.get('notified_status') != 'active':
+        if key not in result['notification_pending']:
+            result['notification_pending'].append(key)
+    return True
+
+
 def attach_entry_execution_tuning_semantics(result, semantics):
     """Persist only contradictory receipt claims; source gaps remain diagnostic."""
     result["entry_execution_tuning_semantics"] = semantics
     key = "entry_execution_tuning_receipt_contract"
+    if _retain_unobserved_incident(result, semantics, key):
+        return
     old = result["incidents"].get(key, {})
     if semantics.get("issues"):
         now = stamp(result["as_of"])
@@ -2374,6 +2404,8 @@ def attach_machine_semantics(result, semantics):
     """Persistent report-only receipt faults; absence never repairs old evidence."""
     result["machine_semantics"] = semantics
     key = "machine_policy_receipt_contract"
+    if _retain_unobserved_incident(result, semantics, key):
+        return
     old = result["incidents"].get(key, {})
     if semantics.get("issues"):
         now = stamp(result["as_of"])
@@ -2835,7 +2867,8 @@ def notify(result, path, send=None):
     result["last_notification_at"] = result["as_of"]
 
 
-def main():
+def main(argv=None):
+    started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--notify", action="store_true")
@@ -2844,7 +2877,11 @@ def main():
     parser.add_argument("--delay-source-only", action="store_true",
                         help="Independently inspect current-day pre-submit source and producer summary.")
     parser.add_argument("--date", help="Exact KST date for independent source monitoring.")
-    args = parser.parse_args()
+    parser.add_argument("--reuse-validation-digests", action="store_true")
+    parser.add_argument("--budget-seconds", type=float, default=120)
+    args = parser.parse_args(argv)
+    if not math.isfinite(args.budget_seconds) or not 20 <= args.budget_seconds <= 120:
+        parser.error("observer_budget_requires_20_to_120_seconds")
     current = datetime.now(KST)
     if args.date and args.date != current.date().isoformat():
         parser.error("source_monitor_requires_current_kst_date")
@@ -2861,34 +2898,87 @@ def main():
             report = {}
     except (OSError, ValueError):
         report = {}
+    from src.engine.infrastructure.validation_digest_session import (
+        DigestSession, ValidationDeferred, bounded_lock, code_generation,
+    )
+    from src.engine.monitoring.observation_budget import computation_budget, ObservationDeadline
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    with state_path.with_suffix(".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        prior = _load_state(state_path)
-        result = evaluate({} if args.source_only or args.delay_source_only else report,
-                          prior, current)
-        if args.delay_source_only:
-            attach_pre_submit_delay_source_semantics(result, pre_submit_delay_source_semantics(
-                PROJECT_ROOT / "data", result["as_of"], prior.get("pre_submit_delay_source_cursor")))
-        elif not args.source_only:
-            attach_machine_semantics(result, machine_semantics(PROJECT_ROOT / "data", result["as_of"]))
-            attach_entry_execution_tuning_semantics(
-                result, entry_execution_tuning_semantics(PROJECT_ROOT / "data", result["as_of"])
-            )
-        if not args.delay_source_only:
-            attach_source_gap_semantics(result, source_gap_semantics(PROJECT_ROOT / "data", result["as_of"]))
-        if args.notify:
-            notify(result, output)
-        _write_state(state_path, result)
-        _write_state(output, result)
-        name = ("pre_submit_delay_source_monitor" if args.delay_source_only else "submission_bottleneck_monitor")
-        _write_state(output.with_name(f"{name}_{result['date']}.json"), result)
-    print(json.dumps({**{k: result.get(k) for k in ("status", "blocker", "notification_status")},
-                      "source_gap_status": (result.get("source_gap_semantics") or {}).get("status"),
-                      "pre_submit_delay_source_status": (
-                          result.get("pre_submit_delay_source_semantics") or {}).get("status")},
-                     ensure_ascii=False))
-    return 0
+    run_id = uuid.uuid4().hex
+    terminal = dict(schema="submission_monitor_execution_v1", run_id=run_id,
+                    target_date=current.date().isoformat(), execution_status="failed",
+                    semantic_status="unobservable", notification_status="not_attempted",
+                    publication={}, status="unobservable", blocker=None)
+    deadline = started + args.budget_seconds
+    result = None
+    session = None
+    try:
+        with bounded_lock(state_path.with_suffix(".lock"), private=False):
+            prior = _load_state(state_path)
+            result = evaluate({} if args.source_only or args.delay_source_only else report,
+                              prior, current)
+            result["run_id"] = run_id
+            deferred = False
+            stages = [("pre_submit_delay_source_semantics", attach_pre_submit_delay_source_semantics,
+                       lambda: pre_submit_delay_source_semantics(PROJECT_ROOT / "data", result["as_of"],
+                                                                 prior.get("pre_submit_delay_source_cursor")))] if args.delay_source_only else [
+                ("source_gap_semantics", attach_source_gap_semantics,
+                 lambda: source_gap_semantics(PROJECT_ROOT / "data", result["as_of"]))]
+            if not args.source_only and not args.delay_source_only:
+                stages += [
+                    ("entry_execution_tuning_semantics", attach_entry_execution_tuning_semantics,
+                     lambda: entry_execution_tuning_semantics(PROJECT_ROOT / "data", result["as_of"])),
+                    ("machine_semantics", attach_machine_semantics,
+                     lambda: machine_semantics(PROJECT_ROOT / "data", result["as_of"]))]
+            if args.reuse_validation_digests:
+                session = DigestSession(PROJECT_ROOT / "data", current.date().isoformat(),
+                                        role="observer", generation=code_generation())
+            for name, attach, read in stages:
+                try:
+                    with computation_budget(deadline-15):
+                        with (session.activate() if session and name in {
+                                'entry_execution_tuning_semantics', 'machine_semantics'} else nullcontext()):
+                            semantics = read()
+                    attach(result, semantics)
+                except (ObservationDeadline, ValidationDeferred) as exc:
+                    deferred = True
+                    semantics = dict(status="validation_deferred", reason=str(exc), issues={})
+                    # Source/cursor observers own their own richer recovery
+                    # rules. Do not feed them a synthetic empty observation.
+                    if name in {"machine_semantics", "entry_execution_tuning_semantics"}:
+                        attach(result, semantics)
+                    else:
+                        result[name] = semantics
+                        if name == "pre_submit_delay_source_semantics" and "pre_submit_delay_source_cursor" in prior:
+                            result["pre_submit_delay_source_cursor"] = prior["pre_submit_delay_source_cursor"]
+            result["execution_status"] = "deferred" if deferred else "completed"
+            result["semantic_status"] = ("partial" if deferred or (result.get("status") == "unobservable"
+                                         and not args.source_only and not args.delay_source_only)
+                                         or any(_incomplete_semantics(result[name]) for name,_,_ in stages)
+                                         else "validated")
+            if args.notify:
+                if time.monotonic() + 12 < deadline:
+                    notify(result, output)
+                else:
+                    result["notification_status"] = "retry_required:resource_budget"
+            if session:
+                result["validation_io"] = dict(session.stats)
+            result["execution_wall_seconds"] = time.monotonic()-started
+            name = "pre_submit_delay_source_monitor" if args.delay_source_only else "submission_bottleneck_monitor"
+            for label, path in (("state", state_path), ("latest", output),
+                                ("dated", output.with_name(f"{name}_{result['date']}.json"))):
+                _write_state(path, result)
+                terminal["publication"][label] = True
+            terminal.update({k:result.get(k) for k in ("status", "blocker", "notification_status",
+                                                      "execution_status", "semantic_status")})
+            terminal["source_gap_status"] = (result.get("source_gap_semantics") or {}).get("status")
+            terminal["pre_submit_delay_source_status"] = (result.get("pre_submit_delay_source_semantics") or {}).get("status")
+    except ValidationDeferred as exc:
+        terminal.update(execution_status="deferred", blocker=str(exc))
+    except (OSError, ValueError) as exc:
+        terminal.update(execution_status="failed", blocker=type(exc).__name__)
+    terminal["wall_seconds"] = time.monotonic()-started
+    print(json.dumps(terminal, ensure_ascii=False))
+    return 0 if terminal["execution_status"] == "completed" else 75 if terminal["execution_status"] == "deferred" else 1
 
 
 if __name__ == "__main__":

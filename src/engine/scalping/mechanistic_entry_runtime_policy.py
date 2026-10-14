@@ -369,6 +369,12 @@ def _cached_source_hash(path: str, signature: tuple) -> str:
     source = Path(path)
     if _signature(source) != signature:
         raise ValueError("machine_policy_source_changed_during_read")
+    from src.engine.infrastructure.validation_digest_session import reused_digest
+    reused = reused_digest(source)
+    if reused is not None:
+        if _signature(source) != signature:
+            raise ValueError('machine_policy_source_changed_during_read')
+        return reused
     key = signature[1:6]  # device/inode/size/mtime/ctime; aliases share the digest
     with _HASH_LOCK:
         cached = _HASH_CACHE.get(key)

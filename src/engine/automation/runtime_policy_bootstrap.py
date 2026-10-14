@@ -2214,6 +2214,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="persist the explicit verification result as the current receipt",
     )
+    parser.add_argument("--validation-session", help="internal transition digest scope; all native checks still run")
     parser.add_argument("--pid", type=int)
     parser.add_argument("--receipt", action="append", type=Path, default=[])
     args = parser.parse_args(argv)
@@ -2221,6 +2222,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("select exactly one of --write or --verify")
     if args.write_verify_artifact and not args.verify:
         parser.error("--write-verify-artifact requires --verify")
+    if args.validation_session and args.write:
+        parser.error("validation session is verification-only")
     if args.write:
         result = write_bootstrap(args.target_date, receipt_paths=args.receipt)
         verification = verify_bootstrap(args.target_date)
@@ -2235,11 +2238,20 @@ def main(argv: list[str] | None = None) -> int:
                      and result["future_handoff_transition"]["status"] in {
                          "linked", "not_applicable", "off"
                      }) else 1
-    result = verify_bootstrap(
-        args.target_date,
-        pid=args.pid,
-        write=args.write_verify_artifact,
-    )
+    from src.engine.infrastructure.validation_digest_session import transition_session, ValidationDeferred
+    session = None
+    try:
+        with transition_session(DATA_DIR, args.target_date, args.validation_session, args.pid) as session:
+            result = verify_bootstrap(
+                args.target_date,
+                pid=args.pid,
+                write=args.write_verify_artifact,
+            )
+    except (OSError, ValueError, ValidationDeferred) as exc:
+        result = dict(status='fail', passed=False, target_date=args.target_date,
+                      findings=[str(exc)])
+    if session is not None:
+        result["validation_io"] = session.stats
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "pass" else 1
 

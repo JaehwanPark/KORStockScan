@@ -57,7 +57,7 @@
 
 ## 실행 항목
 
-- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-14`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-14`, `Slot: PREOPEN`, `TimeWindow: 다음 승인된 적용·기동 시점`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-13.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-13.json)
   - 판정 기준: source_date=`2026-10-13`, apply_date=`2026-10-14`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=incumbent_preserved); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=df061c25b6f68a6979ebbdb5f3b2093666589240ce6e100cd04ca3bb94467ac0, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
@@ -127,12 +127,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 10/14 승인 구현의 자연 수용 인계
 
-- [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 07:55~08:15`, `Track: RuntimeStability`)
+- [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
   - Source: [보조 회로·제출 보완계획](../proposals/main-auxiliary-circuit-recovery-and-submit-receipt-remediation-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md).
   - Acceptance: 실제 새 PID/cwd/start ticks·bundle/registry 소비, 같은 시장명 비교의 receipt→revision→sizing 연결, 원 native5초·단일 recovery lease·공통 인증/unknown fail-closed·보호 exit 독립성을 확인한다. 회로가 자연히 열리지 않으면 HALF_OPEN 성공을 주장하지 않고 pending으로 남긴다. PASS와 intent/send/fill/terminal을 분리한다.
   - History: 10/12 계획의 P0-A/B/P1 새 결함만 구현 범위다. 기존 완료 native/readiness/auth owner 전체를 다시 열지 않는다. 기동 준비·배포 수용은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다.
 
-- [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 07:55~08:15`, `Track: RuntimeStability`)
+- [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
   - Source: [잔여 병목·패턴 보완계획](../proposals/main-post-readiness-residual-bottleneck-and-unidentified-pattern-research-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md).
   - Acceptance: 슬롯5/long2·60/150초·원 lease deadline 보존, mixed branch 긴 관측 순환, exact item/route/epoch/sequence의 0D count·중복/신원 결손 분리, Main 편입 첫 실패와 capture/lease/record/PID/start 연결을 확인한다. 등록6정의/4scope의 registry·native root·OR 한 기회 소비를 실제 대상에서 확인하며 신호 미발생은 pending이다. PRE NXT와 AFTER SOR 범위를 REGULAR로 복사하지 않는다.
   - History: 10/12 완료 owner의 R1/R2/R4 새 결함 범위와 지정 등록의 자연 수용만 전달한다. 과거 원천의 route/count·미확정 손익을 소급 보충하지 않고 새 경제성/미래 날짜 gate를 추가하지 않는다.
@@ -144,3 +144,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - `NonfixedDispatchReadinessReview1012`는 기존 Acceptance를 유지하며 정규 08:00/08:05/08:10 Sentinel 연속 3회 DONE/exit 0, 전체 report population·source freshness≤600초, cold/warm 구분과 RSS/wall/논리·물리 I/O를 확인한다. 최초 색인 약1.12GiB의 저장·cold 비용을 포함하며 frozen 읽기79.3% 감소를 자연 성능이나80% 목표 달성으로 표시하지 않는다. 현재 정책의 실제 registry/정의/scope 소비를 검증하며 과거 등록 수치를 새 membership으로 합성하지 않는다.
 - `AuxiliaryCircuitRecoveryRepair1012`는 같은 정상 attempt의 stage clocks·local p95/p99·offered/timeout/censored 분모와 원 native5초·필수 저장/guard를 확인한다. 초기 구간에 자연 신호나 HALF_OPEN 표본이 없으면 pending을 유지하고 실제 표본에 연결한다. 새 실주문/provider replay를 검증용으로 만들지 않는다.
 - History: 10/13 I/O 코드/격리 parity·비용 검증은 완료 기록이며, 최신 장후 수리와 결합한 코드 검증·선택 릴리스·준비·실제 PID·자연 성능을 분리한다. 기존 주문/수량/가격/계좌/custody/퇴역/운영자 가드 및 separately approved policy를 보존한다.
+
+
+### 10/14 최종 릴리스 기준 I/O 추가 구현 인계
+
+- Source: [구현 리뷰](../audits/main-io-residual-implementation-review-2026-10-14.md), [보완 계획](../proposals/main-io-residual-validation-and-monitor-read-amplification-remediation-plan-2026-10-14.md).
+- 기존 `NonfixedDispatchReadinessReview1012`는 정상/source-only의 priority·단일 예산·보류 이력 보존·native cold/warm parity와 적용 후 정규3슬롯 source age/분모/worker I/O를 수용한다. bytes 감소와 전체 host p95는 별도이며 synthetic8MiB 실험을 실운영 개선으로 승격하지 않는다.
+- 기존 `DirectFamilyPreopenPolicyHandoff`는 명시적 transition digest session의 기본 full 경로·원 정책/selector/PID 독립 검사를 유지한다. 선택5fb4c0a33의 Main 정지 상태는 구현으로 해제하지 않는다. 기존07:35~08:15 및08:00/08:05/08:10 창은 새 구현의 수용 일정이 아니다. 새 기동·배포가 수행될 때 native source/code handoff와 실제 successor receipt를 따로 검증한다.
+- 기존 `AuxiliaryCircuitRecoveryRepair1012`는 실제 정상 attempt가 생긴 뒤 원5초 deadline·local 지연·offered/timeout/censored·필수 guard를 비교한다. Main 정지/자연 표본 부재는 pending이며 구현·단위시험 통과로 닫지 않는다.
+- 이 인계는 격리 candidate의 checklist 변경이다. 공유 operational checklist·selector·정책·프로세스는 구현 중 변경하지 않으며, 이후 허용된 배포의 snapshot/CAS 절차가 이 문서 publication을 소유한다. 원 Acceptance/History와 stable ID를 유지한다.

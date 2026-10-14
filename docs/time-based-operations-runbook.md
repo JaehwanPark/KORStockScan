@@ -552,6 +552,13 @@ tmux ls
 
 BUY Funnel Sentinel 본체가 실패해도 같은 wrapper는 기계·보조 AI의 독립 원천 감시를 실행하고 원래 실패 코드를 유지한다. 이때 기존 제출 분류는 유효하지 않으며 독립 원천 영수증만 검토한다.
 
+Sentinel과 정상/source-only 후속 monitor는 같은 nice/ionice/CPU affinity를 사용한다. wrapper는 전체180초(마지막5초 자식 회수 포함), monitor는 남은 예산과120초 중 작은 값을 사용한다. monitor 계산은 마지막15초를 publication/알림에 남긴다. 상태/store 잠금은2초 내 획득하고 충돌이나 검증 시간 초과는 `validation_deferred`/exit75 및 wrapper `[FAIL]`로 남긴다. 성공 cooldown은 하류 publication까지 완료된 실행만 갱신한다. 원천 미관측은 기존 pending/active 이력을 지우지 않는다.
+
+`submission_monitor_execution_v1` stdout terminal의 `run_id`, `execution_status`, `semantic_status`, `notification_status`, `publication`을 구별한다. state/latest/dated에는 같은 run_id를 저장한다. `[DONE]`과 exit0는 실행 완료이며 전체 관측/PID 소비/경제성 PASS가 아니다. freshness detector는 신규 execution 필드의 deferred/failed/partial을 알림 idle과 별도로 판정한다. 구형 receipt는 기존 검사를 유지한다. 중간 write 실패와 notification retry를 정상 전송으로 표시하지 않는다.
+
+wrapper의 명시적 `--reuse-validation-digests`는 `data/runtime/validation_digests/observer`의 local 파일 SHA만 재사용한다. 정책 선택·source 목록·경로·PID·receipt 검사는 매번 수행한다. 1MiB 이상 동일 local mount 파일의 dev/inode/size/mtime/ctime·권한·symlink 세대를 확인하며 최대6시간,32세대·각512KiB로 제한한다. 정상 warm hit는 cache fsync를 반복하지 않는다. 저장소 손상/부적격은 full fallback이며 timeout을 source 손상으로 해석하지 않는다. `validation_io`의 full/reused bytes는 native 파일 읽기 비용이고 전체 worker 성능과 별도다. 운영 근거는 [I/O 추가 구현 리뷰](audits/main-io-residual-implementation-review-2026-10-14.md)를 따른다.
+
+
 `build_codex_daily_workorder --slot INTRADAY`는 이 절차를 `IntradayAutomationHealthCheckYYYYMMDD`로 자동 포함한다.
 
 1. Sentinel은 상태 확인용이다. BUY/HOLD-EXIT 이상치가 보여도 runtime threshold를 바꾸지 않는다.
