@@ -272,6 +272,33 @@ def test_launch_failure_restores_only_own_startup_hold(driver, monkeypatch):
     assert d.state['failed_phase']=='prepared'
 
 
+def test_start_uses_real_router_after_releasing_only_owned_hold(driver, monkeypatch):
+    d=driver;d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D,'_main_pids',lambda:[]);d.publish();d.phase='prepared'
+    calls=[]
+    def launch(plan):
+        assert not d.hold.exists()
+        assert plan['cwd']==str(d.candidate/'src')
+        assert 'KORSTOCKSCAN_VALIDATION_SESSION_ID='+d.validation_session in plan['command'][-1]
+        calls.append(plan)
+    monkeypatch.setattr(D,'_launch',launch)
+    d.start()
+    assert d.phase=='starting' and len(calls)==1
+
+
+def test_router_planning_failure_restores_owned_hold_through_failure_handler(driver, monkeypatch):
+    d=driver;d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D,'_main_pids',lambda:[]);d.publish();d.phase='prepared'
+    def fail(*a):
+        assert not d.hold.exists()
+        raise ValueError('native_router_failure')
+    monkeypatch.setattr(D.R,'make_plan',fail)
+    monkeypatch.setattr(D,'_launch',lambda *a:pytest.fail('planning failure cannot launch'))
+    with pytest.raises(ValueError,match='native_router_failure'):d.start()
+    d.fail(ValueError('native_router_failure'))
+    assert d.hold.read_bytes()==d.hold_bytes and d.state['failed_phase']=='prepared'
+
+
 def test_failed_validation_keeps_selected_generation_held_without_false_success(driver, monkeypatch):
     d=driver;d.acquire_hold();d.phase='drained'
     monkeypatch.setattr(D,'_main_pids',lambda:[]);d.publish()

@@ -346,13 +346,16 @@ class Deployment:
         self.assert_hold()
         if self.phase != 'prepared' or self.selection.read_bytes() != self.published or _main_pids():
             raise ValueError('deployment_start_generation_changed')
+        # The native router rejects every startup hold, including ours. The
+        # release-set lock still serializes launch; execute() restores this
+        # exact owned hold on any planning/launch failure before attestation.
+        self.hold.unlink()
         plan = R.make_plan(self.workspace, self.candidate, self.commit, 'start', self.day)
         child = shlex.split(plan['command'][-1])
         if child[0] != '/usr/bin/env':
             raise ValueError('deployment_launcher_environment_contract_changed')
         child.insert(1, 'KORSTOCKSCAN_VALIDATION_SESSION_ID=' + self.validation_session)
         plan['command'][-1] = shlex.join(child)
-        self.hold.unlink()
         _launch(plan)
         self.checkpoint('starting')
 

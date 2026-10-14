@@ -27,7 +27,7 @@ metadata 재사용은 같은 OS/local writer와 ctime 세대 검출을 신뢰한
 1. 검증 결과 전체를 cache하는 초안을 파일 digest만 공유하는 설계로 고쳤다. 부재/새 후보/env·PID 조건을 빠짐없이 cache key로 복제해야 하는 부담을 제거하고 native 검사를 매회 유지했다.
 2. machine 경로 외 delay ledger의 `byte_generation` 원천 재해시를 연결했다. 작은 파일·누적 compact 계산과 기존 source inventory 오류는 유지했다.
 3. deferred/partial이 incident를 초기화하는 경로, blocking state lock, monitor exit0와 freshness 정상 판정 혼동을 수정했다. 실제 source gap을 확인했더라도 다른 source가 미관측이면 partial로 남긴다.
-4. independent source-only에 불필요한 machine cache lock을 걸지 않게 수정했다. 새 phase context와 실제 tmux child 전달을 확인했고, launcher 명령 검증 뒤에만 자기 hold를 제거하도록 순서를 보완했다.
+4. independent source-only에 불필요한 machine cache lock을 걸지 않게 수정했다. 새 phase context와 실제 tmux child 전달을 확인했고, launcher 명령에 세션 namespace를 전달했다. 후속 실제 router 연동에서 hold 해제 순서 오류를 발견해 아래 재리뷰로 보완했다.
 5. synthetic 측정에서 warm cache에도 fsync가 발생하는 결함을 찾아 제거했다. TTL은 hit로 연장하지 않으며 storage/partial publication 실패는 정상 완료로 바꾸지 않는다.
 6. 이전 테스트의 mock launcher 명령과 생성자 우회 fixture를 새 계약에 맞췄다. 실제 standalone/default opt-out, cross-process reuse, PID 검사 재실행·실패 전달, native policy/monitor parity, source rewrite/alias/expiry/corruption/permission/ENOSPC/lock·deadline·notification 이력·wrapper failure propagation을 재검증했다.
 
@@ -60,3 +60,11 @@ metadata 재사용은 같은 OS/local writer와 ctime 세대 검출을 신뢰한
 첫 candidate `b98559625`의 native prepare가10:10 KST에 `holding_path_vote_policy_receipt_mismatch,holding_path_vote_policy_stale_env`로 차단됐다. 변경한 `holding_window_generation.py`가 보유 vote 수치 연구의 code pin에도 포함되지만 reviewed pair와 선택 전 holding code 검증이 빠진 것이 원인이다. Main은 기동되지 않았고 원 정책/PREOPEN/env/manifest/prepared byte는 보존됐다. 실패 phase·자기 hold·선택을 보존한 뒤 release/detector 잠금과 byte CAS로 기존5fb4c0a33 정지 선택·공유 문서를 복원했다. [실패 복구 기록](../../tmp/main-io-residual-deploy-20261014/failed-attempt-recovery.json)을 성공으로 덮어쓰지 않는다.
 
 원 PREOPEN code pin에서 실제 리뷰한 holding generation 파일까지 exact SHA pair를 추가했다. 새 `verify_candidate_holding_vote_code`는 native bundle 구조/receipt/date/origin/carry를 검사하고 approved source delta를 선택 전 검증한다. 수치 successor는 기존 current code 계약을 유지하고 전체 source/bootstrap 검증도 다시 수행한다. 일반 ordered driver와 이번 정지 배치 preflight 모두 이 검사를 사용한다. 잘못된 origin/date/bundle/path, 미검토 코드, 수치 successor와 원천·verifier 변조를 반례로 추가했다. [표적760개](../../tmp/main-io-residual-deploy-20261014/holding-fix-tests.log) 통과; 보유 native 회귀와 최종 통합 검증은 재배포 기록에 별도 봉인한다.
+
+### Native router의 자기 hold 순서 보완
+
+두 번째 candidate `0aceeec35`는 delay/stop/holding preflight와 native prepare/bootstrap/auxiliary 준비를 통과했다. 이어 `make_plan`이 자기 startup hold를 일반 operator hold로 차단하여 Main launch 전에 정지했다. 실제 router를 mock한 기존 테스트가 이 연동을 검증하지 못했다. 기존 성공·실패 기록을 보존하고 같은 CAS 절차로 정지 선택을 복원했다.
+
+release-set lock을 계속 유지한 채 소유 byte·phase·selector·Main 부재를 검증하고 **자기 hold 제거 → 원 router 계획/명령 검증 → launcher → PID** 순서로 고쳤다. 계획/launch 실패는 기존 failure handler가 자기 hold를 exclusive 생성하며 다른 operator hold를 덮어쓰지 않는다. 실제 router 호출과 계획 실패/hold 복원 반례를 추가했다. 정책 검증을 생략하거나 router hold guard를 완화하지 않았다. 최종 후보는 이 보완을 포함해 재배포한다.
+
+두 번째 준비의 bootstrap은 `full_reads=0`, `reused_reads=2`, `reused_bytes=10438031954`로 native PASS였다(2.04초, 전체 logical read251,291,057 bytes). 이는 해당 재검증 단계의 실측이며 전체 서버·정규3슬롯 성능 PASS는 아니다.
