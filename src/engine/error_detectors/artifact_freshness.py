@@ -353,6 +353,26 @@ def _submission_observer_actor_issue(payload):
             return 'observer_current_main_identity_changed'
     except (OSError, ValueError, TypeError, KeyError, IndexError):
         return 'observer_current_main_not_running'
+    # A report may bound its health window by this exact process lifetime only
+    # when the kernel independently confirms the declared birth evidence. Old
+    # reports without this additive evidence retain their strict full-window
+    # behavior; they do not acquire an inferred lifetime allowance here.
+    declared = generation.get('actor_birth_proof')
+    cohorts = [stage.get('current_health_cohort')
+               for stage in (payload.get('source_gap_semantics'), payload.get('machine_semantics'))
+               if isinstance(stage, dict)]
+    cohort_proofs = [value.get('actor_birth_proof') for value in cohorts if isinstance(value, dict)]
+    if declared is not None or any(value is not None for value in cohort_proofs):
+        try:
+            from src.engine.monitoring.submission_bottleneck_monitor import _attest_health_actor_birth
+            at = datetime.fromisoformat(str(payload.get('as_of')))
+            native = _attest_health_actor_birth(generation, at)
+            if (not isinstance(declared, dict) or declared.get('status') != 'verified'
+                    or native.get('status') != 'verified' or native != declared
+                    or any(value != declared for value in cohort_proofs)):
+                return 'observer_current_main_birth_unproven'
+        except (OSError, ValueError, TypeError, KeyError, IndexError, OverflowError):
+            return 'observer_current_main_birth_unproven'
     return None
 
 

@@ -39,6 +39,69 @@ DELAY_RAW_BUDGET = 32 * 1024 * 1024
 DELAY_WINDOW_SEC = 600
 DELAY_SUMMARY_GRACE_SEC = 150
 _HEALTH_ACTOR = ContextVar('submission_monitor_health_actor', default=None)
+_HEALTH_BIRTH = ContextVar('submission_monitor_health_birth', default=None)
+
+
+def _verified_health_actor_birth(proof, actor, now, generation=None):
+    """Validate the additive native birth receipt without I/O or authority."""
+    try:
+        if (not isinstance(proof, dict) or proof.get('schema') != 'submission_monitor_actor_birth_v1'
+                or proof.get('status') != 'verified' or proof.get('actor') != actor
+                or proof.get('runtime_effect') is not False or proof.get('allowed_runtime_apply') is not False
+                or not isinstance(actor, list) or len(actor) != 2
+                or any(not isinstance(p, str) or not p.isdigit() or not 0 < len(p) <= 20
+                       or int(p) <= 0 for p in actor)):
+            return None
+        epoch, hz, ticks = (proof.get(k) for k in ('boot_epoch', 'clock_ticks_per_second', 'start_ticks'))
+        if (any(type(v) is not int or v <= 0 for v in (epoch, hz, ticks))
+                or hz > 1000000 or ticks != int(actor[1])):
+            return None
+        lower = epoch + ticks / hz - 1.0  # btime has second precision; retain the preceding second.
+        if (not 0 < lower <= now.timestamp() or type(proof.get('birth_lower_bound_epoch')) not in (int, float)
+                or proof['birth_lower_bound_epoch'] != lower
+                or proof.get('birth_lower_bound_at') != datetime.fromtimestamp(lower, KST).isoformat()
+                or stamp(proof.get('observed_at')) != now
+                or not isinstance(proof.get('process_cwd'), str) or not Path(proof['process_cwd']).is_absolute()):
+            return None
+        if generation is not None:
+            receipt = generation.get('selector_reported_pid_receipt') or {}
+            if (proof != generation.get('actor_birth_proof') or stamp(generation.get('started_at')) != now
+                    or actor != [str(receipt.get('pid') or ''), str(receipt.get('start_ticks') or '')]
+                    or proof['process_cwd'] != receipt.get('process_cwd')
+                    or proof['process_cwd'] != str(Path(generation['release_root']) / 'src')):
+                return None
+        return lower
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError, OSError):
+        return None
+
+
+def _attest_health_actor_birth(generation, now):
+    """One bounded local attestation; no broker/source query or order authority."""
+    try:
+        receipt = generation['selector_reported_pid_receipt']
+        pid, ticks = receipt['pid'], receipt['start_ticks']
+        if type(pid) is not int or pid <= 0 or not isinstance(ticks, str) or not ticks.isdigit():
+            raise ValueError('actor_identity_invalid')
+        path = Path('/proc') / str(pid)
+        before = _observer_regular_bytes(path/'stat', limit=65536)
+        observed_ticks = before.decode().split(') ',1)[1].split()[19]
+        cwd = str((path/'cwd').resolve(strict=True))
+        boot = _observer_regular_bytes(Path('/proc/stat'), limit=256*1024).decode()
+        epoch = int(next(line.split()[1] for line in boot.splitlines() if line.startswith('btime ')))
+        hz = os.sysconf('SC_CLK_TCK')
+        if (observed_ticks != ticks or cwd != receipt['process_cwd']
+                or cwd != str(Path(generation['release_root'])/'src') or type(hz) is not int or hz <= 0
+                or _observer_regular_bytes(path/'stat', limit=65536).decode().split(') ',1)[1].split()[19] != ticks):
+            raise ValueError('actor_live_identity_changed')
+        lower = epoch+int(ticks)/hz-1.0
+        if not 0 < lower <= now.timestamp():
+            raise ValueError('actor_birth_clock_invalid')
+        return dict(schema='submission_monitor_actor_birth_v1', status='verified', actor=[str(pid),ticks],
+            observed_at=now.isoformat(), boot_epoch=epoch, clock_ticks_per_second=hz, start_ticks=int(ticks),
+            birth_lower_bound_epoch=lower, birth_lower_bound_at=datetime.fromtimestamp(lower,KST).isoformat(),
+            process_cwd=cwd, runtime_effect=False, allowed_runtime_apply=False)
+    except (OSError,ValueError,KeyError,TypeError,IndexError,StopIteration,OverflowError):
+        return dict(schema='submission_monitor_actor_birth_v1',status='unverified',runtime_effect=False)
 
 
 @contextmanager
@@ -50,17 +113,24 @@ def _health_actor_scope(generation):
         if all(p.isdigit() and 0 < len(p) <= 20 and int(p) > 0 for p in parts):
             actor = parts
     token = _HEALTH_ACTOR.set(actor)
+    proof = generation.get('actor_birth_proof') if isinstance(generation,dict) else None
+    at = stamp(generation.get('started_at')) if isinstance(generation, dict) else None
+    birth_token = _HEALTH_BIRTH.set(proof if at and
+        _verified_health_actor_birth(proof, actor, at, generation) is not None else None)
     try:
         yield
     finally:
         _HEALTH_ACTOR.reset(token)
+        _HEALTH_BIRTH.reset(birth_token)
 
 
 def _health_cohort(view, actor, now, *, excluded=0):
-    return dict(schema='submission_monitor_current_health_cohort_v1', as_of=now.isoformat(),
+    result = dict(schema='submission_monitor_current_health_cohort_v1', as_of=now.isoformat(),
         window_seconds=SOURCE_WINDOW_SEC, actor=list(actor), view=view,
         excluded_observation_count=excluded, excluded_classification='historical_not_current_cohort',
         decision_authority='report_only', runtime_effect=False, allowed_runtime_apply=False)
+    if _HEALTH_BIRTH.get():result['actor_birth_proof']=_HEALTH_BIRTH.get()
+    return result
 
 
 def _row_actor(row):
@@ -701,6 +771,43 @@ def _probe_verified_no_match(row, *, allow_incomplete=False):
         return False
 
 
+def _probe_verified_pending(row):
+    """Recognize exact pending native observation; UNKNOWN remains unassessed."""
+    import ast
+    if not _probe_verified_no_match(row, allow_incomplete=True):
+        return None
+    try:
+        fields = row['fields']
+        if fields.get('zero_base_probe_reason') != 'confirmation_pending_at_residence_end':
+            return None
+        receipt = fields['native_observation_receipt']
+        if isinstance(receipt, str):
+            try: receipt = json.loads(receipt)
+            except ValueError: receipt = ast.literal_eval(receipt)
+        truth, counts = receipt['selected_branch_truth'], receipt['selected_lifecycle_counts']
+        if (receipt.get('reason') != 'required_window_incomplete' or 'UNKNOWN' not in truth.values()
+                or any(v not in {'FALSE', 'UNKNOWN'} for v in truth.values())
+                or set(counts) != set(truth) or len(truth) > 512
+                or any(type(receipt.get(k)) is not int or receipt[k] < 0 for k in
+                       ('selected_pending_count', 'source_censored_count', 'raw_ready_count', 'selected_ready_count'))
+                or receipt['selected_pending_count'] <= 0 or receipt['raw_ready_count'] != 0
+                or receipt['selected_ready_count'] != 0):
+            return None
+        unknown = 0
+        for values in counts.values():
+            if (not isinstance(values, dict) or not set(values) <= {'TRUE', 'FALSE', 'UNKNOWN'}
+                    or any(type(v) is not int or v < 0 for v in values.values())
+                    or values.get('TRUE', 0) or not sum(values.values())):
+                return None
+            unknown += values.get('UNKNOWN', 0)
+        if not unknown:
+            return None
+        return dict(pending_count=receipt['selected_pending_count'], unknown_count=unknown,
+                    source_censored_count=receipt['source_censored_count'])
+    except (KeyError, ValueError, TypeError, SyntaxError, RecursionError):
+        return None
+
+
 def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loaded=None, _actor=None):
     """Observe source causes before and after machine assessment without trading authority."""
     now = stamp(now)
@@ -713,18 +820,37 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
     sources, issues, diagnostics, observed = {}, Counter(), Counter(), Counter()
     loaded = {} if _loaded is None else _loaded
     excluded_rows = 0
+    excluded_prebirth = 0
 
     def read_source(path, at, *, time_field, **kwargs):
-        nonlocal excluded_rows
+        nonlocal excluded_rows, excluded_prebirth
         if _loaded is None:
             rows, receipt = _recent_source_rows(path, at, time_field=time_field, **kwargs)
             loaded[str(path)] = (rows, receipt)
         else:
             rows, receipt = loaded[str(path)]
         if _actor:
-            selected = [r for r in rows if _row_actor(r) in (None, _actor)]
+            birth = _HEALTH_BIRTH.get()
+            lower = _verified_health_actor_birth(birth, _actor, at) if birth else None
+            selected=[]
+            for row in rows:
+                identity = _row_actor(row)
+                at_row = stamp(row.get(time_field))
+                if identity is None and lower is not None and at_row is not None and at_row.timestamp()<lower:
+                    excluded_prebirth+=1
+                    continue
+                if identity in (None,_actor):selected.append(row)
             excluded_rows += len(rows)-len(selected)
             rows, receipt = selected, dict(receipt, recent_count=len(selected))
+            first = stamp(receipt.get('first_read_at'))
+            window_start = max(at.timestamp()-SOURCE_WINDOW_SEC, lower) if lower is not None else None
+            if (window_start is not None and first is not None and first.timestamp()<=window_start
+                    and receipt.get('status')=='partial' and receipt.get('window_covered') is False
+                    and receipt.get('malformed_rows')==0 and receipt.get('missing_timestamp_rows')==0
+                    and receipt.get('incomplete_last_line') is False):
+                receipt.update(status='complete',window_covered=True,original_window_status='partial',
+                    coverage_basis='current_actor_lifetime_bounded_tail',
+                    current_window_start_at=datetime.fromtimestamp(window_start,KST).isoformat())
         return rows, receipt
     issue_scopes, diagnostic_scopes, healthy_scopes = Counter(), Counter(), Counter()
     issue_examples, diagnostic_examples = [], []
@@ -782,7 +908,8 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
     from src.engine.scalping.main_fixed_watch import SPECS
     fixed_symbols = {spec.symbol for spec in SPECS}
     native_session = session_contract.resolve_market_session(now)
-    wait_total = boundary_waits = unclassified_waits = 0
+    wait_total = boundary_waits = source_waits = unclassified_waits = 0
+    pending_total = pending_verified = pending_unknown = pending_censored = 0
     wait_reasons = Counter()
     for row in probe_rows:
         if row.get('pipeline') != 'ENTRY_PIPELINE' or row.get('stage') != 'main_fixed_watch_observation_wait':
@@ -790,7 +917,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
         wait_total += 1
         fields = row.get('fields') if isinstance(row.get('fields'), dict) else {}
         reason = fields.get('source_quality_reason')
-        reason = reason if isinstance(reason, str) and re.fullmatch('[a-z_]{1,80}', reason) else 'unclassified'
+        reason = reason if isinstance(reason, str) and re.fullmatch('[A-Za-z0-9_]{1,80}', reason) else 'unclassified'
         wait_reasons[reason if reason in wait_reasons or len(wait_reasons) < 16 else 'other'] += 1
         row_at = stamp(row.get('emitted_at'))
         context = session_contract.resolve_market_session(row_at) if row_at else None
@@ -805,6 +932,19 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
                 and (fields.get('actual_order_submitted') is False or fields.get('actual_order_submitted') == 'False')
                 and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
             boundary_waits += 1
+        elif (reason in {'post_receipt_observation_warmup', 'exact_0B_missing'} and context is not None
+                and context.entry_allowed_by_clock is True
+                and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
+                and isinstance(row.get('stock_code'), str) and row['stock_code'] in fixed_symbols
+                and fields.get('venue_source_quality_status') == 'pass'
+                and (fields.get('effective_venue'), fields.get('market_session_bucket')) in {
+                    ('KRX', 'krx_regular') if context.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
+                    else ('KRX_NXT_INTEGRATED', session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET)
+                    if context.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+                    else ('PREMARKET_KRX_LIKE', 'krx_like_premarket')}
+                and (fields.get('actual_order_submitted') is False or fields.get('actual_order_submitted') == 'False')
+                and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
+            source_waits += 1
         else:
             unclassified_waits += 1
     for row in probe_rows:
@@ -839,6 +979,12 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
                 healthy("machine_probe", row, route)
         elif result == 'observation_incomplete':
             observed['probe_observation_incomplete']+=1
+            pending_total += 1
+            pending = _probe_verified_pending(row)
+            if pending is not None:
+                pending_verified += 1
+                pending_unknown += pending['unknown_count']
+                pending_censored += pending['source_censored_count']
             if _probe_verified_no_match(row,allow_incomplete=True):
                 covered_by_route[str(route or 'UNKNOWN')]+=1
             record('machine_probe','native_observation_incomplete',row,diagnostic=True,
@@ -1093,11 +1239,17 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
         "sources": sources, "observed": dict(observed), "issues": dict(sorted(issues.items())),
         "fixed_watch_waits": {"schema": "submission_monitor_fixed_watch_wait_census_v1",
             "count": wait_total, "session_boundary_wait_count": boundary_waits,
+            "known_source_wait_count": source_waits,
             "unclassified_or_actionable_wait_count": unclassified_waits,
             "reason_counts": dict(sorted(wait_reasons.items())),
             "native_session_regime": native_session.session_regime,
             "native_entry_allowed_by_clock": native_session.entry_allowed_by_clock,
             "runtime_effect": False},
+        "native_pending_observations": {"schema": "submission_monitor_native_pending_census_v1",
+            "count": pending_total, "verified_pending_count": pending_verified,
+            "unclassified_count": pending_total-pending_verified, "unknown_count": pending_unknown,
+            "source_censored_count": pending_censored, "runtime_effect": False,
+            "machine_admission_proven": False, "pattern_no_match_proven": False},
         "async_pass_projection": pass_projection[-128:],
         "async_pass_unmapped_count": unmapped_pass_count,
         "async_transition_projection": [dict(emitted_at=row.get('emitted_at'),
@@ -1129,6 +1281,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
             excluded=view.pop('_excluded_health_rows', 0))
     elif _actor:
         result['_excluded_health_rows'] = excluded_rows
+        result['excluded_pre_actor_birth_count'] = excluded_prebirth
     return result
 
 
@@ -2954,6 +3107,12 @@ def observation_health_projection(result):
                 and isinstance(p.get('view'), dict) for p in projections))
         require(valid, 'current_health_cohort_binding_invalid')
         if valid:
+            proofs = [p.get('actor_birth_proof') for p in projections]
+            generation = result.get('observer_generation')
+            if any(p is not None for p in proofs) or isinstance(generation, dict) and generation.get('actor_birth_proof') is not None:
+                require(proofs[0] == proofs[1] and isinstance(generation, dict)
+                        and _verified_health_actor_birth(proofs[0], actor, now, generation) is not None,
+                        'current_health_actor_birth_invalid')
             stages[:2] = [p['view'] for p in projections]
             receipt = obj(obj(result.get('observer_generation')).get('selector_reported_pid_receipt'))
             if result.get('observer_generation') is not None:
@@ -2975,6 +3134,27 @@ def observation_health_projection(result):
     allowed_diagnostics.add('machine_trace:source_quality_blocked_before_assessment')
     allowed_diagnostics.update('machine_trace:' + reason for reason in
         ('reversal_first_signal_invalidated', 'reversal_signal_generation_changed'))
+    pending = obj(gap.get('native_pending_observations'))
+    pending_n = obj(gap.get('observed')).get('probe_observation_incomplete', 0)
+    valid_pending = (pending.get('schema') == 'submission_monitor_native_pending_census_v1'
+        and count(pending_n, minimum=1) and pending.get('count') == pending_n
+        and pending.get('verified_pending_count') == pending_n
+        and count(pending.get('count'), minimum=1) and count(pending.get('verified_pending_count'), minimum=1)
+        and count(pending.get('unclassified_count'), maximum=0)
+        and count(pending.get('unknown_count'), minimum=1) and count(pending.get('source_censored_count'))
+        and pending.get('runtime_effect') is False and pending.get('machine_admission_proven') is False
+        and pending.get('pattern_no_match_proven') is False)
+    if valid_pending:
+        allowed_diagnostics.add('machine_probe:native_observation_incomplete')
+    require(not pending_n or valid_pending, 'native_pending_observation_not_verified')
+    no_match_n = obj(gap.get('observed')).get('probe_native_no_match', 0)
+    no_match_routes = obj(gap.get('probe_route_native_no_match_counts'))
+    valid_no_match = (count(no_match_n, minimum=1) and len(no_match_routes) <= 16
+        and all(count(v) for v in no_match_routes.values()) and sum(no_match_routes.values()) == no_match_n
+        and obj(gap.get('diagnostics')).get('machine_probe:native_no_matching_pattern') == no_match_n)
+    if valid_no_match:
+        allowed_diagnostics.add('machine_probe:native_no_matching_pattern')
+    require(not no_match_n or valid_no_match, 'native_no_match_observation_not_verified')
     diagnostics = obj(gap.get('diagnostics'))
     scoped = obj(gap.get('diagnostics_by_scope'))
     totals = Counter()
@@ -2998,7 +3178,8 @@ def observation_health_projection(result):
     observed_valid = (isinstance(gap.get('observed'), dict)
         and set(observed) <= {'probe_results', 'probe_assessed', 'entry_traces', 'machine_assessed',
             'auxiliary_required', 'auxiliary_called', 'auxiliary_cost_bound',
-            'auxiliary_pending', 'auxiliary_pending_bound'}
+            'auxiliary_pending', 'auxiliary_pending_bound', 'auxiliary_transport_unavailable',
+            'probe_observation_incomplete', 'probe_native_no_match'}
         and all(count(v) for v in observed.values()))
     expected_gap = ('gap_observed' if diagnostics else 'observed_no_gap' if any(observed.values())
                     else 'unobservable')
@@ -3026,23 +3207,33 @@ def observation_health_projection(result):
         'probe_route_counts_invalid')
     waits = obj(gap.get('fixed_watch_waits'))
     reasons = obj(waits.get('reason_counts'))
+    known_waits = waits.get('known_source_wait_count', 0)
     from src.trading.market import session_contract
     context = session_contract.resolve_market_session(now) if now else None
     require(waits.get('schema') == 'submission_monitor_fixed_watch_wait_census_v1'
             and waits.get('runtime_effect') is False
             and count(waits.get('count')) and count(waits.get('session_boundary_wait_count'))
             and count(waits.get('unclassified_or_actionable_wait_count'), maximum=0)
-            and waits.get('count') == waits.get('session_boundary_wait_count')
-            and len(reasons) <= 16 and all(count(value) for value in reasons.values())
-            and (waits.get('count') == 0 and reasons == {}
-                 or count(waits.get('count'), minimum=1)
-                    and reasons == {'session_generation_mismatch': waits.get('count')})
+            and count(known_waits) and waits.get('count') == waits.get('session_boundary_wait_count')+known_waits
+            and len(reasons) <= 16 and all(count(value, minimum=1) for value in reasons.values())
+            and set(reasons) <= {'session_generation_mismatch', 'post_receipt_observation_warmup', 'exact_0B_missing'}
+            and reasons.get('session_generation_mismatch', 0) == waits.get('session_boundary_wait_count')
+            and sum(v for k,v in reasons.items() if k != 'session_generation_mismatch') == known_waits
             and context is not None and waits.get('native_session_regime') == context.session_regime
             and waits.get('native_entry_allowed_by_clock') is context.entry_allowed_by_clock,
             'excluded_fixed_watch_wait_not_proven_boundary')
     for name in ('probe', 'trace', 'pending'):
         source = obj(sources.get(name))
         identity = obj(source.get('source_identity'))
+        if source.get('coverage_basis') == 'current_actor_lifetime_bounded_tail':
+            proof = projections[0].get('actor_birth_proof') if actor else None
+            lower = _verified_health_actor_birth(proof, actor, now, result.get('observer_generation'))
+            first = clock(source.get('first_read_at'))
+            start = max(now.timestamp()-SOURCE_WINDOW_SEC, lower) if lower is not None and now else None
+            require(start is not None and first is not None and first.timestamp() <= start
+                    and source.get('original_window_status') == 'partial'
+                    and source.get('current_window_start_at') == datetime.fromtimestamp(start,KST).isoformat(),
+                    'actor_lifetime_source_coverage_invalid:' + name)
         require(source.get('status') == 'complete' and source.get('window_covered') is True
                 and source.get('incomplete_last_line') is False
                 and count(source.get('malformed_rows'), maximum=0)
@@ -3346,11 +3537,145 @@ def observation_health_projection(result):
                 incidents_valid = False
                 break
     require(incidents_valid, 'active_current_or_unknown_incident')
+    # A completed bounded report can faithfully report incomplete source/AI
+    # outcomes. Preserve every original quality failure without relabelling the
+    # report's successful publication as an execution failure. This second path
+    # grants WARNING only; it cannot validate a decision, PASS or trade.
+    soft = {'current_failure_or_diagnostic_present', 'source_population_not_unassessed',
+        'source_window_not_complete:probe', 'source_window_not_complete:trace', 'source_window_not_complete:pending',
+        'machine_selection_or_source_not_verified', 'machine_provider_lineage_not_recorded_guard_or_nonentry',
+        'pending_or_withheld_auxiliary_pass_not_quiet', 'active_current_or_unknown_incident'}
+
+    def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC):
+        source=obj(source); identity=obj(source.get('source_identity'))
+        base = (source.get('incomplete_last_line') is False
+            and count(source.get('malformed_rows'), maximum=0) and count(source.get('missing_timestamp_rows'), maximum=0)
+            and count(source.get('recent_count')) and count(source.get('read_count'), minimum=1, maximum=1)
+            and count(source.get('bytes_read'), minimum=1, maximum=maximum)
+            and count(source.get('source_size'), minimum=source.get('bytes_read') if count(source.get('bytes_read')) else 1)
+            and count(identity.get('device')) and count(identity.get('inode'), minimum=1)
+            and not source.get('reason') and ('adjacent_partition' not in source
+                or obj(source.get('adjacent_partition')).get('status') == 'complete'))
+        if not base: return False
+        if source.get('status') == 'complete' and source.get('window_covered') is True: return True
+        first=clock(source.get('first_read_at'))
+        return (source.get('status') == 'partial' and source.get('window_covered') is False
+            and source.get('tail_truncated') is True and first is not None and now is not None and first <= now
+            and (now-first).total_seconds() < window
+            and source['source_size'] > source['bytes_read'])
+
+    bounded = False
+    if failed and set(failed) <= soft:
+        generation=obj(result.get('observer_generation'))
+        birth=obj(generation.get('actor_birth_proof'))
+        actor_valid=(actor is not None and generation.get('status') == 'current'
+            and generation.get('generation_current') is True and generation.get('selector_reported_actual_pid_consumed') is True
+            and _verified_health_actor_birth(birth, actor, now, generation) is not None
+            and all(p.get('actor_birth_proof') == birth for p in projections))
+        stages_clean=(all(stage.get('issues') == {} and stage.get('issues_by_scope',{}) == {}
+            and all(stage.get(k) in (None,'') for k in ('selection_status','source_status','error','errors','reason'))
+            for stage in stages) and result.get('issues',{}) == {} and result.get('diagnostics',{}) == {}
+            and all(stage.get('provider_lineage_source_status') in (None,'') for stage in (gap,execution))
+            and machine.get('provider_lineage_source_status') in (None,'','partial_source_gap')
+            and isinstance(result.get('notification_pending'),list)
+            and all(key == 'machine_auxiliary_intraday_source_gap' for key in result['notification_pending']))
+        source_shape=(gap.get('schema') == 'machine_auxiliary_intraday_source_semantics_v1'
+            and clock(gap.get('as_of')) == now and gap.get('status') == expected_gap
+            and gap.get('runtime_effect') is False and gap.get('decision_authority') == 'report_only'
+            and observed_valid and set(sources) == {'probe','trace','pending'}
+            and gap.get('async_transition_projection_coverage') in ('complete','partial')
+            and gap.get('async_pass_projection_coverage') in ('complete','partial')
+            and isinstance(gap.get('async_pass_projection'),list) and len(gap['async_pass_projection']) <= 128
+            and isinstance(gap.get('async_transition_projection'),list) and len(gap['async_transition_projection']) <= 1024
+            and count(gap.get('async_pass_unmapped_count'))
+            and all(clean_reader(source,SOURCE_TAIL_BYTES) for source in sources.values()))
+        machine_shape=(machine.get('status') in (expected_machine,'partial_unobservable')
+            and machine.get('decision_authority') == 'report_only' and machine.get('selection_family') == 'continuous_reversal'
+            and publication.get('status') == 'native_frozen_family_verified' and publication.get('effective_date') == day
+            and sha(machine.get('current_bundle_sha256')) and 0 < len(selections) <= 512
+            and all(obj(row).get('score_contract_valid') is True for row in selections.values())
+            and count(machine.get('read_count'),minimum=1,maximum=1)
+            and count(machine.get('read_limit_bytes'),minimum=1,maximum=8*1024*1024)
+            and count(machine.get('bytes_read'),minimum=1,maximum=machine['read_limit_bytes']
+                      if count(machine.get('read_limit_bytes')) else 0)
+            and count(machine.get('source_bytes'),minimum=machine.get('bytes_read')
+                      if count(machine.get('bytes_read')) else 1)
+            and machine.get('window_coverage') in ('bounded_suffix','complete_file_prefix')
+            and (machine.get('window_coverage') != 'bounded_suffix' or machine.get('tail_truncated') is True
+                and machine['source_bytes'] > machine['bytes_read'])
+            and machine.get('action_replay_performed') is False)
+        lineage_shape=True
+        if lineage:
+            windows=obj(lineage.get('source_windows')); gaps=obj(lineage.get('source_gaps'))
+            allowed_gaps={'observation_trace_unresolved','request_unresolved','request_identity_missing',
+                          'trace_identity_missing','observation_identity_missing'}
+            outcome_counts=('machine_observation_count','trace_attempt_count','request_prepared_count',
+                'provider_transmission_attempt_count','raw_response_observed_count','auxiliary_response_contract_valid_count',
+                'raw_pass_count','valid_pass_count','execution_valid_pass_count','provider_timeout_count',
+                'enter_without_request_observed','exact_attempt_join_gap_count')
+            ledger=lineage.get('attempt_ledger'); ledger_shape=isinstance(ledger,list) and len(ledger) <= 4096
+            ledger_keys=set(); ledger_hashes=set()
+            if ledger_shape:
+                for row in ledger:
+                    row=obj(row); digest=row.get('machine_observation_sha256'); at=clock(row.get('trace_decision_ts'))
+                    key=tuple(row.get(k) for k in ('evaluation_attempt_id','decision_trace_id'))
+                    if (not all(isinstance(v,str) and 0 < len(v) <= 256 for v in key)
+                            or key in ledger_keys or [row.get('producer_pid'),row.get('producer_start_ticks')] != actor
+                            or row.get('machine_bundle_sha256') != machine.get('current_bundle_sha256')
+                            or at is None or now is None or not 0 <= (now-at).total_seconds() <= SOURCE_WINDOW_SEC+5
+                            or digest is not None and (not sha(digest) or digest in ledger_hashes)
+                            or digest is None and (row.get('machine_action') is not None
+                                or lineage.get('status') != 'partial_source_gap'
+                                or not any(count(gaps.get(k),minimum=1) for k in
+                                    ('observation_trace_unresolved','trace_identity_missing','observation_identity_missing')))
+                            or row.get('machine_action') not in (None,'SOURCE_INVALID','RECHECK','BLOCK','ENTER_NOW')
+                            or row.get('raw_verdict') not in (None,'PASS','CAUTION','VETO','INSUFFICIENT')
+                            or row.get('effective_screen_status') is not None and (
+                                not isinstance(row['effective_screen_status'],str) or not 0 < len(row['effective_screen_status']) <= 96)
+                            or any(type(row.get(k)) is not bool for k in ('request_prepared','transmission_attempt_observed',
+                                'raw_response_observed','timeout'))
+                            or any(row.get(k) is not None and type(row[k]) is not bool for k in
+                                ('auxiliary_response_contract_valid','post_response_execution_valid'))
+                            or not isinstance(row.get('execution_errors'),list) or len(row['execution_errors']) > 64
+                            or any(not isinstance(v,str) or not 0 < len(v) <= 256 for v in row['execution_errors'])):
+                        ledger_shape=False; break
+                    ledger_keys.add(key)
+                    if digest is not None:ledger_hashes.add(digest)
+            lineage_shape=(lineage.get('status') in ('observed','partial_source_gap') and lineage.get('issues') == {}
+                and lineage.get('decision_authority') == 'report_only' and lineage.get('exact_pid_filter') == actor
+                and lineage.get('current_pid_coverage') == 'exact_live_pid'
+                and all(count(lineage.get(k)) for k in outcome_counts)
+                and isinstance(lineage.get('source_gaps'),dict) and set(gaps) <= allowed_gaps
+                and all(count(v,minimum=1) for v in gaps.values())
+                and sum(gaps.values()) == lineage.get('exact_attempt_join_gap_count')
+                and set(windows) == {'requests','traces'}
+                and all(clean_reader(v,8*1024*1024,SOURCE_WINDOW_SEC+5) for v in windows.values())
+                and ledger_shape and len(ledger) == lineage.get('trace_attempt_count')
+                and lineage.get('machine_observation_count') == n
+                and lineage.get('execution_valid_pass_count',0) <= lineage.get('valid_pass_count',0)
+                    <= lineage.get('raw_pass_count',0) <= lineage.get('raw_response_observed_count',0)
+                and lineage.get('auxiliary_response_contract_valid_count',0) <= lineage.get('raw_response_observed_count',0))
+        quality_incidents=True
+        if not incidents_valid:
+            quality_incidents=isinstance(incidents,dict) and len(incidents) <= 256
+            if quality_incidents:
+                for key,item in incidents.items():
+                    item=obj(item); last=clock(item.get('last_seen')); state=item.get('status')
+                    if last is None or now is None or last > now: quality_incidents=False; break
+                    if state in ('recovered','superseded_alias','reclassified') or (
+                            state == 'historical_unresolved' and (now-last).total_seconds() > SOURCE_WINDOW_SEC): continue
+                    quality=obj(item.get('issues'))
+                    if (key != 'machine_auxiliary_intraday_source_gap' or state not in ('pending','active','historical_unresolved')
+                            or not quality or any(k not in {'machine_probe:coverage_degraded:'+route for route in
+                                ('krx_only','nxt_only','krx_nxt_integrated')} or not count(v,minimum=1)
+                                for k,v in quality.items())):
+                        quality_incidents=False; break
+        bounded=bool(actor_valid and stages_clean and source_shape and machine_shape and lineage_shape and quality_incidents)
     return {
         'schema': 'submission_monitor_observation_health_v1',
-        'status': 'not_eligible' if failed else 'warning_pending',
-        'severity': 'unchanged' if failed else 'warning',
-        'reason': ('health_conditions_not_met' if failed else 'recorded_guard_or_cohort_pending'
+        'status': 'not_eligible' if failed and not bounded else 'warning_pending',
+        'severity': 'unchanged' if failed and not bounded else 'warning',
+        'reason': ('bounded_source_quality_observation' if bounded else 'health_conditions_not_met' if failed else 'recorded_guard_or_cohort_pending'
                    if counts_valid and n or diagnostics or any(observed.values())
                    else 'bounded_no_applicable_observations'),
         'unmet_conditions': failed, 'current_observation_verified': False,
@@ -4102,6 +4427,8 @@ def main(argv=None):
     run_id = uuid.uuid4().hex
     observer_generation = (None if args.delay_source_only else _observer_generation_snapshot(
         PROJECT_ROOT, run_id=run_id, target_date=current.date().isoformat(), started_at=current))
+    if observer_generation is not None:
+        observer_generation['actor_birth_proof']=_attest_health_actor_birth(observer_generation,current)
     terminal = dict(schema="submission_monitor_execution_v1", run_id=run_id,
                     target_date=current.date().isoformat(), execution_status="failed",
                     semantic_status="unobservable", notification_status="not_attempted",

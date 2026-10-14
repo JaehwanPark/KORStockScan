@@ -76,3 +76,13 @@
 해당 native 모듈1개만 바뀌므로 이전128scope 근거를 그대로 수용하지 않는다. 기준945/수리 candidate를 같은76,800행에 새로 재생해128scope·621hits·동일 signal SHA를 확인하고 runner/원본·후보 source hash/결과를 결속한다. source-only 수리의 새 code handoff는 이 정확한 old/new 모듈과 fresh parity를 검증한 뒤 기존 정의/bundle/pointer를 보존해 발행한다. C.issue의 source_semantics_repair 계약을 사용하며 새 정책·원천 과거 채움·추가 경제 gate를 만들지 않는다. 새 PID의 자연 주성 입력 생성/기존 conflict 비재발과 detector 결과를 별도로 확인한다.
 
 최종 source 동결 후 관련15 suite 통합2,034개가41.21초에 통과했다. compile·bash 문법·diff 검사와 현재 owner4개/문서 링크70개/print-only parser25항목 검증을 닫는다. 기동·순서·observer 세대/현재600초 cohort·과거30분/allPID 이력 보존·실제 입력 충돌/미확인 소비 FAIL 반례를 포함하며 시험의 중복 합산은 하지 않는다. 배포 후 자연 예약과 새 PID의 원천 충돌 비재발은 별도 receipt로 수용한다.
+
+## 10. 자연 수용 실패로 발견한 startup CAS 경합
+
+다섯 번째 b0d795c1c는 정책/기동 배포 PASS와 달리 첫 진단 수용이 실패했다. 원 보고서와 startup-acceptance.json은 data/report/observer_alert_dimensions_deployment/2026-10-14와 별도 원 tmp 증거에 보존한다. 원인은 최종 영수증 교체 중의 읽기 충돌을 영구 실패로 처리해 ordered 완료 전에 full sweep을 실행한 것이다. 정확한 CAS 읽기 경합만 기존 원150초 내 pending/retry로 취급하며 실제 영수증 오류와 기한 실패를 유지한다. observer/거래 정책과 모든 native kernel은 변경하지 않는다. 후속 배포·첫 진단·정규 예약 수용은 data/report/startup_receipt_race_deployment/2026-10-14에 별도로 남긴다.
+
+다섯 번째 정규 보고서의 남은 path conflict3건은 새 PID 출생 전108초 이상 앞선 과거 행이었다. 원tail은 현 PID 생애 전체를 포함했으나 고정10분 경계만 검사해 partial이었다. 현재 native birth의 보수적 하한·전체 수명 읽기 증빙으로 정확한 현재 cohort를 검증하고 원 과거/allPID/10분 partial을 별도 보존한다. 초기 수신 대기와 검증된 native confirmation pending은 UNKNOWN 그대로 WARNING이며 no-match/PASS로 승격하지 않는다. 기동 후 미확인 신원·현재 구간 미완전·실제 오류/잘못된 증빙은 FAIL이다. 이 실제 반례까지 포함해 여섯 번째 리뷰·시험·자연 예약으로 수용한다.
+
+최신16:56 자연 보고서에서 현재 source/machine issues는 없지만 clean bounded 읽기·AI 결과/소비 미검증까지 artifact 실패로 묶인 경계를 추가 보완한다. 엄격한 검증 경로와 별개로, 유효한 발행/세대/시각/actor/native/정책/schema/count 및 실제 오류0을 확인한 제한 관측은 WARNING/pending이다. source quality·미확인 PASS·invalid/timeout·원 uncovered 범위는 유지하며 full coverage/PASS/복구/매매 권한을 만들지 않는다. 잘못된 읽기/신원/정책/실제 issues는 FAIL이다. 이 최종 기준은 앞선 엄격 경로의 미검증 결과를 artifact FAIL로만 취급하던 기준을 보완한다.
+
+최종 여섯 번째 source 동결 후8suite 통합1,730개가12.50초에 통과했다. Python compile·bash 문법·diff 검사와70개 문서 링크/기존4owner/print-only parser25항목을 확인한다. 원150초의 실제 영수증 교체 경합, native birth/현재 수명, complete/clean bounded 관측과 AI invalid/timeout/미확인 PASS의 경고 경계 및 변조·손상·실제 계약 오류 hard FAIL 반례를 포함한다. 이 기술 검증은 전체 원천·AI 응답·Main 소비·경제 성과의 완료가 아니며, 첫 진단과 자연 정규 예약의 실제 결과를 별도로 수용한다.

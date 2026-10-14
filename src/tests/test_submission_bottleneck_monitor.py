@@ -2826,6 +2826,247 @@ def _native_no_match_probe(now, *, receipt_format='literal'):
     return row
 
 
+def _health_birth_fixture(now, actor=('9', '900')):
+    epoch = int(now.timestamp())-180-int(actor[1])//100
+    lower = epoch+int(actor[1])/100-1.0
+    proof = dict(schema='submission_monitor_actor_birth_v1', status='verified', actor=list(actor),
+        observed_at=now.isoformat(), boot_epoch=epoch, clock_ticks_per_second=100,
+        start_ticks=int(actor[1]), birth_lower_bound_epoch=lower,
+        birth_lower_bound_at=datetime.fromtimestamp(lower, monitor.KST).isoformat(),
+        process_cwd='/reviewed/release/src', runtime_effect=False, allowed_runtime_apply=False)
+    generation = dict(actor_birth_proof=proof, started_at=now.isoformat(), release_root='/reviewed/release',
+        selector_reported_pid_receipt=dict(pid=int(actor[0]), start_ticks=actor[1],
+                                         process_cwd=proof['process_cwd']))
+    return proof, generation
+
+
+def _bounded_outcome_health_fixture(*, partial=True, outcome='response_invalid'):
+    from copy import deepcopy
+    result=_provider_health_fixture('PASS'); now=monitor.stamp(result['as_of']); actor=['679747','2339199']
+    proof,generation=_health_birth_fixture(now,actor)
+    generation.update(status='current',generation_current=True,selector_reported_actual_pid_consumed=True)
+    result['observer_generation']=generation
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name]; view=deepcopy(original)
+        token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(view,actor,now)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    gap=result['source_gap_semantics']['current_health_cohort']['view']
+    machine=result['machine_semantics']['current_health_cohort']['view']
+    machine['tail_truncated']=True
+    if partial:
+        gap['sources']['probe'].update(status='partial',tail_truncated=True,window_covered=False,
+            first_read_at=(now-timedelta(seconds=60)).isoformat())
+        gap['async_transition_projection_coverage']='partial'
+    lineage=machine['reversal_provider_lineage'];row=lineage['attempt_ledger'][0]
+    if outcome=='response_invalid':
+        row.update(auxiliary_response_contract_valid=False,post_response_execution_valid=False,
+            effective_screen_status='response_invalid',execution_errors=['union_pass_support_invalid','reversal_signal_path_changed'])
+        lineage.update(auxiliary_response_contract_valid_count=1,valid_pass_count=1,execution_valid_pass_count=1)
+    elif outcome=='timeout':
+        row.update(raw_response_observed=False,raw_verdict=None,auxiliary_response_contract_valid=None,
+            post_response_execution_valid=None,effective_screen_status='not_evaluated_transport',timeout=True)
+        lineage.update(raw_response_observed_count=1,raw_pass_count=1,raw_verdict_counts={'PASS':1},
+            auxiliary_response_contract_valid_count=1,valid_pass_count=1,execution_valid_pass_count=1,
+            provider_timeout_count=1)
+    elif outcome=='unknown_pass':
+        result['async_disposition_coverage']['attempt_projection']=[]
+    return result,gap,machine,lineage
+
+
+@pytest.mark.parametrize('partial',[False,True])
+@pytest.mark.parametrize('outcome',['response_invalid','timeout','unknown_pass'])
+def test_completed_report_bounded_or_unverified_ai_outcomes_are_warning_not_validation(partial,outcome):
+    result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=partial,outcome=outcome)
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']=='warning_pending',health
+    assert health['reason']=='bounded_source_quality_observation' and health['unmet_conditions']
+    assert health['current_observation_verified'] is False and health['full_coverage_proven'] is False
+    assert health['runtime_effect'] is False and health['allowed_runtime_apply'] is False
+    assert json.dumps(result,sort_keys=True)==before
+
+
+def test_bounded_quality_warning_preserves_pending_source_quality_notification():
+    result,*_=_bounded_outcome_health_fixture()
+    incident=dict(status='pending',last_seen=result['as_of'],issues={'machine_probe:coverage_degraded:krx_nxt_integrated':1})
+    result['incidents']['machine_auxiliary_intraday_source_gap']=incident
+    result['notification_pending']=['machine_auxiliary_intraday_source_gap']
+    health=monitor.observation_health_projection(result)
+    assert health['status']=='warning_pending' and 'active_current_or_unknown_incident' in health['unmet_conditions']
+    assert result['incidents']['machine_auxiliary_intraday_source_gap'] is incident
+    assert result['notification_pending']==['machine_auxiliary_intraday_source_gap']
+
+
+@pytest.mark.parametrize('bad',['malformed','io','stage_issue','stage_scope_issue','hash','hash_none','actor','bundle','count','clock',
+    'bootstrap','split','unknown_diagnostic','birth','reader_identity','unknown_incident'])
+def test_bounded_quality_warning_never_hides_intrinsic_contract_or_reader_failure(bad):
+    result,gap,machine,lineage=_bounded_outcome_health_fixture()
+    row=lineage['attempt_ledger'][0]
+    if bad=='malformed':gap['sources']['probe']['malformed_rows']=1
+    elif bad=='io':gap['sources']['probe']['reason']='PermissionError'
+    elif bad=='stage_issue':gap['issues']={'machine_trace:path_auxiliary_feature_input_conflict':1}
+    elif bad=='stage_scope_issue':machine['issues_by_scope']={'scope':1}
+    elif bad=='hash':row['machine_observation_sha256']='invalid'
+    elif bad=='hash_none':row['machine_observation_sha256']=None
+    elif bad=='actor':row['producer_pid']='999'
+    elif bad=='bundle':row['machine_bundle_sha256']='e'*64
+    elif bad=='count':lineage['raw_response_observed_count']=-1
+    elif bad=='clock':row['trace_decision_ts']='2027-01-01T00:00:00+09:00'
+    elif bad=='bootstrap':result['entry_execution_tuning_semantics']['bootstrap']['status']='unverified'
+    elif bad=='split':result['entry_execution_tuning_semantics']['entry_split']['verification']='unverified'
+    elif bad=='unknown_diagnostic':
+        gap['diagnostics']={'machine_probe:unknown_contract_failure':1}
+        gap['diagnostics_by_scope']={'scope|machine_probe:unknown_contract_failure':1}
+    elif bad=='birth':result['observer_generation']['actor_birth_proof']['birth_lower_bound_epoch']=0
+    elif bad=='reader_identity':gap['sources']['probe']['source_identity']['inode']=0
+    elif bad=='unknown_incident':result['incidents']['unknown']={'status':'active','last_seen':result['as_of'],'issues':{'bad':1}}
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+def test_bounded_native_birth_attestation_matches_actual_kernel_identity(monkeypatch):
+    import os
+    from pathlib import Path
+    root=Path(monitor.__file__).resolve().parents[3]
+    monkeypatch.chdir(root/'src')
+    pid=os.getpid(); ticks=(Path('/proc')/str(pid)/'stat').read_text().split(') ',1)[1].split()[19]
+    now=datetime.now(monitor.KST)
+    generation=dict(release_root=str(root),started_at=now.isoformat(),
+        selector_reported_pid_receipt=dict(pid=pid,start_ticks=ticks,process_cwd=str(root/'src')))
+    proof=monitor._attest_health_actor_birth(generation,now)
+    generation['actor_birth_proof']=proof
+    assert proof['status']=='verified'
+    assert monitor._verified_health_actor_birth(proof,[str(pid),ticks],now,generation) is not None
+
+
+@pytest.mark.parametrize('mutation', [None, 'boot_epoch', 'clock_ticks_per_second', 'start_ticks',
+    'birth_lower_bound_epoch', 'birth_lower_bound_at', 'observed_at', 'process_cwd', 'runtime_effect'])
+def test_native_birth_receipt_math_and_generation_binding(mutation):
+    from copy import deepcopy
+    now=monitor.stamp('2026-10-14T16:45:00+09:00')
+    proof,generation=_health_birth_fixture(now)
+    if mutation:
+        bad={'boot_epoch':True,'clock_ticks_per_second':0,'start_ticks':901,
+             'birth_lower_bound_epoch':float('nan'),'birth_lower_bound_at':now.isoformat(),
+             'observed_at':(now+timedelta(seconds=1)).isoformat(),'process_cwd':'/other/src','runtime_effect':True}
+        proof=deepcopy(proof);proof[mutation]=bad[mutation]
+    assert (monitor._verified_health_actor_birth(proof,['9','900'],now,generation) is not None)==(mutation is None)
+
+
+@pytest.mark.parametrize('unknown_age,partial_start_age,expected', [(200,300,False),(100,300,True),(200,100,False)])
+def test_current_lifetime_excludes_only_prebirth_unknown_and_covers_tail_without_rereads(
+        tmp_path,monkeypatch,unknown_age,partial_start_age,expected):
+    now=monitor.stamp('2026-10-14T16:45:00+09:00')
+    proof,generation=_health_birth_fixture(now)
+    trace=dict(decision_ts=(now-timedelta(seconds=unknown_age)).isoformat(),decision_stage='entry_screen',
+        stock_code='036930',machine_evaluation_status='assessment_contract_invalid',
+        machine_contract_error='path_auxiliary_feature_input_conflict')
+    calls=[]
+    def read(path,*args,**kwargs):
+        calls.append(path)
+        return ([trace] if 'ai_decision_trace' in str(path) else []),dict(status='partial',window_covered=False,
+            malformed_rows=0,missing_timestamp_rows=0,incomplete_last_line=False,
+            first_read_at=(now-timedelta(seconds=partial_start_age)).isoformat())
+    monkeypatch.setattr(monitor,'_recent_source_rows',read)
+    with monitor._health_actor_scope(generation):
+        original=monitor.source_gap_semantics(tmp_path,now)
+    assert len(calls)==3 and original['issues']=={'machine_trace:path_auxiliary_feature_input_conflict':1}
+    cohort=original['current_health_cohort'];view=cohort['view']
+    assert bool(view['issues']) is expected
+    assert cohort['actor_birth_proof']==proof
+    assert view['excluded_pre_actor_birth_count']==int(unknown_age==200)
+    assert (view['sources']['trace']['status']=='complete')==(partial_start_age==300)
+    assert original['sources']['trace']['status']=='partial'  # Preserve original10m evidence.
+
+
+def test_pure_projection_requires_identical_generation_birth_and_complete_lifetime_tail():
+    from copy import deepcopy
+    result=_observation_health_fixture();now=monitor.stamp(result['as_of'])
+    proof,generation=_health_birth_fixture(now)
+    result['observer_generation']=generation
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name]; view=deepcopy(original)
+        token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(view,['9','900'],now,excluded=1)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    source=result['source_gap_semantics']['current_health_cohort']['view']['sources']['trace']
+    source.update(coverage_basis='current_actor_lifetime_bounded_tail',original_window_status='partial',
+        first_read_at=(now-timedelta(seconds=300)).isoformat(),
+        current_window_start_at=proof['birth_lower_bound_at'])
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+    source['first_read_at']=now.isoformat()
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+    source['first_read_at']=(now-timedelta(seconds=300)).isoformat()
+    result['machine_semantics']['current_health_cohort']['actor_birth_proof']={**proof,'boot_epoch':123}
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+@pytest.mark.parametrize('reason', ['post_receipt_observation_warmup','exact_0B_missing'])
+@pytest.mark.parametrize('bad', [False,True])
+def test_active_session_known_fixed_source_waits_are_warning_only_with_exact_safety(tmp_path,monkeypatch,reason,bad):
+    now=monitor.stamp('2026-10-14T16:45:00+09:00')
+    fields=dict(watch_origin='MAIN_FIXED_WATCH',source_quality_reason=reason,venue_source_quality_status='pass',
+        effective_venue='KRX_NXT_INTEGRATED',market_session_bucket='KRX_NXT_AFTERMARKET',
+        actual_order_submitted='False',broker_order_forbidden='True')
+    if bad:fields['broker_order_forbidden']=1
+    row=dict(pipeline='ENTRY_PIPELINE',stage='main_fixed_watch_observation_wait',stock_code='005930',
+             emitted_at=now.isoformat(),fields=fields)
+    def read(path,*args,**kwargs):return ([row] if 'pipeline_events' in str(path) else []),dict(status='complete')
+    monkeypatch.setattr(monitor,'_recent_source_rows',read)
+    census=monitor.source_gap_semantics(tmp_path,now)['fixed_watch_waits']
+    assert census['known_source_wait_count']==int(not bad)
+    assert census['unclassified_or_actionable_wait_count']==int(bad)
+    assert census['reason_counts']=={reason:1}
+
+
+@pytest.mark.parametrize('receipt_format', ['dict','json','literal'])
+def test_native_pending_unknown_censored_observation_is_not_a_no_match_or_admission(tmp_path,receipt_format):
+    now=monitor.stamp('2026-10-14T16:45:00+09:00')
+    row=_native_no_match_probe(now,receipt_format='dict')
+    row['fields'].update(zero_base_probe_result='observation_incomplete',
+                         zero_base_probe_reason='confirmation_pending_at_residence_end')
+    receipt=row['fields']['native_observation_receipt']
+    receipt.update(reason='required_window_incomplete',native_source_current=True,
+        selected_branch_truth={'G1':'UNKNOWN','G2':'UNKNOWN'},selected_pending_count=1,source_censored_count=57,
+        selected_lifecycle_counts={'G1':{'UNKNOWN':29},'G2':{'UNKNOWN':29}})
+    if receipt_format != 'dict':
+        row['fields']['native_observation_receipt']=(json.dumps(receipt) if receipt_format=='json' else repr(receipt))
+    assert monitor._probe_verified_pending(row)=={'pending_count':1,'unknown_count':58,'source_censored_count':57}
+    _source_gap_files(tmp_path,now,probes=[row])
+    gap=monitor.source_gap_semantics(tmp_path,now)
+    assert gap['observed']['probe_observation_incomplete']==1
+    assert gap['probe_route_native_no_match_counts']=={} and gap['probe_route_assessed_counts']=={}
+    census=gap['native_pending_observations']
+    assert census['verified_pending_count']==1 and census['unknown_count']==58 and census['source_censored_count']==57
+    assert census['machine_admission_proven'] is False and census['pattern_no_match_proven'] is False
+    result=_observation_health_fixture(); result['source_gap_semantics'].update(
+        observed={'probe_results':1,'probe_observation_incomplete':1},status='gap_observed',
+        native_pending_observations=census,diagnostics=gap['diagnostics'],diagnostics_by_scope=gap['diagnostics_by_scope'],
+        probe_route_counts=gap['probe_route_counts'],probe_route_source_covered_counts=gap['probe_route_source_covered_counts'])
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+    census['unclassified_count']=1
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+    receipt['selected_ready_count']=1
+    row['fields']['native_observation_receipt']=receipt
+    assert monitor._probe_verified_pending(row) is None
+
+
+def test_verified_native_false_is_warning_without_machine_admission_and_tampered_count_fails(tmp_path):
+    now=monitor.stamp('2026-10-14T16:45:00+09:00')
+    row=_native_no_match_probe(now,receipt_format='dict')
+    _source_gap_files(tmp_path,now,probes=[row])
+    gap=monitor.source_gap_semantics(tmp_path,now)
+    result=_observation_health_fixture(); result['source_gap_semantics'].update(
+        observed=gap['observed'],status=gap['status'],diagnostics=gap['diagnostics'],
+        diagnostics_by_scope=gap['diagnostics_by_scope'],probe_route_counts=gap['probe_route_counts'],
+        probe_route_source_covered_counts=gap['probe_route_source_covered_counts'],
+        probe_route_native_no_match_counts=gap['probe_route_native_no_match_counts'])
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+    assert result['machine_semantics']['observation_count']==0
+    result['source_gap_semantics']['probe_route_native_no_match_counts']['krx_nxt_integrated']=2
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
 @pytest.mark.parametrize('receipt_format', ['literal', 'json', 'dict'])
 def test_native_all_false_is_source_coverage_without_machine_admission(tmp_path, receipt_format):
     now = START + timedelta(minutes=10)

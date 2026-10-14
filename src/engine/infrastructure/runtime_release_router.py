@@ -541,6 +541,10 @@ def _process_start_ticks(pid: int) -> str:
         raise ValueError('runtime_pid_not_running') from exc
 
 
+class _StartupReceiptReadRace(ValueError):
+    """An atomic receipt publication raced the bounded read, not validation."""
+
+
 def _startup_receipt(path: Path) -> tuple[dict, bytes]:
     """Read only bounded local receipts; never invoke a policy/source verifier."""
     before = path.lstat()
@@ -559,7 +563,7 @@ def _startup_receipt(path: Path) -> tuple[dict, bytes]:
     after = path.lstat()
     signature = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
     if signature(before) != signature(opened) or signature(opened) != signature(after):
-        raise ValueError('startup_receipt_changed_during_read')
+        raise _StartupReceiptReadRace('startup_receipt_changed_during_read')
     if len(raw) > MAX_STARTUP_RECEIPT_BYTES:
         raise ValueError('startup_receipt_size_limit')
     def unique(pairs):
@@ -735,23 +739,29 @@ def startup_consumption_state(workspace: Path, *, pid: int, start_ticks: str,
             handoff_read = (handoff_path, handoff_raw, consumed_path, consumed_raw)
         elif manifest.get('selected_release_sha') != git_commit:
             raise ValueError('startup_native_preopen_release_mismatch')
-        if (_startup_receipt(selection_path)[1] != selected_raw
+        receipt_set_changed = (_startup_receipt(selection_path)[1] != selected_raw
                 or _startup_receipt(directory / f'runtime_policy_bootstrap_{target_date}.json')[1] != manifest_raw
-                or _startup_receipt(directory / f'runtime_policy_bootstrap_verify_{target_date}.json')[1] != verify_raw
-                or _process_start_ticks(pid) != str(start_ticks)):
-            raise ValueError('startup_receipt_generation_changed')
+                or _startup_receipt(directory / f'runtime_policy_bootstrap_verify_{target_date}.json')[1] != verify_raw)
+        if _process_start_ticks(pid) != str(start_ticks):
+            raise ValueError('startup_process_identity_changed')
+        if receipt_set_changed:
+            raise _StartupReceiptReadRace('startup_receipt_generation_changed')
         if handoff_read is not None:
             path, raw, consumed_path, consumed_raw = handoff_read
             if (_startup_receipt(path)[1] != raw or _startup_receipt(consumed_path)[1] != consumed_raw):
-                raise ValueError('startup_receipt_generation_changed')
+                raise _StartupReceiptReadRace('startup_receipt_generation_changed')
         if transition is not None:
             if transition['active']:
                 return dict(result, status='pending', reason='waiting_ordered_transition_completion')
             if _startup_receipt(transition['path'])[1] != transition['raw']:
-                raise ValueError('startup_ordered_transition_generation_changed')
+                raise _StartupReceiptReadRace('startup_ordered_transition_generation_changed')
         return dict(result, status='ready', reason='current_pid_consumption_complete',
                     basis=basis, release_root=str(release_root), git_commit=git_commit,
                     manifest_sha256=manifest_sha)
+    except _StartupReceiptReadRace as exc:
+        # The caller retains the original process-start deadline. A stable
+        # next read must still pass every identity/source/receipt validation.
+        return dict(result, status='pending', reason=str(exc))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return dict(result, reason=str(exc)[:240])
 

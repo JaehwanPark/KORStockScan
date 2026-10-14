@@ -333,6 +333,7 @@ def test_startup_first_health_barrier_uses_bounded_exact_receipts(release, monke
     ('oversized', 'failed', 'startup_receipt_size_limit'),
     ('duplicate_key', 'failed', 'startup_receipt_duplicate_key'),
     ('fifo', 'failed', 'startup_receipt_regular_file_required'),
+    ('symlink', 'failed', 'startup_receipt_symlink'),
 ])
 def test_startup_first_health_barrier_never_relabels_incomplete_or_invalid_as_pass(
     release, monkeypatch, damage, status, reason
@@ -356,6 +357,10 @@ def test_startup_first_health_barrier_never_relabels_incomplete_or_invalid_as_pa
     elif damage == 'fifo':
         paths['selection'].unlink()
         os.mkfifo(paths['selection'])
+    elif damage == 'symlink':
+        target=paths['selection'].with_suffix('.original.json')
+        paths['selection'].replace(target)
+        paths['selection'].symlink_to(target)
     result = router.startup_consumption_state(**expected)
     assert result['status'] == status and result['reason'] == reason
 
@@ -372,6 +377,71 @@ def test_startup_receipts_and_pid_rechecked_before_ready(release, monkeypatch):
         return value
     monkeypatch.setattr(router, '_startup_receipt', read)
     assert router.startup_consumption_state(**expected)['reason'] == 'startup_receipt_generation_changed'
+
+
+@pytest.mark.parametrize('race_mode', ['once', 'persistent', 'wrong_identity'])
+@pytest.mark.parametrize('race_location', ['during_read', 'between_reads'])
+def test_actual_startup_receipt_read_race_uses_original_bot_deadline(release,monkeypatch,race_mode,race_location):
+    import src.bot_main as bot_main
+    import src.utils.logger as logger
+    expected, paths, _ = _startup_receipts(release,monkeypatch,intraday=True)
+    original_open=router.os.open
+    original_receipt=router._startup_receipt
+    original_selection=paths['selection'].read_bytes()
+    replacements=[]
+    def replace_receipt(path):
+        if Path(path)==paths['selection'] and (not replacements or race_mode=='persistent'):
+            replacement=paths['selection'].with_suffix('.race.json')
+            value=json.loads(original_selection)
+            if race_mode=='wrong_identity':value['git_commit']='c'*40
+            value['receipt_publication_sequence']=len(replacements)
+            replacement.write_text(json.dumps(value))
+            replacement.replace(paths['selection'])
+            replacements.append(True)
+    def open_receipt(path,*args,**kwargs):
+        if race_location=='during_read':replace_receipt(path)
+        return original_open(path,*args,**kwargs)
+    def read_receipt(path):
+        value=original_receipt(path)
+        if race_location=='between_reads':replace_receipt(path)
+        return value
+    monkeypatch.setattr(router.os,'open',open_receipt)
+    monkeypatch.setattr(router,'_startup_receipt',read_receipt)
+    monkeypatch.setattr(logger,'log_info',lambda message:None)
+    clock=[149.5 if race_mode=='persistent' else 26.6]
+    visits=[];waits=[];heartbeats=[]
+    def check(identity):
+        result=router.startup_consumption_state(**expected)
+        visits.append(result)
+        return result
+    def wait(seconds):
+        waits.append(seconds);clock[0]+=seconds
+    result=bot_main._await_startup_consumption(dict(process_started_monotonic=0.),check=check,
+        monotonic=lambda:clock[0],wait=wait,heartbeat=lambda:heartbeats.append(clock[0]))
+    assert visits[0]['status']=='pending'
+    assert visits[0]['reason']==('startup_receipt_changed_during_read' if race_location=='during_read'
+                                 else 'startup_receipt_generation_changed')
+    assert heartbeats
+    if race_mode=='once':
+        assert result['status']=='ready' and len(replacements)==1
+        assert len(visits)==2 and waits==[.25] and clock[0]==26.85
+    elif race_mode=='persistent':
+        assert result['status']=='failed' and result['reason']=='startup_consumption_deadline_expired'
+        assert sum(waits)==.5 and clock[0]==150. and result['waited_seconds']==.5
+    else:
+        assert result['status']=='failed' and result['reason']=='startup_selected_generation_changed'
+        assert len(visits)==2 and waits==[.25]
+
+
+def test_startup_process_reuse_during_receipt_read_is_permanent_failure(release,monkeypatch):
+    expected,_,_=_startup_receipts(release,monkeypatch,intraday=True)
+    calls=[]
+    def ticks(pid):
+        calls.append(pid)
+        return '100' if len(calls)==1 else '999'
+    monkeypatch.setattr(router,'_process_start_ticks',ticks)
+    result=router.startup_consumption_state(**expected)
+    assert result['status']=='failed' and result['reason']=='startup_process_identity_changed'
 
 
 def test_failed_current_bootstrap_surfaces_before_final_pid_attestation(release, monkeypatch):

@@ -3094,3 +3094,54 @@ def test_actual_artifact_check_and_status_reader_do_not_open_fifo(tmp_path, monk
     error, status = queue.get(timeout=1)
     assert "regular_file_required" in error and status == "fail"
     assert report.is_fifo()
+
+
+@pytest.mark.parametrize('tamper', [None, 'birth_lower_bound_epoch', 'boot_epoch'])
+def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, monkeypatch, tamper):
+    import copy
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    mod, root, now, path, report, _, selection, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    receipt = selection['actual_pid_receipt']
+    actor = [str(receipt['pid']), receipt['start_ticks']]
+    at = datetime.fromisoformat(report['as_of'])
+    boot = int(at.timestamp()) - 3600
+    hz = 100
+    lower = boot + int(actor[1])/hz - 1.0
+    native = dict(schema='submission_monitor_actor_birth_v1', status='verified', actor=actor,
+        observed_at=at.isoformat(), boot_epoch=boot, clock_ticks_per_second=hz, start_ticks=int(actor[1]),
+        birth_lower_bound_epoch=lower, birth_lower_bound_at=datetime.fromtimestamp(lower, monitor.KST).isoformat(),
+        process_cwd=receipt['process_cwd'], runtime_effect=False, allowed_runtime_apply=False)
+    declared = copy.deepcopy(native)
+    if tamper is not None:
+        declared[tamper] += 1
+        # A forged proof is internally consistent, including its derived clock.
+        # Only the separate live-kernel oracle can disprove its claimed boot.
+        if tamper == 'boot_epoch':
+            declared['birth_lower_bound_epoch'] += 1
+        declared['birth_lower_bound_at'] = datetime.fromtimestamp(
+            declared['birth_lower_bound_epoch'], monitor.KST).isoformat()
+    calls = []
+    def attest(generation, observed):
+        calls.append((generation['selector_reported_pid_receipt'], observed))
+        return copy.deepcopy(native)
+    monkeypatch.setattr(monitor, '_attest_health_actor_birth', attest)
+    seal()
+    report['observer_generation']['actor_birth_proof'] = declared
+    for key in ('source_gap_semantics', 'machine_semantics'):
+        report[key]['current_health_cohort'] = dict(
+            monitor._health_cohort(copy.deepcopy(report[key]), actor, at), actor_birth_proof=declared)
+    report['observer_generation']['sha256'] = monitor._observer_seal(report['observer_generation'])
+    report['observation_health'] = monitor.observation_health_projection(report)
+    path.write_text(json.dumps(report)); os.utime(path, (now.timestamp()-10,)*2)
+    outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    if tamper is None:
+        assert outcome.severity == 'warning'
+        assert calls == [(receipt, at)]
+        assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
+    else:
+        assert outcome.severity == 'fail'
+        # A malformed proof can fail in the pure projection before the kernel
+        # check; an internally valid changed boot must reach and fail the latter.
+        if tamper == 'boot_epoch':
+            assert calls == [(receipt, at)]
+            assert 'observer_current_main_birth_unproven' in outcome.summary

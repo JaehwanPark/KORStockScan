@@ -302,3 +302,25 @@ Sentinel은 기존 observer owner에서 run 시작/완료·선택 bytes SHA·cod
 원인은 J.compose가 원 확인 event의 top-level DD/volume를 보존하고 refinement의 rolling branch_features만 교체하는데, 상속 source projector가 DD/volume까지 rolling feature에서 읽은 것이다. reversal_extended_state.State._source의 composed 전용 override에서 validate_composed와 원 event top/base 일치를 확인한 후 두 source facts만 원 확인 정의로 맞춘다. 원 event/refinement/proof·매칭 조건·validator의 strict equality·prompt/모델·정책 membership과 원5초는 보존한다. noncomposed source bytes는 기존과 동일하다.
 
 해당 native 모듈1개만 바뀌므로 이전128scope 근거를 그대로 수용하지 않는다. 기준945/수리 candidate를 같은76,800행에 새로 재생해128scope·621hits·동일 signal SHA를 확인하고 runner/원본·후보 source hash/결과를 결속한다. source-only 수리의 새 code handoff는 이 정확한 old/new 모듈과 fresh parity를 검증한 뒤 기존 정의/bundle/pointer를 보존해 발행한다. C.issue의 source_semantics_repair 계약을 사용하며 새 정책·원천 과거 채움·추가 경제 gate를 만들지 않는다. 새 PID의 자연 주성 입력 생성/기존 conflict 비재발과 detector 결과를 별도로 확인한다.
+
+## 17. 첫 진단의 영수증 갱신 경합 수리
+
+b0d795c1c의 ordered 배포는16:43:08 PASS지만, 첫 진단은16:42:53에 시작해 실패했다. 읽기 중 최종 영수증이 원자 교체되자 startup_receipt_changed_during_read를 영구 실패로 취급한 것이 원인이다. 그 결과 완료 전 시각으로 이전 observer 세대를 검사해 observer_generation_not_current가 함께 발생했다. 최초 실패 영수증·원 보고서·배포 PASS는 서로 구분해 보존한다.
+
+startup_consumption_state는 정확한 읽기 CAS 경합만 pending으로 되돌려 기존 원150초 안에서 재확인한다. polling이 기한을 연장하지 않으며 지속 경합은 원 기한 실패다. 잘못된 PID/세대/정책·symlink/손상·명시적 실패·source provenance는 실패를 유지한다. observer grace, 기계/보조 정책, native kernel, source stale, 원5초는 변경하지 않는다. 실제 router 검사와 daemon 대기를 조합한 경합→ready/지속 경합→timeout/실제 invalid 실패 반례를 검증한 뒤 기존 ordered 절차로 배포한다. 첫 full sweep은 정확한 complete/PID 소비 이후여야 하며 정규 observer 예약과 후속 자연 진단으로 수용한다. 증거 owner는 data/report/startup_receipt_race_deployment/2026-10-14다.
+
+## 18. 현재 PID 수명 구간과 정상 원천 대기 구분
+
+다섯 번째 정규16:45 예약의 b0 보고서는16:46:32→16:47:21에 발행됐으며 generation·entry-split projection은 검증됐다. 남은 충돌3건의 시각은16:39:15/16:39:33/16:40:27로, 실제 PID809464의16:42:16 기동보다 모두 앞선다. 원 trace에 PID가 없다는 이유만으로 이를 새 PID 결함으로 세면 안 된다. 원10분/allPID 기록은 보존하고, 현재 PID/start와 검증된 native birth 하한을 함께 사용해 명백한 기동 전 행만 historical로 분리한다. 기동 후 신원 미확인은 여전히 실패다.
+
+32MiB probe tail의 시작16:37:40은 전체10분 시작16:36:32보다 늦지만 현재 PID 출생보다 앞선다. 현재 PID의 건강 검증에는 max(원600초 시작, 보수적 native 출생 하한) 이후 전체 읽기 범위를 입증하고 실제 유효 시작·과거 제외 건수를 표시한다. 원10분 reader의 partial을 바꾸거나 전체 원천 완전성으로 표시하지 않는다. 현재 수명 구간조차 덮지 못한 tail, malformed/누락 시각/미완성 행, 잘못된 actor/출생 증빙은 계속 실패다.
+
+현재 warmup5건·exact_0B_missing1건은 source quality pass/정확한 시장·상시 종목·actual_order=false/broker_forbidden=true인 보호 대기다. native confirmation_pending_at_residence_end1건은 원 native receipt의 source_current/미확정 분모를 검증한 관측 대기다. 기존 native validator를 통과하는 정확한 상태만 WARNING/pending으로 표시하며 UNKNOWN/censored/pending 수치와 원 결손·partial은 보존한다. no-match/PASS/정책 적격/경제성 성공을 합성하지 않는다. 다른 진짜 원천/실행 계약 오류, 미분류 원인, 실제 미완전 읽기는 실패다. 보고서 생산 고장과 정책 입력 대기를 구분하는 수리이며 신호·정책·원5초·매매 권한을 바꾸지 않는다.
+
+## 19. 최종 보고서 실행 건강과 제한된 데이터 검증 경계
+
+§15/§18의 엄격한 표본·완전 범위 검증 경로는 유지하되, 최신 자연 보고서에서 별도 정상 상태가 확인됐다. 보고서는 current generation으로 정상 발행됐고 현재 source/machine issues는 비어 있지만,32MiB/8MiB 읽기 한계가 전체10분/30분을 덮지 못하고 AI 응답·Main 소비 일부가 미검증인 상태다. 이를 보고서 생산 실패로 합치면 정상 예약마다 동일 오류를 반복한다. 이는 최근 데이터를 더 완전하게 읽었다는 근거나 AI/주문 성공의 증거가 아니다.
+
+최종 진단은 두 경로다. 첫 경로는 기존 엄격한 관측/보호/종료 증빙을 검증한다. 두 번째 bounded_source_quality_observation은 정상 발행·fresh/current generation·정확한 live actor/출생·입력 시각/schema/count/정책/native bootstrap/split/delay 증빙이 유효하고 현재 stage issues가 없을 때만 제한 관측을 WARNING/pending으로 표시한다. 허용된 읽기 부족은 명시적 tail_truncated·window_covered=false와 실제 bytes/source identity가 있는 clean bounded tail뿐이다. malformed/시각 누락/미완성 행/읽기 IO오류·신원/해시/정책 변조·실제 current 계약 issues는 FAIL이다. 미분류 진단은 임의로 허용하지 않는다.
+
+이 두 번째 경로에서는 원 semantic partial, 원 uncovered 범위·unmet_conditions·source_gaps·AI invalid/timeout·미확인 PASS/소비/사건 수치를 보존한다. current_observation_verified/full_coverage_proven은 false이며 PASS/복구/정책·주문 권한을 발행하지 않는다. AI 응답·Main 소비의 실제 guard는 원래대로 실패/보류하며 각 원천 품질 알림도 유지한다. 앞 절의 미확인 결과/깨끗한 bounded coverage 자체를 artifact FAIL로 취급하던 초기 기준은 이 경계로 보완한다. 실제로 없는 과거 결과나 source receipt는 만들지 않는다.
