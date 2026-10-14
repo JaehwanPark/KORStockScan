@@ -224,6 +224,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 - 같은 owner는17aac/PID1243842의20:17 배포 소비 PASS와20:22 수동 Sentinel exit1/source-only partial을 구분한다. 실제 CLI의 검증된 __main__ callback identity 수리를 격리 entrypoint 재현·변조 반례와 재리뷰 후 배포하며 보호80개/native33개·정책12개 불변을 확인한다. cli-summary-followup의 실제 PID/발행 결과를 기록하고 수동 확인으로 자연3슬롯·AI/주문·경제성 OPEN을 닫지 않는다.
 
+- 같은 owner는43a79e569/PID1263868/start4167445 소비와 두 native summary migration 완료를 보존하되20:36:46·20:40:14의130초 exit124/source-only partial을 남은 계산 병목으로 유지한다. cold-summary-followup의 buy332ffe는 무관한 trace payload·cash terminal 없는 window의 중복 계산을 줄이고 Mapping token의 논리 필드 일치를 수리한다. 최적화 동등성과 의도된 token 복원을 분리하며 exact parser/owner 전이·원 manifest archive·메모리 한도·기존130/40/180초·AI5초·보호80개/native33개·정책12개를 유지한다. 최종 표본 계측과 실제 cold 보고서 완료를 구분하고 memo 채우기나 수동 확인으로 자연3슬롯·AI·정상 주문·경제성 수용을 닫지 않는다.
+
+- 최종 후보a179bb42d의917개 시험·리뷰는 PASS이나20:56 정상 장후 격리 뒤 배포 사전검사가 중단돼 selector43/Main stopped를 유지한다. [현재 상태](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/current-task-disposition.json)의 기존 승인은 유효하다. `DirectFamilyPreopenPolicyHandoff`는 실행 중 장후 owner의 terminal 이후 정상 전환 창에서 날짜/정책/source/selector 재검증→정지 custody를 보존한 후보 배포→다음 PREOPEN 준비/적용→정상 PID 소비를 확인한다. 살아 있는 이전 PID를 요구하는 D helper를 그대로 재실행하지 않는다. `NonfixedDispatchReadinessReview1012`는 후속 실제 cold 보고서/observer/detector 및 자연3슬롯을, `AuxiliaryCircuitRecoveryRepair1012`는 새 자연 AI timeout·제출 증거를 확인한다. 자동 배포 예약이나 추가 승인 대기로 기록하지 않으며 기존 stable ID·Due/Slot/TimeWindow/Acceptance를 보존한다.
+
 ### 10/14 EOD 장후 실패 보완·10/15 인계
 
 기존 `DirectFamilyPreopenPolicyHandoff` 및 direct family source owner가 [복구 리뷰](../audits/postclose-auxiliary-membership-and-final-resume-recovery-review-2026-10-14.md)의 source/publication 10/14→effective 10/15를 인계한다. 승인 native variant 선정의 보조 입력 수용과 완전한 normal 원 run의 최종 resume만 검증한다. 원 실패·원천·예산·완료 계산·stable ID/Acceptance/History를 보존한다. 새로운 OPEN·매매 기동·수동 env/lock/provider/threshold·주문·추가 EV gate 권한은 없으며 운영 strict/controller/준비와 미래 PREOPEN/PID·자연 경제성을 구분한다.

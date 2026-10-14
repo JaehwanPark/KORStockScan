@@ -1,5 +1,7 @@
 # 최신 Main 재기동 이후 제출병목 점검·구현계획 — 2026-10-14
 
+현재 상태: 위기 스캐너 제거와 제출·AI·관측 원천 수리를 포함한 선택 배포본은 `43a79e569`다. Main은20:56:01 장후 격리로 정상 종료됐으며 마지막 PID1263868 receipt는 과거 소비 증거다. 최종 보고서 계산 수리 `a179bb42d`는917개 시험·독립 리뷰를 통과했지만 배포되지 않았다. [현재 인계 상태](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/current-task-disposition.json)와 아래 §12의 실제 배포 제약을 따른다. 기존 배포·재기동 승인은 유효하며 추가 승인 대기가 아니다.
+
 ## 1. 최신 기준과 승인 범위
 
 사용자의 후속 지시는 최신 배포본 기준 계획 보완, 글로벌 위기 감지 기능·문서 제거, 제시한 timeout 6건의 원인·AI 시간 예산 검토, 구현→반복 리뷰·수정·검증 후 배포·Main 재기동이다. 이 문서는 이전 읽기 전용 계획을 대체한다. 구현·코드 검증·실제 PID 소비·자연 제출·경제 성과는 각각 판정한다.
@@ -150,3 +152,25 @@ NXT 수리로 native 계약 module33개 중 `session_contract.py`1개가 바뀐�
 원 파일 d487b404의 SHA와 callback 정의는 맞지만 실제 `python -m src.engine.buy_funnel_sentinel`은 callback 모듈 이름을 `__main__`으로 설정한다. 정상 CLI를 canonical import 이름만으로 거부한 검증 결함을 수리한다. `__main__`이라는 문자열만 허용하지 않고 실제 등록 module·callback globals/함수 identity·canonical spec.name·origin/file·승인 파일 SHA·전이 정의/의존성 검증을 모두 결속한다. 실제 CLI 실행을 재현하는 격리 시험에서 수정 전 실패와 수정 후 수용을 확인하고 다른 모듈·변조된 spec/origin/정의를 거부한다. 원 parser/manifest/checkpoint·append 한도·매매 정책은 유지한다.
 
 추가 코드·시험·문서·배포 결과는 `tmp/submit-crisis-timeout-20261014/cli-summary-followup`에 새 시도로 보존한다. 보호80개/native33개 및 정책12개 전체 bytes는 유지하고 동일 승인으로 재리뷰·표적 검증 뒤 ordered 배포한다. 원 두 배포/수동 실패 영수증을 덮어쓰지 않는다. 장후 실행의 producer_parity 요약과 Sentinel default 요약은 별도 owner/lock이며 기존 장후 작업·일정·정상 종료를 변경하지 않는다.
+
+## 12. 요약 계산의 남은 시간초과 보완
+
+세 번째 배포43a79e569는20:36:25에 ordered complete/pass, PID1263868/start4167445로 소비됐다. [배포 결과](../../tmp/submit-crisis-timeout-20261014/cli-summary-followup/deployment-result.json)와 [native migration 검증](../../tmp/submit-crisis-timeout-20261014/cli-summary-followup/manual-203646-native-migration-verification.json)은10/13·10/14 summary 계약 전이가 모두 완료됐음을 확인한다. 원 manifest와 checkpoint를 보존했고 전이 owner의 raw suffix 처리는 각각0·651,310바이트였다. 이 수치는 해당 전이의 증거이며 종료된 전체 프로세스가 읽은 모든 원천의 양을 뜻하지 않는다.
+
+그러나 [20:36:46 시도](../../tmp/submit-crisis-timeout-20261014/cli-summary-followup/manual-no-notify-20261014T203646-6547f58a/receipt.json)와 [20:40:14 시도](../../tmp/submit-crisis-timeout-20261014/cli-summary-followup/manual-no-notify-20261014T204014-3d167ce8/receipt.json)는 모두 첫 단계130초에서 exit124였고 후속 source-only 발행만 완료했다. 원 exit124·semantic partial·unobservable을 보존한다. 당일 전체와 전일 전체, 일부 scope의 memo가 차례로 완료된 사실은 전체 보고서 완료나 장중 성능 수용이 아니다.
+
+[남은 병목 진단](../../tmp/submit-crisis-timeout-20261014/cli-summary-followup/repeated-summary-cold-path-readonly-diagnosis.json)에 따르면 memo 키는 전체 입력 population·summary·시각·코드 계약에 결속된다. 새 event가 추가되면 그 population을 받은 작은 window도 키가 달라질 수 있다. 관측한 두 순간에는 current/baseline compact SQLite handle과 읽기 증가가 있었으며 전체 실행의 I/O 경로는 확정하지 않았다. 종료된 원천을 반복 실행하여 memo를 채운 결과를 지속 가능한 장중 수리로 판정하지 않는다.
+
+확정한 보고서 코드 `332ffe2791e389741af907e3fa304352a0abea01e222053a20bff2ba2de7400b`는 세 부분을 수리한다. AI trace를 가질 수 없는 stage는 lazy payload를 읽기 전에 제외하고, 해당 stage의 기존 trace/parse/source 증명은 유지한다. 계산 window에 retry를 제외한 실제 `blocked_zero_qty`가 없으면 이미 계산한 raw 요약을 반환하여 두 번째 exact ledger 계산을 생략한다. terminal이 있으면 기존 ledger·broker cash proof·중복/회복·exclusion 경로를 그대로 사용하며 summary-only terminal gap을 현금 부족으로 지우지 않는다.
+
+세 번째는 token 탐색이 `dict`만 순회하여 `CompactFields`의 nested token을 놓치던 결함이다. `Mapping`을 순회하도록 바꾸고 동일한 논리 필드의 materialized dict 결과를 기준으로 검증한다. 이 의미 수리를 기존 compact의 잘못된 출력 보존으로 요구하지 않는다. 성능 최적화의 출력 동등성과 token-only 증거 복원의 의도된 차이를 분리하고, cold·append·다른 window/scope·요약 suppression의 전체 출력·exclusion·lineage·terminal gap·순서·결손 의미를 확인한다. decoded cache 한도·compact index owner·memo key 구성 규칙은 변경하지 않는다. 실제 memo key 값은 기존 규칙에 따라 source/Git HEAD 변경에 결속되어 갱신된다. 기존130초 첫 단계·40초 observer 예약·총180초 및 AI5초 예산과 정책12개·보호80개/native33개도 유지한다.
+
+summary 인계 owner는 검토된 `(원 parser1ddc, owner83d8)`, `(1ddc, d487)`, `(현재 parserb1b, d487)` 쌍에서 `(b1b, 332ffe)`로의 전이만 인정한다. parser/owner의 독립 allowlist 조합으로 확대하지 않는다. 실제 CLI module·callback/의존 정의·source hash·원 checkpoint/summary/raw stamp를 계속 검증하며 연속 전이의 원 manifest archive를 보존한다. 기존 raw suffix·32MiB 한도를 유지하고 과거 prefix 재구축이나 전체 source 생략으로 성능을 맞추지 않는다.
+
+[최종 원 코드 비교](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/final-profile-20261014T210134/result.json)는 봉인된 private9990행에서 baseline/candidate를 교대로3회씩 cProfile로 측정하고 매번 decoded/payload cache를 비웠다. Mapping 수리를 포함한 median은1.568초에서0.667초로57.46% 줄었고 전체 출력과3scope·3window·501행 append 표본의7개 비교가 원 논리 dict와 일치했다. 이는 선택된 표본의 계산 결과이며 전체 날짜 보고서·지속 append·자연 슬롯의130초 수용을 증명하지 않는다. 프로파일 전체14.06초의 관측 peak RSS는495,046,656바이트(472.1MiB)이며 프로세스 전체의 누적 high-water다. 이 값을 강제 메모리 상한이나 개별 단계의 증가량으로 해석하지 않는다. cache 한도 확대와 live 원천/보고서 쓰기는 없었다.
+
+새 구현·독립 리뷰·동등성/성능 검증·배포는 `tmp/submit-crisis-timeout-20261014/cold-summary-followup`에 별도 시도로 기록한다. 기존 안정 owner를 유지하며 제한 수동 확인은 자연3슬롯, AI 호출 개선율, 정상 주문 또는 비용 후 경제성의 완료로 세지 않는다. 증거가 부족하면 해당 수용을 OPEN으로 남기며 과거 실패 receipt를 덮어쓰지 않는다.
+
+최종 후보 commit은 `a179bb42d7d597b261dc352e3813829dbd06daba`다. 배포 시도는 기존 Main singleton이 없어 첫 사전검사에서 중단됐다. [독립 확인](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/blocked-preflight-runtime-verification.json)은 selector43·정책12개 불변, 신규 transition/code handoff/source prepare·재기동·보고서 실행이 없음을 확인한다. 원인은20:56:01의 정상 postclose isolation이며, [실제 wrapper 대사](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/postclose-route-independent-verification.json)에서도 장후 wrapper3개와 controller가 실행 중이었다. [배포 운영 계약](../runtime-release-routing.md#scheduled-scope-and-maintenance)은 scheduled wrapper 실행 중 selector 전환을 금지한다. 기존 singleton 검사를 우회하거나 정지된 Main을 복구 대상으로 취급하지 않는다.
+
+`DirectFamilyPreopenPolicyHandoff`는 장후 owner들의 정확한 terminal을 확인한 뒤 정상 배포 가능 창에서 selector·날짜·정책·원천을 다시 결속하고, 정지 custody를 유지한 후보 배포와 다음 PREOPEN 준비/07:35 적용/07:55 정상 기동을 검증한다. 기존 D helper는 이전 PID가 살아 있는 ordered 경로이므로 현재 상태에서 그대로 재실행하지 않는다. 날짜나 선택 원천이 바뀌면 원 승인 범위 안에서 새 인계 증거와 실행 경로를 검토한다. `NonfixedDispatchReadinessReview1012`는 그 후 동일130/40/180초 안의 실제 cold 보고서·현재 observer/detector와 정규3슬롯을 확인한다. 자동 배포나 별도 cron을 예약하지 않았으며 이 문서 인계가 실행을 대신하지 않는다. 전체 private 재현도 최소 약1.20GB의 입력이 필요해 활성 장후 작업과 경합하는 복사/전수 스캔은 하지 않았다. AI timeout 개선·자연 제출·비용 후 경제성은 기존 owner에서 OPEN으로 유지한다.
