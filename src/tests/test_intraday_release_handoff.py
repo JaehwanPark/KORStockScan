@@ -22,7 +22,8 @@ NATIVE_SELECTION = handoff._selection
                                   'src/engine/ai_engine_openai.py',
                                   'src/engine/scalping/main_stop_policy.py',
                                   'src/engine/automation/main_stop_postclose.py',
-                                  'src/engine/automation/runtime_policy_bootstrap.py'])
+                                  'src/engine/automation/runtime_policy_bootstrap.py',
+                                  'src/engine/lifecycle/holding_window_generation.py'])
 @pytest.mark.parametrize('review_map', ['REVIEWED_ENTRY_CONSUMER_SOURCES',
                                      'REVIEWED_ENTRY_LATENCY_SOURCES',
                                      'REVIEWED_ENTRY_BOUNDARY_SOURCES',
@@ -31,6 +32,7 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_JOINT_CONSUMER_SOURCES',
                                      'REVIEWED_REST_REDUCTION_SOURCES',
                                      'REVIEWED_IO_OBSERVER_SOURCES',
+                                     'REVIEWED_IO_DIGEST_SOURCES',
                                      'REVIEWED_STOP_CONSUMER_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
@@ -46,6 +48,7 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     monkeypatch.setattr(handoff, 'REVIEWED_JOINT_CONSUMER_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_REST_REDUCTION_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_IO_OBSERVER_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_IO_DIGEST_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_STOP_CONSUMER_SOURCES', {})
     monkeypatch.setattr(handoff, review_map, {name: pair})
     expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -974,3 +977,39 @@ def test_candidate_delay_code_is_checked_without_selection_or_runtime_mutation(f
         assert result['status'] == 'pass' and result['actual_pid_consumed'] is False
         assert result['changed_consumer_paths'] == [name]
     assert before == {p: p.read_bytes() for p in data.parent.parent.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('fault', [None, 'root', 'origin', 'date', 'bundle', 'path', 'successor', 'unreviewed', 'absent_receipt'])
+def test_candidate_holding_vote_pin_is_checked_before_selection(fixture, monkeypatch, fault):
+    from src.engine.scalping import holding_path_vote_policy as V, holding_vote_experiment as E
+    data, _, selected, _ = fixture
+    monkeypatch.setattr(handoff, '_today', lambda *a: NOW)
+    monkeypatch.setattr(handoff, '__file__', str(selected/'src/engine/automation/intraday_release_handoff.py'))
+    monkeypatch.setattr(handoff, '_selection', lambda **kw: pytest.fail('no selector mutation or dependency'))
+    bundle=dict(schema=V.SUCCESSOR_SCHEMA,bundle_sha256='b'*64,code_sha256='c'*64,
+                selection_mode='validated_successor' if fault=='successor' else 'incumbent_carry')
+    def load(root, day, *, require_current_code):
+        assert root==data and day==DAY and require_current_code is False
+        return bundle
+    monkeypatch.setattr(V,'load_bundle',load)
+    monkeypatch.setattr(E,'code_sha',lambda:'d'*64)
+    checked=[]
+    def check(root, commit, origin, paths, expected):
+        assert root==selected and commit==NEW and origin==OLD and expected=='c'*64
+        assert paths['lifecycle/holding_window_generation.py']=='src/engine/lifecycle/holding_window_generation.py'
+        checked.append(True)
+        if fault=='unreviewed':raise ValueError('entry_consumer_producer_changed')
+        return ['src/engine/lifecycle/holding_window_generation.py']
+    monkeypatch.setattr(handoff,'_verify_entry_code_delta',check)
+    bound=dict(allowed_runtime_apply=True,target_date='wrong' if fault=='date' else DAY,
+               bundle_sha256='wrong' if fault=='bundle' else 'b'*64,
+               path='/wrong' if fault=='path' else str(V.policy_path(data,DAY)))
+    _json(handoff.bootstrap.manifest_path(DAY),dict(selected_release_sha=NEW if fault=='origin' else OLD,
+          holding_path_vote_policy_receipt={} if fault=='absent_receipt' else bound))
+    before={p:p.read_bytes() for p in data.rglob('*') if p.is_file()}
+    if fault:
+        with pytest.raises(ValueError):handoff.verify_candidate_holding_vote_code(DAY,data if fault=='root' else selected,NEW)
+    else:
+        result=handoff.verify_candidate_holding_vote_code(DAY,selected,NEW)
+        assert result['status']=='pass' and result['actual_pid_consumed'] is False and checked
+    assert before=={p:p.read_bytes() for p in data.rglob('*') if p.is_file()}

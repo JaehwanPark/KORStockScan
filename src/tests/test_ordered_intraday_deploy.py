@@ -355,7 +355,7 @@ def test_supervisor_retry_only_while_session_and_child_absent(monkeypatch,damage
         D._launch(dict(command=['tmux'],cwd='/unused'));assert len(calls)==2
 
 
-@pytest.mark.parametrize('family', ['delay', 'stop'])
+@pytest.mark.parametrize('family', ['delay', 'stop', 'holding'])
 def test_incompatible_candidate_is_rejected_before_hold_or_restart(driver, monkeypatch, family):
     d = driver
     monkeypatch.setattr(D.H, 'DATA_DIR', d.workspace/'data')
@@ -390,7 +390,8 @@ def test_incompatible_candidate_is_rejected_before_hold_or_restart(driver, monke
         assert d.selection.read_bytes() == d.before
         raise ValueError('entry_consumer_unreviewed_change:producer')
     monkeypatch.setattr(D.H, 'verify_candidate_delay_code', incompatible if family=='delay' else lambda *a:dict(status='pass'))
-    monkeypatch.setattr(D.H, 'verify_candidate_stop_code', incompatible)
+    monkeypatch.setattr(D.H, 'verify_candidate_stop_code', incompatible if family=='stop' else lambda *a:dict(status='pass'))
+    monkeypatch.setattr(D.H, 'verify_candidate_holding_vote_code', incompatible)
     with pytest.raises(ValueError, match='entry_consumer_unreviewed_change'):
         D.execute(d)
     assert d.state['failed_phase'] == 'preflight'

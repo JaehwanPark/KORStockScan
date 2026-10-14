@@ -54,3 +54,9 @@ metadata 재사용은 같은 OS/local writer와 ctime 세대 검출을 신뢰한
 10/14 사용자가 반복 코드리뷰·수정보완 후 배포 및 Main 기동을 명시적으로 승인했다. 10:04 재확인에서 selected5fb4c0a33/Main 없음, operator startup hold/restart 요청 없음이다. 일반 ordered driver는 실행 중인 predecessor를 요구하므로 이번 정지 배치는 기존 native `--previous-stopped` 인계를 사용한다. 현재 미기동 selector와 마지막 실제 소비01d9fefa4/PID3854164/ticks18431371을 각각 보존하고, 이전 소비·원 PREOPEN/manifest/env/prepared·정책 byte와 code delta를 검증한 뒤 release/detector 잠금 아래 publication·prepare·ordinary launcher·실제 PID 검증을 수행한다. 정지 상태에서 실제 소비 영수증을 새로 합성하지 않는다.
 
 재리뷰에서 candidate checklist가 이후 추가된 약세 연구 배포 승인 이력을 누락하는 것을 발견하여 원문을 보존하도록 보완했다. monitor budget/부분 관측/incident·파일 SHA 재사용/native semantic 반복·wrapper 실패 전파·launcher PID 분리 범위에 추가 미수정 코드 결함은 확인되지 않았다. 검증·배포 phase·새 PID 결과는 `/home/ubuntu/KORStockScan/tmp/main-io-residual-deploy-20261014/`와 deployment result가 소유한다.
+
+### 기동 전 holding 계약 결함과 보완
+
+첫 candidate `b98559625`의 native prepare가10:10 KST에 `holding_path_vote_policy_receipt_mismatch,holding_path_vote_policy_stale_env`로 차단됐다. 변경한 `holding_window_generation.py`가 보유 vote 수치 연구의 code pin에도 포함되지만 reviewed pair와 선택 전 holding code 검증이 빠진 것이 원인이다. Main은 기동되지 않았고 원 정책/PREOPEN/env/manifest/prepared byte는 보존됐다. 실패 phase·자기 hold·선택을 보존한 뒤 release/detector 잠금과 byte CAS로 기존5fb4c0a33 정지 선택·공유 문서를 복원했다. [실패 복구 기록](../../tmp/main-io-residual-deploy-20261014/failed-attempt-recovery.json)을 성공으로 덮어쓰지 않는다.
+
+원 PREOPEN code pin에서 실제 리뷰한 holding generation 파일까지 exact SHA pair를 추가했다. 새 `verify_candidate_holding_vote_code`는 native bundle 구조/receipt/date/origin/carry를 검사하고 approved source delta를 선택 전 검증한다. 수치 successor는 기존 current code 계약을 유지하고 전체 source/bootstrap 검증도 다시 수행한다. 일반 ordered driver와 이번 정지 배치 preflight 모두 이 검사를 사용한다. 잘못된 origin/date/bundle/path, 미검토 코드, 수치 successor와 원천·verifier 변조를 반례로 추가했다. [표적760개](../../tmp/main-io-residual-deploy-20261014/holding-fix-tests.log) 통과; 보유 native 회귀와 최종 통합 검증은 재배포 기록에 별도 봉인한다.

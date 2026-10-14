@@ -171,3 +171,7 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 | 성능 분모·표본·부분 성공 및 rollback 상태 보존 불명확 | §8 전체 bytes/활성 구간/비대상 공개, §10 schema 호환 | parity·frozen 비교쌍·자연3슬롯·rollback 회귀 |
 
 계획만 검토했던 당시 기록은 [문서 리뷰 검증](/home/ubuntu/KORStockScan/tmp/resource-recheck-20261014-0845/plan-review-validation.json)이다. 후속 구현은 회귀1,450건, Python compile/shell syntax, diff와 print-only parser 및 owner 검증으로 닫는다. 최신 근거·보완 이력·미실행 범위는 [구현 리뷰](../audits/main-io-residual-implementation-review-2026-10-14.md)를 따른다.
+
+### 승인 배포의 추가 계약 gate
+
+후속 사용자가 배포 및 Main 기동을 승인했다. 실제 준비에서 holding vote code pin 누락을 발견해 exact reviewed holding-generation pair와 선택 전 native holding code 검증을 추가했다. delay/stop/holding 세 계약을 모두 preflight하고 원 정책/PREOPEN byte 불변을 대사한다. 첫 차단 시도와 복구·후속 결과는 [구현 리뷰](../audits/main-io-residual-implementation-review-2026-10-14.md#기동-전-holding-계약-결함과-보완)에 보존한다.

@@ -135,7 +135,9 @@ REVIEWED_IO_OBSERVER_SOURCES = {
 REVIEWED_IO_DIGEST_SOURCES = {'src/engine/automation/runtime_policy_bootstrap.py': ('0df0b5d81707fe66bd38f140a3bcb3c40d7d526d9afa55755a87b8dc8123d5a8',
                                                        '7a2e67d6d537ccc0a322bbbde8935f96de74869bc48e456bd13071225dd84b56'),
  'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
-                                                            'fa572589c6b2f0ceedd943f16195ac43573d02d285438fd6c28d23e4a1157be9')}
+                                                            'fa572589c6b2f0ceedd943f16195ac43573d02d285438fd6c28d23e4a1157be9'),
+ 'src/engine/lifecycle/holding_window_generation.py': ('5f80256f9484c5fb485502bbdad461639c4d471d070fabde37c1743c3c8fd444',
+                                                    '2d9a6c71c088671ff4349117d4df302dec46ebb55f39e98beca703c9fac28d0a')}
 
 # Incumbent stop consumer compatibility only; numerical selection and research
 # remain pinned to the full current implementation generation.
@@ -510,6 +512,42 @@ def verify_candidate_stop_code(day, root, commit):
             raise ValueError('stop_bundle_code_generation_changed')
         changed = _verify_entry_code_delta(root, commit, origin,
             {name:'src/engine/'+name for name in S.implementation_paths()}, bundle['code_sha256'])
+    return dict(status='pass', target_date=day, origin_commit=origin, release_commit=commit,
+                changed_consumer_paths=changed, policy_effect='unchanged', actual_pid_consumed=False)
+
+
+def verify_candidate_holding_vote_code(day, root, commit):
+    """Check the original holding-vote code pin before changing selection.
+
+    Only incumbent carry can cross a reviewed code delta. Full source handoff
+    and the unchanged policy receipt remain mandatory during preparation.
+    """
+    _today(day, None)
+    root = Path(root).resolve(strict=True)
+    if Path(__file__).resolve().parents[3] != root:
+        raise ValueError('entry_consumer_candidate_code_mismatch')
+    manifest = _read(bootstrap.manifest_path(day))
+    origin = manifest.get('selected_release_sha')
+    if not origin or origin != _preopen(day).get('selected_release_commit'):
+        raise ValueError('entry_consumer_origin_invalid')
+    bound = manifest.get('holding_path_vote_policy_receipt') or {}
+    from src.engine.scalping import holding_path_vote_policy as V
+    from src.engine.scalping.holding_vote_experiment import code_sha, _code_paths
+    if not bound.get('allowed_runtime_apply'):
+        if bound.get('status') != 'baseline_policy_not_published' or V.policy_path(DATA_DIR, day).exists():
+            raise ValueError('holding_vote_candidate_policy_not_verified')
+        return dict(status='pass', applicability='not_installed', target_date=day)
+    bundle = V.load_bundle(DATA_DIR, day, require_current_code=False)
+    if (bound.get('bundle_sha256') != bundle.get('bundle_sha256')
+            or bound.get('target_date') != day
+            or bound.get('path') != str(V.policy_path(DATA_DIR, day))):
+        raise ValueError('entry_consumer_policy_binding_invalid')
+    changed = []
+    if bundle.get('schema') == V.SUCCESSOR_SCHEMA and bundle.get('code_sha256') != code_sha():
+        if bundle.get('selection_mode') != 'incumbent_carry':
+            raise ValueError('holding_vote_successor_code_changed')
+        changed = _verify_entry_code_delta(root, commit, origin,
+            {name: 'src/engine/' + name for name in _code_paths()}, bundle['code_sha256'])
     return dict(status='pass', target_date=day, origin_commit=origin, release_commit=commit,
                 changed_consumer_paths=changed, policy_effect='unchanged', actual_pid_consumed=False)
 

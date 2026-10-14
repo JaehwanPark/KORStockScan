@@ -213,6 +213,8 @@ class Deployment:
         _atomic(self.directory / 'candidate-delay-code.json', _json_bytes(code_check))
         stop_check = H.verify_candidate_stop_code(self.day, self.candidate, self.commit)
         _atomic(self.directory / 'candidate-stop-code.json', _json_bytes(stop_check))
+        holding_check = H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit)
+        _atomic(self.directory / 'candidate-holding-vote-code.json', _json_bytes(holding_check))
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
         self.document_before = self.checklist.read_bytes()
         self.document_after = subprocess.check_output(['git', '-C', str(self.candidate), 'show',
