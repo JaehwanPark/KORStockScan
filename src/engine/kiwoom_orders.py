@@ -2123,10 +2123,14 @@ def send_buy_order_market(
     market_session = session_contract.resolve_market_session(order_now)
     canary_provenance = {}
     effective_venue_eligibility = venue_eligibility
+    if (effective_venue_eligibility is not None
+            and effective_venue_eligibility.stock_code != clean_code):
+        effective_venue_eligibility = None
     if (
         market_session.session_regime
         == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
         and str(normalized_type) in {"0", "00", "3", "6"}
+        and resolved_dmst_stex_tp == "SOR"
     ):
         effective_venue_eligibility, canary_provenance = (
             _main_aftermarket_sor_canary_eligibility(
@@ -2135,7 +2139,7 @@ def send_buy_order_market(
                 now=order_now,
                 route_resolution=order_resolution,
                 owner_context=owner_context,
-                venue_eligibility=venue_eligibility,
+                venue_eligibility=effective_venue_eligibility,
             )
         )
     market_session, order_preflight = _resolve_submit_order_type_preflight(

@@ -22,7 +22,7 @@ from src.engine.ai_engine_openai import (
 
 
 @pytest.mark.parametrize('version', ['v5', 'v6'])
-@pytest.mark.parametrize('failure', [None, 'model', 'claim', 'changed_refs', 'auxiliary', 'exit'])
+@pytest.mark.parametrize('failure', [None, 'model', 'claim', 'changed_refs', 'auxiliary', 'definition_missing', 'exit'])
 def test_final_native_boundary_keeps_all_guards_and_closes_before_provider(monkeypatch, version, failure):
     from src.engine.scalping import reversal_evaluation_context as E
     from src.engine.scalping import reversal_auxiliary_registry as G
@@ -43,9 +43,6 @@ def test_final_native_boundary_keeps_all_guards_and_closes_before_provider(monke
             calls.append('exit')
             if failure == 'exit':
                 raise ValueError('pointer changed')
-    def registry(*args):
-        calls.append('model')
-        return {'model': 'changed' if failure == 'model' else 'gpt-5.4-nano'}
     def claim(actual_policy, actual_bundle, *, now):
         assert actual_policy is policy and actual_bundle is active
         with pytest.raises(TypeError):
@@ -59,8 +56,11 @@ def test_final_native_boundary_keeps_all_guards_and_closes_before_provider(monke
         calls.append('auxiliary')
         if failure == 'auxiliary':
             raise ValueError('auxiliary_decision_generation_revoked')
+        if failure == 'definition_missing':
+            return None
+        return {'model': 'changed' if failure == 'model' else 'gpt-5.4-nano'}
     monkeypatch.setattr(E.N, 'verified_evaluation', view)
-    monkeypatch.setattr(G, 'load', registry)
+    monkeypatch.setattr(G, 'load', lambda *a: pytest.fail('duplicate registry load'))
     monkeypatch.setattr(V, 'validate_active_claim', claim)
     monkeypatch.setattr(I, 'validate_decision', auxiliary)
     with R.entry_timing_frame() as frame:
@@ -70,10 +70,38 @@ def test_final_native_boundary_keeps_all_guards_and_closes_before_provider(monke
         else:
             assert E.validate_before_provider(policy, data_root='fixture', model='gpt-5.4-nano') == ['original']
         assert 'entry_native_load' in frame
-    assert calls[0:2] == ['load', 'model'] and calls[-1] == 'exit'
-    assert ('claim' in calls) == (failure != 'model')
-    assert ('auxiliary' in calls) == (failure not in {'model', 'claim', 'changed_refs'})
+    assert calls[0:2] == ['load', 'claim'] and calls[-1] == 'exit'
+    assert ('auxiliary' in calls) == (failure not in {'claim', 'changed_refs'})
     assert E.N._SIGNATURE_PASS.get() is None and E.N._VERIFIED_EVALUATION.get() is None
+
+
+@pytest.mark.parametrize('revoked', [False, True])
+def test_auxiliary_validation_returns_once_loaded_definition_only_after_latest_revocation_check(monkeypatch, revoked):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    selected = {'registry_sha256': 'b' * 64, 'model': 'gpt-5.4-nano'}
+    overlay = {'artifact_content_sha256': 'c' * 64, 'bindings': {'scope|SOR': 'b' * 64}}
+    active = {'bundle_sha256': 'a' * 64, 'continuous_reversal': {'auxiliary_cells': {
+        'scope': {'routes': {'SOR': {'payload': {'arm': 'test', 'binding': {'input_version': 'test'}}}}}}}}
+    assessment = dict(policy_version='continuous_reversal_policy_v6', action='ENTER_NOW',
+        event={'epoch': 100.}, cell_key='scope', route='SOR', auxiliary_registry_sha256='b' * 64,
+        auxiliary_binding={'verified': True}, auxiliary_base_bundle_sha256='a' * 64,
+        auxiliary_overlay_sha256='c' * 64)
+    calls = []
+    monkeypatch.setattr(I, 'at_confirmation', lambda *a: overlay)
+    monkeypatch.setattr(G, 'definition', lambda *a, **kw: {'registry_sha256': 'd' * 64})
+    monkeypatch.setattr(G, 'load', lambda *a: calls.append('registry') or selected)
+    monkeypatch.setattr(G, 'binding', lambda v: {'verified': True})
+    def latest(*a, **kw):
+        calls.append('latest_revocation')
+        return {'revoked_overlays': ['c' * 64] if revoked else []}
+    monkeypatch.setattr(I, 'current', latest)
+    if revoked:
+        with pytest.raises(ValueError, match='auxiliary_decision_generation_revoked'):
+            I.validate_decision('unused', {'continuous_reversal_assessment': assessment}, active, now=101.)
+    else:
+        assert I.validate_decision('unused', {'continuous_reversal_assessment': assessment}, active, now=101.) is selected
+    assert calls == ['registry', 'latest_revocation']
 
 
 
@@ -446,9 +474,46 @@ def test_timeout_does_not_invent_sdk_end_and_late_settlement_is_diagnostic_only(
     assert phases['future_settled'] >= phases['sdk_finished']
     row = R._HTTP_SETTLEMENTS[-1]
     assert row['request_id'] == 'request' and row['decision_authority'] == 'none'
+    assert row['provider_terminal'] == dict(future_status='completed',
+        exception_type=None, http_status_code=None)
     assert row['stage_monotonic']['sdk_finished'] > phases['caller_adapter_finished']
     remaining = row['transport_facts']['provider_stage_remaining_ms']
     assert 0 < remaining['sdk_started'] <= remaining['executor_enqueued'] <= 30
+
+
+@pytest.mark.parametrize('status_code', [429, 503, True, '429', None, 999])
+def test_late_sdk_exception_retains_typed_terminal_without_secrets_or_result_admission(monkeypatch, status_code):
+    monkeypatch.setattr(R, '_HTTP_SETTLEMENTS', deque(maxlen=128))
+    entered, release = threading.Event(), threading.Event()
+    class ProviderFailure(Exception):
+        pass
+    failure = ProviderFailure('secret request body must never enter diagnostic output')
+    failure.status_code = status_code
+    def create(**kwargs):
+        entered.set()
+        assert release.wait(2)
+        raise failure
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    engine._http_deadline_executor = ThreadPoolExecutor(max_workers=1)
+    observation = OpenAITransportObservation()
+    current = request(timeout_ms=30, transport_observation=observation)
+    try:
+        with pytest.raises(OpenAIHTTPWallClockDeadlineError) as caller_error:
+            engine._create_openai_response_with_deadline(current, provider_payload={})
+        assert entered.is_set() and not R._HTTP_SETTLEMENTS
+    finally:
+        release.set()
+        engine._http_deadline_executor.shutdown(wait=True)
+    assert caller_error.value.provider_future.exception() is failure
+    row = R._HTTP_SETTLEMENTS[-1]
+    assert row['provider_terminal'] == dict(future_status='exception',
+        exception_type='ProviderFailure',
+        http_status_code=status_code if type(status_code) is int and 100 <= status_code <= 599 else None)
+    assert row['transport_facts']['provider_response_received'] is False
+    assert row['transport_facts']['provider_physical_transmission'] == 'unknown'
+    assert row['decision_authority'] == 'none'
+    assert 'secret request body' not in json.dumps(row)
 
 
 def test_optional_transport_observation_can_disappear_before_settlement(monkeypatch):

@@ -46,7 +46,7 @@
 ## 기동 후 자연 확인과 남은 경계
 
 - 12:31:42 메인 잔고/DB 동기화 완료, 12:31:44 WS 연결·LOGIN ACK, 12:31:48 이후0B/0D 첫 데이터 수신을 확인했다. 12:31:59 snapshot은 신규 registration receipt와23종목, received types0B/0D/0F/0w를 보존했다.
-- 12:32:12 heartbeat는 새 PID682672이며 기록된 telegram/crisis/sniper/scanner/error detector worker 모두 alive=true다. 메인/WS/scanner/order 관련 error log에는 재기동 이후 새 오류가 없었다.
+- 12:32:12 heartbeat는 새 PID682672이며 기록된 telegram/sniper/scanner/error detector worker 모두 alive=true다. 메인/WS/scanner/order 관련 error log에는 재기동 이후 새 오류가 없었다.
 - 신규 micro collector는12:32:04 trade680/depth856에서12:32:44 trade2400/depth3466으로 증가했다. 후자는 `healthy_observer_canary`, callback p95=0.099671ms/p99=0.116226ms, trade/depth queue-full·worker/writer 오류와 stale exchange rejection0, trade/depth writer alive2/2다. snapshot 시점 main WS TCP Recv-Q도0이었다. 짧은 자연 관측이며 장마감까지의 처리성능이나 순이익 개선량으로 외삽하지 않는다.
 - 1,606개 통합 검증·배포·PID 소비는 닫았으나 과거 ingress loss/원천 결손 복원, Main AI Provider hold, source-quality final audit·WS finalize의 다음 자연 장후 generation, 실제 submit/fill/terminal·비용 EV는 기존 체크리스트 owner에서 계속 확인한다. 경제성 미관측을 이유로 새 주문·재생성·재기동을 추가하지 않는다.
 - Git의 기존 loose-object GC 경고는 commit/push를 차단하지 않았다. 이번 작업에서 git prune·강제 history 정리·force push는 하지 않았다. 외부 Project/Calendar sync도 실행하지 않았다.

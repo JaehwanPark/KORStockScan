@@ -51,6 +51,97 @@ def test_atomic_multiple_scopes_idempotent_and_cas(prepared):
     assert I.current(root,b,day='2026-10-08')==r
 
 
+@pytest.fixture
+def wire_repair_prepared(prepared, monkeypatch):
+    """Isolate the auxiliary publisher; native bundle tests own machine validation."""
+    root, bundle, *_ = prepared
+    manifest = bundle['continuous_reversal']['operating_manifest']
+    manifest.update(scopes=[V.scope_id(k, r) for k, r in V.scopes()], definitions={})
+    N._atomic_write_json(N.root(root)/'current.json', {'bundle_sha256': bundle['bundle_sha256']})
+    P.write(N.root(root)/'generations'/(bundle['bundle_sha256']+'.json'), bundle)
+    report = P.seal(dict(auxiliary_registry_bindings=I.effective_bindings(root, bundle, day='2026-10-08'),
+                        auxiliary_reader_code_hashes=I.code_hashes()))
+    path = N.root(root)/'sources'/('reversal-'+bundle['continuous_reversal']['auxiliary_report_sha256']+'.json')
+    P.write(path, report)
+    bundle['continuous_reversal']['report_file_sha256']['auxiliary'] = P.file_hash(path)
+    P.write(N.root(root)/'generations'/(bundle['bundle_sha256']+'.json'), bundle)
+    monkeypatch.setattr(N, 'validate', lambda *args, **kwargs: None)
+    clock = datetime(2026, 10, 8, 15, 1, tzinfo=I.K.KST)
+    prompt_repair = I.prepare_contract_repair(root, bundle, expected_parent=None, now=clock)
+    parent = I.publish_contract_repair(root, prompt_repair, expected_parent=None,
+                                      confirm=I.CONTRACT_REPAIR_AUTHORITY, now=clock)
+    return root, bundle, clock, parent
+
+
+def test_wire_contract_repair_preserves_incumbent_policy_and_frozen_prompt_history(wire_repair_prepared):
+    from datetime import timedelta
+    from src.engine.scalping import reversal_auxiliary_wire as W
+    from src.tests.test_reversal_extended_policy import FIXTURES
+    root, bundle, clock, parent = wire_repair_prepared
+    before = {str(p):p.read_bytes() for p in root.rglob('*.json')}
+    args = dict(expected_parent=parent['artifact_content_sha256'], now=clock+timedelta(seconds=1),
+                repair_schema=I.WIRE_REPAIR_SCHEMA)
+    repair = I.prepare_contract_repair(root, bundle, **args)
+    assert before == {str(p):p.read_bytes() for p in root.rglob('*.json')}
+    assert repair['scope_count'] == 128 and repair['old_bindings'] == parent['bindings']
+    assert repair['clarification'] == I.WIRE_SUPPORT_CONTRACT
+    overlay = I.publish_contract_repair(root, repair, expected_parent=args['expected_parent'],
+                                       confirm=I.CONTRACT_REPAIR_AUTHORITY, now=args['now'])
+    assert all(Path(p).read_bytes() == content for p, content in before.items()
+               if not p.endswith('/current.json') and '/days/' not in p)
+    assert (N.root(root)/'current.json').read_bytes() == before[str(N.root(root)/'current.json')]
+    fixture = next(iter(FIXTURES.values()))
+    snap = fixture['event'], fixture['source']
+    for old_id, replacement in repair['registry_mapping'].items():
+        old = G.load(root, old_id)
+        new = G.load(root, replacement['registry_sha256'])
+        assert new['schema'] == G.SCHEMA_V2
+        assert new['research_registry_sha256'] == old_id
+        assert new['research_wire_contract']['research_executed'] is False
+        for key in ('prompt', 'model', 'base_arm', 'max_output_tokens', 'reasoning_effort',
+                    'input_version', 'validator_version', 'projector_sha256'):
+            assert new[key] == old[key]
+        logical, prompt, schema = G.production_request(snap, new)
+        assert G.production_request(snap, old) == (logical, prompt, schema)
+        env = G.envelope(logical, new)
+        pass_schema = env['wire_schema']['properties']['screen']['anyOf'][0]
+        assert pass_schema['properties']['fact']['enum'] == [env['citation_map']['observed_machine_signal']]
+        raw = dict(assessed={env['citation_map'][s['ref']]:True for s in logical['signals']},
+                   screen=dict(verdict='PASS', risk='NO_BLOCKING_RISK', fact=env['citation_map']['observed_machine_signal']),
+                   confidence=50)
+        frozen = copy.deepcopy(raw)
+        assert G.decode_response(raw, logical, new)['supporting_fact_ids'] == ['observed_machine_signal']
+        assert raw == frozen
+        assert G.request(snap, new)['candidate']['schema_name'] == W.VERSION
+    assert I.at_confirmation(root, bundle, clock.timestamp()+.5) == parent
+    assert I.at_confirmation(root, bundle, clock.timestamp()+1) == overlay
+    assert I.publish_contract_repair(root, repair, expected_parent=args['expected_parent'],
+        confirm=I.CONTRACT_REPAIR_AUTHORITY, now=args['now']) == overlay
+    reverted = I.rollback(root, expected_parent=overlay['artifact_content_sha256'], reason='wire repair regression',
+                          confirm=I.AUTHORITY, now=clock+timedelta(seconds=2))
+    assert reverted['bindings'] == parent['bindings']
+    assert overlay['artifact_content_sha256'] in reverted['revoked_overlays']
+
+
+@pytest.mark.parametrize('defect', ['prompt', 'model', 'wire_contract', 'research_claim', 'scope', 'source', 'parent'])
+def test_wire_contract_repair_rejects_mutation_before_pointer_write(wire_repair_prepared, defect):
+    root, bundle, clock, parent = wire_repair_prepared
+    repair = I.prepare_contract_repair(root, bundle, expected_parent=parent['artifact_content_sha256'],
+                                      now=clock, repair_schema=I.WIRE_REPAIR_SCHEMA)
+    bad = copy.deepcopy(repair)
+    replacement = next(iter(bad['registry_mapping'].values()))
+    if defect in {'prompt', 'model'}: replacement[defect] = 'changed'
+    elif defect == 'wire_contract': replacement['wire_contract']['version'] = 'changed'
+    elif defect == 'research_claim': replacement['research_wire_contract']['research_executed'] = True
+    elif defect == 'scope': bad['new_bindings'].pop(next(iter(bad['new_bindings'])))
+    elif defect == 'source': bad['source_hashes'][next(iter(bad['source_hashes']))] = '0'*64
+    elif defect == 'parent': bad['expected_parent'] = '0'*64
+    with pytest.raises(ValueError):
+        I.publish_contract_repair(root, P.seal(bad), expected_parent=parent['artifact_content_sha256'],
+                                  confirm=I.CONTRACT_REPAIR_AUTHORITY, now=clock)
+    assert I.current(root, bundle, day='2026-10-08') == parent
+
+
 def test_original_confirmation_selects_wire_and_scope_revoke_is_local(prepared):
     root,b,m,scopes,old,new=prepared
     clock=datetime(2026,10,8,15,1,tzinfo=I.K.KST)

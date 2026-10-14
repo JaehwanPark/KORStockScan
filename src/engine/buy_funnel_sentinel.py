@@ -124,8 +124,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 17
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 18
+EVENT_CACHE_SCHEMA_VERSION = 19
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 20
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -364,6 +364,13 @@ def _payload_to_cache_row(
 ) -> dict[str, Any] | None:
     if _safe_str(payload.get("event_type")) != "pipeline_event":
         return None
+    if (payload.get('pipeline') == 'ENTRY_PIPELINE' and payload.get('stage') in {
+            'zero_base_probe_result', 'main_fixed_watch_observation_wait'}):
+        # Source-health rows bypass funnel exclusions and retain native field
+        # types. They feed only the forward source window, never the funnel.
+        return {**{key: payload.get(key) for key in ('emitted_at', 'pipeline', 'stage',
+                    'stock_name', 'stock_code', 'record_id', 'fields')},
+                '_source_window_only': True}
     if _is_ignored_event(payload):
         return None
     stage = _safe_str(payload.get("stage"))
@@ -481,12 +488,27 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
 def _previous_cache_schema_proof(target_date, raw_path, previous_schema):
     """A native stage census can prove that newly retained stages were absent."""
     from src.engine import observation_source_quality_audit as audit
-    if previous_schema not in {11, 13, 15, 16}:
+    if previous_schema not in {11, 13, 15, 16, 17, 18}:
         return None
     try:
         meta_path = _event_cache_dir() / f"{EVENT_CACHE_NAME}_{target_date}.meta.json"
         meta = json.loads(meta_path.read_text())
         actual_schema = meta.get("schema_version")
+        if previous_schema in {17, 18}:
+            if actual_schema not in {previous_schema, previous_schema - 2}:
+                return None
+            stat = raw_path.stat()
+            if (str(meta.get('raw_path')) != str(raw_path)
+                    or meta.get('raw_inode') != stat.st_ino
+                    or not 0 <= int(meta.get('raw_offset', -1)) <= stat.st_size):
+                return None
+            stages = ['zero_base_probe_result', 'main_fixed_watch_observation_wait']
+            if actual_schema == previous_schema - 2:
+                stages += ['pre_submit_weak_context_late_entry_guard_block', 'real_weak_pullback_entry_block']
+            return dict(from_schema=actual_schema, to_schema=previous_schema + 2,
+                raw_generation=audit._raw_generation(raw_path), raw_offset=int(meta['raw_offset']),
+                newly_admitted_stages=stages, population_proof='forward_only_stage_extension',
+                historical_stage_coverage='not_backfilled_before_raw_offset')
         if previous_schema in {15, 16}:
             if actual_schema != previous_schema:
                 return None
@@ -551,7 +573,7 @@ def load_pipeline_events(
             target_date=target_date,
             schema_version=cache_schema_version,
             verified_schema_migration=_previous_cache_schema_proof(
-                target_date, path, 16 if exclude_summary_stages else 15),
+                target_date, path, 18 if exclude_summary_stages else 17),
             parse_payload=lambda payload: _payload_to_cache_row(
                 payload,
                 exclude_summary_stages=exclude_summary_stages,
@@ -561,7 +583,8 @@ def load_pipeline_events(
             compact_index=True,
         )
         events = [
-            event for row in rows if (event := _event_from_cache_row(row)) is not None
+            event for row in rows if not row.get('_source_window_only')
+            and (event := _event_from_cache_row(row)) is not None
         ]
         events.sort(key=lambda event: event.emitted_at)
         return events

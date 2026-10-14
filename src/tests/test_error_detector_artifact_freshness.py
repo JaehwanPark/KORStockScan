@@ -2736,6 +2736,24 @@ def test_observer_partial_legacy_generation_does_not_claim_current_proof(tmp_pat
     assert generation == dict(status='legacy_generation_unverified',current_generation_verified=False)
 
 
+def test_observer_partial_reason_distinguishes_scanner_cohort_main_and_actual_health_failure(tmp_path):
+    from src.engine.error_detectors import artifact_freshness as mod
+    payload=dict(evaluation_cohort='scanner_promotions',blocker='no_identified_scanner_machine_evaluation',
+        identity_observation={'identified_event_count':0,'window_sec':600},
+        fixed_watch_identity_observation={'identified_event_count':204,'window_policy':'current_45_minutes'},
+        source_gap_semantics={'status':'gap_observed','sources':{'probe':
+            {'status':'partial','window_covered':False,'first_read_at':'2026-10-14T18:31:39+09:00'}}})
+    dimensions=mod._submission_observer_dimensions(payload,tmp_path/'report.json','a'*64)
+    dimensions['observation_health']={'unmet_conditions':['source_window_not_complete:probe',
+        'pending_or_withheld_auxiliary_pass_not_quiet']}
+    reason=mod._submission_observer_partial_reason(dimensions)
+    assert reason.startswith('health_unmet=source_window_not_complete:probe')
+    assert 'evaluation_cohort=scanner_promotions' in reason
+    assert 'scanner_identified_events=0' in reason and 'fixed_watch_identified_events=204' in reason
+    assert dimensions['source']['cohorts']['fixed_watch_identity_observation']['window_policy']=='current_45_minutes'
+    assert dimensions['source']['stages']['source_gap_semantics']['sources']['probe']['window_covered'] is False
+
+
 def test_observer_snapshot_change_cannot_inherit_status_or_generation(tmp_path, monkeypatch):
     mod, _, _, path, _, *_ = _current_observer_fixture(tmp_path, monkeypatch)
     snapshot = mod._submission_observer_snapshot(path)

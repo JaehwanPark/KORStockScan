@@ -36,13 +36,20 @@ def test_telegram_manager_has_no_start_of_day_ai_report_handler():
     assert "오늘의 AI 리포트" not in source
 
 
-def test_crisis_monitor_import_keeps_runtime_dependencies_lazy():
-    sys.modules.pop("src.scanners.crisis_monitor", None)
+def test_retired_news_scanner_has_no_startup_database_or_dependency_surface():
+    from src.database import models
+    from src.database.db_manager import DBManager
 
-    module = importlib.import_module("src.scanners.crisis_monitor")
-
-    assert not hasattr(module, "db_manager")
-    assert not hasattr(module, "event_bus")
+    root = Path(__file__).resolve().parents[2]
+    assert importlib.util.find_spec("src.scanners.crisis_monitor") is None
+    assert "crisis_monitor" not in (root / "src/bot_main.py").read_text()
+    assert "macro_alerts" not in models.Base.metadata.tables
+    assert not hasattr(models, "MacroAlert")
+    assert not hasattr(DBManager, "save_macro_alert")
+    assert not hasattr(DBManager, "get_recent_risk_count")
+    requirements = (root / "requirements.txt").read_text().splitlines()
+    assert "feedparser" not in requirements
+    assert "deep-translator" not in requirements
 
 
 def test_scalping_scanner_discovery_time_uses_scalping_buy_window(monkeypatch):

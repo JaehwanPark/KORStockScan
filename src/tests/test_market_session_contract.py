@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from dataclasses import replace
 
 import pytest
 
@@ -129,6 +130,70 @@ def _eligibility(*, krx: bool | None = True, nxt: bool | None = True):
             "payload_sha256": "fixture-sha",
         },
     )
+
+
+def _nxt_listing_eligibility():
+    return contract.resolve_symbol_venue_eligibility(
+        "005930", date(2026, 9, 14), {
+            "trade_date": "2026-09-14", "source_id": "ka10099",
+            "source_revision": "a" * 40, "payload_sha256": "b" * 64,
+            "observed_at_kst": _kst_datetime(2026, 9, 14, 8),
+            "krx_regular_eligible": True, "nxt_eligible": True,
+            "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+            "blocked_reasons_json": ["krx_aftermarket_eligibility_unknown"],
+        })
+
+
+@pytest.mark.parametrize("route,allowed", [("NXT", True), ("SOR", False), ("KRX", False)])
+def test_official_nxt_axis_preserves_unknown_krx(route, allowed):
+    source = _nxt_listing_eligibility()
+    result = contract.resolve_order_type_preflight(
+        contract.resolve_market_session(_kst_datetime(2026, 9, 14, 18)),
+        route, "buy", "3", eligibility=source)
+    assert result.allowed is allowed
+    assert source.quality_state == "PARTIAL"
+    assert source.krx_aftermarket_eligible is None
+    assert source.blockers == ("krx_aftermarket_eligibility_unknown",)
+    if allowed:
+        assert result.effective_order_type == "6"
+
+
+@pytest.mark.parametrize("changed", [
+    {"trade_date": date(2026, 9, 13)},
+    {"source_trade_date": "2026-09-13"},
+    {"observed_at_kst": _kst_datetime(2026, 9, 13, 8)},
+    {"observed_at_kst": _kst_datetime(2026, 9, 14, 19)},
+    {"observed_at_kst": None}, {"source_revision": ""},
+    {"source_revision": "g" * 40}, {"source_sha256": ""},
+    {"source_id": "ws_quote"}, {"quality_state": "CONFLICT"},
+    {"krx_regular_eligible": None}, {"nxt_eligible": None},
+    {"nxt_eligible": False}, {"blockers": ()},
+    {"blockers": ("krx_aftermarket_eligibility_unknown", "order_warning_excluded")},
+    {"blockers": ("krx_aftermarket_eligibility_unknown", "official_source_snapshot_incomplete")},
+])
+def test_nxt_axis_rejects_every_other_source_gap(changed):
+    result = contract.resolve_order_type_preflight(
+        contract.resolve_market_session(_kst_datetime(2026, 9, 14, 18)),
+        "NXT", "buy", "6", eligibility=replace(_nxt_listing_eligibility(), **changed))
+    assert result.allowed is False
+
+
+def test_nxt_listing_normalizes_utc_observation_to_exact_kst_day():
+    source = _nxt_listing_eligibility()
+    normalized = contract.resolve_symbol_venue_eligibility(
+        source.stock_code, source.trade_date, {
+            "trade_date": source.source_trade_date, "source_id": source.source_id,
+            "source_revision": source.source_revision,
+            "payload_sha256": source.source_sha256,
+            "observed_at_kst": datetime(2026, 9, 13, 23, tzinfo=timezone.utc),
+            "krx_regular_eligible": True, "nxt_eligible": True,
+            "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+            "blocked_reasons_json": list(source.blockers),
+        })
+    assert normalized.observed_at_kst == _kst_datetime(2026, 9, 14, 8)
+    assert contract.resolve_order_type_preflight(
+        contract.resolve_market_session(_kst_datetime(2026, 9, 14, 18)),
+        "NXT", "buy", "6", eligibility=normalized).allowed
 
 
 @pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])

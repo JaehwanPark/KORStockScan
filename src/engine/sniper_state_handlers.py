@@ -71069,6 +71069,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         "cancel_wait_source_gap": (
                             "sequential_first_context_capture_failed:"
                             + type(exc).__name__)}
+        # The local exact-date listing read consumes the original entry deadline.
+        # Observation admission and a live NXT quote are not listing authority.
+        submit_venue_eligibility = _entry_order_venue_eligibility(code)
         if _async_entry_deadline_expired(stock):
             # Preserve any already-recorded intent for its existing owner;
             # no physical call, fabricated broker response, or resubmission.
@@ -71097,6 +71100,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 tif=request["tif"],
                 dmst_stex_tp=submit_dmst_stex_tp,
                 owner_context=buy_owner_context,
+                venue_eligibility=submit_venue_eligibility,
             )
         except Exception:
             if not sequential_first:
@@ -80730,6 +80734,46 @@ def _finalize_buy_order_submission(
         f"mode={stock.get('entry_mode', 'unknown')} requested_qty={requested_qty} "
         f"legs={len(entry_orders)} primary_ord_no={primary_ord_no}"
     )
+
+
+def _entry_order_venue_eligibility(code: str, *, now=None):
+    """Bind a canonical local listing snapshot to one aftermarket entry.
+
+    Only a complete NXT axis may retain the source's unknown KRX axis. Missing,
+    stale, conflicting, future or otherwise partial evidence stays unknown.
+    This does not fetch a provider, infer eligibility from quotes, or grant the
+    independent SOR operator approval enforced by the order adapter.
+    """
+    now_kst = now if now is not None else datetime.now(_KST)
+    context = session_contract.resolve_market_session(now_kst)
+    if context.session_regime != session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET:
+        return None
+    try:
+        from src.trading.market.aftermarket_eligibility import (
+            resolve_symbol_venue_eligibility,
+        )
+        snapshot = DB.get_security_market_eligibility(code, context.trade_date)
+        evidence = resolve_symbol_venue_eligibility(code, context.trade_date, snapshot)
+        observed = evidence.observed_at_kst
+        complete_nxt_axis = (
+            evidence.quality_state == "PARTIAL"
+            and set(evidence.blockers) == {"krx_aftermarket_eligibility_unknown"}
+            and evidence.krx_regular_eligible is True
+            and evidence.krx_aftermarket_eligible is None
+            and isinstance(evidence.nxt_eligible, bool)
+        )
+        if ((not complete_nxt_axis and (
+                evidence.quality_state != "VALID" or evidence.blockers))
+                or observed is None or observed.date() != context.trade_date
+                or observed.timestamp() > now_kst.timestamp()):
+            return None
+        return session_contract.resolve_symbol_venue_eligibility(
+            evidence.stock_code, context.trade_date,
+            {**snapshot, "observed_at_kst": observed,
+             "quality_state": evidence.quality_state,
+             "source_id": evidence.source_api_id})
+    except (AttributeError, OSError, ValueError, TypeError):
+        return None
 
 
 def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:

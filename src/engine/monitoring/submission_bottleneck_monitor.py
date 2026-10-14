@@ -825,7 +825,25 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
     def read_source(path, at, *, time_field, **kwargs):
         nonlocal excluded_rows, excluded_prebirth
         if _loaded is None:
-            rows, receipt = _recent_source_rows(path, at, time_field=time_field, **kwargs)
+            indexed = None
+            if path == paths['probe'][0] and tail_bytes == SOURCE_TAIL_BYTES:
+                import sqlite3
+                from src.engine.monitoring.sentinel_source_window import read as read_source_window
+                health_actor = _HEALTH_ACTOR.get()
+                birth = _HEALTH_BIRTH.get()
+                actor_start = (_verified_health_actor_birth(birth, health_actor, at)
+                               if health_actor and birth else None)
+                lower = at.timestamp()-SOURCE_WINDOW_SEC
+                if actor_start is not None:
+                    lower = max(lower, actor_start)
+                try:
+                    indexed = read_source_window(data_root, at, lower_epoch=lower)
+                    if lower > at.timestamp()-SOURCE_WINDOW_SEC:
+                        indexed[1].update(status='partial',window_covered=False,actor_lifetime_bound=True)
+                except (OSError, ValueError, TypeError, KeyError, sqlite3.DatabaseError):
+                    pass
+            rows, receipt = indexed if indexed is not None else _recent_source_rows(
+                path, at, time_field=time_field, **kwargs)
             loaded[str(path)] = (rows, receipt)
         else:
             rows, receipt = loaded[str(path)]
@@ -849,7 +867,8 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
                     and receipt.get('malformed_rows')==0 and receipt.get('missing_timestamp_rows')==0
                     and receipt.get('incomplete_last_line') is False):
                 receipt.update(status='complete',window_covered=True,original_window_status='partial',
-                    coverage_basis='current_actor_lifetime_bounded_tail',
+                    coverage_basis=(receipt.get('coverage_basis')
+                        if receipt.get('actor_lifetime_bound') is True else 'current_actor_lifetime_bounded_tail'),
                     current_window_start_at=datetime.fromtimestamp(window_start,KST).isoformat())
         return rows, receipt
     issue_scopes, diagnostic_scopes, healthy_scopes = Counter(), Counter(), Counter()
@@ -3305,6 +3324,29 @@ def observation_health_projection(result):
     for name in ('probe', 'trace', 'pending'):
         source = obj(sources.get(name))
         identity = obj(source.get('source_identity'))
+        indexed_source = source.get('coverage_basis') == 'verified_forward_sentinel_source_window_v1'
+        if indexed_source:
+            start = clock(source.get('coverage_started_at'))
+            lower = clock(source.get('current_window_start_at'))
+            cache_generation = source.get('cache_generation')
+            lower_epoch = now.timestamp()-SOURCE_WINDOW_SEC if now else None
+            if source.get('actor_lifetime_bound') is True:
+                birth = _verified_health_actor_birth(projections[0].get('actor_birth_proof'), actor,
+                    now, result.get('observer_generation')) if actor else None
+                lower_epoch = max(lower_epoch,birth) if birth is not None and lower_epoch is not None else None
+            require(name == 'probe' and start is not None and lower is not None and now is not None
+                    and start <= lower and lower.timestamp() == lower_epoch
+                    and source.get('cache_schema_version') in (19,20)
+                    and isinstance(source.get('projection_contract'), str)
+                    and re.fullmatch('[0-9a-f]{64}', source['projection_contract']) is not None
+                    and source.get('historical_stage_coverage') == 'not_backfilled_before_cache_offset'
+                    and isinstance(cache_generation,list) and len(cache_generation)==5
+                    and all(count(v) for v in cache_generation)
+                    and count(source.get('source_size'))
+                    and count(source.get('indexed_raw_offset'),maximum=source['source_size'])
+                    and count(source.get('indexed_bytes_read'),maximum=SOURCE_TAIL_BYTES)
+                    and count(source.get('indexed_identity_bytes_read'),maximum=SOURCE_TAIL_BYTES),
+                    'indexed_source_window_proof_invalid:' + name)
         if source.get('coverage_basis') == 'current_actor_lifetime_bounded_tail':
             proof = projections[0].get('actor_birth_proof') if actor else None
             lower = _verified_health_actor_birth(proof, actor, now, result.get('observer_generation'))
@@ -3319,7 +3361,7 @@ def observation_health_projection(result):
                 and count(source.get('malformed_rows'), maximum=0)
                 and count(source.get('missing_timestamp_rows'), maximum=0)
                 and count(source.get('recent_count')) and count(source.get('read_count'), minimum=1, maximum=1)
-                and count(source.get('bytes_read'), minimum=1, maximum=SOURCE_TAIL_BYTES)
+                and count(source.get('bytes_read'), minimum=0 if indexed_source else 1, maximum=SOURCE_TAIL_BYTES)
                 and count(source.get('source_size'), minimum=source.get('bytes_read')
                           if count(source.get('bytes_read')) else 1)
                 and count(identity.get('device')) and count(identity.get('inode'), minimum=1)

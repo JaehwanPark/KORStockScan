@@ -8822,7 +8822,7 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
     monkeypatch.setattr(policy, 'assess', lambda *a, **kw: (copy.deepcopy(assessment), inp, prompt, schema))
     monkeypatch.setattr(diagnostics, 'validate_claim_with_receipt', lambda *a, **kw: snapshot)
     monkeypatch.setattr(intraday, 'apply_request', lambda *a: a[-1])
-    monkeypatch.setattr(intraday, 'validate_decision', lambda *a, **kw: None)
+    monkeypatch.setattr(intraday, 'validate_decision', lambda *a, **kw: definition)
     monkeypatch.setattr(runtime, 'load_effective', lambda **kw: {'bundle_sha256': 'b'*64})
     monkeypatch.setattr(native, 'validate_active_claim', lambda *a, **kw: refs)
     response = dict(schema=union.VERSION, decision_scope='COMMON_OPPORTUNITY', assessed_signal_refs=refs,

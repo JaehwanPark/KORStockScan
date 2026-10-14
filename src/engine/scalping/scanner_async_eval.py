@@ -94,8 +94,14 @@ def record_async_disposition(result, disposition, reason, **facts):
                 window_policy='current_pid_exact_attempt_with_carry_in_out', sample_floor='none',
                 primary_decision_metric='pass_to_main_disposition_coverage',
                 forbidden_uses='policy_promotion,broker_order,economics',
-                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False,
-                **facts)
+                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False)
+        for key, value in facts.items():
+            # Main's timing projection repeats the worker completion clock.
+            # Accept its identical value, while preserving original request
+            # identity and execution facts against a conflicting override.
+            if key in fields and (type(fields[key]) is not type(value) or fields[key] != value):
+                raise ValueError('async_disposition_original_fact_conflict:' + key)
+            fields[key] = value
         if getattr(result, 'observation_sink', None) is not None:
             return result.observation_sink(_append_async_disposition, result.code, fields)
         receipt = _append_async_disposition(result.code, fields)

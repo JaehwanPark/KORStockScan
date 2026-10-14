@@ -25,7 +25,11 @@ from src.engine.scalping import reversal_auxiliary_registry as G
 SCHEMA = 'main_auxiliary_intraday_v1'
 AUTHORITY = 'APPROVED_INTRADAY_AUXILIARY_TUNING'
 CONTRACT_REPAIR_SCHEMA = 'main_auxiliary_common_support_repair_v1'
+WIRE_REPAIR_SCHEMA = 'main_auxiliary_common_support_wire_repair_v1'
 CONTRACT_REPAIR_AUTHORITY = 'APPROVED_REVIEWED_COMMON_SUPPORT_CONTRACT_REPAIR'
+WIRE_SUPPORT_CONTRACT = dict(schema='reviewed_common_support_wire_repair_v1',
+    repair_kind='exact_incumbent_compact_citations', provider_called=False,
+    research_executed=False, policy_reselected=False)
 COMMON_SUPPORT_CLARIFICATION = """
 Common PASS support contract: for PASS, supporting_fact_ids MUST contain the
 exact supplied common ID observed_machine_signal. A supplied namespaced ID
@@ -215,11 +219,35 @@ def _check_contract_repair_source_hashes(data_root,manifest,bundle,*,force=False
                     _CONTRACT_REPAIR_SOURCE_DIGESTS.popitem(last=False)
 
 
+def _contract_repair_replacement(original, repair_schema):
+    """Derive the only permitted successor; preserve original prompt and facts."""
+    if repair_schema == WIRE_REPAIR_SCHEMA:
+        from src.engine.scalping import reversal_extended_union as U
+        if original['schema'] != G.SCHEMA or original['input_version'] != U.VERSION:
+            raise ValueError('auxiliary_contract_repair_registry_unsupported')
+        # The v2 registry's historical field names identify the exact source
+        # definition and codec provenance. They do not assert research execution
+        # or economic selection; the sealed repair manifest owns this change.
+        return G.compact_definition(original, research_wire_contract=WIRE_SUPPORT_CONTRACT)
+    if repair_schema != CONTRACT_REPAIR_SCHEMA:
+        raise ValueError('auxiliary_contract_repair_schema_invalid')
+    if original['schema'] != G.SCHEMA or original['prompt'].endswith(COMMON_SUPPORT_CLARIFICATION):
+        raise ValueError('auxiliary_contract_repair_registry_unsupported')
+    replacement = copy.deepcopy(original)
+    replacement['prompt'] += COMMON_SUPPORT_CLARIFICATION
+    replacement.pop('registry_sha256')
+    replacement['registry_sha256'] = P.digest(replacement)
+    return G.validate(replacement)
+
+
 def validate_contract_repair_manifest(data_root,manifest,bundle,*,force_source_hashes=False):
-    """Verify exact prompt append and immutable original evidence, never alpha."""
+    """Verify one exact contract successor and immutable evidence, never alpha."""
     f=bundle['continuous_reversal']
+    repair_schema=manifest.get('schema')
+    clarification=(WIRE_SUPPORT_CONTRACT if repair_schema==WIRE_REPAIR_SCHEMA
+                   else COMMON_SUPPORT_CLARIFICATION)
     prepared=datetime.fromisoformat(manifest.get('prepared_at',''))
-    if (manifest.get('schema')!=CONTRACT_REPAIR_SCHEMA
+    if (repair_schema not in {CONTRACT_REPAIR_SCHEMA, WIRE_REPAIR_SCHEMA}
             or manifest.get('authority')!=CONTRACT_REPAIR_AUTHORITY
             or manifest.get('artifact_content_sha256')!=P.seal(manifest)['artifact_content_sha256']
             or manifest.get('base_bundle_sha256')!=bundle['bundle_sha256']
@@ -227,7 +255,7 @@ def validate_contract_repair_manifest(data_root,manifest,bundle,*,force_source_h
             or manifest.get('detector_manifest_hash')!=f['operating_manifest']['detector_manifest_hash']
             or manifest.get('scope_membership_sha256')!=P.digest(f['operating_manifest']['scopes'])
             or manifest.get('definitions_sha256')!=P.digest(f['operating_manifest']['definitions'])
-            or manifest.get('clarification')!=COMMON_SUPPORT_CLARIFICATION
+            or manifest.get('clarification')!=clarification
             or manifest.get('provider_called') is not False
             or manifest.get('policy_reselected') is not False
             or manifest.get('actual_order_submitted') is not False):
@@ -244,14 +272,9 @@ def validate_contract_repair_manifest(data_root,manifest,bundle,*,force_source_h
         raise ValueError('auxiliary_contract_repair_scope_changed')
     for ident,replacement in mapping.items():
         original=G.load(data_root,ident)
-        expected_value=copy.deepcopy(original)
-        if original['schema']!=G.SCHEMA or original['prompt'].endswith(COMMON_SUPPORT_CLARIFICATION):
-            raise ValueError('auxiliary_contract_repair_registry_unsupported')
-        expected_value['prompt']+=COMMON_SUPPORT_CLARIFICATION
-        expected_value.pop('registry_sha256')
-        expected_value['registry_sha256']=P.digest(expected_value)
+        expected_value=_contract_repair_replacement(original, repair_schema)
         if replacement!=expected_value:
-            raise ValueError('auxiliary_contract_repair_not_exact_prompt_append')
+            raise ValueError('auxiliary_contract_repair_not_exact_successor')
         G.validate(replacement)
     sources=manifest.get('source_hashes')
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
@@ -284,7 +307,8 @@ def _contract_repair_incumbents(data_root,bundle,before):
     return bindings
 
 
-def prepare_contract_repair(data_root,bundle,*,expected_parent,now=None):
+def prepare_contract_repair(data_root,bundle,*,expected_parent,now=None,
+                            repair_schema=CONTRACT_REPAIR_SCHEMA):
     """Read-only review artifact: frozen incumbents and exact replacement bodies."""
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     clock=now or datetime.now(K.KST)
@@ -302,11 +326,8 @@ def prepare_contract_repair(data_root,bundle,*,expected_parent,now=None):
     sources={}
     for ident in sorted(set(bindings.values())):
         original=G.load(data_root,ident)
-        if original['schema']!=G.SCHEMA or original['prompt'].endswith(COMMON_SUPPORT_CLARIFICATION):
-            raise ValueError('auxiliary_contract_repair_registry_unsupported')
-        replacement=copy.deepcopy(original);replacement['prompt']+=COMMON_SUPPORT_CLARIFICATION
-        replacement.pop('registry_sha256');replacement['registry_sha256']=P.digest(replacement)
-        G.validate(replacement);mapping[ident]=replacement
+        replacement=_contract_repair_replacement(original, repair_schema)
+        mapping[ident]=replacement
         source=G.directory(data_root)/(ident+'.json');sources[str(source.resolve())]=P.file_hash(source)
     for source in (N.root(Path(data_root))/'generations'/(bundle['bundle_sha256']+'.json'),
             N.root(Path(data_root))/'sources'/('reversal-'+f['auxiliary_report_sha256']+'.json')):
@@ -317,13 +338,14 @@ def prepare_contract_repair(data_root,bundle,*,expected_parent,now=None):
     pointer=N.root(Path(data_root))/'current.json'
     if N._read(pointer).get('bundle_sha256')!=bundle['bundle_sha256']:
         raise ValueError('auxiliary_base_parent_changed')
-    manifest=P.seal(dict(schema=CONTRACT_REPAIR_SCHEMA,authority=CONTRACT_REPAIR_AUTHORITY,
+    manifest=P.seal(dict(schema=repair_schema,authority=CONTRACT_REPAIR_AUTHORITY,
         day=day,prepared_at=clock.isoformat(),expected_parent=expected_parent,
         base_bundle_sha256=bundle['bundle_sha256'],base_family_sha256=f['family_sha256'],
         detector_manifest_hash=f['operating_manifest']['detector_manifest_hash'],
         scope_membership_sha256=P.digest(f['operating_manifest']['scopes']),
         definitions_sha256=P.digest(f['operating_manifest']['definitions']),
-        clarification=COMMON_SUPPORT_CLARIFICATION,old_bindings=bindings,
+        clarification=(WIRE_SUPPORT_CONTRACT if repair_schema==WIRE_REPAIR_SCHEMA
+                       else COMMON_SUPPORT_CLARIFICATION),old_bindings=bindings,
         new_bindings={s:mapping[i]['registry_sha256'] for s,i in bindings.items()},
         registry_mapping=mapping,scope_count=len(bindings),source_hashes=sources,
         native_pointer_sha256=P.file_hash(pointer),code_hashes=code_hashes(),
@@ -357,7 +379,7 @@ def publish_contract_repair(data_root,manifest,*,expected_parent,confirm,now=Non
         if actual!=expected_parent or actual!=manifest['expected_parent']:
             raise ValueError('auxiliary_parent_cas_failed')
         frozen=prepare_contract_repair(data_root,active,expected_parent=actual,
-            now=datetime.fromisoformat(manifest['prepared_at']))
+            now=datetime.fromisoformat(manifest['prepared_at']),repair_schema=manifest['schema'])
         if frozen!=manifest:raise ValueError('auxiliary_contract_repair_preparation_changed')
         for replacement in manifest['registry_mapping'].values():G.register(data_root,replacement)
         manifest_path=folder/'contract_repairs'/(manifest['artifact_content_sha256']+'.json')
@@ -465,6 +487,10 @@ def validate_decision(data_root,policy,active,*,now):
     if latest and (a.get('auxiliary_overlay_sha256') in latest.get('revoked_overlays',[])
             or sid in latest.get('revoked_scope_overlays',{}).get(a.get('auxiliary_overlay_sha256') or 'inherited:'+active['bundle_sha256'],[])):
         raise ValueError('auxiliary_decision_generation_revoked')
+    # The synchronous caller may inspect this same verified definition. This
+    # avoids a second registry load while retaining the final revocation read;
+    # it is not a cached decision or permission for later provider/submit work.
+    return value
 
 
 def validate_submit(data_root,fields,*,now):

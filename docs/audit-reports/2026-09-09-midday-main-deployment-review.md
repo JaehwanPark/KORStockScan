@@ -27,7 +27,7 @@
 | supervisor | PID12159 유지. 로드된 launcher와 현재 `src/run_bot.sh` SHA256 일치 |
 | exact-date verify | target9/9, PID310359, status=pass, passed/pid_passed=true, selected18, runtime-policy/dated-override/unverified fail0 |
 | WS | 12:21:16 LOGIN ACK, 이후 자연0B·0D 첫 수신 확인 |
-| 진행 | 12:21:38 main heartbeat와 telegram/crisis/sniper/scanner/error threads alive 확인 |
+| 진행 | 12:21:38 main heartbeat와 telegram/sniper/scanner/error threads alive 확인 |
 | Samsung morning handoff | prepare/commit 모두 `not_required: morning_owner_not_active`; 별도 machine 권한 발급 없음 |
 | 독립 owner | 확인한 위젯/collector·low-price10개 running unit의 MainPID·active/running 불변; 별도 재기동 없음 |
 

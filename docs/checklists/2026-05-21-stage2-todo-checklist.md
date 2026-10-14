@@ -119,7 +119,7 @@
 - `IntradayAutomationHealthCheck20260521` 장중 자동화체인 상태 확인
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장중 확인 절차`
   - 판정: `pass`
-  - 근거: `2026-05-21 09:18 KST` 기준 error detector dry-run은 `summary_severity=pass`다. `process_health=pass`로 `bot_main.py` PID `4069`, main loop age 약 `1.2s`, `telegram/crisis_monitor/sniper_engine/scalping_scanner/error_detection` thread가 모두 alive였다. `artifact_freshness=pass`로 `pipeline_events_age_sec=0.0`, `threshold_events_age_sec=0.0`, sentinel/panic report freshness가 정상이고, `cron_completion=pass`에서 장중 전까지 도래한 sentinel/panic 계열 cron은 정상 완료됐다.
+  - 근거: `2026-05-21 09:18 KST` 기준 error detector dry-run은 `summary_severity=pass`다. `process_health=pass`로 `bot_main.py` PID `4069`, main loop age 약 `1.2s`, `telegram/sniper_engine/scalping_scanner/error_detection` thread가 모두 alive였다. `artifact_freshness=pass`로 `pipeline_events_age_sec=0.0`, `threshold_events_age_sec=0.0`, sentinel/panic report freshness가 정상이고, `cron_completion=pass`에서 장중 전까지 도래한 sentinel/panic 계열 cron은 정상 완료됐다.
   - 금지: 장중 확인 결과를 runtime threshold/order/provider/bot 변경으로 연결하지 않는다. `threshold_cycle_calibration_intraday`와 장후 체인은 당시 `not_yet_due`로 별도 postclose/12:05 확인 owner가 소유한다.
   - 테스트/검증: `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` 통과. `data/pipeline_events/pipeline_events_2026-05-21.jsonl`와 `data/threshold_cycle/threshold_events_2026-05-21.jsonl` append freshness를 확인했다.
   - 다음 액션: 장중 운영 확인은 `pass`로 닫고, 12:05 calibration과 postclose R1~R6는 기존 POSTCLOSE/RunbookOps 항목에서 확인한다.

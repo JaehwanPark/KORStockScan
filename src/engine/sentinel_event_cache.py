@@ -102,6 +102,7 @@ def _update_and_load_cached_event_rows(
     cache_projection_version: str | None = None,
     load_rows: bool = True,
     compact_index: bool = False,
+    max_append_bytes: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Maintain a slim append-only cache for sentinel pipeline-event scans.
 
@@ -113,6 +114,9 @@ def _update_and_load_cached_event_rows(
     """
 
     raw_path = existing_or_gzip_path(raw_path)
+    if max_append_bytes is not None and (type(max_append_bytes) is not int
+            or not 0 < max_append_bytes <= 32 * 1024 * 1024):
+        raise ValueError('sentinel_append_byte_budget_invalid')
     if not raw_path.exists():
         return [], {
             "enabled": True,
@@ -184,7 +188,13 @@ def _update_and_load_cached_event_rows(
         with cache_path.open("a", encoding="utf-8") as cache_handle:
             while True:
                 line_start = raw_handle.tell()
-                raw_bytes = raw_handle.readline()
+                if max_append_bytes is not None:
+                    remaining = max_append_bytes - (line_start-raw_offset)
+                    if remaining <= 0:
+                        break
+                    raw_bytes = raw_handle.readline(remaining)
+                else:
+                    raw_bytes = raw_handle.readline()
                 if not raw_bytes:
                     break
                 appended_raw_lines += 1
@@ -198,6 +208,16 @@ def _update_and_load_cached_event_rows(
                     decode_errors += 1
                     last_good_offset = raw_handle.tell()
                     continue
+                if compact_index and cache_name == 'buy_funnel_sentinel_events' and schema_version in (19,20):
+                    from src.engine.monitoring.sentinel_source_window import _epoch
+                    try:
+                        if not isinstance(payload,dict):
+                            raise ValueError('source_window_raw_not_object')
+                        _epoch(payload.get('emitted_at'))
+                    except (ValueError,TypeError,OverflowError):
+                        decode_errors += 1
+                        last_good_offset = raw_handle.tell()
+                        continue
                 parsed = parse_payload(payload) if isinstance(payload, dict) else None
                 if parsed is not None:
                     if compact_index and project_loaded_payload is not None:
@@ -332,6 +352,11 @@ def _update_and_load_cached_event_rows(
         "cache_projection_skip_reason": projection_skip,
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
+    if compact_index and cache_name == 'buy_funnel_sentinel_events' and schema_version in (19, 20):
+        from src.engine.monitoring.sentinel_source_window import maintain
+        new_meta['source_window_projection'] = maintain(cache_path,
+            before_cache_stamp if reusable_projection else None, new_meta,
+            previous_state=meta.get('source_window_projection'))
     _write_json(meta_path, new_meta)
     if compact_index and load_rows:
         # Seal the durable native cache before optional acceleration. Index

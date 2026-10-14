@@ -2124,6 +2124,7 @@ def get_stock_eligibility_map_ka10099(
     *,
     trade_date=None,
     observed_at_kst=None,
+    runtime_prepare=False,
 ) -> tuple[dict[str, dict], dict]:
     """Return date-bound raw ``ka10099`` eligibility snapshots.
 
@@ -2132,7 +2133,8 @@ def get_stock_eligibility_map_ka10099(
     ``ka10017(stk_cnd=10)``.
     """
 
-    source_revision = "234560d213acd8871ae344b5481aecd2f30287fa"
+    source_revision = ("953e5dbff123f437ab4d11a78a95191a685eb51f" if runtime_prepare
+                       else "234560d213acd8871ae344b5481aecd2f30287fa")
     observed_at = observed_at_kst or datetime.now(_KST)
     if isinstance(observed_at, datetime) and observed_at.tzinfo is not None:
         observed_at = observed_at.astimezone(_KST).isoformat(timespec="seconds")
@@ -2146,7 +2148,10 @@ def get_stock_eligibility_map_ka10099(
     requested_codes = {
         code for code in requested_codes if code and code.isdigit() and len(code) == 6
     }
-    if not requested_codes:
+    # None explicitly requests every returned listing. An empty iterable keeps
+    # the existing no-call contract used by EOD and offline callers.
+    all_listings = target_codes is None
+    if not requested_codes and not all_listings:
         return {}, {
             "api_id": "ka10099",
             "status": "pass",
@@ -2163,6 +2168,11 @@ def get_stock_eligibility_map_ka10099(
     page_count = 0
     market_source_meta: list[dict] = []
     snapshot_complete = True
+    bounds = (dict(max_retries=1, max_pages=8,
+                   request_owner="runtime_market_eligibility",
+                   request_class=REQUEST_CLASS_SOURCE_ONLY,
+                   read_rate_max_wait_sec=1.0, request_timeout=(1.0, 2.0))
+              if runtime_prepare else {})
     for mrkt_tp in requested_markets:
         fetched = fetch_kiwoom_api_continuous(
             url=url,
@@ -2171,6 +2181,7 @@ def get_stock_eligibility_map_ka10099(
             payload={"mrkt_tp": mrkt_tp},
             use_continuous=True,
             return_meta=True,
+            **bounds,
         )
         if isinstance(fetched, tuple) and len(fetched) == 2:
             responses, source_meta = fetched
@@ -2190,6 +2201,17 @@ def get_stock_eligibility_map_ka10099(
             and not source_meta.get("continuous_next_key_missing")
             and not source_meta.get("continuous_page_limit_reached")
         )
+        if runtime_prepare:
+            # Runtime preparation cannot treat a missing code/list/meta envelope
+            # or an empty whole-market result as a complete listing snapshot.
+            market_complete = market_complete and bool(source_meta) and all(
+                isinstance(response, dict)
+                and ("return_code" in response or "rt_cd" in response)
+                and isinstance(response.get("list"), list)
+                for response in responses)
+            market_complete = market_complete and any(
+                isinstance(response, dict) and bool(response.get("list"))
+                for response in responses)
         if source_meta and source_meta.get("last_http_status_code") != 200:
             market_complete = False
         snapshot_complete = snapshot_complete and market_complete
@@ -2216,13 +2238,16 @@ def get_stock_eligibility_map_ka10099(
                 if not isinstance(item, dict):
                     continue
                 code = normalize_stock_code(item.get("code"))
-                if code not in requested_codes:
+                if (not code or not code.isdigit() or len(code) != 6
+                        or (not all_listings and code not in requested_codes)):
                     continue
                 audit_info = str(item.get("auditInfo") or "").strip()
                 stock_state = str(item.get("state") or "").strip()
                 order_warning = str(item.get("orderWarning") or "").strip()
                 market_code = str(item.get("marketCode") or "").strip()
-                nxt_enable = str(item.get("nxtEnable") or "").strip().upper()
+                nxt_enable = str(item.get("nxtEnable") or "").strip()
+                if not runtime_prepare:
+                    nxt_enable = nxt_enable.upper()
                 nxt_eligible = (
                     True if nxt_enable == "Y" else False if nxt_enable == "N" else None
                 )
@@ -2274,7 +2299,7 @@ def get_stock_eligibility_map_ka10099(
                     "blocked_reasons": blocked_reasons,
                 }
                 previous = result.get(code)
-                if previous is not None and any(
+                if previous is not None and ((runtime_prepare and previous.get("quality_state") == "CONFLICT") or any(
                     previous.get(field) != snapshot.get(field)
                     for field in (
                         "nxt_eligible",
@@ -2283,7 +2308,7 @@ def get_stock_eligibility_map_ka10099(
                         "order_warning",
                         "market_code",
                     )
-                ):
+                )):
                     snapshot["quality_state"] = "CONFLICT"
                     snapshot["eligible_venues_json"] = []
                     snapshot["blocked_reasons"] = list(
@@ -2329,7 +2354,11 @@ def get_stock_eligibility_map_ka10099(
             snapshot["quality_state"] = (
                 "CONFLICT" if snapshot.get("quality_state") == "CONFLICT" else "UNKNOWN"
             )
-            snapshot["eligible_venues_json"] = []
+            if not runtime_prepare:
+                snapshot["eligible_venues_json"] = []
+            # Runtime storage retains the observed venue axis while UNKNOWN
+            # and complete=False deny its use. Clearing this list would invent
+            # a contradiction against the same row's explicit nxt_eligible.
             snapshot["blocked_reasons"] = list(
                 dict.fromkeys(
                     [
@@ -2344,6 +2373,7 @@ def get_stock_eligibility_map_ka10099(
         "complete": snapshot_complete,
         "requested_markets": requested_markets,
         "requested_code_count": len(requested_codes),
+        "requested_scope": "all_listings" if all_listings else "explicit_codes",
         "received_code_count": received_code_count,
         "missing_codes": missing_codes,
         "page_count": page_count,
@@ -2351,7 +2381,8 @@ def get_stock_eligibility_map_ka10099(
         "official_upstream_commit": source_revision,
         "eligibility_source_revision": source_revision,
         "official_upstream_paths": [
-            "kiwoom_docs/종목정보.md#종목정보-리스트-ka10099",
+            ("kiwoom/_data/kiwoom_api_spec.json#종목정보-리스트-ka10099" if runtime_prepare
+             else "kiwoom_docs/종목정보.md#종목정보-리스트-ka10099"),
             "kiwoom/specs.py",
         ],
     }

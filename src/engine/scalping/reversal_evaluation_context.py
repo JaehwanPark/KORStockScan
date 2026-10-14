@@ -73,7 +73,6 @@ def validate_before_provider(policy, *, data_root, model):
     from contextlib import ExitStack
     from src.engine.monitoring.runtime_performance import entry_stage, timed_entry_call
     from src.engine.scalping import reversal_auxiliary_intraday as I
-    from src.engine.scalping import reversal_auxiliary_registry as G
     assessment = policy['continuous_reversal_assessment']
     version = assessment.get('policy_version')
     if version == 'continuous_reversal_policy_v6':
@@ -88,10 +87,6 @@ def validate_before_provider(policy, *, data_root, model):
         # view and this synchronous pass never escape to SDK or order callers.
         with entry_stage('entry_native_load'):
             active = boundary.enter_context(N.verified_evaluation(data_root=data_root, target_date=day))
-        if assessment.get('auxiliary_registry_sha256'):
-            registered = G.load(data_root, assessment['auxiliary_registry_sha256'])
-            if model != registered['model']:
-                raise ValueError('auxiliary_registered_model_mismatch')
         remaining = (timed_entry_call('entry_native_claim', _prepared_v6_claim,
                                       policy, active, data_root=data_root, day=day)
                      if version == 'continuous_reversal_policy_v6' else None)
@@ -100,8 +95,13 @@ def validate_before_provider(policy, *, data_root, model):
                                          policy, active, now=time.time())
         if set(remaining) != set(assessment['matched_policy_refs']):
             raise ValueError('reversal_request_signal_set_changed_before_send')
-        timed_entry_call('entry_native_auxiliary', I.validate_decision,
-                         data_root, policy, active, now=time.time())
+        registered = timed_entry_call('entry_native_auxiliary', I.validate_decision,
+                                      data_root, policy, active, now=time.time())
+        if assessment.get('auxiliary_registry_sha256'):
+            if not isinstance(registered, dict):
+                raise ValueError('auxiliary_registered_definition_missing')
+            if model != registered['model']:
+                raise ValueError('auxiliary_registered_model_mismatch')
         return remaining
 
 

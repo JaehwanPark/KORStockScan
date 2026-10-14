@@ -73,7 +73,6 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
 REQUIRED_HEARTBEAT_COMPONENTS: set[str] = {
     "main_loop",
     "telegram",
-    "crisis_monitor",
     "error_detection",
     "sniper_engine",
     "scalping_scanner",

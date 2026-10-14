@@ -44,13 +44,15 @@ def record_entry_gap():
         _ENTRY_TIMING_GAPS += 1
 
 
-def record_http_settlement(request_id, symbol, clocks, *, cancelled, transport_facts=None):
+def record_http_settlement(request_id, symbol, clocks, *, cancelled, transport_facts=None,
+                           terminal=None):
     """Late SDK facts reach the existing diagnostics, never a result inbox."""
     with _LOCK:
         _HTTP_SETTLEMENTS.append(dict(request_id=str(request_id)[:160],
             symbol=str(symbol)[:6], observed_epoch=time.time(),
             stage_monotonic=dict(clocks), future_cancelled=bool(cancelled),
             transport_facts=dict(transport_facts or {}),
+            provider_terminal=dict(terminal or {}),
             decision_authority='none'))
 
 

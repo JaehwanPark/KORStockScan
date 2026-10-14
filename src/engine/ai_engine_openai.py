@@ -5103,10 +5103,24 @@ class GPTSniperEngine:
             try:
                 if request.transport_observation is not None:
                     request.transport_observation.mark('future_settled')
+                # A caller deadline can precede the actual SDK terminal. Keep
+                # the Future's typed outcome without payloads or exception
+                # messages, and without admitting its late response anywhere.
+                cancelled = done.cancelled()
+                terminal_error = None if cancelled else done.exception()
+                status_code = getattr(terminal_error, 'status_code', None)
+                terminal = dict(
+                    future_status=('cancelled' if cancelled else
+                                   'exception' if terminal_error is not None else 'completed'),
+                    exception_type=(type(terminal_error).__name__[:80]
+                                    if terminal_error is not None else None),
+                    http_status_code=(status_code if type(status_code) is int
+                                      and 100 <= status_code <= 599 else None))
                 from src.engine.monitoring.runtime_performance import record_http_settlement
                 record_http_settlement(request.request_id, request.symbol,
                     {**attempt_clocks, 'future_settled': time.perf_counter()},
-                    cancelled=done.cancelled(), transport_facts=(request.transport_observation.fields()
+                    cancelled=cancelled, terminal=terminal,
+                    transport_facts=(request.transport_observation.fields()
                         if request.transport_observation is not None else None))
             except Exception:
                 # Diagnostic callbacks cannot unlock a circuit or change the

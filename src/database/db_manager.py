@@ -15,13 +15,11 @@ from sqlalchemy import or_
 from contextlib import contextmanager
 from src.utils.constants import TRADING_RULES
 
-# 💡 MacroAlert 등 새로 추가된 모델들도 모두 임포트합니다.
 from src.database.models import (
     Base,
     User,
     RecommendationHistory,
     DailyStockQuote,
-    MacroAlert,
     HoldingAddHistory,
     TradePerformanceFact,
     StrategyPositionPerformanceDaily,
@@ -926,39 +924,6 @@ class DBManager:
         except Exception as e:
             log_error(f"추천 기록 조회 실패 (날짜: {date}): {e}")
             return pd.DataFrame()
-
-    def save_macro_alert(self, alert_data):
-        """💡 [핵심] 글로벌 위기 알림을 DB에 저장 (중복 방어 포함)"""
-        query = text("""
-            INSERT INTO macro_alerts (alert_time, category, source, title, link, severity_score)
-            VALUES (:alert_time, :category, :source, :title, :link, :severity_score)
-            ON CONFLICT (link) DO NOTHING
-        """)
-        try:
-            with self.get_session() as session:
-                session.execute(query, alert_data)
-                session.commit()
-                return True
-        except Exception as e:
-            from src.utils.logger import log_error
-
-            log_error(f"❌ 위기 경보 저장 실패: {e}")
-            return False
-
-    def get_recent_risk_count(self, hours=12, min_severity=2):
-        """💡 [핵심] 최근 N시간 동안 발생한 심각한 위기 건수를 반환"""
-        threshold = datetime.now() - timedelta(hours=hours)
-        query = text("""
-            SELECT COUNT(*) FROM macro_alerts 
-            WHERE alert_time >= :threshold AND severity_score >= :min_severity
-        """)
-        try:
-            with self.get_session() as session:
-                return session.execute(
-                    query, {"threshold": threshold, "min_severity": min_severity}
-                ).scalar()
-        except Exception:
-            return 0
 
     def get_active_targets(self) -> list:
         """

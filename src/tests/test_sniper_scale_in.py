@@ -26,6 +26,59 @@ from src.engine.scalping import main_lifecycle_journal
 from src.engine.kiwoom_websocket import KiwoomWSManager
 
 
+@pytest.mark.parametrize("failure", [
+    None, "missing", "wrong_symbol", "stale", "future", "incomplete",
+    "conflict", "other_blocker", "no_provenance",
+])
+def test_entry_order_eligibility_binds_only_canonical_current_source(monkeypatch, failure):
+    now = datetime(2026, 10, 14, 18, 33, tzinfo=state_handlers._KST)
+    source = {
+        "stock_code": "036930", "trade_date": "2026-10-14",
+        "source_api_id": "ka10099", "source_revision": "a" * 40,
+        "payload_sha256": "b" * 64, "observed_at_kst": "2026-10-14T08:00:00+09:00",
+        "krx_regular_eligible": True, "nxt_eligible": True,
+        "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+        "eligible_venues_json": ["NXT"],
+        "blocked_reasons_json": ["krx_aftermarket_eligibility_unknown"],
+    }
+    if failure == "missing":
+        source = None
+    elif failure == "wrong_symbol":
+        source["stock_code"] = "005930"
+    elif failure == "stale":
+        source["trade_date"] = "2026-10-13"
+    elif failure == "future":
+        source["observed_at_kst"] = "2026-10-14T19:00:00+09:00"
+    elif failure == "incomplete":
+        source["complete"] = False
+    elif failure == "conflict":
+        source["quality_state"] = "CONFLICT"
+    elif failure == "other_blocker":
+        source["blocked_reasons_json"].append("order_warning_excluded")
+    elif failure == "no_provenance":
+        source["payload_sha256"] = None
+    reads = []
+    monkeypatch.setattr(state_handlers, "DB", SimpleNamespace(
+        get_security_market_eligibility=lambda code, day: reads.append((code, day)) or source))
+    result = state_handlers._entry_order_venue_eligibility("036930", now=now)
+    assert reads == [("036930", now.date())]
+    if failure:
+        assert result is None
+    else:
+        assert result.stock_code == "036930"
+        assert result.quality_state == "PARTIAL"
+        assert result.source_revision == "a" * 40
+        assert result.source_trade_date == "2026-10-14"
+        assert result.krx_aftermarket_eligible is None
+
+
+def test_entry_order_eligibility_has_no_regular_session_read(monkeypatch):
+    monkeypatch.setattr(state_handlers, "DB", SimpleNamespace(
+        get_security_market_eligibility=lambda *_args: pytest.fail("regular listing read")))
+    assert state_handlers._entry_order_venue_eligibility(
+        "036930", now=datetime(2026, 10, 14, 10, tzinfo=state_handlers._KST)) is None
+
+
 def test_initial_quantity_cap_research_context_is_source_only_and_bounded():
     from src.engine.scalping.position_sizing_allocator import ScalpingSizingContext
 
@@ -732,6 +785,40 @@ def _stale_holding_score_fields(score=50, *, now_ts=None):
         "holding_score_effective_usable": False,
         "holding_score_last_effective_at": now_ts - 999,
     }
+
+
+def _machine_submit_guard_fixture(stock, code, case):
+    """Bind an explicit synthetic machine revision for downstream guard tests.
+
+    Use the real revision binder and submit-lineage validation. This fixture
+    supplies no runtime policy, provider response, or broker authorization.
+    """
+    from hashlib import sha256
+    from src.engine.scalping.ai_decision_trace import bind_machine_observation_revision
+
+    fields = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "entry_ai_screen_pass": True,
+        "evaluation_attempt_id": f"guard-evaluation-{case}",
+        "scanner_promotion_id": f"SCANPROM-GUARD-{case}",
+        "policy_bundle_hash": sha256(f"guard-policy-{case}".encode()).hexdigest(),
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "machine_capture_status": "captured",
+        "machine_observation_sha256": sha256(
+            f"guard-observation-{code}-{case}".encode()
+        ).hexdigest(),
+    }
+    stock.update({key: fields[key] for key in (
+        "scanner_promotion_id", "effective_venue", "market_session_bucket"
+    )})
+    stock["code"] = code
+    bind_machine_observation_revision(
+        stock, fields, symbol=code, bundle_sha256=fields["policy_bundle_hash"]
+    )
+    return fields
 
 
 def _fresh_submit_micro_fields():
@@ -12381,6 +12468,10 @@ def test_watching_entry_submit_blocks_unresolved_exit_authority_before_deposit(
         "alerted_stocks": set(),
     }
 
+    runtime["machine_primary_entry_provenance"] = _machine_submit_guard_fixture(
+        stock, "123456", "exit-authority"
+    )
+
     assert (
         state_handlers._submit_watching_triggered_entry(
             stock, "123456", {"curr": 10000}, 1, runtime
@@ -12560,6 +12651,10 @@ def test_normal_scalping_buy_blocks_mechanistic_price_contract_before_broker_sub
         },
     }
 
+    runtime["machine_primary_entry_provenance"] = _machine_submit_guard_fixture(
+        stock, "024061", "price-contract"
+    )
+
     result = state_handlers._submit_watching_triggered_entry(
         stock, "024061", ws_data, 1, runtime
     )
@@ -12619,6 +12714,10 @@ def test_scalping_buy_submit_blocks_upper_limit_before_deposit(monkeypatch):
         "cooldowns": {},
         "alerted_stocks": set(),
     }
+
+    runtime["machine_primary_entry_provenance"] = _machine_submit_guard_fixture(
+        stock, "123456", "upper-limit"
+    )
 
     result = state_handlers._submit_watching_triggered_entry(
         stock,
@@ -19699,11 +19798,17 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
 
     logs = []
     sent_orders = []
+    venue_eligibility = object()
+    venue_reads = []
+    monkeypatch.setattr(state_handlers, "_entry_order_venue_eligibility",
+        lambda code: venue_reads.append(code) or venue_eligibility)
 
     def fake_log_entry_pipeline(stock, code, stage, **fields):
         logs.append((stage, fields))
 
     def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
+        assert venue_reads == [code]
+        assert kwargs["venue_eligibility"] is venue_eligibility
         sent_orders.append((qty, price, order_type_code, kwargs.get("tif")))
         return {"return_code": "0", "ord_no": "O1"}
 
@@ -19872,6 +19977,7 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(
                 "reason": "confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                **_machine_submit_guard_fixture(stock, "123456", "negative-orderbook"),
                 **_fresh_submit_micro_fields(),
             }
 
@@ -22492,6 +22598,7 @@ def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
                 "reason": "confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                **_machine_submit_guard_fixture(stock, "123123", "low-liquidity"),
                 **_fresh_submit_micro_fields(),
             }
 
@@ -23117,6 +23224,10 @@ def test_entry_submit_identity_reconciliation_guard_blocks_repeat_broker_attempt
         "alerted_stocks": set(),
     }
 
+    runtime["machine_primary_entry_provenance"] = _machine_submit_guard_fixture(
+        stock, "555555", "broker-reconciliation"
+    )
+
     submitted = state_handlers._submit_watching_triggered_entry(
         stock,
         "555555",
@@ -23559,6 +23670,7 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
                 "reason": "confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                **_machine_submit_guard_fixture(stock, "456456", "overbought"),
                 **_fresh_submit_micro_fields(),
             }
 
@@ -27395,6 +27507,7 @@ def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
                 "reason": "confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                **_machine_submit_guard_fixture(stock, "123456", "armed-strength"),
             }
 
     state_handlers.datetime = FixedDateTime

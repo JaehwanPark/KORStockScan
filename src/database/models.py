@@ -97,22 +97,6 @@ class SecurityMarketEligibilityDaily(Base):
         )
 
 
-class MacroAlert(Base):
-    __tablename__ = "macro_alerts"
-
-    # 💡 신규 추가된 거시경제 알림 테이블
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    alert_time = Column(DateTime)
-    category = Column(Text)
-    source = Column(Text)
-    title = Column(Text)
-    link = Column(Text, unique=True)  # UNIQUE 제약조건 반영
-    severity_score = Column(Integer)
-
-    def __repr__(self):
-        return f"<MacroAlert(id={self.id}, category='{self.category}')>"
-
-
 class RecommendationHistory(Base):
     __tablename__ = "recommendation_history"
 

@@ -228,10 +228,10 @@ class TestProcessHealthDetector:
 
     def test_heartbeat_append_thread(self):
         write_heartbeat("main_loop")
-        write_heartbeat("crisis_monitor")
+        write_heartbeat("error_detection")
         data = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
         assert "main_loop" in data
-        assert "crisis_monitor" in data["threads"]
+        assert "error_detection" in data["threads"]
 
     def test_reset_heartbeat_discards_stale_threads(self):
         write_heartbeat("main_loop")

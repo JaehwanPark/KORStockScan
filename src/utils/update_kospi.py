@@ -24,9 +24,9 @@ import FinanceDataReader as fdr
 from src.utils import kiwoom_utils
 from src.model.common_v2 import calculate_all_features
 from src.database.db_manager import DBManager
-from src.database.models import DailyStockQuote, SecurityMarketEligibilityDaily
-from src.trading.market.aftermarket_eligibility import (
-    resolve_symbol_venue_eligibility,
+from src.database.models import DailyStockQuote
+from src.engine.infrastructure.market_eligibility_source import (
+    store_market_eligibility_rows as _store_market_eligibility_rows,
 )
 from src.core.event_bus import EventBus
 
@@ -301,47 +301,6 @@ def _sanitize_daily_input(df: pd.DataFrame, code_str: str) -> pd.DataFrame:
 def _normalize_stock_code(code) -> str:
     return kiwoom_utils.normalize_stock_code(code)
 
-
-def _store_market_eligibility_rows(
-    session,
-    *,
-    trade_date: date,
-    source_rows: dict[str, dict],
-) -> dict:
-    quality_counts: dict[str, int] = {}
-    for code, source_snapshot in sorted((source_rows or {}).items()):
-        resolved = resolve_symbol_venue_eligibility(
-            code,
-            trade_date,
-            source_snapshot,
-        )
-        session.merge(
-            SecurityMarketEligibilityDaily(
-                trade_date=trade_date,
-                stock_code=resolved.stock_code,
-                krx_regular_eligible=resolved.krx_regular_eligible,
-                nxt_eligible=resolved.nxt_eligible,
-                krx_aftermarket_eligible=resolved.krx_aftermarket_eligible,
-                eligible_venues_json=list(resolved.eligible_venues),
-                audit_info=resolved.audit_info,
-                stock_state=resolved.stock_state,
-                order_warning=resolved.order_warning,
-                market_code=resolved.market_code,
-                source_api_id=resolved.source_api_id,
-                source_revision=resolved.source_revision,
-                observed_at_kst=resolved.observed_at_kst,
-                payload_sha256=resolved.payload_sha256,
-                quality_state=resolved.quality_state,
-                blocked_reasons_json=list(resolved.blockers),
-            )
-        )
-        quality_counts[resolved.quality_state] = (
-            quality_counts.get(resolved.quality_state, 0) + 1
-        )
-    return {
-        "stored_count": int(sum(quality_counts.values())),
-        "quality_counts": quality_counts,
-    }
 
 
 def _collect_and_store_market_eligibility(

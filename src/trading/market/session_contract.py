@@ -105,6 +105,8 @@ class SymbolVenueEligibility:
     observed_at_kst: datetime | None
     quality_state: str
     blockers: tuple[str, ...]
+    source_revision: str = ""
+    source_trade_date: str = ""
 
 
 @dataclass(frozen=True)
@@ -227,6 +229,8 @@ def resolve_symbol_venue_eligibility(
         observed_at_kst=observed_at_snapshot,
         quality_state=quality_state,
         blockers=tuple(_dedupe_strings(raw_blockers)),
+        source_revision=_coerce_text(source_snapshot.get("source_revision")) or "",
+        source_trade_date=str(source_snapshot.get("trade_date") or ""),
     )
 
 
@@ -399,11 +403,36 @@ def _aftermarket_buy_eligibility_blocker(
     route: str,
     eligibility: SymbolVenueEligibility | None,
 ) -> str | None:
+    # ka10099/ka10100 prove NXT listing but provide no KRX aftermarket axis.
+    # Preserve that PARTIAL source; only the explicitly requested NXT route can
+    # consume it, with complete current-day provenance and no other blocker.
+    nxt_source_complete = bool(
+        route == BROKER_ORDER_ROUTE_NXT
+        and eligibility is not None
+        and eligibility.quality_state == "PARTIAL"
+        and set(eligibility.blockers) == {"krx_aftermarket_eligibility_unknown"}
+        and eligibility.krx_regular_eligible is True
+        and eligibility.krx_aftermarket_eligible is None
+        and isinstance(eligibility.nxt_eligible, bool)
+        and eligibility.source_id in {"ka10099", "ka10100"}
+        and len(eligibility.source_revision) == 40
+        and all(c in "0123456789abcdef" for c in eligibility.source_revision)
+        and isinstance(eligibility.source_sha256, str)
+        and len(eligibility.source_sha256) == 64
+        and all(c in "0123456789abcdef" for c in eligibility.source_sha256)
+        and eligibility.source_trade_date == session_context.trade_date.isoformat()
+        and isinstance(eligibility.observed_at_kst, datetime)
+        and eligibility.observed_at_kst.utcoffset() is not None
+        and eligibility.observed_at_kst.date() == session_context.trade_date
+        and eligibility.observed_at_kst <= session_context.observed_at_kst
+    )
     if (
         eligibility is None
         or eligibility.trade_date != session_context.trade_date
-        or eligibility.quality_state != SOURCE_QUALITY_VALID
-        or eligibility.blockers
+        or (not nxt_source_complete and (
+            eligibility.quality_state != SOURCE_QUALITY_VALID
+            or eligibility.blockers
+        ))
     ):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
     if route == BROKER_ORDER_ROUTE_KRX:

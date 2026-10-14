@@ -37,6 +37,34 @@ def test_wire_parity_and_strict_decode(fixture):
     with pytest.raises(ValueError,match='identity'):W.encode(duplicate)
 
 
+@pytest.mark.parametrize('defect', ['branch_only_pass', 'missing_common_source', 'partial_refs',
+                                  'unknown_fact', 'unbound_risk', 'wrong_risk_role'])
+def test_common_support_wire_never_repairs_invalid_provider_or_source_evidence(defect):
+    fixture=next(iter(FIXTURES.values()));old,new=definitions()
+    logical,_,_=G.production_request((fixture['event'],fixture['source']),new)
+    _,schema,aliases=W.encode(logical)
+    common=aliases['observed_machine_signal']
+    branch=next(aliases[f['id']] for f in logical['entry_setup_evidence_v1']['positive_facts']
+                if f['id'].endswith('/observed_machine_signal'))
+    assert schema['type']=='object' and 'anyOf' not in schema
+    assert schema['additionalProperties'] is False
+    assert set(schema['required'])==set(schema['properties'])
+    assert schema['properties']['screen']['anyOf'][0]['properties']['fact']['enum']==[common]
+    raw=dict(assessed={aliases[s['ref']]:True for s in logical['signals']},
+             screen=dict(verdict='PASS',risk='NO_BLOCKING_RISK',fact=common),confidence=50)
+    if defect=='branch_only_pass':raw['screen']['fact']=branch
+    elif defect=='missing_common_source':
+        logical['entry_setup_evidence_v1']['positive_facts']=[
+            f for f in logical['entry_setup_evidence_v1']['positive_facts'] if f['id']!='observed_machine_signal']
+    elif defect=='partial_refs':raw['assessed'].pop(next(iter(raw['assessed'])))
+    elif defect=='unknown_fact':raw['screen']['fact']='not_supplied'
+    elif defect=='unbound_risk':raw['screen'].update(verdict='CAUTION',risk='not_supplied')
+    elif defect=='wrong_risk_role':raw['screen']['verdict']='CAUTION'
+    before=copy.deepcopy((raw,logical))
+    with pytest.raises(ValueError):G.decode_response(raw,logical,new)
+    assert (raw,logical)==before
+
+
 @pytest.mark.parametrize('schema_changed', [False, True])
 def test_live_sdk_exact_contract(tmp_path,monkeypatch,schema_changed):
     from src.tests.test_ai_engine_openai_transport import _build_engine
@@ -124,7 +152,7 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
     monkeypatch.setattr(POLICY,'assess',lambda *args,**kw:(copy.deepcopy(a),inp,prompt,schema))
     monkeypatch.setattr(D,'validate_claim_with_receipt',lambda *args,**kw:snap)
     monkeypatch.setattr(I,'apply_request',lambda *args:args[-1])
-    monkeypatch.setattr(I,'validate_decision',lambda *args,**kw:None)
+    monkeypatch.setattr(I,'validate_decision',lambda *args,**kw:new)
     monkeypatch.setattr(N,'load_effective',lambda **kw:{'bundle_sha256':'b'*64})
     monkeypatch.setattr(V,'validate_active_claim',lambda *args,**kw:a['matched_policy_refs'])
     engine=_build_engine();calls=[];response_arrived=[False]

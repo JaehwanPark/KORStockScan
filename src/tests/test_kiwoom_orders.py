@@ -902,6 +902,51 @@ def test_aftermarket_buy_unknown_eligibility_blocks_before_broker(monkeypatch):
     assert result["broker_order_attempted"] is False
 
 
+@pytest.mark.parametrize("failure", [None, "missing", "wrong_symbol", "stale", "nxt_false"])
+def test_explicit_nxt_uses_own_eligibility_without_sor_approval(monkeypatch, failure):
+    _allow_buy_time_guards(monkeypatch)
+    calls = []
+    monkeypatch.setattr(kiwoom_orders, "_main_aftermarket_sor_canary_eligibility",
+                        lambda **_kwargs: pytest.fail("NXT cannot consume SOR approval"))
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry",
+        lambda _url, _headers, payload, _api_id, timeout=5: (
+            calls.append(dict(payload)) or types.SimpleNamespace(status_code=200),
+            {"return_code": "0", "ord_no": "NXT1"}))
+    source = session_contract.resolve_symbol_venue_eligibility(
+        "005930", date(2026, 9, 14), {
+            "trade_date": "2026-09-14", "source_id": "ka10099",
+            "source_revision": "a" * 40, "payload_sha256": "b" * 64,
+            "observed_at_kst": datetime(2026, 9, 14, 8, tzinfo=session_contract.KST),
+            "krx_regular_eligible": True, "nxt_eligible": True,
+            "krx_aftermarket_eligible": None, "quality_state": "PARTIAL",
+            "blocked_reasons_json": ["krx_aftermarket_eligibility_unknown"],
+        })
+    if failure == "missing":
+        source = None
+    elif failure == "wrong_symbol":
+        source = replace(source, stock_code="036930")
+    elif failure == "stale":
+        source = replace(source, source_trade_date="2026-09-13")
+    elif failure == "nxt_false":
+        source = replace(source, nxt_eligible=False)
+    result = kiwoom_orders.send_buy_order_market(
+        "005930", 2, "TOKEN", order_type="3", dmst_stex_tp="NXT",
+        owner_context=_main_owner_context(),
+        now=datetime(2026, 9, 14, 18, tzinfo=session_contract.KST),
+        venue_eligibility=source)
+    if failure:
+        assert calls == []
+        assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+        assert result["broker_order_attempted"] is False
+    else:
+        assert len(calls) == 1
+        assert calls[0]["dmst_stex_tp"] == "NXT"
+        assert calls[0]["trde_tp"] == "6"
+        assert calls[0]["ord_uv"] == ""
+        assert calls[0]["ord_qty"] == "2"
+        assert result["return_code"] == "0"
+
+
 @pytest.mark.parametrize("side", ["buy", "sell"])
 def test_broker_reject_does_not_reroute_or_retry_order_type(
     monkeypatch, tmp_path, side

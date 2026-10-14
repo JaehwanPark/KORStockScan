@@ -89,6 +89,27 @@ def _observation_health_fixture():
     return result
 
 
+@pytest.mark.parametrize('damage',[None,'late_activation','wrong_lower','unbounded_index','missing_population'])
+def test_source_window_health_contract_is_pure_and_cannot_expand_coverage(monkeypatch,damage):
+    result=_observation_health_fixture()
+    now=monitor.stamp(result['as_of']);lower=now-timedelta(seconds=monitor.SOURCE_WINDOW_SEC)
+    source=result['source_gap_semantics']['sources']['probe']
+    source.update(coverage_basis='verified_forward_sentinel_source_window_v1',
+        coverage_started_at=(lower-timedelta(seconds=1)).isoformat(),current_window_start_at=lower.isoformat(),
+        cache_schema_version=20,projection_contract='a'*64,
+        historical_stage_coverage='not_backfilled_before_cache_offset',cache_generation=[1,2,3,4,5],
+        indexed_raw_offset=2048,indexed_bytes_read=123,indexed_identity_bytes_read=300,bytes_read=0)
+    if damage=='late_activation':source['coverage_started_at']=(lower+timedelta(seconds=1)).isoformat()
+    elif damage=='wrong_lower':source['current_window_start_at']=(lower+timedelta(seconds=1)).isoformat()
+    elif damage=='unbounded_index':source['indexed_identity_bytes_read']=monitor.SOURCE_TAIL_BYTES+1
+    elif damage=='missing_population':source.pop('indexed_identity_bytes_read')
+    from pathlib import Path
+    monkeypatch.setattr(Path,'read_bytes',lambda *a:pytest.fail('pure health projection performed IO'))
+    health=monitor.observation_health_projection(result)
+    assert (health['status']=='warning_pending')==(damage is None),health
+    if damage is not None:assert 'indexed_source_window_proof_invalid:probe' in health['unmet_conditions']
+
+
 def _recorded_guard_health_fixture(*, healthy=False):
     """Reconstructed small16:00 guard contract using actual first2 hashes/IDs.
 

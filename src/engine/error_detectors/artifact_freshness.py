@@ -124,7 +124,8 @@ def _submission_observer_dimensions(payload, path, sha):
                  if isinstance(value.get(key), (str, int, float, bool))}
         sources = value.get('sources')
         if isinstance(sources, dict):
-            stage['sources'] = {str(key)[:80]:{field:scalar(source[field]) for field in ('status', 'recent_count', 'reason')
+            stage['sources'] = {str(key)[:80]:{field:scalar(source[field]) for field in (
+                'status', 'recent_count', 'reason', 'window_covered', 'first_read_at', 'bytes_read')
                 if isinstance(source.get(field), (str, int, float, bool))}
                 for key, source in list(sources.items())[:16] if isinstance(source, dict)}
         for field in ('issues', 'diagnostics'):
@@ -137,11 +138,19 @@ def _submission_observer_dimensions(payload, path, sha):
         'latest_event_status', 'loaded_recent_event_count',
         'snapshot_age_seconds', 'latest_event_age_seconds', 'row_count', 'snapshot_order') if key in provenance}
         if isinstance(provenance, dict) else None)
+    cohorts = {'evaluation_cohort': scalar(payload.get('evaluation_cohort'))}
+    for name in ('identity_observation', 'fixed_watch_identity_observation'):
+        value = payload.get(name)
+        if isinstance(value, dict):
+            cohorts[name] = {key:scalar(value[key]) for key in (
+                'status', 'window_sec', 'window_policy', 'identified_event_count',
+                'missing_event_count', 'identity_missing_event_count', 'latest_identified_at')
+                if isinstance(value.get(key), (str, int, float, bool))}
     return dict(report=dict(path=str(path), byte_sha256=sha,
                            date=scalar(payload.get('date')), as_of=scalar(payload.get('as_of')), run_id=scalar(payload.get('run_id'))),
                 execution=scalar(payload.get('execution_status')), semantic=scalar(payload.get('semantic_status')),
                 source=dict(status=scalar(payload.get('status')), blocker=scalar(payload.get('blocker')), stages=stages,
-                            input_provenance=provenance,
+                            input_provenance=provenance, cohorts=cohorts,
                             inherited_source_as_of=scalar(payload.get('source_as_of')),
                             inherited_source_as_of_is_upstream_clock=False),
                 runtime_effect=False, allowed_runtime_apply=False)
@@ -152,6 +161,20 @@ def _submission_observer_partial_reason(dimensions):
         return ' '.join(str(value).split())[:160]
     source = dimensions['source']
     reasons = []
+    # Name the recomputed failed health conditions before the scanner-only
+    # funnel blocker. Fixed-watch Main activity has its own cohort and clock.
+    health = dimensions.get('observation_health') or {}
+    unmet = health.get('unmet_conditions')
+    if isinstance(unmet, list) and unmet:
+        reasons.append('health_unmet=' + ','.join(text(value) for value in unmet[:12]))
+    cohorts = source.get('cohorts') or {}
+    if cohorts.get('evaluation_cohort'):
+        reasons.append('evaluation_cohort=' + text(cohorts['evaluation_cohort']))
+    for key, label in (('identity_observation', 'scanner_identified_events'),
+                       ('fixed_watch_identity_observation', 'fixed_watch_identified_events')):
+        count = (cohorts.get(key) or {}).get('identified_event_count')
+        if count is not None:
+            reasons.append(label + '=' + text(count))
     if source.get('blocker') is not None:
         reasons.append('blocker=' + text(source['blocker']))
     for name, stage in source['stages'].items():
@@ -314,6 +337,16 @@ def _submission_observer_generation_issue(payload, root):
         observer_path = Path(generation["release_root"]) / "src/engine/monitoring/submission_bottleneck_monitor.py"
         if _observer_small_object(observer_path, limit=1024 * 1024, hash_only=True)[1] != generation["observer_code_sha256"]:
             return "observer_generation_code_mismatch"
+        gap = payload.get('source_gap_semantics') or {}
+        views = [gap, (gap.get('current_health_cohort') or {}).get('view') or {}]
+        indexed = [((view.get('sources') or {}).get('probe') or {}) for view in views]
+        indexed = [source for source in indexed
+                   if source.get('coverage_basis') == 'verified_forward_sentinel_source_window_v1']
+        if indexed:
+            source_path = Path(generation['release_root'])/'src/engine/monitoring/sentinel_source_window.py'
+            source_sha = _observer_small_object(source_path,limit=1024*1024,hash_only=True)[1]
+            if any(source.get('projection_contract') != source_sha for source in indexed):
+                return 'observer_source_window_code_mismatch'
     except (OSError, ValueError, TypeError):
         return "observer_generation_selection_unavailable"
     return None

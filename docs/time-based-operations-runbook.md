@@ -298,18 +298,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
 | 수동 dry-run | 배포 전/수정 후 안전 점검 | `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` | report 파일 미작성, filesystem mutation 차단 |
 | 수동 단일 범위 | 특정 detector 재현 | `--mode health_only|cron_only|log_only|auth_only|artifact_only|resource_only` | 해당 detector만 실행 |
 
-### 글로벌 위기/매매 리스크 경보 알림 제한
-
-`crisis_monitor`는 bot daemon 안에서 60분 주기로 RSS 위기 뉴스를 수집하고 DB에 저장한다. 단, 관리자 Telegram `시스템 경보: 매매 리스크 감지`는 수집 주기마다 보내지 않고 아래 KST 슬롯에서 risk 조건이 살아 있을 때만 슬롯별 1회 발송한다.
-
-| 슬롯 | 발송 허용 window | 조건 | 상태 파일 |
-| --- | --- | --- | --- |
-| 장전 | `08:00~09:30` | 최근 12시간 severe risk count `>=4` 및 신규 severe alert 존재 | `data/runtime/crisis_monitor_alert_state.json` |
-| 정오 | `11:30~12:30` | 동일 | 동일 |
-| 장후 | `15:30~16:30` | 동일 | 동일 |
-
-이 제한은 알림 피로도를 줄이기 위한 notification throttle이다. RSS 수집, macro alert DB 저장, risk count 계산은 계속 수행하며 threshold, 주문 guard, provider, bot restart, 자동매도 권한을 갖지 않는다. 긴급 운영자가 일시적으로 기존 주간 시간대 발송 방식으로 되돌릴 때만 `KORSTOCKSCAN_CRISIS_ALERT_SLOT_THROTTLE_ENABLED=false`를 사용하고, 사유와 복구 시각을 checklist에 남긴다.
-
 nproc 기반 CPU profile로 bot hot path와 report-only job 경합을 줄인다. 공통 profile은 [cpu_affinity_profile.sh](/home/ubuntu/KORStockScan/deploy/cpu_affinity_profile.sh)가 소유한다. 4 vCPU 이상에서는 [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)의 기본 `KORSTOCKSCAN_BOT_CPU_AFFINITY`가 `0-1`, report-only wrapper 기본값이 `2-3`, health/sampler 기본값이 `3`이다. 2~3 vCPU 환경에서는 bot `0`, wrapper `1` 또는 `1-2` 계열로 축소되고, 1 vCPU 또는 `taskset` 부재 환경에서는 affinity 없이 실행한다. 적용 대상은 `run_error_detection.sh`, `run_buy_funnel_sentinel_intraday.sh`, `run_holding_exit_sentinel_intraday.sh`, `run_panic_sell_defense_intraday.sh`, `run_system_metric_sampler_cron.sh`, `run_rising_missed_intraday_feedback.sh`, `run_scalping_pyramid_intraday_feedback.sh`, `run_intraday_ws_freshness_monitor.sh`, `run_monitor_snapshot_cron.sh`, `run_monitor_snapshot_incremental_cron.sh`, `run_monitor_snapshot_midcheck_safe.sh`, `run_monitor_snapshot_safe.sh`, `run_threshold_cycle_postclose.sh`이며, 각각의 wrapper별 `*_CPU_AFFINITY`로 override할 수 있다. growing pipeline을 재탐색하는 rising-missed/pyramid/WS source-only 작업의 성공 완료 cooldown 기본값은 각각 1500/720/720초이고, 5분 trigger와 조합한 실효 간격은 약 30/15/15분이다. panic sell wrapper 내부의 `market_panic_breadth_collector`도 같은 panic wrapper affinity/nice/ionice와 shared lock/fresh artifact 재사용 계약을 따른다. 이 설정은 CPU 배치와 source-only 보고 주기만 바꾸며 threshold, 주문 guard, provider 변경 권한은 없다. 단 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart`는 15:45 장후 postclose resource isolation 전용 운영 재기동이며, strategy/runtime threshold 변경으로 해석하지 않는다.
 
 `run_error_detection.sh`의 직접 Telegram 알림은 `KORSTOCKSCAN_ERROR_DETECTION_TELEGRAM_NOTIFY_ENABLED=false`로 비활성화할 수 있다. 동일 fail signature는 `tmp/error_detection_telegram_notify_state.json` 기준 10분 cooldown으로 중복 전송을 막는다. wrapper는 실행별 임시 report의 `schema_version/report_type/mode/run_id/target_date`, 예상 detector 집합과 생성 실패 accounting, `runtime_effect=false/runtime_mutation=none`을 검증한다. 여기서 `runtime_mutation=none`은 `trading_strategy_runtime` 범위이며, flag/cap/cooldown 안에서 실제 수행된 restart flag·token cache invalidation·log rotation·stale-lock cleanup은 `operational_mutations`로 별도 기록한다. 누락·이전 실행 파일·부분 JSON·detector silent drop은 canonical report로 승격하거나 `[DONE]`으로 닫지 않고 `[FAIL]`로 종료한다. canonical report와 bot daemon report는 모두 atomic replace로 기록해 동시 reader가 부분 JSON을 읽지 않게 한다.
@@ -507,6 +495,14 @@ Greenfield의 LDM bucket authority는 retired/no-op다. 예전 containment env �
 8. apply plan의 `runtime_apply_bridge` 또는 blocked reason에서 bridge 후보 상태를 확인한다. scale-in 또는 complete-lifecycle bridge는 `bridge_candidate_state=live_auto_apply_ready`, `allowed_runtime_apply=true`, target env mapping, runtime hook/provenance mapping, parsed AI Tier2 review가 모두 맞는 후보만 selected될 수 있다. `ai_two_pass_review_status`가 `parsed`가 아니면 pre-final live-auto는 fail-closed 차단하고 다음 postclose review로 넘긴다. `bootstrap_pending`, `blocked_source_quality`, `blocked_rolling_conflict`, `runtime_blocked_contract_gap`, `code_patch_required`, 명시적 AI contract/safety block은 env 미생성이 정상이다.
 9. bridge selected env가 있으면 `runtime_apply_bridge_family`, `bridge_candidate_id`, `source_bucket_key`, `discovery_ai_review_id` 또는 `ai_two_pass_review_status`, `actual_runtime_effect` provenance가 runtime env JSON 또는 post-apply attribution 입력에 남는지 확인한다. discovery 범위 밖 approval-required 후보는 기존 `approval_id`도 함께 확인한다. provenance가 없으면 적용 성공이 아니라 `warning`으로 닫는다.
 10. 실패 시 수동 approve가 아니라 `safety_revert_required`, `hold_sample`, `hold_no_edge`, `AI instrumentation_gap/incident`, same-stage owner 충돌 중 어느 차단인지 판정한다.
+
+### Main 당일 거래소 자격 원천 준비
+
+Main 기동 시 entry worker보다 먼저 `ka10099`의 코스피·코스닥 전체 목록을 수집하여 당일 `security_market_eligibility_daily`에 저장한다. 실행 owner는 `src/engine/infrastructure/market_eligibility_source.py`이며 EOD와 같은 canonical 저장 함수를 사용한다. 성공 자료는 Main 프로세스·KST 날짜별로 재사용하고 날짜 변경은 기존 관제 루프에서 감지한다. 신규 cron/daemon이나 entry의 원 5초 안에 provider 조회를 추가하지 않는다.
+
+각 시장은 기존 공통 rate gate를 거치는 source-only 읽기이며 페이지 최대 8개, 일반 전송 `max_retries=1`, 기존 인증복구 최대 1회, connect/read timeout 1/2초, rate admission 대기 최대 1초를 사용한다. 물리 호출 수는 `request_attempt_count`로 확인한다. 수집 실패·불완전 응답은 5분 뒤 자연 scheduler tick에서 재시도하되 날짜당 최대 3회다. `data/runtime/market_eligibility_source/YYYY-MM-DD/<PID>-<start_ticks>-<attempt>.json`과 `latest.json`, `[MARKET_ELIGIBILITY_SOURCE]` 로그에서 완료/partial/fail·원천 revision·원 종목별 normalized row와 payload hash를 확인한다. 재기동은 새 프로세스의 당일 원천을 다시 확인한다.
+
+응답의 NXT `Y`/`N` 이외 값, continuation 누락·페이지 한도·오류·당일 자료 부재는 unknown을 유지한다. KRX 시간외 자격은 이 API로 추정하지 않으며 raw `PARTIAL`과 `krx_aftermarket_eligibility_unknown`을 보존한다. 명시적 NXT 경로의 별도 소비 계약만 검증된 NXT 축을 사용할 수 있고 SOR 승인·수량·가격·deadline·기존 hard safety는 그대로 적용한다. 수집 성공은 주문·체결 또는 경제 성과의 증거가 아니다.
 
 ### 장중 운영 override 기준
 

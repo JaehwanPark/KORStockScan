@@ -433,6 +433,29 @@ REVIEWED_STARTUP_OBSERVER_SOURCES = {'src/engine/monitoring/submission_bottlenec
 REVIEWED_OBSERVER_HEALTH_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd', '6287ec98260f02ae85e61a2f25147d3011a89ebb276a962f215888fcd409f541')}
 
 
+# Exact original PREOPEN-to-reviewed submission and observer repair.
+# Preserve native deadlines, policy values, custody and every order guard.
+# Evidence: docs/audits/main-submission-crisis-timeout-implementation-review-2026-10-14.md.
+REVIEWED_SUBMISSION_TIMEOUT_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        'dabda2cb9fee6fd17263465f38866d90ec66f62b7305a2b5bb7a8dd9fc9a1671',
+        '58aa3ca78af08ef2cac6ec0501cc212947c4c5fa743c58b2daea26c0ba205937',
+    ),
+    'src/engine/sniper_state_handlers.py': (
+        'b7435b6001fc5901f601879a08fa4e61b7c337187e1ac58db5e93984768beaa3',
+        'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',
+    ),
+    'src/engine/scalping/scanner_async_eval.py': (
+        '54d8584efa5350575d687b92486e205702f94cfde7a87da0acda46d1f3522748',
+        'bfd354bbfbc371e912e873a3cbb40fd1ec2b9f5a78427602f214cfb0543b1d21',
+    ),
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
+        '3f53a161bf5ca4857ec0b6b817ffe1c5bbf0b5e8712444334a421e200f9a40a4',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -481,7 +504,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES.get(name),
                     REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES.get(name),
                     REVIEWED_STARTUP_OBSERVER_SOURCES.get(name),
-                    REVIEWED_OBSERVER_HEALTH_SOURCES.get(name)):
+                    REVIEWED_OBSERVER_HEALTH_SOURCES.get(name),
+                    REVIEWED_SUBMISSION_TIMEOUT_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

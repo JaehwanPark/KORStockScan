@@ -24,6 +24,23 @@ def test_required_detector_coverage_registry_is_complete():
     }
 
 
+def test_heartbeat_coverage_requires_only_surviving_runtime_workers():
+    components = {
+        "main_loop", "telegram", "error_detection", "sniper_engine", "scalping_scanner"
+    }
+    assert REQUIRED_HEARTBEAT_COMPONENTS == components
+    gaps = validate_detector_coverage(
+        CRON_JOB_REGISTRY, ARTIFACT_REGISTRY, heartbeat_components=components
+    )
+    assert gaps["missing_heartbeat_components"] == []
+    gaps = validate_detector_coverage(
+        CRON_JOB_REGISTRY,
+        ARTIFACT_REGISTRY,
+        heartbeat_components=components - {"sniper_engine"},
+    )
+    assert gaps["missing_heartbeat_components"] == ["sniper_engine"]
+
+
 def test_native_stage_and_notifier_functional_coverage():
     from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY
     from src.engine.notify_error_detection_admin import SEMANTIC_ALERT_STAGES

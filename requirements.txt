@@ -18,9 +18,7 @@ django-timedeltafield
 google-api-python-client
 holidays
 openpyxl
-feedparser
 cryptography
-deep-translator
 google-genai
 openai
 openai-codex

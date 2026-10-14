@@ -134,29 +134,6 @@ def install_dual_logger():
     return logger
 
 
-# 💡 글로벌 위기 감지 무한 루프
-def crisis_monitor_loop():
-    """60분(3600초) 주기로 글로벌 위기를 감시하고 Telegram은 슬롯 단위로 제한한다."""
-    # 순환 참조 및 의존성 방지를 위해 쓰레드 내부에서 지역 임포트
-    try:
-        import src.scanners.crisis_monitor as crisis_monitor
-    except ImportError:
-        print(
-            "⚠️ [시스템] crisis_monitor.py 모듈을 찾을 수 없어 위기 감지 스케줄러를 종료합니다."
-        )
-        return
-
-    while True:
-        try:
-            crisis_monitor.run_crisis_monitor()
-        except Exception as e:
-            from src.utils.logger import log_error
-
-            log_error(f"위기 감지 스케줄러 에러: {e}")
-        write_heartbeat("crisis_monitor")
-        time.sleep(3600)
-
-
 def _startup_consumption_identity():
     """Pin this launch once; polling cannot renew its startup deadline."""
     from src.engine.infrastructure import runtime_release_router as router
@@ -492,10 +469,15 @@ if __name__ == "__main__":
     reset_heartbeat()
     write_heartbeat("main_loop")
     write_heartbeat("telegram")
-    write_heartbeat("crisis_monitor")
 
     # 🚀 영업일 체크
     is_open, reason = kiwoom_utils.is_trading_day()
+    from src.engine.infrastructure.market_eligibility_source import RuntimeMarketEligibilitySource
+    market_eligibility_source = RuntimeMarketEligibilitySource(
+        PROJECT_ROOT / 'data/runtime/market_eligibility_source')
+    # Prepare canonical current-date listing evidence before entry workers start.
+    # An incomplete read remains fail-closed and retries on natural main ticks.
+    market_eligibility_source.tick(db_manager)
     if is_open:
         write_heartbeat("sniper_engine")
         write_heartbeat("scalping_scanner")
@@ -515,13 +497,6 @@ if __name__ == "__main__":
         print(
             "[시스템] 에러 탐지 데몬 DISABLED (TRADING_RULES.ERROR_DETECTOR_ENABLED=False)"
         )
-
-    # 💡 2. [신규 추가] 글로벌 위기 감지 모니터는 주말/휴일 상관없이 365일 돌아가야 합니다.
-    crisis_thread = threading.Thread(target=crisis_monitor_loop, daemon=True)
-    crisis_thread.start()
-    print(
-        "🌍 [시스템] 글로벌 위기 감지 모니터 (60분 수집, 장전/정오/장후 알림 제한) 가동 완료."
-    )
 
     if is_open:
         import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
@@ -585,6 +560,8 @@ if __name__ == "__main__":
             heartbeat_counter += 1
             if heartbeat_counter % 5 == 0:
                 write_heartbeat("main_loop")
+
+            market_eligibility_source.tick(db_manager)
 
             # 자정이 지나면 당일 스케줄러 플래그를 초기화
             if now.hour == 0 and now.minute == 1:

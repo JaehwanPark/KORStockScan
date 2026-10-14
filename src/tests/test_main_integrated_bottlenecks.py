@@ -251,7 +251,9 @@ def test_trace_background_releases_generation_before_writer_mutex(tmp_path, monk
                     with jsonl_artifact_generation_lock(paths['_payload_path'],exclusive=True,blocking=False):
                         acquired=True
                         break
-                except BlockingIOError:
+                except OSError as exc:
+                    if not str(exc).startswith('jsonl_generation_lock_busy:'):
+                        raise
                     time.sleep(.001)
             assert acquired, 'background cannot hold file lease while waiting on writer mutex'
     finally:
@@ -583,6 +585,85 @@ def test_reordered_repeated_transitions_do_not_overflow_bounded_projection():
     result=async_disposition_coverage([event]*1100,datetime.fromtimestamp(NOW+6,KST),source_coverage='complete')
     assert result['by_producer']['123:456']['accepted']==1
     assert not result['denominator_partial'] and len(result['attempt_projection'])==1
+
+
+@pytest.mark.parametrize('disposition', ['accepted_to_entry_path', 'rejected'])
+def test_real_main_guard_clocks_preserve_terminal_async_receipt(monkeypatch, disposition):
+    from src.engine.scalping import scanner_async_eval as A
+    from src.engine.monitoring import runtime_performance as P
+    from src.engine.monitoring.submission_bottleneck_monitor import async_disposition_coverage
+    writes = []
+    result = SimpleNamespace(request_id='request', generation_id='original', code='005930',
+        native_claim={}, origin_fields={}, venue='SOR', deadline_epoch=NOW+5,
+        submitted_epoch=NOW, completed_epoch=NOW+1, coordinator_ready_perf=20.,
+        ai_payload=dict(evaluation_attempt_id='attempt', ai_decision_trace_id='trace',
+            entry_mechanistic_action='ENTER_NOW', entry_ai_screen_status='pass',
+            entry_ai_risk_verdict='PASS', provider_called=True,
+            entry_local_stage_clocks={'async_evaluation_completed_perf': 19.5}))
+    monkeypatch.setattr(A.time, 'time', lambda: NOW+2)
+    monkeypatch.setattr(A, '_PROCESS_START', '456')
+    monkeypatch.setattr(A, '_append_async_disposition', lambda code, fields:
+        writes.append(SimpleNamespace(stage='entry_async_disposition', stock_code=code,
+            emitted_at=datetime.fromtimestamp(NOW+2,KST).isoformat(), fields=fields)) or
+        {'structured_append_succeeded': True, 'structured_append_status': 'raw_appended'})
+    facts = P.observe_async_main_guard(result, now_perf=20.25)
+    assert facts['async_evaluation_completed_perf'] == 19.5
+    assert A.record_async_disposition(result, disposition, 'commit_allowed', **facts) is True
+    assert len(writes) == 1
+    assert writes[0].fields['async_evaluation_completed_perf'] == 19.5
+    counts = next(iter(async_disposition_coverage(writes,
+        datetime.fromtimestamp(NOW+6,KST))['by_producer'].values()))
+    assert counts['accepted' if disposition == 'accepted_to_entry_path' else 'rejected'] == 1
+    assert counts['unobservable'] == 0
+
+
+@pytest.mark.parametrize('facts', [{'async_request_id': 'other'},
+    {'async_provider_called': False}, {'async_provider_called': 1},
+    {'async_evaluation_completed_perf': 999.}])
+def test_async_receipt_rejects_conflicting_original_fact_overrides(monkeypatch, facts):
+    from src.engine.scalping import scanner_async_eval as A
+    result = SimpleNamespace(request_id='request', generation_id='original', code='005930',
+        native_claim={}, origin_fields={}, venue='SOR', deadline_epoch=NOW+5,
+        completed_epoch=NOW, ai_payload=dict(provider_called=True,
+            entry_local_stage_clocks={'async_evaluation_completed_perf': 19.5}))
+    monkeypatch.setattr(A, '_append_async_disposition', lambda *a: pytest.fail('conflicting receipt emitted'))
+    assert A.record_async_disposition(result, 'accepted_to_entry_path', 'commit_allowed', **facts) is False
+
+
+def test_183339_jusung_exact_attempt_missing_main_receipt_stays_unknown_until_emitted(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as A
+    from src.engine.monitoring import runtime_performance as P
+    from src.engine.monitoring.submission_bottleneck_monitor import async_disposition_coverage
+    epoch=1791970419.490577
+    generation='fixed-watch:29970cf8035eceb8ceb50f9e1e650de3d3c316a897ee218df13e26278f23f54f'
+    result=SimpleNamespace(request_id=generation+':watching:a434ef4843d7787f',
+        generation_id=generation,code='036930',native_claim={},origin_fields={},venue='SOR',
+        deadline_epoch=1791970420.810281,submitted_epoch=1791970416.461839,
+        completed_epoch=1791970419.4021714,coordinator_ready_perf=34361.102524763,
+        ai_payload=dict(evaluation_attempt_id='aims-65f5fb4d53b4b90fdf97',
+            ai_decision_trace_id='analyze_target:036930:1791970417550:e1217a92',
+            entry_mechanistic_action='ENTER_NOW',entry_ai_screen_status='pass',
+            entry_ai_risk_verdict='PASS',provider_called=True,
+            entry_local_stage_clocks={'async_evaluation_completed_perf':34361.046640665}))
+    rows=[]
+    monkeypatch.setattr(A.os,'getpid',lambda:1025115)
+    monkeypatch.setattr(A,'_PROCESS_START','3338102')
+    monkeypatch.setattr(A.time,'time',lambda:epoch)
+    monkeypatch.setattr(A,'_append_async_disposition',lambda code,fields:
+        rows.append(SimpleNamespace(stage='entry_async_disposition',stock_code=code,
+            emitted_at=datetime.fromtimestamp(epoch,KST).isoformat(),fields=fields)) or
+        {'structured_append_succeeded':True,'structured_append_status':'raw_appended'})
+    assert A.record_async_disposition(result,'worker_completed','completed')
+    assert A.record_async_disposition(result,'entry_path_returned','real_weak_pullback_entry_block')
+    now=datetime.fromtimestamp(epoch+10,KST)
+    baseline=async_disposition_coverage(rows,now)['by_producer']['1025115:3338102']
+    assert baseline['unobservable']==1 and baseline['accepted']==0
+    facts=P.observe_async_main_guard(result,now_perf=34361.14)
+    assert A.record_async_disposition(result,'accepted_to_entry_path','commit_allowed',**facts)
+    for events in (rows,rows[::-1],rows+rows):
+        repaired=async_disposition_coverage(events,now)['by_producer']['1025115:3338102']
+        assert repaired['pass_count']==repaired['accepted']==repaired['accepted_direct_guard']==1
+        assert repaired['unobservable']==repaired['accepted_submit_observed']==0
 
 
 @pytest.mark.parametrize('field,value', [('ai_decision_trace_id','other'),
