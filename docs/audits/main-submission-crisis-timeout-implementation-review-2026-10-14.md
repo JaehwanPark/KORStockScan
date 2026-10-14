@@ -1,5 +1,7 @@
 # Main 제출 응답·timeout·위기 감지 제거 구현 리뷰 — 2026-10-14
 
+최종 판정: 코드 후보 `a179bb42d`와 관련917개 시험은 검증 완료지만, 마지막 계산 수리의 배포·전체 cold CLI 검증은 장후 격리로 보류됐다. 선택 배포본은43a79e569이며 Main은20:56 정상 종료됐다. [현재 인계 상태](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/current-task-disposition.json)를 최종 운영 판정으로 사용한다.
+
 ## 범위와 기준
 
 사용자의 최신 배포 기준 계획 보완·기능 제거·6건 오류 해소·반복 리뷰/수정 후 배포·재기동 승인 및 추가18:36:07 artifact_freshness 경보를 처리한다. [보완계획](../proposals/main-postrestart-submission-bottleneck-review-and-remediation-plan-2026-10-14.md)을 실행 owner별로 구현한다. 기반은 f71c7d5f9/PID1025115/start3338102다. 동일 commit의 분리 worktree에서 작업하여 기존 workspace의 무관한 변경을 보존한다.
@@ -57,6 +59,8 @@ H c8f46d46은 기존16개 허용 map을 보존하며 정확한 신규 monitor pa
 
 [읽기 전용 진단](../../tmp/submit-crisis-timeout-20261014/cli-summary-followup/repeated-summary-cold-path-readonly-diagnosis.json) 뒤 buy `332ffe2791e389741af907e3fa304352a0abea01e222053a20bff2ba2de7400b`를 확정했다. 무관한 stage의 AI trace payload 조회와 실제 cash terminal이 없는 window의 중복 ledger 계산을 생략한다. cash terminal·broker proof·summary-only gap·중복/회복 경로는 유지한다. 별도로 `CompactFields`가 `dict`가 아니어서 token을 놓친 결함을 `Mapping` 순회로 고쳤다. 기존 잘못된 compact 출력과의 무조건 동등성이 아니라 materialized 논리 필드와의 의미 일치를 확인한다. 독립 표적51개는 lazy field 미조회, trace 증명 유지, cash terminal/window/retry/summary-only/중복/회복, token-only 전체 요약과 잘못된 payload 거부를 통과했다.
 
-summary owner는 원 `(1ddc,83d8)`, 중간 `(1ddc,d487)`, 이미 전이된 `(b1b,d487)` 세 쌍에서 `(b1b,332ffe)`로의 검토된 전이만 허용한다. 실제 CLI와 의존 정의 검증·연속 원 manifest archive·native checkpoint·suffix 한도를 보존한다. compact index owner/cache 한도·memo key·130/40/180초·AI5초·정책12개·보호80개/native33개는 바꾸지 않았다. 후속 cold-summary-followup 증거는 새 시도로 남기고 원 세 배포/수동 실패, 자연3슬롯·AI·주문·경제성 OPEN을 보존한다.
+summary owner는 원 `(1ddc,83d8)`, 중간 `(1ddc,d487)`, 이미 전이된 `(b1b,d487)` 세 쌍에서 `(b1b,332ffe)`로의 검토된 전이만 허용한다. 실제 CLI와 의존 정의 검증·연속 원 manifest archive·native checkpoint·suffix 한도를 보존한다. compact index owner/cache 한도·memo key 구성 규칙·130/40/180초·AI5초·정책12개·보호80개/native33개는 바꾸지 않았다. 후속 cold-summary-followup 증거는 새 시도로 남기고 원 세 배포/수동 실패, 자연3슬롯·AI·주문·경제성 OPEN을 보존한다.
 
 [최종 private 표본 계측](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/final-profile-20261014T210134/result.json)은9990행의 실제 baseline/candidate 코드와 동일 cProfile·교대3회·cache reset 조건에서 median1.568→0.667초(57.46% 감소), 전체 출력 및3scope/3window/append501행의7개 논리 dict 동등성을 확인했다. 관측 peak495,046,656바이트는14.06초 프로파일 프로세스의 high-water이며 강제 상한·단계별 증가량·전체 장중 보고서의 SLA가 아니다. 초기 두 shortcut 계측과 구분하며 최종 수치는 Mapping 수리도 포함한다. 통합8개 suite917개(16.11초)·Python compile·bash·diff 검증을 통과했고 [정적 검증](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/static-validation.json)에 source4개 freeze를 결속했다. 최종 문서 검증 이후의 실제 배포·cold 보고서 발행 결과는 별도 receipt가 소유하며 아직 성공으로 미리 집계하지 않는다.
+
+실제 네 번째 시도는 `main_singleton_changed`로 첫 사전검사에서 종료됐다. [독립 실패 검증](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/blocked-preflight-runtime-verification.json)은20:56:01 정상 장후 격리·Main 부재·selector43/정책12개 불변·a179의 transition/준비/기동 부재를 확인한다. [운영 경로 검증](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/postclose-route-independent-verification.json)은 실제 진행 중 wrapper와 공용 selector 전환 금지 계약을 결속한다. 권한 부족이 아니므로 새 승인을 요구하지 않는다. 장후 terminal 이후 정상 전환 창에서 정확한 날짜/정책/선택자와 다음 PREOPEN을 다시 결속하며, 현재 live-PID 전제 helper를 우회 재사용하지 않는다. 새 helper의 실제 실행과 자연3슬롯·AI·주문·경제성은 미수행/OPEN이다. 후보 source/gate와 원 실패 증거는 보존하고 이번 상태 문서만 별도로 반영한다.

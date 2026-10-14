@@ -520,6 +520,8 @@ observer의 fixed-watch session boundary는 native resolver가 확인한 시각�
 
 Sentinel wrapper는 전체180초/최종 cleanup5초를 유지하면서 observer40초와 첫 child의 TERM→KILL 여유5초를 예약한다. 첫 Sentinel은 최대130초이고 실제 경과시간에 따라 더 줄어든다. 빠른 성공은 기존 full observer, 실패는 남은 시간의 source-only 진단으로 이어지며 원 실패 종료코드를 보존한다. source-only 발행은 현재 원천 진단이며 full 건강 판정·제출 성공이 아니다. 승인된 배포의 정규 시간 외 검증은 알림 없이 같은 한도와 원 producer/consumer를 사용하고 수동 receipt를 자연 정규 슬롯으로 집계하지 않는다.
 
+승인된 배포 검증 중 정상 postclose isolation으로 Main이 이미 정지됐다면 살아 있는 이전 PID를 요구하는 ordered 사전검사를 우회하지 않는다. [공용 배포 계약](runtime-release-routing.md#scheduled-scope-and-maintenance)에 따라 scheduled wrapper 실행 중 selector도 전환하지 않는다. 원 승인은 유지하되 실제 장후 owner의 terminal 이후 정상 전환 창에서 날짜·정책·원천·선택자와 다음 PREOPEN 준비를 다시 검증한다. 정지 custody와 과거 PID receipt를 보존하고 새 PID 소비·전체 cold 보고서·자연 슬롯을 각각 확인한다. 보류된 후보는 배포/예약 완료로 기록하지 않는다.
+
 ### 장중 운영 override 기준
 
 장중 운영 override는 사용자가 명시적으로 지시한 경우에만 적용한다. 기본 원칙은 장중 threshold/runtime mutation 금지다.
