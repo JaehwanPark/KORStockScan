@@ -978,14 +978,20 @@ def final_handoff_resume(project, day):
         'src.engine.observation_source_quality_audit', 'src.engine.monitoring.intraday_ws_freshness_monitor',
         'src.engine.pipeline_event_verbosity_report', 'src.engine.monitoring.rising_missed_classifier_prior'}
     prior = status.get('scoped_resume')
-    if not isinstance(prior, dict) or prior.get('resume_from') not in {'initial_quantity', 'final_handoff'}:
-        raise ValueError('final_resume_verified_prefix_missing')
-    proof_path = Path(prior['path']); proof_bytes = proof_path.read_bytes(); proof = json.loads(proof_bytes)
-    if (hashlib.sha256(proof_bytes).hexdigest() != prior.get('sha256')
-            or proof.get('schema') not in {'postclose_initial_quantity_resume_v1', 'postclose_final_handoff_resume_v1'}
-            or proof.get('source_date') != day or proof.get('origin_run_id') != prior.get('origin_run_id')
-            or proof.get('runtime_effect') is not False or proof.get('allowed_runtime_apply') is not False):
-        raise ValueError('final_resume_verified_prefix_changed')
+    if prior is None:
+        # A full scheduled run already owns its native command prefix. Require
+        # that prefix below; never synthesize an earlier scoped recovery.
+        if status.get('regeneration_scope') != 'normal' or status.get('reused_steps_receipt') is not None:
+            raise ValueError('final_resume_verified_prefix_missing')
+    else:
+        if not isinstance(prior, dict) or prior.get('resume_from') not in {'initial_quantity', 'final_handoff'}:
+            raise ValueError('final_resume_verified_prefix_missing')
+        proof_path = Path(prior['path']); proof_bytes = proof_path.read_bytes(); proof = json.loads(proof_bytes)
+        if (hashlib.sha256(proof_bytes).hexdigest() != prior.get('sha256')
+                or proof.get('schema') not in {'postclose_initial_quantity_resume_v1', 'postclose_final_handoff_resume_v1'}
+                or proof.get('source_date') != day or proof.get('origin_run_id') != prior.get('origin_run_id')
+                or proof.get('runtime_effect') is not False or proof.get('allowed_runtime_apply') is not False):
+            raise ValueError('final_resume_verified_prefix_changed')
     def inherited_receipts(value, depth=0):
         if depth > 8: raise ValueError('final_resume_ancestry_unbounded')
         rows = list(value.get('completed_command_receipts', []))
@@ -1006,7 +1012,7 @@ def final_handoff_resume(project, day):
                 raise ValueError('final_resume_ancestry_changed')
             rows += inherited_receipts(parent, depth + 1)
         return rows
-    inherited = inherited_receipts(proof)
+    inherited = inherited_receipts(proof) if prior is not None else []
     if not required <= {m.get('producer_module') for m in completed + inherited}:
         raise ValueError('final_resume_native_prefix_incomplete')
     for stage in active_stage_names(day):

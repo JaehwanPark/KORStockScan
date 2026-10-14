@@ -274,3 +274,7 @@ The observer computes observation_health only from the final publication diction
 ### 전체 관측과 Main provider 적격 모집단
 
 보고서 건강은 native 검증된 전체 관측의 역할별 건수/원 해시 분할을 확인하고, Main provider 계보는 main_live/unspecified_legacy 적격 집합과만 정확히 대사한다. probe/CF의 provider/주문 금지와 원 역할을 보존한다. 분할 합계·해시·actor·bundle·소속이 다르거나 과거 원 분할 증빙이 없으면 성공 처리하지 않는다. 매매 정책/native 정의·주문 권한은 변경하지 않는다.
+
+### Native 완료 prefix와 승인된 보조 집합의 복구
+
+`--resume-from-final-handoff`는 native tower/strict 실패를 최소 재개한다. 이전 scoped ancestry 또는 `normal` 원 run의 실제 완료 command receipts가 있어야 하며, 다른 regeneration/reuse·누락/변조 prefix·source/commit 불일치를 거부한다. 모든 stage·exit snapshot·수량 terminal 검증 후 summary→tower→checklist→strict→controller를 갱신한다. 이전 실행/원천/실패는 보존하며 이전 scoped 복구를 합성하지 않는다. 보조 준비의 집합 차이는 검증된 parent에서 native 승인 selector의 manifest/cells/선정 영수증을 정확히 재현하는 경우만 허용한다. 새 scope/variant·예산 reset·live current 변경 권한은 없다. [구현 검증](audits/postclose-auxiliary-membership-and-final-resume-recovery-review-2026-10-14.md)을 따른다.

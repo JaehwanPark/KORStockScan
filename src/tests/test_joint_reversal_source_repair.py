@@ -399,6 +399,54 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,mo
     monkeypatch.setattr(N,'load',lambda **kw:bundle)
     handoff=dispatch.direct_handoff(tmp_path,'2026-10-13')
     assert handoff['scope_census']['new_ready']==128 and not handoff['current_pid_consumption_claimed']
+
+    # A later approved whole-variant selection must reach auxiliary preparation.
+    # Keep the actual native family validator and selector; no provider calls.
+    from src.engine.scalping import reversal_auxiliary_tuning as tuning
+    from src.engine.ai import offline_comparison_store as store_module
+    from src.tests.test_offline_comparison_store import activate
+    future_manifest=V.detector_manifest(bundle,effective_date='2026-10-15')
+    groups=future_manifest['approved_variant_groups']
+    metrics={}
+    for scope,group in groups.items():
+        for variant in (*group['alternatives'],'CURRENT_NATIVE'):
+            metrics[scope+'::'+variant]={'counts':{'WIN':80 if variant=='ADD_A_ONLY' else 7,'FAIL_STOP':20 if variant=='ADD_A_ONLY' else 3}}
+    next_machine=P.seal(dict(schema='fixture',source_date='2026-10-14',publication_date='2026-10-14',
+        status='completed',policy_schema=V.SCHEMA,parent_bundle_sha256=bundle['bundle_sha256'],
+        operating_manifest=future_manifest,cells=copy.deepcopy(list(bundle['continuous_reversal']['machine_cells'].values())),
+        execution_code_sha256=P.digest(code),label_contract=C.LABEL,
+        source_manifest_sha256=issued['source_manifest_sha256'],
+        source_manifest_receipt={'path':str(frozen),'sha256':P.file_hash(frozen)},
+        proposal_metrics=metrics,partitions=[],quarantined_conflicts=[],registration_change=None))
+    selected=R.apply_selection(next_machine,bundle)
+    assert selected['operating_manifest']['scopes']!=bundle['continuous_reversal']['operating_manifest']['scopes']
+    candidate=G.register(tmp_path,G.definition(V.A.V1.ARMS[0],input_version=V.A.VERSION))
+    tuning.configure(tmp_path,candidate=candidate,scopes=list(groups),seed='approved-variant-test',max_pairs=2)
+    with store_module.Store(tmp_path) as store:
+        activate(store)
+    before=copy.deepcopy((bundle,selected))
+    campaign=tuning.prepare(tmp_path,'2026-10-14',selected,bundle)
+    assert campaign['machine_report_sha256']==selected['artifact_content_sha256']
+    assert (bundle,selected)==before
+    for defect in ('parent','receipt','definitions','nongroup','cells','metrics','authority','source'):
+        damaged=copy.deepcopy(selected)
+        sid=next(iter(groups))
+        if defect=='parent':damaged['parent_bundle_sha256']='b'*64
+        elif defect=='receipt':damaged['operating_manifest'].pop('variant_selection_receipt')
+        elif defect=='definitions':damaged['operating_manifest']['definitions']={}
+        elif defect=='nongroup':
+            other=next(s for s in damaged['operating_manifest']['scopes'] if s not in groups)
+            damaged['operating_manifest']['scopes'][other]=['unapproved_detector']
+        elif defect=='cells':damaged['cells']=[]
+        elif defect=='metrics':damaged['proposal_metrics'][sid+'::ADD_A_ONLY']={'counts':{'WIN':0,'FAIL_STOP':100}}
+        elif defect=='authority':damaged['operating_manifest']['selection_authority']='unapproved'
+        else:damaged['source_manifest_receipt']=None
+        with pytest.raises(ValueError,match='auxiliary_tuning_machine_membership_changed'):
+            tuning.prepare(tmp_path,'2026-10-14',P.seal(damaged),bundle)
+    assert tuning.prepare(tmp_path,'2026-10-14',selected,bundle)==campaign
+    with store_module.Store(tmp_path) as store:
+        assert store.db.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]==0
+
     bad=copy.deepcopy(bundle['continuous_reversal']);sid=next(iter(J.changes()))
     bad['operating_manifest']['scopes'][sid]=[J.ALIASES['jusung_after_breakout']]
     bad['family_sha256']=P.digest({k:v for k,v in bad.items() if k!='family_sha256'})

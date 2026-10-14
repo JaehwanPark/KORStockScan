@@ -223,3 +223,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 같은 owner는19:55 현재 PID의 첫 completed publication과 complete600초/290행 원천을 보존한다. native CLOSE_ONLY/TERMINAL_EXIT의 정확한 고정감시 진입 금지 경계를 수리하되20:00 CLOSED·위조/누락 안전 증거는 허용하지 않는다. 원 incident·source cursor·semantic partial을 보존하며 warning_pending을 full coverage나 자연3슬롯 수용으로 세지 않는다. 후속 H/monitor exact pair·보호 정책/native 불변·새 PID/보고 세대·후속 detector를 별도 receipt로 확인한다.
 
 - 같은 owner는17aac/PID1243842의20:17 배포 소비 PASS와20:22 수동 Sentinel exit1/source-only partial을 구분한다. 실제 CLI의 검증된 __main__ callback identity 수리를 격리 entrypoint 재현·변조 반례와 재리뷰 후 배포하며 보호80개/native33개·정책12개 불변을 확인한다. cli-summary-followup의 실제 PID/발행 결과를 기록하고 수동 확인으로 자연3슬롯·AI/주문·경제성 OPEN을 닫지 않는다.
+
+### 10/14 EOD 장후 실패 보완·10/15 인계
+
+기존 `DirectFamilyPreopenPolicyHandoff` 및 direct family source owner가 [복구 리뷰](../audits/postclose-auxiliary-membership-and-final-resume-recovery-review-2026-10-14.md)의 source/publication 10/14→effective 10/15를 인계한다. 승인 native variant 선정의 보조 입력 수용과 완전한 normal 원 run의 최종 resume만 검증한다. 원 실패·원천·예산·완료 계산·stable ID/Acceptance/History를 보존한다. 새로운 OPEN·매매 기동·수동 env/lock/provider/threshold·주문·추가 EV gate 권한은 없으며 운영 strict/controller/준비와 미래 PREOPEN/PID·자연 경제성을 구분한다.

@@ -110,6 +110,32 @@ def rebind_candidate_input(data_root, *, input_version, expected_config_sha256):
         return receipt
 
 
+def _approved_machine_selection(machine, parent):
+    """Verify the delegated selector against the unchanged registered parent.
+
+    Rebuild the manifest and cells from the parent, not the claimed successor.
+    This cannot authorize new scopes, detectors, variants or source generations.
+    """
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_joint_registration as J
+    try:
+        family = parent['continuous_reversal']
+        if (family['schema'] != V.SCHEMA or machine.get('policy_schema') != V.SCHEMA
+                or machine.get('parent_bundle_sha256') != parent['bundle_sha256']
+                or not family['operating_manifest'].get('approved_variant_groups')):
+            return False
+        V.validate_family(family)
+        manifest = V.detector_manifest(parent, effective_date=N.next_target(machine['publication_date']))
+        original = dict(machine, operating_manifest=manifest,
+                        cells=copy.deepcopy(list(family['machine_cells'].values())))
+        expected = J.apply_selection(original, parent)
+        return all(machine.get(key) == expected.get(key) for key in (
+            'operating_manifest', 'cells', 'variant_selection', 'variant_selection_basis'))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def prepare(data_root, day, machine, parent, *, research=None):
     from src.engine.scalping import reversal_auxiliary_intraday as I
     context = None
@@ -125,7 +151,9 @@ def prepare(data_root, day, machine, parent, *, research=None):
         raise ValueError('auxiliary_tuning_not_configured')
     if machine.get('artifact_content_sha256') != P.seal(machine)['artifact_content_sha256'] or machine.get('source_date')!=day:
         raise ValueError('auxiliary_machine_report_changed')
-    if machine['operating_manifest']['scopes'] != parent['continuous_reversal']['operating_manifest']['scopes'] and not machine.get('registration_change'):
+    if (machine['operating_manifest']['scopes'] != parent['continuous_reversal']['operating_manifest']['scopes']
+            and not machine.get('registration_change')
+            and not _approved_machine_selection(machine, parent)):
         raise ValueError('auxiliary_tuning_machine_membership_changed')
     # Current identities are frozen before looking at outcomes or responses.
     current = R.current_bindings(data_root,parent) if context else I.effective_bindings(data_root,parent,day=day)

@@ -91,6 +91,30 @@ def test_final_resume_binds_native_prefix_and_preserves_previous_proof(tmp_path)
     assert proof['runtime_effect'] is proof['allowed_runtime_apply'] is False
 
 
+@pytest.mark.parametrize('defect', [None, 'partial', 'reuse', 'wrong_commit', 'missing_command', 'changed_source'])
+def test_final_resume_accepts_only_complete_normal_native_run(tmp_path, defect):
+    import json
+    n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
+    status.update(scoped_resume=None, regeneration_scope='normal', reused_steps_receipt=None, exit_code=2)
+    metrics[-1].update(producer_module='src.engine.verify_threshold_cycle_postclose_chain', exit_code=2)
+    if defect == 'partial': status['regeneration_scope'] = 'all_except_eod'
+    if defect == 'reuse': status['reused_steps_receipt'] = {'unverified': True}
+    if defect == 'wrong_commit': metrics[0]['code_commit'] = 'b' * 40
+    if defect == 'missing_command': metrics.pop(0)
+    if defect == 'changed_source': n['stage_receipt_issues'] = lambda *a: ['source_changed']
+    path.write_text(json.dumps(status)); log.write_text(''.join('[PERF] '+json.dumps(m)+'\n' for m in metrics))
+    if defect is not None:
+        with pytest.raises(ValueError, match='final_resume_'):
+            n['final_handoff_resume'](tmp_path, day)
+        return
+    before = path.read_bytes()
+    proof = n['final_handoff_resume'](tmp_path, day)
+    assert proof['completed_command_receipts'] == metrics[:-1]
+    assert proof['prior_scoped_resume'] is None and proof['inherited_command_receipts'] == []
+    assert proof['origin_run_id'] == status['run_id'] and path.read_bytes() == before
+    assert proof['runtime_effect'] is proof['allowed_runtime_apply'] is False
+
+
 @pytest.mark.parametrize('defect', ['running','other_failure','prefix_missing','proof_changed','stage_invalid','snapshot_invalid','quantity_invalid'])
 def test_final_resume_refuses_incomplete_or_changed_native_prefix(tmp_path, defect):
     import json
