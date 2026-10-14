@@ -20,3 +20,7 @@
 사용자가 배포 및 재기동을 명시 승인했다. ordered intraday driver로 incumbent 검증→graceful drain→불변 candidate 선택/문서 게시→원 정책 유지 handoff→정상 launcher→새 PID native 소비를 확인한다. frozen PREOPEN/bootstrap/env/정책 부모와 원 checklist 증빙을 보존한다. Main/manual custody와 퇴역 보유/intent는 변경하지 않는다. 재기동 전후 broker inventory/미체결, WS 수신, singleton PID, selected commit, 원 경보와 현재 source 상태를 대사한다. 실제 결과는 `tmp/intraday-submission-20261015-until0820`와 native `data/runtime/release_transitions` 영수증이 소유한다.
 
 기존 OPEN owner는 `AuxiliaryCircuitRecoveryRepair1012`, `NonfixedDispatchReadinessReview1012`, `HoldingProfitExitSourceContractRepair`와 `DirectFamilyPreopenPolicyHandoff`다. 계획/리뷰와 배포/PID/자연 실행/경제성 완료를 혼동하지 않는다. 외부 Project/Calendar sync, provider replay, 수동 주문과 광역 장후 재계산은 실행하지 않는다.
+
+## 사전 배포 검증 보완
+
+첫 candidate `a2d8b8bdb`는 incumbent native/PID bootstrap PASS 후 `entry_consumer_unreviewed_change`로 drain 이전 차단됐다. selector/PID/hold 변경 없이 원 Main이 유지됐다. 3d native PREOPEN의 monitor SHA `90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d`와 수정본 SHA `7484dde211aeca61eb8172072f432c7d24bf7803e39c0f73ef9561cb64d0bfcf`만 별도 검토 pair로 등록했다. 원/수정 byte·dirty verifier·origin digest 변조 거부 회귀를 확장한다. 실패 attempt는 보존하고 새 commit에서 인계를 다시 검증한다.

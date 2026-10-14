@@ -467,6 +467,17 @@ REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES = {
 }
 
 
+# Exact native 2026-10-15 PREOPEN-to-reviewed venue/pending observer repair.
+# No source or signal guard is waived; retain all earlier consumed pairs.
+# Evidence: docs/audits/main-premarket-error-repair-and-restart-2026-10-15.md.
+REVIEWED_PREMARKET_OBSERVER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        '7484dde211aeca61eb8172072f432c7d24bf7803e39c0f73ef9561cb64d0bfcf',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -517,7 +528,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_STARTUP_OBSERVER_SOURCES.get(name),
                     REVIEWED_OBSERVER_HEALTH_SOURCES.get(name),
                     REVIEWED_SUBMISSION_TIMEOUT_SOURCES.get(name),
-                    REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES.get(name)):
+                    REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES.get(name),
+                    REVIEWED_PREMARKET_OBSERVER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:
