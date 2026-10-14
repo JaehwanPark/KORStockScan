@@ -428,6 +428,11 @@ REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES = {'src/engine/monitoring/submission_bot
 # Report-only observer generation and first-current-publication ordering.
 REVIEWED_STARTUP_OBSERVER_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd', '112e22fde60ceb305450183883ffe6e3b338df6eb47e8c5d3ce78c282b968558')}
 
+# Source-exact observer availability and bounded handoff diagnosis; no trading authority.
+# Evidence: docs/audits/entry-split-projection-and-main-delivery-implementation-review-2026-10-14.md section8.
+REVIEWED_OBSERVER_HEALTH_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd', '4f743930576e13365d70c265c45a422f99d986da95b8bbe71ba9c18e174a05ef')}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -475,7 +480,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_NONFIXED_SUBMIT_SOURCES.get(name),
                     REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES.get(name),
                     REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES.get(name),
-                    REVIEWED_STARTUP_OBSERVER_SOURCES.get(name)):
+                    REVIEWED_STARTUP_OBSERVER_SOURCES.get(name),
+                    REVIEWED_OBSERVER_HEALTH_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

@@ -15,6 +15,15 @@ from src.engine.monitoring.observation_budget import ObservationDeadline
 def observer(monkeypatch, tmp_path):
     monkeypatch.setattr(M, 'PROJECT_ROOT', tmp_path)
     (tmp_path/'data').mkdir()
+    runtime = tmp_path/'data/runtime'
+    runtime.mkdir()
+    (runtime/'runtime_release_selection.lock').write_bytes(b'')
+    # These tests isolate execution/publication. Generation identity and safe
+    # selector IO have dedicated adversarial tests in the monitor suite.
+    monkeypatch.setattr(M, '_observer_generation_snapshot', lambda project, **kw: dict(
+        run_id=kw['run_id'], target_date=kw['target_date'], started_at=kw['started_at'].isoformat(),
+        generation_current=True, status='current', selection_sha256='a'*64,
+        release_root=str(tmp_path), git_commit='b'*40, observer_code_sha256='c'*64))
     today = datetime.now(M.KST).date().isoformat()
     monkeypatch.setattr(M, 'evaluate', lambda report,state,now: dict(
         schema=M.SCHEMA, as_of=now.isoformat(), date=today, status='observed',

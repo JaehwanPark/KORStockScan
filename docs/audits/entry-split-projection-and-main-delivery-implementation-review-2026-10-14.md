@@ -58,3 +58,21 @@
 40357의 final launcher가 사용한 `--workspace`가 parser에 없어 exit2,15:12:11 attestation timeout이 발생했다. 모의 Python wrapper 시험이 실제 parser를 실행하지 않아 놓친 범위 내 결함이다. 원 status/hold·첫 health(startup failed)·15:15 자연 Sentinel은 `data/report/startup_observer_order_deployment/2026-10-14`에 실패/partial로 보존한다. 원 PID의 native H/verify PASS와 ordered 실패를 구분한다.
 
 후속 수리는 실제 -I subprocess/managed clean Git release/child PID positive 및 입력 거부 반례, record-only 명시 workspace 계약, 검증된 native PID 메타데이터 복구와 정확한 failed owned hold의 원자 소유권 인계를 검증한다. 모든 일반 native/source/정책 guard를 유지하며 원 terminal을 성공으로 수정하지 않는다. 새 배포 증거는 `data/report/startup_router_cli_repair_deployment/2026-10-14`에 별도로 남긴다.
+
+## 8. 새 경보 대사와 진단 원인 분리
+
+945 배포/PID/첫 health 순서는 PASS이나 전체 원천 검증은 별도다.15:37:02 health가 읽은 run970642의 age646.7초와 이전 generation이 semantic partial 선행 반환에 가려졌다. 이후 runb807은 현재 generation이며 upstream as_of15:35:12와 latest_event15:08:54의 차이로 관측불가다. 이전에 수용된 source_as_of15:15를 현재 입력 시각으로 해석하지 않는다. probe의145개 세션 generation 대기는 평가 모집단에서 제외됐으며 무신호 완전성은 미입증이다. 원 source gaps·partial은 유지한다.
+
+후속 수리는 artifact 진단만 변경하며 freshness/generation/semantic/source blocker를 같은 bounded 보고서 snapshot에서 드러낸다. 일반 stale·실제 결손 partial 실패·권한/경제성을 보존하며 아래 승인된 두 pending 예외만 분리한다. 독립 리뷰와 반례 검증 뒤 `data/report/observer_alert_dimensions_deployment/2026-10-14`에서 새 배포/첫 health/자연 예약을 수용한다. 실제 split warm full report0과 전체 observer cold11.60GB→다음 warm full digest0/3.84초는 서로 다른 측정이다.
+
+사용자는15:40 재경보 후 충분한 대기 시간 또는 지연 원인 해소로 반복 오류를 끝내도록 명시했다. 같은 승인 범위에서 두 경계를 보완한다. (1) ordered 완료 당시600초 안이었던 정확한 captured predecessor는 첫 정상5분 slot+기존 전체 wrapper180초까지 WARNING/pending을 유지할 수 있다. 대기 중 과거 파일이600초를 넘겼다는 사실·원 partial/실패 이력은 보존한다. 이미 완료 시점에 stale였던 자료, bytes/신원 변경, 명시적 생산 실패·기한 초과·현행 보고서에는 이 유예를 적용하지 않는다. 현재/일반 보고서와 매매 원천 stale 기준은 변경하지 않는다. (2) 새 보고서의 partial은 fresh upstream·필수 reader 정상 완료·정책/분할/지연 native 증빙을 재검증한다. 판정 표본 부재, 원 계약에 결속된 SOURCE_INVALID/필수 특징 보호 판정, 정상 BLOCK/RECHECK 및 요청·응답·화면 계약이 정확한 CAUTION/VETO, Main의 정확한 거절 또는 처리 종료가 확인된 PASS는 observation_pending WARNING으로 구분할 수 있다. 원 source gap·partial/unobservable·미검증은 보존하며 valid_empty/PASS/복구를 합성하지 않는다. 미확인 PASS 소비·실패/모순 제출·실제 계약 충돌·읽기/생산 실패·세대/시각 오류는 FAIL이다. 현재 건강 cohort는 단일 as_of의 최근600초·현재 PID/start를 machine/lineage/Main 증빙에 동일하게 적용한다. 기존30분/allPID 모집단과 과거 미확인/실패는 별도로 보존하며 과거 성공을 만들지 않는다. 자연 보고서와 detector에서 새로운 출력·기존 오류의 비재발을 확인한 뒤 수용한다.
+
+## 9. 애프터마켓 주성 조합 입력의 실제 생산 결함 수리
+
+16:05 관측의 path_auxiliary_feature_input_conflict10건은 실제 계약 오류로 유지했다. 이후 같은036930 AFTER 조합에서29건까지 늘어 원 trace ID/attempt/원문 SHA를 보존했다. 요청·원 machine payload 발행 전 예외라 과거 개별 숫자를 복구했다고 주장하지 않는다. 같은 joint 정의의 deterministic State 입력에서 UNKNOWN/TRUE 두 확인 경우 모두 source DD0.5484460694698434와 보존된 원 FIRST DD0.6363636363636349의 불일치로 동일 오류를 재현했다.
+
+원인은 J.compose가 원 확인 event의 top-level DD/volume를 보존하고 refinement의 rolling branch_features만 교체하는데, 상속 source projector가 DD/volume까지 rolling feature에서 읽은 것이다. reversal_extended_state.State._source의 composed 전용 override에서 validate_composed와 원 event top/base 일치를 확인한 후 두 source facts만 원 확인 정의로 맞춘다. 원 event/refinement/proof·매칭 조건·validator의 strict equality·prompt/모델·정책 membership과 원5초는 보존한다. noncomposed source bytes는 기존과 동일하다.
+
+해당 native 모듈1개만 바뀌므로 이전128scope 근거를 그대로 수용하지 않는다. 기준945/수리 candidate를 같은76,800행에 새로 재생해128scope·621hits·동일 signal SHA를 확인하고 runner/원본·후보 source hash/결과를 결속한다. source-only 수리의 새 code handoff는 이 정확한 old/new 모듈과 fresh parity를 검증한 뒤 기존 정의/bundle/pointer를 보존해 발행한다. C.issue의 source_semantics_repair 계약을 사용하며 새 정책·원천 과거 채움·추가 경제 gate를 만들지 않는다. 새 PID의 자연 주성 입력 생성/기존 conflict 비재발과 detector 결과를 별도로 확인한다.
+
+최종 source 동결 후 관련15 suite 통합2,034개가41.21초에 통과했다. compile·bash 문법·diff 검사와 현재 owner4개/문서 링크70개/print-only parser25항목 검증을 닫는다. 기동·순서·observer 세대/현재600초 cohort·과거30분/allPID 이력 보존·실제 입력 충돌/미확인 소비 FAIL 반례를 포함하며 시험의 중복 합산은 하지 않는다. 배포 후 자연 예약과 새 PID의 원천 충돌 비재발은 별도 receipt로 수용한다.

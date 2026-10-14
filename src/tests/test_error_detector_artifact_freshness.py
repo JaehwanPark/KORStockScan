@@ -2594,7 +2594,7 @@ def _startup_observer_fixture(tmp_path, monkeypatch):
         selected_at_kst=f"{day}T14:35:38+09:00", deployment_transition=str(transition_path),
         approval_scope="ordered_intraday_deploy_and_restart", approved_by="user", actual_pid_consumed=True,
         actual_pid_receipt=dict(schema="runtime_release_pid_receipt_v1", git_commit=commit,
-            release_root=str(release), pid=42, process_cwd=str(release / "src")))
+            release_root=str(release), pid=42, start_ticks='123', process_cwd=str(release / "src")))
     selection_path.write_text(json.dumps(selection))
     return mod, root, now, report_path, report, transition_path, transition, selection_path, selection
 
@@ -2616,7 +2616,7 @@ def test_exact_captured_old_observer_is_bounded_pending_without_new_pass(tmp_pat
 
 @pytest.mark.parametrize("change", ["capture_absent", "capture_sha", "capture_path", "capture_mtime", "capture_clock",
     "capture_partial_lost", "transition_failed", "transition_starting", "transition_wrong_root", "selection_wrong_commit",
-    "selection_unapproved", "selection_pid_missing", "pid_changed", "stale", "failed", "malformed", "new_current", "replaced_same_bytes"])
+    "selection_unapproved", "selection_pid_missing", "receipt_start_changed", "pid_changed", "stale", "failed", "malformed", "new_current", "replaced_same_bytes"])
 def test_pending_never_suppresses_unproven_failed_stale_or_current_report(tmp_path, monkeypatch, change):
     fixture = _startup_observer_fixture(tmp_path, monkeypatch)
     mod, root, now, path, report, tp, transition, sp, selection = fixture
@@ -2632,8 +2632,9 @@ def test_pending_never_suppresses_unproven_failed_stale_or_current_report(tmp_pa
     elif change == "selection_wrong_commit": selection["git_commit"] = "c" * 40
     elif change == "selection_unapproved": selection["approval_scope"] = "unknown"
     elif change == "selection_pid_missing": selection["actual_pid_consumed"] = False
+    elif change == 'receipt_start_changed': selection['actual_pid_receipt']['start_ticks']='999'
     elif change == "pid_changed": monkeypatch.setattr(mod, "_observer_live_identity", lambda pid: {"pid": 99})
-    elif change == "stale": os.utime(path, (now.timestamp() - 601,) * 2)
+    elif change == "stale": os.utime(path, (datetime.fromisoformat(transition['updated_at']).timestamp() - 601,) * 2)
     elif change == "failed": report["execution_status"] = "failed"
     elif change == "malformed": path.write_text("{bad")
     elif change == "new_current": report["as_of"] = "2026-10-14T14:41:19+09:00"
@@ -2644,15 +2645,338 @@ def test_pending_never_suppresses_unproven_failed_stale_or_current_report(tmp_pa
 
 
 def test_current_partial_keeps_original_failure_and_generation_loss_cannot_pass(tmp_path, monkeypatch):
-    fixture = _startup_observer_fixture(tmp_path, monkeypatch)
+    fixture = _current_observer_fixture(tmp_path, monkeypatch)
     mod, root, now, path, report, *_ = fixture
     monkeypatch.setattr(mod, "PROJECT_ROOT", root)
     artifact = dict(id="submission_bottleneck_monitor", json_status_field="notification_status",
                     json_ok_values=["idle", "sent", "cooldown"])
-    report["as_of"] = "2026-10-14T14:41:19+09:00"; path.write_text(json.dumps(report))
     assert "semantic coverage partial" in mod.ArtifactFreshnessDetector._validate_json_status(artifact, path, {})
-    report["semantic_status"] = "validated"; path.write_text(json.dumps(report))
+    report["semantic_status"] = "validated"; report.pop('observer_generation'); path.write_text(json.dumps(report))
     assert "observer_generation_missing" in mod.ArtifactFreshnessDetector._validate_json_status(artifact, path, {})
+
+
+def _current_observer_fixture(tmp_path, monkeypatch):
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    fixture = _startup_observer_fixture(tmp_path, monkeypatch)
+    mod, root, now, path, report, _, _, selector_path, selection = fixture
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', root)
+    code_path = Path(selection['release_root']) / 'src/engine/monitoring/submission_bottleneck_monitor.py'
+    code_path.parent.mkdir(parents=True); code_path.write_bytes(b'reviewed immutable observer\n')
+    code = dict(release_root=selection['release_root'], git_commit=selection['git_commit'],
+                observer_code_sha256=hashlib.sha256(code_path.read_bytes()).hexdigest())
+    monkeypatch.setattr(monitor, '_observer_code_identity', lambda: dict(code))
+    selection['actual_pid_receipt']['start_ticks']='123'
+    selector_path.write_text(json.dumps(selection))
+    report.update(as_of=(now-timedelta(seconds=30)).isoformat(), blocker='missing_stale_or_noncurrent_sentinel_evidence',
+                  source_as_of='2026-10-14T08:00:00+09:00',
+                  source_gap_semantics=dict(status='unobservable',sources=dict(probe=dict(status='complete', recent_count=0))),
+                  machine_semantics=dict(status='unobservable'), entry_execution_tuning_semantics=dict(status='observed'))
+    original = monitor._observer_generation_snapshot(root, run_id=report['run_id'], target_date=report['date'],
+        started_at=datetime.fromisoformat(report['as_of']))
+    report['observer_generation'] = monitor._finish_observer_generation(original, root, completed_at=now-timedelta(seconds=20))
+    path.write_text(json.dumps(report)); os.utime(path, ((now-timedelta(seconds=20)).timestamp(),)*2)
+    return fixture
+
+
+def _isolate_submission_artifact_check(mod, root, now, monkeypatch):
+    from src.engine.monitoring import policy_generation_contract
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return now if tz else now.replace(tzinfo=None)
+    monkeypatch.setattr(mod, 'datetime', Clock)
+    monkeypatch.setattr(mod.time, 'time', lambda: now.timestamp())
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', root)
+    monkeypatch.setattr(mod, 'ARTIFACT_REGISTRY', [r for r in ARTIFACT_REGISTRY if r['id']=='submission_bottleneck_monitor'])
+    monkeypatch.setattr(mod, 'is_krx_trading_day', lambda *args: True)
+    monkeypatch.setattr(mod, 'load_installed_crontab', lambda: '')
+    for name in ('_entry_cancel_wait_result_semantics', '_holding_profit_exit_semantics', '_machine_result_semantics',
+                 '_auxiliary_result_semantics', '_postclose_handoff_semantics', '_main_stop_semantics', '_samsung_forward_semantics',
+                 '_initial_quantity_semantics'):
+        monkeypatch.setattr(mod, name, lambda *args, **kwargs: dict(status='not_assessed',findings=[]))
+    monkeypatch.setattr(mod, '_completed_semantic_source', lambda *args: dict(status='not_assessed',findings=[],target_date=None))
+    monkeypatch.setattr(mod, '_current_semantic_owners', lambda *args: set())
+    monkeypatch.setattr(policy_generation_contract, 'observations', lambda *args, **kwargs: [])
+    monkeypatch.setattr(policy_generation_contract, 'retirement_dispositions', lambda *args, **kwargs: [])
+
+
+@pytest.mark.parametrize('stale,wrong_generation', [(False,False),(True,False),(False,True),(True,True)])
+def test_observer_dimensions_expose_freshness_generation_and_actual_source_gap(tmp_path, monkeypatch, stale, wrong_generation):
+    mod, root, now, path, report, _, _, selector_path, selector = _current_observer_fixture(tmp_path, monkeypatch)
+    if stale: os.utime(path, (now.timestamp()-1801,)*2)
+    if wrong_generation: selector_path.write_text(json.dumps({**selector,'actual_pid_consumed':False}))
+    _isolate_submission_artifact_check(mod, root, now, monkeypatch)
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    dims = result.details['submission_bottleneck_monitor_observation_dimensions']
+    assert result.severity == 'fail'
+    assert dims['freshness']['status'] == ('stale' if stale else 'fresh')
+    assert dims['freshness']['max_staleness_sec'] == 600
+    assert dims['generation']['status'] == ('observer_generation_not_current' if wrong_generation else 'current')
+    assert dims['semantic'] == 'partial' and dims['execution'] == 'completed'
+    assert dims['source']['blocker'] == 'missing_stale_or_noncurrent_sentinel_evidence'
+    assert dims['source']['inherited_source_as_of_is_upstream_clock'] is False
+    assert 'upstream_age_sec' not in dims['source']
+    assert dims['report']['byte_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert dims['report']['run_id'] == report['run_id']
+    if stale:
+        assert 'submission_bottleneck_monitor: stale (1801s > 600s)' in result.summary
+    elif wrong_generation:
+        assert 'observer_generation_not_current' in result.summary
+    else:
+        assert 'blocker=missing_stale_or_noncurrent_sentinel_evidence' in result.summary
+        assert 'machine_semantics=unobservable' in result.summary
+
+
+def test_observer_partial_legacy_generation_does_not_claim_current_proof(tmp_path, monkeypatch):
+    mod, root, _, path, report, *_ = _startup_observer_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', root)
+    report['date']='2026-10-13'; path.write_text(json.dumps(report))
+    details={}
+    mod.ArtifactFreshnessDetector._validate_json_status(dict(id='submission_bottleneck_monitor',json_status_field='notification_status'),path,details)
+    generation=details['submission_bottleneck_monitor_observation_dimensions']['generation']
+    assert generation == dict(status='legacy_generation_unverified',current_generation_verified=False)
+
+
+def test_observer_snapshot_change_cannot_inherit_status_or_generation(tmp_path, monkeypatch):
+    mod, _, _, path, _, *_ = _current_observer_fixture(tmp_path, monkeypatch)
+    snapshot = mod._submission_observer_snapshot(path)
+    path.write_bytes(path.read_bytes())
+    result=mod.ArtifactFreshnessDetector._validate_json_status(
+        dict(id='submission_bottleneck_monitor',json_status_field='notification_status'),path,{},observer_snapshot=snapshot)
+    assert 'observer_report_changed_after_snapshot' in result
+    snapshot=mod._submission_observer_snapshot(path)
+    def changed(*args):
+        path.unlink()
+        return None
+    monkeypatch.setattr(mod,'_submission_observer_generation_issue',changed)
+    result=mod.ArtifactFreshnessDetector._validate_json_status(
+        dict(id='submission_bottleneck_monitor',json_status_field='notification_status'),path,{},observer_snapshot=snapshot)
+    assert 'observer_report_changed_after_snapshot' in result
+
+
+def test_current_observer_diagnostics_reuse_one_bounded_report_snapshot(tmp_path, monkeypatch):
+    mod,root,now,path,*_ = _current_observer_fixture(tmp_path,monkeypatch)
+    _isolate_submission_artifact_check(mod,root,now,monkeypatch)
+    original=mod._observer_small_object
+    reads=[]
+    def read(candidate,**kwargs):
+        if Path(candidate)==path: reads.append(candidate)
+        return original(candidate,**kwargs)
+    monkeypatch.setattr(mod,'_observer_small_object',read)
+    outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity=='fail'
+    assert len(reads)==1
+
+
+def _quiet_current_observer_fixture(tmp_path, monkeypatch, *, payload_factory=None):
+    from src.tests.test_submission_bottleneck_monitor import _observation_health_fixture
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    mod,root,_,path,report,tp,transition,sp,selection = _current_observer_fixture(tmp_path,monkeypatch)
+    report.clear(); report.update((payload_factory or _observation_health_fixture)())
+    lineage=report['machine_semantics'].get('reversal_provider_lineage')
+    if lineage:
+        pid,ticks=lineage['exact_pid_filter']
+        selection['actual_pid_receipt'].update(pid=int(pid),start_ticks=ticks)
+        sp.write_text(json.dumps(selection))
+        monkeypatch.setattr(mod,'_observer_live_identity',lambda actual:dict(pid=actual,start_ticks=ticks,cwd=selection['actual_pid_receipt']['process_cwd']))
+    now=datetime.fromisoformat(report['as_of'])+timedelta(seconds=20)
+    def seal():
+        original=monitor._observer_generation_snapshot(root,run_id=report['run_id'],target_date=report['date'],
+            started_at=datetime.fromisoformat(report['as_of']))
+        report['observer_generation']=monitor._finish_observer_generation(original,root,completed_at=now-timedelta(seconds=10))
+        report['observation_health']=monitor.observation_health_projection(report)
+        path.write_text(json.dumps(report));os.utime(path,(now.timestamp()-10,)*2)
+    seal()
+    _isolate_submission_artifact_check(mod,root,now,monkeypatch)
+    return mod,root,now,path,report,sp,selection,seal
+
+
+def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(tmp_path,monkeypatch):
+    from src.engine.error_detector import iter_daemon_alert_events
+    from src.engine.error_detectors.base import DetectionResult
+    mod,root,now,path,report,*_ = _quiet_current_observer_fixture(tmp_path,monkeypatch)
+    before=path.read_bytes()
+    result=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.severity=='warning' and 'observation pending' in result.summary
+    assert result.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+    assert result.details['submission_bottleneck_monitor_observation_health_projection_match'] is True
+    assert result.details['submission_bottleneck_monitor_current_observation_verified'] is False
+    assert result.details['submission_bottleneck_monitor_semantic_status']=='partial'
+    source=result.details['submission_bottleneck_monitor_observation_dimensions']['source']
+    assert source['input_provenance']['snapshot_as_of']=='2026-10-14T15:35:12.585430+09:00'
+    assert source['inherited_source_as_of']=='2026-10-14T15:15:18.387222+09:00'
+    assert source['inherited_source_as_of_is_upstream_clock'] is False
+    health=result.details['submission_bottleneck_monitor_observation_health']
+    assert health['full_coverage_proven'] is False and health['runtime_effect'] is False
+    assert path.read_bytes()==before and report['status']=='unobservable'
+    assert report['entry_execution_tuning_semantics']['entry_split']['status']=='source_gap'
+    assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+    state={}
+    prior=DetectionResult(detector_id='artifact_freshness',category='artifact',severity='fail',summary='prior genuine failure')
+    assert len(list(iter_daemon_alert_events([prior],state,target_date='2026-10-14')))==1
+    assert list(iter_daemon_alert_events([result],state,target_date='2026-10-14'))==[]
+    assert 'artifact_freshness' in state
+
+
+@pytest.mark.parametrize('wrong_actor', [False, True])
+def test_current_health_cohort_uses_selected_actor_without_rewriting_old_pid_history(tmp_path,monkeypatch,wrong_actor):
+    import copy
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    mod,root,now,path,report,_,selection,seal=_quiet_current_observer_fixture(tmp_path,monkeypatch)
+    receipt=selection['actual_pid_receipt']
+    actor=[str(receipt['pid']),receipt['start_ticks']]
+    original_machine=copy.deepcopy(report['machine_semantics'])
+    for key in ('source_gap_semantics','machine_semantics'):
+        view=copy.deepcopy(report[key])
+        report[key]['current_health_cohort']=monitor._health_cohort(
+            view, ['999999',actor[1]] if wrong_actor else actor,
+            datetime.fromisoformat(report['as_of']),excluded=7)
+    old_lineage=dict(exact_pid_filter=['111111','222222'],attempt_ledger=[dict(producer_pid='111111')])
+    report['machine_semantics']['reversal_provider_lineage']=old_lineage
+    seal()
+    outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity==('fail' if wrong_actor else 'warning')
+    assert report['machine_semantics']['reversal_provider_lineage']==old_lineage
+    assert report['machine_semantics']['current_health_cohort']['view']==original_machine
+    if wrong_actor:
+        assert 'current_health_actor_not_selected_pid' in outcome.details['submission_bottleneck_monitor_observation_health']['unmet_conditions']
+    else:
+        assert outcome.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+        assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
+
+
+@pytest.mark.parametrize('healthy',[False,True])
+def test_recorded_guard_and_healthy_fixed_nonentry_warn_without_fullpass_or_recovery(tmp_path,monkeypatch,healthy):
+    from src.tests.test_submission_bottleneck_monitor import _recorded_guard_health_fixture
+    from src.engine.error_detector import iter_daemon_alert_events
+    from src.engine.error_detectors.base import DetectionResult
+    mod,root,now,path,report,*_=_quiet_current_observer_fixture(tmp_path,monkeypatch,
+        payload_factory=lambda:_recorded_guard_health_fixture(healthy=healthy))
+    before=path.read_bytes()
+    outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity=='warning'
+    assert outcome.details['submission_bottleneck_monitor_status']=='pending_bounded_observation'
+    assert 'recorded_guard_or_cohort_pending' in outcome.summary
+    assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
+    assert outcome.details['submission_bottleneck_monitor_semantic_status']=='partial'
+    assert report['status']=='unobservable' and path.read_bytes()==before
+    assert report['entry_execution_tuning_semantics']['entry_split']['status']=='source_gap'
+    assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+    machine=outcome.details['submission_bottleneck_monitor_observation_dimensions']['source']['stages']['machine_semantics']
+    assert machine['source_invalid_count']==(0 if healthy else 2)
+    state={};prior=DetectionResult(detector_id='artifact_freshness',category='artifact',severity='fail',summary='prior actual failure')
+    assert len(list(iter_daemon_alert_events([prior],state,target_date='2026-10-14')))==1
+    assert list(iter_daemon_alert_events([outcome],state,target_date='2026-10-14'))==[]
+    assert 'artifact_freshness' in state
+
+
+@pytest.mark.parametrize('damage',['unknown_diagnostic','actual_path_conflict','foreign_lineage'])
+def test_recorded_guard_warning_never_hides_unknown_or_actual_conflict_or_foreign_pid(tmp_path,monkeypatch,damage):
+    from src.tests.test_submission_bottleneck_monitor import _recorded_guard_health_fixture
+    mod,root,now,path,report,_,_,seal=_quiet_current_observer_fixture(tmp_path,monkeypatch,payload_factory=_recorded_guard_health_fixture)
+    if damage=='unknown_diagnostic':
+        report['source_gap_semantics']['diagnostics']={'machine_probe:unknown_contract_error':2}
+    elif damage=='actual_path_conflict':
+        report['source_gap_semantics']['issues']={'machine_trace:path_auxiliary_feature_input_conflict':10}
+    else:
+        lineage=report['machine_semantics']['reversal_provider_lineage']
+        lineage['exact_pid_filter'][0]='999999'
+        for row in lineage['attempt_ledger']:row['producer_pid']='999999'
+    seal()
+    outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity=='fail'
+    assert outcome.details['submission_bottleneck_monitor_status']=='fail'
+    if damage=='foreign_lineage':assert 'observer_current_main_lineage_mismatch' in outcome.summary
+    elif damage=='actual_path_conflict':assert 'path_auxiliary_feature_input_conflict' in outcome.summary
+
+
+@pytest.mark.parametrize('damage', ['missing_projection','mismatched_projection','source_gap','missing_reader','deferred',
+    'stale_input','stale_report','future_report','wrong_generation','unattested_actor','dead_actor','reused_actor','malformed_actor'])
+def test_quiet_warning_never_hides_real_failure_or_missing_current_actor(tmp_path,monkeypatch,damage):
+    mod,root,now,path,report,sp,selection,seal = _quiet_current_observer_fixture(tmp_path,monkeypatch)
+    if damage=='missing_projection': report.pop('observation_health')
+    elif damage=='mismatched_projection': report['observation_health']['reason']='forged'
+    elif damage=='source_gap': report['source_gap_semantics']['issues']['machine_probe:0B_missing']=1
+    elif damage=='missing_reader': report['source_gap_semantics']['sources'].pop('trace')
+    elif damage=='deferred': report['execution_status']='deferred'
+    elif damage=='stale_input': report['input_provenance']['snapshot_age_seconds']=999
+    elif damage in {'wrong_generation','unattested_actor'}:
+        selection['actual_pid_consumed']=False;sp.write_text(json.dumps(selection))
+        if damage=='unattested_actor': seal()
+    elif damage=='dead_actor':
+        def absent(pid): raise FileNotFoundError('dead test child')
+        monkeypatch.setattr(mod,'_observer_live_identity',absent)
+    elif damage=='reused_actor': monkeypatch.setattr(mod,'_observer_live_identity',lambda pid:dict(pid=pid,start_ticks='999',cwd=selection['actual_pid_receipt']['process_cwd']))
+    elif damage=='malformed_actor':
+        selection['actual_pid_receipt']['pid']='../../not-a-pid';sp.write_text(json.dumps(selection));seal()
+        monkeypatch.setattr(mod,'_observer_live_identity',lambda *args:pytest.fail('malformed PID reached proc'))
+    if damage in {'source_gap','missing_reader','deferred','stale_input'}: seal()
+    else: path.write_text(json.dumps(report));os.utime(path,(now.timestamp()-10,)*2)
+    if damage=='stale_report': os.utime(path,(now.timestamp()-601,)*2)
+    elif damage=='future_report': os.utime(path,(now.timestamp()+0.05,)*2)
+    outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity=='fail'
+    assert outcome.details['submission_bottleneck_monitor_status']=='fail'
+    if damage in {'stale_report','future_report','wrong_generation'}:
+        assert 'submission_bottleneck_monitor_observation_health' not in outcome.details
+
+
+def test_exact_prior_fresh_at_completion_may_age_only_through_first_slot_budget(tmp_path, monkeypatch):
+    mod,root,now,path,report,tp,transition,*_ = _startup_observer_fixture(tmp_path,monkeypatch)
+    complete=datetime.fromisoformat(transition['updated_at'])
+    mtime=complete.timestamp()-590
+    report['as_of']=datetime.fromtimestamp(mtime-10,now.tzinfo).isoformat()
+    path.write_text(json.dumps(report));os.utime(path,(mtime,mtime))
+    transition['predecessor_observer'].update(mtime_ns=path.stat().st_mtime_ns,as_of=report['as_of'],
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    tp.write_text(json.dumps(transition))
+    pending=mod._submission_observer_transition_pending(root,path,now,max_staleness_sec=600)
+    assert pending['prior_stale_retained'] is True
+    assert pending['age_at_completion_sec']==590
+    assert pending['freshness_at_completion']=='fresh'
+    assert pending['deadline']==pending['cron_deadline']=='2026-10-14T14:43:00+09:00'
+    assert pending['current_observation_verified'] is False
+    _isolate_submission_artifact_check(mod,root,now,monkeypatch)
+    actual=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert actual.severity=='warning'
+    assert actual.details['submission_bottleneck_monitor_status']=='pending_first_current_observer'
+    assert actual.details['submission_bottleneck_monitor_transition']['prior_stale_retained'] is True
+    assert mod._submission_observer_transition_pending(root,path,datetime.fromisoformat(pending['deadline'])+timedelta(microseconds=1),max_staleness_sec=600) is None
+    os.utime(path,(complete.timestamp()-601,)*2);transition['predecessor_observer']['mtime_ns']=path.stat().st_mtime_ns
+    tp.write_text(json.dumps(transition))
+    assert mod._submission_observer_transition_pending(root,path,now,max_staleness_sec=600) is None
+
+
+@pytest.mark.parametrize('change',['selector','report'])
+def test_quiet_warning_rechecks_exact_generation_after_live_actor_read(tmp_path,monkeypatch,change):
+    mod,root,now,path,report,sp,selection,_ = _quiet_current_observer_fixture(tmp_path,monkeypatch)
+    def identity(pid):
+        if change=='selector': sp.write_text(json.dumps({**selection,'actual_pid_consumed':False}))
+        else: path.write_bytes(path.read_bytes())
+        return dict(pid=pid,start_ticks='123',cwd=selection['actual_pid_receipt']['process_cwd'])
+    monkeypatch.setattr(mod,'_observer_live_identity',identity)
+    outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity=='fail'
+    assert ('observer_generation_changed_after_assessment' if change=='selector' else 'observer_report_changed_after_snapshot') in outcome.summary
+
+
+@pytest.mark.parametrize('delta_sec',[-60,700,None])
+def test_quiet_warning_rejects_future_or_stale_body_even_when_file_is_fresh(tmp_path,monkeypatch,delta_sec):
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    mod,root,now,path,report,*_ = _quiet_current_observer_fixture(tmp_path,monkeypatch)
+    detector_now=now+timedelta(seconds=delta_sec or 0)
+    if delta_sec is None:
+        report['observer_generation']['completed_at']=(now+timedelta(seconds=30)).isoformat()
+        report['observer_generation']['sha256']=monitor._observer_seal(report['observer_generation'])
+        path.write_text(json.dumps(report))
+    _isolate_submission_artifact_check(mod,root,detector_now,monkeypatch)
+    os.utime(path,(detector_now.timestamp()-10,)*2)
+    outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity=='fail'
+    assert 'observer_report_body_clock_not_current' in outcome.summary
+    freshness=outcome.details['submission_bottleneck_monitor_observation_dimensions']['freshness']
+    assert freshness['status']=='fresh'
+    assert freshness['body_clock']['status']=='future_or_stale_or_unavailable'
+    assert 'submission_bottleneck_monitor_observation_health' not in outcome.details
 
 
 def test_pending_is_warning_and_cannot_clear_prior_daemon_failure(tmp_path, monkeypatch):

@@ -33,6 +33,52 @@ def test_composed_confirmation_keeps_original_and_never_emits_dependency(warm,vw
         assert e['signal_proof']['refinement_truth']==vwap_truth
     assert all(base not in r['event']['branch_signals'] for r in candidate.ready)
 
+
+@pytest.mark.parametrize('warm,truth',[(20,'UNKNOWN'),(121,'TRUE')])
+def test_composed_original_and_refinement_features_build_strict_production_request(warm,truth):
+    from src.engine.scalping import reversal_extended_runtime as E,reversal_path_runtime as ORIGINAL
+    from src.engine.scalping import reversal_auxiliary_contract as V1
+    from src.engine.scalping.continuous_reversal_postclose import digest
+    bid=J.ALIASES['jusung_after_refined']
+    values=[row(i) for i in range(warm)]+[row(warm,109300,100000),row(warm+1,109400),row(warm+2,109500)]
+    state=S.State(branch_ids=[bid],offline=True,session_anchor=values[0])
+    ready=feed(state,values)[0]
+    event,source=E.snapshot(state,ready);signal=event['branch_signals'][bid]
+    original=J.validate_composed(signal)
+    frozen=copy.deepcopy((event,source));claim_digest=digest(frozen)
+    assert signal['signal_proof']['refinement_truth']==truth
+    assert signal['drawdown_5m_pct'] != signal['branch_features']['dd']
+    facts=source['branch_inputs'][bid]['facts']
+    assert facts['drawdown_5m_pct']==original['drawdown_5m_pct']
+    assert facts['volume_ratio_60s']==original['volume_ratio_60s']
+    unadapted=ORIGINAL.State._source(state,signal,ready['row'])
+    assert {k:v for k,v in facts.items() if k not in {'drawdown_5m_pct','volume_ratio_60s'}} == {
+        k:v for k,v in unadapted['facts'].items() if k not in {'drawdown_5m_pct','volume_ratio_60s'}}
+    inp,_,_=A.production_request(source['branch_inputs'][bid],V1.ARMS[0],phase=signal['decision_phase'],event=signal)
+    A.validate_input_signal(inp,signal)
+    assert (event,source)==frozen and digest((event,source))==claim_digest
+    assert E.snapshot(state,ready)==frozen
+    bad=copy.deepcopy(inp);bad['entry_setup_evidence_v1']['facts']['drawdown_5m_pct']+=.1
+    with pytest.raises(ValueError,match='path_auxiliary_feature_input_conflict'):A.validate_input_signal(bad,signal)
+
+
+@pytest.mark.parametrize('field',['drawdown_5m_pct','volume_ratio_60s'])
+def test_composed_source_rejects_altered_original_top_features(field):
+    bid=J.ALIASES['jusung_after_refined'];values=[row(i) for i in range(121)]+[row(121,109300,100000),row(122,109400)]
+    state=S.State(branch_ids=[bid],offline=True,session_anchor=values[0]);ready=feed(state,values)[0]
+    signal=copy.deepcopy(ready['event']['branch_signals'][bid]);signal[field]=(signal[field] or 0)+.1
+    with pytest.raises(ValueError,match='joint_original_feature_projection_conflict'):
+        state._source(signal,ready['row'])
+
+
+def test_noncomposed_source_bytes_remain_the_original_projection():
+    from src.engine.scalping import reversal_path_runtime as ORIGINAL
+    from src.engine.scalping.continuous_reversal_postclose import digest
+    base=J.ALIASES['jusung_after_breakout'];values=[row(i) for i in range(61)]+[row(61,110100)]
+    state=S.State(branch_ids=[base],offline=True,session_anchor=values[0]);ready=feed(state,values)[0]
+    event=ready['event']['branch_signals'][base]
+    assert digest(state._source(event,ready['row']))==digest(ORIGINAL.State._source(state,event,ready['row']))
+
 def test_refinement_false_consumes_confirmation_without_later_refinement_root():
     bid=J.ALIASES['jusung_after_refined']
     state=S.State(branch_ids=[bid],offline=True,session_anchor=row(0))

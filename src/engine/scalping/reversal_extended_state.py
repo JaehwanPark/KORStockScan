@@ -51,6 +51,22 @@ class State(OLD.State):
             result.update(low_price=proof['low'],anchor_event_id=proof['anchor_event_id'])
         return result
 
+    def _source(self, event, row):
+        from src.engine.scalping import reversal_joint_catalog as J
+        if event.get('extended_definition_id') not in J.COMPOSED:
+            return super()._source(event, row)
+        original = J.validate_composed(event)
+        # A refinement has current rolling features, while these two fields
+        # retain the original confirmation's low/volume definitions. Neither
+        # the original confirmation nor the refinement is rewritten here.
+        fields = ('drawdown_5m_pct', 'volume_ratio_60s')
+        if any(event.get(key) != original.get(key) for key in fields):
+            raise ValueError('joint_original_feature_projection_conflict')
+        source = super()._source(event, row)
+        for key in fields:
+            source['facts'][key] = original[key]
+        return source
+
     def observe(self,row,*,symbol,venue,session):
         previous=self.legacy.last
         if previous and row==previous:return []

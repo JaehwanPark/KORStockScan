@@ -101,6 +101,70 @@ def _observer_small_object(path, *, limit=1024 * 1024, hash_only=False):
     return ({} if hash_only else _observer_json_object(encoded), hashlib.sha256(encoded).hexdigest())
 
 
+def _submission_observer_snapshot(path):
+    """Reuse one strict bounded report read, only while its exact inode is stable."""
+    before = _observer_file_signature(path.lstat())
+    payload, sha = _observer_small_object(path, limit=8 * 1024 * 1024)
+    if _observer_file_signature(path.lstat()) != before:
+        raise ValueError('observer_report_changed_during_snapshot')
+    return payload, sha, before
+
+
+def _submission_observer_dimensions(payload, path, sha):
+    def scalar(value):
+        if isinstance(value, str): return ' '.join(value.split())[:160]
+        return value if isinstance(value, (int, float, bool)) or value is None else None
+    stages = {}
+    for name in ('source_gap_semantics', 'entry_execution_tuning_semantics', 'machine_semantics'):
+        value = payload.get(name)
+        if not isinstance(value, dict):
+            continue
+        stage = {key:scalar(value[key]) for key in ('status', 'reason', 'blocker', 'source_status', 'selection_status',
+                 'observation_count', 'source_invalid_count', 'required_feature_guard_count')
+                 if isinstance(value.get(key), (str, int, float, bool))}
+        sources = value.get('sources')
+        if isinstance(sources, dict):
+            stage['sources'] = {str(key)[:80]:{field:scalar(source[field]) for field in ('status', 'recent_count', 'reason')
+                if isinstance(source.get(field), (str, int, float, bool))}
+                for key, source in list(sources.items())[:16] if isinstance(source, dict)}
+        for field in ('issues', 'diagnostics'):
+            if isinstance(value.get(field), dict):
+                stage[field] = {str(key)[:160]:scalar(count) for key,count in list(value[field].items())[:16]}
+        stages[name] = stage
+    provenance = payload.get('input_provenance')
+    provenance = ({key:scalar(provenance[key]) for key in (
+        'schema', 'target_date', 'evaluated_at', 'snapshot_as_of', 'latest_event_at',
+        'latest_event_status', 'loaded_recent_event_count',
+        'snapshot_age_seconds', 'latest_event_age_seconds', 'row_count', 'snapshot_order') if key in provenance}
+        if isinstance(provenance, dict) else None)
+    return dict(report=dict(path=str(path), byte_sha256=sha,
+                           date=scalar(payload.get('date')), as_of=scalar(payload.get('as_of')), run_id=scalar(payload.get('run_id'))),
+                execution=scalar(payload.get('execution_status')), semantic=scalar(payload.get('semantic_status')),
+                source=dict(status=scalar(payload.get('status')), blocker=scalar(payload.get('blocker')), stages=stages,
+                            input_provenance=provenance,
+                            inherited_source_as_of=scalar(payload.get('source_as_of')),
+                            inherited_source_as_of_is_upstream_clock=False),
+                runtime_effect=False, allowed_runtime_apply=False)
+
+
+def _submission_observer_partial_reason(dimensions):
+    def text(value):
+        return ' '.join(str(value).split())[:160]
+    source = dimensions['source']
+    reasons = []
+    if source.get('blocker') is not None:
+        reasons.append('blocker=' + text(source['blocker']))
+    for name, stage in source['stages'].items():
+        reasons.append(name + '=' + text(stage.get('status', 'not_reported')))
+        for key in ('reason', 'blocker', 'source_status', 'selection_status'):
+            if key in stage:
+                reasons.append(name + '.' + key + '=' + text(stage[key]))
+        for key in ('issues', 'diagnostics'):
+            if stage.get(key):
+                reasons.append(name + '.' + key + '=' + ','.join(list(stage[key])[:4]))
+    return '; '.join(reasons) or 'source_reason_not_reported'
+
+
 def _observer_clock(value):
     try:
         parsed = datetime.fromisoformat(str(value))
@@ -115,7 +179,7 @@ def _observer_live_identity(pid):
             "cwd": str(Path(os.readlink(f"/proc/{pid}/cwd")).resolve(strict=True))}
 
 
-def _submission_observer_transition_pending(root, artifact_path, now, *, max_staleness_sec):
+def _submission_observer_transition_pending(root, artifact_path, now, *, max_staleness_sec, report_snapshot=None):
     """Recognize only the exact frozen predecessor while its first slot is due.
 
     The report remains prior partial/validated evidence; this never synthesizes
@@ -128,9 +192,12 @@ def _submission_observer_transition_pending(root, artifact_path, now, *, max_sta
         expected_report = data / "report/buy_funnel_sentinel" / f"submission_bottleneck_monitor_{day}.json"
         if Path(artifact_path).resolve(strict=True) != expected_report or Path(artifact_path).is_symlink():
             return None
-        age = now.timestamp() - Path(artifact_path).stat().st_mtime
-        if not 0 <= age <= max_staleness_sec: return None
-        report, report_sha = _observer_small_object(Path(artifact_path), limit=8 * 1024 * 1024)
+        snapshot = report_snapshot or _submission_observer_snapshot(Path(artifact_path))
+        report, report_sha, report_signature = snapshot
+        if _observer_file_signature(Path(artifact_path).lstat()) != report_signature: return None
+        report_mtime = report_signature[7] / 1_000_000_000
+        age = now.timestamp() - report_mtime
+        if age < 0: return None
         if (report.get("schema") != "submission_bottleneck_monitor_v1" or report.get("date") != day
                 or not re.fullmatch("[0-9a-f]{32}", str(report.get("run_id") or ""))
                 or report.get("execution_status") != "completed"
@@ -161,6 +228,8 @@ def _submission_observer_transition_pending(root, artifact_path, now, *, max_sta
                 or selected_at is None or complete_at is None or report_at is None
                 or not report_at < selected_at <= complete_at <= now):
             return None
+        age_at_completion = complete_at.timestamp() - report_mtime
+        if not 0 <= age_at_completion <= max_staleness_sec: return None
         # Strictly next five-minute cron slot, then the existing 180-second
         # total wrapper budget (Sentinel prefix + observer + cleanup).
         due_epoch = (math.floor(complete_at.timestamp() / 300) + 1) * 300 + 180
@@ -180,6 +249,7 @@ def _submission_observer_transition_pending(root, artifact_path, now, *, max_sta
                 or not isinstance(identity.get("start_ticks"), str) or not identity["start_ticks"].isdigit()
                 or receipt.get("git_commit") != commit or receipt.get("release_root") != release
                 or receipt.get("pid") != identity.get("pid")
+                or receipt.get('start_ticks') != identity['start_ticks']
                 or receipt.get("process_cwd") != str(Path(release) / "src")
                 or identity != _observer_live_identity(receipt["pid"])):
             return None
@@ -196,6 +266,11 @@ def _submission_observer_transition_pending(root, artifact_path, now, *, max_sta
             prior_execution_status=report["execution_status"], prior_semantic_status=report["semantic_status"],
             prior_blocker=report.get("blocker"), prior_status=report.get("status"),
             deadline=datetime.fromtimestamp(due_epoch, now.tzinfo).isoformat(),
+            cron_deadline=datetime.fromtimestamp(due_epoch, now.tzinfo).isoformat(),
+            freshness_deadline=datetime.fromtimestamp(predecessor['mtime_ns'] / 1_000_000_000 + max_staleness_sec, now.tzinfo).isoformat(),
+            prior_age_sec=round(age, 1), age_at_completion_sec=round(age_at_completion, 1),
+            freshness_at_completion='fresh', prior_stale_retained=age > max_staleness_sec,
+            handoff_time_allowance='exact_captured_predecessor_through_first_slot_budget',
             current_observation_verified=False, runtime_effect=False, allowed_runtime_apply=False)
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
@@ -242,6 +317,44 @@ def _submission_observer_generation_issue(payload, root):
     except (OSError, ValueError, TypeError):
         return "observer_generation_selection_unavailable"
     return None
+
+
+def _submission_observer_actor_issue(payload):
+    """Only the quiet-window WARNING exception requires a live consumed Main."""
+    generation = payload.get('observer_generation') or {}
+    if not isinstance(generation, dict): return 'observer_current_main_receipt_unproven'
+    receipt = generation.get('selector_reported_pid_receipt') or {}
+    if (generation.get('selector_reported_actual_pid_consumed') is not True
+            or not isinstance(receipt, dict)
+            or receipt.get('schema') != 'runtime_release_pid_receipt_v1'
+            or type(receipt.get('pid')) is not int or receipt['pid'] <= 0
+            or not isinstance(receipt.get('start_ticks'), str) or not receipt['start_ticks'].isdigit()
+            or receipt.get('release_root') != generation.get('release_root')
+            or receipt.get('git_commit') != generation.get('git_commit')
+            or receipt.get('process_cwd') != str(Path(generation['release_root']) / 'src')):
+        return 'observer_current_main_receipt_unproven'
+    machine = payload.get('machine_semantics') or {}
+    cohort = machine.get('current_health_cohort') if isinstance(machine, dict) else None
+    if cohort is not None:
+        # The pure health projection has already validated the exact current
+        # cohort. The outer 30-minute ledger remains historical evidence.
+        if (not isinstance(cohort, dict)
+                or cohort.get('actor') != [str(receipt['pid']), receipt['start_ticks']]
+                or not isinstance(cohort.get('view'), dict)):
+            return 'observer_current_main_lineage_mismatch'
+        machine = cohort['view']
+    lineage = machine.get('reversal_provider_lineage') if isinstance(machine, dict) else None
+    if lineage is not None and (not isinstance(lineage, dict)
+            or lineage.get('exact_pid_filter') != [str(receipt['pid']), receipt['start_ticks']]):
+        return 'observer_current_main_lineage_mismatch'
+    try:
+        if _observer_live_identity(receipt['pid']) != dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'],
+                                                        cwd=receipt['process_cwd']):
+            return 'observer_current_main_identity_changed'
+    except (OSError, ValueError, TypeError, KeyError, IndexError):
+        return 'observer_current_main_not_running'
+    return None
+
 
 def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Check the sentinel's exact-date semantic receipt separately from freshness."""
@@ -2817,9 +2930,28 @@ class ArtifactFreshnessDetector(BaseDetector):
             mtime = artifact_path.stat().st_mtime
             age_sec = now_ts - mtime
             details[f"{aid}_age_sec"] = round(age_sec, 1)
+            observer_snapshot = None
             if aid == "submission_bottleneck_monitor":
                 try:
-                    _observer_small_object(artifact_path, limit=8 * 1024 * 1024)
+                    observer_snapshot = _submission_observer_snapshot(artifact_path)
+                    # The file clock and body must belong to this same read.
+                    mtime = observer_snapshot[2][7] / 1_000_000_000
+                    age_sec = now_ts - mtime
+                    details[f"{aid}_age_sec"] = round(age_sec, 1)
+                    dimensions = _submission_observer_dimensions(observer_snapshot[0], artifact_path, observer_snapshot[1])
+                    dimensions['freshness'] = dict(status='future' if age_sec < 0 else 'stale' if age_sec > max_stale else 'fresh',
+                        age_sec=round(age_sec, 1), max_staleness_sec=max_stale, clock='report_file_mtime')
+                    body_clock = _observer_clock(observer_snapshot[0].get('as_of'))
+                    generation = observer_snapshot[0].get('observer_generation')
+                    completed_clock = _observer_clock(generation.get('completed_at')) if isinstance(generation, dict) else None
+                    body_age = now_ts - body_clock.timestamp() if body_clock else None
+                    completed_age = now_ts - completed_clock.timestamp() if completed_clock else None
+                    dimensions['freshness']['body_clock'] = dict(
+                        status=('fresh' if body_age is not None and completed_age is not None
+                                and 0 <= completed_age <= body_age <= max_stale else 'future_or_stale_or_unavailable'),
+                        as_of_age_sec=body_age, completed_age_sec=completed_age,
+                        max_staleness_sec=max_stale, clock='detector_wall_clock')
+                    details[f'{aid}_observation_dimensions'] = dimensions
                     json_error = ""
                 except (OSError, ValueError, TypeError) as exc:
                     json_error = str(exc)
@@ -2837,17 +2969,36 @@ class ArtifactFreshnessDetector(BaseDetector):
                 continue
             if aid == "submission_bottleneck_monitor":
                 pending = _submission_observer_transition_pending(
-                    PROJECT_ROOT, artifact_path, now_dt, max_staleness_sec=max_stale)
+                    PROJECT_ROOT, artifact_path, now_dt, max_staleness_sec=max_stale,
+                    report_snapshot=observer_snapshot)
                 if pending is not None:
                     details[f"{aid}_status"] = "pending_first_current_observer"
                     details[f"{aid}_transition"] = pending
+                    dimensions['generation'] = dict(status='pending_first_current_observer', current_observation_verified=False)
                     details[f"{aid}_current_observation_verified"] = False
                     warnings.append(f"{aid}: first current-generation observation pending; prior evidence retained")
                     continue
-            status_warning = self._validate_json_status(
-                artifact, artifact_path, details
-            )
+            status_warning = self._validate_json_status(artifact, artifact_path, details,
+                **({'observer_snapshot': observer_snapshot} if observer_snapshot is not None else {}))
+            if (aid == 'submission_bottleneck_monitor' and age_sec > max_stale
+                    and not past_window_end and not in_startup_grace):
+                message = f'{aid}: stale ({age_sec:.0f}s > {max_stale}s)'
+                if status_warning:
+                    message += '; ' + status_warning.removeprefix(aid + ': ')
+                (issues if critical else warnings).append(message)
+                details[f'{aid}_status'] = 'fail' if critical else 'warning'
+                continue
             if status_warning:
+                observation_health = details.get(f'{aid}_observation_health') or {}
+                if (aid == 'submission_bottleneck_monitor' and 0 <= age_sec <= max_stale
+                        and observation_health.get('status') == 'warning_pending'
+                        and details.get(f'{aid}_observation_health_projection_match') is True):
+                    warnings.append(status_warning)
+                    details[f'{aid}_status'] = ('pending_no_applicable_observations'
+                        if observation_health.get('reason') == 'bounded_no_applicable_observations'
+                        else 'pending_bounded_observation')
+                    details[f'{aid}_current_observation_verified'] = False
+                    continue
                 if self._is_bounded_postclose_running(
                     artifact, artifact_path, artifact_day, now_dt
                 ):
@@ -3015,8 +3166,15 @@ class ArtifactFreshnessDetector(BaseDetector):
             (warnings if 'current_owner' in finding else issues).append('semantic_coverage: ' + finding)
 
         severity, summary = self._classify(issues, warnings)
-        if severity == "warning" and not issues and len(warnings) == 1 and details.get("submission_bottleneck_monitor_status") == "pending_first_current_observer":
-            summary = "Artifact observation pending: first current-generation submission monitor; prior evidence retained"
+        if (severity == "warning" and not issues and len(warnings) == 1
+                and details.get("submission_bottleneck_monitor_status") in {
+                    "pending_first_current_observer", "pending_no_applicable_observations", "pending_bounded_observation"}):
+            summary = ("Artifact observation pending: first current-generation submission monitor; prior evidence retained"
+                       if details['submission_bottleneck_monitor_status'] == 'pending_first_current_observer'
+                       else ('Artifact observation pending: '
+                             + str((details.get('submission_bottleneck_monitor_observation_health') or {}).get('reason',
+                                   'bounded_observation'))[:120]
+                             + '; partial validation retained'))
         return DetectionResult(
             detector_id=self.id,
             category=self.category,
@@ -3265,6 +3423,7 @@ class ArtifactFreshnessDetector(BaseDetector):
         artifact: dict[str, Any],
         artifact_path: Path,
         details: dict[str, Any],
+        *, observer_snapshot=None,
     ) -> str:
         status_field = artifact.get("json_status_field")
         if not status_field:
@@ -3273,27 +3432,83 @@ class ArtifactFreshnessDetector(BaseDetector):
         aid = artifact["id"]
         ok_values = {str(v) for v in artifact.get("json_ok_values", [])}
         try:
-            payload = (_observer_small_object(artifact_path, limit=8 * 1024 * 1024)[0]
-                       if aid == "submission_bottleneck_monitor"
-                       else json.loads(artifact_path.read_text(encoding="utf-8")))
+            if aid == 'submission_bottleneck_monitor':
+                snapshot = observer_snapshot or _submission_observer_snapshot(artifact_path)
+                payload, report_sha, signature = snapshot
+                if _observer_file_signature(artifact_path.lstat()) != signature:
+                    raise ValueError('observer_report_changed_after_snapshot')
+            else:
+                payload = json.loads(artifact_path.read_text(encoding="utf-8"))
         except Exception as exc:
             details[f"{aid}_content_status"] = "invalid_json"
             return f"{aid}: invalid status JSON ({exc})"
 
-        if aid == 'submission_bottleneck_monitor' and isinstance(payload, dict) and 'execution_status' in payload:
+        if aid == 'submission_bottleneck_monitor' and isinstance(payload, dict) and (
+                'execution_status' in payload or str(payload.get('date') or '') >= '2026-10-14'):
+            dimensions = details.setdefault(f'{aid}_observation_dimensions',
+                _submission_observer_dimensions(payload, artifact_path, report_sha))
             details[f'{aid}_execution_status'] = payload.get('execution_status')
             details[f'{aid}_semantic_status'] = payload.get('semantic_status')
             details[f'{aid}_run_id'] = payload.get('run_id')
+            generation_issue = _submission_observer_generation_issue(payload, PROJECT_ROOT)
+            dimensions['generation'] = dict(status=generation_issue or 'current',
+                current_generation_verified=generation_issue is None)
+            if generation_issue is None and payload.get('observer_generation') is None:
+                dimensions['generation'] = dict(status='legacy_generation_unverified', current_generation_verified=False)
+            try:
+                report_unchanged = _observer_file_signature(artifact_path.lstat()) == signature
+            except OSError:
+                report_unchanged = False
+            if not report_unchanged:
+                dimensions['generation'] = dict(status='observer_report_changed_after_snapshot', current_generation_verified=False)
+                return f'{aid}: observer_report_changed_after_snapshot'
+            if generation_issue:
+                details[f'{aid}_observer_generation_issue'] = generation_issue
+                return f'{aid}: {generation_issue}'
             if (not re.fullmatch('[0-9a-f]{32}', str(payload.get('run_id', '')))
                     or payload.get('execution_status') != 'completed'
                     or payload.get('semantic_status') not in {'validated', 'partial'}):
                 return f'{aid}: observer execution incomplete or invalid'
             if payload.get('semantic_status') == 'partial':
-                return f'{aid}: observer semantic coverage partial; publication is not full validation'
-            generation_issue = _submission_observer_generation_issue(payload, PROJECT_ROOT)
-            if generation_issue:
-                details[f'{aid}_observer_generation_issue'] = generation_issue
-                return f'{aid}: {generation_issue}'
+                # This pure projection never grants full validation. Recompute
+                # from the exact report; only the fresh/current caller may
+                # classify its narrowly proven empty observation as pending.
+                freshness = dimensions.get('freshness') or {}
+                if freshness.get('status') == 'fresh' and (freshness.get('body_clock') or {}).get('status') != 'fresh':
+                    return f'{aid}: observer_report_body_clock_not_current'
+                if (dimensions['generation'].get('current_generation_verified') is True
+                        and freshness.get('status') == 'fresh'
+                        and 0 <= freshness.get('age_sec', -1) <= freshness.get('max_staleness_sec', -1)):
+                    from src.engine.monitoring.submission_bottleneck_monitor import observation_health_projection
+                    assessment = observation_health_projection(payload)
+                    details[f'{aid}_observation_health'] = assessment
+                    dimensions['observation_health'] = assessment
+                    declared = payload.get('observation_health')
+                    matches = isinstance(declared, dict) and declared == assessment
+                    details[f'{aid}_observation_health_projection_match'] = matches
+                    if declared is not None and not matches:
+                        return f'{aid}: observer_observation_health_projection_mismatch'
+                    if assessment.get('status') == 'warning_pending' and not matches:
+                        return f'{aid}: observer_observation_health_projection_missing'
+                    if assessment.get('status') == 'warning_pending' and matches:
+                        actor_issue = _submission_observer_actor_issue(payload)
+                        if not actor_issue:
+                            try:
+                                _, selection_sha = _observer_small_object(
+                                    Path(PROJECT_ROOT) / 'data/runtime/runtime_release_selection.json',
+                                    limit=1024 * 1024, hash_only=True)
+                                if selection_sha != payload['observer_generation']['final_selection_sha256']:
+                                    actor_issue = 'observer_generation_changed_after_assessment'
+                                elif _observer_file_signature(artifact_path.lstat()) != signature:
+                                    actor_issue = 'observer_report_changed_after_snapshot'
+                            except (OSError, ValueError, TypeError, KeyError):
+                                actor_issue = 'observer_assessment_snapshot_unavailable'
+                        dimensions['current_main_actor'] = dict(status=actor_issue or 'verified')
+                        if actor_issue:
+                            details[f'{aid}_observation_health_projection_match'] = False
+                            return f'{aid}: {actor_issue}'
+                return (f'{aid}: observer semantic coverage partial; publication is not full validation; '
+                        + _submission_observer_partial_reason(dimensions))
 
         current: Any = payload
         for part in str(status_field).split("."):

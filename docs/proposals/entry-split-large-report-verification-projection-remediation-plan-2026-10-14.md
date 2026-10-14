@@ -282,3 +282,23 @@ Sentinel은 기존 observer owner에서 run 시작/완료·선택 bytes SHA·cod
 복구는 기존 release-set/detector/Sentinel 잠금과 원 실패·hold bytes SHA를 유지한다. 현재 PID의 native H/manifest/verify와 실제 source/cwd/start·singleton을 다시 확인한 뒤 검토된 이전 native PID 기록 API로 사실인 소비 메타데이터만 기록할 수 있다. 이는 실패 transition의 완료나 startup PASS를 뜻하지 않으며 해당 terminal/hold를 변경하지 않는다. 새 배포기는 명시적인 failed-hold adoption에서만 canonical current-selected 실패가 starting/attestation timeout이고 hold 소유와 원 이전 PID가 실패 receipt에 일치하는지 검증한다. 모든 표준 native preflight/code/source 검증 뒤 old hold bytes를 보존하고 새 owned hold로 CAS 원자 교체한다. unlink 공백·foreign/operator hold 삭제·실패 terminal의 성공 수정은 금지한다.
 
 후속 새 commit/transition의 graceful drain·native 준비·실제 record-pid/complete/첫 health를 다시 검증하며, 실패한 시도의 immutable code를 직접 수정하지 않는다. 복구 수용 owner는 `tmp/startup-router-cli-repair-evidence-20261014`와 `data/report/startup_router_cli_repair_deployment/2026-10-14`다.
+
+## 15. 15:37 이후 경보의 독립 원인 표시 보완
+
+945c30637의 ordered 배포는15:31:42 완료했고 PID679747/start2339199의 첫 full sweep은22.056ms 뒤 시작했다. 15:37:02 경보는15:26:10 발행된 이전 observer가646.7초를 넘긴 상태를 읽었다. 기존 status 검사가 partial에서 먼저 반환해 stale와 이전 세대 원인을 가렸다. 이후 현행 세대 보고서의 partial은 별도다. upstream snapshot은15:35:12로 새 자료이나 관련 latest_event가15:08:54여서600초 조건을 통과하지 못했다. monitor.source_as_of15:15는 이전 수용 snapshot에서 승계한 값이며 현재 upstream 입력 시각이 아니다.
+
+작은 같은 보고서 snapshot의 execution/semantic·정확한 run/date·freshness·선택/코드 generation·원 blocker를 독립 진단한다. stale/잘못된 세대가 partial 문구에 가려지지 않게 하고 현재 partial의 blocker와 축별 상태를 남긴다. 일반600초 stale·실제 결손 partial FAIL과 과거 실패 보존을 유지하며, 아래 사용자 승인 예외만 pending WARNING으로 구분한다. 판정 없음이나 issues={}만으로 valid_empty/정상·복구를 합성하지 않는다.
+
+최근145개 이벤트는5상시종목의 session_generation_mismatch 대기였고 기존 평가 stage 모집단에서 제외됐다. 관련 평가 부재와 원천 유실은 구분하며, 세션경계 quiet의 현재 완전성은 별도 source owner의 후속 수용이다. entry-split은 verified projection/full report read0다. 첫 새 release digest cold11.60GB와 다음 자연 warm full read0/3.84초를 구분한다. 다른 source의 cold 검증을 이번 작은 진단 수리에 추가 재실행하거나 cache 경계 완화로 바꾸지 않는다.
+
+표적 시험은 stale+partial+이전 generation 동시 결함, current partial의 실제 blocker, malformed/신원 변경, pending의 WARNING·미검증, 같은 bounded snapshot과 원 실패/경제 상태 보존을 포함한다. 기존4owner·원 정책과 승인된 ordered 배포를 사용하고 새 자연 evidence는 `data/report/observer_alert_dimensions_deployment/2026-10-14`에 분리한다.
+
+사용자는15:40 재경보 후 충분한 대기 시간 또는 지연 원인 해소로 반복 오류를 끝내도록 명시했다. 같은 승인 범위에서 두 경계를 보완한다. (1) ordered 완료 당시600초 안이었던 정확한 captured predecessor는 첫 정상5분 slot+기존 전체 wrapper180초까지 WARNING/pending을 유지할 수 있다. 대기 중 과거 파일이600초를 넘겼다는 사실·원 partial/실패 이력은 보존한다. 이미 완료 시점에 stale였던 자료, bytes/신원 변경, 명시적 생산 실패·기한 초과·현행 보고서에는 이 유예를 적용하지 않는다. 현재/일반 보고서와 매매 원천 stale 기준은 변경하지 않는다. (2) 새 보고서의 partial은 fresh upstream·필수 reader 정상 완료·정책/분할/지연 native 증빙을 재검증한다. 판정 표본 부재, 원 계약에 결속된 SOURCE_INVALID/필수 특징 보호 판정, 정상 BLOCK/RECHECK 및 요청·응답·화면 계약이 정확한 CAUTION/VETO, Main의 정확한 거절 또는 처리 종료가 확인된 PASS는 observation_pending WARNING으로 구분할 수 있다. 원 source gap·partial/unobservable·미검증은 보존하며 valid_empty/PASS/복구를 합성하지 않는다. 미확인 PASS 소비·실패/모순 제출·실제 계약 충돌·읽기/생산 실패·세대/시각 오류는 FAIL이다. 현재 건강 cohort는 단일 as_of의 최근600초·현재 PID/start를 machine/lineage/Main 증빙에 동일하게 적용한다. 기존30분/allPID 모집단과 과거 미확인/실패는 별도로 보존하며 과거 성공을 만들지 않는다. 자연 보고서와 detector에서 새로운 출력·기존 오류의 비재발을 확인한 뒤 수용한다.
+
+## 16. 애프터마켓 주성 조합 입력의 실제 생산 결함 수리
+
+16:05 관측의 path_auxiliary_feature_input_conflict10건은 실제 계약 오류로 유지했다. 이후 같은036930 AFTER 조합에서29건까지 늘어 원 trace ID/attempt/원문 SHA를 보존했다. 요청·원 machine payload 발행 전 예외라 과거 개별 숫자를 복구했다고 주장하지 않는다. 같은 joint 정의의 deterministic State 입력에서 UNKNOWN/TRUE 두 확인 경우 모두 source DD0.5484460694698434와 보존된 원 FIRST DD0.6363636363636349의 불일치로 동일 오류를 재현했다.
+
+원인은 J.compose가 원 확인 event의 top-level DD/volume를 보존하고 refinement의 rolling branch_features만 교체하는데, 상속 source projector가 DD/volume까지 rolling feature에서 읽은 것이다. reversal_extended_state.State._source의 composed 전용 override에서 validate_composed와 원 event top/base 일치를 확인한 후 두 source facts만 원 확인 정의로 맞춘다. 원 event/refinement/proof·매칭 조건·validator의 strict equality·prompt/모델·정책 membership과 원5초는 보존한다. noncomposed source bytes는 기존과 동일하다.
+
+해당 native 모듈1개만 바뀌므로 이전128scope 근거를 그대로 수용하지 않는다. 기준945/수리 candidate를 같은76,800행에 새로 재생해128scope·621hits·동일 signal SHA를 확인하고 runner/원본·후보 source hash/결과를 결속한다. source-only 수리의 새 code handoff는 이 정확한 old/new 모듈과 fresh parity를 검증한 뒤 기존 정의/bundle/pointer를 보존해 발행한다. C.issue의 source_semantics_repair 계약을 사용하며 새 정책·원천 과거 채움·추가 경제 gate를 만들지 않는다. 새 PID의 자연 주성 입력 생성/기존 conflict 비재발과 detector 결과를 별도로 확인한다.

@@ -10,6 +10,542 @@ from src.engine.monitoring import submission_bottleneck_monitor as monitor
 START = datetime(2026, 9, 21, 8, 5)
 
 
+def _observation_health_fixture():
+    """Small sanitized b8079548/2026-10-14 snapshot, with additive new receipts.
+
+    Preserve its exact clocks, zero decisions, three complete readers, historical
+    incident and economic gaps. Replace bulky128-scope selection by one verified
+    representative. No provider, source reader or native validator is invoked.
+    """
+    now = '2026-10-14T15:36:25.112259+09:00'
+    day = '2026-10-14'
+    source = {'schema': monitor.SCHEMA, 'as_of': '2026-10-14T15:35:12.585430+09:00',
+              'latest_event_at': '2026-10-14T15:08:54.875071+09:00', 'rows': [],
+              'identity_missing_events': 0, 'auxiliary_ai_semantic_issue_counts': {}}
+    prior = {'schema': monitor.SCHEMA, 'date': day, 'source_as_of': '2026-10-14T15:15:18.387222+09:00',
+             'incidents': {'old': {'status': 'historical_unresolved',
+                 'last_seen': '2026-10-14T13:00:56.607087+09:00',
+                 'issues': {'pre_submit_delay_bootstrap_env_mismatch': 1}}}}
+    result = monitor.evaluate({'target_date': day, 'dry_run': False, 'submission_monitor': source}, prior, now)
+    result.update(run_id='b807954859a24aad8c71f57a5991d068', execution_mode='full',
+                  execution_status='completed', semantic_status='partial')
+    sources = {name: {'status': 'complete', 'window_covered': True,
+                     'incomplete_last_line': False, 'malformed_rows': 0, 'missing_timestamp_rows': 0,
+                     'recent_count': 125 if name == 'probe' else 0, 'read_count': 1,
+                     'bytes_read': 1024, 'source_size': 2048,
+                     'source_identity': {'device': 66305, 'inode': 1358691 + index}}
+               for index, name in enumerate(('probe', 'trace', 'pending'))}
+    result['source_gap_semantics'] = {
+        'schema': 'machine_auxiliary_intraday_source_semantics_v1', 'as_of': now,
+        'status': 'unobservable', 'runtime_effect': False, 'decision_authority': 'report_only',
+        'issues': {}, 'diagnostics': {}, 'issues_by_scope': {}, 'diagnostics_by_scope': {},
+        'observed': {}, 'sources': sources, 'async_transition_projection_coverage': 'complete',
+        'async_pass_projection_coverage': 'complete', 'async_pass_projection': [],
+        'async_transition_projection': [], 'async_pass_unmapped_count': 0,
+        'probe_route_counts': {}, 'probe_route_assessed_counts': {},
+        'probe_route_source_covered_counts': {}, 'probe_route_native_no_match_counts': {},
+        'fixed_watch_waits': {'schema': 'submission_monitor_fixed_watch_wait_census_v1',
+            'count': 125, 'session_boundary_wait_count': 125,
+            'unclassified_or_actionable_wait_count': 0, 'reason_counts': {'session_generation_mismatch': 125},
+            'native_session_regime': 'session_transition', 'native_entry_allowed_by_clock': False,
+            'runtime_effect': False},
+    }
+    from src.trading.market import session_contract
+    result['source_gap_semantics']['fixed_watch_waits']['native_session_regime'] = (
+        session_contract.resolve_market_session(monitor.stamp(now)).session_regime)
+    result['machine_semantics'] = {
+        'status': 'unobservable', 'decision_authority': 'report_only', 'issues': {},
+        'observation_count': 0, 'source_invalid_count': 0, 'required_feature_guard_count': 0,
+        'source_invalid_blockers': {}, 'scopes': {}, 'selection_family': 'continuous_reversal',
+        'selection': {'representative': {'score_contract_valid': True}},
+        'publication': {'status': 'native_frozen_family_verified', 'effective_date': day},
+        'current_bundle_sha256': '99c894cb018ee594c9767bb6b9d9de544e1019587fb5379605136e0adbb48215',
+        'read_count': 1, 'read_limit_bytes': 8388608, 'bytes_read': 8362685, 'source_bytes': 8677570,
+        'window_coverage': 'bounded_suffix', 'action_replay_performed': False,
+    }
+    result['entry_execution_tuning_semantics'] = {
+        'schema': 'entry_execution_tuning_semantics_v1', 'as_of': now, 'status': 'observed',
+        'decision_authority': 'report_only', 'runtime_effect': False, 'allowed_runtime_apply': False,
+        'actual_order_submitted': False, 'issues': {},
+        'bootstrap': {'status': 'verified', 'verify_status': 'pass', 'policy_pid_consumption_proven': False},
+        'entry_split': {'status': 'source_gap', 'verification': 'verified',
+            'read_mode': 'verified_monitor_projection', 'source_date': '2026-10-13',
+            'policy_generation_binding': 'matched', 'prepared_effective_date': day,
+            'policy_runtime_apply_allowed': False,
+            'blockers': ['operating_paired_source_missing', 'operating_owner_source_invalid:actual_outcomes',
+                         'clean_baseline_paired_realized_population_incomplete'],
+            'primary_operating_ev_pct': None, 'paired_net_ev_delta_pct': None,
+            'verification_receipt': {'verified': True, 'role': 'submission_monitor', 'source_date': '2026-10-13',
+                'generation_id': 'f9224cfaead3cb85ea13f4376085a1d3bf11795f37f1051b0088c40828c364c3',
+                'report_sha256': '955eda70d4de631e4fcdd06fa8670c41b94ea2ecce1100b66591060cb62bd5fc',
+                'policy_sha256': 'fae051dcb3cce32d2496070481b92c31cb84a6d460a6d8e473d41f9a4c477d4d',
+                'manifest_sha256': '5d5b121398a63683c654df79cfeb5dc7389263cf67362ba676c1d2d9cef89d52',
+                'native_validation': {'reason': 'generation_binding_valid',
+                    'scope': 'full_report_policy_native_contract', 'status': 'verified'},
+                'full_report_bytes_read': 0, 'metadata_bytes_read': 18581, 'consumer_elapsed_ms': 16.671}},
+        'pre_submit_delay': {'status': 'verified_policy_bound', 'bootstrap_handoff_match': True,
+            'bootstrap_env_match': True, 'runtime_effect': False, 'effective_from': day, 'report_blockers': []},
+    }
+    return result
+
+
+def _recorded_guard_health_fixture(*, healthy=False):
+    """Reconstructed small16:00 guard contract using actual first2 hashes/IDs.
+
+    The original full16:00 report was not retained. This is explicitly a fixture,
+    not a byte-identical report capture or a fresh native validation receipt.
+    """
+    result = _observation_health_fixture()
+    now = monitor.stamp('2026-10-14T16:00:55.026558+09:00')
+    result['as_of'] = now.isoformat()
+    inp = result['input_provenance']
+    inp.update(evaluated_at=now.isoformat(), snapshot_as_of=(now-timedelta(seconds=50)).isoformat(),
+               snapshot_age_seconds=50.0,
+               latest_event_age_seconds=(now-monitor.stamp(inp['latest_event_at'])).total_seconds())
+    gap, machine, execution = (result[k] for k in
+        ('source_gap_semantics', 'machine_semantics', 'entry_execution_tuning_semantics'))
+    gap['as_of'] = execution['as_of'] = now.isoformat()
+    gap.update(status='observed_no_gap' if healthy else 'gap_observed',
+        observed={'probe_results': 2, 'entry_traces': 2},
+        diagnostics={} if healthy else {'machine_probe:route_snapshot_missing': 2,
+            'machine_trace:source_quality_blocked_before_assessment': 2},
+        diagnostics_by_scope={} if healthy else {
+            'route:krx_nxt_integrated|machine_probe:route_snapshot_missing': 2,
+            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET|route:krx_nxt_integrated|machine_trace:source_quality_blocked_before_assessment': 2},
+        probe_route_counts={'krx_nxt_integrated': 2})
+    gap['sources']['trace']['recent_count'] = 2
+    from src.trading.market import session_contract
+    context = session_contract.resolve_market_session(now)
+    gap['fixed_watch_waits'].update(native_session_regime=context.session_regime,
+        native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+    machine.update(status='observed_receipts_match' if healthy else 'source_invalid_observed',
+        observation_count=2, source_invalid_count=0 if healthy else 2,
+        source_invalid_blockers={} if healthy else {'candle_completed_timing_invalid': 2,
+            'candle_source_quality': 2, 'candle_unknown_age': 2},
+        scopes={'representative': {'matched_receipts': 2, 'live_pid_receipts': 2,
+                                 'current_bundle': True}} if healthy else {})
+    rows = [
+        ('aims-1134842ea3b534c12091', '26fce9f47e552f2e65e95e9c7233c4f919222de04e7c0c22cd625cf33f392e4c',
+         '2026-10-14T16:00:41.031593+09:00'),
+        ('aims-219196881f9e972d92e0', 'c45406032abf7a2fa761a7a3e53745a18a9de95c6989bc63fdb00405febbdde0',
+         '2026-10-14T16:00:54.643203+09:00')]
+    machine['reversal_provider_lineage'] = {
+        'status': 'observed', 'decision_authority': 'report_only', 'issues': {}, 'source_gaps': {},
+        'exact_attempt_join_gap_count': 0, 'current_pid_coverage': 'exact_live_pid',
+        'machine_observation_count': 2, 'trace_attempt_count': 2, 'exact_pid_filter': ['679747', '2339199'],
+        'source_windows': {'requests': dict(gap['sources']['trace']), 'traces': dict(gap['sources']['trace'])},
+        **{key: 0 for key in ('request_prepared_count', 'provider_transmission_attempt_count',
+            'raw_response_observed_count', 'provider_timeout_count', 'enter_without_request_observed',
+            'valid_pass_count', 'raw_pass_count', 'auxiliary_response_contract_valid_count',
+            'execution_valid_pass_count')},
+        'raw_verdict_counts': {},
+        'attempt_ledger': [dict(evaluation_attempt_id=attempt, machine_observation_sha256=digest,
+            decision_trace_id='trace-' + attempt,
+            producer_pid='679747', producer_start_ticks='2339199',
+            machine_bundle_sha256=machine['current_bundle_sha256'], trace_decision_ts=at,
+            machine_action='BLOCK' if healthy else 'SOURCE_INVALID', request_prepared=False,
+            effective_screen_status='not_requested_machine_nonentry' if healthy else 'not_requested_machine_source_invalid',
+            raw_verdict=None, auxiliary_response_contract_valid=None, post_response_execution_valid=None,
+            transmission_attempt_observed=False, raw_response_observed=False, timeout=False,
+            execution_errors=[]) for attempt, digest, at in rows],
+    }
+    return result
+
+
+def _provider_health_fixture(verdict='CAUTION', terminal='rejected'):
+    result = _recorded_guard_health_fixture(healthy=True)
+    lineage = result['machine_semantics']['reversal_provider_lineage']
+    rows = lineage['attempt_ledger']
+    for index,row in enumerate(rows):
+        row.update(machine_action='ENTER_NOW', decision_trace_id='trace-' + str(index),
+            effective_screen_status=verdict.lower(), raw_verdict=verdict,
+            request_prepared=True, transmission_attempt_observed=True, raw_response_observed=True,
+            auxiliary_response_contract_valid=True, post_response_execution_valid=True)
+    for key in ('request_prepared_count', 'provider_transmission_attempt_count', 'raw_response_observed_count',
+                'auxiliary_response_contract_valid_count'):
+        lineage[key] = 2
+    lineage.update(raw_verdict_counts={verdict: 2}, raw_pass_count=2 if verdict == 'PASS' else 0,
+        valid_pass_count=2 if verdict == 'PASS' else 0, execution_valid_pass_count=2 if verdict == 'PASS' else 0)
+    if verdict == 'PASS':
+        attempts=[]
+        for index,row in enumerate(rows):
+            fields=dict(async_producer_pid=row['producer_pid'], async_producer_start_ticks=row['producer_start_ticks'],
+                evaluation_attempt_id=row['evaluation_attempt_id'], ai_decision_trace_id=row['decision_trace_id'],
+                entry_machine_bundle_sha256=row['machine_bundle_sha256'], async_request_id='async-' + str(index),
+                async_machine_action='ENTER_NOW', async_auxiliary_verdict='PASS', async_auxiliary_status='pass',
+                async_provider_called=True, async_disposition=terminal,
+                async_disposition_reason='commit_allowed' if terminal == 'accepted_to_entry_path' else 'result_deadline_expired',
+                async_disposition_event_id=hashlib.sha256(('terminal' + str(index)).encode()).hexdigest())
+            attempts.append(dict(emitted_at=row['trace_decision_ts'], fields=fields))
+            if terminal == 'accepted_to_entry_path':
+                returned=dict(fields, async_disposition='entry_path_returned', async_disposition_reason='entry_cooldown_active',
+                    async_disposition_event_id=hashlib.sha256(('returned' + str(index)).encode()).hexdigest())
+                attempts.append(dict(emitted_at=row['trace_decision_ts'], fields=returned))
+        result['async_disposition_coverage'] = dict(coverage='bounded_trace_projection_complete',
+            denominator_partial=False, attempt_projection=attempts)
+    return result
+
+
+@pytest.mark.parametrize('verdict,terminal', [('CAUTION', 'rejected'), ('VETO', 'rejected'),
+    ('PASS', 'rejected'), ('PASS', 'accepted_to_entry_path')])
+def test_complete_provider_decisions_and_exact_main_closed_pass_are_observation_warning(verdict, terminal):
+    result=_provider_health_fixture(verdict, terminal)
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+
+
+def test_pass_native_invalidation_requires_exact_known_terminal_and_keeps_observation_pending():
+    result=_provider_health_fixture('PASS')
+    result['machine_semantics']['reversal_provider_lineage']['execution_valid_pass_count']=0
+    for row in result['machine_semantics']['reversal_provider_lineage']['attempt_ledger']:
+        row.update(post_response_execution_valid=False, execution_errors=['reversal_signal_expired'])
+    for item in result['async_disposition_coverage']['attempt_projection']:
+        item['fields']['async_disposition_reason']='reversal_signal_expired'
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+
+
+def test_required_feature_recheck_uses_canonical_guard_screen():
+    result=_recorded_guard_health_fixture()
+    machine=result['machine_semantics']
+    machine.update(source_invalid_count=1,required_feature_guard_count=1)
+    machine['reversal_provider_lineage']['attempt_ledger'][1].update(machine_action='RECHECK',
+        effective_screen_status='not_requested_required_feature_insufficient')
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+
+
+@pytest.mark.parametrize('mutation', ['no_terminal', 'no_return', 'unknown_terminal', 'wrong_trace',
+    'wrong_pid', 'uncertain_return', 'failed_submit', 'contradictory_submit', 'unvalidated_response',
+    'unknown_verdict', 'timeout', 'unknown_contract_error', 'conflicting_event'])
+def test_provider_observation_warning_cannot_hide_missing_consumption_or_contract_failure(mutation):
+    from copy import deepcopy
+    result=_provider_health_fixture('PASS', 'accepted_to_entry_path')
+    lineage=result['machine_semantics']['reversal_provider_lineage']
+    events=result['async_disposition_coverage']['attempt_projection']
+    if mutation=='no_terminal':
+        result['async_disposition_coverage']['attempt_projection']=[]
+    elif mutation=='no_return':
+        result['async_disposition_coverage']['attempt_projection']=[e for e in events if e['fields']['async_disposition']!='entry_path_returned']
+    elif mutation=='unknown_terminal':events[0]['fields']['async_disposition_reason']='unknown_contract_failure'
+    elif mutation=='wrong_trace':events[0]['fields']['ai_decision_trace_id']='other'
+    elif mutation=='wrong_pid':events[0]['fields']['async_producer_pid']='999'
+    elif mutation=='uncertain_return':events[1]['fields']['async_disposition_reason']='entry_execution_exception_or_uncertain'
+    elif mutation in ('failed_submit', 'contradictory_submit'):
+        for event in events:
+            if event['fields']['async_disposition']=='entry_path_returned':
+                event['fields'].update(async_disposition_reason='order_bundle_submitted',async_entry_submit_attempt_id='submit',
+                    async_entry_broker_attempts='1',async_entry_broker_accepted=True,async_entry_submit_outcome=False)
+        if mutation=='contradictory_submit':
+            other=deepcopy(events[1]);other['fields']['async_entry_submit_outcome']=True
+            other['fields']['async_disposition_event_id']='b'*64;events.append(other)
+    elif mutation=='unvalidated_response':lineage['attempt_ledger'][0]['auxiliary_response_contract_valid']=False
+    elif mutation=='unknown_verdict':lineage['attempt_ledger'][0]['raw_verdict']='UNKNOWN'
+    elif mutation=='timeout':lineage['attempt_ledger'][0]['timeout']=True
+    elif mutation=='unknown_contract_error':lineage['attempt_ledger'][0]['execution_errors']=['path_auxiliary_feature_input_conflict']
+    elif mutation=='conflicting_event':
+        other=deepcopy(events[0]);other['fields']['async_disposition_reason']='generation_superseded';events.append(other)
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+@pytest.mark.parametrize('healthy', [False, True])
+def test_recorded_native_guards_and_healthy_fixed_receipts_with_scanner_zero_are_warning(healthy):
+    result = _recorded_guard_health_fixture(healthy=healthy)
+    before = json.dumps(result, sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'warning_pending'
+    assert health['reason'] == 'recorded_guard_or_cohort_pending'
+    assert health['current_observation_verified'] is False and health['full_coverage_proven'] is False
+    assert json.dumps(result, sort_keys=True) == before
+
+
+@pytest.mark.parametrize('path,value', [
+    ('source_gap_semantics.diagnostics', {'machine_probe:unknown_contract_failure': 2}),
+    ('source_gap_semantics.diagnostics', {'machine_probe:route_snapshot_missing': []}),
+    ('source_gap_semantics.diagnostics_by_scope', {}),
+    ('source_gap_semantics.issues', {'machine_trace:path_auxiliary_feature_input_conflict': 10}),
+    ('source_gap_semantics.observed.entry_traces', False),
+    ('machine_semantics.observation_count', 3),
+    ('machine_semantics.source_invalid_count', 1),
+    ('machine_semantics.reversal_provider_lineage.status', 'partial_source_gap'),
+    ('machine_semantics.reversal_provider_lineage.source_gaps', {'observation_trace_unresolved': 1}),
+    ('machine_semantics.reversal_provider_lineage.exact_attempt_join_gap_count', 1),
+    ('machine_semantics.reversal_provider_lineage.exact_pid_filter', ['679748', '2339199']),
+    ('machine_semantics.reversal_provider_lineage.source_windows.requests.status', 'partial'),
+    ('machine_semantics.reversal_provider_lineage.valid_pass_count', 1),
+    ('machine_semantics.source_status', 'unobservable:FileNotFoundError'),
+    ('async_disposition_coverage', {'attempt_projection': [{'fields': {'async_auxiliary_verdict': 'PASS'}}]}),
+    ('async_disposition_coverage', {'attempt_projection': [{'fields': {
+        'async_machine_action': 'RECHECK', 'async_provider_called': True}}]}),
+])
+def test_recorded_guard_warning_never_hides_contract_failure_or_unjoined_evidence(path, value):
+    result = _recorded_guard_health_fixture()
+    keys = path.split('.')
+    target = result
+    for key in keys[:-1]: target = target[key]
+    target[keys[-1]] = value
+    assert monitor.observation_health_projection(result)['status'] == 'not_eligible'
+
+
+def test_machine_30m_receipts_and_source_10m_observations_keep_distinct_denominators():
+    result = _recorded_guard_health_fixture()
+    gap = result['source_gap_semantics']
+    gap.update(diagnostics={}, diagnostics_by_scope={}, observed={}, status='unobservable', probe_route_counts={})
+    # Earlier machine guards can remain30m after the10m source window empties.
+    assert monitor.observation_health_projection(result)['status'] == 'warning_pending'
+
+
+@pytest.mark.parametrize('reason', ['0B_missing','0B_age_exceeded','0D_missing','0D_age_exceeded'])
+def test_known_sparse_source_availability_diagnostics_remain_warning_not_contract_success(reason):
+    result=_recorded_guard_health_fixture()
+    gap=result['source_gap_semantics']
+    gap['diagnostics']={'machine_probe:'+reason:2}
+    gap['diagnostics_by_scope']={'route:krx_nxt_integrated|machine_probe:'+reason:2}
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+    gap['issues']={'machine_probe:coverage_degraded:krx_nxt_integrated':1}
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+@pytest.mark.parametrize('reason',['reversal_first_signal_invalidated','reversal_signal_generation_changed'])
+def test_native_validated_lifecycle_diagnostic_is_not_an_observer_failure(reason):
+    result=_recorded_guard_health_fixture()
+    gap=result['source_gap_semantics']
+    gap['diagnostics']={'machine_trace:'+reason:2}
+    gap['diagnostics_by_scope']={'KRX|KRX_REGULAR|route:krx_nxt_integrated|machine_trace:'+reason:2}
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+    gap['diagnostics']['machine_probe:required_feature_insufficient_unclassified']=1
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+def test_old_pass_and_other_pid_counts_are_preserved_but_not_current_health_denominator():
+    from copy import deepcopy
+    result=_provider_health_fixture('PASS')
+    current=_observation_health_fixture()
+    now=monitor.stamp(result['as_of']); actor=['679747','2339199']
+    source=deepcopy(current['source_gap_semantics']);source['as_of']=now.isoformat()
+    from src.trading.market import session_contract
+    native=session_contract.resolve_market_session(now)
+    source['fixed_watch_waits'].update(native_session_regime=native.session_regime,
+        native_entry_allowed_by_clock=native.entry_allowed_by_clock)
+    machine=deepcopy(current['machine_semantics'])
+    result['source_gap_semantics']['current_health_cohort']=monitor._health_cohort(source,actor,now,excluded=2)
+    result['machine_semantics']['current_health_cohort']=monitor._health_cohort(machine,actor,now,excluded=2)
+    # Unknown historical PASS remains in the original30m record. There is no
+    # fabricated current terminal or full-coverage assertion.
+    result['async_disposition_coverage']={}
+    result['incidents']['machine_auxiliary_intraday_source_gap']={
+        'status':'historical_unresolved','current_status':'historical_not_current_cohort',
+        'last_seen':now.isoformat(),'issues':{'machine_trace:path_auxiliary_feature_input_conflict':1}}
+    assert result['machine_semantics']['observation_count']==2
+    assert monitor.observation_health_projection(result)['status']=='warning_pending'
+    result['observer_generation']={'selector_reported_pid_receipt':{'pid':999,'start_ticks':'888'}}
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+@pytest.mark.parametrize('identity', ['historical','missing','conflicting'])
+def test_source_health_reuses_three_loaded_reads_and_never_discards_unknown_actor(tmp_path,monkeypatch,identity):
+    now=monitor.stamp('2026-10-14T16:05:00+09:00')
+    trace=dict(decision_ts=now.isoformat(),decision_stage='entry_screen',stock_code='036930',
+        machine_evaluation_status='assessment_contract_invalid',machine_contract_error='path_auxiliary_feature_input_conflict')
+    if identity!='missing':trace.update(async_producer_pid='8',async_producer_start_ticks='80')
+    if identity=='conflicting':trace['continuous_reversal_consumption']={'pid':9,'process_start_ticks':'90'}
+    calls=[]
+    def read(path,*a,**k):
+        calls.append(path)
+        return ([trace] if 'ai_decision_trace' in str(path) else []),dict(status='complete')
+    monkeypatch.setattr(monitor,'_recent_source_rows',read)
+    token=monitor._HEALTH_ACTOR.set(['9','90'])
+    try:observed=monitor.source_gap_semantics(tmp_path,now)
+    finally:monitor._HEALTH_ACTOR.reset(token)
+    assert len(calls)==3
+    assert observed['issues']['machine_trace:path_auxiliary_feature_input_conflict']==1
+    view=observed['current_health_cohort']['view']
+    assert bool(view['issues'])==(identity!='historical')
+    assert observed['current_health_cohort']['excluded_observation_count']==int(identity=='historical')
+
+
+@pytest.mark.parametrize('age,expected', [(600,1),(600.001,0)])
+def test_provider_current_health_inclusive_600s_boundary_reuses_two_reads(tmp_path,monkeypatch,age,expected):
+    _,observations,_,_,_=_current_provider_lineage_fixture(tmp_path,verdicts=('CAUTION',))
+    now=monitor.stamp(observations[0]['captured_at'])+timedelta(seconds=age)
+    read=monitor._recent_source_rows;calls=[]
+    def counted(*a,**k):calls.append(a[0]);return read(*a,**k)
+    monkeypatch.setattr(monitor,'_recent_source_rows',counted)
+    token=monitor._HEALTH_ACTOR.set(['123','456'])
+    try:original=monitor._reversal_provider_lineage(tmp_path,now,observations,tail_bytes=16384,pid_identity=(123,'456'))
+    finally:monitor._HEALTH_ACTOR.reset(token)
+    assert len(calls)==2 and original['machine_observation_count']==1
+    cohort=original['current_health_cohort']
+    assert cohort['window_seconds']==600 and cohort['view']['machine_observation_count']==expected
+    assert cohort['view']['source_gaps']=={}
+    assert cohort['excluded_observation_count']==1-expected
+
+
+def test_no_applicable_b807_observations_are_warning_pending_not_pass_or_recovery(monkeypatch):
+    result = _observation_health_fixture()
+    before = json.dumps(result, sort_keys=True)
+    monkeypatch.setattr(monitor.Path, 'open', lambda *a, **k: pytest.fail('health_projection_must_not_read'))
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'warning_pending'
+    assert health['severity'] == 'warning' and health['unmet_conditions'] == []
+    assert health['current_observation_verified'] is False and health['full_coverage_proven'] is False
+    assert health['runtime_effect'] is False and health['allowed_runtime_apply'] is False
+    assert json.dumps(result, sort_keys=True) == before
+    assert result['semantic_status'] == 'partial' and result['status'] == 'unobservable'
+    assert result['source_as_of'] == '2026-10-14T15:15:18.387222+09:00'
+    provenance = result['input_provenance']
+    assert provenance['snapshot_as_of'] == '2026-10-14T15:35:12.585430+09:00'
+    assert provenance['snapshot_age_seconds'] == pytest.approx(72.526829)
+    assert provenance['latest_event_age_seconds'] == pytest.approx(1650.237188)
+    assert result['incidents']['old']['status'] == 'historical_unresolved'
+    assert result['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+
+
+@pytest.mark.parametrize('path,value', [
+    ('input_provenance', None), ('input_provenance.dry_run', True),
+    ('input_provenance.snapshot_as_of', 1791960000),
+    ('input_provenance.snapshot_age_seconds', True), ('input_provenance.snapshot_age_seconds', float('nan')),
+    ('input_provenance.snapshot_age_seconds', 10**400),
+    ('input_provenance.latest_event_age_seconds', float('inf')),
+    ('input_provenance.target_date', '2026-10-13'), ('input_provenance.snapshot_schema', 'wrong'),
+    ('input_provenance.row_count', True), ('input_provenance.row_count', 1),
+    ('input_provenance.identity_missing_events', 1),
+    ('input_provenance.auxiliary_ai_semantic_issue_counts', {'receipt_mismatch': 1}),
+    ('input_provenance.snapshot_order', 'duplicate_or_reversed'),
+    ('input_provenance.snapshot_as_of', '2026-10-14T15:00:00+09:00'),
+    ('input_provenance.latest_event_at', '2026-10-14T15:36:26+09:00'),
+    ('execution_mode', 'source_only'), ('execution_status', 'deferred'), ('runtime_effect', True),
+    ('blocker', []),
+    ('source_gap_semantics', {}), ('source_gap_semantics.sources.trace.status', 'unobservable'),
+    ('source_gap_semantics.sources.probe.window_covered', False),
+    ('source_gap_semantics.sources.pending.malformed_rows', 1),
+    ('source_gap_semantics.sources.pending.incomplete_last_line', True),
+    ('source_gap_semantics.sources.pending.bytes_read', True),
+    ('source_gap_semantics.observed', {'probe_results': 1}),
+    ('source_gap_semantics.issues', {'machine_probe:0B_missing': 1}),
+    ('source_gap_semantics.diagnostics', {'machine_probe:0B_age_exceeded': 1}),
+    ('source_gap_semantics.issues_by_scope', {'scope|machine_probe:0B_missing': 1}),
+    ('source_gap_semantics.diagnostics_by_scope', {'scope|machine_probe:0B_age_exceeded': 1}),
+    ('source_gap_semantics.fixed_watch_waits.unclassified_or_actionable_wait_count', 1),
+    ('source_gap_semantics.fixed_watch_waits.reason_counts', {'route_snapshot_missing': 125}),
+    ('source_gap_semantics.fixed_watch_waits.native_entry_allowed_by_clock', True),
+    ('machine_semantics.selection_status', 'unobservable:policy_missing'),
+    ('machine_semantics.source_status', 'unobservable:FileNotFoundError'),
+    ('machine_semantics.source_status', False),
+    ('machine_semantics.publication.status', 'invalid'), ('machine_semantics.read_count', 0),
+    ('machine_semantics.window_coverage', []),
+    ('machine_semantics.observation_count', 1), ('machine_semantics.source_invalid_count', 1),
+    ('machine_semantics.observation_count', False),
+    ('machine_semantics.selection.representative.score_contract_valid', False),
+    ('entry_execution_tuning_semantics.bootstrap.status', 'verification_not_passed'),
+    ('entry_execution_tuning_semantics.entry_split.verification', 'not_verified'),
+    ('entry_execution_tuning_semantics.entry_split.status', 'unknown'),
+    ('entry_execution_tuning_semantics.entry_split.status', []),
+    ('entry_execution_tuning_semantics.entry_split.verification_receipt.verified', 1),
+    ('entry_execution_tuning_semantics.entry_split.verification_receipt.full_report_bytes_read', 1),
+    ('entry_execution_tuning_semantics.entry_split.policy_runtime_apply_allowed', True),
+    ('entry_execution_tuning_semantics.pre_submit_delay.bootstrap_env_match', False),
+    ('entry_execution_tuning_semantics.allowed_runtime_apply', True),
+    ('incidents.current', {'status': 'active', 'last_seen': '2026-10-14T15:36:20+09:00'}),
+    ('incidents.current', {'status': 'historical_unresolved', 'last_seen': '2026-10-14T15:36:20+09:00'}),
+    ('incidents.current', []), ('notification_pending', ['current']),
+    ('incidents.current', {'status': [], 'last_seen': '2026-10-14T15:36:20+09:00'}),
+])
+def test_no_applicable_health_rejects_actual_failure_missing_and_contradictory_evidence(path, value):
+    result = _observation_health_fixture()
+    keys = path.split('.')
+    selected = result
+    for key in keys[:-1]: selected = selected[key]
+    selected[keys[-1]] = value
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'not_eligible' and health['severity'] == 'unchanged'
+    assert health['unmet_conditions'] and health['current_observation_verified'] is False
+
+
+@pytest.mark.parametrize('value', [None, [], True, 5, {}, {'as_of': True}, {'as_of': 10**400}])
+def test_observation_health_malformed_envelope_never_throws_or_warns_pending(value):
+    assert monitor.observation_health_projection(value)['status'] == 'not_eligible'
+
+
+def test_empty_loaded_population_marker_requires_explicit_producer_count_and_exact_clock():
+    result = _observation_health_fixture()
+    inp = result['input_provenance']
+    latest = monitor.stamp(inp['snapshot_as_of']) - timedelta(days=1)
+    inp.update(latest_event_at=latest.isoformat(),
+               latest_event_age_seconds=(monitor.stamp(result['as_of'])-latest).total_seconds())
+    assert monitor.observation_health_projection(result)['status'] == 'not_eligible'
+    marker = monitor.snapshot([], monitor.stamp(inp['snapshot_as_of']))
+    assert marker['latest_event_at'] == latest.isoformat()
+    inp.update(latest_event_status=marker['latest_event_status'],
+               loaded_recent_event_count=marker['loaded_recent_event_count'])
+    assert monitor.observation_health_projection(result)['status'] == 'warning_pending'
+    inp['loaded_recent_event_count'] = False
+    assert monitor.observation_health_projection(result)['status'] == 'not_eligible'
+    inp['loaded_recent_event_count'] = 0
+    inp['latest_event_at'] = (latest-timedelta(seconds=1)).isoformat()
+    assert monitor.observation_health_projection(result)['status'] == 'not_eligible'
+    inp['snapshot_as_of'] = '0001-01-01T00:00:00+09:00'
+    assert monitor.observation_health_projection(result)['status'] == 'not_eligible'
+
+
+def test_boundary_wait_carryover_does_not_turn_into_failure_when_current_clock_changes():
+    result = _observation_health_fixture()
+    prior_now = monitor.stamp(result['as_of'])
+    now = monitor.stamp('2026-10-14T16:01:00+09:00')
+    delta = now-prior_now
+    result['as_of'] = now.isoformat()
+    for key in ('source_gap_semantics', 'entry_execution_tuning_semantics'):
+        result[key]['as_of'] = now.isoformat()
+    inp = result['input_provenance']
+    inp['evaluated_at'] = now.isoformat()
+    inp['snapshot_as_of'] = (monitor.stamp(inp['snapshot_as_of'])+delta).isoformat()
+    inp['latest_event_age_seconds'] += delta.total_seconds()
+    from src.trading.market import session_contract
+    context = session_contract.resolve_market_session(now)
+    result['source_gap_semantics']['fixed_watch_waits'].update(
+        native_session_regime=context.session_regime, native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+    assert monitor.observation_health_projection(result)['status'] == 'warning_pending'
+    result['source_gap_semantics']['fixed_watch_waits']['unclassified_or_actionable_wait_count'] = 1
+    assert monitor.observation_health_projection(result)['status'] == 'not_eligible'
+
+
+@pytest.mark.parametrize('when,reason,flags,boundary', [
+    ('15:36:00', 'session_generation_mismatch', {}, True),
+    ('15:36:00', 'route_snapshot_missing', {}, False),
+    ('14:36:00', 'session_generation_mismatch', {}, False),
+    ('16:36:00', 'session_generation_mismatch', {}, False),
+    ('15:59:00', 'session_generation_mismatch', {'_observed_at': '16:01:00'}, True),
+    ('16:00:00', 'session_generation_mismatch', {'_observed_at': '16:01:00'}, False),
+    ('15:36:00', 'session_generation_mismatch', {'actual_order_submitted': 0}, False),
+    ('15:36:00', 'session_generation_mismatch', {'broker_order_forbidden': 1}, False),
+    ('15:36:00', 'session_generation_mismatch', {'venue_source_quality_status': 'blocked'}, False),
+    ('15:36:00', 'session_generation_mismatch', {'watch_origin': 'SCANNER_PROMOTION'}, False),
+    ('15:36:00', 'session_generation_mismatch', {'market_session_bucket': 'nxt_premarket'}, False),
+])
+def test_existing_probe_read_censuses_excluded_waits_without_hiding_actionable_failure(
+        tmp_path, monkeypatch, when, reason, flags, boundary):
+    row_at = monitor.stamp('2026-10-14T' + when + '+09:00')
+    flags = dict(flags)
+    observed_at = flags.pop('_observed_at', when)
+    now = monitor.stamp('2026-10-14T' + observed_at + '+09:00')
+    fields = dict(watch_origin='MAIN_FIXED_WATCH', source_quality_reason=reason,
+                  venue_source_quality_status='pass', effective_venue='KRX',
+                  market_session_bucket='krx_regular', actual_order_submitted='False', broker_order_forbidden='True')
+    fields.update(flags)
+    wait = dict(pipeline='ENTRY_PIPELINE', stage='main_fixed_watch_observation_wait',
+                stock_code='005930', emitted_at=row_at.isoformat(), fields=fields)
+    calls = []
+    def existing_read(path, *args, **kwargs):
+        calls.append(path)
+        return ([wait] if 'pipeline_events' in str(path) else []), dict(status='complete')
+    monkeypatch.setattr(monitor, '_recent_source_rows', existing_read)
+    semantics = monitor.source_gap_semantics(tmp_path, now)
+    assert len(calls) == 3
+    census = semantics['fixed_watch_waits']
+    assert census['count'] == 1 and census['session_boundary_wait_count'] == int(boundary)
+    assert census['unclassified_or_actionable_wait_count'] == int(not boundary)
+    assert census['reason_counts'] == {reason: 1}
+    assert semantics['status'] == 'unobservable' and semantics['observed'] == {}
+    assert semantics['runtime_effect'] is False
+
+
 def test_monitor_consumes_pre_submit_prices_separately_from_terminal_and_pid(tmp_path, monkeypatch):
     from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
