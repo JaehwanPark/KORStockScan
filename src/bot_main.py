@@ -27,6 +27,7 @@ import threading
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # A child-only graceful restart can keep the long-lived supervisor's inherited
 # environment.  Strip retired trading authority before importing modules that
@@ -156,19 +157,103 @@ def crisis_monitor_loop():
         time.sleep(3600)
 
 
-def error_detection_loop(interval: int, event_bus):
+def _startup_consumption_identity():
+    """Pin this launch once; polling cannot renew its startup deadline."""
+    from src.engine.infrastructure import runtime_release_router as router
+    try:
+        root = PROJECT_ROOT.resolve(strict=True)
+        commit = os.environ.get('KORSTOCKSCAN_RUNTIME_GIT_COMMIT', '')
+        if (os.environ.get('KORSTOCKSCAN_RUNTIME_SOURCE_ROOT') != str(root)
+                or os.environ.get('KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY') != 'false'):
+            raise ValueError('startup_launcher_source_provenance_invalid')
+        ticks = router._process_start_ticks(os.getpid())
+        age = max(0., float(Path('/proc/uptime').read_text().split()[0])
+                  - int(ticks) / os.sysconf('SC_CLK_TCK'))
+        return dict(workspace=(root / 'data').resolve(strict=True).parent,
+                    pid=os.getpid(), start_ticks=ticks, release_root=root,
+                    git_commit=commit, target_date=datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat(),
+                    process_started_monotonic=time.monotonic() - age)
+    except (OSError, ValueError, IndexError, TypeError) as exc:
+        return {'identity_error': str(exc)}
+
+
+def _startup_consumption_check(identity):
+    from src.engine.infrastructure import runtime_release_router as router
+    if identity.get('identity_error'):
+        return dict(status='failed', reason=identity['identity_error'], runtime_effect=False)
+    return router.startup_consumption_state(**{key: value for key, value in identity.items()
+        if key != 'process_started_monotonic'})
+
+
+def _await_startup_consumption(identity, *, check=None, monotonic=None, wait=None, heartbeat=None):
+    """Wait only for the launcher's final receipt, keeping health heartbeat alive."""
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.utils.logger import log_info
+    check = check or _startup_consumption_check
+    monotonic = monotonic or time.monotonic
+    wait = wait or threading.Event().wait
+    heartbeat = heartbeat or (lambda: write_heartbeat('error_detection'))
+    started = monotonic()
+    deadline = identity.get('process_started_monotonic', started) + router.STARTUP_CONSUMPTION_TIMEOUT_SEC
+    last_heartbeat = float('-inf')
+    waiting_logged = False
+    while True:
+        now = monotonic()
+        if now - last_heartbeat >= 5:
+            heartbeat()
+            last_heartbeat = now
+        result = check(identity)
+        now = monotonic()
+        if result.get('status') == 'failed':
+            return dict(result, waited_seconds=max(0., now - started))
+        if now >= deadline:
+            return dict(result, status='failed', reason='startup_consumption_deadline_expired',
+                        waited_seconds=max(0., now - started), runtime_effect=False)
+        if result.get('status') == 'ready':
+            return dict(result, waited_seconds=max(0., now - started))
+        if not waiting_logged:
+            log_info('[STARTUP_CONSUMPTION_WAIT] first full health sweep waits for exact launcher PID consumption')
+            waiting_logged = True
+        wait(min(.25, deadline - now))
+
+
+def _bind_startup_health(results, state):
+    """Surface a failed barrier through existing process health, not a fake PASS."""
+    if state is None or state.get('status') == 'ready':
+        return results
+    from dataclasses import replace
+    return [replace(result, severity='fail',
+                    summary=result.summary + '; startup consumption failed: ' + str(state.get('reason')),
+                    details={**(result.details if isinstance(result.details, dict) else {}),
+                             'startup_consumption': dict(state)})
+            if result.detector_id == 'process_health' else result for result in results]
+
+
+def error_detection_loop(interval: int, event_bus, *, startup_identity=None):
     """60초 주기로 시스템 에러 탐지를 실행하는 데몬 루프."""
     from src.utils.logger import log_error as ed_log_error
     from src.utils.logger import log_info as ed_log_info
 
     alert_state: dict[str, dict] = {}
+    startup_state = (_await_startup_consumption(startup_identity)
+                     if startup_identity is not None else None)
+    first_report_completed = False
     while True:
         try:
             write_heartbeat("error_detection")
+            if first_report_completed and startup_state is not None and startup_state.get('status') != 'ready':
+                refreshed = _startup_consumption_check(startup_identity)
+                if refreshed.get('status') == 'ready':
+                    startup_state = refreshed
             engine = ErrorDetectionEngine(dry_run=False, mode="full")
-            results = engine.run_all()
+            health_sweep_started_at = datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
+            results = _bind_startup_health(engine.run_all(), startup_state)
             report = engine.build_report(results)
+            report['health_sweep_started_at_kst'] = health_sweep_started_at
+            if startup_state is not None:
+                report['startup_consumption'] = dict(startup_state)
             engine.write_report(report)
+            first_report_completed = True
             for kind, r in iter_daemon_alert_events(
                 results, alert_state, target_date=report["target_date"]
             ):
@@ -421,7 +506,8 @@ if __name__ == "__main__":
     if ed_enabled:
         write_heartbeat("error_detection")
         error_detect_thread = threading.Thread(
-            target=error_detection_loop, args=(ed_interval, event_bus), daemon=True
+            target=error_detection_loop, args=(ed_interval, event_bus),
+            kwargs={'startup_identity': _startup_consumption_identity() if is_open else None}, daemon=True
         )
         error_detect_thread.start()
         print(f"[시스템] 에러 탐지 데몬 ({ed_interval}초 주기) 가동 완료.")

@@ -258,3 +258,17 @@ proposed schema는 `entry_split_monitor_projection_v1`, `entry_split_monitor_val
 10/14 실제438MiB alias/514MiB 불변 원본의 native 검증은66.66초/최대RSS1,884,928KiB로 통과했다. 원 bytes와 generation을 보존하고7,017bytes projection을 발행했다. 새 프로세스3회의 warm fullreport read는0, 소비13.528/13.576/13.549ms였다. 첫 코드 릴리스4e21d783e는14:24:53 PID547164/start1938099의 native 정책 소비와 보호 정책11개 해시 보존을 확인했다.
 
 그러나 첫 예약 Sentinel(14:26:25)은 raw `release/data` mount 경로를 소비자가 전달해 strict canonical source 검증에 거부됐다. trusted data root를 consumer 진입점에서 한 번 resolve하고 이후의 family/date 파일·자식 symlink 검사는 유지한다. 실제 native proof와 release/data symlink를 사용하는 whole consumer 반례2개가 수정 전 실패함을 확인하고 재검증한다. native kernel/helper/원 보고서/정책·기계/보조/매매 코드는 이 추가 수리에서 변경하지 않는다. 동일 승인으로 scoped source pair·반복 리뷰·표적 검증 후 ordered 재배포·실제 PID와 후속 예약 결과를 수용한다.
+
+## 13. 재기동 직후 진단 순서의 근본 보완
+
+14:36:49 경보를 재검증한 결과, Main 내부의 첫 full error detector가 launcher의 bootstrap 검증→intraday consume/verify→최종 record-pid보다 먼저 실행됐다. 14:37:18 소비 완료 뒤 strict generation 오류가 없어졌다는 사실만으로 이 순서 결함을 닫지 않는다. 첫 full 진단은 실제 자기 PID/start ticks/cwd·선택 commit/root·당일 bootstrap/verify·해당 시 consumed receipt와 final record-pid가 모두 일치한 뒤 실행한다. 이번 ordered 배포로 시작한 PID는 같은 transition의 complete/pass·successor identity까지 기다린다. record-pid만으로 먼저 진단하는 추가 경합을 닫으며, 이미 완료된 과거 배포의 PID로 이후 같은 릴리스 재기동이나 다음 날짜 native PREOPEN을 묶지 않는다. Main 평가 스레드는 이 진단 대기와 독립적으로 시작하며 대기 중 heartbeat를 갱신한다. 시작 시점부터 기존150초 한도를 고정하고 timeout/잘못된 영수증/세대 변경은 명시적인 startup failure와 실제 점검으로 노출한다. 대기를 PASS나 정책 소비 성공으로 발행하지 않는다.
+
+최종 record-pid는 기존 launcher의 마지막 위치와 권한을 유지하되 현재 선택된 immutable router를 호출한다. 과거 workspace router로 새 receipt 필드가 누락되는 경로를 없앤다. receipt의 start ticks를 포함해 PID 재사용과 이전 기동 영수증을 거부하고, 정상 native PREOPEN과 장중 handoff를 각각 검증한다. 이 작은 영수증 대조에 native full 검증·10GB 원천 읽기·provider 호출을 재실행하지 않는다.
+
+Sentinel은 기존 observer owner에서 run 시작/완료·선택 bytes SHA·code root/commit·PID receipt 신원을 작은 observer_generation으로 결속한다. 발행 전에 선택 세대가 바뀌면 deferred/partial로 남긴다. ordered publish는 기존 dated monitor의 정확한 경로·byte SHA·mtime·run/date/as_of·완료/semantic 상태를 작은 predecessor 증거로 저장한다. detector는 그 bytes 그대로인 과거 partial만 현재 승인된 complete transition의 다음5분 slot+전체 wrapper180초 한도 안에서 pending으로 구분한다. 기존600초 stale·실패·잘못된 JSON/신원·현재 세대 partial은 그대로 실패하며, 모르는 세대나 임의 grace로 성공 처리하지 않는다. 이전 실패 내용도 진단에 보존한다.
+
+실제14:40 예약→14:41:59 완료에서 entry-split은 verified projection·full report read0·metadata18,581B로 확인됐다. 그러나 전체 partial에는 scanner 평가 분모 미식별과 장중 deadline 결손이 별도로 남는다. 이를 시작 순서 수리로 숨기거나 source gap을 valid_empty로 바꾸지 않는다. 원5초·정책/모델/프롬프트·매매/원천 stale guard·custody와 자연 경제성 경계는 유지한다.
+
+표적 종료 시험은 native/intraday 정상 준비, 자기 PID/start/root/날짜·manifest/소비/선택 오류, timeout·재시도 한도 불변, Main/heartbeat 진행, stale/실패/현재 partial 및 잘못된 predecessor·세대 변경 거부, 원 report/economic 상태 보존이다. 기존 startup/router/daemon·ordered deployment·monitor/artifact 시험 owner를 사용한다. 수리→독립 리뷰→반례 보완→재리뷰·표적 시험 후 같은 승인으로 ordered 배포하며, 실제 첫 진단과 첫 예약 발행을 별도 수용한다.
+
+최종 통합 시험에서 기존 coverage 선언이 이미 제거된 옛 Markdown `code_improvement_workorder` 감시를 요구하는 불일치도 확인했다. 선행08dbea와 후보에서 같은 실패를 재현했고, 제거 커밋2c3b7597a를 대사해 이 오래된 선언만 제거한다. 현행 runner JSON·performance workorder 감시를 유지하며 퇴역 producer를 복원하지 않는다.

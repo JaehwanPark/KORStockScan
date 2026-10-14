@@ -424,6 +424,10 @@ REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES = {'src/engine/ai_engine_openai.py': 
 REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
                                                             'd276463a93a03a3c161a202811056eeae88a5def1e684ea3d0f5ee8a6217b7eb')}
 
+
+# Report-only observer generation and first-current-publication ordering.
+REVIEWED_STARTUP_OBSERVER_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd', '112e22fde60ceb305450183883ffe6e3b338df6eb47e8c5d3ce78c282b968558')}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -470,7 +474,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name),
                     REVIEWED_NONFIXED_SUBMIT_SOURCES.get(name),
                     REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES.get(name),
-                    REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES.get(name)):
+                    REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES.get(name),
+                    REVIEWED_STARTUP_OBSERVER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

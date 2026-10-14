@@ -10,6 +10,8 @@ import math
 import os
 import re
 import time
+import stat
+from contextlib import contextmanager
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -35,6 +37,211 @@ from src.engine.error_detectors.cron_completion import CronCompletionDetector
 def _today_kst_str(now_kst: datetime | None = None) -> str:
     return (now_kst or datetime.now()).strftime("%Y-%m-%d")
 
+
+
+
+def _observer_file_signature(info):
+    return tuple(getattr(info, "st_" + field) for field in (
+        "dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns"))
+
+
+@contextmanager
+def _observer_regular_fd(path, *, max_bytes=None):
+    """Never block opening special files or follow a replacement symlink."""
+    path = Path(path)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode): raise ValueError("observer_regular_file_required")
+    if max_bytes is not None and before.st_size > max_bytes:
+        raise ValueError("observer_file_size_limit")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode): raise ValueError("observer_regular_file_required")
+        if _observer_file_signature(opened) != _observer_file_signature(before):
+            raise ValueError("observer_file_changed_before_read")
+        yield fd
+        if (_observer_file_signature(os.fstat(fd)) != _observer_file_signature(opened)
+                or _observer_file_signature(path.lstat()) != _observer_file_signature(opened)):
+            raise ValueError("observer_file_changed_during_read")
+    finally:
+        os.close(fd)
+
+
+def _observer_regular_bytes(path, *, limit):
+    with _observer_regular_fd(path, max_bytes=limit) as fd:
+        chunks, total = [], 0
+        while True:
+            chunk = os.read(fd, min(128 * 1024, limit + 1 - total))
+            if not chunk: break
+            chunks.append(chunk); total += len(chunk)
+            if total > limit: raise ValueError("observer_file_size_limit")
+        return b"".join(chunks)
+
+
+def _observer_json_object(encoded):
+    def pairs(values):
+        result = {}
+        for key, value in values:
+            if key in result: raise ValueError("observer_json_duplicate_key")
+            result[key] = value
+        return result
+    def number(value):
+        result = float(value)
+        if not math.isfinite(result): raise ValueError("observer_json_nonfinite")
+        return result
+    def invalid_constant(value):
+        raise ValueError("observer_json_nonfinite")
+    value = json.loads(encoded, object_pairs_hook=pairs, parse_float=number, parse_constant=invalid_constant)
+    if not isinstance(value, dict): raise ValueError("observer_json_object_required")
+    return value
+
+
+def _observer_small_object(path, *, limit=1024 * 1024, hash_only=False):
+    encoded = _observer_regular_bytes(path, limit=limit)
+    return ({} if hash_only else _observer_json_object(encoded), hashlib.sha256(encoded).hexdigest())
+
+
+def _observer_clock(value):
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        return parsed if parsed.tzinfo is not None else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _observer_live_identity(pid):
+    tail = Path("/proc", str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+    return {"pid": pid, "start_ticks": tail[19],
+            "cwd": str(Path(os.readlink(f"/proc/{pid}/cwd")).resolve(strict=True))}
+
+
+def _submission_observer_transition_pending(root, artifact_path, now, *, max_staleness_sec):
+    """Recognize only the exact frozen predecessor while its first slot is due.
+
+    The report remains prior partial/validated evidence; this never synthesizes
+    current validation, clears source gaps, or grants startup/policy authority.
+    """
+    try:
+        if now.tzinfo is None: now = now.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        data = (Path(root) / "data").resolve(strict=True)
+        day = now.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+        expected_report = data / "report/buy_funnel_sentinel" / f"submission_bottleneck_monitor_{day}.json"
+        if Path(artifact_path).resolve(strict=True) != expected_report or Path(artifact_path).is_symlink():
+            return None
+        age = now.timestamp() - Path(artifact_path).stat().st_mtime
+        if not 0 <= age <= max_staleness_sec: return None
+        report, report_sha = _observer_small_object(Path(artifact_path), limit=8 * 1024 * 1024)
+        if (report.get("schema") != "submission_bottleneck_monitor_v1" or report.get("date") != day
+                or not re.fullmatch("[0-9a-f]{32}", str(report.get("run_id") or ""))
+                or report.get("execution_status") != "completed"
+                or report.get("semantic_status") not in {"partial", "validated"}):
+            return None
+        selected_path = data / "runtime/runtime_release_selection.json"
+        selection, selection_sha = _observer_small_object(selected_path, limit=1024 * 1024)
+        commit = selection.get("git_commit")
+        release = selection.get("release_root")
+        if (selection.get("schema") != "runtime_release_selection_v1"
+                or not re.fullmatch("[0-9a-f]{40}", str(commit or ""))
+                or not isinstance(release, str) or not Path(release).is_absolute()
+                or selection.get("approval_scope") != "ordered_intraday_deploy_and_restart"
+                or selection.get("approved_by") != "user"
+                or selection.get("actual_pid_consumed") is not True):
+            return None
+        transition_path = data / "runtime/release_transitions" / day / commit / "status.json"
+        if selection.get("deployment_transition") != str(transition_path): return None
+        transition, transition_sha = _observer_small_object(transition_path, limit=1024 * 1024)
+        selected_at = _observer_clock(selection.get("selected_at_kst"))
+        complete_at = _observer_clock(transition.get("updated_at"))
+        report_at = _observer_clock(report.get("as_of"))
+        if (transition.get("schema") != "ordered_intraday_deployment_v1"
+                or transition.get("authority") != "APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART"
+                or transition.get("target_date") != day or transition.get("candidate_commit") != commit
+                or transition.get("candidate_root") != release or transition.get("policy_effect") != "unchanged"
+                or transition.get("phase") != "complete" or transition.get("status") != "pass"
+                or selected_at is None or complete_at is None or report_at is None
+                or not report_at < selected_at <= complete_at <= now):
+            return None
+        # Strictly next five-minute cron slot, then the existing 180-second
+        # total wrapper budget (Sentinel prefix + observer + cleanup).
+        due_epoch = (math.floor(complete_at.timestamp() / 300) + 1) * 300 + 180
+        if now.timestamp() > due_epoch: return None
+        predecessor = transition.get("predecessor_observer") or {}
+        if (predecessor.get("schema") != "startup_observer_predecessor_v1"
+                or predecessor.get("status") != "captured" or predecessor.get("path") != str(expected_report)
+                or predecessor.get("sha256") != report_sha
+                or predecessor.get("mtime_ns") != Path(artifact_path).stat().st_mtime_ns
+                or any(predecessor.get(key) != report.get(key) for key in (
+                    "date", "as_of", "run_id", "execution_status", "semantic_status"))):
+            return None
+        receipt = selection.get("actual_pid_receipt") or {}
+        identity = transition.get("successor_identity") or {}
+        if (receipt.get("schema") != "runtime_release_pid_receipt_v1"
+                or type(receipt.get("pid")) is not int or receipt["pid"] <= 0
+                or not isinstance(identity.get("start_ticks"), str) or not identity["start_ticks"].isdigit()
+                or receipt.get("git_commit") != commit or receipt.get("release_root") != release
+                or receipt.get("pid") != identity.get("pid")
+                or receipt.get("process_cwd") != str(Path(release) / "src")
+                or identity != _observer_live_identity(receipt["pid"])):
+            return None
+        # A selector/transition replacement during this check cannot inherit
+        # pending status from an earlier deployment generation.
+        if (_observer_small_object(selected_path, limit=1024 * 1024)[1] != selection_sha
+                or _observer_small_object(transition_path, limit=1024 * 1024)[1] != transition_sha
+                or _observer_small_object(Path(artifact_path), limit=8 * 1024 * 1024)[1] != report_sha
+                or Path(artifact_path).stat().st_mtime_ns != predecessor["mtime_ns"]):
+            return None
+        return dict(status="pending_first_current_observer", source="exact_captured_predecessor",
+            current_commit=commit, current_release_root=release, transition=str(transition_path),
+            prior_run_id=report["run_id"], prior_sha256=report_sha,
+            prior_execution_status=report["execution_status"], prior_semantic_status=report["semantic_status"],
+            prior_blocker=report.get("blocker"), prior_status=report.get("status"),
+            deadline=datetime.fromtimestamp(due_epoch, now.tzinfo).isoformat(),
+            current_observation_verified=False, runtime_effect=False, allowed_runtime_apply=False)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
+def _submission_observer_generation_issue(payload, root):
+    generation = payload.get("observer_generation")
+    if generation is None:
+        return "observer_generation_missing" if str(payload.get("date") or "") >= "2026-10-14" else None
+    if not isinstance(generation, dict): return "observer_generation_invalid"
+    expected = hashlib.sha256(json.dumps({key: value for key, value in generation.items() if key != "sha256"},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    started = _observer_clock(generation.get("started_at"))
+    completed = _observer_clock(generation.get("completed_at"))
+    if (generation.get("schema") != "submission_monitor_observer_generation_v1"
+            or generation.get("sha256") != expected
+            or generation.get("target_date") != payload.get("date")
+            or generation.get("run_id") != payload.get("run_id")
+            or generation.get("status") != "current" or generation.get("generation_current") is not True
+            or generation.get("policy_pid_consumption_proven") is not False
+            or started is None or completed is None or completed < started
+            or _observer_clock(payload.get("as_of")) != started
+            or started.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat() != payload.get("date")
+            or not isinstance(generation.get("release_root"), str)
+            or not Path(generation["release_root"]).is_absolute()
+            or not re.fullmatch("[0-9a-f]{40}", str(generation.get("git_commit") or ""))
+            or not re.fullmatch("[0-9a-f]{64}", str(generation.get("observer_code_sha256") or ""))):
+        return "observer_generation_invalid"
+    try:
+        selection, sha = _observer_small_object(Path(root) / "data/runtime/runtime_release_selection.json", limit=1024 * 1024)
+        if (selection.get("schema") != "runtime_release_selection_v1"
+                or generation.get("selection_sha256") != sha or generation.get("final_selection_sha256") != sha
+                or generation.get("release_root") != selection.get("release_root")
+                or generation.get("git_commit") != selection.get("git_commit")
+                or generation.get("selected_release_root") != selection.get("release_root")
+                or generation.get("selected_git_commit") != selection.get("git_commit")
+                or generation.get("selected_at_kst") != selection.get("selected_at_kst")
+                or generation.get("selector_reported_actual_pid_consumed") != selection.get("actual_pid_consumed")
+                or generation.get("selector_reported_pid_receipt") != selection.get("actual_pid_receipt")):
+            return "observer_generation_not_current"
+        observer_path = Path(generation["release_root"]) / "src/engine/monitoring/submission_bottleneck_monitor.py"
+        if _observer_small_object(observer_path, limit=1024 * 1024, hash_only=True)[1] != generation["observer_code_sha256"]:
+            return "observer_generation_code_mismatch"
+    except (OSError, ValueError, TypeError):
+        return "observer_generation_selection_unavailable"
+    return None
 
 def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Check the sentinel's exact-date semantic receipt separately from freshness."""
@@ -2610,7 +2817,14 @@ class ArtifactFreshnessDetector(BaseDetector):
             mtime = artifact_path.stat().st_mtime
             age_sec = now_ts - mtime
             details[f"{aid}_age_sec"] = round(age_sec, 1)
-            json_error = self._validate_json_artifact(artifact_path)
+            if aid == "submission_bottleneck_monitor":
+                try:
+                    _observer_small_object(artifact_path, limit=8 * 1024 * 1024)
+                    json_error = ""
+                except (OSError, ValueError, TypeError) as exc:
+                    json_error = str(exc)
+            else:
+                json_error = self._validate_json_artifact(artifact_path)
             if json_error:
                 details[f"{aid}_content_status"] = "invalid_json"
                 message = f"{aid}: invalid JSON ({json_error})"
@@ -2621,6 +2835,15 @@ class ArtifactFreshnessDetector(BaseDetector):
                     warnings.append(message)
                     details[f"{aid}_status"] = "warning"
                 continue
+            if aid == "submission_bottleneck_monitor":
+                pending = _submission_observer_transition_pending(
+                    PROJECT_ROOT, artifact_path, now_dt, max_staleness_sec=max_stale)
+                if pending is not None:
+                    details[f"{aid}_status"] = "pending_first_current_observer"
+                    details[f"{aid}_transition"] = pending
+                    details[f"{aid}_current_observation_verified"] = False
+                    warnings.append(f"{aid}: first current-generation observation pending; prior evidence retained")
+                    continue
             status_warning = self._validate_json_status(
                 artifact, artifact_path, details
             )
@@ -2792,6 +3015,8 @@ class ArtifactFreshnessDetector(BaseDetector):
             (warnings if 'current_owner' in finding else issues).append('semantic_coverage: ' + finding)
 
         severity, summary = self._classify(issues, warnings)
+        if severity == "warning" and not issues and len(warnings) == 1 and details.get("submission_bottleneck_monitor_status") == "pending_first_current_observer":
+            summary = "Artifact observation pending: first current-generation submission monitor; prior evidence retained"
         return DetectionResult(
             detector_id=self.id,
             category=self.category,
@@ -3048,7 +3273,9 @@ class ArtifactFreshnessDetector(BaseDetector):
         aid = artifact["id"]
         ok_values = {str(v) for v in artifact.get("json_ok_values", [])}
         try:
-            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            payload = (_observer_small_object(artifact_path, limit=8 * 1024 * 1024)[0]
+                       if aid == "submission_bottleneck_monitor"
+                       else json.loads(artifact_path.read_text(encoding="utf-8")))
         except Exception as exc:
             details[f"{aid}_content_status"] = "invalid_json"
             return f"{aid}: invalid status JSON ({exc})"
@@ -3063,6 +3290,10 @@ class ArtifactFreshnessDetector(BaseDetector):
                 return f'{aid}: observer execution incomplete or invalid'
             if payload.get('semantic_status') == 'partial':
                 return f'{aid}: observer semantic coverage partial; publication is not full validation'
+            generation_issue = _submission_observer_generation_issue(payload, PROJECT_ROOT)
+            if generation_issue:
+                details[f'{aid}_observer_generation_issue'] = generation_issue
+                return f'{aid}: {generation_issue}'
 
         current: Any = payload
         for part in str(status_field).split("."):

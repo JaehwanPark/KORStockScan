@@ -7,9 +7,12 @@ import hashlib
 import json
 import math
 import os
+import re
+import subprocess
+import stat
 import time
 import uuid
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -3199,6 +3202,145 @@ def notify(result, path, send=None):
     result["last_notification_at"] = result["as_of"]
 
 
+
+
+def _observer_file_signature(info):
+    return tuple(getattr(info, "st_" + field) for field in (
+        "dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns"))
+
+
+@contextmanager
+def _observer_regular_fd(path, *, max_bytes=None):
+    """Never block opening special files or follow a replacement symlink."""
+    path = Path(path)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode): raise ValueError("observer_regular_file_required")
+    if max_bytes is not None and before.st_size > max_bytes:
+        raise ValueError("observer_file_size_limit")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode): raise ValueError("observer_regular_file_required")
+        if _observer_file_signature(opened) != _observer_file_signature(before):
+            raise ValueError("observer_file_changed_before_read")
+        yield fd
+        if (_observer_file_signature(os.fstat(fd)) != _observer_file_signature(opened)
+                or _observer_file_signature(path.lstat()) != _observer_file_signature(opened)):
+            raise ValueError("observer_file_changed_during_read")
+    finally:
+        os.close(fd)
+
+
+def _observer_regular_bytes(path, *, limit):
+    with _observer_regular_fd(path, max_bytes=limit) as fd:
+        chunks, total = [], 0
+        while True:
+            chunk = os.read(fd, min(128 * 1024, limit + 1 - total))
+            if not chunk: break
+            chunks.append(chunk); total += len(chunk)
+            if total > limit: raise ValueError("observer_file_size_limit")
+        return b"".join(chunks)
+
+
+def _observer_json_object(encoded):
+    def pairs(values):
+        result = {}
+        for key, value in values:
+            if key in result: raise ValueError("observer_json_duplicate_key")
+            result[key] = value
+        return result
+    def number(value):
+        result = float(value)
+        if not math.isfinite(result): raise ValueError("observer_json_nonfinite")
+        return result
+    def invalid_constant(value):
+        raise ValueError("observer_json_nonfinite")
+    value = json.loads(encoded, object_pairs_hook=pairs, parse_float=number, parse_constant=invalid_constant)
+    if not isinstance(value, dict): raise ValueError("observer_json_object_required")
+    return value
+
+
+def _observer_seal(value):
+    return hashlib.sha256(json.dumps({key: item for key, item in value.items() if key != "sha256"},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+
+
+def _observer_code_identity():
+    root = Path(__file__).resolve().parents[3]
+    commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"],
+        text=True, timeout=3).strip()
+    if not re.fullmatch("[0-9a-f]{40}", commit):
+        raise ValueError("observer_code_commit_invalid")
+    return dict(release_root=str(root), git_commit=commit,
+        observer_code_sha256=hashlib.sha256(_observer_regular_bytes(Path(__file__), limit=1024 * 1024)).hexdigest())
+
+
+def _observer_generation_snapshot(project, *, run_id, target_date, started_at):
+    """Small publication provenance only; never substitutes for policy/PID proof."""
+    result = dict(schema="submission_monitor_observer_generation_v1", run_id=run_id,
+        target_date=target_date, started_at=started_at.isoformat(), completed_at=None,
+        status="unavailable", generation_current=False, reason=None,
+        policy_pid_consumption_proven=False)
+    try:
+        path = Path(project) / "data/runtime/runtime_release_selection.json"
+        encoded = _observer_regular_bytes(path, limit=1024 * 1024)
+        selection = _observer_json_object(encoded)
+        code = _observer_code_identity()
+        if (selection.get("schema") != "runtime_release_selection_v1"
+                or not isinstance(selection.get("release_root"), str)
+                or not Path(selection["release_root"]).is_absolute()
+                or not re.fullmatch("[0-9a-f]{40}", str(selection.get("git_commit") or ""))
+                or stamp(selection.get("selected_at_kst")) is None):
+            raise ValueError("observer_selection_identity_invalid")
+        current = (selection["release_root"] == code["release_root"]
+                   and selection["git_commit"] == code["git_commit"])
+        result.update(code, selection_sha256=hashlib.sha256(encoded).hexdigest(),
+            selected_release_root=selection["release_root"], selected_git_commit=selection["git_commit"],
+            selected_at_kst=selection["selected_at_kst"],
+            selector_reported_actual_pid_consumed=selection.get("actual_pid_consumed"),
+            selector_reported_pid_receipt=selection.get("actual_pid_receipt"),
+            generation_current=current, status="current" if current else "not_current",
+            reason=None if current else "observer_release_not_selected")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as exc:
+        result["reason"] = type(exc).__name__ + ":" + str(exc)[:160]
+    result["sha256"] = _observer_seal(result)
+    return result
+
+
+
+@contextmanager
+def _observer_publication_lease(project):
+    """Use the selector writer's existing lock only for final small publication."""
+    from src.engine.infrastructure.validation_digest_session import ValidationDeferred
+    path = Path(project) / "data/runtime/runtime_release_selection.lock"
+    opened = False
+    try:
+        with _observer_regular_fd(path) as fd:
+            opened = True
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ValidationDeferred("observer_selection_lease_busy") from exc
+            yield
+    except (OSError, ValueError) as exc:
+        if not opened:
+            raise ValidationDeferred("observer_selection_lease_unavailable") from exc
+        raise  # Preserve real notification/publication IO failures.
+
+
+def _finish_observer_generation(original, project, *, completed_at):
+    final = _observer_generation_snapshot(project, run_id=original["run_id"],
+        target_date=original["target_date"], started_at=stamp(original["started_at"]))
+    stable = (original.get("generation_current") is True and final.get("generation_current") is True
+        and all(original.get(key) == final.get(key) for key in (
+            "selection_sha256", "release_root", "git_commit", "observer_code_sha256")))
+    result = dict(original, completed_at=completed_at.isoformat(), generation_current=stable,
+        status="current" if stable else "changed_or_unavailable",
+        reason=None if stable else "observer_generation_changed_during_run",
+        final_selection_sha256=final.get("selection_sha256"))
+    result["sha256"] = _observer_seal(result)
+    return result
+
 def main(argv=None):
     started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -3223,11 +3365,7 @@ def main(argv=None):
         "pre_submit_delay_source_monitor_latest.json" if args.delay_source_only
         else "submission_bottleneck_monitor_latest.json")
     try:
-        if args.report.stat().st_size > 8 * 1024 * 1024:
-            raise ValueError("report_size_limit")
-        report = json.loads(args.report.read_text())
-        if not isinstance(report, dict):
-            report = {}
+        report = _observer_json_object(_observer_regular_bytes(args.report, limit=8 * 1024 * 1024))
     except (OSError, ValueError):
         report = {}
     from src.engine.infrastructure.validation_digest_session import (
@@ -3236,6 +3374,8 @@ def main(argv=None):
     from src.engine.monitoring.observation_budget import computation_budget, ObservationDeadline
     state_path.parent.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex
+    observer_generation = (None if args.delay_source_only else _observer_generation_snapshot(
+        PROJECT_ROOT, run_id=run_id, target_date=current.date().isoformat(), started_at=current))
     terminal = dict(schema="submission_monitor_execution_v1", run_id=run_id,
                     target_date=current.date().isoformat(), execution_status="failed",
                     semantic_status="unobservable", notification_status="not_attempted",
@@ -3287,19 +3427,38 @@ def main(argv=None):
                                          and not args.source_only and not args.delay_source_only)
                                          or any(_incomplete_semantics(result[name]) for name,_,_ in stages)
                                          else "validated")
-            if args.notify:
-                if time.monotonic() + 12 < deadline:
-                    notify(result, output)
-                else:
-                    result["notification_status"] = "retry_required:resource_budget"
-            if session:
-                result["validation_io"] = dict(session.stats)
-            result["execution_wall_seconds"] = time.monotonic()-started
-            name = "pre_submit_delay_source_monitor" if args.delay_source_only else "submission_bottleneck_monitor"
-            for label, path in (("state", state_path), ("latest", output),
-                                ("dated", output.with_name(f"{name}_{result['date']}.json"))):
-                _write_state(path, result)
-                terminal["publication"][label] = True
+            with (_observer_publication_lease(PROJECT_ROOT) if observer_generation is not None else nullcontext()):
+                if observer_generation is not None:
+                    result["observer_generation"] = _finish_observer_generation(
+                        observer_generation, PROJECT_ROOT, completed_at=datetime.now(KST))
+                if observer_generation is not None and result["observer_generation"]["generation_current"] is not True:
+                    terminal.update(execution_status="deferred", semantic_status="partial",
+                        observer_generation=result["observer_generation"],
+                        source_gap_status=(result.get("source_gap_semantics") or {}).get("status"))
+                    raise ValidationDeferred(result["observer_generation"].get("reason") or "observer_generation_unavailable")
+                if args.notify and (observer_generation is None or result["observer_generation"]["generation_current"] is True):
+                    if time.monotonic() + 12 < deadline:
+                        notify(result, output)
+                    else:
+                        result["notification_status"] = "retry_required:resource_budget"
+                if session:
+                    result["validation_io"] = dict(session.stats)
+                result["execution_wall_seconds"] = time.monotonic()-started
+                name = "pre_submit_delay_source_monitor" if args.delay_source_only else "submission_bottleneck_monitor"
+                # Notification may take time. Recheck immediately before canonical
+                # publication so an old reader cannot claim a new selector's PASS.
+                if observer_generation is not None:
+                    result["observer_generation"] = _finish_observer_generation(
+                        observer_generation, PROJECT_ROOT, completed_at=datetime.now(KST))
+                if observer_generation is not None and result["observer_generation"]["generation_current"] is not True:
+                    terminal.update(execution_status="deferred", semantic_status="partial",
+                        observer_generation=result["observer_generation"],
+                        source_gap_status=(result.get("source_gap_semantics") or {}).get("status"))
+                    raise ValidationDeferred(result["observer_generation"].get("reason") or "observer_generation_unavailable")
+                for label, path in (("state", state_path), ("latest", output),
+                                    ("dated", output.with_name(f"{name}_{result['date']}.json"))):
+                    _write_state(path, result)
+                    terminal["publication"][label] = True
             terminal.update({k:result.get(k) for k in ("status", "blocker", "notification_status",
                                                       "execution_status", "semantic_status")})
             terminal["source_gap_status"] = (result.get("source_gap_semantics") or {}).get("status")

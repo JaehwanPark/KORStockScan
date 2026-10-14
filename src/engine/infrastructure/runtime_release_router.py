@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -49,6 +50,8 @@ OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "bu
               "pre-submit-source", "holding-exit-sentinel", "error-detection")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
+STARTUP_CONSUMPTION_TIMEOUT_SEC = 150
+MAX_STARTUP_RECEIPT_BYTES = 4 * 1024 * 1024
 CORE_SYSTEMD_UNITS = (
     "korstockscan-low-price-two-leg-auto-expansion.service",
 )
@@ -531,6 +534,228 @@ def validate_release(workspace: Path, selection: dict) -> tuple[Path, str]:
     return root, commit
 
 
+def _process_start_ticks(pid: int) -> str:
+    try:
+        return Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (OSError, IndexError) as exc:
+        raise ValueError('runtime_pid_not_running') from exc
+
+
+def _startup_receipt(path: Path) -> tuple[dict, bytes]:
+    """Read only bounded local receipts; never invoke a policy/source verifier."""
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode):
+        raise ValueError('startup_receipt_symlink')
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError('startup_receipt_regular_file_required')
+    if before.st_size > MAX_STARTUP_RECEIPT_BYTES:
+        raise ValueError('startup_receipt_size_limit')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError('startup_receipt_regular_file_required')
+        raw = handle.read(MAX_STARTUP_RECEIPT_BYTES + 1)
+        opened = os.fstat(handle.fileno())
+    after = path.lstat()
+    signature = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+    if signature(before) != signature(opened) or signature(opened) != signature(after):
+        raise ValueError('startup_receipt_changed_during_read')
+    if len(raw) > MAX_STARTUP_RECEIPT_BYTES:
+        raise ValueError('startup_receipt_size_limit')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('startup_receipt_duplicate_key')
+            value[key] = item
+        return value
+    try:
+        value = json.loads(raw, object_pairs_hook=unique)
+    except RecursionError as exc:
+        raise ValueError('startup_receipt_json_invalid') from exc
+    if not isinstance(value, dict):
+        raise ValueError('startup_receipt_object_required')
+    return value, raw
+
+
+def _startup_ordered_transition(workspace, selection, release_root, git_commit, target_date):
+    """Bind only the canonical ordered owner; a completed past launch is history."""
+    if selection.get('approval_scope') != 'ordered_intraday_deploy_and_restart':
+        if selection.get('deployment_transition'):
+            raise ValueError('startup_ordered_transition_approval_invalid')
+        return None
+    if selection.get('approved_by') != 'user':
+        raise ValueError('startup_ordered_transition_approval_invalid')
+    path = Path(str(selection.get('deployment_transition') or ''))
+    source_day = path.parent.parent.name
+    try:
+        if date.fromisoformat(source_day).isoformat() != source_day or source_day > target_date:
+            raise ValueError('startup_ordered_transition_date_invalid')
+        selected_at = datetime.fromisoformat(selection['selected_at_kst'])
+        if selected_at.tzinfo is None or selected_at.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat() != source_day:
+            raise ValueError('startup_ordered_transition_date_invalid')
+    except (KeyError, ValueError) as exc:
+        raise ValueError('startup_ordered_transition_date_invalid') from exc
+    owner = workspace / 'data/runtime/release_transitions'
+    expected = owner / source_day / git_commit / 'status.json'
+    if path != expected or path.resolve(strict=True) != owner.resolve(strict=True) / source_day / git_commit / 'status.json':
+        raise ValueError('startup_ordered_transition_path_invalid')
+    value, raw = _startup_receipt(path)
+    if (value.get('schema') != 'ordered_intraday_deployment_v1'
+            or value.get('authority') != 'APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART'
+            or value.get('policy_effect') != 'unchanged'
+            or value.get('target_date') != source_day
+            or value.get('candidate_root') != str(release_root)
+            or value.get('candidate_commit') != git_commit):
+        raise ValueError('startup_ordered_transition_identity_invalid')
+    phase = value.get('phase')
+    if phase == 'failed' or value.get('status') == 'fail':
+        raise ValueError('startup_ordered_transition_failed')
+    active = phase in {'selected', 'prepared', 'starting'}
+    if active:
+        if source_day != target_date or value.get('status') not in (None, 'running'):
+            raise ValueError('startup_ordered_transition_state_invalid')
+    elif phase != 'complete' or value.get('status') != 'pass':
+        raise ValueError('startup_ordered_transition_state_invalid')
+    else:
+        identity = value.get('successor_identity') or {}
+        if (not isinstance(identity, dict) or type(identity.get('pid')) is not int
+                or identity['pid'] <= 0 or not str(identity.get('start_ticks') or '').isdigit()
+                or identity.get('cwd') != str(release_root / 'src')):
+            raise ValueError('startup_ordered_transition_successor_invalid')
+    return dict(path=path, raw=raw, value=value, active=active, source_date=source_day)
+
+
+def startup_consumption_state(workspace: Path, *, pid: int, start_ticks: str,
+                              release_root: Path, git_commit: str, target_date: str) -> dict:
+    """First-health ordering barrier for the launcher's completed PID receipts.
+
+    These receipts reuse the parent's full validation. They grant no policy,
+    launch or order authority and do not replace the subsequent full detector.
+    """
+    result = dict(schema='main_startup_consumption_barrier_v1', status='failed',
+                  target_date=target_date, pid=pid, start_ticks=str(start_ticks),
+                  runtime_effect=False, new_finalization_claimed=False)
+    try:
+        workspace = Path(workspace).resolve(strict=True)
+        release_root = Path(release_root).resolve(strict=True)
+        if (type(pid) is not int or pid <= 0 or not str(start_ticks).isdigit()
+                or not re.fullmatch(r'[0-9a-f]{40}', git_commit or '')
+                or date.fromisoformat(target_date).isoformat() != target_date):
+            raise ValueError('startup_expected_identity_invalid')
+        if _process_start_ticks(pid) != str(start_ticks):
+            raise ValueError('startup_process_identity_changed')
+        if Path(os.readlink(f'/proc/{pid}/cwd')).resolve(strict=True) != release_root / 'src':
+            raise ValueError('startup_process_cwd_changed')
+        runtime = workspace / 'data/runtime'
+        selection_path = runtime / 'runtime_release_selection.json'
+        selection, selected_raw = _startup_receipt(selection_path)
+        if (selection.get('schema') != 'runtime_release_selection_v1'
+                or selection.get('workspace') != str(workspace)
+                or selection.get('release_root') != str(release_root)
+                or selection.get('git_commit') != git_commit):
+            raise ValueError('startup_selected_generation_changed')
+        transition = _startup_ordered_transition(workspace, selection, release_root, git_commit, target_date)
+        receipt = selection.get('actual_pid_receipt') or {}
+        if not isinstance(receipt, dict):
+            raise ValueError('startup_attested_identity_invalid')
+        if (selection.get('actual_pid_consumed') is not True
+                or receipt.get('pid') != pid):
+            # A missing final attestation is expected during startup. A
+            # published failure for this child already proves startup failed.
+            pending_verify_path = runtime / 'policy_bootstrap' / f'runtime_policy_bootstrap_verify_{target_date}.json'
+            if pending_verify_path.exists() or pending_verify_path.is_symlink():
+                pending_verify, _ = _startup_receipt(pending_verify_path)
+                if (pending_verify.get('target_date') == target_date and pending_verify.get('pid') == pid
+                        and (pending_verify.get('status') != 'pass' or pending_verify.get('passed') is not True
+                             or pending_verify.get('pid_passed') is not True
+                             or pending_verify.get('pid_env_available') is not True)):
+                    raise ValueError('startup_bootstrap_pid_receipt_invalid')
+            return dict(result, status='pending', reason='waiting_current_pid_attestation')
+        if (receipt.get('schema') != 'runtime_release_pid_receipt_v1'
+                or receipt.get('start_ticks') != str(start_ticks)
+                or receipt.get('release_root') != str(release_root)
+                or receipt.get('git_commit') != git_commit
+                or receipt.get('process_cwd') != str(release_root / 'src')):
+            raise ValueError('startup_attested_identity_invalid')
+        if transition is not None:
+            required = receipt.get('ordered_transition_required')
+            if type(required) is not bool or (transition['active'] and required is not True):
+                raise ValueError('startup_ordered_transition_receipt_invalid')
+            if required and not transition['active']:
+                if (transition['source_date'] != target_date
+                        or transition['value']['successor_identity'] != dict(
+                            pid=pid, start_ticks=str(start_ticks), cwd=str(release_root / 'src'))):
+                    raise ValueError('startup_ordered_transition_successor_invalid')
+            elif not required:
+                try:
+                    recorded = datetime.fromisoformat(receipt['recorded_at_kst'])
+                    completed = datetime.fromisoformat(transition['value']['updated_at'])
+                    if recorded.tzinfo is None or completed.tzinfo is None or recorded < completed:
+                        raise ValueError('startup_ordered_transition_receipt_invalid')
+                except (KeyError, ValueError) as exc:
+                    raise ValueError('startup_ordered_transition_receipt_invalid') from exc
+        directory = runtime / 'policy_bootstrap'
+        manifest, manifest_raw = _startup_receipt(directory / f'runtime_policy_bootstrap_{target_date}.json')
+        verification, verify_raw = _startup_receipt(directory / f'runtime_policy_bootstrap_verify_{target_date}.json')
+        unsigned = {key: value for key, value in manifest.items() if key != 'manifest_sha256'}
+        manifest_sha = hashlib.sha256(json.dumps(unsigned, ensure_ascii=True, allow_nan=False,
+            sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        if (manifest.get('target_date') != target_date or manifest.get('manifest_sha256') != manifest_sha
+                or verification.get('target_date') != target_date
+                or verification.get('status') != 'pass' or verification.get('passed') is not True
+                or verification.get('pid') != pid or verification.get('pid_passed') is not True
+                or verification.get('pid_env_available') is not True
+                or verification.get('manifest_sha256') != manifest_sha):
+            raise ValueError('startup_bootstrap_pid_receipt_invalid')
+        handoff_path = directory / 'intraday_handoff' / target_date / (git_commit + '.json')
+        basis = 'native_preopen'
+        handoff_read = None
+        if handoff_path.exists() or handoff_path.is_symlink():
+            handoff, handoff_raw = _startup_receipt(handoff_path)
+            consumed_path = handoff_path.with_suffix('.consumed.json')
+            consumed, consumed_raw = _startup_receipt(consumed_path)
+            identity = dict(pid=pid, start_ticks=str(start_ticks), cwd=str(release_root / 'src'))
+            if (handoff.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+                    or handoff.get('status') != 'prepared_verified'
+                    or handoff.get('authority') != 'APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF'
+                    or handoff.get('target_date') != target_date
+                    or handoff.get('selected_release_commit') != git_commit
+                    or handoff.get('release_root') != str(release_root)
+                    or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+                    or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+                    or consumed.get('target_date') != target_date
+                    or consumed.get('selected_release_commit') != git_commit
+                    or consumed.get('release_root') != str(release_root)
+                    or consumed.get('pid_identity') != identity
+                    or consumed.get('handoff_sha256') != hashlib.sha256(handoff_raw).hexdigest()
+                    or consumed.get('manifest_sha256') != manifest_sha):
+                raise ValueError('startup_intraday_consumption_invalid')
+            basis = 'intraday_policy_preserving_handoff'
+            handoff_read = (handoff_path, handoff_raw, consumed_path, consumed_raw)
+        elif manifest.get('selected_release_sha') != git_commit:
+            raise ValueError('startup_native_preopen_release_mismatch')
+        if (_startup_receipt(selection_path)[1] != selected_raw
+                or _startup_receipt(directory / f'runtime_policy_bootstrap_{target_date}.json')[1] != manifest_raw
+                or _startup_receipt(directory / f'runtime_policy_bootstrap_verify_{target_date}.json')[1] != verify_raw
+                or _process_start_ticks(pid) != str(start_ticks)):
+            raise ValueError('startup_receipt_generation_changed')
+        if handoff_read is not None:
+            path, raw, consumed_path, consumed_raw = handoff_read
+            if (_startup_receipt(path)[1] != raw or _startup_receipt(consumed_path)[1] != consumed_raw):
+                raise ValueError('startup_receipt_generation_changed')
+        if transition is not None:
+            if transition['active']:
+                return dict(result, status='pending', reason='waiting_ordered_transition_completion')
+            if _startup_receipt(transition['path'])[1] != transition['raw']:
+                raise ValueError('startup_ordered_transition_generation_changed')
+        return dict(result, status='ready', reason='current_pid_consumption_complete',
+                    basis=basis, release_root=str(release_root), git_commit=git_commit,
+                    manifest_sha256=manifest_sha)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return dict(result, reason=str(exc)[:240])
+
+
 def record_runtime_pid_consumption(
     workspace: Path,
     *,
@@ -563,6 +788,7 @@ def record_runtime_pid_consumption(
         expected_cwd = (selected_root / "src").resolve(strict=True)
         if process_cwd != expected_cwd:
             raise ValueError("runtime_pid_cwd_mismatch")
+        start_ticks = _process_start_ticks(pid)
         manifest_path = workspace / "data/runtime/runtime_release_selection.json"
         selection = json.loads(manifest_path.read_text())
         # Re-check the current manifest while holding the receipt lock.  A
@@ -573,9 +799,18 @@ def record_runtime_pid_consumption(
         ):
             raise ValueError("runtime_selection_changed_before_pid_receipt")
         recorded_at = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
+        transition = _startup_ordered_transition(workspace, selection, selected_root, selected_commit,
+            datetime.fromisoformat(recorded_at).date().isoformat())
+        previous_receipt = selection.get('actual_pid_receipt') or {}
+        transition_required = bool(transition and (transition['active'] or (
+            isinstance(previous_receipt, dict) and previous_receipt.get('pid') == pid
+            and previous_receipt.get('start_ticks') == start_ticks
+            and previous_receipt.get('ordered_transition_required') is True)))
         receipt = {
             "schema": "runtime_release_pid_receipt_v1",
             "pid": pid,
+            "start_ticks": start_ticks,
+            "ordered_transition_required": transition_required,
             "recorded_at_kst": recorded_at,
             "release_root": str(selected_root),
             "git_commit": selected_commit,
@@ -599,6 +834,8 @@ def record_runtime_pid_consumption(
                 temporary_path.unlink(missing_ok=True)
                 raise
         try:
+            if _process_start_ticks(pid) != start_ticks:
+                raise ValueError('runtime_pid_changed_before_receipt')
             # A privileged launcher must not replace the cron user's private
             # selector with a root-owned 0600 file. Preserve custody before
             # publishing; failure leaves the existing selector untouched.

@@ -370,7 +370,8 @@ export KORSTOCKSCAN_MAIN_FIXED_WATCH_036930_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_W
     # A failed receipt cannot attest deployment success or authorize a kill.
     if record_threshold_runtime_env_pid_handoff "$RUNTIME_TARGET_DATE" "$BOT_PID"; then
         RUNTIME_WORKSPACE="$(dirname "$(readlink -f "$PROJECT_DIR/data")")"
-        if ! /bin/bash "$RUNTIME_WORKSPACE/deploy/run_runtime_release.sh" \
+        if ! ../.venv/bin/python -I "$PROJECT_DIR/src/engine/infrastructure/runtime_release_router.py" \
+            --workspace "$RUNTIME_WORKSPACE" \
             --record-pid "$BOT_PID" \
             --record-release-root "$PROJECT_DIR" \
             --record-git-commit "$KORSTOCKSCAN_RUNTIME_GIT_COMMIT"; then

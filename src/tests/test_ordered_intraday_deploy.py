@@ -146,6 +146,43 @@ def driver(tmp_path):
     return d
 
 
+@pytest.mark.parametrize('damage', [None, 'missing', 'malformed', 'symlink', 'future', 'failed', 'date', 'oversize', 'schema', 'run_id', 'duplicate', 'nonfinite', 'overflow', 'as_of_date', 'fifo'])
+def test_predecessor_observer_captures_only_exact_bounded_completed_source(tmp_path, damage):
+    day = '2026-10-12'
+    path = tmp_path / 'data/report/buy_funnel_sentinel' / ('submission_bottleneck_monitor_' + day + '.json')
+    path.parent.mkdir(parents=True)
+    value = dict(schema='submission_bottleneck_monitor_v1', date=day, as_of='2026-10-12T10:00:00+09:00', run_id='a' * 32,
+                 execution_status='completed', semantic_status='partial')
+    if damage == 'future': value['as_of'] = '2099-10-12T10:00:00+09:00'
+    if damage == 'failed': value['execution_status'] = 'failed'
+    if damage == 'date': value['date'] = '2026-10-11'
+    if damage == 'as_of_date': value['as_of'] = '2026-10-11T10:00:00+09:00'
+    if damage == 'schema': value['schema'] = 'unknown'
+    if damage == 'run_id': value['run_id'] = 1
+    if damage != 'missing':
+        path.write_bytes(D._json_bytes(value))
+    if damage == 'malformed': path.write_bytes(b'{')
+    if damage == 'duplicate': path.write_bytes(D._json_bytes(value).replace(b'"run_id":', b'"run_id":"extra", "run_id":'))
+    if damage == 'nonfinite': path.write_bytes(D._json_bytes(value).replace(b'"run_id":', b'"extra":NaN, "run_id":'))
+    if damage == 'overflow': path.write_bytes(D._json_bytes(value).replace(b'"run_id":', b'"extra":1e999, "run_id":'))
+    if damage == 'oversize':
+        with path.open('wb') as out: out.truncate(8 * 1024 * 1024 + 1)
+    if damage == 'fifo':
+        path.unlink(); D.os.mkfifo(path)
+    if damage == 'symlink':
+        other = path.with_suffix('.old'); path.rename(other); path.symlink_to(other)
+    result = D._predecessor_observer(tmp_path, day)
+    if damage is not None:
+        assert result['status'] == 'unavailable'
+    else:
+        assert result['status'] == 'captured'
+        assert result['sha256'] == D._digest(path.read_bytes())
+        assert result['mtime_ns'] == path.stat().st_mtime_ns
+        assert result['path'] == str(path)
+        assert result['as_of'] == value['as_of']
+        assert result['semantic_status'] == 'partial'
+
+
 @pytest.mark.parametrize('damage', ['running', 'phase', 'selection', 'source', 'hold'])
 def test_publication_refuses_unfinished_or_changed_predecessor(driver, monkeypatch, damage):
     d=driver; d.acquire_hold(); d.phase='drained'

@@ -44,7 +44,8 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "runtime_approval_summary_report",
     "postclose_done_controller_report",
     "codex_workorder_runner_report",
-    "code_improvement_workorder",
+    # The old docs/code-improvement-workorders Markdown monitor was removed
+    # with 2c3b7597a. The current runner JSON and performance workorder remain.
     "pipeline_event_verbosity_report",
     "observation_source_quality_audit_report",
     "codebase_performance_workorder_report",

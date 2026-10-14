@@ -42,3 +42,13 @@
 14:25 예약 실행에서 first source-only consumer의 `release/data` raw 경로가 managed canonical 경로와 달라 `managed_source_path:report_alias`가 발생했다. 이 실패를 기술적 검증 완료로 합치지 않는다. consumer의 trusted data mount만 초기에 resolve하는 최소 수정과 실제 migrated native proof+release/data symlink를 통한 whole consumer 반례2개를 추가했다. 수정 전2실패, 수정 후 관련 suite·코드 인계 source pair를 검증한다. 자식 symlink/data root 탈출 검사는 유지한다. 이 추가 수리는 monitor/H exact pair/시험/문서만 변경하며 helper/native report/policy/Main 기계·보조 로직은 첫 검증 bytes 그대로다.
 
 두 번째 코드 gate·배포/PID·정상 예약 관측 증거는 `data/report/entry_split_latency_pathfix_deployment/2026-10-14`와 `tmp/entry-proof-pathfix-evidence-20261014`가 소유한다. 첫 배포의 frozen evidence는 수정하지 않는다. 전체 Main 자연 지연 목표/경제성 source_gap은 별도 수용이다.
+
+## 6. 재기동 진단 순서 추가 수리
+
+14:36:49 최초 detector가 launcher 최종 record-pid/consumed보다 먼저 실행되어 historical checklist의 소비 검증을 거부했다. 재검증 issues=[]는 원 최종화 증거의 유효성만 입증하며 순서 수리의 완료가 아니다. source-only 재생성 없이 첫 full sweep의 정확한 native PID/start/manifest/consumed/selector 영수증 장벽, 시작부터150초 한도·heartbeat·실패 노출, 선택된 immutable router의 최종 record-pid로 수리한다.
+
+이전 Sentinel의 partial은 ordered publish가 캡처한 dated artifact bytes/mtime/원 신원과 정확히 일치할 때만 다음 정상 예약 실행의 제한된 대기로 분류한다. 현재 세대 partial·실패·stale/잘못된 결속은 유지하고, 발행 전후 generation 변경은 deferred다. observer generation metadata는 감시 전용이며 매매/정책/과거 DONE 권한을 만들지 않는다.
+
+두 번째 릴리스08dbea37c/PID574420의 첫 자연 예약은14:40:01→14:41:59, entry-split 검증/세대 일치·원본 읽기0·메타18,581B·26.804ms였다. 전역 partial의 scanner 미식별/trace deadline 결손을 이 수용에 합치지 않는다. 세 번째 수리의 리뷰·시험·배포·첫 진단·후속 예약 증거 owner는 `tmp/startup-observer-order-evidence-20261014` 및 `data/report/startup_observer_order_deployment/2026-10-14`다. 이전 frozen 증거는 보존한다.
+
+교차 리뷰는 final record-pid 직후와 ordered attest complete 사이의 추가 경합을 발견했다. 이번 배포의 첫 PID만 complete/pass·successor identity까지 같은150초 한도에서 대기하고, 완료된 과거 transition이 이후 같은 릴리스 기동을 막지 않도록 구분한다. 기존08dbea에서도 재현된 coverage 실패는 제거된 옛 workorder Markdown 감시 선언이 남은 원인으로 확인했으며 현행 runner JSON·performance workorder는 유지한다. FIFO/파일 교체·duplicate/nonfinite·bounded metadata 읽기와 과거 보고서의 정확 신원·경고/실패 경계를 반례로 재검증한다.

@@ -99,6 +99,7 @@ def release(tmp_path, monkeypatch):
     monkeypatch.setattr(
         router, "git", lambda _, *args: "a" * 40 if args[0] == "rev-parse" else ""
     )
+    monkeypatch.setattr(router, '_process_start_ticks', lambda _pid: '100')
     return workspace, root, manifest, selection
 
 
@@ -165,9 +166,265 @@ def test_pid_receipt_requires_selected_release_child_cwd(release, monkeypatch):
 
     selection = json.loads(manifest.read_text())
     assert receipt["pid"] == 1234
+    assert receipt['start_ticks'] == '100'
     assert selection["actual_pid_consumed"] is True
     assert selection["actual_pid_consumption_status"] == "pid_receipt_attested"
     assert selection["actual_pid_receipt"]["process_cwd"] == str(root / "src")
+
+
+def _startup_receipts(release, monkeypatch, *, intraday=False):
+    workspace, root, selection_path, _ = release
+    (root / 'src').mkdir()
+    original_readlink = router.os.readlink
+    monkeypatch.setattr(router.os, 'readlink', lambda path: str(root / 'src')
+                        if str(path).startswith('/proc/') else original_readlink(path))
+    router.record_runtime_pid_consumption(workspace, pid=1234, release_root=root, git_commit='a' * 40)
+    directory = workspace / 'data/runtime/policy_bootstrap'
+    directory.mkdir()
+    day = '2026-10-14'
+    def put(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+    manifest = dict(target_date=day, selected_release_sha='b' * 40 if intraday else 'a' * 40)
+    manifest['manifest_sha256'] = hashlib.sha256(json.dumps(manifest, ensure_ascii=True,
+        allow_nan=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    manifest_path = directory / f'runtime_policy_bootstrap_{day}.json'
+    verify_path = directory / f'runtime_policy_bootstrap_verify_{day}.json'
+    put(manifest_path, manifest)
+    verification = dict(target_date=day, status='pass', passed=True, pid=1234,
+                        pid_passed=True, pid_env_available=True, manifest_sha256=manifest['manifest_sha256'])
+    put(verify_path, verification)
+    handoff_path = directory / 'intraday_handoff' / day / ('a' * 40 + '.json')
+    consumed_path = handoff_path.with_suffix('.consumed.json')
+    if intraday:
+        handoff = dict(schema='intraday_policy_preserving_release_handoff_v1', status='prepared_verified',
+                       authority='APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF',
+                       target_date=day, selected_release_commit='a' * 40, release_root=str(root))
+        put(handoff_path, handoff)
+        consumed = dict(schema='intraday_policy_preserving_consumption_v1', status='pass',
+            actual_pid_consumed=True, target_date=day, selected_release_commit='a' * 40,
+            release_root=str(root), pid_identity=dict(pid=1234, start_ticks='100', cwd=str(root / 'src')),
+            manifest_sha256=manifest['manifest_sha256'],
+            handoff_sha256=hashlib.sha256(handoff_path.read_bytes()).hexdigest())
+        put(consumed_path, consumed)
+    expected = dict(workspace=workspace, pid=1234, start_ticks='100', release_root=root,
+                    git_commit='a' * 40, target_date=day)
+    return expected, dict(selection=selection_path, manifest=manifest_path, verification=verify_path,
+                          handoff=handoff_path, consumed=consumed_path), put
+
+
+@pytest.mark.parametrize('intraday', [False, True])
+def test_startup_first_health_barrier_uses_bounded_exact_receipts(release, monkeypatch, intraday):
+    expected, paths, _ = _startup_receipts(release, monkeypatch, intraday=intraday)
+    monkeypatch.setattr(router, 'selected_release', lambda *a: pytest.fail('no native release/source revalidation'))
+    monkeypatch.setattr(router, 'git', lambda *a: pytest.fail('no startup git/provider subprocess'))
+    result = router.startup_consumption_state(**expected)
+    assert result['status'] == 'ready'
+    assert result['basis'] == ('intraday_policy_preserving_handoff' if intraday else 'native_preopen')
+    assert result['runtime_effect'] is False and result['new_finalization_claimed'] is False
+
+
+@pytest.mark.parametrize('damage, status, reason', [
+    ('old_pid', 'pending', 'waiting_current_pid_attestation'),
+    ('not_attested', 'pending', 'waiting_current_pid_attestation'),
+    ('reused_pid', 'failed', 'startup_attested_identity_invalid'),
+    ('generation', 'failed', 'startup_selected_generation_changed'),
+    ('bad_receipt', 'failed', 'startup_attested_identity_invalid'),
+    ('verify', 'failed', 'startup_bootstrap_pid_receipt_invalid'),
+    ('manifest', 'failed', 'startup_bootstrap_pid_receipt_invalid'),
+    ('missing_handoff', 'failed', 'startup_native_preopen_release_mismatch'),
+    ('consumed', 'failed', 'startup_intraday_consumption_invalid'),
+    ('oversized', 'failed', 'startup_receipt_size_limit'),
+    ('duplicate_key', 'failed', 'startup_receipt_duplicate_key'),
+    ('fifo', 'failed', 'startup_receipt_regular_file_required'),
+])
+def test_startup_first_health_barrier_never_relabels_incomplete_or_invalid_as_pass(
+    release, monkeypatch, damage, status, reason
+):
+    expected, paths, put = _startup_receipts(release, monkeypatch, intraday=True)
+    selection = json.loads(paths['selection'].read_text())
+    if damage == 'old_pid': selection['actual_pid_receipt']['pid'] = 9999
+    elif damage == 'not_attested': selection['actual_pid_consumed'] = False
+    elif damage == 'reused_pid': selection['actual_pid_receipt']['start_ticks'] = 'old'
+    elif damage == 'generation': selection['git_commit'] = 'c' * 40
+    elif damage == 'bad_receipt': selection['actual_pid_receipt'] = ['malformed']
+    put(paths['selection'], selection)
+    if damage in {'verify', 'manifest', 'consumed'}:
+        selected = 'verification' if damage == 'verify' else damage
+        payload = json.loads(paths[selected].read_text())
+        payload['status' if damage == 'verify' else 'manifest_sha256'] = 'wrong'
+        put(paths[selected], payload)
+    elif damage == 'missing_handoff': paths['handoff'].unlink()
+    elif damage == 'oversized': paths['selection'].write_bytes(b' ' * (router.MAX_STARTUP_RECEIPT_BYTES + 1))
+    elif damage == 'duplicate_key': paths['selection'].write_text('{"schema":1,"schema":2}')
+    elif damage == 'fifo':
+        paths['selection'].unlink()
+        os.mkfifo(paths['selection'])
+    result = router.startup_consumption_state(**expected)
+    assert result['status'] == status and result['reason'] == reason
+
+
+def test_startup_receipts_and_pid_rechecked_before_ready(release, monkeypatch):
+    expected, paths, put = _startup_receipts(release, monkeypatch, intraday=True)
+    original = router._startup_receipt
+    calls = []
+    def read(path):
+        value = original(path)
+        calls.append(path)
+        if path == paths['verification'] and calls.count(path) == 2:
+            paths['consumed'].write_text('{}')
+        return value
+    monkeypatch.setattr(router, '_startup_receipt', read)
+    assert router.startup_consumption_state(**expected)['reason'] == 'startup_receipt_generation_changed'
+
+
+def test_failed_current_bootstrap_surfaces_before_final_pid_attestation(release, monkeypatch):
+    expected, paths, put = _startup_receipts(release, monkeypatch)
+    selection = json.loads(paths['selection'].read_text())
+    selection['actual_pid_consumed'] = False
+    put(paths['selection'], selection)
+    verification = json.loads(paths['verification'].read_text())
+    put(paths['verification'], dict(verification, status='fail', passed=False, pid_passed=False))
+    assert router.startup_consumption_state(**expected)['reason'] == 'startup_bootstrap_pid_receipt_invalid'
+    # A previous child's failure does not become this fresh launch's failure.
+    put(paths['verification'], dict(verification, pid=9999, status='fail', passed=False))
+    assert router.startup_consumption_state(**expected)['status'] == 'pending'
+
+
+def _ordered_startup_receipts(release, monkeypatch, *, phase='starting', required=True):
+    original_datetime = router.datetime
+    class StartupClock(original_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 10, 14, 15, tzinfo=router.ZoneInfo('Asia/Seoul'))
+            return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+    monkeypatch.setattr(router, 'datetime', StartupClock)
+    expected, paths, put = _startup_receipts(release, monkeypatch, intraday=True)
+    workspace, root = expected['workspace'], expected['release_root']
+    path = workspace / 'data/runtime/release_transitions' / expected['target_date'] / expected['git_commit'] / 'status.json'
+    selection = json.loads(paths['selection'].read_text())
+    selection.update(approval_scope='ordered_intraday_deploy_and_restart', approved_by='user',
+                     selected_at_kst='2026-10-14T14:00:00+09:00', deployment_transition=str(path))
+    selection['actual_pid_receipt'].update(ordered_transition_required=required,
+        recorded_at_kst='2026-10-14T14:01:00+09:00' if required else '2026-10-14T14:06:00+09:00')
+    put(paths['selection'], selection)
+    transition = dict(schema='ordered_intraday_deployment_v1', authority='APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART',
+        target_date=expected['target_date'], candidate_root=str(root), candidate_commit=expected['git_commit'],
+        phase=phase, policy_effect='unchanged', updated_at='2026-10-14T14:05:00+09:00')
+    if phase == 'complete':
+        transition.update(status='pass', successor_identity=dict(pid=1234, start_ticks='100', cwd=str(root / 'src')))
+    put(path, transition)
+    paths['transition'] = path
+    return expected, paths, put
+
+
+@pytest.mark.parametrize('phase', ['selected', 'prepared', 'starting', 'complete'])
+def test_ordered_startup_waits_for_post_attestation_completion(release, monkeypatch, phase):
+    expected, paths, put = _ordered_startup_receipts(release, monkeypatch, phase=phase)
+    result = router.startup_consumption_state(**expected)
+    assert result['status'] == ('ready' if phase == 'complete' else 'pending')
+    if phase != 'complete': assert result['reason'] == 'waiting_ordered_transition_completion'
+
+
+@pytest.mark.parametrize('damage, reason', [
+    ('failed', 'startup_ordered_transition_failed'),
+    ('root', 'startup_ordered_transition_identity_invalid'),
+    ('commit', 'startup_ordered_transition_identity_invalid'),
+    ('policy_effect', 'startup_ordered_transition_identity_invalid'),
+    ('policy_effect_missing', 'startup_ordered_transition_identity_invalid'),
+    ('approval', 'startup_ordered_transition_approval_invalid'),
+    ('path', 'startup_ordered_transition_path_invalid'),
+    ('false_while_active', 'startup_ordered_transition_receipt_invalid'),
+    ('unknown_phase', 'startup_ordered_transition_state_invalid'),
+    ('successor', 'startup_ordered_transition_successor_invalid'),
+])
+def test_ordered_startup_never_bypasses_a_failed_or_unbound_transition(release, monkeypatch, damage, reason):
+    expected, paths, put = _ordered_startup_receipts(release, monkeypatch,
+        phase='complete' if damage == 'successor' else 'starting')
+    transition = json.loads(paths['transition'].read_text())
+    selection = json.loads(paths['selection'].read_text())
+    if damage == 'failed': transition.update(phase='failed', status='fail')
+    elif damage in {'root', 'commit'}: transition['candidate_' + damage] = 'wrong'
+    elif damage == 'policy_effect': transition['policy_effect'] = 'changed'
+    elif damage == 'policy_effect_missing': transition.pop('policy_effect')
+    elif damage == 'approval': selection['approval_scope'] = 'unapproved'
+    elif damage == 'path':
+        wrong = paths['transition'].parent / 'wrong.json'
+        put(wrong, transition)
+        selection['deployment_transition'] = str(wrong)
+    elif damage == 'false_while_active': selection['actual_pid_receipt']['ordered_transition_required'] = False
+    elif damage == 'unknown_phase': transition['phase'] = 'unknown'
+    elif damage == 'successor': transition['successor_identity']['start_ticks'] = '999'
+    put(paths['selection'], selection); put(paths['transition'], transition)
+    assert router.startup_consumption_state(**expected)['reason'] == reason
+
+
+def test_record_pid_derives_active_ordered_barrier_and_preserves_it_after_completion(release, monkeypatch):
+    expected, paths, put = _ordered_startup_receipts(release, monkeypatch, required=False)
+    recorded = router.record_runtime_pid_consumption(expected['workspace'], pid=expected['pid'],
+        release_root=expected['release_root'], git_commit=expected['git_commit'])
+    assert recorded['ordered_transition_required'] is True
+    transition = json.loads(paths['transition'].read_text())
+    transition.update(phase='complete', status='pass', successor_identity=dict(pid=1234,
+        start_ticks='100', cwd=str(expected['release_root'] / 'src')))
+    put(paths['transition'], transition)
+    again = router.record_runtime_pid_consumption(expected['workspace'], pid=expected['pid'],
+        release_root=expected['release_root'], git_commit=expected['git_commit'])
+    assert again['ordered_transition_required'] is True
+
+
+def test_same_release_later_restart_uses_fresh_consumption_not_historical_successor_pid(release, monkeypatch):
+    expected, paths, put = _ordered_startup_receipts(release, monkeypatch, phase='complete', required=False)
+    transition = json.loads(paths['transition'].read_text())
+    transition['successor_identity']['pid'] = 9999
+    put(paths['transition'], transition)
+    selection = json.loads(paths['selection'].read_text())
+    selection['actual_pid_receipt']['pid'] = 9999
+    put(paths['selection'], selection)
+    current = router.record_runtime_pid_consumption(expected['workspace'], pid=expected['pid'],
+        release_root=expected['release_root'], git_commit=expected['git_commit'])
+    assert current['ordered_transition_required'] is False
+    assert router.startup_consumption_state(**expected)['status'] == 'ready'
+
+
+def test_next_date_native_preopen_is_not_blocked_by_completed_previous_day_transition(release, monkeypatch):
+    expected, paths, put = _ordered_startup_receipts(release, monkeypatch, phase='complete', required=False)
+    expected['target_date'] = '2026-10-15'
+    selection = json.loads(paths['selection'].read_text())
+    selection['actual_pid_receipt']['recorded_at_kst'] = '2026-10-15T07:55:00+09:00'
+    put(paths['selection'], selection)
+    manifest = dict(target_date=expected['target_date'], selected_release_sha=expected['git_commit'])
+    manifest['manifest_sha256'] = hashlib.sha256(json.dumps(manifest, ensure_ascii=True,
+        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    directory = expected['workspace'] / 'data/runtime/policy_bootstrap'
+    put(directory / 'runtime_policy_bootstrap_2026-10-15.json', manifest)
+    put(directory / 'runtime_policy_bootstrap_verify_2026-10-15.json', dict(target_date=expected['target_date'],
+        status='pass', passed=True, pid=expected['pid'], pid_passed=True, pid_env_available=True,
+        manifest_sha256=manifest['manifest_sha256']))
+    assert router.startup_consumption_state(**expected)['status'] == 'ready'
+
+
+def test_ordered_completion_is_rechecked_before_ready(release, monkeypatch):
+    expected, paths, put = _ordered_startup_receipts(release, monkeypatch, phase='complete')
+    original = router._startup_receipt
+    count = [0]
+    def read(path):
+        count[0] += 1
+        if path == paths['transition'] and count[0] > 2:
+            payload = json.loads(path.read_text())
+            put(path, dict(payload, phase='failed', status='fail'))
+        return original(path)
+    monkeypatch.setattr(router, '_startup_receipt', read)
+    assert router.startup_consumption_state(**expected)['reason'] == 'startup_ordered_transition_generation_changed'
+
+
+def test_launcher_uses_reviewed_selected_router_after_policy_consumption():
+    text = (Path(__file__).resolve().parents[1] / 'run_bot.sh').read_text()
+    final = text.index('if record_threshold_runtime_env_pid_handoff "$RUNTIME_TARGET_DATE" "$BOT_PID"; then')
+    selected = text.index('../.venv/bin/python -I "$PROJECT_DIR/src/engine/infrastructure/runtime_release_router.py"', final)
+    assert selected > final
+    assert '--workspace "$RUNTIME_WORKSPACE"' in text[selected:selected+350]
+    assert '--record-pid "$BOT_PID"' in text[selected:selected+350]
 
 
 def test_pid_receipt_rejects_non_release_child_cwd(release, monkeypatch):

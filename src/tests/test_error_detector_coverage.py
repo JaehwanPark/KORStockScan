@@ -30,7 +30,10 @@ def test_native_stage_and_notifier_functional_coverage():
     result = validate_semantic_coverage('2026-10-07')
     assert result['status'] == 'pass' and result['native_stage_count'] == len(STAGE_REGISTRY)
     assert result['stages']['main_auxiliary_policy']['prerequisites'] == ['main_machine_policy']
-    assert len(REQUIRED_ARTIFACT_IDS) == 40
+    assert len(REQUIRED_ARTIFACT_IDS) == 39
+    assert 'code_improvement_workorder' not in REQUIRED_ARTIFACT_IDS
+    assert 'codex_workorder_runner_report' in REQUIRED_ARTIFACT_IDS
+    assert 'codebase_performance_workorder_report' in REQUIRED_ARTIFACT_IDS
     bad = validate_semantic_coverage('2026-10-07', alert_stages=SEMANTIC_ALERT_STAGES-{'main_machine_policy'})
     assert bad['findings'] == ['main_machine_policy:notifier_unbound']
     bad = validate_semantic_coverage('2026-10-07', stages={k:v for k,v in STAGE_REGISTRY.items() if k!='main_machine_policy'})

@@ -421,12 +421,22 @@ def test_launcher_selector_receipt_requires_native_consumption(tmp_path, native_
     end = script.index('    wait "$BOT_PID"', start)
     project = tmp_path / 'release'; project.mkdir()
     data = tmp_path / 'data'; data.mkdir(); (project / 'data').symlink_to(data)
-    router = tmp_path / 'deploy/run_runtime_release.sh'; router.parent.mkdir()
+    source = project / 'src/engine/infrastructure/runtime_release_router.py'
+    source.parent.mkdir(parents=True); source.write_text('# selected immutable router fixture\n')
+    router = project / '.venv/bin/python'; router.parent.mkdir(parents=True)
     marker = tmp_path / 'recorded'
-    router.write_text('#!/bin/bash\nprintf "%s\\n" "$*" > "$MARKER"\n')
+    router.write_text('''#!/bin/bash
+[[ "$1" == -I && "$2" == "$PROJECT_DIR/src/engine/infrastructure/runtime_release_router.py" ]] || exit 2
+[[ "$3" == --workspace && "$4" == "$EXPECTED_WORKSPACE" ]] || exit 3
+[[ -f "$2" ]] || exit 4
+printf "%s\\n" "$*" > "$MARKER"
+''')
+    router.chmod(0o755)
     prefix = 'set -e\nrecord_threshold_runtime_env_pid_handoff() { return "$NATIVE_RC"; }\n'
     result = subprocess.run(['bash', '-c', prefix + script[start:end]],
+        cwd=project / 'src',
         env={**os.environ, 'PROJECT_DIR': str(project), 'MARKER': str(marker),
+             'EXPECTED_WORKSPACE': str(tmp_path),
              'RUNTIME_TARGET_DATE': '2026-10-12', 'BOT_PID': '123',
              'KORSTOCKSCAN_RUNTIME_GIT_COMMIT': 'a' * 40, 'NATIVE_RC': str(native_rc)},
         capture_output=True, text=True, timeout=5)

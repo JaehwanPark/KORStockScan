@@ -10,10 +10,12 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
 import shlex
+import stat
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -71,6 +73,60 @@ def _atomic(path, raw):
 
 def _json_bytes(value):
     return (json.dumps(value, sort_keys=True, indent=2) + '\n').encode()
+
+
+def _predecessor_observer(workspace, day):
+    """Freeze a small, exact old observation; never grant validation or trading authority."""
+    path = (Path(workspace) / 'data/report/buy_funnel_sentinel'
+            / ('submission_bottleneck_monitor_' + day + '.json')).absolute()
+    try:
+        expected_parent = ((Path(workspace) / 'data').resolve()
+                           / 'report/buy_funnel_sentinel')
+        if path.is_symlink() or path.parent.resolve() != expected_parent:
+            raise ValueError('observer_symlink')
+        before = path.stat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 8 * 1024 * 1024:
+            raise ValueError('observer_size_limit')
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise ValueError('observer_not_regular')
+            raw = handle.read(8 * 1024 * 1024 + 1)
+        after = path.stat()
+        signature = lambda item: (item.st_dev, item.st_ino, item.st_mtime_ns, item.st_ctime_ns, item.st_size)
+        if (len(raw) > 8 * 1024 * 1024 or signature(before) != signature(opened)
+                or signature(opened) != signature(after)):
+            raise ValueError('observer_changed_during_capture')
+        def unique_object(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ValueError('observer_duplicate_key')
+                result[key] = item
+            return result
+        def invalid_constant(_):
+            raise ValueError('observer_non_finite')
+        value = json.loads(raw, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+        # parse_constant does not see an overflowing JSON exponent (1e999).
+        json.dumps(value, allow_nan=False)
+        stamp = datetime.fromisoformat(value['as_of'])
+        if (value.get('schema') != 'submission_bottleneck_monitor_v1'
+                or value.get('date') != day
+                or not isinstance(value.get('run_id'), str)
+                or not re.fullmatch(r'[0-9a-f]{32}', value['run_id'])
+                or value.get('execution_status') != 'completed'
+                or value.get('semantic_status') not in {'partial', 'validated'}
+                or stamp.tzinfo is None or stamp.astimezone(H.KST).date().isoformat() != day
+                or stamp > datetime.now(H.KST)):
+            raise ValueError('observer_identity_invalid')
+        return dict(schema='startup_observer_predecessor_v1', status='captured',
+                    path=str(path), sha256=_digest(raw), mtime_ns=after.st_mtime_ns,
+                    **{key:value[key] for key in ('date', 'as_of', 'run_id',
+                                                  'execution_status', 'semantic_status')})
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return dict(schema='startup_observer_predecessor_v1', status='unavailable',
+                    path=str(path), reason=type(exc).__name__)
 
 
 def _main_pids():
@@ -303,6 +359,7 @@ class Deployment:
         self.assert_unchanged()
         if self.phase != 'drained' or _main_pids():
             raise ValueError('deployment_publish_requires_drained_main')
+        predecessor_observer = _predecessor_observer(self.workspace, self.day)
         value = dict(self.old)
         value.pop('actual_pid_receipt', None)
         value.update(release_root=str(self.candidate), git_commit=self.commit,
@@ -328,7 +385,8 @@ class Deployment:
             _atomic(self.selection, self.published)
             _atomic(self.checklist, self.document_after)
         self.checkpoint('selected', selected_at=value['selected_at_kst'],
-                        checklist_sha256=_digest(self.document_after))
+                        checklist_sha256=_digest(self.document_after),
+                        predecessor_observer=predecessor_observer)
 
     def prepare(self):
         self.assert_hold()
@@ -365,7 +423,7 @@ class Deployment:
             if value.get('git_commit') != self.commit:
                 raise ValueError('deployment_selection_changed_during_start')
             return value.get('actual_pid_consumed') is True
-        _wait(consumed, 150, 'deployment_pid_attestation_timeout')
+        _wait(consumed, R.STARTUP_CONSUMPTION_TIMEOUT_SEC, 'deployment_pid_attestation_timeout')
         value = H._read(self.selection)
         identity = H._identity(value['actual_pid_receipt']['pid'])
         if identity['cwd'] != str(self.candidate / 'src') or _main_pids() != [identity['pid']]:

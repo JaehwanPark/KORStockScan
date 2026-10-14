@@ -282,6 +282,8 @@ def test_pre_submit_source_cli_runs_without_sentinel_report_or_other_semantics(t
                         "pre_submit_delay_source_monitor_latest.json").read_text())
     assert saved["pre_submit_delay_source_semantics"]["status"] == "unobservable"
     assert "source_gap_semantics" not in saved
+    assert "observer_generation" not in saved
+    assert not (tmp_path / "data/runtime/runtime_release_selection.lock").exists()
 
 
 def _entry_axis_fixture(data_root, *, delay_handoff=None, mismatch_split_policy=False, delay_env=None):
@@ -2039,6 +2041,7 @@ def test_intraday_source_semantics_catches_missing_capture_and_pending_source(tm
 
 def test_source_only_monitor_runs_when_sentinel_report_is_absent(tmp_path, monkeypatch):
     import sys
+    _observer_selection_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(monitor, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(monitor, "machine_semantics", lambda *args, **kwargs:
                         pytest.fail("source-only must not run policy receipt audit"))
@@ -2413,3 +2416,172 @@ def test_new_native_results_require_lifecycle_and_keep_incomplete_distinct():
     assert not monitor._probe_verified_no_match(row)
     row['fields']['zero_base_probe_result']='observation_incomplete'
     assert monitor._probe_verified_no_match(row,allow_incomplete=True)
+
+
+def _observer_selection_fixture(tmp_path, monkeypatch):
+    root = tmp_path.resolve(); release = root / "release"
+    release.mkdir()
+    code = dict(release_root=str(release), git_commit="b" * 40, observer_code_sha256="c" * 64)
+    monkeypatch.setattr(monitor, "_observer_code_identity", lambda: dict(code))
+    selection = dict(schema="runtime_release_selection_v1", release_root=str(release), git_commit="b" * 40,
+        selected_at_kst="2026-10-14T14:35:00+09:00", actual_pid_consumed=True,
+        actual_pid_receipt={"schema": "runtime_release_pid_receipt_v1", "pid": 42,
+            "start_ticks": "123", "release_root": str(release), "git_commit": "b" * 40,
+            "process_cwd": str(release / "src"), "recorded_at_kst": "2026-10-14T14:36:00+09:00"})
+    path = root / "data/runtime/runtime_release_selection.json"
+    path.parent.mkdir(parents=True); path.write_text(json.dumps(selection))
+    path.with_suffix(".lock").write_text("")
+    return root, path, selection, code
+
+
+def test_observer_generation_seals_selected_bytes_code_and_reported_pid(tmp_path, monkeypatch):
+    root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
+    started = datetime.fromisoformat("2026-10-14T14:40:00+09:00")
+    generation = monitor._observer_generation_snapshot(root, run_id="d" * 32,
+        target_date="2026-10-14", started_at=started)
+    assert generation["generation_current"] is True
+    assert generation["selection_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert generation["selector_reported_pid_receipt"] == selection["actual_pid_receipt"]
+    assert generation["policy_pid_consumption_proven"] is False
+    final = monitor._finish_observer_generation(generation, root, completed_at=started + timedelta(seconds=25))
+    assert final["generation_current"] is True and final["status"] == "current"
+    assert final["sha256"] == monitor._observer_seal(final)
+
+
+@pytest.mark.parametrize("change", ["selector", "code", "wrong_root", "missing", "malformed"])
+def test_observer_publication_cannot_claim_changed_or_unknown_generation(tmp_path, monkeypatch, change):
+    root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
+    started = datetime.fromisoformat("2026-10-14T14:40:00+09:00")
+    original = monitor._observer_generation_snapshot(root, run_id="d" * 32,
+        target_date="2026-10-14", started_at=started)
+    if change == "selector": path.write_text(json.dumps({**selection, "actual_pid_consumed": False}))
+    elif change == "code": code["observer_code_sha256"] = "f" * 64
+    elif change == "wrong_root": code["release_root"] = str(root / "other")
+    elif change == "missing": path.unlink()
+    else: path.write_text("[]")
+    final = monitor._finish_observer_generation(original, root, completed_at=started + timedelta(seconds=1))
+    assert final["generation_current"] is False
+    assert final["status"] == "changed_or_unavailable"
+    assert final["policy_pid_consumption_proven"] is False
+
+
+def test_main_defers_without_overwriting_when_selection_changes_before_publication(tmp_path, monkeypatch, capsys):
+    root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", root)
+    raw = root / "source.json"; raw.write_text("{}")
+    def changed_source(*args, **kwargs):
+        path.write_text(json.dumps({**selection, "actual_pid_consumed": False}))
+        return {"status": "observed", "issues": {"real_source_gap": 1}}
+    monkeypatch.setattr(monitor, "source_gap_semantics", changed_source)
+    monkeypatch.setattr(monitor, "attach_source_gap_semantics", lambda result, sem: result.update(source_gap_semantics=sem))
+    monkeypatch.setattr(monitor, "notify", lambda *args: pytest.fail("changed generation notified current result"))
+    assert monitor.main(["--report", str(raw), "--source-only", "--notify"]) == 75
+    terminal = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert terminal["execution_status"] == "deferred"
+    assert terminal["semantic_status"] == "partial"
+    assert terminal["publication"] == {}
+    assert terminal["observer_generation"]["generation_current"] is False
+    assert terminal["source_gap_status"] == "observed"
+    assert not list((root / "data/report/buy_funnel_sentinel").glob("*.json"))
+
+
+def test_observer_publication_lease_serializes_existing_selector_writer(tmp_path, monkeypatch):
+    root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
+    lock_path = path.with_suffix(".lock")
+    inode = lock_path.stat().st_ino
+    with monitor._observer_publication_lease(root):
+        with lock_path.open("rb") as writer:
+            with pytest.raises(BlockingIOError):
+                monitor.fcntl.flock(writer, monitor.fcntl.LOCK_EX | monitor.fcntl.LOCK_NB)
+    with lock_path.open("rb") as writer:
+        monitor.fcntl.flock(writer, monitor.fcntl.LOCK_EX | monitor.fcntl.LOCK_NB)
+    assert lock_path.stat().st_ino == inode
+
+
+def test_main_selector_change_during_notify_preserves_existing_canonical_bytes(tmp_path, monkeypatch, capsys):
+    root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", root)
+    raw = root / "source.json"; raw.write_text("{}")
+    names = [root / "tmp/submission_bottleneck_monitor_state.json",
+             root / "data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json",
+             root / "data/report/buy_funnel_sentinel" / f"submission_bottleneck_monitor_{datetime.now(monitor.KST).date().isoformat()}.json"]
+    for saved in names:
+        saved.parent.mkdir(parents=True, exist_ok=True); saved.write_text('{"prior":"preserved"}')
+    before = {saved: saved.read_bytes() for saved in names}
+    monkeypatch.setattr(monitor, "source_gap_semantics", lambda *args: {"status": "observed", "issues": {}})
+    monkeypatch.setattr(monitor, "attach_source_gap_semantics", lambda result, sem: result.update(source_gap_semantics=sem))
+    # Simulate a writer violating the existing lease. The second identity
+    # check still refuses canonical publication; lawful writers are serialized.
+    monkeypatch.setattr(monitor, "notify", lambda *args: path.write_text(json.dumps({**selection, "actual_pid_consumed": False})))
+    assert monitor.main(["--report", str(raw), "--source-only", "--notify"]) == 75
+    assert {saved: saved.read_bytes() for saved in names} == before
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["publication"] == {}
+
+
+@pytest.mark.parametrize("which", ["selector", "lock"])
+def test_observer_fifo_paths_fail_bounded_without_open_wait(tmp_path, monkeypatch, which):
+    import multiprocessing
+    import os
+    root, selector, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
+    path = selector if which == "selector" else selector.with_suffix(".lock")
+    path.unlink(); os.mkfifo(path)
+    context = multiprocessing.get_context("fork"); queue = context.Queue()
+    def attempt():
+        try:
+            if which == "selector":
+                result = monitor._observer_generation_snapshot(root, run_id="d" * 32,
+                    target_date="2026-10-14", started_at=datetime.fromisoformat("2026-10-14T14:40:00+09:00"))
+                queue.put((result["generation_current"], result["reason"]))
+            else:
+                with monitor._observer_publication_lease(root): queue.put((True, "unexpected lease"))
+        except Exception as exc:
+            queue.put((False, str(exc)))
+    child = context.Process(target=attempt); child.start(); child.join(timeout=2)
+    if child.is_alive():
+        child.terminate(); child.join(timeout=2)
+        pytest.fail("observer blocked on FIFO")
+    valid, reason = queue.get(timeout=1)
+    assert valid is False
+    assert "regular_file_required" in reason or "lease_unavailable" in reason
+    assert path.is_fifo()
+
+
+def test_observer_read_open_race_fifo_replacement_uses_nonblocking_fd(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+    root, path, _, _ = _observer_selection_fixture(tmp_path, monkeypatch)
+    real_open = monitor.os.open
+    def replacement(selected, flags, *args, **kwargs):
+        if Path(selected) == path:
+            assert flags & os.O_NOFOLLOW
+            assert flags & os.O_NONBLOCK
+            path.unlink(); os.mkfifo(path)
+        return real_open(selected, flags, *args, **kwargs)
+    monkeypatch.setattr(monitor.os, "open", replacement)
+    with pytest.raises(ValueError, match="regular_file_required"):
+        monitor._observer_regular_bytes(path, limit=1024 * 1024)
+
+
+def test_observer_lease_does_not_reclassify_real_publication_failure(tmp_path, monkeypatch):
+    root, *_ = _observer_selection_fixture(tmp_path, monkeypatch)
+    with pytest.raises(OSError, match="disk failure"):
+        with monitor._observer_publication_lease(root):
+            raise OSError("disk failure")
+
+
+def test_main_source_report_fifo_is_bounded(tmp_path, monkeypatch):
+    import multiprocessing
+    import os
+    root, *_ = _observer_selection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", root)
+    fifo = root / "source.json"; os.mkfifo(fifo)
+    monkeypatch.setattr(monitor, "source_gap_semantics", lambda *args: {"status": "observed", "issues": {}})
+    monkeypatch.setattr(monitor, "attach_source_gap_semantics", lambda result, sem: result.update(source_gap_semantics=sem))
+    context = multiprocessing.get_context("fork"); queue = context.Queue()
+    child = context.Process(target=lambda: queue.put(monitor.main(["--report", str(fifo), "--source-only"])))
+    child.start(); child.join(timeout=2)
+    if child.is_alive():
+        child.terminate(); child.join(timeout=2)
+        pytest.fail("observer main blocked on source FIFO")
+    assert queue.get(timeout=1) == 0
+    assert fifo.is_fifo()

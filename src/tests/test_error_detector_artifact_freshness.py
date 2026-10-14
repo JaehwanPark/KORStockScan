@@ -2561,3 +2561,212 @@ def test_generation_detector_preserves_release_code_root_and_canonical_data(tmp_
     monkeypatch.setattr(generation,'observations',observe)
     mod.ArtifactFreshnessDetector(dry_run=True).check()
     assert seen and all(root==release and actual==data.resolve() for root,actual in seen)
+
+
+def _startup_observer_fixture(tmp_path, monkeypatch):
+    import src.engine.error_detectors.artifact_freshness as mod
+    now = datetime.fromisoformat("2026-10-14T14:42:00+09:00")
+    root = tmp_path.resolve(); data = root / "data"; data.mkdir()
+    release = root / "release"; release.mkdir()
+    day = "2026-10-14"; commit = "b" * 40
+    report_path = data / "report/buy_funnel_sentinel" / f"submission_bottleneck_monitor_{day}.json"
+    report_path.parent.mkdir(parents=True)
+    report = dict(schema="submission_bottleneck_monitor_v1", date=day,
+        as_of=f"{day}T14:34:40+09:00", run_id="d" * 32,
+        execution_status="completed", semantic_status="partial", notification_status="idle",
+        status="unobservable", blocker="prior_real_source_gap")
+    report_path.write_text(json.dumps(report))
+    old_epoch = datetime.fromisoformat(f"{day}T14:34:45+09:00").timestamp()
+    os.utime(report_path, (old_epoch, old_epoch))
+    identity = dict(pid=42, start_ticks="123", cwd=str(release / "src"))
+    monkeypatch.setattr(mod, "_observer_live_identity", lambda pid: dict(identity))
+    transition_path = data / "runtime/release_transitions" / day / commit / "status.json"
+    transition_path.parent.mkdir(parents=True)
+    transition = dict(schema="ordered_intraday_deployment_v1", authority="APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART",
+        target_date=day, candidate_commit=commit, candidate_root=str(release), policy_effect="unchanged",
+        phase="complete", status="pass", updated_at=f"{day}T14:37:18+09:00", successor_identity=identity,
+        predecessor_observer=dict(schema="startup_observer_predecessor_v1", status="captured", path=str(report_path),
+            sha256=hashlib.sha256(report_path.read_bytes()).hexdigest(), mtime_ns=report_path.stat().st_mtime_ns,
+            **{key: report[key] for key in ("date", "as_of", "run_id", "execution_status", "semantic_status")}))
+    transition_path.write_text(json.dumps(transition))
+    selection_path = data / "runtime/runtime_release_selection.json"
+    selection = dict(schema="runtime_release_selection_v1", git_commit=commit, release_root=str(release),
+        selected_at_kst=f"{day}T14:35:38+09:00", deployment_transition=str(transition_path),
+        approval_scope="ordered_intraday_deploy_and_restart", approved_by="user", actual_pid_consumed=True,
+        actual_pid_receipt=dict(schema="runtime_release_pid_receipt_v1", git_commit=commit,
+            release_root=str(release), pid=42, process_cwd=str(release / "src")))
+    selection_path.write_text(json.dumps(selection))
+    return mod, root, now, report_path, report, transition_path, transition, selection_path, selection
+
+
+def test_exact_captured_old_observer_is_bounded_pending_without_new_pass(tmp_path, monkeypatch):
+    mod, root, now, report_path, report, *_ = _startup_observer_fixture(tmp_path, monkeypatch)
+    before = report_path.read_bytes()
+    pending = mod._submission_observer_transition_pending(root, report_path, now, max_staleness_sec=600)
+    assert pending["status"] == "pending_first_current_observer"
+    assert pending["deadline"] == "2026-10-14T14:43:00+09:00"
+    assert pending["prior_semantic_status"] == "partial"
+    assert pending["prior_blocker"] == "prior_real_source_gap"
+    assert pending["current_observation_verified"] is False
+    assert pending["runtime_effect"] is False and pending["allowed_runtime_apply"] is False
+    assert report_path.read_bytes() == before
+    assert mod._submission_observer_transition_pending(root, report_path,
+        datetime.fromisoformat("2026-10-14T14:43:01+09:00"), max_staleness_sec=600) is None
+
+
+@pytest.mark.parametrize("change", ["capture_absent", "capture_sha", "capture_path", "capture_mtime", "capture_clock",
+    "capture_partial_lost", "transition_failed", "transition_starting", "transition_wrong_root", "selection_wrong_commit",
+    "selection_unapproved", "selection_pid_missing", "pid_changed", "stale", "failed", "malformed", "new_current", "replaced_same_bytes"])
+def test_pending_never_suppresses_unproven_failed_stale_or_current_report(tmp_path, monkeypatch, change):
+    fixture = _startup_observer_fixture(tmp_path, monkeypatch)
+    mod, root, now, path, report, tp, transition, sp, selection = fixture
+    if change == "capture_absent": transition.pop("predecessor_observer")
+    elif change == "capture_sha": transition["predecessor_observer"]["sha256"] = "0" * 64
+    elif change == "capture_path": transition["predecessor_observer"]["path"] = str(path.with_name("latest.json"))
+    elif change == "capture_mtime": transition["predecessor_observer"]["mtime_ns"] += 1
+    elif change == "capture_clock": transition["predecessor_observer"]["as_of"] = "wrong"
+    elif change == "capture_partial_lost": transition["predecessor_observer"]["semantic_status"] = "validated"
+    elif change == "transition_failed": transition.update(status="fail", phase="failed")
+    elif change == "transition_starting": transition["phase"] = "starting"
+    elif change == "transition_wrong_root": transition["candidate_root"] = str(root / "wrong")
+    elif change == "selection_wrong_commit": selection["git_commit"] = "c" * 40
+    elif change == "selection_unapproved": selection["approval_scope"] = "unknown"
+    elif change == "selection_pid_missing": selection["actual_pid_consumed"] = False
+    elif change == "pid_changed": monkeypatch.setattr(mod, "_observer_live_identity", lambda pid: {"pid": 99})
+    elif change == "stale": os.utime(path, (now.timestamp() - 601,) * 2)
+    elif change == "failed": report["execution_status"] = "failed"
+    elif change == "malformed": path.write_text("{bad")
+    elif change == "new_current": report["as_of"] = "2026-10-14T14:41:19+09:00"
+    elif change == "replaced_same_bytes": path.write_bytes(path.read_bytes())
+    tp.write_text(json.dumps(transition)); sp.write_text(json.dumps(selection))
+    if change in {"failed", "new_current"}: path.write_text(json.dumps(report))
+    assert mod._submission_observer_transition_pending(root, path, now, max_staleness_sec=600) is None
+
+
+def test_current_partial_keeps_original_failure_and_generation_loss_cannot_pass(tmp_path, monkeypatch):
+    fixture = _startup_observer_fixture(tmp_path, monkeypatch)
+    mod, root, now, path, report, *_ = fixture
+    monkeypatch.setattr(mod, "PROJECT_ROOT", root)
+    artifact = dict(id="submission_bottleneck_monitor", json_status_field="notification_status",
+                    json_ok_values=["idle", "sent", "cooldown"])
+    report["as_of"] = "2026-10-14T14:41:19+09:00"; path.write_text(json.dumps(report))
+    assert "semantic coverage partial" in mod.ArtifactFreshnessDetector._validate_json_status(artifact, path, {})
+    report["semantic_status"] = "validated"; path.write_text(json.dumps(report))
+    assert "observer_generation_missing" in mod.ArtifactFreshnessDetector._validate_json_status(artifact, path, {})
+
+
+def test_pending_is_warning_and_cannot_clear_prior_daemon_failure(tmp_path, monkeypatch):
+    from src.engine.error_detector import iter_daemon_alert_events
+    from src.engine.error_detectors.base import DetectionResult
+    from src.engine.monitoring import policy_generation_contract
+    mod, root, now, path, report, *_ = _startup_observer_fixture(tmp_path, monkeypatch)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return now if tz else now.replace(tzinfo=None)
+    monkeypatch.setattr(mod, "datetime", Clock)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", root)
+    monkeypatch.setattr(mod, "ARTIFACT_REGISTRY", [r for r in ARTIFACT_REGISTRY if r["id"] == "submission_bottleneck_monitor"])
+    monkeypatch.setattr(mod, "is_krx_trading_day", lambda *args: True)
+    monkeypatch.setattr(mod, "load_installed_crontab", lambda: "")
+    for name in ("_entry_cancel_wait_result_semantics", "_holding_profit_exit_semantics", "_machine_result_semantics",
+                 "_auxiliary_result_semantics", "_postclose_handoff_semantics", "_main_stop_semantics", "_samsung_forward_semantics",
+                 "_initial_quantity_semantics"):
+        monkeypatch.setattr(mod, name, lambda *args, **kwargs: {"status": "not_assessed", "findings": []})
+    monkeypatch.setattr(mod, "_completed_semantic_source", lambda *args: {"status": "not_assessed", "findings": [], "target_date": None})
+    monkeypatch.setattr(mod, "_current_semantic_owners", lambda *args: set())
+    monkeypatch.setattr(policy_generation_contract, "observations", lambda *args, **kwargs: [])
+    monkeypatch.setattr(policy_generation_contract, "retirement_dispositions", lambda *args, **kwargs: [])
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.details["submission_bottleneck_monitor_status"] == "pending_first_current_observer"
+    assert result.details["submission_bottleneck_monitor_current_observation_verified"] is False
+    assert result.severity == "warning"
+    assert "pending" in result.summary
+    prior = DetectionResult(detector_id="artifact_freshness", category="artifact", severity="fail", summary="prior partial")
+    state = {}
+    assert len(list(iter_daemon_alert_events([prior], state, target_date="2026-10-14"))) == 1
+    assert list(iter_daemon_alert_events([result], state, target_date="2026-10-14")) == []
+    assert "artifact_freshness" in state
+
+
+def test_current_observer_generation_requires_exact_selector_and_code(tmp_path, monkeypatch):
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    mod, root, now, path, report, tp, transition, sp, selection = _startup_observer_fixture(tmp_path, monkeypatch)
+    code_path = Path(selection["release_root"]) / "src/engine/monitoring/submission_bottleneck_monitor.py"
+    code_path.parent.mkdir(parents=True); code_path.write_bytes(b"reviewed immutable observer\n")
+    code = dict(release_root=selection["release_root"], git_commit=selection["git_commit"],
+                observer_code_sha256=hashlib.sha256(code_path.read_bytes()).hexdigest())
+    monkeypatch.setattr(monitor, "_observer_code_identity", lambda: dict(code))
+    started = datetime.fromisoformat("2026-10-14T14:41:00+09:00")
+    original = monitor._observer_generation_snapshot(root, run_id=report["run_id"], target_date=report["date"], started_at=started)
+    generation = monitor._finish_observer_generation(original, root, completed_at=started + timedelta(seconds=15))
+    payload = {**report, "as_of": started.isoformat(), "semantic_status": "validated", "observer_generation": generation}
+    assert mod._submission_observer_generation_issue(payload, root) is None
+    generation["sha256"] = "0" * 64
+    assert mod._submission_observer_generation_issue(payload, root) == "observer_generation_invalid"
+    generation["sha256"] = monitor._observer_seal(generation)
+    code_path.write_bytes(b"mutated observer\n")
+    assert mod._submission_observer_generation_issue(payload, root) == "observer_generation_code_mismatch"
+    sp.write_text(json.dumps({**selection, "actual_pid_consumed": False}))
+    assert mod._submission_observer_generation_issue(payload, root) == "observer_generation_not_current"
+
+
+@pytest.mark.parametrize("which", ["report", "selector", "transition"])
+def test_observer_pending_metadata_fifo_is_bounded_and_never_pending(tmp_path, monkeypatch, which):
+    import multiprocessing
+    fixture = _startup_observer_fixture(tmp_path, monkeypatch)
+    mod, root, now, report, _, transition, _, selector, _ = fixture
+    path = {"report": report, "selector": selector, "transition": transition}[which]
+    path.unlink(); os.mkfifo(path)
+    context = multiprocessing.get_context("fork"); queue = context.Queue()
+    def attempt():
+        queue.put(mod._submission_observer_transition_pending(root, report, now, max_staleness_sec=600))
+    child = context.Process(target=attempt); child.start(); child.join(timeout=2)
+    if child.is_alive():
+        child.terminate(); child.join(timeout=2)
+        pytest.fail("observer detector blocked on FIFO")
+    assert queue.get(timeout=1) is None
+    assert path.is_fifo()
+
+
+@pytest.mark.parametrize("encoded", [b'{"x":1,"x":2}', b'{"x":NaN}', b'{"x":Infinity}', b'{"x":1e999}', b'[]'])
+def test_new_observer_metadata_reader_rejects_non_strict_json(tmp_path, encoded):
+    import src.engine.error_detectors.artifact_freshness as mod
+    path = tmp_path / "metadata.json"; path.write_bytes(encoded)
+    with pytest.raises(ValueError): mod._observer_small_object(path)
+
+
+def test_observer_pending_malformed_pid_cannot_reach_proc_path(tmp_path, monkeypatch):
+    mod, root, now, report, _, tp, transition, sp, selection = _startup_observer_fixture(tmp_path, monkeypatch)
+    selection["actual_pid_receipt"]["pid"] = "../../tmp/not-a-pid"
+    transition["successor_identity"]["pid"] = "../../tmp/not-a-pid"
+    sp.write_text(json.dumps(selection)); tp.write_text(json.dumps(transition))
+    monkeypatch.setattr(mod, "_observer_live_identity", lambda *args: pytest.fail("malformed PID reached proc lookup"))
+    assert mod._submission_observer_transition_pending(root, report, now, max_staleness_sec=600) is None
+
+
+def test_actual_artifact_check_and_status_reader_do_not_open_fifo(tmp_path, monkeypatch):
+    import multiprocessing
+    fixture = _startup_observer_fixture(tmp_path, monkeypatch)
+    mod, root, now, report, *_ = fixture
+    report.unlink(); os.mkfifo(report)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", root)
+    monkeypatch.setattr(mod, "ARTIFACT_REGISTRY", [r for r in ARTIFACT_REGISTRY if r["id"] == "submission_bottleneck_monitor"])
+    monkeypatch.setattr(mod, "is_krx_trading_day", lambda *args: True)
+    monkeypatch.setattr(mod, "load_installed_crontab", lambda: "")
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return now if tz else now.replace(tzinfo=None)
+    monkeypatch.setattr(mod, "datetime", Clock)
+    context = multiprocessing.get_context("fork"); queue = context.Queue()
+    def attempt():
+        status = mod.ArtifactFreshnessDetector._validate_json_status(
+            dict(id="submission_bottleneck_monitor", json_status_field="notification_status"), report, {})
+        outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+        queue.put((status, outcome.details["submission_bottleneck_monitor_status"]))
+    child = context.Process(target=attempt); child.start(); child.join(timeout=2)
+    if child.is_alive():
+        child.terminate(); child.join(timeout=2)
+        pytest.fail("artifact check blocked before safe observer reader")
+    error, status = queue.get(timeout=1)
+    assert "regular_file_required" in error and status == "fail"
+    assert report.is_fifo()

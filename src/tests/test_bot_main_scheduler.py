@@ -4,8 +4,100 @@ import threading
 import time
 from datetime import datetime
 from types import SimpleNamespace
+import pytest
 
 import src.bot_main as bot_main
+
+
+def test_first_health_waits_for_current_consumption_without_blocking_main_engine(monkeypatch):
+    import src.utils.logger as logger
+    ready = threading.Event()
+    visited, heartbeats, logs = [], [], []
+    clock = [10.]
+    def check(identity):
+        visited.append('check')
+        return dict(status='ready' if ready.is_set() else 'pending')
+    def wait(seconds):
+        # The first sweep owns a wait, not Main engine initialization.
+        visited.append('engine_started')
+        ready.set()
+        clock[0] += seconds
+    monkeypatch.setattr(logger, 'log_info', logs.append)
+    result = bot_main._await_startup_consumption(dict(process_started_monotonic=0.),
+        check=check, monotonic=lambda: clock[0], wait=wait, heartbeat=lambda: heartbeats.append(clock[0]))
+    assert result['status'] == 'ready' and visited == ['check', 'engine_started', 'check']
+    assert len(logs) == 1 and len(heartbeats) == 1
+
+
+def test_first_health_deadline_uses_original_process_start_and_keeps_heartbeat(monkeypatch):
+    import src.utils.logger as logger
+    clock, heartbeats, waits = [140.], [], []
+    monkeypatch.setattr(logger, 'log_info', lambda message: None)
+    def wait(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+    result = bot_main._await_startup_consumption(dict(process_started_monotonic=0.),
+        check=lambda identity: dict(status='pending'), monotonic=lambda: clock[0],
+        wait=wait, heartbeat=lambda: heartbeats.append(clock[0]))
+    assert result['status'] == 'failed' and result['reason'] == 'startup_consumption_deadline_expired'
+    assert sum(waits) == 10. and heartbeats == [140., 145., 150.]
+    assert result['waited_seconds'] == 10.
+
+
+def test_invalid_startup_receipt_does_not_wait_for_timeout():
+    result = bot_main._await_startup_consumption(dict(process_started_monotonic=0.),
+        check=lambda identity: dict(status='failed', reason='invalid_receipt'),
+        monotonic=lambda: 1., wait=lambda seconds: pytest.fail('invalid input must surface immediately'),
+        heartbeat=lambda: None)
+    assert result['reason'] == 'invalid_receipt' and result['waited_seconds'] == 0.
+
+
+def test_receipt_check_cannot_complete_ready_after_original_startup_deadline():
+    clock = [149.9]
+    def check(identity):
+        clock[0] = 150.01
+        return dict(status='ready')
+    result = bot_main._await_startup_consumption(dict(process_started_monotonic=0.),
+        check=check, monotonic=lambda: clock[0], heartbeat=lambda: None,
+        wait=lambda seconds: pytest.fail('no renewed startup wait'))
+    assert result['status'] == 'failed' and result['reason'] == 'startup_consumption_deadline_expired'
+
+
+def test_startup_failure_runs_real_full_checks_and_recovers_only_on_receipt(monkeypatch):
+    from src.engine.error_detectors.base import DetectionResult
+    import src.utils.logger as logger
+    reports, full_checks, alerts = [], [], []
+    class FakeEngine:
+        def __init__(self, **kwargs): assert kwargs == dict(dry_run=False, mode='full')
+        def run_all(self):
+            full_checks.append(True)
+            return [DetectionResult('process_health', 'system', 'pass', 'processes healthy'),
+                    DetectionResult('artifact_freshness', 'artifact', 'fail', 'real current partial')]
+        def build_report(self, results):
+            return dict(target_date='2026-10-14', summary_severity='fail', results=results)
+        def write_report(self, report): reports.append(report)
+    def stop_after_second(interval):
+        if len(reports) == 2: raise KeyboardInterrupt
+    monkeypatch.setattr(bot_main, 'ErrorDetectionEngine', FakeEngine)
+    monkeypatch.setattr(bot_main, '_await_startup_consumption', lambda identity: dict(
+        status='failed', reason='startup_consumption_deadline_expired'))
+    monkeypatch.setattr(bot_main, '_startup_consumption_check', lambda identity: dict(status='ready'))
+    monkeypatch.setattr(bot_main, 'write_heartbeat', lambda name: None)
+    monkeypatch.setattr(bot_main.time, 'sleep', stop_after_second)
+    monkeypatch.setattr(logger, 'log_error', lambda message: None)
+    monkeypatch.setattr(logger, 'log_info', lambda message: None)
+    with pytest.raises(KeyboardInterrupt):
+        bot_main.error_detection_loop(60, SimpleNamespace(publish=lambda *args: alerts.append(args)),
+                                      startup_identity={'fixture': True})
+    assert len(full_checks) == 2
+    assert reports[0]['results'][0].severity == 'fail'
+    assert reports[0]['results'][0].details['startup_consumption']['reason'] == 'startup_consumption_deadline_expired'
+    assert reports[1]['results'][0].severity == 'pass'
+    assert all(report['results'][1].summary == 'real current partial' for report in reports)
+    assert all(report['results'][1].severity == 'fail' for report in reports)
+    assert reports[1]['startup_consumption']['status'] == 'ready'
+    assert all(datetime.fromisoformat(report['health_sweep_started_at_kst']).utcoffset().total_seconds() == 9 * 3600
+               for report in reports)
 
 
 def test_monitor_archive_defers_live_fact_sync_to_postclose(monkeypatch, tmp_path):
