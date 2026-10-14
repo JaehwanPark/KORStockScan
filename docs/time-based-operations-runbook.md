@@ -1099,6 +1099,12 @@ KST 21:40~익일 05:40의 시간별 최대 9회(UTC host 12:40~20:40), 21:40~06:
 
 마지막 소비는 `data/report/main_market_weakness_research/night_summary.json`이다. immutable 일별 source manifest/daily/terminal, 누적 comparison/manifest, notification disposition, supervisor attempt receipt를 단방향 참조한다. 계산 완료·원천 결손·비적격·미설치·자원 defer·실패·배송 불확실을 구분한다. late 연구는 기존 봉인된 controller/summary/checklist를 재생성하지 않는다. 첫 세대는 cutpoint 고정, 다음 자연 자료부터 안내 비교이며 실제 정책 적용은 없다. mixed payload writer는 검증된 직전 구간만 이어가도록 수리했으며 기존 누락 행은 소급 생성하지 않고 미평가/U로 보존한다. root 설치 시 연구 namespace와 설정은 실제 cron 사용자 소유로 만들고 등록 재조회까지 검증한다.
 
+[10/14 원천 연결 수리](audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md)의 후속 배치에서는 installer를 같은 사용자로 재호출해 code/calendar만 재결속한다. `--notify-enabled` 미지정은 기존 notify 설정을 보존하며 최초 설치만 false다. 기존 enabled/설치 시각·원천일/초기 selected release/source floor와 일별/후보/outbox 이력을 유지하고 새 rebind 시각·release·code를 별도로 기록한다. 설치 재조회 실패는 원 cron/config 복구와 재조회 성공까지 확인하며 새 설치 성공으로 기록하지 않는다. 이번 작업본 수리 자체는 설치 실행 영수증이 아니다.
+
+plain/gzip은 날짜별 하나의 논리 원천으로 읽으며 충돌/CRC/해제 크기·필수 필드 결손은 source gap이다. 무재개 gzip은 회당 잔여 예산 안에 EOF/CRC/hash 확인을 마쳐야 하며 중단된 자기 staging을 폐기하고 그 세대를 건너뛴다. 일별 완료 이후의 누적/알림은 `phase.json`과 후보 계산 checkpoint에서 이어간다. `night_summary.json.latest_attempt`와 `last_completed_computation.json`을 분리해 최신 defer가 원 계산을 덮지 않도록 한다. 복구 시 이미 보관된 날짜는 후보 고정 cutoff에 포함하고 이후 새 자연 자료만 전향 비교다. 2회 약세/3회 회복 확인 latch의 실제 receipt와 장후 재구성을 구분하며 Main/보조 입력·주문은 바꾸지 않는다. 기계 numeric 역할/정의가 없거나 완전 확인점 재생 원천이 없으면 해당 capability를 명시하고 임의 숫자를 만들지 않는다.
+
+장후 누적 비교에 `pending_source_dates`가 있으면 기존 알림 상태를 그대로 두고 재개를 기다린다. 비교는 완료·미완료 날짜의 cursor 상태를 함께 결속하므로 새 재처리 날짜가 생긴 뒤 과거 비교를 발송하지 않는다. immutable comparison 저장 후 manifest가 없는 중단은 동일 비교로 handoff를 복구한다. projection 저장 오류는 원천 결손 완료가 아닌 defer이며, plain은 마지막 durable cursor에서 재시도하고 gzip은 위 무재개 계약을 따른다. 현재 지원 필터의 알림은 제외>0·추가=0만 허용한다. 완전 확인점 재생은 producer 부재로 selection/알림 모두 미지원이며, 보류된 정정/철회도 매번 현행 비교와 다시 대사한다.
+
 ## 야간 시장약세 연구 예약 계약 보완
 
 예약 소유자의 exact command·시간·중복·설치 코드 SHA와 Main 장전 준비 calendar를 검증한다. 다른 설치기가 추가한 행에 따른 크론 내 위치 변경은 결손이 아니다. 선택 릴리스의 wrapper는 기존 owned-log writer로 `logs/main_market_weakness_research_cron.log`에 성공·보류·실패 결과를 남긴다. 연구의 야간 시간·자원/호출 예산·알림 설정과 report-only 권한은 기존 계약을 유지한다. 최종화 05:35 예약은 06:00 선행 마감·06:50 종료·07:20 스캐너·07:35 PREOPEN·07:55 Main 계약을 유지하며 05:00 구 marker는 설치 migration 입력으로만 허용한다.

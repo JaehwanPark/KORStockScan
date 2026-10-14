@@ -76,8 +76,9 @@ def test_crash_after_partition_does_not_advance_cursor(tmp_path, monkeypatch):
         original(path, value, **kwargs)
 
     monkeypatch.setattr(A, "atomic", crash)
-    with pytest.raises(OSError):
+    with pytest.raises(A.Deferred, match="projection_commit_failed") as error:
         run_date(data)
+    assert isinstance(error.value.__cause__, OSError)
     assert not (A.namespace(data) / DAY / "cursor.json").exists()
     monkeypatch.setattr(A, "atomic", original)
     assert run_date(data)["delta"] == 1
@@ -374,11 +375,16 @@ def test_installed_calendar_rejects_actual_owner_or_binding_drift(tmp_path, monk
     config = dict(uid=os.geteuid(), installation_code_sha256=A.code_hash(),
                   cron_zone="Asia/Seoul", workspace=str(tmp_path),
                   **A.calendar_signature(base, "Asia/Seoul"))
-    if change == "duplicate": installed += installed.splitlines()[-1] + "\n"
-    elif change == "time": installed = installed.replace("40 0-5", "41 0-5")
-    elif change == "command": installed = installed.replace("run_main_market_weakness_research_postclose.sh", "unexpected.sh")
-    elif change == "main_time": installed = installed.replace("35 7", "30 7")
-    else: config["installation_code_sha256"] = "changed"
+    if change == "duplicate":
+        installed += installed.splitlines()[-1] + "\n"
+    elif change == "time":
+        installed = installed.replace("40 0-5", "41 0-5")
+    elif change == "command":
+        installed = installed.replace("run_main_market_weakness_research_postclose.sh", "unexpected.sh")
+    elif change == "main_time":
+        installed = installed.replace("35 7", "30 7")
+    else:
+        config["installation_code_sha256"] = "changed"
     monkeypatch.setattr(A, "host_cron_zone", lambda: "Asia/Seoul")
     monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=installed))
     assert not A.verify_installed_calendar(config)

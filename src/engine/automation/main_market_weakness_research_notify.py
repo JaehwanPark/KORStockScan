@@ -20,6 +20,20 @@ def valid_message_id(value):
 
 
 def advisory_eligible(c):
+    definition = c.get("definition") or {}
+    kind = definition.get("kind")
+    if kind not in {
+        "post_auxiliary_withhold_cf",
+        "machine_confirmation_filter_cf",
+    }:
+        return False
+    if kind == "machine_confirmation_filter_cf":
+        contract = definition.get("axis_contract") or {}
+        if contract.get("verified") is not True or contract.get("role") not in {
+            "baseline_prior",
+            "bounded_tunable",
+        }:
+            return False
     values = [
         c.get("delta_raw_win_rate"),
         c.get("empirical_lower_5pct_delta"),
@@ -35,6 +49,7 @@ def advisory_eligible(c):
         and c.get("scope_winner") is True
         and c.get("comparison_complete") is True
         and c.get("excluded_opportunities", 0) > 0
+        and c.get("added_opportunities") == 0
         and c.get("bootstrap_valid_iterations") == 1000
         and c.get("leave_date_delta")
         and c.get("leave_episode_delta")
@@ -43,13 +58,48 @@ def advisory_eligible(c):
     )
 
 
+def recommendation_meaning(candidate):
+    definition = dict(candidate["definition"])
+    scope = dict(candidate["scope"])
+    if definition.get("scope_parent_machine_payload_sha256"):
+        definition.pop("parent_hash", None)
+        scope.pop("machine_hash", None)
+        if definition.get("auxiliary_binding"):
+            definition.pop("auxiliary_hash", None)
+            scope.pop("auxiliary_hash", None)
+    return dict(
+        admin_scope="configured_admin_only",
+        scope=scope,
+        adjustment=definition,
+    )
+
+
 def recommendation_id(candidate):
-    return R.digest(
-        dict(
-            admin_scope="configured_admin_only",
-            scope=candidate["scope"],
-            adjustment=candidate["definition"],
+    return R.digest(recommendation_meaning(candidate))
+
+
+def winner_group(candidate):
+    definition = candidate["definition"]
+    if definition.get("scope_parent_machine_payload_sha256"):
+        meaning = recommendation_meaning(candidate)
+        return R.digest(
+            dict(
+                scope=meaning["scope"],
+                kind=definition["kind"],
+                policy_scope=definition.get("policy_scope"),
+                parent_payload=definition["scope_parent_machine_payload_sha256"],
+                cohort_contract=definition.get("cohort_contract"),
+                auxiliary_binding=(
+                    definition.get("auxiliary_binding")
+                    if definition["kind"] == "post_auxiliary_withhold_cf"
+                    else None
+                ),
+                weakness_basis=definition.get("weakness_basis"),
+                evaluation_mode=definition.get("evaluation_mode", definition["kind"]),
+            )
         )
+    return candidate.get("winner_group") or R.digest(
+        [candidate["scope_key"], definition["kind"]]
     )
 
 
@@ -71,13 +121,33 @@ def preview(candidate, transition="recommendation"):
         for g in ("A", "B", "C", "U")
     }
     lower = candidate.get("empirical_lower_5pct_delta")
+    kind = d["kind"]
+    meaning = (
+        "실제 보조 PASS 이후 제출 제외 CF"
+        if kind == "post_auxiliary_withhold_cf"
+        else (
+            "기계 단독 원 확인점 필터 CF"
+            if kind == "machine_confirmation_filter_cf"
+            else "기계 단독 확인점 재생 CF; 새 보조/주문 성과 미평가"
+        )
+    )
+    adjustment = (
+        f"{d['axis']} {d['before']} → < {d['after']:.4f} {d['unit']} 시 이번 기회 보류"
+        if kind == "post_auxiliary_withhold_cf"
+        else f"{d['axis']} {d['before']} → {d['after']} {d['unit']} ({d['operator']})"
+    )
     return "\n".join(
         [
             "Main 약세 대응 연구 — 조정 후보 발견 / 자동 적용 없음",
             f"대상: {s.get('listing_market')} {s.get('symbol')} / {s.get('session')} / {s.get('route')}",
-            f"범위: 실제 보조 PASS 이후 제출 제외 CF / {s.get('decision_origin')}",
+            f"범위: {meaning} / {s.get('decision_origin')}",
+            (
+                "약세 기준: 연속 확인 latch의 장후 재구성; 실제 Main 소비를 뜻하지 않음"
+                if d.get("weakness_basis") == "confirmed_latch"
+                else "약세 기준: 과거 raw 관찰 진단"
+            ),
             f"약세 조건: 해당 시장 지수 <= {d['weakness_index_max_pct']:+.3f}%",
-            f"검토할 조정: {d['axis']} {d['before']} → < {d['after']:.4f} {d['unit']} 시 이번 기회 보류",
+            f"검토할 조정: {adjustment}",
             f"누적 비교: {period}; 약세 구간 {candidate['episode_count']}개",
             f"W/F/U: {b['W']}/{b['F']}/{b['U']} → {c['W']}/{c['F']}/{c['U']}",
             f"raw 승률: {b['raw_win_rate']*100:.2f}% → {c['raw_win_rate']*100:.2f}% (Δ {candidate['delta_raw_win_rate']*100:+.2f}%p)",
@@ -85,13 +155,26 @@ def preview(candidate, transition="recommendation"):
             f"제외/추가 {candidate['excluded_opportunities']}/{candidate['added_opportunities']}, 놓친 W {candidate['missed_W']}, 제거한 F {candidate['removed_F']}",
             f"근거 품질: {json.dumps(grades,ensure_ascii=True)}",
             "근사 연결 연구 추정; 60/180초 공통 연결·U·날짜/구간 제외 민감도 확인. 실제 체결/수익 보장이 아님.",
-            f"기계 parent {d['parent_hash']}; 보조 component {d['auxiliary_hash']}",
+            f"기계 parent {d['parent_hash']}; 보조 component {d.get('auxiliary_hash', 'not_required_machine_only')}",
             f"근거 세대 {candidate['generation']}; 후보 ID {recommendation_id(candidate)}",
         ]
     )
 
 
 def current_parent_matches(data_root, candidate):
+    from src.engine.automation.main_market_weakness_research import stat_receipt
+
+    pointer = Path(data_root) / "runtime/mechanistic_entry_policy/current.json"
+    try:
+        before = stat_receipt(pointer) if pointer.exists() else None
+        valid = _current_parent_matches(data_root, candidate)
+        after = stat_receipt(pointer) if pointer.exists() else None
+        return valid and before == after
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _current_parent_matches(data_root, candidate):
     from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
 
     try:
@@ -109,7 +192,9 @@ def current_parent_matches(data_root, candidate):
     if (
         scope
         and d.get("scope_parent_machine_payload_sha256")
-        and d.get("auxiliary_binding")
+        and (
+            d.get("auxiliary_binding") or d.get("kind") != "post_auxiliary_withhold_cf"
+        )
     ):
         key, route = scope.rsplit("|", 1)
         machine = (
@@ -128,6 +213,28 @@ def current_parent_matches(data_root, candidate):
             "scope_parent_machine_payload_sha256"
         ] or machine.get("payload_sha256") != R.digest(machine.get("payload")):
             return False
+        contract = d.get("cohort_contract")
+        if contract:
+            kernels = {
+                k: v
+                for k, v in family.get("contract_file_sha256", {}).items()
+                if Path(k).name
+                in {
+                    "continuous_reversal.py",
+                    "reversal_extended_state.py",
+                    "reversal_registered_state.py",
+                    "reversal_path_state.py",
+                }
+            }
+            if (
+                contract.get("verified") is not True
+                or contract.get("feature_kernel") != kernels
+                or contract.get("machine_payload_sha256") != machine["payload_sha256"]
+                or contract.get("label_contract") != family.get("label_contract")
+            ):
+                return False
+        if d.get("kind") != "post_auxiliary_withhold_cf":
+            return True
         payload = auxiliary.get("payload", {})
         if auxiliary.get("payload_sha256") != R.digest(payload):
             return False
@@ -225,6 +332,17 @@ def reconcile(
         comparison.get(k) != v for k, v in R.AUTH.items()
     ):
         raise ValueError("notification_comparison_authority_invalid")
+    if (
+        comparison.get("migration_pending")
+        or comparison.get("pending_source_dates")
+        or comparison.get("comparison_complete") is False
+    ):
+        return dict(
+            status="deferred_migration_or_comparison",
+            eligible_candidates=0,
+            dispositions=[],
+            **R.AUTH,
+        )
     with lock(root / "outbox/outbox.lock"):
         path = root / "outbox/state.json"
         state = read_json(
@@ -241,20 +359,40 @@ def reconcile(
                 ] = "delivery_uncertain"
         atomic(path, state)
         candidates = comparison.get("comparisons", [])
-        winners = {recommendation_id(c): c for c in candidates if advisory_eligible(c)}
-        current_scopes = {c["scope_key"] for c in candidates}
-        winning_scopes = {c["scope_key"] for c in winners.values()}
+        aliases = {
+            recommendation_id(r["candidate"]): rid
+            for rid, r in state["recommendations"].items()
+        }
+        winners = {
+            aliases.get(recommendation_id(c), recommendation_id(c)): c
+            for c in candidates
+            if advisory_eligible(c)
+        }
+
+        def group(c):
+            return winner_group(c)
+
+        current_scopes = {group(c) for c in candidates}
+        winning_scopes = {group(c) for c in winners.values()}
+        current_invalidations = set()
         for rid, rec in state["recommendations"].items():
             if (
                 rec.get("status") != "sent"
                 or rid in winners
-                or rec["candidate"]["scope_key"] in winning_scopes
+                or group(rec["candidate"]) in winning_scopes
             ):
                 continue
-            scope = rec["candidate"]["scope_key"]
-            source_invalid = scope not in current_scopes or any(
-                c["scope_key"] == scope and c["status"] == "source_gap"
-                for c in candidates
+            scope = group(rec["candidate"])
+            source_invalid = (
+                scope not in current_scopes
+                or any(
+                    group(c) == scope and c["status"] == "source_gap"
+                    for c in candidates
+                )
+                or bool(
+                    set(rec["candidate"].get("source_dates", []))
+                    & set(comparison.get("invalidated_source_dates", []))
+                )
             )
             transition = "correction" if source_invalid else "withdrawal"
             prior = rec.get("sent_event")
@@ -264,6 +402,7 @@ def reconcile(
             ):
                 continue
             key = R.digest([rid, transition, prior])
+            current_invalidations.add(key)
             state["events"].setdefault(
                 key,
                 dict(
@@ -279,6 +418,8 @@ def reconcile(
                     ),
                 ),
             )
+            if state["events"][key]["status"] == "suppressed":
+                state["events"][key]["status"] = "prepared"
         for rid, c in winners.items():
             rec = state["recommendations"].get(rid)
             if rec and rec.get("status") in {
@@ -330,7 +471,7 @@ def reconcile(
                     continue
             else:
                 prior = state["events"].get(event.get("previous_sent_event"), {})
-                if rid in winners:
+                if key not in current_invalidations:
                     event.update(
                         status="suppressed", reason="invalidation_no_longer_current"
                     )
@@ -397,8 +538,7 @@ def reconcile(
             old_sent = [
                 r["sent_event"]
                 for r in state["recommendations"].values()
-                if r.get("status") == "sent"
-                and r["candidate"]["scope_key"] == c["scope_key"]
+                if r.get("status") == "sent" and group(r["candidate"]) == group(c)
             ]
             if old_sent and event["transition"] == "recommendation":
                 message += (
@@ -438,7 +578,7 @@ def reconcile(
                         if (
                             old_id != rid
                             and old.get("status") == "sent"
-                            and old["candidate"]["scope_key"] == c["scope_key"]
+                            and group(old["candidate"]) == group(c)
                         ):
                             old.update(status="superseded", superseded_by=rid)
                 else:
