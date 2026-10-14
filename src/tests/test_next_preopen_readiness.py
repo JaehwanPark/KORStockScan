@@ -269,3 +269,214 @@ def test_startup_requires_today_success_from_same_release(monkeypatch, tmp_path)
     receipt["status"] = "failed"
     _json(status, receipt)
     assert readiness.verify_preopen_completion(target, "a" * 40, now=now)["status"] == "fail"
+
+
+@pytest.fixture
+def stopped_rebind(tmp_path, monkeypatch):
+    """Exercise real file/lock/CAS guards with only native producer boundaries mocked."""
+    import copy
+    from types import SimpleNamespace
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.engine.automation import ordered_intraday_deploy as ordered
+    from src.engine.automation import postclose_summary_handoff as stages
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import continuous_reversal_policy_v6 as policy
+    source, target = '2026-10-14', '2026-10-15'
+    workspace = tmp_path / 'workspace'
+    data = workspace / 'data'
+    release = tmp_path / 'release'
+    release.mkdir(); (workspace / 'logs').mkdir(parents=True)
+    monkeypatch.chdir(release)
+    monkeypatch.setattr(readiness, '__file__', str(release / 'src/engine/automation/next_preopen_readiness.py'))
+    monkeypatch.setattr(readiness, 'DATA_DIR', data)
+    state = SimpleNamespace(now=datetime.fromisoformat(target + 'T00:01:00+09:00'),
+                            main=False, supervisor=False, closure=[], producer=[], writes=0,
+                            damage=None, origins=[], parent_calls=[])
+    class Clock:
+        @classmethod
+        def now(cls, tz): return state.now
+    monkeypatch.setattr(readiness, 'datetime', Clock)
+    monkeypatch.setattr(readiness, 'is_krx_trading_day', lambda d: d.weekday() < 5)
+    monkeypatch.setattr(router, 'selected_release', lambda w: (release, 'b' * 40))
+    def validate_release(workspace, value):
+        if state.damage == 'origin_identity': raise ValueError('original_release_commit_mismatch')
+        return Path(value['release_root']), value['git_commit']
+    monkeypatch.setattr(router, 'validate_release', validate_release)
+    monkeypatch.setattr(ordered, '_main_pids', lambda: [123] if state.main else [])
+    monkeypatch.setattr(ordered, '_session_absent', lambda: not state.supervisor)
+    monkeypatch.setattr(readiness, 'done_terminal_receipt_issues', lambda *a, **k: state.closure)
+    monkeypatch.setattr(stages, 'stage_receipt_issues', lambda *a, **k: state.producer)
+    root = native.root(data)
+    candidate = root / 'candidates' / ('policy_' + target + '.json')
+    pointer = root / 'current.json'
+    selection = data / 'runtime/runtime_release_selection.json'
+    controller = data / 'report/postclose_done_controller' / ('postclose_done_controller_' + source + '.json')
+    strict = data / 'report/threshold_cycle_postclose_verification/attempts' / source / 'strict.json'
+    isolation = workspace / 'tmp/postclose_bot_isolation.json'
+    hold = data / 'runtime/operator_startup_hold.json'
+    family = dict(schema=policy.SCHEMA, source_date=source, publication_date=source,
+                  effective_date=target, effective_mode='next_session', release_commit='a' * 40,
+                  parent_bundle_sha256='d' * 64, machine_cells={'cell': {'routes': {'KRX': {'payload': {'branch': 'preserved'}}}}},
+                  auxiliary_cells={'cell': {'routes': {'KRX': {'payload': {'arm': 'preserved'}}}}},
+                  code_refresh={'source_bundle_sha256': 'e' * 64, 'older_proof': 'preserve_in_original'})
+    original = dict(bundle_sha256='a' * 64, source_date=source, publication_date=source,
+                    target_date=target, continuous_reversal=family, previous_bundle_sha256='d' * 64)
+    _json(candidate, original)
+    generation = root / 'generations' / ('a' * 64 + '.json')
+    _json(generation, original)
+    _json(pointer, dict(bundle_sha256='d' * 64, effective_date=source))
+    _json(selection, dict(approved_by='user', approval_scope='after_postclose_deploy_for_next_regular_start', actual_pid_consumed=False))
+    (data / 'runtime/runtime_release_set.lock').touch()
+    _json(strict, {'status': 'pass', 'source': source})
+    _json(controller, {'verification_attempt_path': str(strict), 'verification_attempt_sha256': readiness._sha(strict)})
+    _json(isolation, dict(target_date=source, active=True, action='stop', session='bot'))
+    _json(hold, {'owner': 'operator', 'reason': 'keep unchanged'})
+    stage_files = [stages.stage_path(data / 'report', source, name) for name in stages.active_stage_names(source)]
+    for path in stage_files: _json(path, {'status': 'succeeded'})
+    monkeypatch.setattr(native, 'validate', lambda *a, **k: None)
+    def validate_sources(bundle, data_root, *, historical_code_root=None):
+        assert bundle == original
+        state.origins.append(historical_code_root)
+        if state.damage == 'origin': raise ValueError('unattested_original_source')
+    monkeypatch.setattr(native, '_validate_bundle_sources', validate_sources)
+    def parent(data_root, day, **kwargs):
+        state.parent_calls.append(kwargs)
+        return {'bundle_sha256': 'e' * 64 if state.damage == 'parent' else 'd' * 64}
+    monkeypatch.setattr(policy, '_attested_activation_parent', parent)
+    def refresh(bundle, data_root, *, release_commit, proof):
+        state.writes += 1
+        result = copy.deepcopy(bundle)
+        result['bundle_sha256'] = 'c' * 64
+        result['continuous_reversal'].update(release_commit=release_commit, code_refresh=proof)
+        if state.damage == 'behavior':
+            result['continuous_reversal']['auxiliary_cells']['cell']['routes']['KRX']['payload']['arm'] = 'changed'
+        if state.damage == 'selection': _json(selection, {'changed': True})
+        if state.damage == 'controller': _json(controller, {'changed': True})
+        if state.damage == 'generation': _json(generation, {'changed': True})
+        if state.damage == 'candidate': _json(candidate, {'changed': True})
+        if state.damage == 'current': _json(pointer, {'changed': True})
+        if state.damage == 'hold': _json(hold, {'changed': True})
+        if state.damage in {'lock_inode', 'release_lock_inode', 'producer_lock_inode', 'publisher_lock_inode'}:
+            lock = {'lock_inode': workspace / 'logs/runtime_policy_preopen.lock',
+                    'release_lock_inode': data / 'runtime/runtime_release_set.lock',
+                    'producer_lock_inode': stage_files[0].with_suffix('.lock'),
+                    'publisher_lock_inode': root / 'publisher.lock'}[state.damage]
+            lock.unlink(); lock.touch()
+        if state.damage == 'cutoff': state.now = datetime.fromisoformat(target + 'T07:35:00+09:00')
+        return result
+    monkeypatch.setattr(policy, '_write_refreshed_bundle', refresh)
+    args = dict(publication_date=source, expected_bundle_sha256='a' * 64,
+                expected_candidate_sha256=readiness._sha(candidate),
+                expected_current_pointer_sha256=readiness._sha(pointer), expected_selection_sha256=readiness._sha(selection),
+                origin_root=tmp_path / 'origin', activation_parent_origin_root=tmp_path / 'parent-origin',
+                activation_parent_origin_commit='f' * 40, release_commit='b' * 40,
+                reason='reviewed same-policy stopped preparation', confirm=policy.CODE_REFRESH_AUTHORITY)
+    state.call = lambda **overrides: readiness.stopped_postclose_candidate_rebind(source, target, **(args | overrides))
+    state.paths = dict(candidate=candidate, current=pointer, generation=generation, selection=selection,
+                       controller=controller, strict=strict, isolation=isolation, hold=hold)
+    state.data, state.workspace, state.original, state.args = data, workspace, original, args
+    return state
+
+
+def test_stopped_rebind_preserves_policy_original_proof_sources_and_current(stopped_rebind):
+    s = stopped_rebind
+    before = {name: path.read_bytes() for name, path in s.paths.items()}
+    successor = s.call()
+    assert s.writes == 1
+    assert s.origins == [s.args['origin_root']]
+    assert s.parent_calls == [{'origin_root': s.args['activation_parent_origin_root'], 'origin_commit': 'f' * 40}]
+    assert successor['continuous_reversal']['code_refresh']['source_bundle_sha256'] == s.original['bundle_sha256']
+    assert json.loads(s.paths['generation'].read_text())['continuous_reversal']['code_refresh'] == s.original['continuous_reversal']['code_refresh']
+    assert all(path.read_bytes() == before[name] for name, path in s.paths.items() if name != 'candidate')
+    assert json.loads(s.paths['candidate'].read_text()) == successor
+    proof = successor['continuous_reversal']['code_refresh']['stopped_postclose_preparation']
+    assert proof['source_date'] == '2026-10-14' and proof['target_date'] == '2026-10-15'
+    assert proof['source_sha256'][str(s.paths['controller'])] == hashlib.sha256(before['controller']).hexdigest()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('confirm', 'unapproved'), ('reason', ''), ('publication_date', '2026-10-15'),
+    ('expected_candidate_sha256', '0' * 64), ('expected_bundle_sha256', '0' * 64),
+    ('expected_current_pointer_sha256', '0' * 64), ('expected_selection_sha256', '0' * 64),
+    ('release_commit', 'a' * 40), ('activation_parent_origin_commit', 'bad'),
+])
+def test_stopped_rebind_authority_and_exact_cas_required(stopped_rebind, field, value):
+    s = stopped_rebind; before = s.paths['candidate'].read_bytes()
+    with pytest.raises(ValueError): s.call(**{field: value})
+    assert s.writes == 0 and s.paths['candidate'].read_bytes() == before
+
+
+@pytest.mark.parametrize('instant,allowed', [
+    ('2026-10-14T23:59:59+09:00', False), ('2026-10-15T00:00:00+09:00', True),
+    ('2026-10-15T07:34:59+09:00', True), ('2026-10-15T07:35:00+09:00', False),
+    ('2026-10-16T00:00:00+09:00', False), ('2026-10-15T00:00:00', False),
+])
+def test_stopped_rebind_real_clock_window(stopped_rebind, instant, allowed):
+    s = stopped_rebind; s.now = datetime.fromisoformat(instant)
+    if allowed: assert s.call()['bundle_sha256'] == 'c' * 64
+    else:
+        with pytest.raises(ValueError, match='window_closed'): s.call()
+        assert s.writes == 0
+
+
+@pytest.mark.parametrize('fault', ['main', 'supervisor', 'closure', 'producer', 'restart', 'env', 'preopen', 'isolation', 'activated', 'source_date', 'mode', 'parent_hash', 'selected_pid', 'selected_transition', 'lock', 'release_lock_absent', 'release_lock_symlink'])
+def test_stopped_rebind_refuses_running_unclosed_or_activated_state(stopped_rebind, fault):
+    s = stopped_rebind; before = s.paths['candidate'].read_bytes()
+    lock = None
+    if fault in {'main', 'supervisor'}: setattr(s, fault, True)
+    elif fault in {'closure', 'producer'}: setattr(s, fault, ['not_closed'])
+    elif fault == 'restart': (s.workspace / 'restart.flag').touch()
+    elif fault == 'env': _json(s.data / 'runtime/policy_bootstrap/runtime_policy_bootstrap_2026-10-15.env', {})
+    elif fault == 'preopen': _json(s.data / 'report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-10-15.status.json', {'status': 'failed'})
+    elif fault == 'isolation': _json(s.paths['isolation'], {'active': False})
+    elif fault == 'activated':
+        _json(s.paths['current'], {'bundle_sha256': 'd' * 64, 'effective_date': '2026-10-15'})
+        s.args['expected_current_pointer_sha256'] = readiness._sha(s.paths['current'])
+    elif fault in {'source_date', 'mode', 'parent_hash'}:
+        value = json.loads(before)
+        key, bad = {'source_date': ('source_date', '2026-10-13'), 'mode': ('effective_mode', 'intraday'), 'parent_hash': ('parent_bundle_sha256', 'e' * 64)}[fault]
+        value['continuous_reversal'][key] = bad
+        _json(s.paths['candidate'], value); before = s.paths['candidate'].read_bytes()
+        s.args['expected_candidate_sha256'] = readiness._sha(s.paths['candidate'])
+    elif fault in {'selected_pid', 'selected_transition'}:
+        value = json.loads(s.paths['selection'].read_text())
+        value.update({'actual_pid_consumed': True} if fault == 'selected_pid' else {'deployment_transition': '/old'})
+        _json(s.paths['selection'], value); s.args['expected_selection_sha256'] = readiness._sha(s.paths['selection'])
+    elif fault == 'lock':
+        import fcntl
+        lock = (s.workspace / 'logs/runtime_policy_preopen.lock').open('a')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif fault.startswith('release_lock_'):
+        path = s.data / 'runtime/runtime_release_set.lock'
+        path.unlink()
+        if fault == 'release_lock_symlink': path.symlink_to(s.paths['hold'])
+    try:
+        with pytest.raises((ValueError, OSError)): s.call()
+        assert s.writes == 0 and s.paths['candidate'].read_bytes() == before
+    finally:
+        if lock: lock.close()
+
+
+@pytest.mark.parametrize('damage', ['origin', 'origin_identity', 'parent', 'behavior', 'selection', 'controller', 'generation', 'candidate', 'current', 'hold', 'lock_inode', 'release_lock_inode', 'producer_lock_inode', 'publisher_lock_inode', 'cutoff'])
+def test_stopped_rebind_rechecks_native_authority_and_preserves_failed_cas(stopped_rebind, damage):
+    s = stopped_rebind; before = s.paths['candidate'].read_bytes(); s.damage = damage
+    with pytest.raises((ValueError, KeyError)): s.call()
+    # An independently changed candidate remains exactly the intervening value.
+    assert s.paths['candidate'].read_bytes() == (b'{"changed": true}\n' if damage == 'candidate' else before)
+    if damage in {'origin', 'origin_identity', 'parent'}: assert s.writes == 0
+
+
+def test_stopped_rebind_postpublication_clock_failure_discloses_committed_candidate(stopped_rebind, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    s = stopped_rebind
+    before = s.paths['current'].read_bytes()
+    publish = native._atomic_write_json
+    def boundary(path, value):
+        publish(path, value)
+        if path == s.paths['candidate']:
+            s.now = datetime.fromisoformat('2026-10-15T07:35:00+09:00')
+    monkeypatch.setattr(native, '_atomic_write_json', boundary)
+    with pytest.raises(ValueError, match='candidate_published_postcheck_failed:' + 'c' * 64):
+        s.call()
+    assert json.loads(s.paths['candidate'].read_text())['bundle_sha256'] == 'c' * 64
+    assert s.paths['current'].read_bytes() == before

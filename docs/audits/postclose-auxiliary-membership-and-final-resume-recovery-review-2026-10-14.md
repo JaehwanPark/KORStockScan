@@ -32,3 +32,9 @@ Implementation → self review → 보완 → re-review: 위 두 결함의 produ
 추가 source finding 구현→리뷰→보완→재리뷰 후 표적 시험83PASS(`test_main_market_source_consolidation`, 기존auxiliary/joint downstream), wrapper57PASS로 최종 관련140PASS다. 기존 code-refresh 반례 fixture에 selector/무영수증 문맥을 추가해 code mismatch 거부를 검증했다. 새 carry의 정상·source/인계/receipt/payload 거부와 원 current/report 불변을 검증했다. compile/bash/diff PASS다.
 
 이번 추가보완은 native33파일 중v6 source-only producer1개를 바꾸므로 이전parity를 새코드의 freshness로 쓰지 않는다. 새 baseline beca/candidate의128scope·76,800row·621hit·동일signal SHA·mismatch0, provider0/orderfalse를 확인했다. AST 비교로3개 postclose function만 변경·다른18함수 보존을 확인했다. 기존 machine code identity와 새 코드 identity가 다르므로 필요한 machine→auxiliary→summary/strict/controller를 재결속하고, 완료된 지연·라벨·수량·exit/stop 계산은 재실행하지 않는다. 새 시행·준비·PID·경제성 결과는 전수 기록에서 별도 확인한다.
+
+## 최종 source 인계·다음 날짜 activation origin
+
+8a252a6e9 machine5385bc0d5e9347728fa6860c45062cfd와 auxiliary43ba962abcbc4cb59c20d893ba382824가 정상 종료했다. legacy native check도 통과해 재계산하지 않았다. 최종 resume의delay/stop 재검증 결손은 원 ledger/단계/로그를 보존하고, 동일원천의native source ledger 재봉인과해당 두단계만 재생성해 닫는다.
+
+10/15 후보e26cdfe0ac17075e8278551b40ab55d3a87eac6d25086f2d93becf0c5b7289c3는 정상 source14/target15지만 code_refresh/registration_code_transition이없다. 당일14 code handoff의expiry만으로15 activation의parent검증을 보장하지 않는다. 현재99c의원bd40c7f12 origin을 실제 원천검증으로attest했다. native stage_code_refresh의동일commit no-op을보존하면서 코드동일후속reviewed release의명시적next-session code refresh로원15후보·origin·current99c CAS·날짜·payload·예산을보존한다. 새계산/정책재선정/기동/주문권한은없다. source 원 candidate와 code refresh proof는 불변generation으로검증하며원PID나currentPointer를변경하지않는다.

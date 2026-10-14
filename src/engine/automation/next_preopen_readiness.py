@@ -9,9 +9,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import re
+import stat
 import subprocess
 import fcntl
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -30,6 +33,227 @@ PREPARED_DIR = DATA_DIR / "runtime" / "policy_bootstrap" / "prepared"
 PREOPEN_START = time(7, 35)
 RECOVERY_AUTHORITY = 'APPROVED_FAILED_PREOPEN_POLICY_PRESERVING_RECOVERY'
 _RECOVERY = ContextVar('failed_preopen_recovery', default=None)
+
+
+def stopped_postclose_candidate_rebind(
+    source_date: str, target_date: str, *, publication_date: str,
+    expected_bundle_sha256: str, expected_candidate_sha256: str,
+    expected_current_pointer_sha256: str, expected_selection_sha256: str,
+    origin_root: Path, activation_parent_origin_root: Path,
+    activation_parent_origin_commit: str, release_commit: str,
+    reason: str, confirm: str,
+) -> dict:
+    """Rebind an unchanged policy after midnight while Main remains stopped.
+
+    This owns release, PREOPEN, producer and publisher locks. Callers must not
+    hold those locks themselves. The normal policy publisher's future-only
+    and failed-PREOPEN contracts remain unchanged; no clock override is exposed.
+    """
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.engine.automation import ordered_intraday_deploy as ordered
+    from src.engine.automation.postclose_summary_handoff import (
+        active_stage_names, stage_path, stage_receipt_issues,
+    )
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import continuous_reversal_policy_v6 as policy
+
+    def require(ok, detail):
+        if not ok:
+            raise ValueError('stopped_postclose_rebind_' + detail)
+
+    def clock():
+        current = datetime.now(KST)
+        require(current.tzinfo is not None
+                and target_date == current.astimezone(KST).date().isoformat()
+                and is_krx_trading_day(current.date())
+                and current.time().replace(tzinfo=None) < PREOPEN_START,
+                'window_closed')
+        return current
+
+    def read(path):
+        path = Path(path)
+        before = path.lstat()
+        require(stat.S_ISREG(before.st_mode) and before.st_size <= 16 * 1024 * 1024,
+                'regular_bounded_receipt_required')
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                  value.st_mtime_ns, value.st_ctime_ns)
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+            require(identity(os.fstat(stream.fileno())) == identity(before), 'receipt_changed')
+            raw = stream.read(16 * 1024 * 1024 + 1)
+            require(identity(os.fstat(stream.fileno())) == identity(before), 'receipt_changed')
+        after = path.lstat()
+        require(stat.S_ISREG(after.st_mode) and identity(after) == identity(before)
+                and len(raw) == before.st_size, 'receipt_changed')
+        value = json.loads(raw)
+        require(isinstance(value, dict), 'receipt_object_required')
+        return value, raw
+
+    require(confirm == policy.CODE_REFRESH_AUTHORITY and bool(str(reason).strip()), 'authority_required')
+    for value in (expected_bundle_sha256, expected_candidate_sha256,
+                  expected_current_pointer_sha256, expected_selection_sha256):
+        require(isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value), 'digest_invalid')
+    for value in (release_commit, activation_parent_origin_commit):
+        require(isinstance(value, str) and re.fullmatch('[0-9a-f]{40}', value), 'commit_invalid')
+    require(date.fromisoformat(source_date).isoformat() == source_date
+            and publication_date == source_date
+            and source_date < target_date
+            and _next_trading_day(date.fromisoformat(source_date)).isoformat() == target_date,
+            'source_session_mismatch')
+    clock()
+    data = DATA_DIR.resolve()
+    workspace = data.parent
+    root = native.root(data)
+    candidate_path = root / 'candidates' / f'policy_{target_date}.json'
+    pointer_path = root / 'current.json'
+    selection_path = data / 'runtime/runtime_release_selection.json'
+    controller_path = data / 'report/postclose_done_controller' / f'postclose_done_controller_{source_date}.json'
+    isolation_path = workspace / 'tmp/postclose_bot_isolation.json'
+    hold_path = data / 'runtime/operator_startup_hold.json'
+    stages = active_stage_names(source_date)
+    frozen = {}
+    held_locks = []
+
+    def lock_identity(path):
+        value = path.lstat()
+        require(stat.S_ISREG(value.st_mode), 'lock_not_regular')
+        return value.st_dev, value.st_ino
+
+    def verify_locks():
+        for path, identity, handle in held_locks:
+            require(lock_identity(path) == identity, 'lock_replaced')
+            if handle is not None:
+                value = os.fstat(handle.fileno())
+                require((value.st_dev, value.st_ino) == identity, 'lock_replaced')
+
+    def bind(path, *, expected=None, optional=False):
+        path = Path(path)
+        if optional and not path.exists() and not path.is_symlink():
+            require(path not in frozen or frozen[path] is None, 'absent_custody_changed')
+            frozen[path] = None
+            return None
+        value, raw = read(path)
+        require(expected is None or hashlib.sha256(raw).hexdigest() == expected, 'generation_changed')
+        require(path not in frozen or frozen[path] == raw, 'frozen_receipt_changed')
+        frozen[path] = raw
+        return value
+
+    def guard():
+        clock()
+        verify_locks()
+        selected, commit = router.selected_release(workspace)
+        require(selected == Path(__file__).resolve().parents[3]
+                and selected == Path.cwd().resolve() and commit == release_commit,
+                'selected_release_changed')
+        selection = bind(selection_path, expected=expected_selection_sha256)
+        require(selection.get('approved_by') == 'user'
+                and selection.get('approval_scope') == 'after_postclose_deploy_for_next_regular_start'
+                and selection.get('actual_pid_consumed') is False
+                and not selection.get('deployment_transition') and not selection.get('actual_pid_receipt'),
+                'stopped_selection_required')
+        require(not ordered._main_pids() and ordered._session_absent(), 'main_or_supervisor_running')
+        restart = workspace / 'restart.flag'
+        env = data / 'runtime/policy_bootstrap' / f'runtime_policy_bootstrap_{target_date}.env'
+        require(not restart.exists() and not restart.is_symlink()
+                and not env.exists() and not env.is_symlink(), 'startup_or_live_env_present')
+        status_path = data / 'report/threshold_cycle_preopen_status' / f'threshold_cycle_preopen_{target_date}.status.json'
+        require(not status_path.exists() and not status_path.is_symlink(), 'preopen_already_attempted')
+        isolation = bind(isolation_path)
+        require(isolation.get('target_date') == source_date and isolation.get('active') is True
+                and isolation.get('action') == 'stop' and isolation.get('session') == 'bot', 'isolation_invalid')
+        bind(hold_path, optional=True)
+        pointer = bind(pointer_path, expected=expected_current_pointer_sha256)
+        require(pointer.get('effective_date') == source_date, 'parent_already_activated_or_wrong_session')
+        candidate = bind(candidate_path, expected=expected_candidate_sha256)
+        native.validate(candidate, target_date=target_date)
+        family = candidate.get('continuous_reversal') or {}
+        require(candidate.get('bundle_sha256') == expected_bundle_sha256
+                and family.get('schema') == policy.SCHEMA
+                and family.get('source_date') == source_date
+                and family.get('publication_date') == publication_date
+                and family.get('effective_date') == target_date
+                and family.get('effective_mode') == 'next_session'
+                and family.get('parent_bundle_sha256') == pointer.get('bundle_sha256')
+                and family.get('release_commit') != release_commit, 'candidate_contract_invalid')
+        controller = bind(controller_path)
+        require(not done_terminal_receipt_issues(controller_path, source_date, started_after_ns=0),
+                'whole_source_not_closed')
+        strict = Path(str(controller.get('verification_attempt_path') or ''))
+        bind(strict, expected=controller.get('verification_attempt_sha256'))
+        for stage in stages:
+            bind(stage_path(data / 'report', source_date, stage))
+            require(not stage_receipt_issues(data / 'report', source_date, stage), 'producer_not_closed:' + stage)
+        for path, raw in frozen.items():
+            if raw is None:
+                require(not path.exists() and not path.is_symlink(), 'absent_custody_changed')
+            else:
+                require(read(path)[1] == raw, 'frozen_receipt_changed')
+        clock()
+        return candidate, pointer
+
+    release_lock_path = data / 'runtime' / router.RELEASE_SET_LOCK
+    # A stopped managed release has already used this native lock. Requiring
+    # its existing inode also binds the router's non-yielded descriptor.
+    release_lock_before = lock_identity(release_lock_path)
+    with router.runtime_release_set_lock(workspace), ExitStack() as locks:
+        release_lock_after = lock_identity(release_lock_path)
+        require(release_lock_before == release_lock_after, 'lock_replaced')
+        held_locks.append((release_lock_path, release_lock_after, None))
+        for path in (workspace / 'logs/runtime_policy_preopen.lock',
+                     *(stage_path(data / 'report', source_date, stage).with_suffix('.lock') for stage in sorted(stages)),
+                     root / 'publisher.lock'):
+            require(path.parent.resolve() == path.parent, 'lock_parent_not_canonical')
+            before = lock_identity(path) if path.exists() or path.is_symlink() else None
+            lock = locks.enter_context(os.fdopen(os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o666), 'a'))
+            opened = os.fstat(lock.fileno())
+            require(stat.S_ISREG(opened.st_mode), 'lock_not_regular')
+            identity = opened.st_dev, opened.st_ino
+            require((before is None or before == identity) and lock_identity(path) == identity, 'lock_replaced')
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held_locks.append((path, identity, lock))
+            verify_locks()
+        original, pointer = guard()
+        origin = Path(origin_root).resolve()
+        original_commit = original['continuous_reversal']['release_commit']
+        require(router.validate_release(workspace, dict(schema='runtime_release_selection_v1',
+                    workspace=str(workspace), release_root=str(origin), git_commit=original_commit))
+                == (origin, original_commit), 'original_release_unattested')
+        native._validate_bundle_sources(original, data, historical_code_root=origin_root)
+        parent = policy._attested_activation_parent(data, target_date,
+            origin_root=activation_parent_origin_root, origin_commit=activation_parent_origin_commit)
+        require(parent is not None and parent['bundle_sha256'] == pointer['bundle_sha256'], 'parent_changed')
+        generation = root / 'generations' / (expected_bundle_sha256 + '.json')
+        require(bind(generation) == original, 'original_generation_missing')
+        guard()
+        proof = dict(schema='main_identical_policy_code_refresh_v1', authority=confirm,
+            source_bundle_sha256=expected_bundle_sha256, origin_root=str(Path(origin_root).resolve()),
+            activation_parent_origin_root=str(Path(activation_parent_origin_root).resolve()),
+            activation_parent_origin_commit=activation_parent_origin_commit,
+            reason=reason, policy_reselected=False, provider_called=False,
+            stopped_postclose_preparation=dict(source_date=source_date, publication_date=publication_date,
+                target_date=target_date, verified_at_kst=clock().isoformat(),
+                source_sha256={str(path): hashlib.sha256(raw).hexdigest() if raw is not None else None
+                               for path, raw in frozen.items()}))
+        successor = policy._write_refreshed_bundle(original, data, release_commit=release_commit, proof=proof)
+        require(policy._behavioral_family(original['continuous_reversal'])
+                == policy._behavioral_family(successor['continuous_reversal']), 'policy_changed')
+        policy._validate_code_refresh(successor, data)
+        guard()
+        native._atomic_write_json(candidate_path, successor)
+        try:
+            require(read(candidate_path)[0] == successor, 'publication_readback_changed')
+            for path, raw in frozen.items():
+                if path == candidate_path:
+                    continue
+                require((not path.exists() and not path.is_symlink()) if raw is None else read(path)[1] == raw,
+                        'publication_source_changed')
+            verify_locks()
+            clock()
+        except (OSError, ValueError) as exc:
+            # The candidate CAS has committed. Preserve that generation and
+            # report partial completion explicitly; never restore stale bytes.
+            raise ValueError('stopped_postclose_rebind_candidate_published_postcheck_failed:'
+                             + successor['bundle_sha256'] + ':' + str(exc)) from exc
+        return successor
 
 
 @contextmanager

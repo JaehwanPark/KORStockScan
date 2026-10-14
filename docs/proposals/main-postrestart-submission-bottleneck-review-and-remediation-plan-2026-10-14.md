@@ -1,6 +1,6 @@
 # 최신 Main 재기동 이후 제출병목 점검·구현계획 — 2026-10-14
 
-현재 상태: 위기 스캐너 제거와 제출·AI·관측 원천 수리를 포함한 선택 배포본은 `43a79e569`다. Main은20:56:01 장후 격리로 정상 종료됐으며 마지막 PID1263868 receipt는 과거 소비 증거다. 최종 보고서 계산 수리 `a179bb42d`는917개 시험·독립 리뷰를 통과했지만 배포되지 않았다. [현재 인계 상태](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/current-task-disposition.json)와 아래 §12의 실제 배포 제약을 따른다. 기존 배포·재기동 승인은 유효하며 추가 승인 대기가 아니다.
+현재 상태: 위기 스캐너 제거와 제출·AI·관측 원천 수리를 포함한 선택 배포본에 다른 세션의 장후 복구가 더해져 `bdf6ffe6a`가 선택돼 있다. Main은20:56:01 장후 격리로 정상 종료됐으며 마지막 PID1263868 receipt는 과거 소비 증거다. 최종 보고서 계산 수리 `a179bb42d`와 최신 장후 수리의 통합 코드 검증은 완료했으며, 장후 전체 종료 후 정지 배포·10/15 준비를 진행한다. [최신 통합·기동 준비 리뷰](../audits/sentinel-postclose-integration-and-next-session-readiness-2026-10-14.md)와 아래 §12–§13을 따른다. 기존 배포·재기동 승인은 유효하며 추가 승인 대기가 아니다.
 
 ## 1. 최신 기준과 승인 범위
 
@@ -174,3 +174,11 @@ summary 인계 owner는 검토된 `(원 parser1ddc, owner83d8)`, `(1ddc, d487)`,
 최종 후보 commit은 `a179bb42d7d597b261dc352e3813829dbd06daba`다. 배포 시도는 기존 Main singleton이 없어 첫 사전검사에서 중단됐다. [독립 확인](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/blocked-preflight-runtime-verification.json)은 selector43·정책12개 불변, 신규 transition/code handoff/source prepare·재기동·보고서 실행이 없음을 확인한다. 원인은20:56:01의 정상 postclose isolation이며, [실제 wrapper 대사](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/postclose-route-independent-verification.json)에서도 장후 wrapper3개와 controller가 실행 중이었다. [배포 운영 계약](../runtime-release-routing.md#scheduled-scope-and-maintenance)은 scheduled wrapper 실행 중 selector 전환을 금지한다. 기존 singleton 검사를 우회하거나 정지된 Main을 복구 대상으로 취급하지 않는다.
 
 `DirectFamilyPreopenPolicyHandoff`는 장후 owner들의 정확한 terminal을 확인한 뒤 정상 배포 가능 창에서 selector·날짜·정책·원천을 다시 결속하고, 정지 custody를 유지한 후보 배포와 다음 PREOPEN 준비/07:35 적용/07:55 정상 기동을 검증한다. 기존 D helper는 이전 PID가 살아 있는 ordered 경로이므로 현재 상태에서 그대로 재실행하지 않는다. 날짜나 선택 원천이 바뀌면 원 승인 범위 안에서 새 인계 증거와 실행 경로를 검토한다. `NonfixedDispatchReadinessReview1012`는 그 후 동일130/40/180초 안의 실제 cold 보고서·현재 observer/detector와 정규3슬롯을 확인한다. 자동 배포나 별도 cron을 예약하지 않았으며 이 문서 인계가 실행을 대신하지 않는다. 전체 private 재현도 최소 약1.20GB의 입력이 필요해 활성 장후 작업과 경합하는 복사/전수 스캔은 하지 않았다. AI timeout 개선·자연 제출·비용 후 경제성은 기존 owner에서 OPEN으로 유지한다.
+
+## 13. 장후 종료 후 통합배포와 10/15 준비
+
+사용자는 다른 세션의 장후 작업이 완전히 끝난 후 `a179bb42d`를 통합배포하고 다음 영업일 정상 기동을 최종 점검하도록 지시했다. 첫 통합본 `4c4996d2a`는 원 계산 수정 4파일과 장후 복구 6파일의 bytes를 보존했다. 격리 fixture 결손 3건을 원 자료 그대로 보완한 뒤 서로 다른 1,105개 시험이 통과했다. 원 실패와 추가 검증을 구분한다. 이후 선택된 `bdf6ffe6a`의 다음날 activation-origin 인계도 최종 통합 조상에 포함한다.
+
+장후 종료가 자정을 넘겨 기존 준비 자동화에 실제 당일07:35 이전의 정지 재결속 API를 추가했다. 원 V6 미래일자 계약·native33·현재 정책은 보존하며, 정확 source14/publication14/target15·Main 정지·장후 전체 종료·미시도 PREOPEN·원 후보/현재/선택 CAS·native 잠금·정책 판단값 동일성을 요구한다. 원 source/후보 generation과 이전 실패를 보존한다. 독립 130개 시험이 통과했고 코드와 실제 발행/준비 결과는 별도 영수증으로 수용한다.
+
+배포 후 source14 consumer·요약·전체 controller를 새 후보에 재결속하고 target15 prepare/verify를 확인한다. 실제 raw 15행 제외로 달라진 source 세대는 원 derived 파일을 보존한 native summary/cache 재준비로 해소하며 보고서130/observer40/총180초 한도는 유지한다. `DirectFamilyPreopenPolicyHandoff`와 기존 자연 수용 두 owner는 [10/15 checklist](../checklists/2026-10-15-stage2-todo-checklist.md)에 Acceptance/History를 유지해 인계한다. 05:35 finalization·07:35 PREOPEN·07:55 정상 기동은 각각 실제 예정 시각의 별도 수용이다.
