@@ -48,3 +48,9 @@ metadata 재사용은 같은 OS/local writer와 ctime 세대 검출을 신뢰한
 - `AuxiliaryCircuitRecoveryRepair1012`: 실제 정상 attempt가 생긴 뒤 원5초 deadline과 offered/timeout/censored·guard를 비교한다. 현재 자연 표본 미관측은 pending이다.
 - RIO4 재확인에서 별도 Gunicorn과 ModemManager/multipathd는 관측됐으나 제거 가능한 불필요 프로세스로 확정하지 않았다. PID/서비스 종료, swapoff, cache drop, EBS/cron/경보 임계치 변경은 하지 않았다.
 - 롤백은 native full/default CLI와 검증된 Main-only recovery release를 사용한다. incident/cursor 삭제로 정상화하지 않으며, 퇴역 owner를 복원하지 않는다. shared workspace의 다른 변경·선택 릴리스·실제 데이터는 보존한다.
+
+## 6. 후속 배포 승인·재리뷰
+
+10/14 사용자가 반복 코드리뷰·수정보완 후 배포 및 Main 기동을 명시적으로 승인했다. 10:04 재확인에서 selected5fb4c0a33/Main 없음, operator startup hold/restart 요청 없음이다. 일반 ordered driver는 실행 중인 predecessor를 요구하므로 이번 정지 배치는 기존 native `--previous-stopped` 인계를 사용한다. 현재 미기동 selector와 마지막 실제 소비01d9fefa4/PID3854164/ticks18431371을 각각 보존하고, 이전 소비·원 PREOPEN/manifest/env/prepared·정책 byte와 code delta를 검증한 뒤 release/detector 잠금 아래 publication·prepare·ordinary launcher·실제 PID 검증을 수행한다. 정지 상태에서 실제 소비 영수증을 새로 합성하지 않는다.
+
+재리뷰에서 candidate checklist가 이후 추가된 약세 연구 배포 승인 이력을 누락하는 것을 발견하여 원문을 보존하도록 보완했다. monitor budget/부분 관측/incident·파일 SHA 재사용/native semantic 반복·wrapper 실패 전파·launcher PID 분리 범위에 추가 미수정 코드 결함은 확인되지 않았다. 검증·배포 phase·새 PID 결과는 `/home/ubuntu/KORStockScan/tmp/main-io-residual-deploy-20261014/`와 deployment result가 소유한다.
