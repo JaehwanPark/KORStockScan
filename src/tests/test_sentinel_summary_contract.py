@@ -3,7 +3,11 @@ import builtins
 import hashlib
 import inspect
 import json
+import runpy
+import sys
 from pathlib import Path
+from types import FunctionType, ModuleType
+from importlib.machinery import ModuleSpec
 
 import pytest
 
@@ -216,3 +220,98 @@ def test_predecessor_archive_rejects_symlink_without_publishing(tmp_path,target)
     with pytest.raises(RuntimeError,match='archive_failed'):
         P.update_and_load_pipeline_event_summaries(**options)
     assert manifest.read_bytes()==original and summary.read_bytes()==prior_summary
+
+
+def _intercept_real_funnel_cli(monkeypatch, inspect_callbacks):
+    """Stop the real -m entry point before any runtime source or report access."""
+    class Intercepted(Exception):
+        pass
+    calls = []
+    def intercept(**options):
+        calls.append(options)
+        inspect_callbacks(options)
+        raise Intercepted
+    monkeypatch.setattr(P, 'update_and_load_pipeline_event_summaries', intercept)
+    monkeypatch.setattr(sys, 'argv', ['buy_funnel_sentinel', '--date', '2026-10-13',
+                                     '--use-cache', '--use-summary'])
+    monkeypatch.delitem(sys.modules, 'src.engine.buy_funnel_sentinel')
+    with pytest.raises(Intercepted):
+        runpy.run_module('src.engine.buy_funnel_sentinel', run_name='__main__', alter_sys=True)
+    assert len(calls) == 1
+
+
+def test_real_module_cli_migrates_exact_predecessor_without_runtime_reads(tmp_path, monkeypatch):
+    _, options, manifest, original, _ = predecessor(tmp_path)
+    native_update = P.update_and_load_pipeline_event_summaries
+    expected_contracts = C._callback_predecessors(
+        (B._blocker_label_from_stage_fields, B._is_ignored_event), Path(P.__file__).resolve())
+    def inspect_callbacks(actual):
+        callbacks = (actual['reason_labeler'], actual['ignore_payload'])
+        for callback in callbacks:
+            assert callback.__module__ == '__main__'
+            assert callback.__globals__ is vars(sys.modules['__main__'])
+            assert callback.__globals__['__spec__'].name == 'src.engine.buy_funnel_sentinel'
+        assert C._callback_predecessors(callbacks, Path(P.__file__).resolve()) == expected_contracts
+        isolated = {**options, 'reason_labeler': callbacks[0], 'ignore_payload': callbacks[1]}
+        rows, meta = native_update(**isolated)
+        assert sum(row['event_count'] for row in rows) == 1
+        assert not meta['rebuilt']
+        assert meta['contract_migration']['to_parser'] == C.CURRENT_PARSER
+        assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes() == original
+        assert meta['contract_migration']['raw_read_start'] == meta['contract_migration']['raw_read_end']
+    _intercept_real_funnel_cli(monkeypatch, inspect_callbacks)
+    assert manifest.read_bytes() != original
+
+
+@pytest.mark.parametrize('mutation', [
+    'module_name', 'missing_module', 'different_module', 'copied_globals',
+    'callback_binding', 'spec_missing', 'spec_name', 'origin_missing',
+    'origin_path', 'file_missing', 'file_path', 'globals_name',
+    'runtime_dependency', 'closure', 'owner_hash',
+])
+def test_real_cli_rejects_unbound_or_modified_callbacks(tmp_path, monkeypatch, mutation):
+    _, options, manifest, original, _ = predecessor(tmp_path)
+    native_update = P.update_and_load_pipeline_event_summaries
+    def inspect_callbacks(actual):
+        callback = actual['reason_labeler']
+        main = sys.modules['__main__']
+        with monkeypatch.context() as patch:
+            if mutation == 'module_name':
+                patch.setattr(callback, '__module__', 'unreviewed')
+            elif mutation == 'missing_module':
+                patch.delitem(sys.modules, '__main__')
+            elif mutation == 'different_module':
+                patch.setitem(sys.modules, '__main__', ModuleType('__main__'))
+            elif mutation == 'copied_globals':
+                callback = FunctionType(callback.__code__, dict(callback.__globals__), callback.__name__)
+            elif mutation == 'callback_binding':
+                patch.setattr(main, callback.__name__, lambda *args: None)
+            elif mutation == 'spec_missing':
+                patch.setattr(main, '__spec__', None)
+            elif mutation in ('spec_name', 'origin_missing', 'origin_path'):
+                spec = ModuleSpec('unreviewed' if mutation == 'spec_name' else main.__spec__.name,
+                                  main.__spec__.loader,
+                                  origin=(None if mutation == 'origin_missing' else
+                                          '/unreviewed.py' if mutation == 'origin_path' else main.__spec__.origin))
+                patch.setattr(main, '__spec__', spec)
+            elif mutation in ('file_missing', 'file_path'):
+                patch.setattr(main, '__file__', None if mutation == 'file_missing' else '/unreviewed.py')
+            elif mutation == 'globals_name':
+                patch.setattr(main, '__name__', 'unreviewed')
+            elif mutation == 'runtime_dependency':
+                patch.setattr(main, 'MANUAL_EXCLUDED_STOCKS', set())
+            elif mutation == 'closure':
+                original_callback = callback
+                def closed(*args):
+                    return original_callback(*args)
+                closed.__name__ = callback.__name__
+                closed.__module__ = '__main__'
+                callback = closed
+            elif mutation == 'owner_hash':
+                patch.setattr(C, 'CURRENT_BUY_OWNER', 'unreviewed')
+            isolated = {**options, 'reason_labeler': callback, 'ignore_payload': actual['ignore_payload']}
+            with pytest.raises(RuntimeError, match='funnel_owner_changed|funnel_dependency_changed|callback_closure_changed'):
+                native_update(**isolated)
+        assert manifest.read_bytes() == original
+        assert not (manifest.parent / 'contract_migrations').exists()
+    _intercept_real_funnel_cli(monkeypatch, inspect_callbacks)

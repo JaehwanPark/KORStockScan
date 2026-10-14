@@ -142,3 +142,11 @@ NXT 수리로 native 계약 module33개 중 `session_contract.py`1개가 바뀐�
 [정확한290행 대사](../../tmp/submit-crisis-timeout-20261014/natural1955-observer-diagnosis.json)에서 원천은 최근600초를 완전히 덮었으며 모두 Main fixed-watch의 정상 진입 금지 대기였다. 기존15:30–16:00 경계에 더해 native resolver가 확정한19:40–19:45 CLOSE_ONLY와19:45–20:00 TERMINAL_EXIT만 정확한 venue/session 조합으로 인정한다. MAIN_FIXED_WATCH·고정종목·source quality pass·entry_allowed_by_clock=false·actual_order_submitted=false·broker_order_forbidden=true를 모두 요구한다. 잘못된 필드형·세션·시각·venue·owner·주문 증거는 계속 거부하며20:00 이후 CLOSED를 일반 허용하지 않는다.
 
 이는 원천 검증의290개 정상 대기 오분류만 수리한다. 회수한18:36:19 보고서와 동일한 과거 incident 객체 및 source_as_of19:15:13은 그대로 보존한다. 원 fixture의 semantic partial·current_observation_verified=false·full_coverage=false·runtime apply 금지를 유지하고 건강 판정만 bounded source-quality observation의 warning_pending으로 바뀐다. 과거 결손 회복·현재 AI 판단·자연 주문을 합성하지 않는다. 최종 monitor90388bc7와 기존 PREOPEN 원천의 exact pair를 인계 owner에 추가하며 기존 허용쌍을 보존한다. 후속 배포는 보호80개 중 검토한 H/monitor2쌍만 변경하고 나머지78개·native33개·보호 정책12개의 동일 bytes를 확인한다.
+
+## 11. 실제 CLI 실행 경로 추가 수리
+
+후속17aac0dae는20:17:14에 ordered complete/pass, PID1243842/start4052271로 소비됐다. [독립 런타임 검증](../../tmp/submit-crisis-timeout-20261014/observer-prepare-followup/postrestart-runtime-verification.json)은 위기 기능 부재·정책12개 불변·자연 startup3906행과 source 준비1batch를 확인한다. 하지만 [20:22 무알림 검증](../../tmp/submit-crisis-timeout-20261014/observer-prepare-followup/manual-no-notify-20261014T202217-1d20b590/receipt.json)의 Sentinel은0.518초에 `summary_contract_migration_funnel_owner_changed`로 실패했다. source-only 후속 발행은 완료했으나 partial이며 원 exit1을 보존한다. 이를 full validation으로 집계하지 않는다.
+
+원 파일 d487b404의 SHA와 callback 정의는 맞지만 실제 `python -m src.engine.buy_funnel_sentinel`은 callback 모듈 이름을 `__main__`으로 설정한다. 정상 CLI를 canonical import 이름만으로 거부한 검증 결함을 수리한다. `__main__`이라는 문자열만 허용하지 않고 실제 등록 module·callback globals/함수 identity·canonical spec.name·origin/file·승인 파일 SHA·전이 정의/의존성 검증을 모두 결속한다. 실제 CLI 실행을 재현하는 격리 시험에서 수정 전 실패와 수정 후 수용을 확인하고 다른 모듈·변조된 spec/origin/정의를 거부한다. 원 parser/manifest/checkpoint·append 한도·매매 정책은 유지한다.
+
+추가 코드·시험·문서·배포 결과는 `tmp/submit-crisis-timeout-20261014/cli-summary-followup`에 새 시도로 보존한다. 보호80개/native33개 및 정책12개 전체 bytes는 유지하고 동일 승인으로 재리뷰·표적 검증 뒤 ordered 배포한다. 원 두 배포/수동 실패 영수증을 덮어쓰지 않는다. 장후 실행의 producer_parity 요약과 Sentinel default 요약은 별도 owner/lock이며 기존 장후 작업·일정·정상 종료를 변경하지 않는다.

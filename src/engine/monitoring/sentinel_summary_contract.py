@@ -11,7 +11,9 @@ import inspect
 import json
 import os
 import stat
+import sys
 from pathlib import Path
+from types import ModuleType
 
 PREVIOUS_PARSER = '1ddc6f33db48db5fec69ec36297119741caebf42444f95e5a6d2e67f4795eeb2'
 CURRENT_PARSER = 'b1b1e59a99c09c79304d9db7cfd731fe47deb1afb9926303c7ba7d1d9ea03116'
@@ -72,6 +74,26 @@ def _parser_dependencies(parser):
         _fail('parser_dependency_changed')
 
 
+def _funnel_module_identity(callback, owner, owner_sha, parser_path):
+    """Bind imported and real -m callbacks to the same pinned module owner."""
+    canonical = 'src.engine.buy_funnel_sentinel'
+    name = getattr(callback, '__module__', None)
+    module = sys.modules.get(name) if name in (canonical, '__main__') else None
+    spec = getattr(module, '__spec__', None)
+    file = getattr(module, '__file__', None)
+    origin = getattr(spec, 'origin', None)
+    if (owner_sha != CURRENT_BUY_OWNER
+            or owner != parser_path.with_name('buy_funnel_sentinel.py')
+            or not isinstance(module, ModuleType)
+            or callback.__globals__ is not vars(module)
+            or getattr(module, '__name__', None) != name
+            or getattr(module, callback.__name__, None) is not callback
+            or getattr(spec, 'name', None) != canonical
+            or not isinstance(file, str) or not isinstance(origin, str)
+            or Path(file).resolve() != owner or Path(origin).resolve() != owner):
+        _fail('funnel_owner_changed')
+
+
 def _callback_predecessors(callbacks, parser_path):
     from src.engine import pipeline_event_summary as parser
     _parser_dependencies(parser)
@@ -90,8 +112,7 @@ def _callback_predecessors(callbacks, parser_path):
         if owner == parser_path and callback is not parser.default_reason_label:
             _fail('parser_callback_not_reviewed')
         if funnel:
-            if owner_sha != CURRENT_BUY_OWNER or callback.__module__ != 'src.engine.buy_funnel_sentinel':
-                _fail('funnel_owner_changed')
+            _funnel_module_identity(callback, owner, owner_sha, parser_path)
             _definition(callback, DEFINITIONS['buy:' + callback.__name__])
             globals_ = callback.__globals__
             _definition(globals_['_safe_str'], DEFINITIONS['buy:_safe_str'])

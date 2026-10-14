@@ -510,6 +510,8 @@ observer source-window 배포 준비는 기존 Sentinel cache lock 아래에서 
 
 summary parser/callback 계약 변경은 정확히 검토된 predecessor와 현재 코드의 동등성 증거가 있을 때만 기존 producer의 bounded append로 인계한다. 원 manifest/checkpoint·raw/summary generation·callback 의존 정의를 확인하고 이전 manifest를 보존한다. 알려지지 않은 코드쌍·원천 변조·한도 초과를 과거 summary 재사용이나 장시간 raw 재스캔으로 덮지 않는다. 실패 receipt와 첫 정규 발행/후속 detector를 별도로 확인한다.
 
+이 계약 검증은 canonical import와 실제 `python -m` CLI를 함께 확인한다. CLI의 __main__ 이름만으로 승인하지 않고 등록 module·정확한 spec/origin/file·callback identity·검토된 source SHA와 의존 정의를 결속한다. 배포 검증용 무알림 실행은 --notify를 강제하는 wrapper를 그대로 호출하지 않고 검토된 동일 producer CLI/예산/우선순위/원 writer lock을 사용하며 자연 정규 슬롯으로 집계하지 않는다. 실행 실패 뒤 source-only 발행은 원 실패코드와 partial을 보존한다.
+
 observer의 fixed-watch session boundary는 native resolver가 확인한 시각·진입 금지·정확한 venue/session 및 실제 source pass·Main fixed owner·주문 없음·broker 금지 증거가 모두 있을 때만 인정한다. CLOSE_ONLY/TERMINAL_EXIT의 정상 대기도 이 조건으로 검증하며 CLOSED 등 다른 세션에 일반화하지 않는다. 과거 incident와 stale source cursor는 유지하고 bounded observation warning을 full semantic validation이나 원천 회복으로 보고하지 않는다.
 
 Sentinel wrapper는 전체180초/최종 cleanup5초를 유지하면서 observer40초와 첫 child의 TERM→KILL 여유5초를 예약한다. 첫 Sentinel은 최대130초이고 실제 경과시간에 따라 더 줄어든다. 빠른 성공은 기존 full observer, 실패는 남은 시간의 source-only 진단으로 이어지며 원 실패 종료코드를 보존한다. source-only 발행은 현재 원천 진단이며 full 건강 판정·제출 성공이 아니다. 승인된 배포의 정규 시간 외 검증은 알림 없이 같은 한도와 원 producer/consumer를 사용하고 수동 receipt를 자연 정규 슬롯으로 집계하지 않는다.
