@@ -79,6 +79,102 @@ def test_isolated_filename_router_loads_only_exact_guard_files(tmp_path):
 
 
 @pytest.fixture
+def isolated_record_cli(tmp_path):
+    """Exercise the deployed filename CLI, its real git gates and a real child."""
+    repo = Path(__file__).resolve().parents[2]
+    workspace = tmp_path / 'project'
+    root = tmp_path / 'project-runtime-releases/reviewed'
+    for name in ('data', 'logs', 'tmp', '.venv', 'docs'):
+        (workspace / name).mkdir(parents=True)
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).symlink_to(workspace / name, target_is_directory=True)
+    (root / 'restart.flag').symlink_to(workspace / 'restart.flag')
+    for name in ('infrastructure/runtime_release_router.py',
+                 'infrastructure/research_release_transition.py',
+                 'lifecycle/research_admission.py'):
+        target = root / 'src/engine' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / 'src/engine' / name, target)
+    (root / '.gitignore').write_text('__pycache__/\n*.pyc\n')
+    for arguments in (('init', '-q'), ('add', 'src', '.gitignore'),
+                      ('-c', 'user.email=test@example.invalid', '-c', 'user.name=Test',
+                       'commit', '-qm', 'Test selected router source')):
+        subprocess.run(['git', '-C', str(root), *arguments], check=True, capture_output=True)
+    commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    selection_path = workspace / 'data/runtime/runtime_release_selection.json'
+    selection_path.parent.mkdir()
+    selection_path.write_text(json.dumps(dict(schema='runtime_release_selection_v1',
+        workspace=str(workspace), release_root=str(root), git_commit=commit)))
+    child = subprocess.Popen([sys.executable, '-I', '-c', 'import sys; sys.stdin.read()'],
+                             cwd=root / 'src', stdin=subprocess.PIPE)
+    command = [sys.executable, '-I', str(root / 'src/engine/infrastructure/runtime_release_router.py'),
+               '--workspace', str(workspace), '--record-pid', str(child.pid),
+               '--record-release-root', str(root), '--record-git-commit', commit]
+    try:
+        yield workspace, root, selection_path, child, command
+    finally:
+        child.communicate(timeout=5)
+
+
+def test_selected_filename_cli_records_shared_workspace_pid(isolated_record_cli, tmp_path):
+    workspace, root, selection_path, child, command = isolated_record_cli
+    original = json.loads(selection_path.read_text())
+    result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout)
+    selected = json.loads(selection_path.read_text())
+    assert receipt['pid'] == child.pid
+    assert receipt['start_ticks'] == router._process_start_ticks(child.pid)
+    assert receipt['release_root'] == str(root)
+    assert receipt['process_cwd'] == str(root / 'src')
+    assert selected['actual_pid_consumed'] is True
+    assert selected['actual_pid_receipt'] == receipt
+    assert {key: selected[key] for key in original} == original
+    assert not (root / 'data/runtime/runtime_release_selection.lock').is_symlink()
+
+
+@pytest.mark.parametrize('damage, reason', [
+    ('relative_workspace', 'runtime_pid_workspace_not_canonical'),
+    ('aliased_workspace', 'runtime_pid_workspace_not_canonical'),
+    ('operation', 'runtime_pid_workspace_record_only'),
+    ('cron', 'runtime_pid_workspace_record_only'),
+    ('print', 'runtime_pid_workspace_record_only'),
+    ('not_record', 'runtime_pid_workspace_record_only'),
+    ('source', 'runtime_pid_router_not_selected_source'),
+    ('mount', 'release_shared_path_mismatch:data'),
+    ('release', 'runtime_pid_release_root_mismatch'),
+    ('commit', 'runtime_pid_commit_mismatch'),
+])
+def test_selected_filename_cli_rejects_unbound_or_nonrecord_workspace(isolated_record_cli, tmp_path, damage, reason):
+    workspace, root, selection_path, _, command = isolated_record_cli
+    original = selection_path.read_bytes()
+    if damage == 'relative_workspace': command[command.index('--workspace') + 1] = 'project'
+    elif damage == 'aliased_workspace':
+        alias = tmp_path / 'alias'; alias.symlink_to(workspace, target_is_directory=True)
+        command[command.index('--workspace') + 1] = str(alias)
+    elif damage == 'operation': command.append('start')
+    elif damage == 'cron': command.append('--check-cron')
+    elif damage == 'print': command.append('--print-plan')
+    elif damage == 'not_record':
+        index = command.index('--record-pid'); del command[index:index + 2]
+    elif damage == 'source':
+        # A clean unrelated source tree cannot attest the selected child.
+        other = tmp_path / 'unselected'
+        shutil.copytree(root / 'src', other / 'src')
+        command[2] = str(other / 'src/engine/infrastructure/runtime_release_router.py')
+    elif damage == 'mount':
+        wrong_data = tmp_path / 'wrong-data'; wrong_data.mkdir()
+        (root / 'data').unlink(); (root / 'data').symlink_to(wrong_data, target_is_directory=True)
+    elif damage == 'release': command[command.index('--record-release-root') + 1] = str(workspace)
+    elif damage == 'commit': command[command.index('--record-git-commit') + 1] = '0' * 40
+    result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 2, result.stdout
+    assert reason in result.stderr
+    assert 'unrecognized arguments' not in result.stderr
+    assert selection_path.read_bytes() == original
+
+
+@pytest.fixture
 def release(tmp_path, monkeypatch):
     workspace = tmp_path / "project"
     root = tmp_path / "project-runtime-releases" / "reviewed"

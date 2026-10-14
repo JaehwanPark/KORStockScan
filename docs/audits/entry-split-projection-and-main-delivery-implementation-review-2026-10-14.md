@@ -52,3 +52,9 @@
 두 번째 릴리스08dbea37c/PID574420의 첫 자연 예약은14:40:01→14:41:59, entry-split 검증/세대 일치·원본 읽기0·메타18,581B·26.804ms였다. 전역 partial의 scanner 미식별/trace deadline 결손을 이 수용에 합치지 않는다. 세 번째 수리의 리뷰·시험·배포·첫 진단·후속 예약 증거 owner는 `tmp/startup-observer-order-evidence-20261014` 및 `data/report/startup_observer_order_deployment/2026-10-14`다. 이전 frozen 증거는 보존한다.
 
 교차 리뷰는 final record-pid 직후와 ordered attest complete 사이의 추가 경합을 발견했다. 이번 배포의 첫 PID만 complete/pass·successor identity까지 같은150초 한도에서 대기하고, 완료된 과거 transition이 이후 같은 릴리스 기동을 막지 않도록 구분한다. 기존08dbea에서도 재현된 coverage 실패는 제거된 옛 workorder Markdown 감시 선언이 남은 원인으로 확인했으며 현행 runner JSON·performance workorder는 유지한다. FIFO/파일 교체·duplicate/nonfinite·bounded metadata 읽기와 과거 보고서의 정확 신원·경고/실패 경계를 반례로 재검증한다.
+
+## 7. 40357 실패 기록과 실제 CLI 수리
+
+40357의 final launcher가 사용한 `--workspace`가 parser에 없어 exit2,15:12:11 attestation timeout이 발생했다. 모의 Python wrapper 시험이 실제 parser를 실행하지 않아 놓친 범위 내 결함이다. 원 status/hold·첫 health(startup failed)·15:15 자연 Sentinel은 `data/report/startup_observer_order_deployment/2026-10-14`에 실패/partial로 보존한다. 원 PID의 native H/verify PASS와 ordered 실패를 구분한다.
+
+후속 수리는 실제 -I subprocess/managed clean Git release/child PID positive 및 입력 거부 반례, record-only 명시 workspace 계약, 검증된 native PID 메타데이터 복구와 정확한 failed owned hold의 원자 소유권 인계를 검증한다. 모든 일반 native/source/정책 guard를 유지하며 원 terminal을 성공으로 수정하지 않는다. 새 배포 증거는 `data/report/startup_router_cli_repair_deployment/2026-10-14`에 별도로 남긴다.

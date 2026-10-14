@@ -1136,19 +1136,34 @@ def main() -> int:
     parser.add_argument("--record-pid", type=int)
     parser.add_argument("--record-release-root")
     parser.add_argument("--record-git-commit")
+    parser.add_argument("--workspace", help="Canonical shared workspace; selected-router PID record only")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--check-cron", action="store_true")
     group.add_argument("--install-cron", action="store_true")
     group.add_argument("--check-release-set", action="store_true")
     args = parser.parse_args()
-    workspace = Path(__file__).resolve().parents[3]
+    source_path = Path(__file__).resolve()
+    workspace = source_path.parents[3]
     try:
+        if args.workspace is not None:
+            if (args.record_pid is None or args.operation or args.target_date
+                    or args.print_plan or args.resolve_effective_today
+                    or args.check_cron or args.install_cron or args.check_release_set):
+                raise ValueError("runtime_pid_workspace_record_only")
+            requested_workspace = Path(args.workspace)
+            if (not requested_workspace.is_absolute()
+                    or str(requested_workspace.resolve(strict=True)) != args.workspace):
+                raise ValueError("runtime_pid_workspace_not_canonical")
+            workspace = requested_workspace
         if args.resolve_effective_today and args.operation != "finalize":
             raise ValueError("resolve_effective_today_requires_finalize")
         root, commit = selected_release(workspace)
+        if args.workspace is not None and source_path != root / 'src/engine/infrastructure/runtime_release_router.py':
+            raise ValueError("runtime_pid_router_not_selected_source")
         if args.record_pid is not None:
             if (
                 args.operation
+                or args.target_date
                 or args.print_plan
                 or args.check_cron
                 or args.install_cron

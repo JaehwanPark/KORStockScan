@@ -461,3 +461,257 @@ def test_incompatible_candidate_is_rejected_before_hold_or_restart(driver, monke
     assert d.state['failed_phase'] == 'preflight'
     assert not d.hold.exists() and not d.flag.exists()
     assert d.selection.read_bytes() == d.before and d.checklist.read_bytes() == d.document_before
+
+
+def _failed_hold_fixture(d, monkeypatch):
+    older = d.workspace / "older"
+    old_identity = dict(pid=111, start_ticks="111", cwd=str(older / "src"))
+    prior = dict(schema="runtime_release_selection_v1", git_commit="c" * 40,
+        release_root=str(older), actual_pid_consumed=True, actual_pid_receipt={"pid": 111})
+    failed_path = d.workspace / "data/runtime/release_transitions" / d.day / d.previous_commit / "status.json"
+    failed_path.parent.mkdir(parents=True)
+    prior_path = failed_path.with_name("selection-before.json"); prior_path.write_bytes(D._json_bytes(prior))
+    failed = dict(schema="ordered_intraday_deployment_v1", authority=D.CONFIRM,
+        target_date=d.day, candidate_commit=d.previous_commit, candidate_root=str(d.previous),
+        previous_commit=prior["git_commit"], previous_root=prior["release_root"],
+        predecessor_identity=old_identity, original_selection_sha256=D._digest(prior_path.read_bytes()),
+        policy_effect="unchanged", phase="failed", status="fail", failed_phase="starting",
+        error="deployment_pid_attestation_timeout")
+    failed_path.write_bytes(D._json_bytes(failed))
+    hold = dict(schema="ordered_deployment_startup_hold_v1", authority=D.CONFIRM,
+        transition=str(failed_path), target_date=d.day, candidate_commit=d.previous_commit,
+        old_pid_identity=old_identity)
+    d.hold.write_bytes(D._json_bytes(hold))
+    d.old.update(schema="runtime_release_selection_v1", deployment_transition=str(failed_path),
+        previous_selection_backup=str(prior_path), previous_git_commit=prior["git_commit"], previous_release_root=prior["release_root"])
+    d.before = D._json_bytes(d.old); d.selection.write_bytes(d.before)
+    d.selection.with_suffix(".lock").write_text("")
+    d.adopt_failed_hold = True; d.failed_hold_adoption = None; d._preflight_native_verified = True
+    monkeypatch.setattr(D.H, "_identity", lambda pid: dict(d.identity))
+    monkeypatch.setattr(D, "_main_pids", lambda: [d.identity["pid"]])
+    return hold, failed, failed_path, prior_path
+
+
+def test_failed_owned_hold_transfer_is_atomic_and_preserves_native_history(driver, monkeypatch):
+    d = driver; hold, failed, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
+    original = {path: path.read_bytes() for path in (d.hold, failed_path, prior_path, d.selection, d.checklist)}
+    d.capture_failed_hold_adoption()
+    assert d.hold.read_bytes() == original[d.hold]
+    assert d.state["failed_hold_adoption"]["transfer_status"] == "verified_not_transferred"
+    replace = D.os.replace
+    def held_replace(source, target):
+        if Path(target) == d.hold:
+            assert d.hold.exists() and d.hold.read_bytes() == original[d.hold]
+        return replace(source, target)
+    monkeypatch.setattr(D.os, "replace", held_replace)
+    unlink = Path.unlink
+    def preserve_hold(path, *args, **kwargs):
+        if path == d.hold: pytest.fail("hold transfer must not unlink")
+        return unlink(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", preserve_hold)
+    d.acquire_hold()
+    assert d.hold.read_bytes() == d.hold_bytes
+    assert json.loads(d.hold_bytes)["old_pid_identity"] == d.identity
+    assert d.state["failed_hold_adoption"]["transfer_status"] == "transferred_exact_owned_hold"
+    for path in (failed_path, prior_path, d.selection, d.checklist): assert path.read_bytes() == original[path]
+    assert (d.directory / "failed-startup-hold-before.json").read_bytes() == original[d.hold]
+    assert (d.directory / "failed-transition-before.json").read_bytes() == original[failed_path]
+    # The live hold intentionally changed, but the original failed terminal
+    # remains a separate frozen source, outside native family frozen_files.
+    d.assert_unchanged()
+    d.assert_hold()
+
+
+@pytest.mark.parametrize("damage", ["operator_hold", "hold_schema", "hold_authority", "hold_day", "hold_commit", "hold_transition",
+    "hold_old_pid", "failed_status", "failed_phase", "failed_error", "failed_root", "failed_authority", "failed_candidate",
+    "failed_source_hash", "failed_source_commit", "selector_root", "selector_commit", "selector_unconsumed", "selector_pid",
+    "pid_changed", "extra_main", "native_preflight"])
+def test_failed_hold_adoption_rejects_foreign_or_unproven_ownership(driver, monkeypatch, damage):
+    d = driver; hold, failed, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
+    if damage == "operator_hold": hold = {"schema": "operator_manual_veto", "authority": "OPERATOR"}
+    elif damage == "hold_schema": hold["schema"] = "unknown"
+    elif damage == "hold_authority": hold["authority"] = "unapproved"
+    elif damage == "hold_day": hold["target_date"] = "2026-10-11"
+    elif damage == "hold_commit": hold["candidate_commit"] = d.commit
+    elif damage == "hold_transition": hold["transition"] = str(d.directory / "status.json")
+    elif damage == "hold_old_pid": hold["old_pid_identity"] = d.identity
+    elif damage == "failed_status": failed["status"] = "pass"
+    elif damage == "failed_phase": failed["failed_phase"] = "prepared"
+    elif damage == "failed_error": failed["error"] = "real_policy_failure"
+    elif damage == "failed_root": failed["candidate_root"] = str(d.candidate)
+    elif damage == "failed_authority": failed["authority"] = "unapproved"
+    elif damage == "failed_candidate": failed["candidate_commit"] = d.commit
+    elif damage == "failed_source_hash": failed["original_selection_sha256"] = "0" * 64
+    elif damage == "failed_source_commit":
+        old = json.loads(prior_path.read_text()); old["git_commit"] = "d" * 40
+        prior_path.write_bytes(D._json_bytes(old))
+    elif damage == "selector_root": d.old["release_root"] = str(d.candidate)
+    elif damage == "selector_commit": d.old["git_commit"] = d.commit
+    elif damage == "selector_unconsumed": d.old["actual_pid_consumed"] = False
+    elif damage == "selector_pid": d.old["actual_pid_receipt"] = {"pid": 999}
+    elif damage == "pid_changed": monkeypatch.setattr(D.H, "_identity", lambda pid: {**d.identity, "start_ticks": "reused"})
+    elif damage == "extra_main": monkeypatch.setattr(D, "_main_pids", lambda: [d.identity["pid"], 999])
+    elif damage == "native_preflight": d._preflight_native_verified = False
+    d.hold.write_bytes(D._json_bytes(hold)); failed_path.write_bytes(D._json_bytes(failed))
+    before = {path: path.read_bytes() for path in (d.hold, d.selection, d.checklist, failed_path, prior_path)}
+    with pytest.raises(ValueError): d.capture_failed_hold_adoption()
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize("damage", ["hold", "same_bytes_replaced", "failed_terminal", "original_selection", "selector", "source"])
+def test_failed_hold_compare_exchange_aborts_later_mutation(driver, monkeypatch, damage):
+    d = driver; _, _, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
+    d.capture_failed_hold_adoption()
+    if damage == "hold": d.hold.write_text('{"operator":"new veto"}')
+    elif damage == "same_bytes_replaced":
+        replacement = d.hold.with_name("replacement"); replacement.write_bytes(d.hold.read_bytes()); D.os.replace(replacement, d.hold)
+    elif damage == "failed_terminal": failed_path.write_bytes(failed_path.read_bytes() + b" ")
+    elif damage == "original_selection": prior_path.write_bytes(prior_path.read_bytes() + b" ")
+    elif damage == "selector": d.selection.write_bytes(d.selection.read_bytes() + b" ")
+    elif damage == "source": d.checklist.write_bytes(b"changed")
+    before = {path: path.read_bytes() for path in (d.hold, failed_path, prior_path, d.selection, d.checklist)}
+    with pytest.raises(ValueError): d.acquire_hold()
+    assert {path: path.read_bytes() for path in before} == before
+    assert d.phase == "preflight"
+
+
+def test_failed_hold_cannot_be_adopted_without_explicit_flag(driver, monkeypatch):
+    d = driver; _failed_hold_fixture(d, monkeypatch); d.adopt_failed_hold = False
+    before = d.hold.read_bytes()
+    with pytest.raises(ValueError, match="native_preflight_required"): d.capture_failed_hold_adoption()
+    with pytest.raises(FileExistsError): d.acquire_hold()
+    assert d.hold.read_bytes() == before
+
+
+def test_unverified_failed_hold_adoption_cannot_acquire(driver, monkeypatch):
+    d = driver; _failed_hold_fixture(d, monkeypatch)
+    before = d.hold.read_bytes()
+    with pytest.raises(ValueError, match="adoption_unverified"): d.acquire_hold()
+    assert d.hold.read_bytes() == before
+
+
+def _mock_adoption_preflight(d, monkeypatch, reject=None):
+    monkeypatch.setattr(D.H, "DATA_DIR", d.workspace / "data")
+    prior_handoff, _ = D.H._paths(d.day, d.previous_commit)
+    prior_handoff.parent.mkdir(parents=True, exist_ok=True)
+    prior_handoff.write_text(json.dumps({"frozen_files": d.frozen}))
+    monkeypatch.setattr(D, "__file__", str(d.candidate / "src/engine/automation/ordered_intraday_deploy.py"))
+    monkeypatch.setattr(D.R, "selected_release", lambda workspace: (d.previous, d.previous_commit))
+    monkeypatch.setattr(D.R, "git", lambda *args: d.commit)
+    monkeypatch.setattr(D.R, "validate_release", lambda *args: (d.candidate, d.commit))
+    text, raw = Path.read_text, Path.read_bytes
+    def proc_stat(path, *args, **kwargs):
+        if str(path) in ("/proc/123/stat", "/proc/124/stat"):
+            return "123 (python) " + " ".join(["S", "124"] + ["0"] * 17 + ["456"])
+        return text(path, *args, **kwargs)
+    def proc_command(path, *args, **kwargs):
+        if str(path) == "/proc/124/cmdline":
+            return b"/bin/bash\0" + str(d.previous / "src/run_bot.sh").encode() + b"\0"
+        return raw(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", proc_stat)
+    monkeypatch.setattr(Path, "read_bytes", proc_command)
+    checklist = d.workspace / "docs/checklists" / (d.day + "-stage2-todo-checklist.md")
+    checklist.parent.mkdir(parents=True); checklist.write_bytes(b"original current checklist")
+    monkeypatch.setattr(D.subprocess, "check_output", lambda *args, **kwargs: b"reviewed candidate checklist")
+    calls = []
+    def native(root, module, *args, **kwargs):
+        calls.append(module)
+        assert d.hold.exists()
+        if reject is not None and reject in module: raise ValueError("native_validation_rejected")
+        return {"status": "pass", "basis": "intraday_policy_preserving_handoff"}
+    d.run_json = native
+    def code(family):
+        def check(*args):
+            calls.append(family)
+            assert len([name for name in calls if name.startswith("src.engine")]) == 2
+            if reject == family: raise ValueError("candidate_validation_rejected")
+            return {"status": "pass"}
+        return check
+    monkeypatch.setattr(D.H, "verify_candidate_delay_code", code("delay"))
+    monkeypatch.setattr(D.H, "verify_candidate_stop_code", code("stop"))
+    monkeypatch.setattr(D.H, "verify_candidate_holding_vote_code", code("holding"))
+    d._preflight_native_verified = False
+    return calls
+
+
+@pytest.mark.parametrize("rejected", ["intraday_release_handoff", "runtime_policy_bootstrap", "delay", "stop", "holding"])
+def test_adoption_native_preflight_failure_never_replaces_old_hold(driver, monkeypatch, rejected):
+    d = driver; _, _, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
+    original = {path: path.read_bytes() for path in (d.hold, failed_path, prior_path, d.selection, d.checklist)}
+    _mock_adoption_preflight(d, monkeypatch, rejected)
+    with pytest.raises(ValueError, match="validation_rejected"): d.preflight()
+    assert d._preflight_native_verified is False
+    assert d.failed_hold_adoption is None
+    assert {path: path.read_bytes() for path in original} == original
+
+
+def test_adoption_preflight_native_checks_precede_capture_and_acquire(driver, monkeypatch):
+    d = driver; _failed_hold_fixture(d, monkeypatch)
+    hold_before = d.hold.read_bytes()
+    calls = _mock_adoption_preflight(d, monkeypatch)
+    d.preflight()
+    assert calls == ["src.engine.automation.intraday_release_handoff", "src.engine.automation.runtime_policy_bootstrap", "delay", "stop", "holding"]
+    assert d._preflight_native_verified is True
+    assert d.hold.read_bytes() == hold_before
+    d.acquire_hold()
+    d.assert_hold(); d.assert_unchanged()
+    assert d.hold.read_bytes() != hold_before and d.phase == "startup_held"
+
+
+def test_adopted_hold_continues_through_ordinary_native_drain(driver, monkeypatch):
+    d = driver; _, _, failed_path, _ = _failed_hold_fixture(d, monkeypatch)
+    failed_before = failed_path.read_bytes()
+    d.capture_failed_hold_adoption(); d.acquire_hold()
+    d.launcher = 124; d.launcher_stat = "456"
+    text = Path.read_text
+    def stat(path, *args, **kwargs):
+        if str(path) == "/proc/124/stat": return "124 (bash) " + " ".join(["S"] + ["0"] * 18 + ["456"])
+        return text(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", stat)
+    exists = Path.exists; alive = {"123": True, "124": True}
+    monkeypatch.setattr(Path, "exists", lambda path: alive[path.name] if str(path) in ("/proc/123", "/proc/124") else exists(path))
+    waits = []
+    def wait(predicate, timeout, reason):
+        waits.append(reason); assert not predicate()
+        alive["123" if len(waits) == 1 else "124"] = False
+        assert predicate()
+        if len(waits) == 2: d.flag.unlink()
+    monkeypatch.setattr(D, "_wait", wait)
+    monkeypatch.setattr(D, "_session_absent", lambda: True)
+    monkeypatch.setattr(D, "_main_pids", lambda: [])
+    d.drain()
+    assert d.phase == "drained" and len(waits) == 2
+    assert failed_path.read_bytes() == failed_before
+    d.assert_hold(); d.assert_unchanged()
+
+
+def test_hold_transfer_postrename_io_failure_preserves_truthful_owned_hold(driver, monkeypatch):
+    d = driver; _, _, failed_path, _ = _failed_hold_fixture(d, monkeypatch)
+    failed_before = failed_path.read_bytes()
+    d.capture_failed_hold_adoption()
+    atomic = D._atomic
+    def publication_failure(path, raw, **kwargs):
+        atomic(path, raw, **kwargs)
+        if Path(path) == d.hold: raise OSError("postrename directory sync failure")
+    monkeypatch.setattr(D, "_atomic", publication_failure)
+    with pytest.raises(OSError, match="postrename"): d.acquire_hold()
+    assert d.hold.read_bytes() == d.hold_bytes
+    assert d.state["failed_hold_adoption"]["transfer_status"] == "transferred_but_publication_failed"
+    assert failed_path.read_bytes() == failed_before
+
+
+@pytest.mark.parametrize("which", ["hold", "failed", "selector_lock"])
+def test_failed_hold_adoption_rejects_special_files_without_replacement(driver, monkeypatch, which):
+    d = driver; _, _, failed_path, _ = _failed_hold_fixture(d, monkeypatch)
+    original = d.hold.read_bytes()
+    if which == "selector_lock":
+        d.capture_failed_hold_adoption()
+        target = d.selection.with_suffix(".lock"); target.unlink(); os.mkfifo(target)
+        with pytest.raises(ValueError, match="regular_file_required"): d.acquire_hold()
+        assert d.hold.read_bytes() == original
+    else:
+        target = d.hold if which == "hold" else failed_path
+        target.unlink(); os.mkfifo(target)
+        with pytest.raises(ValueError, match="regular_file_required"): d.capture_failed_hold_adoption()
+        assert target.is_fifo()
+        if which != "hold": assert d.hold.read_bytes() == original

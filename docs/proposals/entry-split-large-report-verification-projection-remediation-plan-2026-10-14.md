@@ -272,3 +272,13 @@ Sentinel은 기존 observer owner에서 run 시작/완료·선택 bytes SHA·cod
 표적 종료 시험은 native/intraday 정상 준비, 자기 PID/start/root/날짜·manifest/소비/선택 오류, timeout·재시도 한도 불변, Main/heartbeat 진행, stale/실패/현재 partial 및 잘못된 predecessor·세대 변경 거부, 원 report/economic 상태 보존이다. 기존 startup/router/daemon·ordered deployment·monitor/artifact 시험 owner를 사용한다. 수리→독립 리뷰→반례 보완→재리뷰·표적 시험 후 같은 승인으로 ordered 배포하며, 실제 첫 진단과 첫 예약 발행을 별도 수용한다.
 
 최종 통합 시험에서 기존 coverage 선언이 이미 제거된 옛 Markdown `code_improvement_workorder` 감시를 요구하는 불일치도 확인했다. 선행08dbea와 후보에서 같은 실패를 재현했고, 제거 커밋2c3b7597a를 대사해 이 오래된 선언만 제거한다. 현행 runner JSON·performance workorder 감시를 유지하며 퇴역 producer를 복원하지 않는다.
+
+## 14. 실제 CLI 계약 누락과 실패 기동의 보존·복구
+
+40357c426 배포는15:12:11 `deployment_pid_attestation_timeout`으로 실패했다. 신규 호출의 `--workspace`를 실제 router parser에 등록하지 않은 구현 결함이며, Python을 대체한 wrapper 모의 시험만으로 수용한 검증 결함도 있다. Main658998/start2212901의 H 소비·bootstrap PID 검증은 통과했지만 final record-pid가 CLI exit2로 실패했다. 첫 health는 실패를 그대로 드러냈으므로 이 시도를 정상 기동이나 전체 수용으로 표시하지 않는다. 원 실패 status·hold·selector와 첫 health/자연 Sentinel을 별도 실패 증거로 보존한다.
+
+수리는 `--workspace`를 final record-pid 용도로만 등록하고 실행 router가 정확한 selected immutable source이며 모든 공유 mount/선택 root·commit·PID가 맞는지 기존 guard로 검증한다. 일반 operation/cron/print 또는 별도 root/relative/alias workspace에는 이 입력을 허용하지 않는다. 실제 `python -I selected/router.py ...`와 clean temporary managed Git release/실제 child PID를 사용하는 positive/negative subprocess 시험으로 parser와 workspace 해석까지 검증한다.
+
+복구는 기존 release-set/detector/Sentinel 잠금과 원 실패·hold bytes SHA를 유지한다. 현재 PID의 native H/manifest/verify와 실제 source/cwd/start·singleton을 다시 확인한 뒤 검토된 이전 native PID 기록 API로 사실인 소비 메타데이터만 기록할 수 있다. 이는 실패 transition의 완료나 startup PASS를 뜻하지 않으며 해당 terminal/hold를 변경하지 않는다. 새 배포기는 명시적인 failed-hold adoption에서만 canonical current-selected 실패가 starting/attestation timeout이고 hold 소유와 원 이전 PID가 실패 receipt에 일치하는지 검증한다. 모든 표준 native preflight/code/source 검증 뒤 old hold bytes를 보존하고 새 owned hold로 CAS 원자 교체한다. unlink 공백·foreign/operator hold 삭제·실패 terminal의 성공 수정은 금지한다.
+
+후속 새 commit/transition의 graceful drain·native 준비·실제 record-pid/complete/첫 health를 다시 검증하며, 실패한 시도의 immutable code를 직접 수정하지 않는다. 복구 수용 owner는 `tmp/startup-router-cli-repair-evidence-20261014`와 `data/report/startup_router_cli_repair_deployment/2026-10-14`다.

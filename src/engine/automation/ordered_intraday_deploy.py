@@ -52,7 +52,40 @@ def _digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _atomic(path, raw):
+def _metadata_signature(path):
+    info = Path(path).lstat()
+    return tuple(getattr(info, "st_" + name) for name in (
+        "dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns"))
+
+
+def _owned_metadata(path):
+    """Reuse the startup owner's bounded, strict, no-follow regular reader."""
+    value, raw = R._startup_receipt(Path(path))
+    return value, raw, _metadata_signature(path)
+
+
+
+@contextmanager
+def _existing_selector_lock(path):
+    """Open the existing writer lock without following links or blocking on FIFO."""
+    before = _metadata_signature(path)
+    if not stat.S_ISREG(before[2]):
+        raise ValueError("deployment_selector_lock_regular_file_required")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        opened = tuple(getattr(info, "st_" + name) for name in (
+            "dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns"))
+        if not stat.S_ISREG(info.st_mode) or opened != before:
+            raise ValueError("deployment_selector_lock_changed")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+        if _metadata_signature(path) != opened:
+            raise ValueError("deployment_selector_lock_changed")
+    finally:
+        os.close(fd)
+
+def _atomic(path, raw, *, expected=None):
     path = Path(path)
     fd, name = tempfile.mkstemp(prefix='.' + path.name + '.', dir=path.parent)
     try:
@@ -61,6 +94,10 @@ def _atomic(path, raw):
             out.flush()
             os.fsync(out.fileno())
         os.chmod(name, path.stat().st_mode & 0o777 if path.exists() else 0o644)
+        if expected is not None:
+            _, current, signature = _owned_metadata(path)
+            if current != expected["raw"] or signature != expected["signature"]:
+                raise ValueError("deployment_failed_hold_compare_exchange_changed")
         os.replace(name, path)
         directory = os.open(path.parent, os.O_DIRECTORY)
         try:
@@ -180,7 +217,7 @@ def execute(driver):
 
 
 class Deployment:
-    def __init__(self, workspace, candidate, day, confirm):
+    def __init__(self, workspace, candidate, day, confirm, *, adopt_failed_hold=False):
         if confirm != CONFIRM:
             raise ValueError('ordered_deployment_explicit_approval_required')
         H._today(day, None)
@@ -193,6 +230,12 @@ class Deployment:
         self.phase = 'new'
         self.hold_bytes = None
         self.validation_session = uuid.uuid4().hex
+        # Explicit embedding-only recovery; the ordinary CLI never adopts holds.
+        if type(adopt_failed_hold) is not bool:
+            raise ValueError("deployment_failed_hold_adoption_flag_invalid")
+        self.adopt_failed_hold = adopt_failed_hold
+        self.failed_hold_adoption = None
+        self._preflight_native_verified = False
 
     def run_json(self, root, module, *args, timeout=120):
         # Predecessors may predate this opt-in CLI. Their native full path stays.
@@ -232,7 +275,10 @@ class Deployment:
         for name in ('operator_startup_hold.json',):
             p = self.workspace / 'data/runtime' / name
             if p.exists() or p.is_symlink():
-                raise ValueError('deployment_existing_operator_hold')
+                if not getattr(self, "adopt_failed_hold", False):
+                    raise ValueError('deployment_existing_operator_hold')
+            elif getattr(self, "adopt_failed_hold", False):
+                raise ValueError("deployment_failed_hold_required")
         if self.flag.exists() or self.flag.is_symlink():
             raise ValueError('deployment_existing_restart_request')
         receipt = self.old.get('actual_pid_receipt') or {}
@@ -277,6 +323,95 @@ class Deployment:
             self.commit + ':docs/checklists/' + self.checklist.name], timeout=10)
         _atomic(self.directory / 'checklist-before.md', self.document_before)
         self.assert_unchanged()
+        self._preflight_native_verified = True
+        if getattr(self, "adopt_failed_hold", False):
+            # All native predecessor, policy/code and source checks above stay
+            # mandatory. No shared hold bytes change during this inspection.
+            self.capture_failed_hold_adoption()
+            self.assert_unchanged()
+
+    def capture_failed_hold_adoption(self):
+        if (getattr(self, "adopt_failed_hold", False) is not True
+                or getattr(self, "_preflight_native_verified", False) is not True):
+            raise ValueError("deployment_failed_hold_native_preflight_required")
+        hold, raw, signature = _owned_metadata(self.hold)
+        expected_transition = (self.workspace / "data/runtime/release_transitions" / self.day
+                               / self.previous_commit / "status.json")
+        selected_transition = self.old.get("deployment_transition")
+        if (selected_transition != str(expected_transition)
+                or hold.get("schema") != "ordered_deployment_startup_hold_v1"
+                or hold.get("authority") != CONFIRM or hold.get("target_date") != self.day
+                or hold.get("candidate_commit") != self.previous_commit
+                or hold.get("transition") != str(expected_transition)):
+            raise ValueError("deployment_failed_hold_identity_invalid")
+        if expected_transition.resolve(strict=True) != expected_transition:
+            raise ValueError("deployment_failed_transition_path_invalid")
+        failed, failed_raw, failed_signature = _owned_metadata(expected_transition)
+        old_identity = hold.get("old_pid_identity")
+        if (failed.get("schema") != "ordered_intraday_deployment_v1"
+                or failed.get("authority") != CONFIRM or failed.get("target_date") != self.day
+                or failed.get("candidate_commit") != self.previous_commit
+                or failed.get("candidate_root") != str(self.previous)
+                or failed.get("policy_effect") != "unchanged"
+                or failed.get("status") != "fail" or failed.get("phase") != "failed"
+                or failed.get("failed_phase") != "starting"
+                or failed.get("error") != "deployment_pid_attestation_timeout"
+                or not isinstance(old_identity, dict)
+                or old_identity != failed.get("predecessor_identity")
+                or type(old_identity.get("pid")) is not int or old_identity["pid"] <= 0
+                or not isinstance(old_identity.get("start_ticks"), str)
+                or not old_identity["start_ticks"].isdigit()
+                or not isinstance(old_identity.get("cwd"), str) or not Path(old_identity["cwd"]).is_absolute()):
+            raise ValueError("deployment_failed_transition_not_adoptable")
+        prior_path = expected_transition.with_name("selection-before.json")
+        prior, prior_raw, prior_signature = _owned_metadata(prior_path)
+        if (prior.get("schema") != "runtime_release_selection_v1"
+                or prior.get("actual_pid_consumed") is not True
+                or failed.get("original_selection_sha256") != _digest(prior_raw)
+                or prior.get("git_commit") != failed.get("previous_commit")
+                or prior.get("release_root") != failed.get("previous_root")
+                or old_identity.get("cwd") != str(Path(prior["release_root"]) / "src")
+                or (prior.get("actual_pid_receipt") or {}).get("pid") != old_identity["pid"]
+                or self.old.get("previous_selection_backup") != str(prior_path)
+                or self.old.get("previous_git_commit") != prior.get("git_commit")
+                or self.old.get("previous_release_root") != prior.get("release_root")):
+            raise ValueError("deployment_failed_transition_source_invalid")
+        if (self.old.get("schema") != "runtime_release_selection_v1"
+                or self.old.get("actual_pid_consumed") is not True
+                or self.old.get("git_commit") != self.previous_commit
+                or self.old.get("release_root") != str(self.previous)
+                or (self.old.get("actual_pid_receipt") or {}).get("pid") != self.identity["pid"]
+                or H._identity(self.identity["pid"]) != self.identity
+                or _main_pids() != [self.identity["pid"]]):
+            raise ValueError("deployment_failed_hold_current_pid_unverified")
+        self.failed_hold_adoption = dict(raw=raw, signature=signature,
+            transition_path=str(expected_transition), transition_raw=failed_raw,
+            transition_signature=failed_signature, prior_path=str(prior_path),
+            prior_raw=prior_raw, prior_signature=prior_signature)
+        proof = dict(schema="ordered_failed_startup_hold_adoption_v1", authority=CONFIRM,
+            target_date=self.day, previous_commit=self.previous_commit,
+            candidate_commit=self.commit, previous_hold_path=str(self.hold),
+            previous_hold_sha256=_digest(raw), failed_transition_path=str(expected_transition),
+            failed_transition_sha256=_digest(failed_raw),
+            failed_original_selection_path=str(prior_path), failed_original_selection_sha256=_digest(prior_raw),
+            source_failure="deployment_pid_attestation_timeout", previous_hold_identity=old_identity,
+            verified_current_pid_identity=self.identity, original_selection_sha256=_digest(self.before),
+            transfer_status="verified_not_transferred", runtime_effect="authorized_code_restart_only",
+            policy_effect="unchanged")
+        _atomic(self.directory / "failed-startup-hold-before.json", raw)
+        _atomic(self.directory / "failed-transition-before.json", failed_raw)
+        _atomic(self.directory / "failed-original-selection-before.json", prior_raw)
+        self.checkpoint("preflight", failed_hold_adoption=proof)
+
+    def _assert_failed_transition_unchanged(self):
+        adoption = getattr(self, "failed_hold_adoption", None)
+        if adoption is None: return
+        _, raw, signature = _owned_metadata(adoption["transition_path"])
+        if raw != adoption["transition_raw"] or signature != adoption["transition_signature"]:
+            raise ValueError("deployment_failed_transition_changed")
+        _, raw, signature = _owned_metadata(adoption["prior_path"])
+        if raw != adoption["prior_raw"] or signature != adoption["prior_signature"]:
+            raise ValueError("deployment_failed_transition_source_changed")
 
     def seal_native_predecessor(self, check):
         """Capture verified LIVE native consumption before requesting drain."""
@@ -314,6 +449,7 @@ class Deployment:
         self.frozen[str(self.native_path)] = self.native_sha
 
     def assert_unchanged(self):
+        self._assert_failed_transition_unchanged()
         if self.selection.read_bytes() != self.before:
             raise ValueError('deployment_selection_changed')
         if any(H._sha(path) != sha for path, sha in self.frozen.items()):
@@ -324,10 +460,37 @@ class Deployment:
         self.hold_bytes = _json_bytes(dict(schema='ordered_deployment_startup_hold_v1',
             authority=CONFIRM, transition=str(self.directory / 'status.json'),
             target_date=self.day, candidate_commit=self.commit, old_pid_identity=self.identity))
-        with self.hold.open('xb') as out:
-            out.write(self.hold_bytes)
-            out.flush()
-            os.fsync(out.fileno())
+        adoption = getattr(self, "failed_hold_adoption", None)
+        if getattr(self, "adopt_failed_hold", False) and (
+                adoption is None or getattr(self, "_preflight_native_verified", False) is not True):
+            raise ValueError("deployment_failed_hold_adoption_unverified")
+        if adoption is None:
+            with self.hold.open('xb') as out:
+                out.write(self.hold_bytes)
+                out.flush()
+                os.fsync(out.fileno())
+        else:
+            # Existing release-set serialization remains required by execute's
+            # caller. The same selector lock also excludes native PID writers.
+            with _existing_selector_lock(self.workspace / "data/runtime/runtime_release_selection.lock"):
+                self.assert_unchanged()
+                try:
+                    _atomic(self.hold, self.hold_bytes, expected=adoption)
+                except BaseException:
+                    # A directory fsync can fail after rename. Preserve the
+                    # actually observed owner in failure evidence; never roll
+                    # back over a hold another operator may have published.
+                    transfer = "transfer_outcome_unobservable"
+                    try:
+                        _, observed, _ = _owned_metadata(self.hold)
+                        transfer = ("transferred_but_publication_failed" if observed == self.hold_bytes
+                                    else "not_transferred" if observed == adoption["raw"]
+                                    else "hold_ownership_changed")
+                    except (OSError, ValueError, TypeError, KeyError):
+                        pass
+                    self.state["failed_hold_adoption"]["transfer_status"] = transfer
+                    raise
+            self.state["failed_hold_adoption"]["transfer_status"] = "transferred_exact_owned_hold"
         self.checkpoint('startup_held')
 
     def assert_hold(self):
