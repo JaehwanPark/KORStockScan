@@ -2363,8 +2363,8 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
     return result
 
 
-def _latest_dated_json(directory, prefix, through_date):
-    """Read one exact-date artifact; never scan event/history payloads here."""
+def _latest_dated_path(directory, prefix, through_date):
+    """Select one date without opening a potentially large report."""
     candidates = []
     for path in directory.glob(f"{prefix}????-??-??.json"):
         day = path.name[len(prefix):-5]
@@ -2378,7 +2378,21 @@ def _latest_dated_json(directory, prefix, through_date):
     day, path = max(candidates)
     if path.is_symlink():
         raise ValueError("semantic_artifact_symlink_rejected")
-    return day, _small_json(path)
+    return day, path
+
+
+def _latest_dated_json(directory, prefix, through_date):
+    """Read one exact-date artifact; never scan event/history payloads here."""
+    day, path = _latest_dated_path(directory, prefix, through_date)
+    return day, _small_json(path) if path is not None else None
+
+
+def _entry_split_count(value):
+    if isinstance(value, (list, dict)):
+        return len(value)
+    if value is None or type(value) is int and value >= 0:
+        return value
+    raise ValueError("entry_split_count_invalid")
 
 
 def entry_execution_tuning_semantics(data_root, now):
@@ -2431,22 +2445,38 @@ def entry_execution_tuning_semantics(data_root, now):
     # a receipt defect and does not create a synthetic zero-EV result.
     split = result["entry_split"]
     try:
-        report_date, report = _latest_dated_json(
+        report_date, report_path = _latest_dated_path(
             data_root / "report/entry_split_order_plan", "entry_split_order_plan_", day
         )
-        if report is None:
+        if report_path is None:
             split.update(status="not_yet_observed", blocker="entry_split_report_missing")
         else:
             policy_path = data_root / "threshold_cycle/entry_split_order_policy" / f"entry_split_order_policy_{report_date}.json"
             binding_status = "missing"
             policy = None
-            if policy_path.is_symlink():
-                binding_status = "symlink_rejected"
-            elif policy_path.exists():
-                policy = _small_json(policy_path)
-                from src.engine.scalping.entry_split_order_plan import validate_report_policy_generation
-                valid, reason = validate_report_policy_generation(report, policy)
-                binding_status = "matched" if valid else reason
+            from src.engine.scalping.entry_split_monitor_projection import manifest_path, read_verified_projection
+            pointer = manifest_path(report_path)
+            if pointer.exists() or pointer.is_symlink() or report_path.stat().st_size > 8 * 1024 * 1024:
+                report, proof = read_verified_projection(
+                    report_path, policy_path, source_date=report_date, role="submission_monitor")
+                proof = dict(proof)
+                policy = proof.pop("_validated_policy", None)
+                if proof.get("verified") is not True or not isinstance(policy, dict):
+                    raise ValueError("entry_split_projection_not_verified")
+                binding_status = "matched"
+                split.update(verification="verified", verification_receipt=proof,
+                             read_mode="verified_monitor_projection")
+            else:
+                report = _small_json(report_path)
+                if policy_path.is_symlink():
+                    binding_status = "symlink_rejected"
+                elif policy_path.exists():
+                    policy = _small_json(policy_path)
+                    from src.engine.scalping.entry_split_order_plan import validate_report_policy_generation
+                    valid, reason = validate_report_policy_generation(report, policy)
+                    binding_status = "matched" if valid else reason
+                split.update(verification="verified" if binding_status == "matched" else "invalid",
+                             read_mode="bounded_native_report")
             if binding_status != "matched":
                 issues["entry_split_report_policy_generation_mismatch"] += 1
                 if len(result["examples"]) < 3:
@@ -2485,19 +2515,22 @@ def entry_execution_tuning_semantics(data_root, now):
                         result["examples"].append({"axis": "entry_split", "reason": bootstrap_policy_binding, "source_date": report_date})
             acceptance = report.get("economic_acceptance") or {}
             candidates = report.get("operating_candidate_grid") or []
+            candidate_count = report.get("operating_candidate_count", len(candidates))
+            if type(candidate_count) is not int or candidate_count < 0:
+                raise ValueError("entry_split_projection_candidate_count_invalid")
             split.update(
-                status="source_gap" if acceptance.get("blockers") else "candidate_observed" if candidates else "no_candidate_observed",
+                status="source_gap" if acceptance.get("blockers") else "candidate_observed" if candidate_count else "no_candidate_observed",
                 source_date=report_date,
                 report_schema=report.get("schema_version"),
                 clean_baseline_date=(report.get("cumulative_state") or {}).get("clean_tuning_baseline_date"),
                 cumulative_source_date_count=len((report.get("cumulative_state") or {}).get("source_dates") or []),
                 economic_status=acceptance.get("status"),
                 blockers=list(acceptance.get("blockers") or [])[:12],
-                operating_candidate_count=len(candidates),
+                operating_candidate_count=candidate_count,
                 primary_operating_ev_pct=acceptance.get("primary_operating_ev_pct"),
                 robust_paired_delta_ev_lower_bound_pct=acceptance.get("robust_paired_delta_ev_lower_bound_pct"),
-                paired_model_row_count=acceptance.get("model_rows"),
-                consumed_holdout_count=acceptance.get("consumed_holdouts"),
+                paired_model_row_count=_entry_split_count(acceptance.get("model_row_count", acceptance.get("model_rows"))),
+                consumed_holdout_count=_entry_split_count(acceptance.get("consumed_holdout_count", acceptance.get("consumed_holdouts"))),
                 policy_generation_binding=binding_status,
                 policy_runtime_apply_allowed=bool(policy and policy.get("runtime_apply_allowed")),
                 prepared_effective_date=(policy or {}).get("prepared_effective_date"),
@@ -2508,7 +2541,7 @@ def entry_execution_tuning_semantics(data_root, now):
                 } else "not_proven",
             )
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        split.update(status="unobservable", reason=str(exc)[:160])
+        split.update(status="unobservable", verification="not_verified", reason=str(exc)[:160])
 
     # The bootstrap's own delay selector is the canonical policy validator.
     # Re-run that bounded small-artifact check and compare it with the frozen
@@ -2622,7 +2655,9 @@ def entry_execution_tuning_semantics(data_root, now):
     result["issues"] = dict(issues)
     if issues:
         result["status"] = "review_required"
-    elif result["bootstrap"].get("status") == "verified":
+    elif (result["bootstrap"].get("status") == "verified"
+          and split.get("verification") == "verified"
+          and delay.get("status") != "unobservable"):
         result["status"] = "observed"
     else:
         result["status"] = "partial_unobservable"

@@ -37,7 +37,8 @@ def test_wire_parity_and_strict_decode(fixture):
     with pytest.raises(ValueError,match='identity'):W.encode(duplicate)
 
 
-def test_live_sdk_exact_contract(tmp_path,monkeypatch):
+@pytest.mark.parametrize('schema_changed', [False, True])
+def test_live_sdk_exact_contract(tmp_path,monkeypatch,schema_changed):
     from src.tests.test_ai_engine_openai_transport import _build_engine
     from src.engine import ai_engine_openai as E
     from src.utils import constants
@@ -53,10 +54,26 @@ def test_live_sdk_exact_contract(tmp_path,monkeypatch):
     engine.client=SimpleNamespace(responses=SimpleNamespace(create=create))
     monkeypatch.setattr(constants,'DATA_DIR',tmp_path)
     monkeypatch.setattr(E,'capture_ai_request',lambda **kw: captures.append(kw) or {})
-    result=engine._call_openai_safe(prompt,json.dumps(inp,ensure_ascii=True,sort_keys=True,separators=(',',':')),
-        model_override=new['model'],schema_name=E.ENTRY_RISK_ADJUDICATION_SCHEMA,endpoint_name='analyze_target',transport_mode_override='http',
-        metadata_extra={'entry_setup_live_policy_selected_prompt_version':G.binding(new)['prompt_version']},
-        response_schema_override=schema,auxiliary_registry_sha256=new['registry_sha256'],replay_context=inp)
+    projector=G.projector(new['input_version'])
+    original_schema=projector.response_schema
+    schema_calls=[]
+    def response_schema(logical):
+        schema_calls.append(logical)
+        return original_schema(logical)
+    monkeypatch.setattr(projector,'response_schema',response_schema)
+    def invoke():
+        return engine._call_openai_safe(prompt,json.dumps(inp,ensure_ascii=True,sort_keys=True,separators=(',',':')),
+            model_override=new['model'],schema_name=E.ENTRY_RISK_ADJUDICATION_SCHEMA,endpoint_name='analyze_target',transport_mode_override='http',
+            metadata_extra={'entry_setup_live_policy_selected_prompt_version':G.binding(new)['prompt_version']},
+            response_schema_override={} if schema_changed else schema,
+            auxiliary_registry_sha256=new['registry_sha256'],replay_context=inp)
+    if schema_changed:
+        with pytest.raises(ValueError,match='registered_auxiliary_transport_contract_changed'):
+            invoke()
+        assert not calls and not captures and len(schema_calls)==1
+        return
+    result=invoke()
+    assert len(schema_calls)==1  # Identical logical schema was previously built twice.
     assert result==raw and len(calls)==1
     sent=calls[0]
     assert sent['instructions']==env['final_prompt'] and sent['input']==json.dumps(env['wire_input'],ensure_ascii=True,sort_keys=True,separators=(',',':'))

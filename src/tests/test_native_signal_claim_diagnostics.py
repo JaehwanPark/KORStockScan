@@ -1,5 +1,5 @@
 """Diagnostic lifecycle, source-only labels and readiness; no broker/provider I/O."""
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -133,6 +133,32 @@ def test_claim_joins_exact_native_scope_not_signal_id_alone(native):
     R.record_selected_native_claim(claim, family_sha256='family', now=T+.2)
     assert row['claimed'] and row['claimed_epoch'] == T+.2
     assert R.snapshot()['native_signal_lifecycle']['counts']['claimed'] == 1
+
+
+def test_main_phase_clock_explains_delivery_without_changing_native_authority(native, monkeypatch):
+    clock = [100.]
+    monkeypatch.setattr(R.time, 'perf_counter', lambda: clock[0])
+    monkeypatch.setattr(R, '_MAIN_PHASE_HISTORY', deque(maxlen=256))
+    monkeypatch.setattr(R, '_MAIN_PHASE', dict(name='not_observed', code=None, epoch=None, perf=None))
+    R.record_main_phase('target_visit', 'other')
+    row = observe(native)
+    assert row['main_phase_at_first_eligible']['name'] == 'target_visit'
+    assert row['first_eligible_perf'] == 100.
+    clock[0] = 100.5
+    R.record_main_phase('optional_maintenance')
+    clock[0] = 103.
+    R.record_main_phase('idle_wait')
+    clock[0] = 103.105
+    R.record_main_phase('main_wake')
+    B, scope, *_ = native
+    R.record_native_visit(*scope[:4], T+3.105)
+    window = row['main_delivery_phase_window']
+    assert window['coverage'] == 'complete' and not window['truncated']
+    assert [(x['name'], round(x['ended_perf']-x['started_perf'], 3))
+            for x in window['intervals']] == [
+        ('target_visit', .5), ('optional_maintenance', 2.5), ('idle_wait', .105)]
+    assert row['claim_attempt_perf'] - row['first_eligible_perf'] == pytest.approx(3.105)
+    assert row['original_deadline'] == T+5 and not B._STATES[scope].ready[0]['claimed']
 
 
 def test_eviction_and_observation_queue_rejection_are_explicit(native, monkeypatch):

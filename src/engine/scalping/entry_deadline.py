@@ -45,9 +45,17 @@ class EntryDeadline:
         if self.remaining() <= 0:
             raise ValueError('entry_machine_input_deadline_expired')
 
-    def transport_ms(self, existing_ms, reserve_sec=0.0):
+    def transport_ms(self, existing_ms, reserve_sec=0.0, *, facts=None):
         # No minimum timeout may enlarge the remaining claim budget.
-        value = int(min(float(existing_ms), (self.remaining() - reserve_sec) * 1000))
+        remaining = self.remaining()
+        value = int(min(float(existing_ms), (remaining - reserve_sec) * 1000))
+        if facts is not None:
+            facts.update(budget_before_transport_ms=remaining * 1000,
+                         response_reserve_ms=reserve_sec * 1000,
+                         configured_transport_limit_ms=float(existing_ms),
+                         timeout_override_ms=value,
+                         original_deadline_epoch=self.epoch,
+                         original_deadline_perf=self.perf)
         if value < 1:
             raise ValueError('entry_machine_input_deadline_expired')
         return value

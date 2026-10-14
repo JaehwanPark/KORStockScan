@@ -408,6 +408,18 @@ REVIEWED_NONFIXED_SUBMIT_SOURCES = {'src/engine/monitoring/submission_bottleneck
  'src/engine/scalping/scanner_async_eval.py': ('54d8584efa5350575d687b92486e205702f94cfde7a87da0acda46d1f3522748',
                                                'f0dc2bbeca1d3365185df9dac27765e7ec8f16d488a1ef352646374517679441')}
 
+# Exact PREOPEN-to-reviewed projection and native-ready delivery consumer bytes.
+# Evidence: docs/audits/entry-split-projection-and-main-delivery-implementation-review-2026-10-14.md.
+REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES = {'src/engine/ai_engine_openai.py': ('dabda2cb9fee6fd17263465f38866d90ec66f62b7305a2b5bb7a8dd9fc9a1671',
+                                    '3831d30ef13ab190b07b64d8159d2e2c23ee6ce4b124f0c6504cb053ca145a3a'),
+ 'src/engine/kiwoom_sniper_v2.py': ('6f1abc2ad7c532d693b832fb041ff519874ce141b52d2f1c724b445467440c0e',
+                                    'bb8cc6f224428a073f60826f8aa70e97d4b68b0383c907d681b8be5473a2d7c6'),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
+                                                            'c1abc77a5bfdc983bb4cdf5fa02cd886337f9b71b68204906f6fbe476cdac723'),
+ 'src/engine/runtime_approval_summary.py': ('ed940e9fd88d328b489400055aceba793b9d0ad83b591053fb1912ac501e1aa3',
+                                            'cc43d8de315cc07cd9545c06d1ce4fbfa32eb432d52d39ccb67b16e22f0c8cfd')}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -452,7 +464,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_IO_OBSERVER_SOURCES.get(name),
                     REVIEWED_IO_DIGEST_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name),
-                    REVIEWED_NONFIXED_SUBMIT_SOURCES.get(name)):
+                    REVIEWED_NONFIXED_SUBMIT_SOURCES.get(name),
+                    REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

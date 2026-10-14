@@ -8,6 +8,42 @@ def _text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("exit_code", [0, 47])
+@pytest.mark.parametrize("shared_mount", [False, True])
+def test_entry_split_verification_hook_uses_bounded_child_and_propagates_failure(tmp_path, exit_code, shared_mount):
+    import os, subprocess
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    body = "publish_entry_split_verification() {" + script.split(
+        "publish_entry_split_verification() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    # Exercise the shell boundary without running the postclose producer or
+    # a provider. A failing verification must stop the calling stage.
+    command = f'''set -e
+run_postclose_cmd() {{ printf '%s\\n' "$@"; return {exit_code}; }}
+{body}
+publish_entry_split_verification
+printf 'continued\\n'
+'''
+    project = tmp_path / "project with spaces"
+    project.mkdir()
+    data = tmp_path / "shared data" if shared_mount else project / "data"
+    data.mkdir()
+    if shared_mount:
+        (project / "data").symlink_to(data, target_is_directory=True)
+    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
+        env={**os.environ, "PROJECT_DIR": str(project), "TARGET_DATE": "2026-10-13",
+             "VENV_PY": str(project / ".venv/bin/python")})
+    assert result.returncode == exit_code
+    args = result.stdout.splitlines()
+    assert args[:5] == ["env", "PYTHONPATH=.", str(project / ".venv/bin/python"), "-m",
+                       "src.engine.scalping.entry_split_monitor_projection"]
+    assert args[args.index("--data-root") + 1] == str(data)
+    assert args[args.index("--report") + 1] == str(data / "report/entry_split_order_plan/entry_split_order_plan_2026-10-13.json")
+    assert args[args.index("--wall-seconds") + 1] == "300"
+    assert args[args.index("--memory-mib") + 1] == "4096"
+    assert ("continued" in args) == (exit_code == 0)
+    assert script.count("  compact_entry_split_report_storage\n  publish_entry_split_verification\n") == 2
+
+
 def _native_final_resume_fixture(tmp_path):
     import json, hashlib
     script = _text('deploy/run_threshold_cycle_postclose.sh')

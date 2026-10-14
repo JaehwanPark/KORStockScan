@@ -210,12 +210,91 @@ def test_native_hints_preserve_protected_positions_and_full_fairness_population(
         dict(code='commit', status='WATCHING', _scanner_scheduler_lane='COMMIT'),
         dict(code='069640', status='WATCHING'), dict(code='sold', status='SELL_ORDERED'),
         dict(code='034020', status='WATCHING'), dict(code='other', status='WATCHING')]
-    actual = R.prioritize_native_watches(targets, now=103.)
+    tokens = {}
+    actual = R.prioritize_native_watches(targets, now=103., visit_tokens=tokens)
     assert [t['code'] for t in actual] == ['held', '034020', 'commit', '069640', 'sold', 'slow', 'other']
     assert {id(t) for t in actual} == {id(t) for t in targets}
     assert [t['code'] for t in targets] == ['held', 'slow', 'commit', '069640', 'sold', '034020', 'other']
-    assert not R._NATIVE_VISIT_HINTS
+    assert len(R._NATIVE_VISIT_HINTS) == 2
+    R.acknowledge_native_watch_visit(actual[1], tokens[id(actual[1])], now=103.)
+    assert set(R._NATIVE_VISIT_HINTS) == {'069640'}
+    # Sorting one target cannot lose another target's pending notification.
+    assert R.prioritize_native_watches(targets[2:], now=103.)[1]['code'] == '069640'
+    R.acknowledge_native_watch_visit(actual[3], tokens[id(actual[3])], now=103.)
     assert R.prioritize_native_watches(targets, now=104.) is targets
+
+
+def test_new_hint_between_selection_and_actual_visit_is_retained(monkeypatch):
+    monkeypatch.setattr(R, '_NATIVE_VISIT_HINTS', OrderedDict([('005930', 100.)]))
+    monkeypatch.setattr(R, '_NATIVE_VISIT_TOKENS', {'005930': 7})
+    target = dict(code='005930', status='WATCHING')
+    tokens = {}
+    R.prioritize_native_watches([target], now=101., visit_tokens=tokens)
+    # Even equal wall timestamps in a successor generation have a new token.
+    R._NATIVE_VISIT_TOKENS['005930'] = 8
+    R.acknowledge_native_watch_visit(target, tokens[id(target)], now=101.)
+    assert R._NATIVE_VISIT_HINTS['005930'] == 100.
+    R.prioritize_native_watches([target], now=101., visit_tokens=tokens)
+    R.acknowledge_native_watch_visit(target, tokens[id(target)], now=101.)
+    assert not R._NATIVE_VISIT_HINTS and not R._NATIVE_VISIT_TOKENS
+
+
+def test_native_signal_after_ordinary_visit_reenters_once_without_displacing_protected_work(monkeypatch):
+    monkeypatch.setattr(R, '_NATIVE_VISIT_HINTS', OrderedDict([('005930', 100.)]))
+    monkeypatch.setattr(R, '_NATIVE_VISIT_TOKENS', {'005930': 1})
+    ready = dict(code='005930', status='WATCHING')
+    held = dict(code='held', status='HOLDING')
+    commit = dict(code='commit', status='WATCHING', _scanner_scheduler_lane='COMMIT')
+    ordinary = dict(code='other', status='WATCHING')
+    all_targets = [ready, held, commit, ordinary]
+    visited, revisited = {id(ready)}, set()
+    queue = [held, commit, ordinary]
+    tokens = {}
+    actual = R.prioritize_native_watches(queue, now=100.1, all_targets=all_targets,
+        processed_target_ids=visited, revisited_target_ids=revisited, visit_tokens=tokens)
+    assert actual == [held, commit, ready, ordinary]
+    assert len(actual) == 4 and revisited == {id(ready)}
+    R.acknowledge_native_watch_visit(ready, tokens[id(ready)], now=100.1)
+    R._NATIVE_VISIT_HINTS['005930'] = 100.2
+    R._NATIVE_VISIT_TOKENS['005930'] = 2
+    # A continuing ingress stream cannot starve the ordinary target forever.
+    assert R.prioritize_native_watches([ordinary], now=100.3, all_targets=all_targets,
+        processed_target_ids=visited, revisited_target_ids=revisited) == [ordinary]
+    # A fresh outer pass can consume this still-original eligible hint.
+    assert R.prioritize_native_watches([], now=100.3, all_targets=all_targets,
+        processed_target_ids=visited, revisited_target_ids=set()) == [ready]
+
+
+def test_transport_budget_facts_use_the_actual_sample_and_do_not_extend_deadline(monkeypatch):
+    from src.engine.scalping.entry_deadline import EntryDeadline
+    from src.engine.scalping import entry_deadline as D
+    monkeypatch.setattr(D.time, 'time', lambda: 104.)
+    monkeypatch.setattr(D.time, 'perf_counter', lambda: 204.)
+    deadline = EntryDeadline(105., 205.)
+    facts = {}
+    assert deadline.transport_ms(5000, reserve_sec=.223, facts=facts) == 777
+    assert facts['budget_before_transport_ms'] == 1000.
+    assert facts['response_reserve_ms'] == 223.
+    assert facts['timeout_override_ms'] == 777
+    assert facts['original_deadline_perf'] == 205.
+    monkeypatch.setattr(D.time, 'perf_counter', lambda: 205.)
+    with pytest.raises(ValueError, match='entry_machine_input_deadline_expired'):
+        deadline.transport_ms(5000, facts=facts)
+    assert facts['timeout_override_ms'] == 0
+
+
+def test_transport_observation_keeps_budget_and_sdk_remaining_separate_from_caller_return():
+    observation = OpenAITransportObservation()
+    observation.record_budget(dict(timeout_override_ms=777, response_reserve_ms=100))
+    observation.mark('executor_enqueued', remaining_sec=.765)
+    observation.mark('sdk_started', remaining_sec=.764)
+    observation.mark('caller_adapter_finished')
+    fields = observation.fields()
+    assert fields['provider_deadline_budget']['timeout_override_ms'] == 777
+    assert fields['provider_stage_remaining_ms']['sdk_started'] == 764.
+    assert 'sdk_finished' not in fields['provider_stage_monotonic']
+    assert fields['provider_response_received'] is False
+    assert fields['provider_physical_transmission'] == 'unknown'
 
 
 def test_expired_or_closed_hint_never_creates_a_new_visit_lease(monkeypatch):
@@ -368,6 +447,31 @@ def test_timeout_does_not_invent_sdk_end_and_late_settlement_is_diagnostic_only(
     row = R._HTTP_SETTLEMENTS[-1]
     assert row['request_id'] == 'request' and row['decision_authority'] == 'none'
     assert row['stage_monotonic']['sdk_finished'] > phases['caller_adapter_finished']
+    remaining = row['transport_facts']['provider_stage_remaining_ms']
+    assert 0 < remaining['sdk_started'] <= remaining['executor_enqueued'] <= 30
+
+
+def test_optional_transport_observation_can_disappear_before_settlement(monkeypatch):
+    monkeypatch.setattr(R, '_HTTP_SETTLEMENTS', deque(maxlen=128))
+    entered, release = threading.Event(), threading.Event()
+    def create(**kwargs):
+        entered.set()
+        assert release.wait(2)
+        return 'response'
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    engine._http_deadline_executor = ThreadPoolExecutor(max_workers=1)
+    current = request(timeout_ms=30, transport_observation=OpenAITransportObservation())
+    try:
+        with pytest.raises(OpenAIHTTPWallClockDeadlineError):
+            engine._create_openai_response_with_deadline(current, provider_payload={})
+        assert entered.is_set()
+        current.transport_observation = None
+    finally:
+        release.set()
+        engine._http_deadline_executor.shutdown(wait=True)
+    assert R._HTTP_SETTLEMENTS[-1]['request_id'] == 'request'
+    assert R._HTTP_SETTLEMENTS[-1]['transport_facts'] == {}
 
 
 def test_executor_queue_clock_excludes_local_warmup_bookkeeping(monkeypatch):

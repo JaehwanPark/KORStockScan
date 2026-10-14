@@ -376,10 +376,24 @@ def _large_companion(
 ) -> tuple[dict[str, Any], dict[str, Any], str | None]:
     if owner == "entry_split":
         from src.engine.scalping import entry_split_order_plan as native
+        from src.engine.scalping.entry_split_monitor_projection import manifest_path, read_verified_projection
         companion_path = paths["entry_split_policy"]
-        proof = {"path": str(companion_path), "sha256": _sha(companion_path),
+        proof = {"path": str(companion_path), "sha256": None,
                  "contract": "entry_split_native_report_policy_generation", "verified": False}
         try:
+            pointer = manifest_path(path)
+            if pointer.exists() or pointer.is_symlink() or path.stat().st_size > MAX_DIRECT_JSON_BYTES:
+                report, receipt = read_verified_projection(
+                    path, companion_path, source_date=target_date, role="runtime_summary")
+                receipt = {key: value for key, value in receipt.items() if key != "_validated_policy"}
+                matches = receipt.get("report_sha256") == artifact_sha256
+                proof.update(receipt, artifact_sha_matches=matches)
+                proof["sha256"] = receipt.get("policy_sha256")
+                proof["verified"] = bool(receipt.get("verified") is True and matches)
+                if proof["verified"]:
+                    return report, proof, None
+                return {}, proof, "semantic_unverified_large_source"
+            proof["sha256"] = _sha(companion_path)
             report, observed_sha = native._read_entry_report(path)
             policy, error, _, _ = _read(companion_path)
             valid, reason = native.validate_report_policy_generation(report, policy)

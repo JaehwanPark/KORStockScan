@@ -356,6 +356,27 @@ def test_entry_execution_semantics_keeps_source_gaps_separate_from_receipt_fault
         patch.undo()
 
 
+def test_large_split_without_verified_projection_stays_partial_without_full_read(tmp_path, monkeypatch):
+    patch = _entry_axis_fixture(tmp_path)
+    try:
+        path = tmp_path / "report/entry_split_order_plan" / f"entry_split_order_plan_{START.date().isoformat()}.json"
+        with path.open("ab") as out:
+            out.write(b" " * (8 * 1024 * 1024))
+        small = monitor._small_json
+        def bounded_only(candidate):
+            assert candidate != path, "monitor must not read the large native report"
+            return small(candidate)
+        monkeypatch.setattr(monitor, "_small_json", bounded_only)
+        result = monitor.entry_execution_tuning_semantics(tmp_path, START)
+        assert result["bootstrap"]["status"] == "verified"
+        assert result["entry_split"]["status"] == "unobservable"
+        assert result["entry_split"]["verification"] == "not_verified"
+        assert result["status"] == "partial_unobservable"
+        assert result["entry_split"].get("primary_operating_ev_pct") is None
+    finally:
+        patch.undo()
+
+
 def test_entry_execution_semantics_detects_generation_and_handoff_mismatch(tmp_path):
     patch = _entry_axis_fixture(
         tmp_path, delay_handoff={"status": "verified_candidate", "target_date": START.date().isoformat()},

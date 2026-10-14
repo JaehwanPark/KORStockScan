@@ -911,6 +911,19 @@ if __name__ == '__main__':
 PY_ENTRY_STORAGE
 }
 
+publish_entry_split_verification() {
+  # Existing postclose publication boundary only. The bounded worker verifies
+  # the native alias and immutable generation without rewriting either source.
+  local entry_split_data_root
+  entry_split_data_root="$(readlink -f -- "$PROJECT_DIR/data")"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_split_monitor_projection \
+    --data-root "$entry_split_data_root" \
+    --source-date "$TARGET_DATE" \
+    --report "$entry_split_data_root/report/entry_split_order_plan/entry_split_order_plan_${TARGET_DATE}.json" \
+    --policy "$entry_split_data_root/threshold_cycle/entry_split_order_policy/entry_split_order_policy_${TARGET_DATE}.json" \
+    --wall-seconds 300 --memory-mib 4096
+}
+
 detect_postclose_recovery_reuse_mode
 if [[ "$RESUME_INITIAL_QUANTITY" == "true" ]]; then
   [[ "$POSTCLOSE_RECOVERY_REUSE_MODE" == "true" ]] || exit 2
@@ -930,6 +943,7 @@ fi
 if [[ "$RESUME_FINAL_HANDOFF" == "true" ]]; then
   [[ "$POSTCLOSE_RECOVERY_REUSE_MODE" == "true" ]] || exit 2
   compact_entry_split_report_storage
+  publish_entry_split_verification
   POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT="$("$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_FINAL_RESUME'
 import hashlib, json, sys
 from pathlib import Path
@@ -1831,6 +1845,7 @@ if [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_ENTRY_SPLIT_ORDER_PLAN"
     "$PROJECT_DIR/data/threshold_cycle/entry_split_order_policy/entry_split_order_policy_${TARGET_DATE}.json" \
     "entry_split_order_policy"
   compact_entry_split_report_storage
+  publish_entry_split_verification
 fi
 if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "1" ]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \

@@ -12988,6 +12988,8 @@ def run_sniper(is_test_mode=False):
             )
         while True:
             loop_work_started = time.perf_counter()
+            from src.engine.monitoring.runtime_performance import record_main_phase
+            record_main_phase('loop_prepare')
             now_ts = time.time()
             from src.engine.scalping.pre_submit_delay_observation import prune as prune_delay_observations
             prune_delay_observations(now_ts)
@@ -13120,6 +13122,7 @@ def run_sniper(is_test_mode=False):
             # 신규 DB 타겟 polling (P0 계측 포함)
             # =====================================================
             _t0_db = time.perf_counter()
+            record_main_phase('target_db_and_fixed_watch_reconcile')
             if now_ts - last_db_poll_time > 5:
                 db_targets = DB.get_active_targets() or []
                 for dt in db_targets:
@@ -13221,6 +13224,7 @@ def run_sniper(is_test_mode=False):
             # 90초 lifecycle reconciliation과 45초 read-only broker snapshot
             # =====================================================
             _t0_acct = time.perf_counter()
+            record_main_phase('account_task_admission')
             if (
                 now_ts - getattr(run_sniper, "last_account_sync_time", 0)
                 > ACCOUNT_RECONCILIATION_INTERVAL_SEC
@@ -13239,6 +13243,7 @@ def run_sniper(is_test_mode=False):
                 ):
                     run_sniper.last_broker_snapshot_refresh_time = now_ts
             _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
+            record_main_phase('prequeue_maintenance')
 
             # Legacy overnight AI is retired. Holding AI remains active through
             # the close; the post-effective terminal rule only adds a SELL when
@@ -13300,6 +13305,7 @@ def run_sniper(is_test_mode=False):
                     targets,
                     now_epoch=time.time(),
                 )
+            record_main_phase('async_completion_drain')
             async_coordinator = getattr(
                 run_sniper,
                 "scanner_async_eval_coordinator",
@@ -13526,6 +13532,7 @@ def run_sniper(is_test_mode=False):
                                     now_epoch=time.time(),
                                     reason="async_commit_enqueue_rejected_generation_warm_parked",
                                 )
+            record_main_phase('target_source_preparation')
             queue_context = _runtime_queue_context(targets, now_ts=now_ts)
             active_scanner_watch_codes = {
                 str(t.get("code", "")).strip()[:6]
@@ -14575,8 +14582,10 @@ def run_sniper(is_test_mode=False):
                 scanner_heavy_eval_flushed = True
 
             runtime_work_queue = list(queue_context["iteration_targets"])
+            record_main_phase('target_queue')
             runtime_iteration_accounting_targets = list(runtime_work_queue)
             runtime_processed_target_ids = set()
+            runtime_native_revisited_ids = set()
             runtime_live_attach_ids = set()
             runtime_scheduler_forced_target_ids = set()
 
@@ -14690,6 +14699,15 @@ def run_sniper(is_test_mode=False):
                     or _scanner_async_commit_ready_for_main_thread()
                 ):
                     break
+                record_main_phase('target_admission')
+                from src.engine.monitoring.runtime_performance import (
+                    prioritize_native_watches, acknowledge_native_watch_visit)
+                native_visit_tokens = {}
+                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
+                    completed_requests=(async_coordinator.fixed_watch_ready_requests()
+                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
+                    all_targets=targets, processed_target_ids=runtime_processed_target_ids,
+                    revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
                 if not runtime_work_queue:
                     _flush_delayed_scanner_heavy_eval()
                     if scanner_async_commit_yield_requested:
@@ -14699,11 +14717,14 @@ def run_sniper(is_test_mode=False):
                 _admit_runtime_live_attaches()
                 if not runtime_work_queue:
                     break
-                from src.engine.monitoring.runtime_performance import prioritize_native_watches
                 runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
                     completed_requests=(async_coordinator.fixed_watch_ready_requests()
-                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None))
+                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
+                    all_targets=targets, processed_target_ids=runtime_processed_target_ids,
+                    revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
                 stock = runtime_work_queue.pop(0)
+                record_main_phase('target_visit', stock.get('code'))
+                acknowledge_native_watch_visit(stock, native_visit_tokens.get(id(stock)), now=time.time())
                 runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]
                 status = stock.get("status")
@@ -16236,6 +16257,7 @@ def run_sniper(is_test_mode=False):
                         ai_engine=holding_ai_engine,
                     )
 
+            record_main_phase('post_target_maintenance')
             _flush_delayed_scanner_heavy_eval()
             _flush_pending_scanner_ws_reg()
             _flush_deferred_scanner_pipeline_events()
@@ -16291,6 +16313,7 @@ def run_sniper(is_test_mode=False):
                     buy_time_allowed=is_scalping_buy_time_allowed(now),
                 )
             from src.engine.monitoring.runtime_performance import observe, log_snapshot
+            record_main_phase('loop_diagnostics')
             observe('loop_work', time.perf_counter() - loop_work_started)
             global _LOOP_METRICS_LAST_LOG_TS
             if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
@@ -16308,10 +16331,12 @@ def run_sniper(is_test_mode=False):
                 _LOOP_METRICS_LAST_LOG_TS = now_ts
 
             coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
+            record_main_phase('idle_wait')
             if coordinator is not None:
                 coordinator.wait_for_completion(_sleep_ms / 1000.0)
             else:
                 time.sleep(_sleep_ms / 1000.0)
+            record_main_phase('main_wake')
 
     except Exception as e:
         log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}\n{traceback.format_exc()}")

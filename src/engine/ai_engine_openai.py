@@ -703,21 +703,33 @@ class OpenAITransportObservation:
     """Local stage facts, never reservation release or proof of network delivery."""
     stages: dict = field(default_factory=dict)
     stage_monotonic: dict = field(default_factory=dict)
+    stage_remaining_ms: dict = field(default_factory=dict)
+    deadline_budget: dict = field(default_factory=dict)
     mutex: Any = field(default_factory=threading.Lock, repr=False)
 
-    def mark(self, stage):
+    def mark(self, stage, *, remaining_sec=None):
         with self.mutex:
             self.stages.setdefault(stage, time.time())
             self.stage_monotonic.setdefault(stage, time.perf_counter())
+            if remaining_sec is not None:
+                self.stage_remaining_ms.setdefault(stage, max(0., remaining_sec) * 1000)
+
+    def record_budget(self, facts):
+        with self.mutex:
+            self.deadline_budget.update(facts)
 
     def fields(self):
         with self.mutex:
             stages = dict(self.stages)
             monotonic = dict(self.stage_monotonic)
+            remaining = dict(self.stage_remaining_ms)
+            budget = dict(self.deadline_budget)
         sdk = 'sdk_started' in stages
         response = 'response_received' in stages
         return dict(provider_stage_epochs=stages,
                     provider_stage_monotonic=monotonic,
+                    provider_stage_remaining_ms=remaining,
+                    provider_deadline_budget=budget,
                     provider_adapter_entered='adapter_entered' in stages,
                     provider_sdk_started=sdk, provider_response_received=response,
                     provider_physical_transmission='response_confirmed' if response else 'unknown' if sdk else 'not_observed',
@@ -5047,6 +5059,8 @@ class GPTSniperEngine:
         provider_payload: dict[str, Any],
     ):
         remaining = request.remaining_timeout_sec()
+        if request.transport_observation is not None:
+            request.transport_observation.mark('http_prepare_completed', remaining_sec=remaining)
         if remaining <= 0:
             if request.transport_observation is not None:
                 request.transport_observation.mark('caller_adapter_finished')
@@ -5061,7 +5075,7 @@ class GPTSniperEngine:
         def transmit():
             attempt_clocks['executor_started'] = time.perf_counter()
             if request.transport_observation is not None:
-                request.transport_observation.mark('executor_started')
+                request.transport_observation.mark('executor_started', remaining_sec=request.remaining_timeout_sec())
             physical_remaining = request.remaining_timeout_sec()
             if physical_remaining <= 0:
                 raise OpenAIHTTPWallClockDeadlineError('OpenAI HTTP deadline exhausted in worker queue', future_cancelled=True)
@@ -5070,7 +5084,7 @@ class GPTSniperEngine:
             observe('provider_key_wait', max(0., started-request.submitted_at_perf))
             try:
                 if request.transport_observation is not None:
-                    request.transport_observation.mark('sdk_started')
+                    request.transport_observation.mark('sdk_started', remaining_sec=physical_remaining)
                 attempt_clocks['sdk_started'] = time.perf_counter()
                 response = client.responses.create(**provider_payload, timeout=physical_remaining)
                 if request.transport_observation is not None:
@@ -5083,7 +5097,7 @@ class GPTSniperEngine:
                 observe('provider_transport', time.perf_counter()-started)
         attempt_clocks = {'executor_enqueued': time.perf_counter()}
         if request.transport_observation is not None:
-            request.transport_observation.mark('executor_enqueued')
+            request.transport_observation.mark('executor_enqueued', remaining_sec=request.remaining_timeout_sec())
         future = self._get_http_deadline_executor().submit(transmit)
         def settled(done):
             try:
@@ -5092,7 +5106,8 @@ class GPTSniperEngine:
                 from src.engine.monitoring.runtime_performance import record_http_settlement
                 record_http_settlement(request.request_id, request.symbol,
                     {**attempt_clocks, 'future_settled': time.perf_counter()},
-                    cancelled=done.cancelled())
+                    cancelled=done.cancelled(), transport_facts=(request.transport_observation.fields()
+                        if request.transport_observation is not None else None))
             except Exception:
                 # Diagnostic callbacks cannot unlock a circuit or change the
                 # request Future's provider result/exception.
@@ -5471,11 +5486,18 @@ class GPTSniperEngine:
                     or selected_prompt_version!=registry.binding(registered_auxiliary)['prompt_version']
                     or target_model!=registered_auxiliary['model']
                     or projected.get('schema')!=registered_auxiliary['input_version']
-                    or response_schema_override!=registry.projector(registered_auxiliary['input_version']).response_schema(projected)
                     or user_input!=json.dumps(projected,ensure_ascii=True,sort_keys=True,separators=(',',':'))):
                 raise ValueError('registered_auxiliary_transport_contract_changed')
             if registered_auxiliary['schema']==registry.SCHEMA_V2:
                 auxiliary_envelope=registry.envelope(projected,registered_auxiliary)
+                # The envelope already computes the exact logical schema.
+                # Reuse that request-owned value for the same mandatory check.
+                expected_schema=auxiliary_envelope['logical_schema']
+            else:
+                expected_schema=registry.projector(registered_auxiliary['input_version']).response_schema(projected)
+            if response_schema_override!=expected_schema:
+                raise ValueError('registered_auxiliary_transport_contract_changed')
+            if auxiliary_envelope is not None:
                 prompt=auxiliary_envelope['final_prompt']
                 user_input=json.dumps(auxiliary_envelope['wire_input'],ensure_ascii=True,sort_keys=True,separators=(',',':'))
                 response_schema_override=auxiliary_envelope['wire_schema']
@@ -5504,6 +5526,8 @@ class GPTSniperEngine:
         )
         request.caller_deadline_perf = caller_deadline_perf
         request.transport_observation = transport_observation
+        if transport_observation is not None:
+            transport_observation.mark('request_built_before_capture', remaining_sec=request.remaining_timeout_sec())
         if request.remaining_timeout_sec() <= 0:
             raise OpenAIHTTPWallClockDeadlineError("OpenAI deadline exhausted before capture", future_cancelled=True)
         if not compact_auxiliary_call and self._uses_openai_primary_bedrock_fallback(
@@ -5620,7 +5644,11 @@ class GPTSniperEngine:
             )
 
         capture_started = time.perf_counter()
+        if transport_observation is not None:
+            transport_observation.mark('capture_started', remaining_sec=request.remaining_timeout_sec())
         capture_meta = capture_request(request)
+        if transport_observation is not None:
+            transport_observation.mark('capture_finished', remaining_sec=request.remaining_timeout_sec())
         transport_meta.update(capture_meta)
         if transport_meta.get('entry_auxiliary_policy_identity'):
             transport_meta['entry_auxiliary_policy_identity']['provenance'].update(
@@ -11045,6 +11073,15 @@ class GPTSniperEngine:
             local_stage_clocks.update(analysis_started_perf=analysis_started,
                 provider_started_perf=provider_started_monotonic,
                 pre_provider_seconds=provider_started_monotonic-analysis_started)
+            timeout_override = getattr(TRADING_RULES, 'OPENAI_SCALPING_ENTRY_TIMEOUT_MS', 5000) if is_scalping_entry_call else None
+            if entry_budget is not None and is_scalping_entry_call:
+                from src.engine.monitoring.runtime_performance import response_reserve
+                budget_facts = {}
+                local_stage_clocks['transport_budget'] = budget_facts
+                timeout_override = entry_budget.transport_ms(timeout_override,
+                    reserve_sec=response_reserve(), facts=budget_facts)
+                if transport_observation is not None:
+                    transport_observation.record_budget(budget_facts)
             result = self._call_openai_safe(
                 prompt,
                 formatted_data,
@@ -11077,10 +11114,7 @@ class GPTSniperEngine:
                     if is_scalping_entry_call
                     else None
                 ),
-                timeout_ms_override=(
-                    entry_budget.transport_ms(getattr(TRADING_RULES,"OPENAI_SCALPING_ENTRY_TIMEOUT_MS",5000), reserve_sec=__import__("src.engine.monitoring.runtime_performance",fromlist=["response_reserve"]).response_reserve())
-                    if entry_budget is not None and is_scalping_entry_call
-                    else getattr(TRADING_RULES,"OPENAI_SCALPING_ENTRY_TIMEOUT_MS",5000) if is_scalping_entry_call else None),
+                timeout_ms_override=timeout_override,
                 caller_deadline_perf=entry_budget.perf if entry_budget is not None else None,
                 **({'transport_observation': transport_observation} if transport_observation is not None else {}),
                 replay_context=replay_context,
