@@ -336,3 +336,9 @@ f25d3282d의17:19:54 기동/첫 진단 순서는 통과했지만17:20 정규 보
 7ee50c621의17:40 자연 보고서는 최종 세대 봉인/건강 재계산 equality를 통과했다. 후속 detector는 실제 현재 원천의 coverage_degraded 집계1건을 보고서 장애로 분류했다. 제한 관측 경로가 해당 원천 품질 incident를 허용하면서도 stages_clean에서 모든 issues를 거부하던 내부 모순이다. 원 issue·원천 결손·domain 알림·partial·미확인 AI/Main 결과는 그대로 보존한다. 알려진 route의 원 전체/원천 유효 건수와 원 coverage floor/threshold에서 정확히 재계산한 coverage_degraded 집계 및 scope만 보고서 건강과 구분한다. 타입·route·floor·분모/분자·집계/범위 위조나 그 밖의 계약/읽기/정책 오류는 실패다. 현재 수동 guard·native kernel·매매 권한과 정책은 바꾸지 않는다.
 
 실제17:40 발행 dict의 양성 회귀와 집계/범위/타입/교차 route 반례, source gap 보존을 검증한다. 이후 정규 보고서와 같은 run/hash를 읽은 후속 daemon으로 수용하며 이전7ee 기술 검증 PASS/semantic 실패는 변경하지 않는다. 새 증거 owner는 data/report/observer_coverage_boundary_deployment/2026-10-14다.
+
+## 22. 전체 기계 관측과 Main provider 모집단의 정확한 분리
+
+5d의17:55 자연 보고서에서 커버리지 분류는 수리됐으나 전체 기계 관측3건과 Main provider 계보2건을 같다고 요구한 결함이 남았다. 세 번째293780 관측은 해시가 정상인 probe_observation/zero_base_probe_machine_only_v1 ENTER_NOW이며 provider_request_observed=false와 주문 금지 원 증빙을 갖는다. 기존 계보 생산자는 의도적으로 probe/CF를 제외한다. 이를 Main 누락이나 주문 실패로 합치지 않는다.
+
+같은 native 검증을 통과한 현재 health_records에서 역할별 건수와 원 관측 해시를 명시적으로 분할한다. 전체 건수는 역할별 합계와 일치하고, Main provider 분모는 main_live/unspecified_legacy의 정확한 적격 해시 집합과 일치해야 한다. probe/CF의 역할 일치와 원 provider/주문 금지 증빙, 중복·분모·해시·actor·bundle을 검증한다. 임의의 이하 비교로 완화하지 않으며 기존 분할 증빙 없는 과거 보고서를 성공 처리하지 않는다. source quality와 원 semantic 실패를 보존한다. 혼합/전부 Main/probe 전용/CF/원천 무효와 변조 반례, 실제3개 원 관측의 producer→consumer 경로로 닫는다. 새 증거 owner는 data/report/observer_population_partition_deployment/2026-10-14다.

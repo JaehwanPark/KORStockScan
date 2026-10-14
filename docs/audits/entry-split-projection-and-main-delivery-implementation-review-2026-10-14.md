@@ -98,3 +98,9 @@ f25의 첫 진단은 ordered 완료 후 시작하고 process PASS였지만 첫 �
 7ee의17:40 자연 run935d0b는 선언 건강과 순수 재계산이 일치해 발행 순서 수리는 입증됐다. 하지만 현재 원천 집계 coverage_degraded1건만으로 다음 daemon에서 artifact 실패가 남았다. 제한 관측 incident 허용과 stages_clean의 모든 issues 거부가 충돌한 결함이다. 원 route별 분모·유효 원천 건수·coverage floor 및 정확한 issue/scope를 재계산해 검증한 원천 품질 경고만 분리한다. 원 partial/source gap/domain 알림과 AI/Main 미검증은 보존한다. 모든 다른 현재 issue와 잘못된 집계·타입·범위·정책/읽기 오류는 실패다. 이전 run의 기술 PASS/semantic 실패는 원 증거로 보존하며 새 정규 보고서/동일 hash를 읽은 daemon을 별도 수용한다.
 
 최종 여덟 번째 source 동결 후8suite 통합1,760개가13.00초에 통과했다. 실제7ee 발행 dict 원 bytes를 보존한 재검증과 원 source issue/domain 알림 보존, 알려진 route/교차 route 건수·고아 route·타입·floor/성공 계약 변조 거부를 포함한다. compile·bash 문법·diff 검사와70개 문서 링크/기존4owner/print-only parser25항목을 확인한다. 원 정책11개와33 native kernel은 변경하지 않으며 배포 후 정규 보고서/동일 run의 다음 daemon으로 별도 수용한다.
+
+## 13. probe 포함 관측과 Main 계보의 모집단 혼합 결함
+
+5d 첫 자연 발행의 세대/건강 equality·커버리지 수학 검증은 통과했으나 계보 비교가 실패했다. 현재 관측3개 중2개는 Main SOURCE_INVALID, 나머지293780의b5ea8945 관측은 provider/주문 금지된 probe ENTER_NOW다. 계보 생산자의 Main 전용2개 필터와 전체3개 분모를 비교한 소비 결함이다. 같은 검증된 원 관측에서 역할별 해시/건수 분할을 발행하고 Main 적격 집합과만 계보를 대사한다. 원 비주문 probe와 과거3vs2 실패는 보존한다. 임의의 <= 비교, 과거 분할 생성 성공 처리, 원천/AI/Main/경제성 완료는 주장하지 않는다. 실제 혼합 역할과 반례를 검증한 뒤 새 정규 run/hash를 읽은 daemon에서 별도 수용한다.
+
+최종 아홉 번째 source 동결 후8suite 통합1,785개가13.22초에 통과했다. 실제 생산자6가지 역할 조합과 native 원본3개 검증→분할→consumer 재계산에서 전체3/Main2/probe1을 확인했다. 모순 역할·probe provider/주문 허용·잘못된 해시/건수/actor/bundle·분할 결손·malformed 역할 예외를 거부하며 기존 원 보고서3vs2 실패는 보존한다. compile·bash 문법·diff 검사와70개 문서 링크/기존4owner/print-only parser25항목을 확인한다. 매매 정책/native 정의는 변경하지 않으며 새 정규 보고서와 이를 읽은 후속 daemon에서 별도 수용한다.

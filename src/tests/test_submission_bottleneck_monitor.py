@@ -1962,6 +1962,84 @@ def reversal_semantic_fixture(tmp_path, monkeypatch, *, turned=True):
     return observation, write, now
 
 
+@pytest.mark.parametrize('members',[
+    [('unspecified_legacy','invalid'),('unspecified_legacy','required')],
+    [('unspecified_legacy','invalid'),('unspecified_legacy','invalid'),('probe_observation','matched')],
+    [('probe_observation','matched')],
+    [('unspecified_legacy','required'),('probe_observation','invalid')],
+    [('counterfactual','matched')],
+    [([],'invalid')],
+])
+def test_real_machine_producer_role_partition_to_health_with_no_provider_calls(tmp_path,monkeypatch,members):
+    from copy import deepcopy
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    original,write,now=reversal_semantic_fixture(tmp_path,monkeypatch)
+    actor=[str(original['runtime_consumption']['pid']),original['runtime_consumption']['process_start_ticks']]
+    payload=[];traces=[]
+    for index,(role,kind) in enumerate(members):
+        row=deepcopy(original);row['evaluation_role']=role
+        row['source']['exact_payload']['evaluation_role']=role
+        row['label_context']['evaluation_attempt_id']='partition-attempt-'+str(index)
+        row['source']['exact_payload']['evaluation_attempt_id']=row['label_context']['evaluation_attempt_id']
+        native=row['runtime_consumption']['continuous_reversal'];native['evaluation_role']=role
+        native['provider_state']='probe_observation_provider_forbidden' if role=='probe_observation' else 'eligible_not_yet_requested'
+        if kind!='matched':
+            row['source']['assessment']=dict(schema='mechanistic_entry_source_invalid_v1' if kind=='invalid' else 'mechanistic_entry_required_feature_v1',
+                action='SOURCE_INVALID' if kind=='invalid' else 'RECHECK',
+                reason='ai_input_preflight_blocked' if kind=='invalid' else 'required_feature_input_insufficient',
+                runtime_effect=False,allowed_runtime_apply=False,actual_order_submitted=False,broker_order_forbidden=True)
+            row['source']['setup_evidence'].update(source_quality_status='blocked',source_quality_blockers=['candle_unknown_age'])
+            if role=='unspecified_legacy':row['runtime_consumption'].pop('continuous_reversal')
+        else:
+            native['exact_payload_sha256']=hashlib.sha256(_json_bytes(row['source']['exact_payload'])).hexdigest()
+        write(row);path=tmp_path/'ai_decision_payloads'/f'ai_decision_payloads_{now.date()}.jsonl'
+        row=json.loads(path.read_text());payload.append(row)
+        if role=='unspecified_legacy':
+            traces.append(dict(schema='ai_decision_trace_v1',decision_ts=now.isoformat(),decision_trace_id='trace-'+str(index),
+                evaluation_attempt_id=row['label_context']['evaluation_attempt_id'],machine_observation_sha256=row['machine_observation_sha256'],
+                machine_bundle_sha256=row['bundle_sha256'],async_producer_pid=actor[0],async_producer_start_ticks=actor[1],
+                entry_mechanistic_action=row['source']['assessment']['action'],provider_called=False,
+                entry_ai_screen_status='not_requested_machine_source_invalid' if kind=='invalid' else 'not_requested_required_feature_insufficient'))
+    # A duplicate physical capture must not add a fourth semantic observation.
+    path.write_text(''.join(json.dumps(row)+'\n' for row in payload+payload[:1]))
+    for kind,rows in [('requests',[dict(captured_at=now.isoformat(),request_id='unrelated',endpoint='other')]),
+                      ('trace',traces or [dict(decision_ts=now.isoformat(),decision_trace_id='unrelated')])]:
+        source=tmp_path/('ai_decision_'+kind)/f'ai_decision_{kind}_{now.date()}.jsonl'
+        source.parent.mkdir();source.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    token=monitor._HEALTH_ACTOR.set(actor)
+    try:semantics=monitor.machine_semantics(tmp_path,now)
+    finally:monitor._HEALTH_ACTOR.reset(token)
+    view=semantics['current_health_cohort']['view'];partition=view['observation_role_partition']
+    if not isinstance(members[0][0],str):
+        assert semantics['issues']==view['issues']=={'machine_observation_role_claim_invalid':1}
+        assert partition['observation_count']==0
+        return
+    assert partition['observation_count']==view['observation_count']==len(members),(semantics['issues'],semantics['examples'])
+    assert partition['provider_eligible_count']==sum(role=='unspecified_legacy' for role,_ in members)
+    assert partition['role_counts']==dict(__import__('collections').Counter(role for role,_ in members))
+    # Use the actual producer census in the real pure consumer; other stages
+    # stay small fixed receipts. Rebase their clocks/date to this native fixture.
+    result=_observation_health_fixture();old=monitor.stamp(result['as_of']);delta=now-old;daydelta=now.date()-old.date()
+    def rebase(value):
+        if isinstance(value,dict):return {k:rebase(v) for k,v in value.items()}
+        if isinstance(value,list):return [rebase(v) for v in value]
+        if isinstance(value,str) and len(value)>10 and value[10]=='T' and monitor.stamp(value):return (monitor.stamp(value)+delta).isoformat()
+        if isinstance(value,str) and len(value)==10 and monitor.stamp(value):return (monitor.stamp(value)+daydelta).date().isoformat()
+        return value
+    result=rebase(result);source=result['source_gap_semantics']
+    from src.trading.market import session_contract
+    context=session_contract.resolve_market_session(now)
+    source['fixed_watch_waits'].update(count=0,session_boundary_wait_count=0,reason_counts={},
+        native_session_regime=context.session_regime,native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+    source['current_health_cohort']=monitor._health_cohort(deepcopy(source),actor,now)
+    result['machine_semantics']=semantics
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('not_eligible' if members[0][0]=='counterfactual' else 'warning_pending'),health
+    if members[0][0]!='counterfactual':
+        assert view['reversal_provider_lineage']['machine_observation_count']==partition['provider_eligible_count']
+        assert health['current_observation_verified'] is False
+
+
 @pytest.mark.parametrize('turned', [True, False])
 def test_reversal_native_source_date_and_receipt_without_legacy_raw(tmp_path, monkeypatch, turned):
     observation, write, now = reversal_semantic_fixture(tmp_path, monkeypatch, turned=turned)
@@ -2877,6 +2955,65 @@ def _bounded_outcome_health_fixture(*, partial=True, outcome='response_invalid')
     elif outcome=='unknown_pass':
         result['async_disposition_coverage']['attempt_projection']=[]
     return result,gap,machine,lineage
+
+
+def _with_role_partition(*, role='probe_observation', kind='matched'):
+    result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=False)
+    now=monitor.stamp(result['as_of']);actor=machine_actor=result['machine_semantics']['current_health_cohort']['actor']
+    records=[]
+    def receipt(digest,at,role,kind):
+        flags=dict(runtime_effect=False,allowed_runtime_apply=False,actual_order_submitted=False,broker_order_forbidden=True)
+        observation=dict(machine_observation_sha256=digest,captured_at=at,bundle_sha256=machine['current_bundle_sha256'],
+            evaluation_role=role,**flags,provider_called=False,source=dict(exact_payload={'evaluation_role':role},assessment=flags),
+            runtime_consumption=dict(pid=int(actor[0]),process_start_ticks=actor[1],continuous_reversal=dict(
+                evaluation_role=role,provider_state='probe_observation_provider_forbidden',provider_request_observed=False)))
+        proof=monitor._machine_role_receipt(observation,kind)
+        return (monitor.stamp(at),(int(actor[0]),'/release/src',actor[1]),kind,[],None,True,proof)
+    for row in lineage['attempt_ledger']:
+        records.append(receipt(row['machine_observation_sha256'],row['trace_decision_ts'],'main_live','matched'))
+    if role is not None:
+        records.append(receipt('f'*64,now.isoformat(),role,kind))
+        machine['observation_count']+=1
+        if kind=='invalid':machine['source_invalid_count']+=1
+        elif kind=='required':machine['required_feature_guard_count']+=1
+        else:next(iter(machine['scopes'].values()))['matched_receipts']+=1
+        machine['status']=('source_invalid_observed' if machine['source_invalid_count']+machine['required_feature_guard_count'] else 'observed_receipts_match')
+    machine['observation_role_partition']=monitor._machine_role_partition(records,actor,now,machine['current_bundle_sha256'])
+    return result,machine,lineage
+
+
+@pytest.mark.parametrize('role,kind,expected',[(None,'matched','warning_pending'),
+    ('probe_observation','matched','warning_pending'),('probe_observation','invalid','warning_pending'),
+    ('probe_observation','required','warning_pending'),('counterfactual','matched','not_eligible')])
+def test_role_partition_closes_all_rows_and_provider_guard_denominator(role,kind,expected):
+    result,machine,lineage=_with_role_partition(role=role,kind=kind)
+    health=monitor.observation_health_projection(result)
+    assert health['status']==expected,health
+    if expected=='warning_pending':
+        assert machine['observation_role_partition']['provider_eligible_count']==lineage['machine_observation_count']==2
+        assert health['current_observation_verified'] is False
+
+
+@pytest.mark.parametrize('bad',['count','bool_count','hash','duplicate','actor','bundle','role_conflict','provider_allowed',
+    'runtime_allowed','ledger_foreign_hash','ledger_missing_hash','missing_partition','unknown_role','malformed_role'])
+def test_role_partition_rejects_tamper_unknown_roles_and_missing_population_proof(bad):
+    result,machine,lineage=_with_role_partition()
+    partition=machine['observation_role_partition'];row=partition['observations'][-1]
+    if bad=='count':partition['excluded_nonprovider_count']=2
+    elif bad=='bool_count':partition['excluded_nonprovider_count']=True
+    elif bad=='hash':row['observation_sha256']='bad'
+    elif bad=='duplicate':row['observation_sha256']=partition['observations'][0]['observation_sha256']
+    elif bad=='actor':row['actor']=['99','99']
+    elif bad=='bundle':row['bundle_sha256']='e'*64
+    elif bad=='role_conflict':row['exact_role']='main_live'
+    elif bad=='provider_allowed':row['native_provider_request_observed']=True
+    elif bad=='runtime_allowed':row['capture_flags']['runtime_effect']=True
+    elif bad=='ledger_foreign_hash':lineage['attempt_ledger'][0]['machine_observation_sha256']='e'*64
+    elif bad=='ledger_missing_hash':lineage['attempt_ledger'][0]['machine_observation_sha256']=None
+    elif bad=='missing_partition':machine.pop('observation_role_partition')
+    elif bad=='unknown_role':row['evaluation_role']='unknown'
+    elif bad=='malformed_role':row['evaluation_role']=[]
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
 
 
 @pytest.mark.parametrize('partial',[False,True])

@@ -270,3 +270,7 @@ The observer computes observation_health only from the final publication diction
 ### 원천 커버리지 품질 집계와 보고서 건강
 
 알려진 route별 원 건수/유효 원천 건수와 원 coverage floor에서 정확히 재계산한 coverage_degraded issue/scope는 source quality 경고로 보존한다. 유효 보고서의 제한 관측 건강을 이 집계만으로 장애로 분류하지 않는다. 원 partial·domain 알림·AI/Main 미검증·거래 guard는 유지하며 타입/route/집계 불일치나 다른 계약/읽기 오류는 실패다. 실제 정규 run/hash와 그 보고서를 읽은 daemon에서 별도 수용한다.
+
+### 전체 관측과 Main provider 적격 모집단
+
+보고서 건강은 native 검증된 전체 관측의 역할별 건수/원 해시 분할을 확인하고, Main provider 계보는 main_live/unspecified_legacy 적격 집합과만 정확히 대사한다. probe/CF의 provider/주문 금지와 원 역할을 보존한다. 분할 합계·해시·actor·bundle·소속이 다르거나 과거 원 분할 증빙이 없으면 성공 처리하지 않는다. 매매 정책/native 정의·주문 권한은 변경하지 않는다.

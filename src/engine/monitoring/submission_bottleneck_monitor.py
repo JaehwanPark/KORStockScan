@@ -2474,6 +2474,81 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
     return {'rule': rule}, dict(policy_sha256=component, leaf=key)
 
 
+def _machine_role_receipt(observation, kind):
+    """Compact role facts from a row already hash/frozen-receipt validated."""
+    source=observation.get('source') or {}; exact=source.get('exact_payload') or {}
+    assessment=source.get('assessment') or {}; runtime=observation.get('runtime_consumption') or {}
+    native=runtime.get('continuous_reversal') or {}
+    role=observation.get('evaluation_role') or exact.get('evaluation_role') or 'unspecified_legacy'
+    claims=[observation.get('evaluation_role'),exact.get('evaluation_role'),native.get('evaluation_role')]
+    if any(value is not None and (not isinstance(value,str) or not 0 < len(value) <= 64) for value in claims):
+        raise ValueError('machine_observation_role_claim_invalid')
+    return dict(observation_sha256=observation.get('machine_observation_sha256'),
+        captured_at=observation.get('captured_at'),bundle_sha256=observation.get('bundle_sha256'),
+        actor=[str(runtime.get('pid') or ''),str(runtime.get('process_start_ticks') or '')],
+        evaluation_role=role,top_role=observation.get('evaluation_role'),exact_role=exact.get('evaluation_role'),
+        native_role=native.get('evaluation_role'),native_provider_state=native.get('provider_state'),
+        native_provider_request_observed=native.get('provider_request_observed'),decision_class=kind,
+        capture_flags={k:observation.get(k) for k in ('runtime_effect','allowed_runtime_apply',
+            'actual_order_submitted','broker_order_forbidden','provider_called')},
+        assessment_flags={k:assessment.get(k) for k in ('runtime_effect','allowed_runtime_apply',
+            'actual_order_submitted','broker_order_forbidden')})
+
+
+def _machine_role_partition(records, actor, now, bundle):
+    rows=[row[6] for row in records]
+    eligible=[row for row in rows if row['evaluation_role'] in ('main_live','unspecified_legacy')]
+    return dict(schema='machine_observation_role_partition_v1',as_of=now.isoformat(),actor=list(actor),
+        bundle_sha256=bundle,observation_count=len(rows),role_counts=dict(Counter(row['evaluation_role'] for row in rows)),
+        provider_eligible_count=len(eligible),excluded_nonprovider_count=len(rows)-len(eligible),
+        provider_eligible_hashes=sorted(row['observation_sha256'] for row in eligible),
+        observations=rows,runtime_effect=False,allowed_runtime_apply=False)
+
+
+def _verified_machine_role_partition(partition, actor, now, bundle, n, invalid, required):
+    """Close the all-role/eligible denominators; unknown roles never disappear."""
+    try:
+        def count(value):return type(value) is int and value >= 0
+        def sha(value):return isinstance(value,str) and re.fullmatch('[0-9a-f]{64}',value) is not None
+        rows=partition['observations']
+        if (partition.get('schema')!='machine_observation_role_partition_v1' or stamp(partition.get('as_of'))!=now
+                or partition.get('actor')!=actor or partition.get('bundle_sha256')!=bundle
+                or partition.get('runtime_effect') is not False or partition.get('allowed_runtime_apply') is not False
+                or not isinstance(rows,list) or len(rows)>4096 or len(rows)!=n
+                or not count(partition.get('observation_count')) or partition['observation_count']!=n):return None
+        seen=set();roles=Counter();kinds=Counter();eligible=[];eligible_kinds=Counter()
+        for row in rows:
+            digest=row['observation_sha256'];at=stamp(row.get('captured_at'));role=row.get('evaluation_role')
+            kind=row.get('decision_class')
+            if (not sha(digest) or digest in seen or row.get('actor')!=actor or row.get('bundle_sha256')!=bundle
+                    or at is None or not 0 <= (now-at).total_seconds() <= SOURCE_WINDOW_SEC
+                    or role not in ('main_live','unspecified_legacy','probe_observation')
+                    or kind not in ('matched','invalid','required')
+                    or any(row.get(k) is not None and row.get(k)!=role for k in ('top_role','exact_role','native_role'))
+                    or (row.get('top_role') or row.get('exact_role') or 'unspecified_legacy')!=role):return None
+            if role=='probe_observation':
+                flags=row.get('capture_flags');assessment=row.get('assessment_flags')
+                if (row.get('top_role')!=role or row.get('exact_role')!=role or row.get('native_role')!=role
+                        or row.get('native_provider_state')!='probe_observation_provider_forbidden'
+                        or row.get('native_provider_request_observed') is not False
+                        or not isinstance(flags,dict) or not isinstance(assessment,dict)
+                        or any(flags.get(k) is not False for k in ('runtime_effect','allowed_runtime_apply','actual_order_submitted','provider_called'))
+                        or flags.get('broker_order_forbidden') is not True
+                        or any(assessment.get(k) is not False for k in ('runtime_effect','allowed_runtime_apply','actual_order_submitted'))
+                        or assessment.get('broker_order_forbidden') is not True):return None
+            else:
+                eligible.append(digest);eligible_kinds[kind]+=1
+            seen.add(digest);roles[role]+=1;kinds[kind]+=1
+        if (kinds['invalid']!=invalid or kinds['required']!=required
+                or not isinstance(partition.get('role_counts'),dict) or partition['role_counts']!=dict(roles)
+                or any(not count(v) for v in partition['role_counts'].values())
+                or not count(partition.get('provider_eligible_count')) or partition['provider_eligible_count']!=len(eligible)
+                or not count(partition.get('excluded_nonprovider_count')) or partition['excluded_nonprovider_count']!=n-len(eligible)
+                or partition.get('provider_eligible_hashes')!=sorted(eligible)):return None
+        return dict(count=len(eligible),invalid=eligible_kinds['invalid'],required=eligible_kinds['required'],hashes=set(eligible))
+    except (KeyError,TypeError,ValueError,AttributeError):return None
+
+
 def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
     """Bounded receipt audit, not a replay, policy publisher or outcome estimator."""
     from src.engine.scalping import entry_strategy_policy as strategy
@@ -2596,13 +2671,15 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                     feature_guard = (assessment.get("schema") == "mechanistic_entry_required_feature_v1"
                         and assessment.get("action") == "RECHECK" and assessment.get("reason") == "required_feature_input_insufficient"
                         and (source.get("setup_evidence") or {}).get("source_quality_status") == "blocked")
+                    role_receipt=_machine_role_receipt(observation,'invalid' if invalid else 'required' if feature_guard else 'matched')
                     if invalid or feature_guard:
                         if generations[bundle_hash].get('continuous_reversal'):
                             reversal_observations.append(observation)
                         result["source_invalid_count" if invalid else "required_feature_guard_count"] += 1
                         health_records.append((at, identity, 'invalid' if invalid else 'required',
                             list((source.get('setup_evidence') or {}).get('source_quality_blockers', [])), None,
-                            bundle_hash == result.get('current_bundle_sha256')))
+                            bundle_hash == result.get('current_bundle_sha256'),
+                            role_receipt))
                         for blocker in (source.get("setup_evidence") or {}).get("source_quality_blockers", []):
                             result["source_invalid_blockers"][blocker] = result["source_invalid_blockers"].get(blocker, 0) + 1
                         continue
@@ -2645,7 +2722,8 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                     live = pid_identities[identity]
                     counts["live_pid_receipts"] += int(live)
                     health_records.append((at, identity, 'matched', [], key,
-                                           bundle_hash == result.get('current_bundle_sha256')))
+                                           bundle_hash == result.get('current_bundle_sha256'),
+                                           role_receipt))
                 except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
                     reason = str(exc)[:160]
                     issues[reason] += 1
@@ -2687,7 +2765,7 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
         view = {k:v for k,v in result.items() if k not in {'current_health_cohort', 'reversal_provider_lineage',
                                                         'provider_lineage_source_status'}}
         scoped, blockers = {}, Counter()
-        for at, identity, kind, reasons, key, current_bundle in retained:
+        for at, identity, kind, reasons, key, current_bundle, role_receipt in retained:
             blockers.update(reasons)
             if key:
                 row = scoped.setdefault(key, dict(matched_receipts=0,live_pid_receipts=0,current_bundle=current_bundle))
@@ -2695,7 +2773,7 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                 row['live_pid_receipts'] += int(pid_identities.get(identity, False))
         view.update(observation_count=len(retained), source_invalid_count=invalid_n,
             required_feature_guard_count=required_n, scopes=scoped, source_invalid_blockers=dict(blockers),
-            issues=native_issues)
+            issues=native_issues,observation_role_partition=_machine_role_partition(retained,actor,now,result.get('current_bundle_sha256')))
         projected = (result.get('reversal_provider_lineage') or {}).get('current_health_cohort')
         if projected:
             view['reversal_provider_lineage'] = projected['view']
@@ -3301,6 +3379,13 @@ def observation_health_projection(result):
             and machine.get('window_coverage') in ('bounded_suffix', 'complete_file_prefix')
             and machine.get('action_replay_performed') is False,
             'machine_selection_or_source_not_verified')
+    role_partition=machine.get('observation_role_partition')
+    role_proof=(_verified_machine_role_partition(role_partition,actor,now,machine.get('current_bundle_sha256'),
+        n,invalid,required) if role_partition is not None and counts_valid and actor is not None and now else None)
+    require(role_partition is None or role_proof is not None,'machine_role_partition_invalid')
+    provider_n=role_proof['count'] if role_proof is not None else n
+    provider_invalid=role_proof['invalid'] if role_proof is not None else invalid
+    provider_required=role_proof['required'] if role_proof is not None else required
     async_view = obj(result.get('async_disposition_coverage'))
     attempts = async_view.get('attempt_projection', [])
     if actor and isinstance(attempts, list):
@@ -3393,7 +3478,7 @@ def observation_health_projection(result):
 
     lineage = obj(machine.get('reversal_provider_lineage'))
     ledger_by_key = {}
-    if lineage or counts_valid and n:
+    if lineage or counts_valid and provider_n:
         ledger = lineage.get('attempt_ledger')
         exact = lineage.get('exact_pid_filter')
         exact_valid = (isinstance(exact, list) and len(exact) == 2
@@ -3458,14 +3543,15 @@ def observation_health_projection(result):
                 guard_count += action == 'SOURCE_INVALID'
                 recheck_count += action == 'RECHECK'
         windows = obj(lineage.get('source_windows'))
-        require(lineage.get('status') == 'observed' and lineage.get('issues') == {}
+        require(lineage.get('status') in (('observed','not_observed') if provider_n==0 else ('observed',)) and lineage.get('issues') == {}
                 and lineage.get('source_gaps') == {} and count(lineage.get('exact_attempt_join_gap_count'), maximum=0)
                 and lineage.get('decision_authority') == 'report_only'
                 and lineage.get('current_pid_coverage') == 'exact_live_pid'
-                and count(lineage.get('machine_observation_count')) and lineage['machine_observation_count'] == n
+                and count(lineage.get('machine_observation_count')) and lineage['machine_observation_count'] == provider_n
                 and count(lineage.get('trace_attempt_count')) and ledger_valid
-                and len(ledger) == lineage['trace_attempt_count'] == n
-                and counts_valid and guard_count == invalid and recheck_count >= required
+                and len(ledger) == lineage['trace_attempt_count'] == provider_n
+                and (role_proof is None or hashes == role_proof['hashes'])
+                and counts_valid and guard_count == provider_invalid and recheck_count >= provider_required
                 and set(windows) == {'requests', 'traces'}
                 and all(obj(v).get('status') == 'complete' and obj(v).get('window_covered') is True
                         and count(obj(v).get('malformed_rows'), maximum=0)
@@ -3479,6 +3565,15 @@ def observation_health_projection(result):
                 and count(lineage.get('execution_valid_pass_count')) and lineage['execution_valid_pass_count'] == effective_passed
                 and lineage.get('raw_verdict_counts') == dict(verdict_counts),
                 'machine_provider_lineage_not_recorded_guard_or_nonentry')
+        if role_proof is not None:
+            rows=lineage.get('attempt_ledger')
+            hash_rows_valid=isinstance(rows,list) and all(isinstance(row,dict) and (
+                row.get('machine_observation_sha256') is None or sha(row.get('machine_observation_sha256'))) for row in rows)
+            observed_hashes={row['machine_observation_sha256'] for row in rows
+                if row.get('machine_observation_sha256') is not None} if hash_rows_valid else set()
+            missing=role_proof['hashes']-observed_hashes
+            require(hash_rows_valid and observed_hashes <= role_proof['hashes'] and len(missing)==obj(lineage.get('source_gaps')).get(
+                'observation_trace_unresolved',0),'machine_provider_role_hash_partition_mismatch')
     require(attempts_valid and all(
         (str(item['fields'].get('async_machine_action')).upper() in ('SOURCE_INVALID', 'RECHECK', 'BLOCK')
          and str(item['fields'].get('async_provider_called')).lower() == 'false'
@@ -3663,7 +3758,8 @@ def observation_health_projection(result):
                         ledger_shape=False; break
                     ledger_keys.add(key)
                     if digest is not None:ledger_hashes.add(digest)
-            lineage_shape=(lineage.get('status') in ('observed','partial_source_gap') and lineage.get('issues') == {}
+            lineage_shape=(lineage.get('status') in (('observed','partial_source_gap','not_observed')
+                if provider_n==0 else ('observed','partial_source_gap')) and lineage.get('issues') == {}
                 and lineage.get('decision_authority') == 'report_only' and lineage.get('exact_pid_filter') == actor
                 and lineage.get('current_pid_coverage') == 'exact_live_pid'
                 and all(count(lineage.get(k)) for k in outcome_counts)
@@ -3673,10 +3769,13 @@ def observation_health_projection(result):
                 and set(windows) == {'requests','traces'}
                 and all(clean_reader(v,8*1024*1024,SOURCE_WINDOW_SEC+5) for v in windows.values())
                 and ledger_shape and len(ledger) == lineage.get('trace_attempt_count')
-                and lineage.get('machine_observation_count') == n
+                and lineage.get('machine_observation_count') == provider_n
                 and lineage.get('execution_valid_pass_count',0) <= lineage.get('valid_pass_count',0)
                     <= lineage.get('raw_pass_count',0) <= lineage.get('raw_response_observed_count',0)
                 and lineage.get('auxiliary_response_contract_valid_count',0) <= lineage.get('raw_response_observed_count',0))
+            if provider_n==0:
+                lineage_shape=(lineage_shape and ledger==[] and gaps=={}
+                    and all(lineage.get(k)==0 for k in outcome_counts))
         quality_incidents=True
         if not incidents_valid:
             quality_incidents=isinstance(incidents,dict) and len(incidents) <= 256
