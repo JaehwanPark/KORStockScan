@@ -325,6 +325,8 @@ def test_finalization_reserves_morning_margin_before_preopen():
     assert "POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600" in script
+    assert "POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC:-600" in script
+    assert 'bounded_stage_budget "$PREPARE_TIMEOUT_SEC"' in script
     assert "POSTCLOSE_FINALIZATION_FINISH_BY_KST:-06:50" in script
     assert script.count('timeout --foreground "${') == 2
     assert "bounded_stage_budget \"$DETECTOR_TIMEOUT_SEC\"" in script
@@ -333,9 +335,10 @@ def test_finalization_reserves_morning_margin_before_preopen():
     assert "--resolve-effective-today" in script
 
 
-@pytest.mark.parametrize("prepare_rc,detector_rc,expected_rc", [(0, 0, 0), (9, 0, 1), (0, 9, 1)])
+@pytest.mark.parametrize("prepare_rc,detector_rc,expected_rc", [(0, 0, 0), (9, 0, 1), (124, 0, 1), (0, 9, 1)])
+@pytest.mark.parametrize("prepare_budget", [None, "450"])
 def test_final_detector_reads_refreshed_prepared_generation(
-    tmp_path, monkeypatch, prepare_rc, detector_rc, expected_rc
+    tmp_path, monkeypatch, prepare_rc, detector_rc, expected_rc, prepare_budget
 ):
     monkeypatch.setattr(sys.modules[__name__], "TARGET_DATE", "2026-09-28")
     project = tmp_path / "project"
@@ -381,14 +384,32 @@ if [[ "${1:-}" == "-" ]]; then
 fi
 exec "$REAL_PY" "$@"
 ''')
+    timeout = project / "bin/timeout"
+    _write_executable(timeout, '''
+printf '%s\\n' "$*" >> "$PROJECT_DIR/timeout-arguments.txt"
+exec /usr/bin/timeout "$@"
+''')
+    env = {**_base_env(project, cleanup, detector), "VENV_PY": str(python),
+           "REAL_PY": sys.executable, "MOCK_PREPARE_RC": str(prepare_rc),
+           "MOCK_DETECTOR_RC": str(detector_rc),
+           "PATH": str(project / "bin") + os.pathsep + os.environ["PATH"]}
+    env.pop("POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC", None)
+    if prepare_budget is not None:
+        env["POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC"] = prepare_budget
     result = subprocess.run(
         ["bash", str(WRAPPER), TARGET_DATE],
-        env={**_base_env(project, cleanup, detector), "VENV_PY": str(python),
-             "REAL_PY": sys.executable, "MOCK_PREPARE_RC": str(prepare_rc),
-             "MOCK_DETECTOR_RC": str(detector_rc)},
+        env=env,
         text=True, capture_output=True, timeout=30,
     )
     assert result.returncode == expected_rc, result.stdout + result.stderr
+    prepare_calls = [line for line in (project / "timeout-arguments.txt").read_text().splitlines()
+                     if "src.engine.automation.next_preopen_readiness" in line]
+    assert len(prepare_calls) == 1
+    assert prepare_calls[0].startswith("--kill-after=10s " + (prepare_budget or "600") + "s ")
+    if prepare_rc:
+        assert f"reason=next_preopen_preparation_failed prepare_exit_code={prepare_rc}" in result.stdout
+    else:
+        assert "reason=next_preopen_preparation_failed" not in result.stdout
     assert (project / "order.txt").read_text().splitlines() == [
         "controller", "cleanup", "prepare", "detector",
     ]

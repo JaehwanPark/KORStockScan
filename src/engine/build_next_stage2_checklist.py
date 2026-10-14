@@ -13,7 +13,7 @@ import re
 import sys
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
@@ -1808,8 +1808,8 @@ def _task_slot_from_block(block: str, fallback_slot: str) -> str:
     return fallback_slot
 
 
-def _is_builder_owned_conditional_task(task_id: str) -> bool:
-    return task_id.startswith(
+def _is_builder_owned_conditional_task(task_id: str, block: str = "") -> bool:
+    return "<!-- POLICY_GENERATION_CAPABILITY_TASK -->" in block or task_id.startswith(
         MACHINE_MICROSTRUCTURE_BUILDER_OWNED_CONDITIONAL_TASK_PREFIXES
     ) or task_id.startswith("DirectFamily")
 
@@ -1841,7 +1841,7 @@ def _preserved_auto_task_blocks(
                 if (
                     task_id
                     and task_id not in generated_task_ids
-                    and not _is_builder_owned_conditional_task(task_id)
+                    and not _is_builder_owned_conditional_task(task_id, block)
                 ):
                     slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
                     preserved.setdefault(slot, []).append(block)
@@ -1858,7 +1858,7 @@ def _preserved_auto_task_blocks(
                 if (
                     task_id
                     and task_id not in generated_task_ids
-                    and not _is_builder_owned_conditional_task(task_id)
+                    and not _is_builder_owned_conditional_task(task_id, block)
                 ):
                     slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
                     preserved.setdefault(slot, []).append(block)
@@ -1872,7 +1872,7 @@ def _preserved_auto_task_blocks(
         if (
             task_id
             and task_id not in generated_task_ids
-            and not _is_builder_owned_conditional_task(task_id)
+            and not _is_builder_owned_conditional_task(task_id, block)
         ):
             slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
             preserved.setdefault(slot, []).append(block)
@@ -2181,6 +2181,58 @@ def _project_direct_tasks(
                 "NaturalEvidence": "natural_evidence_wait",
                 "PolicyHandoff": "policy_handoff_repair",
             }[role]
+
+    # Code capability is independent of the operating policy's economics and
+    # PREOPEN receipt. Retain its native repair owner without replacing either.
+    from src.engine.monitoring.policy_generation_contract import OWNERS
+
+    for capability in summary.get("policy_generation_capabilities") or []:
+        findings = capability.get("findings") or []
+        if not findings:
+            continue
+        family = capability.get("family")
+        task_id = OWNERS.get(family)
+        if (not task_id or capability.get("source_date") != source_date
+                or capability.get("repair_owner", task_id) != task_id):
+            raise RuntimeError("policy generation capability owner/date mismatch")
+        lines = (
+            "<!-- POLICY_GENERATION_CAPABILITY_TASK -->",
+            "정책 생성 코드 계약: "
+            f"family=`{family}`, status=`{capability.get('status')}`, "
+            f"findings=`{_compact_inline_value(findings, max_length=500)}`.",
+            "원본 증거: "
+            f"runtime_summary_sha256=`{summary_sha256}`, source_date=`{source_date}`, "
+            f"artifact=`{capability.get('artifact') or '-'}`, "
+            f"report_sha256=`{capability.get('report_sha256') or '-'}`.",
+            "세대 결속: "
+            f"source_generation=`{capability.get('source_generation') or '-'}`, "
+            f"code_sha256=`{capability.get('code_sha256') or '-'}`, "
+            f"contract_sha256=`{capability.get('contract_sha256') or '-'}`.",
+            "완료 기준: "
+            f"repair_owner=`{task_id}`, closure_test=`{capability.get('closure_test') or 'native_generation_contract_and_reader_validation'}`; "
+            "같은 원천·코드 세대의 fixture와 native reader 계약을 검증한다.",
+            "권한 경계: report_only, runtime_effect=false, allowed_runtime_apply=false. "
+            "운영 정책의 경제성·PREOPEN handoff와 독립된 코드 검증이며 "
+            "provider·주문·정책 적용·재기동 또는 비용 후 성과를 승인하지 않는다.",
+        )
+        existing_key = next(
+            (key for key, task in tasks_by_owner.items() if task.task_id == task_id),
+            None,
+        )
+        if existing_key is not None:
+            task = tasks_by_owner[existing_key]
+            tasks_by_owner[existing_key] = replace(
+                task, lines=tuple(dict.fromkeys((*task.lines, *lines)))
+            )
+        else:
+            tasks_by_owner[f"__policy_generation__{task_id}"] = GeneratedTask(
+                task_id=task_id,
+                title=f"{family} 정책 생성 코드·원천 세대 계약 검증",
+                slot="POSTCLOSE", time_window="16:30~21:40", track="RuntimeStability",
+                source=f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
+                lines=lines,
+            )
+        action_by_owner[f"policy_generation:{family}"] = "producer_contract_repair"
 
     holding_repair = ((summary.get("holding_exit_threshold_lineage") or {}).get("source_contract_repair") or {})
     if holding_repair.get("repair_required") is True:

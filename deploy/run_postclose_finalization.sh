@@ -57,13 +57,14 @@ HARD_DEADLINE_KST="${POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-06:00}"
 CLEANUP_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600}"
 DETECTOR_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600}"
 SUMMARY_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600}"
+PREPARE_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC:-600}"
 FINALIZATION_FINISH_BY_KST="${POSTCLOSE_FINALIZATION_FINISH_BY_KST:-06:50}"
 ALLOW_NONCURRENT_TARGET="${POSTCLOSE_FINALIZATION_ALLOW_NONCURRENT_TARGET:-false}"
 OWNED_LOG_RUNNER="${POSTCLOSE_FINALIZATION_OWNED_LOG_RUNNER:-$SCRIPT_DIR/run_with_owned_log.sh}"
 CLEANUP_RUNNER="${POSTCLOSE_FINALIZATION_CLEANUP_RUNNER:-$SCRIPT_DIR/run_logs_rotation_cleanup_cron.sh}"
 ERROR_DETECTION_RUNNER="${POSTCLOSE_FINALIZATION_ERROR_DETECTION_RUNNER:-$SCRIPT_DIR/run_error_detection.sh}"
 
-if [[ ! "$WAIT_TIMEOUT_SEC" =~ ^[0-9]+$ || ! "$POLL_SEC" =~ ^[1-9][0-9]*$ || ! "$CLEANUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$DETECTOR_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$SUMMARY_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$HARD_DEADLINE_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ || ! "$FINALIZATION_FINISH_BY_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+if [[ ! "$WAIT_TIMEOUT_SEC" =~ ^[0-9]+$ || ! "$POLL_SEC" =~ ^[1-9][0-9]*$ || ! "$CLEANUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$DETECTOR_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$SUMMARY_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$PREPARE_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$HARD_DEADLINE_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ || ! "$FINALIZATION_FINISH_BY_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=invalid_wait_config"
   exit 2
 fi
@@ -414,15 +415,18 @@ PY
   if [[ "$preparation_disposition" == "historical_recovery_no_prepare" ]]; then
     echo "[INFO] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} preopen=not_applicable_historical_recovery runtime_effect=false"
   else
-    prepare_budget="$(bounded_stage_budget 120)" || {
+    prepare_budget="$(bounded_stage_budget "$PREPARE_TIMEOUT_SEC")" || {
       echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_preopen_preparation"
       run_final_detector || true
       exit 1
     }
-    if ! timeout --kill-after=10s "${prepare_budget}s" env PYTHONPATH=. "$VENV_PY" \
+    if timeout --kill-after=10s "${prepare_budget}s" env PYTHONPATH=. "$VENV_PY" \
       -m src.engine.automation.next_preopen_readiness --prepare --source-date "$TARGET_DATE" \
       --target-date "$TARGET_EFFECTIVE_DATE"; then
-      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=next_preopen_preparation_failed"
+      :
+    else
+      prepare_exit_code=$?
+      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=next_preopen_preparation_failed prepare_exit_code=${prepare_exit_code}"
       run_final_detector || true
       exit 1
     fi

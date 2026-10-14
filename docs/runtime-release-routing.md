@@ -286,3 +286,7 @@ Next-session 발행이 승인된 active parent의 native v4 조상을 상속할 
 명시한 이전 source date의 Main terminal이 succeeded인 경우, 종료된 장중 observer는 최대16개 보존 selector 중 원 generation SHA·release/코드·run/date seal이 일치하는 원 영수증으로만 감사한다. 과거 partial/source gap은 경고로 보존하며 current generation/coverage/PID 소비를 인정하지 않는다. 장중 현재 selector/코드 검증과 손상·누락의 실패는 유지한다.
 
 이미 발행된 code-refresh candidate가 당일 code-handoff 만료 후 동일 active parent의 원 release를 증명하는 경우, 발행 origin 검증은 그 불변 generation·전체 source 검증·원 parent CAS를 사용한다. 새 code refresh는 명시한 source/publication의 다음 거래일인 당일07:30 전, PREOPEN status와 live bootstrap JSON/env/verify가 모두 없는 경우에만 허용한다. 날짜·payload·집합·budget·current pointer는 보존하며 bootstrap 시작 후 변경이나 후보 재선정·실행 권한을 만들지 않는다. [장후 복구 리뷰](audits/postclose-auxiliary-membership-and-final-resume-recovery-review-2026-10-14.md)를 따른다.
+
+### Finalization preparation budget
+
+`run_postclose_finalization.sh` gives native next-session preparation its own positive integer `POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC`, default600 seconds. Normal scheduled execution remains capped by the existing finalization finish-by cutoff and retains the10-second kill grace. A preparation failure records its actual child exit code, runs the existing detector path and exits1; it cannot emit DONE. This maintenance budget does not change trading/AI or Sentinel report deadlines. See [10/15 repair evidence](audits/morning-finalization-preparation-and-generation-warning-repair-2026-10-15.md).

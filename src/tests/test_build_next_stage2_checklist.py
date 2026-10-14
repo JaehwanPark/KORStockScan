@@ -1310,6 +1310,154 @@ def test_direct_family_manual_stable_task_is_not_duplicated(monkeypatch, tmp_pat
     assert text.count("[DirectFamilySourceRepairEntrySplit]") == 1
 
 
+def _generation_warning_summary(*, family="auxiliary", status="unverified"):
+    from src.engine.monitoring.policy_generation_contract import OWNERS
+
+    summary = _main_only_summary()
+    summary["date"] = "2026-10-14"
+    summary["preopen_consumption_receipt"].update(
+        source_date="2026-10-14", apply_date="2026-10-15",
+        effective_dates=["2026-10-15"],
+        manifest_path="/runtime/runtime_policy_bootstrap_2026-10-15.json",
+        verification_path="/runtime/runtime_policy_bootstrap_verify_2026-10-15.json",
+    )
+    summary["policy_generation_capabilities"] = [{
+        "family": family, "source_date": "2026-10-14", "status": status,
+        "findings": [] if status == "verified" else ["policy_generation_unverified"],
+        "repair_owner": OWNERS[family], "closure_test": "source_to_publisher_native_reader",
+        "artifact": f"/evidence/{family}/evaluation.json", "report_sha256": "r" * 64,
+        "source_generation": "s" * 64, "code_sha256": "c" * 64,
+        "contract_sha256": "g" * 64, "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }]
+    return summary
+
+
+def _project_generation_warning(summary):
+    return mod._project_direct_tasks(
+        summary=summary, source_date="2026-10-14", target_date="2026-10-15",
+        summary_path=Path("/evidence/runtime_approval_summary_2026-10-14.json"),
+        summary_sha256="a" * 64,
+    )
+
+
+def test_generation_warning_keeps_repair_owner_and_valid_preopen_independent():
+    summary = _generation_warning_summary()
+    summary["sources"]["compact_auxiliary"] = _direct_source(
+        "compact_auxiliary", comparison_status="cumulative_winrate_selected",
+        policy_handoff_state="verified", policy_valid=True,
+    )
+    summary["preopen_consumption_state"] = "pending"
+    original = json.dumps(summary, sort_keys=True)
+
+    tasks, actions = _project_generation_warning(summary)
+
+    assert [t.task_id for t in tasks] == [
+        "DirectFamilyPreopenPolicyHandoff", "DirectFamilySourceRepairCompactAuxiliary",
+    ]
+    assert actions["compact_auxiliary"] == "preopen_policy_handoff"
+    assert actions["policy_generation:auxiliary"] == "producer_contract_repair"
+    text = "\n".join(tasks[1].lines)
+    for value in ("/evidence/auxiliary/evaluation.json", "r" * 64, "s" * 64,
+                  "c" * 64, "g" * 64, "source_to_publisher_native_reader",
+                  "report_only", "runtime_effect=false", "allowed_runtime_apply=false"):
+        assert value in text
+    assert json.dumps(summary, sort_keys=True) == original
+
+
+@pytest.mark.parametrize("family", ["auxiliary", "entry_cancel_wait", "rising_missed", "holding_vote"])
+@pytest.mark.parametrize("status", ["unverified", "structurally_blocked", "unobservable", "verified"])
+def test_generation_warning_projects_native_owner_only_when_actionable(family, status):
+    from src.engine.monitoring.policy_generation_contract import OWNERS
+
+    tasks, _ = _project_generation_warning(_generation_warning_summary(family=family, status=status))
+    assert [t.task_id for t in tasks] == ([] if status == "verified" else [OWNERS[family]])
+
+
+def test_generation_warning_merges_with_existing_economic_repair_and_duplicate_capability():
+    summary = _generation_warning_summary()
+    summary["sources"]["compact_auxiliary"] = _direct_source(
+        "compact_auxiliary", comparison_status="source_gap", first_blocker="real_source_gap",
+    )
+    summary["policy_generation_capabilities"] *= 2
+    tasks, actions = _project_generation_warning(summary)
+    assert len(tasks) == 1
+    assert tasks[0].task_id == "DirectFamilySourceRepairCompactAuxiliary"
+    text = "\n".join(tasks[0].lines)
+    assert "real_source_gap" in text
+    assert text.count("정책 생성 코드 계약:") == 1
+    assert actions["compact_auxiliary"] == "producer_contract_repair"
+
+
+@pytest.mark.parametrize("manual_on_target", [False, True])
+def test_generation_warning_has_one_current_owner_without_borrowing_prior_day(
+    monkeypatch, tmp_path, manual_on_target,
+):
+    docs, *_ = _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    source_day, target_day = "2026-10-14", "2026-10-15"
+    manual_day = target_day if manual_on_target else source_day
+    task_id = "DirectFamilySourceRepairCompactAuxiliary"
+    manual = (f"# Manual\n\n- [ ] `[{task_id}] existing owner` "
+              f"(`Due: {manual_day}`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
+              "`Track: RuntimeStability`)\n  - 기존 원본 이력과 Acceptance 보존.\n")
+    manual_path = docs / "checklists" / f"{manual_day}-stage2-todo-checklist.md"
+    manual_path.parent.mkdir(parents=True, exist_ok=True)
+    manual_path.write_text(manual, encoding="utf-8")
+    _write_json(mod._direct_summary_path(source_day), _generation_warning_summary())
+
+    result = mod.build_next_stage2_checklist(source_day)
+    target = Path(result["path"])
+    text = target.read_text(encoding="utf-8")
+    assert text.count(f"[{task_id}]") == 1
+    parsed = [task for task in parse_checklist_tasks(current_path=target)
+              if Path(task.source).resolve() == target.resolve() and task.title.startswith(f"[{task_id}]")]
+    assert len(parsed) == 1
+    assert result["manual_task_reuse_count"] == int(manual_on_target)
+    if manual_on_target:
+        assert manual in text
+    else:
+        assert manual_path.read_text(encoding="utf-8") == manual
+    mod.build_next_stage2_checklist(source_day)
+    assert target.read_text(encoding="utf-8").count(f"[{task_id}]") == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("source_date", "2026-10-13"), ("family", "unknown_family"),
+    ("repair_owner", "UnrelatedManualOwner"),
+])
+def test_generation_warning_rejects_wrong_source_or_owner(field, value):
+    summary = _generation_warning_summary()
+    summary["policy_generation_capabilities"][0][field] = value
+    with pytest.raises(RuntimeError, match="capability owner/date mismatch"):
+        _project_generation_warning(summary)
+
+
+@pytest.mark.parametrize("family", ["auxiliary", "entry_cancel_wait", "rising_missed", "holding_vote"])
+def test_generation_warning_verified_successor_removes_only_generated_task(monkeypatch, tmp_path, family):
+    from src.engine.monitoring.policy_generation_contract import OWNERS
+
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-10-14"
+    summary = _generation_warning_summary(family=family)
+    _write_json(mod._direct_summary_path(day), summary)
+    target = Path(mod.build_next_stage2_checklist(day)["path"])
+    assert f"[{OWNERS[family]}]" in target.read_text(encoding="utf-8")
+    manual = ("- [ ] `[UnrelatedCurrentOwner] retain original task` "
+              "(`Due: 2026-10-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
+              "`Track: RuntimeStability`)\n")
+    text = target.read_text(encoding="utf-8")
+    target.write_text(text.replace(mod.AUTO_END, manual + mod.AUTO_END), encoding="utf-8")
+    summary["policy_generation_capabilities"][0].update(status="verified", findings=[])
+    _write_json(mod._direct_summary_path(day), summary)
+
+    mod.build_next_stage2_checklist(day)
+    text = target.read_text(encoding="utf-8")
+    assert f"[{OWNERS[family]}]" not in text
+    assert manual in text
+
+
 def test_direct_family_removes_stale_generation_marker_outside_auto_block(
     monkeypatch, tmp_path
 ):
