@@ -2903,6 +2903,70 @@ def test_bounded_quality_warning_preserves_pending_source_quality_notification()
     assert result['notification_pending']==['machine_auxiliary_intraday_source_gap']
 
 
+def _derived_coverage_health_fixture(route='krx_nxt_integrated'):
+    result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=False)
+    gap.update(status='gap_observed',issues={'machine_probe:coverage_degraded:'+route:1},
+        issues_by_scope={'route:'+route+'|machine_probe:coverage_degraded':1},
+        probe_route_counts={route:20},probe_route_source_covered_counts={route:3},
+        coverage_alert_floor='10_same_route_unique_probes_below_20pct_source_covered',
+        coverage_success_contract='valid_machine_capture_or_exact_native_all_false_receipt')
+    gap['observed']['probe_results']=20
+    result['incidents']['machine_auxiliary_intraday_source_gap']=dict(status='active',last_seen=result['as_of'],
+        issues=dict(gap['issues']))
+    result['notification_pending']=['machine_auxiliary_intraday_source_gap']
+    return result,gap
+
+
+@pytest.mark.parametrize('route',['krx_only','nxt_only','krx_nxt_integrated'])
+def test_exact_recomputed_route_coverage_quality_preserves_issue_and_domain_alert(route):
+    result,gap=_derived_coverage_health_fixture(route)
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']=='warning_pending' and health['reason']=='bounded_source_quality_observation'
+    assert 'current_failure_or_diagnostic_present' in health['unmet_conditions']
+    assert health['current_observation_verified'] is False and health['full_coverage_proven'] is False
+    assert gap['issues']=={'machine_probe:coverage_degraded:'+route:1}
+    assert result['notification_pending']==['machine_auxiliary_intraday_source_gap']
+    assert result['incidents']['machine_auxiliary_intraday_source_gap']['status']=='active'
+    assert json.dumps(result,sort_keys=True)==before
+
+
+@pytest.mark.parametrize('bad',['issue_bool','issue_count','scope_bool','scope_count','wrong_scope','unknown_route',
+    'below_floor','healthy_coverage','denominator_bool','numerator_negative','numerator_string','partial_reader',
+    'extra_contract_issue','machine_issue','execution_issue','cross_route_overcount','unknown_extra','orphan',
+    'floor_bool','wrong_floor','wrong_success_contract'])
+def test_route_coverage_quality_requires_exact_math_typed_counts_complete_reader_and_scope(bad):
+    result,gap=_derived_coverage_health_fixture();route='krx_nxt_integrated'
+    if bad=='issue_bool':gap['issues']['machine_probe:coverage_degraded:'+route]=True
+    elif bad=='issue_count':gap['issues']['machine_probe:coverage_degraded:'+route]=2
+    elif bad=='scope_bool':gap['issues_by_scope']['route:'+route+'|machine_probe:coverage_degraded']=True
+    elif bad=='scope_count':gap['issues_by_scope']['route:'+route+'|machine_probe:coverage_degraded']=2
+    elif bad=='wrong_scope':gap['issues_by_scope']={'route:nxt_only|machine_probe:coverage_degraded':1}
+    elif bad=='unknown_route':gap['issues']={'machine_probe:coverage_degraded:unknown':1}
+    elif bad=='below_floor':gap['probe_route_counts'][route]=9
+    elif bad=='healthy_coverage':gap['probe_route_source_covered_counts'][route]=4
+    elif bad=='denominator_bool':gap['probe_route_counts'][route]=True
+    elif bad=='numerator_negative':gap['probe_route_source_covered_counts'][route]=-1
+    elif bad=='numerator_string':gap['probe_route_source_covered_counts'][route]='3'
+    elif bad=='cross_route_overcount':
+        gap['probe_route_counts']['nxt_only']=1
+        gap['probe_route_assessed_counts']['nxt_only']=2
+        gap['observed']['probe_results']=21
+    elif bad=='unknown_extra':
+        gap['probe_route_counts']['unknown']=1
+        gap['observed']['probe_results']=21
+    elif bad=='orphan':gap['probe_route_source_covered_counts']['nxt_only']=1
+    elif bad=='floor_bool':gap['coverage_alert_floor']=True
+    elif bad=='wrong_floor':gap['coverage_alert_floor']='1_same_route_unique_probes_below_20pct_source_covered'
+    elif bad=='wrong_success_contract':gap['coverage_success_contract']='unverified_source_is_success'
+    elif bad=='partial_reader':gap['sources']['probe'].update(status='partial',window_covered=False,
+        tail_truncated=True,first_read_at=(monitor.stamp(result['as_of'])-timedelta(seconds=30)).isoformat())
+    elif bad=='extra_contract_issue':gap['issues']['machine_trace:path_auxiliary_feature_input_conflict']=1
+    elif bad=='machine_issue':result['machine_semantics']['current_health_cohort']['view']['issues']={'contract_invalid':1}
+    elif bad=='execution_issue':result['entry_execution_tuning_semantics']['issues']={'contract_invalid':1}
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
 @pytest.mark.parametrize('bad',['malformed','io','stage_issue','stage_scope_issue','hash','hash_none','actor','bundle','count','clock',
     'bootstrap','split','unknown_diagnostic','birth','reader_identity','unknown_incident'])
 def test_bounded_quality_warning_never_hides_intrinsic_contract_or_reader_failure(bad):

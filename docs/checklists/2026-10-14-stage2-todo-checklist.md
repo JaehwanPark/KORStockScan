@@ -199,3 +199,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 같은 owner의 최종 보고서 건강 수용은 엄격한 완전 관측 검증과 별도로 bounded_source_quality_observation WARNING을 검증한다. fresh/current/정상 발행·정확한 actor/native/정책/schema/count·clean bounded reader·현재 issues0이 필수다. 원 source quality/AI invalid·timeout·미확인 PASS/소비·partial/uncovered를 보존하며 full validation/복구/매매 권한으로 전용하지 않는다. malformed/IO·변조·실제 계약 issues는 FAIL이다.
 
 기존 동일 기동/observer owner는 f25 첫 진단 PASS와 정규 semantic 실패를 보존하고, 최종 notify/세대 봉인 이후 건강 계산→실제 main 발행 dict의 재계산 equality를 추가 수용한다. 세대 교체 시 미발행, 정식 fixed_watch_post_receipt_warmup 대기의 원 typed/native/주문금지 계약도 검증한다. 정책/권한/OPEN/AUTO는 보존하며 data/report/observer_publication_order_deployment/2026-10-14의 실제 정규 보고서와 후속 daemon에서 닫는다.
+
+기존 동일 observer owner는7ee의 발행 projection equality PASS/semantic 실패를 보존하고, 원 route별 건수에서 정확히 재계산한 coverage_degraded 집계만 보고서 건강과 분리하는 경계를 추가 수용한다. 원천 부족/domain 알림·partial·미확인 AI/Main은 보존하며 다른 계약 오류와 위조 집계는 실패다. 새 정규 발행과 동일 run/hash의 후속 daemon 증거는 data/report/observer_coverage_boundary_deployment/2026-10-14다. OPEN/AUTO·정책·native kernel·권한을 보존한다.

@@ -330,3 +330,9 @@ startup_consumption_state는 정확한 읽기 CAS 경합만 pending으로 되돌
 f25d3282d의17:19:54 기동/첫 진단 순서는 통과했지만17:20 정규 보고서의 건강 projection은 실패했다. main이 최종 observer_generation을 붙이기 전에 건강을 계산해 발행 후 재계산과 달라진 실제 결함이다. notify 전후에 generation을 두 번 확인하므로 단순히 첫 확인 뒤로 옮기는 것으로는 부족하다. 최종 세대 재확인과 알림 상태 갱신이 끝난 직후, 세 canonical 파일을 쓰기 직전에 건강을 계산한다. 같은 발행 dict에서 선언값과 재계산값이 일치해야 하며 세대 변경은 publication 없이 deferred다. 실제 정식 대기명 fixed_watch_post_receipt_warmup도 동일한 기존 typed/native scope/금지 주문 flags 계약으로 구분한다.
 
 회귀는 helper 조립 fixture만으로 닫지 않고 실제 main() parser→stage attach→notify→마지막 generation→projection→write 경로를 실행한다. optional notify 뒤 두 번째 generation 시각 변경, 실제 발행 dict 재계산 equality, 선택 세대 변경 시 미발행을 확인한다. provider/실원천 재계산·정책/매매 권한을 만들지 않는다. 원 f25 첫 진단 PASS와 자연 semantic 실패는 그대로 보존한다. 새 배포와 실제 첫 정규 보고서/후속 진단의 수용 owner는 data/report/observer_publication_order_deployment/2026-10-14다.
+
+## 21. 원천 커버리지 집계와 보고서 건강의 일관성
+
+7ee50c621의17:40 자연 보고서는 최종 세대 봉인/건강 재계산 equality를 통과했다. 후속 detector는 실제 현재 원천의 coverage_degraded 집계1건을 보고서 장애로 분류했다. 제한 관측 경로가 해당 원천 품질 incident를 허용하면서도 stages_clean에서 모든 issues를 거부하던 내부 모순이다. 원 issue·원천 결손·domain 알림·partial·미확인 AI/Main 결과는 그대로 보존한다. 알려진 route의 원 전체/원천 유효 건수와 원 coverage floor/threshold에서 정확히 재계산한 coverage_degraded 집계 및 scope만 보고서 건강과 구분한다. 타입·route·floor·분모/분자·집계/범위 위조나 그 밖의 계약/읽기/정책 오류는 실패다. 현재 수동 guard·native kernel·매매 권한과 정책은 바꾸지 않는다.
+
+실제17:40 발행 dict의 양성 회귀와 집계/범위/타입/교차 route 반례, source gap 보존을 검증한다. 이후 정규 보고서와 같은 run/hash를 읽은 후속 daemon으로 수용하며 이전7ee 기술 검증 PASS/semantic 실패는 변경하지 않는다. 새 증거 owner는 data/report/observer_coverage_boundary_deployment/2026-10-14다.

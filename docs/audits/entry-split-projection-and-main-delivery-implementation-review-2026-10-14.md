@@ -92,3 +92,9 @@
 f25의 첫 진단은 ordered 완료 후 시작하고 process PASS였지만 첫 정규 보고서에 observer_observation_health_projection_mismatch가 남았다. 생산 main이 generation 봉인 전에 건강을 계산한 것이 원인이다. 이를 숨기지 않고 원 실패 보고서를 보존한다. 건강 계산은 notify와 마지막 generation 재확인 이후의 최종 발행 dict에서 한 번 수행한다. 실제 main 발행 경로 회귀와 선언값/재계산 equality, notify 뒤 두 번째 seal 시각, 세대 변경 미발행을 검증한다. 원 typed/native source/생애/개수/정책 검사와33 native kernel, 원5초·매매 권한은 보존한다. 새 배포·자연 수용은 data/report/observer_publication_order_deployment/2026-10-14에서 별도로 기록한다.
 
 최종 일곱 번째 source 동결 후8suite 통합1,736개가13.99초에 통과했다. 실제 main 발행 순서·알림 후 최종 세대·건강 선언값과 재계산 일치·세대 변경 미발행을 포함한다. Python compile·bash 문법·diff 검사를 통과했으며 매매 정책/native kernel과 원5초는 변경하지 않았다. 배포와 자연 정규 보고서·후속 detector 수용은 별도 증거로 확인한다.
+
+## 12. 자연 커버리지 경고의 report-health 경계
+
+7ee의17:40 자연 run935d0b는 선언 건강과 순수 재계산이 일치해 발행 순서 수리는 입증됐다. 하지만 현재 원천 집계 coverage_degraded1건만으로 다음 daemon에서 artifact 실패가 남았다. 제한 관측 incident 허용과 stages_clean의 모든 issues 거부가 충돌한 결함이다. 원 route별 분모·유효 원천 건수·coverage floor 및 정확한 issue/scope를 재계산해 검증한 원천 품질 경고만 분리한다. 원 partial/source gap/domain 알림과 AI/Main 미검증은 보존한다. 모든 다른 현재 issue와 잘못된 집계·타입·범위·정책/읽기 오류는 실패다. 이전 run의 기술 PASS/semantic 실패는 원 증거로 보존하며 새 정규 보고서/동일 hash를 읽은 daemon을 별도 수용한다.
+
+최종 여덟 번째 source 동결 후8suite 통합1,760개가13.00초에 통과했다. 실제7ee 발행 dict 원 bytes를 보존한 재검증과 원 source issue/domain 알림 보존, 알려진 route/교차 route 건수·고아 route·타입·floor/성공 계약 변조 거부를 포함한다. compile·bash 문법·diff 검사와70개 문서 링크/기존4owner/print-only parser25항목을 확인한다. 원 정책11개와33 native kernel은 변경하지 않으며 배포 후 정규 보고서/동일 run의 다음 daemon으로 별도 수용한다.

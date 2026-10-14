@@ -3182,7 +3182,7 @@ def observation_health_projection(result):
             'auxiliary_pending', 'auxiliary_pending_bound', 'auxiliary_transport_unavailable',
             'probe_observation_incomplete', 'probe_native_no_match'}
         and all(count(v) for v in observed.values()))
-    expected_gap = ('gap_observed' if diagnostics else 'observed_no_gap' if any(observed.values())
+    expected_gap = ('gap_observed' if diagnostics or gap.get('issues') else 'observed_no_gap' if any(observed.values())
                     else 'unobservable')
     sources = obj(gap.get('sources'))
     require(gap.get('schema') == 'machine_auxiliary_intraday_source_semantics_v1'
@@ -3574,9 +3574,29 @@ def observation_health_projection(result):
             and generation.get('generation_current') is True and generation.get('selector_reported_actual_pid_consumed') is True
             and _verified_health_actor_birth(birth, actor, now, generation) is not None
             and all(p.get('actor_birth_proof') == birth for p in projections))
-        stages_clean=(all(stage.get('issues') == {} and stage.get('issues_by_scope',{}) == {}
-            and all(stage.get(k) in (None,'') for k in ('selection_status','source_status','error','errors','reason'))
-            for stage in stages) and result.get('issues',{}) == {} and result.get('diagnostics',{}) == {}
+        # This source-quality aggregate is derived by this producer from exact
+        # complete-reader route counts. Keep the issue and its domain alert;
+        # it is not a failed artifact publication or a contract exception.
+        expected_coverage={}
+        if obj(sources.get('probe')).get('status') == 'complete' and obj(sources.get('probe')).get('window_covered') is True:
+            for route,total in route_counts[0].items():
+                covered=route_counts[2].get(route,0)
+                if route in {'krx_only','nxt_only','krx_nxt_integrated'} and count(total,minimum=10) and count(covered) and covered*5 < total:
+                    expected_coverage['machine_probe:coverage_degraded:'+route]=1
+        aggregate=obj(gap.get('issues')); scoped_aggregate=obj(gap.get('issues_by_scope'))
+        expected_scopes={'route:'+key.rsplit(':',1)[1]+'|machine_probe:coverage_degraded':1 for key in expected_coverage}
+        route_bounds=(set(route_counts[0]) <= {'krx_only','nxt_only','krx_nxt_integrated'}
+            and all(set(rows) <= set(route_counts[0]) and all(count(v,maximum=route_counts[0][route])
+                for route,v in rows.items()) for rows in route_counts[1:]))
+        coverage_quality=(route_bounds
+            and gap.get('coverage_alert_floor') == '10_same_route_unique_probes_below_20pct_source_covered'
+            and gap.get('coverage_success_contract') == 'valid_machine_capture_or_exact_native_all_false_receipt'
+            and bool(expected_coverage) and aggregate == expected_coverage and scoped_aggregate == expected_scopes
+            and all(count(value,minimum=1,maximum=1) for value in (*aggregate.values(),*scoped_aggregate.values())))
+        stages_clean=((gap.get('issues') == {} and gap.get('issues_by_scope',{}) == {} or coverage_quality)
+            and all(stage.get('issues') == {} and stage.get('issues_by_scope',{}) == {} for stage in (machine,execution))
+            and all(all(stage.get(k) in (None,'') for k in ('selection_status','source_status','error','errors','reason'))
+                    for stage in stages) and result.get('issues',{}) == {} and result.get('diagnostics',{}) == {}
             and all(stage.get('provider_lineage_source_status') in (None,'') for stage in (gap,execution))
             and machine.get('provider_lineage_source_status') in (None,'','partial_source_gap')
             and isinstance(result.get('notification_pending'),list)
