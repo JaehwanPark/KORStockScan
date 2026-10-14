@@ -22,3 +22,13 @@ Implementation → self review → 보완 → re-review: 위 두 결함의 produ
 새 모듈·cron/서비스·패키지·Main 재기동·수동 env/lock/provider/threshold·주문/취소·가격/수량/cap·retired consumer 권한은 만들지 않는다. 기존 approved custody profile을 native router와 동일하게 전달한다. 단일 실패 보조 producer → 최종 summary/tower/checklist/strict/controller → exact 10/15 prepared readiness를 확인한다. 기동 준비와 미래 PREOPEN/PID·자연 주문·비용 후 성과는 별도다.
 
 운영 결과는 [전수 점검 기록](postclose-monitoring-and-next-session-readiness-2026-10-14.md)에 후속 기록한다. 05:35 최종화·07:35 PREOPEN·07:55 기동의 실제 예정 상태는 완료로 합성하지 않는다.
+
+## 다음 날짜의 native v4 조상 보완
+
+`beca2988c` 보조 시도 e339aa809bf941e5b39bb061f393838e는50쌍/100request 준비·평가 후 새15일 bundle 검증에서 `v4_contract_code_changed:session_contract.py`로 실패했다. active99c의 당일 code handoff는 유효했지만 평일 후속발행은 처음 joint 등록 때의 native 조상 refresh를 승계하지 못했다. 원 시도·봉인 캠페인·provider ledger·응답·평가를 보존한다.
+
+`continuous_reversal_policy_v6.stage`의 next_session만 현재 승인된 active-parent code handoff를 검증한 뒤 기존 immutable refresh builder로 native v4 metadata를 재결속한다. 조상 payload·안전값의 behavioral equality와 전체 native source 검증을 요구하고, 원 parent generation과 승인 receipt SHA를 새 reports의 source receipts에 보존한다. code-change 외의 source 오류·유효하지 않은 인계·source 누락·payload 변경은 그대로 실패한다. current pointer·원 report bytes·데이트·budget는 변하지 않으며 intraday/activation/validator/assess 경계는 보존한다.
+
+추가 source finding 구현→리뷰→보완→재리뷰 후 표적 시험83PASS(`test_main_market_source_consolidation`, 기존auxiliary/joint downstream), wrapper57PASS로 최종 관련140PASS다. 기존 code-refresh 반례 fixture에 selector/무영수증 문맥을 추가해 code mismatch 거부를 검증했다. 새 carry의 정상·source/인계/receipt/payload 거부와 원 current/report 불변을 검증했다. compile/bash/diff PASS다.
+
+이번 추가보완은 native33파일 중v6 source-only producer1개를 바꾸므로 이전parity를 새코드의 freshness로 쓰지 않는다. 새 baseline beca/candidate의128scope·76,800row·621hit·동일signal SHA·mismatch0, provider0/orderfalse를 확인했다. AST 비교로3개 postclose function만 변경·다른18함수 보존을 확인했다. 기존 machine code identity와 새 코드 identity가 다르므로 필요한 machine→auxiliary→summary/strict/controller를 재결속하고, 완료된 지연·라벨·수량·exit/stop 계산은 재실행하지 않는다. 새 시행·준비·PID·경제성 결과는 전수 기록에서 별도 확인한다.

@@ -344,7 +344,7 @@ def _validate_code_refresh(bundle, data_root):
     return original
 
 
-def _write_refreshed_bundle(original, data_root, *, release_commit, proof):
+def _write_refreshed_bundle(original, data_root, *, release_commit, proof, attestation_sources=()):
     """Private, immutable generation builder after origin attestation."""
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     root = N.root(Path(data_root))
@@ -353,7 +353,8 @@ def _write_refreshed_bundle(original, data_root, *, release_commit, proof):
         raise ValueError('v6_code_refresh_schema_unsupported')
     if f['schema'] == SCHEMA:
         f['native_parent_bundle'] = _write_refreshed_bundle(
-            f['native_parent_bundle'], data_root, release_commit=release_commit, proof=None)
+            f['native_parent_bundle'], data_root, release_commit=release_commit, proof=None,
+            attestation_sources=attestation_sources)
         f['code_refresh'] = proof
     modules = contract_modules() if f['schema'] == SCHEMA else V4.contract_modules()
     f['contract_file_sha256'] = {Path(m.__file__).name:file_hash(m.__file__) for m in modules}
@@ -372,7 +373,8 @@ def _write_refreshed_bundle(original, data_root, *, release_commit, proof):
         old_sha = file_hash(old_path)
         if old_sha != original['continuous_reversal']['report_file_sha256'][name]:
             raise ValueError('v6_code_refresh_report_changed')
-        report['source_receipts'] = report.get('source_receipts',[]) + [dict(path=str(old_path.resolve()),sha256=old_sha)]
+        report['source_receipts'] = (report.get('source_receipts',[])
+            + [dict(path=str(old_path.resolve()),sha256=old_sha)] + copy.deepcopy(list(attestation_sources)))
         report['cells'] = [copy.deepcopy(f[name+'_cells'][c['key']]) for c in report['cells']]
         if f['schema'] == SCHEMA and name == 'machine':
             report['execution_code_sha256'] = f['execution_code_sha256']
@@ -532,6 +534,31 @@ def assess(family, snapshot, *, symbol, session):
     return base, inp, prompt, schema
 
 
+def _carry_native_parent(parent, data_root, *, release_commit):
+    """Carry an attested active ancestor with current code metadata only."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_code_handoff as H
+    native = parent['continuous_reversal'].get('native_parent_bundle', parent)
+    try:
+        V4.validate_sources(native, Path(data_root))
+        return native
+    except ValueError as exc:
+        if not str(exc).startswith('v4_contract_code_changed:'):
+            raise
+        H.validate(parent, Path(data_root), original_error=exc)
+    day = datetime.now(K.KST).date().isoformat()
+    receipt = H.path(data_root, day, release_commit, parent['bundle_sha256'])
+    original = N.root(Path(data_root))/'generations'/(parent['bundle_sha256']+'.json')
+    sources = [dict(path=str(p.resolve()), sha256=file_hash(p)) for p in (receipt, original)]
+    refreshed = _write_refreshed_bundle(native, data_root, release_commit=release_commit,
+                                      proof=None, attestation_sources=sources)
+    if _behavioral_family(native['continuous_reversal']) != _behavioral_family(refreshed['continuous_reversal']):
+        raise ValueError('v6_native_carry_policy_changed')
+    N.validate(refreshed, target_date=native['target_date'])
+    V4.validate_sources(refreshed, Path(data_root))
+    return refreshed
+
+
 def stage(data_root, day, publication, machine, auxiliary, *, target_date, release_commit,effective_mode='next_session',registration_activation=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     if (effective_mode not in {'next_session','intraday'} or day > publication
@@ -570,6 +597,8 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             # disclosed by the registration transition instead of an identical-
             # behavior assertion.
             native=_write_refreshed_bundle(native,data_root,release_commit=release_commit,proof=None)
+        elif effective_mode == 'next_session':
+            native=_carry_native_parent(parent,data_root,release_commit=release_commit)
         f = dict(schema=SCHEMA, kernel_version=K.VERSION, registry_sha256=machine['operating_manifest']['registry_sha256'],
             branch_definition_sha256=machine['operating_manifest']['registry_sha256'], auxiliary_version=A.VERSION, label_contract=C.LABEL,
             source_date=day, publication_date=publication, effective_date=target_date, effective_mode=effective_mode,

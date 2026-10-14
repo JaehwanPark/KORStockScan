@@ -278,3 +278,5 @@ The observer computes observation_health only from the final publication diction
 ### Native 완료 prefix와 승인된 보조 집합의 복구
 
 `--resume-from-final-handoff`는 native tower/strict 실패를 최소 재개한다. 이전 scoped ancestry 또는 `normal` 원 run의 실제 완료 command receipts가 있어야 하며, 다른 regeneration/reuse·누락/변조 prefix·source/commit 불일치를 거부한다. 모든 stage·exit snapshot·수량 terminal 검증 후 summary→tower→checklist→strict→controller를 갱신한다. 이전 실행/원천/실패는 보존하며 이전 scoped 복구를 합성하지 않는다. 보조 준비의 집합 차이는 검증된 parent에서 native 승인 selector의 manifest/cells/선정 영수증을 정확히 재현하는 경우만 허용한다. 새 scope/variant·예산 reset·live current 변경 권한은 없다. [구현 검증](audits/postclose-auxiliary-membership-and-final-resume-recovery-review-2026-10-14.md)을 따른다.
+
+Next-session 발행이 승인된 active parent의 native v4 조상을 상속할 때는 현재 code handoff를 검증한 뒤 기존 불변 metadata refresh builder를 사용한다. behavioral payload equality·native source 재검증과 원 parent/승인 receipt SHA를 보존한다. source/code 전환은 새 scope/가드/활성화 권한이 아니며 intraday 경로에는 적용하지 않는다. native 계약 파일 변경은 fresh parity와 영향받은 producer code identity로 재생성한다.

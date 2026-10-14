@@ -227,3 +227,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ### 10/14 EOD 장후 실패 보완·10/15 인계
 
 기존 `DirectFamilyPreopenPolicyHandoff` 및 direct family source owner가 [복구 리뷰](../audits/postclose-auxiliary-membership-and-final-resume-recovery-review-2026-10-14.md)의 source/publication 10/14→effective 10/15를 인계한다. 승인 native variant 선정의 보조 입력 수용과 완전한 normal 원 run의 최종 resume만 검증한다. 원 실패·원천·예산·완료 계산·stable ID/Acceptance/History를 보존한다. 새로운 OPEN·매매 기동·수동 env/lock/provider/threshold·주문·추가 EV gate 권한은 없으며 운영 strict/controller/준비와 미래 PREOPEN/PID·자연 경제성을 구분한다.
+
+같은 10/14 복구 owner는 active code handoff가 후속15일 native 조상에 누락되는 source 계약을 함께 수용한다. source-only 발행 함수1/33 변경의 fresh128scope parity·원 payload/source/current/예산 불변·영향받은machine→auxiliary→마지막consumer를 확인한다. 재선정된새CODE를 원 계산의 코드/PID로 relabel하지 않고 기존 자연수용·경제성OPEN을 보존한다.

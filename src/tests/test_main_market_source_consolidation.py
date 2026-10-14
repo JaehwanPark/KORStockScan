@@ -124,6 +124,13 @@ def test_v6_code_refresh_preserves_issued_policy_and_current_until_exact_activat
     next(iter(cell['routes'].values()))['payload']['arm'] = 'changed'
     with pytest.raises(ValueError, match='policy_changed'):
         V6._validate_code_refresh(tampered,root)
+    # The active-policy compatibility reader requires a real selector context.
+    # This isolated candidate has no compatibility receipt: preserve the native
+    # code mismatch rather than failing on an unrelated missing fixture file.
+    selection = root/'runtime/runtime_release_selection.json'
+    selection.parent.mkdir(parents=True, exist_ok=True)
+    P.write(selection, dict(git_commit='b'*40, release_root=str(root/'new-release')))
+    monkeypatch.setattr(router,'selected_release',lambda *args:(root/'new-release','b'*40))
     pin.write_text('# Unreviewed bytes\n')
     with pytest.raises(ValueError, match='contract_code_changed'):
         original_validate(refreshed,root)
@@ -572,3 +579,53 @@ def test_warm_operating_replay_reuses_derived_points_without_provider_calls(repl
     assert second['proposal_metrics']==first['proposal_metrics']
     with STORE.Store(root) as store:
         assert store.db.execute('select count(*) from requests').fetchone()[0]==0
+
+
+@pytest.mark.parametrize('defect', [None, 'source', 'handoff', 'missing_receipt', 'policy'])
+def test_native_carry_refresh_requires_current_attestation_and_preserves_payload(next_session_v6, monkeypatch, defect):
+    from datetime import datetime
+    from src.engine.scalping import continuous_reversal_policy_v6 as V, continuous_reversal_policy_v4 as V4
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N, reversal_code_handoff as H
+    root, active, parent = next_session_v6
+    commit = 'a' * 40
+    receipt = H.path(root, datetime.now(P.KST).date().isoformat(), commit, parent['bundle_sha256'])
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    if defect != 'missing_receipt': receipt.write_text('{"verified_fixture_handoff":true}\n')
+    native = parent['continuous_reversal']['native_parent_bundle']
+    pointer = N.root(root) / 'current.json'
+    before = copy.deepcopy(parent); current_bytes = pointer.read_bytes()
+    original_reports = {p: p.read_bytes() for p in (N.root(root) / 'sources').glob('*.json')}
+    validate_source = V4.validate_sources
+    calls = []
+    def source_check(value, data_root):
+        calls.append(value['bundle_sha256'])
+        if len(calls) == 1:
+            raise ValueError('v4_frozen_source_changed' if defect == 'source' else 'v4_contract_code_changed:session_contract.py')
+        return validate_source(value, data_root)
+    monkeypatch.setattr(V4, 'validate_sources', source_check)
+    handoffs = []
+    def attested(value, data_root, *, original_error):
+        handoffs.append(value['bundle_sha256'])
+        assert value == parent and str(original_error).startswith('v4_contract_code_changed:')
+        if defect == 'handoff': raise ValueError('active_policy_code_handoff_source_changed')
+        return value
+    monkeypatch.setattr(H, 'validate', attested)
+    writer = V._write_refreshed_bundle
+    if defect == 'policy':
+        def changed(*args, **kwargs):
+            result = writer(*args, **kwargs)
+            result['continuous_reversal']['unexpected_trading_value'] = 1
+            return result
+        monkeypatch.setattr(V, '_write_refreshed_bundle', changed)
+    if defect is not None:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            V._carry_native_parent(parent, root, release_commit=commit)
+    else:
+        refreshed = V._carry_native_parent(parent, root, release_commit=commit)
+        assert V._behavioral_family(native['continuous_reversal']) == V._behavioral_family(refreshed['continuous_reversal'])
+        for name in ('machine', 'auxiliary'):
+            path = N.root(root) / 'sources' / ('reversal-' + refreshed['continuous_reversal'][name+'_report_sha256'] + '.json')
+            assert {'path':str(receipt.resolve()), 'sha256':P.file_hash(receipt)} in N._read(path)['source_receipts']
+    assert parent == before and pointer.read_bytes() == current_bytes
+    assert all(p.read_bytes() == raw for p, raw in original_reports.items())
+    assert handoffs == ([] if defect == 'source' else [parent['bundle_sha256']])
