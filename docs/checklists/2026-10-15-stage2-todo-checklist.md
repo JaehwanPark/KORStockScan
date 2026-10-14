@@ -84,24 +84,51 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 <!-- entry_cancel_wait_handoff:end -->
 
+## 전일 미종결 수용 이관
+
+- [ ] `[MainMarketWeaknessPostcloseObservation1008] 압축 원천·native 판정 연결·누적·약세 조정 후보 보완` (`Due: 2026-10-15`, `Slot: POSTCLOSE`, `TimeWindow: 검증된 수리의 후속 배치·자연 수용; 실제 연구는 21:40~익일 05:40 허용 슬롯`, `Track: RuntimeStability`)
+  - Source: [10/14 구현 리뷰](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md), [10/13 결함보완계획 WR0–WR5](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md), [원 MW0–MW6·구현/배포 이력](../proposals/main-market-weakness-observer-repair-and-postclose-research-implementation-plan-2026-10-08.md), [기존 stable ID·Acceptance](2026-10-09-stage2-todo-checklist.md).
+  - 범위: 10/14 사용자 승인으로 WR1~WR4 작업본 구현·반복 코드리뷰/수정을 수행했다. gzip-only reader/native 연결·확인 latch/누적/phase/typed 후보/안내와 설정 재결속을 구현했다. 실제 배치·예약 재결속·원천 재계산·실발송은 후속 수용이다. 추가 장중 hook·로깅·metadata·파일 조회/계산·queue/thread·API/AI 호출은 0, 기존 보조 패턴연구·정책/주문·Main/manual custody·퇴역 경계는 보존한다. joint/지연 개선 작업의 구현·배포 승인을 전용하지 않는다.
+  - Acceptance: 기존 MW1 회귀·선택 observer 자연 소비 경계를 보존한다. 실제 schema/선별 전 census·gzip/원본 alias·bounded decode·effective listing 검증, 원 event/attempt/hash/ask/feature/label binding·결손 U, A/B/C/U·미래 join/TTL300·지연60/180·W/F/U 공통 분모·origin/중복 분리를 검증한다. 같은 관련 정의만 날짜 간 누적하고 실제 변경은 분리한다. 기계 지원 수치 축/미지원 사유와 보조 PASS 이후 CF를 구분하며 후보 합계 최대6·고정1,000회 안정성/U 민감도를 유지한다. 최대9회·야간 총 예약600초/worker1/512MiB·자식 회수·crash/delta0, optional code/calendar rebind와 terminal→누적→후보→관리자 Telegram 의미 ID/receipt·정정/uncertain→night summary를 검증한다. 연구는 strict/PREOPEN·기동 비차단이며 95% 보장·정책 자동 적용·주문 권한은 없다.
+  - 리뷰 보완 수용: gzip-only 날짜 discovery→pending→실제 reader까지, 잔여 budget/CRC·hard kill 뒤 prefix 반복 억제·daily/cumulative/notification phase 재개를 검증한다. 2회 활성/3회 회복 확인 latch를 primary로 두고 raw 진단·실제/재구성 근거를 분리한다. 기계/보조 kind별 K/R/A/N 공통 분모·추가만 있는 후보·U 민감도·parent/preview/winner_group, key 이행 중 오정정0·원 sent 보존을 검증한다. optional rebind는 기존 notify/설치 이력/source 경계를 보존하고 자정 active/staged를 구분한다. outside_night_window의 신규 연구 상태 쓰기는0이며 최신 야간 시도와 원 계산 receipt를 별도 보존한다.
+  - History: 10/9 MW1 수리·MW2–MW5 구현/반복 검증·selected release/optional 설치는 [배포 리뷰](../audits/main-market-weakness-review-deployment-2026-10-09.md)의 역사다. 10/13 점검 누적16,722개·자연1,534개·시장 연결0·후보0은 입력 연결 결함이며 no-edge가 아니다. 새 결함만 열고 과거 완료 구현을 전면 재실행하지 않는다. 이 stable ID를 미래 날짜에 Acceptance와 함께 이전하며 중복 OPEN을 만들지 않는다.
+  - 인계: 원 AUTO 봉인 bytes와 다른 OPEN owner를 보존한다. 최종 checklist 문서 바이트의 기존 strict/PREOPEN 영향은 `DirectFamilyPreopenPolicyHandoff`가 기존 승인 범위에서 검증하고 과거 PASS를 현행으로 주장하지 않는다. 현재 작업본 코드 수리·표적 회귀는 완료했으며 배치·연구 재계산·실발송은 미실행이다. 원 기계 숫자 역할 미확인은 role_unverified, 완전 확인점 재생 producer 부재는 confirmation_replay_unavailable이며 지원 축/실제 수치로 보고하지 않는다.
+
+  - 구현 검증: [구현 리뷰](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md)의 회귀/compile/정적 검사·문서 parser 결과를 수용한다. 실제 예약의 원천 연결/A·B/U·phase·notification disposition·최신 시도/원 계산은 검토 release 배치와 자기 code rebind 후 확인한다. 기계 수치 후보 부재·새 자연 표본 부족은 경제성 null/연구 capability이며 source 수리 실패나 no-edge로 전용하지 않는다.
+  - 후속 재리뷰: [8종 수정 근거](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md#후속-코드-재리뷰와-수정보완), 표적 263개 통과. 재생 producer 부재는 selection/안내 거부, 두 지원 필터의 추가 모집단은0이다. pending 날짜 중 outbox 보존·cursor 변경 시 발송 보류·conflict 캐시 무효화·오래된 철회/정정 억제·comparison→manifest 중단 복구·저장 오류 defer·probe BLOCK 분리·실제 capability 사유를 후속 배치 수용에 포함한다. 원 K/R/A/N 통계 수용은 미지원 재생 producer의 완료를 뜻하지 않는다. 배포·예약 변경·운영 원천 재계산·실발송 미실행 경계를 유지한다.
+
+  - 배포 승인 수용: 후속 사용자 “배포승인”으로 [검증한 불변 배포본](../../data/report/main_market_weakness_deployment/2026-10-14/build.json)의 선택·자기 optional 예약 code rebind를 실행한다. 최종 결과는 [배포 결과](../../data/report/main_market_weakness_deployment/2026-10-14/deployment-result.json)가 소유한다. 기존 enabled/notify·설치 이력·source 경계와 정지된 Main 상태를 보존하며 기동·정책 발행·장중 연구/실발송은 포함하지 않는다. 263개 release 회귀 통과와 실제 다음 야간의 terminal→누적→알림 disposition 수용을 구분하고 자연 수용 전 이 OPEN owner를 유지한다.
+  - 이관: 10/14 미종결 Acceptance/History를 보존해 10/15 동일 ID로 인계했다. 코드·장후 준비를 미래 자연 수용/비용 후 성과로 닫지 않는다.
+
+- [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-15`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
+  - Source: [보조 회로·제출 보완계획](../proposals/main-auxiliary-circuit-recovery-and-submit-receipt-remediation-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 제출 병목 개선계획 B0/B2/B3](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
+  - Acceptance: 실제 새 PID/cwd/start ticks·bundle/registry 소비, 같은 시장명 비교의 receipt→revision→sizing 연결, 원 native5초·단일 recovery lease·공통 인증/unknown fail-closed·보호 exit 독립성을 확인한다. 회로가 자연히 열리지 않으면 HALF_OPEN 성공을 주장하지 않고 pending으로 남긴다. PASS와 intent/send/fill/terminal을 분리한다.
+  - History: 10/12 계획의 P0-A/B/P1 새 결함만 구현 범위다. 기존 완료 native/readiness/auth owner 전체를 다시 열지 않는다. 기동 준비·배포 수용은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다.
+  - 이관: 10/14 미종결 Acceptance/History를 보존해 10/15 동일 ID로 인계했다. 코드·장후 준비를 미래 자연 수용/비용 후 성과로 닫지 않는다.
+
+- [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-15`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
+  - Source: [잔여 병목·패턴 보완계획](../proposals/main-post-readiness-residual-bottleneck-and-unidentified-pattern-research-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 비고정 관측 개선계획 B0/B4](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
+  - Acceptance: 슬롯5/long2·60/150초·원 lease deadline 보존, mixed branch 긴 관측 순환, exact item/route/epoch/sequence의 0D count·중복/신원 결손 분리, Main 편입 첫 실패와 capture/lease/record/PID/start 연결을 확인한다. 등록6정의/4scope의 registry·native root·OR 한 기회 소비를 실제 대상에서 확인하며 신호 미발생은 pending이다. PRE NXT와 AFTER SOR 범위를 REGULAR로 복사하지 않는다.
+  - History: 10/12 완료 owner의 R1/R2/R4 새 결함 범위와 지정 등록의 자연 수용만 전달한다. 과거 원천의 route/count·미확정 손익을 소급 보충하지 않고 새 경제성/미래 날짜 gate를 추가하지 않는다.
+  - 이관: 10/14 미종결 Acceptance/History를 보존해 10/15 동일 ID로 인계했다. 코드·장후 준비를 미래 자연 수용/비용 후 성과로 닫지 않는다.
+
+- [ ] `[HoldingProfitExitSourceContractRepair] Main 보유 익절 원천·재생·의미 계약 수리` (`Due: 2026-10-15`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
+  - Source: [runtime_approval_summary_2026-10-13.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-13.json)
+  - 식별 결함: ["policy_binding_gap"]
+  - 완료 기준: 기간·정산 세대·first crossing/유예·signal별 lifecycle/as-of의 producer→consumer 회귀 검증.
+  - 비용 원천 부재·자연 표본 0은 코드 결함과 분리하며 신규 EV gate·SELL/retry·재기동 권한을 만들지 않는다.
+  - 이관: 10/14 미종결 Acceptance/History를 보존해 10/15 동일 ID로 인계했다. 코드·장후 준비를 미래 자연 수용/비용 후 성과로 닫지 않는다.
+
+기존 HoldingProfitExitSourceContractRepair는 10/13 policy_binding_gap 이력과 별도로 10/14 holding_exit snapshot의 source_gap_readiness_missing·COMPLETED 비용 원천 부재를 [전수 점검](../audits/postclose-monitoring-and-next-session-readiness-2026-10-14.md)로 수용한다. 12cell 검증 incumbent carry와 연구/PID/경제성 미확정을 분리한다.
+
 
 <!-- SENTINEL_POSTCLOSE_INTEGRATION_HANDOFF_20261015_START -->
 ## 계산 수정 통합본과 다음 정상 기동의 수용 인계
 
 - Source: [장후 통합·다음날 준비 리뷰](../audits/sentinel-postclose-integration-and-next-session-readiness-2026-10-14.md), [10/14 원 Acceptance/History](2026-10-14-stage2-todo-checklist.md).
 - 기존 `DirectFamilyPreopenPolicyHandoff`는 다른 세션의 source/publication14 장후 전체 종료 후 승인된 계산 수정본 `a179bb42d`와 최신 장후 수리 통합배포, target15 준비·검증, 07:35 PREOPEN 및 07:55 정상 Main PID 소비를 각각 확인한다. 현재 정책·보조 판단값·operator custody를 보존한다. 정지 배포 또는 prepared_verified를 실제 PID/주문/손익으로 표시하지 않는다.
-- 자정 이후 코드 결속은 기존 준비 자동화의 `stopped_postclose_candidate_rebind`로만 수행한다. 실제 target15의07:35 이전, Main/supervisor 정지·정상 장후 격리·전체 controller/strict/producer 종료·미시도 PREOPEN·선택/현재/원후보의 정확한 해시와 native 잠금이 필요하다. 원 native33·판단값·현재 pointer를 보존하고 source14 consumer→summary→controller→target15 prepare/verify를 재결속한다. 정상 PREOPEN/기동을 앞당기거나 실패 receipt·시간을 합성하지 않는다.
+- 자정 이후 코드 결속은 기존 준비 자동화의 `stopped_postclose_candidate_rebind`로만 수행한다. 실제 target15의07:35 이전, Main/supervisor 정지·정상 장후 격리·전체 controller/strict/producer 종료·미시도 PREOPEN과 canonical bootstrap env/manifest/verify 부재·선택/현재/원후보의 정확한 해시와 native 잠금이 필요하다. 원 native33·판단값·현재 pointer를 보존하고 source14 consumer→summary→controller→target15 prepare/verify를 재결속한다. 정상 PREOPEN/기동을 앞당기거나 실패 receipt·시간을 합성하지 않는다.
 
-- [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-15`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
-  - Source: [보조 회로·제출 보완계획](../proposals/main-auxiliary-circuit-recovery-and-submit-receipt-remediation-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 제출 병목 개선계획 B0/B2/B3](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
-  - Acceptance: 실제 새 PID/cwd/start ticks·bundle/registry 소비, 같은 시장명 비교의 receipt→revision→sizing 연결, 원 native5초·단일 recovery lease·공통 인증/unknown fail-closed·보호 exit 독립성을 확인한다. 회로가 자연히 열리지 않으면 HALF_OPEN 성공을 주장하지 않고 pending으로 남긴다. PASS와 intent/send/fill/terminal을 분리한다.
-  - History: 10/12 계획의 P0-A/B/P1 새 결함만 구현 범위다. 기존 완료 native/readiness/auth owner 전체를 다시 열지 않는다. 기동 준비·배포 수용은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다.
-
-- [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-15`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
-  - Source: [잔여 병목·패턴 보완계획](../proposals/main-post-readiness-residual-bottleneck-and-unidentified-pattern-research-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 비고정 관측 개선계획 B0/B4](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
-  - Acceptance: 슬롯5/long2·60/150초·원 lease deadline 보존, mixed branch 긴 관측 순환, exact item/route/epoch/sequence의 0D count·중복/신원 결손 분리, Main 편입 첫 실패와 capture/lease/record/PID/start 연결을 확인한다. 등록6정의/4scope의 registry·native root·OR 한 기회 소비를 실제 대상에서 확인하며 신호 미발생은 pending이다. PRE NXT와 AFTER SOR 범위를 REGULAR로 복사하지 않는다.
-  - History: 10/12 완료 owner의 R1/R2/R4 새 결함 범위와 지정 등록의 자연 수용만 전달한다. 과거 원천의 route/count·미확정 손익을 소급 보충하지 않고 새 경제성/미래 날짜 gate를 추가하지 않는다.
-
-- 추가 Acceptance: `NonfixedDispatchReadinessReview1012`는 원천15행 제외로 교체된 source14 raw와 derived summary/cache의 세대를 대사하고 실제 cold CLI≤130초·observer≤40초·전체≤180초 및 정상08:00/08:05/08:10 연속3슬롯을 별도로 확인한다. 원생성물·실패/timeout·source-gap을 보존하며 캐시 준비를 자연 계산 성공으로 보고하지 않는다. `AuxiliaryCircuitRecoveryRepair1012`는 새 PID의 실제 정상 AI attempt 분모·stage clocks·timeout·회로와 PASS→intent/send/fill/terminal을 구분한다. 검증용 provider replay나 주문을 만들지 않는다.
-- History: 위 두 OPEN stable ID의10/14 원 Acceptance/History를 보존해10/15로 이관한다. 이전 날짜 구현·검증 완료 항목을 다시 열지 않으며 과거 로그·등록 membership·손익을 보충하지 않는다. 코드/배포/준비와 자연 성능·실제 거래·비용 후 경제성은 별도 수용이다.
+- 추가 Acceptance: `NonfixedDispatchReadinessReview1012`는 원천15행 제외로 교체된 source14 raw와 derived summary/cache의 세대를 대사하고 과거19:55:39 기준 cold CLI≤130초와 실제10/15 observer≤40초·전체≤180초 및 정상08:00/08:05/08:10 연속3슬롯을 별도로 확인한다. source14 과거 계산과 실제 실행 시각15를 분리하고 과거 observer를 합성하지 않는다. 원생성물·실패/timeout·source-gap을 보존하며 캐시 준비를 자연 계산 성공으로 보고하지 않는다. `AuxiliaryCircuitRecoveryRepair1012`는 새 PID의 실제 정상 AI attempt 분모·stage clocks·timeout·회로와 PASS→intent/send/fill/terminal을 구분한다. 검증용 provider replay나 주문을 만들지 않는다.
+- History: 다른 장후 세션이10/15로 이관한 위 두 OPEN stable ID와 원 Acceptance/History를 유지하며 이 추가 수용을 연결한다. 이전 날짜 구현·검증 완료 항목을 다시 열지 않으며 과거 로그·등록 membership·손익을 보충하지 않는다. 코드/배포/준비와 자연 성능·실제 거래·비용 후 경제성은 별도 수용이다.
 <!-- SENTINEL_POSTCLOSE_INTEGRATION_HANDOFF_20261015_END -->

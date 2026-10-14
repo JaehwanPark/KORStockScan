@@ -480,3 +480,84 @@ def test_stopped_rebind_postpublication_clock_failure_discloses_committed_candid
         s.call()
     assert json.loads(s.paths['candidate'].read_text())['bundle_sha256'] == 'c' * 64
     assert s.paths['current'].read_bytes() == before
+
+
+@pytest.mark.parametrize('filename', [
+    'runtime_policy_bootstrap_2026-10-15.env',
+    'runtime_policy_bootstrap_2026-10-15.json',
+    'runtime_policy_bootstrap_verify_2026-10-15.json',
+])
+@pytest.mark.parametrize('kind', ['regular', 'symlink', 'dangling_symlink', 'directory'])
+def test_stopped_rebind_refuses_any_canonical_bootstrap_residue(stopped_rebind, filename, kind):
+    s = stopped_rebind
+    before = {name: path.read_bytes() for name, path in s.paths.items()}
+    path = s.data / 'runtime/policy_bootstrap' / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if kind == 'regular': path.write_bytes(b'partial bootstrap bytes')
+    elif kind == 'symlink': path.symlink_to(s.paths['hold'])
+    elif kind == 'dangling_symlink': path.symlink_to(path.parent / 'absent-target')
+    else: path.mkdir()
+    with pytest.raises(ValueError, match='startup_or_live_env_present'):
+        s.call()
+    assert s.writes == 0
+    assert all(path.read_bytes() == before[name] for name, path in s.paths.items())
+    assert path.exists() or path.is_symlink()
+
+
+@pytest.mark.parametrize('filename', [
+    'runtime_policy_bootstrap_2026-10-15.env',
+    'runtime_policy_bootstrap_2026-10-15.json',
+    'runtime_policy_bootstrap_verify_2026-10-15.json',
+])
+@pytest.mark.parametrize('phase', ['refresh', 'after_publication'])
+def test_stopped_rebind_rechecks_absence_and_preserves_partial_publication(
+    stopped_rebind, monkeypatch, filename, phase,
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import continuous_reversal_policy_v6 as policy
+    s = stopped_rebind
+    before = {name: path.read_bytes() for name, path in s.paths.items()}
+    residue = s.data / 'runtime/policy_bootstrap' / filename
+    def create_residue():
+        residue.parent.mkdir(parents=True, exist_ok=True)
+        residue.write_bytes(b'concurrent partial bootstrap')
+    if phase == 'refresh':
+        refresh = policy._write_refreshed_bundle
+        def during_refresh(*args, **kwargs):
+            value = refresh(*args, **kwargs)
+            create_residue()
+            return value
+        monkeypatch.setattr(policy, '_write_refreshed_bundle', during_refresh)
+        reason = 'startup_or_live_env_present'
+    else:
+        publish = native._atomic_write_json
+        def after_publish(path, value):
+            publish(path, value)
+            if path == s.paths['candidate']: create_residue()
+        monkeypatch.setattr(native, '_atomic_write_json', after_publish)
+        reason = 'candidate_published_postcheck_failed:' + 'c' * 64
+    with pytest.raises(ValueError, match=reason):
+        s.call()
+    assert residue.read_bytes() == b'concurrent partial bootstrap'
+    assert all(path.read_bytes() == before[name] for name, path in s.paths.items() if name != 'candidate')
+    if phase == 'refresh': assert s.paths['candidate'].read_bytes() == before['candidate']
+    else: assert json.loads(s.paths['candidate'].read_text())['bundle_sha256'] == 'c' * 64
+
+
+def test_stopped_rebind_preserves_historical_and_isolated_prepared_bootstrap(stopped_rebind):
+    s = stopped_rebind
+    live = s.data / 'runtime/policy_bootstrap'
+    protected = [live / f'runtime_policy_bootstrap_2026-10-14.{suffix}' for suffix in ('env', 'json')]
+    protected.append(live / 'runtime_policy_bootstrap_verify_2026-10-14.json')
+    protected.extend(live / 'prepared/2026-10-15/prior-generation' / filename for filename in (
+        'runtime_policy_bootstrap_2026-10-15.env', 'runtime_policy_bootstrap_2026-10-15.json',
+        'runtime_policy_bootstrap_verify_2026-10-15.json'))
+    for path in protected:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'preserved independent artifact')
+    result = s.call()
+    absence = result['continuous_reversal']['code_refresh']['stopped_postclose_preparation']['source_sha256']
+    for filename in ('runtime_policy_bootstrap_2026-10-15.env', 'runtime_policy_bootstrap_2026-10-15.json',
+                     'runtime_policy_bootstrap_verify_2026-10-15.json'):
+        assert str(live / filename) in absence and absence[str(live / filename)] is None
+    assert all(path.read_bytes() == b'preserved independent artifact' for path in protected)

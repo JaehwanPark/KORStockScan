@@ -79,7 +79,37 @@ def audit(event,args):
     if root not in p.parents or not p.is_file():return
     st=p.stat();opened.setdefault(str(p),(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns))
 sys.addaudithook(audit)
-b=N._load_current_uncached(root,day)
+try:
+    b=N._load_current_uncached(root,day)
+except ValueError as exc:
+    # A dated code handoff can expire while the next day's issued code-refresh
+    # candidate already attests the same active parent in its original release.
+    # Use that immutable, fully validated ancestry only for this source handoff.
+    if not str(exc).startswith('v4_contract_code_changed:'):
+        raise
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    candidate_path=N.root(root)/'candidates'/('policy_'+day+'.json')
+    candidate=N._read(candidate_path)
+    N.validate(candidate,target_date=day)
+    f=candidate.get('continuous_reversal') or {}
+    proof=f.get('code_refresh') or {}
+    if (f.get('schema')!=V.SCHEMA or f.get('effective_mode')!='next_session'
+            or f.get('effective_date')!=day or f.get('publication_date','')>=day
+            or proof.get('authority')!=V.CODE_REFRESH_AUTHORITY):
+        raise ValueError('active_policy_code_handoff_rollover_candidate_invalid')
+    frozen=N._read(N.root(root)/'generations'/(candidate['bundle_sha256']+'.json'))
+    if frozen!=candidate:
+        raise ValueError('active_policy_code_handoff_rollover_generation_changed')
+    N._validate_bundle_sources(frozen,root)
+    b=V._attested_activation_parent(root,day,
+        origin_root=proof['activation_parent_origin_root'],
+        origin_commit=proof['activation_parent_origin_commit'])
+    current=N._read(N.root(root)/'current.json')
+    if b is None or b['bundle_sha256']!=current['bundle_sha256'] or b['bundle_sha256']!=f['parent_bundle_sha256']:
+        raise ValueError('active_policy_code_handoff_rollover_parent_changed')
+    # The mutable preparation alias is observed, not an immutable policy input.
+    # The identical frozen generation and its full source receipts remain bound.
+    opened.pop(str(candidate_path.absolute()),None)
 refs={}
 for name,identity in list(opened.items()):
     p=Path(name);st=p.stat()

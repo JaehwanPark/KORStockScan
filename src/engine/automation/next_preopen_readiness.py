@@ -152,9 +152,15 @@ def stopped_postclose_candidate_rebind(
                 'stopped_selection_required')
         require(not ordered._main_pids() and ordered._session_absent(), 'main_or_supervisor_running')
         restart = workspace / 'restart.flag'
-        env = data / 'runtime/policy_bootstrap' / f'runtime_policy_bootstrap_{target_date}.env'
+        bootstrap_dir = data / 'runtime/policy_bootstrap'
+        live_bootstrap = (bootstrap_dir / f'runtime_policy_bootstrap_{target_date}.env',
+                          bootstrap_dir / f'runtime_policy_bootstrap_{target_date}.json',
+                          bootstrap_dir / f'runtime_policy_bootstrap_verify_{target_date}.json')
         require(not restart.exists() and not restart.is_symlink()
-                and not env.exists() and not env.is_symlink(), 'startup_or_live_env_present')
+                and all(not path.exists() and not path.is_symlink() for path in live_bootstrap),
+                'startup_or_live_env_present')
+        for path in live_bootstrap:
+            require(bind(path, optional=True) is None, 'live_bootstrap_artifact_present')
         status_path = data / 'report/threshold_cycle_preopen_status' / f'threshold_cycle_preopen_{target_date}.status.json'
         require(not status_path.exists() and not status_path.is_symlink(), 'preopen_already_attempted')
         isolation = bind(isolation_path)

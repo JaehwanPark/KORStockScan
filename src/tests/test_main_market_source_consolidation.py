@@ -18,6 +18,51 @@ from src.engine.scalping.micro_reversion.observation_adapter import ObserverFeat
 from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
 from src.engine.scalping import continuous_reversal_postclose as P
 from src.engine.scalping import continuous_reversal_source as S
+
+
+@pytest.mark.parametrize('damage', ['none', 'source_error', 'authority', 'mode', 'date',
+                                    'generation', 'strict_source', 'parent'])
+def test_code_handoff_rollover_requires_frozen_validated_next_session_origin(tmp_path, monkeypatch, damage):
+    import sys
+    from src.engine.scalping import reversal_code_handoff as H
+    from src.engine.scalping import continuous_reversal_policy_v6 as V, mechanistic_entry_runtime_policy as N
+    root=tmp_path/'data';base=N.root(root);(base/'generations').mkdir(parents=True)
+    candidate=dict(bundle_sha256='candidate',continuous_reversal=dict(schema=V.SCHEMA,
+        effective_mode='next_session',effective_date='2026-10-15',publication_date='2026-10-14',
+        parent_bundle_sha256='parent',code_refresh=dict(authority=V.CODE_REFRESH_AUTHORITY,
+            activation_parent_origin_root=str(tmp_path/'origin'),activation_parent_origin_commit='a'*40)))
+    f=candidate['continuous_reversal']
+    if damage=='authority': f['code_refresh']['authority']='invalid'
+    elif damage=='mode': f['effective_mode']='intraday'
+    elif damage=='date': f['effective_date']='2026-10-16'
+    path=base/'candidates/policy_2026-10-15.json';path.parent.mkdir(parents=True);path.write_text(json.dumps(candidate))
+    frozen=base/'generations/candidate.json';frozen.write_text(json.dumps({**candidate,'changed':True} if damage=='generation' else candidate))
+    (base/'current.json').write_text(json.dumps(dict(bundle_sha256='parent')))
+    before={p:p.read_bytes() for p in base.rglob('*.json')}
+    def load(*args):raise ValueError('source_missing' if damage=='source_error' else 'v4_contract_code_changed:session_contract.py')
+    monkeypatch.setattr(N,'_load_current_uncached',load)
+    monkeypatch.setattr(N,'validate',lambda *args,**kw:None)
+    strict=[]
+    def validate(bundle,data):
+        strict.append(bundle)
+        if damage=='strict_source':raise ValueError('strict_source_changed')
+    monkeypatch.setattr(N,'_validate_bundle_sources',validate)
+    origins=[]
+    def attest(data,day,**kwargs):
+        origins.append((day,kwargs));return dict(bundle_sha256='wrong' if damage=='parent' else 'parent')
+    monkeypatch.setattr(V,'_attested_activation_parent',attest)
+    monkeypatch.setattr(sys,'argv',['origin',str(root),'2026-10-15'])
+    monkeypatch.setattr(sys,'addaudithook',lambda hook:None)
+    scope={}
+    source=H._ORIGIN_SCRIPT.split('refs={}')[0]
+    if damage!='none':
+        with pytest.raises(ValueError):exec(source,scope)
+    else:
+        exec(source,scope)
+        assert scope['b']==dict(bundle_sha256='parent')
+        assert strict==[candidate] and len(origins)==1
+        assert str(path.absolute()) not in scope['opened']
+    assert before=={p:p.read_bytes() for p in before}
 from src.trading.market.session_contract import market_source_partition_venue, market_source_session_bucket
 from src.tests.test_micro_reversion_forward_collector import _snapshot, _depth_snapshot
 from src.tests.test_reversal_operating_policy import parent, native, replay
@@ -57,7 +102,7 @@ def next_session_v6(replay, monkeypatch):
     return root, old, candidate
 
 
-@pytest.mark.parametrize('failed_preopen', [False, True])
+@pytest.mark.parametrize('failed_preopen', [False, True, 'closed_postclose'])
 def test_v6_code_refresh_preserves_issued_policy_and_current_until_exact_activation(next_session_v6, monkeypatch, failed_preopen):
     from types import SimpleNamespace
     from datetime import datetime
@@ -92,7 +137,25 @@ def test_v6_code_refresh_preserves_issued_policy_and_current_until_exact_activat
         V6.stage_code_refresh(root,'2026-10-12',**dict(kwargs,confirm='invalid'))
     with pytest.raises(ValueError, match='future_candidate_required'):
         V6.stage_code_refresh(root,'2026-10-12',**dict(kwargs,now=datetime.fromisoformat('2026-10-12T07:30:00+09:00')))
-    if failed_preopen:
+    if failed_preopen == 'closed_postclose':
+        kwargs.update(now=datetime.fromisoformat('2026-10-12T05:00:00+09:00'),
+                      closed_postclose_source_date='2026-10-08')
+        for extra in [dict(now=datetime.fromisoformat('2026-10-12T07:30:00+09:00')),
+                      dict(now=datetime.fromisoformat('2026-10-13T05:00:00+09:00')),
+                      dict(closed_postclose_source_date='2026-10-07')]:
+            with pytest.raises(ValueError, match='closed_postclose_window_invalid'):
+                V6.stage_code_refresh(root,'2026-10-12',**dict(kwargs,**extra))
+        for relative in ['runtime/policy_bootstrap/runtime_policy_bootstrap_2026-10-12.env',
+                         'runtime/policy_bootstrap/runtime_policy_bootstrap_2026-10-12.json',
+                         'runtime/policy_bootstrap/runtime_policy_bootstrap_verify_2026-10-12.json',
+                         'report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-10-12.status.json']:
+            blocked = root/relative
+            blocked.parent.mkdir(parents=True,exist_ok=True)
+            blocked.write_text('{}')
+            with pytest.raises(ValueError, match='closed_postclose_window_invalid'):
+                V6.stage_code_refresh(root,'2026-10-12',**kwargs)
+            blocked.unlink()
+    elif failed_preopen:
         from src.engine.automation import next_preopen_readiness as readiness
         kwargs.update(now=datetime.fromisoformat('2026-10-12T07:40:00+09:00'),recover_failed_preopen=True)
         with pytest.raises(ValueError,match='lease_invalid'):

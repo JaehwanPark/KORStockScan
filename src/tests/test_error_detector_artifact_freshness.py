@@ -3052,6 +3052,42 @@ def test_current_observer_generation_requires_exact_selector_and_code(tmp_path, 
     assert mod._submission_observer_generation_issue(payload, root) == "observer_generation_not_current"
 
 
+@pytest.mark.parametrize('mutation', ['none', 'archive', 'seal', 'code', 'terminal', 'same_day', 'execution'])
+def test_closed_postclose_observer_preserves_gaps_without_current_generation_claim(tmp_path, monkeypatch, mutation):
+    mod, root, now, path, report, _, _, selector, selection = _current_observer_fixture(tmp_path, monkeypatch)
+    archived = root/'data/runtime/postclose_recovery/2026-10-14/recovery/selection-before.json'
+    archived.parent.mkdir(parents=True); archived.write_bytes(selector.read_bytes())
+    selector.write_text(json.dumps({**selection,'actual_pid_consumed':False}))
+    terminal = root/'data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_2026-10-14.status.json'
+    terminal.parent.mkdir(parents=True); terminal.write_text(json.dumps(dict(target_date='2026-10-14',status='succeeded')))
+    current = '2026-10-15'
+    if mutation == 'archive': archived.write_text('{}')
+    elif mutation == 'seal': report['observer_generation']['sha256']='0'*64
+    elif mutation == 'code':
+        (Path(selection['release_root'])/'src/engine/monitoring/submission_bottleneck_monitor.py').write_text('changed')
+    elif mutation == 'terminal': terminal.write_text(json.dumps(dict(target_date='2026-10-14',status='failed')))
+    elif mutation == 'same_day': current='2026-10-14'
+    elif mutation == 'execution': report['execution_status']='deferred'
+    assessment=mod._closed_submission_observer_evidence(report,root,'2026-10-14',current)
+    if mutation != 'none':
+        assert assessment is None
+        assert mod._submission_observer_generation_issue(report,root) is not None
+        return
+    assert assessment['source_gap_preserved']==report['source_gap_semantics']
+    assert assessment['semantic_status']=='partial'
+    assert assessment['current_generation_verified'] is False
+    assert assessment['current_observation_verified'] is False
+    assert assessment['full_coverage_proven'] is False
+    path.write_text(json.dumps(report))
+    _isolate_submission_artifact_check(mod,root,now+timedelta(days=1),monkeypatch)
+    detector=mod.ArtifactFreshnessDetector(dry_run=True)
+    detector.postclose_source_date='2026-10-14'
+    result=detector.check()
+    assert result.severity=='warning'
+    assert result.details['submission_bottleneck_monitor_status']=='historical_observation_only'
+    assert result.details['submission_bottleneck_monitor_historical_evidence']==assessment
+
+
 @pytest.mark.parametrize("which", ["report", "selector", "transition"])
 def test_observer_pending_metadata_fifo_is_bounded_and_never_pending(tmp_path, monkeypatch, which):
     import multiprocessing
