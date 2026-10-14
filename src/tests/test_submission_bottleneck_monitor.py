@@ -3807,3 +3807,146 @@ def test_main_source_report_fifo_is_bounded(tmp_path, monkeypatch):
         pytest.fail("observer main blocked on source FIFO")
     assert queue.get(timeout=1) == 0
     assert fifo.is_fifo()
+
+
+@pytest.mark.parametrize('partial', [False, True])
+@pytest.mark.parametrize('outcome', ['response_invalid', 'timeout', 'unknown_pass'])
+def test_active_observations_keep_bounded_inflight_outcomes_as_warning(partial, outcome):
+    result, *_ = _bounded_outcome_health_fixture(partial=partial, outcome=outcome)
+    result.update(status='observing', blocker=None, scopes={'KRX|krx_regular|bundle': {}})
+    result['input_provenance']['row_count'] = 1
+    before = json.dumps(result, sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'warning_pending', health
+    assert health['reason'] == 'bounded_source_quality_observation'
+    assert set(health['unmet_conditions']) >= {'monitor_state_not_quiet_full_observation',
+                                             'current_input_provenance_invalid'}
+    assert not any(health[k] for k in ('current_observation_verified', 'full_coverage_proven',
+                                     'runtime_effect', 'allowed_runtime_apply'))
+    assert json.dumps(result, sort_keys=True) == before
+
+
+@pytest.mark.parametrize('bad', ['status', 'blocker', 'failed', 'dry', 'authority', 'date',
+    'stale', 'row_bool', 'row_negative', 'row_missing', 'row_zero', 'scopes_missing',
+    'scopes_type', 'scopes_malformed', 'order', 'identity', 'source_malformed', 'source_missing',
+    'foreign_actor', 'unconsumed', 'birth_missing', 'source_issue', 'active_incident'])
+def test_active_report_warning_rejects_invalid_publication_and_source_contracts(bad):
+    result, gap, machine, lineage = _bounded_outcome_health_fixture(partial=False)
+    result.update(status='observing', blocker=None, scopes={'KRX|krx_regular|bundle': {}})
+    inp = result['input_provenance']; inp['row_count'] = 1
+    if bad == 'status': result['status'] = 'unknown'
+    elif bad == 'blocker': result['blocker'] = 'machine_identity_missing_events'
+    elif bad == 'failed': result['execution_status'] = 'failed'
+    elif bad == 'dry': inp['dry_run'] = True
+    elif bad == 'authority': result['runtime_effect'] = True
+    elif bad == 'date': inp['target_date'] = '2026-10-13'
+    elif bad == 'stale':
+        inp['snapshot_as_of'] = (monitor.stamp(result['as_of'])-timedelta(seconds=421)).isoformat()
+        inp['snapshot_age_seconds'] = 421
+    elif bad == 'row_bool': inp['row_count'] = True
+    elif bad == 'row_negative': inp['row_count'] = -1
+    elif bad == 'row_missing': inp.pop('row_count')
+    elif bad == 'row_zero': inp['row_count'] = 0
+    elif bad == 'scopes_missing': result.pop('scopes')
+    elif bad == 'scopes_type': result['scopes'] = []
+    elif bad == 'scopes_malformed': result['scopes'] = {'': None}
+    elif bad == 'order': inp['snapshot_order'] = 'reversed'
+    elif bad == 'identity': inp['identity_missing_events'] = 1
+    elif bad == 'source_malformed': gap['sources']['probe']['malformed_rows'] = 1
+    elif bad == 'source_missing': gap['sources'].pop('probe')
+    elif bad == 'foreign_actor': lineage['attempt_ledger'][0]['producer_pid'] = '999'
+    elif bad == 'unconsumed': result['observer_generation']['selector_reported_actual_pid_consumed'] = False
+    elif bad == 'birth_missing': result['observer_generation'].pop('actor_birth_proof')
+    elif bad == 'source_issue': gap['issues'] = {'machine_probe:source_contract_missing': 1}
+    elif bad == 'active_incident':
+        result['incidents']['current_submit_gap'] = dict(status='active', last_seen=result['as_of'],
+                                                        issues={'source_or_submit_lineage_gap': 1})
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'not_eligible', health
+
+
+@pytest.mark.parametrize('reason', ['exact_0B_missing', 'fixed_watch_post_receipt_warmup',
+                                   'post_receipt_observation_warmup'])
+@pytest.mark.parametrize('bad', [None, 'before_open', 'after_premarket', 'generation', 'admission',
+    'signature', 'resolution', 'venue', 'bucket', 'symbol', 'symbol_type', 'submitted', 'forbidden',
+    'unknown_reason', 'quality'])
+def test_premarket_fixed_watch_wait_requires_native_route_generation_and_safety(tmp_path, monkeypatch, reason, bad):
+    from src.engine.scalping.main_fixed_watch import generation_id, session_route
+    now = monitor.stamp('2026-10-15T08:28:44.575705+09:00')
+    route = session_route(now.timestamp(), '196170')
+    admission = 'FIXED-2026-10-15-196170-krx_like_premarket-nxt_only-04d5219cff7e'
+    fields = dict(watch_origin='MAIN_FIXED_WATCH', watch_admission_id=admission,
+        watch_generation_id=generation_id(now.timestamp(), route),
+        source_signature='MAIN_FIXED_WATCH:'+admission, venue_resolution='main_fixed_watch_session_route',
+        source_quality_reason=reason, venue_source_quality_status='pass',
+        effective_venue='PREMARKET_KRX_LIKE', market_session_bucket='krx_like_premarket',
+        actual_order_submitted='False', broker_order_forbidden='True')
+    row = dict(pipeline='ENTRY_PIPELINE', stage='main_fixed_watch_observation_wait', stock_code='196170',
+               emitted_at=now.isoformat(), fields=fields)
+    if bad == 'before_open': row['emitted_at'] = '2026-10-15T07:59:59+09:00'
+    elif bad == 'after_premarket': row['emitted_at'] = '2026-10-15T09:00:00+09:00'
+    elif bad == 'generation': fields['watch_generation_id'] = '0'*64
+    elif bad == 'admission': fields['watch_admission_id'] = admission.replace('nxt_only', 'krx_only')
+    elif bad == 'signature': fields['source_signature'] = 'MAIN_FIXED_WATCH:foreign'
+    elif bad == 'resolution': fields['venue_resolution'] = 'inferred'
+    elif bad == 'venue': fields['effective_venue'] = 'KRX'
+    elif bad == 'bucket': fields['market_session_bucket'] = 'krx_regular'
+    elif bad == 'symbol': row['stock_code'] = '999999'
+    elif bad == 'symbol_type': row['stock_code'] = []
+    elif bad == 'submitted': fields['actual_order_submitted'] = 0
+    elif bad == 'forbidden': fields['broker_order_forbidden'] = 1
+    elif bad == 'unknown_reason': fields['source_quality_reason'] = 'new_unknown_reason'
+    elif bad == 'quality': fields['venue_source_quality_status'] = 'unknown'
+    def read(path, *args, **kwargs):
+        return ([row] if 'pipeline_events' in str(path) else []), dict(status='complete')
+    monkeypatch.setattr(monitor, '_recent_source_rows', read)
+    census = monitor.source_gap_semantics(tmp_path, now)['fixed_watch_waits']
+    assert census['known_source_wait_count'] == int(bad is None)
+    assert census['unclassified_or_actionable_wait_count'] == int(bad is not None)
+    assert census['native_entry_allowed_by_clock'] is False
+    assert census['runtime_effect'] is False
+
+
+@pytest.mark.parametrize('bad', [None, 'too_short', 'malformed', 'missing_clock', 'incomplete', 'io', 'not_tail'])
+def test_current_lineage_recomputes_narrower_coverage_from_same_loaded_suffix(tmp_path, bad):
+    from copy import deepcopy
+    now = monitor.stamp('2026-10-15T08:30:13.312471+09:00')
+    source = dict(status='partial', window_covered=False, tail_truncated=True,
+        first_read_at='2026-10-15T08:05:32.969671+09:00', malformed_rows=0,
+        missing_timestamp_rows=0, incomplete_last_line=False, read_count=1,
+        bytes_read=8367448, source_size=12577010, source_identity=dict(device=66305, inode=531689))
+    if bad == 'too_short': source['first_read_at'] = (now-timedelta(seconds=604)).isoformat()
+    elif bad == 'malformed': source['malformed_rows'] = 1
+    elif bad == 'missing_clock': source['missing_timestamp_rows'] = 1
+    elif bad == 'incomplete': source['incomplete_last_line'] = True
+    elif bad == 'io': source['reason'] = 'PermissionError'
+    elif bad == 'not_tail': source['tail_truncated'] = False
+    before = deepcopy(source)
+    result = monitor._reversal_provider_lineage(tmp_path, now, [], tail_bytes=8*1024*1024,
+        window_sec=600, pid_identity=['1481448','8438079'], _loaded=([],source,[],source))
+    assert source == before
+    for window in result['source_windows'].values():
+        assert window['status'] == ('complete' if bad is None else 'partial')
+        if bad is None:
+            assert window['original_window_status'] == 'partial'
+            assert window['current_window_seconds'] == 605
+            assert monitor.stamp(window['current_window_start_at']) == now-timedelta(seconds=605)
+            for field in ('first_read_at','bytes_read','read_count','source_identity'):
+                assert window[field] == source[field]
+
+
+@pytest.mark.parametrize('bad', [None, 'lower', 'first', 'window', 'bool_window', 'origin', 'tail'])
+def test_bounded_health_verifies_narrowed_lineage_coverage_receipt(bad):
+    result, gap, machine, lineage = _bounded_outcome_health_fixture(partial=False)
+    now = monitor.stamp(result['as_of']); window = lineage['source_windows']['traces']
+    window.update(status='complete', window_covered=True, original_window_status='partial', tail_truncated=True,
+        coverage_basis='current_lineage_window_bounded_tail', current_window_seconds=605,
+        first_read_at=(now-timedelta(seconds=1000)).isoformat(),
+        current_window_start_at=(now-timedelta(seconds=605)).isoformat())
+    if bad == 'lower': window['current_window_start_at'] = now.isoformat()
+    elif bad == 'first': window['first_read_at'] = now.isoformat()
+    elif bad == 'window': window['current_window_seconds'] = 600
+    elif bad == 'bool_window': window['current_window_seconds'] = True
+    elif bad == 'origin': window['original_window_status'] = 'unknown'
+    elif bad == 'tail': window['tail_truncated'] = False
+    assert monitor.observation_health_projection(result)['status'] == ('warning_pending' if bad is None else 'not_eligible')

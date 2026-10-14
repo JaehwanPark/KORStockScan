@@ -478,6 +478,17 @@ REVIEWED_PREMARKET_OBSERVER_SOURCES = {
 }
 
 
+# Exact PREOPEN origin to active-report and native fixed-watch wait repair.
+# Earlier deployed pairs remain verifiable; no policy or execution change.
+# Evidence: docs/audits/main-premarket-error-repair-and-restart-2026-10-15.md.
+REVIEWED_ACTIVE_OBSERVER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        'dd164faf5619deb20eef0456cd1187164f09d7f2094c474a2c691e9b700a253f',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -529,7 +540,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_OBSERVER_HEALTH_SOURCES.get(name),
                     REVIEWED_SUBMISSION_TIMEOUT_SOURCES.get(name),
                     REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES.get(name),
-                    REVIEWED_PREMARKET_OBSERVER_SOURCES.get(name)):
+                    REVIEWED_PREMARKET_OBSERVER_SOURCES.get(name),
+                    REVIEWED_ACTIVE_OBSERVER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

@@ -262,6 +262,25 @@ def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes,
             and 0 <= (now-stamp(r['decision_ts'])).total_seconds() <= window_sec+5
             and not (isinstance(r.get('machine_observation_sha256'), str) and r['machine_observation_sha256'] in historical
                      and _row_actor(r) == historical[r['machine_observation_sha256']])]
+        # The loaded suffix was read for the outer 30-minute population. Its
+        # partial flag does not describe this narrower current-PID window.
+        # Retain the original receipt and prove coverage from the same bytes;
+        # never reread, infer missing rows, or hide malformed/incomplete input.
+        narrowed = []
+        for source in (requests, traces):
+            source = dict(source)
+            first = stamp(source.get('first_read_at'))
+            lower = now - timedelta(seconds=window_sec+5)
+            if (source.get('status') == 'partial' and source.get('window_covered') is False
+                    and source.get('tail_truncated') is True and first is not None and first <= lower
+                    and type(source.get('malformed_rows')) is int and source['malformed_rows'] == 0
+                    and type(source.get('missing_timestamp_rows')) is int and source['missing_timestamp_rows'] == 0
+                    and source.get('incomplete_last_line') is False and not source.get('reason')):
+                source.update(status='complete', window_covered=True, original_window_status='partial',
+                    coverage_basis='current_lineage_window_bounded_tail',
+                    current_window_start_at=lower.isoformat(), current_window_seconds=window_sec+5)
+            narrowed.append(source)
+        requests, traces = narrowed
     issues, gaps, noncall, stops = Counter(), Counter(), Counter(), Counter()
 
     def mapping(value):
@@ -927,7 +946,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
     # bounded census so an actionable fixed-watch wait cannot masquerade as a
     # no-decision window. No additional source read or strategy change occurs.
     from src.trading.market import session_contract
-    from src.engine.scalping.main_fixed_watch import SPECS
+    from src.engine.scalping.main_fixed_watch import SPECS, generation_id, session_route
     fixed_symbols = {spec.symbol for spec in SPECS}
     native_session = session_contract.resolve_market_session(now)
     wait_total = boundary_waits = source_waits = unclassified_waits = 0
@@ -943,6 +962,21 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
         wait_reasons[reason if reason in wait_reasons or len(wait_reasons) < 16 else 'other'] += 1
         row_at = stamp(row.get('emitted_at'))
         context = session_contract.resolve_market_session(row_at) if row_at else None
+        # Main fixed watch owns its NXT premarket session; the common KRX
+        # clock intentionally disallows entry then. Verify its native generation
+        # and admission identity without granting entry or source completeness.
+        fixed_route = (session_route(row_at.timestamp(), row['stock_code'])
+                       if row_at and isinstance(row.get('stock_code'), str)
+                       and row['stock_code'] in fixed_symbols else None)
+        admission = fields.get('watch_admission_id')
+        premarket_wait = bool(context is not None and fixed_route
+            and context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+            and fields.get('venue_resolution') == 'main_fixed_watch_session_route'
+            and fields.get('watch_generation_id') == generation_id(row_at.timestamp(), fixed_route)
+            and isinstance(admission, str) and re.fullmatch(
+                re.escape(f"FIXED-{row_at.date()}-{row['stock_code']}-{fixed_route['bucket']}-{fixed_route['route']}-")
+                + '[0-9a-f]{12}', admission)
+            and fields.get('source_signature') == 'MAIN_FIXED_WATCH:' + admission)
         if (reason == 'session_generation_mismatch' and context is not None
                 and context.entry_allowed_by_clock is False
                 and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
@@ -961,15 +995,13 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
                 and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
             boundary_waits += 1
         elif (reason in {'post_receipt_observation_warmup', 'fixed_watch_post_receipt_warmup', 'exact_0B_missing'} and context is not None
-                and context.entry_allowed_by_clock is True
+                and (context.entry_allowed_by_clock is True or premarket_wait)
                 and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
                 and isinstance(row.get('stock_code'), str) and row['stock_code'] in fixed_symbols
                 and fields.get('venue_source_quality_status') == 'pass'
-                and (fields.get('effective_venue'), fields.get('market_session_bucket')) in {
-                    ('KRX', 'krx_regular') if context.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
-                    else ('KRX_NXT_INTEGRATED', session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET)
-                    if context.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
-                    else ('PREMARKET_KRX_LIKE', 'krx_like_premarket')}
+                and fixed_route is not None
+                and (fields.get('effective_venue'), fields.get('market_session_bucket'))
+                    == (fixed_route['venue'], fixed_route['bucket'])
                 and (fields.get('actual_order_submitted') is False or fields.get('actual_order_submitted') == 'False')
                 and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
             source_waits += 1
@@ -3160,8 +3192,10 @@ def observation_health_projection(result):
     day = now.date().isoformat() if now else None
     require(now is not None and result.get('schema') == SCHEMA and result.get('date') == day,
             'monitor_identity_invalid')
-    require(result.get('execution_mode') == 'full' and result.get('execution_status') == 'completed'
-            and result.get('semantic_status') == 'partial' and result.get('status') == 'unobservable'
+    report_execution_valid = (result.get('execution_mode') == 'full'
+        and result.get('execution_status') == 'completed' and result.get('semantic_status') == 'partial'
+        and result.get('runtime_effect') is False)
+    require(report_execution_valid and result.get('status') == 'unobservable'
             and result.get('blocker') in ('missing_stale_or_noncurrent_sentinel_evidence',
                                          'no_identified_scanner_machine_evaluation')
             and result.get('runtime_effect') is False, 'monitor_state_not_quiet_full_observation')
@@ -3182,7 +3216,7 @@ def observation_health_projection(result):
                      and (inp.get('latest_event_status') is None
                           or inp.get('latest_event_status') == 'observed_recent_event'
                              and count(inp.get('loaded_recent_event_count'), minimum=1)))
-    require(inp.get('schema') == 'submission_monitor_input_provenance_v1'
+    input_provenance_valid = (inp.get('schema') == 'submission_monitor_input_provenance_v1'
             and clock(inp.get('evaluated_at')) == now and inp.get('target_date') == day
             and inp.get('dry_run') is False and inp.get('snapshot_schema') == SCHEMA
             and at is not None and at.date().isoformat() == day and age is not None and 0 <= age <= 420
@@ -3190,10 +3224,11 @@ def observation_health_projection(result):
             and event_age is not None and event_age >= age
             and number(inp.get('snapshot_age_seconds')) and inp['snapshot_age_seconds'] == age
             and number(inp.get('latest_event_age_seconds')) and inp['latest_event_age_seconds'] == event_age
-            and count(inp.get('row_count'), maximum=0)
+            and count(inp.get('row_count'))
             and count(inp.get('identity_missing_events'), maximum=0)
             and inp.get('auxiliary_ai_semantic_issue_counts') == {}
-            and order in {'initial', 'advancing'} and inp.get('snapshot_order') == order,
+            and order in {'initial', 'advancing'} and inp.get('snapshot_order') == order)
+    require(input_provenance_valid and count(inp.get('row_count'), maximum=0),
             'current_input_provenance_invalid')
 
     stages = [obj(result.get(k)) for k in
@@ -3693,6 +3728,18 @@ def observation_health_projection(result):
         'source_window_not_complete:probe', 'source_window_not_complete:trace', 'source_window_not_complete:pending',
         'machine_selection_or_source_not_verified', 'machine_provider_lineage_not_recorded_guard_or_nonentry',
         'pending_or_withheld_auxiliary_pass_not_quiet', 'active_current_or_unknown_incident'}
+    # Observing scanner rows and in-flight AI/PASS outcomes are a valid bounded
+    # report state too. Revalidate publication and provenance before permitting
+    # this warning-only path; unknown state, stale input and source defects stay
+    # failures. Keep all original diagnostics and never claim full validation.
+    active_report_valid = (report_execution_valid and input_provenance_valid
+        and result.get('status') == 'observing' and result.get('blocker') is None
+        and count(inp.get('row_count'), minimum=1)
+        and isinstance(result.get('scopes'), dict) and 0 < len(result['scopes']) <= 512
+        and all(isinstance(key, str) and 0 < len(key) <= 512 and isinstance(value, dict)
+                for key, value in result['scopes'].items()))
+    if active_report_valid:
+        soft.update({'monitor_state_not_quiet_full_observation', 'current_input_provenance_invalid'})
 
     def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC):
         source=obj(source); identity=obj(source.get('source_identity'))
@@ -3705,6 +3752,13 @@ def observation_health_projection(result):
             and not source.get('reason') and ('adjacent_partition' not in source
                 or obj(source.get('adjacent_partition')).get('status') == 'complete'))
         if not base: return False
+        if source.get('coverage_basis') == 'current_lineage_window_bounded_tail':
+            first, lower = clock(source.get('first_read_at')), clock(source.get('current_window_start_at'))
+            if (source.get('original_window_status') != 'partial' or source.get('tail_truncated') is not True
+                    or not count(source.get('current_window_seconds'), minimum=window, maximum=window)
+                    or first is None or lower is None or now is None or first > lower
+                    or (now-lower).total_seconds() != window):
+                return False
         if source.get('status') == 'complete' and source.get('window_covered') is True: return True
         first=clock(source.get('first_read_at'))
         return (source.get('status') == 'partial' and source.get('window_covered') is False

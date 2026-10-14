@@ -3230,3 +3230,46 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
         if tamper == 'boot_epoch':
             assert calls == [(receipt, at)]
             assert 'observer_current_main_birth_unproven' in outcome.summary
+
+
+@pytest.mark.parametrize('tamper', [None, 'source_issue', 'stale_input', 'wrong_actor'])
+def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(tmp_path, monkeypatch, tamper):
+    import copy
+    from src.tests.test_submission_bottleneck_monitor import _bounded_outcome_health_fixture, _health_birth_fixture
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    def payload():
+        report, *_ = _bounded_outcome_health_fixture(partial=False, outcome='unknown_pass')
+        report.update(status='observing', blocker=None, scopes={'KRX|krx_regular|bundle': {}})
+        report['input_provenance']['row_count'] = 1
+        return report
+    mod, root, now, path, report, _, selection, seal = _quiet_current_observer_fixture(
+        tmp_path, monkeypatch, payload_factory=payload)
+    actor = [str(selection['actual_pid_receipt']['pid']), selection['actual_pid_receipt']['start_ticks']]
+    at = monitor.stamp(report['as_of'])
+    native, _ = _health_birth_fixture(at, actor)
+    native['process_cwd'] = selection['actual_pid_receipt']['process_cwd']
+    monkeypatch.setattr(monitor, '_attest_health_actor_birth', lambda generation, observed: copy.deepcopy(native))
+    seal()
+    report['observer_generation']['actor_birth_proof'] = copy.deepcopy(native)
+    report['observer_generation']['sha256'] = monitor._observer_seal(report['observer_generation'])
+    for name in ('source_gap_semantics', 'machine_semantics'):
+        report[name]['current_health_cohort']['actor_birth_proof'] = copy.deepcopy(native)
+    if tamper == 'source_issue':
+        report['source_gap_semantics']['current_health_cohort']['view']['issues'] = {'native_contract_missing': 1}
+    elif tamper == 'stale_input':
+        report['input_provenance']['snapshot_as_of'] = (at-timedelta(seconds=421)).isoformat()
+        report['input_provenance']['snapshot_age_seconds'] = 421
+    elif tamper == 'wrong_actor':
+        report['machine_semantics']['current_health_cohort']['actor'] = ['999', '999']
+    report['observation_health'] = monitor.observation_health_projection(report)
+    path.write_text(json.dumps(report)); os.utime(path, (now.timestamp()-10,)*2)
+    before = path.read_bytes()
+    outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity == ('warning' if tamper is None else 'fail'), outcome.summary
+    assert path.read_bytes() == before
+    assert outcome.details['submission_bottleneck_monitor_observation_health_projection_match'] is True
+    assert outcome.details.get('submission_bottleneck_monitor_current_observation_verified') is not True
+    assert report['observation_health']['current_observation_verified'] is False
+    if tamper is None:
+        assert outcome.details['submission_bottleneck_monitor_observation_health']['status'] == 'warning_pending'
+        assert report['status'] == 'observing' and report['semantic_status'] == 'partial'
