@@ -68,3 +68,11 @@ metadata 재사용은 같은 OS/local writer와 ctime 세대 검출을 신뢰한
 release-set lock을 계속 유지한 채 소유 byte·phase·selector·Main 부재를 검증하고 **자기 hold 제거 → 원 router 계획/명령 검증 → launcher → PID** 순서로 고쳤다. 계획/launch 실패는 기존 failure handler가 자기 hold를 exclusive 생성하며 다른 operator hold를 덮어쓰지 않는다. 실제 router 호출과 계획 실패/hold 복원 반례를 추가했다. 정책 검증을 생략하거나 router hold guard를 완화하지 않았다. 최종 후보는 이 보완을 포함해 재배포한다.
 
 두 번째 준비의 bootstrap은 `full_reads=0`, `reused_reads=2`, `reused_bytes=10438031954`로 native PASS였다(2.04초, 전체 logical read251,291,057 bytes). 이는 해당 재검증 단계의 실측이며 전체 서버·정규3슬롯 성능 PASS는 아니다.
+
+### 첫 실제 기동과 역사 연구 영수증 후속 보완
+
+`75bc732ca`는10:23:06에 배포 complete/PASS, Main PID28080/start_ticks487911에서 실제 정책 소비가 launcher/driver 양쪽으로 검증됐다. 원 manifest/env/PREOPEN/prepared/active pointer는 유지했고8개 cron·release-set이 통과했다. 10:25 정규 Sentinel은10:26:16 DONE, monitor35.28초/실행 completed였다. source gap 없음·기계 평가 미관측은 partial로 보존했으며 이를 정상 신호 관측으로 표시하지 않았다.
+
+후속 observer에서 `holding_generation_rebinding_not_unarmed_code_only`가 새로 발생했다. 마지막5fb4c0a33 reader는 같은 역사 영수증을 unverified로 읽지만, 새 holding generation 코드 때문에 reader가 발행 당시 code pin을 현재 pin으로 재검증하는 결함이었다. 실제 PID/정책 handoff와 별개인 report-only 분류 오류다.
+
+새 발행은 여전히 현재 code pin·unarmed/빈 수치 셀·정책/경제성 불변을 요구한다. 기존 immutable receipt 읽기는 원 report/contract/source SHA·원 code 세대를 유지하고 모든 source/authority/clock/shape 조건을 재검사한다. 현재 코드의 fixture 검증을 과거 영수증에 부여하지 않으며 결과는 계속 unverified/비용 성과null/적용false다. 코드 세대 변경 뒤 원천/권한/fixture 변조 반례와 실제10/13 원천 read-only 대조를 통과했다. 원 보고서/sidecar/정책은 수정하지 않았다. 새 코드 기동은 이 수정의 선택·PID 소비를 다시 검증한다.

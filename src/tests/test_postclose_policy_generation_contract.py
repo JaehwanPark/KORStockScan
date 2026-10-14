@@ -2,6 +2,7 @@
 
 import copy
 import json
+from pathlib import Path
 import pytest
 from src.engine.monitoring import policy_generation_contract as generation
 from src.engine.monitoring import semantic_incident_contract as incidents
@@ -244,6 +245,25 @@ def test_unarmed_code_rebinding_preserves_snapshot_and_never_verifies_fixture(tm
     assert generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path) == receipt
 
 
+def test_rebinding_remains_historical_unverified_after_code_deployment(tmp_path, monkeypatch):
+    from src.engine.scalping import holding_vote_experiment as vote
+    day, original, path = holding_rebinding_fixture(tmp_path, monkeypatch)
+    reference = generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+    before = path.read_bytes(), Path(reference['path']).read_bytes()
+    observed_before = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
+    monkeypatch.setattr(vote, 'code_sha', lambda: 'c'*64)
+    monkeypatch.setattr(generation, 'code_generation', lambda family: 'd'*64)
+    observed = generation.observations(tmp_path.parent, day, data_root=tmp_path)[0]
+    assert observed['status']=='unverified' and observed['observation_complete'] is True
+    assert observed['native_validated'] is False and observed['allowed_runtime_apply'] is False
+    assert observed['code_sha256']==observed_before['code_sha256'] != 'd'*64
+    assert observed['findings']==['policy_generation_unverified']
+    assert before == (path.read_bytes(), Path(reference['path']).read_bytes())
+    # Reading old custody does not authorize re-publication under new code.
+    with pytest.raises(ValueError, match='not_unarmed_code_only'):
+        generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+
+
 @pytest.mark.parametrize('change', ['selected', 'armed', 'profit', 'parent', 'meta', 'unknown_code', 'unsealed_original'])
 def test_unarmed_code_rebinding_rejects_source_economics_or_policy_changes(tmp_path, monkeypatch, change):
     day, original, path = holding_rebinding_fixture(tmp_path, monkeypatch)
@@ -264,11 +284,16 @@ def test_unarmed_code_rebinding_rejects_source_economics_or_policy_changes(tmp_p
         generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
 
 
-@pytest.mark.parametrize('change', ['seal', 'runtime', 'contract', 'symlink', 'source_changed'])
-def test_rebinding_reader_fails_closed_for_changed_or_unsafe_receipts(tmp_path, monkeypatch, change):
+@pytest.mark.parametrize('change', ['seal', 'runtime', 'contract', 'symlink', 'source_changed', 'fixture'])
+@pytest.mark.parametrize('code_advanced', [False, True])
+def test_rebinding_reader_fails_closed_for_changed_or_unsafe_receipts(tmp_path, monkeypatch, change, code_advanced):
     from pathlib import Path
     day, original, source = holding_rebinding_fixture(tmp_path, monkeypatch)
     reference = generation.publish_holding_code_rebinding(day, original_path=original, data_root=tmp_path)
+    if code_advanced:
+        from src.engine.scalping import holding_vote_experiment as vote
+        monkeypatch.setattr(vote, 'code_sha', lambda: 'c'*64)
+        monkeypatch.setattr(generation, 'code_generation', lambda family: 'd'*64)
     path = Path(reference['path'])
     if change == 'symlink':
         moved = path.with_suffix('.original')
@@ -282,6 +307,9 @@ def test_rebinding_reader_fails_closed_for_changed_or_unsafe_receipts(tmp_path, 
         body = json.loads(path.read_text())
         if change == 'seal': body['receipt_sha256'] = '0' * 64
         elif change == 'runtime': body['runtime_effect'] = True
+        elif change == 'fixture':
+            body['contract']['fixture_receipt'] = {'path': '/unreviewed', 'sha256': 'e'*64}
+            body['contract']['contract_sha256'] = generation.digest({k:v for k,v in body['contract'].items() if k!='contract_sha256'})
         else: body['contract']['source_state'] = 'complete'
         if change != 'seal': body['receipt_sha256'] = generation.digest({k:v for k,v in body.items() if k != 'receipt_sha256'})
         path.write_text(json.dumps(body))

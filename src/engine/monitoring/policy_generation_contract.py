@@ -244,7 +244,7 @@ def inspect(contract, *, family, day, payload=None, data_root=None):
     )
 
 
-def _holding_code_rebinding(original, current, day, data):
+def _holding_code_rebinding(original, current, day, data, *, historical_contract=None):
     """Only an unarmed numeric projection's code identity may differ."""
     from src.engine.scalping.holding_vote_experiment import code_sha
 
@@ -258,7 +258,10 @@ def _holding_code_rebinding(original, current, day, data):
             or numeric.get('selected_cells') != {} or numeric.get('cells') != {}
             or numeric.get('allowed_runtime_apply') is not False
             or numeric.get('actual_profit_verified') is not False
-            or numeric.get('code_sha256') != code_sha()):
+            or not isinstance(numeric.get('code_sha256'), str)
+            or len(numeric['code_sha256']) != 64
+            or any(c not in '0123456789abcdef' for c in numeric['code_sha256'])
+            or (historical_contract is None and numeric['code_sha256'] != code_sha())):
         raise ValueError('holding_generation_rebinding_not_unarmed_code_only')
     prior = inspect(before.get('policy_generation'), family='holding_vote',
                     day=day, payload=before, data_root=data)
@@ -271,6 +274,20 @@ def _holding_code_rebinding(original, current, day, data):
     contract = native(after, family='holding_vote', day=day, data_root=data,
                       source_state=prior['source_state'], comparison_state=prior['comparison_state'],
                       handoff_state=prior['handoff_state'])
+    if historical_contract is not None:
+        # An immutable report-only receipt describes its original code. A
+        # later deployment cannot turn that historical source into corruption
+        # or promote its capabilities to the newly installed code generation.
+        inspect(historical_contract, family='holding_vote', day=day, payload=after, data_root=data)
+        historical_code = historical_contract.get('code_sha256')
+        if (historical_contract.get('fixture_receipt') is not None
+                or not isinstance(historical_code, str) or len(historical_code) != 64
+                or any(c not in '0123456789abcdef' for c in historical_code)):
+            raise ValueError('holding_generation_rebinding_historical_code_invalid')
+        contract.update(code_sha256=historical_code, fixture_receipt=None,
+            components={step: dict(status='supported', verification='unverified') for step in STEPS},
+            retry_key=digest(['holding_vote', digest(source_body(after)), historical_code, prior['source_state']]))
+        contract['contract_sha256'] = digest({k:v for k,v in contract.items() if k!='contract_sha256'})
     if contract.get('fixture_receipt'):
         raise ValueError('holding_generation_rebinding_cannot_add_fixture_verification')
     return contract
@@ -328,7 +345,8 @@ def _read_holding_code_rebinding(data, day, report_sha, payload):
             or body.get('runtime_effect') is not False or body.get('allowed_runtime_apply') is not False
             or body.get('actual_pid_consumed') is not False or body.get('realized_profit') is not None):
         raise ValueError('holding_generation_rebinding_receipt_invalid')
-    expected = _holding_code_rebinding(body['original_report'], payload, day, data)
+    expected = _holding_code_rebinding(body['original_report'], payload, day, data,
+                                       historical_contract=body.get('contract'))
     if body.get('contract') != expected:
         raise ValueError('holding_generation_rebinding_contract_changed')
     return body['contract'], dict(path=str(path), sha256=receipt_sha,
