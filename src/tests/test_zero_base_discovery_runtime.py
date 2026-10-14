@@ -115,6 +115,46 @@ def _panel(_token):
     }]}
 
 
+def _target_readiness(stamp, codes):
+    owner = dict(runtime_generation='fixture', process_pid=123,
+        process_start_ticks='456', date='2026-09-28')
+    return dict(ready=True, **owner, main_target_snapshot=dict(
+        schema='zero_base_main_target_snapshot_v1', status='observed', **owner,
+        generation='c'*64, observed_epoch=stamp, active_codes=codes, runtime_effect=False))
+
+
+def test_active_target_snapshot_defers_before_claim_and_release_restores_admission(tmp_path):
+    bus = Bus()
+    readiness = _target_readiness(T0+1, ['123456'])
+    bus.consumer_readiness = lambda event: readiness
+    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
+    summary = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    assert summary['probe_requested_count'] == runtime.queue.in_flight_count() == 0
+    assert summary['probe_claim_eligibility']['active_target_deferred_count'] == 1
+    assert runtime.queue.snapshot()['candidates'][0]['claim_count'] == 0
+    readiness = _target_readiness(T0+2, [])
+    assert runtime.dispatch_due_probes(now_epoch=T0+2)['probe_requested_count'] == 1
+
+
+@pytest.mark.parametrize('defect', ['stale', 'future', 'wrong_owner', 'wrong_day', 'invalid_code', 'unknown', 'unbounded'])
+def test_unproven_target_snapshot_falls_back_without_excluding_candidate(tmp_path, defect):
+    bus = Bus()
+    readiness = _target_readiness(T0+1, ['123456'])
+    snapshot = readiness['main_target_snapshot']
+    if defect == 'stale': snapshot['observed_epoch'] -= 2.001
+    if defect == 'future': snapshot['observed_epoch'] += .001
+    if defect == 'wrong_owner': snapshot['process_start_ticks'] = 'foreign'
+    if defect == 'wrong_day': snapshot['date'] = '2026-09-27'
+    if defect == 'invalid_code': snapshot['active_codes'] = ['invalid']
+    if defect == 'unknown': snapshot['status'] = 'unobserved'
+    if defect == 'unbounded': snapshot['active_codes'] = ['123456']*513
+    bus.consumer_readiness = lambda event: readiness
+    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
+    summary = runtime.scan_once('fixture', fetcher=_panel, now_epoch=T0+1)
+    assert summary['probe_requested_count'] == 1
+    assert summary['probe_active_target_snapshot_status'] == 'fallback'
+
+
 @pytest.mark.parametrize('defect', ['claim_clock', 'claim_scope', 'lease', 'candidate', 'action',
                                   'claim_shape', 'code_shape', 'action_shape', 'ack_shape'])
 def test_invalid_result_cannot_occupy_exact_claim_inbox(tmp_path, defect):
@@ -459,3 +499,36 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     assert fields["evaluation_attempt_id"] == "-"
     assert fields["zero_base_machine_evaluation_status"] == "-"
     assert fields["zero_base_machine_preflight_artifact_status"] == "-"
+
+
+@pytest.mark.parametrize('frozen_clock', [False, True])
+def test_live_callback_snapshot_uses_completion_clock_without_renewing_claim_deadline(tmp_path, monkeypatch, frozen_clock):
+    from src.scanners import zero_base_discovery_runtime as module
+    from src.engine import kiwoom_sniper_v2 as main
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28', state_path=tmp_path/'q.json')
+    runtime.queue.observe(**{k:v for k,v in dict(code='123456', route='krx_nxt_integrated',
+        observed_epoch=T0, source_sha256='a'*64, source_scope='observed_panel',
+        received_epoch=T0).items()})
+    epoch = [T0+1]
+    perf = [100.0]
+    monkeypatch.setattr(module.time, 'time', lambda: epoch[0])
+    monkeypatch.setattr(module.time, 'perf_counter', lambda: perf[0])
+    monkeypatch.setattr(main, 'ACTIVE_TARGETS', [{'code':'123456','id':1,'status':'WATCHING'}])
+    def readiness(_event):
+        epoch[0] += .05
+        perf[0] += .05
+        receipt=_target_readiness(epoch[0], ['123456'])
+        receipt['main_target_snapshot']=main._zero_base_active_target_snapshot(receipt)
+        return receipt
+    bus.consumer_readiness = readiness
+    summary = runtime.dispatch_due_probes(**({'now_epoch':T0+1} if frozen_clock else {}))
+    assert summary['probe_requested_count'] == 0
+    assert summary['probe_active_target_snapshot_status'] == 'observed'
+    assert summary['probe_claim_eligibility']['active_target_deferred_count'] == 1
+    bus.consumer_readiness = lambda event: _target_readiness(epoch[0], [])
+    next_boundary = epoch[0]
+    summary = runtime.dispatch_due_probes(**({'now_epoch':next_boundary} if frozen_clock else {}))
+    request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
+    assert request['claim']['last_claim_epoch'] == next_boundary
+    assert request['claim']['residence_deadline_epoch'] == next_boundary+60

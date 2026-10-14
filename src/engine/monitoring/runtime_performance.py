@@ -22,7 +22,7 @@ _NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare',
           'preparation_queue', 'preparation_service', 'source_prepare', 'capacity_prepare',
           'provider_key_wait', 'provider_transport', 'response_validate', 'main_commit', 'submit_guard',
           'capture_append', 'provider_reserve', 'order_acknowledgement', 'pipeline_source_replay',
-          'observation_queue_wait')
+          'observation_queue_wait', 'coordinator_ready_to_main_guard')
 _NAMES += ('entry_refresh', 'entry_evaluation', 'entry_policy', 'entry_machine_assess',
            'entry_machine_capture', 'entry_economics', 'entry_wire', 'entry_native_check',
            'entry_native_load', 'entry_native_claim', 'entry_native_auxiliary',
@@ -89,7 +89,7 @@ def timed_entry_call(name, function, *args, **kwargs):
         return function(*args, **kwargs)
 
 
-def prioritize_native_watches(queue, *, now):
+def prioritize_native_watches(queue, *, now, completed_requests=None):
     """Consume bounded wake hints between Main units; keep protected slots.
 
     A hint only changes the next visit. The handler still owns native claim,
@@ -107,14 +107,47 @@ def prioritize_native_watches(queue, *, now):
         hinted = {code: stamp for code, stamp in hinted.items() if stamp is not None}
         for code in hinted:
             _NATIVE_VISIT_HINTS.pop(code, None)
-    if not hinted:
+    completed_requests = completed_requests or {}
+    completed = {}
+    for i in indexes:
+        target = queue[i]
+        identity = (target.get('_scanner_async_generation_id'),
+                    target.get('_scanner_async_cache_key'))
+        stamp = completed_requests.get(identity)
+        if (type(stamp) in (int, float) and math.isfinite(stamp) and stamp >= 0
+                and identity[0] and identity[1]):
+            completed[id(target)] = stamp
+    if not hinted and not completed:
         return queue
-    ordered = sorted((queue[i] for i in indexes), key=lambda target:
-                     (hinted.get(str(target.get('code') or '')[:6], float('inf'))))
+    def visit_order(target):
+        if id(target) in completed:
+            return (0, completed[id(target)])
+        return (1, hinted.get(str(target.get('code') or '')[:6], float('inf')))
+    ordered = sorted((queue[i] for i in indexes), key=visit_order)
     result = list(queue)
     for i, target in zip(indexes, ordered):
         result[i] = target
     return result
+
+
+def observe_async_main_guard(result, *, now_perf):
+    """Same-process coordinator clock only, including normally rejected work."""
+    ready = getattr(result, 'coordinator_ready_perf', 0.0)
+    if (type(ready) not in (int, float) or not math.isfinite(ready) or ready <= 0
+            or not math.isfinite(now_perf) or now_perf < ready):
+        return {}
+    seconds = now_perf - ready
+    observe('coordinator_ready_to_main_guard', seconds)
+    fields = dict(async_main_guard_perf=now_perf,
+                  async_coordinator_ready_to_main_guard_ms=round(seconds * 1000, 3),
+                  async_guard_clock_basis='same_pid_monotonic')
+    finished = (getattr(result, 'ai_payload', {}).get('entry_local_stage_clocks') or {}).get(
+        'async_evaluation_completed_perf')
+    if type(finished) in (int, float) and math.isfinite(finished) and 0 < finished <= ready:
+        fields.update(async_evaluation_completed_perf=finished,
+                      async_evaluation_to_coordinator_ready_ms=round((ready-finished)*1000, 3),
+                      async_evaluation_to_main_guard_ms=round((now_perf-finished)*1000, 3))
+    return fields
 _SAMPLES = {name: deque(maxlen=_LIMIT) for name in _NAMES}
 _TOTAL = {name: 0 for name in _NAMES}
 _BOUNDS = (.01, .05, .1, .25, .5, 1., 1.5, 2., 3., 5., 10., float('inf'))

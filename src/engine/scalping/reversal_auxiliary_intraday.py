@@ -13,6 +13,8 @@ import hashlib
 import json
 import os
 import re
+import threading
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from src.engine.scalping import continuous_reversal as K
@@ -22,8 +24,23 @@ from src.engine.scalping import reversal_auxiliary_registry as G
 
 SCHEMA = 'main_auxiliary_intraday_v1'
 AUTHORITY = 'APPROVED_INTRADAY_AUXILIARY_TUNING'
+CONTRACT_REPAIR_SCHEMA = 'main_auxiliary_common_support_repair_v1'
+CONTRACT_REPAIR_AUTHORITY = 'APPROVED_REVIEWED_COMMON_SUPPORT_CONTRACT_REPAIR'
+COMMON_SUPPORT_CLARIFICATION = """
+Common PASS support contract: for PASS, supporting_fact_ids MUST contain the
+exact supplied common ID observed_machine_signal. A supplied namespaced ID
+<signal_ref>/observed_machine_signal confirms only that branch and MUST NOT
+replace the common ID. Assess every supplied signal and return every ref in
+assessed_signal_refs. PASS requires only NO_BLOCKING_RISK in risk_codes.
+For CAUTION/VETO retain the supplied risk_fact_bindings and cite matching
+adverse or context facts in contradicting_fact_ids. Do not invent facts,
+rewrite IDs, repair invalid output or change the machine signal conditions.
+"""
 _BASE_CONSUMED = set()
 _INHERITED = {}
+_CONTRACT_REPAIR_SOURCE_DIGESTS = OrderedDict()
+_CONTRACT_REPAIR_DIGEST_LOCK = threading.RLock()
+_CONTRACT_REPAIR_DIGEST_LIMIT = 128
 
 
 def root(data_root):
@@ -142,7 +159,228 @@ def validate_record(data_root,v,bundle,*,check_definitions=True):
     if v.get('transition_manifest_sha256'):
         from src.engine.scalping import reversal_auxiliary_transition as X
         X.validate_published(data_root,v,bundle)
+    if v.get('contract_repair_manifest_sha256'):
+        if v.get('contract_repair_authority')!=CONTRACT_REPAIR_AUTHORITY:
+            raise ValueError('auxiliary_contract_repair_authority_invalid')
+        manifest_path=root(data_root)/'contract_repairs'/(v['contract_repair_manifest_sha256']+'.json')
+        manifest=read(manifest_path)
+        validate_contract_repair_manifest(data_root,manifest,bundle)
+        if (manifest['artifact_content_sha256']!=v['contract_repair_manifest_sha256']
+                or manifest['expected_parent']!=v.get('previous_overlay_sha256')
+                or v['bindings']!=manifest['new_bindings']
+                or v.get('changes')!={s:n for s,n in manifest['new_bindings'].items()
+                    if n!=manifest['old_bindings'][s]}):
+            raise ValueError('auxiliary_contract_repair_overlay_changed')
+    elif v.get('contract_repair_authority'):
+        raise ValueError('auxiliary_contract_repair_manifest_missing')
     return v
+
+
+def _check_contract_repair_source_hashes(data_root,manifest,bundle,*,force=False):
+    """Cache file digests only; recheck every source and semantic contract."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping.reversal_source_diagnostics import _PROCESS_START_TICKS
+    sources=manifest['source_hashes']
+    signatures={name:N._signature(Path(name)) for name in sources}
+    selector=Path(data_root)/'runtime/runtime_release_selection.json'
+    pointer=N.root(Path(data_root))/'current.json'
+    selector_signature=N._signature(selector if selector.exists() else selector.parent)
+    namespace=P.digest(dict(pid=os.getpid(),start_ticks=_PROCESS_START_TICKS,
+        day=datetime.now(K.KST).date().isoformat(),manifest_day=manifest['day'],
+        bundle=bundle['bundle_sha256'],manifest=manifest['artifact_content_sha256'],
+        reader_code=code_hashes(),selector=selector_signature,
+        native_pointer=N._signature(pointer),sources=signatures))
+    for name,expected in sources.items():
+        signature=signatures[name];key=(namespace,name,signature)
+        with _CONTRACT_REPAIR_DIGEST_LOCK:
+            observed=None if force else _CONTRACT_REPAIR_SOURCE_DIGESTS.get(key)
+            if observed is not None:_CONTRACT_REPAIR_SOURCE_DIGESTS.move_to_end(key)
+        if observed is None:
+            if force:
+                with Path(name).open('rb') as stream:
+                    observed=hashlib.file_digest(stream,'sha256').hexdigest()
+            else:
+                observed=N._source_hash(name,signature)
+        if N._signature(Path(name))!=signature:
+            raise ValueError('auxiliary_contract_repair_source_changed_during_read:'+name)
+        if observed!=expected:
+            raise ValueError('auxiliary_contract_repair_source_changed:'+name)
+        # Each key is bounded independently; at most128 digest strings are
+        # retained, never JSON source objects or a successful semantic verdict.
+        if len(repr(key))<=4096:
+            with _CONTRACT_REPAIR_DIGEST_LOCK:
+                _CONTRACT_REPAIR_SOURCE_DIGESTS[key]=observed
+                _CONTRACT_REPAIR_SOURCE_DIGESTS.move_to_end(key)
+                while len(_CONTRACT_REPAIR_SOURCE_DIGESTS)>_CONTRACT_REPAIR_DIGEST_LIMIT:
+                    _CONTRACT_REPAIR_SOURCE_DIGESTS.popitem(last=False)
+
+
+def validate_contract_repair_manifest(data_root,manifest,bundle,*,force_source_hashes=False):
+    """Verify exact prompt append and immutable original evidence, never alpha."""
+    f=bundle['continuous_reversal']
+    prepared=datetime.fromisoformat(manifest.get('prepared_at',''))
+    if (manifest.get('schema')!=CONTRACT_REPAIR_SCHEMA
+            or manifest.get('authority')!=CONTRACT_REPAIR_AUTHORITY
+            or manifest.get('artifact_content_sha256')!=P.seal(manifest)['artifact_content_sha256']
+            or manifest.get('base_bundle_sha256')!=bundle['bundle_sha256']
+            or manifest.get('base_family_sha256')!=f['family_sha256']
+            or manifest.get('detector_manifest_hash')!=f['operating_manifest']['detector_manifest_hash']
+            or manifest.get('scope_membership_sha256')!=P.digest(f['operating_manifest']['scopes'])
+            or manifest.get('definitions_sha256')!=P.digest(f['operating_manifest']['definitions'])
+            or manifest.get('clarification')!=COMMON_SUPPORT_CLARIFICATION
+            or manifest.get('provider_called') is not False
+            or manifest.get('policy_reselected') is not False
+            or manifest.get('actual_order_submitted') is not False):
+        raise ValueError('auxiliary_contract_repair_manifest_invalid')
+    if (prepared.tzinfo is None or prepared.astimezone(K.KST).date().isoformat()!=manifest.get('day')):
+        raise ValueError('auxiliary_contract_repair_clock_invalid')
+    old=manifest.get('old_bindings');new=manifest.get('new_bindings');mapping=manifest.get('registry_mapping')
+    expected={V.scope_id(k,r) for k,r in V.scopes()
+        if f['machine_cells'][k]['routes'][r]['backend'] in {'union_v5','union_v6'}}
+    if (not isinstance(old,dict) or not isinstance(new,dict) or not isinstance(mapping,dict)
+            or set(old)!=expected or set(new)!=expected or set(mapping)!=set(old.values())
+            or manifest.get('scope_count')!=len(expected)
+            or any(new[s]!=mapping[old[s]].get('registry_sha256') for s in expected)):
+        raise ValueError('auxiliary_contract_repair_scope_changed')
+    for ident,replacement in mapping.items():
+        original=G.load(data_root,ident)
+        expected_value=copy.deepcopy(original)
+        if original['schema']!=G.SCHEMA or original['prompt'].endswith(COMMON_SUPPORT_CLARIFICATION):
+            raise ValueError('auxiliary_contract_repair_registry_unsupported')
+        expected_value['prompt']+=COMMON_SUPPORT_CLARIFICATION
+        expected_value.pop('registry_sha256')
+        expected_value['registry_sha256']=P.digest(expected_value)
+        if replacement!=expected_value:
+            raise ValueError('auxiliary_contract_repair_not_exact_prompt_append')
+        G.validate(replacement)
+    sources=manifest.get('source_hashes')
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    source_paths=[G.directory(data_root)/(ident+'.json') for ident in mapping]
+    source_paths.extend((N.root(Path(data_root))/'generations'/(bundle['bundle_sha256']+'.json'),
+        N.root(Path(data_root))/'sources'/('reversal-'+f['auxiliary_report_sha256']+'.json')))
+    parent=manifest.get('expected_parent')
+    if parent is not None:
+        if not isinstance(parent,str) or not re.fullmatch('[a-f0-9]{64}',parent):
+            raise ValueError('auxiliary_contract_repair_parent_invalid')
+        source_paths.append(root(data_root)/'generations'/(parent+'.json'))
+    if not isinstance(sources,dict) or set(sources)!={str(p.resolve()) for p in source_paths}:
+        raise ValueError('auxiliary_contract_repair_sources_missing')
+    _check_contract_repair_source_hashes(data_root,manifest,bundle,force=force_source_hashes)
+    incumbent=(read(root(data_root)/'generations'/(parent+'.json')) if parent else None)
+    if old!=_contract_repair_incumbents(data_root,bundle,incumbent):
+        raise ValueError('auxiliary_contract_repair_incumbent_changed')
+    return manifest
+
+
+def _contract_repair_incumbents(data_root,bundle,before):
+    """Selected bindings without effective_bindings' default registration writes."""
+    f=bundle['continuous_reversal']
+    bindings={V.scope_id(k,r):G.definition(
+        f['auxiliary_cells'][k]['routes'][r]['payload']['arm'],
+        input_version=f['auxiliary_cells'][k]['routes'][r]['payload']['binding']['input_version'])['registry_sha256']
+        for k,r in V.scopes() if f['machine_cells'][k]['routes'][r]['backend'] in {'union_v5','union_v6'}}
+    bindings.update(inherited(data_root,bundle))
+    if before:bindings.update(before['bindings'])
+    return bindings
+
+
+def prepare_contract_repair(data_root,bundle,*,expected_parent,now=None):
+    """Read-only review artifact: frozen incumbents and exact replacement bodies."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    clock=now or datetime.now(K.KST)
+    if clock.tzinfo is None:raise ValueError('auxiliary_contract_repair_clock_invalid')
+    day=clock.astimezone(K.KST).date().isoformat()
+    N.validate(bundle,target_date=day)
+    before=current(data_root,bundle,day=day)
+    if (before or {}).get('artifact_content_sha256')!=expected_parent:
+        raise ValueError('auxiliary_parent_cas_failed')
+    f=bundle['continuous_reversal']
+    # effective_bindings registers missing defaults. Preparation instead reads
+    # only the selected incumbent identities and never writes the shared store.
+    bindings=_contract_repair_incumbents(data_root,bundle,before)
+    mapping={}
+    sources={}
+    for ident in sorted(set(bindings.values())):
+        original=G.load(data_root,ident)
+        if original['schema']!=G.SCHEMA or original['prompt'].endswith(COMMON_SUPPORT_CLARIFICATION):
+            raise ValueError('auxiliary_contract_repair_registry_unsupported')
+        replacement=copy.deepcopy(original);replacement['prompt']+=COMMON_SUPPORT_CLARIFICATION
+        replacement.pop('registry_sha256');replacement['registry_sha256']=P.digest(replacement)
+        G.validate(replacement);mapping[ident]=replacement
+        source=G.directory(data_root)/(ident+'.json');sources[str(source.resolve())]=P.file_hash(source)
+    for source in (N.root(Path(data_root))/'generations'/(bundle['bundle_sha256']+'.json'),
+            N.root(Path(data_root))/'sources'/('reversal-'+f['auxiliary_report_sha256']+'.json')):
+        sources[str(source.resolve())]=P.file_hash(source)
+    if before:
+        source=root(data_root)/'generations'/(before['artifact_content_sha256']+'.json')
+        sources[str(source.resolve())]=P.file_hash(source)
+    pointer=N.root(Path(data_root))/'current.json'
+    if N._read(pointer).get('bundle_sha256')!=bundle['bundle_sha256']:
+        raise ValueError('auxiliary_base_parent_changed')
+    manifest=P.seal(dict(schema=CONTRACT_REPAIR_SCHEMA,authority=CONTRACT_REPAIR_AUTHORITY,
+        day=day,prepared_at=clock.isoformat(),expected_parent=expected_parent,
+        base_bundle_sha256=bundle['bundle_sha256'],base_family_sha256=f['family_sha256'],
+        detector_manifest_hash=f['operating_manifest']['detector_manifest_hash'],
+        scope_membership_sha256=P.digest(f['operating_manifest']['scopes']),
+        definitions_sha256=P.digest(f['operating_manifest']['definitions']),
+        clarification=COMMON_SUPPORT_CLARIFICATION,old_bindings=bindings,
+        new_bindings={s:mapping[i]['registry_sha256'] for s,i in bindings.items()},
+        registry_mapping=mapping,scope_count=len(bindings),source_hashes=sources,
+        native_pointer_sha256=P.file_hash(pointer),code_hashes=code_hashes(),
+        policy_reselected=False,provider_called=False,actual_order_submitted=False))
+    validate_contract_repair_manifest(data_root,manifest,bundle,force_source_hashes=True)
+    return manifest
+
+
+def publish_contract_repair(data_root,manifest,*,expected_parent,confirm,now=None):
+    """Publish a reviewed citation clarification with full-scope parent CAS."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    if confirm!=CONTRACT_REPAIR_AUTHORITY:
+        raise ValueError('auxiliary_contract_repair_authority_required')
+    if not isinstance(manifest,dict):manifest=read(manifest)
+    clock=now or datetime.now(K.KST)
+    if clock.tzinfo is None:raise ValueError('auxiliary_contract_repair_clock_invalid')
+    day=clock.astimezone(K.KST).date().isoformat()
+    folder=root(data_root)
+    with publisher_locks(data_root):
+        active=N.load_effective(data_root=Path(data_root),target_date=day)
+        if not active:raise ValueError('auxiliary_base_parent_changed')
+        validate_contract_repair_manifest(data_root,manifest,active,force_source_hashes=True)
+        if (manifest['day']!=day or datetime.fromisoformat(manifest['prepared_at'])>clock
+                or manifest['code_hashes']!=code_hashes()
+                or manifest['native_pointer_sha256']!=P.file_hash(N.root(Path(data_root))/'current.json')):
+            raise ValueError('auxiliary_contract_repair_preparation_changed')
+        before=current(data_root,active,day=day)
+        if before and before.get('contract_repair_manifest_sha256')==manifest['artifact_content_sha256']:
+            return before
+        actual=(before or {}).get('artifact_content_sha256')
+        if actual!=expected_parent or actual!=manifest['expected_parent']:
+            raise ValueError('auxiliary_parent_cas_failed')
+        frozen=prepare_contract_repair(data_root,active,expected_parent=actual,
+            now=datetime.fromisoformat(manifest['prepared_at']))
+        if frozen!=manifest:raise ValueError('auxiliary_contract_repair_preparation_changed')
+        for replacement in manifest['registry_mapping'].values():G.register(data_root,replacement)
+        manifest_path=folder/'contract_repairs'/(manifest['artifact_content_sha256']+'.json')
+        if manifest_path.exists() and read(manifest_path)!=manifest:
+            raise ValueError('auxiliary_contract_repair_immutable_conflict')
+        N._atomic_write_json(manifest_path,manifest)
+        body=P.seal(dict(schema=SCHEMA,authority=AUTHORITY,day=day,effective_from=clock.isoformat(),
+            base_bundle_sha256=active['bundle_sha256'],base_family_sha256=active['continuous_reversal']['family_sha256'],
+            detector_manifest_hash=manifest['detector_manifest_hash'],previous_overlay_sha256=actual,
+            bindings=manifest['new_bindings'],changes={s:n for s,n in manifest['new_bindings'].items()
+                if n!=manifest['old_bindings'][s]},
+            independent_scopes=sorted(independent_scopes(data_root,active,before)),code_hashes=code_hashes(),
+            revoked_overlays=(before or {}).get('revoked_overlays',[]),
+            revoked_scope_overlays=(before or {}).get('revoked_scope_overlays',{}),
+            rollback_bindings=rollback_bindings(data_root,active,before),
+            contract_repair_manifest_sha256=manifest['artifact_content_sha256'],
+            contract_repair_authority=confirm,actual_pid_consumed=False,actual_order_submitted=False))
+        validate_record(data_root,body,active)
+        N._atomic_write_json(folder/'generations'/(body['artifact_content_sha256']+'.json'),body)
+        write_day_pointer(data_root,body)
+        N._atomic_write_json(folder/'current.json',body)
+        if current(data_root,active,day=day)!=body:raise ValueError('auxiliary_overlay_readback_failed')
+        return body
 
 
 def effective_bindings(data_root,bundle,*,day=None):
@@ -393,7 +631,15 @@ def rollback(data_root,*,expected_parent,reason,confirm,now=None,scopes=None):
                 if bundle['continuous_reversal']['machine_cells'][key]['routes'][route]['backend'] in {'union_v5','union_v6'}:
                     value=G.definition(cell['payload']['arm'],input_version=cell['payload']['binding']['input_version']);bindings[V.scope_id(key,route)]=G.register(data_root,value)
             bindings.update(inherited(data_root,bundle))
-        record=P.seal(dict(before,effective_from=clock.isoformat(),bindings=bindings,changes=bindings,
+        rollback_base=dict(before)
+        # The original manifest proves issuance of its exact new bindings.
+        # Rollback restores predecessor bindings and keeps that proof in the
+        # immutable revoked generation, rather than claiming it issued rollback.
+        repair_manifest=rollback_base.pop('contract_repair_manifest_sha256',None)
+        rollback_base.pop('contract_repair_authority',None)
+        if repair_manifest:
+            rollback_base['rollback_contract_repair_manifest_sha256']=repair_manifest
+        record=P.seal(dict(rollback_base,effective_from=clock.isoformat(),bindings=bindings,changes=bindings,
             previous_overlay_sha256=expected_parent,rollback_reason=reason,evaluation_sha256=None,
             code_hashes=code_hashes(),revoked_overlays=sorted(set(before.get('revoked_overlays',[])+[expected_parent])),
             actual_pid_consumed=False))
@@ -509,6 +755,12 @@ def lineage_sources(data_root,bundle,overlay=None):
             p=X.folder(data_root)/(rec['transition_manifest_sha256']+'.json');add(p)
             for item in read(p)['sources']:
                 X.verify_reference(item);refs[item['path']]=item
+        repair=rec.get('contract_repair_manifest_sha256') or rec.get('rollback_contract_repair_manifest_sha256')
+        if repair:
+            p=root(data_root)/'contract_repairs'/(repair+'.json');add(p)
+            for name,expected in read(p)['source_hashes'].items():
+                if P.file_hash(name)!=expected:raise ValueError('auxiliary_contract_repair_source_changed:'+name)
+                add(name)
         previous=rec.get('previous_overlay_sha256')
         rec=read(root(data_root)/'generations'/(previous+'.json')) if previous else None
     for ident in set(rollback_bindings(data_root,bundle,overlay).values()):add(G.directory(data_root)/(ident+'.json'))

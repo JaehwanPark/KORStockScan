@@ -227,6 +227,37 @@ def test_expired_or_closed_hint_never_creates_a_new_visit_lease(monkeypatch):
     assert not R._NATIVE_VISIT_HINTS
 
 
+def test_retained_fixed_result_precedes_other_watches_without_moving_protected_work(monkeypatch):
+    monkeypatch.setattr(R, '_NATIVE_VISIT_HINTS', OrderedDict([('native', 102.)]))
+    targets = [dict(code='holding', status='HOLDING'),
+        dict(code='ordinary', status='WATCHING'),
+        dict(code='commit', status='WATCHING', _scanner_scheduler_lane='COMMIT'),
+        dict(code='native', status='WATCHING'), dict(code='order', status='BUY_ORDERED'),
+        dict(code='ready', status='WATCHING', _scanner_async_generation_id='g',
+             _scanner_async_cache_key='k'), dict(code='other', status='WATCHING')]
+    actual = R.prioritize_native_watches(targets, now=103., completed_requests={('g', 'k'): 50.})
+    assert [t['code'] for t in actual] == ['holding', 'ready', 'commit', 'native', 'order', 'ordinary', 'other']
+    assert {id(t) for t in actual} == {id(t) for t in targets}
+    assert targets[5]['_scanner_async_generation_id'] == 'g'
+    # A result from another request cannot move the same symbol forward.
+    monkeypatch.setattr(R, '_NATIVE_VISIT_HINTS', OrderedDict())
+    assert R.prioritize_native_watches(targets, now=103., completed_requests={('g', 'successor'): 50.}) is targets
+
+
+def test_same_process_ready_guard_clock_keeps_worker_to_poll_delay(monkeypatch):
+    observed=[]
+    monkeypatch.setattr(R, 'observe', lambda name, seconds: observed.append((name, seconds)))
+    result=SimpleNamespace(coordinator_ready_perf=12., ai_payload={
+        'entry_local_stage_clocks': {'async_evaluation_completed_perf': 10.}})
+    fields=R.observe_async_main_guard(result, now_perf=12.25)
+    assert fields['async_coordinator_ready_to_main_guard_ms'] == 250.
+    assert fields['async_evaluation_to_coordinator_ready_ms'] == 2000.
+    assert fields['async_evaluation_to_main_guard_ms'] == 2250.
+    assert observed == [('coordinator_ready_to_main_guard', .25)]
+    assert R.observe_async_main_guard(SimpleNamespace(coordinator_ready_perf=0.), now_perf=12.) == {}
+    assert R.observe_async_main_guard(result, now_perf=11.) == {}
+
+
 def test_stage_frame_is_attempt_local_and_exception_does_not_change_reserve(monkeypatch):
     clock = [0.]
     monkeypatch.setattr(R.time, 'perf_counter', lambda: clock[0])

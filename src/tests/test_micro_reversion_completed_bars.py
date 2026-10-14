@@ -53,6 +53,22 @@ def test_complete_quiet_not_freshened_or_imputed(tmp_path):
     assert payload(tmp_path) == before
 
 
+def test_latest_completed_receipt_retains_original_epoch_and_availability(tmp_path):
+    p = CompletedBarProjection(tmp_path)
+    published = BASE + timedelta(seconds=122)
+    p.consume([point(1, 10), point(2, 60), point(3, 121)],
+        integrity=INTEGRITY, journal_path="durable.jsonl", now_ts=published.timestamp())
+    now = BASE + timedelta(seconds=179)
+    result = reader.read_shared_completed_bars("005930_AL", now=now,
+        root=tmp_path, snapshot_path=bind(tmp_path, p, now), allow_partial_history=True)
+    latest = result["_completed_bar_source"]["latest_completed_bar"]
+    assert latest == dict(minute_epoch=int((BASE+timedelta(seconds=60)).timestamp()),
+        source_time="20260921160100", source_epoch=7,
+        available_at_epoch=published.timestamp(), status="complete", issues=[])
+    assert result["_completed_bar_source"]["watermark_epoch"] == (BASE+timedelta(seconds=121)).timestamp()
+    assert latest["available_at_epoch"] != now.timestamp()
+
+
 @pytest.mark.parametrize("bad", [point(5, 125), point(4,125,cumulative=100), replace(point(4,125),cumulative_volume_raw=None)])
 def test_actual_loss_invalidates_completed_suffix(tmp_path,bad):
     p=CompletedBarProjection(tmp_path)

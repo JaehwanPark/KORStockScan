@@ -330,3 +330,166 @@ def test_terminal_source_resolution_preserves_campaign_and_durable_budget(setup)
     assert T.evaluate(root,'2026-10-07')['artifact_content_sha256']==result['artifact_content_sha256']
     with S.Store(root) as store:assert store.db.execute('SELECT * FROM attempt_budgets ORDER BY 1,2').fetchall()==spent
     assert (T.directory(root,'2026-10-07')/'latest-campaign.json').read_bytes()==before
+
+
+def _prepare_common_contract_repair(setup):
+    root, bundle, machine, scope, value = setup
+    N._atomic_write_json(N.root(root)/'current.json', {'bundle_sha256': bundle['bundle_sha256']})
+    # Register the unchanged selected defaults as normal bootstrap would do.
+    I.effective_bindings(root, bundle, day='2026-10-08')
+    now = datetime(2026, 10, 8, 10, 0, tzinfo=P.KST)
+    manifest = I.prepare_contract_repair(root, bundle, expected_parent=None, now=now)
+    return root, bundle, now, manifest
+
+
+def test_common_support_repair_preparation_is_read_only_and_publication_is_exact(setup):
+    root, bundle, now, manifest = _prepare_common_contract_repair(setup)
+    before = {str(p):P.file_hash(p) for p in root.rglob('*.json')}
+    assert I.prepare_contract_repair(root, bundle, expected_parent=None, now=now) == manifest
+    assert before == {str(p):P.file_hash(p) for p in root.rglob('*.json')}
+    pointer_before = (N.root(root)/'current.json').read_bytes()
+    original = copy.deepcopy(bundle)
+    overlay = I.publish_contract_repair(root, manifest, expected_parent=None,
+        confirm=I.CONTRACT_REPAIR_AUTHORITY, now=now)
+    assert bundle == original and (N.root(root)/'current.json').read_bytes() == pointer_before
+    assert set(overlay['bindings']) == set(manifest['old_bindings'])
+    assert overlay['contract_repair_manifest_sha256'] == manifest['artifact_content_sha256']
+    for old, new in manifest['registry_mapping'].items():
+        previous = G.load(root, old)
+        issued = G.load(root, new['registry_sha256'])
+        assert issued['prompt'] == previous['prompt'] + I.COMMON_SUPPORT_CLARIFICATION
+        assert {k:v for k,v in issued.items() if k not in {'prompt','registry_sha256'}} == {
+            k:v for k,v in previous.items() if k not in {'prompt','registry_sha256'}}
+    assert I.at_confirmation(root, bundle, now.timestamp()-.001) is None
+    assert I.at_confirmation(root, bundle, now.timestamp()) == overlay
+    assert I.publish_contract_repair(root, manifest, expected_parent=None,
+        confirm=I.CONTRACT_REPAIR_AUTHORITY, now=now) == overlay
+
+
+@pytest.mark.parametrize('defect', ['prompt', 'model', 'scope', 'source', 'parent', 'authority'])
+def test_common_support_repair_rejects_changed_preparation_before_pointer_write(setup, defect):
+    root, bundle, now, manifest = _prepare_common_contract_repair(setup)
+    candidate = copy.deepcopy(manifest)
+    if defect in {'prompt','model'}:
+        first = next(iter(candidate['registry_mapping'].values()))
+        first['prompt' if defect=='prompt' else 'model'] = 'changed'
+    elif defect == 'scope': candidate['new_bindings'].pop(next(iter(candidate['new_bindings'])))
+    elif defect == 'source': candidate['source_hashes'][next(iter(candidate['source_hashes']))] = '0'*64
+    elif defect == 'parent': candidate['expected_parent'] = '0'*64
+    elif defect == 'authority': candidate['authority'] = I.AUTHORITY
+    candidate = P.seal(candidate)
+    with pytest.raises(ValueError):
+        I.publish_contract_repair(root, candidate, expected_parent=None,
+            confirm=I.CONTRACT_REPAIR_AUTHORITY, now=now)
+    assert not (I.root(root)/'current.json').exists()
+
+
+def test_published_common_support_repair_rejects_tampered_overlay(setup):
+    root, bundle, now, manifest = _prepare_common_contract_repair(setup)
+    overlay = I.publish_contract_repair(root, manifest, expected_parent=None,
+        confirm=I.CONTRACT_REPAIR_AUTHORITY, now=now)
+    modified = copy.deepcopy(overlay)
+    modified['bindings'][next(iter(modified['bindings']))] = next(iter(manifest['old_bindings'].values()))
+    with pytest.raises(ValueError, match='contract_repair_overlay_changed'):
+        I.validate_record(root, P.seal(modified), bundle)
+
+
+def test_common_support_repair_rollback_restores_old_bindings_and_revokes_claim_generation(setup):
+    from datetime import timedelta
+    root, bundle, now, manifest = _prepare_common_contract_repair(setup)
+    overlay = I.publish_contract_repair(root, manifest, expected_parent=None,
+        confirm=I.CONTRACT_REPAIR_AUTHORITY, now=now)
+    original_file = I.root(root)/'generations'/(overlay['artifact_content_sha256']+'.json')
+    original_bytes = original_file.read_bytes()
+    rolled = I.rollback(root, expected_parent=overlay['artifact_content_sha256'],
+        reason='reviewed contract repair rollback', confirm=I.AUTHORITY, now=now+timedelta(seconds=2))
+    assert rolled['bindings'] == manifest['old_bindings']
+    assert 'contract_repair_manifest_sha256' not in rolled
+    assert 'contract_repair_authority' not in rolled
+    assert rolled['rollback_contract_repair_manifest_sha256'] == manifest['artifact_content_sha256']
+    assert overlay['artifact_content_sha256'] in rolled['revoked_overlays']
+    assert original_file.read_bytes() == original_bytes
+    assert I.at_confirmation(root, bundle, now.timestamp()+1) == overlay
+    assert I.current(root, bundle, day='2026-10-08') == rolled
+    refs = I.lineage_sources(root, bundle, rolled)
+    manifest_file = I.root(root)/'contract_repairs'/(manifest['artifact_content_sha256']+'.json')
+    assert str(manifest_file.resolve()) in {r['path'] for r in refs}
+
+
+def test_contract_repair_warm_digest_reads_zero_full_sources_and_rejects_preserved_mtime_change(setup, monkeypatch):
+    import os
+    root, bundle, now, manifest = _prepare_common_contract_repair(setup)
+    N._cached_source_hash.cache_clear()
+    I._CONTRACT_REPAIR_SOURCE_DIGESTS.clear()
+    actual = I.hashlib.file_digest
+    hashed = []
+    def counted(stream, algorithm):
+        hashed.append(str(stream.name))
+        return actual(stream, algorithm)
+    monkeypatch.setattr(I.hashlib, 'file_digest', counted)
+    I.validate_contract_repair_manifest(root, manifest, bundle, force_source_hashes=True)
+    assert set(manifest['source_hashes']) <= set(hashed)
+    hashed.clear()
+    I.validate_contract_repair_manifest(root, manifest, bundle)
+    assert not hashed
+    source = next(name for name in manifest['source_hashes'] if '/generations/' in name)
+    path = I.Path(source)
+    stat = path.stat()
+    content = path.read_bytes()
+    replacement = content.replace(b'next_session', b'next_sessioN', 1)
+    assert len(content) == len(replacement) and replacement != content
+    path.write_bytes(replacement)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert path.stat().st_ino == stat.st_ino and path.stat().st_mtime_ns == stat.st_mtime_ns
+    with pytest.raises(ValueError, match='contract_repair_source_changed'):
+        I.validate_contract_repair_manifest(root, manifest, bundle)
+    assert source in hashed
+
+
+def test_contract_repair_truncated_source_never_reuses_warm_verification(setup):
+    root, bundle, now, manifest = _prepare_common_contract_repair(setup)
+    I.validate_contract_repair_manifest(root, manifest, bundle)
+    source = next(name for name in manifest['source_hashes'] if '/generations/' in name)
+    I.Path(source).write_bytes(b'{')
+    with pytest.raises(ValueError, match='contract_repair_source_changed'):
+        I.validate_contract_repair_manifest(root, manifest, bundle)
+
+
+def test_contract_repair_preserves_current_custom_overlay_and_old_claim_binding(setup):
+    from datetime import timedelta
+    root,bundle,machine,scope,value=setup
+    N._atomic_write_json(N.root(root)/'current.json',{'bundle_sha256':bundle['bundle_sha256']})
+    first_clock=datetime(2026,10,8,10,tzinfo=P.KST)
+    bindings=I.effective_bindings(root,bundle,day='2026-10-08')
+    bindings[scope]=value['registry_sha256']
+    first=P.seal(dict(schema=I.SCHEMA,authority=I.AUTHORITY,day='2026-10-08',
+        effective_from=first_clock.isoformat(),base_bundle_sha256=bundle['bundle_sha256'],
+        base_family_sha256=bundle['continuous_reversal']['family_sha256'],
+        detector_manifest_hash=bundle['continuous_reversal']['operating_manifest']['detector_manifest_hash'],
+        previous_overlay_sha256=None,bindings=bindings,changes={scope:value['registry_sha256']},
+        independent_scopes=[scope],code_hashes=I.code_hashes(),revoked_overlays=[],
+        actual_pid_consumed=False,actual_order_submitted=False))
+    I.validate_record(root,first,bundle)
+    N._atomic_write_json(I.root(root)/'generations'/(first['artifact_content_sha256']+'.json'),first)
+    I.write_day_pointer(root,first)
+    N._atomic_write_json(I.root(root)/'current.json',first)
+    clock=first_clock+timedelta(seconds=2)
+    manifest=I.prepare_contract_repair(root,bundle,expected_parent=first['artifact_content_sha256'],now=clock)
+    assert manifest['old_bindings'][scope]==value['registry_sha256']
+    second=I.publish_contract_repair(root,manifest,expected_parent=first['artifact_content_sha256'],
+        confirm=I.CONTRACT_REPAIR_AUTHORITY,now=clock)
+    assert second['previous_overlay_sha256']==first['artifact_content_sha256']
+    assert second['independent_scopes']==[scope]
+    assert G.load(root,second['bindings'][scope])['prompt']==value['prompt']+I.COMMON_SUPPORT_CLARIFICATION
+    assert I.at_confirmation(root,bundle,first_clock.timestamp()+1)==first
+    assert I.at_confirmation(root,bundle,clock.timestamp())==second
+
+
+def test_contract_repair_changed_native_pointer_after_preparation_has_no_publication(setup):
+    root,bundle,clock,manifest=_prepare_common_contract_repair(setup)
+    N._atomic_write_json(N.root(root)/'current.json',{'bundle_sha256':'0'*64})
+    with pytest.raises(ValueError,match='preparation_changed'):
+        I.publish_contract_repair(root,manifest,expected_parent=None,
+            confirm=I.CONTRACT_REPAIR_AUTHORITY,now=clock)
+    assert not (I.root(root)/'current.json').exists()
+    assert not (I.root(root)/'contract_repairs').exists()

@@ -3049,6 +3049,76 @@ class GPTSniperEngine:
             ),
         }
 
+    @staticmethod
+    def _raw_reversal_response_fields(result, response_sha256=None):
+        """Bounded evidence from the received response, before live composition."""
+        received = result if isinstance(result, dict) else {}
+        from src.engine.scalping.continuous_reversal_postclose import digest
+        fields = ('risk_verdict', 'risk_codes', 'supporting_fact_ids',
+                  'contradicting_fact_ids', 'confidence')
+        projection = {
+            'entry_ai_raw_fields_present': {key: key in received for key in fields},
+            'entry_ai_raw_fields_truncated': False,
+            'entry_ai_raw_truncated_field_names': [],
+            'entry_ai_raw_fields_invalid_shape': [],
+            'entry_ai_raw_fields_source': 'decoded_provider_response',
+            'entry_ai_raw_response_sha256': response_sha256 or digest(received),
+        }
+        for key in fields:
+            value = received.get(key)
+            if key.endswith('_ids') or key == 'risk_codes':
+                values = value if isinstance(value, list) else []
+                if key in received and not isinstance(value, list):
+                    projection['entry_ai_raw_fields_invalid_shape'].append(key)
+                if len(values) > 64 or any((isinstance(v, str) and len(v) > 512)
+                        or (v is not None and type(v) not in (bool, int, float, str)) for v in values):
+                    projection['entry_ai_raw_fields_truncated'] = True
+                    projection['entry_ai_raw_truncated_field_names'].append(key)
+                # JSON scalar values remain exact, including invalid citations;
+                # non-scalar malformed members are represented by their type.
+                projection['entry_ai_raw_' + key] = [
+                    v[:512] if isinstance(v, str) else v
+                    if v is None or type(v) in (bool, int, float)
+                    else {'invalid_type': type(v).__name__}
+                    for v in values[:64]
+                ]
+            elif key == 'risk_verdict':
+                projection['entry_ai_raw_risk_verdict'] = value[:512] if isinstance(value, str) else ''
+                if key in received and not isinstance(value,str):
+                    projection['entry_ai_raw_fields_invalid_shape'].append(key)
+                if isinstance(value, str) and len(value) > 512:
+                    projection['entry_ai_raw_fields_truncated'] = True
+                    projection['entry_ai_raw_truncated_field_names'].append(key)
+            else:
+                projection['entry_ai_raw_confidence'] = value[:512] if isinstance(value, str) else value if (
+                    value is None or type(value) in (bool, int, float, str)) else None
+                if isinstance(value,str) and len(value)>512:
+                    projection['entry_ai_raw_fields_truncated']=True
+                    projection['entry_ai_raw_truncated_field_names'].append(key)
+        return projection
+
+    @staticmethod
+    def _received_reversal_response_failure(raw_fields, *, error, response_errors=None):
+        """A completed response rejected locally remains received evidence."""
+        contract_errors=(list(response_errors) if response_errors is not None else
+            ['auxiliary_response_validator_exception:'+type(error).__name__])
+        execution_errors=['entry_post_response_projection_error:'+type(error).__name__]
+        return dict(raw_fields, action='WAIT', action_v2='WAIT',
+            entry_auxiliary_response_received=True,
+            entry_auxiliary_response_contract_valid=(response_errors is not None and not response_errors),
+            entry_auxiliary_response_contract_errors=contract_errors,
+            entry_post_response_execution_valid=False,
+            entry_ai_contract_valid=False, entry_ai_contract_errors=contract_errors+execution_errors,
+            entry_ai_screen_required=True, entry_ai_screen_pass=False,
+            entry_ai_screen_status='response_invalid',
+            entry_ai_evaluation_status='response_invalid',
+            entry_machine_pass_submit_candidate=False,
+            decision_quality_contract_status='rejected',
+            semantic_validation_status='rejected',
+            entry_post_response_failure_reason=str(error)[:240],
+            openai_timeout_like=False, openai_transport_fail_closed=False, actual_order_submitted=False,
+            broker_order_forbidden=True)
+
     def _normalize_decision_quality_entry_result(
         self,
         result,
@@ -3059,6 +3129,11 @@ class GPTSniperEngine:
         live_policy=None,
     ):
         if isinstance(live_policy, dict) and live_policy.get('continuous_reversal_assessment'):
+            # Capture the received logical response before the composer replaces
+            # it with a guarded execution decision. Raw citations never repair
+            # a semantic failure and are not passed back to the validator.
+            raw_response_fields = self._raw_reversal_response_fields(result,
+                live_policy.get('continuous_reversal_raw_response_sha256'))
             from src.engine.scalping.continuous_reversal_policy import compose
             if live_policy['continuous_reversal_assessment'].get('policy_version') == 'continuous_reversal_policy_v6':
                 # New boundary after provider I/O: share only the loader-owned
@@ -3069,11 +3144,11 @@ class GPTSniperEngine:
                 try:
                     with native.signature_pass(), native.verified_evaluation(
                             data_root=DATA_DIR, target_date=day):
-                        return compose(result, live_policy)
+                        return dict(compose(result, live_policy), **raw_response_fields)
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     # Preserve the completed provider result as a transport
                     # fact, but never retry a failed execution boundary to BUY.
-                    return dict(action='WAIT', action_v2='WAIT', score=50,
+                    return dict(**raw_response_fields, action='WAIT', action_v2='WAIT', score=50,
                         reason='entry_post_response_source_invalid',
                         continuous_reversal_applied=True,
                         entry_mechanistic_action=live_policy['continuous_reversal_assessment']['action'],
@@ -3087,7 +3162,7 @@ class GPTSniperEngine:
                         decision_quality_contract_status='rejected',
                         entry_machine_pass_submit_candidate=False,
                         actual_order_submitted=False, broker_order_forbidden=True)
-            return compose(result, live_policy)
+            return dict(compose(result, live_policy), **raw_response_fields)
         payload = dict(result or {}) if isinstance(result, dict) else {}
         normalized_prompt_version = (
             str(prompt_version or DECISION_QUALITY_DETAILED_PROMPT_VERSION).strip()
@@ -10290,6 +10365,8 @@ class GPTSniperEngine:
 
         provider_attempted = False
         frozen_auxiliary_response_errors = None
+        raw_auxiliary_response_fields = {}
+        received_auxiliary_transport_fields = {}
         entry_circuit_ticket = None
         common_recovery_ticket = None
         try:
@@ -11034,6 +11111,14 @@ class GPTSniperEngine:
                 from src.engine.scalping.reversal_operating_outbox import advance
                 received_meta=self._consume_last_transport_meta()
                 self._set_last_transport_meta(received_meta)
+                self._copy_ai_transport_trace_metadata(received_auxiliary_transport_fields,received_meta)
+                for identity_key in ('async_request_id','async_producer_pid','async_producer_start_ticks',
+                        'async_origin_deadline_epoch','async_order_venue','scanner_generation_id'):
+                    if identity_key in received_meta:
+                        received_auxiliary_transport_fields[identity_key]=received_meta[identity_key]
+                if isinstance(received_meta.get('entry_auxiliary_policy_identity'),dict):
+                    received_auxiliary_transport_fields['entry_auxiliary_policy_identity']=copy.deepcopy(
+                        received_meta['entry_auxiliary_policy_identity'])
                 advance(DATA_DIR,entry_setup_live_policy['continuous_reversal_assessment']['opportunity_key'],
                     'response_received',binding=dict(response=result,request_sha256=request_identity,
                         **(transport_observation.fields() if transport_observation is not None else {}),
@@ -11055,6 +11140,12 @@ class GPTSniperEngine:
                 self._set_last_transport_meta(received_meta)
             if auxiliary_assessment.get('policy_version') in {
                     'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+                # Hash decoded provider semantics before local transport fields
+                # and guarded decisions are merged into the response projection.
+                from src.engine.scalping.continuous_reversal_postclose import digest as raw_response_digest
+                entry_setup_live_policy['continuous_reversal_raw_response_sha256'] = raw_response_digest(result)
+                raw_auxiliary_response_fields = self._raw_reversal_response_fields(result,
+                    entry_setup_live_policy['continuous_reversal_raw_response_sha256'])
                 # Validate the received model result against its issued input
                 # before the composer independently rechecks live eligibility.
                 # A changed price path cannot make transport failures consecutive.
@@ -11266,15 +11357,17 @@ class GPTSniperEngine:
                         "actual_order_submitted":False, "broker_order_forbidden":True,
                         **machine_capture, **stage_fields}
             owned_entry_timeout = (entry_circuit_ticket is not None and provider_attempted
+                and not raw_auxiliary_response_fields
                 and getattr(e,'provider_common_error',None) is None
                 and (isinstance(e, (OpenAIHTTPWallClockDeadlineError, APITimeoutError))
                      or getattr(e, 'entry_deadline_timeout', False) is True))
-            local_contract_error = (isinstance(e, ValueError) and str(e) in {
+            local_contract_error = (bool(raw_auxiliary_response_fields)
+                or (isinstance(e, ValueError) and str(e) in {
                 'auxiliary_soft_policy_invalid_before_provider', 'machine_predecision_composer_disagreement',
                 'auxiliary_registered_model_mismatch', 'reversal_request_signal_set_changed_before_send',
                 'reversal_policy_changed_before_provider', 'registered_auxiliary_transport_contract_changed',
                 'entry_machine_transport_epoch_changed', 'entry_machine_quote_clock_conflict',
-                'entry_machine_quote_value_conflict'})
+                'entry_machine_quote_value_conflict'}))
             if owned_entry_timeout:
                 self._entry_circuit().failed(entry_circuit_ticket,
                     future=getattr(e, 'provider_future', None))
@@ -11294,7 +11387,8 @@ class GPTSniperEngine:
             timeout_like = bool(
                 provider_attempted and self._is_openai_timeout_like_error(e)
             )
-            result_source = "timeout" if timeout_like else "exception"
+            result_source = ("schema_semantic_rejected" if raw_auxiliary_response_fields
+                else "timeout" if timeout_like else "exception")
             log_error(
                 f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}"
             )
@@ -11308,6 +11402,10 @@ class GPTSniperEngine:
                 if getattr(TRADING_RULES, "OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED", True)
                 else {"action": "WAIT", "score": 50, "reason": f"에러: {e}"}
             )
+            # Normalization may already have consumed thread-local metadata.
+            # Retain the one received request/response identity through local
+            # projection failures, without resending or changing entry guards.
+            fallback_payload.update(received_auxiliary_transport_fields)
             fallback_payload = self._merge_last_transport_meta(fallback_payload)
             timing_meta = getattr(e, "timing_meta", None)
             if isinstance(timing_meta, dict):
@@ -11424,6 +11522,10 @@ class GPTSniperEngine:
                 fallback_payload["openai_local_failure_reason"] = str(e)[:240]
             fallback_payload = _merge_runtime_fields(fallback_payload)
             fallback_payload.update(stage_fields)
+            if raw_auxiliary_response_fields:
+                fallback_payload.update(self._received_reversal_response_failure(
+                    raw_auxiliary_response_fields, error=e,
+                    response_errors=frozen_auxiliary_response_errors))
             try:
                 fallback_score_50 = float(fallback_payload.get("score")) == 50.0
             except Exception:
@@ -11438,8 +11540,8 @@ class GPTSniperEngine:
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                parse_ok=False,
-                parse_fail=True,
+                parse_ok=bool(raw_auxiliary_response_fields),
+                parse_fail=not bool(raw_auxiliary_response_fields),
                 fallback_score_50=fallback_score_50,
                 cache_hit=False,
                 cache_mode="miss",

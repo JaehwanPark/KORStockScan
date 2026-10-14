@@ -61070,6 +61070,8 @@ def _resolve_scanner_async_entry_ai(
     if result is not None:
         now_epoch = time.time()
         commit_started = time.perf_counter()
+        from src.engine.monitoring.runtime_performance import observe_async_main_guard
+        main_guard_fields = observe_async_main_guard(result, now_perf=commit_started)
         native_valid = True
         native_validation_error = None
         revalidation = {}
@@ -61091,6 +61093,7 @@ def _resolve_scanner_async_entry_ai(
                 sort_keys=True, separators=(',', ':'), allow_nan=False)} if revalidation else {}
         except (TypeError, ValueError):
             revalidation_fields = {'native_commit_revalidation': '{"status":"unobservable","reason":"projection_invalid"}'}
+        revalidation_fields.update(main_guard_fields)
         now_epoch = time.time()
         decision = validate_scanner_async_commit(
             result,
@@ -61140,6 +61143,7 @@ def _resolve_scanner_async_entry_ai(
             if result.status == "expired_after_response"
             else {}
         )
+        decision_fields = {**dict(decision.fields), **main_guard_fields}
         _log_async_commit(
             coordinator, result,
             stock,
@@ -61147,7 +61151,7 @@ def _resolve_scanner_async_entry_ai(
             "scanner_async_result_commit",
             **{
                 **generation.timing_fields(now_epoch=result.completed_epoch),
-                **dict(decision.fields),
+                **decision_fields,
             },
             scanner_async_cache_key=cache_key,
             preparation_wait_sec=round(result.preparation_wait_sec, 6),

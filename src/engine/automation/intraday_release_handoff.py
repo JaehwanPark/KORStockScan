@@ -396,6 +396,18 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         changed_consumer_paths=changed, policy_effect='unchanged')
 
 
+# Reviewed B0/B2/B3/B4 consumer repair; original PREOPEN policy and guards stay bound.
+REVIEWED_NONFIXED_SUBMIT_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
+                                                            'ab743fd49b99cef9c9c3570fc8b542e3b7f54f983335da5bbdfc5465f5e9943a'),
+ 'src/engine/ai_engine_openai.py': ('dabda2cb9fee6fd17263465f38866d90ec66f62b7305a2b5bb7a8dd9fc9a1671',
+                                    '6aa60869d8516af5222902761f412d87864125c8f160a2b6866aecae57d7dc58'),
+ 'src/engine/sniper_state_handlers.py': ('b7435b6001fc5901f601879a08fa4e61b7c337187e1ac58db5e93984768beaa3',
+                                         'ff7e21f742986c71711b79dc45c2044291f6e6b80155e343b7ccd1424721e2c4'),
+ 'src/engine/kiwoom_sniper_v2.py': ('6f1abc2ad7c532d693b832fb041ff519874ce141b52d2f1c724b445467440c0e',
+                                    '2498fb498de2d796fd9abc695caad99ccc61b914c2999a640d88f3f5c96f8dac'),
+ 'src/engine/scalping/scanner_async_eval.py': ('54d8584efa5350575d687b92486e205702f94cfde7a87da0acda46d1f3522748',
+                                               'f0dc2bbeca1d3365185df9dac27765e7ec8f16d488a1ef352646374517679441')}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -439,7 +451,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_REST_REDUCTION_SOURCES.get(name),
                     REVIEWED_IO_OBSERVER_SOURCES.get(name),
                     REVIEWED_IO_DIGEST_SOURCES.get(name),
-                    REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
+                    REVIEWED_STOP_CONSUMER_SOURCES.get(name),
+                    REVIEWED_NONFIXED_SUBMIT_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

@@ -16,6 +16,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
+    completed_ws_candle_source_issue,
     fetch_entry_candles_with_meta,
     resolve_entry_candle_request_code,
     resolve_entry_candle_session,
@@ -425,6 +426,11 @@ def exact_probe_rest_source_issue(ticks, candle_meta, *, request_code, now_epoch
         return "candle_route_mismatch"
     if candle_meta.get('api_id') == 'WS_0B_completed_1m':
         source = candle_meta.get('completed_bar_source') or {}
+        if candle_meta.get("decision_input_profile") == "reduced_completed_v1":
+            issue = completed_ws_candle_source_issue(source, request_code=request_code,
+                transport_epoch=transport_epoch, now_epoch=now_epoch)
+            if issue:
+                return issue
         generated = source.get('generated_at_epoch')
         available = source.get('available_at_epoch')
         if (source.get('request_code') != request_code
@@ -433,8 +439,9 @@ def exact_probe_rest_source_issue(ticks, candle_meta, *, request_code, now_epoch
                 or source.get('transport_epoch') != transport_epoch
                 or not re.fullmatch(r'[0-9a-f]{64}', str(source.get('content_sha256', '')))):
             return 'candle_ws_provenance_invalid'
-        if (type(generated) not in (int, float) or not 0 <= now_epoch - generated <= 20
-                or type(available) not in (int, float) or not 0 < available <= now_epoch):
+        if (candle_meta.get("decision_input_profile") != "reduced_completed_v1"
+                and (type(generated) not in (int, float) or not 0 <= now_epoch - generated <= 20
+                or type(available) not in (int, float) or not 0 < available <= now_epoch)):
             return 'candle_ws_clock_invalid'
     else:
         candle_received = candle_meta.get("rest_received_ts_ms")

@@ -71,14 +71,17 @@ def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES,
     lines = payload.split(b"\n")
     incomplete_last_line = bool(lines[-1])
     lines.pop()  # A concurrently appended final line has no complete receipt.
-    rows, first_at, malformed = [], None, 0
+    rows, first_at, malformed, missing_clock = [], None, 0, 0
     for line in lines:
         try:
             row = json.loads(line)
             if not isinstance(row, dict):
                 raise ValueError("source_row_not_object")
             at = stamp(row.get(time_field))
-            if at is None or (not allow_adjacent_date and at.date() != now.date()) or at > now:
+            if at is None:
+                missing_clock += 1
+                continue
+            if (not allow_adjacent_date and at.date() != now.date()) or at > now:
                 continue
             first_at = at if first_at is None else min(first_at, at)
             if (now - at).total_seconds() <= window_sec:
@@ -86,54 +89,308 @@ def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES,
         except (ValueError, UnicodeDecodeError, TypeError):
             malformed += 1
     covered = not start or (first_at is not None and (now - first_at).total_seconds() >= window_sec)
-    source.update(status="complete" if covered and not malformed and not incomplete_last_line else "partial",
+    source.update(status="complete" if covered and not malformed and not missing_clock and not incomplete_last_line else "partial",
                   tail_truncated=bool(start), window_covered=covered,
                   recent_count=len(rows), malformed_rows=malformed,
                   incomplete_last_line=incomplete_last_line,
+                  missing_timestamp_rows=missing_clock,
                   first_read_at=first_at.isoformat() if first_at else None)
     source.update(bytes_read=len(payload), read_count=1, source_size=before.st_size,
                   source_identity=dict(device=before.st_dev, inode=before.st_ino))
     return rows, source
 
 
-def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes):
-    """Request preparation and raw responses are facts distinct from compose."""
+def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes,
+                               window_sec=WINDOW_SEC, pid_identity=None):
+    """Join the observation cohort using exact producer IDs and content hashes.
+
+    A request is preparation, a raw response is reception, and a valid response
+    still needs Main execution revalidation. No provider or order is replayed.
+    The optional window/identity pins support finite offline receipt audits;
+    scheduled execution retains the existing time and byte budgets.
+    """
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    now = stamp(now)
     request_rows, requests = _recent_source_rows(
         data_root/'ai_decision_requests'/f'ai_decision_requests_{now.date()}.jsonl',
-        now, time_field='captured_at', tail_bytes=tail_bytes, window_sec=WINDOW_SEC)
-    actions = {row['machine_observation_sha256']: row['source']['assessment']['action'] for row in observations}
-    if 'ENTER_NOW' in actions.values() or request_rows:
-        trace_rows, traces = _recent_source_rows(
-            data_root/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl',
-            now, time_field='created_at', tail_bytes=tail_bytes, window_sec=WINDOW_SEC)
-    else:
-        trace_rows, traces = [], dict(status='not_required_machine_nonentry', bytes_read=0, read_count=0)
-    prepared, responded, noncall, issues = set(), set(), Counter(), Counter()
-    for row in request_rows:
-        binding = row.get('continuous_reversal_request_binding') or {}
-        key = binding.get('machine_observation_sha256')
-        if key not in actions:
+        now, time_field='captured_at', tail_bytes=tail_bytes, window_sec=window_sec + 5)
+    trace_rows, traces = _recent_source_rows(
+        data_root/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl',
+        now, time_field='decision_ts', tail_bytes=tail_bytes, window_sec=window_sec + 5)
+    issues, gaps, noncall, stops = Counter(), Counter(), Counter(), Counter()
+
+    def mapping(value):
+        return value if isinstance(value, dict) else {}
+
+    def identity(row, *, native=False):
+        row = mapping(row)
+        return (str(row.get('pid' if native else 'async_producer_pid') or ''),
+                str(row.get('process_start_ticks' if native else 'async_producer_start_ticks') or ''))
+
+    def valid_identity(value):
+        return all(part.isdigit() and int(part) > 0 for part in value)
+
+    def digest(value):
+        return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+    def unique(rows, field, kind):
+        retained, conflicts = {}, set()
+        for row in rows:
+            key = row.get(field)
+            if not isinstance(key, str) or not key:
+                gaps[kind + '_identity_missing'] += 1
+                continue
+            if key in retained and retained[key] != row:
+                conflicts.add(key)
+            else:
+                retained[key] = row
+        for key in conflicts:
+            retained.pop(key, None)
+            issues[kind + '_identity_conflict'] += 1
+        return retained
+
+    cohort = {}
+    for row in observations:
+        raw_source = mapping(mapping(row.get('source')).get('exact_payload'))
+        role = row.get('evaluation_role') or raw_source.get('evaluation_role') or 'unspecified_legacy'
+        if role not in {'main_live', 'unspecified_legacy'}:
+            continue  # Probe/CF evaluations never join the Main provider funnel.
+        at = stamp(row.get('captured_at'))
+        receipt = mapping(row.get('runtime_consumption'))
+        producer = identity(receipt, native=True)
+        if (at is None or at.date() != now.date() or not 0 <= (now-at).total_seconds() <= window_sec
+                or pid_identity is not None and producer != tuple(map(str, pid_identity))):
             continue
-        if actions[key] != 'ENTER_NOW':
-            issues['reversal_provider_request_after_nonentry'] += 1
-        if binding.get('binding_status') != 'matched':
-            issues['reversal_provider_request_hash_mismatch'] += 1
-        prepared.add(key)
-    for row in trace_rows:
         key = row.get('machine_observation_sha256')
-        if key not in actions:
+        if (not digest(key) or hashlib.sha256(_json_bytes({k: v for k, v in row.items()
+                if k != 'machine_observation_sha256'})).hexdigest() != key):
+            issues['reversal_observation_hash_invalid'] += 1
             continue
-        if row.get('ai_decision_trace_id') and row.get('entry_ai_raw_risk_verdict'):
-            responded.add(key)
-        if actions[key] == 'ENTER_NOW' and not row.get('entry_ai_raw_risk_verdict'):
-            reason = row.get('entry_ai_screen_status') or row.get('ai_screen_status') or row.get('machine_contract_error')
-            if reason:
+        if key in cohort and cohort[key] != row:
+            issues['observation_identity_conflict'] += 1
+            cohort[key] = None
+        elif key not in cohort:
+            cohort[key] = row
+    cohort = {key: row for key, row in cohort.items() if row is not None}
+    producers = {identity(row.get('runtime_consumption') or {}, native=True) for row in cohort.values()}
+    if pid_identity is not None:
+        producers.add(tuple(map(str, pid_identity)))
+    producers = {value for value in producers if valid_identity(value)}
+    bundles = {row.get('bundle_sha256') for row in cohort.values()}
+    request_index = unique(request_rows, 'request_id', 'request')
+    trace_index = unique(trace_rows, 'decision_trace_id', 'trace')
+    prepared, responded, transmitted, timeouts = set(), set(), set(), set()
+    matched_requests, valid_response, valid_pass, effective_pass = set(), set(), set(), set()
+    raw_verdicts = Counter()
+    attempt_ledger = []
+    observed_trace_keys = set()
+    # Explicit old captures retain their exact observation binding. They do not
+    # gain an inferred PID, transport call or response from that preparation.
+    for request_id, row in request_index.items():
+        binding = mapping(row.get('continuous_reversal_request_binding'))
+        key = binding.get('machine_observation_sha256')
+        if key in cohort and row.get('schema') is None and binding.get('binding_status') == 'matched':
+            prepared.add(key)
+            matched_requests.add(request_id)
+            gaps['legacy_request_identity_unverified'] += 1
+            if str(cohort[key]['source']['assessment'].get('action')).upper() != 'ENTER_NOW':
+                issues['reversal_provider_request_after_nonentry'] += 1
+
+    for trace_id, row in trace_index.items():
+        key = row.get('machine_observation_sha256')
+        if key is not None and not isinstance(key, str):
+            issues['reversal_trace_observation_hash_invalid'] += 1
+            continue
+        observation = cohort.get(key)
+        rejected = mapping(row.get('continuous_reversal_rejected_claim_receipt'))
+        native = mapping(row.get('continuous_reversal_consumption'))
+        if observation is None:
+            # A pre-adjudication terminal has no fabricated machine observation.
+            rejected_identity = (str(rejected.get('process_pid') or ''), str(rejected.get('process_start_ticks') or ''))
+            at = stamp(row.get('decision_ts'))
+            if (key or row.get('source_event_stage') == 'zero_base_probe_machine_only_v1'
+                    or rejected_identity not in producers or row.get('machine_bundle_sha256') not in bundles
+                    or at is None or not 0 <= (now-at).total_seconds() <= window_sec):
+                continue
+            if _reversal_lifecycle_diagnostic(row) is None:
+                gaps['preadjudication_terminal_unresolved'] += 1
+                continue
+            attempt = row.get('evaluation_attempt_id')
+            producer = rejected_identity
+            action = None
+            stops['native_signal_invalidated_before_provider'] += 1
+        else:
+            context = mapping(observation.get('label_context'))
+            receipt = mapping(observation.get('runtime_consumption'))
+            expected_native = mapping(receipt.get('continuous_reversal'))
+            attempt, producer = context.get('evaluation_attempt_id'), identity(receipt, native=True)
+            noncall_source_guard = (not expected_native and not native
+                and row.get('provider_called') is False
+                and row.get('machine_bundle_sha256') == observation.get('bundle_sha256')
+                and str(row.get('entry_mechanistic_action')).upper()
+                    == str(observation['source']['assessment'].get('action')).upper())
+            if (row.get('schema') != 'ai_decision_trace_v1' or not attempt
+                    or row.get('evaluation_attempt_id') != attempt
+                    or not valid_identity(producer)
+                    or any(identity(row)) and identity(row) != producer
+                    or not noncall_source_guard and (identity(native, native=True) != producer
+                        or any(native.get(field) != expected_native.get(field) for field in
+                               ('family_sha256', 'bundle_sha256', 'input_sha256', 'prompt_sha256')))):
+                issues['reversal_trace_observation_binding_invalid'] += 1
+                continue
+            action = str(observation['source']['assessment'].get('action')).upper()
+            observed_trace_keys.add(key)
+        request_id = row.get('request_id')
+        if not isinstance(request_id, str):
+            request_id = None
+        request = request_index.get(request_id)
+        request_valid = False
+        if request is not None:
+            request_valid = (request.get('schema') == 'ai_decision_request_provenance_v1'
+                and request.get('endpoint') == 'analyze_target'
+                and identity(request) == identity(row) == producer
+                and bool(request.get('async_request_id'))
+                and request.get('async_request_id') == row.get('async_request_id')
+                and all(digest(request.get(field)) and request.get(field) == row.get(field)
+                        for field in ('prompt_sha256', 'request_envelope_sha256'))
+                and digest(request.get('sanitized_user_input_sha256'))
+                and request.get('sanitized_user_input_sha256') == row.get('payload_semantic_sha256')
+                and digest(native.get('input_sha256'))
+                and native.get('input_sha256') == request.get('sanitized_replay_context_sha256',
+                                                            request.get('sanitized_user_input_sha256')))
+            request_at, trace_at = stamp(request.get('captured_at')), stamp(row.get('decision_ts'))
+            observation_at = stamp(observation.get('captured_at')) if observation is not None else None
+            request_valid = request_valid and request_at is not None and trace_at is not None and (
+                request_at <= trace_at and (observation_at is None or observation_at <= request_at))
+            binding = request.get('continuous_reversal_request_binding')
+            if isinstance(binding, dict):
+                request_valid = request_valid and binding.get('binding_status') == 'matched' and binding.get('machine_observation_sha256') == key
+            if not request_valid:
+                issues['reversal_provider_request_hash_or_identity_mismatch'] += 1
+            else:
+                prepared.add(key)
+                matched_requests.add(request_id)
+                if action != 'ENTER_NOW':
+                    issues['reversal_provider_request_after_nonentry'] += 1
+        raw = row.get('entry_ai_raw_risk_verdict')
+        recognized_raw = isinstance(raw, str) and raw in {'PASS', 'CAUTION', 'VETO'}
+        response = (bool(row.get('provider_response_id'))
+                    and digest(row.get('response_sha256')) and row.get('provider_called') is True)
+        http_attempt_count = mapping(row.get('transport_timing')).get('openai_http_attempt_count')
+        transmitted_fact = row.get('provider_called') is True and (
+            response or (type(http_attempt_count) in (int, float) and http_attempt_count > 0))
+        if transmitted_fact:
+            transmitted.add(trace_id)
+            if not request_valid and not response:
+                gaps['transmission_request_unresolved'] += 1
+        if response:
+            responded.add(trace_id)
+            raw_verdicts[raw if recognized_raw else 'UNRECOGNIZED'] += 1
+            if not recognized_raw:
+                gaps['raw_response_verdict_unrecognized'] += 1
+            if not request_valid:
+                gaps['response_request_unresolved'] += 1
+            if (row.get('entry_ai_raw_fields_source') != 'decoded_provider_response'
+                    or not digest(row.get('entry_ai_raw_response_sha256'))
+                    or row.get('entry_ai_raw_fields_truncated') is not False
+                    or bool(row.get('entry_ai_raw_fields_invalid_shape'))
+                    or not isinstance(row.get('entry_ai_raw_fields_present'), dict)
+                    or not all(isinstance(row.get('entry_ai_raw_' + field), list) for field in
+                        ('risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids'))
+                    or not all(row['entry_ai_raw_fields_present'].get(field) is True for field in
+                        ('risk_verdict', 'risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids'))):
+                gaps['raw_response_evidence_arrays_unverified'] += 1
+            if row.get('entry_auxiliary_response_contract_valid') is True:
+                valid_response.add(trace_id)
+                if raw == 'PASS':
+                    valid_pass.add(trace_id)
+                    if row.get('entry_post_response_execution_valid') is True and row.get('entry_ai_screen_status') == 'pass':
+                        effective_pass.add(trace_id)
+            elif row.get('entry_auxiliary_response_contract_valid') is not False:
+                gaps['response_validation_unobservable'] += 1
+        if row.get('timeout') is True and transmitted_fact and not response:
+            timeouts.add(trace_id)
+        execution_errors = row.get('entry_ai_contract_errors')
+        execution_errors = execution_errors if isinstance(execution_errors, list) else []
+        reason = (row.get('machine_contract_error')
+                  or (row.get('reason') if str(row.get('reason')).startswith('reversal_signal_') else None)
+                  or next((error for error in execution_errors
+                           if isinstance(error, str) and error.startswith('reversal_signal_')), None)
+                  or row.get('entry_ai_screen_status'))
+        if action == 'SOURCE_INVALID':
+            stops['input_' + str(row.get('entry_source_invalid_primary_blocker') or 'source_invalid')] += 1
+        elif action == 'ENTER_NOW':
+            if row.get('timeout') is True and transmitted_fact:
+                stops['original_budget_transport_timeout' if mapping(row.get('transport_timing')).get(
+                    'openai_http_timeout_budget_exhausted') is True else 'provider_transport_timeout'] += 1
+            elif response and row.get('entry_auxiliary_response_contract_valid') is False:
+                stops['auxiliary_response_contract_invalid'] += 1
+            elif response and recognized_raw and raw in {'CAUTION', 'VETO'}:
+                stops['auxiliary_' + raw.lower()] += 1
+            elif response and raw == 'PASS' and row.get('entry_auxiliary_response_contract_valid') is True and row.get('entry_post_response_execution_valid') is False:
+                stops['native_signal_invalidated_after_valid_auxiliary_pass' if str(reason).startswith(
+                    'reversal_signal_') else 'post_response_execution_invalid'] += 1
+            elif not transmitted_fact and reason:
                 noncall[str(reason)] += 1
-    return dict(status='review_required' if issues else 'observed' if prepared or responded else 'not_observed',
-        request_prepared_count=len(prepared), raw_response_observed_count=len(responded),
-        enter_without_request_observed=sum(action == 'ENTER_NOW' and key not in prepared for key, action in actions.items()),
-        noncall_reasons=dict(noncall), issues=dict(issues), source_windows=dict(requests=requests, traces=traces),
-        provider_called_metadata_used_as_fact=False, actual_order_submitted_assessed=False)
+                stops['native_signal_invalidated_before_provider' if str(reason).startswith('reversal_signal_') else 'noncall_' + str(reason)] += 1
+        attempt_ledger.append(dict(evaluation_attempt_id=attempt, machine_observation_sha256=key,
+            producer_pid=producer[0], producer_start_ticks=producer[1], decision_trace_id=trace_id,
+            machine_bundle_sha256=(observation.get('bundle_sha256') if observation is not None
+                                   else row.get('machine_bundle_sha256')),
+            effective_venue=(mapping(observation.get('label_context')).get('effective_venue')
+                             if observation is not None else row.get('effective_venue')),
+            session_bucket=(mapping(observation.get('label_context')).get('session_bucket')
+                            if observation is not None else row.get('session_bucket')),
+            market_data_route=(mapping(observation.get('label_context')).get('market_data_route')
+                               if observation is not None else row.get('market_data_route')),
+            request_id=request_id, machine_action=action, request_prepared=request_valid,
+            transmission_attempt_observed=transmitted_fact, raw_response_observed=response,
+            raw_verdict=raw, auxiliary_response_contract_valid=row.get('entry_auxiliary_response_contract_valid'),
+            post_response_execution_valid=row.get('entry_post_response_execution_valid'),
+            effective_screen_status=row.get('entry_ai_screen_status'), timeout=row.get('timeout') is True,
+            execution_errors=[str(error)[:512] for error in execution_errors[:64]],
+            trace_decision_ts=row.get('decision_ts'), main_commit_assessed=False))
+    by_producer = {}
+    for row in attempt_ledger:
+        counts = by_producer.setdefault(row['producer_pid'] + ':' + row['producer_start_ticks'],
+            dict(trace_attempt_count=0, request_prepared_count=0, raw_response_observed_count=0,
+                 provider_transmission_attempt_count=0, provider_timeout_count=0))
+        counts['trace_attempt_count'] += 1
+        counts['request_prepared_count'] += int(row['request_prepared'])
+        counts['raw_response_observed_count'] += int(row['raw_response_observed'])
+        counts['provider_transmission_attempt_count'] += int(row['transmission_attempt_observed'])
+        counts['provider_timeout_count'] += int(row['timeout'] and row['transmission_attempt_observed'])
+    for request_id, row in request_index.items():
+        if (request_id not in matched_requests and identity(row) in producers
+                and row.get('endpoint') == 'analyze_target'):
+            gaps['request_unresolved'] += 1
+    missing_trace = len(set(cohort) - observed_trace_keys)
+    if missing_trace:
+        gaps['observation_trace_unresolved'] += missing_trace
+    partial = bool(gaps) or any(source.get('status') != 'complete' for source in (requests, traces))
+    attempt_identities = [(row['producer_pid'], row['producer_start_ticks'], row['evaluation_attempt_id'])
+                          for row in attempt_ledger]
+    if len(attempt_identities) != len(set(attempt_identities)):
+        issues['reversal_attempt_trace_conflict'] += len(attempt_identities) - len(set(attempt_identities))
+    return dict(status='review_required' if issues else 'partial_source_gap' if partial else 'observed' if cohort or prepared or responded else 'not_observed',
+        metric_role='funnel_count', decision_authority='report_only',
+        window_policy='exact_observation_cohort_pid_start_attempt_hash_with_five_second_carry_in',
+        sample_floor='none_for_counts', primary_decision_metric='exact_attempt_join_gap_count',
+        source_quality_gate='bounded_complete_source_exact_pid_attempt_and_content_hashes',
+        forbidden_uses=['order_authority', 'policy_promotion', 'missing_as_zero_ev'],
+        observation_window_seconds=window_sec, machine_observation_count=len(cohort),
+        by_producer=by_producer, exact_pid_filter=list(map(str, pid_identity)) if pid_identity is not None else None,
+        trace_attempt_count=len(set(attempt_identities)), request_prepared_count=len(matched_requests),
+        provider_transmission_attempt_count=len(transmitted), raw_response_observed_count=len(responded),
+        raw_verdict_counts=dict(raw_verdicts), auxiliary_response_contract_valid_count=len(valid_response),
+        raw_pass_count=raw_verdicts.get('PASS', 0), valid_pass_count=len(valid_pass),
+        execution_valid_pass_count=len(effective_pass), provider_timeout_count=len(timeouts),
+        enter_without_request_observed=sum(str(row['source']['assessment'].get('action')).upper() == 'ENTER_NOW' and key not in prepared for key, row in cohort.items()),
+        first_stop_counts=dict(stops), noncall_reasons=dict(noncall), issues=dict(issues),
+        exact_attempt_join_gap_count=sum(gaps.values()), source_gaps=dict(gaps),
+        source_windows=dict(requests=requests, traces=traces), attempt_ledger=attempt_ledger[-1024:],
+        provider_called_metadata_used_as_fact=False,
+        observation_provider_called_metadata_used_as_fact=False, actual_order_submitted_assessed=False)
 
 
 def _auxiliary_cost_receipt_valid(row):
@@ -1457,6 +1714,7 @@ def snapshot(events, as_of):
     identified_clocks = []
     fixed_watch_clocks = []
     fixed_watch_evidence = []
+    fixed_watch_attempts = {}
     def identity_evidence_id(event):
         return hashlib.sha256(repr((event.emitted_at, event.stage, event.stock_code,
             event.record_id, sorted(event.fields.items()))).encode()).hexdigest()
@@ -1473,6 +1731,16 @@ def snapshot(events, as_of):
             fixed_watch_evidence.append((at, identity_evidence_id(e)))
             if (now - at).total_seconds() <= 2700:
                 fixed_watch_clocks.append(at)
+                components = _machine_primary_fixed_watch_identity_components(e)
+                attempt_key = tuple(components.items())
+                attempt = fixed_watch_attempts.setdefault(attempt_key, dict(
+                    **components, first_evaluated_at=at.isoformat(),
+                    last_event_at=at.isoformat(), observed_actions=set()))
+                attempt['first_evaluated_at'] = min(attempt['first_evaluated_at'], at.isoformat())
+                attempt['last_event_at'] = max(attempt['last_event_at'], at.isoformat())
+                action = str(e.fields.get('entry_mechanistic_action') or '').upper()
+                if action:
+                    attempt['observed_actions'].add(action)
             continue
         if not fixed_watch and _machine_primary_evaluation_key(e):
             if (now - at).total_seconds() <= 2700:
@@ -1590,6 +1858,21 @@ def snapshot(events, as_of):
                     break
     return {
         "schema": SCHEMA, "as_of": now.isoformat(),
+        "evaluation_cohort": "scanner_promotions",
+        "main_machine_observation": {
+            "schema": "main_machine_cohort_observation_v1",
+            "metric_role": "funnel_count", "decision_authority": "report_only",
+            "window_policy": "loaded_exact_identity_attempts_current_45_minutes",
+            "sample_floor": "none_for_counts", "primary_decision_metric": "identified_attempt_count",
+            "source_quality_gate": "separate_exact_scanner_and_fixed_watch_identities",
+            "forbidden_uses": ["order_authority", "economic_acceptance", "whole_main_zero_from_scanner_zero"],
+            "scanner_evaluation_count": funnel['evaluation_count'],
+            "fixed_watch_evaluation_count": len(fixed_watch_attempts),
+            "all_main_identified_evaluation_count": funnel['evaluation_count'] + len(fixed_watch_attempts),
+            "coverage": "loaded_evidence_only_pid_consumption_not_assessed",
+            "fixed_watch_attempts": [{**row, 'observed_actions': sorted(row['observed_actions'])}
+                for row in list(fixed_watch_attempts.values())[-1024:]],
+        },
         "async_disposition_coverage": async_disposition_coverage(events, as_of),
         "latest_event_at": max((stamp(e.emitted_at) for e in recent), default=now - timedelta(days=1)).isoformat(),
         "auxiliary_ai_semantic_status_counts": funnel.get("auxiliary_ai_semantic_status_counts", {}),
@@ -1988,11 +2271,22 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                         generations[bundle_hash] = bundle
                     context, source = observation["label_context"], observation["source"]
                     assessment = source.get("assessment") or {}
+                    identity = (receipt.get('pid'), receipt.get('cwd'), receipt.get('process_start_ticks'))
+                    if identity not in pid_identities:
+                        try:
+                            proc = Path('/proc') / str(int(receipt['pid']))
+                            live = (str((proc/'cwd').resolve()) == receipt.get('cwd')
+                                and (proc/'stat').read_text().split(') ', 1)[1].split()[19] == receipt.get('process_start_ticks'))
+                        except (OSError, ValueError, KeyError, IndexError):
+                            live = False
+                        pid_identities[identity] = live
                     invalid = str(assessment.get("action", "")).upper() == "SOURCE_INVALID"
                     feature_guard = (assessment.get("schema") == "mechanistic_entry_required_feature_v1"
                         and assessment.get("action") == "RECHECK" and assessment.get("reason") == "required_feature_input_insufficient"
                         and (source.get("setup_evidence") or {}).get("source_quality_status") == "blocked")
                     if invalid or feature_guard:
+                        if generations[bundle_hash].get('continuous_reversal'):
+                            reversal_observations.append(observation)
                         result["source_invalid_count" if invalid else "required_feature_guard_count"] += 1
                         for blocker in (source.get("setup_evidence") or {}).get("source_quality_blockers", []):
                             result["source_invalid_blockers"][blocker] = result["source_invalid_blockers"].get(blocker, 0) + 1
@@ -2033,15 +2327,6 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                                 else 'historical_reversal_capture' if frozen.get('continuous_reversal')
                                 else 'legacy_strategy_receipt')
                     counts[contract] = counts.get(contract, 0) + 1
-                    identity = (receipt.get('pid'), receipt.get('cwd'), receipt.get('process_start_ticks'))
-                    if identity not in pid_identities:
-                        try:
-                            proc = Path('/proc') / str(int(receipt['pid']))
-                            live = (str((proc/'cwd').resolve()) == receipt.get('cwd')
-                                and (proc/'stat').read_text().split(') ', 1)[1].split()[19] == receipt.get('process_start_ticks'))
-                        except (OSError, ValueError, KeyError, IndexError):
-                            live = False
-                        pid_identities[identity] = live
                     live = pid_identities[identity]
                     counts["live_pid_receipts"] += int(live)
                 except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -2054,9 +2339,17 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
             'compressed_archive_not_current_bounded_source'
             if path.with_suffix(path.suffix + '.gz').exists() else type(exc).__name__)
     if reversal_observations:
-        lineage = _reversal_provider_lineage(data_root, now, reversal_observations, tail_bytes=tail_bytes)
+        live_identities = [identity for identity, live in pid_identities.items() if live]
+        live_pid = (live_identities[0][0], live_identities[0][2]) if len(live_identities) == 1 else None
+        lineage = _reversal_provider_lineage(data_root, now, reversal_observations,
+            tail_bytes=tail_bytes, pid_identity=live_pid)
+        lineage['live_producer_identities'] = [dict(pid=identity[0], cwd=identity[1],
+            process_start_ticks=identity[2]) for identity in live_identities]
+        lineage['current_pid_coverage'] = 'exact_live_pid' if live_pid is not None else 'unresolved_or_multiple_live_producers'
         result['reversal_provider_lineage'] = lineage
         issues.update(lineage['issues'])
+        if lineage.get('status') == 'partial_source_gap':
+            result['provider_lineage_source_status'] = 'partial_source_gap'
     result['pid_identity_read_count'] = len(pid_identities)
     result["issues"] = dict(issues)
     if issues:
@@ -2337,14 +2630,14 @@ def entry_execution_tuning_semantics(data_root, now):
 
 
 def _incomplete_semantics(semantics):
-    statuses = {'unobservable', 'partial_unobservable', 'validation_deferred'}
+    statuses = {'unobservable', 'partial_unobservable', 'partial_source_gap', 'validation_deferred'}
     sources = semantics.get('sources') or {}
     return (semantics.get('status') in statuses
             or bool(semantics.get('selection_status') or semantics.get('source_status'))
             or any((value.get('status') if isinstance(value, dict) else value)
                    not in {'complete', 'valid_empty', 'not_applicable'} for value in sources.values())
             or any(isinstance(semantics.get(key), dict) and semantics[key].get('status') in statuses
-                   for key in ('bootstrap', 'entry_split', 'pre_submit_delay')))
+                   for key in ('bootstrap', 'entry_split', 'pre_submit_delay', 'reversal_provider_lineage')))
 
 
 def _retain_unobserved_incident(result, semantics, key):
@@ -2448,6 +2741,7 @@ def evaluate(report, state, now):
               "incidents": incidents, "notification_pending": [], "scopes": {},
               "source_as_of": prior.get("source_as_of"),
               "identity_observation": {"status": "unobservable", "reason": "source_not_validated"},
+              "evaluation_cohort": "scanner_promotions",
               "last_notification_at": prior.get("last_notification_at")}
     result["economic_coverage_contract"] = {
         "metric_role": "funnel_count", "decision_authority": "report_only",
@@ -2493,6 +2787,7 @@ def evaluate(report, state, now):
         return result
     result.update(status="observing", source_as_of=as_of.isoformat())
     result["fixed_watch_identity_observation"] = source.get("fixed_watch_identity_observation") or {}
+    result['main_machine_observation'] = source.get('main_machine_observation') or {}
     # Preserve the original incident as superseded evidence, without reporting
     # alias normalization as recovery or double-counting its exact attempts.
     for old_key, old in list(incidents.items()):
@@ -2526,7 +2821,7 @@ def evaluate(report, state, now):
                 "effective_venue", "session_bucket", "policy_bundle_hash"))
             groups[scope].append(row)
     if not groups:
-        result.update(status="unobservable", blocker="no_identified_machine_evaluation")
+        result.update(status="unobservable", blocker="no_identified_scanner_machine_evaluation")
     for scope, all_rows in groups.items():
         rows = [r for r in all_rows if (now - stamp(r["first_evaluated_at"])).total_seconds() <= WINDOW_SEC]
         # Count each promotion once for scarcity, but retain exact attempts for gaps.

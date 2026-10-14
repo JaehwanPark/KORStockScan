@@ -93,6 +93,27 @@ def test_native_opportunity_namespace_unchanged_across_registry_version():
     from src.engine.scalping import reversal_operating_auxiliary as OLD
     for fixture in FIXTURES.values():assert U.opportunity(fixture['event'])==OLD.opportunity(fixture['event'])
 
+
+def test_common_pass_support_role_cannot_be_replaced_with_branch_support():
+    fixture = next(iter(FIXTURES.values()))
+    arm = U.V1.ARMS[1]
+    inp, prompt, schema = U.production_request(fixture['source'], arm, event=fixture['event'])
+    facts = inp['entry_setup_evidence_v1']['positive_facts']
+    common = next(f for f in facts if f['id'] == 'observed_machine_signal')
+    branch = next(f for f in facts if f['id'].endswith('/observed_machine_signal'))
+    assert prompt.isascii()
+    assert 'PASS must include observed_machine_signal' in schema['properties']['supporting_fact_ids']['description']
+    response = dict(schema=U.VERSION, decision_scope='COMMON_OPPORTUNITY',
+        assessed_signal_refs=[s['ref'] for s in inp['signals']], risk_verdict='PASS',
+        risk_codes=['NO_BLOCKING_RISK'], supporting_fact_ids=[branch['id']],
+        contradicting_fact_ids=[], confidence=50)
+    # Frozen historical failure remains invalid; no citation rewriting.
+    assert U.validate_response(response, inp, arm=arm) == ['union_pass_support_invalid']
+    response['supporting_fact_ids'].append(common['id'])
+    assert U.validate_response(response, inp, arm=arm) == []
+    response['supporting_fact_ids'].append(common['id'])
+    assert U.validate_response(response, inp, arm=arm) == ['union_response_citations_invalid']
+
 from src.tests.test_continuous_reversal_policy_v3 import native
 from src.tests.test_reversal_operating_policy import parent,replay,transport,authorize_initial
 

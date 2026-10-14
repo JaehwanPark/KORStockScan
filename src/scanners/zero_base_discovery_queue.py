@@ -61,6 +61,9 @@ class DiscoveryQueue:
         self.session_date = date.fromisoformat(session_date).isoformat()
         self._candidates: dict[tuple[str, str], Candidate] = {}
         self._claim_sequence = 0
+        # First observation of current dispatch eligibility. Never infer this
+        # from historical first_seen, and never carry it across process restore.
+        self._eligible_since = {}
 
     def observe(
         self,
@@ -158,6 +161,7 @@ class DiscoveryQueue:
         eligible_routes: set[str] | None = None,
         activity_claims_per_gainer: int = 3,
         residence_requirements=None,
+        deferred_active_codes: set[str] | None = None,
     ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
         if limit < 0 or min_interval_sec < 0:
@@ -168,24 +172,37 @@ class DiscoveryQueue:
             raise ValueError("invalid observation age budget")
         ready_by_cohort: dict[tuple[str, str, str], list[Candidate]] = {}
         cohort_claims: dict[tuple[str, str, str], int] = {}
+        self.claim_eligibility = dict(eligible_due_count=0, active_target_deferred_count=0,
+            stale_count=0, in_flight_count=0, retry_not_due_count=0, route_ineligible_count=0)
+        eligible_wait = []
         for candidate in self._candidates.values():
             # Activity is a discovery hint, not an entry decision. Keep one
             # bounded claim for gainers per source-rotation cycle.
             kind = "activity" if candidate.source_kind == "activity" else "gainers"
             cohort = (candidate.market, candidate.route, kind)
             cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
-            if (
-                (eligible_routes is None or candidate.route in eligible_routes)
-                and
-                candidate.next_due_epoch <= now_epoch
-                and not candidate.in_flight
-                and candidate.last_claim_epoch + min_interval_sec <= now_epoch
-                and (
-                    max_observation_age_sec is None
-                    or 0 <= now_epoch - candidate.observed_epoch <= max_observation_age_sec
-                )
-            ):
+            if candidate.in_flight:
+                self.claim_eligibility['in_flight_count'] += 1
+            elif eligible_routes is not None and candidate.route not in eligible_routes:
+                self.claim_eligibility['route_ineligible_count'] += 1
+            elif max_observation_age_sec is not None and not (
+                    0 <= now_epoch - candidate.observed_epoch <= max_observation_age_sec):
+                self.claim_eligibility['stale_count'] += 1
+            elif candidate.next_due_epoch > now_epoch or candidate.last_claim_epoch + min_interval_sec > now_epoch:
+                self.claim_eligibility['retry_not_due_count'] += 1
+            elif candidate.code in (deferred_active_codes or ()):
+                self.claim_eligibility['active_target_deferred_count'] += 1
+            else:
+                self.claim_eligibility['eligible_due_count'] += 1
+                key = (candidate.code, candidate.route)
+                first_eligible = self._eligible_since.setdefault(key, now_epoch)
+                eligible_wait.append(max(0.0, now_epoch-first_eligible))
                 ready_by_cohort.setdefault(cohort, []).append(candidate)
+                continue
+            self._eligible_since.pop((candidate.code, candidate.route), None)
+        self.claim_eligibility['eligible_due_wait_max_seconds'] = max(eligible_wait, default=None)
+        self.claim_eligibility['wait_basis'] = 'observed_fresh_due_at_dispatch'
+        self.claim_eligibility['wait_continuity'] = 'dispatch_samples_only'
         for cohort_ready in ready_by_cohort.values():
             cohort_ready.sort(key=lambda row: (
                 row.last_claim_epoch,
@@ -250,6 +267,7 @@ class DiscoveryQueue:
             long_used += int(residence > 60)
             cohort_claims[cohort] += 1
         for candidate in ready:
+            self._eligible_since.pop((candidate.code, candidate.route), None)
             candidate.last_claim_epoch = now_epoch
             candidate.claim_count += 1
             candidate.in_flight = True
@@ -260,6 +278,13 @@ class DiscoveryQueue:
             candidate.lease_phase = 'observing'
             candidate.handoff_id = uuid.uuid4().hex
         self._claim_sequence += len(ready)
+        checked = [r.get('minimum_seconds') for r in requirements.values()]
+        self.claim_eligibility.update(
+            residence_requirement_checked_count=len(checked),
+            short_capable_checked_count=sum(type(v) in (float, int) and isfinite(v) and 0 <= v < 60 for v in checked),
+            long_required_checked_count=sum(type(v) in (float, int) and isfinite(v) and 60 <= v < 150 for v in checked),
+            requirement_unobservable_checked_count=sum(type(v) not in (float, int) or not isfinite(v) or v < 0 for v in checked),
+        )
         claims = [
             {
                 "code": row.code,

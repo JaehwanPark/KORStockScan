@@ -17,6 +17,87 @@ from src.engine.scalping.scanner_async_eval import (
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 
 
+def test_exact_fixed_watch_completion_can_be_consumed_in_current_main_pass(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as M
+    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+    dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now=time.time()
+    generation=M.FixedWatchGeneration('036930', 'SOR', 'fixed:g', 'source', now)
+    context=ScannerAsyncEvalContext.create(generation=generation, cache_key='original',
+        submitted_epoch=now, deadline_epoch=now+2., stock_snapshot={'status':'WATCHING'},
+        ws_snapshot={'curr':1000}, state_version='WATCHING:0:0')
+    try:
+        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
+            prepare=lambda ctx:{'ready':True}, evaluate=lambda ctx,prepared:{'action':'WAIT'})).accepted
+        deadline=time.time()+1.
+        while not coordinator.has_undrained_result() and time.time()<deadline:
+            time.sleep(.005)
+        assert coordinator.has_undrained_result()
+        keys=coordinator.fixed_watch_ready_requests()
+        assert list(keys)==[('fixed:g','original')]
+        assert keys['fixed:g','original']>0
+        assert not coordinator.has_undrained_result(direct_fixed_requests={('fixed:g','original')})
+        assert coordinator.has_undrained_result(direct_fixed_requests={('fixed:g','different')})
+        # Notification drain does not destroy the retained original identity.
+        result=coordinator.drain_completed()[0]
+        assert coordinator.fixed_watch_ready_requests()==keys
+        assert result.deadline_epoch==context.deadline_epoch
+        assert result.ai_payload['entry_local_stage_clocks']['async_evaluation_completed_perf'] <= result.coordinator_ready_perf
+        assert coordinator.take_completed(generation_id='fixed:g',cache_key='original') is result
+        assert not coordinator.fixed_watch_ready_requests()
+        assert not coordinator.has_undrained_result()
+    finally:
+        coordinator.shutdown()
+
+
+def test_scanner_completion_still_requires_scheduler_drain(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as M
+    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+    dispatcher=HotPathAIDispatcher(loaded_key_count=1)
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now=time.time()
+    context=ScannerAsyncEvalContext.create(generation=_generation(),cache_key='scanner',
+        submitted_epoch=now,deadline_epoch=now+2.,stock_snapshot={'status':'WATCHING'},
+        ws_snapshot={'curr':1000},state_version='WATCHING:0:0')
+    try:
+        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
+            prepare=lambda ctx:{},evaluate=lambda ctx,prepared:{'action':'WAIT'})).accepted
+        deadline=time.time()+1.
+        while not coordinator.has_undrained_result() and time.time()<deadline:
+            time.sleep(.005)
+        assert coordinator.has_undrained_result(direct_fixed_requests={('unused','scanner')})
+        assert coordinator.fixed_watch_ready_requests()=={}
+    finally:
+        coordinator.shutdown()
+
+
+def test_coordinator_ready_clock_is_stamped_only_at_locked_publication(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as M
+    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    now=time.time()
+    context=ScannerAsyncEvalContext.create(generation=_generation(),cache_key='publish',
+        submitted_epoch=now,deadline_epoch=now+2.,stock_snapshot={'status':'WATCHING'},
+        ws_snapshot={},state_version='WATCHING:0:0')
+    request=ScannerAsyncEvalRequest(context=context,prepare=lambda ctx:{},evaluate=lambda ctx,p:{})
+    coordinator._requests[context.request_id]=request
+    calls=[]
+    original_replace=M.replace
+    def recorded_replace(result, **fields):
+        calls.append(coordinator._lock._is_owned())
+        return original_replace(result, **fields)
+    monkeypatch.setattr(M, 'replace', recorded_replace)
+    try:
+        coordinator._finish(request,status='completed',preparation_started_epoch=now,
+            preparation_completed_epoch=now,completed_epoch=now,observation_only=False)
+        assert calls==[True]
+        assert coordinator.peek_completed(generation_id=context.generation.generation_id,
+            cache_key='publish').coordinator_ready_perf>0
+    finally:
+        coordinator.shutdown()
+
+
 def _generation(*, promotion_id="PROMO-1", revision=1, venue="KRX"):
     return ScannerGeneration(
         code="005930",

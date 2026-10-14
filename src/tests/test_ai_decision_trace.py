@@ -3047,3 +3047,46 @@ def test_valid_provider_reply_and_invalid_execution_remain_separate_in_trace(mon
     for key, value in fields.items():
         assert stored[key] == pending[key] == value
     assert stored['action'] == 'WAIT' and stored['entry_ai_screen_pass'] is False
+
+
+def test_raw_union_projection_keeps_all_provided_fact_refs_without_validated_fallback(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    raw_support=[f'branch-{index}/observed_machine_signal' for index in range(24)]
+    present={k:True for k in ('risk_verdict','risk_codes','supporting_fact_ids','contradicting_fact_ids','confidence')}
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='union-full-raw',action='WAIT',score=0,
+        entry_ai_screen_status='response_invalid',entry_ai_risk_codes=[],
+        entry_ai_raw_risk_verdict='PASS',entry_ai_raw_risk_codes=['NO_BLOCKING_RISK'],
+        entry_ai_raw_supporting_fact_ids=raw_support,entry_ai_raw_contradicting_fact_ids=[],
+        entry_ai_raw_confidence=72,entry_ai_raw_fields_present=present,
+        entry_ai_raw_fields_source='decoded_provider_response',entry_ai_raw_fields_truncated=False,
+        entry_ai_raw_response_sha256='a'*64,entry_auxiliary_response_contract_valid=False,
+        entry_auxiliary_response_contract_errors=['union_pass_support_invalid'],entry_post_response_execution_valid=False),
+        prompt_type='scalping_entry',prompt_version='continuous_reversal_union_auxiliary_v3',
+        result_source='live',provider_called=True)
+    stored=_rows(trace._trace_path(trace._date_text()))[0]
+    assert stored['entry_ai_raw_supporting_fact_ids']==raw_support
+    assert stored['entry_ai_raw_risk_codes']==['NO_BLOCKING_RISK']
+    assert stored['entry_ai_risk_codes']==[]
+    assert stored['entry_ai_raw_fields_present']==present
+    assert stored['entry_ai_raw_fields_truncated'] is False
+    assert stored['entry_ai_raw_response_sha256']=='a'*64
+    assert _rows(trace._outcome_path(trace._date_text()))[0]['entry_ai_raw_fields_present']==present
+
+
+def test_raw_union_projection_marks_missing_truncated_and_redacted_fields(monkeypatch,tmp_path):
+    _enable(monkeypatch,tmp_path)
+    secret='sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='union-raw-bounded',action='WAIT',score=0,
+        entry_ai_raw_supporting_fact_ids=[secret]+['x'*600]*70,
+        entry_ai_risk_codes=['validated-must-not-be-reconstructed']),
+        prompt_type='scalping_entry',prompt_version='continuous_reversal_union_auxiliary_v3',
+        result_source='live',provider_called=True)
+    stored=_rows(trace._trace_path(trace._date_text()))[0]
+    assert len(stored['entry_ai_raw_supporting_fact_ids'])==64
+    assert max(map(len,stored['entry_ai_raw_supporting_fact_ids']))==512
+    assert secret not in json.dumps(stored)
+    assert stored['entry_ai_raw_fields_truncated'] is True
+    assert stored['entry_ai_raw_fields_present']['risk_codes'] is False
+    assert stored['entry_ai_raw_risk_codes']==[]
+    assert stored['entry_ai_raw_response_sha256'] is None
+    assert stored['trace_storage_redacted'] is True

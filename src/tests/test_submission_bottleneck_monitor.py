@@ -1440,8 +1440,187 @@ def test_reversal_request_preparation_is_not_provider_execution(tmp_path, monkey
     assert result['request_prepared_count'] == 1 and result['raw_response_observed_count'] == 0
     assert result['provider_called_metadata_used_as_fact'] is False
     observation['source']['assessment']['action'] = 'BLOCK'
+    observation['machine_observation_sha256'] = hashlib.sha256(
+        __import__('src.engine.scalping.ai_decision_trace', fromlist=['_json_bytes'])._json_bytes(
+            {k: v for k, v in observation.items() if k != 'machine_observation_sha256'})).hexdigest()
+    prepared = json.loads(path.read_text())
+    prepared['continuous_reversal_request_binding']['machine_observation_sha256'] = observation['machine_observation_sha256']
+    path.write_text(json.dumps(prepared) + '\n')
     result = monitor._reversal_provider_lineage(tmp_path, now, [observation], tail_bytes=8192)
     assert result['issues'] == {'reversal_provider_request_after_nonentry': 1}
+
+
+def _current_provider_lineage_fixture(tmp_path, *, verdicts=('CAUTION', 'PASS', 'PASS', None)):
+    """Use actual v1 producer fields; no absent legacy request binding is invented."""
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    now = datetime(2026, 10, 14, 11, 17, tzinfo=monitor.KST)
+    observations, requests, traces = [], [], []
+    for index, verdict in enumerate(verdicts):
+        at = now - timedelta(seconds=100-index*10)
+        native = dict(pid=123, process_start_ticks='456', family_sha256='f'*64,
+            bundle_sha256='b'*64, input_sha256=f'{index+1:064x}', prompt_sha256='1'*64)
+        observation = dict(schema='mechanistic_entry_observation_v1', captured_at=at.isoformat(),
+            bundle_sha256='b'*64, runtime_consumption=dict(pid=123, process_start_ticks='456', continuous_reversal=native),
+            label_context=dict(evaluation_attempt_id=f'attempt-{index}'),
+            source=dict(assessment=dict(action='ENTER_NOW')))
+        observation['machine_observation_sha256'] = hashlib.sha256(_json_bytes(observation)).hexdigest()
+        observations.append(observation)
+        # Final provider prompt bytes differ from the verified logical prompt.
+        request = dict(schema='ai_decision_request_provenance_v1', captured_at=(at+timedelta(milliseconds=200)).isoformat(),
+            request_id=f'request-{index}', endpoint='analyze_target', async_request_id=f'async-{index}',
+            async_producer_pid=123, async_producer_start_ticks='456', prompt_sha256='2'*64,
+            request_envelope_sha256=f'{index+10:064x}', payload_sha256=native['input_sha256'],
+            sanitized_user_input_sha256=native['input_sha256'], sanitized_replay_context_sha256=native['input_sha256'])
+        requests.append(request)
+        trace = dict(schema='ai_decision_trace_v1', decision_ts=(at+timedelta(seconds=2)).isoformat(),
+            decision_trace_id=request['request_id'], request_id=request['request_id'],
+            evaluation_attempt_id=f'attempt-{index}', machine_observation_sha256=observation['machine_observation_sha256'],
+            continuous_reversal_consumption=native, async_request_id=request['async_request_id'],
+            async_producer_pid=123, async_producer_start_ticks='456', prompt_sha256=request['prompt_sha256'],
+            request_envelope_sha256=request['request_envelope_sha256'],
+            payload_sha256='9'*64, payload_semantic_sha256=request['sanitized_user_input_sha256'],
+            provider_called=True, provider_response_id=f'response-{index}' if verdict else None,
+            response_sha256='a'*64, entry_ai_raw_risk_verdict=verdict,
+            entry_auxiliary_response_contract_valid=index < 2 if verdict else None,
+            entry_post_response_execution_valid=index == 0,
+            entry_ai_screen_status='caution' if index == 0 else 'response_invalid' if verdict else 'not_evaluated_transport',
+            timeout=verdict is None, transport_timing={'openai_http_attempt_count': 1,
+                'openai_http_timeout_budget_exhausted': verdict is None},
+            entry_ai_contract_errors=['reversal_signal_path_changed'] if index==1 else [],
+            entry_ai_raw_fields_present={k: True for k in ('risk_verdict', 'risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids')},
+            entry_ai_raw_fields_truncated=False, entry_ai_raw_fields_source='decoded_provider_response',
+            entry_ai_raw_risk_codes=['NO_BLOCKING_RISK'] if verdict=='PASS' else ['EARLY_SIGNAL_FRAGILE'],
+            entry_ai_raw_supporting_fact_ids=['observed_machine_signal'], entry_ai_raw_contradicting_fact_ids=[],
+            entry_ai_raw_response_sha256='d'*64)
+        traces.append(trace)
+    def write(request_values=requests, trace_values=traces):
+        for kind, values in (('requests', request_values), ('trace', trace_values)):
+            path=tmp_path/f'ai_decision_{kind}'/f'ai_decision_{kind}_{now.date()}.jsonl'
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(''.join(json.dumps(row)+'\n' for row in values))
+    write()
+    return now, observations, requests, traces, write
+
+
+def test_current_provider_schema_counts_raw_valid_execution_and_http_timeout_separately(tmp_path):
+    now, observations, requests, traces, _ = _current_provider_lineage_fixture(tmp_path)
+    result = monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=16384)
+    assert result['status'] == 'observed'
+    assert result['request_prepared_count'] == result['provider_transmission_attempt_count'] == 4
+    assert result['raw_response_observed_count'] == 3
+    assert result['raw_verdict_counts'] == {'CAUTION': 1, 'PASS': 2}
+    assert result['raw_pass_count'] == 2 and result['valid_pass_count'] == 1
+    assert result['execution_valid_pass_count'] == 0 and result['provider_timeout_count'] == 1
+    assert result['first_stop_counts'] == {'auxiliary_caution': 1,
+        'native_signal_invalidated_after_valid_auxiliary_pass': 1,
+        'auxiliary_response_contract_invalid': 1, 'original_budget_transport_timeout': 1}
+    assert result['exact_attempt_join_gap_count'] == 0 and result['issues'] == {}
+    assert all(row['main_commit_assessed'] is False for row in result['attempt_ledger'])
+
+
+@pytest.mark.parametrize('field,value', [('async_producer_pid',999),('async_producer_start_ticks','789'),
+    ('async_request_id','different'),('request_envelope_sha256','e'*64),('prompt_sha256','e'*64),
+    ('sanitized_user_input_sha256','e'*64),('sanitized_replay_context_sha256','e'*64)])
+def test_provider_lineage_never_joins_symbol_or_time_when_exact_request_binding_differs(tmp_path, field, value):
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    requests[0][field] = value
+    write()
+    result = monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=8192)
+    assert result['request_prepared_count'] == 0
+    assert result['raw_response_observed_count'] == 1
+    assert result['issues']['reversal_provider_request_hash_or_identity_mismatch'] == 1
+    assert result['source_gaps']['response_request_unresolved'] == 1
+
+
+def test_provider_lineage_request_only_is_unresolved_and_partial_without_fabricated_timeout(tmp_path):
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=(None,))
+    write(trace_values=[])
+    result = monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=8192)
+    assert result['status'] == 'partial_source_gap'
+    assert result['source_gaps'] == {'request_unresolved': 1, 'observation_trace_unresolved': 1}
+    assert result['provider_transmission_attempt_count'] == result['provider_timeout_count'] == 0
+    assert monitor._incomplete_semantics({'status':'observed_receipts_match','reversal_provider_lineage':result})
+
+
+def test_provider_lineage_deduplicates_identical_rows_but_rejects_conflicting_trace_identity(tmp_path):
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    write(request_values=requests*2, trace_values=traces*2)
+    assert monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=8192)['raw_response_observed_count'] == 1
+    write(trace_values=[traces[0], dict(traces[0], response_sha256='e'*64)])
+    result = monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=8192)
+    assert result['raw_response_observed_count'] == 0
+    assert result['issues'] == {'trace_identity_conflict': 1}
+
+
+def test_provider_lineage_preserves_partial_tail_and_excludes_foreign_date_or_pid(tmp_path):
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    foreign = dict(traces[0], decision_trace_id='foreign', decision_ts=(now-timedelta(days=1)).isoformat())
+    write(trace_values=[foreign, traces[0]])
+    path=tmp_path/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl'
+    with path.open('ab') as stream:
+        stream.write(b'{"decision_ts":')
+    result = monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=8192, pid_identity=(123,'456'))
+    assert result['raw_response_observed_count'] == 1
+    assert result['status'] == 'partial_source_gap'
+    assert result['source_windows']['traces']['incomplete_last_line'] is True
+    assert monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=8192,
+        pid_identity=(999,'456'))['raw_response_observed_count'] == 0
+
+
+def test_provider_lineage_future_trace_leaves_carry_out_unresolved(tmp_path):
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    traces[0]['decision_ts']=(now+timedelta(milliseconds=1)).isoformat()
+    write()
+    result=monitor._reversal_provider_lineage(tmp_path,now,observations,tail_bytes=8192)
+    assert result['raw_response_observed_count']==0
+    assert result['source_gaps']=={'request_unresolved':1,'observation_trace_unresolved':1}
+    assert result['status']=='partial_source_gap'
+
+
+def test_raw_response_received_with_malformed_verdict_remains_a_received_response(tmp_path):
+    now,observations,requests,traces,write=_current_provider_lineage_fixture(tmp_path,verdicts=('PASS',))
+    traces[0].update(entry_ai_raw_risk_verdict=['malformed'],entry_auxiliary_response_contract_valid=False)
+    write()
+    result=monitor._reversal_provider_lineage(tmp_path,now,observations,tail_bytes=8192)
+    assert result['raw_response_observed_count']==1
+    assert result['raw_verdict_counts']=={'UNRECOGNIZED':1}
+    assert result['valid_pass_count']==0
+    assert result['source_gaps']=={'raw_response_verdict_unrecognized':1}
+
+
+def test_bounded_reader_missing_clock_and_rotation_cannot_publish_complete_zero(tmp_path,monkeypatch):
+    from pathlib import Path
+    path=tmp_path/'source.jsonl'
+    path.write_text(json.dumps({'schema':'unexpected'})+'\n')
+    rows,source=monitor._recent_source_rows(path,monitor.stamp(START),time_field='decision_ts')
+    assert rows==[] and source['status']=='partial' and source['missing_timestamp_rows']==1
+    path.write_text(json.dumps({'decision_ts':monitor.stamp(START).isoformat()})+'\n')
+    replacement=tmp_path/'rotated.jsonl'
+    replacement.write_bytes(path.read_bytes())
+    original_stat=Path.stat
+    def rotate_after_read(candidate,*args,**kwargs):
+        if candidate==path and replacement.exists():
+            replacement.replace(path)
+        return original_stat(candidate,*args,**kwargs)
+    monkeypatch.setattr(Path,'stat',rotate_after_read)
+    rows,source=monitor._recent_source_rows(path,monitor.stamp(START),time_field='decision_ts')
+    assert rows==[] and source['status']=='unobservable'
+    assert source['reason']=='source_generation_changed'
+
+
+def test_fixed_watch_and_scanner_counts_have_explicit_cohort_without_changing_scarcity_denominator():
+    generation=hashlib.sha256(b'2026-09-21|005930|nxt_premarket|nxt_only').hexdigest()
+    fixed=event(action='BLOCK',screen='not_requested_machine_nonentry',scanner_promotion_id='None',
+        watch_origin='MAIN_FIXED_WATCH',watch_admission_id='FIXED-2026-09-21-005930-nxt_premarket-nxt_only-abcdef123456',
+        watch_generation_id=generation)
+    source=monitor.snapshot([fixed, fixed],START)
+    counts=source['main_machine_observation']
+    assert counts['scanner_evaluation_count']==0 and counts['fixed_watch_evaluation_count']==1
+    assert counts['all_main_identified_evaluation_count']==1
+    observed=monitor.evaluate({'target_date':START.date().isoformat(),'dry_run':False,'submission_monitor':source},{},START)
+    assert observed['evaluation_cohort']=='scanner_promotions'
+    assert observed['blocker']=='no_identified_scanner_machine_evaluation'
+    assert observed['main_machine_observation']==counts
 
 
 def test_compressed_source_never_becomes_zero_complete_window(tmp_path):

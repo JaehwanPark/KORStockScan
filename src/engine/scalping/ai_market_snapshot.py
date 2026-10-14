@@ -7,8 +7,10 @@ bypass deterministic trading guards.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import math
 import os
 import threading
 import time
@@ -55,6 +57,7 @@ _PROGRAM_FRESH_MS = 60_000.0
 # of its lifetime.  Keep one full interval plus a bounded 30-second delivery
 # allowance; the candle producer's own structural quality gate remains active.
 _CANDLE_FRESH_MS = 90_000.0
+COMPLETED_CANDLE_TIMING_SCHEMA = "entry_completed_candle_timing_v1"
 _FUTURE_TOLERANCE_MS = 1000.0
 _POSITION_FRESH_SEC = 60.0
 _PROCESS_STARTED_AT = time.time()
@@ -152,6 +155,66 @@ def _item_suffix(value: Any) -> str:
 def _mapping(source: dict[str, Any], key: str) -> dict[str, Any]:
     value = source.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def completed_candle_timing_validation(
+    context: dict[str, Any], ws: dict[str, Any], *, now_epoch: float,
+    session: str,
+) -> tuple[float | None, list[str]]:
+    """Validate the reduced entry receipt against the original source clocks.
+
+    The latest bar must close at the current completed cutoff. Receipt reads,
+    preparation and copies cannot renew either that cutoff or source freshness.
+    Callers outside initial entry retain their existing bar-open age contract.
+    """
+    receipt = context.get("completed_candle_timing")
+    if not isinstance(receipt, dict):
+        return None, ["candle_completed_timing_missing"]
+    body = {key: value for key, value in receipt.items() if key != "sha256"}
+    try:
+        fingerprint = hashlib.sha256(json.dumps(
+            body, sort_keys=True, ensure_ascii=True, separators=(",", ":"),
+            allow_nan=False,
+        ).encode()).hexdigest()
+    except (TypeError, ValueError):
+        return None, ["candle_completed_timing_invalid"]
+    if (
+        receipt.get("schema") != COMPLETED_CANDLE_TIMING_SCHEMA
+        or receipt.get("sha256") != fingerprint
+        or receipt.get("status") != "validated"
+        or receipt.get("time_basis") != "provider_bar_open_kst"
+        or receipt.get("interval_seconds") != 60
+    ):
+        return None, ["candle_completed_timing_invalid"]
+    clocks = [receipt.get(key) for key in (
+        "bar_open_epoch", "bar_close_epoch", "completed_cutoff_epoch",
+        "original_source_verified_epoch", "prepared_at_epoch",
+    )]
+    if any(type(value) not in (int, float) or not math.isfinite(value)
+           for value in clocks):
+        return None, ["candle_completed_clock_invalid"]
+    opened, closed, cutoff, verified, prepared = clocks
+    current_cutoff = int(now_epoch // 60) * 60
+    if opened % 60 or closed != opened + 60 or closed != cutoff:
+        return None, ["candle_completed_cutoff_invalid"]
+    if cutoff != current_cutoff:
+        return None, ["candle_latest_completed_missing"]
+    if not closed <= verified <= prepared <= now_epoch:
+        return None, ["candle_completed_clock_invalid"]
+    if (now_epoch - verified) * 1000 > _CANDLE_FRESH_MS:
+        return None, ["candle_completed_source_stale"]
+    binding = receipt.get("route_binding")
+    if (
+        not isinstance(binding, dict)
+        or binding.get("request_code") != context.get("request_code")
+        or binding.get("session") != session
+        or type(binding.get("transport_epoch")) is not int
+        or binding["transport_epoch"] <= 0
+        or type(ws.get("market_data_transport_epoch")) is not int
+        or binding["transport_epoch"] != ws.get("market_data_transport_epoch")
+    ):
+        return None, ["candle_completed_route_or_epoch_invalid"]
+    return closed, []
 
 
 def publish_broker_account_snapshot(
@@ -1504,6 +1567,16 @@ def build_ai_market_snapshot(
         if candle_age_sec is not None and candle_age_sec >= 0
         else None
     )
+    completed_timing_blockers = []
+    completed_timing = None
+    if (
+        stage_value in {"entry_context", "entry_screen"}
+        and candle_ctx.get("decision_input_profile") == "reduced_completed_v1"
+    ):
+        candle_epoch, completed_timing_blockers = completed_candle_timing_validation(
+            candle_ctx, ws, now_epoch=now_epoch, session=session_bucket,
+        )
+        completed_timing = copy.deepcopy(candle_ctx.get("completed_candle_timing"))
     broker_snapshot_at = _epoch(position_ctx.get("broker_snapshot_at"))
     if broker_snapshot_at is not None:
         broker_age_sec = now_epoch - broker_snapshot_at
@@ -1671,6 +1744,8 @@ def build_ai_market_snapshot(
                     ),
                     "source_quality_blockers": candle_quality.get("blockers", []),
                     "request_route_binding": candle_quality.get("request_route_binding"),
+                    **({"completed_candle_timing": completed_timing}
+                       if completed_timing is not None else {}),
                 }
                 if candle_ctx
                 else None
@@ -1790,6 +1865,8 @@ def build_ai_market_snapshot(
         and candle_quality.get("status") != "fresh_consistent"
     ):
         blockers.append("candle_source_quality")
+    if "candle" in required_sources:
+        blockers.extend(completed_timing_blockers)
     position_reconciled = bool(
         broker_qty is not None
         and broker_age_sec is not None
@@ -2128,7 +2205,9 @@ def ai_market_snapshot_log_fields(
                 "freshness_limit_ms",
                 "market_route",
             )
-        }
+        } | ({"completed_candle_timing": row["value"]["completed_candle_timing"]}
+             if isinstance(row.get("value"), dict)
+             and isinstance(row["value"].get("completed_candle_timing"), dict) else {})
         for name, row in (snapshot.get("sources") or {}).items()
         if isinstance(row, dict)
     }

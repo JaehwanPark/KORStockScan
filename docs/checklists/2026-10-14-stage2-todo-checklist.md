@@ -130,12 +130,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 10/14 승인 구현의 자연 수용 인계
 
 - [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
-  - Source: [보조 회로·제출 보완계획](../proposals/main-auxiliary-circuit-recovery-and-submit-receipt-remediation-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md).
+  - Source: [보조 회로·제출 보완계획](../proposals/main-auxiliary-circuit-recovery-and-submit-receipt-remediation-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 제출 병목 개선계획 B0/B2/B3](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
   - Acceptance: 실제 새 PID/cwd/start ticks·bundle/registry 소비, 같은 시장명 비교의 receipt→revision→sizing 연결, 원 native5초·단일 recovery lease·공통 인증/unknown fail-closed·보호 exit 독립성을 확인한다. 회로가 자연히 열리지 않으면 HALF_OPEN 성공을 주장하지 않고 pending으로 남긴다. PASS와 intent/send/fill/terminal을 분리한다.
   - History: 10/12 계획의 P0-A/B/P1 새 결함만 구현 범위다. 기존 완료 native/readiness/auth owner 전체를 다시 열지 않는다. 기동 준비·배포 수용은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다.
 
 - [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
-  - Source: [잔여 병목·패턴 보완계획](../proposals/main-post-readiness-residual-bottleneck-and-unidentified-pattern-research-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md).
+  - Source: [잔여 병목·패턴 보완계획](../proposals/main-post-readiness-residual-bottleneck-and-unidentified-pattern-research-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 비고정 관측 개선계획 B0/B4](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
   - Acceptance: 슬롯5/long2·60/150초·원 lease deadline 보존, mixed branch 긴 관측 순환, exact item/route/epoch/sequence의 0D count·중복/신원 결손 분리, Main 편입 첫 실패와 capture/lease/record/PID/start 연결을 확인한다. 등록6정의/4scope의 registry·native root·OR 한 기회 소비를 실제 대상에서 확인하며 신호 미발생은 pending이다. PRE NXT와 AFTER SOR 범위를 REGULAR로 복사하지 않는다.
   - History: 10/12 완료 owner의 R1/R2/R4 새 결함 범위와 지정 등록의 자연 수용만 전달한다. 과거 원천의 route/count·미확정 손익을 소급 보충하지 않고 새 경제성/미래 날짜 gate를 추가하지 않는다.
 
@@ -155,3 +155,18 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 기존 `DirectFamilyPreopenPolicyHandoff`는 명시적 transition digest session의 기본 full 경로·원 정책/selector/PID 독립 검사를 유지한다. 후속 사용자 “코드리뷰 후 수정보완을 반복하고 배포 및 메인봇 기동하라” 승인으로 검증된 릴리스 배포와 Main 기동을 수행한다. 선택5fb4c0a33은 미기동 배치이며 마지막 실제 소비 릴리스01d9fefa4/PID3854164의 native 정지 인계 증거를 검증한다. 기존07:35~08:15 및08:00/08:05/08:10 창은 새 구현의 수용 일정이 아니다. 새 기동·배포가 수행될 때 native source/code handoff와 실제 successor receipt를 따로 검증한다.
 - 기존 `AuxiliaryCircuitRecoveryRepair1012`는 실제 정상 attempt가 생긴 뒤 원5초 deadline·local 지연·offered/timeout/censored·필수 guard를 비교한다. Main 정지/자연 표본 부재는 pending이며 구현·단위시험 통과로 닫지 않는다.
 - 이 인계는 격리 candidate의 checklist 변경이며 승인된 배포의 snapshot/CAS 절차가 공유 문서 publication을 소유한다. 현재 공유 checklist의 약세 연구 배포 이력을 함께 보존한다. 원 Acceptance/History와 stable ID를 유지한다.
+
+### 10/14 비고정 관측·제출 병목 개선계획 인계
+
+- Source: [개선계획 B0–B4](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md). 10:33:50~11:17:00의 ff32b99b3/PID53125 근거로 작성한 계획이며 구현·배포·자연 수용 완료를 뜻하지 않는다. 기존 OPEN ID·Due/Slot/TimeWindow·Acceptance/History와 AUTO 봉인 영역을 유지한다.
+- `AuxiliaryCircuitRecoveryRepair1012`의 추가 수용: B0의 exact request/raw response/validated PASS/Main terminal 대사, B2의 공통·분기 fact 계약 및 원 응답 보존, B3의 원5초·기존 NS5/R2b 지연 목표를 확인한다. 원12시도·4호출·3응답·1timeout은 고정 창의 회귀 기준이며 미래 자연 분모로 재사용하지 않는다.
+- `NonfixedDispatchReadinessReview1012`의 추가 수용: B4의 기존 target 중복 defer·해제 후 복귀, fresh 적격 대기와 PID carry-over 분리,5/long2·60/150초·mixed branch/market/source 순환·단일 lease/ACK를 확인한다. 원32관측의 no-pattern22와 source gap10을 보존하고 conflict40을 물리 관측40으로 계산하지 않는다. 비고정 편입 표본 부재는 pending이다.
+- `DirectFamilySourceRepairMainMechanisticEntry`는 B1 완성봉 시작/종료·원천 시각·reduced/strict 소비 계약 수리를 기존 source owner로 받는다. 현재 POSTCLOSE 창은 장중 수동 실행 권한이 아니다. 실제 stale/quote·holding/custody guard와 기존 CR7 입력 감축을 보존하며, 새로운 수리의 코드 검증·발행·자연 수용을 별도 기록한다.
+- `DirectFamilyPreopenPolicyHandoff`는 후속 허용된 적용 시 affected code/registry/prompt/schema pin·원 policy 날짜·준비·PID 소비 및 최종 checklist generation 영향을 검증한다. 이 문서 수정으로 기존 prepared/strict receipt를 다시 PASS라고 주장하거나 보고 재생성·재기동을 실행하지 않는다. 실제 검증 슬롯은 승인된 적용 이후로 잡고, 문서 계획은 runtime 권한을 추가하지 않는다.
+
+### 10/14 B0–B4 승인 구현·배포 인계
+
+- 사용자 후속 “계획을 구현하고 코드리뷰 후 수정보완 완료시 배포 및 재기동 승인”은 이 B0–B4 구현과 기존 owner의 sealed contract-repair 발행·ordered Main 재기동에 적용한다. [구현 리뷰](../audits/main-nonfixed-submit-bottleneck-implementation-review-2026-10-14.md)가 코드·독립 리뷰·표적 검증을 기록하며, 배포 결과는 `data/report/main_nonfixed_submit_deployment/2026-10-14/deployment-result.json`과 native transition receipt로 구분한다.
+- 기존 `DirectFamilyPreopenPolicyHandoff`는 selected commit/PID/start/cwd·원10/13 source/publication 및10/14 effective date·원 policy/PREOPEN/env/manifest hash·native code handoff·별도 auxiliary manifest/registry generation을 대사한다. shared checklist만 과거 frozen bytes와 다르면 두 버전을 보존하고 exact sealed incumbent 문서만 기존 release-set/detector/Sentinel lock 안에서 predecessor 검증에 사용한다. 다른 frozen mismatch는 중단한다. graceful drain 후 candidate 문서를 발행하며 선택 이전 실패에는 byte CAS로 편집본을 복구한다.
+- 기존 `AuxiliaryCircuitRecoveryRepair1012`는 원 request/PID/hash·raw/contract-valid/executable response를 분리하고 worker 완료→coordinator ready→Main guard를 함께 관측한다. 고정5/비고정5·보호 위치의 구조 fixture 통과와 helper 추가 비용은 실제 Main 성능 개선으로 보고하지 않는다. 원5초와 필수 guard는 유지한다.
+- 기존 `NonfixedDispatchReadinessReview1012`는 실제 배포 이후 정규5분 연속3슬롯의 source/단일 lease/중복 defer·해제 후 복귀·전체 cohort/long2·eligible wait·cold/warm I/O를 확인한다. snapshot 결손 시 기존 callback으로 판단하며 자연 비고정 신호·편입·경제 표본 부재는 pending이다. 기존 AUTO 봉인 영역·stable ID·원 Acceptance와 다른 owner는 유지한다.

@@ -40,6 +40,35 @@ def test_unseen_candidates_rotate_and_recheck_does_not_starve_them():
     assert queue.claim(now_epoch=T0 + 6, limit=1) == []  # prior claim is in flight
 
 
+def test_active_target_deferral_does_not_consume_claim_or_rotation_and_releases_immediately():
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, '000001', kind='activity')
+    _observe(queue, '000002', kind='gainers')
+    claims = queue.claim(now_epoch=T0+2, limit=1, deferred_active_codes={'000001'})
+    assert [r['code'] for r in claims] == ['000002']
+    active = queue._candidates[('000001', 'krx_only')]
+    assert active.claim_count == 0 and not active.in_flight and active.last_result == 'queued'
+    assert queue.claim_eligibility['active_target_deferred_count'] == 1
+    released = queue.claim(now_epoch=T0+3, limit=1, deferred_active_codes=set())
+    assert released[0]['code'] == '000001'
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+
+
+def test_current_eligible_wait_is_observed_and_does_not_restore_historical_first_seen():
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, '000001')
+    queue.claim(now_epoch=T0+100, limit=0)
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+    queue.claim(now_epoch=T0+110, limit=0)
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 10
+    restored = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY)
+    restored.claim(now_epoch=T0+111, limit=0)
+    assert restored.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+    queue.claim(now_epoch=T0+112, limit=0, deferred_active_codes={'000001'})
+    queue.claim(now_epoch=T0+113, limit=0)
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+
+
 def test_mixed_branches_keep_short_admission_and_rotate_two_long_slots():
     queue=DiscoveryQueue(DAY)
     for i in range(1,6):_observe(queue,f'{i:06d}')

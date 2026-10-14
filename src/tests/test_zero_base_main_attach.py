@@ -687,3 +687,60 @@ def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(
     assert not slots.acquire(blocking=False)
     slots.release()
     slots.release()
+
+
+def test_read_only_main_target_snapshot_changes_with_release_and_identity(monkeypatch):
+    targets = [{'code': '123456', 'id': 1, 'status': 'WATCHING', 'source_signature': 'one'},
+               {'code': '654321', 'id': 2, 'status': 'COMPLETED'}]
+    monkeypatch.setattr(main, 'ACTIVE_TARGETS', targets)
+    owner = dict(runtime_generation='g1', process_pid=1, process_start_ticks='2', date='2026-10-14')
+    first = main._zero_base_active_target_snapshot(owner)
+    assert first['active_codes'] == ['123456']
+    targets[0]['source_signature'] = 'two'
+    replaced = main._zero_base_active_target_snapshot(owner)
+    assert replaced['generation'] != first['generation']
+    targets[0]['status'] = 'EXPIRED'
+    released = main._zero_base_active_target_snapshot(owner)
+    assert released['active_codes'] == [] and released['generation'] != replaced['generation']
+    targets[:] = [None, ['invalid']]
+    assert main._zero_base_active_target_snapshot(owner)['status'] == 'unobserved'
+
+
+def test_probe_rechecks_active_target_after_executor_queue_without_registering(monkeypatch):
+    monkeypatch.setattr(main, '_zero_base_runtime_enabled', lambda: True)
+    monkeypatch.setattr(main, 'ACTIVE_TARGETS', [])
+    monkeypatch.setattr(main, 'evaluate_main_bot_control_exclusion', lambda code: SimpleNamespace(excluded=False))
+    monkeypatch.setattr(main, 'scalping_session_venue_provenance', lambda stamp: {'market_session_regime': 'KRX_REGULAR'})
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(main, '_ZERO_BASE_PROBE_SLOTS', slots)
+    monkeypatch.setattr(main, '_ZERO_BASE_PROBE_IN_FLIGHT', set())
+    work = []
+    monkeypatch.setattr(main, '_ZERO_BASE_PROBE_EXECUTOR', SimpleNamespace(submit=lambda fn: work.append(fn)))
+    events = []
+    monkeypatch.setattr(main, 'event_bus', SimpleNamespace(publish=lambda event, payload: events.append((event, payload))))
+    monkeypatch.setattr(main, 'run_zero_base_probe', lambda *a, **k: pytest.fail('existing target reached physical probe'))
+    req = dict(claim={'code': '123456', 'route': 'krx_nxt_integrated', 'source_sha256': 'b'*64},
+               candidate={'code': '123456', 'route': 'krx_nxt_integrated', 'source_sha256': 'b'*64},
+               consumer_readiness={'ready': True, 'runtime_generation': 'fixture'})
+    main.handle_zero_base_probe_requested(req)
+    main.ACTIVE_TARGETS.append({'code': '123456', 'id': 1, 'status': 'WATCHING'})
+    work[0]()
+    result = next(payload for event, payload in events if event == main.PROBE_RESULT_EVENT)
+    assert result['result'] == 'active_conflict' and result['reason'] == 'existing_runtime_target_at_worker'
+    assert not main._ZERO_BASE_PROBE_IN_FLIGHT
+    assert slots.acquire(blocking=False)
+    assert sum(event == 'ZERO_BASE_HANDOFF_CLOSED' for event, _ in events) == 1
+
+
+def test_main_target_snapshot_keeps_observation_time_before_hashing(monkeypatch):
+    monkeypatch.setattr(main, 'ACTIVE_TARGETS', [{'code':'123456','id':1,'status':'WATCHING'}])
+    epoch=[100.0]
+    monkeypatch.setattr(main.time,'time',lambda:epoch[0])
+    actual=main.hashlib.sha256
+    def delayed_hash(value):
+        epoch[0]+=3
+        return actual(value)
+    monkeypatch.setattr(main.hashlib,'sha256',delayed_hash)
+    result=main._zero_base_active_target_snapshot(dict(runtime_generation='g',
+        process_pid=1,process_start_ticks='2',date='2026-10-14'))
+    assert result['observed_epoch']==100 and epoch[0]==103

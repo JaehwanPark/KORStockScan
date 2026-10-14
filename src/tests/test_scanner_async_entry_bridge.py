@@ -1405,7 +1405,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
 
     class CapturingAI(_FakeAI):
         def analyze_target(self, name, frame, ticks, candles, **kwargs):
-            assert len(capacity_prefetch_calls) == 1
+            assert not capacity_prefetch_calls
             evaluated.append((frame, ticks, kwargs["candle_context"]))
             return super().analyze_target(name, frame, ticks, candles, **kwargs)
 
@@ -1451,11 +1451,9 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     coordinator.shutdown()
 
     assert committed["status"] == "completed"
-    assert capacity_prefetch_calls[0][0] == "005930"
-    assert capacity_prefetch_calls[0][1]["curr"] == (1003 if execution_refresh else 1001)
-    assert committed["prepared_context"]["entry_capacity_prefetch"]["reason"] == "fixture_no_account_io"
-    assert len(capacity_prefetch_calls) == 1
-    assert capacity_prefetch_calls[0][1] == evaluated[0][0]
+    assert not capacity_prefetch_calls
+    assert committed["prepared_context"]["entry_capacity_prefetch"] == {
+        "status": "skipped", "reason": "awaiting_machine_enter_now"}
     assert committed["ai_decision"]["action"] == "BUY"
     assert [dict(item) for item in committed["prepared_context"]["recent_ticks"]] == [
         {"price": 1003 if execution_refresh else 1000}

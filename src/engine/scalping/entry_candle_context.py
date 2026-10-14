@@ -15,13 +15,14 @@ import json
 import math
 import os
 import time
-from datetime import datetime, time as dt_time, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.scalping.ai_market_snapshot import (
     ai_market_snapshot_log_fields,
     build_ai_market_snapshot,
+    COMPLETED_CANDLE_TIMING_SCHEMA,
     enrich_investor_source,
     preferred_ws_route,
     realtime_type_provenance,
@@ -580,6 +581,175 @@ def _normalized_bar(candle: dict[str, Any], moment: datetime) -> dict[str, Any]:
         "forming": False,
         "partial_volume": False,
     }
+
+
+def completed_ws_candle_source_issue(
+    source: Any, *, request_code: str, transport_epoch: Any, now_epoch: float,
+) -> str:
+    """Check sealed completion and live transport clocks as separate evidence."""
+    if not isinstance(source, dict):
+        return "candle_ws_provenance_invalid"
+    latest = source.get("latest_completed_bar")
+    integrity = source.get("integrity")
+    if not isinstance(latest, dict) or not isinstance(integrity, dict):
+        return "candle_ws_provenance_invalid"
+    if (
+        source.get("source") != "kiwoom_ws_AL_completed_1m"
+        or source.get("request_code") != request_code
+        or source.get("adjustment") != "raw_same_day"
+        or type(transport_epoch) is not int or transport_epoch <= 0
+        or type(source.get("transport_epoch")) is not int
+        or source.get("transport_epoch") != transport_epoch
+        or type(integrity.get("transport_epoch")) is not int
+        or integrity.get("transport_epoch") != transport_epoch
+        or type(source.get("source_epoch")) is not int or source["source_epoch"] <= 0
+        or integrity.get("observer_epoch") != source["source_epoch"]
+        or type(integrity.get("observer_epoch")) is not int
+        or type(latest.get("source_epoch")) is not int
+        or latest.get("source_epoch") != source["source_epoch"]
+        or type(source.get("revision")) is not int or source["revision"] <= 0
+        or len(str(source.get("content_sha256", ""))) != 64
+        or any(char not in "0123456789abcdef" for char in str(source.get("content_sha256", "")))
+        or latest.get("status") != "complete" or latest.get("issues") != []
+    ):
+        return "candle_ws_provenance_invalid"
+    minute = latest.get("minute_epoch")
+    generated, available, watermark, transport_stamp = [source.get(key) for key in (
+        "generated_at_epoch", "available_at_epoch", "watermark_epoch",
+        "transport_snapshot_generated_at_epoch")]
+    latest_available = latest.get("available_at_epoch")
+    if (
+        type(minute) is not int or minute % 60
+        or any(type(value) not in (int, float) or not math.isfinite(value)
+               for value in (now_epoch, generated, available, watermark, transport_stamp, latest_available))
+        or not 0 <= now_epoch - transport_stamp <= 20
+        or not minute + 60 <= latest_available <= available <= generated <= now_epoch
+        or not minute + 61 <= watermark <= generated
+        or now_epoch - latest_available > 90
+    ):
+        return "candle_ws_clock_invalid"
+    if minute + 60 != int(now_epoch // 60) * 60:
+        return "candle_latest_completed_missing"
+    if latest.get("source_time") != datetime.fromtimestamp(minute, KST).strftime("%Y%m%d%H%M%S"):
+        return "candle_ws_clock_invalid"
+    return ""
+
+
+def _completed_candle_timing(
+    bars: list[dict[str, Any]], candles: list[dict[str, Any]],
+    source_meta: dict[str, Any], ws: dict[str, Any], *, now: datetime,
+    request_code: str, session: str,
+) -> dict[str, Any]:
+    """Bind bar close semantics to validated, unchanged producer evidence."""
+    cutoff = now.replace(second=0, microsecond=0)
+    latest = bars[-1] if bars else None
+    opened = latest["dt"] if latest else None
+    closed = opened + timedelta(minutes=1) if opened else None
+    blockers = []
+    binding = source_meta.get("entry_candle_route_binding")
+    if (
+        not isinstance(binding, dict)
+        or binding.get("schema") != CANDLE_ROUTE_BINDING_SCHEMA
+        or binding.get("request_code") != request_code
+        or binding.get("session") != session
+        or type(binding.get("transport_epoch")) is not int
+        or binding["transport_epoch"] <= 0
+        or type(ws.get("market_data_transport_epoch")) is not int
+        or binding["transport_epoch"] != ws.get("market_data_transport_epoch")
+        or source_meta.get("request_code") != request_code
+        or source_meta.get("entry_candle_request_code") != request_code
+        or source_meta.get("completed_only") is not True
+    ):
+        blockers.append("candle_completed_route_or_epoch_invalid")
+    if closed != cutoff:
+        blockers.append("candle_latest_completed_missing")
+    if any(
+        (moment := _parse_bar_dt(row, now)) is None or moment > now
+        or moment.second != 0 or moment.microsecond != 0
+        for row in candles
+    ):
+        blockers.append("candle_completed_row_clock_invalid")
+    if any(
+        not (0 < bar["l"] <= min(bar["o"], bar["c"])
+             <= max(bar["o"], bar["c"]) <= bar["h"])
+        for bar in bars
+    ):
+        blockers.append("candle_completed_ohlc_invalid")
+    source = source_meta.get("completed_bar_source")
+    source = source if isinstance(source, dict) else {}
+    api_id = source_meta.get("api_id")
+    verified = None
+    proof = {}
+    if api_id == "WS_0B_completed_1m":
+        from src.trading.market.shared_ws_snapshot import _bar_session
+        try:
+            completed_session = _bar_session(now)
+        except ValueError:
+            completed_session = None
+        accepted = source.get("latest_completed_bar")
+        accepted = accepted if isinstance(accepted, dict) else {}
+        proof = {key: source.get(key) for key in (
+            "source", "adjustment", "source_epoch", "transport_epoch",
+            "revision", "content_sha256", "generated_at_epoch", "session",
+            "watermark_epoch", "latest_completed_bar",
+            "integrity", "transport_snapshot_generated_at_epoch",
+        )}
+        ws_issue = completed_ws_candle_source_issue(source, request_code=request_code,
+            transport_epoch=ws.get("market_data_transport_epoch"), now_epoch=now.timestamp())
+        if ws_issue:
+            blockers.append(ws_issue.replace("candle_ws_", "candle_completed_ws_"))
+        if (
+            source.get("session") != completed_session
+            or not opened
+            or accepted.get("source_time") != opened.strftime("%Y%m%d%H%M%S")
+            or accepted.get("minute_epoch") != opened.timestamp()
+            or any(row.get("source_time_basis") != "provider_trade_time"
+                   or row.get("_history_basis") != "observed_valid_rows" for row in candles)
+        ):
+            blockers.append("candle_completed_ws_provenance_invalid")
+        verified = accepted.get("available_at_epoch")
+    elif api_id == "ka10080":
+        received = source_meta.get("rest_received_ts_ms")
+        verified = received / 1000 if type(received) is int and received > 0 else None
+        proof = {key: source_meta.get(key) for key in (
+            "rest_received_ts_ms", "shared_history_revision_sha256",
+            "shared_history_completed_cutoff", "shared_history_source_method",
+        )}
+        if any(row.get("source_time_basis") != "ka10080_cntr_tm_bar_timestamp"
+               or row.get("_history_basis") is not None for row in candles):
+            blockers.append("candle_completed_rest_time_basis_invalid")
+        if (source_meta.get("continuous_next_key_missing")
+                or source_meta.get("rate_limit_detected")
+                or source_meta.get("read_rate_control_status") == "deferred"):
+            blockers.append("candle_completed_rest_source_invalid")
+    else:
+        blockers.append("candle_completed_source_unknown")
+    if (type(verified) not in (int, float) or not math.isfinite(verified)
+            or not closed or not closed.timestamp() <= verified <= now.timestamp()):
+        blockers.append("candle_completed_clock_invalid")
+    elif now.timestamp() - verified > 90:
+        blockers.append("candle_completed_source_stale")
+    body = {
+        "schema": COMPLETED_CANDLE_TIMING_SCHEMA,
+        "status": "blocked" if blockers else "validated",
+        "blockers": sorted(set(blockers)), "time_basis": "provider_bar_open_kst",
+        "interval_seconds": 60,
+        "bar_open_epoch": opened.timestamp() if opened else None,
+        "bar_close_epoch": closed.timestamp() if closed else None,
+        "completed_cutoff_epoch": cutoff.timestamp(),
+        "original_source_verified_epoch": verified,
+        "prepared_at_epoch": now.timestamp(),
+        "route_binding": copy.deepcopy(binding), "source_proof": copy.deepcopy(proof),
+        "input_rows_sha256": hashlib.sha256(json.dumps(
+            candles, sort_keys=True, ensure_ascii=True, separators=(",", ":"),
+            default=str,
+        ).encode()).hexdigest(),
+    }
+    body["sha256"] = hashlib.sha256(json.dumps(
+        body, sort_keys=True, ensure_ascii=True, separators=(",", ":"),
+        default=str,
+    ).encode()).hexdigest()
+    return body
 
 
 def _nxt_integrated_closed_krx_session_route_proof(
@@ -1170,6 +1340,11 @@ def build_session_candle_source(
             recent_candles, source_meta = [], {}
             fetch_error = f"{type(exc).__name__}:{str(exc)[:120]}"
         fetch_ms = int((time.perf_counter() - fetch_started) * 1000)
+        if reduced_inputs and (source_meta or {}).get("decision_input_profile") == "reduced_completed_v1":
+            # The supplied clock is the start of this preparation. Compare
+            # original receipts with its measured completion, without deriving
+            # a new clock from the source timestamps or renewing an entry lease.
+            now += timedelta(seconds=max(0.0, time.perf_counter() - started))
     source_meta = dict(source_meta or {})
     reduced_inputs = reduced_inputs and source_meta.get('decision_input_profile') == 'reduced_completed_v1'
     if reduced_inputs:
@@ -1385,6 +1560,12 @@ def build_session_candle_source(
         quality_blockers.append("duplicate_bar")
     if duplicate_price_conflict:
         quality_blockers.append("duplicate_price_conflict")
+    completed_timing = (_completed_candle_timing(
+        completed_session, candles, source_meta, ws, now=now,
+        request_code=request_code, session=session_value,
+    ) if reduced_inputs else None)
+    if completed_timing is not None:
+        quality_blockers.extend(completed_timing["blockers"])
     source_api_id = str((source_meta or {}).get("api_id") or "").lower()
     ka10080_observed_bars = source_api_id == "ka10080" or (
         reduced_inputs and source_api_id == 'ws_0b_completed_1m'
@@ -1494,6 +1675,8 @@ def build_session_candle_source(
         strategy_source["strategy_completed_bars"] = dict(body=body, sha256=strategy_digest(body))
     return {
         **strategy_source,
+        **({"decision_input_profile": "reduced_completed_v1",
+            "completed_candle_timing": completed_timing} if reduced_inputs else {}),
         "schema": SOURCE_SCHEMA,
         "venue": venue_value,
         "session": session_value,
@@ -1683,6 +1866,8 @@ def build_entry_candle_context(
             "observation_contract": OBSERVATION_CONTRACT,
         }
     )
+    if context.get("decision_input_profile") == "reduced_completed_v1":
+        now_kst = _now_kst(context["completed_candle_timing"]["prepared_at_epoch"])
     snapshot_ws_data = dict(ws_data or {})
     if include_investor_source:
         if entry_budget is not None:

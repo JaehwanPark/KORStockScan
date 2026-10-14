@@ -278,6 +278,17 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
                "revision": payload["revision"], "content_sha256": expected,
                "available_at_epoch": max((b["available_at_epoch"] for b in accepted_bars), default=0),
                "generated_at_epoch": payload["generated_at_epoch"], "session": session,
+               # Preserve the latest accepted bar's own generation and close
+               # evidence. Historical epochs may coexist after reconnect;
+               # the current producer epoch alone cannot re-label an old bar.
+               "latest_completed_bar": ({
+                   key: accepted_bars[-1][key] for key in (
+                       "minute_epoch", "source_time", "source_epoch",
+                       "available_at_epoch", "status", "issues")
+               } if accepted_bars else None),
+               "watermark_epoch": payload["watermark_epoch"],
+               "integrity": dict(payload["integrity"]),
+               "transport_snapshot_generated_at_epoch": snapshot["generated_at_epoch"],
                "cursor": payload["cursor"], "durable_cursor": payload.get("durable_cursor"),
                "historical_source_epochs": sorted({b["source_epoch"] for b in accepted_bars}),
                "rest_request_count": 0,

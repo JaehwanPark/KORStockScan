@@ -267,6 +267,46 @@ def _json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _raw_auxiliary_projection(merged: dict) -> dict:
+    """Keep decoded raw evidence distinct from normalized or effective fields.
+
+    Arrays remain bounded for append I/O. Presence and truncation are explicit,
+    so an absent historical field is never reconstructed as an empty response.
+    The normal adapter and this projection use the same 64 item / 512 char cap.
+    """
+    names = ('risk_verdict', 'risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids', 'confidence')
+    present = {name: 'entry_ai_raw_' + name in merged for name in names}
+    upstream_present = merged.get('entry_ai_raw_fields_present')
+    if isinstance(upstream_present, dict):
+        for name in names:
+            if name in upstream_present:
+                present[name] = upstream_present[name] is True
+    truncated = bool(merged.get('entry_ai_raw_fields_truncated', False))
+    result = {}
+    for name in ('risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids'):
+        value = merged.get('entry_ai_raw_' + name)
+        if not isinstance(value, list):
+            result['entry_ai_raw_' + name] = []
+            continue
+        truncated = truncated or len(value) > 64 or any(
+            not isinstance(item, str) or len(item) > 512 for item in value)
+        result['entry_ai_raw_' + name] = [str(item)[:512] for item in value[:64]]
+    result.update(entry_ai_raw_fields_present=present,
+                  entry_ai_raw_fields_truncated=truncated,
+                  entry_ai_raw_fields_source=merged.get('entry_ai_raw_fields_source')
+                    or ('caller_raw_projection' if any(present.values()) else 'unavailable'))
+    invalid_shape = merged.get('entry_ai_raw_fields_invalid_shape')
+    invalid_shape = invalid_shape if isinstance(invalid_shape, list) else []
+    result['entry_ai_raw_fields_invalid_shape'] = [name for name in names
+        if name in invalid_shape
+        or name in ('risk_codes', 'supporting_fact_ids', 'contradicting_fact_ids')
+            and present[name] and not isinstance(merged.get('entry_ai_raw_' + name), list)]
+    raw_hash = merged.get('entry_ai_raw_response_sha256')
+    result['entry_ai_raw_response_sha256'] = (raw_hash if isinstance(raw_hash, str)
+        and len(raw_hash) == 64 and all(c in '0123456789abcdef' for c in raw_hash) else None)
+    return result
+
+
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
     serialization_started = time.perf_counter()
     encoded = (
@@ -2507,6 +2547,7 @@ def record_ai_decision_trace(
                 if isinstance(merged.get("entry_ai_raw_contradicting_fact_ids"), list)
                 else []
             ),
+            **_raw_auxiliary_projection(merged),
             "entry_ai_invalid_supporting_fact_ids": (
                 [
                     str(value)
@@ -2937,6 +2978,9 @@ def record_ai_decision_trace(
         trace_row.update(screen_fields)
         pending_row = {
             **screen_fields,
+            **{key: trace_row[key] for key in ('entry_ai_raw_fields_present',
+                'entry_ai_raw_fields_truncated', 'entry_ai_raw_fields_source', 'entry_ai_raw_response_sha256',
+                'entry_ai_raw_fields_invalid_shape')},
             "schema": OUTCOME_SCHEMA,
             "label_id": f"{trace_id}:v1",
             "decision_trace_id": trace_id,

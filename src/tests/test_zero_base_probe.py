@@ -952,6 +952,50 @@ def test_rest_probe_rejects_reused_or_cross_route_feature_rows():
     ) == "tick_receive_clock_invalid"
 
 
+def test_reduced_probe_uses_sealed_close_and_original_live_transport_clocks():
+    from datetime import timedelta
+    from copy import deepcopy
+    from src.tests.test_micro_reversion_completed_bars import BASE
+    opened = (BASE + timedelta(seconds=60)).timestamp()
+    close = opened + 60
+    now = close + 59
+    source = dict(source="kiwoom_ws_AL_completed_1m", request_code="123456_AL",
+        adjustment="raw_same_day", transport_epoch=2, source_epoch=7, revision=3,
+        content_sha256="a" * 64, generated_at_epoch=close+2, available_at_epoch=close+2,
+        transport_snapshot_generated_at_epoch=now, watermark_epoch=close+1,
+        integrity=dict(observer_epoch=7, transport_epoch=2),
+        latest_completed_bar=dict(minute_epoch=int(opened), source_time="20260921160100",
+            source_epoch=7, available_at_epoch=close+2, status="complete", issues=[]))
+    meta = dict(api_id="WS_0B_completed_1m", request_code="123456_AL",
+        decision_input_profile="reduced_completed_v1", completed_bar_source=source)
+    def issue(value=meta, stamp=now):
+        return exact_probe_rest_source_issue([], value, request_code="123456_AL",
+            now_epoch=stamp, allow_empty_ticks=True, transport_epoch=2)
+    assert issue() == ""  # Publication is 57s old; close and live transport are proven.
+    strict = dict(meta, decision_input_profile="strict_adjusted")
+    assert issue(strict) == "candle_ws_clock_invalid"
+    assert issue(stamp=now+1) == "candle_latest_completed_missing"
+    for field, value in (("source_epoch", 8), ("transport_epoch", 3)):
+        altered = deepcopy(meta)
+        altered["completed_bar_source"][field] = value
+        assert issue(altered) == "candle_ws_provenance_invalid"
+    stale_transport = deepcopy(meta)
+    stale_transport["completed_bar_source"]["transport_snapshot_generated_at_epoch"] = now-21
+    assert issue(stale_transport) == "candle_ws_clock_invalid"
+    unavailable = deepcopy(meta)
+    unavailable["completed_bar_source"]["latest_completed_bar"]["available_at_epoch"] = now+1
+    assert issue(unavailable) == "candle_ws_clock_invalid"
+    unsealed = deepcopy(meta)
+    unsealed["completed_bar_source"]["watermark_epoch"] = close
+    assert issue(unsealed) == "candle_ws_clock_invalid"
+    future_watermark = deepcopy(meta)
+    future_watermark["completed_bar_source"]["watermark_epoch"] = now+60
+    assert issue(future_watermark) == "candle_ws_clock_invalid"
+    old_bar_fresh_read = deepcopy(meta)
+    old_bar_fresh_read["completed_bar_source"]["transport_snapshot_generated_at_epoch"] = now+1
+    assert issue(old_bar_fresh_read, stamp=now+1) == "candle_latest_completed_missing"
+
+
 def test_probe_fetches_short_lived_ticks_after_slow_candle_source(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")

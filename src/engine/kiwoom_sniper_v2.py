@@ -43,6 +43,7 @@ import json
 import traceback
 from queue import Empty, Queue, Full
 import copy
+import hashlib
 from sqlalchemy import text
 
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
@@ -8552,6 +8553,39 @@ def _zero_base_active_conflict(code):
         )
 
 
+def _zero_base_active_target_snapshot(readiness):
+    """Read only Main's target identities; failure falls back to callback checks."""
+    if not ENTRY_LOCK.acquire(blocking=False):
+        return {'status': 'unobserved', 'reason': 'main_target_lock_busy'}
+    try:
+        if len(ACTIVE_TARGETS) > 512:
+            return {'status': 'unobserved', 'reason': 'main_target_snapshot_bound'}
+        identities = sorted((
+            str((target or {}).get('code') or '').strip()[:6],
+            str((target or {}).get('id') or ''),
+            str((target or {}).get('status') or '').upper(),
+            str((target or {}).get('owner') or ''),
+            str((target or {}).get('source_signature') or ''),
+            str((target or {}).get('watch_generation_id') or ''),
+        ) for target in ACTIVE_TARGETS)
+        active_codes = sorted({row[0] for row in identities
+            for code, status in [(row[0], row[2])]
+            if len(code) == 6 and code.isdigit()
+            and status not in {'EXPIRED', 'COMPLETED', 'CANCELLED'}})
+        observed_epoch=time.time()
+    except (AttributeError, TypeError, ValueError):
+        return {'status': 'unobserved', 'reason': 'main_target_snapshot_invalid'}
+    finally:
+        ENTRY_LOCK.release()
+    owner = {key: readiness.get(key) for key in (
+        'runtime_generation', 'process_pid', 'process_start_ticks', 'date')}
+    generation = hashlib.sha256(json.dumps(
+        [owner, identities], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return dict(schema='zero_base_main_target_snapshot_v1', status='observed',
+        **owner, generation=generation, observed_epoch=observed_epoch,
+        active_codes=active_codes, runtime_effect=False)
+
+
 def _zero_base_probe_result(request, result, reason):
     event_bus.publish(
         PROBE_RESULT_EVENT,
@@ -8679,9 +8713,11 @@ def _zero_base_probe_observation_profile(session_regime):
 def _zero_base_consumer_readiness():
     from src.engine.scalping.zero_base_probe import consumer_readiness
     from src.engine.scalping.reversal_current_backend import backend
-    return consumer_readiness(ws_manager=WS_MANAGER, ai_engine=AI_ENGINE,
+    readiness = consumer_readiness(ws_manager=WS_MANAGER, ai_engine=AI_ENGINE,
         token=KIWOOM_TOKEN, enabled=_zero_base_runtime_enabled(),
         family_sha256=getattr(backend(), '_GENERATION', None))
+    readiness['main_target_snapshot'] = _zero_base_active_target_snapshot(readiness)
+    return readiness
 
 
 def handle_zero_base_probe_requested(request):
@@ -8819,6 +8855,11 @@ def handle_zero_base_probe_requested(request):
                     if issue:
                         return dict(request, result='policy_unavailable', reason=issue,
                                     consumer_readiness_at_worker=current, machine_action='')
+                    if _zero_base_active_conflict(code):
+                        # Main may attach a target while this executor waited.
+                        # No physical REG has occurred at this boundary.
+                        return dict(request, result='active_conflict',
+                            reason='existing_runtime_target_at_worker', machine_action='')
                     return run_zero_base_probe(
                         request,
                         ws_manager=WS_MANAGER,
@@ -13268,8 +13309,8 @@ def run_sniper(is_test_mode=False):
             def _scanner_async_commit_ready_for_main_thread() -> bool:
                 """Yield between synchronous units when a COMMIT is ready.
 
-                Completed worker output remains inside the coordinator until
-                the next outer-loop drain enqueues its scheduler COMMIT lane.
+                Scanner output needs the next outer drain and COMMIT lane.
+                Exact fixed-watch output can use its remaining Main visit.
                 This is deliberately a main-thread-only cooperative yield:
                 it neither applies a result nor changes any trading state.
                 """
@@ -13277,7 +13318,15 @@ def run_sniper(is_test_mode=False):
                 return bool(
                     _scanner_scheduler_startup_mode() == "async_v1"
                     and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
-                    and async_coordinator.has_undrained_result()
+                    and async_coordinator.has_undrained_result(
+                        direct_fixed_requests={
+                            (target.get('_scanner_async_generation_id'),
+                             target.get('_scanner_async_cache_key'))
+                            for target in runtime_work_queue
+                            if target.get('status') == 'WATCHING'
+                            and main_fixed_watch.is_fixed_watch(target)
+                            and target.get('_scanner_async_generation_id')
+                            and target.get('_scanner_async_cache_key')})
                 )
 
             if _scanner_scheduler_startup_mode() == "async_v1" and isinstance(
@@ -14651,7 +14700,9 @@ def run_sniper(is_test_mode=False):
                 if not runtime_work_queue:
                     break
                 from src.engine.monitoring.runtime_performance import prioritize_native_watches
-                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time())
+                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
+                    completed_requests=(async_coordinator.fixed_watch_ready_requests()
+                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None))
                 stock = runtime_work_queue.pop(0)
                 runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]

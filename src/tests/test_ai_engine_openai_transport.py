@@ -8710,3 +8710,204 @@ def test_local_async_capture_binding_survives_provider_metadata_limit(monkeypatc
     for key,value in binding.items():assert row[key]==value
     receipt=engine._consume_last_transport_meta()
     for key,value in binding.items():assert receipt[key]==value
+
+
+@pytest.mark.parametrize('version', ['continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'])
+def test_reversal_normalization_retains_provider_citations_when_composer_rejects(monkeypatch, version):
+    from contextlib import nullcontext
+    from copy import deepcopy
+    from src.engine.scalping import continuous_reversal_policy as policy
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    engine = _build_engine()
+    response = dict(risk_verdict='PASS', risk_codes=['NO_BLOCKING_RISK'],
+        supporting_fact_ids=['branch:hash/observed_machine_signal']*12,
+        contradicting_fact_ids=[], confidence=71)
+    original = deepcopy(response)
+    monkeypatch.setattr(policy, 'compose', lambda raw, live: dict(action='WAIT',
+        entry_ai_contract_valid=False, entry_ai_contract_errors=['union_pass_support_invalid']))
+    monkeypatch.setattr(native, 'signature_pass', lambda: nullcontext())
+    monkeypatch.setattr(native, 'verified_evaluation', lambda **kwargs: nullcontext())
+    result = engine._normalize_decision_quality_entry_result(response, exact_payload={},
+        live_policy={'continuous_reversal_assessment': {'policy_version': version}})
+    assert response == original and result['action'] == 'WAIT'
+    assert result['entry_ai_contract_errors'] == ['union_pass_support_invalid']
+    assert result['entry_ai_raw_risk_codes'] == original['risk_codes']
+    assert result['entry_ai_raw_supporting_fact_ids'] == original['supporting_fact_ids']
+    assert result['entry_ai_raw_contradicting_fact_ids'] == []
+    assert result['entry_ai_raw_fields_present']['contradicting_fact_ids'] is True
+    assert result['entry_ai_raw_fields_truncated'] is False
+
+
+def test_raw_reversal_response_projection_distinguishes_absence_and_bounded_truncation():
+    engine = _build_engine()
+    missing = engine._raw_reversal_response_fields({'risk_verdict': 'PASS'})
+    assert missing['entry_ai_raw_risk_codes'] == []
+    assert missing['entry_ai_raw_fields_present']['risk_codes'] is False
+    bounded = engine._raw_reversal_response_fields({'supporting_fact_ids': ['x'*513]*65})
+    assert bounded['entry_ai_raw_fields_truncated'] is True
+    assert bounded['entry_ai_raw_truncated_field_names'] == ['supporting_fact_ids']
+    assert len(bounded['entry_ai_raw_supporting_fact_ids']) == 64
+    assert len(bounded['entry_ai_raw_supporting_fact_ids'][0]) == 512
+
+
+def test_received_reversal_validator_exception_preserves_raw_response_and_waits_without_replay(monkeypatch):
+    from src.engine.scalping import reversal_extended_union as U
+    from src.tests.test_reversal_extended_policy import FIXTURES
+    fixture=next(iter(FIXTURES.values())); arm=U.V1.ARMS[1]
+    inp, _, _=U.production_request(fixture['source'],arm,event=fixture['event'])
+    response=dict(schema=U.VERSION,decision_scope='COMMON_OPPORTUNITY',
+        assessed_signal_refs=[s['ref'] for s in inp['signals']],risk_verdict=['PASS'],
+        risk_codes=['NO_BLOCKING_RISK'],supporting_fact_ids=['observed_machine_signal'],
+        contradicting_fact_ids=[],confidence=70)
+    engine=_build_engine()
+    monkeypatch.setattr(engine,'_call_openai_safe',lambda *a,**kw:pytest.fail('invalid received response must not replay provider'))
+    raw=engine._raw_reversal_response_fields(response)
+    try:
+        U.validate_response(response,inp,arm=arm)
+    except TypeError as error:
+        result=engine._received_reversal_response_failure(raw,error=error)
+    else:
+        pytest.fail('fixture must exercise frozen validator exception')
+    assert result['entry_ai_raw_risk_codes']==response['risk_codes']
+    assert result['entry_ai_raw_supporting_fact_ids']==response['supporting_fact_ids']
+    assert result['entry_ai_raw_fields_present']['risk_verdict'] is True
+    assert result['entry_ai_raw_response_sha256']
+    assert result['action']=='WAIT' and result['entry_ai_screen_status']=='response_invalid'
+    assert result['entry_auxiliary_response_received'] is True
+    assert result['entry_auxiliary_response_contract_valid'] is False
+    assert result['openai_transport_fail_closed'] is False
+
+
+@pytest.mark.parametrize('failure_stage', ['frozen_validator', 'post_validation'])
+def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution_separate(tmp_path, monkeypatch, failure_stage):
+    """Exercise real request, receipt, validator exception, fallback and trace."""
+    import copy
+    import os
+    import time
+    from pathlib import Path
+    from src.engine.scalping import continuous_reversal_policy as policy
+    from src.engine.scalping import continuous_reversal_policy_v6 as native
+    from src.engine.scalping import reversal_extended_union as union
+    from src.engine.scalping import reversal_auxiliary_registry as registry
+    from src.engine.scalping import reversal_auxiliary_intraday as intraday
+    from src.engine.scalping import reversal_source_diagnostics as diagnostics
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime
+    from src.engine.scalping import continuous_reversal_postclose as postclose
+    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.tests.test_reversal_extended_policy import FIXTURES
+    from src.tests.test_ai_decision_trace import _enable
+    from src.utils import constants
+    _enable(monkeypatch, tmp_path)
+    monkeypatch.setattr(constants, 'DATA_DIR', tmp_path)
+    fixture = next(iter(FIXTURES.values()))
+    snapshot = (copy.deepcopy(fixture['event']), copy.deepcopy(fixture['source']))
+    definition = registry.definition(union.V1.ARMS[1], input_version=union.VERSION)
+    registry.register(tmp_path, definition)
+    inp, prompt, schema = registry.production_request(snapshot, definition)
+    snapshot[0]['epoch'] = time.time()
+    refs = [signal['ref'] for signal in inp['signals']]
+    assessment = dict(action='ENTER_NOW', reason='controlled_native_source', policy_version=native.SCHEMA,
+        auxiliary_arm=definition['base_arm'], auxiliary_binding=registry.binding(definition),
+        auxiliary_registry_sha256=definition['registry_sha256'], family_sha256='f'*64,
+        event=snapshot[0], signal_id='s'*64, signal_set_hash=postclose.digest(inp['signals']),
+        opportunity_key='e'*64, scope_execution_hash='x'*64, matched_policy_refs=refs,
+        cell_key='samsung|REGULAR|ALL', route='SOR')
+    live = dict(enabled=True, status='active_bounded_krx_canary', selected_prompt_version=runtime.AI_VERSION,
+        primary_decision_owner='mechanistic_entry_adjudicator', ai_role='auxiliary_risk_screen_pass_veto_no_promotion',
+        mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, machine_bundle_sha256='b'*64,
+        continuous_reversal=dict(schema=native.SCHEMA, family_sha256='f'*64, machine_cells={}, auxiliary_cells={}))
+    monkeypatch.setattr(openai_module, 'resolve_live_prompt_policy', lambda **kw: copy.deepcopy(live))
+    monkeypatch.setattr(openai_module, 'TRADING_RULES', replace(openai_module.TRADING_RULES,
+        OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION))
+    monkeypatch.setattr(policy, 'assess', lambda *a, **kw: (copy.deepcopy(assessment), inp, prompt, schema))
+    monkeypatch.setattr(diagnostics, 'validate_claim_with_receipt', lambda *a, **kw: snapshot)
+    monkeypatch.setattr(intraday, 'apply_request', lambda *a: a[-1])
+    monkeypatch.setattr(intraday, 'validate_decision', lambda *a, **kw: None)
+    monkeypatch.setattr(runtime, 'load_effective', lambda **kw: {'bundle_sha256': 'b'*64})
+    monkeypatch.setattr(native, 'validate_active_claim', lambda *a, **kw: refs)
+    response = dict(schema=union.VERSION, decision_scope='COMMON_OPPORTUNITY', assessed_signal_refs=refs,
+        risk_verdict=['PASS'] if failure_stage == 'frozen_validator' else 'PASS',
+        risk_codes=['NO_BLOCKING_RISK'], supporting_fact_ids=['observed_machine_signal'],
+        contradicting_fact_ids=[], confidence=70)
+    original = copy.deepcopy(response)
+    engine = _build_engine()
+    # Existing failure chains must neither grow nor be discharged by a local
+    # response-contract exception. Near-threshold state exposes accidental
+    # provider disablement as well as an incorrect success reset.
+    engine.consecutive_failures = engine.max_consecutive_failures - 1
+    engine._common_recoverable_chain = True
+    entry_circuit = engine._entry_circuit()
+    common_circuit = engine._common_circuit()
+    entry_circuit.failed(entry_circuit.admit('prior-entry', eligible=True, deadline_remaining=3))
+    for index in range(engine.consecutive_failures):
+        common_circuit.failed(common_circuit.admit(f'prior-http-{index}', eligible=False,
+            deadline_remaining=3), reason='provider_http_429')
+    def stable_circuit(circuit):
+        return {key: value for key, value in circuit.snapshot().items()
+                if key != 'recovery_wait_observed_epoch'}
+    circuit_before = (stable_circuit(entry_circuit), stable_circuit(common_circuit))
+    failure_before = engine.consecutive_failures
+    key_before = (engine.current_api_key_index, engine.current_key)
+    rotations = []
+    engine._rotate_client = lambda: rotations.append(True)
+    rotations_at_transport_exit = []
+    original_call = engine._call_openai_safe
+    def capture_transport_exit(*args, **kwargs):
+        received = original_call(*args, **kwargs)
+        rotations_at_transport_exit.append(len(rotations))
+        return received
+    monkeypatch.setattr(engine, '_call_openai_safe', capture_transport_exit)
+    if failure_stage == 'post_validation':
+        def fail_normalization(*a, **kw):
+            raise ValueError('controlled_post_response_projection_fault')
+        monkeypatch.setattr(engine, '_normalize_decision_quality_entry_result', fail_normalization)
+    calls = []
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_text=json.dumps(response), id='received-malformed-test', status='completed')
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    result = engine.analyze_target('test', _sample_ws_data(), _sample_ticks(), _sample_candles(),
+        strategy='SCALPING', prompt_profile='watching', candle_context=_allowed_entry_candle_context(),
+        reversal_signal_claim={'snapshot': snapshot, 'token': 'controlled-native-test'},
+        metadata_extra=dict(evaluation_attempt_id='controlled-evaluation',
+            async_request_id='controlled-generation:request', async_producer_pid=os.getpid(),
+            async_producer_start_ticks=Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19],
+            async_origin_deadline_epoch=snapshot[0]['epoch']+5, async_order_venue='SOR',
+            scanner_generation_id='controlled-generation'))
+    assert len(calls) == 1, result  # A received failure cannot replay the provider.
+    assert engine.consecutive_failures == failure_before
+    assert engine.ai_disabled is False and engine._common_recoverable_chain is True
+    assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
+    assert (engine.current_api_key_index, engine.current_key) == key_before
+    # The established HTTP receipt owns its normal key rotation; the local
+    # response exception must not add another rotation or replay.
+    assert len(rotations) == rotations_at_transport_exit[-1] == 1
+    assert response == original
+    assert result['action'] == 'WAIT' and result['entry_ai_screen_pass'] is False
+    assert result['entry_auxiliary_response_received'] is True
+    assert result['entry_auxiliary_response_contract_valid'] is (failure_stage == 'post_validation')
+    assert result['entry_post_response_execution_valid'] is False
+    assert result['entry_ai_screen_status'] == 'response_invalid'
+    assert result['openai_transport_fail_closed'] is False
+    assert result['ai_parse_ok'] is True and result['ai_parse_fail'] is False
+    assert result['entry_ai_raw_response_sha256'] == postclose.digest(original)
+    assert result['entry_ai_raw_risk_codes'] == original['risk_codes']
+    assert result['entry_ai_raw_supporting_fact_ids'] == original['supporting_fact_ids']
+    assert result['entry_ai_raw_contradicting_fact_ids'] == []
+    traces = [json.loads(line) for p in (tmp_path/'ai_decision_trace').glob('*.jsonl') for line in p.read_text().splitlines()]
+    assert len(traces) == 1
+    trace = traces[0]
+    assert trace['provider_response_id'] == 'received-malformed-test'
+    assert trace['provider_called'] is True and trace['actual_order_submitted'] is False
+    assert trace['entry_auxiliary_response_contract_valid'] is (failure_stage == 'post_validation')
+    assert trace['entry_post_response_execution_valid'] is False
+    assert trace['entry_ai_raw_response_sha256'] == postclose.digest(original)
+    requests = [json.loads(line) for p in (tmp_path/'ai_decision_requests').glob('*.jsonl') for line in p.read_text().splitlines()]
+    assert len(requests) == 1 and trace['request_id'] == requests[0]['request_id']
+    assert trace['request_envelope_sha256'] == requests[0]['request_envelope_sha256']
+    assert trace['prompt_sha256'] == requests[0]['prompt_sha256']
+    assert trace['async_request_id'] == requests[0]['async_request_id'] == 'controlled-generation:request'
+    assert trace['async_producer_pid'] == requests[0]['async_producer_pid'] == os.getpid()
+    outbox = [json.loads(p.read_text()) for p in (tmp_path/'runtime/initial_quantity/operating_opportunities').glob('*.json')]
+    assert len(outbox) == 1 and outbox[0]['state'] == 'response_received'
+    assert outbox[0]['history'][-1]['binding']['response'] == original
