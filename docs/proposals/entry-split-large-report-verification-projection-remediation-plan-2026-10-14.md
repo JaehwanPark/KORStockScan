@@ -252,3 +252,9 @@ proposed schema는 `entry_split_monitor_projection_v1`, `entry_split_monitor_val
 추가 구현 리뷰에서는 원본 JSON 토큰 사이 공백을 전부 제거하면 잘못된 숫자/키워드를 정상 값으로 바꿀 수 있는 결함, 재검증 시각 때문에 불변 receipt가 충돌하는 결함, worker 강제 시간 종료 뒤 임시 사본이 남는 결함을 수리 대상으로 확인했다. 연속 공백 축소·strict JSON 검증·내용 결속된 idempotent 재사용·부모 소유 임시 디렉터리 정리로 보완하고 반례를 검증한다. source/정책·작은 산출물의 경로는 관리 data root의 정확한 family/date 경로로 한정한다.
 
 실제 발행은 기존 장후 wrapper의 정상 생산/최종 handoff 복구 지점에 인접한 bounded worker로 수행한다. 이전부터 승인된 정상 publication의 alias 서식 처리와 새 검증 migration을 구분한다. 새 migration은 기존 alias/불변 원본·정책의 bytes를 변경하지 않으며, 현재 수리에서 native owner 전체 파일 hash와 역사 probe 커널 증거를 보존한다. runtime summary의 장후 byte SHA 전체 읽기는 유지되며 warm monitor의 full read0 측정에 포함하지 않는다.
+
+## 12. 실제 이관·첫 예약 실행의 추가 수리
+
+10/14 실제438MiB alias/514MiB 불변 원본의 native 검증은66.66초/최대RSS1,884,928KiB로 통과했다. 원 bytes와 generation을 보존하고7,017bytes projection을 발행했다. 새 프로세스3회의 warm fullreport read는0, 소비13.528/13.576/13.549ms였다. 첫 코드 릴리스4e21d783e는14:24:53 PID547164/start1938099의 native 정책 소비와 보호 정책11개 해시 보존을 확인했다.
+
+그러나 첫 예약 Sentinel(14:26:25)은 raw `release/data` mount 경로를 소비자가 전달해 strict canonical source 검증에 거부됐다. trusted data root를 consumer 진입점에서 한 번 resolve하고 이후의 family/date 파일·자식 symlink 검사는 유지한다. 실제 native proof와 release/data symlink를 사용하는 whole consumer 반례2개가 수정 전 실패함을 확인하고 재검증한다. native kernel/helper/원 보고서/정책·기계/보조/매매 코드는 이 추가 수리에서 변경하지 않는다. 동일 승인으로 scoped source pair·반복 리뷰·표적 검증 후 ordered 재배포·실제 PID와 후속 예약 결과를 수용한다.

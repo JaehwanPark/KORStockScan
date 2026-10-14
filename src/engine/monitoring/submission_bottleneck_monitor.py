@@ -2416,7 +2416,9 @@ def entry_execution_tuning_semantics(data_root, now):
         "examples": [],
     }
     issues = Counter()
-    data_root = Path(data_root)
+    # The routed cron passes release/data; resolve the trusted deployment
+    # mount once. The family reader still rejects symlinks below this root.
+    data_root = Path(data_root).resolve()
 
     bootstrap_path = data_root / "runtime/policy_bootstrap" / f"runtime_policy_bootstrap_{day}.json"
     verify_path = data_root / "runtime/policy_bootstrap" / f"runtime_policy_bootstrap_verify_{day}.json"

@@ -34,3 +34,11 @@
 승인된 배포는 reviewed immutable candidate에서 delay/stop/holding-vote preflight와 active code handoff를 검증한 뒤 기존 ordered transition을 사용한다. release-set/detector/Sentinel 잠금·문서 CAS·원 정책 hash를 대사하고 graceful drain→선택/문서 발행→native 준비→정규 기동→singleton successor PID/start/cwd 실제 소비를 확인한다. 기존 보조 overlay 발행은 반복하지 않는다. 실제 결과 owner는 `data/report/entry_split_latency_deployment/2026-10-14/deployment-result.json`과 해당 `data/runtime/release_transitions/2026-10-14/<commit>/status.json`이다. 회귀·기동 수용으로 자연 신호/경제 성과를 주장하지 않는다.
 
 배포 이후의 정상 예약 관측에서 size-limit 해소와 원 상태·새 PID의 실제 기계/보조 시도 및 지연을 확인한다. 자연 표본 부재는 pending이며 실주문이나 provider replay를 시험 목적으로 만들지 않는다.
+
+## 5. 실제 이관·기동과 routed mount 추가 반례
+
+첫 구현4e21d783e의 실제 검증은 alias/immutable full native PASS,66.66초/peak1,884,928KiB, projection7,017B, fresh process warm13.528/13.576/13.549ms·fullreportread0이었다.14:24:53 실제PID547164/start1938099/cwd entry-proof-latency-20261014-4e21d783e/src와 정책 소비를 검증하고 보호 정책11개 hash를 보존했다. 증거는 `data/report/entry_split_latency_deployment/2026-10-14`와 해당 첫 transition receipt다.
+
+14:25 예약 실행에서 first source-only consumer의 `release/data` raw 경로가 managed canonical 경로와 달라 `managed_source_path:report_alias`가 발생했다. 이 실패를 기술적 검증 완료로 합치지 않는다. consumer의 trusted data mount만 초기에 resolve하는 최소 수정과 실제 migrated native proof+release/data symlink를 통한 whole consumer 반례2개를 추가했다. 수정 전2실패, 수정 후 관련 suite·코드 인계 source pair를 검증한다. 자식 symlink/data root 탈출 검사는 유지한다. 이 추가 수리는 monitor/H exact pair/시험/문서만 변경하며 helper/native report/policy/Main 기계·보조 로직은 첫 검증 bytes 그대로다.
+
+두 번째 코드 gate·배포/PID·정상 예약 관측 증거는 `data/report/entry_split_latency_pathfix_deployment/2026-10-14`와 `tmp/entry-proof-pathfix-evidence-20261014`가 소유한다. 첫 배포의 frozen evidence는 수정하지 않는다. 전체 Main 자연 지연 목표/경제성 source_gap은 별도 수용이다.

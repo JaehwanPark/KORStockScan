@@ -126,3 +126,16 @@ def test_runtime_summary_rejects_canonical_hash_used_as_report_byte_hash(publish
         semantic, {"entry_split_policy": published["policy_path"]})
     assert payload == {} and error == "semantic_unverified_large_source"
     assert proof["verified"] is False and proof["artifact_sha_matches"] is False
+
+
+def test_monitor_accepts_trusted_release_data_mount_without_weakening_child_checks(published, monkeypatch):
+    release = published["root"] / "release"
+    release.mkdir()
+    (release / "data").symlink_to(published["root"], target_is_directory=True)
+    _forbid_full_reads(monkeypatch, published)
+    result = monitor.entry_execution_tuning_semantics(release / "data", NOW)
+    assert result["entry_split"]["verification"] == "verified"
+    assert result["entry_split"]["policy_generation_binding"] == "matched"
+    assert result["entry_split"]["status"] == "source_gap"
+    assert result["entry_split"]["verification_receipt"]["report_sha256"] == published["report_sha"]
+    assert result["status"] == "observed"

@@ -420,6 +420,10 @@ REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES = {'src/engine/ai_engine_openai.py': 
                                             'cc43d8de315cc07cd9545c06d1ce4fbfa32eb432d52d39ccb67b16e22f0c8cfd')}
 
 
+# Canonical trusted data mount in the report-only entry-split consumer.
+REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd',
+                                                            'd276463a93a03a3c161a202811056eeae88a5def1e684ea3d0f5ee8a6217b7eb')}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -465,7 +469,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_IO_DIGEST_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name),
                     REVIEWED_NONFIXED_SUBMIT_SOURCES.get(name),
-                    REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES.get(name)):
+                    REVIEWED_ENTRY_PROJECTION_DELIVERY_SOURCES.get(name),
+                    REVIEWED_ENTRY_PROJECTION_MOUNT_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:
