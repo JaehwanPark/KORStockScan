@@ -38,3 +38,13 @@ Implementation → self review → 보완 → re-review: 위 두 결함의 produ
 8a252a6e9 machine5385bc0d5e9347728fa6860c45062cfd와 auxiliary43ba962abcbc4cb59c20d893ba382824가 정상 종료했다. legacy native check도 통과해 재계산하지 않았다. 최종 resume의delay/stop 재검증 결손은 원 ledger/단계/로그를 보존하고, 동일원천의native source ledger 재봉인과해당 두단계만 재생성해 닫는다.
 
 10/15 후보e26cdfe0ac17075e8278551b40ab55d3a87eac6d25086f2d93becf0c5b7289c3는 정상 source14/target15지만 code_refresh/registration_code_transition이없다. 당일14 code handoff의expiry만으로15 activation의parent검증을 보장하지 않는다. 현재99c의원bd40c7f12 origin을 실제 원천검증으로attest했다. native stage_code_refresh의동일commit no-op을보존하면서 코드동일후속reviewed release의명시적next-session code refresh로원15후보·origin·current99c CAS·날짜·payload·예산을보존한다. 새계산/정책재선정/기동/주문권한은없다. source 원 candidate와 code refresh proof는 불변generation으로검증하며원PID나currentPointer를변경하지않는다.
+
+## 자정 이후 최종 진단과 날짜 전환 보완
+
+00:16 현재 full 진단은 운영 cron/프로세스/자원/lock 정상과 별도로 10/14 observer의 old43 vs BDF current selector를 실패로 남겼다. 역사 보고서의20:42 as-of·partial·probe 결손을 새 현재 관측으로 재발행하지 않는다. source14 Main succeeded와 원 e880896a selector 보관본·observer generation/code seal을 실제 검증하는 경우만 역사 관측 warning으로 분리하며 coverage/현재 세대는 false를 유지한다. 현재 장중 검증·변조/원 receipt 부재/미종결 실패는 유지한다. 진단의 prepared effective date는 native finalization의 source14→effective15 호출 계약 그대로 제공하며 fake clock/env 정책을 만들지 않는다.
+
+날짜 전환 후 BDF의 current99c 검증은 실제 `v4_contract_code_changed:session_contract.py`를 반환했다. 새15 후보 d2f8의 기존 code-refresh proof를 원 BDF validator로 전체 검증하고 불변 candidate generation·원 BD40 active-parent validation·current parent CAS가 맞는 경우만 native handoff origin을 수용한다. mutable candidate alias는 관찰 provenance이며 불변 generation/source receipts를 동결한다. 날짜 전환 후보 재결속은 명시 source/publication→다음 KRX date·07:30 cutoff·live bootstrap/PREOPEN 미착수 guard 안에서만 허용한다. 원 source/current/정책값·budget·기동 권한은 보존한다.
+
+보완 구현→self review→fixture/alias 선택 수정→re-review를 수행했다. 역사 observer 정상과 archive/seal/code/terminal/당일/미완료 거부, 새벽 후보 정상과 cutoff/다른 날짜/source·PREOPEN·각 bootstrap 파일 거부, origin source/authority/mode/date/generation/full source/parent 거부를 검증한다. 최종 코드의 fresh33모듈·128scope parity와 표적검증을 완료한 후 필요한 native 후행 소비만 재결속한다. 최종 수치와 실제 배포/준비 결과는 전수 점검 기록에 남긴다.
+
+최종 보완 검증은 401 pytest PASS·compile/bash/diff·print-only parser PASS다. 현재10/15 owner7개는 고유하며 미종결4ID의 Acceptance/History를 이전했다. 최종 fresh parity는 native33 중source-only2파일 변경,128scope/76,800row/621hit·동일 signal SHA·mismatch0·provider0/orderfalse다. 실제 BDF origin의 10/15 rollover 검증은 current99c와826 source hashes를 반환했고, 역사 observer는 원 selector e880896a와 partial 결손을 보존한 historical_generation_verified였다. 외부 sync·추가 provider/주문·Main 기동은 실행하지 않았다.

@@ -434,7 +434,7 @@ def _attested_activation_parent(data_root, target_date, *, origin_root, origin_c
 
 def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
                        origin_root, activation_parent_origin_root, activation_parent_origin_commit, release_commit,
-                       reason, confirm, now=None, recover_failed_preopen=False):
+                       reason, confirm, now=None, recover_failed_preopen=False, closed_postclose_source_date=None):
     """Rebind an issued next-session candidate; no activation or reselection.
 
     The current pointer, dates, memberships, thresholds, auxiliary evidence and
@@ -451,7 +451,7 @@ def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
     if recover_failed_preopen:
         from src.engine.automation.next_preopen_readiness import require_failed_preopen_recovery
         require_failed_preopen_recovery(data_root, target_date, now=clock)
-    elif clock.tzinfo is None or target_date <= clock.astimezone(K.KST).date().isoformat():
+    elif (clock.tzinfo is None or target_date <= clock.astimezone(K.KST).date().isoformat()) and not closed_postclose_source_date:
         raise ValueError('v6_code_refresh_future_candidate_required')
     data_root = Path(data_root).absolute(); root = N.root(data_root)
     code_root = Path(__file__).resolve().parents[3]
@@ -464,6 +464,23 @@ def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
         path = root/'candidates'/('policy_'+target_date+'.json')
         original = N._read(path); f = original['continuous_reversal']
         N.validate(original,target_date=target_date)
+        if closed_postclose_source_date is not None:
+            from datetime import date, time
+            from src.engine.automation.next_preopen_readiness import _next_trading_day
+            local = clock.astimezone(K.KST) if clock.tzinfo is not None else None
+            bootstrap = data_root/'runtime/policy_bootstrap'
+            preopen = data_root/'report/threshold_cycle_preopen_status'/f'threshold_cycle_preopen_{target_date}.status.json'
+            if (recover_failed_preopen or local is None or local.date().isoformat() != target_date
+                    or local.time().replace(tzinfo=None) >= time(7,30)
+                    or f.get('source_date') != closed_postclose_source_date
+                    or f.get('publication_date') != closed_postclose_source_date
+                    or _next_trading_day(date.fromisoformat(closed_postclose_source_date)).isoformat() != target_date
+                    or preopen.exists() or preopen.is_symlink()
+                    or any(p.exists() or p.is_symlink() for p in (
+                        bootstrap/f'runtime_policy_bootstrap_{target_date}.json',
+                        bootstrap/f'runtime_policy_bootstrap_{target_date}.env',
+                        bootstrap/f'runtime_policy_bootstrap_verify_{target_date}.json'))):
+                raise ValueError('v6_code_refresh_closed_postclose_window_invalid')
         if (original['bundle_sha256'] != expected_bundle_sha256 or f['schema'] != SCHEMA
                 or f['effective_mode'] != 'next_session'):
             raise ValueError('v6_code_refresh_candidate_cas_failed')

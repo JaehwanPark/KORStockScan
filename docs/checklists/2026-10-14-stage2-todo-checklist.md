@@ -20,7 +20,7 @@
 
 ## 약세 장후 연구 결함보완 인계
 
-- [ ] `[MainMarketWeaknessPostcloseObservation1008] 압축 원천·native 판정 연결·누적·약세 조정 후보 보완` (`Due: 2026-10-14`, `Slot: POSTCLOSE`, `TimeWindow: 검증된 수리의 후속 배치·자연 수용; 실제 연구는 21:40~익일 05:40 허용 슬롯`, `Track: RuntimeStability`)
+- 이관(10/15): `[MainMarketWeaknessPostcloseObservation1008] 압축 원천·native 판정 연결·누적·약세 조정 후보 보완` (`Due: 2026-10-14`, `Slot: POSTCLOSE`, `TimeWindow: 검증된 수리의 후속 배치·자연 수용; 실제 연구는 21:40~익일 05:40 허용 슬롯`, `Track: RuntimeStability`)
   - Source: [10/14 구현 리뷰](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md), [10/13 결함보완계획 WR0–WR5](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md), [원 MW0–MW6·구현/배포 이력](../proposals/main-market-weakness-observer-repair-and-postclose-research-implementation-plan-2026-10-08.md), [기존 stable ID·Acceptance](2026-10-09-stage2-todo-checklist.md).
   - 범위: 10/14 사용자 승인으로 WR1~WR4 작업본 구현·반복 코드리뷰/수정을 수행했다. gzip-only reader/native 연결·확인 latch/누적/phase/typed 후보/안내와 설정 재결속을 구현했다. 실제 배치·예약 재결속·원천 재계산·실발송은 후속 수용이다. 추가 장중 hook·로깅·metadata·파일 조회/계산·queue/thread·API/AI 호출은 0, 기존 보조 패턴연구·정책/주문·Main/manual custody·퇴역 경계는 보존한다. joint/지연 개선 작업의 구현·배포 승인을 전용하지 않는다.
   - Acceptance: 기존 MW1 회귀·선택 observer 자연 소비 경계를 보존한다. 실제 schema/선별 전 census·gzip/원본 alias·bounded decode·effective listing 검증, 원 event/attempt/hash/ask/feature/label binding·결손 U, A/B/C/U·미래 join/TTL300·지연60/180·W/F/U 공통 분모·origin/중복 분리를 검증한다. 같은 관련 정의만 날짜 간 누적하고 실제 변경은 분리한다. 기계 지원 수치 축/미지원 사유와 보조 PASS 이후 CF를 구분하며 후보 합계 최대6·고정1,000회 안정성/U 민감도를 유지한다. 최대9회·야간 총 예약600초/worker1/512MiB·자식 회수·crash/delta0, optional code/calendar rebind와 terminal→누적→후보→관리자 Telegram 의미 ID/receipt·정정/uncertain→night summary를 검증한다. 연구는 strict/PREOPEN·기동 비차단이며 95% 보장·정책 자동 적용·주문 권한은 없다.
@@ -129,12 +129,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 10/14 승인 구현의 자연 수용 인계
 
-- [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
+- 이관(10/15): `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
   - Source: [보조 회로·제출 보완계획](../proposals/main-auxiliary-circuit-recovery-and-submit-receipt-remediation-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 제출 병목 개선계획 B0/B2/B3](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
   - Acceptance: 실제 새 PID/cwd/start ticks·bundle/registry 소비, 같은 시장명 비교의 receipt→revision→sizing 연결, 원 native5초·단일 recovery lease·공통 인증/unknown fail-closed·보호 exit 독립성을 확인한다. 회로가 자연히 열리지 않으면 HALF_OPEN 성공을 주장하지 않고 pending으로 남긴다. PASS와 intent/send/fill/terminal을 분리한다.
   - History: 10/12 계획의 P0-A/B/P1 새 결함만 구현 범위다. 기존 완료 native/readiness/auth owner 전체를 다시 열지 않는다. 기동 준비·배포 수용은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다.
 
-- [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
+- 이관(10/15): `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-14`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
   - Source: [잔여 병목·패턴 보완계획](../proposals/main-post-readiness-residual-bottleneck-and-unidentified-pattern-research-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 비고정 관측 개선계획 B0/B4](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
   - Acceptance: 슬롯5/long2·60/150초·원 lease deadline 보존, mixed branch 긴 관측 순환, exact item/route/epoch/sequence의 0D count·중복/신원 결손 분리, Main 편입 첫 실패와 capture/lease/record/PID/start 연결을 확인한다. 등록6정의/4scope의 registry·native root·OR 한 기회 소비를 실제 대상에서 확인하며 신호 미발생은 pending이다. PRE NXT와 AFTER SOR 범위를 REGULAR로 복사하지 않는다.
   - History: 10/12 완료 owner의 R1/R2/R4 새 결함 범위와 지정 등록의 자연 수용만 전달한다. 과거 원천의 route/count·미확정 손익을 소급 보충하지 않고 새 경제성/미래 날짜 gate를 추가하지 않는다.
@@ -223,6 +223,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 같은 owner는19:55 현재 PID의 첫 completed publication과 complete600초/290행 원천을 보존한다. native CLOSE_ONLY/TERMINAL_EXIT의 정확한 고정감시 진입 금지 경계를 수리하되20:00 CLOSED·위조/누락 안전 증거는 허용하지 않는다. 원 incident·source cursor·semantic partial을 보존하며 warning_pending을 full coverage나 자연3슬롯 수용으로 세지 않는다. 후속 H/monitor exact pair·보호 정책/native 불변·새 PID/보고 세대·후속 detector를 별도 receipt로 확인한다.
 
 - 같은 owner는17aac/PID1243842의20:17 배포 소비 PASS와20:22 수동 Sentinel exit1/source-only partial을 구분한다. 실제 CLI의 검증된 __main__ callback identity 수리를 격리 entrypoint 재현·변조 반례와 재리뷰 후 배포하며 보호80개/native33개·정책12개 불변을 확인한다. cli-summary-followup의 실제 PID/발행 결과를 기록하고 수동 확인으로 자연3슬롯·AI/주문·경제성 OPEN을 닫지 않는다.
+
+- 같은 owner는43a79e569/PID1263868/start4167445 소비와 두 native summary migration 완료를 보존하되20:36:46·20:40:14의130초 exit124/source-only partial을 남은 계산 병목으로 유지한다. cold-summary-followup의 buy332ffe는 무관한 trace payload·cash terminal 없는 window의 중복 계산을 줄이고 Mapping token의 논리 필드 일치를 수리한다. 최적화 동등성과 의도된 token 복원을 분리하며 exact parser/owner 전이·원 manifest archive·메모리 한도·기존130/40/180초·AI5초·보호80개/native33개·정책12개를 유지한다. 최종 표본 계측과 실제 cold 보고서 완료를 구분하고 memo 채우기나 수동 확인으로 자연3슬롯·AI·정상 주문·경제성 수용을 닫지 않는다.
+
+- 최종 후보a179bb42d의917개 시험·리뷰는 PASS이나20:56 정상 장후 격리 뒤 배포 사전검사가 중단돼 selector43/Main stopped를 유지한다. [현재 상태](../../tmp/submit-crisis-timeout-20261014/cold-summary-followup/current-task-disposition.json)의 기존 승인은 유효하다. `DirectFamilyPreopenPolicyHandoff`는 실행 중 장후 owner의 terminal 이후 정상 전환 창에서 날짜/정책/source/selector 재검증→정지 custody를 보존한 후보 배포→다음 PREOPEN 준비/적용→정상 PID 소비를 확인한다. 살아 있는 이전 PID를 요구하는 D helper를 그대로 재실행하지 않는다. `NonfixedDispatchReadinessReview1012`는 후속 실제 cold 보고서/observer/detector 및 자연3슬롯을, `AuxiliaryCircuitRecoveryRepair1012`는 새 자연 AI timeout·제출 증거를 확인한다. 자동 배포 예약이나 추가 승인 대기로 기록하지 않으며 기존 stable ID·Due/Slot/TimeWindow/Acceptance를 보존한다.
 
 ### 10/14 EOD 장후 실패 보완·10/15 인계
 

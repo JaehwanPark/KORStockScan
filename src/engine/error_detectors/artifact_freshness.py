@@ -299,7 +299,7 @@ def _submission_observer_transition_pending(root, artifact_path, now, *, max_sta
         return None
 
 
-def _submission_observer_generation_issue(payload, root):
+def _submission_observer_generation_issue(payload, root, *, selection_path=None):
     generation = payload.get("observer_generation")
     if generation is None:
         return "observer_generation_missing" if str(payload.get("date") or "") >= "2026-10-14" else None
@@ -323,7 +323,8 @@ def _submission_observer_generation_issue(payload, root):
             or not re.fullmatch("[0-9a-f]{64}", str(generation.get("observer_code_sha256") or ""))):
         return "observer_generation_invalid"
     try:
-        selection, sha = _observer_small_object(Path(root) / "data/runtime/runtime_release_selection.json", limit=1024 * 1024)
+        selection, sha = _observer_small_object(
+            selection_path or Path(root) / "data/runtime/runtime_release_selection.json", limit=1024 * 1024)
         if (selection.get("schema") != "runtime_release_selection_v1"
                 or generation.get("selection_sha256") != sha or generation.get("final_selection_sha256") != sha
                 or generation.get("release_root") != selection.get("release_root")
@@ -2820,6 +2821,34 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
 ]
 
 
+def _closed_submission_observer_evidence(payload, root, source_day, current_day):
+    """Attest a closed day's retained observation without claiming current coverage."""
+    if (not source_day or source_day >= current_day or payload.get('date') != source_day
+            or payload.get('execution_status') != 'completed'
+            or payload.get('semantic_status') not in {'partial', 'validated'}):
+        return None
+    try:
+        terminal, _ = _observer_small_object(Path(root) / 'data/report/threshold_cycle_postclose_status' /
+            f'threshold_cycle_postclose_{source_day}.status.json', limit=1024 * 1024)
+        if terminal.get('target_date') != source_day or terminal.get('status') != 'succeeded':
+            return None
+        archive = Path(root) / 'data/runtime/postclose_recovery' / source_day
+        candidates = sorted(archive.glob('*/selection-before.json'))
+        if len(candidates) > 16:
+            return None
+        for path in candidates:
+            if _submission_observer_generation_issue(payload, root, selection_path=path) is None:
+                return dict(status='historical_generation_verified', selection_path=str(path),
+                    selection_sha256=payload['observer_generation']['selection_sha256'],
+                    semantic_status=payload['semantic_status'],
+                    source_gap_preserved=payload.get('source_gap_semantics'),
+                    current_generation_verified=False, current_observation_verified=False,
+                    full_coverage_proven=False, runtime_effect=False, allowed_runtime_apply=False)
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
 @register_detector
 class ArtifactFreshnessDetector(BaseDetector):
     id = "artifact_freshness"
@@ -3021,6 +3050,20 @@ class ArtifactFreshnessDetector(BaseDetector):
                     details[f"{aid}_status"] = "warning"
                 continue
             if aid == "submission_bottleneck_monitor":
+                historical = _closed_submission_observer_evidence(observer_snapshot[0], PROJECT_ROOT,
+                    source_day, _today_kst_str(now_dt))
+                if historical is not None:
+                    try:
+                        unchanged = _observer_file_signature(artifact_path.lstat()) == observer_snapshot[2]
+                    except OSError:
+                        unchanged = False
+                    if unchanged:
+                        details[f'{aid}_status'] = 'historical_observation_only'
+                        details[f'{aid}_historical_evidence'] = historical
+                        dimensions['generation'] = historical
+                        warnings.append(f'{aid}: closed source-day observation retained; '
+                            'current coverage and historical source gaps remain unverified')
+                        continue
                 pending = _submission_observer_transition_pending(
                     PROJECT_ROOT, artifact_path, now_dt, max_staleness_sec=max_stale,
                     report_snapshot=observer_snapshot)
