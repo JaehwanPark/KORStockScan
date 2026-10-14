@@ -18,7 +18,8 @@ from types import ModuleType
 PREVIOUS_PARSER = '1ddc6f33db48db5fec69ec36297119741caebf42444f95e5a6d2e67f4795eeb2'
 CURRENT_PARSER = 'b1b1e59a99c09c79304d9db7cfd731fe47deb1afb9926303c7ba7d1d9ea03116'
 PREVIOUS_BUY_OWNER = '83d8b3d9e41f496e7f868789d635472fd5ebd994489f3db31bbb1f670565f468'
-CURRENT_BUY_OWNER = 'd487b4041fff24f690f78bef9bbfea1bdbf6dedd59c70095585b23e9fe1005e7'
+INTERMEDIATE_BUY_OWNER = 'd487b4041fff24f690f78bef9bbfea1bdbf6dedd59c70095585b23e9fe1005e7'
+CURRENT_BUY_OWNER = '332ffe2791e389741af907e3fa304352a0abea01e222053a20bff2ba2de7400b'
 LIMIT = 32 * 1024 * 1024
 SUMMARY_LIMIT = 128 * 1024 * 1024
 DEFINITIONS = {
@@ -97,7 +98,7 @@ def _funnel_module_identity(callback, owner, owner_sha, parser_path):
 def _callback_predecessors(callbacks, parser_path):
     from src.engine import pipeline_event_summary as parser
     _parser_dependencies(parser)
-    original, parser_only, funnel_old = [], [], []
+    original, parser_only, funnel_old, funnel_intermediate = [], [], [], []
     funnel = tuple(getattr(f, '__name__', None) for f in callbacks) == (
         '_blocker_label_from_stage_fields', '_is_ignored_event')
     for callback in callbacks:
@@ -123,8 +124,21 @@ def _callback_predecessors(callbacks, parser_path):
         original.extend((source, owner_sha))
         parser_only.extend((source, prior_owner))
         funnel_old.extend((source, PREVIOUS_BUY_OWNER if funnel else prior_owner))
+        funnel_intermediate.extend((source, INTERMEDIATE_BUY_OWNER if funnel else prior_owner))
     digest = lambda parts: hashlib.sha256('\n'.join(parts).encode()).hexdigest()
-    return digest(original), {digest(parser_only), digest(funnel_old)}
+    if funnel:
+        # These are reviewed parser/owner pairs, not independent allowlists.
+        # In particular, the new owner never appeared with PREVIOUS_PARSER.
+        predecessors = {
+            (PREVIOUS_PARSER, digest(funnel_old)),
+            (PREVIOUS_PARSER, digest(funnel_intermediate)),
+            (CURRENT_PARSER, digest(funnel_intermediate)),
+        }
+    else:
+        # Preserve the existing parser-only migration for unchanged external
+        # callbacks and the pinned native default_reason_label callback.
+        predecessors = {(PREVIOUS_PARSER, digest(parser_only))}
+    return digest(original), predecessors
 
 
 def _verify_predecessor(*, manifest, manifest_path, raw_path, summary_path,
@@ -134,10 +148,11 @@ def _verify_predecessor(*, manifest, manifest_path, raw_path, summary_path,
     parser_path = Path(parser_path).resolve()
     if (parser_contract != CURRENT_PARSER
             or hashlib.sha256(_read(parser_path, LIMIT)).hexdigest() != CURRENT_PARSER
-            or manifest.get('parser_contract') != PREVIOUS_PARSER):
+            or manifest.get('parser_contract') not in {PREVIOUS_PARSER, CURRENT_PARSER}):
         _fail('parser_predecessor_unverified')
     actual_callback, predecessors = _callback_predecessors(callbacks, parser_path)
-    if actual_callback != callback_contract or manifest.get('callback_contract') not in predecessors:
+    predecessor = (manifest.get('parser_contract'), manifest.get('callback_contract'))
+    if actual_callback != callback_contract or predecessor not in predecessors:
         _fail('callback_predecessor_unverified')
     original = _read(manifest_path, LIMIT)
     if json.loads(original) != manifest or manifest.get('checkpoint_digest') != checkpoint_digest(manifest):

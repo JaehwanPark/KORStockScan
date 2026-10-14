@@ -22,7 +22,7 @@ def event(second):
         stock_code='123456', record_id=second, fields={'reason': 'stretched'})
 
 
-def predecessor(tmp_path, *, parser_callback=False):
+def predecessor(tmp_path, *, parser_callback=False, parser_contract=None, buy_owner=None):
     raw = tmp_path/'raw.jsonl'
     raw.write_text(json.dumps(event(1))+'\n')
     callbacks = (P.default_reason_label, None) if parser_callback else (
@@ -35,9 +35,10 @@ def predecessor(tmp_path, *, parser_callback=False):
     parts = []
     for callback in callbacks:
         if callback is not None:
-            parts.extend((inspect.getsource(callback), C.PREVIOUS_PARSER if parser_callback else C.PREVIOUS_BUY_OWNER))
+            parts.extend((inspect.getsource(callback), C.PREVIOUS_PARSER if parser_callback
+                          else buy_owner or C.PREVIOUS_BUY_OWNER))
     source['callback_contract'] = hashlib.sha256('\n'.join(parts).encode()).hexdigest()
-    source['parser_contract'] = C.PREVIOUS_PARSER
+    source['parser_contract'] = parser_contract or C.PREVIOUS_PARSER
     source['checkpoint_digest'] = P.checkpoint_digest(source)
     manifest.write_text(json.dumps(source))
     return raw, options, manifest, manifest.read_bytes(), rows
@@ -156,14 +157,15 @@ def test_prepublication_same_size_raw_rewrite_is_rejected(tmp_path, monkeypatch)
     assert manifest.read_bytes()==original
 
 
-def test_parser_only_migration_keeps_unchanged_external_callback(tmp_path):
+def test_prior_parser_intermediate_funnel_owner_remains_supported(tmp_path):
     _,options,manifest,_,_=predecessor(tmp_path)
     parts=[]
     for cb in (options['reason_labeler'],options['ignore_payload']):
-        parts.extend((inspect.getsource(cb),C.CURRENT_BUY_OWNER))
+        parts.extend((inspect.getsource(cb),C.INTERMEDIATE_BUY_OWNER))
     revise(manifest,callback_contract=hashlib.sha256('\n'.join(parts).encode()).hexdigest())
     _,meta=P.update_and_load_pipeline_event_summaries(**options)
-    assert meta['contract_migration']['from_callback']==meta['callback_contract']
+    assert meta['contract_migration']['from_parser']==C.PREVIOUS_PARSER
+    assert meta['contract_migration']['from_callback']==hashlib.sha256('\n'.join(parts).encode()).hexdigest()
     assert not meta['rebuilt']
 
 
@@ -180,7 +182,7 @@ def test_explicit_bootstrap_preserves_existing_revalidation_authority(tmp_path):
     _,options,manifest,_,_=predecessor(tmp_path)
     revise(manifest,parser_contract=C.CURRENT_PARSER,callback_contract='changed_semantics')
     original=manifest.read_bytes()
-    with pytest.raises(RuntimeError,match='parser_predecessor_unverified'):
+    with pytest.raises(RuntimeError,match='callback_predecessor_unverified'):
         P.update_and_load_pipeline_event_summaries(**options)
     assert manifest.read_bytes()==original
     rows,meta=P.update_and_load_pipeline_event_summaries(**options,allow_bootstrap=True)
@@ -240,8 +242,11 @@ def _intercept_real_funnel_cli(monkeypatch, inspect_callbacks):
     assert len(calls) == 1
 
 
-def test_real_module_cli_migrates_exact_predecessor_without_runtime_reads(tmp_path, monkeypatch):
-    _, options, manifest, original, _ = predecessor(tmp_path)
+@pytest.mark.parametrize('same_parser', [False, True])
+def test_real_module_cli_migrates_exact_predecessor_without_runtime_reads(tmp_path, monkeypatch, same_parser):
+    _, options, manifest, original, _ = predecessor(tmp_path,
+        parser_contract=C.CURRENT_PARSER if same_parser else C.PREVIOUS_PARSER,
+        buy_owner=C.INTERMEDIATE_BUY_OWNER if same_parser else C.PREVIOUS_BUY_OWNER)
     native_update = P.update_and_load_pipeline_event_summaries
     expected_contracts = C._callback_predecessors(
         (B._blocker_label_from_stage_fields, B._is_ignored_event), Path(P.__file__).resolve())
@@ -256,11 +261,137 @@ def test_real_module_cli_migrates_exact_predecessor_without_runtime_reads(tmp_pa
         rows, meta = native_update(**isolated)
         assert sum(row['event_count'] for row in rows) == 1
         assert not meta['rebuilt']
+        assert meta['contract_migration']['from_parser'] == json.loads(original)['parser_contract']
         assert meta['contract_migration']['to_parser'] == C.CURRENT_PARSER
         assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes() == original
         assert meta['contract_migration']['raw_read_start'] == meta['contract_migration']['raw_read_end']
     _intercept_real_funnel_cli(monkeypatch, inspect_callbacks)
     assert manifest.read_bytes() != original
+
+
+@pytest.mark.parametrize('append', [False, True])
+def test_same_parser_owner_migration_preserves_archival_and_suffix(tmp_path, monkeypatch, append):
+    raw, options, manifest, original, _ = predecessor(tmp_path,
+        parser_contract=C.CURRENT_PARSER, buy_owner=C.INTERMEDIATE_BUY_OWNER)
+    start = raw.stat().st_size
+    if append:
+        with raw.open('a') as stream:
+            stream.write(json.dumps(event(2)) + '\n')
+    real_open = builtins.open
+    reads = []
+    class Tracked:
+        def __init__(self, stream): self.stream = stream
+        def __getattr__(self, name): return getattr(self.stream, name)
+        def __enter__(self): return self
+        def __exit__(self, *args): return self.stream.__exit__(*args)
+        def readline(self, *args):
+            assert self.stream.tell() >= start
+            value = self.stream.readline(*args)
+            reads.append(len(value))
+            return value
+    def guarded(path, *args, **kwargs):
+        stream = real_open(path, *args, **kwargs)
+        return Tracked(stream) if Path(path) == raw and args and args[0] == 'rb' else stream
+    monkeypatch.setattr(builtins, 'open', guarded)
+    rows, meta = P.update_and_load_pipeline_event_summaries(**options)
+    receipt = meta['contract_migration']
+    assert receipt['from_parser'] == receipt['to_parser'] == C.CURRENT_PARSER
+    assert receipt['from_callback'] != receipt['to_callback']
+    assert receipt['from_callback'] == json.loads(original)['callback_contract']
+    assert not meta['rebuilt'] and meta['start_raw_offset'] == start
+    assert receipt['raw_read_start'] == start
+    assert sum(reads) == raw.stat().st_size - start
+    assert sum(row['event_count'] for row in rows) == (2 if append else 1)
+    assert Path(receipt['original_manifest_archive']).read_bytes() == original
+    assert json.loads(manifest.read_text())['checkpoint_digest'] == P.checkpoint_digest(json.loads(manifest.read_text()))
+
+
+@pytest.mark.parametrize('parser_kind,owner_kind', [
+    ('current', 'original'), ('previous', 'current'),
+    ('unknown', 'intermediate'), ('current', 'unknown'),
+])
+def test_parser_and_callback_owner_pairs_cannot_be_crossed(tmp_path, parser_kind, owner_kind):
+    parsers = {'current': C.CURRENT_PARSER, 'previous': C.PREVIOUS_PARSER, 'unknown': 'f' * 64}
+    owners = {'original': C.PREVIOUS_BUY_OWNER, 'intermediate': C.INTERMEDIATE_BUY_OWNER,
+              'current': C.CURRENT_BUY_OWNER, 'unknown': 'e' * 64}
+    _, options, manifest, original, _ = predecessor(tmp_path,
+        parser_contract=parsers[parser_kind], buy_owner=owners[owner_kind])
+    summary = Path(json.loads(original)['summary_path'])
+    original_summary = summary.read_bytes()
+    with pytest.raises(RuntimeError, match='parser_predecessor_unverified|callback_predecessor_unverified'):
+        P.update_and_load_pipeline_event_summaries(**options)
+    assert manifest.read_bytes() == original and summary.read_bytes() == original_summary
+    assert not (manifest.parent / 'contract_migrations').exists()
+
+
+def test_current_parser_does_not_adopt_previous_default_parser_callback(tmp_path):
+    _, options, manifest, original, _ = predecessor(tmp_path,
+        parser_callback=True, parser_contract=C.CURRENT_PARSER)
+    with pytest.raises(RuntimeError, match='callback_predecessor_unverified'):
+        P.update_and_load_pipeline_event_summaries(**options)
+    assert manifest.read_bytes() == original
+    assert not (manifest.parent / 'contract_migrations').exists()
+
+
+def test_same_parser_migration_preserves_complete_previous_migration_chain(tmp_path, monkeypatch):
+    raw, options, manifest, first_original, _ = predecessor(tmp_path)
+    first_source = json.loads(first_original)
+    parts = []
+    for callback in (options['reason_labeler'], options['ignore_payload']):
+        parts.extend((inspect.getsource(callback), C.INTERMEDIATE_BUY_OWNER))
+    intermediate_callback = hashlib.sha256('\n'.join(parts).encode()).hexdigest()
+    summary = Path(first_source['summary_path'])
+    # Model the already published C checkpoint, including its native migration
+    # receipt and original archive, entirely inside this private source fixture.
+    first_receipt = C.archive_predecessor(dict(
+        schema='native_summary_contract_migration_v1',
+        from_parser=C.PREVIOUS_PARSER, to_parser=C.CURRENT_PARSER,
+        from_callback=first_source['callback_contract'], to_callback=intermediate_callback,
+        original_checkpoint=first_source['checkpoint_digest'],
+        original_manifest_sha256=hashlib.sha256(first_original).hexdigest(),
+        original_summary_sha256=hashlib.sha256(summary.read_bytes()).hexdigest(),
+        original_summary_generation=C._stamp(summary), raw_generation=C._stamp(raw),
+        raw_read_start=raw.stat().st_size, raw_read_end=raw.stat().st_size,
+        verification_owner_sha256='083c8368b852618e47e3322958d8c8c655fdb27c958d0524049542d9fa32fabf',
+        decision_authority='report_only', runtime_effect=False,
+        historical_rebuild_performed=False), manifest)
+    first_archive = Path(first_receipt['original_manifest_archive'])
+    revise(manifest, parser_contract=C.CURRENT_PARSER,
+           callback_contract=intermediate_callback, contract_migration=first_receipt)
+    previous_checkpoint = manifest.read_bytes()
+    start = raw.stat().st_size
+    with raw.open('a') as stream:
+        stream.write(json.dumps(event(2)) + '\n')
+    real_open = builtins.open
+    reads = []
+    class Tracked:
+        def __init__(self, stream): self.stream = stream
+        def __getattr__(self, name): return getattr(self.stream, name)
+        def __enter__(self): return self
+        def __exit__(self, *args): return self.stream.__exit__(*args)
+        def readline(self, *args):
+            assert self.stream.tell() >= start
+            value = self.stream.readline(*args)
+            reads.append(len(value))
+            return value
+    def guarded(path, *args, **kwargs):
+        stream = real_open(path, *args, **kwargs)
+        return Tracked(stream) if Path(path) == raw and args and args[0] == 'rb' else stream
+    monkeypatch.setattr(builtins, 'open', guarded)
+    rows, meta = P.update_and_load_pipeline_event_summaries(**options)
+    second_receipt = meta['contract_migration']
+    second_archive = Path(second_receipt['original_manifest_archive'])
+    assert second_archive != first_archive
+    assert first_archive.read_bytes() == first_original
+    assert second_archive.read_bytes() == previous_checkpoint
+    assert json.loads(second_archive.read_text())['contract_migration'] == first_receipt
+    assert second_receipt['original_manifest_sha256'] == hashlib.sha256(previous_checkpoint).hexdigest()
+    assert second_receipt['original_checkpoint'] == json.loads(previous_checkpoint)['checkpoint_digest']
+    assert second_receipt['from_parser'] == second_receipt['to_parser'] == C.CURRENT_PARSER
+    assert second_receipt['from_callback'] == intermediate_callback != second_receipt['to_callback']
+    assert sum(reads) == raw.stat().st_size - start
+    assert not meta['rebuilt'] and meta['start_raw_offset'] == start
+    assert sum(row['event_count'] for row in rows) == 2
 
 
 @pytest.mark.parametrize('mutation', [

@@ -7,6 +7,147 @@ import pytest
 from src.engine import buy_funnel_sentinel as sentinel
 
 
+def _private_compact_fields(fields):
+    """Use the native field encoding without touching any runtime cache."""
+    import hashlib
+    from src.engine.monitoring import sentinel_compact_store as store
+    header, payload = store._pack({'fields': fields})
+    _, size, digest, hot = json.loads(header)
+    class Reader:
+        def read(self, offset, expected):
+            assert offset == 0 and hashlib.sha256(payload).hexdigest() == expected
+            return payload
+    return store.CompactFields(Reader(), 0, digest, size, hot)
+
+
+@pytest.mark.parametrize('stage', ['blocked_strength_momentum', 'budget_pass', 'latency_block', 'order_bundle_submitted'])
+def test_non_ai_trace_stage_never_reads_lazy_payload(stage):
+    from collections.abc import Mapping
+    from datetime import datetime
+    class Unreadable(Mapping):
+        def __getitem__(self, key): raise AssertionError('irrelevant trace payload read')
+        def __iter__(self): raise AssertionError('irrelevant trace payload iterated')
+        def __len__(self): raise AssertionError('irrelevant trace payload measured')
+    event = sentinel.PipelineEvent(datetime(2026,10,14,10), 'ENTRY_PIPELINE', stage,
+                                   'fixture', '005930', '1', Unreadable())
+    assert sentinel._trusted_ai_trace_result(event) is False
+
+
+@pytest.mark.parametrize('compact', [False, True])
+@pytest.mark.parametrize('stage,trace,parse_ok,expected', [
+    ('ai_confirmed', 'trace-1', 'False', True),
+    ('ai_confirmed', 'unknown', 'True', False),
+    ('early_accel_strong_bundle_recheck_failed', 'trace-1', 'True', True),
+    ('early_accel_strong_bundle_recheck_failed', 'trace-1', 'False', False),
+    ('early_accel_strong_bundle_recheck_failed', '', 'True', False),
+])
+def test_trace_stage_shortcut_preserves_required_proof(compact, stage, trace, parse_ok, expected):
+    from datetime import datetime
+    fields = dict(ai_decision_trace_id=trace, ai_parse_ok=parse_ok, ai_result_source='live',
+                  ai_decision_evaluation_status='evaluated', decision_quality_contract_status='pass')
+    event = sentinel.PipelineEvent(datetime(2026,10,14,10), 'ENTRY_PIPELINE', stage,
+                                   'fixture', '005930', '1', _private_compact_fields(fields) if compact else fields)
+    assert sentinel._trusted_ai_trace_result(event) is expected
+
+
+@pytest.mark.parametrize('compact', [False, True])
+@pytest.mark.parametrize('case', ['absent', 'outside_window', 'retry_only', 'summary_only',
+                                 'terminal', 'duplicate_terminal', 'recovered', 'unproven'])
+def test_cash_ledger_shortcut_preserves_exact_terminal_population(monkeypatch, compact, case):
+    from dataclasses import replace
+    from datetime import datetime, timedelta
+    start, end = datetime(2026,9,11,10), datetime(2026,9,11,10,3)
+    events = _cash_exclusion_events(
+        {'kt00011_cash_orderable_contract_status':'missing'} if case == 'unproven' else None,
+        recovered=case == 'recovered')
+    summaries = None
+    if case in {'absent', 'summary_only'}:
+        events = [e for e in events if e.stage != 'blocked_zero_qty']
+    elif case == 'outside_window':
+        events = [replace(e, emitted_at=end+timedelta(seconds=1)) if e.stage=='blocked_zero_qty' else e for e in events]
+    elif case == 'retry_only':
+        events = [replace(e, fields={**e.fields,'ai_call_trigger_reason':'early_accel_recheck'}) if e.stage=='blocked_zero_qty' else e for e in events]
+    elif case == 'duplicate_terminal':
+        events += [replace(e) for e in events]
+    if case == 'summary_only':
+        summaries = [dict(stage='blocked_zero_qty', pipeline='ENTRY_PIPELINE', stock_code='005930',
+            bucket_start=start.isoformat(), first_seen=start.isoformat(), last_seen=start.isoformat(),
+            event_count=20, reason_label='blocked_zero_qty:diagnostic_only')]
+    if compact:
+        events = [replace(e,fields=_private_compact_fields(e.fields)) for e in events]
+    original = sentinel._exact_submit_drought_axis_summary
+    calls = []
+    def count(population, **kwargs):
+        calls.append(tuple((e.stage,e.record_id) for e in population))
+        return original(population, **kwargs)
+    raw = sentinel._summarize_events_included(events,start_at=start,end_at=end,summary_rows=summaries)
+    monkeypatch.setattr(sentinel,'_exact_submit_drought_axis_summary',count)
+    result = sentinel._calculate_event_summary(events,start_at=start,end_at=end,summary_rows=summaries)
+    if case in {'terminal','duplicate_terminal'}:
+        assert len(calls) == 3
+        assert result['cash_shortfall_exclusion']['excluded_attempt_count'] == 20
+        assert result['cash_shortfall_exclusion']['raw_exact_attempt_contract'] == raw['exact_attempt_contract']
+    else:
+        assert result == raw
+        assert 'cash_shortfall_exclusion' not in result
+        assert len(calls) == (2 if case in {'recovered','unproven'} else 1)
+    if case == 'summary_only':
+        assert result['exact_attempt_contract']['summary_terminal_identity_gap_events'] == 20
+
+
+@pytest.mark.parametrize('token', ['latency_state_danger', 'ai_score_50_buy_hold_override'])
+@pytest.mark.parametrize('variant,expected', [('key',True),('value',True),('unicode',True),
+    ('split',False),('literal_escape',False),('actual_escape',True),('nested_text',True),('long',True),('none',False)])
+def test_token_detection_preserves_logical_dict_fields_for_compact_mapping(token, variant, expected):
+    from collections import UserDict
+    fields = {'x': token}
+    if variant=='key':fields={token:'yes'}
+    elif variant=='unicode':fields={'x':'한글 '+token}
+    elif variant=='split':fields={token[:5]:token[5:]}
+    elif variant=='literal_escape':fields={'x':'\\u0061'+token[1:]}
+    elif variant=='actual_escape':fields={'x':chr(ord(token[0]))+token[1:]}
+    elif variant=='nested_text':fields={'x':{'nested':token}}
+    elif variant=='long':fields={'x':'z'*100000+token}
+    elif variant=='none':fields={'x':None}
+    compact = _private_compact_fields(fields)
+    logical = dict(compact.items())
+    assert sentinel._contains_text_token(logical, token) is expected
+    assert sentinel._contains_text_token(compact, token) is expected
+    assert sentinel._contains_text_token(UserDict(logical), token) is expected
+
+
+def test_compact_token_scan_rejects_malformed_payload():
+    import hashlib
+    import zlib
+    from src.engine.monitoring.sentinel_compact_store import CompactFields
+    body = zlib.compress(b'not-valid-json')
+    class Reader:
+        def read(self,offset,expected):
+            assert hashlib.sha256(body).hexdigest()==expected
+            return body
+    fields=CompactFields(Reader(),0,hashlib.sha256(body).hexdigest(),14,{})
+    with pytest.raises(ValueError):sentinel._contains_text_token(fields,'latency_state_danger')
+
+
+@pytest.mark.parametrize('stage,token,counter', [
+    ('latency_block','latency_state_danger','latency_state_danger_events'),
+    ('custom_observation','ai_score_50_buy_hold_override','upstream_block_events'),
+])
+def test_token_only_evidence_survives_compact_full_summary(stage, token, counter):
+    from dataclasses import replace
+    from datetime import datetime, timedelta
+    start=datetime(2026,10,14,10)
+    # The canonical cache stores nested diagnostics as strings. No dedicated
+    # reason, decision, or explicit override field supplies a second route.
+    fields={'diagnostic':json.dumps({'nested':{'marker':token}})}
+    event=sentinel.PipelineEvent(start,'ENTRY_PIPELINE',stage,'fixture','005930','1',fields)
+    options=dict(start_at=start-timedelta(seconds=1),end_at=start+timedelta(seconds=1))
+    logical=sentinel._calculate_event_summary([event],**options)
+    compact=sentinel._calculate_event_summary([replace(event,fields=_private_compact_fields(fields))],**options)
+    assert logical[counter] == 1
+    assert compact == logical
+
+
 @pytest.mark.parametrize('override,skipped', [(None, False), ('240', True)])
 def test_periodic_wrapper_runs_next_tick_and_preserves_explicit_cooldown(tmp_path, override, skipped):
     import os

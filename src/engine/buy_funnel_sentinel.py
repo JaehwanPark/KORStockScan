@@ -17,6 +17,7 @@ import os
 import stat
 import tempfile
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -322,7 +323,7 @@ def _is_truthy_text(value: Any) -> bool:
 
 
 def _contains_text_token(value: Any, token: str) -> bool:
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return any(
             token in str(key) or _contains_text_token(item, token)
             for key, item in value.items()
@@ -1612,13 +1613,13 @@ def _ai_trace_key(event: PipelineEvent) -> str:
 
 
 def _trusted_ai_trace_result(event: PipelineEvent) -> bool:
+    if event.stage != "ai_confirmed" and event.stage not in AI_TRACE_RESULT_STAGES:
+        return False
     trace_id = _field_first(event.fields, ("ai_decision_trace_id",))
     if trace_id in {"", "-", "unknown", "not_available"}:
         return False
     if event.stage == "ai_confirmed":
         return True
-    if event.stage not in AI_TRACE_RESULT_STAGES:
-        return False
     result_source = _field_first(event.fields, ("ai_result_source",)).lower()
     evaluation_status = _field_first(
         event.fields, ("ai_decision_evaluation_status",)
@@ -2411,6 +2412,15 @@ def _calculate_event_summary(events, *, start_at, end_at, summary_rows=None):
     raw = _summarize_events_included(
         events, start_at=start_at, end_at=end_at, summary_rows=summary_rows
     )
+    # Cash exclusion requires a retained terminal row in this exact window.
+    # A diagnostic summary alone cannot prove a broker-bound cash shortfall.
+    if not any(
+        event.stage == "blocked_zero_qty"
+        and start_at <= event.emitted_at <= end_at
+        and not _is_early_accel_recheck_retry_event(event)
+        for event in events
+    ):
+        return raw
     scoped = [
         e
         for e in events
