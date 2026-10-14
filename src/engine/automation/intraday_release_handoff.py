@@ -430,7 +430,7 @@ REVIEWED_STARTUP_OBSERVER_SOURCES = {'src/engine/monitoring/submission_bottlenec
 
 # Source-exact observer availability and bounded handoff diagnosis; no trading authority.
 # Evidence: docs/audits/entry-split-projection-and-main-delivery-implementation-review-2026-10-14.md section8.
-REVIEWED_OBSERVER_HEALTH_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd', '01db52399dcc1a4b4da7e81bd64da07482b6819f8cc9dc9b2cb1672a7b04e910')}
+REVIEWED_OBSERVER_HEALTH_SOURCES = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd', '2941814205cfc9e92896b6807536792e661e0c13070a99ae3ff2205c5baa82bd')}
 
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):

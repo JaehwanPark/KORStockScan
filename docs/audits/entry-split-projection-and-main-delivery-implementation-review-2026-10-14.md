@@ -85,4 +85,4 @@
 
 최신16:56 자연 보고서에서 현재 source/machine issues는 없지만 clean bounded 읽기·AI 결과/소비 미검증까지 artifact 실패로 묶인 경계를 추가 보완한다. 엄격한 검증 경로와 별개로, 유효한 발행/세대/시각/actor/native/정책/schema/count 및 실제 오류0을 확인한 제한 관측은 WARNING/pending이다. source quality·미확인 PASS·invalid/timeout·원 uncovered 범위는 유지하며 full coverage/PASS/복구/매매 권한을 만들지 않는다. 잘못된 읽기/신원/정책/실제 issues는 FAIL이다. 이 최종 기준은 앞선 엄격 경로의 미검증 결과를 artifact FAIL로만 취급하던 기준을 보완한다.
 
-최종 여섯 번째 source 동결 후8suite 통합1,730개가12.50초에 통과했다. Python compile·bash 문법·diff 검사와70개 문서 링크/기존4owner/print-only parser25항목을 확인한다. 원150초의 실제 영수증 교체 경합, native birth/현재 수명, complete/clean bounded 관측과 AI invalid/timeout/미확인 PASS의 경고 경계 및 변조·손상·실제 계약 오류 hard FAIL 반례를 포함한다. 이 기술 검증은 전체 원천·AI 응답·Main 소비·경제 성과의 완료가 아니며, 첫 진단과 자연 정규 예약의 실제 결과를 별도로 수용한다.
+최종 여섯 번째 source 동결 후8suite 통합1,731개가12.16초에 통과했다. Python compile·bash 문법·diff 검사와70개 문서 링크/기존4owner/print-only parser25항목을 확인한다. 원150초의 실제 영수증 교체 경합, native birth/현재 수명, complete/clean bounded 관측과 AI invalid/timeout/미확인 PASS의 경고 경계 및 변조·손상·실제 계약 오류 hard FAIL 반례를 포함한다. 이 기술 검증은 전체 원천·AI 응답·Main 소비·경제 성과의 완료가 아니며, 첫 진단과 자연 정규 예약의 실제 결과를 별도로 수용한다.

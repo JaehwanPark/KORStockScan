@@ -3131,7 +3131,8 @@ def observation_health_projection(result):
     gap, machine, execution = stages
     allowed_diagnostics = {'machine_probe:' + reason for reason in
         ('route_snapshot_missing', '0B_missing', '0B_age_exceeded', '0D_missing', '0D_age_exceeded')}
-    allowed_diagnostics.add('machine_trace:source_quality_blocked_before_assessment')
+    allowed_diagnostics.update('machine_trace:' + reason for reason in
+        ('source_quality_blocked_before_assessment', 'required_feature_blocked_before_assessment'))
     allowed_diagnostics.update('machine_trace:' + reason for reason in
         ('reversal_first_signal_invalidated', 'reversal_signal_generation_changed'))
     pending = obj(gap.get('native_pending_observations'))

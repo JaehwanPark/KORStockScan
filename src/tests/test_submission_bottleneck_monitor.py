@@ -303,13 +303,18 @@ def test_known_sparse_source_availability_diagnostics_remain_warning_not_contrac
     assert monitor.observation_health_projection(result)['status']=='not_eligible'
 
 
-@pytest.mark.parametrize('reason',['reversal_first_signal_invalidated','reversal_signal_generation_changed'])
+@pytest.mark.parametrize('reason',['reversal_first_signal_invalidated','reversal_signal_generation_changed',
+                                  'required_feature_blocked_before_assessment'])
 def test_native_validated_lifecycle_diagnostic_is_not_an_observer_failure(reason):
     result=_recorded_guard_health_fixture()
     gap=result['source_gap_semantics']
     gap['diagnostics']={'machine_trace:'+reason:2}
     gap['diagnostics_by_scope']={'KRX|KRX_REGULAR|route:krx_nxt_integrated|machine_trace:'+reason:2}
     assert monitor.observation_health_projection(result)['status']=='warning_pending'
+    key=next(iter(gap['diagnostics_by_scope']))
+    gap['diagnostics_by_scope'][key]=3
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+    gap['diagnostics_by_scope'][key]=2
     gap['diagnostics']['machine_probe:required_feature_insufficient_unclassified']=1
     assert monitor.observation_health_projection(result)['status']=='not_eligible'
 
