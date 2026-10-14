@@ -3381,6 +3381,31 @@ def test_native_pending_unknown_censored_observation_is_not_a_no_match_or_admiss
     assert monitor._probe_verified_pending(row) is None
 
 
+@pytest.mark.parametrize('raw_ready,historical_true,unknown', [(0, 0, 9), (1, 0, 9), (0, 4, 9), (1, 4, 0)])
+def test_pending_selected_scope_keeps_latest_truth_and_historical_populations_separate(raw_ready, historical_true, unknown):
+    now = monitor.stamp('2026-10-15T08:10:00+09:00')
+    row = _native_no_match_probe(now, receipt_format='dict')
+    row['fields'].update(zero_base_probe_result='observation_incomplete',
+        zero_base_probe_reason='confirmation_pending_at_residence_end')
+    receipt = row['fields']['native_observation_receipt']
+    receipt.update(reason='no_matching_pattern', native_source_current=True,
+        selected_branch_truth={'G1': 'FALSE'}, selected_pending_count=2,
+        raw_ready_count=raw_ready, selected_ready_count=0, source_censored_count=0,
+        selected_lifecycle_counts={'G1': {'TRUE': historical_true, 'FALSE': 10, 'UNKNOWN': unknown}})
+    before = json.dumps(row, sort_keys=True)
+    assert monitor._probe_verified_pending(row) == dict(pending_count=2, unknown_count=unknown, source_censored_count=0)
+    assert json.dumps(row, sort_keys=True) == before
+    assert monitor._probe_verified_no_match(row) is False
+    receipt['selected_ready_count'] = 1
+    assert monitor._probe_verified_pending(row) is None
+    receipt['selected_ready_count'] = 0
+    receipt['selected_branch_truth']['G1'] = 'TRUE'
+    assert monitor._probe_verified_pending(row) is None
+    receipt['selected_branch_truth']['G1'] = 'FALSE'
+    receipt['native_source_current'] = False
+    assert monitor._probe_verified_pending(row) is None
+
+
 def test_verified_native_false_is_warning_without_machine_admission_and_tampered_count_fails(tmp_path):
     now=monitor.stamp('2026-10-14T16:45:00+09:00')
     row=_native_no_match_probe(now,receipt_format='dict')
@@ -3567,6 +3592,9 @@ def test_real_main_seals_final_generation_and_notification_before_health_publica
         if isinstance(value,list):return [shift(v) for v in value]
         if isinstance(value,str) and len(value)>10 and value[10]=='T' and monitor.stamp(value):
             return (monitor.stamp(value)+delta).isoformat()
+        if isinstance(value, str) and len(value) == 10 and monitor.stamp(value):
+            # Policy effective dates move with this live-clock fixture too.
+            return (monitor.stamp(value).date() + (now.date() - old.date())).isoformat()
         return value
     fixture=shift(fixture)
     from src.trading.market import session_contract

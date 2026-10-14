@@ -431,7 +431,9 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
         if registry is None:
             return dict(meta, status="not_installed", findings=[])
         start = datetime.fromisoformat(source_date).replace(tzinfo=now.tzinfo, hour=registry["window_start"][0], minute=registry["window_start"][1])
-        overdue = now >= start + timedelta(seconds=registry.get("window_grace_sec", 0))
+        # Match the registry freshness check's inclusive initial publication
+        # grace. Existing JSON/markdown artifacts are checked outside this branch.
+        overdue = now > start + timedelta(seconds=registry.get("window_grace_sec", 0))
         return dict(meta, status="unobservable" if overdue else "future_due",
                     expected_overdue=overdue, findings=["holding_semantic_receipt_missing_after_due"] if overdue else [])
     try:
@@ -2489,6 +2491,9 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
         "window_start": (8, 5),
         "window_end": (8, 55),
+        # Producer and detector share the 08:05 cron trigger. Allow its first
+        # publication one cadence; this never relaxes an existing receipt.
+        "window_grace_sec": 300,
     },
     {
         "id": "holding_exit_sentinel_aftermarket_report",

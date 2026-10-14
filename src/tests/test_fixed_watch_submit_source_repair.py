@@ -85,6 +85,46 @@ def test_submit_caller_stops_with_exact_binding_failure_before_other_guards(monk
     assert events[0][1]['actual_order_submitted'] is False
 
 
+@pytest.mark.parametrize('stock_session,source_session', [
+    ('krx_like_premarket', 'premarket_krx_like'),
+    ('KRX_LIKE_PREMARKET', 'PREMARKET_KRX_LIKE'),
+    ('premarket_krx_like', 'krx_like_premarket'),
+])
+def test_premarket_native_alias_binds_exact_revision_without_rewriting_receipts(stock_session, source_session):
+    from src.engine.scalping.entry_execution_sizing_plan import compose_entry_execution_sizing_plan
+    from src.tests.test_entry_execution_sizing_plan import _priced
+    stock, receipt = fixed()
+    stock.update(effective_venue='PREMARKET_KRX_LIKE', market_session_bucket=stock_session)
+    receipt.update(effective_venue='PREMARKET_KRX_LIKE', market_session_bucket=source_session)
+    stock['_machine_observation_revision'] = dict(digest='a'*64,
+        key=[stock['watch_admission_id'], receipt['evaluation_attempt_id'], '403870',
+             'PREMARKET_KRX_LIKE', source_session, 'b'*64, os.getpid()])
+    before = deepcopy(receipt)
+    @observe_submit_attempt
+    def run(stock, code):
+        assert bind_submit_attempt_machine_lineage(stock, code, receipt)
+        bound = submit_attempt_machine_lineage(stock, code)
+        assert H._machine_submit_revision_is_current(stock, bound)
+        orders, fields = compose_entry_execution_sizing_plan(
+            [_priced(dict(qty=10, price=10000))], expected_total_qty=10,
+            action_receipt=bound, quantity_policy_version='initial-v2', split_policy_version='initial-v2')
+        assert fields['entry_execution_sizing_valid']
+        assert sum(order['qty'] for order in orders) == 10
+        assert bound['market_session_bucket'] == source_session
+        return False
+    assert run(stock, '403870') is False
+    assert receipt == before
+    assert stock['market_session_bucket'] == stock_session
+
+
+@pytest.mark.parametrize('session', ['krx_regular', 'nxt_regular_overlap', 'nxt_aftermarket',
+                                    'nxt_premarket', 'unknown', 'premarket_krx_like:KRX',
+                                    ' premarket_krx_like', '', None, ['premarket_krx_like']])
+def test_premarket_alias_never_merges_other_or_unknown_sessions(session):
+    from src.engine.monitoring.entry_attempt_identity import same_market_session_name
+    assert not same_market_session_name('krx_like_premarket', session)
+
+
 def test_actual_capture_and_projection_preserve_case_through_call_local_sizing(monkeypatch,tmp_path):
     from src.engine.scalping import ai_decision_trace as trace
     from src.tests.test_ai_decision_trace import _enable
@@ -278,6 +318,11 @@ def _native_reversal_claim(monkeypatch):
     return B, state, values, claim
 
 
+@pytest.mark.parametrize('venue,session,item,route', [
+    ('SOR', 'SOR_REGULAR', '403870_AL', 'krx_nxt_integrated'),
+    ('NXT', 'NXT_PREMARKET', '403870_NX', 'nxt_only'),
+    ('KRX', 'KRX_REGULAR', '403870', 'krx_only'),
+])
 @pytest.mark.parametrize('version', ['v5', 'v6'])
 @pytest.mark.parametrize('case,expected', [
     ('down', 'reversal_first_signal_invalidated'),
@@ -286,7 +331,7 @@ def _native_reversal_claim(monkeypatch):
     ('expire', 'reversal_signal_expired'),
     ('epoch', None), ('invalid_source', None), ('bad_quote', None),
 ])
-def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeypatch, tmp_path, version, case, expected):
+def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeypatch, tmp_path, version, case, expected, venue, session, item, route):
     from src.engine.scalping import reversal_current_backend as D
     from src.engine.scalping import reversal_source_diagnostics as DIAG
     from src.engine.scalping import reversal_extended_runtime as V6
@@ -299,41 +344,41 @@ def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeyp
     B = V6 if version == 'v6' else V5
     values = [row(i, 100) for i in range(121)] + [row(121, 99), row(122, 100)]
     for r in values:
-        r[9] = '403870_AL'
+        r[9] = item
     state = E.State(branch_ids=['legacy_dd5_ge_0_4_v1'], generation='a'*64)
     for r in values:
-        state.observe(r, symbol='403870', venue='SOR', session='SOR_REGULAR')
+        state.observe(r, symbol='403870', venue=venue, session=session)
     at = values[-1][0]
     day = datetime.fromtimestamp(at, B.K.KST).date().isoformat()
-    cell = cell_key('403870', 'REGULAR', 100)
-    key = ('403870', 'SOR', '403870_AL', 'REGULAR', day, cell)
+    cell = cell_key('403870', session, 100)
+    key = ('403870', venue, item, B.K.market_bucket(session), day, cell)
     monkeypatch.setattr(B, '_STATES', {key: state})
     monkeypatch.setattr(B, '_CLAIMS', {})
     monkeypatch.setattr(B, '_GENERATION', 'f'*64)
     monkeypatch.setattr(B, '_FAMILY', dict(family_sha256='f'*64,
-        machine_cells={cell: dict(routes={'SOR': dict(scope_execution_hash='a'*64)})}))
+        machine_cells={cell: dict(routes={venue: dict(scope_execution_hash='a'*64)})}))
     monkeypatch.setattr(D, 'backend', lambda *args: B)
     monkeypatch.setattr(DIAG.time, 'time', lambda: at)
-    claim = DIAG.claim_snapshot_with_receipt('403870', 'SOR', 'SOR_REGULAR',
-        now=at, item='403870_AL', family_sha256='f'*64)
+    claim = DIAG.claim_snapshot_with_receipt('403870', venue, session,
+        now=at, item=item, family_sha256='f'*64)
     assert claim and claim['backend'] == 'operating_'+version
     now = at + (6 if case == 'expire' else 1)
     if case == 'expire':
         for offset in range(123, 128):
             tick = row(offset, 100)
-            tick[9] = '403870_AL'
-            state.observe(tick, symbol='403870', venue='SOR', session='SOR_REGULAR')
+            tick[9] = item
+            state.observe(tick, symbol='403870', venue=venue, session=session)
     update = row(128 if case == 'expire' else 123, 99)
-    update[9] = '403870_AL'
+    update[9] = item
     if case == 'flat': update[3:6] = [101, 101, 101]
     if case == 'epoch': update[1] += 1
     if case == 'invalid_source': update[8] = 0
     if case == 'bad_quote': update[4:6] = [101, 99]
-    state.observe(update, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    state.observe(update, symbol='403870', venue=venue, session=session)
     if case in {'replacement', 'flat'}:
         update = row(124, 100)
-        update[9] = '403870_AL'
-        state.observe(update, symbol='403870', venue='SOR', session='SOR_REGULAR')
+        update[9] = item
+        state.observe(update, symbol='403870', venue=venue, session=session)
         now = at + 2
     monkeypatch.setattr(DIAG.time, 'time', lambda: now)
     before = deepcopy((claim, B._CLAIMS))
@@ -347,10 +392,12 @@ def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeyp
     receipt = measured.value.reversal_source_receipt
     trace = dict(stock_code='403870', decision_ts=B.K.iso(now+.01),
         decision_stage='entry_screen', machine_evaluation_status='assessment_contract_invalid',
-        market_data_route='krx_nxt_integrated', evaluation_attempt_id='attempt-operating',
+        market_data_route=route, evaluation_attempt_id='attempt-operating',
         machine_bundle_sha256='b'*64, machine_contract_error=str(measured.value),
         provider_called=False, continuous_reversal_rejected_claim_receipt=receipt)
     assert _reversal_lifecycle_diagnostic(trace) == expected
+    for foreign_route in {'krx_nxt_integrated', 'nxt_only', 'krx_only', ''} - {route}:
+        assert _reversal_lifecycle_diagnostic(dict(trace, market_data_route=foreign_route)) is None
     if case in {'down', 'flat', 'replacement'}:
         from src.engine.scalping.ai_decision_trace import sanitize_ai_trace_value
         stored, redacted = sanitize_ai_trace_value(trace)

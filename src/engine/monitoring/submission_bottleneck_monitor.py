@@ -642,13 +642,15 @@ def _reversal_lifecycle_diagnostic(row):
         token = hashlib.sha256(json.dumps([generation, event["signal_id"], snapshot],
             sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
         trace_at = stamp(row["decision_ts"]).timestamp()
+        route = {'KRX': ('', 'krx_only'), 'NXT': ('_NX', 'nxt_only'),
+                 'SOR': ('_AL', 'krx_nxt_integrated')}.get(scope[1])
         if ((not operating and family != generation) or generation != receipt["claim_generation"]
                 or (not expired_registration and snapshot_sha != receipt["snapshot_sha256"])
                 or snapshot_sha != receipt["supplied_snapshot_sha256"]
                 or token != receipt["claim_token"] or age != receipt["signal_age_seconds"]
                 or scope[0] != row.get("stock_code") or scope[2] != event["source_item"]
-                or scope[1] != "SOR" or not scope[2].endswith("_AL")
-                or row.get("market_data_route") != "krx_nxt_integrated"
+                or route is None or scope[2] != str(scope[0]) + route[0]
+                or row.get("market_data_route") != route[1]
                 or latest[9] != scope[2] or not latest[8]
                 or str(latest[1]) != event["event_id"].rsplit(":", 2)[-2]
                 or latest[2] < int(event["event_id"].rsplit(":", 1)[-1])
@@ -785,23 +787,24 @@ def _probe_verified_pending(row):
             try: receipt = json.loads(receipt)
             except ValueError: receipt = ast.literal_eval(receipt)
         truth, counts = receipt['selected_branch_truth'], receipt['selected_lifecycle_counts']
-        if (receipt.get('reason') != 'required_window_incomplete' or 'UNKNOWN' not in truth.values()
+        if (receipt.get('reason') not in {'required_window_incomplete', 'no_matching_pattern'}
                 or any(v not in {'FALSE', 'UNKNOWN'} for v in truth.values())
                 or set(counts) != set(truth) or len(truth) > 512
                 or any(type(receipt.get(k)) is not int or receipt[k] < 0 for k in
                        ('selected_pending_count', 'source_censored_count', 'raw_ready_count', 'selected_ready_count'))
-                or receipt['selected_pending_count'] <= 0 or receipt['raw_ready_count'] != 0
+                or receipt['selected_pending_count'] <= 0
                 or receipt['selected_ready_count'] != 0):
             return None
+        # Pending anchors, latest branch truth and cumulative lifecycle counts
+        # are different native populations. An earlier TRUE or another cell's
+        # raw ready row does not invalidate this selected cell's pending proof.
         unknown = 0
         for values in counts.values():
             if (not isinstance(values, dict) or not set(values) <= {'TRUE', 'FALSE', 'UNKNOWN'}
                     or any(type(v) is not int or v < 0 for v in values.values())
-                    or values.get('TRUE', 0) or not sum(values.values())):
+                    or not sum(values.values())):
                 return None
             unknown += values.get('UNKNOWN', 0)
-        if not unknown:
-            return None
         return dict(pending_count=receipt['selected_pending_count'], unknown_count=unknown,
                     source_censored_count=receipt['source_censored_count'])
     except (KeyError, ValueError, TypeError, SyntaxError, RecursionError):
@@ -3245,7 +3248,7 @@ def observation_health_projection(result):
         and pending.get('verified_pending_count') == pending_n
         and count(pending.get('count'), minimum=1) and count(pending.get('verified_pending_count'), minimum=1)
         and count(pending.get('unclassified_count'), maximum=0)
-        and count(pending.get('unknown_count'), minimum=1) and count(pending.get('source_censored_count'))
+        and count(pending.get('unknown_count')) and count(pending.get('source_censored_count'))
         and pending.get('runtime_effect') is False and pending.get('machine_admission_proven') is False
         and pending.get('pattern_no_match_proven') is False)
     if valid_pending:

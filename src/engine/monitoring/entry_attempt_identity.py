@@ -111,13 +111,20 @@ def _watch_identity(stock):
 
 
 def same_market_session_name(left, right):
-    """Compare spelling case only; retain exact raw native revision fields."""
+    """Compare known session names without rewriting native receipt fields."""
     from src.trading.market import session_contract as S
     known={v.casefold() for k,v in vars(S).items() if k.startswith('MARKET_SESSION_REGIME_') and isinstance(v,str)}
     known |= {'premarket_krx_like','nxt_premarket','nxt_regular_overlap','nxt_aftermarket'}
-    return (isinstance(left, str) and isinstance(right, str)
-            and left.casefold() in known
-            and ":" not in left and left.casefold() == right.casefold())
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    left, right = left.casefold(), right.casefold()
+    if left not in known or right not in known:
+        return False
+    # Fixed-watch admission uses the session-contract legacy name; the exact
+    # machine snapshot uses the AI input name for that same premarket session.
+    # Venue, route, watch parent and revision checks remain independent.
+    aliases = {'premarket_krx_like': 'krx_like_premarket'}
+    return aliases.get(left, left) == aliases.get(right, right)
 
 
 def submit_attempt_lineage_rejection(stock, code):

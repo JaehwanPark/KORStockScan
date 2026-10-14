@@ -568,6 +568,37 @@ def test_holding_profit_semantics_does_not_retroactively_reject_old_report(tmp_p
         "holding_semantic_json_missing_with_markdown_report"]
 
 
+@pytest.mark.parametrize("clock,overdue", [
+    ((8, 4, 59), False), ((8, 5, 17), False), ((8, 10, 0), False),
+    ((8, 10, 1), True), ((9, 0, 0), True),
+])
+def test_holding_first_publication_race_has_bounded_missing_receipt_grace(tmp_path, clock, overdue):
+    registry = next(a for a in ARTIFACT_REGISTRY if a["id"] == "holding_exit_sentinel_premarket_report")
+    assert registry["window_grace_sec"] == 300
+    now = datetime(2026, 10, 15, *clock, tzinfo=ZoneInfo("Asia/Seoul"))
+    result = _holding_profit_exit_semantics(tmp_path, "2026-10-15", now=now)
+    assert result["expected_overdue"] is overdue
+    assert result["findings"] == (["holding_semantic_receipt_missing_after_due"] if overdue else [])
+    assert result["native_validated"] is False
+    assert result["observation_complete"] is False
+
+
+@pytest.mark.parametrize("artifact", ["markdown_only", "invalid_json", "wrong_date"])
+def test_holding_first_publication_grace_never_hides_existing_invalid_receipt(tmp_path, artifact):
+    path = tmp_path / "data/report/holding_exit_sentinel/holding_exit_sentinel_2026-10-15.json"
+    path.parent.mkdir(parents=True)
+    if artifact == "markdown_only":
+        path.with_suffix(".md").write_text("# published\n")
+    elif artifact == "invalid_json":
+        path.write_text("{invalid")
+    else:
+        path.write_text(json.dumps({"target_date": "2026-10-14"}))
+    now = datetime(2026, 10, 15, 8, 5, 17, tzinfo=ZoneInfo("Asia/Seoul"))
+    result = _holding_profit_exit_semantics(tmp_path, "2026-10-15", now=now)
+    assert result["status"] == "source_invalid"
+    assert result["findings"]
+
+
 def test_machine_semantics_requires_full_report_when_sidecar_exists(tmp_path):
     folder = tmp_path / "data/report/ai_decision_action_outcome_calibration"
     folder.mkdir(parents=True)
