@@ -558,6 +558,17 @@ REVIEWED_OPPORTUNITY_CUSTODY_SOURCES = {
 }
 
 
+# Exact PREOPEN-to-candidate arm cleanup, with unchanged original deadlines and
+# policy/source custody. This is a code check, not selection/startup authority.
+# Evidence: docs/audits/main-native-entry-arm-handoff-repair-2026-10-15.md.
+REVIEWED_NATIVE_ARM_COMPLETION_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',
+        '930921a6e3b77fa1e4342d46f29e117cdf18301a8f24220736ebdb384e97af8c',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -616,7 +627,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name),
                     REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
-                    REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name)):
+                    REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
+                    REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

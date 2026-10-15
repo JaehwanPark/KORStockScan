@@ -2025,7 +2025,12 @@ def test_expired_pass_does_not_suppress_fresh_native_signal(monkeypatch):
 
 
 def test_entry_arm_cannot_outlive_bound_machine_pass(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as A
     stock = _expired_bound_pass()
+    stock['_async_entry_decision_deadline']['request_id'] = 'original'
+    stock['_entry_arm_native_owner'] = dict(request_id='original', evaluation_attempt_id='old-attempt',
+        ai_decision_trace_id='old-pass', native_signal_id='native',
+        producer_pid=handlers.os.getpid(), producer_start_ticks=A._PROCESS_START)
     stock.update(entry_armed=True, entry_armed_until=time.time()+20,
                  entry_armed_at=time.time()-1, historical_custody='preserved')
     events=[]
@@ -2064,11 +2069,49 @@ def test_expired_non_native_decision_keeps_legacy_refresh(monkeypatch):
 
 
 def test_live_bound_pass_keeps_original_arm(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as A
     stock=_expired_bound_pass()
-    stock['_async_entry_decision_deadline'].update(deadline_epoch=time.time()+5, deadline_perf=time.perf_counter()+5)
+    stock['_async_entry_decision_deadline'].update(request_id='original', deadline_epoch=time.time()+5, deadline_perf=time.perf_counter()+5)
     stock.update(entry_armed=True, entry_armed_until=time.time()+20, entry_armed_ai_score=75)
+    stock['_entry_arm_native_owner'] = dict(request_id='original', evaluation_attempt_id='old-attempt',
+        ai_decision_trace_id='old-pass', native_signal_id='native',
+        producer_pid=handlers.os.getpid(), producer_start_ticks=A._PROCESS_START)
     assert handlers._get_live_entry_arm(stock,'036930')['ai_score']==75
     assert stock['entry_armed']
+
+
+@pytest.mark.parametrize('defect', ['missing', 'pid', 'ticks', 'request', 'evaluation', 'trace', 'signal',
+    'bound_evaluation', 'bound_trace', 'missing_bound', 'missing_deadline', 'zero_deadline', 'nan_deadline'])
+def test_restored_or_unbound_native_arm_cannot_reuse_pass(monkeypatch, defect):
+    from src.engine.scalping import scanner_async_eval as A
+    stock = _expired_bound_pass()
+    stock['_async_entry_decision_deadline'].update(request_id='original',
+        deadline_epoch=time.time()+5, deadline_perf=time.perf_counter()+5)
+    stock.update(entry_armed=True, entry_armed_until=time.time()+20)
+    owner = dict(request_id='original', evaluation_attempt_id='old-attempt',
+        ai_decision_trace_id='old-pass', native_signal_id='native',
+        producer_pid=handlers.os.getpid(), producer_start_ticks=A._PROCESS_START)
+    keys = dict(pid='producer_pid', ticks='producer_start_ticks', request='request_id',
+                evaluation='evaluation_attempt_id', trace='ai_decision_trace_id', signal='native_signal_id')
+    if defect.startswith('bound_'):
+        stock['_async_entry_decision_deadline'][keys[defect.split('_')[1]]] = 'mismatch'
+    elif defect == 'missing_bound':
+        stock.pop('_async_entry_decision_deadline')
+    elif defect == 'missing_deadline':
+        stock['_async_entry_decision_deadline'].pop('deadline_epoch')
+    elif defect in ('zero_deadline', 'nan_deadline'):
+        stock['_async_entry_decision_deadline']['deadline_perf'] = 0 if defect == 'zero_deadline' else float('nan')
+    elif defect != 'missing':
+        owner[keys[defect]] = '' if defect == 'signal' else 'different'
+    if defect != 'missing':
+        stock['_entry_arm_native_owner'] = owner
+    # Retain the supplied corrupt/missing source as evidence, never repair its deadline.
+    preserved = {k: v for k, v in stock.items() if k not in
+                 ('entry_armed', 'entry_armed_until', '_entry_arm_native_owner')}
+    assert handlers._get_live_entry_arm(stock, '036930') is None
+    assert stock.pop('_native_entry_terminal_decision') == dict(
+        evaluation_attempt_id='old-attempt', ai_decision_trace_id='old-pass')
+    assert stock == preserved  # Source, policy, PASS and original deadline survive.
 
 
 def test_main_native_rejection_keeps_compact_source_even_if_ack_fails(monkeypatch):
