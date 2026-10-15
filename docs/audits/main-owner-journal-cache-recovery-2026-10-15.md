@@ -17,3 +17,18 @@
 캐시 경합·원장·Main/manual 퇴역 경계·체결/보유 복원·cancel_wait·주문 receipt 회귀411개 PASS. Python compile 및 diff 검사 PASS. 실제 원장 사본은 원본1,529행을 모두 유지한1,530행으로 검증했고, 기존 체결1주·금액·execution_no·원 체결 시각을 복원했다. 선택본의 native custody 환경에서 동일10/14 보고서는 `source_invalid / cancel_wait_reconciliation_ledger_invalid`에서 `incumbent_carry / findings=[]`로 복구됨을 격리 검증했다. 원 보고서·checkpoint·과거 손익을 재생성하지 않았다.
 
 [원본 경보·원장·시험·사본 검증](../../tmp/postrestart-alert-20261015-1611/)을 보존한다. 배포 전 코드 리뷰는 해당 범위의 미해결 결함0이다. 실원장 append 및 ordered 배포·새 PID 소비·현재 보유 관리·정규 detector 수용은 실제 실행 영수증으로 후속 기록한다. 자연 신규 주문 성공·경제성 개선은 이 수리의 검증 결과가 아니다.
+
+## 실원장 복구·배포 영수증
+
+- 배포 코드: `d05ebbf8770cb63b51a4ae57e9d2924de3fdf975`. 통합cfa070c1e/7b2e421e3/af2b8f994의 기존 변경을 유지한다.
+- 실원장1,529행·원본 바이트 전체를 유지하고1530행에 복구 기록 `554b84028fee892111a5a1da3d59291943780289cb7c2953738f28a20513933d`를 추가했다. [실행 영수증](../../tmp/postrestart-alert-20261015-1611/live-recovery-receipt.json). 원장 inode와 과거 ancestor hash를 유지한다. 복구 인식 코드 이전으로의 rollback이나 원장 절삭은 금지하며, 후속 배포도 이 reader 계약을 보존해야 한다.
+- 16:53:48 ordered transition complete/pass. 전임 PID2407222 정상 종료, 새 PID2470537/start11470048, cwd `/home/ubuntu/KORStockScan-runtime-releases/owner-journal-cache-recovery-20261015-d05ebbf87/src`. 정책·PREOPEN/env/current pointer·수동 제외 파일은 기존 bytes를 유지한다. 거래 규칙과 탐지 임계값은 변경하지 않았다.
+- 실제 새 reader의 cancel_wait 검증은 `incumbent_carry / findings=[]`, 원 보고서 SHA `21c328a5c06e9da1c9fe8d75279bb7de02ba48ab10943073feae4eecf9b26d01` 불변이다. 과거 비용/source gap과 자연 경제성 수용은 OPEN으로 유지한다. [직접 소비 검증](../../tmp/postrestart-alert-20261015-1611/live-source-consumer-verification.json).
+- 16:55:10 삼성전자49266·두산49267의 `main_stop_source`와 `scalp_trailing_mechanical_input` 자연 생성 재개를 확인했다. 주성49294의 기존 수동 이관 차단은 유지한다. [자연 사건 원본](../../tmp/postrestart-alert-20261015-1611/holding-natural-event-evidence.json).
+- 16:55:33 새 코드의 정규 detector에서 process_health/log_scanner/resource_usage PASS, cancel_wait 원장 경고 없음. artifact_freshness는 첫 현재 세대 관측 대기 및 기존 holding_exit_sentinel_aftermarket_report stale의 warning이다. [최초 탐지](../../tmp/postrestart-alert-20261015-1611/detector-first-new-pid.json). 현재 세대 observer의 완료/동일 run 소비는 아래 최종 확인 영수증에 남긴다.
+
+## 현재 세대 최종 수용
+
+16:55:33.743684 observer는 새 PID2470537/start11470048·d05ebbf87을 관측했고, 정규 detector가 같은 run과 health projection을 소비했다. [배포15조건](../../tmp/postrestart-alert-20261015-1611/postdeploy-verification.json) 모두 PASS. 16:58:02 정규 탐지의 failure0, process_health/log_scanner/resource_usage PASS, 자동 보유 관리 차단0 및 기존 주성 수동 이관1 유지, cancel_wait 원장 경고 해소를 확인했다. 10/16 누적 등록 대기 원본도 불변이다. [최종 수용](../../tmp/postrestart-alert-20261015-1611/final-alert-acceptance-1658.json).
+
+16:56:46에는 I/O wait38.66%≥35%의 일시적 resource_usage fail이 있었고16:58:02에 회복했다. 최초 경보는 삭제하지 않는다. artifact_freshness는 observer 원천 관측 부족과 기존 holding_exit_sentinel_aftermarket_report stale로 warning이 남는다. source coverage 전체 완료·과거 비용 복원·신규 자연 주문 또는 경제성 개선으로 확대 해석하지 않는다. 확인된 원장 캐시/체결 보존/실제 보유 관리 결함 수리는 종료하며, 기존 원천 부족과 holding 보고서 생성 실패의 수용은 기존 OPEN owner가 유지한다.
