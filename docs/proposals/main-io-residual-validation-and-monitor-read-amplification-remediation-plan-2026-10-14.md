@@ -192,3 +192,10 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 ### 10/16 승인 배포의 source-pair 수용
 
 사용자 후속 지시로 위 구현의 배포와07:55 정기 기동 검증이 승인됐다. 기존 인계의 `REVIEWED_POSTCLOSE_READ_SOURCES`는 원23a13aba6의 delay source verifier와 검토된 단일 패스 구현의 정확한 파일 SHA 쌍만 인정한다. 원 정책/보고서/code pin은 유지하고 source/코드 변조와 native 원천 결손은 계속 거부한다. PREOPEN 진행 중 선택 전환이나 code-refresh 시한 우회는 하지 않는다. 정기 첫 기동의 native 소비 뒤 기존 ordered driver를 사용하며 원 기동/후속 배포 PID를 분리한다. [재리뷰·배포 수용](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md)을 따른다.
+
+
+### 10/16 정지한 selected-phase 실패의 제한 복구
+
+07:55 원본 native 기동 후 첫 ordered 배포에서 carried stop의 consumed vote 원천에 당일 관측 tail이 추가되어 인계가 실패했다. 원 consumed prefix의 publisher 봉인과 전체 SHA를 유지한 채 엄격히 후속 날짜의 완결된 native holding 행만 분리 검증한다. full research와 selected cell은 이 경로를 쓰지 않는다. 정확한 source-pair와 코드·변조·동시성 시험을 유지한다.
+
+복구는 기존 automation 패키지의 embedding-only `StoppedDeploymentRecovery`가 소유한다. 정지한 Main/원 supervisor/tmux, 정확한 selected-phase 실패와 owned hold, 원 live-captured PID proof 및 원 정책/PREOPEN/prepared, 새 candidate delay/stop/holding 검증 후 새 attempt에서 hold를 CAS 인계한다. 기존 FAIL과 selector를 보존하고 native prepare/bootstrap/auxiliary/기동/독립 PID 검증을 반복한다. 일반 CLI의 임의 hold 인수나 자동 복구 권한을 열지 않는다. owner는 기존 `DirectFamilyPreopenPolicyHandoff`이고 원 봉인 체크리스트는 유지한다. [배포·복구 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md).

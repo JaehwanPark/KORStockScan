@@ -10,6 +10,107 @@ import pytest
 from src.engine.automation import ordered_intraday_deploy as D
 
 
+@pytest.fixture
+def stopped_recovery(tmp_path, monkeypatch):
+    day = '2026-10-12'
+    candidate = Path(D.__file__).resolve().parents[3]
+    old_root, failed_root = tmp_path/'old', tmp_path/'failed'
+    old_commit, failed_commit, new_commit = 'a'*40, 'b'*40, 'c'*40
+    directory = tmp_path/'data/runtime/release_transitions'/day/failed_commit
+    directory.mkdir(parents=True)
+    identity = dict(pid=2147483601, start_ticks='123', cwd=str(old_root/'src'))
+    prior = dict(schema='runtime_release_selection_v1', workspace=str(tmp_path),
+        release_root=str(old_root), git_commit=old_commit, actual_pid_consumed=True,
+        actual_pid_receipt={'pid':identity['pid']})
+    prior_path = directory/'selection-before.json';prior_path.write_bytes(D._json_bytes(prior))
+    status_path = directory/'status.json'
+    status = dict(schema='ordered_intraday_deployment_v1', authority=D.CONFIRM,
+        target_date=day, candidate_commit=failed_commit, candidate_root=str(failed_root),
+        previous_root=str(old_root), previous_commit=old_commit, predecessor_identity=identity,
+        predecessor_launcher=dict(pid=2147483602,start_ticks='124'), phase='failed',status='fail',
+        failed_phase='selected', error='deployment_validation_failed:src.engine.automation.intraday_release_handoff',
+        policy_effect='unchanged', original_selection_sha256=D._digest(prior_path.read_bytes()))
+    status_path.write_bytes(D._json_bytes(status))
+    native_path = directory/'native-predecessor.json'
+    policy = tmp_path/'policy.json';policy.write_text('original policy')
+    native_value = dict(candidate_commit=failed_commit, frozen_files={str(policy):D.H._sha(policy)})
+    native_path.write_bytes(D._json_bytes(native_value))
+    selected = dict(schema='runtime_release_selection_v1',workspace=str(tmp_path),
+        release_root=str(failed_root),git_commit=failed_commit, actual_pid_consumed=False,
+        deployment_transition=str(status_path),approval_scope='ordered_intraday_deploy_and_restart',
+        approved_by='user',previous_selection_backup=str(prior_path),
+        previous_git_commit=old_commit,previous_release_root=str(old_root),
+        native_predecessor_path=str(native_path),native_predecessor_sha256=D.H._sha(native_path))
+    selection = tmp_path/'data/runtime/runtime_release_selection.json';selection.write_bytes(D._json_bytes(selected))
+    hold = selection.with_name('operator_startup_hold.json')
+    hold.write_bytes(D._json_bytes(dict(schema='ordered_deployment_startup_hold_v1',authority=D.CONFIRM,
+        transition=str(status_path),target_date=day,candidate_commit=failed_commit,old_pid_identity=identity)))
+    selection.with_suffix('.lock').touch()
+    checklist = tmp_path/'docs/checklists'/(day+'-stage2-todo-checklist.md')
+    checklist.parent.mkdir(parents=True);checklist.write_text('editable original')
+    monkeypatch.setattr(D.H,'_today',lambda *a:None)
+    monkeypatch.setattr(D.R,'selected_release',lambda *a:(failed_root,failed_commit))
+    monkeypatch.setattr(D.R,'git',lambda *a:new_commit)
+    monkeypatch.setattr(D.R,'validate_release',lambda w,v:(Path(v['release_root']),v['git_commit']))
+    monkeypatch.setattr(D,'_main_pids',lambda:[])
+    monkeypatch.setattr(D,'_session_absent',lambda:True)
+    def native(day,commit,previous,previous_commit,old_identity,path,sha):
+        assert D.H._sha(path)==sha
+        value=D.H._read(path)
+        assert value['candidate_commit']==commit and old_identity==identity
+        assert all(D.H._sha(p)==s for p,s in value['frozen_files'].items())
+        return dict(path=str(path),sha256=sha,frozen_files=value['frozen_files'])
+    monkeypatch.setattr(D.H,'_native_predecessor',native)
+    for name in ('delay','stop','holding_vote'):
+        monkeypatch.setattr(D.H,'verify_candidate_'+name+'_code',lambda *a:dict(status='pass'))
+    d=D.StoppedDeploymentRecovery(tmp_path,candidate,day,D.CONFIRM)
+    return d, status_path, policy
+
+
+@pytest.mark.parametrize('damage',[None,'phase','error','date','hold','selection','original','native',
+    'main','supervisor','flag','delay','stop','holding_vote','changed_hold','changed_status','changed_policy'])
+def test_stopped_recovery_preserves_failed_attempt_and_requires_native_sources(stopped_recovery,monkeypatch,damage):
+    d,status_path,policy=stopped_recovery
+    if damage in {'phase','error','date'}:
+        value=D.H._read(status_path)
+        value[{'phase':'failed_phase','error':'error','date':'target_date'}[damage]]='foreign'
+        status_path.write_bytes(D._json_bytes(value))
+    if damage=='hold':d.hold.write_text('{"operator":"another"}')
+    if damage in {'selection','original'}:
+        path=d.selection if damage=='selection' else status_path.with_name('selection-before.json')
+        value=D.H._read(path);value['actual_pid_consumed']=False if damage=='original' else True
+        path.write_bytes(D._json_bytes(value))
+    if damage=='native':
+        monkeypatch.setattr(D.H,'_native_predecessor',lambda *a:(_ for _ in ()).throw(ValueError('native invalid')))
+    if damage=='main':monkeypatch.setattr(D,'_main_pids',lambda:[1])
+    if damage=='supervisor':monkeypatch.setattr(D,'_session_absent',lambda:False)
+    if damage=='flag':d.flag.write_text('other request')
+    if damage in {'delay','stop','holding_vote'}:
+        monkeypatch.setattr(D.H,'verify_candidate_'+damage+'_code',lambda *a:(_ for _ in ()).throw(ValueError('code invalid')))
+    before=d.selection.read_bytes(),d.hold.read_bytes(),status_path.read_bytes()
+    if damage and not damage.startswith('changed_'):
+        with pytest.raises((ValueError,AssertionError)):d.preflight()
+        assert before==(d.selection.read_bytes(),d.hold.read_bytes(),status_path.read_bytes())
+        return
+    d.preflight()
+    assert before==(d.selection.read_bytes(),d.hold.read_bytes(),status_path.read_bytes())
+    if damage=='changed_hold':d.hold.write_text('{"new_owner":true}')
+    if damage=='changed_status':status_path.write_text('{}')
+    if damage=='changed_policy':policy.write_text('changed policy')
+    if damage:
+        current=d.selection.read_bytes(),d.hold.read_bytes(),status_path.read_bytes()
+        with pytest.raises(ValueError):d.acquire_hold()
+        assert current==(d.selection.read_bytes(),d.hold.read_bytes(),status_path.read_bytes())
+        return
+    d.acquire_hold();d.drain();d.publish()
+    assert status_path.read_bytes()==before[2]
+    assert d.checklist.read_text()=='editable original'
+    assert D.H._read(d.selection)['previous_release_root']==str(d.previous)
+    assert D.H._read(d.native_path)['candidate_commit']==d.commit
+    assert (d.directory/'failed-selection-before.json').read_bytes()==before[0]
+    assert d.state['failed_hold_adoption']['transfer_status']=='transferred_exact_owned_hold'
+
+
 def _assert_detector_lock_held(workspace):
     with (workspace / 'tmp/run_error_detection.lock').open('a') as other:
         with pytest.raises(BlockingIOError):

@@ -1104,6 +1104,58 @@ def test_vote_tail_cannot_relax_consumed_source_or_incomplete_original(tmp_path)
     with pytest.raises(ValueError):post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound)
 
 
+@pytest.mark.parametrize('damage', [None, 'prefix', 'past', 'partial', 'replace', 'race', 'unsealed'])
+def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(tmp_path, monkeypatch, damage):
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    path = path_vote_store_path(tmp_path, 'record:91')
+    path.parent.mkdir(parents=True)
+    original = _later_vote_bytes('2026-10-12')
+    path.write_bytes(original)
+    # Exercise the native publisher with a consumed, hashed vote dependency.
+    def consumed(root, directory, source, inventory):
+        inventory[str(path)] = post.byte_generation(path)
+        return None
+    from src.engine.ai import holding_vote_replay_source
+    monkeypatch.setattr(holding_vote_replay_source, 'assemble_votes', consumed)
+    original_rows = rows
+    def with_vote_source(*args, **kwargs):
+        for row in original_rows(*args, **kwargs):
+            yield dict(row, holding_vote_source={'fixture': 'consumed'})
+    monkeypatch.setitem(globals(), 'rows', with_vote_source)
+    if damage == 'unsealed':
+        capture = post.capture_vote_watch_binding
+        def legacy_binding(*args):
+            binding = capture(*args)
+            binding[str(path)].pop('decoded_sha256')
+            return binding
+        monkeypatch.setattr(post, 'capture_vote_watch_binding', legacy_binding)
+    bundle, report, _, _ = publication(tmp_path)
+    assert str(path) in report['vote_source_inventory']
+    suffix = _later_vote_bytes('2026-10-12' if damage == 'past' else '2026-10-13')
+    if damage == 'partial': suffix = suffix.rstrip(b'\n')
+    if damage == 'prefix': path.write_bytes(original.replace(b'record:91', b'record:92'))
+    if damage == 'replace':
+        other = path.with_suffix('.replacement');other.write_bytes(original);other.replace(path)
+    with path.open('ab') as out: out.write(suffix)
+    path.with_suffix('.jsonl.lock').touch()
+    if damage == 'race':
+        verify = post.verify_vote_watch_binding
+        def append_after_verification(*args, **kwargs):
+            observed = verify(*args, **kwargs)
+            with path.open('ab') as out: out.write(_later_vote_bytes())
+            return observed
+        monkeypatch.setattr(post, 'verify_vote_watch_binding', append_after_verification)
+    if damage is None:
+        loaded, saved, _, _ = post.read_committed(tmp_path, '2026-10-12')
+        assert loaded == bundle and saved == report
+        assert post.handoff(tmp_path, '2026-10-13')[1]['status'] == 'verified_carried'
+    else:
+        with pytest.raises((OSError, ValueError)):
+            post.read_committed(tmp_path, '2026-10-12')
+    with pytest.raises(ValueError):
+        post.read_committed(tmp_path, '2026-10-12', verify_full=True)
+
+
 @pytest.mark.parametrize('new_file', [False, True])
 @pytest.mark.parametrize('damage', [None, 'past', 'prefix', 'replace'])
 def test_carried_vote_revalidates_append_between_file_read_and_census_end(tmp_path, monkeypatch, new_file, damage):

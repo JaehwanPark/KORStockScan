@@ -203,3 +203,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 이 체크리스트는 구현 작업본의 인계 초안이다. 원 작업공간의 봉인된10/16 checklist·선택본·정책·controller/prepared는 변경하지 않았다. 구현 검증은 배포·PREOPEN/PID 소비·정규 장후 성능 수용과 별개다. 적용할 때 기존 source/code/date/native handoff 검증을 수행하며 원 정책 코드 계약 차이를 무시하거나 기존 준비본을 새 코드로 재라벨링하지 않는다. 세대 전체 게시의 원자성과 프로세스 사이 재사용은 이번 구현 대상이 아니다.
 
 사용자 후속 배포·07:55 확인 지시를 수용했다. 기존 `DirectFamilyPreopenPolicyHandoff`의 원 수용 기준으로 정규 PREOPEN/첫 기동과 후속 ordered 배포를 검증한다. [배포 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md). 원 운영 체크리스트와 이미 봉인된 정책/PREOPEN bytes는 별도 보호한다.
+
+580d5865b의 selected-phase 실패와 정지 복구는 같은 `DirectFamilyPreopenPolicyHandoff`가 소유한다. 원 native PID 증거·정책·봉인 체크리스트와 실패 attempt/hold를 보존하고, 검토 source-pair 및 새 attempt에서 native 소비를 확인한다. 상세는 위 배포 리뷰를 따른다.

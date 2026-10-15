@@ -682,6 +682,14 @@ REVIEWED_POSTCLOSE_READ_SOURCES = {
     ),
 }
 
+# Carried stop dependency prefixes remain byte-sealed across later native rows.
+REVIEWED_CARRIED_VOTE_PREFIX_SOURCES = {
+    'src/engine/automation/main_stop_postclose.py': (
+        'e9ab07117a0200610e19f4b24ea0000579203628a887e16387b24189b8734a13',
+        'cce1f797bd17f5ddde0aa5eec68cdb285c224e198fea7bb184d03a444ff32c05',
+    ),
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -753,7 +761,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name),
                     REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name),
                     REVIEWED_HOLDING_CONTRACT_SOURCES.get(name),
-                    REVIEWED_POSTCLOSE_READ_SOURCES.get(name)):
+                    REVIEWED_POSTCLOSE_READ_SOURCES.get(name),
+                    REVIEWED_CARRIED_VOTE_PREFIX_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

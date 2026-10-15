@@ -348,9 +348,10 @@ def verify_vote_watch_binding(root, day, binding, *, future_unconsumed=False):
             # Recheck the original prefix AND every later row under the native
             # writer lock once. These are per-file snapshots, not a global freeze
             # of live observations. Consumed/full-publication sources stay strict.
-            _future_unconsumed_vote_tail(root, day, path, binding.get(key))
+            observed[key] = _future_unconsumed_vote_tail(root, day, path, binding.get(key))
         else:
             raise ValueError('stop_vote_source_changed_during_read')
+    return observed
 
 
 def baseline(root, target):
@@ -460,9 +461,22 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     policy.validate_bundle(bundle,bundle['target_date'])
     if bundle.get('operator_sources') != operator_sources(root,bundle['target_date']):
         raise ValueError('stop_operator_sources_changed')
+    observed_votes = {}
+    sealed_sources = False
     if report.get('vote_watch_sha256')!=vote_watch(root,day):
-        verify_vote_watch_binding(root, day, report.get('vote_watch_binding'),
-            future_unconsumed=(not verify_full and report.get('vote_source_inventory') == {}
+        vote_sources = report.get('vote_source_inventory', {})
+        binding = report.get('vote_watch_binding') or {}
+        # A carried policy may still have read historical votes. Preserve every
+        # consumed byte: only a publisher-sealed exact prefix can admit a later
+        # native observation tail. Full research and selected cells stay strict.
+        sealed_sources = all(
+            (ref := binding.get(name, {})).get('path') == name
+            and ref.get('stat') == report['dependency_stats'].get(name)
+            and ref.get('decoded_sha256') == source.get('sha256')
+            and ref.get('decoded_bytes') == source.get('size')
+            for name, source in vote_sources.items())
+        observed_votes = verify_vote_watch_binding(root, day, report.get('vote_watch_binding'),
+            future_unconsumed=(not verify_full and sealed_sources
                 and all(cell['status'] != 'selected' for cell in bundle['cells'].values())))
     if report.get('source_catalog_sha256')!=policy.digest([str(p) for p in sources(root,day)]):
         raise ValueError('stop_raw_source_set_changed')
@@ -488,7 +502,10 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
                 raise ValueError('stop_native_source_bytes_changed')
             continue
         if before != list(source_stat(Path(path).stat())):
-            raise ValueError('stop_native_source_generation_changed')
+            if (path not in report.get('vote_source_inventory', {})
+                    or observed_votes.get(path) != list(source_stat(Path(path).stat()))
+                    or not sealed_sources or verify_full):
+                raise ValueError('stop_native_source_generation_changed')
         if verify_full and byte_generation(Path(path)) != expected:
             raise ValueError('stop_native_source_bytes_changed')
     economic = report.get('economic_sources') or {}

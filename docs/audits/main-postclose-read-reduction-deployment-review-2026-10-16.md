@@ -23,3 +23,20 @@
 당일 PREOPEN을 이미 열었고07:30 code-refresh 경계를 지났으므로 준비본을 새 코드로 재발행하지 않는다. 기존07:55 정기 기동의 native PID 소비를 확인한 뒤, 검토 candidate의 기존 ordered driver로 predecessor 검증→graceful drain→selector→동일 정책 handoff→native 기동/새 PID attestation을 수행한다. 진행 중인 wrapper·이전 PID 위로 selector를 먼저 바꾸지 않는다. 원 PREOPEN·bootstrap·정책을 유지하며 이전 PID와 새 PID의 결과를 분리한다.
 
 실행 owner는 기존 `DirectFamilyPreopenPolicyHandoff`다. 원 봉인 체크리스트 bytes와 OPEN stable ID를 보존하며 새 배포 인계는 별도 감사/transition 영수증으로 남긴다. 배포 후보·실제 기동·오류 탐지의 최종 결과는 아래 후속 영수증까지 미완료다. 코드 PASS를 실제 PID 소비·자연 주문·비용 후 성과로 확대하지 않는다.
+
+
+## 07:55 첫 기동과 배포 중 발견한 결함
+
+07:55:02 정기 launcher가 기존23a13aba6을 기동했다. Main PID2934092/start_ticks16890468의 native bootstrap은07:57:03 PASS, selector의 실제 소비 영수증은07:57:14에 기록됐다. 따라서 정기 기동은 실제 PID까지 확인했다. 다만07:57:29 I/O wait37.19% >=35% resource ERROR 한 건이 발생했고,07:58:59 full detector에서21.11%/PASS로 회복했다. 최초 기동을 오류0으로 보고하지 않으며 원 error122바이트를 보존한다.
+
+승인 ordered 배포의580d5865b 시도는 graceful drain과 selector 게시 후08:01:27 `intraday_bootstrap_invalid:main_stop_confirmation_invalid`로 실패했다. 상세 원인은 `stop_vote_source_set_changed`다. 실패 transition/원 selector/PID 증거/owned startup hold를 보존했고 Main이 정지한 상태에서 복구를 검토했다. 실패 디렉터리를 재사용하거나 원 FAIL을 PASS로 고치지 않는다.
+
+원천 대사에서 추가/누락 파일은0이었다. 기존 holding vote 파일의763,760바이트 SHA는 원 봉인과 같았고, 오늘08:00:03 관측2행2,104바이트만 추가됐다. 두 행은2026-10-16의 SOURCE_GAP/INSUFFICIENT이며 과거 정책 입력으로 소급하지 않는다. 별도10/14 AI 원천3개는 lossless gzip이고 원 decoded 크기/SHA 모두 일치했다. [대사 증거](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/stop-vote-content-reconciliation.json).
+
+기존 carried reader의 미래 tail 분리는 `vote_source_inventory == {}`만 허용했다. 실제 보고서는7개 vote 원천을 소비했으나9개 cell 모두 source_gap/비선정이어서 정상 당일 append도 실패했다. 새 reader는 publisher가 봉인한 path/stat/decoded SHA/크기가 consumed inventory와 정확히 같을 때만 기존 prefix 전체 SHA와 후속 행의 날짜/session/position/schema/완결성을 native writer shared lock 아래 검증한다. 검증한 identity와 dependency identity도 일치해야 한다. 과거 구간 변조·inode replacement·같은 날짜/부분행·비봉인 prefix·검증 후 append는 거부하고 full research/selected policy는 엄격히 유지한다. 원 보고서/정책/원천은 수정하지 않는다.
+
+정지 복구는 기존 automation owner의 embedding-only `StoppedDeploymentRecovery`로 제한한다. 정확한 selected-phase handoff 실패, 원 live-captured native PID proof, 원 selector/PREOPEN/prepared/policy, Main/원 supervisor/tmux 부재, 추가 restart 요청 부재, candidate 세 code gate와 owned hold의 CAS를 요구한다. 원 실패 selector/status/hold를 새 attempt에 별도 보존하고 새 native proof는 같은 역사적 소비 증거에 후보 commit만 결속한다. 소비 영수증을 합성하지 않는다. native prepare/bootstrap/auxiliary/launcher/독립 PID 검증은 일반 배포와 동일하다. 기존 CLI는 이 복구를 자동 선택하지 않는다.
+
+반복 리뷰 후 인계·배포·stop·digest·delay 시험 **2219 PASS**, Python compile6개와 diff 검사 PASS다. source-pair는 main_stop_postclose.py의 원 SHA `e9ab07117a0200610e19f4b24ea0000579203628a887e16387b24189b8734a13`와 검토 SHA `cce1f797bd17f5ddde0aa5eec68cdb285c224e198fea7bb184d03a444ff32c05`에 한정한다. 숫자 정책이나 원 준비 code pin은 바꾸지 않는다. 신규 복구의 실제 실행/PID 소비/후속 detector 수용은 후속 영수증으로 확인한다.
+
+08:02:53 별도 작업이 운영 checklist의 기존 시장약세 OPEN에 근거1행을 추가했다. 원 봉인f9b27df0…와 현재394a2f6e…를 별도 보존하며 이 동시 변경을 되돌리거나 배포 체크리스트로 덮어쓰지 않는다. 목적/강제 규칙과 OPEN owner 집합은 동일하다. 복구는 현재 editable bytes를 보존하고 원 strict-bound snapshot을 독립 검증한다.

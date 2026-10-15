@@ -655,6 +655,131 @@ class Deployment:
                         recovery='inspect_transition_and_preserve_startup_hold')
 
 
+class StoppedDeploymentRecovery(Deployment):
+    """Explicit embedding-only recovery of a failed selected native transition.
+
+    The caller holds both ordinary deployment locks. Reuse the live-captured
+    native proof, never infer consumption from an absent process. The failed
+    attempt remains immutable; only its exact owned hold may transfer.
+    """
+
+    def assert_stopped(self):
+        if (_main_pids() or not _session_absent() or self.flag.exists()
+                or self.flag.is_symlink()
+                or Path('/proc', str(self.identity['pid'])).exists()
+                or Path('/proc', str(self.launcher)).exists()):
+            raise ValueError('deployment_recovery_requires_stopped_main_and_supervisor')
+
+    def preflight(self):
+        self.before = self.selection.read_bytes()
+        selected = json.loads(self.before)
+        failed_root, failed_commit = R.selected_release(self.workspace)
+        failed_path = (self.workspace / 'data/runtime/release_transitions' / self.day
+                       / failed_commit / 'status.json')
+        hold, hold_raw, hold_sig = _owned_metadata(self.hold)
+        failed, failed_raw, failed_sig = _owned_metadata(failed_path)
+        prior_path = failed_path.with_name('selection-before.json')
+        prior, prior_raw, prior_sig = _owned_metadata(prior_path)
+        identity = failed.get('predecessor_identity') or {}
+        if (selected.get('deployment_transition') != str(failed_path)
+                or selected.get('actual_pid_consumed') is not False
+                or selected.get('approval_scope') != 'ordered_intraday_deploy_and_restart'
+                or selected.get('approved_by') != 'user'
+                or failed.get('schema') != 'ordered_intraday_deployment_v1'
+                or failed.get('authority') != CONFIRM or failed.get('target_date') != self.day
+                or failed.get('candidate_commit') != failed_commit
+                or failed.get('candidate_root') != str(failed_root)
+                or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
+                or failed.get('failed_phase') != 'selected'
+                or failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
+                or failed.get('policy_effect') != 'unchanged'
+                or hold != dict(schema='ordered_deployment_startup_hold_v1', authority=CONFIRM,
+                    transition=str(failed_path), target_date=self.day,
+                    candidate_commit=failed_commit, old_pid_identity=identity)
+                or failed.get('original_selection_sha256') != _digest(prior_raw)
+                or prior.get('actual_pid_consumed') is not True
+                or prior.get('schema') != 'runtime_release_selection_v1'
+                or prior.get('git_commit') != failed.get('previous_commit')
+                or prior.get('release_root') != failed.get('previous_root')
+                or selected.get('previous_selection_backup') != str(prior_path)
+                or selected.get('previous_git_commit') != prior.get('git_commit')
+                or selected.get('previous_release_root') != prior.get('release_root')
+                or type(identity.get('pid')) is not int
+                or identity['pid'] <= 0 or not isinstance(identity.get('start_ticks'), str)
+                or not identity['start_ticks'].isdigit()
+                or type((failed.get('predecessor_launcher') or {}).get('pid')) is not int
+                or failed['predecessor_launcher']['pid'] <= 0
+                or not isinstance(failed['predecessor_launcher'].get('start_ticks'), str)
+                or not failed['predecessor_launcher']['start_ticks'].isdigit()
+                or (prior.get('actual_pid_receipt') or {}).get('pid') != identity['pid']
+                or identity.get('cwd') != str(Path(prior['release_root']) / 'src')):
+            raise ValueError('deployment_stopped_recovery_source_invalid')
+        if failed_path.resolve(strict=True) != failed_path or prior_path.resolve(strict=True) != prior_path:
+            raise ValueError('deployment_stopped_recovery_path_invalid')
+        self.identity = identity
+        self.launcher = failed['predecessor_launcher']['pid']
+        self.assert_stopped()
+        self.previous, self.previous_commit = R.validate_release(self.workspace, prior)
+        commit = R.git(self.candidate, 'rev-parse', 'HEAD')
+        self.candidate, self.commit = R.validate_release(self.workspace, dict(
+            schema='runtime_release_selection_v1', workspace=str(self.workspace),
+            release_root=str(self.candidate), git_commit=commit))
+        if (self.candidate in {failed_root, self.previous}
+                or Path(__file__).resolve().parents[3] != self.candidate):
+            raise ValueError('deployment_recovery_requires_new_reviewed_candidate')
+        native = H._native_predecessor(self.day, failed_commit, self.previous,
+            self.previous_commit, identity, selected.get('native_predecessor_path'),
+            selected.get('native_predecessor_sha256'))
+        native_value = H._read(native['path'])
+        checks = dict(delay=H.verify_candidate_delay_code(self.day, self.candidate, self.commit),
+            stop=H.verify_candidate_stop_code(self.day, self.candidate, self.commit),
+            holding=H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit))
+        self.directory = self.workspace / 'data/runtime/release_transitions' / self.day / self.commit
+        self.directory.mkdir(parents=True, exist_ok=False)
+        self.old = prior
+        self.frozen = dict(native['frozen_files'])
+        self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
+        self.document_before = self.document_after = self.checklist.read_bytes()
+        self.state = dict(schema='ordered_intraday_deployment_v1', authority=CONFIRM,
+            target_date=self.day, previous_root=str(self.previous), previous_commit=self.previous_commit,
+            candidate_root=str(self.candidate), candidate_commit=self.commit,
+            predecessor_identity=identity, predecessor_launcher=failed['predecessor_launcher'],
+            original_selection_sha256=_digest(prior_raw), runtime_effect='authorized_code_restart_only',
+            policy_effect='unchanged', stopped_recovery_selection_sha256=_digest(self.before),
+            failed_hold_adoption=dict(source_failure=failed['error'],
+                failed_transition_path=str(failed_path), failed_transition_sha256=_digest(failed_raw),
+                failed_selected_root=str(failed_root), failed_selected_commit=failed_commit,
+                previous_hold_sha256=_digest(hold_raw), native_predecessor_sha256=native['sha256'],
+                transfer_status='verified_not_transferred'))
+        self.failed_hold_adoption = dict(raw=hold_raw, signature=hold_sig,
+            transition_path=str(failed_path), transition_raw=failed_raw, transition_signature=failed_sig,
+            prior_path=str(prior_path), prior_raw=prior_raw, prior_signature=prior_sig)
+        for name, raw in [('selection-before.json', prior_raw), ('failed-selection-before.json', self.before),
+                ('failed-startup-hold-before.json', hold_raw), ('failed-transition-before.json', failed_raw),
+                ('checklist-before.md', self.document_before)]:
+            _atomic(self.directory/name, raw)
+        self.native_path = self.directory/'native-predecessor.json'
+        _atomic(self.native_path, _json_bytes(dict(native_value, candidate_commit=self.commit)))
+        self.native_sha = H._sha(self.native_path)
+        H._native_predecessor(self.day, self.commit, self.previous, self.previous_commit,
+                             identity, self.native_path, self.native_sha)
+        self.frozen[str(self.native_path)] = self.native_sha
+        self.frozen.update({native['path']: native['sha256'], str(failed_path): _digest(failed_raw),
+                            str(prior_path): _digest(prior_raw)})
+        for name, check in checks.items():
+            _atomic(self.directory/('candidate-'+name+'-code.json'), _json_bytes(check))
+        self.assert_unchanged()
+        self.assert_stopped()
+        self.checkpoint('preflight')
+
+    def drain(self):
+        self.assert_hold()
+        self.assert_unchanged()
+        self.assert_stopped()
+        self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat(),
+                        drain_basis='verified_original_native_predecessor_already_stopped')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workspace', type=Path, default=H.DATA_DIR.parent)

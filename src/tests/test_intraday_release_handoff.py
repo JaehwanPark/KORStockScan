@@ -55,7 +55,8 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES',
                                      'REVIEWED_CARRIED_SOURCE_BINDING_SOURCES',
                                      'REVIEWED_HOLDING_CONTRACT_SOURCES',
-                                     'REVIEWED_POSTCLOSE_READ_SOURCES'])
+                                     'REVIEWED_POSTCLOSE_READ_SOURCES',
+                                     'REVIEWED_CARRIED_VOTE_PREFIX_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib
