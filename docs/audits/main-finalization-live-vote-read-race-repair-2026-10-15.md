@@ -18,3 +18,17 @@
 기존 배포·재기동 승인 범위에서 후속 immutable release를 준비한다. 정책/임계값/수동 이관/계좌·주문·수량 안전장치, 원 finalization·strict/controller/summary·정책 보고서는 변경하지 않는다. 과거 보고서나 최종화를 다시 생성하지 않고 Telegram 알림도 수동 재발송하지 않는다. 실제 선택·PID 소비와 정규 artifact/cron 판정은 배포 후 별도로 기록한다. owner는 기존 `DirectFamilyPreopenPolicyHandoff`이며 중복 OPEN 항목을 만들지 않는다.
 
 [경보 원본·직접 원인 재현·동시성 시험·현재 원천 검증](../../tmp/finalization-checklist-alert-20261015-1750/). 앞선 코드·원장·보유 경합 수리와 누적/보유 계약 통합을 모두 보존한다. 남은 원천 부족·기존 holding stale 및 장후 최종화 지연 경고의 수용은 기존 owner/Acceptance를 유지한다.
+
+## 배포·정규 탐지 수용
+
+배포 코드는 `ebcde3d87e3dd73f6d33e0d0bce1f71f009c9b31`, release는 `/home/ubuntu/KORStockScan-runtime-releases/finalization-vote-snapshot-20261015-ebcde3d87`다. holding 독립 network-blocked fixture91개 PASS, 나머지 세 family의 동일 세대 fixture와 native parity 원 증거는 해시 대조로 재검증했다.18:08:00 ordered complete/pass, PID2552591/start11915026의 native handoff/bootstrap 소비와 WS·release-set을 확인했다.
+
+18:13:37/18:14:52 정규 detector 두 회차 모두 실패0, 현재 PID·동일 historical checklist generation으로 cron 최종화 검증 정상, artifact handoff `done/findings=[]`다. 현재 observer 동일 run/health 소비도 확인했다. 원 PREOPEN/env/current policy·10/16 누적 대기·10/14 strict/controller/summary·손절 policy/report/target bytes는 모두 불변이다. 과거 최종화 완료07:45:42의 지연은 `recovered_late` 경고로 보존한다.18:11:23 I/O wait36.68%≥35의 일시적 실패는 원 기록을 유지하며 후속 정상 검사와 구분한다. [최종 수용](../../tmp/finalization-checklist-alert-20261015-1750/final-acceptance.json), [정규 회차 원본](../../tmp/finalization-checklist-alert-20261015-1750/regular-finalization-observations.json).
+
+수동 제외 파일은 바이트 불변이 아니다.18:08:24 두산034020/Main49267이 평균가62,600에 도달해 기존 `auto_hard_stop_handoff` 자동 해제 함수가 동작했다. 새 release와 직전3803938c7 사이의 해당 handler/guard 구현은 동일하며 agent가 제외 파일을 수정하거나 해제 규칙을 바꾸지 않았다. 원본 byte 차이 전체를 복원했다고 주장하지 않는다. strict byte 비교의 false를 보존하고, 정책·최종화 불변 검사와 이 가변 운영 상태를 분리한다. 주성036930 자동 이관은 유지되며 보유3종목 source/trailing 관측 재개와 엔진·receipt·동기화 오류 추가0을 확인했다. [자연 해제 원본·별도 비교](../../tmp/finalization-checklist-alert-20261015-1750/mutable-manual-guard-observation.json).
+
+## 별도 후속: observer 선택 scope 카운트
+
+이 최종화 결함과 별도로, 전임 PID의17:57:01 라온시큐어042510 probe는 선택 scope 두 branch FALSE, selected_ready_count0인데 다른 scope를 포함한 raw_ready_count1이었다. producer는 정상 no-match를 발행했으나 observer가 전체 raw_ready0까지 요구해 미분류로 남긴 원본1건을 확인했다. 이번 최종화 수리에서는 해당 predicate를 변경하지 않았다. 다음 작업은 기존 `NonfixedDispatchReadinessReview1012`에서 `_probe_verified_no_match`의 전체 ready와 선택 scope ready 검증을 분리하는 것이다. closure는 이 원본 재생, 다른 scope TRUE/선택 FALSE 정상 수용, 선택 scope TRUE·pending·stale/다른 PID·잘못된 scope 거부 및 provider/주문 권한 불변 시험이다. [원본](../../tmp/finalization-checklist-alert-20261015-1750/predecessor-other-source-diagnostic.json). 신규 OPEN owner는 만들지 않는다.
+
+최종화 source reader의 코드·배포·정규 소비 수리는 종료한다. 기존 holding stale·원천 부족·별도 observer 카운트 결함과 자연 경제성 수용은 종료로 표시하지 않는다.

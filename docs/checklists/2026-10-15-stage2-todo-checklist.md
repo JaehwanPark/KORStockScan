@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-15`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - ebcde3d87 최종화 읽기 경합 수리 ordered 배포18:08:00/PID2552591(start11915026) PASS.18:13:37·18:14:52 정규 detector 실패0·cron 역사적 세대 검증/인계 done 확인. 원 정책·strict/controller 보고서 불변. 수동 제외 파일은18:08:24 두산의 기존 평균가 자동 해제로 변경됐으며 원 native receipt와 불변 정책 검사를 구분한다.
   - 17:49 최종화 stale 경보의 내부 원인은 오늘 보유 투표 append와 역사적 원천 검증의 읽기 경합으로 재현했다. native writer shared lock 및 동일 inode 성장의 원 prefix/후속 날짜 재검증으로 수리하며, 원 strict/controller/정책은 재생성하지 않는다. 최종 회귀2,089개 PASS; 기존 승인 범위의 배포·현재 PID·정규 cron/artifact 수용은 [원인 수리 감사](../audits/main-finalization-live-vote-read-race-repair-2026-10-15.md)에 기록한다.
   - 최종3803938c7 ordered 배포17:43:44 PASS, PID2527556/start11769546.17:47:02 정규 detector 실패0·현재 observer 동일 run/health 소비·장후 인계 done/findings0, 보유3종목 원천 관측 재개와 기존 수동 이관 유지 확인. 경합/receipt 오류 추가0, 원 정책·PREOPEN·10/16 누적 대기 bytes 불변. 원천 부족·기존 holding stale 경고와 전체 자연·경제성 수용은 기존 OPEN 범위로 남긴다.
   - 17:30:32 기존 PID의 보유 AI 문맥 사전 순회 경합을 추가 수리한다. shared stock을 공통 잠금 아래 한 번 복사해 일관된 원천을 읽으며, 실제 추가·삭제4경우 재현 후 관련 회귀2,652개 PASS. observer df2afffa7 이후 통합 후속본의 ordered 전환·보유 자연 관측·정규 detector 소비는 [경합 수리 감사](../audits/main-holding-context-dictionary-race-repair-2026-10-15.md)로 확인한다.
@@ -160,6 +161,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 이관: 10/14 미종결 Acceptance/History를 보존해 10/15 동일 ID로 인계했다. 코드·장후 준비를 미래 자연 수용/비용 후 성과로 닫지 않는다.
 
 - [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-15`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
+  - 다음 보완:17:57:01 라온시큐어 no-match 원본의 raw_ready_count1(다른 scope 포함)과 selected_ready_count0을 observer가 혼동해 미분류 처리했다. `_probe_verified_no_match`에서 전체/선택 scope 카운트를 분리하고 선택 TRUE·pending·stale·다른 PID는 계속 거부한다. 이번 최종화 수리와 별도로 미적용이며 원본 재생·거부 회귀가 closure다. [근거와 범위](../audits/main-finalization-live-vote-read-race-repair-2026-10-15.md).
   - 10/15 비상시 원천7건 추적: [등록·첫 수신·exact 원천 리뷰](../audits/main-nonfixed-registration-source-gap-review-2026-10-15.md). 기한 내 REG 후 future 완료 지연의 연결 결함1건을 재현해 수리했고 표적342개 검증을 통과했다. 같은 lease/item/epoch·원3초 전송 예산·원 residence/native 마감과 cleanup을 보존한다. 늦은 전송2건은 timeout, 등록 후 exact 쌍 미확인4건은 원천 대기로 유지한다. 격리 작업 트리 코드 검증이며 배포·재기동·자연 복구/제출은 미실행이다. 별도 적용 후 동일 lease의 timely local REG→원천 검사→원 마감/cleanup과 Main disposition을 확인한다. VI 결속·슬롯 추가 증설·TTL 변경은 포함하지 않는다.
   - 10/15 사용자 확정: 전체5 내 장기 슬롯2→3개 및 두 cycle의 적격 대기/장기 대기 진단값 연결. 별도 적용 전 용량 비교·부하실험·추가 확인은 생략하며 코드 리뷰·보완·기능 회귀는 수행한다. 이전 long2 보존 조건은 이번 지정 변경에 한해 대체한다. [변경 계약](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md#13-2026-10-15-사용자-확정--장기-슬롯3-및-대기-계측-연결). [구현 리뷰](../audits/main-long-probe-and-weak-veto-scope-review-2026-10-15.md).
   - 오류 수리 인계: 10/15 관측 수리: NXT/KRX/SOR exact item·route의 native 만료 영수증, selected pending/최신 truth/누적 lifecycle의 서로 다른 모수를 검증한다. 과거 source gap·로컬 deadline·0B 누락은 보존한다. 08:19 forward index는 현재 10분 window complete이며 과거 backfill은 없다. [구현·배포 검토](../audits/main-premarket-error-repair-and-restart-2026-10-15.md).
