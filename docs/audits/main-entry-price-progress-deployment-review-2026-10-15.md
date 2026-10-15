@@ -73,3 +73,11 @@
 정책 검증은 이미 절대경로인 문자열을 매번 Path로 재구성하던 비용만 줄였다. 각 경계의 전체 file stat·symlink/ancestor·inode/ctime·pointer 변경 검증은 유지한다. 실제 같은893개 의존 원천을 변경 없이 교차50회 측정한 검증 구간 p95는10.867ms→5.488ms, median10.261ms→5.336ms이고 전 signature가 동일하다. 전체 native→claim 지연이나 provider timeout이 같은 비율로 개선됐다는 증거는 아니다. 기존 priority·기회·동시성·원5초·원천/주문 안전장치와 오류 분류는 변경하지 않는다. [측정 원본](../../tmp/entry-budget-alert-20261015-1906/signature-benchmark.json).
 
 생산자·조기 반환·정상 provider 응답·기록기·의존 검증·exact source handoff를 자기 리뷰하고 trace 실기록 검사와 변조 거부 검사를 보완했다. 기본 관련550개, 계약1,692개 PASS 후 새 exact map45개를 더했으며 최종 handoff1,506개와 trace321개 회귀를 통과했다(중복 합산하지 않는다). Python compile·diff·print-only parser로 문서/코드를 닫는다. Kiwoom wire/parser/recovery 계약, provider 값, 기계 판단값과 안전 임계값은 변경하지 않았고 전체 주문 경로/provider replay는 실행하지 않았다. native37개 계약 파일의 원 parity 해시는 동일하고 네 family의 기존 코드 세대 fixture를 현재 코드/원천으로 재검증한 뒤 재사용한다. 실제 배포·정규 산출물 수용은 아래 후속 영수증으로 구분한다.
+
+## 19:40 세션 경계 치명적 예외 추가 수리
+
+첫 수정본 `847607658566536fc2bce914e933f0ac95f1d538`은19:42:59 ordered PASS로 배포됐고 PID2675822/start12484981이 정책·WS를 소비했다. 19:48:15 정규 detector는 fail0이며19:49:08까지 새 PID 오류0을 확인했다. 이 구간의 신규 entry trace는0이므로 조기 거절 필드의 자연 발생 확인으로 확대하지 않는다. 19:44:51 기존 자동 hard-stop 이관에 의해 삼성전자 수동 제외 행1개가 append됐다. 기존 파일 prefix SHA와 추가 사유를 확인했으며 agent는 수정하지 않았다. 현재 수동 제외를 보존한다. [첫 전환](../../tmp/entry-receipt-deploy-20261015-1938/deployment-result.json), [수동 제외 원본 대사](../../tmp/entry-receipt-deploy-20261015-1938/mutable-manual-guard-observation.json).
+
+그러나 전환 직전 기존PID2610988에서19:39:58 HPSP API timeout1건과19:40:02 `fixed_watch_entry_session_route_conflict` 치명적 예외가 새로 발생했다. 경로 예외는 `handle_watching_state`의 완료 결과 소비→`_resolve_scanner_async_entry_ai`→현재 세션 route 검사에서 발생했다. 19:40 세션 종료를 넘긴 원 요청을 회수하기 전에 예외가 전파되어 스나이퍼 스레드가 종료됐다.19:40:11 process_health FAIL도 원본으로 보존하며 단순 재기동 성공으로 이 결함을 닫지 않는다.
+
+정확히 이 route conflict만 비실행 사유로 전달해 원 queue identity로 완료 결과를 회수하고 거절 disposition·원 claim 정리를 수행한다. 물리 작업이 진행 중이면 원 요청의 drain을 유지한다. 새 요청/기한/대체 route를 만들지 않으며 예상하지 않은 예외는 계속 노출한다. 세션 종료·세션 변경·세대 불일치와 completed/expired 응답, pending 작업 보존8개가 원 구현에서 실패하고 새 구현에서 통과했다. 관련151개 및 배포·세대 계약1,808개 PASS. 공유 handler 변경의 rising/holding capability 후속 해시를 별도로 검토하고 새 network-blocked fixture를 발행한 뒤 다시 ordered 배포한다. 원 거래 세션·Kiwoom 요청/응답·order guard·정책 수치는 변경하지 않았다.

@@ -58,6 +58,78 @@ def _retained_fixture(stock):
     return coordinator, generation, result
 
 
+@pytest.mark.parametrize('boundary', ['close', 'session_change', 'generation_conflict'])
+@pytest.mark.parametrize('status', ['completed', 'expired_after_response'])
+def test_fixed_watch_completion_crossing_route_boundary_is_consumed_without_execution(
+    monkeypatch, boundary, status
+):
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import main_fixed_watch as fixed, scanner_async_eval as A
+    from src.engine.scalping import reversal_current_backend as native
+    before = datetime(2026, 10, 15, 19, 39, 59, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+    if boundary == 'session_change':
+        before = datetime(2026, 10, 15, 8, 49, 59, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+    now = before + (602 if boundary == 'session_change' else 2)
+    if boundary == 'generation_conflict':
+        now = before
+    monkeypatch.setattr(time, 'time', lambda: now)
+    route = fixed.session_route(before, '005930')
+    stock = dict(code='005930', status='WATCHING', position_tag='SCALP_BASE',
+        watch_origin=fixed.WATCH_ORIGIN, watch_admission_id=fixed.new_admission_id(before, route),
+        watch_generation_id=fixed.generation_id(before, route),
+        broker_route='NXT' if route['route']=='nxt_only' else 'SOR')
+    if boundary == 'generation_conflict': stock['watch_generation_id'] = 'obsolete'
+    coordinator, _, original = _retained_fixture(stock)
+    claim = {'token':'original', 'snapshot':[{'event_id':'event', 'epoch':before,
+        'symbol':'005930', 'venue':stock['broker_route'], 'source_item':route['item']}]}
+    generation = A.FixedWatchGeneration('005930', stock['broker_route'], 'fixed-watch:original', 'a'*64, before)
+    result = replace(original, generation_id=generation.generation_id,
+        request_id=generation.generation_id+':key', original_generation=generation,
+        generation_kind='fixed_watch', venue=generation.venue, native_claim=claim, status=status)
+    coordinator._ready.clear(); coordinator._ready[result.request_id] = result
+    stock.update(_scanner_async_generation_id=generation.generation_id,
+        _fixed_watch_async_claim=claim, _continuous_reversal_pending_claim=claim)
+    events=[];acks=[]
+    monkeypatch.setattr(A, 'record_async_disposition', lambda r, kind, reason, **kw: events.append((r,kind,reason)))
+    monkeypatch.setattr(native, 'acknowledge_any', lambda c, **kw: acks.append((c['token'],kw['status'])))
+    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **kw: None)
+    monkeypatch.setattr(handlers, '_handle_watching_state_impl', lambda *a, **kw: pytest.fail('route conflict executed'))
+    try:
+        handlers.handle_watching_state(stock, '005930', {}, 1,
+            scanner_async_eval_coordinator=coordinator)
+        expected = 'fixed_watch_entry_session_route_conflict' if status=='completed' else 'result_not_commit_eligible'
+        assert events == [(result, 'rejected', expected)]
+        assert acks == [('original', 'async_commit_rejected')]
+        assert not coordinator.has_completed(generation_id=result.generation_id, cache_key='key')
+        assert '_scanner_async_generation_id' not in stock
+        assert '_fixed_watch_async_claim' not in stock
+        assert stock['status'] == 'WATCHING'
+    finally:
+        coordinator.shutdown()
+
+
+@pytest.mark.parametrize('pending', [False, True])
+def test_fixed_watch_invalid_route_cannot_start_or_replace_pending_work(monkeypatch, pending):
+    stock = dict(code='005930', status='WATCHING', watch_origin='MAIN_FIXED_WATCH',
+        watch_generation_id='obsolete', broker_route='SOR')
+    coordinator, generation, result = _retained_fixture(stock)
+    coordinator._ready.clear()
+    claim = {'token':'original'}
+    if pending: stock['_fixed_watch_async_claim'] = claim
+    monkeypatch.setattr(coordinator, 'is_pending', lambda **kw: pending)
+    monkeypatch.setattr(coordinator, 'submit', lambda *a: pytest.fail('route conflict dispatched'))
+    try:
+        outcome = handlers._resolve_scanner_async_entry_ai(stock, '005930', {}, _FakeAI(),
+            dict(scanner_async_eval_coordinator=coordinator),
+            trigger_reason='fixture', last_ai_time=0, current_ai_score=0)
+        assert outcome['status'] == ('pending' if pending else 'commit_rejected')
+        if pending:
+            assert stock['_fixed_watch_async_claim'] == claim
+            assert stock['_scanner_async_generation_id'] == generation.generation_id
+    finally:
+        coordinator.shutdown()
+
+
 @pytest.mark.parametrize('operation,reason', [('discard','target_removed'),
     ('invalidate','generation_invalidated'), ('shutdown','coordinator_shutdown')])
 def test_coordinator_removal_records_original_terminal_once(monkeypatch, operation, reason):

@@ -61181,8 +61181,18 @@ def _resolve_scanner_async_entry_ai(
     origin_generation_id = stock.get('_scanner_async_generation_id')
     origin_cache_key = stock.get('_scanner_async_cache_key')
     scope_epoch = time.time()
-    fixed_route = _fixed_watch_entry_source_route(stock, scope_epoch)
-    fixed_watch = bool(fixed_route)
+    route_error = None
+    try:
+        fixed_route = _fixed_watch_entry_source_route(stock, scope_epoch)
+    except ValueError as exc:
+        if str(exc) != 'fixed_watch_entry_session_route_conflict':
+            raise
+        # A completed request can cross a session boundary. Keep its original
+        # queue identity and record nonexecution through the normal consumer;
+        # a route conflict must never escape and terminate the Main loop.
+        fixed_route = None
+        route_error = str(exc)
+    fixed_watch = bool(fixed_route) or route_error is not None
     claim = copy.deepcopy(stock.get('_fixed_watch_async_claim') or stock.get('_continuous_reversal_pending_claim'))
     retained = (coordinator.peek_completed(
         generation_id=stock.get('_scanner_async_generation_id', ''),
@@ -61194,6 +61204,8 @@ def _resolve_scanner_async_entry_ai(
         generation = retained.original_generation or generation
         if retained.generation_kind == 'fixed_watch':
             fixed_watch = True
+    if route_error and retained is None and not claim:
+        return {'status': 'commit_rejected', 'reason': route_error}
     if retained is None and fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and not claim:
         # A registered native scope remains enabled while it has no signal.
         # Falling back to inline REST here blocks Main before any eligible
@@ -61212,6 +61224,8 @@ def _resolve_scanner_async_entry_ai(
                 return {'status': 'waiting_native_signal', 'reason': 'native_signal_not_ready'}
     if retained is None and fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and claim:
         try:
+            if route_error:
+                raise ValueError(route_error)
             generation = FixedWatchGeneration.from_claim(code, claim)
             if (fixed_route['item'] != claim['snapshot'][0].get('source_item')
                     or fixed_route['broker_route'] != generation.venue):
@@ -61252,10 +61266,10 @@ def _resolve_scanner_async_entry_ai(
         commit_started = time.perf_counter()
         from src.engine.monitoring.runtime_performance import observe_async_main_guard
         main_guard_fields = observe_async_main_guard(result, now_perf=commit_started)
-        native_valid = True
-        native_validation_error = None
+        native_valid = route_error is None
+        native_validation_error = route_error
         revalidation = {}
-        if claim:
+        if claim and native_valid:
             try:
                 from src.engine.scalping.reversal_current_backend import backend
                 from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt

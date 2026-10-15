@@ -24,19 +24,22 @@ from src.engine.monitoring import policy_generation_validation as validation
 # The carried-stop reader now locks future-only vote snapshots; the holding
 # capability remains bound to a fresh exact-generation fixture.
 # Review: docs/audits/main-finalization-live-vote-read-race-repair-2026-10-15.md.
+# Async session-boundary rejection changes shared-handler bytes only. Preserve
+# route/order guards and require fresh rising/holding fixtures for this successor.
+# Review: docs/audits/main-entry-price-progress-deployment-review-2026-10-15.md.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
         'b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '13c57fae8a6540a23e6db6997a4ff06727a51852d6c4456adfe10f74c8ffe2bb'),
+        '7d56e2207d7116576e608db26d4a3b7bfd8c910ec8f355485450089b52f1998a'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
         '44363b0c64586c71663449d4704d70d39b9ccaa93f93d71d428a8ad948edb5be'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '133f24bdcc12cf50fcc6c11a69dead048283033cad089d5809952109fb89b5aa'),
+        '1833be6984a09cefa515f2228e68a0b291be84fc0988ac29231279ddbd052c5b'),
 }
 
 

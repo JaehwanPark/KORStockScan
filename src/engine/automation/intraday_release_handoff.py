@@ -615,6 +615,15 @@ REVIEWED_ENTRY_RECEIPT_IDENTITY_SOURCES = {
     ),
 }
 
+# Original result custody across a fixed-watch session boundary. Route conflict
+# remains nonexecution; no fallback route, new request or deadline is admitted.
+REVIEWED_ASYNC_SESSION_BOUNDARY_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',
+        'c3ac7e88532734dcd14c1037ecaecea82064701c3a6cc03ae1871e158bc38f80',
+    ),
+}
+
 
 # Exact PREOPEN-to-candidate arm cleanup, with unchanged original deadlines and
 # policy/source custody. This is a code check, not selection/startup authority.
@@ -717,6 +726,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
                     REVIEWED_ENTRY_RECEIPT_IDENTITY_SOURCES.get(name),
+                    REVIEWED_ASYNC_SESSION_BOUNDARY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
                     REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name),
                     REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name),
