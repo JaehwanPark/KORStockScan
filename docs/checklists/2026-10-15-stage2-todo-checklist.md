@@ -195,6 +195,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 누적 기계 후보의 별도 작업본 인계
 
 - [ ] `[CumulativePolicyAdoptionDeployment1015] 누적 기계 후보 등록안 배포 대기` (`Due: 2026-10-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 추가12가설 구현 인계: 별도 작업본 `entry-progress-cumulative-20261015`에서 214개 회귀·27 partition native/35,558대안 일치 검증과 private 준비(content82796bfeee27)를 완료했다. [추가 구현 검토](../audits/main-entry-price-progress-implementation-review-2026-10-15.md). 기존38가설 운영 pending c15491190e72와 구분하며, 새12가설의 등록/배포/PID 수용은 이번 구현으로 승인되지 않는다. 기존 parent/pending 충돌은 원 등록을 보존하고 현재 parent·날짜·후속 권한을 재확인한다.
   - 통합cfa070c1e로 코드 배포·재기동 완료. publication10/15·target10/16 누적 등록 receipt c15491190e72의 durable intake 완료, 현재 policy pointer 불변. 정상 장후 stage와 적용일 PREOPEN/PID 소비는 OPEN이며 오늘의 코드 소비와 혼합하지 않는다.
   - 10/15 후속 지시로 통합 배포·재기동이 승인됐다. 기존 배포대기 상태는 이 승인으로 대체하며, publication10/15·target10/16 및 원 parent CAS를 유지해 durable intake와 정상 장후 stage→PREOPEN 인계를 수행한다. [통합 배포 리뷰](../audits/main-cumulative-holding-integration-deployment-2026-10-15.md).
   - Source: [구현·리뷰·격리 검증](../audits/main-cumulative-policy-adoption-implementation-review-2026-10-15.md), [정책 반영 계획 §10](../proposals/main-cumulative-research-policy-adoption-plan-2026-10-14.md#10-1015-별도-작업본-구현과-배포-대기-인계).

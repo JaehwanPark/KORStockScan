@@ -67,16 +67,18 @@ def build(data_root,day,publication,parent,*,source=None,publish_outputs=True):
     manifest=V.detector_manifest(parent,effective_date=N.next_target(publication),changes=change)
     registered=manifest.get('cumulative_variant_groups') or {}
     if not registered:raise ValueError('cumulative_postclose_registration_missing')
+    batch=G.approval(manifest)['research_batch_sha256'];catalog=Q.catalog(batch)
     source=source or P.ensure_population(data_root,day)
     if source.get('artifact_content_sha256')!=P.seal(source)['artifact_content_sha256']:
         raise ValueError('cumulative_source_manifest_changed')
     out=O.directory(data_root,day);out.mkdir(parents=True,exist_ok=True)
     configs={};current=parent['continuous_reversal']['operating_manifest']['scopes']
     for sid,ids in manifest['scopes'].items():
-        configs[sid]=dict(Q.variants(sid),CURRENT_NATIVE=current[sid]) if sid in registered else dict(CURRENT_NATIVE=current[sid])
+        configs[sid]=dict(Q.variants(sid,batch),CURRENT_NATIVE=current[sid]) if sid in registered else dict(CURRENT_NATIVE=current[sid])
     code={Path(m.__file__).name:P.file_hash(m.__file__) for m in V.contract_modules()}
     children=defaultdict(list)
-    for bid,d in Q.REFINEMENTS.items():children[d['original_definition_ref']['branch_id']].append(bid)
+    for bid,d in catalog['definitions'].items():
+        if d['kind']=='cumulative_refinement':children[d['original_definition_ref']['branch_id']].append(bid)
     canonical={};conflicts=set();partitions=[];receipts=[];bars={};census=Counter();observed=Counter()
     with S.Store(data_root) as store:
         for rec in source['normalized_sources']['partitions']:
@@ -120,7 +122,7 @@ def build(data_root,day,publication,parent,*,source=None,publish_outputs=True):
                         if row[8]:coverage[sid]+=1
                         if ready and K.good_quote(row):
                             event,inp=LIVE.snapshot(state,ready[0])
-                            allowed=(set(Q.GROUPS[sid]['baseline'])|set(Q.GROUPS[sid]['additions'].values())
+                            allowed=(set(catalog['groups'][sid]['baseline'])|set(catalog['groups'][sid]['additions'].values())
                                      if sid in registered else set(current[sid]))
                             signals={b:e for b,e in event['branch_signals'].items()
                                      if b in allowed and C.applicable(b,sid.rsplit('|',1)[0],route)}
@@ -209,7 +211,7 @@ def build(data_root,day,publication,parent,*,source=None,publish_outputs=True):
     small_metrics={};selected_effects={}
     for sid in configs:
         selected=report.get('cumulative_selection',{}).get(sid,{}).get('variant')
-        if not selected:selected=Q.RECOMMENDATIONS[sid] if change and sid in registered else 'CURRENT_NATIVE'
+        if not selected:selected=catalog['recommendations'][sid] if change and sid in registered else 'CURRENT_NATIVE'
         for name,origin in [('CURRENT_NATIVE','CURRENT_NATIVE'),('SELECTED',selected)]:
             small_metrics[sid+'::'+name]=metrics.get(sid+'::'+origin,metrics[sid+'::CURRENT_NATIVE'])
         selected_effects[sid]=effects[sid+'::'+selected]
@@ -263,7 +265,7 @@ def _initial_reports_locked(data_root,day,publication,parent,machine,*,publish_p
         bindings[sid]=current[sid]
         # Source evidence and custom prompt/registry remain current; no campaign cloning.
         if not old.get('actual_response_evidence'):
-            old['initial_binding']=dict(operator_receipt=G.AUTHORITY,research_batch_sha256=Q.RESEARCH_RESULT,
+            old['initial_binding']=dict(operator_receipt=G.AUTHORITY,research_batch_sha256=G.approval(manifest)['research_batch_sha256'],
                 source_scope=sid,source_bundle_sha256=parent['bundle_sha256'],comparison_result_required=False,
                 response_evidence_role='compatible_current_auxiliary_contract_carry')
     receipts=list(machine['source_receipts'])+(request['source_receipts'] if request else [])+I.lineage_sources(data_root,parent,overlay)

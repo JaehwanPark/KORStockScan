@@ -86,9 +86,10 @@ class State(OLD.State):
         old_ready=super().observe(row,symbol=symbol,venue=venue,session=session)
         for ready in tuple(self.ready):
             for bid, signal in tuple(ready['event']['branch_signals'].items()):
-                from src.engine.scalping.reversal_cumulative_runtime import hold_floor
+                from src.engine.scalping.reversal_cumulative_runtime import hold_floor,hold_breached
                 floor=hold_floor(signal) if bid in C.CUMULATIVE_DEFINITIONS else signal['signal_proof']['price'] if signal['decision_phase']=='FIRST_PRICE_HOLD' else None
-                if floor is not None and row[3]<floor:
+                if ((bid in C.CUMULATIVE_DEFINITIONS and hold_breached(signal,row))
+                        or floor is not None and row[3]<floor):
                     ready['event']['branch_signals'].pop(bid)
                     ready.get('path_inputs',{}).pop(bid,None)
             if not ready['event']['branch_signals']:
