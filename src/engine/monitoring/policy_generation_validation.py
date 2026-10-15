@@ -32,6 +32,11 @@ PLANS = {
         'src/tests/test_holding_vote_numeric_successor.py',
         'src/tests/test_holding_exit_vote.py',
     ],
+    'auxiliary': [
+        'src/tests/test_reversal_auxiliary_tuning.py',
+        'src/tests/test_reversal_auxiliary_transition.py',
+        'src/tests/test_reversal_cumulative_policy.py',
+    ],
 }
 AUTHORITY_FALSE = ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed',
                    'actual_profit_verified', 'policy_published')
@@ -111,6 +116,16 @@ def verify_fixture(data, family):
     return value, dict(path=str(path), sha256=sha)
 
 
+def native_report_path(data, family, day):
+    relative = {
+        'entry_cancel_wait': f'entry_cancel_wait_tuning/entry_cancel_wait_tuning_{day}.json',
+        'rising_missed': f'rising_missed_classifier_prior/rising_missed_classifier_prior_{day}.json',
+        'holding_vote': f'monitor_snapshots/holding_exit_observation_{day}.json',
+        'auxiliary': f'reversal_auxiliary_tuning/{day}/evaluation.json',
+    }[family]
+    return Path(data)/'report'/relative
+
+
 def current_fixture_observation(observed, data):
     """Supplement only a valid, same-code native contract lacking its fixture.
 
@@ -128,12 +143,7 @@ def current_fixture_observation(observed, data):
         return observed
     try:
         fixture, reference = verify_fixture(data, family)
-        relative = {
-            'entry_cancel_wait': 'entry_cancel_wait_tuning/entry_cancel_wait_tuning_',
-            'rising_missed': 'rising_missed_classifier_prior/rising_missed_classifier_prior_',
-            'holding_vote': 'monitor_snapshots/holding_exit_observation_',
-        }[family]
-        expected = Path(data)/'report'/(relative+observed['source_date']+'.json')
+        expected = native_report_path(data, family, observed['source_date'])
         if Path(observed['artifact']) != expected:
             raise ValueError('fixture_native_report_path_invalid')
         payload, report_sha = bounded_object(Path(observed['artifact']), 8*1024*1024)

@@ -12,6 +12,7 @@ from src.engine.scalping.continuous_reversal_postclose import digest
 VERSION = 'continuous_extended_path_auxiliary_v1'
 PHASES = frozenset({FIRST,CONFIRMED,'PEAK_RECLAIM','MOMENTUM_CROSS','MOMENTUM_HOLD','HIGH_BREAKOUT',
                     'RETEST_RECLAIM_FIRST','RETEST_RECLAIM_PEAK','FIRST_PRICE_HOLD'})
+PHASES = PHASES | {'HIGH_BREAKOUT_HOLD','VWAP_RECLAIM_HOLD','RISING_STRUCTURE_HOLD'}
 FEATURES = ('confirmation_price','entry_ask','spread_pct','drawdown_5m_pct',
             'volume_ratio_60s','return_60s_pct','session_return_pct','vs_vwap_60s_pct',
             'buy_pressure_10t','buy_pressure_30s','return_10t_pct')
@@ -19,6 +20,8 @@ PROOF_FIELDS = frozenset({'epoch','price','threshold','return_60s_pct','previous
                          'low','peak','reclaim','minimum_price','touch_epoch','touch_price','native_epoch','native_sequence','touch_sequence','root_contract','confirmation_sequence'})
 PROOF_FIELDS = PROOF_FIELDS | {'original_definition_ref','original_confirmation',
                               'refinement_truth','refinement_feature_ref'}
+PROOF_FIELDS = PROOF_FIELDS | {'feature_version','root_confirmation','refinement_features',
+                              'vwap_at_root','structure_at_root'}
 PROMPT = '''Assess the supplied machine-observed signal at its actual confirmation ask.
 Judge net +0.4% within 1800 seconds before net -3%, with cost 0.23% once.
 Judge event likelihood, never expected PnL, payoff ratio or a desired PASS quota.
@@ -45,7 +48,7 @@ def finite(value):
 
 def project_signal(event):
     proof={k:copy.deepcopy(v) for k,v in event['signal_proof'].items() if k in PROOF_FIELDS}
-    if event.get('extended_definition_id') in C.JOINT.COMPOSED:
+    if event.get('extended_definition_id') in C.JOINT.COMPOSED or event.get('extended_definition_id') in C.CUMULATIVE.REFINEMENTS:
         original=proof['original_confirmation']
         proof['original_confirmation']={k:original.get(k) for k in ('event_id','signal_id','epoch',
             'native_epoch','native_sequence','decision_phase','confirmation_price','entry_ask',
@@ -70,6 +73,9 @@ def validate_input_signal(inp,event):
 
 def validate_signal(event):
     bid=event.get('extended_definition_id')
+    if bid in C.CUMULATIVE_DEFINITIONS:
+        C.CUMULATIVE.validate_signal(event)
+        return
     if bid in C.JOINT.COMPOSED:
         C.JOINT.validate_composed(event)
         if C.matches(bid,event,event['branch_features']) is not True:

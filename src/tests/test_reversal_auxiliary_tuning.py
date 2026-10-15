@@ -121,6 +121,16 @@ def test_zero_budget_has_no_transport_and_no_false_winrate(setup):
     assert later['call_budget']['used_after']==0
 
 
+def test_cumulative_marker_cannot_authorize_unregistered_machine_membership(setup):
+    root,b,m,sid,_=setup
+    changed=copy.deepcopy(m)
+    changed['operating_manifest']['scopes'][sid]=[]
+    changed=P.seal(dict(changed,cumulative_selection={sid:{'status':'selected'}}))
+    with pytest.raises(ValueError,match='cumulative_selection_authority_missing'):
+        T.prepare(root,'2026-10-07',changed,b)
+    assert not (T.directory(root,'2026-10-07')/'latest-campaign.json').exists()
+
+
 def test_later_evaluation_charges_both_dates_without_repeating_calls(setup):
     root,b,m,sid,v=setup
     next_machine=P.seal(dict(m,source_date='2026-10-08',publication_date='2026-10-08'))

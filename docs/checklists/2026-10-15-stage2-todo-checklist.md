@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-15`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 후속 사용자 승인: `7b2e421e3` 누적 후보와 `af2b8f994` 보유·비상시 등록 수리를 선택본451b6c1ec 위에 통합 배포·재기동한다. 원 PREOPEN 봉인·정책과 전임/새 PID 소비를 보존 검증하며, 다음 정규 artifact_freshness 실패0으로 배포 수용한다. [통합 배포 리뷰](../audits/main-cumulative-holding-integration-deployment-2026-10-15.md).
   - 12:06 후속 경보: 이미 소비된 정책의 문서 편집 및 다음 날짜 미사용 holding append 결속을 수정하고, 사용자 지정40b931254 장기3/약세 veto 변경과 통합 배포·재기동한다. 원 정책/실제 사용 원천·실패 기록을 보존하며 새 immutable 운영 문서, 정확한 PID 소비와 다음 정규 관측으로 수용한다. [통합 검토](../audits/main-postdeployment-policy-source-binding-repair-2026-10-15.md). 12:40:21 통합110ac4a90 ordered 배포 완료·PID2020871/start9949242 실제 소비 PASS. 이후 정규 관측/탐지기 수용은 audit에서 확인하며 자연 제출·경제성 OPEN은 유지한다. 12:51:18 후속bb4808c77/PID2039852/start10014770 소비 PASS; 과거 delay 사건의 새 PID 오귀속 보완까지 포함한다. 12:57:12 새 정규 관측/탐지기 동일 run 소비·정책4계열 검증·실패0, 최종15조건 PASS.
   - Source: [runtime_approval_summary_2026-10-14.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-14.json)
   - 판정 기준: source_date=`2026-10-14`, apply_date=`2026-10-15`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=verified); entry_cancel_wait(valid=True, handoff=incumbent_preserved); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=1070bb77bd3bccd712c238c3a82f5c24539f88e93d62643b851ba9a521b75f33, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
@@ -160,6 +161,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 이관: 10/14 미종결 Acceptance/History를 보존해 10/15 동일 ID로 인계했다. 코드·장후 준비를 미래 자연 수용/비용 후 성과로 닫지 않는다.
 
 - [ ] `[HoldingProfitExitSourceContractRepair] Main 보유 익절 원천·재생·의미 계약 수리` (`Due: 2026-10-15`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
+  - 보유 계약 수리의 통합 배포·재기동이 후속 승인됐다. 코드/PID 반영은 [통합 배포 리뷰](../audits/main-cumulative-holding-integration-deployment-2026-10-15.md)에서 확인하며, 실제 preset·수동 이관 자연 receipt와 비용 성과는 별도 수용한다.
   - 10/15 추가 수리: [preset·비용 시각·수동 이관 계약 리뷰](../audits/main-holding-preset-cost-clock-and-manual-handoff-contract-repair-2026-10-15.md). 연구 +0.4/-3/1800/0.0023·공통 pin·실효 preset·등록 대기/완료를 병렬로 결속하고 원 ISO 비용 시각을 불변 소비한다. 기존 비상시 등록 완료 연결 수리와 선택본451b6c1ec 기준 격리 커밋으로 준비한다. 과거 partial-fill/preset 원천 결손·실현 비용 null을 보존하며 배포·PID 소비·자연 receipt·경제성은 미수용으로 남긴다. 재기동·정책/제외 파일·주문 변경 없이 기존 Acceptance/History와 OPEN을 유지한다.
   - 후속 사용자 승인: HPSP 수리의 재리뷰·보완 후 배포·재기동 및 `06deaab3453edcb66e493098f9128651f53b928f`의 완료봉 원천 복구를 통합한다. 실제 선택본bb4808c77의 기존 수리·정책을 보존하며 원 PREOPEN source/code 계약과 현재 세대 fixture 검증 뒤 ordered 전환을 수행한다. 배포 수용은 `DirectFamilyPreopenPolicyHandoff`, 각 자연 수용은 이 owner와 `AuxiliaryCircuitRecoveryRepair1012`에서 기존 Acceptance로 확인한다.
   - 10/15 HPSP 후속 결함 수리: [고점 재생·SELL outbox 리뷰](../audits/main-hpsp-trailing-event-replay-and-sell-outbox-repair-review-2026-10-15.md). 실제 0B 묶음 고점 반영·실패 상태 분리·복구 표시, fast/normal 및 장후 consumer 계약과 고정 감시의 native receipt ACK를 보완했다. 원 journal/hash·broker provenance 결손을 보존하고 관련377개 회귀·compile·diff 검증을 통과했다. workspace 코드 리뷰 범위 finding 0이며 기존 PID2039852 경보·outbox pending의 live 해소는 미확인이다. 배포·재기동·live journal 변경은 미실행; 별도 승인된 적용 후 같은 leg의 ACK/종결·중복 주문0·새 고점 재생/복구와 탐지기 소비를 확인하며 원 Acceptance/경제성 OPEN은 유지한다.
@@ -187,3 +189,13 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 05:51 장전 최종화 경보 수리 인계
 
 - 기존 `DirectFamilyPreopenPolicyHandoff`가 [준비 예산·코드 검증 경보 수리](../audits/morning-finalization-preparation-and-generation-warning-repair-2026-10-15.md)의 source14/target15 새 prepared·최종화·선택 commit·정규 PREOPEN/실제 PID 소비를 각각 확인한다. 준비 기본600초는 원06:50 마감 cap과 분리된 검증 예산이며 AI/매매 예산을 바꾸지 않는다. 원05:51 실패와 이전 준비 영수증을 보존한다.
+
+## 누적 기계 후보의 별도 작업본 인계
+
+- [ ] `[CumulativePolicyAdoptionDeployment1015] 누적 기계 후보 등록안 배포 대기` (`Due: 2026-10-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 10/15 후속 지시로 통합 배포·재기동이 승인됐다. 기존 배포대기 상태는 이 승인으로 대체하며, publication10/15·target10/16 및 원 parent CAS를 유지해 durable intake와 정상 장후 stage→PREOPEN 인계를 수행한다. [통합 배포 리뷰](../audits/main-cumulative-holding-integration-deployment-2026-10-15.md).
+  - Source: [구현·리뷰·격리 검증](../audits/main-cumulative-policy-adoption-implementation-review-2026-10-15.md), [정책 반영 계획 §10](../proposals/main-cumulative-research-policy-adoption-plan-2026-10-14.md#10-1015-별도-작업본-구현과-배포-대기-인계).
+  - 사용자 지시는 별도 작업본의 구현·반복 보완·배포대기다. 이 항목의 일정은 자동 배포/등록/재기동 권한이 아니다. source 수리의 과거 OPEN을 재개하지 않는다.
+  - 작업본 `/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015`, branch `codex/cumulative-policy-adoption-20261015`; private data/tmp와 immutable prepared archive를 보존한다. 원 작업본의 동시 작업은 그대로 둔다.
+  - Acceptance: 코드·원천/variant/native-reader 검증 PASS와 prepare authority false를 확인한 뒤 배포 지시를 기다린다. 승인 후 새 selected release/코드·현재 parent CAS·날짜·원천 해시를 대조하고 durable intake→동일 세대 stage→적용일 준비/정상 PID 소비를 기존 `DirectFamilyPreopenPolicyHandoff`와 연결한다. target이 지나면 publication/target을 새로 준비한다.
+  - History: 10/14 계획, 10/15 누적 연구 38개 가설·19,892개 관측 대안과 reviewed 15개 scope 변경/7개 승계를 계승한다. 성공 보존율/표본/EV/새 날짜 gate는 추가하지 않는다. 코드·준비와 실제 등록/활성/PID/자연 거래/실현 성과는 별도 상태다.

@@ -23,6 +23,7 @@ def _fixture(data, family):
         'entry_cancel_wait':f'report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_{DAY}.json',
         'rising_missed':f'report/rising_missed_classifier_prior/rising_missed_classifier_prior_{DAY}.json',
         'holding_vote':f'report/monitor_snapshots/holding_exit_observation_{DAY}.json',
+        'auxiliary':f'report/reversal_auxiliary_tuning/{DAY}/evaluation.json',
     }[family]
     report=data/relative;report.parent.mkdir(parents=True);report.write_text(json.dumps(payload))
     observed=generation.observations(data.parent,DAY,data_root=data)[0]
@@ -166,7 +167,7 @@ def test_fixture_publication_rejects_dirty_or_untracked_source(monkeypatch):
         writer._assert_committed('entry_cancel_wait')
 
 
-@pytest.mark.parametrize('family', ['rising_missed','holding_vote'])
+@pytest.mark.parametrize('family', ['entry_cancel_wait','rising_missed','holding_vote','auxiliary'])
 @pytest.mark.parametrize('damage', [None,'unreviewed_old','unreviewed_current','source','contract',
     'fixture_code','plan','report_path','state','missing','authority','receipt'])
 def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage):
@@ -203,8 +204,44 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     assert all(p.read_bytes()==b for p,b in before.items())
 
 
-@pytest.mark.parametrize('family', ['rising_missed', 'holding_vote'])
+@pytest.mark.parametrize('family', ['entry_cancel_wait', 'rising_missed', 'holding_vote', 'auxiliary'])
 def test_reviewed_successor_binds_current_family_code(family):
     """Shared handler edits must renew the preserved-report capability review."""
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     assert handoff.REVIEWED_SUCCESSORS[family][1] == generation.code_generation(family)
+
+
+@pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink'])
+def test_successor_requires_preserved_prior_fixture_and_independent_current_fixture(tmp_path, monkeypatch, damage):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    data=tmp_path/'data'; family='auxiliary'
+    _,report,_,_,value,_=_fixture(data,family)
+    payload=json.loads(report.read_text());contract=payload['policy_generation']
+    old='a'*64; current=contract['code_sha256']
+    historical=dict(value,code_sha256=old)
+    if damage=='authority':historical['allowed_runtime_apply']=True
+    historical['receipt_sha256']=generation.digest({k:v for k,v in historical.items() if k!='receipt_sha256'})
+    if damage=='seal':historical['receipt_sha256']='b'*64
+    path=data/'report/postclose_generation_validation'/('auxiliary_'+old+'.json')
+    path.write_text(json.dumps(historical))
+    reference=dict(path=str(path),sha256=validation.file_sha(path))
+    contract.update(code_sha256=old,fixture_receipt=reference,
+        retry_key=generation.digest([family,contract['source_generation'],old,contract['source_state']]))
+    if damage=='path':reference['path']=str(tmp_path/'foreign.json')
+    contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
+    report.write_text(json.dumps(payload))
+    observed=generation.observations(tmp_path,DAY,data_root=data)[0]
+    monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{family:(old,current)})
+    if damage=='missing':path.unlink()
+    elif damage=='bytes':path.write_text('{}')
+    elif damage=='symlink':
+        other=tmp_path/'historical.json';path.rename(other);path.symlink_to(other)
+    before=report.read_bytes()
+    result=handoff.current_fixture_observation(observed,data)
+    assert result['status']==('verified' if damage is None else 'unverified'),result
+    assert report.read_bytes()==before
+    if damage is None:
+        assert result['preserved_historical_fixture']==reference
+        assert result['current_fixture']!=reference
+        assert result['native_validated'] is False
+        assert result['historical_contract_status']=='unverified'

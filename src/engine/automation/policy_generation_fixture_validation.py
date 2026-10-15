@@ -40,6 +40,7 @@ def validate(family, data, *, source_date, target_date, publish=False):
         data/'report/entry_cancel_wait_tuning'/f'entry_cancel_wait_tuning_{source_date}.json',
         data/'report/rising_missed_classifier_prior'/f'rising_missed_classifier_prior_{source_date}.json',
         data/'report/monitor_snapshots'/f'holding_exit_observation_{source_date}.json',
+        data/'report/reversal_auxiliary_tuning'/source_date/'evaluation.json',
         data/'runtime/runtime_release_selection.json',
         data/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{target_date}.json',
         data/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{target_date}.env',

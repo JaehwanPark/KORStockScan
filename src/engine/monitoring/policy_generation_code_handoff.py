@@ -15,15 +15,48 @@ from src.engine.monitoring import policy_generation_validation as validation
 # scopes the approved Main weak vetoes without changing either family producer.
 # All components remain bound by the complete generation hashes; current fixture
 # evidence is independently required. No historical contract is reclassified.
-# Review: docs/audits/main-native-entry-arm-handoff-repair-2026-10-15.md.
+# Review: docs/audits/main-cumulative-holding-integration-deployment-2026-10-15.md.
+# Preset/cost-clock and cumulative auxiliary changes extend exact review to
+# entry-cancel-wait and auxiliary; every successor needs new isolated fixtures.
 REVIEWED_SUCCESSORS = {
+    'entry_cancel_wait': (
+        'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
+        '0ca40b9fc16658dd7ab8561723daf8d9315432f860d2e71a2cda03cef40b3885'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '0b80d5f5b4a5d32c7208da29903b815b195c0afcb379b08bca73d5fd2750c989'),
+        '79de6415f87f70bb39c08bde827cbfc6e97cc5fbc63728aba584021cada10533'),
+    'auxiliary': (
+        '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
+        '527117df62523777584ca57d2588a2061e9867f44a40c40b7deaac3fca498046'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '2334f3e3e3434b0d5e968cc01bee8eaaa5d7f3d7628b05829dde7d2ccad7f61a'),
+        'f946f4bea342c9974555c2e72910d1cab563647bdf071f6dd4af5ec8c03b192c'),
 }
+
+
+def _historical_fixture(contract, data, family):
+    """Preserve a prior fixture without using it to certify the successor."""
+    reference = contract.get('fixture_receipt')
+    if reference is None:
+        return None
+    path = Path(data)/'report/postclose_generation_validation'/(
+        family+'_'+contract['code_sha256']+'.json')
+    if not isinstance(reference, dict) or reference.get('path') != str(path):
+        raise ValueError('successor_historical_fixture_path_invalid')
+    payload, sha = validation.bounded_object(path, 65536)
+    if (path.is_symlink() or sha != reference.get('sha256')
+            or payload.get('schema') != 'postclose_generation_fixture_receipt_v1'
+            or payload.get('family') != family or payload.get('status') != 'pass'
+            or payload.get('code_sha256') != contract['code_sha256']
+            or not payload.get('closure_tests') or payload.get('unresolved_findings') != []
+            or payload.get('receipt_sha256') != generation.digest(
+                {k:v for k,v in payload.items() if k != 'receipt_sha256'})
+            or payload.get('runtime_effect') is not False
+            or payload.get('actual_pid_consumed') is not False
+            or payload.get('actual_profit_verified') is not False
+            or payload.get('allowed_runtime_apply', False) is not False):
+        raise ValueError('successor_historical_fixture_invalid')
+    return reference
 
 
 def current_fixture_observation(observed, data):
@@ -38,9 +71,7 @@ def current_fixture_observation(observed, data):
     try:
         data = Path(data)
         fixture, reference = validation.verify_fixture(data, family)
-        relative = {'rising_missed':'rising_missed_classifier_prior/rising_missed_classifier_prior_',
-                    'holding_vote':'monitor_snapshots/holding_exit_observation_'}[family]
-        path = data/'report'/(relative+observed['source_date']+'.json')
+        path = validation.native_report_path(data, family, observed['source_date'])
         if Path(observed['artifact']) != path:
             raise ValueError('successor_report_path_invalid')
         payload, report_sha = validation.bounded_object(path, 8*1024*1024)
@@ -57,10 +88,11 @@ def current_fixture_observation(observed, data):
                                       payload=native, data_root=data)
         keys = ('status','findings','missing_components','observation_complete','source_generation',
                 'code_sha256','contract_sha256','source_state','comparison_state','handoff_state')
-        if (any(original[k] != observed.get(k) for k in keys) or contract.get('fixture_receipt') is not None
+        if (any(original[k] != observed.get(k) for k in keys)
                 or report_sha != observed.get('report_sha256') or contract['code_sha256'] != pair[0]
                 or fixture['code_sha256'] != pair[1]):
             raise ValueError('successor_historical_contract_changed')
+        historical_fixture = _historical_fixture(contract, data, family)
         current = generation.native(native, family=family, day=observed['source_date'], data_root=data,
             source_state=contract['source_state'], comparison_state=contract['comparison_state'],
             handoff_state=contract['handoff_state'])
@@ -69,12 +101,16 @@ def current_fixture_observation(observed, data):
                 or verified['source_generation'] != original['source_generation']
                 or current['code_sha256'] != pair[1] or validation.file_sha(path) != report_sha):
             raise ValueError('successor_current_reader_unverified')
+        if historical_fixture and validation.file_sha(historical_fixture['path']) != historical_fixture['sha256']:
+            raise ValueError('successor_historical_fixture_changed')
         result = deepcopy(observed)
         result.update(status='verified', findings=[], native_validated=False,
             current_code_capability_verified=True, historical_contract_status='unverified',
             verification_basis='reviewed_code_successor_fixture_for_preserved_native_report',
             current_fixture=reference, current_capability_contract_sha256=current['contract_sha256'],
             current_capability_code_sha256=pair[1], reviewed_code_pair=list(pair))
+        if historical_fixture:
+            result['preserved_historical_fixture'] = historical_fixture
         result['scopes'] = {family:{k:v for k,v in result.items() if k not in {'scopes','family','source_date','artifact'}}}
         return result
     except (OSError, ValueError, KeyError, TypeError, validation.ET.ParseError) as exc:

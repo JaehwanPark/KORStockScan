@@ -599,6 +599,10 @@ REVIEWED_CARRIED_SOURCE_BINDING_SOURCES = {
 REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES = {'src/engine/sniper_state_handlers.py': ('b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500', 'f19298ecdebfe6bb936c8d3700c50073592da6bdd1548dc104bfc9595399023d'), 'src/engine/sniper_execution_receipts.py': ('97ca5efc27896fb31cf04eeccf596efe389e41b2332907b36039357e3f77472c', 'dc4a57286b38f72c96e538e7eb3851f806af1b9c07e0145f3f5aed51ea00bbe1'), 'src/engine/scalping/trailing_mechanical_strength.py': ('b2c425e1fff3f8241b9fd5b55c590eeb264b0a1ab909b0059bc32198e6ad6c1a', '6e6ff97542868f4624efb18e8b31c1fab6142b37921b98e67f1ace614e79ceb3'), 'src/engine/scalping/trailing_mechanical_replay.py': ('78d8f61e0105818402608bff314bfb11f70850a8701812ab0ddce1cdf9274895', 'de989aadd577f78f298677d10b6054fb4e11530af6920ba9f0841212c47ddfe2')}
 
 
+# Reviewed preset/cost-clock/manual-handoff observations; original policies stay sealed.
+REVIEWED_HOLDING_CONTRACT_SOURCES = {'src/engine/sniper_state_handlers.py': ('b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500', '8eaa7493ce235c64e8ccea966afee2a87ef6ee201dd080407584b51925d45ec2'), 'src/engine/scalping/main_stop_policy.py': ('c444f74e9da0339b564543322da389bcbe38552c4ed56531e8ebf5c21676752e', '8cdd21315d3d0db00f3383406dbb7d885ca02fef7ed957edf4f9535f0f022087'), 'src/engine/scalping/main_stop_replay.py': ('f609161b46296329cb08a4f4b71a07f465f6e412429286348901d85e66c90363', '3194cc743fc664176245ccb5ffbb26469d68c4276bc8c86aa4d0d87377615ffe'), 'src/engine/automation/main_stop_postclose.py': ('360573dc170d91617cbaec7f1c8713b769c403b22e52449e11434019360a6224', '0a33ccf900e7d512ff03ee62923efa95842ea87caeb2987fbd1b479aa18f8258'), 'src/engine/automation/main_stop_source_index.py': ('ddaab50afeee7a47c4a49565f27dc699532aabf8197e5276eb0d57cf974dfdce', '802a8f3878f5d9d2fd299c79a57f9b84db6bf1de52017f0e995958b65145381d')}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -660,7 +664,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
                     REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name),
-                    REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name)):
+                    REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name),
+                    REVIEWED_HOLDING_CONTRACT_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

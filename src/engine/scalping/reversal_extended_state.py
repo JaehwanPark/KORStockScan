@@ -17,11 +17,17 @@ from src.engine.scalping.continuous_reversal_postclose import digest
 class State(OLD.State):
     def __init__(self, *, branch_ids, registry_sha256=None, **kwargs):
         from src.engine.scalping import reversal_joint_catalog as J
+        from src.engine.scalping import reversal_cumulative_catalog as Q
+        from src.engine.scalping.reversal_cumulative_runtime import Detector
         self.operating_ids=tuple(branch_ids)
+        expanded=Q.dependencies(branch_ids)
+        self.cumulative_ids=tuple(b for b in expanded if b in Q.DEFINITIONS)
+        self.cumulative=Detector(self.cumulative_ids) if self.cumulative_ids else None
+        branch_ids=tuple(b for b in expanded if b not in Q.DEFINITIONS)
         self.composed_ids=tuple(b for b in branch_ids if b in J.COMPOSED)
         dependencies=[J.COMPOSED[b]['original_definition_ref']['branch_id'] for b in self.composed_ids]
         branch_ids=tuple(dict.fromkeys((*branch_ids,*dependencies)))
-        self.registry_sha256=registry_sha256 or (C.registry_for(branch_ids) if any(b in C.EXTENDED_DEFINITIONS for b in branch_ids) else C.OLD.SHA256)
+        self.registry_sha256=registry_sha256 or (C.registry_for(self.operating_ids) if any(b in C.EXTENDED_DEFINITIONS for b in self.operating_ids) else C.OLD.SHA256)
         self.extended_ids=tuple(b for b in branch_ids if b in C.EXTENDED_DEFINITIONS and b not in J.COMPOSED)
         self.extended_pending={};self.extended_previous={};self.extended_turn=None
         self.coverage_snapshot=MappingProxyType({});self.coverage_identity=None
@@ -31,6 +37,7 @@ class State(OLD.State):
 
     def _reset_windows(self):
         super()._reset_windows()
+        if getattr(self,'cumulative',None):self.cumulative.reset()
         self.counts['extended_source_censored']+=len(self.extended_pending)
         self.extended_pending.clear();self.extended_previous.clear();self.extended_turn=None
         self.coverage_snapshot=MappingProxyType({});self.coverage_identity=None
@@ -79,13 +86,14 @@ class State(OLD.State):
         old_ready=super().observe(row,symbol=symbol,venue=venue,session=session)
         for ready in tuple(self.ready):
             for bid, signal in tuple(ready['event']['branch_signals'].items()):
-                if (signal['decision_phase']=='FIRST_PRICE_HOLD'
-                        and row[3]<signal['signal_proof']['price']):
+                from src.engine.scalping.reversal_cumulative_runtime import hold_floor
+                floor=hold_floor(signal) if bid in C.CUMULATIVE_DEFINITIONS else signal['signal_proof']['price'] if signal['decision_phase']=='FIRST_PRICE_HOLD' else None
+                if floor is not None and row[3]<floor:
                     ready['event']['branch_signals'].pop(bid)
                     ready.get('path_inputs',{}).pop(bid,None)
             if not ready['event']['branch_signals']:
                 self.ready.remove(ready)
-        all_ids=(*self.selected_ids,*self.extended_ids,*self.composed_ids)
+        all_ids=(*self.selected_ids,*self.extended_ids,*self.composed_ids,*self.cumulative_ids)
         valid=bool(row[8] and self.legacy.last and self.legacy.last[8])
         known=bool(valid and previous and K.connected(previous,row))
         truth={b:'FALSE' if known and K.good_quote(row) else 'UNKNOWN' for b in all_ids}
@@ -184,11 +192,6 @@ class State(OLD.State):
             if event is not None:
                 signals[bid]=event;inputs[bid]=self._source(event,row)
                 lineage[bid]=copy.deepcopy(lineage.get(dependency,[base['event_id']]))
-        # Internal dependency confirmations are consumed even when F vetoes.
-        # They are not operating OR members and cannot leak into a later tick.
-        signals={b:e for b,e in signals.items() if b in self.operating_ids}
-        inputs={b:e for b,e in inputs.items() if b in self.operating_ids}
-        lineage={b:e for b,e in lineage.items() if b in self.operating_ids}
         for bid,proof in candidates:
             event=self._extended_event(bid,row,symbol,venue,session,f,proof)
             matched=C.matches(bid,event,f)
@@ -198,6 +201,34 @@ class State(OLD.State):
             if matched and event['entry_ask'] is not None:
                 signals.setdefault(bid,event);inputs.setdefault(bid,self._source(event,row))
                 lineage.setdefault(bid,[]).append(proof.get('anchor_event_id',event['event_id']))
+        cumulative_evaluated=set()
+        if self.cumulative:
+            from src.engine.scalping import reversal_cumulative_catalog as Q
+            from src.engine.scalping.reversal_cumulative_runtime import prefix_features
+            cf=prefix_features(self,row,f)
+            new=self.cumulative.observe(self,row,cf,prior60,symbol=symbol,venue=venue,session=session)
+            truth.update(self.cumulative.coverage)
+            for bid,event in new.items():
+                signals[bid]=event;inputs[bid]=self._source(event,row);lineage[bid]=[event['event_id']]
+                truth[bid]='TRUE'
+            for bid in self.cumulative_ids:
+                if bid not in Q.REFINEMENTS:continue
+                if not C.applicable(bid,C.cell_key(symbol,K.market_bucket(session),row[3]),venue):
+                    truth[bid]='FALSE';continue
+                original=Q.REFINEMENTS[bid]['original_definition_ref']['branch_id']
+                if original not in signals:
+                    truth[bid]=truth.get(original,'FALSE' if known else 'UNKNOWN');continue
+                cumulative_evaluated.add(bid)
+                event=Q.compose(bid,signals[original],cf)
+                truth[bid]='FALSE' if event is None else 'TRUE'
+                if event is not None:
+                    signals[bid]=event;inputs[bid]=self._source(event,row)
+                    lineage[bid]=copy.deepcopy(lineage.get(original,[event['event_id']]))
+            self.counts['cumulative_pending_overload']=self.cumulative.counts['pending_overload']
+        # Dependencies are calculation-only, including freshly confirmed extended roots.
+        signals={b:e for b,e in signals.items() if b in self.operating_ids}
+        inputs={b:e for b,e in inputs.items() if b in self.operating_ids}
+        lineage={b:e for b,e in lineage.items() if b in self.operating_ids}
         # Coverage is a detector-time snapshot. Known lack of a FIRST root is
         # FALSE; optional rolling windows cannot turn that absence into UNKNOWN.
         for bid in self.selected_ids:
@@ -213,6 +244,14 @@ class State(OLD.State):
         for bid in self.composed_ids:
             if bid not in composed_evaluated:
                 truth[bid]=truth.get(J.COMPOSED[bid]['original_definition_ref']['branch_id'],'UNKNOWN')
+        if self.cumulative:
+            # Native missing-feature and legacy-J coverage is finalized above.
+            # An absent original UNKNOWN cannot become a resolved F rejection.
+            for bid in self.cumulative_ids:
+                if (bid in Q.REFINEMENTS and bid not in cumulative_evaluated
+                        and C.applicable(bid,C.cell_key(symbol,K.market_bucket(session),row[3]),venue)):
+                    original=Q.REFINEMENTS[bid]['original_definition_ref']['branch_id']
+                    truth[bid]=truth.get(original,'UNKNOWN')
         if not K.good_quote(row):truth={b:'UNKNOWN' for b in all_ids}
         self.coverage_snapshot=MappingProxyType({b:truth.get(b,'UNKNOWN') for b in self.operating_ids})
         self._record_coverage(self.coverage_snapshot)

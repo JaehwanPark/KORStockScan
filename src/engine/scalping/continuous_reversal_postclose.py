@@ -556,9 +556,21 @@ def main(argv=None):
         parser.error('source generation cannot be combined with mutable research seeding')
     selected_source = (ensure_population(args.data_root,args.date,source_generation=args.source_generation,expected_sha256=args.source_sha256)
                        if args.source_generation else None)
-    if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
     publication=args.publication_date or args.date
+    from src.engine.scalping import reversal_cumulative_registration as cumulative
+    if cumulative.pending_path(args.data_root).is_file():
+        registration=cumulative.validate_request(json.loads(cumulative.pending_path(args.data_root).read_text()))
+        if registration['publication_date']==publication and not cumulative.consumed(args.data_root,registration):
+            if args.actual_inputs or args.seed_research:
+                raise ValueError('cumulative_registration_input_override_forbidden')
+            parent=cumulative.load_offline_parent(args.data_root,publication)
+            if cumulative.pending(args.data_root,parent,registration['target_date']) is not None:
+                if args.evaluate_only:
+                    print(json.dumps(dict(status='registered_pending',provider_calls=0,runtime_effect=False)))
+                    return 0
+                print(json.dumps(cumulative.run_postclose(args.data_root,args.date,publication,args.mode,source=selected_source)))
+                return 0
     from src.engine.scalping import reversal_joint_registration as joint
     if joint.pending_path(args.data_root).is_file():
         registration=joint.validate_request(json.loads(joint.pending_path(args.data_root).read_text()))
@@ -586,6 +598,7 @@ def main(argv=None):
             print(json.dumps(manual.run_postclose(args.data_root,args.date,publication,args.mode)))
             return 0
     current=operating.active(args.data_root,publication)
+    if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
     if current:
         if args.mode=='machine':
             result=operating.machine_report(args.data_root,args.date,publication,current,source=selected_source)

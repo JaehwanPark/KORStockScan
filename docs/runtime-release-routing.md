@@ -24,6 +24,8 @@ The launcher admits a different commit only through that verified same-day recei
 
 Reviewed trailing event/SELL receipt repairs cross the same policy-preserving code gate only through exact original/candidate source hashes. The current rising-missed and holding-vote code generations require independent network-denied fixture receipts; preserve original reports, policy hashes, native receipt gaps and all execution guards. Native Main receipt custody does not manufacture scanner lifecycle identity or economic acceptance. Build integrations over the actual selected release so newer deployed source, routing and custody repairs are retained.
 
+A reviewed holding/cumulative integration also binds entry-cancel-wait and auxiliary code generations. Publish fresh network-denied fixtures for each changed generation; a preserved historical auxiliary fixture is checked independently and cannot certify new code. Keep the original report, source state, target date, PREOPEN and policy bytes. Cumulative registration uses its sealed next-session publication/target contract; a code restart does not activate that future candidate.
+
 ## Single selection
 
 `data/runtime/retirements/main-only-retirement.json` seals the permanent automatic-owner exclusion and removed executable surfaces. The router rejects releases that restore those surfaces or change the approved retirement guard. Historical quantities and intents remain operator-managed; no broker-flat, terminal-order or residual exit-worker prerequisite applies. Keep only a clean Main recovery release with the same exclusion and manual boundary.
