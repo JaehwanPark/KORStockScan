@@ -427,6 +427,7 @@ def test_code_refresh_parent_uses_full_strict_old_release_validator(parent, tmp_
 @pytest.mark.parametrize('damage', [
     'none', 'rollover', 'source', 'code', 'authority', 'date', 'pointer',
     'missing_receipt', 'generation', 'source_error', 'overlap', 'membership', 'seal',
+    'next_session', 'next_session_rollover', 'future_parent', 'pointer_day', 'bad_requested',
 ])
 def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_changes(tmp_path, monkeypatch, damage):
     import contextlib
@@ -445,7 +446,8 @@ def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_chang
     base = N.root(root)
     pointer = base / 'current.json'
     bundle = dict(bundle_sha256=ident, target_date=day)
-    P.write(pointer, dict(bundle_sha256=ident))
+    P.write(pointer, dict(bundle_sha256=ident,
+        effective_date='2026-10-14' if damage == 'pointer_day' else day))
     P.write(base / 'generations' / (ident + '.json'), bundle)
     source = root / 'immutable-source.json'
     code = origin / 'reader.py'
@@ -474,7 +476,7 @@ def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_chang
     if damage == 'generation':
         P.write(base / 'generations' / (ident + '.json'), dict(bundle, bundle_sha256='d' * 64))
     before = {p: p.read_bytes() for p in root.rglob('*.json')}
-    reason = ('v6_contract_code_changed:reader.py' if damage == 'rollover'
+    reason = ('v6_contract_code_changed:reader.py' if damage in ('rollover', 'next_session_rollover')
               else 'source_missing' if damage == 'source_error'
               else 'active_policy_code_reader_root_changed')
     def unavailable(*a, **kw): raise ValueError(reason)
@@ -492,12 +494,15 @@ def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_chang
             exec(args[2], {})
         return SimpleNamespace(stdout=output.getvalue())
     monkeypatch.setattr(subprocess, 'run', invoke)
-    if damage in ('none', 'rollover'):
-        assert V._attested_activation_parent(root, day,
+    requested = ('2026-10-16' if damage.startswith('next_session') else
+                 '2026-10-14' if damage == 'future_parent' else
+                 '2026-10-016' if damage == 'bad_requested' else day)
+    if damage in ('none', 'rollover', 'next_session', 'next_session_rollover'):
+        assert V._attested_activation_parent(root, requested,
             origin_root=origin, origin_commit=commit) == bundle
     else:
         with pytest.raises((ValueError, FileNotFoundError)):
-            V._attested_activation_parent(root, day,
+            V._attested_activation_parent(root, requested,
                 origin_root=origin, origin_commit=commit)
     assert before == {p: p.read_bytes() for p in before}
 

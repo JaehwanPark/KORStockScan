@@ -26,3 +26,7 @@
 그러나22:13:49 checklist 생성이 `initial_quantity_refresh_stage_invalid`로 실패했다. 원 수량 generation `b6cf05ed0edd…`의 엄격 검증은 `quantity_fact_cost_generation_changed`를 반환했다. 공식 holding 비용 수집이 이미 fact와 수량이 비용 세대를 결속한 뒤 실행돼 생긴 선후행 오류다. 비용 결손을0으로 바꾸거나 검증을 느슨하게 하지 않는다.
 
 기존 비용 수집을 fact 생성 앞으로 이동하고 호출 수·명령·timeout·경고/unknown 의미를 보존한다. 최종 resume의 허용 실패 지점에 checklist 생성 실패만 추가하며, 원 native 명령 증명·6개 stage·snapshot·현재 수량 영수증 검증은 그대로 유지한다. 복구는 현재 비용으로 fact와 직접 downstream·수량을 다시 결속하고 최종 handoff를 재개한다. 원 수량·원 실패·정책/보조 원천과 기존 승인 membership을 보존한다. wrapper 회귀·`bash -n`·print-only parser로 이 보완을 검증하며, Kiwoom 요청/응답·provider·매매 프로세스·주문/수량 guard를 변경하지 않는다.
+
+직접 소비자 fact·scale-in·entry split·entry cancel·initial quantity를 비용 세대에 맞춰 순차 재생성했다. 수량 generation `b59af1a1566d…`는 strict 검증과 exit snapshot 검증을 통과했고 `carry_parent`를 유지했다. 완료 거래 근거가 없어 성과를0으로 대체하지 않는다. 기존6개 stage 영수증은 원 코드와 source로 다시 검증됐다.
+
+추가로 다음날 요청16일이 부모 적용일15일과 다른 실제 origin 읽기를 검사했다. 보존 영수증은 부모의 원 적용일로 검증하고 요청일보다 미래인 부모·포인터 적용일 불일치·비정규 날짜는 거부한다. 실제 cfa origin에서 요청16일/부모15일의 동일 부모 읽기가 통과했다. 원 부모 날짜나 current pointer는 변경하지 않았다. 날짜 회귀·wrapper·PREOPEN 관련227개 검사와 shell 구문 검증이 통과했다. 새 고정 workload 대조는 [날짜 보완 동일성 증거](../../tmp/postclose-monitor-20261015/future-parent-native-parity-provenance.json), 검사 로그는 [227개 검사](../../tmp/postclose-monitor-20261015/future-parent-and-cost-handoff-tests.log)로 별도 보존해 기존 배포 영수증의 해시를 바꾸지 않는다.

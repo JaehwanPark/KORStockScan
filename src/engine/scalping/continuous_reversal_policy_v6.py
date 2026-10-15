@@ -464,16 +464,23 @@ except ValueError as exc:
                 'v5_contract_code_changed:', 'v6_contract_code_changed:'))):
         raise
     from src.engine.scalping import reversal_code_handoff as H
+    from datetime import date
     pointer = N.root(data) / 'current.json'
     before = pointer.read_bytes()
-    ident = N._read(pointer)['bundle_sha256']
+    current = N._read(pointer)
+    ident = current['bundle_sha256']
     b = N._read(N.root(data) / 'generations' / (ident + '.json'))
-    N.validate(b, target_date=day)
+    attested_day = b['target_date']
+    if (date.fromisoformat(attested_day).isoformat() != attested_day or
+            date.fromisoformat(day).isoformat() != day or attested_day > day or
+            current.get('effective_date') != attested_day):
+        raise ValueError('v6_historical_parent_date_invalid')
+    N.validate(b, target_date=attested_day)
     if b['bundle_sha256'] != ident:
         raise ValueError('v6_historical_parent_generation_changed')
-    receipt_path = H.path(data, day, commit, ident)
+    receipt_path = H.path(data, attested_day, commit, ident)
     receipt_sha = N._source_hash(str(receipt_path), N._signature(receipt_path))
-    r = H.validate_receipt(N._read(receipt_path), day=day, commit=commit,
+    r = H.validate_receipt(N._read(receipt_path), day=attested_day, commit=commit,
         root=Path.cwd(), bundle_sha=ident, pointer_sha=H.P.file_hash(pointer))
     if r['code_hashes'] != H.code_hashes():
         raise ValueError('v6_historical_parent_code_changed')
