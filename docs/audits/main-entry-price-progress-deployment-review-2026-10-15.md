@@ -81,3 +81,18 @@
 그러나 전환 직전 기존PID2610988에서19:39:58 HPSP API timeout1건과19:40:02 `fixed_watch_entry_session_route_conflict` 치명적 예외가 새로 발생했다. 경로 예외는 `handle_watching_state`의 완료 결과 소비→`_resolve_scanner_async_entry_ai`→현재 세션 route 검사에서 발생했다. 19:40 세션 종료를 넘긴 원 요청을 회수하기 전에 예외가 전파되어 스나이퍼 스레드가 종료됐다.19:40:11 process_health FAIL도 원본으로 보존하며 단순 재기동 성공으로 이 결함을 닫지 않는다.
 
 정확히 이 route conflict만 비실행 사유로 전달해 원 queue identity로 완료 결과를 회수하고 거절 disposition·원 claim 정리를 수행한다. 물리 작업이 진행 중이면 원 요청의 drain을 유지한다. 새 요청/기한/대체 route를 만들지 않으며 예상하지 않은 예외는 계속 노출한다. 세션 종료·세션 변경·세대 불일치와 completed/expired 응답, pending 작업 보존8개가 원 구현에서 실패하고 새 구현에서 통과했다. 관련151개 및 배포·세대 계약1,808개 PASS. 공유 handler 변경의 rising/holding capability 후속 해시를 별도로 검토하고 새 network-blocked fixture를 발행한 뒤 다시 ordered 배포한다. 원 거래 세션·Kiwoom 요청/응답·order guard·정책 수치는 변경하지 않았다.
+
+
+## 20:00 종료 검사 실패 — 시각과 수동 custody 계약 수리
+
+`6181532ac057f62cd940c35a7b2b22bfc87925ff`의19:56:48 ordered 배포/PID2691410(start12567942) 소비는 통과했다. 19:58/19:59 detector 비실패는 그 시점의 결과다. 20:00 스나이퍼는 예외가 아니라 `market_close_unresolved_scalping_positions`(4건)로 종료했고20:01 process_health가 정확히 이를 실패로 검출했다. 기존19:40 route 예외 재발은 없다. 20:13:57에는 artifact_freshness도 `observer_generation_not_current`다. 마지막19:55 정규 observer가 ordered startup 중 deferred됐고 예약은19시까지여서 현재 산출물이19:50 이전PID 세대에 머물렀다. 이를 현재 정상으로 보고하지 않는다.
+
+수리 범위는 다음과 같다.
+
+- 삼성전자005930·두산034020·주성036930은 실제 원 제외 파일에서 `operator_manual_control_excluded_symbol`인 반면 마감 census는 이를 확인하지 않았다. 실제 HOLDING·명시적 수동 veto·비시뮬레이션이며 미결 주문/exit token/SELL 대사가 없는 경우에만 자동 보유 종료 분모에서 제외한다. 파일/정책 읽기 실패나 단순 runtime boolean을 수동 이관 증거로 쓰지 않는다. 제외 파일·보유 수량·주문·원장을 변경하지 않는다.
+- 알테오젠196170은 Main custody이며 원 HOLD 증빙이 없다. live loop의 naive KST `now_dt`가 엄격한 session resolver에 그대로 전달돼 마감 판단이 차단됐다. 보유 consumer가 해당 시각을 KST로 명시해 session 판단과 HOLD 영수증에 같은 시각을 기록하도록 수리한다. 원 helper의 시간대 필수 계약과 fresh executable price/비용/주문 안전장치는 유지한다.
+- 재리뷰에서 미래 시각을 age0으로 받아들이거나 음의 무한 net 값을 HOLD로 받아들이던 경계를 닫았다. 진행 중 exit token 역시 HOLD 종결 수용을 막는다. 정상60초 창은 확대하지 않는다.
+
+원 구현을 격리해8개 실패를 재현했고 새 구현의 보유·마감·수동 통제·process health253개와 exact handoff/ordered/세대 계약1,853개를 통과했다. 실제 보유 함수의 naive/aware 시각과 음수/양수/부재 bid에서 HOLD와 EXIT 후보 및 미확인 분리가 검증됐다. HTTP는 시험 fixture에서 차단됐고 실제 주문/provider 호출은 만들지 않았다. 공유 handler의 rising/holding 세대는 새 network-blocked fixture로 검증하며 과거 원 보고서와 원 실패를 보존한다. [검증 디렉터리](../../tmp/terminal-clock-custody-20261015).
+
+오늘 알테오젠의 누락된 판단을 과거 성공으로 재작성하지 않는다. 코드 수리와 배포는 다음 평가를 고치는 작업이며 오늘의 실제 terminal HOLD/체결 증거를 대신하지 않는다. `HoldingProfitExitSourceContractRepair`가 원 포지션49300의 판단 부재를 보유 원천/대사와 연결하고 다음 실제 terminal 평가의 시각·비용·fresh quote·소비 증빙을 확인한다. `DirectFamilyPreopenPolicyHandoff`는 승인된 새 코드 선택/PID 소비와 bounded 현재 observer 재발행/동일 run detector를 확인한다. 장후 재기동만으로 원 HOLD 증거가 복원되지 않으므로 미확인 종료를 정상 market_close로 완화하지 않는다.

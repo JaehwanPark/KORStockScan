@@ -624,6 +624,16 @@ REVIEWED_ASYNC_SESSION_BOUNDARY_SOURCES = {
     ),
 }
 
+# Bind the live KST terminal decision/receipt and exclude proven manual custody
+# only when no order or reconciliation is pending. No historical HOLD is inferred.
+# Evidence: docs/audits/main-entry-price-progress-deployment-review-2026-10-15.md.
+REVIEWED_TERMINAL_CLOCK_CUSTODY_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',
+        'bb6108b506bebfb957f7257bbf4e466837f19a48eff6a742a245f5c3b3e57dcf',
+    ),
+}
+
 
 # Exact PREOPEN-to-candidate arm cleanup, with unchanged original deadlines and
 # policy/source custody. This is a code check, not selection/startup authority.
@@ -727,6 +737,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
                     REVIEWED_ENTRY_RECEIPT_IDENTITY_SOURCES.get(name),
                     REVIEWED_ASYNC_SESSION_BOUNDARY_SOURCES.get(name),
+                    REVIEWED_TERMINAL_CLOCK_CUSTODY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
                     REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name),
                     REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name),

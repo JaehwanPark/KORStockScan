@@ -76846,6 +76846,26 @@ def unresolved_scalping_terminal_positions(
             "SELL_ORDERED",
         }:
             continue
+        # Match the holding consumer's explicit manual custody veto. An unknown
+        # policy/read failure is not proof of a handoff, and an outstanding
+        # order/reconciliation must remain visible even for a manual symbol.
+        code = str(stock.get("code") or "").strip()[:6]
+        custody = evaluate_main_bot_control_exclusion(
+            code, target_date=evaluation_date, new_entry=False
+        )
+        if (
+            status == "HOLDING"
+            and not _is_scalp_simulated_position(stock, strategy)
+            and custody.excluded
+            and custody.reason == "operator_manual_control_excluded_symbol"
+            and not stock.get("exit_token")
+            and not _has_open_pending_entry_orders(stock)
+            and not _has_active_sell_order_pending(stock)
+            and not sniper_trade_utils.holding_sell_reconciliation_block_reason(
+                stock, code
+            )
+        ):
+            continue
         hold_observed_at = None
         try:
             hold_observed_at = datetime.fromisoformat(
@@ -76860,10 +76880,7 @@ def unresolved_scalping_terminal_positions(
         except (TypeError, ValueError):
             hold_net_ev_pct = None
         hold_age_sec = (
-            max(
-                0.0,
-                (evaluation_at - hold_observed_at.astimezone(_KST)).total_seconds(),
-            )
+            (evaluation_at - hold_observed_at.astimezone(_KST)).total_seconds()
             if hold_observed_at is not None
             else None
         )
@@ -76874,11 +76891,13 @@ def unresolved_scalping_terminal_positions(
             and str(stock.get("terminal_exit_hold_basis") or "").strip()
             == "fresh_executable_sell_price_after_configured_trade_cost"
             and hold_net_ev_pct is not None
+            and math.isfinite(hold_net_ev_pct)
             and hold_net_ev_pct <= 0.0
             and hold_observed_at is not None
             and hold_observed_at.astimezone(_KST).date() == evaluation_date
             and hold_age_sec is not None
-            and hold_age_sec <= 60.0
+            and 0.0 <= hold_age_sec <= 60.0
+            and not stock.get("exit_token")
             and not _has_open_pending_entry_orders(stock)
             and not _has_active_sell_order_pending(stock)
             and not sniper_trade_utils.holding_sell_reconciliation_block_reason(
@@ -85636,12 +85655,20 @@ def handle_holding_state(
     opening_rotation_active = bool(
         strategy == "SCALPING" and is_opening_rotation_position(pos_tag)
     )
+    # The live loop supplies a naive KST wall clock. Bind both the session
+    # decision and its HOLD receipt to the same explicit KST instant; otherwise
+    # the session rejects the input and the shutdown consumer rejects the receipt.
+    terminal_observed_at = (
+        now_dt.replace(tzinfo=_KST)
+        if now_dt.tzinfo is None
+        else now_dt.astimezone(_KST)
+    )
     same_session_terminal_exit = _scalping_same_session_terminal_exit_fields(
         stock,
         code,
         strategy=strategy,
-        now_t=now_t,
-        observed_at=now_dt,
+        now_t=terminal_observed_at.time(),
+        observed_at=terminal_observed_at,
     )
     terminal_exit_ev_fields: dict[str, Any] = {}
     if same_session_terminal_exit.get("should_exit") and same_session_terminal_exit.get(
@@ -85656,7 +85683,7 @@ def handle_holding_state(
                 stock,
                 set_fields={
                     "terminal_exit_hold_authorized": True,
-                    "terminal_exit_hold_observed_at": now_dt.isoformat(),
+                    "terminal_exit_hold_observed_at": terminal_observed_at.isoformat(),
                     "terminal_exit_hold_net_ev_pct": terminal_exit_ev_fields.get(
                         "terminal_exit_net_ev_pct"
                     ),

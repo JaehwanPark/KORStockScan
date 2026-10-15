@@ -27,19 +27,21 @@ from src.engine.monitoring import policy_generation_validation as validation
 # Async session-boundary rejection changes shared-handler bytes only. Preserve
 # route/order guards and require fresh rising/holding fixtures for this successor.
 # Review: docs/audits/main-entry-price-progress-deployment-review-2026-10-15.md.
+# The terminal KST/custody repair changes shared-handler bytes. Verify fresh
+# fixtures while retaining all original reports and unresolved terminal evidence.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
         'b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '7d56e2207d7116576e608db26d4a3b7bfd8c910ec8f355485450089b52f1998a'),
+        'dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
         '44363b0c64586c71663449d4704d70d39b9ccaa93f93d71d428a8ad948edb5be'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '1833be6984a09cefa515f2228e68a0b291be84fc0988ac29231279ddbd052c5b'),
+        '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2'),
 }
 
 
