@@ -20,13 +20,15 @@
 
 ## 약세 장후 연구 결함보완 인계
 
-- [ ] `[MainMarketWeaknessPostcloseObservation1008] 압축 원천·native 판정 연결·누적·약세 조정 후보 보완` (`Due: 2026-10-13`, `Slot: POSTCLOSE`, `TimeWindow: 후속 구현 WR0~WR3 우선; 실제 연구는 21:40~익일 05:40 허용 슬롯`, `Track: RuntimeStability`)
+- [x] `[MainMarketWeaknessPostcloseObservation1008] 압축 원천·native 판정 연결·누적·약세 조정 후보 보완` (`Due: 2026-10-13`, `Slot: POSTCLOSE`, `TimeWindow: 후속 구현 WR0~WR3 우선; 실제 연구는 21:40~익일 05:40 허용 슬롯`, `Track: RuntimeStability`)
   - Source: [10/13 결함보완계획 WR0–WR5](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md), [원 MW0–MW6·구현/배포 이력](../proposals/main-market-weakness-observer-repair-and-postclose-research-implementation-plan-2026-10-08.md), [기존 stable ID·Acceptance](2026-10-09-stage2-todo-checklist.md).
   - 범위: 이번 지시는 계획 수립·리뷰다. gzip-only master/trace reader와 이미 있는 machine observation/native receipt의 장후 연결을 우선 수리하는 계획을 인계한다. 추가 장중 hook·로깅·metadata·파일 조회/계산·queue/thread·API/AI 호출은 0, 기존 보조 패턴연구·정책/주문·Main/manual custody·퇴역 경계는 보존한다. joint/지연 개선 작업의 구현·배포 승인을 전용하지 않는다.
   - Acceptance: 기존 MW1 회귀·선택 observer 자연 소비 경계를 보존한다. 실제 schema/선별 전 census·gzip/원본 alias·bounded decode·effective listing 검증, 원 event/attempt/hash/ask/feature/label binding·결손 U, A/B/C/U·미래 join/TTL300·지연60/180·W/F/U 공통 분모·origin/중복 분리를 검증한다. 같은 관련 정의만 날짜 간 누적하고 실제 변경은 분리한다. 기계 지원 수치 축/미지원 사유와 보조 PASS 이후 CF를 구분하며 후보 합계 최대6·고정1,000회 안정성/U 민감도를 유지한다. 최대9회·야간 총 예약600초/worker1/512MiB·자식 회수·crash/delta0, optional code/calendar rebind와 terminal→누적→후보→관리자 Telegram 의미 ID/receipt·정정/uncertain→night summary를 검증한다. 연구는 strict/PREOPEN·기동 비차단이며 95% 보장·정책 자동 적용·주문 권한은 없다.
   - 리뷰 보완 수용: gzip-only 날짜 discovery→pending→실제 reader까지, 잔여 budget/CRC·hard kill 뒤 prefix 반복 억제·daily/cumulative/notification phase 재개를 검증한다. 2회 활성/3회 회복 확인 latch를 primary로 두고 raw 진단·실제/재구성 근거를 분리한다. 기계/보조 kind별 K/R/A/N 공통 분모·추가만 있는 후보·U 민감도·parent/preview/winner_group, key 이행 중 오정정0·원 sent 보존을 검증한다. optional rebind는 기존 notify/설치 이력/source 경계를 보존하고 자정 active/staged를 구분한다. outside_night_window의 신규 연구 상태 쓰기는0이며 최신 야간 시도와 원 계산 receipt를 별도 보존한다.
   - History: 10/9 MW1 수리·MW2–MW5 구현/반복 검증·selected release/optional 설치는 [배포 리뷰](../audits/main-market-weakness-review-deployment-2026-10-09.md)의 역사다. 10/13 점검 누적16,722개·자연1,534개·시장 연결0·후보0은 입력 연결 결함이며 no-edge가 아니다. 새 결함만 열고 과거 완료 구현을 전면 재실행하지 않는다. 이 stable ID를 미래 날짜에 Acceptance와 함께 이전하며 중복 OPEN을 만들지 않는다.
   - 인계: 원 AUTO 봉인 bytes와 다른 OPEN owner를 보존한다. 최종 checklist 문서 바이트의 기존 strict/PREOPEN 영향은 `DirectFamilyPreopenPolicyHandoff`가 기존 승인 범위에서 검증하고 과거 PASS를 현행으로 주장하지 않는다. 현재 결함보완 코드·배치·연구 재계산·실발송은 미실행이다.
+
+이 실행 owner는 10/14 [현행 체크리스트](2026-10-14-stage2-todo-checklist.md)로 Acceptance/리뷰 수용/History를 함께 이전했다. 위 미실행 문구는 10/13 당시 이력이며 이전 체크 표시는 자연 수용 완료를 뜻하지 않는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 <!-- POSTCLOSE_SUMMARY_SOURCES {"allowed_runtime_apply": false, "runtime_effect": false, "schema": "postclose_summary_sources_v1", "source_date": "2026-10-12", "sources": {"entry_cancel_wait_policy": {"sha256": "044a309e399df5499c75fc33ed6090e5c4c5d1cccf5b30ffd5db0069a72902ba"}, "entry_cancel_wait_tuning": {"sha256": "b6f790248a22afcc9525e86effac745e1536997d2e3fed61e51dd99b41f12f1f"}, "holding_path_vote_policy": {"sha256": "b19a1a4a38fa315fc5eed4100616201559c23c972777fc9f9e47329b8766328c"}, "initial_quantity_refresh_stage": {"sha256": "c75db66506a51e3ede6fcaa7b63128360306853e264148012b147e0556b15138"}, "runtime_approval_summary": {"sha256": "41ba57f7779a8930a7a4100eb66b00c4079b8adacf452726c33a82993c9e46bc"}, "stage_legacy_machine_report": {"sha256": "a8e5d8525e606b010c15c2d710eea71419ba76d5bbabc8a4d42b8fe3f7ba2edd"}, "stage_main_auxiliary_policy": {"sha256": "ac05eb708aa260f46d9a8051308115e61062927d2a89980054cf832f58d66efe"}, "stage_main_machine_policy": {"sha256": "c47c75b6e33c1813a152dd5738cc64a7eb738183bdeda9f67d6dcb923256e082"}, "stage_main_stop_confirmation": {"sha256": "8d3f3161307dee517a5d22455bb11d19b8e937f249419b07f2a0c042f98c096f"}, "stage_outcome_labels": {"sha256": "84edc5a692d35b18d9cf6a87e17f9dcf4672766a98e0765fae9d17d3709dbc18"}, "stage_pre_submit_delay": {"sha256": "09efcbdb838111c8729de848557c498e77d2fa0cc6a82945641d84e8fbafa2b1"}}} -->
@@ -143,6 +145,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ### 10/13 REST 절감의 구현·잔여 호출 점검 인계
 
+사용자 후속 승인으로 계획 리뷰·보완과 CR0~CR8 구현·반복 코드리뷰/수정을 수행했다. [구현 리뷰](../audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md)의 소비 없는 Radar/복구 후보0 조회 제거, 판정 전 capacity/investor와 무신호 native probe 선조회 제거, gainers1page/기존60·90초 주기, scheduled census executable BBO OFF, Main/probe opt-in61 completed/raw WS·선택 MTF OFF·full-session unknown, 수요별45초 account polling을 같은 owner에 인계한다. 실제 ENTER_NOW observer의 원 deadline·최종 quote/account/order/수량/청산과90초 reconciliation은 유지한다. 751개 영향 범위 회귀·13개 Python compile·wrapper syntax와 문서 parser를 검증했다. 퇴역 generic workorder의 옛 속성을 요구하는 legacy test1개는 현 실행 범위에서 제외하고 시험 이력을 보존한다. 작업본 구현과 실제 배포/PID/자연 절감 수용은 별도이며 AUTO/strict 역사 바이트를 다시 발행하지 않았다. 아래 읽기 전용 문구는 최초 점검 이력이다.
+
 [현재 점검](../audits/main-rest-call-reduction-implementation-performance-and-excessive-calls-audit-2026-10-13.md)과 [호출 제거·입력 간소화 계획](../proposals/main-rest-excessive-call-removal-and-input-quality-relaxation-plan-2026-10-13.md)을 기존 `DirectFamilySourceRepairMainMechanisticEntry`에 연결한다. 코드/실PID의 체결 WS HTTP0 소비는 확인했지만 분봉527 logical demand 모두 REST유지, 소비 없는 Radar·대상 검사 전 계좌 복구3조회·판정 전 capacity/investor·다중page discovery 및 외부 census BBO가 지속된다. CR0~CR8은 consumer 없는 조회 제거→선택 판정/발굴/관측 품질 축소→raw same-day/closed-only 이력 소비의 후속 명세다. 사용자 허용에 따라 과거 판정 parity·관측95%/전체 coverage를 새 제거 선행 gate로 만들지 않는다. Main/manual·실제 quote/account/order/수량/청산 hard safety와 퇴역 owner 자동 실행 금지를 보존한다. 이번 점검은 읽기/문서 결과이며 운영 코드/설정/호출 제거·배포/재기동을 실행하지 않았다. 기존 배포 승인과 AUTO/strict 역사 bytes를 전용하지 않으며 최종 checklist 변경 영향은 당시 handoff owner가 별도 검증한다. 새 중복 OPEN owner는 만들지 않는다.
 
 기존 `AuxiliaryCircuitRecoveryRepair1012`는 원 native5초·단일 lease·보호 exit·필수 저장을 유지한 상태에서 새로운 stage clock과 실제 caller timeout/SDK 종료·worker/Main 소비를 같은 attempt에서 검증한다. local p95 1.60초와 timeout 감소는 자연 표본이 없으면 미검증으로 남긴다. 기존 `NonfixedDispatchReadinessReview1012`는 WATCHING hint 재정렬의 전체 대상·HOLDING/주문/COMMIT 슬롯 보존과 fixed/nonfixed의 실제 경로 소비를 함께 확인한다. 코드·배포 PASS로 자연·경제성 수용을 완료하지 않는다.
@@ -175,3 +179,25 @@ report 메모리 후속 보완도 기존 위 owner들이 수용한다. read-loca
 사용자의 반복 코드리뷰·수정보완 후 배포·재기동 승인에 따라 기존 `DirectFamilyPreopenPolicyHandoff`가 이번 불변 코드 전환을 소유한다. [구조 수리 리뷰](../audits/main-restart-machine-monitoring-and-timeout-structural-repair-review-2026-10-13.md)의 원 응답 계약/실행 판정 분리, 실제 응답 시각, fresh post-response 검증, 저장 잠금 경합과 경고 원인·날짜 수리를 적용한다. 당일 정책·PREOPEN·원 소비 bytes와 보호 가드는 유지하고 active code handoff 및 기존 10/14 후보의 동일정책 code refresh만 결속한다. incumbent 종료 뒤 이 문서를 발행하며 새 PID/start/cwd·128 scope 소비를 확인한다.
 
 `AuxiliaryCircuitRecoveryRepair1012`는 정상 응답 사이 시간초과가 누적되지 않는지, 원 기한·단일 recovery lease·미종결 Future 및 최종 실행 가드가 유지되는지 자연 attempt로 수용한다. `NonfixedDispatchReadinessReview1012`는 상시5종목과 비상시 큐 전수·실제 source/native terminal·cleanup을 별도로 확인한다. source gap과 자연 무표본은 OPEN이며 코드·배포 성공으로 주문·경제성을 완료하지 않는다. 기존 stable ID와 Acceptance를 보존하며 신규 OPEN·Provider replay·정책 재선택·주문 권한은 만들지 않는다.
+
+
+## 10/13 반복 검증·Sentinel I/O 개선계획 인계
+
+[I/O 경합 개선계획 IO0~IO5](../proposals/main-io-contention-and-repeated-validation-remediation-plan-2026-10-13.md)을 기존 OPEN owner에 연결한다. 이번 지시는 계획 수립이며 I/O 코드 구현·배포·재기동 승인은 포함하지 않는다. 원 19:02 경보/19:14~19:16 측정은 이전 PID3387032의 증거다. 19:44 확인한 REST 절감 release `932bb3a1`/PID3517912와 관련13개 코드의 동일성만 확인했으며 새 PID 성능을 측정한 것으로 표시하지 않는다.
+
+`DirectFamilyPreopenPolicyHandoff`는 IO1 observer 검증 재사용의 full native 판정·source 변화 무효화·정확 날짜와 허용된 release/PID handoff를, `NonfixedDispatchReadinessReview1012`는 IO0/IO2/IO3의 전체 report population·RSS·정규 cron3회 DONE/freshness600초·shared-source 소비를, `AuxiliaryCircuitRecoveryRepair1012`는 같은 attempt의 local 지연·원5초·필수 저장/guard를 수용한다. 기존 Acceptance/History와 OPEN을 보존한다. 다음 구현은 좁은 IO0→IO1이며 IO2 증분 집계가 뒤따른다. 성능 목표는 미달성 계획값이고 무표본은 pending이다. 후일 실행은 stable ID/Acceptance를 실제 대상일 일정으로 이전하며 현재의 과거 오전 시각이나 다른 변경의 배포 권한을 전용하지 않는다.
+
+AUTO/strict 역사 bytes와 다른 편집 내용을 보존한다. 최신 checklist 문서 변경은 과거 strict PASS를 갱신한 것이 아니며 실제 배포 시 기존 handoff owner가 최종 문서의 영향을 검증한다. 새 중복 OPEN·경제성 gate·원천 삭제·경보 완화·provider/주문 권한은 없다.
+
+## 10/13 REST 절감 코드의 배포·재기동 승인 인계
+
+사용자가 CR0~CR8 구현·반복 리뷰 후 배포와 재기동을 승인했다. 기존 `DirectFamilyPreopenPolicyHandoff`가 실제 실행본을 기준으로 REST 변경만 추가한 불변 릴리스와 정상 종료→선택→native 인계→기동→새 PID/start/cwd·128 scope 소비 검증을 소유한다. [구현 리뷰](../audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md)의 배포 증빙은 `tmp/rest-removal-deployment-20261013/completion.json`과 ordered transition에 별도 기록한다. 원 PREOPEN/정책/env·active pointer·원5초·quote/account/order/quantity·Main/manual custody·퇴역 가드를 유지하며 active code handoff와 이미 있는 10/14 후보의 동일정책 code refresh만 결속한다. 기존 봉인의 정확한 Git 체크리스트와 최신 편집본을 모두 보존하고 incumbent 종료 뒤 이 최종 문서를 발행한다.
+
+`DirectFamilySourceRepairMainMechanisticEntry`는 제거 목적별 actual attempts·valid/unknown·coverage tradeoff·loop/WS 소비를 기존 PID별 원천으로 수용한다. `NonfixedDispatchReadinessReview1012`와 `AuxiliaryCircuitRecoveryRepair1012`의 자연 신호·cleanup·응답/제출 Acceptance는 유지하며 코드·배포 성공으로 주문/성과를 완료하지 않는다. 예정된 입력/발굴 completeness 감소는 허용하되 stale/epoch/route 위반이나 부족한 CF 경제성을 정상값으로 합성하지 않는다. 신규 OPEN ID·Provider replay·정책 재선택·주문 권한·별도 약세 연구 WR0~WR5 구현/연구는 이번 승인 범위에 추가하지 않는다.
+
+
+## 10/13 장후 실패 지점 복구 승인
+
+사용자가 실패 지점의 수리·재실행을 지시했다. 기존 `DirectFamilyPreopenPolicyHandoff`와 `DirectFamilySourceRepairMainMechanisticEntry`가 초기 수량의 두-slot 입장 대기 및 joint 등록의 실제 산출물·원천·stage 인계를 수용한다. 선택된 실행본을 부모로 격리해 수리·리뷰·표적 검증 뒤 불변 장후 실행본에서 동일10/13 source/publication으로 실패 단계와 직접 하류만 재개한다. 완료된 원천·보고서·라벨·delay는 원 receipt/hash를 검증해 재사용하고 원 실패를 보존한다. 매매 재기동·수동 env/lock/provider/threshold·주문 권한과 별도 IO/WR 구현 범위를 추가하지 않는다. 전체 acceptance는 최신 summary/checklist/strict/controller이며 초기 지정에 새 경제성 gate를 붙이지 않는다.
+
+직접 재개도 정상 release router의 승인된 account/journal 설정을 native parser로 읽는다. 실제 tower 실패 뒤에는 `--resume-from-final-handoff`의 원 native command·이전 scoped proof·전체 stage·청산 snapshot·수량 terminal 검증으로 완료 계산을 보존하고 summary부터 재생성한다. 기존 설정 파일이나 정책 값을 수동 변경하지 않는다. 같은 owner의 최신 strict/controller와 다음 날짜 준비·실제 PID 수용을 별도로 확인한다.

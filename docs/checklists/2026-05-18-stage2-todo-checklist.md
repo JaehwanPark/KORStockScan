@@ -341,17 +341,6 @@
   - 판정: `pass_sim_probe_split_preserved`.
   - 근거: pipeline events 기준 `actual_order_submitted=False` 1336건, threshold events 기준 `actual_order_submitted=False` 16건이 확인됐고, `decision_authority=source_quality_only`와 report-only/runtime_effect split이 유지됐다.
 
-### CrisisRiskAlertSlotThrottle0518 확인 기록
-
-- checked_at: `2026-05-18 12:53 KST`
-- 판정: `implemented_notification_throttle`
-- 근거: `crisis_monitor`는 위기 RSS 수집과 DB 저장 후 `risk_count>=4` 조건에서 `시스템 경보: 매매 리스크 감지` Telegram을 보낼 수 있었고, 기존 제어는 야간 quiet hour 중심이라 장중 반복 발송을 충분히 제한하지 못했다.
-- 조치: `crisis_monitor`에 KST 기준 장전 `08:00~09:30`, 정오 `11:30~12:30`, 장후 `15:30~16:30` 슬롯 게이트와 `data/runtime/crisis_monitor_alert_state.json` 기반 일자별 슬롯 1회 발송 상태를 추가했다. bot daemon 설명은 60분 수집과 슬롯 제한 알림으로 맞췄고, 런북에 알림 제한 계약을 추가했다.
-- 금지 확인: 알림 notification throttle만 변경했고 threshold, 주문 guard, provider, 자동매도, broker order submit 권한은 추가하지 않았다. RSS 수집, macro alert DB 저장, risk count 계산은 계속 수행한다.
-- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_crisis_monitor.py` 4 passed, `py_compile` 통과, `git diff --check` 통과, `sync_docs_backlog_to_project --dry-run` parsed_tasks=`7`, `error_detector --mode full --dry-run` summary_severity=`pass`.
-- 재기동 확인: `restart.flag` 기반 graceful restart로 bot PID가 최종 `66968`로 변경됐고, post-restart process health는 main loop와 `crisis_monitor` heartbeat 모두 pass다. 현재 시각 `12:56 KST` 기준 슬롯 밖 dry-check는 `outside_alert_slot`으로 Telegram 발송 차단 판정이다.
-- 다음 액션: 장후 `15:30~16:30` 슬롯에 risk 조건이 살아 있을 때만 당일 `postclose` 슬롯 1회 발송되는지 로그를 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
-
 ## 장후 체크리스트 (16:30~18:55)
 
 - [x] `[ThresholdDailyEVReport0518] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)

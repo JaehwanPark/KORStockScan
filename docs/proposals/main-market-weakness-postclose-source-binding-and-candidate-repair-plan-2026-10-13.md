@@ -245,3 +245,26 @@ Telegram은 현재 의미 기반 recommendation ID·현행 관련 parent·원 se
 이번 재리뷰는 새 계획과 현행 owner의 인계 문서만 보완한다. 실제 수리·설치/코드 소비·자연 산출물·첫 적격 수치 안내는 WR0–WR5의 후속 검증 상태로 남긴다.
 
 재리뷰 문서 검증: 새/원 계획 로컬 링크45개 정상, print-only backlog24개 중 현행 owner1개, 이번 owner section 밖 checklist 바이트·원 AUTO 봉인 SHA256 보존, 공백 검사 통과. 이번 회차는 두 문서만 수정했고 원 계획의 이전 pointer는 유지했다. 코드/거래 테스트·provider/Telegram 호출·보고서 재계산·예약/정책/배포 변경은 수행하지 않았다. native 본문 잔존·숫자 축 역할·큰 압축 원천의 허용 예산 내 완료 여부는 후속 WR0/표적 회귀로 확인할 항목이며 현재 해결됐다고 표시하지 않는다.
+
+## 10. 2026-10-14 승인 구현과 수용 인계
+
+사용자의 구현·반복 코드리뷰·수정보완 지시에 따라 WR1–WR4의 기존 장후 reader/순수 평가/outbox를 수리했다. 결과는 [구현 리뷰](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md), 후속 실행 owner는 [10/14 체크리스트](../checklists/2026-10-14-stage2-todo-checklist.md)의 동일 `MainMarketWeaknessPostcloseObservation1008`이다. §1/§9의 계획 전용 범위는 10/13 이력이며 이번 코드 수정 권한과 구분한다.
+
+gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 trace/label의 정확 연결, 확인 latch 기준, 검증된 scope 의미 누적, 역사 cutoff·후보별 계산 checkpoint, daily/cumulative/notification phase 재개, typed 후보/안내·의미 ID/설치 설정 보존을 구현했다. gzip은 한 연속 해제에서 physical/decoded hash와 EOF/CRC를 검증하며 완료 전에 만든 partition은 자기 staging에 둔다. 예산 중단/CRC 실패 시 부분 결과를 폐기하고 해당 세대의 무재개 원천은 건너뛰므로 같은 prefix를 계속 해제하지 않는다. accuracy/coverage 손실은 결손 사유로 남긴다.
+
+실제 기존 Main/probe 표본의 `redacted=true`는 원 `signal_token`에만 해당하며 event/ask/본문 해시는 일치했다. 전체 redaction flag를 이유로 버리지 않고 필요한 필드와 각 해시를 독립 검증한다. 가려진 event/ask/identity는 복원하지 않는다. 보조 요청 input/prompt/schema와 원 component가 확인된 경우에만 scope binding hash로 정규화하며 기존 요청/응답을 수정하지 않는다.
+
+기계 수치 연구는 원 정책에 검증된 역할/정의/unit/연산자/원 수치 계약이 있는 **원 확인점 tightening 필터**를 지원한다. 읽기 전용으로 확인한 현재 원 정책 표본에는 이 numeric role 계약이 없으므로 실제 기계 수치를 만들지 않고 `role_unverified`로 남긴다. root/FSM/재무장/확인 ask를 변경하는 완전 재생은 현재 producer가 없으며 `confirmation_replay_unavailable`이다. typed 분모의 추가/제외 통계 지원을 이 producer의 구현 완료나 실제 후보 발견으로 해석하지 않는다. 보조 이후 실제 PASS subset의 연구는 별도 분기로 계속 가능하다.
+
+후속 코드 재리뷰에서 [8종 추가 결함과 수정 회귀](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md#후속-코드-재리뷰와-수정보완)를 확인했다. 미지원 확인점 재생은 selection/알림에서 명시적으로 거부하고, 현재 두 필터의 추가 모집단은 0이어야 한다. 미완료 날짜·scope conflict를 비교/currentness/cache에 결속하며 오래된 철회/정정, 비교→manifest 중단과 projection 저장 실패의 재개 경로를 보완했다. probe BLOCK의 원 분류와 역할/특징/cutpoint별 capability 사유도 보존한다.
+
+작업본 코드·fixture 검증의 완료와 실제 selected release 배포, optional code rebind, 다음 자연 예약의 원천 연결/phase/마지막 소비, 적격 수치 안내 및 실제 매매 효과는 별도다. 이번에는 배포·재기동·cron 수정·원 운영 보고서 재계산·provider/Telegram 발송·정책 발행을 수행하지 않았다. 후속 rebind는 기존 enable/notify/설치 이력/source 경계를 보존하는 수리된 installer를 사용하며 실패 시 원 cron/config 재조회까지 확인한다. 연구를 mandatory stage/PREOPEN/기동 gate로 추가하지 않는다.
+
+## 11. 2026-10-15 처리 정체·근거 보존 보완 운영 계약
+
+10/14 승인 배포 후 실제 야간에서 날짜 선택 정체와 원천 결손이 확인되어 사용자 후속 지시로 [처리 순서·관찰 근거 고정 구현 리뷰](../audits/main-market-weakness-night-progress-and-evidence-review-2026-10-15.md)의 보완을 수행했다. 현재 실행 owner는 [10/15 동일 stable ID](../checklists/2026-10-15-stage2-todo-checklist.md)다. 아래 규칙은 종전 latest/oldest 양 끝 선택 규칙을 대체한다.
+
+- 원천 미완료/무효 날짜를 누적·알림 phase 재시도보다 먼저 순환 처리한다. `schedule_cursor.json`의 봉인된 위치는 밤 사이에도 유지한다. 실패한 날짜를 다음 시도의 독점 대상으로 삼지 않으며, 기존 cursor 날짜도 원천 소실의 명시적 결손 처리 대상으로 보존한다. 자정 이후 새 달력 날짜는 `night_id`를 넘어 처리하지 않는다.
+- 정확한 기존 event/time/ask와 비용·성과 label 계약이 연결된 표본만 W/F로 평가한다. 빈 재생 partition과 상위 epoch 결손은 daily/terminal의 원천 사유로 전달한다. 보존된 종료·대사 영수증이 없는 과거는 U이며, 날짜 처리 수리나 진단 수리를 역사 성과 복구로 간주하지 않는다.
+- 장후에 사용한 exact observer 상태 원 bytes/SHA를 자기 `observer_receipts`에 고정한다. 현재 관찰 상태의 이후 변경은 과거 세대를 무효화하지 않지만 실제 원 observation 변경·삭제와 고정 증거 손상은 계속 거부한다. archive 날짜는 snapshot 쓰기 전에 차단한다.
+- 시간창 밖 쓰기0, 기존 9회/60초/600초/worker1/512MiB, 후보 동결·안내 기준, 장중 추가 부하0을 유지한다. 후속 배포에서는 자기 optional code binding만 새 검토본에 재결속하고 기존 설정/이력을 보존한다. 실제 야간의 중간 날짜 진전과 migration 종료·알림 disposition 확인 전 자연 수용 owner를 닫지 않는다.

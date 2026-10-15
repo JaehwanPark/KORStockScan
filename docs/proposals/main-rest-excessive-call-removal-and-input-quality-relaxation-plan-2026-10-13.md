@@ -1,10 +1,18 @@
 # Main 과도한 REST 호출 제거·판정 입력 간소화 계획 — 2026-10-13
 
+**후속 승인:** 사용자가 이 계획의 리뷰·보완→구현→반복 코드리뷰·수정보완을 요청했다. 아래의 읽기 전용 문구는 최초 점검 이력이며 이번 작업은 CR0~CR8 코드 구현·오프라인 검증까지 수행한다. 배포/재기동과 자연 성능 수용은 별도다.
+
+**구현 전 리뷰 보완:** CR1은 기존 적격 후보 검사 뒤 첫 실제 후보에만 복구3조회 묶음을 lazy 실행한다. CR2는 판정 뒤 observer에 원 entry deadline/context를 전달해 ENTER_NOW 필요조회가 사라지지 않게 한다. CR4는 native residence가 있는 경로의 모든 사전 candle/tape/context 준비를 신호 뒤로 옮기며 즉시 평가 호환 경로는 보존한다. CR5는 1page와 기존60/90초 주기를 이번 기본안으로 확정하고 별도180초 split scheduler는 추가하지 않는다. CR6은 scheduled wrapper의 BBO OFF와 보고의 명시 결손을 함께 검증한다. CR7은 초기 Main/zero-base 입력만 `reduced_completed_v1`으로 opt-in한다: 최대61개 completed window·raw_same_day/partial reader·선택 MTF 외부조회OFF·full-session feature unknown; holding/재가격/strict 소비자는 기본 계약을 유지한다. CR8은 Main 보유/주문 또는 실제 fixed-watch broker admission 대기 수요가 있을 때45초 refresh를 수행하며90초 reconciliation과 execution receipt callback은 유지한다.
+
+**구현 결과:** CR0~CR8을 작업본에 구현하고 반복 리뷰·수정을 수행했다. [구현 리뷰·검증](../audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md)이 최종 코드/시험/남은 실제 수용 상태를 소유한다. 751개 영향 범위 회귀, Python13파일 compile, wrapper syntax 및 문서 parser를 검증한다. 배포/PID와 자연 전체 호출 절감률은 이번 코드 완료에 포함하지 않는다. 아래 원 계획의 읽기 전용/미구현 문구는 최초 이력이다.
+
+**후속 배포 결과:** 사용자 배포·재기동 승인 후 `main-rest-reduction-20261013` / commit `932bb3a1294e3e5b318cdb565fefa87f11d6e28b`를 선택하고 Main PID `3517912`의 정책128/128 scope·상시5종목 WS 실수신을 확인했다. 원 정책/PREOPEN/active pointer는 유지했다. release 회귀1,461건, 목적 없는 선조회0과 19:40 scheduled census의 BBO OFF를 검증했다. 짧은 자연 호출 window는116회/180.64초→17회/182.37초이나 시장 입력/기동 상태가 달라 확정 절감률·동일 부하 성능으로 승격하지 않는다. 기존 cold source replay 지연과 자연 주문/경제성은 미완료다. [후속 배포 리뷰 §7](../audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md#7-배포pid-검증과-초기-자연-관측)이 실제 영수증을 소유하며 본문의 미배포 문구는 최초 코드 완료 시점의 이력이다.
+
 ## 1. 결정·범위·현재 인계
 
 사용자는 절감계획의 구현·성능·잔여 호출 점검을 요청하며, **판정 품질요건을 완화하더라도 불필요하고 과도한 호출을 제거할 수 있게 점검**하도록 지시했다. 따라서 10/8 계획의 완전한 입력/판정 parity, 전시장 관측 coverage, 수정주가 이력·현재봉 보충을 무조건 유지하는 접근을 변경한다. 소비 없는 조회를 먼저 없애고 선택 입력·발굴 범위·관측 정밀도를 줄인다. 호출을 줄이기 위한 새 계측/worker/구독 증설부터 시작하지 않는다.
 
-근거와 구현·PID·성능 상태는 [10/13 점검](../audits/main-rest-call-reduction-implementation-performance-and-excessive-calls-audit-2026-10-13.md)이 소유한다. 원 [10/8 REST/WS 계획](main-rest-api-ws-substitution-and-load-reduction-plan-2026-10-08.md)과 그 후속 구현은 이력으로 보존한다. 이번 산출물은 읽기 전용 점검과 후속 변경 명세이며 코드·운영 설정·정책·스케줄·릴리스 선택을 변경하지 않았다. 후속 코드 수용과 실제 배포/PID 수용은 독립 증거로 남긴다.
+근거와 구현·PID·성능 상태는 [10/13 점검](../audits/main-rest-call-reduction-implementation-performance-and-excessive-calls-audit-2026-10-13.md)이 소유한다. 원 [10/8 REST/WS 계획](main-rest-api-ws-substitution-and-load-reduction-plan-2026-10-08.md)과 그 후속 구현은 이력으로 보존한다. 최초 점검은 읽기 전용이었다. 후속 승인에 따라 현재 CR0~CR8 작업본과 scheduled wrapper 기본 수집을 구현했고 정책 발행·설치 cron·릴리스 선택은 실행하지 않았다. 코드 수용과 실제 배포/PID 수용은 독립 증거로 남긴다.
 
 실행 인계는 [현재 checklist](../checklists/2026-10-13-stage2-todo-checklist.md)의 기존 `DirectFamilySourceRepairMainMechanisticEntry`에 연결한다. 이미 진행되는 shared-deadline·joint 작업의 구현/배포 승인을 새로운 source 의미 변경 승인으로 전용하지 않는다. 실제 배포 인계는 당시 유효한 `DirectFamilyPreopenPolicyHandoff` 범위로 처리한다. 경제성·최소 자연 신호/체결·전체 관측 coverage 증명을 호출 제거의 새 선행 조건으로 추가하지 않는다.
 
@@ -12,7 +20,7 @@
 
 ## 2. 제거 우선순위와 품질 손실
 
-아래는 **구현할 변경**이다. 현재 호출 발생 증거와 추정 가능한 절감 한계는 audit의 API/owner 표를 따른다. 특정 호출 전부가 제거 가능하다고 일괄 계산하지 않는다.
+아래는 **최종 구현 경계**다. 현재 호출 발생 증거와 추정 가능한 절감 한계는 audit의 API/owner 표를 따른다. 특정 호출 전부가 제거 가능하다고 일괄 계산하지 않는다.
 
 | ID | 현재 지점·원인 | 변경 | 허용할 품질/coverage 손실 | 유지할 조건 |
 | --- | --- | --- | --- | --- |
@@ -44,7 +52,7 @@ CR7의 첫 적용은 같은 날짜·route·session의 이미 수신/저장된 WS
 
 1. CR0/CR1: actual subscriber와 적격 복구 후보가 없을 때 추가 HTTP0. 필요한 consumer/복구 후보가 있는 경우 종전 기능 유지. CR1은 신규 module 없이 기존 `sniper_sync`의 대상 검사/요청 순서를 바꾼다.
 2. CR2/CR3/CR4: 판정 전 account/investor/probe 선조회 제거. ENTER_NOW 필요조회는 정확 가격/계좌 generation과 원 deadline으로 실행하며 BLOCK/RECHECK·무신호 probe에 새 조회를 하지 않는다. stage clock과 observer U 처리까지 함께 검증한다.
-3. CR5/CR6: source-only 발굴/관측의 page/주기/BBO 수집을 축소. wrapper/automation 변경은 운영 owner 문서와 당일 checklist를 함께 갱신한다. 현 운영 명령은 이번 읽기 전용 점검에서 실행/변경하지 않는다.
+3. CR5/CR6: source-only 발굴/관측의 page/주기/BBO 수집을 축소. wrapper/automation 변경은 운영 owner 문서와 당일 checklist를 함께 갱신한다. scheduled wrapper의 기본 BBO OFF를 코드에 반영하며 현재 설치 cron/선택 runtime 명령은 실행하지 않는다.
 4. CR7/CR8: source 의미·freshness의 실제 consumer를 좁혀 적용. 기존 `trading/market`·`scalping`·`monitoring` owner를 사용하고 새 engine-root 모듈이나 epoch/receipt 체계를 만들지 않는다.
 
 프로토콜/request/parser/REG/recovery에 영향을 주는 구현은 [Official Kiwoom Reference Gate](../kiwoom-api-data-contract.md#official-kiwoom-reference-gate)를 착수 시 다시 적용한다. 공식 `953e5dbff123f437ab4d11a78a95191a685eb51f`와 관련 spec/core/realtime은 이번 점검에서 확인했지만 향후 영구 pin으로 사용하지 않는다. 신규 패키지·API/provider/실주문 호출 없이 보존 fixture와 injected fake transport로 검증한다.

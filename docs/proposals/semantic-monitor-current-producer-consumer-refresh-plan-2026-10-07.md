@@ -64,7 +64,7 @@
 - 장후·작업지시 9: `runtime_approval_summary_report`, `threshold_postclose_status`, `postclose_done_controller_report`, `codex_workorder_runner_report`, `code_improvement_workorder`, `pipeline_event_verbosity_report`, `observation_source_quality_audit_report`, `codebase_performance_workorder_report`, `update_kospi_status`.
 - Swing/연구 16: `swing_live_dry_run_status`, `swing_selection_funnel_report`, `swing_lifecycle_audit_report`, `swing_threshold_ai_review_report`, `swing_improvement_automation_report`, `swing_runtime_approval_report`, `swing_pattern_lab_automation_report`, `pattern_lab_currentness_audit_report`, `pattern_lab_propagation_audit_report`, `swing_model_retrain_diagnosis`, `swing_bull_period_ai_review`, `swing_model_retrain_report`, `swing_model_retrain_status`, `swing_model_registry_current`, `swing_daily_simulation_status`, `swing_daily_simulation_report`. Swing real OFF와 report/sim 설치 여부를 분리한다. 기존 schedule contract가 OFF/미설치를 구분하므로 이름만 보고 제거하거나 재활성화하지 않는다.
 
-등록 heartbeat 6개: `main_loop`, `telegram`, `crisis_monitor`, `error_detection`, `sniper_engine`, `scalping_scanner`. [coverage 검사](../../src/engine/monitoring/error_detector_coverage.py)는 현재 ID 포함 여부만 검증하므로 **연결·퇴역·현행 schema coverage**를 추가 검증해야 한다. WS 연속 상태 갱신은 새 의무 heartbeat를 무조건 늘리는 대신 기존 원천 receipt와 연결한다.
+등록 heartbeat 5개: `main_loop`, `telegram`, `error_detection`, `sniper_engine`, `scalping_scanner`. [coverage 검사](../../src/engine/monitoring/error_detector_coverage.py)는 현재 ID 포함 여부만 검증하므로 **연결·퇴역·현행 schema coverage**를 추가 검증해야 한다. WS 연속 상태 갱신은 새 의무 heartbeat를 무조건 늘리는 대신 기존 원천 receipt와 연결한다.
 
 ### 3.2 현행 생산자 → 사실/산출물 → 소비자 전수 연결표
 

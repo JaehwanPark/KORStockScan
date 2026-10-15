@@ -63,7 +63,7 @@
 
 ## 5. Process와 수정·리뷰
 
-Expected owner는 runbook/traceability와 설치된 trigger, 당일 policy를 기준으로 읽었다. Main195755의 종료 heartbeat main11:20:12/sniper11:20:11/scanner11:18:41, widget와 TARGET_OPEN 두 machine의 progress를 확인했다. Samsung 오전 정상 종료와 정오/오후 미도래를 dead로 분류하지 않는다. Crisis thread alive이지만 last marker10:59:11만으로 모든 기능의 진행 정상까지 증명하지 않는다. 모든 systemd timer/cgroup/consumer 전수 완료 주장은 하지 않으며 미검증 future profile은 not_yet_due/blocked_missing_evidence다.
+Expected owner는 runbook/traceability와 설치된 trigger, 당일 policy를 기준으로 읽었다. Main195755의 종료 heartbeat main11:20:12/sniper11:20:11/scanner11:18:41, widget와 TARGET_OPEN 두 machine의 progress를 확인했다. Samsung 오전 정상 종료와 정오/오후 미도래를 dead로 분류하지 않는다. 모든 systemd timer/cgroup/consumer 전수 완료 주장은 하지 않으며 미검증 future profile은 not_yet_due/blocked_missing_evidence다.
 
 Census capture는 5분 trigger에서 계속 생성된다. Canonical report는 09:15/12:00/15:15/19:45 schedule이므로 09:15 alias를 임의 stale incident로 처리하지 않았다. 이번 read-only report는 operator 감사용 last consumer이며 다음 PREOPEN 효과가 아니다. 퇴역 ADM/LDM/greenfield/institutional/latency 추천 및 Swing은 `not_applicable_retired_or_deprioritized`; canonical OFF 확인 외 성과·shortage/ETA를 만들지 않았다. Sim source event는 real submit에 포함하지 않는다. 관측한 process에서 sim의 실주문 누출 증거는 없으나 모든 broker caller의 resource 전수 감사 완료를 주장하지 않는다.
 

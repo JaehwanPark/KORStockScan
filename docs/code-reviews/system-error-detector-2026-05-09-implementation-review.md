@@ -58,7 +58,7 @@ src/engine/error_detector.py          ErrorDetectionEngine (6 detectors, 6 modes
     |
     +-- error_detectors/process_health.py    ProcessHealthDetector
     |        reads: tmp/error_detector_heartbeat.json (atomic Lock + os.replace)
-    |        heartbeat owners: main_loop, telegram, crisis_monitor, error_detection, scalping_scanner, sniper_engine
+    |        heartbeat owners: main_loop, telegram, error_detection, scalping_scanner, sniper_engine
     |
     +-- error_detectors/cron_completion.py   CronCompletionDetector
     |        reads: logs/*.log (KST date filter, terminal marker priority)
@@ -86,7 +86,6 @@ bot_main.py
   |
   +-- main loop (1s)                 write_heartbeat("main_loop") every 5s
   +-- telegram daemon                sidecar 30s -> write_heartbeat("telegram")
-  +-- crisis_monitor daemon          write_heartbeat("crisis_monitor") every 3600s
   +-- error_detection daemon         write_heartbeat("error_detection") every cycle
   |       TRADING_RULES.ERROR_DETECTOR_ENABLED/DAEMON_INTERVAL_SEC gated
   |       fail -> EventBus SYSTEM_HEALTH_ALERT (dedup: 600s cooldown + hash change + transition)
@@ -107,7 +106,7 @@ EventBus: SYSTEM_HEALTH_ALERT -> telegram_manager (html.escape, admin HTML)
 | 입력 | `tmp/error_detector_heartbeat.json` (threading.Lock + os.replace atomic write) |
 | main loop | age > 15s -> fail, PID `/proc` 검증 |
 | thread | age > 7200s -> fail (TRADING_RULES.ERROR_DETECTOR_PROCESS_THREAD_TIMEOUT_SEC) |
-| heartbeat owners | main_loop(5s), telegram(30s sidecar), crisis_monitor(3600s), error_detection(60s), scalping_scanner(2-3min loop top), sniper_engine(1s loop top) |
+| heartbeat owners | main_loop(5s), telegram(30s sidecar), error_detection(60s), scalping_scanner(2-3min loop top), sniper_engine(1s loop top) |
 
 ### 4.2 CronCompletionDetector
 
