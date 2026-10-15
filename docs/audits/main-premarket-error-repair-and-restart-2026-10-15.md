@@ -147,3 +147,18 @@ observer 전용 state reader는 canonical 보고서와 같은8MiB 한도에서 r
 consumer는 같은 exact route/PID/start/clock/family/scope/0B/0D 증빙을 검증한 다음 producer의 우선순위대로 세 사유를 구분한다. anchor 대기는 pending>0, 만료 확인은 pending0/누적 TRUE>0, feature window 미완료는 pending0/TRUE0/censored0/현재 UNKNOWN 및 누적 UNKNOWN>0을 요구한다. ready·stale/foreign route·잘못된 count/reason은 거부하며 current UNKNOWN/미소비 확인의 원 기록·full_coverage_proven=false·machine_admission_proven=false를 보존한다. 새 원 native PREOPEN→monitor hash pair는 REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES에만 추가한다. 과거 handoff pair는 유지한다. [원 행 재검증](../../tmp/observer-auxiliary-route-repair-20261015-1001/native-pending-replay.json)은 pending_count0/unknown_count31을 정확히 재현하고 no_match=false였다. 기존 사용자 통합92785b7da와 계산a179bb42d는 그대로 유지한다.
 
 10:01 수리 최종 통합 검증2,856개 PASS(34.56초), compile·diff whitespace·print-only parser PASS다. 미해결 코드 결함은 검토 범위에서 없으며 원 정책4종 fixture와 exact native bootstrap을 배포 전 다시 검증한다. 운영 consumer 확인은 후속 영수증으로 별도 기록한다.
+
+
+## 추가 승인 커밋 통합과 배포 사전검사
+
+사용자가 추가 지정한 `e6326b0b1da8c2fcf218137b66bc631c52427d4d`와 `87fda9479a3b04cebb31a2925abd5266b6f02248`를 별도 작업 트리에서 각각 merge하여 원 commit ancestry를 보존했다. 앞서 승인된92785b7da·a179bb42d와10:01 증빙 수리d6111d915도 포함한다. ai_decision_trace 자동 병합부는 저장 경합 수리와 local custody parse 분류가 함께 유지되는지 재검토했다.
+
+e632의 durable transport epoch는 매 연결의 LOGIN ACK 이후 구독/ready 전에 원자 저장한다. 재기동·시계 역행·동시 할당에도 원 native signal과 새 signal의 identity가 겹치지 않으며 원 provider/intent 예약과 outbox를 보존한다. 저장 손상/부재/동기화 실패는 준비를 차단하고 과거 예약을 비우지 않는다. local custody 충돌은 WAIT/주문 금지·원 provider_called 사실을 유지하며 provider 장애/parse 오류로 오분류하거나 재호출하지 않는다. 새 모듈 위치는 기존 시장 원천 계약의 `src/trading/market`이고 engine root 추가는 없다.
+
+통합 전 공식 Kiwoom HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`와 현재 checkout의 일치를 온라인 조회했다. 정확한 조회 시각·파일 SHA는 [reference receipt](../../tmp/observer-auxiliary-route-repair-20261015-1001/official-reference-integration.json)가 보유한다. `kiwoom/specs.py`, `kiwoom/core/ws_client.py`·`auth.py`, `kiwoom/realtime/packets.py`·`stream.py`, packaged0B/0D/00 및 Postman PRD/MOCK를 대조했다. 해당 revision에는kiwoom_docs가 없다. epoch는 로컬 원천 세대이며 Kiwoom wire/FID/route, LOGIN/PING/REG/REMOVE, real/demo 분리, 재구독 범위·한도·주문 계약은 변경하지 않는다. API/주문 예제는 실행하지 않았다.
+
+87fda의 optional 야간 연구는 기존 source·누적·알림 계약과512MiB/9회/600초 경계를 유지하며 원천 미완료 날짜의 순환, 미래 날짜 제외, 결손 사유 전달 및 immutable observer 증거를 보완한다. 배포 후 기존 enabled/notify/source floor/설치 이력을 그대로 보존하는 optional installer로 새 code binding을 재결속한다. 자연 야간 계산·적격 안내 수용은 원 MainMarketWeaknessPostcloseObservation1008 owner에 남긴다.
+
+10:11:41 d611 단독 배포 시도는 preflight의 `intraday_preserved_generation_changed`로 중단됐다. Main PID1614174와 selector27e는 변경되지 않았고 stop/hold/prepare는 실행하지 않았다. 차이는 canonical checklist가87fda의 연구 인계 한 줄로 갱신된 것뿐이며 native 정책·env·controller·summary·prepared 원 bytes는 모두 일치했다. 현재 문서 SHA57a407e76ad3b044f761cfc7376af78f435d365b8a4da1acd4603dc74d0fab06는87fda의 committed bytes와 정확히 같다. 원 파일을 별도 보존하고 그 한 줄을 통합 candidate에 유지한 후, canonical 문서를 이미 소비된27e의 SHA1d83229768bec6231b5e019dd90faaed27f0b88015dfac1f558e131d714248f0로 CAS 복구한다. 새 ordered driver가 Main drain 후 통합 문서를 정상 게시한다. 실패 transition은 삭제/덮어쓰지 않으며 새 commit의 독립 시도로 기록한다. 정책 봉인/strict 검증을 완화하지 않는다.
+
+통합 검증은 총3,367개 서로 다른 회귀 사례를 확인했다. 대형 단일 pytest에서는3,184 PASS/5 FAIL이었으며, 한 실패는 isolated 작업 트리의 `.venv` 경로 부재, 네 실패는 기존512MiB 실제 감독자 메모리 gate가 대형 test 프로세스를 차단한 결과였다. 프로젝트 `.venv`를 연결하고 같은 수정본의 연구/예약312개를 별도 프로세스로 재실행해 모두 PASS(41.20초), WebSocket178개 PASS(6.27초)로 닫았다. 실패 로그도 보존했고 운영 메모리 gate를 변경하지 않았다. 변경 Python17개 compile·diff·print-only parser 통과, 원 report/정책을 읽는 현재 capability4종은 모두 verified/findings[]다. 새 provider/주문 호출·과거 report 재생은 수행하지 않았다.
