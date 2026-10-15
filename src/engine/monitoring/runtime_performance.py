@@ -140,6 +140,54 @@ def acknowledge_native_watch_visit(target, token, *, now):
                     _queue_lifecycle(key, row)
 
 
+def rearm_native_watch_after_completion(claim):
+    """Revisit an already observed successor after the old request releases Main.
+
+    This is only a bounded scheduling hint. The native selector and handler
+    still validate and claim the signal, with its original five-second budget.
+    """
+    global _NATIVE_HINT_SEQUENCE
+    snapshot = (claim or {}).get('snapshot')
+    if not snapshot or not isinstance(snapshot[0], dict):
+        return False
+    original = snapshot[0]
+    required = ('symbol', 'venue', 'source_item', 'market', 'native_epoch', 'epoch', 'signal_id')
+    if any(original.get(key) is None for key in required) or not claim.get('generation'):
+        return False
+    day = __import__('datetime').datetime.fromtimestamp(original['epoch'],
+        __import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+    stream = (original['symbol'], original['venue'], original['source_item'], original['market'], day)
+    now, perf = time.time(), time.perf_counter()
+    with _LOCK:
+        eligible = []
+        for key in _ACTIVE_SELECTED.get(stream, ()):
+            row = _SELECTED_READY.get(key)
+            if (row and not row.get('terminal') and not row.get('claimed')
+                    and not row.get('selector_claimed') and row.get('first_eligible_seen') is not None
+                    and row['signal_id'] != original['signal_id']
+                    and row['native_epoch'] == original['native_epoch']
+                    and row['scope_execution_hash'] == claim['generation']
+                    and 0 <= now - row['epoch'] < 5
+                    and now < row['original_deadline']
+                    and perf < row['first_seen_perf'] + row['original_deadline'] - row['first_native_seen']):
+                eligible.append(row['epoch'])
+        if not eligible or _NATIVE_READY_EVENT is None:
+            return False
+        code = str(original['symbol'])[:6]
+        # Never replace a newer ingress token or restart the signal clock.
+        if not 0 <= now - _NATIVE_VISIT_HINTS.get(code, float('-inf')) < 5:
+            _NATIVE_HINT_SEQUENCE += 1
+            _NATIVE_VISIT_TOKENS[code] = _NATIVE_HINT_SEQUENCE
+            _NATIVE_VISIT_HINTS[code] = min(eligible)
+            _NATIVE_VISIT_HINTS.move_to_end(code)
+            while len(_NATIVE_VISIT_HINTS) > 128:
+                old_code, _ = _NATIVE_VISIT_HINTS.popitem(last=False)
+                _NATIVE_VISIT_TOKENS.pop(old_code, None)
+        event = _NATIVE_READY_EVENT
+    event.set()
+    return True
+
+
 def prioritize_native_watches(queue, *, now, completed_requests=None,
                               all_targets=None, processed_target_ids=None,
                               revisited_target_ids=None, visit_tokens=None):

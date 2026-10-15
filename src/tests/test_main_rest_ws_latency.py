@@ -343,6 +343,12 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
     def observe(private,code,ws,**kw):
         budget = H.kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
         assert budget is not None and budget.epoch == claim['snapshot'][0]['epoch'] + 5
+        context = kw['evaluation_context']
+        assert isinstance(context, H.ScannerAsyncEvalContext)
+        assert context.generation.code == code
+        assert context.deadline_epoch == budget.epoch
+        assert context.deadline_perf == budget.perf
+        assert context.request_id == provider_calls[-1]['metadata_extra']['async_request_id']
         private['_machine_observation_revision']={'test_receipt':'captured'}
         return {}
     monkeypatch.setattr(H,'_observe_entry_economics_before_ai',observe)
