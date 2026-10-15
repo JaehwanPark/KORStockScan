@@ -1,5 +1,6 @@
 """Journal cache publication and append-only recovery of an existing full fill."""
 import copy
+import fcntl
 import hashlib
 import json
 import threading
@@ -30,6 +31,61 @@ def fill(registry, ctx):
     registry.record_fill(context=ctx, symbol='034020', side='BUY', order_quantity=1,
         order_date='2026-10-15', broker_order_no='0057428', cumulative_filled_qty=1,
         cumulative_fill_amount=62600, execution_no='142564')
+
+
+@pytest.mark.parametrize('warm', [False, True])
+def test_native_owner_projection_holds_writer_lock_for_whole_read(bound, monkeypatch, warm):
+    registry, ctx, _ = bound
+    registry.retire_automatic_owners_to_manual()
+    if warm:
+        registry.native_owner_contract('034020')
+    entered, resume = threading.Event(), threading.Event()
+    original = registry._journal_identity
+    results, errors = [], []
+
+    def pause_reader():
+        value = original()
+        if threading.current_thread().name == 'native-reader' and not entered.is_set():
+            entered.set()
+            assert resume.wait(5)
+        return value
+
+    monkeypatch.setattr(registry, '_journal_identity', pause_reader)
+
+    def reader():
+        try:
+            results.append(registry.native_owner_contract('034020'))
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=reader, name='native-reader')
+    thread.start()
+    try:
+        assert entered.wait(5)
+        with registry.lock_path.open('rb') as writer:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        resume.set()
+        thread.join(5)
+    assert not thread.is_alive() and not errors
+    assert results[0]['registered'] and results[0]['disposition_hash']
+    fill(registry, ctx)
+    assert registry.owner_position_qty(ctx.position_id, symbol='034020') == 1
+    assert registry.native_owner_contract('034020') == results[0]
+
+
+def test_native_frozen_projection_creates_no_lock_and_rejects_corruption(bound):
+    registry, _, _ = bound
+    registry.retire_automatic_owners_to_manual()
+    expected = registry.native_owner_contract('034020')
+    registry.lock_path.unlink()
+    assert OrderOwnerRegistry(registry.path).native_owner_contract('034020') == expected
+    assert not registry.lock_path.exists()
+    registry.path.write_bytes(registry.path.read_bytes() + b'{broken\n')
+    with pytest.raises(OwnerRegistryConflict, match='json_invalid'):
+        OrderOwnerRegistry(registry.path).native_owner_contract('034020')
+    assert not registry.lock_path.exists()
 
 
 def test_cache_publication_cannot_pair_new_signature_with_pre_fill_events(bound, monkeypatch):

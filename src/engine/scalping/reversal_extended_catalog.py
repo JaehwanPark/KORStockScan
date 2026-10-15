@@ -714,11 +714,15 @@ EXTENDED_DEFINITIONS = dict(EXTENDED_DEFINITIONS, **CUMULATIVE_DEFINITIONS)
 DEFINITIONS = dict(DEFINITIONS, **CUMULATIVE_DEFINITIONS)
 PHASES = dict(PHASES, **CUMULATIVE.PHASES)
 CUMULATIVE_MANIFEST = dict(schema=CUMULATIVE.VERSION,parent_registry_sha256=JOINT_SHA256,
-                          data_sha256=CUMULATIVE.DATA_SHA256,additions=CUMULATIVE_DEFINITIONS)
+                          data_sha256=CUMULATIVE.DATA_SHA256,additions=CUMULATIVE.LEGACY_DEFINITIONS)
 CUMULATIVE_SHA256 = digest(CUMULATIVE_MANIFEST)
+PROGRESS_MANIFEST = dict(schema='main_price_progress_definition_catalog_v1',parent_registry_sha256=CUMULATIVE_SHA256,
+                         data_sha256=CUMULATIVE.PROGRESS_DATA_SHA256,additions=CUMULATIVE.PROGRESS_DEFINITIONS)
+PROGRESS_SHA256 = digest(PROGRESS_MANIFEST)
 
 def registry_for(branch_ids):
     ids=tuple(branch_ids)
+    if any(b in CUMULATIVE.PROGRESS_DEFINITIONS for b in ids):return PROGRESS_SHA256
     if any(b in CUMULATIVE_DEFINITIONS for b in ids):return CUMULATIVE_SHA256
     if any(b in JOINT_DEFINITIONS for b in ids):return JOINT_SHA256
     return SUCCESSOR_SHA256 if any(b in ADDITIONAL_DEFINITIONS for b in ids) else SHA256

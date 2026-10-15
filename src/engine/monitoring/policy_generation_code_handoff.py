@@ -27,16 +27,16 @@ from src.engine.monitoring import policy_generation_validation as validation
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
-        '0ca40b9fc16658dd7ab8561723daf8d9315432f860d2e71a2cda03cef40b3885'),
+        'b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '3a3d58010e8d708568f2766d2020de59ec0a1f4efc2304241516a5af4fc169de'),
+        '13c57fae8a6540a23e6db6997a4ff06727a51852d6c4456adfe10f74c8ffe2bb'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
-        '527117df62523777584ca57d2588a2061e9867f44a40c40b7deaac3fca498046'),
+        '44363b0c64586c71663449d4704d70d39b9ccaa93f93d71d428a8ad948edb5be'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        'd0d3e2fbad9315f7001566d2c1fdd0a4f27754dc78dd47b10a2050bb3b31d702'),
+        '133f24bdcc12cf50fcc6c11a69dead048283033cad089d5809952109fb89b5aa'),
 }
 
 

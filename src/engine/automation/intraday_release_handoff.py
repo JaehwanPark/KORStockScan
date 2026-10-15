@@ -556,6 +556,16 @@ REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES = {
     ),
 }
 
+
+# Scope-bound raw/selected ready census; no machine/provider admission.
+# Review: docs/audits/main-entry-price-progress-deployment-review-2026-10-15.md.
+REVIEWED_SCOPE_READY_OBSERVER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        '203b397835edf5ff0d578aa8d5b25126f8c61307adbe92031371b9000d710e56',
+    ),
+}
+
 # Snapshot-only holding observer concurrency repair. Preserve the original
 # PREOPEN contract and every execution gate; bind only these reviewed bytes.
 # Evidence: docs/audits/main-holding-context-dictionary-race-repair-2026-10-15.md.
@@ -691,6 +701,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name),
                     REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
                     REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES.get(name),
+                    REVIEWED_SCOPE_READY_OBSERVER_SOURCES.get(name),
                     REVIEWED_HOLDING_CONTEXT_SNAPSHOT_SOURCES.get(name),
                     REVIEWED_STOP_VOTE_SNAPSHOT_SOURCES.get(name),
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),

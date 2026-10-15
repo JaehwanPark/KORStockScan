@@ -3457,7 +3457,7 @@ def test_native_all_false_is_source_coverage_without_machine_admission(tmp_path,
     ('selected_branch_truth', {'G1': 'UNKNOWN'}), ('selected_branch_truth', {'G1': 'TRUE'}),
     ('selected_branch_truth', {}), ('runtime_effect', True), ('observed_epoch', 0),
     ('observed_epoch', float('nan')), ('native_epoch', False), ('native_sequence', 0),
-    ('observed_seconds', float('inf')), ('raw_ready_count', 1), ('raw_ready_count', False),
+    ('observed_seconds', float('inf')), ('raw_ready_count', -1), ('raw_ready_count', False),
     ('selected_ready_count', 1), ('schema', 'other'), ('evaluation_role', 'claim'),
 ])
 def test_native_no_match_requires_exact_complete_receipt(key, value):
@@ -3548,6 +3548,53 @@ def test_new_native_results_require_lifecycle_and_keep_incomplete_distinct():
     assert not monitor._probe_verified_no_match(row)
     row['fields']['zero_base_probe_result']='observation_incomplete'
     assert monitor._probe_verified_no_match(row,allow_incomplete=True)
+
+
+def _no_match_with_unselected_ready():
+    row=_native_no_match_probe(START+timedelta(minutes=10),receipt_format='dict')
+    fields=row['fields'];receipt=fields['native_observation_receipt']
+    fields.update(zero_base_probe_result='pattern_not_matched',zero_base_probe_result_schema='zero_base_probe_result_v2',
+                  zero_base_probe_reason='native_observation_no_matching_pattern')
+    receipt.update(raw_ready_count=1,native_source_current=True,selected_pending_count=0,source_censored_count=0,
+                   selected_lifecycle_counts={b:{'TRUE':0,'FALSE':10} for b in receipt['selected_branch_truth']})
+    fields['zero_base_branch_readiness']=dict(schema='native_branch_residence_requirements_v2',status='observed',
+        runtime_effect=False,decision_authority='none',scope_changed=False,price_basis='exact_native_trade',
+        route=fields['zero_base_route'],policy_scope=receipt['selected_scope'],
+        **{k:receipt[k] for k in ('item','family_sha256','scope_execution_hash','native_epoch','native_sequence')},
+        branch_descriptors={b:dict(detector_truth=v) for b,v in receipt['selected_branch_truth'].items()})
+    return row
+
+
+@pytest.mark.parametrize('encoding',['dict','json','literal'])
+def test_other_cell_ready_is_bound_no_match_without_machine_admission(tmp_path,encoding):
+    row=_no_match_with_unselected_ready()
+    if encoding!='dict':
+        for key in ('native_observation_receipt','zero_base_branch_readiness'):
+            row['fields'][key]=(json.dumps if encoding=='json' else repr)(row['fields'][key])
+    assert monitor._probe_verified_no_match(row)
+    now=monitor.stamp(row['emitted_at'])
+    _source_gap_files(tmp_path,now,probes=[row])
+    result=monitor.source_gap_semantics(tmp_path,now)
+    assert result['probe_route_native_no_match_counts']=={'krx_nxt_integrated':1}
+    assert not result['probe_route_assessed_counts']
+
+
+@pytest.mark.parametrize('target,key,value',[
+    ('receipt','selected_ready_count',1),('receipt','selected_pending_count',1),
+    ('receipt','native_source_current',False),('receipt','process_pid',124),
+    ('receipt','selected_scope','other_non_fixed|AFTER|LT_20000'),
+    ('receipt','selected_branch_truth',{'G1':'TRUE','G2':'FALSE'}),
+    ('receipt','selected_lifecycle_counts',{'G1':{'TRUE':1,'FALSE':10},'G2':{'FALSE':10}}),
+    ('receipt','selected_lifecycle_counts',{'G1':None,'G2':{'FALSE':10}}),
+    ('receipt','selected_lifecycle_counts',{'G1':{'FALSE':True},'G2':{'FALSE':10}}),
+    ('readiness','scope_execution_hash','c'*64),('readiness','native_sequence',199),
+    ('readiness','scope_changed',True),('readiness','runtime_effect',True),
+])
+def test_other_cell_ready_never_hides_selected_or_unbound_failure(target,key,value):
+    row=_no_match_with_unselected_ready()
+    field='native_observation_receipt' if target=='receipt' else 'zero_base_branch_readiness'
+    row['fields'][field][key]=value
+    assert not monitor._probe_verified_no_match(row)
 
 
 def _observer_selection_fixture(tmp_path, monkeypatch):

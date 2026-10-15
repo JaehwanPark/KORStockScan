@@ -224,7 +224,8 @@ def validate_family(f):
                 proof=aux['initial_binding']
                 approved=(proof.get('operator_receipt'),proof.get('research_batch_sha256')) in {
                     (AUTHORITY,C.RESEARCH_BATCH_SHA256),(M.AUTHORITY,M.PROPOSAL_SHA256),
-                    (C.JOINT.AUTHORITY,C.JOINT.RESEARCH_RESULT),(Q.AUTHORITY,C.CUMULATIVE.RESEARCH_RESULT)}
+                    (C.JOINT.AUTHORITY,C.JOINT.RESEARCH_RESULT),
+                    *((Q.AUTHORITY,batch) for batch in C.CUMULATIVE.CATALOGS)}
                 if (not approved
                         or proof.get('comparison_result_required') is not False):
                     raise ValueError('v6_initial_registration_proof_invalid')

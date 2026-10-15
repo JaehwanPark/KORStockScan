@@ -39,6 +39,15 @@ COMPONENTS = {
     "auxiliary": (
         "scalping/reversal_auxiliary_tuning.py",
         "scalping/reversal_auxiliary_registry.py",
+        # Versioned cumulative membership and materialization are consumed by
+        # auxiliary comparison/initial carry; their changes need fresh fixtures.
+        "scalping/reversal_cumulative_catalog.py",
+        "scalping/reversal_cumulative_runtime.py",
+        "scalping/reversal_cumulative_registration.py",
+        "scalping/reversal_cumulative_postclose.py",
+        "scalping/continuous_reversal_policy_v6.py",
+        "scalping/reversal_extended_catalog.py",
+        "scalping/reversal_extended_state.py",
         "ai/offline_comparison_store.py",
         "runtime_approval_summary.py",
         "automation/runtime_policy_bootstrap.py",

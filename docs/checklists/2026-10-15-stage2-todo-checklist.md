@@ -43,6 +43,8 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-15`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 사용자 지정0d4f422a8을 ebcde3d87의 최종화·보유·원장 수리 위에 통합한다. cumulative 대기/특징 관측 누락·observer 전체/선택 ready 혼동·auxiliary 코드 세대 누락을 리뷰 후 보완한다. 현재128 scope/76,800행·607확인 신호 일치, 기존10/16 pending 보존. exact fixture/handoff→ordered 재기동→정규 artifact/cron 수용은 [통합 배포 검토](../audits/main-entry-price-progress-deployment-review-2026-10-15.md)에 기록한다.
+  - 같은 배포 수용에서 삼성전자49266의18:17:41 체결 후 owner-policy 반영 누락을 점검했다. kt00007 원본으로0060210 매도1주@210000/잔량0 확인. native 원장 공유 읽기 락과 cold/warm 회귀를 보완했으며 원본 결속 복구는 Main drain 뒤 적용·검증한다. 비용/체결번호/정확한 체결시각은 미확인으로 보존한다.
   - ebcde3d87 최종화 읽기 경합 수리 ordered 배포18:08:00/PID2552591(start11915026) PASS.18:13:37·18:14:52 정규 detector 실패0·cron 역사적 세대 검증/인계 done 확인. 원 정책·strict/controller 보고서 불변. 수동 제외 파일은18:08:24 두산의 기존 평균가 자동 해제로 변경됐으며 원 native receipt와 불변 정책 검사를 구분한다.
   - 17:49 최종화 stale 경보의 내부 원인은 오늘 보유 투표 append와 역사적 원천 검증의 읽기 경합으로 재현했다. native writer shared lock 및 동일 inode 성장의 원 prefix/후속 날짜 재검증으로 수리하며, 원 strict/controller/정책은 재생성하지 않는다. 최종 회귀2,089개 PASS; 기존 승인 범위의 배포·현재 PID·정규 cron/artifact 수용은 [원인 수리 감사](../audits/main-finalization-live-vote-read-race-repair-2026-10-15.md)에 기록한다.
   - 최종3803938c7 ordered 배포17:43:44 PASS, PID2527556/start11769546.17:47:02 정규 detector 실패0·현재 observer 동일 run/health 소비·장후 인계 done/findings0, 보유3종목 원천 관측 재개와 기존 수동 이관 유지 확인. 경합/receipt 오류 추가0, 원 정책·PREOPEN·10/16 누적 대기 bytes 불변. 원천 부족·기존 holding stale 경고와 전체 자연·경제성 수용은 기존 OPEN 범위로 남긴다.
@@ -203,6 +205,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 누적 기계 후보의 별도 작업본 인계
 
 - [ ] `[CumulativePolicyAdoptionDeployment1015] 누적 기계 후보 등록안 배포 대기` (`Due: 2026-10-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 추가12가설 구현 인계: 별도 작업본 `entry-progress-cumulative-20261015`에서 214개 회귀·27 partition native/35,558대안 일치 검증과 private 준비(content82796bfeee27)를 완료했다. [추가 구현 검토](../audits/main-entry-price-progress-implementation-review-2026-10-15.md). 기존38가설 운영 pending c15491190e72와 구분하며, 새12가설의 등록/배포/PID 수용은 이번 구현으로 승인되지 않는다. 기존 parent/pending 충돌은 원 등록을 보존하고 현재 parent·날짜·후속 권한을 재확인한다.
   - 통합cfa070c1e로 코드 배포·재기동 완료. publication10/15·target10/16 누적 등록 receipt c15491190e72의 durable intake 완료, 현재 policy pointer 불변. 정상 장후 stage와 적용일 PREOPEN/PID 소비는 OPEN이며 오늘의 코드 소비와 혼합하지 않는다.
   - 10/15 후속 지시로 통합 배포·재기동이 승인됐다. 기존 배포대기 상태는 이 승인으로 대체하며, publication10/15·target10/16 및 원 parent CAS를 유지해 durable intake와 정상 장후 stage→PREOPEN 인계를 수행한다. [통합 배포 리뷰](../audits/main-cumulative-holding-integration-deployment-2026-10-15.md).
   - Source: [구현·리뷰·격리 검증](../audits/main-cumulative-policy-adoption-implementation-review-2026-10-15.md), [정책 반영 계획 §10](../proposals/main-cumulative-research-policy-adoption-plan-2026-10-14.md#10-1015-별도-작업본-구현과-배포-대기-인계).

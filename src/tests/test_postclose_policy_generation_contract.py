@@ -54,6 +54,25 @@ def attest(root, family):
     return path
 
 
+@pytest.mark.parametrize('component', [
+    'scalping/reversal_cumulative_catalog.py', 'scalping/reversal_cumulative_runtime.py',
+    'scalping/reversal_cumulative_registration.py', 'scalping/reversal_cumulative_postclose.py',
+    'scalping/continuous_reversal_policy_v6.py', 'scalping/reversal_extended_catalog.py',
+    'scalping/reversal_extended_state.py',
+])
+def test_auxiliary_generation_binds_cumulative_producer_and_consumer(tmp_path,monkeypatch,component):
+    from src.engine.lifecycle import holding_window_generation as window
+    original=window.cached_code_generation
+    before=generation.code_generation('auxiliary')
+    def changed(paths):
+        values=original(paths)
+        path=str(generation.ENGINE/component)
+        if path in values:values[path]='f'*64
+        return values
+    monkeypatch.setattr(window,'cached_code_generation',changed)
+    assert generation.code_generation('auxiliary')!=before
+
+
 def test_native_cutover_reports_unverified_without_reopening_legacy():
     assert (
         generation.inspect(None, family="auxiliary", day="2026-10-08")["findings"] == []

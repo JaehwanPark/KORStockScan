@@ -28,7 +28,7 @@ def replay(ids,source):
 
 
 def test_catalog_is_content_addressed_and_frozen():
-    assert len(Q.DEFINITIONS)==1430 and len(Q.GROUPS)==22
+    assert len(Q.LEGACY_DEFINITIONS)==1430 and len(Q.GROUPS)==22
     from src.engine.scalping.continuous_reversal_postclose import digest
     for bid,d in Q.DEFINITIONS.items():
         assert bid=='manual_cumulative_'+digest(d)[:24]
@@ -134,7 +134,7 @@ def request():
         research_batch_sha256=Q.RESEARCH_RESULT,registry_sha256=C.CUMULATIVE_SHA256,
         initial_memberships=members,scopes={s:dict(remove=sorted(set(g['baseline'])-set(members[s])),
             add=sorted(set(members[s])-set(g['baseline']))) for s,g in Q.GROUPS.items()},
-        definition_hashes={b:P.digest(d) for b,d in Q.DEFINITIONS.items()},variant_groups=R.groups(),
+        definition_hashes={b:P.digest(d) for b,d in Q.LEGACY_DEFINITIONS.items()},variant_groups=R.groups(),
         selection_authority=R.SELECTION_AUTHORITY,comparison_result_required=False,
         contract_file_sha256={'fixture.py':'a'*64},**P.AUTH,
         source_receipts=[dict(path='/not-live/'+name,name=name,sha256=sha) for name,sha in [

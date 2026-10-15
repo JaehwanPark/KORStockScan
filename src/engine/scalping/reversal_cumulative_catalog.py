@@ -15,16 +15,40 @@ if hashlib.sha256(_raw).hexdigest() != DATA_SHA256:
     raise ValueError('cumulative_catalog_data_changed')
 _data = json.loads(_raw)
 DEFINITIONS = _data['definitions']
+LEGACY_DEFINITIONS = DEFINITIONS
 GROUPS = _data['groups']
 RECOMMENDATIONS = _data['recommendations']
 PARENT = _data['parent_bundle_sha256']
 RESEARCH_RESULT = _data['research_result_sha256']
 RESEARCH_MANIFEST = _data['research_manifest_sha256']
+PROGRESS_DATA_SHA256 = 'b70882e87411bf76b22330b61c9e3aa158eba42c5f8ad798eb8c2d3b8a72aef4'
+_progress_raw = Path(__file__).with_name('reversal_price_progress_data.json').read_bytes()
+if hashlib.sha256(_progress_raw).hexdigest() != PROGRESS_DATA_SHA256:
+    raise ValueError('price_progress_catalog_data_changed')
+PROGRESS = json.loads(_progress_raw)
+PROGRESS_RESULT = PROGRESS['research_result_sha256']
+PROGRESS_DEFINITIONS = {b:d for b,d in PROGRESS['definitions'].items() if b not in LEGACY_DEFINITIONS}
+if any(PROGRESS['definitions'].get(b) != d for b,d in LEGACY_DEFINITIONS.items()):
+    raise ValueError('price_progress_legacy_definition_changed')
+DEFINITIONS = dict(LEGACY_DEFINITIONS, **PROGRESS_DEFINITIONS)
+CATALOGS = {RESEARCH_RESULT: _data, PROGRESS_RESULT: PROGRESS}
 REFINEMENTS = {b:d for b,d in DEFINITIONS.items() if d['kind']=='cumulative_refinement'}
 ROOTS = {b:d for b,d in DEFINITIONS.items() if d['kind']=='cumulative_root'}
 FEATURE_VERSION = 'manual_cumulative_confirmation_prefix_v2'
 FIELDS = dict(ret='ret',session='session',vwap='vwap',buy='buy10',volume='volume',
-              spread='spread',dd='dd')
+              spread='spread',dd='dd',price10='return10_pct',bid10='bid_return10_pct',
+              bid30='bid_return30_pct',range10='range_spread10',progress='price_progress_spreads10')
+
+
+def catalog(batch=None):
+    try:return CATALOGS[RESEARCH_RESULT if batch is None else batch]
+    except (KeyError,TypeError):raise ValueError('cumulative_research_batch_unknown') from None
+
+
+def registry(batch=None):
+    from src.engine.scalping import reversal_extended_catalog as C
+    catalog(batch)
+    return C.PROGRESS_SHA256 if batch==PROGRESS_RESULT else C.CUMULATIVE_SHA256
 
 
 def definition(bid):
@@ -36,6 +60,7 @@ def phase(bid):
     if bid in REFINEMENTS:
         return d['decision_phase']
     root=d['root_confirmation']
+    if root.startswith('FIRST_BID'):return 'FIRST_PRICE_HOLD'
     if root.startswith('FIRST_HOLD'):return 'FIRST_PRICE_HOLD'
     if root.startswith('RETEST'):return 'RETEST_RECLAIM_FIRST'
     if root=='BREAKOUT60':return 'HIGH_BREAKOUT'
@@ -57,6 +82,9 @@ def root_contract(root):
     if signal=='MOMENTUM':d['return_60s_min_pct']=float(root.split('_')[1])
     if signal!='native_first_turn':d['warmup_seconds']=60
     if root.startswith('RETEST'):d.update(maximum_wait_seconds=30,allowed_below_original_low_pct=.2)
+    if root.startswith('FIRST_BID'):
+        d.update(confirmation='FIRST_BID_ADVANCE_HOLD',maximum_wait_seconds=30,
+                 quote_continuity_required=True,trade_and_bid_hold=True,first_bid_advance_consumed=True)
     return d
 
 
@@ -106,8 +134,8 @@ def dependencies(ids):
     return tuple(order)
 
 
-def variants(scope):
-    g=GROUPS[scope];base=set(g['baseline'])
+def variants(scope,batch=None):
+    g=catalog(batch)['groups'][scope];base=set(g['baseline'])
     result={'CURRENT':sorted(base)}
     refs={}
     for name,replacements in sorted(g['refinements'].items()):
@@ -122,8 +150,8 @@ def variants(scope):
     return result
 
 
-def membership(scope,variant):
-    g=GROUPS[scope];base=set(g['baseline'])
+def membership(scope,variant,batch=None):
+    g=catalog(batch)['groups'][scope];base=set(g['baseline'])
     if variant=='CURRENT':return sorted(base)
     kind,expression=variant.split(':',1);addition=None
     if kind=='J':addition,expression=expression.split('+',1)
@@ -133,9 +161,9 @@ def membership(scope,variant):
     return sorted(result|({g['additions'][addition]} if addition else set()))
 
 
-def valid_membership(scope,ids):
+def valid_membership(scope,ids,batch=None):
     """Validate the finite expression grammar without expanding 25k portfolios."""
-    g=GROUPS[scope];selected=set(ids);additions=selected&set(g['additions'].values())
+    g=catalog(batch)['groups'][scope];selected=set(ids);additions=selected&set(g['additions'].values())
     if len(additions)>1 or len(ids)!=len(selected):return False
     selected-=additions;base=set(g['baseline'])
     if selected==base:return True
@@ -163,7 +191,7 @@ def compose(bid, original, features):
         signal_proof=dict(root_contract=dict(signal='original_confirmation'),
             original_definition_ref=copy.deepcopy(ref),original_confirmation=copy.deepcopy(original),
             refinement_truth='UNKNOWN' if truth is None else 'TRUE',
-            feature_version=FEATURE_VERSION,refinement_features=copy.deepcopy(features)))
+            feature_version=d['feature_contract'],refinement_features=copy.deepcopy(features)))
     return event
 
 
@@ -203,7 +231,7 @@ def validate_signal(event):
         if expected is None or expected!=event:raise ValueError('cumulative_refinement_proof_invalid')
         return
     root=d['root_confirmation']
-    if (proof.get('root_confirmation')!=root or proof.get('root_contract')!=root_contract(root) or proof.get('feature_version')!=FEATURE_VERSION
+    if (proof.get('root_confirmation')!=root or proof.get('root_contract')!=root_contract(root) or proof.get('feature_version')!=d['feature_contract']
             or condition(event.get('branch_features',{}),d['filters']) is not True
             or proof.get('native_epoch')!=event['native_epoch']
             or type(proof.get('native_sequence')) is not int or proof['native_sequence']>event['native_sequence']
@@ -246,3 +274,16 @@ def validate_signal(event):
                 or proof['touch_price']>proof['low'] or proof['minimum_price']>proof['touch_price']
                 or proof['minimum_price']<proof['low']*.998 or event['confirmation_price']<proof['price']):
             raise ValueError('cumulative_retest_proof_invalid')
+    if root.startswith('FIRST_BID'):
+        numeric=('turn_epoch','turn_sequence','turn_price','initial_bid','bid_at_root','minimum_bid')
+        if (any(type(proof.get(k)) not in (int,float) or not math.isfinite(proof[k]) or proof[k]<=0 for k in numeric)
+                or type(proof['turn_sequence']) is not int
+                or not proof['turn_sequence']<proof['native_sequence']<event['native_sequence']
+                or not proof['turn_epoch']<=proof['epoch']<=event['epoch']<=proof['turn_epoch']+30
+                or proof['price']<proof['turn_price'] or proof['bid_at_root']<=proof['initial_bid']
+                or proof['minimum_bid']<proof['bid_at_root']
+                or type(event.get('confirmation_bid')) not in (int,float)
+                or not math.isfinite(event['confirmation_bid'])
+                or not proof['minimum_bid']<=event['confirmation_bid']
+                or proof.get('quote_contiguous') is not True):
+            raise ValueError('cumulative_bid_hold_proof_invalid')

@@ -789,11 +789,42 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False):
                 receipt = ast.literal_eval(receipt)
         if not isinstance(receipt, dict):
             return False
+        # Raw ready rows span price cells; only selected ready rows can refute
+        # this cell's no-match. Require the native scope projection when an
+        # unselected row exists, rather than treating its count as a failure.
+        raw_ready = receipt.get('raw_ready_count')
+        if not allow_incomplete and type(raw_ready) is int and raw_ready > 0:
+            readiness = fields.get('zero_base_branch_readiness')
+            if isinstance(readiness, str):
+                if len(readiness) > 65536:return False
+                try:readiness = json.loads(readiness)
+                except ValueError:readiness = ast.literal_eval(readiness)
+            if (result != 'pattern_not_matched'
+                    or fields.get('zero_base_probe_result_schema') != 'zero_base_probe_result_v2'
+                    or not isinstance(readiness, dict)
+                    or readiness.get('schema') != 'native_branch_residence_requirements_v2'
+                    or readiness.get('status') != 'observed'
+                    or readiness.get('runtime_effect') is not False
+                    or readiness.get('decision_authority') != 'none'
+                    or readiness.get('scope_changed') is not False
+                    or readiness.get('price_basis') != 'exact_native_trade'
+                    or readiness.get('route') != fields.get('zero_base_route')
+                    or readiness.get('policy_scope') != receipt.get('selected_scope')
+                    or any(readiness.get(k) != receipt.get(k) for k in
+                           ('item','family_sha256','scope_execution_hash','native_epoch','native_sequence'))
+                    or not isinstance(readiness.get('branch_descriptors'), dict)
+                    or {b:d.get('detector_truth') if isinstance(d,dict) else None
+                        for b,d in readiness['branch_descriptors'].items()} != receipt.get('selected_branch_truth')):
+                return False
         if result in {'pattern_not_matched','observation_incomplete'} or feature_gap:
             if receipt.get('native_source_current') is not True:return False
             if not allow_incomplete:
                 counts=receipt.get('selected_lifecycle_counts') or {}
-                if (receipt.get('selected_pending_count') or receipt.get('source_censored_count')
+                if (not isinstance(counts,dict) or not isinstance(receipt.get('selected_branch_truth'),dict)
+                        or set(counts)!=set(receipt['selected_branch_truth'])
+                        or any(not isinstance(v,dict) or not set(v)<={'TRUE','FALSE','UNKNOWN'}
+                               or any(type(n) is not int or n<0 for n in v.values()) for v in counts.values())
+                        or receipt.get('selected_pending_count') or receipt.get('source_censored_count')
                         or any(v.get('TRUE',0)>0 for v in counts.values())
                         or any(counts.get(b,{}).get('FALSE',0)<=0 for b in receipt.get('selected_branch_truth',{}))):
                     return False
@@ -823,9 +854,8 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False):
             and bool(receipt.get('selected_scope'))
             and isinstance(truth, dict) and bool(truth)
             and all(isinstance(k, str) and k and (allow_incomplete or v == 'FALSE') for k, v in truth.items())
-            and (allow_incomplete or all(type(receipt.get(k)) is int and receipt[k] == 0
-                    for k in ('raw_ready_count', 'selected_ready_count'))
-                )
+            and (allow_incomplete or (type(raw_ready) is int and raw_ready >= 0
+                 and type(receipt.get('selected_ready_count')) is int and receipt['selected_ready_count'] == 0))
             and all(type(receipt.get(k)) is int and receipt[k] > 0
                     for k in ('native_epoch', 'native_sequence'))
             and type(receipt.get('observed_seconds')) in (int, float)

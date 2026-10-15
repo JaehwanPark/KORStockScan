@@ -45,22 +45,45 @@ def wait_observation(item, sequence, timeout):
         _CHANGE.wait_for(lambda: _SEQUENCES.get(item, 0) != sequence, timeout=max(0, timeout))
 
 
+def _required_definition(definition):
+    """Resolve optional refinements to their unchanged native confirmation."""
+    from src.engine.scalping import reversal_extended_catalog as C
+    from src.engine.scalping import reversal_cumulative_catalog as Q
+    if definition.get('kind') in {'composed_confirmation_refinement', 'cumulative_refinement'}:
+        return _required_definition(C.definition(definition['original_definition_ref']['branch_id']))
+    if definition.get('kind') == 'cumulative_root':
+        return dict(definition, root_contract=Q.root_contract(definition['root_confirmation']))
+    return definition
+
+
+def _filter_fields(filters):
+    from src.engine.scalping import reversal_cumulative_catalog as Q
+    fields = set()
+    for name, value in filters.items():
+        if name in {'when','require'} and isinstance(value,dict):
+            fields.update(_filter_fields(value))
+        for feature in ('ret','vwap','volume','buy10','dd','session','structure','low_rising',*Q.FIELDS):
+            if name == feature or name.startswith(feature+'_'):
+                fields.add(Q.FIELDS.get(feature,feature))
+    return fields
+
+
 def branch_required_seconds(definition):
     """Lower bound on native history, not a promise that a pattern will fire."""
-    if definition.get('kind')=='composed_confirmation_refinement':
-        from src.engine.scalping import reversal_extended_catalog as C
-        return branch_required_seconds(C.definition(definition['original_definition_ref']['branch_id']))
+    definition = _required_definition(definition)
     root = definition.get('root_contract') or {}
     filters = definition.get('filters') or {}
+    fields = _filter_fields(filters)
     required = float(root.get('warmup_seconds') or 0)
     if (definition.get('return_60s_min_pct') is not None or definition.get('higher_low')
             or root.get('return_60s_min_pct') is not None):
         required = max(required, 60.)
-    if any(k.startswith(('ret_', 'vwap_')) or k in {'structure', 'low_rising'} for k in filters):
+    if fields & {'ret','vwap','structure','low_rising'}:
         required = max(required, 60.)
-    if (any(k.startswith('volume_') for k in filters)
+    if ('volume' in fields
             or definition.get('rule') in {'VOLUME_RATIO_GE_1_5', 'DROP_0_4_VOL_UP', 'DD5_0_8_VOL_UP'}):
         required = max(required, 120.)
+    if 'bid_return30_pct' in fields:required = max(required,30.)
     return required + float(root.get('hold_seconds') or 0)
 
 
@@ -73,16 +96,14 @@ def _branch_descriptor(registry_sha256, bid):
     optional_fields=[]
     if d.get('kind')=='composed_confirmation_refinement':
         optional_fields=[d['conditional_refinement']['feature']]
-        d=C.definition(d['original_definition_ref']['branch_id'])
+    elif d.get('kind')=='cumulative_refinement':
+        optional_fields=sorted(_filter_fields(d['filters']))
+    d=_required_definition(d)
     root, filters = d.get('root_contract') or {}, d.get('filters') or {}
     phase = C.branch(bid).get('decision_phase')
     hold = float(root.get('hold_seconds') or 0)
     seconds = branch_required_seconds(d)
-    fields = set()
-    for name in filters:
-        for feature in ('ret', 'vwap', 'volume', 'buy10', 'dd', 'session', 'structure', 'low_rising'):
-            if name == feature or name.startswith(feature+'_'):
-                fields.add(feature)
+    fields = _filter_fields(filters)
     if root.get('return_60s_min_pct') is not None:
         fields.add('ret')
     if d.get('rule') in {'VOLUME_RATIO_GE_1_5', 'DROP_0_4_VOL_UP', 'DD5_0_8_VOL_UP'}:
@@ -96,7 +117,8 @@ def _branch_descriptor(registry_sha256, bid):
         hold_seconds=hold, decision_phase=phase,
         confirmation_window_seconds=d.get('confirmation_seconds') or root.get('maximum_wait_seconds'),
         predecessor_required='ret' in fields or bool(d.get('return_60s_min_pct')),
-        minimum_trade_count=10 if 'buy10' in fields else None,
+        minimum_trade_count=10 if fields & {'buy10','return10_pct','bid_return10_pct',
+            'range_spread10','price_progress_spreads10'} else None,
         known_side_required='buy10' in fields,
         positive_quantity_required=bool(fields & {'buy10', 'vwap', 'volume'}),
         transition_required=phase in {'MOMENTUM_CROSS', 'MOMENTUM_HOLD', 'HIGH_BREAKOUT'},
@@ -135,6 +157,20 @@ def residence_requirements(candidate, now, *, actual_price=None):
         registry_sha256=registry_hash,
         branch_required_seconds=requirements, family_sha256=generation, scope_execution_hash=scope_hash,
         history_reuse='none_without_exact_lease_interval', runtime_effect=False)
+
+
+def _cumulative_pending(state):
+    """Map shared causal roots back to their selected branch dependencies."""
+    from src.engine.scalping import reversal_cumulative_catalog as Q
+    detector=getattr(state,'cumulative',None)
+    if detector is None:return {}
+    roots={p['root_confirmation']:p['epoch'] for p in detector.pending.values()}
+    result={}
+    for bid in state.operating_ids:
+        definition=_required_definition(Q.DEFINITIONS[bid]) if bid in Q.DEFINITIONS else None
+        if definition and definition.get('root_confirmation') in roots:
+            result[bid]=roots[definition['root_confirmation']]
+    return result
 
 
 def branch_readiness(candidate, *, now, deadline, original_requirements=None):
@@ -180,6 +216,12 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
                     family_sha256=getattr(B, '_GENERATION', None),
                     pending={p.get('bid'): p.get('epoch') for p in getattr(state, 'path_pending', {}).values()
                              if p.get('bid')})
+                facts['pending'].update(_cumulative_pending(state))
+                progress=getattr(getattr(state,'cumulative',None),'progress',None)
+                if progress and progress.last is not None and tuple(progress.last[:3])==tuple(last[:3]):
+                    rolling=facts['diagnostic_rolling']
+                    if rolling and rolling.get('identity')==tuple(last[:3]):
+                        rolling['values'].update(progress.values)
                 break
             if facts:
                 break
@@ -293,6 +335,7 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
                            else 'required_window_incomplete')
                 receipt['selected_pending_count']=sum(len(getattr(state,attr,{}))
                     for attr in ('pending','path_pending','extended_pending'))
+                receipt['selected_pending_count']+=len(getattr(getattr(state,'cumulative',None),'pending',{}))
                 receipt['selected_lifecycle_counts']={b:dict(getattr(state,'coverage_counts',{}).get(b,{})) for b in ids}
                 receipt['source_censored_count']=getattr(state,'coverage_source_censored',0)
             for ready in state.ready:

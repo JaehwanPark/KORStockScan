@@ -15,6 +15,7 @@ import json
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -1994,6 +1995,23 @@ class OrderOwnerRegistry:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
 
+    @contextmanager
+    def _native_read_lock(self):
+        """Serialize live projections with appenders without writing frozen sources."""
+        try:
+            lock = self.lock_path.open("rb")
+        except FileNotFoundError:
+            # Frozen research snapshots have no writer lock. Generation/hash
+            # verification below remains mandatory and rejects concurrent edits.
+            yield
+            return
+        with lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
     def native_owner_contract(self, symbol):
         """One verified snapshot binds account, registration and disposition."""
         clean = _registry_symbol(symbol)
@@ -2001,9 +2019,9 @@ class OrderOwnerRegistry:
             return {"registered": False, "account_key": broker_account_key(),
                     "disposition_hash": "", "effective_at": "", "registry_path": str(self.path)}
         # Read-only authority lookup must also work inside frozen replay. The
-        # journal reader verifies the hash chain and unchanged file generation;
-        # a concurrent append fails closed. Actual reservations still hold flock.
-        with self._native_projection_lock:
+        # live reader shares the writer lock across the complete projection.
+        # Hash/generation checks still reject corrupt or externally changed data.
+        with self._native_projection_lock, self._native_read_lock():
             identity = (str(self.path.absolute()), self._journal_identity())
             if identity != self._native_projection_signature:
                 self._native_projection_signature = None
