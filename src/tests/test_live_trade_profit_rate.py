@@ -240,6 +240,64 @@ def test_native_fixed_watch_sell_outbox_acks_exact_receipt_without_scanner(
         assert len(captured) == count
 
 
+@pytest.mark.parametrize('damage', [None, 'position', 'buy_generation', 'bundle', 'signal', 'binding',
+    'broker', 'custody', 'source_gap', 'quantity', 'unit_fill', 'remaining', 'clock', 'naive',
+    'partial', 'scanner', 'simulation', 'invalid_trace', 'event_tamper'])
+def test_overnight_terminal_outbox_acks_only_exact_broker_position_receipt(monkeypatch, damage):
+    from copy import deepcopy
+    now = datetime(2026, 10, 16, 8, 18, 25, 167570, tzinfo=timezone(timedelta(hours=9)))
+    stock = dict(id=49328, code='005930', name='Samsung')
+    fields = dict(order_no='0002918', execution_no='105241', sell_qty=1, remaining_sell_qty=0,
+        actual_order_submitted=True, broker_order_forbidden=False,
+        exit_rule='scalp_trailing_take_profit', holding_path_terminal_signal_binding='same_position_buy_generation',
+        holding_path_position_key='record:49328', holding_path_buy_fill_identity='a'*64,
+        holding_path_policy_bundle_sha256='b'*64, holding_path_signal_id='original-signal',
+        broker_execution_provenance_complete=True, main_lifecycle_broker_reconciled=True,
+        main_lifecycle_reconciled_final_exit=True, sell_execution_receipt_quantity_contract_complete=True,
+        sell_execution_receipt_unit_fill_consistent=True, exit_receipt_submission_custody_committed=True,
+        exit_receipt_submission_custody_source_gap=False, exit_execution_received_at=now.isoformat(),
+        main_lifecycle_actual_cost_status='cost_source_unavailable', main_lifecycle_broker_actual_fees_taxes_krw=None)
+    changes = dict(position=('holding_path_position_key','record:1'),buy_generation=('holding_path_buy_fill_identity','bad'),
+        bundle=('holding_path_policy_bundle_sha256','bad'),signal=('holding_path_signal_id',''),
+        binding=('holding_path_terminal_signal_binding','source_gap'),broker=('broker_execution_provenance_complete',False),
+        custody=('exit_receipt_submission_custody_committed',False),source_gap=('exit_receipt_submission_custody_source_gap',True),
+        quantity=('sell_execution_receipt_quantity_contract_complete',False),unit_fill=('sell_execution_receipt_unit_fill_consistent',False),
+        remaining=('remaining_sell_qty',1),clock=('exit_execution_received_at',now.replace(second=26).isoformat()),
+        naive=('exit_execution_received_at',now.replace(tzinfo=None).isoformat()))
+    if damage in changes: fields[changes[damage][0]]=changes[damage][1]
+    if damage=='scanner':stock['scanner_promotion_id']='existing-scanner'
+    if damage=='simulation':stock['simulation_book']='probe'
+    if damage=='invalid_trace':stock['last_watching_ai_attempt_decision_trace_id']='foreign'
+    leg=receipts._build_sell_lifecycle_outbox_leg(stock,code='005930',target_id=49328,now=now,
+        stage='sell_partial_fill_progress' if damage=='partial' else 'sell_completed',event_fields=fields)
+    frozen=deepcopy(leg);emitted=[]
+    def emit(pipeline,name,code,stage,*,record_id,fields):
+        normalized={str(k):str(v) for k,v in fields.items()}
+        if damage=='event_tamper':normalized['execution_no']='other'
+        emitted.append(normalized)
+        return dict(pipeline=pipeline,stock_code=code,stage=stage,record_id=record_id,fields=normalized,
+            structured_append_succeeded=True,structured_append_status='raw_appended')
+    monkeypatch.setattr(receipts,'emit_pipeline_event',emit)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (damage in (None, 'scanner'))
+    assert leg==frozen
+    if damage == 'scanner':
+        assert receipts._native_sell_receipt_identity(stock,'005930',49328,'sell_completed',fields,now)=={}
+        assert 'native_receipt_identity_schema' not in emitted[0]
+        assert emitted[0]['main_lifecycle_id']
+    if damage is None:
+        assert emitted[0]['native_receipt_identity_schema']=='broker_position_sell_receipt_v1'
+        assert 'main_lifecycle_id' not in emitted[0] and 'attempt_id' not in emitted[0]
+        assert 'native_receipt_entry_trace_id' not in emitted[0]
+        assert emitted[0]['main_lifecycle_actual_cost_status']=='cost_source_unavailable'
+        assert emitted[0]['main_lifecycle_broker_actual_fees_taxes_krw']=='None'
+        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]={receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY:{leg['leg_sha256']:leg}}
+        monkeypatch.setattr(receipts,'_persist_sell_receipt_recovery_or_interlock',lambda *a,**k:True)
+        assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
+        count=len(emitted)
+        assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
+        assert len(emitted)==count
+
+
 @pytest.mark.parametrize("trace", ["", "analyze_target:005930:1792038802347:4a778b1f",
                                    "manual:403870", "analyze_target:403870:bad:4a778b1f"])
 def test_native_receipt_identity_rejects_unbound_entry_trace(trace):

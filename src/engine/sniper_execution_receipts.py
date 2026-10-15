@@ -239,6 +239,8 @@ _SELL_PARTIAL_LIFECYCLE_IDENTITY_STOCK_KEYS = (
     "id",
     "name",
     "code",
+    "simulation_book",
+    "simulation_owner",
     "scanner_promotion_id",
     "scanner_generation_id",
     "effective_venue",
@@ -1430,10 +1432,45 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
         return {}
     trace = str(stock.get("last_watching_ai_attempt_decision_trace_id")
                 or stock.get("last_watching_ai_decision_trace_id") or "")
+    if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
+        return {}
+    if not trace:
+        # Overnight positions can preserve their BUY generation without an
+        # entry AI trace. ACK only an already completed, broker-bound terminal
+        # leg; this identity neither invents an entry nor grants sell authority.
+        if (stage != "sell_completed"
+                or fields.get("exit_rule") != "scalp_trailing_take_profit"
+                or fields.get("holding_path_terminal_signal_binding") != "same_position_buy_generation"
+                or fields.get("holding_path_position_key") != f"record:{int(target_id)}"
+                or not isinstance(fields.get("holding_path_signal_id"), str)
+                or not fields["holding_path_signal_id"]
+                or any(not re.fullmatch(r"[0-9a-f]{64}", str(fields.get(key) or ""))
+                       for key in ("holding_path_buy_fill_identity", "holding_path_policy_bundle_sha256"))
+                or any(fields.get(key) is not True for key in (
+                    "broker_execution_provenance_complete", "main_lifecycle_broker_reconciled",
+                    "main_lifecycle_reconciled_final_exit", "sell_execution_receipt_quantity_contract_complete",
+                    "sell_execution_receipt_unit_fill_consistent", "exit_receipt_submission_custody_committed"))
+                or fields.get("exit_receipt_submission_custody_source_gap") is not False
+                or _safe_int(fields.get("remaining_sell_qty"), -1) != 0):
+            return {}
+        try:
+            received_at = datetime.fromisoformat(str(fields.get("exit_execution_received_at") or ""))
+        except ValueError:
+            return {}
+        if received_at.tzinfo is None or received_at != observed_at:
+            return {}
+        return {
+            "native_receipt_identity_schema": "broker_position_sell_receipt_v1",
+            "native_receipt_position_key": fields["holding_path_position_key"],
+            "native_receipt_buy_fill_identity": fields["holding_path_buy_fill_identity"],
+            "native_receipt_order_no": str(fields["order_no"]),
+            "native_receipt_execution_no": str(fields["execution_no"]),
+            "native_receipt_record_id": int(target_id),
+            "native_receipt_stock_code": str(code),
+            "native_receipt_observed_at": observed_at.astimezone(_KST).isoformat(timespec="microseconds"),
+        }
     if not re.fullmatch(r"analyze_target:" + re.escape(str(code))
                         + r":[0-9]{10,16}:[0-9a-f]{8,64}", trace):
-        return {}
-    if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         return {}
     return {
         "native_receipt_identity_schema": "native_entry_sell_receipt_v1",

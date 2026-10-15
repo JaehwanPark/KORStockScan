@@ -199,3 +199,8 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 07:55 원본 native 기동 후 첫 ordered 배포에서 carried stop의 consumed vote 원천에 당일 관측 tail이 추가되어 인계가 실패했다. 원 consumed prefix의 publisher 봉인과 전체 SHA를 유지한 채 엄격히 후속 날짜의 완결된 native holding 행만 분리 검증한다. full research와 selected cell은 이 경로를 쓰지 않는다. 정확한 source-pair와 코드·변조·동시성 시험을 유지한다.
 
 복구는 기존 automation 패키지의 embedding-only `StoppedDeploymentRecovery`가 소유한다. 정지한 Main/원 supervisor/tmux, 정확한 selected-phase 실패와 owned hold, 원 live-captured PID proof 및 원 정책/PREOPEN/prepared, 새 candidate delay/stop/holding 검증 후 새 attempt에서 hold를 CAS 인계한다. 기존 FAIL과 selector를 보존하고 native prepare/bootstrap/auxiliary/기동/독립 PID 검증을 반복한다. 일반 CLI의 임의 hold 인수나 자동 복구 권한을 열지 않는다. owner는 기존 `DirectFamilyPreopenPolicyHandoff`이고 원 봉인 체크리스트는 유지한다. [배포·복구 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md).
+
+
+### 장중 terminal receipt 수리 인계 — 2026-10-16
+
+추가 사용자 오류의 세 overnight SELL은 이미 체결한 `sell_completed` outbox다. 별도 broker/BUY-generation identity로 원 frozen field/시각/qty/custody를 검증해 ACK하며, scanner/entry trace를 합성하거나 주문을 재전송하지 않는다. simulation scope를 outbox snapshot에도 보존한다. 정확한 코드 쌍과 새 holding/auxiliary capability fixture, 원 정책/PREOPEN 불변, native PID/세 원 key ACK/최종 detector를 배포 수용으로 확인한다. [수리·인계 근거](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md#장중-추가-sell-terminal-outbox-세-건의-수리). 원 journal과 실제 비용 미상은 보존한다.

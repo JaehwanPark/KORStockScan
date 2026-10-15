@@ -29,6 +29,8 @@ from src.engine.monitoring import policy_generation_validation as validation
 # Review: docs/audits/main-entry-price-progress-deployment-review-2026-10-15.md.
 # The terminal KST/custody repair changes shared-handler bytes. Verify fresh
 # fixtures while retaining all original reports and unresolved terminal evidence.
+# The reviewed sealed-prefix and overnight terminal receipt successor preserves
+# historical source bytes and requires its own fresh holding capability fixture.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
@@ -38,10 +40,10 @@ REVIEWED_SUCCESSORS = {
         'dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
-        '44363b0c64586c71663449d4704d70d39b9ccaa93f93d71d428a8ad948edb5be'),
+        'c2c4bc102308a27e521def1669c196bcc61ed13cef1d49d10d90e1f48fa225ce'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2'),
+        '39d0f10c41b661a3d8ea794ff66bfa86b55fab31351062bfb41463bb943bbfe5'),
 }
 
 

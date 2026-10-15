@@ -49,3 +49,18 @@
 최종 통합본은 승인된 배포의 후속 native handoff로 actual PID까지 확인하고, optional installer는 기존 ubuntu 한 사용자 scope를 보존하여 호출한다. 일반 신규 설치 기본값을 쓰거나 새 스케줄/worker를 추가하지 않는다. 원 `enabled=true`, `notify_enabled=true`, `installed_at=2026-10-09T11:58:21.225157+09:00`, `installed_source_date=2026-10-09`, `evidence_start_date=2026-09-29`, 원 후보/outbox/rotation/night reservations를 유지한다. code hash/재결속 시각/직전 installation ancestry와 현재 선택본만 갱신할 수 있다. 실제 crontab bytes 및 원 Main07:35/07:55 calendar를 재조회하고 새 선택본에서 `verify_installed_calendar`를 확인한다. installer의 다른 사용자/root 중복 schedule census는 권한 있는 named-user installer로 수행하고 runtime verify는 ubuntu UID에서 별도 수행한다.
 
 연구 원천 재계산·worker 강제 실행·예약 확대·Telegram 발송은 이 재결속에 포함하지 않는다. 다음 허용 야간의 최신 source/backlog 진전·pending/migration·누적/알림 disposition은 기존 `MainMarketWeaknessPostcloseObservation1008` OPEN의 자연 수용이다. 코드 배포나 설치 PASS를 미래 야간 완료·매매·경제성으로 보고하지 않는다.
+
+
+## 장중 추가 SELL terminal outbox 세 건의 수리
+
+사용자가08:19에196170/005930,08:25에034020의 `SELL_PARTIAL_LIFECYCLE_OUTBOX_PENDING`을 전달했다. 당시 최종4c4fec0bb 배포는 preflight였고 startup hold/selector 변경/드레인 전에 driver만 SIGINT로 정상 중단했다. 원 a94b54afa Main PID2940050은 계속 실행됐다. 이 중단 시도의 원 status/KeyboardInterrupt를 보존한다.
+
+실제 봉인 leg는 모두 `sell_completed`다. 이름에 PARTIAL이 있어도 부분체결로 오분류하지 않는다. 원 snapshot을 private 증거로 보존했다. 기록49300/196170의 key6eab6d8c…,49328/005930의 key5545ec16…,49267/034020의 key31a24908…는 원 주문/체결번호·잔량0·qty/unit contract·broker provenance·제출 custody가 유효하다. BUY-generation과 TP signal/bundle도 같은 record에 결속되지만 leg의 candidate_stock에 scanner/entry trace가 없다. 기존 trace-only native receipt 경로도 ACK할 수 없어 재시도 중이었다. 비용 실제 reconciliation은 `cost_source_unavailable`로 남는다.
+
+새 `broker_position_sell_receipt_v1`은 이 overnight terminal 범위만 인식한다. 기존 trace가 없고, 실제 broker 체결·완전한 qty/unit·잔량0·확정 제출 custody/no source gap·동일 record BUY generation/TP lineage·원 ingress clock이 모두 일치해야 한다. scanner의 기존 lifecycle 경로를 대체하지 않고 entry trace/Main lifecycle ID를 합성하지 않는다. 원 leg/hash/field 전부를 보존하고 generated identity만 append 결과에 넣어 엄격히 검증한다. scanner·simulation 격리 회귀에서 outbox snapshot의 simulation_book/owner 보존 누락도 보완했다. native ACK는 추가 주문 권한이나 실제 비용/수익 검증이 아니다.
+
+원 세 leg의 오프라인 리허설은 실제 journal 쓰기·provider·주문0으로 emit 계약 PASS, 원 leg/hash 불변을 확인했다. [세 leg 리허설](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/sell-outbox-offline-rehearsal-all-three.json). 위치/BUY/bundle/신호/결속/broker/custody/source-gap/수량/unit/잔량/시각/partial/trace/event 변조를 거부하고, 기존 scanner 경로·idempotent ACK·실제 비용 미상 보존을 시험했다. wire/parser/FID/주문 API는 수정하지 않았다.
+
+선택23a13aba6→검토 receipt 파일의 정확한 쌍을 `REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES`에 결속한다. holding capability 후속은 전체 `39d0f10c41b661a3d8ea794ff66bfa86b55fab31351062bfb41463bb943bbfe5`다. 통합 시험이 auxiliary의 낡은 successor hash도 발견했고, 실제 선택23a13aba6 자체가 이미c2c4bc10…임을 재현했다. 그 family의 모든 component는 선택23과 byte 동일하다. 기존 원 계약88a49610…→현재c2c4bc10…의 exact pair를 갱신하고 fresh 네트워크 차단 fixture를 별도 요구한다. 과거 계약/보고서/정책 code pin을 바꾸지 않는다. native-v6 계약37개는 unchanged여서 정책 code refresh를 새로 발행하지 않는다.
+
+다음 승인 배포 후 세 original key가 native replay로 ACK됐는지, final pending/기록 terminal 및 다음 자연 detector를 확인해야 운영 수용이다. journal 강제 편집·수동 replay/SELL·historical FAIL 삭제는 수행하지 않는다.

@@ -690,6 +690,14 @@ REVIEWED_CARRIED_VOTE_PREFIX_SOURCES = {
     ),
 }
 
+# Completed overnight SELL receipts use their sealed broker/BUY identity only.
+REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
+    'src/engine/sniper_execution_receipts.py': (
+        'dc4a57286b38f72c96e538e7eb3851f806af1b9c07e0145f3f5aed51ea00bbe1',
+        '0171cada0bb9eeb3410671a0fb4824914c0255eb32aceeb69cea6d359401694b',
+    ),
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -762,7 +770,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name),
                     REVIEWED_HOLDING_CONTRACT_SOURCES.get(name),
                     REVIEWED_POSTCLOSE_READ_SOURCES.get(name),
-                    REVIEWED_CARRIED_VOTE_PREFIX_SOURCES.get(name)):
+                    REVIEWED_CARRIED_VOTE_PREFIX_SOURCES.get(name),
+                    REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:
