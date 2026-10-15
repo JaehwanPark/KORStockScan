@@ -14515,6 +14515,58 @@ def test_post_probe_ai_thesis_does_not_mix_partial_frozen_and_latest_provenance(
     assert context["supportive"] is False
 
 
+@pytest.mark.parametrize('frozen_parent', [False, True])
+@pytest.mark.parametrize('mutation', ['add', 'remove'])
+def test_post_probe_ai_thesis_uses_one_snapshot_during_concurrent_stock_mutation(frozen_parent, mutation):
+    entered, changed = Event(), Event()
+
+    class CoordinatedKey(str):
+        def startswith(self, prefix, *args):
+            entered.set()
+            assert changed.wait(5), 'writer did not finish outside snapshot lock'
+            return super().startswith(prefix, *args)
+
+    now = time.time()
+    stock = {CoordinatedKey('unrelated_runtime_field'): 1,
+        'last_watching_ai_action': 'DROP', 'last_watching_ai_result_source': 'live',
+        'last_watching_ai_attempt_contract_status': 'pass',
+        'last_watching_ai_decision_trace_id': 'original-trace',
+        'last_watching_ai_attempt_decision_trace_id': 'original-trace',
+        'last_watching_ai_attempt_trusted': True,
+        'last_watching_ai_snapshot_id': 'original-snapshot',
+        'last_watching_ai_probe_intent_prompt_version': 'entry-v9',
+        'last_watching_ai_confirmed_at': now - 10}
+    if frozen_parent:
+        stock['rising_missed_scout_parent_ai_action'] = 'WAIT'
+
+    def writer():
+        assert entered.wait(5), 'reader did not reach parent census'
+        try:
+            if mutation == 'add':
+                state_handlers._mutate_stock_state(stock, set_fields={
+                    'rising_missed_scout_parent_ai_new_field': 'late-value',
+                    'last_watching_ai_decision_trace_id': 'later-trace'})
+            else:
+                state_handlers._mutate_stock_state(stock, pop_fields=['last_watching_ai_snapshot_id'])
+        finally:
+            changed.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(writer)
+        context = state_handlers._post_probe_ai_thesis_context(
+            stock, current_ai_score=68, now_ts=now, market_path_confirmed=True)
+        future.result(timeout=5)
+    assert context['latest_entry_negative'] is True
+    assert context['negative'] is True and context['supportive'] is False
+    assert context['parent_provenance_source'] == (
+        'frozen_scout_parent' if frozen_parent else 'latest_entry_fallback')
+    assert context['parent_trusted'] is (not frozen_parent)
+    if not frozen_parent:
+        assert context['parent_trace_id'] == 'original-trace'
+        assert context['parent_snapshot_id'] == 'original-snapshot'
+    assert changed.is_set()
+
+
 def test_post_probe_ai_thesis_latest_drop_requires_fresh_trusted_attempt():
     base_ts = time.time()
     stock = {

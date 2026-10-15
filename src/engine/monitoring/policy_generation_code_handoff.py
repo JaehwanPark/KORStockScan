@@ -18,19 +18,22 @@ from src.engine.monitoring import policy_generation_validation as validation
 # Review: docs/audits/main-cumulative-holding-integration-deployment-2026-10-15.md.
 # Preset/cost-clock and cumulative auxiliary changes extend exact review to
 # entry-cancel-wait and auxiliary; every successor needs new isolated fixtures.
+# The holding-context snapshot successor changes only the source-only observer's
+# concurrent reads. Rising/holding require fresh fixtures for the new bytes.
+# Review: docs/audits/main-holding-context-dictionary-race-repair-2026-10-15.md.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
         '0ca40b9fc16658dd7ab8561723daf8d9315432f860d2e71a2cda03cef40b3885'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '79de6415f87f70bb39c08bde827cbfc6e97cc5fbc63728aba584021cada10533'),
+        '3a3d58010e8d708568f2766d2020de59ec0a1f4efc2304241516a5af4fc169de'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
         '527117df62523777584ca57d2588a2061e9867f44a40c40b7deaac3fca498046'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        'f946f4bea342c9974555c2e72910d1cab563647bdf071f6dd4af5ec8c03b192c'),
+        '11b146f51994ccfec37dc15ebe2d9b7b797242c2f2fcd162170f4c5ac19e0715'),
 }
 
 

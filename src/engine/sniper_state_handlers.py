@@ -26807,6 +26807,11 @@ def _post_probe_ai_thesis_context(
 ) -> dict[str, Any]:
     """Resolve bounded AI thesis continuity without granting order authority."""
 
+    # Runtime writers add/remove fields under ENTRY_LOCK. Freeze the scalar
+    # provenance once, then release the lock before evaluating this observation.
+    with ENTRY_LOCK:
+        stock = stock.copy()
+
     latest_confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
     latest_max_age_sec = max(
         1.0,

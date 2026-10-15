@@ -556,6 +556,16 @@ REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES = {
     ),
 }
 
+# Snapshot-only holding observer concurrency repair. Preserve the original
+# PREOPEN contract and every execution gate; bind only these reviewed bytes.
+# Evidence: docs/audits/main-holding-context-dictionary-race-repair-2026-10-15.md.
+REVIEWED_HOLDING_CONTEXT_SNAPSHOT_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',
+        '92f4c9380e4bd5caec8f252bbb8deb4f3012de1031ec5d37389c430623efde8d',
+    ),
+}
+
 # Preserve the frozen predecessor while ordered startup has not completed.
 # The producer defers publication; detector deadlines and failures stay strict.
 REVIEWED_ORDERED_PUBLICATION_SOURCES = {
@@ -671,6 +681,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name),
                     REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
                     REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES.get(name),
+                    REVIEWED_HOLDING_CONTEXT_SNAPSHOT_SOURCES.get(name),
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),

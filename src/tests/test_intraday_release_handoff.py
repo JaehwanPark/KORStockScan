@@ -44,6 +44,7 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_OBSERVER_STATE_READER_SOURCES',
                                      'REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES',
                                      'REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES',
+                                     'REVIEWED_HOLDING_CONTEXT_SNAPSHOT_SOURCES',
                                      'REVIEWED_ORDERED_PUBLICATION_SOURCES',
                                      'REVIEWED_OPPORTUNITY_CUSTODY_SOURCES',
                                      'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES',
@@ -75,6 +76,7 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     monkeypatch.setattr(handoff, 'REVIEWED_OBSERVER_STATE_READER_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_HOLDING_CONTEXT_SNAPSHOT_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_ORDERED_PUBLICATION_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_OPPORTUNITY_CUSTODY_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES', {})
