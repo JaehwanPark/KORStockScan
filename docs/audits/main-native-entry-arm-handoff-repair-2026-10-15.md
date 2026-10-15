@@ -51,3 +51,18 @@
 재발 방지 시험은 실제 소스 세대와 검토된 후속 해시의 일치를 확인한다. 보완 전2개 모두 실패했고, 원천/계약/fixture/권한 변조는 기존 거부 회귀로 검증한다. 다음 배포는4개 family의 실제 reader 검증을 포함한 사전 점검 이후 진행한다. 기존 실행 파일을 덮어쓰지 않고 불변 후속 release를 사용한다.
 
 보완 재리뷰: capability/native 계약/탐지 소비자354개 PASS(4.32초), compile2개·diff·print-only parser PASS. 두 family 구성 파일을 기존3d435와 대조해 변경은 검토한 공용 handler 한 파일뿐임을 확인했다. 정확한 해시 제한과 원본/fixture 거부 동작을 유지했다.
+
+
+## 최종 통합 배포·실제 PID 소비
+
+최종 실행 commit은 `3b390be1e71f6b90f309ecce6ca49a8ddb2629b3`이며 원86f789693 및 이전 승인a179bb42d/92785b7da/e6326b0b1/87fda9479를 모두 조상으로 포함한다. release는 `/home/ubuntu/KORStockScan-runtime-releases/native-entry-arm-capability-20261015-3b390be1e`다. 기존038fe6ea8/PID1907749를11:55:44에 정상 drain한 후 선택·prepare·시작·실제 소비 검증이11:57:59 PASS로 종료했다. 새 Main은 PID1927180/start9694877이며 실제 cwd/selector가 이 release와 일치한다. startup hold는 없다.11:58:36 WS snapshot의 transport producer도 이 PID/start로 갱신됐다.
+
+배포 전 네 family reader 모두verified, 두 신규 fixture177개(rising_missed86, holding_vote91) PASS/provider0/orders0/네트워크 시도0이다. 원 보고서4개의 SHA는 그대로 보존했다. active-native33개 코드 계약은 변경되지 않아 원 sealed parity를 사용했고 모든 정책/원천844개 해시와 candidate delay/stop/holding을 검증해 새 handoff를 발행했다. 기존 정책 숫자/선택/current pointer/원 PREOPEN을 재생성하지 않았다.
+
+통합 검증은 진입·기동2970개, capability·탐지354개, native fixture177개로 구분해 기록한다. live 전환 중11:51의 일시 I/O wait 경보는 다음 자연 탐지에서 사라졌으며 과거 실패 기록은 보존한다. 현재 code repair와 실제 실행 소비의 완료가 다음 자연 AI 응답/주문/체결/비용 후 성과의 완료를 의미하지 않는다. 자연 수용은 기존 `AuxiliaryCircuitRecoveryRepair1012` OPEN으로 유지한다.
+
+증거: [최종 후보·승인 조상](../../tmp/native-entry-arm-review-deploy-20261015-1137/capability-successor/candidate.json), [native 사전 검증](../../tmp/native-entry-arm-review-deploy-20261015-1137/capability-successor/native-preflight.json), [보존한 원 보고서](../../tmp/native-entry-arm-review-deploy-20261015-1137/capability-successor/preserved-report-hashes.json), [배포 로그](../../tmp/native-entry-arm-review-deploy-20261015-1137/capability-successor/deployment.log).
+
+최종 자연 소비 검증:12:00 정규 슬롯의 run `30745732ad31473d8a4b4f67a11cc4c4`가12:01:44 완료됐고, observer 계산57.263초로 정상 게시됐다.12:02:56 탐지기가 같은 run·현재 code/PID·report SHA·health projection을 소비했다.12:03:15 대조15항목 모두PASS이며 실패 detector0/정책 capability4개verified이다. 원본 네 보고서는 계속 같은 SHA다. `recorded_guard_or_cohort_pending`과 과거 장후 effective-date06:50 이후 복구 경고는 그대로 남으며 full coverage·제출/체결·경제성 성공을 뜻하지 않는다. [최종 수용 영수증](../../tmp/native-entry-arm-review-deploy-20261015-1137/capability-successor/final-acceptance-120315.json), [실제 PID·WS 확인](../../tmp/native-entry-arm-review-deploy-20261015-1137/capability-successor/deployment-check-120236.json).
+
+코드 재리뷰 범위의 미해결 결함은 없고 당일 OPEN9개와 자연 신호 owner1개를 유지한다. 실행 중인 PID의 checklist 봉인은 수정하지 않는다. 최종 운영 기록만 별도 문서 commit으로 남기며 selected 실행 commit은3b390be1e다. 외부 Project/Calendar 동기화·수동 provider 호출/주문·광범위 재계산은 수행하지 않았다.
