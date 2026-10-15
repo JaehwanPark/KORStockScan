@@ -23,3 +23,18 @@
 실행 owner는 `DirectFamilyPreopenPolicyHandoff`, `CumulativePolicyAdoptionDeployment1015`, `HoldingProfitExitSourceContractRepair`, `NonfixedDispatchReadinessReview1012`를 재사용한다. 원 날짜별 Acceptance/History를 유지하며, 외부 Project/Calendar sync와 수동 주문·provider 호출은 실행하지 않는다.
 
 통합 배포 경계 회귀 1,614개와 holding/등록/기계/freshness 회귀 846개 PASS(기존 pandas 경고1). Python compile, diff 및 두 작업본의 print-only parser와 단일 owner 확인 PASS. 누적 native 전수 재생은 별도 진행 중이며 실행 완료 뒤 등록 준비를 봉인한다.
+
+## 실제 배포·다음 날짜 인계
+
+- 15:55:22 ordered transition `complete/pass`: 코드 `cfa070c1e1dab125170b08aaef6b3583a7b50ae8`, PID2407222/start11119497, cwd `/home/ubuntu/KORStockScan-runtime-releases/cumulative-holding-integrated-20261015-v1/src`. 전임 PID2276473은 정상 종료됐다. 원 bootstrap JSON/env·current policy·수동 제외 파일 hash가 보존됐다.
+- 통합 native 누적 재생 27 partitions/5,587,427 rows, confirmation236,597·선정9,502·불일치0. 네트워크 차단 fixture는 entry93/rising86/holding91/auxiliary83, 총353개 PASS. [최종 리뷰](../../tmp/cumulative-holding-deploy-20261015/review-result.json).
+- 10/16 등록을 durable intake했다: publication10/15, target10/16, receipt `c15491190e72030fabeb7e2eea8027d0e744f2775c0d7dcc5ec629ce77d3b62a`. 기존 기계 policy pointer는 불변이며 새 후보 활성/PID 소비는 false다. [등록 영수증](../../tmp/cumulative-holding-deploy-20261015/cumulative-intake.json). 정상 장후 machine→auxiliary→stage와 다음 PREOPEN 소비는 기존 OPEN owner가 계속 소유한다.
+- 다음 정규 observer/detector 및 새 PID의 WebSocket snapshot은 관측 대기다. 배포 직전 15:52:41 정규 탐지의 artifact_freshness=warning, 실패0은 이전 PID 결과로 보존한다. 새 선택본의 탐지 수용은 [후속 확인](../../tmp/cumulative-holding-deploy-20261015/postdeploy-verification.json)의 실제 세대가 소유한다.
+
+## 배포 후 수용
+
+[배포 후 확인](../../tmp/cumulative-holding-deploy-20261015/postdeploy-verification.json)의 15개 조건 PASS: 현재 commit/PID/start/cwd, 원 정책/수동 제외 hash, native bootstrap·소비, 새 PID의 WebSocket 연결/게시, 현재 observer/detector 동일 run과 health projection을 확인했다. `artifact_freshness`는 관측 대기 warning이며 실패는 없다. 새 후보는 여전히 target10/16 등록 대기로, 오늘 실제 PID의 코드 소비와 분리된다.
+
+15:57:08에 기동 직후 resource_usage의 I/O wait40.22%≥35% 경보1회가 발생했다. 이후15:58:17·15:59:25 정규 탐지의 resource_usage/process_health/log_scanner는 PASS다. [재기동 이후 오류 관측](../../tmp/cumulative-holding-deploy-20261015/postrestart-error-observations.json)에 최초 경보를 보존하며 임계값·cursor를 변경하지 않았다. 기존 holding_exit_sentinel 이력과 06:50 이후 최종화 복구 warning은 남아 있다. 전체 무경고·경제성 완료를 주장하지 않는다.
+
+16:00:37 정규 탐지에서도 현재 commit·observer 동일 run/health projection 및 실패0을 확인했고 16:01:01 WebSocket producer는 PID2407222/cfa070c1e다. AFTER 개장 후 holding_exit_sentinel_aftermarket_report의 기존 stale(9,020초>600초)와 observer coverage partial warning이 명시됐다. 이는 새 배포의 정책/원천 결속 실패와 구분하며 기존 `HoldingProfitExitSourceContractRepair`·관측 owner의 source acceptance를 유지한다.

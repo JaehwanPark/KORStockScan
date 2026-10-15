@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-15`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 15:55:22 통합cfa070c1e ordered complete/pass·PID2407222/start11119497 실제 소비 PASS. 원 PREOPEN/env/current policy/manual 제외 bytes 불변. 새 PID WebSocket 및 현재 정규 observer/detector의 같은 run·health projection 포함 [배포 후15조건](../../tmp/cumulative-holding-deploy-20261015/postdeploy-verification.json) PASS. artifact_freshness 실패0/관측 대기 warning이며 초기 I/O wait 경보1회와 후속 정상은 원본에 보존한다.
   - 후속 사용자 승인: `7b2e421e3` 누적 후보와 `af2b8f994` 보유·비상시 등록 수리를 선택본451b6c1ec 위에 통합 배포·재기동한다. 원 PREOPEN 봉인·정책과 전임/새 PID 소비를 보존 검증하며, 다음 정규 artifact_freshness 실패0으로 배포 수용한다. [통합 배포 리뷰](../audits/main-cumulative-holding-integration-deployment-2026-10-15.md).
   - 12:06 후속 경보: 이미 소비된 정책의 문서 편집 및 다음 날짜 미사용 holding append 결속을 수정하고, 사용자 지정40b931254 장기3/약세 veto 변경과 통합 배포·재기동한다. 원 정책/실제 사용 원천·실패 기록을 보존하며 새 immutable 운영 문서, 정확한 PID 소비와 다음 정규 관측으로 수용한다. [통합 검토](../audits/main-postdeployment-policy-source-binding-repair-2026-10-15.md). 12:40:21 통합110ac4a90 ordered 배포 완료·PID2020871/start9949242 실제 소비 PASS. 이후 정규 관측/탐지기 수용은 audit에서 확인하며 자연 제출·경제성 OPEN은 유지한다. 12:51:18 후속bb4808c77/PID2039852/start10014770 소비 PASS; 과거 delay 사건의 새 PID 오귀속 보완까지 포함한다. 12:57:12 새 정규 관측/탐지기 동일 run 소비·정책4계열 검증·실패0, 최종15조건 PASS.
   - Source: [runtime_approval_summary_2026-10-14.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-14.json)
@@ -193,6 +194,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 누적 기계 후보의 별도 작업본 인계
 
 - [ ] `[CumulativePolicyAdoptionDeployment1015] 누적 기계 후보 등록안 배포 대기` (`Due: 2026-10-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 통합cfa070c1e로 코드 배포·재기동 완료. publication10/15·target10/16 누적 등록 receipt c15491190e72의 durable intake 완료, 현재 policy pointer 불변. 정상 장후 stage와 적용일 PREOPEN/PID 소비는 OPEN이며 오늘의 코드 소비와 혼합하지 않는다.
   - 10/15 후속 지시로 통합 배포·재기동이 승인됐다. 기존 배포대기 상태는 이 승인으로 대체하며, publication10/15·target10/16 및 원 parent CAS를 유지해 durable intake와 정상 장후 stage→PREOPEN 인계를 수행한다. [통합 배포 리뷰](../audits/main-cumulative-holding-integration-deployment-2026-10-15.md).
   - Source: [구현·리뷰·격리 검증](../audits/main-cumulative-policy-adoption-implementation-review-2026-10-15.md), [정책 반영 계획 §10](../proposals/main-cumulative-research-policy-adoption-plan-2026-10-14.md#10-1015-별도-작업본-구현과-배포-대기-인계).
   - 사용자 지시는 별도 작업본의 구현·반복 보완·배포대기다. 이 항목의 일정은 자동 배포/등록/재기동 권한이 아니다. source 수리의 과거 OPEN을 재개하지 않는다.
