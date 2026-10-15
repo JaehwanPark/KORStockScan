@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from src.trading.config.owner_identity import ACTIVATION_SCHEMA, normalize_symbol
 from src.trading.config.owner_retirement import automatic_owner_retired, main_manual_after_episode_retirement, new_entry_retired
 from src.utils.constants import DATA_DIR
+from src.trading.order import owner_journal_recovery as journal_recovery
 
 KST = ZoneInfo("Asia/Seoul")
 REGISTRY_SCHEMA = "order_owner_registry_event_v1"
@@ -191,8 +192,7 @@ class OrderOwnerRegistry:
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         self._activation_signature = None
         self._activation_rows = {}
-        self._journal_signature = None
-        self._journal_events = None
+        self._journal_cache = None
         self._native_projection_lock = threading.RLock()
         self._native_projection_signature = None
         self._native_projection_accounts = {}
@@ -216,24 +216,37 @@ class OrderOwnerRegistry:
 
     def _read_locked(self) -> list[dict[str, Any]]:
         identity = self._journal_identity()
-        if identity is not None and identity == self._journal_signature:
-            return copy.deepcopy(self._journal_events)
+        cached = self._journal_cache
+        if identity is not None and cached is not None and identity == cached[0]:
+            return copy.deepcopy(cached[1])
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+            raw = self.path.read_bytes()
         except FileNotFoundError:
             return []
         except OSError as exc:
             raise OwnerRegistryError(
                 f"owner_registry_read_failed:{type(exc).__name__}"
             ) from exc
+        events = self._validated_events(raw)
+        if self._journal_identity() != identity:
+            raise OwnerRegistryConflict("owner_registry_changed_during_read")
+        # Read-only native projections and flock-serialized writers share this
+        # cache. Publish the generation and its immutable contents together;
+        # publishing identity first lets a writer append from a stale tail.
+        self._journal_cache = (identity, copy.deepcopy(events))
+        return events
+
+    def _validated_events(self, raw: bytes) -> list[dict[str, Any]]:
+        lines = raw.splitlines(keepends=True)
         events: list[dict[str, Any]] = []
         previous = "0" * 64
+        recovery_line = None
         for line_no, line in enumerate(lines, 1):
             if not line.strip():
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError as exc:
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise OwnerRegistryConflict(
                     f"owner_registry_json_invalid:line={line_no}"
                 ) from exc
@@ -242,9 +255,21 @@ class OrderOwnerRegistry:
                     f"owner_registry_schema_invalid:line={line_no}"
                 )
             if event.get("previous_hash") != previous:
-                raise OwnerRegistryConflict(
-                    f"owner_registry_chain_invalid:line={line_no}"
-                )
+                # An explicit, immediately following repair receipt can bind
+                # one known full-fill/stale-terminal fork. All source bytes,
+                # original hashes and the stale event remain in the journal.
+                try:
+                    receipt = json.loads(lines[line_no])
+                    journal_recovery.validate_recovery(
+                        events, event, receipt, b''.join(lines[:line_no]))
+                except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+                    raise OwnerRegistryConflict(
+                        f"owner_registry_chain_invalid:line={line_no}"
+                    ) from exc
+                previous = event["previous_hash"]
+                recovery_line = line_no + 1
+            if event.get('event') == journal_recovery.EVENT and line_no != recovery_line:
+                raise OwnerRegistryConflict(f"owner_registry_recovery_unbound:line={line_no}")
             expected = hashlib.sha256(
                 previous.encode("ascii") + self._canonical(event)
             ).hexdigest()
@@ -254,11 +279,48 @@ class OrderOwnerRegistry:
                 )
             previous = expected
             events.append(event)
-        if self._journal_identity() != identity:
-            raise OwnerRegistryConflict("owner_registry_changed_during_read")
-        self._journal_signature = identity
-        self._journal_events = copy.deepcopy(events)
         return events
+
+    def reconcile_stale_terminal_tail(self, *, expected_sha256: str, apply: bool = False):
+        """Explicit CAS repair; never called by live receipt processing.
+
+        A dry run and an apply use the same validator. The only mutation is one
+        fsynced append under the ordinary journal lock; no original row changes.
+        """
+        lock = self._locked()
+        try:
+            raw = self.path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != expected_sha256:
+                raise OwnerRegistryConflict('owner_registry_recovery_source_changed')
+            lines = raw.splitlines(keepends=True)
+            if not lines or not raw.endswith(b'\n'):
+                raise OwnerRegistryConflict('owner_registry_recovery_tail_incomplete')
+            events = self._validated_events(b''.join(lines[:-1]))
+            try:
+                stale = json.loads(lines[-1])
+                payload = journal_recovery.recovery_payload(events, stale, raw)
+                expected = hashlib.sha256(stale['previous_hash'].encode('ascii')
+                                          + self._canonical(stale)).hexdigest()
+                if stale.get('schema') != REGISTRY_SCHEMA or stale.get('event_hash') != expected:
+                    raise ValueError('stale terminal hash invalid')
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                raise OwnerRegistryConflict('owner_registry_recovery_proof_invalid') from exc
+            # Validate the complete prospective journal before any append.
+            preview = self._event_row([*events, stale], payload)
+            proposed = raw + (json.dumps(preview, ensure_ascii=True, sort_keys=True,
+                                        separators=(',', ':')) + '\n').encode()
+            self._validated_events(proposed)
+            if apply:
+                receipt = self._append_locked([*events, stale], payload)
+                self._read_locked()
+            else:
+                receipt = preview
+            return {'status': 'applied' if apply else 'validated', 'receipt': receipt,
+                    'original_sha256': expected_sha256, 'original_bytes': len(raw),
+                    'original_events_preserved': True, 'broker_order_attempted': False}
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
 
     @staticmethod
     def _state(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -331,7 +393,7 @@ class OrderOwnerRegistry:
                 )
         return state
 
-    def _append_locked(
+    def _event_row(
         self, events: list[dict[str, Any]], event: dict[str, Any]
     ) -> dict[str, Any]:
         previous = str(events[-1].get("event_hash")) if events else "0" * 64
@@ -345,6 +407,12 @@ class OrderOwnerRegistry:
         row["event_hash"] = hashlib.sha256(
             previous.encode("ascii") + self._canonical(row)
         ).hexdigest()
+        return row
+
+    def _append_locked(
+        self, events: list[dict[str, Any]], event: dict[str, Any]
+    ) -> dict[str, Any]:
+        row = self._event_row(events, event)
         encoded = json.dumps(
             row, ensure_ascii=True, sort_keys=True, separators=(",", ":")
         )
