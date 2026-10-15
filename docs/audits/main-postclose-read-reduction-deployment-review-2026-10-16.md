@@ -40,3 +40,12 @@
 반복 리뷰 후 인계·배포·stop·digest·delay 시험 **2219 PASS**, Python compile6개와 diff 검사 PASS다. source-pair는 main_stop_postclose.py의 원 SHA `e9ab07117a0200610e19f4b24ea0000579203628a887e16387b24189b8734a13`와 검토 SHA `cce1f797bd17f5ddde0aa5eec68cdb285c224e198fea7bb184d03a444ff32c05`에 한정한다. 숫자 정책이나 원 준비 code pin은 바꾸지 않는다. 신규 복구의 실제 실행/PID 소비/후속 detector 수용은 후속 영수증으로 확인한다.
 
 08:02:53 별도 작업이 운영 checklist의 기존 시장약세 OPEN에 근거1행을 추가했다. 원 봉인f9b27df0…와 현재394a2f6e…를 별도 보존하며 이 동시 변경을 되돌리거나 배포 체크리스트로 덮어쓰지 않는다. 목적/강제 규칙과 OPEN owner 집합은 동일하다. 복구는 현재 editable bytes를 보존하고 원 strict-bound snapshot을 독립 검증한다.
+
+
+## 6cf45b5c 통합과 optional code/calendar 인계
+
+사용자가08:14 전후 `6cf45b5cfa095897c1e5a346ac91af0512be6604` 통합 및 optional 연구의 code/calendar 재결속을 추가 지시했다. 진행 중 a94b54afa의 native 복구는 원 소비 증거를 먼저 닫고, 검토 커밋은 작업 branch에 실제 두 부모 merge로 통합했다. merge `2f4e7bdc09832e78ad35f2270ffa3afc345a1c7b`에는 원 커밋이 ancestor로 남는다. 통합 코드13 suites **2508 PASS**, compile·shell syntax·diff·print-only parser를 통과했다. optional module 외 Main/native machine/stop/delay/holding 계약 소스는 a94b54afa와 같다.
+
+최종 통합본은 승인된 배포의 후속 native handoff로 actual PID까지 확인하고, optional installer는 기존 ubuntu 한 사용자 scope를 보존하여 호출한다. 일반 신규 설치 기본값을 쓰거나 새 스케줄/worker를 추가하지 않는다. 원 `enabled=true`, `notify_enabled=true`, `installed_at=2026-10-09T11:58:21.225157+09:00`, `installed_source_date=2026-10-09`, `evidence_start_date=2026-09-29`, 원 후보/outbox/rotation/night reservations를 유지한다. code hash/재결속 시각/직전 installation ancestry와 현재 선택본만 갱신할 수 있다. 실제 crontab bytes 및 원 Main07:35/07:55 calendar를 재조회하고 새 선택본에서 `verify_installed_calendar`를 확인한다. installer의 다른 사용자/root 중복 schedule census는 권한 있는 named-user installer로 수행하고 runtime verify는 ubuntu UID에서 별도 수행한다.
+
+연구 원천 재계산·worker 강제 실행·예약 확대·Telegram 발송은 이 재결속에 포함하지 않는다. 다음 허용 야간의 최신 source/backlog 진전·pending/migration·누적/알림 disposition은 기존 `MainMarketWeaknessPostcloseObservation1008` OPEN의 자연 수용이다. 코드 배포나 설치 PASS를 미래 야간 완료·매매·경제성으로 보고하지 않는다.

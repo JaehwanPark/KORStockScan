@@ -206,3 +206,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 사용자 후속 배포·07:55 확인 지시를 수용했다. 기존 `DirectFamilyPreopenPolicyHandoff`의 원 수용 기준으로 정규 PREOPEN/첫 기동과 후속 ordered 배포를 검증한다. [배포 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md). 원 운영 체크리스트와 이미 봉인된 정책/PREOPEN bytes는 별도 보호한다.
 
 580d5865b의 selected-phase 실패와 정지 복구는 같은 `DirectFamilyPreopenPolicyHandoff`가 소유한다. 원 native PID 증거·정책·봉인 체크리스트와 실패 attempt/hold를 보존하고, 검토 source-pair 및 새 attempt에서 native 소비를 확인한다. 상세는 위 배포 리뷰를 따른다.
+
+추가 승인된6cf45b5c 통합·optional code/calendar 재결속은 기존 `MainMarketWeaknessPostcloseObservation1008`와 `DirectFamilyPreopenPolicyHandoff`가 각자의 설치/선택·PID 수용을 소유한다. 원 enabled/notify/source floor/설치 역사·후보/outbox와 야간 예산을 유지하고 다음 자연 야간 수용은 OPEN이다. [통합·배포 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md#6cf45b5c-통합과-optional-codecalendar-인계).
