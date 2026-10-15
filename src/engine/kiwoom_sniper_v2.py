@@ -40,6 +40,7 @@ from concurrent.futures import ThreadPoolExecutor
 import math
 import numpy as np
 import json
+import hashlib
 import traceback
 from queue import Empty, Queue, Full
 import copy
@@ -684,6 +685,24 @@ def _request_broker_snapshot_refresh_after_execution(*, code: str, reason: str) 
         code=code,
         coalesce_if_busy=True,
     )
+
+
+def _periodic_broker_snapshot_required(targets):
+    """Optional context polling serves real positions/orders or watch admission."""
+    if getattr(_reconcile_main_fixed_watch, 'broker_refresh_needed', False):
+        return True
+    for target in targets:
+        if str(target.get('status') or '').upper() not in {'WATCHING', 'EXPIRED', 'COMPLETED'}:
+            return True  # Unknown state retains conservative reconciliation.
+        try:
+            quantity = float(str(target.get('buy_qty') or 0).replace(',', ''))
+            if not math.isfinite(quantity) or quantity != 0:
+                return True
+        except (TypeError, ValueError):
+            return True
+        if any(target.get(k) for k in ('buy_ord_no', 'sell_ord_no', 'pending_cancel_ord_no')):
+            return True
+    return False
 
 
 MARKET_REGIME = MarketRegimeService(refresh_minutes=15)
@@ -6151,6 +6170,11 @@ def _reconcile_main_fixed_watch(targets, *, now_ts, publish_reg):
                 log_info(f"[MAIN_FIXED_WATCH] code={code} admission waiting reason={outcome}")
                 waits[code] = (outcome, now_ts)
                 _reconcile_main_fixed_watch.waits = waits
+    _reconcile_main_fixed_watch.broker_refresh_needed = any(
+        reason in {'broker_snapshot_missing_or_stale', 'broker_exchange_census_incomplete',
+                   'broker_inventory_rows_invalid', 'broker_open_orders_unverified',
+                   'broker_open_order_rows_invalid'} for reason in
+        (value.rsplit(':', 1)[-1] for value in outcomes.values()))
     return outcomes.get(main_fixed_watch.SAMSUNG_CODE, "disabled")
 
 
@@ -8529,6 +8553,40 @@ def _zero_base_active_conflict(code):
         )
 
 
+def _zero_base_active_target_snapshot(readiness):
+    """Read only Main's target identities; failure falls back to callback checks."""
+    if not ENTRY_LOCK.acquire(blocking=False):
+        return {'status': 'unobserved', 'reason': 'main_target_lock_busy'}
+    try:
+        if len(ACTIVE_TARGETS) > 512:
+            return {'status': 'unobserved', 'reason': 'main_target_snapshot_bound'}
+        identities = sorted((
+            str((target or {}).get('code') or '').strip()[:6],
+            str((target or {}).get('id') or ''),
+            str((target or {}).get('status') or '').upper(),
+            str((target or {}).get('owner') or ''),
+            str((target or {}).get('source_signature') or ''),
+            str((target or {}).get('watch_generation_id') or ''),
+        ) for target in ACTIVE_TARGETS)
+        active_codes = sorted({row[0] for row in identities
+            for code, status in [(row[0], row[2])]
+            if len(code) == 6 and code.isdigit()
+            and status not in {'EXPIRED', 'COMPLETED', 'CANCELLED'}})
+        observed_epoch=time.time()
+    except (AttributeError, TypeError, ValueError):
+        return {'status': 'unobserved', 'reason': 'main_target_snapshot_invalid'}
+    finally:
+        ENTRY_LOCK.release()
+    owner = {key: readiness.get(key) for key in (
+        'runtime_generation', 'process_pid', 'process_start_ticks', 'date')}
+    generation = hashlib.sha256(json.dumps(
+        [owner, identities], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return dict(schema='zero_base_main_target_snapshot_v1', status='observed',
+        **owner, generation=generation, observed_epoch=observed_epoch,
+        active_codes=active_codes, runtime_effect=False)
+
+
+
 def _zero_base_probe_result(request, result, reason):
     event_bus.publish(
         PROBE_RESULT_EVENT,
@@ -8656,9 +8714,11 @@ def _zero_base_probe_observation_profile(session_regime):
 def _zero_base_consumer_readiness():
     from src.engine.scalping.zero_base_probe import consumer_readiness
     from src.engine.scalping.reversal_current_backend import backend
-    return consumer_readiness(ws_manager=WS_MANAGER, ai_engine=AI_ENGINE,
+    readiness = consumer_readiness(ws_manager=WS_MANAGER, ai_engine=AI_ENGINE,
         token=KIWOOM_TOKEN, enabled=_zero_base_runtime_enabled(),
         family_sha256=getattr(backend(), '_GENERATION', None))
+    readiness['main_target_snapshot'] = _zero_base_active_target_snapshot(readiness)
+    return readiness
 
 
 def handle_zero_base_probe_requested(request):
@@ -8796,6 +8856,11 @@ def handle_zero_base_probe_requested(request):
                     if issue:
                         return dict(request, result='policy_unavailable', reason=issue,
                                     consumer_readiness_at_worker=current, machine_action='')
+                    if _zero_base_active_conflict(code):
+                        # Main may attach a target while this executor waited.
+                        # No physical REG has occurred at this boundary.
+                        return dict(request, result='active_conflict',
+                            reason='existing_runtime_target_at_worker', machine_action='')
                     return run_zero_base_probe(
                         request,
                         ws_manager=WS_MANAGER,
@@ -12924,6 +12989,8 @@ def run_sniper(is_test_mode=False):
             )
         while True:
             loop_work_started = time.perf_counter()
+            from src.engine.monitoring.runtime_performance import record_main_phase
+            record_main_phase('loop_prepare')
             now_ts = time.time()
             from src.engine.scalping.pre_submit_delay_observation import prune as prune_delay_observations
             prune_delay_observations(now_ts)
@@ -13056,6 +13123,7 @@ def run_sniper(is_test_mode=False):
             # 신규 DB 타겟 polling (P0 계측 포함)
             # =====================================================
             _t0_db = time.perf_counter()
+            record_main_phase('target_db_and_fixed_watch_reconcile')
             if now_ts - last_db_poll_time > 5:
                 db_targets = DB.get_active_targets() or []
                 for dt in db_targets:
@@ -13157,6 +13225,7 @@ def run_sniper(is_test_mode=False):
             # 90초 lifecycle reconciliation과 45초 read-only broker snapshot
             # =====================================================
             _t0_acct = time.perf_counter()
+            record_main_phase('account_task_admission')
             if (
                 now_ts - getattr(run_sniper, "last_account_sync_time", 0)
                 > ACCOUNT_RECONCILIATION_INTERVAL_SEC
@@ -13167,6 +13236,7 @@ def run_sniper(is_test_mode=False):
             elif (
                 now_ts - getattr(run_sniper, "last_broker_snapshot_refresh_time", 0)
                 > BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC
+                and _periodic_broker_snapshot_required(targets)
             ):
                 if _submit_account_task(
                     task_kind="broker_snapshot_read_only",
@@ -13174,6 +13244,7 @@ def run_sniper(is_test_mode=False):
                 ):
                     run_sniper.last_broker_snapshot_refresh_time = now_ts
             _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
+            record_main_phase('prequeue_maintenance')
 
             # Legacy overnight AI is retired. Holding AI remains active through
             # the close; the post-effective terminal rule only adds a SELL when
@@ -13235,6 +13306,7 @@ def run_sniper(is_test_mode=False):
                     targets,
                     now_epoch=time.time(),
                 )
+            record_main_phase('async_completion_drain')
             async_coordinator = getattr(
                 run_sniper,
                 "scanner_async_eval_coordinator",
@@ -13244,8 +13316,8 @@ def run_sniper(is_test_mode=False):
             def _scanner_async_commit_ready_for_main_thread() -> bool:
                 """Yield between synchronous units when a COMMIT is ready.
 
-                Completed worker output remains inside the coordinator until
-                the next outer-loop drain enqueues its scheduler COMMIT lane.
+                Scanner output needs the next outer drain and COMMIT lane.
+                Exact fixed-watch output can use its remaining Main visit.
                 This is deliberately a main-thread-only cooperative yield:
                 it neither applies a result nor changes any trading state.
                 """
@@ -13253,7 +13325,15 @@ def run_sniper(is_test_mode=False):
                 return bool(
                     _scanner_scheduler_startup_mode() == "async_v1"
                     and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
-                    and async_coordinator.has_undrained_result()
+                    and async_coordinator.has_undrained_result(
+                        direct_fixed_requests={
+                            (target.get('_scanner_async_generation_id'),
+                             target.get('_scanner_async_cache_key'))
+                            for target in runtime_work_queue
+                            if target.get('status') == 'WATCHING'
+                            and main_fixed_watch.is_fixed_watch(target)
+                            and target.get('_scanner_async_generation_id')
+                            and target.get('_scanner_async_cache_key')})
                 )
 
             if _scanner_scheduler_startup_mode() == "async_v1" and isinstance(
@@ -13453,6 +13533,7 @@ def run_sniper(is_test_mode=False):
                                     now_epoch=time.time(),
                                     reason="async_commit_enqueue_rejected_generation_warm_parked",
                                 )
+            record_main_phase('target_source_preparation')
             queue_context = _runtime_queue_context(targets, now_ts=now_ts)
             active_scanner_watch_codes = {
                 str(t.get("code", "")).strip()[:6]
@@ -14502,8 +14583,10 @@ def run_sniper(is_test_mode=False):
                 scanner_heavy_eval_flushed = True
 
             runtime_work_queue = list(queue_context["iteration_targets"])
+            record_main_phase('target_queue')
             runtime_iteration_accounting_targets = list(runtime_work_queue)
             runtime_processed_target_ids = set()
+            runtime_native_revisited_ids = set()
             runtime_live_attach_ids = set()
             runtime_scheduler_forced_target_ids = set()
 
@@ -14617,6 +14700,15 @@ def run_sniper(is_test_mode=False):
                     or _scanner_async_commit_ready_for_main_thread()
                 ):
                     break
+                record_main_phase('target_admission')
+                from src.engine.monitoring.runtime_performance import (
+                    prioritize_native_watches, acknowledge_native_watch_visit)
+                native_visit_tokens = {}
+                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
+                    completed_requests=(async_coordinator.fixed_watch_ready_requests()
+                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
+                    all_targets=targets, processed_target_ids=runtime_processed_target_ids,
+                    revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
                 if not runtime_work_queue:
                     _flush_delayed_scanner_heavy_eval()
                     if scanner_async_commit_yield_requested:
@@ -14626,9 +14718,14 @@ def run_sniper(is_test_mode=False):
                 _admit_runtime_live_attaches()
                 if not runtime_work_queue:
                     break
-                from src.engine.monitoring.runtime_performance import prioritize_native_watches
-                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time())
+                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
+                    completed_requests=(async_coordinator.fixed_watch_ready_requests()
+                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
+                    all_targets=targets, processed_target_ids=runtime_processed_target_ids,
+                    revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
                 stock = runtime_work_queue.pop(0)
+                record_main_phase('target_visit', stock.get('code'))
+                acknowledge_native_watch_visit(stock, native_visit_tokens.get(id(stock)), now=time.time())
                 runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]
                 status = stock.get("status")
@@ -16161,6 +16258,7 @@ def run_sniper(is_test_mode=False):
                         ai_engine=holding_ai_engine,
                     )
 
+            record_main_phase('post_target_maintenance')
             _flush_delayed_scanner_heavy_eval()
             _flush_pending_scanner_ws_reg()
             _flush_deferred_scanner_pipeline_events()
@@ -16216,6 +16314,7 @@ def run_sniper(is_test_mode=False):
                     buy_time_allowed=is_scalping_buy_time_allowed(now),
                 )
             from src.engine.monitoring.runtime_performance import observe, log_snapshot
+            record_main_phase('loop_diagnostics')
             observe('loop_work', time.perf_counter() - loop_work_started)
             global _LOOP_METRICS_LAST_LOG_TS
             if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
@@ -16233,10 +16332,12 @@ def run_sniper(is_test_mode=False):
                 _LOOP_METRICS_LAST_LOG_TS = now_ts
 
             coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
+            record_main_phase('idle_wait')
             if coordinator is not None:
                 coordinator.wait_for_completion(_sleep_ms / 1000.0)
             else:
                 time.sleep(_sleep_ms / 1000.0)
+            record_main_phase('main_wake')
 
     except Exception as e:
         log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}\n{traceback.format_exc()}")

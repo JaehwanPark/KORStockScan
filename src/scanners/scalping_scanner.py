@@ -6946,7 +6946,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
         active_window = _active_scalping_buy_window(now)
         if (active_window is not None or is_test_mode) and time.time() >= next_scan_epoch:
             if runtime.start_scan(token):
-                next_scan_epoch = time.time() + min(60, _resolve_scan_interval_sec(now.time()))
+                next_scan_epoch = time.time() + _resolve_scan_interval_sec(now.time())
         try:
             summary = runtime.finish_scan()
         except Exception as exc:
@@ -6962,6 +6962,11 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         "zero_base_probe_consumer_ready": summary["probe_consumer_ready"],
                         "zero_base_probe_no_consumer_count": summary["probe_no_consumer_count"],
                         "zero_base_probe_capacity_limit": summary["probe_capacity_limit"],
+                        "zero_base_probe_claim_eligibility": summary["probe_claim_eligibility"],
+                        "zero_base_probe_residence_deferred": summary["probe_residence_deferred"],
+                        "zero_base_probe_active_target_snapshot_status": summary["probe_active_target_snapshot_status"],
+                        "zero_base_probe_active_target_snapshot_generation": summary["probe_active_target_snapshot_generation"],
+                        "zero_base_queue_restored_candidate_count": summary["queue_restored_candidate_count"],
                         "zero_base_probe_claims_in_flight_count": summary["probe_claims_in_flight_count"],
                         "zero_base_probe_timeout_count": summary["probe_timeout_count"],
                         "zero_base_stale_candidate_count": summary["stale_candidate_count"],
@@ -6971,7 +6976,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 )
             except Exception as exc:
                 log_error("[ZERO_BASE_SCANNER] cycle failed: " + type(exc).__name__)
-            next_scan_epoch = time.time() + min(60, _resolve_scan_interval_sec(now.time()))
+            next_scan_epoch = time.time() + _resolve_scan_interval_sec(now.time())
             next_probe_epoch = time.time() + 10
         elif (active_window is not None or is_test_mode) and time.time() >= next_probe_epoch:
             try:
@@ -6983,6 +6988,11 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         "zero_base_probe_consumer_ready": dispatch["probe_consumer_ready"],
                         "zero_base_probe_no_consumer_count": dispatch["probe_no_consumer_count"],
                         "zero_base_probe_capacity_limit": dispatch["probe_capacity_limit"],
+                        "zero_base_probe_claim_eligibility": dispatch["probe_claim_eligibility"],
+                        "zero_base_probe_residence_deferred": dispatch["probe_residence_deferred"],
+                        "zero_base_probe_active_target_snapshot_status": dispatch["probe_active_target_snapshot_status"],
+                        "zero_base_probe_active_target_snapshot_generation": dispatch["probe_active_target_snapshot_generation"],
+                        "zero_base_queue_restored_candidate_count": dispatch["queue_restored_candidate_count"],
                         "zero_base_probe_claims_in_flight_count": dispatch["probe_claims_in_flight_count"],
                         "zero_base_probe_timeout_count": dispatch["probe_timeout_count"],
                         "zero_base_stale_candidate_count": dispatch["stale_candidate_count"],

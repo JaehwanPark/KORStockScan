@@ -340,6 +340,7 @@ def fetch_entry_candles_with_meta(
     allow_integrated_sor_execution_view: bool = False,
     request_owner: str | None = None,
     request_class: str | None = None,
+    reduced_inputs: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch entry candles from the route owned by the effective venue/session."""
 
@@ -380,19 +381,35 @@ def fetch_entry_candles_with_meta(
     from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
     from src.utils.kiwoom_transport_telemetry import demand
     requirement = entry_history_requirement(now=now, session=session_value, requested_limit=limit)
+    if reduced_inputs:
+        requirement.update(input_profile='reduced_completed_v1',
+            fetch_limit=DECISION_CONTINUITY_HORIZON_MINUTES + 1,
+            forming='excluded', adjustment='raw_same_day_ws_or_homogeneous_rest_adjusted',
+            shortage_policy='optional_fields_unavailable_no_synthetic_fill')
     required_bars = requirement['legacy_raw_limit']
+    if reduced_inputs:
+        required_bars = requirement['fetch_limit']
     selection = {'consumer_requirement': requirement}
     demand('ka10080','entry_logical_demand')
     selected = selected_completed_bar_payload(request_code,now=now,consumer='main',
-        minimum_bars=max(1, requirement['minimum_completed_for_full_recent_window']),
-        history_scope='session',selection_receipt=selection,required_adjustment='adjusted_1')
+        minimum_bars=1 if reduced_inputs else max(1, requirement['minimum_completed_for_full_recent_window']),
+        history_scope='rolling' if reduced_inputs else 'session', selection_receipt=selection,
+        required_adjustment='raw_same_day' if reduced_inputs else 'adjusted_1',
+        **({'allow_partial_history': True} if reduced_inputs else {}))
     if selected is None:
         candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
-            token, request_code, limit=required_bars, explicit_request_code=True, **request_purpose)
+            token, request_code, limit=required_bars, explicit_request_code=True,
+            **({'include_forming': False} if reduced_inputs else {}), **request_purpose)
         source_meta = dict(source_meta or {}, completed_bar_selection=selection)
         demand('ka10080','rest_retained')
     else:
+        selected_epoch = selected['_completed_bar_source'].get('transport_epoch')
+        if reduced_inputs and (type(transport_epoch) is not int or transport_epoch <= 0):
+            raise ValueError('completed_bar_input_transport_epoch_missing')
+        if transport_epoch is not None and selected_epoch != transport_epoch:
+            raise ValueError('completed_bar_transport_changed_during_selection')
         candles = [{'체결시간':r['cntr_tm'],'source_timestamp':r['cntr_tm'],
+            **({'_history_basis': 'observed_valid_rows'} if reduced_inputs else {}),
             'source_time_basis':'provider_trade_time','시가':int(r['open_pric']),
             '고가':int(r['high_pric']),'저가':int(r['low_pric']),
             '현재가':int(r['cur_prc']),'거래량':int(r['trde_qty'])}
@@ -409,7 +426,14 @@ def fetch_entry_candles_with_meta(
             "entry_candle_request_venue": request_venue,
             "entry_candle_request_session": session_value,
             "entry_candle_request_broker_route": planned_broker_route,
-            "multi_timeframe_auxiliary_fetch": True,
+            "multi_timeframe_auxiliary_fetch": not reduced_inputs,
+            "decision_input_profile": 'reduced_completed_v1' if reduced_inputs else 'strict_adjusted',
+            "completed_only": reduced_inputs,
+            "complete_session_prefix": (
+                bool(selected is not None
+                     and selected['_completed_bar_source'].get('complete_session_prefix')
+                     and len(selected['stk_min_pole_chart_qry']) <= required_bars)
+                if reduced_inputs else None),
             "history_consumer_requirement": requirement,
             "history_consumer_receipt": {
                 'schema': 'main_entry_history_consumption_v1',
@@ -1088,6 +1112,7 @@ def build_session_candle_source(
     broker_route: str | None = None,
     allow_integrated_sor_execution_view: bool = False,
     local_breakout: bool = False,
+    reduced_inputs: bool = False,
 ) -> dict[str, Any]:
     """Build a neutral venue/session candle bundle for bounded consumers."""
 
@@ -1139,12 +1164,17 @@ def build_session_candle_source(
                 allow_integrated_sor_execution_view=(
                     allow_integrated_sor_execution_view
                 ),
+                **({'reduced_inputs': True} if reduced_inputs else {}),
             )
         except Exception as exc:
             recent_candles, source_meta = [], {}
             fetch_error = f"{type(exc).__name__}:{str(exc)[:120]}"
         fetch_ms = int((time.perf_counter() - fetch_started) * 1000)
     source_meta = dict(source_meta or {})
+    reduced_inputs = reduced_inputs and source_meta.get('decision_input_profile') == 'reduced_completed_v1'
+    if reduced_inputs:
+        source_limit = DECISION_CONTINUITY_HORIZON_MINUTES + 1
+        fetch_auxiliary_sources = False
     ws, request_route_binding = _bind_entry_candle_request_route(
         ws, source_meta, code=code, venue=venue_value, session=session_value,
         broker_route=str(broker_route or resolve_order_dmst_stex_tp(now=now)).upper(),
@@ -1212,6 +1242,8 @@ def build_session_candle_source(
     )
     route_conflict_count = 0
     current_minute = now.replace(second=0, microsecond=0)
+    if reduced_inputs:
+        current_session = [bar for bar in current_session if bar['dt'] < current_minute]
     if current_session and current_session[-1]["dt"] == current_minute:
         current_session[-1]["forming"] = True
         current_session[-1]["partial_volume"] = True
@@ -1242,7 +1274,7 @@ def build_session_candle_source(
             trusted_tick_volume_count += 1
         else:
             untrusted_tick_volume_count += 1
-    if minute_ticks:
+    if minute_ticks and not reduced_inputs:
         minute_ticks.sort(key=lambda item: item[0])
         prices = [_integer(item[1].get("price")) for item in minute_ticks]
         prices = [price for price in prices if price > 0]
@@ -1354,7 +1386,12 @@ def build_session_candle_source(
     if duplicate_price_conflict:
         quality_blockers.append("duplicate_price_conflict")
     source_api_id = str((source_meta or {}).get("api_id") or "").lower()
-    ka10080_observed_bars = source_api_id == "ka10080"
+    ka10080_observed_bars = source_api_id == "ka10080" or (
+        reduced_inputs and source_api_id == 'ws_0b_completed_1m'
+    )
+    minute_bar_policy = ('ws_observed_rows_missing_minutes_unknown'
+        if reduced_inputs and source_api_id == 'ws_0b_completed_1m'
+        else 'ka10080_observed_rows_no_synthetic_fill')
     decision_window_blockers = []
     session_integrity_blockers = []
     decision_window_sparse_observed_minutes = (
@@ -1385,6 +1422,16 @@ def build_session_candle_source(
         )
     )
     structure = _structure(current_session, local_breakout=local_breakout)
+    complete_session_prefix = None
+    if reduced_inputs:
+        complete_session_prefix = source_meta.get('complete_session_prefix') is True
+        structure['history_scope'] = 'recent_completed_v1'
+        if not complete_session_prefix:
+            for field in ('session_peak_drawdown_pct', 'session_low_rebound_pct',
+                          'session_high_at', 'session_low_at',
+                          'bars_since_session_high', 'bars_since_session_low'):
+                structure[field] = None
+            structure['anchor_window_policy'] = 'observed_recent_extrema_no_full_session_claim'
     local = structure.get("local_breakout")
     if isinstance(local, dict) and local.get("source_sha256"):
         local["episode_id"] = hashlib.sha256(json.dumps(
@@ -1434,6 +1481,7 @@ def build_session_candle_source(
         captured_at=now,
         fetch_external_sources=fetch_auxiliary_sources,
         minute_bar_source_api_id=source_api_id,
+        **({'complete_session_prefix': complete_session_prefix} if reduced_inputs else {}),
     )
     build_ms = int((time.perf_counter() - started) * 1000)
     strategy_source = {}
@@ -1525,7 +1573,7 @@ def build_session_candle_source(
                 "blockers": decision_window_blockers,
                 "sparse_observed_minutes": decision_window_sparse_observed_minutes,
                 "provider_call_allowed": not decision_window_blockers,
-                "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
+                "minute_bar_policy": minute_bar_policy,
             },
             "session_integrity": {
                 "status": session_integrity_status,
@@ -1535,7 +1583,7 @@ def build_session_candle_source(
                     max_consecutive_missing_bar_count
                 ),
                 "sparse_observed_minutes": session_sparse_observed_minutes,
-                "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
+                "minute_bar_policy": minute_bar_policy,
             },
             "duplicate_count": duplicate_count,
             "duplicate_price_conflict": duplicate_price_conflict,
@@ -1573,6 +1621,9 @@ def build_session_candle_source(
                     "entry_candle_request_session",
                     "entry_candle_request_broker_route",
                     "entry_candle_route_binding",
+                    "decision_input_profile",
+                    "completed_only",
+                    "complete_session_prefix",
                 }
             },
         },
@@ -1618,6 +1669,8 @@ def build_entry_candle_context(
         broker_route=planned_broker_route,
         allow_integrated_sor_execution_view=True,
         local_breakout=True,
+        **({'reduced_inputs': True} if (source_meta or {}).get('decision_input_profile')
+            == 'reduced_completed_v1' else {}),
     )
     context.update(
         {

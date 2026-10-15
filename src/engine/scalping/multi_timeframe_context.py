@@ -539,6 +539,7 @@ def build_multi_timeframe_context(
     captured_at: datetime,
     fetch_external_sources: bool = False,
     minute_bar_source_api_id: str | None = None,
+    complete_session_prefix: bool | None = None,
 ) -> dict[str, Any]:
     """Build the shared feature bundle from exact completed source windows."""
 
@@ -587,6 +588,10 @@ def build_multi_timeframe_context(
         sector_context=sector_context,
         minute_bar_source_api_id=minute_bar_source_api_id,
     )
+    if complete_session_prefix is False:
+        for name in ('session_bar_vwap', 'opening_range_5m', 'opening_range_15m'):
+            derived[name] = {'status': 'source_unavailable', 'value': None,
+                             'reason': 'full_session_history_not_required'}
     activation = promotion_activation_state(captured_at)
     bundle = {
         "schema": SCHEMA,

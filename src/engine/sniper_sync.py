@@ -733,38 +733,7 @@ def _recover_missing_broker_holdings(session, real_codes):
     today = datetime.now().date()
     settlement_context_snapshot = []
     order_ref_snapshot = []
-    if KIWOOM_TOKEN:
-        try:
-            settlement_context_snapshot = (
-                kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
-            )
-        except Exception:
-            settlement_context_snapshot = []
-        use_order_ref_2nd_pass = False
-        if isinstance(CONF, dict) and "ENABLE_ORDER_REF_2ND_PASS" in CONF:
-            use_order_ref_2nd_pass = bool(CONF.get("ENABLE_ORDER_REF_2ND_PASS"))
-        elif len(str(KIWOOM_TOKEN or "")) >= 40:
-            # 테스트 토큰("token")에서는 호출을 건너뛰고, 실토큰에서만 기본 활성
-            use_order_ref_2nd_pass = True
-        if use_order_ref_2nd_pass:
-            try:
-                qry_tp = (
-                    str((CONF or {}).get("BROKER_ORDER_REF_QRY_TP", "0"))
-                    if isinstance(CONF, dict)
-                    else "0"
-                )
-                stk_bond_tp = (
-                    str((CONF or {}).get("BROKER_ORDER_REF_STK_BOND_TP", "0"))
-                    if isinstance(CONF, dict)
-                    else "0"
-                )
-                order_ref_snapshot = kiwoom_utils.get_order_reference_snapshot_2nd_pass(
-                    KIWOOM_TOKEN,
-                    qry_tp=qry_tp,
-                    stk_bond_tp=stk_bond_tp,
-                )
-            except Exception:
-                order_ref_snapshot = []
+    recovery_sources_loaded = False
     active_statuses = {"HOLDING", "SELL_ORDERED", "BUY_ORDERED"}
     tracked_codes = {
         str(getattr(record, "stock_code", "") or "").strip()[:6]
@@ -813,6 +782,42 @@ def _recover_missing_broker_holdings(session, real_codes):
         real_qty = _to_int(real_data.get("qty", 0))
         if real_qty <= 0:
             continue
+
+        if not recovery_sources_loaded:
+            # Fetch recovery enrichment only after a real eligible candidate.
+            recovery_sources_loaded = True
+            if KIWOOM_TOKEN:
+                try:
+                    settlement_context_snapshot = (
+                        kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
+                    )
+                except Exception:
+                    settlement_context_snapshot = []
+                use_order_ref_2nd_pass = False
+                if isinstance(CONF, dict) and "ENABLE_ORDER_REF_2ND_PASS" in CONF:
+                    use_order_ref_2nd_pass = bool(CONF.get("ENABLE_ORDER_REF_2ND_PASS"))
+                elif len(str(KIWOOM_TOKEN or "")) >= 40:
+                    # 테스트 토큰("token")에서는 호출을 건너뛰고, 실토큰에서만 기본 활성
+                    use_order_ref_2nd_pass = True
+                if use_order_ref_2nd_pass:
+                    try:
+                        qry_tp = (
+                            str((CONF or {}).get("BROKER_ORDER_REF_QRY_TP", "0"))
+                            if isinstance(CONF, dict)
+                            else "0"
+                        )
+                        stk_bond_tp = (
+                            str((CONF or {}).get("BROKER_ORDER_REF_STK_BOND_TP", "0"))
+                            if isinstance(CONF, dict)
+                            else "0"
+                        )
+                        order_ref_snapshot = kiwoom_utils.get_order_reference_snapshot_2nd_pass(
+                            KIWOOM_TOKEN,
+                            qry_tp=qry_tp,
+                            stk_bond_tp=stk_bond_tp,
+                        )
+                    except Exception:
+                        order_ref_snapshot = []
 
         raw_price = (
             real_data.get("buy_price")

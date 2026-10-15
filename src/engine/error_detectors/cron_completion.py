@@ -715,10 +715,23 @@ class CronCompletionDetector(BaseDetector):
 
     @staticmethod
     def _read_tail_lines(path: Path, n: int) -> list[str]:
+        if n <= 0:
+            return []
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-                return lines[-n:]
+            with open(path, "rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                position = stream.tell()
+                chunks = []
+                newlines = 0
+                while position and newlines <= n:
+                    size = min(65536, position)
+                    position -= size
+                    stream.seek(position)
+                    chunk = stream.read(size)
+                    chunks.append(chunk)
+                    newlines += chunk.count(b'\n')
+                # Decode after joining: UTF-8 code points can cross block edges.
+                return b''.join(reversed(chunks)).decode('utf-8', errors='replace').splitlines(keepends=True)[-n:]
         except OSError:
             return []
 

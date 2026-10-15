@@ -334,8 +334,9 @@ def test_finalization_reserves_morning_margin_before_preopen():
 
 
 @pytest.mark.parametrize("prepare_rc,detector_rc,expected_rc", [(0, 0, 0), (9, 0, 1), (0, 9, 1)])
+@pytest.mark.parametrize("prepare_budget", [None, "450"])
 def test_final_detector_reads_refreshed_prepared_generation(
-    tmp_path, monkeypatch, prepare_rc, detector_rc, expected_rc
+    tmp_path, monkeypatch, prepare_rc, detector_rc, expected_rc, prepare_budget
 ):
     monkeypatch.setattr(sys.modules[__name__], "TARGET_DATE", "2026-09-28")
     project = tmp_path / "project"
@@ -381,14 +382,27 @@ if [[ "${1:-}" == "-" ]]; then
 fi
 exec "$REAL_PY" "$@"
 ''')
+    timeout = project / "bin/timeout"
+    _write_executable(timeout, '''
+printf '%s\\n' "$*" >> "$PROJECT_DIR/timeout-arguments.txt"
+exec /usr/bin/timeout "$@"
+''')
+    env = {**_base_env(project, cleanup, detector), "VENV_PY": str(python),
+           "REAL_PY": sys.executable, "MOCK_PREPARE_RC": str(prepare_rc),
+           "MOCK_DETECTOR_RC": str(detector_rc),
+           "PATH": str(project / "bin") + os.pathsep + os.environ["PATH"]}
+    if prepare_budget is not None:
+        env["POSTCLOSE_FINALIZATION_PREPARE_TIMEOUT_SEC"] = prepare_budget
     result = subprocess.run(
         ["bash", str(WRAPPER), TARGET_DATE],
-        env={**_base_env(project, cleanup, detector), "VENV_PY": str(python),
-             "REAL_PY": sys.executable, "MOCK_PREPARE_RC": str(prepare_rc),
-             "MOCK_DETECTOR_RC": str(detector_rc)},
+        env=env,
         text=True, capture_output=True, timeout=30,
     )
     assert result.returncode == expected_rc, result.stdout + result.stderr
+    prepare_calls = [line for line in (project / "timeout-arguments.txt").read_text().splitlines()
+                     if "src.engine.automation.next_preopen_readiness" in line]
+    assert len(prepare_calls) == 1
+    assert prepare_calls[0].startswith("--kill-after=10s " + (prepare_budget or "600") + "s ")
     assert (project / "order.txt").read_text().splitlines() == [
         "controller", "cleanup", "prepare", "detector",
     ]

@@ -26,6 +26,7 @@ from src.engine.risk.market_weakness_threshold_policy import observation_thresho
 
 KST = ZoneInfo("Asia/Seoul")
 VERSION = "main_market_weakness_research_v1"
+REPAIR_VERSION = "source_binding_confirmed_cohort_v2"
 LABEL = dict(
     target_net_pct=0.4, stop_net_pct=-3.0, cost_rate=0.0023, horizon_seconds=1800
 )
@@ -38,6 +39,10 @@ AUTH = dict(
 )
 FEATURES = ("volume_ratio_60s", "drawdown_5m_pct")
 DELAYS = (0, 60, 180)
+
+
+class ResearchBudgetExceeded(RuntimeError):
+    pass
 
 
 def digest(value):
@@ -77,6 +82,23 @@ def timestamp(value):
 
 
 def scope_key(row):
+    contract = row.get("cohort_contract")
+    if isinstance(contract, dict) and contract.get("verified") is True:
+        return digest(
+            dict(
+                contract=contract,
+                symbol=row.get("symbol"),
+                listing_market=row.get("listing_market"),
+                session=row.get("session"),
+                route=row.get("route"),
+                policy_scope=row.get("policy_scope"),
+                decision_origin=row.get("decision_origin"),
+                classification_kind=row.get("classification_kind"),
+                outcome_kind=row.get("outcome_kind"),
+                label_contract=LABEL,
+                auxiliary_binding=row.get("auxiliary_binding"),
+            )
+        )
     return digest(
         {
             k: row.get(k)
@@ -95,6 +117,274 @@ def scope_key(row):
             )
         }
     )
+
+
+def native_digest(value):
+    """The capture writer hashes sanitized UTF-8 JSON, not research ASCII JSON."""
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+
+
+def project_native_observation(raw, source_date):
+    if raw.get("schema") != "mechanistic_entry_observation_v1":
+        return None, "not_native_observation"
+    body = {k: v for k, v in raw.items() if k != "machine_observation_sha256"}
+    context, source, receipt = (
+        raw.get("label_context") or {},
+        raw.get("source") or {},
+        raw.get("runtime_consumption") or {},
+    )
+    native = receipt.get("continuous_reversal") or {}
+    assessment, payload = (
+        source.get("assessment") or {},
+        source.get("exact_payload") or {},
+    )
+    captured = timestamp(raw.get("captured_at"))
+    symbol, attempt = context.get("stock_code"), context.get("evaluation_attempt_id")
+    if not (
+        captured
+        and captured.date().isoformat() == source_date
+        and symbol
+        and attempt
+        and type(raw.get("redacted")) is bool
+        and raw.get("provider_called") is False
+        and all(raw.get(k) == v for k, v in AUTH.items() if k != "decision_authority")
+        and raw.get("machine_observation_sha256") == native_digest(body)
+        and payload.get("stock_code") == symbol
+        and payload.get("evaluation_attempt_id") == attempt
+        and native.get("exact_payload_sha256") == native_digest(payload)
+        and native.get("assessment_sha256") == native_digest(assessment)
+        and native.get("bundle_sha256")
+        == receipt.get("bundle_sha256")
+        == raw.get("bundle_sha256")
+        and native.get("pid") == receipt.get("pid")
+        and native.get("process_start_ticks") == receipt.get("process_start_ticks")
+        and native.get("captured_at") == raw.get("captured_at")
+    ):
+        return None, "native_observation_binding_invalid"
+    # Capture-wide redaction includes nonessential signal_token. Only consume
+    # independently hashed fields needed for this projection; never reconstruct
+    # a hidden field or treat the sanitized request as an eligible AI input.
+    required_text = [
+        symbol,
+        attempt,
+        native.get("bundle_sha256"),
+        native.get("process_start_ticks"),
+        assessment.get("action"),
+    ]
+    if any(not isinstance(v, str) or not v or "[REDACTED" in v for v in required_text):
+        return None, "native_required_field_redacted_or_missing"
+    if type(native.get("pid")) is not int or native["pid"] <= 0:
+        return None, "native_pid_invalid"
+    event = assessment.get("event")
+    if not event:
+        if (
+            assessment.get("action") == "BLOCK"
+            and assessment.get("reason") == "no_current_operating_signal"
+        ):
+            event = None
+        else:
+            return None, "native_event_missing"
+    else:
+        at, epoch = timestamp(event.get("at")), number(event.get("epoch"))
+        clock, observed = number(native.get("snapshot_read_at")), number(
+            payload.get("entry_machine_input_as_of")
+        )
+        event_text = [event.get(k) for k in ("event_id", "symbol", "session", "venue")]
+        if any(not isinstance(v, str) or not v or "[REDACTED" in v for v in event_text):
+            return None, "native_event_required_field_redacted_or_missing"
+        if not (
+            at
+            and at.date().isoformat() == source_date
+            and epoch is not None
+            and abs(at.timestamp() - epoch) < 0.001
+            and event.get("symbol") == symbol
+            and native.get("event_id")
+            == assessment.get("event_id")
+            == event.get("event_id")
+            and clock is not None
+            and observed is not None
+            and observed <= clock <= captured.timestamp()
+            and 0 <= clock - epoch <= 5
+            and number(event.get("entry_ask")) is not None
+            and number(event.get("entry_ask")) > 0
+        ):
+            return None, "native_event_scope_or_clock_invalid"
+        event = {
+            k: event.get(k)
+            for k in (
+                "at",
+                "epoch",
+                "symbol",
+                "event_id",
+                "session",
+                "venue",
+                "source_item",
+                "native_epoch",
+                "native_sequence",
+                "entry_ask",
+                "canonical_opportunity_id",
+                *FEATURES,
+            )
+        }
+    native = {
+        k: native.get(k)
+        for k in (
+            "bundle_sha256",
+            "pid",
+            "process_start_ticks",
+            "captured_at",
+            "event_id",
+            "exact_payload_sha256",
+            "assessment_sha256",
+            "machine_component_sha256",
+            "auxiliary_component_sha256",
+            "family_sha256",
+            "snapshot_read_at",
+        )
+    }
+    request_binding = {
+        k: digest((source.get("auxiliary_request") or {}).get(k))
+        for k in ("input", "prompt", "response_schema")
+    }
+    request_verified = all(
+        request_binding[k] == receipt.get("continuous_reversal", {}).get(v)
+        for k, v in (
+            ("input", "input_sha256"),
+            ("prompt", "prompt_sha256"),
+            ("response_schema", "response_schema_sha256"),
+        )
+    )
+    return (
+        dict(
+            observation_sha256=raw["machine_observation_sha256"],
+            native_receipt=native,
+            symbol=symbol,
+            evaluation_attempt_id=attempt,
+            captured_at=raw["captured_at"],
+            event=event,
+            action=assessment.get("action"),
+            canonical_opportunity_id=assessment.get("opportunity_key")
+            or assessment.get("canonical_opportunity_id")
+            or (event or {}).get("canonical_opportunity_id"),
+            cell_key=assessment.get("cell_key"),
+            evaluation_role=raw.get("evaluation_role"),
+            request_binding=request_binding,
+            request_binding_verified=request_verified,
+        ),
+        None,
+    )
+
+
+def bind_native(row, observation):
+    expected = row.get("native_receipt") or {}
+    native = observation["native_receipt"]
+    fields = (
+        "bundle_sha256",
+        "pid",
+        "process_start_ticks",
+        "captured_at",
+        "event_id",
+        "exact_payload_sha256",
+        "assessment_sha256",
+    )
+    decision = timestamp(row.get("decision_ts"))
+    if (
+        row.get("evaluation_attempt_id") != observation["evaluation_attempt_id"]
+        or row.get("symbol") != observation["symbol"]
+        or not decision
+        or timestamp(observation["captured_at"]) > decision
+        or any(
+            (expected.get(k) is None and k != "event_id")
+            or expected.get(k) != native.get(k)
+            for k in fields
+        )
+        or any(
+            expected.get(k) != native.get(k)
+            for k in (
+                "machine_component_sha256",
+                "auxiliary_component_sha256",
+                "family_sha256",
+                "snapshot_read_at",
+            )
+        )
+        or (row.get("machine_hash") and row["machine_hash"] != native["bundle_sha256"])
+        or (
+            row.get("entry_ask") is not None
+            and observation.get("event")
+            and row["entry_ask"] != number(observation["event"].get("entry_ask"))
+        )
+        or (
+            row.get("machine_observation_sha256")
+            and row["machine_observation_sha256"] != observation["observation_sha256"]
+        )
+    ):
+        row["native_binding_status"] = "native_trace_binding_mismatch"
+        return
+    event = observation.get("event")
+    row.update(
+        native_binding_status="verified",
+        native_binding_ref=observation.get("source_ref"),
+        native_policy_ref=observation.get("policy_source_ref"),
+        machine_hash=native["bundle_sha256"],
+        captured_machine_action=observation["action"],
+    )
+    if row.get("machine_action") is None:
+        row["machine_action"] = observation["action"]
+    if observation.get("evaluation_role") == "probe_observation":
+        row["decision_origin"] = "probe_observation"
+    if not event:
+        row["outcome_reason"] = "no_current_operating_signal"
+        return
+    canonical = observation.get("canonical_opportunity_id")
+    row.update(
+        event_id=event["event_id"],
+        machine_confirmed_at=event["at"],
+        entry_ask=number(event["entry_ask"]),
+        features={k: number(event.get(k)) for k in FEATURES},
+        session=event.get("session"),
+        route=event.get("venue"),
+        source_item=event.get("source_item"),
+        native_epoch=event.get("native_epoch"),
+        native_sequence=event.get("native_sequence"),
+    )
+    if canonical:
+        row.update(
+            opportunity_id=canonical,
+            canonical_alias=event.get("canonical_opportunity_id") or canonical,
+            identity_grade="canonical",
+        )
+    for key in (
+        "cohort_contract",
+        "scope_parent_machine_payload_sha256",
+        "policy_scope",
+        "machine_axes",
+        "auxiliary_binding",
+    ):
+        if key in observation:
+            row[key] = observation[key]
+    binding = observation.get("auxiliary_binding")
+    if binding:
+        row["original_auxiliary_component_sha256"] = row.get("auxiliary_hash")
+        if (
+            observation.get("request_binding_verified") is True
+            and row.get("auxiliary_hash") == native.get("auxiliary_component_sha256")
+            and (
+                row.get("auxiliary_verdict") in {"not_called", "not_evaluated"}
+                or row.get("auxiliary_version") == binding.get("prompt_version")
+            )
+        ):
+            row["auxiliary_hash"] = digest(binding)
+            row["auxiliary_binding_status"] = "verified"
+        else:
+            row["auxiliary_binding_status"] = "request_or_component_binding_unverified"
 
 
 def project_trace(raw, source_date, listing_market=None):
@@ -172,6 +462,8 @@ def project_trace(raw, source_date, listing_market=None):
         machine_action=raw.get("entry_mechanistic_action"),
         auxiliary_verdict=verdict,
         event_id=native.get("event_id") or assessment.get("event_id"),
+        native_receipt=native,
+        machine_observation_sha256=raw.get("machine_observation_sha256"),
         entry_ask=ask,
         features=features,
         decision_origin="natural_decision",
@@ -226,6 +518,9 @@ def project_replay(record, event, source_date, parent_hash, listing_market=None)
         machine_action="ENTER_NOW",
         auxiliary_verdict="not_called",
         event_id=event.get("event_id"),
+        source_item=event.get("source_item"),
+        native_epoch=event.get("native_epoch"),
+        native_sequence=event.get("native_sequence"),
         entry_ask=ask,
         features={k: number(event.get(k)) for k in FEATURES},
         decision_origin="confirmation_replay",
@@ -275,9 +570,13 @@ class ObservationIndex:
         return (entry[2] for entry in self.entries[low:high])
 
 
-def join_snapshot(row, observations, *, delay=0):
+def join_snapshot(row, observations, *, delay=0, basis="raw_market_snapshot"):
     """No future source or availability. Listing market and execution are separate."""
-    at = timestamp(row.get("auxiliary_completed_at") or row.get("decision_ts"))
+    at = timestamp(
+        row.get("classification_at")
+        or row.get("auxiliary_completed_at")
+        or row.get("decision_ts")
+    )
     market = row.get("listing_market")
     if not (
         at
@@ -321,6 +620,20 @@ def join_snapshot(row, observations, *, delay=0):
     )
     if raw == "UNKNOWN":
         state = "UNKNOWN"
+    latch_basis = None
+    if basis == "confirmed_latch":
+        observed = o.get("observed_latch_active", {})
+        if market in observed and o.get("availability_receipt_verified"):
+            active, latch_basis = observed[market], "observed_confirmed_latch"
+        else:
+            active = (o.get("reconstructed_active") or {}).get(market)
+            latch_basis = "reconstructed_confirmed_latch"
+        if raw == "UNKNOWN" or o.get("reconstructed_health") is False or active is None:
+            state = "UNKNOWN"
+        elif active is True:
+            state = "WEAKNESS"
+        else:
+            state = "RECOVERY" if market in recovered else "NEAR_WEAKNESS_BOUNDARY"
     grade = (
         "C"
         if row.get("time_precision") == "minute"
@@ -346,7 +659,8 @@ def join_snapshot(row, observations, *, delay=0):
         or o["observation_id"],
         reconstructed_active=o.get("reconstructed_active", {}).get(market),
         policy_hash=(o.get("hysteresis_policy") or {}).get("policy_hash"),
-        classification_kind="raw_market_snapshot",
+        classification_kind=basis,
+        latch_basis=latch_basis,
         legacy_research_metadata=(o.get("response_research_contract") or {}).get(
             "status"
         )
@@ -356,7 +670,7 @@ def join_snapshot(row, observations, *, delay=0):
 
 def reconstruct_latches(observations):
     """Research reconstruction only; source policy changes break the lineage."""
-    states, previous_key, previous_at, episode = {}, None, None, {}
+    states, previous_key, previous_at, episode, seen = {}, None, None, {}, set()
     result = []
     for original in sorted(
         observations,
@@ -366,6 +680,9 @@ def reconstruct_latches(observations):
         at = timestamp(o.get("as_of"))
         if not at or market_weakness_observation_contract_errors(o):
             continue
+        if o["observation_id"] in seen:
+            continue
+        seen.add(o["observation_id"])
         activation, release, spacing = observation_thresholds(o)
         key = (
             o["target_date"],
@@ -373,8 +690,12 @@ def reconstruct_latches(observations):
             activation,
             release,
         )
-        if key != previous_key:
+        if key != previous_key or (
+            previous_at and (at - previous_at).total_seconds() > 300
+        ):
             states, previous_at, episode = {}, None, {}
+        if o.get("raw_state") == "UNKNOWN":
+            states, episode = {}, {}
         if previous_at is None or (at - previous_at).total_seconds() >= spacing:
             for m in ("KOSPI", "KOSDAQ"):
                 classification = (
@@ -391,16 +712,24 @@ def reconstruct_latches(observations):
                     )
                 )
                 before = states.get(m, {})
+                if classification == "unknown":
+                    # Missing acceptance history cannot prove continuity of a live latch.
+                    states[m] = {}
+                    episode.pop(m, None)
+                    continue
                 states[m] = advance_market_latch(
                     before, classification, activation=activation, release=release
                 )
-                if classification == "weak" and before.get("last_class") != "weak":
+                if states[m].get("active") and not before.get("active"):
                     episode[m] = digest([key, m, o["observation_id"]])
+                elif not states[m].get("active"):
+                    episode.pop(m, None)
             previous_at = at
         o["reconstructed_active"] = {
             m: states.get(m, {}).get("active", False) for m in ("KOSPI", "KOSDAQ")
         }
         o["reconstructed_episode_ids"] = dict(episode)
+        o["reconstructed_health"] = o.get("raw_state") != "UNKNOWN"
         result.append(o)
         previous_key = key
     return result
@@ -409,8 +738,15 @@ def reconstruct_latches(observations):
 def attach_joins(row, observations):
     row = dict(
         row,
-        joins={str(d): join_snapshot(row, observations, delay=d) for d in DELAYS},
-        classification_kind="raw_market_snapshot",
+        joins={
+            str(d): join_snapshot(row, observations, delay=d, basis="confirmed_latch")
+            for d in DELAYS
+        },
+        raw_diagnostic_join=join_snapshot(row, observations),
+        classification_kind="confirmed_latch",
+    )
+    row["original_scope_key"] = scope_key(
+        dict(row, classification_kind="raw_market_snapshot", cohort_contract=None)
     )
     row["scope_key"] = scope_key(row)
     return row
@@ -428,13 +764,91 @@ def quantile(histogram, fraction):
             return value
 
 
+def machine_capability(summary):
+    axes = [
+        a
+        for a in summary.get("machine_axes", [])
+        if a.get("verified") is True
+        and a.get("role") in {"baseline_prior", "bounded_tunable"}
+        and a.get("axis") in FEATURES
+        and a.get("operator") in {"lt", "le", "gt", "ge"}
+        and number(a.get("before")) is not None
+    ]
+    if not axes:
+        return "role_unverified"
+    filters = [a for a in axes if not a.get("changes_confirmation")]
+    if not filters:
+        return "confirmation_replay_unavailable"
+    hist = summary.get("feature_histograms", {})
+    features_available = False
+    for axis in filters:
+        for q in (0.25, 0.5, 0.75):
+            after = quantile(hist.get(axis["axis"], {}), q)
+            index = quantile(hist.get("index_change_pct", {}), q)
+            if after is None or index is None:
+                continue
+            features_available = True
+            before = number(axis["before"])
+            if index <= 0 and (
+                (axis["operator"] in {"lt", "le"} and after < before)
+                or (axis["operator"] in {"gt", "ge"} and after > before)
+            ):
+                return "supported"
+    return "no_tightening_cutpoint" if features_available else "feature_missing"
+
+
 def freeze_candidates(previous_daily, source_generation):
     """Use outcome-independent previous sealed feature histograms; no cross product."""
     scopes = {}
     for sid, summary in previous_daily.get("scopes", {}).items():
         candidates = []
         hist = summary.get("feature_histograms", {})
-        for feature in FEATURES:
+        axes = summary.get("machine_axes") or []
+        machine_candidates = []
+        for axis in axes:
+            if (
+                axis.get("role") not in {"baseline_prior", "bounded_tunable"}
+                or axis.get("axis") not in FEATURES
+                or axis.get("verified") is not True
+            ):
+                continue
+            if axis.get("changes_confirmation"):
+                continue  # Full FSM reconstruction cannot be inferred from confirmation rows.
+            before = number(axis.get("before"))
+            if before is None or axis.get("operator") not in {"lt", "le", "gt", "ge"}:
+                continue
+            for q in (0.25, 0.5, 0.75):
+                after = quantile(hist.get(axis["axis"], {}), q)
+                x = quantile(hist.get("index_change_pct", {}), q)
+                if after is None or x is None or x > 0 or after == before:
+                    continue
+                # A confirmation filter supports tightening, never invented new signals.
+                if (axis["operator"] in {"lt", "le"} and after > before) or (
+                    axis["operator"] in {"gt", "ge"} and after < before
+                ):
+                    continue
+                d = dict(
+                    kind="machine_confirmation_filter_cf",
+                    axis=axis["axis"],
+                    before=before,
+                    after=after,
+                    unit=axis["unit"],
+                    operator=axis["operator"],
+                    role=axis["role"],
+                    axis_contract=axis,
+                    weakness_index_max_pct=x,
+                    weakness_basis="confirmed_latch",
+                    parent_hash=summary["scope"].get("machine_hash"),
+                    policy_scope=summary.get("policy_scope"),
+                    scope_parent_machine_payload_sha256=summary.get(
+                        "scope_parent_machine_payload_sha256"
+                    ),
+                )
+                d["cohort_contract"] = summary.get("cohort_contract")
+                machine_candidates.append(dict(candidate_id=digest(d), definition=d))
+        for feature in (
+            FEATURES if summary.get("scope", {}).get("auxiliary_hash") else ()
+        ):
             for q in (0.25, 0.5, 0.75):
                 x = quantile(hist.get("index_change_pct", {}), q)
                 y = quantile(hist.get(feature, {}), q)
@@ -442,6 +856,7 @@ def freeze_candidates(previous_daily, source_generation):
                     continue
                 definition = dict(
                     kind="post_auxiliary_withhold_cf",
+                    weakness_basis="confirmed_latch",
                     axis=feature,
                     weakness_index_max_pct=x,
                     feature_max_exclusive=y,
@@ -456,17 +871,29 @@ def freeze_candidates(previous_daily, source_generation):
                         "scope_parent_machine_payload_sha256"
                     ),
                     auxiliary_binding=summary.get("auxiliary_binding"),
+                    cohort_contract=summary.get("cohort_contract"),
                 )
                 if definition not in [c["definition"] for c in candidates]:
                     candidates.append(
                         dict(candidate_id=digest(definition), definition=definition)
                     )
+        # Reserve half the bounded grid for each supported kind.
+        candidates = (
+            machine_candidates[:3] + candidates[: (3 if machine_candidates else 6)]
+        )
         scopes[sid] = dict(
             scope=summary["scope"],
             candidates=candidates[:6],
             fixed_after_source_date=previous_daily["source_date"],
             seed_source_generation=source_generation,
-            machine_status="numeric_adjustment_unidentifiable",
+            machine_status=(
+                "supported"
+                if machine_candidates
+                else "numeric_adjustment_unidentifiable"
+            ),
+            machine_reason=(
+                machine_capability(summary) if not machine_candidates else None
+            ),
         )
     return seal(
         dict(
@@ -483,15 +910,65 @@ def selection(row, candidate, join):
     if join.get("grade") not in {"A", "B"} or row.get("identity_grade") != "canonical":
         return None
     d = candidate["definition"]
-    if d["kind"] != "post_auxiliary_withhold_cf":
+    kind = d["kind"]
+    if kind not in {
+        "post_auxiliary_withhold_cf",
+        "machine_confirmation_filter_cf",
+    }:
+        # There is no full FSM/confirmation/ask replay producer. A row-local
+        # verified boolean cannot establish replay lineage or new outcomes.
         return None
-    if row.get("auxiliary_verdict") != "PASS" or not row.get("auxiliary_hash"):
+    if kind == "post_auxiliary_withhold_cf" and (
+        row.get("auxiliary_verdict") != "PASS" or not row.get("auxiliary_hash")
+    ):
         return None
+    if (
+        kind == "post_auxiliary_withhold_cf"
+        and row.get("native_binding_status") == "verified"
+        and row.get("cohort_contract")
+        and row.get("auxiliary_binding_status") != "verified"
+    ):
+        return None
+    if (
+        d.get("weakness_basis") == "confirmed_latch"
+        and join.get("classification_kind") != "confirmed_latch"
+    ):
+        return None
+    if kind == "machine_confirmation_filter_cf":
+        contract = d.get("axis_contract") or {}
+        if (
+            row.get("machine_action") != "ENTER_NOW"
+            or contract.get("verified") is not True
+            or contract.get("role") not in {"baseline_prior", "bounded_tunable"}
+            or contract.get("axis") != d["axis"]
+        ):
+            return None
+    if join.get("state") != "WEAKNESS":
+        return True  # An inactive overlay does not require its feature.
     value, index = number(row.get("features", {}).get(d["axis"])), number(
         join.get("index_change_pct")
     )
     if value is None or index is None:
         return None
+    if kind == "machine_confirmation_filter_cf":
+        if index > d["weakness_index_max_pct"]:
+            return True
+        operator = d.get("operator")
+        after = number(d.get("after"))
+        contract = d.get("axis_contract") or {}
+        if (
+            after is None
+            or contract.get("verified") is not True
+            or contract.get("role") not in {"baseline_prior", "bounded_tunable"}
+            or contract.get("axis") != d["axis"]
+        ):
+            return None
+        return {
+            "lt": value < after,
+            "le": value <= after,
+            "gt": value > after,
+            "ge": value >= after,
+        }.get(operator)
     withhold = (
         join.get("state") == "WEAKNESS"
         and index <= d["weakness_index_max_pct"]
@@ -508,32 +985,45 @@ def metric(counts):
 
 
 def pair_delta(counts, *, worst_u=False):
-    selected, excluded = counts["selected"], counts["excluded"]
+    selected, excluded, added = (
+        counts["selected"],
+        counts["excluded"],
+        counts.get("added", {}),
+    )
     baseline = Counter(selected) + Counter(excluded)
+    candidate = Counter(selected) + Counter(added)
     if worst_u:
         base_n = sum(baseline.get(k, 0) for k in ("W", "F", "U"))
-        selected_n = sum(selected.get(k, 0) for k in ("W", "F", "U"))
-        b = (baseline.get("W", 0) + excluded.get("U", 0)) / base_n if base_n else None
-        c = selected.get("W", 0) / selected_n if selected_n else None
+        selected_n = sum(candidate.get(k, 0) for k in ("W", "F", "U"))
+        if not base_n or not selected_n:
+            return None
+        return min(
+            (candidate.get("W", 0) + x) / selected_n
+            - (baseline.get("W", 0) + excluded.get("U", 0) + x) / base_n
+            for x in (0, selected.get("U", 0))
+        )
     else:
-        b, c = metric(baseline)["raw_win_rate"], metric(selected)["raw_win_rate"]
+        b, c = metric(baseline)["raw_win_rate"], metric(candidate)["raw_win_rate"]
     return c - b if b is not None and c is not None else None
 
 
 def subtract_pairs(total, part):
     return {
         field: {
-            k: total[field].get(k, 0) - part[field].get(k, 0) for k in ("W", "F", "U")
+            k: total.get(field, {}).get(k, 0) - part.get(field, {}).get(k, 0)
+            for k in ("W", "F", "U")
         }
-        for field in ("selected", "excluded")
+        for field in ("selected", "excluded", "added", "neither")
     }
 
 
 def merge_pairs(pairs):
-    result = dict(selected=Counter(), excluded=Counter())
+    result = dict(
+        selected=Counter(), excluded=Counter(), added=Counter(), neither=Counter()
+    )
     for p in pairs:
         for field in result:
-            result[field].update(p[field])
+            result[field].update(p.get(field, {}))
     return result
 
 
@@ -547,13 +1037,25 @@ class Aggregator:
             lambda: defaultdict(
                 lambda: defaultdict(
                     lambda: defaultdict(
-                        lambda: dict(selected=Counter(), excluded=Counter())
+                        lambda: dict(
+                            selected=Counter(),
+                            excluded=Counter(),
+                            added=Counter(),
+                            neither=Counter(),
+                        )
                     )
                 )
             )
         )
         self.historical_pairs = defaultdict(
-            lambda: defaultdict(lambda: dict(selected=Counter(), excluded=Counter()))
+            lambda: defaultdict(
+                lambda: dict(
+                    selected=Counter(),
+                    excluded=Counter(),
+                    added=Counter(),
+                    neither=Counter(),
+                )
+            )
         )
         self.conflicts = set()
         self.conflict_scopes = set()
@@ -656,6 +1158,8 @@ class Aggregator:
                     feature_histograms=defaultdict(Counter),
                     policy_scope=source.get("policy_scope"),
                     auxiliary_binding=source.get("auxiliary_binding"),
+                    cohort_contract=source.get("cohort_contract"),
+                    machine_axes=source.get("machine_axes", []),
                     scope_parent_machine_payload_sha256=source.get(
                         "scope_parent_machine_payload_sha256"
                     ),
@@ -666,11 +1170,11 @@ class Aggregator:
         for sid, cid, pair in aggregate.get("historical_pairs", []):
             target = self.historical_pairs[sid][cid]
             for k in target:
-                target[k].update(pair[k])
+                target[k].update(pair.get(k, {}))
         for sid, cid, delay, cluster, pair in aggregate.get("pairs", []):
             target = self.pairs[sid][cid][delay][tuple(cluster)]
             for k in target:
-                target[k].update(pair[k])
+                target[k].update(pair.get(k, {}))
 
     def export(self):
         self.finalize()
@@ -715,6 +1219,8 @@ class Aggregator:
                 feature_histograms=defaultdict(Counter),
                 policy_scope=row.get("policy_scope"),
                 auxiliary_binding=row.get("auxiliary_binding"),
+                cohort_contract=row.get("cohort_contract"),
+                machine_axes=row.get("machine_axes", []),
                 scope_parent_machine_payload_sha256=row.get(
                     "scope_parent_machine_payload_sha256"
                 ),
@@ -722,6 +1228,8 @@ class Aggregator:
         summary = self.scopes[sid]
         join = row["joins"]["0"]
         summary["counts"]["rows"] += 1
+        if row.get("native_binding_status"):
+            summary["counts"]["native_binding_" + row["native_binding_status"]] += 1
         summary["counts"]["join_" + join["grade"]] += 1
         summary["counts"]["identity_" + str(row.get("identity_grade"))] += 1
         if join["grade"] == "U":
@@ -752,38 +1260,61 @@ class Aggregator:
         candidates = (
             self.candidates.get("scopes", {}).get(sid, {}).get("candidates", [])
         )
-        if not candidates or row.get("auxiliary_verdict") != "PASS":
+        if not candidates:
             return
-        decisions = {
-            c["candidate_id"]: {
-                str(delay): selection(row, c, row["joins"][str(delay)])
-                for delay in DELAYS
+        groups = defaultdict(list)
+        for c in candidates:
+            groups[c["definition"]["kind"]].append(c)
+        for kind, group in groups.items():
+            if (
+                kind == "post_auxiliary_withhold_cf"
+                and row.get("auxiliary_verdict") != "PASS"
+            ):
+                continue
+            decisions = {
+                c["candidate_id"]: {
+                    str(delay): selection(row, c, row["joins"][str(delay)])
+                    for delay in DELAYS
+                }
+                for c in group
             }
-            for c in candidates
-        }
-        if any(v is None for d in decisions.values() for v in d.values()):
-            summary["counts"]["candidate_common_range_gap"] += 1
-            return
-        summary["counts"]["candidate_common_range"] += 1
-        for c in candidates:
-            selected = decisions[c["candidate_id"]]["0"]
-            self.historical_pairs[sid][c["candidate_id"]][
-                "selected" if selected else "excluded"
-            ][row["outcome"]] += 1
-        if row["source_date"] <= self.candidates.get("scopes", {}).get(sid, {}).get(
-            "fixed_after_source_date", "9999"
-        ):
-            return
-        summary["counts"]["prospective_common_range"] += 1
-        for c in candidates:
-            for delay in DELAYS:
-                selected = decisions[c["candidate_id"]][str(delay)]
-                cluster = (
-                    row["source_date"],
-                    row["joins"][str(delay)].get("episode_id"),
-                )
-                target = self.pairs[sid][c["candidate_id"]][str(delay)][cluster]
-                target["selected" if selected else "excluded"][row["outcome"]] += 1
+            if any(v is None for values in decisions.values() for v in values.values()):
+                summary["counts"]["candidate_common_range_gap"] += 1
+                continue
+            # Both supported kinds can only withhold original opportunities.
+            baseline = True
+            summary["counts"]["candidate_common_range"] += 1
+            prospective = row["source_date"] > self.candidates.get("scopes", {}).get(
+                sid, {}
+            ).get("fixed_after_source_date", "9999")
+            if prospective:
+                summary["counts"]["prospective_common_range"] += 1
+            for c in group:
+                for delay in DELAYS:
+                    selected = decisions[c["candidate_id"]][str(delay)]
+                    field = (
+                        "selected"
+                        if baseline and selected
+                        else (
+                            "excluded"
+                            if baseline
+                            else "added" if selected else "neither"
+                        )
+                    )
+                    if delay == 0:
+                        self.historical_pairs[sid][c["candidate_id"]][field][
+                            row["outcome"]
+                        ] += 1
+                    if prospective:
+                        join = row["joins"][str(delay)]
+                        episode = (
+                            join.get("episode_id")
+                            if join.get("state") == "WEAKNESS"
+                            else "nonweak:" + row["source_date"]
+                        )
+                        self.pairs[sid][c["candidate_id"]][str(delay)][
+                            (row["source_date"], episode)
+                        ][field][row["outcome"]] += 1
 
     def diagnostics(self):
         result = {}
@@ -839,12 +1370,20 @@ class Aggregator:
             )
         )
 
-    def comparison(self, generation):
+    def comparison(self, generation, *, checkpoint=None, gate=lambda: True):
         self.finalize()
         results = []
         for sid, declared in self.candidates.get("scopes", {}).items():
             local = []
             for c in declared["candidates"]:
+                if not gate():
+                    raise ResearchBudgetExceeded("comparison_wall_budget")
+                cached = (
+                    checkpoint(sid, c["candidate_id"], None) if checkpoint else None
+                )
+                if cached:
+                    local.append(dict(cached, generation=generation))
+                    continue
                 clusters = self.pairs[sid][c["candidate_id"]]["0"]
                 totals = merge_pairs(clusters.values())
                 baseline = Counter(totals["selected"]) + Counter(totals["excluded"])
@@ -861,9 +1400,13 @@ class Aggregator:
                 if (
                     len(dates) > 1
                     and len(cluster_deltas - {None}) >= 2
-                    and sum(totals["excluded"].values())
+                    and (
+                        sum(totals["excluded"].values()) + sum(totals["added"].values())
+                    )
                 ):
-                    for _ in range(1000):
+                    for draw_index in range(1000):
+                        if draw_index % 25 == 0 and not gate():
+                            raise ResearchBudgetExceeded("comparison_wall_budget")
                         value = pair_delta(
                             merge_pairs(day_pairs[rng.choice(dates)] for _ in dates)
                         )
@@ -883,7 +1426,9 @@ class Aggregator:
                     for d in (60, 180)
                 }
                 u_delta = pair_delta(totals, worst_u=True)
-                changes = sum(totals["excluded"].values())
+                changes = sum(totals["excluded"].values()) + sum(
+                    totals["added"].values()
+                )
                 cluster_deltas = {pair_delta(p) for p in clusters.values()}
                 status = "hold_observation"
                 if sid in self.conflict_scopes:
@@ -932,16 +1477,38 @@ class Aggregator:
                             )
                         ),
                         full_cumulative_candidate=metric(
-                            self.historical_pairs[sid][c["candidate_id"]]["selected"]
+                            Counter(
+                                self.historical_pairs[sid][c["candidate_id"]][
+                                    "selected"
+                                ]
+                            )
+                            + Counter(
+                                self.historical_pairs[sid][c["candidate_id"]]["added"]
+                            )
                         ),
-                        candidate=metric(totals["selected"]),
+                        candidate=metric(
+                            Counter(totals["selected"]) + Counter(totals["added"])
+                        ),
                         delta_raw_win_rate=delta,
-                        excluded_opportunities=changes,
-                        added_opportunities=0,
+                        excluded_opportunities=sum(totals["excluded"].values()),
+                        added_opportunities=sum(totals["added"].values()),
+                        mask_counts={
+                            name: dict(totals[field])
+                            for name, field in (
+                                ("K", "selected"),
+                                ("R", "excluded"),
+                                ("A", "added"),
+                                ("N", "neither"),
+                            )
+                        },
                         missed_W=totals["excluded"].get("W", 0),
                         removed_F=totals["excluded"].get("F", 0),
                         source_dates=dates,
-                        episode_count=len(clusters),
+                        episode_count=sum(
+                            1
+                            for _, episode in clusters
+                            if episode and not episode.startswith("nonweak:")
+                        ),
                         bootstrap_iterations=1000,
                         bootstrap_valid_iterations=len(draws),
                         bootstrap_seed=seed,
@@ -957,13 +1524,24 @@ class Aggregator:
                         **AUTH,
                     )
                 )
-            eligible = [r for r in local if r["status"] == "eligible_advisory"]
-            winner = max(
-                eligible,
-                key=lambda r: (r["delta_raw_win_rate"], r["candidate_id"]),
-                default=None,
-            )
+                if checkpoint:
+                    checkpoint(sid, c["candidate_id"], local[-1])
+            winners = {}
+            for kind in {r["definition"]["kind"] for r in local}:
+                eligible = [
+                    r
+                    for r in local
+                    if r["status"] == "eligible_advisory"
+                    and r["definition"]["kind"] == kind
+                ]
+                winners[kind] = max(
+                    eligible,
+                    key=lambda r: (r["delta_raw_win_rate"], r["candidate_id"]),
+                    default=None,
+                )
             for r in local:
+                winner = winners[r["definition"]["kind"]]
+                r["winner_group"] = digest([sid, r["definition"]["kind"]])
                 r["scope_winner"] = bool(
                     winner and r["candidate_id"] == winner["candidate_id"]
                 )
@@ -980,6 +1558,30 @@ class Aggregator:
                 ),
                 comparisons=results,
                 candidate_count=len(results),
+                capability_by_scope={
+                    sid: dict(
+                        machine=(
+                            "supported"
+                            if any(
+                                r["scope_key"] == sid
+                                and r["definition"]["kind"]
+                                != "post_auxiliary_withhold_cf"
+                                for r in results
+                            )
+                            else machine_capability(s)
+                        ),
+                        post_auxiliary=(
+                            "auxiliary_not_observed"
+                            if not s["counts"].get("auxiliary_PASS")
+                            else (
+                                "join_or_feature_missing"
+                                if not s.get("feature_histograms")
+                                else "supported"
+                            )
+                        ),
+                    )
+                    for sid, s in self.scopes.items()
+                },
                 **AUTH,
             )
         )

@@ -270,6 +270,134 @@ def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
         handlers._reset_entry_capacity_receipts()
 
 
+@pytest.fixture
+def capacity_retry_lane(monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.engine.scalping.avg_down_replay_capture import GLOBALS
+    handlers._reset_entry_capacity_receipts()
+    clock, account, reads, events, logs, repeat_error = [1000.0], ['account-1'], [], [], [], [False]
+    monkeypatch.setattr(handlers.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(handlers.time, 'perf_counter', lambda: 100 + clock[0] - 1000)
+    monkeypatch.setattr(handlers, 'KIWOOM_TOKEN', 'fixture')
+    monkeypatch.setattr(handlers, '_entry_capacity_receipt_key', lambda c, p: (account[0], c, p))
+    monkeypatch.setattr(handlers, '_is_any_simulated_position', lambda *a: False)
+    monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_meta', lambda: {})
+    monkeypatch.setattr(handlers, '_log_entry_pipeline',
+        lambda *a, **kw: events.append(kw) or {'structured_append_succeeded': True})
+    monkeypatch.setattr(handlers, 'log_info', logs.append)
+    for name in GLOBALS:
+        monkeypatch.setattr(handlers, name, set() if name == 'ALERTED_STOCKS' else {})
+    def fetch(token, code, unit_price, **kwargs):
+        reads.append((code, unit_price, kwargs, kiwoom_utils._ENTRY_SOURCE_BUDGET.get()))
+        if len(reads) == 1 or repeat_error[0]:
+            return {'error': 'read_timeout'}
+        return {'return_code': 0, 'cash_orderable_contract_status': 'valid',
+            'capacity_observed_at': datetime.fromtimestamp(clock[0], timezone.utc).isoformat(),
+            'capacity_source_sha256': 'a' * 64, 'requested_stock_code': code,
+            'requested_unit_price': unit_price}
+    monkeypatch.setattr(kiwoom_utils, 'get_orderable_by_margin_kt00011', fetch)
+    stock = dict(id=1, code='005930', strategy='SCALPING', status='WATCHING', buy_qty=0, broker_route='NXT')
+    context = _capacity_context(stock, '005930')
+    def observe(ctx=context, action='ENTER_NOW'):
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        with kiwoom_utils.entry_source_budget(EntryDeadline.create(
+                caller_epoch=context.deadline_epoch, caller_perf=context.deadline_perf)):
+            return handlers._observe_entry_economics_before_ai(stock, '005930', {'curr': 10000},
+                exact_payload={'current': {'price': 10020}, 'broker_route': 'NXT',
+                               'session_bucket': 'NXT_PREMARKET'},
+                assessment={'action': action}, capture={'evaluation_attempt_id': 'machine-attempt',
+                    'effective_venue': 'NXT', 'session_bucket': 'NXT_PREMARKET'},
+                bundle_sha256='a' * 64, evaluation_context=ctx)
+    try:
+        yield SimpleNamespace(**locals())
+    finally:
+        handlers._reset_entry_capacity_receipts()
+
+
+@pytest.mark.parametrize('retry_outcome', ['ready', 'source_gap'])
+def test_failed_observer_capacity_retries_after_suppression_with_original_context(capacity_retry_lane, retry_outcome):
+    import json
+    lane = capacity_retry_lane
+    lane.repeat_error[0] = retry_outcome == 'source_gap'
+    result = lane.observe()
+    assert result['entry_economic_capacity_preparation_requested'] is True
+    assert result['entry_economic_source_blocker'] == 'exact_broker_capacity_missing'
+    assert len(lane.reads) == 1 and len(handlers._ENTRY_CAPACITY_PENDING) == 1
+    pending = next(iter(handlers._ENTRY_CAPACITY_PENDING.values()))
+    assert pending[:3] == ('005930', 10020, lane.context.deadline_epoch)
+    assert pending[3] is lane.context
+    for elapsed in (.1, .2, .49):
+        lane.clock[0] = 1000 + elapsed
+        assert handlers.prepare_pending_entry_capacity()['reason'] == 'capacity_source_retry_deferred'
+        assert len(handlers._ENTRY_CAPACITY_PENDING) == 1 and len(lane.reads) == 1
+    lane.clock[0] = 1000.5
+    assert handlers.prepare_pending_entry_capacity()['status'] == retry_outcome
+    assert len(lane.reads) == 2 and lane.reads[-1][:2] == ('005930', 10020)
+    assert lane.reads[-1][3].epoch == lane.context.deadline_epoch
+    assert lane.reads[-1][3].perf == lane.context.deadline_perf
+    assert handlers.prepare_pending_entry_capacity() == {'status': 'idle'}
+    assert len(lane.events) == 1  # The frozen failure is not backfilled.
+    assert result['entry_economic_source_status'] == 'source_gap'
+    retry = json.loads(next(row for row in reversed(lane.logs)
+        if row.startswith('[ENTRY_CAPACITY_READ] ')).split('] ', 1)[1])
+    assert retry['correlation_id'] == lane.context.request_id
+    assert (retry['broker_route'], retry['effective_venue'], retry['session_bucket']) == (
+        'NXT', 'NXT', 'NXT_PREMARKET')
+
+
+@pytest.mark.parametrize('invalid', ['missing', 'symbol', 'state', 'expired', 'BLOCK', 'RECHECK'])
+def test_observer_cannot_invent_or_rebind_capacity_context(capacity_retry_lane, invalid):
+    from dataclasses import replace
+    lane = capacity_retry_lane
+    context, action = lane.context, 'ENTER_NOW'
+    if invalid == 'missing':
+        context = None
+    elif invalid == 'symbol':
+        context = _capacity_context(lane.stock, '034020')
+    elif invalid == 'state':
+        context = replace(context, state_version='obsolete')
+    elif invalid == 'expired':
+        context = replace(context, deadline_perf=1)
+    else:
+        action = invalid
+    result = lane.observe(context, action)
+    assert result['entry_economic_source_blocker'] == 'exact_broker_capacity_missing'
+    assert not result.get('entry_economic_capacity_preparation_requested')
+    assert not handlers._ENTRY_CAPACITY_PENDING
+
+
+@pytest.mark.parametrize('changed', ['epoch_deadline', 'perf_deadline', 'account', 'stock'])
+def test_queued_capacity_still_checks_original_deadline_and_scope(capacity_retry_lane, monkeypatch, changed):
+    from src.engine.scalping import scanner_async_eval as A
+    from types import SimpleNamespace
+    lane = capacity_retry_lane
+    assert lane.observe()['entry_economic_capacity_preparation_requested']
+    lane.clock[0] = 1000.5
+    if changed == 'epoch_deadline':
+        lane.clock[0] = lane.context.deadline_epoch + .001
+    elif changed == 'perf_deadline':
+        monkeypatch.setattr(A, 'time', SimpleNamespace(time=lambda: lane.clock[0],
+            perf_counter=lambda: lane.context.deadline_perf + .001))
+    elif changed == 'account':
+        lane.account[0] = 'account-2'
+    else:
+        next(iter(handlers._ENTRY_CAPACITY_PENDING.values()))[4]['buy_qty'] = 1
+    assert handlers.prepare_pending_entry_capacity()['reason'] == 'expired_or_changed_scope'
+    assert len(lane.reads) == 1 and not handlers._ENTRY_CAPACITY_PENDING
+
+
+def test_cooling_capacity_does_not_starve_another_symbol(capacity_retry_lane):
+    lane = capacity_retry_lane
+    assert lane.observe()['entry_economic_capacity_preparation_requested']
+    other = dict(lane.stock, code='034020')
+    context = _capacity_context(other, '034020')
+    assert handlers._request_entry_capacity_preparation(other, '034020', {'curr': 50000}, context=context)
+    assert handlers.prepare_pending_entry_capacity()['status'] == 'ready'
+    assert lane.reads[-1][:2] == ('034020', 50000)
+    assert len(handlers._ENTRY_CAPACITY_PENDING) == 1
+
+
 def test_pending_preparation_replaces_obsolete_price_even_at_queue_capacity(monkeypatch):
     handlers._reset_entry_capacity_receipts()
     monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)

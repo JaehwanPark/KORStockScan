@@ -22,7 +22,7 @@ _NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare',
           'preparation_queue', 'preparation_service', 'source_prepare', 'capacity_prepare',
           'provider_key_wait', 'provider_transport', 'response_validate', 'main_commit', 'submit_guard',
           'capture_append', 'provider_reserve', 'order_acknowledgement', 'pipeline_source_replay',
-          'observation_queue_wait')
+          'observation_queue_wait', 'coordinator_ready_to_main_guard')
 _NAMES += ('entry_refresh', 'entry_evaluation', 'entry_policy', 'entry_machine_assess',
            'entry_machine_capture', 'entry_economics', 'entry_wire', 'entry_native_check',
            'entry_native_load', 'entry_native_claim', 'entry_native_auxiliary',
@@ -30,6 +30,10 @@ _NAMES += ('entry_refresh', 'entry_evaluation', 'entry_policy', 'entry_machine_a
            'entry_outcome_append', 'entry_error_processing')
 _ENTRY_TIMINGS = ContextVar('entry_local_stage_timings', default=None)
 _NATIVE_VISIT_HINTS = OrderedDict()
+_NATIVE_VISIT_TOKENS = {}
+_NATIVE_HINT_SEQUENCE = 0
+_MAIN_PHASE = {'name': 'not_observed', 'epoch': None, 'perf': None, 'code': None}
+_MAIN_PHASE_HISTORY = deque(maxlen=256)
 _HTTP_SETTLEMENTS = deque(maxlen=128)
 _ENTRY_TIMING_GAPS = 0
 
@@ -40,12 +44,15 @@ def record_entry_gap():
         _ENTRY_TIMING_GAPS += 1
 
 
-def record_http_settlement(request_id, symbol, clocks, *, cancelled):
+def record_http_settlement(request_id, symbol, clocks, *, cancelled, transport_facts=None,
+                           terminal=None):
     """Late SDK facts reach the existing diagnostics, never a result inbox."""
     with _LOCK:
         _HTTP_SETTLEMENTS.append(dict(request_id=str(request_id)[:160],
             symbol=str(symbol)[:6], observed_epoch=time.time(),
             stage_monotonic=dict(clocks), future_cancelled=bool(cancelled),
+            transport_facts=dict(transport_facts or {}),
+            provider_terminal=dict(terminal or {}),
             decision_authority='none'))
 
 
@@ -89,8 +96,102 @@ def timed_entry_call(name, function, *args, **kwargs):
         return function(*args, **kwargs)
 
 
-def prioritize_native_watches(queue, *, now):
-    """Consume bounded wake hints between Main units; keep protected slots.
+def record_main_phase(name, code=None):
+    """A scalar Main boundary for the existing lifecycle sink, without I/O."""
+    with _LOCK:
+        _MAIN_PHASE.update(name=str(name)[:64], code=str(code)[:6] if code else None,
+                           epoch=time.time(), perf=time.perf_counter())
+        _MAIN_PHASE_HISTORY.append(dict(_MAIN_PHASE))
+
+
+def _phase_window_locked(start, end):
+    if start is None:
+        return {'coverage': 'eligible_clock_unobserved', 'intervals': []}
+    phases = list(_MAIN_PHASE_HISTORY)
+    intervals = []
+    for i, phase in enumerate(phases):
+        left = max(start, phase['perf'])
+        right = min(end, phases[i+1]['perf'] if i+1 < len(phases) else end)
+        if right > left:
+            intervals.append(dict(name=phase['name'], code=phase['code'],
+                                  started_perf=left, ended_perf=right))
+    return dict(coverage='complete' if phases and phases[0]['perf'] <= start else 'prefix_unobserved',
+                interval_count=len(intervals), intervals=intervals[-32:],
+                truncated=len(intervals) > 32, clock_basis='same_pid_monotonic')
+
+
+def acknowledge_native_watch_visit(target, token, *, now):
+    """Acknowledge only the hint used to select this actual Main visit."""
+    code = str(target.get('code') or '')[:6]
+    perf = time.perf_counter()
+    with _LOCK:
+        if token is not None and token == (_NATIVE_VISIT_HINTS.get(code), _NATIVE_VISIT_TOKENS.get(code)):
+            _NATIVE_VISIT_HINTS.pop(code, None)
+            _NATIVE_VISIT_TOKENS.pop(code, None)
+        for stream, keys in _ACTIVE_SELECTED.items():
+            if stream[0] != code:
+                continue
+            for key in keys:
+                row = _SELECTED_READY.get(key)
+                if row and not row.get('terminal') and row.get('main_queue_first_visit') is None:
+                    row.update(main_queue_first_visit=now, main_queue_first_visit_perf=perf,
+                               main_phase_at_queue_visit=dict(_MAIN_PHASE),
+                               main_queue_visit_scope_basis='symbol_only_not_native_claim')
+                    _queue_lifecycle(key, row)
+
+
+def rearm_native_watch_after_completion(claim):
+    """Revisit an already observed successor after the old request releases Main.
+
+    This is only a bounded scheduling hint. The native selector and handler
+    still validate and claim the signal, with its original five-second budget.
+    """
+    global _NATIVE_HINT_SEQUENCE
+    snapshot = (claim or {}).get('snapshot')
+    if not snapshot or not isinstance(snapshot[0], dict):
+        return False
+    original = snapshot[0]
+    required = ('symbol', 'venue', 'source_item', 'market', 'native_epoch', 'epoch', 'signal_id')
+    if any(original.get(key) is None for key in required) or not claim.get('generation'):
+        return False
+    day = __import__('datetime').datetime.fromtimestamp(original['epoch'],
+        __import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+    stream = (original['symbol'], original['venue'], original['source_item'], original['market'], day)
+    now, perf = time.time(), time.perf_counter()
+    with _LOCK:
+        eligible = []
+        for key in _ACTIVE_SELECTED.get(stream, ()):
+            row = _SELECTED_READY.get(key)
+            if (row and not row.get('terminal') and not row.get('claimed')
+                    and not row.get('selector_claimed') and row.get('first_eligible_seen') is not None
+                    and row['signal_id'] != original['signal_id']
+                    and row['native_epoch'] == original['native_epoch']
+                    and row['scope_execution_hash'] == claim['generation']
+                    and 0 <= now - row['epoch'] < 5
+                    and now < row['original_deadline']
+                    and perf < row['first_seen_perf'] + row['original_deadline'] - row['first_native_seen']):
+                eligible.append(row['epoch'])
+        if not eligible or _NATIVE_READY_EVENT is None:
+            return False
+        code = str(original['symbol'])[:6]
+        # Never replace a newer ingress token or restart the signal clock.
+        if not 0 <= now - _NATIVE_VISIT_HINTS.get(code, float('-inf')) < 5:
+            _NATIVE_HINT_SEQUENCE += 1
+            _NATIVE_VISIT_TOKENS[code] = _NATIVE_HINT_SEQUENCE
+            _NATIVE_VISIT_HINTS[code] = min(eligible)
+            _NATIVE_VISIT_HINTS.move_to_end(code)
+            while len(_NATIVE_VISIT_HINTS) > 128:
+                old_code, _ = _NATIVE_VISIT_HINTS.popitem(last=False)
+                _NATIVE_VISIT_TOKENS.pop(old_code, None)
+        event = _NATIVE_READY_EVENT
+    event.set()
+    return True
+
+
+def prioritize_native_watches(queue, *, now, completed_requests=None,
+                              all_targets=None, processed_target_ids=None,
+                              revisited_target_ids=None, visit_tokens=None):
+    """Retain bounded wake hints until the selected target is actually visited.
 
     A hint only changes the next visit. The handler still owns native claim,
     current source validation and every execution guard. No target is dropped.
@@ -99,22 +200,80 @@ def prioritize_native_watches(queue, *, now):
         for code, stamp in tuple(_NATIVE_VISIT_HINTS.items()):
             if not 0 <= now - stamp < 5:
                 _NATIVE_VISIT_HINTS.pop(code, None)
+                _NATIVE_VISIT_TOKENS.pop(code, None)
+        hints = dict(_NATIVE_VISIT_HINTS)
+        tokens = {code: (stamp, _NATIVE_VISIT_TOKENS.get(code)) for code, stamp in hints.items()}
+    # A signal can arrive after this target's ordinary visit. Re-admit at
+    # most once per target/pass; the unchanged native selector owns its claim.
+    # Append before sorting so every existing protected slot keeps its index.
+    queued = {id(target) for target in queue}
+    additions = []
+    if all_targets is not None and revisited_target_ids is not None:
+        for target in all_targets:
+            identity = id(target)
+            if (identity in (processed_target_ids or ()) and identity not in queued
+                    and identity not in revisited_target_ids
+                    and target.get('status') == 'WATCHING'
+                    and str(target.get('_scanner_scheduler_lane') or '') != 'COMMIT'
+                    and str(target.get('code') or '')[:6] in hints):
+                additions.append(target)
+                queued.add(identity)
+                revisited_target_ids.add(identity)
+    if additions:
+        queue = [*queue, *additions]
+    if visit_tokens is not None:
+        visit_tokens.update({id(target): tokens[str(target.get('code') or '')[:6]]
+                             for target in queue if str(target.get('code') or '')[:6] in tokens})
+    if not hints and not completed_requests:
+        return queue
+    with _LOCK:
         indexes = [i for i, target in enumerate(queue)
                    if target.get('status') == 'WATCHING'
                    and str(target.get('_scanner_scheduler_lane') or '') != 'COMMIT']
-        hinted = {str(queue[i].get('code') or '')[:6]: _NATIVE_VISIT_HINTS.get(
+        hinted = {str(queue[i].get('code') or '')[:6]: hints.get(
             str(queue[i].get('code') or '')[:6]) for i in indexes}
         hinted = {code: stamp for code, stamp in hinted.items() if stamp is not None}
-        for code in hinted:
-            _NATIVE_VISIT_HINTS.pop(code, None)
-    if not hinted:
+    completed_requests = completed_requests or {}
+    completed = {}
+    for i in indexes:
+        target = queue[i]
+        identity = (target.get('_scanner_async_generation_id'),
+                    target.get('_scanner_async_cache_key'))
+        stamp = completed_requests.get(identity)
+        if (type(stamp) in (int, float) and math.isfinite(stamp) and stamp >= 0
+                and identity[0] and identity[1]):
+            completed[id(target)] = stamp
+    if not hinted and not completed:
         return queue
-    ordered = sorted((queue[i] for i in indexes), key=lambda target:
-                     (hinted.get(str(target.get('code') or '')[:6], float('inf'))))
+    def visit_order(target):
+        if id(target) in completed:
+            return (0, completed[id(target)])
+        return (1, hinted.get(str(target.get('code') or '')[:6], float('inf')))
+    ordered = sorted((queue[i] for i in indexes), key=visit_order)
     result = list(queue)
     for i, target in zip(indexes, ordered):
         result[i] = target
     return result
+
+
+def observe_async_main_guard(result, *, now_perf):
+    """Same-process coordinator clock only, including normally rejected work."""
+    ready = getattr(result, 'coordinator_ready_perf', 0.0)
+    if (type(ready) not in (int, float) or not math.isfinite(ready) or ready <= 0
+            or not math.isfinite(now_perf) or now_perf < ready):
+        return {}
+    seconds = now_perf - ready
+    observe('coordinator_ready_to_main_guard', seconds)
+    fields = dict(async_main_guard_perf=now_perf,
+                  async_coordinator_ready_to_main_guard_ms=round(seconds * 1000, 3),
+                  async_guard_clock_basis='same_pid_monotonic')
+    finished = (getattr(result, 'ai_payload', {}).get('entry_local_stage_clocks') or {}).get(
+        'async_evaluation_completed_perf')
+    if type(finished) in (int, float) and math.isfinite(finished) and 0 < finished <= ready:
+        fields.update(async_evaluation_completed_perf=finished,
+                      async_evaluation_to_coordinator_ready_ms=round((ready-finished)*1000, 3),
+                      async_evaluation_to_main_guard_ms=round((now_perf-finished)*1000, 3))
+    return fields
 _SAMPLES = {name: deque(maxlen=_LIMIT) for name in _NAMES}
 _TOTAL = {name: 0 for name in _NAMES}
 _BOUNDS = (.01, .05, .1, .25, .5, 1., 1.5, 2., 3., 5., 10., float('inf'))
@@ -138,9 +297,11 @@ def set_native_ready_event(event):
     with _LOCK:
         if _NATIVE_READY_EVENT is not event:
             _NATIVE_VISIT_HINTS.clear()
+            _NATIVE_VISIT_TOKENS.clear()
         _NATIVE_READY_EVENT = event
         if event is None:
             _NATIVE_VISIT_HINTS.clear()
+            _NATIVE_VISIT_TOKENS.clear()
 _ACTIVE_SELECTED = {}  # stream -> bounded active keys, never all-day scans per tick
 _LIFECYCLE_STATES = ('claimed', 'invalidated_before_claim', 'replaced_before_claim',
     'observed_valid_until_deadline_unclaimed', 'source_or_guard_blocked_before_claim',
@@ -312,6 +473,7 @@ def observe(name, seconds, *, generation=None):
     with _LOCK:
         if generation is not None and generation != _GENERATION:
             _NATIVE_VISIT_HINTS.clear()
+            _NATIVE_VISIT_TOKENS.clear()
             _SIGNALS.clear()
             for values in _SAMPLES.values():
                 values.clear()
@@ -423,6 +585,7 @@ def log_snapshot():
 
 
 def record_native_ready(B, symbol, venue, item, market, epoch):
+    global _NATIVE_HINT_SEQUENCE
     from contextlib import ExitStack
     # Match claim/observation adapter lock ordering. Publish the scalar receipt
     # before another thread can claim the event; no I/O under either lock.
@@ -434,10 +597,13 @@ def record_native_ready(B, symbol, venue, item, market, epoch):
     with _LOCK:
         event = _NATIVE_READY_EVENT
         if notify and event is not None:
+            _NATIVE_HINT_SEQUENCE += 1
+            _NATIVE_VISIT_TOKENS[str(symbol)[:6]] = _NATIVE_HINT_SEQUENCE
             _NATIVE_VISIT_HINTS[str(symbol)[:6]] = epoch
             _NATIVE_VISIT_HINTS.move_to_end(str(symbol)[:6])
             while len(_NATIVE_VISIT_HINTS) > 128:
-                _NATIVE_VISIT_HINTS.popitem(last=False)
+                old_code, _ = _NATIVE_VISIT_HINTS.popitem(last=False)
+                _NATIVE_VISIT_TOKENS.pop(old_code, None)
     if notify and event is not None:
         event.set()
 
@@ -569,6 +735,10 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                     row.update(terminal='unobservable', terminal_reason='selector_consumed_without_claim_receipt')
                 else:
                     notify = notify or row['first_eligible_seen'] is None
+                    if row['first_eligible_seen'] is None:
+                        row.update(first_eligible_perf=time.perf_counter(),
+                                   main_phase_at_first_eligible=dict(_MAIN_PHASE),
+                                   native_wake_event_installed=_NATIVE_READY_EVENT is not None)
                     row['first_eligible_seen'] = row['first_eligible_seen'] or epoch
                     row['last_eligible_seen'] = epoch
             if row.get('terminal'):
@@ -602,6 +772,11 @@ def record_native_visit(symbol, venue, item, market, now):
                 if row and not row.get('terminal'):
                     row['main_first_visit'] = row['main_first_visit'] or now
                     row['claim_attempt'] = now
+                    row.setdefault('main_first_visit_perf', time.perf_counter())
+                    row['claim_attempt_perf'] = time.perf_counter()
+                    row['main_phase_at_claim_attempt'] = dict(_MAIN_PHASE)
+                    row['main_delivery_phase_window'] = _phase_window_locked(
+                        row.get('first_eligible_perf'), row['claim_attempt_perf'])
                     _queue_lifecycle(key, row)
 
 

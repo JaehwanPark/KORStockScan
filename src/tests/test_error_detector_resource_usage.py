@@ -54,6 +54,49 @@ def test_system_metric_append_writes_complete_json_records(tmp_path):
     assert [row["epoch"] for row in rows] == [1, 2]
 
 
+def test_disk_inventory_excludes_partitions_and_virtual_layers(tmp_path, monkeypatch):
+    from src.engine.monitoring import system_metric_sampler as sampler
+    real_read = Path.read_text
+    real_exists = Path.exists
+    def read(path, *a, **kw):
+        if str(path) == '/proc/diskstats':
+            return '\n'.join(f'1 0 {name} 2 0 100 3 4 0 200 5 0 8 9' for name in
+                             ('nvme0n1', 'nvme0n1p1', 'sda', 'sda1', 'dm-0', 'loop0'))
+        return real_read(path, *a, **kw)
+    def exists(path):
+        if str(path).startswith('/sys/class/block/'):
+            return path.name != 'partition' or path.parent.name in {'nvme0n1p1', 'sda1'}
+        return real_exists(path)
+    monkeypatch.setattr(Path, 'read_text', read)
+    monkeypatch.setattr(Path, 'exists', exists)
+    disk = sampler._read_diskstats()
+    assert set(disk['devices']) == {'nvme0n1', 'sda'}
+    assert disk['read_sectors'] == 200
+    assert sampler._disk_delta(disk, {})['disk_read_mb_delta'] is None
+
+
+def test_process_birth_reuse_and_missing_io_are_not_zero():
+    from src.engine.monitoring.system_metric_sampler import _process_io_deltas
+    old = [dict(pid=12, start_ticks=1, status='observed', io={'read_bytes': 100})]
+    for row in [dict(pid=12, start_ticks=2, status='observed', io={'read_bytes': 200}),
+                dict(pid=12, start_ticks=1, status='unobserved')]:
+        assert _process_io_deltas([row], old)[0]['io_delta'] is None
+    row = dict(pid=12, start_ticks=1, status='observed', io={'read_bytes': 150})
+    assert _process_io_deltas([row], old)[0]['io_delta']['read_bytes'] == 50
+
+
+def test_device_interval_uses_completed_io_and_separate_queue():
+    from src.engine.monitoring.system_metric_sampler import _device_intervals
+    before = dict(schema='v2', devices={'sda': dict(read_ios=10, write_ios=5,
+        read_ms=100, write_ms=50, io_ms=200, weighted_ms=300, inflight=0)})
+    after = dict(schema='v2', devices={'sda': dict(read_ios=12, write_ios=6,
+        read_ms=106, write_ms=53, io_ms=250, weighted_ms=500, inflight=2)})
+    value = _device_intervals(after, before, 10)['sda']
+    assert value['await_ms'] == 3 and value['average_queue_depth'] == .02
+    assert value['inflight'] == 2
+    assert _device_intervals(before, after, 10)['sda']['status'] == 'baseline_or_counter_reset'
+
+
 class TestResourceUsageDetector:
     def test_classify_pass(self):
         detector = ResourceUsageDetector()

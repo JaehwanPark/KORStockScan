@@ -40,7 +40,36 @@ def test_unseen_candidates_rotate_and_recheck_does_not_starve_them():
     assert queue.claim(now_epoch=T0 + 6, limit=1) == []  # prior claim is in flight
 
 
-def test_mixed_branches_keep_short_admission_and_rotate_two_long_slots():
+def test_active_target_deferral_does_not_consume_claim_or_rotation_and_releases_immediately():
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, '000001', kind='activity')
+    _observe(queue, '000002', kind='gainers')
+    claims = queue.claim(now_epoch=T0+2, limit=1, deferred_active_codes={'000001'})
+    assert [r['code'] for r in claims] == ['000002']
+    active = queue._candidates[('000001', 'krx_only')]
+    assert active.claim_count == 0 and not active.in_flight and active.last_result == 'queued'
+    assert queue.claim_eligibility['active_target_deferred_count'] == 1
+    released = queue.claim(now_epoch=T0+3, limit=1, deferred_active_codes=set())
+    assert released[0]['code'] == '000001'
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+
+
+def test_current_eligible_wait_is_observed_and_does_not_restore_historical_first_seen():
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, '000001')
+    queue.claim(now_epoch=T0+100, limit=0)
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+    queue.claim(now_epoch=T0+110, limit=0)
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 10
+    restored = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY)
+    restored.claim(now_epoch=T0+111, limit=0)
+    assert restored.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+    queue.claim(now_epoch=T0+112, limit=0, deferred_active_codes={'000001'})
+    queue.claim(now_epoch=T0+113, limit=0)
+    assert queue.claim_eligibility['eligible_due_wait_max_seconds'] == 0
+
+
+def test_mixed_branches_keep_short_admission_and_rotate_three_long_slots():
     queue=DiscoveryQueue(DAY)
     for i in range(1,6):_observe(queue,f'{i:06d}')
     requirement=lambda *args:dict(minimum_seconds=0,full_input_requirement_seconds=120)
@@ -50,7 +79,7 @@ def test_mixed_branches_keep_short_admission_and_rotate_two_long_slots():
         claims=queue.claim(now_epoch=now,limit=5,residence_requirements=requirement)
         assert len(claims)==5
         long=[r for r in claims if r['residence_deadline_epoch']-now==150]
-        assert len(long)==2
+        assert len(long)==3
         seen.update(r['code'] for r in long)
         for claim in claims:
             assert queue.resolve(claim,result='assessed',machine_action='RECHECK',next_due_epoch=now+150,
@@ -243,3 +272,24 @@ def test_stale_observation_cannot_consume_probe_budget_until_refreshed():
     assert [row["code"] for row in queue.claim(
         now_epoch=T0 + 123, limit=8, max_observation_age_sec=120,
     )] == ["000001"]
+
+
+def test_three_long_leases_preserve_deadlines_capacity_and_cleanup_custody():
+    queue = DiscoveryQueue(DAY)
+    for i in range(6):
+        _observe(queue, f'{i+1:06d}')
+    required = lambda *args: {'minimum_seconds': 60, 'full_input_requirement_seconds': 61}
+    claims = queue.claim(now_epoch=T0+2, limit=5, residence_requirements=required)
+    assert len(claims) == 3
+    assert all(c['residence_deadline_epoch'] == T0+152 for c in claims)
+    assert queue.residence_deferred == {'long_slot_wait': 3}
+    claim = claims[0]
+    assert queue.resolve(claim, result='pattern_not_matched', next_due_epoch=T0+200,
+                         handoff_id=claim['physical_probe_lease_id'])
+    assert queue.claim(now_epoch=T0+153, limit=2, residence_requirements=required) == []
+    assert queue.close_handoff(claim, claim['physical_probe_lease_id'])
+    replacement = queue.claim(now_epoch=T0+154, limit=3, residence_requirements=required)
+    assert len(replacement) == 1
+    assert replacement[0]['code'] not in {c['code'] for c in claims}
+    assert all(queue._candidates[(c['code'], c['route'])].residence_deadline_epoch == T0+152
+               for c in claims[1:])

@@ -58,6 +58,60 @@ def test_vote_watch_does_not_hide_gzip_behind_foreign_symlink(tmp_path):
     assert post.vote_watch(tmp_path,'2026-10-12')!=before
 
 
+@pytest.mark.parametrize('namespace', ['ai_decision_payloads', 'ai_decision_prompts', 'ai_decision_requests'])
+def test_native_stop_accepts_only_sealed_lossless_compression(tmp_path, namespace):
+    import gzip
+    folder=tmp_path/namespace;folder.mkdir()
+    raw=folder/(namespace+'_2026-10-08.jsonl');content=b'{"original":1}\n'
+    raw.write_bytes(content)
+    _, report, _, _=publication(tmp_path)
+    compressed=raw.with_suffix('.jsonl.gz')
+    compressed.write_bytes(gzip.compress(content));raw.unlink()
+    assert post.vote_watch(tmp_path,'2026-10-12') != report['vote_watch_sha256']
+    assert post.read_committed(tmp_path,'2026-10-12')[1] == report
+    assert post.read_committed(tmp_path,'2026-10-12',verify_full=True)[1] == report
+    assert post.handoff(tmp_path,'2026-10-13')[1]['status'] == 'verified_carried'
+    compressed.write_bytes(gzip.compress(b'{"original":2}\n'))
+    with pytest.raises(ValueError,match='compressed_content_changed'):
+        post.read_committed(tmp_path,'2026-10-12')
+
+
+def test_compression_binding_keeps_missing_new_and_replaced_sources_invalid(tmp_path):
+    import gzip
+    folder=tmp_path/'ai_decision_requests';folder.mkdir()
+    raw=folder/'ai_decision_requests_2026-10-08.jsonl';content=b'{}\n'
+    raw.write_bytes(content);binding=post.capture_vote_watch_binding(tmp_path,'2026-10-12')
+    new=folder/'ai_decision_requests_2026-10-09.jsonl';new.write_bytes(content)
+    with pytest.raises(ValueError,match='source_set_changed'):
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+
+
+    new.unlink();replacement=folder/'replace';replacement.write_bytes(content);replacement.replace(raw)
+    with pytest.raises(ValueError,match='source_set_changed'):
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+    raw.unlink()
+    with pytest.raises(ValueError,match='source_set_changed'):
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+    raw.with_suffix('.jsonl.gz').write_bytes(gzip.compress(content))
+    post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+    raw.symlink_to(raw.with_suffix('.jsonl.gz'))
+    with pytest.raises(ValueError,match='source_set_changed'):
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+
+
+@pytest.mark.parametrize('damage', ['truncated', 'expanded'])
+def test_native_stop_rejects_invalid_or_expanded_compressed_source(tmp_path, damage):
+    import gzip
+    folder=tmp_path/'ai_decision_requests';folder.mkdir()
+    raw=folder/'ai_decision_requests_2026-10-08.jsonl';raw.write_bytes(b'{}\n')
+    publication(tmp_path)
+    compressed=raw.with_suffix('.jsonl.gz')
+    compressed.write_bytes(gzip.compress(b'{}\n')[:-2] if damage == 'truncated' else gzip.compress(b'{}\n'*100))
+    raw.unlink()
+    with pytest.raises(ValueError,match='compressed_content_(invalid|changed)'):
+        post.read_committed(tmp_path,'2026-10-12')
+
+
 def test_holding_request_index_and_watch_share_original_compression_contract(tmp_path):
     import gzip
     from src.engine.ai.holding_vote_replay_source import _request_index

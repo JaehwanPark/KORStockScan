@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from math import isfinite
 
 from src.trading.market import session_contract
 
@@ -48,11 +49,14 @@ class ZeroBaseDiscoveryRuntime:
         self.event_bus.subscribe(HANDOFF_ACK_EVENT, self._receive_result)
 
     def _restore(self, session_date: str) -> DiscoveryQueue:
+        self._restored_candidate_count = 0
         if not self.state_path.exists():
             return DiscoveryQueue(session_date)
         try:
             snapshot = json.loads(self.state_path.read_text())
-            return DiscoveryQueue.restore(snapshot, session_date=session_date)
+            queue = DiscoveryQueue.restore(snapshot, session_date=session_date)
+            self._restored_candidate_count = len(queue._candidates)
+            return queue
         except (OSError, ValueError, TypeError, KeyError) as exc:
             # A corrupt ledger cannot silently turn into a fresh queue.
             raise RuntimeError("zero_base_queue_restore_failed") from exc
@@ -217,6 +221,8 @@ class ZeroBaseDiscoveryRuntime:
         return accepted
 
     def dispatch_due_probes(self, *, now_epoch=None) -> dict:
+        frozen_clock = now_epoch is not None
+        dispatch_started_perf = time.perf_counter()
         now_epoch = time.time() if now_epoch is None else float(now_epoch)
         regime = session_contract.resolve_market_session(
             datetime.fromtimestamp(now_epoch, tz=session_contract.KST)
@@ -239,9 +245,34 @@ class ZeroBaseDiscoveryRuntime:
         check = getattr(self.event_bus, 'consumer_readiness', None)
         readiness = (check(PROBE_REQUEST_EVENT) if callable(check) else
                      {'ready': False, 'reason': 'consumer_readiness_unobserved'})
+        # The callback publishes its snapshot after the dispatch boundary.
+        # Validate that observation at callback completion. Queue/claim/lease
+        # clocks below remain the original boundary without budget renewal.
+        snapshot_checked_epoch = (now_epoch + max(0.0, time.perf_counter()-dispatch_started_perf)
+            if frozen_clock else time.time())
         if self._closed:
             readiness = dict(readiness, ready=False, reason='discovery_runtime_closed')
         consumer_ready = readiness.get('ready') is True
+        snapshot = readiness.get('main_target_snapshot')
+        valid_snapshot = (
+            isinstance(snapshot, dict)
+            and snapshot.get('schema') == 'zero_base_main_target_snapshot_v1'
+            and snapshot.get('status') == 'observed'
+            and snapshot.get('runtime_effect') is False
+            and all(snapshot.get(key) == readiness.get(key) and snapshot.get(key) is not None
+                for key in ('runtime_generation', 'process_pid', 'process_start_ticks', 'date'))
+            and snapshot.get('date') == self.queue.session_date
+            and isinstance(snapshot.get('generation'), str)
+            and re.fullmatch('[a-f0-9]{64}', snapshot['generation']) is not None
+            and type(snapshot.get('observed_epoch')) in (int, float)
+            and isfinite(snapshot['observed_epoch'])
+            and 0 <= snapshot_checked_epoch-snapshot['observed_epoch'] <= 2
+            and isinstance(snapshot.get('active_codes'), list)
+            and len(snapshot['active_codes']) <= 512
+            and all(isinstance(code, str) and re.fullmatch(r'\d{6}', code)
+                    for code in snapshot['active_codes'])
+        )
+        active_codes = set(snapshot['active_codes']) if valid_snapshot else set()
         from src.engine.scalping.reversal_source_diagnostics import residence_requirements
         available_slots = max(0, MAX_CONCURRENT_PROBES - active_claims) if consumer_ready else 0
         claims = self.queue.claim(
@@ -251,6 +282,7 @@ class ZeroBaseDiscoveryRuntime:
             max_observation_age_sec=MAX_DISCOVERY_OBSERVATION_AGE_SEC,
             eligible_routes=eligible_routes,
             residence_requirements=residence_requirements,
+            deferred_active_codes=active_codes,
             activity_claims_per_gainer=(
                 7 if regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
                 else 3
@@ -297,6 +329,10 @@ class ZeroBaseDiscoveryRuntime:
             "probe_requested_count": dispatched,
             "probe_consumer_ready": consumer_ready,
             "probe_readiness": readiness,
+            "probe_active_target_snapshot_status": 'observed' if valid_snapshot else 'fallback',
+            "probe_active_target_snapshot_generation": snapshot['generation'] if valid_snapshot else None,
+            "probe_claim_eligibility": dict(self.queue.claim_eligibility),
+            "queue_restored_candidate_count": self._restored_candidate_count,
             "probe_residence_deferred": dict(getattr(self.queue, 'residence_deferred', {})),
             "probe_no_consumer_count": not_dispatched,
             "probe_capacity_limit": MAX_CONCURRENT_PROBES,

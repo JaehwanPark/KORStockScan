@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import date, timedelta
 import hashlib
+import gzip
 import json
 import tempfile
 import time
@@ -123,6 +124,109 @@ def vote_watch(root, day):
     return digest.hexdigest()
 
 
+def _vote_watch_files(root, day):
+    """Use the same preferred representations as the original watch/reader."""
+    import os
+    result = {}
+    directories = [Path(root)/'runtime/holding_path_votes'] + [Path(root)/name for name in (
+        'ai_decision_payloads', 'ai_decision_prompts', 'ai_decision_requests')]
+    for directory in directories:
+        if not directory.exists():
+            continue
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                path = Path(entry.path)
+                if directory.name != 'holding_path_votes':
+                    if not '2026-09-29' <= entry.name[len(directory.name)+1:][:10] <= day:
+                        continue
+                    if entry.name.endswith('.jsonl.gz'):
+                        from src.engine.ai.holding_vote_replay_source import request_source_shadowed
+                        if request_source_shadowed(path):
+                            continue
+                logical = path.with_suffix('') if path.name.endswith('.jsonl.gz') else path
+                if str(logical) in result:
+                    raise ValueError('stop_vote_watch_logical_collision')
+                result[str(logical)] = path
+    return result
+
+
+def _vote_watch_content(path, *, max_bytes=None):
+    """Bind decoded bytes in a stable read; reject truncation and expansion."""
+    import os
+    import stat
+    before = list(source_stat(path.lstat()))
+    sha = hashlib.sha256()
+    size = 0
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as raw:
+        if not stat.S_ISREG(os.fstat(raw.fileno()).st_mode) or before != list(source_stat(os.fstat(raw.fileno()))):
+            raise ValueError('stop_vote_source_changed_during_read')
+        from contextlib import nullcontext
+        with (gzip.GzipFile(fileobj=raw) if path.name.endswith('.jsonl.gz') else nullcontext(raw)) as handle:
+            try:
+                for block in iter(lambda: handle.read(64*1024), b''):
+                    checkpoint()
+                    size += len(block)
+                    if max_bytes is not None and size > max_bytes:
+                        raise ValueError('stop_vote_compressed_content_changed')
+                    sha.update(block)
+            except (EOFError, gzip.BadGzipFile) as exc:
+                raise ValueError('stop_vote_compressed_content_invalid') from exc
+        if before != list(source_stat(os.fstat(raw.fileno()))):
+            raise ValueError('stop_vote_source_changed_during_read')
+    if path.is_symlink() or before != list(source_stat(path.lstat())):
+        raise ValueError('stop_vote_source_changed_during_read')
+    return sha.hexdigest(), size, before
+
+
+def capture_vote_watch_binding(root, day):
+    """Publisher-only seal for a later lossless plain-to-gzip transition."""
+    files = _vote_watch_files(root, day)
+    binding = {}
+    for logical, path in files.items():
+        identity = list(source_stat(path.stat()))
+        row = dict(path=str(path), stat=identity)
+        if path.parent.name != 'holding_path_votes' and path.name.endswith('.jsonl'):
+            sha, size, identity = _vote_watch_content(path)
+            row.update(stat=identity, decoded_sha256=sha, decoded_bytes=size)
+        binding[logical] = row
+    if files != _vote_watch_files(root, day):
+        raise ValueError('stop_vote_source_set_changed')
+    if any(row['stat'] != list(source_stat(Path(row['path']).stat())) for row in binding.values()):
+        raise ValueError('stop_vote_source_changed_during_read')
+    return binding
+
+
+def verify_vote_watch_binding(root, day, binding):
+    """Only decoded equality permits a sealed original's compression."""
+    if not isinstance(binding, dict):
+        raise ValueError('stop_vote_source_set_changed')
+    files = _vote_watch_files(root, day)
+    if set(files) != set(binding):
+        raise ValueError('stop_vote_source_set_changed')
+    observed = {}
+    for logical, path in files.items():
+        row = binding[logical]
+        observed[logical] = list(source_stat(path.stat()))
+        if str(path) == row['path'] and observed[logical] == row['stat']:
+            continue
+        if (row['path'] != logical or not logical.endswith('.jsonl')
+                or path.parent.name == 'holding_path_votes'
+                or str(path) != logical+'.gz'
+                or Path(logical).exists() or Path(logical).is_symlink()
+                or not isinstance(row.get('decoded_bytes'), int)):
+            raise ValueError('stop_vote_source_set_changed')
+        sha, size, identity = _vote_watch_content(path, max_bytes=row['decoded_bytes'])
+        observed[logical] = identity
+        if sha != row.get('decoded_sha256') or size != row['decoded_bytes']:
+            raise ValueError('stop_vote_compressed_content_changed')
+    if files != _vote_watch_files(root, day):
+        raise ValueError('stop_vote_source_set_changed')
+    if any(observed[key] != list(source_stat(path.stat())) for key, path in files.items()):
+        raise ValueError('stop_vote_source_changed_during_read')
+
+
 def baseline(root, target):
     # Reuse the verified incumbent owner; do not rebuild or mutate PREOPEN.
     from src.engine.automation import runtime_policy_bootstrap as boot
@@ -231,7 +335,7 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     if bundle.get('operator_sources') != operator_sources(root,bundle['target_date']):
         raise ValueError('stop_operator_sources_changed')
     if report.get('vote_watch_sha256')!=vote_watch(root,day):
-        raise ValueError('stop_vote_source_set_changed')
+        verify_vote_watch_binding(root, day, report.get('vote_watch_binding'))
     if report.get('source_catalog_sha256')!=policy.digest([str(p) for p in sources(root,day)]):
         raise ValueError('stop_raw_source_set_changed')
     for label in ('parent_receipt','snapshot_receipt'):
@@ -244,6 +348,17 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
                       **(report.get('economic_sources') or {}).get('files', {})}
     for path, expected in expected_files.items():
         before = report['dependency_stats'].get(path)
+        physical = Path(path)
+        if path in report.get('vote_source_inventory', {}) and not physical.exists():
+            ref = (report.get('vote_watch_binding') or {}).get(path) or {}
+            if (physical.is_symlink() or ref.get('path') != path or ref.get('stat') != before
+                    or ref.get('decoded_sha256') != expected.get('sha256')
+                    or ref.get('decoded_bytes') != expected.get('size')):
+                raise ValueError('stop_native_source_generation_changed')
+            sha, size, _ = _vote_watch_content(Path(path+'.gz'), max_bytes=expected['size'])
+            if sha != expected['sha256'] or size != expected['size']:
+                raise ValueError('stop_native_source_bytes_changed')
+            continue
         if before != list(source_stat(Path(path).stat())):
             raise ValueError('stop_native_source_generation_changed')
         if verify_full and byte_generation(Path(path)) != expected:
@@ -329,6 +444,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     economic_sources = economic_sources or dict(files={}, cost_generations={})
     authority_sources = operator_sources(root,target)
     vote_watch_sha=vote_watch(root,day)
+    vote_watch_binding=capture_vote_watch_binding(root,day)
     source_catalog=[str(p) for p in sources(root,day)]
     source_catalog_sha=policy.digest(source_catalog)
     inventory={str(p):byte_generation(p) for p in source_paths}
@@ -339,7 +455,8 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     generation=policy.digest(dict(inventory=inventory,snapshot=snapshot_receipt,parent=parent_receipt,
         parents={k:asdict(v) for k,v in parents.items()},code=algorithm_sha,source_date=day,target_date=target,
         experiments=experiments or {},economic_sources=economic_sources,operator_sources=authority_sources,
-        vote_watch_sha256=vote_watch_sha,source_catalog_sha256=source_catalog_sha,
+        vote_watch_sha256=vote_watch_sha,vote_watch_binding=vote_watch_binding,
+        source_catalog_sha256=source_catalog_sha,
         input_stat_identity=input_stat_identity))
     pointer_path=committed_path(root,day)
     if pointer_path.exists():
@@ -487,6 +604,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
         parent_receipt=parent_receipt,snapshot_receipt=snapshot_receipt,code_sha256=algorithm_sha,
         source_inventory=inventory,source_catalog_sha256=source_catalog_sha,
         vote_source_inventory=vote_sources,vote_watch_sha256=vote_watch_sha,
+        vote_watch_binding=vote_watch_binding,
         economic_sources=economic_sources, opportunity_census=opportunity_census,
         census_dependencies=census_dependencies(directory,opportunity_census),
         dependency_stats=dependency_stats,

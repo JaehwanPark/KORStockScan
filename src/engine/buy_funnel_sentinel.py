@@ -7,6 +7,8 @@ strategy thresholds.
 
 from __future__ import annotations
 
+from src.engine.monitoring.sentinel_compact_store import fields_identity
+
 import argparse
 import ast
 import hashlib
@@ -15,7 +17,7 @@ import os
 import stat
 import tempfile
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -238,6 +240,7 @@ class PipelineEvent:
     stock_code: str
     record_id: str
     fields: dict[str, str]
+    cache_digest: str = field(default='', compare=False, repr=False)
 
 
 def _pipeline_events_path(target_date: str) -> Path:
@@ -455,8 +458,10 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     emitted_at = _parse_iso_datetime(_safe_str(row.get("emitted_at")))
     if emitted_at is None:
         return None
+    from src.engine.monitoring.sentinel_compact_store import CompactFields
     raw_fields = row.get("fields") or {}
     fields = (
+        raw_fields if isinstance(raw_fields, CompactFields) else
         {str(k): _safe_str(v) for k, v in raw_fields.items()}
         if isinstance(raw_fields, dict)
         else {}
@@ -469,6 +474,7 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
         stock_code=_safe_str(row.get("stock_code"))[:6],
         record_id=_safe_str(row.get("record_id")),
         fields=fields,
+        cache_digest=row.get('_sentinel_index_sha', ''),
     )
 
 
@@ -552,6 +558,7 @@ def load_pipeline_events(
             ),
             project_loaded_payload=_slim_economic_cache_row,
             cache_projection_version='economic_source_refs_v1',
+            compact_index=True,
         )
         events = [
             event for row in rows if (event := _event_from_cache_row(row)) is not None
@@ -606,6 +613,7 @@ def load_pipeline_event_summaries(
         reason_labeler=_blocker_label_from_stage_fields,
         ignore_payload=_is_ignored_event,
         include_samples=False,
+        reuse_small_projection=True,
     )
 
 
@@ -1095,7 +1103,7 @@ def _exact_submit_drought_axis_summary(
             signature = (
                 event.emitted_at,
                 event.stage,
-                tuple(sorted(event.fields.items())),
+                fields_identity(event.fields),
             )
             if signature in seen_rows:
                 continue
@@ -2336,6 +2344,47 @@ def _cash_shortfall_attempt_exclusions(exact, bindings):
 
 
 def _summarize_events(events, *, start_at, end_at, summary_rows=None):
+    if not events or any(not e.cache_digest for e in events):
+        return _calculate_event_summary(events, start_at=start_at, end_at=end_at,
+                                        summary_rows=summary_rows)
+    from src.engine.monitoring.sentinel_compact_store import report_code_contract, summary_memo
+    import hashlib
+    import subprocess
+    # Boundaries outside the complete input extent only change display clocks.
+    # Within the extent retain exact microseconds (second-count cutoffs matter).
+    clocks = [e.emitted_at for e in events]
+    for row in summary_rows or []:
+        for key in ('first_seen', 'last_seen', 'bucket_start', 'bucket_end'):
+            at = _parse_iso_datetime(_safe_str(row.get(key)))
+            if at is not None:
+                clocks.append(at)
+        for second in row.get('second_counts', {}) or {}:
+            at = _parse_iso_datetime(_safe_str(second))
+            if at is not None:
+                clocks.append(at)
+    lower, upper = min(clocks), max(clocks)
+    normalized_start = start_at if start_at > lower else lower - timedelta(microseconds=1)
+    normalized_end = end_at if end_at <= upper else upper + timedelta(microseconds=1)
+    digest = hashlib.sha256()
+    try:
+        digest.update(report_code_contract().encode())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return _calculate_event_summary(events, start_at=start_at, end_at=end_at,
+                                        summary_rows=summary_rows)
+    digest.update(str(DATA_DIR.resolve()).encode())
+    digest.update((normalized_start.isoformat() + '/' + normalized_end.isoformat()).encode())
+    for event in events:
+        digest.update(event.cache_digest.encode())
+    digest.update(json.dumps(summary_rows or [], sort_keys=True, separators=(',', ':')).encode())
+    result = summary_memo(_event_cache_dir() / 'summary-results', digest.hexdigest(),
+        lambda: _calculate_event_summary(events, start_at=start_at, end_at=end_at,
+                                         summary_rows=summary_rows))
+    result['start_at'] = start_at.isoformat(timespec='seconds')
+    result['end_at'] = end_at.isoformat(timespec='seconds')
+    return result
+
+
+def _calculate_event_summary(events, *, start_at, end_at, summary_rows=None):
     raw = _summarize_events_included(
         events, start_at=start_at, end_at=end_at, summary_rows=summary_rows
     )
@@ -2359,7 +2408,7 @@ def _summarize_events(events, *, start_at, end_at, summary_rows=None):
             event.stage,
             event.stock_code,
             event.record_id,
-            tuple(sorted(event.fields.items())),
+            fields_identity(event.fields),
         )
 
     # The exact ledger deduplicates source rows before binding. Remove their

@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 
+def test_main_stop_alert_uses_current_preopen_owner_after_transfer():
+    from src.engine.error_detectors.artifact_freshness import _project_semantic_owner
+    alert = dict(stage='main_stop_confirmation', owner='main_stop_confirmation', target_date='2026-10-14')
+    _project_semantic_owner(alert, {'DirectFamilyPreopenPolicyHandoff'}, '2026-10-14')
+    assert alert['owner'] == 'DirectFamilyPreopenPolicyHandoff'
+    assert alert['owner_status'] == 'current_open'
+    assert alert['historical_owner'] == 'main_stop_confirmation'
+
+
 def test_historical_family_kernel_uses_exact_original_bytes_after_code_change(tmp_path):
     from src.engine.monitoring import family_policy_semantics as native
     import hashlib

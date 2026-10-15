@@ -111,6 +111,25 @@ REVIEWED_JOINT_CONSUMER_SOURCES = {
         '95bd122be3b47d18236c2cc1127eefc9d0b9dd60771cf387637e9c838790e6fd'),
 }
 
+# Reviewed optional REST removal and completed-only initial entry inputs.
+# Exact original PREOPEN-to-candidate bytes; retain all earlier consumed pairs.
+# Evidence: docs/audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md.
+REVIEWED_REST_REDUCTION_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '5c0b5e1b97e50ed1bd80c4084795a40eaa430c62a8d52cb30b338dbbf7c574ca',
+        'b7435b6001fc5901f601879a08fa4e61b7c337187e1ac58db5e93984768beaa3'),
+    'src/engine/kiwoom_sniper_v2.py': (
+        '96319c0071dfce04980af151ff9e22b91352a704281bb727c8e68d604ee6aa20',
+        '6f1abc2ad7c532d693b832fb041ff519874ce141b52d2f1c724b445467440c0e'),
+}
+
+# Observer-only verification reuse; original publication/startup checks remain full.
+REVIEWED_IO_OBSERVER_SOURCES = {
+    'src/engine/automation/runtime_policy_bootstrap.py': (
+        'f58cafa2207bbb2f1457173ff2d63bb41ca038ddb948c25df4f18b12c9e1499b',
+        '0df0b5d81707fe66bd38f140a3bcb3c40d7d526d9afa55755a87b8dc8123d5a8'),
+}
+
 # Incumbent stop consumer compatibility only; numerical selection and research
 # remain pinned to the full current implementation generation.
 # Evidence: docs/audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md.
@@ -408,6 +427,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ENTRY_RESPONSE_SOURCES.get(name),
                     REVIEWED_ENTRY_STORAGE_SOURCES.get(name),
                     REVIEWED_JOINT_CONSUMER_SOURCES.get(name),
+                    REVIEWED_REST_REDUCTION_SOURCES.get(name),
+                    REVIEWED_IO_OBSERVER_SOURCES.get(name),
                     REVIEWED_STOP_CONSUMER_SOURCES.get(name)):
             changed.append(name)
             continue
@@ -486,7 +507,8 @@ def verify_candidate_stop_code(day, root, commit):
 
 
 def _checked_bootstrap(day, pid):
-    check = bootstrap.verify_bootstrap(day, pid=pid, write=False)
+    options = {'observer_reuse': True} if _OBSERVER_CUSTODY.get() is not None else {}
+    check = bootstrap.verify_bootstrap(day, pid=pid, write=False, **options)
     if check.get("status") != "pass":
         raise ValueError("intraday_bootstrap_invalid:" + ",".join(check.get("findings") or []))
     from src.engine.automation.auxiliary_reader_readiness import verify_auxiliary_reader
@@ -939,6 +961,7 @@ def _historical_checklist_for_observer(project, source_date, *, now=None):
         path=historical['path'], sha256=historical['sha256'],
         handoff_path=str(handoff_path), handoff_sha256=handoff_sha,
         consumed_path=str(consumed_path), consumed_sha256=consumed_sha,
+        delay_observer_validation=bootstrap_check.get('delay_observer_validation'),
         pid_identity=identity, runtime_effect=False, new_finalization_claimed=False)
 
 

@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from collections import OrderedDict
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import math
@@ -81,6 +81,9 @@ def record_async_disposition(result, disposition, reason, **facts):
                 entry_auxiliary_policy_sha256=payload.get('entry_ai_component_sha256') or result.origin_fields.get('entry_auxiliary_policy_sha256'),
                 async_origin_deadline_epoch=result.deadline_epoch,
                 async_worker_completed_epoch=result.completed_epoch,
+                async_coordinator_ready_perf=getattr(result, 'coordinator_ready_perf', 0.0) or None,
+                async_evaluation_completed_perf=(payload.get('entry_local_stage_clocks') or {}).get(
+                    'async_evaluation_completed_perf'),
                 entry_local_stage_clocks=json.dumps(thaw_scanner_async_value(payload.get('entry_local_stage_clocks') or {}),
                     sort_keys=True, separators=(',', ':')),
                 async_disposition_epoch=time.time(), async_producer_pid=os.getpid(),
@@ -91,8 +94,14 @@ def record_async_disposition(result, disposition, reason, **facts):
                 window_policy='current_pid_exact_attempt_with_carry_in_out', sample_floor='none',
                 primary_decision_metric='pass_to_main_disposition_coverage',
                 forbidden_uses='policy_promotion,broker_order,economics',
-                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False,
-                **facts)
+                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False)
+        for key, value in facts.items():
+            # Main's timing projection repeats the worker completion clock.
+            # Accept its identical value, while preserving original request
+            # identity and execution facts against a conflicting override.
+            if key in fields and (type(fields[key]) is not type(value) or fields[key] != value):
+                raise ValueError('async_disposition_original_fact_conflict:' + key)
+            fields[key] = value
         if getattr(result, 'observation_sink', None) is not None:
             return result.observation_sink(_append_async_disposition, result.code, fields)
         receipt = _append_async_disposition(result.code, fields)
@@ -280,6 +289,7 @@ class ScannerAsyncEvalResult:
     original_generation: Any = None
     origin_fields: Mapping[str, Any] = field(default_factory=dict)
     observation_sink: Any = field(default=None, repr=False, compare=False)
+    coordinator_ready_perf: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,6 +576,7 @@ class ScannerAsyncEvalCoordinator:
             clocks = dict(result.get('entry_local_stage_clocks') or {})
             clocks['stage_durations_ms'] = dict(timings)
             clocks['stage_duration_basis'] = 'nested_same_pid_monotonic_not_additive'
+            clocks['async_evaluation_completed_perf'] = time.perf_counter()
             result['entry_local_stage_clocks'] = clocks
             return result
 
@@ -715,6 +726,7 @@ class ScannerAsyncEvalCoordinator:
                 if context.generation.generation_id in self._cancelled_generations:
                     terminal_reason = 'generation_invalidated'
                 else:
+                    result = replace(result, coordinator_ready_perf=time.perf_counter())
                     self._ready[context.request_id] = result
                 # Superseded output is still an observation notification,
                 # never a retained executable result or a second terminal.
@@ -833,6 +845,18 @@ class ScannerAsyncEvalCoordinator:
         with self._lock:
             return request_id in self._ready
 
+    def fixed_watch_ready_requests(self) -> dict[tuple[str, str], float]:
+        """Read bounded retained identities without consuming or revalidating.
+
+        Scanner output keeps its scheduler COMMIT lane. Main may bring a
+        matching fixed-watch visit forward; the normal handler still takes
+        the original result and checks its original deadline and guards.
+        """
+        with self._lock:
+            return {(result.generation_id, result.cache_key): result.coordinator_ready_perf
+                    for result in self._ready.values()
+                    if result.generation_kind == 'fixed_watch'}
+
     def has_completed_result(self) -> bool:
         """Report a result retained for main-thread COMMIT consumption.
 
@@ -846,18 +870,27 @@ class ScannerAsyncEvalCoordinator:
         with self._lock:
             return bool(self._ready)
 
-    def has_undrained_result(self) -> bool:
+    def has_undrained_result(self, *, direct_fixed_requests=()) -> bool:
         """Report worker output that the outer main-thread drain has not seen.
 
         A result remains in ``_ready`` after the drain because the scheduler
         COMMIT lane still needs to consume it. Using that retained state as a
         cooperative-yield signal would make the main loop yield before it can
-        execute the COMMIT.
+        execute the COMMIT. An exact fixed-watch request that still has a
+        target in Main's remaining queue can be consumed in the current pass.
+        The default preserves the ordinary drain requirement for all output.
         """
 
         self.poll()
+        direct = frozenset(direct_fixed_requests)
         with self._lock:
-            return bool(self._undrained_request_ids)
+            for request_id in self._undrained_request_ids:
+                result = self._ready.get(request_id)
+                if (result is not None and result.generation_kind == 'fixed_watch'
+                        and (result.generation_id, result.cache_key) in direct):
+                    continue
+                return True
+            return False
 
     def invalidate_generation(self, generation_id: str) -> None:
         normalized = str(generation_id or "").strip()
