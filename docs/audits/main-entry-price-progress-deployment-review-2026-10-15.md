@@ -48,3 +48,18 @@
 동일 탐지의 resource_usage는 PASS로 회복했다. 다만 log_scanner는 별도 OpenAI analyze_target timeout4건으로 fail이다. 19:04:14~19:04:48 실제 삼성전자 재진입 평가에서 잔여 예산223~831ms의 timeout5건이 기록됐다. 이번 매도 주문0060210의 상태 오류 재발이 아니며 provider/예산/threshold는 변경하지 않는다. 기존 `AuxiliaryCircuitRecoveryRepair1012`가 원 기계/AI 요청 시각·총예산·잔여예산 원천을 연결해 후속 원인을 확인한다. [별도 API 경보 원본](../../tmp/entry-progress-deploy-20261015-1820/postrestart-provider-errors.json). 배포 수용 PASS와 전체 시스템 무경고/보조 판단 자연 성공을 구분한다.
 
 10/14 최종화 recovered_late와 기존 holding sentinel 경고는 보존한다. 새 코드·PID의 역사적 finalization 결속, generation issues없음, handoff done/findings없음 및 원 보고서 SHA 불변은 확인했다. 별도 API log_scanner fail 때문에 모든 detector 무실패를 요구하는 통합 finalization 관측은 아직 pending이며, finalization 자체의 generation stale 재발을 뜻하지 않는다. 19:04:59 기준 새 PID341초 동안 매도 대기/owner receipt/sync 오류0 및 원장/DB9조건 PASS. [삼성전자 재기동 후 검증](../../tmp/entry-progress-deploy-20261015-1820/samsung-postrestart-verification.json).
+
+
+## 19:06 API 및 artifact 경보 재발 — 현재 수용 미완료
+
+19:04:37의 artifact 비실패는 해당 관측 시점의 역사적 결과다. 19:05:49 observer `e3827a8c1fe84dfd99d5789e2ceb3656`에서 실제 시간 초과와 원천 결손이 새로 관측됐다. 후속 19:19:24 정규 detector도 19:15:50 observer `8e93046c19a74a0180898cabc524a12a`와 동일 run으로 결속되며 artifact_freshness FAIL을 유지한다. 따라서 현재 상태를 **무오류 수용 미완료**로 정정한다. 배포된 코드/PID는 `05b78a4011ab7627b7e8ddc341d688fecf8f6a4e` / 2610988 / start12230101 그대로다. [원본 해시·요청 결속·현재 탐지 진단](../../tmp/entry-budget-alert-20261015-1906/diagnosis.json).
+
+- 19:05:49의 정확한 현재 PID 분모: 기계 관측21 / 연결 trace20 / 실제 provider 시도12 / 응답5 / timeout7. 원 응답은 CAUTION4·VETO1·PASS0이다. `pending_or_withheld_auxiliary_pass_not_quiet` 문구만으로 실제 PASS 보류가 있었다고 해석하지 않는다. 미연결 관측1건은 복구 또는 진행 중 여부를 추가 대사해야 하며, 누락 결함으로 확정하지 않는다.
+- 19:04:14~48 timeout5건은 모두 삼성전자 새 진입 평가의 OpenAI 원 기한 소진이다. 각 trace의 signal ID·원 epoch+5·PID/start·요청을 결속했고 HTTP 예산223~831ms, HTTP local lock 대기0ms를 확인했다. 실제 SDK가 timeout 후 언제 종료했는지, provider 서버 자체가 느렸는지는 이 자료로 확정하지 않는다. 매도0060210의 체결 반영 복구와 다른 사건이다.
+- 19:13:19 누적 성능 표본에서 native-ready→claim52건 p95 4.880초 / max4.944초다. 준비 queue50건 max23.45ms, 준비 service50건 max159.84ms, 응답 성공10건 max1.484초다. 서로 다른 단계·표본의 p95를 더하지 않는다. 주 지연은 provider 요청 이전에 존재하며 준비 queue 단독 병목 근거는 없다.
+- 현재 v6 selector는 유효 ready를 event epoch/sequence 오름차순으로 확보한다. 진행 중 평가가 끝나는 동안 후속 신호가 누적되면 원5초가 거의 소진된 신호가 다시 선택될 수 있다. 이를 곧바로 최신 신호 우선이나 후보 폐기로 바꾸면 기존 priority/전체 기회 보존 계약을 바꾸므로 이번 진단에서 변경하지 않았다. 지연 전체를 selector 구현 결함 하나로 단정하지 않는다.
+- 기계 원천에는 candle 시간/age 실패2건과 입력 refresh 실패3건도 별도로 존재한다. `machine_trace:entry_machine_input_deadline_expired` 외 원천 문제를 전부 provider timeout으로 합치지 않는다. 코드·정책 publication 검증 성공이 이 원천/요청 결손의 해소를 뜻하지 않는다.
+
+실행 owner는 기존 `AuxiliaryCircuitRecoveryRepair1012`다. 해야 할 일은 (1) 원 priority·전체 signal identity·원5초·기존 동시성을 보존한 Main 인수 및 정책 검증의 확인된 비용 축소, (2) 미연결 관측1건과 완료봉 실패의 producer→consumer 대사 후 재현된 결함 수리, (3) 같은 workload의 p95 목표와 다음 정규 observer/detector 동일 run 수용이다. 목표는 기존 native-ready→claim p95≤250ms / signal→live capture p95≤1초를 유지한다. 오류를 warning/PASS로 덮거나 최소 잔여시간 veto를 추가해 성능을 개선한 것으로 집계하지 않는다.
+
+재발 후 이번 점검은 원본·현재 PID·요청·code path 대조와 문서 정정이다. 새 runtime code 수정/커밋·배포·재기동·provider 호출·주문·전체 주문 경로 재생은 수행하지 않았다. 따라서 추가 수리 완료나 전체 detector 정상으로 보고하지 않는다. 문서 변경은 print-only parser와 diff 검증으로 닫으며, 기존 통합 코드 시험 수를 이번 재발 해결 시험으로 재사용하지 않는다.
