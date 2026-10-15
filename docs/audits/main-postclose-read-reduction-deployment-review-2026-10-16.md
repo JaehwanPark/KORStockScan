@@ -69,3 +69,22 @@
 배포 전 최종 검증은 통합16 suites2813 PASS, Python compile/diff/parser PASS다. 추가 실제 dated reader 대사에서 source10/15 holding 보고서가 이미5658a73a…를 원 code로 가지고 있음을 확인했다. 역사적b2087e97… source와 이 후속 source를 각각 같은 검토39d0f10c…에 exact pair로 결속하며 임의 origin/current는 거부한다. 관련 역사 보존/변조 회귀를 두 source-map에 확장해303 PASS를 확인했다. 보고서와 원 contract/code/FAIL 상태는 그대로고 현재 reader capability만 검증한다.
 
 새 네트워크 차단 fixture는 holding91개/auxiliary83개, 합계174 PASS·네트워크 시도/provider/order0·보호 산출물 불변으로 발행됐다. 현재 native 관측은 entry_cancel_wait/rising_missed/holding_vote의 source10/15와 auxiliary의 실제 기존 source10/14를 구분해4개 모두verified다. source10/15 auxiliary evaluation.json은 없으므로10/14를10/15로 재라벨링하지 않는다. 실제 source/comparison gaps와 비용 미상은 보존한다. [날짜별 reader/fixture 대사](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/preserved-date-native-preflight.json).
+
+
+## 실제 통합 기동·세 terminal ACK·optional 재결속
+
+b4d23f65815f4326caab9d89513b816a0abc082a의 ordered 배포는08:36:58 PASS다. 선택 release의 실제 Main PID2961613/start_ticks17126763과 native bootstrap·selector 소비를 확인했다. 6cf45b5c는 실제 ancestor다. 원07:55 기동의 I/O 경고 및 두 중단/실패 시도는 별도 보존한다.
+
+08:37:00 새 Main의 정규 startup recovery가 세 원 leg key를 모두 broker_position_sell_receipt_v1으로 append하고 해당 pending journal을 native ACK 후 제거했다. DB read-only 조회에서49300/49328/49267 모두 COMPLETED다. 수동 주문·journal 편집0이며 원 비용은 cost_source_unavailable다. [세 terminal 수용](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/native-sell-terminal-acceptance.json).
+
+같은 선택본의 native named-user installer로 ubuntu optional code/calendar를 재결속했다. 기존 enabled/notify/설치 시각/source floor/예산과17개 야간·후보·cursor 파일 SHA를 보존했다. code hash f6f009128fb691f482170f062fd75ff793cc2b4dd5d65122f0532c4bf54bcc1a, calendar hash18df578a22076af4b963aa168e2f77c41f7df9b210f24dce1baad8f3ff229603이며 ubuntu 비특권 verify_installed_calendar는 true다. [설치 검증](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/optional-unprivileged-verification.json). 자연 야간 수용은 기존 OPEN이다.
+
+## 08:42 observer 경고와 보유 감시기 시각 오류 보완
+
+08:38 log_scanner는 배포 전 누적134개 오류를 뒤늦게 읽어 ERROR를 발행했고08:39:49 새 오류 없이 PASS로 회복했다. 그 원 이력을 삭제하지 않았다. 별도로 정규 holding_exit_sentinel은 raw/legacy cache에 혼재한 offset-aware/naive clock을 정렬하며 TypeError로 실패했다. 기존 KST wall-time 계약에 맞춰 파싱 경계에서 aware 시각만 KST naive로 변환한다. 원 raw bytes·microsecond·cache schema와 시간창을 보존하고 UTC/KST/naive·기존 cache/cutoff parity를 검증했다.
+
+cron_completion은 holding_exit_sentinel 한 owner에만 기존 엄격한 owner_terminal_recovery를 opt-in한다. 같은 owner의 후속 정규 DONE만 앞선 FAIL을 supersede한다. ERROR/새 FAIL/START/SKIP/다른 owner DONE은 복구 영수증이 아니며 이전 error count/log는 보존한다. 기존 Buy Funnel 동작과 다른 cron/postclose는 변경하지 않는다. 실제 다음 정규 DONE·신선한 report/receipt와 detector를 최종 수용으로 요구한다.
+
+08:42 ERROR의 실제08:40 observer 원본은 현재 PID trace4개가 전부 source_quality_blocked_before_assessment이고, machine/provider/요청/전송/PASS0이었다. 요청·pending journal은 첫 호출 전 lazy 생성되어 FileNotFoundError였다. 완전한 현재-actor trace와 전부 알려진 평가 전 차단, 모든 auxiliary/lineage 카운터0, 빈 ledger/gap, 정확한 두 native 부재 shape를 함께 증명할 때만 bounded_source_quality_observation/warning_pending을 허용한다. 원천을 유효한 빈 입력으로 만들지 않으며 source gap·partial·diagnostics·runtime admission false를 유지한다. Permission/I/O/partial/actor/설명되지 않은 trace/호출·PASS1건/잘못된 count는 계속 실패한다. 원본 불변 재현은 [08:42 health rehearsal](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/observer-0842-health-readonly-rehearsal.json)이다.
+
+observer의 observation_health_projection 외 AST는 동일하고 native-v6 37개와 네 capability component는 byte 동일하다. 원 정책/code pin을 재발행하지 않는다. 해당 observer의 원203b3978…→검토19bdf1e4… 전체 SHA 쌍만 기존 code handoff에 추가한다. 보완7 suites **3082 PASS**, 앞선 sentinel/cache/cron167 PASS와13개 경고 경계 회귀는 중복 합산하지 않는다. Python compile·diff·print-only parser 후 immutable 후보를 새로 배포하고 실제 PID/다음 자연 cron/전체 detector로 닫는다. 코드 시험을 실제 오류 해소나 완전 원천 검증으로 보고하지 않는다.

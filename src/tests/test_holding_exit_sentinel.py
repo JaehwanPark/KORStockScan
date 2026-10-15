@@ -23,6 +23,31 @@ MECHANICAL_FIELDS = {
 }
 
 
+@pytest.mark.parametrize('use_cache', [False, True])
+def test_mixed_timezone_rows_use_the_same_kst_clock_in_sort_and_windows(tmp_path, monkeypatch, use_cache):
+    monkeypatch.setattr(sentinel, 'DATA_DIR', tmp_path)
+    day = '2026-10-16'
+    payloads = [_event(day, '08:20:01', 'holding_started'),
+                _event(day, '08:20:00+09:00', 'holding_started'),
+                _event(day, '08:20:02+09:00', 'holding_started')]
+    payloads[2]['emitted_at'] = '2026-10-15T23:19:59+00:00'
+    path = tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    path.parent.mkdir();raw=''.join(json.dumps(p)+'\n' for p in payloads).encode();path.write_bytes(raw)
+    events = sentinel.load_pipeline_events(day, use_cache=use_cache)
+    assert [e.emitted_at for e in events] == [datetime(2026,10,16,8,19,59),
+        datetime(2026,10,16,8,20),datetime(2026,10,16,8,20,1)]
+    report = sentinel.build_holding_exit_sentinel_report(day,
+        as_of=datetime(2026,10,16,8,20,tzinfo=ZoneInfo('Asia/Seoul')), use_cache=use_cache, dry_run=True)
+    assert report['current']['session']['event_count'] == 2
+    assert path.read_bytes() == raw
+
+
+def test_legacy_aware_cache_row_is_read_without_cache_schema_rebuild():
+    row = dict(emitted_at='2026-10-15T23:20:00+00:00', pipeline='HOLDING_PIPELINE',
+               stage='holding_started',stock_name='Stock',stock_code='005930',record_id='1',fields={})
+    assert sentinel._event_from_cache_row(row).emitted_at == datetime(2026,10,16,8,20)
+
+
 def test_typed_semantics_pins_actual_position_and_current_effective_receipt():
     from src.engine.scalping import holding_profit_exit_semantics as semantics
     from src.engine.scalping import trailing_situation_policy as typed

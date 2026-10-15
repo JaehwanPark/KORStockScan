@@ -210,3 +210,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 추가 승인된6cf45b5c 통합·optional code/calendar 재결속은 기존 `MainMarketWeaknessPostcloseObservation1008`와 `DirectFamilyPreopenPolicyHandoff`가 각자의 설치/선택·PID 수용을 소유한다. 원 enabled/notify/source floor/설치 역사·후보/outbox와 야간 예산을 유지하고 다음 자연 야간 수용은 OPEN이다. [통합·배포 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md#6cf45b5c-통합과-optional-codecalendar-인계).
 
 현재 승인 배포는 세 overnight SELL 완료 outbox의 엄격한 broker/BUY 결속 ACK 수리를 포함한다. 원 record49300/49328/49267과 leg hash를 보존하고 native PID·세 key ACK·terminal 및 다음 detector로 운영 수용한다. 비용 미상/기존 연구 OPEN은 유지한다. 동일 배포 owner와 위 감사 근거를 사용하며 수동 주문/journal 편집은 하지 않는다.
+
+08:36:58 b4d23f658 native 배포/PID 수용과08:37 세 SELL key ACK 및 optional code/calendar verify를 확인했다. 후속08:42 observer의 lazy auxiliary 부재와 sentinel clock 혼용은 동일 배포 owner에서 보완·새 PID/자연 cron/detector 수용한다. 원 FAIL·partial/source gap·비용 미상 및 다음 optional 자연 야간 OPEN은 유지한다. 위 배포 리뷰의 원인/시험/종결 증거를 따른다.

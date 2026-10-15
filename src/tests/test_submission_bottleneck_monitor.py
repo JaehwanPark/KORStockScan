@@ -3164,6 +3164,57 @@ def test_bounded_quality_warning_preserves_pending_source_quality_notification()
     assert result['notification_pending']==['machine_auxiliary_intraday_source_gap']
 
 
+@pytest.mark.parametrize('damage', [None,'aux_required','request','machine','trace_partial','pending_io',
+    'request_io','trace_io','unexplained_trace','birth','pending_boolean','extra_metadata','pass'])
+def test_preassessment_without_lazy_auxiliary_journals_is_bounded_warning_only(damage):
+    from copy import deepcopy
+    result=_observation_health_fixture();now=monitor.stamp(result['as_of']);actor=['9','900']
+    proof,generation=_health_birth_fixture(now,actor)
+    generation.update(status='current',generation_current=True,selector_reported_actual_pid_consumed=True)
+    result['observer_generation']=generation
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name];token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(deepcopy(original),actor,now)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    gap=result['source_gap_semantics']['current_health_cohort']['view']
+    machine=result['machine_semantics']['current_health_cohort']['view']
+    absent=dict(status='unobservable',tail_truncated=False,window_covered=False,recent_count=0,reason='FileNotFoundError')
+    gap.update(status='gap_observed',observed={'entry_traces':4},
+        diagnostics={'machine_trace:source_quality_blocked_before_assessment':4},
+        diagnostics_by_scope={'route:krx_nxt_integrated|machine_trace:source_quality_blocked_before_assessment':4})
+    gap['sources']['trace']['recent_count']=4;gap['sources']['pending']=deepcopy(absent)
+    machine.update(status='partial_unobservable',tail_truncated=True,provider_lineage_source_status='partial_source_gap')
+    zero_keys=('machine_observation_count','trace_attempt_count','request_prepared_count',
+        'provider_transmission_attempt_count','raw_response_observed_count','auxiliary_response_contract_valid_count',
+        'raw_pass_count','valid_pass_count','execution_valid_pass_count','provider_timeout_count',
+        'enter_without_request_observed','exact_attempt_join_gap_count')
+    lineage=dict(status='partial_source_gap',issues={},decision_authority='report_only',exact_pid_filter=actor,
+        current_pid_coverage='exact_live_pid',source_gaps={},attempt_ledger=[],
+        source_windows={'requests':deepcopy(absent),'traces':deepcopy(gap['sources']['trace'])},
+        **dict.fromkeys(zero_keys,0))
+    machine['reversal_provider_lineage']=lineage
+    if damage=='aux_required':gap['observed']['auxiliary_required']=1
+    elif damage=='request':lineage['request_prepared_count']=1
+    elif damage=='machine':machine['observation_count']=1
+    elif damage=='trace_partial':gap['sources']['trace'].update(status='partial',window_covered=False)
+    elif damage=='pending_io':gap['sources']['pending']['reason']='PermissionError'
+    elif damage=='request_io':lineage['source_windows']['requests']['reason']='PermissionError'
+    elif damage=='trace_io':gap['sources']['trace']['reason']='FileNotFoundError'
+    elif damage=='unexplained_trace':gap['observed']['entry_traces']=5;gap['sources']['trace']['recent_count']=5
+    elif damage=='birth':proof['boot_epoch']+=1
+    elif damage=='pending_boolean':gap['sources']['pending']['recent_count']=False
+    elif damage=='extra_metadata':gap['sources']['pending']['malformed_rows']=1
+    elif damage=='pass':lineage['raw_pass_count']=1
+    before=json.dumps(result,sort_keys=True);health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    assert health['full_coverage_proven'] is False and health['current_observation_verified'] is False
+    assert health['runtime_effect'] is False and health['allowed_runtime_apply'] is False
+    if damage is None:
+        assert health['reason']=='bounded_source_quality_observation'
+        assert 'source_window_not_complete:pending' in health['unmet_conditions']
+    assert json.dumps(result,sort_keys=True)==before
+
+
 def _derived_coverage_health_fixture(route='krx_nxt_integrated'):
     result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=False)
     gap.update(status='gap_observed',issues={'machine_probe:coverage_degraded:'+route:1},

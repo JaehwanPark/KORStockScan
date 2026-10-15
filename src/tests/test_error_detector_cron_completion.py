@@ -30,10 +30,12 @@ def test_finalization_detector_window_precedes_preopen_scanner():
     (['FAIL', 'DONE', 'GENERIC_ERROR'], 'warning'),
     (['START'], 'unknown'),
 ])
-@pytest.mark.parametrize('label', ['buy_funnel_sentinel', 'buy funnel sentinel'])
-def test_buy_funnel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected, label):
+@pytest.mark.parametrize('job_id,label', [
+    ('buy_funnel_sentinel', 'buy_funnel_sentinel'), ('buy_funnel_sentinel', 'buy funnel sentinel'),
+    ('holding_exit_sentinel', 'holding_exit_sentinel'), ('holding_exit_sentinel', 'holding exit sentinel')])
+def test_recurring_sentinel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected, job_id, label):
     import src.engine.error_detectors.cron_completion as cc
-    job = next(dict(job) for job in CRON_JOB_REGISTRY if job['id'] == 'buy_funnel_sentinel')
+    job = next(dict(job) for job in CRON_JOB_REGISTRY if job['id'] == job_id)
     log = tmp_path / job['log']; log.parent.mkdir()
     lines = []
     for marker in markers:
@@ -46,9 +48,10 @@ def test_buy_funnel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_
     monkeypatch.setattr(cc, '_kst_time_tuple', lambda: (10, 30))
     monkeypatch.setattr(cc, 'is_krx_trading_day', lambda day: True)
     monkeypatch.setattr(cc, 'CRON_JOB_REGISTRY', [job])
-    monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '*/5 9-15 * * 1-5 # BUY_FUNNEL_SENTINEL_INTRADAY')
+    marker = 'BUY_FUNNEL_SENTINEL_INTRADAY' if job_id == 'buy_funnel_sentinel' else 'HOLDING_EXIT_SENTINEL_PREMARKET'
+    monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '*/5 9-15 * * 1-5 # '+marker)
     result = CronCompletionDetector(dry_run=True).check()
-    assert result.details['buy_funnel_sentinel_status'] == expected
+    assert result.details[job_id+'_status'] == expected
     assert result.severity == ('warning' if expected == 'warning' else 'pass')
     assert log.read_text() == '\n'.join(lines)+'\n'
 

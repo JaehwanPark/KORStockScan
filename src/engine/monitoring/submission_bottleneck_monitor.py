@@ -3951,8 +3951,34 @@ def observation_health_projection(result):
     if active_report_valid or quiet_report_valid:
         soft.update({'monitor_state_not_quiet_full_observation', 'current_input_provenance_invalid'})
 
+    # Request/pending journals are created lazily. A complete current-actor
+    # trace can prove that every observed attempt stopped before assessment,
+    # while those absent journals remain explicitly unobservable. This permits
+    # bounded source-quality WARNING only, never source/decision validation.
+    preassessment_counts = [diagnostics.get('machine_trace:'+reason, 0)
+        for reason in ('source_quality_blocked_before_assessment', 'required_feature_blocked_before_assessment')]
+    preassessment_traces = sum(preassessment_counts) if all(count(v) for v in preassessment_counts) else None
+    lazy_auxiliary_absence = (counts_valid and n == provider_n == 0
+        and 'source_window_not_complete:trace' not in failed
+        and count(observed.get('entry_traces'), minimum=1)
+        and preassessment_traces == observed['entry_traces']
+        and all(count(observed.get(k, 0), maximum=0) for k in ('auxiliary_required', 'auxiliary_called',
+            'auxiliary_cost_bound', 'auxiliary_pending', 'auxiliary_pending_bound'))
+        and lineage.get('attempt_ledger') == [] and lineage.get('source_gaps') == {}
+        and all(count(lineage.get(k), maximum=0) for k in ('machine_observation_count', 'trace_attempt_count',
+            'request_prepared_count', 'provider_transmission_attempt_count', 'raw_response_observed_count',
+            'auxiliary_response_contract_valid_count', 'raw_pass_count', 'valid_pass_count',
+            'execution_valid_pass_count', 'provider_timeout_count', 'enter_without_request_observed',
+            'exact_attempt_join_gap_count')))
+
     def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC, source_name=None):
         source=obj(source); identity=obj(source.get('source_identity'))
+        if (source_name in ('pending','requests') and lazy_auxiliary_absence
+                and source.get('status') == 'unobservable'):
+            return (set(source) == {'status','tail_truncated','window_covered','recent_count','reason'}
+                and source.get('reason') == 'FileNotFoundError'
+                and source.get('tail_truncated') is False and source.get('window_covered') is False
+                and count(source.get('recent_count'), maximum=0))
         # A validated native forward index can cover the whole interval without
         # a raw append read. Reuse the exact proof checks above, not bytes>0.
         if (source_name == 'probe'
@@ -4090,7 +4116,8 @@ def observation_health_projection(result):
                 and all(count(v,minimum=1) for v in gaps.values())
                 and sum(gaps.values()) == lineage.get('exact_attempt_join_gap_count')
                 and set(windows) == {'requests','traces'}
-                and all(clean_reader(v,8*1024*1024,SOURCE_WINDOW_SEC+5) for v in windows.values())
+                and all(clean_reader(v,8*1024*1024,SOURCE_WINDOW_SEC+5,source_name=name)
+                        for name,v in windows.items())
                 and ledger_shape and len(ledger) == lineage.get('trace_attempt_count')
                 and lineage.get('machine_observation_count') == provider_n
                 and lineage.get('execution_valid_pass_count',0) <= lineage.get('valid_pass_count',0)

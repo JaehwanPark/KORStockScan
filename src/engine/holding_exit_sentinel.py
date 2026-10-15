@@ -130,7 +130,11 @@ def _parse_iso_datetime(value: str) -> datetime | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
+        # Sentinel windows use KST wall time. Normalize at both raw and legacy
+        # cache entry points, before sorting or subtracting mixed source clocks.
+        return (parsed.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+                if parsed.tzinfo is not None else parsed)
     except ValueError:
         return None
 

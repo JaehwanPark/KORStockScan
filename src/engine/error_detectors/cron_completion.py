@@ -140,6 +140,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "holding_exit_sentinel",
         "log": "logs/run_holding_exit_sentinel_cron.log",
+        "owner_terminal_recovery": True,
+        "owner_log_labels": ("holding_exit_sentinel", "holding exit sentinel"),
         "window_start": (8, 5),
         "window_end": (19, 50),
         "mode": "recurring",

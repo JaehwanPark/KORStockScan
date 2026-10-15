@@ -698,6 +698,14 @@ REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     ),
 }
 
+# Warning-only health for proven preassessment traces with lazy journals absent.
+REVIEWED_PREASSESSMENT_OBSERVER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '203b397835edf5ff0d578aa8d5b25126f8c61307adbe92031371b9000d710e56',
+        '19bdf1e4417830d69773bf41c0511326242a5435e1f94af84dbeb5dac968b3c2',
+    ),
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -771,7 +779,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_HOLDING_CONTRACT_SOURCES.get(name),
                     REVIEWED_POSTCLOSE_READ_SOURCES.get(name),
                     REVIEWED_CARRIED_VOTE_PREFIX_SOURCES.get(name),
-                    REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES.get(name)):
+                    REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES.get(name),
+                    REVIEWED_PREASSESSMENT_OBSERVER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

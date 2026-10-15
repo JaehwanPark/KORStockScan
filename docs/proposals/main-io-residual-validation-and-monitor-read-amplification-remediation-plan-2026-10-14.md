@@ -204,3 +204,8 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 ### 장중 terminal receipt 수리 인계 — 2026-10-16
 
 추가 사용자 오류의 세 overnight SELL은 이미 체결한 `sell_completed` outbox다. 별도 broker/BUY-generation identity로 원 frozen field/시각/qty/custody를 검증해 ACK하며, scanner/entry trace를 합성하거나 주문을 재전송하지 않는다. simulation scope를 outbox snapshot에도 보존한다. 정확한 코드 쌍과 새 holding/auxiliary capability fixture, 원 정책/PREOPEN 불변, native PID/세 원 key ACK/최종 detector를 배포 수용으로 확인한다. [수리·인계 근거](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md#장중-추가-sell-terminal-outbox-세-건의-수리). 원 journal과 실제 비용 미상은 보존한다.
+
+
+### 10/16 자연 감시 결과의 추가 보완
+
+실제 b4d23f658 기동과 세 SELL terminal native ACK, optional code/calendar 재결속을 확인했다. 후속 정규 감시에서 holding_exit_sentinel의 aware/naive clock 혼용을 발견하여 기존 raw/cache 파싱을 KST wall-time으로 통일한다. cron 복구는 이 owner만 같은 owner의 후속 DONE을 요구하며 기존 FAIL 이력과 새 오류 감지를 보존한다. observer는 완전한 현재 PID 평가 전 차단 trace·호출0을 증명한 lazy 요청/pending 부재만 제한 경고로 분류한다. partial/source gap/runtime admission false는 유지한다. 운영 수용은 같은 DirectFamilyPreopenPolicyHandoff 아래 새 native PID·자연 sentinel DONE·전체 detector로 확인한다. [원인·경계·시험·수용](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md#0842-observer-경고와-보유-감시기-시각-오류-보완). 다음 자연 optional 야간은 기존 MainMarketWeaknessPostcloseObservation1008 OPEN이다.
