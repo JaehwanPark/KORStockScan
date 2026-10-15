@@ -52,9 +52,11 @@ def active(data_root,day):
         current=N.load_effective(data_root=Path(data_root),target_date=day)
     except ValueError as exc:
         from src.engine.scalping import reversal_joint_registration as J
-        if not J.pending_path(data_root).exists() or not str(exc).startswith(
+        from src.engine.scalping import reversal_cumulative_registration as Q
+        owner=Q if Q.pending_path(data_root).exists() else J
+        if not owner.pending_path(data_root).exists() or not str(exc).startswith(
                 ('v4_contract_code_changed:','v5_contract_code_changed:','v6_contract_code_changed:')):raise
-        current=J.load_offline_parent(data_root,day)
+        current=owner.load_offline_parent(data_root,day)
     if (current or {}).get('continuous_reversal',{}).get('schema') in {V5.SCHEMA,'continuous_reversal_policy_v6'} or (enabled(data_root) and (current or {}).get('continuous_reversal',{}).get('schema')==V4.SCHEMA):
         return current
     return None
@@ -88,7 +90,7 @@ def request(snapshot, arm, *, incumbent=None):
     event,source=snapshot
     from src.engine.scalping import reversal_extended_catalog as EC
     from src.engine.scalping import reversal_extended_union as EA
-    UNION = EA if event.get("registry_sha256") in {EC.SHA256, EC.SUCCESSOR_SHA256, EC.JOINT_SHA256} else globals()["UNION"]
+    UNION = EA if event.get("registry_sha256") in {EC.SHA256, EC.SUCCESSOR_SHA256, EC.JOINT_SHA256,EC.CUMULATIVE_SHA256} else globals()["UNION"]
     if incumbent is not None:
         key=C.cell_key(event['symbol'],event['market'],event['confirmation_price']); route=event['venue']
         cell=incumbent['machine_cells'][key]['routes'][route]
@@ -129,6 +131,12 @@ def _totals(c):
 
 def machine_report(data_root,day,publication,parent,*,source=None,publish_outputs=True):
     """All retained native ticks, unchanged causal roots and native labels."""
+    from src.engine.scalping import reversal_cumulative_registration as Q
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    if (parent['continuous_reversal'].get('operating_manifest',{}).get('cumulative_variant_groups')
+            or Q.pending(data_root,parent,N.next_target(publication))):
+        from src.engine.scalping import reversal_cumulative_postclose as CP
+        return CP.build(data_root,day,publication,parent,source=source,publish_outputs=publish_outputs)
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     out=directory(data_root,day);(out/'frozen').mkdir(parents=True,exist_ok=True)
     source=source or P.ensure_population(data_root,day)
@@ -285,6 +293,9 @@ def prepare_inputs(data_root,day,machine,parent=None):
         parent=parent or N.load_effective(data_root=Path(data_root),target_date=machine['publication_date'])
         if parent['continuous_reversal']['schema'] in {V5.SCHEMA,'continuous_reversal_policy_v6'}:
             return T.prepare(data_root,day,machine,parent)
+    if machine.get('operating_manifest',{}).get('cumulative_variant_groups'):
+        from src.engine.scalping.reversal_cumulative_postclose import compatible_inputs
+        return compatible_inputs(machine)
     if machine['artifact_content_sha256']!=P.seal(machine)['artifact_content_sha256']:
         raise ValueError('operating_machine_changed')
     parent=parent or N._read(N.root(Path(data_root))/'generations'/(machine['parent_bundle_sha256']+'.json'))
@@ -356,6 +367,10 @@ def calls(data_root,day,*,stop_epoch=None,workers=4,transport=None):
     from src.engine.scalping import reversal_auxiliary_tuning as T
     if T.config(data_root) is not None:
         return T.calls(data_root,day,stop_epoch=stop_epoch,transport=transport)
+    machine=json.loads((directory(data_root,day)/'machine-comparison.json').read_text())
+    if machine.get('operating_manifest',{}).get('cumulative_variant_groups'):
+        from src.engine.scalping.reversal_cumulative_postclose import compatible_inputs
+        return compatible_inputs(machine)
     return L.calls(sys.modules[__name__],data_root,day,stop_epoch=stop_epoch,workers=workers,transport=transport)
 
 
@@ -486,10 +501,17 @@ def initial_protocol_evidence(store, snapshot, required):
 def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
     machine=json.loads((directory(data_root,day)/'machine-comparison.json').read_text())
     if machine.get('registration_change'):
+        from src.engine.scalping import reversal_cumulative_registration as Q
+        if machine['registration_change'].get('schema')==Q.SCHEMA:
+            from src.engine.scalping.reversal_cumulative_postclose import initial_reports
+            return initial_reports(data_root,day,publication,parent,machine,publish_policy=publish_policy)
         from src.engine.scalping.reversal_extended_registration import initial_reports
         return initial_reports(data_root,day,publication,parent,machine,publish_policy=publish_policy)
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import reversal_auxiliary_tuning as T
+    if (T.config(data_root) is None and machine.get('operating_manifest',{}).get('cumulative_variant_groups')):
+        from src.engine.scalping.reversal_cumulative_postclose import initial_reports
+        return initial_reports(data_root,day,publication,parent,machine,publish_policy=publish_policy)
     if parent['continuous_reversal']['schema']=='continuous_reversal_policy_v6' or (T.config(data_root) is not None and parent['continuous_reversal']['schema']==V5.SCHEMA):
         return T.auxiliary_report(data_root,day,publication,parent,publish_policy=publish_policy)
     out=directory(data_root,day);ledger=out/'shared-ledger'

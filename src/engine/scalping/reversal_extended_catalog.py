@@ -470,6 +470,10 @@ def validate_payload(p,key,route):
         raise ValueError('extended_definition_or_scope_invalid')
 
 def matches(bid,event,features):
+    if bid in CUMULATIVE.DEFINITIONS:
+        if not applicable(bid,cell_key(event['symbol'],event['market'],event['confirmation_price']),event['venue']):return False
+        CUMULATIVE.validate_signal(event)
+        return True
     if bid in JOINT.COMPOSED:
         if not applicable(bid,cell_key(event['symbol'],event['market'],event['confirmation_price']),event['venue']):return False
         JOINT.validate_composed(event)
@@ -703,7 +707,18 @@ JOINT_MANIFEST = dict(schema=JOINT.VERSION,parent_registry_sha256=SUCCESSOR_SHA2
     additions=JOINT_DEFINITIONS)
 JOINT_SHA256 = digest(JOINT_MANIFEST)
 
+# Explicit cumulative successor. Earlier manifests and hashes stay frozen.
+from src.engine.scalping import reversal_cumulative_catalog as CUMULATIVE
+CUMULATIVE_DEFINITIONS = CUMULATIVE.DEFINITIONS
+EXTENDED_DEFINITIONS = dict(EXTENDED_DEFINITIONS, **CUMULATIVE_DEFINITIONS)
+DEFINITIONS = dict(DEFINITIONS, **CUMULATIVE_DEFINITIONS)
+PHASES = dict(PHASES, **CUMULATIVE.PHASES)
+CUMULATIVE_MANIFEST = dict(schema=CUMULATIVE.VERSION,parent_registry_sha256=JOINT_SHA256,
+                          data_sha256=CUMULATIVE.DATA_SHA256,additions=CUMULATIVE_DEFINITIONS)
+CUMULATIVE_SHA256 = digest(CUMULATIVE_MANIFEST)
+
 def registry_for(branch_ids):
     ids=tuple(branch_ids)
+    if any(b in CUMULATIVE_DEFINITIONS for b in ids):return CUMULATIVE_SHA256
     if any(b in JOINT_DEFINITIONS for b in ids):return JOINT_SHA256
     return SUCCESSOR_SHA256 if any(b in ADDITIONAL_DEFINITIONS for b in ids) else SHA256

@@ -182,3 +182,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 05:51 장전 최종화 경보 수리 인계
 
 - 기존 `DirectFamilyPreopenPolicyHandoff`가 [준비 예산·코드 검증 경보 수리](../audits/morning-finalization-preparation-and-generation-warning-repair-2026-10-15.md)의 source14/target15 새 prepared·최종화·선택 commit·정규 PREOPEN/실제 PID 소비를 각각 확인한다. 준비 기본600초는 원06:50 마감 cap과 분리된 검증 예산이며 AI/매매 예산을 바꾸지 않는다. 원05:51 실패와 이전 준비 영수증을 보존한다.
+
+## 누적 기계 후보의 별도 작업본 인계
+
+- [ ] `[CumulativePolicyAdoptionDeployment1015] 누적 기계 후보 등록안 배포 대기` (`Due: 2026-10-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - Source: [구현·리뷰·격리 검증](../audits/main-cumulative-policy-adoption-implementation-review-2026-10-15.md), [정책 반영 계획 §10](../proposals/main-cumulative-research-policy-adoption-plan-2026-10-14.md#10-1015-별도-작업본-구현과-배포-대기-인계).
+  - 사용자 지시는 별도 작업본의 구현·반복 보완·배포대기다. 이 항목의 일정은 자동 배포/등록/재기동 권한이 아니다. source 수리의 과거 OPEN을 재개하지 않는다.
+  - 작업본 `/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015`, branch `codex/cumulative-policy-adoption-20261015`; private data/tmp와 immutable prepared archive를 보존한다. 원 작업본의 동시 작업은 그대로 둔다.
+  - Acceptance: 코드·원천/variant/native-reader 검증 PASS와 prepare authority false를 확인한 뒤 배포 지시를 기다린다. 승인 후 새 selected release/코드·현재 parent CAS·날짜·원천 해시를 대조하고 durable intake→동일 세대 stage→적용일 준비/정상 PID 소비를 기존 `DirectFamilyPreopenPolicyHandoff`와 연결한다. target이 지나면 publication/target을 새로 준비한다.
+  - History: 10/14 계획, 10/15 누적 연구 38개 가설·19,892개 관측 대안과 reviewed 15개 scope 변경/7개 승계를 계승한다. 성공 보존율/표본/EV/새 날짜 gate는 추가하지 않는다. 코드·준비와 실제 등록/활성/PID/자연 거래/실현 성과는 별도 상태다.

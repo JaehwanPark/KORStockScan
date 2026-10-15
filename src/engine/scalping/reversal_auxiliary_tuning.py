@@ -125,7 +125,10 @@ def prepare(data_root, day, machine, parent, *, research=None):
         raise ValueError('auxiliary_tuning_not_configured')
     if machine.get('artifact_content_sha256') != P.seal(machine)['artifact_content_sha256'] or machine.get('source_date')!=day:
         raise ValueError('auxiliary_machine_report_changed')
-    if machine['operating_manifest']['scopes'] != parent['continuous_reversal']['operating_manifest']['scopes'] and not machine.get('registration_change'):
+    if machine.get('cumulative_selection'):
+        from src.engine.scalping import reversal_cumulative_registration as Q
+        Q.validate_manifest(machine['operating_manifest'])
+    if machine['operating_manifest']['scopes'] != parent['continuous_reversal']['operating_manifest']['scopes'] and not (machine.get('registration_change') or machine.get('cumulative_selection')):
         raise ValueError('auxiliary_tuning_machine_membership_changed')
     # Current identities are frozen before looking at outcomes or responses.
     current = R.current_bindings(data_root,parent) if context else I.effective_bindings(data_root,parent,day=day)
@@ -154,6 +157,10 @@ def prepare(data_root, day, machine, parent, *, research=None):
         for ident, p in seen.items():
             census['eligible_universe'] += 1
             census['outcome_'+p['outcome']['status']] += 1
+            if p.get('cumulative_features') is not None and not any(
+                    p['truth'].get(b)=='TRUE' for b in machine['operating_manifest']['scopes'][p['scope']]):
+                census['not_selected_machine_confirmation']+=1
+                continue
             if ident in excluded or ident in conflicting:
                 census['development_or_source_excluded'] += 1
                 continue
@@ -198,9 +205,14 @@ def prepare(data_root, day, machine, parent, *, research=None):
         pairs = []; groups = defaultdict(list)
         for p in selected_all:
             sid = p['scope']; old = current[sid]
-            snap = store.get(p['snapshot_obj'])
+            if p.get('cumulative_features') is not None:
+                from src.engine.scalping.reversal_cumulative_postclose import materialize
+                snap=materialize(store,p,machine['operating_manifest']['scopes'][sid])
+                snapshot_obj=store.put(snap)
+            else:
+                snap = store.get(p['snapshot_obj']);snapshot_obj=p['snapshot_obj']
             pair = dict(scope=sid, opportunity_key=p['opportunity_key'], day=p['day'], symbol=p['symbol'],
-                        snapshot_obj=p['snapshot_obj'], outcome=p['outcome'],
+                        snapshot_obj=snapshot_obj, outcome=p['outcome'],
                         current_registry=old, candidate_registry=cfg['candidate_registry'], requests={})
             comp = 'aux-pair:'+P.digest([sid,old,cfg['candidate_registry'],'confirmation_replay'])
             for role, registry in [('current',old),('candidate',cfg['candidate_registry'])]:
@@ -562,7 +574,7 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
         # Older comparison reports contain comparison payloads without execution
         # bindings. Only the new explicit selector's receipt can replace them.
         mc=({c['key']:copy.deepcopy(c) for c in machine['cells']}
-            if machine.get('variant_selection') is not None else copy.deepcopy(f['machine_cells']))
+            if machine.get('variant_selection') is not None or machine.get('cumulative_selection') is not None else copy.deepcopy(f['machine_cells']))
         ac=copy.deepcopy(f['auxiliary_cells']);pending=[]
         for key,route in V.scopes():
             cell=mc[key]['routes'][route]

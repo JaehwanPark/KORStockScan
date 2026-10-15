@@ -82,6 +82,9 @@ def intake(data_root,research_dir,parent,*,confirm,publication):
 
 
 def pending(data_root,parent,target_date):
+    from src.engine.scalping import reversal_cumulative_registration as Q
+    cumulative=Q.pending(data_root,parent,target_date)
+    if cumulative is not None:return cumulative
     from src.engine.scalping import reversal_manual_registration as M
     residual=M.pending(data_root,parent,target_date)
     if residual is not None:return residual

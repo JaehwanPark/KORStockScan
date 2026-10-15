@@ -225,11 +225,12 @@ def claim_snapshot(symbol, venue, session, *, now, item, family_sha256):
 
 
 def _filter_first(event, source, state):
+    from src.engine.scalping.reversal_cumulative_runtime import hold_floor
     for bid, signal in list(event['branch_signals'].items()):
         if signal['decision_phase'] == B.FIRST and (not state.legacy.turn or state.legacy.turn['event_id'] != signal['event_id']):
             event['branch_signals'].pop(bid)
             source['branch_inputs'].pop(bid)
-        elif signal['decision_phase']=='FIRST_PRICE_HOLD' and not any(
+        elif (signal['decision_phase']=='FIRST_PRICE_HOLD' or bid in C.CUMULATIVE_DEFINITIONS and hold_floor(signal) is not None) and not any(
                 ready['event']['signal_id']==event['signal_id']
                 and bid in ready['event']['branch_signals'] for ready in state.ready):
             event['branch_signals'].pop(bid)

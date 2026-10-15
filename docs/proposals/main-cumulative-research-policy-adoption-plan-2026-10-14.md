@@ -1,19 +1,19 @@
-# Main 누적 상승 포착·실패 감소 연구의 정책 반영 계획 — 2026-10-14
+# Main 누적 상승 포착·실패 감소 연구의 정책 반영 계획 — 2026-10-14 / 10-15 보완
 
 ## 1. 목적과 적용 범위
 
-9/29~10/13 누적 원천으로 연구한 고정 후보를 **등록 → 실제 탐지 코드와 재생 일치 검증 → 기존형·추가형·정제형·결합형 비교 → 정책 발행 → 적용 확인**으로 연결한다. 새로운 가설·조건·경계값 탐색은 수동 연구가 담당한다. 장후에는 등록한 불변 후보와 실제 적용 정책을 평가한다.
+누적 원천으로 수동 연구한 후보를 **등록 → 실제 탐지 코드와 재생 일치 검증 → 기존형·추가형·정제형·결합형 비교 → 정책 발행 → 적용 확인**으로 연결한다. 10/14의 고정 25가설 재검증뿐 아니라 사용자 후속 지시에 따른 [10/15 신규 두 축 연구](main-machine-cumulative-dual-track-research-plan-2026-10-15.md)를 함께 소비한다. 새로운 가설·조건·경계값 탐색은 수동 연구가 담당한다. 장후에는 등록한 불변 후보와 실제 적용 정책을 평가한다.
 
-이 문서는 구현·검증·정책 반영 절차의 제안이다. 이번 작성으로 등록 요청, 정책 선택, 배포, 재기동 영수증을 발급하지 않는다. 구현 착수 시 그 지시의 적용 범위와 기존 승인을 구체적인 batch receipt에 결속한다. 본 계획의 Main 기계 후보와 [entry-split 관측 계약 수리](entry-split-large-report-verification-projection-remediation-plan-2026-10-14.md)는 독립 작업이다.
+10/15 사용자 지시에 따라 별도 작업본에서 구현·코드 리뷰·보완·격리 검증을 진행한다. 운영 등록·배포·재기동은 대기한다. 현재 구현과 인계 상태는 §10 및 [구현 검토](../audits/main-cumulative-policy-adoption-implementation-review-2026-10-15.md)가 소유한다. 본 계획의 Main 기계 후보와 [entry-split 관측 계약 수리](entry-split-large-report-verification-projection-remediation-plan-2026-10-14.md)는 독립 작업이다.
 
-실행 인계는 [당일 체크리스트](../checklists/2026-10-14-stage2-todo-checklist.md)의 기존 `DirectFamilySourceRepairMainMechanisticEntry`, `DirectFamilyPreopenPolicyHandoff`를 사용한다. 새로운 중복 OPEN ID나 자동 가설 생성 작업을 만들지 않는다. 구현·코드 리뷰·발행·자연 판정·실제 비용 성과는 각각 완료 상태를 갖는다.
+10/14 인계 기준은 [당시 체크리스트](../checklists/2026-10-14-stage2-todo-checklist.md)의 `DirectFamilySourceRepairMainMechanisticEntry`, `DirectFamilyPreopenPolicyHandoff`였다. [10/15 체크리스트](../checklists/2026-10-15-stage2-todo-checklist.md)에는 전자의 OPEN이 없으므로 과거 완료/인계 항목을 현재 executable owner로 재사용하지 않는다. 후속 등록 구현 시 현재 정책 owner와 `DirectFamilyPreopenPolicyHandoff`의 적용일·수용 범위를 연결한다. 이번 수동 연구로 중복 OPEN이나 자동 가설 생성 작업을 만들지 않는다. 구현·코드 리뷰·발행·자연 판정·실제 비용 성과는 각각 완료 상태를 갖는다.
 
 ## 2. 확인한 기준과 증거
 
 - [누적 연구 결과](../audits/main-machine-cumulative-missed-rise-and-enter-failure-research-review-2026-10-14.md): 고정 가설 25개, 22개 scope, A/F 조합 8,432개. F 개선 12개 scope, A 개선 또는 동률 추가 성공 5개 scope, 두 효과를 함께 보인 J 10개 scope.
 - **정정본** [cumulative-result.json](../../tmp/main-machine-joint-research-20261014/corrected/cumulative-result.json)의 SHA256은 `afa281aa051636505a1e4ed34eb2ac64fae53c5bf55706b3a644635c8a95436e`이다. 같은 디렉터리의 manifest, label 검증, native root parity, 원천 보정 receipt를 함께 소비한다. 상위 디렉터리의 정정 전 result는 등록 근거로 사용하지 않는다.
-- 기준 bundle은 `99c894cb018ee594c9767bb6b9d9de544e1019587fb5379605136e0adbb48215`, family는 `c366914f1a2a76d85bceacd406e6c377f1fb32b2b50d757fb195484ab783ff8c`이다. 이번 점검의 [current pointer](../../data/runtime/mechanistic_entry_policy/current.json)와 같았다.
-- 연구 코드 기준은 `ff32b99b3…`였다. 현재 [release selection](../../data/runtime/runtime_release_selection.json)은 `main-nonfixed-submit-20261014-f8dc4431d`, commit `f8dc4431d0b3cc2cb84610979ec4f3440d3e8e46`로 바뀌었다. 따라서 정책이 같아도 구현 때 실제 선택 코드와 replay parity를 다시 확인한다. 이 점검은 현재 PID를 독립 검증한 결과가 아니다.
+- 10/14 연구 기준 bundle은 `99c894cb018ee594c9767bb6b9d9de544e1019587fb5379605136e0adbb48215`, family는 `c366914f1a2a76d85bceacd406e6c377f1fb32b2b50d757fb195484ab783ff8c`이며 **당시** current pointer와 같았다. 10/15 연구 baseline은 `1f069c6894b5b9a7fa3f9450a9a306ff41469346e1318b20b18fcaee7e490637`로 재고정했다.
+- 10/14 연구 코드는 `ff32b99b3…`, 당시 후속 선택은 `f8dc4431d…`였다. 10/15 연구는 `policy-custody-incident-integrated-20261015-bb4808c77`을 사용한다. 실제 적용 때 운영 데이터의 [선택 릴리스](/home/ubuntu/KORStockScan/data/runtime/runtime_release_selection.json)와 [현재 정책](/home/ubuntu/KORStockScan/data/runtime/mechanistic_entry_policy/current.json)을 다시 결속한다. 이 연구는 현재 PID를 독립 검증한 결과가 아니다.
 - 24개 partition의 raw 5,261,652행 중 유효 3,831,217행, 제외 1,430,435행이다. 10/13은 애프터 19:36:41~20:00:00의 18,688행만 적격이었다. 누적 비교의 소스 범위가 10/13 전체 장을 대표한다고 표현하지 않는다.
 
 원천·결과를 운영 등록에 사용할 때 필요한 작은 근거/정의/manifest/검증 receipt를 기존 등록 archive로 이관하고 SHA와 상대경로 해석을 검증한다. 임시 디렉터리의 수명에 runtime validation을 의존시키지 않는다. 대용량 raw의 중복 복제는 피하고 기존 보존 owner와 원천 generation ref를 연결한다.
@@ -39,11 +39,11 @@
 
 `highest_fraction_joint`는 J 집합 안의 최고 비율이다. A/F/current까지 합친 전체 승자를 뜻하지 않는다. 또한 `opportunity_joint`는 성공 수를 우선한 연구 대안이다. 운영에서 이를 자동으로 `JOINT_BALANCED` 고정 선택하면 사용자 승률 우선 기준과 충돌한다.
 
-구현에서는 이미 고정한 후보 정의·대상 22개 scope·8,432개 조합 목록을 재사용해 평가한다. 새 조합 탐색을 늘리지 않는다. current/A-only/F-only/J의 기존 고정 대안 중 계약이 입증된 결과를 같은 분모 규칙으로 비교하고 최종 winner를 발행한다. 표의 연구 대표만 읽고 나머지 고정 대안을 누락하지 않는다. 등록 batch에 허용 대안의 전체 membership/hash를 먼저 동결하며, 비교 후 임의로 승인 범위를 넓히지 않는다.
+구현에서는 수동 연구가 동결한 버전별 catalog·대상 scope·전체 대안 목록을 재사용한다. 10/14는 25가설·22개 scope·A/F 조합 8,432개였고, 10/15 연구는 신규 13가설을 더한 별도 불변 버전이다. 장후 자동 작업이 이를 임의 확장하지 않는다. current/A-only/F-only/J 중 계약이 입증된 결과를 같은 분모 규칙으로 비교하고 최종 winner를 발행한다. 표의 연구 대표만 읽고 나머지 고정 대안을 누락하지 않는다. 등록 batch에 허용 대안의 전체 membership/hash를 먼저 동결하며, 연구 실행을 운영 등록 승인으로 전용하지 않는다.
 
 ## 4. 현재 결과로 예상하는 반영안
 
-아래는 **현재 보고서에 제시된 대표 A/F/J 사이에서 승률 우선으로 비교한 제안**이다. 수치는 현 정책을 과거 원천에 재생한 확인점 CF이며 실제 발행 ENTER_NOW·독립 거래·체결 수가 아니다. 전체 고정 대안의 native parity와 최종 selection receipt를 대신하지 않는다. 가격대의 중가는 `20000_TO_100000`, 고가는 `GE_100000`, 저가는 `LT_20000`의 기존 코드 경계를 사용한다. PRE는 NXT `_NX`, REGULAR/AFTER는 SOR `_AL`이다.
+아래는 **10/14 보고서의 당시 baseline에 대한 대표 제안**이다. 10/15 재고정 결과는 별도 추가 연구 검토를 우선 소비하고 이 표를 현재 정책 수치로 전용하지 않는다. 수치는 정책을 과거 원천에 재생한 확인점 CF이며 실제 발행 ENTER_NOW·독립 거래·체결 수가 아니다. 전체 고정 대안의 native parity와 최종 selection receipt를 대신하지 않는다. 가격대의 중가는 `20000_TO_100000`, 고가는 `GE_100000`, 저가는 `LT_20000`의 기존 코드 경계를 사용한다. PRE는 NXT `_NX`, REGULAR/AFTER는 SOR `_AL`이다.
 
 | scope | 대표 우선 대안 | 현재 W/확정 → 후보 W/확정 | U 전→후 | 변경 의미 |
 |---|---|---|---|---|
@@ -131,13 +131,41 @@ A는 기존 하락반전의 선행 발생에 종속시키지 않는다. 각 root
 
 정의/기회/label parity 불일치, 권한 밖 membership 변경, 과거 승인 손상, dedup 깨짐 또는 기존 시간·자원 계약 퇴행은 발행 중단 사유다. 수리는 같은 고정 후보로 재검증한다. 실제 적용 뒤 코드/원천/hard safety 결함 rollback은 당시 승인된 compatible incumbent와 receipt를 사용하며, 단순 하루 패배는 다음 누적 비교로 처리한다. 옛 전체 릴리스를 복원해 retired executor를 되살리지 않는다.
 
-25개 고정 특징/root 계산과 기회 집합을 source/feature/label/definition hash로 재사용해8,432개 조합마다 raw를 다시 읽지 않는다. 날짜별 immutable partition을 만들고 U의 관측 만기·기존 source 수정도 dependency로 무효화한다. 비교 완료 전에 cursor/누적 집계 완료를 먼저 저장하지 않는다. 부하를 줄이려고 종목·시장·후보·관측기간을 숨겨서 축소하지 않는다. 새 신호 증가에 따른 보조 요청 증가는 실제 고유 confirmation과 기존 예산으로 계측하고 중복 호출과 구분한다.
+버전별 고정 특징/root 계산과 기회 집합을 source/feature/label/definition hash로 재사용해 대안마다 raw를 다시 읽지 않는다. 10/15 연구는 38가설·19,892개 current/A/F/J 대안이다. 날짜별 immutable partition을 만들고 U의 관측 만기·기존 source 수정도 dependency로 무효화한다. 비교 완료 전에 cursor/누적 집계 완료를 먼저 저장하지 않는다. 부하를 줄이려고 종목·시장·후보·관측기간을 숨겨서 축소하지 않는다. 새 신호 증가에 따른 보조 요청 증가는 실제 고유 confirmation과 기존 예산으로 계측하고 중복 호출과 구분한다.
 
-## 8. 계획 리뷰와 인계
+## 8. 10/15 추가 연구의 반영 보완
+
+최신 근거는 [추가 연구 검토](../audits/main-machine-cumulative-dual-track-research-review-2026-10-15.md), [frozen manifest](../../tmp/main-machine-cumulative-research-20261015/frozen-manifest.json), [reviewed 결과](../../tmp/main-machine-cumulative-research-20261015/result-reviewed.json), [검증 receipt](../../tmp/main-machine-cumulative-research-20261015/validation.json)다. reviewed 결과 SHA256은 `2a0663bcf24378574d101371855266dd2bd6f9810dc80599f2aae68002eef956`이다. 원 10/14 자료와 초기 selector 결과는 보존하고 최신 제안은 `recommendation` 필드를 소비한다. raw `winner`의 0% 동률·U만 증가를 개선으로 등록하지 않는다.
+
+원천 검토는 9개 날짜·27개 partition, 적격 입력은 기존 8개 날짜·3,831,217행이다. 추가 10/14 325,775행은 원천 epoch 계약으로 제외됐다. 10/15도 epoch 입증 미비여서 제외했다. 새 가설 13개를 실제 검증했으나 새 독립 날짜 검증을 확보한 것은 아니다. 새 날짜 대기를 정책 채택의 추가 조건으로 만들지는 않는다.
+
+현재 parent `1f069c…` 기준 변경 검토는 15개 scope(A2/F8/J5), 개선 미확인 current 유지 7개다. 이 중 **기존 연구 후보 최고보다 나아진 새 가설은 아래 4곳**이다.
+
+| scope | 추가 구현 대상 | 현재 → 새 제안 | 인계 주의 |
+|---|---|---|---|
+| 두산 PRE 중가 | 조건부 F21 | 51/72 → 48/48 | 해당 종목 세션 중립에서만 volume≥1 AND buy≥60 AND spread≤0.1%; 밖/UNKNOWN은 원 확인 보존. W3·TIMEOUT21 제외, U3,943 |
+| 일반 AFTER 저가 | 원 legacy branch의 F18 | 36/111 → 16/37 | ret60≥0.05 AND vwap60≥0 AND volume≥1. 원 branch `legacy_drop_0_4_rebound_le_0_3_v1` 교체, 다른 OR branch 보존 |
+| 일반 PRE 고가 | A10 | 10/10 → 11/11 | FIRST_HOLD1 + 중립 세션·작은 수익률/낙폭·거래량 조건. 새 W1/U1 |
+| 일반 PRE 저가 | A14 + scope F10 | 157/204 → 2/2 | 독립적인 고점·저점 상승 구조 FALSE→TRUE 뒤 3초 hold. F10은 current만 정제하고 A14는 독립 OR. 기존 W156 제외·새 W1 |
+
+나머지 11개는 기존 고정 후보의 재비교이며 새 발견으로 세지 않는다. 전체 branch ID·조건·U·제거/추가 W/F·날짜 편중은 reviewed JSON에 동결돼 있다. 15개 제안을 합한 확인점 CF는 67.80%→79.39%이지만 W2,579→905, distinct target clock288→117로 감소한다. 성공 보존율을 gate로 쓰지 않되 이를 제출/순이익 증가라고 주장하지 않는다. 기회 수 우선 대안을 모두 합한 67.72%는 current 67.80%보다 낮으므로 그대로 전체 운영 winner로 채택하지 않는다.
+
+구현 보완은 다음과 같다.
+
+1. A/F 번호는 이번 연구 namespace의 local ID다. runtime definition은 root·hold·prefix feature·삼치 조건·exact scope/parent를 canonical hash로 고정한다. 10/14 목록을 덮어쓰거나 이번 연구를 운영 등록 승인으로 사용하지 않는다.
+2. F18의 AND와 F21의 `when/require` 삼치 평가를 versioned successor에 추가한다. 조건부 regime은 개별 종목의 첫 유효 세션 관측 대비 변화이며 KOSPI/KOSDAQ 시장 regime으로 바꾸지 않는다. regime FALSE는 원 신호 보존, UNKNOWN도 원 신호 보존, regime TRUE일 때만 고정 require를 평가한다.
+3. A10은 existing FIRST/hold confirmation을 재사용해 연구 key/ask/시각을 대조한다. A14는 기존 반전 FSM에 종속시키지 않는 독립 상승 구조 root가 필요하다. root 이전 UNKNOWN을 FALSE로 간주하지 않고 3초 hold 중 source break·한 번의 가격 하회도 거부한다. 조건은 root가 아닌 confirmation prefix에서 읽는다.
+4. 비교 대상은 current와 등록 승인에 결속한 고정 대안 전부다. 성공 100%/80% 보존율·최소 표본/일수·새 holdout·추가 EV를 넣지 않는다. 비율·W 수까지 같고 실제 개선이 없는 대안은 current를 유지하며, 같은 membership의 별칭은 current canonical ID로 묶는다.
+5. 기존/새 A를 무차별 OR하지 않는다. 이번 신규 가설 전체에서 과거 연구에 없던 W3,276개가 확인됐지만 STOP28·TIMEOUT21,484개도 있다. 좁은 scope의 검증된 대안을 등록하고 기존 보조 입력/응답·5초 예산·주문 guard·custody·퇴역 경계를 유지한다.
+6. 원천·현재 native State·연구 라벨 검증과 신규 runtime root parity는 구분한다. 연구 38개 시험·정규화 가격 경로214개·실제 native ENTER_NOW240개 검사를 등록 구현 완료로 갈음하지 않는다. 운영 archive와 actual reader/CAS 및 자연 소비는 §6~§7의 별도 수용이다.
+
+## 9. 계획 리뷰와 인계
+
+아래 초기 계획 검증 수치는 10/14 당시 문서 검증 이력이다. 10/15에는 §8의 실제 격리 연구·검증을 추가했으며 운영 등록/적용 수용은 별도다.
 
 계획 리뷰에서 수정한 사항: J 최고비율을 전체 winner로 오해하는 문제, F를 OR 추가해 원형이 우회하는 문제, extended 생성 전 F 평가, 기존 합성 의존성 미지원, 정정 전 BREAKOUT 결과 소비, 후보 catalog와 운영 membership 혼동, 이전 batch 고정 authority 재사용을 각각 구현 항목·반례로 명시했다.
 
-이번 완료 기준은 두 계획의 실제 경로·링크·owner·권한·문서 parser 검증이다. 생산 코드 시험, 큰 보고서 재생성, 정책 변경, provider 호출, 배포/재기동은 계획 작성의 검증에 포함하지 않는다. 구현 완료 시 §7과 실제 적용 영수증은 별도로 보고한다.
+10/14 계획 작성의 완료 기준은 두 계획의 실제 경로·링크·owner·권한·문서 parser 검증이었다. 생산 코드 시험, 큰 보고서 재생성, 정책 변경, provider 호출, 배포/재기동은 당시 계획 작성의 검증에 포함하지 않았다. 10/15 구현·격리 검증은 §10, 실제 적용 영수증은 이후 별도 수용으로 관리한다.
 
 계획 검증 결과: 두 문서의 로컬 링크26개·표7개에 오류0, 정정 연구 결과 SHA 일치, 관련 current OPEN owner3개가 각각1개임을 확인했다. print-only parser는25개 작업을 출력했고 `git diff --check`와 새 문서 공백 검사를 통과했다. 이는 계획 검증이며 §7의 구현 시험이 통과했다는 뜻은 아니다.
 
@@ -146,3 +174,36 @@ A는 기존 하락반전의 선행 발생에 종속시키지 않는다. 각 root
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+## 10. 10/15 별도 작업본 구현과 배포 대기 인계
+
+- 작업본: `/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015`, branch `codex/cumulative-policy-adoption-20261015`, 기준 commit `c938ace0610aeec2e68dde9a024e0b82579a1c3b`. 운영 데이터·임시 디렉터리는 공유하지 않는다. 동시 진행 중인 원 작업본 변경은 그대로 보존한다.
+- [catalog](../../src/engine/scalping/reversal_cumulative_catalog.py), [고정 정의 resource](../../src/engine/scalping/reversal_cumulative_data.json), [detector](../../src/engine/scalping/reversal_cumulative_runtime.py), [등록 owner](../../src/engine/scalping/reversal_cumulative_registration.py), [장후 owner](../../src/engine/scalping/reversal_cumulative_postclose.py)가 새 계약을 소유한다. 과거 joint v1과 기존 auxiliary prompt/binding은 유지한다.
+- 후보는 수동 연구의 16개 A·22개 F다. 구현은 22개 scope의 원 membership 전체에 같은 고정 표현을 적용하므로 26,928개 표현을 제공한다. 연구에서 실제 hit가 없었던 A와 같은 결과의 별칭도 포함된다. 새 가설·특징·임계값을 자동 탐색하는 기능은 추가하지 않는다. 관측된 19,892개 연구 대안과 계산을 대조한다.
+- initial 지정안은 reviewed `recommendation`의 변경 15개 scope·승계 7개 scope다. 초기 등록은 기술 계약을 검증하며 새 독립 날짜·성공 보존율·표본/EV gate를 추가하지 않는다. 이후에는 실제 current와 고정 대안을 각자의 동일 원천 누적 승률로 비교한다. 동일 비율·동일 W 수 또는 비교 불완전이면 current를 유지한다.
+- 모든 원 root 확인을 만든 뒤 유한 의존성 순서로 F를 평가한다. 내부 원 branch는 운영 OR/AI 요청에 포함하지 않는다. 새로운 상승 지속 root는 FIRST 반전에 종속되지 않는다. 비선정 후보는 장후에만 비교한다.
+- 전체 비교표는 immutable `.json.gz`로 보관하고 해시를 보고서에 결속한다. 운영 보고서는 현재/선정 membership·W/STOP/TIMEOUT/U·추가/제외 수치를 제공한다. 원천 결손과 미확정·실현 손익을 혼합하지 않는다.
+- 보조 연구가 설정돼 있으면 선정 membership의 확인점만 기존 bounded consumer에 전달한다. 설정이 없으면 호환 현재 보조를 승계한다. 기계의 모든 후보별 AI fanout과 새 provider 호출을 초기 등록 조건으로 만들지 않는다. 이전 provider 응답 원장은 덮어쓰지 않는다.
+
+### 10.1 준비 명령과 권한
+
+다음 명령은 private 배포대기 산출물만 만든다. 아래 근거 경로는 해시가 고정된 원 연구 디렉터리다. 코드와 원천 parity가 바뀌면 먼저 재검증한다.
+
+```bash
+PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.scalping.reversal_cumulative_registration prepare \
+  --evidence-root /home/ubuntu/KORStockScan/tmp/main-machine-cumulative-research-20261015 \
+  --parent /home/ubuntu/KORStockScan/tmp/main-machine-cumulative-research-20261015/baseline-bundle.json \
+  --parity tmp/cumulative-adoption-review/native-parity.json \
+  --output tmp/cumulative-adoption-review/deploy-wait \
+  --publication-date 2026-10-15 --target-date 2026-10-16
+```
+
+운영 등록은 배포 지시 후 `reversal_cumulative_registration intake` owner로 수행한다. `--confirm APPROVED_CUMULATIVE_POLICY_REGISTRATION_V2`, `--data-root`, `--prepared`, `--origin-root`, `--origin-commit`을 명시한다. 실제 검토된 origin release의 검증, 코드 해시, publication/target, 현재 parent CAS와 같은 parent의 타 등록 요청 충돌을 검사하고 작은 근거를 durable archive로 복사한다. 준비 산출물의 `operator_receipt=null`을 직접 수정해 등록하지 않는다.
+
+그 다음 기존 `continuous_reversal_postclose`의 machine→auxiliary, v6 stage, 정확한 target PREOPEN/정상 기동 소비 절차를 따른다. 초기 prepare-inputs/calls는 provider 0의 호환 승계이며 소비한 등록안은 다시 적용하지 않는다. registry/selection authority/범위/근거의 봉인을 유지한다. **운영 parent가 연구 parent와 달라지면 CAS 실패를 우회하지 않는다.** 변경된 membership·탐지 코드·근거를 재대조한 별도 successor 등록안을 준비한다. 동일 정책의 코드 배포와 실제 새 정책 선택을 구분한다.
+
+이 인계는 target `2026-10-16`의 다음 세션 준비다. 승인 시점에 날짜가 지났으면 publication/target을 새로 준비한다. 이 작업으로 intraday 활성화·봇 재기동·주문을 수행하지 않는다. `CumulativePolicyAdoptionDeployment1015`가 별도 배포대기를 소유하고, 승인된 적용의 정책/bootstrap/PID 수용은 기존 `DirectFamilyPreopenPolicyHandoff`와 연결한다. 과거 source 수리 OPEN을 새로 만들지 않는다.
+
+### 10.2 최종 수용
+
+격리 검증의 수치·코드 리뷰 findings와 완료 상태는 [구현 검토](../audits/main-cumulative-policy-adoption-implementation-review-2026-10-15.md)에 기록한다. 코드·정의·원천 재생 검증, 배포대기 근거 준비, 실제 등록/배포/자연 신호/실현 성과를 별도 상태로 유지한다.
