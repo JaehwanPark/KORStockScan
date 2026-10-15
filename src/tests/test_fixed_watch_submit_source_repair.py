@@ -396,6 +396,37 @@ def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeyp
         machine_bundle_sha256='b'*64, machine_contract_error=str(measured.value),
         provider_called=False, continuous_reversal_rejected_claim_receipt=receipt)
     assert _reversal_lifecycle_diagnostic(trace) == expected
+    if expected and receipt.get('process_pid') and receipt.get('process_start_ticks'):
+        # Exercise the actual native rejection through the provider-lineage
+        # producer and its independently recomputed health proof.
+        import hashlib
+        from src.engine.monitoring import submission_bottleneck_monitor as monitor
+        from src.engine.scalping.ai_decision_trace import _json_bytes
+        trace['decision_trace_id'] = 'native-terminal-trace'
+        actor = [str(receipt['process_pid']), str(receipt['process_start_ticks'])]
+        observation = dict(captured_at=trace['decision_ts'], bundle_sha256='b'*64,
+            source=dict(assessment=dict(action='SOURCE_INVALID')),
+            runtime_consumption=dict(pid=actor[0], process_start_ticks=actor[1]))
+        observation['machine_observation_sha256'] = hashlib.sha256(_json_bytes(observation)).hexdigest()
+        when = datetime.fromtimestamp(now+.1, B.K.KST)
+        source = dict(status='complete')
+        lineage = monitor._reversal_provider_lineage(tmp_path, when, [observation],
+            tail_bytes=65536, pid_identity=actor, _loaded=([],source,[trace],source))
+        terminal = lineage['attempt_ledger'][0]
+        assert terminal['machine_observation_sha256'] is None
+        assert monitor._native_preassessment_terminal_valid(terminal, actor, 'b'*64)
+        assert not monitor._native_preassessment_terminal_valid(terminal, ['999','999'], 'b'*64)
+        assert not monitor._native_preassessment_terminal_valid(terminal, actor, 'c'*64)
+        for field, value in [('request_prepared',True), ('transmission_attempt_observed',True),
+                             ('raw_response_observed',True), ('timeout',True), ('raw_verdict','PASS'),
+                             ('decision_trace_id','foreign'), ('machine_action','ENTER_NOW'),
+                             ('evaluation_attempt_id','foreign'), ('trace_decision_ts',None),
+                             ('market_data_route','foreign'), ('native_preassessment_terminal',None)]:
+            broken = dict(terminal, **{field:value})
+            assert not monitor._native_preassessment_terminal_valid(broken, actor, 'b'*64), field
+        broken = deepcopy(terminal)
+        broken['native_preassessment_terminal']['continuous_reversal_rejected_claim_receipt']['snapshot_sha256'] = 'c'*64
+        assert not monitor._native_preassessment_terminal_valid(broken, actor, 'b'*64)
     for foreign_route in {'krx_nxt_integrated', 'nxt_only', 'krx_only', ''} - {route}:
         assert _reversal_lifecycle_diagnostic(dict(trace, market_data_route=foreign_route)) is None
     if case in {'down', 'flat', 'replacement'}:

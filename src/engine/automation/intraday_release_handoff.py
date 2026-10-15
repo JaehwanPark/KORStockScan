@@ -500,6 +500,25 @@ REVIEWED_CURRENT_OBSERVER_SOURCES = {
 }
 
 
+# Exact source-bound regular-session observer and approved 92785b7da integration.
+# Historical policies/receipts stay intact; entry scheduling retains original TTL.
+# Evidence: docs/audits/main-premarket-error-repair-and-restart-2026-10-15.md.
+REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        '628d60031f1b787ad8fe661a261063f6925276e189fd6116d1948dd7db479f8a',
+    ),
+    'src/engine/sniper_state_handlers.py': (
+        'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',
+        'b39ddafe82bfbeab1d48502cce349b0e355e6008a1012a661d3e71973e2afe0e',
+    ),
+    'src/engine/monitoring/runtime_performance.py': (
+        '3021477fe2ce6841e2d8acb734fc2fe0812939cd5b1be74333d18c2e6ed379f9',
+        '767fe6bb4e874d8d2e6b56a693f028ecebc02f30ea8cf96a050e47ca6b76ebf8',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -553,7 +572,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES.get(name),
                     REVIEWED_PREMARKET_OBSERVER_SOURCES.get(name),
                     REVIEWED_ACTIVE_OBSERVER_SOURCES.get(name),
-                    REVIEWED_CURRENT_OBSERVER_SOURCES.get(name)):
+                    REVIEWED_CURRENT_OBSERVER_SOURCES.get(name),
+                    REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

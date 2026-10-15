@@ -41,6 +41,15 @@ DELAY_SUMMARY_GRACE_SEC = 150
 _HEALTH_ACTOR = ContextVar('submission_monitor_health_actor', default=None)
 _HEALTH_BIRTH = ContextVar('submission_monitor_health_birth', default=None)
 
+# Report-only reasons emitted by main_fixed_watch.observation_ready. Missing
+# quotes and warmup remain source waits, never source-health or order approval.
+_FIXED_SOURCE_WAIT_REASONS = frozenset({
+    'post_receipt_observation_warmup', 'fixed_watch_post_receipt_warmup',
+    'fixed_watch_warmup', 'route_snapshot_missing', 'exact_route_item_missing',
+    'exact_0B_missing', 'exact_0D_missing', 'post_admission_0B_missing',
+    'post_admission_0D_missing', 'price_missing',
+})
+
 
 def _verified_health_actor_birth(proof, actor, now, generation=None):
     """Validate the additive native birth receipt without I/O or authority."""
@@ -514,6 +523,14 @@ def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes,
             effective_screen_status=row.get('entry_ai_screen_status'), timeout=row.get('timeout') is True,
             execution_errors=[str(error)[:512] for error in execution_errors[:64]],
             trace_decision_ts=row.get('decision_ts'), main_commit_assessed=False))
+        if observation is None:
+            # Preserve the native pre-assessment terminal proof. No machine
+            # observation or provider request exists for this rejected claim.
+            attempt_ledger[-1]['native_preassessment_terminal'] = {
+                name: row.get(name) for name in ('continuous_reversal_rejected_claim_receipt',
+                    'provider_called', 'actual_order_submitted', 'evaluation_attempt_id',
+                    'machine_bundle_sha256', 'machine_contract_error', 'decision_ts',
+                    'decision_trace_id', 'stock_code', 'market_data_route')}
     by_producer = {}
     for row in attempt_ledger:
         counts = by_producer.setdefault(row['producer_pid'] + ':' + row['producer_start_ticks'],
@@ -718,6 +735,33 @@ def _reversal_lifecycle_diagnostic(row):
     except (KeyError, TypeError, ValueError, IndexError, AttributeError, OverflowError):
         pass
     return None
+
+
+
+def _native_preassessment_terminal_valid(row, actor, bundle):
+    """Recheck the original rejected claim; missing observations stay missing."""
+    proof = row.get('native_preassessment_terminal')
+    try:
+        if not isinstance(proof, dict) or len(json.dumps(proof, allow_nan=False)) > 65536:
+            return False
+    except (TypeError, ValueError):
+        return False
+    receipt = proof.get('continuous_reversal_rejected_claim_receipt')
+    if not isinstance(receipt, dict):
+        return False
+    return (row.get('machine_observation_sha256') is None and row.get('machine_action') is None
+        and [str(receipt.get('process_pid')), str(receipt.get('process_start_ticks'))] == actor
+        and proof.get('machine_bundle_sha256') == bundle == row.get('machine_bundle_sha256')
+        and proof.get('evaluation_attempt_id') == row.get('evaluation_attempt_id')
+        and proof.get('decision_trace_id') == row.get('decision_trace_id')
+        and proof.get('decision_ts') == row.get('trace_decision_ts')
+        and proof.get('market_data_route') == row.get('market_data_route')
+        and all(row.get(k) is False for k in ('request_prepared', 'transmission_attempt_observed',
+                                            'raw_response_observed', 'timeout'))
+        and all(row.get(k) is None for k in ('raw_verdict', 'auxiliary_response_contract_valid',
+            'post_response_execution_valid', 'effective_screen_status'))
+        and row.get('execution_errors') == []
+        and _reversal_lifecycle_diagnostic(proof) is not None)
 
 
 def _probe_verified_no_match(row, *, allow_incomplete=False):
@@ -946,12 +990,26 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
     # bounded census so an actionable fixed-watch wait cannot masquerade as a
     # no-decision window. No additional source read or strategy change occurs.
     from src.trading.market import session_contract
-    from src.engine.scalping.main_fixed_watch import SPECS, generation_id, session_route
+    from src.engine.scalping.main_fixed_watch import SPECS, MIN_WARMUP_SEC, generation_id, session_route
     fixed_symbols = {spec.symbol for spec in SPECS}
     native_session = session_contract.resolve_market_session(now)
     wait_total = boundary_waits = source_waits = unclassified_waits = 0
     pending_total = pending_verified = pending_unknown = pending_censored = 0
     wait_reasons = Counter()
+
+    def native_watch_claim(fields, symbol, at, route):
+        if route is None:
+            return False
+        admission = fields.get('watch_admission_id')
+        return (fields.get('venue_resolution') == 'main_fixed_watch_session_route'
+            and fields.get('watch_generation_id') == generation_id(at.timestamp(), route)
+            and isinstance(admission, str) and re.fullmatch(
+                re.escape(f"FIXED-{at.date()}-{symbol}-{route['bucket']}-{route['route']}-")
+                + '[0-9a-f]{12}', admission) is not None
+            and fields.get('source_signature') == 'MAIN_FIXED_WATCH:' + admission
+            and (fields.get('effective_venue'), fields.get('market_session_bucket'))
+                == (route['venue'], route['bucket']))
+
     for row in probe_rows:
         if row.get('pipeline') != 'ENTRY_PIPELINE' or row.get('stage') != 'main_fixed_watch_observation_wait':
             continue
@@ -968,34 +1026,34 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
         fixed_route = (session_route(row_at.timestamp(), row['stock_code'])
                        if row_at and isinstance(row.get('stock_code'), str)
                        and row['stock_code'] in fixed_symbols else None)
-        admission = fields.get('watch_admission_id')
-        premarket_wait = bool(context is not None and fixed_route
-            and context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
-            and fields.get('venue_resolution') == 'main_fixed_watch_session_route'
-            and fields.get('watch_generation_id') == generation_id(row_at.timestamp(), fixed_route)
-            and isinstance(admission, str) and re.fullmatch(
-                re.escape(f"FIXED-{row_at.date()}-{row['stock_code']}-{fixed_route['bucket']}-{fixed_route['route']}-")
-                + '[0-9a-f]{12}', admission)
-            and fields.get('source_signature') == 'MAIN_FIXED_WATCH:' + admission)
+        current_claim = bool(fixed_route and native_watch_claim(fields, row['stock_code'], row_at, fixed_route))
+        premarket_wait = bool(context is not None and current_claim
+            and context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET)
+        previous_route = (session_route(row_at.timestamp()-MIN_WARMUP_SEC, row['stock_code'])
+                          if fixed_route else None)
+        rollover_wait = bool(previous_route and previous_route != fixed_route
+            and native_watch_claim(fields, row['stock_code'], row_at, previous_route))
         if (reason == 'session_generation_mismatch' and context is not None
-                and context.entry_allowed_by_clock is False
+                and (context.entry_allowed_by_clock is False or rollover_wait)
                 and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
                 and isinstance(row.get('stock_code'), str) and row['stock_code'] in fixed_symbols
                 and fields.get('venue_source_quality_status') == 'pass'
                 and isinstance(fields.get('effective_venue'), str)
                 and isinstance(fields.get('market_session_bucket'), str)
-                and (context.session_regime, fields.get('effective_venue'), fields.get('market_session_bucket')) in {
+                and (rollover_wait or (context.session_regime, fields.get('effective_venue'), fields.get('market_session_bucket')) in {
                     (session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION, 'KRX', 'krx_regular'),
                     (session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
                      'KRX_NXT_INTEGRATED', session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET),
                     (session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
                      'KRX_NXT_INTEGRATED', session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET),
-                }
+                })
                 and (fields.get('actual_order_submitted') is False or fields.get('actual_order_submitted') == 'False')
                 and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
             boundary_waits += 1
-        elif (reason in {'post_receipt_observation_warmup', 'fixed_watch_post_receipt_warmup', 'exact_0B_missing', 'exact_route_item_missing'} and context is not None
+        elif (reason in _FIXED_SOURCE_WAIT_REASONS and context is not None
                 and (context.entry_allowed_by_clock is True or premarket_wait)
+                and (current_claim or reason in {'post_receipt_observation_warmup',
+                    'fixed_watch_post_receipt_warmup', 'exact_0B_missing'})
                 and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
                 and isinstance(row.get('stock_code'), str) and row['stock_code'] in fixed_symbols
                 and fields.get('venue_source_quality_status') == 'pass'
@@ -3358,8 +3416,7 @@ def observation_health_projection(result):
             and count(waits.get('unclassified_or_actionable_wait_count'), maximum=0)
             and count(known_waits) and waits.get('count') == waits.get('session_boundary_wait_count')+known_waits
             and len(reasons) <= 16 and all(count(value, minimum=1) for value in reasons.values())
-            and set(reasons) <= {'session_generation_mismatch', 'post_receipt_observation_warmup',
-                                'fixed_watch_post_receipt_warmup', 'exact_0B_missing', 'exact_route_item_missing'}
+            and set(reasons) <= _FIXED_SOURCE_WAIT_REASONS | {'session_generation_mismatch'}
             and reasons.get('session_generation_mismatch', 0) == waits.get('session_boundary_wait_count')
             and sum(v for k,v in reasons.items() if k != 'session_generation_mismatch') == known_waits
             and context is not None and waits.get('native_session_regime') == context.session_regime
@@ -3867,8 +3924,9 @@ def observation_health_projection(result):
                             or row.get('machine_bundle_sha256') != machine.get('current_bundle_sha256')
                             or at is None or now is None or not 0 <= (now-at).total_seconds() <= SOURCE_WINDOW_SEC+5
                             or digest is not None and (not sha(digest) or digest in ledger_hashes)
-                            or digest is None and (row.get('machine_action') is not None
-                                or lineage.get('status') != 'partial_source_gap'
+                            or digest is None and not _native_preassessment_terminal_valid(
+                                row, actor, machine.get('current_bundle_sha256')) and (
+                                row.get('machine_action') is not None or lineage.get('status') != 'partial_source_gap'
                                 or not any(count(gaps.get(k),minimum=1) for k in
                                     ('observation_trace_unresolved','trace_identity_missing','observation_identity_missing')))
                             or row.get('machine_action') not in (None,'SOURCE_INVALID','RECHECK','BLOCK','ENTER_NOW')

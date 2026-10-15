@@ -71,3 +71,24 @@ Detector는 해당 code fixture를 native reader로 다시 검증하고 정확�
 사전 실제 fixture 시험은 entry_cancel_wait93·rising_missed86·holding_vote91개 전부 PASS, 네트워크 시도0/보호 파일 변경0/게시false다. observer·capability 소비/변조 경로 935개 PASS. 후속 monitor SHA `8525a03215257c97d8497ad6a55f4b9c7ffd543763c35d31e3730c85759f2221`와 원 PREOPEN만 REVIEWED_CURRENT_OBSERVER_SOURCES exact pair로 허용하고 이전 pair를 보존한다. 최종 code/배포/PID 및 현재 detector 수용은 각각 별도 영수증으로 확인한다.
 
 통합 최종 리뷰: 표적 회귀2,188개 PASS(18.55초), 그 뒤 source/code/state 동등성 및 bounded regular-file 보완 소비 회귀283개 PASS, 미커밋 게시 거부 포함 게시 회귀39개 PASS다. compile·diff·print-only parser PASS이며 기존 parsed owner9개를 유지했다. 실제 canonical fixture는 최종 커밋의 깨끗한 불변 candidate에서 고정 계획을 다시 실행한 뒤에만 발행한다. 광역 장후 재계산·원 보고서 재봉인·provider/주문/임계값 변경은 실행하지 않는다.
+
+최종 candidate `28b8f8e219bbac71cf12287b42bdf399f77eed66`에서 3개 canonical fixture를 고정 시험93/86/91개 PASS 후 게시했다. native current consumer는 entry_cancel_wait/rising_missed/holding_vote의 원 보고서 byte·source/code/contract 결속을 확인해 보충 capability verified로 수용했고 auxiliary는 기존 native verified를 유지했다. 원 3개 native contract의 historical unverified와 실제 source/sample 부족은 그대로 남겼다. 증거: `current-capability-native-consumer-pass.json` 및 각 family의 `data/report/postclose_generation_validation/runs/` 불변 run. 배포 지연/손절/holding vote candidate code 사전검증도 모두 PASS다.
+
+
+## 정규장 전환 재검증 및 92785b7da 통합
+
+28b8f8e21 배포는 09:08:50.292990 complete/pass, Main PID1525207/start ticks8680392의 실제 소비·WS 수신·startup hold 해제를 확인했다. 09:14:28 detector는 새 09:10:11 관측을 warning_pending으로 수용하고 세 capability 경고는 사라졌다. 다만 09:05 정규장 전환 원본에는 같은 allowlist 누락과 pre-assessment terminal의 원천 증명 누락이 있어 재발 조건을 함께 수정한다.
+
+native `main_fixed_watch.observation_ready`가 실제 내보내는 9종 source wait를 PRE/REGULAR/AFTERMARKET에서 실행해 census와 연결했다. 새로 분류하는 wait에는 exact native generation/admission/signature/venue/session과 주문 없음·broker 금지 조건이 필수다. 09:00 PRE→KRX generation rollover는 native warmup10초 안의 바로 이전 route generation을 증명한 경우만 session boundary wait로 구분한다. 늦은 이전 세대·변조·unknown reason은 실패를 유지한다. 원 데이터 누락을 source-health PASS로 바꾸지 않는다.
+
+평가 전 native 취소는 machine observation 없이 끝나는 정상 경로다. provider lineage에 원 rejected claim receipt와 원 attempt/trace/route/clock을 추가하고, consumer는 native lifecycle 검증·PID/start·bundle·원 해시를 다시 대조한다. request/전송/response/주문 권한으로 승격하지 않고 null machine hash와 원 진단을 보존한다. 09:05 원 보고서의 wait22건은 known19/boundary3/unclassified0, pre-assessment terminal19건은 원 영수증으로 검증됐다. 순수 원본 재현 결과 warning_pending이며 full_coverage/current_observation/runtime_effect는 false다. 원본 및 재현은 `regular-transition-observer.json`, `regular-transition-native-terminals.json`, `regular-transition-observer-replay.json`에 보존한다.
+
+사용자 요청 커밋 `92785b7dafba26e44dd2757f51b07040c34cfd54`를 별도 `intraday-observation-20261015-0820` 작업 트리에 merge commit45dcdc6f2로 통합했다. 기존 native 후속 신호의 scheduling hint만 재연결하며 원 5초 epoch/monotonic deadline·scope generation·claim 소유권은 유지한다. capacity 준비는 기존 평가 context만 받고 기존 worker·cooldown·source read budget 안에서 수행한다. 새 기한·provider 재시도·주문/quantity/custody 권한은 만들지 않는다. 관련 통합 회귀1,230개 PASS(16.88초)이며 pandas_ta의 pandas mode.copy_on_write deprecation warning1건은 환경 변경 없이 기록했다.
+
+이 커밋의 공통 handler 변경으로 rising_missed/holding_vote 코드 세대가 바뀐다. 이전 fixture를 재사용하지 않고 새 코드의 고정 시험을 다시 수행한다. native 계약과 원 보고서는 유지하며, 검토된 old/current 전체 component hash pair에만 보충 capability를 연결하는 `src/engine/monitoring/policy_generation_code_handoff.py`를 monitoring 소유로 추가했다. 새 consumer는 원 byte/source/state/contract·native reader·현재 실제 fixture를 모두 검증한다. entry_cancel_wait와 auxiliary의 코드 및 기존 fixture는 그대로다. 경제성/source OPEN 기준은 유지한다. 새 consumer 및 detector 회귀308개 PASS다.
+
+Kiwoom official gate: upstream `953e5dbff123f437ab4d11a78a95191a685eb51f`, 조회 시각 2026-10-15T09:12:26.641055+09:00. `kiwoom_docs`는 해당 tree에 없다. `kiwoom/specs.py`, `kiwoom/core/client.py`, `kiwoom/_data/kiwoom_api_spec.json`의 kt00011 및 PRD/MOCK Postman을 확인했다. POST /api/dostk/acnt, api-id/authorization/content-type, stk_cd/uv 원 단위 및 금액/주수 응답·continuation·real/demo 구분을 유지한다. SDK JSON body와 Postman query 표현 차이는 기존 계약 gap으로 보존하고 이번 변경은 wire/parser/auth/continuation을 바꾸지 않는다. 실제 broker/provider 호출을 시험에 사용하지 않았다. 조회 원본/해시는 `kiwoom-official-20261015/`에 보존한다.
+
+검토한 monitor·handler·runtime_performance의 원 native PREOPEN→최종 source pair만 REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES에 추가한다. 이미 소비한 이전 pair·원 정책 bundle/bootstrap 봉인·manual/retired custody는 유지한다. native 사전검증과 최종 표적 시험/문서 parser 후 ordered driver로 배포하며 실제 PID·새 관측 generation·detector 소비를 별도 확인한다.
+
+최종 통합 표적 검증2,870개 PASS(27.02초), Python compile·diff whitespace·print-only parser PASS다. 기존 current parsed OPEN owner9개와 원 수용 기준을 유지했다. 새 report-only code handoff는 code/source/state/fixture/권한 변조를 거부하며 미검토 pair에는 적용되지 않는다. 검토 범위의 미해결 코드 결함은 없고 실제 deployment/consumer 확인은 후속 영수증으로 기록한다.

@@ -164,3 +164,40 @@ def test_fixture_publication_rejects_dirty_or_untracked_source(monkeypatch):
     monkeypatch.setattr(writer.subprocess,'check_output',lambda *a,**k:'?? untracked.py\n')
     with pytest.raises(ValueError,match='committed_sources'):
         writer._assert_committed('entry_cancel_wait')
+
+
+@pytest.mark.parametrize('family', ['rising_missed','holding_vote'])
+@pytest.mark.parametrize('damage', [None,'unreviewed_old','unreviewed_current','source','contract',
+    'fixture_code','plan','report_path','state','missing','authority','receipt'])
+def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    data=tmp_path/'data'; observed,report,run,path,value,seal=_fixture(data,family)
+    payload=json.loads(report.read_text())
+    native=payload['holding_path_vote_replay'] if family=='holding_vote' else payload
+    contract=native['policy_generation']; old='a'*64; current=contract['code_sha256']
+    contract['code_sha256']=old
+    contract['retry_key']=generation.digest([family,contract['source_generation'],old,contract['source_state']])
+    contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
+    report.write_text(json.dumps(payload))
+    observed=generation.observations(tmp_path,DAY,data_root=data)[0]
+    monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{family:(old,current)})
+    if damage=='unreviewed_old':monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{family:('b'*64,current)})
+    elif damage=='unreviewed_current':monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{family:(old,'b'*64)})
+    elif damage=='source':native['count']=1;report.write_text(json.dumps(payload))
+    elif damage=='contract':contract['code_sha256']='b'*64;report.write_text(json.dumps(payload))
+    elif damage=='fixture_code':value['code_sha256']='b'*64;seal()
+    elif damage=='plan':value['validation_plan']={};seal()
+    elif damage=='report_path':observed['artifact']=str(tmp_path/'foreign.json')
+    elif damage=='state':observed['source_state']='foreign'
+    elif damage=='missing':observed['missing_components']=['reader']
+    elif damage=='authority':contract['allowed_runtime_apply']=True;report.write_text(json.dumps(payload))
+    elif damage=='receipt':value['receipt_sha256']='b'*64;path.write_text(json.dumps(value))
+    before={p:p.read_bytes() for p in data.rglob('*') if p.is_file()}
+    result=handoff.current_fixture_observation(observed,data)
+    assert result['status']==('verified' if damage is None else 'unverified'),result
+    if damage is None:
+        assert result['code_sha256']==old and result['current_capability_code_sha256']==current
+        assert result['native_validated'] is False and result['runtime_effect'] is False
+        assert result['allowed_runtime_apply'] is False and result['source_generation']==observed['source_generation']
+        assert result['contract_sha256']==observed['contract_sha256']
+    assert all(p.read_bytes()==b for p,b in before.items())

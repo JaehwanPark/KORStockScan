@@ -3993,3 +3993,84 @@ def test_quiet_current_pid_with_old_scanner_rows_and_verified_index_preserves_hi
     assert health['status']==('warning_pending' if bad is None else 'not_eligible'),health
     assert json.dumps(result,sort_keys=True)==before
     assert health['current_observation_verified'] is False and health['runtime_effect'] is False
+
+
+@pytest.mark.parametrize('clock', ['08:45:00', '10:00:00', '16:00:00'])
+@pytest.mark.parametrize('failure', ['fixed_watch_warmup', 'route_snapshot_missing',
+    'exact_route_item_missing', 'exact_0B_missing', 'exact_0D_missing',
+    'post_admission_0B_missing', 'post_admission_0D_missing', 'price_missing',
+    'fixed_watch_post_receipt_warmup'])
+def test_actual_fixed_watch_producer_waits_have_bounded_report_census(tmp_path, monkeypatch, clock, failure):
+    from src.engine.scalping import main_fixed_watch as producer
+    now = monitor.stamp('2026-10-15T'+clock+'+09:00')
+    epoch = now.timestamp()
+    route = producer.session_route(epoch, '005930')
+    target = dict(code='005930', watch_generation_id=producer.generation_id(epoch, route),
+                  entry_armed_at_epoch=epoch-30, _fixed_first_exact_receipt_epoch=epoch-20)
+    snapshot = dict(last_ws_item=route['item'], curr=100,
+        last_realtime_type_item={kind:route['item'] for kind in ('0B','0D')},
+        last_realtime_type_ts={kind:epoch-1 for kind in ('0B','0D')})
+    if failure == 'fixed_watch_warmup': target['entry_armed_at_epoch'] = epoch-1
+    elif failure == 'route_snapshot_missing': snapshot = {}
+    elif failure == 'exact_route_item_missing': snapshot['last_ws_item'] = '005930'
+    elif failure.startswith('exact_'): snapshot['last_realtime_type_item'].pop(failure.split('_')[1])
+    elif failure.startswith('post_admission_'): snapshot['last_realtime_type_ts'][failure.split('_')[2]] = epoch-60
+    elif failure == 'price_missing': snapshot['curr'] = 0
+    else: target['_fixed_first_exact_receipt_epoch'] = 0
+    ready, reason = producer.observation_ready(target, snapshot, now_epoch=epoch)
+    assert not ready and reason == failure
+    admission = f"FIXED-{now.date()}-005930-{route['bucket']}-{route['route']}-0123456789ab"
+    fields = dict(watch_origin='MAIN_FIXED_WATCH', watch_admission_id=admission,
+        watch_generation_id=target['watch_generation_id'], source_signature='MAIN_FIXED_WATCH:'+admission,
+        venue_resolution='main_fixed_watch_session_route', source_quality_reason=reason,
+        venue_source_quality_status='pass', effective_venue=route['venue'],
+        market_session_bucket=route['bucket'], actual_order_submitted=False, broker_order_forbidden=True)
+    row = dict(pipeline='ENTRY_PIPELINE', stage='main_fixed_watch_observation_wait',
+               stock_code='005930', emitted_at=now.isoformat(), fields=fields)
+    monkeypatch.setattr(monitor, '_recent_source_rows', lambda path,*a,**k:
+        ([row] if 'pipeline_events' in str(path) else [], dict(status='complete')))
+    census = monitor.source_gap_semantics(tmp_path,now)['fixed_watch_waits']
+    assert census['known_source_wait_count'] == 1
+    assert census['unclassified_or_actionable_wait_count'] == 0
+    assert census['reason_counts'] == {failure:1}
+    assert census['runtime_effect'] is False
+    fields['watch_generation_id'] = '0'*64
+    # Legacy reasons retain their prior regular-session contract; every newly
+    # recognized reason requires exact native generation even in regular hours.
+    if failure not in {'fixed_watch_post_receipt_warmup','exact_0B_missing'} or clock.startswith('08'):
+        assert monitor.source_gap_semantics(tmp_path,now)['fixed_watch_waits']['unclassified_or_actionable_wait_count'] == 1
+
+
+@pytest.mark.parametrize('damage', [None, 'late', 'generation', 'admission', 'signature',
+    'venue', 'bucket', 'submitted', 'forbidden', 'reason'])
+def test_native_session_rollover_wait_requires_original_generation_within_warmup(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import main_fixed_watch as producer
+    now = monitor.stamp('2026-10-15T09:00:00.100000+09:00')
+    route = producer.session_route(now.timestamp()-producer.MIN_WARMUP_SEC, '005930')
+    generation = producer.generation_id(now.timestamp(),route)
+    ready, reason = producer.observation_ready(dict(code='005930', watch_generation_id=generation),
+                                              {}, now_epoch=now.timestamp())
+    assert not ready and reason == 'session_generation_mismatch'
+    admission = f"FIXED-{now.date()}-005930-{route['bucket']}-{route['route']}-0123456789ab"
+    fields = dict(watch_origin='MAIN_FIXED_WATCH', watch_admission_id=admission,
+        watch_generation_id=generation, source_signature='MAIN_FIXED_WATCH:'+admission,
+        venue_resolution='main_fixed_watch_session_route', source_quality_reason=reason,
+        venue_source_quality_status='pass', effective_venue=route['venue'], market_session_bucket=route['bucket'],
+        actual_order_submitted=False, broker_order_forbidden=True)
+    if damage == 'late': now += __import__('datetime').timedelta(seconds=producer.MIN_WARMUP_SEC)
+    elif damage == 'generation': fields['watch_generation_id'] = '0'*64
+    elif damage == 'admission': fields['watch_admission_id'] = admission.replace('2026-10-15','2026-10-14')
+    elif damage == 'signature': fields['source_signature'] = 'MAIN_FIXED_WATCH:foreign'
+    elif damage == 'venue': fields['effective_venue'] = 'KRX'
+    elif damage == 'bucket': fields['market_session_bucket'] = 'krx_regular'
+    elif damage == 'submitted': fields['actual_order_submitted'] = True
+    elif damage == 'forbidden': fields['broker_order_forbidden'] = False
+    elif damage == 'reason': fields['source_quality_reason'] = 'unknown_wait'
+    row = dict(pipeline='ENTRY_PIPELINE', stage='main_fixed_watch_observation_wait',
+               stock_code='005930', emitted_at=now.isoformat(), fields=fields)
+    monkeypatch.setattr(monitor, '_recent_source_rows', lambda path,*a,**k:
+        ([row] if 'pipeline_events' in str(path) else [], dict(status='complete')))
+    census = monitor.source_gap_semantics(tmp_path,now)['fixed_watch_waits']
+    assert census['session_boundary_wait_count'] == int(damage is None)
+    assert census['unclassified_or_actionable_wait_count'] == int(damage is not None)
+    assert census['native_entry_allowed_by_clock'] is True
