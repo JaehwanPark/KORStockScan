@@ -168,3 +168,14 @@ e632의 durable transport epoch는 매 연결의 LOGIN ACK 이후 구독/ready �
 68b110e8e의 첫 호출은 기존 정기 detector 완료 대기60초 만료로 mutation 전에 종료했다. 원 실패 로그를 보존하고10:21:19 정기 검사 종료 후 새 호출을 시작했다. native incumbent 두 검증 PASS·10:23:46 정상 drain/selection 이후 prepare가 `v6_contract_code_changed:reversal_operating_outbox.py`로 실패했다. Main은 기동 보류 상태이고 해당 failed transition/selector/hold는 그대로 보존한다. e632가 바꾼 active V6 code에 필요한 기존 `reversal_code_handoff.issue` 영수증을 pre-selection에 발행하지 않은 인계 누락이었다. 앞으로 같은 계약 모듈 변경은 원 정책의 native parity와 source-exact code handoff를 반드시 drain/selection 전에 확인한다.
 
 현재 bundle1f069c6894b5b9a7fa3f9450a9a306ff41469346e1318b20b18fcaee7e490637의 exact128 scope/76,800 입력을 old27e와 승인 통합본에 독립 실행했다.607 확인 신호와 SHA72a8e589d1c1288f684d16c8aa66bcf5d1787671358ce7063551627fef0e2d0d가 일치하며 broker/provider0이다. 실제 원천을 재생하거나 원 epoch/예약을 지우지 않았다. 정지 복구는 release-set/detector locks 아래 원 failed selector/hold/transition과 last consumed27e PID/start/cwd·모든 정책 봉인을 재확인한다. 기존 native origin reader에 필요한 원 selection을 기동 hold 아래 잠시 복원해 승인된 source-exact receipt만 발행한 뒤, 새 commit의 독립 stopped transition에서 실제 predecessor27e를 인계한다. 원 실패 경로는 변경하지 않고 새 hold/selector는 원 바이트 CAS로 전환한다. native prepare/bootstrap/auxiliary/launcher/PID 검증을 모두 다시 실행하며 정책·후보·원 report를 재선정/재작성하지 않는다.
+
+
+## 10:33 재기동 중 관측 게시 경합
+
+da17555f2에 a179bb42d/92785b7da/e6326b0b1/87fda9479를 통합 배포했다.10:31:42 Main1703840/start9177845가 실제 소비했고 native 정책·custody를 보존했다. optional 야간 연구는 기존 설치/예약/notify 설정을 유지한 native installer rebind14항목을 확인했으며 실제 야간 실행은 기존 OPEN 수용이다.
+
+10:30:35 시작한 관측 b68e3459fee5478ea1348b3519ae4393은10:31:38 게시됐다. 실제 PID 확인보다4.7초 빨라 `actual_pid_consumed=false`인 selector를 봉인했고,10:33:41 탐지기는 `observer_generation_not_current`를 올바르게 반환했다. 이전 보고서를 뒤늦게 읽는 문제와 별도로, 시작 중인 producer가 frozen predecessor를 덮어쓴 공백이다. 원 보고서/health는 tmp/observer-auxiliary-route-repair-20261015-1001의 restart-generation-alert 원 bytes로 보존한다.10:35:38 다음 정규 관측과10:36:12 detector는 동일 run/hash로 현재 PID를 검증했고15개 수용 검사와 정책 생성4종을 통과했다. bounded pending은 완전 관측·주문·성과를 증명하지 않는다.
+
+재발 방지: producer는 기존 canonical ordered transition reader로 정확한 승인/날짜/release/상태를 검증하고 selected/prepared/starting 구간에서는 계산·알림·canonical/state 쓰기 전에 exit75로 보류한다. 실행 중 시작 상태나 transition 변경도 최종 봉인에서 거부한다. wrapper는75를 DEFERRED로 기록하며 DONE/cooldown/실패복구를 만들지 않는다. failed/위조/소실 transition은 정상 게시가 불가능하다. 원 predecessor에 대한 detector의 exact hash·PID·첫 cron slot+180초 제한과 실제 실패는 그대로 유지한다. 다음 정규 tick이 새 PID 영수증으로 독립 계산해야 한다. 매매/정책/AI 한도와 원 incident는 변경하지 않는다.
+
+시작 경합 보완 검증: 관측/탐지/cron/wrapper1,246개와 source-exact handoff/ordered/router1,435개, 합계2,681개 PASS. handoff fixture 확장 중 잘못된 monkeypatch 인자를 바로잡고 전체 해당 묶음을 재검증했다. Python compile, bash -n, diff whitespace, print-only parser PASS(현 체크리스트9개 OPEN ID 유일). 코드 재리뷰에서 현재 수정 범위 미해결 결함은 없으며 배포·자연 보고서 수용은 후속 영수증으로 확인한다.

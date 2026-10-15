@@ -180,6 +180,7 @@ def test_periodic_wrapper_runs_next_tick_and_preserves_explicit_cooldown(tmp_pat
      (137, 135, 0, False, 137, 40),
      (7, 2, 0, False, 7, 120),
      (0, 130, 75, False, 75, 45),
+     (0, 130, 1, False, 1, 45),
      (124, 135, 75, False, 124, 40),
      (0, 130, 0, True, 0, None)],
 )
@@ -240,7 +241,11 @@ def test_wrapper_reserves_observer_time_and_preserves_stage_terminals(
     if first_exit:
         assert f'exit_code={first_exit}' in result.stdout
     elif monitor_exit and not dry_run:
-        assert f'reason=monitor_incomplete exit_code={monitor_exit}' in result.stdout
+        if monitor_exit == 75:
+            assert 'reason=monitor_deferred exit_code=75' in result.stdout
+            assert '[FAIL]' not in result.stdout
+        else:
+            assert f'reason=monitor_incomplete exit_code={monitor_exit}' in result.stdout
 
 
 def _event(

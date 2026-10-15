@@ -4673,7 +4673,23 @@ def _observer_generation_snapshot(project, *, run_id, target_date, started_at):
             selector_reported_pid_receipt=selection.get("actual_pid_receipt"),
             generation_current=current, status="current" if current else "not_current",
             reason=None if current else "observer_release_not_selected")
+        if selection.get("approval_scope") == "ordered_intraday_deploy_and_restart" or selection.get("deployment_transition"):
+            # An observer started after selection but before PID attestation
+            # must not replace the frozen predecessor. Its selector hash will
+            # necessarily expire when startup records the consumed child.
+            from src.engine.infrastructure.runtime_release_router import _startup_ordered_transition
+            workspace = (Path(project) / "data").resolve(strict=True).parent
+            transition = _startup_ordered_transition(workspace, selection,
+                Path(selection["release_root"]), selection["git_commit"], target_date)
+            if transition is not None:
+                result["publication_transition"] = dict(path=str(transition["path"]),
+                    sha256=hashlib.sha256(transition["raw"]).hexdigest(),
+                    phase=transition["value"]["phase"])
+                if transition["active"]:
+                    result.update(status="startup_pending", generation_current=False,
+                        reason="observer_waiting_ordered_startup_completion")
     except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as exc:
+        result.update(status="unavailable", generation_current=False)
         result["reason"] = type(exc).__name__ + ":" + str(exc)[:160]
     result["sha256"] = _observer_seal(result)
     return result
@@ -4705,7 +4721,7 @@ def _finish_observer_generation(original, project, *, completed_at):
         target_date=original["target_date"], started_at=stamp(original["started_at"]))
     stable = (original.get("generation_current") is True and final.get("generation_current") is True
         and all(original.get(key) == final.get(key) for key in (
-            "selection_sha256", "release_root", "git_commit", "observer_code_sha256")))
+            "selection_sha256", "release_root", "git_commit", "observer_code_sha256", "publication_transition")))
     result = dict(original, completed_at=completed_at.isoformat(), generation_current=stable,
         status="current" if stable else "changed_or_unavailable",
         reason=None if stable else "observer_generation_changed_during_run",
@@ -4781,6 +4797,9 @@ def main(argv=None):
     result = None
     session = None
     try:
+        if observer_generation is not None and observer_generation.get("status") == "startup_pending":
+            terminal.update(semantic_status="partial", observer_generation=observer_generation)
+            raise ValidationDeferred("observer_waiting_ordered_startup_completion")
         with bounded_lock(state_path.with_suffix(".lock"), private=False):
             prior = _load_state(state_path)
             result = evaluate({} if args.source_only or args.delay_source_only else report,

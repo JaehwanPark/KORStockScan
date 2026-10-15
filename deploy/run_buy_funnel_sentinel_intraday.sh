@@ -116,6 +116,10 @@ if run_sentinel "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
       :
     else
       exit_code=$?
+      if [[ "$exit_code" -eq 75 ]]; then
+        echo "[DEFERRED] buy funnel sentinel target_date=${TARGET_DATE} reason=monitor_deferred exit_code=${exit_code}" | tee -a "$LOG_FILE"
+        exit "$exit_code"
+      fi
       echo "[FAIL] buy funnel sentinel target_date=${TARGET_DATE} reason=monitor_incomplete exit_code=${exit_code}" | tee -a "$LOG_FILE"
       exit "$exit_code"
     fi

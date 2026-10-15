@@ -538,6 +538,15 @@ REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES = {
     ),
 }
 
+# Preserve the frozen predecessor while ordered startup has not completed.
+# The producer defers publication; detector deadlines and failures stay strict.
+REVIEWED_ORDERED_PUBLICATION_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        '182e0a4b73b18536a7acdfe6aef36c88d7a9d919ca0647e6646df9f4c0569456',
+    ),
+}
+
 # Approved e6326b0b1: classify local opportunity custody without changing the
 # preserved policy, provider failure counters or retry/order authority.
 # Evidence: docs/audits/main-premarket-error-repair-and-restart-2026-10-15.md.
@@ -606,6 +615,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES.get(name),
                     REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name),
                     REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
+                    REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name)):
             changed.append(name)
             continue

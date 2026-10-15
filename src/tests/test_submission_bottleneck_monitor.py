@@ -3673,6 +3673,79 @@ def test_observer_generation_seals_selected_bytes_code_and_reported_pid(tmp_path
     assert final["sha256"] == monitor._observer_seal(final)
 
 
+def _ordered_observer_fixture(tmp_path, monkeypatch, phase="starting"):
+    root, selector, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
+    now = datetime.now(monitor.KST)
+    day = now.date().isoformat()
+    path = root / "data/runtime/release_transitions" / day / code["git_commit"] / "status.json"
+    path.parent.mkdir(parents=True)
+    transition = dict(schema="ordered_intraday_deployment_v1",
+        authority="APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART", policy_effect="unchanged",
+        target_date=day, candidate_root=code["release_root"], candidate_commit=code["git_commit"],
+        phase=phase, status="pass" if phase == "complete" else "running",
+        successor_identity=dict(pid=42, start_ticks="123", cwd=code["release_root"] + "/src"))
+    selection.update(approval_scope="ordered_intraday_deploy_and_restart", approved_by="user",
+        selected_at_kst=(now - timedelta(minutes=2)).isoformat(), deployment_transition=str(path))
+    selector.write_text(json.dumps(selection)); path.write_text(json.dumps(transition))
+    return root, selector, selection, path, transition, now
+
+
+@pytest.mark.parametrize("phase", ["selected", "prepared", "starting"])
+@pytest.mark.parametrize("consumed", [False, True])
+def test_ordered_startup_does_not_replace_frozen_report_or_state(
+        tmp_path, monkeypatch, capsys, phase, consumed):
+    root, selector, selection, transition_path, transition, now = _ordered_observer_fixture(tmp_path, monkeypatch, phase)
+    selection["actual_pid_consumed"] = consumed
+    if not consumed: selection.pop("actual_pid_receipt")
+    selector.write_text(json.dumps(selection))
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", root)
+    raw = root / "source.json"; raw.write_text("{}")
+    saved = [root / "tmp/submission_bottleneck_monitor_state.json",
+        root / "data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json",
+        root / "data/report/buy_funnel_sentinel" / f"submission_bottleneck_monitor_{now.date()}.json"]
+    for path in saved:
+        path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'{"original_source_gap":"preserved"}')
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in saved}
+    monkeypatch.setattr(monitor, "evaluate", lambda *a: pytest.fail("startup performed observer work"))
+    monkeypatch.setattr(monitor, "notify", lambda *a: pytest.fail("startup sent a notification"))
+    assert monitor.main(["--report", str(raw), "--notify"]) == 75
+    terminal = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert terminal["execution_status"] == "deferred" and terminal["publication"] == {}
+    assert terminal["blocker"] == "observer_waiting_ordered_startup_completion"
+    assert terminal["observer_generation"]["generation_current"] is False
+    assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in saved} == before
+    # Only the next independent run may carry the newly attested selector.
+    transition.update(phase="complete", status="pass"); transition_path.write_text(json.dumps(transition))
+    selection.update(actual_pid_consumed=True, actual_pid_receipt=dict(pid=42))
+    selector.write_text(json.dumps(selection))
+    fresh = monitor._observer_generation_snapshot(root, run_id="e" * 32,
+        target_date=now.date().isoformat(), started_at=now)
+    assert fresh["generation_current"] is True
+    final = monitor._finish_observer_generation(terminal["observer_generation"], root, completed_at=now)
+    assert final["generation_current"] is False
+
+
+@pytest.mark.parametrize("damage", ["failed", "wrong_date", "wrong_commit", "wrong_authority", "wrong_approval", "path", "missing", "malformed", "changed_after_read"])
+def test_ordered_observer_never_publishes_for_invalid_or_changed_transition(tmp_path, monkeypatch, damage):
+    root, selector, selection, path, transition, now = _ordered_observer_fixture(tmp_path, monkeypatch, "complete")
+    original = monitor._observer_generation_snapshot(root, run_id="e" * 32,
+        target_date=now.date().isoformat(), started_at=now)
+    assert original["generation_current"] is True
+    if damage == "failed": transition.update(phase="failed", status="fail")
+    elif damage == "wrong_date": transition["target_date"] = "2026-01-01"
+    elif damage == "wrong_commit": transition["candidate_commit"] = "f" * 40
+    elif damage == "wrong_authority": transition["authority"] = "unknown"
+    elif damage == "wrong_approval": selection["approved_by"] = "unknown"
+    elif damage == "path": selection["deployment_transition"] = str(root / "elsewhere.json")
+    elif damage == "changed_after_read": transition["updated_at"] = now.isoformat()
+    path.write_text(json.dumps(transition)); selector.write_text(json.dumps(selection))
+    if damage == "missing": path.unlink()
+    elif damage == "malformed": path.write_text("[]")
+    final = monitor._finish_observer_generation(original, root, completed_at=now)
+    assert final["generation_current"] is False
+    assert final["policy_pid_consumption_proven"] is False
+
+
 @pytest.mark.parametrize("change", ["selector", "code", "wrong_root", "missing", "malformed"])
 def test_observer_publication_cannot_claim_changed_or_unknown_generation(tmp_path, monkeypatch, change):
     root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
