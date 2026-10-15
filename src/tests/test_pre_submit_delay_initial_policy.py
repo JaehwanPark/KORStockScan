@@ -6,6 +6,136 @@ from src.engine.scalping import pre_submit_delay_tuning as legacy
 from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
 
 
+def _byte_source_fixture(tmp_path):
+    import hashlib
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    paths = []
+    for day, part, raw in [('2026-09-29', '000', b'alpha\n'),
+                           ('2026-09-29', '001', b'beta\n'),
+                           ('2026-10-02', '000', b'gamma\n')]:
+        path = tmp_path / f'threshold_cycle/date={day}/family=pre_submit_delay/part-execution-{part}.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        paths.append(path)
+    ledgers = {}
+    for day in ['2026-09-29', '2026-10-02']:
+        path = legacy.family_source_ledger_path(tmp_path, day)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{}')
+        ledgers[day] = byte_generation(path)
+    report = dict(source_date='2026-10-02', effective_date='2026-10-05',
+        source_sha256=hashlib.sha256(b''.join(p.read_bytes() for p in paths)).hexdigest(),
+        source_receipt=dict(schema='pre_submit_delay_input_generation_v1', through_date='2026-10-02',
+            partition_generations={str(p):{'size':p.stat().st_size,
+                'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in paths},
+            ledger_generations=ledgers, isolated_dates={}))
+    return paths, report
+
+
+def test_source_verifier_one_read_preserves_part_whole_and_daily_prefix_hashes(tmp_path, monkeypatch):
+    import hashlib
+    from pathlib import Path
+    paths, report = _byte_source_fixture(tmp_path)
+    expected = {}
+    for day in ['2026-09-29', '2026-10-02']:
+        prefix = [p for p in paths if p.parent.parent.name <= 'date=' + day]
+        expected[day] = {'sha256':hashlib.sha256(b''.join(p.read_bytes() for p in prefix)).hexdigest(),
+                         'paths':[str(p) for p in prefix]}
+    checked = []
+    def ledger_issues(root, day, *, source_snapshot):
+        source_snapshot.verify()
+        assert source_snapshot.source['cumulative_generations'][day] == expected[day]
+        assert source_snapshot.source['sha256'] == report['source_sha256']
+        checked.append(day)
+        return []
+    monkeypatch.setattr(legacy, 'family_source_ledger_issues', ledger_issues)
+    original = Path.open
+    reads = []
+    def tracked(path, *args, **kwargs):
+        if path in paths and args and args[0] == 'rb': reads.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', tracked)
+    initial.verify_source(tmp_path, report)
+    assert reads == paths
+    assert checked == ['2026-09-29', '2026-10-02']
+
+
+@pytest.mark.parametrize('mutation', ['rewrite', 'append', 'truncate', 'whole_hash', 'ledger'])
+def test_single_pass_rejects_corrupt_part_whole_or_ledger(tmp_path, monkeypatch, mutation):
+    paths, report = _byte_source_fixture(tmp_path)
+    monkeypatch.setattr(legacy, 'family_source_ledger_issues', lambda *a, **k: [])
+    if mutation == 'rewrite': paths[0].write_bytes(b'ALPHA\n')
+    elif mutation == 'append': paths[0].write_bytes(paths[0].read_bytes() + b'x')
+    elif mutation == 'truncate': paths[0].write_bytes(b'')
+    elif mutation == 'whole_hash': report['source_sha256'] = '0' * 64
+    else: legacy.family_source_ledger_path(tmp_path, '2026-09-29').write_text('{ }')
+    with pytest.raises(ValueError, match='generation_changed'):
+        initial.verify_source(tmp_path, report)
+
+
+@pytest.mark.parametrize('mutation', ['old_part', 'new_part', 'symlink'])
+def test_source_changed_during_ledger_validation_is_rejected(tmp_path, monkeypatch, mutation):
+    paths, report = _byte_source_fixture(tmp_path)
+    def race(*a, **kwargs):
+        if mutation == 'old_part': paths[0].write_bytes(b'ALPHA\n')
+        elif mutation == 'new_part': paths[0].with_name('part-execution-late.jsonl').write_bytes(b'new')
+        else:
+            other = paths[0].with_suffix('.other');other.write_bytes(paths[0].read_bytes())
+            paths[0].unlink();paths[0].symlink_to(other)
+        return []
+    monkeypatch.setattr(legacy, 'family_source_ledger_issues', race)
+    with pytest.raises(ValueError, match='source_(generation|inventory)_changed'):
+        initial.verify_source(tmp_path, report)
+
+
+@pytest.mark.parametrize('mutation', ['raw', 'gzip_alias', 'late_raw', 'ledger', 'compact_arrival'])
+def test_invocation_digest_keeps_native_raw_compact_ledger_checks(tmp_path, monkeypatch, mutation):
+    import gzip
+    from src.engine.automation.pre_submit_delay_source_ledger import seal
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.engine.infrastructure import validation_digest_session as D
+    report, _ = build(tmp_path, monkeypatch, [{'prices':{0:10000, 30:9900}}])
+    rows = [json.loads(line) for p in (tmp_path/'threshold_cycle').glob(
+        'date=*/family=pre_submit_delay/part-execution-*.jsonl') for line in p.read_text().splitlines()]
+    raw = tmp_path/'pipeline_events/pipeline_events_2026-10-02.jsonl'
+    raw.parent.mkdir()
+    raw.write_text(''.join(json.dumps({**r, 'event_type':'pipeline_event'})+'\n' for r in rows))
+    seal(tmp_path, '2026-10-02')
+    ledger = legacy.family_source_ledger_path(tmp_path, '2026-10-02')
+    report['source_receipt']['ledger_generations'] = {'2026-10-02':byte_generation(ledger)}
+    monkeypatch.setattr(D, 'MIN_BYTES', 1)
+    with D.postclose_session(tmp_path, '2026-10-02') as invocation:
+        initial.verify_source(tmp_path, report)
+        initial.verify_source(tmp_path, report)
+        assert invocation.stats['reused_reads'] > 0
+        if mutation == 'raw': raw.write_bytes(raw.read_bytes() + b'{}\n')
+        elif mutation == 'gzip_alias': raw.with_suffix('.jsonl.gz').write_bytes(gzip.compress(raw.read_bytes()))
+        elif mutation == 'late_raw':
+            from src.engine.pipeline_event_summary import _source_part_path
+            _source_part_path(raw.parent, '2026-10-02', 'late').write_text('{}\n')
+        elif mutation == 'ledger': ledger.write_text('{}')
+        else:
+            part = next((tmp_path/'threshold_cycle').glob('date=*/family=pre_submit_delay/part-execution-*.jsonl'))
+            part.with_name('part-execution-new.jsonl').write_text('{}\n')
+        with pytest.raises(ValueError, match='initial_delay_(raw_compact_generation_changed|source_inventory_changed)'):
+            initial.verify_source(tmp_path, report)
+
+
+def test_single_pass_rejects_replacement_after_open_even_with_same_bytes(tmp_path, monkeypatch):
+    from pathlib import Path
+    paths, report = _byte_source_fixture(tmp_path)
+    replacement = paths[0].with_suffix('.replacement')
+    replacement.write_bytes(paths[0].read_bytes())
+    original = Path.open
+    def racing(path, *args, **kwargs):
+        stream = original(path, *args, **kwargs)
+        if path == paths[0] and args and args[0] == 'rb': replacement.replace(path)
+        return stream
+    monkeypatch.setattr(Path, 'open', racing)
+    with pytest.raises(ValueError, match='window_dependency_changed_during_read'):
+        initial.verify_source(tmp_path, report)
+
+
 def test_v2_streaming_admits_retained_fields_instead_of_full_raw_expansion(tmp_path,monkeypatch):
     from src.engine.lifecycle import research_input_budget as budget
     from src.engine.pipeline_event_summary import execution_projection_identity
@@ -289,7 +419,9 @@ def test_same_day_consumer_compatibility_keeps_producers_and_original_policy_bou
     verifier=tmp_path/'src/engine/automation/intraday_release_handoff.py'
     verifier.parent.mkdir(parents=True,exist_ok=True);verifier.write_bytes(b'# verifier\n')
     monkeypatch.setattr(handoff,'_today',lambda *a: None)
-    monkeypatch.setattr(handoff,'_paths',lambda *a: (verifier, verifier))
+    # This case exercises the pre-consumption verification branch. A consumed
+    # receipt has a different path and does not exist in this fixture.
+    monkeypatch.setattr(handoff,'_paths',lambda *a: (verifier, verifier.with_name('consumed.json')))
     monkeypatch.setattr(handoff,'_selection',lambda **kw: (tmp_path,'new'))
     monkeypatch.setattr(handoff,'verify',lambda *a: {'status':'fail' if fault=='handoff' else 'pass'})
     bound=dict(code_contract_sha256=expected,policy_sha256='policy',source_date='2026-10-08',target_date='2026-10-12')

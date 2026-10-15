@@ -653,10 +653,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_completion and not args.selected_release_commit:
         parser.error("--verify-completion requires --selected-release-commit")
     try:
-        result = (prepare(args.source_date, target_date=args.target_date)
-                  if args.prepare else verify_prepared(args.target_date, require_today=args.require_today)
-                  if args.verify else verify_preopen_completion(
-                      args.target_date, args.selected_release_commit))
+        if args.prepare:
+            from src.engine.infrastructure.validation_digest_session import postclose_session
+            with postclose_session(DATA_DIR, args.source_date) as session:
+                result = prepare(args.source_date, target_date=args.target_date)
+            result = {**result, 'validation_io': session.stats}
+        else:
+            result = (verify_prepared(args.target_date, require_today=args.require_today)
+                      if args.verify else verify_preopen_completion(
+                          args.target_date, args.selected_release_commit))
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         result = {"status": "fail", "reason": str(exc), "actual_pid_consumed": False}
     print(json.dumps(result, ensure_ascii=False))

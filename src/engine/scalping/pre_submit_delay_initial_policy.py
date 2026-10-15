@@ -483,7 +483,7 @@ def _read(path):
 
 def verify_source(data_root, report):
     """Preparation/publication verification; never called by warm lookup."""
-    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.engine.lifecycle.holding_window_generation import byte_generation, source_stat
     receipt = report.get('source_receipt')
     if not isinstance(receipt, dict) or receipt.get('schema') != 'pre_submit_delay_input_generation_v1':
         raise ValueError('initial_delay_source_window_unverified')
@@ -491,9 +491,11 @@ def verify_source(data_root, report):
     day = report['source_date']
     if receipt.get('through_date') != day:
         raise ValueError('initial_delay_source_date_invalid')
-    paths = sorted(str(p) for directory in (root / 'threshold_cycle').glob('date=*/family=pre_submit_delay')
-                   if '2026-09-29' <= directory.parent.name.removeprefix('date=') <= day
-                   for p in directory.glob('part-execution-*.jsonl'))
+    def inventory():
+        return sorted(str(p) for directory in (root / 'threshold_cycle').glob('date=*/family=pre_submit_delay')
+                      if '2026-09-29' <= directory.parent.name.removeprefix('date=') <= day
+                      for p in directory.glob('part-execution-*.jsonl'))
+    paths = inventory()
     generations = receipt.get('partition_generations')
     if not isinstance(generations, dict) or sorted(generations) != paths:
         raise ValueError('initial_delay_source_inventory_changed')
@@ -501,38 +503,55 @@ def verify_source(data_root, report):
     if report['effective_date'] >= '2026-10-10' and not dates - set(receipt.get('isolated_dates', {})) <= set(receipt.get('ledger_generations', {})):
         raise ValueError('initial_delay_exact_raw_compact_window_unverified')
     sha = hashlib.sha256()
+    cumulative_generations = {}
+    cumulative_paths = []
+    identities = {}
     for name in paths:
         path = Path(name)
-        value = byte_generation(path)
-        if {'size':value['size'], 'sha256':value['sha256']} != generations[name]:
-            raise ValueError('initial_delay_source_generation_changed')
+        if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+            raise ValueError('window_dependency_path_invalid')
+        before = source_stat(path.stat())
+        part_sha = hashlib.sha256()
+        size = 0
         with path.open('rb') as handle:
+            if source_stat(os.fstat(handle.fileno())) != before:
+                raise ValueError('window_dependency_changed_during_read')
             for block in iter(lambda:handle.read(64*1024), b''):
+                size += len(block)
+                part_sha.update(block)
                 sha.update(block)
+            if (source_stat(os.fstat(handle.fileno())) != before
+                    or source_stat(path.stat()) != before or size != before[2]):
+                raise ValueError('window_dependency_changed_during_read')
+        if {'size':size, 'sha256':part_sha.hexdigest()} != generations[name]:
+            raise ValueError('initial_delay_source_generation_changed')
+        identities[name] = before
+        cumulative_paths.append(name)
+        source_day = path.parent.parent.name.removeprefix('date=')
+        cumulative_generations[source_day] = {'sha256':sha.hexdigest(), 'paths':list(cumulative_paths)}
     if sha.hexdigest() != report['source_sha256']:
         raise ValueError('initial_delay_source_generation_changed')
     from .pre_submit_delay_tuning import family_source_ledger_path, family_source_ledger_issues
     class ReceiptSnapshot:
         # Ledger validation needs cumulative byte seals, not another JSON scan.
         target_date = day
-        source = {'sha256':report['source_sha256'], 'paths':paths, 'cumulative_generations':{}}
+        source = {'sha256':report['source_sha256'], 'paths':paths,
+                  'cumulative_generations':cumulative_generations}
         def verify(self, *_):
-            return None  # Verified independently above in this invocation.
+            if inventory() != paths:
+                raise ValueError('initial_delay_source_inventory_changed')
+            for name, expected in identities.items():
+                path = Path(name)
+                if (path.is_symlink() or any(parent.is_symlink() for parent in path.parents)
+                        or source_stat(path.stat()) != expected):
+                    raise ValueError('initial_delay_source_generation_changed')
         rows = []
     snapshot = ReceiptSnapshot()
-    cumulative = hashlib.sha256()
-    cumulative_paths = []
-    for name in paths:
-        with Path(name).open('rb') as handle:
-            for block in iter(lambda:handle.read(64*1024), b''):
-                cumulative.update(block)
-        cumulative_paths.append(name)
-        source_day = Path(name).parent.parent.name.removeprefix('date=')
-        snapshot.source['cumulative_generations'][source_day] = {'sha256':cumulative.hexdigest(), 'paths':list(cumulative_paths)}
     for source_day, expected in receipt.get('ledger_generations', {}).items():
         path = family_source_ledger_path(root, source_day)
         if byte_generation(path) != expected or family_source_ledger_issues(root, source_day, source_snapshot=snapshot):
             raise ValueError('initial_delay_raw_compact_generation_changed')
+    snapshot.verify()
 
 
 def _atomic(path, value):

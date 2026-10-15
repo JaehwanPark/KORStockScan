@@ -37,6 +37,156 @@ def test_cold_warm_actual_digest_and_default_opt_out(tmp_path, source):
     assert D.reused_digest(source) is None
 
 
+def test_postclose_is_fresh_per_invocation_and_has_no_store(tmp_path, source):
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    for _ in range(2):
+        with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+            assert D.reused_digest(source) == expected
+            with D.postclose_session(tmp_path, '2026-10-14') as nested:
+                assert nested is invocation
+                assert D.reused_digest(source) == expected
+            assert D.ACTIVE.get() is invocation
+        assert invocation.stats['full_reads'] == 1
+        assert invocation.stats['reused_reads'] == 1
+        assert invocation.entries == {}
+        assert not invocation.directory.exists()
+        assert D.ACTIVE.get() is None
+
+
+def test_postclose_never_inherits_persistent_cache_and_restores_parent(tmp_path, source):
+    with session(tmp_path).activate() as observer:
+        D.reused_digest(source)
+        with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+            D.reused_digest(source)
+            assert invocation is not observer
+        assert invocation.stats['full_reads'] == 1
+        assert D.ACTIVE.get() is observer
+        assert D.reused_digest(source)
+        assert observer.stats['reused_reads'] == 1
+
+
+@pytest.mark.parametrize('role', ['observer', 'transition'])
+def test_explicit_persistent_role_cannot_borrow_postclose_lifetime(tmp_path, source, role):
+    with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+        D.reused_digest(source)
+        explicit = D.DigestSession(tmp_path, '2026-10-14', role=role, generation={'code':'test'})
+        with explicit.activate() as nested:
+            assert nested is explicit and nested is not invocation
+            assert D.reused_digest(source)
+        assert explicit.stats['full_reads'] == 1
+        assert D.ACTIVE.get() is invocation
+        assert D.reused_digest(source)
+    assert invocation.stats['reused_reads'] == 1
+
+
+def test_postclose_failure_clears_memory_without_caching_a_verdict(tmp_path, source):
+    with pytest.raises(ValueError, match='semantic_failure'):
+        with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+            D.reused_digest(source)
+            raise ValueError('semantic_failure')
+    assert not invocation.entries
+    assert D.ACTIVE.get() is None
+    with D.postclose_session(tmp_path, '2026-10-14') as retry:
+        D.reused_digest(source)
+    assert retry.stats['full_reads'] == 1
+
+
+def test_postclose_missing_root_keeps_native_default_and_never_creates_store(tmp_path):
+    root = tmp_path / 'missing'
+    with D.postclose_session(root, '2026-10-14') as invocation:
+        assert D.ACTIVE.get() is None
+    assert not root.exists()
+    assert invocation.stats['cache_status'] == 'storage_unavailable_full_fallback'
+
+
+def test_postclose_inherited_context_cannot_reuse_after_fork(tmp_path, source, monkeypatch):
+    with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+        assert D.reused_digest(source)
+        with monkeypatch.context() as child:
+            child.setattr(D.os, 'getpid', lambda: invocation.binding['pid'] + 1)
+            assert D.reused_digest(source) is None
+        assert D.reused_digest(source)
+    assert invocation.stats['full_reads'] == 1
+    assert invocation.stats['reused_reads'] == 1
+
+
+def test_postclose_reuse_has_a_bounded_non_sliding_lifetime(tmp_path, source, monkeypatch):
+    now = [time.time()]
+    monkeypatch.setattr(D.time, 'time', lambda: now[0])
+    with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+        D.reused_digest(source)
+        now[0] += 590
+        D.reused_digest(source)
+        now[0] += 11
+        D.reused_digest(source)
+    assert invocation.stats['full_reads'] == 2
+    assert invocation.stats['reused_reads'] == 1
+
+
+def test_postclose_rechecks_changed_bytes_inside_invocation(tmp_path, source):
+    with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+        first = D.reused_digest(source)
+        before = source.stat()
+        source.write_bytes(b'b' * before.st_size)
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        assert D.reused_digest(source) != first
+    assert invocation.stats['full_reads'] == 2
+
+
+def test_postclose_nonlocal_falls_back_without_borrowing_parent(tmp_path, source, monkeypatch):
+    with session(tmp_path).activate() as observer:
+        D.reused_digest(source)
+        monkeypatch.setattr(D, '_local_filesystem', lambda _: False)
+        with D.postclose_session(tmp_path, '2026-10-14') as invocation:
+            assert D.reused_digest(source) is None
+        assert D.ACTIVE.get() is observer
+    assert invocation.stats['cache_status'] == 'storage_unavailable_full_fallback'
+
+
+def test_postclose_controller_cli_reruns_semantics_and_uses_no_persistent_pass(
+        tmp_path, source, monkeypatch, capsys):
+    from src.engine.automation import postclose_done_controller as C
+    monkeypatch.setattr(C, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(C, '_wait_for_predecessor_succeeded', lambda *a, **k: True)
+    calls = []
+    def build(day, **kwargs):
+        calls.append(day)
+        assert D.reused_digest(source)
+        assert D.reused_digest(source)
+        return dict(date=day, status='done' if len(calls) == 1 else 'blocked_direct_evidence_gap')
+    monkeypatch.setattr(C, 'build_postclose_done_controller', build)
+    assert C.main(['--date', '2026-10-14']) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert C.main(['--date', '2026-10-14']) == 1
+    second = json.loads(capsys.readouterr().out)
+    assert calls == ['2026-10-14'] * 2
+    for result in (first, second):
+        assert result['validation_io']['full_reads'] == 1
+        assert result['validation_io']['reused_reads'] == 1
+    assert second['status'] == 'blocked_direct_evidence_gap'
+
+
+def test_prepare_cli_only_shares_digests_verify_keeps_default_full(
+        tmp_path, source, monkeypatch, capsys):
+    from src.engine.automation import next_preopen_readiness as N
+    monkeypatch.setattr(N, 'DATA_DIR', tmp_path)
+    def prepare(day, **kwargs):
+        assert D.reused_digest(source)
+        assert D.reused_digest(source)
+        return dict(status='prepared_verified', actual_pid_consumed=False)
+    def verify(day, **kwargs):
+        assert D.ACTIVE.get() is None
+        return dict(status='pass')
+    monkeypatch.setattr(N, 'prepare', prepare)
+    monkeypatch.setattr(N, 'verify_prepared', verify)
+    assert N.main(['--prepare', '--source-date', '2026-10-14']) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['validation_io']['reused_reads'] == 1
+    assert result['actual_pid_consumed'] is False
+    assert N.main(['--verify', '--target-date', '2026-10-15']) == 0
+    assert json.loads(capsys.readouterr().out) == dict(status='pass')
+
+
 @pytest.mark.parametrize('mutation', ['rewrite', 'replace', 'append', 'truncate', 'chmod'])
 def test_source_generation_changes_invalidate(tmp_path, source, mutation):
     with session(tmp_path).activate() as cold:

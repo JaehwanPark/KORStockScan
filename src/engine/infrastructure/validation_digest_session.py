@@ -1,6 +1,8 @@
 """Explicit, bounded reuse of file digests; never cache a validator verdict.
 
-Only the observer CLI and native transition CLI opt in. All semantic checks,
+Observer, transition and postclose CLIs opt in. Postclose reuse is memory-only
+and ends with the invocation; it never loads or publishes a digest store.
+All semantic checks,
 file discovery and publication still run. Default library callers do full
 native validation. Metadata trust is limited to local, same-owner storage;
 this is not protection against an administrator changing the filesystem.
@@ -107,18 +109,20 @@ def bounded_lock(path, seconds=2, *, private=True):
 
 class DigestSession:
     def __init__(self, data_root, day, *, role, generation, ttl=None):
-        if role not in {'observer', 'transition'}:
+        if role not in {'observer', 'transition', 'postclose'}:
             raise ValueError('digest_role_invalid')
         if datetime.fromisoformat(day).date().isoformat() != day:
             raise ValueError('digest_date_invalid')
-        self.ttl = 21600 if role == 'observer' else 120
+        self.ttl = {'observer': 21600, 'transition': 120, 'postclose': 600}[role]
         if ttl is not None:
             self.ttl = min(self.ttl, ttl)
         self.data_root = Path(data_root).absolute()
         self.directory = self.data_root/'runtime/validation_digests'/role
         self.binding = dict(schema='validation_file_digests_v1', role=role, day=day,
-            lexical_root=str(self.data_root), resolved_root=str(self.data_root.resolve(strict=True)),
+            lexical_root=str(self.data_root), resolved_root=str(self.data_root.resolve(strict=role != 'postclose')),
             boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(), generation=generation)
+        if role == 'postclose':
+            self.binding['pid'] = os.getpid()
         self.key = _sha(self.binding)
         self.path = self.directory/(self.key+'.json')
         self.entries = {}
@@ -163,6 +167,8 @@ class DigestSession:
             self._loaded_entries_sha = None
 
     def digest(self, path):
+        if self.binding['role'] == 'postclose' and self.binding['pid'] != os.getpid():
+            return None  # A fork cannot inherit invocation-local digest authority.
         path = Path(path).absolute()
         before = identity(path)
         if before[4] < MIN_BYTES:
@@ -226,8 +232,35 @@ class DigestSession:
 
     @contextmanager
     def activate(self):
-        if ACTIVE.get() is not None:
-            yield ACTIVE.get()
+        if self.binding['role'] == 'postclose':
+            # A new postclose invocation must not inherit a persistent observer
+            # or transition cache. Nested native checks share this invocation.
+            active = ACTIVE.get()
+            if (active is not None and active.binding == self.binding):
+                yield active
+                return
+            try:
+                local = self.data_root.is_dir() and _local_filesystem(self.data_root)
+            except (OSError, ValueError):
+                local = False
+            if not local:
+                self.stats['cache_status'] = 'storage_unavailable_full_fallback'
+                token = ACTIVE.set(None)
+                try:
+                    yield self
+                finally:
+                    ACTIVE.reset(token)
+                return
+            self.stats['cache_status'] = 'invocation_memory_only'
+            with self._measure_active():
+                try:
+                    yield self
+                finally:
+                    self.entries.clear()
+            return
+        active = ACTIVE.get()
+        if active is not None and active.binding['role'] != 'postclose':
+            yield active
             return
         try:
             self._prepare()
@@ -243,27 +276,41 @@ class DigestSession:
                 yield self
                 return
             self._load()
-            token = ACTIVE.set(self)
-            started, io_before = time.monotonic(), _thread_io()
-            try:
-                yield self
-            finally:
-                ACTIVE.reset(token)
+            with self._measure_active():
                 try:
-                    self._save()
-                except (OSError, ValueError, TypeError):
-                    self.stats['cache_status'] = 'publication_failed_full_fallback'
-                self.stats['wall_seconds'] += time.monotonic()-started
-                self.stats['peak_process_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                after = _thread_io()
-                if io_before is not None and after is not None:
-                    prior = self.stats['thread_io_delta'] or dict.fromkeys(after,0)
-                    self.stats['thread_io_delta'] = {k:prior[k]+after[k]-io_before[k] for k in after}
+                    yield self
+                finally:
+                    try:
+                        self._save()
+                    except (OSError, ValueError, TypeError):
+                        self.stats['cache_status'] = 'publication_failed_full_fallback'
+
+    @contextmanager
+    def _measure_active(self):
+        token = ACTIVE.set(self)
+        started, io_before = time.monotonic(), _thread_io()
+        try:
+            yield
+        finally:
+            ACTIVE.reset(token)
+            self.stats['wall_seconds'] += time.monotonic()-started
+            self.stats['peak_process_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            after = _thread_io()
+            if io_before is not None and after is not None:
+                prior = self.stats['thread_io_delta'] or dict.fromkeys(after,0)
+                self.stats['thread_io_delta'] = {k:prior[k]+after[k]-io_before[k] for k in after}
 
 
 def reused_digest(path):
     session = ACTIVE.get()
     return session.digest(path) if session is not None else None
+
+
+@contextmanager
+def postclose_session(data_root, day):
+    """Share content digests, never validator verdicts, within one invocation."""
+    with DigestSession(data_root, day, role='postclose', generation={}).activate() as session:
+        yield session
 
 
 def code_generation():

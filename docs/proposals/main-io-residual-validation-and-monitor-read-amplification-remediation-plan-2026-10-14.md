@@ -175,3 +175,15 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 ### 승인 배포의 추가 계약 gate
 
 후속 사용자가 배포 및 Main 기동을 승인했다. 실제 준비에서 holding vote code pin 누락을 발견해 exact reviewed holding-generation pair와 선택 전 native holding code 검증을 추가했다. delay/stop/holding 세 계약을 모두 preflight하고 원 정책/PREOPEN byte 불변을 대사한다. 첫 차단 시도와 복구·후속 결과는 [구현 리뷰](../audits/main-io-residual-implementation-review-2026-10-14.md#기동-전-holding-계약-결함과-보완)에 보존한다.
+
+
+## 장후 CLI 실행 내 재사용 보완 — 2026-10-16
+
+사용자 지시로 선택 코드23a13aba6 기준 별도 작업본에서 postclose controller/next-session prepare의 반복 원천 읽기를 보완한다. 기존 observer/transition 저장소와 수명은 유지한다. 구현·검증·배포 상태는 [10/16 리뷰](../audits/main-postclose-read-reduction-implementation-review-2026-10-16.md)가 소유한다.
+
+- `postclose_done_controller` CLI의 실제 native controller 실행과 `next_preopen_readiness --prepare`만 기존 digest 계층의 `postclose` 역할을 사용한다. 라이브 library·standalone verify·PREOPEN의 기본 전체 검증을 바꾸지 않는다.
+- postclose 해시는 해당 프로세스/호출의 메모리에만 보존한다. 실행 시작은 cold이며 persistent observer/transition 해시·PASS를 읽거나 쓰지 않는다. 중첩된 같은 root/date 호출만 공유하고 종료/예외에 비운다. PID가 바뀐 fork는 재사용할 수 없다. 최대4096개 항목·개별 digest600초의 비연장 수명이며 기존 단계 마감시간을 늘리지 않는다.
+- 파일의 lexical/resolved path·부모/alias·dev/inode/size/mtime/ctime/mode/owner를 매번 확인한다. 실제 해시만 공유하며 정책 선택·기대 SHA 비교·파일 discovery·원천 격리·현재 날짜/selector/PID·hard safety 판정은 각 native consumer가 다시 수행한다. nonlocal/부적격 저장소는 full 경로를 유지한다.
+- delay compact 검증은 파일별 SHA·ordered 전체 SHA·날짜별 cumulative SHA를 한 스트림으로 구한다. descriptor와 경로의 전후 identity/byte count, 마지막 inventory/identity 검사를 수행한다. 원 raw/compact ledger·plain/gzip/late-part 검사는 그대로 수행한다.
+- CLI stdout의 `validation_io`는 이 호출의 완료된 해시 읽기/재사용량과 thread I/O 계수다. controller·prepared canonical 산출물에 새 계측 필드를 넣어 원 해시를 바꾸지 않는다. 파일 내용 SHA 재사용을 semantic PASS로 기록하지 않는다.
+- 실제 적용과 자연 장후 cold/warm 소요시간 수용은 기존 `DirectFamilyPreopenPolicyHandoff` 및 당일 체크리스트로 확인한다. full strict/currentness 호출을 생략하거나600초 예산을 늘리지 않는다. 현재 봉인 준비본 재생성·거래 재기동·주문 권한은 이 구현에서 열지 않는다.

@@ -306,18 +306,21 @@ def main(argv: list[str] | None = None) -> int:
             and os.environ.get('POSTCLOSE_STAGE_WORKER') != '1'
             and any(stage_path(DATA_DIR / 'report', args.date, s).exists() for s in STAGE_REGISTRY)):
         return _stage_main(['--stage', 'summary_handoff', '--date', args.date])
-    report = build_postclose_done_controller(
-        args.date,
-        max_attempts=args.max_attempts,
-        predecessor_wait_sec=args.predecessor_wait_sec,
-        predecessor_timeout_sec=args.predecessor_timeout_sec,
-        allow_wrapper_rerun=args.allow_wrapper_rerun,
-        require_codex_completed=args.require_codex_completed,
-        dry_run=args.dry_run,
-        summary_handoff_only=args.summary_handoff_only,
-        require_independent_producers=args.require_independent_producers,
-    )
-    print(json.dumps({"status": report["status"], "date": report["date"]}, ensure_ascii=False))
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    with postclose_session(DATA_DIR, args.date) as session:
+        report = build_postclose_done_controller(
+            args.date,
+            max_attempts=args.max_attempts,
+            predecessor_wait_sec=args.predecessor_wait_sec,
+            predecessor_timeout_sec=args.predecessor_timeout_sec,
+            allow_wrapper_rerun=args.allow_wrapper_rerun,
+            require_codex_completed=args.require_codex_completed,
+            dry_run=args.dry_run,
+            summary_handoff_only=args.summary_handoff_only,
+            require_independent_producers=args.require_independent_producers,
+        )
+    print(json.dumps({"status": report["status"], "date": report["date"],
+                      "validation_io": session.stats}, ensure_ascii=False))
     return 0 if report["status"] in {"done", "summary_verified", "dry_run_planned"} else 1
 
 
