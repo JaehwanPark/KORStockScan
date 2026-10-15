@@ -3794,6 +3794,25 @@ def observation_health_projection(result):
                      and count(projections[owner].get('excluded_observation_count'), minimum=1)
                      or status == 'historical_unresolved' and last is not None
                         and birth_lower is not None and last.timestamp() < birth_lower))
+            # A prior PID's exact delay/bootstrap mismatch is historical only
+            # after the current native contracts independently verify. Keep the
+            # old incident bytes/status; an empty current issue list alone is
+            # never recovery evidence.
+            if incident_key == 'entry_execution_tuning_receipt_contract':
+                birth_lower = (_verified_health_actor_birth(projections[0].get('actor_birth_proof'),
+                    actor, now, result.get('observer_generation')) if actor and now else None)
+                old_issues = obj(incident.get('issues'))
+                historical_cohort = bool(status == 'historical_unresolved' and last is not None
+                    and birth_lower is not None and last.timestamp() < birth_lower
+                    and incident.get('scope') == 'entry_split|pre_submit_delay'
+                    and incident.get('rule') == incident_key and old_issues
+                    and set(old_issues) <= {'pre_submit_delay_bootstrap_handoff_mismatch',
+                                           'pre_submit_delay_bootstrap_env_mismatch'}
+                    and all(count(v, minimum=1) for v in old_issues.values())
+                    and execution.get('issues') == {} and bootstrap.get('pid_passed') is True
+                    and sha(delay.get('policy_sha256'))
+                    and not set(failed) & {'execution_or_bootstrap_not_verified',
+                        'split_projection_not_verified', 'delay_policy_not_verified'})
             if historical_cohort:
                 historical_incident_keys.add(incident_key)
             if (status not in ('historical_unresolved', 'recovered', 'superseded_alias', 'reclassified')

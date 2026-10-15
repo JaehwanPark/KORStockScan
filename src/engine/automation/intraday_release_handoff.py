@@ -580,6 +580,10 @@ REVIEWED_NATIVE_ARM_COMPLETION_SOURCES = {
 # Carried policy readers exclude only later, never-consumed observation tails.
 # Exact reviewed source bytes; full research and numeric selection stay strict.
 REVIEWED_CARRIED_SOURCE_BINDING_SOURCES = {
+    # Preserve a previous PID's delay incident after current native proof.
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        '2f897e3b30c912faba4a96bc4482bd23cd404d70e2ae7fc3593d4492d2395ca4'),
     # Operator-approved 40b931254: long-probe allocation and exact Main weak-veto scope.
     'src/engine/sniper_state_handlers.py': (
         'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',

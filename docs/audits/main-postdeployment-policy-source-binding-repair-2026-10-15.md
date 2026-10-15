@@ -25,3 +25,10 @@
 실행 owner는 기존 `DirectFamilyPreopenPolicyHandoff`, `AuxiliaryCircuitRecoveryRepair1012`, `MainStopLossRetirementRuntimeTuning1010`, `NonfixedDispatchReadinessReview1012`를 유지한다. 현재 실제 PID와 다음 정규 observer/detector generation의 일치가 운영 수용이며, 제출·경제성은 별도 자연 수용이다.
 
 추가 경계 보완 후 회귀1,529개 PASS. 복사한 immutable native fixture5개를 격리 worktree에서 읽었으며 운영 원천에는 쓰지 않았다. 최신 native128 scopes·76,800rows·607hits 및 signal hash가 기존 선택과 동일했다(mismatch0). 새 rising86·holding91 fixture의 network/provider/order0과 원 protected artifact 불변을 확인했다. 배포 전 후보787a5ee97은 선택하지 않았으며 추가 경계 보완 후속본으로 대체한다.
+
+## 첫 배포와 신규 경보 후속
+
+- `110ac4a90`은12:40:21 ordered complete/pass, PID2020871/start9949242가 원 정책을 실제 소비했다. WebSocket도 같은 PID/commit으로 갱신됐다. 공유 체크리스트 완료 기록을 수정한 뒤에도 새 operating snapshot의 public verify가 PASS여서 편집 결속 문제 해소를 실증했다.
+- 12:40 정규 관측에서 stop native 정책·delay/bootstrap 결속은 검증됐지만, 배포 전12:35의 `entry_execution_tuning_receipt_contract`가 `historical_unresolved`로 남아 최근10분 규칙에서 현재 미상 사건으로 다시 집계됐다. 사용자 후속 경보와 동일하다. 원 실패를 삭제하거나 recovered로 바꾸지 않는다.
+- 후속 보완은 이 정확한 두 delay/bootstrap mismatch에 한정한다. 사건의 마지막 관측이 검증된 현재 PID 탄생 이전이고, 현재 bootstrap/PID·split native projection·delay/env/hash가 모두 검증된 경우에만 과거 사건으로 분류한다. 현재 PID에서 발생한 실패, 다른 원인, 원천/정책 결손, 불완전 증거는 계속 실패다. 실제 원 보고서의 읽기 전용 재계산은 `warning_pending`이며 원 incident bytes/status를 유지한다.
+- 관련978개 회귀 PASS. 완전한 제출/경제성 수용을 주장하지 않으며 현재 관측 없음은 pending으로 남긴다. 첫 기동 점검의 heartbeat16초/I/O wait36.45% 실패도 원본에 보존하고 후속 새 점검에서 재확인한다. 한계치를 완화하지 않는다.

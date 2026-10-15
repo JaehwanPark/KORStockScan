@@ -4270,3 +4270,41 @@ def test_native_incomplete_population_matches_producer_without_admission(tmp_pat
     health = monitor.observation_health_projection(result)
     assert health['status'] == 'warning_pending'
     assert health['full_coverage_proven'] is False
+
+
+@pytest.mark.parametrize('damage', [None, 'current_pid', 'active', 'unknown_issue', 'empty_issue',
+    'bad_count', 'scope', 'rule', 'birth', 'new_issue', 'bootstrap', 'pid_unverified',
+    'split', 'delay', 'policy_hash', 'stale_contract'])
+def test_prior_pid_delay_contract_incident_requires_current_native_proof(damage):
+    result, _, _, _ = _bounded_outcome_health_fixture(partial=False)
+    now = monitor.stamp(result['as_of']); birth = result['observer_generation']['actor_birth_proof']
+    key = 'entry_execution_tuning_receipt_contract'
+    item = dict(status='historical_unresolved', rule=key, scope='entry_split|pre_submit_delay',
+        last_seen=datetime.fromtimestamp(birth['birth_lower_bound_epoch']-1,monitor.KST).isoformat(),
+        issues={'pre_submit_delay_bootstrap_handoff_mismatch':1,
+                'pre_submit_delay_bootstrap_env_mismatch':1}, notified_status='active')
+    result['incidents'][key] = item
+    execution = result['entry_execution_tuning_semantics']
+    execution['bootstrap']['pid_passed'] = True
+    execution['pre_submit_delay']['policy_sha256'] = 'a'*64
+    if damage == 'current_pid': item['last_seen'] = now.isoformat()
+    elif damage == 'active': item['status'] = 'active'
+    elif damage == 'unknown_issue': item['issues'] = {'unknown_contract':1}
+    elif damage == 'empty_issue': item['issues'] = {}
+    elif damage == 'bad_count': item['issues']['pre_submit_delay_bootstrap_env_mismatch'] = True
+    elif damage == 'scope': item['scope'] = 'unknown'
+    elif damage == 'rule': item['rule'] = 'unknown'
+    elif damage == 'birth': birth['boot_epoch'] += 1
+    elif damage == 'new_issue': execution['issues'] = {'pre_submit_delay_bootstrap_env_mismatch':1}
+    elif damage == 'bootstrap': execution['bootstrap']['status'] = 'unverified'
+    elif damage == 'pid_unverified': execution['bootstrap']['pid_passed'] = False
+    elif damage == 'split': execution['entry_split']['verification'] = 'unverified'
+    elif damage == 'delay': execution['pre_submit_delay']['bootstrap_env_match'] = False
+    elif damage == 'policy_hash': execution['pre_submit_delay']['policy_sha256'] = 'invalid'
+    elif damage == 'stale_contract': execution['as_of'] = (now-timedelta(minutes=1)).isoformat()
+    before = json.dumps(result,sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == ('warning_pending' if damage is None else 'not_eligible'),health
+    assert json.dumps(result,sort_keys=True) == before
+    assert item['status'] == ('active' if damage == 'active' else 'historical_unresolved')
+    assert health['current_observation_verified'] is False and health['runtime_effect'] is False
