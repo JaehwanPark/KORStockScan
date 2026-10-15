@@ -40,3 +40,14 @@
 최종 배포 전 새 코드 SHA를 기존 정확한 전후 source pair에 결속하고 candidate delay/stop/holding, active-native 코드 handoff를 검증한다. 원 입력/정책/예약/transmission_uncertain은 그대로 보존한다. 다음 자연 신호의 타이밍·provider·제출/체결은 현재 code review/배포 영수증과 별도 수용이다.
 
 재리뷰 검증: 진입/async/native 완료/지연/scale-in/동결 정책/ordered/router13개 시험 모듈2,970개 PASS(36.31초). 기존 pandas_ta deprecation 경고1건은 기능 실패가 아니다. Python compile5개·diff·print-only parser PASS, 당일9개 OPEN ID와 자연 수용 owner1개를 유지했다. 최초 경합 재현 실패와 보완 통과를 `tmp/native-entry-arm-review-deploy-20261015-1137/`에 분리 보존한다. 변경 코드·소비자·unknown/미체결/후속 소유권을 재리뷰했고 현재 수정 범위의 미해결 결함은 없다. Kiwoom wire/parser/auth/등록 흐름은 변경하지 않아 이번 범위의 API 계약 수정 검증은 해당하지 않는다.
+
+
+## 11:50 capability 인계 보완
+
+038fe6ea8의 ordered 재기동은11:49:10 PASS(PID1907749/start9642233)였지만, 후속 실제 reader 대조에서 rising_missed/holding_vote의 정책 코드 capability가 unverified로 남았다. 공용 handler의 전체 파일 해시가 두 family 세대에 포함되므로 기존92785 successor 등록·fixture를 그대로 재사용할 수 없었다. 배포 전 점검 누락이며, policy/원천 실패 또는 전략 수치 변경은 아니다. 원본86에도 같은 인계 누락이 있다.
+
+두 family의 원 코드→검토 완료 코드의 정확한 전체 세대 해시만 갱신한다. rising_missed 후속은 d2af96d68157d270ed4fc8f44c67896180210100e0f86ddc3505c288d7470807, holding_vote 후속은 d0a28277da5dccdeaf07830fc426ff2cf7b9eb0ebbea35bd48ed20adbacdedd3이다. native fixture 생성기는 네트워크 차단·provider/order0·원 보고서/정책/selector/bootstrap 불변을 확인하고 새 해시 경로에만 영수증을 생성한다. 역사적 unverified/native_validated=false는 그대로 두고 현재 reader capability만 독립 검증한다.
+
+재발 방지 시험은 실제 소스 세대와 검토된 후속 해시의 일치를 확인한다. 보완 전2개 모두 실패했고, 원천/계약/fixture/권한 변조는 기존 거부 회귀로 검증한다. 다음 배포는4개 family의 실제 reader 검증을 포함한 사전 점검 이후 진행한다. 기존 실행 파일을 덮어쓰지 않고 불변 후속 release를 사용한다.
+
+보완 재리뷰: capability/native 계약/탐지 소비자354개 PASS(4.32초), compile2개·diff·print-only parser PASS. 두 family 구성 파일을 기존3d435와 대조해 변경은 검토한 공용 handler 한 파일뿐임을 확인했다. 정확한 해시 제한과 원본/fixture 거부 동작을 유지했다.

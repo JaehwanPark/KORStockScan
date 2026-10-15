@@ -201,3 +201,10 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
         assert result['allowed_runtime_apply'] is False and result['source_generation']==observed['source_generation']
         assert result['contract_sha256']==observed['contract_sha256']
     assert all(p.read_bytes()==b for p,b in before.items())
+
+
+@pytest.mark.parametrize('family', ['rising_missed', 'holding_vote'])
+def test_reviewed_successor_binds_current_family_code(family):
+    """Shared handler edits must renew the preserved-report capability review."""
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    assert handoff.REVIEWED_SUCCESSORS[family][1] == generation.code_generation(family)

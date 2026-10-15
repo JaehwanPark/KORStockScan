@@ -9,16 +9,18 @@ from pathlib import Path
 from src.engine.monitoring import policy_generation_contract as generation
 from src.engine.monitoring import policy_generation_validation as validation
 
-# 92785b7da changes only entry scheduling/capacity paths in the shared handler.
-# All other family components remain bound by the complete generation hashes.
-# Review: docs/audits/main-premarket-error-repair-and-restart-2026-10-15.md.
+# 92785b7da and the reviewed 86f789693 native-arm completion successor change
+# entry paths in the shared handler, not either family publication or policy.
+# All components remain bound by the complete generation hashes; current fixture
+# evidence is independently required. No historical contract is reclassified.
+# Review: docs/audits/main-native-entry-arm-handoff-repair-2026-10-15.md.
 REVIEWED_SUCCESSORS = {
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '566a8527852bb50d28395a7b615afe686b2ceb3b2cc6f21a2047cb70a0d17b1b'),
+        'd2af96d68157d270ed4fc8f44c67896180210100e0f86ddc3505c288d7470807'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        'e3fc780cb8e8ba1ff85855b97f0e1baaa909d09b9f7d8b27b812d7e039c8b52c'),
+        'd0a28277da5dccdeaf07830fc426ff2cf7b9eb0ebbea35bd48ed20adbacdedd3'),
 }
 
 
