@@ -19,3 +19,11 @@ intraday handoff는 원 PREOPEN source SHA에서 이번 검토본의 정확한 S
 구현→자체 리뷰→native identity 타입 보강→재리뷰→표적 검증을 완료했다. monitor/최종 artifact consumer/handoff 회귀2,386개 PASS. 원본 두 행의 격리 검증과 고정 observer 재생에서 기존 모든 관측·원천 충족·평가·no-match 건수 및 원천 issue가 불변이고, health는 `not_eligible`에서 기존 `bounded_source_quality_observation / warning_pending`으로 바뀐다. `full_coverage_proven=false`, runtime/정책 적용 권한 false를 유지한다. 해당 범위 미해결 코드 결함0이다.
 
 [원본·고정 구간 재생·시험 로그](../../tmp/submission-observer-alert-20261015-1710/)를 보존한다. broad report 재생성·provider 재호출·검증용 주문·외부 동기화는 실행하지 않는다. 실제 배포·정규 observer와 detector의 동일 run 수용은 별도 영수증으로 후속 기록한다. 원천 전체 충족과 경제성 개선은 이 수리의 완료 조건이 아니며 입증하지 않았다.
+
+## 배포·정규 소비 수용
+
+수정 df2afffa7은17:33:11 ordered complete/pass, PID2516478/start11706324에서 소비됐다.17:36:13.584013 자연 observer의 필수 입력 부족1건은 verified1/unclassified0, source coverage/admission/no-match false를 유지했다.17:37:23 detector가 동일 run/health를 소비했고 실패0이었다. [첫 실제 수용](../../tmp/submission-observer-alert-20261015-1710/postdeploy-verification.json), [자연 부족 원천](../../tmp/submission-observer-alert-20261015-1710/natural-feature-gap-acceptance.json).
+
+그 사이 기존 PID의 별도 보유 사전 순회 경합이 확인돼 [추가 수리](main-holding-context-dictionary-race-repair-2026-10-15.md)를 통합했다. 최종 배포 코드는3803938c7dec2c50fb7e24270a527f3e48dd66bd이며17:43:44 재기동, PID2527556/start11769546이다.17:47:02 정규 detector의 실패0, 현재 observer 동일 run/health 소비 및 원 PREOPEN/정책/수동 제외/누적 등록 대기 원본 불변을 확인했다. [최종 수용](../../tmp/holding-context-race-20261015-1730/final-acceptance.json).
+
+원천 관측 부족과 기존 holding_exit_sentinel_aftermarket_report stale·장후 최종화 지연 경고는 남는다. 전체 coverage·자연 제출 전체 성공·경제성을 완료로 표시하지 않는다.

@@ -11,3 +11,13 @@ Event로 순회 시점과 실제 writer를 동기화한 추가/삭제×frozen pa
 자체 리뷰→보완→재리뷰에서 이 함수의 scalar reader, 공통 RLock writer, source-only caller 및 handoff 소비를 확인했다. 정확한 원 PREOPEN source→후속 source SHA만 추가한다. shared handler 변경에 영향을 받는 rising_missed/holding_vote capability는 새 코드 세대의 독립 network-blocked fixture로 확인하고, 원 보고서·과거 fixture·정책 원본은 보존한다. Kiwoom wire protocol 변경은 없다. 코드 검증은 실제 배포·자연 실행·경제성과 구분한다.
 
 원본 traceback과 재현/수정 회귀는 [수리 증거](../../tmp/holding-context-race-20261015-1730/)에 보존한다. 배포 owner는 기존 `DirectFamilyPreopenPolicyHandoff`이며, 기존 사용자 배포·재기동 승인 범위에서 observer 수정과 누적/보유/원장 복구를 모두 포함한 후속 release로 ordered 전환한다. 새 PID·원 정책 바이트·WS·보유 자연 관측·정규 detector 소비를 실행 영수증으로 확인한다. 외부 동기화·검증용 주문·provider 호출·과거 보고서 재생성은 실행하지 않는다.
+
+## 실제 배포·최종 수용
+
+- 배포 코드 `3803938c7dec2c50fb7e24270a527f3e48dd66bd`; 경로 `/home/ubuntu/KORStockScan-runtime-releases/holding-context-snapshot-20261015-3803938c7`. observer df2afffa7, 원장 복구 d05ebbf87, 기존 누적7b2e421e3/보유 계약 통합을 모두 포함한다.
+- 독립 network-blocked fixture rising86/holding91 PASS. 변경 없는 entry_cancel_wait/auxiliary fixture는 정확한 원 코드 세대·원천으로 재검증했다. 현재 native 정책 코드가 동일함을 확인해 기존 parity 증거를 재사용했으며 정책 재선정·과거 보고서 재생성은 하지 않았다.
+- 17:43:44 ordered complete/pass, 새 PID2527556/start11769546. 기존 PID2516478 종료, native bootstrap/handoff 소비·WS 연결·release-set 검증 PASS. 원 PREOPEN/env/current policy·수동 제외·10/16 cumulative-registration bytes는 모두 보존됐다.
+- 17:47:02 정규 detector 실패0, process_health/log_scanner/resource_usage PASS. 현재 observer 동일 run/health 소비를 포함한15조건 모두 PASS. 보유005930/034020/196170의 main_stop_source와 trailing 입력 자연 관측 재개, 기존036930 수동 이관 차단 유지. 재기동 전 offset 이후 엔진·주문 receipt·동기화 오류 로그 추가0. [최종 수용](../../tmp/holding-context-race-20261015-1730/final-acceptance.json).
+- 17:36:12의 별도 `postclose_handoff_generation_invalid` 원인은 감싼 `main_stop_confirmation_invalid`까지만 기록돼 있다. 상세 예외 원인은 확정하지 않는다.17:37:23 및 최종17:47:02에 같은 원10/14 summary/DONE·historical checklist를 현재 PID로 검증해 `done / findings=[]`를 확인했다.10/16 준비는 future_due이며 새 finalization이나 미래 PID 소비를 주장하지 않는다. [실패 원본](../../tmp/holding-context-race-20261015-1730/detector-handoff-warning.json), [회복 증거](../../tmp/holding-context-race-20261015-1730/handoff-recovered-1737.json).
+
+원천 관측 부족 및 기존 holding 보고서 stale/장후 최종화 지연 경고는 기존 owner에 남는다. 원 오류 분기의 자연 재진입 영수증은 아직 없고, 경합 수리는 결정적 동시성4경우 회귀와 정상 보유 처리 관측으로 검증했다. 재발 불가능·전체 자연 수용·경제성 개선으로 확대 해석하지 않는다. 최종 문서 parser/link/owner·compile/diff 검증을 완료하며 외부 sync는 실행하지 않는다.
