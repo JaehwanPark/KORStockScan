@@ -46,6 +46,14 @@ REVIEWED_SUCCESSORS = {
         '39d0f10c41b661a3d8ea794ff66bfa86b55fab31351062bfb41463bb943bbfe5'),
 }
 
+# The next dated native report already carries the formerly reviewed successor.
+# Preserve that report too; do not relabel it as the older source generation.
+REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
+    'holding_vote': (
+        '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
+        '39d0f10c41b661a3d8ea794ff66bfa86b55fab31351062bfb41463bb943bbfe5'),
+}
+
 
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -75,7 +83,11 @@ def _historical_fixture(contract, data, family):
 def current_fixture_observation(observed, data):
     family = observed.get('family')
     pair = REVIEWED_SUCCESSORS.get(family)
-    if not pair or (observed.get('code_sha256'), generation.code_generation(family)) != pair:
+    actual_pair = (observed.get('code_sha256'), generation.code_generation(family))
+    preserved = REVIEWED_PRESERVED_SOURCE_SUCCESSORS.get(family)
+    if preserved and actual_pair == preserved:
+        pair = preserved
+    if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
             or observed.get('missing_components') != [] or observed.get('observation_complete') is not True

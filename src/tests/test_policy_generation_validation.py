@@ -168,9 +168,10 @@ def test_fixture_publication_rejects_dirty_or_untracked_source(monkeypatch):
 
 
 @pytest.mark.parametrize('family', ['entry_cancel_wait','rising_missed','holding_vote','auxiliary'])
+@pytest.mark.parametrize('review_map', ['REVIEWED_SUCCESSORS', 'REVIEWED_PRESERVED_SOURCE_SUCCESSORS'])
 @pytest.mark.parametrize('damage', [None,'unreviewed_old','unreviewed_current','source','contract',
     'fixture_code','plan','report_path','state','missing','authority','receipt'])
-def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage):
+def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage, review_map):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     data=tmp_path/'data'; observed,report,run,path,value,seal=_fixture(data,family)
     payload=json.loads(report.read_text())
@@ -181,9 +182,11 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
     report.write_text(json.dumps(payload))
     observed=generation.observations(tmp_path,DAY,data_root=data)[0]
-    monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{family:(old,current)})
-    if damage=='unreviewed_old':monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{family:('b'*64,current)})
-    elif damage=='unreviewed_current':monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{family:(old,'b'*64)})
+    monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{})
+    monkeypatch.setattr(handoff,'REVIEWED_PRESERVED_SOURCE_SUCCESSORS',{})
+    monkeypatch.setattr(handoff,review_map,{family:(old,current)})
+    if damage=='unreviewed_old':monkeypatch.setattr(handoff,review_map,{family:('b'*64,current)})
+    elif damage=='unreviewed_current':monkeypatch.setattr(handoff,review_map,{family:(old,'b'*64)})
     elif damage=='source':native['count']=1;report.write_text(json.dumps(payload))
     elif damage=='contract':contract['code_sha256']='b'*64;report.write_text(json.dumps(payload))
     elif damage=='fixture_code':value['code_sha256']='b'*64;seal()

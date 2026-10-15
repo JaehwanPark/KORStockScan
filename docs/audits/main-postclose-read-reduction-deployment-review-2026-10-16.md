@@ -64,3 +64,8 @@
 선택23a13aba6→검토 receipt 파일의 정확한 쌍을 `REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES`에 결속한다. holding capability 후속은 전체 `39d0f10c41b661a3d8ea794ff66bfa86b55fab31351062bfb41463bb943bbfe5`다. 통합 시험이 auxiliary의 낡은 successor hash도 발견했고, 실제 선택23a13aba6 자체가 이미c2c4bc10…임을 재현했다. 그 family의 모든 component는 선택23과 byte 동일하다. 기존 원 계약88a49610…→현재c2c4bc10…의 exact pair를 갱신하고 fresh 네트워크 차단 fixture를 별도 요구한다. 과거 계약/보고서/정책 code pin을 바꾸지 않는다. native-v6 계약37개는 unchanged여서 정책 code refresh를 새로 발행하지 않는다.
 
 다음 승인 배포 후 세 original key가 native replay로 ACK됐는지, final pending/기록 terminal 및 다음 자연 detector를 확인해야 운영 수용이다. journal 강제 편집·수동 replay/SELL·historical FAIL 삭제는 수행하지 않는다.
+
+
+배포 전 최종 검증은 통합16 suites2813 PASS, Python compile/diff/parser PASS다. 추가 실제 dated reader 대사에서 source10/15 holding 보고서가 이미5658a73a…를 원 code로 가지고 있음을 확인했다. 역사적b2087e97… source와 이 후속 source를 각각 같은 검토39d0f10c…에 exact pair로 결속하며 임의 origin/current는 거부한다. 관련 역사 보존/변조 회귀를 두 source-map에 확장해303 PASS를 확인했다. 보고서와 원 contract/code/FAIL 상태는 그대로고 현재 reader capability만 검증한다.
+
+새 네트워크 차단 fixture는 holding91개/auxiliary83개, 합계174 PASS·네트워크 시도/provider/order0·보호 산출물 불변으로 발행됐다. 현재 native 관측은 entry_cancel_wait/rising_missed/holding_vote의 source10/15와 auxiliary의 실제 기존 source10/14를 구분해4개 모두verified다. source10/15 auxiliary evaluation.json은 없으므로10/14를10/15로 재라벨링하지 않는다. 실제 source/comparison gaps와 비용 미상은 보존한다. [날짜별 reader/fixture 대사](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/preserved-date-native-preflight.json).
