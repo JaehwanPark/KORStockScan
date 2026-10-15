@@ -31,3 +31,20 @@
 별도 source-bound 복구 preview는 원장 사본의 기존 bytes 전부를 보존하고 기존 record_fill/terminal 계약으로 해당 Main SELL만 연결한다. 실제 체결번호는 비워 두고 terminal reason에 원천 SHA를 결속한다. Main drain 후 exact DB row CAS로 COMPLETED / sell_price210000 / sell_time NULL / profit_rate NULL을 적용하도록 준비했다. 비용·정확한 체결시각 부재를 경제성0이나 확정 순이익으로 대체하지 않는다. preview의 재실행 멱등성 및 잘못된 주문·부분체결·잔량·단가·일자·거래소·방향7종 거부를 확인했다. 실제 적용·PID 상태는 후속 영수증으로 구분한다. 새 주문·취소·WS 재생은 없다.
 
 최종 통합 회귀3,201개 PASS, 원장·소유권·실체결·동기화 관련 추가252개 PASS(기존 warning1), Python compile/diff/print-only parser PASS. 원본 cold/warm 읽기 잠금 실패2개를 재현했고 새 reader에서 통과했다. 코드 리뷰의 해당 변경 범위 미해결 결함0이며, 원 체결에 대한 내부 예외 세부 원인은 로그 부재로 미확정이다.
+
+## 실제 복구·배포
+
+- 통합 배포 commit `05b78a4011ab7627b7e8ddc341d688fecf8f6a4e`; 작업 트리 `/home/ubuntu/KORStockScan-worktrees/entry-progress-deploy-20261015`. 지정0d4f422a8과 기존 운영 수리를 함께 포함한다.
+- 네 계열의 별도 network-blocked fixture: entry_cancel_wait93 / rising_missed86 / auxiliary83 / holding_vote91 PASS, 총353개. 기존 source14 원 보고서를 덮어쓰지 않았다. 정확한 candidate delay/stop/holding와854개 source hash code handoff를 검증했다.
+- 18:58:19 Main drain 구간에서 원장 전체 prefix를 유지하고 정확한0060210 체결1/금액210000 및 terminal 기록을 append했다. terminal event `7392027d88867d40361de6f97ff4d273533ed1605f78cced8cef092b24a3cd71`, 기존49266 owner 수량0, DB CAS는 COMPLETED / sell_price210000 / sell_time NULL / profit_rate NULL이다. [실제 복구 영수증](../../tmp/entry-progress-deploy-20261015-1820/samsung-recovery-applied.json). 원천 기반 복구 script SHA50758eb60354b0bd4bb5c86ce508405cd31e5c8b736684da9c8d24a709e4d542, ordered driver embedding SHA924c1a9bc579c610eb8965e2d82f8a57c3f471268b9c5b848036cdba3899b2d6. 새 broker 주문/취소0.
+- 19:00:41 ordered transition complete/pass. 전임PID2552591 종료, 새PID2610988/start12230101, cwd `/home/ubuntu/KORStockScan-runtime-releases/entry-progress-custody-20261015-05b78a401/src`. native bootstrap/handoff 소비와 현재 WS 연결 PASS. 원 정책·PREOPEN/env·기존10/16 pending·수동 제외·10/14 controller/strict/summary/stop 원본 SHA 유지. [전환 영수증](../../tmp/entry-progress-deploy-20261015-1820/deployment-result.json).
+- 19:02:57의 새 PID 218초 관측에서 삼성전자 경고/owner receipt/sync 오류0, 기존49266 포지션 수량0과 DB 완료 및 원본 보존9조건 PASS. 두산·알테오젠의 기존 보유 관측은 자연 재개했고 주성의 기존 수동 이관은 유지한다. 새 주문 성공·비용 포함 경제성 개선으로 확대 해석하지 않는다.
+- 19:02:07 첫 정규 detector는 artifact_freshness warning(첫 현재세대 관측 대기와 기존 holding_exit_sentinel_aftermarket_report stale), log_scanner/process_health PASS. resource_usage는 실제 I/O wait39.63% >=35% fail이었으므로 해당 실패를 보존하고 후속 회복을 별도로 확인한다. cron은 원10/14 최종화의 recovered_late 경고를 유지하며, 새 PID의 historical generation 소비/세대 결속에는 오류가 없다.
+
+## 정규 산출물 수용과 남은 관측
+
+19:04:37의 정규 detector/observer 동일 run·health projection·현재 commit/PID 결속을 포함한 배포15조건이 모두 PASS다. artifact_freshness fail0이며, 기존 holding_exit_sentinel_aftermarket_report stale와 scanner 기계 식별0에 따른 관측 부분 범위 warning은 남는다. 현재 observer의 health_unmet는 앞선 오류 묶음에서 해소됐지만 full semantic coverage나 자연 주문 성공으로 선언하지 않는다. [배포 수용](../../tmp/entry-progress-deploy-20261015-1820/postdeploy-verification.json).
+
+동일 탐지의 resource_usage는 PASS로 회복했다. 다만 log_scanner는 별도 OpenAI analyze_target timeout4건으로 fail이다. 19:04:14~19:04:48 실제 삼성전자 재진입 평가에서 잔여 예산223~831ms의 timeout5건이 기록됐다. 이번 매도 주문0060210의 상태 오류 재발이 아니며 provider/예산/threshold는 변경하지 않는다. 기존 `AuxiliaryCircuitRecoveryRepair1012`가 원 기계/AI 요청 시각·총예산·잔여예산 원천을 연결해 후속 원인을 확인한다. [별도 API 경보 원본](../../tmp/entry-progress-deploy-20261015-1820/postrestart-provider-errors.json). 배포 수용 PASS와 전체 시스템 무경고/보조 판단 자연 성공을 구분한다.
+
+10/14 최종화 recovered_late와 기존 holding sentinel 경고는 보존한다. 새 코드·PID의 역사적 finalization 결속, generation issues없음, handoff done/findings없음 및 원 보고서 SHA 불변은 확인했다. 별도 API log_scanner fail 때문에 모든 detector 무실패를 요구하는 통합 finalization 관측은 아직 pending이며, finalization 자체의 generation stale 재발을 뜻하지 않는다. 19:04:59 기준 새 PID341초 동안 매도 대기/owner receipt/sync 오류0 및 원장/DB9조건 PASS. [삼성전자 재기동 후 검증](../../tmp/entry-progress-deploy-20261015-1820/samsung-postrestart-verification.json).
