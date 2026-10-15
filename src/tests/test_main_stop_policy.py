@@ -162,6 +162,244 @@ def rows(base=1791766800., record=1):
             runtime_flags=dict(grace_enabled=True,protect_enabled=True,handoff_enabled=False,vote_max_worsen_pct=.8),cost_model=dict(buy_cost_krw=10.,sell_cost_rate=.001,known_at=base-10,source_sha256='a'*64),vote_source=None)
 
 
+def reseal(row):
+    row['source_sha256'] = p.digest({k:v for k,v in row.items() if k != 'source_sha256'})
+    return row
+
+
+@pytest.mark.parametrize('zone', ['+09:00', '+00:00', 'Z'])
+def test_native_cost_iso_replays_identically_without_mutating_source(zone):
+    from datetime import datetime, timezone, timedelta
+    import copy
+    source = list(rows())
+    expected = r.replay(source, replace(baseline(), grace_sec=0))
+    for row in source:
+        epoch = row['cost_model']['known_at']
+        tz = timezone(timedelta(hours=9)) if zone == '+09:00' else timezone.utc
+        row['cost_model']['known_at'] = datetime.fromtimestamp(epoch, tz).isoformat()
+        if zone == 'Z':
+            row['cost_model']['known_at'] = row['cost_model']['known_at'].replace('+00:00', 'Z')
+        row['cost_model']['actual_broker_cost'] = False
+        reseal(row)
+    frozen = copy.deepcopy(source)
+    assert r.replay(source, replace(baseline(), grace_sec=0)) == expected
+    assert source == frozen
+    source[0]['cost_model']['known_at'] = source[0]['cost_model']['known_at'].replace('2026', '2025')
+    assert r.replay(source, baseline())['reason'] == 'quote_or_position_source_invalid'
+
+
+@pytest.mark.parametrize('clock', [True, False, None, '', 'bad', '1791766790',
+    '2026-10-12T09:00:00', -1, 0, '2100-01-01T00:00:00+09:00'])
+def test_invalid_or_future_cost_clock_stays_source_gap(clock):
+    source = list(rows())
+    source[0]['cost_model']['known_at'] = clock
+    reseal(source[0])
+    result = r.replay(source, baseline())
+    assert result['reason'] == 'cost_model_source_missing'
+    assert result['modeled_net_krw'] is None
+
+
+def test_nonfinite_cost_clock_is_not_a_source():
+    for clock in (float('nan'), float('inf'), float('-inf')):
+        assert r.cost_known_epoch(clock) is None
+
+
+def preset_sources(profits=(-.2, -1.42), *, grace=0, emergency=-2.4, handoff=True):
+    stock = dict(id=99, code='036930', strategy='SCALPING', position_tag='SCALPING',
+        buy_qty=1, buy_price=210000., exit_mode='SCALP_PRESET_TP',
+        hard_stop_pct=-1.4, hard_stop_grace_sec=grace, hard_stop_emergency_pct=emergency)
+    stock['main_stop_policy_pin'] = p.pin(position_key=position_cycle_id(stock),
+        role='SCALP_PRESET_TP', market='REGULAR', target='2026-10-12', baseline=baseline())
+    result = []
+    for n, profit in enumerate(profits):
+        at = 1791766800. + n
+        preset = p.preset_stop_receipt(stock, at=at, evaluator='normal', hard_pct=-1.4,
+            grace_sec=grace, emergency_pct=emergency, held_sec=60+n, enabled=True)
+        result.append(p.source_row(stock, at=at, bid=210000*(1+profit/100), bid_qty=1,
+            quote=dict(market_route='krx_nxt_integrated', item='036930_AL', transport_epoch=1, observed_epoch=at),
+            coverage_complete=True, automatic_management_allowed=True,
+            cost_model=dict(buy_cost_krw=0., sell_cost_rate=.0023,
+                known_at='2026-10-12T08:59:59+09:00', source_sha256='a'*64, actual_broker_cost=False),
+            vote_source=None, preset_stop=preset, decision_profit_pct=profit,
+            runtime_flags=dict(grace_enabled=True, protect_enabled=True, handoff_enabled=handoff, vote_max_worsen_pct=.8)))
+    return stock, result
+
+
+def handoff_fixture(stock, at, registered=True):
+    preset = p.preset_stop_receipt(stock, at=at, evaluator='normal', hard_pct=-1.4,
+        grace_sec=0, emergency_pct=-2.4, held_sec=65, enabled=True)
+    return p.handoff_source(stock, at=at, registered=registered,
+        exit_rule='scalp_preset_hard_stop_pct', profit_pct=-1.42,
+        source_stage='fixture_after_quote_guard', preset_stop=preset)
+
+
+@pytest.mark.parametrize('profit,grace,handoff,rule,disposition', [
+    (-1.42, 0, True, 'scalp_hard_stop_pct', 'manual_handoff'),
+    (-1.42, 0, False, 'scalp_hard_stop_pct', 'exit_candidate'),
+    (-2.5, 90, True, 'scalp_hard_stop_emergency', 'exit_candidate')])
+def test_preset_precedes_research_and_common_stop(profit, grace, handoff, rule, disposition):
+    stock, source = preset_sources(profits=(-.2, profit), grace=grace, handoff=handoff)
+    result = r.replay(source, baseline())
+    assert result['reason'] == 'preset_safety_precedes_soft_policy'
+    assert result['operating_rule'] == rule and result['operating_disposition'] == disposition
+    assert result['modeled_net_krw'] is None and not result['actual_order_submitted']
+    contract = r.holding_contracts(source)
+    assert contract['common_stop_values']['soft_stop_pct'] == -3.
+    assert contract['effective_preset']['hard_stop_pct'] == -1.4
+    assert contract['manual_handoff']['status'] == 'not_observed'
+
+
+def test_preset_grace_missing_contract_and_pending_or_actual_handoff_are_distinct():
+    stock, source = preset_sources(grace=90)
+    assert r.replay(source, baseline())['reason'] == 'crossing_not_observed'
+    source[0].pop('preset_stop'); reseal(source[0])
+    assert r.replay(source, baseline())['reason'] == 'preset_effective_stop_unobserved'
+    stock, source = preset_sources()
+    pending = handoff_fixture(stock, source[-1]['at']+1, registered=False)
+    registered = handoff_fixture(stock, pending['at']+5)
+    result = r.holding_contracts(source+[pending, registered])
+    assert result['manual_handoff']['status'] == 'registered'
+    assert result['manual_handoff']['attempts'] == 2
+    assert result['manual_handoff']['source_sha256'] == registered['source_sha256']
+    assert result['actual_realized_net_krw'] is None
+    assert r.holding_contracts(source+[pending])['manual_handoff']['status'] == 'pending'
+    assert r.replay([registered], baseline())['reason'] == 'manual_handoff_not_sell'
+    registered['position_key'] = 'another_position'; reseal(registered)
+    assert r.holding_contracts(source+[registered])['reason'] == 'holding_contract_identity_changed'
+
+
+@pytest.mark.parametrize('mutation', ['hash', 'clock', 'pin', 'stop', 'stage'])
+def test_handoff_and_effective_preset_reject_unbound_evidence(mutation):
+    from src.engine.automation import main_stop_source_index as idx
+    stock, source = preset_sources()
+    receipt = handoff_fixture(stock, source[-1]['at']+1)
+    if mutation == 'hash': receipt['decision_profit_pct'] = -2.
+    elif mutation == 'clock': receipt['at'] -= 100; reseal(receipt)
+    elif mutation == 'pin': receipt['pin_sha256'] = 'b'*64; reseal(receipt)
+    elif mutation == 'stop': receipt['preset_stop']['hard_stop_pct'] = -3.; reseal(receipt)
+    else:
+        with pytest.raises(ValueError, match='stop_handoff_stage_invalid'):
+            idx.extract(dict(stage='hard_stop_manual_control_handoff_deferred', fields=dict(main_stop_handoff_source=receipt)))
+        return
+    assert r.holding_contracts(source+[receipt])['status'] == 'source_gap'
+
+
+@pytest.mark.parametrize('registered', [True, False])
+def test_actual_handoff_adapter_binds_current_cycle_after_registration(monkeypatch, registered):
+    from types import SimpleNamespace
+    from src.engine import sniper_state_handlers as h
+    stock, source = preset_sources()
+    stock['status'] = 'HOLDING'
+    emitted = []
+    monkeypatch.setattr(h, '_env_or_rule_bool', lambda *a, **k: True)
+    monkeypatch.setattr(h, '_is_scalp_simulated_position', lambda *a: False)
+    monkeypatch.setattr(h, '_has_active_sell_order_pending', lambda *a: False)
+    monkeypatch.setattr(h, '_resolve_holding_elapsed_sec', lambda *a, **k: 600.)
+    monkeypatch.setattr(h, 'add_manual_control_exclusion_code', lambda *a, **k: SimpleNamespace(
+        excluded=registered, reason='fixture', source='fixture', code='036930', as_log_fields=lambda: {}))
+    monkeypatch.setattr(h, '_log_holding_pipeline', lambda *a, **k: emitted.append((a[2], k)))
+    assert h._handoff_hard_stop_to_manual_control_if_enabled(stock, '036930', strategy='SCALPING',
+        sell_reason_type='LOSS', exit_rule='scalp_preset_hard_stop_pct', profit_rate=-1.42,
+        peak_profit=-.23, curr_price=207500, buy_price=210000., now_ts=source[-1]['at']+1,
+        source_stage='normal_after_quote_guard')
+    receipt = json.loads(emitted[-1][1]['main_stop_handoff_source'])
+    assert r.valid_handoff(receipt) and receipt['registered'] is registered
+    assert receipt['preset_stop']['hard_stop_pct'] == -1.4
+    assert receipt['position_key'] == source[0]['position_key']
+    assert not stock.get('exit_requested')
+    assert stock['manual_control_hard_stop_handoff_pending'] is not registered
+
+
+@pytest.mark.parametrize('evaluator', ['normal', 'fast', 'fast_rest_confirmed', 'fast_prearm'])
+def test_preset_observation_matches_evaluator_values_and_never_arms_prearm(monkeypatch, evaluator):
+    from src.engine import sniper_state_handlers as h
+    stock, source = preset_sources()
+    monkeypatch.setattr(h, '_resolve_holding_elapsed_sec', lambda *a, **k: 600.)
+    monkeypatch.setattr(h, '_scalp_fast_exit_guard_active', lambda **k: True)
+    receipt = h._main_stop_preset_observation(stock, now_ts=source[0]['at'], evaluator=evaluator)
+    assert receipt['hard_stop_pct'] == -1.4 and receipt['emergency_pct'] == -2.4
+    assert receipt['grace_sec'] == 0 and receipt['held_sec'] == 600.
+    assert receipt['enabled'] is (evaluator != 'fast_prearm')
+    assert receipt['position_key'] == source[0]['position_key']
+
+
+@pytest.mark.parametrize('bad_pin', [None, ['malformed']])
+def test_missing_pin_observation_cannot_unblock_an_actual_handoff(monkeypatch, bad_pin):
+    from types import SimpleNamespace
+    from src.engine import sniper_state_handlers as h
+    stock, source = preset_sources()
+    stock['main_stop_policy_pin'] = bad_pin
+    stock['status'] = 'HOLDING'
+    emitted = []
+    monkeypatch.setattr(h, '_env_or_rule_bool', lambda *a, **k: True)
+    monkeypatch.setattr(h, '_is_scalp_simulated_position', lambda *a: False)
+    monkeypatch.setattr(h, '_has_active_sell_order_pending', lambda *a: False)
+    monkeypatch.setattr(h, 'add_manual_control_exclusion_code', lambda *a, **k: SimpleNamespace(
+        excluded=True, reason='fixture', source='fixture', code='036930', as_log_fields=lambda: {}))
+    monkeypatch.setattr(h, '_log_holding_pipeline', lambda *a, **k: emitted.append(k))
+    assert h._handoff_hard_stop_to_manual_control_if_enabled(stock, '036930', strategy='SCALPING',
+        sell_reason_type='LOSS', exit_rule='scalp_preset_hard_stop_pct', profit_rate=-1.42,
+        peak_profit=-.23, curr_price=207500, buy_price=210000., now_ts=source[-1]['at']+1,
+        source_stage='normal_after_quote_guard')
+    assert stock['manual_control_exclusion_blocked'] is True
+    assert not stock.get('exit_requested') and not stock['manual_control_hard_stop_handoff_pending']
+    assert 'main_stop_handoff_source_gap' in emitted[-1]
+    assert 'main_stop_handoff_source' not in emitted[-1]
+
+
+def test_manual_custody_does_not_reactivate_emergency_in_operating_projection():
+    stock, source = preset_sources(profits=(-.2, -.3, -5.))
+    registered = handoff_fixture(stock, source[1]['at'])
+    after = source[2]
+    after.update(manual=True, automatic_management_allowed=False)
+    reseal(after)
+    result = r.holding_contracts(source[:2]+[registered, after])
+    assert result['manual_handoff']['status'] == 'registered'
+    assert result['preset_crossing']['source_sha256'] == registered['source_sha256']
+    assert result['preset_crossing']['rule'] == 'scalp_hard_stop_pct'
+    assert r.preset_decision(after) is None
+    after.update(manual=False, automatic_management_allowed=True); reseal(after)
+    assert r.holding_contracts(source[:2]+[registered, after])['reason'] == 'automatic_source_after_manual_handoff'
+
+
+@pytest.mark.parametrize('field,value', [('coverage_complete', False), ('quote_at', 0),
+    ('route', ''), ('transport_epoch', None)])
+def test_incomplete_quote_is_not_a_preset_crossing_but_does_not_erase_actual_registration(field, value):
+    stock, source = preset_sources()
+    source[-1][field] = value; reseal(source[-1])
+    result = r.holding_contracts(source)
+    assert result['preset_crossing'] is None and result['status'] == 'source_gap'
+    receipt = handoff_fixture(stock, source[-1]['at']+1)
+    result = r.holding_contracts(source+[receipt])
+    assert result['manual_handoff']['status'] == 'registered'
+    assert result['preset_crossing']['source_sha256'] == receipt['source_sha256']
+    assert result['status'] == 'source_gap'
+
+
+def test_postclose_reports_research_preset_and_actual_manual_axes_separately(tmp_path):
+    stock, source = preset_sources()
+    handoff = handoff_fixture(stock, source[-1]['at'])
+    events = [dict(stage='main_stop_source', fields=dict(main_stop_source=json.dumps(row))) for row in source]
+    events.append(dict(stage='hard_stop_manual_control_handoff', fields=dict(main_stop_handoff_source=json.dumps(handoff))))
+    events.append(dict(stage='hard_stop_manual_control_handoff', fields=dict(runtime_record_id=99)))
+    path = tmp_path/'raw.jsonl'
+    path.write_text(''.join(json.dumps(event)+'\n' for event in events))
+    parents = {f'{role}|{market}': baseline() for role in p.ROLES for market in p.MARKETS}
+    args = dict(parents=parents, parent_receipt=seal(tmp_path/'parent.json', {}),
+        snapshot_receipt=seal(tmp_path/'snapshot.json', {}), source_paths=[path])
+    bundle, report = post.publish(tmp_path, '2026-10-12', '2026-10-13', **args)
+    comparison = report['examples'][0]['operating_contract']
+    assert report['auxiliary_research_reference']['stop_net_pct'] == -3.
+    assert comparison['common_stop_values']['hard_stop_pct'] == -5.
+    assert comparison['effective_preset']['hard_stop_pct'] == -1.4
+    assert comparison['manual_handoff']['status'] == 'registered'
+    assert comparison['actual_realized_net_krw'] is None
+    assert report['census']['unbound_handoff_events'] == 1
+    assert not report['actual_profit_verified']
+    assert all(cell['status'] != 'selected' for cell in bundle['cells'].values())
+    assert post.publish(tmp_path, '2026-10-12', '2026-10-13', **args)[1] == report
+
+
 def test_single_grace_clock_hard_priority_and_reset():
     v=baseline();first=p.soft_decision(v,profit_pct=-3.1,now=100)
     assert first.disposition=='defer_until' and first.due_at==160

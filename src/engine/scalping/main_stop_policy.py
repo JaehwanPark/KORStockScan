@@ -372,9 +372,46 @@ def protect_line_origin(stock):
     return 'unverified_existing'
 
 
+def preset_stop_receipt(stock, *, at, evaluator, hard_pct, grace_sec, emergency_pct,
+                        held_sec, enabled, protect_pct=None):
+    """Observation of the evaluated preset; never replaces the common pin."""
+    from .position_peak_ledger import position_cycle_id
+    pin = stock.get('main_stop_policy_pin') or {}
+    if not isinstance(pin, dict):
+        raise ValueError('stop_pin_invalid')
+    key = position_cycle_id(stock)
+    pin_values(pin, key)
+    body = dict(schema='main_preset_stop_receipt_v1', position_key=key,
+        pin_sha256=pin['pin_sha256'], at=at, evaluator=evaluator,
+        hard_stop_pct=hard_pct, grace_sec=grace_sec, emergency_pct=emergency_pct,
+        held_sec=held_sec, enabled=enabled, protect_pct=protect_pct)
+    return dict(body, sha256=digest(body))
+
+
+def handoff_source(stock, *, at, registered, exit_rule, profit_pct, source_stage,
+                   preset_stop=None):
+    """Seal the already completed registration result, not a SELL receipt."""
+    from .position_peak_ledger import position_cycle_id
+    key = position_cycle_id(stock)
+    pin = stock.get('main_stop_policy_pin') or {}
+    if not isinstance(pin, dict):
+        raise ValueError('stop_pin_invalid')
+    values = pin_values(pin, key)
+    if type(registered) is not bool or not finite(at) or not finite(profit_pct):
+        raise ValueError('stop_handoff_result_invalid')
+    body = dict(schema='main_stop_handoff_source_v1', position_key=key,
+        record_id=stock.get('id'), role=pin['role'], market=pin['market'], at=at,
+        pin_sha256=pin['pin_sha256'], source_stop_values=asdict(values),
+        owner='main', registered=registered, exit_rule=exit_rule,
+        decision_profit_pct=profit_pct, source_stage=source_stage,
+        preset_stop=preset_stop, handoff_enabled=True, actual_order_submitted=False,
+        actual_realized_net_krw=None, allowed_runtime_apply=False)
+    return dict(body, source_sha256=digest(body))
+
+
 def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model, vote_source,
                automatic_management_allowed=False, runtime_flags=None, decision_profit_pct=None, seal=True,
-               post_add_vote_source=None, post_add_inputs=None):
+               post_add_vote_source=None, post_add_inputs=None, preset_stop=None):
     """Project the already supplied holding snapshot; no I/O or new collection."""
     value = stock.get('main_stop_policy_pin') or {}
     from .position_peak_ledger import position_cycle_id
@@ -396,6 +433,7 @@ def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model,
         transport_epoch=quote.get('transport_epoch'),quote_at=quote.get('observed_epoch'),
         pin_sha256=value['pin_sha256'],parent_values_sha256=cached[2],
         source_stop_values=cached[1],
+        preset_stop=preset_stop,
         owner='main',automatic_management_allowed=automatic_management_allowed is True,quantity=qty,
         buy_basis_krw=qty*average if finite(qty) and finite(average) else None,
         decision_profit_pct=decision_profit_pct,

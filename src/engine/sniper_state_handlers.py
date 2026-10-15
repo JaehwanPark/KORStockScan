@@ -29487,6 +29487,7 @@ def _observe_scalp_trailing_input_transition(
                 quote=quote_receipt, coverage_complete=grid_source_complete,
                 cost_model=stock.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
                 post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
+                preset_stop=_main_stop_preset_observation(stock, now_ts=now_ts, evaluator=evaluator),
                 decision_profit_pct=holding_profit_rate_at_eval,
                 automatic_management_allowed=not bool(stock.get("manual_control_exclusion_blocked")
                     or stock.get("manual_control_hard_stop_handoff_pending")
@@ -82426,6 +82427,31 @@ def _maybe_release_auto_manual_control_at_average_price(
     return True
 
 
+def _main_stop_preset_observation(stock, *, now_ts, evaluator):
+    """Mirror the selected evaluator's effective values for observation only."""
+    if stock.get('exit_mode') != 'SCALP_PRESET_TP':
+        return None
+    from src.engine.scalping.main_stop_policy import preset_stop_receipt, pin_values
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    if evaluator.startswith('fast'):
+        hard = _safe_float(stock.get('hard_stop_pct'), None)
+        if hard is None:
+            hard = pin_values(stock.get('main_stop_policy_pin') or {}, position_cycle_id(stock)).hard_stop_pct
+        emergency = _safe_float(stock.get('hard_stop_emergency_pct'), None)
+        grace = _safe_float(stock.get('hard_stop_grace_sec'), 0)
+        enabled = evaluator != 'fast_prearm' and _scalp_fast_exit_guard_active(now_ts=now_ts)
+    else:
+        hard = float(stock.get('hard_stop_pct') or _rule('SCALP_PRESET_HARD_STOP_PCT', -0.7))
+        emergency = float(stock.get('hard_stop_emergency_pct') or _rule(
+            'SCALP_PRESET_HARD_STOP_EMERGENCY_PCT', min(hard - 0.5, -1.2)))
+        grace = int(stock.get('hard_stop_grace_sec', _rule('SCALP_PRESET_HARD_STOP_GRACE_SEC', 0)) or 0)
+        enabled = True
+    return preset_stop_receipt(stock, at=now_ts, evaluator=evaluator, hard_pct=hard,
+        grace_sec=grace, emergency_pct=emergency,
+        held_sec=_resolve_holding_elapsed_sec(stock, now_ts=now_ts), enabled=enabled,
+        protect_pct=_safe_float(stock.get('protect_profit_pct'), None) if evaluator.startswith('fast') else None)
+
+
 def _handoff_hard_stop_to_manual_control_if_enabled(
     stock,
     code,
@@ -82464,6 +82490,8 @@ def _handoff_hard_stop_to_manual_control_if_enabled(
         if retry_attempt and float(now_ts) - _safe_float(stock.get("manual_control_hard_stop_handoff_last_attempt_ts"), 0) < retry_sec:
             return True
         reserved_cycle = position_cycle_id(stock)
+        reserved_stop_pin = stock.get('main_stop_policy_pin')
+        reserved_stop_pin_sha = reserved_stop_pin.get('pin_sha256') if isinstance(reserved_stop_pin, dict) else None
         stock.update(manual_control_hard_stop_handoff_exit_rule=exit_key,
             manual_control_hard_stop_handoff_profit_rate=float(profit_rate),
             manual_control_hard_stop_handoff_peak_profit=float(peak_profit),
@@ -82537,6 +82565,21 @@ def _handoff_hard_stop_to_manual_control_if_enabled(
             "score_threshold_change,provider_route_change,quantity_or_cap_change"
         ),
     }
+    # Registration/custody has already been decided. A missing observation
+    # must never interrupt the intercept or authorize a broker submission.
+    try:
+        from src.engine.scalping.main_stop_policy import handoff_source
+        receipt = handoff_source(stock, at=now_ts, registered=registered,
+            exit_rule=exit_key, profit_pct=profit_rate, source_stage=source_stage,
+            preset_stop=_main_stop_preset_observation(stock, now_ts=now_ts,
+                evaluator='fast' if source_stage.startswith('fast') else 'normal'))
+        if receipt['position_key'] != reserved_cycle or receipt['pin_sha256'] != reserved_stop_pin_sha:
+            raise ValueError('position_or_pin_changed_during_observation')
+        # The pipeline logger stores scalar strings; encode JSON explicitly.
+        fields['main_stop_handoff_source'] = json.dumps(receipt, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        fields['position_key'] = reserved_cycle
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        fields['main_stop_handoff_source_gap'] = type(exc).__name__
     _log_holding_pipeline(stock or {}, code, stage, **fields)
     set_fields = {
         "manual_control_hard_stop_handoff_pending": not registered,

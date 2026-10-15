@@ -22,11 +22,20 @@ SCHEMA = 'main_stop_source_reference_index_v1'
 
 
 def extract(event):
-    if not isinstance(event,dict) or event.get('stage')!='main_stop_source':return None
+    if not isinstance(event,dict):return None
+    stage=event.get('stage')
+    if stage not in {'main_stop_source','hard_stop_manual_control_handoff','hard_stop_manual_control_handoff_deferred'}:
+        return None
     fields=event.get('fields')
-    row=fields.get('main_stop_source') if isinstance(fields,dict) else None
+    field='main_stop_source' if stage=='main_stop_source' else 'main_stop_handoff_source'
+    row=fields.get(field) if isinstance(fields,dict) else None
+    # Historical events have no exact position/pin receipt. Do not backfill it.
+    if row is None and stage!='main_stop_source':return None
     if isinstance(row,str):row=json.loads(row)
     if not isinstance(row,dict):raise ValueError('stop_source_row_invalid')
+    if stage!='main_stop_source' and (row.get('schema')!='main_stop_handoff_source_v1'
+            or row.get('registered') is not (stage=='hard_stop_manual_control_handoff')):
+        raise ValueError('stop_handoff_stage_invalid')
     return row
 
 
@@ -56,13 +65,17 @@ def prepare(root, inventory, loader, census):
                     for event,offset,line_sha in loader(Path(name),counts,references=True):
                         try:row=extract(event)
                         except ValueError:counts['malformed']+=1;continue
-                        if row is None:continue
+                        if row is None:
+                            if isinstance(event,dict) and event.get('stage') in {'hard_stop_manual_control_handoff','hard_stop_manual_control_handoff_deferred'}:
+                                counts['unbound_handoff_events']+=1
+                            continue
                         key,at=row.get('position_key'),row.get('at')
                         if not isinstance(key,str) or not key or not policy.finite(at):
                             counts['unidentifiable']+=1;continue
                         cell=str(row.get('role',''))+'|'+str(row.get('market',''))
                         bucket=int(hashlib.sha256(key.encode()).hexdigest()[:8],16)%PARTITIONS
-                        record=dict(id=f'{key}|{float(at):020.6f}',position_key=key,at=at,
+                        kind='1' if row.get('schema')=='main_stop_handoff_source_v1' else '0'
+                        record=dict(id=f'{key}|{float(at):020.6f}|{kind}',position_key=key,at=at,
                             cell=cell,offset=offset,line_sha256=line_sha,content_sha256=policy.digest(row))
                         raw=storage.encoded(record)+b'\n'
                         used+=len(raw)

@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from src.engine.scalping import main_stop_policy as policy
-from src.engine.scalping.main_stop_replay import candidates, replay, choose, validate_experiment
+from src.engine.scalping.main_stop_replay import candidates, replay, choose, validate_experiment, holding_contracts
 from src.engine.lifecycle import research_storage as storage
 from src.engine.lifecycle.holding_window_generation import byte_generation, source_stat
 from src.engine.lifecycle.research_admission import direct_job
@@ -598,12 +598,15 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                 votes=storage.logical_value(logical_votes),grid={k:asdict(v) for k,v in grid.items()}))
             cache=root/'threshold_cycle/main_stop_confirmation/replay_cache'/f'{cache_key}.json'
             outcomes=None
+            operating_contract=None
             if cache.exists():
                 cached,_=bounded(cache)
                 if (cached.get('cache_key')!=cache_key or cached.get('sha256')!=policy.digest({k:v for k,v in cached.items() if k!='sha256'})
-                        or set(cached.get('outcomes',{}))!=set(grid)):
+                        or set(cached.get('outcomes',{}))!=set(grid)
+                        or not isinstance(cached.get('operating_contract'),dict)):
                     raise ValueError('stop_replay_checkpoint_invalid')
                 outcomes=cached['outcomes']
+                operating_contract=cached['operating_contract']
             if outcomes is None:
                 with tempfile.TemporaryDirectory(prefix='.votes-', dir=directory) as scratch:
                     prepared = PreparedVotes(reference, scratch)
@@ -616,9 +619,10 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                             except (ValueError, OSError, TypeError, KeyError):
                                 return dict(source_verified=False)
                         with position.materialized(directory) as prepared_rows:
+                            operating_contract=holding_contracts(prepared_rows())
                             outcomes={name:replay(prepared_rows(),value, vote_reader=vote_reader) for name,value in grid.items()}
                     finally:prepared.close()
-                cached=dict(cache_key=cache_key,outcomes=outcomes)
+                cached=dict(cache_key=cache_key,outcomes=outcomes,operating_contract=operating_contract)
                 cached['sha256']=policy.digest(cached)
                 _atomic(cache,cached)
 
@@ -650,7 +654,8 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                     stat[split+'_delta_sq']+=delta*delta
                     stat[split+'_safety_regressions']+=int(row['mae_pct']<incumbent['mae_pct'] or row['exposure_sec']>incumbent['exposure_sec'])
             summary=dict(position_key=key,cell=cell,status=incumbent['status'],reason=incumbent['reason'],
-                actual_cost_verified=economic_source, split=split, common=common)
+                actual_cost_verified=economic_source, split=split, common=common,
+                operating_contract=operating_contract)
             db.execute('INSERT INTO census VALUES (?,?)',(key,storage.encoded(summary).decode()))
             evidence.append(summary)
             if len(evidence)>64:evidence.pop(0)
@@ -679,6 +684,10 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     if any(dependency_stats[name]!=value for name,value in input_stat_identity.items()):
         raise ValueError('stop_source_changed_during_research')
     research=dict(schema='main_stop_research_v1',source_date=day,target_date=target,source_sha256=source_sha,
+        auxiliary_research_reference=dict(owner='scalping.reversal_auxiliary_contract.build_input',
+            evidence_kind='reference_contract_not_actual_ai_input',
+            target_net_pct=.4,stop_net_pct=-3.,horizon_sec=1800,cost_rate=.0023,
+            changes_original_labels=False,changes_runtime_stop=False),
         vote_selection_mode='separate_holding_vote_family_parent_carry',
         protect_line_generator_status='conditional_existing_line_provenance_only',
         protect_line_authority='existing_main_trailing_owner_no_new_line_strategy',

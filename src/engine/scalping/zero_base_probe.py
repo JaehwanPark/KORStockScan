@@ -92,6 +92,61 @@ def probe_registration_receipt(ws_manager, *, code: str, item: str) -> str:
         return inspect()
 
 
+def sent_probe_registration_receipt(ws_manager, *, code, item, lease_id,
+                                    now_epoch, send_deadline_epoch, residence_deadline_epoch):
+    """Recover only a timely local send whose async completion was delayed.
+
+    This is not a broker ACK or a source-ready receipt. The original lease,
+    exact 0B/0D validation and native deadline still govern the source wait.
+    """
+    times = (now_epoch, send_deadline_epoch, residence_deadline_epoch)
+    if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in times):
+        return None
+    if now_epoch >= residence_deadline_epoch:
+        return None
+    lock = getattr(ws_manager, 'lock', None)
+    if lock is None:
+        return None
+    try:
+        acquired = lock.acquire(blocking=False)
+    except (AttributeError, TypeError):
+        return None
+    if not acquired:
+        return None
+    try:
+        ready = getattr(ws_manager, '_session_ready', None)
+        stopped = getattr(ws_manager, '_stop_event', None)
+        if (not getattr(ws_manager, 'websocket', None) or ready is None or not ready.is_set()
+                or stopped is None or stopped.is_set()):
+            return None
+        epoch = getattr(ws_manager, '_market_data_transport_epoch', None)
+        lease = getattr(ws_manager, '_exact_probe_item_leases', {}).get(item) or {}
+        proof = (getattr(ws_manager, '_micro_reversion_registration_receipt', {}).get('items') or {}).get(item) or {}
+        started, sent = lease.get('interval_started_epoch'), proof.get('registration_sent_at_epoch')
+        if (type(epoch) is not int or epoch <= 0 or lease.get('lease_id') != lease_id
+                or any(type(v) is not int or v != epoch for v in (
+                    lease.get('epoch'), proof.get('registration_transport_epoch'),
+                    getattr(ws_manager, '_registered_item_epochs', {}).get(item)))
+                or lease.get('adopted') or lease.get('removing')
+                or item not in getattr(ws_manager, '_micro_reversion_observation_only_items', ())
+                or code not in getattr(ws_manager, 'subscribed_codes', ())
+                or item not in getattr(ws_manager, '_registered_items_by_code', {}).get(code, ())
+                or not {'0B', '0D'}.issubset(getattr(ws_manager, '_registered_item_types', {}).get(item, ()))
+                or proof.get('source') != 'zero_base_exact_probe'
+                or any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in (started, sent))
+                or not started <= sent <= min(now_epoch, send_deadline_epoch)):
+            return None
+        return dict(item=item, lease_id=lease_id, transport_epoch=epoch,
+                    created=True, registered=True, interval_started_epoch=started,
+                    registration_sent_at_epoch=sent,
+                    registration_basis='local_sent_registry_not_broker_ack',
+                    reason='exact_probe_timely_send_completion_pending')
+    except (AttributeError, TypeError, ValueError):
+        return None
+    finally:
+        lock.release()
+
+
 def exact_probe_ws_data(
     snapshot: dict, *, code: str, route: str, after_epoch: float,
     now_epoch: float | None = None, max_age_sec: float = 3.0,
@@ -636,14 +691,25 @@ def run_zero_base_probe(
                     if lease_receipt.get('interval_started_epoch'):
                         registered_epoch = float(lease_receipt['interval_started_epoch'])
             except FutureTimeoutError:
-                if exact_lease or callable(release_ws):
-                    registration.add_done_callback(
-                        lambda _future: release()
-                    )
-                    deferred_release = True
-                    result["_ws_cleanup_deferred"] = True
-                result["reason"] = "ws_registration_timeout"
-                return result
+                sent_receipt = (sent_probe_registration_receipt(
+                    ws_manager, code=code, item=item, lease_id=lease_id, now_epoch=now(),
+                    send_deadline_epoch=registered_epoch + 3.0,
+                    residence_deadline_epoch=native_wait_deadline_epoch,
+                ) if exact_lease else None)
+                if sent_receipt:
+                    # The wire send finished in its original budget. Continue
+                    # source validation; cleanup remains owned by this probe.
+                    result['ws_registration'] = sent_receipt
+                    registered_epoch = sent_receipt['interval_started_epoch']
+                else:
+                    if exact_lease or callable(release_ws):
+                        registration.add_done_callback(
+                            lambda _future: release()
+                        )
+                        deferred_release = True
+                        result["_ws_cleanup_deferred"] = True
+                    result["reason"] = "ws_registration_timeout"
+                    return result
             except Exception as exc:
                 result["reason"] = "ws_registration_failed:" + type(exc).__name__
                 return result

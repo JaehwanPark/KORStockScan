@@ -1,9 +1,133 @@
 """Causal stop-confirmation comparison. No synthetic AI, fills or broker calls."""
 from dataclasses import asdict, replace
+from datetime import datetime
 import math
-from .main_stop_policy import StopValues, soft_decision, protect_confirmed, append_sample, digest, finite, TUNABLE
+from .main_stop_policy import StopValues, soft_decision, safety_decision, protect_confirmed, append_sample, digest, finite, TUNABLE
 
 SCHEMA = 'main_stop_research_v1'
+
+
+def cost_known_epoch(value):
+    """Read the native aware ISO clock or legacy epoch without rewriting it."""
+    if finite(value):
+        return float(value) if value > 0 else None
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            return None
+        epoch = stamp.timestamp()
+        return epoch if finite(epoch) and epoch > 0 else None
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _sealed(row):
+    try:
+        return (isinstance(row, dict) and row.get('source_sha256') ==
+            digest({k:v for k,v in row.items() if k != 'source_sha256'}))
+    except (ValueError, TypeError):
+        return False
+
+
+def preset_decision(row):
+    """Evaluate only the observed preset contract, ahead of common soft stop."""
+    receipt = row.get('preset_stop')
+    if not isinstance(receipt, dict):
+        raise ValueError('preset_effective_stop_unobserved')
+    if (receipt.get('schema') != 'main_preset_stop_receipt_v1'
+            or receipt.get('sha256') != digest({k:v for k,v in receipt.items() if k != 'sha256'})
+            or any(receipt.get(k) != row.get(k) for k in ('position_key', 'pin_sha256', 'at'))
+            or not isinstance(receipt.get('evaluator'), str) or not receipt['evaluator']
+            or not all(finite(receipt.get(k)) for k in ('hard_stop_pct', 'grace_sec', 'held_sec'))
+            or receipt['hard_stop_pct'] >= 0 or min(receipt['grace_sec'], receipt['held_sec']) < 0
+            or type(receipt.get('enabled')) is not bool
+            or (receipt.get('emergency_pct') is not None and (not finite(receipt['emergency_pct'])
+                or receipt['emergency_pct'] > receipt['hard_stop_pct']))
+            or (receipt.get('protect_pct') is not None and not finite(receipt['protect_pct']))
+            or not finite(row.get('decision_profit_pct')) or type(row.get('handoff_enabled')) is not bool):
+        raise ValueError('preset_effective_stop_invalid')
+    return safety_decision(profit_pct=row['decision_profit_pct'], hard_pct=receipt['hard_stop_pct'],
+        emergency_pct=receipt.get('emergency_pct'), protect_pct=receipt.get('protect_pct'),
+        preset_grace_sec=receipt['grace_sec'], held_sec=receipt['held_sec'],
+        handoff_enabled=row['handoff_enabled'], manual=bool(row.get('manual')),
+        pending=bool(row.get('pending_exit'))) if (receipt['enabled']
+            and row.get('automatic_management_allowed', True) is True) else None
+
+
+def valid_handoff(row):
+    return (_sealed(row) and row.get('schema') == 'main_stop_handoff_source_v1'
+        and row.get('owner') == 'main' and type(row.get('registered')) is bool
+        and finite(row.get('at')) and row['at'] > 0
+        and bool(row.get('position_key') and row.get('pin_sha256') and row.get('source_stage'))
+        and row.get('exit_rule') in {'scalp_hard_stop_pct', 'scalp_preset_hard_stop_pct'}
+        and finite(row.get('decision_profit_pct'))
+        and row.get('actual_order_submitted') is False
+        and row.get('handoff_enabled') is True
+        and row.get('actual_realized_net_krw') is None
+        and row.get('allowed_runtime_apply') is False)
+
+
+def holding_contracts(rows):
+    """Parallel operating evidence; no research relabeling or realized PnL.
+
+    Keep scanning after a candidate crossing to bind the actual registration
+    result. Only exact position/pin receipts can attest manual custody.
+    """
+    result = dict(schema='main_holding_contract_comparison_v1', status='observed',
+        common_stop_values=None, effective_preset=None, preset_crossing=None,
+        manual_handoff=dict(status='not_observed', attempts=0), actual_realized_net_krw=None)
+    identity = None
+    previous = None
+    for row in rows:
+        if not _sealed(row) or row.get('schema') not in {'main_stop_source_v1', 'main_stop_handoff_source_v1'}:
+            return dict(result, status='source_gap', reason='holding_contract_source_invalid')
+        current = tuple(row.get(k) for k in ('position_key', 'pin_sha256', 'role', 'market', 'record_id'))
+        if not all(current[:4]) or (identity is not None and current != identity):
+            return dict(result, status='source_gap', reason='holding_contract_identity_changed')
+        at = row.get('at')
+        if not finite(at) or (previous is not None and at < previous):
+            return dict(result, status='source_gap', reason='holding_contract_clock_invalid')
+        identity, previous = current, at
+        try:
+            common = asdict(StopValues.parse(row.get('source_stop_values')))
+        except (ValueError, TypeError):
+            return dict(result, status='source_gap', reason='original_stop_values_unverified')
+        if result['common_stop_values'] is not None and common != result['common_stop_values']:
+            return dict(result, status='source_gap', reason='original_stop_values_changed')
+        result['common_stop_values'] = common
+        terminal = row['schema'] == 'main_stop_handoff_source_v1'
+        if terminal:
+            if not valid_handoff(row):
+                return dict(result, status='source_gap', reason='manual_handoff_receipt_invalid')
+            old = result['manual_handoff']
+            if old['status'] == 'registered' and not row['registered']:
+                return dict(result, status='source_gap', reason='manual_custody_regressed')
+            result['manual_handoff'] = dict(status='registered' if row['registered'] else 'pending',
+                at=at, source_sha256=row['source_sha256'], attempts=old['attempts']+1,
+                exit_rule=row['exit_rule'], observed_profit_pct=row['decision_profit_pct'])
+        if row.get('role') == 'SCALP_PRESET_TP':
+            try:
+                decision = preset_decision(row)
+            except ValueError as exc:
+                result.update(status='source_gap', reason=str(exc))
+                continue
+            result['effective_preset'] = row['preset_stop']
+            if not terminal and (row.get('coverage_complete') is not True
+                    or not row.get('item') or not row.get('route') or not row.get('transport_epoch')
+                    or not finite(row.get('quote_at')) or not 0 <= at-row['quote_at'] <= 3):
+                result.update(status='source_gap', reason='operating_quote_source_unverified')
+                continue
+            if not terminal and result['manual_handoff']['status'] == 'registered':
+                if row.get('automatic_management_allowed') is True and not row.get('manual'):
+                    result.update(status='source_gap', reason='automatic_source_after_manual_handoff')
+                continue
+            if decision is not None and decision.disposition in {'exit_candidate', 'manual_handoff'} and result['preset_crossing'] is None:
+                result['preset_crossing'] = dict(at=at, rule=decision.rule, disposition=decision.disposition,
+                    evidence_kind='observed_safety_candidate_not_sell', first_crossing_proven=False,
+                    source_sha256=row['source_sha256'])
+    return result
 
 
 def candidates(parent):
@@ -43,6 +167,11 @@ def replay(rows, values, *, vote_reader=None, post_add_generation=False):
     result = dict(status='censored', reason='crossing_not_observed', modeled_net_krw=None,
                   actual_order_submitted=False, allowed_runtime_apply=False)
     for row in rows:
+        if row.get('schema') == 'main_stop_handoff_source_v1':
+            if (not valid_handoff(row) or (identity is not None
+                    and (row['position_key'], row['pin_sha256']) != identity[:2])):
+                return dict(result, status='source_gap', reason='manual_handoff_receipt_invalid')
+            return dict(result, reason='manual_handoff_not_sell' if row['registered'] else 'manual_handoff_pending')
         count += 1
         at, bid = row.get('at'), row.get('bid')
         if (row.get('schema') != 'main_stop_source_v1' or not finite(at) or not finite(bid)
@@ -68,11 +197,14 @@ def replay(rows, values, *, vote_reader=None, post_add_generation=False):
                 or not finite(row.get('vote_max_worsen_pct'))):
             return dict(result, status='source_gap', reason='runtime_flags_unobserved')
         qty, basis = row.get('quantity'), row.get('buy_basis_krw')
-        model = row.get('cost_model') or {}
+        model = row.get('cost_model')
+        if not isinstance(model, dict):
+            return dict(result,status='source_gap',reason='cost_model_source_missing')
         buy_cost, sell_rate = model.get('buy_cost_krw'), model.get('sell_cost_rate')
-        if (not all(finite(x) for x in (qty,basis,buy_cost,sell_rate,model.get('known_at')))
+        known_at = cost_known_epoch(model.get('known_at'))
+        if (not all(finite(x) for x in (qty,basis,buy_cost,sell_rate,known_at))
                 or qty <= 0 or int(qty)!=qty or basis<=0 or buy_cost<0 or not 0<=sell_rate<.05
-                or model['known_at']>at or not model.get('source_sha256')):
+                or known_at>at or not model.get('source_sha256')):
             return dict(result,status='source_gap',reason='cost_model_source_missing')
         if post_add_generation:
             aggregate=row.get('post_add_generation') or {}
@@ -98,6 +230,16 @@ def replay(rows, values, *, vote_reader=None, post_add_generation=False):
         # Runtime crossing uses the actually observed decision basis. Exact
         # costs evaluate the alternative economics without rewriting that rule.
         profit = row['decision_profit_pct']
+        if row.get('role') == 'SCALP_PRESET_TP':
+            try:
+                safety = preset_decision(row)
+            except ValueError as exc:
+                return dict(result, status='source_gap', reason=str(exc))
+            if safety is not None and safety.disposition in {'exit_candidate', 'manual_handoff'}:
+                return dict(result, reason='preset_pre_crossing_source_missing' if count == 1
+                    else 'preset_safety_precedes_soft_policy', operating_rule=safety.rule,
+                    operating_disposition=safety.disposition, crossing_at=at)
+            continue
         line = row.get('protect_line')
         if finite(line) and line>0:
             # Current Main has no active source-bound line generator. A legacy

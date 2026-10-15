@@ -1218,3 +1218,104 @@ def test_exact_probe_late_registration_defers_only_lease_cleanup():
     completion.set_result({"registered": True})
     assert cleanup == [("123456_NX", "timed-out")]
     assert ws._registered_items_by_code["123456"] == ("123456_AL",)
+
+
+def _sent_registration_with_delayed_completion(monkeypatch):
+    import threading
+    import src.engine.scalping.zero_base_probe as module
+    from concurrent.futures import TimeoutError
+
+    clock = [11.0]
+
+    class DelayedCompletion(Future):
+        def result(self, timeout=None):
+            assert timeout == 3.0
+            clock[0] = 15.0
+            raise TimeoutError()
+
+    completion = DelayedCompletion()
+    ready = threading.Event()
+    ready.set()
+    item, lease_id = "123456_AL", "same-probe"
+    cleanup, source_waits = [], []
+    ws = SimpleNamespace(
+        lock=threading.RLock(), _session_ready=ready, _stop_event=threading.Event(), websocket=object(),
+        _market_data_transport_epoch=3, subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": (item,)},
+        _registered_item_epochs={item: 3}, _registered_item_types={item: ("0B", "0D")},
+        _exact_probe_item_leases={item: {"lease_id": lease_id, "epoch": 3,
+                                      "interval_started_epoch": 11.2}},
+        _micro_reversion_observation_only_items={item},
+        _micro_reversion_registration_receipt={"items": {item: {
+            "source": "zero_base_exact_probe", "registration_transport_epoch": 3,
+            "registration_sent_at_epoch": 11.5}}},
+        execute_acquire_exact_probe_item=lambda *a: completion,
+        execute_release_exact_probe_item=lambda *a: cleanup.append(a),
+        get_exact_item_data=lambda *a: _snapshot(route="krx_nxt_integrated", item=item, epoch=15),
+    )
+
+    def wait_for_source(*args, **kwargs):
+        source_waits.append(kwargs)
+        return {}, {}, "0B_missing"
+
+    monkeypatch.setattr(module, "wait_for_exact_probe_ws_data", wait_for_source)
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
+    request = {"claim": {"code": "123456", "route": "krx_nxt_integrated", "observed_epoch": 10},
+               "candidate": {"code": "123456", "route": "krx_nxt_integrated"}}
+    return ws, request, clock, completion, cleanup, source_waits
+
+
+def test_sent_registration_survives_delayed_future_without_renewing_lease(monkeypatch):
+    ws, request, clock, completion, cleanup, waits = _sent_registration_with_delayed_completion(monkeypatch)
+    result = run_zero_base_probe(
+        request, ws_manager=ws, ai_engine=object(), token="test", now=lambda: clock[0],
+        ws_lease_id="same-probe", native_wait_deadline_epoch=160,
+        candle_fetcher=lambda *a, **kw: pytest.fail("no source must not call REST"))
+    assert result["reason"] == "0B_missing"
+    assert len(waits) == 1 and waits[0]["after_epoch"] == 11.2
+    assert waits[0]["residence_deadline_epoch"] == 160
+    assert result["ws_registration"]["registration_basis"] == "local_sent_registry_not_broker_ack"
+    assert result["actual_order_submitted"] is False
+    assert cleanup == [("123456_AL", "same-probe")]
+    completion.set_result({"registered": True})
+    assert cleanup == [("123456_AL", "same-probe")]
+
+
+@pytest.mark.parametrize("damage", ["late_send", "lease", "epoch", "types", "missing_item",
+                                    "session", "stopped", "adopted", "removing", "expired",
+                                    "corrupt_lease", "corrupt_proof", "bool_epoch", "future_send",
+                                    "source", "not_observation_only", "lock_busy"])
+def test_delayed_registration_without_timely_exact_ownership_keeps_timeout(monkeypatch, damage):
+    ws, request, clock, completion, cleanup, waits = _sent_registration_with_delayed_completion(monkeypatch)
+    item = "123456_AL"
+    deadline = 160
+    if damage == "late_send":
+        ws._micro_reversion_registration_receipt['items'][item]['registration_sent_at_epoch'] = 14.1
+    elif damage == "lease": ws._exact_probe_item_leases[item]['lease_id'] = 'successor'
+    elif damage == "epoch": ws._registered_item_epochs[item] = 2
+    elif damage == "types": ws._registered_item_types[item] = ('0B',)
+    elif damage == "missing_item": ws._registered_items_by_code.clear()
+    elif damage == "session": ws._session_ready.clear()
+    elif damage == "stopped": ws._stop_event.set()
+    elif damage == "adopted": ws._exact_probe_item_leases[item]['adopted'] = True
+    elif damage == "removing": ws._exact_probe_item_leases[item]['removing'] = True
+    elif damage == "expired": deadline = 14
+    elif damage == "corrupt_lease": ws._exact_probe_item_leases[item] = ['invalid']
+    elif damage == "corrupt_proof": ws._micro_reversion_registration_receipt['items'][item] = ['invalid']
+    elif damage == "bool_epoch": ws._registered_item_epochs[item] = True
+    elif damage == "future_send":
+        ws._micro_reversion_registration_receipt['items'][item]['registration_sent_at_epoch'] = 20
+    elif damage == "source": ws._micro_reversion_registration_receipt['items'][item]['source'] = 'main_fixed_watch'
+    elif damage == "not_observation_only": ws._micro_reversion_observation_only_items.clear()
+    elif damage == "lock_busy":
+        import threading
+        ws.lock = threading.Lock()
+        ws.lock.acquire()
+    result = run_zero_base_probe(
+        request, ws_manager=ws, ai_engine=object(), token='test', now=lambda: clock[0],
+        ws_lease_id='same-probe', native_wait_deadline_epoch=deadline)
+    assert result['reason'] == 'ws_registration_timeout' and result['_ws_cleanup_deferred']
+    assert not waits and not cleanup
+    if damage == 'lock_busy': ws.lock.release()
+    completion.set_result({'registered': True})
+    assert cleanup == [(item, 'same-probe')]
