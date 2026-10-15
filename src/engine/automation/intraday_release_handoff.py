@@ -580,6 +580,10 @@ REVIEWED_NATIVE_ARM_COMPLETION_SOURCES = {
 # Carried policy readers exclude only later, never-consumed observation tails.
 # Exact reviewed source bytes; full research and numeric selection stay strict.
 REVIEWED_CARRIED_SOURCE_BINDING_SOURCES = {
+    # Operator-approved 40b931254: long-probe allocation and exact Main weak-veto scope.
+    'src/engine/sniper_state_handlers.py': (
+        'b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500',
+        '493b9802652ac820803a5887e7e5670f7bbe8b42d000547abf3f45df06479563'),
     'src/engine/automation/main_stop_postclose.py': (
         '360573dc170d91617cbaec7f1c8713b769c403b22e52449e11434019360a6224',
         '72334470389eed899eed84da5fb3d157bd8ae6078e2d38bfb10b0bc96b79ba6f'),
