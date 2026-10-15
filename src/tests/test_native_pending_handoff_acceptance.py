@@ -186,12 +186,12 @@ def lane(monkeypatch):
         assert coordinator.wait_for_completion(1.0)  # consume the original native wake
         return old_event, old_claim, request
 
-    def finish(status):
+    def finish(status, payload=None):
         request = requests[0]
         coordinator._finish(request, status=status,
             preparation_started_epoch=request.context.submitted_epoch,
             preparation_completed_epoch=clock.time(), completed_epoch=clock.time(),
-            observation_only=status != 'completed', ai_payload={'action': 'WAIT'})
+            observation_only=status != 'completed', ai_payload=payload or {'action': 'WAIT'})
 
     def consume():
         notifications = coordinator.drain_completed()
@@ -375,3 +375,117 @@ def test_completion_wrapper_does_not_revisit_holding_or_successor_owner(lane, mo
     if successor_owner == 'successor':
         assert lane.stock['_fixed_watch_async_claim']['token'] == 'successor'
         assert lane.stock['_scanner_async_generation_id'] == 'new-generation'
+
+
+def _complete_unsent_pass(lane, monkeypatch, *, protect=None):
+    """Use real Main completion and submit observer; no broker/provider call."""
+    from src.engine.monitoring.entry_attempt_identity import observe_submit_attempt
+    monkeypatch.setattr(H, '_log_entry_pipeline', lambda *_a, **_kw: None)
+    old_event, old_claim, request = lane.start_old()
+    lane.clock.advance(.1)
+    successor = lane.emit(2)
+    lane.visit()  # New native signal first visits while the old request is pending.
+    assert lane.coordinator.wait_for_completion(1.0)
+    payload = dict(action='BUY', evaluation_attempt_id='original-evaluation',
+        ai_decision_trace_id='original-trace', entry_mechanistic_policy_version='continuous_reversal_policy_v6')
+
+    @observe_submit_attempt(on_finish=H._observe_entry_submit_finished)
+    def guarded_submit(stock, code):
+        H._set_async_terminal(stock, 'real_weak_pullback_entry_block')
+        return False
+
+    def accepted_path(stock, code, *_a, **kwargs):
+        assert kwargs['_completed_async_resolution']['ai_decision']['action'] == 'BUY'
+        stock['last_watching_ai_machine_primary_fields'] = deepcopy(payload)
+        stock['last_watching_ai_decision_trace_id'] = payload['ai_decision_trace_id']
+        H._activate_entry_arm(stock, code, ai_score=75, ratio=.1, target_buy_price=50000,
+            current_vpw=100, reason='fixture', dynamic_reason='fixture')
+        guarded_submit(stock, code)
+        if protect:
+            protect(stock, stock['_async_consumption_guard'])
+    monkeypatch.setattr(H, '_handle_watching_state_impl', accepted_path)
+    lane.finish('completed', payload)
+    lane.consume()
+    return old_event, old_claim, request, successor
+
+
+def test_unsent_native_pass_releases_arm_before_first_successor_revisit(lane, monkeypatch):
+    old_event, old_claim, request, successor = _complete_unsent_pass(lane, monkeypatch)
+    assert not lane.stock.get('entry_armed')
+    assert lane.stock['_async_entry_decision_deadline']['request_id'] == request.context.request_id
+    assert lane.stock['last_watching_ai_decision_trace_id'] == 'original-trace'
+    ready_at = lane.clock.time()
+    revisit = R.prioritize_native_watches([], now=ready_at, all_targets=[lane.stock],
+        processed_target_ids={id(lane.stock)}, revisited_target_ids=set())
+    assert revisit == [lane.stock]
+    lane.visit()
+    assert H._get_live_entry_arm(lane.stock, lane.code) is None
+    refresh = H._resolve_watching_state_change_refresh(lane.stock, lane.ws,
+        now_ts=lane.clock.time(), last_ai_time=0, cooldown_sec=60)
+    assert refresh['allowed'] and refresh['event_id'] == successor['event_id']
+    assert D.claim_deadline_epoch(lane.stock['_continuous_reversal_pending_claim']) == successor['epoch'] + 5
+    assert D.claim_deadline_epoch(old_claim) == old_event['epoch'] + 5
+    assert lane.clock.time() == ready_at and not lane.wake.blocked_seconds
+    assert len(lane.requests) == 1  # Never restart or resend the old provider request.
+
+
+@pytest.mark.parametrize('protection', [
+    'delay_pending', 'delay_due', 'bundle', 'open_order', 'partial_order', 'sent_order',
+    'buy_qty', 'entry_filled_qty', 'holding_qty', 'status', 'broker_attempt',
+    'broker_accepted', 'unknown_outcome', 'missing_attempt', 'exception',
+    'successor_request', 'successor_evaluation', 'successor_trace', 'missing_owner_id',
+])
+def test_completion_retains_delayed_or_uncertain_custody_and_successor_arm(lane, monkeypatch, protection):
+    def protect(stock, guard):
+        if protection.startswith('delay_'):
+            stock['_pre_submit_delay_' + protection.split('_')[1]] = {'id': 'retained'}
+        elif protection == 'bundle':
+            stock['initial_quantity_bundle'] = {'state': 'intent_assigned'}
+        elif protection.endswith('_order'):
+            stock['pending_entry_orders'] = [{'status': protection.split('_')[0].upper()}]
+        elif protection in ('buy_qty', 'entry_filled_qty', 'holding_qty'):
+            stock[protection] = 1
+        elif protection == 'status':
+            stock['status'] = 'HOLDING'
+        elif protection == 'broker_attempt':
+            guard['async_entry_broker_attempts'] = 1
+        elif protection == 'broker_accepted':
+            guard['async_entry_broker_accepted'] = True
+        elif protection == 'unknown_outcome':
+            guard['async_entry_submit_outcome'] = 'raised'
+        elif protection == 'missing_attempt':
+            guard.pop('async_entry_submit_attempt_id')
+        elif protection == 'exception':
+            guard['reason'] = 'entry_execution_exception_or_uncertain'
+        else:
+            key = dict(successor_request='request_id', successor_evaluation='evaluation_attempt_id',
+                successor_trace='ai_decision_trace_id', missing_owner_id='request_id')[protection]
+            stock['_entry_arm_native_owner'][key] = '' if protection == 'missing_owner_id' else 'successor'
+    _complete_unsent_pass(lane, monkeypatch, protect=protect)
+    assert lane.stock['entry_armed']
+
+
+def test_arm_cleanup_failure_does_not_strand_completion_or_native_pending(lane, monkeypatch):
+    def broken(*_a):
+        raise ValueError('fixture_arm_failure')
+    monkeypatch.setattr(H, '_retire_completed_native_entry_arm', broken)
+    _complete_unsent_pass(lane, monkeypatch)
+    assert lane.stock['entry_armed']
+    assert not lane.stock.get('_scanner_async_generation_id')
+    assert lane.wake.is_set()
+
+
+def test_completed_pass_is_not_reused_when_successor_source_is_absent(lane, monkeypatch):
+    _complete_unsent_pass(lane, monkeypatch)
+    # The next tick/source is absent; old PASS must not fall through to cached BUY.
+    lane.state.ready.clear()
+    refresh = H._resolve_watching_state_change_refresh(lane.stock, lane.ws,
+        now_ts=lane.clock.time(), last_ai_time=0, cooldown_sec=60)
+    assert refresh['suppress_normal_refresh']
+    assert refresh['reason'] == 'completed_entry_decision_wait_native_signal'
+    assert lane.stock['last_watching_ai_machine_primary_fields']['action'] == 'BUY'
+    successor = lane.emit(3)
+    refresh = H._resolve_watching_state_change_refresh(lane.stock, lane.ws,
+        now_ts=lane.clock.time(), last_ai_time=0, cooldown_sec=60)
+    assert refresh['allowed'] and refresh['event_id'] == successor['event_id']
+    assert D.claim_deadline_epoch(lane.stock['_continuous_reversal_pending_claim']) == successor['epoch'] + 5

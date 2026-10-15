@@ -49462,6 +49462,15 @@ def _resolve_watching_state_change_refresh(
             from src.engine.monitoring.runtime_performance import failure
             failure('policy_refresh', type(exc).__name__ + ':' + str(exc))
     prior_machine = (stock or {}).get('last_watching_ai_machine_primary_fields') or {}
+    terminal = (stock or {}).get('_native_entry_terminal_decision')
+    if (str(prior_machine.get('entry_mechanistic_policy_version') or '').startswith('continuous_reversal_policy_v')
+            and isinstance(terminal, dict)
+            and terminal.get('evaluation_attempt_id') == prior_machine.get('evaluation_attempt_id')
+            and terminal.get('ai_decision_trace_id') == stock.get('last_watching_ai_decision_trace_id')):
+        # Keep the completed PASS as evidence, not a cached retry authority.
+        # A new exact native claim above is still admitted with its own TTL.
+        return {"allowed": False, "reason": "completed_entry_decision_wait_native_signal",
+                "suppress_normal_refresh": True, "signature": {}}
     if (str(prior_machine.get('entry_mechanistic_policy_version') or '').startswith(
             'continuous_reversal_policy_v') and _async_entry_deadline_expired(stock)):
         # An old PASS cannot authorize another submission pass while waiting
@@ -72600,6 +72609,7 @@ def _clear_entry_arm(stock):
             "entry_armed_ratio",
             "entry_armed_dynamic_reason",
             "entry_armed_resume_count",
+            "_entry_arm_native_owner",
         ),
     )
 
@@ -72618,6 +72628,16 @@ def _activate_entry_arm(
     ttl_sec = int(_rule("SCALP_ENTRY_ARM_TTL_SEC", 20) or 20)
     now_ts = time.time()
     entry_ratio = _safe_float(ratio, 0.0)
+    from src.engine.scalping import scanner_async_eval as async_eval
+    original = (async_eval.ASYNC_CONSUMPTION.get() or {}).get('original_result')
+    native_owner = None
+    if isinstance(original, async_eval.ScannerAsyncEvalResult) and original.native_claim:
+        event = (original.native_claim.get('snapshot') or [{}])[0]
+        native_owner = dict(request_id=original.request_id,
+            evaluation_attempt_id=original.ai_payload.get('evaluation_attempt_id'),
+            ai_decision_trace_id=original.ai_payload.get('ai_decision_trace_id'),
+            native_signal_id=event.get('signal_id') or event.get('event_id'),
+            producer_pid=os.getpid(), producer_start_ticks=async_eval._PROCESS_START)
     _mutate_stock_state(
         stock,
         set_fields={
@@ -72631,6 +72651,7 @@ def _activate_entry_arm(
             "entry_armed_ratio": entry_ratio,
             "entry_armed_dynamic_reason": dynamic_reason,
             "entry_armed_resume_count": 0,
+            "_entry_arm_native_owner": native_owner,
         },
     )
     _log_entry_pipeline(
@@ -72655,6 +72676,39 @@ def _activate_entry_arm(
 def _get_live_entry_arm(stock, code):
     if not stock.get("entry_armed"):
         return None
+    from src.engine.scalping import scanner_async_eval as async_eval
+    # Bind validation and invalid-arm removal to one stock generation.
+    with ENTRY_LOCK:
+        owner = stock.get('_entry_arm_native_owner')
+        current = stock.get('last_watching_ai_machine_primary_fields')
+        current = current if isinstance(current, dict) else {}
+        native = str(current.get('entry_mechanistic_policy_version') or '').startswith('continuous_reversal_policy_v')
+        if owner or native:
+            bound = stock.get('_async_entry_decision_deadline')
+            bound = bound if isinstance(bound, dict) else {}
+            if (not isinstance(owner, dict)
+                    or owner.get('producer_pid') != os.getpid()
+                    or not owner.get('producer_start_ticks')
+                    or owner.get('producer_start_ticks') != async_eval._PROCESS_START
+                    or not owner.get('native_signal_id')
+                    or not owner.get('request_id') or owner['request_id'] != bound.get('request_id')
+                    or not owner.get('evaluation_attempt_id')
+                    or owner['evaluation_attempt_id'] != current.get('evaluation_attempt_id')
+                    or owner['evaluation_attempt_id'] != bound.get('evaluation_attempt_id')
+                    or not owner.get('ai_decision_trace_id')
+                    or owner['ai_decision_trace_id'] != stock.get('last_watching_ai_decision_trace_id')
+                    or owner['ai_decision_trace_id'] != bound.get('ai_decision_trace_id')
+                    or any(type(bound.get(key)) not in (int, float)
+                           or not math.isfinite(bound[key]) or bound[key] <= 0
+                           for key in ('deadline_epoch', 'deadline_perf'))):
+                # A restart/missing identity cannot turn an old PASS into reusable
+                # entry authority. Only this transient arm is discarded; custody,
+                # policy/source receipts and the next native claim stay untouched.
+                stock['_native_entry_terminal_decision'] = dict(
+                    evaluation_attempt_id=current.get('evaluation_attempt_id'),
+                    ai_decision_trace_id=stock.get('last_watching_ai_decision_trace_id'))
+                _clear_entry_arm(stock)
+                return None
     expires_at = float(stock.get("entry_armed_until", 0) or 0)
     now_ts = time.time()
     if expires_at <= now_ts or _async_entry_deadline_expired(stock):
@@ -72692,6 +72746,40 @@ def _get_live_entry_arm(stock, code):
         "reason": stock.get("entry_armed_reason"),
         "dynamic_reason": stock.get("entry_armed_dynamic_reason"),
     }
+
+
+def _retire_completed_native_entry_arm(stock, result, guard):
+    """Release one unsent, completed native arm before successor scheduling.
+
+    Explicit delayed intents and broker/quantity custody keep their own path.
+    No native reservation, PASS receipt or original deadline is renewed here.
+    """
+    with ENTRY_LOCK:
+        owner = stock.get('_entry_arm_native_owner')
+        if (not stock.get('entry_armed') or not isinstance(owner, dict)
+                or not result.native_claim
+                or any(not owner.get(key) or owner[key] != expected for key, expected in (
+                    ('request_id', result.request_id),
+                    ('evaluation_attempt_id', result.ai_payload.get('evaluation_attempt_id')),
+                    ('ai_decision_trace_id', result.ai_payload.get('ai_decision_trace_id'))))
+                or stock.get('status') != 'WATCHING'
+                or guard.get('reason') == 'entry_execution_exception_or_uncertain'
+                or not guard.get('async_entry_submit_attempt_id')
+                or guard.get('async_entry_submit_outcome') != 'returned_false'
+                or guard.get('async_entry_broker_attempts', 0) != 0
+                or guard.get('async_entry_broker_accepted')
+                or _has_open_pending_entry_orders(stock) or _already_holding_entry_position(stock)
+                or isinstance(stock.get('initial_quantity_bundle'), dict)
+                or any(isinstance(stock.get(key), dict) for key in (
+                    '_pre_submit_delay_pending', '_pre_submit_delay_due'))):
+            return False
+        # Check ownership and custody under the same mutex as arm removal.
+        stock['_native_entry_terminal_decision'] = dict(
+            evaluation_attempt_id=owner['evaluation_attempt_id'],
+            ai_decision_trace_id=owner['ai_decision_trace_id'])
+        _clear_entry_arm(stock)
+    guard['async_entry_arm_released'] = True
+    return True
 
 
 def _has_open_pending_entry_orders(stock):
@@ -82722,6 +82810,12 @@ def handle_watching_state(
         try:
             result = owner.get('original_result')
             if result is not None:
+                if isinstance(result, ScannerAsyncEvalResult):
+                    try:
+                        _retire_completed_native_entry_arm(stock, result, guard)
+                    except Exception as exc:
+                        from src.engine.monitoring.runtime_performance import failure
+                        failure('async_entry_arm_cleanup', type(exc).__name__, emit_log=False)
                 if not owner.get('disposition'):
                     _record_async_disposition(result, 'terminal_nonexecution',
                         guard.get('reason') or 'commit_resolution_unobservable')
