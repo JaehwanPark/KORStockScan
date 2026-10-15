@@ -594,6 +594,11 @@ REVIEWED_CARRIED_SOURCE_BINDING_SOURCES = {
 }
 
 
+# Exact reviewed HPSP replay/receipt and 06deaab source-recovery code.
+# Policy values, sources and all execution guards remain independently checked.
+REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES = {'src/engine/sniper_state_handlers.py': ('b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500', 'f19298ecdebfe6bb936c8d3700c50073592da6bdd1548dc104bfc9595399023d'), 'src/engine/sniper_execution_receipts.py': ('97ca5efc27896fb31cf04eeccf596efe389e41b2332907b36039357e3f77472c', 'dc4a57286b38f72c96e538e7eb3851f806af1b9c07e0145f3f5aed51ea00bbe1'), 'src/engine/scalping/trailing_mechanical_strength.py': ('b2c425e1fff3f8241b9fd5b55c590eeb264b0a1ab909b0059bc32198e6ad6c1a', '6e6ff97542868f4624efb18e8b31c1fab6142b37921b98e67f1ace614e79ceb3'), 'src/engine/scalping/trailing_mechanical_replay.py': ('78d8f61e0105818402608bff314bfb11f70850a8701812ab0ddce1cdf9274895', 'de989aadd577f78f298677d10b6054fb4e11530af6920ba9f0841212c47ddfe2')}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -654,7 +659,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
-                    REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name)):
+                    REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name),
+                    REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

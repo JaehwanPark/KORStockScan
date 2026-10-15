@@ -1407,6 +1407,44 @@ def bind_execution_dependencies(
         _finalize_fast_state_callback = finalize_fast_state_callback
 
 
+def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observed_at):
+    """Bind a non-scanner receipt to its preserved native entry trace.
+
+    This is receipt custody, not scanner lifecycle coverage or a current exit
+    AI decision. It also works for sealed outbox legs created before this fix.
+    """
+    if (not isinstance(stock, dict)
+            or stage not in {"sell_completed", "sell_partial_fill_progress",
+                             "nxt_rising_missed_tp1_partial_fill_progress",
+                             "nxt_rising_missed_tp1_partial_sell_completed"}
+            or any(stock.get(key) or fields.get(key) for key in (
+                "scanner_promotion_id", "scanner_generation_id"))
+            or stock.get("simulation_book") or stock.get("simulation_owner")
+            or fields.get("actual_order_submitted") is not True
+            or fields.get("broker_order_forbidden") is not False
+            or not re.fullmatch(r"[0-9]+", str(fields.get("order_no") or ""))
+            or not re.fullmatch(r"[0-9]+", str(fields.get("execution_no") or ""))
+            or _safe_int(fields.get("sell_qty"), 0) <= 0
+            or _safe_int(stock.get("id"), 0) != _safe_int(target_id, 0)
+            or str(stock.get("code") or "") != str(code)):
+        return {}
+    trace = str(stock.get("last_watching_ai_attempt_decision_trace_id")
+                or stock.get("last_watching_ai_decision_trace_id") or "")
+    if not re.fullmatch(r"analyze_target:" + re.escape(str(code))
+                        + r":[0-9]{10,16}:[0-9a-f]{8,64}", trace):
+        return {}
+    if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
+        return {}
+    return {
+        "native_receipt_identity_schema": "native_entry_sell_receipt_v1",
+        "native_receipt_entry_trace_id": trace,
+        "native_receipt_record_id": int(target_id),
+        "native_receipt_stock_code": str(code),
+        "native_receipt_observed_at": observed_at.astimezone(_KST).isoformat(
+            timespec="microseconds"),
+    }
+
+
 def _log_holding_pipeline_impl(
     name,
     code,
@@ -1478,6 +1516,10 @@ def _log_holding_pipeline_impl(
                 observed_at=trusted_observed_at,
             )
         )
+        if not fields.get("main_lifecycle_id"):
+            fields.update(_native_sell_receipt_identity(
+                identity_stock, code, target_id, stage, fields, trusted_observed_at,
+            ))
         if observe_candidate_lifecycle:
             observe_candidate_transition_safe(candidate_stock, code, stage, fields)
     emitted = emit_pipeline_event(
@@ -3383,6 +3425,29 @@ def _sell_lifecycle_outbox_event_contract_valid(
     event_fields = leg.get("event_fields")
     if not isinstance(fields, dict) or not isinstance(event_fields, dict):
         return False
+    try:
+        native_observed_at = datetime.fromisoformat(str(leg.get("observed_at") or ""))
+    except (TypeError, ValueError):
+        return False
+    native_identity = _native_sell_receipt_identity(
+        leg.get("candidate_stock"), leg.get("code"), leg.get("target_id"),
+        leg.get("stage"), event_fields, native_observed_at,
+    )
+    if native_identity:
+        # Preserve every frozen field and exact broker/position identity.
+        # Native Main entries do not acquire a synthetic scanner attempt.
+        return bool(
+            event_payload.get("pipeline") == "HOLDING_PIPELINE"
+            and event_payload.get("stage") == leg.get("stage")
+            and str(event_payload.get("record_id")) == str(leg.get("target_id"))
+            and event_payload.get("stock_code") == leg.get("code")
+            and not fields.get("main_lifecycle_id")
+            and not fields.get("attempt_id")
+            and all(fields.get(str(key)) == str(value)
+                    for key, value in event_fields.items())
+            and all(fields.get(key) == str(value)
+                    for key, value in native_identity.items())
+        )
     attempt_id = str(fields.get("attempt_id") or "").strip()
     if not attempt_id:
         return False

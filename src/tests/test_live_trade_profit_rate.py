@@ -186,6 +186,73 @@ def _install_successful_sell_lifecycle_outbox(monkeypatch, logged):
     )
 
 
+@pytest.mark.parametrize("tamper_field", [None, "sell_qty", "execution_no",
+                                          "native_receipt_entry_trace_id",
+                                          "native_receipt_observed_at"])
+def test_native_fixed_watch_sell_outbox_acks_exact_receipt_without_scanner(
+    monkeypatch, tamper_field,
+):
+    from copy import deepcopy
+
+    observed_at = datetime(2026, 10, 15, 13, 59, 4, tzinfo=timezone(timedelta(hours=9)))
+    trace = "analyze_target:403870:1792038802347:4a778b1f"
+    stock = {"id": 49293, "code": "403870", "name": "HPSP",
+             "last_watching_ai_attempt_decision_trace_id": trace,
+             "effective_venue": "KRX", "market_session_bucket": "krx_regular"}
+    leg = receipts._build_sell_lifecycle_outbox_leg(
+        stock, code="403870", target_id=49293, now=observed_at,
+        stage="sell_completed", event_fields={
+            "sell_qty": 21, "remaining_sell_qty": 0,
+            "order_no": "0043525", "execution_no": "61455",
+            "main_lifecycle_exit_qty": 21, "main_lifecycle_exit_price": 50500.0,
+            "main_lifecycle_broker_reconciled": True,
+            "main_lifecycle_reconciled_final_exit": True,
+            "broker_execution_provenance_complete": False,
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False, "runtime_effect": True,
+        })
+    frozen = deepcopy(leg)
+    captured = []
+
+    def emit(pipeline, name, code, stage, *, record_id=None, fields=None):
+        normalized = {str(k): str(v) for k, v in fields.items()}
+        if tamper_field:
+            normalized[tamper_field] = "tampered"
+        captured.append(normalized)
+        return dict(pipeline=pipeline, stock_code=code, stage=stage,
+                    record_id=record_id, fields=normalized,
+                    structured_append_succeeded=True, structured_append_status="raw_appended")
+
+    monkeypatch.setattr(receipts, "emit_pipeline_event", emit)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (tamper_field is None)
+    assert leg == frozen  # A sealed recovery leg is never rewritten.
+    assert "main_lifecycle_id" not in captured[0]
+    assert "attempt_id" not in captured[0]
+    assert captured[0]["broker_execution_provenance_complete"] == "False"
+    if tamper_field is None:
+        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+            receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY: {leg["leg_sha256"]: leg}}
+        monkeypatch.setattr(receipts, "_persist_sell_receipt_recovery_or_interlock",
+                            lambda *args, **kwargs: True)
+        assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
+        count = len(captured)
+        assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
+        assert len(captured) == count
+
+
+@pytest.mark.parametrize("trace", ["", "analyze_target:005930:1792038802347:4a778b1f",
+                                   "manual:403870", "analyze_target:403870:bad:4a778b1f"])
+def test_native_receipt_identity_rejects_unbound_entry_trace(trace):
+    fields = dict(actual_order_submitted=True, broker_order_forbidden=False,
+                  broker_execution_provenance_state="complete",
+                  broker_execution_identity="execution", broker_execution_no="61455",
+                  order_no="0043525", execution_no="61455", sell_qty=21)
+    stock = dict(id=49293, code="403870", last_watching_ai_attempt_decision_trace_id=trace)
+    assert receipts._native_sell_receipt_identity(
+        stock, "403870", 49293, "sell_completed", fields,
+        datetime(2026, 10, 15, tzinfo=timezone.utc)) == {}
+
+
 def test_sell_lifecycle_outbox_ack_requires_every_durable_field_exact(
     monkeypatch,
 ):

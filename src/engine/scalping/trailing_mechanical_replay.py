@@ -295,7 +295,15 @@ def _expand_event_time_rows(
                         or event.get("classifier_state") != raw.get("state")
                         or at_ms / 1000 > row["_at"]):
                     return [], "source_gap_event_time_replay_source_or_price"
-                if previous_peak is not None and peak != max(previous_peak, trade_peak, bid):
+                peak_contract = event.get("peak_source_contract")
+                if peak_contract not in (None, "verified_0b_only_v1"):
+                    return [], "source_gap_event_time_replay_peak_contract"
+                expected_peak = (max(previous_peak, trade_peak)
+                                 if previous_peak is not None else None)
+                if expected_peak is not None and peak_contract is None:
+                    # Preserve the original contract of immutable old rows.
+                    expected_peak = max(expected_peak, bid)
+                if expected_peak is not None and peak != expected_peak:
                     return [], "source_gap_event_time_replay_peak_path"
                 if peak > row["_peak"]:
                     return [], "source_gap_event_time_replay_peak_path"

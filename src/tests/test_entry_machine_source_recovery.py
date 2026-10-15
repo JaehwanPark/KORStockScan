@@ -108,6 +108,200 @@ def test_source_recovery_runs_with_state_change_flag_off_but_keeps_provider_cool
     assert prior["reason"] == "machine_source_wait_completed_decision_cooldown"
 
 
+def _fixed_watch_recovery(monkeypatch):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.scalping import main_fixed_watch as fixed
+    from src.engine.scalping import reversal_evaluation_context as policy
+
+    stock, ws = pending()
+    route = fixed.session_route(NOW, stock["code"])
+    stock.update(
+        watch_origin="MAIN_FIXED_WATCH", status="WATCHING",
+        watch_admission_id=fixed.new_admission_id(NOW, route),
+        watch_generation_id=fixed.generation_id(NOW, route),
+        broker_route="SOR", market_session_bucket=route["bucket"],
+    )
+    stock[R.STATE_KEY] = R.pending_after_failure(
+        stock, source_failure(ws), now=NOW, cooldown_sec=90)
+    advance(ws)
+    ws["last_realtime_type_item"] = {"0B": "005930_AL"}
+    monkeypatch.setattr(H.time, "time", lambda: NOW + .2)
+    monkeypatch.setattr(H, "WS_MANAGER", None)
+    monkeypatch.setattr(policy, "prepare", lambda **kw: {
+        "continuous_reversal": {
+            "schema": "continuous_reversal_policy_v6", "family_sha256": "f" * 64}})
+    return H, stock, ws
+
+
+@pytest.mark.parametrize("signal_ready", [True, False])
+def test_fixed_watch_source_recovery_reaches_native_claim_handoff(monkeypatch, signal_ready):
+    from src.engine.scalping import reversal_source_diagnostics as native
+
+    H, stock, ws = _fixed_watch_recovery(monkeypatch)
+    origin = deepcopy(stock[R.STATE_KEY])
+    claim = {
+        "token": "fresh-native-claim",
+        "snapshot": ({"event_id": "fresh-native-event", "epoch": NOW + .1}, {}),
+    }
+    calls = []
+
+    def claim_current(*args, **kwargs):
+        calls.append((args, kwargs))
+        return claim if signal_ready else None
+
+    monkeypatch.setattr(native, "claim_snapshot_with_receipt", claim_current)
+    result = H._resolve_watching_state_change_refresh(
+        stock, ws, now_ts=NOW + .2, last_ai_time=0, cooldown_sec=90)
+
+    assert len(calls) == 1  # The async fixed-watch consumer requires this claim.
+    assert stock[R.STATE_KEY] == origin
+    if signal_ready:
+        assert result["allowed"] and result["reason"] == "machine_source_fresh_retry"
+        assert result["parent_attempt_id"] == origin["parent_attempt_id"]
+        assert result["parent_observation_sha256"] == origin["parent_observation_sha256"]
+        assert result["source_observed_at"] == NOW + .1
+        assert stock["_continuous_reversal_pending_claim"] is claim
+        assert claim["snapshot"][0]["epoch"] == NOW + .1
+    else:
+        assert not result["allowed"] and result["suppress_normal_refresh"]
+        assert result["reason"] == "machine_source_wait_native_signal"
+        assert "_continuous_reversal_pending_claim" not in stock
+
+
+@pytest.mark.parametrize("block", ["completed_decision_cooldown", "stale_quote"])
+def test_fixed_watch_recovery_cannot_claim_before_source_and_cooldown_pass(monkeypatch, block):
+    from src.engine.scalping import reversal_source_diagnostics as native
+
+    H, stock, ws = _fixed_watch_recovery(monkeypatch)
+    last_ai = NOW - 10 if block == "completed_decision_cooldown" else 0
+    if block == "stale_quote":
+        ws["realtime_type_snapshots_by_route"][KEY]["0D"]["observed_epoch"] = NOW - 4
+    monkeypatch.setattr(native, "claim_snapshot_with_receipt",
+                        lambda *a, **kw: pytest.fail("blocked recovery must not claim a signal"))
+
+    result = H._resolve_watching_state_change_refresh(
+        stock, ws, now_ts=NOW + .2, last_ai_time=last_ai, cooldown_sec=90)
+    assert not result["allowed"] and result["suppress_normal_refresh"]
+    assert "_continuous_reversal_pending_claim" not in stock
+
+
+def test_fixed_watch_recovery_does_not_reuse_requested_signal(monkeypatch):
+    from src.engine.scalping import reversal_source_diagnostics as native
+
+    H, stock, ws = _fixed_watch_recovery(monkeypatch)
+    stock["_continuous_reversal_last_requested_id"] = "already-requested"
+    monkeypatch.setattr(native, "claim_snapshot_with_receipt", lambda *a, **kw: {
+        "token": "old-claim", "snapshot": ({"event_id": "already-requested"}, {})})
+    result = H._resolve_watching_state_change_refresh(
+        stock, ws, now_ts=NOW + .2, last_ai_time=0, cooldown_sec=90)
+    assert not result["allowed"] and result["reason"] == "machine_source_wait_native_signal"
+    assert "_continuous_reversal_pending_claim" not in stock
+
+
+@pytest.mark.parametrize("aggregate_item", [None, "005930", "005930_NX"])
+def test_fixed_watch_recovery_claim_uses_validated_exact_item(monkeypatch, aggregate_item):
+    from src.engine.scalping import reversal_source_diagnostics as native
+
+    H, stock, exact = _fixed_watch_recovery(monkeypatch)
+    aggregate = deepcopy(exact)
+    aggregate["last_realtime_type_item"] = {"0B": aggregate_item}
+    # The recovery reader has newer exact data than the caller's aggregate.
+    aggregate["realtime_type_snapshots_by_route"][KEY]["0B"]["observed_epoch"] = NOW
+    monkeypatch.setattr(H, "WS_MANAGER", SimpleNamespace(
+        get_exact_item_data=lambda code, item: deepcopy(exact)))
+    calls = []
+    claim = {"token": "exact-native", "snapshot": ({"event_id": "exact-event"}, {})}
+
+    def claim_current(symbol, venue, session, **kwargs):
+        calls.append((symbol, venue, session, kwargs["item"]))
+        return claim if venue == "SOR" and kwargs["item"] == "005930_AL" else None
+
+    monkeypatch.setattr(native, "claim_snapshot_with_receipt", claim_current)
+    result = H._resolve_watching_state_change_refresh(
+        stock, aggregate, now_ts=NOW + .2, last_ai_time=0, cooldown_sec=90)
+    assert result["allowed"] and result["reason"] == "machine_source_fresh_retry"
+    assert calls == [(stock["code"], "SOR", stock["market_session_bucket"], "005930_AL")]
+    assert stock["_continuous_reversal_pending_claim"] is claim
+    assert aggregate["last_realtime_type_item"]["0B"] == aggregate_item
+
+
+@pytest.mark.parametrize("damage", ["wrong_item", "stale_quote", "read_error"])
+def test_fixed_watch_recovery_rejects_bad_exact_read_without_claim(monkeypatch, damage):
+    from src.engine.scalping import reversal_source_diagnostics as native
+
+    H, stock, aggregate = _fixed_watch_recovery(monkeypatch)
+    exact = deepcopy(aggregate)
+    if damage == "wrong_item":
+        exact["realtime_type_snapshots_by_route"][KEY]["0D"]["item"] = "000660_AL"
+    elif damage == "stale_quote":
+        exact["realtime_type_snapshots_by_route"][KEY]["0D"]["observed_epoch"] = NOW - 4
+
+    def read_exact(*args):
+        if damage == "read_error":
+            raise OSError("fixture_read_error")
+        return exact
+
+    monkeypatch.setattr(H, "WS_MANAGER", SimpleNamespace(get_exact_item_data=read_exact))
+    monkeypatch.setattr(native, "claim_snapshot_with_receipt",
+                        lambda *a, **kw: pytest.fail("invalid exact source must not claim"))
+    result = H._resolve_watching_state_change_refresh(
+        stock, aggregate, now_ts=NOW + .2, last_ai_time=0, cooldown_sec=90)
+    assert not result["allowed"] and result["suppress_normal_refresh"]
+    assert "_continuous_reversal_pending_claim" not in stock
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_fixed_watch_recovery_async_admission_preserves_native_deadline(monkeypatch, expired):
+    from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
+    from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator, FixedWatchGeneration
+    from src.engine.scalping import reversal_source_diagnostics as native
+
+    H, stock, ws = _fixed_watch_recovery(monkeypatch)
+    origin = deepcopy(stock[R.STATE_KEY])
+    event_epoch = NOW - 5.1 if expired else NOW + .1
+    claim = {
+        "token": "fresh-native-claim", "source_registration_receipt": {"sha256": "c" * 64},
+        "snapshot": ({"event_id": "fresh-native-event", "epoch": event_epoch,
+                      "symbol": stock["code"], "venue": "SOR", "source_item": "005930_AL"}, {}),
+    }
+    monkeypatch.setattr(native, "claim_snapshot_with_receipt", lambda *a, **kw: claim)
+    monkeypatch.setattr(H, "_acknowledge_async_claim", lambda *a, **kw: None)
+    monkeypatch.setattr(H, "_log_entry_pipeline", lambda *a, **kw: None)
+    refresh = H._resolve_watching_state_change_refresh(
+        stock, ws, now_ts=NOW + .2, last_ai_time=0, cooldown_sec=90)
+    assert refresh["allowed"]
+
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    admitted = []
+
+    def capture_request(request):
+        # Stop at admission: no worker, provider, account or order I/O.
+        admitted.append(request)
+        return SimpleNamespace(accepted=True, reason="fixture_admitted")
+
+    monkeypatch.setattr(coordinator, "submit", capture_request)
+    try:
+        result = H._resolve_scanner_async_entry_ai(
+            stock, stock["code"], ws, None, {"scanner_async_eval_coordinator": coordinator},
+            trigger_reason=refresh["reason"], last_ai_time=0, current_ai_score=0)
+    finally:
+        coordinator.shutdown()
+
+    assert stock[R.STATE_KEY] == origin
+    if expired:
+        assert result == {"status": "commit_rejected",
+                          "reason": "fixed_watch_native_identity_missing_or_expired"}
+        assert not admitted
+        assert "_fixed_watch_async_claim" not in stock
+    else:
+        assert result["status"] == "dispatched" and len(admitted) == 1
+        context = admitted[0].context
+        assert isinstance(context.generation, FixedWatchGeneration)
+        assert context.deadline_epoch == event_epoch + 5  # Not dispatch time + 5.
+        assert context.stock_snapshot[R.STATE_KEY]["parent_observation_sha256"] == origin["parent_observation_sha256"]
+        assert stock["_fixed_watch_async_claim"]["token"] == claim["token"]
+
+
 def test_route_price_is_available_even_when_aggregate_curr_is_missing(monkeypatch):
     from src.engine import sniper_state_handlers as H
     ws, context = fixture()

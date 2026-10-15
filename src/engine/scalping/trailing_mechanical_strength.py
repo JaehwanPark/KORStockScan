@@ -209,6 +209,36 @@ def _trade_peak_since(
     return peak, cursor, receipts, None
 
 
+def validate_replay_trade_peak(
+    observation: Mapping[str, Any], *, after_ms: int,
+    prior_sequence: int | None,
+) -> tuple[int, int | None]:
+    """Validate the producer's same-route 0B receipts before promoting a peak."""
+
+    receipts = observation.get("trade_peak_receipts")
+    at_ms = _positive_int(observation.get("at_ms"))
+    declared = _nonnegative_int(observation.get("trade_peak_price_since_prior_depth"))
+    if (not isinstance(receipts, list) or at_ms is None or declared is None
+            or observation.get("trade_peak_gap")):
+        raise ValueError("event_trade_peak_unproven")
+    peak, previous_at = 0, after_ms
+    cursor = prior_sequence
+    for receipt in receipts:
+        if not isinstance(receipt, Mapping):
+            raise ValueError("event_trade_peak_receipt_invalid")
+        sequence = _positive_int(receipt.get("sequence"))
+        received = _positive_int(receipt.get("received_at_ms"))
+        price = _positive_int(receipt.get("price"))
+        if (sequence is None or received is None or price is None
+                or not after_ms <= received <= at_ms or received < previous_at
+                or (cursor is not None and sequence != cursor + 1)):
+            raise ValueError("event_trade_peak_receipt_invalid")
+        cursor, previous_at, peak = sequence, received, max(peak, price)
+    if peak != declared:
+        raise ValueError("event_trade_peak_receipt_mismatch")
+    return peak, cursor
+
+
 def classify_ws_history(
     ws_data: Mapping[str, Any], previous_state: Mapping[str, Any] | None,
     *, now_ms: int, max_quote_age_ms: int, market: str | None = None,

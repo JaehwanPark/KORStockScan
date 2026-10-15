@@ -334,6 +334,158 @@ def test_runtime_route_baseline_advances_event_clock_without_source_gap(monkeypa
     assert not fields.get("classifier_event_time_gap")
 
 
+def _peak_replay_setup(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    base = int(_at("2026-10-15 13:33:29") * 1000)
+    stock = {"id": 1, "code": "123456", "buy_price": 50000,
+             "scalp_trailing_event_peak_state": {
+                 "position_key": "record:1", "buy_price": 50000,
+                 "peak_price": 50400, "last_quote_at_ms": base,
+             }}
+    monkeypatch.setattr(handlers, "_scalp_trailing_values_for_evaluation",
+                        lambda *args: (dict(DEFAULTS), "REGULAR"))
+    monkeypatch.setattr(handlers, "_scalp_trailing_arm_was_latched", lambda s: True)
+    monkeypatch.setattr(handlers, "calculate_net_profit_rate",
+                        lambda buy, price: (price / buy - 1) * 100 - .23)
+
+    def run(sequence, *, peak=50400, bid=50400, trade_prices=(), corrupt=False,
+            identity=None, quote_state="ok", mutate=None):
+        prior = stock["scalp_trailing_event_peak_state"]
+        at = base + sequence * 100
+        trade_seq = prior.get("trade_sequence") or 0
+        obs = {"at_ms": at, "sequence": sequence,
+               "previous_quote_at_ms": at - 100,
+               "touch": (bid, 100, bid + 100, 100), "best_bid": bid,
+               "state": "WEAK", "trade_peak_price_since_prior_depth": max(trade_prices, default=0),
+               "trade_peak_receipts": [
+                   {"sequence": trade_seq + i + 1, "received_at_ms": at - 10,
+                    "price": price} for i, price in enumerate(trade_prices)]}
+        if corrupt:
+            obs["trade_peak_receipts"][0]["price"] += 100
+        if mutate:
+            mutate(obs)
+        fields = {"classifier_quote_received_at_ms": at,
+                  "_classifier_observations": [obs]}
+        if identity:
+            fields.update(zip(("classifier_item", "classifier_transport_epoch",
+                               "classifier_route_key", "classifier_market"), identity))
+        handlers._scalp_trailing_replay_observed_quotes_safe(
+            stock, "123456", fields, peak_price=peak,
+            buy_price=stock["buy_price"], executable_bid=bid,
+            bid_source="fresh_ws_executable_bid",
+            quote_fields={"quote_consistency_state": quote_state}, observed_at=at / 1000 + .01,
+        )
+        return fields
+
+    return handlers, stock, run
+
+
+def test_runtime_preserves_real_intra_batch_high_above_latest_trade(monkeypatch):
+    _, stock, run = _peak_replay_setup(monkeypatch)
+    fields = run(1, trade_prices=(50400, 50500, 50400))
+    assert not fields["classifier_event_time_gap"]
+    assert json.loads(fields["classifier_event_replay"])[0]["peak_price"] == 50500
+    assert fields["classifier_validated_peak_price"] == 50500
+    assert stock["scalp_trailing_trusted_peak_price"] == 50500
+
+
+def test_runtime_bid_alone_cannot_extend_trade_peak(monkeypatch):
+    _, stock, run = _peak_replay_setup(monkeypatch)
+    fields = run(1, bid=50600)
+    assert json.loads(fields["classifier_event_replay"])[0]["peak_price"] == 50400
+    assert stock["scalp_trailing_trusted_peak_price"] == 50400
+
+
+def test_runtime_failed_batch_does_not_commit_peak_and_recovers_with_history(monkeypatch):
+    _, stock, run = _peak_replay_setup(monkeypatch)
+    failed = run(1, trade_prices=(50500,), corrupt=True)
+    assert failed["classifier_event_time_gap"]
+    prior = stock["scalp_trailing_event_peak_state"]
+    assert prior["peak_price"] == 50400 and prior.get("trade_sequence") is None
+    assert "scalp_trailing_trusted_peak_price" not in stock
+    baseline = run(2)
+    assert baseline["classifier_event_recovery_baseline"]
+    recovered = run(3, trade_prices=(50400,))
+    assert not recovered["classifier_event_time_gap"]
+    assert recovered["classifier_event_gap_recovered_from"] == "event_trade_peak_receipt_mismatch"
+    assert stock["scalp_trailing_mechanical_event_gap_history"]["count"] == 1
+
+
+def test_runtime_partial_fill_basis_change_resets_event_peak(monkeypatch):
+    _, stock, run = _peak_replay_setup(monkeypatch)
+    run(1, trade_prices=(50500,))
+    stock["buy_price"] = 50285.7143
+    baseline = run(2, peak=50300)
+    assert json.loads(baseline["classifier_event_replay"]) == []
+    assert stock["scalp_trailing_event_peak_state"]["peak_price"] == 50300
+
+
+@pytest.mark.parametrize("defect", ["future_trade", "missing_trade", "stale_quote",
+                                    "trade_sequence_gap"])
+def test_runtime_unproven_event_peak_cannot_promote_or_signal(monkeypatch, defect):
+    _, stock, run = _peak_replay_setup(monkeypatch)
+
+    def corrupt(obs):
+        if defect == "future_trade":
+            obs["trade_peak_receipts"][0]["received_at_ms"] = obs["at_ms"] + 1
+        elif defect == "missing_trade":
+            obs["trade_peak_receipts"] = []
+        elif defect == "trade_sequence_gap":
+            obs["trade_peak_receipts"][1]["sequence"] += 1
+
+    fields = run(1, trade_prices=(50500, 50400), mutate=corrupt,
+                 quote_state="blocked" if defect == "stale_quote" else "ok")
+    assert fields["classifier_event_time_gap"]
+    assert json.loads(fields["classifier_event_replay"]) == []
+    assert stock["scalp_trailing_event_peak_state"]["peak_price"] == 50400
+    assert "scalp_trailing_first_crossing" not in stock
+
+
+def test_runtime_transport_change_requires_new_baseline(monkeypatch):
+    _, stock, run = _peak_replay_setup(monkeypatch)
+    run(1, trade_prices=(50500,), identity=("123456_AL", 1, "AL|KRX", "REGULAR"))
+    baseline = run(2, peak=50500, identity=("123456_AL", 2, "AL|KRX", "REGULAR"))
+    assert json.loads(baseline["classifier_event_replay"]) == []
+    assert stock["scalp_trailing_event_peak_state"]["source_identity"][1] == 2
+    valid = run(3, peak=50500, identity=("123456_AL", 2, "AL|KRX", "REGULAR"))
+    assert not valid["classifier_event_time_gap"]
+
+
+@pytest.mark.parametrize("contract", [None, "verified_0b_only_v1", "unknown"])
+def test_offline_replay_preserves_versioned_trade_peak_contract(contract):
+    from src.engine.scalping.trailing_mechanical_replay import _expand_event_time_rows
+
+    at = _at("2026-10-15 13:33:29")
+    segment = ("123456", 1, "KRX|KRX", "REGULAR")
+    peak = 50600 if contract is None else 50400
+    first = {"_at": at, "_classifier_segment": segment, "_peak": 50400,
+             "_peak_profit": .57, "_bid": 50300, "classifier_quote_sequence": 1,
+             "classifier_item": "123456", "classifier_transport_epoch": 1,
+             "classifier_route_key": "KRX|KRX", "classifier_market": "REGULAR",
+             "classifier_new_event_count": 0}
+    event = {"sequence": 2, "at_ms": (at + .1) * 1000,
+             "peak_price": peak, "peak_profit_pct": .57,
+             "executable_bid": 50600, "executable_bid_qty": 100,
+             "classifier_state": "WEAK", "market": "REGULAR",
+             "start_pct": DEFAULTS["SCALP_TRAILING_START_PCT"],
+             "raw_limit_pct": DEFAULTS["SCALP_TRAILING_LIMIT_WEAK"]}
+    if contract is not None:
+        event["peak_source_contract"] = contract
+    second = {**first, "_at": at + .1, "_peak": peak, "_bid": 50600,
+              "classifier_quote_sequence": 2, "classifier_new_event_count": 1,
+              "classifier_event_replay": [event]}
+    raw = {"_classifier_segment": segment, "sequence": 2, "at_ms": event["at_ms"],
+           "touch": (50600, 100, 50700, 100), "state": "WEAK",
+           "trade_peak_price_since_prior_depth": 0}
+    rows, gap = _expand_event_time_rows([first, second], [raw],
+                                       {market: dict(DEFAULTS) for market in START_MARKETS})
+    if contract == "unknown":
+        assert gap == "source_gap_event_time_replay_peak_contract"
+    else:
+        assert gap is None and rows[-1]["_peak"] == peak
+
+
 def test_m1_replay_excludes_legacy_score_and_uses_three_numeric_axes():
     position, _ = _path(score=80, strong=True, limit=0.8)
     vector = {market: dict(DEFAULTS) for market in START_MARKETS}

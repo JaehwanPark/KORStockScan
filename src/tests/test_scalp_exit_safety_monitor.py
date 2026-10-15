@@ -376,7 +376,8 @@ def test_fast_exit_skips_manual_control_excluded_holding(monkeypatch):
     )
 
 
-def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
+@pytest.mark.parametrize("replayed_peak", [10077, 10100])
+def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch, replayed_peak):
     now_ts = 1_784_778_400.0
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", "2026-01-01")
@@ -419,6 +420,17 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
     monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
     monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
     monkeypatch.setattr(
+        handlers, "_scalp_trailing_strength_and_event_replay",
+        lambda stock, *args, **kwargs: (False, {
+            "classifier_validated_peak_price": replayed_peak
+        } if stock.get("id") == 1 else {}),
+    )
+    observed_peaks = []
+    monkeypatch.setattr(
+        handlers, "_observe_scalp_trailing_input_transition_safe",
+        lambda *args, **kwargs: observed_peaks.append(kwargs["peak_price"]),
+    )
+    monkeypatch.setattr(
         handlers,
         "_scalping_micro_estimator_log_fields",
         lambda **_kwargs: {},
@@ -457,6 +469,7 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
     assert len(dispatches) == 1
     assert dispatches[0]["fast_exit"] is True
     assert dispatches[0]["exit_rule"] == "scalp_trailing_take_profit"
+    assert observed_peaks[-1] == replayed_peak
     assert stock["exit_requested"] is True
     assert stock["exit_token"]
     assert stock["probe_expand_forbidden"] is True

@@ -381,6 +381,7 @@ from src.engine.scalping.trailing_mechanical_policy import (
 from src.engine.scalping.trailing_mechanical_strength import (
     VERSION as SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION,
     classify_ws_history as classify_scalp_trailing_strength,
+    validate_replay_trade_peak,
 )
 from src.engine.scalping.trailing_operational_replay import (
     GRID_VERSION as SCALP_TRAILING_OPERATIONAL_GRID_VERSION,
@@ -20743,9 +20744,16 @@ def _scalp_trailing_replay_observed_quotes(
 
     observations = mechanical_fields.pop("_classifier_observations", ())
     position_key = _scalp_holding_source_position_key(stock, code)
+    source_identity = tuple(mechanical_fields.get(key) for key in (
+        "classifier_item", "classifier_transport_epoch", "classifier_route_key",
+        "classifier_market",
+    ))
     prior = stock.get("scalp_trailing_event_peak_state")
-    if not isinstance(prior, dict) or prior.get("position_key") != position_key:
+    if (not isinstance(prior, dict) or prior.get("position_key") != position_key
+            or prior.get("buy_price", buy_price) != buy_price
+            or prior.get("source_identity", source_identity) != source_identity):
         prior = {"position_key": position_key, "peak_price": peak_price,
+                 "buy_price": buy_price, "source_identity": source_identity,
                  "last_quote_at_ms": mechanical_fields.get(
                      "classifier_quote_received_at_ms")}
         stock["scalp_trailing_event_peak_state"] = prior
@@ -20777,7 +20785,20 @@ def _scalp_trailing_replay_observed_quotes(
         and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
         and _safe_int(executable_bid, 0) == _safe_int(observations[-1].get("best_bid"), 0)
     )
+    if prior.get("recovery_pending") and valid_quote:
+        # Preserve the missing interval and establish a new baseline. Only
+        # the next complete batch can clear current source health.
+        stock["scalp_trailing_event_peak_state"] = {
+            "position_key": position_key, "buy_price": buy_price,
+            "source_identity": source_identity, "peak_price": peak_price,
+            "last_quote_at_ms": mechanical_fields.get("classifier_quote_received_at_ms"),
+        }
+        mechanical_fields["classifier_event_recovery_baseline"] = True
+        mechanical_fields["classifier_event_replay"] = "[]"
+        return
     last_at = _safe_int(prior.get("last_quote_at_ms"), 0)
+    last_sequence = prior.get("quote_sequence")
+    trade_sequence = prior.get("trade_sequence")
     event_peak = _safe_int(prior.get("peak_price"), 0)
     now_ms = int(observed_at * 1000)
     max_age = int(QuoteConsistencyConfig.from_env().max_ws_age_ms)
@@ -20791,6 +20812,7 @@ def _scalp_trailing_replay_observed_quotes(
             touch = observation.get("touch")
             trade_peak = _safe_int(observation.get("trade_peak_price_since_prior_depth"), -1)
             if (seq <= 0 or at_ms < last_at or at_ms > now_ms
+                    or (last_sequence is not None and seq != last_sequence + 1)
                     or now_ms - at_ms > max_age
                     or _safe_int(observation.get("previous_quote_at_ms"), 0) != last_at
                     or not isinstance(touch, (tuple, list)) or len(touch) != 4
@@ -20803,10 +20825,16 @@ def _scalp_trailing_replay_observed_quotes(
                     }):
                 gap = "event_quote_peak_or_continuity_unproven"
                 break
-            event_peak = max(event_peak, trade_peak, _safe_int(touch[0], 0))
-            if event_peak > peak_price:
-                gap = "event_peak_exceeds_trusted_peak"
+            try:
+                trade_peak, trade_sequence = validate_replay_trade_peak(
+                    observation, after_ms=last_at, prior_sequence=trade_sequence,
+                )
+            except ValueError as exc:
+                gap = str(exc)
                 break
+            # A buffered trade high can exceed the sampled latest trade.
+            # Only verified 0B prices extend the peak; a 0D bid cannot.
+            event_peak = max(event_peak, trade_peak)
             at_epoch = at_ms / 1000.0
             event_values, event_market = _scalp_trailing_values_for_evaluation(at_epoch, stock)
             event_state = str(observation.get("state") or "UNKNOWN")
@@ -20816,6 +20844,7 @@ def _scalp_trailing_replay_observed_quotes(
             validated.append((at_ms, seq, touch, event_peak,
                               event_values, event_market, event_state))
             last_at = at_ms
+            last_sequence = seq
     if not gap:
         armed = _scalp_trailing_arm_was_latched(stock)
         for (at_ms, seq, touch, event_peak,
@@ -20858,6 +20887,7 @@ def _scalp_trailing_replay_observed_quotes(
             replay.append({
                 "sequence": seq, "at_ms": at_ms, "peak_price": event_peak,
                 "peak_profit_pct": calculate_net_profit_rate(buy_price, event_peak),
+                "peak_source_contract": "verified_0b_only_v1",
                 "executable_bid": _safe_int(touch[0], 0),
                 "executable_bid_qty": _safe_int(touch[1], 0),
                 "classifier_state": event_state, "market": event_market,
@@ -20878,8 +20908,29 @@ def _scalp_trailing_replay_observed_quotes(
         mechanical_fields["classifier_event_time_gap"] = True
         mechanical_fields["classifier_event_time_gap_reason"] = gap
         replay = []
-    prior["peak_price"] = max(event_peak, _safe_int(peak_price, 0))
-    prior["last_quote_at_ms"] = mechanical_fields.get("classifier_quote_received_at_ms")
+        prior["recovery_pending"] = True
+        history = stock.setdefault("scalp_trailing_mechanical_event_gap_history", {})
+        if history.get("position_key") != position_key:
+            history.clear()
+            history["position_key"] = position_key
+        history.setdefault("first_reason", gap)
+        history.update(last_reason=gap, last_at=observed_at,
+                       count=_safe_int(history.get("count"), 0) + 1)
+    else:
+        recovered = stock.pop("scalp_trailing_mechanical_event_gap", None)
+        stock.pop("scalp_trailing_mechanical_event_gap_position_key", None)
+        mechanical_fields["classifier_event_time_gap"] = False
+        mechanical_fields["classifier_event_time_gap_reason"] = ""
+        if recovered:
+            mechanical_fields["classifier_event_gap_recovered_from"] = recovered
+        trusted_peak = max(event_peak, _safe_int(peak_price, 0))
+        mechanical_fields["classifier_validated_peak_price"] = trusted_peak
+        prior.update(peak_price=trusted_peak, last_quote_at_ms=last_at,
+                     quote_sequence=last_sequence, trade_sequence=trade_sequence,
+                     buy_price=buy_price, source_identity=source_identity)
+        stock["scalp_trailing_trusted_peak_price"] = max(
+            _safe_int(stock.get("scalp_trailing_trusted_peak_price"), 0), trusted_peak,
+        )
     mechanical_fields["classifier_event_replay"] = json.dumps(
         replay, sort_keys=True, separators=(",", ":"), allow_nan=False
     )
@@ -30027,6 +30078,9 @@ def _evaluate_and_dispatch_fast_scalp_exit(
             bid_source=early_bid_source, peak_price=peak_price,
             buy_price=buy_price,
         )
+        peak_price = max(peak_price, _safe_int(
+            early_mechanical_fields.get("classifier_validated_peak_price"), 0))
+        peak_profit = calculate_net_profit_rate(buy_price, peak_price)
         early_decision = evaluate_trailing_take_profit(
             peak_price=peak_price, executable_bid=early_bid,
             peak_profit_pct=peak_profit, start_pct=trailing_start_pct,
@@ -30197,6 +30251,9 @@ def _evaluate_and_dispatch_fast_scalp_exit(
         executable_bid=trusted_bid, bid_source=trusted_bid_source,
         peak_price=peak_price, buy_price=buy_price,
     )
+    peak_price = max(peak_price, _safe_int(
+        mechanical_fields.get("classifier_validated_peak_price"), 0))
+    peak_profit = calculate_net_profit_rate(buy_price, peak_price)
     trailing_limit = float(trailing_values[
         "SCALP_TRAILING_LIMIT_STRONG" if strong_trailing else "SCALP_TRAILING_LIMIT_WEAK"
     ])
@@ -49446,6 +49503,7 @@ def _resolve_watching_state_change_refresh(
     pending_source = (stock or {}).get(MACHINE_SOURCE_RECOVERY_KEY)
     source_now = now_ts
     source_refresh = None
+    fixed_watch_source_retry = False
     if isinstance(pending_source, dict):
         source_now = time.time()
         source_refresh = machine_source_recovery_refresh(stock, source_ws, now=source_now)
@@ -49471,11 +49529,19 @@ def _resolve_watching_state_change_refresh(
                     allowed=False, suppress_normal_refresh=True,
                     reason="machine_source_wait_completed_decision_cooldown",
                 )
-            return source_refresh
+            if not (source_refresh.get("allowed")
+                    and main_fixed_watch.is_fixed_watch(stock)):
+                return source_refresh
+            # Fresh source permits a new calculation, but fixed-watch async
+            # admission still requires a newly selected, valid native claim.
+            fixed_watch_source_retry = True
     if isinstance(ws_data, dict) and isinstance(stock, dict):
         from src.engine.scalping.continuous_reversal import current_snapshot
         from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
-        item=(ws_data.get('last_realtime_type_item') or {}).get('0B')
+        # Recovery validated the lease's exact tape/quote partition. Aggregate
+        # metadata can still describe an older or different registered item.
+        item = (pending_source['item'] if fixed_watch_source_retry else
+                (ws_data.get('last_realtime_type_item') or {}).get('0B'))
         session=stock.get('market_session_bucket') or ws_data.get('market_session_bucket') or ws_data.get('session_bucket')
         try:
             from src.engine.scalping.reversal_evaluation_context import prepare
@@ -49511,13 +49577,22 @@ def _resolve_watching_state_change_refresh(
             if snapshot and stock.get('_continuous_reversal_last_requested_id')!=snapshot[0]['event_id']:
                 if family:
                     stock['_continuous_reversal_pending_claim']=claim
-                    return dict(allowed=True,reason='continuous_reversal_first_uptick',
-                                signature=_build_watching_refresh_signature(ws_data),
-                                event_id=snapshot[0]['event_id'],decision_authority='machine_evaluation_only',
-                                actual_order_submitted=False,broker_order_forbidden=True)
+                    return {
+                        **(source_refresh if fixed_watch_source_retry else {}),
+                        'allowed': True,
+                        'reason': ('machine_source_fresh_retry' if fixed_watch_source_retry
+                                   else 'continuous_reversal_first_uptick'),
+                        'signature': _build_watching_refresh_signature(ws_data),
+                        'event_id': snapshot[0]['event_id'],
+                        'decision_authority': 'machine_evaluation_only',
+                        'actual_order_submitted': False, 'broker_order_forbidden': True,
+                    }
         except (ValueError,TypeError,KeyError,OSError) as exc:
             from src.engine.monitoring.runtime_performance import failure
             failure('policy_refresh', type(exc).__name__ + ':' + str(exc))
+    if fixed_watch_source_retry:
+        return {**source_refresh, "allowed": False, "suppress_normal_refresh": True,
+                "reason": "machine_source_wait_native_signal"}
     prior_machine = (stock or {}).get('last_watching_ai_machine_primary_fields') or {}
     terminal = (stock or {}).get('_native_entry_terminal_decision')
     if (str(prior_machine.get('entry_mechanistic_policy_version') or '').startswith('continuous_reversal_policy_v')
@@ -86036,6 +86111,9 @@ def handle_holding_state(
             executable_bid=trailing_decision_price, bid_source=trailing_bid_source,
             peak_price=scalp_tp_peak_price, buy_price=buy_p,
         )
+        scalp_tp_peak_price = max(scalp_tp_peak_price, _safe_int(
+            mechanical_fields.get("classifier_validated_peak_price"), 0))
+        scalp_tp_peak_profit = calculate_net_profit_rate(buy_p, scalp_tp_peak_price)
         tp_trailing_limit = float(trailing_values[
             "SCALP_TRAILING_LIMIT_STRONG" if strong_trailing else "SCALP_TRAILING_LIMIT_WEAK"
         ])

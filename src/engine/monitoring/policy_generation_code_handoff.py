@@ -19,10 +19,10 @@ from src.engine.monitoring import policy_generation_validation as validation
 REVIEWED_SUCCESSORS = {
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '9ad7d05f1c3eadda4c591693d0df6b8f0b58fba037920212085ed0c4f21ed682'),
+        '0b80d5f5b4a5d32c7208da29903b815b195c0afcb379b08bca73d5fd2750c989'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        'e99b74b3877ea45cfb5e3bcc80f9a3ed9070ebc7ba1e2c90557203e387050092'),
+        '2334f3e3e3434b0d5e968cc01bee8eaaa5d7f3d7628b05829dde7d2ccad7f61a'),
 }
 
 
