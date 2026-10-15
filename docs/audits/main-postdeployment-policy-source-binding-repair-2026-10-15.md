@@ -16,10 +16,12 @@
 - 이미 소비된 legacy 문서는 exact live PID와 원 immutable historical snapshot을 함께 검증한다. 새 ordered 배포는 공유 체크리스트를 쓰지 않고 안정된 operating snapshot을 create-only로 봉인한다. public startup/consume/activation은 그 immutable bytes를 요구한다.
 - 후보 reader의 predecessor 재검증은 immutable candidate·정확한 source pair·기존 실제 PID·전체 native bootstrap/auxiliary proof를 요구한다. 이전 실패 로그를 보존하며 성공을 후보 PID 소비로 표시하지 않는다. 검증 실패 시 drain/selector/hold 변경에 진입하지 않는다.
 - `40b931254`의 전체 physical probe5 내 long3, 두 약세 alpha veto의 exact Main ENTER_NOW/AI PASS 범위와 이력 분리를 통합했다. native deadline, stale/conflict, DANGER, source-quality, 가격·계좌·주문·수량·custody와 기존 operator lock을 유지한다. [별도 구현 리뷰](main-long-probe-and-weak-veto-scope-review-2026-10-15.md)의 사용자 승인 범위를 따른다.
-- handler 및 stop reader 변경에 대한 정확한 source-pair와 rising/holding capability successor hash를 갱신한다. native 보고서와 과거 unverified 상태는 보존하고 현재 fixture 검증을 별도로 발급한다. active policy33 module bytes가 기존 선택과 동일함을 확인한 경우에만 기존 native parity를 재사용한다.
+- handler 및 stop reader 변경에 대한 정확한 source-pair와 rising/holding capability successor hash를 갱신한다. native 보고서와 과거 unverified 상태는 보존하고 현재 fixture 검증을 별도로 발급한다. 초기 후보는 active policy33 module bytes가 같았으나, 배포 전 전체 검증에서 active-policy reader도 후보 경로를 거절하는 추가 경계를 발견했다. 정확한 기존 selector/PID와 이미 발급된 candidate receipt의 origin/code/source/pointer를 모두 요구하는 읽기 전용 predecessor scope를 보완했다. 실제 native confirmation128 scopes·76,800rows의 기존/후보 비교를 새로 실행하며 원 데이터·정책·선택은 변경하지 않는다.
 
 ## 검증 및 실행 상태
 
 경보 수정 2,122개 및 배포 경계121개 회귀 PASS. 통합본 전체 관련 회귀3,148개 PASS(기존 pandas 경고1), 변경 Python compile·diff·print-only parser PASS. native capability fixture 및 배포 전 검증 결과와 실제 배포/PID 영수증은 완료 후 아래에 기록한다. 테스트 PASS를 자연 제출·체결·비용 후 성과로 해석하지 않는다. 외부 Project/Calendar sync와 수동 주문/provider 호출은 실행하지 않는다.
 
 실행 owner는 기존 `DirectFamilyPreopenPolicyHandoff`, `AuxiliaryCircuitRecoveryRepair1012`, `MainStopLossRetirementRuntimeTuning1010`, `NonfixedDispatchReadinessReview1012`를 유지한다. 현재 실제 PID와 다음 정규 observer/detector generation의 일치가 운영 수용이며, 제출·경제성은 별도 자연 수용이다.
+
+추가 경계 보완 후 회귀1,529개 PASS. 복사한 immutable native fixture5개를 격리 worktree에서 읽었으며 운영 원천에는 쓰지 않았다. 최신 native128 scopes·76,800rows·607hits 및 signal hash가 기존 선택과 동일했다(mismatch0). 새 rising86·holding91 fixture의 network/provider/order0과 원 protected artifact 불변을 확인했다. 배포 전 후보787a5ee97은 선택하지 않았으며 추가 경계 보완 후속본으로 대체한다.

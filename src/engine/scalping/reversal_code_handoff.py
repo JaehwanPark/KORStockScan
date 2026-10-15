@@ -47,6 +47,20 @@ def validate(bundle,data_root,*,original_error):
     selection=N._read(Path(data_root)/'runtime/runtime_release_selection.json')
     if selection.get('git_commit')!=commit or selection.get('release_root')!=str(root):
         raise ValueError('active_policy_code_selection_changed')
+    if not path(data_root,day,commit,bundle['bundle_sha256']).exists():
+        raise original_error
+    selected_root, selected_commit = root, commit
+    review = None
+    if root != Path(__file__).resolve().parents[3]:
+        from src.engine.automation import intraday_release_handoff as handoff
+        review = handoff._PREDECESSOR_REVIEW.get()
+        if (not review or review['day'] != day or review['root'] != root
+                or review['commit'] != commit
+                or review['code_root'] != Path(__file__).resolve().parents[3]
+                or review['identity'].get('cwd') != str(root/'src')
+                or handoff._identity(review['identity']['pid']) != review['identity']):
+            raise ValueError('active_policy_code_reader_root_changed')
+        root, commit = review['code_root'], review['code_commit']
     receipt_path=path(data_root,day,commit,bundle['bundle_sha256'])
     # Preserve the native reason for unregistered code and tomorrow's parent
     # transition. There is no generic historical-loader fallback.
@@ -56,6 +70,11 @@ def validate(bundle,data_root,*,original_error):
     pointer_sha=N._source_hash(str(pointer),N._signature(pointer))
     r=N._read(receipt_path)
     validate_receipt(r,day=day,commit=commit,root=root,bundle_sha=bundle['bundle_sha256'],pointer_sha=pointer_sha)
+    if review is not None and (r.get('origin_root') != str(selected_root)
+            or r.get('origin_commit') != selected_commit
+            or r.get('origin_selection_sha256') != P.file_hash(Path(data_root)/'runtime/runtime_release_selection.json')
+            or r.get('actual_pid_consumed') is not False):
+        raise ValueError('active_policy_predecessor_review_unbound')
     current={str(Path(m.__file__).resolve()) for m in __import__(
         'src.engine.scalping.continuous_reversal_policy_v6',fromlist=['contract_modules']).contract_modules()} | {str(Path(__file__).resolve())}
     if set(r['code_hashes'])!=current:raise ValueError('active_policy_code_membership_changed')
@@ -65,6 +84,10 @@ def validate(bundle,data_root,*,original_error):
             raise ValueError('active_policy_code_handoff_source_changed:'+name)
     if N._read(pointer)['bundle_sha256']!=bundle['bundle_sha256']:
         raise ValueError('active_policy_code_handoff_pointer_changed')
+    if review is not None and (selected_release(Path(data_root).resolve().parent) != (selected_root, selected_commit)
+            or N._read(Path(data_root)/'runtime/runtime_release_selection.json') != selection
+            or handoff._identity(review['identity']['pid']) != review['identity']):
+        raise ValueError('active_policy_predecessor_review_changed')
     return bundle
 
 

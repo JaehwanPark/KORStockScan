@@ -478,8 +478,11 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,mo
     assert receipt['status']=='activated' and receipt['previous_bundle_sha256']==J.PARENT
 
 
-@pytest.mark.parametrize('damage',[None,'code','source','pointer','date','authority','members','seal','selector','absent'])
-def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkeypatch,damage):
+@pytest.mark.parametrize('predecessor_review,damage',
+    [(review,damage) for review in (False,True) for damage in
+     (None,'code','source','pointer','date','authority','members','seal','selector','absent')]
+    + [(True,damage) for damage in ('review_missing','review_day','review_origin','review_pid','review_race','review_consumed')])
+def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkeypatch,damage,predecessor_review):
     from pathlib import Path
     from src.engine.scalping import reversal_code_handoff as H, continuous_reversal_policy_v6 as V
     from src.engine.scalping import mechanistic_entry_runtime_policy as N,continuous_reversal_postclose as P
@@ -498,6 +501,32 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
     if damage=='authority':receipt['authority']='unapproved'
     if damage=='members':receipt['code_hashes']={str(old):P.file_hash(old)}
     receipt=P.seal(receipt)
+    if predecessor_review:
+        from src.engine.automation import intraday_release_handoff as IH
+        selected=tmp_path/'incumbent';selected.mkdir();old_commit='a'*40
+        selector.write_text(__import__('json').dumps(dict(git_commit=old_commit,release_root=str(selected))))
+        identity=dict(pid=123,start_ticks='456',cwd=str(selected/'src'))
+        monkeypatch.setattr(router,'selected_release',lambda *a:(selected,old_commit))
+        monkeypatch.setattr(IH,'_identity',lambda pid:identity)
+        context=IH._PREDECESSOR_REVIEW.set(dict(day=day,root=selected,commit=old_commit,
+            code_root=root,code_commit=commit,identity=identity))
+        if damage == 'review_missing': IH._PREDECESSOR_REVIEW.set(None)
+        if damage == 'review_day': IH._PREDECESSOR_REVIEW.get()['day'] = '2026-10-01'
+        if damage in ('review_pid','review_race'):
+            visits=[]
+            def observed(pid):
+                visits.append(pid)
+                return dict(identity,start_ticks='changed') if damage == 'review_pid' or len(visits)>1 else identity
+            monkeypatch.setattr(IH,'_identity',observed)
+        # Scope ends even when the native source validation raises.
+        import contextlib
+        stack=contextlib.ExitStack();stack.callback(IH._PREDECESSOR_REVIEW.reset,context)
+        receipt=P.seal(dict(receipt,origin_root=str(selected),origin_commit=old_commit,
+            origin_selection_sha256=P.file_hash(selector),actual_pid_consumed=False))
+        N._atomic_write_json(H.path(data,day,old_commit,'bundle'),
+            P.seal(dict(receipt,release_root=str(selected),release_commit=old_commit)))
+        if damage == 'review_origin': receipt=P.seal(dict(receipt,origin_commit='c'*40))
+        if damage == 'review_consumed': receipt=P.seal(dict(receipt,actual_pid_consumed=True))
     if damage=='seal':receipt['policy_reselected']=True
     dest=H.path(data,day,commit,'bundle');N._atomic_write_json(dest,receipt)
     if damage=='code':code.write_text('unreviewed code')
@@ -506,9 +535,12 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
     if damage=='selector':selector.write_text('{}')
     if damage=='absent':dest.unlink()
     frozen={p:p.read_bytes() for p in (code,old,pointer,selector)};bundle={'bundle_sha256':'bundle'}
-    if damage:
-        with pytest.raises(ValueError):H.validate(bundle,data,original_error=ValueError('v4_contract_code_changed:test'))
-    else:assert H.validate(bundle,data,original_error=ValueError('v4_contract_code_changed:test')) is bundle
+    try:
+        if damage:
+            with pytest.raises(ValueError):H.validate(bundle,data,original_error=ValueError('v4_contract_code_changed:test'))
+        else:assert H.validate(bundle,data,original_error=ValueError('v4_contract_code_changed:test')) is bundle
+    finally:
+        if predecessor_review:stack.close()
     assert frozen=={p:p.read_bytes() for p in frozen}
 
 
