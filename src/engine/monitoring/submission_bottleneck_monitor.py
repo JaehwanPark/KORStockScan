@@ -20,7 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from src.engine.notify_error_detection_admin import (
-    _load_state, _load_telegram_config, _send_telegram, _write_state,
+    _load_telegram_config, _send_telegram, _write_state,
 )
 from src.utils.constants import PROJECT_ROOT
 
@@ -4697,6 +4697,29 @@ def _finish_observer_generation(original, project, *, completed_at):
     result["sha256"] = _observer_seal(result)
     return result
 
+
+def _load_state(path):
+    """Own the observer's bounded state contract, independently of Telegram."""
+    try:
+        Path(path).lstat()
+    except FileNotFoundError:
+        return {}
+    # Removal/replacement after the initial presence check must fail, never
+    # turn lost incident custody into a first run. Symlinks/FIFOs fail closed.
+    value = _observer_json_object(_observer_regular_bytes(path, limit=8*1024*1024))
+    if (value.get('schema') != SCHEMA or not isinstance(value.get('incidents'), dict)
+            or value.get('persistence_schema') not in (None, 'submission_monitor_continuation_v1')):
+        raise ValueError('observer_state_contract_invalid')
+    return value
+
+
+def _continuation_state(result):
+    """Keep exact incident/cursor custody; bulky observations live in reports."""
+    return dict({key:result[key] for key in ('schema','date','as_of','run_id','incidents',
+        'source_as_of','last_notification_at','pre_submit_delay_source_cursor') if key in result},
+        persistence_schema='submission_monitor_continuation_v1')
+
+
 def main(argv=None):
     started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -4820,7 +4843,7 @@ def main(argv=None):
                     result['observation_health'] = observation_health_projection(result)
                 for label, path in (("state", state_path), ("latest", output),
                                     ("dated", output.with_name(f"{name}_{result['date']}.json"))):
-                    _write_state(path, result)
+                    _write_state(path, _continuation_state(result) if label == 'state' else result)
                     terminal["publication"][label] = True
             terminal.update({k:result.get(k) for k in ("status", "blocker", "notification_status",
                                                       "execution_status", "semantic_status")})

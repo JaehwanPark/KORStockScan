@@ -519,6 +519,16 @@ REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES = {
 }
 
 
+# Observer continuation separates small incident/cursor custody from full reports.
+# Exact origin/successor pair; no policy or trading path changed.
+REVIEWED_OBSERVER_STATE_READER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        'f4815942b04cf7cfda9d6db977d9987eb3a5d549e69a0ecdf5a77de10931ef22',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -573,7 +583,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_PREMARKET_OBSERVER_SOURCES.get(name),
                     REVIEWED_ACTIVE_OBSERVER_SOURCES.get(name),
                     REVIEWED_CURRENT_OBSERVER_SOURCES.get(name),
-                    REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES.get(name)):
+                    REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES.get(name),
+                    REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

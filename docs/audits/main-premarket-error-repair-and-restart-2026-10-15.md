@@ -92,3 +92,16 @@ Kiwoom official gate: upstream `953e5dbff123f437ab4d11a78a95191a685eb51f`, 조�
 검토한 monitor·handler·runtime_performance의 원 native PREOPEN→최종 source pair만 REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES에 추가한다. 이미 소비한 이전 pair·원 정책 bundle/bootstrap 봉인·manual/retired custody는 유지한다. native 사전검증과 최종 표적 시험/문서 parser 후 ordered driver로 배포하며 실제 PID·새 관측 generation·detector 소비를 별도 확인한다.
 
 최종 통합 표적 검증2,870개 PASS(27.02초), Python compile·diff whitespace·print-only parser PASS다. 기존 current parsed OPEN owner9개와 원 수용 기준을 유지했다. 새 report-only code handoff는 code/source/state/fixture/권한 변조를 거부하며 미검토 pair에는 적용되지 않는다. 검토 범위의 미해결 코드 결함은 없고 실제 deployment/consumer 확인은 후속 영수증으로 기록한다.
+
+
+## 09:25 실제 첫 소비에서 확인한 continuation 크기 계약
+
+통합235eca7a5는 09:24:02.916036 ordered complete/pass, Main PID1553546/start ticks8771106의 실제 native 정책 소비 및 같은 commit의 WS 수신(writer_loss/projection_errors0)을 확인했다. 92785b7da와 a179bb42d는 모두 ancestry에 포함된다. 신규 rising_missed86/holding_vote91 fixture는 현재 code hash로 실제 실행·게시됐고 native capability4종은 verified/findings[]다.
+
+그러나 09:25 정규 monitor 실행7ca0197fc21b4d8f9839b8bb149c67e2는 0.009초 만에 ValueError로 실패했다. 원인을 실제 reader로 재현한 결과, 09:20 report를 그대로 저장한 continuation이3,713,939bytes인데 notifier의 2MiB state reader를 재사용해 notifier_state_untrusted로 거부했다. 원 상태/보고서 SHA89751aa929e7822e694b1e557c412afa18838c08c8f09e9546c26a14fa540c66는 `observer-state-before-size-repair.json`으로 보존했다. 배포 완료와 후속 observer 소비 완료를 구분하여 최종 수용을 보류했다.
+
+observer 전용 state reader는 canonical 보고서와 같은8MiB 한도에서 regular/no-follow/nonblocking·전후 identity·JSON 중복/유한값·schema를 검증한다. 처음부터 absent인 경우만 첫 실행이고, 읽는 중 삭제/교체·symlink/FIFO·과대/손상은 실패다. Telegram notifier의2MiB 계약은 변경하지 않는다. 이후 continuation은 incident/notification 상태·원 accepted source clock·delay cursor·날짜/run identity만 저장한다. 전체 관측·원천 증명은 기존 dated/latest report에 유지한다. 원 실제 상태의 continuation projection은3,709bytes이며 incidents/source clock은 동일하다. 원 파일을 수동 재작성하거나 삭제하지 않았고 정상 producer가 다음 게시에서 compact 형태를 만든다.
+
+회귀는 실제 CLI의3MiB 보고서→legacy full state→다음 실행→compact state→재실행, 원 historical incident/notification 보존, delay cursor/accepted clock 보존과8MiB 초과·symlink·dangling·FIFO·중복/손상·읽기 중 제거의 거부를 포함한다. selector가 notify 중 바뀌면 기존 canonical bytes를 그대로 보존하는 검증도 유지한다. 정책/주문/AI 경로는 통합235의 검증본 그대로이며 이번 추가는 state persistence와 exact hash 인계만 수정한다.
+
+추가 수리 최종 검증은 observer/탐지기/인계/ordered 배포/notifier2,096개 PASS(12.55초), compile·diff·print-only parser PASS, 당일 OPEN9개 동일이다. 현재 원3.7MB state의 read-only 로드·compact projection 및 incident/source clock 보존을 실제 파일로 확인했다. 새 code pair 이후 네 capability/정책은 재사용 가능 여부를 원 영수증으로 다시 확인한다.

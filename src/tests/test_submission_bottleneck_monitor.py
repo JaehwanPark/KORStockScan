@@ -3650,7 +3650,10 @@ def test_real_main_seals_final_generation_and_notification_before_health_publica
         return
     latest=json.loads(output.read_text());state=json.loads((root/'tmp/submission_bottleneck_monitor_state.json').read_text())
     dated=json.loads(output.with_name('submission_bottleneck_monitor_'+now.date().isoformat()+'.json').read_text())
-    assert latest==state==dated and latest['observation_health']==project(latest)==projections[0]
+    assert latest==dated and latest['observation_health']==project(latest)==projections[0]
+    assert state['incidents']==latest['incidents'] and state['run_id']==latest['run_id']
+    assert state['last_notification_at']==latest['last_notification_at']
+    assert 'observation_health' not in state and state['persistence_schema']=='submission_monitor_continuation_v1'
     assert latest['observation_health']['status']=='warning_pending',latest['observation_health']
     assert latest['observer_generation']['completed_at']==finishes[-1]['completed_at']
     assert terminal['publication']==dict(state=True,latest=True,dated=True)
@@ -3728,7 +3731,7 @@ def test_main_selector_change_during_notify_preserves_existing_canonical_bytes(t
              root / "data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json",
              root / "data/report/buy_funnel_sentinel" / f"submission_bottleneck_monitor_{datetime.now(monitor.KST).date().isoformat()}.json"]
     for saved in names:
-        saved.parent.mkdir(parents=True, exist_ok=True); saved.write_text('{"prior":"preserved"}')
+        saved.parent.mkdir(parents=True, exist_ok=True); saved.write_text(json.dumps(dict(prior='preserved',schema=monitor.SCHEMA,incidents={})))
     before = {saved: saved.read_bytes() for saved in names}
     monkeypatch.setattr(monitor, "source_gap_semantics", lambda *args: {"status": "observed", "issues": {}})
     monkeypatch.setattr(monitor, "attach_source_gap_semantics", lambda result, sem: result.update(source_gap_semantics=sem))
@@ -4074,3 +4077,76 @@ def test_native_session_rollover_wait_requires_original_generation_within_warmup
     assert census['session_boundary_wait_count'] == int(damage is None)
     assert census['unclassified_or_actionable_wait_count'] == int(damage is not None)
     assert census['native_entry_allowed_by_clock'] is True
+
+
+
+def test_observer_large_legacy_state_is_read_and_compacted_without_losing_incidents(tmp_path,monkeypatch):
+    _observer_selection_fixture(tmp_path,monkeypatch)
+    monkeypatch.setattr(monitor,'PROJECT_ROOT',tmp_path)
+    monkeypatch.setattr(monitor,'source_gap_semantics',lambda *a,**k:dict(
+        status='gap_observed',issues={'machine_probe:source_route_conflict':1},
+        examples=[],sources={},observed={},large_observation='x'*(3*1024*1024)))
+    args=['--report',str(tmp_path/'missing.json'),'--source-only']
+    assert monitor.main(args)==0
+    state=tmp_path/'tmp/submission_bottleneck_monitor_state.json'
+    report=tmp_path/'data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json'
+    original=report.read_bytes(); assert len(original)>2*1024*1024
+    large=json.loads(original)
+    large['incidents']['historical_original'] = dict(status='recovered',last_seen=large['as_of'],
+        notified_status='recovered',issues={'original_source_gap':1})
+    large['last_notification_at']=large['as_of']
+    state.write_text(json.dumps(large))  # Actual preceding full-report state format.
+    assert monitor._load_state(state)['incidents']==large['incidents']
+    assert monitor.main(args)==0
+    compact=monitor._load_state(state)
+    assert state.stat().st_size<16384 and report.stat().st_size>2*1024*1024
+    assert compact['incidents']['historical_original']==large['incidents']['historical_original']
+    assert compact['last_notification_at']==large['last_notification_at']
+    assert compact['persistence_schema']=='submission_monitor_continuation_v1'
+    assert compact['incidents']==json.loads(report.read_bytes())['incidents']
+    assert monitor.main(args)==0  # Compact form is accepted by the next run too.
+
+
+@pytest.mark.parametrize('damage',['oversize','symlink','dangling','fifo','malformed','duplicate','foreign','incidents'])
+def test_observer_state_rejects_untrusted_input_without_rewriting(tmp_path,damage):
+    import os
+    path=tmp_path/'state.json'
+    good=dict(schema=monitor.SCHEMA,incidents={})
+    if damage=='oversize':path.write_bytes(b'x'*(8*1024*1024+1))
+    elif damage in ('symlink','dangling'):
+        target=tmp_path/'target.json'
+        if damage=='symlink':target.write_text(json.dumps(good))
+        path.symlink_to(target)
+    elif damage=='fifo':os.mkfifo(path)
+    elif damage=='malformed':path.write_text('{')
+    elif damage=='duplicate':path.write_text('{"schema":"a","schema":"b"}')
+    elif damage=='foreign':path.write_text(json.dumps(dict(good,schema='notifier')))
+    else:path.write_text(json.dumps(dict(good,incidents=[])))
+    before=path.lstat()
+    with pytest.raises((OSError,ValueError)):monitor._load_state(path)
+    after=path.lstat()
+    assert (before.st_ino,before.st_size,before.st_mtime_ns)==(after.st_ino,after.st_size,after.st_mtime_ns)
+
+
+def test_observer_continuation_keeps_delay_cursor_and_accepted_source_clock():
+    source=dict(schema=monitor.SCHEMA,date='2026-10-15',as_of='2026-10-15T09:25:00+09:00',
+        source_as_of='2026-10-15T09:20:00+09:00',incidents={'unresolved':{'status':'active'}},
+        pre_submit_delay_source_cursor={'offset':12345,'generation':'original'},last_notification_at='original',
+        large_observation='discarded_from_continuation_only')
+    from copy import deepcopy
+    original=deepcopy(source); saved=monitor._continuation_state(source)
+    assert source==original
+    assert all(saved[k]==source[k] for k in ('pre_submit_delay_source_cursor','incidents','source_as_of','last_notification_at'))
+    assert 'large_observation' not in saved
+
+
+
+def test_observer_state_disappearance_during_read_is_not_a_first_run(tmp_path,monkeypatch):
+    path=tmp_path/'state.json';path.write_text(json.dumps(dict(schema=monitor.SCHEMA,incidents={})))
+    real_read=monitor.os.read
+    def removed(fd,size):
+        raw=real_read(fd,size)
+        path.unlink(missing_ok=True)
+        return raw
+    monkeypatch.setattr(monitor.os,'read',removed)
+    with pytest.raises((FileNotFoundError,ValueError)):monitor._load_state(path)
