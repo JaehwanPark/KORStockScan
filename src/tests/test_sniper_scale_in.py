@@ -22110,12 +22110,12 @@ def test_weak_context_late_entry_guard_blocks_when_recent_block_history_and_weak
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_vpw",
+                "stage": "blocked_vpw", "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "below_static_vpw_context",
             },
@@ -22168,12 +22168,12 @@ def test_weak_context_late_entry_guard_blocks_rising_missed_zero_mfe_proxy(monke
         "rising_missed_one_share_entry_forced": True,
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "weak_momentum_context",
             },
@@ -22225,12 +22225,12 @@ def test_weak_context_late_entry_guard_blocks_general_buy_zero_mfe_proxy(monkeyp
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 100,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 20,
                 "risk_state": "weak_momentum_context",
             },
@@ -22283,12 +22283,12 @@ def test_weak_context_late_entry_guard_does_not_block_weak_strength_without_micr
             "position_tag": "SCANNER",
             "trade_quality_block_history": [
                 {
-                    "stage": "blocked_strength_momentum",
+                    "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                     "ts": now_ts - 100,
                     "risk_state": "weak_momentum_context",
                 },
                 {
-                    "stage": "blocked_strength_momentum",
+                    "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                     "ts": now_ts - 20,
                     "risk_state": "weak_momentum_context",
                 },
@@ -22332,12 +22332,12 @@ def test_weak_context_late_entry_guard_does_not_block_on_missing_micro_fields(
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_vpw",
+                "stage": "blocked_vpw", "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "below_static_vpw_context",
             },
@@ -22380,12 +22380,12 @@ def test_weak_context_late_entry_guard_uses_late_drift_micro_fallback(monkeypatc
         "position_tag": "SCANNER",
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "weak_momentum_context",
             },
@@ -22442,12 +22442,12 @@ def test_weak_context_late_entry_guard_uses_ai_source_quality_fallback(monkeypat
         },
         "trade_quality_block_history": [
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 120,
                 "risk_state": "weak_momentum_context",
             },
             {
-                "stage": "blocked_strength_momentum",
+                "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                 "ts": now_ts - 30,
                 "risk_state": "weak_momentum_context",
             },
@@ -22488,7 +22488,7 @@ def test_weak_context_late_entry_guard_does_not_block_with_insufficient_history(
             "position_tag": "SCANNER",
             "trade_quality_block_history": [
                 {
-                    "stage": "blocked_strength_momentum",
+                    "stage": "blocked_strength_momentum", "gate_action": "baseline_block",
                     "ts": now_ts - 30,
                     "risk_state": "weak_momentum_context",
                 },
@@ -40338,3 +40338,110 @@ def test_normal_exploration_cap_does_not_need_retired_actor_flag(monkeypatch):
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **kw: None)
     assert state_handlers._commit_entry_setup_exploration_probe_cap(stock, "005930", "accepted-order", now_ts=1000)
     assert len(calls) == 1
+
+
+def test_weak_history_separates_context_confirmed_and_unclassified_without_rewriting(monkeypatch):
+    stock = {}
+    for action in ['risk_context_only', 'source_quality_block', 'baseline_block', 'legacy_unclassified']:
+        state_handlers._append_trade_quality_block_history(stock, stage='blocked_strength_momentum',
+            now_ts=1000, risk_state='weak', gate_action=action)
+    stock['trade_quality_block_history'].extend([
+        {'stage': 'blocked_vpw', 'ts': 999},
+        {'stage': 'blocked_vpw', 'ts': 999, 'observed_gate_action': 'risk_context_only'},
+    ])
+    original = deepcopy(stock)
+    counts = state_handlers._recent_trade_quality_block_counts(stock, now_ts=1001, confirmed_only=True)
+    assert counts['total_count'] == 2
+    assert counts['risk_context_only_count'] == 2
+    assert counts['unclassified_count'] == 2
+    assert stock == original
+
+
+@pytest.mark.parametrize('origin', ['scanner', 'fixed'])
+@pytest.mark.parametrize('guard_name', ['real_weak_pullback', 'weak_context_late_entry'])
+@pytest.mark.parametrize('damage', [None, 'danger', 'no_normal_submit', 'source_gap', 'wrong_attempt',
+    'wrong_revision', 'invalid_capture', 'untrusted_ai', 'wrong_trace', 'ai_caution', 'ai_veto',
+    'machine_recheck', 'wrong_screen_status', 'wrong_owner', 'probe', 'no_call_context'])
+def test_main_approved_weak_veto_scope_preserves_exact_authority_and_hard_guards(monkeypatch, origin, guard_name, damage):
+    from src.engine.monitoring import entry_attempt_identity as attempts
+    machine = dict(entry_primary_decision_owner='mechanistic_entry_adjudicator',
+        evaluation_attempt_id='attempt', scanner_promotion_id='promotion', effective_venue='KRX',
+        market_session_bucket='krx_regular', policy_bundle_hash='b'*64,
+        machine_capture_status='captured', machine_observation_sha256='a'*64,
+        entry_mechanistic_action='ENTER_NOW', entry_ai_screen_status='pass', entry_ai_screen_pass=True,
+        entry_ai_effective_assessment={'effective_verdict': 'PASS'})
+    stock = dict(id=7, code='036930', strategy='SCALPING', scanner_promotion_id='promotion',
+        last_watching_ai_action='BUY', last_watching_ai_result_source='live',
+        last_watching_ai_attempt_contract_status='pass', last_watching_ai_decision_trace_id='trace',
+        last_watching_ai_attempt_decision_trace_id='trace', last_watching_ai_snapshot_id='snapshot',
+        last_watching_ai_attempt_snapshot_id='snapshot',
+        last_watching_ai_machine_primary_fields=deepcopy(machine),
+        _machine_observation_revision={'digest': 'a'*64, 'key': ['promotion', 'attempt']})
+    if origin == 'fixed':
+        watch = dict(watch_origin='MAIN_FIXED_WATCH',
+            watch_admission_id='FIXED-2026-10-15-036930-krx_regular-test', watch_generation_id='d'*64)
+        machine.pop('scanner_promotion_id')
+        stock.pop('scanner_promotion_id')
+        machine.update(watch)
+        stock.update(watch, effective_venue='KRX', market_session_bucket='krx_regular')
+        stock['last_watching_ai_machine_primary_fields'] = deepcopy(machine)
+        stock['_machine_observation_revision']['key'] = [watch['watch_admission_id'], 'attempt',
+            '036930', 'KRX', 'krx_regular', 'b'*64, __import__('os').getpid()]
+    authority = dict(blocked=False, entry_ai_submit_authority_action='BUY',
+        entry_ai_submit_authority_result_source='live', entry_ai_submit_authority_decision_trace_id='trace',
+        entry_ai_submit_authority_fresh_prior=True, entry_ai_submit_authority_latest_attempt_trusted=True)
+    latency = {'latency_state': 'CAUTION', 'decision': 'ALLOW_NORMAL'}
+    verdict = {'blocked': True, 'reason': 'weak_momentum_caution_without_micro_confirmation',
+               'fields': {'weak_context_late_entry_guard_blocked': True}}
+    monkeypatch.setattr(state_handlers, '_is_any_simulated_position', lambda *a: False)
+    monkeypatch.setattr(state_handlers, '_is_swing_live_order_dry_run', lambda *a: False)
+    monkeypatch.setattr(state_handlers, '_has_sim_probe_provenance', lambda *a: damage == 'probe')
+    events = []
+    monkeypatch.setattr(state_handlers, '_log_entry_pipeline', lambda *a, **kw: events.append((a, kw)))
+    if damage == 'danger': latency['latency_state'] = 'DANGER'
+    if damage == 'no_normal_submit': latency.update(decision='WAIT')
+    if damage == 'source_gap': verdict.update(reason='weak_pullback_micro_source_unavailable', metric_role='source_quality_gate')
+    if damage == 'wrong_attempt': stock['last_watching_ai_machine_primary_fields']['evaluation_attempt_id'] = 'other'
+    if damage == 'wrong_revision': stock['_machine_observation_revision']['digest'] = 'c'*64
+    if damage == 'invalid_capture': machine['machine_capture_status'] = 'missing'
+    if damage == 'untrusted_ai': authority['entry_ai_submit_authority_latest_attempt_trusted'] = False
+    if damage == 'wrong_trace': authority['entry_ai_submit_authority_decision_trace_id'] = 'other'
+    if damage in {'ai_caution', 'ai_veto'}:
+        stock['last_watching_ai_machine_primary_fields']['entry_ai_effective_assessment']['effective_verdict'] = 'CAUTION' if damage == 'ai_caution' else 'VETO'
+    if damage == 'machine_recheck': machine['entry_mechanistic_action'] = 'RECHECK'
+    if damage == 'wrong_screen_status': machine['entry_ai_screen_status'] = 'response_invalid'
+    if damage == 'wrong_owner': machine['entry_primary_decision_owner'] = 'other'
+    original = deepcopy(verdict)
+    def invoke():
+        return state_handlers._scope_main_machine_ai_weak_veto(stock, '036930', strategy='SCALPING',
+            authority=authority, latency_gate=latency, guard_name=guard_name, verdict=verdict)
+    @attempts.observe_submit_attempt
+    def submit(stock, code):
+        attempts.bind_submit_attempt_machine_lineage(stock, code, machine)
+        return invoke()
+    result = invoke() if damage == 'no_call_context' else submit(stock, '036930')
+    assert result['blocked'] is (damage is not None)
+    assert verdict == original
+    assert len(events) == (0 if damage else 1)
+    if damage is None:
+        assert events[0][1]['gate_action'] == 'risk_context_only'
+        assert events[0][1]['evaluation_attempt_id'] == 'attempt'
+        assert events[0][1]['actual_order_submitted'] is False
+
+
+def test_weak_context_observations_do_not_evict_confirmed_block_history():
+    stock = {}
+    state_handlers._append_trade_quality_block_history(stock, stage='blocked_strength_momentum',
+        now_ts=1000, gate_action='source_quality_block')
+    for i in range(40):
+        state_handlers._append_trade_quality_block_history(stock, stage='blocked_vpw',
+            now_ts=1001+i, gate_action='risk_context_only')
+    assert len(stock['trade_quality_block_history']) == 1
+    assert len(stock['trade_quality_risk_context_history']) == 32
+    stock['trade_quality_block_history'].extend([
+        {'stage': 'blocked_vpw', 'gate_action': 'baseline_block', 'ts': float('nan')},
+        {'stage': 'blocked_vpw', 'gate_action': 'baseline_block', 'ts': 2000},
+    ])
+    counts = state_handlers._recent_trade_quality_block_counts(stock, now_ts=1041, confirmed_only=True)
+    assert counts['total_count'] == 1
+    assert counts['risk_context_only_count'] == 32

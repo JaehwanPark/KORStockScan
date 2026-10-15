@@ -34511,6 +34511,61 @@ def _evaluate_late_entry_price_drift_guard(
     }
 
 
+def _scope_main_machine_ai_weak_veto(
+    stock, code, *, strategy, authority, latency_gate, guard_name, verdict,
+):
+    """Keep a duplicate alpha veto as context for the exact approved Main call.
+
+    This grants no submit authority. Source-invalid micro, DANGER, and every
+    surrounding native/price/broker/account/order/quantity guard stay enforced.
+    Operator enable flags remain effective outside this explicitly approved scope.
+    """
+    if (guard_name not in {"real_weak_pullback", "weak_context_late_entry"}
+            or verdict.get("blocked") is not True
+            or str(strategy).upper() not in {"SCALP", "SCALPING"}
+            or _is_any_simulated_position(stock, strategy)
+            or _has_sim_probe_provenance(stock)
+            or _is_swing_live_order_dry_run(strategy)
+            or str(latency_gate.get("latency_state") or "").upper() == "DANGER"
+            or not _entry_latency_allows_normal_submit(latency_gate)
+            or verdict.get("reason") == "weak_pullback_micro_source_unavailable"
+            or verdict.get("metric_role") == "source_quality_gate"
+            or not isinstance(authority, dict) or authority.get("blocked") is not False
+            or not _entry_reprice_parent_ai_receipt(stock, authority)):
+        return verdict
+    receipt = submit_attempt_machine_lineage(stock, code)
+    machine = stock.get("last_watching_ai_machine_primary_fields") or {}
+    if not isinstance(machine, dict) or not receipt:
+        return verdict
+    if (receipt.get("entry_primary_decision_owner") != "mechanistic_entry_adjudicator"
+            or receipt.get("entry_mechanistic_action") != "ENTER_NOW"
+            or receipt.get("entry_ai_screen_status") != "pass"
+            or receipt.get("entry_ai_screen_pass") is not True
+            or receipt.get("machine_capture_status") != "captured"
+            or not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("machine_observation_sha256") or ""))
+            or not receipt.get("evaluation_attempt_id")
+            or any(machine.get(key) != receipt.get(key) for key in (
+                "evaluation_attempt_id", "machine_observation_sha256",
+                "entry_mechanistic_action", "entry_ai_screen_status", "entry_ai_screen_pass"))
+            or _pre_submit_delay_auxiliary_verdict(machine) != "PASS"
+            or not _machine_submit_revision_is_current(stock, receipt)):
+        return verdict
+    fields = dict(verdict.get("fields") or {})
+    fields.update(weak_context_late_entry_guard_blocked=False,
+                  weak_context_guard_reason="main_machine_ai_pass_risk_context_only")
+    _log_entry_pipeline(stock, code, "main_machine_ai_weak_veto_context",
+        weak_veto_guard=guard_name, weak_veto_would_block_reason=verdict.get("reason"),
+        gate_action="risk_context_only", evaluation_attempt_id=receipt["evaluation_attempt_id"],
+        machine_observation_sha256=receipt["machine_observation_sha256"],
+        ai_decision_trace_id=authority["entry_ai_submit_authority_decision_trace_id"],
+        metric_role="funnel_count", decision_authority="report_only",
+        actual_order_submitted=False, broker_order_forbidden=True,
+        runtime_effect=False, weak_veto_scope="main_exact_enter_now_auxiliary_pass")
+    return {**verdict, "blocked": False, "reason": "main_machine_ai_pass_risk_context_only",
+            "block_reason": "", "fields": fields, "gate_action": "risk_context_only",
+            "decision_authority": "report_only", "runtime_effect": False}
+
+
 def _evaluate_weak_context_late_entry_guard(
     *,
     strategy: str,
@@ -34561,7 +34616,7 @@ def _evaluate_weak_context_late_entry_guard(
             "fields": fields,
         }
 
-    recent_counts = _recent_trade_quality_block_counts(stock, now_ts=now_ts)
+    recent_counts = _recent_trade_quality_block_counts(stock, now_ts=now_ts, confirmed_only=True)
     min_block_count = max(1, _rule_int("WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT", 2))
     late_drift_fields = (
         late_drift_guard.get("fields") if isinstance(late_drift_guard, dict) else {}
@@ -34683,6 +34738,8 @@ def _evaluate_weak_context_late_entry_guard(
 
     fields.update(
         {
+            "recent_risk_context_only_count": recent_counts["risk_context_only_count"],
+            "recent_unclassified_history_count": recent_counts["unclassified_count"],
             "recent_blocked_strength_count": _safe_int(
                 recent_counts.get("blocked_strength_momentum"), 0
             ),
@@ -52319,6 +52376,7 @@ def _append_trade_quality_block_history(
     stage: str,
     now_ts: float | None = None,
     risk_state: str | None = None,
+    gate_action: str = "legacy_unclassified",
 ) -> None:
     if not isinstance(stock, dict):
         return
@@ -52326,12 +52384,16 @@ def _append_trade_quality_block_history(
     if not event_stage:
         return
     ts = float(now_ts or time.time())
-    history = list(stock.get("trade_quality_block_history") or [])
+    # Context must not evict the last real vetoes from the bounded history.
+    history_key = ("trade_quality_risk_context_history" if gate_action == "risk_context_only"
+                   else "trade_quality_block_history")
+    history = list(stock.get(history_key) or [])
     history.append(
         {
             "stage": event_stage,
             "ts": ts,
             "risk_state": str(risk_state or "").strip() or "-",
+            "gate_action": str(gate_action or "legacy_unclassified"),
         }
     )
     cutoff = ts - max(
@@ -52342,25 +52404,38 @@ def _append_trade_quality_block_history(
         for item in history[-32:]
         if isinstance(item, dict) and _safe_float(item.get("ts"), 0.0) >= cutoff
     ]
-    _mutate_stock_state(stock, set_fields={"trade_quality_block_history": trimmed})
+    _mutate_stock_state(stock, set_fields={history_key: trimmed})
 
 
 def _recent_trade_quality_block_counts(
-    stock: dict | None, *, now_ts: float | None = None
+    stock: dict | None, *, now_ts: float | None = None, confirmed_only: bool = False
 ) -> dict:
     ts = float(now_ts or time.time())
     lookback_sec = max(1, _rule_int("WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC", 900))
     cutoff = ts - float(lookback_sec)
-    history = list((stock or {}).get("trade_quality_block_history") or [])
+    history = (list((stock or {}).get("trade_quality_block_history") or [])
+               + list((stock or {}).get("trade_quality_risk_context_history") or []))
     counts = {
         "blocked_strength_momentum": 0,
         "blocked_vpw": 0,
         "blocked_overbought": 0,
     }
     matched: list[str] = []
+    context_count = unclassified_count = 0
     for item in history:
-        if not isinstance(item, dict) or _safe_float(item.get("ts"), 0.0) < cutoff:
+        if not isinstance(item, dict):
             continue
+        observed = _safe_float(item.get("ts"), 0.0)
+        if not math.isfinite(observed) or not cutoff <= observed <= ts:
+            continue
+        action = str(item.get("gate_action") or item.get("observed_gate_action") or "")
+        if action == "risk_context_only":
+            context_count += 1
+            continue
+        if action not in {"source_quality_block", "baseline_block", "block"}:
+            unclassified_count += 1
+            if confirmed_only or action:
+                continue
         stage = str(item.get("stage") or "").strip()
         if stage in counts:
             counts[stage] += 1
@@ -52369,6 +52444,8 @@ def _recent_trade_quality_block_counts(
         **counts,
         "lookback_sec": lookback_sec,
         "total_count": sum(counts.values()),
+        "risk_context_only_count": context_count,
+        "unclassified_count": unclassified_count,
         "signature": "|".join(matched[-6:]) if matched else "-",
     }
 
@@ -61800,13 +61877,13 @@ def _handle_watching_strategy_branch(
                             ),
                         ),
                     )
-                    _append_trade_quality_block_history(
-                        stock,
-                        stage="blocked_overbought",
-                        risk_state=overbought_context.get("risk_state"),
-                    )
                     overbought_baseline_would_block = not _rule_bool(
                         "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                    )
+                    _append_trade_quality_block_history(
+                        stock, stage="blocked_overbought",
+                        risk_state=overbought_context.get("risk_state"),
+                        gate_action=("baseline_block" if overbought_baseline_would_block and not opening_rotation_handoff_defers_baseline else "risk_context_only"),
                     )
                     if (
                         overbought_baseline_would_block
@@ -62246,16 +62323,16 @@ def _handle_watching_strategy_branch(
                                     overlap_snapshot=overlap_snapshot,
                                 ),
                             )
-                            _append_trade_quality_block_history(
-                                stock,
-                                stage="blocked_strength_momentum",
-                                risk_state=strength_context.get("risk_state"),
-                            )
                             strength_baseline_would_block = bool(
                                 not observe_only
                                 and not _rule_bool(
                                     "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
                                 )
+                            )
+                            _append_trade_quality_block_history(
+                                stock, stage="blocked_strength_momentum",
+                                risk_state=strength_context.get("risk_state"),
+                                gate_action="source_quality_block" if source_quality_block_reason else ("baseline_block" if strength_baseline_would_block and not opening_rotation_handoff_defers_baseline else "risk_context_only"),
                             )
                             if source_quality_block_reason or (
                                 not opening_rotation_handoff_defers_baseline
@@ -62410,13 +62487,13 @@ def _handle_watching_strategy_branch(
                                 overlap_snapshot=overlap_snapshot,
                             ),
                         )
-                        _append_trade_quality_block_history(
-                            stock,
-                            stage="blocked_vpw",
-                            risk_state=vpw_context.get("risk_state"),
-                        )
                         vpw_baseline_would_block = not _rule_bool(
                             "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                        )
+                        _append_trade_quality_block_history(
+                            stock, stage="blocked_vpw",
+                            risk_state=vpw_context.get("risk_state"),
+                            gate_action=("baseline_block" if vpw_baseline_would_block and not opening_rotation_handoff_defers_baseline else "risk_context_only"),
                         )
                         if (
                             vpw_baseline_would_block
@@ -69005,6 +69082,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         orderbook_fields=entry_orderbook_micro_fields,
         microstructure_fields=microstructure_submit_log_fields,
     )
+    weak_pullback_block_verdict = _scope_main_machine_ai_weak_veto(
+        stock, code, strategy=strategy, authority=entry_ai_submit_authority,
+        latency_gate=latency_gate, guard_name="real_weak_pullback",
+        verdict=weak_pullback_block_verdict,
+    )
     if weak_pullback_block_verdict.get("blocked"):
         from src.engine.scalping.strategy_owner_replay import observe_seed
 
@@ -70681,6 +70763,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             pre_submit_fields=weak_context_pre_submit_fields,
             microstructure_fields=microstructure_submit_log_fields,
             orderbook_fields=entry_orderbook_micro_fields,
+        )
+        weak_context_guard = _scope_main_machine_ai_weak_veto(
+            stock, code, strategy=strategy, authority=entry_ai_submit_authority,
+            latency_gate=latency_gate, guard_name="weak_context_late_entry",
+            verdict=weak_context_guard,
         )
         if weak_context_guard.get(
             "blocked"

@@ -104,7 +104,7 @@ B0으로 비교 분모를 먼저 확정한다. B1/B2는 각각 독립 fixture·�
 1. 같은 existing target/owner generation이 유지되는 동안 삼성전자와 같은 반복 충돌을 claim 전에 defer하는 최소안을 검토한다. Main 소유의 현재 active-target snapshot을 읽고 callback의 최종 재검사를 유지한다. 영구 blacklist로 만들지 않으며 target 해제/세션·route·generation 변경 때 즉시 다시 적격 판단한다. snapshot이 오래됐거나 신원을 입증하지 못하면 종목을 제외하지 않고 기존 callback 경로를 사용한다.
 2. discovery hint와 현재 source freshness·기존 retry due를 보존한다. 중복 defer는 신규 physical slot/claim 횟수·activity/gainers 소비 quota를 차지하지 않게 하되 기존 pending result/cleanup·historical conflict receipt는 유지한다. queue 전체 snapshot을 매 dispatch 다시 해시/읽거나 추가 broker/provider 조회로 active 여부를 확인하지 않는다.
 3. 누적 후보/현재 same-route fresh·due 후보/long 필요 후보/짧은 branch 실행 가능 후보/진행/cleanup pending의 분모를 분리한다. `first_seen`, 기존 `residence_wait_since`, **현재 적격 대기의 시작**을 구별하고 재시작 carry-over와 source 나이를 따로 보고한다. 근거 없이 적격 대기 시작을 과거 first_seen으로 소급 합성하지 않는다.
-4. 모든 실제32관측이150초였다는 사실은 현재 선택 branch의 최소 이력과 연결해 설명한다. 60초 이상의 cold history가 필요한 종목을 남은 short3슬롯에 강제로 넣지 않는다. 현재5/long2·60/150초와 mixed 짧은 branch의 빠른 admission, 긴 branch 순환, activity:gainers 기존3:1 선호·market 순환을 보존한다. 긴 배정 기아가 실제 재현될 때 기존 순환 결함만 수리한다.
+4. 모든 실제32관측이150초였다는 사실은 현재 선택 branch의 최소 이력과 연결해 설명한다. 60초 이상의 cold history가 필요한 종목을 남은 short2슬롯에 강제로 넣지 않는다. 2026-10-15 사용자 확정으로 전체5/long3·60/150초와 mixed 짧은 branch의 빠른 admission, 긴 branch 순환, activity:gainers 기존3:1 선호·market 순환을 보존한다. 긴 배정 기아가 실제 재현될 때 기존 순환 결함만 수리한다.
 5. 원32 = valid no-pattern22 + source gap10 분류를 유지한다. terminal 마지막 체결 age4.53~48.97초의9건과 censor1건에 대해 packet/receive/native ingest/quiet를 기존 receipt로 비교한다. 적은 거래와 수신 장애를 구분할 수 없으면 unresolved다. stale 허용·종료 시점 임의 연장·추가 REST/구독으로 채우지 않는다.
 
 수용: 동일 discovery trace에서 active target 불변 구간의 반복 conflict dispatch가 제거되고 해제 후 정상 순환으로 복귀한다. physical lease·full branch 관측·필수 저장·원 deadline/단일 ACK 보존을 확인한다. 실제 관측 처리량/대기 개선은 별도 before/after로 측정한다. 충돌40 감소를 장기관측40개 증가로 환산하지 않는다. 비고정 ENTER/Main 편입 자연 표본이 없으면 해당 수용은 pending이다.
@@ -128,9 +128,9 @@ B0으로 비교 분모를 먼저 확정한다. B1/B2는 각각 독립 fixture·�
 ### 9.2 비교와 종료 조건
 
 - 원12시도·32관측을 재현하는 최소 frozen fixture와 충분한 입력의 정상 fixture를 분리한다. 원 응답/원 시계를 실제로 재호출하지 않는다. B0 집계 창을10분으로 유지한 실행과43분 점검 전체를 같은 분모로 비교하지 않는다.
-- 동일 baseline/candidate **교대3회**: fixed5+nonfixed5(긴2), 동일 panel·source/input rate·policy 및 COMMIT/holding/exit/account/필수 append 부하를 사용한다. B1/B2 의미 변경은 별도 fixture의 명시 delta로만 허용하고, B3/B4 성능 비교에서는 같은 소비 계약으로 고정한다.
+- 다른 성능 변경의 기존 검증은 동일 baseline/candidate **교대3회**: fixed5+nonfixed5(긴2), 동일 panel·source/input rate·policy 및 COMMIT/holding/exit/account/필수 append 부하를 사용한다. B1/B2 의미 변경은 별도 fixture의 명시 delta로만 허용하고, B3/B4 성능 비교에서는 같은 소비 계약으로 고정한다.
 - wall/CPU/RSS·worker/thread·물리 REST·WS churn·read/hash/decode bytes·lock hold/wait·Main 지연·original deadline miss·누락/중복·branch coverage·cohort 대기를 보고한다. component/local 대역 부하와 실제 전체 Main 검증을 구분한다. cold/warm 분리, 반복150초 관측 비용은 제외하지 않는다.
-- B0/B4 수리로 reader·물리 요청·worker/slot 한도가 증가하면 중단한다. 동일 전체 Main/보호 부하 비교에서 CPU/RSS/I/O/COMMIT·보호 경로 p95가 모든 pair에서 악화되면 성능 변경 발행을 보류한다. 단일 helper 비용은 별도 원가로 공개하고 전체 Main 비교를 대체하지 않는다. 전체 실행 표본이 없으면 성능 주장은 보류하며, 정확한 결과 소비·출처 보존의 검증된 계약 수리와 구분한다. 변동/귀속 불가도 개선 확정으로 표시하지 않는다. 단순 warning은 자동 거래프로세스 재기동을 뜻하지 않는다.
+- B0/B4 수리로 reader·물리 요청·worker/slot 한도가 증가하면 중단한다. 단, 2026-10-15 사용자가 확정한 장기 관측2→3개는 이 제한의 명시 예외이며 전체 physical probe5개·worker5개는 유지한다. 동일 전체 Main/보호 부하 비교에서 CPU/RSS/I/O/COMMIT·보호 경로 p95가 모든 pair에서 악화되면 성능 변경 발행을 보류한다. 단일 helper 비용은 별도 원가로 공개하고 전체 Main 비교를 대체하지 않는다. 전체 실행 표본이 없으면 성능 주장은 보류하며, 정확한 결과 소비·출처 보존의 검증된 계약 수리와 구분한다. 변동/귀속 불가도 개선 확정으로 표시하지 않는다. 단순 warning은 자동 거래프로세스 재기동을 뜻하지 않는다.
 - 임의 scope 축소·unknown→FALSE·필수 저장 생략으로 얻은 속도 개선은 실패다. B1/B2에서 명시한 계약 차이 밖의 전략/guard 변화, 중복 claim/provider/intent, 원 예산 증가, custody 침범, source freshness 허위 갱신, cleanup 누락은 즉시 수용 실패다.
 - 자연 수용은 기존 정규5분 연속3슬롯과 다음 실제 정상 attempt를 사용한다. 시행 날짜/시각은 **승인된 실제 적용 이후**로 체크리스트 owner가 정하며 지나간 슬롯을 재사용하지 않는다. small N의 p99/timeout률을 일반화하지 않는다. 자연 표본 없음은 pending이고 코드 수리 완료를 부정하거나 경제성/실주문 시험을 추가 요구하지 않는다.
 
@@ -159,3 +159,11 @@ B0으로 비교 분모를 먼저 확정한다. B1/B2는 각각 독립 fixture·�
 3쌍 고정5/비고정5 및 holding/order component 비교에서는 완료 target 방문이9번째→1번째로 바뀌고 전체12개·보호 위치가 유지됐다. helper p95는 약3.7→8.6µs로 늘었다. 이 추가 약5µs 비용을 숨기지 않으며 전체 Main CPU/I/O/guard 지연 개선은 아직 `performance_not_established`다. 실제 전체 부하가 모든 pair에서 악화되면 기존 종료 기준으로 수리 조합의 성능 변경을 재검토한다.
 
 릴리스 검증과 실제 배포 결과는 후속 [구현 리뷰](../audits/main-nonfixed-submit-bottleneck-implementation-review-2026-10-14.md)와 `data/report/main_nonfixed_submit_deployment/2026-10-14`의 봉인 자료로 기록한다. 코드 source pair·sealed prompt generation·문서 publication·실제 PID 소비·자연 성능·경제성은 각각 대사한다.
+
+
+## 13. 2026-10-15 사용자 확정 — 장기 슬롯3 및 대기 계측 연결
+
+- 장기 관측 슬롯은2→3개로 확정한다. 전체 physical probe/worker5개와60/150초 원 deadline, 종료 ACK·동일 lease 귀속, mixed 짧은 분기와 source/market 순환을 유지한다. 이는 관측 배정 한도만 변경하며 Main 보유·주문 수량 cap이나 broker 권한을 바꾸지 않는다.
+- 사용자의 지시로 이 변경을 위한 별도 적용 전 용량 비교,2대3 부하실험, 추가 승인/경제성 확인은 실행하지 않는다. §9.2의 교대 성능 비교를 이 확정 변경의 적용 조건으로 재도입하지 않는다. 요청된 코드 리뷰·보완·기능 회귀·compile·문서 parser 검증은 수행한다.
+- `probe_claim_eligibility`, `probe_residence_deferred`, active-target snapshot 상태/세대, 재시작 복원 수를 `zero_base_discovery_cycle`과 `zero_base_probe_dispatch_cycle` 양쪽에 전달한다. 현재 적격 대기시간은 dispatch 관측 기준이며 과거 first_seen으로 소급하지 않는다. 기존 PID/경로/시각과 report-only 권한을 유지한다.
+- 실행 owner는 `NonfixedDispatchReadinessReview1012`를 유지한다. 적용 후 자연 관측·Main 편입 및 실제 제출/경제성은 기존 owner에서 별도로 기록하며 이번 코드 완료를 자연 성공으로 대체하지 않는다.

@@ -532,3 +532,38 @@ def test_live_callback_snapshot_uses_completion_clock_without_renewing_claim_dea
     request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
     assert request['claim']['last_claim_epoch'] == next_boundary
     assert request['claim']['residence_deadline_epoch'] == next_boundary+60
+
+
+@pytest.mark.parametrize('panel_finished', [False, True])
+def test_scanner_publishes_scheduler_diagnostics_in_both_cycle_paths(monkeypatch, tmp_path, panel_finished):
+    from src.scanners import scalping_scanner as scanner
+    from src.engine.error_detectors import process_health
+    class StopScanner(Exception): pass
+    summary = dict(probe_requested_count=0, probe_consumer_ready=True,
+        probe_no_consumer_count=0, probe_capacity_limit=5, probe_claims_in_flight_count=3,
+        probe_timeout_count=0, stale_candidate_count=10, queue_count=20,
+        probe_claim_eligibility={'eligible_due_count': 7, 'eligible_due_wait_max_seconds': 40},
+        probe_residence_deferred={'long_slot_wait': 7},
+        probe_active_target_snapshot_status='observed',
+        probe_active_target_snapshot_generation='a'*64, queue_restored_candidate_count=18,
+        observed_new_generation_count=2, panels=[])
+    class Runtime:
+        def __init__(self, **kwargs): pass
+        def drain_results(self): return []
+        def start_scan(self, token): return False
+        def finish_scan(self): return summary if panel_finished else None
+        def dispatch_due_probes(self): return summary
+        def wait(self, seconds): raise StopScanner()
+    emitted = []
+    monkeypatch.setattr(scanner, 'ZeroBaseDiscoveryRuntime', Runtime)
+    monkeypatch.setattr(scanner, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(process_health, 'write_heartbeat', lambda *a: None)
+    monkeypatch.setattr(scanner, '_zero_base_log_event', lambda stage, **kw: emitted.append((stage, kw)))
+    with pytest.raises(StopScanner):
+        scanner.run_zero_base_scanner(token='offline', event_bus=Bus(), is_test_mode=True)
+    stage, payload = emitted[0]
+    assert stage == ('zero_base_discovery_cycle' if panel_finished else 'zero_base_probe_dispatch_cycle')
+    for key in ['probe_claim_eligibility', 'probe_residence_deferred',
+                'probe_active_target_snapshot_status', 'probe_active_target_snapshot_generation',
+                'queue_restored_candidate_count']:
+        assert payload['fields']['zero_base_'+key] == summary[key]

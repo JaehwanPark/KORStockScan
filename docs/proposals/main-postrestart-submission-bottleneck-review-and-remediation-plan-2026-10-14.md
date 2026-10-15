@@ -188,3 +188,13 @@ summary 인계 owner는 검토된 `(원 parser1ddc, owner83d8)`, `(1ddc, d487)`,
 source14 canonical CLI 재발행은 기존 final audit/final-contract가 해당 JSON의 SHA와 inode·mtime·ctime을 참조하므로 실행 전에 취소했다. `--dry-run`도 canonical 발행을 생략하지 않는다. [원천 결속](../../tmp/sentinel-integrated-postclose-20261014/cold-cli-policy-readiness-input-causal-review-v2.json)과 [실제 인계 호출 경로](../../tmp/sentinel-integrated-postclose-20261014/audit-digest-deployment-callgraph-review.json)를 검토하고 원 감사·보고서·영수증을 보존했다. 계산 코드 digest 차이를 이유로 완료 감사나 기계·보조 producer를 재생성하지 않았다. 선택적 과거130초 build-only 진단도 실행하지 않았으며 준비 성공이나342초 원천 복구를 실제 보고서130초 수용으로 기록하지 않는다.
 
 설치된 cron과 router는 **10/15 05:35 finalization, 07:35 PREOPEN, 07:55 Main 정상 기동**을 새 선택본으로 해석했고 release-set 검증도 PASS했다. Main PID·restart flag·startup hold는 없으며 당일 canonical bootstrap은 정상 PREOPEN의 소유로 남긴다. 실제 기동·정책 소비는 `DirectFamilyPreopenPolicyHandoff`, 08:00/08:05/08:10 자연3슬롯과 기존130/40/180초 수용은 `NonfixedDispatchReadinessReview1012`, 자연 AI timeout·정상 제출 및 비용 후 경제성은 `AuxiliaryCircuitRecoveryRepair1012`의 기존 OPEN Acceptance/History에서 확인한다. [10/15 체크리스트](../checklists/2026-10-15-stage2-todo-checklist.md)는 준비 검증 후 bytes를 보존했으며 새 owner·cron은 만들지 않았다. 미래 실행은 due 전까지 `not_yet_due`이고 현재 준비 검증으로 자연 실행 성공을 대신하지 않는다.
+
+
+## 14. 2026-10-15 사용자 지시 — Main 승인 타점의 약세 veto 범위 정정
+
+소유자는 `AuxiliaryCircuitRecoveryRepair1012`다. 기존 operator enable lock의 원본과 적용 이력은 보존하며, 아래 동일 Main 승인 범위에서 두 검사를 참고 문맥으로 한정하는 이번 사용자 지시가 기존 광역 약세 veto 범위를 대체한다.
+
+1. 새 이력에는 실제 gate disposition을 저장한다. `risk_context_only`는 별도의 bounded context history에 보존해 실제 source/baseline 차단 이력을 밀어내지 않게 한다. 기존 이력은 삭제/소급 재분류하지 않는다. 후단 약세 검사의 집계는 확인된 실제 차단만 사용하며 명시적 참고 문맥과 분류 불명 이력은 별도 수로 보고한다.
+2. 현재 Main 제출 호출에 결속된 기계 `ENTER_NOW`, captured hash·evaluation/revision 일치, 유효한 AI screen·effective `PASS`, 신뢰된 현재 BUY trace/snapshot이 모두 일치할 때 `real_weak_pullback`과 `weak_context_late_entry`의 추가 alpha veto를 `risk_context_only`로 기록한다. 단순 stock 문자열이나 다른 시도의 PASS는 이 범위를 열지 않는다. CAUTION/VETO·invalid response·sim/probe·다른 owner/시도는 기존 검사 범위를 유지한다.
+3. weak pullback의 실제 micro source 결손은 계속 차단한다. DANGER, stale/conflict, 원 native deadline/최종 유효성, 가격 drift, 계좌·주문·수량·cooldown·보호 exit는 기존 경로에 남는다. AI 입력·응답·보조평가 membership·metrics와 provider 선택을 바꾸지 않는다.
+4. 같은 시도의 참고 문맥 전환 로그는 원 would-block reason, guard, evaluation/hash/AI trace를 보존한다. 코드 회귀와 실제 자연 제출·broker receipt·비용 후 경제성은 별도이며 검증용 주문/AI 호출은 생성하지 않는다. 장기 슬롯 변경과 계측 연결은 [비고정 계획 §13](main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md#13-2026-10-15-사용자-확정--장기-슬롯3-및-대기-계측-연결)을 따른다.

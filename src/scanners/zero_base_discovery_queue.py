@@ -22,6 +22,7 @@ RESULTS = {
     "pattern_not_matched", "observation_incomplete",
 }
 ACTIONS = {"ENTER_NOW", "RECHECK", "BLOCK"}
+MAX_LONG_PROBES = 3  # Operator-approved allocation within the five physical probes.
 
 
 @dataclass
@@ -218,7 +219,7 @@ class DiscoveryQueue:
         self.residence_deferred = {}
         while len(ready) < limit:
             for rows in ready_by_cohort.values():
-                if long_used < 2:
+                if long_used < MAX_LONG_PROBES:
                     # Mixed branches retain short admission. Rotate scarce
                     # long observation to candidates that previously missed it.
                     rows.sort(key=lambda row: (-row.long_residence_deferred_count,
@@ -232,7 +233,7 @@ class DiscoveryQueue:
                     needed = requirements[key].get('minimum_seconds')
                     valid_requirement = type(needed) in (float, int) and isfinite(needed) and needed >= 0
                     if (not valid_requirement or needed >= 150
-                            or (needed >= 60 and long_used >= 2)):
+                            or (needed >= 60 and long_used >= MAX_LONG_PROBES)):
                         reason = ('requirement_unobservable' if not valid_requirement
                                   else 'beyond_residence_limit' if needed >= 150 else 'long_slot_wait')
                         row.residence_wait_since_epoch = row.residence_wait_since_epoch or now_epoch
@@ -259,7 +260,7 @@ class DiscoveryQueue:
             needed = requirements[(row.code, row.route)]['minimum_seconds']
             full = requirements[(row.code, row.route)].get('full_input_requirement_seconds', needed)
             wants_long = type(full) in (int, float) and isfinite(full) and 60 <= full < 150
-            residence = 150 if long_used < 2 and (needed >= 60 or wants_long or residence_requirements is None) else 60
+            residence = 150 if long_used < MAX_LONG_PROBES and (needed >= 60 or wants_long or residence_requirements is None) else 60
             if wants_long:
                 row.long_residence_deferred_count = (0 if residence > 60
                     else row.long_residence_deferred_count + 1)
