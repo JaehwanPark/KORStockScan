@@ -368,7 +368,37 @@ class ReadObjects:
         return json.loads(raw)
 
 
-def observations(data_root, source_date):
+def observer_snapshot_state(data_root, receipt):
+    """Read only the immutable observer evidence captured by this night owner."""
+    path = Path(receipt["path"])
+    directory = (namespace(data_root) / "observer_receipts").resolve()
+    if path.resolve().parent != directory or not receipts_current([receipt]):
+        raise ValueError("observer_snapshot_receipt_invalid")
+    snapshot = check_seal(read_json(path, limit=1024 * 1024))
+    if (
+        not isinstance(snapshot.get("source_raw"), str)
+        or snapshot.get("source_path")
+        != str(
+            Path(data_root).resolve().parent / "tmp/market_weakness_observer_state.json"
+        )
+        or any(snapshot.get(k) != v for k, v in R.AUTH.items())
+    ):
+        raise ValueError("observer_snapshot_contract_invalid")
+    raw = snapshot["source_raw"].encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    if (
+        snapshot.get("schema") != R.VERSION + ":observer_snapshot"
+        or snapshot.get("source_sha256") != digest
+        or path.name != digest + ".json"
+    ):
+        raise ValueError("observer_snapshot_binding_invalid")
+    state = strict_json(raw)
+    if not isinstance(state, dict):
+        raise ValueError("observer_snapshot_state_invalid")
+    return state
+
+
+def observations(data_root, source_date, *, observer_snapshot=None):
     directory = Path(data_root) / "report/market_weakness_observations" / source_date
     result, receipts, gaps = [], [], CounterDict()
     paths = sorted(directory.glob("*.json"))
@@ -400,9 +430,22 @@ def observations(data_root, source_date):
     state_path = (
         Path(data_root).resolve().parent / "tmp/market_weakness_observer_state.json"
     )
-    try:
-        state = read_json(state_path, {}, limit=128 * 1024)
-    except (ValueError, TypeError):
+    state_raw = None
+    if observer_snapshot:
+        state = observer_snapshot_state(data_root, observer_snapshot)
+    else:
+        try:
+            before = stat_receipt(state_path)
+            with state_path.open("rb") as handle:
+                state_raw = handle.read(128 * 1024 + 1)
+            if len(state_raw) > 128 * 1024:
+                raise ValueError("observer_state_size_limit")
+            if before != stat_receipt(state_path):
+                raise Deferred("observer_state_changed_during_capture")
+            state = strict_json(state_raw)
+        except (FileNotFoundError, ValueError, TypeError):
+            state = {}
+    if not isinstance(state, dict):
         state = {}
     latch = state.get("market_weakness", {})
     health = state.get("market_weakness_observer_health", {})
@@ -438,8 +481,27 @@ def observations(data_root, source_date):
                 o["observed_source_delay_sec"] = (
                     checked - R.timestamp(o["as_of"]).timestamp()
                 )
-    if any(o.get("availability_receipt_verified") for o in result):
-        receipts.append(stat_receipt(state_path))
+    if observer_snapshot:
+        # Keep the same historical evidence even if its observation was removed.
+        # Observation additions/removals still invalidate the daily generation.
+        receipts.append(observer_snapshot)
+    elif any(o.get("availability_receipt_verified") for o in result):
+        digest = hashlib.sha256(state_raw).hexdigest()
+        snapshot_path = namespace(data_root) / "observer_receipts" / (digest + ".json")
+        atomic(
+            snapshot_path,
+            R.seal(
+                dict(
+                    schema=R.VERSION + ":observer_snapshot",
+                    source_path=str(state_path),
+                    source_sha256=digest,
+                    source_raw=state_raw.decode("utf-8"),
+                    **R.AUTH,
+                )
+            ),
+            immutable=True,
+        )
+        receipts.append(stat_receipt(snapshot_path))
     return R.reconstruct_latches(result), receipts, dict(gaps)
 
 
@@ -641,6 +703,11 @@ def cursor_current(data_root, cursor):
     )
     if paths != old or not receipts_current(d.get("observations", [])):
         return False
+    if d.get("observer_snapshot"):
+        try:
+            observer_snapshot_state(data_root, d["observer_snapshot"])
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
     _, listing = listing_lookup(data_root, day)
     return (
         listing == d.get("listing")
@@ -803,9 +870,18 @@ def replay_records(
                 yield output, next_position, next_position[0] == len(parts), dict(gaps)
                 gaps = CounterDict()
             if not records:
-                yield [], [pi + 1, 0], pi + 1 == len(parts), {}
+                # Empty replay points do not establish an empty market. Preserve
+                # upstream row exclusions instead of silently losing label ancestry.
+                gaps.add("replay_empty_partition")
+                issues = ref.get("issues", {})
+                if not isinstance(issues, dict):
+                    raise ValueError("replay_upstream_issues_invalid")
+                for reason, count in issues.items():
+                    if type(count) is int and count > 0:
+                        gaps.add("replay_upstream_" + reason, count)
+                yield [], [pi + 1, 0], pi + 1 == len(parts), dict(gaps)
         if not parts:
-            yield [], [0, 0], True, {}
+            yield [], [0, 0], True, {"replay_source_date_partition_missing": 1}
     finally:
         store.close()
 
@@ -1445,10 +1521,6 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
     root = namespace(data_root)
     path = root / source_date / "cursor.json"
     prior = read_json(path, {})
-    obs, obs_receipts, obs_gaps = observations(data_root, source_date)
-    obs = R.ObservationIndex(obs)
-    listing, listing_receipt = listing_lookup(data_root, source_date)
-    sources = source_plan(data_root, source_date)
     baseline = read_json(
         Path(data_root) / "source_quality/clean_baseline_policy.json", {}
     )
@@ -1459,10 +1531,28 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
     )
     if source_date < start_date:
         raise ValueError("archive_date_forbidden_for_research")
+    obs, obs_receipts, obs_gaps = observations(
+        data_root,
+        source_date,
+        observer_snapshot=prior.get("source_descriptor", {}).get("observer_snapshot"),
+    )
+    obs = R.ObservationIndex(obs)
+    listing, listing_receipt = listing_lookup(data_root, source_date)
+    sources = source_plan(data_root, source_date)
+    if not sources:
+        obs_gaps["retained_decision_sources_unavailable"] = 1
     descriptor = dict(
         source_date=source_date,
         sources=sources,
         observations=obs_receipts,
+        observer_snapshot=next(
+            (
+                r
+                for r in obs_receipts
+                if Path(r["path"]).parent == (root / "observer_receipts").resolve()
+            ),
+            None,
+        ),
         listing=listing_receipt,
         dependencies=dependencies(data_root, source_date),
         code=code_hash(),
@@ -2299,6 +2389,11 @@ def discover_dates(data_root, config):
             "????-??-??"
         )
     )
+    # A retired/missing input still needs one explicit source-gap generation.
+    # Otherwise its old-code cursor can keep migration pending indefinitely.
+    dates.update(
+        p.parent.name for p in namespace(data_root).glob("????-??-??/cursor.json")
+    )
     last = datetime.now(R.KST).date().isoformat()
     return sorted(
         d
@@ -2568,6 +2663,57 @@ def verify_installed_calendar(config):
         return False
 
 
+def select_source_date(data_root, dates, *, night, check_preflight):
+    """Rotate source repairs before downstream retries; persist across nights.
+
+    A notification waiting for migration must not monopolize the oldest/latest
+    slots that the migration itself needs. Reserve the rotation before starting
+    the worker so a crash or permanently unavailable date cannot starve peers.
+    Caller owns worker.lock and has already reserved the night budget.
+    """
+    dates = sorted(d for d in set(dates) if d <= night)
+    if not dates:
+        return None
+    root = namespace(data_root)
+    repairs, phases = [], []
+    for day in dates:
+        check_preflight()
+        cursor = read_json(root / day / "cursor.json", {})
+        if cursor.get("status") not in {
+            "completed",
+            "completed_with_source_gaps",
+            "valid_empty",
+        } or not cursor_current(data_root, cursor):
+            repairs.append(day)
+        elif unfinished_phase(data_root, day, cursor):
+            phases.append(day)
+    check_preflight()
+    lane, candidates = (
+        ("source", repairs)
+        if repairs
+        else ("phase", phases) if phases else ("refresh", dates[-1:])
+    )
+    path = root / "schedule_cursor.json"
+    rotation = read_json(path, {})
+    if rotation:
+        check_seal(rotation)
+    previous = rotation.get("last_" + lane + "_date", "")
+    day = next((d for d in candidates if d > previous), candidates[0])
+    rotation.update({"last_" + lane + "_date": day})
+    atomic(
+        path,
+        R.seal(
+            dict(
+                rotation,
+                schema=R.VERSION + ":schedule_cursor",
+                night_id=night,
+                **R.AUTH,
+            )
+        ),
+    )
+    return day
+
+
 def scheduled(data_root):
     started = time.monotonic()
     root = namespace(data_root)
@@ -2657,30 +2803,13 @@ def scheduled(data_root):
             check_preflight()
             if not dates:
                 return preflight_status("valid_empty", "no_retained_source_date")
-            # Alternate latest and pending oldest; preserve date across midnight.
-            pending = []
-            for day in dates:
-                check_preflight()
-                c = read_json(root / day / "cursor.json", {})
-                if (
-                    c.get("status")
-                    not in {
-                        "completed",
-                        "completed_with_source_gaps",
-                        "valid_empty",
-                    }
-                    or not cursor_current(data_root, c)
-                    or unfinished_phase(data_root, day, c)
-                ):
-                    pending.append(day)
-                check_preflight()
+            day = select_source_date(
+                data_root, dates, night=night, check_preflight=check_preflight
+            )
+            if day is None:
+                return preflight_status("valid_empty", "no_closed_source_date")
         except Deferred as exc:
             return preflight_status("deferred_resource_or_window", str(exc))
-        day = (
-            (pending[-1] if state["attempts"] % 2 else pending[0])
-            if pending
-            else dates[-1]
-        )
         state["source_date"] = day
         atomic(p, state)
         import uuid

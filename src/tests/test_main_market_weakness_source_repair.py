@@ -1233,3 +1233,302 @@ def test_verified_axis_without_candidate_keeps_actual_capability_reason(
     assert frozen["scopes"][r["scope_key"]]["machine_reason"] == reason
     assert a.comparison("g")["capability_by_scope"][r["scope_key"]]["machine"] == reason
     a.close()
+
+
+def test_source_rotation_precedes_notification_waiters_and_survives_nights(
+    tmp_path, monkeypatch
+):
+    days = [
+        "2026-09-29",
+        "2026-09-30",
+        "2026-10-02",
+        "2026-10-06",
+        "2026-10-07",
+        "2026-10-08",
+        "2026-10-12",
+        "2026-10-13",
+        "2026-10-14",
+    ]
+    root = A.namespace(tmp_path)
+    for day in days:
+        A.atomic(root / day / "cursor.json", dict(source_date=day, status="completed"))
+    current = {days[0], days[-1]}
+    monkeypatch.setattr(A, "cursor_current", lambda _, c: c["source_date"] in current)
+    monkeypatch.setattr(A, "unfinished_phase", lambda *a: True)
+    selected = []
+    for _ in range(2):
+        for night in ("2026-10-14", "2026-10-15"):
+            selected.extend(
+                A.select_source_date(
+                    tmp_path, days, night=night, check_preflight=lambda: None
+                )
+                for _ in range(4)
+            )
+    # Even permanently failing repairs are visited fairly, without a midnight reset.
+    assert selected[:14] == days[1:-1] * 2
+    current.update(days)
+    assert [
+        A.select_source_date(
+            tmp_path, days, night="2026-10-15", check_preflight=lambda: None
+        )
+        for _ in days
+    ] == days
+
+
+def test_source_rotation_skips_open_next_day_and_has_no_outside_budget_write(tmp_path):
+    root = A.namespace(tmp_path)
+    assert (
+        A.select_source_date(
+            tmp_path, ["2026-10-15"], night="2026-10-14", check_preflight=lambda: None
+        )
+        is None
+    )
+    assert not root.exists()
+
+    def expired():
+        raise A.Deferred("budget_expired")
+
+    with pytest.raises(A.Deferred, match="budget_expired"):
+        A.select_source_date(tmp_path, [DAY], night=DAY, check_preflight=expired)
+    assert not root.exists()
+
+
+def test_missing_retained_day_is_discovered_and_closes_as_gap(tmp_path, monkeypatch):
+    root = A.namespace(tmp_path)
+    A.atomic(root / DAY / "cursor.json", dict(source_date=DAY, status="completed"))
+    assert DAY in A.discover_dates(tmp_path, dict(evidence_start_date="2026-09-29"))
+    monkeypatch.setattr(A, "listing_lookup", lambda *a: (lambda _: "KOSPI", None))
+    result = A.process_date(tmp_path, DAY, stop_at=time.monotonic() + 5)
+    cursor = A.read_json(root / DAY / "cursor.json")
+    assert result["status"] == "completed_with_source_gaps"
+    assert cursor["gaps"]["retained_decision_sources_unavailable"] == 1
+    assert A.cursor_current(tmp_path, cursor)
+    assert not A.cumulative(tmp_path, stop_at=time.monotonic() + 5)["migration_pending"]
+
+
+def test_outside_night_window_never_advances_source_rotation(tmp_path, monkeypatch):
+    root = A.namespace(tmp_path)
+    A.atomic(root / "installation.json", R.seal(dict(enabled=True)))
+    path = root / "schedule_cursor.json"
+    A.atomic(path, R.seal(dict(last_source_date=DAY)))
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    monkeypatch.setattr(A, "verify_installed_calendar", lambda _: True)
+    monkeypatch.setattr(
+        A, "night_window", lambda *a: (None, None, "outside_night_window")
+    )
+    monkeypatch.setattr(
+        A, "discover_dates", lambda *a: pytest.fail("intraday discovery")
+    )
+    assert A.scheduled(tmp_path)["reason"] == "outside_night_window"
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+def observer_state_fixture(data, obs):
+    state = dict(
+        market_weakness=dict(
+            last_source_gate=dict(passed=True),
+            last_observation_id=obs["observation_id"],
+            last_observation_as_of=obs["as_of"],
+            market_states=dict(KOSPI=dict(active=True)),
+        ),
+        market_weakness_observer_health=dict(
+            ready=True,
+            checked_at_ts=datetime.fromisoformat(obs["as_of"]).timestamp() + 1,
+            last_healthy_observation_id=obs["observation_id"],
+        ),
+    )
+    path = data.parent / "tmp/market_weakness_observer_state.json"
+    A.atomic(path, state)
+    return path
+
+
+def test_frozen_observer_evidence_survives_live_advance_and_preserves_raw_bytes(
+    tmp_path, monkeypatch
+):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+
+    data, _, obs_path = setup_sources(tmp_path, monkeypatch)
+    state_path = observer_state_fixture(data, A.read_json(obs_path))
+    original = state_path.read_bytes()
+    first = A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    receipt = cursor["source_descriptor"]["observer_snapshot"]
+    snapshot = A.check_seal(A.read_json(receipt["path"]))
+    assert snapshot["source_raw"].encode() == original
+    assert snapshot["source_sha256"] == hashlib.sha256(original).hexdigest()
+    assert str(state_path) not in {
+        r["path"] for r in cursor["source_descriptor"]["observations"]
+    }
+    A.atomic(state_path, dict(new_day="2026-10-09"))
+    assert A.cursor_current(data, cursor)
+    second = A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    assert second["delta"] == 0 and second["generation"] == first["generation"]
+    obs, _, _ = A.observations(data, DAY, observer_snapshot=receipt)
+    assert obs[0]["availability_receipt_verified"] is True
+    # Retained market-source edits still invalidate the day independently.
+    A.atomic(obs_path, observation(DAY + "T09:01:00+09:00"))
+    assert not A.cursor_current(data, cursor)
+    assert (
+        A.process_date(data, DAY, stop_at=time.monotonic() + 5)["generation"]
+        != first["generation"]
+    )
+
+
+@pytest.mark.parametrize("mutation", ["corrupt", "remove", "outside_namespace"])
+def test_frozen_observer_corruption_never_falls_back_to_live(tmp_path, mutation):
+    data = tmp_path / "data"
+    obs = observation()
+    A.atomic(data / "report/market_weakness_observations" / DAY / "one.json", obs)
+    observer_state_fixture(data, obs)
+    _, receipts, _ = A.observations(data, DAY)
+    receipt = receipts[-1]
+    path = Path(receipt["path"])
+    if mutation == "remove":
+        path.unlink()
+    elif mutation == "corrupt":
+        A.atomic(path, {"invalid": True})
+    else:
+        receipt = A.stat_receipt(
+            data.parent / "tmp/market_weakness_observer_state.json"
+        )
+    with pytest.raises(ValueError, match="observer_snapshot_receipt_invalid"):
+        A.observations(data, DAY, observer_snapshot=receipt)
+
+
+def test_archive_rejection_precedes_observer_capture(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        A, "observations", lambda *a, **k: pytest.fail("archive capture")
+    )
+    with pytest.raises(ValueError, match="archive_date_forbidden"):
+        A.process_date(tmp_path, "2026-09-28", stop_at=time.monotonic() + 5)
+    assert not A.namespace(tmp_path).exists()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("source_raw", None), ("source_path", "/unrelated"), ("runtime_effect", True)],
+)
+def test_frozen_observer_contract_damage_is_explicit(tmp_path, field, value):
+    data = tmp_path / "data"
+    obs = observation()
+    A.atomic(data / "report/market_weakness_observations" / DAY / "one.json", obs)
+    observer_state_fixture(data, obs)
+    _, receipts, _ = A.observations(data, DAY)
+    path = Path(receipts[-1]["path"])
+    snapshot = A.read_json(path)
+    snapshot[field] = value
+    A.atomic(path, R.seal(snapshot))
+    with pytest.raises(ValueError, match="observer_snapshot_contract_invalid"):
+        A.observations(data, DAY, observer_snapshot=A.stat_receipt(path))
+
+
+@pytest.mark.parametrize("mode", ["missing", "resolved", "mixed"])
+def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome(
+    tmp_path, monkeypatch, mode
+):
+    resolved = mode != "missing"
+    data = tmp_path / "data"
+    bundle, _ = source_bundle(data)
+    body, t = native_capture()
+    event = body["source"]["assessment"]["event"]
+    records = (
+        [
+            dict(
+                day=DAY,
+                symbol=event["symbol"],
+                scope="samsung|REGULAR|ALL|SOR",
+                opportunity_key="canonical",
+                native_alias="canonical",
+                snapshot_obj=2,
+                outcome=dict(status="WIN", delay_sec=10),
+            )
+        ]
+        if resolved
+        else []
+    )
+    normalized = data / "normalized.json"
+    normalized.write_text("retained source")
+    report = R.seal(
+        dict(
+            schema="continuous_reversal_operating_comparison_v1",
+            source_date=DAY,
+            status="completed",
+            label_contract=R.LABEL,
+            parent_bundle_sha256=bundle["bundle_sha256"],
+            partitions=[
+                dict(
+                    normalized_source=dict(
+                        day=DAY,
+                        path=str(normalized),
+                        sha256=A.file_hash(normalized),
+                        issues={} if resolved else dict(source_epoch_unverified=25),
+                    ),
+                    records_object=1,
+                    records_sha256=R.digest(records),
+                )
+            ],
+        )
+    )
+    if mode == "mixed":
+        report["partitions"].append(
+            dict(
+                normalized_source=dict(
+                    day=DAY,
+                    path=str(normalized),
+                    sha256=A.file_hash(normalized),
+                    issues=dict(source_epoch_unverified=25),
+                ),
+                records_object=3,
+                records_sha256=R.digest([]),
+            )
+        )
+        report = R.seal(report)
+    A.atomic(
+        data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json",
+        report,
+    )
+
+    class Reader:
+        receipts = {}
+
+        def __init__(self, *a):
+            pass
+
+        def get(self, oid):
+            if oid == 3:
+                return []
+            return records if oid == 1 else [event, None]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(A, "ReadObjects", Reader)
+    monkeypatch.setattr(A, "listing_lookup", lambda *a: (lambda _: "KOSPI", None))
+    write_gzip(
+        data / "ai_decision_payloads" / f"ai_decision_payloads_{DAY}.jsonl.gz",
+        (json.dumps(body) + "\n").encode(),
+    )
+    write_gzip(
+        data / "ai_decision_trace" / f"ai_decision_trace_{DAY}.jsonl.gz",
+        (json.dumps(t) + "\n").encode(),
+    )
+    A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    daily = A.check_seal(A.read_json(cursor["daily_path"]))
+    natural = [
+        r
+        for r in A.projection_rows(cursor["partitions"])
+        if r["decision_origin"] != "confirmation_replay"
+    ]
+    assert len(natural) == 1 and natural[0]["outcome"] == ("W" if resolved else "U")
+    if resolved:
+        assert natural[0]["label_binding"] == "exact_event_time_actual_ask"
+    if mode == "resolved":
+        assert "replay_empty_partition" not in daily["input_exclusions"]
+    else:
+        assert daily["input_exclusions"]["replay_empty_partition"] == 1
+        assert (
+            daily["input_exclusions"]["replay_upstream_source_epoch_unverified"] == 25
+        )
+        terminal = A.check_seal(A.read_json(cursor["terminal_path"]))
+        assert terminal["gaps"] == daily["input_exclusions"]
