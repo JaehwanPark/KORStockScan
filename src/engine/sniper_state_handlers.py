@@ -49446,6 +49446,7 @@ def _resolve_watching_state_change_refresh(
     pending_source = (stock or {}).get(MACHINE_SOURCE_RECOVERY_KEY)
     source_now = now_ts
     source_refresh = None
+    fixed_watch_source_retry = False
     if isinstance(pending_source, dict):
         source_now = time.time()
         source_refresh = machine_source_recovery_refresh(stock, source_ws, now=source_now)
@@ -49471,11 +49472,19 @@ def _resolve_watching_state_change_refresh(
                     allowed=False, suppress_normal_refresh=True,
                     reason="machine_source_wait_completed_decision_cooldown",
                 )
-            return source_refresh
+            if not (source_refresh.get("allowed")
+                    and main_fixed_watch.is_fixed_watch(stock)):
+                return source_refresh
+            # Fresh source permits a new calculation, but fixed-watch async
+            # admission still requires a newly selected, valid native claim.
+            fixed_watch_source_retry = True
     if isinstance(ws_data, dict) and isinstance(stock, dict):
         from src.engine.scalping.continuous_reversal import current_snapshot
         from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
-        item=(ws_data.get('last_realtime_type_item') or {}).get('0B')
+        # Recovery validated the lease's exact tape/quote partition. Aggregate
+        # metadata can still describe an older or different registered item.
+        item = (pending_source['item'] if fixed_watch_source_retry else
+                (ws_data.get('last_realtime_type_item') or {}).get('0B'))
         session=stock.get('market_session_bucket') or ws_data.get('market_session_bucket') or ws_data.get('session_bucket')
         try:
             from src.engine.scalping.reversal_evaluation_context import prepare
@@ -49511,13 +49520,22 @@ def _resolve_watching_state_change_refresh(
             if snapshot and stock.get('_continuous_reversal_last_requested_id')!=snapshot[0]['event_id']:
                 if family:
                     stock['_continuous_reversal_pending_claim']=claim
-                    return dict(allowed=True,reason='continuous_reversal_first_uptick',
-                                signature=_build_watching_refresh_signature(ws_data),
-                                event_id=snapshot[0]['event_id'],decision_authority='machine_evaluation_only',
-                                actual_order_submitted=False,broker_order_forbidden=True)
+                    return {
+                        **(source_refresh if fixed_watch_source_retry else {}),
+                        'allowed': True,
+                        'reason': ('machine_source_fresh_retry' if fixed_watch_source_retry
+                                   else 'continuous_reversal_first_uptick'),
+                        'signature': _build_watching_refresh_signature(ws_data),
+                        'event_id': snapshot[0]['event_id'],
+                        'decision_authority': 'machine_evaluation_only',
+                        'actual_order_submitted': False, 'broker_order_forbidden': True,
+                    }
         except (ValueError,TypeError,KeyError,OSError) as exc:
             from src.engine.monitoring.runtime_performance import failure
             failure('policy_refresh', type(exc).__name__ + ':' + str(exc))
+    if fixed_watch_source_retry:
+        return {**source_refresh, "allowed": False, "suppress_normal_refresh": True,
+                "reason": "machine_source_wait_native_signal"}
     prior_machine = (stock or {}).get('last_watching_ai_machine_primary_fields') or {}
     terminal = (stock or {}).get('_native_entry_terminal_decision')
     if (str(prior_machine.get('entry_mechanistic_policy_version') or '').startswith('continuous_reversal_policy_v')
