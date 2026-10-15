@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-15`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 17:49 최종화 stale 경보의 내부 원인은 오늘 보유 투표 append와 역사적 원천 검증의 읽기 경합으로 재현했다. native writer shared lock 및 동일 inode 성장의 원 prefix/후속 날짜 재검증으로 수리하며, 원 strict/controller/정책은 재생성하지 않는다. 최종 회귀2,089개 PASS; 기존 승인 범위의 배포·현재 PID·정규 cron/artifact 수용은 [원인 수리 감사](../audits/main-finalization-live-vote-read-race-repair-2026-10-15.md)에 기록한다.
   - 최종3803938c7 ordered 배포17:43:44 PASS, PID2527556/start11769546.17:47:02 정규 detector 실패0·현재 observer 동일 run/health 소비·장후 인계 done/findings0, 보유3종목 원천 관측 재개와 기존 수동 이관 유지 확인. 경합/receipt 오류 추가0, 원 정책·PREOPEN·10/16 누적 대기 bytes 불변. 원천 부족·기존 holding stale 경고와 전체 자연·경제성 수용은 기존 OPEN 범위로 남긴다.
   - 17:30:32 기존 PID의 보유 AI 문맥 사전 순회 경합을 추가 수리한다. shared stock을 공통 잠금 아래 한 번 복사해 일관된 원천을 읽으며, 실제 추가·삭제4경우 재현 후 관련 회귀2,652개 PASS. observer df2afffa7 이후 통합 후속본의 ordered 전환·보유 자연 관측·정규 detector 소비는 [경합 수리 감사](../audits/main-holding-context-dictionary-race-repair-2026-10-15.md)로 확인한다.
   - 17:11 제출 observer 경보의 native 필수 입력 부족 미분류를 수리한다. 라온시큐어042510 두 원본의 exact receipt/readiness를 검증해 부족 상태를 경고로 보존하며 평가·원천 충족 건수는 늘리지 않는다. 회귀2,386개 및 고정 구간 재생 PASS. 기존 승인 범위의 ordered 배포와 정규 동일 run 소비는 [수리 감사](../audits/main-submission-observer-native-feature-gap-repair-2026-10-15.md)로 확인한다. 원천·AI→제출 자연 수용은 기존 NonfixedDispatchReadinessReview1012/AuxiliaryCircuitRecoveryRepair1012에 남긴다.

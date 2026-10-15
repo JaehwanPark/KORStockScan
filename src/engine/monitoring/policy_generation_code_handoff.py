@@ -21,6 +21,9 @@ from src.engine.monitoring import policy_generation_validation as validation
 # The holding-context snapshot successor changes only the source-only observer's
 # concurrent reads. Rising/holding require fresh fixtures for the new bytes.
 # Review: docs/audits/main-holding-context-dictionary-race-repair-2026-10-15.md.
+# The carried-stop reader now locks future-only vote snapshots; the holding
+# capability remains bound to a fresh exact-generation fixture.
+# Review: docs/audits/main-finalization-live-vote-read-race-repair-2026-10-15.md.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
@@ -33,7 +36,7 @@ REVIEWED_SUCCESSORS = {
         '527117df62523777584ca57d2588a2061e9867f44a40c40b7deaac3fca498046'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '11b146f51994ccfec37dc15ebe2d9b7b797242c2f2fcd162170f4c5ac19e0715'),
+        'd0d3e2fbad9315f7001566d2c1fdd0a4f27754dc78dd47b10a2050bb3b31d702'),
 }
 
 

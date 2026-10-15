@@ -199,6 +199,42 @@ def capture_vote_watch_binding(root, day):
 
 
 def _future_unconsumed_vote_tail(root, day, path, row):
+    """Read a future-only snapshot under the native append writer's lock."""
+    import fcntl
+    import os
+    import stat
+    if (path.parent != Path(root)/'runtime/holding_path_votes' or path.suffix != '.jsonl'
+            or len(path.stem) != 64 or any(c not in '0123456789abcdef' for c in path.stem)):
+        raise ValueError('stop_vote_source_set_changed')
+    lock_path = Path(str(path)+'.lock')
+    fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as lock:
+        identity = os.fstat(lock.fileno())
+        if not stat.S_ISREG(identity.st_mode):
+            raise ValueError('stop_vote_writer_lock_invalid')
+        deadline = time.monotonic()+0.25
+        while True:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ValueError('stop_vote_writer_busy')
+                time.sleep(0.005)
+        def same_lock():
+            current = lock_path.lstat()
+            return (stat.S_ISREG(current.st_mode)
+                    and (current.st_dev,current.st_ino)==(identity.st_dev,identity.st_ino))
+        try:
+            if not same_lock():raise ValueError('stop_vote_writer_lock_changed')
+            result = _future_unconsumed_vote_tail_locked(root, day, path, row)
+            if not same_lock():raise ValueError('stop_vote_writer_lock_changed')
+            return result
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _future_unconsumed_vote_tail_locked(root, day, path, row):
     """Partition a later observation tail; never attest unconsumed old bytes.
 
     Only carried policies with no consumed vote sources may use this check.
@@ -302,8 +338,19 @@ def verify_vote_watch_binding(root, day, binding, *, future_unconsumed=False):
             raise ValueError('stop_vote_compressed_content_changed')
     if files != {k:v for k,v in _vote_watch_files(root, day).items() if not is_lock(k)}:
         raise ValueError('stop_vote_source_set_changed')
-    if any(observed[key] != list(source_stat(path.stat())) for key, path in files.items()):
-        raise ValueError('stop_vote_source_changed_during_read')
+    for key, path in files.items():
+        current = list(source_stat(path.lstat()))
+        if observed[key] == current:
+            continue
+        if (future_unconsumed and path.parent == Path(root)/'runtime/holding_path_votes'
+                and observed[key][:2] == current[:2] and current[2] > observed[key][2]):
+            # A later unconsumed append does not invalidate a historical carry.
+            # Recheck the original prefix AND every later row under the native
+            # writer lock once. These are per-file snapshots, not a global freeze
+            # of live observations. Consumed/full-publication sources stay strict.
+            _future_unconsumed_vote_tail(root, day, path, binding.get(key))
+        else:
+            raise ValueError('stop_vote_source_changed_during_read')
 
 
 def baseline(root, target):

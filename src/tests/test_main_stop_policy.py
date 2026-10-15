@@ -1098,6 +1098,119 @@ def test_vote_tail_cannot_relax_consumed_source_or_incomplete_original(tmp_path)
     path.write_bytes(_later_vote_bytes('2026-10-12').rstrip(b'\n'))
     bound=post.capture_vote_watch_binding(tmp_path,'2026-10-12')
     with path.open('ab') as out:out.write(_later_vote_bytes())
+    path.with_suffix('.jsonl.lock').touch()
     with pytest.raises(ValueError,match='boundary_invalid'):
         post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound,future_unconsumed=True)
     with pytest.raises(ValueError):post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound)
+
+
+@pytest.mark.parametrize('new_file', [False, True])
+@pytest.mark.parametrize('damage', [None, 'past', 'prefix', 'replace'])
+def test_carried_vote_revalidates_append_between_file_read_and_census_end(tmp_path, monkeypatch, new_file, damage):
+    import fcntl
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    path=path_vote_store_path(tmp_path,'record:91');path.parent.mkdir(parents=True)
+    original=_later_vote_bytes('2026-10-12')
+    if not new_file:path.write_bytes(original)
+    bound=post.capture_vote_watch_binding(tmp_path,'2026-10-12')
+    with path.open('ab') as out:out.write(_later_vote_bytes())
+    lock=path.with_suffix('.jsonl.lock');lock.touch()
+    real=post._vote_watch_files;calls=0
+    def concurrent_append(root, day):
+        nonlocal calls
+        files=real(root,day);calls+=1
+        if calls==2:
+            with lock.open('rb') as guard:
+                fcntl.flock(guard,fcntl.LOCK_EX)
+                if damage=='replace':
+                    other=path.with_suffix('.replacement');other.write_bytes(path.read_bytes());other.replace(path)
+                elif damage=='prefix':
+                    with path.open('r+b') as out:out.write(b'!')
+                else:
+                    with path.open('ab') as out:out.write(_later_vote_bytes('2026-10-12' if damage=='past' else '2026-10-14'))
+        return files
+    monkeypatch.setattr(post,'_vote_watch_files',concurrent_append)
+    if damage:
+        with pytest.raises((ValueError,OSError)):
+            post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound,future_unconsumed=True)
+    else:
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound,future_unconsumed=True)
+    assert calls==2
+
+
+def test_future_vote_reader_uses_native_writer_lock(tmp_path, monkeypatch):
+    import fcntl
+    from concurrent.futures import ThreadPoolExecutor
+    from src.engine.ai import holding_exit_vote as votes
+    path=votes.path_vote_store_path(tmp_path,'record:91');path.parent.mkdir(parents=True)
+    path.write_bytes(_later_vote_bytes());lock=path.with_suffix('.jsonl.lock');lock.touch()
+    real=votes.path_vote_store_path;blocked=[]
+    def writer_probe():
+        with lock.open('rb') as writer:
+            try:fcntl.flock(writer,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:return True
+            return False
+    def inspect_lock(root,key):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            blocked.append(executor.submit(writer_probe).result(timeout=2))
+        return real(root,key)
+    monkeypatch.setattr(votes,'path_vote_store_path',inspect_lock)
+    before=path.read_bytes()
+    post._future_unconsumed_vote_tail(tmp_path,'2026-10-12',path,None)
+    assert blocked==[True] and path.read_bytes()==before
+
+
+@pytest.mark.parametrize('damage', ['missing','symlink','fifo','busy','replaced'])
+def test_future_vote_lock_is_bounded_native_and_never_created_by_reader(tmp_path, monkeypatch, damage):
+    import fcntl, os, time
+    from src.engine.ai import holding_exit_vote as votes
+    path=votes.path_vote_store_path(tmp_path,'record:91');path.parent.mkdir(parents=True)
+    path.write_bytes(_later_vote_bytes());lock=path.with_suffix('.jsonl.lock')
+    held=None
+    if damage=='symlink':
+        target=tmp_path/'foreign';target.touch();lock.symlink_to(target)
+    elif damage=='fifo':os.mkfifo(lock)
+    elif damage!='missing':lock.touch()
+    if damage=='busy':
+        held=lock.open('rb');fcntl.flock(held,fcntl.LOCK_EX)
+    if damage=='replaced':
+        real=votes.path_vote_store_path
+        def replace_lock(root,key):
+            other=tmp_path/'other-lock';other.touch();other.replace(lock)
+            return real(root,key)
+        monkeypatch.setattr(votes,'path_vote_store_path',replace_lock)
+    start=time.monotonic()
+    try:
+        with pytest.raises((ValueError,OSError)):
+            post._future_unconsumed_vote_tail(tmp_path,'2026-10-12',path,None)
+    finally:
+        if held:held.close()
+    assert time.monotonic()-start<2
+    if damage=='missing':assert not lock.exists()
+
+
+def test_future_vote_waits_for_native_partial_append_to_finish(tmp_path, monkeypatch):
+    import fcntl
+    from threading import Event
+    from concurrent.futures import ThreadPoolExecutor
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    path=path_vote_store_path(tmp_path,'record:91');path.parent.mkdir(parents=True)
+    lock=path.with_suffix('.jsonl.lock');lock.touch()
+    partial,reader_waiting=Event(),Event();raw=_later_vote_bytes()
+    real=fcntl.flock
+    def traced_flock(fd,operation):
+        if operation==fcntl.LOCK_SH|fcntl.LOCK_NB:reader_waiting.set()
+        return real(fd,operation)
+    monkeypatch.setattr(fcntl,'flock',traced_flock)
+    def writer():
+        with lock.open('rb') as guard:
+            real(guard,fcntl.LOCK_EX)
+            with path.open('wb') as out:
+                out.write(raw[:len(raw)//2]);out.flush();partial.set()
+                assert reader_waiting.wait(2)
+                out.write(raw[len(raw)//2:]);out.flush()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future=executor.submit(writer);assert partial.wait(2)
+        result=post._future_unconsumed_vote_tail(tmp_path,'2026-10-12',path,None)
+        future.result(timeout=2)
+    assert result[2]==len(raw) and path.read_bytes()==raw

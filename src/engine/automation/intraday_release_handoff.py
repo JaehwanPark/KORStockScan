@@ -566,6 +566,16 @@ REVIEWED_HOLDING_CONTEXT_SNAPSHOT_SOURCES = {
     ),
 }
 
+# Exact carried-stop source snapshot repair. Publication and consumed sources
+# retain strict immutable validation; native future-only appends are locked.
+# Evidence: docs/audits/main-finalization-live-vote-read-race-repair-2026-10-15.md.
+REVIEWED_STOP_VOTE_SNAPSHOT_SOURCES = {
+    'src/engine/automation/main_stop_postclose.py': (
+        '360573dc170d91617cbaec7f1c8713b769c403b22e52449e11434019360a6224',
+        'e9ab07117a0200610e19f4b24ea0000579203628a887e16387b24189b8734a13',
+    ),
+}
+
 # Preserve the frozen predecessor while ordered startup has not completed.
 # The producer defers publication; detector deadlines and failures stay strict.
 REVIEWED_ORDERED_PUBLICATION_SOURCES = {
@@ -682,6 +692,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
                     REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES.get(name),
                     REVIEWED_HOLDING_CONTEXT_SNAPSHOT_SOURCES.get(name),
+                    REVIEWED_STOP_VOTE_SNAPSHOT_SOURCES.get(name),
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
