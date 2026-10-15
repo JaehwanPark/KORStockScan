@@ -105,3 +105,16 @@ observer 전용 state reader는 canonical 보고서와 같은8MiB 한도에서 r
 회귀는 실제 CLI의3MiB 보고서→legacy full state→다음 실행→compact state→재실행, 원 historical incident/notification 보존, delay cursor/accepted clock 보존과8MiB 초과·symlink·dangling·FIFO·중복/손상·읽기 중 제거의 거부를 포함한다. selector가 notify 중 바뀌면 기존 canonical bytes를 그대로 보존하는 검증도 유지한다. 정책/주문/AI 경로는 통합235의 검증본 그대로이며 이번 추가는 state persistence와 exact hash 인계만 수정한다.
 
 추가 수리 최종 검증은 observer/탐지기/인계/ordered 배포/notifier2,096개 PASS(12.55초), compile·diff·print-only parser PASS, 당일 OPEN9개 동일이다. 현재 원3.7MB state의 read-only 로드·compact projection 및 incident/source clock 보존을 실제 파일로 확인했다. 새 code pair 이후 네 capability/정책은 재사용 가능 여부를 원 영수증으로 다시 확인한다.
+
+
+## 새 보고서 게시와 탐지기 판정의 경합 재발 방지
+
+50fd8581d는09:35:31.288108 ordered complete/pass, Main PID1580496/start ticks8840055로 정책을 실제 소비했다. 첫 native observer run96c87822b92b462ea3214a7a28fd6d43는09:35:32 시작·09:36:31 게시됐고 report SHA1d5025687914a7207e3aa942b3b533c0ac545143e8fd2cc927881a6f9cf7e060, bounded_no_applicable_observations/unmet[]였다. compact continuation4,901bytes의 새 run·incident·원 source clock을 실제 reader로 확인했다. 정책 generation4종은 실제 detector에서도 verified/findings[]다.
+
+그러나09:35:31 시작한 detector는09:20 이전 report를 먼저 읽고 다른 source/semantic 검사를 수행해09:37:16 stale888초·observer_generation_not_current를 반환했다. 새 보고서는 이미09:36:31 게시된 상태였다. 상태 크기 수리는 성공했지만 독립 producer/consumer의 시간차가 남아 있었으므로 동일 경보가 재발할 수 있었다. 기존 실패 로그와 보고서 원 bytes는 보존한다.
+
+수리는 동일 artifact 검증 루프를 재사용하면서 observer 검사를 긴 semantic 검사 뒤로 이동한다. 판정 직전의 새 wall clock으로 freshness를 계산하고 report/selector 파일 identity를 전후 비교한다. 바뀌면 해당 observer의 판정만 폐기하고 동일 date/schema/source/generation/PID/health 계약으로 한 번 재검증한다. 첫 시도의 SHA·진단·identity는 publication_recheck evidence에 보존하고 다른 artifact 실패는 유지한다. 재검증 중 다시 교체되거나 날짜가 넘어가면 실패로 남긴다. 미변경 보고서는 한 번만 bounded read하며 provider/주문/정책·경보 기준을 바꾸지 않는다. 판정 후 게시되는 미래 보고서까지 미리 알 수는 없고 다음 정상 sweep의 새 증거로 평가한다.
+
+회귀는 긴 검사 중 새 보고서 게시, 최초 실패→새 정상/실패 보고서, 손상·과대·삭제·symlink·stale/future, selector 변경, 연속 교체, 다른 artifact 실패 보존, 최신 wall clock 및 KST 날짜 전환을 포함한다. 원 quiet-window 변경 감지 회귀는 첫 시도 진단 보존과 최종 실패를 모두 확인하도록 갱신했다.
+
+추가 수리의 재검토·표적 회귀2,110개 PASS(12.88초), compile·diff whitespace·print-only parser PASS다. 원 정책과 reporter code hash는 변경하지 않아 기존 capability fixture와 native code handoff를 유지한다. 승인된 ordered 배포 이후 실제 consumer 영수증을 후속 기록한다.

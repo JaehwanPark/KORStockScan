@@ -3005,7 +3005,9 @@ def test_quiet_warning_rechecks_exact_generation_after_live_actor_read(tmp_path,
     monkeypatch.setattr(mod,'_observer_live_identity',identity)
     outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
     assert outcome.severity=='fail'
-    assert ('observer_generation_changed_after_assessment' if change=='selector' else 'observer_report_changed_after_snapshot') in outcome.summary
+    first = outcome.details['submission_bottleneck_monitor_publication_recheck']['attempts'][0]
+    assert ('observer_generation_changed_after_assessment' if change=='selector' else 'observer_report_changed_after_snapshot') in '; '.join(first['issues'])
+    assert first['stable'] is False
 
 
 @pytest.mark.parametrize('delta_sec',[-60,700,None])
@@ -3273,3 +3275,132 @@ def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(t
     if tamper is None:
         assert outcome.details['submission_bottleneck_monitor_observation_health']['status'] == 'warning_pending'
         assert report['status'] == 'observing' and report['semantic_status'] == 'partial'
+
+
+def test_observer_reads_publication_after_slow_semantics_with_current_clock(tmp_path, monkeypatch):
+    mod, root, now, path, report, _, _, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    path.write_text('{old incomplete report')
+    reads = []
+    original = mod._submission_observer_snapshot
+    def snapshot(candidate):
+        reads.append(candidate)
+        return original(candidate)
+    monkeypatch.setattr(mod, '_submission_observer_snapshot', snapshot)
+    def slow_semantics(*args, **kwargs):
+        assert reads == []
+        seal()
+        return dict(status='not_assessed', findings=[])
+    monkeypatch.setattr(mod, '_initial_quantity_semantics', slow_semantics)
+    outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity == 'warning', outcome.summary
+    assert reads == [path]
+    boundary = outcome.details['submission_bottleneck_monitor_publication_recheck']
+    assert boundary['stable'] and len(boundary['attempts']) == 1
+    assert outcome.details['submission_bottleneck_monitor_run_id'] == report['run_id']
+
+
+@pytest.mark.parametrize('replacement', ['valid', 'invalid_execution', 'invalid_projection', 'stale',
+    'future', 'missing', 'symlink', 'oversize', 'wrong_selector', 'repeated_publication'])
+def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkeypatch, replacement):
+    mod, root, now, path, report, selection_path, selection, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    report['execution_status'] = 'failed'
+    seal()
+    old_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    detector = mod.ArtifactFreshnessDetector
+    original = detector._validate_json_status
+    calls = []
+    def validate(artifact, candidate, details, **kwargs):
+        result = original(artifact, candidate, details, **kwargs)
+        if artifact['id'] != 'submission_bottleneck_monitor':
+            return result
+        calls.append(report['run_id'])
+        if len(calls) == 1 or replacement == 'repeated_publication':
+            report.update(execution_status='completed', run_id=('b' if len(calls) == 1 else 'c') * 32)
+            seal()
+            if replacement == 'invalid_execution':
+                report['execution_status'] = 'failed'; seal()
+            elif replacement == 'invalid_projection':
+                report['observation_health']['reason'] = 'forged'
+                path.write_text(json.dumps(report)); os.utime(path, (now.timestamp()-10,)*2)
+            elif replacement == 'stale':
+                os.utime(path, (now.timestamp()-601,)*2)
+            elif replacement == 'future':
+                os.utime(path, (now.timestamp()+60,)*2)
+            elif replacement == 'missing':
+                path.unlink()
+            elif replacement == 'symlink':
+                copy = path.with_name('untrusted.json'); copy.write_bytes(path.read_bytes())
+                path.unlink(); path.symlink_to(copy)
+            elif replacement == 'oversize':
+                path.write_bytes(b'x' * (8 * 1024 * 1024 + 1))
+            elif replacement == 'wrong_selector':
+                selection_path.write_text(json.dumps({**selection, 'actual_pid_consumed': False}))
+        return result
+    monkeypatch.setattr(detector, '_validate_json_status', staticmethod(validate))
+    outcome = detector(dry_run=True).check()
+    assert outcome.severity == ('warning' if replacement == 'valid' else 'fail'), outcome.summary
+    boundary = outcome.details['submission_bottleneck_monitor_publication_recheck']
+    assert len(boundary['attempts']) == 2
+    assert boundary['attempts'][0]['stable'] is False
+    assert boundary['attempts'][0]['issues']
+    first = boundary['attempts'][0]['details']['submission_bottleneck_monitor_observation_dimensions']
+    assert first['report']['byte_sha256'] == old_sha
+    if replacement == 'repeated_publication':
+        assert not boundary['stable']
+        assert 'observer_inputs_changed_during_final_recheck' in outcome.summary
+    else:
+        assert boundary['stable']
+    if replacement == 'valid':
+        assert outcome.details['submission_bottleneck_monitor_run_id'] == 'b' * 32
+        assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
+        assert 'failed' not in outcome.summary
+    assert len(calls) <= 2
+
+
+def test_observer_recheck_preserves_other_artifact_failures(tmp_path, monkeypatch):
+    mod, root, now, path, report, _, _, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    mod.ARTIFACT_REGISTRY.append(dict(id='other_required', path_template='missing.json', critical=True))
+    original = mod.ArtifactFreshnessDetector._validate_json_status
+    count = 0
+    def validate(*args, **kwargs):
+        nonlocal count
+        result = original(*args, **kwargs)
+        count += 1
+        if count == 1:
+            report['run_id'] = 'b' * 32; seal()
+        return result
+    monkeypatch.setattr(mod.ArtifactFreshnessDetector, '_validate_json_status', staticmethod(validate))
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.severity == 'fail'
+    assert result.details['other_required_status'] == 'fail'
+    assert 'other_required: missing.json missing' in result.summary
+    assert result.details['submission_bottleneck_monitor_status'] == 'pending_no_applicable_observations'
+
+
+def test_observer_late_check_uses_elapsed_wall_clock(tmp_path, monkeypatch):
+    mod, root, now, path, report, *_ = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    def slow_semantics(*args, **kwargs):
+        monkeypatch.setattr(mod.time, 'time', lambda: now.timestamp() + 650)
+        return dict(status='not_assessed', findings=[])
+    monkeypatch.setattr(mod, '_initial_quantity_semantics', slow_semantics)
+    outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity == 'fail'
+    assert outcome.details['submission_bottleneck_monitor_age_sec'] == 660
+    assert 'stale (660s > 600s)' in outcome.summary
+
+
+def test_observer_final_check_rejects_kst_date_rollover(tmp_path, monkeypatch):
+    mod, root, now, path, report, *_ = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    class NextDay(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = now + timedelta(days=1)
+            return current if tz else current.replace(tzinfo=None)
+    def slow_semantics(*args, **kwargs):
+        monkeypatch.setattr(mod, 'datetime', NextDay)
+        return dict(status='not_assessed', findings=[])
+    monkeypatch.setattr(mod, '_initial_quantity_semantics', slow_semantics)
+    outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert outcome.severity == 'fail'
+    assert 'observer_check_crossed_kst_date_boundary' in outcome.summary
+    assert outcome.details['submission_bottleneck_monitor_publication_recheck']['stable'] is False

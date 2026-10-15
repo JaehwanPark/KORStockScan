@@ -110,6 +110,21 @@ def _submission_observer_snapshot(path):
     return payload, sha, before
 
 
+def _submission_observer_input_identity(path, root):
+    """Cheap publication boundary; unavailable inputs still reach validation."""
+    report = existing_or_gzip_path(path)
+    result = {}
+    for name, candidate in (
+            ('report', report),
+            ('selection', Path(root) / 'data/runtime/runtime_release_selection.json')):
+        try:
+            identity = _observer_file_signature(candidate.lstat())
+        except OSError as exc:
+            identity = (type(exc).__name__, exc.errno)
+        result[name] = dict(path=str(candidate), signature=identity)
+    return result
+
+
 def _submission_observer_dimensions(payload, path, sha):
     def scalar(value):
         if isinstance(value, str): return ' '.join(value.split())[:160]
@@ -2876,284 +2891,293 @@ class ArtifactFreshnessDetector(BaseDetector):
         warnings: list[str] = []
         installed_crontab = load_installed_crontab()
 
-        for artifact in ARTIFACT_REGISTRY:
-            aid = artifact["id"]
-            if today < artifact.get("first_required_date", "0001-01-01"):
-                details[f"{aid}_status"] = "not_required_before_introduction"
-                continue
-            artifact_day = today
-            artifact_now_total = now_total
-            artifact_past_source_day = past_source_day
-            if aid == "runtime_policy_bootstrap" and past_source_day:
-                prepared = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "")
-                try:
-                    prepared_day = date.fromisoformat(prepared)
-                    if prepared <= today or not is_krx_trading_day(prepared_day):
-                        raise ValueError("invalid prepared date")
-                except ValueError:
-                    details[f"{aid}_status"] = "fail"
-                    issues.append(f"{aid}: explicit prepared effective date missing or invalid")
+        observer_id = 'submission_bottleneck_monitor'
+        observer_registry = [item for item in ARTIFACT_REGISTRY if item['id'] == observer_id]
+        sweep_day = _today_kst_str(now_dt)
+
+        def check_registered_artifacts(registry):
+            for artifact in registry:
+                aid = artifact["id"]
+                if today < artifact.get("first_required_date", "0001-01-01"):
+                    details[f"{aid}_status"] = "not_required_before_introduction"
                     continue
-                details[f"{aid}_historical_source_date"] = today
-                details[f"{aid}_prepared_effective_date"] = prepared
-                if prepared > _today_kst_str(now_dt):
-                    details[f"{aid}_status"] = "future_due"
-                    continue
-                artifact_day = prepared
-                artifact_past_source_day = prepared < _today_kst_str(now_dt)
-                artifact_now_total = 24 * 60 if artifact_past_source_day else now_h * 60 + now_m
-            path_str = artifact["path_template"].replace("{date}", artifact_day)
-            artifact_path = PROJECT_ROOT / path_str
-            artifact_path = existing_or_gzip_path(artifact_path)
-            critical = artifact.get("critical", False)
-            max_stale = artifact.get("max_staleness_sec", 600)
-            trading_day_only = artifact.get("trading_day_only", False)
-            ws = artifact.get("window_start")
-            we = artifact.get("window_end")
-
-            if trading_day_only and not trading_day:
-                details[f"{aid}_status"] = "skip_non_trading_day"
-                continue
-
-            schedule_contract = ARTIFACT_SCHEDULE_CONTRACTS.get(aid)
-            if schedule_contract:
-                schedule_status, schedule_details = evaluate_schedule_contract(
-                    installed_crontab,
-                    **schedule_contract,
-                )
-                details[f"{aid}_schedule_contract"] = schedule_details
-                if schedule_status.startswith("disabled_"):
-                    details[f"{aid}_status"] = schedule_status
-                    continue
-
-            ws_total = ws[0] * 60 + ws[1] if ws else None
-
-            if ws_total is not None and artifact_now_total < ws_total:
-                details[f"{aid}_status"] = "not_yet_due"
-                details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
-                continue
-
-            past_window_end = False
-            if we is not None:
-                window_end = now_dt.replace(
-                    hour=we[0], minute=we[1], second=0, microsecond=0
-                )
-                past_window_end = artifact_past_source_day or now_dt >= window_end
-            exists = artifact_path.exists()
-            grace_sec = int(artifact.get("window_grace_sec") or 0)
-            in_startup_grace = False
-            if grace_sec > 0 and ws and not past_window_end:
-                window_start = now_dt.replace(
-                    hour=ws[0], minute=ws[1], second=0, microsecond=0
-                )
-                elapsed_from_start = (now_dt - window_start).total_seconds()
-                in_startup_grace = 0 <= elapsed_from_start <= grace_sec
-            if not exists and in_startup_grace:
-                details[f"{aid}_status"] = "startup_grace"
-                details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
-                details[f"{aid}_grace_sec"] = grace_sec
-                continue
-
-            if not exists:
-                terminal_skip = self._terminal_skip_status(aid, artifact_day)
-                if terminal_skip:
-                    details[f"{aid}_status"] = "pass_terminal_skip"
-                    details[f"{aid}_terminal_skip"] = terminal_skip
-                    continue
-                alternate_status = self._validate_partitioned_compact(
-                    artifact,
-                    artifact_day,
-                    details,
-                )
-                if alternate_status:
-                    status, warning = alternate_status
-                    details[f"{aid}_status"] = status
-                    if warning:
-                        warnings.append(warning)
-                    continue
-
-                in_progress_cron = self._is_upstream_cron_in_progress(
-                    artifact.get("suppress_missing_while_cron_in_progress"),
-                    artifact_day,
-                )
-                if in_progress_cron and not past_window_end:
-                    warnings.append(
-                        f"{aid}: upstream cron in progress; artifact not generated yet"
-                    )
-                    details[f"{aid}_status"] = "warning"
-                    details[f"{aid}_upstream_status"] = "in_progress"
-                    continue
-                if (
-                    in_progress_cron
-                    and past_window_end
-                    and bool(
-                        artifact.get(
-                            "allow_missing_after_window_while_cron_in_progress"
-                        )
-                    )
-                ):
-                    warnings.append(
-                        f"{aid}: upstream cron still in progress after window end"
-                    )
-                    details[f"{aid}_status"] = "warning"
-                    details[f"{aid}_upstream_status"] = "in_progress_after_window"
-                    continue
-                if past_window_end:
-                    if critical:
-                        issues.append(f"{aid}: missing after window end")
-                        details[f"{aid}_status"] = "fail"
-                    else:
-                        warnings.append(f"{aid}: not generated within window")
-                        details[f"{aid}_status"] = "warning"
-                else:
-                    if critical:
-                        issues.append(f"{aid}: {path_str} missing")
-                        details[f"{aid}_status"] = "fail"
-                    else:
-                        warnings.append(f"{aid}: {path_str} not found")
-                        details[f"{aid}_status"] = "warning"
-                continue
-
-            mtime = artifact_path.stat().st_mtime
-            age_sec = now_ts - mtime
-            details[f"{aid}_age_sec"] = round(age_sec, 1)
-            observer_snapshot = None
-            if aid == "submission_bottleneck_monitor":
-                try:
-                    observer_snapshot = _submission_observer_snapshot(artifact_path)
-                    # The file clock and body must belong to this same read.
-                    mtime = observer_snapshot[2][7] / 1_000_000_000
-                    age_sec = now_ts - mtime
-                    details[f"{aid}_age_sec"] = round(age_sec, 1)
-                    dimensions = _submission_observer_dimensions(observer_snapshot[0], artifact_path, observer_snapshot[1])
-                    dimensions['freshness'] = dict(status='future' if age_sec < 0 else 'stale' if age_sec > max_stale else 'fresh',
-                        age_sec=round(age_sec, 1), max_staleness_sec=max_stale, clock='report_file_mtime')
-                    body_clock = _observer_clock(observer_snapshot[0].get('as_of'))
-                    generation = observer_snapshot[0].get('observer_generation')
-                    completed_clock = _observer_clock(generation.get('completed_at')) if isinstance(generation, dict) else None
-                    body_age = now_ts - body_clock.timestamp() if body_clock else None
-                    completed_age = now_ts - completed_clock.timestamp() if completed_clock else None
-                    dimensions['freshness']['body_clock'] = dict(
-                        status=('fresh' if body_age is not None and completed_age is not None
-                                and 0 <= completed_age <= body_age <= max_stale else 'future_or_stale_or_unavailable'),
-                        as_of_age_sec=body_age, completed_age_sec=completed_age,
-                        max_staleness_sec=max_stale, clock='detector_wall_clock')
-                    details[f'{aid}_observation_dimensions'] = dimensions
-                    json_error = ""
-                except (OSError, ValueError, TypeError) as exc:
-                    json_error = str(exc)
-            else:
-                json_error = self._validate_json_artifact(artifact_path)
-            if json_error:
-                details[f"{aid}_content_status"] = "invalid_json"
-                message = f"{aid}: invalid JSON ({json_error})"
-                if critical:
-                    issues.append(message)
-                    details[f"{aid}_status"] = "fail"
-                else:
-                    warnings.append(message)
-                    details[f"{aid}_status"] = "warning"
-                continue
-            if aid == "submission_bottleneck_monitor":
-                historical = _closed_submission_observer_evidence(observer_snapshot[0], PROJECT_ROOT,
-                    source_day, _today_kst_str(now_dt))
-                if historical is not None:
+                artifact_day = today
+                artifact_now_total = now_total
+                artifact_past_source_day = past_source_day
+                if aid == "runtime_policy_bootstrap" and past_source_day:
+                    prepared = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "")
                     try:
-                        unchanged = _observer_file_signature(artifact_path.lstat()) == observer_snapshot[2]
-                    except OSError:
-                        unchanged = False
-                    if unchanged:
-                        details[f'{aid}_status'] = 'historical_observation_only'
-                        details[f'{aid}_historical_evidence'] = historical
-                        dimensions['generation'] = historical
-                        warnings.append(f'{aid}: closed source-day observation retained; '
-                            'current coverage and historical source gaps remain unverified')
+                        prepared_day = date.fromisoformat(prepared)
+                        if prepared <= today or not is_krx_trading_day(prepared_day):
+                            raise ValueError("invalid prepared date")
+                    except ValueError:
+                        details[f"{aid}_status"] = "fail"
+                        issues.append(f"{aid}: explicit prepared effective date missing or invalid")
                         continue
-                pending = _submission_observer_transition_pending(
-                    PROJECT_ROOT, artifact_path, now_dt, max_staleness_sec=max_stale,
-                    report_snapshot=observer_snapshot)
-                if pending is not None:
-                    details[f"{aid}_status"] = "pending_first_current_observer"
-                    details[f"{aid}_transition"] = pending
-                    dimensions['generation'] = dict(status='pending_first_current_observer', current_observation_verified=False)
-                    details[f"{aid}_current_observation_verified"] = False
-                    warnings.append(f"{aid}: first current-generation observation pending; prior evidence retained")
+                    details[f"{aid}_historical_source_date"] = today
+                    details[f"{aid}_prepared_effective_date"] = prepared
+                    if prepared > _today_kst_str(now_dt):
+                        details[f"{aid}_status"] = "future_due"
+                        continue
+                    artifact_day = prepared
+                    artifact_past_source_day = prepared < _today_kst_str(now_dt)
+                    artifact_now_total = 24 * 60 if artifact_past_source_day else now_h * 60 + now_m
+                path_str = artifact["path_template"].replace("{date}", artifact_day)
+                artifact_path = PROJECT_ROOT / path_str
+                artifact_path = existing_or_gzip_path(artifact_path)
+                critical = artifact.get("critical", False)
+                max_stale = artifact.get("max_staleness_sec", 600)
+                trading_day_only = artifact.get("trading_day_only", False)
+                ws = artifact.get("window_start")
+                we = artifact.get("window_end")
+
+                if trading_day_only and not trading_day:
+                    details[f"{aid}_status"] = "skip_non_trading_day"
                     continue
-            status_warning = self._validate_json_status(artifact, artifact_path, details,
-                **({'observer_snapshot': observer_snapshot} if observer_snapshot is not None else {}))
-            if (aid == 'submission_bottleneck_monitor' and age_sec > max_stale
-                    and not past_window_end and not in_startup_grace):
-                message = f'{aid}: stale ({age_sec:.0f}s > {max_stale}s)'
-                if status_warning:
-                    message += '; ' + status_warning.removeprefix(aid + ': ')
-                (issues if critical else warnings).append(message)
-                details[f'{aid}_status'] = 'fail' if critical else 'warning'
-                continue
-            if status_warning:
-                observation_health = details.get(f'{aid}_observation_health') or {}
-                if (aid == 'submission_bottleneck_monitor' and 0 <= age_sec <= max_stale
-                        and observation_health.get('status') == 'warning_pending'
-                        and details.get(f'{aid}_observation_health_projection_match') is True):
-                    warnings.append(status_warning)
-                    details[f'{aid}_status'] = ('pending_no_applicable_observations'
-                        if observation_health.get('reason') == 'bounded_no_applicable_observations'
-                        else 'pending_bounded_observation')
-                    details[f'{aid}_current_observation_verified'] = False
-                    continue
-                if self._is_bounded_postclose_running(
-                    artifact, artifact_path, artifact_day, now_dt
-                ):
-                    warnings.append(
-                        f"{aid}: exact-date postclose still running before deadline"
+
+                schedule_contract = ARTIFACT_SCHEDULE_CONTRACTS.get(aid)
+                if schedule_contract:
+                    schedule_status, schedule_details = evaluate_schedule_contract(
+                        installed_crontab,
+                        **schedule_contract,
                     )
-                    details[f"{aid}_status"] = "warning"
-                    details[f"{aid}_upstream_status"] = "running_before_deadline"
-                    details[f"{aid}_running_deadline"] = "23:20"
+                    details[f"{aid}_schedule_contract"] = schedule_details
+                    if schedule_status.startswith("disabled_"):
+                        details[f"{aid}_status"] = schedule_status
+                        continue
+
+                ws_total = ws[0] * 60 + ws[1] if ws else None
+
+                if ws_total is not None and artifact_now_total < ws_total:
+                    details[f"{aid}_status"] = "not_yet_due"
+                    details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
                     continue
-                if critical:
-                    issues.append(status_warning)
-                    details[f"{aid}_status"] = "fail"
-                else:
-                    warnings.append(status_warning)
-                    details[f"{aid}_status"] = "warning"
-                continue
-            content_warning, content_passed = self._validate_content_freshness(
-                artifact,
-                artifact_path,
-                details,
-                now_dt,
-            )
-            if content_warning:
-                warnings.append(content_warning)
-                details[f"{aid}_status"] = "warning"
-                continue
-            if content_passed:
-                details[f"{aid}_status"] = "pass_content_date"
-                continue
 
-            if artifact.get("one_shot"):
-                details[f"{aid}_status"] = "pass_one_shot"
-                continue
-
-            if past_window_end:
-                details[f"{aid}_status"] = "pass_after_window"
-                continue
-
-            if age_sec > max_stale:
-                if in_startup_grace:
+                past_window_end = False
+                if we is not None:
+                    window_end = now_dt.replace(
+                        hour=we[0], minute=we[1], second=0, microsecond=0
+                    )
+                    past_window_end = artifact_past_source_day or now_dt >= window_end
+                exists = artifact_path.exists()
+                grace_sec = int(artifact.get("window_grace_sec") or 0)
+                in_startup_grace = False
+                if grace_sec > 0 and ws and not past_window_end:
+                    window_start = now_dt.replace(
+                        hour=ws[0], minute=ws[1], second=0, microsecond=0
+                    )
+                    elapsed_from_start = (now_dt - window_start).total_seconds()
+                    in_startup_grace = 0 <= elapsed_from_start <= grace_sec
+                if not exists and in_startup_grace:
                     details[f"{aid}_status"] = "startup_grace"
-                    details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}" if ws else ""
+                    details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
                     details[f"{aid}_grace_sec"] = grace_sec
-                    details[f"{aid}_startup_stale_suppressed"] = True
                     continue
-                if critical:
-                    issues.append(f"{aid}: stale ({age_sec:.0f}s > {max_stale}s)")
-                    details[f"{aid}_status"] = "fail"
+
+                if not exists:
+                    terminal_skip = self._terminal_skip_status(aid, artifact_day)
+                    if terminal_skip:
+                        details[f"{aid}_status"] = "pass_terminal_skip"
+                        details[f"{aid}_terminal_skip"] = terminal_skip
+                        continue
+                    alternate_status = self._validate_partitioned_compact(
+                        artifact,
+                        artifact_day,
+                        details,
+                    )
+                    if alternate_status:
+                        status, warning = alternate_status
+                        details[f"{aid}_status"] = status
+                        if warning:
+                            warnings.append(warning)
+                        continue
+
+                    in_progress_cron = self._is_upstream_cron_in_progress(
+                        artifact.get("suppress_missing_while_cron_in_progress"),
+                        artifact_day,
+                    )
+                    if in_progress_cron and not past_window_end:
+                        warnings.append(
+                            f"{aid}: upstream cron in progress; artifact not generated yet"
+                        )
+                        details[f"{aid}_status"] = "warning"
+                        details[f"{aid}_upstream_status"] = "in_progress"
+                        continue
+                    if (
+                        in_progress_cron
+                        and past_window_end
+                        and bool(
+                            artifact.get(
+                                "allow_missing_after_window_while_cron_in_progress"
+                            )
+                        )
+                    ):
+                        warnings.append(
+                            f"{aid}: upstream cron still in progress after window end"
+                        )
+                        details[f"{aid}_status"] = "warning"
+                        details[f"{aid}_upstream_status"] = "in_progress_after_window"
+                        continue
+                    if past_window_end:
+                        if critical:
+                            issues.append(f"{aid}: missing after window end")
+                            details[f"{aid}_status"] = "fail"
+                        else:
+                            warnings.append(f"{aid}: not generated within window")
+                            details[f"{aid}_status"] = "warning"
+                    else:
+                        if critical:
+                            issues.append(f"{aid}: {path_str} missing")
+                            details[f"{aid}_status"] = "fail"
+                        else:
+                            warnings.append(f"{aid}: {path_str} not found")
+                            details[f"{aid}_status"] = "warning"
+                    continue
+
+                # The strict observer snapshot below owns its file clock and
+                # handles disappearance/replacement without an unguarded stat.
+                mtime = now_ts if aid == observer_id else artifact_path.stat().st_mtime
+                age_sec = now_ts - mtime
+                details[f"{aid}_age_sec"] = round(age_sec, 1)
+                observer_snapshot = None
+                if aid == "submission_bottleneck_monitor":
+                    try:
+                        observer_snapshot = _submission_observer_snapshot(artifact_path)
+                        # The file clock and body must belong to this same read.
+                        mtime = observer_snapshot[2][7] / 1_000_000_000
+                        age_sec = now_ts - mtime
+                        details[f"{aid}_age_sec"] = round(age_sec, 1)
+                        dimensions = _submission_observer_dimensions(observer_snapshot[0], artifact_path, observer_snapshot[1])
+                        dimensions['freshness'] = dict(status='future' if age_sec < 0 else 'stale' if age_sec > max_stale else 'fresh',
+                            age_sec=round(age_sec, 1), max_staleness_sec=max_stale, clock='report_file_mtime')
+                        body_clock = _observer_clock(observer_snapshot[0].get('as_of'))
+                        generation = observer_snapshot[0].get('observer_generation')
+                        completed_clock = _observer_clock(generation.get('completed_at')) if isinstance(generation, dict) else None
+                        body_age = now_ts - body_clock.timestamp() if body_clock else None
+                        completed_age = now_ts - completed_clock.timestamp() if completed_clock else None
+                        dimensions['freshness']['body_clock'] = dict(
+                            status=('fresh' if body_age is not None and completed_age is not None
+                                    and 0 <= completed_age <= body_age <= max_stale else 'future_or_stale_or_unavailable'),
+                            as_of_age_sec=body_age, completed_age_sec=completed_age,
+                            max_staleness_sec=max_stale, clock='detector_wall_clock')
+                        details[f'{aid}_observation_dimensions'] = dimensions
+                        json_error = ""
+                    except (OSError, ValueError, TypeError) as exc:
+                        json_error = str(exc)
                 else:
-                    warnings.append(f"{aid}: stale ({age_sec:.0f}s > {max_stale}s)")
+                    json_error = self._validate_json_artifact(artifact_path)
+                if json_error:
+                    details[f"{aid}_content_status"] = "invalid_json"
+                    message = f"{aid}: invalid JSON ({json_error})"
+                    if critical:
+                        issues.append(message)
+                        details[f"{aid}_status"] = "fail"
+                    else:
+                        warnings.append(message)
+                        details[f"{aid}_status"] = "warning"
+                    continue
+                if aid == "submission_bottleneck_monitor":
+                    historical = _closed_submission_observer_evidence(observer_snapshot[0], PROJECT_ROOT,
+                        source_day, _today_kst_str(now_dt))
+                    if historical is not None:
+                        try:
+                            unchanged = _observer_file_signature(artifact_path.lstat()) == observer_snapshot[2]
+                        except OSError:
+                            unchanged = False
+                        if unchanged:
+                            details[f'{aid}_status'] = 'historical_observation_only'
+                            details[f'{aid}_historical_evidence'] = historical
+                            dimensions['generation'] = historical
+                            warnings.append(f'{aid}: closed source-day observation retained; '
+                                'current coverage and historical source gaps remain unverified')
+                            continue
+                    pending = _submission_observer_transition_pending(
+                        PROJECT_ROOT, artifact_path, now_dt, max_staleness_sec=max_stale,
+                        report_snapshot=observer_snapshot)
+                    if pending is not None:
+                        details[f"{aid}_status"] = "pending_first_current_observer"
+                        details[f"{aid}_transition"] = pending
+                        dimensions['generation'] = dict(status='pending_first_current_observer', current_observation_verified=False)
+                        details[f"{aid}_current_observation_verified"] = False
+                        warnings.append(f"{aid}: first current-generation observation pending; prior evidence retained")
+                        continue
+                status_warning = self._validate_json_status(artifact, artifact_path, details,
+                    **({'observer_snapshot': observer_snapshot} if observer_snapshot is not None else {}))
+                if (aid == 'submission_bottleneck_monitor' and age_sec > max_stale
+                        and not past_window_end and not in_startup_grace):
+                    message = f'{aid}: stale ({age_sec:.0f}s > {max_stale}s)'
+                    if status_warning:
+                        message += '; ' + status_warning.removeprefix(aid + ': ')
+                    (issues if critical else warnings).append(message)
+                    details[f'{aid}_status'] = 'fail' if critical else 'warning'
+                    continue
+                if status_warning:
+                    observation_health = details.get(f'{aid}_observation_health') or {}
+                    if (aid == 'submission_bottleneck_monitor' and 0 <= age_sec <= max_stale
+                            and observation_health.get('status') == 'warning_pending'
+                            and details.get(f'{aid}_observation_health_projection_match') is True):
+                        warnings.append(status_warning)
+                        details[f'{aid}_status'] = ('pending_no_applicable_observations'
+                            if observation_health.get('reason') == 'bounded_no_applicable_observations'
+                            else 'pending_bounded_observation')
+                        details[f'{aid}_current_observation_verified'] = False
+                        continue
+                    if self._is_bounded_postclose_running(
+                        artifact, artifact_path, artifact_day, now_dt
+                    ):
+                        warnings.append(
+                            f"{aid}: exact-date postclose still running before deadline"
+                        )
+                        details[f"{aid}_status"] = "warning"
+                        details[f"{aid}_upstream_status"] = "running_before_deadline"
+                        details[f"{aid}_running_deadline"] = "23:20"
+                        continue
+                    if critical:
+                        issues.append(status_warning)
+                        details[f"{aid}_status"] = "fail"
+                    else:
+                        warnings.append(status_warning)
+                        details[f"{aid}_status"] = "warning"
+                    continue
+                content_warning, content_passed = self._validate_content_freshness(
+                    artifact,
+                    artifact_path,
+                    details,
+                    now_dt,
+                )
+                if content_warning:
+                    warnings.append(content_warning)
                     details[f"{aid}_status"] = "warning"
-            else:
-                details[f"{aid}_status"] = "pass"
+                    continue
+                if content_passed:
+                    details[f"{aid}_status"] = "pass_content_date"
+                    continue
+
+                if artifact.get("one_shot"):
+                    details[f"{aid}_status"] = "pass_one_shot"
+                    continue
+
+                if past_window_end:
+                    details[f"{aid}_status"] = "pass_after_window"
+                    continue
+
+                if age_sec > max_stale:
+                    if in_startup_grace:
+                        details[f"{aid}_status"] = "startup_grace"
+                        details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}" if ws else ""
+                        details[f"{aid}_grace_sec"] = grace_sec
+                        details[f"{aid}_startup_stale_suppressed"] = True
+                        continue
+                    if critical:
+                        issues.append(f"{aid}: stale ({age_sec:.0f}s > {max_stale}s)")
+                        details[f"{aid}_status"] = "fail"
+                    else:
+                        warnings.append(f"{aid}: stale ({age_sec:.0f}s > {max_stale}s)")
+                        details[f"{aid}_status"] = "warning"
+                else:
+                    details[f"{aid}_status"] = "pass"
+
+        check_registered_artifacts([item for item in ARTIFACT_REGISTRY if item['id'] != observer_id])
 
         cancel_wait_day = _cancel_wait_monitor_source_date(PROJECT_ROOT, today)
         cancel_wait = None
@@ -3267,6 +3291,49 @@ class ArtifactFreshnessDetector(BaseDetector):
         details['functional_semantic_coverage'] = coverage
         for finding in coverage['findings']:
             (warnings if 'current_owner' in finding else issues).append('semantic_coverage: ' + finding)
+
+        # Semantic/source checks above can take longer than report publication.
+        # Read the observer last, then retry its exact existing contract once if
+        # publication or selection changed during validation. Never replay the
+        # expensive source checks or inherit a verdict from a replaced report.
+        for observer_artifact in observer_registry:
+            attempts = []
+            for attempt in range(2):
+                now_dt, now_ts = datetime.now(), time.time()
+                if _today_kst_str(now_dt) != sweep_day:
+                    issues.append(f'{observer_id}: observer_check_crossed_kst_date_boundary')
+                    details[f'{observer_id}_status'] = 'fail'
+                    break
+                now_h, now_m = _kst_time_tuple(now_dt)
+                now_total = 24 * 60 if past_source_day else now_h * 60 + now_m
+                observer_path = PROJECT_ROOT / observer_artifact['path_template'].replace('{date}', today)
+                before = _submission_observer_input_identity(observer_path, PROJECT_ROOT)
+                check_registered_artifacts([observer_artifact])
+                after = _submission_observer_input_identity(observer_path, PROJECT_ROOT)
+                prefix = observer_id + '_'
+                attempts.append(dict(
+                    checked_at=now_dt.isoformat(), input_identity=before,
+                    stable=before == after,
+                    details={key: value for key, value in details.items() if key.startswith(prefix)},
+                    issues=[value for value in issues if value.startswith(observer_id + ':')],
+                    warnings=[value for value in warnings if value.startswith(observer_id + ':')]))
+                if before == after:
+                    break
+                if attempt == 0:
+                    for key in list(details):
+                        if key.startswith(prefix):
+                            del details[key]
+                    issues[:] = [value for value in issues if not value.startswith(observer_id + ':')]
+                    warnings[:] = [value for value in warnings if not value.startswith(observer_id + ':')]
+                else:
+                    issues.append(f'{observer_id}: observer_inputs_changed_during_final_recheck')
+                    details[f'{observer_id}_status'] = 'fail'
+                    details[f'{observer_id}_current_observation_verified'] = False
+            details[f'{observer_id}_publication_recheck'] = dict(
+                schema='submission_observer_publication_recheck_v1',
+                deferred_until_semantic_checks_complete=True, attempts=attempts,
+                stable=bool(attempts and attempts[-1]['stable']),
+                runtime_effect=False, allowed_runtime_apply=False)
 
         severity, summary = self._classify(issues, warnings)
         if (severity == "warning" and not issues and len(warnings) == 1
