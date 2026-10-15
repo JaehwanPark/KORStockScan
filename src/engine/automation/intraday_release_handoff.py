@@ -538,6 +538,16 @@ REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES = {
     ),
 }
 
+# Approved e6326b0b1: classify local opportunity custody without changing the
+# preserved policy, provider failure counters or retry/order authority.
+# Evidence: docs/audits/main-premarket-error-repair-and-restart-2026-10-15.md.
+REVIEWED_OPPORTUNITY_CUSTODY_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        '58aa3ca78af08ef2cac6ec0501cc212947c4c5fa743c58b2daea26c0ba205937',
+        '9731f7d729506494fc088ed74dcd54d7f5daa96604364dcac55131bf53a0cc32',
+    ),
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -595,7 +605,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_CURRENT_OBSERVER_SOURCES.get(name),
                     REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES.get(name),
                     REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name),
-                    REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name)):
+                    REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
+                    REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:
