@@ -546,6 +546,16 @@ REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES = {
     ),
 }
 
+
+# Exact report-only native feature-gap census; no admission or source-coverage grant.
+# Evidence: docs/audits/main-submission-observer-native-feature-gap-repair-2026-10-15.md.
+REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        'c241bc4e58f9025229fb7abce51475a1b6ec4b4c2c79c54e6a35fa53cfb98236',
+    ),
+}
+
 # Preserve the frozen predecessor while ordered startup has not completed.
 # The producer defers publication; detector deadlines and failures stay strict.
 REVIEWED_ORDERED_PUBLICATION_SOURCES = {
@@ -660,6 +670,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES.get(name),
                     REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name),
                     REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
+                    REVIEWED_NATIVE_FEATURE_GAP_OBSERVER_SOURCES.get(name),
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),

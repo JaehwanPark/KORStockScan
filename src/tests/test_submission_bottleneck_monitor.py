@@ -4308,3 +4308,106 @@ def test_prior_pid_delay_contract_incident_requires_current_native_proof(damage)
     assert json.dumps(result,sort_keys=True) == before
     assert item['status'] == ('active' if damage == 'active' else 'historical_unresolved')
     assert health['current_observation_verified'] is False and health['runtime_effect'] is False
+
+
+def _native_feature_gap_probe(now):
+    row = _native_no_match_probe(now, receipt_format='dict')
+    fields = row['fields']
+    fields.update(zero_base_probe_result_schema='zero_base_probe_result_v2',
+                  zero_base_probe_reason='required_branch_feature_missing')
+    receipt = fields['native_observation_receipt']
+    receipt.update(reason='required_window_incomplete', native_source_current=True,
+        selected_branch_truth={'G1':'FALSE','G2':'UNKNOWN'}, selected_pending_count=0,
+        source_censored_count=0, selected_lifecycle_counts={
+            'G1':{'FALSE':35,'UNKNOWN':1}, 'G2':{'UNKNOWN':36}})
+    fields['zero_base_branch_readiness'] = dict(
+        schema='native_branch_residence_requirements_v2', status='observed',
+        runtime_effect=False, decision_authority='none', scope_changed=False,
+        price_basis='exact_native_trade', route='krx_nxt_integrated',
+        policy_scope=receipt['selected_scope'],
+        **{k:receipt[k] for k in ('item','family_sha256','scope_execution_hash','native_epoch','native_sequence')},
+        branch_descriptors={
+            'G1':dict(detector_truth='FALSE', feature_availability='complete',missing_inputs=[]),
+            'G2':dict(detector_truth='UNKNOWN', feature_availability='incomplete',
+                      missing_inputs=['ret','volume','backward_window'])})
+    return row
+
+
+@pytest.mark.parametrize('format', ['dict','json','literal'])
+def test_required_feature_gap_keeps_source_shortfall_without_unclassified_failure(tmp_path, format):
+    now=monitor.stamp('2026-10-14T16:45:00+09:00');row=_native_feature_gap_probe(now)
+    for key in ('native_observation_receipt','zero_base_branch_readiness'):
+        value=row['fields'][key]
+        if format!='dict':row['fields'][key]=json.dumps(value) if format=='json' else repr(value)
+    original=json.dumps(row,sort_keys=True)
+    assert monitor._probe_verified_no_match(row) is False
+    assert monitor._probe_verified_pending(row) is None
+    assert monitor._probe_verified_pending(row,feature_gap=True)['unknown_count']==37
+    _source_gap_files(tmp_path,now,probes=[row]);gap=monitor.source_gap_semantics(tmp_path,now)
+    census=gap['native_feature_gap_observations']
+    assert census['count']==census['verified_count']==1 and census['unclassified_count']==0
+    assert gap['diagnostics']=={'machine_probe:required_branch_feature_missing':1}
+    assert gap['probe_route_assessed_counts']==gap['probe_route_source_covered_counts']=={}
+    assert gap['probe_route_native_no_match_counts']=={} and gap['native_pending_observations']['count']==0
+    assert census['source_coverage_proven'] is False and census['machine_admission_proven'] is False
+    assert json.dumps(row,sort_keys=True)==original
+
+
+@pytest.mark.parametrize('damage', ['missing_readiness','schema','scope','item','generation','sequence',
+    'branch_set','truth','missing_inputs','available','authority','source_current','pending','censored',
+    'historical_true','no_unknown','pid','stale','bool_count','bool_epoch','float_sequence','oversize'])
+def test_feature_gap_requires_exact_native_receipt_and_missing_branch_inputs(damage):
+    now=monitor.stamp('2026-10-14T16:45:00+09:00');row=_native_feature_gap_probe(now)
+    f=row['fields'];r=f['native_observation_receipt'];b=f['zero_base_branch_readiness']
+    if damage=='missing_readiness':f.pop('zero_base_branch_readiness')
+    elif damage=='schema':f['zero_base_probe_result_schema']='legacy'
+    elif damage=='scope':b['policy_scope']='foreign'
+    elif damage=='item':b['item']='005930_NX'
+    elif damage=='generation':b['scope_execution_hash']='e'*64
+    elif damage=='sequence':b['native_sequence']+=1
+    elif damage=='branch_set':b['branch_descriptors']['foreign']=b['branch_descriptors']['G2']
+    elif damage=='truth':b['branch_descriptors']['G2']['detector_truth']='FALSE'
+    elif damage=='missing_inputs':b['branch_descriptors']['G2']['missing_inputs']=[]
+    elif damage=='available':b['branch_descriptors']['G2']['feature_availability']='complete'
+    elif damage=='authority':b['runtime_effect']=True
+    elif damage=='source_current':r['native_source_current']=False
+    elif damage=='pending':r['selected_pending_count']=1
+    elif damage=='censored':r['source_censored_count']=1
+    elif damage=='historical_true':r['selected_lifecycle_counts']['G1']['TRUE']=1
+    elif damage=='no_unknown':r['selected_branch_truth']['G2']='FALSE'
+    elif damage=='pid':r['process_pid']=999
+    elif damage=='stale':r['observed_epoch']-=10
+    elif damage=='bool_count':r['selected_lifecycle_counts']['G2']['UNKNOWN']=True
+    elif damage=='bool_epoch':r['native_epoch']=1;b['native_epoch']=True
+    elif damage=='float_sequence':b['native_sequence']=float(r['native_sequence'])
+    elif damage=='oversize':f['zero_base_branch_readiness']='x'*65537
+    assert monitor._probe_verified_pending(row,feature_gap=True) is None
+
+
+@pytest.mark.parametrize('damage', [None,'count','bool_count','verified','unknown','unclassified',
+    'coverage','admission','no_match','schema','missing','diagnostic'])
+def test_feature_gap_health_requires_verified_census_and_never_grants_coverage(tmp_path,damage):
+    result=_observation_health_fixture();now=monitor.stamp(result['as_of'])
+    _source_gap_files(tmp_path,now,probes=[_native_feature_gap_probe(now)])
+    actual=monitor.source_gap_semantics(tmp_path,now);gap=result['source_gap_semantics']
+    for key in ('observed','diagnostics','diagnostics_by_scope','native_feature_gap_observations',
+                'probe_route_counts','probe_route_assessed_counts','probe_route_source_covered_counts',
+                'probe_route_native_no_match_counts'):
+        gap[key]=actual[key]
+    gap['status']='gap_observed';gap['sources']['probe']['recent_count']=1
+    census=gap['native_feature_gap_observations']
+    if damage=='count':census['count']=2
+    elif damage=='bool_count':census['count']=True
+    elif damage=='verified':census['verified_count']=0
+    elif damage=='unknown':census['unknown_count']=0
+    elif damage=='unclassified':census['unclassified_count']=1
+    elif damage=='coverage':census['source_coverage_proven']=True
+    elif damage=='admission':census['machine_admission_proven']=True
+    elif damage=='no_match':census['pattern_no_match_proven']=True
+    elif damage=='schema':census['schema']='other'
+    elif damage=='missing':gap.pop('native_feature_gap_observations')
+    elif damage=='diagnostic':gap['diagnostics']['machine_probe:required_branch_feature_missing']=2
+    original=json.dumps(result,sort_keys=True);health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    assert health['full_coverage_proven'] is False and health['runtime_effect'] is False
+    assert json.dumps(result,sort_keys=True)==original

@@ -764,13 +764,15 @@ def _native_preassessment_terminal_valid(row, actor, bundle):
         and _reversal_lifecycle_diagnostic(proof) is not None)
 
 
-def _probe_verified_no_match(row, *, allow_incomplete=False):
+def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False):
     """A native FALSE observation proves coverage, never machine/AI acceptance."""
     import ast
     try:
         fields = row['fields']
         result=fields.get('zero_base_probe_result')
-        if (result not in ({'observation_incomplete'} if allow_incomplete else {'required_feature_insufficient','pattern_not_matched'})
+        allowed = ({'required_feature_insufficient'} if feature_gap else
+                   {'observation_incomplete'} if allow_incomplete else {'required_feature_insufficient','pattern_not_matched'})
+        if (feature_gap and not allow_incomplete or result not in allowed
                 or (not allow_incomplete and fields.get('zero_base_probe_reason') not in {
                     'native_observation_residence_exhausted', 'native_observation_no_matching_pattern'})
                 or fields.get('zero_base_ws_wait_reason') != 'ready'):
@@ -787,7 +789,7 @@ def _probe_verified_no_match(row, *, allow_incomplete=False):
                 receipt = ast.literal_eval(receipt)
         if not isinstance(receipt, dict):
             return False
-        if result in {'pattern_not_matched','observation_incomplete'}:
+        if result in {'pattern_not_matched','observation_incomplete'} or feature_gap:
             if receipt.get('native_source_current') is not True:return False
             if not allow_incomplete:
                 counts=receipt.get('selected_lifecycle_counts') or {}
@@ -836,16 +838,18 @@ def _probe_verified_no_match(row, *, allow_incomplete=False):
         return False
 
 
-def _probe_verified_pending(row):
+def _probe_verified_pending(row, *, feature_gap=False):
     """Verify native incomplete outcomes; UNKNOWN never becomes an assessment."""
     import ast
-    if not _probe_verified_no_match(row, allow_incomplete=True):
+    if not _probe_verified_no_match(row, allow_incomplete=True, feature_gap=feature_gap):
         return None
     try:
         fields = row['fields']
         reason = fields.get('zero_base_probe_reason')
-        if reason not in {'confirmation_pending_at_residence_end', 'feature_window_incomplete',
-                          'native_confirmation_not_consumed_before_expiry'}:
+        allowed_reasons = ({'required_branch_feature_missing'} if feature_gap else
+            {'confirmation_pending_at_residence_end', 'feature_window_incomplete',
+             'native_confirmation_not_consumed_before_expiry'})
+        if reason not in allowed_reasons:
             return None
         receipt = fields['native_observation_receipt']
         if isinstance(receipt, str):
@@ -884,6 +888,43 @@ def _probe_verified_pending(row):
                 or receipt.get('reason') != 'required_window_incomplete'
                 or not any(v == 'UNKNOWN' for v in truth.values()) or unknown <= 0):
             return None
+        if feature_gap:
+            readiness = fields.get('zero_base_branch_readiness')
+            if isinstance(readiness, str):
+                if len(readiness) > 65536:
+                    return None
+                try: readiness = json.loads(readiness)
+                except ValueError: readiness = ast.literal_eval(readiness)
+            if not isinstance(readiness, dict):
+                return None
+            branches = readiness.get('branch_descriptors')
+            if (fields.get('zero_base_probe_result_schema') != 'zero_base_probe_result_v2'
+                    or readiness.get('schema') != 'native_branch_residence_requirements_v2'
+                    or readiness.get('status') != 'observed'
+                    or readiness.get('runtime_effect') is not False
+                    or readiness.get('decision_authority') != 'none'
+                    or readiness.get('scope_changed') is not False
+                    or readiness.get('price_basis') != 'exact_native_trade'
+                    or readiness.get('route') != fields.get('zero_base_route')
+                    or readiness.get('policy_scope') != receipt.get('selected_scope')
+                    or any(type(readiness.get(k)) is not int for k in ('native_epoch','native_sequence'))
+                    or any(readiness.get(k) != receipt.get(k) for k in
+                           ('item','family_sha256','scope_execution_hash','native_epoch','native_sequence'))
+                    or not isinstance(branches, dict) or set(branches) != set(truth)):
+                return None
+            missing = 0
+            for branch, descriptor in branches.items():
+                inputs = descriptor.get('missing_inputs') if isinstance(descriptor, dict) else None
+                if (not isinstance(inputs, list) or len(inputs) > 64
+                        or any(not isinstance(v, str) or not re.fullmatch('[A-Za-z0-9_]{1,80}', v) for v in inputs)
+                        or descriptor.get('detector_truth') != truth[branch]
+                        or descriptor.get('feature_availability') not in ('complete','incomplete')
+                        or bool(inputs) != (descriptor.get('feature_availability') == 'incomplete')
+                        or inputs and truth[branch] != 'UNKNOWN'):
+                    return None
+                missing += len(inputs)
+            if not missing:
+                return None
         return dict(pending_count=receipt['selected_pending_count'], unknown_count=unknown,
                     source_censored_count=receipt['source_censored_count'])
     except (KeyError, ValueError, TypeError, SyntaxError, RecursionError):
@@ -1011,6 +1052,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
     native_session = session_contract.resolve_market_session(now)
     wait_total = boundary_waits = source_waits = unclassified_waits = 0
     pending_total = pending_verified = pending_unknown = pending_censored = 0
+    feature_gap_total = feature_gap_verified = feature_gap_unknown = 0
     wait_reasons = Counter()
 
     def native_watch_claim(fields, symbol, at, route):
@@ -1124,6 +1166,18 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
             record('machine_probe','native_observation_incomplete',row,diagnostic=True,
                    code=row.get('stock_code'),route=route)
         elif result in {"required_feature_insufficient", "pattern_not_matched"}:
+            if result == 'required_feature_insufficient' and reason == 'required_branch_feature_missing':
+                feature_gap_total += 1
+                observed['probe_feature_missing'] += 1
+                proof = _probe_verified_pending(row, feature_gap=True)
+                if proof is not None:
+                    feature_gap_verified += 1
+                    feature_gap_unknown += proof['unknown_count']
+                    record('machine_probe', 'required_branch_feature_missing', row,
+                           diagnostic=True, code=row.get('stock_code'), route=route)
+                    # Missing required features never count as covered, assessed
+                    # or no-match, even when their source contract is verified.
+                    continue
             if _probe_verified_no_match(row):
                 covered_by_route[str(route or 'UNKNOWN')] += 1
                 no_match_by_route[str(route or 'UNKNOWN')] += 1
@@ -1384,6 +1438,12 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
             "unclassified_count": pending_total-pending_verified, "unknown_count": pending_unknown,
             "source_censored_count": pending_censored, "runtime_effect": False,
             "machine_admission_proven": False, "pattern_no_match_proven": False},
+        "native_feature_gap_observations": {"schema": "submission_monitor_native_feature_gap_census_v1",
+            "count": feature_gap_total, "verified_count": feature_gap_verified,
+            "unclassified_count": feature_gap_total-feature_gap_verified,
+            "unknown_count": feature_gap_unknown, "runtime_effect": False,
+            "source_coverage_proven": False, "machine_admission_proven": False,
+            "pattern_no_match_proven": False},
         "async_pass_projection": pass_projection[-128:],
         "async_pass_unmapped_count": unmapped_pass_count,
         "async_transition_projection": [dict(emitted_at=row.get('emitted_at'),
@@ -3371,6 +3431,20 @@ def observation_health_projection(result):
     if valid_no_match:
         allowed_diagnostics.add('machine_probe:native_no_matching_pattern')
     require(not no_match_n or valid_no_match, 'native_no_match_observation_not_verified')
+    feature_gap = obj(gap.get('native_feature_gap_observations'))
+    feature_gap_n = obj(gap.get('observed')).get('probe_feature_missing', 0)
+    valid_feature_gap = (feature_gap.get('schema') == 'submission_monitor_native_feature_gap_census_v1'
+        and count(feature_gap_n, minimum=1) and count(feature_gap.get('count'), minimum=1)
+        and count(feature_gap.get('verified_count'), minimum=1)
+        and feature_gap['count'] == feature_gap['verified_count'] == feature_gap_n
+        and count(feature_gap.get('unclassified_count'), maximum=0)
+        and count(feature_gap.get('unknown_count'), minimum=feature_gap_n)
+        and all(feature_gap.get(k) is False for k in ('runtime_effect', 'source_coverage_proven',
+                                                     'machine_admission_proven', 'pattern_no_match_proven'))
+        and obj(gap.get('diagnostics')).get('machine_probe:required_branch_feature_missing') == feature_gap_n)
+    if valid_feature_gap:
+        allowed_diagnostics.add('machine_probe:required_branch_feature_missing')
+    require(not feature_gap_n or valid_feature_gap, 'native_feature_gap_observation_not_verified')
     diagnostics = obj(gap.get('diagnostics'))
     scoped = obj(gap.get('diagnostics_by_scope'))
     totals = Counter()
@@ -3395,7 +3469,7 @@ def observation_health_projection(result):
         and set(observed) <= {'probe_results', 'probe_assessed', 'entry_traces', 'machine_assessed',
             'auxiliary_required', 'auxiliary_called', 'auxiliary_cost_bound',
             'auxiliary_pending', 'auxiliary_pending_bound', 'auxiliary_transport_unavailable',
-            'probe_observation_incomplete', 'probe_native_no_match'}
+            'probe_observation_incomplete', 'probe_native_no_match', 'probe_feature_missing'}
         and all(count(v) for v in observed.values()))
     expected_gap = ('gap_observed' if diagnostics or gap.get('issues') else 'observed_no_gap' if any(observed.values())
                     else 'unobservable')
