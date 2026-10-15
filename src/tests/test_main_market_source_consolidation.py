@@ -424,6 +424,84 @@ def test_code_refresh_parent_uses_full_strict_old_release_validator(parent, tmp_
     assert len(calls) == (0 if failure == 'dirty_origin' else 1)
 
 
+@pytest.mark.parametrize('damage', [
+    'none', 'rollover', 'source', 'code', 'authority', 'date', 'pointer',
+    'missing_receipt', 'generation', 'source_error', 'overlap', 'membership', 'seal',
+])
+def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_changes(tmp_path, monkeypatch, damage):
+    import contextlib
+    import io
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_code_handoff as H
+    from src.engine.infrastructure import runtime_release_router as router
+    root = tmp_path / 'data'
+    origin = tmp_path / 'origin'
+    origin.mkdir()
+    commit, ident, day = 'c' * 40, 'b' * 64, '2026-10-15'
+    base = N.root(root)
+    pointer = base / 'current.json'
+    bundle = dict(bundle_sha256=ident, target_date=day)
+    P.write(pointer, dict(bundle_sha256=ident))
+    P.write(base / 'generations' / (ident + '.json'), bundle)
+    source = root / 'immutable-source.json'
+    code = origin / 'reader.py'
+    source.write_text('{}')
+    code.write_text('# original reviewed reader\n')
+    codes = {str(code): P.file_hash(code)}
+    receipt = P.seal(dict(schema=H.SCHEMA, authority=H.AUTHORITY,
+        target_date=day, release_commit=commit, release_root=str(origin),
+        bundle_sha256=ident, current_pointer_sha256=P.file_hash(pointer),
+        policy_reselected=False, provider_called=False,
+        source_hashes={str(source): P.file_hash(source)}, code_hashes=codes))
+    if damage in ('authority', 'date', 'pointer'):
+        field, value = {'authority': ('authority', 'unapproved'),
+                        'date': ('target_date', '2026-10-14'),
+                        'pointer': ('current_pointer_sha256', 'f' * 64)}[damage]
+        receipt = P.seal(dict(receipt, **{field: value}))
+    if damage == 'overlap':
+        receipt = P.seal(dict(receipt, source_hashes={str(code): 'f' * 64}))
+    if damage == 'membership':
+        receipt = P.seal(dict(receipt, code_hashes={str(code) + '.other': 'f' * 64}))
+    if damage == 'seal': receipt['artifact_content_sha256'] = 'f' * 64
+    if damage != 'missing_receipt':
+        P.write(H.path(root, day, commit, ident), receipt)
+    if damage == 'source': source.write_text('{"changed":true}')
+    if damage == 'code': code.write_text('# changed implementation\n')
+    if damage == 'generation':
+        P.write(base / 'generations' / (ident + '.json'), dict(bundle, bundle_sha256='d' * 64))
+    before = {p: p.read_bytes() for p in root.rglob('*.json')}
+    reason = ('v6_contract_code_changed:reader.py' if damage == 'rollover'
+              else 'source_missing' if damage == 'source_error'
+              else 'active_policy_code_reader_root_changed')
+    def unavailable(*a, **kw): raise ValueError(reason)
+    monkeypatch.setattr(N, '_load_current_uncached', unavailable)
+    monkeypatch.setattr(N, 'validate', lambda *a, **kw: None)
+    monkeypatch.setattr(H, 'code_hashes', lambda: {str(code): P.file_hash(code)})
+    monkeypatch.setattr(router, '_release_identity', lambda *a: dict(
+        source_integrity='git_commit_and_clean_runtime_source'))
+    def invoke(args, **kw):
+        assert kw['cwd'] == origin and kw['check'] is True
+        output = io.StringIO()
+        with monkeypatch.context() as child, contextlib.redirect_stdout(output):
+            child.chdir(origin)
+            child.setattr(sys, 'argv', ['-c', *args[3:]])
+            exec(args[2], {})
+        return SimpleNamespace(stdout=output.getvalue())
+    monkeypatch.setattr(subprocess, 'run', invoke)
+    if damage in ('none', 'rollover'):
+        assert V._attested_activation_parent(root, day,
+            origin_root=origin, origin_commit=commit) == bundle
+    else:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            V._attested_activation_parent(root, day,
+                origin_root=origin, origin_commit=commit)
+    assert before == {p: p.read_bytes() for p in before}
+
+
 @pytest.mark.parametrize('item',['005930','005930_NX','005930_AL'])
 def test_retired_manifest_cannot_replace_main_route_or_schedule_deferred_reg(item):
     manager=KiwoomWSManager('unused')

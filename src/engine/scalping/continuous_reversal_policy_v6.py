@@ -448,11 +448,47 @@ def _attested_activation_parent(data_root, target_date, *, origin_root, origin_c
                                  'code_refresh_activation_parent',origin_commit)
     if identity['source_integrity'] != 'git_commit_and_clean_runtime_source':
         raise ValueError('v6_code_refresh_activation_origin_unattested')
-    script = ('import sys; from pathlib import Path; '
-              'from src.engine.scalping import mechanistic_entry_runtime_policy as N; '
-              'b=N._load_current_uncached(Path(sys.argv[1]),sys.argv[2]); '
-              'print(b["bundle_sha256"] if b else "none")')
-    result = subprocess.run([str(origin/'.venv/bin/python'),'-c',script,str(Path(data_root).resolve()),target_date],
+    script = r'''
+import sys
+from pathlib import Path
+from src.engine.scalping import mechanistic_entry_runtime_policy as N
+data, day, commit = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+try:
+    b = N._load_current_uncached(data, day)
+except ValueError as exc:
+    # The intake release is immutable; a later selector or date cannot make
+    # its live-reader context current again. Revalidate its dated, originally
+    # issued strict-source attestation only for this explicit parent reader.
+    if not (str(exc) == 'active_policy_code_reader_root_changed' or
+            str(exc).startswith(('v4_contract_code_changed:',
+                'v5_contract_code_changed:', 'v6_contract_code_changed:'))):
+        raise
+    from src.engine.scalping import reversal_code_handoff as H
+    pointer = N.root(data) / 'current.json'
+    before = pointer.read_bytes()
+    ident = N._read(pointer)['bundle_sha256']
+    b = N._read(N.root(data) / 'generations' / (ident + '.json'))
+    N.validate(b, target_date=day)
+    if b['bundle_sha256'] != ident:
+        raise ValueError('v6_historical_parent_generation_changed')
+    receipt_path = H.path(data, day, commit, ident)
+    receipt_sha = N._source_hash(str(receipt_path), N._signature(receipt_path))
+    r = H.validate_receipt(N._read(receipt_path), day=day, commit=commit,
+        root=Path.cwd(), bundle_sha=ident, pointer_sha=H.P.file_hash(pointer))
+    if r['code_hashes'] != H.code_hashes():
+        raise ValueError('v6_historical_parent_code_changed')
+    signatures = {}
+    for name, expected in list(r['source_hashes'].items()) + list(r['code_hashes'].items()):
+        signatures[name] = N._signature(Path(name))
+        if N._source_hash(name, signatures[name]) != expected:
+            raise ValueError('v6_historical_parent_source_changed:' + name)
+    if (pointer.read_bytes() != before or
+            N._source_hash(str(receipt_path), N._signature(receipt_path)) != receipt_sha or
+            any(N._signature(Path(name)) != sig for name, sig in signatures.items())):
+        raise ValueError('v6_historical_parent_changed_during_validation')
+print(b['bundle_sha256'] if b else 'none')
+'''
+    result = subprocess.run([str(origin/'.venv/bin/python'),'-c',script,str(Path(data_root).resolve()),target_date,origin_commit],
         text=True,check=True,capture_output=True,timeout=120,cwd=origin,env={**os.environ,'PYTHONPATH':str(origin)})
     ident = result.stdout.strip()
     if not re.fullmatch('[0-9a-f]{64}',ident):
