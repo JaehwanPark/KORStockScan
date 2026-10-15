@@ -1872,6 +1872,10 @@ def decision_parse_status(payload: dict[str, Any], result_source: str | None) ->
         return "not_attempted_transport_timeout"
     if _safe_bool(payload.get("ai_parse_ok", payload.get("parse_ok"))) is True:
         return "parsed"
+    if str(result_source or "") == "operating_opportunity_blocked":
+        # A response receipt can precede a failed local outbox transition.
+        # That receipt alone does not establish a response parse failure.
+        return "not_evaluated_local_custody"
     received = (
         payload.get("microstructure_provider_delivery_status") == "response_received"
         or bool(payload.get("provider_response_id"))

@@ -294,6 +294,26 @@ def test_outbox_uncertainty_blocks_restart_and_new_generation(tmp_path):
     with pytest.raises(ValueError):O.advance(tmp_path,a['opportunity_key'],'reserved')
 
 
+@pytest.mark.parametrize('damage', ['null', 'empty', 'state_type', 'key', 'history'])
+def test_outbox_invalid_shape_is_local_custody_error_and_preserves_bytes(tmp_path, damage):
+    key = 'a'*64
+    value = O.advance(tmp_path, key, 'reserved')
+    path = tmp_path/'runtime/initial_quantity/operating_opportunities'/(key+'.json')
+    if damage == 'null':
+        value = None
+    elif damage == 'empty':
+        value = {}
+    else:
+        value[{'state_type':'state', 'key':'opportunity_key', 'history':'history'}[damage]] = (
+            [] if damage == 'state_type' else 'b'*64 if damage == 'key' else None)
+        value['sha256'] = O.digest({k:v for k,v in value.items() if k != 'sha256'})
+    path.write_text(json.dumps(value))
+    before = path.read_bytes()
+    with pytest.raises(O.OperatingOpportunityError, match='operating_outbox_corrupt'):
+        O.advance(tmp_path, key, 'transmission_uncertain')
+    assert path.read_bytes() == before
+
+
 def configured_family(replay):
     root,b,m=replay
     PC.prepare_inputs(root,'2026-10-07',m,b)

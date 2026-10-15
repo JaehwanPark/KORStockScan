@@ -3040,6 +3040,12 @@ class KiwoomWSManager:
         if not self.websocket:
             return
 
+        # Persist a new source generation before subscriptions/readiness. A
+        # process-local counter can alias a previous Main PID's durable signal.
+        self._session_ready.clear()
+        from src.trading.market.transport_epoch import allocate_transport_epoch
+        transport_epoch = allocate_transport_epoch(previous=self._market_data_transport_epoch)
+
         if is_ws_condition_search_enabled() and (
             not _zero_base_discovery_enabled()
             or is_swing_real_watching_enabled()
@@ -3058,7 +3064,7 @@ class KiwoomWSManager:
         with self.lock:
             for item, lease in list(self._exact_probe_item_leases.items()):
                 self._discard_exact_probe_item_locked(item, lease["lease_id"])
-        self._market_data_transport_epoch += 1
+        self._market_data_transport_epoch = transport_epoch
         self._route_realtime_sequence.clear()
         if self.is_reconnected:
             self._begin_micro_reversion_transport_epoch()

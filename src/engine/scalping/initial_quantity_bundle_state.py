@@ -55,7 +55,8 @@ def reserve_reversal_signal(base_dir: Path, *, signal_id: str, stage: str,
     with (base/(key+".lock")).open("a") as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         state=json.loads(path.read_text()) if path.exists() else dict(schema="main_reversal_signal_intent_v1",signal_id=signal_id,stages={})
-        if path.exists() and (state.get("content_sha256")!=_digest({k:v for k,v in state.items() if k!="content_sha256"})
+        if path.exists() and (not isinstance(state,dict) or not isinstance(state.get("stages"),dict)
+                              or state.get("content_sha256")!=_digest({k:v for k,v in state.items() if k!="content_sha256"})
                               or state.get("signal_id")!=signal_id or state.get("schema")!="main_reversal_signal_intent_v1"):
             raise ValueError("reversal_signal_journal_invalid")
         existing=state["stages"].get(stage)
