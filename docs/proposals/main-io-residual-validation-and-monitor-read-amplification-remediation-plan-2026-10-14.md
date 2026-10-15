@@ -187,3 +187,8 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 - delay compact 검증은 파일별 SHA·ordered 전체 SHA·날짜별 cumulative SHA를 한 스트림으로 구한다. descriptor와 경로의 전후 identity/byte count, 마지막 inventory/identity 검사를 수행한다. 원 raw/compact ledger·plain/gzip/late-part 검사는 그대로 수행한다.
 - CLI stdout의 `validation_io`는 이 호출의 완료된 해시 읽기/재사용량과 thread I/O 계수다. controller·prepared canonical 산출물에 새 계측 필드를 넣어 원 해시를 바꾸지 않는다. 파일 내용 SHA 재사용을 semantic PASS로 기록하지 않는다.
 - 실제 적용과 자연 장후 cold/warm 소요시간 수용은 기존 `DirectFamilyPreopenPolicyHandoff` 및 당일 체크리스트로 확인한다. full strict/currentness 호출을 생략하거나600초 예산을 늘리지 않는다. 현재 봉인 준비본 재생성·거래 재기동·주문 권한은 이 구현에서 열지 않는다.
+
+
+### 10/16 승인 배포의 source-pair 수용
+
+사용자 후속 지시로 위 구현의 배포와07:55 정기 기동 검증이 승인됐다. 기존 인계의 `REVIEWED_POSTCLOSE_READ_SOURCES`는 원23a13aba6의 delay source verifier와 검토된 단일 패스 구현의 정확한 파일 SHA 쌍만 인정한다. 원 정책/보고서/code pin은 유지하고 source/코드 변조와 native 원천 결손은 계속 거부한다. PREOPEN 진행 중 선택 전환이나 code-refresh 시한 우회는 하지 않는다. 정기 첫 기동의 native 소비 뒤 기존 ordered driver를 사용하며 원 기동/후속 배포 PID를 분리한다. [재리뷰·배포 수용](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md)을 따른다.

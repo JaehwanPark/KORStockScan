@@ -201,3 +201,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 기존 `DirectFamilyPreopenPolicyHandoff`가 반복 검증으로 실패한 장후 인계 경로의 적용·현재성 수용을 계속 소유한다. OPEN stable ID·기한·원 Acceptance는 바꾸지 않는다. 사용자10/16 지시로 controller/prepare CLI의 실행 내 digest 공유와 delay 단일 패스 검증을 별도 작업본에 구현했다. [구현·반복 리뷰](../audits/main-postclose-read-reduction-implementation-review-2026-10-16.md), [운영 계약](../proposals/main-io-residual-validation-and-monitor-read-amplification-remediation-plan-2026-10-14.md#장후-cli-실행-내-재사용-보완--2026-10-16)을 따른다.
 
 이 체크리스트는 구현 작업본의 인계 초안이다. 원 작업공간의 봉인된10/16 checklist·선택본·정책·controller/prepared는 변경하지 않았다. 구현 검증은 배포·PREOPEN/PID 소비·정규 장후 성능 수용과 별개다. 적용할 때 기존 source/code/date/native handoff 검증을 수행하며 원 정책 코드 계약 차이를 무시하거나 기존 준비본을 새 코드로 재라벨링하지 않는다. 세대 전체 게시의 원자성과 프로세스 사이 재사용은 이번 구현 대상이 아니다.
+
+사용자 후속 배포·07:55 확인 지시를 수용했다. 기존 `DirectFamilyPreopenPolicyHandoff`의 원 수용 기준으로 정규 PREOPEN/첫 기동과 후속 ordered 배포를 검증한다. [배포 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md). 원 운영 체크리스트와 이미 봉인된 정책/PREOPEN bytes는 별도 보호한다.

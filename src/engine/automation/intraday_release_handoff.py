@@ -672,6 +672,17 @@ REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES = {'src/engine/sniper_state_handlers.py': 
 REVIEWED_HOLDING_CONTRACT_SOURCES = {'src/engine/sniper_state_handlers.py': ('b87f2ecdd7ef43a9f5268e06a5a9fbf8991223acffd58c3258aec68d77832500', '8eaa7493ce235c64e8ccea966afee2a87ef6ee201dd080407584b51925d45ec2'), 'src/engine/scalping/main_stop_policy.py': ('c444f74e9da0339b564543322da389bcbe38552c4ed56531e8ebf5c21676752e', '8cdd21315d3d0db00f3383406dbb7d885ca02fef7ed957edf4f9535f0f022087'), 'src/engine/scalping/main_stop_replay.py': ('f609161b46296329cb08a4f4b71a07f465f6e412429286348901d85e66c90363', '3194cc743fc664176245ccb5ffbb26469d68c4276bc8c86aa4d0d87377615ffe'), 'src/engine/automation/main_stop_postclose.py': ('360573dc170d91617cbaec7f1c8713b769c403b22e52449e11434019360a6224', '0a33ccf900e7d512ff03ee62923efa95842ea87caeb2987fbd1b479aa18f8258'), 'src/engine/automation/main_stop_source_index.py': ('ddaab50afeee7a47c4a49565f27dc699532aabf8197e5276eb0d57cf974dfdce', '802a8f3878f5d9d2fd299c79a57f9b84db6bf1de52017f0e995958b65145381d')}
 
 
+# Reviewed full-byte pair for one-pass source verification only. Qualification,
+# selection, policy values and the original native source proof are unchanged.
+# Evidence: main-postclose-read-reduction-deployment-review-2026-10-16.md.
+REVIEWED_POSTCLOSE_READ_SOURCES = {
+    'src/engine/scalping/pre_submit_delay_initial_policy.py': (
+        'ea2f93040975dcf7b9fc247ad57c706fd2bab6a9b717da7f754a0364e43dccf0',
+        '037af000399c501362c62a63e4361501c041e3db0289b1edd059b839e36e0a47',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -741,7 +752,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
                     REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name),
                     REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name),
-                    REVIEWED_HOLDING_CONTRACT_SOURCES.get(name)):
+                    REVIEWED_HOLDING_CONTRACT_SOURCES.get(name),
+                    REVIEWED_POSTCLOSE_READ_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

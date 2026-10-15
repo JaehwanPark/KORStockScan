@@ -16,6 +16,7 @@ NATIVE_SELECTION = handoff._selection
 
 
 @pytest.mark.parametrize('name', ['src/engine/kiwoom_sniper_v2.py',
+                                  'src/engine/scalping/pre_submit_delay_initial_policy.py',
                                   'src/engine/monitoring/submission_bottleneck_monitor.py',
                                   'src/engine/sniper_state_handlers.py',
                                   'src/engine/scalping/scanner_async_eval.py',
@@ -53,7 +54,8 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_TERMINAL_CLOCK_CUSTODY_SOURCES',
                                      'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES',
                                      'REVIEWED_CARRIED_SOURCE_BINDING_SOURCES',
-                                     'REVIEWED_HOLDING_CONTRACT_SOURCES'])
+                                     'REVIEWED_HOLDING_CONTRACT_SOURCES',
+                                     'REVIEWED_POSTCLOSE_READ_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib
