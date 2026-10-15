@@ -118,3 +118,14 @@ observer 전용 state reader는 canonical 보고서와 같은8MiB 한도에서 r
 회귀는 긴 검사 중 새 보고서 게시, 최초 실패→새 정상/실패 보고서, 손상·과대·삭제·symlink·stale/future, selector 변경, 연속 교체, 다른 artifact 실패 보존, 최신 wall clock 및 KST 날짜 전환을 포함한다. 원 quiet-window 변경 감지 회귀는 첫 시도 진단 보존과 최종 실패를 모두 확인하도록 갱신했다.
 
 추가 수리의 재검토·표적 회귀2,110개 PASS(12.88초), compile·diff whitespace·print-only parser PASS다. 원 정책과 reporter code hash는 변경하지 않아 기존 capability fixture와 native code handoff를 유지한다. 승인된 ordered 배포 이후 실제 consumer 영수증을 후속 기록한다.
+
+
+## 09:52 최종 통합 배포·실제 소비 확인
+
+배포 source commit은27e1b5bdfe4156491ad275e88034980153f5bc62이며92785b7da·a179bb42d를 ancestry에 포함한다. 별도 작업 트리에서 검토/검증 후 ordered driver가09:50:33.562520 complete/pass로 종료했다. 선택 release는 `/home/ubuntu/KORStockScan-runtime-releases/observer-publication-integrated-20261015-27e1b5bdf`, 실제 Main PID1614174/start ticks8930260/cwd `release/src`이고 native 정책 소비가 확인됐다. native manifest seal73a9a4f20bc146ea40c2f74966e107a3cb7773ef623dd1b9df0750a838adebad는 동일하다. custody registry1489/tail b03d9a806ec95f8eebbf83e87900f4957b46d90312e721c1d10f10d7f2912d83, 기존042660qty10·475150qty20/미확인 open code[]/open quantity{}를 보존했다. 새 PID와 commit의 WS 수신에서 writer_loss/projection_errors0을 확인했다.
+
+실제 첫 sweep은09:50:33.674983에 시작했고 native observer는 그 이후09:50:36.086464에 시작해 게시됐다. 변경된 detector의 최종 검사는09:52:19.629576에 새 report run031f8e3ce00a4a79b6e8bbc75c2eae69/SHA3715e3ad6dad67d30567fdec3a69ba93e086d12de6733d871dec96a752bb38d8를 소비했다. publication_recheck는 deferred=true/stable=true이며 같은 run·SHA·projection·compact continuation이 일치한다. 따라서 탐지기 시작이 게시보다 빨라도 오래된 snapshot 판정을 반환하던 결함을 실제 후속 소비로 검증했다. 게시와 탐지기의 독립 스케줄 자체를 제거한 것은 아니며 최종 검사 뒤 게시되는 보고서는 다음 sweep에서 평가한다.
+
+09:52:24 health에서 fail/critical/error0, 정책 generation4종 verified/findings[]다. observer는 bounded_no_applicable_observations/unmet[]의 warning_pending이며 full_coverage_proven=false를 유지한다. 남은 warning은 표본 대기와 postclose_finalization의06:50 이후 복구 이력이다. 원 실패·복구 지연을 삭제하지 않았고 실주문·체결·경제성 또는 전체 source coverage 완료로 해석하지 않는다. 해당 자연 수용은 기존 OPEN owner에 남겨둔다. 재발 방지 코드 범위의 미해결 결함은 없으며 정책/AI/주문을 수동 재실행하지 않았다.
+
+[최종 수용 대사](../../tmp/intraday-submission-20261015-until0820/final-acceptance-095235.json)의15개 check는 모두true다. [native 증거 manifest](../../tmp/intraday-submission-20261015-until0820/final-native-27e1b5bdf-manifest.json)에 health·observer·selector·transition·WS·custody·continuation·bootstrap 원 bytes와 hash를 별도 보존했다. 최종 문서 갱신은 별도 기록 커밋이며 배포 source를 바꾸지 않는다.
