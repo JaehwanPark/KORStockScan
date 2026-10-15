@@ -127,13 +127,15 @@ def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
                 assert reason in result["latency_danger_reasons"]
 
 
-def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
+def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "_ENTRY_CAPACITY_PENDING", {})
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
     monkeypatch.setattr(capture, "_POLICY_CACHE", {})
+    monkeypatch.setattr(capture, "DATA_DIR", tmp_path / "data")
     rules = sniper_runtime.sniper_state_handlers.TRADING_RULES
     monkeypatch.setattr(capture, "policy_snapshot", lambda handlers, now_ts: {
+        "schema": "avg_down_full_policy_snapshot_v1",
         "rules": capture._json_value(vars(rules)), "environment": capture.policy_environment(),
         "files": {}, "matrix_selection": {},
         "peak_ledger_source_path": str(POSITION_PEAK_LEDGER.path.absolute()),
@@ -162,7 +164,8 @@ def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
     assert not thread.is_alive()
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_failure_count == 0
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_last_success_epoch > 0.0
-    assert sniper_runtime.run_sniper.entry_economic_policy_cache_receipt["status"] == "ready"
+    receipt = sniper_runtime.run_sniper.entry_economic_policy_cache_receipt
+    assert receipt["status"] == "ready", receipt
     assert capture._cached_policy(sniper_runtime.sniper_state_handlers, time.time())["rules"]
 
 

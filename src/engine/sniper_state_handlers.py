@@ -3200,7 +3200,8 @@ def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch,
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
 
-def _request_entry_capacity_preparation(stock, code, ws_data, *, context=None):
+def _request_entry_capacity_preparation(stock, code, ws_data, *, context=None,
+                                        diagnostic_context=None):
     """Reserve only an existing, unexpired evaluation demand; never invent TTL."""
     try:
         if not isinstance(context, ScannerAsyncEvalContext) or context.expired():
@@ -3219,7 +3220,7 @@ def _request_entry_capacity_preparation(stock, code, ws_data, *, context=None):
                 return True
             if _ENTRY_CAPACITY_INFLIGHT.get(key):
                 return True
-            for expired in [k for k, v in _ENTRY_CAPACITY_PENDING.items() if v[2] <= now_ts]:
+            for expired in [k for k, v in _ENTRY_CAPACITY_PENDING.items() if v[3].expired()]:
                 _ENTRY_CAPACITY_PENDING.pop(expired)
             # Coalesce a changed quote for the same symbol instead of spending
             # the existing worker on obsolete prices. No historical backfill.
@@ -3234,7 +3235,9 @@ def _request_entry_capacity_preparation(stock, code, ws_data, *, context=None):
             for obsolete in obsolete_keys:
                 _ENTRY_CAPACITY_PENDING.pop(obsolete)
             if key not in _ENTRY_CAPACITY_PENDING:
-                _ENTRY_CAPACITY_PENDING[key] = (code, price, context.deadline_epoch, context, stock)
+                _ENTRY_CAPACITY_PENDING[key] = (code, price, context.deadline_epoch, context, stock,
+                    {name: (diagnostic_context or {}).get(name) for name in (
+                        'broker_route', 'effective_venue', 'session_bucket', 'mechanistic_action')})
                 created = True
             deadline = _ENTRY_CAPACITY_PENDING[key][2]
         if created:
@@ -3243,6 +3246,7 @@ def _request_entry_capacity_preparation(stock, code, ws_data, *, context=None):
                     "preparation_id": hashlib.sha256(repr((key, deadline)).encode()).hexdigest(),
                     "pid": os.getpid(), "code": str(code), "price": price,
                     "result": "pending", "deadline_epoch": deadline,
+                    "request_id": context.request_id, "deadline_perf": context.deadline_perf,
                     "scope_sha256": hashlib.sha256(repr(key).encode()).hexdigest(),
                     "http_attempts": 0}, sort_keys=True, separators=(",", ":")))
             except Exception:
@@ -3258,8 +3262,14 @@ def prepare_pending_entry_capacity():
     with _ENTRY_CAPACITY_LOCK:
         if not _ENTRY_CAPACITY_PENDING:
             return {"status": "idle"}
-        key = next(iter(_ENTRY_CAPACITY_PENDING))
-        code, price, deadline, context, stock = _ENTRY_CAPACITY_PENDING.pop(key)
+        # The observer worker polls faster than the existing retry suppression.
+        # Keep cooling requests queued, while allowing other symbols to proceed.
+        now_ts = time.time()
+        key = next((key for key, pending in _ENTRY_CAPACITY_PENDING.items()
+                    if pending[3].expired() or now_ts >= _ENTRY_CAPACITY_RETRY_AFTER.get(key, 0)), None)
+        if key is None:
+            return {"status": "deferred", "reason": "capacity_source_retry_deferred"}
+        code, price, deadline, context, stock, diagnostic_context = _ENTRY_CAPACITY_PENDING.pop(key)
     try:
         if (context.expired() or context.state_version != _scanner_async_entry_state_version(stock)
                 or key != _entry_capacity_receipt_key(code, price)):
@@ -3268,7 +3278,7 @@ def prepare_pending_entry_capacity():
         with kiwoom_utils.entry_source_budget(EntryDeadline.create(
                 caller_epoch=deadline, caller_perf=context.deadline_perf)):
             return _prefetch_entry_capacity_for_async_evaluation(code, {"curr": price}, deadline,
-                correlation_id=context.request_id)
+                correlation_id=context.request_id, diagnostic_context=diagnostic_context)
     except Exception as exc:
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
@@ -12344,7 +12354,7 @@ def _machine_auxiliary_receipt_wire_fields(fields: dict) -> dict:
 
 
 def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
-                                      assessment, capture, bundle_sha256):
+                                      assessment, capture, bundle_sha256, evaluation_context=None):
     """Freeze the existing owner plan before AI without submitting or reserving.
 
     The clone protects trading state; only the observation revision receipt is
@@ -12444,7 +12454,10 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             source["entry_economic_capacity_blocker"] = budget.get("kt00011_error") or "cash_quantity_missing"
             if assessment.get("action") == "ENTER_NOW":
                 source["entry_economic_capacity_preparation_requested"] = _request_entry_capacity_preparation(
-                    snapshot, code, {"curr": current})
+                    snapshot, code, {"curr": current}, context=evaluation_context,
+                    diagnostic_context={"broker_route": broker_route, "effective_venue": venue,
+                        "session_bucket": identity["market_session_bucket"],
+                        "mechanistic_action": assessment.get("action")})
             raise ValueError("exact_broker_capacity_missing")
         budget = _apply_general_entry_margin_budget_authority(budget, unit_price=current)
         source["entry_economic_capacity_receipt"] = copy.deepcopy(budget)
@@ -61421,7 +61434,8 @@ def _resolve_scanner_async_entry_ai(
             with kiwoom_utils.entry_source_budget(budget):
                 return _observe_entry_economics_before_ai(
                     stock_snapshot, code, facts.pop('observation_ws_data',
-                        thaw_scanner_async_value(prepared.get('ws_data') or {})), **facts)
+                        thaw_scanner_async_value(prepared.get('ws_data') or {})),
+                    evaluation_context=async_context, **facts)
 
         decision = dict(
             ai_engine.analyze_target(
@@ -82732,6 +82746,19 @@ def handle_watching_state(
                         except Exception as exc:
                             from src.engine.monitoring.runtime_performance import failure
                             failure('async_native_ack', type(exc).__name__, emit_log=False)
+                    if (claim and result.generation_kind == 'fixed_watch'
+                            and stock.get('status') == 'WATCHING'
+                            and stock.get('_scanner_scheduler_lane') != 'COMMIT'
+                            and not stock.get('_fixed_watch_async_claim')
+                            and not stock.get('_continuous_reversal_pending_claim')
+                            and not stock.get('_scanner_async_generation_id')
+                            and not stock.get('_scanner_async_cache_key')):
+                        try:
+                            from src.engine.monitoring.runtime_performance import rearm_native_watch_after_completion
+                            rearm_native_watch_after_completion(claim)
+                        except Exception as exc:
+                            from src.engine.monitoring.runtime_performance import failure
+                            failure('async_successor_revisit', type(exc).__name__, emit_log=False)
         finally:
             if stock.get('_async_consumption_guard') is guard:
                 if previous_guard is None:
