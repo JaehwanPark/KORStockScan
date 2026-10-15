@@ -1629,6 +1629,7 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             # content-addressed object or upstream source is removed here.
             shutil.rmtree(staging)
         cursor["source_census"] = ticket["source_census"]
+        cursor["source_projection_census"] = ticket.get("source_projection_census", {})
         cursor["native_indexed_rows"] = ticket.get("native_indexed_rows", 0)
         cursor["source_dependency_receipts"] = ticket.get(
             "source_dependency_receipts", []
@@ -1662,6 +1663,9 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                     source_path=source["path"],
                     partition_start=len(cursor["partitions"]),
                     source_census=dict(cursor.get("source_census", {})),
+                    source_projection_census=dict(
+                        cursor.get("source_projection_census", {})
+                    ),
                     gaps=dict(cursor["gaps"]),
                     native_indexed_rows=cursor.get("native_indexed_rows", 0),
                     source_dependency_receipts=list(
@@ -1765,7 +1769,15 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                 raise Deferred("source_cutoff_changed")
             projection_commit_started = True
             cursor.setdefault("source_census", {}).setdefault(source["kind"], 0)
-            cursor["source_census"][source["kind"]] += len(rows)
+            cursor["source_census"][source["kind"]] += (
+                len(native_rows)
+                if source["kind"] == "native_observations"
+                else len(rows)
+            )
+            cursor.setdefault("source_projection_census", {}).setdefault(
+                source["kind"], 0
+            )
+            cursor["source_projection_census"][source["kind"]] += len(rows)
             object_receipts = {
                 r["path"]: r for r in cursor.get("shared_object_receipts", [])
             }
@@ -1871,6 +1883,8 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
         dict(
             daily,
             source_census=cursor.get("source_census", {}),
+            source_projection_census=cursor.get("source_projection_census", {}),
+            native_indexed_rows=cursor.get("native_indexed_rows", 0),
             input_exclusions=cursor["gaps"],
             analysis_coverage=coverage(daily),
             population="retained_natural_trace_and_confirmation_replay_cohorts_only",
@@ -1907,7 +1921,14 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
         + source_date
         + "\n\nNo runtime or order effect. W/F/U are counterfactual price-path outcomes.\n\n```json\n"
         + json.dumps(
-            dict(census=daily["census"], scopes=daily["scopes"]),
+            dict(
+                source_census=daily["source_census"],
+                source_projection_census=daily["source_projection_census"],
+                native_indexed_rows=daily["native_indexed_rows"],
+                analysis_coverage=daily["analysis_coverage"],
+                census=daily["census"],
+                scopes=daily["scopes"],
+            ),
             ensure_ascii=True,
             indent=2,
         )
@@ -1925,6 +1946,9 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             daily_sha256=daily["artifact_content_sha256"],
             gaps=cursor["gaps"],
             analysis_coverage=daily["analysis_coverage"],
+            source_census=daily["source_census"],
+            source_projection_census=daily["source_projection_census"],
+            native_indexed_rows=daily["native_indexed_rows"],
             recommendation_status="not_evaluated_until_cumulative",
             **R.AUTH,
         )
@@ -1992,25 +2016,54 @@ def phase_receipt(data_root, day, daily_generation, phase, **refs):
     )
 
 
-def source_cursor_states(root):
-    """Bind completed and pending dates without loading their source streams."""
+def research_source_scope(data_root, *, through_date=None):
+    """Bound discovery, pending and currentness to the same closed source dates."""
+    config = read_json(namespace(data_root) / "installation.json", {})
+    if config:
+        check_seal(config)
+    baseline = read_json(
+        Path(data_root) / "source_quality/clean_baseline_policy.json", {}
+    )
+    start = max(
+        "2026-06-05",
+        baseline.get("clean_tuning_baseline_date", "2026-06-05"),
+        baseline.get("policy_refresh_start_date", "2026-09-29"),
+        config.get("evidence_start_date", "2026-09-29"),
+    )
+    through = through_date or datetime.now(R.KST).date().isoformat()
+    date.fromisoformat(start)
+    date.fromisoformat(through)
+    return dict(
+        evidence_start_date=start,
+        through_date=through,
+        source_dates=[
+            d
+            for d in discover_dates(data_root, dict(evidence_start_date=start))
+            if d <= through
+        ],
+    )
+
+
+def source_cursor_states(root, source_dates):
+    """Include discovered dates that have never started, without stream reads."""
     states = []
-    for path in sorted(root.glob("????-??-??/cursor.json")):
-        cursor = read_json(path, {})
+    for day in source_dates:
+        cursor = read_json(root / day / "cursor.json", {})
         states.append(
             dict(
-                source_date=path.parent.name,
+                source_date=day,
                 generation=cursor.get("generation"),
-                status=cursor.get("status"),
+                status=cursor.get("status", "not_started"),
                 code=cursor.get("source_descriptor", {}).get("code"),
             )
         )
     return states
 
 
-def cumulative(data_root, *, stop_at, clock=time.monotonic):
+def cumulative(data_root, *, stop_at, clock=time.monotonic, through_date=None):
     root = namespace(data_root)
-    cursor_states = source_cursor_states(root)
+    source_scope = research_source_scope(data_root, through_date=through_date)
+    cursor_states = source_cursor_states(root, source_scope["source_dates"])
     registry = read_json(root / "fixed_candidates.json", {})
     if registry:
         check_seal(registry)
@@ -2024,9 +2077,10 @@ def cumulative(data_root, *, stop_at, clock=time.monotonic):
         default="0000",
     )
     descriptors, days, invalidated, pending = [], [], [], []
-    for p in sorted(root.glob("????-??-??/cursor.json")):
+    for day in source_scope["source_dates"]:
         if clock() >= stop_at:
             raise Deferred("cumulative_source_validation_budget")
+        p = root / day / "cursor.json"
         cursor = read_json(p, {})
         if cursor.get("status") not in {
             "completed",
@@ -2086,6 +2140,7 @@ def cumulative(data_root, *, stop_at, clock=time.monotonic):
             descriptors,
             registry.get("artifact_content_sha256"),
             invalidated,
+            source_scope,
             cursor_states,
             code_hash(),
         ]
@@ -2097,9 +2152,15 @@ def cumulative(data_root, *, stop_at, clock=time.monotonic):
             comparison.get("generation") != gen
             or comparison.get("source_generations") != descriptors
             or comparison.get("source_cursor_states") != cursor_states
+            or comparison.get("source_scope") != source_scope
         ):
             raise ValueError("cumulative_comparison_binding_invalid")
-        if source_cursor_states(root) != cursor_states:
+        if (
+            research_source_scope(data_root, through_date=source_scope["through_date"])
+            != source_scope
+        ):
+            raise Deferred("cumulative_source_inventory_changed_before_seal")
+        if source_cursor_states(root, source_scope["source_dates"]) != cursor_states:
             raise Deferred("cumulative_cursor_changed_before_seal")
         result = R.seal(
             dict(
@@ -2109,6 +2170,7 @@ def cumulative(data_root, *, stop_at, clock=time.monotonic):
                 invalidated_source_dates=invalidated,
                 pending_source_dates=pending,
                 source_cursor_states=cursor_states,
+                source_scope=source_scope,
                 candidate_manifest_sha256=registry.get("artifact_content_sha256"),
                 candidate_comparison_path=str(existing),
                 candidate_sha256=comparison["artifact_content_sha256"],
@@ -2204,6 +2266,7 @@ def cumulative(data_root, *, stop_at, clock=time.monotonic):
             invalidated_source_dates=invalidated,
             pending_source_dates=pending,
             source_cursor_states=cursor_states,
+            source_scope=source_scope,
             source_generations=descriptors,
             migration_pending=any(
                 read_json(root / day / "cursor.json", {})
@@ -2221,8 +2284,13 @@ def comparison_current(data_root, comparison):
     current = read_json(namespace(data_root) / "cumulative/current.json", {})
     if current.get("candidate_sha256") != comparison.get("artifact_content_sha256"):
         return False
+    scope = comparison.get("source_scope")
+    if not isinstance(scope, dict) or not scope.get("through_date"):
+        return False
+    if research_source_scope(data_root, through_date=scope["through_date"]) != scope:
+        return False
     if comparison.get("source_cursor_states") != source_cursor_states(
-        namespace(data_root)
+        namespace(data_root), scope["source_dates"]
     ):
         return False
     for d in comparison.get("source_generations", []):
@@ -2394,6 +2462,12 @@ def discover_dates(data_root, config):
     dates.update(
         p.parent.name for p in namespace(data_root).glob("????-??-??/cursor.json")
     )
+    # Keep a discovered-but-unstarted date visible after its input disappears.
+    # Its next source attempt must publish an explicit gap, not silent completion.
+    current = read_json(namespace(data_root) / "cumulative/current.json", {})
+    if current:
+        check_seal(current)
+        dates.update(current.get("source_scope", {}).get("source_dates", []))
     last = datetime.now(R.KST).date().isoformat()
     return sorted(
         d
@@ -2698,8 +2772,17 @@ def select_source_date(data_root, dates, *, night, check_preflight):
     if rotation:
         check_seal(rotation)
     previous = rotation.get("last_" + lane + "_date", "")
-    day = next((d for d in candidates if d > previous), candidates[0])
-    rotation.update({"last_" + lane + "_date": day})
+    if dates[-1] in repairs and rotation.get("latest_priority_night") != night:
+        # One latest-source opportunity per night, without moving the backlog
+        # cursor. Failed/crashed reservations cannot monopolize subsequent slots.
+        day = dates[-1]
+        rotation.update(latest_priority_night=night, latest_priority_date=day)
+    else:
+        if lane == "source" and len(candidates) > 1:
+            candidates = [d for d in candidates if d != dates[-1]]
+        day = next((d for d in candidates if d > previous), candidates[0])
+        rotation.update({"last_" + lane + "_date": day})
+    check_preflight()
     atomic(
         path,
         R.seal(
@@ -2721,28 +2804,46 @@ def scheduled(data_root):
     if config.get("enabled") is not True:
         return dict(status="disabled_or_not_installed", **R.AUTH)
     check_seal(config)
-    if not verify_installed_calendar(config):
-        return dict(
-            status="deferred_resource_or_window",
-            reason="installed_calendar_changed_or_unobservable",
-            **R.AUTH,
-        )
     now = datetime.now(R.KST)
     night, deadline, reason = night_window(now, config)
-    if reason or heavy_owner_running():
+    if reason:
         return dict(
             status="deferred_resource_or_window",
-            reason=reason or "regular_postclose_or_eod_active",
+            reason=reason,
             **R.AUTH,
         )
     with lock(root / "worker.lock"):
         p = root / "nights" / (night + ".json")
         state = read_json(p, dict(night_id=night, attempts=0, reserved_seconds=0))
+
+        def preflight_status(status, reason):
+            result = R.seal(
+                dict(
+                    schema=R.VERSION + ":night_status",
+                    night_id=night,
+                    attempted_at_kst=now.isoformat(),
+                    status=status,
+                    reason=reason,
+                    worker_started=False,
+                    attempts=state["attempts"],
+                    reserved_seconds=state["reserved_seconds"],
+                    **R.AUTH,
+                )
+            )
+            return publish_night_status(root, result)
+
+        if not verify_installed_calendar(config):
+            return preflight_status(
+                "deferred_resource_or_window",
+                "installed_calendar_changed_or_unobservable",
+            )
+        if heavy_owner_running():
+            return preflight_status(
+                "deferred_resource_or_window", "regular_postclose_or_eod_active"
+            )
         if state["attempts"] >= 9 or state["reserved_seconds"] >= NIGHT_SECONDS:
-            return dict(
-                status="deferred_resource_or_window",
-                reason="night_budget_exhausted",
-                **R.AUTH,
+            return preflight_status(
+                "deferred_resource_or_window", "night_budget_exhausted"
             )
         seconds = min(
             RESERVATION_SECONDS,
@@ -2750,10 +2851,8 @@ def scheduled(data_root):
             (deadline - now).total_seconds() - 2,
         )
         if seconds <= 0:
-            return dict(
-                status="deferred_resource_or_window",
-                reason="night_deadline_margin",
-                **R.AUTH,
+            return preflight_status(
+                "deferred_resource_or_window", "night_deadline_margin"
             )
         state.update(
             attempts=state["attempts"] + 1,
@@ -2770,21 +2869,6 @@ def scheduled(data_root):
             if supervisor_rss() > MEMORY_BYTES:
                 raise Deferred("supervisor_preflight_memory_limit")
 
-        def preflight_status(status, reason):
-            result = R.seal(
-                dict(
-                    schema=R.VERSION + ":night_status",
-                    night_id=night,
-                    status=status,
-                    reason=reason,
-                    worker_started=False,
-                    attempts=state["attempts"],
-                    reserved_seconds=state["reserved_seconds"],
-                    **R.AUTH,
-                )
-            )
-            return publish_night_status(root, result)
-
         try:
             check_preflight()
             # Only this producer's abandoned scratch is removed under its lock.
@@ -2799,7 +2883,7 @@ def scheduled(data_root):
                     )
                 ):
                     shutil.rmtree(scratch)
-            dates = discover_dates(data_root, config)
+            dates = research_source_scope(data_root, through_date=night)["source_dates"]
             check_preflight()
             if not dates:
                 return preflight_status("valid_empty", "no_retained_source_date")
@@ -2853,6 +2937,7 @@ def scheduled(data_root):
             dict(
                 schema=R.VERSION + ":night_status",
                 night_id=night,
+                attempted_at_kst=now.isoformat(),
                 source_date=day,
                 status=(
                     "deferred_resource_or_window"
@@ -2972,7 +3057,7 @@ def main(argv=None):
                 raise Deferred("worker_not_in_verified_night")
             stop = time.monotonic() + min(args.worker_seconds, RESERVATION_SECONDS)
             result = process_date(args.data_root, args.worker_date, stop_at=stop)
-            comparison = cumulative(args.data_root, stop_at=stop)
+            comparison = cumulative(args.data_root, stop_at=stop, through_date=night)
             phase_receipt(
                 args.data_root,
                 args.worker_date,

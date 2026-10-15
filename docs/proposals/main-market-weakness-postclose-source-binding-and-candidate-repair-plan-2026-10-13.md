@@ -268,3 +268,13 @@ gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 
 - 정확한 기존 event/time/ask와 비용·성과 label 계약이 연결된 표본만 W/F로 평가한다. 빈 재생 partition과 상위 epoch 결손은 daily/terminal의 원천 사유로 전달한다. 보존된 종료·대사 영수증이 없는 과거는 U이며, 날짜 처리 수리나 진단 수리를 역사 성과 복구로 간주하지 않는다.
 - 장후에 사용한 exact observer 상태 원 bytes/SHA를 자기 `observer_receipts`에 고정한다. 현재 관찰 상태의 이후 변경은 과거 세대를 무효화하지 않지만 실제 원 observation 변경·삭제와 고정 증거 손상은 계속 거부한다. archive 날짜는 snapshot 쓰기 전에 차단한다.
 - 시간창 밖 쓰기0, 기존 9회/60초/600초/worker1/512MiB, 후보 동결·안내 기준, 장중 추가 부하0을 유지한다. 후속 배포에서는 자기 optional code binding만 새 검토본에 재결속하고 기존 설정/이력을 보존한다. 실제 야간의 중간 날짜 진전과 migration 종료·알림 disposition 확인 전 자연 수용 owner를 닫지 않는다.
+
+## 12. 2026-10-16 날짜 완전성·최신 원천 처리·보고 보완 운영 계약
+
+사용자 1~4번 구현·반복 리뷰·커밋 지시에 따른 보완이다. [구현 리뷰와 배포 인계](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md)가 검증 결과를 소유하고, [10/16 동일 stable ID](../checklists/2026-10-16-stage2-todo-checklist.md)의 자연 수용 OPEN을 유지한다. 이 절은 §11의 순환 규칙에 최신 원천 처리 기회를 추가하며, source-only·optional 권한과 원 evidence/후보/outbox 이력을 유지한다.
+
+- scheduler·누적·현행성 검사는 설치 원천 시작일, clean/forward 정책 시작일 중 가장 늦은 시작일과 `night_id` 이하의 발견 날짜를 공유한다. `source_scope`에 시작일·상한일·대상 날짜를 봉인하고 아직 cursor가 없는 날도 `not_started`/`pending_source_dates`에 포함한다. 발견 후 원천이 사라져도 현행 manifest에 보존된 날짜는 남겨 다음 처리에서 명시적 source gap으로 종결한다. 새 원천 날짜·시작일·cursor 변경은 이전 비교를 무효화하며, 계산 중 대상 목록이 바뀌면 publish를 보류한다. 예전 `source_scope` 없는 비교는 현행으로 재사용하지 않는다.
+- 최신 마감일이 원천 미완료이면 야간 첫 가용 처리 기회를 한 번 부여한다. 선택을 먼저 봉인하므로 실패/crash가 다음 슬롯을 독점하지 않는다. 이 선택은 기존 `last_source_date`를 이동하지 않으며, 나머지 미완료 날짜가 있으면 후속 source 슬롯은 최신 날짜를 제외하고 기존 순환 위치를 이어간다. 다른 source 수리가 끝나면 최신 날짜도 다시 이어갈 수 있다. 자정의 다음 날짜는 대상에 넣지 않는다. 슬롯·예약 상한이나 EOD/정규 장후 우선권을 늘리거나 우회하지 않는다.
+- 검증 가능한 야간 창 안에서 code/calendar 불일치·EOD 실행·야간 예산 소진·deadline 여유 부족으로 worker 시작 전에 보류한 결과도 lock 아래 `night_summary.latest_attempt`에 시각·사유·`worker_started=false`로 기록한다. 이 보류는 worker 예약 횟수·예약초·순환 위치·원 마지막 계산 bytes를 바꾸지 않는다. 최초 검사부터 시간창 밖이면 신규 lock/연구 상태 쓰기는 0이다. 다른 worker가 lock을 보유한 경우 그 writer의 요약을 덮지 않는다.
+- `source_census.native_observations`는 native 색인에 공급한 유효 행 수로 바로잡고, 독립 분석행 수는 `source_projection_census`로 분리한다. `native_indexed_rows`는 중복 입력을 포함한 행 수이며 고유 관측/매매 기회 수가 아니다. daily JSON/Markdown과 terminal에 두 census·색인 수·`analysis_coverage.native_binding_verified`를 제공한다. gzip 중단/CRC 실패 시 색인·두 census를 같은 checkpoint로 되돌린다. 분석/재생/보조 모집단이나 W/F/U·후보 정의를 변경하지 않는다.
+- 배포 전용 세션은 검토 커밋을 통합한 selected release에서 기존 자기 optional code/calendar binding을 재결속하고 설정·cron 재조회를 확인한다. 기존 enabled/notify·설치 역사·source floor·후보/outbox를 보존한다. 코드 hash 변경으로 기완료 날짜도 재처리 대상이 될 수 있으므로 한 야간의 전체 완료를 보장하지 않는다. 다음 허용 야간에서 최신 마감일 기회→기존 backlog 진전→migration/누적→알림 disposition을 수용한다. 연구 때문에 Main을 재기동하거나 과거 원천/보조 응답을 다시 생성하지 않는다. 후보의 새 전향 근거 부재는 알림 보류이며 실주문/정책 적용 권한이 아니다.

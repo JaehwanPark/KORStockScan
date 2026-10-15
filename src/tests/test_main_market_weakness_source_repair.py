@@ -555,6 +555,43 @@ def test_native_and_trace_gzip_integration_does_not_fabricate_auxiliary(
         projected["auxiliary_verdict"] == "not_called" and projected["outcome"] == "U"
     )
     assert len(A.read_json(cursor["manifest_path"])["stream_receipts"]) == 2
+    daily = A.check_seal(A.read_json(cursor["daily_path"]))
+    terminal = A.check_seal(A.read_json(cursor["terminal_path"]))
+    for report in (daily, terminal):
+        assert report["native_indexed_rows"] == 1
+        assert report["source_census"]["native_observations"] == 1
+        assert report["source_projection_census"]["native_observations"] == 0
+        assert report["source_projection_census"]["natural_trace"] == 1
+        assert report["analysis_coverage"]["native_binding_verified"] == 1
+    assert daily["census"]["projected_rows"] == 1
+    assert (
+        '"native_indexed_rows": 1'
+        in Path(cursor["daily_path"]).with_suffix(".md").read_text()
+    )
+
+
+def test_corrupt_native_gzip_rolls_back_index_and_report_counts(tmp_path, monkeypatch):
+    body, t = native_capture()
+    data = tmp_path / "data"
+    p = data / "ai_decision_payloads" / f"ai_decision_payloads_{DAY}.jsonl.gz"
+    write_gzip(p, ((json.dumps(body) + "\n") * 3).encode())
+    broken = bytearray(p.read_bytes())
+    broken[-8] ^= 1
+    p.write_bytes(broken)
+    write_gzip(
+        data / "ai_decision_trace" / f"ai_decision_trace_{DAY}.jsonl.gz",
+        (json.dumps(t) + "\n").encode(),
+    )
+    monkeypatch.setattr(A, "CHUNK_ROWS", 1)
+    monkeypatch.setattr(A, "listing_lookup", lambda *a: (lambda _: "KOSPI", None))
+    A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    daily = A.check_seal(A.read_json(cursor["daily_path"]))
+    assert daily["native_indexed_rows"] == 0
+    assert daily["source_census"].get("native_observations", 0) == 0
+    assert daily["source_projection_census"].get("native_observations", 0) == 0
+    assert not daily["analysis_coverage"].get("native_binding_verified")
+    assert daily["input_exclusions"]["compressed_source_contract_invalid"] == 1
 
 
 def test_semantic_id_ignores_global_but_keeps_numeric_definition():
@@ -1084,10 +1121,96 @@ def test_new_pending_date_invalidates_previously_complete_comparison(
     complete = A.cumulative(data, stop_at=time.monotonic() + 5)
     assert A.comparison_current(data, complete)
     A.atomic(
-        A.namespace(data) / "2026-10-09/cursor.json",
-        dict(source_date="2026-10-09", generation="new", status="in_progress"),
+        A.namespace(data) / "2026-10-12/cursor.json",
+        dict(source_date="2026-10-12", generation="new", status="in_progress"),
     )
     assert not A.comparison_current(data, complete)
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_unstarted_discovered_date_blocks_outbox_and_invalidates_old_comparison(
+    tmp_path, monkeypatch, compressed
+):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    from src.tests.test_main_market_weakness_research_notify import call, comparison
+
+    data, trace_path, _ = setup_sources(tmp_path, monkeypatch)
+    root = A.namespace(data)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    complete = A.cumulative(data, stop_at=time.monotonic() + 5)
+    call(root, comparison())
+    sent = (root / "outbox/state.json").read_bytes()
+    new_day = "2026-10-12"
+    new_path = trace_path.with_name("ai_decision_trace_" + new_day + ".jsonl")
+    if compressed:
+        new_path = Path(str(new_path) + ".gz")
+        write_gzip(new_path, b"{}\n")
+    else:
+        new_path.write_bytes(b"{}\n")
+    assert not (root / new_day / "cursor.json").exists()
+    assert not A.comparison_current(data, complete)
+    pending = A.cumulative(data, stop_at=time.monotonic() + 5)
+    assert pending["pending_source_dates"] == [new_day]
+    assert pending["source_cursor_states"][-1]["status"] == "not_started"
+    assert N.reconcile(root, pending)["status"] == "deferred_migration_or_comparison"
+    assert (root / "outbox/state.json").read_bytes() == sent
+
+    # Losing a discovered input must not turn incomplete research into complete.
+    new_path.unlink()
+    assert new_day in A.discover_dates(data, dict(evidence_start_date="2026-09-29"))
+    assert A.cumulative(data, stop_at=time.monotonic() + 5)["pending_source_dates"] == [
+        new_day
+    ]
+    result = A.process_date(data, new_day, stop_at=time.monotonic() + 5)
+    assert result["status"] == "completed_with_source_gaps"
+    assert A.read_json(root / new_day / "cursor.json")["gaps"][
+        "retained_decision_sources_unavailable"
+    ]
+    assert not A.cumulative(data, stop_at=time.monotonic() + 5)["pending_source_dates"]
+
+
+def test_source_inventory_honors_floor_and_night_cutoff(tmp_path):
+    trace_root = tmp_path / "ai_decision_trace"
+    trace_root.mkdir()
+    for day in ("2026-10-08", "2026-10-15", "2026-10-16"):
+        (trace_root / ("ai_decision_trace_" + day + ".jsonl")).write_bytes(b"{}\n")
+    A.atomic(
+        A.namespace(tmp_path) / "installation.json",
+        R.seal(dict(evidence_start_date="2026-10-12")),
+    )
+    result = A.cumulative(
+        tmp_path, through_date="2026-10-15", stop_at=time.monotonic() + 5
+    )
+    assert result["source_scope"] == dict(
+        evidence_start_date="2026-10-12",
+        through_date="2026-10-15",
+        source_dates=["2026-10-15"],
+    )
+    assert result["pending_source_dates"] == ["2026-10-15"]
+    assert A.comparison_current(tmp_path, result)
+    A.atomic(
+        A.namespace(tmp_path) / "installation.json",
+        R.seal(dict(evidence_start_date="2026-09-29")),
+    )
+    assert not A.comparison_current(tmp_path, result)
+
+
+def test_new_source_during_comparison_defers_before_publishing(tmp_path, monkeypatch):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+
+    data, trace_path, _ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    original = R.Aggregator.comparison
+
+    def source_arrives(self, *args, **kwargs):
+        value = original(self, *args, **kwargs)
+        trace_path.with_name("ai_decision_trace_2026-10-12.jsonl").write_bytes(b"{}\n")
+        return value
+
+    monkeypatch.setattr(R.Aggregator, "comparison", source_arrives)
+    with pytest.raises(A.Deferred, match="cumulative_source_inventory_changed"):
+        A.cumulative(data, stop_at=time.monotonic() + 5)
+    assert not (A.namespace(data) / "cumulative/current.json").exists()
 
 
 def test_comparison_checkpoint_includes_conflicting_scope(tmp_path, monkeypatch):
@@ -1291,6 +1414,50 @@ def test_source_rotation_skips_open_next_day_and_has_no_outside_budget_write(tmp
     with pytest.raises(A.Deferred, match="budget_expired"):
         A.select_source_date(tmp_path, [DAY], night=DAY, check_preflight=expired)
     assert not root.exists()
+
+
+def test_latest_night_opportunity_preserves_backlog_position_and_survives_failure(
+    tmp_path, monkeypatch
+):
+    days = ["2026-10-06", "2026-10-07", "2026-10-08", "2026-10-12", "2026-10-15"]
+    root = A.namespace(tmp_path)
+    A.atomic(root / "schedule_cursor.json", R.seal(dict(last_source_date=days[0])))
+    monkeypatch.setattr(A, "cursor_current", lambda *a: False)
+
+    def select(night):
+        return A.select_source_date(
+            tmp_path, days, night=night, check_preflight=lambda: None
+        )
+
+    assert select("2026-10-15") == days[-1]
+    assert (
+        A.check_seal(A.read_json(root / "schedule_cursor.json"))["last_source_date"]
+        == days[0]
+    )
+    # No completion is written: the failed latest date still yields to backlog.
+    assert select("2026-10-15") == days[1]
+    assert select("2026-10-15") == days[2]
+    days.append("2026-10-16")
+    assert select("2026-10-16") == days[-1]
+    assert select("2026-10-16") == "2026-10-12"
+
+
+def test_legacy_rotation_receipt_gives_latest_then_backlog(tmp_path, monkeypatch):
+    days = ["2026-10-08", "2026-10-12"]
+    root = A.namespace(tmp_path)
+    A.atomic(root / "schedule_cursor.json", R.seal(dict(last_source_date=days[0])))
+    monkeypatch.setattr(A, "cursor_current", lambda *a: False)
+    # A pre-repair rotation receipt has no priority marker and is compatible.
+    selected = [
+        A.select_source_date(
+            tmp_path, days, night="2026-10-15", check_preflight=lambda: None
+        )
+        for _ in range(2)
+    ]
+    assert selected == ["2026-10-12", "2026-10-08"]
+    assert A.read_json(root / "schedule_cursor.json")["latest_priority_night"] == (
+        "2026-10-15"
+    )
 
 
 def test_missing_retained_day_is_discovered_and_closes_as_gap(tmp_path, monkeypatch):
@@ -1532,3 +1699,77 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
         )
         terminal = A.check_seal(A.read_json(cursor["terminal_path"]))
         assert terminal["gaps"] == daily["input_exclusions"]
+
+
+@pytest.mark.parametrize(
+    "blocker,reason",
+    [
+        ("eod", "regular_postclose_or_eod_active"),
+        ("calendar", "installed_calendar_changed_or_unobservable"),
+        ("budget", "night_budget_exhausted"),
+        ("margin", "night_deadline_margin"),
+    ],
+)
+def test_early_night_defer_publishes_latest_without_reservation_or_source_reads(
+    tmp_path, monkeypatch, blocker, reason
+):
+    now = datetime.fromisoformat("2026-10-16T05:40:00+09:00")
+    night = "2026-10-15"
+    monkeypatch.setattr(
+        A,
+        "night_window",
+        lambda *a: (
+            night,
+            now + timedelta(seconds=1 if blocker == "margin" else 60),
+            None,
+        ),
+    )
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(A, "datetime", Clock)
+    monkeypatch.setattr(A, "verify_installed_calendar", lambda _: blocker != "calendar")
+    monkeypatch.setattr(A, "heavy_owner_running", lambda: blocker == "eod")
+    monkeypatch.setattr(
+        A, "discover_dates", lambda *a: pytest.fail("blocked source discovery")
+    )
+    monkeypatch.setattr(
+        A, "supervise", lambda *a, **kw: pytest.fail("blocked child started")
+    )
+    root = A.namespace(tmp_path)
+    A.atomic(root / "installation.json", R.seal(dict(enabled=True)))
+    state_path = root / "nights" / (night + ".json")
+    A.atomic(
+        state_path,
+        dict(
+            night_id=night,
+            attempts=9 if blocker == "budget" else 6,
+            reserved_seconds=360,
+        ),
+    )
+    completed = R.seal(
+        dict(
+            status="completed",
+            source_date=DAY,
+            cumulative_generation="original",
+            **R.AUTH,
+        )
+    )
+    A.publish_night_status(root, completed)
+    original = (root / "last_completed_computation.json").read_bytes()
+    reservation = state_path.read_bytes()
+    result = A.scheduled(tmp_path)
+    assert result["status"] == "deferred_resource_or_window"
+    assert result["reason"] == reason
+    assert result["attempted_at_kst"] == now.isoformat()
+    assert result["worker_started"] is False
+    assert result["latest_attempt"]["reason"] == reason
+    assert result["last_completed_computation"]["cumulative_generation"] == "original"
+    assert A.check_seal(A.read_json(root / "night_summary.json")) == result
+    assert state_path.read_bytes() == reservation
+    assert (root / "last_completed_computation.json").read_bytes() == original
+    assert not (root / "schedule_cursor.json").exists()
+    assert not list((root / "attempts").glob("*.json"))
