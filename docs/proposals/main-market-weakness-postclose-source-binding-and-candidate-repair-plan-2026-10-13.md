@@ -259,3 +259,12 @@ gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 
 후속 코드 재리뷰에서 [8종 추가 결함과 수정 회귀](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md#후속-코드-재리뷰와-수정보완)를 확인했다. 미지원 확인점 재생은 selection/알림에서 명시적으로 거부하고, 현재 두 필터의 추가 모집단은 0이어야 한다. 미완료 날짜·scope conflict를 비교/currentness/cache에 결속하며 오래된 철회/정정, 비교→manifest 중단과 projection 저장 실패의 재개 경로를 보완했다. probe BLOCK의 원 분류와 역할/특징/cutpoint별 capability 사유도 보존한다.
 
 작업본 코드·fixture 검증의 완료와 실제 selected release 배포, optional code rebind, 다음 자연 예약의 원천 연결/phase/마지막 소비, 적격 수치 안내 및 실제 매매 효과는 별도다. 이번에는 배포·재기동·cron 수정·원 운영 보고서 재계산·provider/Telegram 발송·정책 발행을 수행하지 않았다. 후속 rebind는 기존 enable/notify/설치 이력/source 경계를 보존하는 수리된 installer를 사용하며 실패 시 원 cron/config 재조회까지 확인한다. 연구를 mandatory stage/PREOPEN/기동 gate로 추가하지 않는다.
+
+## 11. 2026-10-15 처리 정체·근거 보존 보완 운영 계약
+
+10/14 승인 배포 후 실제 야간에서 날짜 선택 정체와 원천 결손이 확인되어 사용자 후속 지시로 [처리 순서·관찰 근거 고정 구현 리뷰](../audits/main-market-weakness-night-progress-and-evidence-review-2026-10-15.md)의 보완을 수행했다. 현재 실행 owner는 [10/15 동일 stable ID](../checklists/2026-10-15-stage2-todo-checklist.md)다. 아래 규칙은 종전 latest/oldest 양 끝 선택 규칙을 대체한다.
+
+- 원천 미완료/무효 날짜를 누적·알림 phase 재시도보다 먼저 순환 처리한다. `schedule_cursor.json`의 봉인된 위치는 밤 사이에도 유지한다. 실패한 날짜를 다음 시도의 독점 대상으로 삼지 않으며, 기존 cursor 날짜도 원천 소실의 명시적 결손 처리 대상으로 보존한다. 자정 이후 새 달력 날짜는 `night_id`를 넘어 처리하지 않는다.
+- 정확한 기존 event/time/ask와 비용·성과 label 계약이 연결된 표본만 W/F로 평가한다. 빈 재생 partition과 상위 epoch 결손은 daily/terminal의 원천 사유로 전달한다. 보존된 종료·대사 영수증이 없는 과거는 U이며, 날짜 처리 수리나 진단 수리를 역사 성과 복구로 간주하지 않는다.
+- 장후에 사용한 exact observer 상태 원 bytes/SHA를 자기 `observer_receipts`에 고정한다. 현재 관찰 상태의 이후 변경은 과거 세대를 무효화하지 않지만 실제 원 observation 변경·삭제와 고정 증거 손상은 계속 거부한다. archive 날짜는 snapshot 쓰기 전에 차단한다.
+- 시간창 밖 쓰기0, 기존 9회/60초/600초/worker1/512MiB, 후보 동결·안내 기준, 장중 추가 부하0을 유지한다. 후속 배포에서는 자기 optional code binding만 새 검토본에 재결속하고 기존 설정/이력을 보존한다. 실제 야간의 중간 날짜 진전과 migration 종료·알림 disposition 확인 전 자연 수용 owner를 닫지 않는다.
