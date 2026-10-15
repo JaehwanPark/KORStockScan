@@ -11,6 +11,7 @@ from src.engine.monitoring import policy_generation_validation as validation
 
 # 92785b7da and the reviewed 86f789693 native-arm completion successor change
 # entry paths in the shared handler, not either family publication or policy.
+# The carried-stop reader also partitions future unconsumed observations.
 # All components remain bound by the complete generation hashes; current fixture
 # evidence is independently required. No historical contract is reclassified.
 # Review: docs/audits/main-native-entry-arm-handoff-repair-2026-10-15.md.
@@ -20,7 +21,7 @@ REVIEWED_SUCCESSORS = {
         'd2af96d68157d270ed4fc8f44c67896180210100e0f86ddc3505c288d7470807'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        'd0a28277da5dccdeaf07830fc426ff2cf7b9eb0ebbea35bd48ed20adbacdedd3'),
+        '61fd954dddb5ef5f7285e8dd14223926a16a726394bd2829c2ff69da32f242ca'),
 }
 
 

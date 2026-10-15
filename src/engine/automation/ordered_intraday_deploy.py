@@ -236,6 +236,7 @@ class Deployment:
         self.adopt_failed_hold = adopt_failed_hold
         self.failed_hold_adoption = None
         self._preflight_native_verified = False
+        self.preserve_editable_checklist = True
 
     def run_json(self, root, module, *args, timeout=120):
         # Predecessors may predate this opt-in CLI. Their native full path stays.
@@ -302,10 +303,34 @@ class Deployment:
             policy_effect='unchanged', original_selection_sha256=_digest(self.before))
         _atomic(self.directory / 'selection-before.json', self.before)
         self.checkpoint('preflight')
-        check = self.run_json(self.previous, 'src.engine.automation.intraday_release_handoff',
-                              '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
-        self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
-                      '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
+        try:
+            check = self.run_json(self.previous, 'src.engine.automation.intraday_release_handoff',
+                                  '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
+            self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
+                          '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
+        except ValueError:
+            if not getattr(self, 'preserve_editable_checklist', False):
+                raise
+            for module in ('intraday_release_handoff', 'runtime_policy_bootstrap'):
+                log = self.directory/('preflight-'+module+'.log')
+                if log.exists(): log.rename(log.with_name('preflight-previous-'+module+'.log'))
+            # A repaired reader must revalidate the entire live predecessor;
+            # the old failure is retained and never converted to a receipt.
+            check = self.run_json(self.candidate, 'src.engine.automation.intraday_release_handoff',
+                '--verify-predecessor', '--target-date', self.day, '--pid', str(self.identity['pid']))
+            if (check.get('status') != 'pass'
+                    or check.get('schema') != 'intraday_pid_consumption_verification_v1'
+                    or check.get('target_date') != self.day or not check.get('manifest_sha256')
+                    or check.get('verification_code_commit') != self.commit
+                    or check.get('verification_code_root') != str(self.candidate)
+                    or check.get('selected_release_commit') != self.previous_commit
+                    or check.get('release_root') != str(self.previous)
+                    or check.get('pid_identity') != self.identity
+                    or check.get('actual_pid_consumed') is not True
+                    or check.get('candidate_pid_consumed') is not False
+                    or check.get('runtime_effect') is not False):
+                raise ValueError('deployment_predecessor_revalidation_unbound')
+            self.state['predecessor_revalidation'] = check
         if check.get('basis') == 'native_preopen':
             self.seal_native_predecessor(check)
         else:
@@ -321,6 +346,13 @@ class Deployment:
         self.document_before = self.checklist.read_bytes()
         self.document_after = subprocess.check_output(['git', '-C', str(self.candidate), 'show',
             self.commit + ':docs/checklists/' + self.checklist.name], timeout=10)
+        if getattr(self, 'preserve_editable_checklist', False):
+            self.state['candidate_checklist_sha256'] = _digest(self.document_after)
+            self.document_after = self.document_before
+            # Policy/source receipts remain frozen. The live PID proof above
+            # independently validated its consumed historical document.
+            self.frozen = dict(self.frozen)
+            self.frozen.pop(str(self.checklist), None)
         _atomic(self.directory / 'checklist-before.md', self.document_before)
         self.assert_unchanged()
         self._preflight_native_verified = True
@@ -546,7 +578,10 @@ class Deployment:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assert_unchanged()
             _atomic(self.selection, self.published)
-            _atomic(self.checklist, self.document_after)
+            if getattr(self, 'preserve_editable_checklist', False):
+                self.document_after = self.checklist.read_bytes()
+            else:
+                _atomic(self.checklist, self.document_after)
         self.checkpoint('selected', selected_at=value['selected_at_kst'],
                         checklist_sha256=_digest(self.document_after),
                         predecessor_observer=predecessor_observer)
@@ -556,7 +591,7 @@ class Deployment:
         self.run_json(self.candidate, 'src.engine.automation.intraday_release_handoff', '--prepare',
             '--target-date', self.day, '--old-pid', str(self.identity['pid']),
             '--previous-root', str(self.previous), '--previous-stopped', '--reseal-postclose-source',
-            '--confirm', H.CONFIRM)
+            '--freeze-operating-checklist', '--confirm', H.CONFIRM)
         self.run_json(self.candidate, 'src.engine.automation.runtime_policy_bootstrap',
                       '--verify', '--target-date', self.day)
         self.run_json(self.candidate, 'src.engine.automation.auxiliary_reader_readiness',

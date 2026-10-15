@@ -45,7 +45,8 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES',
                                      'REVIEWED_ORDERED_PUBLICATION_SOURCES',
                                      'REVIEWED_OPPORTUNITY_CUSTODY_SOURCES',
-                                     'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES'])
+                                     'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES',
+                                     'REVIEWED_CARRIED_SOURCE_BINDING_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib
@@ -313,8 +314,9 @@ def test_stopped_handoff_requires_prior_exact_consumption(fixture, monkeypatch, 
         assert handoff.verify(DAY, commit, now=NOW)['status'] == 'fail'
 
 
-@pytest.mark.parametrize('tamper', ['none', 'policy', 'controller', 'checklist'])
-def test_intraday_current_document_reseal_preserves_original_preopen_generation(fixture, monkeypatch, tamper):
+@pytest.mark.parametrize('freeze', [False, True])
+@pytest.mark.parametrize('tamper', ['none', 'policy', 'controller', 'checklist', 'snapshot'])
+def test_intraday_current_document_reseal_preserves_original_preopen_generation(fixture, monkeypatch, tamper, freeze):
     data, previous, _, _ = fixture
     source_day = '2026-10-01'
     index_path = data/'runtime/policy_bootstrap/prepared'/DAY/'latest.json'
@@ -337,15 +339,17 @@ def test_intraday_current_document_reseal_preserves_original_preopen_generation(
     if tamper == 'policy':
         with pytest.raises(ValueError,match='policy_generation_changed'):
             handoff.prepare(DAY, old_pid=1, previous_root=previous, confirm=handoff.CONFIRM,
-                            now=NOW, reseal_postclose_source=True)
+                            now=NOW, reseal_postclose_source=True, freeze_operating_checklist=freeze)
         return
     prepared = handoff.prepare(DAY, old_pid=1, previous_root=previous, confirm=handoff.CONFIRM,
-                               now=NOW, reseal_postclose_source=True)
+                               now=NOW, reseal_postclose_source=True, freeze_operating_checklist=freeze)
     assert prepared['status'] == 'pass' and receipt.read_bytes() == original
-    if tamper != 'none':
+    if tamper == 'snapshot' and freeze:
+        Path(prepared['handoff']['postclose_source_reseal']['operating_checklist']['path']).write_text('changed')
+    elif tamper not in {'none','snapshot'}:
         (controller if tamper == 'controller' else checklist).write_text('changed')
     result = handoff.verify(DAY, NEW, now=NOW)
-    assert result['status'] == ('pass' if tamper=='none' else 'fail')
+    assert result['status'] == ('pass' if tamper=='none' or (tamper=='checklist' and freeze) or (tamper=='snapshot' and not freeze) else 'fail')
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(days=1))["status"] == "fail"
 
 
@@ -1037,3 +1041,45 @@ def test_candidate_holding_vote_pin_is_checked_before_selection(fixture, monkeyp
         result=handoff.verify_candidate_holding_vote_code(DAY,selected,NEW)
         assert result['status']=='pass' and result['actual_pid_consumed'] is False and checked
     assert before=={p:p.read_bytes() for p in data.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('damage',[None,'status','schema','pid','manifest','handoff','policy'])
+def test_existing_consumption_proof_is_live_and_immutable(fixture,monkeypatch,damage):
+    data,_,_,prepare=fixture
+    assert prepare()['status']=='pass'
+    assert handoff.consume(DAY,pid=2,now=NOW)['status']=='pass'
+    path,consumed_path=handoff._paths(DAY,NEW);body=handoff._read(consumed_path)
+    if damage=='status':body['status']='fail'
+    elif damage=='schema':body['schema']='foreign'
+    elif damage=='pid':body['pid_identity']['start_ticks']='reused'
+    elif damage=='manifest':body['manifest_sha256']='changed'
+    elif damage=='handoff':body['handoff_sha256']='changed'
+    elif damage=='policy':handoff.bootstrap.env_path(DAY).write_text('changed')
+    _json(consumed_path,body)
+    checked=handoff._verify_consumed_handoff(DAY,NEW,now=NOW)
+    assert checked['status']==('pass' if damage is None else 'fail')
+
+
+@pytest.mark.parametrize('raises',[False,True])
+def test_candidate_predecessor_review_context_cannot_escape(fixture,monkeypatch,raises):
+    from src.engine.infrastructure import runtime_release_router as router
+    data,previous,candidate,_=fixture
+    monkeypatch.setattr(handoff,'__file__',str(candidate/'src/engine/automation/intraday_release_handoff.py'))
+    monkeypatch.setattr(handoff,'_selection',lambda **kw:(previous,OLD))
+    monkeypatch.setattr(router,'git',lambda *args:NEW)
+    monkeypatch.setattr(router,'validate_release',lambda *args:(candidate,NEW))
+    def read(day,*,pid):
+        scope=handoff._PREDECESSOR_REVIEW.get()
+        assert scope['root']==previous and scope['commit']==OLD and scope['code_root']==candidate
+        assert scope['identity']==handoff._identity(pid)
+        if raises:raise ValueError('unverified_native_source')
+        return dict(status='pass')
+    monkeypatch.setattr(handoff,'verify_pid_consumption',read)
+    if raises:
+        with pytest.raises(ValueError,match='unverified_native_source'):
+            handoff.verify_predecessor_consumption(DAY,pid=1)
+    else:
+        result=handoff.verify_predecessor_consumption(DAY,pid=1)
+        assert result['runtime_effect'] is False and result['candidate_pid_consumed'] is False
+        assert result['verification_code_commit']==NEW
+    assert handoff._PREDECESSOR_REVIEW.get() is None

@@ -803,3 +803,63 @@ def test_unsealed_observation_vector_refreshes_all_inputs_and_cannot_be_mutated(
     assert policy.runtime_policy_vector_snapshot(scalar)[0]['REGULAR']['SCALP_TRAILING_START_PCT']==.5
     monkeypatch.setenv(env_key,'bad')
     with pytest.raises(ValueError):policy.runtime_policy_vector_snapshot(scalar)
+
+
+def _later_vote_bytes(day='2026-10-13', **changes):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    value=dict(schema='holding_path_vote_v10',position_key='record:91',session_key=day,
+        requested_at=datetime.fromisoformat(day+'T10:00:00').replace(tzinfo=ZoneInfo('Asia/Seoul')).timestamp())
+    value.update(changes)
+    return json.dumps(value).encode()+b'\n'
+
+
+@pytest.mark.parametrize('new_file',[False,True])
+@pytest.mark.parametrize('damage',[None,'past','session','position','schema','nan','overflow','partial','replaced','prefix','source','selected'])
+def test_carried_stop_partitions_only_future_unconsumed_votes(tmp_path,new_file,damage):
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    path=path_vote_store_path(tmp_path,'record:91');path.parent.mkdir(parents=True)
+    original=_later_vote_bytes('2026-10-12')
+    if not new_file:path.write_bytes(original)
+    bundle,report,_,_=publication(tmp_path,experiment=damage=='selected')
+    generation=(post.committed_path(tmp_path,'2026-10-12')).read_bytes()
+    suffix=_later_vote_bytes()
+    if damage=='past':suffix=_later_vote_bytes('2026-10-12')
+    elif damage=='session':suffix=_later_vote_bytes(session_key='2026-10-14')
+    elif damage=='position':suffix=_later_vote_bytes(position_key='foreign')
+    elif damage=='schema':suffix=_later_vote_bytes(schema='foreign')
+    elif damage=='nan':suffix=_later_vote_bytes(requested_at=float('nan'))
+    elif damage=='overflow':suffix=_later_vote_bytes(requested_at=1e300)
+    elif damage=='partial':suffix=suffix.rstrip(b'\n')
+    if damage=='prefix' and not new_file:
+        with path.open('r+b') as out:out.write(original.replace(b'record:91',b'record:92'))
+    if damage=='replaced' and not new_file:
+        replacement=path.with_suffix('.replacement');replacement.write_bytes(original+suffix);replacement.replace(path)
+    else:
+        with path.open('ab') as out:out.write(suffix)
+    path.with_suffix('.jsonl.lock').touch()
+    if damage=='source':
+        source=tmp_path/'pipeline_events/pipeline_events_2026-10-12.jsonl'
+        with source.open('a') as out:out.write('{}\n')
+    accepted=damage is None or (damage in {'replaced','prefix'} and new_file)
+    if accepted:
+        loaded,saved,_,_=post.read_committed(tmp_path,'2026-10-12')
+        assert loaded==bundle and saved==report
+        assert report['vote_source_inventory']=={}
+        assert post.handoff(tmp_path,'2026-10-13')[1]['status']=='verified_carried'
+    else:
+        with pytest.raises((ValueError,OSError)):
+            post.read_committed(tmp_path,'2026-10-12')
+    with pytest.raises(ValueError):post.read_committed(tmp_path,'2026-10-12',verify_full=True)
+    assert post.committed_path(tmp_path,'2026-10-12').read_bytes()==generation
+
+
+def test_vote_tail_cannot_relax_consumed_source_or_incomplete_original(tmp_path):
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    path=path_vote_store_path(tmp_path,'record:91');path.parent.mkdir(parents=True)
+    path.write_bytes(_later_vote_bytes('2026-10-12').rstrip(b'\n'))
+    bound=post.capture_vote_watch_binding(tmp_path,'2026-10-12')
+    with path.open('ab') as out:out.write(_later_vote_bytes())
+    with pytest.raises(ValueError,match='boundary_invalid'):
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound,future_unconsumed=True)
+    with pytest.raises(ValueError):post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound)

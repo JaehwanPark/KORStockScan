@@ -187,7 +187,7 @@ def capture_vote_watch_binding(root, day):
     for logical, path in files.items():
         identity = list(source_stat(path.stat()))
         row = dict(path=str(path), stat=identity)
-        if path.parent.name != 'holding_path_votes' and path.name.endswith('.jsonl'):
+        if path.name.endswith('.jsonl'):
             sha, size, identity = _vote_watch_content(path)
             row.update(stat=identity, decoded_sha256=sha, decoded_bytes=size)
         binding[logical] = row
@@ -198,19 +198,98 @@ def capture_vote_watch_binding(root, day):
     return binding
 
 
-def verify_vote_watch_binding(root, day, binding):
+def _future_unconsumed_vote_tail(root, day, path, row):
+    """Partition a later observation tail; never attest unconsumed old bytes.
+
+    Only carried policies with no consumed vote sources may use this check.
+    Publication/full research validation still requires the original watch.
+    """
+    import math
+    import os
+    import stat
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+
+    if (path.parent != Path(root)/'runtime/holding_path_votes' or path.suffix != '.jsonl'
+            or len(path.stem) != 64 or any(c not in '0123456789abcdef' for c in path.stem)):
+        raise ValueError('stop_vote_source_set_changed')
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        current = list(source_stat(before))
+        offset = 0
+        if row is not None:
+            original = row.get('stat')
+            if (row.get('path') != str(path) or not isinstance(original, list) or len(original) != 5
+                    or original[:2] != current[:2] or type(original[2]) is not int
+                    or not 0 <= original[2] < before.st_size):
+                raise ValueError('stop_vote_source_set_changed')
+            offset = original[2]
+            if 'decoded_sha256' in row:
+                if row.get('decoded_bytes') != offset or offset > 8*1024*1024:
+                    raise ValueError('stop_vote_original_prefix_invalid')
+                prefix = stream.read(offset)
+                if len(prefix) != offset or hashlib.sha256(prefix).hexdigest() != row['decoded_sha256']:
+                    raise ValueError('stop_vote_original_prefix_changed')
+        if not stat.S_ISREG(before.st_mode) or before.st_size-offset > 8*1024*1024:
+            raise ValueError('stop_vote_future_tail_invalid')
+        if offset:
+            stream.seek(offset-1)
+            if stream.read(1) != b'\n':
+                raise ValueError('stop_vote_future_tail_boundary_invalid')
+        stream.seek(offset)
+        raw = stream.read(before.st_size-offset+1)
+        if len(raw) != before.st_size-offset or not raw or not raw.endswith(b'\n'):
+            raise ValueError('stop_vote_future_tail_invalid')
+        for line in raw.splitlines():
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise ValueError('stop_vote_future_tail_invalid')
+            at = value.get('requested_at')
+            if (value.get('schema') != 'holding_path_vote_v10' or type(at) not in (int, float)
+                    or not math.isfinite(at)):
+                raise ValueError('stop_vote_future_tail_invalid')
+            try:
+                source_day = datetime.fromtimestamp(at, ZoneInfo('Asia/Seoul')).date().isoformat()
+            except (OSError, ValueError, OverflowError) as exc:
+                raise ValueError('stop_vote_future_tail_invalid') from exc
+            if (source_day <= day or value.get('session_key') != source_day
+                    or not isinstance(value.get('position_key'), str) or not value['position_key']
+                    or path_vote_store_path(root, value['position_key']) != path):
+                raise ValueError('stop_vote_future_tail_scope_invalid')
+        if (current != list(source_stat(os.fstat(stream.fileno())))
+                or path.is_symlink() or current != list(source_stat(path.stat()))):
+            raise ValueError('stop_vote_source_changed_during_read')
+    return current
+
+
+def verify_vote_watch_binding(root, day, binding, *, future_unconsumed=False):
     """Only decoded equality permits a sealed original's compression."""
     if not isinstance(binding, dict):
         raise ValueError('stop_vote_source_set_changed')
     files = _vote_watch_files(root, day)
-    if set(files) != set(binding):
+    # Locks are synchronization metadata, never native vote inputs. Keep the
+    # old strict watch for publication, but ignore new locks in carried reads.
+    if future_unconsumed:
+        is_lock = lambda name: (Path(name).parent == Path(root)/'runtime/holding_path_votes'
+                                and name.endswith('.jsonl.lock'))
+        files = {k:v for k,v in files.items() if not is_lock(k)}
+        binding = {k:v for k,v in binding.items() if not is_lock(k)}
+    else:
+        is_lock = lambda name: False
+    if set(binding)-set(files) or (not future_unconsumed and set(files) != set(binding)):
         raise ValueError('stop_vote_source_set_changed')
     observed = {}
     for logical, path in files.items():
-        row = binding[logical]
+        row = binding.get(logical)
         observed[logical] = list(source_stat(path.stat()))
-        if str(path) == row['path'] and observed[logical] == row['stat']:
+        if row and str(path) == row['path'] and observed[logical] == row['stat']:
             continue
+        if future_unconsumed and path.parent == Path(root)/'runtime/holding_path_votes':
+            observed[logical] = _future_unconsumed_vote_tail(root, day, path, row)
+            continue
+        if row is None:
+            raise ValueError('stop_vote_source_set_changed')
         if (row['path'] != logical or not logical.endswith('.jsonl')
                 or path.parent.name == 'holding_path_votes'
                 or str(path) != logical+'.gz'
@@ -221,7 +300,7 @@ def verify_vote_watch_binding(root, day, binding):
         observed[logical] = identity
         if sha != row.get('decoded_sha256') or size != row['decoded_bytes']:
             raise ValueError('stop_vote_compressed_content_changed')
-    if files != _vote_watch_files(root, day):
+    if files != {k:v for k,v in _vote_watch_files(root, day).items() if not is_lock(k)}:
         raise ValueError('stop_vote_source_set_changed')
     if any(observed[key] != list(source_stat(path.stat())) for key, path in files.items()):
         raise ValueError('stop_vote_source_changed_during_read')
@@ -335,7 +414,9 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     if bundle.get('operator_sources') != operator_sources(root,bundle['target_date']):
         raise ValueError('stop_operator_sources_changed')
     if report.get('vote_watch_sha256')!=vote_watch(root,day):
-        verify_vote_watch_binding(root, day, report.get('vote_watch_binding'))
+        verify_vote_watch_binding(root, day, report.get('vote_watch_binding'),
+            future_unconsumed=(not verify_full and report.get('vote_source_inventory') == {}
+                and all(cell['status'] != 'selected' for cell in bundle['cells'].values())))
     if report.get('source_catalog_sha256')!=policy.digest([str(p) for p in sources(root,day)]):
         raise ValueError('stop_raw_source_set_changed')
     for label in ('parent_receipt','snapshot_receipt'):

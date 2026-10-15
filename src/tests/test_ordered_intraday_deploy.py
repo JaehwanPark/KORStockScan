@@ -658,6 +658,50 @@ def test_adoption_preflight_native_checks_precede_capture_and_acquire(driver, mo
     assert d.hold.read_bytes() != hold_before and d.phase == "startup_held"
 
 
+@pytest.mark.parametrize('damage', [None, 'native_source', 'pid', 'candidate', 'runtime_effect', 'consumed'])
+def test_repaired_predecessor_requires_full_bound_read_before_any_mutation(driver, monkeypatch, damage):
+    d = driver
+    _failed_hold_fixture(d, monkeypatch)
+    _mock_adoption_preflight(d, monkeypatch)
+    d.adopt_failed_hold = False
+    d.hold.unlink()
+    d.preserve_editable_checklist = True
+    before = {p: p.read_bytes() for p in (d.selection, d.checklist)}
+    calls = []
+    def native(root, module, *args, **kwargs):
+        calls.append((root, args))
+        if root == d.previous:
+            (d.directory/'preflight-intraday_release_handoff.log').write_text('old failure')
+            raise ValueError('intraday_preserved_generation_changed')
+        assert args == ('--verify-predecessor', '--target-date', d.day, '--pid', '123')
+        if damage == 'native_source': raise ValueError('actual_native_source_changed')
+        result = dict(status='pass', schema='intraday_pid_consumption_verification_v1',
+            target_date=d.day, manifest_sha256='a'*64, verification_code_commit=d.commit,
+            verification_code_root=str(d.candidate), selected_release_commit=d.previous_commit,
+            release_root=str(d.previous), pid_identity=d.identity, actual_pid_consumed=True,
+            candidate_pid_consumed=False, runtime_effect=False)
+        if damage == 'pid': result['pid_identity'] = dict(d.identity, start_ticks='changed')
+        if damage == 'candidate': result['verification_code_commit'] = 'c'*40
+        if damage == 'runtime_effect': result['runtime_effect'] = True
+        if damage == 'consumed': result['actual_pid_consumed'] = False
+        return result
+    d.run_json = native
+    for name in ('verify_candidate_delay_code', 'verify_candidate_stop_code', 'verify_candidate_holding_vote_code'):
+        monkeypatch.setattr(D.H, name, lambda *args: dict(status='pass'))
+    if damage:
+        with pytest.raises(ValueError): d.preflight()
+        assert d._preflight_native_verified is False
+    else:
+        d.preflight()
+        assert d._preflight_native_verified is True
+        assert d.state['predecessor_revalidation']['actual_pid_consumed'] is True
+        assert d.document_after == b'original current checklist'
+        assert (d.directory/'preflight-previous-intraday_release_handoff.log').read_text() == 'old failure'
+    assert len(calls) == 2
+    assert not d.hold.exists()
+    assert {p: p.read_bytes() for p in before} == before
+
+
 def test_adopted_hold_continues_through_ordinary_native_drain(driver, monkeypatch):
     d = driver; _, _, failed_path, _ = _failed_hold_fixture(d, monkeypatch)
     failed_before = failed_path.read_bytes()
@@ -715,3 +759,15 @@ def test_failed_hold_adoption_rejects_special_files_without_replacement(driver, 
         with pytest.raises(ValueError, match="regular_file_required"): d.capture_failed_hold_adoption()
         assert target.is_fifo()
         if which != "hold": assert d.hold.read_bytes() == original
+
+
+def test_publish_preserves_concurrent_work_checklist(driver,monkeypatch):
+    d=driver;d.preserve_editable_checklist=True;d.frozen={}
+    d.hold_bytes=b'owned';d.hold.write_bytes(d.hold_bytes);d.phase='drained'
+    monkeypatch.setattr(D,'_main_pids',lambda:[])
+    d.checklist.write_bytes(b'other session changed its approved plan')
+    before=d.checklist.read_bytes()
+    d.publish()
+    assert d.checklist.read_bytes()==before
+    assert d.state['checklist_sha256']==D._digest(before)
+    assert d.selection.read_bytes()==d.published

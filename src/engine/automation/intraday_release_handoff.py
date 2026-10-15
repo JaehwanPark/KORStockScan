@@ -25,6 +25,7 @@ CONFIRM = "APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF"
 _STOPPED_PREPARATION = ContextVar('intraday_stopped_preparation', default=None)
 _NATIVE_PREDECESSOR = ContextVar('intraday_native_predecessor', default=None)
 _OBSERVER_CUSTODY = ContextVar('intraday_observer_custody', default=None)
+_PREDECESSOR_REVIEW = ContextVar('intraday_predecessor_review', default=None)
 
 # Reviewed delivery/observation repair. Exact source pairs, not a blanket
 # exception for the large runtime functions. Policy generation, quote timing
@@ -312,8 +313,14 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     """
     _today(day, None)
     root, commit = _selection(require_selected_cwd=False)
+    code_root, code_commit = root, commit
     if Path(__file__).resolve().parents[3] != root:
-        raise ValueError('entry_consumer_release_mismatch')
+        review = _PREDECESSOR_REVIEW.get()
+        if (not review or review['day'] != day or review['root'] != root
+                or review['commit'] != commit or review['code_root'] != Path(__file__).resolve().parents[3]
+                or _identity(review['identity']['pid']) != review['identity']):
+            raise ValueError('entry_consumer_release_mismatch')
+        code_root, code_commit = review['code_root'], review['code_commit']
     manifest = _read(bootstrap.manifest_path(day))
     original = _preopen(day)
     origin = manifest.get('selected_release_sha')
@@ -335,12 +342,13 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
             raise ValueError('entry_consumer_policy_binding_invalid')
     else:
         raise ValueError('entry_consumer_family_invalid')
-    current_path, _ = _paths(day, commit)
+    current_path, consumed_path = _paths(day, commit)
     if current_path.exists():
-        # Only the read-only historical observer's nested policy validation may
-        # use the already-consumed sealed document. Public startup stays strict.
-        checked = (_verify_handoff(day, commit, historical_observer=True)
-                   if _OBSERVER_CUSTODY.get() == (day, commit) else verify(day, commit))
+        # A policy already consumed by this exact live PID keeps its sealed
+        # authority when the editable work checklist changes. No new launch or
+        # policy activation uses this read-only proof.
+        checked = (_verify_consumed_handoff(day, commit) if consumed_path.exists()
+                   else verify(day, commit))
         if checked.get('status') != 'pass':
             raise ValueError('entry_consumer_handoff_invalid')
     else:
@@ -389,7 +397,7 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         required = (bootstrap.manifest_path(day), bootstrap.env_path(day), _preopen_path(day))
         if any(prior.get('frozen_files', {}).get(str(p)) != _sha(p) for p in required):
             raise ValueError('entry_consumer_original_generation_changed')
-    changed = _verify_entry_code_delta(root, commit, origin, paths, expected)
+    changed = _verify_entry_code_delta(code_root, code_commit, origin, paths, expected)
     return dict(status='verified_intraday_consumer_repair', target_date=day,
         policy_sha256=policy_sha, origin_commit=origin, release_commit=commit,
         code_contract_sha256=expected, runtime_code_contract_sha256=actual,
@@ -569,6 +577,15 @@ REVIEWED_NATIVE_ARM_COMPLETION_SOURCES = {
 }
 
 
+# Carried policy readers exclude only later, never-consumed observation tails.
+# Exact reviewed source bytes; full research and numeric selection stay strict.
+REVIEWED_CARRIED_SOURCE_BINDING_SOURCES = {
+    'src/engine/automation/main_stop_postclose.py': (
+        '360573dc170d91617cbaec7f1c8713b769c403b22e52449e11434019360a6224',
+        '72334470389eed899eed84da5fb3d157bd8ae6078e2d38bfb10b0bc96b79ba6f'),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -628,7 +645,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name),
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
-                    REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name)):
+                    REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
+                    REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:
@@ -752,21 +770,21 @@ def _checked_bootstrap(day, pid):
 
 
 def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_source=False,
-            previous_stopped=False):
+            previous_stopped=False, freeze_operating_checklist=False):
     token = _STOPPED_PREPARATION.set(
         (day, int(old_pid), str(Path(previous_root).resolve())) if previous_stopped else None)
     native_token = _NATIVE_PREDECESSOR.set(None)
     try:
         return _prepare(day, old_pid=old_pid, previous_root=previous_root, confirm=confirm,
                         now=now, reseal_postclose_source=reseal_postclose_source,
-                        previous_stopped=previous_stopped)
+                        previous_stopped=previous_stopped, freeze_operating_checklist=freeze_operating_checklist)
     finally:
         _NATIVE_PREDECESSOR.reset(native_token)
         _STOPPED_PREPARATION.reset(token)
 
 
 def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_source=False,
-             previous_stopped=False):
+             previous_stopped=False, freeze_operating_checklist=False):
     current = _today(day, now)
     if confirm != CONFIRM:
         raise ValueError("intraday_handoff_explicit_authority_required")
@@ -918,11 +936,14 @@ def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose
         if not source.get('policy_receipts') or source['policy_receipts'] != original_prepared.get('policy_receipts'):
             raise ValueError('intraday_reseal_policy_generation_changed')
         checklist = DATA_DIR.parent / 'docs/checklists' / (day + '-stage2-todo-checklist.md')
-        frozen.extend([Path(source['controller_path']), Path(source['summary_path']), checklist])
+        operating = _freeze_operating_checklist(day, commit, checklist) if freeze_operating_checklist else None
+        frozen.extend([Path(source['controller_path']), Path(source['summary_path']),
+                       Path(operating['path']) if operating else checklist])
         reseal = dict(source_date=source_day, target_date=day, current_source_receipts=source,
                       checklist_path=str(checklist), original_controller_sha256=original_prepared.get('controller_sha256'),
                       original_summary_sha256=original_prepared.get('summary_sha256'), policy_effect='unchanged')
         if historical: reseal['historical_checklist'] = historical
+        if operating: reseal['operating_checklist'] = operating
     # All native source receipts remain independently validated by the launcher.
     hashes = {str(path): _sha(path) for path in frozen}
     if reseal is not None and any(hashes[source[key + '_path']] != source[key + '_sha256']
@@ -964,6 +985,25 @@ def _prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose
 
 def verify(day, commit, *, now=None):
     return _verify_handoff(day, commit, now=now)
+
+
+def _freeze_operating_checklist(day, commit, checklist):
+    import stat
+    with os.fdopen(os.open(checklist, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 2*1024*1024:
+            raise ValueError('intraday_operating_checklist_invalid')
+        content = stream.read(2*1024*1024+1)
+        after = checklist.lstat()
+        identity = lambda s: (s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+        if len(content) != before.st_size or identity(before) != identity(after):
+            raise ValueError('intraday_operating_checklist_changed_during_read')
+    path = _paths(day, commit)[0].parent/(commit+'.operating-checklist.md')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('xb') as stream:
+        stream.write(content); stream.flush(); os.fsync(stream.fileno())
+    return dict(path=str(path), sha256=hashlib.sha256(content).hexdigest(),
+                source_path=str(checklist), target_date=day, role='launch_document_snapshot')
 
 
 def _verify_handoff(day, commit, *, now=None, historical_observer=False):
@@ -1033,7 +1073,18 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
                         or snapshot.get('git_path') != 'docs/checklists/' + day + '-stage2-todo-checklist.md'):
                     raise ValueError('intraday_historical_checklist_binding_invalid')
                 required.add(str(expected_path))
-            required.update([source['controller_path'], source['summary_path'], reseal['checklist_path']])
+            operating = reseal.get('operating_checklist')
+            if operating is not None:
+                operating_path = path.parent/(commit+'.operating-checklist.md')
+                if (operating.get('path') != str(operating_path) or operating_path.is_symlink()
+                        or operating.get('source_path') != reseal['checklist_path']
+                        or operating.get('target_date') != day or operating.get('role') != 'launch_document_snapshot'
+                        or frozen.get(str(operating_path)) != operating.get('sha256')):
+                    raise ValueError('intraday_operating_checklist_binding_invalid')
+                required.add(str(operating_path))
+            else:
+                required.add(reseal['checklist_path'])
+            required.update([source['controller_path'], source['summary_path']])
         historical_document = None
         if historical_observer:
             # Only an already-consumed historical handoff may disregard edits
@@ -1042,7 +1093,7 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
             # take this branch, and the observer binds the live PID separately.
             if not reseal or not reseal.get('historical_checklist') or not consumed_path.exists():
                 raise ValueError('intraday_observer_consumed_historical_handoff_required')
-            historical_document = reseal['checklist_path']
+            historical_document = reseal['checklist_path'] if not reseal.get('operating_checklist') else None
         if set(frozen) != required or any(_sha(name) != sha for name, sha in frozen.items()
                                          if name != historical_document):
             raise ValueError("intraday_preserved_generation_changed")
@@ -1086,7 +1137,7 @@ def verify_pid_consumption(day, *, pid, now=None):
                 raise ValueError('intraday_consumption_handoff_missing')
         else:
             frozen.update({path: _sha(path), consumed_path: _sha(consumed_path)})
-            check = verify(day, commit, now=current)
+            check = _verify_consumed_handoff(day, commit, now=current)
             if check['status'] != 'pass':
                 return check
             consumed = _read(consumed_path)
@@ -1114,6 +1165,61 @@ def verify_pid_consumption(day, *, pid, now=None):
                     pid_identity=identity, actual_pid_consumed=True, manifest_sha256=manifest_sha)
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         return dict(status='fail', findings=[str(exc)], target_date=day, actual_pid_consumed=False)
+
+
+def _verify_consumed_handoff(day, commit, *, now=None):
+    """Existing live policy custody; never a launch/consume/activation gate."""
+    try:
+        root, selected = _selection(require_selected_cwd=False)
+        path, consumed_path = _paths(day, commit)
+        handoff_sha, consumed_sha = _sha(path), _sha(consumed_path)
+        consumed = _read(consumed_path)
+        identity = consumed.get('pid_identity') or {}
+        if (selected != commit or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+                or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+                or consumed.get('target_date') != day or consumed.get('selected_release_commit') != commit
+                or consumed.get('release_root') != str(root) or consumed.get('handoff_sha256') != handoff_sha
+                or identity.get('cwd') != str(root/'src') or _identity(identity['pid']) != identity):
+            raise ValueError('intraday_consumed_live_identity_invalid')
+        historical = bool((_read(path).get('postclose_source_reseal') or {}).get('historical_checklist'))
+        result = _verify_handoff(day, commit, now=now, historical_observer=historical)
+        if consumed.get('manifest_sha256') != result.get('handoff', {}).get('manifest_sha256'):
+            raise ValueError('intraday_consumed_manifest_changed')
+        if (_sha(path) != handoff_sha or _sha(consumed_path) != consumed_sha
+                or _identity(identity['pid']) != identity
+                or _selection(require_selected_cwd=False) != (root, commit)):
+            raise ValueError('intraday_consumed_generation_changed')
+        return result
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return dict(status='fail', findings=[str(exc)], target_date=day, actual_pid_consumed=False)
+
+
+def verify_predecessor_consumption(day, *, pid):
+    """Candidate's full read-only revalidation before an ordered cutover.
+
+    The candidate must be immutable, and every affected policy consumer must
+    pass its exact reviewed source-pair gate. This does not attest candidate
+    consumption or change the selector, checklist, policy or predecessor.
+    """
+    from src.engine.infrastructure import runtime_release_router as router
+    root, commit = _selection(require_selected_cwd=False)
+    candidate = Path(__file__).resolve().parents[3]
+    candidate_commit = router.git(candidate, 'rev-parse', 'HEAD')
+    router.validate_release(DATA_DIR.parent, dict(schema='runtime_release_selection_v1',
+        workspace=str(DATA_DIR.parent), release_root=str(candidate), git_commit=candidate_commit))
+    if root == candidate:
+        raise ValueError('intraday_predecessor_candidate_already_selected')
+    identity = _identity(pid)
+    token = _PREDECESSOR_REVIEW.set(dict(day=day, root=root, commit=commit,
+        code_root=candidate, code_commit=candidate_commit, identity=identity))
+    try:
+        result = verify_pid_consumption(day, pid=pid)
+        if result.get('status') == 'pass':
+            result.update(verification_code_root=str(candidate), verification_code_commit=candidate_commit,
+                          candidate_pid_consumed=False, runtime_effect=False)
+        return result
+    finally:
+        _PREDECESSOR_REVIEW.reset(token)
 
 
 def consume(day, *, pid, now=None):
@@ -1238,6 +1344,7 @@ def main(argv=None):
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--prepare", action="store_true")
     group.add_argument("--verify", action="store_true")
+    group.add_argument("--verify-predecessor", action="store_true")
     group.add_argument("--consume", action="store_true")
     group.add_argument('--activate-main-v2',action='store_true')
     parser.add_argument("--target-date", required=True)
@@ -1248,6 +1355,7 @@ def main(argv=None):
     parser.add_argument("--confirm")
     parser.add_argument('--reseal-postclose-source', action='store_true')
     parser.add_argument('--previous-stopped', action='store_true')
+    parser.add_argument('--freeze-operating-checklist', action='store_true')
     args = parser.parse_args(argv)
     if args.validation_session and args.activate_main_v2:
         parser.error("validation session cannot wrap policy activation")
@@ -1258,11 +1366,14 @@ def main(argv=None):
             if args.prepare:
                 result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root,
                                  confirm=args.confirm, reseal_postclose_source=args.reseal_postclose_source,
-                                 previous_stopped=args.previous_stopped)
+                                 previous_stopped=args.previous_stopped,
+                                 freeze_operating_checklist=args.freeze_operating_checklist)
             elif args.activate_main_v2:
                 result=activate_main_v2(args.target_date,pid=args.pid,confirm=args.confirm)
             elif args.consume:
                 result = consume(args.target_date, pid=args.pid)
+            elif args.verify_predecessor:
+                result = verify_predecessor_consumption(args.target_date, pid=args.pid)
             elif args.pid is not None:
                 result = verify_pid_consumption(args.target_date, pid=args.pid)
             else:
