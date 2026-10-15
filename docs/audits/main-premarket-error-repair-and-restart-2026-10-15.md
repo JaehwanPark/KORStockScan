@@ -129,3 +129,21 @@ observer 전용 state reader는 canonical 보고서와 같은8MiB 한도에서 r
 09:52:24 health에서 fail/critical/error0, 정책 generation4종 verified/findings[]다. observer는 bounded_no_applicable_observations/unmet[]의 warning_pending이며 full_coverage_proven=false를 유지한다. 남은 warning은 표본 대기와 postclose_finalization의06:50 이후 복구 이력이다. 원 실패·복구 지연을 삭제하지 않았고 실주문·체결·경제성 또는 전체 source coverage 완료로 해석하지 않는다. 해당 자연 수용은 기존 OPEN owner에 남겨둔다. 재발 방지 코드 범위의 미해결 결함은 없으며 정책/AI/주문을 수동 재실행하지 않았다.
 
 [최종 수용 대사](../../tmp/intraday-submission-20261015-until0820/final-acceptance-095235.json)의15개 check는 모두true다. [native 증거 manifest](../../tmp/intraday-submission-20261015-until0820/final-native-27e1b5bdf-manifest.json)에 health·observer·selector·transition·WS·custody·continuation·bootstrap 원 bytes와 hash를 별도 보존했다. 최종 문서 갱신은 별도 기록 커밋이며 배포 source를 바꾸지 않는다.
+
+
+## 10:01 새 보조평가 증빙 누락 경보
+
+10:01:20 경보의 report run6bacc639e9b54598bbefc3558434960d/as_of10:00:40.370762/SHA8e135a0f2da4fc054500af15db12c6288f55ff51b938509fcb20ac09be1274d9는27e1b5bdf/current PID1614174의 최신 보고서다. publication_recheck stable=true이며 보고서 게시 경합은 재발하지 않았다. 새 원천 결함은09:58:24.539185 HPSP403870/attempt aims-05085a127d27bf82a455/trace analyze_target:403870:1792025902532:5833c760이다. route/venue/session은 존재하지만 reference_price=null, async identity=null, request_capture_status=partial이었다. 실제 응답은 PASS이고 원 비용 영수증은 존재하며, 이 사실을 주문 성공이나 유효한 연구 표본으로 승격하지 않는다.
+
+직접 원인은09:58:22 ai_decision_trace_error.log의 `request capture failed: jsonl_generation_lock_busy:.../ai_decision_payloads_2026-10-15.jsonl`이다. capture_ai_request가 세 파일의 _load_seen을 nonblocking shared lease로 먼저 확인하여 같은 파일의 machine append와 경합하면 전체 capture 결과를{}로 반환했다. 원 요청 저장이 빠진 뒤 provider 응답은 기록돼 reference/async/request 연결이 누락됐다. 탐지기의 auxiliary_call/pending route_or_reference_missing 및 response_request_unresolved는 실제 누락을 반영한다. 같은 시간대의 별도1379ms provider timeout은 원 오류로 남기며 이번 저장 수리로 해결됐다고 주장하지 않는다.
+
+수리는 ai_decision_trace의 요청·trace·pending·candidate 쓰기 앞의 중복 _load_seen만 제거한다. 기존 _append_jsonl은 exclusive generation lease 안에서 prepared index, 최대64KiB append suffix, exact content digest/중복, regular/no-follow/parent/name identity를 검증한다. payload→prompt→request-last 순서, 기존 writer lock과 fsync, 별도 bounded background preparation을 그대로 사용한다. 새 worker·provider 재호출·무제한 과거 scan·deadline 재설정·정책 변경을 추가하지 않는다. cold/unverified index·미완성/교체 파일·동일 ID 다른 내용은 실패로 유지한다. 실패 전 원본 report/state/trace/payload/pending/request 및 오류 tail은 `tmp/observer-auxiliary-route-repair-20261015-1001`에 보존하고 원 과거 ledger를 재작성하지 않는다.
+
+실제 flock으로 payload/prompt/request/trace/pending 각각을 점유한 회귀에서 기존 append owner가 순차 저장한 뒤 reference50600·async PID/start/request·원 deadline·request envelope·pending 동일 attempt가 유지된다. 동일 요청 중복은1행이고 conflict/partial tail/cold replacement는 거부된다. 초기 표적 검증225개 PASS이며 기존 pandas_ta 경고1건은 패키지 변경 없이 유지했다. 후속 통합 검증 및 배포/실제 producer 소비 영수증을 별도로 기록한다.
+
+
+10:07 후속 점검에서는10:03:37.704833 030000 probe의 별도 분류 누락도 확인했다. native_wait_result는 confirmation_pending_at_residence_end, native_confirmation_not_consumed_before_expiry, feature_window_incomplete를 서로 다른 observation_incomplete 결과로 발행하지만 consumer는 첫 사유만 검증했다. 실제 receipt는 current SOR/030000_AL·selected_pending0·selected_ready0·G4 UNKNOWN·누적 FALSE40/UNKNOWN31·source_censored0였으며 UNKNOWN은 매수 평가나 패턴 FALSE가 아니다.
+
+consumer는 같은 exact route/PID/start/clock/family/scope/0B/0D 증빙을 검증한 다음 producer의 우선순위대로 세 사유를 구분한다. anchor 대기는 pending>0, 만료 확인은 pending0/누적 TRUE>0, feature window 미완료는 pending0/TRUE0/censored0/현재 UNKNOWN 및 누적 UNKNOWN>0을 요구한다. ready·stale/foreign route·잘못된 count/reason은 거부하며 current UNKNOWN/미소비 확인의 원 기록·full_coverage_proven=false·machine_admission_proven=false를 보존한다. 새 원 native PREOPEN→monitor hash pair는 REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES에만 추가한다. 과거 handoff pair는 유지한다. [원 행 재검증](../../tmp/observer-auxiliary-route-repair-20261015-1001/native-pending-replay.json)은 pending_count0/unknown_count31을 정확히 재현하고 no_match=false였다. 기존 사용자 통합92785b7da와 계산a179bb42d는 그대로 유지한다.
+
+10:01 수리 최종 통합 검증2,856개 PASS(34.56초), compile·diff whitespace·print-only parser PASS다. 미해결 코드 결함은 검토 범위에서 없으며 원 정책4종 fixture와 exact native bootstrap을 배포 전 다시 검증한다. 운영 consumer 확인은 후속 영수증으로 별도 기록한다.

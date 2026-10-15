@@ -1115,13 +1115,7 @@ def capture_canonical_context_candidate(
     }
     try:
         with _WRITE_LOCK:
-            seen = _SEEN_CONTEXT_CANDIDATE_HASHES.get(target_date)
-            if seen is None:
-                path = _context_candidate_path(target_date)
-                seen = _load_seen(path, "candidate_sha256")
-                _SEEN_CONTEXT_CANDIDATE_HASHES[target_date] = seen
             _append_jsonl(_context_candidate_path(target_date), row)
-            seen.add(candidate_sha256)
         return {
             "ai_context_candidate_sha256": candidate_sha256,
             "ai_context_candidate_status": row["validation_only_status"],
@@ -1628,22 +1622,15 @@ def capture_ai_request(
         lock_started = time.perf_counter()
         with _WRITE_LOCK:
             timings["ai_trace_lock_wait_ms"] = (time.perf_counter() - lock_started) * 1000
-            for cache, path, field in (
-                (_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
-                (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
-                (_SEEN_REQUEST_IDS, _request_path, "request_id")):
-                cache[target_date] = _load_seen(path(target_date), field)
-            seen = _SEEN_PAYLOAD_HASHES[target_date]
+            # The append owner validates the bounded prepared index and exact
+            # content under its exclusive generation lease. A preliminary
+            # nonblocking reader can race a machine capture and discard this
+            # request's provenance even though the writer can serialize it.
             persist(_payload_path(target_date), payload_row)
-            seen.add(request_envelope_sha256)
-            seen_prompts = _SEEN_PROMPT_HASHES[target_date]
             persist(_prompt_path(target_date), prompt_row)
-            seen_prompts.add(prompt_sha256)
             # Commit the request ledger last. A request row must never point at
             # payload/prompt content that failed to persist.
-            seen_requests = _SEEN_REQUEST_IDS[target_date]
             persist(_request_path(target_date), request_row)
-            seen_requests.add(trace_id)
         return {
             **{key: metadata_row.get(key) for key in (
                 'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
@@ -3173,11 +3160,6 @@ def record_ai_decision_trace(
         from src.engine.monitoring.runtime_performance import record_entry_duration, timed_entry_call
         record_entry_duration('entry_trace_prepare', time.perf_counter() - preparation_started)
         with _WRITE_LOCK:
-            seen = _SEEN_TRACE_IDS.get(target_date)
-            if seen is None:
-                path = _trace_path(target_date)
-                seen = _load_seen(path, "decision_trace_id")
-                _SEEN_TRACE_IDS[target_date] = seen
             if trace_row.get("entry_economic_plan_sha256"):
                 from src.utils.pipeline_event_logger import emit_pipeline_event
                 emit_pipeline_event("ENTRY_PIPELINE", str(trace_row.get("stock_code") or ""),
@@ -3188,16 +3170,8 @@ def record_ai_decision_trace(
                         "decision_trace_id": trace_id, "actual_order_submitted": False,
                         "broker_order_forbidden": True, "runtime_effect": False, "allowed_runtime_apply": False})
             timed_entry_call('entry_trace_append', _append_jsonl, _trace_path(target_date), trace_row)
-            seen.add(trace_id)
             if trace_row["outcome_label_eligible"]:
-                seen_outcomes = _SEEN_OUTCOME_LABEL_IDS.get(target_date)
-                if seen_outcomes is None:
-                    outcome_path = _outcome_path(target_date)
-                    seen_outcomes = _load_seen(outcome_path, "label_id")
-                    _SEEN_OUTCOME_LABEL_IDS[target_date] = seen_outcomes
-                label_id = str(pending_row["label_id"])
                 timed_entry_call('entry_outcome_append', _append_jsonl, _outcome_path(target_date), pending_row)
-                seen_outcomes.add(label_id)
         return {
             "ai_decision_trace_schema": TRACE_SCHEMA,
             "ai_decision_trace_id": trace_id,

@@ -41,7 +41,8 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_ACTIVE_OBSERVER_SOURCES',
                                      'REVIEWED_CURRENT_OBSERVER_SOURCES',
                                      'REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES',
-                                     'REVIEWED_OBSERVER_STATE_READER_SOURCES'])
+                                     'REVIEWED_OBSERVER_STATE_READER_SOURCES',
+                                     'REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib
@@ -66,6 +67,7 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     monkeypatch.setattr(handoff, 'REVIEWED_CURRENT_OBSERVER_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_OBSERVER_STATE_READER_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES', {})
     monkeypatch.setattr(handoff, review_map, {name: pair})
     expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if damage == 'before': before += b'# altered baseline\n'

@@ -837,13 +837,15 @@ def _probe_verified_no_match(row, *, allow_incomplete=False):
 
 
 def _probe_verified_pending(row):
-    """Recognize exact pending native observation; UNKNOWN remains unassessed."""
+    """Verify native incomplete outcomes; UNKNOWN never becomes an assessment."""
     import ast
     if not _probe_verified_no_match(row, allow_incomplete=True):
         return None
     try:
         fields = row['fields']
-        if fields.get('zero_base_probe_reason') != 'confirmation_pending_at_residence_end':
+        reason = fields.get('zero_base_probe_reason')
+        if reason not in {'confirmation_pending_at_residence_end', 'feature_window_incomplete',
+                          'native_confirmation_not_consumed_before_expiry'}:
             return None
         receipt = fields['native_observation_receipt']
         if isinstance(receipt, str):
@@ -851,11 +853,10 @@ def _probe_verified_pending(row):
             except ValueError: receipt = ast.literal_eval(receipt)
         truth, counts = receipt['selected_branch_truth'], receipt['selected_lifecycle_counts']
         if (receipt.get('reason') not in {'required_window_incomplete', 'no_matching_pattern'}
-                or any(v not in {'FALSE', 'UNKNOWN'} for v in truth.values())
+                or any(v not in {'TRUE', 'FALSE', 'UNKNOWN'} for v in truth.values())
                 or set(counts) != set(truth) or len(truth) > 512
                 or any(type(receipt.get(k)) is not int or receipt[k] < 0 for k in
                        ('selected_pending_count', 'source_censored_count', 'raw_ready_count', 'selected_ready_count'))
-                or receipt['selected_pending_count'] <= 0
                 or receipt['selected_ready_count'] != 0):
             return None
         # Pending anchors, latest branch truth and cumulative lifecycle counts
@@ -868,6 +869,21 @@ def _probe_verified_pending(row):
                     or not sum(values.values())):
                 return None
             unknown += values.get('UNKNOWN', 0)
+        # Match the producer's native_wait_result precedence and populations.
+        # Historical TRUE counts can coexist with a current pending anchor;
+        # without an anchor they describe an expired, unconsumed confirmation.
+        pending = receipt['selected_pending_count']
+        historical_true = sum(values.get('TRUE', 0) for values in counts.values())
+        if reason == 'confirmation_pending_at_residence_end':
+            if pending <= 0 or any(v == 'TRUE' for v in truth.values()):
+                return None
+        elif reason == 'native_confirmation_not_consumed_before_expiry':
+            if pending != 0 or historical_true <= 0:
+                return None
+        elif (pending != 0 or historical_true != 0 or receipt['source_censored_count'] != 0
+                or receipt.get('reason') != 'required_window_incomplete'
+                or not any(v == 'UNKNOWN' for v in truth.values()) or unknown <= 0):
+            return None
         return dict(pending_count=receipt['selected_pending_count'], unknown_count=unknown,
                     source_censored_count=receipt['source_censored_count'])
     except (KeyError, ValueError, TypeError, SyntaxError, RecursionError):

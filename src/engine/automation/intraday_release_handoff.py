@@ -529,6 +529,16 @@ REVIEWED_OBSERVER_STATE_READER_SOURCES = {
 }
 
 
+# Native incomplete observations retain UNKNOWN/expired evidence without admission.
+# Exact reviewed source pair; see the 10:01 repair in the 2026-10-15 audit.
+REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        'ad8d684a71c2e6e8917f4a9db539da3df8ed1ef5b77b48cc6c892defc4318582',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -584,7 +594,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_ACTIVE_OBSERVER_SOURCES.get(name),
                     REVIEWED_CURRENT_OBSERVER_SOURCES.get(name),
                     REVIEWED_NATIVE_HANDOFF_INTEGRATION_SOURCES.get(name),
-                    REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name)):
+                    REVIEWED_OBSERVER_STATE_READER_SOURCES.get(name),
+                    REVIEWED_NATIVE_INCOMPLETE_OBSERVER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

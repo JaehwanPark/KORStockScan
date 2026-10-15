@@ -179,7 +179,7 @@ def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, 
                   model="test", schema_name="entry_v1", require_json=True)
     first = trace.capture_ai_request(**kwargs)
     trace.capture_ai_request(**kwargs)
-    assert len(calls) == 6  # Prepared lookups only; no history scan.
+    assert len(calls) == 0  # The exclusive append lease owns dedup validation.
     assert len(_rows(trace._payload_path(day))) == 1
     assert len(_rows(trace._request_path(day))) == 1
     assert first["ai_trace_dedup_init_ms"] == 0
@@ -187,7 +187,7 @@ def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, 
                 "ai_trace_write_ms", "ai_trace_capture_ms"):
         assert first[key] >= 0
     assert trace.prepare_ai_request_capture("2026-09-23")
-    assert len(calls) == 6
+    assert len(calls) == 0
 
 
 def test_request_preparation_defers_wrapped_generation_lock_contention(monkeypatch, tmp_path):
@@ -3090,3 +3090,92 @@ def test_raw_union_projection_marks_missing_truncated_and_redacted_fields(monkey
     assert stored['entry_ai_raw_risk_codes']==[]
     assert stored['entry_ai_raw_response_sha256'] is None
     assert stored['trace_storage_redacted'] is True
+
+
+@pytest.mark.parametrize('blocked_stage', ['payload', 'prompt', 'request', 'trace', 'outcome'])
+def test_actual_generation_contention_preserves_request_trace_and_pending_binding(
+    monkeypatch, tmp_path, blocked_stage
+):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    _enable(monkeypatch, tmp_path)
+    day = trace._date_text()
+    trace.prepare_ai_request_capture(day)
+    paths = {name: getattr(trace, '_' + name + '_path')(day)
+             for name in ('payload', 'prompt', 'request', 'trace', 'outcome')}
+    blocked = paths[blocked_stage]
+    binding = dict(async_request_id='fixed-watch:original', async_producer_pid=123,
+        async_producer_start_ticks='456', async_origin_deadline_epoch=1792025905.,
+        async_order_venue='SOR', scanner_generation_id='fixed-watch:generation')
+    kwargs = dict(prompt='fixture risk screen',
+        user_input=dict(stock_code='403870', best_ask=50600, effective_venue='KRX',
+            session_bucket='krx_regular', market_data_route='krx_nxt_integrated',
+            snapshot_id='aims-original'), endpoint_name='analyze_target', symbol='403870',
+        request_id='exact-provider-request', metadata=binding,
+        model='fixture', schema_name='fixture', require_json=True)
+    reached = threading.Event()
+    real_lease = trace.jsonl_artifact_generation_lock
+    @contextmanager
+    def observed_lease(path, **options):
+        if path == blocked and options.get('exclusive') is True:
+            reached.set()
+        with real_lease(path, **options) as lease:
+            yield lease
+    monkeypatch.setattr(trace, 'jsonl_artifact_generation_lock', observed_lease)
+    # Maintenance may evict its hints while another writer owns the file.
+    # No hint is an authority to skip the append's prepared-index verification.
+    for cache in (trace._SEEN_TRACE_IDS, trace._SEEN_OUTCOME_LABEL_IDS):
+        cache.clear()
+    def capture_and_trace():
+        captured = trace.capture_ai_request(**kwargs)
+        assert captured['ai_trace_reference_price'] == 50600
+        result = trace.record_ai_decision_trace(dict(action='BUY', score=90,
+            evaluation_attempt_id='aims-original', entry_mechanistic_action='ENTER_NOW',
+            entry_ai_screen_status='pass', entry_ai_risk_verdict='PASS'),
+            prompt_type='scalping_entry', prompt_version='fixture', result_source='live',
+            input_contract_fields=captured, provider_called=True)
+        return captured, result
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with real_lease(blocked, exclusive=True):
+            future = pool.submit(capture_and_trace)
+            assert reached.wait(2), 'writer must reach its existing exclusive lease'
+            assert not future.done(), 'contention must not discard the observation'
+        captured, result = future.result(timeout=3)
+    assert result['ai_decision_trace_id'] == 'exact-provider-request'
+    assert trace.capture_ai_request(**kwargs)['ai_decision_trace_id'] == 'exact-provider-request'
+    request = _rows(paths['request'])[0]
+    decision = _rows(paths['trace'])[0]
+    pending = _rows(paths['outcome'])[0]
+    for path in paths.values():
+        assert len(_rows(path)) == 1
+    for key, value in binding.items():
+        assert captured[key] == request[key] == decision[key] == value
+    assert decision['request_capture_status'] == 'captured'
+    assert decision['reference_price'] == pending['reference_price'] == 50600
+    assert decision['evaluation_attempt_id'] == pending['evaluation_attempt_id'] == 'aims-original'
+    assert decision['request_envelope_sha256'] == request['request_envelope_sha256']
+    assert decision['actual_order_submitted'] is False
+
+
+@pytest.mark.parametrize('failure', ['conflict', 'partial_tail', 'cold_replacement'])
+def test_capture_append_owner_still_rejects_unverified_generation(monkeypatch, tmp_path, failure):
+    _enable(monkeypatch, tmp_path)
+    kwargs = dict(prompt='fixture', user_input=dict(stock_code='403870', best_ask=50600),
+        endpoint_name='analyze_target', symbol='403870', request_id='original',
+        model='fixture', schema_name='fixture', require_json=True)
+    assert trace.capture_ai_request(**kwargs)
+    path = trace._request_path(trace._date_text())
+    if failure == 'conflict':
+        kwargs['user_input'] = dict(stock_code='403870', best_ask=50700)
+    elif failure == 'partial_tail':
+        with path.open('ab') as stream:
+            stream.write(b'{"request_id":"unfinished"')
+        kwargs['request_id'] = 'next'
+    else:
+        replacement = path.with_suffix('.replacement')
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+        kwargs['request_id'] = 'next'
+    before = path.read_bytes()
+    assert trace.capture_ai_request(**kwargs) == {}
+    assert path.read_bytes() == before

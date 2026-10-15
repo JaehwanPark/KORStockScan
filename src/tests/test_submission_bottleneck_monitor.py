@@ -4150,3 +4150,50 @@ def test_observer_state_disappearance_during_read_is_not_a_first_run(tmp_path,mo
         return raw
     monkeypatch.setattr(monitor.os,'read',removed)
     with pytest.raises((FileNotFoundError,ValueError)):monitor._load_state(path)
+
+
+@pytest.mark.parametrize('reason,historical_true', [
+    ('feature_window_incomplete', 0), ('native_confirmation_not_consumed_before_expiry', 2)])
+@pytest.mark.parametrize('damage', [None, 'pending', 'ready', 'wrong_reason', 'stale_source',
+    'source_route', 'missing_unknown_or_true', 'current_truth'])
+def test_native_incomplete_population_matches_producer_without_admission(tmp_path, reason, historical_true, damage):
+    from src.engine.scalping.zero_base_probe import native_wait_result
+    now = monitor.stamp('2026-10-15T10:03:38+09:00')
+    row = _native_no_match_probe(now, receipt_format='dict')
+    row['fields'].update(zero_base_probe_result='observation_incomplete', zero_base_probe_reason=reason)
+    receipt = row['fields']['native_observation_receipt']
+    receipt.update(reason='required_window_incomplete', native_source_current=True,
+        selected_branch_truth={'G4': 'UNKNOWN'}, selected_pending_count=0,
+        selected_ready_count=0, source_censored_count=0,
+        selected_lifecycle_counts={'G4': {'TRUE': historical_true, 'FALSE': 40, 'UNKNOWN': 31}})
+    assert native_wait_result(receipt, {}) == ('observation_incomplete', reason)
+    if damage == 'pending': receipt['selected_pending_count'] = 1
+    elif damage == 'ready': receipt['selected_ready_count'] = 1
+    elif damage == 'wrong_reason': row['fields']['zero_base_probe_reason'] = 'unknown_pending'
+    elif damage == 'stale_source': receipt['native_source_current'] = False
+    elif damage == 'source_route': receipt['item'] = '999999_AL'
+    elif damage == 'missing_unknown_or_true':
+        receipt['selected_lifecycle_counts']['G4']['TRUE' if historical_true else 'UNKNOWN'] = 0
+    elif damage == 'current_truth': receipt['selected_branch_truth']['G4'] = 'UNRECOGNIZED'
+    before = json.dumps(row, sort_keys=True)
+    observed = monitor._probe_verified_pending(row)
+    assert json.dumps(row, sort_keys=True) == before
+    if damage:
+        assert observed is None
+        return
+    assert observed == dict(pending_count=0, unknown_count=31, source_censored_count=0)
+    assert monitor._probe_verified_no_match(row) is False
+    _source_gap_files(tmp_path, now, probes=[row])
+    gap = monitor.source_gap_semantics(tmp_path, now)
+    census = gap['native_pending_observations']
+    assert census['verified_pending_count'] == 1 and census['unclassified_count'] == 0
+    assert census['machine_admission_proven'] is False and census['pattern_no_match_proven'] is False
+    assert gap['probe_route_native_no_match_counts'] == {} and gap['probe_route_assessed_counts'] == {}
+    result = _observation_health_fixture()
+    result['source_gap_semantics'].update(observed={'probe_results': 1, 'probe_observation_incomplete': 1},
+        status='gap_observed', native_pending_observations=census, diagnostics=gap['diagnostics'],
+        diagnostics_by_scope=gap['diagnostics_by_scope'], probe_route_counts=gap['probe_route_counts'],
+        probe_route_source_covered_counts=gap['probe_route_source_covered_counts'])
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'warning_pending'
+    assert health['full_coverage_proven'] is False
