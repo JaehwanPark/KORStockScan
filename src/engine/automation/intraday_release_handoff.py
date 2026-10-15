@@ -489,6 +489,17 @@ REVIEWED_ACTIVE_OBSERVER_SOURCES = {
 }
 
 
+# Exact PREOPEN to quiet current-PID/index and pre-birth incident classification.
+# Capability receipts are separate report-only evidence; policies stay unchanged.
+# Evidence: docs/audits/main-premarket-error-repair-and-restart-2026-10-15.md.
+REVIEWED_CURRENT_OBSERVER_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '90388bc7badb918a01763c9f1aa0c1bd10a322c8760034a3768714edba94809d',
+        '8525a03215257c97d8497ad6a55f4b9c7ffd543763c35d31e3730c85759f2221',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -541,7 +552,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_SUBMISSION_TIMEOUT_SOURCES.get(name),
                     REVIEWED_OBSERVER_TERMINAL_SESSION_SOURCES.get(name),
                     REVIEWED_PREMARKET_OBSERVER_SOURCES.get(name),
-                    REVIEWED_ACTIVE_OBSERVER_SOURCES.get(name)):
+                    REVIEWED_ACTIVE_OBSERVER_SOURCES.get(name),
+                    REVIEWED_CURRENT_OBSERVER_SOURCES.get(name)):
             changed.append(name)
             continue
         if name not in allowed:

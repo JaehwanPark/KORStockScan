@@ -41,3 +41,33 @@
 후속 candidate의 native monitor hash는 `dd164faf5619deb20eef0456cd1187164f09d7f2094c474a2c691e9b700a253f`이고 REVIEWED_ACTIVE_OBSERVER_SOURCES에 원 PREOPEN 해시와 exact pair로 등록한다. 이전 소비 pair는 유지한다. targeted pytest·compile·diff·문서 parser와 원 경보 재현 후 ordered driver로 배포/재기동하고 새 generation 소비를 별도로 기록한다.
 
 후속 재리뷰·표적 검증: producer/consumer·handoff/router·source-window 총 2,047개 pytest 통과(18.43초). current active observer의 detector warning 및 source/date/actor 변조 FAIL 통합 회귀를 포함한다. py_compile, git diff --check, print-only parser PASS이며 당일 parsed OPEN owner는 기존9개다. 새 승인 요청·provider replay·임계값 변경·실주문은 없다.
+
+
+## 후속 배포 결과
+
+`7ee86f3e9eae8b9d82cdde30e7e205f9893962df`는 08:46:12.288564 ordered transition `complete/pass`다. 기존 PID1481448/start ticks8438079는 08:43:57 정상 종료했고, 새 Main PID1506055/start ticks8543913의 cwd와 selector 및 실제 native 소비가 일치한다. 정책과 bootstrap 원 봉인은 유지했고, startup hold가 해제됐다. 최종 계산 수정 a179bb42d는 조상 commit에 포함된다.
+
+08:46:48부터 새 PID의 실제 0B/0D 수신을 확인했다. 08:46:49 broker checkpoint는 KRX/NXT 모두 유효하고 미체결0이며, 기존 manual/retired 보유042660 10주·475150 20주와 custody registry1489건/원 tail hash를 유지한다. Main holding0은 source-only 상태이며 거래/경제성 수용으로 보고하지 않는다.
+
+08:45 정규 observer 시도는 실행 중 selector의 actual_pid_consumed가 false→true로 바뀌어 `observer_generation_changed_during_run`으로 게시 보류(exit75)했다. 원 predecessor 보고서를 덮어쓰지 않았으며 정상 후속 generation/탐지기 수용은 별도로 확인한다. transition 원본과 1차 실패/소비 이력은 모두 보존했다.
+
+
+## 08:51 후속 경보와 정책 생성 검증 경고 통합 수리
+
+08:50 정규 generation `6570277fe5714f54839591d115128c24`는 새 PID에 결속되어 10.57초에 정상 게시됐지만 세 가지 기동 대기 해석이 남았다. 원본은 `tmp/intraday-submission-20261015-until0820/second-new-generation-observer.json`에 보존한다.
+
+- native admission/generation/route와 안전 증거를 갖춘 `exact_route_item_missing`은 WS 첫 수신 대기로 분리한다. 실제 원천 없음 또는 다른 route를 검증 완료로 바꾸지 않는다.
+- 신선한 source snapshot에 남은 45분 scanner row와 최근10분 current-PID 관측을 분리한다. 알려진 unobservable blocker/빈 scopes인 완료 보고서도 exact birth·완전 source 계약을 통과할 때만 bounded warning으로 분류한다. 검증된 native forward index가 raw append 0bytes로 구간을 읽은 경우 기존 index proof 검사를 재사용한다.
+- 집계 last_seen이 새 PID의 검증된 kernel birth 이전인 알려진 owner의 historical_unresolved incident는 현 PID 실패로 다시 승격하지 않는다. 원 incident를 수정하거나 recovered로 만들지 않는다. birth 이후·unknown owner·현재 issue·불완전 원천은 계속 거부한다.
+
+원본5건을 실제 producer로 재분류한 재현은 warning_pending이며 current_observation_verified/full_coverage_proven/runtime_effect/allowed_runtime_apply는 모두 false다. negative regression은 source date/staleness·index clock/schema/hash·unknown/current incident·birth tamper를 포함한다.
+
+사용자 후속 지시에 따라 세 family의 policy_generation_unverified도 이번 수리 범위다. 기존 native 코드와 report 계약은 유효하지만 현재 코드 해시의 fixture receipt가 없었다. 위치 gate에서 producer/consumer를 확인했고, 새 검증 CLI는 `src/engine/automation/policy_generation_fixture_validation.py`, 읽기 전용 보충 증빙 소비자는 `src/engine/monitoring/policy_generation_validation.py`, 회귀는 `src/tests/test_policy_generation_validation.py`가 소유한다. engine root 신규 모듈은 없다.
+
+CLI는 allowlist의 실제 pytest 계획을 네트워크 차단 하에 실행한다. 모든 testcase PASS·계획별 파일 포함·0 network attempt·source/selected/bootstrap 보호 hash 동일·코드/검증 계획 hash 동일을 확인한 뒤에만 불변 run 증빙 및 canonical code fixture를 atomic create한다. timeout/실패/코드 또는 운영 파일 변경 시 게시하지 않고 실패 증거를 보존한다. 원 영수증 덮어쓰기는 없다.
+
+Detector는 해당 code fixture를 native reader로 다시 검증하고 정확한 원 보고서·source generation·code·contract SHA에 결속한 보충 projection만 만든다. 원 계약은 historical_contract_status=unverified/native_validated=false로 남고 current_code_capability_verified=true를 별도로 기록한다. 원 보고서·정책·PREOPEN은 재작성하지 않는다. 기존 null 경제성·표본 부족·incumbent carry도 유지한다. 이후 native postclose producer는 같은 코드 fixture를 정상 소비한다.
+
+사전 실제 fixture 시험은 entry_cancel_wait93·rising_missed86·holding_vote91개 전부 PASS, 네트워크 시도0/보호 파일 변경0/게시false다. observer·capability 소비/변조 경로 935개 PASS. 후속 monitor SHA `8525a03215257c97d8497ad6a55f4b9c7ffd543763c35d31e3730c85759f2221`와 원 PREOPEN만 REVIEWED_CURRENT_OBSERVER_SOURCES exact pair로 허용하고 이전 pair를 보존한다. 최종 code/배포/PID 및 현재 detector 수용은 각각 별도 영수증으로 확인한다.
+
+통합 최종 리뷰: 표적 회귀2,188개 PASS(18.55초), 그 뒤 source/code/state 동등성 및 bounded regular-file 보완 소비 회귀283개 PASS, 미커밋 게시 거부 포함 게시 회귀39개 PASS다. compile·diff·print-only parser PASS이며 기존 parsed owner9개를 유지했다. 실제 canonical fixture는 최종 커밋의 깨끗한 불변 candidate에서 고정 계획을 다시 실행한 뒤에만 발행한다. 광역 장후 재계산·원 보고서 재봉인·provider/주문/임계값 변경은 실행하지 않는다.

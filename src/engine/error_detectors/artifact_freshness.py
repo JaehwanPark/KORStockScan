@@ -3182,6 +3182,8 @@ class ArtifactFreshnessDetector(BaseDetector):
         for semantic_day in semantic_days:
             for observed in generation_observations(PROJECT_ROOT,semantic_day,
                     data_root=(PROJECT_ROOT/'data').resolve()):
+                from src.engine.monitoring.policy_generation_validation import current_fixture_observation
+                observed = current_fixture_observation(observed, (PROJECT_ROOT/'data').resolve())
                 details['policy_generation_semantics'].append(observed)
                 observations.append(dict(stage='policy_generation',semantics=observed))
                 bindings.append(dict(stage='policy_generation',source_date=semantic_day,

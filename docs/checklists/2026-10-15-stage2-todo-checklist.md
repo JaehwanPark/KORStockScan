@@ -61,6 +61,8 @@
   - 완료 기준: repair_owner=`DirectFamilySourceRepairEntryCancelWait`, closure_test=`eligible_source_to_selection_publisher_native_reader`; 같은 원천·코드 세대의 fixture와 native reader 계약을 검증한다.
   - 권한 경계: report_only, runtime_effect=false, allowed_runtime_apply=false. 운영 정책의 경제성·PREOPEN handoff와 독립된 코드 검증이며 provider·주문·정책 적용·재기동 또는 비용 후 성과를 승인하지 않는다.
 
+  - 10/15 검증 경고 보완: native 원 보고서·정책 봉인을 유지하고 현재 코드의 실제 fixture 시험/영수증을 별도 검증한다. 코드 capability의 보충 소비와 source/sample/경제성 수용은 분리하며 이 OPEN owner는 원 수용 기준을 유지한다. [통합 수리·실제 영수증](../audits/main-premarket-error-repair-and-restart-2026-10-15.md).
+
 - [ ] `[DirectFamilySourceRepairEntrySplit] entry_split 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-14.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-14.json)
   - 증거: runtime_summary_sha256=`f45f42e4e86c2e7ab43dbfd5440279be8a34dcade9653b740ce3c5b66f65f2d2`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_split_order_plan/entry_split_order_plan_2026-10-14.json`.
@@ -76,6 +78,8 @@
   - 세대 결속: source_generation=`1609973c820643368a9465903fcf1b5f0c284c28eb98c744b4ae6360265921a5`, code_sha256=`b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab`, contract_sha256=`753ea75c3470866f6e56fad1a50b3fa5cc3c46bac5e114061fd8e176905004ff`.
   - 완료 기준: repair_owner=`MainStopLossRetirementRuntimeTuning1010`, closure_test=`eligible_source_to_selection_publisher_native_reader`; 같은 원천·코드 세대의 fixture와 native reader 계약을 검증한다.
   - 권한 경계: report_only, runtime_effect=false, allowed_runtime_apply=false. 운영 정책의 경제성·PREOPEN handoff와 독립된 코드 검증이며 provider·주문·정책 적용·재기동 또는 비용 후 성과를 승인하지 않는다.
+
+  - 10/15 검증 경고 보완: native 원 보고서·정책 봉인을 유지하고 현재 코드의 실제 fixture 시험/영수증을 별도 검증한다. 코드 capability의 보충 소비와 source/sample/경제성 수용은 분리하며 이 OPEN owner는 원 수용 기준을 유지한다. [통합 수리·실제 영수증](../audits/main-premarket-error-repair-and-restart-2026-10-15.md).
 
 - [ ] `[PostcloseStructuralPolicyCompletion1011] rising_missed 정책 생성 코드·원천 세대 계약 검증` (`Due: 2026-10-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-14.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-14.json)
@@ -110,6 +114,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 전일 미종결 수용 이관
 
+  - 10/15 검증 경고 보완: native 원 보고서·정책 봉인을 유지하고 현재 코드의 실제 fixture 시험/영수증을 별도 검증한다. 코드 capability의 보충 소비와 source/sample/경제성 수용은 분리하며 이 OPEN owner는 원 수용 기준을 유지한다. [통합 수리·실제 영수증](../audits/main-premarket-error-repair-and-restart-2026-10-15.md).
+
 - [ ] `[MainMarketWeaknessPostcloseObservation1008] 압축 원천·native 판정 연결·누적·약세 조정 후보 보완` (`Due: 2026-10-15`, `Slot: POSTCLOSE`, `TimeWindow: 검증된 수리의 후속 배치·자연 수용; 실제 연구는 21:40~익일 05:40 허용 슬롯`, `Track: RuntimeStability`)
   - Source: [10/14 구현 리뷰](../audits/main-market-weakness-postclose-source-binding-implementation-review-2026-10-14.md), [10/13 결함보완계획 WR0–WR5](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md), [원 MW0–MW6·구현/배포 이력](../proposals/main-market-weakness-observer-repair-and-postclose-research-implementation-plan-2026-10-08.md), [기존 stable ID·Acceptance](2026-10-09-stage2-todo-checklist.md).
   - 범위: 10/14 사용자 승인으로 WR1~WR4 작업본 구현·반복 코드리뷰/수정을 수행했다. gzip-only reader/native 연결·확인 latch/누적/phase/typed 후보/안내와 설정 재결속을 구현했다. 실제 배치·예약 재결속·원천 재계산·실발송은 후속 수용이다. 추가 장중 hook·로깅·metadata·파일 조회/계산·queue/thread·API/AI 호출은 0, 기존 보조 패턴연구·정책/주문·Main/manual custody·퇴역 경계는 보존한다. joint/지연 개선 작업의 구현·배포 승인을 전용하지 않는다.
@@ -127,6 +133,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-15`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
   - 오류 수리 인계: 10/15 08:12 사용자 지시로 08:20 병목 감시를 중단하고 오류 수정·배포·재기동으로 전환했다. PRE 이름 alias만 동등 비교하며 원 receipt/revision·venue·route·수량/안전 guard를 유지한다. 표적 1,973개 통과; 새 PID 소비와 자연 제출은 별도 수용이다. [구현·배포 검토](../audits/main-premarket-error-repair-and-restart-2026-10-15.md).
   - 08:32 후속 경보 수리: native 장전 fixed-watch 대기와 active observing 상태·재사용 reader의 30분/10분 coverage 계약을 보완한다. 실제 원 보고서의 현재 PID·AI 진행 기록·원 결손은 유지하고 artifact 실패와 bounded pending을 구분한다. 완료 기준은 새 불변 release의 ordered 재기동·동일 정책 소비·새 관측 generation의 detector 재계산 일치다. 원본 경보/재현 및 배포 이력은 위 audit가 소유한다.
+  - 08:51 후속: exact_route_item_missing 초기 대기·quiet old scanner 행·완전 native index의 raw0·kernel birth 이전 historical incident를 보완한다. 원 경보를 보존하고 새 current generation의 순수 재계산/daemon 수용으로 종료한다.
   - Source: [보조 회로·제출 보완계획](../proposals/main-auxiliary-circuit-recovery-and-submit-receipt-remediation-plan-2026-10-12.md), [구현 리뷰](../audits/main-post-readiness-residual-and-pattern-research-review-2026-10-12.md), [10/14 제출 병목 개선계획 B0/B2/B3](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md).
   - Acceptance: 실제 새 PID/cwd/start ticks·bundle/registry 소비, 같은 시장명 비교의 receipt→revision→sizing 연결, 원 native5초·단일 recovery lease·공통 인증/unknown fail-closed·보호 exit 독립성을 확인한다. 회로가 자연히 열리지 않으면 HALF_OPEN 성공을 주장하지 않고 pending으로 남긴다. PASS와 intent/send/fill/terminal을 분리한다.
   - History: 10/12 계획의 P0-A/B/P1 새 결함만 구현 범위다. 기존 완료 native/readiness/auth owner 전체를 다시 열지 않는다. 기동 준비·배포 수용은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다.

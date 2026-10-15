@@ -994,7 +994,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
                 and (fields.get('actual_order_submitted') is False or fields.get('actual_order_submitted') == 'False')
                 and (fields.get('broker_order_forbidden') is True or fields.get('broker_order_forbidden') == 'True')):
             boundary_waits += 1
-        elif (reason in {'post_receipt_observation_warmup', 'fixed_watch_post_receipt_warmup', 'exact_0B_missing'} and context is not None
+        elif (reason in {'post_receipt_observation_warmup', 'fixed_watch_post_receipt_warmup', 'exact_0B_missing', 'exact_route_item_missing'} and context is not None
                 and (context.entry_allowed_by_clock is True or premarket_wait)
                 and fields.get('watch_origin') == 'MAIN_FIXED_WATCH'
                 and isinstance(row.get('stock_code'), str) and row['stock_code'] in fixed_symbols
@@ -3359,7 +3359,7 @@ def observation_health_projection(result):
             and count(known_waits) and waits.get('count') == waits.get('session_boundary_wait_count')+known_waits
             and len(reasons) <= 16 and all(count(value, minimum=1) for value in reasons.values())
             and set(reasons) <= {'session_generation_mismatch', 'post_receipt_observation_warmup',
-                                'fixed_watch_post_receipt_warmup', 'exact_0B_missing'}
+                                'fixed_watch_post_receipt_warmup', 'exact_0B_missing', 'exact_route_item_missing'}
             and reasons.get('session_generation_mismatch', 0) == waits.get('session_boundary_wait_count')
             and sum(v for k,v in reasons.items() if k != 'session_generation_mismatch') == known_waits
             and context is not None and waits.get('native_session_regime') == context.session_regime
@@ -3703,16 +3703,26 @@ def observation_health_projection(result):
             'delay_policy_not_verified')
     incidents = result.get('incidents')
     incidents_valid = isinstance(incidents, dict) and len(incidents) <= 256
+    historical_incident_keys = set()
     if incidents_valid:
         for incident_key, incident in incidents.items():
             incident = obj(incident)
             status = incident.get('status')
             last = clock(incident.get('last_seen'))
             owner = {'machine_auxiliary_intraday_source_gap':0, 'machine_policy_receipt_contract':1}.get(incident_key)
+            birth_lower = (_verified_health_actor_birth(projections[owner].get('actor_birth_proof'),
+                actor, now, result.get('observer_generation')) if actor and owner is not None and now else None)
+            # Incident last_seen is the aggregation clock. An unresolved known
+            # owner recorded before this verified process birth cannot become
+            # a new-PID failure merely because its aggregation is <10 min old.
             historical_cohort = (actor is not None and owner is not None
-                and incident.get('current_status') == 'historical_not_current_cohort'
-                and count(projections[owner].get('excluded_observation_count'), minimum=1)
-                and obj(projections[owner].get('view')).get('issues') == {})
+                and obj(projections[owner].get('view')).get('issues') == {}
+                and (incident.get('current_status') == 'historical_not_current_cohort'
+                     and count(projections[owner].get('excluded_observation_count'), minimum=1)
+                     or status == 'historical_unresolved' and last is not None
+                        and birth_lower is not None and last.timestamp() < birth_lower))
+            if historical_cohort:
+                historical_incident_keys.add(incident_key)
             if (status not in ('historical_unresolved', 'recovered', 'superseded_alias', 'reclassified')
                     or not last or not now or last > now
                     or status == 'historical_unresolved' and (now-last).total_seconds() <= SOURCE_WINDOW_SEC
@@ -3738,11 +3748,22 @@ def observation_health_projection(result):
         and isinstance(result.get('scopes'), dict) and 0 < len(result['scopes']) <= 512
         and all(isinstance(key, str) and 0 < len(key) <= 512 and isinstance(value, dict)
                 for key, value in result['scopes'].items()))
-    if active_report_valid:
+    quiet_report_valid = (report_execution_valid and input_provenance_valid
+        and result.get('status') == 'unobservable' and result.get('scopes') == {}
+        and result.get('blocker') in ('missing_stale_or_noncurrent_sentinel_evidence',
+                                     'no_identified_scanner_machine_evaluation'))
+    if active_report_valid or quiet_report_valid:
         soft.update({'monitor_state_not_quiet_full_observation', 'current_input_provenance_invalid'})
 
-    def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC):
+    def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC, source_name=None):
         source=obj(source); identity=obj(source.get('source_identity'))
+        # A validated native forward index can cover the whole interval without
+        # a raw append read. Reuse the exact proof checks above, not bytes>0.
+        if (source_name == 'probe'
+                and source.get('coverage_basis') == 'verified_forward_sentinel_source_window_v1'
+                and 'indexed_source_window_proof_invalid:probe' not in failed
+                and 'source_window_not_complete:probe' not in failed):
+            return True
         base = (source.get('incomplete_last_line') is False
             and count(source.get('malformed_rows'), maximum=0) and count(source.get('missing_timestamp_rows'), maximum=0)
             and count(source.get('recent_count')) and count(source.get('read_count'), minimum=1, maximum=1)
@@ -3810,7 +3831,7 @@ def observation_health_projection(result):
             and isinstance(gap.get('async_pass_projection'),list) and len(gap['async_pass_projection']) <= 128
             and isinstance(gap.get('async_transition_projection'),list) and len(gap['async_transition_projection']) <= 1024
             and count(gap.get('async_pass_unmapped_count'))
-            and all(clean_reader(source,SOURCE_TAIL_BYTES) for source in sources.values()))
+            and all(clean_reader(source,SOURCE_TAIL_BYTES,source_name=name) for name,source in sources.items()))
         machine_shape=(machine.get('status') in (expected_machine,'partial_unobservable')
             and machine.get('decision_authority') == 'report_only' and machine.get('selection_family') == 'continuous_reversal'
             and publication.get('status') == 'native_frozen_family_verified' and publication.get('effective_date') == day
@@ -3888,7 +3909,7 @@ def observation_health_projection(result):
                 for key,item in incidents.items():
                     item=obj(item); last=clock(item.get('last_seen')); state=item.get('status')
                     if last is None or now is None or last > now: quality_incidents=False; break
-                    if state in ('recovered','superseded_alias','reclassified') or (
+                    if key in historical_incident_keys or state in ('recovered','superseded_alias','reclassified') or (
                             state == 'historical_unresolved' and (now-last).total_seconds() > SOURCE_WINDOW_SEC): continue
                     quality=obj(item.get('issues'))
                     if (key != 'machine_auxiliary_intraday_source_gap' or state not in ('pending','active','historical_unresolved')

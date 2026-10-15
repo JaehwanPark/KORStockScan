@@ -3866,7 +3866,7 @@ def test_active_report_warning_rejects_invalid_publication_and_source_contracts(
 
 
 @pytest.mark.parametrize('reason', ['exact_0B_missing', 'fixed_watch_post_receipt_warmup',
-                                   'post_receipt_observation_warmup'])
+                                   'post_receipt_observation_warmup', 'exact_route_item_missing'])
 @pytest.mark.parametrize('bad', [None, 'before_open', 'after_premarket', 'generation', 'admission',
     'signature', 'resolution', 'venue', 'bucket', 'symbol', 'symbol_type', 'submitted', 'forbidden',
     'unknown_reason', 'quality'])
@@ -3950,3 +3950,46 @@ def test_bounded_health_verifies_narrowed_lineage_coverage_receipt(bad):
     elif bad == 'origin': window['original_window_status'] = 'unknown'
     elif bad == 'tail': window['tail_truncated'] = False
     assert monitor.observation_health_projection(result)['status'] == ('warning_pending' if bad is None else 'not_eligible')
+
+
+@pytest.mark.parametrize('bad', [None, 'unknown_blocker', 'scope_present', 'stale', 'bool_row', 'dry',
+    'index_generation', 'index_schema', 'index_contract', 'index_clock', 'index_bytes', 'index_malformed',
+    'incident_new', 'incident_unknown', 'birth_invalid'])
+def test_quiet_current_pid_with_old_scanner_rows_and_verified_index_preserves_history(bad):
+    result, gap, machine, lineage = _bounded_outcome_health_fixture(partial=False)
+    result.update(status='unobservable', blocker='missing_stale_or_noncurrent_sentinel_evidence', scopes={})
+    result['input_provenance']['row_count'] = 1
+    now = monitor.stamp(result['as_of'])
+    birth = result['observer_generation']['actor_birth_proof']
+    lower = max(now.timestamp()-600, birth['birth_lower_bound_epoch'])
+    probe = gap['sources']['probe']
+    probe.update(bytes_read=0, coverage_basis='verified_forward_sentinel_source_window_v1',
+        coverage_started_at=(now-timedelta(seconds=600)).isoformat(),
+        current_window_start_at=datetime.fromtimestamp(lower,monitor.KST).isoformat(),
+        actor_lifetime_bound=True, cache_schema_version=20, projection_contract='a'*64,
+        historical_stage_coverage='not_backfilled_before_cache_offset', cache_generation=[1,2,3,4,5],
+        indexed_raw_offset=2048, indexed_bytes_read=400, indexed_identity_bytes_read=100)
+    key='machine_auxiliary_intraday_source_gap'
+    incident=dict(status='historical_unresolved',
+        last_seen=datetime.fromtimestamp(birth['birth_lower_bound_epoch']-1,monitor.KST).isoformat(),
+        issues={'machine_trace:entry_machine_input_deadline_expired':1})
+    result['incidents'][key]=incident
+    if bad=='unknown_blocker':result['blocker']='unknown'
+    elif bad=='scope_present':result['scopes']={'unexpected':{}}
+    elif bad=='stale':result['input_provenance']['snapshot_age_seconds']=500
+    elif bad=='bool_row':result['input_provenance']['row_count']=True
+    elif bad=='dry':result['input_provenance']['dry_run']=True
+    elif bad=='index_generation':probe['cache_generation']=[1]
+    elif bad=='index_schema':probe['cache_schema_version']=0
+    elif bad=='index_contract':probe['projection_contract']='bad'
+    elif bad=='index_clock':probe['current_window_start_at']=now.isoformat()
+    elif bad=='index_bytes':probe['indexed_bytes_read']=True
+    elif bad=='index_malformed':probe['malformed_rows']=1
+    elif bad=='incident_new':incident['last_seen']=now.isoformat()
+    elif bad=='incident_unknown':result['incidents']['unknown']=result['incidents'].pop(key)
+    elif bad=='birth_invalid':birth['boot_epoch']+=1
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if bad is None else 'not_eligible'),health
+    assert json.dumps(result,sort_keys=True)==before
+    assert health['current_observation_verified'] is False and health['runtime_effect'] is False
