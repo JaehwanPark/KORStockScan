@@ -8778,7 +8778,9 @@ def test_received_reversal_validator_exception_preserves_raw_response_and_waits_
     assert result['openai_transport_fail_closed'] is False
 
 
-@pytest.mark.parametrize('failure_stage', ['frozen_validator', 'post_validation'])
+@pytest.mark.parametrize('failure_stage', ['frozen_validator', 'post_validation',
+    'duplicate_reservation', 'legacy_reservation', 'invalid_outbox_transition', 'corrupt_outbox',
+    'outbox_io_failure', 'corrupt_legacy_journal', 'invalid_legacy_shape'])
 def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution_separate(tmp_path, monkeypatch, failure_stage):
     """Exercise real request, receipt, validator exception, fallback and trace."""
     import copy
@@ -8861,6 +8863,36 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
         def fail_normalization(*a, **kw):
             raise ValueError('controlled_post_response_projection_fault')
         monkeypatch.setattr(engine, '_normalize_decision_quality_entry_result', fail_normalization)
+    from src.engine.scalping import reversal_operating_outbox as outbox_owner
+    custody_failure = failure_stage in {'duplicate_reservation', 'legacy_reservation',
+        'invalid_outbox_transition', 'corrupt_outbox', 'outbox_io_failure',
+        'corrupt_legacy_journal', 'invalid_legacy_shape'}
+    if failure_stage == 'duplicate_reservation':
+        outbox_owner.reserve(tmp_path, assessment, 'previous-request')
+    elif failure_stage == 'legacy_reservation':
+        outbox_owner.reserve_reversal_signal(tmp_path/'runtime/initial_quantity/reversal_signals',
+            signal_id=assessment['signal_id'], stage='provider_request', identity='previous-request', binding={})
+    elif failure_stage == 'corrupt_outbox':
+        folder = tmp_path/'runtime/initial_quantity/operating_opportunities'
+        folder.mkdir(parents=True)
+        (folder/(assessment['opportunity_key']+'.json')).write_text('{')
+    elif failure_stage in {'corrupt_legacy_journal', 'invalid_legacy_shape'}:
+        import hashlib
+        folder = tmp_path/'runtime/initial_quantity/reversal_signals'
+        folder.mkdir(parents=True)
+        path = folder/(hashlib.sha256(assessment['signal_id'].encode()).hexdigest()+'.json')
+        path.write_text('{' if failure_stage == 'corrupt_legacy_journal' else 'null')
+    elif failure_stage == 'outbox_io_failure':
+        def fail_write(*args):
+            raise OSError('controlled outbox storage failure')
+        monkeypatch.setattr(outbox_owner, '_write_target_index_atomic', fail_write)
+    elif failure_stage == 'invalid_outbox_transition':
+        advance = outbox_owner.advance
+        def fail_transition(root, key, state, **kwargs):
+            if state == 'response_received':
+                raise outbox_owner.OperatingOpportunityError('operating_opportunity_already_reserved_or_transition_invalid')
+            return advance(root, key, state, **kwargs)
+        monkeypatch.setattr(outbox_owner, 'advance', fail_transition)
     calls = []
     def create(**kwargs):
         calls.append(kwargs)
@@ -8874,6 +8906,35 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
             async_producer_start_ticks=Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19],
             async_origin_deadline_epoch=snapshot[0]['epoch']+5, async_order_venue='SOR',
             scanner_generation_id='controlled-generation'))
+    if custody_failure:
+        transmitted = failure_stage == 'invalid_outbox_transition'
+        assert len(calls) == int(transmitted), result
+        assert result['provider_called'] is transmitted
+        assert result['action'] == 'WAIT' and result['entry_ai_screen_pass'] is False
+        assert result['ai_result_source'] == 'operating_opportunity_blocked'
+        assert result['entry_recheck_intent'] is False
+        assert result['entry_ai_followup_authority'] == 'none'
+        assert result['entry_ai_followup_disposition'] == 'operating_opportunity_blocked'
+        assert result['entry_ai_screen_status'] == 'blocked_local_custody'
+        assert not result.get('openai_transport_fail_closed_reason')
+        assert result['ai_parse_fail'] is False and result['openai_transport_fail_closed'] is False
+        assert engine.consecutive_failures == failure_before and not engine.ai_disabled
+        assert engine._common_recoverable_chain is True
+        assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
+        assert len(rotations) == int(transmitted)
+        if transmitted:
+            assert result['openai_response_id']
+        else:
+            assert (engine.current_api_key_index, engine.current_key) == key_before
+        traces = [json.loads(line) for p in (tmp_path/'ai_decision_trace').glob('*.jsonl')
+                  for line in p.read_text().splitlines()]
+        assert len(traces) == 1 and traces[0]['provider_called'] is transmitted
+        assert traces[0]['result_source'] == 'operating_opportunity_blocked'
+        assert traces[0]['parse_status'] == 'not_evaluated_local_custody'
+        assert traces[0]['actual_order_submitted'] is False
+        assert engine.lock.acquire(blocking=False)
+        engine.lock.release()
+        return
     assert len(calls) == 1, result  # A received failure cannot replay the provider.
     assert engine.consecutive_failures == failure_before
     assert engine.ai_disabled is False and engine._common_recoverable_chain is True

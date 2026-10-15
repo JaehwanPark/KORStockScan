@@ -11387,6 +11387,8 @@ class GPTSniperEngine:
 
         except Exception as e:
             failure_perf = time.perf_counter()
+            from src.engine.scalping.reversal_operating_outbox import OperatingOpportunityError
+            opportunity_custody_error = isinstance(e, OperatingOpportunityError)
             provider_start = local_stage_clocks.get('provider_started_perf')
             if provider_start is not None and 'provider_returned_perf' not in local_stage_clocks:
                 local_stage_clocks['provider_returned_perf'] = failure_perf
@@ -11409,7 +11411,7 @@ class GPTSniperEngine:
                 and getattr(e,'provider_common_error',None) is None
                 and (isinstance(e, (OpenAIHTTPWallClockDeadlineError, APITimeoutError))
                      or getattr(e, 'entry_deadline_timeout', False) is True))
-            local_contract_error = (bool(raw_auxiliary_response_fields)
+            local_contract_error = (opportunity_custody_error or bool(raw_auxiliary_response_fields)
                 or (isinstance(e, ValueError) and str(e) in {
                 'auxiliary_soft_policy_invalid_before_provider', 'machine_predecision_composer_disagreement',
                 'auxiliary_registered_model_mismatch', 'reversal_request_signal_set_changed_before_send',
@@ -11435,11 +11437,16 @@ class GPTSniperEngine:
             timeout_like = bool(
                 provider_attempted and self._is_openai_timeout_like_error(e)
             )
-            result_source = ("schema_semantic_rejected" if raw_auxiliary_response_fields
+            result_source = ("operating_opportunity_blocked" if opportunity_custody_error
+                else "schema_semantic_rejected" if raw_auxiliary_response_fields
                 else "timeout" if timeout_like else "exception")
-            log_error(
-                f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}"
-            )
+            if opportunity_custody_error:
+                log_info(f"[ENTRY_OPPORTUNITY_CUSTODY_BLOCK] [{target_name}][{strategy}] "
+                         f"provider_called={provider_attempted} reason={e}")
+            else:
+                log_error(
+                    f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}"
+                )
 
             fallback_payload = (
                 self._build_buy_side_timeout_reject(
@@ -11574,6 +11581,25 @@ class GPTSniperEngine:
                 fallback_payload.update(self._received_reversal_response_failure(
                     raw_auxiliary_response_fields, error=e,
                     response_errors=frozen_auxiliary_response_errors))
+            if opportunity_custody_error:
+                # Reservation/receipt custody can fail on either side of the
+                # provider call. Retain observed transport facts, but never
+                # turn local custody failure into provider failure or retry.
+                fallback_payload.update(action='WAIT', score=50, reason=str(e),
+                    entry_ai_screen_pass=False, entry_ai_primary_reason='operating_opportunity_blocked',
+                    entry_ai_final_disposition='operating_opportunity_blocked',
+                    entry_ai_screen_status='blocked_local_custody',
+                    entry_ai_followup_disposition='operating_opportunity_blocked',
+                    entry_ai_followup_authority='none', entry_recheck_intent=False,
+                    entry_recheck_reasons=[], entry_recheck_intent_status='blocked_existing_opportunity_custody',
+                    entry_probe_intent=False, entry_probe_intent_status='blocked_local_custody',
+                    decision_quality_contract_status='not_evaluated_local_custody',
+                    decision_quality_runtime_action_mapping='operating_opportunity_blocked_to_wait',
+                    openai_transport_fail_closed=False, openai_local_failure_reason=str(e)[:240],
+                    actual_order_submitted=False, broker_order_forbidden=True)
+                fallback_payload.pop('openai_transport_fail_closed_reason', None)
+                if not provider_attempted:
+                    fallback_payload['provider_called'] = False
             try:
                 fallback_score_50 = float(fallback_payload.get("score")) == 50.0
             except Exception:
@@ -11589,7 +11615,7 @@ class GPTSniperEngine:
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=bool(raw_auxiliary_response_fields),
-                parse_fail=not bool(raw_auxiliary_response_fields),
+                parse_fail=not bool(raw_auxiliary_response_fields) and not opportunity_custody_error,
                 fallback_score_50=fallback_score_50,
                 cache_hit=False,
                 cache_mode="miss",

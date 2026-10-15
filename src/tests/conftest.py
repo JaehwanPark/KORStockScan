@@ -58,6 +58,8 @@ def isolate_module_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_event_logger, "DATA_DIR", tmp_path / "data")
     from src.utils import kiwoom_utils
     monkeypatch.setattr(kiwoom_utils, "DATA_DIR", tmp_path / "data")
+    from src.trading.market import transport_epoch
+    monkeypatch.setattr(transport_epoch, "DEFAULT_PATH", tmp_path / "runtime/kiwoom_ws_transport_epoch.json")
     # Probe circuit trips persist across process restarts. Every test must use
     # its own state file, including tests that reach the circuit indirectly.
     monkeypatch.setattr(
