@@ -111,6 +111,25 @@ def test_symlink_replacement_even_same_target_invalidates(tmp_path):
             N._signature(link/'a');link.unlink();link.symlink_to(folder,target_is_directory=True)
 
 
+@pytest.mark.parametrize('spelling', ['absolute', 'relative', 'symlink', 'dot_parent'])
+def test_signature_string_fast_path_preserves_path_and_mutation_checks(tmp_path, monkeypatch, spelling):
+    folder = tmp_path / 'folder'; folder.mkdir()
+    source = folder / 'source'; source.write_text('original')
+    link = tmp_path / 'link'; link.symlink_to(folder, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    path = {'absolute': str(source), 'relative': 'folder/source',
+            'symlink': str(link / 'source'),
+            'dot_parent': str(folder) + '/../folder/source'}[spelling]
+    with N.signature_pass():
+        before = N._signature(path)
+        assert before == N._signature(Path(path))
+    original = source.stat()
+    source.write_text('modified')
+    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert N._signature(path) != before
+    assert not N.dependencies_unchanged({path: before})
+
+
 def test_concurrent_miss_single_flight_and_failure_does_not_reuse(loader,monkeypatch):
     root,path,calls=loader
     original=N._load_current_uncached;entered=threading.Event();release=threading.Event()

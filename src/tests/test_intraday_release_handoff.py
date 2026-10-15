@@ -48,6 +48,7 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_STOP_VOTE_SNAPSHOT_SOURCES',
                                      'REVIEWED_ORDERED_PUBLICATION_SOURCES',
                                      'REVIEWED_OPPORTUNITY_CUSTODY_SOURCES',
+                                     'REVIEWED_ENTRY_RECEIPT_IDENTITY_SOURCES',
                                      'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES',
                                      'REVIEWED_CARRIED_SOURCE_BINDING_SOURCES',
                                      'REVIEWED_HOLDING_CONTRACT_SOURCES'])
@@ -81,6 +82,7 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     monkeypatch.setattr(handoff, 'REVIEWED_STOP_VOTE_SNAPSHOT_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_ORDERED_PUBLICATION_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_OPPORTUNITY_CUSTODY_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_RECEIPT_IDENTITY_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_NATIVE_ARM_COMPLETION_SOURCES', {})
     monkeypatch.setattr(handoff, review_map, {name: pair})
     expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()

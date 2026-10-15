@@ -9594,6 +9594,14 @@ class GPTSniperEngine:
 
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
+            # Preflight/non-entry returns never reach transport metadata.
+            # Preserve the caller's original async identity on those receipts
+            # too, without importing arbitrary metadata into a decision.
+            if isinstance(metadata_extra, dict):
+                for key in ('async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
+                            'async_origin_deadline_epoch', 'async_order_venue', 'scanner_generation_id'):
+                    if key in metadata_extra:
+                        merged[key] = metadata_extra[key]
             if isinstance(entry_adm_runtime, dict):
                 merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
             merged = merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)

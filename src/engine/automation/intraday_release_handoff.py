@@ -605,6 +605,16 @@ REVIEWED_OPPORTUNITY_CUSTODY_SOURCES = {
     ),
 }
 
+# Preserve original async identity on early non-provider receipts. Exact bytes;
+# no request/deadline renewal, provider admission or policy-selection change.
+# Evidence: docs/audits/main-entry-price-progress-deployment-review-2026-10-15.md.
+REVIEWED_ENTRY_RECEIPT_IDENTITY_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        '58aa3ca78af08ef2cac6ec0501cc212947c4c5fa743c58b2daea26c0ba205937',
+        'e75c946a70ec6513162c5a657604830a82e4d718bd5400076d0e05a1639e56f6',
+    ),
+}
+
 
 # Exact PREOPEN-to-candidate arm cleanup, with unchanged original deadlines and
 # policy/source custody. This is a code check, not selection/startup authority.
@@ -706,6 +716,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_STOP_VOTE_SNAPSHOT_SOURCES.get(name),
                     REVIEWED_ORDERED_PUBLICATION_SOURCES.get(name),
                     REVIEWED_OPPORTUNITY_CUSTODY_SOURCES.get(name),
+                    REVIEWED_ENTRY_RECEIPT_IDENTITY_SOURCES.get(name),
                     REVIEWED_NATIVE_ARM_COMPLETION_SOURCES.get(name),
                     REVIEWED_CARRIED_SOURCE_BINDING_SOURCES.get(name),
                     REVIEWED_HPSP_SOURCE_RECOVERY_SOURCES.get(name),

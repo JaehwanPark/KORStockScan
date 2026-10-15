@@ -258,7 +258,7 @@ def signature_pass():
 def dependencies_unchanged(dependencies):
     try:
         with signature_pass():
-            return all(_signature(Path(path)) == sig for path, sig in dependencies.items())
+            return all(_signature(path) == sig for path, sig in dependencies.items())
     except (OSError, ValueError):
         return False
 
@@ -445,11 +445,15 @@ _cached_source_hash.cache_info = _hash_cache_info
 _cached_source_hash.cache_clear = _hash_cache_clear
 
 
-def _signature(path: Path) -> tuple:
-    path = source_path(path)
+def _signature(path: Path | str) -> tuple:
+    # Dependency keys are already canonical absolute strings. Rebuilding a
+    # Path for every one of the ~900 dependencies dominated warm validation.
+    # Reuse only the spelling, never a stat result or validation decision.
+    if not (type(path) is str and os.path.isabs(path) and os.path.normpath(path) == path):
+        path = os.fspath(source_path(path))
     resolver = _SIGNATURE_PASS.get() or _IdentityPass()
     resolved, links = resolver.resolve(path)
-    stat = path.stat()
+    stat = os.stat(path)
     signature = (resolved, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, links)
     dependencies = _READ_DEPENDENCIES.get()
     if dependencies is not None:

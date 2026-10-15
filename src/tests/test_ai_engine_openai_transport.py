@@ -4282,13 +4282,16 @@ def test_selected_machine_only_returns_assessment_without_provider(monkeypatch):
 
 @pytest.mark.parametrize("feature_shortfall", [False, True])
 def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
-    monkeypatch, feature_shortfall
+    monkeypatch, tmp_path, feature_shortfall
 ):
+    from src.engine.scalping import ai_decision_trace as trace
+    from src.tests.test_ai_decision_trace import _enable, _rows
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
     from src.engine.scalping.entry_setup_evidence import (
         MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
     )
 
+    _enable(monkeypatch, tmp_path)
     engine = _build_engine()
     live = {
         "enabled": True,
@@ -4334,6 +4337,9 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
             },
         )
 
+    async_binding = dict(async_request_id='original-async-request', async_producer_pid=123,
+        async_producer_start_ticks='456', async_origin_deadline_epoch=1234567890.,
+        async_order_venue='SOR', scanner_generation_id='original-generation')
     result = engine.analyze_target(
         "test",
         {
@@ -4346,9 +4352,17 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
-        metadata_extra={"scanner_promotion_id": "SCANPROM-source-invalid"},
+        metadata_extra={"scanner_promotion_id": "SCANPROM-source-invalid", **async_binding,
+                        "untrusted_runtime_action": "BUY"},
         candle_context=None,
     )
+
+    assert {key: result.get(key) for key in async_binding} == async_binding
+    assert 'untrusted_runtime_action' not in result
+    row = _rows(trace._trace_path(trace._date_text()))[-1]
+    assert {key: row.get(key) for key in async_binding} == async_binding
+    assert row['provider_called'] is False
+    assert row['actual_order_submitted'] is False
 
     if feature_shortfall:
         assert result["action"] == "WAIT"

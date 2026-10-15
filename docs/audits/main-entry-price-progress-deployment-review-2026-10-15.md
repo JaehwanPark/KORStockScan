@@ -63,3 +63,13 @@
 실행 owner는 기존 `AuxiliaryCircuitRecoveryRepair1012`다. 해야 할 일은 (1) 원 priority·전체 signal identity·원5초·기존 동시성을 보존한 Main 인수 및 정책 검증의 확인된 비용 축소, (2) 미연결 관측1건과 완료봉 실패의 producer→consumer 대사 후 재현된 결함 수리, (3) 같은 workload의 p95 목표와 다음 정규 observer/detector 동일 run 수용이다. 목표는 기존 native-ready→claim p95≤250ms / signal→live capture p95≤1초를 유지한다. 오류를 warning/PASS로 덮거나 최소 잔여시간 veto를 추가해 성능을 개선한 것으로 집계하지 않는다.
 
 재발 후 이번 점검은 원본·현재 PID·요청·code path 대조와 문서 정정이다. 새 runtime code 수정/커밋·배포·재기동·provider 호출·주문·전체 주문 경로 재생은 수행하지 않았다. 따라서 추가 수리 완료나 전체 detector 정상으로 보고하지 않는다. 문서 변경은 print-only parser와 diff 검증으로 닫으며, 기존 통합 코드 시험 수를 이번 재발 해결 시험으로 재사용하지 않는다.
+
+## 후속 승인에 따른 요청 결속·검증 비용 수리
+
+사용자가 수리·코드리뷰·보완·배포·재기동과 `7b2e421e3` 통합 확인을 지시했다. 실제 선택본 `05b78a4011ab7627b7e8ddc341d688fecf8f6a4e`와 PID2610988/start12230101을 다시 확인했다. 지정7b2e421e3은 이미 선택본의 ancestor이며 이번 후속 통합에서도 유지한다. 기존0d4f422a8·보유/재생·체결 반영 수리도 보존한다. 이는 코드 포함 확인이며 새 누적 정책 후보의 intake/선택 승인을 합성하지 않는다.
+
+확인된 결함은 source/preflight 또는 non-entry의 조기 반환이 provider transport metadata를 거치지 않아 원 async 요청 ID·PID/start·마감·venue·scanner generation을 결과/trace에 남기지 않는 경로다. 원 여섯 필드만 공통 결과 병합에 전달하고 실제 trace writer까지 검증한다. arbitrary metadata의 decision 유입과 provider 호출/주문은 거부한다. 원 구현을 격리한 두 회귀에서 ID 유실 실패를 재현했고 새 구현은 통과했다. 이것으로 원천 부재를 정상으로 바꾸거나 진행 중이던 과거 미연결 한 건을 누락 결함으로 확정하지 않는다.
+
+정책 검증은 이미 절대경로인 문자열을 매번 Path로 재구성하던 비용만 줄였다. 각 경계의 전체 file stat·symlink/ancestor·inode/ctime·pointer 변경 검증은 유지한다. 실제 같은893개 의존 원천을 변경 없이 교차50회 측정한 검증 구간 p95는10.867ms→5.488ms, median10.261ms→5.336ms이고 전 signature가 동일하다. 전체 native→claim 지연이나 provider timeout이 같은 비율로 개선됐다는 증거는 아니다. 기존 priority·기회·동시성·원5초·원천/주문 안전장치와 오류 분류는 변경하지 않는다. [측정 원본](../../tmp/entry-budget-alert-20261015-1906/signature-benchmark.json).
+
+생산자·조기 반환·정상 provider 응답·기록기·의존 검증·exact source handoff를 자기 리뷰하고 trace 실기록 검사와 변조 거부 검사를 보완했다. 기본 관련550개, 계약1,692개 PASS 후 새 exact map45개를 더했으며 최종 handoff1,506개와 trace321개 회귀를 통과했다(중복 합산하지 않는다). Python compile·diff·print-only parser로 문서/코드를 닫는다. Kiwoom wire/parser/recovery 계약, provider 값, 기계 판단값과 안전 임계값은 변경하지 않았고 전체 주문 경로/provider replay는 실행하지 않았다. native37개 계약 파일의 원 parity 해시는 동일하고 네 family의 기존 코드 세대 fixture를 현재 코드/원천으로 재검증한 뒤 재사용한다. 실제 배포·정규 산출물 수용은 아래 후속 영수증으로 구분한다.
