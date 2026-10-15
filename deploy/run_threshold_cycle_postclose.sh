@@ -969,6 +969,7 @@ def final_handoff_resume(project, day):
     metrics = [m for m in metrics if m.get('run_id') == status['run_id'] and m.get('phase') == 'command']
     if (not metrics or (metrics[-1].get('producer_module'), metrics[-1].get('exit_code')) not in {
             ('src.engine.automation.tuning_performance_control_tower', 1),
+            ('src.engine.build_next_stage2_checklist', 1),
             ('src.engine.verify_threshold_cycle_postclose_chain', 2)}):
         raise ValueError('final_resume_failed_command_not_handoff')
     completed = [m for m in metrics if m.get('exit_code') == 0
@@ -1797,6 +1798,15 @@ if [ "$RUN_MARKET_PANIC_BREADTH_REPORT" = "true" ] || [ "$RUN_MARKET_PANIC_BREAD
     "market_panic_breadth_postclose"
 fi
 
+wait_for_postclose_resources "holding_broker_cost_source"
+# Freeze official cost provenance before trade facts and quantity refresh bind
+# its generation. Missing costs remain unknown and never block protection or
+# become a new initial-policy approval gate.
+if ! run_postclose_cmd timeout 180 env PYTHONPATH=. "$VENV_PY" \
+  -m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE"; then
+  echo "[WARN] official holding costs unavailable; preserve source gap date=$TARGET_DATE" >&2
+fi
+
 # Refresh exact execution-derived facts after the NXT session before the
 # calibration reads completed trades.  The recovery controller uses the same
 # explicit ordering rather than hiding this database write in a report build.
@@ -2316,13 +2326,6 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
     "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.md" \
     "rising_missed_classifier_prior"
-fi
-wait_for_postclose_resources "holding_broker_cost_source"
-# Read-only official costs. Missing/ambiguous costs remain unknown and cannot
-# block protection/exit or become a new initial-policy approval gate.
-if ! run_postclose_cmd timeout 180 env PYTHONPATH=. "$VENV_PY" \
-  -m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE"; then
-  echo "[WARN] official holding costs unavailable; preserve source gap date=$TARGET_DATE" >&2
 fi
 wait_for_postclose_resources "scalp_trailing_postclose_exit_snapshot"
 scalp_exit_snapshot_started_epoch="$(date +%s)"

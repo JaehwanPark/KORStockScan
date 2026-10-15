@@ -18,3 +18,11 @@
 - Python compile·`git diff --check` 통과. 문서/owner는 print-only parser로 확인한다. Kiwoom wire 변경, 패키지 변경, provider 호출·주문·매매 재기동은 수행하지 않는다.
 
 근거는 [EOD 대사](../../tmp/postclose-monitor-20261015/eod-review.json), [검사 원본](../../tmp/postclose-monitor-20261015/parent-custody-tests.log), [subprocess 재검사](../../tmp/postclose-monitor-20261015/parent-custody-subprocess-recheck.log), [신규 동일성 대조](../../tmp/postclose-monitor-20261015/parent-custody-native-parity-provenance.json)다. 이 검토는 코드 수리와 읽기 검증이며, 배포·장후 terminal·10/16 prepared/PREOPEN/PID·실현 성과를 대신하지 않는다. 운영 후속은 기존 `CumulativePolicyAdoptionDeployment1015`와 `DirectFamilyPreopenPolicyHandoff`가 소유한다.
+
+## 비용 세대와 최종 checklist 인계 수리
+
+부모 검증을 복구한 실행 `e286ad714ddd438e88dc3c83a2f3d5fe`에서 분석·정책6개 stage가 모두 성공했다. 승인된38가설은 next-session 후보 `a09735ace81a…`에 반영됐으며128 scope 중22개 등록 범위가 일치한다(15개 변경·7개 승계). 원 현재 포인터는 유지됐다.
+
+그러나22:13:49 checklist 생성이 `initial_quantity_refresh_stage_invalid`로 실패했다. 원 수량 generation `b6cf05ed0edd…`의 엄격 검증은 `quantity_fact_cost_generation_changed`를 반환했다. 공식 holding 비용 수집이 이미 fact와 수량이 비용 세대를 결속한 뒤 실행돼 생긴 선후행 오류다. 비용 결손을0으로 바꾸거나 검증을 느슨하게 하지 않는다.
+
+기존 비용 수집을 fact 생성 앞으로 이동하고 호출 수·명령·timeout·경고/unknown 의미를 보존한다. 최종 resume의 허용 실패 지점에 checklist 생성 실패만 추가하며, 원 native 명령 증명·6개 stage·snapshot·현재 수량 영수증 검증은 그대로 유지한다. 복구는 현재 비용으로 fact와 직접 downstream·수량을 다시 결속하고 최종 handoff를 재개한다. 원 수량·원 실패·정책/보조 원천과 기존 승인 membership을 보존한다. wrapper 회귀·`bash -n`·print-only parser로 이 보완을 검증하며, Kiwoom 요청/응답·provider·매매 프로세스·주문/수량 guard를 변경하지 않는다.

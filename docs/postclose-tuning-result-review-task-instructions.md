@@ -162,6 +162,8 @@ bash deploy/run_runtime_release.sh finalize "$TARGET_DATE" --print-plan
 
 기존 비용 source producer는 main wrapper의 긴 raw/research 작업 전에 같은 날짜의 원천을 확보한다(`ai_action_outcome_calibration --write --ensure-economic-reference-only`). 비용 입력은 report 아래 private namespace로 작성하며 live provider budget/lock/env를 발행하지 않는다. 기존 검증 원천은 보존한다. 통합/프리마켓 시장데이터 scope의 비용은 검증된 snapshot의 명시적 broker route로 조회하고 scope label은 변경하지 않는다. 누락·충돌 route와 복구 불가 과거 당일 원천은 source gap/null이다.
 
+공식 holding 비용 수집은 거래 fact 생성과 최초 수량 refresh보다 먼저 수행한다. 이후 비용 세대가 달라지면 원 fact/수량 영수증을 보존하고 해당 fact→직접 소비→수량 평가를 현재 비용에 다시 결속한다. 비용 결손은 기존 source gap이며 보호/청산이나 지정 초기 정책에 새 승인 gate를 만들지 않는다. 이 원인으로 checklist 생성이 실패했을 때의 최종 handoff resume는 원 실패 실행의 완전한 명령 증명, 모든 선행 stage, exit snapshot과 보완된 수량 영수증 검증을 모두 요구한다. 완료된 Main이나 미수리 수량을 resume로 통과시키지 않는다.
+
 전용 raw 재스캔·구 entry funnel·독립 누적 연구/rollup/backfill 장후작업은 폐기한다. 실시간 특징·holding/entry 안전 소비와 별도 `machine_microstructure_attribution`/정책 경로는 유지한다. legacy 통계는 N/A이며 구 보고서가 없어도 정상이다.
 
 후행 calibration `--write`는 전체 case의 통합 진단을 날짜가 같은 microstructure 보고서에 가볍게 갱신한다. EV/runtime summary는 이 원천 계약을 직접 소비하고 부모 보고서 hash가 바뀌거나 없으면 source gap으로 표시한다. 부모의 날짜·calibration schema·diagnostic-only 권한과 기존 modern 보고서의 false apply/runtime 권한도 재검증한다. 진단 지표는 기존 labeler window·owner sample/promotion gate·source-quality 선언을 포함한다. 기존 가격 labeler의3분 window 마지막 관측값에서 검증된 full-cost estimate를 차감한 값은 관측 endpoint lag까지 명시한 CF 진단이다. 실제 completed EV/순익·인과 ΔEV와 합산하지 않으며 별도 tuner·정책 승격·런타임 권한을 만들지 않는다. 선정/발행/PREOPEN은 기존 기계·보조 AI의 source/terminal/holdout/promotion gate를 따른다.

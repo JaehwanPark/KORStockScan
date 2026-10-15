@@ -8,6 +8,27 @@ def _text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize('cost_exit', [0, 47])
+def test_cost_source_precedes_fact_and_quantity_generation_without_new_hard_gate(cost_exit):
+    import os, subprocess
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    start = script.index('wait_for_postclose_resources "holding_broker_cost_source"')
+    end = script.index('# Refresh exact execution-derived facts', start)
+    fact = script.index('-m src.engine.strategy_position_performance_report')
+    quantity = script.index('-m src.engine.scalping.initial_quantity_policy \\\n')
+    assert start < end < fact < quantity
+    assert script.count('-m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE"') == 1
+    body = script[start:end]
+    command = ('set -e\nwait_for_postclose_resources() { return 0; }\n'
+        + 'run_postclose_cmd() { printf "cost-source\\n"; return '+str(cost_exit)+'; }\n'
+        + body + '\nprintf "facts-and-quantity-follow\\n"\n')
+    result = subprocess.run(['bash', '-c', command], capture_output=True, text=True,
+        env={**os.environ, 'VENV_PY': '/unused/python', 'TARGET_DATE': '2026-10-15'})
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ['cost-source', 'facts-and-quantity-follow']
+    assert ('preserve source gap' in result.stderr) == (cost_exit != 0)
+
+
 @pytest.mark.parametrize("exit_code", [0, 47])
 @pytest.mark.parametrize("shared_mount", [False, True])
 def test_entry_split_verification_hook_uses_bounded_child_and_propagates_failure(tmp_path, exit_code, shared_mount):
@@ -89,6 +110,27 @@ def test_final_resume_binds_native_prefix_and_preserves_previous_proof(tmp_path)
     assert proof['completed_command_receipts'] == metrics[:-1]
     assert proof['prior_scoped_resume'] == status['scoped_resume']
     assert proof['runtime_effect'] is proof['allowed_runtime_apply'] is False
+
+
+@pytest.mark.parametrize('quantity_valid', [False, True])
+def test_final_resume_checklist_failure_requires_repaired_quantity_source(tmp_path, quantity_valid):
+    import json
+    n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
+    status.update(scoped_resume=None, regeneration_scope='normal', reused_steps_receipt=None)
+    metrics[-1].update(producer_module='src.engine.build_next_stage2_checklist', exit_code=1)
+    path.write_text(json.dumps(status))
+    log.write_text(''.join('[PERF] '+json.dumps(m)+'\n' for m in metrics))
+    n['refresh_quantity_stage_terminal_valid'] = lambda *a: quantity_valid
+    before = path.read_bytes()
+    if not quantity_valid:
+        with pytest.raises(ValueError, match='final_resume_quantity_stage_invalid'):
+            n['final_handoff_resume'](tmp_path, day)
+    else:
+        proof = n['final_handoff_resume'](tmp_path, day)
+        assert proof['completed_command_receipts'] == metrics[:-1]
+        assert proof['origin_run_id'] == status['run_id']
+        assert proof['prior_scoped_resume'] is None
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize('defect', [None, 'partial', 'reuse', 'wrong_commit', 'missing_command', 'changed_source'])
