@@ -37,19 +37,21 @@ from src.engine.monitoring import policy_generation_validation as validation
 # Probe partial custody repair changes shared handler/receipt bytes only.
 # Fresh fixtures bind the successor; historical source reports remain unchanged.
 # Review: docs/audits/main-probe-partial-integrated-deployment-review-2026-10-16.md.
+# Long4/fixed-watch and 04c holding/replay integration; original reports stay unchanged.
+# Review: docs/audits/long4-source-retention-integration-review-2026-10-16.md.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
         'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '6d994fd8d9f1484950564d70acbf28ef054e18f01c599eaef999e08171b1590b'),
+        'ea1ac91b6e080d96f3a0d61dca47575c101862ba6fe77fed36fc6170687f3e08'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
         'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '8d6b9c421249a38cbdf2e3c876430540392a35645334c66cc2e8305ff7ff0b55'),
+        'dfd762fa2b9d15799e4951bc5624effa58f8efdec29cb85939ba9d5e21765d58'),
 }
 
 # The next dated native report already carries the formerly reviewed successor.
@@ -57,16 +59,16 @@ REVIEWED_SUCCESSORS = {
 REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
     'holding_vote': (
         '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
-        '8d6b9c421249a38cbdf2e3c876430540392a35645334c66cc2e8305ff7ff0b55'),
+        'dfd762fa2b9d15799e4951bc5624effa58f8efdec29cb85939ba9d5e21765d58'),
 }
 
 
 # The actual 4c65523b2 source generation is also preserved if already reported.
 REVIEWED_DEPLOYED_SOURCE_SUCCESSORS = {
     'entry_cancel_wait': ('6d6a294941f6337d48420514d40e36891d25b44dc09bd914be0831d897794d4c', 'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
-    'rising_missed': ('0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed', '6d994fd8d9f1484950564d70acbf28ef054e18f01c599eaef999e08171b1590b'),
+    'rising_missed': ('0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed', 'ea1ac91b6e080d96f3a0d61dca47575c101862ba6fe77fed36fc6170687f3e08'),
     'auxiliary': ('711184e6d93f27e3d8f4bdd97598f4880f752332f850763b32b434560b460f8e', 'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
-    'holding_vote': ('e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278', '8d6b9c421249a38cbdf2e3c876430540392a35645334c66cc2e8305ff7ff0b55'),
+    'holding_vote': ('e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278', 'dfd762fa2b9d15799e4951bc5624effa58f8efdec29cb85939ba9d5e21765d58'),
 }
 
 

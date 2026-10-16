@@ -41,3 +41,5 @@
 - [검토 source pairs](/home/ubuntu/KORStockScan/tmp/long4-retention-integrated-20261016/reviewed-source-pairs.json)
 
 기존 `NonfixedDispatchReadinessReview1012`, `AuxiliaryCircuitRecoveryRepair1012`, `HoldingProfitExitSourceContractRepair`, `DirectFamilyPreopenPolicyHandoff`와 새 `OperationalLogRetentionRepair1016`가 각 수용을 소유한다. 과거 주성 WATCHING49353의 유실된 fixed 소유권은 원 매도→새 row의 정확한 연결 증거 없이 역으로 채우지 않는다. 다음 자연 매도/재감시와 새 lease 수신, 실효 처리량·제출·비용 후 성과는 코드 PASS와 별도 OPEN이다. 오래된 원천·unknown 신원·수동/retired custody·DANGER·계좌/주문/수량 안전장치는 유지한다.
+
+배포 전 추가 리뷰에서 rising/holding 보고서의 현재 capability 세대 연결도 새 코드로 갱신했다. 원 보고서·이전 fixture를 보존하는 정확한 source→successor 쌍이며 새 fixture 없이는 검증되지 않는다. 관련147개 회귀가 통과했다.
