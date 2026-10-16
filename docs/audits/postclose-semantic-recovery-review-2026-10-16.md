@@ -1,5 +1,7 @@
 # 2026-10-16 EOD·장후 의미 검증과 복구
 
+> 최신 검증: 2026-10-17 01:45 KST. 다음 정규 기동용 선택은 `b8ca6f66512db30fde8f570b76667dbcc0012499`이며, source 10/16 → target 10/19 finalization DONE와 current_full_contract PASS를 확인했다. 실제 PREOPEN/PID 소비는 아직 future-due다. 아래 0e19/c63 등 이전 릴리스와 완료 시각은 원 실행·검증 이력이며 현재 선택을 뜻하지 않는다. 최신 영수증은 문서 마지막 절을 기준으로 한다.
+
 대상 원천일은10/16, 다음 영업일은10/19다. 자정 이후에도 이 두 날짜를 유지한다. 현재17일 체크리스트는 없으며, 주말 임의 소유자를 만들지 않고16일 원천과19일 실행 소유자를 사용한다. 사용자의 실패 보완·재실행·의미 결함 점검 지시에 따른 source-only 복구다. 원 정규 run은082096071의 `3e85e2b94d2343d39348739296a8acc6`이며 새 코드로 재라벨링하지 않는다. 매매 프로세스 재기동·주문·수동 provider/threshold/env 변경은 수행하지 않는다.
 
 ## EOD와 원 실행
@@ -136,3 +138,22 @@
 - 토요일의 당일 체크리스트 부재를 장후 결함으로 오인하던 경로를 수정했다. 당일 체크리스트가 있으면 그것을 우선하며, 없는 비영업일에만 같은 sweep에서 native 검증한 DONE controller와 다음 영업일 prepared PASS의 source/target/generation/selected release가 일치할 때 기존 다음 영업일 OPEN stable ID를 연결한다. 원래 관측일과 원천일은 보존하며 다른 원천일 경고에는 인계를 확장하지 않는다.
 - 실제 PID 소비나 정책 활성화는 생성하지 않는다. 잘못된 날짜·세대·검증 실패·중복 인계·영업일 체크리스트 부재는 계속 실패로 드러낸다. 동일 원천을 다시 읽지 않고 이미 검증된 sweep 결과를 사용한다.
 - self review와 보완 후 artifact freshness/coverage 회귀 315 passed, Python compile 및 diff check 통과. 다음 릴리스 선택 뒤 native finalization과 독립 detector로 실제 주말 인계를 재확인한다.
+
+## 01:45 최종 후속 검증과 기동 준비
+
+- 배포 선택: `b8ca6f66512db30fde8f570b76667dbcc0012499`. 68be02a77의 원천/현재 custody 수리, bd550f123의 machine 완료 기록, 272083f42/c63d44bcb의 atomic population 보존, b8ca6f665의 비영업일 OPEN owner 인계를 모두 포함한다. 매매 프로세스를 주말에 시작하지 않았고 원 Main/PID 이력은 그대로다.
+- 01:43:20 finalization DONE, controller native terminal PASS/문제 0, strict `--require-summary-handoff` PASS, cleanup DONE. 01:43:03 준비 영수증은 source 10/16·target 10/19·선택 b8ca6f665와 결속됐다. 별도 `current_full_contract` 재검증도 PASS/findings[]이다. 최종화에 봉인된 detector와 01:44:09 독립 detector는 서로 다른 실행으로 보존한다.
+- 독립 detector 7/7 실행, error/critical 0, pass 4/warning 3, operational mutation 0. 주말 owner lookup/미해결 owner 경고는 해소됐다. source 10/16의 현재 경고는 기존 10/19 OPEN owner에 연결되며 관측일은 10/17로 남는다. 남은 경고는 EOD 이력 부족 4종목·보유의 실제 과거 source gap·마감 관측의 coverage 한계, 변하지 않은 과거 오류 로그, 보존된 tmp 용량 초과다. 경고를 없애기 위해 원천·증거를 삭제하거나 비용/전이를 만들지 않았다.
+- 필수 원천 9/9의 실제 바이트 SHA가 최종 summary와 일치하고 native generation 4/4가 검증됐다. 기계 관측 58=35 assessed+16 source-invalid 제외+7 contract-invalid 격리, 미계상 0. atomic 유효 계획 8·고유 주문 10·unjoined 0, 현재 Main 보유 3. 과거 first-TP 전이 5건, strict 비용 적격 completed 0/9, outcome/forward 미관측은 결손으로 남으며 경제성 null과 승격 제외를 유지한다.
+- 새 다음 후보 `5a0f29fb9f8766e85618ad293036073cd8b4895243a6341cd7ff74bc90bed1c3`의 machine/AI/scope 정책·승격 집합·날짜는 직전 후보와 동일하다. live pointer `8809c82e36bacc6a6e07b44c8bba6ccf15e477b67e11bdfcf4addf15112a4139`는 변하지 않았다. Main/supervisor 부재, startup hold/restart flag 부재, 설치된 평일 07:35 PREOPEN 및 07:55 start가 선택 릴리스를 경유함을 확인했다. 05:35 최종화 예약도 그대로다.
+- 날짜별 체크리스트의 c63d44bcb 문구는 이전 선택 기록으로 보존한다. 새 선택의 권위는 selector 및 위의 새 영수증이다. 현재 strict/prepared가 봉인한 체크리스트 바이트와 기존 OPEN stable ID 5개를 보존하며, 연결된 이 감사 문서에서 이전 선택이 대체됐음을 명시한다.
+- 이번 최종 수정의 artifact/coverage 315 passed, compile/diff/문서 링크 검사 및 print-only parser 확인. 앞선 562/824/323/262건 등은 각 변경 범위의 실제 결과이며 중복 시험을 합산하지 않는다. 변경되지 않은 대규모 holding/stop/delay를 다시 생성하지 않고 원 native 생성물·코드 계약·최종 소비자 결속을 검증했다. 신규 provider/broker/order 호출과 외부 Project/Calendar 동기화는 수행하지 않았다.
+
+최종 증거:
+
+- [전체 완료·기동 준비 영수증](../../tmp/postclose-monitoring-20261016/final-closure-verification-b8ca6f665.json)
+- [장전 전체 계약 검증](../../tmp/postclose-monitoring-20261016/final-next-preopen-full-verification-b8ca6f665.json)
+- [원천과 최종 소비자 의미 대사](../../tmp/postclose-monitoring-20261016/final-semantic-source-consumer-verification-b8ca6f665.json)
+- [정책 값과 활성 포인터 보존](../../tmp/postclose-monitoring-20261016/final-policy-parity-b8ca6f665.json)
+- [설치된 기동 예약](../../tmp/postclose-monitoring-20261016/final-cron-readiness-b8ca6f665.json)
+- [주말 owner 회귀 검증](../../tmp/postclose-monitoring-20261016/review-weekend-owner-pytest.log)
