@@ -323,7 +323,6 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
                     "policy_sha256": initial_policy["policy_sha256"],
                     "manifest_sha256": manifest["manifest_sha256"],
                     "code_contract_sha256": initial_policy["code_contract_sha256"],
-                    "pipeline_source_validation": "producer_sealed_pipeline_reference_no_raw_rehash",
                     "policy_path": str(policy_file.resolve()), "source_report": str(report_file.resolve()),
                     "evidence_grade": "estimated_provisional", "actual_pid_consumed": False}
         except (OSError, ValueError, TypeError, KeyError):

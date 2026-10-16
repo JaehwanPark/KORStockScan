@@ -762,7 +762,7 @@ REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     ),
     'src/engine/automation/runtime_policy_bootstrap.py': (
         '7a2e67d6d537ccc0a322bbbde8935f96de74869bc48e456bd13071225dd84b56',
-        'dffecc310d61168ce8b3f8427adc68ca19f1929fa45f433ab96f01eabd63280c',
+        '1dcbb457a66330ff9285574c2182b146aa4663ac171358249df7571ee6be2b6a',
     ),
     'src/engine/infrastructure/validation_digest_session.py': (
         '8fc28395c82a3efa15896c21362d3be7162656fec506fbba6f939e8c6b5101a3',

@@ -33,3 +33,5 @@ raw open 직전 중단하는 read-only audit로 `artifact_freshness → historic
 추가 구현은 지연 정책 bootstrap/prepare 및 수량 terminal 소비에서 pipeline 참조만 검증한다. 봉인 ledger, compact source bytes, 정확한 overlap, 보고서/정책/코드 결속은 유지하고 연구 producer의 기본 full 원천 검증은 보존한다. canonical plain/gzip/late 참조를 같은 계약으로 처리한다. 실제 10/15 발행 지연 보고서의 수정 consumer 검증은 원장 open 0, 0.207초에 통과했다. 이는 해당 consumer 한 회 측정이며 전체 기동 시간은 후속 배포에서 별도로 측정한다.
 
 observer digest의 role 공통 잠금이 전체 검증 동안 유지되어 다른 observer가 2초 후 `ValidationDeferred`로 중단되는 문제도 확인했다. generation 잠금으로 검증을 분리하고 role 잠금은 발행/retention에만 사용한다. 같은 generation 경합 시 artifact 관측을 명시적으로 deferred/불완전으로 남기고 독립 health 검사는 계속한다. cache 발행 실패로 semantic 결과를 PASS로 바꾸거나 원장 전체 읽기로 재시도하지 않는다.
+
+`5f3bbfc01` 추가 배포는 11:56:37 selected 단계에서 `pre_submit_delay_generation_changed`로 차단됐다. 추가한 `pipeline_source_validation` 표시 필드가 frozen PREOPEN의 전체 영수증 비교를 바꾼 결함이며 정책/임계치 변경은 없다. 해당 필드를 제거하고 영수증 ABI 회귀검사를 추가한다. 원 failed status·hold·native predecessor를 보존하고 기존 `StoppedDeploymentRecovery`로 선택 단계부터 복구한다. 실패를 PASS로 덮거나 hold를 임의 해제하지 않는다.

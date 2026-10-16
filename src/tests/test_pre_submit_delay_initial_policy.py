@@ -286,6 +286,11 @@ def test_prepared_lookup_has_no_file_io_and_handoff_accepts_zero(tmp_path, monke
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     env, receipt = bootstrap._pre_submit_delay_handoff("2026-10-05")
     assert receipt["status"] == "verified_initial_timing_policy"
+    # Native deployment compares this whole map to the frozen PREOPEN receipt.
+    # Validation-scope annotations belong in audit evidence, not this policy ABI.
+    assert set(receipt) == {'status', 'target_date', 'source_date', 'effective_from',
+        'policy_sha256', 'manifest_sha256', 'code_contract_sha256', 'policy_path',
+        'source_report', 'evidence_grade', 'actual_pid_consumed'}
     assert handoff._stage_output_issues(tmp_path / "report", "2026-10-02", "pre_submit_delay") == []
     for key, value in env.items():
         monkeypatch.setenv(key, value)
