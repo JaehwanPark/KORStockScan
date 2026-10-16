@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import ast
+import re
 from datetime import datetime
 import hashlib
 import json
@@ -46,7 +48,7 @@ def event_generation(events: list[Any]) -> str:
 
 
 def _mechanical_check(transition: dict, snapshot: dict, receipt: dict | None,
-                      market: str, target_date: str) -> str | None:
+                      market: str, target_date: str, *, record_symbol: tuple[str, str] | None = None) -> str | None:
     if not receipt:
         return "tp_mechanical_policy_receipt_missing"
     try:
@@ -66,15 +68,55 @@ def _mechanical_check(transition: dict, snapshot: dict, receipt: dict | None,
             raw_pin = transition.get('trailing_situation_pin')
             raw_pin = json.loads(raw_pin) if isinstance(raw_pin, str) else raw_pin
             position_key = transition.get('position_key')
-            pin = PreparedPin.prepare(raw_pin, position_key)
+            pin_key = position_key
+            legacy_base = (isinstance(raw_pin, dict) and isinstance(raw_pin.get('position_key'), str)
+                           and raw_pin['position_key'].startswith('target:')
+                           and raw_pin['position_key'] != position_key)
+            if legacy_base:
+                # Historical Main hydration used target:id:symbol for an
+                # unclassified BASE pin. Bind both original row identities;
+                # preserve the pin/hash and prove exactly the approved parent.
+                if (not isinstance(record_symbol, tuple) or len(record_symbol) != 2
+                        or not re.fullmatch(r'[1-9][0-9]*', str(record_symbol[0]))
+                        or not re.fullmatch(r'[0-9]{6}', str(record_symbol[1]))
+                        or position_key != 'record:' + record_symbol[0]
+                        or raw_pin.get('position_key') != 'target:' + ':'.join(record_symbol)
+                        or raw_pin.get('situation_type') != 'BASE'
+                        or raw_pin.get('reason') != 'legacy_context_unbound'
+                        or type(raw_pin.get('entry_at')) not in (int, float) or raw_pin['entry_at'] != 0
+                        or raw_pin.get('classifier_sha256') is not None
+                        or raw_pin.get('feature_sha256') is not None
+                        or not isinstance(snapshot.get('buy_fill_identity'), str)
+                        or not re.fullmatch(r'[0-9a-f]{64}', snapshot['buy_fill_identity'])):
+                    return 'tp_situation_legacy_record_symbol_unbound'
+                pin_key = raw_pin['position_key']
+            pin = PreparedPin.prepare(raw_pin, pin_key)
             snapshot_pin = snapshot.get('trailing_situation_pin')
-            snapshot_pin = json.loads(snapshot_pin) if isinstance(snapshot_pin, str) else snapshot_pin
+            if isinstance(snapshot_pin, str):
+                if len(snapshot_pin) > 4096:
+                    raise ValueError('trailing_situation_snapshot_pin_budget_invalid')
+                try:
+                    snapshot_pin = json.loads(snapshot_pin)
+                except ValueError:
+                    # The native pipeline logger persisted dictionary repr.
+                    # Decode only a flat literal; never evaluate source code.
+                    tree = ast.parse(snapshot_pin, mode='eval')
+                    body = tree.body
+                    if (not isinstance(body, ast.Dict) or len(body.keys) != 8
+                            or any(not isinstance(k, ast.Constant) or not isinstance(k.value, str)
+                                   for k in body.keys)
+                            or len({k.value for k in body.keys}) != 8
+                            or any(not isinstance(v, ast.Constant) for v in body.values)):
+                        raise ValueError('trailing_situation_snapshot_literal_invalid')
+                    snapshot_pin = ast.literal_eval(tree)
             if (transition.get('classification_origin_hash') != pin.classification_origin_hash
                     or snapshot.get('position_key') != position_key
                     or snapshot_pin != raw_pin
                     or snapshot.get('effective_trailing_policy_sha256') != typed_sha):
                 return 'tp_situation_origin_or_snapshot_unbound'
             effective = prepared.effective(market, pin, position_key=pin.position_key, target_date=target_date)
+            if legacy_base and dict(effective) != vector[market]:
+                return 'tp_situation_legacy_base_parent_mismatch'
         if (receipt["market_values_sha256"] != vector_sha
                 or receipt["classifier_version"] != CLASSIFIER_VERSION
                 or receipt["classifier_sha256"] != classifier_hash(classifier)
@@ -96,7 +138,7 @@ def _mechanical_check(transition: dict, snapshot: dict, receipt: dict | None,
                 or pinned.get("scalp_trailing_market_values_sha256") != vector_sha
                 or pinned.get("scalp_trailing_policy_date") != target_date):
             return "tp_snapshot_mechanical_policy_unbound"
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, SyntaxError):
         return "tp_mechanical_policy_contract_invalid"
     return None
 
@@ -330,7 +372,12 @@ def audit_profit_exit_flow(
                         or transition.get("tuning_exit_allowed_by_clock") not in {"True", "true", True}):
                     add(findings, record_id, "tp_crossing_arm_or_clock_invalid")
                 pid_receipt = (mechanical_receipts_by_pid or {}).get(_float(fields.get("runtime_pid")), mechanical_policy_receipt)
-                mechanical_error = _mechanical_check(transition, fields, pid_receipt, market, target_date)
+                origin = crossing_rows[-1]
+                record_symbol = ((record_id, str(getattr(event, 'stock_code', '')))
+                    if str(getattr(origin, 'record_id', '')) == record_id
+                    and getattr(origin, 'stock_code', None) == getattr(event, 'stock_code', None) else None)
+                mechanical_error = _mechanical_check(transition, fields, pid_receipt, market, target_date,
+                                                     record_symbol=record_symbol)
                 if mechanical_error:
                     add(policy_gaps, record_id, mechanical_error)
                 valid_pids = set(consumed_pids or ([consumed_pid] if consumed_pid is not None else []))

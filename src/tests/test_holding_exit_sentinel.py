@@ -72,6 +72,53 @@ def test_typed_semantics_pins_actual_position_and_current_effective_receipt():
         'PREMARKET','2026-09-28')=='tp_situation_origin_or_snapshot_unbound'
 
 
+
+@pytest.mark.parametrize('damage',[None,'json_pin','native_record_repr','context_missing','symbol','record',
+    'nonbase','entry','classifier','features','reason','hash','snapshot_position','snapshot_pin',
+    'snapshot_policy','origin','generation','large_literal','call_literal','duplicate_literal','width'])
+def test_original_legacy_base_pin_binds_record_symbol_and_parent_without_rewriting(damage):
+    from copy import deepcopy
+    from src.engine.scalping import holding_profit_exit_semantics as semantics
+    from src.engine.scalping import trailing_situation_policy as typed
+    bundle=typed.initial_bundle(MECHANICAL['market_values'],parent_sha256=MECHANICAL['market_values_sha256'],
+        source_date='2026-09-25',target_date='2026-09-28',parent_classifier_parameters=MECHANICAL['classifier_parameters'])
+    pin=typed.pin_context(None,position_key='target:7:005930',entry_at=0)
+    context=('7','005930')
+    if damage=='native_record_repr':pin=typed.pin_context(None,position_key='record:7',entry_at=1)
+    if damage=='context_missing':context=None
+    elif damage=='symbol':context=('7','000001')
+    elif damage=='record':context=('8','005930')
+    elif damage=='nonbase':pin['situation_type']='TREND_CONTINUATION'
+    elif damage=='entry':pin['entry_at']=1
+    elif damage=='classifier':pin['classifier_sha256']='b'*64
+    elif damage=='features':pin['feature_sha256']='c'*64
+    elif damage=='reason':pin['reason']='classified'
+    pin['classification_origin_hash']=typed.digest({k:v for k,v in pin.items() if k!='classification_origin_hash'})
+    if damage=='hash':pin['classification_origin_hash']='d'*64
+    transition={**MECHANICAL_FIELDS,'position_key':'record:7','trailing_situation_pin':json.dumps(pin),
+        'classification_origin_hash':pin['classification_origin_hash'],
+        'effective_trailing_policy_sha256':bundle['policy_sha256'],
+        'trailing_start_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_START_PCT'],
+        'raw_limit_pct':MECHANICAL['market_values']['PREMARKET']['SCALP_TRAILING_LIMIT_WEAK'],
+        'first_crossing':{'threshold_key':'SCALP_TRAILING_LIMIT_WEAK'}}
+    snapshot={**MECHANICAL_FIELDS,'position_key':'record:7','trailing_situation_pin':repr(pin),
+        'buy_fill_identity':'a'*64,'effective_trailing_policy_sha256':bundle['policy_sha256']}
+    if damage=='json_pin':snapshot['trailing_situation_pin']=json.dumps(pin)
+    elif damage=='snapshot_position':snapshot['position_key']='record:8'
+    elif damage=='snapshot_pin':snapshot['trailing_situation_pin']=repr(typed.pin_context(None,position_key='target:8:005930',entry_at=0))
+    elif damage=='snapshot_policy':snapshot['effective_trailing_policy_sha256']='f'*64
+    elif damage=='origin':transition['classification_origin_hash']='f'*64
+    elif damage=='generation':snapshot['buy_fill_identity']=None
+    elif damage=='large_literal':snapshot['trailing_situation_pin']=' '*4097+repr(pin)
+    elif damage=='call_literal':snapshot['trailing_situation_pin']="dict(schema='main_trailing_situation_pin_v1')"
+    elif damage=='duplicate_literal':snapshot['trailing_situation_pin']=repr(pin)[:-1]+", 'reason':'legacy_context_unbound'}"
+    elif damage=='width':transition['raw_limit_pct']=99
+    receipt={**MECHANICAL,'situation_policy':bundle}
+    before=deepcopy((transition,snapshot,receipt))
+    error=semantics._mechanical_check(transition,snapshot,receipt,'PREMARKET','2026-09-28',record_symbol=context)
+    assert (error is None)==(damage in (None,'json_pin','native_record_repr')),error
+    assert (transition,snapshot,receipt)==before
+
 def _event(
     target_date: str,
     hhmmss: str,

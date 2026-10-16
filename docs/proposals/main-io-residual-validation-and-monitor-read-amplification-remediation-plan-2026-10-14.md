@@ -212,3 +212,6 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 
 
 09:01:47의 보유 의미 영수증 누락은 첫 자연 감시가09:00:35 완료된 뒤 후속 native detector의 exact-date/source-generation 검증으로 해소됐다. 과거 first-crossing/정책 결손·비용 미상은 원 owner에 유지한다. 추가로 평가 시도0인 현재 PID의 모든 strict 계약이 통과하고 pending 파일 부재만 남은 경우를 같은 bounded 경고 경로로 제한한다. 다른 미충족과 partial/권한은 보존하며 source-pair·회귀·새 native 배포/자연 detector를 요구한다. 세부 근거는 위 배포 리뷰의09:01:47 절을 따른다.
+
+
+09:06:39 policy_binding_gap 추가 수리는 기존 보고서 consumer에서 원 legacy BASE target pin과 native record/symbol을 엄격히 결속한다. 원 pin/hash를 보존하고 승인 부모 vector와 동일한 값만 검증하며 native logger의 bounded flat dictionary repr를 안전하게 읽는다. 매매/정책/수량/provider를 변경하지 않는다. driver preflight 중단·원 신호 재현·회귀·새 native 배포 및 자연 보고서 수용은 위 배포 리뷰의09:06:39 절을 따른다. 원 first-crossing/비용 source gap은 원 owner에 유지한다.

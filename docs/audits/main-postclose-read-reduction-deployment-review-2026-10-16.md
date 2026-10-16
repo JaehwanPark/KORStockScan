@@ -103,3 +103,18 @@ observer의 observation_health_projection 외 AST는 동일하고 native-v6 37�
 관측 경계8개 회귀의 초기 positive 재현 실패와 시험 fixture의 bounded-suffix 누락 보완을 보존했다. 최종8개 PASS 후 같은7 suites와 compile/diff/print-only parser를 재검증한다. observer exact successor는 a1284490d780a882b8c7591765ccf5f081b53cf9320fe350d03b620263310e55다. native-v6/네 capability/optional code hash는 변경하지 않는다. 새 immutable 배포와 후속 자연 detector로 실제 수용하며 현재3c의 잔여 pending ERROR를 코드 검증만으로 해소됐다고 보고하지 않는다.
 
 추가 보완7 suites의 최종 결과는 **3090 PASS/16.79초**, Python compile·diff·print-only parser PASS다.09:04:48 자연 detector는 cron/process/resource/log/auth/lock6종 PASS였고 artifact의 유일한 FAIL은 pending 원천 부재다. 추가 배포 수용은 다음 실제 native 영수증으로 확인한다.
+
+
+## 09:06:39 policy_binding_gap의 실제 원인과 제한 수리
+
+09:05 자연 observer는09:05:42 completed/partial(10.48초),09:06:39 full detector는 FAIL0이었다. 사용자 추가 alert는 영수증 누락이 아닌49300의 실제 tp_mechanical_policy_contract_invalid다. 새75d6318c4 배포는09:06:42부터 preflight였고, 새 결함을 포함해 리뷰를 닫기 위해 hold/selector/드레인 전에 driver만 SIGINT로 중단했다. Main2984178은 계속 실행했다. 원 failed-phase preflight/KeyboardInterrupt를 보존한다.
+
+원 캐시1,410,817바이트의 제한 읽기와 당시 PID2934092의 봉인된 원 receipt를 대조했다. 예외는 PreparedPin.prepare의 trailing_situation_pin_invalid다. 원 legacy pin은 target:49300:196170/BASE/legacy_context_unbound/entry_at0이며 유효한 원 classification_origin_hash를 가진다. 현재 native transition/signal의 position_key는 record:49300이다. 보고서 소비자가 두 identity를 무조건 같게 요구해 부모 BASE로 실행한 원 신호를 invalid policy로 잘못 분류했다. snapshot의 pin은 native logger가 Python dictionary repr로 기록했다. 원 bytes·신호·pin·정책은 수정하지 않는다.
+
+수리는 기존 scalping/holding_profit_exit_semantics.py의 보고서 검증 경계에 둔다. 같은 record의 실제 두 source row에서 종목 코드도 같을 때만 record/symbol context를 전달한다. target:id:symbol이 정확히 맞고 BASE/legacy_context_unbound/entry_at0/no classifier/no feature, 유효한 BUY-generation64SHA와 원 pin hash가 모두 맞을 때 legacy pin 자체를 준비한다. 유효 값은 기존 승인 부모 vector와 완전히 같아야 한다. 분류된 pin·다른 id/symbol·세대·정책·threshold·origin 불일치는 계속 거부한다. 원 target pin을 record pin으로 재작성하지 않으며 Main/주문/provider/정책 값은 바꾸지 않는다.
+
+native snapshot repr는 최대4096자의 정확한 flat8-key literal만 AST로 구조 검사 후 literal_eval한다. 코드 실행·함수·중첩 값·중복 키·초과 크기는 거부한다. JSON/dict 기존 형식과 원 pin 검증을 유지한다. foreign record pin의 기존 실패 계약도 보존했다. 기존 test_holding_exit_sentinel.py에21개 양·음성 회귀를 넣어 전체71 PASS다. 실제 원 first-signal만 native audit_profit_exit_flow로 읽기 전용 재현해 policy_binding_gaps0을 확인했다. 전체 날짜 의미 완료나 경제성으로 확대하지 않는다. [원 신호 native 재현](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/holding-policy-gap-49300-native-scoped-rehearsal.json).
+
+holding generation39d0f10c…와 다른 세 capability 및 optional code hash는 동일하다. native-v6/원 보고서/code pin을 바꾸지 않는다. 최종 회귀·compile/diff/parser 뒤 새 immutable 통합본을 배포하며 정규 holding 보고서와 후속 detector에서 실제 policy_binding_gap 해소를 확인한다. 과거 first-crossing 세 원천 공백·비용 미상은 그대로 기존 owner에 남긴다.
+
+legacy 보완 최종9 suites **3182 PASS/16.73초**, Python compile·diff·print-only parser PASS다. 원 첫 신호 native scoped audit도 policy binding0결손을 재현했다. 실제 일일 보고서·현재 PID 후속 수용은 다음 배포 영수증을 따른다.

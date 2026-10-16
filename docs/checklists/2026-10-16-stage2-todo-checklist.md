@@ -214,3 +214,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 08:36:58 b4d23f658 native 배포/PID 수용과08:37 세 SELL key ACK 및 optional code/calendar verify를 확인했다. 후속08:42 observer의 lazy auxiliary 부재와 sentinel clock 혼용은 동일 배포 owner에서 보완·새 PID/자연 cron/detector 수용한다. 원 FAIL·partial/source gap·비용 미상 및 다음 optional 자연 야간 OPEN은 유지한다. 위 배포 리뷰의 원인/시험/종결 증거를 따른다.
 
 3c814c05c의08:57:51 native PID와09:00:35 holding 정규 DONE을 확인했다.09:01:47 의미 영수증 누락은 후속 native_validated/observation_complete 소비로 닫고 기존 source/policy/economics 공백은 HoldingProfitExitSourceContractRepair에 유지한다. 시도0·strict pending 부재만 남은 observer 경계는 같은 배포 owner에서 추가 수리·native 수용한다. 원 운영 checklist bytes와 OPEN stable ID는 유지한다.
+
+09:06:39 추가 policy_binding_gap은 HoldingProfitExitSourceContractRepair가 소유한다. legacy BASE 원 target pin/hash와 native record/symbol을 보존·결속하는 보고서 수리를 같은 배포 owner에 인계한다.75d preflight 중단과 원 실패를 보존하며 새 natural 보고서/의미 detector로 닫는다. 원 first-crossing/비용 미상 OPEN은 별도다.
