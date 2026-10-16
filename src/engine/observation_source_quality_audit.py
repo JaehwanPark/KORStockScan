@@ -303,6 +303,95 @@ def _audited_jsonl(path: Path, receipt: dict[str, Any]):
     receipt["logical_content_sha256"] = digest.hexdigest()
 
 
+def _verified_machine_completion_capture(row: dict, day: str) -> dict | None:
+    """Keep a bounded identity only after verifying the original capture bytes."""
+    if (row.get("schema") != "mechanistic_entry_observation_v1"
+            or row.get("evaluation_role") != "main_live"):
+        return None
+    digest = lambda value: hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    ).encode()).hexdigest()
+    expected = row.get("machine_observation_sha256")
+    body = {k: v for k, v in row.items() if k != "machine_observation_sha256"}
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected or "")) or digest(body) != expected:
+        return None
+    source, context, runtime = (row.get(k) for k in ("source", "label_context", "runtime_consumption"))
+    if not all(isinstance(v, dict) for v in (source, context, runtime)):
+        return None
+    native = runtime.get("continuous_reversal")
+    assessment = source.get("assessment")
+    if (not isinstance(native, dict) or not isinstance(assessment, dict)
+            or assessment.get("action") != "ENTER_NOW"
+            or native.get("schema") != "continuous_reversal_consumption_v1"
+            or native.get("assessment_sha256") != digest(assessment)
+            or native.get("exact_payload_sha256") != digest(source.get("exact_payload"))
+            or native.get("bundle_sha256") != row.get("bundle_sha256")
+            or native.get("pid") != runtime.get("pid")
+            or native.get("process_start_ticks") != runtime.get("process_start_ticks")
+            or native.get("captured_at") != row.get("captured_at")):
+        return None
+    try:
+        captured = datetime.fromisoformat(row["captured_at"])
+        if captured.tzinfo is None or captured.date().isoformat() != day:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return dict(context=context, pid=runtime.get("pid"),
+        process_start_ticks=runtime.get("process_start_ticks"),
+        source_event_stage=row.get("source_event_stage"),
+        bundle_sha256=row.get("bundle_sha256"), captured_at=row["captured_at"],
+        machine_observation_sha256=expected,
+        machine_capture_status="redacted_ineligible" if row.get("redacted") else "captured")
+
+
+def _recover_machine_completion(trace: dict, candidates: list[dict], day: str) -> dict | None:
+    """Repair a report projection; never rewrite a trace or infer an AI outcome."""
+    if (trace.get("machine_evaluation_status") != "assessment_pending"
+            or trace.get("machine_evaluation_expected") is not True
+            or not isinstance(trace.get("decision_trace_id"), str) or not trace["decision_trace_id"]
+            or trace.get("provider_called") is not False
+            or trace.get("result_source") not in {"entry_circuit_open", "engine_disabled", "lock_contention"}
+            or trace.get("entry_mechanistic_action") not in (None, "")):
+        return None
+    matches = {}
+    for capture in candidates:
+        context = capture["context"]
+        if (trace.get("machine_observation_sha256") not in (None, "", capture["machine_observation_sha256"])
+                or trace.get("machine_capture_status") not in (None, "", "captured", "redacted_ineligible")
+                or type(trace.get("async_producer_pid")) is not int
+                or type(capture.get("pid")) is not int):
+            continue
+        pairs = [(trace.get("snapshot_id"), context.get("snapshot_id")),
+            (trace.get("stock_code"), context.get("stock_code")),
+            (trace.get("record_id"), context.get("record_id")),
+            (trace.get("machine_bundle_sha256"), capture.get("bundle_sha256")),
+            (trace.get("async_producer_pid"), capture.get("pid")),
+            (trace.get("async_producer_start_ticks"), capture.get("process_start_ticks")),
+            (trace.get("source_event_stage"), capture.get("source_event_stage"))]
+        if any(a in (None, "", False) or b in (None, "", False) or str(a) != str(b) for a, b in pairs):
+            continue
+        if any(not trace.get(k) or str(trace[k]).upper() != str(context.get(k) or "").upper()
+               for k in ("effective_venue", "session_bucket", "broker_route")):
+            continue
+        try:
+            terminal = datetime.fromisoformat(trace["decision_ts"])
+            captured = datetime.fromisoformat(capture["captured_at"])
+            if terminal.tzinfo is None or terminal.date().isoformat() != day or captured > terminal:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        matches[capture["machine_observation_sha256"]] = capture
+    if len(matches) != 1:
+        return None
+    capture = next(iter(matches.values()))
+    return dict(decision_trace_id=trace["decision_trace_id"],
+        original_status="assessment_pending", status="assessed",
+        machine_observation_sha256=capture["machine_observation_sha256"],
+        machine_capture_status=capture["machine_capture_status"],
+        binding="exact_snapshot_bundle_record_route_pid_verified_native_capture",
+        original_trace_preserved=True, provider_outcome_inferred=False, economic_eligibility_granted=False)
+
+
 def _machine_ai_natural_source_consumption(
     target_date: str, *, data_root: Path = DATA_DIR
 ) -> dict[str, Any]:
@@ -323,6 +412,7 @@ def _machine_ai_natural_source_consumption(
     receipts: dict[str, dict[str, Any]] = {}
     rows: dict[str, list[dict[str, Any]]] = {}
     source_generation_changed = False
+    completion_captures: dict[str, list[dict]] = defaultdict(list)
     for name in archive_names:
         path = existing_or_gzip_path(data_root / name / f"{name}_{target_date}.jsonl")
         receipt: dict[str, Any] = {"path": str(path), "exists": path.is_file()}
@@ -330,6 +420,9 @@ def _machine_ai_natural_source_consumption(
         parsed = []
         for row in _audited_jsonl(path, receipt) if path.is_file() else ():
             if name == "ai_decision_payloads":
+                completion = _verified_machine_completion_capture(row, target_date)
+                if completion:
+                    completion_captures[str(completion["context"].get("snapshot_id"))].append(completion)
                 source = row.get("source")
                 source = source if isinstance(source, dict) else {}
                 exact = source.get("exact_payload")
@@ -348,6 +441,8 @@ def _machine_ai_natural_source_consumption(
                     "decision_trace_id", "prompt_sha256", "prompt_version", "effective_venue",
                     "session_bucket", "auxiliary_system_prompt_sha256", "entry_ai_prompt_variant",
                     "market_data_health",
+                    "decision_ts", "stock_code", "record_id", "broker_route", "source_event_stage",
+                    "async_producer_pid", "async_producer_start_ticks",
                 )}
             parsed.append(row)
         after = _raw_generation(path)
@@ -369,6 +464,22 @@ def _machine_ai_natural_source_consumption(
         if row.get("schema") == "ai_decision_trace_v1"
         and row.get("decision_stage") == "entry_screen"
     ]
+    completion_recoveries = []
+    proposals = []
+    capture_uses = Counter(str(trace.get("machine_observation_sha256") or "") for trace in traces
+        if trace.get("machine_evaluation_status") != "assessment_pending")
+    for trace in traces:
+        recovery = _recover_machine_completion(trace,
+            completion_captures.get(str(trace.get("snapshot_id")), []), target_date)
+        if recovery:
+            proposals.append((trace, recovery))
+            capture_uses[recovery["machine_observation_sha256"]] += 1
+    for trace, recovery in proposals:
+        if capture_uses[recovery["machine_observation_sha256"]] == 1:
+            completion_recoveries.append(recovery)
+            trace.update(machine_evaluation_status="assessed", entry_mechanistic_action="ENTER_NOW",
+                machine_capture_status=recovery["machine_capture_status"],
+                machine_observation_sha256=recovery["machine_observation_sha256"])
     requests = [
         row
         for row in rows["ai_decision_requests"]
@@ -809,6 +920,10 @@ def _machine_ai_natural_source_consumption(
             ),
             "source_invalid_rows_are_tuning_excluded": True,
             "missing_economics_imputed": False,
+        },
+        "machine_trace_completion_recovery": {
+            "count": len(completion_recoveries), "receipts": completion_recoveries,
+            "original_trace_bytes_changed": False, "runtime_effect": False,
         },
         "ai_screen_population": {
             "count": len(traces),

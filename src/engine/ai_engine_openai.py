@@ -10176,6 +10176,15 @@ class GPTSniperEngine:
                 )
                 from src.engine.monitoring.runtime_performance import observe
                 observe('capture_append', time.perf_counter()-capture_started_perf)
+                # Circuit/lock/common-provider exits occur after this assessment.
+                # Preserve its original capture on every terminal return without
+                # changing the WAIT/DROP decision or authorizing a provider call.
+                machine_policy_trace_fields.update(machine_capture)
+                machine_policy_trace_fields.update(
+                    machine_evaluation_status="assessed",
+                    entry_mechanistic_action=machine_assessment["action"],
+                    machine_decision_before_provider=True,
+                )
                 if machine_only:
                     # Discovery probes have no provider, WATCHING, or order
                     # authority. A later live WATCHING attempt gets a new

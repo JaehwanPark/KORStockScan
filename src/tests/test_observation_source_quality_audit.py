@@ -48,6 +48,76 @@ def _prune_observer_contract_fields() -> dict:
     }
 
 
+@pytest.mark.parametrize("damage", [None, "capture_hash", "native_hash", "snapshot", "pid",
+    "start_ticks", "record", "symbol", "route", "date", "future", "provider_called",
+    "explicit_conflict", "write_failed", "missing_trace_id", "ambiguous", "duplicate_trace", "already_consumed"])
+def test_pending_machine_terminal_requires_exact_original_completion(tmp_path, damage):
+    import hashlib
+    from copy import deepcopy
+    digest = lambda x: hashlib.sha256(json.dumps(x, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), default=str).encode()).hexdigest()
+    day = "2026-10-16"
+    capture = dict(schema="mechanistic_entry_observation_v1", evaluation_role="main_live",
+        captured_at=day+"T15:00:00+09:00", bundle_sha256="b"*64,
+        source_event_stage="watching_analyze_target_async_v1",
+        label_context=dict(snapshot_id="snapshot", record_id=123, stock_code="005930",
+            effective_venue="KRX", session_bucket="krx_regular", broker_route="SOR"),
+        source=dict(exact_payload=dict(snapshot_id="snapshot"),
+            assessment=dict(action="ENTER_NOW", reason="원본 평가")),
+        runtime_consumption=dict(pid=101, process_start_ticks="1234"))
+    capture["runtime_consumption"]["continuous_reversal"] = dict(
+        schema="continuous_reversal_consumption_v1", bundle_sha256="b"*64,
+        pid=101, process_start_ticks="1234", captured_at=capture["captured_at"],
+        assessment_sha256=digest(capture["source"]["assessment"]),
+        exact_payload_sha256=digest(capture["source"]["exact_payload"]))
+    trace = dict(schema="ai_decision_trace_v1", decision_stage="entry_screen",
+        decision_trace_id="trace", decision_ts=day+"T15:00:01+09:00",
+        machine_evaluation_expected=True, machine_evaluation_status="assessment_pending",
+        provider_called=False, result_source="entry_circuit_open", machine_bundle_sha256="b"*64,
+        async_producer_pid=101, async_producer_start_ticks="1234",
+        source_event_stage=capture["source_event_stage"], **capture["label_context"])
+    if damage == "native_hash":
+        capture["runtime_consumption"]["continuous_reversal"]["assessment_sha256"] = "0"*64
+    elif damage in {"snapshot", "pid", "start_ticks", "record", "symbol", "route"}:
+        key = dict(snapshot="snapshot_id", pid="async_producer_pid", start_ticks="async_producer_start_ticks",
+            record="record_id", symbol="stock_code", route="broker_route")[damage]
+        trace[key] = 999 if damage in {"pid", "record"} else "different"
+    elif damage == "date": trace["decision_ts"] = "2026-10-17T15:00:01+09:00"
+    elif damage == "future": trace["decision_ts"] = day+"T14:59:59+09:00"
+    elif damage == "provider_called": trace["provider_called"] = True
+    elif damage == "explicit_conflict": trace["machine_observation_sha256"] = "0"*64
+    elif damage == "write_failed": trace["machine_capture_status"] = "write_failed"
+    elif damage == "missing_trace_id": del trace["decision_trace_id"]
+    capture["machine_observation_sha256"] = digest(capture)
+    if damage == "capture_hash": capture["machine_observation_sha256"] = "0"*64
+    captures = [capture]
+    if damage == "ambiguous":
+        other = deepcopy(capture); del other["machine_observation_sha256"]
+        other["source"]["assessment"]["reason"] = "different source"
+        other["runtime_consumption"]["continuous_reversal"]["assessment_sha256"] = digest(other["source"]["assessment"])
+        other["machine_observation_sha256"] = digest(other); captures.append(other)
+    traces = [trace]
+    if damage in {"duplicate_trace", "already_consumed"}:
+        other = dict(trace, decision_trace_id="another-trace")
+        if damage == "already_consumed":
+            other.update(machine_evaluation_status="assessed", machine_capture_status="captured",
+                machine_observation_sha256=capture["machine_observation_sha256"])
+        traces.append(other)
+    original = {}
+    for name, rows in (("ai_decision_payloads", captures), ("ai_decision_trace", traces)):
+        path = tmp_path/name/f"{name}_{day}.jsonl"; path.parent.mkdir()
+        path.write_text("".join(json.dumps(x)+"\n" for x in rows)); original[path] = path.read_bytes()
+    result = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+    recovery = result["machine_trace_completion_recovery"]
+    assert recovery["count"] == int(damage is None)
+    assert result["machine_attempt_conservation"]["unaccounted_trace_count"] == (2 if damage == "duplicate_trace" else int(damage is not None))
+    assert all(p.read_bytes() == raw for p, raw in original.items())
+    if damage is None:
+        assert result["machine_attempt_conservation"]["assessed_trace_count"] == 1
+        assert recovery["receipts"][0]["provider_outcome_inferred"] is False
+        assert recovery["receipts"][0]["economic_eligibility_granted"] is False
+
+
 def test_aftermarket_axes_exclude_only_identifiable_misclassified_row(monkeypatch):
     stage = "test_aftermarket_axes"
     contract = audit.StageContract(required_fields=())

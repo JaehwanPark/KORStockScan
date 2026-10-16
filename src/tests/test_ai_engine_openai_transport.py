@@ -4433,7 +4433,8 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
     assert result["provider_called"] is False
 
 
-def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
+@pytest.mark.parametrize("terminal", ["timeout", "circuit", "lock", "disabled"])
+def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch, terminal):
     from src.engine.scalping import ai_decision_trace as trace_module
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
     from src.engine.scalping.entry_setup_evidence import (
@@ -4482,7 +4483,8 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
         "capture_machine_observation",
         lambda **kwargs: {
             "machine_observation_sha256": "c" * 64,
-            "machine_observation_status": "captured",
+            "machine_capture_status": "captured",
+            "evaluation_attempt_id": "current-machine-attempt",
         },
     )
     monkeypatch.setattr(
@@ -4492,6 +4494,18 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
             TimeoutError("provider deadline exhausted")
         ),
     )
+    if terminal != "timeout":
+        monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **k: pytest.fail("provider called"))
+    if terminal == "circuit":
+        monkeypatch.setattr(engine._entry_circuit(), "admit", lambda *a, **k: None)
+    elif terminal == "lock":
+        class BusyLock:
+            def acquire(self, **kwargs):
+                return False
+        engine.lock = BusyLock()
+    elif terminal == "disabled":
+        engine.ai_disabled = True
+        monkeypatch.setattr(engine, "_admit_common_recovery", lambda *a, **k: None)
 
     result = engine.analyze_target(
         "test",
@@ -4501,8 +4515,19 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
         strategy="SCALPING",
         prompt_profile="watching",
         candle_context=_allowed_entry_candle_context(),
+        **({"entry_input_deadline_epoch": openai_module.time.time() + 30} if terminal == "circuit" else {}),
     )
 
+    assert result["machine_evaluation_status"] == "assessed"
+    assert result["machine_capture_status"] == "captured"
+    assert result["machine_observation_sha256"] == "c" * 64
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    if terminal != "timeout":
+        assert result["action"] == ("WAIT" if terminal == "circuit" else "DROP")
+        assert result["ai_result_source"] == {"circuit": "entry_circuit_open", "lock": "lock_contention", "disabled": "engine_disabled"}[terminal]
+        assert not result.get("provider_called")
+        assert not result.get("entry_ai_screen_pass")
+        return
     assert result["action"] == "WAIT"
     assert result["score"] == 50
     assert result["entry_mechanistic_action"] == "ENTER_NOW"
