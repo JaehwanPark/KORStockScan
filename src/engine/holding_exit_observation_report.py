@@ -357,11 +357,13 @@ def _load_saved_snapshots(
 
 def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path | None = None,
                                       metadata_only: bool = False) -> dict | None:
+    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity
+    path = logical_path(path)
     data_root = _data_root() if data_root is None else data_root
     sidecar = path.with_suffix(".completed_projection.json")
-    if not sidecar.is_file():
+    if not present(sidecar):
         return None
-    if metadata_only and sidecar.stat().st_size > 4 * 1024 * 1024:
+    if metadata_only and generation(sidecar)['size'] > 4 * 1024 * 1024:
         from src.engine.lifecycle.holding_window_generation import _capture_day
         try:
             dependency=_capture_day(Path(data_root),path.parent,target_date)
@@ -372,7 +374,13 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
                 normalized_projection_reference=dependency['projection'])
         except (OSError,ValueError,KeyError,TypeError):return None
     try:
-        projected = _read_json(sidecar)
+        from src.engine.lifecycle.snapshot_archive import read_bytes
+        raw = read_bytes(sidecar, maximum=4 * 1024 * 1024)
+        budget = _INPUT_BUDGET.get()
+        if budget is not None:
+            from src.engine.lifecycle.research_input_budget import Claim
+            budget.enter_context(Claim(len(raw)*8))
+        projected = json.loads(raw)
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
         costs = source_generation(data_root, target_date)
         recorded_costs = (projected.get("meta") or {}).get("actual_cost_source_generation")
@@ -384,12 +392,8 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
         actual = hashlib.sha256(json.dumps(
             content, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         ).encode("utf-8")).hexdigest()
-        stat = path.stat()
         identity = projected.get("snapshot_identity") or {}
-        expected_identity = {
-            "device": stat.st_dev, "inode": stat.st_ino, "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
-        }
+        expected_identity = snapshot_identity(path)
         if (projected.get("schema") != "trade_review_completed_projection_sidecar_v1"
             or projected.get("date") != target_date
             or projected.get("code") or projected.get("since")

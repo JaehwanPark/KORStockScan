@@ -1041,9 +1041,8 @@ def _load_direct_receipts(
                     raise ValueError("source_date_format")
                 source_path = (DATA_DIR / "report" / "monitor_snapshots"
                                / f"holding_exit_observation_{source_date}.json")
-                if source_path.stat().st_size > 64 * 1024 * 1024:
-                    raise ValueError("source_report_exceeds_read_limit")
-                source_bytes = source_path.read_bytes()
+                from src.engine.lifecycle.snapshot_archive import read_bytes
+                source_bytes = read_bytes(source_path, maximum=64*1024*1024)
                 source_report = json.loads(source_bytes)
                 manifest_path = (DATA_DIR / "report" / "monitor_snapshots" / "manifests"
                                  / f"monitor_snapshot_manifest_{source_date}_postclose_exit.json")

@@ -330,17 +330,13 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_de
                    f"holding_exit_observation_{source_date}.json")
     summary_file = (root / "report" / "runtime_approval_summary" /
                     f"runtime_approval_summary_{source_date}.json")
-    for path, limit in ((source_file, 64 * 1024 * 1024),
-                        (summary_file, 8 * 1024 * 1024)):
-        if path.is_symlink() or path.stat().st_size > limit:
-            raise ValueError("holding_vote_source_untrusted_path_or_size")
-    sha = hashlib.sha256()
-    with source_file.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            sha.update(chunk)
-    if sha.hexdigest() != bundle["source_report_sha256"]:
+    from src.engine.lifecycle.snapshot_archive import read_bytes
+    if summary_file.is_symlink() or summary_file.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError("holding_vote_source_untrusted_path_or_size")
+    source_bytes = read_bytes(source_file, maximum=64 * 1024 * 1024)
+    if hashlib.sha256(source_bytes).hexdigest() != bundle["source_report_sha256"]:
         raise ValueError("holding_vote_source_report_hash_mismatch")
-    observation = json.loads(source_file.read_text(encoding="utf-8"))
+    observation = json.loads(source_bytes)
     if not isinstance(observation, dict) or observation.get("date") != source_date:
         raise ValueError("holding_vote_source_report_date_mismatch")
     if bundle.get('schema')==SUCCESSOR_SCHEMA:

@@ -67,10 +67,11 @@ def _source(target_date: str) -> tuple[dict[str, Any], bytes, str, str]:
         recorded = (manifest.get("snapshot_paths") or {}).get(kind)
         if not isinstance(recorded, str) or Path(recorded).resolve() != expected.resolve():
             raise ValueError(f"postclose_exit_{kind}_path_mismatch")
-        raw = expected.read_bytes()
-        if _sha(raw) != (manifest.get("snapshot_sha256") or {}).get(kind):
+        from src.engine.lifecycle.snapshot_archive import generation, read_bytes
+        if generation(expected)['sha256'] != (manifest.get("snapshot_sha256") or {}).get(kind):
             raise ValueError(f"postclose_exit_{kind}_hash_mismatch")
-        source_bytes[kind] = raw
+        if kind == 'holding_exit_observation':
+            source_bytes[kind] = read_bytes(expected, maximum=64*1024*1024)
     report_bytes = source_bytes["holding_exit_observation"]
     report = json.loads(report_bytes)
     if (report.get("date") != source_date

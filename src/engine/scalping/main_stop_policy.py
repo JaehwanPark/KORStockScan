@@ -51,7 +51,8 @@ def implementation_paths():
         'scalping/main_stop_policy.py','scalping/main_stop_replay.py',
         'scalping/trailing_exit_decision.py','scalping/holding_path_vote_policy.py',
         'ai/holding_vote_replay_source.py','ai/holding_exit_vote.py','sniper_state_handlers.py',
-        'ai_prompt_contracts.py','ai_response_contracts.py')
+        'ai_prompt_contracts.py','ai_response_contracts.py',
+        'lifecycle/holding_window_generation.py','lifecycle/snapshot_archive.py')
 
 
 def implementation_sha():

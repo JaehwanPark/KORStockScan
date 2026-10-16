@@ -55,7 +55,7 @@ def _code_paths():
         "lifecycle/broker_cost_reconciliation.py",
         "lifecycle/research_storage.py",
     )
-    return names + ("lifecycle/holding_window_generation.py",)
+    return names + ("lifecycle/holding_window_generation.py", "lifecycle/snapshot_archive.py")
 
 
 def code_sha():
@@ -468,7 +468,8 @@ def _native_research(root, day, *, trailing_assembly=None, skip_experiment=False
     for d in economic_days:
         snapshot = root / "report/monitor_snapshots" / f"trade_review_{d}.json"
         for path in (snapshot, snapshot.with_suffix(".completed_projection.json")):
-            if path.exists():
+            from src.engine.lifecycle.snapshot_archive import identity_available
+            if identity_available(path):
                 inventory[str(path)] = byte_generation(path)
     inventory_sha = digest(dict(files=inventory, cost_generations=cost_generations))
     source_sha = inventory_sha

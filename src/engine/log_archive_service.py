@@ -215,9 +215,8 @@ def save_monitor_snapshot_manifest(
                      or payload["actual_cost_source_generation"].get("official_source_sha256"))):
             raise ValueError("postclose_exit_actual_cost_generation_changed")
         holding_path = Path(tracked_paths.get("holding_exit_observation", ""))
-        if holding_path.stat().st_size > 64 * 1024 * 1024:
-            raise ValueError("postclose_exit_holding_report_size_invalid")
-        holding = json.loads(holding_path.read_text())
+        from src.engine.lifecycle.snapshot_archive import read_bytes
+        holding = json.loads(read_bytes(holding_path, maximum=64 * 1024 * 1024))
         from src.engine.lifecycle.holding_window_generation import verify_window
         window = holding.get("input_window_dependencies")
         verify_window(DATA_DIR, window)
@@ -248,6 +247,9 @@ def save_monitor_snapshot_manifest(
 
 
 def _sha256_file(path: Path) -> str:
+    if path.parent.name == 'monitor_snapshots' and path.suffix == '.json':
+        from src.engine.lifecycle.snapshot_archive import generation
+        return generation(path)['sha256']
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -291,9 +293,8 @@ def verified_postclose_exit_snapshot_manifest(target_date: str, *, data_root: Pa
         if recorded_costs != costs and (costs["count"] or costs.get("official_source_sha256") or recorded_costs is not None):
             return None
         holding_path = directory / f"holding_exit_observation_{target_date}.json"
-        if holding_path.stat().st_size > 64 * 1024 * 1024:
-            return None
-        holding = json.loads(holding_path.read_text())
+        from src.engine.lifecycle.snapshot_archive import read_bytes
+        holding = json.loads(read_bytes(holding_path, maximum=64 * 1024 * 1024))
         from src.engine.lifecycle.holding_window_generation import verify_window
         window = holding.get("input_window_dependencies")
         verify_window(data_root, window)

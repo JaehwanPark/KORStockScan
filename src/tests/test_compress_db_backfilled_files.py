@@ -114,9 +114,12 @@ def test_archive_preserves_native_holding_policy_source_handoff(tmp_path, monkey
     policy.verify_source_handoff(tmp_path,bundle)
     stats=archive.run(retention_days=1,today=date(2026,10,16),dry_run=dry_run)
     policy.verify_source_handoff(tmp_path,bundle)
-    assert path.read_bytes()==original and not path.with_suffix('.json.gz').exists()
-    assert stats['retained_holding_policy_source_count']==1
-    assert stats['snapshots']['compressed']==0
+    from src.engine.lifecycle.snapshot_archive import read_bytes
+    assert read_bytes(path, maximum=1024*1024)==original
+    assert path.exists() is dry_run
+    assert path.with_suffix('.json.gz').exists() is not dry_run
+    assert stats['retained_holding_policy_source_count']==0
+    assert stats['snapshots']['compressed']==1
 
 
 def test_archive_preserves_frozen_trade_window_identity(tmp_path, monkeypatch):
@@ -139,8 +142,12 @@ def test_archive_preserves_frozen_trade_window_identity(tmp_path, monkeypatch):
     monkeypatch.setattr(archive,'_snapshot_manifest_verifies',lambda *a:True)
     stats=archive.run(retention_days=1,today=date(2026,10,16),dry_run=False)
     verify_window(tmp_path,window)
-    assert path.exists() and not path.with_suffix('.json.gz').exists()
-    assert stats['retained_trade_window_source_count']==1
+    from src.engine.holding_exit_observation_report import _verified_trade_review_projection
+    assert _verified_trade_review_projection(path.with_suffix('.json.gz'), day, data_root=tmp_path) is not None
+    assert not path.exists() and path.with_suffix('.json.gz').exists()
+    assert not path.with_suffix('.completed_projection.json').exists()
+    assert stats['retained_trade_window_source_count']==0
+    assert stats['snapshots']['compressed']==2
 
 
 def test_run_does_not_compress_manifested_corrupt_snapshot(tmp_path, monkeypatch):

@@ -55,6 +55,21 @@ protected. Actual `saved_bytes` subtracts the retained gzip size; dry-run bytes
 remain an upper estimate. Logical hash receipts preserve gzip/plain consumer
 identity.
 
+Monitor snapshots use `monitor_snapshot_archive_identity_v1`: the compressor
+verifies the full gzip round trip, original byte hash/size/inode/mtime/ctime,
+and compressed byte hash/generation before removing the plain representation.
+The existing next-policy-day and native controller protection still applies.
+Existing gzip bytes are preserved and enrolled only after exact original-byte
+comparison. Trade snapshots and completed projections may be compressed while
+the small producer dependency receipt stays plain. Holding policy ancestry,
+input windows, all-scope/stop consumers and bootstrap bind the same logical
+source through this receipt; their census, cost and policy checks stay required.
+Metadata consumers verify compressed bytes without decoding huge timelines,
+and the existing explicit digest session can reuse unchanged generations.
+Content-consuming research streams gzip and checks CRC. Old archives without
+an original-identity receipt cannot fabricate a former raw inode or close an
+existing source gap.
+
 The journald drop-in `deploy/korstockscan-journald-retention.conf` specifies
 30 days, 512 MiB persistent, 128 MiB volatile and 1 GiB disk reserve. Installation
 backs up any prior drop-in and preserves the current journal; no immediate

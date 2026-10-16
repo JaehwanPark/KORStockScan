@@ -301,3 +301,16 @@ source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10
 회귀는 실제 policy/summary를 만든 뒤 archive를 실행하고 native verify_source_handoff가 계속 통과하는지 확인한다. 수정 전 일반·dry-run 경로의 차이를 재현하며 다른 snapshot의 압축 회귀를 유지한다. 소유자는 `OperationalLogRetentionRepair1016` 및 `HoldingProfitExitSourceContractRepair`다. 소비 검증 실패를 숨기거나 file publication 성공으로 완료 처리하지 않는다.
 
 추가 리뷰에서 완료 축약본의 input window도 원 trade_review의 inode/ctime을 고정함을 확인했다. 따라서 clean baseline6/5 이후 거래 리뷰 원문도 기존 보존 통계와 분리해 retained_trade_window_source_count로 남긴다. 정상 native snapshot의 valid_empty window조차 원문 압축 제거 뒤 generation_changed가 되는 것을 격리 재현했다. 새 보존 규칙 후 같은 window 검증이 유지되며, baseline 이전 archive-only 거래 리뷰와 일반 검증된 snapshot의 압축은 유지한다. 이 보완은 현재 실행 코드를 교체하지 않고 체인 종료 후 다음 정상 기동용 릴리스에 반영한다.
+
+
+## 16. 사용자 지시 후 논리 원천 인계를 갖춘 압축으로 전환
+
+사용자는 원문 보존을 비압축 보관과 동일시하지 말고 압축한 상태로 인계하도록 지시했다. §15의 원문 제외는 임시 보호 이력이며 이후 구현은 이를 대체한다. `lifecycle/snapshot_archive.py`가 저장 표현과 정책 의미를 분리한다. 새 Python 모듈은 engine root 대신 원천 저장 계약을 맡는 기존 lifecycle 패키지에 둔다.
+
+압축자는 원문 전체 SHA/크기/원 inode·mtime·ctime, gzip 왕복 CRC/원문 일치, 압축 파일 SHA/정확한 세대를 검증한 뒤 작은 archive receipt를 발행하고 원문을 제거한다. 이미 존재하는 gzip은 덮어쓰지 않고 원문과 일치할 때만 같은 인계 영수증을 추가한다. 다른 내용·세대 변경·링크·손상은 거부한다.
+
+보유 정책 ancestry, 거래 input window, 완료 projection, all-scope inventory/stream, 손절 원천 stat, summary/stage/manifest와 bootstrap 소비자는 같은 논리 경로·원 해시·원 inode를 검증한다. 큰 trade_review와 completed_projection은 압축하고 작은 producer dependency receipt는 남긴다. 비용·census·정책 의미 검증은 유지한다. 옛 gzip만으로 사라진 inode를 추정하거나 source gap을 정상화하지 않는다.
+
+기동·정책 선택은 압축 영수증과 bounded metadata를 사용한다. 큰 거래 JSON을 선택 함수에서 메모리에 올리던 중복 읽기는 streaming digest로 바꾸고, 필요한 보유 보고서만 bounded decode한다. 기존 explicit digest session은 같은 압축 세대의 digest를 재사용한다. 실제 연구가 내용을 필요로 하면 gzip을 streaming으로 읽고 CRC를 검증한다. 기존 날짜·다음 정책일·controller 보호와 원 failed/PASS/policy bytes를 유지한다.
+
+리뷰·변조/CRC/교체/링크/동일 window·정책 인계·큰 projection 무해제 회귀를 통과한 뒤, 실행 중인 기존 wrapper 종료를 확인하고 다음 정상 기동용 selected release와 prepared 인계를 다시 검증한다. 자동 매매 기동·실주문·경제성 수용은 별도이며 이번 변경으로 발생시키지 않는다.

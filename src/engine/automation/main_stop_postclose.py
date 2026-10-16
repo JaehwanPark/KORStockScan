@@ -49,13 +49,22 @@ def bounded(path, limit=1024*1024):
     return policy.bounded_object(path,limit)
 
 
+def dependency_stat(path):
+    path = Path(path)
+    if path.parent.name == 'monitor_snapshots':
+        from src.engine.lifecycle.snapshot_archive import snapshot_identity
+        identity = snapshot_identity(path)
+        return [identity[key] for key in ('device','inode','size','mtime_ns','ctime_ns')]
+    return list(source_stat(path.stat()))
+
+
 def verified_dependency_stats(inventory):
     """Bind stat identities to the bytes verified in that same read window."""
     result = {}
     for name, expected in inventory.items():
         path = Path(name)
-        before = list(source_stat(path.stat()))
-        if byte_generation(path) != expected or list(source_stat(path.stat())) != before:
+        before = dependency_stat(path)
+        if byte_generation(path) != expected or dependency_stat(path) != before:
             raise ValueError('stop_source_changed_during_read')
         result[name] = before
     return result
@@ -533,6 +542,10 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     for path, expected in expected_files.items():
         before = report['dependency_stats'].get(path)
         physical = Path(path)
+        if physical.parent == Path(root)/'report/monitor_snapshots' and not physical.exists():
+            if dependency_stat(physical) != before or byte_generation(physical) != expected:
+                raise ValueError('stop_native_source_bytes_changed')
+            continue
         if (path in inventory and physical.parent == Path(root)/'pipeline_events'
                 and physical.name.endswith('.jsonl') and not physical.exists()):
             _archived_pipeline_source(physical, expected, verify_full=verify_full)
@@ -641,7 +654,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     inventory={str(p):byte_generation(p) for p in source_paths}
     if not set(source_catalog)<=set(inventory):
         raise ValueError('stop_source_catalog_not_consumed')
-    input_stat_identity={name:list(source_stat(Path(name).stat()))
+    input_stat_identity={name:dependency_stat(name)
                          for name in {**inventory,**economic_sources.get('files',{})}}
     generation=policy.digest(dict(inventory=inventory,snapshot=snapshot_receipt,parent=parent_receipt,
         parents={k:asdict(v) for k,v in parents.items()},code=algorithm_sha,source_date=day,target_date=target,
@@ -923,7 +936,8 @@ def main():
         for day in days:
             path=Path(DATA_DIR)/'report/monitor_snapshots'/f'trade_review_{day}.json'
             for item in (path,path.with_suffix('.completed_projection.json')):
-                if item.exists():files[str(item)]=byte_generation(item)
+                from src.engine.lifecycle.snapshot_archive import identity_available
+                if identity_available(item):files[str(item)]=byte_generation(item)
         economic_sources=dict(files=files,cost_generations={day:source_generation(DATA_DIR,day) for day in days})
         publish(DATA_DIR,args.date,args.target,parents=parents,parent_receipt=receipt,
             source_paths=sources(DATA_DIR,args.date),snapshot_receipt=dict(path=str(snapshot),sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest()),experiments=experiments,

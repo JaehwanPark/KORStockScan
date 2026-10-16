@@ -30,10 +30,16 @@ def input_inventory(root,days,master_path,parent_path):
         for namespace,stem in (('ai_decision_trace','ai_decision_trace'),('ai_decision_payloads','ai_decision_payloads'),('ai_decision_prompts','ai_decision_prompts'),
                                ('ai_decision_requests','ai_decision_requests')):
             paths.update((Path(root)/namespace).glob(stem+'_'+day+'.jsonl*'))
-        paths.update((Path(root)/'report/monitor_snapshots').glob('trade_review_'+day+'*.json'))
+        from src.engine.lifecycle.snapshot_archive import logical_path, identity_available
+        for path in (Path(root)/'report/monitor_snapshots').glob('trade_review_'+day+'*.json*'):
+            if (path.name.endswith(('.json', '.json.gz')) and not path.name.endswith('.archive_receipt.json')
+                    and identity_available(path)):
+                paths.add(logical_path(path))
     paths.update((Path(root)/'runtime/holding_path_votes').glob('*.jsonl*'))
     paths.update((Path(root)/'runtime/mechanistic_entry_policy/decisions'/days[-1]).glob('*/*.json'))
-    return [{'path':str(p.resolve()),'generation':byte_generation(p)} for p in sorted(paths) if p.is_file()]
+    from src.engine.lifecycle.snapshot_archive import present
+    return [{'path':str(p.resolve()),'generation':byte_generation(p)} for p in sorted(paths)
+            if p.is_file() or (p.parent.name=='monitor_snapshots' and present(p))]
 
 
 def verify_inventory(manifest, assembly_root):
@@ -263,9 +269,8 @@ def large_completed_sources(root,raw,day,output,dependency):
         or not receipt.get('census_sha256') or receipt.get('meta',{}).get('snapshot_profile')!='postclose_exit'
         or receipt.get('meta',{}).get('actual_cost_source_generation')!=dependency['cost_generation']):
         raise ValueError('all_scope_large_completed_receipt_invalid')
-    stat=raw.stat()
-    identity={
-        'device':stat.st_dev,'inode':stat.st_ino,'size':stat.st_size,'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns}
+    from src.engine.lifecycle.snapshot_archive import snapshot_identity
+    identity=snapshot_identity(raw)
     if raw.is_symlink() or receipt.get('snapshot_identity')!=identity:
         raise ValueError('all_scope_large_completed_snapshot_changed')
     count=0
@@ -379,15 +384,16 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
     operating=_operating(root,source_date,sources,gaps)
     from src.engine.holding_exit_observation_report import _verified_trade_review_projection
     def records():
+        from src.engine.lifecycle.snapshot_archive import present
         for day in days:
             dependency=window['dependencies'][day]
             if dependency['status']=='source_gap': gaps['completed_snapshot_source_gap']+=1;continue
             raw=root/'report/monitor_snapshots'/f'trade_review_{day}.json'
-            if not raw.exists():
+            if not present(raw):
                 if date.fromisoformat(day).weekday()<5: gaps['completed_snapshot_missing']+=1
                 continue
             sidecar=raw.with_suffix('.completed_projection.json')
-            if sidecar.exists() and sidecar.stat().st_size>4*1024*1024:
+            if present(sidecar) and byte_generation(sidecar)['size']>4*1024*1024:
                 sources[str(sidecar)]=byte_generation(sidecar)
                 receipt=Path(str(sidecar)+'.dependencies.json');sources[str(receipt)]=byte_generation(receipt)
                 cohort=large_completed_sources(root,raw,day,output,dependency)

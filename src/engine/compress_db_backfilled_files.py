@@ -33,9 +33,6 @@ THRESHOLD_PARTITION_MIN_AGE_DAYS = 30
 # Keep aligned with backfill_threshold_cycle_events.DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION.
 # This module must remain import-side-effect free because it runs under disk-pressure cleanup.
 THRESHOLD_PARTITION_MAX_ROWS = 25_000
-# Frozen holding windows can bind a trade snapshot's original file identity.
-# Pre-baseline snapshots are archive-only and cannot be policy inputs.
-POLICY_INPUT_SNAPSHOT_START = date(2026, 6, 5)
 
 
 def _parse_iso_date(value: str) -> date | None:
@@ -202,29 +199,43 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
     if not path.exists() or not path.is_file():
         return False, 0
     gz_path = Path(f"{path}.gz")
-    if gz_path.exists():
+    snapshot = path.parent == MONITOR_SNAPSHOT_DIR and path.suffix == '.json'
+    existing_archive = gz_path.exists()
+    if existing_archive and not snapshot:
         return False, 0
-    original_size = path.stat().st_size
+    from src.engine.lifecycle.snapshot_archive import file_identity
+    if path.is_symlink() or gz_path.is_symlink() or any(p.is_symlink() for p in path.parents):
+        raise ValueError('archive_source_path_invalid')
+    original_identity = file_identity(path.stat())
+    archive_identity = file_identity(gz_path.stat()) if existing_archive else None
+    original_size = original_identity['size']
     if dry_run:
         return True, original_size
     tmp_path = Path(f"{gz_path}.tmp")
     logical_digest = hashlib.sha256()
-    with open(path, "rb") as src, gzip.open(tmp_path, "wb", compresslevel=9) as dst:
-        while True:
-            chunk = src.read(1024 * 1024)
-            if not chunk:
-                break
-            dst.write(chunk)
-            logical_digest.update(chunk)
+    if existing_archive:
+        with path.open('rb') as src:
+            logical_digest = hashlib.file_digest(src, 'sha256')
+    else:
+        with open(path, "rb") as src, gzip.open(tmp_path, "wb", compresslevel=9) as dst:
+            while chunk := src.read(1024 * 1024):
+                dst.write(chunk)
+                logical_digest.update(chunk)
+        with tmp_path.open('rb') as handle:
+            os.fsync(handle.fileno())
     restored_size = 0
     restored_digest = hashlib.sha256()
-    with gzip.open(tmp_path, "rb") as archived:
+    with gzip.open(gz_path if existing_archive else tmp_path, "rb") as archived:
         while chunk := archived.read(1024 * 1024):
             restored_size += len(chunk)
+            if restored_size > original_size:
+                raise ValueError('archive_decoded_size_mismatch')
             restored_digest.update(chunk)
     if (
         restored_size != original_size
         or restored_digest.digest() != logical_digest.digest()
+        or file_identity(path.stat()) != original_identity
+        or (existing_archive and file_identity(gz_path.stat()) != archive_identity)
     ):
         tmp_path.unlink(missing_ok=True)
         raise OSError(f"gzip_size_mismatch:{path.name}:{restored_size}/{original_size}")
@@ -232,7 +243,19 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
         if hashlib.sha256(Path(reference['path']).read_bytes()).hexdigest() != reference['sha256']:
             tmp_path.unlink(missing_ok=True)
             raise ValueError('storage_custody_changed_during_compression')
-    os.replace(tmp_path, gz_path)
+    if not existing_archive:
+        os.replace(tmp_path, gz_path)
+    if snapshot:
+        from src.engine.lifecycle.snapshot_archive import SCHEMA
+        with gz_path.open('rb') as handle:
+            archive_sha = hashlib.file_digest(handle, 'sha256').hexdigest()
+        write_json_object_generation_safe(
+            Path(f'{gz_path}.archive_receipt.json'), dict(
+                schema=SCHEMA, logical_path=str(path),
+                logical_content_sha256=logical_digest.hexdigest(),
+                logical_size_bytes=original_size, original_identity=original_identity,
+                archive_generation=file_identity(gz_path.stat()), archive_sha256=archive_sha,
+                runtime_effect=False, allowed_runtime_apply=False))
     if path.name.startswith("pipeline_events_") and path.suffix == ".jsonl":
         stat = gz_path.stat()
         write_json_object_generation_safe(
@@ -254,6 +277,8 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
                 "allowed_runtime_apply": False,
             },
         )
+    if file_identity(path.stat()) != original_identity:
+        raise ValueError('archive_source_changed_before_removal')
     path.unlink()
     return True, original_size - gz_path.stat().st_size
 
@@ -511,15 +536,6 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
             continue
         if protected(target_date):
             continue
-        # Published holding policies recursively verify these exact plain
-        # report bytes through their original summary/stage receipts. Closed
-        # postclose custody alone does not make that ancestry gzip compatible.
-        if kind == 'holding_exit_observation':
-            stats['retained_holding_policy_source_count'] += 1
-            continue
-        if kind == 'trade_review' and target_date >= POLICY_INPUT_SNAPSHOT_START:
-            stats['retained_trade_window_source_count'] += 1
-            continue
         stats["snapshots"]["scanned"] += 1
         try:
             manifest_verified = _snapshot_manifest_verifies(kind, target_date)
@@ -537,6 +553,15 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
             if compressed:
                 stats["snapshots"]["compressed"] += 1
                 stats["snapshots"]["saved_bytes"] += saved
+            if kind == 'trade_review':
+                sidecar = path.with_suffix('.completed_projection.json')
+                if sidecar.is_file():
+                    # Keep the small producer dependency receipt plain; its
+                    # projection bytes retain the same logical generation.
+                    compressed, saved = _gzip_file(sidecar, dry_run=dry_run)
+                    if compressed:
+                        stats['snapshots']['compressed'] += 1
+                        stats['snapshots']['saved_bytes'] += saved
         except Exception as exc:
             stats["errors"].append(f"snapshot:{path.name}:{exc}")
 

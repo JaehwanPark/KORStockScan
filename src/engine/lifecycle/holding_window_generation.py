@@ -30,6 +30,11 @@ def source_stat(stat):
 
 def byte_generation(path):
     """Independent byte verification, with a constant 64 KiB read buffer."""
+    path = Path(path)
+    if (path.parent.name == 'monitor_snapshots' and path.name.endswith(('.json', '.json.gz'))
+            and not (path.name.endswith('.gz') and not Path(str(path)+'.archive_receipt.json').exists())):
+        from .snapshot_archive import generation
+        return generation(path)
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
         raise ValueError('window_dependency_path_invalid')
     before = path.stat()
@@ -95,6 +100,15 @@ def seal_dependency_receipt(sidecar, payload):
 
 
 def _file_generation(path: Path) -> dict:
+    if path.parent.name == 'monitor_snapshots' and path.suffix == '.json':
+        from .snapshot_archive import generation, read_bytes
+        observed = generation(path)
+        if observed['size'] > MAX_PROJECTION_BYTES:
+            raise ValueError('window_dependency_projection_unbounded')
+        raw = read_bytes(path, maximum=MAX_PROJECTION_BYTES)
+        if len(raw) != observed['size'] or hashlib.sha256(raw).hexdigest() != observed['sha256']:
+            raise ValueError('window_dependency_changed_during_read')
+        return observed, raw
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
         raise ValueError("window_dependency_path_invalid")
     before = path.stat()
@@ -124,7 +138,8 @@ def _capture_day_inputs(root, directory, day, budget):
     sidecar = raw.with_suffix(".completed_projection.json")
     # The bounded sidecar is authoritative only with its original snapshot
     # identity. Preserve that binding as well as the sidecar's bytes.
-    if raw.is_file() and sidecar.is_file():
+    from .snapshot_archive import present, snapshot_identity
+    if present(raw) and present(sidecar):
         receipt = Path(str(sidecar) + '.dependencies.json')
         if receipt.is_file():
             if receipt.stat().st_size > MAX_METADATA_BYTES:
@@ -143,14 +158,11 @@ def _capture_day_inputs(root, directory, day, budget):
             # Legacy projections remain verifiable when small. Large historical
             # files require the existing producer's receipt, not an unbounded
             # JSON decode or a fabricated validation marker.
-            if sidecar.stat().st_size > MAX_PROJECTION_BYTES:
+            if byte_generation(sidecar)['size'] > MAX_PROJECTION_BYTES:
                 raise ValueError('window_dependency_legacy_metadata_required')
             generation, content = _file_generation(sidecar)
             value = decode(content)
-        stat = raw.stat()
-        identity = {"device": stat.st_dev, "inode": stat.st_ino,
-                    "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-                    "ctime_ns": stat.st_ctime_ns}
+        identity = snapshot_identity(raw)
         if raw.is_symlink() or value.get("snapshot_identity") != identity:
             raise ValueError("window_dependency_snapshot_binding_invalid")
         generation["snapshot_identity"] = identity
@@ -164,7 +176,7 @@ def _capture_day_inputs(root, directory, day, budget):
                     or verify_completed_census_manifest(value, day) is not None):
                 raise ValueError('window_dependency_projection_contract_invalid')
     elif raw.is_file() or compressed.is_file():
-        path = raw if raw.is_file() else compressed
+        path = raw if raw.is_file() or Path(str(compressed)+'.archive_receipt.json').is_file() else compressed
         generation, content = _file_generation(path)
         if path.suffix == '.gz':
             with gzip.GzipFile(fileobj=io.BytesIO(content)) as handle:
@@ -218,6 +230,24 @@ def capture_window(data_root: Path, dates: list[str]) -> dict:
             # an invalid old row cannot erase valid current analysis.
             projections = {}
             for path in directory.glob(f'trade_review_{day}*'):
+                if path.name.endswith('.archive_receipt.json'):
+                    continue
+                from .snapshot_archive import logical_path, snapshot_identity
+                if path.name.endswith('.json.gz') and Path(str(path)+'.archive_receipt.json').is_file():
+                    logical = logical_path(path)
+                    try:
+                        identity = snapshot_identity(logical)
+                        projections[logical.name] = byte_generation(logical) if identity['size'] <= MAX_PROJECTION_BYTES else {
+                            **identity, 'status':'unverified_unbounded_source'}
+                    except (OSError,ValueError,KeyError,TypeError):
+                        # Keep this identifiable corrupt date isolated. A bad
+                        # receipt must not escape the source-gap recovery path.
+                        for physical in (path,Path(str(path)+'.archive_receipt.json')):
+                            stat=physical.lstat()
+                            projections[physical.name] = dict(size=stat.st_size,mtime_ns=stat.st_mtime_ns,
+                                ctime_ns=stat.st_ctime_ns,inode=stat.st_ino,device=stat.st_dev,
+                                status='unverified_archive_generation')
+                    continue
                 if path.is_file() and not path.is_symlink():
                     stat = path.stat()
                     projections[path.name] = byte_generation(path) if stat.st_size <= MAX_PROJECTION_BYTES else {

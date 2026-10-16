@@ -534,7 +534,8 @@ def verify_summary_handoff(
         observation_path = (report_dir / "monitor_snapshots" /
                             f"holding_exit_observation_{target_date}.json")
         try:
-            observation_sha = hashlib.sha256(observation_path.read_bytes()).hexdigest()
+            from src.engine.lifecycle.snapshot_archive import read_bytes
+            observation_sha = hashlib.sha256(read_bytes(observation_path, maximum=64*1024*1024)).hexdigest()
             bundle = load_holding_vote_policy(
                 report_dir.parent, target_policy_date,
                 source_report_sha256=observation_sha,
@@ -996,6 +997,14 @@ def _stage_sources(paths):
     result = {}
     for name, path in paths.items():
         path = Path(path)
+        if path.parent.name == 'monitor_snapshots' and path.suffix == '.json':
+            from src.engine.lifecycle.snapshot_archive import generation
+            try:
+                sha = generation(path)['sha256']
+            except FileNotFoundError:
+                sha = None
+            result[name] = dict(path=str(path.resolve()), sha256=sha)
+            continue
         # Exact AI storage may replace a closed-date plain source with a
         # verified gzip. Keep the original logical path and decoded SHA in
         # older stage receipts; validate the producer's date/schema contract.

@@ -167,7 +167,12 @@ def completed_rows(path,output_root):
         for _ in reader.fields(field):pass
         body['holding_path_signal_snapshots_ref']=storage.write_tree(output_root,signals)
         return body,reference or storage.write_tree(output_root,[])
-    with Path(path).open('r',encoding='utf-8') as handle:
+    import gzip
+    from .snapshot_archive import logical_path
+    logical = logical_path(path)
+    path = logical if logical.exists() else Path(str(logical)+'.gz')
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rt', encoding='utf-8') as handle:
         reader=Reader(handle)
         yield from reader.target(('sections','completed_trade_projection'),trade)
         reader.spaces()
