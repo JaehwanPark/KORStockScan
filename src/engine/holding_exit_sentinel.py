@@ -8,6 +8,8 @@ artifacts.
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
+import fcntl
 import hashlib
 import json
 from collections import Counter, defaultdict
@@ -26,7 +28,7 @@ from src.engine.scalping.holding_path_vote_policy import (
     policy_path as holding_vote_policy_path,
     verify_source_handoff as verify_holding_vote_source_handoff,
 )
-from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow, event_generation
+from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.market_day import is_krx_trading_day
@@ -73,6 +75,16 @@ SESSION_SCOPE_FIELD_KEYS = (
     "market_session",
     "session",
 )
+# Only prior-day summaries use this projection. Current-day causal auditing
+# continues to consume every original field, including the first-crossing source.
+BASELINE_SUMMARY_FIELDS = frozenset((*VENUE_SCOPE_FIELD_KEYS, *SESSION_SCOPE_FIELD_KEYS,
+    "actual_execution_venue", "actual_order_submitted", "broker_order_forbidden",
+    "simulated_order", "simulation_book", "simulation_owner", "swing_intraday_probe",
+    "probe_id", "probe_origin_stage", "ord_no", "order_no", "broker_order_no",
+    "ai_cache", "ai_parse_fail", "holding_score_score50_origin", "holding_score_effective",
+    "ai_score", "current_ai_score", "holding_score_preflight_blocked", "holding_score_source",
+    "holding_score_raw_source", "holding_score_basis", "holding_score_excluded_reason",
+    "ai_result_source", "worsen_pct", "profit_rate", "exit_rule", "reason"))
 HOLDING_CLASSIFICATION_PRIORITY = (
     "RUNTIME_OPS",
     "SELL_EXECUTION_DROUGHT",
@@ -210,20 +222,55 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
 
 
 def load_pipeline_events(
-    target_date: str, *, use_cache: bool = False
+    target_date: str, *, use_cache: bool = False, summary_only: bool = False
 ) -> list[PipelineEvent]:
     path = existing_or_gzip_path(_pipeline_events_path(target_date))
     if not path.exists():
         return []
     if use_cache:
-        rows, _ = update_and_load_cached_event_rows(
+        rows, receipt = update_and_load_cached_event_rows(
             raw_path=path,
             cache_dir=_event_cache_dir(),
             cache_name=EVENT_CACHE_NAME,
             target_date=target_date,
             schema_version=EVENT_CACHE_SCHEMA_VERSION,
             parse_payload=_payload_to_cache_row,
+            **({"load_rows": False, "compact_index": True} if summary_only else {}),
         )
+        if summary_only:
+            from src.engine.monitoring import sentinel_compact_store as store
+            cache_path = Path(receipt["cache_path"])
+            meta_path = cache_path.with_suffix(".meta.json")
+            # Share the native cache writer's lock across the projection read.
+            # A changed native population cannot become an empty/slim success.
+            with meta_path.with_suffix(".lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                expected = receipt["cache_generation"]
+                if store.stamp(cache_path) != expected:
+                    raise ValueError("holding_baseline_cache_generation_changed")
+                columns = ("emitted_at", "pipeline", "stage", "stock_name", "stock_code", "record_id")
+
+                def project_rows():
+                    return [[*(row.get(key) for key in columns), {
+                        str(key): _safe_str(value)
+                        for key, value in (row.get("fields") or {}).items()
+                        if key in BASELINE_SUMMARY_FIELDS}]
+                        for row in iter_jsonl(cache_path)]
+
+                contract = {
+                    "reader_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                    "store_sha256": hashlib.sha256(Path(store.__file__).read_bytes()).hexdigest(),
+                    "fields": sorted(BASELINE_SUMMARY_FIELDS),
+                    "columns": list(columns),
+                }
+                rows = store.slim_summary_projection(cache_path, project_rows, contract=contract)
+                if (store.stamp(cache_path) != expected
+                        or len(rows) != receipt["cache_event_count"]
+                        or any(not isinstance(row, list) or len(row) != len(columns) + 1
+                               or not isinstance(row[-1], dict)
+                               for row in rows)):
+                    raise ValueError("holding_baseline_projection_population_changed")
+                rows = [{**dict(zip(columns, row[:-1])), "fields": row[-1]} for row in rows]
         events = [
             event for row in rows if (event := _event_from_cache_row(row)) is not None
         ]
@@ -441,38 +488,34 @@ def _actual_execution_venue(event: PipelineEvent) -> str:
 def _partition_events_by_venue_session(
     events: list[PipelineEvent],
 ) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
-    explicit_by_attempt: dict[str, list[tuple[datetime, tuple[str, str]]]] = (
-        defaultdict(list)
-    )
-    for event in events:
-        scope = _explicit_event_scope(event)
+    explicit_by_attempt: dict[str, dict[datetime, set[tuple[str, str]]]] = defaultdict(
+        lambda: defaultdict(set))
+    explicit_scopes = [_explicit_event_scope(event) for event in events]
+    for event, scope in zip(events, explicit_scopes):
         exact_key = _exact_attempt_key(event)
         if scope and scope[2] == "pass" and exact_key:
-            explicit_by_attempt[exact_key].append(
-                (event.emitted_at, (scope[0], scope[1]))
-            )
+            explicit_by_attempt[exact_key][event.emitted_at].add((scope[0], scope[1]))
+    indexed = {key: (sorted(scopes), scopes) for key, scopes in explicit_by_attempt.items()}
 
     groups: dict[str, list[PipelineEvent]] = defaultdict(list)
     quality_counts: Counter[str] = Counter()
-    for event in events:
-        explicit = _explicit_event_scope(event)
+    for event, explicit in zip(events, explicit_scopes):
         if explicit is not None:
             venue, session, quality = explicit
         else:
             exact_key = _exact_attempt_key(event)
-            candidates = explicit_by_attempt.get(exact_key or "", [])
+            clocks, scopes = indexed.get(exact_key or "", ([], {}))
+            index = bisect_left(clocks, event.emitted_at)
+            candidates = [clocks[i] for i in (index - 1, index) if 0 <= i < len(clocks)]
             nearest_scopes: set[tuple[str, str]] = set()
             if candidates:
                 min_delta = min(
                     abs((candidate_at - event.emitted_at).total_seconds())
-                    for candidate_at, _ in candidates
+                    for candidate_at in candidates
                 )
-                nearest_scopes = {
-                    scope
-                    for candidate_at, scope in candidates
-                    if abs((candidate_at - event.emitted_at).total_seconds())
-                    == min_delta
-                }
+                for candidate_at in candidates:
+                    if abs((candidate_at - event.emitted_at).total_seconds()) == min_delta:
+                        nearest_scopes.update(scopes[candidate_at])
             if len(nearest_scopes) == 1:
                 venue, session = next(iter(nearest_scopes))
                 quality = "inherited_nearest_exact_attempt"
@@ -760,11 +803,12 @@ def _summarize_events(
             and _attempt_key(event) not in real_sell_keys
         )
     ]
-    stage_events = Counter(event.stage for event in scoped)
-    stage_unique = {
-        stage: len({_attempt_key(event) for event in scoped if event.stage == stage})
-        for stage in sorted(set(stage_events))
-    }
+    stage_events = Counter()
+    stage_attempts: dict[str, set[str]] = defaultdict(set)
+    for event in scoped:
+        stage_events[event.stage] += 1
+        stage_attempts[event.stage].add(_attempt_key(event))
+    stage_unique = {stage: len(keys) for stage, keys in sorted(stage_attempts.items())}
     exit_signal = int(stage_unique.get("exit_signal", 0) or 0)
     sell_sent = int(stage_unique.get("sell_order_sent", 0) or 0)
     sell_completed = int(stage_unique.get("sell_completed", 0) or 0)
@@ -1279,7 +1323,8 @@ def build_holding_exit_sentinel_report(
     baseline_date = previous_trading_day_with_events(target_date)
     baseline_summary = None
     if baseline_date:
-        baseline_events = load_pipeline_events(baseline_date, use_cache=use_cache)
+        baseline_events = load_pipeline_events(baseline_date, use_cache=use_cache,
+                                              summary_only=use_cache)
         baseline_start = datetime.combine(
             _parse_target_date(baseline_date), SESSION_START
         )
@@ -1313,7 +1358,7 @@ def build_holding_exit_sentinel_report(
         ),
         observation=observation, policies=vote_policies,
         policy_bundle_sha256=vote_policy_bundle_sha,
-        as_of=as_of, source_generation=event_generation(events),
+        as_of=as_of,
         mechanical_policy_receipt=mechanical_receipt, consumed_pids=list(consumed_pids),
         mechanical_receipts_by_pid=consumed_pids,
     )

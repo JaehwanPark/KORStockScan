@@ -48,6 +48,149 @@ def test_legacy_aware_cache_row_is_read_without_cache_schema_rebuild():
     assert sentinel._event_from_cache_row(row).emitted_at == datetime(2026,10,16,8,20)
 
 
+def test_indexed_scope_matches_exhaustive_nearest_including_ties_and_invalid_ids():
+    import random
+    from collections import defaultdict, Counter
+    rng = random.Random(541)
+    events = []
+    for index in range(250):
+        fields = rng.choice([{}, {"venue": "KRX"}, {"venue": "NXT"},
+                             {"venue": "KRX", "session": "NXT_REGULAR"}])
+        events.append(sentinel.PipelineEvent(datetime(2026, 10, 16, 10) + timedelta(
+            microseconds=rng.randrange(12)), "HOLDING_PIPELINE", "exit_signal", "Stock",
+            "123456", rng.choice(["1", "2", "0", "-", ""]), fields))
+    rng.shuffle(events)
+    groups, quality = defaultdict(list), Counter()
+    for event in events:
+        explicit = sentinel._explicit_event_scope(event)
+        if explicit is not None:
+            venue, session, reason = explicit
+        else:
+            identity = sentinel._exact_attempt_key(event)
+            candidates = [(abs((other.emitted_at-event.emitted_at).total_seconds()), scope[:2])
+                for other in events if identity is not None
+                and sentinel._exact_attempt_key(other) == identity
+                and (scope := sentinel._explicit_event_scope(other)) is not None and scope[2] == "pass"]
+            nearest = {scope for distance, scope in candidates
+                       if distance == min(value[0] for value in candidates)} if candidates else set()
+            if len(nearest) == 1:
+                venue, session = next(iter(nearest)); reason = "inherited_nearest_exact_attempt"
+            elif nearest:
+                venue, session, reason = "CONFLICT", "CONFLICT", "conflict"
+            else:
+                venue, session, reason = "UNKNOWN", "UNKNOWN", "missing"
+        groups[f"{venue}|{session}"].append(event); quality[reason] += 1
+    assert sentinel._partition_events_by_venue_session(events) == (dict(groups), dict(sorted(quality.items())))
+    assert quality["conflict"] and quality["missing"] and quality["inherited_nearest_exact_attempt"]
+
+
+def test_scope_distance_work_is_bounded_per_implicit_event():
+    calls = 0
+    class Delta:
+        def __init__(self, value): self.value = value
+        def total_seconds(self):
+            nonlocal calls
+            calls += 1
+            return self.value.total_seconds()
+    class Clock(datetime):
+        def __sub__(self, other): return Delta(super().__sub__(other))
+    events = [sentinel.PipelineEvent(Clock(2026, 10, 16, 10, index // 60, index % 60),
+        "HOLDING_PIPELINE", "exit_signal", "Stock", "123456", "1",
+        {"venue": "KRX"} if index % 2 else {}) for index in range(1000)]
+    groups, quality = sentinel._partition_events_by_venue_session(events)
+    assert len(groups["KRX|KRX_REGULAR"]) == 1000
+    assert quality["inherited_nearest_exact_attempt"] == 500
+    assert calls <= 4 * 500
+
+
+def test_baseline_projection_preserves_summaries_scopes_and_warm_read_bound(monkeypatch, tmp_path):
+    from pathlib import Path
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-15"
+    fields = dict(venue="KRX", actual_order_submitted="True", ai_cache="miss",
+        ai_parse_fail="True", holding_score_effective="50", holding_score_source="input_preflight_blocked",
+        worsen_pct="1.1", profit_rate="2.3", exit_rule="trailing", opaque_context="x"*50000)
+    payloads = [_event(day, f"10:00:0{index}", stage, record_id=1, fields=fields)
+        for index, stage in enumerate(["holding_started", "ai_holding_review",
+                                       "holding_flow_override_defer_exit", "sell_order_sent", "sell_completed"])]
+    payloads.append(_event(day, "10:00:06", "exit_signal", record_id=2,
+                          fields={"simulated_order": "True", "venue": "NXT"}))
+    _write_events(tmp_path, day, payloads)
+    full = sentinel.load_pipeline_events(day)
+    projected = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
+    assert "opaque_context" not in projected[0].fields
+    assert "opaque_context" in sentinel.load_pipeline_events(day, use_cache=True)[0].fields
+    # Restore the baseline owner's metadata after the full-reader compatibility check.
+    projected = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
+    for start in [datetime(2026, 10, 15, 8), datetime(2026, 10, 15, 10, 0, 3)]:
+        assert sentinel._summarize_events(full, start_at=start, end_at=datetime(2026, 10, 15, 11)) == sentinel._summarize_events(projected, start_at=start, end_at=datetime(2026, 10, 15, 11))
+    assert sentinel._partition_events_by_venue_session(full)[1] == sentinel._partition_events_by_venue_session(projected)[1]
+    cache = tmp_path/"runtime/sentinel_event_cache"/f"holding_exit_sentinel_events_{day}.jsonl"
+    original_open = Path.open
+    def guarded(path, mode="r", *args, **kwargs):
+        if path == cache and "r" in mode:
+            pytest.fail("warm baseline reread the full native cache")
+        return original_open(path, mode, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", guarded)
+    assert sentinel.load_pipeline_events(day, use_cache=True, summary_only=True) == projected
+
+
+@pytest.mark.parametrize("change", ["append", "projection_hash", "reader_contract"])
+def test_baseline_projection_invalidates_on_source_or_contract_change(monkeypatch, tmp_path, change):
+    from src.engine.monitoring import sentinel_compact_store as store
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-15"
+    _write_events(tmp_path, day, [_event(day, "10:00:00", "holding_started", record_id=1)])
+    first = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
+    cache = tmp_path/"runtime/sentinel_event_cache"/f"holding_exit_sentinel_events_{day}.jsonl"
+    projection = cache.with_name(cache.name+".sentinel-slim.json")
+    if change == "append":
+        with (tmp_path/"pipeline_events"/f"pipeline_events_{day}.jsonl").open("a") as f:
+            f.write(json.dumps(_event(day, "10:00:01", "sell_completed", record_id=1))+"\n")
+    else:
+        value = json.loads(projection.read_text())
+        if change == "projection_hash": value["sha256"] = "0"*64
+        else:
+            value["body"]["contract"]["reader_sha256"] = "0"*64
+            value["sha256"] = __import__('hashlib').sha256(json.dumps(value["body"], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        projection.write_text(json.dumps(value))
+    result = sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
+    assert len(result) == (2 if change == "append" else len(first))
+    assert json.loads(projection.read_text())["body"]["contract"]["reader_sha256"] != "0"*64
+
+
+def test_baseline_source_mutation_cannot_publish_a_projected_population(monkeypatch, tmp_path):
+    from src.engine.monitoring import sentinel_compact_store as store
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-15"
+    _write_events(tmp_path, day, [_event(day, "10:00:00", "holding_started")])
+    original = store.slim_summary_projection
+    def racing(path, loader, **kwargs):
+        rows = original(path, loader, **kwargs)
+        with path.open("a") as f: f.write("{}\n")
+        return rows
+    monkeypatch.setattr(store, "slim_summary_projection", racing)
+    with pytest.raises(ValueError, match="projection_population_changed"):
+        sentinel.load_pipeline_events(day, use_cache=True, summary_only=True)
+
+
+def test_baseline_projection_covers_summary_field_contract():
+    import ast
+    import inspect
+    readers = (sentinel._is_non_real_observation, sentinel._is_explicit_real_sell_execution,
+        sentinel._count_cache_miss, sentinel._count_parse_fail, sentinel._score50_origin_counts,
+        sentinel._count_holding_score_preflight_blocked, sentinel._stage_reason_top,
+        sentinel._actual_execution_venue)
+    required = set(sentinel.VENUE_SCOPE_FIELD_KEYS + sentinel.SESSION_SCOPE_FIELD_KEYS)
+    for reader in readers:
+        for node in ast.walk(ast.parse(inspect.getsource(reader))):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == 'get' and node.args
+                    and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+                required.add(node.args[0].value)
+    assert required <= sentinel.BASELINE_SUMMARY_FIELDS
+
+
 def test_typed_semantics_pins_actual_position_and_current_effective_receipt():
     from src.engine.scalping import holding_profit_exit_semantics as semantics
     from src.engine.scalping import trailing_situation_policy as typed
