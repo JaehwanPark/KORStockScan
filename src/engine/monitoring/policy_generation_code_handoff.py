@@ -37,6 +37,10 @@ from src.engine.monitoring import policy_generation_validation as validation
 # Probe partial custody repair changes shared handler/receipt bytes only.
 # Fresh fixtures bind the successor; historical source reports remain unchanged.
 # Review: docs/audits/main-probe-partial-integrated-deployment-review-2026-10-16.md.
+# Exact nonfixed continuity changes entry source readiness in shared Main/handler
+# bytes only. Family producers and historical contracts remain unchanged; require
+# fresh rising/holding fixtures before consuming this reviewed successor.
+# Review: docs/audits/nonfixed-source-continuity-review-2026-10-16.md.
 # Long4/fixed-watch and 04c holding/replay integration; original reports stay unchanged.
 # Review: docs/audits/long4-source-retention-integration-review-2026-10-16.md.
 REVIEWED_SUCCESSORS = {
@@ -45,13 +49,13 @@ REVIEWED_SUCCESSORS = {
         'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '684090396e36144e6b79a33aacf55f8f63c3bd9260e534d58e2aefcdcd30f2e9'),
+        'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
         'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '2cdbab10ad57c817ba2117d43699ba2fe79a96fe73e5e00e5667bacaeffd2d3e'),
+        '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd'),
 }
 
 # The next dated native report already carries the formerly reviewed successor.
@@ -65,26 +69,26 @@ REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
         'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
     'rising_missed': (
         'dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3',
-        '684090396e36144e6b79a33aacf55f8f63c3bd9260e534d58e2aefcdcd30f2e9'),
+        'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'),
     'holding_vote': (
         '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
-        '2cdbab10ad57c817ba2117d43699ba2fe79a96fe73e5e00e5667bacaeffd2d3e'),
+        '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd'),
 }
 
 
 # The actual 4c65523b2 source generation is also preserved if already reported.
 REVIEWED_DEPLOYED_SOURCE_SUCCESSORS = {
     'entry_cancel_wait': ('6d6a294941f6337d48420514d40e36891d25b44dc09bd914be0831d897794d4c', 'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
-    'rising_missed': ('0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed', '684090396e36144e6b79a33aacf55f8f63c3bd9260e534d58e2aefcdcd30f2e9'),
+    'rising_missed': ('0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed', 'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'),
     'auxiliary': ('711184e6d93f27e3d8f4bdd97598f4880f752332f850763b32b434560b460f8e', 'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
-    'holding_vote': ('e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278', '2cdbab10ad57c817ba2117d43699ba2fe79a96fe73e5e00e5667bacaeffd2d3e'),
+    'holding_vote': ('e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278', '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd'),
 }
 
 
 # Delay situation/zero-cell observer repair touches shared handler metadata.
 # Preserve the selected predecessor's report generation and require a new fixture.
 # Review: docs/audits/pre-submit-semantic-implementation-review-2026-10-16.md.
-REVIEWED_DELAY_SOURCE_SUCCESSORS = {'rising_missed': ('ea1ac91b6e080d96f3a0d61dca47575c101862ba6fe77fed36fc6170687f3e08', '684090396e36144e6b79a33aacf55f8f63c3bd9260e534d58e2aefcdcd30f2e9'), 'holding_vote': ('dfd762fa2b9d15799e4951bc5624effa58f8efdec29cb85939ba9d5e21765d58', '2cdbab10ad57c817ba2117d43699ba2fe79a96fe73e5e00e5667bacaeffd2d3e')}
+REVIEWED_DELAY_SOURCE_SUCCESSORS = {'rising_missed': ('ea1ac91b6e080d96f3a0d61dca47575c101862ba6fe77fed36fc6170687f3e08', 'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'), 'holding_vote': ('dfd762fa2b9d15799e4951bc5624effa58f8efdec29cb85939ba9d5e21765d58', '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd')}
 
 
 def _historical_fixture(contract, data, family):
