@@ -2794,7 +2794,8 @@ def _scanner_runtime_handoff_updates(payload, *, source, existing=None):
         else time.time()
     )
     return {
-        **{key: copy.deepcopy(payload[key]) for key in ('native_observation', 'ws_handoff_id') if key in payload},
+        **{key: copy.deepcopy(payload[key]) for key in (
+            'native_observation', 'ws_handoff_id', 'physical_probe_lease_id') if key in payload},
         "scanner_runtime_handoff_epoch": round(float(handoff_epoch), 6),
         "scanner_runtime_handoff_source": str(source),
         "scanner_runtime_handoff_promotion_id": promotion_id,
@@ -8602,7 +8603,7 @@ def _zero_base_probe_result(request, result, reason):
     )
 
 
-def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None):
+def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None, finalize_payload=None):
     if outcome in {'attached', 'rejected'}:
         with _ZERO_BASE_PROBE_LOCK:
             _ZERO_BASE_MAIN_PENDING.discard((result or {}).get('ws_handoff_id'))
@@ -8626,7 +8627,8 @@ def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None):
                 "machine_observation_sha256": (result or {}).get("machine_observation_sha256"),
                 "record_id": record_id,
                 "zero_base_finalize_receipt": json.dumps(
-                    (result or {}).get('_zero_base_finalize_receipt') or {}, sort_keys=True),
+                    (finalize_payload if finalize_payload is not None else result or {}).get(
+                        '_zero_base_finalize_receipt') or {}, sort_keys=True),
                 "zero_base_handoff_id": (result or {}).get('ws_handoff_id'),
                 "zero_base_physical_probe_lease_id": (result or {}).get('physical_probe_lease_id'),
                 "zero_base_attach_pid": os.getpid(),
@@ -9013,6 +9015,7 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
                     code=code, **identity, observed_epoch=time.time(),
                     ws_handoff_id=payload.get('ws_handoff_id'),
                     physical_probe_lease_id=payload.get('physical_probe_lease_id'),
+                    admission_failure_reason=payload.get('_zero_base_attach_failure_reason'),
                     machine_observation_sha256=payload.get('zero_base_probe_machine_observation_sha256')
                         or payload.get('machine_observation_sha256'),
                     native_signal_id=expected.get('signal_id') or expected.get('event_id'),
@@ -9079,16 +9082,31 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
 def _zero_base_rollback_uncommitted_target(payload):
     record_id = (payload or {}).get("record_id")
     code = str((payload or {}).get("code") or "").strip()[:6]
+    original = (payload or {}).get('_zero_base_finalize_receipt')
+    if (original or {}).get('finalized') and (original or {}).get('attached'):
+        return  # A committed Main target is outside provisional rollback custody.
+    cleanup_done = ((original or {}).get('rollback_receipt') or {}).get('finalized')
+    if ((payload or {}).get('zero_base_pending_db')
+            and not (original or {}).get('finalized') and not cleanup_done):
+        _zero_base_finalize_candidate_record(payload, attached=False)
+        cleanup = payload.get('_zero_base_finalize_receipt')
+        if original is not None:
+            payload['_zero_base_finalize_receipt'] = dict(original, rollback_receipt=cleanup)
     with ENTRY_LOCK:
+        before = len(ACTIVE_TARGETS)
         ACTIVE_TARGETS[:] = [
             target for target in ACTIVE_TARGETS
-            if not (target.get("id") == record_id and target.get("code") == code)
+            if not (target.get("id") == record_id and target.get("code") == code
+                    and target.get("status") == "WATCHING" and target.get('zero_base_pending_db'))
         ]
-    if code and not _zero_base_active_conflict(code):
+        removed = len(ACTIVE_TARGETS) < before
+    if (code and (removed or (payload or {}).get('_zero_base_ws_adopted'))
+            and not _zero_base_active_conflict(code)):
         event_bus.publish("COMMAND_WS_UNREG", {
             "codes": [_scanner_runtime_ws_item(code, (payload or {}).get("market_data_route"))],
             "source": "zero_base_attach_rollback",
         })
+        payload.pop('_zero_base_ws_adopted', None)
 
 
 def _scanner_runtime_ws_item(code, route):
@@ -9097,6 +9115,19 @@ def _scanner_runtime_ws_item(code, route):
     if route == "nxt_only":
         return code + "_NX"
     return code
+
+
+def _zero_base_adopt_probe_ws(payload):
+    """Preserve the original native lease when a provisional target attaches."""
+    if not payload.get('zero_base_pending_db') or payload.get('native_observation') is None:
+        return True  # Existing non-native scanner registration path.
+    adopt = getattr(WS_MANAGER, 'adopt_zero_base_probe_target', None)
+    adopted = bool(_zero_base_native_handoff_valid(payload) and callable(adopt) and adopt(payload))
+    if not adopted:
+        payload['_zero_base_attach_failure_reason'] = 'native_subscription_adoption_failed'
+    else:
+        payload['_zero_base_ws_adopted'] = True
+    return adopted
 
 
 def handle_zero_base_machine_enter(result):
@@ -9167,7 +9198,8 @@ def handle_zero_base_machine_enter(result):
         f"{int(claim.get('claim_count') or 0)}"
     )
     payload = {
-        **{key: copy.deepcopy(result[key]) for key in ('native_observation', 'ws_handoff_id') if key in result},
+        **{key: copy.deepcopy(result[key]) for key in (
+            'native_observation', 'ws_handoff_id', 'physical_probe_lease_id') if key in result},
         "code": code,
         "name": candidate.get("name") or code,
         "strategy": "SCALPING",
@@ -9231,7 +9263,7 @@ def handle_zero_base_machine_enter(result):
     with ENTRY_LOCK:
         if _zero_base_active_conflict(code):
             _zero_base_finalize_candidate_record(payload, attached=False)
-            _zero_base_attach_receipt(result, outcome="rejected", reason="conflict_after_provisional_insert", record_id=payload.get("record_id"))
+            _zero_base_attach_receipt(result, outcome="rejected", reason="conflict_after_provisional_insert", record_id=payload.get("record_id"), finalize_payload=payload)
             return False
         scheduler_mode = _scanner_scheduler_startup_mode()
         try:
@@ -9248,13 +9280,13 @@ def handle_zero_base_machine_enter(result):
             _zero_base_rollback_uncommitted_target(payload)
             _zero_base_attach_receipt(
                 result, outcome="rejected", reason="attach_exception",
-                record_id=payload.get("record_id"),
+                record_id=payload.get("record_id"), finalize_payload=payload,
             )
             return False
     if scheduler_mode in {"deadline_v1", "async_v1"}:
         if not accepted:
             _zero_base_finalize_candidate_record(payload, attached=False)
-            _zero_base_attach_receipt(result, outcome="rejected", reason="scheduler_inbox_rejected", record_id=payload.get("record_id"))
+            _zero_base_attach_receipt(result, outcome="rejected", reason="scheduler_inbox_rejected", record_id=payload.get("record_id"), finalize_payload=payload)
         else:
             _zero_base_attach_receipt(result, outcome="queued", reason="scheduler_inbox_pending", record_id=payload.get("record_id"))
         return bool(accepted)
@@ -9264,8 +9296,9 @@ def handle_zero_base_machine_enter(result):
     _zero_base_attach_receipt(
         result,
         outcome="attached" if accepted and finalized else "rejected",
-        reason="committed" if accepted and finalized else "attach_or_db_finalize_failed",
-        record_id=payload.get("record_id"),
+        reason=("committed" if accepted and finalized else
+                payload.get('_zero_base_attach_failure_reason') or "attach_or_db_finalize_failed"),
+        record_id=payload.get("record_id"), finalize_payload=payload,
     )
     return bool(accepted and finalized)
 
@@ -9434,6 +9467,10 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
         if existing is not None:
             status = str(existing.get("status") or "").upper()
             if status == "WATCHING":
+                if not _zero_base_adopt_probe_ws(payload):
+                    _log_scanner_runtime_target_attach(
+                        payload_for_log, outcome="skipped", reason="native_subscription_adoption_failed")
+                    return False
                 refresh_context_updates, refresh_context_fields = (
                     _scanner_merge_context_preserving_positive_delta(
                         existing,
@@ -9516,11 +9553,12 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                     reason="existing_watching_refreshed",
                     target=existing,
                 )
-                event_bus.publish(
-                    "COMMAND_WS_REG",
-                    {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
-                     "source": "scanner_runtime_target_refresh"},
-                )
+                if not (payload.get('zero_base_pending_db') and payload.get('native_observation') is not None):
+                    event_bus.publish(
+                        "COMMAND_WS_REG",
+                        {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
+                         "source": "scanner_runtime_target_refresh"},
+                    )
                 return True
 
             conflict_reason = _same_symbol_active_conflict_reason(existing)
@@ -9603,6 +9641,10 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                 f"reason=scalping_dynamic_watch_cap_capacity cap={_scalping_fifo_max_active()}"
             )
             return False
+        if not _zero_base_adopt_probe_ws(payload):
+            _log_scanner_runtime_target_attach(
+                payload_for_log, outcome="skipped", reason="native_subscription_adoption_failed")
+            return False
         if replacements:
             _expire_scalping_watch_budget_targets(
                 replacements,
@@ -9612,11 +9654,12 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
         new_target["marcap"] = _resolve_stock_marcap(new_target, code)
         ACTIVE_TARGETS.append(new_target)
 
-    event_bus.publish(
-        "COMMAND_WS_REG",
-        {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
-         "source": "scanner_runtime_target_attach"},
-    )
+    if not (payload.get('zero_base_pending_db') and payload.get('native_observation') is not None):
+        event_bus.publish(
+            "COMMAND_WS_REG",
+            {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
+             "source": "scanner_runtime_target_attach"},
+        )
     _log_scanner_runtime_target_attach(
         payload_for_log,
         outcome="attached",
@@ -10217,7 +10260,8 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             _zero_base_inbox_attach_receipt(
                 payload,
                 outcome="attached" if success else "rejected",
-                reason="committed" if success else "attach_or_db_finalize_failed",
+                reason=("committed" if success else
+                        payload.get('_zero_base_attach_failure_reason') or "attach_or_db_finalize_failed"),
             )
         if success and target is not None:
             applied += 1

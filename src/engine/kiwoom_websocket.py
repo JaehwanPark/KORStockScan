@@ -5827,6 +5827,53 @@ class KiwoomWSManager:
             snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
         return self._finish_snapshot(snapshot) if snapshot else {}
 
+    def adopt_zero_base_probe_target(self, payload):
+        """Transfer a validated exact probe subscription without REG/REMOVE.
+
+        This changes local collection custody only. Executable fields are filled
+        by subsequent REAL packets, never copied from an observation snapshot.
+        """
+        from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid
+        expected = (payload or {}).get("native_observation")
+        if not (payload or {}).get("zero_base_pending_db") or not observation_binding_valid(expected):
+            return False
+        code = str(payload.get("code") or "")
+        route = {"nxt_only": ("NXT", code + "_NX"),
+                 "krx_nxt_integrated": ("SOR", code + "_AL")}.get(payload.get("market_data_route"))
+        event = expected["snapshot"][0]
+        lease_id = payload.get("ws_handoff_id")
+        if (len(code) != 6 or not code.isdigit() or not route or not lease_id
+                or payload.get("physical_probe_lease_id") != lease_id
+                or event.get("symbol") != code or event.get("venue") != route[0]
+                or event.get("source_item") != route[1]):
+            return False
+        item = route[1]
+        with self.lock:
+            epoch = self._market_data_transport_epoch
+            lease = self._exact_probe_item_leases.get(item)
+            if (self._stop_event.is_set() or self.websocket is None or not self._session_ready.is_set()
+                    or not observation_binding_valid(expected)
+                    or event.get("native_epoch") != epoch
+                    or code not in self.subscribed_codes
+                    or item not in self._registered_items_by_code.get(code, ())
+                    or self._registered_item_epochs.get(item) != epoch
+                    or not {"0B", "0D"}.issubset(self._registered_item_types.get(item, ()))
+                    or self._runtime_primary_items_by_code.get(code) not in (None, item)
+                    or any(other != item and other not in self._micro_reversion_observation_only_items
+                           for other in self._registered_items_by_code.get(code, ()))
+                    or (lease is not None and (lease.get("lease_id") != lease_id
+                        or lease.get("epoch") != epoch or lease.get("removing")))):
+                return False
+            if lease is not None:
+                lease["adopted"] = True
+            self._micro_reversion_observation_only_items.discard(item)
+            self._micro_reversion_observation_only_codes.discard(code)
+            self._runtime_primary_items_by_code[code] = item
+            self._implicit_runtime_route_codes.discard(code)
+            if item.endswith("_AL"):
+                self._runtime_integrated_route_active = True
+        return True
+
     def adopt_main_fixed_watch_target(self, target, *, now_ts):
         """Transfer an already registered exact item to Main without wire churn.
 

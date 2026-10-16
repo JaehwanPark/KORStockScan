@@ -3904,6 +3904,124 @@ def _exact_probe_manager():
     return manager
 
 
+def _zero_base_native_transfer(route="nxt_only"):
+    import time
+    from src.engine.scalping import reversal_source_diagnostics as D
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    manager._market_data_transport_epoch = 8
+    code = "010140"
+    venue, suffix = ("NXT", "_NX") if route == "nxt_only" else ("SOR", "_AL")
+    item = code + suffix
+    manager.subscribed_codes = {code}
+    manager._registered_items_by_code[code] = (item,)
+    manager._registered_item_epochs[item] = 8
+    manager._registered_item_types[item] = ("0B", "0D")
+    manager._exact_probe_item_leases[item] = {"lease_id": "lease-1", "epoch": 8}
+    manager._micro_reversion_observation_only_items.add(item)
+    manager._micro_reversion_observation_only_codes.add(code)
+    manager._ensure_target_defaults(item, store=manager._micro_reversion_observation_route_data)["curr"] = 99999
+    now = time.time()
+    expected = dict(snapshot=({"symbol": code, "venue": venue, "source_item": item,
+                              "native_epoch": 8, "epoch": now}, {}),
+                    deadline_epoch=now + 5, deadline_perf=time.perf_counter() + 5,
+                    observer_pid=os.getpid(), observer_start_ticks=D._PROCESS_START_TICKS)
+    payload = dict(code=code, market_data_route=route, ws_handoff_id="lease-1",
+                   physical_probe_lease_id="lease-1", native_observation=expected,
+                   zero_base_pending_db=True)
+    return manager, payload, item
+
+
+@pytest.mark.parametrize("route", ["nxt_only", "krx_nxt_integrated"])
+@pytest.mark.parametrize("borrowed", [False, True])
+def test_zero_base_native_transfer_keeps_exact_registration_and_cleanup(route, borrowed):
+    manager, payload, item = _zero_base_native_transfer(route)
+    if borrowed:
+        manager._exact_probe_item_leases.clear()
+    other = "010140" if item.endswith("_NX") else "010140_NX"
+    manager._registered_items_by_code["010140"] += (other,)
+    manager._registered_item_epochs[other] = 8
+    manager._registered_item_types[other] = ("0B", "0D")
+    manager._micro_reversion_observation_only_items.add(other)
+    assert manager.adopt_zero_base_probe_target(payload)
+    assert manager._runtime_primary_items_by_code["010140"] == item
+    assert item not in manager._micro_reversion_observation_only_items
+    assert other in manager._micro_reversion_observation_only_items
+    assert manager.get_latest_data("010140") == {}  # No observation-to-executable copy.
+    assert manager.get_exact_item_data("010140", item) == {}
+    assert asyncio.run(manager._release_exact_probe_item(item, "lease-1"))
+    assert manager._registered_item_epochs[item] == 8
+    assert manager._registered_item_types[item] == ("0B", "0D")
+    assert manager._registered_item_epochs[other] == 8
+    assert manager.websocket.sent == []
+
+
+@pytest.mark.parametrize("gap", [
+    "expired", "wrong_pid", "route", "symbol", "epoch", "registered_epoch", "missing_0d",
+    "lease", "lease_epoch", "physical_lease", "removing", "not_ready", "stopped", "primary_conflict",
+    "other_runtime_item", "unregistered",
+])
+def test_zero_base_native_transfer_rejects_invalid_original_binding(gap):
+    import time
+    manager, payload, item = _zero_base_native_transfer()
+    expected = payload["native_observation"]
+    if gap == "expired":
+        expected["deadline_perf"] = time.perf_counter() - 1
+    elif gap == "wrong_pid":
+        expected["observer_pid"] += 1
+    elif gap == "route":
+        payload["market_data_route"] = "krx_nxt_integrated"
+    elif gap == "symbol":
+        expected["snapshot"][0]["symbol"] = "005930"
+    elif gap == "epoch":
+        manager._market_data_transport_epoch = 9
+    elif gap == "registered_epoch":
+        manager._registered_item_epochs[item] = 7
+    elif gap == "missing_0d":
+        manager._registered_item_types[item] = ("0B",)
+    elif gap == "lease":
+        manager._exact_probe_item_leases[item]["lease_id"] = "other"
+    elif gap == "lease_epoch":
+        manager._exact_probe_item_leases[item]["epoch"] = 7
+    elif gap == "physical_lease":
+        payload["physical_probe_lease_id"] = "different-physical-lease"
+    elif gap == "removing":
+        manager._exact_probe_item_leases[item]["removing"] = True
+    elif gap == "not_ready":
+        manager._session_ready.clear()
+    elif gap == "stopped":
+        manager._stop_event.set()
+    elif gap == "primary_conflict":
+        manager._runtime_primary_items_by_code["010140"] = "010140_AL"
+    elif gap == "other_runtime_item":
+        manager._registered_items_by_code["010140"] += ("010140_AL",)
+    elif gap == "unregistered":
+        manager._registered_items_by_code["010140"] = ()
+    assert not manager.adopt_zero_base_probe_target(payload)
+    assert item in manager._micro_reversion_observation_only_items
+    assert not manager._exact_probe_item_leases[item].get("adopted")
+    assert manager.websocket.sent == []
+
+
+@pytest.mark.parametrize("route", ["nxt_only", "krx_nxt_integrated"])
+def test_zero_base_native_transfer_uses_only_later_real_packets(route):
+    manager, payload, item = _zero_base_native_transfer(route)
+    assert manager.adopt_zero_base_probe_target(payload)
+    before_epoch = manager._market_data_transport_epoch
+    asyncio.run(manager._handle_message(json.dumps({
+        "trnm": "REAL", "data": [
+            {"type": "0B", "item": item, "values": {"10": "10000", "15": "+1", "228": "101.5"}},
+            {"type": "0D", "item": item, "values": {"21": "133500", "41": "10010", "51": "9990", "61": "10", "71": "10"}},
+        ],
+    })))
+    snapshot = manager.get_exact_item_data("010140", item)
+    assert snapshot["curr"] == 10000  # Observation-only price was 99999.
+    assert snapshot["received_types"] == {"0B", "0D"}
+    assert manager._market_data_transport_epoch == before_epoch
+    assert manager.websocket.sent == []
+
+
 def test_exact_probe_adds_nx_preserves_al_and_removes_only_owned_item():
     manager = _exact_probe_manager()
     async def scenario():

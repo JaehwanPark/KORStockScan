@@ -1,5 +1,6 @@
 """Zero-base Main handoff must commit only a matching attached generation."""
 
+import json
 import time
 import threading
 from concurrent.futures import Future
@@ -100,6 +101,236 @@ def test_enter_now_commits_only_matching_attached_watching_row(monkeypatch):
     assert "zero_base_pending_db" not in targets[0]
     assert main.handle_zero_base_machine_enter(_result()) is False
     assert len(rows) == 1
+
+
+def _native_main_handoff(monkeypatch, route="krx_nxt_integrated"):
+    import os
+    from src.engine.kiwoom_websocket import KiwoomWSManager
+    from src.engine.scalping import reversal_source_diagnostics as D
+    receipt_fn = main._zero_base_attach_receipt
+    rows, targets = _prepare(monkeypatch)
+    monkeypatch.setattr(main, "_zero_base_attach_receipt", receipt_fn)
+    result = _result()
+    result["claim"]["route"] = result["candidate"]["route"] = route
+    venue, suffix = ("NXT", "_NX") if route == "nxt_only" else ("SOR", "_AL")
+    if route == "nxt_only":
+        monkeypatch.setattr(main, "scalping_session_venue_provenance", lambda _epoch: {
+            "market_session_bucket": "krx_like_premarket", "market_session_regime": "krx_like_premarket"})
+    code = result["claim"]["code"]
+    item = code + suffix
+    now = time.time()
+    expected = dict(snapshot=({"symbol": code, "venue": venue, "source_item": item,
+                              "native_epoch": 88, "epoch": now}, {}),
+                    deadline_epoch=now + 5, deadline_perf=time.perf_counter() + 5,
+                    observer_pid=os.getpid(), observer_start_ticks=D._PROCESS_START_TICKS)
+    result.update(native_observation=expected, ws_handoff_id="lease-native",
+                  physical_probe_lease_id="lease-native")
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = SimpleNamespace()  # Local ownership transfer sends no packets.
+    manager._session_ready.set()
+    manager._market_data_transport_epoch = 88
+    manager.subscribed_codes = {code}
+    manager._registered_items_by_code[code] = (item,)
+    manager._registered_item_epochs[item] = 88
+    manager._registered_item_types[item] = ("0B", "0D")
+    manager._exact_probe_item_leases[item] = {"lease_id": "lease-native", "epoch": 88}
+    manager._micro_reversion_observation_only_codes.add(code)
+    manager._micro_reversion_observation_only_items.add(item)
+    monkeypatch.setattr(main, "WS_MANAGER", manager)
+    monkeypatch.setattr(main, "_ZERO_BASE_HANDOFFS", {
+        "lease-native": {"event": threading.Event(), "outcome": None}})
+    monkeypatch.setattr(main, "_ZERO_BASE_MAIN_PENDING", {"lease-native"})
+    monkeypatch.setattr(main, "_resolve_stock_marcap", lambda *_args: 0)
+    monkeypatch.setattr(main, "_scanner_identity_guard", lambda *_args: (True, {}))
+    monkeypatch.setattr(main, "_log_scanner_runtime_target_attach", lambda *_args, **_kwargs: None)
+    events = []
+    def publish(topic, payload):
+        events.append((topic, payload))
+        if topic == "COMMAND_WS_REG":
+            # Deterministically enter the actual REMOVE-before-REG boundary.
+            manager._registered_item_epochs.pop(item, None)
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(publish=publish))
+    monkeypatch.setattr(main, "emit_pipeline_event", lambda *_args, **kw: events.append(("receipt", kw["fields"])))
+    claims = []
+    monkeypatch.setattr(D, "claim_expected_snapshot", lambda p: (claims.append(p) or {"token": "native-once"}))
+    return rows, targets, result, manager, events, claims
+
+
+@pytest.mark.parametrize("route", ["nxt_only", "krx_nxt_integrated"])
+def test_native_main_handoff_commits_without_subscription_gap(monkeypatch, route):
+    import asyncio
+    rows, targets, result, manager, events, claims = _native_main_handoff(monkeypatch, route)
+    assert main.handle_zero_base_machine_enter(result)
+    assert rows[1].status == "WATCHING"
+    assert targets[0]["_continuous_reversal_pending_claim"] == {"token": "native-once"}
+    assert targets[0]["_entry_native_deadline_binding"]["deadline_perf"] == result["native_observation"]["deadline_perf"]
+    assert "zero_base_pending_db" not in targets[0]
+    assert len(claims) == 1
+    assert not any(topic == "COMMAND_WS_REG" for topic, _ in events)
+    receipt = next(f for topic, f in reversed(events) if topic == "receipt")
+    detail = json.loads(receipt["zero_base_finalize_receipt"])
+    assert receipt["zero_base_attach_outcome"] == "attached"
+    assert detail["reason"] == "watching_finalized" and detail["record_id"] == 1
+    assert detail["physical_probe_lease_id"] == "lease-native"
+    item = result["native_observation"]["snapshot"][0]["source_item"]
+    assert asyncio.run(manager._release_exact_probe_item(item, "lease-native"))
+    assert manager._registered_item_epochs[item] == 88
+
+
+def test_native_handoff_failed_claim_expires_exact_row_and_preserves_reason(monkeypatch):
+    from src.engine.scalping import reversal_source_diagnostics as D
+    rows, targets, _result_value, _manager, events, _claims = _native_main_handoff(monkeypatch)
+    monkeypatch.setattr(D, "claim_expected_snapshot", lambda _p: None)
+    assert not main.handle_zero_base_machine_enter(_result_value)
+    assert rows[1].status == "EXPIRED" and targets == []
+    receipt = next(f for topic, f in reversed(events) if topic == "receipt")
+    detail = json.loads(receipt["zero_base_finalize_receipt"])
+    assert detail["reason"] == "expected_native_claim_unavailable"
+    assert not detail["finalized"]
+    assert detail["rollback_receipt"]["reason"] == "probe_expired"
+    assert detail["rollback_receipt"]["finalized"]
+    assert receipt["zero_base_attach_outcome"] == "rejected"
+
+
+def test_native_handoff_adoption_failure_expires_without_attaching(monkeypatch):
+    rows, targets, result, manager, events, claims = _native_main_handoff(monkeypatch)
+    monkeypatch.setattr(manager, "adopt_zero_base_probe_target", lambda _p: False)
+    assert not main.handle_zero_base_machine_enter(result)
+    assert rows[1].status == "EXPIRED" and not targets and not claims
+    assert not any(topic == "COMMAND_WS_REG" for topic, _ in events)
+    receipt = next(f for topic, f in reversed(events) if topic == "receipt")
+    detail = json.loads(receipt["zero_base_finalize_receipt"])
+    assert detail["reason"] == "probe_expired"
+    assert detail["admission_failure_reason"] == "native_subscription_adoption_failed"
+    assert receipt["zero_base_attach_reason"] == "native_subscription_adoption_failed"
+
+
+def test_blocking_finalization_emits_original_inner_receipt(monkeypatch):
+    receipt_fn = main._zero_base_attach_receipt
+    rows, targets = _prepare(monkeypatch)
+    monkeypatch.setattr(main, "_zero_base_attach_receipt", receipt_fn)
+    events = []
+    monkeypatch.setattr(main, "emit_pipeline_event", lambda *_a, **kw: events.append(kw["fields"]))
+    def attach(payload, **_kw):
+        targets.append(dict(id=payload["record_id"], code=payload["code"], status="WATCHING"))
+        return True
+    monkeypatch.setattr(main, "_apply_scalping_scanner_promoted_target", attach)
+    assert main.handle_zero_base_machine_enter(_result())
+    detail = json.loads(events[-1]["zero_base_finalize_receipt"])
+    assert detail["reason"] == "watching_finalized"
+    assert detail["record_id"] == rows[1].id
+
+
+def test_native_handoff_db_failure_preserves_original_error_and_exact_cleanup(monkeypatch):
+    from src.engine.scalping import reversal_current_backend as B
+    rows, targets, result, _manager, events, claims = _native_main_handoff(monkeypatch)
+    sessions = []
+    class FailedFinalize(_Session):
+        def __exit__(self, *_args):
+            if len(sessions) == 2:
+                rows[1].status = "PROBE_READY"  # SQL rollback preserves the original row.
+                raise OSError("commit failed")
+            return False
+    def session():
+        sessions.append(1)
+        return FailedFinalize(rows)
+    monkeypatch.setattr(main, "DB", SimpleNamespace(get_session=session))
+    closed = []
+    monkeypatch.setattr(B, "acknowledge_any", lambda claim, **kw: closed.append((claim, kw)))
+    assert not main.handle_zero_base_machine_enter(result)
+    assert rows[1].status == "EXPIRED" and targets == []
+    assert len(claims) == 1
+    assert closed == [({"token": "native-once"}, {"status": "main_attach_commit_failed"})]
+    receipt = next(f for topic, f in reversed(events) if topic == "receipt")
+    detail = json.loads(receipt["zero_base_finalize_receipt"])
+    assert detail["reason"] == "db_finalize_exception" and detail["exception_type"] == "OSError"
+    assert detail["rollback_receipt"]["reason"] == "probe_expired"
+    assert detail["physical_probe_lease_id"] == "lease-native"
+
+
+def test_provisional_rollback_is_idempotent_and_retains_first_failure(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    rows[1] = _Record(stock_code="123456", status="PROBE_READY", scanner_source_signature="ZERO_BASE_DISCOVERY:a")
+    targets.append(dict(id=1, code="123456", status="WATCHING", zero_base_pending_db=True))
+    events = []
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(publish=lambda *args: events.append(args)))
+    payload = dict(record_id=1, code="123456", zero_base_pending_db=True,
+                   _zero_base_ws_adopted=True, market_data_route="krx_nxt_integrated",
+                   _zero_base_finalize_receipt=dict(finalized=False, attached=True, reason="expected_native_claim_unavailable"))
+    main._zero_base_rollback_uncommitted_target(payload)
+    first = json.dumps(payload["_zero_base_finalize_receipt"], sort_keys=True)
+    main._zero_base_rollback_uncommitted_target(payload)
+    assert rows[1].status == "EXPIRED" and targets == [] and len(events) == 1
+    assert json.dumps(payload["_zero_base_finalize_receipt"], sort_keys=True) == first
+
+
+@pytest.mark.parametrize("status,pending", [("HOLDING", False), ("WATCHING", False)])
+def test_provisional_rollback_keeps_committed_or_holding_target(monkeypatch, status, pending):
+    rows, targets = _prepare(monkeypatch)
+    rows[1] = _Record(stock_code="123456", status=status, scanner_source_signature="ZERO_BASE_DISCOVERY:a")
+    target = dict(id=1, code="123456", status=status, zero_base_pending_db=pending)
+    targets.append(target)
+    events = []
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(publish=lambda *args: events.append(args)))
+    main._zero_base_rollback_uncommitted_target(dict(record_id=1, code="123456", zero_base_pending_db=True))
+    assert targets == [target] and rows[1].status == status and events == []
+
+
+@pytest.mark.parametrize("claim_valid", [True, False])
+def test_native_scheduler_inbox_handoff_keeps_lease_and_original_receipt(monkeypatch, claim_valid):
+    from src.engine.scalping import reversal_source_diagnostics as D
+    rows, targets, result, manager, events, claims = _native_main_handoff(monkeypatch)
+    payload = dict(
+        code="123456", name="TEST", record_id=1, strategy="SCALPING", status="WATCHING",
+        position_tag="SCANNER", buy_price=10000, added_time=time.time(),
+        source_signature="ZERO_BASE_DISCOVERY:" + "b" * 64,
+        scanner_promotion_id="ZBPROM-123456-inbox", scanner_promotion_emitted_epoch=time.time(),
+        market_data_route="krx_nxt_integrated", effective_venue="KRX", broker_route="SOR",
+        native_observation=result["native_observation"], ws_handoff_id="lease-native",
+        physical_probe_lease_id="lease-native", zero_base_pending_db=True)
+    rows[1] = _Record(stock_code="123456", status="PROBE_READY", scanner_source_signature=payload["source_signature"])
+    queue = [SimpleNamespace(payload=payload, enqueued_epoch=time.time())]
+    def pop():
+        if queue:
+            return queue.pop(0)
+        raise Empty
+    monkeypatch.setattr(main, "_SCANNER_PROMOTION_INBOX", SimpleNamespace(get_nowait=pop))
+    monkeypatch.setattr(main, "_scanner_scheduler_coalesce_duplicate_inbox", lambda *_a, **_kw: None)
+    monkeypatch.setattr(main, "_scanner_scheduler_reconcile_active_targets", lambda *_a, **_kw: None)
+    monkeypatch.setattr(main, "_register_scanner_scheduler_generation", lambda *_a, **_kw: None)
+    monkeypatch.setattr(main, "_emit_scanner_scheduler_event", lambda *_a, **_kw: None)
+    if not claim_valid:
+        monkeypatch.setattr(D, "claim_expected_snapshot", lambda _p: None)
+    summary = main._drain_scanner_promotion_inbox(SimpleNamespace(), max_items=1)
+    assert summary["applied"] == int(claim_valid)
+    assert rows[1].status == ("WATCHING" if claim_valid else "EXPIRED")
+    assert bool(targets) == claim_valid
+    assert len(claims) == int(claim_valid)
+    assert not any(topic == "COMMAND_WS_REG" for topic, _ in events)
+    receipt = next(f for topic, f in reversed(events) if topic == "receipt")
+    detail = json.loads(receipt["zero_base_finalize_receipt"])
+    assert detail["reason"] == ("watching_finalized" if claim_valid else "expected_native_claim_unavailable")
+    assert detail["physical_probe_lease_id"] == "lease-native"
+    assert manager._registered_item_epochs["123456_AL"] == 88
+
+
+@pytest.mark.parametrize("fault", ["expired", "wrong_epoch", "conflict", "manual", "capacity"])
+def test_native_main_handoff_preserves_original_rejection_guards(monkeypatch, fault):
+    rows, targets, result, manager, events, claims = _native_main_handoff(monkeypatch)
+    if fault == "expired":
+        result["native_observation"]["deadline_perf"] = time.perf_counter() - 1
+    elif fault == "wrong_epoch":
+        manager._market_data_transport_epoch += 1
+    elif fault == "conflict":
+        monkeypatch.setattr(main, "_zero_base_active_conflict", lambda _code: True)
+    elif fault == "manual":
+        monkeypatch.setattr(main, "evaluate_main_bot_control_exclusion", lambda _code: SimpleNamespace(excluded=True))
+    elif fault == "capacity":
+        monkeypatch.setattr(main, "_scalping_attach_capacity_decision", lambda *_a, **_kw: (False, [], {}))
+    assert not main.handle_zero_base_machine_enter(result)
+    assert rows == {} and targets == [] and claims == []
+    assert not manager._exact_probe_item_leases["123456_AL"].get("adopted")
+    assert not any(topic == "COMMAND_WS_REG" for topic, _ in events)
 
 
 def test_invalid_db_admission_does_not_consume_native_claim(monkeypatch):
