@@ -106,6 +106,27 @@ def freeze_replay_trade(trade, root, output, sources):
         votes=assemble_votes(root,output,source,sources))
 
 
+def _same_completed_position(position, trade):
+    """Match the native completed source ID, separate from AI's record: key."""
+    identity = _trade_id(trade)
+    if not identity or position.get('position_key') != identity or position.get('owner') != 'main':
+        return False
+    reference = position.get('source_reference')
+    if reference is not None and (not isinstance(reference, dict) or reference.get('id') != identity):
+        return False
+    symbol = position.get('symbol')
+    if symbol is not None and str(symbol) != str(trade.get('stock_code') or trade.get('code') or ''):
+        return False
+    # Closed historical Main positions may have no current execution authority.
+    # Preserve that flag exactly; diagnostic identity is not an activation gate.
+    if 'automatic_management_allowed' in position and (
+        type(position['automatic_management_allowed']) is not bool
+        or position['automatic_management_allowed'] is not (trade.get('main_automatic_management_allowed') is True)
+    ):
+        return False
+    return True
+
+
 def summarize_frozen_holding_path_votes(assembly, partitions, *, model, clean_start):
     """Use the same strict admission and replay on sealed partition inputs."""
     from src.engine.lifecycle import research_storage as storage
@@ -136,13 +157,16 @@ def summarize_frozen_holding_path_votes(assembly, partitions, *, model, clean_st
                     raise ValueError('holding_path_frozen_trade_invalid')
                 frozen_count+=1;frozen=rows[0];trade=frozen['trade']
                 reasons=_strict_completed_reasons(trade,clean_start=clean_start)
-                if position['position_key']!='main:'+_trade_id(trade):
+                if not _same_completed_position(position,trade):
                     reasons.append('frozen_vote_position_identity_mismatch')
                 if not _is_valid_completed_trade(trade):reasons.append('completed_trade_invalid')
                 if frozen.get('source_gap'):reasons.append(frozen['source_gap'])
                 if reasons:
                     gaps[_trade_id(trade)]=sorted(set(reasons));continue
                 vote_ref=frozen['votes']
+                if (vote_ref.get('status')=='source_bound'
+                    and vote_ref.get('original_position_key')!='record:'+_trade_id(trade)):
+                    gaps[_trade_id(trade)]=['frozen_vote_source_identity_mismatch'];continue
                 try:
                     trade=dict(trade,buy_fill_legs=bounded_rows(frozen['buys_ref']),
                         timeline=bounded_rows(frozen['signals_ref']))

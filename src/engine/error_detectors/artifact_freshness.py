@@ -757,6 +757,25 @@ def _quantity_current_observation(current_path, target_date, read):
     return result
 
 
+def _quantity_data_mount_generation(root):
+    """Pin the shared data directory without treating child writes as a move."""
+    logical = root / 'data'
+    try:
+        resolved = logical.resolve()
+    except RuntimeError as exc:
+        raise ValueError('quantity_data_mount_invalid') from exc
+    def identity(path):
+        try:
+            observed = path.lstat()
+        except FileNotFoundError:
+            return None
+        result = (observed.st_dev, observed.st_ino, observed.st_mode)
+        if stat.S_ISLNK(observed.st_mode):
+            result += (observed.st_mtime_ns, observed.st_ctime_ns)
+        return result
+    return resolved, (identity(logical), identity(resolved))
+
+
 def _quantity_completion_overlay_observation(root, source_date, census, facts, read):
     """Authenticate bounded terminal observations separately from entry facts."""
     fields = {'completion_overlay_generations', 'completion_overlay_summary',
@@ -784,8 +803,11 @@ def _quantity_completion_overlay_observation(root, source_date, census, facts, r
     )
     from src.engine.scalping.initial_quantity_policy import _timestamp
     from src.engine.sniper_position_tags import normalize_strategy
+    data_root, data_generation = _quantity_data_mount_generation(root)
     terminals = verify_completion_overlay_generations(
-        generations, data_dir=root / 'data', read=read)
+        generations, data_dir=data_root, read=read)
+    if _quantity_data_mount_generation(root) != (data_root, data_generation):
+        raise ValueError('quantity_data_mount_changed_during_read')
     native_by_day = {
         day: {str(row['recommendation_id']): row for row in rows}
         for day, rows in terminals.items()

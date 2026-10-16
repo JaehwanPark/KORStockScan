@@ -539,6 +539,43 @@ def test_quantity_completion_observer_preserves_original_holding_and_null_econom
     assert row['profit_rate'] is row['realized_pnl_krw'] is None
 
 
+@pytest.mark.parametrize('mutation', ['none', 'foreign_root', 'switch_during_read', 'replace_same_link', 'child_write'])
+def test_quantity_completion_observer_pins_actual_shared_data_directory(tmp_path, monkeypatch, mutation):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    verified = cache.verify_completion_overlay_generations
+    native = tmp_path / 'canonical/data'
+    foreign = tmp_path / 'foreign/data'
+    native.mkdir(parents=True)
+    foreign.mkdir(parents=True)
+    release = tmp_path / 'release'
+    release.mkdir()
+    alias = release / 'data'
+    alias.symlink_to(foreign if mutation == 'foreign_root' else native, target_is_directory=True)
+    def bound(generations, *, data_dir, read):
+        # Native receipts name the canonical source directory, regardless of
+        # which immutable release mounts it. A foreign directory stays invalid.
+        if data_dir != native:
+            raise ValueError('quantity_completion_reference_invalid')
+        result = verified(generations, data_dir=data_dir, read=read)
+        if mutation in {'switch_during_read', 'replace_same_link'}:
+            alias.unlink()
+            alias.symlink_to(foreign if mutation == 'switch_during_read' else native,
+                             target_is_directory=True)
+        elif mutation == 'child_write':
+            (native / 'unrelated.json').write_text('{}')
+        return result
+    monkeypatch.setattr(cache, 'verify_completion_overlay_generations', bound)
+    if mutation in {'none', 'child_write'}:
+        observed = detector._quantity_completion_overlay_observation(
+            release, '2026-09-28', census, [row], reader)
+        assert observed['postclose_as_of_completed_population_count'] == 1
+    else:
+        with pytest.raises(ValueError, match='quantity_(completion_reference_invalid|data_mount_changed_during_read)'):
+            detector._quantity_completion_overlay_observation(release, '2026-09-28', census, [row], reader)
+
+
 @pytest.mark.parametrize('field', ['native_terminal_observation_count',
                                   'applicable_terminal_record_count', 'original_fact_status_counts'])
 def test_quantity_completion_observer_rejects_boolean_census_count(tmp_path, monkeypatch, field):

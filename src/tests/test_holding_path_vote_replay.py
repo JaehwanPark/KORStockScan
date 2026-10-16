@@ -769,18 +769,26 @@ def test_partitioned_postclose_replays_frozen_add_inputs_with_null_economics(tmp
         session_key='2026-10-16',position_key='record:7',buy_fill_identity=BUY_IDENTITY,
         signal_id='add-1',signal_at=at+20,policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[(path,market)]),
         decision='PASS',vote_count=2))
-    trade=dict(id=7,rec_date='2026-10-16',completion_observed_date='2026-10-16',
+    trade=dict(id=7,code='005930',main_automatic_management_allowed=False,
+        rec_date='2026-10-16',completion_observed_date='2026-10-16',
         status='COMPLETED',strategy='SCALPING',profit_rate=.2,strict_completion_status='eligible',
         strict_completion_reasons=[],entry_mode='normal',terminal_population_scope='real_record_bound',
         sell_quantity_conserved=True,terminal_profit_rate_reconciled=True,
         realized_pnl_krw_source='broker_actual_fee_reconciled',realized_pnl_krw=100,
         broker_actual_cost_observed=True,broker_actual_fees_taxes_krw=20,
         exact_sell_fill_time='2026-10-16T01:01:00+00:00')
-    frozen=dict(schema='holding_path_frozen_trade_v1',trade=trade,source_gap=None,
-        signals_ref=storage.write_tree(tmp_path,[signal]),buys_ref=storage.write_tree(tmp_path,legs),
-        votes=votes)
-    partition=dict(positions=[dict(position_key='main:7',evidence_kind='actual_completed',
-        holding_path_diagnostic_ref=storage.write_tree(tmp_path,[frozen]))])
+    # Exercise the actual producer contracts instead of a handwritten main:7
+    # partition that mirrored the consumer's old incorrect expectation.
+    from src.engine.scalping.holding_path_vote_replay import freeze_replay_trade
+    from src.engine.scalping.universal_trailing_replay import completed_sources
+    native_trade=dict(trade,timeline=[signal],buy_fill_legs=legs)
+    frozen=freeze_replay_trade(native_trade,tmp_path,tmp_path,{})
+    frozen['votes']=votes
+    positions,_=completed_sources([native_trade])
+    assert positions[0]['position_key']=='7' and positions[0]['owner']=='main'
+    positions[0].update(symbol='005930',source_reference={'id':'7'},
+        holding_path_diagnostic_ref=storage.write_tree(tmp_path,[frozen]))
+    partition=dict(positions=positions)
     partition['artifact_sha256']=digest(partition);_atomic(tmp_path/'part.json',partition)
     refs=storage.write_tree(tmp_path,[dict(path='part.json')])
     if input_state=='changed_after_seal':
@@ -1026,3 +1034,54 @@ def test_retired_historical_vote_is_read_without_new_runtime_authority(tmp_path)
     retired['prompt_version']=PATH_PROMPT_VERSION
     path.write_text(json.dumps(retired)+'\n')
     with pytest.raises(ValueError,match='contract_corrupt'):list(iter_path_events_file(path,'record:7'))
+
+
+@pytest.mark.parametrize('fault', ['none','main_prefix','record_prefix','cf_prefix','alternative_prefix','different_id',
+    'manual_owner','retired_owner','missing_owner','reference_id','symbol','management_conflict','management_type',
+    'wrong_date','cost_gap','non_main_trade','vote_source_id'])
+def test_frozen_completed_native_identity_preserves_main_source_and_exclusions(tmp_path,fault):
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.scalping.universal_trailing_replay import completed_sources
+    from src.engine.scalping.holding_path_vote_replay import freeze_replay_trade,summarize_frozen_holding_path_votes
+    from src.engine.scalping.pre_submit_delay_initial_policy import digest,_atomic
+    trade=dict(id=49267,code='034020',main_automatic_management_allowed=False,
+        rec_date='2026-10-16',completion_observed_date='2026-10-16',status='COMPLETED',strategy='SCALPING',
+        profit_rate=.2,strict_completion_status='eligible',strict_completion_reasons=[],entry_mode='normal',
+        terminal_population_scope='real_record_bound',sell_quantity_conserved=True,terminal_profit_rate_reconciled=True,
+        realized_pnl_krw_source='broker_actual_fee_reconciled',realized_pnl_krw=100,
+        broker_actual_cost_observed=True,broker_actual_fees_taxes_krw=20,
+        exact_sell_fill_time='2026-10-16T10:01:00+09:00')
+    position=completed_sources([trade])[0][0]
+    position.update(symbol='034020',source_reference=dict(id='49267'))
+    if fault in {'main_prefix','record_prefix','cf_prefix','alternative_prefix'}:
+        position['position_key']=fault.removesuffix('_prefix')+':49267'
+    elif fault=='different_id':position['position_key']='49268'
+    elif fault=='manual_owner':position['owner']='manual_operator'
+    elif fault=='retired_owner':position['owner']='episode'
+    elif fault=='missing_owner':position.pop('owner')
+    elif fault=='reference_id':position['source_reference']['id']='49268'
+    elif fault=='symbol':position['symbol']='005930'
+    elif fault=='management_conflict':position['automatic_management_allowed']=True
+    elif fault=='management_type':position['automatic_management_allowed']='false'
+    elif fault=='wrong_date':trade['rec_date']='2026-06-04'
+    elif fault=='cost_gap':trade['broker_actual_cost_observed']=False
+    elif fault=='non_main_trade':trade['strategy']='SWING'
+    frozen=freeze_replay_trade(trade,tmp_path,tmp_path,{})
+    if fault=='vote_source_id':
+        frozen['votes']=dict(status='source_bound',original_position_key='record:49268')
+    position['holding_path_diagnostic_ref']=storage.write_tree(tmp_path,[frozen])
+    part=dict(positions=[position]);part['artifact_sha256']=digest(part);_atomic(tmp_path/'position.json',part)
+    result=summarize_frozen_holding_path_votes(tmp_path,storage.write_tree(tmp_path,[dict(path='position.json')]),
+        model='gpt-5.4-nano',clean_start='2026-06-05')
+    assert result['strict_population_count']==int(fault=='none')
+    assert result['selected_policy'] is None and result['allowed_runtime_apply'] is False
+    assert result['cost_after_paired_ev_krw'] is None
+    gaps=result['partition_excluded_by_position_id'].get('49267',[])
+    if fault=='none':
+        assert result['partition_excluded_by_position_id']=={}
+        assert result['excluded_by_position_id']['49267']==['vote_ledger_missing','path_signal_receipt_missing']
+    elif fault=='wrong_date':assert 'outside_clean_entry_window' in gaps
+    elif fault=='cost_gap':assert 'source_gap_broker_actual_cost_missing' in gaps
+    elif fault=='non_main_trade':assert 'completed_trade_invalid' in gaps
+    elif fault=='vote_source_id':assert gaps==['frozen_vote_source_identity_mismatch']
+    else:assert gaps==['frozen_vote_position_identity_mismatch']
