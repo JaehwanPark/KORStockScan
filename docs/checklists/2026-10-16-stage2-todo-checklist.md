@@ -260,3 +260,6 @@ selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한�
   - 사용자 승인: 구현→리뷰→수정보완 반복→배포·재기동. 현재 정책·PREOPEN·custody·hard safety는 보존한다.
   - Acceptance: exact source/hash 및0초 우선순위 회귀 PASS, 원 오류와 과거 incident 보존, C01–C25 기존 owner 연결, 원천/감시와 실제 주문/경제성 분리, exact candidate pre-drain handoff, 새 PID 소비와 bounded observer, 최소 영향 재계산의 source/target/native terminal. 자연 v4 후행 관측·경제성은 기존 family owner로 명시 인계한다.
   - 근거: [구현 리뷰](../audits/pre-submit-semantic-implementation-review-2026-10-16.md), [의미감시 계획](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md).
+  - 17:25 수용: 코드45fa0470e, PID167546/start20296002, ordered complete17:24:10·정책 소비 PASS. 현재 원천3종 complete/신규 결손0/flush error0, 현재 준비10cell 및 격리 재계산20cell 모두0초. 신규 delay event0이므로 v4 자연 완주 미관측. 원67건과 실제 stale/source 경고는 보존한다.
+  - 잔여 실행: 자연 v4 intent→5 horizon 및10/16 정규 장후→10/19 준비/소비를 DirectFamilyPreopenPolicyHandoff에 연결한다. Due: 2026-10-16; Slot: POSTCLOSE; TimeWindow: 정규20:05 이후 장후 및 다음 운영일 PREOPEN 인계; Track: runtime-source-contract. 과거15일 격리 재계산은 완료(267건, UNKNOWN29,195cell)했으며 정규16일 terminal을 대체하지 않는다.
+  - 기존 경고 수용은 HoldingProfitExitSourceContractRepair/NonfixedDispatchReadinessReview1012/OperationalLogRetentionRepair1016/MainMarketWeaknessPostcloseObservation1008의 원 Acceptance를 유지한다. 감시 구현·시험 통과를 해당 원천·경제성 완료로 사용하지 않는다.

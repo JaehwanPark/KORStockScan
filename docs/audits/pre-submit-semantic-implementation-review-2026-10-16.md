@@ -2,7 +2,7 @@
 
 ## 범위와 권한
 
-사용자 승인에 따라 현재 selected6c97e83f1에서 격리 구현한다. 현재 정책/PREOPEN/수동·퇴역 custody와 안전 guard를 보존하고 정확한 코드 인계 후 ordered 배포한다. 원 실패 배포·기존 source gap·원장 bytes를 보존한다.
+구현 시작 기준은 selected6c97e83f1이며 사용자 승인에 따라 격리 구현했다. 현재 정책/PREOPEN/수동·퇴역 custody와 안전 guard를 보존하고 정확한 코드 인계 후 ordered 배포한다. 원 실패 배포·기존 source gap·원장 bytes를 보존한다.
 
 ## 확인된 원인과 수정
 
@@ -13,13 +13,13 @@
 - machine/auxiliary/joint comparison, 봉인 적용일/다음 예정일을 분리한다. optional 약세 연구는 기존 감시·incident·owner에 연결하며 native calendar·scope·cursor currentness를 확인한다.
 - 과거 재분류는 exact machine SHA/evaluation/symbol/parent/causal capture가 일치할 때만 수행한다. SQLite와 날짜별 단일 스트림을 사용하고 plain/gzip logical seal을 보존한다. 원 commit/quote 해시는 변경하지 않는다.
 
-## 검증과 실행 증거
+## 초기 검증 기록
 
-증거 디렉터리: `/home/ubuntu/KORStockScan/tmp/pre-submit-semantic-20261016/`. 초기 core904개, monitor318개 회귀가 통과했다. 추가 native join/압축 무결성·signal terminal·alias 회귀에서 발견한 catalog legacy definition hash 누락과 fixture route 표기를 보완했다. 확장 회귀와 exact 후보 인계는 진행 중이다.
+증거 디렉터리: `/home/ubuntu/KORStockScan/tmp/pre-submit-semantic-20261016/`. 초기 core904개, monitor318개 회귀가 통과했다. 추가 native join/압축 무결성·signal terminal·alias 회귀에서 발견한 catalog legacy definition hash 누락과 fixture route 표기를 보완했다. 당시 확장 회귀와 exact 후보 인계는 진행 중이었다. 최종 결과는 아래 절을 따른다.
 
-코드 closure, 불변 후보 선택, 새 PID 소비, 자연 v4 생성, 장후 정책 생성, 비용 후 성과는 별도 판정한다. 현재 자연/배포 완료를 주장하지 않는다.
+코드 closure, 불변 후보 선택, 새 PID 소비, 자연 v4 생성, 장후 정책 생성, 비용 후 성과는 별도 판정한다. 이 초기 기록 시점에는 자연/배포 완료를 주장하지 않았다.
 
-## 남은 수용
+## 초기 수용 순서
 
 최종 반복 리뷰/확장 시험→exact active-policy/code handoff→ordered drain/select/start/consumed→bounded observer→영향 범위 장후 projection 및 재계산의 native terminal을 확인한다. 현행 당일0초 정책을 재기동에서 그대로 소비하며 후속19일 정책 준비는 별도 generation으로 보존한다.
 
@@ -58,3 +58,20 @@ bbb9d46b7 전이는17:18:23.838565에 완료했고PID157049/start20261178의 exa
 기존 exact preserved-source map에 두 쌍만 추가하고 원 보고서/fixture/원천 hash·comparison/handoff를 보존한다. 실제 native probe에서 두 family의 current_code_capability_verified=true, 취소대기 model_unvalidated/incumbent_carried, 상승누락 valid_empty/incumbent_carried가 유지됐다. 권한·source·receipt·보고서 경합·미등록 쌍 거부를 포함한571개 PASS, compile/diff PASS. 증거: capability-source-review.json, capability-native-probe.json, verified-capability-successor-tests.log. 기존571개 시험 대상 코드와 구 코드 시험 로그를 구분했다. 이 보완은 신규 정책 선정이나 경제성 승격이 아니다.
 
 최종 delay 재계산은 qualified267/P0 220/price pair255와 동일한 source SHA를 유지하며 source_decode_passes=0, minimal_projection_reused=true로 완료했다. policy SHA f8c911dd…/code contract ae1aac66…이며 추가 capability map 변경은 delay contract 구성 파일을 바꾸지 않는다.
+
+
+## 최종 배포·실제 소비 및 잔여 자연 수용
+
+- 선택 코드: `45fa0470e899f68415557b6b97b7817839881e66`, release `/home/ubuntu/KORStockScan-runtime-releases/pre-submit-semantic-close-20261016-45fa0470e`. 정규 ordered 전이는 **2026-10-16 17:24:10.807245 KST complete/pass**, Main PID **167546**, start ticks **20296002**. 원 transition과 세 차례 적용/추가 수리 이력은 보존했다. release-set 및 독립 PID/bootstrap 검증 PASS, policy_effect=unchanged다. 미선택 c836 후보는 운영본이 아니다.
+- 실제 source-only 감시: **17:25:30.632392 KST**, raw/summary/compact 모두 complete, issues={}, writer PID167546, writer17:24:54, flush error0, bounded projection 사용. 해당 최근10분의 delay_events는0으로 신규 v4 ENTER_NOW+PASS/5 horizon의 자연 완주 증거는 아직 없다. 같은 구간 요약 count/identity 대사는 통과했다.
+- 전체 감시: **17:25:22 KST** 실행 코드/selected 모두45fa0470e. 취소대기·상승누락·holding capability verified, 기계 비교 true/보조 false/joint false, bound_target10/16와 next_due10/19를 구분했고 C01–C25 정적 coverage PASS다. Startup Sentinel success와 observer completed를 확인했다. observer는 scanner 식별 평가0/fixed10에 따라 partial을 유지한다.
+- 남은 실제 경고: 기존 holding_profit_exit source-gap, scanner source/평가 모집단 미관측, tmp 용량 경고. 각각 HoldingProfitExitSourceContractRepair, NonfixedDispatchReadinessReview1012, OperationalLogRetentionRepair1016가 소유한다. optional 약세 연구의 기존 invalidated source dates도 불완전으로 보존한다. 전체 거래 건강이나 경제성 PASS로 보고하지 않는다.
+- 실제 shard/native reader로 현재 정책97cell 중 준비된 price_ready10cell이 모두0초임을 확인했다. 격리 재계산195cell 중 준비된20cell도 모두0초이며 양수 price_ready cell0이다. 당일 정책 SHA f2c4287c…와16일 적용일을 유지했다.
+- 최소 영향 재계산: 완결 source10/15→publication10/16→target10/19의 **격리 generation** `970a6a540138e9daeff64e8073659593020f5e79b5cfe9f343d661a36b4af264`, manifest89f7252e…/policy f8c911dd…/code ae1aac66…를 최종 코드 native reader로 검증했다. 원267건·source SHA·제외 사유를 유지하고 qualified projection을 재사용했다(source_decode_passes0). canonical 당일 정책과 기존 sealed 장후 stage는 보존했으며 전체 장후를 조기 재실행하지 않았다.
+- 사용자가 제시한67건은 `original-user-alert.json`에 사용자 제공 텍스트 증거로 별도 보존했다. 현재창0건은 과거67건 복구나 stale 호가4건 정상화를 뜻하지 않는다. 원 호가/terminal 부재 및 장후 제외를 임의 채우지 않았다.
+
+검증 증거: `close-preflight.json`, `close-ordered-deployment.log`, `close-release-set.json`, `close-current-pid-source-observation.json`, `close-full-detector.json`, `close-static-coverage.json`, `close-zero-policy-validation.json`, `close-regeneration-validation.json` 및 실제 `startup-observer-167546.log`. 전체 broad 장후 재생·provider/API 직접 호출·수동 주문·수동 알림·Project/Calendar sync는 수행하지 않았다. 기존 정규 알림 작업의 자연 전달과 이번 검증 실행(notification idle)을 구분한다.
+
+코드 리뷰/수정/표적 검증과 승인된 배포는 완료했다. `PreSubmitSemanticCurrentization1016`의 잔여 수용은 다음 eligible v4 관측과10/16 정규 장후 source→policy→strict/controller→10/19 준비/장전 소비이며, 실행은 기존 `DirectFamilyPreopenPolicyHandoff`와 family owner에 연결한다. 현재 적용일 이후 정책 활성화·실제 주문·비용 후 이익은 미확인이다.
+
+최종 문서 재검증: 현재 문서와 격리 문서의 print-only parser 모두29항목/당일 OPEN13개/고유 ID13개/이번 owner1개. 관련 링크와 diff 검사 PASS.17:29:14의 PID167546 독립 bootstrap 재검증도 findings0, pid_mismatches0, 미검증 selected family0으로 PASS했다. source/control commit과 실제 선택45fa0470e를 구분한다.

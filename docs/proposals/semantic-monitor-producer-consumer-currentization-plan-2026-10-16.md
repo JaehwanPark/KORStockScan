@@ -4,7 +4,7 @@
 
 현재 선택 릴리스의 생산자 → 원천/영수증 → native 검증 → 실제 소비자 → 알림/복구 → 현행 담당 작업을 기준으로 감시를 현행화한다. 기존 감시기를 확장하며 새 병렬 감시 프레임워크·중복 연구·상시 전량 원문 스캔은 만들지 않는다.
 
-상태: **읽기 전용 대사와 계획 작성·리뷰 완료. 구현·배포·재기동은 미실행**. 이 문서는 구현 승인이 아니다. 기존 [10/10 계획](semantic-monitor-latest-release-followup-repair-plan-2026-10-10.md)의 기준 시점과 미구현 목록을 대체하지만, 원 구현·배포 영수증과 미완료 자연 수용을 삭제하거나 재완료 처리하지 않는다.
+상태: **사용자의 후속 승인에 따라 구현·반복 리뷰·보완·배포·재기동 완료(17:24 KST)**. 계획 작성 당시에는 읽기 전용이었으며, 후속 승인과 실제 실행 결과는 §9 및 아래 §10을 따른다. 기존 [10/10 계획](semantic-monitor-latest-release-followup-repair-plan-2026-10-10.md)의 기준 시점과 미구현 목록을 대체하지만, 원 구현·배포 영수증과 미완료 자연 수용을 삭제하거나 재완료 처리하지 않는다.
 
 기준은 [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md) §1–§8, [10/16 체크리스트](../checklists/2026-10-16-stage2-todo-checklist.md), 선택 릴리스의 실제 코드·산출물이다. 기존 baseline의 옛 winrate 초기값/whipsaw 설명을 최신 승인된 누적 정책·Main stop의 원 영수증 위에 덮어쓰지 않는다. baseline/runbook 정정은 별도 명시 요청 대상이며 이번에는 수정하지 않는다.
 
@@ -254,3 +254,12 @@
 운영 소비 계약: v4 commit은 native matched branch/definition refs/상황/선택 지연을 해시에 묶는다. 기존 v2/v3 원 bytes와 digest는 보존한다. producer manifest의 최근20분 요약은 기존 append 세대에 결속하며 감시기는 최대2MiB manifest와 bounded raw/compact를 읽는다. 구 manifest는 기존 native 검증으로 읽고 writer의 다음 flush에서 이관한다. 구 cursor는 관측 범위를 다시 확보하며 과거 incident를 복구 완료로 만들지 않는다. signal_ready의0/30/60/120/180초 관측 완료는 주문 terminal을 요구하지 않는다.
 
 `observation_date/source_date/bound_target_date/next_due_target_date`를 분리하고 기존 notifier/fingerprint의 `target_date`는 호환 필드로 보존한다. optional 연구는 native 설치 calendar/권한/최근 attempt/last-completed/cursor/source scope를 읽으며 추천 전송은 기존 전용 notifier가 소유한다. 정적 C01–C25 연결은 실제 주문·경제성·Telegram 전달 증명이 아니다.
+
+
+## 10. 승인 후 실행 결과 — 17:25 KST
+
+최종 코드45fa0470e/Main PID167546의 ordered 전이·정책 소비와 새 writer 원천 감시를 확인했다. raw/summary/compact complete, 현재창 결손0, flush error0이며 현재0초 정책을 유지한다. 원67건은 사용자 제공 이력으로 보존하고 과거 stale 호가나 terminal 부재를 복구 완료로 처리하지 않았다. 해당 구간 신규 delay event0이므로 v4 후행 관측의 자연 수용은 대기한다.
+
+기계/보조/joint 비교는 true/false/false, 봉인 적용일10/16와 다음 예정일10/19를 분리했다. 과거 장후 취소대기·상승누락의 exact 세대 인계 누락도 보완했으며 실제 조회에서 current capability verified를 확인했다. native source/comparison/정책 유지 상태는 보존한다. C01–C25 정적 연결 PASS와 실제 전체 감시의 holding/source/scanner/tmp 잔여 경고는 별도 결과다.
+
+과거 native capture와 exact join한238개 anchor로 상황 UNKNOWN267→29, cell97→195를 얻었다. source10/15의 영향 family만 격리 재계산하고 최종 코드로 검증했으며, 초기 정책은0초다. 현재10/16 canonical 정책을 대체하지 않았고 오늘 정규 장후 및10/19 실제 소비는 기존 OPEN owner로 유지한다. 상세 시험·성능·실제 receipt와 잔여 수용은 [구현 리뷰](../audits/pre-submit-semantic-implementation-review-2026-10-16.md#최종-배포실제-소비-및-잔여-자연-수용)를 따른다.
