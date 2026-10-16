@@ -46245,6 +46245,7 @@ def _entry_split_probe_exit_authority_active(stock: dict) -> bool:
     return bool(
         stock.get("entry_split_probe_exit_bundle_id")
         or stock.get("exit_token")
+        or stock.get("fast_exit_token")
         or stock.get("exit_requested")
         or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
     )
@@ -46328,56 +46329,73 @@ def _finalize_entry_split_probe_partial_position(
 ) -> bool:
     """Close a terminal partial probe bundle without freezing future scale-in."""
 
-    if str(stock.get("entry_split_probe_phase") or "").strip() != (
-        "residual_partial_submitted"
-    ):
+    # Both fully submitted and partially submitted residual bundles permit a
+    # smaller holding once their submitted BUY orders are terminal. The full
+    # target is not a minimum committed position for this probe-first plan.
+    if str(stock.get("entry_split_probe_phase") or "").strip() not in {
+        "residual_submitted", "residual_partial_submitted",
+    }:
         return False
-    if _entry_split_probe_exit_authority_active(stock):
-        return False
-    if _has_open_pending_entry_orders(stock):
-        return False
-    bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
-    requested_qty = max(
-        0,
-        _safe_int(
-            stock.get("entry_split_probe_requested_qty")
-            or stock.get("entry_requested_qty")
-            or stock.get("requested_buy_qty"),
+    with ENTRY_LOCK:
+        if (
+            _entry_split_probe_exit_authority_active(stock)
+            or str(stock.get("status") or "").upper() not in {"BUY_ORDERED", "HOLDING"}
+            or str(stock.get("entry_split_probe_phase") or "") not in {
+                "residual_submitted", "residual_partial_submitted",
+            }
+        ):
+            return False
+        if _has_open_pending_entry_orders(stock):
+            return False
+        bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+        entry_bundle_id = str(stock.get("entry_bundle_id") or "").strip()
+        if (
+            not bundle_id
+            or (entry_bundle_id and entry_bundle_id != bundle_id)
+            or isinstance(stock.get("initial_quantity_bundle"), dict)
+        ):
+            # Stale probe metadata cannot retire a different entry owner.
+            return False
+        requested_qty = max(
             0,
-        ),
-    )
-    filled_qty = max(
-        0,
-        _safe_int(stock.get("buy_qty"), 0),
-        _safe_int(stock.get("entry_filled_qty"), 0),
-    )
-    if filled_qty <= 0:
-        return False
-    move_orders_to_terminal(stock, reason="entry_split_probe_partial_complete")
-    _mutate_stock_state(
-        stock,
-        set_fields={
-            "status": "HOLDING",
-            "entry_split_probe_phase": "partial_complete",
-            "entry_split_probe_partial_complete_reason": reason,
-            "entry_split_probe_partial_complete_qty": filled_qty,
-            "entry_fill_quality": "PARTIAL_FILL",
-        },
-        pop_fields=[
-            "pending_entry_orders",
-            "entry_requested_qty",
-            "requested_buy_qty",
-            "entry_filled_qty",
-            "entry_fill_amount",
-            "entry_bundle_id",
-            "odno",
-            "order_time",
-            "entry_split_probe_residual_claimed",
-            "entry_split_probe_scale_in_forbidden",
-            "probe_expand_forbidden",
-            "entry_split_probe_reward_target_price",
-        ],
-    )
+            _safe_int(
+                stock.get("entry_split_probe_requested_qty")
+                or stock.get("entry_requested_qty")
+                or stock.get("requested_buy_qty"),
+                0,
+            ),
+        )
+        # Inventory is authoritative; a historical cumulative BUY receipt cannot
+        # recreate a sold position or inflate the remaining holding.
+        filled_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
+        if not 0 < filled_qty < requested_qty:
+            return False
+        move_orders_to_terminal(stock, reason="entry_split_probe_partial_complete")
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "status": "HOLDING",
+                "entry_split_probe_phase": "partial_complete",
+                "entry_split_probe_partial_complete_reason": reason,
+                "entry_split_probe_partial_complete_qty": filled_qty,
+                "entry_fill_quality": "PARTIAL_FILL",
+            },
+            pop_fields=[
+                "pending_entry_orders",
+                "entry_requested_qty",
+                "requested_buy_qty",
+                "entry_filled_qty",
+                "entry_fill_amount",
+                "entry_bundle_id",
+                "odno",
+                "order_time",
+                "entry_split_probe_residual_claimed",
+                "entry_split_probe_scale_in_forbidden",
+                "probe_expand_forbidden",
+                "entry_split_probe_reward_target_price",
+            ],
+        )
+        observation_fields = _entry_split_probe_observation_contract_fields(stock)
     if bundle_id:
         update_probe_runtime_bundle(
             bundle_id,
@@ -46399,7 +46417,7 @@ def _finalize_entry_split_probe_partial_position(
         actual_order_submitted=False,
         broker_order_forbidden=False,
         runtime_effect=True,
-        **_entry_split_probe_observation_contract_fields(stock),
+        **observation_fields,
     )
     return True
 
@@ -78510,6 +78528,12 @@ def _cancel_pending_entry_orders(
                     code, reason="initial_quantity_local_order_absent",
                 )
                 return "pending"
+            # A fill/cancel receipt can finish the last leg between the
+            # reconciler's open-order check and this locked cancellation path.
+            if _finalize_entry_split_probe_partial_position(
+                stock, code, reason=str(cancel_reason or "residual_orders_terminal"),
+            ):
+                return "resolved"
             _clear_pending_entry_meta(
                 stock,
                 preserve_probe_runtime=_entry_split_probe_exit_authority_active(stock),
@@ -81681,6 +81705,17 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                     "opening_rotation_episode_phase": "ENTRY_CANCEL_RECONCILING",
                 },
             )
+        return
+    # Cancellation may already have handed a terminal probe bundle to HOLDING.
+    # Do not reinterpret its optional total target as a minimum fill contract,
+    # or compete with an existing stop/exit owner after cancellation callbacks.
+    if _entry_split_probe_exit_authority_active(stock):
+        return
+    if (
+        str(stock.get("entry_split_probe_phase") or "") == "partial_complete"
+        and str(stock.get("status") or "").upper() == "HOLDING"
+        and not _has_open_pending_entry_orders(stock)
+    ):
         return
     if opening_rotation_order:
         _mutate_stock_state(

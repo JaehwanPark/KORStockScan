@@ -10049,7 +10049,15 @@ def _publish_entry_partial_fill_message(
     probe_first_fill_with_planned_residual = bool(
         probe_order_no and cum_filled_qty == 1 and remaining_qty > 0
     )
-    if probe_first_fill_with_planned_residual:
+    if probe_phase == "partial_complete":
+        # Submitted residual orders are terminal. Do not describe this holding
+        # as still revalidating, or label cancelled submitted shares unsubmitted.
+        partial_msg += (
+            f"\n✅ **부분 보유:** `{cum_filled_qty}/{requested_entry_qty}주`"
+            f" / **평균 체결가:** `{avg_buy_price:,.0f}원`"
+            f"\n⏹ **잔량 진입 종료:** `{remaining_qty}주` / 기존 보유관리로 전환"
+        )
+    elif probe_first_fill_with_planned_residual:
         partial_msg += (
             f"\n✅ **probe 체결:** `1/1주` / **평균 체결가:** `{avg_buy_price:,.0f}원`"
         )

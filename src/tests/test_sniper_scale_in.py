@@ -30494,6 +30494,225 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
     assert fields["allowed_runtime_apply"] is False
 
 
+@pytest.mark.parametrize("phase,submitted_qty", [
+    ("residual_submitted", 9),
+    ("residual_partial_submitted", 5),
+])
+@pytest.mark.parametrize("code,venue,session", [
+    ("403870", "KRX", "krx_regular"),
+    ("123456", "NXT", "nxt_entry_window"),
+    ("654321", "NXT", "nxt_regular_overlap"),
+    ("234567", "NXT", "nxt_aftermarket"),
+    ("345678", "SOR", "krx_regular"),
+    ("456789", "SOR", "nxt_aftermarket"),
+])
+def test_reconcile_probe_partial_holding_is_not_ratio_liquidated(
+    monkeypatch, code, venue, session, phase, submitted_qty,
+):
+    """Cancel -> partial HOLDING must not fall through to a second exit owner."""
+    _mock_exact_order_terminal(monkeypatch)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(
+        constants.TRADING_RULES, SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True,
+        SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=0.20,
+    ))
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle", lambda *a, **kw: None)
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline",
+                        lambda s, c, stage, **kw: logs.append((stage, kw)))
+    cancels = []
+    monkeypatch.setattr(kiwoom_orders, "send_cancel_order",
+                        lambda **kw: cancels.append(kw) or {"return_code": "0", "ord_no": "C1"})
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market",
+                        lambda **kw: pytest.fail("intentional probe ratio liquidation"))
+    stock = {
+        "id": 1, "code": code, "name": "TEST", "strategy": "SCALPING",
+        "effective_venue": venue, "market_session_bucket": session,
+        "status": "HOLDING", "buy_qty": 1, "buy_price": 53700,
+        "entry_requested_qty": 9, "requested_buy_qty": 9, "entry_filled_qty": 1,
+        "order_time": 800.0, "entry_split_probe_phase": phase,
+        "entry_split_probe_bundle_id": f"{code}-probe-terminal",
+        "entry_bundle_id": f"{code}-probe-terminal",
+        "entry_split_probe_requested_qty": 9, "entry_split_probe_target_qty": 9,
+        "entry_split_probe_committed_qty": 1, "entry_split_probe_conditional_qty": 8,
+        "entry_split_probe_actual_submitted_qty": submitted_qty,
+        "entry_split_probe_scale_in_forbidden": phase == "residual_partial_submitted",
+        "pending_entry_orders": [{
+            "tag": "entry_split_passive_1", "ord_no": "B2", "status": "OPEN",
+            "qty": submitted_qty - 1, "filled_qty": 0, "sent_at": 800.0,
+            "split_leg_ttl_sec": 45, "split_bundle_hard_ttl_sec": 180,
+            "dmst_stex_tp": venue,
+        }],
+    }
+    state_handlers._reconcile_pending_entry_orders(stock, code, "SCALPING")
+    assert stock["status"] == "HOLDING"
+    assert stock["entry_split_probe_phase"] == "partial_complete"
+    assert stock["buy_qty"] == 1
+    assert stock["entry_fill_quality"] == "PARTIAL_FILL"
+    assert "pending_sell_msg" not in stock
+    assert "pending_entry_orders" not in stock
+    assert "entry_requested_qty" not in stock
+    assert stock["entry_split_probe_target_qty"] == 9
+    assert stock["entry_split_probe_actual_submitted_qty"] == submitted_qty
+    assert len(cancels) == 1
+    assert cancels[0]["code"] == code
+    assert cancels[0]["orig_ord_no"] == "B2"
+    assert entry_state.TERMINAL_ENTRY_ORDERS["B2"]["bundle_id"] == f"{code}-probe-terminal"
+    assert entry_state.TERMINAL_ENTRY_ORDERS["B2"]["target_id"] == 1
+    terminal = [fields for stage, fields in logs if stage == "residual_partial_complete"]
+    assert len(terminal) == 1
+    assert terminal[0]["requested_qty"] == 9
+    assert terminal[0]["filled_qty"] == 1
+    # A later reconciliation is idempotent and cannot reuse the old target.
+    state_handlers._reconcile_pending_entry_orders(stock, code, "SCALPING")
+    assert len(cancels) == 1
+    assert stock["status"] == "HOLDING"
+
+
+@pytest.mark.parametrize("result", ["failed", "pending", "partial_cancelled"])
+def test_reconcile_probe_uncertain_cancel_keeps_bundle_open(monkeypatch, result):
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders", lambda *a, **kw: result)
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market",
+                        lambda **kw: pytest.fail("uncertain cancellation cannot sell"))
+    stock = {
+        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
+        "entry_requested_qty": 9, "order_time": time.time() - 3600,
+        "entry_split_probe_phase": "residual_submitted",
+        "pending_entry_orders": [{"ord_no": "B2", "status": "OPEN", "qty": 8}],
+    }
+    before = deepcopy(stock)
+    state_handlers._reconcile_pending_entry_orders(stock, "123456", "SCALPING")
+    assert {key: stock[key] for key in before} == before
+    assert "sell_odno" not in stock
+    assert "entry_split_probe_partial_complete_qty" not in stock
+
+
+@pytest.mark.parametrize("authority", [
+    {"exit_token": "stop-owner"}, {"exit_requested": True},
+    {"fast_exit_token": "fast-stop-owner"},
+    {"entry_split_probe_exit_bundle_id": "exit-bundle"}, {"status": "SELL_ORDERED"},
+])
+def test_reconcile_partial_entry_cannot_overwrite_existing_exit(monkeypatch, authority):
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders", lambda *a, **kw: "cancelled")
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market",
+                        lambda **kw: pytest.fail("duplicate exit owner"))
+    stock = {
+        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
+        "entry_requested_qty": 9, "order_time": time.time() - 3600,
+        "entry_split_probe_phase": "residual_submitted",
+        "pending_entry_orders": [{"ord_no": "B2", "status": "OPEN", "qty": 8}],
+        **authority,
+    }
+    before = deepcopy(stock)
+    assert not state_handlers._finalize_entry_split_probe_partial_position(
+        stock, "123456", reason="submitted_residual_orders_terminal")
+    state_handlers._reconcile_pending_entry_orders(stock, "123456", "SCALPING")
+    assert {key: stock[key] for key in before} == before
+    assert "sell_odno" not in stock
+    assert "entry_split_probe_partial_complete_qty" not in stock
+
+
+def test_probe_terminal_fill_race_keeps_partial_holding_contract(monkeypatch):
+    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle", lambda *a, **kw: None)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **kw: None)
+    stock = {
+        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
+        "entry_requested_qty": 9, "entry_split_probe_requested_qty": 9,
+        "entry_split_probe_bundle_id": "123456-probe-terminal-race",
+        "entry_split_probe_phase": "residual_submitted",
+        "pending_entry_orders": [{"ord_no": "B2", "status": "CANCELLED", "qty": 8}],
+    }
+    assert state_handlers._cancel_pending_entry_orders(stock, "123456", force=True) == "resolved"
+    assert stock["entry_split_probe_phase"] == "partial_complete"
+    assert stock["entry_split_probe_partial_complete_qty"] == 1
+    assert stock["status"] == "HOLDING"
+
+
+@pytest.mark.parametrize("changes", [
+    {"status": "COMPLETED"}, {"status": "SOLD"}, {"status": "CLOSED"},
+    {"buy_qty": 0, "entry_filled_qty": 1},
+    {"buy_qty": 9}, {"entry_requested_qty": 0, "entry_split_probe_requested_qty": 0},
+    {"entry_split_probe_phase": "aborted"},
+    {"entry_split_probe_phase": "probe_recheck_pending"},
+    {"entry_split_probe_bundle_id": ""}, {"entry_bundle_id": "another-entry"},
+    {"initial_quantity_bundle": {"attempt_id": "separate-durable-owner"}},
+])
+def test_probe_partial_finalization_requires_live_partial_inventory(monkeypatch, changes):
+    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle",
+                        lambda *a, **kw: pytest.fail("invalid partial finalization"))
+    stock = {
+        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
+        "entry_requested_qty": 9, "entry_split_probe_requested_qty": 9,
+        "entry_split_probe_bundle_id": "123456-probe-terminal-invalid",
+        "entry_split_probe_phase": "residual_submitted", **changes,
+    }
+    before = deepcopy(stock)
+    assert not state_handlers._finalize_entry_split_probe_partial_position(
+        stock, "123456", reason="submitted_residual_orders_terminal")
+    assert stock == before
+
+
+def test_probe_partial_finalization_rechecks_exit_after_lock_wait(monkeypatch):
+    stock = {
+        "id": 1, "strategy": "SCALPING", "status": "HOLDING", "buy_qty": 1,
+        "entry_split_probe_requested_qty": 9,
+        "entry_split_probe_bundle_id": "123456-probe-terminal-race",
+        "entry_split_probe_phase": "residual_submitted",
+    }
+    acquired = Event()
+    real_lock = state_handlers.ENTRY_LOCK
+
+    class ContendedLock:
+        def __enter__(self):
+            acquired.set()
+            real_lock.acquire()
+
+        def __exit__(self, *_args):
+            real_lock.release()
+
+    monkeypatch.setattr(state_handlers, "ENTRY_LOCK", ContendedLock())
+    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle",
+                        lambda *a, **kw: pytest.fail("exit owner overwritten"))
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with real_lock:
+            pending = executor.submit(
+                state_handlers._finalize_entry_split_probe_partial_position,
+                stock, "123456", reason="submitted_residual_orders_terminal")
+            assert acquired.wait(timeout=2)
+            stock.update(status="SELL_ORDERED", exit_token="hard-stop-owner")
+        assert pending.result(timeout=2) is False
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["exit_token"] == "hard-stop-owner"
+    assert stock["entry_split_probe_phase"] == "residual_submitted"
+
+
+@pytest.mark.parametrize("filled_qty", [1, 3])
+def test_terminal_partial_probe_deferred_notice_does_not_promise_residual(
+    monkeypatch, filled_qty,
+):
+    events = []
+    monkeypatch.setattr(receipts, "event_bus", SimpleNamespace(
+        publish=lambda event, payload: events.append((event, payload))))
+    stock = {
+        "code": "403870", "name": "HPSP", "strategy": "SCALPING",
+        "entry_split_probe_phase": "partial_complete",
+        "entry_split_probe_order_no": "B1",
+        "entry_partial_fill_deferred_notice": {
+            "avg_buy_price": 53700, "cum_filled_qty": filled_qty,
+            "requested_entry_qty": 9, "remaining_qty": 9 - filled_qty,
+        },
+    }
+    assert receipts.flush_deferred_entry_partial_fill_notice(stock)
+    message = events[0][1]["message"]
+    assert "부분 보유" in message
+    assert f"`{filled_qty}/9주`" in message
+    assert "잔량 진입 종료" in message
+    assert "재검증 중" not in message
+    assert "제출·체결 확인 중" not in message
+    assert "미제출" not in message
+    assert not receipts.flush_deferred_entry_partial_fill_notice(stock)
+
+
 def test_reconcile_partial_fill_strong_override_uses_relaxed_ratio(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
