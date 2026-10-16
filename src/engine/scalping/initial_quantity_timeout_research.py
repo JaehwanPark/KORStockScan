@@ -296,9 +296,15 @@ def build_timeout_research(
     started = time.perf_counter()
     usage_start = resource.getrusage(resource.RUSAGE_SELF)
     wait_start = _block_io_wait_ms()
+    source_census = (replay.get('census') if replay is not None else
+                     path_cache.get('census') if path_cache is not None else None)
+    if replay is not None and (replay.get('source_date') != as_of
+            or replay.get('report_content_sha256') != _digest({
+                k:v for k,v in replay.items() if k != 'report_content_sha256'})):
+        raise ValueError('timeout_research_shared_source_mismatch')
     trades, census = completed_trade_fact_census(
         as_of, fact_rows=fact_rows, data_dir=data_dir,
-        entry_on_or_after=entry_on_or_after)
+        entry_on_or_after=entry_on_or_after, source_census=source_census)
     eligible = [trade for trade in trades if trade_source_allowed(census,trade)]
     scan_seconds: dict[str, float] = {}
     sources: dict[str, Any] = {}
@@ -531,7 +537,7 @@ def build_timeout_research(
             shared = {"census":census, "paths":paths, "pipeline_source_receipts":sources,
                       "date_scan_seconds":scan_seconds, "price_horizon_seconds":max(horizons)}
             replay = build_initial_quantity_replay(as_of, data_dir=data_dir, fact_rows=census["input_fact_rows"],
-                entry_on_or_after=entry_on_or_after, path_cache=shared)
+                entry_on_or_after=entry_on_or_after, path_cache=shared, source_census=census)
         if replay.get("census") != census:
             raise ValueError("joint_replay_census_mismatch")
         grid = {f"{mode}:{shape}:{h}": {"mode":mode,"shape":shape,"horizon":h,"reserve":5}

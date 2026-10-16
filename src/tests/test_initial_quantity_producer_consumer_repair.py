@@ -1257,3 +1257,173 @@ def test_completion_overlay_preserves_full_native_census_but_excludes_other_owne
 def test_completion_overlay_same_record_other_owner_remains_conflict(tmp_path,monkeypatch,identity):
     original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,identity=identity)
     with pytest.raises(ValueError,match='quantity_completion_entry_binding_conflict'):_overlay_for_test(tmp_path,[original])
+
+
+@pytest.mark.parametrize('actual',[False,True])
+def test_completion_overlay_context_survives_shared_timeout_and_serialized_replay(tmp_path,monkeypatch,actual):
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research,timeout_research_valid
+    from src.engine.scalping.initial_quantity_refresh_evaluation import joint_evidence_valid
+    from src.engine.scalping.initial_quantity_following_bars import build_following_bar_source,following_bar_source_valid
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,actual=actual)
+    rows=_overlay_for_test(tmp_path,[original])
+    for day in ('2026-10-07','2026-10-08'):_quality(tmp_path,day)
+    shared={}
+    replay=policy.build_initial_quantity_replay('2026-10-08',data_dir=tmp_path,fact_rows=rows,
+        entry_on_or_after='2026-10-07',path_cache=shared)
+    serialized=json.loads(json.dumps(replay))
+    assert serialized['census']['completion_overlay_generations']
+    assert serialized['census']['completion_overlay_summary']['overlaid_completed_count']==1
+    monkeypatch.setattr(policy,'_read_trade_facts',lambda *a,**k:pytest.fail('shared context must not requery database'))
+    timeout=build_timeout_research('2026-10-08',data_dir=tmp_path,
+        fact_rows=serialized['census']['input_fact_rows'],entry_on_or_after='2026-10-07',
+        path_cache=shared,replay=serialized)
+    independent=build_timeout_research('2026-10-08',data_dir=tmp_path,fact_rows=rows,
+        entry_on_or_after='2026-10-07')
+    assert timeout==independent
+    assert timeout['census']==serialized['census']
+    assert timeout_research_valid(timeout,replay=serialized) and joint_evidence_valid(timeout,replay=serialized)
+    assert timeout['census']['actual_completed_net_pnl_krw']==(800 if actual else None)
+    if not actual:assert timeout['census']['excluded']=={'terminal_cost_or_quantity_missing':1}
+    following=build_following_bar_source(serialized,fetch=lambda *a:pytest.fail('no supported source needs provider call'))
+    assert following_bar_source_valid(following,serialized)
+    changed=copy.deepcopy(serialized)
+    changed['census']['completion_overlay_summary']['overlaid_completed_count']=0
+    changed['report_content_sha256']=policy._digest({k:v for k,v in changed.items() if k!='report_content_sha256'})
+    assert not following_bar_source_valid(following,changed)
+
+
+@pytest.mark.parametrize('mutation',['summary_count','native_count','status_counts','summary_only_omission','missing_context','missing_all_overlay_evidence',
+    'original_status','row_price','row_cost','missing_row','extra_completion_row','economic_count','wrong_generation'])
+def test_shared_overlay_context_independently_rejects_resealed_header_row_and_cohort(tmp_path,monkeypatch,mutation):
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,actual=True)
+    rows=_overlay_for_test(tmp_path,[original]);shared={}
+    for day in ('2026-10-07','2026-10-08'):_quality(tmp_path,day)
+    replay=policy.build_initial_quantity_replay('2026-10-08',data_dir=tmp_path,fact_rows=rows,
+        entry_on_or_after='2026-10-07',path_cache=shared)
+    # Warm the same-process memo before forging a new, internally rehashed input.
+    build_timeout_research('2026-10-08',data_dir=tmp_path,fact_rows=replay['census']['input_fact_rows'],
+        entry_on_or_after='2026-10-07',path_cache=shared,replay=replay)
+    changed=json.loads(json.dumps(replay));census=changed['census']
+    if mutation=='summary_count':census['completion_overlay_summary']['overlaid_completed_count']=0
+    elif mutation=='native_count':census['completion_overlay_summary']['native_terminal_record_count']=2
+    elif mutation=='status_counts':census['completion_overlay_summary']['original_fact_status_counts']={'COMPLETED':1}
+    elif mutation=='summary_only_omission':census['completion_overlay_summary']={}
+    elif mutation=='missing_context':
+        census['completion_overlay_generations']={};census['completion_overlay_summary']={}
+    elif mutation=='missing_all_overlay_evidence':
+        census['completion_overlay_generations']={};census['completion_overlay_summary']={}
+        for key in ('completion_generation','completion_source_date','completion_observed_scale_in_fields',
+                    'completion_scale_in_observations','original_fact_status'):
+            census['input_fact_rows'][0].pop(key,None)
+    elif mutation=='original_status':census['input_fact_rows'][0]['original_fact_status']='COMPLETED'
+    elif mutation=='row_price':census['input_fact_rows'][0]['sell_price']=102000
+    elif mutation=='row_cost':census['input_fact_rows'][0]['broker_actual_fees_taxes_krw']=0
+    elif mutation=='missing_row':census['input_fact_rows']=[]
+    elif mutation=='extra_completion_row':census['input_fact_rows'].append({**census['input_fact_rows'][0],'recommendation_id':2})
+    elif mutation=='economic_count':census['all_completed_initial_trades']=2
+    else:census['completion_overlay_generations']['2026-10-08']['fact_receipt']['sha256']='f'*64
+    census['input_manifest_sha256']=policy._digest(census['input_fact_rows'])
+    changed['report_content_sha256']=policy._digest({k:v for k,v in changed.items() if k!='report_content_sha256'})
+    monkeypatch.setattr(policy,'_read_trade_facts',lambda *a,**k:pytest.fail('no database replay'))
+    monkeypatch.setattr(policy,'_quantity_fact_generation_issue',lambda *a,**k:pytest.fail('no native large-source verifier'))
+    with pytest.raises(ValueError,match='quantity_|timeout_research_'):
+        build_timeout_research('2026-10-08',data_dir=tmp_path,fact_rows=census['input_fact_rows'],
+            entry_on_or_after='2026-10-07',replay=changed)
+
+
+def test_shared_overlay_context_memo_avoids_repeat_decode_and_rechecks_late_generation(tmp_path,monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    rows=_overlay_for_test(tmp_path,[original])
+    _,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=rows,entry_on_or_after='2026-10-07')
+    serialized=json.loads(json.dumps(census));cache._VERIFIED_COMPLETION_CONTEXTS.clear()
+    validate=lambda:policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,
+        fact_rows=serialized['input_fact_rows'],entry_on_or_after='2026-10-07',source_census=serialized)
+    validate()
+    monkeypatch.setattr(cache,'_completion_json',lambda *a,**k:pytest.fail('memo must not decode again'))
+    validate()
+    from src.engine import strategy_position_performance_report as native
+    path=tmp_path/'report/strategy_position_fact_sync/strategy_position_fact_sync_2026-10-08.status.json'
+    original_signature=native._completion_source_signature;changed=False
+    def signature(paths):
+        nonlocal changed
+        result=original_signature(paths)
+        if not changed:
+            changed=True;path.write_text(path.read_text()+' ')
+        return result
+    monkeypatch.setattr(native,'_completion_source_signature',signature)
+    with pytest.raises(ValueError,match='quantity_completion_source_changed'):validate()
+
+
+def test_shared_overlay_context_detects_source_change_during_independent_reconstruction(tmp_path,monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    rows=_overlay_for_test(tmp_path,[original])
+    _,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=rows,entry_on_or_after='2026-10-07')
+    serialized=json.loads(json.dumps(census));cache._VERIFIED_COMPLETION_CONTEXTS.clear()
+    original_overlay=cache.completion_overlay
+    def overlay(*a,**kw):
+        result=original_overlay(*a,**kw)
+        path=tmp_path/'report/strategy_position_fact_sync/strategy_position_fact_sync_2026-10-08.status.json'
+        path.write_text(path.read_text()+' ')
+        return result
+    monkeypatch.setattr(cache,'completion_overlay',overlay)
+    with pytest.raises(ValueError,match='quantity_completion_source_changed'):
+        policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,
+            fact_rows=serialized['input_fact_rows'],entry_on_or_after='2026-10-07',source_census=serialized)
+
+
+@pytest.mark.parametrize('first,last',[(1,2),(1,None),(None,None)])
+def test_shared_overlay_context_rebuilds_observed_count_sequence_without_inventing_entry_zero(tmp_path,monkeypatch,first,last):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,
+        identity={} if first is None else {'add_count':first})
+    _quantity_completion_overlay_fixture(tmp_path,monkeypatch,day='2026-10-09',
+        identity={} if last is None else {'add_count':last})
+    if first is None:original['add_count']=3
+    rows=_overlay_for_test(tmp_path,[original],as_of='2026-10-09')
+    _,census=policy.completed_trade_fact_census('2026-10-09',data_dir=tmp_path,
+        fact_rows=rows,entry_on_or_after='2026-10-07')
+    serialized=json.loads(json.dumps(census))
+    _,rebuilt=policy.completed_trade_fact_census('2026-10-09',data_dir=tmp_path,
+        fact_rows=serialized['input_fact_rows'],entry_on_or_after='2026-10-07',source_census=serialized)
+    assert rebuilt==serialized and rebuilt['excluded']=={'scale_in_position':1}
+    assert rebuilt['input_fact_rows'][0]['add_count']==(last if last is not None else first if first is not None else 3)
+    if first is None:assert rebuilt['input_fact_rows'][0]['completion_scale_in_observations']=={}
+
+
+def test_empty_shared_cohort_preserves_native_foreign_custody_and_rejects_whole_context_omission(tmp_path,monkeypatch):
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    _quantity_completion_overlay_fixture(tmp_path,monkeypatch,identity={'position_tag':'MANUAL'})
+    rows=_overlay_for_test(tmp_path,[]);shared={}
+    replay=policy.build_initial_quantity_replay('2026-10-08',data_dir=tmp_path,fact_rows=rows,
+        entry_on_or_after='2026-10-07',path_cache=shared)
+    serialized=json.loads(json.dumps(replay))
+    timeout=build_timeout_research('2026-10-08',data_dir=tmp_path,fact_rows=[],
+        entry_on_or_after='2026-10-07',path_cache=shared,replay=serialized)
+    assert timeout['census']==serialized['census']
+    assert timeout['census']['input_fact_rows']==[]
+    assert timeout['census']['completion_overlay_summary']['excluded_native_terminal_observation_counts']=={'other_custody':1}
+    stripped=copy.deepcopy(serialized)
+    stripped['census']['completion_overlay_generations']={};stripped['census']['completion_overlay_summary']={}
+    stripped['report_content_sha256']=policy._digest({k:v for k,v in stripped.items() if k!='report_content_sha256'})
+    with pytest.raises(ValueError,match='quantity_completion_generation_changed'):
+        build_timeout_research('2026-10-08',data_dir=tmp_path,fact_rows=[],
+            entry_on_or_after='2026-10-07',replay=stripped)
+
+
+def test_serialized_completion_context_accepts_compression_without_full_snapshot_read(tmp_path,monkeypatch):
+    from src.engine import compress_db_backfilled_files as archive
+    from src.engine.lifecycle import snapshot_archive
+    original,path=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    rows=_overlay_for_test(tmp_path,[original])
+    _,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,
+        fact_rows=rows,entry_on_or_after='2026-10-07')
+    serialized=json.loads(json.dumps(census))
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',path.parent)
+    for source in (path,path.with_suffix('.completed_projection.json'),path.with_suffix('.fact_projection.json')):
+        assert archive._gzip_file(source,dry_run=False)[0]
+    monkeypatch.setattr(snapshot_archive,'snapshot_identity',lambda *a:pytest.fail('no full archived snapshot verification'))
+    _,rebuilt=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,
+        fact_rows=serialized['input_fact_rows'],entry_on_or_after='2026-10-07',source_census=serialized)
+    assert rebuilt==serialized

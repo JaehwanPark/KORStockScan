@@ -369,7 +369,8 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
 
 def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] | None = None,
                                 data_dir: Path = DATA_DIR,
-                                entry_on_or_after: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                                entry_on_or_after: str | None = None,
+                                source_census: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Seal every eligible completed initial position from the costed fact owner."""
     date.fromisoformat(as_of)
     refresh_start = date.fromisoformat(entry_on_or_after) if entry_on_or_after else None
@@ -378,6 +379,28 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                   if fact_rows is None else fact_rows)
     source = ResidentFacts(sorted(raw_source, key=lambda item: str(item.get("recommendation_id") or "")
                     if isinstance(item, dict) else ""),claim=raw_source.claim if isinstance(raw_source,ResidentFacts) else None)
+    if source_census is not None and (not isinstance(source_census, dict)
+            or source_census.get('input_manifest_sha256') != _digest(source)
+            or source_census.get('input_manifest_sha256') != _digest(source_census.get('input_fact_rows'))
+            or source_census.get('entry_on_or_after') != entry_on_or_after):
+        raise ValueError('quantity_shared_fact_census_mismatch')
+    # JSON rows carry their economics and exact terminal references. The full
+    # native census also observes foreign/excluded terminals, including when no
+    # economic rows remain. Preserve that separate context explicitly during a
+    # shared or serialized replay; list attributes alone do not survive JSON.
+    completion_generations = (source_census.get('completion_overlay_generations', {})
+        if source_census is not None else getattr(raw_source, 'completion_generations', {}))
+    completion_summary = (source_census.get('completion_overlay_summary', {})
+        if source_census is not None else getattr(raw_source, 'completion_overlay_summary', {}))
+    if (not isinstance(completion_generations, dict) or not isinstance(completion_summary, dict)
+            or completion_summary and completion_summary.get('as_of') != as_of):
+        raise ValueError('quantity_shared_fact_census_mismatch')
+    if source_census is not None:
+        from src.engine.scalping.initial_quantity_source_cache import verify_completion_census_context
+        verify_completion_census_context(source, source_census, as_of=as_of,
+            data_dir=data_dir, entry_on_or_after=entry_on_or_after)
+    source.completion_generations = completion_generations
+    source.completion_overlay_summary = completion_summary
     exclusions: Counter[str] = Counter()
     rows: dict[str, dict[str, Any]] = {}
     conflicts: set[str] = set()
@@ -504,7 +527,7 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
     result = sorted(rows.values(), key=lambda item: (item["entry_date"], item["record_id"]))
     entry_days = sorted({row["entry_date"] for row in result})
     exit_days = sorted({row["exit_date"] for row in result})
-    return result, {"census_source": "trade_performance_facts",
+    census = {"census_source": "trade_performance_facts",
                     **({"entry_on_or_after": entry_on_or_after} if refresh_start else {}),
                     "all_completed_initial_trades": len(result),
                     "actual_completed_net_pnl_krw": (round(sum(
@@ -516,8 +539,8 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                     "fact_rows_read": len(source), "excluded": dict(sorted(exclusions.items())),
                     "as_of_completed_population_count": sum(str(f.get('status')).upper() == 'COMPLETED'
                         for f in source if isinstance(f, dict)),
-                    "completion_overlay_generations": getattr(raw_source, 'completion_generations', {}),
-                    "completion_overlay_summary": getattr(raw_source, 'completion_overlay_summary', {}),
+                    "completion_overlay_generations": completion_generations,
+                    "completion_overlay_summary": completion_summary,
                     "cost_rate": cost_rate, "input_fact_rows": source,
                     "input_manifest_sha256": _digest(source),
                     "persisted_fact_generations": {str(f.get("rec_date")): f["fact_generation"] for f in source if isinstance(f,dict) and isinstance(f.get("fact_generation"),dict)},
@@ -525,6 +548,9 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                         day: _source_quality_state(day, data_dir) for day in entry_days},
                     "source_quality_by_exit_date": {
                         day: _source_quality_state(day, data_dir) for day in exit_days}}
+    if source_census is not None and census != source_census:
+        raise ValueError('quantity_shared_fact_census_mismatch')
+    return result, census
 
 
 def _record_id(raw: str) -> str:
@@ -1486,13 +1512,15 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                   fact_rows: list[dict[str, Any]] | None = None,
                                   performance: dict[str, Any] | None = None,
                                   entry_on_or_after: str | None = None,
-                                  path_cache: dict[str, Any] | None = None) -> dict[str, Any]:
+                                  path_cache: dict[str, Any] | None = None,
+                                  source_census: dict[str, Any] | None = None) -> dict[str, Any]:
     started = time.perf_counter()
     usage_start = resource.getrusage(resource.RUSAGE_SELF)
     wait_start = _block_io_wait_ms()
     trades, census = completed_trade_fact_census(as_of, fact_rows=fact_rows,
                                                   data_dir=data_dir,
-                                                  entry_on_or_after=entry_on_or_after)
+                                                  entry_on_or_after=entry_on_or_after,
+                                                  source_census=source_census)
     eligible_trades = [trade for trade in trades if trade_source_allowed(census,trade)]
     date_scan_seconds: dict[str, float] = {}
     source_receipts: dict[str, Any] = {}

@@ -394,7 +394,7 @@ def joint_evidence_valid(timeout, *, replay=None):
         if timeout['joint_grid']!=grid:return False
         shared={}
         rebuilt=build_initial_quantity_replay(timeout['source_date'],data_dir=root,fact_rows=timeout['census']['input_fact_rows'],
-            entry_on_or_after=timeout['entry_on_or_after'],path_cache=shared)
+            entry_on_or_after=timeout['entry_on_or_after'],path_cache=shared,source_census=timeout['census'])
         if (rebuilt['report_content_sha256']!=timeout['joint_replay_content_sha256'] or rebuilt['census']!=timeout['census']
             or replay is not None and rebuilt!=replay):return False
         facts={str(f['recommendation_id']):f for f in rebuilt['census']['input_fact_rows']}

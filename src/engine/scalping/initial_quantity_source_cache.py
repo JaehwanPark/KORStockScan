@@ -7,6 +7,7 @@ from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+from collections import OrderedDict
 import uuid
 from src.engine.lifecycle import research_storage as storage
 from src.engine.lifecycle.research_input_budget import Claim, LIMIT_BYTES
@@ -16,6 +17,7 @@ from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
 
 QUANTITY_FACT_STRATEGIES = ("SCALPING", "SCALP")
 QUANTITY_FACT_CUSTODIES = ("SCANNER", "SCALP_BASE")
+_VERIFIED_COMPLETION_CONTEXTS = OrderedDict()
 
 
 def completion_fact_scope(row):
@@ -416,7 +418,8 @@ def verify_completion_overlay_generations(generations, *, data_dir, read=None):
     return verified
 
 
-def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_generations, validate_day):
+def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_generations, validate_day,
+                       source_generations=None):
     """Apply exact completion-date observations to a memory-only as-of census.
 
     Entry-day facts and DB history remain immutable. Their invalid source proof
@@ -430,10 +433,39 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
     current = {str(row['recommendation_id']): dict(row) for row in original}
     if len(current) != len(original):
         raise ValueError('quantity_completion_entry_identity_conflict')
+    if source_generations is not None:
+        for row in current.values():
+            observations = row.pop('completion_scale_in_observations', {})
+            if not isinstance(observations, dict) or any(key not in {
+                    'add_count', 'avg_down_count', 'pyramid_count'} for key in observations):
+                raise ValueError('quantity_completion_scale_in_count_invalid')
+            # A serialized row holds the latest native count, not its original
+            # entry value. Rebuild observed counts from the first sealed native
+            # observation; the unknown original count is never replaced by 0.
+            # Counts with no native observation retain their entry evidence.
+            for key in observations:
+                row.pop(key, None)
     generations, seen_terminal, overlays = {}, {}, set()
     native_ids, excluded_terminals = set(), Counter()
     native_observation_count = 0
-    original_counts = dict(Counter(str(row.get('status')) for row in original))
+    original_counts = dict(Counter(str(row.get('original_fact_status', row.get('status'))) for row in original))
+    # Reconstructing a pinned replay uses the same terminal join, with bounded
+    # receipt/scalar reads. It does not repeat the native large-source hashes.
+    decoded = {}
+    def bounded_read(path, *, expected_sha=None, limit):
+        physical = path if path.exists() else Path(str(path) + '.gz')
+        signature = facts._completion_source_signature([path, Path(str(path) + '.gz')])
+        key = (str(path), expected_sha, limit)
+        cached = decoded.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        value, reference = _completion_json(physical, limit)
+        if expected_sha is not None and reference['sha256'] != expected_sha:
+            raise ValueError('quantity_completion_generation_changed')
+        if signature != facts._completion_source_signature([path, Path(str(path) + '.gz')]):
+            raise ValueError('quantity_completion_source_changed')
+        decoded[key] = (signature, value)
+        return value
     receipt_dir = Path(data_dir) / 'report/strategy_position_fact_sync'
     for scalar in (Path(data_dir) / 'report/monitor_snapshots').glob('trade_review_*.fact_projection.json*'):
         match = re.fullmatch(r'trade_review_(\d{4}-\d{2}-\d{2})\.fact_projection\.json(?:\.gz)?', scalar.name)
@@ -453,10 +485,15 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
             continue
         if not isinstance(proof, dict) or proof.get('source_basis') != 'native_bounded_fact_projection':
             raise ValueError('quantity_completion_source_basis_invalid')
-        issue = entry_generations.get(day, {}).get('issue') if day in entry_generations else validate_day(day)
+        if source_generations is not None and day not in source_generations:
+            raise ValueError('quantity_completion_generation_changed')
+        issue = (entry_generations.get(day, {}).get('issue') if day in entry_generations
+                 else validate_day(day) if source_generations is None else None)
         if issue is not None:
             raise ValueError('quantity_completion_native_source_invalid:' + str(issue))
-        loaded = _completion_day(data_dir, day)
+        loaded = _completion_day(data_dir, day,
+            read=bounded_read if source_generations is not None else None,
+            expected=source_generations.get(day) if source_generations is not None else None)
         if loaded is None:
             raise ValueError('quantity_completion_projection_missing')
         completed, generation = loaded
@@ -527,7 +564,13 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
             current[rid] = updated
             if original_status != 'COMPLETED':
                 overlays.add(rid)
-    verify_completion_overlay_generations(generations, data_dir=data_dir)
+    if source_generations is not None and generations != source_generations:
+        raise ValueError('quantity_completion_generation_changed')
+    if source_generations is not None and any(row.get('completion_generation')
+            and str(row['recommendation_id']) not in seen_terminal for row in original):
+        raise ValueError('quantity_completion_entry_binding_conflict')
+    verify_completion_overlay_generations(generations, data_dir=data_dir,
+        read=bounded_read if source_generations is not None else None)
     result = ResidentFacts(list(current.values()))
     result.completion_generations = generations
     result.completion_overlay_summary = dict(schema='initial_quantity_completion_overlay_v1',
@@ -541,3 +584,61 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
         source_scope='entry_day_facts_plus_exact_completion_date_observations',
         entry_day_database_or_source_mutation=False)
     return result
+
+
+def verify_completion_census_context(rows, census, *, as_of, data_dir, entry_on_or_after):
+    """Reproduce serialized overlay claims from small native terminal receipts.
+
+    The original entry status is retained evidence, never a new DB attestation.
+    Exact current completion scalars, economics, custody and full populations
+    are independently joined by the existing overlay owner.
+    """
+    from src.engine import strategy_position_performance_report as facts
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    from src.engine.scalping.initial_quantity_policy import _digest
+    import re
+    root = Path(data_dir)
+    generations = census.get('completion_overlay_generations', {})
+    summary = census.get('completion_overlay_summary', {})
+    if (not isinstance(generations, dict) or not isinstance(summary, dict)
+            or generations and not summary):
+        raise ValueError('quantity_shared_fact_census_mismatch')
+    if not generations and not summary:
+        if any(isinstance(row, dict) and row.get('completion_generation') for row in rows):
+            raise ValueError('quantity_shared_fact_census_mismatch')
+    start = entry_on_or_after or '2026-06-05'
+    if any(not isinstance(day, str) or datetime.fromisoformat(day).date().isoformat() != day
+           or not start <= day <= as_of for day in generations):
+        raise ValueError('quantity_shared_fact_census_mismatch')
+    def generation():
+        paths = []
+        for directory, pattern in ((root/'report/strategy_position_fact_sync', 'strategy_position_fact_sync_*.status.json'),
+                                   (root/'report/monitor_snapshots', 'trade_review_*.fact_projection.json*')):
+            for path in directory.glob(pattern):
+                match = re.search(r'(\d{4}-\d{2}-\d{2})', path.name)
+                if match and start <= match[1] <= as_of:
+                    paths.append(path)
+        for day in generations:
+            raw = root/'report/monitor_snapshots'/f'trade_review_{day}.json'
+            sidecar = raw.with_suffix('.completed_projection.json')
+            scalar = raw.with_suffix('.fact_projection.json')
+            paths.extend(p for logical in (raw, sidecar, scalar) for p in (
+                logical, Path(str(logical)+'.gz'), Path(str(logical)+'.gz.archive_receipt.json')))
+            paths.append(Path(str(sidecar)+'.dependencies.json'))
+        return (facts._completion_source_signature(sorted(set(paths))),
+                {day:source_generation(root, day) for day in generations})
+    before = generation()
+    key = (str(root.resolve()), as_of, start, _digest(census))
+    if _VERIFIED_COMPLETION_CONTEXTS.get(key) != before:
+        reconstructed = completion_overlay(rows, as_of=as_of, data_dir=root,
+            entry_on_or_after=start, entry_generations=census.get('persisted_fact_generations', {}),
+            validate_day=None, source_generations=generations)
+        if (list(reconstructed) != list(rows) or reconstructed.completion_generations != generations
+                or summary and reconstructed.completion_overlay_summary != summary):
+            raise ValueError('quantity_shared_fact_census_mismatch')
+    if generation() != before:
+        raise ValueError('quantity_completion_source_changed')
+    _VERIFIED_COMPLETION_CONTEXTS[key] = before
+    _VERIFIED_COMPLETION_CONTEXTS.move_to_end(key)
+    while len(_VERIFIED_COMPLETION_CONTEXTS) > 8:
+        _VERIFIED_COMPLETION_CONTEXTS.popitem(last=False)

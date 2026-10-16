@@ -101,3 +101,15 @@
 추가 근거: [이월 완료4 원천 대사](../../tmp/postclose-complete-repair-20261017/quantity-carry-overlay-current-native-bounded-verification.json), [수량 overlay 구현·리뷰](../../tmp/postclose-complete-repair-20261017/quantity-completion-overlay-implementation-review.json), [역사 cancel 원천 보존 조사](../../tmp/postclose-complete-repair-20261017/cancel-historical-original-source-recovery-assessment.json), [기계·연구11개 작업 대사](../../tmp/postclose-complete-repair-20261017/final-semantic-group-machine.json).
 
 후속 코드 게이트도 종료했다. source SHA를 시작·끝에 고정한 9개 모듈 통합1,042건 통과(57.91초), Python compile·diff·print-only parser PASS다. cancel 복구는 독립3개 모듈133건 통과, 수량/모니터·WS·시장기회/stage 교차 리뷰도 미해결 finding0으로 닫혔다. [최종 source 결속 검증](../../tmp/postclose-complete-repair-20261017/supplemental-validation-attestation-v2.json), [cancel 독립 리뷰](../../tmp/postclose-complete-repair-20261017/cancel-native-ancestry-independent-review-final.json). 다음 단계는 이 exact code를 다음 정규 기동용으로 선택한 후 영향받은 native 생산자와 전체 최종 소비자를 실제 재생성·검증하는 것이다. 아직 미래 PREOPEN/PID/자연 주문·비용경제성 완료를 뜻하지 않는다.
+
+## 실제 재생성에서 발견한 추가 계약과 반복 보완
+
+- 058d432d3 선택 후 첫 native 수량 refresh는 `timeout_research_shared_source_mismatch`로 실패했다. 완료일 overlay를 가진 첫 census와 후속 timeout의 JSON/shared 재-census 사이에 완료 세대 헤더가 빠졌다. 실패 영수증을 보존하며, 행·cohort·작은 봉인 원천으로 공유 context를 독립 검증하고 전달하도록 후속 수리한다. 코드 검증1,042건 통과가 native 실행 성공을 대신하지 않는다.
+- cancel native 재생성은98.915초에 완료했다. 원9/30 이벤트8개는 각 실행 stage2개씩 복구됐고, 원9/30·실패 조상15의 바이트는 그대로다. 10/1만 과거 격리를 유지한다. 9/30 미분류2와 전체 역사 미분류5·terminal/cost 미확정10, 현재일 미분류6은 별도 원천 결손이다. 실제 수량·종결·비용을 추정하지 않는다.
+- WS native 최종화9.713초 후10/10의 원 세션을 확인했다. 두 경제 후보는 exact BBO/session 경로를 복구했으나20분 horizon의 exit BBO가 없어 right_censored2/EV NULL이다. 원 lookup2190의 실제 체결 결손과 exact source record 결손도 남는다.
+- 시장기회 native17.508초의 의미 대사에서 기대 cron marker의 `KRX_` 누락을 추가 발견했다. 실제 설치4행과 원 receipt는 정상이다. 상수1줄·독립 literal4행 회귀를 수리했고96건 독립 검증을 통과했다. 새 코드에서 보고서만 다시 발행한다. 별도 확대 suite의2건 실패는 변경 전058에서도 동일 재현됐다. 하나는 시각을 고정하지 않은 scanner receipt 테스트의 비영업 시간 axes, 하나는 이미 퇴역한 builder 속성을 사용하는 fixture다. 운영 guard/퇴역 producer를 복원하지 않는다.
+- 지연 정책 native stage는271.656초에 succeeded로 완료했다. 이전 source/code contract 불일치는 원 producer가 다시 검증한 세대로 대체하며 기본 지연/운영 권한을 변경하지 않는다.
+
+후속 원 실패와 성공의 각 명령·실행 릴리스·소요 시간은 [native 실행 기록](../../tmp/postclose-complete-repair-20261017/native-operations.jsonl)에 별도 보존한다.
+
+공유 원천 후속 수리는 독립348건, 최종 결합685건을 통과했다. 원 entry 상태·명시 횟수와 작은 native terminal/census·원천 세대로 재구성하며 JSON 왕복, 정상 count1→2, 전체 context 삭제와 summary만 삭제, 후행 세대 변조를 검증한다. 실제 실패는 publish 이전으로 기존 committed pointer와 원 report/evaluation/timeout 세대가 교체되지 않았음을 확인했다. [후속 결합 source-guard](../../tmp/postclose-complete-repair-20261017/supplemental-validation-attestation-v3.json), [공유 census 독립 리뷰](../../tmp/postclose-complete-repair-20261017/quantity-shared-census-independent-review-final.json), [실패 세대 보존](../../tmp/postclose-complete-repair-20261017/quantity-timeout-shared-census-failure-custody.json), [시장기회 marker 독립 리뷰](../../tmp/postclose-complete-repair-20261017/moc-trigger-independent-review-final.json). 미해결 in-scope 코드 지적0이며 다음 native 재생성 결과는 별도 검증한다.

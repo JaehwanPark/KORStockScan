@@ -1504,8 +1504,14 @@ def test_trigger_existing_four_owned_log_lines_are_verified_without_transition_c
     command = (f"bash {tmp_path}/deploy/run_with_owned_log.sh --owner market_opportunity_census_cron "
                f"--log {tmp_path}/logs/run_market_opportunity_census_intraday_cron.log {wrapper} "
                "$(TZ=Asia/Seoul date +\\%F)")
-    lines = [f"{prefix}{command} # {marker}" for prefix, marker in zip(
-        census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES, census.EXPECTED_TRIGGER_MARKERS, strict=True)]
+    # Literal installed schedules/markers are evidence independent of validator
+    # constants. Mirroring those constants hid an aftermarket marker typo.
+    lines = [
+        f"*/5 8 * * 1-5 {command} # MARKET_OPPORTUNITY_CENSUS_NXT_PREMARKET_5MIN",
+        f"*/5 9-14 * * 1-5 {command} # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_5MIN",
+        f"0-30/5 15 * * 1-5 {command} # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN",
+        f"*/5 16-19 * * 1-5 {command} # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_AFTERMARKET_5MIN",
+    ]
     payload = dict(schema_version=census.TRIGGER_SCHEMA_VERSION, trigger_id="MARKET_OPPORTUNITY_CENSUS_5MIN",
                    enabled=True, contract_source="installed_crontab_verified", schedule_timezone="Asia/Seoul",
                    capture_cadence_sec=300, installed_exec_start=str(wrapper),
@@ -1523,6 +1529,12 @@ def test_trigger_existing_four_owned_log_lines_are_verified_without_transition_c
                                             census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES[0], census.EXPECTED_TRIGGER_MARKERS[0], wrapper)
     assert not census._trigger_command_valid(lines[0].replace("$(TZ=Asia/Seoul date +\\%F)", "; touch foreign"),
                                             census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES[0], census.EXPECTED_TRIGGER_MARKERS[0], wrapper)
+    payload['trigger_lines'][-1] = lines[-1].replace('CENSUS_KRX_NXT_AFTERMARKET', 'CENSUS_NXT_AFTERMARKET')
+    payload['trigger_lines_sha256'] = census._canonical_trigger_lines_sha256(payload['trigger_lines'])
+    receipt.write_text(json.dumps(payload))
+    wrong_marker = census._load_trigger_contract(receipt,
+        installed_crontab_text='\n'.join(payload['trigger_lines']), system_timezone='Asia/Seoul')
+    assert wrong_marker['status'] == 'invalid' and 'trigger_schedule' in wrong_marker['reason_codes']
 
 
 def _zero_base_native_events(*, route="krx_nxt_integrated"):
