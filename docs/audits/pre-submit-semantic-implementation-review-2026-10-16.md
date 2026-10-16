@@ -31,3 +31,12 @@
 동결된 당일 요약9,251행+fixture1개에서 producer 최근 구간118행의 count/identity parity를 확인했다. 같은 프로세스 warm 기준 full8,790,806B→manifest35,041B, native 읽기 중앙값89.081ms→bounded 읽기/해시0.253ms, 상황 조회 p95 12.324µs, 최초 writer 이관0.116초다. 실제 Main 주문 latency 개선이나 cold I/O로 해석하지 않는다. `performance.json`과 `targeted-validation.json`에 원 snapshot SHA/시험 로그를 결속했다.
 
 후속 리뷰에서 압축 pipeline의 물리 파일명 변경을 원천 유실로 보던 delay ledger 경계를 수리했다. 원 ledger를 다시 쓰지 않고 original logical SHA/byte 수와 전체 gzip CRC를 검증한다. 검증 cache는 최대64개 metadata/digest이며 append·inode/ctime/alias 변경을 다시 검증한다. 재계산은 완결된15일 원천을 먼저 격리 생성하여19일 target으로 검증하고, 현재16일 정책/PREOPEN pointer를 보존한다.16일 당일 누적 정책과 전체 strict/controller는 정규 장후 수용이 소유한다.
+
+
+## 첫 배포·원천 재생 결과와 관측 대기 보완
+
+30cffe251의 active policy source1,198개와 native37파일 동일 SHA를 확인하고 fresh rising86개/holding99개 network-denied fixture를 발행했다. 정규 ordered 전이는17:01:52.935897 완료, 새PID131879/start20162156이며 original policy unchanged다. 새 producer PID의 recent projection 게시/flush error0을 확인했다.
+
+기동 후 구 cursor 이관의10분 관측 창 확보 시간을 `raw_source_unobservable_with_summary`로 세던 추가 오경보를 발견했다. 원천이 실제 unobservable일 때만 해당 결손을 내고 partial window는 `raw_observation_window_pending`으로 표시한다. malformed/backlog 결손과 기존 incident를 보존하고 완전한 관측을 확보하기 전에는 healthy/recovered로 바꾸지 않는다. 관련3,092개 PASS 후 같은 승인/인계 절차로 후속 배포한다.
+
+10/15 완결 원천을10/16 발행·10/19 target으로 격리 재계산했다. qualified267개/P0 220개/price pairs255개를 보존했고 상황 UNKNOWN267→29, 실제 상황15종+UNKNOWN, cell97→195, 양수 price cell0으로 초기0초를 유지한다. native capture163개에서 anchor238개를 exact join했으며 원천 날짜 전체 제외0이다. 원 호가 clock/hash169개·generation/epoch70개 제외와 native/parent 미확인 표본은 보존했다. canonical10/16 정책/과거 sealed stage를 바꾸지 않았다. 후속 cursor 코드 세대와는 같은 qualified projection을 native 검증 후 재사용해 최종 artifact를 결속한다.

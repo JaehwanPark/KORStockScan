@@ -4616,3 +4616,18 @@ def test_delay_signal_observation_complete_has_no_submit_terminal_requirement(tm
     value=json.loads(manifest.read_text());value['recent_summary']['rows'][0]['event_count']+=1
     manifest.write_text(json.dumps(value))
     assert monitor.pre_submit_delay_source_semantics(alias,now)['sources']['summary']=='unobservable'
+
+
+def test_delay_cursor_migration_waits_for_window_without_new_source_gap(tmp_path,monkeypatch):
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor
+    day='2026-10-16';now=monitor.stamp(day+'T10:05:00+09:00')
+    event=dict(event_type='pipeline_event',pipeline='ENTRY_PIPELINE',stage='scalping_scanner_fast_precheck',
+        stock_code='005930',record_id=1,emitted_date=day,emitted_at=day+'T10:02:00+09:00',fields={})
+    raw=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl';raw.parent.mkdir();raw.write_text(json.dumps(event)+'\n')
+    writer=ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries',mode='shadow');writer.submit(event);writer.flush()
+    prior=dict(date=day,offset=raw.stat().st_size,minutes={},delay_events=[],coverage_started_at=day+'T00:00:00+09:00')
+    result=monitor.pre_submit_delay_source_semantics(tmp_path,now,prior)
+    assert result['sources']['raw']=='partial' and result['sources']['summary']=='complete'
+    assert result['issues']=={} and result['status']=='unobservable'
+    assert result['diagnostics']['raw_observation_window_pending']==1
+    assert result['healthy'].get('raw_source_unobservable_with_summary',0)==0

@@ -2054,8 +2054,13 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     elif summary_status == "complete" and any(
             stamp(key.split("|", 1)[0]) >= now - timedelta(seconds=DELAY_WINDOW_SEC)
             for key in summary_minutes):
-        issues["raw_source_unobservable_with_summary"] += 1
-        issue_scopes["raw_source_unobservable_with_summary|raw"] += 1
+        if raw_status == "unobservable":
+            issues["raw_source_unobservable_with_summary"] += 1
+            issue_scopes["raw_source_unobservable_with_summary|raw"] += 1
+        else:
+            # A new/migrated cursor has not observed a complete window yet.
+            # Malformed rows/backlog already have their own explicit findings.
+            diagnostics["raw_observation_window_pending"] += 1
     status = ("gap_observed" if issues else "observed_no_gap"
               if raw_status == summary_status == compact_status == "complete" else "unobservable")
     return {"schema": "pre_submit_delay_intraday_source_semantics_v1", "as_of": now.isoformat(),
