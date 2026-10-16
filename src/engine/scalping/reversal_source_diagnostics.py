@@ -235,6 +235,7 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
     if desc.get('family_sha256') != facts['family_sha256']:
         return dict(status='unobservable', reason='policy_changed_during_projection', decision_authority='none')
     valid = bool(last[8] and 0 <= now-last[0] <= 3)
+    quote_usable = bool(valid and K.good_quote(last))
     covered = max(0, last[0]-facts['start']) if valid and facts['start'] is not None else None
     desc.update(interval_start_epoch=facts['start'], interval_end_epoch=last[0],
         continuous_covered_seconds=covered, native_epoch=last[1], native_sequence=last[2],
@@ -252,6 +253,8 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
         values = projection.get('values', facts['features'])
         missing = [field for field in row['feature_fields']
                    if not feature_bound or values.get(field) is None]
+        if not quote_usable:
+            missing.append('executable_quote')
         if covered is None:
             missing.append('continuous_source_interval')
         elif covered < row['backward_window_seconds']:
@@ -259,6 +262,7 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
         condition = facts['root'].get(bid)
         # Root predicate value is not the FALSE->TRUE event or its hold outcome.
         row.update(detector_truth=facts['coverage'].get(bid, 'UNKNOWN') if valid and coverage_bound else 'UNKNOWN',
+            native_quote_usable=quote_usable,
             feature_basis='actual_branch_confirmation' if projection is actual and actual else 'prefix_context_no_confirmation',
             feature_identity=tuple(last[:3]) if feature_bound else None,
             feature_values={field: values.get(field) for field in row['feature_fields']},
