@@ -229,6 +229,8 @@ predecessor native preflight 반복 읽기/120초 timeout도 같은 DirectFamily
 
 11:35 후속 관측에서 delay source ledger 내부의 과거 pipeline 재해시와 observer role 공통 잠금 경합을 확인했다. 기존 owner의 잔여 결함으로 지연·수량 정책 소비의 봉인 참조 검증과 generation별 잠금을 보완한다. [SOR/pipeline 재리뷰](../audits/main-sor-krx-and-pipeline-validation-deployment-review-2026-10-16.md)의 추가 배포·현재 PID·실측 I/O 수용을 따르며 원 실패와 자연 관측/경제성 OPEN은 유지한다.
 
+selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한계를 같은 owner에서 보완한다. 원 실패·기동 hold·당일 intraday 실제 소비 증거를 보존하고 exact frozen generation 검증 후 정식 중단 복구를 수행한다. 정책 재선정·임계치 변경·native 소비 합성은 하지 않는다.
+
 09:49 cold timeout의 실패 이력을 보존하고 같은 배포 owner에서 기존 transition TTL120초/의미 검증을 유지한다. 단일 역사파일 content-hash 준비와 native phase 비용을 구분해 실제 PID/ACK/고정5개 수용을 확인한다. 원 운영 checklist bytes는 유지한다.
 
 10:13:11 같은-PID native 복구/PID3083694와 원4개 SELL ACK·고정5개를 확인했다.10:20 자연 full observer 회복과10:22:17 전체 FAIL0(경고1/PASS6)을 대조했다. 원150초 timeout·I/O/원천 결손·다음 optional 야간 OPEN은 유지하며 상세 감사 근거를 따른다. canonical 당일 checklist는 SHA394a2f6e… 그대로다.

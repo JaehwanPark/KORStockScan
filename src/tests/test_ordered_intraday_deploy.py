@@ -117,6 +117,60 @@ def _assert_detector_lock_held(workspace):
             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+@pytest.mark.parametrize('damage', [None, 'proof_pid', 'proof_basis', 'consumed', 'handoff', 'policy', 'preopen', 'manifest'])
+def test_stopped_intraday_recovery_requires_original_consumption_and_every_frozen_byte(tmp_path, monkeypatch, damage):
+    day, commit = '2026-10-16', 'a'*40
+    old = tmp_path/'old';identity=dict(pid=2147483601,start_ticks='123',cwd=str(old/'src'))
+    policy=tmp_path/'policy.json';policy.write_text('original')
+    preopen=tmp_path/'preopen.json';preopen.write_text('original preopen')
+    manifest=tmp_path/'manifest.json';manifest.write_text(json.dumps({'manifest_sha256':'b'*64}))
+    proof_path=tmp_path/'preflight-intraday_release_handoff.log'
+    proof=dict(schema='intraday_pid_consumption_verification_v1',status='pass',findings=[],
+        basis='intraday_policy_preserving_handoff',actual_pid_consumed=True,target_date=day,
+        selected_release_commit=commit,release_root=str(old),pid_identity=identity,manifest_sha256='b'*64)
+    handoff_path=tmp_path/'handoff.json';consumed_path=tmp_path/'consumed.json'
+    handoff=dict(schema='intraday_policy_preserving_release_handoff_v1',status='prepared_verified',
+        authority=D.H.CONFIRM,target_date=day,selected_release_commit=commit,release_root=str(old),
+        preopen_sha256=D.H._sha(preopen),frozen_files={str(policy):D.H._sha(policy),str(manifest):D.H._sha(manifest)})
+    handoff_path.write_bytes(D._json_bytes(handoff))
+    consumed=dict(schema='intraday_policy_preserving_consumption_v1',status='pass',target_date=day,
+        selected_release_commit=commit,release_root=str(old),actual_pid_consumed=True,
+        pid_identity=identity,handoff_sha256=D.H._sha(handoff_path),manifest_sha256='b'*64)
+    if damage=='proof_pid':proof['pid_identity']={**identity,'start_ticks':'456'}
+    elif damage=='proof_basis':proof['basis']='native_preopen'
+    elif damage=='consumed':consumed['actual_pid_consumed']=False
+    elif damage=='handoff':handoff_path.write_text('{}')
+    elif damage=='policy':policy.write_text('changed')
+    elif damage=='preopen':preopen.write_text('changed')
+    elif damage=='manifest':manifest.write_text(json.dumps({'manifest_sha256':'c'*64}))
+    proof_path.write_bytes(D._json_bytes(proof));consumed_path.write_bytes(D._json_bytes(consumed))
+    monkeypatch.setattr(D.H,'_paths',lambda *a:(handoff_path,consumed_path))
+    monkeypatch.setattr(D.H,'_preopen_path',lambda *a:preopen)
+    monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda *a:manifest)
+    before={p:p.read_bytes() for p in (proof_path,handoff_path,consumed_path,policy,preopen,manifest)}
+    if damage:
+        with pytest.raises(ValueError,match='stopped_intraday_predecessor_invalid'):
+            D._stopped_intraday_predecessor(day,old,commit,identity,tmp_path/'status.json')
+    else:
+        result=D._stopped_intraday_predecessor(day,old,commit,identity,tmp_path/'status.json')
+        assert result['frozen_files'][str(consumed_path)]==D.H._sha(consumed_path)
+        assert result['frozen_files'][str(proof_path)]==D.H._sha(proof_path)
+    assert all(p.read_bytes()==raw for p,raw in before.items())
+
+
+def test_stopped_recovery_from_intraday_does_not_fabricate_native_receipt(stopped_recovery, monkeypatch):
+    d,status_path,policy=stopped_recovery
+    selected=D.H._read(d.selection);selected.pop('native_predecessor_path');selected.pop('native_predecessor_sha256')
+    d.selection.write_bytes(D._json_bytes(selected))
+    proof=status_path.with_name('preflight-intraday_release_handoff.log');proof.write_text('verified original proof')
+    monkeypatch.setattr(D,'_stopped_intraday_predecessor',lambda *a:dict(path=str(proof),sha256=D.H._sha(proof),frozen_files={str(policy):D.H._sha(policy)}))
+    monkeypatch.setattr(D.H,'_native_predecessor',lambda *a:pytest.fail('intraday consumption relabeled native'))
+    d.preflight();d.acquire_hold();d.drain();d.publish()
+    assert not hasattr(d,'native_path')
+    assert 'native_predecessor_path' not in D.H._read(d.selection)
+    assert d.state['failed_hold_adoption']['intraday_predecessor_proof_sha256']==D.H._sha(proof)
+
+
 @pytest.mark.parametrize('failure', [None, 'preflight', 'publish', 'attest'])
 def test_cli_holds_detector_lock_through_attestation_and_failure(tmp_path, monkeypatch, failure):
     calls = []

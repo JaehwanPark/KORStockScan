@@ -237,3 +237,5 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 SOR 미식별 체결의 KRX 사용자 지정과 35beec0f 통합·리뷰·배포 수용은 [전용 감사 기록](../audits/main-sor-krx-and-pipeline-validation-deployment-review-2026-10-16.md)을 따른다. 기존 OPEN owner와 원 실패/경제성 결손은 유지한다.
 
 기동 후 잔여 조사에서 지연 정책 source ledger 내부의 pipeline byte_generation 재호출을 확인했다. bootstrap·Main prepare·health와 수량 terminal 소비는 봉인 pipeline 참조를 사용하고 compact/ledger/정책·보고서 검증을 유지한다. 연구 producer의 기본 원천 검증은 그대로 수행한다. observer 검증 잠금은 generation별로 보유하며 role 공통 잠금은 digest 발행/retention에서만 보유한다. 경합은 관측 deferred로 기록하고 독립 health 검사를 계속한다. 원장 재읽기, timeout 확대, semantic PASS 합성으로 경합을 우회하지 않는다.
+
+중단 복구는 PREOPEN 직접 predecessor와 당일 intraday 인계 완료 predecessor를 원래 schema로 구별한다. 후자는 원 live preflight PASS·prepared/consumed 영수증·정확한 PID/start/cwd·manifest/PREOPEN·모든 frozen bytes가 일치해야 한다. 기존 실패·선택·hold를 CAS로 보존하며 실제 소비를 다른 schema로 합성하지 않는다.

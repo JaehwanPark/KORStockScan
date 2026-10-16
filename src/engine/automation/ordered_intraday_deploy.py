@@ -701,11 +701,47 @@ class Deployment:
                         recovery='inspect_transition_and_preserve_startup_hold')
 
 
+def _stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path):
+    """Recheck the genuine same-day consumption, without inventing a native PID."""
+    proof_path = Path(failed_path).with_name('preflight-intraday_release_handoff.log')
+    proof, proof_raw, _ = _owned_metadata(proof_path)
+    handoff_path, consumed_path = H._paths(day, previous_commit)
+    handoff, handoff_raw, _ = _owned_metadata(handoff_path)
+    consumed, consumed_raw, _ = _owned_metadata(consumed_path)
+    manifest = H._read(H.bootstrap.manifest_path(day))
+    if (proof.get('schema') != 'intraday_pid_consumption_verification_v1'
+            or proof.get('status') != 'pass' or proof.get('findings') != []
+            or proof.get('basis') != 'intraday_policy_preserving_handoff'
+            or proof.get('actual_pid_consumed') is not True
+            or proof.get('target_date') != day or proof.get('pid_identity') != identity
+            or proof.get('selected_release_commit') != previous_commit
+            or proof.get('release_root') != str(previous)
+            or proof.get('manifest_sha256') != manifest.get('manifest_sha256')
+            or handoff.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+            or handoff.get('status') != 'prepared_verified' or handoff.get('authority') != H.CONFIRM
+            or handoff.get('target_date') != day or handoff.get('selected_release_commit') != previous_commit
+            or handoff.get('release_root') != str(previous)
+            or handoff.get('preopen_sha256') != H._sha(H._preopen_path(day))
+            or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+            or consumed.get('status') != 'pass' or consumed.get('target_date') != day
+            or consumed.get('selected_release_commit') != previous_commit
+            or consumed.get('release_root') != str(previous)
+            or consumed.get('actual_pid_consumed') is not True or consumed.get('pid_identity') != identity
+            or consumed.get('handoff_sha256') != _digest(handoff_raw)
+            or consumed.get('manifest_sha256') != proof.get('manifest_sha256')
+            or not handoff.get('frozen_files')
+            or any(H._sha(p) != sha for p, sha in handoff['frozen_files'].items())):
+        raise ValueError('deployment_stopped_intraday_predecessor_invalid')
+    return dict(path=str(proof_path), sha256=_digest(proof_raw),
+        frozen_files={**handoff['frozen_files'], str(proof_path):_digest(proof_raw),
+                      str(handoff_path):_digest(handoff_raw), str(consumed_path):_digest(consumed_raw)})
+
+
 class StoppedDeploymentRecovery(Deployment):
     """Explicit embedding-only recovery of a failed selected native transition.
 
     The caller holds both ordinary deployment locks. Reuse the live-captured
-    native proof, never infer consumption from an absent process. The failed
+    native or intraday proof, never infer consumption from an absent process. The failed
     attempt remains immutable; only its exact owned hold may transfer.
     """
 
@@ -773,10 +809,15 @@ class StoppedDeploymentRecovery(Deployment):
         if (self.candidate in {failed_root, self.previous}
                 or Path(__file__).resolve().parents[3] != self.candidate):
             raise ValueError('deployment_recovery_requires_new_reviewed_candidate')
-        native = H._native_predecessor(self.day, failed_commit, self.previous,
-            self.previous_commit, identity, selected.get('native_predecessor_path'),
-            selected.get('native_predecessor_sha256'))
-        native_value = H._read(native['path'])
+        native_basis = bool(selected.get('native_predecessor_path'))
+        if native_basis:
+            native = H._native_predecessor(self.day, failed_commit, self.previous,
+                self.previous_commit, identity, selected.get('native_predecessor_path'),
+                selected.get('native_predecessor_sha256'))
+            native_value = H._read(native['path'])
+        else:
+            native = _stopped_intraday_predecessor(self.day, self.previous,
+                self.previous_commit, identity, failed_path)
         checks = dict(delay=H.verify_candidate_delay_code(self.day, self.candidate, self.commit),
             stop=H.verify_candidate_stop_code(self.day, self.candidate, self.commit),
             holding=H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit))
@@ -795,7 +836,8 @@ class StoppedDeploymentRecovery(Deployment):
             failed_hold_adoption=dict(source_failure=failed['error'],
                 failed_transition_path=str(failed_path), failed_transition_sha256=_digest(failed_raw),
                 failed_selected_root=str(failed_root), failed_selected_commit=failed_commit,
-                previous_hold_sha256=_digest(hold_raw), native_predecessor_sha256=native['sha256'],
+                previous_hold_sha256=_digest(hold_raw),
+                **{('native_predecessor_sha256' if native_basis else 'intraday_predecessor_proof_sha256'):native['sha256']},
                 transfer_status='verified_not_transferred'))
         self.failed_hold_adoption = dict(raw=hold_raw, signature=hold_sig,
             transition_path=str(failed_path), transition_raw=failed_raw, transition_signature=failed_sig,
@@ -804,12 +846,13 @@ class StoppedDeploymentRecovery(Deployment):
                 ('failed-startup-hold-before.json', hold_raw), ('failed-transition-before.json', failed_raw),
                 ('checklist-before.md', self.document_before)]:
             _atomic(self.directory/name, raw)
-        self.native_path = self.directory/'native-predecessor.json'
-        _atomic(self.native_path, _json_bytes(dict(native_value, candidate_commit=self.commit)))
-        self.native_sha = H._sha(self.native_path)
-        H._native_predecessor(self.day, self.commit, self.previous, self.previous_commit,
-                             identity, self.native_path, self.native_sha)
-        self.frozen[str(self.native_path)] = self.native_sha
+        if native_basis:
+            self.native_path = self.directory/'native-predecessor.json'
+            _atomic(self.native_path, _json_bytes(dict(native_value, candidate_commit=self.commit)))
+            self.native_sha = H._sha(self.native_path)
+            H._native_predecessor(self.day, self.commit, self.previous, self.previous_commit,
+                                 identity, self.native_path, self.native_sha)
+            self.frozen[str(self.native_path)] = self.native_sha
         self.frozen.update({native['path']: native['sha256'], str(failed_path): _digest(failed_raw),
                             str(prior_path): _digest(prior_raw)})
         for name, check in checks.items():

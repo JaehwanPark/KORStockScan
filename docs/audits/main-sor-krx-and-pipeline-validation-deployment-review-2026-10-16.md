@@ -35,3 +35,5 @@ raw open 직전 중단하는 read-only audit로 `artifact_freshness → historic
 observer digest의 role 공통 잠금이 전체 검증 동안 유지되어 다른 observer가 2초 후 `ValidationDeferred`로 중단되는 문제도 확인했다. generation 잠금으로 검증을 분리하고 role 잠금은 발행/retention에만 사용한다. 같은 generation 경합 시 artifact 관측을 명시적으로 deferred/불완전으로 남기고 독립 health 검사는 계속한다. cache 발행 실패로 semantic 결과를 PASS로 바꾸거나 원장 전체 읽기로 재시도하지 않는다.
 
 `5f3bbfc01` 추가 배포는 11:56:37 selected 단계에서 `pre_submit_delay_generation_changed`로 차단됐다. 추가한 `pipeline_source_validation` 표시 필드가 frozen PREOPEN의 전체 영수증 비교를 바꾼 결함이며 정책/임계치 변경은 없다. 해당 필드를 제거하고 영수증 ABI 회귀검사를 추가한다. 원 failed status·hold·native predecessor를 보존하고 기존 `StoppedDeploymentRecovery`로 선택 단계부터 복구한다. 실패를 PASS로 덮거나 hold를 임의 해제하지 않는다.
+
+첫 중단 복구는 `intraday_native_predecessor_hash_invalid`로 mutation 전에 차단됐다. 원 8d1fb29fd PID는 PREOPEN 직접 predecessor가 아니라 `intraday_policy_preserving_handoff` 소비를 완료했으므로 native 영수증이 없는 것이 정상이다. 복구 분기를 보완해 원 live preflight PASS·동일 PID/start/cwd·기존 prepared handoff/consumption·manifest/PREOPEN와 모든 frozen bytes를 검증한다. 실제 intraday 소비를 native 소비로 재분류하지 않는다. recovery/인계 회귀 2,111개를 통과했다. 기존 4개 family의 component hash와 검증 plan은 이 deployment-only 보완으로 변하지 않으며 정확히 같은 generation fixture를 검증해 재사용한다.
