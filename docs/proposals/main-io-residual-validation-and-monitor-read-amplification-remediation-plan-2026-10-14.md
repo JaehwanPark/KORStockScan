@@ -225,3 +225,6 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 ### 호환 predecessor의 배포 검증 세션
 
 승인된 ordered 배포의 기존 PID 검증에도 동일 CLI/digest 구현이 byte/전체 AST로 확인된 경우에만 같은 validation session을 전달한다. H의 정확한 overnight source-pair 상수 데이터 외 검증 코드가 다르거나 cache가 다르면 기존 full 경로다. digest 재사용만 허용하며 의미·원천·코드·날짜·PID 검사는 각 subprocess가 수행한다. 기존120초/phase deadline·cache TTL은 유지한다. 실제 timeout·회귀·code compatibility·native I/O 수용은 위 배포 리뷰를 따른다.
+
+
+09:49 native cold preflight timeout은 원 시도/현재 PID를 보존한다. 전환용 digest TTL120초는 장후600초와 구분한다. 같은 현재 PID/code/root/date/새 UUID의 기존 native content-hash API로 가장 큰 역사파일1개만 사전 읽고 즉시 정규 배포를 실행한다. 판정·원천·정책·deadline/TTL 변경은 없으며 각 native 검증은 다시 수행한다. 실제 준비 비용과 phase 재사용/성공은 위 배포 리뷰에 구분해 기록한다.

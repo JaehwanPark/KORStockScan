@@ -157,3 +157,10 @@ bdd461fde 최초 일반 preflight는 원 PID 부재로 selector 전 차단됐다
 각 code source는2MiB 이하 regular/no-follow로 읽고 descriptor/경로 전후 identity를 대조한다. 데이터 파일 stat·source set·기대 hash·날짜·정책·hard safety·native 의미 검사·120초 timeout은 그대로다. session의 기존 digest 저장소/TTL/무효화 규칙을 바꾸지 않는다. compatibility proof는 호출 옵션만 고르고 actual verdict는 각 native subprocess가 다시 만든다.
 
 18개 compatibility/옵션·deadline 경계 회귀를 포함한6 suites2389 PASS, descriptor identity 보완 후 automation suite156 PASS와 현재bdd→후보의 실제 두 CLI compatibility true를 확인했다. [실제 코드 호환성](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/predecessor-actual-cli-compatibility.json). 새 후보를 clean immutable release로 만들고 실제 preflight validation_io·원 deadline 내 통과·PID·ACK·고정5개·정규 detector로 확인한다. 예상 읽기 절감을 실제 측정으로 확대하지 않는다.
+
+
+## 09:49 cold predecessor timeout과 제한 content-hash 준비
+
+a01b84d79의09:47:58 native preflight는 호환 기존bdd CLI에 같은 UUID를 전달했지만09:49:59 기존120초에서 timeout됐다. selector/Main3016558은 그대로이며 원 failed attempt는 보존한다.112초 관측의 논리16.60GB/물리16.28GB와 원 digest metadata의 경로·크기 발견을 대조하면 역사10/12–10/15 pipeline4개15,473,647,020바이트가 cold 원천이다. metadata의 이전 digest/판정은 재사용하지 않는다.
+
+transition digest TTL은120초이며 postclose600초와 다르다. TTL/deadline/의미 검증은 늘리거나 생략하지 않는다. 새 시도 전 가장 큰 역사10/13 파일7,394,107,688바이트만 genuine 현재 PID/start/cwd/code/root/date와 새 UUID의 기존 transition_session으로 새로 읽는다. native identity 전후 검사 후 content digest만 게시하고 어떤 PASS/선택/정책/영수증도 만들지 않는다. 즉시 같은 UUID로 정규 ordered driver/잠금/120초 검증을 실행한다. 만료·source/PID/code 변경·불일치는 원 full 재검증 또는 실패다. 전체4개를 미리 읽으면120초 수명을 소진할 수 있으므로 단일 큰 파일로 준비를 제한한다. cold 준비 I/O와 각 native phase I/O/소요시간을 분리해 기록하며 단축을 미리 주장하지 않는다.
