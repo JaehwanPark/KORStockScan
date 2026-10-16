@@ -43,3 +43,13 @@
 기존 `NonfixedDispatchReadinessReview1012`, `AuxiliaryCircuitRecoveryRepair1012`, `HoldingProfitExitSourceContractRepair`, `DirectFamilyPreopenPolicyHandoff`와 새 `OperationalLogRetentionRepair1016`가 각 수용을 소유한다. 과거 주성 WATCHING49353의 유실된 fixed 소유권은 원 매도→새 row의 정확한 연결 증거 없이 역으로 채우지 않는다. 다음 자연 매도/재감시와 새 lease 수신, 실효 처리량·제출·비용 후 성과는 코드 PASS와 별도 OPEN이다. 오래된 원천·unknown 신원·수동/retired custody·DANGER·계좌/주문/수량 안전장치는 유지한다.
 
 배포 전 추가 리뷰에서 rising/holding 보고서의 현재 capability 세대 연결도 새 코드로 갱신했다. 원 보고서·이전 fixture를 보존하는 정확한 source→successor 쌍이며 새 fixture 없이는 검증되지 않는다. 관련147개 회귀가 통과했다.
+
+## 15:45 중단과 원 인계 복구
+
+첫628771e9c 배포는 selected 단계에서 `v4_contract_code_changed:continuous_reversal_policy_v3.py`로 중단됐다. delay/stop/holding 검증과 별도로 필요한 active cumulative policy 코드 인계가 게시되지 않은 운영 준비 누락이다. 선택만 변경됐고 새 Main은 기동하지 않았다. 기존 봇은 정규 drain으로 종료됐으며 원 failed transition·operator hold·소비 영수증을 보존한다.
+
+새 복구는 현재 선택된 실패 시도의 정확한 날짜/commit/root/phase/hold와 원 selection SHA, 이전 Main의 실제 native 소비 및 봉인 원천을 모두 검증한다. Main·supervisor·restart 요청이 있거나 다른 hold/실패·원천 변경이면 거부한다. 기존 native 코드 인계의 ancestry만 새 승인 영수증에 연결하고 selector/hold는 불변 정책 원천으로 동결하지 않는다. 이 제한된 인계 후 기존 StoppedDeploymentRecovery의 독립 전체 검증과 hold CAS로 새 코드 후보를 선택·기동한다. 원 정책을 재선정하거나 실패를 PASS로 덮어쓰지 않는다.
+
+앞으로 active policy 코드 인계 영수증 게시/검증을 drain 전에 수행한다.37개 native 정책 파일은 선행922b9cbc3의 검증본과 모두 동일하므로 원76,800행/128scope/594hit parity를 SHA로 재사용한다. 새 재생을 수행했다고 보고하지 않는다. 변경된 인계 함수 자체는 별도의 변조/실패/경합 회귀로 검증한다.
+
+중단 코드 인계와 기존 배포/원천 회귀288개 PASS. 검증 로그: [stopped-code-handoff-tests.log](/home/ubuntu/KORStockScan/tmp/long4-retention-integrated-20261016/stopped-code-handoff-tests.log).

@@ -966,3 +966,36 @@ def test_run_json_uses_predecessor_session_only_when_compatible_and_keeps_timeou
     assert ('--validation-session' in argv) is compatible
     if compatible:assert argv[-2:]==['--validation-session',d.validation_session]
     assert options['timeout']==17 and options['cwd']==previous
+
+
+@pytest.mark.parametrize('damage',[None,'phase','error','date','hold','selection','original','main','supervisor','flag','native','ancestry','race'])
+def test_stopped_policy_code_handoff_uses_only_proven_original_ancestry(stopped_recovery,monkeypatch,damage):
+    from src.engine.scalping import reversal_code_handoff as C
+    d,status_path,policy=stopped_recovery
+    selected=D.H._read(d.selection); failed_root=Path(selected['release_root']); failed_commit=selected['git_commit']
+    prior=D.H._read(status_path.with_name('selection-before.json'))
+    monkeypatch.setattr(D,'_stopped_intraday_predecessor',lambda *a: dict(frozen_files={str(policy):D.H._sha(policy)}))
+    def ancestry(data,day,origin,commit,bundle,pointer):
+        assert str(origin)==prior['release_root'] and commit==prior['git_commit']
+        if damage=='race':d.hold.write_text('{}')
+        return None if damage=='ancestry' else dict(bundle_sha256=bundle,source_hashes={})
+    monkeypatch.setattr(C,'_validated_origin_receipt',ancestry)
+    if damage in {'phase','error','date'}:
+        row=D.H._read(status_path);row[{'phase':'failed_phase','error':'error','date':'target_date'}[damage]]='foreign';status_path.write_bytes(D._json_bytes(row))
+    if damage=='hold':d.hold.write_text('{}')
+    if damage in {'selection','original'}:
+        p=d.selection if damage=='selection' else status_path.with_name('selection-before.json')
+        row=D.H._read(p);row['actual_pid_consumed']=True if damage=='selection' else False;p.write_bytes(D._json_bytes(row))
+    if damage=='main':monkeypatch.setattr(D,'_main_pids',lambda:[1])
+    if damage=='supervisor':monkeypatch.setattr(D,'_session_absent',lambda:False)
+    if damage=='flag':d.flag.write_text('restart')
+    if damage=='native':monkeypatch.setattr(D,'_stopped_intraday_predecessor',lambda *a:(_ for _ in ()).throw(ValueError('native invalid')))
+    before=(d.selection.read_bytes(),status_path.read_bytes(),policy.read_bytes())
+    if damage:
+        with pytest.raises(ValueError):C._stopped_origin_receipt(d.workspace/'data',d.day,failed_root,failed_commit,'bundle','pointer')
+    else:
+        result=C._stopped_origin_receipt(d.workspace/'data',d.day,failed_root,failed_commit,'bundle','pointer')
+        assert result['source_hashes'][str(policy)]==D.H._sha(policy)
+        assert str(d.hold) not in result['source_hashes'] and str(d.selection) not in result['source_hashes']
+        assert str(status_path) in result['source_hashes']
+    assert before==(d.selection.read_bytes(),status_path.read_bytes(),policy.read_bytes())

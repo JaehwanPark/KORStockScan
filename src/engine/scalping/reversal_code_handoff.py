@@ -159,7 +159,56 @@ print(json.dumps(dict(bundle_sha256=b['bundle_sha256'],source_hashes=refs)))
 '''
 
 
-def issue(data_root,day,*,origin_root,release_root,parity_path,confirm):
+def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha):
+    """Recover only the native ancestry of an exact failed selected transition."""
+    from src.engine.automation import ordered_intraday_deploy as D
+    workspace = Path(data_root).resolve().parent
+    selected, selected_raw, _ = D._owned_metadata(Path(data_root)/'runtime/runtime_release_selection.json')
+    failed_path = Path(data_root)/'runtime/release_transitions'/day/origin_commit/'status.json'
+    failed, failed_raw, _ = D._owned_metadata(failed_path)
+    prior_path = failed_path.with_name('selection-before.json')
+    prior, prior_raw, _ = D._owned_metadata(prior_path)
+    hold, hold_raw, _ = D._owned_metadata(Path(data_root)/'runtime/operator_startup_hold.json')
+    identity = failed.get('predecessor_identity')
+    expected_hold = dict(schema='ordered_deployment_startup_hold_v1',authority=D.CONFIRM,
+        transition=str(failed_path),target_date=day,candidate_commit=origin_commit,old_pid_identity=identity)
+    if (selected.get('actual_pid_consumed') is not False
+            or selected.get('git_commit') != origin_commit or selected.get('release_root') != str(origin_root)
+            or selected.get('deployment_transition') != str(failed_path)
+            or selected.get('approval_scope') != 'ordered_intraday_deploy_and_restart'
+            or selected.get('approved_by') != 'user' or hold != expected_hold
+            or failed.get('schema') != 'ordered_intraday_deployment_v1' or failed.get('authority') != D.CONFIRM
+            or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
+            or failed.get('failed_phase') != 'selected' or failed.get('target_date') != day
+            or failed.get('candidate_commit') != origin_commit or failed.get('candidate_root') != str(origin_root)
+            or failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
+            or failed.get('policy_effect') != 'unchanged'
+            or failed.get('original_selection_sha256') != D._digest(prior_raw)
+            or prior.get('actual_pid_consumed') is not True
+            or prior.get('git_commit') != failed.get('previous_commit')
+            or prior.get('release_root') != failed.get('previous_root')
+            or not isinstance(identity,dict) or (prior.get('actual_pid_receipt') or {}).get('pid') != identity.get('pid')
+            or D._main_pids() or not D._session_absent()
+            or (workspace/'restart.flag').exists() or (workspace/'restart.flag').is_symlink()):
+        raise ValueError('active_policy_stopped_origin_invalid')
+    previous, previous_commit = D.R.validate_release(workspace, prior)
+    proof = D._stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path)
+    checked = _validated_origin_receipt(data_root,day,previous,previous_commit,bundle_sha,pointer_sha)
+    if checked is None:
+        raise ValueError('active_policy_stopped_native_ancestry_missing')
+    # The hold and selector are observed transition state, never frozen policy inputs.
+    if (D._owned_metadata(Path(data_root)/'runtime/runtime_release_selection.json')[1] != selected_raw
+            or D._owned_metadata(Path(data_root)/'runtime/operator_startup_hold.json')[1] != hold_raw
+            or failed_path.read_bytes() != failed_raw or prior_path.read_bytes() != prior_raw
+            or D._main_pids() or not D._session_absent()):
+        raise ValueError('active_policy_stopped_origin_changed')
+    checked['source_hashes'].update(proof['frozen_files'])
+    checked['source_hashes'].update({str(failed_path):D._digest(failed_raw),str(prior_path):D._digest(prior_raw)})
+    checked['verification_basis'] = 'verified_stopped_transition_original_native_code_ancestry'
+    return checked
+
+
+def issue(data_root,day,*,origin_root,release_root,parity_path,confirm,recover_stopped_origin=False):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import continuous_reversal_policy_v6 as V
     from src.engine.scalping import reversal_extended_catalog as C
@@ -187,6 +236,10 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm):
     if any(d!=C.definition(b) for b,d in bundle['continuous_reversal']['operating_manifest']['definitions'].items()):
         raise ValueError('active_policy_code_handoff_definition_changed')
     checked=_validated_origin_receipt(data_root,day,origin_root,previous,bundle['bundle_sha256'],P.file_hash(pointer))
+    if recover_stopped_origin is True:
+        checked = _stopped_origin_receipt(data_root,day,origin_root,previous,bundle['bundle_sha256'],P.file_hash(pointer))
+    elif recover_stopped_origin is not False:
+        raise ValueError('active_policy_stopped_recovery_flag_invalid')
     if checked is None:
         output=subprocess.check_output([str(origin_root/'.venv/bin/python'),'-B','-c',_ORIGIN_SCRIPT,str(Path(data_root).resolve()),day],
             cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=120)
