@@ -34,16 +34,16 @@ from src.engine.monitoring import policy_generation_validation as validation
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
-        'b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0'),
+        '569a17edc28df66fb47191ab771302160250cb61621c7030ec7b38aba118906a'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        'dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3'),
+        'e224059f9ea0cf593f11dc9f4415b6f0bffcb3a3896d2d299b24c47fd80b8d4f'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
-        'c2c4bc102308a27e521def1669c196bcc61ed13cef1d49d10d90e1f48fa225ce'),
+        '525c05c7ec221bb21e20399c832983b85a62e18edb907b6c9dadc693b29f0fcb'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '0c46142960ee6381e8b7b66e546108e88d37c552c4a5fa4601c265db8101d8f4'),
+        'c6a0e8863716c16fc4a55a736efe0397c9d4a17eae7e739d20fd8ecaa9c0683e'),
 }
 
 # The next dated native report already carries the formerly reviewed successor.
@@ -51,7 +51,7 @@ REVIEWED_SUCCESSORS = {
 REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
     'holding_vote': (
         '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
-        '0c46142960ee6381e8b7b66e546108e88d37c552c4a5fa4601c265db8101d8f4'),
+        'c6a0e8863716c16fc4a55a736efe0397c9d4a17eae7e739d20fd8ecaa9c0683e'),
 }
 
 

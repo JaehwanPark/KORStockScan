@@ -69,6 +69,7 @@ COMPONENTS = {
         "sniper_execution_receipts.py",
         "ai/holding_vote_replay_source.py",
         "holding_exit_observation_report.py",
+        "../trading/market/execution_venue.py",
         "automation/runtime_policy_bootstrap.py",
     ),
 }
