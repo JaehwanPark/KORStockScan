@@ -42,6 +42,8 @@
 
 ## 실행 항목
 
+현재 보조 연구 인계: `DirectFamilySourceRepairCompactAuxiliary`의 하위 작업으로 [누적 보조 연구 실행 검토](../audits/main-cumulative-auxiliary-research-implementation-review-2026-10-16.md)를 추가했다. 원 Acceptance·Due·봉인 source 영수증은 보존한다. 10개 원천일·현재 기계 확인점 14,005건을 census하고 67쌍 실제 비교를 마쳤다. 전체 교체 비권고, 두 scope 탐색 후보이며 정책 발행·배포·재기동은 사용자 지시 대기다. 과거 수동관리 이관·원천 결손을 실현손익이나 정상 차단으로 바꾸지 않는다. 이 인계는 OPEN 완료나 장후 finalization 완료 영수증이 아니다.
+
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-15.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-15.json)
   - 판정 기준: source_date=`2026-10-15`, apply_date=`2026-10-16`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=verified); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=09d592da2dc7c980401cd4999ecfaad2d306d85d89a5c8f7c6fa5cdc0fd0993d, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.

@@ -21,6 +21,7 @@ CONTINUATION_LIMIT = 600
 CONTINUATION_AUTHORITY = 'USER_APPROVED_COMPLETE_RESEARCH_TOTAL_600_CALLS_20261008'
 FOLLOWUP_LIMIT = 800
 FOLLOWUP_AUTHORITY = 'USER_APPROVED_COMPLETE_RESEARCH_TOTAL_800_CALLS_20261008'
+SOURCE_SCOPE_AUTHORITY = 'USER_APPROVED_CUMULATIVE_AUXILIARY_RESEARCH_SCOPE_20261016'
 
 
 def root(data_root):
@@ -172,6 +173,58 @@ def immutable(path, value):
         S.atomic_json(path, value)
 
 
+def authorize_source_scope(data_root, *, source_dates, approval_reference, as_of, confirm):
+    """Extend source scope on explicit instruction, without adding call funds."""
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+    dates = sorted(set(source_dates))
+    cutoff = date.fromisoformat(as_of)
+    if (cutoff > datetime.now(ZoneInfo('Asia/Seoul')).date()
+            or confirm != SOURCE_SCOPE_AUTHORITY or not approval_reference or not dates or any(
+            date.fromisoformat(day).isoformat() != day
+            or not '2026-09-29' <= day <= cutoff.isoformat() for day in dates)):
+        raise ValueError('auxiliary_research_source_scope_invalid')
+    base = grant(data_root)
+    value = P.seal(dict(schema='auxiliary_research_source_scope_v1',
+        research_id=RESEARCH_ID, allowance_sha256=base['artifact_content_sha256'],
+        authority=SOURCE_SCOPE_AUTHORITY,
+        budget_key=base['budget_key'], source_dates=dates, as_of=as_of,
+        approval_reference=approval_reference, call_limit_unchanged=True, **P.AUTH))
+    with S.Store(data_root):
+        immutable(root(data_root)/'source-scopes'/(value['artifact_content_sha256']+'.json'), value)
+    return value
+
+
+def source_scope(data_root, ident):
+    if not isinstance(ident, str) or not re.fullmatch(r'[0-9a-f]{64}', ident):
+        raise ValueError('auxiliary_research_source_scope_invalid')
+    value = read(root(data_root)/'source-scopes'/(ident+'.json'))
+    base = grant(data_root)
+    dates = value.get('source_dates')
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+    try:
+        cutoff = date.fromisoformat(value['as_of']).isoformat()
+        valid_dates = (isinstance(dates, list) and bool(dates)
+            and cutoff <= datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
+            and dates == sorted(set(dates)) and all(
+                date.fromisoformat(day).isoformat() == day
+                and '2026-09-29' <= day <= cutoff for day in dates))
+    except (KeyError, TypeError, ValueError):
+        valid_dates = False
+    if (value.get('schema') != 'auxiliary_research_source_scope_v1'
+            or value.get('authority') != SOURCE_SCOPE_AUTHORITY
+            or value.get('artifact_content_sha256') != ident
+            or value.get('research_id') != RESEARCH_ID
+            or value.get('allowance_sha256') != base['artifact_content_sha256']
+            or value.get('budget_key') != base['budget_key']
+            or value.get('call_limit_unchanged') is not True
+            or not value.get('approval_reference') or not valid_dates
+            or any(value.get(key) != expected for key, expected in P.AUTH.items())):
+        raise ValueError('auxiliary_research_source_scope_invalid')
+    return value
+
+
 def authorize(data_root, *, confirm, source_dates, approval_reference):
     from datetime import date
     if confirm != AUTHORITY or not approval_reference or not source_dates:
@@ -190,7 +243,8 @@ def authorize(data_root, *, confirm, source_dates, approval_reference):
 
 def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
               purpose='evaluation', include_keys=(), native_current=False, resolved_only=False,
-              native_output_tokens_override=None, compact_wire=False, compact_candidate_only=False):
+              native_output_tokens_override=None, compact_wire=False, compact_candidate_only=False,
+              source_scope_sha256=None):
     from src.engine.scalping import reversal_auxiliary_tuning as T
     from src.engine.scalping import continuous_reversal_policy_v5 as V
     allowance = grant(data_root)
@@ -221,6 +275,9 @@ def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
     v = P.seal(dict(schema=SCHEMA, research_id=RESEARCH_ID, experiment=experiment,
                     allowance_sha256=allowance['artifact_content_sha256'], purpose=purpose,
                     include_keys=sorted(set(include_keys)), config=P.seal(cfg), **P.AUTH))
+    if source_scope_sha256 is not None:
+        source_scope(data_root, source_scope_sha256)
+        v = P.seal(dict(v, source_scope_sha256=source_scope_sha256))
     with S.Store(data_root):
         immutable(directory(data_root, experiment) / 'configuration.json', v)
     return v
@@ -233,6 +290,8 @@ def context(data_root, experiment):
             or v.get('experiment') != experiment or v.get('allowance_sha256') != a['artifact_content_sha256']
             or v.get('purpose') not in {'development', 'evaluation'}):
         raise ValueError('auxiliary_research_context_invalid')
+    if v.get('source_scope_sha256'):
+        source_scope(data_root, v['source_scope_sha256'])
     return v
 
 
@@ -240,12 +299,17 @@ def validate_campaign(data_root, campaign):
     ref = campaign['research']
     v = context(data_root, ref['experiment'])
     a = budget(data_root)
-    if (ref != {k: v[k] for k in ('research_id', 'experiment', 'purpose', 'allowance_sha256')}
+    fields = ('research_id', 'experiment', 'purpose', 'allowance_sha256')
+    dates = a['source_dates']
+    if v.get('source_scope_sha256'):
+        fields += ('source_scope_sha256',)
+        dates = source_scope(data_root, v['source_scope_sha256'])['source_dates']
+    if (ref != {k: v[k] for k in fields}
             or campaign['config_sha256'] != v['config']['artifact_content_sha256']
             or campaign['call_limit'] not in {LIMIT, TOPUP_LIMIT, CONTINUATION_LIMIT, FOLLOWUP_LIMIT}
             or campaign['call_limit'] > a['call_limit']
-            or campaign['source_date'] not in a['source_dates']
-            or any(p['day'] not in a['source_dates'] for p in campaign['pairs'])
+            or campaign['source_date'] not in dates
+            or any(p['day'] not in dates for p in campaign['pairs'])
             or any(p['candidate_registry'] != v['config']['candidate_registry'] for p in campaign['pairs'])):
         raise ValueError('auxiliary_research_campaign_invalid')
     return a

@@ -34,7 +34,19 @@ def materialize(store,point,ids):
         child=Q.compose(bid,signals[original],features)
         if child is None:continue
         signals[bid]=child
-        inp=copy.deepcopy(inputs[original]);facts=inp['facts']
+        inp=copy.deepcopy(inputs[original])
+        facts=inp.get('facts')
+        if not isinstance(facts,dict):
+            # Native legacy roots retain the original nested fact ledger.
+            # A cumulative child uses the typed extended source envelope;
+            # lift only recorded facts and retain missing optional values.
+            recorded=(inp.get('entry_setup_evidence_v1') or {}).get('facts')
+            if not isinstance(recorded,dict):
+                raise ValueError('cumulative_original_confirmation_facts_missing')
+            from src.engine.scalping.reversal_extended_auxiliary import FEATURES
+            facts={key:copy.deepcopy(recorded.get(key)) for key in FEATURES}
+            inp['facts']=facts
+        facts.update(confirmation_price=child['confirmation_price'],entry_ask=child['entry_ask'])
         facts.update(spread_pct=features['spread'],drawdown_5m_pct=features['dd'],volume_ratio_60s=features['volume'],
             return_60s_pct=features['ret'],session_return_pct=features['session'],
             vs_vwap_60s_pct=features['vwap'],buy_pressure_10t=features['buy10'])
@@ -42,6 +54,13 @@ def materialize(store,point,ids):
         inputs[bid]=inp
     event['branch_signals']={b:e for b,e in signals.items() if b in ids}
     source['branch_inputs']={b:e for b,e in inputs.items() if b in ids}
+    # This is a newly materialized current-membership snapshot. Its immutable
+    # root snapshot may predate the typed cumulative catalog. Keep that parent
+    # provenance rather than routing the child through its historical envelope.
+    selected_registry = C.registry_for(event['branch_signals'])
+    if event.get('registry_sha256') != selected_registry:
+        event['materialization_parent_registry_sha256'] = event.get('registry_sha256')
+        event['registry_sha256'] = selected_registry
     return event,source
 
 

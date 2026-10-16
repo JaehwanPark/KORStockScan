@@ -167,7 +167,9 @@ def prepare(data_root, day, machine, parent, *, research=None):
     choices = defaultdict(list); census = Counter(); seen = {}; conflicting = set()
     with S.Store(data_root) as store:
         store.activation()
-        prep_key='auxiliary-prepare:'+P.digest([day,machine['artifact_content_sha256'],parent['bundle_sha256'],current,cfg,context,P.file_hash(__file__)])
+        from src.engine.scalping import reversal_cumulative_postclose as materializer
+        materializer_hash=P.file_hash(materializer.__file__)
+        prep_key='auxiliary-prepare:'+P.digest([day,machine['artifact_content_sha256'],parent['bundle_sha256'],current,cfg,context,P.file_hash(__file__),materializer_hash])
         cached=store.checkpoint(prep_key)
         if cached:
             validate_campaign(store,cached)
@@ -262,11 +264,14 @@ def prepare(data_root, day, machine, parent, *, research=None):
                     machine_report_sha256=machine['artifact_content_sha256'],
                     detector_manifest_hash=machine['operating_manifest']['detector_manifest_hash'],
                     config_sha256=cfg['artifact_content_sha256'], selector=selector,
+                    input_materializer_code_sha256=materializer_hash,
                     eligible_census=dict(census), not_sampled_budget=sum(map(len,choices.values()))-len(selected_all),
                     pairs=pairs, expected_pairs=len(pairs), expected_owner_requests=2*len(pairs),
                     observation_mode='confirmation_replay', call_limit=LIMIT, **P.AUTH)
         if context:
             body['research'] = {k:context[k] for k in ('research_id','experiment','purpose','allowance_sha256')}
+            if context.get('source_scope_sha256'):
+                body['research']['source_scope_sha256'] = context['source_scope_sha256']
             body['call_limit'] = R.budget(data_root)['call_limit']
             R.validate_campaign(data_root, body)
         campaign = P.seal(body); gen = campaign['artifact_content_sha256']

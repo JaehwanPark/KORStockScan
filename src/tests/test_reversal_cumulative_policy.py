@@ -17,6 +17,35 @@ def rows(prices):
             for i,p in enumerate(prices)]
 
 
+def test_materialize_preserves_nested_legacy_facts_and_original_snapshot(monkeypatch):
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+    child, definition = next((b,d) for b,d in Q.REFINEMENTS.items()
+        if d['original_definition_ref']['branch_id'].startswith('legacy_'))
+    original = definition['original_definition_ref']['branch_id']
+    signal = dict(confirmation_price=100., entry_ask=101., signal_kind='FIRST', signal_proof={})
+    snapshot = [dict(branch_signals={original:{}}), dict(branch_inputs={original:dict(
+        entry_setup_evidence_v1={'facts':{'buy_pressure_30s':75.,'return_10t_pct':.2}},
+        recent_observed_prices=[])})]
+    before = copy.deepcopy(snapshot)
+    class Store:
+        def get(self, ident):return snapshot
+    monkeypatch.setattr(Q, 'compose', lambda *args:signal)
+    point = dict(snapshot_obj=1,cumulative_features=dict(spread=.1,dd=1.,volume=2.,
+        ret=.2,session=.3,vwap=.4,buy10=80.))
+    event, source = CP.materialize(Store(),point,[child])
+    facts = source['branch_inputs'][child]['facts']
+    assert event['registry_sha256'] == C.registry_for([child])
+    assert event['materialization_parent_registry_sha256'] is None
+    assert facts['buy_pressure_30s'] == 75.
+    assert facts['return_10t_pct'] == .2
+    assert facts['return_60s_pct'] == .2
+    assert facts['confirmation_price'] == 100.
+    assert snapshot == before
+    snapshot[1]['branch_inputs'][original]['entry_setup_evidence_v1']['facts'] = None
+    with pytest.raises(ValueError, match='original_confirmation_facts_missing'):
+        CP.materialize(Store(),point,[child])
+
+
 def replay(ids,source):
     state=State(branch_ids=ids,session_anchor=source[0],offline=True)
     signals=[]

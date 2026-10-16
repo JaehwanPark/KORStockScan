@@ -90,7 +90,10 @@ def request(snapshot, arm, *, incumbent=None):
     event,source=snapshot
     from src.engine.scalping import reversal_extended_catalog as EC
     from src.engine.scalping import reversal_extended_union as EA
-    UNION = EA if event.get("registry_sha256") in {EC.SHA256, EC.SUCCESSOR_SHA256, EC.JOINT_SHA256,EC.CUMULATIVE_SHA256} else globals()["UNION"]
+    UNION = EA if event.get("registry_sha256") in {
+        EC.SHA256, EC.SUCCESSOR_SHA256, EC.JOINT_SHA256,
+        EC.CUMULATIVE_SHA256, EC.PROGRESS_SHA256,
+    } else globals()["UNION"]
     if incumbent is not None:
         key=C.cell_key(event['symbol'],event['market'],event['confirmation_price']); route=event['venue']
         cell=incumbent['machine_cells'][key]['routes'][route]

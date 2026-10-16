@@ -263,3 +263,16 @@ R1의 신규 구현은 기존 `src/engine/scalping` 연구/보조 owner와 `src/
 후속 [compact 계약 운영 연결·장중 적용 구현계획](main-auxiliary-compact-contract-intraday-adoption-implementation-plan-2026-10-08.md)의 AC0~AC7에 공통 codec·v2 registry·실제 provider/trace 연결, 구형 reader 호환성, 네 경로의 명시 평가 발행, 장후 승계와 배포·재기동 순서를 구체화했다. 비교 대조군은 `incumbent_prompt_under_successor_wire`로 기록하며 기존 native 운영 대비 우월성으로 바꾸어 설명하지 않는다. 이번 후속 작업은 계획 수립·문서 검증이며 코드·정책·운영 변경을 실행하지 않았다.
 
 후속 계획 리뷰에서는 원 논리 신호와 전송 별칭 분리, 실제 SDK 요청 바이트 대조, 기계·보조 동시 발행/CAS 재실행, 현재 세대 위의 scope별 되돌림, 자정 후 해당 거래일 정책 승계와 준비 이후 변경 감지, 구형·신형 혼합 비교를 보완했다. 저장된 실제 응답과 원장 ID는 보존하고, 현행 조건이 달라진 경로만 다시 대조한다. 상세 변경 근거와 검증 반례는 후속 구현계획 §6.1에 둔다.
+
+## 14. 누적 원천 기준 재연구 실행 — 2026-10-16
+
+사용자가 “누적 보조프롬프트 연구 1~6단계” 실행을 확인했다. 현재 실행 owner는 [10/16 체크리스트](../checklists/2026-10-16-stage2-todo-checklist.md)의 `DirectFamilySourceRepairCompactAuxiliary`다. 과거 owner·호출·정책 영수증은 이력으로 보존한다. 마지막 지시에 따라 **정책 발행·배포·재기동은 추가 지시를 기다린다.**
+
+1. 원 증빙은 덮지 않고 archive/request/envelope/native scope를 대사했다. 10/15 284개 label 중 283개 원 요청 연결 보강, 1개 원천 결손을 기록했다. 과거 primary eligibility와 10분 라벨은 승격하지 않았다. 현재 코드의 최종 capture hash 보존 수리도 별도로 검증했다.
+2. 연구 모집단은 9/29 이후 현재 기계 membership의 전체 보유 유효 원천이다. 기존 normalized manifest에서 빠진 10/13의 유효 raw/closed epoch를 찾아 별도 replay로 보강했다. 10개 원천일·60 partition·현재 확인점 14,005건 중 확정 W/F 2,342건, U 11,663건이다. 기존 개발 집합 92건을 제외한 새 평가 적격은 2,250건이다. 10/16의 미확정 수집 epoch는 고정 시점에 제외했다. 향후에도 retained date inventory와 누적 manifest를 먼저 대조하고 누락이 있으면 전체 완료로 표시하지 않는다.
+3. 연구 정답은 확인 ask·비용 .0023·30분·비용 후 +.4%·soft −3% 선도달 없음으로 고정했다. 실제 preset 하드스톱·수동관리 이관은 position/pin/시각이 맞는 별도 운영 축이다. −1.47% 이관을 실현손실이나 연구 FAIL로 바꾸지 않는다.
+4. H6는 확인 시점 사실과 과거 rolling 맥락을 구별하는 문구를 현행 7종 binding과 같은 입력/스키마/모델 설정에서 비교했다. 개발 7쌍, 효과 평가 67쌍을 완료했다. 이번 신규 provider attempt는 147회이며 기존 사용량을 유지해 **800/800회**다. source-scope 승인 보강으로 예산을 늘리거나 초기화하지 않았다. 일반 장후 한도는 그대로다.
+5. 전체 표본의 비가중 PASS 승률은 현행 30/47(63.8%), 후보 25/40(62.5%)로 전면 교체하지 않는다. 주성 AFTER/GE_100000/SOR(2쌍)와 기타 비삼성 PRE/20000_TO_100000/NXT(3쌍)는 승률 동률에서 TP가 1개씩 늘어난 탐색 후보로 인계한다. 삼성 REGULAR의 현행 0/0은 null을 유지한다. 시장 합계를 세부 scope의 개선 근거로 대신하지 않는다.
+6. nested 원 fact 처리, 누적 snapshot registry, progress request routing, materializer cache hash, 누적 날짜 승인/coverage를 보완하고 회귀검증했다. 원장/응답/기존 캠페인은 보존했다. 실제 적용 시 최신 부모·현행 binding·명시 evaluation과 필요한 native code handoff를 재검증하며, 새 확인점부터 소비하는 기존 CAS/TTL/rollback 경로를 사용한다. 이 문서 보완은 발행 권한이 아니다.
+
+구현과 실제 연구 결과, 원천·운영 결손, scope별 TP/FP/FN/TN, 검증과 배포 대기는 [10/16 실행 검토](../audits/main-cumulative-auxiliary-research-implementation-review-2026-10-16.md)에 기록했다. 후보는 수동 연구 후 등록하고 장후에는 등록된 후보를 평가한다. 매 장후 자유 프롬프트 생성·대형 원장 복제·연구 예산 재충전은 추가하지 않았다.

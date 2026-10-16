@@ -17,6 +17,23 @@ SCOPE='other_non_fixed|PRE|LT_20000|NXT'
 GROUP=Q.PROGRESS['groups'][SCOPE]
 
 
+def test_progress_registry_reaches_current_typed_auxiliary_request(monkeypatch):
+    from src.engine.scalping import continuous_reversal_operating_postclose as O
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    event = dict(registry_sha256=C.PROGRESS_SHA256, event_id='2026-10-15:NXT:PRE:000001:1:2',
+        epoch=1792022400., symbol='000001', market='PRE', venue='NXT', source_item='000001_NX',
+        native_epoch=1, native_sequence=2)
+    monkeypatch.setattr(U, 'production_request', lambda *args, **kwargs:
+        (dict(schema=U.VERSION), 'Current typed prompt', {'type':'object'}))
+    monkeypatch.setattr(O.UNION, 'production_request', lambda *args, **kwargs:
+        pytest.fail('Progress must not use the older v2 projector'))
+    registry = G.definition(U.V1.ARMS[1], input_version=U.VERSION)
+    request = G.request([event,{}], registry)
+    assert request['candidate_input']['schema'] == U.VERSION
+    assert request['candidate']['schema_name'] == U.VERSION
+    assert request['actual_order_submitted'] is False
+
+
 def fixture():
     source=rows([100]*125+[100,99,100,100]+[101]*11)
     for row in source:

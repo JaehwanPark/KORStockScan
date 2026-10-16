@@ -6,6 +6,57 @@ from src.engine.scalping import reversal_auxiliary_research as Q
 from src.tests.test_reversal_auxiliary_tuning import setup, replay, parent, native, T, G, I, P, S, transport
 
 
+def test_cumulative_scope_extends_sources_without_resetting_or_adding_call_funds(setup):
+    root, b, m, sid, v = setup
+    old, path = campaign(setup)
+    T.calls(root, '2026-10-07', campaign_path=path, transport=transport, max_new_calls=1)
+    original = Q.grant(root)
+    scope = Q.authorize_source_scope(root, source_dates=['2026-10-07', '2026-10-15'],
+        as_of='2026-10-15', confirm=Q.SOURCE_SCOPE_AUTHORITY,
+        approval_reference='User: cumulative source scope, no extra funds')
+    assert Q.grant(root) == original
+    assert Q.budget(root)['call_limit'] == 200
+    with S.Store(root, readonly=True) as store:
+        assert store.budget_used(original['budget_key']) == 1
+    Q.configure(root, experiment='cumulative', candidate=v['registry_sha256'],
+        scopes=[sid], seed='cumulative', max_pairs=3,
+        source_scope_sha256=scope['artifact_content_sha256'])
+    m = P.seal(dict(m, source_date='2026-10-15'))
+    new = T.prepare(root, '2026-10-15', m, b, research='cumulative')
+    assert new['research']['source_scope_sha256'] == scope['artifact_content_sha256']
+    assert Q.validate_campaign(root, new)['budget_key'] == original['budget_key']
+    assert Q.validate_campaign(root, old)['call_limit'] == 200
+    missing = copy.deepcopy(new)
+    missing['research'].pop('source_scope_sha256')
+    with pytest.raises(ValueError, match='research_campaign_invalid'):
+        Q.validate_campaign(root, missing)
+
+
+@pytest.mark.parametrize('dates,as_of,confirm', [
+    (['2026-09-28'], '2026-10-15', Q.SOURCE_SCOPE_AUTHORITY),
+    (['2026-10-16'], '2026-10-15', Q.SOURCE_SCOPE_AUTHORITY),
+    (['2026-10-15'], '2026-10-15', 'unapproved'),
+    (['2099-10-15'], '2099-10-15', Q.SOURCE_SCOPE_AUTHORITY),
+])
+def test_cumulative_scope_cannot_expand_without_current_instruction(setup, dates, as_of, confirm):
+    root, *_ = setup
+    campaign(setup)
+    with pytest.raises(ValueError, match='source_scope_invalid'):
+        Q.authorize_source_scope(root, source_dates=dates, as_of=as_of,
+            confirm=confirm, approval_reference='explicit instruction')
+
+
+def test_source_scope_cannot_gain_runtime_authority_even_when_resealed(setup):
+    root, *_ = setup
+    campaign(setup)
+    scope = Q.authorize_source_scope(root, source_dates=['2026-10-15'],
+        as_of='2026-10-15', confirm=Q.SOURCE_SCOPE_AUTHORITY, approval_reference='User')
+    bad = P.seal(dict(scope, allowed_runtime_apply=True))
+    P.write(Q.root(root)/'source-scopes'/(bad['artifact_content_sha256']+'.json'), bad)
+    with pytest.raises(ValueError, match='source_scope_invalid'):
+        Q.source_scope(root, bad['artifact_content_sha256'])
+
+
 def campaign(setup, *, name='trial', purpose='evaluation', include_keys=()):
     root,b,m,sid,v = setup
     Q.authorize(root,confirm=Q.AUTHORITY,source_dates=['2026-10-07'],approval_reference='User: additional 200 calls')
