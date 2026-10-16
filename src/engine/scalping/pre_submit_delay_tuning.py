@@ -649,7 +649,8 @@ def seal_family_source_ledger(data_root: Path, target_date: str, *, source_snaps
     return ledger
 
 
-def family_source_ledger_issues(data_root: Path, target_date: str, *, source_snapshot=None,ledger_path=None) -> list[str]:
+def family_source_ledger_issues(data_root: Path, target_date: str, *, source_snapshot=None,
+                               ledger_path=None, pipeline_reference_only=False) -> list[str]:
     from src.engine.pipeline_event_summary import _part_snapshot_stamp, _source_part_path
     from src.engine.lifecycle.holding_window_generation import source_stat
 
@@ -667,6 +668,15 @@ def family_source_ledger_issues(data_root: Path, target_date: str, *, source_sna
             from src.engine.lifecycle.holding_window_generation import byte_generation
             for part in ledger['raw_parts']:
                 for representation in part['representations']:
+                    if pipeline_reference_only:
+                        from . import mechanistic_entry_runtime_policy as native
+                        generation = representation['generation']
+                        if (not native.is_pipeline_source_reference(representation['path'], data_root=data_root)
+                                or not native.source_receipt_matches(
+                                    dict(path=representation['path'], sha256=generation['sha256']), data_root=data_root)
+                                or type(generation.get('size')) is not int or generation['size'] < 0):
+                            return ['raw_source_reference_invalid']
+                        continue
                     if byte_generation(Path(representation['path']))!=representation['generation']:
                         return ['raw_generation_changed']
         raw_dir = data_root / "pipeline_events"
@@ -674,11 +684,19 @@ def family_source_ledger_issues(data_root: Path, target_date: str, *, source_sna
             logical = _source_part_path(raw_dir, target_date, part["partition"])
             if part["logical_path"] != str(logical.resolve()):
                 return ["raw_source_path_invalid"]
+            if pipeline_reference_only:
+                from . import mechanistic_entry_runtime_policy as native
+                if (not part['representations'] or any(
+                        not native.is_pipeline_source_reference(item['path'], data_root=data_root)
+                        or Path(item['path']).name not in {logical.name, logical.name + '.gz'}
+                        for item in part['representations'])):
+                    return ['raw_source_reference_invalid']
+                continue
             current = {str(item.resolve()): _part_snapshot_stamp(item)
                        for item in (logical, Path(str(logical) + ".gz")) if item.exists()}
             if current != {item["path"]: item["stamp"] for item in part["representations"]}:
                 return ["raw_generation_changed"]
-        if (Path(str(_source_part_path(raw_dir, target_date, "late"))).exists()
+        if not pipeline_reference_only and (Path(str(_source_part_path(raw_dir, target_date, "late"))).exists()
                 or Path(str(_source_part_path(raw_dir, target_date, "late")) + ".gz").exists()) != any(
                     part["partition"] == "late" for part in ledger["raw_parts"]):
             return ["raw_generation_changed"]
@@ -1653,7 +1671,7 @@ def prepare_runtime_policy(*, now=None):
             code_compatibility = _verify_runtime_code_contract(policy, day)
             report_file, policy_file, pointer, manifest = committed_paths(DATA_DIR, policy["source_date"])
             policy, prepared_report = _read(policy_file), _read(report_file)
-            verify_source(DATA_DIR, prepared_report)
+            verify_source(DATA_DIR, prepared_report, pipeline_reference_only=True)
             if (policy_file.resolve() != path.resolve()
                 or manifest["manifest_sha256"] != key[2]
                 or os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE") != day):

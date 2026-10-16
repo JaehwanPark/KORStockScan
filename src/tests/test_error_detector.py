@@ -54,6 +54,39 @@ def test_artifact_checks_reuse_digests_between_invocations_but_run_semantics(mon
     assert len(calls) == 3 and calls[0] == calls[1] != calls[2]
 
 
+def test_digest_contention_defers_artifact_only_and_keeps_health_failure(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    import src.engine.error_detector as module
+    from src.engine.infrastructure import validation_digest_session as D
+    monkeypatch.setattr(module, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(D, 'code_generation', lambda: {'code':'same'})
+    (tmp_path/'data').mkdir()
+    @contextmanager
+    def deferred(self):
+        raise D.ValidationDeferred('validation_deferred:resource_wait')
+        yield  # pragma: no cover
+    monkeypatch.setattr(D.DigestSession, 'activate', deferred)
+    calls = []
+    class Health:
+        id, category = 'process_health', 'system'
+        def check(self):
+            calls.append(self.id)
+            return DetectionResult(self.id, self.category, 'fail', 'Main missing')
+    class Artifact:
+        id, category = 'artifact_freshness', 'artifact'
+        def check(self): pytest.fail('contended artifact validation was repeated')
+    engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
+    engine.mode, engine.postclose_source_date = 'full', None
+    engine.initialization_failures = []
+    engine.detectors = [Artifact(), Health()]
+    artifact, health = engine.run_all()
+    assert artifact.severity == 'warning'
+    assert artifact.details['observation_complete'] is False
+    assert artifact.details['validation_status'] == 'deferred'
+    assert artifact.details['validation_io']['full_reads'] == 0
+    assert health.severity == 'fail' and calls == ['process_health']
+
+
 class TestBaseDetector:
     def test_detection_result_defaults(self):
         result = DetectionResult(

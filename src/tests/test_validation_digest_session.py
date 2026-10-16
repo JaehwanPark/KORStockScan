@@ -11,9 +11,10 @@ import pytest
 from src.engine.infrastructure import validation_digest_session as D
 
 
-def test_policy_pipeline_reference_never_opens_raw_and_survives_archive(tmp_path, monkeypatch):
+@pytest.mark.parametrize('suffix', ['.jsonl', '.jsonl.gz', '.late.jsonl', '.late.jsonl.gz'])
+def test_policy_pipeline_reference_never_opens_raw_and_survives_archive(tmp_path, monkeypatch, suffix):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
-    path = tmp_path / 'pipeline_events/pipeline_events_2026-10-15.jsonl'
+    path = tmp_path / ('pipeline_events/pipeline_events_2026-10-15' + suffix)
     record = dict(path=str(path), sha256='a' * 64)
     def forbidden(*args, **kwargs):
         raise AssertionError('policy consumer opened raw pipeline')
@@ -36,6 +37,19 @@ def test_policy_reference_exclusion_keeps_reports_and_other_raw_strict(tmp_path)
         assert N.source_receipt_matches(record, data_root=tmp_path)
         path.write_text('changed')
         assert not N.source_receipt_matches(record, data_root=tmp_path)
+
+
+def test_quantity_consumer_trusts_sealed_pipeline_but_producer_and_other_sources_remain_strict(tmp_path, monkeypatch):
+    from src.engine.scalping import initial_quantity_policy as Q
+    monkeypatch.setattr(Q, 'DATA_DIR', tmp_path)
+    raw = tmp_path/'pipeline_events/pipeline_events_2026-10-15.jsonl'
+    report = dict(census={}, pipeline_source_receipts={'2026-10-15':dict(path=str(raw), sha256='a'*64)})
+    Q.verify_refresh_source_generations(report, pipeline_reference_only=True)
+    with pytest.raises(FileNotFoundError):
+        Q.verify_refresh_source_generations(report)
+    report['pipeline_source_receipts']['2026-10-15']['sha256'] = 'bad'
+    with pytest.raises(ValueError, match='pipeline_source_generation_changed'):
+        Q.verify_refresh_source_generations(report, pipeline_reference_only=True)
 
 
 def test_code_handoff_reuses_native_origin_without_raw_or_subprocess(tmp_path, monkeypatch):
@@ -287,7 +301,7 @@ def test_corruption_permission_and_enospc_never_return_fake_pass(tmp_path, sourc
     source.write_bytes(b'b'*source.stat().st_size)
     monkeypatch.setattr(D.os, 'replace', lambda *a: (_ for _ in ()).throw(OSError('disk full')))
     with session(tmp_path).activate() as failed: assert D.reused_digest(source)
-    assert failed.stats['cache_status'] == 'publication_failed_full_fallback'
+    assert failed.stats['cache_status'] == 'publication_failed_no_persistent_reuse'
     assert D.ACTIVE.get() is None
 
 
@@ -382,6 +396,27 @@ def test_store_lock_is_bounded_and_not_unlinked(tmp_path):
         with pytest.raises(D.ValidationDeferred):
             with D.bounded_lock(lock, seconds=0.01): pass
         assert lock.stat().st_ino == inode
+
+
+def test_validation_does_not_hold_role_wide_store_lock(tmp_path, source):
+    with session(tmp_path).activate() as active:
+        assert D.reused_digest(source)
+        with D.bounded_lock(active.directory/'store.lock', seconds=0.01):
+            pass  # Another generation can publish while this validator runs.
+    assert active.path.exists()
+
+
+def test_contended_publication_keeps_semantic_result_and_does_not_rehash(tmp_path, source):
+    active = session(tmp_path)
+    active._prepare()
+    with D.bounded_lock(active.directory/'store.lock'):
+        with active.activate():
+            assert D.reused_digest(source)
+            assert D.reused_digest(source)
+    assert active.stats['full_reads'] == 1
+    assert active.stats['reused_reads'] == 1
+    assert active.stats['cache_status'] == 'publication_failed_no_persistent_reuse'
+    assert not active.path.exists()
 
 
 def test_cross_process_reuse_role_and_pid_isolation(tmp_path, source):

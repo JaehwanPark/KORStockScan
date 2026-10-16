@@ -694,7 +694,7 @@ REVIEWED_CARRIED_VOTE_PREFIX_SOURCES = {
 REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     'src/engine/error_detector.py': (
         '6da85a87a0d32d2a2815ee452353394afc2abaeac009084d1f69aa1d2934f875',
-        'aa985ea3012432a1499f140725a5e8782476cf4e4edb6028a56ba31679c39a02',
+        '96c4218b76cd19310afc3d089a1fc6ff0e80a2b0c45316e546600ca6a5d9fb77',
     ),
     'src/engine/holding_exit_observation_report.py': (
         '2ec0a7be672eb04044a9094b7ee445af66cef17720df83efe24e6148110ded03',
@@ -714,11 +714,11 @@ REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     ),
     'src/engine/scalping/continuous_reversal_policy_v3.py': (
         '905232875ec6767cb4169fd9c8935ccf800f05fa7e3316687398518cae54f0fb',
-        '3a8fe901212facfd9a5a8782c3054dd4926c81074777477478317fa294c23dff',
+        '86b942fa51b2079fb9b51df50f8da92e9b92d0fdab4d397ca7f297abe453399b',
     ),
     'src/engine/scalping/continuous_reversal_policy_v4.py': (
         'f37709fb11b2b13006b268c401541749d18e8845de16174b9b6736dfd16ea3d4',
-        'f0305941b0d09eb4d6955b296c0fec5b4cb6400f81bfd1b6fa0a18cac306f962',
+        '9b1e7ba3fefb6df1c6dc20a0c336f30b006ce982f38764c819a91f5e3f091e4f',
     ),
     'src/engine/scalping/continuous_reversal_policy_v5.py': (
         '1d60a547a5730ff34da9c144a14feedfa322e09604bde84a46aafd04999941f6',
@@ -730,7 +730,7 @@ REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     ),
     'src/engine/scalping/mechanistic_entry_runtime_policy.py': (
         '671f655287ff452f4dc5162c754c98a9e05e9397eb2a9e217f34fc193db1104d',
-        '04525b236b3192f1e5464bc9381f2681e628a8b66eaa98daad639c0e212e40a3',
+        '215ac04e8c50c5d18777617b262c7a73b77c2d4d134c26c6f4c88a31dc162867',
     ),
     'src/engine/scalping/reversal_code_handoff.py': (
         'f73faae0d4eb1e4f844d2cc7b6ab27f0c03316cb6d2aa85a8dbbae44e43c9fec',
@@ -751,6 +751,26 @@ REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     'src/engine/sniper_trade_review_report.py': (
         '5267041fe305ab93d636e3fe27f6633c86bddd49f7250418c2898ca55706cefd',
         'fd08e8db61295786759280e46ddaa4d8198a04053d6c702495a26cee76346c39',
+    ),
+    'src/engine/scalping/pre_submit_delay_initial_policy.py': (
+        'ea2f93040975dcf7b9fc247ad57c706fd2bab6a9b717da7f754a0364e43dccf0',
+        '74adf3c630fa6ed24819f371007faa8f8b4ee086c330be2cd8431cfe89af4c52',
+    ),
+    'src/engine/scalping/pre_submit_delay_tuning.py': (
+        'c577f885ca02eef999aad71f514fa7a4ef4f7f13e328c0614e93e46b5be6f810',
+        'e677004513e6c3b5382ea58933aa39e12feac9dcfafbdd93b88dda53e173bf76',
+    ),
+    'src/engine/automation/runtime_policy_bootstrap.py': (
+        '7a2e67d6d537ccc0a322bbbde8935f96de74869bc48e456bd13071225dd84b56',
+        'dffecc310d61168ce8b3f8427adc68ca19f1929fa45f433ab96f01eabd63280c',
+    ),
+    'src/engine/infrastructure/validation_digest_session.py': (
+        '8fc28395c82a3efa15896c21362d3be7162656fec506fbba6f939e8c6b5101a3',
+        'bfdcbf093652783bea5d2c72bf10e1dc910b5d3cdca9c702279ee75a15ec77b9',
+    ),
+    'src/engine/scalping/initial_quantity_policy.py': (
+        'b00edf437d65017bdf10760bac8ebf1a4f603e0a45b6ccc0d32159d5e73985d2',
+        'b05fdfdd1f2bb0560c8af33c08d6aa046791d46db90a3b56b5eb2e9d7bbeb326',
     ),
 }
 

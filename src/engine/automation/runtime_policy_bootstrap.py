@@ -131,7 +131,8 @@ def _delay_observer_signature(source_day, target_date):
 
     Only the observer uses this signature, after a successful native verifier.
     Directory membership catches new compact/late parts and replaced leaves.
-    Publication, preparation, startup and live guards retain full verification.
+    Compact evidence and ledger seals retain full verification. Historical raw
+    pipeline references are not rehashed by policy consumers.
     """
     from src.engine.scalping import pre_submit_delay_initial_policy as initial
     from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
@@ -220,7 +221,7 @@ def _observer_delay_generation(source_day, target_date):
                 DATA_DIR, source_day, validate_selection=False)
             report, policy = initial._read(report_path), initial._read(policy_path)
             initial.validate(policy, report)
-            initial.verify_source(DATA_DIR, report)
+            initial.verify_source(DATA_DIR, report, pipeline_reference_only=True)
             value = (report_path, policy_path, manifest, policy, report)
             cacheable = _observer_canonical_tree_layout(report_path.parent, report, policy)
             if before != _delay_observer_signature(source_day, target_date):
@@ -304,7 +305,7 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
                     _observer_delay_generation(source_day, target_date))
             else:
                 report_file, policy_file, _, manifest = committed_paths(DATA_DIR, source_day)
-                verify_source(DATA_DIR, _read(report_file))
+                verify_source(DATA_DIR, _read(report_file), pipeline_reference_only=True)
                 initial_policy, initial_report = _read(policy_file), _read(report_file)
             if manifest.get('code_contract_sha256') != code_contract():
                 from src.engine.scalping.pre_submit_delay_tuning import _verify_runtime_code_contract
@@ -322,6 +323,7 @@ def _pre_submit_delay_handoff(target_date: str, *, observer_reuse=False) -> tupl
                     "policy_sha256": initial_policy["policy_sha256"],
                     "manifest_sha256": manifest["manifest_sha256"],
                     "code_contract_sha256": initial_policy["code_contract_sha256"],
+                    "pipeline_source_validation": "producer_sealed_pipeline_reference_no_raw_rehash",
                     "policy_path": str(policy_file.resolve()), "source_report": str(report_file.resolve()),
                     "evidence_grade": "estimated_provisional", "actual_pid_consumed": False}
         except (OSError, ValueError, TypeError, KeyError):

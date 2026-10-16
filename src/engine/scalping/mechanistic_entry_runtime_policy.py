@@ -374,7 +374,7 @@ def is_pipeline_source_reference(path, *, data_root=None):
         path = anchor.joinpath(*path.parts[1:])
     if path.parent.resolve() != (anchor / "pipeline_events").resolve():
         return False
-    match = re.fullmatch(r"pipeline_events_(\d{4}-\d{2}-\d{2})\.jsonl(?:\.gz)?", path.name)
+    match = re.fullmatch(r"pipeline_events_(\d{4}-\d{2}-\d{2})(?:\.late)?\.jsonl(?:\.gz)?", path.name)
     if match is None:
         return False
     try:

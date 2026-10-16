@@ -223,7 +223,7 @@ class DigestSession:
                 os.close(fd)
         finally:
             Path(name).unlink(missing_ok=True)
-        # All sessions in this role share the store lock. Never delete a lock.
+        # Only publication/retention holds the role-wide lock. Never delete a lock.
         files = sorted((p for p in self.directory.glob('*.json')
                         if re.fullmatch('[0-9a-f]{64}.json', p.name) and not p.is_symlink()),
                        key=lambda p:p.stat().st_mtime_ns, reverse=True)
@@ -270,7 +270,7 @@ class DigestSession:
             return
         with ExitStack() as stack:
             try:
-                stack.enter_context(bounded_lock(self.directory/'store.lock'))
+                stack.enter_context(bounded_lock(self.directory/(self.key+'.lock')))
             except (OSError, ValueError):
                 self.stats['cache_status'] = 'lock_unavailable_full_fallback'
                 yield self
@@ -281,9 +281,10 @@ class DigestSession:
                     yield self
                 finally:
                     try:
-                        self._save()
-                    except (OSError, ValueError, TypeError):
-                        self.stats['cache_status'] = 'publication_failed_full_fallback'
+                        with bounded_lock(self.directory/'store.lock'):
+                            self._save()
+                    except (OSError, ValueError, TypeError, ValidationDeferred):
+                        self.stats['cache_status'] = 'publication_failed_no_persistent_reuse'
 
     @contextmanager
     def _measure_active(self):

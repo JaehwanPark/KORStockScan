@@ -136,8 +136,7 @@ def validate_sources(bundle, data_root, *, code_root=None):
             for p in value['payload']['branch_policies'].values():
                 records = p.get('actual_response_evidence') or []
                 for record in [records] if isinstance(records,dict) else records:
-                    path = Path(record['path'])
-                    if N._source_hash(str(path),N._signature(path)) != record['sha256']:
+                    if not N.source_receipt_matches(record, data_root=data_root):
                         raise ValueError('v3_actual_response_source_changed')
     return bundle
 

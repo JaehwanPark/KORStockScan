@@ -42,7 +42,7 @@ def test_source_verifier_one_read_preserves_part_whole_and_daily_prefix_hashes(t
         expected[day] = {'sha256':hashlib.sha256(b''.join(p.read_bytes() for p in prefix)).hexdigest(),
                          'paths':[str(p) for p in prefix]}
     checked = []
-    def ledger_issues(root, day, *, source_snapshot):
+    def ledger_issues(root, day, *, source_snapshot, pipeline_reference_only=False):
         source_snapshot.verify()
         assert source_snapshot.source['cumulative_generations'][day] == expected[day]
         assert source_snapshot.source['sha256'] == report['source_sha256']
@@ -58,6 +58,41 @@ def test_source_verifier_one_read_preserves_part_whole_and_daily_prefix_hashes(t
     initial.verify_source(tmp_path, report)
     assert reads == paths
     assert checked == ['2026-09-29', '2026-10-02']
+
+
+@pytest.mark.parametrize('mutation', ['none', 'archive', 'compact', 'ledger'])
+def test_consumer_keeps_sealed_overlap_and_compact_bytes_without_raw_open(tmp_path, monkeypatch, mutation):
+    from pathlib import Path
+    from src.engine.automation.pre_submit_delay_source_ledger import seal
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    report, _ = build(tmp_path, monkeypatch, [{'prices':{0:10000, 30:9900}}])
+    parts = list((tmp_path/'threshold_cycle').glob('date=*/family=pre_submit_delay/part-execution-*.jsonl'))
+    rows = [json.loads(line) for p in parts for line in p.read_text().splitlines()]
+    raw = tmp_path/'pipeline_events/pipeline_events_2026-10-02.jsonl'
+    raw.parent.mkdir()
+    raw.write_text(''.join(json.dumps({**r, 'event_type':'pipeline_event'})+'\n' for r in rows))
+    seal(tmp_path, '2026-10-02')
+    ledger = legacy.family_source_ledger_path(tmp_path, '2026-10-02')
+    report['source_receipt']['ledger_generations'] = {'2026-10-02':byte_generation(ledger)}
+    if mutation == 'archive': raw.unlink()
+    elif mutation == 'compact': parts[0].write_text('{}\n')
+    elif mutation == 'ledger': ledger.write_text('{}')
+    original = Path.open
+    def no_raw(path, *args, **kwargs):
+        if path.parent == raw.parent:
+            pytest.fail('policy consumer opened historical raw pipeline')
+        return original(path, *args, **kwargs)
+    with monkeypatch.context() as consumer:
+        consumer.setattr(Path, 'open', no_raw)
+        if mutation in {'compact', 'ledger'}:
+            with pytest.raises(ValueError, match='generation_changed'):
+                initial.verify_source(tmp_path, report, pipeline_reference_only=True)
+        else:
+            initial.verify_source(tmp_path, report, pipeline_reference_only=True)
+    if mutation == 'none':
+        raw.write_bytes(b'{}\n')
+        with pytest.raises(ValueError, match='raw_compact_generation_changed'):
+            initial.verify_source(tmp_path, report)
 
 
 @pytest.mark.parametrize('mutation', ['rewrite', 'append', 'truncate', 'whole_hash', 'ledger'])

@@ -235,3 +235,5 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 정책 발행·기동·상시 감시는 발행된 보고서에 봉인된 canonical 일별 pipeline 참조를 검증하며 과거 원장을 재해시하지 않는다. 연구 producer가 원천을 검증하고 날짜·경로·해시를 봉인하는 책임은 유지한다. 소비 단계의 성공은 원천 현재 내용/존재의 재검증을 뜻하지 않는다. 정책·보고서·코드·다른 원천 결속은 유지한다. full/artifact detector는 기존 generation별 observer digest session으로 변경되지 않은 대용량 의존성을 재사용하며 semantic check를 매번 실행하고 validation_io를 남긴다. timeout·주문·수량·provider·hard safety는 바꾸지 않는다.
 
 SOR 미식별 체결의 KRX 사용자 지정과 35beec0f 통합·리뷰·배포 수용은 [전용 감사 기록](../audits/main-sor-krx-and-pipeline-validation-deployment-review-2026-10-16.md)을 따른다. 기존 OPEN owner와 원 실패/경제성 결손은 유지한다.
+
+기동 후 잔여 조사에서 지연 정책 source ledger 내부의 pipeline byte_generation 재호출을 확인했다. bootstrap·Main prepare·health와 수량 terminal 소비는 봉인 pipeline 참조를 사용하고 compact/ledger/정책·보고서 검증을 유지한다. 연구 producer의 기본 원천 검증은 그대로 수행한다. observer 검증 잠금은 generation별로 보유하며 role 공통 잠금은 digest 발행/retention에서만 보유한다. 경합은 관측 deferred로 기록하고 독립 health 검사를 계속한다. 원장 재읽기, timeout 확대, semantic PASS 합성으로 경합을 우회하지 않는다.

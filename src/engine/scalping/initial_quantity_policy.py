@@ -1990,7 +1990,7 @@ def publish_refresh_quantity_evaluation(
     return stage
 
 
-def verify_refresh_source_generations(report):
+def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
     census = report["census"]
     from src.engine.strategy_position_performance_report import _saved_fact_generation_issue
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
@@ -2003,6 +2003,12 @@ def verify_refresh_source_generations(report):
         if current_issue != gen.get("issue") or gen.get('cost_generation')!=source_generation(DATA_DIR,day):
             raise ValueError("quantity_fact_cost_generation_changed")
     for gen in (report.get("pipeline_source_receipts") or {}).values():
+        if pipeline_reference_only:
+            from . import mechanistic_entry_runtime_policy as native
+            if native.is_pipeline_source_reference(gen['path'], data_root=DATA_DIR):
+                if not native.source_receipt_matches(gen, data_root=DATA_DIR):
+                    raise ValueError("quantity_pipeline_source_generation_changed")
+                continue
         if _file_sha256(Path(gen["path"])) != gen.get("sha256"):
             raise ValueError("quantity_pipeline_source_generation_changed")
     for key in ("source_quality_by_entry_date", "source_quality_by_exit_date"):
@@ -2063,7 +2069,7 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
         report = json.loads(paths["report"].read_text(encoding="utf-8"))
         evaluation = json.loads(paths["evaluation"].read_text(encoding="utf-8"))
         if report.get("evaluation_algorithm") == REPAIR_VERSION:
-            verify_refresh_source_generations(report)
+            verify_refresh_source_generations(report, pipeline_reference_only=True)
         if (receipt.get("terminal_receipt") is None
                 and receipt.get("decision") == "carry_parent"
                 and not any(key.startswith("candidate_") for key in receipt)):

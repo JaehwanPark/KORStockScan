@@ -481,8 +481,13 @@ def _read(path):
     return value
 
 
-def verify_source(data_root, report):
-    """Preparation/publication verification; never called by warm lookup."""
+def verify_source(data_root, report, *, pipeline_reference_only=False):
+    """Verify compact evidence; consumers may trust sealed raw references.
+
+    Research defaults to full raw verification. Approved policy consumers
+    retain the ledger seal, compact bytes and overlap checks without rehashing
+    the historical pipeline represented by that ledger.
+    """
     from src.engine.lifecycle.holding_window_generation import byte_generation, source_stat
     receipt = report.get('source_receipt')
     if not isinstance(receipt, dict) or receipt.get('schema') != 'pre_submit_delay_input_generation_v1':
@@ -549,7 +554,9 @@ def verify_source(data_root, report):
     snapshot = ReceiptSnapshot()
     for source_day, expected in receipt.get('ledger_generations', {}).items():
         path = family_source_ledger_path(root, source_day)
-        if byte_generation(path) != expected or family_source_ledger_issues(root, source_day, source_snapshot=snapshot):
+        if byte_generation(path) != expected or family_source_ledger_issues(
+                root, source_day, source_snapshot=snapshot,
+                pipeline_reference_only=pipeline_reference_only):
             raise ValueError('initial_delay_raw_compact_generation_changed')
     snapshot.verify()
 
