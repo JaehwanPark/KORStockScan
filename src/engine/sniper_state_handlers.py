@@ -21043,7 +21043,13 @@ def _scalp_trailing_latch_first_crossing(
                     "crossing_basis", "first_trusted_evaluation"
                 ),
                 "new_event_count": mechanical_fields.get("classifier_new_event_count"),
+                "source_runtime_pid": os.getpid(),
             }
+            try:
+                first["buy_fill_identity"] = buy_fill_identity_from_runtime(stock)
+            except Exception:
+                # Observation identity cannot change the native TP latch.
+                first["buy_fill_identity"] = None
             stock["scalp_trailing_first_crossing"] = first
     if first and decision.price_usable:
         decision = dataclass_replace(
@@ -29191,6 +29197,52 @@ def _scalp_trailing_trusted_peak(
         return _safe_int(stock.get("scalp_trailing_trusted_peak_price"), 0)
 
 
+def _observe_scalp_trailing_first_crossing(stock, code, *, mechanical_fields,
+                                         policy_fields, start_pct, now_ts, evaluator,
+                                         buy_fill_identity):
+    """One small native crossing receipt, independent of the sampled grid cap."""
+    first = (mechanical_fields or {}).get('first_crossing')
+    if not isinstance(first, dict):
+        return
+    # Never reconstruct a pre-deployment or different BUY generation's crossing.
+    if (first.get('source_runtime_pid') != os.getpid()
+            or not buy_fill_identity or first.get('buy_fill_identity') != buy_fill_identity):
+        return
+    from src.engine.scalping.holding_profit_exit_semantics import first_crossing_source
+    key = (first.get('position_key'), buy_fill_identity, first.get('at_epoch'),
+           first.get('threshold_key'), os.getpid())
+    with ENTRY_LOCK:
+        state = stock.get('_tp_first_crossing_source')
+        if not isinstance(state, dict) or state.get('key') != key:
+            try:
+                source = first_crossing_source(
+                    first, stock_code=code, buy_fill_identity=buy_fill_identity,
+                    mechanical_fields=mechanical_fields, policy_fields=policy_fields,
+                    start_pct=start_pct, observed_at=now_ts, evaluator=evaluator)
+            except Exception:
+                stock['_tp_first_crossing_source'] = {'key': key, 'attempts': 3, 'emitted': False}
+                raise
+            state = {'key': key, 'source': source, 'attempts': 0, 'last_attempt': 0., 'emitted': False}
+            stock['_tp_first_crossing_source'] = state
+        if state['emitted'] or state['attempts'] >= 3 or state.get('inflight'):
+            return
+        if state['attempts'] and now_ts - state['last_attempt'] < 1.:
+            return
+        state.update(attempts=state['attempts'] + 1, last_attempt=now_ts, inflight=True)
+        source = state['source']
+    try:
+        emitted = _log_holding_pipeline(stock, code, 'scalp_trailing_first_crossing_transition',
+            first_crossing_source=json.dumps(source, sort_keys=True, separators=(',', ':'), allow_nan=False),
+            position_key=first['position_key'], buy_fill_identity=buy_fill_identity,
+            first_crossing_at=first['at_epoch'],
+            source_sha256=source['source_sha256'], actual_order_submitted=False, runtime_effect=False)
+        with ENTRY_LOCK:
+            state['emitted'] = emitted is True
+    finally:
+        with ENTRY_LOCK:
+            state['inflight'] = False
+
+
 def _observe_scalp_trailing_input_transition(
     stock: dict,
     code: str,
@@ -29374,6 +29426,17 @@ def _observe_scalp_trailing_input_transition(
         # The classifier journal may still describe this market, but a
         # non-executable clock must not become a TP candidate path row.
         return
+    holding_generation = buy_fill_identity_from_runtime(stock)
+    from src.engine.ai.holding_vote_replay_source import begin_coverage
+    begin_coverage(stock, now_ts, generation=holding_generation)
+    try:
+        _observe_scalp_trailing_first_crossing(stock, code,
+            mechanical_fields=mechanical_fields, policy_fields=policy_fields,
+            start_pct=start_pct, now_ts=now_ts, evaluator=evaluator,
+            buy_fill_identity=holding_generation)
+    except Exception as exc:
+        stock['tp_first_crossing_source_gap'] = type(exc).__name__
+        log_error(f'[TP_FIRST_CROSSING_SOURCE] {code} {type(exc).__name__}')
     depth_receipt = quote_receipt.get("depth_receipt")
     depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
     depth_row = None
@@ -29715,7 +29778,7 @@ def _observe_scalp_trailing_input_transition(
         entry_cost_model=stock.get('_trailing_entry_cost_model'))
     from src.engine.ai.holding_vote_replay_source import runtime_source
     holding_source = runtime_source(stock, position_key=_scalp_holding_source_position_key(stock, code),
-        buy_fill_identity=buy_fill_identity_from_runtime(stock),
+        buy_fill_identity=holding_generation,
         market=scalp_trailing_market_type_at(now_ts), now=now_ts,
         policy=_holding_path_policy_for('EXIT_TRAILING_TP', scalp_trailing_market_type_at(now_ts)),
         data_root=DATA_DIR, model=str(getattr(TRADING_RULES,'OPENAI_HOLDING_EXIT_VOTE_MODEL','gpt-5.4-nano')))
@@ -53804,6 +53867,7 @@ def _persist_holding_path_review_gap(
     *, stock: dict, code: str, reason: str,
     paths: tuple[str, ...] | None = None,
     quote_generation: str | None = None,
+    input_gap_source: dict | None = None,
 ) -> str:
     """Persist one due review failure so earlier votes cannot bridge the gap."""
     now_ts = time.time()
@@ -53854,6 +53918,8 @@ def _persist_holding_path_review_gap(
     )
     for event in events:
         event["excluded_reason"] = reason
+        if input_gap_source is not None:
+            event['input_gap_source']=input_gap_source
         event["provider_called"] = False
         event["quote_generation_observed"] = quote_generation
     try:
@@ -53888,6 +53954,7 @@ def _collect_holding_path_votes(
     recent_ticks: list, recent_candles: list, position_ctx: dict,
     holding_context: dict | None, now_ts: float, min_interval_sec: float,
     live_stock: dict | None = None,
+    holding_context_diagnostics: dict | None = None,
 ) -> str:
     """Use the existing due holding review for one multi-path provider call."""
     if _is_any_simulated_position(stock, stock.get("strategy")):
@@ -54003,6 +54070,10 @@ def _collect_holding_path_votes(
         return persist_gap(f"input_hash_unavailable:{type(exc).__name__}",
                            source_generation)
     input_gaps = path_vote_input_gaps(full_payload)
+    from src.engine.ai.holding_exit_vote import path_vote_gap_source
+    gap_source=(path_vote_gap_source(full_payload,full_hashes,
+        context_source=holding_context_diagnostics if holding_context_diagnostics is not None else holding_context)
+        if any(input_gaps.values()) else None)
     input_ready_paths = tuple(path for path in paths if not input_gaps[path])
     for path in paths:
         if input_gaps[path]:
@@ -54010,6 +54081,7 @@ def _collect_holding_path_votes(
                 stock=stock, code=code,
                 reason="path_input_missing:" + ",".join(input_gaps[path]),
                 paths=(path,), quote_generation=source_generation,
+                input_gap_source=gap_source,
             )
             if gap_status != "appended":
                 return f"path_input_gap_store_failed:{gap_status}"
@@ -71274,6 +71346,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         "cancel_wait_source_gap": (
                             "sequential_first_context_capture_failed:"
                             + type(exc).__name__)}
+        if isinstance(planned_order.get('entry_split_order_probe_continuation'), dict):
+            try:
+                from src.engine.scalping.entry_cancel_wait_runtime import probe_submit_source
+                source = probe_submit_source(stock,
+                    parent_id=str(submit_attempt_fields(stock,code).get('entry_submit_attempt_id') or ''),
+                    account_key=broker_account_key(), owner_context=buy_owner_context,
+                    planned_qty=_safe_int(planned_order['entry_split_order_probe_continuation'].get('requested_qty'),0),
+                    source_date=datetime.now(_KST).date().isoformat())
+                _mutate_stock_state(stock, set_fields={'entry_split_probe_submit_source':source})
+            except Exception as exc:
+                log_error(f'[PROBE_SUBMIT_SOURCE] {code} prepare {type(exc).__name__}:{exc}')
         # The local exact-date listing read consumes the original entry deadline.
         # Observation admission and a live NXT quote are not listing authority.
         submit_venue_eligibility = _entry_order_venue_eligibility(code)
@@ -71590,6 +71673,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _safe_int(buy_plan.get("requested_qty"), 0)
             if isinstance(buy_plan, dict) else None
         )
+        if buy_planned_qty and buy_planned_qty > 1:
+            try:
+                from src.engine.scalping.entry_cancel_wait_runtime import probe_submit_source
+                source = probe_submit_source(stock, parent_id=buy_parent_id,
+                    account_key=buy_account_key, owner_context=buy_owner_context,
+                    planned_qty=buy_planned_qty,
+                    source_date=datetime.fromtimestamp(order_sent_ts,_KST).date().isoformat())
+                _mutate_stock_state(stock, set_fields={'entry_split_probe_submit_source':source})
+                update_probe_runtime_bundle(source['bundle_id'],
+                    phase=str(stock.get('entry_split_probe_phase') or 'probe_submitting'),
+                    entry_split_probe_submit_source=source)
+            except Exception as exc:
+                # The broker already accepted this order. Observation failures
+                # cannot change the result, reserve quantity, or trigger retry.
+                log_error(f'[PROBE_SUBMIT_SOURCE] {code} {type(exc).__name__}:{exc}')
         successful_orders.append(
             {
                 "tag": request["tag"],
@@ -71801,6 +71899,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             code,
             "order_leg_sent",
             buy_parent_id=buy_parent_id,
+            buy_submit_attempt_id=buy_parent_id,
+            buy_position_cycle_id=str(stock.get('position_cycle_id') or stock.get('id') or ''),
             buy_child_id=buy_child_id,
             buy_owner_type=buy_owner_type,
             buy_owner_id=buy_owner_id,
@@ -82430,6 +82530,15 @@ def _maybe_release_auto_manual_control_at_average_price(
             "threshold_mutation|provider_change|broker_guard_bypass|hard_safety_relaxation"
         ),
     }
+    if released:
+        try:
+            from src.engine.scalping.main_stop_policy import release_source
+            fields['main_stop_release_source']=json.dumps(release_source(stock,
+                at=now_ts,auto_source=auto_source,average_price=average_price,
+                current_price=current_price,quote_at=last_ws_update_ts,
+                quote_max_age_sec=max_age_sec),sort_keys=True,separators=(',',':'))
+        except Exception as exc:
+            fields['main_stop_release_source_gap']=str(exc)
     _log_holding_pipeline(
         stock or {},
         code,
@@ -84686,6 +84795,9 @@ def _submit_entry_split_probe_residual_locked(
             },
         )
         try:
+            residual_owner_context = main_owner_context(
+                stock, action="ENTRY_RESIDUAL_BUY",
+                ordinal=residual_order.get("tag") or len(successful_orders))
             response = kiwoom_orders.send_buy_order(
                 code,
                 qty,
@@ -84695,11 +84807,7 @@ def _submit_entry_split_probe_residual_locked(
                 order_type_desc="0-leg 체결기준 잔여매수",
                 tif="DAY",
                 dmst_stex_tp=dmst_stex_tp,
-                owner_context=main_owner_context(
-                    stock,
-                    action="ENTRY_RESIDUAL_BUY",
-                    ordinal=residual_order.get("tag") or len(successful_orders),
-                ),
+                owner_context=residual_owner_context,
             )
         except Exception as exc:
             failure_reason = "residual_broker_submit_exception"
@@ -84796,6 +84904,33 @@ def _submit_entry_split_probe_residual_locked(
         residual_execution_cohort = _scalping_execution_cohort(
             sent_at, residual_broker_route
         )
+        try:
+            from src.engine.scalping.entry_cancel_wait_runtime import residual_submission_fields
+            source_fields = residual_submission_fields(stock, residual_order,
+                owner_context=residual_owner_context, account_key=broker_account_key(),
+                intent_id=str(response.get('owner_registry_intent_id') or ''),
+                order_no=order_no, qty=qty, price=price, route=residual_broker_route, now_ts=sent_at)
+        except Exception as exc:
+            # The accepted order owns execution. A diagnostic formatter failure
+            # must not escape into the submit path and cause a retry.
+            source_fields = {'cancel_wait_source_gap':str(exc), 'buy_registry_mode':'unknown',
+                'owner_registry_intent_id':str(response.get('owner_registry_intent_id') or '')}
+        # Same regular stage as the first leg, before a callback can finish
+        # the residual bundle. It describes one accepted order, never a retry.
+        try:
+            _log_entry_pipeline(stock, code, 'order_leg_sent', **{
+                **_merge_entry_pipeline_field_groups(plan_fields,
+                    _entry_split_probe_observation_contract_fields(stock)),
+                **source_fields, 'tag':residual_order.get('tag'),
+                'broker_order_no':order_no, 'ord_no':order_no,
+                'qty':qty, 'requested_qty':qty, 'submitted_qty':qty,
+                'entry_split_submitted_price':price,
+                'entry_split_submitted_at':datetime.fromtimestamp(sent_at,_KST).isoformat(),
+                'broker_route':residual_broker_route, 'effective_venue':residual_execution_cohort,
+                'actual_order_submitted':True, 'broker_order_forbidden':False,
+                'residual_source_only':True})
+        except Exception as exc:
+            log_error(f'[RESIDUAL_SUBMIT_SOURCE] {code} {type(exc).__name__}:{exc}')
         successful_orders.append(
             {
                 **residual_order,
@@ -85972,7 +86107,7 @@ def handle_holding_state(
                             }
                             holding_context_source = _build_holding_ai_decision_context(
                                 stock=stock, code=code, ws_data=vote_ws_data,
-                                decision_kind="holding_score", now_ts=time.time(),
+                                decision_kind="holding_path_vote", now_ts=time.time(),
                                 recent_candles=recent_candles,
                                 candle_meta=recent_candle_meta,
                                 recent_ticks=recent_ticks, position_ctx=position_ctx,
@@ -85992,6 +86127,7 @@ def handle_holding_state(
                                 holding_context=holding_context, now_ts=now_ts,
                                 min_interval_sec=float(dynamic_min_cd),
                                 live_stock=live_stock,
+                                holding_context_diagnostics=holding_context_source,
                             )
                             review_phase_ms["vote_collect"] = int(
                                 (time.perf_counter() - collect_started) * 1000
@@ -86043,9 +86179,11 @@ def handle_holding_state(
                         with ENTRY_LOCK:
                             if (_scalp_holding_source_position_key(live_stock,code)==_scalp_holding_source_position_key(stock,code)
                                 and buy_fill_identity_from_runtime(live_stock)==buy_fill_identity_from_runtime(stock)):
-                                for field in ('holding_vote_coverage_started_at','holding_vote_coverage_checked_at',
-                                    'holding_vote_coverage_birth_at','holding_vote_coverage_generation','holding_vote_coverage_pid'):
-                                    if field in stock:live_stock[field]=stock[field]
+                                if (_safe_float(stock.get('holding_vote_coverage_checked_at'),0)
+                                        >=_safe_float(live_stock.get('holding_vote_coverage_checked_at'),0)):
+                                    for field in ('holding_vote_coverage_started_at','holding_vote_coverage_checked_at',
+                                        'holding_vote_coverage_birth_at','holding_vote_coverage_generation','holding_vote_coverage_pid'):
+                                        if field in stock:live_stock[field]=stock[field]
                                 live_stock['holding_vote_coverage_store_gap']=bool(stock.get('holding_path_vote_store_gap'))
                     stock["holding_path_last_review_at"] = now_ts
                     stock["last_ai_profit"] = profit_rate

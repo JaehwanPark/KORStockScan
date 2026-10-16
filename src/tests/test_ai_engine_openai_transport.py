@@ -1633,14 +1633,38 @@ def test_entry_price_evaluate_preserves_exact_request_trace_fields(monkeypatch):
     )
 
     for key, value in exact_fields.items():
-        if key == "ai_input_payload_sha256":
-            continue
         assert result[key] == value
         assert captured_trace[key] == value
     assert len(result["ai_input_payload_sha256"]) == 64
     assert (
         captured_trace["ai_input_payload_sha256"] == result["ai_input_payload_sha256"]
     )
+
+
+@pytest.mark.parametrize('cache_hit', [False, True])
+def test_annotation_keeps_final_capture_hash_after_compact_input_recomposition(monkeypatch, cache_hit):
+    engine = _build_engine()
+    observed = []
+    monkeypatch.setattr(openai_module, 'record_ai_decision_trace',
+        lambda payload, **kwargs: observed.append(dict(payload)) or {})
+    result = engine._annotate_analysis_result_frame(
+        {'action': 'PASS', 'ai_decision_trace_id': 'actual-wire-request',
+         'ai_input_payload_sha256': 'a'*64, 'ai_input_payload_bytes': 30,
+         'ai_request_envelope_sha256': 'b'*64},
+        prompt_type='scalping_entry', prompt_version='compact', response_ms=1,
+        parse_ok=True, parse_fail=False, fallback_score_50=False,
+        cache_hit=cache_hit, cache_mode='hit' if cache_hit else 'miss', result_source='live',
+        input_contract_fields={'ai_input_payload_sha256': 'c'*64,
+            'ai_input_payload_bytes': 1000, 'ai_request_envelope_sha256': 'd'*64,
+            'ai_trace_stock_code': '005930'})
+    assert result['ai_input_payload_sha256'] == 'a'*64
+    assert observed[0]['ai_request_envelope_sha256'] == 'b'*64
+    assert result['ai_input_payload_bytes'] == 30
+    assert result['ai_trace_stock_code'] == '005930'
+    if cache_hit:
+        assert result['ai_decision_parent_trace_id'] == 'actual-wire-request'
+    else:
+        assert result['ai_decision_trace_id'] == 'actual-wire-request'
 
 
 def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):

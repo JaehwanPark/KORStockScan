@@ -69,6 +69,20 @@ def valid_handoff(row):
         and row.get('allowed_runtime_apply') is False)
 
 
+def valid_release(row):
+    return (_sealed(row) and row.get('schema')=='main_stop_release_source_v1'
+        and row.get('owner')=='main' and row.get('released') is True
+        and row.get('remaining_excluded') is False
+        and row.get('actual_order_submitted') is False and row.get('allowed_runtime_apply') is False
+        and row.get('actual_realized_net_krw') is None
+        and row.get('source_stage')=='manual_control_auto_released_at_average_price'
+        and bool(row.get('position_key') and row.get('pin_sha256'))
+        and row.get('auto_source') in {'auto_hard_stop_handoff','auto_open_loss','auto_scale_in_qty_guard_block'}
+        and all(finite(row.get(k)) for k in ('at','quote_at','quote_max_age_sec','current_price','average_price'))
+        and row['at']>0 and row['average_price']>0 and row['current_price']>=row['average_price']
+        and row['quote_max_age_sec']>0 and 0<=row['at']-row['quote_at']<=row['quote_max_age_sec'])
+
+
 def holding_contracts(rows):
     """Parallel operating evidence; no research relabeling or realized PnL.
 
@@ -81,7 +95,8 @@ def holding_contracts(rows):
     identity = None
     previous = None
     for row in rows:
-        if not _sealed(row) or row.get('schema') not in {'main_stop_source_v1', 'main_stop_handoff_source_v1'}:
+        if not _sealed(row) or row.get('schema') not in {'main_stop_source_v1', 'main_stop_handoff_source_v1',
+                                                       'main_stop_release_source_v1'}:
             return dict(result, status='source_gap', reason='holding_contract_source_invalid')
         current = tuple(row.get(k) for k in ('position_key', 'pin_sha256', 'role', 'market', 'record_id'))
         if not all(current[:4]) or (identity is not None and current != identity):
@@ -97,6 +112,12 @@ def holding_contracts(rows):
         if result['common_stop_values'] is not None and common != result['common_stop_values']:
             return dict(result, status='source_gap', reason='original_stop_values_changed')
         result['common_stop_values'] = common
+        if row['schema']=='main_stop_release_source_v1':
+            if not valid_release(row):
+                return dict(result,status='source_gap',reason='manual_release_receipt_invalid')
+            result['manual_release']=dict(at=at,source_sha256=row['source_sha256'],auto_source=row['auto_source'])
+            result['manual_handoff']={**result['manual_handoff'],'status':'released'}
+            continue
         terminal = row['schema'] == 'main_stop_handoff_source_v1'
         if terminal:
             if not valid_handoff(row):
@@ -172,6 +193,9 @@ def replay(rows, values, *, vote_reader=None, post_add_generation=False):
                     and (row['position_key'], row['pin_sha256']) != identity[:2])):
                 return dict(result, status='source_gap', reason='manual_handoff_receipt_invalid')
             return dict(result, reason='manual_handoff_not_sell' if row['registered'] else 'manual_handoff_pending')
+        if row.get('schema')=='main_stop_release_source_v1':
+            return dict(result,status='censored' if valid_release(row) else 'source_gap',
+                reason='manual_release_alternative_lifecycle_unmodeled' if valid_release(row) else 'manual_release_receipt_invalid')
         count += 1
         at, bid = row.get('at'), row.get('bid')
         if (row.get('schema') != 'main_stop_source_v1' or not finite(at) or not finite(bid)

@@ -458,7 +458,7 @@ def recover_probe_submit_contract_for_fill(
         "entry_split_probe_conditional_qty": max(0, requested_qty - 1),
         **{
             key: value for key, value in bundle.items()
-            if key.startswith("entry_split_probe_successor_")
+            if key.startswith("entry_split_probe_successor_") or key == "entry_split_probe_submit_source"
         },
         "entry_split_probe_continuation": dict(continuation),
         "entry_split_probe_submit_best_ask": submit_best_ask,
@@ -659,7 +659,7 @@ def recover_probe_runtime_bundle_for_stock(
                 ),
                 **{
                     key: value for key, value in bundle.items()
-                    if key.startswith("entry_split_probe_successor_")
+                    if key.startswith("entry_split_probe_successor_") or key == "entry_split_probe_submit_source"
                 },
             })
         if "wait_contract_at_submit" in bundle:
@@ -848,7 +848,7 @@ def recover_probe_runtime_bundle_for_stock(
                     "entry_split_probe_residual_terminal_qty": max(0, requested_qty - 1),
                     **{
                         key: value for key, value in bundle.items()
-                        if key.startswith("entry_split_probe_successor_")
+                        if key.startswith("entry_split_probe_successor_") or key == "entry_split_probe_submit_source"
                     },
                     "entry_split_probe_abort_reason": close_reason,
                     "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
@@ -1047,7 +1047,7 @@ def recover_probe_runtime_bundle_for_stock(
             ),
             **{
                 key: value for key, value in bundle.items()
-                if key.startswith("entry_split_probe_successor_")
+                if key.startswith("entry_split_probe_successor_") or key == "entry_split_probe_submit_source"
             },
             "entry_split_probe_continuation": bundle.get("continuation"),
             "entry_split_probe_submit_best_ask": bundle.get("probe_submit_best_ask"),
@@ -5964,24 +5964,31 @@ EXECUTION_SOURCE_STAGES = frozenset({
 })
 
 
-def _execution_projection_census(target_date, events, *, stages=None):
+def _execution_projection_census(target_date, events, *, stages=None, data_root=None,
+                                 max_decoded_bytes=None):
     """Reconcile retained raw identities against the existing producer census."""
     from src.engine.pipeline_event_summary import (producer_summary_paths,
         EXECUTION_SUMMARY_STAGES, IDENTITY_CONTRACT, IDENTITY_MODULUS, execution_projection_identity)
     stages = EXECUTION_SUMMARY_STAGES if stages is None else stages
-    directory = DATA_DIR / "pipeline_event_summaries"
+    from src.utils.jsonl_io import iter_jsonl_objects_strict
+    directory = Path(data_root or DATA_DIR) / "pipeline_event_summaries"
     path, manifest_path = producer_summary_paths(directory, target_date)
     manifest = _load_json(manifest_path) or {}
     if (not stages <= set(manifest.get("summary_stages") or [])
-        or manifest.get("identity_contract") != IDENTITY_CONTRACT or not path.is_file()):
+        or manifest.get("identity_contract") != IDENTITY_CONTRACT
+        or not (path.exists() or path.is_symlink()
+                or Path(str(path)+'.gz').exists() or Path(str(path)+'.gz').is_symlink())):
         return {"status": "source_gap", "reason": "execution_producer_census_missing",
                 "coverage_scope": "declared_execution_stage_producer_census"}
-    before = path.stat()
-    if (path.is_symlink() or before.st_size > EXECUTION_PRODUCER_CENSUS_MAX_BYTES
-            or manifest.get("summary_storage_size_bytes") != before.st_size):
+    limit = EXECUTION_PRODUCER_CENSUS_MAX_BYTES if max_decoded_bytes is None else min(
+        max_decoded_bytes, EXECUTION_PRODUCER_CENSUS_MAX_BYTES)
+    declared_size = manifest.get("summary_storage_size_bytes")
+    if (type(declared_size) is not int or not 0 <= declared_size <= limit):
         return {"status": "source_gap", "reason": "execution_producer_census_unsealed"}
     expected = Counter(); expected_hash = Counter()
-    for row in iter_jsonl(path):
+    provenance = {}
+    for row in iter_jsonl_objects_strict(path, provenance=provenance,
+            max_decoded_bytes=max(1, limit), max_line_bytes=min(max(1, limit), 2*1024*1024)):
         stage = row.get("stage")
         if stage not in stages:
             continue
@@ -5989,6 +5996,8 @@ def _execution_projection_census(target_date, events, *, stages=None):
             raise ValueError("execution_producer_census_contract_invalid")
         if row.get("execution_projection_identity_contract") != "lossless_execution_projection_v1":
             raise ValueError("execution_producer_lossless_identity_missing")
+        if type(row.get("event_count")) is not int or row['event_count'] < 0:
+            raise ValueError("execution_producer_census_count_invalid")
         expected[stage] += int(row["event_count"])
         expected_hash[stage] = (expected_hash[stage] + int(row["execution_projection_hash_sum"], 16)) % IDENTITY_MODULUS
     observed = Counter(); observed_hash = Counter(); missing = 0
@@ -6002,8 +6011,9 @@ def _execution_projection_census(target_date, events, *, stages=None):
             if value != execution_projection_identity(event):
                 raise ValueError("execution_projection_content_identity_mismatch")
             observed_hash[stage] = (observed_hash[stage] + int(value, 16)) % IDENTITY_MODULUS
-    after = path.stat()
-    if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns) or manifest != (_load_json(manifest_path) or {}):
+    if provenance['source_content_bytes'] != declared_size:
+        return {"status": "source_gap", "reason": "execution_producer_census_unsealed"}
+    if manifest != (_load_json(manifest_path) or {}):
         raise ValueError("execution_producer_census_changed")
     ready = not missing and expected == observed and expected_hash == observed_hash
     return {"status": "ready" if ready else "source_gap",
@@ -6011,6 +6021,10 @@ def _execution_projection_census(target_date, events, *, stages=None):
         "expected_stage_counts": dict(expected), "observed_stage_counts": dict(observed),
         "missing_identity_count": missing, "identity_conservation_holds": ready,
         "manifest_sha256": _canonical_sha256(manifest),
+        'native_census_projection':{
+            'schema':'execution_census_logical_source_v1',
+            'source':provenance, 'expected_stage_counts':dict(expected),
+            'expected_stage_hash_sums':{k:format(v,'064x') for k,v in expected_hash.items()}},
         "coverage_scope": "declared_execution_stage_producer_census"}
 
 
@@ -8157,7 +8171,7 @@ def apply_entry_split_order_policy(
                 ),
                 **{
                     key: value for key, value in latency_gate.items()
-                    if key.startswith("entry_split_probe_successor_")
+                    if key.startswith("entry_split_probe_successor_") or key == "entry_split_probe_submit_source"
                 },
                 "entry_split_order_target_qty": total_qty,
                 "entry_split_order_probe_committed_qty": 1 if admission_ok else 0,
@@ -8311,7 +8325,7 @@ def apply_entry_split_order_policy(
                 "continuation": continuation,
                 **{
                     key: value for key, value in latency_gate.items()
-                    if key.startswith("entry_split_probe_successor_")
+                    if key.startswith("entry_split_probe_successor_") or key == "entry_split_probe_submit_source"
                 },
                 "probe_submit_best_ask": market_first_reference_price,
                 "timeout_sec": probe_config["timeout_sec"],

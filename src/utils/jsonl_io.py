@@ -1145,6 +1145,8 @@ def _iter_jsonl_objects_strict_pinned(
     generation: ArtifactGenerationLease,
     *,
     provenance: dict[str, Any] | None,
+    max_decoded_bytes: int | None = None,
+    max_line_bytes: int | None = None,
 ) -> Iterator[dict[str, Any]]:
     candidate_names = (logical.name, f"{logical.name}.gz")
 
@@ -1220,11 +1222,20 @@ def _iter_jsonl_objects_strict_pinned(
                     else:
                         stream_context = raw_handle
                     try:
-                        for raw_line in stream_context:
+                        while True:
+                            raw_line = stream_context.readline(
+                                -1 if max_line_bytes is None else max_line_bytes + 1
+                            )
+                            if not raw_line:
+                                break
+                            if max_line_bytes is not None and len(raw_line) > max_line_bytes:
+                                raise ValueError(f"jsonl_artifact_line_limit:{item}")
                             if not name.endswith(".gz"):
                                 stored_digest.update(raw_line)
                             decoded_digest.update(raw_line)
                             decoded_bytes += len(raw_line)
+                            if max_decoded_bytes is not None and decoded_bytes > max_decoded_bytes:
+                                raise ValueError(f"jsonl_artifact_decoded_limit:{item}")
                             line_count += 1
                             if not raw_line.strip():
                                 continue
@@ -1318,6 +1329,8 @@ def _iter_jsonl_objects_strict_pinned(
                             ),
                             "stored_bytes": scans[name]["stored_size_bytes"],
                             "stored_sha256": scans[name]["stored_sha256"],
+                            "file_identity": list(initial_census[name]) + [
+                                generation.stat_name(name).st_ctime_ns],
                         }
                         for name in candidate_names
                         if name in scans
@@ -1335,9 +1348,14 @@ def iter_jsonl_objects_strict(
     *,
     provenance: dict[str, Any] | None = None,
     generation: ArtifactGenerationLease | None = None,
+    max_decoded_bytes: int | None = None,
+    max_line_bytes: int | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield stable strict JSONL from one no-follow pinned parent."""
 
+    for limit in (max_decoded_bytes, max_line_bytes):
+        if limit is not None and (type(limit) is not int or limit <= 0):
+            raise ValueError("jsonl_artifact_read_limit_invalid")
     candidate = Path(path).absolute()
     logical = (
         candidate.with_name(candidate.name[: -len(".gz")])
@@ -1353,6 +1371,8 @@ def iter_jsonl_objects_strict(
             logical,
             generation,
             provenance=provenance,
+            max_decoded_bytes=max_decoded_bytes,
+            max_line_bytes=max_line_bytes,
         )
         return
     try:
@@ -1370,6 +1390,8 @@ def iter_jsonl_objects_strict(
                 logical,
                 read_generation,
                 provenance=provenance,
+                max_decoded_bytes=max_decoded_bytes,
+                max_line_bytes=max_line_bytes,
             )
     except FileNotFoundError:
         raise

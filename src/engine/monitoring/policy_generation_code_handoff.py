@@ -31,19 +31,22 @@ from src.engine.monitoring import policy_generation_validation as validation
 # fixtures while retaining all original reports and unresolved terminal evidence.
 # The reviewed sealed-prefix and overnight terminal receipt successor preserves
 # historical source bytes and requires its own fresh holding capability fixture.
+# Source-gap and mandatory first-crossing repair: exact code pairs only.
+# Fresh network-denied fixtures attest every changed generation.
+# Review: docs/audits/main-postclose-source-gap-final-release-review-2026-10-16.md.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
-        '6d6a294941f6337d48420514d40e36891d25b44dc09bd914be0831d897794d4c'),
+        'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        '0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed'),
+        'fab27e3ba6ca3406a6d810488a6ea0c91313707012387e7f242372d230348bc4'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
-        '711184e6d93f27e3d8f4bdd97598f4880f752332f850763b32b434560b460f8e'),
+        'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        'e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278'),
+        'c53e929978126b8eaec7007d80e9708a0c5bbf6c98ea8559b068ed79d1cd0c17'),
 }
 
 # The next dated native report already carries the formerly reviewed successor.
@@ -51,7 +54,16 @@ REVIEWED_SUCCESSORS = {
 REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
     'holding_vote': (
         '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
-        'e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278'),
+        'c53e929978126b8eaec7007d80e9708a0c5bbf6c98ea8559b068ed79d1cd0c17'),
+}
+
+
+# The actual 4c65523b2 source generation is also preserved if already reported.
+REVIEWED_DEPLOYED_SOURCE_SUCCESSORS = {
+    'entry_cancel_wait': ('6d6a294941f6337d48420514d40e36891d25b44dc09bd914be0831d897794d4c', 'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
+    'rising_missed': ('0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed', 'fab27e3ba6ca3406a6d810488a6ea0c91313707012387e7f242372d230348bc4'),
+    'auxiliary': ('711184e6d93f27e3d8f4bdd97598f4880f752332f850763b32b434560b460f8e', 'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
+    'holding_vote': ('e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278', 'c53e929978126b8eaec7007d80e9708a0c5bbf6c98ea8559b068ed79d1cd0c17'),
 }
 
 
@@ -87,6 +99,9 @@ def current_fixture_observation(observed, data):
     preserved = REVIEWED_PRESERVED_SOURCE_SUCCESSORS.get(family)
     if preserved and actual_pair == preserved:
         pair = preserved
+    deployed = REVIEWED_DEPLOYED_SOURCE_SUCCESSORS.get(family)
+    if deployed and actual_pair == deployed:
+        pair = deployed
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']

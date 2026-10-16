@@ -537,3 +537,19 @@ def test_generation_safe_writer_rejects_invalid_legacy_gzip_without_mutation(
     assert not artifact.exists()
     assert compressed.read_bytes() == compressed_bytes
     assert not (tmp_path / "superseded").exists()
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_strict_jsonl_read_limits_bound_archive_expansion(tmp_path, compressed):
+    path = tmp_path/'source.jsonl'
+    raw = b'{"v":"' + b'x'*200 + b'"}\n'
+    (path.with_name(path.name+'.gz') if compressed else path).write_bytes(
+        gzip.compress(raw) if compressed else raw)
+    with pytest.raises(ValueError, match='line_limit'):
+        list(iter_jsonl_objects_strict(path, max_line_bytes=32))
+    with pytest.raises(ValueError, match='decoded_limit'):
+        list(iter_jsonl_objects_strict(path, max_decoded_bytes=64))
+    receipt = {}
+    assert len(list(iter_jsonl_objects_strict(path, provenance=receipt,
+        max_decoded_bytes=len(raw), max_line_bytes=len(raw)))) == 1
+    assert receipt['source_content_bytes'] == len(raw)

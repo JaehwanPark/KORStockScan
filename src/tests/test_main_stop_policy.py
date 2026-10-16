@@ -362,6 +362,24 @@ def test_manual_custody_does_not_reactivate_emergency_in_operating_projection():
     assert r.holding_contracts(source[:2]+[registered, after])['reason'] == 'automatic_source_after_manual_handoff'
 
 
+def test_native_auto_release_is_distinct_from_unexplained_manual_custody_regression():
+    from src.engine.automation import main_stop_source_index as idx
+    stock,source=preset_sources(profits=(-.2,-.3,.1))
+    handoff=handoff_fixture(stock,source[1]['at']+.1)
+    release=p.release_source(stock,at=source[1]['at']+.2,auto_source='auto_hard_stop_handoff',
+        average_price=210000,current_price=210000,quote_at=source[1]['at'],quote_max_age_sec=3)
+    event=dict(stage='manual_control_auto_released_at_average_price',fields={
+        'main_stop_release_source':json.dumps(release)})
+    assert idx.extract(event)==release
+    result=r.holding_contracts(source[:2]+[handoff,release,source[2]])
+    assert result['status']=='observed'
+    assert result['manual_handoff']['status']=='released'
+    assert result['manual_handoff']['source_sha256']==handoff['source_sha256']
+    assert result['manual_release']['source_sha256']==release['source_sha256']
+    release['auto_source']='manual_operator';reseal(release)
+    assert r.holding_contracts(source[:2]+[handoff,release,source[2]])['reason']=='manual_release_receipt_invalid'
+
+
 @pytest.mark.parametrize('field,value', [('coverage_complete', False), ('quote_at', 0),
     ('route', ''), ('transport_epoch', None)])
 def test_incomplete_quote_is_not_a_preset_crossing_but_does_not_erase_actual_registration(field, value):

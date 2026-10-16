@@ -3416,12 +3416,102 @@ def _latest_exact_control_signatures(
     return {endpoint: value[2] for endpoint, value in sorted(selected.items())}
 
 
+def reconcile_compact_request_binding(trace, payload, request):
+    """Append-only research supplement; never edits or relaxes canonical traces."""
+    from src.engine.scalping.ai_decision_trace import _json_bytes, REQUEST_SCHEMA, PAYLOAD_SCHEMA
+    findings=[]
+    actual=payload.get('sanitized_user_input') or {}
+    if not isinstance(actual,dict) or actual.get('schema')!='continuous_reversal_union_auxiliary_v3':
+        findings.append('compact_input_schema_unsupported_or_missing')
+    identity=trace.get('decision_trace_id')
+    if (not identity or payload.get('request_id')!=identity or request.get('request_id')!=identity
+            or payload.get('schema')!=PAYLOAD_SCHEMA
+            or request.get('schema')!=REQUEST_SCHEMA):
+        findings.append('original_request_identity_missing_or_conflicting')
+    for field in ('payload_sha256','request_envelope_sha256','prompt_sha256'):
+        if not _is_sha256(payload.get(field)) or request.get(field)!=payload.get(field):
+            findings.append('request_payload_'+field+'_mismatch')
+    for field in ('request_envelope_sha256','prompt_sha256'):
+        if trace.get(field)!=payload.get(field):findings.append('trace_'+field+'_mismatch')
+    if (_trace_endpoint(trace)!=payload.get('endpoint') or request.get('endpoint')!=payload.get('endpoint')
+            or payload.get('endpoint')!='analyze_target'
+            or trace.get('model')!=payload.get('model') or request.get('model')!=payload.get('model')):
+        findings.append('request_endpoint_or_model_mismatch')
+    for trace_key,archive_key in (('stock_code','symbol'),('effective_venue','effective_venue'),
+                                 ('session_bucket','session_bucket'),('broker_route','broker_route')):
+        value=trace.get(trace_key)
+        if archive_key=='effective_venue' and payload.get(archive_key) is None and request.get(archive_key) is None:
+            continue  # Kept absent; the typed native scope below is independent.
+        if value in (None,'','-') or payload.get(archive_key)!=value or request.get(archive_key)!=value:
+            findings.append('request_'+archive_key+'_mismatch_or_missing')
+    binding=payload.get('continuous_reversal_request_binding')
+    binding=binding if isinstance(binding,dict) else {}
+    native=binding.get('continuous_reversal_consumption')
+    native=native if isinstance(native,dict) else {}
+    common=actual.get('common_context') if isinstance(actual,dict) else {}
+    common=common if isinstance(common,dict) else {}
+    replay=payload.get('sanitized_replay_context')
+    replay_common=replay.get('common_context') if isinstance(replay,dict) else None
+    if (binding.get('binding_status')!='matched' or request.get('continuous_reversal_request_binding')!=binding
+            or trace.get('continuous_reversal_consumption')!=native
+            or binding.get('machine_observation_sha256')!=trace.get('machine_observation_sha256')
+            or not _is_sha256(binding.get('machine_observation_sha256'))
+            or not isinstance(common,dict) or common!=replay_common
+            or common.get('symbol')!=trace.get('stock_code')
+            or common.get('venue') not in {'KRX','NXT','SOR'}
+            or not all(common.get(k) for k in ('market','source_item','opportunity_key'))
+            or trace.get('venue_consistent') is not True
+            or not _venue_session_consistent(trace.get('effective_venue'),trace.get('session_bucket'))):
+        findings.append('compact_native_scope_binding_unproven')
+    captured=_parse_ts(payload.get('captured_at'));decision=_parse_ts(trace.get('decision_ts'))
+    if (captured is None or decision is None or captured>decision or captured.date()!=decision.date()
+            or request.get('captured_at')!=payload.get('captured_at')):
+        findings.append('request_capture_clock_unproven')
+    if (payload.get('replay_exact') is not True or payload.get('redacted') is not False
+            or request.get('payload_redacted') is not False
+            or request.get('prompt_redacted') is not False
+            or trace.get('payload_replay_exact') is not True or trace.get('request_capture_status')!='captured'):
+        findings.append('original_capture_not_exact')
+    # The registered compact producer emits this exact canonical wire encoding.
+    wire=json.dumps(actual,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()
+    if hashlib.sha256(wire).hexdigest()!=payload.get('payload_sha256'):
+        findings.append('compact_wire_bytes_unproven')
+    envelope={k:payload.get(k) for k in ('endpoint','model','schema_name','require_json',
+        'temperature','max_output_tokens','reasoning_effort','prompt_sha256')}
+    envelope['user_input_sha256']=payload.get('payload_sha256')
+    if payload.get('replay_context_sha256'):
+        context=payload.get('sanitized_replay_context')
+        if (payload.get('replay_context_exact') is not True
+                or hashlib.sha256(_json_bytes(context)).hexdigest()!=payload['replay_context_sha256']
+                or request.get('replay_context_sha256')!=payload['replay_context_sha256']):
+            findings.append('compact_replay_context_unproven')
+        envelope['replay_context_sha256']=payload['replay_context_sha256']
+    if hashlib.sha256(_json_bytes(envelope)).hexdigest()!=payload.get('request_envelope_sha256'):
+        findings.append('request_envelope_content_unproven')
+    body=dict(schema='compact_request_binding_supplement_v1',
+        status='source_gap' if findings else 'exact_request_bound' if trace.get('payload_sha256')==payload.get('payload_sha256')
+            else 'archive_identity_verified_trace_hash_mismatch',
+        decision_trace_id=identity,original_trace_payload_sha256=trace.get('payload_sha256'),
+        archived_payload_sha256=payload.get('payload_sha256'),
+        request_envelope_sha256=payload.get('request_envelope_sha256'),findings=sorted(set(findings)),
+        compact_source_scope={k:(common or {}).get(k) for k in ('symbol','market','venue','source_item')},
+        legacy_effective_venue_unrecorded=payload.get('effective_venue') is None,
+        metric_role='source_quality_gate',decision_authority='research_source_reconciliation_only',
+        window_policy='same_original_request_trace_and_native_opportunity',sample_floor=1,
+        primary_decision_metric='exact_original_request_binding',
+        source_quality_gate='exact_envelope_wire_native_scope_and_capture_clock',
+        forbidden_uses=['canonical_primary_promotion','actual_cost_or_order_inference','policy_or_provider_mutation'],
+        runtime_effect=False,allowed_runtime_apply=False,canonical_primary_eligibility_changed=False)
+    return {**body,'sha256':_sha256(body)}
+
+
 def annotate_primary_cohort_eligibility(
     *,
     labels: list[dict[str, Any]],
     traces: list[dict[str, Any]],
     payloads: list[dict[str, Any]],
     promotion: dict[str, Any],
+    requests: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Join exact trace/payload evidence before labels enter the primary cohort."""
 
@@ -3432,6 +3522,10 @@ def annotate_primary_cohort_eligibility(
         if trace_id:
             traces_by_id[trace_id].append(trace)
     payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
+    archive_by_request=defaultdict(list);requests_by_id=defaultdict(list)
+    for row in payloads:
+        if row.get('schema')=='ai_decision_payload_v1':archive_by_request[row.get('request_id')].append(row)
+    for row in requests or []:requests_by_id[row.get('request_id')].append(row)
     annotated: list[dict[str, Any]] = []
     for label in labels:
         trace_id = str(label.get("decision_trace_id") or "")
@@ -3467,6 +3561,16 @@ def annotate_primary_cohort_eligibility(
                 trace.get("session_bucket")
             ):
                 findings.append("label_trace_session_mismatch")
+        supplement={}
+        if len(trace_rows)==1:
+            candidates=archive_by_request.get(trace_id,[])
+            compact=(len(candidates)==1 and isinstance(candidates[0].get('sanitized_user_input'),dict)
+                and candidates[0]['sanitized_user_input'].get('schema')=='continuous_reversal_union_auxiliary_v3')
+            if compact or 'continuous_reversal_auxiliary' in str(trace.get('prompt_version') or ''):
+                original_requests=requests_by_id.get(trace_id,[])
+                supplement['compact_request_binding']=reconcile_compact_request_binding(trace,
+                    candidates[0] if len(candidates)==1 else {},
+                    original_requests[0] if len(original_requests)==1 else {})
         annotated.append(
             {
                 **label,
@@ -3474,6 +3578,7 @@ def annotate_primary_cohort_eligibility(
                 "primary_cohort_exclusion_reasons": sorted(set(findings)),
                 "primary_payload_sha256": trace.get("payload_sha256"),
                 "primary_context_contract": _payload_contract(payload),
+                **supplement,
             }
         )
     return annotated
@@ -30369,6 +30474,7 @@ def _default_sources(
 ) -> dict[str, Any]:
     traces = _load_jsonl(TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl")
     payloads = _load_jsonl(PAYLOAD_DIR / f"ai_decision_payloads_{target_date}.jsonl")
+    requests = _load_jsonl(DATA_DIR / 'ai_decision_requests' / f'ai_decision_requests_{target_date}.jsonl')
     pending = _load_jsonl(OUTCOME_DIR / f"ai_decision_outcomes_{target_date}.jsonl")
     pipeline_paths: list[Path] = []
     if include_pipeline:
@@ -30387,6 +30493,7 @@ def _default_sources(
     return {
         "traces": traces,
         "payloads": payloads,
+        'requests':requests,
         "pending": pending,
         "pipeline": [],
         "pipeline_paths": pipeline_paths,
@@ -31561,6 +31668,7 @@ def main(argv: list[str] | None = None) -> int:
                 traces=sources["traces"],
                 payloads=sources["payloads"],
                 promotion=promotion,
+                requests=sources.get('requests'),
             )
             traces_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for trace in sources["traces"]:
@@ -31717,6 +31825,7 @@ def main(argv: list[str] | None = None) -> int:
             traces=sources["traces"],
             payloads=sources["payloads"],
             promotion=promotion,
+            requests=sources.get('requests'),
         )
         for label in labels:
             route_exclusions = {

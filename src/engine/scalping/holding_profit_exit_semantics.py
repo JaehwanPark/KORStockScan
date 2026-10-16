@@ -169,6 +169,72 @@ def _first_crossing(event: Any) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def first_crossing_source(first, *, stock_code, buy_fill_identity, mechanical_fields,
+                          policy_fields, start_pct, observed_at, evaluator):
+    """Freeze mandatory evidence without carrying sampled grid/quote histories."""
+    fields = mechanical_fields or {}
+    body = {key: fields.get(key) for key in (
+        'classifier_version', 'classifier_sha256', 'effective_trailing_policy_sha256',
+        'classification_origin_hash', 'trailing_situation_pin')}
+    body.update({key: policy_fields.get(key) for key in (
+        'scalp_trailing_market_values', 'scalp_trailing_market_values_sha256',
+        'scalp_trailing_policy_date')})
+    body.update(schema='scalp_trailing_first_crossing_source_v1',
+        stock_code=str(stock_code), position_key=first.get('position_key'),
+        buy_fill_identity=buy_fill_identity, first_crossing=dict(first),
+        runtime_pid=first.get('source_runtime_pid'), observed_at=observed_at,
+        evaluator=evaluator, trailing_start_pct=start_pct,
+        raw_limit_pct=first.get('threshold_pct'), tuning_exit_allowed_by_clock=True,
+        trigger_kind='trailing_peak_worsen_floor', actual_order_submitted=False,
+        runtime_effect=False, allowed_runtime_apply=False,
+        metric_role='source_quality_gate', decision_authority='native_first_crossing_observation_only',
+        window_policy='same_position_buy_generation_pid_and_native_latch', sample_floor=1,
+        primary_decision_metric='first_crossing_source_binding',
+        source_quality_gate='native_latch_clock_policy_and_buy_identity',
+        forbidden_uses=['historical_crossing_backfill', 'quote_coverage_inference',
+                        'order_or_threshold_authority', 'actual_economics'])
+    # Bound each receipt independently; the existing 256-row grid cap stays intact.
+    body = json.loads(json.dumps(body, sort_keys=True, allow_nan=False))
+    receipt = {**body, 'source_sha256': input_snapshot_id(body)}
+    if len(json.dumps(receipt, sort_keys=True, allow_nan=False).encode()) > 8192:
+        raise ValueError('tp_first_crossing_source_budget_invalid')
+    return receipt
+
+
+def _native_crossing_source(event, snapshot):
+    raw = _fields(event).get('first_crossing_source')
+    if isinstance(raw, str) and len(raw.encode()) > 8192:
+        raise ValueError('tp_first_crossing_source_budget_invalid')
+    body = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(body, dict):
+        raise ValueError('tp_first_crossing_source_missing')
+    if len(json.dumps(body, sort_keys=True, allow_nan=False).encode()) > 8192:
+        raise ValueError('tp_first_crossing_source_budget_invalid')
+    first = body.get('first_crossing')
+    if (body.get('schema') != 'scalp_trailing_first_crossing_source_v1'
+            or body.get('source_sha256') != input_snapshot_id({k:v for k,v in body.items() if k!='source_sha256'})
+            or body.get('actual_order_submitted') is not False or body.get('runtime_effect') is not False
+            or body.get('allowed_runtime_apply') is not False
+            or not isinstance(first, dict)
+            or body.get('stock_code') != str(getattr(event, 'stock_code', ''))
+            or body.get('position_key') != 'record:' + str(getattr(event, 'record_id', ''))
+            or body.get('position_key') != snapshot.get('position_key')
+            or body.get('buy_fill_identity') != snapshot.get('buy_fill_identity')
+            or not re.fullmatch('[0-9a-f]{64}', str(body.get('buy_fill_identity') or ''))
+            or type(body.get('runtime_pid')) is not int or body['runtime_pid'] <= 0
+            or _float(body.get('runtime_pid')) != _float(snapshot.get('runtime_pid'))
+            or first.get('source_runtime_pid') != body.get('runtime_pid')
+            or first.get('position_key') != body.get('position_key')
+            or first.get('buy_fill_identity') != body.get('buy_fill_identity')
+            or first.get('at_epoch') != _float(snapshot.get('signal_at'))
+            or type(first.get('at_epoch')) not in (int, float)
+            or not math.isfinite(first['at_epoch'])
+            or _float(body.get('observed_at')) is None
+            or not first['at_epoch'] <= body['observed_at'] <= _epoch(event.emitted_at)):
+        raise ValueError('tp_first_crossing_source_binding_invalid')
+    return body
+
+
 def _latency_distribution(rows: list[Any], field: str) -> dict[str, Any]:
     values = sorted(value for row in rows
                     if (value := _float(_fields(row).get(field))) is not None
@@ -220,6 +286,7 @@ def audit_profit_exit_flow(
 
     findings: list[dict[str, str]] = []
     gaps: list[dict[str, str]] = []
+    gap_details: list[dict[str, Any]] = []
     policy_gaps: list[dict[str, str]] = []
     runtime_gaps: list[dict[str, str]] = []
     counts = Counter()
@@ -269,6 +336,8 @@ def audit_profit_exit_flow(
         timing_rows["signal_provider_wait_ms"].extend(snapshots)
         transitions = [event for event in rows
                        if getattr(event, "stage", "") == "scalp_trailing_input_transition"]
+        native_crossings = [event for event in rows
+                           if getattr(event, 'stage', '') == 'scalp_trailing_first_crossing_transition']
         exits = [event for event in rows if getattr(event, "stage", "") == "exit_signal"
                  and _fields(event).get("exit_rule") == "scalp_trailing_take_profit"]
         sent = [event for event in rows if getattr(event, "stage", "") == "sell_order_sent"
@@ -360,11 +429,38 @@ def audit_profit_exit_flow(
                              if _epoch(row.emitted_at) <= _epoch(event.emitted_at)
                              and _fields(row).get("position_key") == position_key
                              and (_first_crossing(row) or {}).get("at_epoch") == signal_at]
-            if not crossing_rows:
+            crossing_candidates = [(row, _fields(row)) for row in crossing_rows]
+            for row in native_crossings:
+                if (_epoch(row.emitted_at) > _epoch(event.emitted_at)
+                        or _fields(row).get('position_key') != position_key
+                        or _fields(row).get('buy_fill_identity') != buy_identity
+                        or _float(_fields(row).get('first_crossing_at')) != signal_at):
+                    continue
+                try:
+                    if getattr(row, 'stock_code', None) != getattr(event, 'stock_code', None):
+                        raise ValueError('tp_first_crossing_symbol_invalid')
+                    source = _native_crossing_source(row, fields)
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    add(gaps, record_id, 'tp_first_crossing_source_invalid')
+                    continue
+                crossing_candidates.append((row, source))
+            if not crossing_candidates:
                 add(gaps, record_id, "tp_first_crossing_transition_missing")
+                exhausted = [row for row in transitions
+                    if _epoch(row.emitted_at) <= _epoch(event.emitted_at)
+                    and str(_fields(row).get('observation_coverage_exhausted')).lower() == 'true']
+                if exhausted:
+                    last = exhausted[-1]
+                    gap_details.append(dict(position_id=record_id, signal_id=signal_id,
+                        reason='tp_first_crossing_transition_missing',
+                        source_disposition='sampled_grid_exhausted_before_signal',
+                        last_grid_transition_at=last.emitted_at.isoformat(),
+                        last_grid_sequence=_float(_fields(last).get('event_sequence')),
+                        grid_sample_limit=_float(_fields(last).get('observation_max_samples')),
+                        historical_recovery_proven=False, actual_order_submitted=False))
             else:
-                crossing = _first_crossing(crossing_rows[-1]) or {}
-                transition = _fields(crossing_rows[-1])
+                origin, transition = max(crossing_candidates, key=lambda item: _epoch(item[0].emitted_at))
+                crossing = _first_crossing_fields(transition)
                 if (crossing.get("market") != market
                         or crossing.get("threshold_key") not in {
                             "SCALP_TRAILING_LIMIT_WEAK", "SCALP_TRAILING_LIMIT_STRONG"
@@ -372,7 +468,6 @@ def audit_profit_exit_flow(
                         or transition.get("tuning_exit_allowed_by_clock") not in {"True", "true", True}):
                     add(findings, record_id, "tp_crossing_arm_or_clock_invalid")
                 pid_receipt = (mechanical_receipts_by_pid or {}).get(_float(fields.get("runtime_pid")), mechanical_policy_receipt)
-                origin = crossing_rows[-1]
                 record_symbol = ((record_id, str(getattr(event, 'stock_code', '')))
                     if str(getattr(origin, 'record_id', '')) == record_id
                     and getattr(origin, 'stock_code', None) == getattr(event, 'stock_code', None) else None)
@@ -593,6 +688,7 @@ def audit_profit_exit_flow(
         },
         "findings": findings,
         "source_gaps": gaps,
+        "source_gap_details": gap_details,
         "policy_binding_gaps": policy_gaps,
         "runtime_consumption_gaps": runtime_gaps,
         "strict_completed_position_count": len(strict_ids),

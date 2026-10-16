@@ -527,6 +527,43 @@ def test_completed_execution_ledger_requires_buy_fill_and_conserves_all_sell_leg
     assert "source_gap_negative_position_balance" in out_of_order["strict_completion_reasons"]
 
 
+def test_split_buy_handoff_reconciles_whole_position_without_per_child_sell_allocation():
+    day='2026-10-15';events=[];journal=[];fills=[]
+    for index,qty in enumerate((1,8,12),1):
+        order=f'B{index}';intent=f'I{index}';execution=f'E{index}'
+        fields=dict(actual_order_submitted=True,broker_order_no=order,requested_qty=qty,
+            submitted_qty=qty,buy_planned_qty=21,buy_submit_attempt_id='attempt-42',
+            buy_parent_id='attempt-42',buy_child_id='attempt-42:'+order,
+            buy_position_cycle_id='42',owner_registry_intent_id=intent,
+            buy_owner_type='main_scalping',buy_owner_id='main_scalping:42',
+            buy_account_key='acct-a',broker_route='KRX')
+        events.append(dict(stage='order_leg_sent',emitted_date=day,record_id=42,stock_code='403870',fields=fields))
+        base=dict(intent_id=intent,owner_type='main_scalping',owner_id='main_scalping:42',
+            account_key='acct-a',order_date=day,side='BUY',action='NEW',broker_order_no=order,
+            symbol='403870',route='KRX',quantity=qty)
+        journal.extend([{**base,'event':'ORDER_BOUND','state':'ORDER_BOUND'},
+            {**base,'event':'FILL_RECORDED','state':'ORDER_TERMINAL','filled_qty':qty,'execution_no':execution}])
+        fills.append(report_mod.HoldingEvent(day+' 09:00:0'+str(index),'x','403870',
+            'position_rebased_after_fill',dict(id='42',order_no=order,execution_no=execution,
+            fill_qty=qty,order_filled_qty=qty,order_remaining_qty=0,fill_price=10000,
+            pipeline_lifecycle_population_scope='real_record_bound',actual_order_submitted=True,
+            broker_order_forbidden=False),''))
+    sale=report_mod.HoldingEvent(day+' 09:05:00','x','403870','sell_completed',dict(
+        id='42',order_no='S1',execution_no='SE1',main_lifecycle_exit_qty=21,cumulative_sell_qty=21,
+        pipeline_lifecycle_population_scope='real_record_bound',actual_order_submitted=True,broker_order_forbidden=False),'')
+    trade=dict(id=42,code='403870',status='COMPLETED',buy_qty=21)
+    result=report_mod._buy_parent_handoff_projection(day,events,journal,fills+[sale],[trade])
+    assert result['counts']['valid']==3
+    assert sum(r['filled_qty'] for r in result['rows'])==21
+    assert all(r['state']=='full' and r['position_sellable_qty']==0 and r['sellable_qty'] is None
+        and r['cost_krw'] is None for r in result['rows'])
+    missing=report_mod._buy_parent_handoff_projection(day,events[:-1],journal,fills+[sale],[trade])
+    assert missing['counts']['valid']==0
+    assert all(r['position_sellable_qty'] is None for r in missing['rows'])
+    events[-1]['fields']['buy_position_cycle_id']='another-cycle'
+    assert report_mod._buy_parent_handoff_projection(day,events,journal,fills+[sale],[trade])['counts']['valid']==0
+
+
 def test_buy_parent_handoff_requires_exact_owner_and_conserves_filled_not_planned_qty():
     day = "2026-09-28"
     def sent(order, intent, record=42, owner="main_scalping:42", account="acct-a"):

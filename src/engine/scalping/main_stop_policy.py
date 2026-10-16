@@ -409,6 +409,32 @@ def handoff_source(stock, *, at, registered, exit_rule, profit_pct, source_stage
     return dict(body, source_sha256=digest(body))
 
 
+def release_source(stock, *, at, auto_source, average_price, current_price,
+                   quote_at, quote_max_age_sec):
+    """Observe an already successful native auto-exclusion release; no authority."""
+    from .position_peak_ledger import position_cycle_id
+    key=position_cycle_id(stock);pin=stock.get('main_stop_policy_pin') or {}
+    values=pin_values(pin,key)
+    if (not all(finite(x) for x in (at,average_price,current_price,quote_at,quote_max_age_sec))
+            or average_price<=0 or current_price<average_price
+            or not 0<=at-quote_at<=quote_max_age_sec or quote_max_age_sec<=0
+            or auto_source not in {'auto_hard_stop_handoff','auto_open_loss','auto_scale_in_qty_guard_block'}):
+        raise ValueError('stop_auto_release_source_invalid')
+    body=dict(schema='main_stop_release_source_v1',position_key=key,pin_sha256=pin['pin_sha256'],
+        record_id=stock.get('id'),role=pin['role'],market=pin['market'],at=at,
+        owner='main',source_stage='manual_control_auto_released_at_average_price',
+        source_stop_values=asdict(values),auto_source=auto_source,
+        average_price=average_price,current_price=current_price,quote_at=quote_at,
+        quote_max_age_sec=quote_max_age_sec,released=True,remaining_excluded=False,
+        metric_role='source_quality_gate',decision_authority='native_release_disposition_observation_only',
+        window_policy='same_position_pin_native_auto_release',sample_floor=1,
+        primary_decision_metric='native_auto_exclusion_release',
+        source_quality_gate='file_auto_provenance_fresh_quote_and_no_remaining_exclusion',
+        forbidden_uses=['operator_veto_release','new_order_authority','actual_profit_claim'],
+        actual_order_submitted=False,allowed_runtime_apply=False,actual_realized_net_krw=None)
+    return {**body,'source_sha256':digest(body)}
+
+
 def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model, vote_source,
                automatic_management_allowed=False, runtime_flags=None, decision_profit_pct=None, seal=True,
                post_add_vote_source=None, post_add_inputs=None, preset_stop=None):

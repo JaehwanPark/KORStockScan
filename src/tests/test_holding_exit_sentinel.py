@@ -208,6 +208,37 @@ def test_profit_semantics_accepts_premarket_zero_vote_first_crossing():
     )["status"] == "runtime_not_consumed"
 
 
+@pytest.mark.parametrize('damage', ['hash', 'buy', 'pid', 'clock', 'symbol', 'budget'])
+def test_native_first_crossing_source_rejects_misbound_receipt(damage):
+    from src.engine.scalping.holding_profit_exit_semantics import first_crossing_source
+    at=datetime(2026,9,28,10,tzinfo=ZoneInfo('Asia/Seoul'));epoch=at.timestamp()
+    first=dict(position_key='record:7',at_epoch=epoch,market='REGULAR',
+        threshold_key='SCALP_TRAILING_LIMIT_WEAK',threshold_pct=.4,
+        source_runtime_pid=42,buy_fill_identity='a'*64)
+    body=first_crossing_source(first,stock_code='000001',buy_fill_identity='a'*64,
+        mechanical_fields=MECHANICAL_FIELDS,policy_fields=MECHANICAL_FIELDS,
+        start_pct=.4,observed_at=epoch,evaluator='fast')
+    if damage=='hash':body['raw_limit_pct']=.8
+    elif damage=='buy':body['buy_fill_identity']='b'*64
+    elif damage=='pid':body['runtime_pid']=43
+    elif damage=='clock':body['observed_at']=epoch+100
+    elif damage=='symbol':body['stock_code']='000002'
+    elif damage=='budget':body['oversized']='x'*9000
+    if damage!='hash':body['source_sha256']=input_snapshot_id({k:v for k,v in body.items() if k!='source_sha256'})
+    event=sentinel.PipelineEvent(at,'HOLDING_PIPELINE','scalp_trailing_first_crossing_transition',
+        'Stock','000001','7',dict(first_crossing_source=json.dumps(body),position_key='record:7',
+        buy_fill_identity='a'*64,first_crossing_at=epoch,pipeline_lifecycle_population_scope='real_record_bound'))
+    snapshot=sentinel.PipelineEvent(at+timedelta(seconds=1),'HOLDING_PIPELINE',
+        'holding_path_signal_snapshot','Stock','000001','7',dict(path_id='EXIT_TRAILING_TP',
+        position_key='record:7',buy_fill_identity='a'*64,signal_at=epoch,signal_id='first',
+        market='REGULAR',session_key='2026-09-28',runtime_pid=42,vote_count=0,decision='INSUFFICIENT',
+        policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[('EXIT_TRAILING_TP','REGULAR')]),
+        pipeline_lifecycle_population_scope='real_record_bound'))
+    report=audit_profit_exit_flow([event,snapshot],target_date='2026-09-28',load_votes=lambda _:[],
+        mechanical_policy_receipt=MECHANICAL,consumed_pid=42)
+    assert {'position_id':'7','reason':'tp_first_crossing_source_invalid'} in report['source_gaps']
+
+
 def test_profit_semantics_distinguishes_empty_and_missing_vote_source():
     assert audit_profit_exit_flow(
         [], target_date="2026-09-28", load_votes=lambda _: [], mechanical_policy_receipt=MECHANICAL, consumed_pid=42,

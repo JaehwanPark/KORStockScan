@@ -4223,12 +4223,19 @@ def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
     assert count == 2
 
 
+@pytest.mark.parametrize('receipt_failure', [None, 'build', 'write'])
+@pytest.mark.parametrize('callback_completed', [False, True])
 def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
-    monkeypatch,
+    monkeypatch, receipt_failure, callback_completed,
 ):
+    from types import SimpleNamespace
+    from src.engine.scalping.entry_cancel_wait_runtime import probe_submit_source
+
     now_ts = 1_785_710_000.0
+    monkeypatch.setattr(state_handlers.time, 'time', lambda: now_ts)
     stock = {
         "id": 26323,
+        "code": "199430",
         "name": "KNR",
         "status": "HOLDING",
         "buy_price": 10_000,
@@ -4249,6 +4256,20 @@ def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
         "entry_split_probe_ai_confirmed_at_submit": now_ts - 0.1,
         "entry_split_probe_wait_contract_at_submit": True,
     }
+    owner = SimpleNamespace(owner_type='main_scalping', owner_id='main_scalping:26323',
+                            client_intent_id='original-residual-client')
+    monkeypatch.setattr(state_handlers, 'main_owner_context', lambda *a, **k: owner)
+    monkeypatch.setattr(state_handlers, 'broker_account_key', lambda: 'account-a')
+    stock['entry_split_probe_submit_source'] = probe_submit_source(
+        stock, parent_id='original-attempt', account_key='account-a', owner_context=owner,
+        planned_qty=2, source_date=datetime.fromtimestamp(now_ts, state_handlers._KST).date().isoformat())
+    if receipt_failure == 'build':
+        from src.engine.scalping import entry_cancel_wait_runtime as receipt_source
+
+        def unavailable_source(*args, **kwargs):
+            raise RuntimeError('diagnostic formatter unavailable')
+
+        monkeypatch.setattr(receipt_source, 'residual_submission_fields', unavailable_source)
     direction_calls = []
     buy_calls = []
 
@@ -4360,19 +4381,26 @@ def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
             "order_type_remap_reason": "-",
         },
     )
-    monkeypatch.setattr(
-        state_handlers.kiwoom_orders,
-        "send_buy_order",
-        lambda *_args, **_kwargs: (
-            buy_calls.append((_args, _kwargs))
-            or {"return_code": "0", "ord_no": "RESIDUAL-1", "broker_route": "KRX"}
-        ),
-    )
+    def accepted_order(*args, **kwargs):
+        buy_calls.append((args, kwargs))
+        if callback_completed:
+            stock.update(entry_split_probe_phase='complete', buy_qty=2)
+        return dict(return_code='0', ord_no='RESIDUAL-1', broker_route='KRX',
+                    owner_registry_intent_id='original-registry-intent')
+
+    monkeypatch.setattr(state_handlers.kiwoom_orders, 'send_buy_order', accepted_order)
     monkeypatch.setattr(state_handlers, "_stage_buy_order_submission", lambda *_: None)
     monkeypatch.setattr(
         state_handlers, "update_probe_runtime_bundle", lambda *_a, **_k: None
     )
-    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *_a, **_k: None)
+    pipeline_events = []
+
+    def record_pipeline(stock, code, stage, **fields):
+        pipeline_events.append((stage, fields))
+        if receipt_failure == 'write' and stage == 'order_leg_sent':
+            raise OSError('receipt storage unavailable')
+
+    monkeypatch.setattr(state_handlers, '_log_entry_pipeline', record_pipeline)
 
     first = state_handlers._maybe_submit_entry_split_probe_residual(
         stock,
@@ -4400,8 +4428,20 @@ def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
     assert second is True
     assert duplicate is False
     assert stock["probe_confirmation_count"] == 2
-    assert stock["entry_split_probe_phase"] == "residual_submitted"
+    assert stock["entry_split_probe_phase"] == ('complete' if callback_completed else 'residual_submitted')
     assert len(buy_calls) == 1
+    assert buy_calls[0][1]['owner_context'] is owner
+    sent = [fields for stage, fields in pipeline_events if stage == 'order_leg_sent']
+    assert len(sent) == 1
+    assert sent[0]['actual_order_submitted'] is True
+    if receipt_failure == 'build':
+        assert sent[0]['cancel_wait_source_gap'] == 'diagnostic formatter unavailable'
+        assert sent[0]['buy_registry_mode'] == 'unknown'
+        return
+    assert 'cancel_wait_source_gap' not in sent[0], sent[0]
+    assert sent[0]['buy_parent_id'] == 'original-attempt'
+    assert sent[0]['owner_registry_intent_id'] == 'original-registry-intent'
+    assert sent[0]['cancel_wait_timeout_owner'] == 'entry_split_probe_residual_runtime'
 
 
 def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeypatch):

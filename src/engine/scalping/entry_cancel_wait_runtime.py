@@ -99,6 +99,63 @@ def submission_response_fields(response):
         actual_order_submitted=bool(code == "0" and number))
 
 
+def probe_submit_source(stock, *, parent_id, account_key, owner_context, planned_qty, source_date):
+    """Freeze initial custody for later residual observations; no runtime gate."""
+    from src.engine.scalping.strategy_owner_components import digest
+    body = dict(schema='entry_probe_submit_source_v1', source_date=source_date,
+        record_id=str(stock.get('id') or ''), stock_code=str(stock.get('code') or ''),
+        bundle_id=stock.get('entry_split_probe_bundle_id'), initial_parent_id=parent_id,
+        position_cycle_id=str(stock.get('position_cycle_id') or stock.get('id') or ''),
+        owner_id=getattr(owner_context, 'owner_id', None), account_key=account_key,
+        planned_qty=planned_qty)
+    if (not all(body[k] for k in ('record_id','stock_code','bundle_id','initial_parent_id',
+            'position_cycle_id','owner_id','account_key'))
+            or type(planned_qty) is not int or planned_qty <= 1
+            or body['owner_id'] != 'main_scalping:'+body['record_id']):
+        raise ValueError('probe_submit_source_identity_missing')
+    return {**body, 'sha256': digest(body)}
+
+
+def residual_submission_fields(stock, order, *, owner_context, account_key, intent_id,
+                               order_no, qty, price, route, now_ts):
+    """Observe the existing residual clock without adopting it for timeout tuning."""
+    from src.engine.scalping.strategy_owner_components import digest
+    source = stock.get('entry_split_probe_submit_source') or {}
+    day = datetime.fromtimestamp(now_ts, KST).date().isoformat()
+    if (source.get('schema') != 'entry_probe_submit_source_v1'
+            or source.get('sha256') != digest({k:v for k,v in source.items() if k!='sha256'})
+            or source.get('source_date') != day
+            or source.get('record_id') != str(stock.get('id') or '')
+            or source.get('stock_code') != str(stock.get('code') or '')
+            or source.get('bundle_id') != stock.get('entry_split_probe_bundle_id')
+            or source.get('position_cycle_id') != str(stock.get('position_cycle_id') or stock.get('id') or '')
+            or source.get('planned_qty') != stock.get('entry_split_probe_requested_qty')
+            or source.get('account_key') != account_key
+            or source.get('owner_id') != getattr(owner_context,'owner_id',None)
+            or not all((intent_id, order_no, getattr(owner_context,'client_intent_id',None)))
+            or type(qty) is not int or qty <= 0 or type(price) is not int or price <= 0
+            or route not in {'KRX','NXT','SOR'}):
+        raise ValueError('residual_submit_source_identity_unproven')
+    parent = source['initial_parent_id']
+    context = dict(schema=ECONOMIC_SCHEMA, source_date=day,
+        frozen_at=datetime.fromtimestamp(now_ts,KST).isoformat(),
+        parent_id='residual:'+parent, child_id=str(order.get('tag') or ''),
+        stock_code=source['stock_code'], requested_qty=qty, submitted_price=price,
+        broker_route=route, timeout_owner='entry_split_probe_residual_runtime',
+        actual_timeout_sec=None, candidate_timeout_secs=[], economic_eligible=False,
+        observation_only=True, owner_client_intent_id=owner_context.client_intent_id,
+        probe_submit_source=source, seed={})
+    context['sha256']=digest(context)
+    return dict(entry_cancel_wait_submission_context=json.dumps(context,sort_keys=True,separators=(',',':')),
+        cancel_wait_timeout_owner=context['timeout_owner'], buy_parent_id=parent,
+        buy_submit_attempt_id=parent, buy_child_id=parent+':'+order_no,
+        buy_position_cycle_id=source['position_cycle_id'], buy_planned_qty=source['planned_qty'],
+        buy_owner_type=owner_context.owner_type, buy_owner_id=owner_context.owner_id,
+        buy_owner_client_intent_id=owner_context.client_intent_id,
+        buy_account_key=account_key, owner_registry_intent_id=intent_id,
+        buy_registry_mode='registry_managed')
+
+
 @lru_cache(maxsize=4)
 def _read_loaded_policy(path, expected_hash, size, mtime_ns):
     import hashlib

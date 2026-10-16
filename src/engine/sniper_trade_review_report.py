@@ -1692,6 +1692,7 @@ def _buy_parent_handoff_projection(
     rows: list[dict] = []
     seen: dict[tuple[str, str, str], dict] = {}
     rows_by_key: dict[tuple[str, str, str], dict] = {}
+    fills_by_row: dict[int, list[dict]] = {}
     counts = dict(raw=0, valid=0, excluded=0, quarantined=0, unobserved=0)
     for event in entry_events:
         if not isinstance(event, dict) or event.get("stage") != "order_leg_sent":
@@ -1727,7 +1728,7 @@ def _buy_parent_handoff_projection(
         seen[key] = event
         parent = str(fields.get("buy_parent_id") or "").strip()
         child = str(fields.get("buy_child_id") or "").strip()
-        attempt = str(fields.get("entry_submit_attempt_id") or "").strip()
+        attempt = str(fields.get("entry_submit_attempt_id") or fields.get('buy_submit_attempt_id') or "").strip()
         intent = str(fields.get("owner_registry_intent_id") or "").strip()
         owner = str(fields.get("buy_owner_id") or "").strip()
         route = str(fields.get("broker_route") or "").strip().upper()
@@ -1748,7 +1749,8 @@ def _buy_parent_handoff_projection(
         )
         if (not all((record, code, order, account, parent, child, attempt,
                      owner, route)) or (not intent and not single_owner)
-            or parent != attempt or not child.startswith(parent + ":")):
+            or parent != attempt or not child.startswith(parent + ":")
+            or (fields.get('buy_submit_attempt_id') and fields['buy_submit_attempt_id']!=attempt)):
             reasons.append("submit_parent_owner_identity_missing")
         if fields.get("buy_owner_type") != "main_scalping" or owner != f"main_scalping:{record}":
             reasons.append("main_owner_mismatch")
@@ -1825,6 +1827,13 @@ def _buy_parent_handoff_projection(
         registry_terminal = any(
             row.get("state") == "ORDER_TERMINAL"
             and bool(row.get("terminal_reconciliation")) for row in journal)
+        # A native full fill has no residual order quantity. Its exact complete
+        # execution set is distinct from partial/cancel terminal reconciliation.
+        full_fill_terminal = bool(cumulative == submitted > 0 and verified_fills
+            and len(journal_fills) == len(verified_fills) and any(
+                row.get('event')=='FILL_RECORDED' and row.get('state')=='ORDER_TERMINAL'
+                and _safe_int(row.get('filled_qty'),-1)==submitted for row in journal))
+        registry_terminal = registry_terminal or full_fill_terminal
         if (not single_owner and cumulative == submitted > 0
             and not registry_terminal):
             reasons.append("full_buy_registry_terminal_unobserved")
@@ -1850,7 +1859,7 @@ def _buy_parent_handoff_projection(
             ) == 1
             sold = 0
             seen_sells: set[tuple[str, str]] = set()
-            for sale in sorted(sells_by_record[record], key=lambda item: item.timestamp):
+            for sale in (sorted(sells_by_record[record], key=lambda item: item.timestamp) if single_parent else []):
                 f = sale.fields
                 sale_id = (str(f.get("order_no") or ""),
                            str(f.get("execution_no") or ""))
@@ -1873,7 +1882,7 @@ def _buy_parent_handoff_projection(
                     {"HOLDING", "SELL_ORDERED", "COMPLETED"}
                 and _safe_int(trade.get("buy_qty"), -1) == cumulative):
                 sellable = cumulative - sold
-            elif not reasons:
+            elif not reasons and single_parent:
                 reasons.append("position_quantity_or_parent_census_unreconciled")
         row = {
             "record_id": record or None, "attempt_id": attempt or None,
@@ -1885,6 +1894,7 @@ def _buy_parent_handoff_projection(
             "owner_type": fields.get("buy_owner_type"), "owner_id": owner or None,
             "custody_mode": mode or None,
             "account_key": account or None, "route": route or None,
+            'position_cycle_id':fields.get('buy_position_cycle_id'),
             "session": fields.get("market_session_bucket"),
             "submitted_at": event.get("emitted_at"),
             "terminal_observed": terminal,
@@ -1903,9 +1913,66 @@ def _buy_parent_handoff_projection(
             "source_quality_reasons": sorted(set(reasons)),
         }
         rows.append(row)
+        fills_by_row[id(row)] = verified_fills
         rows_by_key[key] = row
         counts["quarantined" if reasons else "unobserved" if not verified_fills
                else "valid"] += 1
+    # Reconcile split children once as a whole position. Never assign one
+    # position's complete SELL quantity to every individual BUY child.
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row['record_id']].append(row)
+    for record, children in grouped.items():
+        if len(children)<2 or any(c['source_quality_reasons'] for c in children):
+            continue
+        trade=trades_by_id.get(record) or {}
+        orders={str(c['order_id'] or '') for c in children}
+        parents={c['parent_id'] for c in children}
+        cycles={str(c.get('position_cycle_id') or '') for c in children}
+        journal_orders={str(r.get('broker_order_no')) for r in registry_events
+            if r.get('order_date')==source_date and r.get('owner_id')=='main_scalping:'+record
+            and r.get('side')=='BUY' and r.get('action')=='NEW' and r.get('broker_order_no')}
+        total=sum(_safe_int(c.get('filled_qty'),0) for c in children)
+        planned={c.get('planned_qty') for c in children}
+        valid=(len(orders)==len(children) and orders==buy_orders_by_record[record]==journal_orders
+            and len(parents)==1 and None not in parents and len(cycles)==1 and '' not in cycles
+            and cycles=={str(trade.get('position_cycle_id') or trade.get('id') or '')}
+            and len(planned)==1 and None not in planned and next(iter(planned))>=total
+            and _safe_int(trade.get('buy_qty'),-1)==total
+            and str(trade.get('status') or '').upper() in {'HOLDING','SELL_ORDERED','COMPLETED'}
+            and len({c['account_key'] for c in children})==1
+            and len({c['owner_id'] for c in children})==1)
+        fills=[f for c in children for f in fills_by_row[id(c)]]
+        sold=0; seen_sells=set()
+        def clock(value):
+            value=_parse_dt(value)
+            if value is None:raise ValueError('split_fill_clock_missing')
+            return (value.replace(tzinfo=ZoneInfo('Asia/Seoul')) if value.tzinfo is None else value).timestamp()
+        try:
+            for sale in sorted(sells_by_record[record],key=lambda e:clock(e.timestamp)):
+                f=sale.fields; identity=(str(f.get('order_no') or ''),str(f.get('execution_no') or ''))
+                delta=_safe_int(f.get('main_lifecycle_exit_qty'),-1)
+                available=sum(fill['qty'] for fill in fills if clock(fill['at'])<=clock(sale.timestamp))
+                if (not all(identity) or identity in seen_sells or delta<=0
+                        or _safe_int(f.get('cumulative_sell_qty'),-1)!=sold+delta
+                        or f.get('pipeline_lifecycle_population_scope')!='real_record_bound'
+                        or str(f.get('actual_order_submitted')).lower()!='true'
+                        or str(f.get('broker_order_forbidden')).lower()!='false'
+                        or sold+delta>available):
+                    valid=False;break
+                seen_sells.add(identity);sold+=delta
+        except (ValueError,TypeError,OverflowError):
+            valid=False
+        for child in children:
+            child['sellable_qty']=None  # No invented per-leg SELL allocation.
+            child['position_sellable_qty']=total-sold if valid else None
+            if not valid:
+                child['source_quality_reasons']=['position_quantity_or_parent_census_unreconciled']
+                child['state']='quarantined'
+                child['parent_id']=child['child_id']=None
+    for key in ('valid','quarantined','unobserved'):
+        counts[key]=sum(('quarantined' if r['source_quality_reasons'] else
+            'unobserved' if not r['execution_ids'] else 'valid')==key for r in rows)
     return {"source_date": source_date, "counts": counts, "rows": rows,
             "response_uncertain_attempts": uncertain_attempts,
             "authority": "source_only_no_order_or_position_mutation"}

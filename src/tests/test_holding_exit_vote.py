@@ -28,6 +28,41 @@ def test_holding_vote_review_scheduler_never_waits_for_provider(monkeypatch):
     release.set()
     handlers._HOLDING_VOTE_INFLIGHT["000001"].result(timeout=2.0)
 
+
+def test_input_gap_receipt_preserves_forensic_activation_reason_without_provider_authority():
+    from src.engine.ai.holding_exit_vote import path_vote_gap_source,input_snapshot_id
+    payload=dict(position_key='record:42',buy_fill_identity='a'*64,market='REGULAR',
+        requested_paths=['EXIT_TRAILING_TP'],position={},quote={},flow={},last_ticks=[],
+        source_quality=dict(allowed=False,status='blocked',blockers=['context_missing']),
+        source=dict(route='KRX',transport_epoch=1,source_generation='snapshot',quote_observed_at=100))
+    context=dict(schema='holding_decision_context_v1',enabled=False,forensic_context_only=True,
+        source_quality=dict(status='disabled',blockers=['promotion_contract_unverified']))
+    receipt=path_vote_gap_source(payload,{'decision_input_sha256':'b'*64},context_source=context)
+    assert receipt['context_enabled'] is False and receipt['forensic_context_only'] is True
+    assert receipt['context_blockers']==['promotion_contract_unverified']
+    assert 'source_preflight_blocked' in receipt['missing_paths']['EXIT_TRAILING_TP']
+    assert receipt['provider_called'] is False and receipt['allowed_runtime_apply'] is False
+    assert receipt['sha256']==input_snapshot_id({k:v for k,v in receipt.items() if k!='sha256'})
+
+
+def test_quote_collector_coverage_starts_at_native_birth_and_resets_for_new_generation(monkeypatch):
+    from datetime import datetime
+    from src.engine.ai import holding_vote_replay_source as source
+    from src.engine.ai import holding_exit_vote as vote
+    monkeypatch.setattr(source,'PROCESS_STARTED_AT',100.)
+    monkeypatch.setattr(vote,'buy_fill_legs_from_runtime',lambda stock:[dict(qty=stock['buy_qty'])])
+    stock=dict(buy_qty=1,buy_time=datetime.fromtimestamp(110.,source.ZoneInfo('Asia/Seoul')))
+    source.begin_coverage(stock,111.,generation='a'*64)
+    assert stock['holding_vote_coverage_birth_at']==110.
+    source.begin_coverage(stock,112.,generation='a'*64)
+    assert stock['holding_vote_coverage_started_at']==110.
+    assert stock['holding_vote_coverage_checked_at']==112.
+    stock.update(buy_qty=2,last_add_at=datetime.fromtimestamp(113.,source.ZoneInfo('Asia/Seoul')),
+        _add_receipt_filled_by_order_no={'ADD':1})
+    source.begin_coverage(stock,114.,generation='b'*64)
+    assert stock['holding_vote_coverage_generation']=='b'*64
+    assert stock['holding_vote_coverage_birth_at']==113.
+
 from src.engine.ai.holding_exit_vote import (
     append_vote_file,
     append_vote,

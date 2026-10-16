@@ -28,14 +28,14 @@ SCHEMA = 'holding_pre_signal_replay_source_v1'
 PROCESS_STARTED_AT = time.time()
 
 
-def begin_coverage(stock, now):
+def begin_coverage(stock, now, *, generation=None):
     """Current-PID native fills prove no pre-birth vote could have existed.
 
     Restarted holdings start at observed collection, never a historical clock.
     A new ADD generation starts at its last native fill, preserving the old pin.
     """
     from .holding_exit_vote import buy_fill_legs_from_runtime, buy_fill_identity_from_runtime
-    generation=buy_fill_identity_from_runtime(stock)
+    generation=generation or buy_fill_identity_from_runtime(stock)
     if (stock.get('holding_vote_coverage_generation')==generation
         and stock.get('holding_vote_coverage_pid')==os.getpid()):
         stock['holding_vote_coverage_checked_at']=now

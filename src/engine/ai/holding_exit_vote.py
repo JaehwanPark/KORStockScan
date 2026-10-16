@@ -415,6 +415,39 @@ def build_path_vote_input(
     }
 
 
+def path_vote_gap_source(payload, hashes, *, context_source=None):
+    """Bounded evidence for a rejected input; never a provider request or vote."""
+    def blockers(value):
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+        return [str(item)[:160] for item in value[:32]]
+
+    source=context_source if isinstance(context_source,dict) else {}
+    quality=source.get('source_quality') if isinstance(source.get('source_quality'),dict) else {}
+    preflight=payload.get('source_quality') or {}
+    body=dict(schema='holding_path_input_gap_source_v1',
+        position_key=payload.get('position_key'),buy_fill_identity=payload.get('buy_fill_identity'),
+        market=payload.get('market'),session_key=payload.get('session_key'),
+        decision_input_sha256=hashes.get('decision_input_sha256'),
+        context_present=bool(source),context_schema=source.get('schema'),
+        context_enabled=source.get('enabled'),forensic_context_only=source.get('forensic_context_only'),
+        context_quality_status=quality.get('status'),
+        context_blockers=blockers(quality.get('blockers')),
+        input_preflight_status=preflight.get('status'),
+        input_preflight_blockers=blockers(preflight.get('blockers')),
+        flow_present=bool(payload.get('flow')),source={k:(payload.get('source') or {}).get(k)
+            for k in ('route','transport_epoch','source_generation','quote_observed_at')},
+        missing_paths={k:list(v) for k,v in path_vote_input_gaps(payload).items()},
+        metric_role='source_quality_gate',decision_authority='rejected_input_observation_only',
+        window_policy='same_native_due_review_input',sample_floor=1,
+        primary_decision_metric='typed_input_gap',source_quality_gate='original_input_hash_and_field_dispositions',
+        forbidden_uses=['provider_request_inference','vote_or_order_authority','historical_coverage_backfill'],
+        provider_called=False,actual_order_submitted=False,runtime_effect=False,allowed_runtime_apply=False)
+    return {**body,'sha256':input_snapshot_id(body)}
+
+
 def path_vote_input_gaps(payload: dict[str, Any]) -> dict[str, tuple[str, ...]]:
     """Name missing decision evidence separately for every requested path."""
     position = payload.get("position") or {}

@@ -476,7 +476,8 @@ def _parents(target_date, events, registry, *, details=None):
         fields=sent.get('fields') or {}
         if not fields.get('entry_cancel_wait_submission_context'):
             continue
-        if fields.get('cancel_wait_timeout_owner') != 'initial_quantity_bundle_timeout_schedule':
+        if fields.get('cancel_wait_timeout_owner') not in {
+                'initial_quantity_bundle_timeout_schedule','entry_split_probe_residual_runtime'}:
             raise ValueError('sequential_timeout_owner_missing')
         if key in submissions:
             existing=submissions[key].get('fields') or {}
@@ -495,6 +496,7 @@ def _parents(target_date, events, registry, *, details=None):
         sent=sent_by_record_order.get((str(event.get('record_id') or ''),no))
         sf=(sent or {}).get('fields') or {}
         sequential=context.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule'
+        residual=context.get('timeout_owner')=='entry_split_probe_residual_runtime'
         if sequential and (sent is None or not _sequential_first_context_valid(
                 context,sent,target_date)):
             raise ValueError('sequential_schedule_or_first_leg_identity_invalid')
@@ -523,7 +525,7 @@ def _parents(target_date, events, registry, *, details=None):
             and sf.get('buy_owner_policy_date')==target_date
             and not any(r.get('symbol')==event.get('stock_code')
                 and r.get('order_date')==target_date for r in registry))
-        if sequential and (single_owner or not identity):
+        if (sequential or residual) and (single_owner or not identity):
             raise ValueError('sequential_registry_owner_identity_missing')
         if single_owner:
             identity='source_only:'+_digest(sent)
@@ -536,6 +538,22 @@ def _parents(target_date, events, registry, *, details=None):
             unclassified.add(('order',target_date,str(event.get('record_id') or ''),
                 str(sf.get('buy_account_key') or ''),no) if no else ('submission',_digest(event)))
             continue
+        if residual:
+            source=context.get('probe_submit_source') or {}
+            if (source.get('schema')!='entry_probe_submit_source_v1'
+                    or source.get('sha256')!=_digest({k:v for k,v in source.items() if k!='sha256'})
+                    or source.get('source_date')!=target_date
+                    or source.get('record_id')!=str(event.get('record_id') or '')
+                    or source.get('stock_code')!=event.get('stock_code')
+                    or source.get('owner_id')!=actual.get('owner_id')
+                    or source.get('account_key')!=actual.get('account_key')
+                    or source.get('initial_parent_id')!=sf.get('buy_parent_id')
+                    or context.get('parent_id')!='residual:'+str(sf.get('buy_parent_id') or '')
+                    or context.get('economic_eligible') is not False
+                    or context.get('actual_timeout_sec') is not None
+                    or context.get('candidate_timeout_secs')!=[]
+                    or context.get('owner_client_intent_id')!=actual.get('client_intent_id')):
+                raise ValueError('residual_submission_source_identity_invalid')
         if sequential and actual.get('client_intent_id') != context.get('owner_client_intent_id'):
             raise ValueError('sequential_owner_client_intent_conflict')
         account=str(sf.get('buy_account_key') or '')
@@ -564,12 +582,12 @@ def _parents(target_date, events, registry, *, details=None):
         if (actual.get('order_date')!=target_date or actual.get('quantity')!=context['requested_qty']
             or actual.get('symbol')!=context.get('stock_code') or actual.get('route')!=context['broker_route']):
             raise ValueError('submission_owner_quantity_symbol_route_conflict')
-        timeout_owner=('initial_quantity_bundle_timeout_schedule' if sequential
-                       else 'entry_cancel_wait_runtime')
-        profile=('initial_quantity_sequential' if sequential else context['wait_profile'])
+        timeout_owner=(context['timeout_owner'] if sequential or residual else 'entry_cancel_wait_runtime')
+        profile=('initial_quantity_sequential' if sequential else
+                 'entry_split_probe_residual' if residual else context['wait_profile'])
         p=parents.setdefault(parent,dict(parent_id=parent,source_date=target_date,seed=seed,
             incumbent_timeout_sec=context['actual_timeout_sec'],profile=profile,
-            timeout_owner=timeout_owner,economic_eligible=not sequential,children={}))
+            timeout_owner=timeout_owner,economic_eligible=not (sequential or residual),children={}))
         if (p['seed'] != seed or p['incumbent_timeout_sec'] != context['actual_timeout_sec']
                 or p['timeout_owner'] != timeout_owner or p['profile'] != profile):
             raise ValueError('submission_parent_context_conflict')
@@ -583,7 +601,7 @@ def _parents(target_date, events, registry, *, details=None):
             intent_id=None if single_owner else identity,
             custody_mode='single_owner_unregistered' if single_owner else 'registry_managed',
             broker_order_no=actual.get('broker_order_no'))
-        if sequential:
+        if sequential or residual:
             filled_qty=0
             if fills[identity]:
                 filled_qty=fills[identity][-1].get('filled_qty')
@@ -647,7 +665,9 @@ def _parents(target_date, events, registry, *, details=None):
             unresolved_uncertain_attempt_count=len(unresolved_uncertain),
             resolved_uncertain_attempt_count=len(uncertain_contexts)-len(unresolved_uncertain),
             sequential_source_only_parent_count=sum(
-                p.get('economic_eligible') is False for p in parents.values()),
+                p.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule' for p in parents.values()),
+            residual_source_only_parent_count=sum(
+                p.get('timeout_owner')=='entry_split_probe_residual_runtime' for p in parents.values()),
             economic_parent_count=sum(
                 p.get('economic_eligible') is True for p in parents.values()),
             unclassified_identities=sorted(_digest(list(key)) for key in unclassified))
@@ -691,6 +711,7 @@ def _source_binding(projection, registry_contract):
                 projection_sha256=_digest(projection),
                 producer_manifest_sha256=census.get('manifest_sha256'),
                 retained_event_count=projection.get('retained_event_count'),
+                native_census_projection=census.get('native_census_projection'),
                 registry_tail_hash=registry_contract.get('tail_hash'))
 
 
@@ -1122,7 +1143,7 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
                 terminal=_sequential_terminal_proof_valid(a)
                 c.update(terminal_at=a.get('observed_at_kst'),fills=filled[key],
                     terminal_reconciled=terminal)
-                if p.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule':
+                if p.get('timeout_owner') in {'initial_quantity_bundle_timeout_schedule','entry_split_probe_residual_runtime'}:
                     quantity=a.get('quantity')
                     filled_qty=a.get('filled_qty',0)
                     valid_quantity=(type(quantity) is int and quantity>0
@@ -1263,6 +1284,7 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
         submission_census=dict(submitted_parent_count=counts.get(target_date),unclassified_count=unclassified,
             economic_parent_count=parent_details.get('economic_parent_count'),
             excluded_sequential_timeout_owner_count=parent_details.get('sequential_source_only_parent_count'),
+            excluded_residual_timeout_owner_count=parent_details.get('residual_source_only_parent_count'),
             response_uncertain_attempt_count=parent_details.get('response_uncertain_attempt_count'),
             unresolved_uncertain_attempt_count=parent_details.get('unresolved_uncertain_attempt_count'),
             coverage_verified=source['projection'].get('status')=='ready' and source['registry'].get('status')=='verified' and source['source_quality'].get('tuning_input_allowed') is True and not unclassified,
@@ -1308,49 +1330,78 @@ def _bounded_semantic_json(path):
     return value, hashlib.sha256(raw).hexdigest()
 
 
-def _sealed_census_matches(data_root, day, events, manifest):
-    """Check retained event identities against bounded producer metadata only."""
+def _projected_census_matches(data_root, day, events, manifest, projection):
+    """Consume the producer's sealed inline census while its source is unchanged.
+
+    This same-owner local receipt is not authentication against a writer that
+    can replace both report and source. Full native semantics created it once.
+    """
     from collections import Counter
+    import re
+    import stat
     from src.engine.pipeline_event_summary import (producer_summary_paths,
-        CANCEL_WAIT_SUMMARY_STAGES, IDENTITY_CONTRACT, IDENTITY_MODULUS,
-        execution_projection_identity)
-    path, _ = producer_summary_paths(Path(data_root)/'pipeline_event_summaries', day)
-    stages = CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'}
-    if (manifest.get('identity_contract') != IDENTITY_CONTRACT
-        or not stages <= set(manifest.get('summary_stages') or [])):
-        return False
-    if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
-        return False
-    before = path.stat()
-    with path.open('rb') as handle:
-        raw = handle.read(MAX_RECONCILIATION_METADATA_BYTES + 1)
-    after = path.stat()
-    stamp = lambda value: (value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-    if stamp(before) != stamp(after):
-        raise ValueError('semantic_generation_changed_during_read')
-    if manifest.get('summary_storage_size_bytes') != len(raw):
-        return False
-    expected, expected_hash = Counter(), Counter()
-    for line in raw.splitlines():
-        row = json.loads(line)
-        stage = row.get('stage')
-        if stage not in stages:
-            continue
-        if (row.get('target_date') != day or row.get('identity_contract') != IDENTITY_CONTRACT
-            or row.get('execution_projection_identity_contract') != 'lossless_execution_projection_v1'
-            or type(row.get('event_count')) is not int or row['event_count'] < 0):
-            return False
-        expected[stage] += row['event_count']
-        expected_hash[stage] = (expected_hash[stage] + int(row['execution_projection_hash_sum'],16)) % IDENTITY_MODULUS
-    observed, observed_hash = Counter(), Counter()
+        CANCEL_WAIT_SUMMARY_STAGES, IDENTITY_CONTRACT, IDENTITY_MODULUS, execution_projection_identity)
+    if projection is None:return None  # Legacy reports retain full validation.
+    stages=CANCEL_WAIT_SUMMARY_STAGES|{'order_leg_sent'}
+    logical,_=producer_summary_paths(Path(data_root)/'pipeline_event_summaries',day)
+    if any(p.is_symlink() for p in logical.parents):
+        raise ValueError('cancel_wait_census_projection_parent_invalid')
+    source=projection.get('source') or {}
+    physical=source.get('physical_representations') or []
+    if (projection.get('schema')!='execution_census_logical_source_v1'
+            or manifest.get('identity_contract')!=IDENTITY_CONTRACT
+            or not stages<=set(manifest.get('summary_stages') or [])
+            or source.get('logical_source_path')!=str(logical.absolute())
+            or source.get('source_snapshot_stable') is not True
+            or type(source.get('source_content_bytes')) is not int
+            or source['source_content_bytes']!=manifest.get('summary_storage_size_bytes')
+            or not re.fullmatch('[0-9a-f]{64}',str(source.get('source_content_sha256') or ''))
+            or not 1<=len(physical)<=2):
+        raise ValueError('cancel_wait_census_projection_invalid')
+    expected_names=set()
+    for item in physical:
+        compression=item.get('compression')
+        if compression not in {'plain','gzip'} or compression in expected_names:
+            raise ValueError('cancel_wait_census_projection_alias_invalid')
+        expected_names.add(compression)
+        path=logical if compression=='plain' else Path(str(logical)+'.gz')
+        before=path.lstat()
+        identity=[before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns]
+        if (not stat.S_ISREG(before.st_mode) or item.get('file_identity')!=identity
+                or item.get('stored_bytes')!=before.st_size
+                or not re.fullmatch('[0-9a-f]{64}',str(item.get('stored_sha256') or ''))):
+            raise ValueError('cancel_wait_census_projection_source_changed')
+    current={name for name,p in (('plain',logical),('gzip',Path(str(logical)+'.gz')))
+        if p.exists() or p.is_symlink()}
+    if current!=expected_names:raise ValueError('cancel_wait_census_projection_alias_changed')
+    expected=Counter(projection.get('expected_stage_counts') or {})
+    hashes=projection.get('expected_stage_hash_sums') or {}
+    if (any(stage not in stages or type(n) is not int or n<0 for stage,n in expected.items())
+            or any(stage not in stages or not re.fullmatch('[0-9a-f]{64}',str(v)) for stage,v in hashes.items())):
+        raise ValueError('cancel_wait_census_projection_counts_invalid')
+    observed=Counter();observed_hash=Counter()
     for event in events:
-        stage = event.get('stage')
-        value = event.get('execution_source_event_sha256')
-        if stage not in stages or event.get('emitted_date') != day or value != execution_projection_identity(event):
+        stage=event.get('stage');sha=event.get('execution_source_event_sha256')
+        if stage not in stages or event.get('emitted_date')!=day or sha!=execution_projection_identity(event):
             return False
-        observed[stage] += 1
-        observed_hash[stage] = (observed_hash[stage] + int(value,16)) % IDENTITY_MODULUS
-    return expected == observed and expected_hash == observed_hash
+        observed[stage]+=1
+        observed_hash[stage]=(observed_hash[stage]+int(sha,16))%IDENTITY_MODULUS
+    return expected==observed and Counter({k:int(v,16) for k,v in hashes.items()})==observed_hash
+
+
+def _sealed_census_matches(data_root, day, events, manifest, binding=None):
+    """Check retained event identities against bounded producer metadata only."""
+    from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES
+    from src.engine.scalping.entry_split_order_plan import _execution_projection_census, _canonical_sha256
+    projected=_projected_census_matches(data_root,day,events,manifest,
+        (binding or {}).get('native_census_projection'))
+    if projected is not None:return projected
+    stages = CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'}
+    if any(e.get('stage') not in stages or e.get('emitted_date') != day for e in events):
+        return False
+    result = _execution_projection_census(day, events, stages=stages,
+        data_root=data_root, max_decoded_bytes=MAX_RECONCILIATION_METADATA_BYTES)
+    return result.get('status') == 'ready' and result.get('manifest_sha256') == _canonical_sha256(manifest)
 
 
 def _candidate_evidence_valid(payload):
@@ -1390,7 +1441,13 @@ def _reconciliation_metadata_generation(data_root, by_date):
     paths = [Path(data_root)/'runtime/order_owner_registry.jsonl']
     for day, row in sorted(by_date.items()):
         if row['coverage_verified']:
-            paths.extend(producer_summary_paths(Path(data_root)/'pipeline_event_summaries',day))
+            logical, manifest = producer_summary_paths(Path(data_root)/'pipeline_event_summaries',day)
+            # Include both directory entries: alias appearance/disappearance
+            # must invalidate a cached semantic check, including gzip conflicts.
+            aliases = [p for p in (logical, Path(str(logical)+'.gz'))
+                       if p.exists() or p.is_symlink()]
+            paths.extend(aliases or [logical])
+            paths.append(manifest)
     for d in by_date:
         checkpoint=Path(data_root)/'runtime/main_custody_checkpoints'/f'{d}.json'
         if checkpoint.exists() or checkpoint.is_symlink():paths.append(checkpoint)
@@ -1574,13 +1631,22 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
         cache_key = None
         if data_root is not None:
             generation = _reconciliation_metadata_generation(data_root,by_date)
-            if sum(item[2] * (2 if item[0].endswith('.json') else 1) for item in generation) > MAX_RECONCILIATION_METADATA_BYTES:
+            projected_sources=set()
+            for d,row in by_date.items():
+                binding=row.get('source_binding') or {}
+                if binding.get('native_census_projection') is not None:
+                    from src.engine.pipeline_event_summary import producer_summary_paths
+                    logical,_=producer_summary_paths(Path(data_root)/'pipeline_event_summaries',d)
+                    projected_sources.update(str(p.resolve()) for p in (logical,Path(str(logical)+'.gz')))
+            if sum(item[2] * (2 if item[0].endswith('.json') else 1) for item in generation
+                   if item[0] not in projected_sources) > MAX_RECONCILIATION_METADATA_BYTES:
                 return {**result,'status':'source_invalid' if findings else 'unobservable',
                     'findings':sorted(set(findings)), 'reason':'bounded_reconciliation_metadata_required'}
             cache_key = (day,payload.get('proof_sha256'),_digest(policy),generation)
             if not findings and cache_key in _RECONCILIATION_VIEW_CACHE:
                 return json.loads(json.dumps(_RECONCILIATION_VIEW_CACHE[cache_key]))
             reader = read_object or _bounded_semantic_json
+            decoded_budget = 0
             for d, row in by_date.items():
                 binding = row.get('source_binding') or {}
                 if not row['coverage_verified']:
@@ -1591,8 +1657,19 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                 from src.engine.scalping.entry_split_order_plan import _canonical_sha256
                 if binding.get('producer_manifest_sha256') != _canonical_sha256(manifest):
                     findings.append('cancel_wait_stale_source_generation')
-                elif not _sealed_census_matches(data_root, d,
-                        [e for e in state['source_events'] if e.get('emitted_date') == d], manifest):
+                    continue
+                declared = manifest.get('summary_storage_size_bytes')
+                if type(declared) is not int or declared < 0:
+                    raise ValueError('execution_producer_census_size_invalid')
+                logical, _ = producer_summary_paths(Path(data_root)/'pipeline_event_summaries', d)
+                aliases = sum(p.exists() or p.is_symlink() for p in (logical, Path(str(logical)+'.gz')))
+                if binding.get('native_census_projection') is None:
+                    decoded_budget += declared * max(1, aliases)
+                if decoded_budget > MAX_RECONCILIATION_METADATA_BYTES:
+                    return {**result,'status':'source_invalid' if findings else 'unobservable',
+                        'findings':sorted(set(findings)), 'reason':'bounded_reconciliation_metadata_required'}
+                if not _sealed_census_matches(data_root, d,
+                        [e for e in state['source_events'] if e.get('emitted_date') == d], manifest, binding):
                     findings.append('cancel_wait_history_source_binding_missing')
                 if reader(path)[0] != manifest:
                     raise ValueError('semantic_generation_changed_during_read')

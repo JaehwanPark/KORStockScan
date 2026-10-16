@@ -5350,6 +5350,30 @@ def test_execution_producer_census_accepts_sealed_summary_above_old_limit(monkey
     assert split_plan._execution_projection_census("2026-09-22", [], stages=frozenset())["status"] == "ready"
 
 
+@pytest.mark.parametrize('fault', ['none', 'alias_conflict', 'crc', 'size'])
+def test_execution_census_uses_logical_gzip_source_and_preserves_seal(monkeypatch, tmp_path, fault):
+    import gzip
+    from src.engine.pipeline_event_summary import IDENTITY_CONTRACT, producer_summary_paths
+    day='2026-10-15'
+    path, manifest = producer_summary_paths(tmp_path/'pipeline_event_summaries', day)
+    path.parent.mkdir(parents=True)
+    raw=b'{"stage":"unrelated"}\n'
+    archive=path.with_name(path.name+'.gz')
+    archive.write_bytes(gzip.compress(raw))
+    manifest.write_text(json.dumps(dict(summary_stages=[], identity_contract=IDENTITY_CONTRACT,
+        summary_storage_size_bytes=len(raw)+(1 if fault=='size' else 0))))
+    monkeypatch.setattr(split_plan, 'DATA_DIR', tmp_path)
+    if fault=='alias_conflict':path.write_text('{"stage":"different"}\n')
+    if fault=='crc':archive.write_bytes(archive.read_bytes()[:-4])
+    if fault in {'alias_conflict','crc'}:
+        with pytest.raises(ValueError, match='conflict|payload_invalid'):
+            split_plan._execution_projection_census(day, [], stages=frozenset())
+    else:
+        result=split_plan._execution_projection_census(day, [], stages=frozenset())
+        assert result['status']==('ready' if fault=='none' else 'source_gap')
+    assert not path.exists() or fault=='alias_conflict'
+
+
 def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-09-17"

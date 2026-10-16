@@ -24,15 +24,22 @@ SCHEMA = 'main_stop_source_reference_index_v1'
 def extract(event):
     if not isinstance(event,dict):return None
     stage=event.get('stage')
-    if stage not in {'main_stop_source','hard_stop_manual_control_handoff','hard_stop_manual_control_handoff_deferred'}:
+    release=stage=='manual_control_auto_released_at_average_price'
+    if stage not in {'main_stop_source','hard_stop_manual_control_handoff','hard_stop_manual_control_handoff_deferred',
+                     'manual_control_auto_released_at_average_price'}:
         return None
     fields=event.get('fields')
-    field='main_stop_source' if stage=='main_stop_source' else 'main_stop_handoff_source'
+    field=('main_stop_source' if stage=='main_stop_source' else
+           'main_stop_release_source' if release else 'main_stop_handoff_source')
     row=fields.get(field) if isinstance(fields,dict) else None
     # Historical events have no exact position/pin receipt. Do not backfill it.
     if row is None and stage!='main_stop_source':return None
     if isinstance(row,str):row=json.loads(row)
     if not isinstance(row,dict):raise ValueError('stop_source_row_invalid')
+    if release:
+        from src.engine.scalping.main_stop_replay import valid_release
+        if not valid_release(row):raise ValueError('stop_release_stage_invalid')
+        return row
     if stage!='main_stop_source' and (row.get('schema')!='main_stop_handoff_source_v1'
             or row.get('registered') is not (stage=='hard_stop_manual_control_handoff')):
         raise ValueError('stop_handoff_stage_invalid')
@@ -66,6 +73,8 @@ def prepare(root, inventory, loader, census):
                         try:row=extract(event)
                         except ValueError:counts['malformed']+=1;continue
                         if row is None:
+                            if isinstance(event,dict) and event.get('stage')=='manual_control_auto_released_at_average_price':
+                                counts['unbound_release_events']+=1
                             if isinstance(event,dict) and event.get('stage') in {'hard_stop_manual_control_handoff','hard_stop_manual_control_handoff_deferred'}:
                                 counts['unbound_handoff_events']+=1
                             continue
@@ -74,7 +83,8 @@ def prepare(root, inventory, loader, census):
                             counts['unidentifiable']+=1;continue
                         cell=str(row.get('role',''))+'|'+str(row.get('market',''))
                         bucket=int(hashlib.sha256(key.encode()).hexdigest()[:8],16)%PARTITIONS
-                        kind='1' if row.get('schema')=='main_stop_handoff_source_v1' else '0'
+                        kind=('1' if row.get('schema')=='main_stop_handoff_source_v1' else
+                              '2' if row.get('schema')=='main_stop_release_source_v1' else '0')
                         record=dict(id=f'{key}|{float(at):020.6f}|{kind}',position_key=key,at=at,
                             cell=cell,offset=offset,line_sha256=line_sha,content_sha256=policy.digest(row))
                         raw=storage.encoded(record)+b'\n'

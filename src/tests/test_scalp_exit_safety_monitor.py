@@ -90,6 +90,85 @@ def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypa
     assert rest_fields["bid_source_received_at_epoch"] == 999.0
 
 
+@pytest.mark.parametrize('failure', [None, 'false_return', 'exception'])
+def test_native_first_crossing_survives_grid_cap_and_retries_frozen_receipt(monkeypatch, failure):
+    from src.engine import holding_exit_sentinel as sentinel
+    from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
+    from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
+    from src.engine.ai.holding_exit_vote import PATH_POLICY_BY_MARKET, input_snapshot_id
+    at = datetime(2026, 10, 16, 10, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+    monkeypatch.setenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE', '2026-10-16')
+    monkeypatch.setattr(handlers, 'buy_fill_identity_from_runtime', lambda stock: 'a'*64)
+    stock = dict(id=123, code='123456', buy_price=10000, buy_qty=1,
+        scalp_trailing_observation_position_key='record:123',
+        scalp_trailing_observation_sequence=256, scalp_trailing_observation_coverage_exhausted=True)
+    policy = handlers._scalp_trailing_policy_observation_fields()
+    mechanical = dict(classifier_version=policy['scalp_trailing_classifier_version'],
+        classifier_sha256=policy['scalp_trailing_classifier_sha256'], classifier_state='WEAK')
+    decision = handlers.evaluate_trailing_take_profit(peak_price=10100, executable_bid=10050,
+        peak_profit_pct=1., start_pct=.4, strong=False, weak_limit_pct=.4, strong_limit_pct=.8)
+    decision = handlers._scalp_trailing_latch_first_crossing(stock, '123456', decision,
+        observed_at=at, mechanical_fields=mechanical, market='REGULAR')
+    calls=[]; accepted=[]
+
+    def emit(stock, code, stage, **fields):
+        calls.append((stage, fields))
+        if failure and len(calls)==1:
+            if failure=='exception':raise OSError('full queue')
+            return False
+        accepted.append((stage, fields))
+        return True
+
+    monkeypatch.setattr(handlers, '_log_holding_pipeline', emit)
+    args=dict(ws_data={}, decision=decision, peak_price=10100, executable_bid=10050,
+        bid_source='missing', strong=False, ai_score=0., ai_usable=False, start_pct=.4,
+        evaluator='fast', mechanical_fields=mechanical)
+    handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at, **args)
+    if failure:
+        mechanical['classifier_state']='STRONG'
+        handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+.1, **args)
+        assert len(calls)==1
+        handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+1.1, **args)
+        assert calls[0][1]['first_crossing_source']==calls[1][1]['first_crossing_source']
+    handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+2, **args)
+    assert stock['scalp_trailing_observation_sequence']==256
+    assert len(accepted)==1 and accepted[0][0]=='scalp_trailing_first_crossing_transition'
+    source=json.loads(accepted[0][1]['first_crossing_source'])
+    assert source['first_crossing']['at_epoch']==at and len(accepted[0][1]['first_crossing_source'])<8192
+    assert 'universal_trailing_quote' not in source and decision.triggered is True
+    emitted=datetime.fromtimestamp(at+1.2,ZoneInfo('Asia/Seoul'))
+    event=sentinel.PipelineEvent(emitted,'HOLDING_PIPELINE',accepted[0][0],'Stock','123456','123',
+        {**accepted[0][1], 'pipeline_lifecycle_population_scope':'real_record_bound'})
+    snapshot=sentinel.PipelineEvent(datetime.fromtimestamp(at+2.1,ZoneInfo('Asia/Seoul')),
+        'HOLDING_PIPELINE','holding_path_signal_snapshot','Stock','123456','123',dict(
+        path_id='EXIT_TRAILING_TP',position_key='record:123',buy_fill_identity='a'*64,
+        signal_at=at,signal_id='first',market='REGULAR',session_key='2026-10-16',
+        runtime_pid=handlers.os.getpid(),vote_count=0,decision='INSUFFICIENT',
+        policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[('EXIT_TRAILING_TP','REGULAR')]),
+        mechanical_policy_receipt=policy,pipeline_lifecycle_population_scope='real_record_bound'))
+    report=audit_profit_exit_flow([event,snapshot],target_date='2026-10-16',load_votes=lambda _:[],
+        mechanical_policy_receipt=baseline_receipt({},source='operator_directed_m1_baseline'),
+        consumed_pid=handlers.os.getpid())
+    assert report['source_gaps']==[] and report['policy_binding_gaps']==[]
+    assert report['status']=='pass'
+
+
+@pytest.mark.parametrize('historical', [False, True])
+def test_first_crossing_receipt_never_backfills_old_latch_or_retries_without_bound(monkeypatch, historical):
+    import os
+    stock=dict(id=7,code='000001')
+    fields=dict(first_crossing=dict(position_key='record:7',at_epoch=100.,market='REGULAR',
+        threshold_key='SCALP_TRAILING_LIMIT_WEAK',threshold_pct=.4,
+        source_runtime_pid=os.getpid()-1 if historical else os.getpid(),buy_fill_identity='a'*64))
+    calls=[]
+    monkeypatch.setattr(handlers,'_log_holding_pipeline',lambda *a,**k:calls.append(k) or False)
+    for at in range(100,110):
+        handlers._observe_scalp_trailing_first_crossing(stock,'000001',mechanical_fields=fields,
+            policy_fields={},start_pct=.4,now_ts=float(at),evaluator='fast',buy_fill_identity='a'*64)
+    assert len(calls)==(0 if historical else 3)
+    assert stock.get('scalp_trailing_first_crossing') is None
+
+
 def test_trailing_grid_heartbeat_exposes_evaluation_gap(monkeypatch):
     events = []
     monkeypatch.setattr(

@@ -2220,7 +2220,11 @@ class GPTSniperEngine:
         payload["cache_mode"] = str(cache_mode or "miss")
         if isinstance(input_contract_fields, dict):
             payload.update(
-                {k: v for k, v in input_contract_fields.items() if v not in (None, "")}
+                {k: v for k, v in input_contract_fields.items()
+                 if v not in (None, "") and not (
+                     k.startswith(("ai_input_payload_", "ai_request_", "ai_prompt_"))
+                     and k in payload
+                 )}
             )
         if "ai_decision_trace_id" not in payload and str(result_source or "") in {
             "error",
@@ -2267,7 +2271,7 @@ class GPTSniperEngine:
         if not isinstance(payload, dict):
             return fields
         fields["ai_input_schema"] = (
-            str(payload.get("input_schema") or default_schema or "-").strip() or "-"
+            str(payload.get("input_schema") or payload.get("schema") or default_schema or "-").strip() or "-"
         )
         fields["ai_input_contract_mode"] = "structured_json"
         fallback_reason = str(payload.get("input_build_fallback") or "").strip()
@@ -11018,6 +11022,11 @@ class GPTSniperEngine:
                 # Send the same allowlisted as-of input used by actual postclose replay.
                 replay_context = entry_setup_live_policy['continuous_reversal_input']
                 formatted_data = json.dumps(replay_context, ensure_ascii=True, sort_keys=True, separators=(',',':'))
+                # The compact policy replaces the earlier formatted context.
+                # Non-provider endings also need the actual final input identity.
+                input_contract_fields.update(self._resolve_ai_input_contract_fields(
+                    formatted_data, default_schema=replay_context.get('schema'),
+                    default_mode='structured_json'))
                 entry_setup_evidence = {**replay_context['entry_setup_evidence_v1'],
                                        'continuous_reversal_response_schema': reversal_schema}
                 trace_metadata_extra['entry_setup_live_policy_selected_prompt_version']=prompt_version

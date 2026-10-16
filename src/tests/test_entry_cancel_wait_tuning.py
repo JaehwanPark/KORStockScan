@@ -85,6 +85,35 @@ def test_registry_only_attempt_cannot_be_verified_zero():
     assert not parents and unclassified==1
 
 
+def test_residual_receipt_classifies_native_order_without_timeout_tuning_authority():
+    from datetime import datetime
+    from types import SimpleNamespace
+    from src.engine.scalping import entry_cancel_wait_runtime as runtime
+    day='2026-10-15';at=datetime.fromisoformat(day+'T10:00:00+09:00').timestamp()
+    stock=dict(id=42,code='403870',entry_split_probe_bundle_id='original-probe',
+        entry_split_probe_requested_qty=21)
+    owner=SimpleNamespace(owner_type='main_scalping',owner_id='main_scalping:42',client_intent_id='original-residual-client')
+    stock['entry_split_probe_submit_source']=runtime.probe_submit_source(stock,
+        parent_id='original-attempt',account_key='acct-a',owner_context=owner,planned_qty=21,source_date=day)
+    fields=runtime.residual_submission_fields(stock,{'tag':'residual-1'},owner_context=owner,
+        account_key='acct-a',intent_id='I1',order_no='B1',qty=8,price=10000,route='KRX',now_ts=at)
+    fields.update(actual_order_submitted=True,broker_order_no='B1',submitted_qty=8,broker_route='KRX')
+    event=dict(stage='order_leg_sent',emitted_date=day,record_id=42,stock_code='403870',fields=fields)
+    registry=[dict(event='ORDER_BOUND',intent_id='I1',owner_type='main_scalping',owner_id=owner.owner_id,
+        client_intent_id=owner.client_intent_id,account_key='acct-a',order_date=day,broker_order_no='B1',
+        side='BUY',action='NEW',quantity=8,filled_qty=0,symbol='403870',route='KRX',state='ORDER_BOUND')]
+    parents,unknown=mod._parents(day,[event],registry)
+    assert unknown==0 and len(parents)==1
+    assert parents[0]['economic_eligible'] is False
+    assert parents[0]['incumbent_timeout_sec'] is None
+    assert parents[0]['timeout_owner']=='entry_split_probe_residual_runtime'
+    assert not next(iter(parents[0]['children'].values()))['terminal_reconciled']
+    # Valid-looking new metadata cannot relabel another owner's native order.
+    registry[0]['client_intent_id']='another-generation'
+    with pytest.raises(ValueError,match='residual_submission_source_identity_invalid'):
+        mod._parents(day,[event],registry)
+
+
 def test_projected_real_submit_without_context_or_owner_cannot_be_verified_zero():
     event=dict(stage='order_leg_sent',emitted_date='2026-09-22',fields=dict(
         actual_order_submitted='True',broker_order_no='0022991'))
@@ -654,6 +683,45 @@ def test_shared_view_accepts_verified_empty_and_documented_history_gap(tmp_path,
     assert view['unresolved_prior_custody_count'] is (None if unknown else 0)
     assert view['historical_state'] == ('source_gap' if unknown else 'verified_empty')
     assert report['economic_evaluation']['delta_ev_pct'] is None
+
+
+def test_shared_view_validates_gzip_census_and_invalidates_cache_on_alias_conflict(tmp_path, monkeypatch):
+    import gzip
+    report, policy, _, _ = _reconciliation_fixture(tmp_path, monkeypatch)
+    data=tmp_path/'data'
+    paths=list((data/'pipeline_event_summaries').glob('*.jsonl'))
+    for path in paths:
+        path.with_name(path.name+'.gz').write_bytes(gzip.compress(path.read_bytes()))
+        path.unlink()
+    first=mod.validated_reconciliation_view(report, policy, data_root=data)
+    assert first['findings']==[] and first['status']=='incumbent_carry'
+    # A conflicting plain alias must not reuse the previous gzip-only PASS.
+    path=paths[0]
+    path.write_text('{"stage":"conflicting"}\n')
+    revised=mod.validated_reconciliation_view(report, policy, data_root=data)
+    assert revised['status']=='source_invalid'
+
+
+def test_native_census_projection_keeps_semantics_without_redecoding_full_sources(tmp_path, monkeypatch):
+    from src.engine.scalping import entry_split_order_plan as entry
+    from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES
+    report,policy,_,_=_reconciliation_fixture(tmp_path,monkeypatch)
+    data=tmp_path/'data'
+    for day,row in report['economic_state']['submission_reconciliation']['by_date'].items():
+        if not row['coverage_verified']:continue
+        census=entry._execution_projection_census(day,[],stages=CANCEL_WAIT_SUMMARY_STAGES|{'order_leg_sent'},data_root=data)
+        assert census['status']=='ready'
+        row['source_binding']['native_census_projection']=census['native_census_projection']
+    _reseal_reconciliation(report)
+    policy['source_report_proof_sha256']=report['proof_sha256']
+    # This test intentionally omits policy: the receipt is source observation,
+    # never a way to approve a policy whose original report hash changed.
+    monkeypatch.setattr(entry,'_execution_projection_census',lambda *a,**k:pytest.fail('duplicate full census read'))
+    view=mod.validated_reconciliation_view(report,data_root=data)
+    assert view['status']=='incumbent_carry' and view['findings']==[]
+    path=data/'pipeline_event_summaries/pipeline_event_producer_summary_2026-10-02.jsonl'
+    path.write_text(path.read_text()+'{}\n')
+    assert mod.validated_reconciliation_view(report,data_root=data)['status']=='source_invalid'
 
 
 @pytest.mark.parametrize('mutation,reason', [

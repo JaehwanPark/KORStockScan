@@ -783,6 +783,25 @@ REVIEWED_PREASSESSMENT_OBSERVER_SOURCES = {
 }
 
 
+# Exact reviewed source-gap/crossing repair; fresh capability fixtures remain required.
+# Review: docs/audits/main-postclose-source-gap-final-release-review-2026-10-16.md.
+REVIEWED_SOURCE_GAP_CROSSING_SOURCES = {
+    'src/engine/ai/holding_exit_vote.py': ('05ba419f5affd9f8b329d3719e77cfcf5f3b4c73ac7496ba15336d76faa340c6', '8d97be85f1d1e0a5cc1408d1060cd2c43a8014be9456ae10b4251431b190ee6a'),
+    'src/engine/ai/holding_vote_replay_source.py': ('0d67dab01f0cf1d5ef4657659ab433d892d854ecb6e9a656a5d93b2e439ff7cf', '6362843a02931562326ce6d700e25dfc3cb2588c42479edbe204ac2aeadf677f'),
+    'src/engine/ai_engine_openai.py': ('e75c946a70ec6513162c5a657604830a82e4d718bd5400076d0e05a1639e56f6', '61d3cfc4e8bca5348ee2816b5451d294e7d825e2f78fe3d134f4ef30c3bdeb5c'),
+    'src/engine/automation/entry_cancel_wait_tuning.py': ('5bdf8f81db148490457f2ab36a9f2c1c6fe6a300b7f5ef9f1d720a91bc44491a', '8313bcfc096d43dbc62d3e4e5938d1ddd47ef1127e6131aae88b160e3736938e'),
+    'src/engine/automation/main_stop_source_index.py': ('802a8f3878f5d9d2fd299c79a57f9b84db6bf1de52017f0e995958b65145381d', '791fd757311aa8c0a96b2373165a52a560b026492992e46e9fe386996eb605ff'),
+    'src/engine/scalping/ai_decision_quality.py': ('218b2d1ed9133ed11894d729d27afdef4288b712262811d6c13e6a1fa013e34f', 'd64bd9fcc77969b326d0ac12938a50ae84b7ad5bf27af113530ce21253b8787f'),
+    'src/engine/scalping/entry_cancel_wait_runtime.py': ('32dfb19821fb2df08a51da16cc158625c53e468f0cd63a4b5930c321b37e9e0e', '8c4871d3064e36d8a57e581bac1ce0b4122325e5f5a2365739f8118adc633b4e'),
+    'src/engine/scalping/entry_split_order_plan.py': ('ed738295a7de91c3972c8360b655d222b26f69e4d1976b2ef27c2c0f0e660c5c', 'bf3c8b69f4c92270f8084bbb44373aa213af1dc94da22d91cf4cbd23e300d37f'),
+    'src/engine/scalping/holding_profit_exit_semantics.py': ('0815edbd37d2932ec57337fe579f5576ffce2fc2140c5273cbdcf26589268454', '7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78'),
+    'src/engine/scalping/main_stop_policy.py': ('8cdd21315d3d0db00f3383406dbb7d885ca02fef7ed957edf4f9535f0f022087', 'a5faea8355cc607e795df2a7f6bf48c385ca509579240a9e23589ec41fa435ad'),
+    'src/engine/scalping/main_stop_replay.py': ('3194cc743fc664176245ccb5ffbb26469d68c4276bc8c86aa4d0d87377615ffe', 'a9351c17a3b9a7cd84a4be7c6672a801ff77f2c537459d95a9eb18b4eca6ff15'),
+    'src/engine/sniper_state_handlers.py': ('bb6108b506bebfb957f7257bbf4e466837f19a48eff6a742a245f5c3b3e57dcf', '706a7dccde4559254bb9ec2d4bb860fed1bf15c8b7d7c9b2b36103da8c3d797f'),
+    'src/engine/sniper_trade_review_report.py': ('5267041fe305ab93d636e3fe27f6633c86bddd49f7250418c2898ca55706cefd', 'b513734f2fe58503f916ff1a513875faf72b75e64cd5fb07c87c68d7b8e61c66'),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -817,7 +836,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),
+        if pair in (REVIEWED_SOURCE_GAP_CROSSING_SOURCES.get(name),
+                    REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),
                     REVIEWED_ENTRY_LATENCY_SOURCES.get(name),
                     REVIEWED_ENTRY_BOUNDARY_SOURCES.get(name),
                     REVIEWED_ENTRY_RESPONSE_SOURCES.get(name),

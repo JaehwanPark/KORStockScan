@@ -74,6 +74,53 @@ def test_async_request_binding_survives_capture_return_and_actual_trace(monkeypa
     assert row['entry_auxiliary_policy_sha256']=='c'*64
 
 
+@pytest.mark.parametrize('fault', ['none','identity','prompt','clock','body','native','replay_type'])
+def test_compact_binding_supplement_proves_original_archive_without_changing_primary_gate(monkeypatch,tmp_path,fault):
+    import hashlib
+    from datetime import timedelta
+    from copy import deepcopy
+    from src.engine.scalping import ai_decision_quality as quality
+    _enable(monkeypatch,tmp_path)
+    prompt='fixture compact prompt'
+    logical=dict(schema='continuous_reversal_union_auxiliary_v3',common_context=dict(
+        symbol='005930',venue='KRX',market='REGULAR',source_item='005930',opportunity_key='opportunity'))
+    native=dict(input_sha256=hashlib.sha256(trace._json_bytes(logical)).hexdigest(),
+        prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest())
+    capture=trace.capture_ai_request(prompt=prompt,
+        user_input=json.dumps(logical,ensure_ascii=True,sort_keys=True,separators=(',',':')),
+        replay_context=logical,endpoint_name='analyze_target',symbol='005930',request_id='fixture-request',
+        model='gpt-5.4-nano',schema_name='auxiliary_compact_citations_v1',require_json=True,
+        metadata=dict(effective_venue='KRX',session_bucket='krx_regular',broker_route='KRX',
+            continuous_reversal_consumption=native,machine_observation_sha256='a'*64))
+    payload=_rows(trace._payload_path(trace._date_text()))[0]
+    request=_rows(trace._request_path(trace._date_text()))[0]
+    before=deepcopy(payload)
+    decision=quality._parse_ts(payload['captured_at'])+timedelta(seconds=1)
+    row=dict(decision_trace_id='fixture-request',endpoint='analyze_target',model='gpt-5.4-nano',
+        stock_code='005930',effective_venue='KRX',session_bucket='krx_regular',broker_route='KRX',
+        payload_sha256='c'*64,payload_replay_exact=True,request_capture_status='captured',
+        request_envelope_sha256=capture['ai_request_envelope_sha256'],prompt_sha256=capture['ai_prompt_sha256'],
+        decision_ts=decision.isoformat(),venue_consistent=True,
+        continuous_reversal_consumption=native,machine_observation_sha256='a'*64)
+    if fault=='identity':request['request_id']='other-request'
+    if fault=='prompt':row['prompt_sha256']='d'*64
+    if fault=='clock':row['decision_ts']=(decision-timedelta(seconds=5)).isoformat()
+    if fault=='body':payload['sanitized_user_input']['common_context']['source_item']='foreign-item'
+    if fault=='native':row['machine_observation_sha256']='f'*64
+    if fault=='replay_type':payload['sanitized_replay_context']=[]
+    result=quality.reconcile_compact_request_binding(row,payload,request)
+    assert result['status']==('archive_identity_verified_trace_hash_mismatch' if fault=='none' else 'source_gap')
+    assert row['payload_sha256']=='c'*64
+    if fault=='none':
+        labels=quality.annotate_primary_cohort_eligibility(labels=[dict(decision_trace_id='fixture-request',
+            effective_venue='KRX',session_bucket='krx_regular')],traces=[row],payloads=[payload],requests=[request],
+            promotion={'promoted_at':payload['captured_at']})
+        assert labels[0]['primary_cohort_eligible'] is False
+        assert labels[0]['compact_request_binding']['findings']==[]
+        assert labels[0]['compact_request_binding']['allowed_runtime_apply'] is False
+        assert payload==before
+
+
 @pytest.mark.parametrize('provider_called,result_source', [(True, 'live'), (True, 'timeout'), (False, 'mechanistic_pre_adjudication_rejected')])
 def test_decision_trace_keeps_existing_input_stage_timing_with_exact_attempt(monkeypatch, tmp_path, provider_called, result_source):
     _enable(monkeypatch, tmp_path)
