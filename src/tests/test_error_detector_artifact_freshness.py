@@ -416,6 +416,51 @@ def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tm
             assert result['closure_errors'] == ['strict_stage_generation_stale:main']
 
 
+def _quantity_semantic_stage(tmp_path, *, facts=(), excluded=None, economic='valid_empty'):
+    from src.engine.scalping.initial_quantity_policy import _digest
+    stage = (tmp_path / 'data/report/initial_entry_quantity_type_policy' /
+             'refresh_postclose_2026-09-28/initial_quantity_refresh_stage_2026-09-28.json')
+    stage.parent.mkdir(parents=True, exist_ok=True)
+    census = dict(input_fact_rows=list(facts), input_manifest_sha256=_digest(list(facts)),
+                  fact_rows_read=len(facts), excluded=excluded or {}, all_completed_initial_trades=0)
+    report = dict(schema_version='initial_entry_quantity_completed_trade_replay_v1',
+                  source_date='2026-09-28', generation_kind='refresh_post_apply_replay',
+                  runtime_apply_allowed=False, runtime_effect=False, actual_order_submitted=False,
+                  trades=[], census=census,
+                  quantity_type_counts={}, pipeline_source_receipts=[])
+    report['report_content_sha256'] = _digest(report)
+    from src.tests.test_initial_quantity_producer_consumer_repair import parent_fixture
+    native_parent = tmp_path / 'native_parent_fixture'
+    if (native_parent / 'parent.json').is_file():
+        parent = json.loads((native_parent / 'parent.json').read_bytes())
+    else:
+        parent, _ = parent_fixture(native_parent)
+    evaluation = dict(source_date='2026-09-28', report_content_sha256=report['report_content_sha256'],
+                      parent_policy_content_sha256=parent['policy_content_sha256'], state='carry_parent',
+                      economic_sample_status=economic, trade_policy_binding_status=(
+                          'valid_empty' if economic == 'valid_empty' else 'source_gap'))
+    timeout = dict(source_date='2026-09-28', generation_kind='refresh_post_apply_timeout_research',
+                   census=census, quantity_type_counts={}, pipeline_source_receipts=[])
+    timeout['report_content_sha256'] = _digest(timeout)
+    value = dict(schema_version='initial_entry_quantity_refresh_stage_v1',
+                 stage='initial_entry_quantity_refresh', source_date='2026-09-28', generation_kind='refresh',
+                 stage_status='complete_source_only', terminal=True, runtime_apply_allowed=False,
+                 runtime_effect=False, actual_order_submitted=False,
+                 applied_policy_lineage_schema='initial_quantity_trade_policy_binding_v1',
+                 all_completed_initial_trades=0, decision='carry_parent',
+                 following_bar_source_status='no_winners', timeout_research_status='source_bound')
+    for name, payload, hash_name in [('report', report, 'report_content_sha256'),
+            ('evaluation', evaluation, None), ('parent_policy', parent, 'policy_content_sha256'),
+            ('timeout_research', timeout, 'report_content_sha256')]:
+        path = stage.with_name(name + '.json'); path.write_text(json.dumps(payload))
+        value[name+'_path'] = str(path)
+        value[name+'_file_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        value[name+'_content_sha256'] = payload[hash_name] if hash_name else _digest(payload)
+    value['receipt_content_sha256'] = _digest(value)
+    stage.write_text(json.dumps(value))
+    return stage
+
+
 def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick",
                                complete_stage=False):
     from src.engine.scalping import initial_quantity_activation as activation
@@ -430,18 +475,17 @@ def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick"
         "KRX_PARENT": {"selected_shape": shape,
                        "timeout_mode": "selected_total_wait_sec",
                        "selected_total_wait_sec": 60}}}))
-    monkeypatch.setattr(activation, "selected_initial_quantity_env",
-                        lambda *_: {activation.ENV_FILE: str(policy),
-                                    activation.ENV_SHA: "a" * 64})
+    from src.engine.error_detectors import artifact_freshness as detector
+    def current_observation(path, target, read):
+        read(path); read(policy)
+        return {activation.ENV_FILE: str(policy), activation.ENV_SHA: "a" * 64}
+    monkeypatch.setattr(detector, '_quantity_current_observation', current_observation)
+    monkeypatch.setattr(activation, 'selected_initial_quantity_env',
+                        lambda *a: pytest.fail('health invoked full PREOPEN validator'))
+    monkeypatch.setattr(producer, 'refresh_quantity_stage_terminal_valid',
+                        lambda *a: pytest.fail('health invoked full refresh replay validator'))
     if complete_stage:
-        monkeypatch.setattr(producer, "refresh_quantity_stage_terminal_valid",
-                            lambda _: True)
-        stage = (tmp_path / "data/report/initial_entry_quantity_type_policy" /
-                 "refresh_postclose_2026-09-28" /
-                 "initial_quantity_refresh_stage_2026-09-28.json")
-        stage.parent.mkdir(parents=True)
-        stage.write_text(json.dumps({"all_completed_initial_trades": 0,
-                                     "decision": "carry_parent"}))
+        _quantity_semantic_stage(tmp_path)
     return current
 
 
@@ -452,24 +496,325 @@ def test_initial_quantity_semantics_separates_missing_policy_and_valid_empty(
     assert _initial_quantity_semantics(tmp_path, "2026-09-28")["status"] == (
         "source_invalid")
     _quantity_semantic_fixture(tmp_path, monkeypatch)
-    from src.engine.scalping import initial_quantity_policy as producer
-    monkeypatch.setattr(producer, "refresh_quantity_stage_terminal_valid",
-                        lambda _: True)
-    stage = (tmp_path / "data/report/initial_entry_quantity_type_policy" /
-             "refresh_postclose_2026-09-28" /
-             "initial_quantity_refresh_stage_2026-09-28.json")
-    stage.parent.mkdir(parents=True)
-    stage.write_text(json.dumps({"all_completed_initial_trades": 0,
-                                 "decision": "carry_parent"}))
+    stage = _quantity_semantic_stage(tmp_path)
     result = _initial_quantity_semantics(tmp_path, "2026-09-28")
     assert result["status"] == "valid_empty"
     assert result["postclose_stage_status"] == "valid_empty"
     assert result["runtime_pid_status"] == "not_observed"
-    monkeypatch.setattr(producer, "refresh_quantity_stage_terminal_valid",
-                        lambda _: False)
+    value = json.loads(stage.read_bytes()); value['terminal'] = False
+    stage.write_text(json.dumps(value))
     invalid = _initial_quantity_semantics(tmp_path, "2026-09-28")
     assert invalid["status"] == "source_invalid"
     assert invalid["postclose_stage_status"] == "source_invalid"
+
+
+@pytest.mark.parametrize('reason,economic', [
+    ('persisted_fact_generation_invalid', 'source_gap'),
+    ('terminal_cost_or_quantity_missing', 'cost_missing'),
+    ('trade_clock_missing_or_invalid', 'source_gap'),
+])
+def test_quantity_source_exclusion_is_not_valid_empty(tmp_path, monkeypatch, reason, economic):
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    _quantity_semantic_stage(tmp_path, facts=[{'status':'COMPLETED'}]*9 + [{'status':'HOLDING'}]*7,
+                             excluded={reason:9, 'not_completed':7}, economic=economic)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == result['postclose_stage_status'] == 'source_gap'
+    assert result['policy_refresh_decision'] == 'carry_parent'
+    assert result['postclose_completed_input_count'] == 9
+    assert result['postclose_input_fact_count'] == 16
+    assert result['postclose_completed_trade_count'] == 0
+    assert result['findings'] == ['initial_quantity_economic_source_gap']
+    assert result['bundle_count'] == 0
+    assert result['bundle_observation_scope'] == 'dedicated_multi_leg_journal_only'
+
+
+def test_quantity_only_holding_is_valid_empty_not_missing_economics(tmp_path, monkeypatch):
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    _quantity_semantic_stage(tmp_path, facts=[{'status':'HOLDING'}], excluded={'not_completed':1})
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'valid_empty'
+    assert result['postclose_completed_input_count'] == 0
+    assert result['findings'] == []
+
+
+def test_quantity_monitor_rejects_changed_bound_evaluation(tmp_path, monkeypatch):
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage = _quantity_semantic_stage(tmp_path)
+    value = json.loads(stage.read_text())
+    Path(value['evaluation_path']).write_text('{}')
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+    assert result['findings'] == ['initial_quantity_stage_invalid:ValueError']
+    assert result['native_validated'] is False
+    assert result['observation_complete'] is False
+
+
+@pytest.mark.parametrize('runtime_v2', [False, True])
+def test_quantity_health_observes_real_native_policy_without_full_replay(tmp_path, monkeypatch, runtime_v2):
+    from src.tests.test_initial_quantity_producer_consumer_repair import parent_fixture
+    from src.engine.scalping import initial_quantity_activation as activation
+    from src.engine.scalping import initial_quantity_policy as producer
+    parent_fixture(tmp_path / 'data')
+    activation.select_initial_quantity_baseline(
+        tmp_path / 'data/seed/initial_quantity_stage_2026-09-24.json',
+        tmp_path / 'data/runtime/initial_quantity')
+    if runtime_v2:
+        activation.select_initial_quantity_runtime_v2(
+            tmp_path / 'data/seed/initial_quantity_stage_2026-09-24.json',
+            tmp_path / 'data/runtime/initial_quantity/current.json')
+    _quantity_semantic_stage(tmp_path)
+    def forbidden(*a, **kw): pytest.fail('bounded health invoked native full source validation')
+    monkeypatch.setattr(activation, 'selected_initial_quantity_env', forbidden)
+    monkeypatch.setattr(producer, 'refresh_quantity_stage_terminal_valid', forbidden)
+    monkeypatch.setattr(producer, 'initial_quantity_stage_terminal_valid', forbidden)
+    monkeypatch.setattr(producer, 'verify_refresh_source_generations', forbidden)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'valid_empty'
+    assert result['bounded_contract_validated'] is True
+    assert result['observation_complete'] is True
+    assert result['native_validated'] is False
+    assert result['full_source_revalidation_performed'] is False
+    assert result['validation_scope'] == 'bounded_issued_generations_and_policy_ancestry'
+
+
+@pytest.mark.parametrize('child', ['report', 'evaluation', 'parent_policy', 'timeout_research'])
+def test_quantity_bounded_child_changes_fail_closed(tmp_path, monkeypatch, child):
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage_path = _quantity_semantic_stage(tmp_path)
+    stage = json.loads(stage_path.read_bytes())
+    Path(stage[child + '_path']).write_text('{}')
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+    assert result['bounded_contract_validated'] is False
+    assert result['observation_complete'] is False
+
+
+def test_quantity_bounded_observer_rejects_oversize_before_decoding(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage = json.loads(_quantity_semantic_stage(tmp_path).read_bytes())
+    report = Path(stage['report_path'])
+    report.write_bytes(b'x' * (4 * 1024 * 1024 + 1))
+    original = detector._semantic_object
+    def read(path, **kwargs):
+        assert Path(path) != report, 'oversize child reached the JSON reader'
+        return original(path, **kwargs)
+    monkeypatch.setattr(detector, '_semantic_object', read)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+    assert result['bounded_contract_validated'] is False
+
+
+def test_quantity_observer_catches_change_between_semantic_read_and_stat(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage = json.loads(_quantity_semantic_stage(tmp_path).read_bytes())
+    report = Path(stage['report_path'])
+    original = detector._semantic_object
+    changed = []
+    def read(path, **kwargs):
+        result = original(path, **kwargs)
+        if Path(path) == report and not changed:
+            with report.open('ab') as handle: handle.write(b' ')
+            changed.append(True)
+        return result
+    monkeypatch.setattr(detector, '_semantic_object', read)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert changed == [True]
+    assert result['status'] == 'source_invalid'
+    assert result['bounded_contract_validated'] is False
+
+
+def test_quantity_observer_rejects_unaccounted_input_rows(tmp_path, monkeypatch):
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    _quantity_semantic_stage(tmp_path, facts=[{'status': 'COMPLETED'}])
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+
+
+def test_quantity_non_object_fact_cannot_be_a_benign_empty_population(tmp_path, monkeypatch):
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    _quantity_semantic_stage(tmp_path, facts=['bad'], excluded={'not_completed': 1})
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+
+
+def _reseal_quantity_stage(stage_path, value):
+    from src.engine.scalping.initial_quantity_policy import _digest
+    value['receipt_content_sha256'] = _digest({k:v for k,v in value.items() if k != 'receipt_content_sha256'})
+    stage_path.write_text(json.dumps(value))
+
+
+def test_quantity_unknown_parent_is_not_a_valid_empty_stage(tmp_path, monkeypatch):
+    from src.engine.scalping.initial_quantity_policy import _digest
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage_path = _quantity_semantic_stage(tmp_path)
+    stage = json.loads(stage_path.read_bytes())
+    parent = {'unknown_policy': True}
+    parent['policy_content_sha256'] = _digest(parent)
+    parent_path = Path(stage['parent_policy_path']); parent_path.write_text(json.dumps(parent))
+    stage['parent_policy_file_sha256'] = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+    stage['parent_policy_content_sha256'] = parent['policy_content_sha256']
+    _reseal_quantity_stage(stage_path, stage)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+
+
+@pytest.mark.parametrize('economic,binding', [('cost_eligible','bound'), ('valid_empty','bound')])
+def test_quantity_issued_evaluation_contradiction_is_invalid(tmp_path, monkeypatch, economic, binding):
+    from src.engine.scalping.initial_quantity_policy import _digest
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage_path = _quantity_semantic_stage(tmp_path)
+    stage = json.loads(stage_path.read_bytes())
+    path = Path(stage['evaluation_path']); value = json.loads(path.read_bytes())
+    value.update(economic_sample_status=economic, trade_policy_binding_status=binding)
+    path.write_text(json.dumps(value))
+    stage['evaluation_file_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    stage['evaluation_content_sha256'] = _digest(value)
+    _reseal_quantity_stage(stage_path, stage)
+    assert _initial_quantity_semantics(tmp_path, '2026-09-28')['status'] == 'source_invalid'
+
+
+@pytest.mark.parametrize('oversize', [False, True])
+def test_quantity_observer_bounds_committed_stage_before_hashing(tmp_path, monkeypatch, oversize):
+    from src.engine.scalping import initial_quantity_policy as producer
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    original = _quantity_semantic_stage(tmp_path)
+    stage = original.parent / 'generations/current/stage.json'
+    stage.parent.mkdir(parents=True)
+    stage.write_bytes(b'x' * (1024*1024 + 1) if oversize else original.read_bytes())
+    pointer = original.parent / 'committed_stage.json'
+    pointer.write_text(json.dumps(dict(schema='initial_quantity_stage_reference_v2',
+        source_date='2026-09-28', stage_path=str(stage), stage_sha256=hashlib.sha256(stage.read_bytes()).hexdigest())))
+    monkeypatch.setattr(producer, 'committed_refresh_stage_path',
+                        lambda *a: pytest.fail('health invoked unbounded committed-stage resolver'))
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == ('source_invalid' if oversize else 'valid_empty')
+
+
+def test_quantity_invalid_committed_reference_cannot_claim_valid_contract(tmp_path, monkeypatch):
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage = _quantity_semantic_stage(tmp_path)
+    stage.with_name('committed_stage.json').write_text('{}')
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+    assert result['bounded_contract_validated'] is False
+    assert result['observation_complete'] is False
+
+
+def test_quantity_observer_reuses_one_decode_per_unchanged_source(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    original = detector._semantic_object
+    seen = []
+    def read(path, **kwargs):
+        seen.append(str(path)); return original(path, **kwargs)
+    monkeypatch.setattr(detector, '_semantic_object', read)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'valid_empty'
+    assert len(seen) == len(set(seen))
+
+
+def test_quantity_observer_catches_late_plain_alias_after_gzip_read(tmp_path, monkeypatch):
+    import gzip
+    from src.engine.error_detectors import artifact_freshness as detector
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage = json.loads(_quantity_semantic_stage(tmp_path).read_bytes())
+    report = Path(stage['report_path']); original_bytes = report.read_bytes()
+    with gzip.open(str(report)+'.gz', 'wb') as handle: handle.write(original_bytes)
+    report.unlink()
+    original = detector._semantic_object
+    def read(path, **kwargs):
+        result = original(path, **kwargs)
+        if Path(path) == Path(stage['timeout_research_path']):
+            report.write_bytes(original_bytes)
+        return result
+    monkeypatch.setattr(detector, '_semantic_object', read)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'unobservable'
+    assert result['generation_changed'] is True
+    assert result['native_validated'] is False and result['observation_complete'] is False
+    assert result['findings'] == []
+
+
+@pytest.mark.parametrize('suffix', ['.json', '.json.gz'])
+def test_semantic_object_rejects_fifo_without_blocking(tmp_path, suffix):
+    from src.engine.error_detectors import artifact_freshness as detector
+    path = tmp_path / ('report' + suffix)
+    os.mkfifo(path)
+    with pytest.raises(ValueError, match='observer_regular_file_required'):
+        detector._semantic_object(path, limit=1024)
+
+
+def test_semantic_object_rejects_replacement_fifo_before_read(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    path = tmp_path / 'report.json'; path.write_text('{}')
+    original_open = detector.os.open
+    replaced = []
+    def opening(name, flags, *args, **kwargs):
+        if Path(name) == path and not replaced:
+            assert flags & os.O_NONBLOCK and flags & os.O_NOFOLLOW
+            path.rename(path.with_suffix('.original'))
+            os.mkfifo(path); replaced.append(True)
+        return original_open(name, flags, *args, **kwargs)
+    monkeypatch.setattr(detector.os, 'open', opening)
+    with pytest.raises(ValueError, match='observer_regular_file_required'):
+        detector._semantic_object(path, limit=1024)
+    assert replaced == [True]
+
+
+def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as mod
+    from src.engine.monitoring import policy_generation_contract as generations
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return cls(2026, 10, 17, 2, 0, tzinfo=tz)
+    monkeypatch.setattr(mod, 'datetime', Clock)
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(mod, 'ARTIFACT_REGISTRY', [])
+    monkeypatch.setattr(mod, 'is_krx_trading_day', lambda day: day.weekday() < 5)
+    monkeypatch.setattr(mod, 'load_installed_crontab', lambda: '')
+    monkeypatch.setattr(mod, '_semantic_due_target', lambda *_: '2026-10-19')
+    monkeypatch.setattr(mod, '_completed_semantic_source', lambda *_: dict(
+        status='receipt_selected', findings=[], source_date='2026-10-16', target_date='2026-10-19'))
+    for name in ['_machine_result_semantics', '_auxiliary_result_semantics', '_main_stop_semantics',
+                 '_samsung_forward_semantics', '_postclose_handoff_semantics', '_optional_weakness_semantics']:
+        monkeypatch.setattr(mod, name, lambda *a, **kw: dict(status='not_assessed', findings=[]))
+    monkeypatch.setattr(mod, '_current_semantic_owners', lambda *_: {'InitialQuantityProducerConsumerRepair1010'})
+    monkeypatch.setattr(generations, 'observations', lambda *a, **kw: [])
+    monkeypatch.setattr(generations, 'retirement_dispositions', lambda *a, **kw: {})
+    seen = []
+    def quantity(root, day, **kwargs):
+        seen.append(day)
+        return dict(status='source_gap', source_date=day, findings=['initial_quantity_economic_source_gap'])
+    monkeypatch.setattr(mod, '_initial_quantity_semantics', quantity)
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert seen == ['2026-10-16']
+    assert result.details['initial_quantity_semantics']['status'] == 'source_gap'
+    alert = next(a for a in result.details['semantic_alerts'] if a['stage']=='initial_quantity')
+    assert alert['source_date'] == '2026-10-16'
+    assert alert['observation_date'] == '2026-10-17'
+    assert alert['owner'] == 'InitialQuantityProducerConsumerRepair1010'
+
+
+def test_main_stop_native_receipt_cannot_hide_stale_trailing_extension(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as mod
+    from src.engine.automation import main_stop_postclose as stop
+    day = '2026-10-16'
+    path = stop.committed_path(tmp_path/'data', day)
+    path.parent.mkdir(parents=True); path.write_text('{}')
+    bundle = dict(target_date='2026-10-19', policy_sha256='a'*64,
+                  cells={'baseline':dict(status='parent_carry', source_census={})})
+    monkeypatch.setattr(stop, 'read_committed', lambda *a: (bundle, {}, {'generation':'b'*64}, None))
+    monkeypatch.setattr(stop, 'runtime_consumption', lambda *a: dict(actual_pid_consumed=False, findings=[]))
+    holding = tmp_path/'data/report/monitor_snapshots'/f'holding_exit_observation_{day}.json'
+    holding.parent.mkdir(parents=True)
+    holding.write_text(json.dumps(dict(date=day, all_scope_trailing_research=dict(report_path=str(tmp_path/'missing.json')))))
+    result = mod._main_stop_semantics(tmp_path, day, now=datetime(2026,10,17))
+    assert result['status'] == 'source_invalid'
+    assert result['main_stop_native_validated'] is True
+    assert result['native_validated'] is False and result['observation_complete'] is False
+    assert result['findings'][0].startswith('main_trailing_research_contract_invalid:')
 
 
 def test_initial_quantity_semantics_checks_bundle_quantity_shape_and_deadline(
@@ -571,12 +916,14 @@ def test_initial_quantity_semantics_uses_applied_ancestor_after_postclose_cas(
                                    "parent_current_file": str(parent)}))
     seen = []
 
-    def selected(path, target):
+    def selected(path, target, read):
+        read(path); read(path.with_name("policy.json"))
         seen.append((path.name, target))
         return {activation.ENV_FILE: str(path.with_name("policy.json")),
                 activation.ENV_SHA: "a" * 64}
 
-    monkeypatch.setattr(activation, "selected_initial_quantity_env", selected)
+    from src.engine.error_detectors import artifact_freshness as detector
+    monkeypatch.setattr(detector, "_quantity_current_observation", selected)
     assert _initial_quantity_semantics(tmp_path, "2026-09-28")["status"] == (
         "valid_empty")
     assert seen == [("current.json", "2026-09-29"),

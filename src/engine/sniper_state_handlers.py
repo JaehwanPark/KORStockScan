@@ -12130,11 +12130,23 @@ def _initial_quantity_cap_research_context(
 
 def _start_initial_quantity_cap_capture(stock, *, attempt_id, submission_fields):
     """Extend observation from the frozen order start, never the plan clock."""
+    if not isinstance(stock,dict) or not isinstance(submission_fields,dict):
+        return
     trace=stock.get('_initial_quantity_cap_trace')
     if not isinstance(trace,dict) or trace.get('entry_submit_attempt_id')!=attempt_id:
         return
+    from src.engine.scalping.initial_quantity_cap_observation import trace_metadata_valid
+    if not trace_metadata_valid(trace):
+        trace['capture_clock_status']='capture_metadata_invalid'
+        return
     bundle=stock.get('initial_quantity_bundle') or {}
+    if not isinstance(bundle,dict):
+        trace['capture_clock_status']='order_start_source_gap'
+        return
     schedule=bundle.get('schedule') or {}
+    if not isinstance(schedule,dict):
+        trace['capture_clock_status']='order_start_source_gap'
+        return
     if bundle.get('attempt_id')==attempt_id:
         start=schedule.get('order_start_at_epoch')
     else:
@@ -12154,6 +12166,20 @@ def _start_initial_quantity_cap_capture(stock, *, attempt_id, submission_fields)
                      capture_clock_status=('capture_clock_invalid'
                          if trace.get('capture_clock_status')=='capture_clock_invalid'
                          else 'frozen_order_start'))
+        if trace.get('capture_lifecycle_identity'):
+            from src.engine.scalping.initial_quantity_cap_observation import append
+            accepted=append(code=trace['capture_lifecycle_identity']['capture_stock_code'],name=stock.get('name'),record_id=stock.get('id'),
+                stage='initial_quantity_cap_capture_order_started',observed_at_epoch=start,
+                fields={**trace['capture_lifecycle_identity'],
+                    'entry_submit_attempt_id':trace.get('entry_submit_attempt_id'),
+                    'entry_execution_sizing_plan_sha256':trace.get('entry_execution_sizing_plan_sha256'),
+                    'capture_planned_epoch':trace.get('started_at_epoch'),
+                    'capture_order_start_epoch':start,'capture_end_epoch':start+1200,
+                    'capture_clock_status':trace['capture_clock_status'],
+                    'capture_disposition':'pending','observation_coverage':'sampled_last_trade_tick',
+                    'actual_order_submitted':False,'broker_order_forbidden':True,'runtime_effect':False})
+            if not accepted:
+                trace['queue_rejected_count']=trace.get('queue_rejected_count',0)+1
 
 
 def _observe_initial_quantity_cap_following_tick(
@@ -12165,9 +12191,21 @@ def _observe_initial_quantity_cap_following_tick(
     trace = stock.get("_initial_quantity_cap_trace")
     if not isinstance(trace, dict):
         return
+    from src.engine.scalping.initial_quantity_cap_observation import trace_metadata_valid
+    if not trace_metadata_valid(trace):
+        trace['capture_clock_status']='capture_metadata_invalid'
+        return
     if type(now_ts) not in (int, float) or not math.isfinite(now_ts) or now_ts<=0:
         # Retain the gap until a real clock value can durably record it.
         trace['capture_clock_status']='capture_clock_invalid'
+        return
+    identity=trace.get('capture_lifecycle_identity') or {}
+    if identity and (str(identity.get('capture_record_id'))!=str(stock.get('id'))
+            or identity.get('capture_stock_code')!=str(code)):
+        from src.engine.scalping.initial_quantity_cap_observation import interrupt
+        if interrupt(code=code,name=stock.get('name'),record_id=stock.get('id'),trace=trace,
+                reason='record_identity_replaced',now=now_ts):
+            _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
         return
     started = trace.get("started_at_epoch")
     valid_start = type(started) in (int, float) and math.isfinite(started) and started>0
@@ -12178,14 +12216,18 @@ def _observe_initial_quantity_cap_following_tick(
         trace['capture_clock_status']='capture_clock_invalid'
     if invalid_clock or now_ts>end or trace.get('capture_terminal_pending'):
         from src.engine.scalping.initial_quantity_cap_observation import append
+        interrupted=invalid_clock or trace.get('capture_clock_status')!='frozen_order_start'
         accepted=append(code=code,name=stock.get('name'),record_id=stock.get('id'),
-               stage='initial_quantity_cap_capture_finished',observed_at_epoch=now_ts,
-               fields=dict(entry_submit_attempt_id=trace.get('entry_submit_attempt_id'),
+               stage=('initial_quantity_cap_capture_interrupted' if interrupted else 'initial_quantity_cap_capture_finished'),observed_at_epoch=now_ts,
+               fields=dict(**(trace.get('capture_lifecycle_identity') or {}),
+                           entry_submit_attempt_id=trace.get('entry_submit_attempt_id'),
                            entry_execution_sizing_plan_sha256=trace.get('entry_execution_sizing_plan_sha256'),
                            capture_clock_status=trace.get('capture_clock_status','no_order_start_observed'),
                            capture_planned_epoch=started if valid_start else None,capture_order_start_epoch=trace.get('order_start_epoch'),
                            capture_end_epoch=end if valid_end else None,capture_queue_rejected_count=trace.get('queue_rejected_count',0),
                            capture_queued_count=trace.get('queued_observation_count',0),
+                           capture_disposition=('interrupted' if interrupted else 'horizon_reached'),
+                           capture_interruption_reason=(trace.get('capture_clock_status','no_order_start_observed') if interrupted else None),
                            observation_coverage='sampled_last_trade_tick',runtime_effect=False,
                            actual_order_submitted=False,broker_order_forbidden=True))
         if accepted:
@@ -12234,6 +12276,7 @@ def _observe_initial_quantity_cap_following_tick(
         return
     trace["last_tick_identity"] = identity
     fields=dict(
+        **(trace.get('capture_lifecycle_identity') or {}),
         entry_submit_attempt_id=trace["entry_submit_attempt_id"],
         entry_execution_sizing_plan_sha256=trace[
             "entry_execution_sizing_plan_sha256"],
@@ -20374,6 +20417,12 @@ def _exit_signal_submission_fields(stock: dict, code: str, fields: dict) -> dict
 
 
 def _log_holding_pipeline(stock, code, stage, **fields):
+    if stage=='sell_completed' and isinstance(stock.get('_initial_quantity_cap_trace'),dict):
+        from src.engine.scalping.initial_quantity_cap_observation import interrupt
+        trace=stock['_initial_quantity_cap_trace']
+        if interrupt(code=code,name=stock.get('name'),record_id=stock.get('id'),trace=trace,
+                reason='position_completed_before_capture_horizon'):
+            _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
     if (stage in {"exit_signal", "sell_order_sent", "sell_completed"} | EXIT_WAIT_STAGES
             and str(fields.get("exit_rule") or stock.get("last_exit_rule") or "")
                 == "scalp_trailing_take_profit"):
@@ -70316,6 +70365,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         cap_observed_at = time.time()
         cap_attempt_id = submit_attempt_fields(stock, code).get(
             "entry_submit_attempt_id")
+        previous_cap_trace=stock.get('_initial_quantity_cap_trace')
+        if isinstance(previous_cap_trace,dict):
+            from src.engine.scalping.initial_quantity_cap_observation import interrupt
+            interrupt(code=code,name=stock.get('name'),record_id=stock.get('id'),
+                trace=previous_cap_trace,reason='attempt_replaced',now=cap_observed_at)
         _mutate_stock_state(stock, pop_fields=("_initial_quantity_cap_trace",))
         cap_source = _initial_quantity_cap_research_context(
             sizing_context, sizing_decision, ws_data=ws_data,
@@ -70354,6 +70408,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         "transport_epoch"],
                 },
             })
+            from src.engine.scalping.initial_quantity_cap_observation import register
+            register(code=code,name=stock.get('name'),record_id=stock.get('id'),
+                trace=stock['_initial_quantity_cap_trace'])
         submit_revalidation_fields.update(entry_split_fields)
         wait_probe_required = bool(
             entry_ai_submit_authority.get(
@@ -72809,6 +72866,17 @@ def _iter_pending_entry_orders(stock):
 
 
 def _clear_pending_entry_meta(stock, *, preserve_probe_runtime=False):
+    if (isinstance(stock.get('_initial_quantity_cap_trace'),dict)
+            and _safe_int(stock.get('buy_qty'),0)<=0
+            and _safe_int(stock.get('entry_filled_qty'),0)<=0):
+        from src.engine.scalping.initial_quantity_cap_observation import interrupt
+        trace=stock['_initial_quantity_cap_trace']
+        identity=trace.get('capture_lifecycle_identity') or {}
+        if not isinstance(identity,dict):identity={}
+        if interrupt(code=identity.get('capture_stock_code') or stock.get('code'),
+                name=stock.get('name'),record_id=stock.get('id'),trace=trace,
+                reason='entry_attempt_cleared_without_position'):
+            _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
     with ENTRY_LOCK:
         move_orders_to_terminal(stock, reason="pending_entry_meta_cleared")
         clear_keys = [

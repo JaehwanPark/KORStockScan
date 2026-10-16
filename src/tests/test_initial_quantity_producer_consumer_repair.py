@@ -1,9 +1,11 @@
 """Integration regressions for quantity source, clocks and frozen selection."""
 import copy
+import hashlib
 import json
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -61,6 +63,23 @@ def test_actual_cost_census_accepts_broker_cost_not_configured_rate(tmp_path):
     bad={**fact,'completion_census_run_id':None}
     good,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=[fact,{**bad,'recommendation_id':2}],entry_on_or_after='2026-09-29')
     assert len(good)==1 and census['excluded']=={'actual_cost_identity_or_amount_invalid':1}
+
+
+@pytest.mark.parametrize('case,expected', [('empty', None), ('missing_cost', None),
+                                         ('measured_zero', 0), ('partial_valid', 800)])
+def test_actual_census_keeps_missing_aggregate_distinct_from_measured_zero(tmp_path, case, expected):
+    day = '2026-10-08'
+    _quality(tmp_path, day)
+    missing = {**actual_fact(2), 'profit_rate': None, 'realized_pnl_krw': None}
+    zero = {**actual_fact(fees=0), 'sell_price': 100000, 'profit_rate': 0,
+            'realized_pnl_krw': 0}
+    facts = {'empty': [], 'missing_cost': [missing], 'measured_zero': [zero],
+             'partial_valid': [actual_fact(), missing]}[case]
+    rows, census = policy.completed_trade_fact_census(day, data_dir=tmp_path,
+        fact_rows=facts, entry_on_or_after='2026-09-29')
+    assert census['actual_completed_net_pnl_krw'] == expected
+    assert census['all_completed_initial_trades'] == len(rows)
+    assert (census['actual_completed_mean_profit_rate_pct'] is None) == (not rows)
 
 
 @pytest.mark.parametrize('value,expected',[('4',4),(4,4),(True,None),('4.0',None),(4.0,None),('',None),('nan',None),('-1',None),('0',0)])
@@ -347,6 +366,157 @@ def test_quantity_fact_validator_never_decodes_oversized_legacy_timeline(monkeyp
     assert policy._quantity_fact_generation_issue('2026-09-30')=='fact_snapshot_requires_bounded_native_projection'
 
 
+def _native_quantity_fact_source(tmp_path, monkeypatch, *, large=True):
+    from src.engine import log_archive_service as archive
+    from src.engine import strategy_position_performance_report as fact
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    day = '2026-10-08'
+    directory = tmp_path / 'report/monitor_snapshots'
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', directory)
+    monkeypatch.setattr(fact, '_FACT_SYNC_STATUS_DIR', tmp_path / 'fact_sync')
+    monkeypatch.setattr(policy, 'DATA_DIR', tmp_path)
+    costs = source_generation(tmp_path, day)
+    row = dict(id='1', status='COMPLETED', completion_observed_date=day,
+               profit_rate=None, strict_completion_status='excluded',
+               timeline=[{'original_observation': 'x' * (5 * 1024 * 1024)}] if large else [])
+    payload = dict(date=day, metrics={'canonical_completed_trades': 1},
+                   meta={'snapshot_profile': 'postclose_exit',
+                         'actual_cost_source_generation': costs,
+                         'sell_completed_event_ids': ['1']},
+                   sections={'completed_trade_projection': [row],
+                             'open_scalp_position_projection': []})
+    census = completed_census_manifest(payload)
+    payload['meta']['completed_census_manifest'] = census
+    path = archive.save_monitor_snapshot('trade_review', day, payload)
+    receipt = fact._write_status(day, dict(status='succeeded',
+        completed_census_run_ids=[census['run_id']],
+        completed_census_projection_sha256=[census['projection_sha256']],
+        actual_cost_source_generation=costs))
+    return day, path, receipt
+
+
+@pytest.mark.parametrize('large', [False, True])
+def test_quantity_fact_native_size_parity_and_no_timeline_decode(tmp_path, monkeypatch, large):
+    from src.engine import strategy_position_performance_report as fact
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    day, path, _ = _native_quantity_fact_source(tmp_path, monkeypatch, large=large)
+    decoded = []
+    original = json.loads
+    def bounded(raw, *args, **kwargs):
+        decoded.append(len(raw))
+        assert len(raw) <= MAX_METADATA_BYTES
+        return original(raw, *args, **kwargs)
+    monkeypatch.setattr(json, 'loads', bounded)
+    if large:
+        monkeypatch.setattr(fact, '_saved_fact_generation_issue',
+            lambda *a, **k: pytest.fail('large completion projection decoded'))
+    assert policy._quantity_fact_generation_issue(day) is None
+    assert max(decoded) < MAX_METADATA_BYTES
+    assert path.with_suffix('.completed_projection.json').stat().st_size > (4 * 1024 * 1024 if large else 0)
+    # A current native source generation does not fill the missing actual cost.
+    _quality(tmp_path, day)
+    rows, census = policy.completed_trade_fact_census(day, data_dir=tmp_path,
+        fact_rows=[{**actual_fact(), 'profit_rate': None, 'realized_pnl_krw': None,
+                    'fact_generation': {'issue': None}}])
+    assert rows == []
+    assert census['excluded'] == {'terminal_cost_or_quantity_missing': 1}
+
+
+@pytest.mark.parametrize('mutation,expected', [
+    ('missing_receipt', 'fact_sync_receipt_missing_or_invalid'),
+    ('invalid_receipt', 'fact_sync_receipt_missing_or_invalid'),
+    ('receipt_hash', 'fact_sync_receipt_sha_mismatch'),
+    ('wrong_day', 'fact_sync_receipt_not_current_success'),
+    ('failed', 'fact_sync_receipt_not_current_success'),
+    ('run', 'stale_fact_source_generation'),
+    ('projection', 'stale_fact_source_generation'),
+    ('fact_cost', 'persisted_fact_cost_generation_stale'),
+    ('source_cost', 'fact_snapshot_native_projection_invalid'),
+    ('sidecar', 'fact_snapshot_native_projection_invalid'),
+    ('dependency', 'fact_snapshot_native_projection_invalid'),
+    ('snapshot', 'fact_snapshot_native_projection_invalid'),
+])
+def test_quantity_compact_fact_rejects_stale_corrupt_and_cost_revisions(tmp_path, monkeypatch, mutation, expected):
+    from src.engine import strategy_position_performance_report as fact
+    from src.engine.lifecycle.broker_cost_reconciliation import receipt_path
+    day, path, receipt = _native_quantity_fact_source(tmp_path, monkeypatch)
+    receipt.pop('artifact_sha256')
+    if mutation == 'missing_receipt':
+        fact._status_path(day).unlink()
+    elif mutation == 'invalid_receipt':
+        fact._status_path(day).write_text('{invalid')
+    elif mutation == 'receipt_hash':
+        receipt['artifact_sha256'] = '0' * 64
+        fact._status_path(day).write_text(json.dumps(receipt))
+    elif mutation in {'wrong_day', 'failed', 'run', 'projection', 'fact_cost'}:
+        key, value = {
+            'wrong_day': ('target_date', '2026-10-07'),
+            'failed': ('status', 'failed'),
+            'run': ('completed_census_run_ids', ['another']),
+            'projection': ('completed_census_projection_sha256', ['0' * 64]),
+            'fact_cost': ('actual_cost_source_generation', {'stale': True}),
+        }[mutation]
+        receipt[key] = value
+        receipt['artifact_sha256'] = fact._canonical_sha256(receipt)
+        fact._status_path(day).write_text(json.dumps(receipt))
+    elif mutation == 'source_cost':
+        cost = receipt_path(tmp_path, day, '1')
+        cost.parent.mkdir(parents=True)
+        cost.write_text('{"corrected_actual_cost":1}')
+    elif mutation == 'snapshot':
+        with path.open('ab') as handle:
+            handle.write(b' ')
+    else:
+        target = path.with_suffix('.completed_projection.json')
+        if mutation == 'dependency':
+            target = Path(str(target) + '.dependencies.json')
+        with target.open('ab') as handle:
+            handle.write(b'x')
+    assert policy._quantity_fact_generation_issue(day) == expected
+
+
+def test_quantity_compact_fact_accepts_native_lossless_gzip(tmp_path, monkeypatch):
+    from src.engine import compress_db_backfilled_files as archive
+    day, path, _ = _native_quantity_fact_source(tmp_path, monkeypatch)
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', path.parent)
+    sidecar = path.with_suffix('.completed_projection.json')
+    assert policy._quantity_fact_generation_issue(day) is None
+    assert archive._gzip_file(path, dry_run=False)[0]
+    assert archive._gzip_file(sidecar, dry_run=False)[0]
+    assert not path.exists() and not sidecar.exists()
+    assert policy._quantity_fact_generation_issue(day) is None
+    compressed = Path(str(sidecar) + '.gz')
+    with compressed.open('ab') as handle:
+        handle.write(b'changed')
+    assert policy._quantity_fact_generation_issue(day) == 'fact_snapshot_native_projection_invalid'
+
+
+def test_quantity_compact_fact_bounded_metadata_gap_and_concurrent_change(tmp_path, monkeypatch):
+    from src.engine.lifecycle import holding_window_generation as window
+    day, path, _ = _native_quantity_fact_source(tmp_path, monkeypatch)
+    original = policy._quantity_compact_fact_issue
+    def changed(*args):
+        issue = original(*args)
+        with path.open('ab') as handle:
+            handle.write(b' ')
+        return issue
+    monkeypatch.setattr(policy, '_quantity_compact_fact_issue', changed)
+    assert policy._quantity_fact_generation_issue(day) == 'fact_snapshot_native_projection_changed_during_read'
+
+    day, path, _ = _native_quantity_fact_source(tmp_path, monkeypatch)
+    monkeypatch.setattr(policy, '_quantity_compact_fact_issue', original)
+    sidecar = path.with_suffix('.completed_projection.json')
+    payload = json.loads(sidecar.read_bytes())
+    payload['meta']['warnings'] = ['x' * window.MAX_METADATA_BYTES]
+    payload['artifact_sha256'] = hashlib.sha256(json.dumps(
+        {k: v for k, v in payload.items() if k != 'artifact_sha256'},
+        sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+    sidecar.write_text(json.dumps(payload))
+    window.seal_dependency_receipt(sidecar, payload)
+    assert policy._quantity_fact_generation_issue(day) == 'fact_snapshot_requires_bounded_native_metadata'
+
+
 def test_quantity_reservation_uses_shared_slots_and_verified_nested_owner(tmp_path):
     from src.engine.lifecycle import research_admission as mod
     r=mod.acquire(tmp_path,'initial_entry_quantity_refresh','2026-10-08')
@@ -377,6 +547,10 @@ def _positive_joint_fixture(root):
             event('order_leg_sent',start,**base,tag='initial_quantity_leg_0',broker_order_no=str(rid),actual_order_submitted=True,initial_quantity_order_start_at=start.isoformat(),initial_quantity_bundle_total_wait_sec=60,initial_quantity_schedule_sha256='c'*64,initial_quantity_policy_file_sha256=sha,initial_quantity_attempt_id=str(rid),initial_quantity_leg_index=0)
             event('position_rebased_after_fill',first,fill_qty=4,fill_price=100,entry_mode='normal',order_no=str(rid),execution_no='1',actual_execution_venue='KRX',broker_execution_observed_at=first.isoformat())
             event('initial_quantity_cap_following_tick',start+timedelta(seconds=40),**base,cap_tick_observed_epoch=(start+timedelta(seconds=40)).timestamp(),cap_tick_price_krw=99,cap_tick_quantity=20,cap_tick_item='005930',cap_tick_depth_item='005930',cap_tick_market_route='KRX',cap_tick_transport_epoch='4',decision_authority='source_only_cap_fill_research',actual_order_submitted=False)
+            event('initial_quantity_cap_capture_finished', start+timedelta(seconds=1201), **base,
+                  capture_clock_status='frozen_order_start', capture_order_start_epoch=start.timestamp(),
+                  capture_end_epoch=start.timestamp()+1200, capture_queue_rejected_count=0,
+                  capture_queued_count=1)
         (pipeline/f'pipeline_events_{day}.jsonl').write_text(''.join(json.dumps(e)+'\n' for e in events))
     receipt=dict(source='verified_daily_preopen_main_pid_env',data_root=str(root.resolve()),first_consumed_date='2026-10-05',policy_file_sha256=sha,actual_pid_consumed=True,policy_content_sha256=parent['policy_content_sha256'],daily_pid_receipts=pid)
     return parent,parent_path,facts,receipt
@@ -481,6 +655,157 @@ def test_capture_loss_excludes_counterfactuals_and_preserves_actual_control(fiel
     assert policy._capture_source_issue(source) is None
     source['capture_receipts']=[]
     assert policy._capture_source_issue(source) is None
+
+
+def _complete_capture_source():
+    start = datetime.fromisoformat('2026-10-08T09:30:00+09:00').timestamp()
+    identity = dict(entry_submit_attempt_id='a', entry_execution_sizing_plan_sha256='b'*64,
+        capture_source_date='2026-10-08', capture_runtime_pid=123, capture_runtime_start_ticks='456')
+    order = dict(capture_order_start_epoch=start, capture_end_epoch=start+1200,
+        capture_queue_rejected_count=0, capture_queued_count=5, capture_clock_status='frozen_order_start')
+    return dict(attempt_id='a', plan_sha256='b'*64, runtime_pid=123,
+        capture_source_date='2026-10-08', capture_terminal_required=True, capture_receipts=[
+            dict(stage='initial_quantity_cap_capture_started', at='2026-10-08T09:29:59+09:00',
+                fields={**identity, 'capture_clock_status': 'no_order_start_observed'}),
+            dict(stage='initial_quantity_cap_capture_order_started', at='2026-10-08T09:30:00+09:00', fields={**identity, **order}),
+            dict(stage='initial_quantity_cap_capture_finished', at='2026-10-08T09:50:01+09:00', fields={**identity, **order})])
+
+
+@pytest.mark.parametrize('mutation,reason', [
+    ('complete', None), ('missing', 'capture_terminal_missing'),
+    ('interrupt', 'capture_interrupted'), ('conflict', 'capture_terminal_conflict'),
+    ('pid', 'capture_runtime_identity_mismatch'), ('start_ticks', 'capture_runtime_identity_mismatch'),
+    ('date', 'capture_runtime_identity_mismatch'), ('short_horizon', 'capture_horizon_unverified'),
+    ('early_terminal', 'capture_horizon_unverified'),
+])
+def test_capture_lifecycle_requires_original_identity_and_real_horizon(mutation, reason):
+    source = _complete_capture_source()
+    terminal = source['capture_receipts'][-1]
+    if mutation == 'missing':
+        source['capture_receipts'].pop()
+    elif mutation == 'interrupt':
+        terminal['stage'] = 'initial_quantity_cap_capture_interrupted'
+        terminal['at'] = '2026-10-08T09:31:00+09:00'
+        terminal['fields'].update(capture_disposition='interrupted', capture_interruption_reason='position_completed_before_capture_horizon')
+    elif mutation == 'conflict':
+        source['capture_receipts'].append({**copy.deepcopy(terminal), 'stage': 'initial_quantity_cap_capture_interrupted'})
+    elif mutation in {'pid', 'start_ticks', 'date'}:
+        key, value = {'pid': ('capture_runtime_pid', 999), 'start_ticks': ('capture_runtime_start_ticks', '457'),
+                      'date': ('capture_source_date', '2026-10-07')}[mutation]
+        terminal['fields'][key] = value
+    elif mutation == 'short_horizon':
+        terminal['fields']['capture_end_epoch'] -= 1
+    elif mutation == 'early_terminal':
+        terminal['at'] = '2026-10-08T09:49:59+09:00'
+    assert policy._capture_source_issue(source) == reason
+
+
+def test_capture_interruption_uses_candidate_horizon_and_original_fixed_exit():
+    source = _complete_capture_source()
+    source['capture_receipts'][-1].update(stage='initial_quantity_cap_capture_interrupted',
+                                         at='2026-10-08T09:31:00+09:00')
+    source['capture_receipts'][-1]['fields'].update(capture_disposition='interrupted',
+        capture_interruption_reason='position_completed_before_capture_horizon')
+    start = datetime.fromisoformat('2026-10-08T09:30:00+09:00').timestamp()
+    assert policy._capture_source_issue(source, horizon_seconds=60, order_start_epoch=start) is None
+    assert policy._capture_source_issue(source, horizon_seconds=61, order_start_epoch=start) == 'capture_interrupted'
+    assert policy._capture_source_issue(source) == 'capture_interrupted'
+    source['capture_exit_epoch'] = start + 60
+    assert policy._capture_source_issue(source) is None
+    source['capture_receipts'][-1]['fields']['capture_interruption_reason'] = 'prior_process_ended_before_terminal'
+    source['capture_receipts'][-1]['at'] = '2026-10-09T08:00:00+09:00'
+    assert policy._capture_source_issue(source, horizon_seconds=30) == 'capture_interrupted'
+    assert policy._capture_source_issue(source, horizon_seconds=None) == 'capture_horizon_unverified'
+
+
+def test_capture_tick_cannot_cross_original_process_epoch():
+    source = _complete_capture_source()
+    source['following_ticks'] = [dict(attempt_id='a', plan_sha256='b'*64,
+        capture_source_date='2026-10-08', capture_runtime_pid='123', capture_runtime_start_ticks='456')]
+    assert policy._capture_source_issue(source) is None
+    source['following_ticks'][0]['capture_runtime_start_ticks'] = '457'
+    assert policy._capture_source_issue(source) == 'capture_runtime_identity_mismatch'
+
+
+def _durable_interruption(root, *, record_id=1):
+    from src.engine.scalping import initial_quantity_cap_observation as producer
+    fields = _complete_capture_source()['capture_receipts'][-1]['fields']
+    fields = {**fields, 'capture_disposition': 'interrupted',
+              'capture_record_id': record_id, 'capture_stock_code': '005930',
+              'capture_interruption_reason': 'prior_process_ended_before_terminal'}
+    capture_id = producer._capture_id(fields)
+    path = root/'runtime/initial_quantity/cap_capture_receipts/2026-10-08'/f'{capture_id}.json'
+    producer._atomic_receipt(path, dict(schema='initial_quantity_cap_capture_lifecycle_v1',
+        capture_id=capture_id, code='005930', name='native', record_id=record_id,
+        fields=fields, observed_at_epoch=datetime.fromisoformat('2026-10-09T08:00:00+09:00').timestamp(),
+        status='interrupted', raw_event_durable=True, raw_event_id='a'*64,
+        raw_event_identity_contract='canonical_original_pipeline_event_sha256_v1',
+        raw_event_stage='initial_quantity_cap_capture_interrupted', runtime_effect=False))
+    return path
+
+
+def test_late_capture_interruption_invalidates_feature_cache_and_report_source(tmp_path, monkeypatch):
+    day = '2026-10-08'
+    _quality(tmp_path, day)
+    trades, _ = policy.completed_trade_fact_census(day, data_dir=tmp_path, fact_rows=[actual_fact()])
+    pipeline = tmp_path/'pipeline_events'
+    pipeline.mkdir()
+    (pipeline/f'pipeline_events_{day}.jsonl').write_text('{}\n')
+    before = policy.join_post_fill_paths(trades, data_dir=tmp_path)
+    assert before[trades[0]['trade_id']]['capture_receipts'] == []
+    path = _durable_interruption(tmp_path)
+    original = policy._join_post_fill_paths_uncached
+    scans = []
+    def counted(rows, **kwargs):
+        scans.append(len(rows))
+        return original(rows, **kwargs)
+    monkeypatch.setattr(policy, '_join_post_fill_paths_uncached', counted)
+    sources = {}
+    after = policy.join_post_fill_paths(trades, data_dir=tmp_path, source_receipts=sources)
+    assert scans == [1]
+    receipts = after[trades[0]['trade_id']]['capture_receipts']
+    assert len(receipts) == 1 and receipts[0]['durable_source'] == 'native_closed_lifecycle_receipt'
+    assert receipts[0]['fields']['capture_source_date'] == day
+    assert receipts[0]['at'].astimezone(ZoneInfo('Asia/Seoul')).date().isoformat() == '2026-10-09'
+    source = {**_complete_capture_source(), 'capture_receipts': receipts}
+    assert policy._capture_source_issue(source) == 'capture_interrupted'
+    policy.join_post_fill_paths(trades, data_dir=tmp_path)
+    assert scans == [1]
+    monkeypatch.setattr(policy, 'DATA_DIR', tmp_path)
+    report = {'census': {}, 'pipeline_source_receipts': sources}
+    policy.verify_refresh_source_generations(report)
+    with path.open('ab') as handle:
+        handle.write(b' ')
+    with pytest.raises(ValueError, match='quantity_capture_lifecycle_generation_changed'):
+        policy.verify_refresh_source_generations(report)
+
+
+@pytest.mark.parametrize('mutation', ['hash', 'day', 'pid', 'ticks', 'attempt', 'plan', 'raw_durable', 'stage', 'link'])
+def test_durable_capture_receipt_rejects_unbound_or_corrupt_proof(tmp_path, mutation):
+    from src.engine.scalping import initial_quantity_cap_observation as producer
+    path = _durable_interruption(tmp_path)
+    body = json.loads(path.read_bytes())
+    if mutation == 'link':
+        other = path.with_suffix('.saved')
+        path.rename(other)
+        path.symlink_to(other)
+    elif mutation == 'hash':
+        with path.open('ab') as handle:
+            handle.write(b'x')
+    else:
+        if mutation in {'day', 'pid', 'ticks', 'attempt', 'plan'}:
+            key, value = {'day': ('capture_source_date', '2026-10-07'), 'pid': ('capture_runtime_pid', 999),
+                'ticks': ('capture_runtime_start_ticks', '457'), 'attempt': ('entry_submit_attempt_id', 'foreign'),
+                'plan': ('entry_execution_sizing_plan_sha256', 'c'*64)}[mutation]
+            body['fields'][key] = value
+        elif mutation == 'raw_durable':
+            body['raw_event_durable'] = False
+        elif mutation == 'stage':
+            body['raw_event_stage'] = 'initial_quantity_cap_capture_finished'
+        body.pop('sha256')
+        producer._atomic_receipt(path, body)
+    with pytest.raises((ValueError, OSError)):
+        policy._quantity_capture_lifecycle_sources(tmp_path, '2026-10-08', decode=True)
 
 
 @pytest.mark.parametrize('end,now',[(True,1),(float('nan'),1),(0,1),(1200,-1)])

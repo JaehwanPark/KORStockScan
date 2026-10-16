@@ -12,6 +12,30 @@ from src.engine.scalping.universal_trailing_replay import common_evaluation
 from src.tests.test_main_all_scope_research import fixture,write
 
 
+@pytest.mark.parametrize('damage', [None, 'code', 'target', 'source', 'extension', 'bytes'])
+def test_bounded_trailing_observation_detects_stale_generation_without_replaying_sources(tmp_path, damage):
+    from src.engine.automation.main_trailing_research_handoff import observe_extension
+    report = dict(schema='main_all_scope_exit_research_v2', status='complete',
+                  source_date='2026-10-16', target_date='2026-10-19',
+                  code_contract_sha256=owner.code_contract(), allowed_runtime_apply=False,
+                  input_window_generation_sha256='a'*64,
+                  initial_policy=dict(policy_sha256='b'*64), scope=dict(scope_count=20832))
+    if damage in {'code', 'target', 'source'}:
+        report[{'code':'code_contract_sha256', 'target':'target_date', 'source':'source_date'}[damage]] = 'invalid'
+    path = tmp_path/'research.json';write(path,report)
+    extension = dict(report_path=str(path), report_generation=byte_generation(path),
+                     status='complete', input_window_generation_sha256='a'*64,
+                     initial_policy_sha256='b'*64, scope_count=20832, allowed_runtime_apply=False)
+    if damage == 'extension': extension['scope_count'] = 1
+    if damage == 'bytes': path.write_text('{}')
+    result = observe_extension(dict(date='2026-10-16', all_scope_trailing_research=extension),
+                               target_date='2026-10-19')
+    assert result['full_source_revalidation_performed'] is False
+    assert result['runtime_effect'] is False
+    assert result['status'] == ('generation_current' if damage is None else 'source_invalid')
+    assert bool(result['findings']) == (damage is not None)
+
+
 def sharded(tmp_path):
     root,out=fixture(tmp_path)
     manifest=owner._sealed(root/'manifest.json');refs=[]
@@ -336,3 +360,13 @@ def test_typed_global_training_evidence_reaches_existing_selector_without_holdou
     forged=deepcopy(view);forged['trailing_mechanical_market_tuning']['research_candidate']['values']['REGULAR']['SCALP_TRAILING_LIMIT_WEAK']=.05
     with pytest.raises(ValueError,match='selector_source_changed'):verify_type_view(forged,target_date='2026-10-12')
     assert _type_view(report,generation,report_path=tmp_path/'research.json',market='AFTER',kind='HIGH_VARIABILITY') is None
+
+
+def test_required_postclose_trailing_extension_cannot_be_missing():
+    from src.engine.automation.main_trailing_research_handoff import observe_extension
+    optional = observe_extension({'date': '2026-10-16'}, target_date='2026-10-19')
+    assert optional['status'] == 'not_observed' and optional['findings'] == []
+    required = observe_extension({'date': '2026-10-16'}, target_date='2026-10-19', required=True)
+    assert required['status'] == 'source_invalid'
+    assert required['findings'] == ['all_scope_research_extension_missing']
+    assert required['full_source_revalidation_performed'] is False

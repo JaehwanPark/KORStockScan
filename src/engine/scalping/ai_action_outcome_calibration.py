@@ -10802,7 +10802,9 @@ def _runtime_policy_publication_errors(
 def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> dict:
     """Decouple the full-cost source prerequisite from provider replay gates."""
     from zoneinfo import ZoneInfo
-    from src.engine.scalping.micro_reversion.economic_reference import build_daily_resolution, atomic_write_json
+    from src.engine.scalping.micro_reversion.economic_reference import (
+        build_daily_resolution, atomic_write_json, publish_canonical_symbol_master,
+    )
     from src.engine.scalping.micro_reversion.economic_reference_owner import build_daily_sources
 
     # Source manifests resolve relative entries against their own directory.
@@ -10812,7 +10814,14 @@ def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> d
     path = root / f"micro_reversion_economic_reference_{target_date}.json"
     existing = existing_or_gzip_path(path)
     if existing and _hierarchy_cost_profiles(data_root, target_date):
-        return {"status": "existing_verified_sources_preserved", "path": str(existing)}
+        try:
+            publication = publish_canonical_symbol_master(
+                _load_json(existing), target_date=target_date, directory=root)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return {"status": "source_gap_symbol_master_publication_failed",
+                    "reason": str(exc), "path": str(existing)}
+        return {"status": "existing_verified_sources_preserved", "path": str(existing),
+                "symbol_master_publication": publication}
     if datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat() != target_date:
         return {"status": "source_gap_historical_official_master_unavailable", "target_date": target_date, "path": str(path)}
     try:
@@ -10820,7 +10829,11 @@ def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> d
         build_daily_sources(target_date=target_date, policy_path=data_root / "config" / "micro_reversion_economic_policy.json", output_root=private)
         report = build_daily_resolution(target_date=target_date, source_manifest_path=private / "economic_reference_sources.json")
         atomic_write_json(path, report)
-        return {"status": report.get("status"), "verified": report.get("verified"), "path": str(path)}
+        publication = (publish_canonical_symbol_master(
+            report, target_date=target_date, directory=root)
+            if report.get("verified") is True else None)
+        return {"status": report.get("status"), "verified": report.get("verified"),
+                "path": str(path), "symbol_master_publication": publication}
     except (OSError, ValueError, RuntimeError) as exc:
         return {"status": "source_gap_cost_prerequisite_failed", "reason": str(exc), "path": str(path)}
 

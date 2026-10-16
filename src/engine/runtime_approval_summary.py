@@ -1404,6 +1404,13 @@ def build_runtime_approval_summary(
     code_defects = ([window_issue] if window_issue else []) + (
         semantic.get("findings", []) if semantic.get("status") in {
             "source_invalid", "semantic_contract_invalid", "policy_binding_gap"} else [])
+    from src.engine.automation.main_trailing_research_handoff import observe_extension
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    trailing_generation = observe_extension(
+        trailing_payload, target_date=preopen_receipt.get('apply_date') or _next_krx_trading_day(target_date),
+        required=(trailing_payload.get('meta') or {}).get('snapshot_profile') == 'postclose_exit')
+    trailing_lineage['all_scope_generation'] = trailing_generation
+    code_defects += trailing_generation['findings']
     trailing_lineage["source_contract_repair"] = {
         "owner": "HoldingProfitExitSourceContractRepair",
         "repair_required": bool(code_defects), "identified_defects": code_defects,

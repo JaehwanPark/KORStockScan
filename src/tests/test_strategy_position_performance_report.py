@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import copy
 import gzip
 import json
 
@@ -20,6 +21,227 @@ def test_main_synchronizes_target_date_without_building_provider_or_runtime_work
 
     assert report_mod.main(["--date", "2026-08-25"]) == 0
     assert calls == ["2026-08-25"]
+
+
+def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope='entered'):
+    from src.engine import log_archive_service as archive
+    from src.engine.sniper_trade_review_report import completed_census_manifest, strategy_fact_projection_rows
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    day = '2026-10-08'
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', tmp_path/'report/monitor_snapshots')
+    monkeypatch.setattr(report_mod, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(report_mod, '_FACT_SYNC_STATUS_DIR', tmp_path/'report/fact_sync')
+    monkeypatch.setattr(report_mod, '_enrich_scanner_provenance', lambda facts, *a, **k: facts)
+    rows = [dict(id=i+1, rec_date=day, code='005930', name='native', status='HOLDING',
+        strategy='SCALPING', position_tag='SCANNER', buy_price=1000, buy_qty=1,
+        buy_time=day+' 09:00:00', sell_time=None, sell_price=None, profit_rate=None,
+        add_count=0, avg_down_count=0, pyramid_count=0,
+        timeline='x'*(5*1024*1024) if large and i == 0 else []) for i in range(count)]
+    if rows:
+        rows[0].update(status='COMPLETED', sell_price=1010, sell_time=day+' 09:10:00')
+    completed = [{**rows[0], 'completion_observed_date': day, 'terminal_population_scope': 'real_record_bound',
+        'strict_completion_status': 'excluded', 'broker_actual_cost_observed': False,
+        'actual_cost_reconciliation': {'status': 'actual_cost_unallocated'}, 'realized_pnl_krw': None,
+        'realized_pnl_krw_source': 'missing_exact_cost', 'broker_actual_fees_taxes_krw': None}] if rows else []
+    payload = dict(date=day, code=None, since=None, scope=scope,
+        meta=dict(snapshot_profile='postclose_exit', warnings=[], sell_completed_event_ids=[1] if rows else [],
+                  actual_cost_source_generation=source_generation(tmp_path,day)),
+        metrics=dict(total_trades=len(rows), canonical_completed_trades=len(completed)),
+        sections=dict(recent_trades=rows[:300], strategy_position_fact_projection=strategy_fact_projection_rows(rows),
+                      completed_trade_projection=completed, open_scalp_position_projection=[]))
+    payload['meta']['completed_census_manifest'] = completed_census_manifest(payload)
+    return day, archive.save_monitor_snapshot('trade_review', day, payload)
+
+
+@pytest.mark.parametrize('count', [0, 2, 303])
+def test_native_fact_projection_preserves_full_census_without_timelines(tmp_path, monkeypatch, count):
+    day, path = _native_fact_projection(tmp_path, monkeypatch, count=count)
+    monkeypatch.setattr(report_mod, 'build_trade_review_report', lambda **k: pytest.fail('rebuilt original report'))
+    monkeypatch.setattr(report_mod, 'load_monitor_snapshot', lambda *a: pytest.fail('decoded original snapshot'))
+    native = report_mod._load_completion_fact_projection(day, path)
+    assert len(native['sections']['recent_trades']) == count
+    assert all('timeline' not in row for row in native['sections']['recent_trades'])
+    assert path.with_suffix('.fact_projection.json').stat().st_size < 512*1024
+    quality = {}
+    facts, warnings = report_mod._build_trade_fact_rows(day, completion_snapshot=path, completion_census_quality=quality)
+    assert len(facts) == count and warnings == []
+    if count:
+        assert (facts[0]['profit_rate'], facts[0]['realized_pnl_krw']) == (None, None)
+        assert facts[0]['actual_cost_reconciliation_status'] == 'actual_cost_unallocated'
+    assert quality['completion_snapshot_source'] == native['_native_source_proof']
+    report_mod._write_status(day, dict(status='succeeded' if count else 'valid_empty',
+        completed_census_run_ids=[quality['run_id']], completed_census_projection_sha256=[quality['projection_sha256']],
+        actual_cost_source_generation=quality['actual_cost_source_generation'],
+        completion_snapshot_source=quality['completion_snapshot_source']))
+    assert report_mod._saved_fact_generation_issue(day) is None
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'bytes', 'cost', 'identity', 'wrong_date', 'wrong_path', 'symlink', 'generation'])
+def test_native_fact_projection_rejects_missing_stale_or_unbound_source(tmp_path, monkeypatch, mutation):
+    from src.engine.lifecycle.broker_cost_reconciliation import receipt_path
+    day, path = _native_fact_projection(tmp_path, monkeypatch)
+    target = path.with_suffix('.fact_projection.json')
+    if mutation == 'missing':
+        target.unlink()
+    elif mutation in {'bytes', 'generation'}:
+        raw = target.read_bytes()
+        if mutation == 'generation':
+            value = json.loads(raw)
+            value['sections']['recent_trades'][0]['buy_qty'] = 2
+            value['artifact_sha256'] = report_mod._canonical_sha256({k:v for k,v in value.items() if k!='artifact_sha256'})
+            raw = json.dumps(value).encode()
+        target.write_bytes(raw + b' ')
+    elif mutation == 'cost':
+        cost = receipt_path(tmp_path, day, '1')
+        cost.parent.mkdir(parents=True)
+        cost.write_text('{"corrected":1}')
+    elif mutation == 'identity':
+        with path.open('ab') as handle:
+            handle.write(b' ')
+    elif mutation == 'wrong_date':
+        day = '2026-10-07'
+    elif mutation == 'wrong_path':
+        path = tmp_path/'other.json'
+    elif mutation == 'symlink':
+        other = path.with_suffix('.saved')
+        path.rename(other)
+        path.symlink_to(other)
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day, path)
+
+
+def test_native_fact_projection_source_survives_lossless_archive(tmp_path, monkeypatch):
+    from src.engine import compress_db_backfilled_files as archive
+    day, path = _native_fact_projection(tmp_path, monkeypatch)
+    before = report_mod._load_completion_fact_projection(day, path)['_native_source_proof']
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', path.parent)
+    for source in (path, path.with_suffix('.completed_projection.json'), path.with_suffix('.fact_projection.json')):
+        assert archive._gzip_file(source, dry_run=False)[0]
+    after = report_mod._load_completion_fact_projection(day, path)['_native_source_proof']
+    assert before == after
+
+
+def test_native_fact_projection_rejects_unentered_display_scope(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match='fact_projection_census_invalid'):
+        _native_fact_projection(tmp_path, monkeypatch, scope='all')
+
+
+def _original_native_fact_source(path):
+    """Keep the fixture's original raw/projection bytes, with the old v1 seal."""
+    from src.engine.lifecycle import holding_window_generation as window
+    sidecar = path.with_suffix('.completed_projection.json')
+    completed = json.loads(sidecar.read_bytes())
+    path.with_suffix('.fact_projection.json').unlink()
+    window.seal_dependency_receipt(sidecar, completed)
+
+
+def test_original_native_stream_restores_binding_without_rewriting_historical_sources(tmp_path, monkeypatch):
+    from src.engine.scalping import initial_quantity_policy as quantity
+    from src.engine import log_archive_service as archive
+    import hashlib
+    day, path = _native_fact_projection(tmp_path, monkeypatch)
+    _original_native_fact_source(path)
+    files = [path, path.with_suffix('.completed_projection.json'),
+             path.with_suffix('.completed_projection.json.dependencies.json')]
+    original = {str(file): hashlib.sha256(file.read_bytes()).hexdigest() for file in files}
+    quality = {}
+    facts, warnings = report_mod._build_trade_fact_rows(day, completion_snapshot=path, completion_census_quality=quality)
+    assert len(facts) == 2 and warnings == []
+    proof = quality['completion_snapshot_source']
+    assert proof['source_basis'] == 'native_original_snapshot_stream' and proof['fact_projection'] is None
+    assert facts[0]['completion_census_run_id'] == quality['run_id']
+    assert facts[0]['completion_census_projection_sha256'] == quality['projection_sha256']
+    assert (facts[0]['profit_rate'], facts[0]['realized_pnl_krw']) == (None, None)
+    report_mod._write_status(day, dict(status='succeeded', completed_census_run_ids=[quality['run_id']],
+        completed_census_projection_sha256=[quality['projection_sha256']],
+        actual_cost_source_generation=quality['actual_cost_source_generation'], completion_snapshot_source=proof))
+    monkeypatch.setattr(quantity, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', path.parent)
+    monkeypatch.setattr(report_mod, '_stream_original_fact_projection', lambda *a: pytest.fail('historical source rescanned'))
+    monkeypatch.setattr(report_mod, 'load_monitor_snapshot', lambda *a: pytest.fail('historical source decoded'))
+    assert report_mod._saved_fact_generation_issue(day) is None
+    assert quantity._quantity_fact_generation_issue(day) is None
+    assert {str(file): hashlib.sha256(file.read_bytes()).hexdigest() for file in files} == original
+    assert not path.with_suffix('.fact_projection.json').exists()
+
+
+def test_original_native_stream_rejects_display_truncation(tmp_path, monkeypatch):
+    day, path = _native_fact_projection(tmp_path, monkeypatch, count=303)
+    _original_native_fact_source(path)
+    with pytest.raises(report_mod.FactSyncSourceError, match='legacy_display_census_unverified'):
+        report_mod._load_completion_fact_projection(day, path)
+
+
+def test_native_fact_sync_cli_passes_explicit_source_only_when_requested(monkeypatch):
+    calls = []
+    monkeypatch.setattr(report_mod, 'sync_trade_performance_for_date', lambda day, **kw: calls.append((day,kw)) or {})
+    path = '/native/trade_review_2026-10-08.json'
+    assert report_mod.main(['--date', '2026-10-08', '--completion-snapshot', path]) == 0
+    from pathlib import Path
+    assert calls == [('2026-10-08', {'completion_snapshot': Path(path)})]
+
+
+@pytest.mark.parametrize('failure', [None, 'missing', 'changed_before_write', 'changed_during_aggregate', 'changed_during_write'])
+def test_native_fact_sync_preserves_database_on_invalid_source_and_null_costs(tmp_path, monkeypatch, failure):
+    from datetime import date
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from src.database.models import TradePerformanceFact, StrategyPositionPerformanceDaily
+    from src.engine.scalping import scale_in_split_order_plan
+    day, path = _native_fact_projection(tmp_path, monkeypatch)
+    engine = create_engine('sqlite:///:memory:')
+    TradePerformanceFact.__table__.create(engine)
+    StrategyPositionPerformanceDaily.__table__.create(engine)
+    class DB:
+        def init_db(self): pass
+        def analyze_performance_tables(self): pass
+        @contextmanager
+        def get_session(self):
+            with Session(engine) as session, session.begin():
+                yield session
+    monkeypatch.setattr(report_mod, '_DB', DB())
+    monkeypatch.setattr(scale_in_split_order_plan, '_query_actual_fill_inventory', lambda _: [])
+    with Session(engine) as session, session.begin():
+        session.add(TradePerformanceFact(recommendation_id=99, rec_date=date.fromisoformat(day),
+            stock_code='005930', strategy='SCALPING', position_tag='SCANNER', status='HOLDING'))
+    if failure == 'missing':
+        path.with_suffix('.fact_projection.json').unlink()
+    elif failure == 'changed_before_write':
+        original = report_mod._validate_fact_batch
+        def changed(*args, **kwargs):
+            with path.with_suffix('.fact_projection.json').open('ab') as handle:
+                handle.write(b' ')
+            return original(*args, **kwargs)
+        monkeypatch.setattr(report_mod, '_validate_fact_batch', changed)
+    elif failure == 'changed_during_aggregate':
+        original = report_mod._aggregate_daily_rows
+        def changed(*args, **kwargs):
+            with path.with_suffix('.fact_projection.json').open('ab') as handle:
+                handle.write(b' ')
+            return original(*args, **kwargs)
+        monkeypatch.setattr(report_mod, '_aggregate_daily_rows', changed)
+    elif failure == 'changed_during_write':
+        original = Session.bulk_insert_mappings
+        def changed(session, *args, **kwargs):
+            value = original(session, *args, **kwargs)
+            with path.with_suffix('.fact_projection.json').open('ab') as handle:
+                handle.write(b' ')
+            return value
+        monkeypatch.setattr(Session, 'bulk_insert_mappings', changed)
+    if failure:
+        with pytest.raises(report_mod.FactSyncSourceError, match='source_blocked'):
+            report_mod.sync_trade_performance_for_date(day, completion_snapshot=path)
+        with Session(engine) as session:
+            assert [row.recommendation_id for row in session.query(TradePerformanceFact)] == [99]
+        assert json.loads(report_mod._status_path(day).read_bytes())['status'] == 'source_blocked'
+    else:
+        result = report_mod.sync_trade_performance_for_date(day, completion_snapshot=path)
+        assert result['status'] == 'succeeded' and result['fact_count'] == 2
+        with Session(engine) as session:
+            assert session.get(TradePerformanceFact, 99) is None
+            completed = session.get(TradePerformanceFact, 1)
+            assert (completed.profit_rate, completed.realized_pnl_krw) == (None, None)
+        assert report_mod._saved_fact_generation_issue(day) is None
 
 
 def test_build_trade_fact_rows_normalizes_strategy_and_exit_fields(monkeypatch):
@@ -459,11 +681,11 @@ def test_saved_fact_generation_rejects_rewritten_trade_review(monkeypatch, tmp_p
             snapshot["meta"]["completed_census_manifest"]["projection_sha256"]
         ],
     })
-    assert report_mod._saved_fact_generation_issue(day) is None
+    assert report_mod._saved_fact_generation_issue(day, snapshot=snapshot) is None
 
     snapshot["meta"]["trailing_event_source_receipts"] = [{"logical_sha256": "new"}]
     snapshot["meta"]["completed_census_manifest"] = completed_census_manifest(snapshot)
-    assert report_mod._saved_fact_generation_issue(day) == "stale_fact_source_generation"
+    assert report_mod._saved_fact_generation_issue(day, snapshot=snapshot) == "stale_fact_source_generation"
 
 
 def test_scanner_provenance_never_uses_future_promotion_event():

@@ -7,7 +7,9 @@ import copy
 import inspect
 import os
 import re
+import stat
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,30 @@ ASYNC_RESPONSE_RE = re.compile(
     r"output_file=(?P<output_file>.+)$"
 )
 TAIL_READ_BYTES = 256 * 1024
+
+
+def _read_phase_manifest_bytes(path: Path, *, limit: int) -> bytes:
+    """Read bounded phase metadata through one stable, regular descriptor."""
+    path = Path(path)
+    identity = lambda value: tuple(getattr(value, name) for name in (
+        'st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+        raise ValueError('snapshot_phase_manifest_untrusted_or_oversized')
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or identity(opened) != identity(before):
+            raise ValueError('snapshot_phase_manifest_changed_before_read')
+        with os.fdopen(descriptor, 'rb', closefd=False) as handle:
+            raw = handle.read(limit + 1)
+        if (len(raw) > limit or len(raw) != opened.st_size
+                or identity(os.fstat(descriptor)) != identity(opened)
+                or identity(path.lstat()) != identity(opened)):
+            raise ValueError('snapshot_phase_manifest_changed_or_oversized')
+        return raw
+    finally:
+        os.close(descriptor)
 
 
 def completion_artifact_path(target_date: str, profile: str) -> Path:
@@ -77,6 +103,7 @@ def normalize_result_payload(
     worker_pid: str | None = None,
     output_file: str | None = None,
     log_file: str | None = None,
+    postclose_phase: str = 'all',
 ) -> dict[str, Any]:
     payload = load_json_line(result_file)
     text = str(output_text or "")
@@ -104,6 +131,35 @@ def normalize_result_payload(
     snapshots = payload.get("snapshots")
     if not isinstance(snapshots, dict):
         snapshots = {}
+    metadata={'profile','io_delay_sec','trend_max_dates','io_delay_sec_per_stage',
+              'stage_metrics','snapshot_manifest','postclose_phase','completion_scope',
+              'full_snapshot_native_verified'}
+    if status=='success' and postclose_phase!='all':
+        prefix={'trade_review','post_sell_feedback','missed_entry_counterfactual'}
+        expected=prefix if postclose_phase=='completion_prefix' else prefix|{'holding_exit_observation'}
+        manifest=Path(str(snapshots.get('snapshot_manifest') or ''))
+        suffix='_completion_prefix' if postclose_phase=='completion_prefix' else ''
+        manifest_valid=False
+        try:
+            raw=_read_phase_manifest_bytes(manifest,limit=1024*1024)
+            body=json.loads(raw)
+            manifest_valid=(isinstance(body,dict) and body.get('target_date')==target_date
+                and body.get('profile')=='postclose_exit'
+                and body.get('postclose_phase')==postclose_phase
+                and set(body.get('snapshot_kinds') or [])==expected
+                and set(body.get('snapshot_paths') or {})==expected
+                and all(body['snapshot_paths'][key]==snapshots[key] for key in expected))
+        except (OSError,ValueError,TypeError,KeyError):
+            pass
+        if (profile!='postclose_exit' or postclose_phase not in {'completion_prefix','holding_suffix'}
+                or payload.get('target_date')!=target_date
+                or snapshots.get('postclose_phase')!=postclose_phase
+                or set(snapshots)-metadata!=expected
+                or manifest.name!=f'monitor_snapshot_manifest_{target_date}_postclose_exit{suffix}.json'
+                or not manifest_valid
+                or (postclose_phase=='holding_suffix' and snapshots.get('full_snapshot_native_verified') is not True)):
+            status='failed'
+            payload.update(error_kind='SnapshotPhaseContractInvalid',error='snapshot_phase_output_or_manifest_invalid')
 
     next_prompt_hint = {
         "success": "snapshot 결과를 확인하고 다음 판정 프롬프트를 이어서 입력하세요.",
@@ -132,6 +188,9 @@ def normalize_result_payload(
         "status": status,
         "target_date": target_date,
         "profile": profile,
+        "postclose_phase": postclose_phase,
+        "completion_scope": snapshots.get('completion_scope'),
+        "full_snapshot_native_verified": snapshots.get('full_snapshot_native_verified') is True,
         "started_at": started_at,
         "finished_at": finished_at,
         "duration_sec": payload.get("duration_sec"),
@@ -147,14 +206,7 @@ def normalize_result_payload(
                 key
                 for key in snapshots
                 if key
-                not in {
-                    "profile",
-                    "io_delay_sec",
-                    "trend_max_dates",
-                    "io_delay_sec_per_stage",
-                    "stage_metrics",
-                    "snapshot_manifest",
-                }
+                not in metadata
             ]
         ),
         "snapshots": snapshots,
@@ -166,9 +218,14 @@ def normalize_result_payload(
 def write_completion_artifact(path: Path | str, payload: dict[str, Any]) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    fd,name=tempfile.mkstemp(prefix='.'+target.name+'.',dir=target.parent)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as handle:
+            json.dump(payload,handle,ensure_ascii=False,indent=2)
+            handle.flush();os.fsync(handle.fileno())
+        os.replace(name,target)
+    finally:
+        Path(name).unlink(missing_ok=True)
     return target
 
 

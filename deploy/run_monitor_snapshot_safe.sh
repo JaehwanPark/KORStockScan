@@ -16,6 +16,12 @@ bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "run_monitor_snapshot_safe" "$LOG_F
 TIMEOUT_SEC="${MONITOR_SNAPSHOT_TIMEOUT_SEC:-1200}"
 ALLOW_PREOPEN_WITH_BOT="${ALLOW_PREOPEN_FULL_BUILD_WITH_BOT:-0}"
 PROFILE="${MONITOR_SNAPSHOT_PROFILE:-full}"
+POSTCLOSE_PHASE="${MONITOR_SNAPSHOT_POSTCLOSE_PHASE:-all}"
+case "$POSTCLOSE_PHASE" in all|completion_prefix|holding_suffix) ;; *) echo "[ERROR] invalid postclose snapshot phase" >&2; exit 2 ;; esac
+if [[ "$POSTCLOSE_PHASE" != "all" && "$PROFILE" != "postclose_exit" ]]; then
+  echo "[ERROR] phased snapshots require postclose_exit profile" >&2
+  exit 2
+fi
 IO_DELAY_SEC="${MONITOR_SNAPSHOT_IO_DELAY_SEC:-0}"
 START_JITTER_SEC="${MONITOR_SNAPSHOT_START_JITTER_SEC:-0}"
 NOTIFY_ADMIN=0
@@ -57,13 +63,18 @@ mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/tmp"
 cd "$PROJECT_DIR"
 
 SAFE_PROFILE="${PROFILE//-/_}"
+STATE_PROFILE="$SAFE_PROFILE"
+if [[ "$POSTCLOSE_PHASE" != "all" ]]; then STATE_PROFILE="${SAFE_PROFILE}_${POSTCLOSE_PHASE}"; fi
 MANIFEST_PATH="$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_${SAFE_PROFILE}.json"
-if [[ -z "$COOLDOWN_STATE_FILE" ]]; then
-  COOLDOWN_STATE_FILE="$PROJECT_DIR/tmp/run_monitor_snapshot_${SAFE_PROFILE}_success.state"
+if [[ "$POSTCLOSE_PHASE" == "completion_prefix" ]]; then
+  MANIFEST_PATH="$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_${STATE_PROFILE}.json"
 fi
-ASYNC_PID_FILE="${MONITOR_SNAPSHOT_ASYNC_PID_FILE:-$PROJECT_DIR/tmp/run_monitor_snapshot_${SAFE_PROFILE}_${TARGET_DATE}.pid}"
-ASYNC_RESULT_HINT="${MONITOR_SNAPSHOT_ASYNC_RESULT_HINT:-$PROJECT_DIR/tmp/run_monitor_snapshot_${SAFE_PROFILE}_${TARGET_DATE}.result}"
-COMPLETION_ARTIFACT_FILE="${MONITOR_SNAPSHOT_COMPLETION_ARTIFACT_FILE:-$PROJECT_DIR/tmp/monitor_snapshot_completion_${TARGET_DATE}_${SAFE_PROFILE}.json}"
+if [[ -z "$COOLDOWN_STATE_FILE" ]]; then
+  COOLDOWN_STATE_FILE="$PROJECT_DIR/tmp/run_monitor_snapshot_${STATE_PROFILE}_success.state"
+fi
+ASYNC_PID_FILE="${MONITOR_SNAPSHOT_ASYNC_PID_FILE:-$PROJECT_DIR/tmp/run_monitor_snapshot_${STATE_PROFILE}_${TARGET_DATE}.pid}"
+ASYNC_RESULT_HINT="${MONITOR_SNAPSHOT_ASYNC_RESULT_HINT:-$PROJECT_DIR/tmp/run_monitor_snapshot_${STATE_PROFILE}_${TARGET_DATE}.result}"
+COMPLETION_ARTIFACT_FILE="${MONITOR_SNAPSHOT_COMPLETION_ARTIFACT_FILE:-$PROJECT_DIR/tmp/monitor_snapshot_completion_${TARGET_DATE}_${STATE_PROFILE}.json}"
 
 # PREOPEN(08:00~09:00 KST)에는 bot_main 동작 중 full build를 막는다.
 KST_HM="$(TZ=Asia/Seoul date +%H%M)"
@@ -141,7 +152,7 @@ check_recent_success() {
 
 build_throttled_command() {
   local -n output_cmd="$1"
-  output_cmd=(env PYTHONPATH=. MONITOR_SNAPSHOT_FROM_WRAPPER=1 "$VENV_PY" -m src.engine.run_monitor_snapshot --date "$TARGET_DATE" --profile "$PROFILE" --io-delay-sec "$IO_DELAY_SEC" --skip-lock)
+  output_cmd=(env PYTHONPATH=. MONITOR_SNAPSHOT_FROM_WRAPPER=1 "$VENV_PY" -m src.engine.run_monitor_snapshot --date "$TARGET_DATE" --profile "$PROFILE" --postclose-phase "$POSTCLOSE_PHASE" --io-delay-sec "$IO_DELAY_SEC" --skip-lock)
   if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then
     output_cmd=(ionice -c "$IONICE_CLASS" -n "$IONICE_LEVEL" -t "${output_cmd[@]}")
   fi
@@ -197,6 +208,7 @@ snapshot_kinds = [
         "io_delay_sec_per_stage",
         "stage_metrics",
         "snapshot_manifest",
+        "postclose_phase", "completion_scope", "full_snapshot_native_verified",
     }
 ]
 print(
@@ -353,15 +365,31 @@ wait_for_async_completion() {
     waited=$((waited + sleep_sec))
   done
 
-  if ! wait "$worker_pid"; then
+  if wait "$worker_pid"; then
+    :
+  else
     local worker_status=$?
-    write_completion_artifact "" "$output_file" "$worker_pid"
+    write_completion_artifact "failed" "$output_file" "$worker_pid"
     echo "[ERROR] monitor snapshot async worker failed status=${worker_status} pid=${worker_pid}"
     return "$worker_status"
   fi
 
   write_completion_artifact "" "$output_file" "$worker_pid"
-  artifact_status="$("$VENV_PY" - "$COMPLETION_ARTIFACT_FILE" <<'PY'
+  artifact_status="$(completion_artifact_status)"
+  case "$artifact_status" in
+    success|skipped)
+      echo "[INFO] monitor snapshot async completed status=${artifact_status} pid=${worker_pid}"
+      return 0
+      ;;
+    *)
+      echo "[ERROR] monitor snapshot async completed with non-success status=${artifact_status} pid=${worker_pid}"
+      return 1
+      ;;
+  esac
+}
+
+completion_artifact_status() {
+  "$VENV_PY" - "$COMPLETION_ARTIFACT_FILE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -374,17 +402,6 @@ except Exception:
 else:
     print(str(payload.get("status") or "unknown").lower())
 PY
-)"
-  case "$artifact_status" in
-    success|skipped)
-      echo "[INFO] monitor snapshot async completed status=${artifact_status} pid=${worker_pid}"
-      return 0
-      ;;
-    *)
-      echo "[ERROR] monitor snapshot async completed with non-success status=${artifact_status} pid=${worker_pid}"
-      return 1
-      ;;
-  esac
 }
 
 write_completion_artifact() {
@@ -398,13 +415,14 @@ write_completion_artifact() {
     result_file="$(cat "$ASYNC_RESULT_HINT" 2>/dev/null || true)"
   fi
 
-  env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$PROFILE" "$COMPLETION_ARTIFACT_FILE" "$result_file" "$status" "$worker_pid" "$LOG_FILE" <<'PY'
+  env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$PROFILE" "$COMPLETION_ARTIFACT_FILE" "$result_file" "$status" "$worker_pid" "$LOG_FILE" "$POSTCLOSE_PHASE" "$PROJECT_DIR" <<'PY'
 from pathlib import Path
 import sys
 
 from src.engine.monitor_snapshot_runtime import normalize_result_payload, write_completion_artifact
 
 target_date, profile, artifact_file, result_file, status, worker_pid, log_file = sys.argv[1:8]
+postclose_phase,project_dir=sys.argv[8:10]
 result_text = ""
 if result_file:
     result_path = Path(result_file)
@@ -419,8 +437,15 @@ normalized = normalize_result_payload(
     worker_pid=worker_pid or None,
     output_file=result_file or None,
     log_file=log_file or None,
+    postclose_phase=postclose_phase,
 )
 write_completion_artifact(Path(artifact_file), normalized)
+if (postclose_phase=='holding_suffix' and normalized['status']=='success'
+        and normalized.get('full_snapshot_native_verified') is True):
+    # Keep the phase receipt and update the existing full-completion pointer
+    # only after the native suffix producer verified all four snapshots.
+    canonical=Path(project_dir)/'tmp'/f'monitor_snapshot_completion_{target_date}_postclose_exit.json'
+    write_completion_artifact(canonical,normalized)
 PY
 }
 
@@ -537,10 +562,16 @@ run_snapshot_once() {
     fi
 
     print_summary "$output_file"
-    if [[ "$SNAPSHOT_STATUS" -eq 0 && "$snapshot_skipped" -ne 1 ]]; then
+    write_completion_artifact "" "$output_file" "$$"
+    local completion_status
+    completion_status="$(completion_artifact_status)"
+    if [[ "$completion_status" != "success" && "$completion_status" != "skipped" ]]; then
+      echo "[ERROR] snapshot output failed completion validation status=$completion_status"
+      return 1
+    fi
+    if [[ "$completion_status" == "success" && "$snapshot_skipped" -ne 1 ]]; then
       touch "$COOLDOWN_STATE_FILE"
     fi
-    write_completion_artifact "" "$output_file" "$$"
     if [[ "$KEEP_OUTPUT_FILE" != "1" ]]; then
       rm -f "$output_file"
     fi

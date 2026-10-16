@@ -17,6 +17,20 @@ VALID_OUTCOMES = {'paired', 'partial_unfilled', 'modeled_no_fill'}
 _VERIFIED_EXECUTIONS = OrderedDict()
 
 
+def economic_sample_status(report):
+    """Separate absent eligible trades from evidence rejected by readers."""
+    if report['trades']:
+        return 'cost_eligible'
+    excluded = report['census']['excluded']
+    costs = {'terminal_cost_or_quantity_missing', 'actual_cost_identity_or_amount_invalid',
+             'actual_cost_provenance_missing', 'terminal_cost_contract_mismatch'}
+    if any(excluded.get(key, 0) for key in costs):
+        return 'cost_missing'
+    benign = {'not_completed', 'other_strategy', 'other_custody', 'scale_in_position',
+              'before_refresh_start', 'duplicate_fact', 'date_outside_baseline_or_as_of'}
+    return 'source_gap' if any(n for key,n in excluded.items() if key not in benign) else 'valid_empty'
+
+
 def _execution_key(trade,path,source,grid):
     from pathlib import Path
     import hashlib
@@ -98,7 +112,10 @@ def execution_case(trade, path, source, *, mode, shape, horizon, reserve=5):
     # Incumbent actual fills remain a control. Known sampling/clock loss must
     # never become counterfactual no-fill or zero economics.
     if not (shape=='parent' and horizon is None and mode=='parent_5stage'):
-        issue=_capture_source_issue(source)
+        observed_horizon = (horizon if type(horizon) is int else
+            start.get('total_wait_sec') if shape != 'parent' and horizon is None else 1200)
+        issue=_capture_source_issue(source, horizon_seconds=observed_horizon,
+                                    order_start_epoch=start['at'].timestamp())
         if issue:
             return {'status':'source_gap','reason':issue}
     if shape=='parent' and horizon is None:
@@ -321,8 +338,9 @@ def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, 
                 parent_policy_bound_trade_count=len(bound),excluded_trade_ids=excluded,purged_trade_ids=purged,
                 train_trade_ids=[r['trade_id'] for r in train],holdout_trade_ids=[r['trade_id'] for r in test],
                 policy_pid_status='verified_archive' if pid_ok else 'unobservable',
-                trade_policy_binding_status='valid_empty' if not report['trades'] else 'partial' if excluded else 'bound',
-                economic_sample_status='cost_eligible' if report['trades'] else 'cost_missing' if any(report['census']['excluded'].get(k,0) for k in ('terminal_cost_or_quantity_missing','actual_cost_identity_or_amount_invalid','actual_cost_provenance_missing','terminal_cost_contract_mismatch')) else 'source_gap' if report['census']['excluded'].get('persisted_fact_generation_invalid') else 'valid_empty',
+                trade_policy_binding_status=('valid_empty' if economic_sample_status(report)=='valid_empty'
+                    else 'source_gap') if not report['trades'] else 'partial' if excluded else 'bound',
+                economic_sample_status=economic_sample_status(report),
                 runtime_apply_allowed=False,runtime_effect=False)
 
 

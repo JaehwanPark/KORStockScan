@@ -556,14 +556,204 @@ def _main_stop_semantics(root, source_date, *, now):
             or any(n and (key.startswith('source_gap:') or key=='actual_cost_or_terminal_gap')
                    for key,n in c.get('source_census',{}).items()) for c in bundle['cells'].values())
             else 'baseline_carry' if all(c['status']!='selected' for c in bundle['cells'].values()) else 'selected')
-        return dict(meta, status="published_policy", report_sha256=before,
+        trailing = dict(status='not_observed', findings=[])
+        holding_path = data_root/'report/monitor_snapshots'/f'holding_exit_observation_{source_date}.json'
+        if holding_path.exists():
+            from src.engine.automation.main_trailing_research_handoff import observe_extension
+            try:
+                holding, _ = _semantic_object(holding_path, limit=4*1024*1024)
+                trailing = observe_extension(holding, target_date=bundle['target_date'],
+                    required=(holding.get('meta') or {}).get('snapshot_profile') == 'postclose_exit')
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                trailing = dict(status='source_invalid', findings=[str(exc)])
+        findings = list(consumed['findings']) + [
+            'main_trailing_research_contract_invalid:' + reason for reason in trailing['findings']]
+        return dict(meta, status='source_invalid' if trailing['findings'] else "published_policy", report_sha256=before,
             target_date=bundle["target_date"], policy_sha256=bundle["policy_sha256"],
-            native_generation=pointer["generation"], native_validated=True,
-            observation_complete=True, actual_pid_consumed=consumed['actual_pid_consumed'],
-            runtime_consumption=consumed, findings=consumed['findings'],
+            native_generation=pointer["generation"], main_stop_native_validated=True,
+            native_validated=not bool(trailing['findings']),
+            observation_complete=not bool(trailing['findings']), actual_pid_consumed=consumed['actual_pid_consumed'],
+            runtime_consumption=consumed, findings=findings, all_scope_trailing_generation=trailing,
             comparison_state=comparison,policy_states=dict(comparison_state=comparison))
     except (OSError, ValueError, TypeError, KeyError):
         return dict(meta, status="source_invalid", findings=["main_stop_committed_binding_invalid"])
+
+
+def _quantity_stage_observation(stage, source_date, read):
+    """Observe issued bounded generations; full replay remains a producer gate."""
+    from src.engine.scalping.initial_quantity_policy import _digest, REPORT_SCHEMA
+    schema = stage.get('schema_version')
+    refresh = schema == 'initial_entry_quantity_refresh_stage_v1'
+    if (schema not in {'initial_entry_quantity_stage_terminal_v1', 'initial_entry_quantity_refresh_stage_v1'}
+            or stage.get('source_date') != source_date
+            or stage.get('stage') != ('initial_entry_quantity_refresh' if refresh else 'initial_entry_quantity_type_policy')
+            or stage.get('generation_kind') != ('refresh' if refresh else 'initial_completed_trade_seed')
+            or stage.get('stage_status') != 'complete_source_only' or stage.get('terminal') is not True
+            or type(stage.get('all_completed_initial_trades')) is not int
+            or stage['all_completed_initial_trades'] < 0
+            or any(stage.get(key) is not False for key in ('runtime_apply_allowed', 'runtime_effect', 'actual_order_submitted'))
+            or stage.get('receipt_content_sha256') != _digest({k:v for k,v in stage.items() if k != 'receipt_content_sha256'})):
+        raise ValueError('quantity_stage_envelope_invalid')
+    def child(name, hash_name=None):
+        path = Path(stage[name + '_path'])
+        if not path.is_absolute(): raise ValueError('quantity_stage_child_path_invalid')
+        payload = read(path, limit=4*1024*1024, expected_sha=stage[name + '_file_sha256'])
+        if hash_name is not None:
+            if (payload.get(hash_name) != _digest({k:v for k,v in payload.items() if k != hash_name})
+                    or payload[hash_name] != stage[name + '_content_sha256']):
+                raise ValueError('quantity_stage_child_content_invalid')
+        return payload
+    report = child('report', 'report_content_sha256')
+    if (report.get('schema_version') != REPORT_SCHEMA
+            or report.get('generation_kind') != ('refresh_post_apply_replay' if refresh else 'initial_completed_trade_seed')
+            or not isinstance(report.get('trades'), list)
+            or any(report.get(key) is not False for key in ('runtime_apply_allowed', 'runtime_effect', 'actual_order_submitted'))
+            or report.get('source_date') != source_date
+            or (report.get('census') or {}).get('all_completed_initial_trades') != stage.get('all_completed_initial_trades')):
+        raise ValueError('quantity_stage_report_binding_invalid')
+    result = {'report': report}
+    if refresh:
+        parent = child('parent_policy', 'policy_content_sha256')
+        from src.engine.scalping.initial_quantity_activation import refresh_parent_policy_valid
+        if (not refresh_parent_policy_valid(parent)
+                or parent['effective_from'] > source_date):
+            raise ValueError('quantity_stage_parent_contract_invalid')
+        evaluation = child('evaluation')
+        if (stage.get('applied_policy_lineage_schema') != 'initial_quantity_trade_policy_binding_v1'
+                or stage.get('decision') not in {'carry_parent', 'eligible_source_only'}
+                or _digest(evaluation) != stage['evaluation_content_sha256']
+                or evaluation.get('source_date') != source_date
+                or evaluation.get('state') != stage.get('decision')
+                or evaluation.get('report_content_sha256') != report['report_content_sha256']
+                or evaluation.get('parent_policy_content_sha256') != parent['policy_content_sha256']):
+            raise ValueError('quantity_stage_evaluation_binding_invalid')
+        timeout = child('timeout_research', 'report_content_sha256')
+        if (stage.get('timeout_research_status') != 'source_bound'
+                or timeout.get('source_date') != source_date
+                or timeout.get('generation_kind') != 'refresh_post_apply_timeout_research'
+                or any(timeout.get(key) != report.get(key) for key in ('census', 'quantity_type_counts', 'pipeline_source_receipts'))):
+            raise ValueError('quantity_stage_timeout_binding_invalid')
+        result.update(parent_policy=parent, evaluation=evaluation)
+        if stage.get('decision') == 'eligible_source_only':
+            candidate = child('candidate', 'policy_content_sha256')
+            if (stage.get('candidate_status') != 'source_only'
+                    or candidate.get('source_date') != source_date
+                    or candidate.get('report_content_sha256') != report['report_content_sha256']
+                    or candidate.get('evaluation_content_sha256') != stage['evaluation_content_sha256']
+                    or candidate.get('parent_policy_content_sha256') != parent['policy_content_sha256']
+                    or candidate.get('runtime_apply_allowed') is not False
+                    or candidate.get('runtime_effect') is not False):
+                raise ValueError('quantity_stage_candidate_binding_invalid')
+            result['candidate'] = candidate
+        elif any(key.startswith('candidate_') for key in stage):
+            raise ValueError('quantity_stage_candidate_unexpected')
+    else:
+        candidate = child('candidate_policy', 'policy_content_sha256')
+        if (candidate.get('source_date') != source_date
+                or candidate.get('report_content_sha256') != report['report_content_sha256']
+                or candidate.get('runtime_apply_allowed') is not False):
+            raise ValueError('quantity_seed_candidate_binding_invalid')
+        result['candidate'] = candidate
+    following_status = stage.get('following_bar_source_status')
+    if stage.get('following_bar_source_path') is not None:
+        following = child('following_bar_source', 'report_content_sha256')
+        if (following.get('source_date') != source_date
+                or following.get('replay_content_sha256') != report['report_content_sha256']
+                or following.get('input_manifest_sha256') != report['census'].get('input_manifest_sha256')
+                or (refresh and following_status != 'source_bound')):
+            raise ValueError('quantity_stage_following_binding_invalid')
+    elif refresh and following_status not in {'no_winners', 'cap_profile_only'}:
+        raise ValueError('quantity_stage_following_missing')
+    elif refresh:
+        winners = [row for row in report.get('trades', [])
+                   if row.get('actual_net_pnl_krw', 0) > 0 and row.get('actual_profit_rate', 0) > 0]
+        from src.engine.scalping.initial_quantity_policy import REPAIR_VERSION
+        if ((following_status == 'no_winners' and winners)
+                or (following_status == 'cap_profile_only'
+                    and (not winners or report.get('evaluation_algorithm') != REPAIR_VERSION))):
+            raise ValueError('quantity_stage_following_population_invalid')
+    return result
+
+
+def _quantity_current_observation(current_path, target_date, read):
+    """Bound the selected policy ancestry without invoking PREOPEN validation."""
+    from src.engine.scalping.initial_quantity_policy import _digest
+    from src.engine.scalping.initial_quantity_activation import (
+        CURRENT_SCHEMA, CURRENT_V2_SCHEMA, ENV_FILE, ENV_SHA, refresh_parent_policy_valid,
+    )
+    seen = set()
+    cached = getattr(read, '_quantity_current_observations', None)
+    if cached is None:
+        cached = {}
+        read._quantity_current_observations = cached
+    def observe(path):
+        path = Path(path)
+        if path in cached: return cached[path]
+        if path in seen or len(seen) >= 32 or not path.is_absolute():
+            raise ValueError('quantity_current_ancestry_invalid')
+        seen.add(path)
+        current = read(path)
+        if (current.get('schema_version') not in {CURRENT_SCHEMA, CURRENT_V2_SCHEMA}
+                or current.get('current_content_sha256') != _digest({k:v for k,v in current.items() if k != 'current_content_sha256'})):
+            raise ValueError('quantity_current_envelope_invalid')
+        policy_path, stage_path = Path(current['policy_file']), Path(current['stage_file'])
+        if not policy_path.is_absolute() or not stage_path.is_absolute():
+            raise ValueError('quantity_current_child_path_invalid')
+        policy = read(policy_path, expected_sha=current['policy_file_sha256'])
+        stage = read(stage_path, expected_sha=current['stage_file_sha256'])
+        if (not refresh_parent_policy_valid(policy)
+                or any(policy.get(k) != current.get(k) for k in ('source_date', 'effective_from', 'policy_content_sha256'))
+                or stage.get('receipt_content_sha256') != current['stage_receipt_content_sha256']
+                or policy.get('candidate_stage_receipt_content_sha256') != current['stage_receipt_content_sha256']):
+            raise ValueError('quantity_current_policy_binding_invalid')
+        issued = _quantity_stage_observation(stage, current['source_date'], read)
+        candidate_name = 'candidate' if stage.get('generation_kind') == 'refresh' else 'candidate_policy'
+        if (policy.get('candidate_policy_file_sha256') != stage.get(candidate_name + '_file_sha256')
+                or policy.get('candidate_policy_content_sha256') != stage.get(candidate_name + '_content_sha256')
+                or policy.get('report_content_sha256') != stage.get('report_content_sha256')
+                or policy.get('input_manifest_sha256') != issued['report']['census'].get('input_manifest_sha256')
+                or policy.get('source_date') != issued['candidate'].get('source_date')
+                or policy.get('effective_from') != issued['candidate'].get('effective_from')
+                or policy.get('following_bar_source_content_sha256') != stage.get('following_bar_source_content_sha256')
+                or policy.get('all_completed_initial_trades') != stage.get('all_completed_initial_trades')):
+            raise ValueError('quantity_current_candidate_binding_invalid')
+        if current['schema_version'] == CURRENT_V2_SCHEMA:
+            choices = issued['candidate']['type_policies']
+            if (set(policy['type_policies']) != set(choices)
+                    or any(any(row.get(key) != choices[name].get(key) for key in (
+                        'ratio_mode', 'selected_shape', 'timeout_mode', 'selected_total_wait_sec'))
+                        for name, row in policy['type_policies'].items())):
+                raise ValueError('quantity_current_selected_choices_invalid')
+            if stage.get('generation_kind') == 'refresh' and any(
+                    policy.get(key) != stage.get(key) for key in (
+                        'evaluation_content_sha256', 'timeout_research_content_sha256')):
+                raise ValueError('quantity_current_refresh_references_invalid')
+        if current['schema_version'] == CURRENT_V2_SCHEMA:
+            parent_path = Path(current['parent_current_file'])
+            parent = read(parent_path, expected_sha=current['parent_current_file_sha256'])
+            parent_env = observe(parent_path)
+            if (parent.get('current_content_sha256') != current['parent_current_sha256']
+                    or parent_env[ENV_FILE] != current['parent_policy_file']
+                    or parent_env[ENV_SHA] != current['parent_policy_file_sha256']
+                    or parent.get('policy_content_sha256') != current['parent_policy_content_sha256']
+                    or policy.get('parent_current_content_sha256') != current['parent_current_sha256']
+                    or policy.get('parent_policy_content_sha256') != current['parent_policy_content_sha256']):
+                raise ValueError('quantity_current_parent_binding_invalid')
+            if stage.get('generation_kind') == 'refresh' and (
+                    stage.get('parent_policy_path') != current['parent_policy_file']
+                    or stage.get('parent_policy_file_sha256') != current['parent_policy_file_sha256']
+                    or stage.get('parent_policy_content_sha256') != current['parent_policy_content_sha256']
+                    or parent['effective_from'] >= current['effective_from']):
+                raise ValueError('quantity_current_refresh_parent_invalid')
+        elif current.get('parent_current_sha256') is not None:
+            raise ValueError('quantity_baseline_parent_invalid')
+        cached[path] = {ENV_FILE: str(policy_path), ENV_SHA: current['policy_file_sha256']}
+        return cached[path]
+    result = observe(current_path)
+    selected = read(Path(result[ENV_FILE]))
+    if selected['effective_from'] > target_date:
+        raise ValueError('quantity_current_not_yet_effective')
+    return result
 
 
 def _initial_quantity_semantics_native(
@@ -573,12 +763,10 @@ def _initial_quantity_semantics_native(
     if source_date < "2026-09-28":
         return {"status": "not_required_before_introduction", "findings": []}
     from src.engine.scalping.initial_quantity_activation import (
-        ENV_FILE, ENV_SHA, selected_initial_quantity_env,
+        ENV_FILE, ENV_SHA,
     )
     from src.engine.scalping.initial_quantity_bundle_state import bundle_state_valid
-    from src.engine.scalping.initial_quantity_policy import (
-        refresh_quantity_stage_terminal_valid,
-    )
+    from src.engine.scalping.initial_quantity_policy import _digest
 
     current_path = root / "data/runtime/initial_quantity/current.json"
     if not current_path.is_file() or current_path.is_symlink():
@@ -596,7 +784,7 @@ def _initial_quantity_semantics_native(
             seen_current.add(current_path)
             current = read(current_path)
             effective = str(current.get("effective_from") or "")
-            selected_initial_quantity_env(current_path, effective)
+            _quantity_current_observation(current_path, effective, read)
             if effective <= source_date:
                 break
             parent = current.get("parent_current_file")
@@ -607,7 +795,7 @@ def _initial_quantity_semantics_native(
                     or not current_path.is_file()
                     or current_path.stat().st_size > 1024 * 1024):
                 raise ValueError("current_parent_untrusted")
-        env = selected_initial_quantity_env(current_path, source_date)
+        env = _quantity_current_observation(current_path, source_date, read)
         policy_path = Path(env[ENV_FILE])
         policy = read(policy_path)
         policy_sha = env[ENV_SHA]
@@ -625,7 +813,7 @@ def _initial_quantity_semantics_native(
                 raise ValueError("initial_quantity_ancestor_cycle_or_oversize")
             ancestors_seen.add(ancestor_path)
             ancestor = read(ancestor_path)
-            ancestor_env = selected_initial_quantity_env(ancestor_path, source_date)
+            ancestor_env = _quantity_current_observation(ancestor_path, source_date, read)
             ancestor_policy_path = Path(ancestor_env[ENV_FILE])
             ancestor_policy = read(ancestor_policy_path)
             verified_policies[ancestor_env[ENV_SHA]] = (ancestor_policy_path, ancestor_policy)
@@ -650,27 +838,87 @@ def _initial_quantity_semantics_native(
         "bundle_count": 0, "terminal_bundle_count": 0,
         "open_bundle_count": 0,
         "quantity_lineage_status": "not_observed",
+        "validation_scope": "bounded_issued_generations_and_policy_ancestry",
+        "full_source_revalidation_performed": False,
     }
-    from src.engine.scalping.initial_quantity_policy import committed_refresh_stage_path
+    output_dir = root / 'data/report/initial_entry_quantity_type_policy' / f'refresh_postclose_{source_date}'
+    stage_expected_sha = None
     try:
-        stage_path = committed_refresh_stage_path(root / "data/report/initial_entry_quantity_type_policy" / f"refresh_postclose_{source_date}", source_date)
+        pointer = output_dir / 'committed_stage.json'
+        if pointer.exists() or pointer.is_symlink():
+            ref = read(pointer, limit=65536)
+            stage_path = Path(ref['stage_path'])
+            stage_expected_sha = ref['stage_sha256']
+            if (ref.get('schema') != 'initial_quantity_stage_reference_v2'
+                    or ref.get('source_date') != source_date or not stage_path.is_absolute()
+                    or stage_path.is_symlink()
+                    or not stage_path.resolve().is_relative_to(output_dir.resolve() / 'generations')
+                    or re.fullmatch(r'[0-9a-f]{64}', str(stage_expected_sha)) is None):
+                raise ValueError('quantity_stage_reference_invalid')
+        else:
+            stage_path = output_dir / f'initial_quantity_refresh_stage_{source_date}.json'
     except (OSError, ValueError, KeyError, TypeError):
         details["findings"].append("initial_quantity_stage_reference_invalid")
+        details['status'] = 'source_invalid'
         details["postclose_stage_status"] = "source_invalid"
         return details
     if stage_path.exists() or stage_path.is_symlink():
         try:
             if stage_path.is_symlink() or stage_path.stat().st_size > 1024 * 1024:
                 raise ValueError("stage_untrusted_or_oversize")
-            stage = read(stage_path)
-            if not refresh_quantity_stage_terminal_valid(stage):
-                raise ValueError("stage_contract_invalid")
+            stage = read(stage_path, expected_sha=stage_expected_sha)
+            observed = _quantity_stage_observation(stage, source_date, read)
             count = stage["all_completed_initial_trades"]
             decision = stage["decision"]
+            report, evaluation = observed['report'], observed['evaluation']
+            census = report['census']
+            facts, excluded = census['input_fact_rows'], census['excluded']
+            if (not isinstance(facts, list) or not isinstance(excluded, dict)
+                    or any(not isinstance(row, dict) for row in facts)
+                    or any(type(n) is not int or n < 0 for n in excluded.values())
+                    or census['fact_rows_read'] != len(facts)
+                    or census['all_completed_initial_trades'] != count
+                    or count != len(report['trades'])
+                    or len(facts) != count + sum(excluded.values())
+                    or census.get('input_manifest_sha256') != _digest(facts)
+                    or evaluation['report_content_sha256'] != report['report_content_sha256']
+                    or report['source_date'] != source_date
+                    or evaluation['source_date'] != source_date):
+                raise ValueError('quantity_input_census_binding_invalid')
+            benign = {'not_completed', 'other_strategy', 'other_custody',
+                      'scale_in_position', 'before_refresh_start', 'duplicate_fact',
+                      'date_outside_baseline_or_as_of'}
+            gaps = {k:n for k,n in excluded.items() if n and k not in benign}
+            economic = evaluation['economic_sample_status']
+            binding = evaluation['trade_policy_binding_status']
+            from src.engine.scalping.initial_quantity_refresh_evaluation import economic_sample_status
+            if (economic not in {'valid_empty', 'cost_eligible', 'source_gap', 'cost_missing'}
+                    or economic != economic_sample_status(report)
+                    or binding not in {'valid_empty', 'bound', 'partial', 'source_gap'}
+                    or (count == 0 and binding != ('valid_empty' if economic == 'valid_empty' else 'source_gap'))
+                    or (count > 0 and binding not in {'bound', 'partial'})):
+                raise ValueError('quantity_evaluation_observation_status_invalid')
+            source_gap = bool(gaps or economic in {'source_gap', 'cost_missing'}
+                              or binding in {'partial', 'source_gap'})
+            details.update(
+                policy_refresh_decision=decision,
+                postclose_input_fact_count=len(facts),
+                postclose_completed_input_count=sum(
+                    isinstance(row, dict) and str(row.get('status', '')).upper() == 'COMPLETED'
+                    for row in facts),
+                postclose_exclusion_reasons=excluded,
+                postclose_source_gap_reasons=gaps,
+                economic_sample_status=economic,
+                trade_policy_binding_status=evaluation['trade_policy_binding_status'],
+                following_bar_source_status=stage.get('following_bar_source_status'),
+                bundle_observation_scope='dedicated_multi_leg_journal_only')
             details["postclose_stage_status"] = (
+                'source_gap' if source_gap else
                 "valid_empty" if count == 0 and decision == "carry_parent"
                 else decision)
             details["postclose_completed_trade_count"] = count
+            if source_gap:
+                details['findings'].append('initial_quantity_economic_source_gap')
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             details["findings"].append(
                 "initial_quantity_stage_invalid:" + type(exc).__name__)
@@ -821,10 +1069,12 @@ def _initial_quantity_semantics_native(
         details["status"] = "source_invalid" if any(
             item not in {"initial_quantity_bundle_terminal_overdue",
                          "initial_quantity_leg_terminal_after_slot",
+                         "initial_quantity_economic_source_gap",
                          "initial_quantity_stage_missing_after_date"}
             for item in details["findings"]) else (
-                "source_gap" if "initial_quantity_stage_missing_after_date"
-                in details["findings"] else "pending_terminal")
+                "source_gap" if any(item in details['findings'] for item in (
+                    "initial_quantity_stage_missing_after_date",
+                    "initial_quantity_economic_source_gap")) else "pending_terminal")
     elif details["bundle_count"] == 0 and details["postclose_stage_status"] == "valid_empty":
         details["status"] = "valid_empty"
     elif details["bundle_count"]:
@@ -837,32 +1087,63 @@ def _initial_quantity_semantics_native(
 def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None):
     references = []
     read_bytes = 0
-    def read(path):
+    cache = {}
+    source_identities = {}
+    def read(path, *, limit=1024*1024, expected_sha=None):
         nonlocal read_bytes
-        read_bytes += path.stat().st_size
-        if read_bytes > 32 * 1024 * 1024:
+        path = Path(path)
+        actual = existing_or_gzip_path(path)
+        if not path.is_absolute() or actual.is_symlink():
+            raise ValueError('quantity_semantic_path_invalid')
+        metadata = actual.stat()
+        before = _observer_file_signature(metadata)
+        if metadata.st_size > limit:
+            raise ValueError('semantic_artifact_untrusted_path_or_size')
+        key = (str(path), str(actual), before)
+        identity_key = str(path)
+        if identity_key in source_identities and source_identities[identity_key] != key:
+            raise ValueError('semantic_generation_changed_during_read')
+        source_identities[identity_key] = key
+        if key in cache:
+            value, sha = cache[key]
+            if expected_sha is not None and sha != expected_sha:
+                raise ValueError('quantity_semantic_bound_generation_changed')
+            return value
+        if read_bytes + metadata.st_size > 32 * 1024 * 1024:
             raise ValueError("semantic_read_budget_oversize")
-        value, sha = _semantic_object(path, limit=1024 * 1024)
-        stat = path.stat()
-        references.append((path, sha, (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)))
+        observed = {}
+        value, sha = _semantic_object(path, limit=min(limit, 32*1024*1024-read_bytes), observation=observed)
+        read_bytes += observed['logical_bytes']
+        if read_bytes > 32 * 1024 * 1024:
+            raise ValueError('semantic_read_budget_oversize')
+        if (existing_or_gzip_path(path) != actual
+                or _observer_file_signature(actual.stat()) != before):
+            raise ValueError('semantic_generation_changed_during_read')
+        if expected_sha is not None and sha != expected_sha:
+            raise ValueError('quantity_semantic_bound_generation_changed')
+        references.append((path, actual, sha, before))
+        cache[key] = (value, sha)
         return value
     result = _initial_quantity_semantics_native(root, source_date, now_epoch=now_epoch, read=read)
     result.update(source_date=source_date, target_date=source_date,
         artifact=str(root / "data/runtime/initial_quantity/current.json"),
-        report_sha256=None, native_validated=False, observation_complete=False)
+        report_sha256=None, native_validated=False, bounded_contract_validated=False,
+        observation_complete=False)
     try:
-        for path, sha, before in references:
-            st = path.stat()
-            if before != (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns):
+        for logical, actual, sha, before in references:
+            st = actual.stat()
+            if existing_or_gzip_path(logical) != actual or before != _observer_file_signature(st):
                 raise ValueError("semantic_generation_changed_during_read")
         complete = not any("oversize" in x for x in result.get("findings", []))
-        result.update(native_validated=complete, observation_complete=complete,
-            observation_generation=hashlib.sha256(json.dumps([(str(p), sha) for p, sha, _ in references], separators=(",", ":")).encode()).hexdigest(),
+        valid_contract = complete and result.get('status') != 'source_invalid'
+        result.update(native_validated=False, bounded_contract_validated=valid_contract,
+            full_source_revalidation_performed=False, observation_complete=valid_contract,
+            observation_generation=hashlib.sha256(json.dumps([(str(p), str(a), sha) for p, a, sha, _ in references], separators=(",", ":")).encode()).hexdigest(),
             source_reference_count=len(references),
-            source_references=[dict(artifact=str(p), byte_sha256=sha) for p, sha, _ in references[:16]])
+            source_references=[dict(artifact=str(p), physical_artifact=str(a), byte_sha256=sha) for p, a, sha, _ in references[:16]])
         if references:
             # The policy pointer bytes are an artifact hash, not the composite digest.
-            result["report_sha256"] = references[0][1]
+            result["report_sha256"] = references[0][2]
         if not complete:
             result.update(status="unobservable", expected_overdue=True)
     except (OSError, ValueError):
@@ -871,34 +1152,45 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
 
 
 def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
-                     hash_only: bool = False) -> tuple[dict, str]:
+                     hash_only: bool = False, observation: dict | None = None) -> tuple[dict, str]:
     """Read one bounded, stable generation without following file symlinks."""
     actual = existing_or_gzip_path(path)
     if actual.is_symlink() or actual.stat().st_size > limit:
         raise ValueError("semantic_artifact_untrusted_path_or_size")
     before = actual.stat()
-    opener = gzip.open if actual.suffix == ".gz" else open
-    with opener(actual, "rb") as handle:
-        if hash_only:
-            digest, size = hashlib.sha256(), 0
-            while chunk := handle.read(128 * 1024):
-                size += len(chunk)
-                if size > limit:
-                    raise ValueError("semantic_artifact_uncompressed_size_exceeded")
-                digest.update(chunk)
-        else:
-            raw = handle.read(limit + 1)
+    try:
+        with _observer_regular_fd(actual, max_bytes=limit) as fd:
+            with os.fdopen(os.dup(fd), 'rb') as physical:
+                handle = gzip.GzipFile(fileobj=physical, mode='rb') if actual.suffix == '.gz' else physical
+                try:
+                    if hash_only:
+                        digest, size = hashlib.sha256(), 0
+                        while chunk := handle.read(128 * 1024):
+                            size += len(chunk)
+                            if size > limit:
+                                raise ValueError("semantic_artifact_uncompressed_size_exceeded")
+                            digest.update(chunk)
+                    else:
+                        raw = handle.read(limit + 1)
+                finally:
+                    if handle is not physical: handle.close()
+    except ValueError as exc:
+        if str(exc) in {'observer_file_changed_before_read', 'observer_file_changed_during_read'}:
+            raise ValueError('semantic_generation_changed_during_read') from exc
+        raise
     after = actual.stat()
     if (before.st_ino, before.st_mtime_ns, before.st_ctime_ns, before.st_size) != (
             after.st_ino, after.st_mtime_ns, after.st_ctime_ns, after.st_size):
         raise ValueError("semantic_generation_changed_during_read")
     if hash_only:
+        if observation is not None: observation['logical_bytes'] = size
         return {}, digest.hexdigest()
     if len(raw) > limit:
         raise ValueError("semantic_artifact_uncompressed_size_exceeded")
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("semantic_artifact_object_invalid")
+    if observation is not None: observation['logical_bytes'] = len(raw)
     return value, hashlib.sha256(raw).hexdigest()
 
 
@@ -3431,6 +3723,9 @@ class ArtifactFreshnessDetector(BaseDetector):
             if handoff["findings"]:
                 warnings.append("postclose_handoff_semantics: " + ", ".join(handoff["findings"]))
             family_results = [("main_stop_confirmation", _main_stop_semantics(PROJECT_ROOT, semantic_day, now=now_dt))]
+            if not trading_day or semantic_day != today:
+                family_results.append(('initial_quantity', _initial_quantity_semantics(
+                    PROJECT_ROOT, semantic_day, now_epoch=now_ts)))
             family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(
                 PROJECT_ROOT, semantic_day, current_main=machine_semantics.get('selection_metric') == 'cumulative_raw_win_fraction')))
             for name, result in family_results:

@@ -19,9 +19,14 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import hashlib
 import logging
 import os
 import shutil
+import zlib
+import stat
+from contextlib import contextmanager, ExitStack
+from functools import lru_cache
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -92,28 +97,49 @@ def list_jsonl_files(dataset: str, target_date: date) -> List[Path]:
     return sorted(files)
 
 
-def read_jsonl_lines(file_path: Path) -> Iterator[Dict[str, Any]]:
+def read_jsonl_lines(
+    file_path: Path, *, strict: bool = False, logical_generation: dict | None = None,
+) -> Iterator[Dict[str, Any]]:
     """JSONL 파일을 줄 단위로 읽어 dict 생성."""
-    open_func = gzip.open if file_path.suffix == ".gz" else open
-    with open_func(file_path, "rt", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+    logical_sha = hashlib.sha256()
+    decoded_size = 0
+    with ExitStack() as stack:
+        raw_source=stack.enter_context(_open_regular_source(file_path))
+        f=(stack.enter_context(gzip.GzipFile(fileobj=raw_source,mode='rb'))
+           if file_path.suffix=='.gz' else raw_source)
+        for raw in f:
+            if logical_generation is not None:
+                logical_sha.update(raw)
+                decoded_size += len(raw)
+            line = raw.decode('utf-8').strip()
             if not line:
                 continue
             try:
-                yield json.loads(line)
+                event = json.loads(line)
+                if strict and not isinstance(event, dict):
+                    raise ValueError("pipeline_parquet_source_non_object")
+                yield event
             except json.JSONDecodeError as e:
+                if strict:
+                    raise ValueError("pipeline_parquet_source_json_invalid") from e
                 logger.warning("JSON decode error in %s: %s", file_path, e)
+    if logical_generation is not None:
+        logical_generation.update(decoded_size_bytes=decoded_size, sha256=logical_sha.hexdigest())
 
 
-def extract_event_id(event: Dict[str, Any]) -> Optional[str]:
+def extract_event_id(
+    event: Dict[str, Any], *, source_payload_sha256: str | None = None
+) -> Optional[str]:
     """이벤트 고유 ID 생성. 중복 제거용."""
-    # pipeline_event 경우 record_id + emitted_at 조합
+    # A record can emit several stages or changed observations at one clock.
+    # Native IDs retain their identity; absent IDs dedupe complete equal rows.
     if event.get("event_type") == "pipeline_event":
-        record_id = event.get("record_id")
-        emitted_at = event.get("emitted_at")
-        if record_id is not None and emitted_at:
-            return f"{record_id}:{emitted_at}"
+        native = event.get("event_id")
+        if native is not None:
+            if not isinstance(native, str) or not native.strip():
+                raise ValueError("pipeline_event_native_id_invalid")
+            return native
+        return "pipeline-content-sha256:" + (source_payload_sha256 or pipeline_event_payload_sha256(event))
     # system metric 샘플은 ts 또는 epoch를 사용
     ts = event.get("ts")
     if ts:
@@ -132,6 +158,12 @@ def extract_event_id(event: Dict[str, Any]) -> Optional[str]:
     # 다른 이벤트 유형은 필요에 따라 확장
     # fallback: 전체 JSON 해시 또는 None (중복 방지 불가)
     return None
+
+
+def pipeline_event_payload_sha256(event: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(
+        event, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        allow_nan=False).encode("utf-8")).hexdigest()
 
 
 def convert_to_dataframe(events: List[Dict[str, Any]], dataset: str) -> pd.DataFrame:
@@ -224,10 +256,12 @@ def convert_pipeline_event_to_row(event: Dict[str, Any]) -> Dict[str, Any]:
         "stock_name": event.get("stock_name"),
         "stock_code": event.get("stock_code"),
         "record_id": event.get("record_id"),
+        "source_record_id": None if event.get("record_id") is None else str(event["record_id"]),
         "emitted_at": event.get("emitted_at"),
         "emitted_date": event.get("emitted_date"),
         "text_payload": event.get("text_payload"),
         "event_id": event.get("event_id"),
+        "source_event_sha256": event.get("source_event_sha256"),
         "fields_json": json.dumps(fields, ensure_ascii=False) if fields else None,
     }
     for key in PIPELINE_FIELD_KEYS:
@@ -244,10 +278,12 @@ def _pipeline_arrow_schema() -> pa.Schema:
         pa.field("stock_name", pa.large_string()),
         pa.field("stock_code", pa.large_string()),
         pa.field("record_id", pa.float64()),
+        pa.field("source_record_id", pa.large_string()),
         pa.field("emitted_at", pa.large_string()),
         pa.field("emitted_date", pa.date32()),
         pa.field("text_payload", pa.large_string()),
         pa.field("event_id", pa.large_string()),
+        pa.field("source_event_sha256", pa.large_string()),
         pa.field("fields_json", pa.large_string()),
     ]
     fields.extend(
@@ -271,6 +307,7 @@ def _pipeline_row_for_arrow(
     row["emitted_date"] = target_date
     for key in (
         "event_type",
+        "source_record_id",
         "pipeline",
         "stage",
         "stock_name",
@@ -278,6 +315,7 @@ def _pipeline_row_for_arrow(
         "emitted_at",
         "text_payload",
         "event_id",
+        "source_event_sha256",
         "fields_json",
         *(f"fields_{item}" for item in PIPELINE_FIELD_KEYS),
     ):
@@ -295,6 +333,190 @@ def _pipeline_chunk_rows() -> int:
         return max(100, int(raw))
     except (TypeError, ValueError):
         return PIPELINE_PARQUET_CHUNK_ROWS
+
+
+def _source_file_identity(path: Path) -> tuple[int, ...]:
+    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents) or not path.is_file():
+        raise ValueError('pipeline_parquet_source_path_invalid')
+    return _source_stat_identity(path.stat())
+
+
+def _source_stat_identity(metadata) -> tuple[int, ...]:
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size,
+            metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+@contextmanager
+def _open_regular_source(path: Path, *, expected: tuple | None = None):
+    before = _source_file_identity(path)
+    if expected is not None and before != expected:
+        raise ValueError('pipeline_parquet_source_changed_before_open')
+    descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+    try:
+        current=os.fstat(descriptor)
+        if not stat.S_ISREG(current.st_mode) or _source_stat_identity(current)!=before:
+            raise ValueError('pipeline_parquet_source_changed_before_open')
+        with os.fdopen(descriptor,'rb') as stream:
+            descriptor=-1
+            yield stream
+            if _source_stat_identity(os.fstat(stream.fileno()))!=before:
+                raise ValueError('pipeline_parquet_source_changed_during_read')
+        if _source_file_identity(path)!=before:
+            raise ValueError('pipeline_parquet_source_changed_during_read')
+    finally:
+        if descriptor>=0:os.close(descriptor)
+
+
+def _parquet_byte_generation(path: Path) -> dict:
+    before = _source_file_identity(path)
+    digest = hashlib.sha256()
+    with _open_regular_source(path,expected=before) as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    if _source_file_identity(path) != before:
+        raise ValueError("pipeline_parquet_output_changed_during_read")
+    return {"size_bytes": before[2], "sha256": digest.hexdigest()}
+
+
+def _read_pipeline_metadata(path: Path) -> dict:
+    before = _source_file_identity(path)
+    limit = 1024 * 1024
+    if before[2] > limit:
+        raise ValueError('pipeline_parquet_source_metadata_unbounded')
+    with _open_regular_source(path,expected=before) as stream:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit or _source_file_identity(path) != before:
+        raise ValueError('pipeline_parquet_source_metadata_changed')
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError('pipeline_parquet_source_metadata_invalid')
+    return value
+
+
+def _pipeline_source_fingerprint(target_date: date) -> dict:
+    fingerprint = {}
+    for path in list_jsonl_files('pipeline_events',target_date):
+        fingerprint[str(path)] = _source_file_identity(path)
+        if path.suffix == '.gz':
+            receipt = Path(str(path)+'.archive_receipt.json')
+            fingerprint[str(receipt)] = _source_file_identity(receipt) if receipt.exists() or receipt.is_symlink() else None
+    return fingerprint
+
+
+@lru_cache(maxsize=32)
+def _verify_legacy_pipeline_archive(path_name: str, identity: tuple, sha256: str, size: int, receipt_identity: tuple):
+    """Old immutable receipts lack ctime; verify CRC and logical bytes once."""
+    path = Path(path_name)
+    digest = hashlib.sha256()
+    decoded_size = 0
+    with _open_regular_source(path,expected=identity) as raw, gzip.GzipFile(fileobj=raw,mode='rb') as stream:
+        for block in iter(lambda: stream.read(64 * 1024), b''):
+            decoded_size += len(block)
+            if decoded_size > size:
+                raise ValueError('pipeline_parquet_archive_logical_conflict')
+            digest.update(block)
+    if (_source_file_identity(path) != identity or decoded_size != size
+            or digest.hexdigest() != sha256):
+        raise ValueError('pipeline_parquet_archive_logical_conflict')
+
+
+def _verify_pipeline_archive(path: Path, logical: Path, expected: dict, *, original_verified=False) -> None:
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    before = _source_file_identity(path)
+    receipt_path = Path(str(path) + '.archive_receipt.json')
+    receipt_before = _source_file_identity(receipt_path)
+    archive = _read_pipeline_metadata(receipt_path)
+    generation = archive.get('archive_generation')
+    physical = dict(device=before[0], inode=before[1], size_bytes=before[2], mtime_ns=before[3])
+    if (archive.get('schema') != 'pipeline_raw_archive_identity_v1'
+            or archive.get('logical_path') != str(logical)
+            or archive.get('logical_content_sha256') != expected.get('sha256')
+            or (archive.get('logical_size_bytes') is not None
+                and archive['logical_size_bytes'] != expected.get('decoded_size_bytes'))
+            or archive.get('runtime_effect') is not False
+            or archive.get('allowed_runtime_apply') is not False
+            or not isinstance(generation, dict)
+            or any(generation.get(key) != value for key, value in physical.items())):
+        raise ValueError('pipeline_parquet_archive_receipt_invalid')
+    if 'ctime_ns' in generation:
+        if (generation['ctime_ns'] != before[4]
+                or archive.get('logical_size_bytes') != expected.get('decoded_size_bytes')
+                or archive.get('verification_contract') != 'logical_sha256_size_crc_to_eof_v1'
+                or archive.get('artifact_content_sha256') != content_sha256({
+                    k:v for k,v in archive.items() if k != 'artifact_content_sha256'})):
+            raise ValueError('pipeline_parquet_archive_receipt_invalid')
+    elif not original_verified:
+        _verify_legacy_pipeline_archive(str(path), before, expected['sha256'], expected['decoded_size_bytes'],receipt_before)
+    if _source_file_identity(path) != before or _source_file_identity(receipt_path) != receipt_before:
+        raise ValueError('pipeline_parquet_archive_changed_during_validation')
+
+
+def _verify_pipeline_logical_sources(files: List[Path], receipt: dict) -> None:
+    original = receipt.get('source_files')
+    if not isinstance(original, dict):
+        raise ValueError('pipeline_parquet_source_receipt_invalid')
+    current = {str(path): list(_source_file_identity(path)) for path in files}
+    logical_sources = receipt.get('logical_sources')
+    if not isinstance(logical_sources, dict):
+        if current != original:
+            raise ValueError('pipeline_parquet_source_generation_changed:logical_seal_missing')
+        return
+    groups = {}
+    for path in files:
+        logical = path.with_suffix('') if path.suffix == '.gz' else path
+        groups.setdefault(str(logical), []).append(path)
+    if set(groups) != set(logical_sources):
+        raise ValueError('pipeline_parquet_source_generation_changed:logical_inventory')
+    try:
+        for logical_name, paths in groups.items():
+            expected = logical_sources[logical_name]
+            if (not isinstance(expected, dict)
+                    or type(expected.get('decoded_size_bytes')) is not int or expected['decoded_size_bytes'] < 0
+                    or not isinstance(expected.get('sha256'), str) or len(expected['sha256']) != 64):
+                raise ValueError('pipeline_parquet_logical_seal_invalid')
+            for path in paths:
+                if current[str(path)] == original.get(str(path)):
+                    # The original producer read this exact representation to
+                    # EOF and sealed all decoded bytes in its existing pass.
+                    if path.suffix == '.gz' and Path(str(path)+'.archive_receipt.json').exists():
+                        _verify_pipeline_archive(path, Path(logical_name), expected,original_verified=True)
+                    continue
+                if path.suffix != '.gz':
+                    raise ValueError('pipeline_parquet_plain_generation_changed')
+                _verify_pipeline_archive(path, Path(logical_name), expected)
+    except (OSError,ValueError,TypeError,KeyError,EOFError,zlib.error) as exc:
+        raise ValueError('pipeline_parquet_source_generation_changed:' + str(exc)) from exc
+    if {str(path): list(_source_file_identity(path)) for path in list_jsonl_files('pipeline_events',date.fromisoformat(receipt['target_date']))} != current:
+        raise ValueError('pipeline_parquet_source_changed_during_validation')
+
+
+def verify_pipeline_source_receipt(target_date: date, *, analytics_root: Path | None = None) -> dict:
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    directory = (analytics_root or ANALYTICS_ROOT) / "pipeline_events" / f"date={target_date.isoformat()}"
+    receipt_path = directory / 'source_receipt.json'
+    receipt_before = _source_file_identity(receipt_path)
+    sources_before = _pipeline_source_fingerprint(target_date)
+    receipt = _read_pipeline_metadata(receipt_path)
+    if (receipt.get("schema") != "tuning_pipeline_parquet_source_v2"
+            or receipt.get("status") != "complete"
+            or receipt.get("target_date") != target_date.isoformat()
+            or receipt.get("conservation_verified") is not True
+            or receipt.get("artifact_content_sha256") != content_sha256({
+                k:v for k,v in receipt.items() if k != "artifact_content_sha256"})):
+        raise ValueError("pipeline_parquet_source_receipt_invalid")
+    _verify_pipeline_logical_sources(list_jsonl_files('pipeline_events',target_date),receipt)
+    paths = sorted(directory.glob("*.parquet"))
+    expected = receipt.get("output_generation")
+    if receipt.get("written_count") == 0:
+        if paths or expected is not None:
+            raise ValueError("pipeline_parquet_empty_generation_conflict")
+    elif (len(paths) != 1 or expected != {
+            "path": paths[0].name, **_parquet_byte_generation(paths[0])}):
+        raise ValueError("pipeline_parquet_output_generation_changed")
+    if (_source_file_identity(receipt_path) != receipt_before
+            or _pipeline_source_fingerprint(target_date) != sources_before):
+        raise ValueError('pipeline_parquet_source_changed_during_validation')
+    return receipt
 
 
 def _write_pipeline_parquet_stream(
@@ -315,10 +537,20 @@ def _write_pipeline_parquet_stream(
     schema = _pipeline_arrow_schema()
     chunk_limit = _pipeline_chunk_rows()
     chunk: List[Dict[str, Any]] = []
-    seen_event_ids: set[str] = set()
+    seen_event_ids: dict[str, str] = {}
     total_lines = 0
+    excluded_dates: dict[str, int] = {}
+    exact_duplicates = 0
+    selected_source_count = 0
+    sources = {str(path): _source_file_identity(path) for path in files}
+    logical_sources: dict[str, dict] = {}
     written = 0
     writer: pq.ParquetWriter | None = None
+
+    def verify_sources() -> None:
+        if (sorted(map(str,list_jsonl_files('pipeline_events',target_date))) != sorted(sources)
+                or any(sources[str(path)] != _source_file_identity(path) for path in files)):
+            raise ValueError('pipeline_parquet_source_changed_during_read')
 
     def flush_chunk() -> None:
         nonlocal chunk, writer, written
@@ -333,22 +565,40 @@ def _write_pipeline_parquet_stream(
 
     try:
         for file_path in tqdm(files, desc=str(target_date)):
-            for event in read_jsonl_lines(file_path):
+            logical_generation = {}
+            for event in read_jsonl_lines(file_path, strict=True,logical_generation=logical_generation):
                 total_lines += 1
                 if not _event_matches_target_date(
                     event, "pipeline_events", target_date
                 ):
+                    observed = next((str(event[key])[:10] for key in (
+                        "emitted_date", "event_date", "signal_date") if event.get(key)), "unknown")
+                    excluded_dates[observed] = excluded_dates.get(observed, 0) + 1
                     continue
-                event_id = extract_event_id(event)
+                selected_source_count += 1
+                source_sha256 = pipeline_event_payload_sha256(event)
+                event_id = extract_event_id(event, source_payload_sha256=source_sha256)
                 if event_id:
-                    if dedupe and event_id in seen_event_ids:
+                    previous = seen_event_ids.get(event_id)
+                    if previous is not None and previous != source_sha256:
+                        raise ValueError("pipeline_event_native_id_conflict:" + event_id)
+                    if dedupe and previous is not None:
+                        exact_duplicates += 1
                         continue
-                    seen_event_ids.add(event_id)
-                    event["event_id"] = event_id
+                    seen_event_ids[event_id] = source_sha256
+                    event = {**event, "event_id": event_id}
+                event = {**event, "source_event_sha256": source_sha256}
                 chunk.append(_pipeline_row_for_arrow(event, target_date=target_date))
                 if len(chunk) >= chunk_limit:
                     flush_chunk()
+            logical = file_path.with_suffix('') if file_path.suffix == '.gz' else file_path
+            previous = logical_sources.setdefault(str(logical),logical_generation)
+            if previous != logical_generation:
+                raise ValueError('pipeline_parquet_plain_gzip_conflict')
         flush_chunk()
+        verify_sources()
+        if total_lines != written + exact_duplicates + sum(excluded_dates.values()):
+            raise ValueError("pipeline_parquet_population_not_conserved")
     except Exception:
         if writer is not None:
             writer.close()
@@ -359,21 +609,45 @@ def _write_pipeline_parquet_stream(
         if writer is not None:
             writer.close()
 
-    if written <= 0:
+    from src.engine.scalping.micro_reversion.economic_reference import atomic_write_json, content_sha256
+    receipt = {
+        "schema": "tuning_pipeline_parquet_source_v2", "target_date": target_date.isoformat(),
+        "identity_contract": "native_id_or_complete_payload_sha256_v1",
+        "source_files": sources,
+        "logical_sources": logical_sources,
+        "decoded_input_count": total_lines, "selected_date_count": selected_source_count,
+        "excluded_date_count": sum(excluded_dates.values()),
+        "excluded_date_counts": excluded_dates, "exact_duplicate_count": exact_duplicates,
+        "written_count": written,
+        "output_generation": ({"path": out_file.name, **_parquet_byte_generation(tmp_file)}
+                              if written else None),
+        "population_state": "retained" if written else "valid_empty",
+        "conservation_verified": total_lines == written + exact_duplicates + sum(excluded_dates.values()),
+        "runtime_effect": False, "allowed_runtime_apply": False,
+    }
+    def publish_receipt(status):
+        body = {**receipt, "status": status}
+        atomic_write_json(partition_dir / "source_receipt.json", {
+            **body, "artifact_content_sha256": content_sha256(body)})
+    try:
+        # Invalidate the previous receipt before changing its output. A crash
+        # between the two atomic writes stays visibly publishing, never current.
+        verify_sources()
+        publish_receipt("publishing")
+        if written:
+            os.replace(tmp_file, out_file)
+        else:
+            tmp_file.unlink(missing_ok=True)
+        for stale_file in partition_dir.glob("*.parquet"):
+            if not written or stale_file != out_file:
+                stale_file.unlink()
+        verify_sources()
+        publish_receipt("complete")
+    except Exception:
         tmp_file.unlink(missing_ok=True)
-        clear_parquet_partition("pipeline_events", target_date)
-        return total_lines, 0
-
-    os.replace(tmp_file, out_file)
-    for stale_file in partition_dir.glob("*.parquet"):
-        if stale_file != out_file:
-            stale_file.unlink()
-    logger.info(
-        "Parquet streaming file written: %s (%d rows, chunk_rows=%d)",
-        out_file,
-        written,
-        chunk_limit,
-    )
+        raise
+    logger.info("Parquet streaming file written: %s (%d rows, chunk_rows=%d)",
+                out_file, written, chunk_limit)
     return total_lines, written
 
 
@@ -467,14 +741,25 @@ def process_single_date(
             dedupe=dedupe,
         )
     all_events = []
+    metric_identities: dict[str, str] = {}
     total_lines = 0
     for file_path in tqdm(files, desc=str(target_date)):
-        for event in read_jsonl_lines(file_path):
+        for event in read_jsonl_lines(file_path, strict=dataset == "system_metric_samples"):
             total_lines += 1
             if not _event_matches_target_date(event, dataset, target_date):
                 continue
             # event_id 주입
             event_id = extract_event_id(event)
+            if dataset == "system_metric_samples":
+                # A sampler clock owns one observation.  Exact repeated bytes
+                # may dedupe; changed measurements at that clock must never be
+                # silently replaced by whichever row happened to arrive first.
+                if event_id is None:
+                    raise ValueError("system_metric_sample_identity_missing")
+                source_sha256 = pipeline_event_payload_sha256(event)
+                previous = metric_identities.setdefault(event_id, source_sha256)
+                if previous != source_sha256:
+                    raise ValueError("system_metric_sample_identity_conflict:" + event_id)
             if event_id:
                 event["event_id"] = event_id
             all_events.append(event)

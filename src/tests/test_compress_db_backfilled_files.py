@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -482,6 +483,129 @@ def test_pipeline_custody_change_preserves_plain_original(tmp_path):
             sha256=hashlib.sha256(b'original').hexdigest())])
     assert path.read_bytes() == original
     assert not path.with_suffix('.jsonl.gz').exists()
+
+
+def test_pipeline_archive_seal_binds_full_crc_proof_to_exact_ctime_generation(tmp_path):
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';original=b'{"source":"original"}\r\n'*100
+    path.write_bytes(original);assert archive._gzip_file(path,dry_run=False)[0] is True
+    compressed=Path(str(path)+'.gz')
+    receipt=json.loads(Path(str(compressed)+'.archive_receipt.json').read_bytes())
+    assert receipt['verification_contract']=='logical_sha256_size_crc_to_eof_v1'
+    assert receipt['archive_generation']['ctime_ns']==compressed.stat().st_ctime_ns
+    assert receipt['artifact_content_sha256']==content_sha256({k:v for k,v in receipt.items() if k!='artifact_content_sha256'})
+    assert receipt['logical_size_bytes']==len(original)
+
+
+def test_pipeline_archive_crc_failure_preserves_original_and_does_not_publish_proof(tmp_path,monkeypatch):
+    import gzip
+    import os
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';original=b'{"source":"original"}\n'*100;path.write_bytes(original)
+    native=os.replace
+    def corrupt_after_rename(src,dst,*args,**kwargs):
+        value=native(src,dst,*args,**kwargs)
+        if Path(dst)==Path(str(path)+'.gz'):
+            target=Path(dst);stamp=target.stat().st_mtime_ns
+            data=bytearray(target.read_bytes());data[-8]^=1;target.write_bytes(data)
+            os.utime(target,ns=(stamp,stamp))
+        return value
+    monkeypatch.setattr(os,'replace',corrupt_after_rename)
+    with pytest.raises(gzip.BadGzipFile):archive._gzip_file(path,dry_run=False)
+    assert path.read_bytes()==original
+    assert not Path(str(path)+'.gz.archive_receipt.json').exists()
+    assert not Path(str(path)+'.gz').exists()
+    failed=list(tmp_path.glob('*.gz.failed.*'));assert len(failed)==1
+    monkeypatch.setattr(os,'replace',native)
+    assert archive._gzip_file(path,dry_run=False)[0] is True
+    assert not path.exists() and failed[0].exists()
+
+
+def test_pipeline_archive_mutation_during_receipt_write_preserves_plain(tmp_path,monkeypatch):
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';original=b'{"source":"original"}\n'*100;path.write_bytes(original)
+    native=archive.write_json_object_generation_safe
+    def changed(destination,payload,**kwargs):
+        native(destination,payload,**kwargs)
+        with Path(str(path)+'.gz').open('ab') as stream:stream.write(b'changed')
+    monkeypatch.setattr(archive,'write_json_object_generation_safe',changed)
+    with pytest.raises(ValueError,match='archive_generation_changed_before_removal'):
+        archive._gzip_file(path,dry_run=False)
+    assert path.read_bytes()==original
+    assert not Path(str(path)+'.gz').exists()
+    assert not Path(str(path)+'.gz.archive_receipt.json').exists()
+    assert len(list(tmp_path.glob('*.gz.failed.*')))==1
+    assert len(list(tmp_path.glob('*.archive_receipt.json.failed.*')))==1
+    monkeypatch.setattr(archive,'write_json_object_generation_safe',native)
+    assert archive._gzip_file(path,dry_run=False)[0] is True
+
+
+@pytest.mark.parametrize('write_completed',[False,True])
+def test_pipeline_archive_receipt_failure_preserves_failed_attempt_and_retry_succeeds(tmp_path,monkeypatch,write_completed):
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';original=b'{"source":"original"}\n'*100;path.write_bytes(original)
+    native=archive.write_json_object_generation_safe
+    def failed(destination,payload,**kwargs):
+        if write_completed:native(destination,payload,**kwargs)
+        raise OSError('receipt publication failed')
+    monkeypatch.setattr(archive,'write_json_object_generation_safe',failed)
+    with pytest.raises(OSError,match='receipt publication failed'):archive._gzip_file(path,dry_run=False)
+    assert path.read_bytes()==original and not Path(str(path)+'.gz').exists()
+    assert not Path(str(path)+'.gz.archive_receipt.json').exists()
+    assert len(list(tmp_path.glob('*.gz.failed.*')))==1
+    assert len(list(tmp_path.glob('*.archive_receipt.json.failed.*')))==int(write_completed)
+    monkeypatch.setattr(archive,'write_json_object_generation_safe',native)
+    assert archive._gzip_file(path,dry_run=False)[0] is True
+
+
+def test_pipeline_archive_failure_does_not_move_foreign_replacement_inode(tmp_path,monkeypatch):
+    import os
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';original=b'{"source":"original"}\n'*100;path.write_bytes(original)
+    archived=Path(str(path)+'.gz');foreign=tmp_path/'foreign';foreign.write_bytes(b'foreign archive bytes')
+    native=archive.write_json_object_generation_safe
+    def replaced(destination,payload,**kwargs):
+        native(destination,payload,**kwargs);os.replace(foreign,archived)
+        raise OSError('foreign replacement occurred')
+    monkeypatch.setattr(archive,'write_json_object_generation_safe',replaced)
+    with pytest.raises(OSError,match='foreign replacement occurred'):archive._gzip_file(path,dry_run=False)
+    assert archived.read_bytes()==b'foreign archive bytes'
+    assert not list(tmp_path.glob('*.gz.failed.*'))
+    assert path.read_bytes()==original
+
+
+def test_pipeline_archive_does_not_adopt_foreign_inode_immediately_after_rename(tmp_path,monkeypatch):
+    import os
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';original=b'{"source":"original"}\n'*100;path.write_bytes(original)
+    archived=Path(str(path)+'.gz');foreign=tmp_path/'foreign';foreign.write_bytes(b'foreign archive bytes')
+    native=os.replace
+    def replaced(src,dst,*args,**kwargs):
+        result=native(src,dst,*args,**kwargs)
+        if Path(dst)==archived:native(foreign,archived)
+        return result
+    monkeypatch.setattr(os,'replace',replaced)
+    with pytest.raises(ValueError,match='foreign_generation_after_rename'):archive._gzip_file(path,dry_run=False)
+    assert archived.read_bytes()==b'foreign archive bytes'
+    assert not list(tmp_path.glob('*.gz.failed.*'))
+    assert not Path(str(archived)+'.archive_receipt.json').exists()
+    assert path.read_bytes()==original
+
+
+def test_archive_preserves_orphan_original_receipt_instead_of_rewriting(tmp_path):
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';original=b'{"source":"original"}\n';path.write_bytes(original)
+    receipt=Path(str(path)+'.gz.archive_receipt.json');receipt.write_bytes(b'{"original_failed_evidence":true}\n')
+    before=receipt.read_bytes()
+    with pytest.raises(ValueError,match='orphan_receipt_preserved'):archive._gzip_file(path,dry_run=False)
+    assert path.read_bytes()==original and receipt.read_bytes()==before
+    assert not Path(str(path)+'.gz').exists()
+
+
+def test_archive_commit_has_no_late_stat_failure_after_plain_removal(tmp_path,monkeypatch):
+    path=tmp_path/'pipeline_events_2026-10-08.jsonl';path.write_bytes(b'{"source":"original"}\n'*100)
+    compressed=Path(str(path)+'.gz');native=Path.stat
+    def guarded(file,*args,**kwargs):
+        if file==compressed and not path.exists():pytest.fail('archive stat after original removal')
+        return native(file,*args,**kwargs)
+    with monkeypatch.context() as finalization:
+        finalization.setattr(Path,'stat',guarded)
+        assert archive._gzip_file(path,dry_run=False)[0] is True
+    assert compressed.exists() and not path.exists()
 
 
 def test_pipeline_date_scope_preserves_other_families(tmp_path, monkeypatch):

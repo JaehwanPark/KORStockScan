@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 import re
+import stat as stat_module
+import uuid
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -195,6 +197,50 @@ def _snapshot_json_boundary_valid(path: Path) -> bool:
 
 
 def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
+    """Retain failed owned archive bytes outside the canonical alias namespace."""
+    attempt = {}
+    try:
+        return _gzip_file_unchecked(path,dry_run=dry_run,custody=custody,_attempt=attempt)
+    except Exception:
+        if not path.is_file() or path.is_symlink():
+            # Once the plain source is gone, never move its sole archive out
+            # of the canonical namespace on an unexpected later exception.
+            raise
+        # The existing JSONL generation owner excludes cooperative writers.
+        # A foreign replacement inode is never moved or removed here.
+        from src.engine.lifecycle.snapshot_archive import file_identity
+        archived = Path(str(path)+'.gz')
+        expected = attempt.get('archive_identity')
+        if expected is not None and archived.is_file() and not archived.is_symlink():
+            current = file_identity(archived.stat())
+            if (current['device'],current['inode']) == (expected['device'],expected['inode']):
+                failed = Path(str(archived)+'.failed.'+uuid.uuid4().hex)
+                os.replace(archived,failed)
+        receipt = Path(str(archived)+'.archive_receipt.json')
+        expected_receipt = attempt.get('receipt_content_sha256')
+        if expected_receipt and receipt.is_file() and not receipt.is_symlink():
+            before = file_identity(receipt.stat())
+            if before != attempt.get('previous_receipt_identity') and before['size'] <= 1024*1024:
+                descriptor=os.open(receipt,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+                with os.fdopen(descriptor,'rb') as stream:
+                    opened=os.fstat(stream.fileno())
+                    if not stat_module.S_ISREG(opened.st_mode) or file_identity(opened)!=before:
+                        raise ValueError('archive_failure_receipt_changed_before_read')
+                    raw=stream.read(1024*1024+1)
+                    if file_identity(os.fstat(stream.fileno()))!=before:
+                        raise ValueError('archive_failure_receipt_changed_during_read')
+                try:
+                    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+                    body=json.loads(raw)
+                    owned=(isinstance(body,dict) and content_sha256(body)==expected_receipt
+                           and file_identity(receipt.stat())==before)
+                except (ValueError,TypeError):owned=False
+                if owned:
+                    os.replace(receipt,Path(str(receipt)+'.failed.'+uuid.uuid4().hex))
+        raise
+
+
+def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=None) -> tuple[bool, int]:
     """Return (compressed, saved_bytes_estimate)."""
     if not path.exists() or not path.is_file():
         return False, 0
@@ -208,6 +254,11 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
         raise ValueError('archive_source_path_invalid')
     original_identity = file_identity(path.stat())
     archive_identity = file_identity(gz_path.stat()) if existing_archive else None
+    receipt_path = Path(str(gz_path)+'.archive_receipt.json')
+    if not existing_archive and (receipt_path.exists() or receipt_path.is_symlink()):
+        raise ValueError('archive_orphan_receipt_preserved')
+    if _attempt is not None:
+        _attempt['previous_receipt_identity'] = file_identity(receipt_path.stat()) if receipt_path.is_file() else None
     original_size = original_identity['size']
     if dry_run:
         return True, original_size
@@ -223,64 +274,103 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
                 logical_digest.update(chunk)
         with tmp_path.open('rb') as handle:
             os.fsync(handle.fileno())
+    custody_identities = {}
+    for reference in custody or []:
+        custody_path = Path(reference['path'])
+        before = file_identity(custody_path.stat())
+        if (hashlib.sha256(custody_path.read_bytes()).hexdigest() != reference['sha256']
+                or file_identity(custody_path.stat()) != before):
+            tmp_path.unlink(missing_ok=True)
+            raise ValueError('storage_custody_changed_during_compression')
+        custody_identities[custody_path] = before
+    if not existing_archive:
+        owned_identity=file_identity(tmp_path.stat())
+        if _attempt is not None:
+            _attempt['archive_identity']=owned_identity
+        os.replace(tmp_path, gz_path)
     restored_size = 0
     restored_digest = hashlib.sha256()
-    with gzip.open(gz_path if existing_archive else tmp_path, "rb") as archived:
+    # Verify the final inode after rename. Rename changes ctime, so validating
+    # a temporary then sealing a later ctime could bind an intervening rewrite.
+    checked_archive = gz_path
+    checked_identity = file_identity(checked_archive.stat())
+    if not existing_archive and any(checked_identity[key]!=owned_identity[key] for key in ('device','inode')):
+        raise ValueError('archive_foreign_generation_after_rename')
+    descriptor=os.open(checked_archive,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+    with os.fdopen(descriptor,'rb') as raw_archive,gzip.GzipFile(fileobj=raw_archive,mode='rb') as archived:
+        if (not stat_module.S_ISREG(os.fstat(raw_archive.fileno()).st_mode)
+                or file_identity(os.fstat(raw_archive.fileno())) != checked_identity):
+            raise ValueError('archive_generation_changed_before_crc')
         while chunk := archived.read(1024 * 1024):
             restored_size += len(chunk)
             if restored_size > original_size:
                 raise ValueError('archive_decoded_size_mismatch')
             restored_digest.update(chunk)
+        if file_identity(os.fstat(archived.fileno())) != checked_identity:
+            raise ValueError('archive_generation_changed_during_crc')
     if (
         restored_size != original_size
         or restored_digest.digest() != logical_digest.digest()
         or file_identity(path.stat()) != original_identity
+        or file_identity(checked_archive.stat()) != checked_identity
         or (existing_archive and file_identity(gz_path.stat()) != archive_identity)
     ):
         tmp_path.unlink(missing_ok=True)
         raise OSError(f"gzip_size_mismatch:{path.name}:{restored_size}/{original_size}")
-    for reference in custody or []:
-        if hashlib.sha256(Path(reference['path']).read_bytes()).hexdigest() != reference['sha256']:
-            tmp_path.unlink(missing_ok=True)
+    for custody_path,before in custody_identities.items():
+        if file_identity(custody_path.stat()) != before:
             raise ValueError('storage_custody_changed_during_compression')
-    if not existing_archive:
-        os.replace(tmp_path, gz_path)
+    published_identity = file_identity(gz_path.stat())
+    if published_identity != checked_identity:
+        raise ValueError('archive_generation_changed_before_receipt')
     if snapshot:
         from src.engine.lifecycle.snapshot_archive import SCHEMA
+        from src.engine.scalping.micro_reversion.economic_reference import content_sha256
         with gz_path.open('rb') as handle:
             archive_sha = hashlib.file_digest(handle, 'sha256').hexdigest()
+        archive_receipt=dict(
+            schema=SCHEMA, logical_path=str(path),
+            logical_content_sha256=logical_digest.hexdigest(),
+            logical_size_bytes=original_size, original_identity=original_identity,
+            archive_generation=file_identity(gz_path.stat()), archive_sha256=archive_sha,
+            runtime_effect=False, allowed_runtime_apply=False)
+        if _attempt is not None:
+            _attempt['receipt_content_sha256']=content_sha256(archive_receipt)
         write_json_object_generation_safe(
-            Path(f'{gz_path}.archive_receipt.json'), dict(
-                schema=SCHEMA, logical_path=str(path),
-                logical_content_sha256=logical_digest.hexdigest(),
-                logical_size_bytes=original_size, original_identity=original_identity,
-                archive_generation=file_identity(gz_path.stat()), archive_sha256=archive_sha,
-                runtime_effect=False, allowed_runtime_apply=False))
+            Path(f'{gz_path}.archive_receipt.json'),archive_receipt)
     if path.name.startswith("pipeline_events_") and path.suffix == ".jsonl":
+        from src.engine.scalping.micro_reversion.economic_reference import content_sha256
         stat = gz_path.stat()
+        if file_identity(stat) != published_identity:
+            raise ValueError('archive_generation_changed_before_receipt')
+        archive_receipt = {
+            "schema": "pipeline_raw_archive_identity_v1",
+            "logical_path": str(path),
+            "logical_content_sha256": logical_digest.hexdigest(),
+            "logical_size_bytes": original_size,
+            "storage_custody": custody or [],
+            "storage_disposition": "verified_gzip_representation_original_receipts_preserved",
+            "archive_generation": {
+                "device": stat.st_dev, "inode": stat.st_ino,
+                "size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+                "ctime_ns": stat.st_ctime_ns,
+            },
+            "verification_contract": "logical_sha256_size_crc_to_eof_v1",
+            "runtime_effect": False, "allowed_runtime_apply": False,
+        }
+        archive_receipt['artifact_content_sha256'] = content_sha256(archive_receipt)
+        if _attempt is not None:
+            _attempt['receipt_content_sha256'] = content_sha256(archive_receipt)
         write_json_object_generation_safe(
             Path(f"{gz_path}.archive_receipt.json"),
-            {
-                "schema": "pipeline_raw_archive_identity_v1",
-                "logical_path": str(path),
-                "logical_content_sha256": logical_digest.hexdigest(),
-                "logical_size_bytes": original_size,
-                "storage_custody": custody or [],
-                "storage_disposition": "verified_gzip_representation_original_receipts_preserved",
-                "archive_generation": {
-                    "device": stat.st_dev,
-                    "inode": stat.st_ino,
-                    "size_bytes": stat.st_size,
-                    "mtime_ns": stat.st_mtime_ns,
-                },
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-            },
+            archive_receipt,
         )
+    if file_identity(gz_path.stat()) != published_identity:
+        raise ValueError('archive_generation_changed_before_removal')
     if file_identity(path.stat()) != original_identity:
         raise ValueError('archive_source_changed_before_removal')
     path.unlink()
-    return True, original_size - gz_path.stat().st_size
+    return True, original_size - published_identity['size']
 
 
 def _gzip_file_with_jsonl_generation_lock(

@@ -1813,10 +1813,35 @@ fi
 # Refresh exact execution-derived facts after the NXT session before the
 # calibration reads completed trades.  The recovery controller uses the same
 # explicit ordering rather than hiding this database write in a report build.
+# Seal completion evidence before fact/quantity consumers. Holding research is
+# generated only after the later AI writers finish; this prefix never means full DONE.
+wait_for_postclose_resources "postclose_completion_prefix"
+completion_prefix_manifest="$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit_completion_prefix.json"
+if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ] && PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" <<'PY'
+import sys
+from src.engine.log_archive_service import verified_postclose_exit_prefix_manifest
+raise SystemExit(0 if verified_postclose_exit_prefix_manifest(sys.argv[1]) else 1)
+PY
+then
+  emit_postclose_marker "[REUSE] exact completion prefix target_date=$TARGET_DATE manifest=$completion_prefix_manifest"
+else
+  run_postclose_cmd env MONITOR_SNAPSHOT_PROFILE=postclose_exit \
+    MONITOR_SNAPSHOT_POSTCLOSE_PHASE=completion_prefix \
+    MONITOR_SNAPSHOT_ASYNC=0 MONITOR_SNAPSHOT_FORCE=1 \
+    "$PROJECT_DIR/deploy/run_monitor_snapshot_safe.sh" "$TARGET_DATE"
+fi
+wait_for_json_artifact "$completion_prefix_manifest" "postclose_completion_prefix.manifest"
+PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" <<'PY'
+import sys
+from src.engine.log_archive_service import verified_postclose_exit_prefix_manifest
+if verified_postclose_exit_prefix_manifest(sys.argv[1]) is None:
+    raise SystemExit("postclose_completion_prefix_generation_invalid")
+PY
 if [ "$SKIP_DB" != "true" ]; then
   wait_for_postclose_resources "strategy_position_performance_sync"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.strategy_position_performance_report \
-    --date "$TARGET_DATE"
+    --date "$TARGET_DATE" \
+    --completion-snapshot "$PROJECT_DIR/data/report/monitor_snapshots/trade_review_${TARGET_DATE}.json"
   wait_for_json_artifact "$FACT_SYNC_STATUS_FILE" "strategy_position_fact_sync"
   if ! validate_fact_sync_receipt "$FACT_SYNC_STATUS_FILE"; then
     echo "[threshold-cycle] exact trade fact sync receipt invalid target_date=$TARGET_DATE path=$FACT_SYNC_STATUS_FILE" >&2
@@ -2330,66 +2355,55 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
     "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.md" \
     "rising_missed_classifier_prior"
 fi
+# Complete all AI-request writers before freezing all-scope holding inventory.
+# Waiting only for these upstream owners avoids waiting on the stop stage below.
+if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
+  for stage in main_machine_policy legacy_machine_report main_auxiliary_policy; do
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+      --stage wait --wait-stage "$stage" --date "$TARGET_DATE" --timeout-sec 14400
+  done
+fi
 wait_for_postclose_resources "scalp_trailing_postclose_exit_snapshot"
-scalp_exit_snapshot_started_epoch="$(date +%s)"
 scalp_exit_snapshot_manifest="$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit.json"
-if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ] && PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" <<'PY'
+if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ] && PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$PREPARED_EFFECTIVE_DATE" <<'PY'
 import sys
 from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
-raise SystemExit(0 if verified_postclose_exit_snapshot_manifest(sys.argv[1]) else 1)
+from src.engine.automation.main_trailing_research_handoff import observe_extension
+from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import read_json_object_strict
+if verified_postclose_exit_snapshot_manifest(sys.argv[1]) is None:
+    raise SystemExit(1)
+holding = read_json_object_strict(DATA_DIR / 'report/monitor_snapshots' / f'holding_exit_observation_{sys.argv[1]}.json')
+raise SystemExit(1 if observe_extension(holding, target_date=sys.argv[2], required=True)['findings'] else 0)
 PY
 then
-  scalp_exit_snapshot_started_epoch="$(date -r "$scalp_exit_snapshot_manifest" +%s)"
   emit_postclose_marker "[REUSE] exact postclose_exit snapshot target_date=$TARGET_DATE manifest=$scalp_exit_snapshot_manifest"
 else
   run_postclose_cmd env MONITOR_SNAPSHOT_PROFILE=postclose_exit \
+    MONITOR_SNAPSHOT_POSTCLOSE_PHASE=holding_suffix \
     MONITOR_SNAPSHOT_ASYNC=0 MONITOR_SNAPSHOT_FORCE=1 \
     "$PROJECT_DIR/deploy/run_monitor_snapshot_safe.sh" "$TARGET_DATE"
 fi
-wait_for_json_artifact \
-  "$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit.json" \
-  "scalp_trailing_postclose_exit_snapshot.manifest"
+wait_for_json_artifact "$scalp_exit_snapshot_manifest" "scalp_trailing_postclose_exit_snapshot.manifest"
 wait_for_json_artifact \
   "$PROJECT_DIR/data/report/monitor_snapshots/holding_exit_observation_${TARGET_DATE}.json" \
   "scalp_trailing_postclose_exit_snapshot.report"
-PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$scalp_exit_snapshot_started_epoch" <<'PY'
-import hashlib
-import json
+PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$PREPARED_EFFECTIVE_DATE" <<'PY'
 import sys
-from pathlib import Path
-
-from src.utils.constants import DATA_DIR
 from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
-
-target_date, started = sys.argv[1], int(sys.argv[2])
-if verified_postclose_exit_snapshot_manifest(target_date) is None:
+from src.engine.automation.main_trailing_research_handoff import observe_extension
+from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import read_json_object_strict
+if verified_postclose_exit_snapshot_manifest(sys.argv[1]) is None:
     raise SystemExit("postclose_exit_cost_or_projection_generation_invalid")
-directory = DATA_DIR / "report" / "monitor_snapshots"
-manifest_path = (directory / "manifests"
-                 / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json")
-manifest = json.loads(manifest_path.read_bytes())
-expected = {"trade_review", "post_sell_feedback", "missed_entry_counterfactual",
-            "holding_exit_observation"}
-if (manifest_path.stat().st_mtime < started
-        or manifest.get("target_date") != target_date
-        or manifest.get("profile") != "postclose_exit"
-        or set(manifest.get("snapshot_kinds") or []) != expected):
-    raise SystemExit("postclose_exit_manifest_generation_invalid")
-for kind in expected:
-    path = directory / f"{kind}_{target_date}.json"
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    if (Path((manifest.get("snapshot_paths") or {}).get(kind, "")).resolve()
-            != path.resolve()
-            or (manifest.get("snapshot_sha256") or {}).get(kind)
-            != digest.hexdigest()):
-        raise SystemExit(f"postclose_exit_source_hash_mismatch:{kind}")
-report = json.loads((directory / f"holding_exit_observation_{target_date}.json").read_bytes())
-if (report.get("date") != target_date
-        or (report.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
+report = read_json_object_strict(DATA_DIR / 'report/monitor_snapshots' / f'holding_exit_observation_{sys.argv[1]}.json')
+if (report.get('date') != sys.argv[1]
+        or (report.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'):
     raise SystemExit("postclose_exit_report_generation_invalid")
+# Native validation above verifies source semantics. This bounded observation
+# reports optional trailing-code currency without adding an approval gate.
+if observe_extension(report, target_date=sys.argv[2], required=True)['findings']:
+    print("[WARN] postclose_exit_trailing_code_generation_invalid; optional research retains parent", file=sys.stderr)
 PY
 # The stop confirmation producer consumes the verified exit snapshot and the
 # shared research reservation. No additional cron or background worker.

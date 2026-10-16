@@ -12522,7 +12522,7 @@ def run_sniper(is_test_mode=False):
     from src.engine.scalping.pre_submit_delay_observation import configure_sink
     configure_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
-    configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit,recover_pending=True)
     from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
     configure_stop_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink

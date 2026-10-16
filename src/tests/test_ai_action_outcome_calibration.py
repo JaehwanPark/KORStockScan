@@ -4967,10 +4967,13 @@ def test_machine_capture_binding_does_not_invent_venue_or_future_cutoff():
 
 
 def test_machine_cost_prerequisite_preserves_valid_source_and_does_not_backdate(monkeypatch, tmp_path):
+    from src.engine.scalping.micro_reversion import economic_reference as reference
+
     path = tmp_path / 'report/micro_reversion_economic_reference/micro_reversion_economic_reference_2026-09-17.json'
     path.parent.mkdir(parents=True)
     path.write_text('original-cost-proof')
     monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a, **k: {'005930': {'verified': True}})
+    monkeypatch.setattr(reference, 'publish_canonical_symbol_master', lambda *a, **k: {'status': 'verified_existing'})
     receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date='2026-09-17')
     assert receipt['status'] == 'existing_verified_sources_preserved'
     assert path.read_text() == 'original-cost-proof'
@@ -5012,6 +5015,7 @@ def test_machine_cost_prerequisite_uses_private_sources_not_live_provider_budget
         (root / 'provider_budget_policy.json').write_text('private-source-only')
     monkeypatch.setattr(owner, 'build_daily_sources', build_sources)
     monkeypatch.setattr(reference, 'build_daily_resolution', lambda **kwargs: {'verified': True, 'status': 'verified', 'target_date': day})
+    monkeypatch.setattr(reference, 'publish_canonical_symbol_master', lambda *a, **k: {'status': 'published'})
     monkeypatch.chdir(tmp_path)
     receipt = calibration.ensure_machine_economic_reference(data_root=Path('.') if relative_root else tmp_path, target_date=day)
     assert receipt['verified'] is True

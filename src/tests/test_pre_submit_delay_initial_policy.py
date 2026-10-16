@@ -123,7 +123,7 @@ def test_source_changed_during_ledger_validation_is_rejected(tmp_path, monkeypat
         initial.verify_source(tmp_path, report)
 
 
-@pytest.mark.parametrize('mutation', ['raw', 'gzip_alias', 'late_raw', 'ledger', 'compact_arrival'])
+@pytest.mark.parametrize('mutation', ['raw', 'conflicting_gzip_alias', 'late_raw', 'ledger', 'compact_arrival'])
 def test_invocation_digest_keeps_native_raw_compact_ledger_checks(tmp_path, monkeypatch, mutation):
     import gzip
     from src.engine.automation.pre_submit_delay_source_ledger import seal
@@ -144,7 +144,7 @@ def test_invocation_digest_keeps_native_raw_compact_ledger_checks(tmp_path, monk
         initial.verify_source(tmp_path, report)
         assert invocation.stats['reused_reads'] > 0
         if mutation == 'raw': raw.write_bytes(raw.read_bytes() + b'{}\n')
-        elif mutation == 'gzip_alias': raw.with_suffix('.jsonl.gz').write_bytes(gzip.compress(raw.read_bytes()))
+        elif mutation == 'conflicting_gzip_alias': raw.with_suffix('.jsonl.gz').write_bytes(gzip.compress(raw.read_bytes()+b'{}\n'))
         elif mutation == 'late_raw':
             from src.engine.pipeline_event_summary import _source_part_path
             _source_part_path(raw.parent, '2026-10-02', 'late').write_text('{}\n')
@@ -153,6 +153,33 @@ def test_invocation_digest_keeps_native_raw_compact_ledger_checks(tmp_path, monk
             part = next((tmp_path/'threshold_cycle').glob('date=*/family=pre_submit_delay/part-execution-*.jsonl'))
             part.with_name('part-execution-new.jsonl').write_text('{}\n')
         with pytest.raises(ValueError, match='initial_delay_(raw_compact_generation_changed|source_inventory_changed)'):
+            initial.verify_source(tmp_path, report)
+
+
+def test_invocation_digest_accepts_only_verified_identical_gzip_alias(tmp_path, monkeypatch):
+    import gzip
+    from src.engine.automation.pre_submit_delay_source_ledger import seal
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.engine.infrastructure import validation_digest_session as D
+    report, _ = build(tmp_path, monkeypatch, [{'prices': {0: 10000, 30: 9900}}])
+    rows = [json.loads(line) for p in (tmp_path/'threshold_cycle').glob(
+        'date=*/family=pre_submit_delay/part-execution-*.jsonl') for line in p.read_text().splitlines()]
+    raw = tmp_path/'pipeline_events/pipeline_events_2026-10-02.jsonl'
+    raw.parent.mkdir()
+    raw.write_text(''.join(json.dumps({**r, 'event_type': 'pipeline_event'})+'\n' for r in rows))
+    seal(tmp_path, '2026-10-02')
+    ledger = legacy.family_source_ledger_path(tmp_path, '2026-10-02')
+    report['source_receipt']['ledger_generations'] = {'2026-10-02': byte_generation(ledger)}
+    monkeypatch.setattr(D, 'MIN_BYTES', 1)
+    with D.postclose_session(tmp_path, '2026-10-02'):
+        initial.verify_source(tmp_path, report)
+        compressed = raw.with_suffix('.jsonl.gz')
+        compressed.write_bytes(gzip.compress(raw.read_bytes()))
+        initial.verify_source(tmp_path, report)
+        raw.unlink()
+        initial.verify_source(tmp_path, report)
+        compressed.write_bytes(gzip.compress(b'changed logical source\n'))
+        with pytest.raises(ValueError, match='initial_delay_raw_compact_generation_changed'):
             initial.verify_source(tmp_path, report)
 
 

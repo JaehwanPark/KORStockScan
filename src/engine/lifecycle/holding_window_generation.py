@@ -81,7 +81,7 @@ def cached_code_generation(paths):
     return value
 
 
-def seal_dependency_receipt(sidecar, payload):
+def seal_dependency_receipt(sidecar, payload, *, fact_projection=None):
     """Only the existing, census-verified projection writer calls this."""
     from src.engine.sniper_trade_review_report import verify_completed_census_manifest
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
@@ -93,6 +93,8 @@ def seal_dependency_receipt(sidecar, payload):
             'meta':{k:payload['meta'].get(k) for k in (
                 'actual_cost_source_generation', 'knowledge_cutoff', 'snapshot_profile')},
             'completed_count':len(payload['sections']['completed_trade_projection'])}
+    if fact_projection is not None:
+        body['fact_projection'] = byte_generation(fact_projection)
     body['artifact_sha256'] = digest(body)
     if len(json.dumps(body).encode()) > MAX_METADATA_BYTES:
         raise ValueError('window_dependency_metadata_budget_exceeded')

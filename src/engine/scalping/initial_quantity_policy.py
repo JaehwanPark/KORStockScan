@@ -45,7 +45,10 @@ def canonical_epoch(value):
     if type(value) is int and value >= 0:
         return value
     if isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value):
-        return int(value)
+        try:
+            return int(value)
+        except ValueError:
+            return None
     return None
 
 MAX_QUOTE_AGE_MS = 1000.0
@@ -155,6 +158,94 @@ def trade_source_allowed(census,trade):
                for source in (census['source_quality_by_entry_date'][trade['entry_date']],census['source_quality_by_exit_date'][trade['exit_date']]))
 
 
+def _quantity_compact_fact_issue(day, sidecar, dependency):
+    """Join a producer-verified census to the fact seal through bounded metadata.
+
+    The native dependency receipt already verifies the complete projection
+    bytes and original snapshot identity. Its census digest binds the leading
+    metadata; no timeline or completion row needs to be decoded again here.
+    """
+    import codecs
+    import gzip
+    import io
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    from src.engine.lifecycle.research_input_budget import Claim
+    from src.engine.lifecycle.research_json_stream import Reader
+    from src.engine.strategy_position_performance_report import _status_path, _canonical_sha256
+
+    physical = sidecar if sidecar.is_file() else Path(str(sidecar) + '.gz')
+    opener = gzip.open if physical.suffix == '.gz' else open
+    with Claim(MAX_METADATA_BYTES * 8):
+        with opener(physical, 'rb') as handle:
+            prefix = handle.read(MAX_METADATA_BYTES)
+        # A bounded prefix can end inside a UTF-8 code point. Invalid complete
+        # sequences still fail; only the unfinished final code point is held.
+        text = codecs.getincrementaldecoder('utf-8')().decode(prefix, final=False)
+        reader = Reader(io.StringIO(text))
+        reader.take('{')
+        header = {}
+        # This is the existing projection producer's order. Unexpected layouts
+        # fail closed rather than scanning through an arbitrarily large field.
+        for index, key in enumerate(('schema', 'date', 'code', 'since', 'meta')):
+            if index:
+                reader.take(',')
+            if reader.value(1024) != key:
+                return 'fact_snapshot_native_projection_metadata_invalid'
+            reader.take(':')
+            header[key] = reader.value(MAX_METADATA_BYTES)
+        meta = header.get('meta')
+        census = meta.get('completed_census_manifest') if isinstance(meta, dict) else None
+        if (header.get('schema') != 'trade_review_completed_projection_sidecar_v1'
+                or header.get('date') != day or header.get('code') or header.get('since')
+                or not isinstance(census, dict)
+                or census.get('source_date') != day
+                or census.get('schema') != 'trade_review_completed_census_v1'
+                or digest(census) != dependency.get('census_sha256')
+                or meta.get('snapshot_profile') != dependency.get('profile')
+                or meta.get('actual_cost_source_generation') != dependency.get('cost_generation')):
+            return 'fact_snapshot_native_projection_metadata_invalid'
+        status_path = _status_path(day)
+        try:
+            if status_path.is_symlink() or status_path.stat().st_size > MAX_METADATA_BYTES:
+                return 'fact_sync_receipt_missing_or_invalid'
+            with status_path.open('rb') as handle:
+                raw = handle.read(MAX_METADATA_BYTES + 1)
+            if len(raw) > MAX_METADATA_BYTES:
+                return 'fact_sync_receipt_missing_or_invalid'
+            receipt = json.loads(raw)
+        except (OSError, ValueError):
+            return 'fact_sync_receipt_missing_or_invalid'
+        if not isinstance(receipt, dict):
+            return 'fact_sync_receipt_missing_or_invalid'
+        expected_sha = receipt.pop('artifact_sha256', None)
+        if expected_sha != _canonical_sha256(receipt):
+            return 'fact_sync_receipt_sha_mismatch'
+        if receipt.get('target_date') != day or receipt.get('status') not in {'succeeded', 'valid_empty'}:
+            return 'fact_sync_receipt_not_current_success'
+        if (receipt.get('completed_census_run_ids') != [census.get('run_id')]
+                or receipt.get('completed_census_projection_sha256') != [census.get('projection_sha256')]):
+            return 'stale_fact_source_generation'
+        if receipt.get('actual_cost_source_generation') != dependency.get('cost_generation'):
+            return 'persisted_fact_cost_generation_stale'
+        proof = receipt.get('completion_snapshot_source')
+        if proof is not None:
+            from src.engine.lifecycle.snapshot_archive import generation
+            fact_path = sidecar.with_name(f'trade_review_{day}.fact_projection.json')
+            if (not isinstance(proof, dict) or proof.get('schema') != 'strategy_position_fact_snapshot_source_v1'
+                    or proof.get('source_date') != day or proof.get('projection') != dependency.get('projection')
+                    or proof.get('actual_cost_source_generation') != dependency.get('cost_generation')
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(proof.get('scalar_projection_sha256') or ''))):
+                return 'stale_fact_snapshot_projection_generation'
+            if proof.get('source_basis') == 'native_original_snapshot_stream':
+                if proof.get('fact_projection') is not None:
+                    return 'stale_fact_snapshot_projection_generation'
+            elif (proof.get('source_basis') != 'native_bounded_fact_projection'
+                    or proof.get('fact_projection') != generation(fact_path)):
+                return 'stale_fact_snapshot_projection_generation'
+    return None
+
+
 def _quantity_fact_generation_issue(day):
     """Validate the native fact seal without loading historical timelines.
 
@@ -163,13 +254,39 @@ def _quantity_fact_generation_issue(day):
     """
     from src.engine.strategy_position_performance_report import _saved_fact_generation_issue
     from src.engine.log_archive_service import MONITOR_SNAPSHOT_DIR
-    from src.engine.lifecycle.holding_window_generation import _capture_day, MAX_PROJECTION_BYTES
+    from src.engine.lifecycle.holding_window_generation import _capture_day, MAX_PROJECTION_BYTES, source_stat
     from src.engine.lifecycle.research_input_budget import Claim
+    from src.engine.lifecycle.snapshot_archive import identity_available, present
     import gzip
     directory = MONITOR_SNAPSHOT_DIR
     path = directory / f'trade_review_{day}.json'
     sidecar = path.with_suffix('.completed_projection.json')
-    candidate = sidecar if path.is_file() and path.stat().st_size > MAX_PROJECTION_BYTES else path
+    candidate = sidecar if ((present(sidecar) and identity_available(path))
+                            or (path.is_file() and path.stat().st_size > MAX_PROJECTION_BYTES)) else path
+    if candidate == sidecar and present(sidecar):
+        # Bind both logical sources and any native archive receipts while the
+        # native verifier hashes the projection and the bounded reader joins it.
+        sources = tuple(p for logical in (path, sidecar)
+                        for p in (logical, Path(str(logical) + '.gz'),
+                                  Path(str(logical) + '.gz.archive_receipt.json'))
+                        ) + (Path(str(sidecar) + '.dependencies.json'),)
+        try:
+            before = tuple((str(p), source_stat(p.stat()) if p.exists() else None) for p in sources)
+            dependency = _capture_day(DATA_DIR, directory, day)
+            issue = _quantity_compact_fact_issue(day, sidecar, dependency)
+            after = tuple((str(p), source_stat(p.stat()) if p.exists() else None) for p in sources)
+            if before != after:
+                return 'fact_snapshot_native_projection_changed_during_read'
+            return issue
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            if str(exc).startswith('shared_research_budget_'):
+                raise
+            if str(exc) == 'window_dependency_legacy_metadata_required':
+                return 'fact_snapshot_requires_bounded_native_projection'
+            if str(exc) in {'research_legacy_json_incomplete', 'research_legacy_json_field_partition_required',
+                            'window_dependency_metadata_budget_exceeded'}:
+                return 'fact_snapshot_requires_bounded_native_metadata'
+            return 'fact_snapshot_native_projection_invalid'
     if not candidate.exists() and Path(str(path)+'.gz').exists():
         candidate = Path(str(path)+'.gz')
     if not candidate.exists():
@@ -177,8 +294,6 @@ def _quantity_fact_generation_issue(day):
     if candidate.stat().st_size > MAX_PROJECTION_BYTES:
         return 'fact_snapshot_requires_bounded_native_projection'
     try:
-        if candidate == sidecar:
-            _capture_day(DATA_DIR, directory, day)  # native byte/identity/cost seal
         with Claim(MAX_PROJECTION_BYTES * 8):
             opener = gzip.open if candidate.suffix == '.gz' else open
             with opener(candidate, 'rb') as handle:
@@ -377,8 +492,9 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
     return result, {"census_source": "trade_performance_facts",
                     **({"entry_on_or_after": entry_on_or_after} if refresh_start else {}),
                     "all_completed_initial_trades": len(result),
-                    "actual_completed_net_pnl_krw": round(sum(
-                        row["realized_net_pnl_krw"] for row in result), 3),
+                    "actual_completed_net_pnl_krw": (round(sum(
+                        row["realized_net_pnl_krw"] for row in result), 3)
+                        if result else None),
                     "actual_completed_mean_profit_rate_pct": (
                         round(sum(row["profit_rate"] for row in result) / len(result), 6)
                         if result else None),
@@ -422,6 +538,61 @@ def join_post_fill_paths(trades, **kwargs):
     return join(trades, **kwargs)
 
 
+def _quantity_capture_lifecycle_sources(data_dir, day, *, decode=False):
+    """Bound native closed receipts without adopting a later process's identity."""
+    from src.engine.scalping.initial_quantity_cap_observation import MAX_RECEIPT_BYTES, _capture_id
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    directory = Path(data_dir) / 'runtime/initial_quantity/cap_capture_receipts' / day
+    if directory.is_symlink() or any(p.is_symlink() for p in directory.parents):
+        raise ValueError('quantity_capture_receipt_path_invalid')
+    paths = []
+    for path in directory.glob('*.json'):
+        if len(paths) >= 4096:
+            raise ValueError('quantity_capture_receipt_partition_required')
+        paths.append(path)
+    from src.engine.scalping.initial_quantity_source_cache import ResidentFacts
+    generation, receipts = [], ResidentFacts([]) if decode else []
+    for path in sorted(paths):
+        before = source_stat(path.stat())
+        if path.is_symlink() or before[2] > MAX_RECEIPT_BYTES or not re.fullmatch(r'[0-9a-f]{64}', path.stem):
+            raise ValueError('quantity_capture_receipt_path_invalid')
+        with path.open('rb') as handle:
+            raw = handle.read(MAX_RECEIPT_BYTES + 1)
+        if len(raw) > MAX_RECEIPT_BYTES or source_stat(path.stat()) != before:
+            raise ValueError('quantity_capture_receipt_changed_during_read')
+        generation.append({'path': str(path), 'size': len(raw),
+                           'sha256': hashlib.sha256(raw).hexdigest()})
+        if not decode:
+            continue
+        body = json.loads(raw)
+        fields = body.get('fields') if isinstance(body, dict) else None
+        if not isinstance(fields, dict):
+            raise ValueError('quantity_capture_receipt_identity_invalid')
+        capture_id = _capture_id(fields)
+        if (body.get('schema') != 'initial_quantity_cap_capture_lifecycle_v1'
+                or body.get('sha256') != _digest({k: v for k, v in body.items() if k != 'sha256'})
+                or body.get('capture_id') != path.stem or capture_id != path.stem
+                or fields.get('capture_source_date') != day
+                or canonical_epoch(fields.get('capture_runtime_pid')) in (None, 0)
+                or canonical_epoch(fields.get('capture_runtime_start_ticks')) in (None, 0)
+                or not fields.get('entry_submit_attempt_id')
+                or not re.fullmatch(r'[0-9a-f]{64}', str(fields.get('entry_execution_sizing_plan_sha256') or ''))
+                or body.get('status') not in {'finished', 'interrupted'}
+                or body.get('raw_event_durable') is not True
+                or not re.fullmatch(r'[0-9a-f]{64}', str(body.get('raw_event_id') or ''))
+                or body.get('raw_event_identity_contract') != 'canonical_original_pipeline_event_sha256_v1'
+                or body.get('raw_event_stage') != 'initial_quantity_cap_capture_' + body.get('status')
+                or not re.fullmatch(r'[0-9]{6}', str(body.get('code') or ''))
+                or canonical_epoch(body.get('record_id')) in (None, 0)
+                or str(fields.get('capture_record_id')) != str(body.get('record_id'))
+                or fields.get('capture_stock_code') != body.get('code')
+                or body.get('runtime_effect') is not False):
+            raise ValueError('quantity_capture_receipt_identity_invalid')
+        receipts.append(body)
+    return {'schema': 'initial_quantity_cap_capture_source_generation_v1',
+            'source_date': day, 'files': generation}, receipts
+
+
 def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Path = DATA_DIR,
                          scan_seconds: dict[str, float] | None = None,
                          source_receipts: dict[str, Any] | None = None,
@@ -452,6 +623,7 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
             if isinstance(value,list):bucket[key]=BoundedRows(result.claim)
     for day, records in sorted(by_date.items()):
         date_started = time.perf_counter()
+        lifecycle_generation, lifecycle_receipts = _quantity_capture_lifecycle_sources(data_dir, day, decode=True)
         path = existing_or_gzip_path(data_dir / "pipeline_events" / f"pipeline_events_{day}.jsonl")
         if not path.exists():
             for group in records.values():
@@ -476,7 +648,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
         if source_receipts is not None:
             source_receipts[day] = {"path": str(path), "size_bytes": stat.st_size,
                                     "sha256": _file_sha256(path),
-                                    "archive_identity_valid": archive_identity_valid}
+                                    "archive_identity_valid": archive_identity_valid,
+                                    "capture_lifecycle_generation": lifecycle_generation}
         if archive_identity_valid is False:
             for group in records.values():
                 for trade in group:
@@ -620,18 +793,21 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                             "schedule_sha256": schedule_sha,
                                             "policy_sha256": policy_sha,
                                         })
-                    if stage == "initial_quantity_cap_capture_finished" and within_entry_join:
+                    if stage in {"initial_quantity_cap_capture_started", "initial_quantity_cap_capture_order_started",
+                                 "initial_quantity_cap_capture_finished", "initial_quantity_cap_capture_interrupted"} and within_entry_join:
                         # A sampled observer never proves full market coverage.
                         # Preserve the terminal queue/clock evidence separately
                         # from the prints usable inside the trade's price window.
                         bucket["capture_receipts"].append({
-                            "at": emitted,
+                            "at": emitted, "stage": stage,
                             "fields": {key: fields.get(key) for key in (
+                                "capture_id", "capture_source_date", "capture_runtime_pid", "capture_runtime_start_ticks",
+                                "capture_record_id", "capture_stock_code",
                                 "entry_submit_attempt_id", "entry_execution_sizing_plan_sha256",
                                 "capture_clock_status", "capture_planned_epoch",
                                 "capture_order_start_epoch", "capture_end_epoch",
                                 "capture_queue_rejected_count", "capture_queued_count",
-                                "observation_coverage")}})
+                                "capture_disposition", "capture_interruption_reason", "observation_coverage")}})
                     if (stage == "initial_quantity_cap_following_tick"
                             and within_entry_join and bucket["price_end"] is not None
                             and emitted <= bucket["price_end"]):
@@ -660,6 +836,9 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                 "attempt_id": str(fields.get("entry_submit_attempt_id") or ""),
                                 "plan_sha256": str(fields.get(
                                     "entry_execution_sizing_plan_sha256") or ""),
+                                **{key: fields.get(key) for key in ('capture_source_date',
+                                   'capture_runtime_pid', 'capture_runtime_start_ticks',
+                                   'capture_record_id', 'capture_stock_code')},
                             })
                     elif (stage == "position_rebased_after_fill" and within_entry_join
                           and str(fields.get("entry_mode") or "").lower() == "normal"):
@@ -719,6 +898,20 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
             for group in records.values():
                 for trade in group:
                     bucket = result[trade["trade_id"]]
+                    # Late dead-PID reconciliation is a negative observation,
+                    # never a substitute for the original horizon completion.
+                    for receipt in lifecycle_receipts:
+                        if (str(receipt.get('record_id')) != str(trade['record_id'])
+                                or receipt.get('code') != trade['stock_code']
+                                or receipt.get('status') != 'interrupted'):
+                            continue
+                        at = _number(receipt.get('observed_at_epoch'))
+                        if at is None or not 0 < at < 4_000_000_000:
+                            raise ValueError('quantity_capture_receipt_clock_invalid')
+                        bucket['capture_receipts'].append({
+                            'at': datetime.fromtimestamp(at, tz=timezone.utc),
+                            'stage': receipt['raw_event_stage'], 'fields': receipt['fields'],
+                            'durable_source': 'native_closed_lifecycle_receipt'})
                     requests = bucket["order_requests"]
                     sent_counts = Counter((row["attempt_id"], row["plan_sha"], row["tag"])
                                           for row in bucket["order_sent"])
@@ -834,19 +1027,22 @@ def _cap_target_qty(context: Any, mode: str) -> int | None:
     return allocate(cap_ratio)[1]
 
 
-def _capture_source_issue(source: dict[str, Any]) -> str | None:
-    """Exclude known loss for this attempt; absence stays legacy sampled capture."""
-    identity = (source.get("attempt_id"), source.get("plan_sha256"))
+def _capture_source_issue(source: dict[str, Any], *, horizon_seconds=1200, order_start_epoch=None) -> str | None:
+    """Exclude lost/censored capture without changing the actual-fill control."""
+    identity = tuple(str(source.get(key)) if source.get(key) is not None else None
+                     for key in ('attempt_id', 'plan_sha256'))
     if not all(identity):
         return None
+    matching = []
     for receipt in source.get("capture_receipts") or []:
         if not isinstance(receipt, dict):
             continue
         fields = receipt.get("fields")
-        if not isinstance(fields, dict) or (
-                fields.get("entry_submit_attempt_id"),
-                fields.get("entry_execution_sizing_plan_sha256")) != identity:
+        if not isinstance(fields, dict) or tuple(
+                str(fields.get(key)) if fields.get(key) is not None else None for key in (
+                'entry_submit_attempt_id', 'entry_execution_sizing_plan_sha256')) != identity:
             continue
+        matching.append(receipt)
         for key in ("capture_queue_rejected_count", "capture_queued_count"):
             raw = fields.get(key)
             if raw is None:
@@ -859,9 +1055,86 @@ def _capture_source_issue(source: dict[str, Any]) -> str | None:
                 return "capture_queue_count_invalid"
             if key == "capture_queue_rejected_count" and count > 0:
                 return "capture_queue_gap"
+        stage = receipt.get('stage') or 'initial_quantity_cap_capture_finished'
         clock = fields.get("capture_clock_status")
-        if clock is not None and clock != "frozen_order_start":
+        if (clock is not None and clock != "frozen_order_start"
+                and not (stage == 'initial_quantity_cap_capture_started' and clock == 'no_order_start_observed')):
             return "capture_clock_gap"
+    producer_identities = set()
+    finished = []
+    interrupted = []
+    for receipt in matching:
+        fields = receipt['fields']
+        stage = receipt.get('stage') or 'initial_quantity_cap_capture_finished'
+        native_identity = tuple(fields.get(key) for key in ('capture_source_date', 'capture_runtime_pid',
+            'capture_runtime_start_ticks'))
+        if any(value is not None for value in native_identity):
+            day, pid, ticks = native_identity
+            if (not isinstance(day, str) or source.get('capture_source_date', day) != day
+                    or canonical_epoch(pid) in (None, 0) or canonical_epoch(ticks) in (None, 0)
+                    or (source.get('runtime_pid') is not None
+                        and canonical_epoch(source['runtime_pid']) != canonical_epoch(pid))):
+                return 'capture_runtime_identity_mismatch'
+            producer_identities.add((day, canonical_epoch(pid), canonical_epoch(ticks)))
+        if ((fields.get('capture_record_id') is not None and source.get('record_id') is not None
+                and str(fields['capture_record_id']) != str(source['record_id']))
+                or (fields.get('capture_stock_code') is not None and source.get('stock_code') is not None
+                    and fields['capture_stock_code'] != source['stock_code'])):
+            return 'capture_runtime_identity_mismatch'
+        if stage == 'initial_quantity_cap_capture_interrupted' or fields.get('capture_disposition') == 'interrupted':
+            interrupted.append(receipt)
+        elif stage == 'initial_quantity_cap_capture_finished':
+            finished.append(receipt)
+    if len(producer_identities) > 1:
+        return 'capture_runtime_identity_mismatch'
+    for tick in source.get('following_ticks') or []:
+        if not isinstance(tick, dict) or tuple(str(tick.get(key)) if tick.get(key) is not None else None
+                for key in ('attempt_id', 'plan_sha256')) != identity:
+            continue
+        day, pid, ticks = (tick.get(key) for key in ('capture_source_date', 'capture_runtime_pid', 'capture_runtime_start_ticks'))
+        if all(value is None for value in (day, pid, ticks)):
+            continue  # Original pre-lifecycle observations retain their provenance.
+        native = (day, canonical_epoch(pid), canonical_epoch(ticks))
+        if (not isinstance(day, str) or source.get('capture_source_date', day) != day
+                or native[1] in (None, 0) or native[2] in (None, 0)
+                or (source.get('runtime_pid') is not None and canonical_epoch(source['runtime_pid']) != native[1])
+                or (producer_identities and native not in producer_identities)):
+            return 'capture_runtime_identity_mismatch'
+        producer_identities.add(native)
+    if interrupted and finished:
+        return 'capture_terminal_conflict'
+    if source.get('capture_terminal_required') is True:
+        if type(horizon_seconds) is not int or not 1 <= horizon_seconds <= 1200:
+            return 'capture_horizon_unverified'
+        if not finished and not interrupted:
+            return 'capture_terminal_missing'
+        for receipt in finished + interrupted:
+            fields = receipt['fields']
+            start = _number(fields.get('capture_order_start_epoch'))
+            end = _number(fields.get('capture_end_epoch'))
+            observed = _timestamp(receipt.get('at'))
+            if (fields.get('capture_clock_status') != 'frozen_order_start'
+                    or start is None or start <= 0 or end is None or end != start + 1200
+                    or (order_start_epoch is not None and start != order_start_epoch)
+                    or observed is None):
+                return 'capture_horizon_unverified'
+            if receipt in interrupted:
+                # A recovery timestamp proves when the dead producer was
+                # noticed, not how long its original capture stayed alive.
+                required_end = start + horizon_seconds
+                fixed_exit = _number(source.get('capture_exit_epoch'))
+                if fixed_exit is not None and fixed_exit > start:
+                    required_end = min(required_end, fixed_exit)
+                if (fields.get('capture_interruption_reason') not in {
+                        'position_completed_before_capture_horizon', 'attempt_replaced',
+                        'process_shutdown_observation_censored'}
+                        or not producer_identities
+                        or observed.timestamp() < required_end):
+                    return 'capture_interrupted'
+            elif observed.timestamp() < end:
+                return 'capture_horizon_unverified'
+    elif interrupted:
+        return 'capture_interrupted'
     return None
 
 
@@ -1260,6 +1533,11 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                 "context": bound_context,
                 "attempt_id": parent.get("applied_cap_attempt_id"),
                 "plan_sha256": parent.get("applied_cap_plan_sha256"),
+                "runtime_pid": parent.get("applied_policy_runtime_pid"),
+                "record_id": trade['record_id'], "stock_code": trade['stock_code'],
+                "capture_source_date": trade['entry_date'],
+                "capture_terminal_required": True,
+                "capture_exit_epoch": _timestamp(trade['exit_at']).timestamp(),
                 "fills": [
                     {"at": fill["at"].isoformat(), "price": fill["price"],
                      "qty": fill["qty"], "venue": fill["venue"]}
@@ -2003,6 +2281,11 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
         if current_issue != gen.get("issue") or gen.get('cost_generation')!=source_generation(DATA_DIR,day):
             raise ValueError("quantity_fact_cost_generation_changed")
     for gen in (report.get("pipeline_source_receipts") or {}).values():
+        lifecycle = gen.get('capture_lifecycle_generation')
+        if lifecycle is not None:
+            current, _ = _quantity_capture_lifecycle_sources(DATA_DIR, lifecycle['source_date'])
+            if current != lifecycle:
+                raise ValueError('quantity_capture_lifecycle_generation_changed')
         if pipeline_reference_only:
             from . import mechanistic_entry_runtime_policy as native
             if native.is_pipeline_source_reference(gen['path'], data_root=DATA_DIR):

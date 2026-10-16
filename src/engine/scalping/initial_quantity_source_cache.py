@@ -57,6 +57,11 @@ def decode(value):
 
 
 def fingerprint(trades,path,horizon):
+    from src.engine.scalping.initial_quantity_policy import _quantity_capture_lifecycle_sources
+    dates = {r['entry_date'] for r in trades}
+    if len(dates) != 1:
+        raise ValueError('quantity_capture_cache_date_invalid')
+    captures, _ = _quantity_capture_lifecycle_sources(path.parents[1], next(iter(dates)))
     leaf=byte_generation(path) if path.exists() else None
     archive=Path(str(path)+'.archive_receipt.json')
     engine=Path(__file__).resolve().parents[1]
@@ -66,8 +71,9 @@ def fingerprint(trades,path,horizon):
     readers['utils/jsonl_io.py']=engine.parent/'utils/jsonl_io.py'
     reader={name:hashlib.sha256(path.read_bytes()).hexdigest()
             for name,path in readers.items()}
-    return dict(schema='initial_quantity_source_features_v3',source=leaf,
+    return dict(schema='initial_quantity_source_features_v4',source=leaf,
                 archive=byte_generation(archive) if archive.exists() else None,
+                capture_lifecycle_generation=captures,
                 reader=reader, horizon=horizon,
                 trades=[{k:r.get(k) for k in ('trade_id','record_id','stock_code','entry_date','exit_date','entry_at_fact_buy_time','exit_at')} for r in trades])
 

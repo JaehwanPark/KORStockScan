@@ -3349,6 +3349,26 @@ def verify_completed_census_manifest(report: dict, expected_date: str) -> str | 
     return None
 
 
+def strategy_fact_projection_rows(rows: list[dict]) -> list[dict]:
+    """Keep the full entry-day fact census before display truncation/timelines."""
+    fields = ('id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
+              'buy_price', 'buy_qty', 'buy_time', 'sell_price', 'sell_time',
+              'profit_rate', 'holding_seconds', 'add_count', 'avg_down_count', 'pyramid_count',
+              'scanner_promotion_id', 'effective_venue', 'market_session_bucket')
+    result = []
+    for row in rows:
+        projected = {key: row.get(key) for key in fields}
+        for name, keys in {
+            'exit_signal': ('exit_rule', 'sell_reason_type'),
+            'ai_review_summary': ('headline',),
+            'gatekeeper_replay': ('action', 'action_key', 'allow_entry'),
+        }.items():
+            value = row.get(name)
+            projected[name] = {key: value.get(key) for key in keys} if isinstance(value, dict) else None
+        result.append(projected)
+    return result
+
+
 def build_trade_review_report(
     target_date: str,
     code: str | None = None,
@@ -3720,6 +3740,7 @@ def build_trade_review_report(
         ],
         "sections": {
             "recent_trades": recent_trades,
+            "strategy_position_fact_projection": strategy_fact_projection_rows(visible_rows),
             "completed_trade_projection": completed_projection,
             "open_scalp_position_projection": open_projection,
             "avg_down_rebound_lineage": avg_down_rebound_lineage_rows,

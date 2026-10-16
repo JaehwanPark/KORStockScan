@@ -1315,3 +1315,28 @@ def test_pipeline_archive_preserves_native_stop_binding_only_for_exact_source(tm
         result=post.read_committed(tmp_path,'2026-10-12',verify_full=True)
         assert result[1] == report
         assert post.handoff(tmp_path,'2026-10-13')[1]['status']=='verified_carried'
+
+
+@pytest.mark.parametrize('damage', [None, 'ctime', 'self_digest', 'verification_contract', 'unknown_generation_field'])
+def test_native_archiver_ctime_seal_survives_stop_and_future_handoff(tmp_path, damage):
+    from src.engine.compress_db_backfilled_files import _gzip_file
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    _, report, _, raw = publication(tmp_path)
+    assert _gzip_file(raw, dry_run=False)[0] is True
+    archive = Path(str(raw) + '.gz')
+    receipt_path = Path(str(archive) + '.archive_receipt.json')
+    receipt = json.loads(receipt_path.read_bytes())
+    assert 'ctime_ns' in receipt['archive_generation']
+    if damage == 'ctime': receipt['archive_generation']['ctime_ns'] += 1
+    elif damage == 'self_digest': receipt['artifact_content_sha256'] = '0' * 64
+    elif damage == 'verification_contract': receipt['verification_contract'] = 'unverified'
+    elif damage == 'unknown_generation_field': receipt['archive_generation']['future_unknown'] = 1
+    if damage:
+        if damage != 'self_digest':
+            receipt['artifact_content_sha256'] = content_sha256({k:v for k,v in receipt.items() if k != 'artifact_content_sha256'})
+        receipt_path.write_text(json.dumps(receipt))
+        with pytest.raises((ValueError, OSError)):
+            post.read_committed(tmp_path, '2026-10-12')
+    else:
+        assert post.read_committed(tmp_path, '2026-10-12', verify_full=True)[1] == report
+        assert post.handoff(tmp_path, '2026-10-13')[1]['status'] == 'verified_carried'

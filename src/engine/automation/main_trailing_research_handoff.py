@@ -138,6 +138,56 @@ def _verify_report(path, *, target_date, parent_sha256, memo_budget):
     return report,generation
 
 
+def observe_extension(holding_report, *, target_date, required=False):
+    """Bounded monitor of issued metadata, separate from full native replay.
+
+    The bootstrap still calls verify_extension. Health sweeps must detect a
+    stale code/target binding without replaying every source and partition.
+    """
+    from .main_trailing_all_scope_research import _sealed, code_contract
+    result = dict(status='not_observed', findings=[], target_date=target_date,
+                  validation_scope='bounded_producer_generation_and_current_code',
+                  full_source_revalidation_performed=False, runtime_effect=False)
+    extension = holding_report.get('all_scope_trailing_research')
+    if extension is None:
+        if required:
+            result.update(status='source_invalid', findings=['all_scope_research_extension_missing'])
+        return result
+    try:
+        if not isinstance(extension, dict):
+            raise ValueError('all_scope_research_extension_invalid')
+        path = Path(extension['report_path'])
+        before = path.stat()
+        hashes = {}
+        report = _sealed(path, generations=hashes)
+        from src.engine.lifecycle.holding_window_generation import source_stat
+        if source_stat(path.stat()) != source_stat(before):
+            raise ValueError('all_scope_research_extension_changed_during_read')
+        generation = dict(path=path.name, size=before.st_size, sha256=hashes[str(path)])
+        if (report.get('schema') != 'main_all_scope_exit_research_v2'
+                or report.get('status') != 'complete'
+                or report.get('target_date') != target_date
+                or report.get('source_date') != holding_report.get('date')
+                or report.get('code_contract_sha256') != code_contract()
+                or report.get('allowed_runtime_apply') is not False):
+            raise ValueError('main_trailing_research_handoff_invalid')
+        if (extension.get('report_generation') != generation
+                or extension.get('status') != report['status']
+                or extension.get('input_window_generation_sha256') != report['input_window_generation_sha256']
+                or extension.get('initial_policy_sha256') != report['initial_policy']['policy_sha256']
+                or extension.get('scope_count') != report['scope']['scope_count']
+                or extension.get('allowed_runtime_apply') is not False
+                or source_stat(path.stat()) != source_stat(before)):
+            raise ValueError('all_scope_research_extension_binding_invalid')
+        result.update(status='generation_current', source_date=report['source_date'],
+                      report_path=str(path), report_generation=generation,
+                      code_contract_sha256=report['code_contract_sha256'],
+                      scope_count=report['scope']['scope_count'])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result.update(status='source_invalid', findings=[str(exc)])
+    return result
+
+
 def verify_extension(holding_report, *, target_date):
     extension=holding_report.get('all_scope_trailing_research')
     if extension is None: return None

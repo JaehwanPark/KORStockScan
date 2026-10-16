@@ -32,6 +32,7 @@ class TuningDuckDBRepository:
         self.duckdb_path = duckdb_path or DUCKDB_FILE
         self.read_only = read_only
         self.conn = None
+        self.pipeline_source_receipts = {}
         self._ensure_db()
 
     def _ensure_db(self):
@@ -77,14 +78,28 @@ class TuningDuckDBRepository:
             day=start
             verified_empty=0
             present_dates={p.parent.name[5:] for p in paths}
+            if dataset == 'pipeline_events':
+                from src.engine.build_tuning_monitoring_parquet import verify_pipeline_source_receipt
+                for present_date in present_dates:
+                    receipt_path = dataset_dir / ('date=' + present_date) / 'source_receipt.json'
+                    if receipt_path.exists():
+                        self.pipeline_source_receipts[present_date] = verify_pipeline_source_receipt(
+                            date.fromisoformat(present_date), analytics_root=PARQUET_ROOT)
             while day<=end:
                 if is_krx_trading_day(day) and day.isoformat() not in present_dates:
-                    if dataset!='post_sell':raise ValueError('parquet_window_source_missing:'+dataset+':'+day.isoformat())
-                    self._verify_empty_partition(dataset,day)
+                    if dataset not in {'post_sell', 'pipeline_events'}:raise ValueError('parquet_window_source_missing:'+dataset+':'+day.isoformat())
+                    empty_receipt = self._verify_empty_partition(dataset,day)
+                    if dataset == 'pipeline_events':
+                        self.pipeline_source_receipts[day.isoformat()] = empty_receipt
                     verified_empty+=1
                 day+=timedelta(days=1)
             if not paths:
-                if dataset!='post_sell' or not verified_empty:raise ValueError('parquet_window_source_missing:'+dataset)
+                if not verified_empty:raise ValueError('parquet_window_source_missing:'+dataset)
+                if dataset == 'pipeline_events':
+                    from src.engine.build_tuning_monitoring_parquet import pa, _pipeline_arrow_schema
+                    self.conn.register('_verified_empty_pipeline', pa.Table.from_pylist([], schema=_pipeline_arrow_schema()))
+                    self.conn.execute('CREATE OR REPLACE TEMP VIEW v_pipeline_events AS SELECT * FROM _verified_empty_pipeline')
+                    return True
                 self.conn.execute("CREATE OR REPLACE TEMP VIEW v_post_sell AS SELECT "
                                   "CAST(NULL AS VARCHAR) AS emitted_date, CAST(NULL AS VARCHAR) AS outcome, "
                                   "CAST(NULL AS VARCHAR) AS profit_rate WHERE FALSE")
@@ -114,6 +129,14 @@ class TuningDuckDBRepository:
 
     @staticmethod
     def _verify_empty_partition(dataset,day):
+        if dataset == 'pipeline_events':
+            from src.engine.build_tuning_monitoring_parquet import verify_pipeline_source_receipt
+            if not (PARQUET_ROOT/dataset/('date='+day.isoformat())/'source_receipt.json').is_file():
+                raise ValueError('parquet_window_source_missing:'+dataset+':'+day.isoformat())
+            receipt = verify_pipeline_source_receipt(day, analytics_root=PARQUET_ROOT)
+            if receipt.get('written_count') != 0 or receipt.get('population_state') != 'valid_empty':
+                raise ValueError('parquet_empty_receipt_invalid:'+day.isoformat())
+            return receipt
         import json
         from src.engine.scalping.continuous_reversal_postclose import seal,file_hash
         from src.engine.build_tuning_monitoring_parquet import list_jsonl_files

@@ -1729,3 +1729,18 @@ def test_source_only_artifact_publish_is_immutable(tmp_path):
     with pytest.raises(ValueError, match="immutable_artifact_conflict"):
         _write_immutable_json(path, {"value": 2})
     assert json.loads(path.read_text()) == {"value": 1}
+
+
+@pytest.mark.parametrize('trades,excluded,expected', [
+    ([], {}, 'valid_empty'),
+    ([], {'not_completed': 7, 'before_refresh_start': 1}, 'valid_empty'),
+    ([], {'persisted_fact_generation_invalid': 16}, 'source_gap'),
+    ([], {'identity_missing': 1}, 'source_gap'),
+    ([], {'trade_clock_missing_or_invalid': 1}, 'source_gap'),
+    ([], {'new_unknown_exclusion': 1}, 'source_gap'),
+    ([], {'actual_cost_provenance_missing': 5, 'not_completed': 7}, 'cost_missing'),
+    ([{'actual_net_pnl_krw': 0}], {'actual_cost_provenance_missing': 5}, 'cost_eligible'),
+])
+def test_refresh_economic_census_distinguishes_no_trades_and_rejected_sources(trades, excluded, expected):
+    from src.engine.scalping.initial_quantity_refresh_evaluation import economic_sample_status
+    assert economic_sample_status(dict(trades=trades, census=dict(excluded=excluded))) == expected

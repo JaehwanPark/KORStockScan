@@ -130,6 +130,200 @@ def _status_path(target_date: str) -> Path:
     )
 
 
+def _completion_source_signature(paths):
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    values = {}
+    for path in paths:
+        if path.is_symlink():
+            raise FactSyncSourceError('completion_snapshot_path_invalid')
+        values[str(path)] = source_stat(path.stat()) if path.exists() else None
+    return values
+
+
+def _completion_source_guard_valid(target_date, quality):
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    guard = quality.get('_source_guard')
+    try:
+        return (isinstance(guard, dict)
+                and _completion_source_signature([Path(name) for name in guard]) == guard
+                and source_generation(DATA_DIR, target_date) == quality.get('actual_cost_source_generation'))
+    except (OSError, ValueError, TypeError, FactSyncSourceError):
+        return False
+
+
+def _stream_original_fact_projection(target_date, path, sidecar, native):
+    """Recover a small dated fact census from unchanged original native bytes."""
+    import gzip
+    from src.engine.lifecycle.research_json_stream import Reader
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, MAX_PROJECTION_BYTES
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    from src.engine.scalping.initial_quantity_source_cache import ResidentFacts
+    scalar = {'id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
+        'buy_price', 'buy_qty', 'buy_time', 'sell_price', 'sell_time', 'profit_rate',
+        'holding_seconds', 'add_count', 'avg_down_count', 'pyramid_count',
+        'scanner_promotion_id', 'effective_venue', 'market_session_bucket',
+        'completion_observed_date', 'terminal_population_scope', 'strict_completion_status',
+        'broker_actual_cost_observed', 'broker_actual_fees_taxes_krw', 'realized_pnl_krw_source',
+        'realized_pnl_krw', 'configured_fee_estimate_krw'}
+    nested = {'exit_signal': {'exit_rule', 'sell_reason_type', 'inferred', 'binding_status'},
+              'ai_review_summary': {'headline'}, 'gatekeeper_replay': {'action', 'action_key', 'allow_entry'},
+              'actual_cost_reconciliation': {'status'}}
+    def row(reader):
+        value = {}
+        def field(key, current):
+            if key in scalar:
+                value[key] = current.value(16*1024)
+            elif key in nested:
+                current.spaces()
+                if current.peek() != '{':
+                    if current.value(16*1024) is not None:
+                        raise FactSyncSourceError('completion_snapshot_legacy_nested_field_invalid')
+                    value[key] = None
+                else:
+                    body = {}
+                    def selected(name, child):
+                        if name in nested[key]: body[name] = child.value(16*1024)
+                        else: child.skip()
+                        return iter(())
+                    for _ in current.fields(selected): pass
+                    value[key] = body
+            else:
+                current.skip()
+            return iter(())
+        for _ in reader.fields(field): pass
+        return value
+    def read_first_array(logical, expected_key):
+        physical = logical if logical.exists() else Path(str(logical)+'.gz')
+        opener = gzip.open if physical.suffix == '.gz' else open
+        header, rows = {}, ResidentFacts([])
+        with opener(physical, 'rt', encoding='utf-8') as handle:
+            reader = Reader(handle)
+            reader.take('{')
+            first = True
+            while True:
+                if not first: reader.take(',')
+                key = reader.value(1024); reader.take(':'); first = False
+                if key == 'sections':
+                    reader.take('{')
+                    if reader.value(1024) != expected_key:
+                        raise FactSyncSourceError('completion_snapshot_legacy_layout_invalid')
+                    reader.take(':')
+                    for projected in reader.array(row): rows.append(projected)
+                    return header, rows
+                if key in {'date', 'code', 'scope', 'since', 'meta', 'metrics', 'schema'}:
+                    header[key] = reader.value(MAX_METADATA_BYTES)
+                else:
+                    # Header fields are bounded before traversing any timeline.
+                    reader.value(MAX_METADATA_BYTES)
+    header, rows = read_first_array(path, 'recent_trades')
+    meta = header.get('meta') or {}
+    census = meta.get('completed_census_manifest')
+    total = (header.get('metrics') or {}).get('total_trades')
+    if (header.get('date') != target_date or header.get('code') or header.get('since')
+            or header.get('scope') != 'entered' or meta.get('snapshot_profile') != 'postclose_exit'
+            or not isinstance(census, dict) or digest(census) != native['census_sha256']
+            or type(total) is not int or not 0 <= total <= 300 or len(rows) != total):
+        raise FactSyncSourceError('completion_snapshot_legacy_display_census_unverified')
+    completion_header, completed = read_first_array(sidecar, 'completed_trade_projection')
+    if (completion_header.get('date') != target_date
+            or digest((completion_header.get('meta') or {}).get('completed_census_manifest')) != native['census_sha256']):
+        raise FactSyncSourceError('completion_snapshot_legacy_census_binding_invalid')
+    value = dict(schema='trade_review_fact_projection_v1', source_scope='entered', date=target_date,
+        snapshot_identity=native['projection']['snapshot_identity'],
+        meta={key: meta.get(key) for key in ('warnings', 'snapshot_profile', 'actual_cost_source_generation', 'completed_census_manifest')},
+        metrics=dict(total_trades=total, canonical_completed_trades=len(completed)),
+        sections=dict(recent_trades=rows, completed_trade_projection=completed))
+    if len(json.dumps(value, ensure_ascii=False).encode()) > MAX_PROJECTION_BYTES:
+        raise FactSyncSourceError('completion_snapshot_legacy_scalar_partition_required')
+    value['artifact_sha256'] = _canonical_sha256(value)
+    return value
+
+
+def _load_completion_fact_projection(target_date: str, completion_snapshot: Path) -> dict:
+    """Read only the native producer's bounded, untruncated scalar fact input."""
+    from src.engine.lifecycle.holding_window_generation import _capture_day, MAX_PROJECTION_BYTES, MAX_METADATA_BYTES
+    from src.engine.lifecycle.snapshot_archive import logical_path, read_bytes, generation
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    from src.engine.lifecycle.research_input_budget import Claim
+    expected = Path(DATA_DIR) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
+    path = logical_path(completion_snapshot)
+    if not path.is_absolute() or path.is_symlink() or path.resolve() != expected.resolve():
+        raise FactSyncSourceError('completion_snapshot_path_invalid')
+    sidecar = path.with_suffix('.completed_projection.json')
+    fact_path = path.with_suffix('.fact_projection.json')
+    receipt_path = Path(str(sidecar) + '.dependencies.json')
+    sources = [candidate for logical in (path, sidecar, fact_path) for candidate in (
+        logical, Path(str(logical) + '.gz'), Path(str(logical) + '.gz.archive_receipt.json'))] + [receipt_path]
+    try:
+        before = _completion_source_signature(sources)
+        native = _capture_day(DATA_DIR, path.parent, target_date)
+        if native.get('profile') != 'postclose_exit' or native.get('status') not in {'observed', 'valid_empty'}:
+            raise FactSyncSourceError('completion_snapshot_native_generation_invalid')
+        with Claim(MAX_METADATA_BYTES * 8):
+            raw = read_bytes(receipt_path, maximum=MAX_METADATA_BYTES)
+            receipt = json.loads(raw)
+        if not isinstance(receipt, dict):
+            raise FactSyncSourceError('completion_snapshot_dependency_receipt_invalid')
+        expected_receipt = native['projection']['dependency_receipt']
+        if (len(raw) != expected_receipt['size'] or hashlib.sha256(raw).hexdigest() != expected_receipt['sha256']):
+            raise FactSyncSourceError('completion_snapshot_fact_projection_unsealed')
+        if receipt.get('fact_projection') is None:
+            from src.engine.lifecycle.snapshot_archive import present
+            if present(fact_path):
+                raise FactSyncSourceError('completion_snapshot_fact_projection_unsealed')
+            value = _stream_original_fact_projection(target_date, path, sidecar, native)
+            fact_generation, resident = None, None
+            source_basis = 'native_original_snapshot_stream'
+        else:
+            fact_generation = generation(fact_path)
+            if fact_generation != receipt['fact_projection']:
+                raise FactSyncSourceError('completion_snapshot_fact_projection_generation_changed')
+            with Claim(MAX_PROJECTION_BYTES):
+                fact_raw = read_bytes(fact_path, maximum=MAX_PROJECTION_BYTES)
+                resident = Claim(len(fact_raw) * 8)
+                value = json.loads(fact_raw)
+            source_basis = 'native_bounded_fact_projection'
+        if not isinstance(value, dict):
+            raise FactSyncSourceError('completion_snapshot_fact_projection_contract_invalid')
+        body = {key: item for key, item in value.items() if key != 'artifact_sha256'}
+        census = (value.get('meta') or {}).get('completed_census_manifest')
+        rows = (value.get('sections') or {}).get('recent_trades')
+        completed = (value.get('sections') or {}).get('completed_trade_projection')
+        total = (value.get('metrics') or {}).get('total_trades')
+        if (value.get('schema') != 'trade_review_fact_projection_v1' or value.get('date') != target_date
+                or value.get('source_scope') != 'entered'
+                or value.get('artifact_sha256') != _canonical_sha256(body)
+                or value.get('snapshot_identity') != native['projection']['snapshot_identity']
+                or not isinstance(census, dict) or digest(census) != native['census_sha256']
+                or (value.get('meta') or {}).get('actual_cost_source_generation') != native['cost_generation']
+                or (value.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'
+                or not isinstance(rows, list) or type(total) is not int or total < 0 or len(rows) != total
+                or any(not isinstance(row, dict) or str(row.get('rec_date')) != target_date for row in rows)
+                or any(not str(row.get('id') or '').isdigit() or int(row['id']) <= 0 for row in rows)
+                or len({str(row.get('id') or '') for row in rows}) != total
+                or not isinstance(completed, list)
+                or len(completed) != census.get('projected_count')
+                or any(not isinstance(row, dict) or row.get('completion_observed_date') != target_date
+                       or row.get('status') != 'COMPLETED' for row in completed)
+                or sorted(str(row.get('id') or '') for row in completed) != sorted(census.get('raw_terminal_ids') or [])):
+            raise FactSyncSourceError('completion_snapshot_fact_projection_contract_invalid')
+        if before != _completion_source_signature(sources):
+            raise FactSyncSourceError('completion_snapshot_changed_during_read')
+        value['_native_source_proof'] = dict(schema='strategy_position_fact_snapshot_source_v1',
+            source_date=target_date, projection=native['projection'], fact_projection=fact_generation,
+            source_basis=source_basis, scalar_projection_sha256=value['artifact_sha256'],
+            actual_cost_source_generation=native['cost_generation'])
+        value['_source_guard'] = before
+        value['_native_budget_claim'] = resident
+        return value
+    except FactSyncSourceError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        if str(exc).startswith('shared_research_budget_'):
+            raise
+        raise FactSyncSourceError('completion_snapshot_native_projection_invalid:' + type(exc).__name__) from exc
+
+
 def _saved_fact_generation_issue(
     target_date: str, *, snapshot: dict | None = None,
 ) -> str | None:
@@ -144,11 +338,26 @@ def _saved_fact_generation_issue(
     if (receipt.get("target_date") != target_date
             or receipt.get("status") not in {"succeeded", "valid_empty"}):
         return "fact_sync_receipt_not_current_success"
-    if snapshot is None:
+    native_projection = False
+    if snapshot is None and target_date >= COMPLETED_CENSUS_CONTRACT_FROM:
+        from src.engine.lifecycle.snapshot_archive import present
+        source = Path(DATA_DIR) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
+        if present(source.with_suffix('.fact_projection.json')):
+            try:
+                snapshot = _load_completion_fact_projection(target_date, source)
+                native_projection = True
+            except FactSyncSourceError as exc:
+                return str(exc)
+        else:
+            # Original native completion sidecars remain verifiable through
+            # bounded metadata, without decoding a multi-gigabyte snapshot.
+            from src.engine.scalping.initial_quantity_policy import _quantity_fact_generation_issue
+            return _quantity_fact_generation_issue(target_date)
+    elif snapshot is None:
         snapshot = load_monitor_snapshot("trade_review", target_date)
     if not isinstance(snapshot, dict):
         return "trade_review_snapshot_missing"
-    issue = verify_completed_census_manifest(snapshot, target_date)
+    issue = None if native_projection else verify_completed_census_manifest(snapshot, target_date)
     if issue:
         return issue
     census = snapshot["meta"]["completed_census_manifest"]
@@ -156,6 +365,10 @@ def _saved_fact_generation_issue(
             or receipt.get("completed_census_projection_sha256")
             != [census["projection_sha256"]]):
         return "stale_fact_source_generation"
+    if native_projection and receipt.get('completion_snapshot_source') != snapshot['_native_source_proof']:
+        return 'stale_fact_snapshot_projection_generation'
+    if native_projection and receipt.get('actual_cost_source_generation') != census.get('actual_cost_source_generation'):
+        return 'persisted_fact_cost_generation_stale'
     return None
 
 
@@ -606,20 +819,22 @@ def _build_trade_fact_rows(
     target_date: str, *, scale_in_projection=None,
     scanner_source_quality: dict[str, Any] | None = None,
     completion_census_quality: dict[str, Any] | None = None,
+    completion_snapshot: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    report = build_trade_review_report(
+    report = (_load_completion_fact_projection(target_date, completion_snapshot)
+              if completion_snapshot is not None else build_trade_review_report(
         target_date=target_date,
         since_time=None,
         top_n=100_000,
         scope="entered",
-    )
+    ))
     rows = list((report.get("sections", {}) or {}).get("recent_trades", []) or [])
     warnings = list((report.get("meta", {}) or {}).get("warnings", []) or [])
     projection = (report.get("sections") or {}).get("completed_trade_projection")
     if target_date >= COMPLETED_CENSUS_CONTRACT_FROM or isinstance(
         (report.get("meta") or {}).get("completed_census_manifest"), dict
     ):
-        issue = verify_completed_census_manifest(report, target_date)
+        issue = (None if completion_snapshot is not None else verify_completed_census_manifest(report, target_date))
         if issue:
             raise FactSyncSourceError(issue)
     completion_by_id = {
@@ -629,6 +844,9 @@ def _build_trade_fact_rows(
     census = (report.get("meta") or {}).get("completed_census_manifest") or {}
     if completion_census_quality is not None:
         completion_census_quality.update(census)
+        if completion_snapshot is not None:
+            completion_census_quality['completion_snapshot_source'] = report['_native_source_proof']
+            completion_census_quality['_source_guard'] = report['_source_guard']
     if warnings and (target_date >= COMPLETED_CENSUS_CONTRACT_FROM or census):
         raise FactSyncSourceError("trade_review_source_warning")
     facts: list[dict[str, Any]] = []
@@ -1338,6 +1556,8 @@ def _sync_status_payload(
             for fact in completed
         )),
         "actual_cost_source_generation": (completion_census_quality or {}).get("actual_cost_source_generation"),
+        **({'completion_snapshot_source': completion_census_quality['completion_snapshot_source']}
+           if completion_census_quality and completion_census_quality.get('completion_snapshot_source') else {}),
         "completed_census_run_ids": (
             [str(completion_census_quality["run_id"])]
             if completion_census_quality and completion_census_quality.get("run_id")
@@ -1367,7 +1587,7 @@ def _sync_status_payload(
     }
 
 
-def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
+def sync_trade_performance_for_date(target_date: str, *, completion_snapshot: Path | None = None) -> dict[str, Any]:
     _DB.init_db()
     from src.engine.scalping.scale_in_split_order_plan import _query_actual_fill_inventory
     inventory = _query_actual_fill_inventory(target_date)
@@ -1389,6 +1609,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
             scale_in_projection=projection if inventory else None,
             scanner_source_quality=scanner_source_quality,
             completion_census_quality=completion_census_quality,
+            **({'completion_snapshot': completion_snapshot} if completion_snapshot is not None else {}),
         )
     except FactSyncSourceError as exc:
         receipt = _write_status(
@@ -1408,6 +1629,8 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
     issues = _validate_fact_batch(
         facts, warnings, target_date, scanner_source_quality=scanner_source_quality,
     )
+    if completion_snapshot is not None and not _completion_source_guard_valid(target_date, completion_census_quality):
+        issues.append('completion_snapshot_changed_before_fact_write')
     if issues:
         receipt = _write_status(
             target_date,
@@ -1428,7 +1651,17 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
 
     summary_rows = _aggregate_daily_rows(facts)
     sync_status = "succeeded" if facts else "valid_empty"
+    def require_current_completion_source():
+        if completion_snapshot is None or _completion_source_guard_valid(target_date, completion_census_quality):
+            return
+        receipt = _write_status(target_date, _sync_status_payload(
+            status='source_blocked', facts=facts, warnings=warnings,
+            issues=['completion_snapshot_changed_during_fact_write'], prior_fact_count=prior_fact_count,
+            source_digest=source_digest, scanner_source_quality=scanner_source_quality,
+            completion_census_quality=completion_census_quality))
+        raise FactSyncSourceError('strategy_position_fact_sync_source_blocked:' + receipt['artifact_sha256'])
     with _DB.get_session() as session:
+        require_current_completion_source()
         session.execute(
             delete(TradePerformanceFact).where(
                 TradePerformanceFact.rec_date == rec_date
@@ -1471,6 +1704,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
                         "broker_actual_fees_taxes_krw"):
                 if getattr(row,key) != _trade_fact_db_payload(fact).get(key):
                     raise FactSyncSourceError("fact_persisted_economics_or_lineage_mismatch:"+key)
+        require_current_completion_source()
 
     _DB.analyze_performance_tables()
     receipt = _write_status(
@@ -1530,18 +1764,18 @@ def build_strategy_position_performance_report(
                 )
 
             if summary_rows:
-                source_snapshot = load_monitor_snapshot("trade_review", target_date)
-                has_new_census = isinstance(
-                    ((source_snapshot or {}).get("meta") or {}).get(
-                        "completed_census_manifest"
-                    ), dict
-                )
-                if target_date >= COMPLETED_CENSUS_CONTRACT_FROM or has_new_census:
-                    issue = _saved_fact_generation_issue(
-                        target_date, snapshot=source_snapshot
-                    )
+                if target_date >= COMPLETED_CENSUS_CONTRACT_FROM:
+                    issue = _saved_fact_generation_issue(target_date)
                     if issue:
                         raise FactSyncSourceError(issue)
+                else:
+                    source_snapshot = load_monitor_snapshot("trade_review", target_date)
+                    has_new_census = isinstance(
+                        ((source_snapshot or {}).get("meta") or {}).get("completed_census_manifest"), dict)
+                    if has_new_census:
+                        issue = _saved_fact_generation_issue(target_date, snapshot=source_snapshot)
+                        if issue:
+                            raise FactSyncSourceError(issue)
 
             facts = (
                 session.query(
@@ -1700,6 +1934,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Target date (YYYY-MM-DD)",
     )
     parser.add_argument(
+        '--completion-snapshot', type=Path,
+        help='Consume the exact native postclose snapshot scalar fact projection.',
+    )
+    parser.add_argument(
         "--print",
         dest="print_stdout",
         action="store_true",
@@ -1707,7 +1945,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        result = sync_trade_performance_for_date(args.target_date)
+        result = sync_trade_performance_for_date(args.target_date,
+            **({'completion_snapshot': args.completion_snapshot} if args.completion_snapshot is not None else {}))
     except FactSyncSourceError as exc:
         if args.print_stdout:
             print(json.dumps({"status": "source_blocked", "reason": str(exc)}))

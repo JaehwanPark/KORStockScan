@@ -59,9 +59,20 @@ def test_cost_source_precedes_fact_and_quantity_generation_without_new_hard_gate
     script = _text('deploy/run_threshold_cycle_postclose.sh')
     start = script.index('wait_for_postclose_resources "holding_broker_cost_source"')
     end = script.index('# Refresh exact execution-derived facts', start)
+    snapshot = script.index('wait_for_postclose_resources "postclose_completion_prefix"')
     fact = script.index('-m src.engine.strategy_position_performance_report')
     quantity = script.index('-m src.engine.scalping.initial_quantity_policy \\\n')
-    assert start < end < fact < quantity
+    assert start < end < snapshot < fact < quantity
+    assert '--completion-snapshot "$PROJECT_DIR/data/report/monitor_snapshots/trade_review_${TARGET_DATE}.json"' in script[fact:quantity]
+    assert script.count('MONITOR_SNAPSHOT_PROFILE=postclose_exit') == 2
+    suffix = script.index('MONITOR_SNAPSHOT_POSTCLOSE_PHASE=holding_suffix')
+    last_ai_launch = script.index('for stage in legacy_machine_report main_auxiliary_policy; do')
+    upstream_wait = script.index('for stage in main_machine_policy legacy_machine_report main_auxiliary_policy; do')
+    stop = script.index('--stage main_stop_confirmation --date')
+    assert fact < quantity < last_ai_launch < upstream_wait < suffix < stop
+    assert 'MONITOR_SNAPSHOT_POSTCLOSE_PHASE=completion_prefix' in script[snapshot:fact]
+    assert 'verified_postclose_exit_prefix_manifest' in script[snapshot:fact]
+    assert 'verified_postclose_exit_snapshot_manifest' not in script[snapshot:fact]
     assert script.count('-m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE"') == 1
     body = script[start:end]
     command = ('set -e\nwait_for_postclose_resources() { return 0; }\n'

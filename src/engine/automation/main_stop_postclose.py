@@ -422,15 +422,23 @@ def _archived_pipeline_source(path, expected, *, verify_full=False):
     receipt, receipt_sha = bounded(receipt_path, 128 * 1024)
     generation = receipt.get('archive_generation') or {}
     observed = dict(device=before.st_dev, inode=before.st_ino,
-                    size_bytes=before.st_size, mtime_ns=before.st_mtime_ns)
+                    size_bytes=before.st_size, mtime_ns=before.st_mtime_ns,
+                    ctime_ns=before.st_ctime_ns)
+    from src.engine.automation.source_quality_hard_gate import _generation_matches
     if (receipt.get('schema') != 'pipeline_raw_archive_identity_v1'
             or receipt.get('logical_path') != str(path)
             or receipt.get('logical_content_sha256') != expected.get('sha256')
             or receipt.get('logical_size_bytes') != expected.get('size')
             or receipt.get('runtime_effect') is not False
             or receipt.get('allowed_runtime_apply') is not False
-            or generation != observed):
+            or not _generation_matches(generation, observed)):
         raise ValueError('stop_pipeline_archive_receipt_invalid')
+    if 'ctime_ns' in generation:
+        from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+        if (receipt.get('verification_contract') != 'logical_sha256_size_crc_to_eof_v1'
+                or receipt.get('artifact_content_sha256') != content_sha256({
+                    k:v for k,v in receipt.items() if k != 'artifact_content_sha256'})):
+            raise ValueError('stop_pipeline_archive_receipt_invalid')
     if verify_full:
         sha, size, _ = _vote_watch_content(archive, max_bytes=expected['size'])
         if sha != expected['sha256'] or size != expected['size']:
