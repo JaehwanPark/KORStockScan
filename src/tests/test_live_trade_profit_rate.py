@@ -5686,3 +5686,55 @@ def test_fast_sell_final_nonzero_remaining_never_completes():
     )
     assert result["status"] == "partial"
     assert state.get("sell_receipt_position_complete") is not True
+
+
+@pytest.mark.parametrize('damage',[None,'venue','venue_source','broker_venue','exit_venue','route','route_request',
+    'envelope','packet','ingress','clock','session_clock','session_schema','custody','quantity','remaining','buy','simulation','tamper'])
+def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkeypatch,damage):
+    from copy import deepcopy
+    now=datetime(2026,10,16,9,23,48,936821,tzinfo=timezone(timedelta(hours=9)))
+    stock=dict(id=49294,code='036930',name='Jusung')
+    fields=dict(order_no='0015649',execution_no='30414',sell_qty=1,remaining_sell_qty=0,
+        actual_order_submitted=True,broker_order_forbidden=False,exit_rule='scalp_trailing_take_profit',
+        holding_path_terminal_signal_binding='same_position_buy_generation',holding_path_position_key='record:49294',
+        holding_path_buy_fill_identity='a'*64,holding_path_policy_bundle_sha256='b'*64,holding_path_signal_id='original',
+        broker_execution_provenance_complete=False,main_lifecycle_broker_reconciled=True,
+        main_lifecycle_reconciled_final_exit=True,sell_execution_receipt_quantity_contract_complete=True,
+        sell_execution_receipt_unit_fill_consistent=True,exit_receipt_submission_custody_committed=True,
+        exit_receipt_submission_custody_source_gap=False,exit_execution_received_at=now.isoformat(),
+        actual_execution_venue='UNKNOWN',broker_actual_execution_venue='UNKNOWN',exit_effective_venue='UNKNOWN',
+        actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing',
+        broker_actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing',
+        broker_route='SOR',broker_route_requested='SOR',
+        main_lifecycle_broker_raw_envelope_schema='kiwoom_websocket_order_execution_00_values_v1',
+        main_lifecycle_broker_raw_source_type='00',broker_execution_receive_time_source='websocket_packet_ingress',
+        broker_execution_received_at=now.isoformat(),exit_market_session_time_source='websocket_packet_ingress',
+        session_contract_version='market_session_contract_v2',main_lifecycle_actual_cost_status='cost_source_unavailable')
+    changes=dict(venue=('actual_execution_venue','KRX'),venue_source=('actual_execution_venue_source','other'),
+        broker_venue=('broker_actual_execution_venue','KRX'),exit_venue=('exit_effective_venue','KRX'),
+        route=('broker_route','KRX'),route_request=('broker_route_requested','KRX'),
+        envelope=('main_lifecycle_broker_raw_envelope_schema','other'),packet=('main_lifecycle_broker_raw_source_type','04'),
+        ingress=('broker_execution_receive_time_source','poll'),clock=('broker_execution_received_at',now.replace(second=49).isoformat()),
+        session_clock=('exit_market_session_time_source','poll'),session_schema=('session_contract_version','other'),
+        custody=('exit_receipt_submission_custody_committed',False),quantity=('sell_execution_receipt_quantity_contract_complete',False),
+        remaining=('remaining_sell_qty',1),buy=('holding_path_buy_fill_identity','bad'))
+    if damage in changes:fields[changes[damage][0]]=changes[damage][1]
+    if damage=='simulation':stock['simulation_book']='probe'
+    leg=receipts._build_sell_lifecycle_outbox_leg(stock,code='036930',target_id=49294,now=now,
+        stage='sell_completed',event_fields=fields);original=deepcopy(leg);captured=[]
+    def emit(pipeline,name,code,stage,*,record_id,fields):
+        normalized={str(k):str(v) for k,v in fields.items()}
+        if damage=='tamper':normalized['broker_execution_provenance_complete']='True'
+        captured.append(normalized)
+        return dict(pipeline=pipeline,stock_code=code,stage=stage,record_id=record_id,fields=normalized,
+            structured_append_succeeded=True,structured_append_status='raw_appended')
+    monkeypatch.setattr(receipts,'emit_pipeline_event',emit)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (damage is None)
+    assert leg==original
+    if damage is None:
+        assert captured[0]['native_receipt_execution_venue_status']=='unknown_preserved'
+        assert captured[0]['native_receipt_source_gap']=='actual_execution_venue_unresolved'
+        assert captured[0]['broker_execution_provenance_complete']=='False'
+        assert captured[0]['actual_execution_venue']=='UNKNOWN'
+        assert captured[0]['main_lifecycle_actual_cost_status']=='cost_source_unavailable'
+        assert 'main_lifecycle_id' not in captured[0] and 'attempt_id' not in captured[0]

@@ -215,3 +215,6 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 
 
 09:06:39 policy_binding_gap 추가 수리는 기존 보고서 consumer에서 원 legacy BASE target pin과 native record/symbol을 엄격히 결속한다. 원 pin/hash를 보존하고 승인 부모 vector와 동일한 값만 검증하며 native logger의 bounded flat dictionary repr를 안전하게 읽는다. 매매/정책/수량/provider를 변경하지 않는다. driver preflight 중단·원 신호 재현·회귀·새 native 배포 및 자연 보고서 수용은 위 배포 리뷰의09:06:39 절을 따른다. 원 first-crossing/비용 source gap은 원 owner에 유지한다.
+
+
+036930의 확인된 SOR SELL은 venue UNKNOWN을 보존한 typed custody ACK로 닫는다. 기존 native terminal/BUY/TP/qty/custody/packet-clock 검증과 source-gap 표기를 요구하며 거래소·비용·전략 권한을 승격하지 않는다. 앞선 세 key와 새036930 ACK, native revive 후 고정5개 실제 편입, 최신 수동 제외 보존·새 generation fixture/PID·자연 detector를 수용한다. 원인·동시 재기동/정지 복구 증거는 위 배포 리뷰에 보존한다.

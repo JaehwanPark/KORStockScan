@@ -43,7 +43,7 @@ REVIEWED_SUCCESSORS = {
         'c2c4bc102308a27e521def1669c196bcc61ed13cef1d49d10d90e1f48fa225ce'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '39d0f10c41b661a3d8ea794ff66bfa86b55fab31351062bfb41463bb943bbfe5'),
+        '0c46142960ee6381e8b7b66e546108e88d37c552c4a5fa4601c265db8101d8f4'),
 }
 
 # The next dated native report already carries the formerly reviewed successor.
@@ -51,7 +51,7 @@ REVIEWED_SUCCESSORS = {
 REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
     'holding_vote': (
         '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
-        '39d0f10c41b661a3d8ea794ff66bfa86b55fab31351062bfb41463bb943bbfe5'),
+        '0c46142960ee6381e8b7b66e546108e88d37c552c4a5fa4601c265db8101d8f4'),
 }
 
 

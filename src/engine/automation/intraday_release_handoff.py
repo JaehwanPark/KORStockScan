@@ -694,7 +694,7 @@ REVIEWED_CARRIED_VOTE_PREFIX_SOURCES = {
 REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     'src/engine/sniper_execution_receipts.py': (
         'dc4a57286b38f72c96e538e7eb3851f806af1b9c07e0145f3f5aed51ea00bbe1',
-        '0171cada0bb9eeb3410671a0fb4824914c0255eb32aceeb69cea6d359401694b',
+        '49e76d6b956ae3af34ff2d790741a47fb2db1652dc36c146fbfb22477d32a826',
     ),
 }
 

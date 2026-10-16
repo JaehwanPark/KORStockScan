@@ -118,3 +118,24 @@ native snapshot repr는 최대4096자의 정확한 flat8-key literal만 AST로 �
 holding generation39d0f10c…와 다른 세 capability 및 optional code hash는 동일하다. native-v6/원 보고서/code pin을 바꾸지 않는다. 최종 회귀·compile/diff/parser 뒤 새 immutable 통합본을 배포하며 정규 holding 보고서와 후속 detector에서 실제 policy_binding_gap 해소를 확인한다. 과거 first-crossing 세 원천 공백·비용 미상은 그대로 기존 owner에 남긴다.
 
 legacy 보완 최종9 suites **3182 PASS/16.73초**, Python compile·diff·print-only parser PASS다. 원 첫 신호 native scoped audit도 policy binding0결손을 재현했다. 실제 일일 보고서·현재 PID 후속 수용은 다음 배포 영수증을 따른다.
+
+
+## 다른 세션의 수동 제외·재기동과 closed-consumption 복구
+
+사용자가 다른 세션에서 수동관리종목 제외와 봇 재기동을 했다고 확인했다. Main2984178은09:09 전후 사라졌고,09:14:05 기존3c의 별도 기동은09:14:54 bootstrap 단계에서 실패했다. 이 동시 작업을75d driver 중단의 결과로 단정하지 않는다. 기존 source/manifest/env/PREOPEN·준비본 해시는 그대로였다. 최신 수동 제외 파일의456010/operator_manual_control 추가와 SHA9d169aed…를 private snapshot으로 보존하고 덮어쓰지 않았다.
+
+bdd461fde 최초 일반 preflight는 원 PID 부재로 selector 전 차단됐다. 원 실패 로그를 보존했다. 이미 완료된3c transition·같은 PID/start_ticks/cwd의 봉인 consumption·75d의 원 live predecessor identity와 frozen 파일을 대조한 뒤 existing native previous-stopped 인계를 사용했다. 별도 private operational helper는 Main/원 supervisor/요청/hold 부재, 정확한 historical receipt와 native handoff verify 및 세 code gate를 확인하고, 실패 출력이 보존된 exact dead pane만 정리한다. 새 owned hold/selector와 native prepare/bootstrap/auxiliary/launcher/독립 PID attestation은 기존 Deployment를 사용한다. 과거 PID를 현재 alive로 합성하지 않으며 원 중단/실패 attempt는 남긴다. helper의 dead-pane capture target 형식 실패는 공유 상태 변경 전이었고 해당 로그도 보존했다.
+
+복구는09:23:32 PASS, 실제 Main3016558/start_ticks17406712,09:23:48 정책 reader/보유 복원/정상 loop 확인이다. optional code/calendar true·17개 역사 SHA 불변·앞선 세 원 SELL journal 부재·현재456010 포함 수동 제외 bytes 불변을 확인했다. 원 익절 비용/source gap은 보존한다.
+
+## 036930 SOR terminal ACK와 상시감시4개의 공통 원인
+
+사용자가09:24:31/32 036930의 key15519689…를 추가했고 상시감시4개 이유를 요청했다.09:23:48 실제 SELL은 record49294/order0015649/execution30414/qty1/remaining0이다. 원 journal을 보존했다. 같은 BUY/TP bundle/signal·제출 custody·qty/unit·broker final reconciliation은 유효하지만 SOR 실제 거래소가 official_exchange_fields_ambiguous_or_missing/UNKNOWN이라 broker_execution_provenance_complete=false다. 기존 traceless broker-position ACK가 이를 전부 거부했다. 실제 거래소를 KRX로 추정하거나 비용·출처를 complete로 바꾸지 않는다.
+
+수리는 receipt custody만 대상으로 한다. 정확한 UNKNOWN/원 source label·SOR 요청/route·기존 normalized raw envelope/source-type·packet ingress clock 일치·session contract와 모든 기존 terminal/BUY/TP/custody/qty/final/잔량0 검증이 함께 맞을 때만 typed ACK를 허용한다. native_receipt_source_gap=actual_execution_venue_unresolved와 venue unknown/provenance false를 명시적으로 남긴다. 기존 entry-trace receipt도 불완전 venue의 custody ACK를 허용하므로 이 경계에 맞추되 scanner coverage/Main lifecycle/actual cost/order authority는 만들지 않는다. REST/WebSocket 요청·parser·FID 매핑은 수정하지 않았다.
+
+원036930 leg의 읽기 전용 fake-append 리허설은 ACK 계약 PASS·원 bytes/hash 불변·journal/provider/order 쓰기0이다. 새19개 venue/route/envelope/clock/custody/qty/BUY/simulation/변조 회귀를 포함한 live-profit suite138 PASS를 확인했다. [원 leg 재현](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/sell-outbox-036930-offline-rehearsal.json). receipt exact successor49e76d6b…와 holding generation0c461429…의 기존 두 원 source-pair를 결속하고 새 isolated fixture를 요구한다.
+
+고정 목록은005930/034020/403870/196170/036930의5개다. 실제3016558은 WATCHING4개였고 036930은 완료49294의 ACK가 미완료라 revive49342/WATCHING의 DB 생성 후 런타임 attach가 보류됐다. source DB readonly 대사로 나머지4개 WATCHING과49342를 확인했다.456010은 고정 목록이 아니며 수동 제외 때문에5→4가 된 것이 아니다. 원 ACK 수리 후 native revive/현재 PID의 실제5개 편입으로 닫는다. 상시감시 충돌 guard를 낮추거나 중복 watch를 생성하지 않는다. [DB 대사](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/fixed-watch-five-readonly-db.json).
+
+036930 보완6 suites **2365 PASS/14.10초**, compile·diff·print-only parser PASS다. 기존3182 검증과 중복 합산하지 않는다. 새 generation fixture와 승인 배포/자연4-key ACK·5개 편입·최종 detector는 별도 후속 수용이다.
