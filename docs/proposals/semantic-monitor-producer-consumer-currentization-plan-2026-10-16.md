@@ -314,3 +314,5 @@ source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10
 기동·정책 선택은 압축 영수증과 bounded metadata를 사용한다. 큰 거래 JSON을 선택 함수에서 메모리에 올리던 중복 읽기는 streaming digest로 바꾸고, 필요한 보유 보고서만 bounded decode한다. 기존 explicit digest session은 같은 압축 세대의 digest를 재사용한다. 실제 연구가 내용을 필요로 하면 gzip을 streaming으로 읽고 CRC를 검증한다. 기존 날짜·다음 정책일·controller 보호와 원 failed/PASS/policy bytes를 유지한다.
 
 리뷰·변조/CRC/교체/링크/동일 window·정책 인계·큰 projection 무해제 회귀를 통과한 뒤, 실행 중인 기존 wrapper 종료를 확인하고 다음 정상 기동용 selected release와 prepared 인계를 다시 검증한다. 자동 매매 기동·실주문·경제성 수용은 별도이며 이번 변경으로 발생시키지 않는다.
+
+실측에서 손절 확인은 약10분간 수행됐고 같은 원천 검증이 여러 단계에서 반복됐다. native 손절 CLI에도 기존 postclose invocation-local digest session을 적용해 첫 전체 검증은 수행하고 같은 stat/ctime 세대의 후속 digest만 메모리에서 재사용한다. 라이브러리 기본 검증은 유지하며 세션은 호출 종료 시 폐기하고 persistent 판정 캐시를 만들지 않는다. full/reused bytes와 시간은 별도 진단으로 기록한다.

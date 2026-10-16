@@ -184,3 +184,31 @@ def test_legacy_archive_does_not_invent_a_previously_missing_inventory(snapshot)
         handle.write(b'{}')
     assert not source.identity_available(snapshot)
     assert input_inventory(snapshot.parents[2],['2026-10-08'],master,parent) == before
+
+
+def test_stop_cli_reuses_digests_without_persistent_validator_state(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    import sys
+    from src.engine.automation import main_stop_postclose as stop
+    from src.engine.infrastructure.validation_digest_session import ACTIVE
+    from src.engine import log_archive_service as snapshots
+    from src.utils import constants
+    manifest=tmp_path/'manifest.json';manifest.write_text('{}')
+    raw=tmp_path/'large.bin';raw.write_bytes(b'x'*(2*1024*1024))
+    monkeypatch.setattr(constants,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(stop,'direct_job',lambda *a,**k:nullcontext())
+    monkeypatch.setattr(snapshots,'verified_postclose_exit_snapshot_manifest',lambda *a,**k:manifest)
+    monkeypatch.setattr(stop,'baseline',lambda *a:({},{}))
+    monkeypatch.setattr(stop,'sources',lambda *a:[])
+    monkeypatch.setattr(stop,'completed_evidence',lambda *a:[])
+    observed={}
+    def publish(*a,**k):
+        session=ACTIVE.get();assert session.binding['role']=='postclose'
+        assert byte_generation(raw)==byte_generation(raw)
+        observed.update(session.stats)
+    monkeypatch.setattr(stop,'publish',publish)
+    monkeypatch.setattr(sys,'argv',['main_stop_postclose','--date','2026-10-16','--target','2026-10-19'])
+    assert stop.main()==0
+    assert observed['full_reads']==observed['reused_reads']==1
+    assert ACTIVE.get() is None
+    assert not (tmp_path/'runtime/validation_digests').exists()

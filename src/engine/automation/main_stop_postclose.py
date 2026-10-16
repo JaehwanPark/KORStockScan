@@ -922,8 +922,9 @@ def main():
     from src.utils.constants import DATA_DIR
     from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    from src.engine.infrastructure.validation_digest_session import postclose_session
     if args.target!=_next_krx_trading_day(args.publication_date or args.date):raise ValueError('stop_next_session_target_invalid')
-    with direct_job(DATA_DIR,STAGE,args.date):
+    with direct_job(DATA_DIR,STAGE,args.date), postclose_session(DATA_DIR,args.date) as validation:
         snapshot=verified_postclose_exit_snapshot_manifest(args.date,data_root=DATA_DIR)
         if snapshot is None:raise ValueError('stop_exit_snapshot_unverified')
         parents,receipt=baseline(DATA_DIR,args.target)
@@ -942,6 +943,7 @@ def main():
         publish(DATA_DIR,args.date,args.target,parents=parents,parent_receipt=receipt,
             source_paths=sources(DATA_DIR,args.date),snapshot_receipt=dict(path=str(snapshot),sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest()),experiments=experiments,
             completed=completed_evidence(DATA_DIR, days),economic_sources=economic_sources)
+    print(json.dumps(dict(source_date=args.date,validation_io=validation.stats,runtime_effect=False)))
     return 0
 
 
