@@ -119,6 +119,30 @@ def test_archive_preserves_native_holding_policy_source_handoff(tmp_path, monkey
     assert stats['snapshots']['compressed']==0
 
 
+def test_archive_preserves_frozen_trade_window_identity(tmp_path, monkeypatch):
+    from src.engine import log_archive_service as snapshots
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    from src.engine.lifecycle.holding_window_generation import capture_window, verify_window
+    directory=tmp_path/'report/monitor_snapshots';directory.mkdir(parents=True)
+    pipeline=tmp_path/'pipeline';pipeline.mkdir()
+    monkeypatch.setattr(snapshots,'MONITOR_SNAPSHOT_DIR',directory)
+    day='2026-10-08'
+    payload=dict(date=day,metrics={'canonical_completed_trades':0},
+        meta={'snapshot_profile':'postclose_exit','sell_completed_event_ids':[]},
+        sections={'completed_trade_projection':[],'open_scalp_position_projection':[]})
+    payload['meta']['completed_census_manifest']=completed_census_manifest(payload)
+    path=snapshots.save_monitor_snapshot('trade_review',day,payload)
+    window=capture_window(tmp_path,[day]);assert window['dependencies'][day]['status']=='valid_empty'
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',directory)
+    monkeypatch.setattr(archive,'PIPELINE_EVENTS_DIR',pipeline)
+    monkeypatch.setattr(archive,'_postclose_source_protection',lambda *a:None)
+    monkeypatch.setattr(archive,'_snapshot_manifest_verifies',lambda *a:True)
+    stats=archive.run(retention_days=1,today=date(2026,10,16),dry_run=False)
+    verify_window(tmp_path,window)
+    assert path.exists() and not path.with_suffix('.json.gz').exists()
+    assert stats['retained_trade_window_source_count']==1
+
+
 def test_run_does_not_compress_manifested_corrupt_snapshot(tmp_path, monkeypatch):
     snapshot_dir = tmp_path / "monitor_snapshots"
     snapshot_dir.mkdir(parents=True)

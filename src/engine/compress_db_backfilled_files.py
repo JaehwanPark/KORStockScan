@@ -33,6 +33,9 @@ THRESHOLD_PARTITION_MIN_AGE_DAYS = 30
 # Keep aligned with backfill_threshold_cycle_events.DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION.
 # This module must remain import-side-effect free because it runs under disk-pressure cleanup.
 THRESHOLD_PARTITION_MAX_ROWS = 25_000
+# Frozen holding windows can bind a trade snapshot's original file identity.
+# Pre-baseline snapshots are archive-only and cannot be policy inputs.
+POLICY_INPUT_SNAPSHOT_START = date(2026, 6, 5)
 
 
 def _parse_iso_date(value: str) -> date | None:
@@ -454,6 +457,7 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
         },
         "skipped_unverified": 0,
         "retained_holding_policy_source_count": 0,
+        "retained_trade_window_source_count": 0,
         "skipped_postclose_protected": 0,
         "postclose_protection_reasons": {},
         "errors": [],
@@ -512,6 +516,9 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
         # postclose custody alone does not make that ancestry gzip compatible.
         if kind == 'holding_exit_observation':
             stats['retained_holding_policy_source_count'] += 1
+            continue
+        if kind == 'trade_review' and target_date >= POLICY_INPUT_SNAPSHOT_START:
+            stats['retained_trade_window_source_count'] += 1
             continue
         stats["snapshots"]["scanned"] += 1
         try:
