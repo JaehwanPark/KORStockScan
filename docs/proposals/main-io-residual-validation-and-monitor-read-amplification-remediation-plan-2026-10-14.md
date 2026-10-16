@@ -209,3 +209,6 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 ### 10/16 자연 감시 결과의 추가 보완
 
 실제 b4d23f658 기동과 세 SELL terminal native ACK, optional code/calendar 재결속을 확인했다. 후속 정규 감시에서 holding_exit_sentinel의 aware/naive clock 혼용을 발견하여 기존 raw/cache 파싱을 KST wall-time으로 통일한다. cron 복구는 이 owner만 같은 owner의 후속 DONE을 요구하며 기존 FAIL 이력과 새 오류 감지를 보존한다. observer는 완전한 현재 PID 평가 전 차단 trace·호출0을 증명한 lazy 요청/pending 부재만 제한 경고로 분류한다. partial/source gap/runtime admission false는 유지한다. 운영 수용은 같은 DirectFamilyPreopenPolicyHandoff 아래 새 native PID·자연 sentinel DONE·전체 detector로 확인한다. [원인·경계·시험·수용](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md#0842-observer-경고와-보유-감시기-시각-오류-보완). 다음 자연 optional 야간은 기존 MainMarketWeaknessPostcloseObservation1008 OPEN이다.
+
+
+09:01:47의 보유 의미 영수증 누락은 첫 자연 감시가09:00:35 완료된 뒤 후속 native detector의 exact-date/source-generation 검증으로 해소됐다. 과거 first-crossing/정책 결손·비용 미상은 원 owner에 유지한다. 추가로 평가 시도0인 현재 PID의 모든 strict 계약이 통과하고 pending 파일 부재만 남은 경우를 같은 bounded 경고 경로로 제한한다. 다른 미충족과 partial/권한은 보존하며 source-pair·회귀·새 native 배포/자연 detector를 요구한다. 세부 근거는 위 배포 리뷰의09:01:47 절을 따른다.

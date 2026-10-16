@@ -88,3 +88,18 @@ cron_completion은 holding_exit_sentinel 한 owner에만 기존 엄격한 owner_
 08:42 ERROR의 실제08:40 observer 원본은 현재 PID trace4개가 전부 source_quality_blocked_before_assessment이고, machine/provider/요청/전송/PASS0이었다. 요청·pending journal은 첫 호출 전 lazy 생성되어 FileNotFoundError였다. 완전한 현재-actor trace와 전부 알려진 평가 전 차단, 모든 auxiliary/lineage 카운터0, 빈 ledger/gap, 정확한 두 native 부재 shape를 함께 증명할 때만 bounded_source_quality_observation/warning_pending을 허용한다. 원천을 유효한 빈 입력으로 만들지 않으며 source gap·partial·diagnostics·runtime admission false를 유지한다. Permission/I/O/partial/actor/설명되지 않은 trace/호출·PASS1건/잘못된 count는 계속 실패한다. 원본 불변 재현은 [08:42 health rehearsal](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/observer-0842-health-readonly-rehearsal.json)이다.
 
 observer의 observation_health_projection 외 AST는 동일하고 native-v6 37개와 네 capability component는 byte 동일하다. 원 정책/code pin을 재발행하지 않는다. 해당 observer의 원203b3978…→검토19bdf1e4… 전체 SHA 쌍만 기존 code handoff에 추가한다. 보완7 suites **3082 PASS**, 앞선 sentinel/cache/cron167 PASS와13개 경고 경계 회귀는 중복 합산하지 않는다. Python compile·diff·print-only parser 후 immutable 후보를 새로 배포하고 실제 PID/다음 자연 cron/전체 detector로 닫는다. 코드 시험을 실제 오류 해소나 완전 원천 검증으로 보고하지 않는다.
+
+
+## 3c814c05c 자연 기동과 09:01:47 추가 경고
+
+3c814c05ca979530e38f19bdc68f328c11116f4d ordered 배포는08:57:51 PASS다. Main PID2984178/start_ticks17249376의 실제 selector 소비·bootstrap·정상 loop 및 같은 PID/commit의 WS connected/writer_loss0/projection_errors0을 확인했다. WS 등록 근거는 local_sent_registry_not_broker_ack다.08:58 독립 대사에서 새 error bytes0·hold/restart 요청 없음·optional UID1000 code/calendar 검증 true·17개 역사 SHA 불변·세 원 SELL journal 부재를 재확인했다. [실제 기동 대사](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/final-native-acceptance.json).
+
+08:55 정규 보유 감시기는09:00:35 DONE으로 회복했다. 첫 성공 경로는334초이며 기준일 raw/cache를 읽었다. 이 비용을 개선 완료나 warm 성능으로 보고하지 않는다.08:55 제출 감시는 인계 미완료 때문에 native startup_pending/exit75로 보류됐고09:00 정규 재실행은09:01:46 completed/partial이다. 모든 원 이력은 남는다.
+
+사용자의09:01:47 holding_semantic_receipt_missing_after_due는09:00:01에 시작한 detector가 아직 미완료였던 보고서를 읽은 경고다.09:01:58 이후 native detector는 해당 당일 JSON을 native_validated=true/observation_complete=true로 검증했다. 누락 경고는 실제 후속 소비로 닫혔다. semantic status는 policy_binding_gap이며49300의 tp_mechanical_policy_contract_invalid, 세49328/49267/49300의 tp_first_crossing_transition_missing 및 비용 unavailable/strict completed0은 보존한다. 과거 누락 transition을 합성하거나 비용을0으로 채우지 않는다.2835개의 sell_completed는 재시도 중 남은 원 terminal event 행 수이며 새2835개 체결/주문이 아니다. 원 lifecycle는 세 broker 주문을 별도로 결속한다. 기존 HoldingProfitExitSourceContractRepair의 원천/정책 결손 OPEN이다.
+
+09:00 현재 PID 관측에서 새 경계를 발견했다. 평가 시도0·완전한 trace·native actor/source/policy/selection 검증이 모두 통과했지만 lazy pending 파일의 부재 하나만 health 실패였다. 이전 평가 전 차단 수리는 실제 trace1개 이상을 요구하여 이 경우를 놓쳤다. 보완은 strict unmet set이 정확히 source_window_not_complete:pending 하나이고 n/provider/entry_trace가0일 때만 해당 pending의 정확한 FileNotFoundError shape를 bounded 경고 경로에서 인정한다. 현재 actor birth와 모든 native reader/코드·날짜·출처 검증은 그대로 요구하고 다른 미충족·I/O·부분 trace·호출·정책 불일치면 거부한다. 원 실패 조건과 partial·허용 권한false는 남긴다. [실제09:00 원본 불변 재현](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/observer-0900-health-readonly-rehearsal.json).
+
+관측 경계8개 회귀의 초기 positive 재현 실패와 시험 fixture의 bounded-suffix 누락 보완을 보존했다. 최종8개 PASS 후 같은7 suites와 compile/diff/print-only parser를 재검증한다. observer exact successor는 a1284490d780a882b8c7591765ccf5f081b53cf9320fe350d03b620263310e55다. native-v6/네 capability/optional code hash는 변경하지 않는다. 새 immutable 배포와 후속 자연 detector로 실제 수용하며 현재3c의 잔여 pending ERROR를 코드 검증만으로 해소됐다고 보고하지 않는다.
+
+추가 보완7 suites의 최종 결과는 **3090 PASS/16.79초**, Python compile·diff·print-only parser PASS다.09:04:48 자연 detector는 cron/process/resource/log/auth/lock6종 PASS였고 artifact의 유일한 FAIL은 pending 원천 부재다. 추가 배포 수용은 다음 실제 native 영수증으로 확인한다.

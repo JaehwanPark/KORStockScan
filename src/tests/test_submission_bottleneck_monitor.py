@@ -3215,6 +3215,39 @@ def test_preassessment_without_lazy_auxiliary_journals_is_bounded_warning_only(d
     assert json.dumps(result,sort_keys=True)==before
 
 
+
+@pytest.mark.parametrize('damage',[None,'trace_partial','probe_partial','unknown_pending','count',
+    'auxiliary','birth','contract'])
+def test_complete_current_quiet_cohort_with_only_lazy_pending_missing_is_warning(damage):
+    from copy import deepcopy
+    result=_observation_health_fixture();now=monitor.stamp(result['as_of']);actor=['9','900']
+    proof,generation=_health_birth_fixture(now,actor)
+    generation.update(status='current',generation_current=True,selector_reported_actual_pid_consumed=True)
+    result['observer_generation']=generation
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name];token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(deepcopy(original),actor,now)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    gap=result['source_gap_semantics']['current_health_cohort']['view']
+    result['machine_semantics']['current_health_cohort']['view']['tail_truncated']=True
+    gap['sources']['pending']=dict(status='unobservable',tail_truncated=False,
+        window_covered=False,recent_count=0,reason='FileNotFoundError')
+    if damage=='trace_partial':gap['sources']['trace'].update(status='partial',window_covered=False)
+    elif damage=='probe_partial':gap['sources']['probe'].update(status='partial',window_covered=False)
+    elif damage=='unknown_pending':gap['sources']['pending']['reason']='PermissionError'
+    elif damage=='count':gap['observed']['entry_traces']=True
+    elif damage=='auxiliary':gap['observed']['auxiliary_called']=1
+    elif damage=='birth':proof['boot_epoch']+=1
+    elif damage=='contract':result['entry_execution_tuning_semantics']['pre_submit_delay']['bootstrap_handoff_match']=False
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    if damage is None:
+        assert health['unmet_conditions']==['source_window_not_complete:pending']
+    assert health['full_coverage_proven'] is False and health['current_observation_verified'] is False
+    assert health['allowed_runtime_apply'] is False and health['runtime_effect'] is False
+    assert json.dumps(result,sort_keys=True)==before
+
 def _derived_coverage_health_fixture(route='krx_nxt_integrated'):
     result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=False)
     gap.update(status='gap_observed',issues={'machine_probe:coverage_degraded:'+route:1},

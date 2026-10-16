@@ -3971,9 +3971,17 @@ def observation_health_projection(result):
             'execution_valid_pass_count', 'provider_timeout_count', 'enter_without_request_observed',
             'exact_attempt_join_gap_count')))
 
+    # With no current attempts, every strict health check must already pass
+    # except the lazy pending file. The bounded path still verifies actor birth
+    # and all native readers, and retains the missing-source condition.
+    quiet_pending_absence = (counts_valid and n == provider_n == 0
+        and set(failed) == {'source_window_not_complete:pending'}
+        and count(observed.get('entry_traces', 0), maximum=0))
+
     def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC, source_name=None):
         source=obj(source); identity=obj(source.get('source_identity'))
-        if (source_name in ('pending','requests') and lazy_auxiliary_absence
+        if ((source_name in ('pending','requests') and lazy_auxiliary_absence
+                or source_name == 'pending' and quiet_pending_absence)
                 and source.get('status') == 'unobservable'):
             return (set(source) == {'status','tail_truncated','window_covered','recent_count','reason'}
                 and source.get('reason') == 'FileNotFoundError'
