@@ -18055,6 +18055,8 @@ def _scanner_fast_precheck_fields_impl(
             )
         )
     )
+    from src.engine.scalping.native_source_continuity import source_ready
+    native_source_continuity_ready = source_ready(stock, ws_data, now=now_ts, max_age=max_age_sec)
     fresh_realtime_evidence = (
         last_0b_age_sec is not None and last_0b_age_sec <= max_age_sec
     ) or (latest_history_age_sec is not None and latest_history_age_sec <= max_age_sec)
@@ -18304,7 +18306,7 @@ def _scanner_fast_precheck_fields_impl(
     elif curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
-    elif not post_attach_entry_realtime:
+    elif not post_attach_entry_realtime and not native_source_continuity_ready:
         result = "source_quality_blocked"
         reason = "awaiting_first_post_attach_trade_input"
     elif promotion_price_conflict:
@@ -18402,6 +18404,7 @@ def _scanner_fast_precheck_fields_impl(
         "budget_reallocated" if result == "budget_reallocated" else "observe_only"
     )
     return {
+        "scanner_native_source_continuity_ready": native_source_continuity_ready,
         **_scanner_runtime_event_venue_fields(stock),
         **market_data_fields,
         **promotion_price_fields,

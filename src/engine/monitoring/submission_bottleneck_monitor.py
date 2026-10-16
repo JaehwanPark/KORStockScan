@@ -835,6 +835,7 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False, 
         truth = receipt.get('selected_branch_truth')
         at = stamp(row.get('emitted_at'))
         epoch = receipt.get('observed_epoch')
+        signed_trades = fields.get('zero_base_ws_signed_0b_count')
         return (
             isinstance(code, str) and len(code) == 6 and code.isdigit()
             and receipt.get('schema') == 'native_observation_selection_v1'
@@ -864,7 +865,11 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False, 
             # missing features, never a complete no-match observation.
             and (receipt['observed_seconds'] >= 0 if feature_gap else receipt['observed_seconds'] > 0)
             and int(fields.get('zero_base_ws_exact_0b_count', 0)) > 0
-            and int(fields.get('zero_base_ws_signed_0b_count', 0)) > 0
+            # A missing-feature receipt may itself lack a signed trade.
+            # Require an explicit nonnegative count; ordinary no-match and
+            # pending coverage keep their positive signed-trade prerequisite.
+            and type(signed_trades) in (int, str)
+            and int(signed_trades) >= (0 if feature_gap else 1)
             and int(fields.get('zero_base_ws_exact_0d_count', 0)) > 0
         )
     except (KeyError, TypeError, ValueError, SyntaxError, RecursionError, OverflowError):

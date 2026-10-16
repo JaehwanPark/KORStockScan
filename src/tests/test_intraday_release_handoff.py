@@ -61,7 +61,8 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_PREASSESSMENT_OBSERVER_SOURCES',
                                      'REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES',
                                      'REVIEWED_LONG4_SOURCE_RETENTION_SOURCES',
-                                     'REVIEWED_DELAY_SITUATION_SOURCES'])
+                                     'REVIEWED_DELAY_SITUATION_SOURCES',
+                                     'REVIEWED_NONFIXED_CONTINUITY_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib

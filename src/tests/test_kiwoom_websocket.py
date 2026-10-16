@@ -4253,6 +4253,8 @@ def test_exact_probe_trace_distinguishes_wire_from_normalization_and_freezes_bef
     from src.engine.kiwoom_websocket import KiwoomWSManager
     manager = KiwoomWSManager.__new__(KiwoomWSManager)
     manager.lock = threading.RLock(); manager._market_data_transport_epoch = 7
+    from src.engine.infrastructure.ws_control_receipts import ControlReceipts
+    manager._control_receipts = ControlReceipts()
     manager._exact_probe_item_leases = {'123456_AL':dict(lease_id='lease',epoch=7)}
     manager._micro_reversion_registration_receipt = {'items':{'123456_AL':dict(
         registration_transport_epoch=7, receipt_count_by_type={})}}
@@ -4270,3 +4272,185 @@ def test_exact_probe_trace_distinguishes_wire_from_normalization_and_freezes_bef
     assert complete['lease']['wire_receipt_count_by_type'] == {'0B':1}
     assert trace['registration']['receipt_count_by_type'] == {}
     assert manager.exact_probe_source_trace('123456_AL','lease')['lease_bound'] is False
+
+
+def _fresh_continuity_transfer():
+    import time
+    from src.engine.scalping.continuous_reversal_postclose import digest
+    manager, payload, item = _zero_base_native_transfer("krx_nxt_integrated")
+    manager._exact_probe_item_leases[item]["interval_started_epoch"] = time.time() - 0.01
+    async def feed():
+        for _ in range(4):
+            await manager._handle_message(json.dumps({"trnm": "REAL", "data": [
+                {"type": "0D", "item": item, "values": {"21": "133500", "41": "10010", "51": "9990", "61": "10", "71": "10"}},
+                {"type": "0B", "item": item, "values": {"10": "10000", "15": "+1", "228": "101.5"}},
+            ]}))
+    asyncio.run(feed())
+    expected = payload["native_observation"]
+    event = expected["snapshot"][0]
+    event.update(epoch=time.time(), signal_id="original-signal", event_id="original-event", native_sequence=4)
+    expected["snapshot_sha256"] = digest(expected["snapshot"])
+    return manager, payload, item
+
+
+def test_native_source_continuity_keeps_original_buffer_precheck_and_receive_clocks():
+    import time
+    from src.engine.scalping.native_source_continuity import source_ready
+    from src.engine import sniper_state_handlers as handlers
+    manager, payload, item = _fresh_continuity_transfer()
+    original = manager.get_exact_item_data(payload["code"], item)
+    stored = manager._micro_reversion_observation_route_data[item]
+    assert manager.adopt_zero_base_probe_target(payload)
+    assert manager.realtime_data[payload["code"]] is stored  # One live writer, no copy/replay.
+    assert item not in manager._micro_reversion_observation_route_data
+    now = time.time()
+    target = {**payload, "id": 92, "strategy": "SCALPING", "status": "WATCHING", "position_tag": "SCANNER",
+              "added_time": now, "entry_armed_at_epoch": now, "scanner_attach_epoch": now,
+              "source_signature": "PRICE_JUMP_START"}
+    current = manager.get_latest_data(payload["code"])
+    assert current["strength_momentum_history"] == original["strength_momentum_history"]
+    assert current["last_realtime_type_ts"] == original["last_realtime_type_ts"]
+    assert len(current["strength_momentum_history"]) == 4
+    assert source_ready(target, current, now=time.time())
+    fields = handlers._scanner_fast_precheck_fields(target, now_ts=time.time(), code=payload["code"], ws_data=current)
+    assert fields["scanner_native_source_continuity_ready"] is True
+    assert fields["fast_precheck_post_attach_entry_realtime"] is False
+    assert fields["fast_precheck_reason"] != "awaiting_first_post_attach_trade_input"
+    assert asyncio.run(manager._release_exact_probe_item(item, "lease-1"))
+    assert manager.realtime_data[payload["code"]] is stored
+    assert manager.websocket.sent == []
+
+
+@pytest.mark.parametrize("damage", ["stale", "missing_depth", "history_epoch", "history_route", "history_sequence", "future", "missing_signal", "missing_digest"])
+def test_native_source_continuity_never_promotes_unverified_observation(damage):
+    from src.engine.infrastructure.snapshot_copy import freeze_history, materialize_history
+    manager, payload, item = _fresh_continuity_transfer()
+    source = manager._micro_reversion_observation_route_data[item]
+    typed = source["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"]
+    if damage == "stale": typed["0B"]["observed_epoch"] -= 4
+    elif damage == "missing_depth": typed.pop("0D")
+    elif damage == "future": typed["0B"]["observed_epoch"] += 5
+    elif damage == "missing_signal": payload["native_observation"]["snapshot"][0].pop("signal_id")
+    elif damage == "missing_digest": payload["native_observation"].pop("snapshot_sha256")
+    else:
+        rows = materialize_history(freeze_history(source["strength_momentum_history"]))
+        key, value = {"history_epoch": ("transport_epoch", 7), "history_route": ("market_route", "krx_only"),
+                      "history_sequence": ("route_sequence", 1)}[damage]
+        rows[-1][key] = value
+        source["strength_momentum_history"] = rows
+    assert manager.adopt_zero_base_probe_target(payload)  # Local custody only.
+    assert "_zero_base_source_continuity" not in payload
+    assert manager.get_latest_data(payload["code"]) == {}
+
+
+@pytest.mark.parametrize("damage", ["pid", "epoch", "lease", "route", "signal", "deadline", "stale", "source_receipt"])
+def test_native_source_continuity_current_readiness_cannot_reuse_old_authority(damage):
+    import time
+    from copy import deepcopy
+    from src.engine.scalping.native_source_continuity import source_ready
+    manager, payload, item = _fresh_continuity_transfer()
+    assert manager.adopt_zero_base_probe_target(payload)
+    data = manager.get_latest_data(payload["code"])
+    target = deepcopy(payload)
+    now = time.time()
+    if damage == "pid": target["native_observation"]["observer_pid"] += 1
+    elif damage == "epoch": data["market_data_transport_epoch"] += 1
+    elif damage == "lease": target["physical_probe_lease_id"] = "new"
+    elif damage == "route": target["market_data_route"] = "nxt_only"
+    elif damage == "signal": target["native_observation"]["snapshot"][0]["signal_id"] = "new"
+    elif damage == "deadline": target["native_observation"]["deadline_perf"] = time.perf_counter() - 1
+    elif damage == "stale": now += 3.5
+    elif damage == "source_receipt": data["_zero_base_source_continuity"]["history_count"] += 1
+    assert not source_ready(target, data, now=now)
+    assert data["strength_momentum_history"]  # Observed history is not erased.
+
+
+@pytest.mark.parametrize("kind", ["REG", "REMOVE"])
+@pytest.mark.parametrize("code", [0, 1])
+def test_control_response_retained_before_send_returns(kind, code):
+    manager = _exact_probe_manager()
+    async def send(_packet):
+        await manager._handle_message(json.dumps({"trnm": kind, "return_code": code, "return_msg": "fixture"}))
+    manager.websocket.send = send
+    asyncio.run(manager._send_control_packet({"trnm": kind, "grp_no": "1", "data": [{"item": ["010140_AL"], "type": ["0B"]}]}))
+    row = manager._control_receipts.projection(item="010140_AL", epoch=8, kind=kind)
+    assert row["broker_ack_observed"] is True
+    assert row["broker_result"] == ("success" if code == 0 else "rejected")
+    assert row["request"]["send_state"] == "sent"
+    assert manager._registered_item_epochs["010140_AL"] == 8  # No unsolicited unsubscribe.
+
+
+def test_control_ambiguous_bootstrap_duplicate_late_and_old_epoch_are_not_item_ack():
+    manager = _exact_probe_manager()
+    async def scenario():
+        for item, group in (("", "2"), ("", "3"), ("010140_AL", "1")):
+            await manager._send_control_packet({"trnm": "REG", "grp_no": group, "data": [{"item": [item], "type": ["0B"]}]})
+        for _ in range(4):
+            await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 0}))
+        assert manager._control_receipts.projection(item="010140_AL", epoch=8)["broker_ack_observed"] is None
+        manager._market_data_transport_epoch = 9
+        await manager._send_control_packet({"trnm": "REG", "grp_no": "1", "data": [{"item": ["010140_AL"], "type": ["0B"]}]})
+        await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 1}), transport_epoch=8)
+        assert manager._control_receipts.projection(item="010140_AL", epoch=9)["broker_ack_observed"] is None
+        await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 0}), transport_epoch=9)
+        assert manager._control_receipts.projection(item="010140_AL", epoch=9)["broker_result"] == "success"
+    asyncio.run(scenario())
+
+
+def test_control_bounded_history_never_makes_evicted_requests_unique():
+    manager = _exact_probe_manager()
+    async def scenario():
+        for _ in range(140):
+            await manager._send_control_packet({"trnm": "REG", "grp_no": "1", "data": [{"item": ["010140_AL"], "type": ["0B"]}]})
+        await manager._handle_message(json.dumps({"trnm": "REG", "return_code": 1}))
+    asyncio.run(scenario())
+    assert len(manager._control_receipts.requests) == 128
+    assert manager._control_receipts.responses[-1]["attribution"] == "unknown"
+
+
+def test_control_uncertain_send_and_unsolicited_response_cannot_claim_later_success():
+    manager = _exact_probe_manager()
+    async def fail(_packet):
+        raise RuntimeError('fixture uncertain send')
+    async def scenario():
+        await manager._handle_message(json.dumps({'trnm':'REG','return_code':0}))
+        manager.websocket.send = fail
+        with pytest.raises(RuntimeError):
+            await manager._send_control_packet({'trnm':'REG','grp_no':'1','data':[{'item':['010140_AL'],'type':['0B']}]})
+        await manager._handle_message(json.dumps({'trnm':'REG','return_code':0}))
+    asyncio.run(scenario())
+    trace = manager._control_receipts.projection(item='010140_AL',epoch=8)
+    assert trace['request']['send_state'] == 'uncertain'
+    assert trace['broker_ack_observed'] is None
+    assert trace['connection_responses'][-1]['attribution'] == 'unknown'
+
+
+def test_native_continuity_real_after_adoption_appends_once_and_keeps_history():
+    manager, payload, item = _fresh_continuity_transfer()
+    assert manager.adopt_zero_base_probe_target(payload)
+    original = manager.get_latest_data(payload['code'])
+    asyncio.run(manager._handle_message(json.dumps({'trnm':'REAL','data':[
+        {'type':'0B','item':item,'values':{'10':'10001','15':'+2','228':'102'}}]})))
+    after = manager.get_latest_data(payload['code'])
+    assert after['strength_momentum_history'][:-1] == original['strength_momentum_history']
+    assert len(after['strength_momentum_history']) == 5
+    assert after['strength_momentum_history'][-1]['route_sequence'] == 5
+    assert after['curr'] == 10001
+    assert item not in manager._micro_reversion_observation_route_data
+    assert manager.websocket.sent == []
+
+
+def test_bound_rejection_preserves_local_registration_and_targets_only_original_lease():
+    manager = KiwoomWSManager('test-token')
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    manager._market_data_transport_epoch = 8
+    async def send(_packet):
+        await manager._handle_message(json.dumps({'trnm':'REG','return_code':1,'return_msg':'fixture refusal'}))
+    manager.websocket.send = send
+    result = asyncio.run(manager._acquire_exact_probe_item('010140_AL','original-lease'))
+    assert result['registered'] is True  # This is still the local-send registry.
+    assert result['server_registration_rejected'] is True
+    assert manager.exact_probe_control_failure('010140_AL','original-lease') == 'exact_probe_registration_rejected'
+    assert manager.exact_probe_control_failure('010140_AL','replacement-lease') == ''
+    assert manager._registered_item_epochs['010140_AL'] == 8

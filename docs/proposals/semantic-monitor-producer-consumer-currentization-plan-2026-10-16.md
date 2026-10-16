@@ -263,3 +263,7 @@
 기계/보조/joint 비교는 true/false/false, 봉인 적용일10/16와 다음 예정일10/19를 분리했다. 과거 장후 취소대기·상승누락의 exact 세대 인계 누락도 보완했으며 실제 조회에서 current capability verified를 확인했다. native source/comparison/정책 유지 상태는 보존한다. C01–C25 정적 연결 PASS와 실제 전체 감시의 holding/source/scanner/tmp 잔여 경고는 별도 결과다.
 
 과거 native capture와 exact join한238개 anchor로 상황 UNKNOWN267→29, cell97→195를 얻었다. source10/15의 영향 family만 격리 재계산하고 최종 코드로 검증했으며, 초기 정책은0초다. 현재10/16 canonical 정책을 대체하지 않았고 오늘 정규 장후 및10/19 실제 소비는 기존 OPEN owner로 유지한다. 상세 시험·성능·실제 receipt와 잔여 수용은 [구현 리뷰](../audits/pre-submit-semantic-implementation-review-2026-10-16.md#최종-배포실제-소비-및-잔여-자연-수용)를 따른다.
+
+## 11. 비상시 원천 인계·제어응답 후속 수리
+
+18:35 상세 점검에 따른 구현·리뷰·보완·배포·재기동 승인을 접수했다. 원천 인계와 Main 준비 조건을 함께 수리하고, 원 신호/5초·실제 수신시각을 보존한다. 제어응답은 local 송신과 분리하며 불명 귀속을 정상 ACK로 세지 않는다. 미배포 unsigned first-trade feature-gap 관측 수리도 통합한다. [구현 리뷰](../audits/nonfixed-source-continuity-review-2026-10-16.md)의 코드 검증과 actual PID/자연 수용을 분리하며 현재 owner는 `NonfixedDispatchReadinessReview1012`를 유지한다.

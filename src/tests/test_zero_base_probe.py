@@ -1319,3 +1319,22 @@ def test_delayed_registration_without_timely_exact_ownership_keeps_timeout(monke
     if damage == 'lock_busy': ws.lock.release()
     completion.set_result({'registered': True})
     assert cleanup == [(item, 'same-probe')]
+
+
+def test_bound_server_rejection_ends_original_probe_without_source_or_machine_calls():
+    cleanup = []
+    future = Future()
+    future.set_result({'registered': True, 'server_registration_rejected': True,
+                       'reason': 'exact_probe_registration_rejected'})
+    ws = SimpleNamespace(subscribed_codes=set(), _registered_items_by_code={},
+        execute_acquire_exact_probe_item=lambda item, lease: future,
+        execute_release_exact_probe_item=lambda item, lease: cleanup.append((item, lease)))
+    result = run_zero_base_probe(
+        {'claim': {'code': '123456', 'route': 'nxt_only', 'observed_epoch': 10},
+         'candidate': {'code': '123456', 'route': 'nxt_only'}},
+        ws_manager=ws, ai_engine=object(), token='fixture', now=lambda: 11, ws_lease_id='rejected',
+        candle_fetcher=lambda *a, **k: pytest.fail('rejected registration must not fetch REST'))
+    assert result['reason'] == 'exact_probe_registration_rejected'
+    assert result['ws_registration']['registered'] is True
+    assert result['actual_order_submitted'] is False
+    assert cleanup == [('123456_NX', 'rejected')]

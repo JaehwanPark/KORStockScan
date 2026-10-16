@@ -2795,7 +2795,9 @@ def _scanner_runtime_handoff_updates(payload, *, source, existing=None):
     )
     return {
         **{key: copy.deepcopy(payload[key]) for key in (
-            'native_observation', 'ws_handoff_id', 'physical_probe_lease_id') if key in payload},
+            'native_observation', 'ws_handoff_id', 'physical_probe_lease_id',
+            '_zero_base_source_continuity') if key in payload},
+        '_zero_base_source_continuity': copy.deepcopy(payload.get('_zero_base_source_continuity')),
         "scanner_runtime_handoff_epoch": round(float(handoff_epoch), 6),
         "scanner_runtime_handoff_source": str(source),
         "scanner_runtime_handoff_promotion_id": promotion_id,
@@ -3439,7 +3441,9 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
             "eviction_reason": "scanner_no_trade_waiting_realtime_type",
             "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
         }
-    if post_attach_trade_evidence or (
+    from src.engine.scalping.native_source_continuity import source_ready
+    continuity_ready = source_ready(target, ws_data, now=now_ts)
+    if post_attach_trade_evidence or continuity_ready or (
         attach_epoch <= 0
         and attach_anchor_source == "missing"
         and "0B" in received_types
@@ -6838,7 +6842,12 @@ def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
         _scanner_no_trade_eviction_grace_sec(),
         SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC,
     )
+    from src.engine.scalping.native_source_continuity import source_ready
+    continuity_ready = source_ready(target, ws_data, now=now_ts)
     return {
+        "scanner_native_source_continuity_ready": continuity_ready,
+        "scanner_continuous_source_adopted_epoch": (
+            target["_zero_base_source_continuity"]["adopted_epoch"] if continuity_ready else None),
         "scanner_entry_realtime_state": "awaiting_first_post_attach_trade_input",
         "scanner_entry_realtime_attach_anchor_epoch": f"{attach_epoch:.6f}",
         "scanner_entry_realtime_attach_anchor_source": attach_anchor_source,
@@ -9018,7 +9027,8 @@ def _zero_base_finalize_candidate_record(payload, *, attached):
                     admission_failure_reason=payload.get('_zero_base_attach_failure_reason'),
                     machine_observation_sha256=payload.get('zero_base_probe_machine_observation_sha256')
                         or payload.get('machine_observation_sha256'),
-                    native_signal_id=expected.get('signal_id') or expected.get('event_id'),
+                    native_signal_id=((expected.get('snapshot') or ({},))[0] or {}).get('signal_id'),
+                    native_event_id=((expected.get('snapshot') or ({},))[0] or {}).get('event_id'),
                     native_snapshot_sha256=expected.get('snapshot_sha256'),
                     original_deadline_perf=expected.get('deadline_perf'),
                     decision_authority='observation_only', actual_order_submitted=False, **fields)
@@ -9651,6 +9661,8 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                 ACTIVE_TARGETS,
                 reason="higher_priority_owner_slot_reclaimed",
             )
+        if payload.get("_zero_base_source_continuity"):
+            new_target["_zero_base_source_continuity"] = copy.deepcopy(payload["_zero_base_source_continuity"])
         new_target["marcap"] = _resolve_stock_marcap(new_target, code)
         ACTIVE_TARGETS.append(new_target)
 

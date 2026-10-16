@@ -120,7 +120,8 @@ def _native_main_handoff(monkeypatch, route="krx_nxt_integrated"):
     item = code + suffix
     now = time.time()
     expected = dict(snapshot=({"symbol": code, "venue": venue, "source_item": item,
-                              "native_epoch": 88, "epoch": now}, {}),
+                              "native_epoch": 88, "epoch": now, "signal_id": "original-signal",
+                              "event_id": "original-event"}, {}),
                     deadline_epoch=now + 5, deadline_perf=time.perf_counter() + 5,
                     observer_pid=os.getpid(), observer_start_ticks=D._PROCESS_START_TICKS)
     result.update(native_observation=expected, ws_handoff_id="lease-native",
@@ -172,6 +173,8 @@ def test_native_main_handoff_commits_without_subscription_gap(monkeypatch, route
     assert receipt["zero_base_attach_outcome"] == "attached"
     assert detail["reason"] == "watching_finalized" and detail["record_id"] == 1
     assert detail["physical_probe_lease_id"] == "lease-native"
+    assert detail["native_signal_id"] == "original-signal"
+    assert detail["native_event_id"] == "original-event"
     item = result["native_observation"]["snapshot"][0]["source_item"]
     assert asyncio.run(manager._release_exact_probe_item(item, "lease-native"))
     assert manager._registered_item_epochs[item] == 88
@@ -975,3 +978,41 @@ def test_main_target_snapshot_keeps_observation_time_before_hashing(monkeypatch)
     result=main._zero_base_active_target_snapshot(dict(runtime_generation='g',
         process_pid=1,process_start_ticks='2',date='2026-10-14'))
     assert result['observed_epoch']==100 and epoch[0]==103
+
+
+def test_native_main_handoff_retains_exact_source_to_precheck_and_original_claim(monkeypatch):
+    import asyncio
+    from src.engine.scalping.continuous_reversal_postclose import digest
+    rows, targets, result, manager, events, claims = _native_main_handoff(monkeypatch)
+    expected = result['native_observation']
+    item = expected['snapshot'][0]['source_item']
+    manager._exact_probe_item_leases[item]['interval_started_epoch'] = time.time() - 0.01
+    async def feed():
+        for _ in range(4):
+            await manager._handle_message(json.dumps({'trnm':'REAL', 'data':[
+                {'type':'0D', 'item':item, 'values':{'41':'10010','51':'9990','61':'10','71':'10'}},
+                {'type':'0B', 'item':item, 'values':{'10':'10000','15':'+1','228':'101.5'}},
+            ]}))
+    asyncio.run(feed())
+    expected['snapshot'][0].update(epoch=time.time(), native_sequence=4)
+    expected['snapshot_sha256'] = digest(expected['snapshot'])
+    original = manager.get_exact_item_data(result['claim']['code'], item)
+    assert main.handle_zero_base_machine_enter(result)
+    target = targets[0]
+    data = manager.get_latest_data(target['code'])
+    assert target['_zero_base_source_continuity'] == data['_zero_base_source_continuity']
+    assert data['strength_momentum_history'] == original['strength_momentum_history']
+    fields = handlers._scanner_fast_precheck_fields(target, now_ts=time.time(), code=target['code'], ws_data=data)
+    assert fields['scanner_native_source_continuity_ready'] is True
+    assert fields['fast_precheck_post_attach_entry_realtime'] is False
+    assert fields['fast_precheck_reason'] != 'awaiting_first_post_attach_trade_input'
+    assert len(claims) == 1
+    binding = target['_entry_native_deadline_binding']
+    assert binding['deadline_perf'] == expected['deadline_perf']
+    assert handlers._native_handoff_deadline_perf(target, {'token':'native-once'}) == expected['deadline_perf']
+    assert rows[1].status == 'WATCHING'
+    # Refresh consumer preserves the same immutable receipt rather than a new clock.
+    refresh = main._scanner_runtime_handoff_updates(target, source='promotion_event_refresh', existing=target)
+    assert refresh['_zero_base_source_continuity'] == target['_zero_base_source_continuity']
+    refresh['_zero_base_source_continuity']['adopted_epoch'] += 1
+    assert refresh['_zero_base_source_continuity'] != target['_zero_base_source_continuity']

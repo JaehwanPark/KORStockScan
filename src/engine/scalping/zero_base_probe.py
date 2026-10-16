@@ -706,6 +706,9 @@ def run_zero_base_probe(
                         result["reason"] = (lease_receipt.get("reason", "ws_registration_unconfirmed")
                                             if isinstance(lease_receipt, dict) else "ws_registration_unconfirmed")
                         return result
+                    if lease_receipt.get("server_registration_rejected") is True:
+                        result["reason"] = "exact_probe_registration_rejected"
+                        return result
                     if lease_receipt.get('interval_started_epoch'):
                         registered_epoch = float(lease_receipt['interval_started_epoch'])
             except FutureTimeoutError:
@@ -751,6 +754,11 @@ def run_zero_base_probe(
         ticks, candles, candle_meta, context = [], [], {}, {}
         try:
             def source_readiness_guard():
+                control_failure = getattr(ws_manager, "exact_probe_control_failure", None)
+                if exact_lease and callable(control_failure):
+                    rejection = control_failure(item, lease_id)
+                    if rejection:
+                        return rejection
                 expected=request.get('consumer_readiness')
                 if expected is None:return ''  # Explicit legacy fixture surface.
                 from src.engine.scalping.reversal_current_backend import backend

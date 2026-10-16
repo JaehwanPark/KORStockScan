@@ -833,6 +833,14 @@ REVIEWED_DELAY_CONTRACT_EXTENSIONS = {('23a13aba62884a5d3a0d48a3f91ebff4262571f6
                                                                                                                     'src/engine/scalping/reversal_extended_catalog.py': 'c03dddde3e642bfa9be01c130eabfcfcc420a182108411099339944c594d4f95'}}
 
 
+# Exact original-policy to reviewed source continuity/control-evidence consumer bytes.
+REVIEWED_NONFIXED_CONTINUITY_SOURCES = {'src/engine/kiwoom_sniper_v2.py': ('bb8cc6f224428a073f60826f8aa70e97d4b68b0383c907d681b8be5473a2d7c6',
+                                    '3b35fc7133fc87cf5b23ae6f03c3272b9b78b61840f3bc1c6f0e84db5ba8def4'),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': ('203b397835edf5ff0d578aa8d5b25126f8c61307adbe92031371b9000d710e56',
+                                                            '2b8af49c0dca2527dd6ab9caea3d8e9e5e98eb73a7f8e069836934d88446ecb6'),
+ 'src/engine/sniper_state_handlers.py': ('bb6108b506bebfb957f7257bbf4e466837f19a48eff6a742a245f5c3b3e57dcf',
+                                         'b18c9204588e52239be3d9167c42fd2ff74855a9244dbb1acd1c36dc78d25fe5')}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -873,7 +881,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_DELAY_SITUATION_SOURCES.get(name),
+        if pair in (REVIEWED_NONFIXED_CONTINUITY_SOURCES.get(name),
+                    REVIEWED_DELAY_SITUATION_SOURCES.get(name),
                     REVIEWED_LONG4_SOURCE_RETENTION_SOURCES.get(name),
                     REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES.get(name),
                     REVIEWED_SOURCE_GAP_CROSSING_SOURCES.get(name),

@@ -4548,21 +4548,36 @@ def test_feature_gap_health_requires_verified_census_and_never_grants_coverage(t
     assert json.dumps(result,sort_keys=True)==original
 
 
+@pytest.mark.parametrize('signed_trades', [0, '0', 1, '1'])
 @pytest.mark.parametrize('duration', [0, 0.0, -1, float('nan')])
-def test_first_exact_trade_feature_gap_is_not_an_observer_contract_failure(tmp_path, duration):
+def test_first_exact_trade_feature_gap_is_not_an_observer_contract_failure(tmp_path, duration, signed_trades):
     now = monitor.stamp('2026-10-16T14:56:50+09:00')
     row = _native_feature_gap_probe(now)
     f = row['fields']; r = f['native_observation_receipt']; b = f['zero_base_branch_readiness']
+    f['zero_base_ws_signed_0b_count'] = signed_trades
     r.update(observed_seconds=duration, native_sequence=1, selected_branch_truth={'G2':'UNKNOWN'},
              selected_lifecycle_counts={'G2':{'UNKNOWN':1}})
     b.update(native_sequence=1, branch_descriptors={'G2':b['branch_descriptors']['G2']})
     proof = monitor._probe_verified_pending(row, feature_gap=True)
     assert (proof is not None) == (duration == 0)
     assert monitor._probe_verified_no_match(row) is False
+    assert monitor._probe_verified_pending(row) is None
     _source_gap_files(tmp_path, now, probes=[row])
     gap = monitor.source_gap_semantics(tmp_path, now)
     assert gap['probe_route_source_covered_counts'] == {}
     assert gap['native_feature_gap_observations']['verified_count'] == int(duration == 0)
+    assert gap['probe_route_assessed_counts'] == gap['probe_route_native_no_match_counts'] == {}
+    assert gap['native_feature_gap_observations']['machine_admission_proven'] is False
+
+
+@pytest.mark.parametrize('signed_trades', [None, -1, '-1', True, False, 0.0, '0.0', 'invalid'])
+def test_feature_gap_rejects_invalid_signed_trade_count(signed_trades):
+    row = _native_feature_gap_probe(monitor.stamp('2026-10-16T16:39:22+09:00'))
+    if signed_trades is None:
+        row['fields'].pop('zero_base_ws_signed_0b_count')
+    else:
+        row['fields']['zero_base_ws_signed_0b_count'] = signed_trades
+    assert monitor._probe_verified_pending(row, feature_gap=True) is None
 
 
 @pytest.mark.parametrize('defect', [None, 'zero_history','current','pid','epoch','bad_counts'])
