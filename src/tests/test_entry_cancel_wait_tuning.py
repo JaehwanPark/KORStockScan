@@ -7,7 +7,7 @@ from src.engine.automation import entry_cancel_wait_tuning as mod
 
 def _unclassified_history(day='2026-09-30'):
     events = [dict(stage='order_leg_sent', emitted_date=day, record_id=i,
-                   stock_code='123456', fields=dict(actual_order_submitted=True,
+                   pipeline='ENTRY_PIPELINE',stock_code='123456', fields=dict(actual_order_submitted=True,
                    broker_order_no=f'B{i}', buy_account_key='acct-a'))
               for i in (1, 2)]
     state = dict(through_date=day, parents=[], source_counts={}, source_events=events,
@@ -1086,3 +1086,248 @@ def test_complete_future_population_can_select_while_history_gap_is_preserved():
     assert ledger['2026-09-29']['coverage_verified'] is False
     rows[-1]['arms']['90']['net_pnl_krw']=-100.
     assert mod._economic_research(rows,model,{'2026-10-02':1,'2026-10-05':1},ledger)['status']=='holdout_rejected'
+
+
+def _lost_original_fixture(tmp_path, monkeypatch, *, predecessor_day='2026-10-15'):
+    """A sealed dated source plus a later explicitly lossy quarantine."""
+    from collections import Counter
+    from src.engine.scalping import entry_split_order_plan as entry
+    from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    import hashlib
+    directory=tmp_path/'data/report/entry_cancel_wait_tuning'
+    directory.mkdir(parents=True,exist_ok=True)
+    monkeypatch.setattr(mod,'REPORT_DIR',directory)
+    events=_unclassified_history()['source_events']
+    for event in events:
+        event['pipeline']='ENTRY_PIPELINE'
+        event['execution_source_event_sha256']=execution_projection_identity(event)
+    counts=dict(Counter(e['stage'] for e in events))
+    source_path=tmp_path/'data/threshold_cycle/date=2026-09-30/family=entry_price_execution_quality/part-native.jsonl'
+    source_path.parent.mkdir(parents=True,exist_ok=True)
+    source_path.write_text(''.join(json.dumps(e)+'\n' for e in events))
+    projection=dict(status='ready',retained_event_count=len(events),full_population_coverage_verified=True,
+        projection_contract=entry.EXECUTION_MODEL_CONTRACT,
+        coverage_scope='declared_execution_stage_producer_census',
+        producer_census=dict(status='ready',expected_stage_counts=counts,observed_stage_counts=counts,
+            missing_identity_count=0,identity_conservation_holds=True,manifest_sha256='a'*64),
+        sources=[dict(path=str(source_path),sha256=hashlib.sha256(source_path.read_bytes()).hexdigest())])
+    state=_unclassified_history();state['source_events']=events
+    # Recovery must not import any old economic/model row.
+    state['model_rows']=[dict(parent_id='old_model',source_date='2026-09-30',complete=True)]
+    state['actual_outcomes']=[dict(plan_sha256='old_cost',completion_date='2026-09-30',net_pnl_krw=99)]
+    state['sha256']=mod._digest({k:v for k,v in state.items() if k!='sha256'})
+    original=dict(date='2026-09-30',economic_schema=ECONOMIC_SCHEMA,runtime_family=mod.RUNTIME_FAMILY,
+        policy_version=mod.POLICY_VERSION,runtime_effect=False,allowed_runtime_apply=True,
+        economic_state=state,source_contract=dict(projection=projection,
+            registry=dict(status='verified',tail_hash='0'*64),source_quality=dict(tuning_input_allowed=True)))
+    original['proof_sha256']=mod._digest(original)
+    original_path=directory/'entry_cancel_wait_tuning_2026-09-30.json'
+    original_path.write_text(json.dumps(original))
+    reason='cancel_wait_predecessor_original_projection_changed:2026-09-30'
+    quarantine=dict(reason=reason,excluded_source_event_sha256s=[],
+        artifact_path=str(directory/'entry_cancel_wait_tuning_2026-10-14.json'),artifact_sha256='b'*64)
+    previous=dict(through_date=predecessor_day,parents=[],source_counts={'2026-09-29':0},source_events=[],
+        actual_outcomes=[],model_rows=[],consumed_holdouts=[],submission_reconciliation=dict(
+            by_date={'2026-09-29':{},'2026-09-30':dict(coverage_verified=False,
+                source_binding=dict(status='source_gap',reason=reason),source_event_sha256s=[],excluded_source_event_sha256s=[],
+                parent_identities=[],classified_parent_count=0,unclassified_identities=[],unclassified_submission_count=0)},
+            quarantined_sources={'2026-09-30':quarantine}))
+    previous_path=directory/f'entry_cancel_wait_tuning_{predecessor_day}.json'
+    def write_previous():
+        previous['sha256']=mod._digest({k:v for k,v in previous.items() if k!='sha256'})
+        value=dict(date=predecessor_day,economic_schema=ECONOMIC_SCHEMA,economic_state=previous,
+            runtime_family=mod.RUNTIME_FAMILY,policy_version=mod.POLICY_VERSION)
+        value['proof_sha256']=mod._digest(value)
+        previous_path.write_text(json.dumps(value))
+    write_previous()
+    native=json.loads(json.dumps(projection));calls=[]
+    def project(day,**kwargs):
+        calls.append(day)
+        return (json.loads(json.dumps(events)),json.loads(json.dumps(native))) if day=='2026-09-30' else ([],dict(status='ready',retained_event_count=0))
+    monkeypatch.setattr(entry,'_bounded_execution_projection',project)
+    monkeypatch.setattr(entry,'_execution_registry_snapshot',lambda:([],dict(status='verified',tail_hash='0'*64)))
+    return dict(events=events,original=original,original_path=original_path,previous=previous,
+        previous_path=previous_path,write_previous=write_previous,native=native,calls=calls)
+
+
+def test_lost_quarantine_recovers_native_events_without_economics_or_false_empty(tmp_path,monkeypatch):
+    fixture=_lost_original_fixture(tmp_path,monkeypatch)
+    original_bytes=fixture['original_path'].read_bytes();previous_bytes=fixture['previous_path'].read_bytes()
+    reads=[];reader=mod._bounded_semantic_json
+    monkeypatch.setattr(mod,'_bounded_semantic_json',lambda p:(reads.append(p) or reader(p)))
+    rebuilt=mod._previous_state('2026-10-16')
+    assert fixture['calls']==['2026-09-29','2026-09-30']
+    assert reads.count(fixture['original_path'])==1 and reads.count(fixture['previous_path'])==1
+    assert rebuilt['source_events']==fixture['events'] and rebuilt['parents']==[]
+    assert '2026-09-30' not in rebuilt['source_counts']
+    assert rebuilt['actual_outcomes']==[] and rebuilt['model_rows']==[]
+    assert rebuilt['_quarantined_sources']=={}
+    proof=rebuilt['_recovered_sources']['2026-09-30']
+    assert proof['prior_quarantine']==fixture['previous']['submission_reconciliation']['quarantined_sources']['2026-09-30']
+    assert proof['imported_economics'] is False and proof['terminal_or_cost_completion_inferred'] is False
+    ledger,history=mod._reconcile_history('2026-10-16',rebuilt['source_events'],[],[],[],
+        dict(projection=dict(status='ready',retained_event_count=0),registry=dict(status='verified'),source_quality=dict(tuning_input_allowed=True)),rebuilt,{})
+    assert ledger['recovered_sources']['2026-09-30']==proof
+    assert ledger['by_date']['2026-09-30']['unclassified_submission_count']==2
+    assert history['status']=='source_gap' and history['zero_is_verified'] is False
+    assert fixture['original_path'].read_bytes()==original_bytes and fixture['previous_path'].read_bytes()==previous_bytes
+
+
+@pytest.mark.parametrize('fault',['not_quarantined','verified_empty','known_nonempty','missing_original','altered_report',
+    'wrong_date','unknown_schema','retired_family','native_event','native_manifest','native_source','native_census','source_quality',
+    'native_contract','missing_manifest','boolean_census','missing_registry_tail'])
+def test_original_recovery_rejects_unproven_or_conflicting_ancestry(tmp_path,monkeypatch,fault):
+    fixture=_lost_original_fixture(tmp_path,monkeypatch)
+    previous=fixture['previous'];row=previous['submission_reconciliation']['by_date']['2026-09-30']
+    original=fixture['original']
+    if fault=='not_quarantined':previous['submission_reconciliation']['quarantined_sources']={}
+    elif fault=='verified_empty':row.update(coverage_verified=True,source_binding=dict(status='ready',retained_event_count=0))
+    elif fault=='known_nonempty':row['excluded_source_event_sha256s']=['f'*64]
+    elif fault=='missing_original':fixture['original_path'].unlink()
+    elif fault=='altered_report':original['runtime_effect']=True
+    elif fault=='wrong_date':original['date']='2026-09-29'
+    elif fault=='unknown_schema':original['economic_schema']='unknown'
+    elif fault=='retired_family':original['runtime_family']='episode'
+    elif fault=='native_event':fixture['events'][0]['record_id']='changed'
+    elif fault=='native_manifest':fixture['native']['producer_census']['manifest_sha256']='f'*64
+    elif fault=='native_source':fixture['native']['sources'][0]['sha256']='f'*64
+    elif fault=='native_census':fixture['native']['producer_census']['identity_conservation_holds']=False
+    elif fault=='native_contract':fixture['native']['projection_contract']='unknown'
+    elif fault=='missing_manifest':fixture['native']['producer_census']['manifest_sha256']=None
+    elif fault=='boolean_census':fixture['native']['producer_census']['observed_stage_counts']['order_leg_sent']=True
+    elif fault=='missing_registry_tail':original['source_contract']['registry']['tail_hash']=None
+    else:original['source_contract']['source_quality']['tuning_input_allowed']=False
+    if fault not in {'missing_original','altered_report'}:
+        original['proof_sha256']=mod._digest({k:v for k,v in original.items() if k!='proof_sha256'})
+        fixture['original_path'].write_text(json.dumps(original))
+    elif fault=='altered_report':fixture['original_path'].write_text(json.dumps(original))
+    fixture['write_previous']()
+    rebuilt=mod._previous_state('2026-10-16')
+    assert rebuilt['source_events']==[] and rebuilt['_recovered_sources']=={}
+    assert rebuilt['_verified_source_bindings']['2026-09-30']['status']=='source_gap'
+    assert '2026-09-30' in rebuilt['_quarantined_sources']
+
+
+def test_recovered_native_source_accepts_gzip_alias_and_retains_ancestry(tmp_path,monkeypatch):
+    fixture=_lost_original_fixture(tmp_path,monkeypatch)
+    fixture['native']['sources'][0]['path'] += '.gz'
+    rebuilt=mod._previous_state('2026-10-16')
+    proof=rebuilt['_recovered_sources']['2026-09-30']
+    carry=json.loads(json.dumps(rebuilt))
+    for key in list(carry):
+        if key.startswith('_'):carry.pop(key)
+    carry['through_date']='2026-10-16'
+    carry['submission_reconciliation']['by_date']['2026-09-30']=dict(
+        source_event_sha256s=proof['source_event_sha256s'],source_binding=rebuilt['_verified_source_bindings']['2026-09-30'])
+    carry['submission_reconciliation']['recovered_sources']=rebuilt['_recovered_sources']
+    carry['submission_reconciliation']['quarantined_sources']={}
+    carry['sha256']=mod._digest({k:v for k,v in carry.items() if k!='sha256'})
+    from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
+    next_report=dict(date='2026-10-16',economic_schema=ECONOMIC_SCHEMA,economic_state=carry)
+    next_report['proof_sha256']=mod._digest(next_report)
+    (mod.REPORT_DIR/'entry_cancel_wait_tuning_2026-10-16.json').write_text(json.dumps(next_report))
+    subsequent=mod._previous_state('2026-10-17')
+    assert subsequent['_recovered_sources']==rebuilt['_recovered_sources']
+    assert subsequent['source_events']==rebuilt['source_events'] and subsequent['model_rows']==[]
+    fixture['original_path'].write_text(fixture['original_path'].read_text()+' ')
+    rejected=mod._previous_state('2026-10-17')
+    assert rejected['_recovered_sources']=={} and rejected['source_events']==[]
+
+
+def _recovered_view_fixture(tmp_path,monkeypatch):
+    fixture=_lost_original_fixture(tmp_path,monkeypatch,predecessor_day='2026-10-01')
+    report,_,_,_=_reconciliation_fixture(tmp_path,monkeypatch,unknown_history=True)
+    events=[e for e in report['economic_state']['source_events'] if e['emitted_date']=='2026-09-30']
+    assert events==fixture['events']
+    manifest=report['economic_state']['submission_reconciliation']['by_date']['2026-09-30']['source_binding']['producer_manifest_sha256']
+    fixture['original']['source_contract']['projection']['producer_census']['manifest_sha256']=manifest
+    fixture['native']['producer_census']['manifest_sha256']=manifest
+    fixture['original']['proof_sha256']=mod._digest({k:v for k,v in fixture['original'].items() if k!='proof_sha256'})
+    fixture['original_path'].write_text(json.dumps(fixture['original']))
+    previous,previous_sha=mod._bounded_semantic_json(fixture['previous_path'])
+    recovery=mod._recover_lost_original('2026-09-30',previous['economic_state'],events,
+        fixture['native'],[],dict(status='verified',tail_hash='0'*64),fixture['previous_path'],previous_sha,previous)
+    report['economic_state']['submission_reconciliation']['recovered_sources']={'2026-09-30':recovery}
+    _reseal_reconciliation(report)
+    mod._RECONCILIATION_VIEW_CACHE.clear()
+    return fixture,report
+
+
+@pytest.mark.parametrize('which',['original','predecessor'])
+def test_recovery_view_binds_both_original_and_quarantined_predecessor_cache_generations(tmp_path,monkeypatch,which):
+    fixture,report=_recovered_view_fixture(tmp_path,monkeypatch)
+    data=tmp_path/'data'
+    view=mod.validated_reconciliation_view(report,data_root=data)
+    assert view['findings']==[] and view['status']=='incumbent_carry'
+    assert view['recovered_source_dates']==['2026-09-30']
+    assert view['historical_state']=='source_gap' and view['historical_zero_is_verified'] is False
+    # Whitespace preserves semantic self-hashes, but is a new original artifact.
+    path=fixture['original_path' if which=='original' else 'previous_path']
+    path.write_text(path.read_text()+' ')
+    changed=mod.validated_reconciliation_view(report,data_root=data)
+    assert changed['status']=='source_invalid' and changed['findings']
+
+
+@pytest.mark.parametrize('mutation',['false_quarantine','false_parent_hash','new_parent','source_event','import_economics','future_parent'])
+def test_recovery_view_rejects_self_resealed_false_recovery_claims(tmp_path,monkeypatch,mutation):
+    fixture,report=_recovered_view_fixture(tmp_path,monkeypatch)
+    receipt=report['economic_state']['submission_reconciliation']['recovered_sources']['2026-09-30']
+    if mutation=='false_quarantine':
+        parent=json.loads(fixture['previous_path'].read_bytes())
+        parent['economic_state']['submission_reconciliation']['by_date']['2026-09-30']['coverage_verified']=True
+        _reseal_reconciliation(parent)
+        fixture['previous_path'].write_text(json.dumps(parent))
+        import hashlib
+        receipt['predecessor_artifact_sha256']=hashlib.sha256(fixture['previous_path'].read_bytes()).hexdigest()
+    elif mutation=='false_parent_hash':receipt['predecessor_artifact_sha256']='f'*64
+    elif mutation=='new_parent':receipt['predecessor_artifact_path']=str(fixture['previous_path'].with_name('entry_cancel_wait_tuning_2026-09-29.json'))
+    elif mutation=='source_event':receipt['source_event_sha256s']=['f'*64]
+    elif mutation=='import_economics':receipt['imported_economics']=True
+    else:receipt['predecessor_artifact_path']=str(fixture['previous_path'].with_name('entry_cancel_wait_tuning_2026-10-02.json'))
+    receipt['sha256']=mod._digest({k:v for k,v in receipt.items() if k!='sha256'})
+    _reseal_reconciliation(report)
+    assert mod.validated_reconciliation_view(report,data_root=tmp_path/'data')['status']=='source_invalid'
+
+
+def test_recovery_view_detects_late_ancestry_change_after_semantic_read(tmp_path,monkeypatch):
+    fixture,report=_recovered_view_fixture(tmp_path,monkeypatch)
+    reader=mod._bounded_semantic_json
+    changed=False
+    def read(path):
+        nonlocal changed
+        result=reader(path)
+        if path==fixture['previous_path'] and not changed:
+            changed=True
+            path.write_text(path.read_text()+' ')
+        return result
+    view=mod.validated_reconciliation_view(report,data_root=tmp_path/'data',read_object=read)
+    assert view['status']=='unobservable' and view['reason']=='semantic_generation_changed_during_read'
+
+
+@pytest.mark.parametrize('kind',['fifo','symlink','oversize'])
+def test_recovery_receipt_reader_rejects_nonregular_or_unbounded_sources(tmp_path,kind):
+    import os
+    path=tmp_path/'receipt.json'
+    if kind=='fifo':os.mkfifo(path)
+    elif kind=='symlink':
+        target=tmp_path/'target.json';target.write_text('{}');path.symlink_to(target)
+    else:
+        with path.open('wb') as handle:handle.truncate(mod.MAX_RECONCILIATION_METADATA_BYTES+1)
+    with pytest.raises(ValueError,match='artifact_path_or_size_invalid'):
+        mod._bounded_semantic_json(path)
+
+
+def test_recovery_cache_hit_rechecks_original_generation_before_return(tmp_path,monkeypatch):
+    fixture,report=_recovered_view_fixture(tmp_path,monkeypatch)
+    assert mod.validated_reconciliation_view(report,data_root=tmp_path/'data')['findings']==[]
+    original=mod._reconciliation_metadata_generation;calls=0
+    def generation(*args):
+        nonlocal calls
+        result=original(*args);calls+=1
+        if calls==1:
+            fixture['original_path'].write_text(fixture['original_path'].read_text()+' ')
+        return result
+    monkeypatch.setattr(mod,'_reconciliation_metadata_generation',generation)
+    view=mod.validated_reconciliation_view(report,data_root=tmp_path/'data')
+    assert view['status']=='unobservable' and view['reason']=='semantic_generation_changed_during_read'

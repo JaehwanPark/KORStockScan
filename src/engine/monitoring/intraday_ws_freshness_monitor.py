@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping
 
 from src.engine.monitoring.market_halt_windows import session_events_path
 from src.trading.market.comparison_cost import comparison_cost_contract
+from src.trading.market.session_contract import resolve_market_session
 from src.engine.monitoring.ws_receive_expectation import classify_receive_gap
 from src.engine.monitoring.ws_freshness_acceptance import (
     BOUNDED_REJECTIONS,
@@ -66,6 +67,7 @@ SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
 SCANNER_BBO_HORIZON_SEC = 20 * 60
+ZERO_BASE_ATTACH_METADATA_MAX_LAG_SEC = 5.0
 SCANNER_BBO_TIMEOUT_MAX_LAG_SEC = 5.0
 SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT = BBO_COVERAGE_FLOOR_PCT
 SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC = 2.0
@@ -1101,6 +1103,104 @@ def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
             value.get("missing_lineage_event_count") or 0
         ),
     }
+
+
+def _reconcile_zero_base_attach_metadata(state: dict[str, Any], target_date: str) -> dict[str, Any]:
+    """Bind original attach context without borrowing a later quote/session.
+
+    Legacy compact events omit source_signature and the promotion clock. Their
+    basis is the existing lineage signature/clock plus the byte-fingerprinted
+    native attach, rather than a claim that those fields exist in that event.
+    """
+    from src.engine.scalping.scanner_lookup_attention_resource import canonical_sha256
+    lineages=state.get('lineages') or {}
+    day_start=datetime.fromisoformat(target_date).replace(tzinfo=KST).timestamp()
+    candidates=defaultdict(list);blocked=defaultdict(list);reasons=Counter()
+    allowed={
+        'KRX':{'KRX_REGULAR'},'PREMARKET_KRX_LIKE':{'KRX_LIKE_PREMARKET'},'NXT':{'NXT'},
+        'KRX_NXT_INTEGRATED':{'KRX_NXT_AFTERMARKET','KRX_NXT_AFTERMARKET_CLOSE_ONLY','KRX_NXT_AFTERMARKET_TERMINAL_EXIT'},
+    }
+    for promotion,lineage in lineages.items():
+        binding=lineage.pop('zero_base_attach_metadata_binding',None)
+        if isinstance(binding,dict) and binding.get('schema')=='zero_base_attach_metadata_binding_v1':
+            if (lineage.get('scan_generation_id') or lineage.get('scan_rank') is not None
+                    or lineage.get('ranked_candidate_count') is not None
+                    or (lineage.get('stages') or {}).get('scalping_scanner_candidate_promoted')):
+                continue
+            for field in ('venue','market_session_bucket'):
+                if lineage.get(field)==binding.get(field):
+                    lineage[field]=(binding.get('original_metadata') or {}).get(field,'UNKNOWN')
+    for event_sha,event in (state.get('lookup_attention_native_events') or {}).items():
+        if not isinstance(event,dict) or event.get('stage')!='scalping_scanner_runtime_target_attach':continue
+        row=_flatten_event(event);promotion=_valid_lineage_token(row.get('scanner_promotion_id'))
+        if not promotion.startswith('ZBPROM-') or promotion not in lineages:continue
+        lineage=lineages[promotion]
+        # Ranked promotions keep their existing immutable metadata owner.
+        if (lineage.get('scan_generation_id') or lineage.get('scan_rank') is not None
+                or lineage.get('ranked_candidate_count') is not None
+                or (lineage.get('stages') or {}).get('scalping_scanner_candidate_promoted')):continue
+        issue=None;parts=promotion.split('-');signature=str(lineage.get('source_signature') or '')
+        code=str(row.get('stock_code') or row.get('code') or '').strip()
+        record=_valid_lineage_token(row.get('runtime_record_id'))
+        anchor=_to_float(lineage.get('promotion_emitted_epoch'));event_at=_event_time(row)
+        source_hash=signature.removeprefix('ZERO_BASE_DISCOVERY:')
+        records=lineage.get('record_ids') if isinstance(lineage.get('record_ids'),list) else []
+        outcomes=lineage.get('attach_outcomes') if isinstance(lineage.get('attach_outcomes'),list) else []
+        venue=str(row.get('effective_venue') or row.get('venue') or '').upper()
+        session=_scanner_session_metadata(row)
+        try:hash_valid=event_sha==canonical_sha256(event)
+        except (ValueError,TypeError):hash_valid=False
+        if not hash_valid:issue='cached_native_hash_conflict'
+        elif (len(parts)!=4 or len(parts[1])!=6 or not parts[1].isdigit()
+              or len(parts[2])!=13 or not parts[2].isdigit() or not parts[3].isdigit()
+              or not 1<=len(parts[3])<=6 or int(parts[3])<=0 or parts[1]!=code or lineage.get('code')!=code):issue='promotion_code_identity_invalid'
+        elif (not signature.startswith('ZERO_BASE_DISCOVERY:') or len(source_hash)!=64
+              or any(c not in '0123456789abcdef' for c in source_hash)
+              or (row.get('source_signature') is not None and row['source_signature']!=signature)):issue='source_signature_conflict'
+        elif (not record or set(map(str,records))!={record}
+              or (row.get('record_id') is not None and str(row['record_id'])!=record)):issue='record_identity_conflict'
+        elif (event_at is None or event_at.date().isoformat()!=target_date
+              or row.get('emitted_date') not in (None,target_date) or anchor is None
+              or not math.isfinite(anchor)
+              or not day_start<=anchor<day_start+86400):issue='source_date_or_clock_invalid'
+        elif (not 0<=anchor-int(parts[2])/1000<=ZERO_BASE_ATTACH_METADATA_MAX_LAG_SEC
+              or not 0<=event_at.timestamp()-anchor<=ZERO_BASE_ATTACH_METADATA_MAX_LAG_SEC
+              or (row.get('scanner_promotion_emitted_epoch') is not None
+                  and _to_float(row['scanner_promotion_emitted_epoch'])!=anchor)):issue='attach_clock_stale_or_conflicting'
+        elif (set(map(_valid_lineage_token,outcomes))!={'attached'}
+              or row.get('runtime_target_attach_outcome') not in (None,'attached')):issue='attach_outcome_unverified'
+        elif (venue not in allowed or session not in allowed[venue]
+              or (row.get('venue') and str(row['venue']).upper()!=venue)
+              or _scanner_market_data_route({'market_session_bucket':session}) is None):issue='attach_session_or_context_conflict'
+        elif any(resolve_market_session(clock).session_regime.upper()!=session for clock in (
+                event_at,datetime.fromtimestamp(anchor,tz=KST))):issue='attach_session_clock_conflict'
+        if issue:
+            reasons[issue]+=1;blocked[promotion].append(issue);continue
+        candidates[promotion].append(dict(
+            schema='zero_base_attach_metadata_binding_v1',promotion_id=promotion,record_id=record,
+            source_signature=signature,promotion_emitted_epoch=anchor,target_date=target_date,
+            venue=venue,market_session_bucket=session,cached_native_event_sha256=event_sha,
+            attach_emitted_at=event['emitted_at'],
+            signature_clock_basis='existing_lineage_signature_and_clock',
+            signature_present_in_cached_event=row.get('source_signature') is not None,
+            session_clock_basis='declared_bucket_matches_original_promotion_and_attach_clock',
+            physical_execution_venue_attested=False,runtime_effect=False,allowed_runtime_apply=False))
+    bindings=[]
+    for promotion,proofs in candidates.items():
+        lineage=lineages[promotion]
+        semantic={(p['record_id'],p['source_signature'],p['promotion_emitted_epoch'],p['venue'],p['market_session_bucket']) for p in proofs}
+        if blocked.get(promotion) or len(semantic)!=1:
+            if len(semantic)!=1:reasons['conflicting_native_reattach']+=1
+            continue
+        proof=sorted(proofs,key=lambda p:p['attach_emitted_at'])[0]
+        if any(lineage.get(k) not in (None,'','UNKNOWN',proof[k]) for k in ('venue','market_session_bucket')):
+            reasons['existing_lineage_context_conflict']+=1;continue
+        proof['original_metadata']={k:lineage.get(k,'UNKNOWN') for k in ('venue','market_session_bucket')}
+        for field in ('venue','market_session_bucket'):lineage[field]=proof[field]
+        lineage['zero_base_attach_metadata_binding']=proof;bindings.append(proof)
+    return dict(schema='zero_base_attach_metadata_reconciliation_v1',target_date=target_date,
+                bound_lineage_count=len(bindings),rejected_reason_counts=dict(reasons),bindings=bindings,
+                physical_execution_venue_attested=False,runtime_effect=False,allowed_runtime_apply=False)
 
 
 def _append_unique(values: Any, value: Any) -> list[str]:
@@ -5713,6 +5813,7 @@ def build_report(
             "source_identity_stable_during_scan": source_identity_stable,
         }
 
+    zero_base_attach_metadata=_reconcile_zero_base_attach_metadata(scanner_funnel_state,target_date)
     incremental_state_persisted = bool(
         incremental_state_path is not None
         and all(
@@ -5848,6 +5949,7 @@ def build_report(
         "official_symbol_master_binding": symbol_master_binding,
         "source_missing": source_missing,
         "input_processing": {
+            "zero_base_attach_metadata_reconciliation": zero_base_attach_metadata,
             "mode": (
                 "incremental_streaming_aggregation"
                 if cached_state is not None

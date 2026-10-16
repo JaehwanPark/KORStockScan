@@ -12,10 +12,14 @@
 | fact 생산 순서와 결속 | 임시 report의 census에 fact를 연결한 뒤 정식 postclose snapshot으로 바꾸던 반복 결함이다. 정식 completion prefix를 먼저 생성하고 source-bound fact → 수량 평가 뒤 AI 입력 작성 종료 후 holding suffix를 생성한다. | 원 snapshot/census/cost에 봉인한 작은 fact projection, top300 표시 전에 전체 fact 모수 보존, DB DELETE 전/commit 전 검증과 rollback |
 | IQ172 atomic 실행 | 감사 문서의 68be 기준 날짜/0행 ready 결함은 후속 272/c63/b8에 이미 반영돼 있다. 최신 표현에서 producer valid와 retained/excluded/미관측을 재검증한다. | 원 plan/leg/probe identity와 8 plans/10 orders를 기존 검증 원본과 구분; 새 사실을 만들지 않음 |
 | IQ173 수량 의미 판정 | 경제 원천 결손을 valid_empty로 표시하던 조건을 수리한다. fact 전체·COMPLETED·원천 제외·경제 적격·정책 PID·전용 bundle 관측을 각각 공개한다. 비영업일 기본 sweep도 마지막 완료 원천일을 점검한다. | unknown invalid exclusion도 source gap, 미완료/다른 owner/기준일 밖 정상 제외와 구분. 최초 정책에 새 경제 승인 gate 없음 |
+| 누적 수량의 이월 완료 전이 | 10/15 원 fact의 HOLDING4가 10/16 완료9건 안에 있으나 entry-day DB만 읽어 not_completed로 탈락했다. 원 DB·snapshot·영수증은 보존하고, 작은 완료일 projection을 정확한 ID/원 추천일/실제 BUY/owner/terminal/census/cost로 메모리에 결합한다. | 실제 대사 COMPLETED9/HOLDING7→COMPLETED13/HOLDING3. 평가일 이전·서로 다른 terminal·다른 owner·세대 경합은 거부한다. 명시된 추가매수 횟수는 단조성 검증 후 반영하여 초기진입 경제성에서 제외하고, 없는 횟수는 원 entry 관측을 유지한다. 비용 NULL은 그대로다. |
 | IQ174 실제 비용 | completed5와 원 완료 모수의 배분 실패를 record/order별로 대사한다. 삼성 10원·HPSP 20원 공식 일지/주문 필드 합계 차이와 다중 포지션을 보존한다. | 공식 upstream 현재953e5dbff123f437ab4d11a78a95191a685eb51f의 spec/core/Postman을 재확인. 새 API·임의 배분·actual 비용 모델 대체 없음 |
 | IQ175 capture lifecycle | 후행453/finish1의 미종료5를 조기 fixed exit2와 native PID drain3에 연결한다. 시작/종료/교체/정리/shutdown/다음 PID의 dead-process 관측을 기존 큐와 작은 영수증으로 기록한다. | queued와 durable·원 PID/attempt/plan을 분리. 과거 finish를 만들지 않고 후보별 관측 horizon을 평가하며 짧은 관측을 전20분 부족으로 일괄 폐기하지 않음 |
 | all-scope trailing | holding 연구의 코드 해시가 최신 AI/실행 코드와 달라 10/19 실제 reader가 거부했는데 전체 준비 PASS가 이를 설명하지 못했다. 현재 코드·target·봉인 세대의 작은 관측을 summary/detector로 연결하고 원 producer를 갱신한다. | 작은 관측은 full native replay가 아니다. 실제 selector/bootstrap 검증은 원 native verifier 유지, optional 연구는 기존 부모 유지 경계 보존 |
 | WS 공식 master | 경제 원천 report는 당일 canonical payload를 가졌지만 standalone master 발행이 빠져 9/16 metadata가 소비됐다. 기존 verified payload와 원 공식 metadata 바이트를 대사해 기존 발행 파일을 생성한다. | 네트워크·퇴역 collector 재생 없이 기존 원본만 사용. 잘못된 날짜/원천/authority/동일 경로 충돌은 거부 |
+| WS zero-base attach 소비 | 당일 작은 native cache의 정확한 attach에 session이 있지만 legacy promoted/scan-generation 조건 때문에 zero-base lineage10건에서 누락된다. | 원 promotion/code/record/source/time 결속으로 실제 보존된 session만 소비한다. 통합 route를 물리 체결 venue로 바꾸지 않으며 BBO·실제 체결 결손은 유지한다. 후속 리뷰·native 재생성 대상 |
+| 시장기회 active scanner 연결 | active zero-base claim/result/attach와 legacy upstream consumer의 불일치가 upstream0에 포함된다. 설치 owned-log cron4행을 읽지 못하는 오래된 기대값과 단일 예정 capture 구간의 불가능한 최소3회 조건도 확인했다. | 발견·승격·실주문을 구분하고 정확한 원 식별자·시간·route·source lineage를 검증한다. 외부524 opportunity episode를 Main 실제 발굴실패524건으로 해석하지 않는다. 후속 리뷰·native 재생성 대상 |
+| machine stage 선택 상태 | 원 native operating comparison은 선택된 machine component인데 stage의 schema 분기 누락으로 no_valid_candidate로 기록됐다. | 새 producer 분기를 수리하고, 현재 overview는 검증된 native terminal/report와 원 stage 실행 영수증·code SHA를 함께 제시한다. 원 stage/aux 바이트는 보존하며 reporting 수정을 위해 provider 연구를 재실행하지 않는다. operator 초기 계약에 새 경제성 gate를 요구하지 않는다. |
 | Parquet identity/보존 | 같은 record·시각의 다른 stage/content가 합쳐질 수 있는 식별자와 같은 집계만 보는 shadow 검증을 수리한다. native ID 또는 전체 원문 fingerprint, 정확 중복/충돌/날짜 제외, source→output 보존과 실제 출력 바이트를 검증한다. | 실제 10행 차이는 날짜 필터 제외이며 10건 유실로 주장하지 않는다. 현재일 원천 식별 비교와 기존 3일 집계 비교 범위를 공개하고 불일치를 실패로 전파 |
 
 ## 전체 작업별 최초 대조
@@ -24,7 +28,7 @@
 
 | 작업 | 실행 성격 | 원천·제외·적격 / 마지막 소비자 |
 | --- | --- | --- |
-| EOD common daily/venue eligibility | scheduled | stored3904 official venue rows; EOD short history exclusions4; must retain actual original EODreceipt; actual EOD/DB consumer |
+| EOD common daily/venue eligibility | scheduled | requested/eligible2626, actual stored quote rows2622; short-history exclusions4(179880/266690/468670/486510); original terminal completed_with_warnings and actual DB consumer agree. Official venue metadata rows are a separate denominator. |
 | market panic breadth | wrapper enabled | sample65=indices2+industry63; bothmarketsready; risk source-only; no economic tuner |
 | observation quality preflight/final | wrapper enabled | 344472 retained; originalbad6excluded; machine58=35+16excluded+7quarantine; machine/aux/cancel/split/WS sources |
 | rising missed feedback | wrapper enabled | retired dedicated scout not active; native source-only feedback remains; rising classifier |
@@ -84,4 +88,16 @@
 
 최종 코드 게이트: 통합 pytest 2,919건 통과. 실행 중 마지막 compactor 소유권 수리로 source guard가 변경 파일 두 개를 검출했다. 이를 무시하지 않고 source SHA 차이를 기록하고, 최종 두 파일을 포함한 Parquet/compactor/Main-stop 독립264건을 재검증했다. 나머지 source SHA는 통합 검증 시작과 끝이 모두 같다. [검증 결속](../../tmp/postclose-complete-repair-20261017/final-validation-attestation.json), [최종 독립 리뷰](../../tmp/postclose-complete-repair-20261017/parquet-archive-stop-independent-review-final.json). Python compile·bash 문법·diff·print-only parser도 통과했으며 unresolved in-scope code finding은0이다. 실제 native 재생성/최종 선택·기동 준비는 아래 별도 영수증으로 마감한다.
 
-최종 native 결과와 재검증 영수증은 아래에 추가한다.
+위 코드 게이트는 첫 커밋18905f3bc의 범위다. native 결과의 전체 의미 대사 중 WS zero-base session 소비와 시장기회 active scanner/설치 capture 읽기 계약의 추가 결함을 발견하여 수리·리뷰를 다시 진행한다. 첫 게이트를 전체 최종 완료로 해석하지 않는다. 최종 native 결과와 재검증 영수증은 아래에 추가한다.
+
+## 후속 의미 대사와 보완
+
+- 10/16 completion prefix는 실제 native producer로 839.039초에 완료했다. trade_review 536.407초, missed counterfactual 292.357초이며 3종 prefix만 완료로 표시한다. 10/15 원본 스트림 fact7건은145.556초, 10/16의18,008B scalar fact8건은3.972초에 적재했다. 최초 수량 refresh는2.696초이며 이월 완료4건의 누적 소비 결함을 이후 대사에서 찾아 추가 수리했다. 작은 관측 검증과 전체 native source replay는 구분한다.
+- WS는 원 cache의 session10건(장전5/통합 장후5)을 정확한 promotion/record/source/원 시각에 연결한다. 통합 route를 물리 체결 venue로 바꾸지 않는다. 시장기회 native source는 claim1724/result1660, confirmed attach5/rejected5로 분리하며 실패한 장전5건을 승격하지 않는다. 새 선택 코드의 native 보고서 재생성은 별도 단계다.
+- labels34건은 price horizon mature29/partial5와 별개로 canonical-primary 입력 결손이 있다. 원 trace/archived request 해시 불일치의 보조 검증을 primary 승격으로 바꾸지 않는다. weakness의 별도30분 라벨과 legacy10분 라벨을 섞지 않으며 outcome_U58을 임의 확정하지 않는다.
+- 마지막 교차 리뷰에서 추가매수 횟수의 presence/단조성, 과거 양수 횟수 보존, 최신 완료 세대, 다른 custody가 Main 연구를 차단하는 조건, 압축 footer/CRC/deflate 예외의 모니터 전파, stage overview의 후행 원천 경합을 보완했다. 첫 결합938건은 통과했으나 실행 중 custody 보완이 반영되어 source guard가 실패했다. 이 로그는 보존하고 해당 실행을 최종 코드 승인으로 쓰지 않는다.
+- cancel-wait9/30은 원 dated report의 native8개 이벤트가 남아 있어 빈 격리 해시의 전파와 실제 부재를 구분한다. 원 native census·이벤트·논리 원천이 모두 일치할 때만 복구하며 비용·terminal 결손은 보존한다. 10/1은 알려진 날짜별 execution/report/manifest의 plain/gzip 원천이 없고 당시 exact-date 보고서도 source_missing을 기록한다. 이를 verified zero로 바꾸지 않는다.
+
+추가 근거: [이월 완료4 원천 대사](../../tmp/postclose-complete-repair-20261017/quantity-carry-overlay-current-native-bounded-verification.json), [수량 overlay 구현·리뷰](../../tmp/postclose-complete-repair-20261017/quantity-completion-overlay-implementation-review.json), [역사 cancel 원천 보존 조사](../../tmp/postclose-complete-repair-20261017/cancel-historical-original-source-recovery-assessment.json), [기계·연구11개 작업 대사](../../tmp/postclose-complete-repair-20261017/final-semantic-group-machine.json).
+
+후속 코드 게이트도 종료했다. source SHA를 시작·끝에 고정한 9개 모듈 통합1,042건 통과(57.91초), Python compile·diff·print-only parser PASS다. cancel 복구는 독립3개 모듈133건 통과, 수량/모니터·WS·시장기회/stage 교차 리뷰도 미해결 finding0으로 닫혔다. [최종 source 결속 검증](../../tmp/postclose-complete-repair-20261017/supplemental-validation-attestation-v2.json), [cancel 독립 리뷰](../../tmp/postclose-complete-repair-20261017/cancel-native-ancestry-independent-review-final.json). 다음 단계는 이 exact code를 다음 정규 기동용으로 선택한 후 영향받은 native 생산자와 전체 최종 소비자를 실제 재생성·검증하는 것이다. 아직 미래 PREOPEN/PID/자연 주문·비용경제성 완료를 뜻하지 않는다.

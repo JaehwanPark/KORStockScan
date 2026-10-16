@@ -23,6 +23,179 @@ def _write_jsonl(path, rows):
     )
 
 
+def _zero_base_attach_fixture():
+    from src.engine.scalping.scanner_lookup_attention_resource import capture_native_event
+    promotion='ZBPROM-000660-1792145190170-2'
+    event=_event('scalping_scanner_runtime_target_attach',{
+        'scanner_promotion_id':promotion,'runtime_record_id':'49358',
+        'source_signature':'ZERO_BASE_DISCOVERY:'+'c'*64,
+        'scanner_promotion_emitted_epoch':1792145190.274517,
+        'runtime_target_attach_outcome':'attached',
+        'effective_venue':'KRX_NXT_INTEGRATED','venue':'KRX_NXT_INTEGRATED',
+        'market_session_bucket':'KRX_NXT_AFTERMARKET',
+    },code='000660',emitted_at='2026-10-16T19:06:30.291307')
+    event['emitted_date']='2026-10-16'
+    state=mod._scanner_funnel_state_from_mapping(None)
+    capture_native_event(state,event)
+    mod._update_scanner_funnel_state(state,mod._flatten_event(event),{})
+    return promotion,event,state
+
+
+def test_zero_base_native_attach_repairs_only_original_context_in_cached_and_fresh_state():
+    from copy import deepcopy
+    promotion,event,fresh=_zero_base_attach_fixture()
+    cached=mod._scanner_funnel_state_from_mapping(deepcopy(fresh))
+    before_bbo=list(fresh['lineages'][promotion]['bbo_observations'])
+    first=mod._reconcile_zero_base_attach_metadata(fresh,'2026-10-16')
+    second=mod._reconcile_zero_base_attach_metadata(cached,'2026-10-16')
+    assert first==second and first['bound_lineage_count']==1
+    assert first['rejected_reason_counts']=={}
+    lineage=cached['lineages'][promotion]
+    assert lineage['market_session_bucket']=='KRX_NXT_AFTERMARKET'
+    assert lineage['venue']=='KRX_NXT_INTEGRATED'
+    assert lineage['bbo_observations']==before_bbo==[]
+    assert lineage['scan_generation_id']=='' and lineage['scan_rank'] is None
+    proof=lineage['zero_base_attach_metadata_binding']
+    assert proof['signature_clock_basis']=='existing_lineage_signature_and_clock'
+    assert proof['signature_present_in_cached_event'] is False
+    assert proof['physical_execution_venue_attested'] is False
+    assert proof['runtime_effect'] is proof['allowed_runtime_apply'] is False
+    assert mod._reconcile_zero_base_attach_metadata(cached,'2026-10-16')==second
+
+
+@pytest.mark.parametrize('mutation',[
+    'promotion','code','record','date','clock','stale','source','native_hash','huge_anchor','negative_anchor','infinite_anchor','nan_anchor','outcome','context',
+])
+def test_zero_base_attach_rejects_identity_clock_source_and_native_conflicts(mutation):
+    from src.engine.scalping.scanner_lookup_attention_resource import canonical_sha256
+    promotion,_,state=_zero_base_attach_fixture()
+    native_key,event=next(iter(state['lookup_attention_native_events'].items()))
+    lineage=state['lineages'][promotion]
+    if mutation=='promotion':event['fields']['scanner_promotion_id']='ZBPROM-000660-1792145190171-2'
+    elif mutation=='code':event['stock_code']='005930'
+    elif mutation=='record':event['fields']['runtime_record_id']='49359'
+    elif mutation=='date':event['emitted_date']='2026-10-15'
+    elif mutation=='clock':event['emitted_at']='2026-10-16T19:06:30.100000'
+    elif mutation=='stale':event['emitted_at']='2026-10-16T19:06:36.291307'
+    elif mutation=='source':event['fields']['source_signature']='ZERO_BASE_DISCOVERY:'+'d'*64
+    elif mutation=='native_hash':event['fields']['market_session_bucket']='KRX_REGULAR'
+    elif mutation=='huge_anchor':lineage['promotion_emitted_epoch']=1e100
+    elif mutation=='negative_anchor':lineage['promotion_emitted_epoch']=-1
+    elif mutation=='infinite_anchor':lineage['promotion_emitted_epoch']=float('inf')
+    elif mutation=='nan_anchor':lineage['promotion_emitted_epoch']=float('nan')
+    elif mutation=='outcome':lineage['attach_outcomes']=['rejected']
+    else:event['fields']['venue']='NXT'
+    if mutation!='native_hash':state['lookup_attention_native_events']={canonical_sha256(event):event}
+    result=mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')
+    assert result['bound_lineage_count']==0
+    assert lineage['market_session_bucket']==lineage['venue']=='UNKNOWN'
+    assert 'zero_base_attach_metadata_binding' not in lineage
+
+
+def test_zero_base_conflicting_reattach_withdraws_prior_metadata_binding():
+    from src.engine.scalping.scanner_lookup_attention_resource import canonical_sha256
+    promotion,_,state=_zero_base_attach_fixture()
+    assert mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')['bound_lineage_count']==1
+    event=json.loads(json.dumps(next(iter(state['lookup_attention_native_events'].values()))))
+    event['fields'].update(effective_venue='KRX',venue='KRX',market_session_bucket='KRX_REGULAR')
+    state['lookup_attention_native_events'][canonical_sha256(event)]=event
+    result=mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')
+    assert result['bound_lineage_count']==0
+    assert result['rejected_reason_counts']=={'attach_session_clock_conflict':1}
+    assert state['lineages'][promotion]['market_session_bucket']=='UNKNOWN'
+
+
+@pytest.mark.parametrize('clock,venue,session,accepted',[
+    ('08:30:00','PREMARKET_KRX_LIKE','KRX_LIKE_PREMARKET',True),
+    ('09:00:00','KRX','KRX_REGULAR',True),
+    ('15:29:59','KRX','KRX_REGULAR',True),
+    ('16:00:00','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET',True),
+    ('19:40:00','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET_CLOSE_ONLY',True),
+    ('19:45:00','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET_TERMINAL_EXIT',True),
+    ('19:06:30','KRX','KRX_REGULAR',False),
+    ('08:30:00','KRX','KRX_REGULAR',False),
+    ('15:30:00','KRX','KRX_REGULAR',False),
+    ('19:40:00','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET',False),
+    ('19:45:00','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET_CLOSE_ONLY',False),
+    ('20:00:00','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET_TERMINAL_EXIT',False),
+])
+def test_zero_base_declared_attach_context_must_match_original_session_clock(clock,venue,session,accepted):
+    from datetime import datetime
+    from src.engine.scalping.scanner_lookup_attention_resource import canonical_sha256
+    old_promotion,_,state=_zero_base_attach_fixture()
+    lineage=state['lineages'].pop(old_promotion)
+    event=next(iter(state['lookup_attention_native_events'].values()))
+    instant=datetime.fromisoformat('2026-10-16T'+clock).replace(tzinfo=mod.KST)
+    anchor=instant.timestamp()
+    promotion=f'ZBPROM-000660-{int(anchor*1000)}-2'
+    lineage['promotion_emitted_epoch']=anchor
+    state['lineages'][promotion]=lineage
+    event['emitted_at']=instant.isoformat()
+    event['fields'].update(scanner_promotion_id=promotion,effective_venue=venue,
+                           venue=venue,market_session_bucket=session)
+    state['lookup_attention_native_events']={canonical_sha256(event):event}
+    result=mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')
+    assert result['bound_lineage_count']==int(accepted)
+    if accepted:
+        assert lineage['market_session_bucket']==session
+        assert lineage['zero_base_attach_metadata_binding']['session_clock_basis']=='declared_bucket_matches_original_promotion_and_attach_clock'
+    else:
+        assert result['rejected_reason_counts']=={'attach_session_clock_conflict':1}
+        assert lineage['market_session_bucket']=='UNKNOWN'
+
+
+def test_zero_base_later_bbo_and_ranked_promotion_never_replace_attach_provenance():
+    promotion,_,state=_zero_base_attach_fixture()
+    lineage=state['lineages'][promotion]
+    lineage['bbo_observations']=[{'market_session_bucket':'KRX_NXT_AFTERMARKET','market_data_route':'KRX_NXT_INTEGRATED'}]
+    state['lookup_attention_native_events']={}
+    assert mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')['bound_lineage_count']==0
+    assert lineage['market_session_bucket']=='UNKNOWN'
+    _,_,state=_zero_base_attach_fixture();lineage=state['lineages'][promotion]
+    lineage.update(scan_generation_id='SCANGEN-original',scan_rank=1,ranked_candidate_count=1,
+                   venue='PREMARKET_KRX_LIKE',market_session_bucket='KRX_LIKE_PREMARKET')
+    assert mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')['bound_lineage_count']==0
+    assert lineage['market_session_bucket']=='KRX_LIKE_PREMARKET'
+
+
+def test_zero_base_original_promoted_owner_supersedes_adapter_without_rollback():
+    promotion,_,state=_zero_base_attach_fixture()
+    mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')
+    lineage=state['lineages'][promotion]
+    # A later original promotion can attest the same context. Removing the
+    # adapter must not withdraw those independently attested values.
+    lineage.update(scan_generation_id='SCANGEN-native',scan_rank=1,ranked_candidate_count=1)
+    lineage['stages']['scalping_scanner_candidate_promoted']=1
+    result=mod._reconcile_zero_base_attach_metadata(state,'2026-10-16')
+    assert result['bound_lineage_count']==0
+    assert lineage['market_session_bucket']=='KRX_NXT_AFTERMARKET'
+    assert lineage['venue']=='KRX_NXT_INTEGRATED'
+    assert 'zero_base_attach_metadata_binding' not in lineage
+
+
+def test_zero_base_report_reuses_cached_attach_without_rescanning_raw(tmp_path,monkeypatch):
+    _,event,_=_zero_base_attach_fixture()
+    pipeline=tmp_path/'pipeline.jsonl';threshold=tmp_path/'threshold.jsonl';cache=tmp_path/'state.json'
+    _write_jsonl(pipeline,[event]);_write_jsonl(threshold,[])
+    fresh=mod.build_report('2026-10-16',pipeline_path=pipeline,threshold_path=threshold,incremental_state_path=cache,generated_at='fixed')
+    # Simulate the original v19 cache before the adapter repair. The native
+    # compact event remains intact, so only the tiny cached evidence is used.
+    saved=json.loads(cache.read_text())
+    for lineage in saved['scanner_funnel_state']['lineages'].values():
+        lineage.pop('zero_base_attach_metadata_binding',None)
+        lineage.update(venue='UNKNOWN',market_session_bucket='UNKNOWN')
+    cache.write_text(json.dumps(saved))
+    original=mod._iter_plain_jsonl_from_offset
+    def no_rescan(path,*,offset=0,**kwargs):
+        assert offset==path.stat().st_size
+        return original(path,offset=offset,**kwargs)
+    monkeypatch.setattr(mod,'_iter_plain_jsonl_from_offset',no_rescan)
+    cached=mod.build_report('2026-10-16',pipeline_path=pipeline,threshold_path=threshold,incremental_state_path=cache,generated_at='fixed')
+    assert cached['input_processing']['appended_event_count']==0
+    assert cached['input_processing']['zero_base_attach_metadata_reconciliation']==fresh['input_processing']['zero_base_attach_metadata_reconciliation']
+    assert cached['scanner_unique_funnel']['venue_counts']=={'KRX_NXT_INTEGRATED':1}
+
+
 def _write_market_session_events(path):
     path.write_text(
         json.dumps(

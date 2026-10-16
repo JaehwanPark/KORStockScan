@@ -11,6 +11,7 @@ import os
 import re
 import time
 import stat
+import zlib
 from contextlib import contextmanager
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -756,6 +757,150 @@ def _quantity_current_observation(current_path, target_date, read):
     return result
 
 
+def _quantity_completion_overlay_observation(root, source_date, census, facts, read):
+    """Authenticate bounded terminal observations separately from entry facts."""
+    fields = {'completion_overlay_generations', 'completion_overlay_summary',
+              'as_of_completed_population_count'}
+    present = fields.intersection(census)
+    tagged = [row for row in facts if 'completion_generation' in row]
+    if not present and not tagged:
+        return {}
+    if present != fields:
+        raise ValueError('quantity_completion_overlay_census_missing')
+    generations = census['completion_overlay_generations']
+    summary = census['completion_overlay_summary']
+    completed = sum(str(row.get('status')).upper() == 'COMPLETED' for row in facts)
+    if (not isinstance(generations, dict) or not isinstance(summary, dict)
+            or len(generations) > 256
+            or any(not isinstance(day, str) or day > source_date for day in generations)
+            or type(census['as_of_completed_population_count']) is not int
+            or census['as_of_completed_population_count'] != completed):
+        raise ValueError('quantity_completion_overlay_population_invalid')
+    if not summary and not generations and not tagged:
+        return {'postclose_as_of_completed_population_count': completed}
+    from src.engine.scalping.initial_quantity_source_cache import (
+        completion_fact_scope, verify_completion_overlay_generations,
+        QUANTITY_FACT_STRATEGIES,
+    )
+    from src.engine.scalping.initial_quantity_policy import _timestamp
+    from src.engine.sniper_position_tags import normalize_strategy
+    terminals = verify_completion_overlay_generations(
+        generations, data_dir=root / 'data', read=read)
+    native_by_day = {
+        day: {str(row['recommendation_id']): row for row in rows}
+        for day, rows in terminals.items()
+    }
+    start = census.get('entry_on_or_after', '2026-06-05')
+    if (not isinstance(start, str) or date.fromisoformat(start).isoformat() != start
+            or not '2026-06-05' <= start <= source_date):
+        raise ValueError('quantity_completion_overlay_entry_window_invalid')
+    latest_day, fixed_terminals = {}, {}
+    input_ids = {str(row.get('recommendation_id')) for row in facts}
+    excluded_native = Counter()
+    for day in sorted(native_by_day):
+        for rid, native in native_by_day[day].items():
+            if not completion_fact_scope(native):
+                if rid in input_ids:
+                    raise ValueError('quantity_completion_overlay_custody_conflict')
+                excluded_native['other_strategy' if native.get('strategy') not in
+                                QUANTITY_FACT_STRATEGIES else 'other_custody'] += 1
+                continue
+            buy, sell = _timestamp(native.get('buy_time')), _timestamp(native.get('sell_time'))
+            if buy is None or sell is None or not buy < sell or sell.date().isoformat() > day:
+                raise ValueError('quantity_completion_overlay_clock_changed')
+            if not start <= buy.date().isoformat() <= source_date:
+                excluded_native['outside_actual_entry_window'] += 1
+                continue
+            fixed = (str(native.get('rec_date')), native.get('stock_code'),
+                     normalize_strategy(native.get('strategy')), native.get('position_tag'),
+                     native.get('buy_price'), native.get('buy_qty'), buy,
+                     native.get('sell_price'), sell)
+            if rid in fixed_terminals and fixed_terminals[rid] != fixed:
+                raise ValueError('quantity_completion_overlay_terminal_conflict')
+            fixed_terminals[rid], latest_day[rid] = fixed, day
+    if set(latest_day) != {str(row.get('recommendation_id')) for row in tagged}:
+        raise ValueError('quantity_completion_overlay_row_binding_invalid')
+    overlaid_ids = []
+    for row in tagged:
+        day = row.get('completion_source_date')
+        native = native_by_day.get(day, {}).get(str(row.get('recommendation_id')))
+        if (native is None or latest_day.get(str(row.get('recommendation_id'))) != day
+                or row['completion_generation'] != generations.get(day)
+                or str(row.get('status')).upper() != 'COMPLETED'
+                or row.get('original_fact_status') is None
+                or not isinstance(row.get('fact_generation'), dict)
+                or row['fact_generation'] != (census.get('persisted_fact_generations') or {}).get(str(row.get('rec_date')))):
+            raise ValueError('quantity_completion_overlay_row_binding_invalid')
+        for field in ('rec_date', 'stock_code', 'strategy', 'position_tag', 'status',
+                      'buy_price', 'buy_qty', 'sell_price', 'profit_rate',
+                      'realized_pnl_krw', 'economics_source_status',
+                      'actual_cost_reconciliation_status', 'actual_cost_source_generation',
+                      'completion_census_run_id', 'completion_census_projection_sha256',
+                      'broker_actual_fees_taxes_krw'):
+            actual, expected = row.get(field), native.get(field)
+            if field == 'rec_date':
+                actual, expected = str(actual), str(expected)
+            elif field == 'strategy':
+                actual, expected = normalize_strategy(actual), normalize_strategy(expected)
+            if actual != expected:
+                raise ValueError('quantity_completion_overlay_terminal_changed')
+        if any(row.get(field) != native[field]
+               for field in ('add_count', 'avg_down_count', 'pyramid_count')
+               if field in native):
+            raise ValueError('quantity_completion_overlay_scale_in_changed')
+        count_fields = ('add_count', 'avg_down_count', 'pyramid_count')
+        observations = {}
+        for observed_day in sorted(native_by_day):
+            if observed_day > day:
+                continue
+            prior = native_by_day[observed_day].get(str(row['recommendation_id']), {})
+            for field in count_fields:
+                if field in prior:
+                    observations[field] = {'source_date': observed_day, 'value': prior[field]}
+        if (row.get('completion_observed_scale_in_fields') != sorted(
+                field for field in count_fields if field in native)
+                or row.get('completion_scale_in_observations') != observations
+                or any(row.get(field) != observation['value']
+                       for field, observation in observations.items())):
+            raise ValueError('quantity_completion_overlay_scale_in_changed')
+        if any(_timestamp(row.get(field)) != _timestamp(native.get(field))
+               for field in ('buy_time', 'sell_time')):
+            raise ValueError('quantity_completion_overlay_clock_changed')
+        if str(row['original_fact_status']).upper() != 'COMPLETED':
+            overlaid_ids.append(str(row['recommendation_id']))
+    original_counts = dict(Counter(str(row.get('original_fact_status', row.get('status')))
+                                   for row in facts))
+    current_counts = dict(Counter(str(row.get('status')) for row in facts))
+    if (not isinstance(summary, dict)
+            or summary.get('schema') != 'initial_quantity_completion_overlay_v1'
+            or summary.get('as_of') != source_date
+            or summary.get('source_scope') != 'entry_day_facts_plus_exact_completion_date_observations'
+            or summary.get('entry_day_database_or_source_mutation') is not False
+            or summary.get('original_fact_status_counts') != original_counts
+            or summary.get('current_fact_status_counts') != current_counts
+            or summary.get('overlaid_record_ids') != sorted(overlaid_ids)
+            or type(summary.get('overlaid_completed_count')) is not int
+            or summary['overlaid_completed_count'] != len(overlaid_ids)
+            or type(summary.get('native_terminal_record_count')) is not int
+            or summary['native_terminal_record_count'] != len({
+                rid for rows in native_by_day.values() for rid in rows})
+            or type(summary.get('native_terminal_observation_count')) is not int
+            or summary.get('native_terminal_observation_count') != sum(map(len, native_by_day.values()))
+            or type(summary.get('applicable_terminal_record_count')) is not int
+            or summary.get('applicable_terminal_record_count') != len(tagged)
+            or summary.get('excluded_native_terminal_observation_counts') != dict(excluded_native)
+            or any(not isinstance(summary.get(field), dict)
+                   or any(type(value) is not int or value < 0 for value in summary[field].values())
+                   for field in ('original_fact_status_counts', 'current_fact_status_counts',
+                                 'excluded_native_terminal_observation_counts'))
+            or len({str(row.get('recommendation_id')) for row in tagged}) != len(tagged)):
+        raise ValueError('quantity_completion_overlay_summary_invalid')
+    return dict(postclose_as_of_completed_population_count=completed,
+                postclose_original_fact_status_counts=original_counts,
+                postclose_completion_overlay_summary=summary,
+                postclose_completion_overlay_generation_count=len(generations))
+
+
 def _initial_quantity_semantics_native(
     root: Path, source_date: str, *, now_epoch: float | None = None, read=None,
 ) -> dict[str, Any]:
@@ -885,6 +1030,8 @@ def _initial_quantity_semantics_native(
                     or report['source_date'] != source_date
                     or evaluation['source_date'] != source_date):
                 raise ValueError('quantity_input_census_binding_invalid')
+            details.update(_quantity_completion_overlay_observation(
+                root, source_date, census, facts, read))
             benign = {'not_completed', 'other_strategy', 'other_custody',
                       'scale_in_position', 'before_refresh_start', 'duplicate_fact',
                       'date_outside_baseline_or_as_of'}
@@ -1174,6 +1321,8 @@ def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
                         raw = handle.read(limit + 1)
                 finally:
                     if handle is not physical: handle.close()
+    except (EOFError, gzip.BadGzipFile, zlib.error) as exc:
+        raise ValueError('semantic_artifact_compression_invalid') from exc
     except ValueError as exc:
         if str(exc) in {'observer_file_changed_before_read', 'observer_file_changed_during_read'}:
             raise ValueError('semantic_generation_changed_during_read') from exc

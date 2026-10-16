@@ -927,3 +927,333 @@ def test_native_capture_loss_is_isolated_before_joint_policy_selection(tmp_path)
     assert all(v['status']=='capture_queue_gap' for v in affected['cap_candidates'].values())
     valid={tid for tid,values in cases.items() if any(v['status']!='source_gap' for key,v in values.items() if key!='parent_5stage:parent:None')}
     assert len(valid)==59 and affected['trade_id'] not in valid
+
+
+def _quantity_completion_overlay_fixture(tmp_path, monkeypatch, *, day='2026-10-08', actual=False,
+                                         terminal_price=101000, identity=None):
+    from src.engine import log_archive_service as archive
+    from src.engine import strategy_position_performance_report as native
+    from src.engine.lifecycle import broker_cost_reconciliation as costs
+    from src.engine.sniper_trade_review_report import completed_census_manifest, strategy_fact_projection_rows
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', tmp_path/'report/monitor_snapshots')
+    monkeypatch.setattr(native, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(native, '_FACT_SYNC_STATUS_DIR', tmp_path/'report/strategy_position_fact_sync')
+    monkeypatch.setattr(policy, 'DATA_DIR', tmp_path)
+    if actual:
+        monkeypatch.setattr(costs, 'source_generation', lambda root, target: dict(
+            schema='holding_actual_cost_source_generation_v1', completion_date=target,
+            count=1, sha256='d'*64, status='observed'))
+        from src.engine.lifecycle import holding_window_generation
+        monkeypatch.setattr(holding_window_generation, 'source_generation', costs.source_generation)
+    entry='2026-10-07'
+    original={**actual_fact(day=entry), 'status':'HOLDING', 'sell_price':None, 'sell_time':None,
+              'profit_rate':None, 'realized_pnl_krw':None, 'economics_source_status':'fixed_comparison_cost_model',
+              'actual_cost_reconciliation_status':None, 'actual_cost_source_generation':None,
+              'completion_census_run_id':None,'completion_census_projection_sha256':None,
+              'broker_actual_fees_taxes_krw':None,'add_count':0,'avg_down_count':0,'pyramid_count':0,
+              'fact_generation':{'issue':None, 'path':str(tmp_path/'entry.json'),'sha256':'a'*64}}
+    row=dict(id=1, rec_date=entry, code='005930', name='native', strategy='SCALPING',position_tag='SCANNER',
+             status='COMPLETED',buy_price=100000,buy_qty=1,buy_time=entry+'T09:30:00+09:00',
+             sell_price=terminal_price,sell_time='2026-10-08T10:00:00+09:00',
+             completion_observed_date=day,terminal_population_scope='real_record_bound',
+             strict_completion_status='eligible' if actual else 'excluded',
+             broker_actual_cost_observed=actual,broker_actual_fees_taxes_krw=200 if actual else None,
+             realized_pnl_krw=terminal_price-100000-200 if actual else None,
+             profit_rate=(terminal_price-100000-200)/1000 if actual else None,
+             realized_pnl_krw_source='broker_actual_fee_reconciled' if actual else 'missing_exact_cost',
+             actual_cost_reconciliation={'status':'actual_cost_reconciled' if actual else 'actual_cost_unallocated'},
+             exit_signal={'inferred':False,'binding_status':'same_order_generation'})
+    row.update(identity or {})
+    payload=dict(date=day,code=None,since=None,scope='entered',
+                 meta=dict(snapshot_profile='postclose_exit',warnings=[],sell_completed_event_ids=[1],
+                           actual_cost_source_generation=costs.source_generation(tmp_path,day)),
+                 metrics=dict(total_trades=0,canonical_completed_trades=1),
+                 sections=dict(recent_trades=[],strategy_position_fact_projection=strategy_fact_projection_rows([]),
+                               completed_trade_projection=[row],open_scalp_position_projection=[]))
+    payload['meta']['completed_census_manifest']=completed_census_manifest(payload)
+    path=archive.save_monitor_snapshot('trade_review',day,payload)
+    source=native._load_completion_fact_projection(day,path)
+    native._write_status(day,dict(status='valid_empty',consumer_ready=True,
+        completed_census_run_ids=[payload['meta']['completed_census_manifest']['run_id']],
+        completed_census_projection_sha256=[payload['meta']['completed_census_manifest']['projection_sha256']],
+        actual_cost_source_generation=payload['meta']['actual_cost_source_generation'],
+        completion_snapshot_source=source['_native_source_proof']))
+    return original,path
+
+
+def _overlay_for_test(tmp_path, rows, *, as_of='2026-10-08', issue=None):
+    from src.engine.scalping.initial_quantity_source_cache import completion_overlay
+    return completion_overlay(rows, as_of=as_of, data_dir=tmp_path, entry_on_or_after='2026-09-29',
+        entry_generations={'2026-10-08':{'issue':issue}}, validate_day=lambda day:None)
+
+
+@pytest.mark.parametrize('actual',[False,True])
+def test_native_completion_overlay_counts_carry_terminal_without_rewriting_entry_source(tmp_path,monkeypatch,actual):
+    from src.engine.scalping.initial_quantity_source_cache import verify_completion_overlay_generations
+    original,path=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,actual=actual)
+    before=copy.deepcopy(original);raw=path.read_bytes()
+    rows=_overlay_for_test(tmp_path,[original]);_quality(tmp_path,'2026-10-07');_quality(tmp_path,'2026-10-08')
+    trades,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=rows)
+    assert original==before and path.read_bytes()==raw
+    assert rows[0]['status']=='COMPLETED' and rows[0]['original_fact_status']=='HOLDING'
+    assert rows[0]['completion_source_date']=='2026-10-08' and rows[0]['rec_date']=='2026-10-07'
+    assert rows[0]['fact_generation']==before['fact_generation']
+    assert census['as_of_completed_population_count']==1
+    assert census['completion_overlay_summary']['overlaid_record_ids']==['1']
+    assert verify_completion_overlay_generations(census['completion_overlay_generations'],data_dir=tmp_path)['2026-10-08'][0]['status']=='COMPLETED'
+    if actual:
+        assert len(trades)==1 and trades[0]['realized_net_pnl_krw']==800
+        assert trades[0]['terminal_source']=='native_completion_date_projection.completed_costed'
+        assert census['excluded']=={}
+    else:
+        assert trades==[] and census['excluded']=={'terminal_cost_or_quantity_missing':1}
+        assert census['actual_completed_net_pnl_krw'] is None
+        assert rows[0]['profit_rate'] is rows[0]['realized_pnl_krw'] is None
+
+
+def test_completion_overlay_preserves_asof_and_invalid_original_entry_proof(tmp_path,monkeypatch):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    before=_overlay_for_test(tmp_path,[original],as_of='2026-10-07')
+    assert before[0]['status']=='HOLDING' and before.completion_generations=={}
+    original['fact_generation']['issue']='original_entry_source_stale'
+    rows=_overlay_for_test(tmp_path,[original])
+    trades,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=rows)
+    assert rows[0]['status']=='COMPLETED' and trades==[]
+    assert census['excluded']=={'persisted_fact_generation_invalid':1}
+
+
+@pytest.mark.parametrize('mutation',['code','quantity','buy_clock','owner','entry_date','terminal'])
+def test_completion_overlay_rejects_contradictory_entry_or_existing_terminal(tmp_path,monkeypatch,mutation):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    if mutation=='code':original['stock_code']='000660'
+    if mutation=='quantity':original['buy_qty']=2
+    if mutation=='buy_clock':original['buy_time']='2026-10-07T09:31:00+09:00'
+    if mutation=='owner':original['position_tag']='SCALP_BASE'
+    if mutation=='entry_date':original['rec_date']='2026-10-06'
+    if mutation=='scale_in':original['add_count']=1
+    if mutation=='terminal':original.update(status='COMPLETED',sell_time='2026-10-08T10:01:00+09:00',sell_price=101000)
+    with pytest.raises(ValueError,match='quantity_completion_'):_overlay_for_test(tmp_path,[original])
+
+
+@pytest.mark.parametrize('mutation',['unsealed','dependency','cost','missing_entry','invalid_native','wrong_data_root'])
+def test_completion_overlay_fails_closed_on_unsealed_stale_missing_or_foreign_source(tmp_path,monkeypatch,mutation):
+    from src.engine.lifecycle import broker_cost_reconciliation as costs
+    original,path=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    if mutation=='unsealed':
+        with path.with_suffix('.fact_projection.json').open('ab') as handle:handle.write(b' ')
+    if mutation=='dependency':
+        with Path(str(path.with_suffix('.completed_projection.json'))+'.dependencies.json').open('ab') as handle:handle.write(b' ')
+    if mutation=='cost':monkeypatch.setattr(costs,'source_generation',lambda *a:{'changed':True})
+    if mutation=='wrong_data_root':
+        # Explicit isolated input cannot borrow the globally configured native receipt.
+        from src.engine.scalping.initial_quantity_source_cache import _completion_day
+        with pytest.raises(FileNotFoundError):_completion_day(tmp_path/'other','2026-10-08')
+        return
+    with pytest.raises(ValueError,match='quantity_completion_'):
+        _overlay_for_test(tmp_path,[] if mutation=='missing_entry' else [original],
+                          issue='stale' if mutation=='invalid_native' else None)
+
+
+def test_completion_overlay_source_changes_during_conversion_fail_before_escape(tmp_path,monkeypatch):
+    from src.engine import strategy_position_performance_report as native
+    original,path=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    converter=native._trade_fact_rows_from_report
+    def changed(*args):
+        result=converter(*args)
+        with path.with_suffix('.fact_projection.json').open('ab') as handle:handle.write(b' ')
+        return result
+    monkeypatch.setattr(native,'_trade_fact_rows_from_report',changed)
+    with pytest.raises(ValueError,match='quantity_completion_source_changed'):_overlay_for_test(tmp_path,[original])
+
+
+@pytest.mark.parametrize('conflict',[False,True])
+def test_completion_overlay_multiple_dates_preserve_one_monotonic_terminal(tmp_path,monkeypatch,conflict):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    _quantity_completion_overlay_fixture(tmp_path,monkeypatch,day='2026-10-09',terminal_price=102000 if conflict else 101000)
+    if conflict:
+        with pytest.raises(ValueError,match='quantity_completion_terminal_identity_conflict'):
+            _overlay_for_test(tmp_path,[original],as_of='2026-10-09')
+    else:
+        rows=_overlay_for_test(tmp_path,[original],as_of='2026-10-09')
+        assert len(rows)==1 and rows[0]['completion_source_date']=='2026-10-09'
+        assert rows.completion_overlay_summary['overlaid_completed_count']==1
+        assert set(rows.completion_generations)=={'2026-10-08','2026-10-09'}
+
+
+def test_completion_overlay_bounded_observer_reads_only_three_small_files(tmp_path,monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    from src.engine.lifecycle import snapshot_archive
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    rows=_overlay_for_test(tmp_path,[original]);reads=[]
+    monkeypatch.setattr(snapshot_archive,'snapshot_identity',lambda *a:pytest.fail('native full archive verifier'))
+    def bounded(path,*,expected_sha=None,limit):
+        reads.append(path)
+        raw=Path(path).read_bytes();assert len(raw)<=limit
+        if expected_sha:assert hashlib.sha256(raw).hexdigest()==expected_sha
+        return json.loads(raw)
+    actual=cache.verify_completion_overlay_generations(rows.completion_generations,data_dir=tmp_path,read=bounded)
+    assert actual['2026-10-08'][0]['recommendation_id']==1
+    assert len(reads)==len(set(reads))==3
+    assert all(p.stat().st_size<128*1024 for p in reads)
+
+
+def test_completion_overlay_metadata_rejects_fifo_before_open(tmp_path):
+    import os
+    from src.engine.scalping.initial_quantity_source_cache import _completion_json
+    path=tmp_path/'fifo.json';os.mkfifo(path)
+    with pytest.raises(ValueError,match='quantity_completion_metadata_invalid'):_completion_json(path,128)
+
+
+def test_completion_overlay_survives_native_snapshot_and_scalar_lossless_compression(tmp_path,monkeypatch):
+    from src.engine import compress_db_backfilled_files as archive
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    original,path=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    before=_overlay_for_test(tmp_path,[original]);proof=before.completion_generations
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',path.parent)
+    for source in (path,path.with_suffix('.completed_projection.json'),path.with_suffix('.fact_projection.json')):
+        assert archive._gzip_file(source,dry_run=False)[0]
+    after=_overlay_for_test(tmp_path,[original])
+    assert before==after and proof==after.completion_generations
+    def bounded(logical,*,expected_sha=None,limit):
+        from src.engine.lifecycle.snapshot_archive import read_bytes
+        raw=read_bytes(logical,maximum=limit)
+        if expected_sha:assert hashlib.sha256(raw).hexdigest()==expected_sha
+        return json.loads(raw)
+    # Original raw gzip is never decoded by this observer callback.
+    assert cache.verify_completion_overlay_generations(proof,data_dir=tmp_path,read=bounded)['2026-10-08'][0]['status']=='COMPLETED'
+
+
+def test_completion_overlay_cache_key_contains_terminal_generation_even_with_same_prices(tmp_path,monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    monkeypatch.setattr(policy,'_quantity_capture_lifecycle_sources',lambda *a:({},[]))
+    raw=tmp_path/'pipeline_events/pipeline_events_2026-10-07.jsonl';raw.parent.mkdir();raw.write_bytes(b'')
+    trade=dict(trade_id='fact:1',record_id='1',stock_code='005930',entry_date='2026-10-07',exit_date='2026-10-08',
+               entry_at_fact_buy_time='2026-10-07T09:30:00',exit_at='2026-10-08T10:00:00',completion_generation={'sha256':'a'*64})
+    first=cache.fingerprint([trade],raw,600)
+    second=cache.fingerprint([{**trade,'completion_generation':{'sha256':'b'*64}}],raw,600)
+    assert first!=second
+
+
+def test_quantity_database_reader_overlays_carry_only_in_memory_and_keeps_entry_receipt(tmp_path,monkeypatch):
+    from src.database import db_manager
+    from src.engine import strategy_position_performance_report as native
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    engine=create_engine('sqlite:///:memory:');TradePerformanceFact.__table__.create(engine)
+    native._write_status('2026-10-07',dict(status='succeeded',consumer_ready=True,
+        actual_cost_source_generation=source_generation(tmp_path,'2026-10-07')))
+    receipt=native._status_path('2026-10-07').read_bytes()
+    record={k:v for k,v in original.items() if k!='fact_generation'}
+    record.update(rec_date=date.fromisoformat(record['rec_date']),buy_time=datetime(2026,10,7,9,30))
+    with Session(engine) as session,session.begin():session.add(TradePerformanceFact(**record))
+    with Session(engine) as session:
+        old_row=session.get(TradePerformanceFact,1)
+        old_status=(old_row.status,old_row.sell_time,old_row.realized_pnl_krw)
+    class DB:
+        @contextmanager
+        def get_session(self):
+            with Session(engine) as session:yield session
+    monkeypatch.setattr(db_manager,'DBManager',DB)
+    monkeypatch.setattr(policy,'_quantity_fact_generation_issue',lambda day:None)
+    before=policy._read_trade_facts('2026-10-07');after=policy._read_trade_facts('2026-10-08')
+    assert before[0]['status']=='HOLDING' and after[0]['status']=='COMPLETED'
+    assert after[0]['original_fact_status']=='HOLDING' and after[0]['fact_generation']['issue'] is None
+    assert native._status_path('2026-10-07').read_bytes()==receipt
+    with Session(engine) as session:
+        row=session.get(TradePerformanceFact,1)
+        assert (row.status,row.sell_time,row.realized_pnl_krw)==old_status
+
+
+def test_completion_overlay_known_scale_in_stays_excluded_not_new_zero_history(tmp_path,monkeypatch):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    original['add_count']=1;original['avg_down_count']=1
+    rows=_overlay_for_test(tmp_path,[original])
+    trades,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=rows)
+    assert rows[0]['add_count']==rows[0]['avg_down_count']==1
+    assert trades==[] and census['excluded']=={'scale_in_position':1}
+
+
+@pytest.mark.parametrize('field',['add_count','avg_down_count','pyramid_count'])
+def test_completion_overlay_observed_positive_scale_in_excludes_economic_initial_trade(tmp_path,monkeypatch,field):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,actual=True,identity={field:1})
+    rows=_overlay_for_test(tmp_path,[original]);trades,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=rows)
+    assert rows[0][field]==1 and original[field]==0
+    assert rows[0]['completion_scale_in_observations'][field]=={'source_date':'2026-10-08','value':1}
+    assert trades==[] and census['excluded']=={'scale_in_position':1}
+
+
+@pytest.mark.parametrize('value',[-1,0.5,True,None])
+def test_completion_overlay_observed_invalid_scale_in_is_not_defaulted_to_zero(tmp_path,monkeypatch,value):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,identity={'add_count':value})
+    with pytest.raises(ValueError,match='quantity_completion_scale_in_count_invalid'):_overlay_for_test(tmp_path,[original])
+
+
+def test_completion_overlay_absent_terminal_scale_in_is_not_attested_zero(tmp_path,monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    original['add_count']=1
+    rows=_overlay_for_test(tmp_path,[original])
+    projected=cache.verify_completion_overlay_generations(rows.completion_generations,data_dir=tmp_path)['2026-10-08'][0]
+    assert 'add_count' not in projected
+    assert rows[0]['add_count']==1 and rows[0]['completion_observed_scale_in_fields']==[]
+    assert rows[0]['completion_scale_in_observations']=={}
+
+
+def test_completion_overlay_rejects_decreasing_observed_scale_in_count(tmp_path,monkeypatch):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,identity={'add_count':0})
+    original['add_count']=1
+    with pytest.raises(ValueError,match='quantity_completion_scale_in_count_conflict'):_overlay_for_test(tmp_path,[original])
+
+
+@pytest.mark.parametrize('mutation',['missing_receipt','unknown_basis'])
+def test_completion_overlay_does_not_silently_skip_unowned_native_scalar(tmp_path,monkeypatch,mutation):
+    from src.engine import strategy_position_performance_report as native
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch)
+    path=native._status_path('2026-10-08')
+    if mutation=='missing_receipt':path.unlink()
+    else:
+        receipt=json.loads(path.read_bytes());receipt['completion_snapshot_source']['source_basis']='unknown'
+        receipt['artifact_sha256']=native._canonical_sha256({k:v for k,v in receipt.items() if k!='artifact_sha256'})
+        path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError,match='quantity_completion_'):_overlay_for_test(tmp_path,[original])
+
+
+def test_completion_overlay_metadata_open_race_cannot_block_on_fifo(tmp_path,monkeypatch):
+    import os
+    from src.engine.scalping.initial_quantity_source_cache import _completion_json
+    path=tmp_path/'receipt.json';path.write_text('{}')
+    original=os.open
+    def replace(name,flags,*args,**kwargs):
+        if Path(name)==path:
+            path.unlink();os.mkfifo(path)
+        return original(name,flags,*args,**kwargs)
+    monkeypatch.setattr(os,'open',replace)
+    with pytest.raises(ValueError,match='quantity_completion_source_changed'):_completion_json(path,128)
+
+
+def test_completion_overlay_uses_actual_entry_time_for_refresh_window(tmp_path,monkeypatch):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,identity={'rec_date':'2026-09-01'})
+    original['rec_date']='2026-09-01'
+    rows=_overlay_for_test(tmp_path,[original])
+    assert rows[0]['status']=='COMPLETED' and rows[0]['rec_date']=='2026-09-01'
+    assert rows.completion_overlay_summary['overlaid_completed_count']==1
+
+
+@pytest.mark.parametrize('identity,reason',[({'position_tag':'MANUAL'},'other_custody'),
+                                          ({'strategy':'KOSPI_ML'},'other_strategy')])
+def test_completion_overlay_preserves_full_native_census_but_excludes_other_owners(tmp_path,monkeypatch,identity,reason):
+    _quantity_completion_overlay_fixture(tmp_path,monkeypatch,identity=identity)
+    rows=_overlay_for_test(tmp_path,[])
+    assert rows==[]
+    summary=rows.completion_overlay_summary
+    assert summary['native_terminal_record_count']==1 and summary['applicable_terminal_record_count']==0
+    assert summary['excluded_native_terminal_observation_counts']=={reason:1}
+    assert set(rows.completion_generations)=={'2026-10-08'}
+    trades,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=rows)
+    assert trades==[] and census['fact_rows_read']==0 and census['excluded']=={}
+
+
+@pytest.mark.parametrize('identity',[{'position_tag':'MANUAL'},{'strategy':'KOSPI_ML'}])
+def test_completion_overlay_same_record_other_owner_remains_conflict(tmp_path,monkeypatch,identity):
+    original,_=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,identity=identity)
+    with pytest.raises(ValueError,match='quantity_completion_entry_binding_conflict'):_overlay_for_test(tmp_path,[original])

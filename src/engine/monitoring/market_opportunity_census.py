@@ -12,6 +12,8 @@ import hashlib
 import json
 import math
 import os
+import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -97,24 +99,22 @@ DEFAULT_TRIGGER_RECEIPT = (
     DATA_DIR / "runtime" / "market_opportunity_census" / "installed_trigger.json"
 )
 DEFAULT_TRIGGER_WRAPPER = (
-    Path(__file__).resolve().parents[3]
+    DATA_DIR.parent
     / "deploy"
     / "run_market_opportunity_census_intraday.sh"
 )
 TRIGGER_SCHEMA_VERSION = "market_opportunity_census_trigger_v3"
-EXPECTED_TRIGGER_LINE_COUNT = 5
+EXPECTED_TRIGGER_LINE_COUNT = 4
 EXPECTED_TRIGGER_SCHEDULE_PREFIXES = (
     "*/5 8 * * 1-5 ",
     "*/5 9-14 * * 1-5 ",
     "0-30/5 15 * * 1-5 ",
-    "35-55/5 15 * * 1-5 ",
     "*/5 16-19 * * 1-5 ",
 )
 EXPECTED_TRIGGER_MARKERS = (
     "MARKET_OPPORTUNITY_CENSUS_NXT_PREMARKET_5MIN",
     "MARKET_OPPORTUNITY_CENSUS_KRX_NXT_5MIN",
     "MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN",
-    "MARKET_OPPORTUNITY_CENSUS_NXT_TRANSITION_5MIN",
     "MARKET_OPPORTUNITY_CENSUS_NXT_AFTERMARKET_5MIN",
 )
 
@@ -445,6 +445,21 @@ def _session_for_capture(*, venue: str, captured_at: datetime) -> str:
     return "OUTSIDE_NXT_BUY_WINDOW"
 
 
+def _scheduled_session_capture_times(target_date: str, venue: str, session: str) -> list[datetime]:
+    """Slots from the installed four-row five-minute schedule, never new requests."""
+    start = datetime.fromisoformat(target_date).replace(tzinfo=KST)
+    result = []
+    for minute in range(8 * 60, 20 * 60, 5):
+        if 15 * 60 + 30 < minute < 16 * 60 or (venue == "KRX" and minute < 9 * 60):
+            continue
+        at = start + timedelta(minutes=minute)
+        if _nxt_scheduled_capture_pause(venue=venue, captured_at=at):
+            continue
+        if _session_for_capture(venue=venue, captured_at=at) == session:
+            result.append(at)
+    return result
+
+
 def _opportunity_episode_id(
     *,
     target_date: str,
@@ -572,6 +587,31 @@ def _read_installed_crontab() -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _trigger_command_valid(line: str, prefix: str, marker: str, wrapper: Path) -> bool:
+    """Verify the existing direct or owned-log command without executing shell text."""
+    suffix = f" # {marker}"
+    if not line.startswith(prefix) or not line.endswith(suffix):
+        return False
+    command = line[len(prefix):-len(suffix)].strip()
+    date_argument = " $(TZ=Asia/Seoul date +\\%F)"
+    if command.endswith(date_argument):
+        command = command[:-len(date_argument)]
+    try:
+        arguments = shlex.split(command)
+    except ValueError:
+        return False
+    workspace = wrapper.parent.parent
+    return arguments in (
+        [str(wrapper)],
+        [
+            "bash", str(workspace / "deploy" / "run_with_owned_log.sh"),
+            "--owner", "market_opportunity_census_cron", "--log",
+            str(workspace / "logs" / "run_market_opportunity_census_intraday_cron.log"),
+            str(wrapper),
+        ],
+    )
+
+
 def _load_trigger_contract(
     path: Path | None,
     *,
@@ -618,8 +658,7 @@ def _load_trigger_contract(
         line in actual_lines for line in trigger_lines
     )
     schedule_contract_valid = len(trigger_lines) == EXPECTED_TRIGGER_LINE_COUNT and all(
-        line.startswith(f"{prefix}{installed_exec_start} ")
-        and line.endswith(f"# {marker}")
+        _trigger_command_valid(line, prefix, marker, DEFAULT_TRIGGER_WRAPPER)
         for line, prefix, marker in zip(
             trigger_lines,
             EXPECTED_TRIGGER_SCHEDULE_PREFIXES,
@@ -1877,6 +1916,10 @@ def _external_snapshot_bbo_observation(
 ) -> tuple[dict[str, Any] | None, str]:
     observation = row.get("executable_bbo_observation")
     if not isinstance(observation, dict):
+        source = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else {}
+        collection = source.get("executable_bbo_collection")
+        if isinstance(collection, dict) and collection.get("enabled") is False:
+            return None, "external_census_bbo_not_requested_by_capture_contract"
         return None, "external_census_bbo_contract_missing"
     if observation.get("schema_version") != EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION:
         return None, "external_census_bbo_schema_version_missing_or_unsupported"
@@ -2035,6 +2078,258 @@ def _deduplicate_executable_bbo_index(
                 )
 
 
+def _zero_base_stage_rows(
+    rows: list[dict[str, Any]],
+    index: dict[str, dict[str, list[dict[str, Any]]]],
+    *,
+    target_date: str,
+) -> dict[str, Any]:
+    """Adapt native discovery custody; a probe result alone is never promotion.
+
+    Integrated source scope stays integrated. It does not prove which physical
+    KRX/NXT ranking panel or execution venue supplied a broad-market opportunity.
+    """
+    counts = Counter(row["raw_stage"] for row in rows)
+    gaps: Counter[str] = Counter()
+    claims: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    results: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    attaches = []
+    runtime_attaches = []
+    matched_claims = set()
+    matched_results = 0
+    confirmed = 0
+    confirmed_candidates = defaultdict(list)
+    attach_outcomes = Counter(str(row["fields"].get("zero_base_attach_outcome") or "missing")
+                              for row in rows if row["raw_stage"] == "zero_base_watch_attach")
+    attach_reasons = Counter(str(row["fields"].get("zero_base_attach_reason") or "reason_missing")
+                             for row in rows if row["raw_stage"] == "zero_base_watch_attach")
+
+    def positive_int(value):
+        text = str(value or "")
+        return int(text) if re.fullmatch(r"[1-9][0-9]{0,18}", text) else None
+
+    def digest(value):
+        return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+    def common(row):
+        fields = row["fields"]
+        route = fields.get("zero_base_route")
+        sha = fields.get("zero_base_source_sha256")
+        if route not in {"nxt_only", "krx_nxt_integrated"} or not digest(sha):
+            return None
+        venue = "NXT" if route == "nxt_only" else "KRX_NXT_INTEGRATED"
+        return {
+            "raw_stage": row["raw_stage"], "ts": row["ts"],
+            "venue": venue,
+            "session": _session_for_capture(venue=venue, captured_at=row["ts"]),
+            "market_data_route": route, "zero_base_source_sha256": sha,
+            "source_signature": "ZERO_BASE_DISCOVERY:" + sha,
+            "source_binding": "native_zero_base_exact_code_route_hash_claim",
+            "reason": str(fields.get("zero_base_probe_reason") or ""),
+        }
+
+    for row in rows:
+        raw = row["raw_stage"]
+        if re.fullmatch(r"[0-9]{6}", row["stock_code"]) is None:
+            gaps["zero_base_symbol_identity_invalid"] += 1
+            continue
+        if row.get("pipeline") != "ENTRY_PIPELINE":
+            gaps["zero_base_pipeline_scope_invalid"] += 1
+            continue
+        if raw == "scalping_scanner_runtime_target_attach":
+            runtime_attaches.append(row)
+            continue
+        item = common(row)
+        if item is None:
+            gaps["zero_base_route_or_source_hash_invalid"] += 1
+            continue
+        fields = row["fields"]
+        code = row["stock_code"]
+        if raw == "zero_base_probe_claim":
+            count = positive_int(fields.get("zero_base_claim_count"))
+            observed = _safe_float(fields.get("zero_base_claim_observed_epoch"))
+            if not count or observed is None or observed <= 0 or observed > row["ts"].timestamp():
+                gaps["zero_base_claim_observation_invalid"] += 1
+                continue
+            observed_at = datetime.fromtimestamp(observed, KST)
+            if observed_at.date().isoformat() != target_date:
+                gaps["zero_base_claim_source_date_mismatch"] += 1
+                continue
+            item.update(claim_count=count, receipt_at=row["ts"], ts=observed_at)
+            item["session"] = _session_for_capture(venue=item["venue"], captured_at=observed_at)
+            key = (code, item["market_data_route"], item["zero_base_source_sha256"], count)
+            claims[key].append(item)
+            index[code]["source_seen"].append(item)
+        elif raw == "zero_base_probe_result":
+            count = positive_int(fields.get("zero_base_claim_count"))
+            if fields.get("zero_base_probe_result_schema") != "zero_base_probe_result_v2":
+                gaps["zero_base_probe_result_schema_invalid"] += 1
+                continue
+            if not count or not str(fields.get("zero_base_probe_result") or "").strip():
+                gaps["zero_base_probe_disposition_missing"] += 1
+                continue
+            item.update(claim_count=count, fields=fields)
+            results[(code, item["market_data_route"], item["zero_base_source_sha256"], count)].append(item)
+        elif raw == "zero_base_watch_attach":
+            attaches.append((row, item))
+
+    result_by_lease: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    dispositions = Counter()
+    for key, values in results.items():
+        code, route, sha, count = key
+        for result in values:
+            prior = [claim for claim in claims.get(key, [])
+                     if claim["receipt_at"] <= result["ts"]]
+            if not prior:
+                gaps["zero_base_probe_claim_lineage_unproven"] += 1
+                continue
+            claim = max(prior, key=lambda item: item["receipt_at"])
+            matched_claims.add((key, claim["receipt_at"]))
+            matched_results += 1
+            fields = result["fields"]
+            disposition = str(fields.get("zero_base_probe_result") or "")
+            dispositions[disposition] += 1
+            candidate = {k: v for k, v in result.items() if k != "fields"}
+            candidate["reason"] = str(fields.get("zero_base_probe_reason") or disposition)
+            # A native terminal probe disposition is an attempted evaluation,
+            # including explicit source failure; successful machine assessment
+            # remains a separate counter and never grants admission.
+            index[code]["candidate_evaluated"].append(candidate)
+            lease = str(fields.get("physical_probe_lease_id") or "")
+            if lease and lease not in {"-", "None"}:
+                result_by_lease[(code, route, sha, lease)].append(result)
+
+    for row, item in attaches:
+        fields = row["fields"]
+        if fields.get("zero_base_attach_outcome") != "attached":
+            continue
+        code = row["stock_code"]
+        record = _lineage_value(fields.get("record_id"))
+        lease = str(fields.get("zero_base_physical_probe_lease_id") or "")
+        observation = fields.get("machine_observation_sha256")
+        try:
+            final = json.loads(fields.get("zero_base_finalize_receipt") or "{}")
+        except (TypeError, ValueError):
+            final = None
+        finalized_epoch = _safe_float(final.get("observed_epoch")) if isinstance(final, dict) else None
+        if not (isinstance(final, dict) and final.get("schema") == "zero_base_finalize_receipt_v1"
+                and final.get("attached") is True and final.get("finalized") is True
+                and final.get("actual_order_submitted") is False
+                and final.get("decision_authority") == "observation_only"
+                and finalized_epoch is not None and 0 <= row["ts"].timestamp() - finalized_epoch <= 5
+                and record and _lineage_value(final.get("record_id")) == record
+                and final.get("code") == code and lease and lease not in {"-", "None"}
+                and final.get("physical_probe_lease_id") == lease
+                and fields.get("zero_base_handoff_id") not in {None, "", "-", "None"}
+                and final.get("ws_handoff_id") == fields.get("zero_base_handoff_id")
+                and positive_int(final.get("pid"))
+                and _lineage_value(final.get("pid")) == _lineage_value(fields.get("zero_base_attach_pid"))
+                and positive_int(final.get("process_start_ticks"))
+                and _lineage_value(final.get("process_start_ticks")) == _lineage_value(fields.get("zero_base_attach_process_start_ticks"))
+                and digest(observation) and final.get("machine_observation_sha256") == observation):
+            gaps["zero_base_attached_finalize_contract_invalid"] += 1
+            continue
+        candidates = [result for result in result_by_lease.get(
+            (code, item["market_data_route"], item["zero_base_source_sha256"], lease), [])
+            if abs((row["ts"] - result["ts"]).total_seconds()) <= 5
+            and result["fields"].get("zero_base_probe_result") == "assessed"
+            and result["fields"].get("entry_mechanistic_action") == "ENTER_NOW"
+            and result["fields"].get("machine_observation_sha256") == observation]
+        runtime = [event for event in runtime_attaches
+            if event["stock_code"] == code
+            and abs((row["ts"] - event["ts"]).total_seconds()) <= 5
+            and event["fields"].get("runtime_target_attach_outcome") == "attached"
+            and _lineage_value(event["fields"].get("runtime_record_id")) == record
+            and event["fields"].get("source_signature") == item["source_signature"]]
+        if len(candidates) != 1 or len(runtime) != 1:
+            gaps["zero_base_attached_probe_runtime_lineage_unproven"] += 1
+            continue
+        result, event = candidates[0], runtime[0]
+        promotion = str(event["fields"].get("scanner_promotion_id") or "")
+        promoted_epoch = _safe_float(event["fields"].get("scanner_promotion_emitted_epoch"))
+        promotion_match = re.fullmatch(rf"ZBPROM-{code}-([1-9][0-9]{{12}})-{result['claim_count']}", promotion)
+        result_epoch = int(promotion_match[1]) / 1000 if promotion_match else None
+        # The native owner encodes result_epoch in ZBPROM before publishing the
+        # promotion. Scanner drain may log the result after the attach callback;
+        # emitted-at order is not a substitute for that original result clock.
+        if (result_epoch is None or promoted_epoch is None
+                or not 0 <= promoted_epoch - result_epoch <= 5
+                or not 0 <= event["ts"].timestamp() - promoted_epoch <= 5):
+            gaps["zero_base_attached_promotion_identity_invalid"] += 1
+            continue
+        promoted_at = datetime.fromtimestamp(promoted_epoch, KST)
+        if promoted_at.date().isoformat() != target_date:
+            gaps["zero_base_attached_promotion_date_mismatch"] += 1
+            continue
+        bound = dict(item, record_id=record, scanner_promotion_id=promotion,
+                     reason="zero_base_machine_enter_now_finalized_attach",
+                     source_binding="native_claim_result_finalized_attach_runtime_record",
+                     ts=promoted_at)
+        bound["session"] = _session_for_capture(venue=bound["venue"], captured_at=promoted_at)
+        confirmed_candidates[(code, promotion, record)].append((bound, event, lease, observation, final))
+    duplicate_confirmations = 0
+    for (code, promotion, record), candidates in confirmed_candidates.items():
+        # Rotation/retry mirrors preserve raw counts but cannot multiply one
+        # admission. Conflicting native custody is not resolved by row order.
+        custody = {json.dumps([bound["market_data_route"], bound["zero_base_source_sha256"],
+                               lease, observation, final], sort_keys=True, separators=(",", ":"))
+                   for bound, event, lease, observation, final in candidates}
+        if len(custody) != 1:
+            gaps["zero_base_finalized_admission_identity_conflict"] += 1
+            continue
+        duplicate_confirmations += len(candidates) - 1
+        bound, event, lease, observation, final = min(candidates, key=lambda value: value[0]["ts"])
+        index[code]["scanner_promoted"].append(bound)
+        index[code]["watch_admitted"].append(bound)
+        # The existing generic parser already indexed this native attach.
+        # Enrich its exact custody rather than counting the same event twice.
+        for existing in index[code].get("runtime_watch_attached", []):
+            if (existing.get("scanner_promotion_id") == promotion
+                    and existing.get("record_id") == record and existing["ts"] == event["ts"]):
+                existing.update(venue=bound["venue"], session=bound["session"],
+                                source_binding=bound["source_binding"])
+        # Only exact proven promotion/record custody may fill an original
+        # logical premarket scope. No BBO or later execution is projected back.
+        for values in index[code].values():
+            for existing in values:
+                if (existing.get("scanner_promotion_id") == promotion
+                        and existing.get("record_id") == record
+                        and existing.get("venue") in {"PREMARKET_KRX_LIKE", bound["venue"]}):
+                    existing.update(venue=bound["venue"], session=bound["session"])
+        confirmed += 1
+    valid_claim_count = sum(len(values) for values in claims.values())
+    pending_count = valid_claim_count - len(matched_claims)
+    runtime_attached_count = sum(row["fields"].get("runtime_target_attach_outcome") == "attached"
+                                 for row in runtime_attaches)
+    runtime_attached_unique_count = len({(row["stock_code"], row["fields"].get("scanner_promotion_id"),
+                                         row["fields"].get("runtime_record_id"))
+                                        for row in runtime_attaches
+                                        if row["fields"].get("runtime_target_attach_outcome") == "attached"})
+    return {
+        "status": ("partial_source" if pending_count or gaps or runtime_attached_unique_count > confirmed
+                   else "observed" if rows else "not_observed"),
+        "scope": "native_zero_base_claimed_source_subset_not_raw_panel_or_whole_market",
+        "raw_stage_counts": dict(sorted(counts.items())),
+        "valid_claim_count": valid_claim_count,
+        "claimed_distinct_symbol_count": len({key[0] for key in claims}),
+        "matched_probe_result_count": matched_results,
+        "probe_disposition_counts": dict(sorted(dispositions.items())),
+        "claim_without_observed_result_count": pending_count,
+        "native_watch_attach_outcome_counts": dict(sorted(attach_outcomes.items())),
+        "native_watch_attach_reason_counts": dict(sorted(attach_reasons.items())),
+        "runtime_attached_receipt_count": runtime_attached_count,
+        "runtime_attached_unique_identity_count": runtime_attached_unique_count,
+        "runtime_attached_without_finalized_confirmation_count": runtime_attached_unique_count - confirmed,
+        "duplicate_finalized_confirmation_count": duplicate_confirmations,
+        "confirmed_watch_admission_count": confirmed,
+        "lineage_gap_counts": dict(sorted(gaps.items())),
+        "route_semantics": "nxt_only_is_physical_nxt_integrated_is_logical_scope_not_execution_venue",
+        "promotion_contract": "exact_claim_result_lease_machine_hash_finalized_record_native_promotion_time",
+        "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_order_submitted": False, "broker_order_forbidden": True,
+    }
+
+
 def _load_stage_index(
     pipeline_path: Path,
     ai_trace_path: Path,
@@ -2046,6 +2341,7 @@ def _load_stage_index(
     executable_bbo_gap_counts: Counter[str] | None = None,
     observer_runtime_receipts: list[dict[str, Any]] | None = None,
     scanner_source_receipts: list[dict[str, Any]] | None = None,
+    zero_base_source_census: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, list[dict[str, Any]]]]:
     index: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
         lambda: defaultdict(list)
@@ -2053,6 +2349,7 @@ def _load_stage_index(
     causal_groups = {}
     causal_parent_ids = set()
     premarket_route_promotions: set[tuple[str, str]] = set()
+    zero_base_rows = []
     reverse_stage: dict[str, list[str]] = defaultdict(list)
     for logical_stage, raw_stages in PIPELINE_STAGE_MAP.items():
         for raw_stage in raw_stages:
@@ -2063,6 +2360,21 @@ def _load_stage_index(
         code = _safe_code(row.get("stock_code"))
         ts = _parse_ts(row.get("emitted_at"))
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if ((raw_stage in {"zero_base_probe_claim", "zero_base_probe_result", "zero_base_watch_attach"}
+             or (raw_stage == "scalping_scanner_runtime_target_attach"
+                 and str(fields.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:")))
+                and code and ts is not None and ts.date().isoformat() == target_date):
+            keys = ("zero_base_route", "zero_base_source_sha256", "zero_base_claim_count",
+                    "zero_base_claim_observed_epoch", "zero_base_probe_result", "zero_base_probe_reason",
+                    "zero_base_probe_result_schema",
+                    "physical_probe_lease_id", "entry_mechanistic_action", "machine_observation_sha256",
+                    "zero_base_attach_outcome", "record_id", "zero_base_physical_probe_lease_id",
+                    "zero_base_attach_reason", "zero_base_attach_pid", "zero_base_attach_process_start_ticks",
+                    "zero_base_finalize_receipt", "zero_base_handoff_id", "runtime_target_attach_outcome",
+                    "runtime_record_id", "source_signature", "scanner_promotion_id",
+                    "scanner_promotion_emitted_epoch")
+            zero_base_rows.append(dict(raw_stage=raw_stage, stock_code=code, ts=ts, pipeline=row.get("pipeline"),
+                                       fields={key: fields[key] for key in keys if key in fields}))
         if (
             raw_stage
             in {
@@ -2317,6 +2629,9 @@ def _load_stage_index(
                 continue
             index[code][logical_stage].append(stage_row)
 
+    zero_base_summary = _zero_base_stage_rows(zero_base_rows, index, target_date=target_date)
+    if zero_base_source_census is not None:
+        zero_base_source_census.update(zero_base_summary)
     try:
         for row in iter_jsonl_objects_strict(ai_trace_path):
             if str(row.get("endpoint") or "") not in ENTRY_AI_ENDPOINTS:
@@ -2714,6 +3029,51 @@ def _ex_post_executable_opportunity(
     }
 
 
+def _zero_base_route_observation(episode, stage_index, *, after, before):
+    """Report integrated discovery independently from physical-panel recall."""
+    members = []
+    for row in stage_index.get(episode["stock_code"], {}).get("source_seen", []):
+        if not str(row.get("source_binding") or "").startswith("native_zero_base_"):
+            continue
+        if after is not None and row["ts"] < after:
+            continue
+        if before is not None and row["ts"] >= before:
+            continue
+        if row.get("venue") not in {episode["venue"], "KRX_NXT_INTEGRATED"}:
+            continue
+        # Integrated observations preserve their exact decision route; they
+        # cannot establish which physical ranking panel supplied that symbol.
+        members.append(row)
+    physical = [row for row in members if row.get("venue") == episode["venue"]]
+    return {
+        "status": ("exact_physical_route_observed" if physical else
+                   "integrated_route_observed_physical_panel_binding_unproven" if members else
+                   "not_observed_in_requested_window"),
+        "claim_observation_count": len(members),
+        "market_data_routes": sorted({row["market_data_route"] for row in members}),
+        "source_sha256": sorted({row["zero_base_source_sha256"] for row in members}),
+        "first_source_observed_at": min((row["ts"] for row in members), default=None).isoformat() if members else None,
+        "window_scope": "forward_exact" if after is not None else "same_day_noncausal",
+        "physical_panel_recall_proven": bool(physical),
+        "promotion_or_submission_proven": False,
+    }
+
+
+def _main_entry_time_scope(at):
+    # Default owner windows are a diagnostic exclusion, never reconstruction
+    # of a historical PID override or proof of every other Main eligibility gate.
+    from src.engine.sniper_time import DEFAULT_SCALPING_BUY_WINDOWS
+    if not isinstance(at, datetime):
+        return "unknown_benchmark_time"
+    clock = at.astimezone(KST).time()
+    inside = any(datetime.strptime(start, "%H:%M:%S").time() <= clock
+                 <= datetime.strptime(end, "%H:%M:%S").time() for start, end in
+                 (window.split("-", 1) for window in DEFAULT_SCALPING_BUY_WINDOWS.split(",")))
+    if "15:10:00" <= clock.isoformat() < "16:00:00" or clock.isoformat() >= "19:40:00":
+        inside = False
+    return "within_baseline_new_buy_time_window_only" if inside else "outside_baseline_new_buy_time_window"
+
+
 def _coverage_row(
     episode: dict[str, Any],
     stage_index: dict[str, dict[str, list[dict[str, Any]]]],
@@ -2740,6 +3100,9 @@ def _coverage_row(
     ):
         session = _session_for_capture(venue=venue, captured_at=first_census_at)
     session = str(session or "UNKNOWN")
+    zero_base_observation = _zero_base_route_observation(
+        episode, stage_index, after=after, before=before)
+    main_entry_time_scope = _main_entry_time_scope(first_census_at)
     candidate_rows = {
         stage: _matching_stage_rows(
             stage_index,
@@ -2936,7 +3299,11 @@ def _coverage_row(
                 else (
                     "scanner_fetch_seen_pool_unobserved"
                     if flags["source_seen"]
-                    else "scanner_discovery_gap_or_unobserved"
+                    else (
+                        "integrated_discovery_observed_physical_panel_binding_unproven"
+                        if zero_base_observation["claim_observation_count"]
+                        else "scanner_discovery_gap_or_unobserved"
+                    )
                 )
             )
         )
@@ -3037,6 +3404,9 @@ def _coverage_row(
             key: (value.isoformat() if isinstance(value, datetime) else value)
             for key, value in episode.items()
         },
+        "main_entry_time_scope": main_entry_time_scope,
+        "main_eligibility_authority": "baseline_time_diagnostic_only_actual_pid_and_other_gates_not_reconstructed",
+        "zero_base_source_observation": zero_base_observation,
         "stage_reached": flags,
         "runtime_attach_attempts": [
             {
@@ -3309,6 +3679,14 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     return {
         "episode_count": total,
+        "external_opportunity_population_is_not_main_eligible_candidate_population": True,
+        "main_entry_time_scope_counts": dict(sorted(Counter(
+            row.get("main_entry_time_scope", "unknown_benchmark_time") for row in rows).items())),
+        "zero_base_route_observed_episode_count": sum(
+            bool((row.get("zero_base_source_observation") or {}).get("claim_observation_count")) for row in rows),
+        "integrated_route_physical_panel_binding_unproven_episode_count": sum(
+            (row.get("zero_base_source_observation") or {}).get("status")
+            == "integrated_route_observed_physical_panel_binding_unproven" for row in rows),
         "denominator_unique_opportunity_episode_count": total,
         "stage_counts": counts,
         "stage_rates_pct": rates,
@@ -3627,6 +4005,7 @@ def build_report(
     executable_bbo_gap_counts: Counter[str] = Counter()
     observer_runtime_receipts: list[dict[str, Any]] = []
     scanner_source_receipts: list[dict[str, Any]] = []
+    zero_base_source_census: dict[str, Any] = {}
     stage_index = _load_stage_index(
         events_path,
         trace_path,
@@ -3635,6 +4014,7 @@ def build_report(
         executable_bbo_gap_counts=executable_bbo_gap_counts,
         observer_runtime_receipts=observer_runtime_receipts,
         scanner_source_receipts=scanner_source_receipts,
+        zero_base_source_census=zero_base_source_census,
     )
     latest_observer_runtime_receipt = max(
         observer_runtime_receipts,
@@ -3921,8 +4301,20 @@ def build_report(
                     if watermark is not None and ordered
                     else None
                 )
+                scheduled = _scheduled_session_capture_times(target_date, venue, session)
+                required_count = min(MIN_VALID_CAPTURE_TIMES_PER_VENUE_PANEL, len(scheduled))
+                # A five-minute close-only/transition session has one scheduled
+                # slot. Requiring three captures would demand unapproved calls.
+                short_session_slots_observed = bool(scheduled) and all(
+                    any(abs((observed - slot).total_seconds()) <= CAPTURE_CADENCE_TOLERANCE_SEC
+                        for observed in ordered)
+                    for slot in scheduled
+                ) if len(scheduled) < MIN_VALID_CAPTURE_TIMES_PER_VENUE_PANEL else True
                 session_summaries[session] = {
                     "capture_time_count": len(ordered),
+                    "scheduled_session_slot_count": len(scheduled),
+                    "minimum_required_capture_count": required_count,
+                    "sample_floor_basis": "installed_five_minute_slots_capped_at_existing_minimum",
                     "first_capture_at": ordered[0].isoformat() if ordered else None,
                     "last_capture_at": ordered[-1].isoformat() if ordered else None,
                     "max_consecutive_gap_sec": max(gaps) if gaps else None,
@@ -3931,10 +4323,12 @@ def build_report(
                     ),
                     "trailing_gap_sec": trailing_gap,
                     "cadence_floor_met": (
-                        len(ordered) >= MIN_VALID_CAPTURE_TIMES_PER_VENUE_PANEL
-                        and bool(gaps)
-                        and max(gaps)
+                        required_count > 0
+                        and len(ordered) >= required_count
+                        and short_session_slots_observed
+                        and (not gaps or max(gaps)
                         <= CAPTURE_CADENCE_SEC + CAPTURE_CADENCE_TOLERANCE_SEC
+                        )
                         and trailing_gap is not None
                         and trailing_gap
                         <= CAPTURE_CADENCE_SEC + CAPTURE_CADENCE_TOLERANCE_SEC
@@ -4137,7 +4531,11 @@ def build_report(
         instrumentation_blockers.append("ex_post_comparison_cost_contract_invalid")
     if primary_episode_count and not external_bbo_capture_contract_reflected:
         instrumentation_blockers.append(
-            "external_opportunity_bbo_capture_contract_not_reflected"
+            "external_executable_bbo_not_requested_by_capture_contract"
+            if executable_bbo_gap_counts.get("external_census_bbo_not_requested_by_capture_contract")
+            and not external_bbo_contract_row_count
+            and not executable_bbo_gap_counts.get("external_census_bbo_contract_missing")
+            else "external_opportunity_bbo_capture_contract_not_reflected"
         )
     ex_post_floor_summaries = list(primary_ex_post_by_venue_session.values()) or [
         primary_ex_post_summary
@@ -4269,7 +4667,9 @@ def build_report(
         "scanner_source_census": {
             "status": (
                 "runtime_receipt_not_observed"
-                if not scanner_source_receipts
+                if not scanner_source_receipts and not zero_base_source_census.get("valid_claim_count")
+                else ("native_zero_base_partial_source" if zero_base_source_census.get("status") == "partial_source"
+                      else "native_zero_base_observed") if not scanner_source_receipts
                 else (
                     "source_contract_invalid"
                     if not any(r["contract_valid"] for r in scanner_source_receipts)
@@ -4288,6 +4688,7 @@ def build_report(
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "receipts": scanner_source_receipts,
+            "zero_base_native": zero_base_source_census,
         },
         "status": (
             "ok"
@@ -4459,6 +4860,13 @@ def build_report(
                 "external_census_capture_contract_reflected": (
                     external_bbo_capture_contract_reflected
                 ),
+                "external_census_source_scope": (
+                    "ranking_only_executable_bbo_not_requested"
+                    if executable_bbo_gap_counts.get("external_census_bbo_not_requested_by_capture_contract")
+                    and not external_bbo_contract_row_count
+                    and not executable_bbo_gap_counts.get("external_census_bbo_contract_missing")
+                    else "executable_bbo_contract_required_or_mixed"
+                ),
                 "external_census_budget_contract": external_bbo_budget_contract,
                 "producer_pid_contract_reflected": observer_pid_contract_reflected,
                 "latest_producer_runtime_receipt": (
@@ -4520,6 +4928,9 @@ def build_report(
                     PIPELINE_STAGE_MAP["submit_safety_checked"]
                 ),
                 "lineage_key": "scanner_promotion_id+runtime_record_id+venue+session",
+                "zero_base_native_adapter": "claim_code_route_source_sha256_count_then_result_lease_then_finalized_attach_record_native_promotion_time",
+                "zero_base_source_denominator": "durably_claimed_subset_not_whole_panel_or_whole_market",
+                "integrated_route_authority": "logical_source_scope_not_physical_panel_recall_or_execution_venue",
                 "runtime_effect": False,
             },
             "snapshot_path": str(snapshots_path),

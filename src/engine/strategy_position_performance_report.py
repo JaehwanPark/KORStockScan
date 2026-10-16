@@ -828,19 +828,13 @@ def _build_trade_fact_rows(
         top_n=100_000,
         scope="entered",
     ))
-    rows = list((report.get("sections", {}) or {}).get("recent_trades", []) or [])
     warnings = list((report.get("meta", {}) or {}).get("warnings", []) or [])
-    projection = (report.get("sections") or {}).get("completed_trade_projection")
     if target_date >= COMPLETED_CENSUS_CONTRACT_FROM or isinstance(
         (report.get("meta") or {}).get("completed_census_manifest"), dict
     ):
         issue = (None if completion_snapshot is not None else verify_completed_census_manifest(report, target_date))
         if issue:
             raise FactSyncSourceError(issue)
-    completion_by_id = {
-        str(item.get("id") or ""): item for item in projection or []
-        if isinstance(item, dict)
-    }
     census = (report.get("meta") or {}).get("completed_census_manifest") or {}
     if completion_census_quality is not None:
         completion_census_quality.update(census)
@@ -849,6 +843,24 @@ def _build_trade_fact_rows(
             completion_census_quality['_source_guard'] = report['_source_guard']
     if warnings and (target_date >= COMPLETED_CENSUS_CONTRACT_FROM or census):
         raise FactSyncSourceError("trade_review_source_warning")
+    facts = _trade_fact_rows_from_report(target_date, report)
+    return _enrich_scanner_provenance(
+        facts, target_date, scale_in_projection=scale_in_projection,
+        scanner_source_quality=scanner_source_quality,
+    ), warnings
+
+
+def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[str, Any]]:
+    """Pure conversion of an already verified native report, without DB writes.
+
+    Source verification stays with the caller. The as-of quantity consumer uses
+    this same terminal/cost conversion for cross-entry completion observations.
+    """
+    rows = list((report.get("sections") or {}).get("recent_trades") or [])
+    projection = (report.get("sections") or {}).get("completed_trade_projection") or []
+    completion_by_id = {str(item.get("id") or ""): item for item in projection
+                        if isinstance(item, dict)}
+    census = (report.get("meta") or {}).get("completed_census_manifest") or {}
     facts: list[dict[str, Any]] = []
     for row in rows:
         strategy = normalize_strategy(row.get("strategy"))
@@ -996,10 +1008,7 @@ def _build_trade_fact_rows(
                 ),
             }
         )
-    return _enrich_scanner_provenance(
-        facts, target_date, scale_in_projection=scale_in_projection,
-        scanner_source_quality=scanner_source_quality,
-    ), warnings
+    return facts
 
 
 def _aggregate_daily_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -203,6 +203,9 @@ def _save_trade_review_fact_projection(path: Path, payload: dict, completed: dic
     completions = []
     for row in completed['sections']['completed_trade_projection']:
         projected = {key: row.get(key) for key in fields}
+        # Presence is meaningful: a missing completion-day scale-in history
+        # cannot be replaced with a synthetic zero from the entry-day display.
+        projected.update({key: row[key] for key in ('add_count', 'avg_down_count', 'pyramid_count') if key in row})
         exit_signal = row.get('exit_signal')
         projected['exit_signal'] = ({key: exit_signal.get(key) for key in ('inferred', 'binding_status')}
                                     if isinstance(exit_signal, dict) else None)

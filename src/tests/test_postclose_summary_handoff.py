@@ -1379,6 +1379,145 @@ def test_joint_initial_stage_succeeds_without_legacy_reports_and_pins_sources(tm
     assert h.stage_receipt_issues(report, day, 'main_machine_policy', code_hash='fixture-code')
 
 
+def _operating_machine_stage_fixture(tmp_path, monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    h,day,report,machine,source=_joint_stage_fixture(tmp_path,monkeypatch)
+    machine=p.seal(dict(machine,registration_change=None,adoption_basis='carried',comparison_complete=True))
+    owned=report/'continuous_reversal'/day
+    (owned/'machine.json').write_text(json.dumps(machine))
+    (owned/'source.json').write_text(json.dumps(p.seal(dict(schema=p.SCHEMA,source_date=day,**p.AUTH))))
+    paths=h.stage_artifacts(report,day,'main_machine_policy')
+    paths['machine_policy'].write_text(json.dumps(machine))
+    terminal=p.seal(dict(schema='continuous_reversal_operating_comparison_v1',source_date=day,target_date=day,
+        status='completed',report_sha256=machine['artifact_content_sha256'],selection_basis='cumulative_raw_win_fraction',
+        disposition='continuous_reversal_selected',staged=dict(status='machine_component_prepared'),**p.AUTH))
+    paths['machine_policy_terminal'].write_text(json.dumps(terminal))
+    monkeypatch.setattr(h,'_stage_code',lambda *a:'fixture-code')
+    monkeypatch.setattr(h,'stage_commands',lambda *a,**k:[['fixture']])
+    monkeypatch.setattr(h,'_machine_source_preflight_issue',lambda *a,**k:None)
+    audit=report/'observation_source_quality_audit'/f'observation_source_quality_audit_{day}.json'
+    audit.parent.mkdir();audit.write_text('{"audit_phase":"preflight"}')
+    Path(str(audit)+'.final-contract.json').write_text(json.dumps({'artifact_sha256':hashlib.sha256(audit.read_bytes()).hexdigest()}))
+    return h,day,report,terminal
+
+
+def test_operating_machine_native_terminal_disposition_is_selected_and_old_receipt_is_preserved_with_projection(tmp_path,monkeypatch):
+    h,day,report,native=_operating_machine_stage_fixture(tmp_path,monkeypatch)
+    stage=h.run_stage('main_machine_policy',day,report_dir=report,project=tmp_path,runner=lambda *a,**k:0)
+    assert stage['status']=='succeeded'
+    assert stage['policy_disposition']=='continuous_reversal_selected'
+    assert stage['selection_metric']=='cumulative_raw_win_fraction'
+    assert stage['machine_report_sha256']==native['report_sha256']
+    assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==[]
+    old=dict(stage,policy_disposition='no_valid_candidate');old.pop('selection_metric');old.pop('machine_report_sha256')
+    h._stage_write(h.stage_path(report,day,'main_machine_policy'),old)
+    original=h.stage_path(report,day,'main_machine_policy').read_bytes()
+    assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==[]
+    old=json.loads(original)
+    view=h._stage_disposition_view(report,day,'main_machine_policy',old,[])
+    assert view['recorded_policy_disposition']=='no_valid_candidate'
+    assert view['policy_disposition']=='continuous_reversal_selected'
+    proof=view['native_disposition_projection']
+    assert proof['correction_applied'] is True
+    assert proof['original_stage_receipt_sha256']==old['receipt_sha256']
+    assert proof['original_stage_file_sha256']==hashlib.sha256(original).hexdigest()
+    assert proof['machine_report_content_sha256']==native['report_sha256']
+    assert proof['current_consumer_sha256']==hashlib.sha256(Path(h.__file__).read_bytes()).hexdigest()
+    assert proof['actual_pid_consumed'] is False
+    assert h.stage_path(report,day,'main_machine_policy').read_bytes()==original
+
+
+def test_machine_disposition_projection_fails_closed_on_late_native_source_change(tmp_path,monkeypatch):
+    h,day,report,native=_operating_machine_stage_fixture(tmp_path,monkeypatch)
+    stage=h.run_stage('main_machine_policy',day,report_dir=report,project=tmp_path,runner=lambda *a,**k:0)
+    path=h.stage_artifacts(report,day,'main_machine_policy')['machine_policy_terminal']
+    original=h._stage_sources
+    def changed(paths):
+        result=original(paths)
+        if 'consumer' in paths:path.write_text(path.read_text()+'\n')
+        return result
+    monkeypatch.setattr(h,'_stage_sources',changed)
+    view=h._stage_disposition_view(report,day,'main_machine_policy',stage,[])
+    assert not view.get('native_disposition_projection')
+    assert 'main_machine_policy:disposition_source_changed' in view['issues']
+
+
+def test_machine_disposition_view_cannot_accept_native_source_changed_to_nonselected_before_view(tmp_path,monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    h,day,report,native=_operating_machine_stage_fixture(tmp_path,monkeypatch)
+    stage=h.run_stage('main_machine_policy',day,report_dir=report,project=tmp_path,runner=lambda *a,**k:0)
+    path=h.stage_artifacts(report,day,'main_machine_policy')['machine_policy_terminal']
+    path.write_text(json.dumps(p.seal(dict(native,disposition='incumbent_carried',selection_basis='operator_initial',staged=None))))
+    view=h._stage_disposition_view(report,day,'main_machine_policy',stage,[])
+    assert view['policy_disposition']=='unverified_recorded_disposition'
+    assert 'main_machine_policy:disposition_source_changed' in view['issues']
+    assert not view.get('native_disposition_projection')
+
+
+def test_overview_cannot_claim_all_stages_complete_when_current_disposition_view_observes_a_late_gap(tmp_path,monkeypatch):
+    day='2026-09-21';report=tmp_path/'report'
+    for stage in mod.active_stage_names(day):
+        path=mod.stage_path(report,day,stage);path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(dict(status='succeeded',policy_disposition='incumbent_carry')))
+    monkeypatch.setattr(mod,'stage_receipt_issues',lambda *a,**k:[])
+    def view(_report,_day,stage,value,issues):
+        return dict(status='succeeded',policy_disposition=value['policy_disposition'],
+            issues=['main_machine_policy:disposition_source_changed'] if stage=='main_machine_policy' else [])
+    monkeypatch.setattr(mod,'_stage_disposition_view',view)
+    result=mod.stage_overview(report,day)
+    assert result['stages']['main_machine_policy']['issues']
+    assert result['postclose_all_active_stages_complete'] is False
+
+
+@pytest.mark.parametrize('field,value', [('schema','unrelated_completed_report'),('status','source_gap'),
+    ('source_date','2026-10-12'),('selection_basis','gross_ev'),('disposition','incumbent_carried'),
+    ('staged',{'status':'activated'}),('runtime_effect',True),('allowed_runtime_apply',True),
+    ('actual_order_submitted',True),('broker_order_forbidden',False)])
+def test_operating_machine_terminal_cannot_grant_selection_for_unknown_or_malformed_contract(tmp_path,monkeypatch,field,value):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    h,day,report,native=_operating_machine_stage_fixture(tmp_path,monkeypatch)
+    changed=p.seal(dict(native,**{field:value}))
+    assert h._operating_machine_terminal_selected(changed,day,
+        json.loads(h.stage_artifacts(report,day,'main_machine_policy')['machine_policy'].read_text())) is False
+    paths=h.stage_artifacts(report,day,'main_machine_policy');paths['machine_policy_terminal'].write_text(json.dumps(changed))
+    if field!='status':
+        assert h._stage_output_issues(report,day,'main_machine_policy')
+
+
+def test_operating_machine_terminal_cannot_select_unrelated_or_rebound_parent_report(tmp_path,monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    h,day,report,native=_operating_machine_stage_fixture(tmp_path,monkeypatch)
+    paths=h.stage_artifacts(report,day,'main_machine_policy');machine=json.loads(paths['machine_policy'].read_text())
+    changed=p.seal(dict(machine,comparison_complete=False))
+    assert not h._operating_machine_terminal_selected(native,day,changed)
+    paths['machine_policy_terminal'].write_text(json.dumps(p.seal(dict(native,report_sha256='f'*64))))
+    assert 'main_machine_policy:operating_terminal_disposition_invalid' in h._stage_output_issues(report,day,'main_machine_policy')
+
+
+def test_known_operator_initial_without_cumulative_selection_claim_remains_nonselected(tmp_path,monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    h,day,report,native=_operating_machine_stage_fixture(tmp_path,monkeypatch)
+    paths=h.stage_artifacts(report,day,'main_machine_policy')
+    initial=p.seal(dict(schema=native['schema'],source_date=day,target_date=day,status='completed',
+        report_sha256=native['report_sha256'],**p.AUTH))
+    paths['machine_policy_terminal'].write_text(json.dumps(initial))
+    assert not h._operating_machine_terminal_selected(initial,day,json.loads(paths['machine_policy'].read_text()))
+    assert h._stage_output_issues(report,day,'main_machine_policy')==[]
+
+
+def test_operating_selected_report_authority_cannot_be_added_by_resealing_both_artifacts(tmp_path,monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as p
+    h,day,report,native=_operating_machine_stage_fixture(tmp_path,monkeypatch)
+    paths=h.stage_artifacts(report,day,'main_machine_policy');machine=json.loads(paths['machine_policy'].read_text())
+    machine=p.seal(dict(machine,allowed_runtime_apply=True))
+    (report/'continuous_reversal'/day/'machine.json').write_text(json.dumps(machine))
+    paths['machine_policy'].write_text(json.dumps(machine))
+    changed=p.seal(dict(native,report_sha256=machine['artifact_content_sha256']))
+    paths['machine_policy_terminal'].write_text(json.dumps(changed))
+    assert not h._operating_machine_terminal_selected(changed,day,machine)
+    assert 'main_machine_policy:operating_terminal_disposition_invalid' in h._stage_output_issues(report,day,'main_machine_policy')
+
+
 @pytest.mark.parametrize('field,value', [('runtime_effect',True), ('source_date','2026-10-12')])
 def test_joint_initial_stage_rejects_resealed_authority_or_date_change(tmp_path, monkeypatch, field, value):
     from src.engine.scalping import continuous_reversal_postclose as p

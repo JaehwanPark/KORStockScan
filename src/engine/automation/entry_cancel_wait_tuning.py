@@ -29,6 +29,7 @@ SAMPLE_FLOOR = 5
 EXECUTABLE_EVIDENCE_DATE = "2026-09-17"
 RECONCILIATION_VERSION = "entry_cancel_wait_source_reconciliation_v1"
 RECONCILIATION_OWNER = "EntryCancelWaitSourceReconciliation1002"
+ORIGINAL_RECOVERY_VERSION = "entry_cancel_wait_original_projection_recovery_v1"
 MAX_RECONCILIATION_METADATA_BYTES = 64 * 1024 * 1024
 _RECONCILIATION_VIEW_CACHE = {}
 
@@ -715,6 +716,141 @@ def _source_binding(projection, registry_contract):
                 registry_tail_hash=registry_contract.get('tail_hash'))
 
 
+def _logical_projection_sources(projection):
+    """Compare decoded native receipts, allowing only lossless gzip aliases.
+
+    The current native loader has already read and checked the full decoded
+    streams/CRC. A gzip name, stored-file hash, or a report hash alone is never
+    evidence that its logical contents match an original source.
+    """
+    import re
+    sources = {}
+    for row in projection['sources']:
+        path, sha = row['path'], row['sha256']
+        if not isinstance(path, str) or not Path(path).is_absolute() or not re.fullmatch('[0-9a-f]{64}', str(sha)):
+            raise ValueError('cancel_wait_original_source_receipt_invalid')
+        logical = path[:-3] if path.endswith('.gz') else path
+        if logical in sources and sources[logical] != sha:
+            raise ValueError('cancel_wait_original_source_alias_conflict')
+        sources[logical] = sha
+    if not sources:
+        raise ValueError('cancel_wait_original_source_receipt_missing')
+    return sorted(sources.items())
+
+
+def _original_projection_evidence(payload, source_day):
+    """Authenticate the original dated source, without importing its economics."""
+    import re
+    from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
+    from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES
+    state = payload['economic_state']
+    if (payload.get('date') != source_day or state.get('through_date') != source_day
+        or payload.get('economic_schema') != ECONOMIC_SCHEMA
+        or payload.get('runtime_family') != RUNTIME_FAMILY or payload.get('policy_version') != POLICY_VERSION
+        or payload.get('runtime_effect') is not False
+        or payload.get('proof_sha256') != _digest({k:v for k,v in payload.items() if k not in ('generated_at','proof_sha256')})
+        or state.get('sha256') != _digest({k:v for k,v in state.items() if k != 'sha256'})):
+        raise ValueError('cancel_wait_original_report_contract_invalid')
+    events = state['source_events']
+    if not isinstance(events, list) or not events or any(not isinstance(e, dict)
+        or e.get('emitted_date') != source_day or e.get('pipeline') != 'ENTRY_PIPELINE'
+        or e.get('stage') not in CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'} for e in events):
+        raise ValueError('cancel_wait_original_event_scope_invalid')
+    projection = payload['source_contract']['projection']
+    _verified_original_census(projection, events)
+    if (payload['source_contract']['registry'].get('status') != 'verified'
+        or not re.fullmatch('[0-9a-f]{64}', str(payload['source_contract']['registry'].get('tail_hash') or ''))
+        or payload['source_contract']['source_quality'].get('tuning_input_allowed') is not True):
+        raise ValueError('cancel_wait_original_source_contract_invalid')
+    return events, projection
+
+
+def _verified_original_census(projection, events):
+    from collections import Counter
+    import re
+    from src.engine.scalping.entry_split_order_plan import EXECUTION_MODEL_CONTRACT
+    census = projection['producer_census']
+    expected = census['expected_stage_counts']
+    observed = dict(Counter(e['stage'] for e in events))
+    if (projection.get('status') != 'ready' or projection.get('full_population_coverage_verified') is not True
+        or projection.get('projection_contract') != EXECUTION_MODEL_CONTRACT
+        or projection.get('coverage_scope') != 'declared_execution_stage_producer_census'
+        or type(projection.get('retained_event_count')) is not int or projection['retained_event_count'] != len(events)
+        or census.get('status') != 'ready' or census.get('identity_conservation_holds') is not True
+        or type(census.get('missing_identity_count')) is not int or census['missing_identity_count'] != 0
+        or not isinstance(expected, dict) or any(type(n) is not int or n < 0 for n in expected.values())
+        or not isinstance(census.get('observed_stage_counts'), dict)
+        or any(type(n) is not int or n < 0 for n in census['observed_stage_counts'].values())
+        or not re.fullmatch('[0-9a-f]{64}', str(census.get('manifest_sha256') or ''))
+        or Counter(expected) != Counter(observed) or census.get('observed_stage_counts') != expected
+        or len({_digest(e) for e in events}) != len(events)):
+        raise ValueError('cancel_wait_original_native_census_invalid')
+    return _logical_projection_sources(projection)
+
+
+def _lost_quarantine(state, source_day):
+    reason = 'cancel_wait_predecessor_original_projection_changed:' + source_day
+    ledger = state.get('submission_reconciliation') or {}
+    row = (ledger.get('by_date') or {}).get(source_day) or {}
+    quarantine = (ledger.get('quarantined_sources') or {}).get(source_day) or {}
+    return (row.get('coverage_verified') is False
+        and row.get('source_binding') == dict(status='source_gap', reason=reason)
+        and row.get('source_event_sha256s') == [] and row.get('excluded_source_event_sha256s') == []
+        and row.get('parent_identities') == [] and type(row.get('classified_parent_count')) is int
+        and row['classified_parent_count'] == 0 and row.get('unclassified_identities') == []
+        and type(row.get('unclassified_submission_count')) is int and row['unclassified_submission_count'] == 0
+        and quarantine.get('reason') == reason and quarantine.get('excluded_source_event_sha256s') == []
+        and not any(e.get('emitted_date') == source_day for e in state.get('source_events', []))
+        and not any(p.get('source_date') == source_day for p in state.get('parents', []))
+        and source_day not in (state.get('source_counts') or {}))
+
+
+def _validate_recovery_predecessor(payload, raw_sha, receipt):
+    from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
+    state = payload['economic_state']
+    parent_day = Path(receipt['predecessor_artifact_path']).stem[-10:]
+    if (raw_sha != receipt['predecessor_artifact_sha256'] or payload.get('date') != parent_day
+        or state.get('through_date') != parent_day or payload.get('economic_schema') != ECONOMIC_SCHEMA
+        or payload.get('runtime_family') != RUNTIME_FAMILY or payload.get('policy_version') != POLICY_VERSION
+        or payload.get('proof_sha256') != _digest({k:v for k,v in payload.items() if k not in ('generated_at','proof_sha256')})
+        or state.get('sha256') != _digest({k:v for k,v in state.items() if k != 'sha256'})
+        or not _lost_quarantine(state, receipt['source_date'])
+        or state['submission_reconciliation']['quarantined_sources'][receipt['source_date']] != receipt['prior_quarantine']):
+        raise ValueError('cancel_wait_original_recovery_predecessor_changed')
+
+
+def _recover_lost_original(source_day, state, original, contract, registry, registry_contract,
+                           predecessor_path, predecessor_sha, predecessor_payload):
+    """Recover only an explicitly lost quarantine, using exact native ancestry."""
+    reason = 'cancel_wait_predecessor_original_projection_changed:' + source_day
+    quarantine = ((state.get('submission_reconciliation') or {}).get('quarantined_sources') or {}).get(source_day) or {}
+    if not _lost_quarantine(state, source_day) or not original:
+        raise ValueError(reason)
+    path = REPORT_DIR / f'entry_cancel_wait_tuning_{source_day}.json'
+    if path == predecessor_path:
+        raise ValueError(reason)
+    payload, raw_sha = _bounded_semantic_json(path)
+    retained, old_projection = _original_projection_evidence(payload, source_day)
+    current_sources = _verified_original_census(contract, original)
+    old_sources = _logical_projection_sources(old_projection)
+    event_hashes = sorted(_digest(e) for e in original)
+    if (event_hashes != sorted(_digest(e) for e in retained) or current_sources != old_sources
+        or old_projection['producer_census'].get('manifest_sha256') != contract['producer_census'].get('manifest_sha256')
+        or registry_contract.get('status') != 'verified'
+        or payload['source_contract']['registry'].get('tail_hash') not in {'0'*64, *(r.get('event_hash') for r in registry)}):
+        raise ValueError('cancel_wait_original_native_source_changed:' + source_day)
+    proof = dict(schema=ORIGINAL_RECOVERY_VERSION, source_date=source_day,
+        artifact_path=str(path), artifact_sha256=raw_sha, report_proof_sha256=payload['proof_sha256'],
+        state_sha256=payload['economic_state']['sha256'], source_event_sha256s=event_hashes,
+        logical_source_receipts_sha256=_digest(old_sources), producer_manifest_sha256=contract['producer_census']['manifest_sha256'],
+        predecessor_artifact_path=str(predecessor_path), predecessor_artifact_sha256=predecessor_sha,
+        prior_quarantine=quarantine, recovery_reason='lost_quarantine_original_native_projection_revalidated',
+        imported_economics=False, imported_policy=False, terminal_or_cost_completion_inferred=False)
+    proof['sha256'] = _digest(proof)
+    _validate_recovery_predecessor(predecessor_payload, predecessor_sha, proof)
+    return proof
+
+
 def _previous_state(target_date):
     from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
     from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
@@ -724,7 +860,7 @@ def _previous_state(target_date):
         if not max(refresh_floor,EXECUTABLE_EVIDENCE_DATE) <= day < target_date:continue
         if path.is_symlink() or path.stat().st_size > MAX_RECONCILIATION_METADATA_BYTES:
             raise ValueError('cancel_wait_predecessor_path_or_size_invalid:'+str(path))
-        payload,_=_bounded_semantic_json(path);state=payload.get('economic_state') or {}
+        payload,predecessor_sha=_bounded_semantic_json(path);state=payload.get('economic_state') or {}
         if payload.get('economic_schema') != ECONOMIC_SCHEMA:continue
         if payload.get('proof_sha256') and payload['proof_sha256'] != _digest({k:v for k,v in payload.items() if k not in ('generated_at','proof_sha256')}):
             raise ValueError('cancel_wait_predecessor_report_hash_invalid')
@@ -738,6 +874,7 @@ def _previous_state(target_date):
         if state.get('parents') and registry_contract.get('status')!='verified':
             raise ValueError('cancel_wait_predecessor_registry_unverified')
         bindings, rebuilt_parents, quarantined, rebuilt_events = {}, [], {}, []
+        recovered = dict((state.get('submission_reconciliation') or {}).get('recovered_sources') or {})
         rebuilt_counts = dict(state.get('source_counts') or {})
         for source_day in sorted(_reconciliation_dates(state)):
             if not refresh_floor <= source_day <= day:
@@ -751,7 +888,18 @@ def _previous_state(target_date):
                 if not expected and prior_row.get('excluded_source_event_sha256s'):
                     expected=set(prior_row['excluded_source_event_sha256s'])
                 if contract.get('status')!='ready' or {_digest(e) for e in original}!=expected:
-                    raise ValueError('cancel_wait_predecessor_original_projection_changed:'+source_day)
+                    # A prior failed projection used to erase both events and
+                    # their excluded hashes. The original dated native receipt
+                    # can recover that loss; a known nonempty/verified-empty
+                    # predecessor disagreement must still fail closed.
+                    recovered[source_day] = _recover_lost_original(source_day, state,
+                        original, contract, registry, registry_contract, path, predecessor_sha, payload)
+                elif source_day in recovered:
+                    _validate_recovery_receipt(source_day, recovered[source_day], original,
+                        read_object=_bounded_semantic_json, report_dir=REPORT_DIR)
+                    if (_digest(_verified_original_census(contract, original)) != recovered[source_day]['logical_source_receipts_sha256']
+                        or contract['producer_census'].get('manifest_sha256') != recovered[source_day]['producer_manifest_sha256']):
+                        raise ValueError('cancel_wait_original_native_source_changed:' + source_day)
                 bindings[source_day] = _source_binding(contract, registry_contract)
                 reconstructed,unknown=_parents(source_day,original,registry)
                 if unknown:
@@ -774,7 +922,8 @@ def _previous_state(target_date):
                 if not refs:
                     refs=(((state.get('submission_reconciliation') or {}).get('by_date') or {}).get(source_day) or {}).get('excluded_source_event_sha256s') or []
                 quarantined[source_day]=dict(reason=str(exc), excluded_source_event_sha256s=refs,
-                    artifact_path=str(path), artifact_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                    artifact_path=str(path), artifact_sha256=predecessor_sha)
+                recovered.pop(source_day, None)
                 bindings[source_day]=dict(status='source_gap', reason=str(exc))
                 rebuilt_counts.pop(source_day,None)
         if quarantined and not any(v.get('status')=='ready' for v in bindings.values()):
@@ -795,6 +944,7 @@ def _previous_state(target_date):
         if quarantined:
             result['model_rows'] = [r for r in state.get('model_rows',[]) if r.get('source_date') and r['source_date'] not in quarantined]
         result['_quarantined_sources'] = quarantined
+        result['_recovered_sources'] = recovered
         result['source_counts'] = rebuilt_counts
         return result
     return {}
@@ -948,6 +1098,9 @@ def _reconcile_history(target_date, events, registry, parents, outcomes, source,
                   predecessor_source_gap=predecessor_gap,
                   predecessor_source_failure=source.get('predecessor') or
                       (predecessor.get('submission_reconciliation') or {}).get('predecessor_source_failure'))
+    recovered = predecessor.get('_recovered_sources') or (predecessor.get('submission_reconciliation') or {}).get('recovered_sources')
+    if recovered:
+        ledger['recovered_sources'] = recovered
     return ledger, history
 
 
@@ -1315,19 +1468,61 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
 
 def _bounded_semantic_json(path):
     """One stable JSON receipt; no replay, source reconstruction, or writes."""
-    if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
+    import stat
+    before = path.lstat()
+    stamp = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_RECONCILIATION_METADATA_BYTES:
         raise ValueError('cancel_wait_artifact_path_or_size_invalid')
-    before = path.stat()
-    with path.open('rb') as handle:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as handle:
+        opened = os.fstat(handle.fileno())
+        if not stat.S_ISREG(opened.st_mode) or stamp(before) != stamp(opened):
+            raise ValueError('semantic_generation_changed_during_read')
         raw = handle.read(MAX_RECONCILIATION_METADATA_BYTES + 1)
-    after = path.stat()
-    stamp = lambda value: (value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-    if stamp(before) != stamp(after):
+        after_fd = os.fstat(handle.fileno())
+    after = path.lstat()
+    if len(raw) > MAX_RECONCILIATION_METADATA_BYTES or stamp(before) != stamp(after) or stamp(before) != stamp(after_fd):
         raise ValueError('semantic_generation_changed_during_read')
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError('cancel_wait_artifact_object_invalid')
     return value, hashlib.sha256(raw).hexdigest()
+
+
+def _validate_recovery_receipt(day, receipt, events, *, read_object=None, report_dir=None):
+    """Check recovery ancestry cheaply; optional native bytes bind observations."""
+    import re
+    reason = 'cancel_wait_predecessor_original_projection_changed:' + day
+    prior = receipt.get('prior_quarantine') or {}
+    path = Path(receipt['artifact_path'])
+    predecessor = Path(receipt['predecessor_artifact_path'])
+    if (receipt.get('schema') != ORIGINAL_RECOVERY_VERSION or receipt.get('source_date') != day
+        or receipt.get('sha256') != _digest({k:v for k,v in receipt.items() if k != 'sha256'})
+        or not path.is_absolute() or path.name != f'entry_cancel_wait_tuning_{day}.json'
+        or predecessor.parent != path.parent or predecessor.name != f'entry_cancel_wait_tuning_{predecessor.stem[-10:]}.json'
+        or not day < date.fromisoformat(predecessor.stem[-10:]).isoformat()
+        or prior.get('reason') != reason or prior.get('excluded_source_event_sha256s') != []
+        or receipt.get('source_event_sha256s') != sorted({_digest(e) for e in events}) or not events
+        or receipt.get('recovery_reason') != 'lost_quarantine_original_native_projection_revalidated'
+        or any(receipt.get(key) is not False for key in ('imported_economics','imported_policy','terminal_or_cost_completion_inferred'))
+        or any(not re.fullmatch('[0-9a-f]{64}', str(receipt.get(key) or '')) for key in (
+            'artifact_sha256','report_proof_sha256','state_sha256','logical_source_receipts_sha256',
+            'producer_manifest_sha256','predecessor_artifact_sha256'))):
+        raise ValueError('cancel_wait_original_recovery_receipt_invalid')
+    if report_dir is not None and path != Path(report_dir)/f'entry_cancel_wait_tuning_{day}.json':
+        raise ValueError('cancel_wait_original_recovery_path_invalid')
+    if read_object is not None:
+        original, raw_sha = read_object(path)
+        retained, projection = _original_projection_evidence(original, day)
+        if (raw_sha != receipt['artifact_sha256'] or original['proof_sha256'] != receipt['report_proof_sha256']
+            or original['economic_state']['sha256'] != receipt['state_sha256']
+            or sorted(_digest(e) for e in retained) != receipt['source_event_sha256s']
+            or _digest(_logical_projection_sources(projection)) != receipt['logical_source_receipts_sha256']
+            or projection['producer_census'].get('manifest_sha256') != receipt['producer_manifest_sha256']):
+            raise ValueError('cancel_wait_original_recovery_source_changed')
+        parent, parent_sha = read_object(predecessor)
+        _validate_recovery_predecessor(parent, parent_sha, receipt)
+    return path
 
 
 def _projected_census_matches(data_root, day, events, manifest, projection):
@@ -1436,7 +1631,7 @@ def _candidate_evidence_valid(payload):
     return True
 
 
-def _reconciliation_metadata_generation(data_root, by_date):
+def _reconciliation_metadata_generation(data_root, by_date, recovered_sources=None):
     from src.engine.pipeline_event_summary import producer_summary_paths
     paths = [Path(data_root)/'runtime/order_owner_registry.jsonl']
     for day, row in sorted(by_date.items()):
@@ -1451,6 +1646,15 @@ def _reconciliation_metadata_generation(data_root, by_date):
     for d in by_date:
         checkpoint=Path(data_root)/'runtime/main_custody_checkpoints'/f'{d}.json'
         if checkpoint.exists() or checkpoint.is_symlink():paths.append(checkpoint)
+    for day, receipt in sorted((recovered_sources or {}).items()):
+        expected = Path(data_root)/'report/entry_cancel_wait_tuning'/f'entry_cancel_wait_tuning_{day}.json'
+        if receipt.get('artifact_path') != str(expected):
+            raise ValueError('cancel_wait_original_recovery_path_invalid')
+        paths.append(expected)
+        parent = Path(receipt['predecessor_artifact_path'])
+        if parent.parent != expected.parent:
+            raise ValueError('cancel_wait_original_recovery_path_invalid')
+        paths.append(parent)
     generation = []
     for path in paths:
         stat = path.lstat()
@@ -1490,6 +1694,18 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
         history = payload['historical_reconciliation']
         census = payload['submission_census']
         by_date = ledger['by_date']
+        recovered_sources = ledger.get('recovered_sources') or {}
+        if not isinstance(recovered_sources, dict):
+            raise ValueError('cancel_wait_original_recovery_receipt_invalid')
+        for recovered_day, receipt in recovered_sources.items():
+            row = by_date[recovered_day]
+            retained = [e for e in state['source_events'] if e.get('emitted_date') == recovered_day]
+            _validate_recovery_receipt(recovered_day, receipt, retained)
+            if (row.get('coverage_verified') is not True
+                or not Path(receipt['predecessor_artifact_path']).stem[-10:] < day
+                or (row.get('source_binding') or {}).get('producer_manifest_sha256') != receipt['producer_manifest_sha256']
+                or recovered_day in (ledger.get('quarantined_sources') or {})):
+                raise ValueError('cancel_wait_original_recovery_receipt_invalid')
         if (state.get('through_date') != day
             or state.get('sha256') != _digest({k:v for k,v in state.items() if k != 'sha256'})
             or any(value != RECONCILIATION_VERSION for value in (
@@ -1630,7 +1846,7 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                 findings.append('cancel_wait_economic_population_or_current_custody_invalid')
         cache_key = None
         if data_root is not None:
-            generation = _reconciliation_metadata_generation(data_root,by_date)
+            generation = _reconciliation_metadata_generation(data_root,by_date,recovered_sources)
             projected_sources=set()
             for d,row in by_date.items():
                 binding=row.get('source_binding') or {}
@@ -1644,8 +1860,14 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                     'findings':sorted(set(findings)), 'reason':'bounded_reconciliation_metadata_required'}
             cache_key = (day,payload.get('proof_sha256'),_digest(policy),generation)
             if not findings and cache_key in _RECONCILIATION_VIEW_CACHE:
+                if _reconciliation_metadata_generation(data_root,by_date,recovered_sources) != generation:
+                    raise ValueError('semantic_generation_changed_during_read')
                 return json.loads(json.dumps(_RECONCILIATION_VIEW_CACHE[cache_key]))
             reader = read_object or _bounded_semantic_json
+            for d, receipt in recovered_sources.items():
+                _validate_recovery_receipt(d, receipt,
+                    [e for e in state['source_events'] if e.get('emitted_date') == d],
+                    read_object=reader, report_dir=Path(data_root)/'report/entry_cancel_wait_tuning')
             decoded_budget = 0
             for d, row in by_date.items():
                 binding = row.get('source_binding') or {}
@@ -1711,7 +1933,7 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             elif any(e.get('owner_type') == 'main_scalping' and e.get('side') == 'BUY'
                      and e.get('order_date', '9999') <= day for e in registry[(hashes.index(tail)+1) if tail in hashes else 0:]):
                 findings.append('cancel_wait_stale_registry_generation')
-        if data_root is not None and _reconciliation_metadata_generation(data_root,by_date) != generation:
+        if data_root is not None and _reconciliation_metadata_generation(data_root,by_date,recovered_sources) != generation:
             raise ValueError('semantic_generation_changed_during_read')
         result.update(status='source_invalid' if findings else 'candidate_selected' if payload.get('economic_tuning_input_allowed') else 'incumbent_carry',
             reconciliation_contract_version=RECONCILIATION_VERSION, report_proof_sha256=payload.get('proof_sha256'),
@@ -1724,6 +1946,7 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             research_evaluation_status=(payload.get('research_economic_evaluation') or {}).get('status'),
             current_custody=(split_population or {}).get('current_custody'),
             missing_dates=missing, evaluation_status=payload['evidence_summary']['state'],
+            recovered_source_dates=sorted(recovered_sources),
             economic_tuning_input_allowed=payload['economic_tuning_input_allowed'])
         if cache_key is not None and not findings:
             if len(_RECONCILIATION_VIEW_CACHE) >= 8:

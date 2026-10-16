@@ -1149,6 +1149,37 @@ def _retired_summary_archive_issues(report_dir, day, value):
     return []
 
 
+def _operating_machine_terminal_selected(terminal, day, report):
+    """Recognize the issued operating comparison, without policy/PID/EV approval."""
+    if (not isinstance(terminal, dict) or not isinstance(report, dict)
+        or terminal.get('schema') != 'continuous_reversal_operating_comparison_v1'):
+        return False
+    from src.engine.scalping.continuous_reversal_postclose import digest
+    staging = terminal.get('staged')
+    return bool(
+        terminal.get('status') == 'completed'
+        and report.get('schema') == terminal['schema']
+        and report.get('source_date') == report.get('target_date') == day
+        and report.get('status') == 'completed'
+        and report.get('artifact_content_sha256') == terminal.get('report_sha256')
+        and report.get('runtime_effect') is False
+        and report.get('allowed_runtime_apply') is False
+        and report.get('actual_order_submitted') is False
+        and report.get('broker_order_forbidden') is True
+        and terminal.get('source_date') == terminal.get('target_date') == day
+        and terminal.get('selection_basis') == 'cumulative_raw_win_fraction'
+        and terminal.get('disposition') == 'continuous_reversal_selected'
+        and isinstance(staging, dict) and staging.get('status') == 'machine_component_prepared'
+        and isinstance(terminal.get('report_sha256'), str)
+        and re.fullmatch(r'[0-9a-f]{64}', terminal['report_sha256'])
+        and terminal.get('artifact_content_sha256') == digest({k:v for k,v in terminal.items() if k!='artifact_content_sha256'})
+        and terminal.get('runtime_effect') is False
+        and terminal.get('allowed_runtime_apply') is False
+        and terminal.get('actual_order_submitted') is False
+        and terminal.get('broker_order_forbidden') is True
+    )
+
+
 def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
                          allow_historical_summary=False,
                          allow_historical_terminal=False):
@@ -1263,7 +1294,16 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
             )
     if value.get('input_sources') != _stage_sources(input_paths):
         return [f'{stage}:input_generation_changed']
-    return _safe_stage_output_issues(report_dir, day, stage)
+    issues = _safe_stage_output_issues(report_dir, day, stage)
+    if not issues and stage == 'main_machine_policy':
+        terminal = _load_json(expected['machine_policy_terminal'])
+        selected = _operating_machine_terminal_selected(terminal, day, _load_json(expected['machine_policy']))
+        if terminal.get('schema') == 'continuous_reversal_operating_comparison_v1':
+            if (value.get('policy_disposition') == 'continuous_reversal_selected' and not selected
+                or value.get('machine_report_sha256') not in (None, terminal.get('report_sha256'))
+                or value.get('selection_metric') not in (None, 'cumulative_raw_win_fraction')):
+                issues.append('main_machine_policy:recorded_native_disposition_unproven')
+    return issues
 
 
 
@@ -1564,6 +1604,15 @@ def _stage_output_issues(report_dir, day, stage):
             if current.get('schema')!=expected_schema or current.get('source_date')!=day or current.get('artifact_content_sha256')!=digest(
                 {k:v for k,v in current.items() if k!='artifact_content_sha256'}):
                 errors.append(f'{stage}:continuous_reversal_compatibility_output_invalid')
+        if stage == 'main_machine_policy' and schema == operating_schema:
+            terminal = _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal'])
+            staging = terminal.get('staged') if isinstance(terminal.get('staged'), dict) else {}
+            claims_selected = (terminal.get('disposition') == 'continuous_reversal_selected'
+                or terminal.get('selection_basis') == 'cumulative_raw_win_fraction'
+                or staging.get('status') == 'machine_component_prepared')
+            if (claims_selected and terminal.get('status') != 'source_gap'
+                and not _operating_machine_terminal_selected(terminal, day, value)):
+                errors.append('main_machine_policy:operating_terminal_disposition_invalid')
         if stage=='main_auxiliary_policy':
             from src.engine.scalping.continuous_reversal_policy import scoped_verification
             errors.extend(scoped_verification(Path(report_dir).parent,day)['issues'])
@@ -2054,7 +2103,9 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                     value['automatic_policy_disposition'] = terminal.get('disposition')
                     value['designated_bundle_sha256'] = staging.get('bundle_sha256')
                 value['policy_sha256'] = terminal.get('policy_sha256')
-                if terminal.get('schema') in {'continuous_reversal_research_v1','continuous_reversal_registered_postclose_v1','continuous_reversal_path_postclose_v1'}:
+                if (terminal.get('schema') in {'continuous_reversal_research_v1','continuous_reversal_registered_postclose_v1','continuous_reversal_path_postclose_v1'}
+                    or _operating_machine_terminal_selected(terminal, day,
+                        _load_json(stage_artifacts(report_dir, day, stage)['machine_policy']))):
                     value['policy_disposition']='continuous_reversal_selected'
                     value['selection_metric']='cumulative_raw_win_fraction'
                     value['machine_report_sha256']=terminal.get('report_sha256')
@@ -2075,10 +2126,82 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             slot.close()
 
 
+def _stage_disposition_view(report_dir, day, stage, value, issues):
+    """Expose current native semantics without rewriting original execution proof."""
+    recorded = value.get('policy_disposition')
+    result = dict(status=value.get('status', 'pending'), issues=list(issues), policy_disposition=recorded)
+    if stage != 'main_machine_policy':
+        return result
+    result['recorded_policy_disposition'] = recorded
+    if issues:
+        if recorded == 'continuous_reversal_selected':
+            result['policy_disposition'] = 'unverified_recorded_disposition'
+        return result
+    paths = stage_artifacts(report_dir, day, stage)
+    references = [*map(Path, paths.values()), stage_path(report_dir,day,stage), Path(__file__)]
+    def generations():
+        return {str(path):(stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)
+                for path in references for stat in (path.stat(),)}
+    try:
+        before = generations()
+    except OSError:
+        result['issues'].append('main_machine_policy:disposition_source_changed')
+        return result
+    terminal = _load_json(paths['machine_policy_terminal'])
+    report = _load_json(paths['machine_policy'])
+    # The old stage code remains execution provenance. The current consumer
+    # authenticates its unchanged native source instead of rewriting a receipt.
+    observed = _stage_sources(paths)
+    if (value.get('sources') != observed
+        or _load_json(stage_path(report_dir, day, stage)) != value):
+        result['issues'].append('main_machine_policy:disposition_source_changed')
+        if recorded == 'continuous_reversal_selected':
+            result['policy_disposition'] = 'unverified_recorded_disposition'
+        return result
+    if not _operating_machine_terminal_selected(terminal, day, report):
+        try:
+            stable = before == generations()
+        except OSError:
+            stable = False
+        if not stable:
+            result['issues'].append('main_machine_policy:disposition_source_changed')
+            if recorded == 'continuous_reversal_selected':
+                result['policy_disposition'] = 'unverified_recorded_disposition'
+        return result
+    result['policy_disposition'] = 'continuous_reversal_selected'
+    result['native_disposition_projection'] = dict(
+        schema='postclose_native_terminal_disposition_projection_v1', source_date=day,
+        role='current_read_semantics_original_native_execution_preserved',
+        correction_applied=recorded != 'continuous_reversal_selected',
+        original_stage_receipt_sha256=value.get('receipt_sha256'),
+        original_stage_file_sha256=_stage_sources({'stage':stage_path(report_dir,day,stage)})['stage']['sha256'],
+        original_stage_code_sha256=value.get('stage_code_sha256'),
+        original_computation_executed=value.get('computation_executed'),
+        native_terminal=observed['machine_policy_terminal'],
+        native_terminal_content_sha256=terminal['artifact_content_sha256'],
+        machine_report=observed['machine_policy'],
+        machine_report_content_sha256=terminal['report_sha256'],
+        current_consumer_sha256=_stage_sources({'consumer':Path(__file__)})['consumer']['sha256'],
+        interpretation='selected_machine_component_prepared_not_activation_pid_or_profit',
+        runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False)
+    try:
+        stable = before == generations()
+    except OSError:
+        stable = False
+    if not stable:
+        result.pop('native_disposition_projection')
+        result['policy_disposition'] = ('unverified_recorded_disposition'
+                                       if recorded == 'continuous_reversal_selected' else recorded)
+        result['issues'].append('main_machine_policy:disposition_source_changed')
+    return result
+
+
 def stage_overview(report_dir, day):
     states = {s:_load_json(stage_path(report_dir, day, s)) for s in active_stage_names(day)}
     issues = {s:stage_receipt_issues(report_dir, day, s, allow_historical_terminal=True)
               for s in states if s != 'summary_handoff'}
+    stage_views = {s:_stage_disposition_view(report_dir,day,s,v,issues.get(s,[])) for s,v in states.items()}
+    issues.update({s:view['issues'] for s,view in stage_views.items() if view['issues']})
     # Startup evidence has its own date and contract, independent of diagnostics.
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
     effective = _next_krx_trading_day(day)
@@ -2122,7 +2245,7 @@ def stage_overview(report_dir, day):
             "intraday_preserved_generation_pid_receipt_unconfirmed",
         })
     return dict(schema='postclose_stage_overview_v2', source_date=day, effective_date=effective,
-        stages={s:dict(status=v.get('status', 'pending'), issues=issues.get(s, []), policy_disposition=v.get('policy_disposition')) for s,v in states.items()},
+        stages=stage_views,
         postclose_all_active_stages_complete=not any(issues.values()) and states['summary_handoff'].get('status') == 'succeeded',
         next_session_policy_ready=ready, policy_loader_checks=policy_checks,
         future_handoff=future_handoff,

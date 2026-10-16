@@ -23,7 +23,7 @@ def test_main_synchronizes_target_date_without_building_provider_or_runtime_work
     assert calls == ["2026-08-25"]
 
 
-def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope='entered'):
+def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope='entered', completion_counts=None):
     from src.engine import log_archive_service as archive
     from src.engine.sniper_trade_review_report import completed_census_manifest, strategy_fact_projection_rows
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
@@ -43,6 +43,11 @@ def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope
         'strict_completion_status': 'excluded', 'broker_actual_cost_observed': False,
         'actual_cost_reconciliation': {'status': 'actual_cost_unallocated'}, 'realized_pnl_krw': None,
         'realized_pnl_krw_source': 'missing_exact_cost', 'broker_actual_fees_taxes_krw': None}] if rows else []
+    if completion_counts is not None:
+        for row in completed:
+            for key in ('add_count', 'avg_down_count', 'pyramid_count'):
+                row.pop(key, None)
+            row.update(completion_counts)
     payload = dict(date=day, code=None, since=None, scope=scope,
         meta=dict(snapshot_profile='postclose_exit', warnings=[], sell_completed_event_ids=[1] if rows else [],
                   actual_cost_source_generation=source_generation(tmp_path,day)),
@@ -1123,3 +1128,11 @@ def test_fact_consumer_preserves_actual_cost_revision_and_configured_rate_separa
     assert facts[0]["actual_cost_reconciliation_status"] == "actual_cost_reconciled"
     assert facts[0]["actual_cost_source_generation"] == generation
     assert row["profit_rate"] == 0.8
+
+
+@pytest.mark.parametrize('counts',[{}, {'add_count':1,'avg_down_count':1,'pyramid_count':0}])
+def test_native_fact_scalar_preserves_terminal_scale_in_presence(tmp_path,monkeypatch,counts):
+    day,path=_native_fact_projection(tmp_path,monkeypatch,large=False,completion_counts=counts)
+    value=report_mod._load_completion_fact_projection(day,path)
+    row=value['sections']['completed_trade_projection'][0]
+    assert {key:row[key] for key in ('add_count','avg_down_count','pyramid_count') if key in row}==counts

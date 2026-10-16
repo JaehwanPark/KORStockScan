@@ -320,6 +320,7 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     from src.engine.lifecycle.research_input_budget import Claim
     from sqlalchemy import text
+    from src.engine.scalping.initial_quantity_source_cache import QUANTITY_FACT_STRATEGIES, QUANTITY_FACT_CUSTODIES
     keys = ("recommendation_id", "rec_date", "stock_code", "strategy", "position_tag", "status",
             "buy_price", "buy_qty", "buy_time", "sell_price", "sell_time", "profit_rate",
             "realized_pnl_krw", "add_count", "avg_down_count", "pyramid_count",
@@ -331,8 +332,8 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
         query = session.query(*(getattr(TradePerformanceFact,k) for k in keys)).filter(
             or_(TradePerformanceFact.rec_date >= start, TradePerformanceFact.buy_time >= datetime.combine(start,datetime.min.time())),
             or_(TradePerformanceFact.rec_date <= end, TradePerformanceFact.buy_time < datetime.combine(end+timedelta(days=1),datetime.min.time())),
-            TradePerformanceFact.strategy.in_(("SCALPING","SCALP")),
-            TradePerformanceFact.position_tag.in_(("SCANNER","SCALP_BASE")))
+            TradePerformanceFact.strategy.in_(QUANTITY_FACT_STRATEGIES),
+            TradePerformanceFact.position_tag.in_(QUANTITY_FACT_CUSTODIES))
         days = [row[0].isoformat() for row in query.with_entities(TradePerformanceFact.rec_date).distinct()]
         generations = {}
         for day in days:
@@ -354,7 +355,16 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
             if (gen["sha256"] != (_file_sha256(path) if path.exists() else None)
                     or gen['cost_generation']!=source_generation(DATA_DIR,day)):
                 raise ValueError("quantity_fact_generation_changed_during_snapshot")
-        return rows
+        from src.engine.scalping.initial_quantity_source_cache import completion_overlay
+        overlaid = completion_overlay(rows, as_of=as_of, data_dir=DATA_DIR,
+            entry_on_or_after=start.isoformat(), entry_generations=generations,
+            validate_day=_quantity_fact_generation_issue)
+        for day, gen in generations.items():
+            path = Path(gen['path'])
+            if (gen['sha256'] != (_file_sha256(path) if path.exists() else None)
+                    or gen['cost_generation'] != source_generation(DATA_DIR, day)):
+                raise ValueError('quantity_fact_generation_changed_during_snapshot')
+        return overlaid
 
 
 def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] | None = None,
@@ -442,7 +452,7 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                 except ValueError:generation=None
             generation_valid=bool(re.fullmatch(r'[0-9a-f]{64}',generation or '')) if isinstance(generation,str) else bool(
                 isinstance(generation,dict) and generation.get('schema')=='holding_actual_cost_source_generation_v1'
-                and generation.get('completion_date')==str(fact.get('rec_date'))
+                and generation.get('completion_date')==str(fact.get('completion_source_date') or fact.get('rec_date'))
                 and re.fullmatch(r'[0-9a-f]{64}',str(generation.get('sha256') or ''))
                 and type(generation.get('count')) is int and generation['count']>=0)
             if (fees is None or fees < 0
@@ -471,7 +481,12 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                "exit_at": sell_at.isoformat(),
                "entry_at_fact_buy_time": buy_at.isoformat(),
                "entry_date_source": "trade_performance_facts.buy_time",
-               "terminal_source": "trade_performance_facts.completed_costed",
+               "terminal_source": ("native_completion_date_projection.completed_costed"
+                    if fact.get('completion_generation') else "trade_performance_facts.completed_costed"),
+               **({"completion_generation": fact['completion_generation'],
+                   "completion_source_date": fact['completion_source_date'],
+                   "fact_generation": fact.get('fact_generation')}
+                  if fact.get('completion_generation') else {}),
                "cost_basis": "broker_actual" if actual else "historical_comparison_model",
                "modeled_parent_net_pnl_krw": _costed_fixed_exit_pnl(
                     [(int(qty), buy_price)], sell_price, cost_rate)}
@@ -499,6 +514,10 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                         round(sum(row["profit_rate"] for row in result) / len(result), 6)
                         if result else None),
                     "fact_rows_read": len(source), "excluded": dict(sorted(exclusions.items())),
+                    "as_of_completed_population_count": sum(str(f.get('status')).upper() == 'COMPLETED'
+                        for f in source if isinstance(f, dict)),
+                    "completion_overlay_generations": getattr(raw_source, 'completion_generations', {}),
+                    "completion_overlay_summary": getattr(raw_source, 'completion_overlay_summary', {}),
                     "cost_rate": cost_rate, "input_fact_rows": source,
                     "input_manifest_sha256": _digest(source),
                     "persisted_fact_generations": {str(f.get("rec_date")): f["fact_generation"] for f in source if isinstance(f,dict) and isinstance(f.get("fact_generation"),dict)},
@@ -2280,6 +2299,8 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
             current_issue='persisted_fact_cost_generation_stale'
         if current_issue != gen.get("issue") or gen.get('cost_generation')!=source_generation(DATA_DIR,day):
             raise ValueError("quantity_fact_cost_generation_changed")
+    from src.engine.scalping.initial_quantity_source_cache import verify_completion_overlay_generations
+    verify_completion_overlay_generations(census.get('completion_overlay_generations', {}), data_dir=DATA_DIR)
     for gen in (report.get("pipeline_source_receipts") or {}).values():
         lifecycle = gen.get('capture_lifecycle_generation')
         if lifecycle is not None:

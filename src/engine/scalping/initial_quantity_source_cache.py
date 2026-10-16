@@ -1,4 +1,4 @@
-"""Byte-verified per-date quantity features; costs never own this cache.
+"""Byte-verified quantity features with pinned as-of terminal generations.
 
 Offline SCALPING research cache. A corrupted disposable cache is rebuilt from
 verified raw sources. Pinned report evidence and raw sources are never deleted.
@@ -12,6 +12,16 @@ from src.engine.lifecycle import research_storage as storage
 from src.engine.lifecycle.research_input_budget import Claim, LIMIT_BYTES
 from src.engine.lifecycle.holding_window_generation import byte_generation
 from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
+
+
+QUANTITY_FACT_STRATEGIES = ("SCALPING", "SCALP")
+QUANTITY_FACT_CUSTODIES = ("SCANNER", "SCALP_BASE")
+
+
+def completion_fact_scope(row):
+    """Existing Main quantity population, never additional custody authority."""
+    return (str(row.get('strategy') or '').upper() in QUANTITY_FACT_STRATEGIES
+            and str(row.get('position_tag') or '').upper() in QUANTITY_FACT_CUSTODIES)
 
 
 class ResidentPaths(dict):
@@ -71,11 +81,11 @@ def fingerprint(trades,path,horizon):
     readers['utils/jsonl_io.py']=engine.parent/'utils/jsonl_io.py'
     reader={name:hashlib.sha256(path.read_bytes()).hexdigest()
             for name,path in readers.items()}
-    return dict(schema='initial_quantity_source_features_v4',source=leaf,
+    return dict(schema='initial_quantity_source_features_v5',source=leaf,
                 archive=byte_generation(archive) if archive.exists() else None,
                 capture_lifecycle_generation=captures,
                 reader=reader, horizon=horizon,
-                trades=[{k:r.get(k) for k in ('trade_id','record_id','stock_code','entry_date','exit_date','entry_at_fact_buy_time','exit_at')} for r in trades])
+                trades=[{k:r.get(k) for k in ('trade_id','record_id','stock_code','entry_date','exit_date','entry_at_fact_buy_time','exit_at','completion_generation','fact_generation')} for r in trades])
 
 
 def _read_index(path):
@@ -195,3 +205,339 @@ def joint_records(trades, paths, rows, grid, *, data_dir, cost_rate):
             if index != base/'index.json':
                 _atomic(index,dict(input_sha256=key,tree=ref,tree_root=str(tree_root.resolve())))
         yield from storage.iter_tree(tree_root,ref)
+
+
+def _completion_json(path, maximum):
+    """Read one regular bounded native JSON generation, including open races."""
+    import os
+    import stat
+    path = Path(path)
+    before = path.lstat()
+    compressed = path.name.endswith('.gz')
+    physical_limit = maximum * 2 + 65536 if compressed else maximum
+    identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    if not stat.S_ISREG(before.st_mode) or before.st_size > physical_limit:
+        raise ValueError('quantity_completion_metadata_invalid')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if identity(os.fstat(fd)) != identity(before) or not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('quantity_completion_source_changed')
+        with os.fdopen(fd, 'rb', closefd=False) as handle:
+            if compressed:
+                import gzip
+                with gzip.GzipFile(fileobj=handle) as decoder:
+                    raw = decoder.read(maximum + 1)
+            else:
+                raw = handle.read(maximum + 1)
+        if ((not compressed and len(raw) != before.st_size) or len(raw) > maximum
+                or identity(os.fstat(fd)) != identity(before)
+                or identity(path.lstat()) != identity(before)):
+            raise ValueError('quantity_completion_source_changed')
+    finally:
+        os.close(fd)
+    claim = Claim(len(raw) * 8)
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError('quantity_completion_metadata_invalid')
+    class NativeObject(dict):
+        pass
+    value = NativeObject(value)
+    value.claim = claim
+    return value, dict(path=str(path), size=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+
+
+def _completion_day(data_dir, day, *, read=None, expected=None):
+    """Join small native fact seals, without revisiting a historical timeline."""
+    import re
+    from src.engine import strategy_position_performance_report as facts
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, MAX_PROJECTION_BYTES
+    from src.engine.lifecycle.snapshot_archive import snapshot_identity
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation, digest
+    directory = Path(data_dir) / 'report/monitor_snapshots'
+    raw_path = directory / f'trade_review_{day}.json'
+    sidecar = raw_path.with_suffix('.completed_projection.json')
+    scalar_path = raw_path.with_suffix('.fact_projection.json')
+    status_path = Path(data_dir) / 'report/strategy_position_fact_sync' / f'strategy_position_fact_sync_{day}.status.json'
+    dependency_path = Path(str(sidecar) + '.dependencies.json')
+    sources = [p for logical in (raw_path, sidecar, scalar_path) for p in (
+        logical, Path(str(logical) + '.gz'), Path(str(logical) + '.gz.archive_receipt.json'))]
+    sources += [status_path, dependency_path]
+    before = facts._completion_source_signature(sources)
+    def metadata(path, maximum, reference=None):
+        if read is None:
+            return _completion_json(path, maximum)
+        if reference is not None:
+            if (reference.get('path') != str(path) or type(reference.get('size')) is not int
+                    or not 0 <= reference['size'] <= maximum
+                    or re.fullmatch(r'[0-9a-f]{64}', str(reference.get('sha256') or '')) is None):
+                raise ValueError('quantity_completion_reference_invalid')
+            value = read(path, expected_sha=reference['sha256'], limit=reference['size'])
+            return value, reference
+        return read(path, limit=maximum), None
+    receipt, status_ref = metadata(status_path, MAX_METADATA_BYTES,
+        expected.get('fact_receipt') if isinstance(expected, dict) else None)
+    if (receipt.get('artifact_sha256') != facts._canonical_sha256({k:v for k,v in receipt.items() if k != 'artifact_sha256'})
+            or receipt.get('target_date') != day
+            or receipt.get('status') not in {'succeeded', 'valid_empty'}
+            or receipt.get('consumer_ready') is not True
+            or receipt.get('runtime_effect') is not False
+            or receipt.get('allowed_runtime_apply') is not False):
+        raise ValueError('quantity_completion_fact_receipt_invalid')
+    proof = receipt.get('completion_snapshot_source')
+    if not isinstance(proof, dict) or proof.get('source_basis') != 'native_bounded_fact_projection':
+        return None
+    dependency, dependency_ref = metadata(dependency_path, MAX_METADATA_BYTES,
+        expected.get('dependency_receipt') if isinstance(expected, dict) else None)
+    if read is None:
+        physical = scalar_path if scalar_path.exists() else Path(str(scalar_path) + '.gz')
+        value, scalar_ref = _completion_json(physical, MAX_PROJECTION_BYTES)
+        scalar = {**scalar_ref, 'path': scalar_path.name}
+        original_identity = snapshot_identity(raw_path)
+    else:
+        scalar = proof.get('fact_projection')
+        if (not isinstance(scalar, dict) or scalar.get('path') != scalar_path.name
+                or type(scalar.get('size')) is not int or not 0 <= scalar['size'] <= MAX_PROJECTION_BYTES
+                or re.fullmatch(r'[0-9a-f]{64}', str(scalar.get('sha256') or '')) is None):
+            raise ValueError('quantity_completion_scalar_reference_invalid')
+        value, _ = metadata(scalar_path, MAX_PROJECTION_BYTES, {**scalar, 'path': str(scalar_path)})
+        from src.engine.lifecycle.snapshot_archive import file_identity, SCHEMA
+        import stat
+        def physical_identity(path):
+            current = path.lstat()
+            if not stat.S_ISREG(current.st_mode):
+                raise ValueError('quantity_completion_physical_source_invalid')
+            return file_identity(current)
+        if raw_path.exists():
+            original_identity = physical_identity(raw_path)
+        else:
+            archived = Path(str(raw_path) + '.gz')
+            archive, _ = metadata(Path(str(archived) + '.archive_receipt.json'), 128 * 1024)
+            if (archive.get('schema') != SCHEMA or archive.get('logical_path') != str(raw_path)
+                    or archive.get('archive_generation') != physical_identity(archived)
+                    or archive.get('runtime_effect') is not False or archive.get('allowed_runtime_apply') is not False
+                    or archive.get('logical_size_bytes') != (archive.get('original_identity') or {}).get('size')
+                    or re.fullmatch(r'[0-9a-f]{64}', str(archive.get('archive_sha256') or '')) is None
+                    or re.fullmatch(r'[0-9a-f]{64}', str(archive.get('logical_content_sha256') or '')) is None):
+                raise ValueError('quantity_completion_archive_metadata_invalid')
+            original_identity = archive.get('original_identity')
+    costs = source_generation(Path(data_dir), day)
+    projection = dict(proof.get('projection') or {})
+    sealed_dependency = projection.pop('dependency_receipt', None)
+    identity = projection.pop('snapshot_identity', None)
+    body = {k:v for k,v in value.items() if k != 'artifact_sha256'} if isinstance(value, dict) else {}
+    census = (value.get('meta') or {}).get('completed_census_manifest') if isinstance(value, dict) else None
+    completed = (value.get('sections') or {}).get('completed_trade_projection') if isinstance(value, dict) else None
+    if (proof.get('schema') != 'strategy_position_fact_snapshot_source_v1' or proof.get('source_date') != day
+            or projection != dependency.get('projection')
+            or projection.get('path') != sidecar.name
+            or type(projection.get('size')) is not int or projection['size'] < 0
+            or re.fullmatch(r'[0-9a-f]{64}', str(projection.get('sha256') or '')) is None
+            or sealed_dependency != dict(path=dependency_path.name, size=dependency_ref['size'], sha256=dependency_ref['sha256'])
+            or dependency.get('schema') != 'holding_projection_dependency_receipt_v1' or dependency.get('date') != day
+            or dependency.get('artifact_sha256') != digest({k:v for k,v in dependency.items() if k != 'artifact_sha256'})
+            or identity != dependency.get('snapshot_identity') or identity != original_identity
+            or proof.get('fact_projection') != scalar or dependency.get('fact_projection') != scalar
+            or not isinstance(value, dict) or value.get('schema') != 'trade_review_fact_projection_v1'
+            or value.get('source_scope') != 'entered' or value.get('date') != day
+            or value.get('snapshot_identity') != identity
+            or value.get('artifact_sha256') != facts._canonical_sha256(body)
+            or proof.get('scalar_projection_sha256') != value.get('artifact_sha256')
+            or not isinstance(census, dict) or census.get('source_date') != day
+            or census.get('schema') != 'trade_review_completed_census_v1'
+            or digest(census) != dependency.get('census_sha256')
+            or census.get('actual_cost_source_generation') != costs
+            or (dependency.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'
+            or (value.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'
+            or receipt.get('completed_census_run_ids') != [census.get('run_id')]
+            or receipt.get('completed_census_projection_sha256') != [census.get('projection_sha256')]
+            or any(g != costs for g in (receipt.get('actual_cost_source_generation'), proof.get('actual_cost_source_generation'),
+                       (value.get('meta') or {}).get('actual_cost_source_generation'),
+                       (dependency.get('meta') or {}).get('actual_cost_source_generation')))
+            or not isinstance(completed, list) or len(completed) != census.get('projected_count')
+            or dependency.get('completed_count') != len(completed)
+            or (value.get('metrics') or {}).get('canonical_completed_trades') != len(completed)
+            or any(not isinstance(row, dict) or row.get('status') != 'COMPLETED'
+                   or row.get('completion_observed_date') != day for row in completed)
+            or len({str(row.get('id')) for row in completed}) != len(completed)
+            or sorted(str(row.get('id')) for row in completed) != sorted(census.get('raw_terminal_ids') or [])):
+        raise ValueError('quantity_completion_projection_binding_invalid')
+    census_rows = census.get('rows')
+    if (not isinstance(census_rows, list) or len(census_rows) != len(completed)
+            or any(not isinstance(row, dict) for row in census_rows)
+            or len({str(row.get('id')) for row in census_rows}) != len(completed)):
+        raise ValueError('quantity_completion_census_identity_invalid')
+    census_by_id = {str(row.get('id')): row for row in census_rows}
+    converted = []
+    for row in completed:
+        sealed = census_by_id.get(str(row.get('id')))
+        if (sealed is None or sealed.get('entry_date') != row.get('rec_date')
+                or sealed.get('completion_observed_date') != day
+                or sealed.get('owner_scope') != row.get('terminal_population_scope')
+                or sealed.get('position_tag') != row.get('position_tag')
+                or sealed.get('strict_status') != row.get('strict_completion_status')
+                or not isinstance(sealed.get('strategy'), str) or not sealed['strategy'].strip()
+                or row.get('strategy') not in (None, sealed.get('strategy'))):
+            raise ValueError('quantity_completion_owner_census_conflict')
+        # Existing native scalar projections deliberately omit strategy; its
+        # original value is retained in the exact same sealed census row.
+        for key in ('add_count', 'avg_down_count', 'pyramid_count'):
+            if key in row and (type(row[key]) is not int or row[key] < 0):
+                raise ValueError('quantity_completion_scale_in_count_invalid')
+        converted.append({**row, 'strategy': sealed['strategy']})
+    native = dict(schema='initial_quantity_completion_generation_v1', source_date=day,
+                  fact_receipt=status_ref, dependency_receipt=dependency_ref,
+                  completion_snapshot_source=proof)
+    projected = facts._trade_fact_rows_from_report(day, {
+        'meta': value['meta'], 'sections': {'recent_trades': converted,
+                                          'completed_trade_projection': converted}})
+    originals = {str(row['id']): row for row in converted}
+    for terminal in projected:
+        source = originals[str(terminal['recommendation_id'])]
+        for key in ('add_count', 'avg_down_count', 'pyramid_count'):
+            if key not in source:
+                terminal.pop(key, None)
+    if before != facts._completion_source_signature(sources) or costs != source_generation(Path(data_dir), day):
+        raise ValueError('quantity_completion_source_changed')
+    return projected, native
+
+
+def verify_completion_overlay_generations(generations, *, data_dir, read=None):
+    """Bounded monitor/replay parity; native full validation stays separate."""
+    if not isinstance(generations, dict):
+        raise ValueError('quantity_completion_generations_invalid')
+    verified = {}
+    for day, expected in generations.items():
+        if datetime.fromisoformat(day).date().isoformat() != day:
+            raise ValueError('quantity_completion_date_invalid')
+        current = _completion_day(data_dir, day, read=read, expected=expected)
+        if current is None or current[1] != expected:
+            raise ValueError('quantity_completion_generation_changed')
+        verified[day] = current[0]
+    return verified
+
+
+def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_generations, validate_day):
+    """Apply exact completion-date observations to a memory-only as-of census.
+
+    Entry-day facts and DB history remain immutable. Their invalid source proof
+    remains invalid even if a later terminal observation is independently valid.
+    """
+    import re
+    from collections import Counter
+    from src.engine import strategy_position_performance_report as facts
+    from src.engine.scalping.initial_quantity_policy import _timestamp, _number
+    original = list(rows)
+    current = {str(row['recommendation_id']): dict(row) for row in original}
+    if len(current) != len(original):
+        raise ValueError('quantity_completion_entry_identity_conflict')
+    generations, seen_terminal, overlays = {}, {}, set()
+    native_ids, excluded_terminals = set(), Counter()
+    native_observation_count = 0
+    original_counts = dict(Counter(str(row.get('status')) for row in original))
+    receipt_dir = Path(data_dir) / 'report/strategy_position_fact_sync'
+    for scalar in (Path(data_dir) / 'report/monitor_snapshots').glob('trade_review_*.fact_projection.json*'):
+        match = re.fullmatch(r'trade_review_(\d{4}-\d{2}-\d{2})\.fact_projection\.json(?:\.gz)?', scalar.name)
+        if (match and entry_on_or_after <= match[1] <= as_of
+                and not (receipt_dir / f'strategy_position_fact_sync_{match[1]}.status.json').exists()):
+            raise ValueError('quantity_completion_fact_receipt_missing')
+    for path in sorted(receipt_dir.glob('strategy_position_fact_sync_*.status.json')):
+        match = re.fullmatch(r'strategy_position_fact_sync_(\d{4}-\d{2}-\d{2})\.status\.json', path.name)
+        if not match:
+            continue
+        day = match[1]
+        if not entry_on_or_after <= day <= as_of:
+            continue
+        receipt, _ = _completion_json(path, 128 * 1024)
+        proof = receipt.get('completion_snapshot_source')
+        if proof is None or (isinstance(proof, dict) and proof.get('source_basis') == 'native_original_snapshot_stream'):
+            continue
+        if not isinstance(proof, dict) or proof.get('source_basis') != 'native_bounded_fact_projection':
+            raise ValueError('quantity_completion_source_basis_invalid')
+        issue = entry_generations.get(day, {}).get('issue') if day in entry_generations else validate_day(day)
+        if issue is not None:
+            raise ValueError('quantity_completion_native_source_invalid:' + str(issue))
+        loaded = _completion_day(data_dir, day)
+        if loaded is None:
+            raise ValueError('quantity_completion_projection_missing')
+        completed, generation = loaded
+        generations[day] = generation
+        native_observation_count += len(completed)
+        for terminal in completed:
+            rid = str(terminal['recommendation_id'])
+            native_ids.add(rid)
+            if not completion_fact_scope(terminal):
+                outside = ('other_strategy' if str(terminal['strategy']).upper() not in QUANTITY_FACT_STRATEGIES
+                           else 'other_custody')
+                if rid in current:
+                    raise ValueError('quantity_completion_entry_binding_conflict')
+                excluded_terminals[outside] += 1
+                continue
+            entry = terminal['rec_date'].isoformat()
+            buy_at = _timestamp(terminal['buy_time'])
+            if buy_at is None:
+                raise ValueError('quantity_completion_entry_clock_invalid')
+            if not entry_on_or_after <= buy_at.date().isoformat() <= as_of:
+                excluded_terminals['outside_actual_entry_window'] += 1
+                continue
+            rid = str(terminal['recommendation_id'])
+            source = current.get(rid)
+            if source is None:
+                raise ValueError('quantity_completion_entry_fact_missing')
+            identity = ('stock_code', 'strategy', 'position_tag', 'buy_price', 'buy_qty')
+            normalize = lambda k,v: facts.normalize_strategy(v) if k == 'strategy' else (str(v).upper() if k == 'position_tag' else v)
+            if (entry != str(source['rec_date'])
+                    or any(normalize(k,terminal[k]) != normalize(k,source.get(k)) for k in identity)
+                    or _timestamp(terminal['buy_time']) != _timestamp(source.get('buy_time'))):
+                raise ValueError('quantity_completion_entry_binding_conflict')
+            buy, sell = _timestamp(terminal['buy_time']), _timestamp(terminal['sell_time'])
+            if (buy is None or sell is None or not buy < sell
+                    or sell.date().isoformat() > day or day > as_of
+                    or _number(terminal['sell_price']) is None or terminal['sell_price'] <= 0):
+                raise ValueError('quantity_completion_terminal_clock_invalid')
+            fixed_terminal = (str(terminal['rec_date']), terminal['stock_code'], terminal['buy_price'],
+                              terminal['buy_qty'], buy.isoformat(), terminal['sell_price'], sell.isoformat())
+            if rid in seen_terminal and seen_terminal[rid] != fixed_terminal:
+                raise ValueError('quantity_completion_terminal_identity_conflict')
+            seen_terminal[rid] = fixed_terminal
+            if str(source.get('status')).upper() == 'COMPLETED':
+                if (_timestamp(source.get('sell_time')) != sell
+                        or _number(source.get('sell_price')) != _number(terminal['sell_price'])):
+                    raise ValueError('quantity_completion_original_terminal_conflict')
+            original_status = source.get('original_fact_status', source.get('status'))
+            updated = dict(source)
+            observed_counts = []
+            count_sources = dict(source.get('completion_scale_in_observations') or {})
+            for key in ('add_count', 'avg_down_count', 'pyramid_count'):
+                if key in terminal:
+                    original_count = _number(source.get(key))
+                    if original_count is not None and terminal[key] < original_count:
+                        raise ValueError('quantity_completion_scale_in_count_conflict')
+                    updated[key] = terminal[key]
+                    count_sources[key] = {'source_date': day, 'value': terminal[key]}
+                    observed_counts.append(key)
+            for key in ('status', 'sell_price', 'sell_time', 'profit_rate', 'realized_pnl_krw',
+                        'economics_source_status', 'actual_cost_reconciliation_status', 'actual_cost_source_generation',
+                        'completion_census_run_id', 'completion_census_projection_sha256', 'broker_actual_fees_taxes_krw'):
+                value = terminal.get(key)
+                updated[key] = value.isoformat() if isinstance(value, datetime) else value
+            updated.update(original_fact_status=original_status, completion_source_date=day,
+                           completion_generation=generation,
+                           completion_observed_scale_in_fields=observed_counts,
+                           completion_scale_in_observations=count_sources)
+            current[rid] = updated
+            if original_status != 'COMPLETED':
+                overlays.add(rid)
+    verify_completion_overlay_generations(generations, data_dir=data_dir)
+    result = ResidentFacts(list(current.values()))
+    result.completion_generations = generations
+    result.completion_overlay_summary = dict(schema='initial_quantity_completion_overlay_v1',
+        as_of=as_of, overlaid_record_ids=sorted(overlays), overlaid_completed_count=len(overlays),
+        native_terminal_record_count=len(native_ids),
+        native_terminal_observation_count=native_observation_count,
+        applicable_terminal_record_count=len(seen_terminal),
+        excluded_native_terminal_observation_counts=dict(excluded_terminals),
+        original_fact_status_counts=original_counts,
+        current_fact_status_counts=dict(Counter(str(row.get('status')) for row in result)),
+        source_scope='entry_day_facts_plus_exact_completion_date_observations',
+        entry_day_database_or_source_mutation=False)
+    return result

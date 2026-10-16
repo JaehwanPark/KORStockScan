@@ -489,6 +489,195 @@ def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick"
     return current
 
 
+def _completion_overlay_observer_fixture(monkeypatch):
+    from datetime import date
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    native = dict(recommendation_id=1, rec_date=date(2026, 9, 27),
+                  stock_code='005930', strategy='SCALPING', position_tag='SCANNER',
+                  status='COMPLETED', buy_price=100, buy_qty=1,
+                  buy_time=datetime(2026, 9, 27, 14), sell_price=101,
+                  sell_time=datetime(2026, 9, 28, 10), profit_rate=None,
+                  realized_pnl_krw=None, economics_source_status='source_gap_broker_actual_cost_missing')
+    generation = {'schema': 'test_verified_native_completion', 'source_date': '2026-09-28'}
+    entry = {'issue': None, 'sha256': 'a' * 64}
+    row = {key: (value.isoformat() if isinstance(value, (datetime, date)) else value)
+           for key, value in native.items()}
+    row.update(original_fact_status='HOLDING', completion_source_date='2026-09-28',
+               completion_generation=generation, fact_generation=entry,
+               completion_observed_scale_in_fields=[], completion_scale_in_observations={})
+    census = dict(completion_overlay_generations={'2026-09-28': generation},
+                  as_of_completed_population_count=1,
+                  persisted_fact_generations={'2026-09-27': entry},
+                  completion_overlay_summary=dict(
+                      schema='initial_quantity_completion_overlay_v1', as_of='2026-09-28',
+                      overlaid_record_ids=['1'], overlaid_completed_count=1,
+                      native_terminal_record_count=1,
+                      native_terminal_observation_count=1,
+                      applicable_terminal_record_count=1,
+                      excluded_native_terminal_observation_counts={},
+                      original_fact_status_counts={'HOLDING': 1},
+                      current_fact_status_counts={'COMPLETED': 1},
+                      source_scope='entry_day_facts_plus_exact_completion_date_observations',
+                      entry_day_database_or_source_mutation=False))
+    bounded_reader = object()
+    def verified(generations, *, data_dir, read):
+        assert read is bounded_reader
+        assert generations == {'2026-09-28': generation}
+        return {'2026-09-28': [native]}
+    monkeypatch.setattr(cache, 'verify_completion_overlay_generations', verified)
+    return row, census, bounded_reader
+
+
+def test_quantity_completion_observer_preserves_original_holding_and_null_economics(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    result = detector._quantity_completion_overlay_observation(
+        tmp_path, '2026-09-28', census, [row], reader)
+    assert result['postclose_as_of_completed_population_count'] == 1
+    assert result['postclose_original_fact_status_counts'] == {'HOLDING': 1}
+    assert result['postclose_completion_overlay_summary']['overlaid_record_ids'] == ['1']
+    assert row['profit_rate'] is row['realized_pnl_krw'] is None
+
+
+@pytest.mark.parametrize('field', ['native_terminal_observation_count',
+                                  'applicable_terminal_record_count', 'original_fact_status_counts'])
+def test_quantity_completion_observer_rejects_boolean_census_count(tmp_path, monkeypatch, field):
+    from src.engine.error_detectors import artifact_freshness as detector
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    census['completion_overlay_summary'][field] = {'HOLDING': True} if field.endswith('_counts') else True
+    with pytest.raises(ValueError, match='quantity_completion_overlay_summary_invalid'):
+        detector._quantity_completion_overlay_observation(tmp_path, '2026-09-28', census, [row], reader)
+
+
+@pytest.mark.parametrize('field', ['add_count', 'avg_down_count', 'pyramid_count'])
+def test_quantity_completion_observer_rejects_zeroing_observed_scale_in(tmp_path, monkeypatch, field):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    verified = cache.verify_completion_overlay_generations
+    def terminal_with_scale_in(*args, **kwargs):
+        terminals = verified(*args, **kwargs)
+        terminals['2026-09-28'][0][field] = 1
+        return terminals
+    monkeypatch.setattr(cache, 'verify_completion_overlay_generations', terminal_with_scale_in)
+    row[field] = 0
+    with pytest.raises(ValueError, match='quantity_completion_overlay_scale_in_changed'):
+        detector._quantity_completion_overlay_observation(tmp_path, '2026-09-28', census, [row], reader)
+
+
+def test_quantity_completion_observer_keeps_prior_terminal_scale_in_when_latest_omits_count(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    verified = cache.verify_completion_overlay_generations
+    def terminals_with_prior_count(generations, **kwargs):
+        current = verified({'2026-09-28': generations['2026-09-28']}, **kwargs)
+        current['2026-09-28'][0]['sell_time'] = datetime(2026, 9, 27, 15)
+        current['2026-09-27'] = [{**current['2026-09-28'][0], 'add_count': 1}]
+        return current
+    monkeypatch.setattr(cache, 'verify_completion_overlay_generations', terminals_with_prior_count)
+    census['completion_overlay_generations']['2026-09-27'] = {'source_date': '2026-09-27'}
+    census['completion_overlay_summary']['native_terminal_observation_count'] = 2
+    row.update(sell_time='2026-09-27T15:00:00', add_count=1,
+               completion_scale_in_observations={'add_count': {'source_date': '2026-09-27', 'value': 1}})
+    assert detector._quantity_completion_overlay_observation(
+        tmp_path, '2026-09-28', census, [row], reader)['postclose_as_of_completed_population_count'] == 1
+    row['add_count'] = 0
+    with pytest.raises(ValueError, match='quantity_completion_overlay_scale_in_changed'):
+        detector._quantity_completion_overlay_observation(tmp_path, '2026-09-28', census, [row], reader)
+
+
+@pytest.mark.parametrize('damage', [None, 'fixed_terminal_conflict', 'stale_completion', 'missing_overlay'])
+def test_quantity_completion_observer_uses_latest_verified_terminal_and_allows_cost_refresh(
+        tmp_path, monkeypatch, damage):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    verified = cache.verify_completion_overlay_generations
+    later = {'schema': 'test_verified_native_completion', 'source_date': '2026-09-29'}
+    old_generation = row['completion_generation']
+    def two_days(generations, **kwargs):
+        source = verified({'2026-09-28': old_generation}, **kwargs)
+        source['2026-09-29'] = [{**source['2026-09-28'][0],
+                               'actual_cost_source_generation': 'later-cost-proof'}]
+        if damage == 'fixed_terminal_conflict':
+            source['2026-09-29'][0]['sell_price'] = 102
+        return source
+    monkeypatch.setattr(cache, 'verify_completion_overlay_generations', two_days)
+    census['completion_overlay_generations']['2026-09-29'] = later
+    census['completion_overlay_summary']['native_terminal_observation_count'] = 2
+    census['completion_overlay_summary']['as_of'] = '2026-09-29'
+    if damage != 'stale_completion':
+        row.update(completion_source_date='2026-09-29', completion_generation=later,
+                   actual_cost_source_generation='later-cost-proof')
+    if damage == 'missing_overlay':
+        row.pop('completion_generation')
+        row.pop('completion_source_date')
+    if damage is None:
+        assert detector._quantity_completion_overlay_observation(
+            tmp_path, '2026-09-29', census, [row], reader)['postclose_as_of_completed_population_count'] == 1
+    else:
+        with pytest.raises(ValueError, match='quantity_completion_overlay_'):
+            detector._quantity_completion_overlay_observation(tmp_path, '2026-09-29', census, [row], reader)
+
+
+@pytest.mark.parametrize('strategy,custody,reason', [
+    ('SCALPING', 'MANUAL', 'other_custody'),
+    ('SCALPING', 'EPISODE', 'other_custody'),
+    ('SWING', 'SCALP_BASE', 'other_strategy'),
+])
+def test_quantity_completion_observer_foreign_custody_does_not_block_main(
+        tmp_path, monkeypatch, strategy, custody, reason):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    verified = cache.verify_completion_overlay_generations
+    def with_foreign_terminal(*args, **kwargs):
+        native = verified(*args, **kwargs)
+        native['2026-09-28'].append({**native['2026-09-28'][0], 'recommendation_id': 2,
+                                   'strategy': strategy, 'position_tag': custody})
+        return native
+    monkeypatch.setattr(cache, 'verify_completion_overlay_generations', with_foreign_terminal)
+    census['completion_overlay_summary'].update(
+        native_terminal_record_count=2, native_terminal_observation_count=2,
+        excluded_native_terminal_observation_counts={reason: 1})
+    assert detector._quantity_completion_overlay_observation(
+        tmp_path, '2026-09-28', census, [row], reader)['postclose_as_of_completed_population_count'] == 1
+
+
+def test_quantity_completion_observer_same_record_foreign_custody_remains_conflict(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    verified = cache.verify_completion_overlay_generations
+    def changed_owner(*args, **kwargs):
+        native = verified(*args, **kwargs)
+        native['2026-09-28'][0]['position_tag'] = 'MANUAL'
+        return native
+    monkeypatch.setattr(cache, 'verify_completion_overlay_generations', changed_owner)
+    with pytest.raises(ValueError, match='quantity_completion_overlay_custody_conflict'):
+        detector._quantity_completion_overlay_observation(tmp_path, '2026-09-28', census, [row], reader)
+
+
+@pytest.mark.parametrize('damage', ['population', 'omitted_generation', 'record',
+                                  'invented_zero_cost', 'clock', 'original_fact',
+                                  'summary', 'future_day'])
+def test_quantity_completion_observer_rejects_self_consistent_report_with_wrong_native_terminal(
+        tmp_path, monkeypatch, damage):
+    from src.engine.error_detectors import artifact_freshness as detector
+    row, census, reader = _completion_overlay_observer_fixture(monkeypatch)
+    if damage == 'population': census['as_of_completed_population_count'] = 0
+    elif damage == 'omitted_generation': del census['completion_overlay_generations']
+    elif damage == 'record': row['recommendation_id'] = 2
+    elif damage == 'invented_zero_cost': row['realized_pnl_krw'] = 0
+    elif damage == 'clock': row['sell_time'] = '2026-09-28T10:00:01'
+    elif damage == 'original_fact': row['fact_generation'] = {'issue': None, 'sha256': 'b' * 64}
+    elif damage == 'summary': census['completion_overlay_summary']['original_fact_status_counts'] = {'COMPLETED': 1}
+    else: census['completion_overlay_generations'] = {'2026-09-29': row['completion_generation']}
+    with pytest.raises(ValueError, match='quantity_completion_overlay_'):
+        detector._quantity_completion_overlay_observation(tmp_path, '2026-09-28', census, [row], reader)
+
+
 def test_initial_quantity_semantics_separates_missing_policy_and_valid_empty(
         tmp_path, monkeypatch):
     assert _initial_quantity_semantics(tmp_path, "2026-09-23")["status"] == (
@@ -587,6 +776,24 @@ def test_quantity_bounded_child_changes_fail_closed(tmp_path, monkeypatch, child
     assert result['status'] == 'source_invalid'
     assert result['bounded_contract_validated'] is False
     assert result['observation_complete'] is False
+
+
+@pytest.mark.parametrize('damage', ['truncated', 'crc', 'deflate'])
+def test_quantity_bounded_compressed_child_failure_is_source_invalid(tmp_path, monkeypatch, damage):
+    import gzip
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage = json.loads(_quantity_semantic_stage(tmp_path).read_bytes())
+    path = Path(stage['report_path'])
+    compressed = bytearray(gzip.compress(path.read_bytes(), mtime=0))
+    if damage == 'truncated': compressed = compressed[:-5]
+    elif damage == 'crc': compressed[-8] ^= 1
+    else: compressed[10:14] = b'\xff' * 4
+    Path(str(path) + '.gz').write_bytes(compressed)
+    path.unlink()
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == 'source_invalid'
+    assert result['bounded_contract_validated'] is False
+    assert result['full_source_revalidation_performed'] is False
 
 
 def test_quantity_bounded_observer_rejects_oversize_before_decoding(tmp_path, monkeypatch):
