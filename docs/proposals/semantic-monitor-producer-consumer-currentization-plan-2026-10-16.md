@@ -283,3 +283,11 @@ source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10
 상승누락 보고서는 원천 감사 preflight의 격리 완료 뒤 생성한다. 감사가 결함 행을 제거한 경우 격리 이전 보고서의 source hash/count를 현재 입력으로 승계하지 않는다. 정상·복구 모드의 기존 검증된 preflight 재사용과 live reader 보호, 자원·EOD gate는 유지한다. 관리 릴리스의 종목원장 조회는 공용 DATA_DIR의 검증된 mount를 사용하고, 하위 링크·plain/gzip 충돌·손상된 최신 세대는 기존 strict reader가 계속 거부한다. 퇴역 collector나 정책 발행기를 복원하지 않는다.
 
 기존 원본·실패·원천 격리 영수증을 보존한 뒤 영향 producer와 직접 소비자만 재생성하고 tower/checklist/strict/controller·10/19 준비로 닫는다. 현재 기계정책·비용·custody·runtime env·provider·주문·수량·hard safety는 바꾸지 않는다. 실제 완료 영수증과 의미적 잔여는 기존 DirectFamilyPreopenPolicyHandoff 및 PostcloseStructuralPolicyCompletion1011 owner에 기록한다.
+
+## 14. 장후 보유 연구 캐시의 물리 레코드 분할
+
+정규 postclose_exit 최초 시도는 보유 연구에서 `research_shard_record_partition_required`로 실패했다. 앞선 거래·매도 후속·누락 진입 보고서와 원 실패 로그를 보존했다. 같은 입력을 다시 계산하던 분석 retry의 정확한 PGID만 확인 후 중단했으며 매매 프로세스·정책·주문은 변경하지 않았다.
+
+격리된 native replay에서 호가 9,665바이트와 파생 feature 77,987바이트의 결합 레코드 87,655바이트를 재현했다. 32개 `new_observations`는 정상 계산 결과이며 source gap이나 잘림으로 처리하지 않는다. 이 목록을 기존 content-addressed tree로 분할하고 캐시 소비 시 hash/count 검증 후 복원한다. 64KiB 물리 row·256KiB leaf·64MiB 캐시 한도, 후보·분류·경제성 계약은 유지한다. 단일 관측 자체가 분할 한도를 넘으면 기존 무캐시 streaming으로 동일 feature를 소비하며 유효 관측을 버리지 않는다.
+
+소유 모듈은 기존 `automation/main_trailing_partitioned_research.py`와 대응 테스트다. 분할 전후 원 관측의 전수 일치·한 번 분류·변조 거부·무캐시 보존 및 native 연구/holding 회귀를 검증한 후 복구한다. 기존 네 산출물의 완전한 manifest가 없으면 세 파일의 존재만으로 완료나 재사용 영수증을 만들지 않는다. 불완전 snapshot은 수리된 producer로 다시 생성하고, 별도 성공한 정책 stage는 native 계약 검증 후 재사용한다. owner는 `HoldingProfitExitSourceContractRepair`이며 다음 영업일 준비와 실제 PREOPEN/PID 수용은 구분한다.

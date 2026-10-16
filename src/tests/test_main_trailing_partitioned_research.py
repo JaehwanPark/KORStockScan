@@ -188,6 +188,63 @@ def test_cache_overflow_classifies_once_for_all_candidates_and_preserves_add(tmp
     assert len(calls)==1
 
 
+def test_large_feature_observations_are_lossless_and_classified_once(tmp_path,monkeypatch):
+    from collections import Counter
+    from dataclasses import asdict
+    from src.engine.scalping.trailing_mechanical_strength import StrengthDecision
+    event={'kind':'QUOTE','known_at':1,'source_sha256':'a'*64}
+    observations=[{'sequence':i,'trade_receipts':[{'qty':i,'source':'x'*2400}]} for i in range(32)]
+    strength=StrengthDecision(state='STRONG',reason='strong_retained',
+        **{key:None for key in StrengthDecision.__dataclass_fields__ if key not in {'state','reason','new_observations'}},
+        new_observations=tuple(observations))
+    feature=['REGULAR',None,asdict(strength)];calls=[]
+    assert len(storage.encoded([event,feature]))>storage.RECORD_BYTES
+    def pairs(events,config):
+        calls.append(1)
+        for row in events:yield row,feature
+    monkeypatch.setattr(research,'stream_pairs',pairs)
+    counters=Counter();quota={'used':0,'limit':research.CACHE_BYTES}
+    prepared=research._prepared(lambda:iter([event]),None,count=1,end=1,last_add=0,
+        cache_root=tmp_path,quota=quota,counters=counters)
+    for _ in range(2):
+        row,(_,_,actual)=next(prepared.pairs())
+        assert row==event and asdict(actual)==asdict(strength)
+    assert calls==[1] and counters['feature_cache_created']==1
+    for path in tmp_path.rglob('*.json'):
+        body=json.loads(path.read_bytes())
+        assert all(len(storage.encoded(row))<=storage.RECORD_BYTES for row in body.get('rows',[]))
+
+
+def test_partitioned_feature_cache_rejects_changed_observation_shard(tmp_path,monkeypatch):
+    event={'kind':'QUOTE','known_at':1}
+    feature=['REGULAR',None,{'state':'STRONG','new_observations':[{'sequence':i,'source':'x'*2400} for i in range(32)]}]
+    monkeypatch.setattr(research,'stream_pairs',lambda events,config:((row,feature) for row in events))
+    ref=storage.write_tree(tmp_path,research._cache_pairs(lambda:iter([event]),None,tmp_path,
+        {'used':0,'limit':research.CACHE_BYTES}),inline=False)
+    _,cached=next(storage.iter_tree(tmp_path,ref))
+    child=cached[2]['new_observations_ref'];path=storage.safe_path(tmp_path,child['path'])
+    path.write_bytes(path.read_bytes()+b' ')
+    with pytest.raises(ValueError,match='generation'):
+        list(research._cached_pairs(tmp_path,ref))
+
+
+def test_single_oversized_observation_uses_existing_stream_without_truncation(tmp_path,monkeypatch):
+    from collections import Counter
+    from dataclasses import asdict
+    from src.engine.scalping.trailing_mechanical_strength import StrengthDecision
+    event={'kind':'QUOTE','known_at':1}
+    strength=StrengthDecision(state='STRONG',reason='strong_retained',
+        **{key:None for key in StrengthDecision.__dataclass_fields__ if key not in {'state','reason','new_observations'}},
+        new_observations=({'source':'x'*storage.RECORD_BYTES},))
+    feature=['REGULAR',None,asdict(strength)]
+    monkeypatch.setattr(research,'stream_pairs',lambda events,config:((row,feature) for row in events))
+    counters=Counter()
+    prepared=research._prepared(lambda:iter([event]),None,count=1,end=1,last_add=0,
+        cache_root=tmp_path,quota={'used':0,'limit':research.CACHE_BYTES},counters=counters)
+    assert asdict(next(prepared.pairs())[1][2])==asdict(strength)
+    assert counters['feature_cache_overflow_streamed']==1
+
+
 def test_streaming_duplicate_across_closed_gap_matches_resident(tmp_path,monkeypatch):
     from src.engine.scalping import universal_trailing_replay as kernel
     from src.tests.test_main_all_scope_trailing import position,quote,vector

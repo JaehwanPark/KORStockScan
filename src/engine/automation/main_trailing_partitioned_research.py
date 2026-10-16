@@ -28,14 +28,36 @@ SCHEMA='main_all_scope_exit_research_v2'
 CACHE_BYTES=64*1024*1024
 
 
+def _cache_pairs(factory,config,cache_root,quota):
+    """Keep every observation while bounding each physical cache record."""
+    for event,feature in stream_pairs(factory(),config):
+        if len(storage.encoded([event,feature]))>storage.RECORD_BYTES and feature[2]:
+            strength=dict(feature[2])
+            observations=strength.pop('new_observations')
+            strength['new_observations_ref']=storage.write_tree(
+                cache_root,observations,quota=quota,inline=False)
+            feature=[feature[0],feature[1],strength]
+        yield [event,feature]
+
+
+def _cached_pairs(cache_root,reference):
+    for event,feature in storage.iter_tree(cache_root,reference):
+        if feature[2] and 'new_observations_ref' in feature[2]:
+            strength=dict(feature[2])
+            reference=strength.pop('new_observations_ref')
+            strength['new_observations']=list(storage.iter_tree(cache_root,reference))
+            feature=[feature[0],feature[1],strength]
+        yield event,feature
+
+
 def _prepared(factory,config,*,count,end,last_add,cache_root,quota,counters):
     if count*1024 <= CACHE_BYTES-quota['used']:
         try:
-            ref=storage.write_tree(cache_root,([event,feature] for event,feature in stream_pairs(factory(),config)),quota=quota,inline=False)
-            raw_pairs=lambda: iter(storage.iter_tree(cache_root,ref))
+            ref=storage.write_tree(cache_root,_cache_pairs(factory,config,cache_root,quota),quota=quota,inline=False)
+            raw_pairs=lambda: _cached_pairs(cache_root,ref)
             counters['feature_cache_created']+=1
         except ValueError as exc:
-            if str(exc)!='research_cache_budget_exceeded': raise
+            if str(exc) not in {'research_cache_budget_exceeded','research_shard_record_partition_required'}: raise
             raw_pairs=lambda: stream_pairs(factory(),config)
             counters['feature_cache_overflow_streamed']+=1
     else:
