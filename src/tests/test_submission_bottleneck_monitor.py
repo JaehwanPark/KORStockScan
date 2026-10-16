@@ -4646,3 +4646,62 @@ def test_delay_cursor_migration_waits_for_window_without_new_source_gap(tmp_path
     assert result['issues']=={} and result['status']=='unobservable'
     assert result['diagnostics']['raw_observation_window_pending']==1
     assert result['healthy'].get('raw_source_unobservable_with_summary',0)==0
+
+
+@pytest.mark.parametrize('stage', ['scalp_trailing_mechanical_input',
+    'scalping_scanner_fast_precheck', 'pre_submit_delay_quote_observed'])
+def test_delay_cursor_retains_post_asof_rows_without_future_intent_effects(tmp_path, stage):
+    import copy
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor
+    day='2026-10-16';now=monitor.stamp(day+'T10:05:00+09:00')
+    base=dict(event_type='pipeline_event',pipeline='ENTRY_PIPELINE',stock_code='196170',
+        record_id=49346,stage=stage,emitted_date=day,fields=dict(
+            delay_intent_id='future-intent',target_delay_sec='invalid',quote_valid=False))
+    rows=[dict(base,emitted_at=(now+timedelta(milliseconds=1)).isoformat()),
+          dict(base,record_id=49347,emitted_at=(now-timedelta(seconds=2)).isoformat())]
+    raw=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl';raw.parent.mkdir()
+    raw.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+    writer=ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries',mode='shadow')
+    for row in rows:writer.submit(row)
+    writer.flush()
+    first=monitor.pre_submit_delay_source_semantics(tmp_path,now)
+    assert first['cursor']['offset']==raw.stat().st_size
+    assert first['diagnostics']['raw_future_events_deferred']==1
+    assert sum(v['count'] for v in first['cursor']['minutes'].values())==2
+    if stage=='pre_submit_delay_quote_observed':
+        assert first['issues']['quote_horizon_invalid']==1  # Only the past row.
+    original=copy.deepcopy(first['cursor'])
+    again=monitor.pre_submit_delay_source_semantics(tmp_path,now,first['cursor'])
+    assert first['cursor']==original
+    assert again['cursor']['minutes']==original['minutes']
+    later=monitor.pre_submit_delay_source_semantics(tmp_path,now+timedelta(minutes=3),again['cursor'])
+    fresh=monitor.pre_submit_delay_source_semantics(tmp_path,now+timedelta(minutes=3))
+    assert later['cursor']['minutes']==fresh['cursor']['minutes']
+    assert later['cursor']['delay_events']==fresh['cursor']['delay_events']
+    assert 'producer_raw_summary_window_mismatch' not in later['issues']
+    if stage=='pre_submit_delay_quote_observed':assert later['issues']['quote_horizon_invalid']==2
+
+
+def test_delay_cursor_partial_append_and_legacy_generation_do_not_lose_boundary(tmp_path):
+    from copy import deepcopy
+    day='2026-10-16';now=monitor.stamp(day+'T10:05:00+09:00')
+    row=dict(event_type='pipeline_event',pipeline='ENTRY_PIPELINE',stage='scalp_trailing_mechanical_input',
+        stock_code='196170',record_id=49346,emitted_date=day,
+        emitted_at=(now+timedelta(milliseconds=1)).isoformat(),fields={})
+    wire=(json.dumps(row)+'\n').encode();raw=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    raw.parent.mkdir();raw.write_bytes(wire[:len(wire)//2])
+    first=monitor.pre_submit_delay_source_semantics(tmp_path,now)
+    assert first['cursor']['offset']==0
+    with raw.open('ab') as handle:handle.write(wire[len(wire)//2:])
+    second=monitor.pre_submit_delay_source_semantics(tmp_path,now,first['cursor'])
+    assert sum(v['count'] for v in second['cursor']['minutes'].values())==1
+    legacy=deepcopy(second['cursor']);legacy.update(delay_cursor_contract_version=2,minutes={})
+    migrated=monitor.pre_submit_delay_source_semantics(tmp_path,now+timedelta(seconds=1),legacy)
+    assert migrated['diagnostics']['raw_cursor_contract_migrated']==1
+    assert migrated['sources']['raw']=='partial'
+    assert sum(v['count'] for v in migrated['cursor']['minutes'].values())==1
+    replacement=raw.with_suffix('.new');replacement.write_bytes(wire.replace(b'49346',b'49347'))
+    replacement.replace(raw)
+    changed=monitor.pre_submit_delay_source_semantics(tmp_path,now+timedelta(seconds=1),second['cursor'])
+    assert changed['sources']['raw']=='partial'
+    assert sum(v['count'] for v in changed['cursor']['minutes'].values())==1

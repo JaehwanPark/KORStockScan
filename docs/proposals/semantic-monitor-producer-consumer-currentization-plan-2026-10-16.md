@@ -267,3 +267,11 @@
 ## 11. 비상시 원천 인계·제어응답 후속 수리
 
 18:35 상세 점검에 따른 구현·리뷰·보완·배포·재기동 승인을 접수했다. 원천 인계와 Main 준비 조건을 함께 수리하고, 원 신호/5초·실제 수신시각을 보존한다. 제어응답은 local 송신과 분리하며 불명 귀속을 정상 ACK로 세지 않는다. 미배포 unsigned first-trade feature-gap 관측 수리도 통합한다. [구현 리뷰](../audits/nonfixed-source-continuity-review-2026-10-16.md)의 코드 검증과 actual PID/자연 수용을 분리하며 현재 owner는 `NonfixedDispatchReadinessReview1012`를 유지한다.
+
+## 12. raw cursor 경계와 누적 보조연구 통합
+
+후속 사용자는 raw117/summary118의 cursor 결함 보완과 `7d62534e3`의 누적 보조연구를 함께 코드리뷰·수정·배포·재기동하도록 승인했다. v3 cursor는 as-of 이후 읽힌 event의 최소 projection을 보존하고 현재 intent 분석에서 제외한다. v2의 결손 가능 상태는 bounded 관측 경계로 이행하며 과거 원천 복구를 주장하지 않는다. 실제118행의 incremental/fresh count·hash parity 및 영향 회귀를 검증한다.
+
+보조연구의 전면 교체 비권고와800회 누적 사용량을 유지한다. 같은 seed와 actual 요청/응답을 재사용해 native 인계를 확인하고 주성 AFTER/SOR·10만원 이상, 기타 비삼성 PRE/NXT·2만~10만원의 두 개선 scope만 기존 CAS publisher로 적용한다. 새 연구 호출은 없다. cursor 코드 owner는 `PreSubmitSemanticCurrentization1016`, 보조정책 owner는 `DirectFamilySourceRepairCompactAuxiliary`, 실제 종목 수신 결손은 `NonfixedDispatchReadinessReview1012`를 유지한다.
+
+003540·417860의 local 송신·연결 success·귀속 unknown·실제 wire0은 분리한다. 기존 bounded probe/회전을 유지하고 새 exact source가 생기기 전 정상화하지 않는다. [통합 리뷰](../audits/main-source-cursor-and-auxiliary-integration-review-2026-10-16.md)의 정지 전 정책 인계·native parity·delay/stop/holding gate 후 정규 전환, 새 PID/observer/full detector와 보조 binding 소비를 각각 확인한다.

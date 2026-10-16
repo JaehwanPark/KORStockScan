@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import hashlib
 import json
@@ -1652,16 +1653,19 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     raw_path = data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     prior_today = isinstance(prior_cursor, dict) and prior_cursor.get("date") == day
     previous = prior_cursor if prior_today else {}
-    if previous and previous.get("delay_cursor_contract_version") != 2:
+    migrated = bool(previous and previous.get("delay_cursor_contract_version") != 3)
+    if migrated:
         previous = {}
     if previous and (type(previous.get("offset")) is not int
                      or not isinstance(previous.get("minutes"), dict)
                      or not isinstance(previous.get("delay_events"), list)
                      or stamp(previous.get("coverage_started_at")) is None):
         previous = {}
-    cursor = {"date": day, "delay_cursor_contract_version": 2, "offset": 0, "device": None, "inode": None,
+    cursor = {"date": day, "delay_cursor_contract_version": 3, "offset": 0, "device": None, "inode": None,
               "coverage_started_at": None, "minutes": {}, "delay_events": []}
     issues, diagnostics, healthy, examples = Counter(), Counter(), Counter(), []
+    if migrated:
+        diagnostics['raw_cursor_contract_migrated'] += 1
     issue_scopes, healthy_scopes = Counter(), Counter()
     raw_status = "unobservable"
     try:
@@ -1676,7 +1680,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
             same_file = False
             diagnostics['raw_generation_rewritten_or_legacy_cursor'] += 1
         if same_file and 0 <= previous.get("offset", -1) <= stat_before.st_size:
-            cursor.update({key: previous.get(key) for key in
+            cursor.update({key: copy.deepcopy(previous.get(key)) for key in
                            ("offset", "coverage_started_at", "minutes", "delay_events")})
         else:
             reset_generation = prior_today
@@ -1714,11 +1718,17 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                 at = stamp(row.get("emitted_at"))
                 if at is None:
                     raise ValueError("raw_event_time_invalid")
-                if at.date() != now.date() or at > now:
+                if at.date() != now.date():
                     continue
                 event = summary_event_from_payload(row, summary_stages=PRODUCER_SUMMARY_STAGES)
                 if event is None:
                     continue
+                # Keep every projected physical row before advancing its byte
+                # cursor. A concurrent append can be later than this run's
+                # as-of; its closed-minute bucket remains dormant until due.
+                # Intent analysis below uses only rows visible at this as-of.
+                if at > now:
+                    diagnostics['raw_future_events_deferred'] += 1
                 minute = event.emitted_at.replace(second=0, microsecond=0).isoformat()
                 key = f"{minute}|{event.stage}"
                 item = cursor["minutes"].setdefault(key, {"count": 0, "identity_sum": "0" * 64})
@@ -1878,6 +1888,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     if raw_status == "complete":
         grace = now - timedelta(seconds=summary_grace_sec)
         window = now - timedelta(seconds=DELAY_WINDOW_SEC)
+        visible_delay_events = [row for row in cursor['delay_events'] if stamp(row['at']) <= now]
         for key in set(cursor["minutes"]) | (set(summary_minutes) if summary_status == "complete" else set()):
             minute = stamp(key.split("|", 1)[0])
             if minute is None or minute < window or minute > grace:
@@ -1905,10 +1916,10 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
         raw_recent_identity_counts = Counter()
         commit_by_intent = {
             (row.get("stock_code", ""), row.get("record_id", ""), row["delay_intent_id"]): row
-            for row in cursor["delay_events"]
+            for row in visible_delay_events
             if row["stage"] == "pre_submit_delay_committed" and row["delay_intent_id"]
         }
-        for row in cursor["delay_events"]:
+        for row in visible_delay_events:
             at = stamp(row["at"])
             if at < window or at > now - timedelta(seconds=20):
                 continue
@@ -1984,7 +1995,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                 if len(examples) < 3:
                     examples.append({"reason": "compact_raw_event_missing", "event_id": identity})
         by_intent = {}
-        for row in cursor["delay_events"]:
+        for row in visible_delay_events:
             if not row["delay_intent_id"]:
                 continue
             identity = (row.get("stock_code", ""), row.get("record_id", ""), row["delay_intent_id"])
