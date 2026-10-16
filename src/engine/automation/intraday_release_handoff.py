@@ -841,6 +841,16 @@ REVIEWED_NONFIXED_CONTINUITY_SOURCES = {'src/engine/kiwoom_sniper_v2.py': ('bb8c
  'src/engine/sniper_state_handlers.py': ('bb6108b506bebfb957f7257bbf4e466837f19a48eff6a742a245f5c3b3e57dcf',
                                          'b18c9204588e52239be3d9167c42fd2ff74855a9244dbb1acd1c36dc78d25fe5')}
 
+# Exact report-only as-of retention repair, reviewed with the actual 118 rows.
+# Review: docs/audits/main-source-cursor-and-auxiliary-integration-review-2026-10-16.md.
+REVIEWED_CURSOR_ASOF_SOURCES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '203b397835edf5ff0d578aa8d5b25126f8c61307adbe92031371b9000d710e56',
+        '082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e',
+    ),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -881,7 +891,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_NONFIXED_CONTINUITY_SOURCES.get(name),
+        if pair in (REVIEWED_CURSOR_ASOF_SOURCES.get(name),
+                    REVIEWED_NONFIXED_CONTINUITY_SOURCES.get(name),
                     REVIEWED_DELAY_SITUATION_SOURCES.get(name),
                     REVIEWED_LONG4_SOURCE_RETENTION_SOURCES.get(name),
                     REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES.get(name),

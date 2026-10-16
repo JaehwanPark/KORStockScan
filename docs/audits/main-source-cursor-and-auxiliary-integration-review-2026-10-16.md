@@ -45,4 +45,6 @@ v2는 이미 행을 잃었을 수 있어 그대로 정상으로 승계하지 않
 - Python compile·diff·print-only parser를 확인한 clean candidate를 만든다. 현재 selector/PID/start, active-policy code handoff 및 delay/stop/holding 계약을 **Main 정지 전에** 검증한다. 원 정책/PREOPEN/strict/controller는 보존하고 정규 `ordered_intraday_deploy`를 사용한다.
 - launch 후 정확 PID 소비, 기존 producer/lock을 통한 현재 observer, full detector를 확인한다. 두 보조 overlay는 명시한 평가를 재검증하여 발행하고 최종 binding/PID receipt를 확인한다. 수신 결손·관측 경계 pending·실현 경제성은 따로 보고한다.
 
+정지 전 반복검토에서 첫c0fb7faab 후보의 delay code 검증이 `entry_consumer_unreviewed_change:src/engine/monitoring/submission_bottleneck_monitor.py`로 거부됐다. Main은 중지하지 않았다. 검증을 끄지 않고 기존 source-pair 경로에 원PREOPEN bytes→검토한 cursor bytes의 exact 두 해시만 추가했으며 before/after 변조·dirty verifier·원 digest 불일치 거부를 재검증한다. 첫 후보와 발급된 원 code-handoff는 실패 전 이력으로 보존한다.
+
 Evidence: `/home/ubuntu/KORStockScan/tmp/source-gap-cursor-aux-integration-20261016/`, [원 점검](/home/ubuntu/KORStockScan/tmp/source-gap-alert-review-20261016-1923/report.md), [native 비교 인계](/home/ubuntu/KORStockScan/data/report/reversal_auxiliary_tuning/research/aux_prompt_research_20261008_01/cumulative-20261016/native-adoption-revalidation.json).
