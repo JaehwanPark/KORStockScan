@@ -6554,7 +6554,7 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
                   "order_leg_sent", "order_bundle_submitted")
         observed = Counter(str(_event_fields(event).get("stage") or "") for event in allowed_events)
         expected = current_generation.get("stage_census") or {}
-        conservation = {stage: {"expected": expected[stage].get("valid_count"),
+        conservation = {stage: {"expected": expected[stage].get("valid_count", 0),
                                 "observed": observed[stage]}
                         for stage in stages if isinstance(expected.get(stage), dict)}
         mismatch = any(type(row["expected"]) is not int or row["expected"] != row["observed"]

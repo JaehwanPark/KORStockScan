@@ -5471,6 +5471,8 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
         plan, leg, bundle, source = _atomic_lineage_fixture(target)
         events = [plan, leg, bundle]
         source['stage_census'] = {event['stage']: {'valid_count':1} for event in events}
+        # The sealed producer represents an absent stage by an empty census.
+        source['stage_census']['entry_execution_sizing_plan_block'] = {}
         if wrapped_projection:
             events = [dict(stage=event['stage'], emitted_date=target,
                 emitted_at=event['emitted_at'], record_id=event['record_id'],
