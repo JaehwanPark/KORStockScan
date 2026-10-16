@@ -244,6 +244,8 @@ def _build_message(
         semantic = item.get("semantic_incident")
         if isinstance(semantic, dict):
             lines.append(f"  source={semantic['source_date']} stage={semantic['stage']} scope={semantic.get('scope')}")
+            if semantic.get('bound_target_date') or semantic.get('next_due_target_date'):
+                lines.append(f"  observed={semantic.get('observation_date')} bound_target={semantic.get('bound_target_date')} next_due={semantic.get('next_due_target_date')}")
             lines.append(f"  affected/eligible/total={semantic.get('affected')}/{semantic.get('eligible')}/{semantic.get('total')}")
             lines.append(f"  artifact={str(semantic.get('artifact'))[:250]} generation={semantic.get('generation')}")
         if action != "-":

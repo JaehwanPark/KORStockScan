@@ -69924,7 +69924,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             venue=stock.get("effective_venue"),
             session=stock.get("market_session_bucket"),
         )
-        from src.engine.scalping.pre_submit_delay_initial_policy import situation
+        from src.engine.scalping.pre_submit_delay_initial_policy import situation, situation_fields
         decision_type["machine_situation"] = situation(machine_fields)
         decision_type["parent_compatibility"] = [str(machine_fields.get(key) or "legacy") for key in (
             "entry_mechanistic_policy_sha256", "entry_ai_soft_policy_sha256")]
@@ -69969,13 +69969,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             delay_id = uuid4().hex
             decision_receipt = dict(
                 delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
-                anchor_contract_version=3, anchor_kind='price_ready',
+                anchor_contract_version=4, anchor_kind='price_ready',
+                selected_delay_sec=delay_policy['delay_sec'],
                 evaluation_attempt_id=machine_key[0],
                 entry_mechanistic_policy_sha256=machine_fields.get('entry_mechanistic_policy_sha256'),
                 entry_ai_soft_policy_sha256=machine_fields.get('entry_ai_soft_policy_sha256'),
                 entry_auxiliary_policy_identity=_entry_auxiliary_identity_json(machine_fields.get('entry_auxiliary_policy_identity')) if machine_fields.get('entry_auxiliary_policy_identity') else None,
                 entry_auxiliary_policy_identity_version=machine_fields.get('entry_auxiliary_policy_identity_version'),
-                primary_branch_id=machine_fields.get('primary_branch_id'),
+                **situation_fields(machine_fields),
                 entry_action='ENTER_NOW', auxiliary_effective_action=_pre_submit_delay_auxiliary_verdict(machine_fields),
                 route=quote_route,
                 quote_transport_epoch=(ws_data or {}).get("market_data_transport_epoch"),
@@ -70047,13 +70048,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             delay_id = uuid4().hex
             decision_receipt = dict(
                 delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
-                anchor_contract_version=3, anchor_kind='price_ready',
+                anchor_contract_version=4, anchor_kind='price_ready',
+                selected_delay_sec=delay_policy['delay_sec'],
                 evaluation_attempt_id=machine_key[0],
                 entry_mechanistic_policy_sha256=machine_fields.get('entry_mechanistic_policy_sha256'),
                 entry_ai_soft_policy_sha256=machine_fields.get('entry_ai_soft_policy_sha256'),
                 entry_auxiliary_policy_identity=_entry_auxiliary_identity_json(machine_fields.get('entry_auxiliary_policy_identity')) if machine_fields.get('entry_auxiliary_policy_identity') else None,
                 entry_auxiliary_policy_identity_version=machine_fields.get('entry_auxiliary_policy_identity_version'),
-                primary_branch_id=machine_fields.get('primary_branch_id'),
+                **situation_fields(machine_fields),
                 entry_action='ENTER_NOW', auxiliary_effective_action=_pre_submit_delay_auxiliary_verdict(machine_fields),
                 route=quote_route,
                 quote_transport_epoch=(ws_data or {}).get("market_data_transport_epoch"),

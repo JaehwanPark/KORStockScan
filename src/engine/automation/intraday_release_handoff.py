@@ -811,6 +811,28 @@ REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES = {'src/engine/sniper_state_handlers.
 # Exact source pairs reviewed in long4-source-retention-integration-review-2026-10-16.md.
 REVIEWED_LONG4_SOURCE_RETENTION_SOURCES = {'src/engine/ai/holding_exit_vote.py': ('05ba419f5affd9f8b329d3719e77cfcf5f3b4c73ac7496ba15336d76faa340c6', '9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b'), 'src/engine/ai/holding_vote_replay_source.py': ('0d67dab01f0cf1d5ef4657659ab433d892d854ecb6e9a656a5d93b2e439ff7cf', '6aa1db742f4f2354c17ed9bd24cfb1bcfaace5e0130a8d0dceef84343ea6a428'), 'src/engine/ai_engine_openai.py': ('e75c946a70ec6513162c5a657604830a82e4d718bd5400076d0e05a1639e56f6', '32ad96c3959cfbc934716a2af3d62f9ef2989a6ae3b3a30e3426be2d1fe7c75f'), 'src/engine/automation/main_stop_postclose.py': ('e9ab07117a0200610e19f4b24ea0000579203628a887e16387b24189b8734a13', 'c3aa703f54661aeae94143fb36afd2d2ac7a4337c1ba346062c21ca2be12a9cc'), 'src/engine/automation/main_stop_source_index.py': ('802a8f3878f5d9d2fd299c79a57f9b84db6bf1de52017f0e995958b65145381d', '791fd757311aa8c0a96b2373165a52a560b026492992e46e9fe386996eb605ff'), 'src/engine/automation/runtime_policy_bootstrap.py': ('7a2e67d6d537ccc0a322bbbde8935f96de74869bc48e456bd13071225dd84b56', '1dcbb457a66330ff9285574c2182b146aa4663ac171358249df7571ee6be2b6a'), 'src/engine/holding_exit_observation_report.py': ('2ec0a7be672eb04044a9094b7ee445af66cef17720df83efe24e6148110ded03', 'd9310a1136cc2086e83037c020d5d44a9d3b3f57d1207697bcd8eac8f6cf73fe'), 'src/engine/kiwoom_sniper_v2.py': ('bb8cc6f224428a073f60826f8aa70e97d4b68b0383c907d681b8be5473a2d7c6', 'e1f43d4d08a0606db678c59f5755b94fbb976ef4ce55ece812ecc00e97c8973e'), 'src/engine/monitoring/submission_bottleneck_monitor.py': ('203b397835edf5ff0d578aa8d5b25126f8c61307adbe92031371b9000d710e56', '1588764df3b3bdedd628d860d832c2ac950171a3928719f4f780ed4a80840ea2'), 'src/engine/scalping/continuous_reversal_policy.py': ('3522757d44f2cb9201892757dc40a0a9650e2c962709d15b2f7b99b737987627', '2c83f7afad5355cda14ef76eb82793ffb1cb982d4e158d260aa71d3c4f1c6cbd'), 'src/engine/scalping/holding_path_vote_policy.py': ('80950db0e9d7420a29cd9ea2b6c6b1b620227a5e13a6e1929c2361b92eb53ab6', '6b739dcdfac2614712e03eb74fb4afeec99cefa28946537c507efc5cc1e5895a'), 'src/engine/scalping/holding_path_vote_replay.py': ('886860aa6181bafb08d5151c4ac1ff0ca5ed6df575cab13e33a0b455cf06366a', 'cd700be6898f87860182379c768cb2960eb79186b187a27e2ed610707924a7cd'), 'src/engine/scalping/main_stop_policy.py': ('8cdd21315d3d0db00f3383406dbb7d885ca02fef7ed957edf4f9535f0f022087', 'a5faea8355cc607e795df2a7f6bf48c385ca509579240a9e23589ec41fa435ad'), 'src/engine/scalping/main_stop_replay.py': ('3194cc743fc664176245ccb5ffbb26469d68c4276bc8c86aa4d0d87377615ffe', 'a9351c17a3b9a7cd84a4be7c6672a801ff77f2c537459d95a9eb18b4eca6ff15'), 'src/engine/scalping/pre_submit_delay_initial_policy.py': ('ea2f93040975dcf7b9fc247ad57c706fd2bab6a9b717da7f754a0364e43dccf0', '74adf3c630fa6ed24819f371007faa8f8b4ee086c330be2cd8431cfe89af4c52'), 'src/engine/scalping/pre_submit_delay_tuning.py': ('c577f885ca02eef999aad71f514fa7a4ef4f7f13e328c0614e93e46b5be6f810', 'e677004513e6c3b5382ea58933aa39e12feac9dcfafbdd93b88dda53e173bf76'), 'src/engine/sniper_execution_receipts.py': ('dc4a57286b38f72c96e538e7eb3851f806af1b9c07e0145f3f5aed51ea00bbe1', '179948c3eb4a0bd7bab6d121ae6d90a0817b82dbef557dea72a25db62c0b8e05'), 'src/engine/sniper_state_handlers.py': ('bb6108b506bebfb957f7257bbf4e466837f19a48eff6a742a245f5c3b3e57dcf', 'f0277cdfb0e2de299d725afc0d047a6c21aa4ec0608d7139e357dba5eb3be459')}
 
+# Exact reviewed delay source/zero-cell/observer repair. The two added
+# dependencies did not belong to the incumbent delay contract; their exact
+# candidate bytes are verified independently without changing its old digest.
+# Evidence: docs/audits/pre-submit-semantic-implementation-review-2026-10-16.md.
+REVIEWED_DELAY_SITUATION_SOURCES = {'src/engine/automation/pre_submit_delay_partitioned_research.py': ('ad5186b7058a1cf7aeefa099cb59e3b03ae51cca7fc26be0e021d90c8e721bdc',
+                                                                    '1f92ea9be98b4a9d0cce66d4105959b21eb03b5d060c501d628b9cef2cc73d65'),
+ 'src/engine/automation/pre_submit_delay_source_ledger.py': ('8b97e228f167eebcf9e6009325d73f1507e1e00eedf53d21985af64b6e8701f7',
+                                                             '8d6a8b3d66af66bba270ba835016403e1740bba16ae374133efb9c3efa681ef0'),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': ('203b397835edf5ff0d578aa8d5b25126f8c61307adbe92031371b9000d710e56',
+                                                            'ecfe1579e4af37935de55a6cfc709449988d3319a6c9824fea31475838135fec'),
+ 'src/engine/scalping/pre_submit_delay_initial_policy.py': ('ea2f93040975dcf7b9fc247ad57c706fd2bab6a9b717da7f754a0364e43dccf0',
+                                                            '9bf1914b5445ad687d2480352cb01d6ca3ab742709175a3ba7181d1747499edc'),
+ 'src/engine/scalping/pre_submit_delay_observation.py': ('909104c8623dd6219ba0a1cb2b964e8998e5eb52a9bae834db26e9f2cb55a0fa',
+                                                         '5128d73f6d45777c5671fd26a774dae5d4839203035607b5bb53a9bcc860e964'),
+ 'src/engine/scalping/pre_submit_delay_tuning.py': ('c577f885ca02eef999aad71f514fa7a4ef4f7f13e328c0614e93e46b5be6f810',
+                                                    'c2fb791a41e35c326ca874562c332fac0e7ea16cda0066fc82f34679cd93ef1a'),
+ 'src/engine/sniper_state_handlers.py': ('bb6108b506bebfb957f7257bbf4e466837f19a48eff6a742a245f5c3b3e57dcf',
+                                         '4a2545b9d796aab6c9df68f08e57ea5f681a856395cde272a613ddea977d7258')}
+REVIEWED_DELAY_CONTRACT_EXTENSIONS = {('23a13aba62884a5d3a0d48a3f91ebff4262571f6', 'afb82ed5c746f939e20ea2a7df7dda595b6091f61e46ca2d1ad3e308c1db73bc'): {'src/engine/automation/pre_submit_delay_situation_projection.py': 'c77e565c1f29b64551e690f0e0901226c73baba2c53a61b6c49239be76c39f28',
+                                                                                                                    'src/engine/scalping/reversal_extended_catalog.py': 'c03dddde3e642bfa9be01c130eabfcfcc420a182108411099339944c594d4f95'}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -836,16 +858,23 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     if (root / own_name).read_bytes() != revision_bytes(commit, own_name):
         raise ValueError('entry_consumer_dirty_verifier')
     original_hashes, changed = {}, []
+    extensions = REVIEWED_DELAY_CONTRACT_EXTENSIONS.get((origin, expected), {})
     for key, name in paths.items():
-        before = revision_bytes(origin, name)
         after = (root / name).read_bytes()
+        if name in extensions:
+            if hashlib.sha256(after).hexdigest() != extensions[name] or after != revision_bytes(commit, name):
+                raise ValueError('entry_consumer_contract_extension_unreviewed:' + name)
+            changed.append(name)
+            continue
+        before = revision_bytes(origin, name)
         if after != revision_bytes(commit, name):
             raise ValueError('entry_consumer_dirty_release')
         original_hashes[key] = hashlib.sha256(before).hexdigest()
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_LONG4_SOURCE_RETENTION_SOURCES.get(name),
+        if pair in (REVIEWED_DELAY_SITUATION_SOURCES.get(name),
+                    REVIEWED_LONG4_SOURCE_RETENTION_SOURCES.get(name),
                     REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES.get(name),
                     REVIEWED_SOURCE_GAP_CROSSING_SOURCES.get(name),
                     REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),

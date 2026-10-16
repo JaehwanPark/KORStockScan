@@ -865,6 +865,10 @@ def test_pre_submit_monitor_separates_unobservable_sources_from_count_mismatch(t
     invalid_cursor = {**healthy["cursor"], "minutes": []}
     reset = monitor.pre_submit_delay_source_semantics(tmp_path, now, invalid_cursor)
     assert reset["sources"]["raw"] == "partial"
+    manifest_path = next((tmp_path / 'pipeline_event_summaries').glob('*manifest*.json'))
+    legacy_manifest = json.loads(manifest_path.read_text())
+    legacy_manifest.pop('recent_summary', None)
+    manifest_path.write_text(json.dumps(legacy_manifest))
     original_load = summary_owner.load_summary_rows
 
     def changed_during_read(path, **kwargs):
@@ -4580,3 +4584,35 @@ def test_history_receipt_is_separate_from_current_source_and_cannot_grant_covera
     assert gap['probe_route_source_covered_counts'] == {}
     assert gap['native_history_observations']['verified_count'] == int(defect is None)
     assert gap['native_history_observations']['current_source_coverage_proven'] is False
+
+
+def test_delay_signal_observation_complete_has_no_submit_terminal_requirement(tmp_path):
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor,execution_projection_identity
+    day='2026-10-16';now=monitor.stamp(day+'T10:06:00+09:00')
+    base=dict(event_type='pipeline_event',pipeline='ENTRY_PIPELINE',stock_code='005930',stock_name='test',
+        record_id=9,emitted_date=day)
+    fields=dict(delay_intent_id='signal',anchor_kind='signal_ready',market_session_bucket='krx_regular',route='KRX_NXT_INTEGRATED')
+    rows=[dict(base,stage='pre_submit_delay_committed',emitted_at=day+'T10:00:00+09:00',fields=fields)]
+    for delay in (0,30,60,120,180):
+        at=monitor.stamp(day+'T10:00:00+09:00')+timedelta(seconds=delay)
+        rows.append(dict(base,stage='pre_submit_delay_quote_observed',emitted_at=at.isoformat(),
+            fields=dict(fields,target_delay_sec=delay,quote_route='KRX_NXT_INTEGRATED',quote_valid=True)))
+    raw=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl';raw.parent.mkdir()
+    raw.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+    compact=tmp_path/'threshold_cycle'/f'date={day}'/'family=pre_submit_delay';compact.mkdir(parents=True)
+    (compact/'part-execution-1000.jsonl').write_text(''.join(json.dumps(dict(r,family='pre_submit_delay',
+        execution_source_event_sha256=execution_projection_identity(r)))+'\n' for r in rows))
+    producer=ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries',mode='shadow')
+    for r in rows:producer.submit(r)
+    producer.flush()
+    # A selected release's data symlink is the same physical canonical source.
+    alias=tmp_path/'release-data';alias.symlink_to(tmp_path,target_is_directory=True)
+    result=monitor.pre_submit_delay_source_semantics(alias,now)
+    assert result['sources']=={'raw':'complete','summary':'complete','compact':'complete'}
+    assert result['issues']=={}
+    assert result['healthy_by_scope']['intent_terminal_missing|KRX_NXT_INTEGRATED']==1
+    assert result['diagnostics']['summary_bounded_projection_used']==1
+    manifest=next((tmp_path/'pipeline_event_summaries').glob('*manifest*.json'))
+    value=json.loads(manifest.read_text());value['recent_summary']['rows'][0]['event_count']+=1
+    manifest.write_text(json.dumps(value))
+    assert monitor.pre_submit_delay_source_semantics(alias,now)['sources']['summary']=='unobservable'

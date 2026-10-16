@@ -24,14 +24,14 @@ def report_state(report):
     comparison=report.get('comparison_state')
     if not comparison:
         values=set((report.get('comparison_statuses') or {}).values())
-        if report.get('comparison_complete') is False or report.get('scope_pending') or 'incomplete' in values:comparison='incomplete'
-        elif 'source_gap' in values or 'input_invalid' in values:comparison='source_gap'
+        if 'source_gap' in values or 'input_invalid' in values:comparison='source_gap'
+        elif report.get('comparison_complete') is False or report.get('scope_pending') or 'incomplete' in values:comparison='incomplete'
         elif values=={'valid_empty'}:comparison='valid_empty'
         elif values=={'completed_unresolved'}:comparison='completed_unresolved'
         elif values=={'completed_no_pass'}:comparison='completed_no_pass'
         else:comparison='complete' if report.get('status') in {'completed','completed_with_scope_carry'} else 'incomplete'
     return dict(registration_state=report.get('registration_state') or ('registered' if cells else 'not_registered'),
-        adoption_basis=basis,comparison_state=comparison,
+        adoption_basis=basis,comparison_state=comparison,comparison_complete=report.get('comparison_complete'),
         publication_state='published' if cells and report.get('status') in {'completed','completed_with_scope_carry'} else 'not_published',
         source_date=report.get('source_date'),target_date=report.get('effective_date') or report.get('target_date'),
         generation=report.get('artifact_content_sha256'),observed_at=report.get('generated_at'),snapshot_semantics='producer_as_of')

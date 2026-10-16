@@ -149,3 +149,72 @@ def test_normal_native_cli_budgets_family_outputs_without_scanning_shared_raw_al
     report,policy=initial._read(report_file),initial._read(policy_file)
     assert report['census']['raw_commit_n']==1 and report['price_ready_pair_n']==2
     assert len(initial.PreparedPolicy.from_artifacts(policy,report,target_date='2026-10-12').cells)==0
+
+
+def test_supported_zero_situation_masks_positive_parent_in_both_formats(tmp_path,monkeypatch):
+    report,_=fixture(tmp_path/'source',monkeypatch)
+    rows=report['qualified_projection']
+    for n,row in enumerate(rows):
+        row['situation']='H1' if n in {0,4,8,12,14,18} else 'D1'
+        row['pairs']={30:-10 if row['situation']=='H1' else 100}
+    kwargs=dict(source_date=report['source_date'],publication_date=report['publication_date'],
+        effective_date=report['effective_date'],source_sha256=report['source_sha256'],
+        code_contract_sha256=report['code_contract_sha256'],source_receipt=report.get('source_receipt'))
+    reference,selected=initial.build_initial([],_projected=(rows,report['census']),**kwargs)
+    result,sharded=partitioned.build(rows,report['census'],output_root=tmp_path/'result',**kwargs)
+    for policy,evidence in ((selected,reference),(sharded,result)):
+        prepared=initial.PreparedPolicy.from_artifacts(policy,evidence,target_date=report['effective_date'])
+        assert prepared.lookup(target_date=report['effective_date'],market='REGULAR',kind='H1')['delay_sec']==0
+        assert prepared.lookup(target_date=report['effective_date'],market='REGULAR',kind='D1')['delay_sec']==30
+
+
+def test_native_situation_join_preserves_original_hash_and_gzip_currentness(tmp_path):
+    import sqlite3,gzip,hashlib
+    from src.engine.automation import pre_submit_delay_situation_projection as recovery
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    from src.engine.scalping.reversal_extended_catalog import DEFINITIONS
+    branch=next(iter(DEFINITIONS))
+    native=dict(captured_at='2026-10-15T10:00:00+09:00',label_context=dict(evaluation_attempt_id='eval',stock_code='005930'),
+        source=dict(assessment=dict(action='ENTER_NOW',machine_component_sha256='a'*64,primary_branch=None,matched_branches=[branch])))
+    sha=hashlib.sha256(_json_bytes(native)).hexdigest();native['machine_observation_sha256']=sha
+    source=tmp_path/'ai_decision_payloads/ai_decision_payloads_2026-10-15.jsonl'
+    source.parent.mkdir();source.write_bytes(_json_bytes(native)+b'\n')
+    from datetime import datetime
+    fields=dict(anchor_contract_version=3,original_machine_observation_sha256=sha,evaluation_attempt_id='eval',
+        entry_mechanistic_policy_sha256='a'*64,decision_source_sha256='b'*64,
+        decision_committed_at_epoch=datetime.fromisoformat('2026-10-15T10:00:01+09:00').timestamp())
+    row=dict(stage='pre_submit_delay_committed',emitted_date='2026-10-15',stock_code='005930',fields=fields)
+    db=sqlite3.connect(':memory:');receipt=recovery.prepare([row],db,tmp_path)
+    projected=list(recovery.enrich([row],db,receipt))[0]
+    assert initial.situation(projected['fields']['_native_situation_projection']['fields'])==branch
+    assert projected['fields']['decision_source_sha256']=='b'*64
+    assert row['fields']==fields and '_native_situation_projection' not in fields
+    later={**row,'fields':{**fields,'decision_committed_at_epoch':fields['decision_committed_at_epoch']-2}}
+    assert '_native_situation_projection' not in list(recovery.enrich([later],db,receipt))[0]['fields']
+    gz=Path(str(source)+'.gz');gz.write_bytes(gzip.compress(source.read_bytes()));source.unlink()
+    recovery.verify(receipt)
+    gz.write_bytes(gz.read_bytes()[:-5])
+    with pytest.raises((ValueError,EOFError,OSError)):recovery.verify(receipt)
+
+
+@pytest.mark.parametrize('damage',[None,'crc','different','late','conflicting_alias'])
+def test_original_delay_ledger_accepts_only_identical_logical_archive(tmp_path,monkeypatch,damage):
+    import gzip
+    from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
+    from src.engine.automation.pre_submit_delay_source_ledger import seal
+    from src.engine.scalping import pre_submit_delay_tuning as owner
+    root=tmp_path/'data';day='2026-10-02'
+    _price_pattern_fixture(root,monkeypatch,[{'prices':{0:10000,30:9900}}])
+    rows=[json.loads(line) for p in (root/'threshold_cycle').glob('date=*/family=pre_submit_delay/part-execution-*.jsonl') for line in p.read_text().splitlines()]
+    raw=root/'pipeline_events'/f'pipeline_events_{day}.jsonl';raw.parent.mkdir()
+    original=''.join(json.dumps({**row,'event_type':'pipeline_event'})+'\n' for row in rows).encode();raw.write_bytes(original)
+    out=tmp_path/'prepared';seal(root,day,output_root=out)
+    path=out/owner.family_source_ledger_path(root,day).name;ledger_bytes=path.read_bytes()
+    gz=Path(str(raw)+'.gz');gz.write_bytes(gzip.compress(original));raw.unlink()
+    assert owner.family_source_ledger_issues(root,day,ledger_path=path)==[]
+    if damage=='crc':gz.write_bytes(gz.read_bytes()[:-5])
+    if damage=='different':gz.write_bytes(gzip.compress(original+b'{}\n'))
+    if damage=='late':(raw.parent/f'pipeline_events_{day}.late.jsonl').write_text('{}\n')
+    if damage=='conflicting_alias':raw.write_bytes(original+b'{}\n')
+    assert bool(owner.family_source_ledger_issues(root,day,ledger_path=path)) is bool(damage)
+    assert path.read_bytes()==ledger_bytes

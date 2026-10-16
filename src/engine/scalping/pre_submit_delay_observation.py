@@ -194,7 +194,7 @@ def register_pass_result(result):
         or result.completed_epoch > result.deadline_epoch or result.error_type):
         return False
     from .pre_submit_delay_tuning import decision_source_sha256, expected_route_for_session
-    from .pre_submit_delay_initial_policy import digest
+    from .pre_submit_delay_initial_policy import digest, situation_fields
     from .reversal_auxiliary_registry import identity_json
     origin = result.origin_fields
     market = origin.get("market_session_bucket")
@@ -205,7 +205,7 @@ def register_pass_result(result):
     identity = digest([result.code, result.request_id, machine, "signal_ready"])
     epoch = (result.prepared_context.get("ws_data") or {}).get("market_data_transport_epoch")
     commit = dict(delay_intent_id=identity, decision_committed_at_epoch=result.completed_epoch,
-                  anchor_contract_version=3,
+                  anchor_contract_version=4,
                   signal_ready_at_epoch=result.completed_epoch, anchor_kind="signal_ready",
                   route=route, quote_transport_epoch=epoch, delay_policy_sha256=None,
                   original_machine_observation_sha256=machine, planned_qty=None,
@@ -217,7 +217,7 @@ def register_pass_result(result):
                   entry_ai_soft_policy_sha256=payload.get("entry_ai_soft_policy_sha256"),
                   entry_auxiliary_policy_identity=identity_json(payload.get('entry_auxiliary_policy_identity')) if payload.get('entry_auxiliary_policy_identity') else None,
                   entry_auxiliary_policy_identity_version=payload.get('entry_auxiliary_policy_identity_version'),
-                  primary_branch_id=payload.get("primary_branch_id"),
+                  **situation_fields(payload),
                   actual_order_submitted=False, runtime_effect=False, broker_order_forbidden=True)
     commit["decision_source_sha256"] = decision_source_sha256(commit)
     return register(result.code, {"id": identity, "committed_at_epoch": result.completed_epoch,

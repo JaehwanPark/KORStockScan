@@ -60,7 +60,8 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES',
                                      'REVIEWED_PREASSESSMENT_OBSERVER_SOURCES',
                                      'REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES',
-                                     'REVIEWED_LONG4_SOURCE_RETENTION_SOURCES'])
+                                     'REVIEWED_LONG4_SOURCE_RETENTION_SOURCES',
+                                     'REVIEWED_DELAY_SITUATION_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib
@@ -1105,3 +1106,29 @@ def test_candidate_predecessor_review_context_cannot_escape(fixture,monkeypatch,
         assert result['runtime_effect'] is False and result['candidate_pid_consumed'] is False
         assert result['verification_code_commit']==NEW
     assert handoff._PREDECESSOR_REVIEW.get() is None
+
+
+@pytest.mark.parametrize('damage',[None,'new_bytes','old_digest','new_dirty'])
+def test_delay_contract_added_dependencies_keep_exact_original_digest(tmp_path,monkeypatch,damage):
+    import hashlib
+    original='src/engine/scalping/a.py';added='src/engine/automation/b.py'
+    own='src/engine/automation/intraday_release_handoff.py'
+    before=b'original = 1\n';new=b'projection = 2\n';verifier=b'# frozen verifier\n'
+    sha=lambda b:hashlib.sha256(b).hexdigest()
+    expected=sha(json.dumps({original:sha(before)},sort_keys=True,separators=(',',':')).encode())
+    monkeypatch.setattr(handoff,'REVIEWED_DELAY_CONTRACT_EXTENSIONS',{(OLD,expected):{added:sha(new)}})
+    for name,raw in [(original,before),(added,new),(own,verifier)]:
+        path=tmp_path/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+    if damage in ('new_bytes','new_dirty'):(tmp_path/added).write_bytes(new+b'# tamper\n')
+    if damage=='old_digest':expected='0'*64
+    def show(command,**kwargs):
+        rev,name=command[-1].split(':',1)
+        if name==own:return verifier
+        if name==original:return before
+        if rev==OLD:raise handoff.subprocess.CalledProcessError(128,command)
+        return new+b'# tamper\n' if damage=='new_bytes' else new
+    monkeypatch.setattr(handoff.subprocess,'check_output',show)
+    if damage:
+        with pytest.raises(ValueError):handoff._verify_entry_code_delta(tmp_path,NEW,OLD,{original:original,added:added},expected)
+    else:
+        assert handoff._verify_entry_code_delta(tmp_path,NEW,OLD,{original:original,added:added},expected)==[added]

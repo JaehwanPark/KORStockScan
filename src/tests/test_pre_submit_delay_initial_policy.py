@@ -482,3 +482,43 @@ def test_same_day_consumer_compatibility_keeps_producers_and_original_policy_bou
         assert receipt['policy_effect']=='unchanged'
         assert receipt['changed_consumer_paths']==[a,b]
         assert receipt['code_contract_sha256']==expected
+
+
+def test_native_union_situation_and_wire_hash_bind_registered_definitions():
+    from src.engine.scalping import reversal_extended_catalog as catalog
+    bid = next(iter(catalog.NEW_DEFINITIONS))
+    raw = dict(continuous_reversal_primary_branch=None,
+               continuous_reversal_matched_branches=[bid], entry_mechanistic_policy_decision={})
+    fields = initial.situation_fields(raw)
+    assert initial.situation(fields) == initial.situation(raw) == bid
+    commit = dict(anchor_contract_version=4, **fields)
+    wire = {k: str(v) for k, v in commit.items()}
+    assert initial.situation(wire) == bid
+    assert legacy.decision_source_sha256(commit) == legacy.decision_source_sha256(wire)
+    changed = {**commit, 'matched_branch_ids': '["H1"]'}
+    assert legacy.decision_source_sha256(changed) != legacy.decision_source_sha256(commit)
+    assert initial.situation(changed) == 'UNKNOWN'
+    conflict = dict(raw, continuous_reversal_matched_policy_refs=[bid+':'+64*'0'])
+    assert initial.situation(initial.situation_fields(conflict)) == 'UNKNOWN'
+
+
+def test_legacy_mapping_remains_deterministically_readable(tmp_path, monkeypatch):
+    report, _ = build(tmp_path, monkeypatch, [
+        {'prices': {0:10000,30:9900}} for _ in range(5)])
+    report, policy = initial.build_initial([],source_date=report['source_date'],
+        publication_date=report['publication_date'],effective_date=report['effective_date'],
+        source_sha256=report['source_sha256'],code_contract_sha256=report['code_contract_sha256'],
+        _projected=([{**r, 'pairs': {int(k):v for k,v in r['pairs'].items()}} for r in report['qualified_projection']],report['census']),
+        _mapping_version=initial.LEGACY_MAPPING_VERSION,_projection_contract='a'*64)
+    initial.validate(policy,report)
+
+
+def test_native_situation_rejects_malformed_explicit_refs_and_matched_set():
+    from src.engine.scalping.reversal_extended_catalog import DEFINITIONS
+    from src.engine.scalping import pre_submit_delay_initial_policy as owner
+    branch=next(iter(DEFINITIONS))
+    base=dict(continuous_reversal_primary_branch=branch,continuous_reversal_matched_branches=[branch])
+    assert owner.situation(owner.situation_fields(base))==branch
+    for bad in ({**base,'continuous_reversal_matched_policy_refs':'{invalid'},
+                {**base,'continuous_reversal_matched_branches':'{invalid'}):
+        assert owner.situation(owner.situation_fields(bad))=='UNKNOWN'

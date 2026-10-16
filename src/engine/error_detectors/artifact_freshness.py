@@ -996,9 +996,14 @@ def _continuous_reversal_result_semantics(root, source_date, component):
                     artifact=str(report_path), report_sha256=report_sha,
                     selection_metric=handoff['selection_metric'],
                     cells=bundle['continuous_reversal'][component + '_cells'],
-                    comparison_complete=handoff.get('comparison_complete',report.get('comparison_complete',not bool(report.get('scope_pending')))),
-                    scope_pending=handoff.get('scope_pending',report.get('scope_pending',[])),
-                    scope_census=handoff.get('scope_census'),
+                    comparison_complete=report.get('comparison_complete'),
+                    component_comparison_complete=report.get('comparison_complete'),
+                    joint_comparison_complete=handoff.get('comparison_complete'),
+                    scope_pending=report.get('scope_pending',[]),
+                    joint_scope_pending=handoff.get('scope_pending',[]),
+                    scope_census=report.get('scope_census'),
+                    joint_scope_census=handoff.get('scope_census'),
+                    bound_target_date=handoff['effective_date'],
                     native_handoff=handoff, realized_profit_assessed=False,
                     runtime_effect=False, actual_pid_consumed=False)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -1963,6 +1968,8 @@ def _postclose_handoff_semantics(root, source_date, now):
     from src.engine.automation import next_preopen_readiness as readiness
     from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
     result = {"status": "not_assessed", "source_date": source_date,
+              "observation_date": _today_kst_str(now), "bound_target_date": None,
+              "next_due_target_date": _semantic_due_target(now),
               "findings": [], "stages": {}, "consumption": "not_observed"}
     try:
         for stage in ("summary_handoff",):
@@ -1976,7 +1983,7 @@ def _postclose_handoff_semantics(root, source_date, now):
             if result["stages"][stage]["status"] in {"failed", "blocked", "source_quality_blocked"}:
                 result["findings"].append(f"{stage}:execution_failed")
         if any(value['status'] in {'pending', 'running'} for value in result['stages'].values()):
-            result.update(status='unobservable', target_date=_semantic_due_target(now),
+            result.update(status='unobservable', target_date=None,
                 prepared=dict(status='unobservable', reason='producer_generation_in_transition'),
                 reason='producer_generation_in_transition')
             return result
@@ -2008,7 +2015,16 @@ def _postclose_handoff_semantics(root, source_date, now):
                     result["report_sha256"] = controller_sha
                     result["artifact"] = str(controller_path)
         target = _semantic_due_target(now)
+        summary_path = root / 'data/report/runtime_approval_summary' / f'runtime_approval_summary_{source_date}.json'
+        if result['stages']['summary_handoff']['status'] == 'succeeded' and summary_path.exists():
+            summary, _ = _semantic_object(summary_path)
+            bound = summary.get('preopen_consumption_receipt') or {}
+            if bound.get('source_date') == source_date:
+                result['bound_target_date'] = bound.get('apply_date')
+        # Preserve the legacy notifier/fingerprint field during migration.
+        # The sealed bound target is explicit and never overwritten by next due.
         result['target_date'] = target
+        result['target_date_role'] = 'legacy_next_due_target'
         index = root / "data/runtime/policy_bootstrap/prepared" / target / "latest.json"
         if source_date >= target:
             # Today's unclosed postclose source does not own this morning's
@@ -2036,6 +2052,87 @@ def _postclose_handoff_semantics(root, source_date, now):
     return result
 
 
+def _optional_weakness_semantics(root, now):
+    """Bounded native receipt observation, separate from recommendation delivery."""
+    from src.engine.automation import main_market_weakness_research as native
+    base = native.namespace(root / 'data')
+    result = dict(status='off', findings=[], observation_date=_today_kst_str(now),
+        source_date=None, target_date=None, observation_complete=False,
+        decision_authority='report_only', runtime_effect=False, mandatory_preopen=False,
+        recommendation_notifier='main_market_weakness_research_notify',
+        common_notifier_scope='execution_and_source_health_only')
+    installation = base / 'installation.json'
+    if not installation.exists():
+        result['reason'] = 'optional_not_installed'
+        return result
+    try:
+        objects, hashes = {}, {}
+        for key, name in (('installation','installation.json'), ('attempt','night_summary.json'),
+                          ('completed','last_completed_computation.json'), ('cursor','schedule_cursor.json'),
+                          ('cumulative','cumulative/current.json'), ('delivery','notification_disposition.json')):
+            path = base / name
+            if not path.exists():
+                continue
+            value, sha = _semantic_object(path, limit=1024*1024)
+            native.check_seal(value)
+            if value.get('runtime_effect') is not False or value.get('allowed_runtime_apply') is not False:
+                raise ValueError('optional_research_authority_invalid')
+            objects[key], hashes[key] = value, sha
+        config = objects['installation']
+        result.update(enabled=config.get('enabled'), notify_enabled=config.get('notify_enabled'),
+                      installed_calendar_sha256=config.get('calendar_sha256'),
+                      calendar_verified_at_install=config.get('calendar_verified'),
+                      producer_receipt_hashes=hashes)
+        if config.get('enabled') is not True:
+            return result
+        result['installed_calendar_valid'] = native.verify_installed_calendar(config)
+        if not result['installed_calendar_valid']:
+            result['findings'].append('optional_research_calendar_unverified')
+        attempt, completed, cumulative = (objects.get(k,{}) for k in ('attempt','completed','cumulative'))
+        latest = attempt.get('latest_attempt', attempt)
+        result.update(status='unobservable', latest_attempt=latest,
+            last_completed_computation={k:completed.get(k) for k in (
+                'source_date','night_id','cumulative_generation','artifact_content_sha256')},
+            source_date=latest.get('source_date') or completed.get('source_date'),
+            source_scope=cumulative.get('source_scope'),
+            pending_source_dates=cumulative.get('pending_source_dates'),
+            invalidated_source_dates=cumulative.get('invalidated_source_dates'),
+            notification_status=(objects.get('delivery') or {}).get('status'),
+            cursor=objects.get('cursor'), artifact=str(base/'night_summary.json'),
+            report_sha256=hashes.get('attempt'), source_generation=cumulative.get('generation'))
+        # A delayed attempt neither erases the last computation nor proves a
+        # new one. Native admission/window reasons retain their own deadlines.
+        result['execution_status'] = latest.get('status', 'not_observed')
+        result['execution_reason'] = latest.get('reason')
+        result['cumulative_currentness'] = ('same_generation' if cumulative and
+            completed.get('cumulative_generation') == cumulative.get('generation') else 'unverified')
+        if latest.get('status') in {'failed', 'error', 'source_invalid'}:
+            result['findings'].append('optional_research_execution_failed')
+        if completed and cumulative and completed.get('cumulative_generation') != cumulative.get('generation'):
+            result['findings'].append('optional_research_generation_mismatch')
+        if cumulative.get('pending_source_dates') or cumulative.get('invalidated_source_dates'):
+            result['source_quality'] = 'incomplete'
+        else:
+            result['source_quality'] = 'verified_native_scope' if cumulative.get('source_scope') else 'unobservable'
+        scope = cumulative.get('source_scope')
+        scope_current = False
+        if isinstance(scope, dict) and scope.get('through_date'):
+            scope_current = (native.research_source_scope(root/'data', through_date=scope['through_date']) == scope
+                and native.source_cursor_states(base, scope['source_dates']) == cumulative.get('source_cursor_states'))
+        result['source_scope_current'] = scope_current
+        result['native_validated'] = bool(result['installed_calendar_valid'] and scope_current)
+        result['validation_mode'] = 'bounded_native_receipts_calendar_and_cursor_scope'
+        result['raw_source_revalidation'] = 'owned_by_native_research'
+        result['observation_complete'] = bool(attempt and cumulative and scope_current and result['installed_calendar_valid'])
+        result['status'] = ('source_invalid' if result['findings'] else
+            'source_gap' if result['source_quality']=='incomplete' else
+            'verified' if result['observation_complete'] else 'unobservable')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result.update(status='source_invalid', findings=['optional_research_receipt_invalid'],
+                      error=str(exc), artifact=str(installation), native_validated=False)
+    return result
+
+
 def _current_semantic_owners(root, day):
     """Project only today's parsed OPEN stable IDs; no historical fallback."""
     from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
@@ -2054,10 +2151,12 @@ def _current_semantic_owners(root, day):
 
 def _semantic_alerts(name, semantics, source_date, *, current_owners=None, as_of_date=None):
     alerts = _semantic_alert_candidates(name, semantics, source_date)
-    if current_owners is None:
-        return alerts
     for alert in alerts:
-        _project_semantic_owner(alert, current_owners, as_of_date)
+        alert.update(observation_date=semantics.get('observation_date', as_of_date),
+            bound_target_date=semantics.get('bound_target_date'),
+            next_due_target_date=semantics.get('next_due_target_date'))
+        if current_owners is not None:
+            _project_semantic_owner(alert, current_owners, as_of_date)
     return alerts
 
 
@@ -2072,24 +2171,28 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'holding_profit_exit': 'HoldingProfitExitSourceContractRepair',
         'initial_quantity': 'InitialQuantityProducerConsumerRepair1010',
         'main_stop_confirmation': 'MainStopLossRetirementRuntimeTuning1010',
+        'main_market_weakness_research': 'MainMarketWeaknessPostcloseObservation1008',
     }
     owner = mapping.get(alert['stage'])
     if (alert['stage'] == 'main_stop_confirmation' and owner not in current_owners
             and 'DirectFamilyPreopenPolicyHandoff' in current_owners):
         owner = 'DirectFamilyPreopenPolicyHandoff'
+    if (alert['stage']=='main_market_weakness_research' and owner not in current_owners
+            and 'PreSubmitSemanticCurrentization1016' in current_owners):
+        owner = 'PreSubmitSemanticCurrentization1016'
     if alert['stage']=='policy_generation':
         from src.engine.monitoring.policy_generation_contract import OWNERS
         owner=OWNERS.get(alert.get('scope'))
     alert.update(producer_owner=alert['owner'], historical_owner=alert['owner'],
                      owner=owner if owner in current_owners else 'UNRESOLVED_CURRENT_OWNER:' + str(owner),
                      owner_status='current_open' if owner in current_owners else 'unresolved',
-                     observation_date=as_of_date, effective_date=alert.get('target_date'))
+                     observation_date=as_of_date, effective_date=alert.get('bound_target_date') or alert.get('target_date'))
 
 
 def _semantic_alert_candidates(name, semantics, source_date):
     if semantics.get('status') in {'off', 'historical_diagnostic'}:
         return []
-    if name in {"holding_profit_exit", "initial_quantity", "main_stop_confirmation"}:
+    if name in {"holding_profit_exit", "initial_quantity", "main_stop_confirmation", "main_market_weakness_research"}:
         if semantics.get("status") in {"future_due", "not_assessed", "not_required_before_introduction"}:
             return []
         if semantics.get("status") == "unobservable" and not semantics.get("expected_overdue"):
@@ -3255,6 +3358,9 @@ class ArtifactFreshnessDetector(BaseDetector):
                 ("postclose_handoff", handoff), *family_results):
                 semantics.setdefault('target_date', selection['target_date'])
                 semantics['due_target_date'] = selection['target_date']
+                semantics['observation_date'] = _today_kst_str(now_dt)
+                semantics.setdefault('bound_target_date', semantics.get('target_date'))
+                semantics['next_due_target_date'] = selection['target_date']
                 observations.append(dict(stage=name, semantics=semantics))
                 bindings.append({'stage': name, 'source_date': semantic_day,
                     'target_date': semantics.get('target_date'), 'as_of_date': _today_kst_str(now_dt),
@@ -3276,6 +3382,14 @@ class ArtifactFreshnessDetector(BaseDetector):
                 alerts.extend(_semantic_alerts(name, semantics, today))
                 if semantics.get("findings"):
                     warnings.append(name + "_semantics: " + ", ".join(sorted(set(semantics["findings"]))))
+        optional = _optional_weakness_semantics(PROJECT_ROOT, now_dt)
+        details['main_market_weakness_research_semantics'] = optional
+        observations.append(dict(stage='main_market_weakness_research', semantics=optional))
+        bindings.append(dict(stage='main_market_weakness_research', source_date=optional.get('source_date'),
+            target_date=None, as_of_date=_today_kst_str(now_dt), generation=optional.get('report_sha256'), status=optional['status']))
+        alerts.extend(_semantic_alerts('main_market_weakness_research', optional, optional.get('source_date')))
+        if optional['findings']:
+            warnings.append('main_market_weakness_research: '+', '.join(optional['findings']))
         details['semantic_source_bindings'] = bindings
         details['semantic_observations'] = observations
         if cancel_wait is not None:

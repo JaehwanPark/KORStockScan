@@ -328,7 +328,7 @@ def _cell_rows(db, effective, algorithm):
 
 
 def build(projected, census, *, output_root, source_date, publication_date, effective_date,
-          source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None):
+          source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None, _mapping_version=None):
     algorithm = _algorithm or initial.ALGORITHM
     if algorithm not in (initial.ALGORITHM,initial.LEGACY_ALGORITHM):
         raise ValueError('initial_delay_algorithm_invalid')
@@ -360,7 +360,7 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
         analysis_axis='pre_submit_delay',source_date=source_date,publication_date=publication_date,effective_date=effective_date,
         source_sha256=source_sha256,code_contract_sha256=code_contract_sha256,
         source_projection_contract_sha256=_projection_contract or initial.projection_contract(),source_receipt=source_receipt,
-        algorithm=algorithm,mapping_version=initial.MAPPING_VERSION,
+        algorithm=algorithm,mapping_version=_mapping_version or initial.MAPPING_VERSION,
         status='blocked' if blocked else 'initial_timing_policy_selected' if positive_n else 'initial_baseline_immediate',
         census=census,price_ready_pair_n=price_pairs,partitions_ref=partitions_ref,cells_ref=cells_ref,
         qualified_projection_ref=projection_ref,default_delay_sec=0,runtime_effect=False,actual_order_submitted=False,
@@ -407,7 +407,8 @@ def validate(policy, report, *, target_date=None):
             publication_date=report['publication_date'],effective_date=report['effective_date'],
             source_sha256=report['source_sha256'],code_contract_sha256=report['code_contract_sha256'],
             source_receipt=report.get('source_receipt'),_algorithm=report['algorithm'],
-            _projection_contract=report.get('source_projection_contract_sha256') if report['algorithm']==initial.LEGACY_ALGORITHM else None)
+            _projection_contract=report.get('source_projection_contract_sha256') if report['algorithm']==initial.LEGACY_ALGORITHM or report.get('mapping_version')==initial.LEGACY_MAPPING_VERSION else None,
+            _mapping_version=report.get('mapping_version'))
         # Physical layout belongs to its own verified generation. Selection and
         # split must match by canonical semantic digests, independently of it.
         for key in ('qualified_projection_ref','partitions_ref','cells_ref'):
@@ -491,10 +492,13 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
                             if not require_ledger or db.execute('SELECT 1 FROM matched WHERE day=? AND id=?',
                                 (row['emitted_date'],row['execution_source_event_sha256'])).fetchone():
                                 yield row
-                    census=project(qualified_source(),db)
+                    from . import pre_submit_delay_situation_projection as situations
+                    situation_receipt=situations.prepare(qualified_source(),db,root)
+                    census=project(situations.enrich(qualified_source(),db,situation_receipt),db)
                     receipt=dict(schema='pre_submit_delay_input_generation_v1',through_date=day,
                         partition_generations=snapshot.source['partition_generations'],
-                        ledger_generations=ledger_generations,isolated_dates=isolated)
+                        ledger_generations=ledger_generations,isolated_dates=isolated,
+                        native_situation_projection=situation_receipt)
                     report,policy=build((row for _,row,_ in storage.records(db)),census,
                         output_root=scratch,source_date=day,publication_date=publication_date,effective_date=effective_date,
                         source_sha256=snapshot.source['sha256'],code_contract_sha256=contract,source_receipt=receipt)

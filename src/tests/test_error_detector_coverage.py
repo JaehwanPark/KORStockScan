@@ -151,3 +151,10 @@ def test_pattern_lab_propagation_freshness_follows_postclose_wrapper_window():
         artifact["suppress_missing_while_cron_in_progress"]["id"]
         == "threshold_cycle_postclose"
     )
+
+
+def test_all_25_feature_bindings_preserve_optional_and_natural_authority():
+    result=validate_semantic_coverage('2026-10-16')
+    assert set(result['feature_contracts'])=={f'C{i:02}' for i in range(1,26)}
+    assert result['feature_contracts']['C18']['expectedness']=='installed_optional_only'
+    assert all(v['natural_acceptance']=='not_proven_by_static_coverage' for v in result['feature_contracts'].values())

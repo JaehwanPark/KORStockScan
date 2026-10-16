@@ -2091,6 +2091,7 @@ class ProducerSummaryCompactor:
         flush_first_event_at = ""
         flush_last_event_at = ""
         lines = []
+        recent_rows = []
         groups = self._pending_batch[1]
         for key in sorted(groups):
             row = groups[key].to_row(
@@ -2100,6 +2101,7 @@ class ProducerSummaryCompactor:
             row["schema_version"] = PRODUCER_SUMMARY_SCHEMA_VERSION
             row["producer_mode"] = self.mode
             row["source"] = "pipeline_event_logger"
+            recent_rows.append(row)
             lines.append(
                 json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
             )
@@ -2130,6 +2132,42 @@ class ProducerSummaryCompactor:
             raise ValueError("producer_summary_missing_commit_receipt; raw retained")
         previous_rows = int(existing.get("summary_row_count") or 0)
         previous_events = int(existing.get("summary_event_count") or 0)
+        # The writer already owns the append generation. Publish a bounded
+        # minute projection here so independent monitors need not decode the
+        # entire growing daily summary. Migrate the old body once, in this
+        # background writer, retaining the native validator and global count.
+        recent = existing.get('recent_summary')
+        prior_rows = []
+        if recent is not None:
+            if (recent.get('schema') != 'producer_recent_minutes_v1'
+                    or recent.get('body_sha256') != hashlib.sha256(json.dumps(
+                        recent['rows'], sort_keys=True, separators=(',', ':')).encode()).hexdigest()):
+                raise ValueError('producer_recent_summary_invalid')
+            prior_rows = recent['rows']
+        elif previous_events:
+            prior_rows = load_summary_rows(summary_path, include_samples=False, strict=True)
+            if sum(r['event_count'] for r in prior_rows) != previous_events:
+                raise ValueError('producer_recent_summary_migration_count_invalid')
+        latest_bucket = max((str(r['bucket_start']) for r in recent_rows), default=safe_date+'T00:00:00')
+        if recent:
+            latest_bucket = max(latest_bucket, recent['latest_bucket'])
+        lower = (datetime.fromisoformat(latest_bucket) - timedelta(minutes=20)).isoformat()
+        minute_rows = {}
+        for r in chain(prior_rows, recent_rows):
+            bucket = str(r['bucket_start'])
+            if bucket < lower:
+                continue
+            key = (bucket, r['stage'])
+            item = minute_rows.setdefault(key, dict(target_date=safe_date, bucket_start=bucket,
+                stage=r['stage'], event_count=0, evidence_hash_sum='0'*64))
+            item['event_count'] += r['event_count']
+            item['evidence_hash_sum'] = f"{(int(item['evidence_hash_sum'],16)+int(r['evidence_hash_sum'],16))%IDENTITY_MODULUS:064x}"
+        recent_body = [minute_rows[k] for k in sorted(minute_rows)]
+        if len(recent_body) > 10000 or len(json.dumps(recent_body).encode()) > 1500000:
+            raise ValueError('producer_recent_summary_budget_exceeded')
+        recent = dict(schema='producer_recent_minutes_v1', lower_bound=lower, latest_bucket=latest_bucket,
+            rows=recent_body, body_sha256=hashlib.sha256(json.dumps(recent_body,
+                sort_keys=True,separators=(',', ':')).encode()).hexdigest())
         existing_first_event_at = _safe_str(existing.get("coverage_first_event_at"))
         existing_last_event_at = _safe_str(existing.get("coverage_last_event_at"))
         coverage_first_event_at = (
@@ -2148,6 +2186,7 @@ class ProducerSummaryCompactor:
             "coverage_first_event_at": coverage_first_event_at or None,
             "coverage_last_event_at": coverage_last_event_at or None,
             "mode": self.mode,
+            "recent_summary": recent,
             "requested_mode": self.requested_mode,
             "summary_detail_level": PRODUCER_PARITY_DETAIL_LEVEL,
             "identity_contract": IDENTITY_CONTRACT,

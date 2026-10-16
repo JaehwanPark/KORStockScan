@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import tempfile
+from functools import lru_cache
 
 from src.engine.lifecycle import research_storage as storage
 from src.engine.lifecycle.holding_window_generation import byte_generation
@@ -159,3 +160,43 @@ def _seal(root,day,*,source_snapshot=None,output_root=None):
             if code_contract()!=contract:raise ValueError('delay_ledger_code_changed_during_scan')
             _atomic(saved,body)
             return body
+
+
+def verify_logical_part(part, raw_dir):
+    """Verify lossless alias transitions against the original full logical seal.
+
+    Full bytes and gzip CRC are checked once per exact file generation. The
+    bounded cache retains digests only; append, replacement and late aliases
+    invalidate the key. No ledger or original source receipt is rewritten.
+    """
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    logical = Path(part['logical_path'])
+    if logical.parent != Path(raw_dir).resolve():
+        raise ValueError('delay_raw_logical_path_invalid')
+    aliases = [p for p in (logical, Path(str(logical)+'.gz')) if p.exists() or p.is_symlink()]
+    if not aliases or any(p.is_symlink() or not p.is_file() for p in aliases):
+        raise ValueError('delay_raw_logical_source_missing')
+    expected, size = part.get('logical_sha256'), part.get('decoded_bytes')
+    if (not isinstance(expected,str) or len(expected)!=64 or type(size) is not int or size<0):
+        raise ValueError('delay_raw_logical_seal_invalid')
+    signature = tuple((str(p),tuple(source_stat(p.stat()))) for p in aliases)
+    _verified_logical_generation(str(logical),signature,expected,size)
+    after = [p for p in (logical,Path(str(logical)+'.gz')) if p.exists() or p.is_symlink()]
+    if (any(p.is_symlink() for p in after)
+            or signature != tuple((str(p),tuple(source_stat(p.stat()))) for p in after)):
+        raise ValueError('delay_raw_logical_generation_changed')
+
+
+@lru_cache(maxsize=64)
+def _verified_logical_generation(logical, signature, expected, expected_size):
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    for name, before in signature:
+        path=Path(name);sha=hashlib.sha256();size=0
+        with (gzip.open if path.suffix=='.gz' else open)(path,'rb') as stream:
+            for block in iter(lambda:stream.read(1024*1024),b''):
+                sha.update(block);size+=len(block)
+                if size>expected_size:raise ValueError('delay_raw_logical_generation_changed')
+        if (path.is_symlink() or tuple(source_stat(path.stat()))!=before
+                or sha.hexdigest()!=expected or size!=expected_size):
+            raise ValueError('delay_raw_logical_generation_changed')
+    return expected

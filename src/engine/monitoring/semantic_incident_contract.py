@@ -5,6 +5,7 @@ import hashlib
 import json
 
 STAGE_HOOKS = {
+    "main_market_weakness_research": "main_market_weakness_research_semantics",
     "legacy_machine_report": "machine_result_semantics",
     "main_machine_policy": "machine_result_semantics",
     "main_auxiliary_policy": "auxiliary_result_semantics",
@@ -176,7 +177,7 @@ def closure_verified(incident, observed, bound):
             or observed.get("generation_changed")
             or (observed.get("status") in NATIVE_BOUND_STATES and not bound)):
         return False
-    if incident.get("stage") in {"holding_profit_exit", "initial_quantity", "main_stop_confirmation"} and (
+    if incident.get("stage") in {"holding_profit_exit", "initial_quantity", "main_stop_confirmation", "main_market_weakness_research"} and (
             not bound or observed.get("native_validated") is not True):
         return False
     scope = incident.get("scope")
@@ -192,7 +193,11 @@ def closure_verified(incident, observed, bound):
         and scoped.get("report_sha256") == observed.get("report_sha256"))
     if observed.get("findings") and not scope_verified:
         return False  # A partial native check cannot prove a missing reason fixed.
-    comparison_gap = (observed.get("policy_states") or {}).get("comparison_state") == "source_gap"
+    comparison_state = (observed.get("policy_states") or {}).get("comparison_state")
+    if comparison_state in {'incomplete', 'not_assessed'} and any(
+            word in reason for word in ('comparison', 'economic', 'paired')):
+        return False
+    comparison_gap = comparison_state == "source_gap"
     if comparison_gap and any(word in reason for word in ("source", "comparison", "population", "label", "economic", "paired")):
         return False
     if observed.get("status") in {"source_gap", "review_required"} and not comparison_gap and not scope_verified:

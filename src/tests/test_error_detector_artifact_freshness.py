@@ -3441,3 +3441,60 @@ def test_holding_native_source_gap_identity_reaches_alert_without_truncating_pop
     report['source_generation']='0'*64
     path.write_text(json.dumps(report))
     assert _holding_profit_exit_semantics(tmp_path,'2026-10-09')['status']=='source_invalid'
+
+
+def test_native_component_comparison_is_independent_of_joint_handoff(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import continuous_reversal_postclose as reports
+    from src.engine.scalping import continuous_reversal_policy as policy
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import reversal_policy_status as status
+    day = '2026-10-15'
+    monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *a, **k: {'status':'succeeded'})
+    monkeypatch.setattr(policy, 'direct_handoff', lambda *a, **k: dict(effective_date='2026-10-16',
+        selection_metric='native', comparison_complete=False, scope_pending=['aux-only']))
+    monkeypatch.setattr(native, 'load', lambda **k: {'continuous_reversal':{'machine_cells':{},'auxiliary_cells':{}}})
+    monkeypatch.setattr(status, 'current_view', lambda *a: {'status':'not_observed'})
+    for component,complete in [('machine',True),('auxiliary',False)]:
+        value=reports.seal(dict(schema=reports.SCHEMA, source_date=day, status='completed',
+            comparison_complete=complete, adoption_basis='operator_designated_initial_cumulative',
+            scope_pending=[] if complete else ['aux-only']))
+        path=tmp_path/'data/report/continuous_reversal'/day/(component+'.json')
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
+        bound=(tmp_path/'data/report/ai_decision_action_outcome_calibration'/f'winrate_policy_{day}.json'
+            if component=='machine' else tmp_path/'data/report/ai_entry_setup_paired_replay_batch'/f'compact_auxiliary_paired_economic_{day}.json')
+        bound.parent.mkdir(parents=True,exist_ok=True);bound.write_text(json.dumps(value))
+        result=detector._continuous_reversal_result_semantics(tmp_path,day,component)
+        assert result['component_comparison_complete'] is complete
+        assert result['joint_comparison_complete'] is False
+        assert result['scope_pending']==([] if complete else ['aux-only'])
+        assert result['policy_states']['adoption_basis']=='operator_designated_initial_cumulative'
+        assert result['bound_target_date']=='2026-10-16'
+        assert result['runtime_effect'] is False
+
+
+def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_path,monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.automation import main_market_weakness_research as native
+    from src.engine.scalping import continuous_reversal_postclose as reports
+    base=native.namespace(tmp_path/'data');base.mkdir(parents=True)
+    def put(name,value):
+        p=base/name;p.parent.mkdir(parents=True,exist_ok=True)
+        p.write_text(json.dumps(reports.seal(dict(**value,runtime_effect=False,allowed_runtime_apply=False))))
+    scope={'through_date':'2026-10-15','source_dates':['2026-10-15']}
+    put('installation.json',dict(enabled=True,notify_enabled=True))
+    put('night_summary.json',dict(latest_attempt=dict(source_date='2026-10-15',status='deferred',reason='regular_postclose_or_eod_active')))
+    put('last_completed_computation.json',dict(source_date='2026-10-14',cumulative_generation='g'))
+    put('cumulative/current.json',dict(generation='g',source_scope=scope,source_cursor_states=[],pending_source_dates=[],invalidated_source_dates=[]))
+    monkeypatch.setattr(native,'verify_installed_calendar',lambda c:True)
+    monkeypatch.setattr(native,'research_source_scope',lambda *a,**k:scope)
+    monkeypatch.setattr(native,'source_cursor_states',lambda *a:[])
+    now=datetime.fromisoformat('2026-10-16T16:00:00+09:00')
+    result=detector._optional_weakness_semantics(tmp_path,now)
+    assert result['status']=='verified' and result['execution_status']=='deferred'
+    assert result['last_completed_computation']['source_date']=='2026-10-14'
+    assert result['mandatory_preopen'] is False and result['runtime_effect'] is False
+    monkeypatch.setattr(native,'verify_installed_calendar',lambda c:False)
+    result=detector._optional_weakness_semantics(tmp_path,now)
+    assert result['findings']==['optional_research_calendar_unverified']
+    assert result['native_validated'] is False

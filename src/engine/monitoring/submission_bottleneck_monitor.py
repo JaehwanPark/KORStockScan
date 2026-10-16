@@ -1647,12 +1647,14 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     raw_path = data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     prior_today = isinstance(prior_cursor, dict) and prior_cursor.get("date") == day
     previous = prior_cursor if prior_today else {}
+    if previous and previous.get("delay_cursor_contract_version") != 2:
+        previous = {}
     if previous and (type(previous.get("offset")) is not int
                      or not isinstance(previous.get("minutes"), dict)
                      or not isinstance(previous.get("delay_events"), list)
                      or stamp(previous.get("coverage_started_at")) is None):
         previous = {}
-    cursor = {"date": day, "offset": 0, "device": None, "inode": None,
+    cursor = {"date": day, "delay_cursor_contract_version": 2, "offset": 0, "device": None, "inode": None,
               "coverage_started_at": None, "minutes": {}, "delay_events": []}
     issues, diagnostics, healthy, examples = Counter(), Counter(), Counter(), []
     issue_scopes, healthy_scopes = Counter(), Counter()
@@ -1724,6 +1726,12 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                         "stock_code": str(row.get("stock_code") or ""),
                         "record_id": str(row.get("record_id") or ""),
                         "delay_intent_id": str(fields.get("delay_intent_id") or ""),
+                        "anchor_kind": fields.get("anchor_kind") or "price_ready",
+                        "anchor_contract_version": fields.get("anchor_contract_version"),
+                        "situation_key": fields.get("situation_key"),
+                        "situation_source_status": fields.get("situation_source_status"),
+                        "observation_only": fields.get("observation_only"),
+                        "terminal_reason": fields.get("terminal_reason"),
                         "target_delay_sec": fields.get("target_delay_sec"),
                         "selected_delay_sec": fields.get("selected_delay_sec"),
                         "route": str(fields.get("route") or ""),
@@ -1770,18 +1778,35 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     manifest_path = summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json"
     try:
         manifest_before = manifest_path.stat()
+        if manifest_before.st_size > 2 * 1024 * 1024:
+            raise ValueError("summary_manifest_budget_exceeded")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         before = summary_path.stat()
-        if before.st_size > 64 * 1024 * 1024 or manifest.get("summary_storage_size_bytes") != before.st_size:
+        if manifest.get("summary_storage_size_bytes") != before.st_size:
             raise ValueError("summary_generation_uncommitted")
-        rows = load_summary_rows(summary_path, include_samples=False, strict=True)
+        recent = manifest.get('recent_summary')
+        if recent is not None:
+            if (recent.get('schema') != 'producer_recent_minutes_v1'
+                    or not isinstance(recent.get('rows'), list) or len(recent['rows']) > 10000
+                    or recent.get('body_sha256') != hashlib.sha256(json.dumps(recent['rows'],
+                        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                    or stamp(recent.get('lower_bound')) is None
+                    or stamp(recent['lower_bound']) > now - timedelta(seconds=DELAY_WINDOW_SEC)):
+                raise ValueError('summary_recent_projection_invalid')
+            rows = recent['rows']
+            diagnostics['summary_bounded_projection_used'] += 1
+        else:
+            if before.st_size > 64 * 1024 * 1024:
+                raise ValueError('legacy_summary_read_budget_exceeded')
+            rows = load_summary_rows(summary_path, include_samples=False, strict=True)
+            diagnostics['summary_legacy_full_validation'] += 1
         after = summary_path.stat()
         manifest_after = manifest_path.stat()
         generation = lambda stat: (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
-        if (manifest.get("mode") != "shadow" or manifest.get("summary_path") != str(summary_path)
+        if (manifest.get("mode") != "shadow" or Path(str(manifest.get("summary_path") or "")).resolve() != summary_path.resolve()
                 or generation(after) != generation(before)
                 or generation(manifest_after) != generation(manifest_before)
-                or manifest.get("summary_event_count") != sum(row["event_count"] for row in rows)):
+                or (recent is None and manifest.get("summary_event_count") != sum(row["event_count"] for row in rows))):
             raise ValueError("summary_generation_changed")
         flush_interval = manifest.get("flush_interval_sec")
         if type(flush_interval) is int and flush_interval > 0:
@@ -1793,8 +1818,13 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                 healthy["producer_summary_flush_interval_too_long"] += 1
                 healthy_scopes["producer_summary_flush_interval_too_long|producer"] += 1
         for row in rows:
-            if row.get("target_date") != day:
-                raise ValueError("summary_target_date_invalid")
+            if (row.get("target_date") != day or stamp(row.get('bucket_start')) is None
+                    or type(row.get('event_count')) is not int or row['event_count'] < 0
+                    or row.get('stage') not in PRODUCER_SUMMARY_STAGES
+                    or not isinstance(row.get('evidence_hash_sum'), str)
+                    or len(row['evidence_hash_sum']) != 64
+                    or any(c not in '0123456789abcdef' for c in row['evidence_hash_sum'])):
+                raise ValueError("summary_projection_row_invalid")
             key = f"{row['bucket_start']}|{row['stage']}"
             item = summary_minutes.setdefault(key, {"count": 0, "identity_sum": "0" * 64})
             item["count"] += row["event_count"]
@@ -1802,6 +1832,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
         summary_status = "complete"
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         diagnostics[f"summary_unobservable:{type(exc).__name__}"] += 1
+        diagnostics["summary_reason:" + str(exc)[:160]] += 1
 
     compact_status = "complete"
     compact_ids = set()
@@ -1893,6 +1924,15 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                 issues["compact_source_unobservable_with_raw"] += 1
                 issue_scopes[f"compact_source_unobservable_with_raw|{row['stage']}"] += 1
             if row["stage"] == "pre_submit_delay_committed":
+                if str(row.get('anchor_contract_version')) == '4':
+                    if row.get('situation_source_status') != 'native_machine_bound' or row.get('situation_key') in (None, '', 'UNKNOWN'):
+                        issues['situation_source_unresolved'] += 1
+                        issue_scopes['situation_source_unresolved|'+row.get('anchor_kind','price_ready')] += 1
+                    else:
+                        healthy['situation_source_unresolved'] += 1
+                        healthy_scopes['situation_source_unresolved|'+row.get('anchor_kind','price_ready')] += 1
+                else:
+                    diagnostics['legacy_situation_not_recorded'] += 1
                 expected_route = expected_route_for_session(row["session_bucket"])
                 if not expected_route:
                     issues["committed_session_missing"] += 1
@@ -1981,10 +2021,14 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
             elif 0 in group["quotes"] or 0.0 in group["quotes"]:
                 healthy["zero_second_quote_missing"] += 1
                 healthy_scopes[f"zero_second_quote_missing|{committed_route or 'UNKNOWN'}"] += 1
-            if age >= 300 and group["terminal"] is None:
+            observation_only = commit.get("anchor_kind") == "signal_ready"
+            observation_complete = set((0, 30, 60, 120, 180)) <= group["quotes"]
+            if observation_only and observation_complete:
+                healthy["observation_completed"] += 1
+            if age >= 300 and group["terminal"] is None and not (observation_only and observation_complete):
                 issues["intent_terminal_missing"] += 1
                 issue_scopes[f"intent_terminal_missing|{committed_route or 'UNKNOWN'}"] += 1
-            elif group["terminal"] is not None:
+            elif group["terminal"] is not None or (observation_only and observation_complete):
                 healthy["intent_terminal_missing"] += 1
                 healthy_scopes[f"intent_terminal_missing|{committed_route or 'UNKNOWN'}"] += 1
             try:
@@ -1993,7 +2037,8 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                     raise ValueError('selected_delay_invalid')
             except (ValueError,TypeError):
                 selected = None
-                diagnostics['selected_due_instrumentation_gap'] += 1
+                if not observation_only:
+                    diagnostics['selected_due_instrumentation_gap'] += 1
             for horizon in (30, 60, 120, 180):
                 if age >= horizon + 30 and horizon not in group["quotes"]:
                     if horizon == selected and group['terminal'] is None:

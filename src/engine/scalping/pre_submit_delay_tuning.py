@@ -62,6 +62,7 @@ _V2_SOURCE_FIELDS = frozenset(_DECISION_SOURCE_KEYS + _QUOTE_SOURCE_KEYS + (
     'anchor_kind','entry_mechanistic_policy_sha256','entry_ai_soft_policy_sha256',
     'primary_branch_id','matched_branch_ids','entry_action','auxiliary_effective_action',
     'entry_auxiliary_policy_identity','entry_auxiliary_policy_identity_version',
+    'situation_definition_refs','situation_mapping_version','situation_key','situation_source_status','selected_delay_sec',
 ))
 
 
@@ -74,11 +75,14 @@ def _digest(payload: Any) -> str:
 def decision_source_sha256(fields: dict[str, Any]) -> str:
     """Logical generation shared by the observer and its first reader."""
     keys = _DECISION_SOURCE_KEYS
-    if fields.get('anchor_contract_version') == 2 or str(fields.get('anchor_contract_version')) == '3':
+    if fields.get('anchor_contract_version') == 2 or str(fields.get('anchor_contract_version')) in {'3', '4'}:
         keys += ('anchor_contract_version', 'anchor_kind', 'evaluation_attempt_id',
                  'request_id', 'ai_decision_trace_id', 'entry_mechanistic_policy_sha256',
                  'entry_ai_soft_policy_sha256', 'primary_branch_id', 'entry_action',
                  'auxiliary_effective_action')
+    if str(fields.get('anchor_contract_version')) == '4':
+        keys += ('matched_branch_ids', 'situation_definition_refs', 'situation_mapping_version',
+                 'situation_key', 'situation_source_status', 'selected_delay_sec')
     if fields.get('entry_auxiliary_policy_identity_version') not in (None,'','None','null'):
         keys += ('entry_auxiliary_policy_identity_version','entry_auxiliary_policy_identity')
     proof = fields.get('entry_auxiliary_policy_identity')
@@ -677,8 +681,10 @@ def family_source_ledger_issues(data_root: Path, target_date: str, *, source_sna
                                 or type(generation.get('size')) is not int or generation['size'] < 0):
                             return ['raw_source_reference_invalid']
                         continue
-                    if byte_generation(Path(representation['path']))!=representation['generation']:
-                        return ['raw_generation_changed']
+                    prior_path = Path(representation['path'])
+                    if not prior_path.exists() or byte_generation(prior_path)!=representation['generation']:
+                        from src.engine.automation.pre_submit_delay_source_ledger import verify_logical_part
+                        verify_logical_part(part, data_root/'pipeline_events')
         raw_dir = data_root / "pipeline_events"
         for part in ledger["raw_parts"]:
             logical = _source_part_path(raw_dir, target_date, part["partition"])
@@ -695,7 +701,8 @@ def family_source_ledger_issues(data_root: Path, target_date: str, *, source_sna
             current = {str(item.resolve()): _part_snapshot_stamp(item)
                        for item in (logical, Path(str(logical) + ".gz")) if item.exists()}
             if current != {item["path"]: item["stamp"] for item in part["representations"]}:
-                return ["raw_generation_changed"]
+                from src.engine.automation.pre_submit_delay_source_ledger import verify_logical_part
+                verify_logical_part(part, raw_dir)
         if not pipeline_reference_only and (Path(str(_source_part_path(raw_dir, target_date, "late"))).exists()
                 or Path(str(_source_part_path(raw_dir, target_date, "late")) + ".gz").exists()) != any(
                     part["partition"] == "late" for part in ledger["raw_parts"]):
@@ -725,7 +732,7 @@ def family_source_ledger_issues(data_root: Path, target_date: str, *, source_sna
             _, compact = _source_rows(target_date, data_root=data_root, strict_projection=True, source_snapshot=source_snapshot)
         if compact["sha256"] != ledger["compact_source_sha256"] or compact["paths"] != ledger["compact_paths"]:
             return ["compact_generation_changed"]
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+    except (OSError, EOFError, ValueError, TypeError, KeyError, AttributeError):
         return ["family_source_ledger_missing_or_invalid"]
     return []
 

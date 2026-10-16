@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 import fcntl
 import hashlib
+from functools import lru_cache
 import json
 import math
 import os
@@ -22,7 +23,8 @@ POLICY_SCHEMA = "pre_submit_delay_policy_v2"
 MANIFEST_SCHEMA = "pre_submit_delay_committed_generation_v2"
 LEGACY_ALGORITHM = "qualified_anchor_shared_chronological_purged_split_v2"
 ALGORITHM = "qualified_anchor_candidate_paired_chronological_split_v3"
-MAPPING_VERSION = "registered_machine_primary_or_sorted_union_v1"
+LEGACY_MAPPING_VERSION = "registered_machine_primary_or_sorted_union_v1"
+MAPPING_VERSION = "native_machine_definition_bound_situation_v2"
 HORIZONS = (0, 30, 60, 120, 180)
 MARKETS = ('PREMARKET', 'REGULAR', 'INTEGRATED_AFTERMARKET')
 MAX_BYTES = 4 * 1024 * 1024
@@ -46,6 +48,8 @@ CONTRACT_PATHS = (
     'src/engine/automation/pre_submit_delay_source_ledger.py',
     'src/engine/infrastructure/research_release_transition.py',
     'src/engine/automation/pre_submit_delay_partitioned_research.py',
+    'src/engine/automation/pre_submit_delay_situation_projection.py',
+    'src/engine/scalping/reversal_extended_catalog.py',
     'src/engine/monitoring/submission_bottleneck_monitor.py',
     'src/engine/scalping/continuous_reversal_policy.py',
     'src/engine/scalping/reversal_auxiliary_registry.py',
@@ -63,14 +67,18 @@ def projection_contract():
     import inspect
     from . import pre_submit_delay_tuning as owner
     from .reversal_registered_catalog import MANIFEST
+    from .reversal_extended_catalog import DEFINITIONS
     from src.engine.automation.pre_submit_delay_partitioned_research import project as partitioned_project
-    functions = (project_rows, partitioned_project, number, digest, session, situation, owner._source_rows,
+    from src.engine.automation import pre_submit_delay_situation_projection as recovery
+    functions = (project_rows, partitioned_project, recovery.prepare, recovery.enrich,
+                 number, digest, session, situation, situation_fields, _situation_definition_ref, _legacy_situation, owner._source_rows,
                  owner._number, owner._digest, owner.decision_source_sha256,
                  owner.quote_source_sha256, owner._quote_source_issue)
     return digest({'functions':{f.__module__+'.'+f.__name__:inspect.getsource(f) for f in functions},
                    'decision_keys':owner._DECISION_SOURCE_KEYS, 'quote_keys':owner._QUOTE_SOURCE_KEYS,
                    'minimal_fields':sorted(owner._V2_SOURCE_FIELDS),
-                   'stages':sorted(owner.SOURCE_STAGES), 'mapping':MANIFEST, 'mapping_version':MAPPING_VERSION})
+                   'stages':sorted(owner.SOURCE_STAGES), 'mapping':MANIFEST, 'mapping_version':MAPPING_VERSION,
+                   'native_definitions':DEFINITIONS})
 
 
 def digest(value):
@@ -99,7 +107,7 @@ def session(value):
     return "UNKNOWN"
 
 
-def situation(fields):
+def _legacy_situation(fields):
     primary = str(fields.get("primary_branch_id") or "")
     matched = fields.get("matched_branch_ids") or []
     if isinstance(matched, str):
@@ -115,6 +123,93 @@ def situation(fields):
         and all(isinstance(x, str) and x in definitions for x in matched)):
         return "+".join(sorted(set(matched)))
     return "UNKNOWN"
+
+
+
+@lru_cache(maxsize=512)
+def _situation_definition_ref(identity):
+    from .reversal_extended_catalog import branch, DEFINITIONS
+    from .continuous_reversal_postclose import digest as native_digest
+    definition = branch(identity)
+    return identity + ':' + (definition.get('definition_sha256') or native_digest(DEFINITIONS[identity]))
+
+
+def situation_fields(fields):
+    """Freeze the already validated machine's situation; no file or model calls.
+
+    UNION legitimately has no primary. Definition references come from the
+    machine receipt, with catalog validation limited to the matched branches.
+    This projection cannot change the machine or auxiliary decision.
+    """
+    from collections.abc import Mapping
+    from .reversal_extended_catalog import DEFINITIONS
+    assessment = fields.get('entry_mechanistic_policy_decision') or {}
+    if not isinstance(assessment, Mapping):
+        assessment = {}
+    primary = fields.get('continuous_reversal_primary_branch', fields.get('primary_branch_id'))
+    matched = fields.get('continuous_reversal_matched_branches', fields.get('matched_branch_ids'))
+    if matched is None:
+        matched = assessment.get('matched_branches')
+    if primary is None:
+        primary = assessment.get('primary_branch')
+    primary = primary or None
+    if isinstance(matched, (tuple, list)):
+        matched = list(matched)
+    elif isinstance(matched, str) and len(matched) <= 8192:
+        try: matched = json.loads(matched)
+        except ValueError: matched = []
+    result = dict(primary_branch_id=primary, matched_branch_ids=[],
+                  situation_definition_refs=[], situation_mapping_version=MAPPING_VERSION,
+                  situation_key='UNKNOWN', situation_source_status='machine_branches_missing')
+    if matched is None and isinstance(primary, str) and primary:
+        matched = [primary]
+    if (not isinstance(matched, list) or not 0 < len(matched) <= 32
+            or any(not isinstance(b, str) or b not in DEFINITIONS for b in matched)):
+        return result
+    matched = sorted(set(matched))
+    result['matched_branch_ids'] = json.dumps(matched, separators=(',', ':'))
+    if primary is not None and primary not in matched:
+        result['situation_source_status'] = 'primary_matched_conflict'
+        return result
+    expected = [_situation_definition_ref(b) for b in matched]
+    refs = fields.get('continuous_reversal_matched_policy_refs', assessment.get('matched_policy_refs'))
+    if isinstance(refs, str) and len(refs) <= 16384:
+        try: refs = json.loads(refs)
+        except ValueError: refs = []
+    if refs is not None and (not isinstance(refs, (list, tuple)) or any(not isinstance(r, str) for r in refs) or sorted(refs) != expected):
+        result['situation_source_status'] = 'machine_definition_reference_conflict'
+        return result
+    result.update(situation_definition_refs=json.dumps(expected, separators=(',', ':')), situation_key=primary or '+'.join(matched),
+                  situation_source_status='native_machine_bound')
+    return result
+
+
+def situation(fields):
+    if fields.get('situation_mapping_version') == MAPPING_VERSION:
+        # Source receipts bind these fields to the original machine. Do not
+        # reinterpret old definitions with today's installed catalog.
+        ids, refs = fields.get('matched_branch_ids'), fields.get('situation_definition_refs')
+        primary = fields.get('primary_branch_id')
+        primary = None if primary in (None, '', 'None', 'null') else primary
+        try:
+            ids = json.loads(ids) if isinstance(ids, str) and len(ids) <= 8192 else ids
+            refs = json.loads(refs) if isinstance(refs, str) and len(refs) <= 16384 else refs
+        except ValueError:
+            return 'UNKNOWN'
+        if (fields.get('situation_source_status') == 'native_machine_bound'
+                and isinstance(ids, list) and 0 < len(ids) <= 32
+                and all(isinstance(b, str) and b and len(b) <= 160 for b in ids)
+                and ids == sorted(set(ids)) and isinstance(refs, list) and len(refs) == len(ids)
+                and all(isinstance(r, str) and r.startswith(b + ':')
+                        and len(r[len(b)+1:]) == 64 and all(c in '0123456789abcdef' for c in r[len(b)+1:])
+                        for b, r in zip(ids, refs))
+                and (primary is None or primary in ids)):
+            key = primary or '+'.join(ids)
+            return key if fields.get('situation_key') == key else 'UNKNOWN'
+        return 'UNKNOWN'
+    if 'continuous_reversal_matched_branches' in fields or 'entry_mechanistic_policy_decision' in fields:
+        return situation(situation_fields(fields))
+    return _legacy_situation(fields)
 
 
 def cell_key(anchor, market, kind="ALL", context="ALL", *, parents=None):
@@ -226,13 +321,23 @@ def project_rows(rows):
         pairs = {int(horizon): (float(zero["ask_price"]) - float(quote["ask_price"]))
                  / float(zero["ask_price"]) * 10000 for horizon, quote in valid.items()
                  if horizon and zero}
+        situation_source = fields.get('_native_situation_projection')
+        if situation_source and (not isinstance(situation_source, dict)
+                or situation_source.get('native_observation_sha256') != fields.get('original_machine_observation_sha256')
+                or situation_source.get('attempt') != fields.get('evaluation_attempt_id')
+                or situation_source.get('parent') != fields.get('entry_mechanistic_policy_sha256')
+                or situation_source.get('symbol') != str(identity[1])):
+            raise ValueError('delay_situation_projection_identity_invalid')
+        kind = situation(situation_source['fields']) if situation_source else situation(fields)
         opportunity = {"identity": canonical, "alias": list(identity), "anchor_kind": anchor,
                        "session": market, "parent_compatibility": list(parent),
                        "native_evaluation_bound":native_bound,
                        "committed_at": stamp, "observation_end_at": stamp + 183,
                        "p0_valid": zero is not None, "pairs": pairs,
-                       "situation": situation(fields), "execution_context": "ALL",
+                       "situation": kind, "execution_context": "ALL",
                        "decision_source_sha256": fields["decision_source_sha256"]}
+        if situation_source:
+            opportunity['situation_projection'] = situation_source
         # A retry is an alias only when its native evaluation and immutable
         # anchor/outcomes agree. Late conflicts invalidate every alias.
         semantic = digest({k:v for k,v in opportunity.items() if k not in {'alias','decision_source_sha256'}})
@@ -315,7 +420,7 @@ def lineage_eligible(row, effective_date):
 
 
 def build_initial(rows, *, source_date, publication_date, effective_date, source_sha256, code_contract_sha256,
-                  _projected=None, source_receipt=None, _algorithm=None, _projection_contract=None):
+                  _projected=None, source_receipt=None, _algorithm=None, _projection_contract=None, _mapping_version=None):
     algorithm = _algorithm or ALGORITHM
     if algorithm not in (ALGORITHM, LEGACY_ALGORITHM):
         raise ValueError('initial_delay_algorithm_invalid')
@@ -376,7 +481,7 @@ def build_initial(rows, *, source_date, publication_date, effective_date, source
               "source_sha256": source_sha256, "code_contract_sha256": code_contract_sha256,
               'source_projection_contract_sha256':_projection_contract or projection_contract(),
               "source_receipt": source_receipt,
-              "algorithm": algorithm, "mapping_version": MAPPING_VERSION,
+              "algorithm": algorithm, "mapping_version": _mapping_version or MAPPING_VERSION,
               "status": "blocked" if blocked else "initial_timing_policy_selected" if any(
                   cell["anchor_kind"] == "price_ready" and (cell["delay_sec"] or 0) > 0 for cell in cells.values()
               ) else "initial_baseline_immediate", "census": census, "price_ready_pair_n": price_pairs,
@@ -418,7 +523,7 @@ def validate(policy, report, *, target_date=None):
         or policy.get("effective_from") != report.get("effective_date")
         or policy.get("supported_anchor_kind") != "price_ready"
         or policy.get("algorithm") not in (ALGORITHM,LEGACY_ALGORITHM)
-        or policy.get('algorithm') != report.get('algorithm') or policy.get("mapping_version") != MAPPING_VERSION
+        or policy.get('algorithm') != report.get('algorithm') or policy.get("mapping_version") not in (MAPPING_VERSION, LEGACY_MAPPING_VERSION)
         or policy.get("runtime_apply_allowed") is not True or report.get("price_ready_pair_n", 0) < 1):
         raise ValueError("initial_delay_contract_invalid")
     for key in ("source_sha256", "code_contract_sha256"):
@@ -452,7 +557,8 @@ def validate(policy, report, *, target_date=None):
         source_sha256=report['source_sha256'], code_contract_sha256=report['code_contract_sha256'],
         _projected=(projected, report['census']), source_receipt=report.get('source_receipt'),
         _algorithm=report['algorithm'],
-        _projection_contract=report.get('source_projection_contract_sha256') if report['algorithm']==LEGACY_ALGORITHM else None)
+        _projection_contract=report.get('source_projection_contract_sha256') if report['algorithm']==LEGACY_ALGORITHM or report.get('mapping_version')==LEGACY_MAPPING_VERSION else None,
+        _mapping_version=report.get('mapping_version'))
     if digest(rebuilt_policy) != digest(policy) or digest(rebuilt_report) != digest(report):
         raise ValueError('initial_delay_deterministic_selection_invalid')
     for key, cell in policy["cells"].items():
@@ -492,6 +598,9 @@ def verify_source(data_root, report, *, pipeline_reference_only=False):
     receipt = report.get('source_receipt')
     if not isinstance(receipt, dict) or receipt.get('schema') != 'pre_submit_delay_input_generation_v1':
         raise ValueError('initial_delay_source_window_unverified')
+    if receipt.get('native_situation_projection'):
+        from src.engine.automation.pre_submit_delay_situation_projection import verify
+        verify(receipt['native_situation_projection'])
     root = Path(data_root).resolve()
     day = report['source_date']
     if receipt.get('through_date') != day:
@@ -692,9 +801,9 @@ class PreparedPolicy:
             for row in iter_tree(policy.evidence_root,policy['cells_ref']):
                 if row['value']['anchor_kind'] != 'price_ready':
                     continue
-                # Zero and unverified cells use the existing immediate path.
-                # They do not consume resident positive-policy map capacity.
-                if not row['value'].get('delay_sec') or row['value'].get('runtime_apply_allowed') is False:
+                # A supported zero cell masks a positive parent. Only unsupported
+                # cells may fall back; zero is a decision, not absence.
+                if row['value'].get('delay_sec') is None or row['value'].get('runtime_apply_allowed') is False:
                     continue
                 if active_parents is not None and tuple(row['value']['parent_compatibility']) not in active_parents:
                     continue
