@@ -39,10 +39,85 @@ METRIC_CONTRACT = dict(
 )
 
 
+def holding_gap_identity(semantics):
+    """Identify only fully enumerated, native v2 missing-crossing evidence.
+
+    Report generations remain provenance, but a new clock/report location is
+    not a new loss of the same original position, BUY fill and signal.
+    Unbound, partial or ambiguous populations keep generation-based alerting.
+    """
+    if (semantics.get('schema') != 'holding_profit_exit_semantics_v2'
+            or semantics.get('status') != 'source_gap'
+            or semantics.get('semantic_status') != 'source_gap'
+            or semantics.get('findings') != [] or semantics.get('policy_binding_gaps') != []
+            or semantics.get('runtime_consumption_gaps') != []):
+        return None
+    gaps, details, lifecycle = (semantics.get(k) for k in
+                                ('source_gaps', 'source_gap_details', 'lifecycle'))
+    if (not isinstance(gaps, list) or not 0 < len(gaps) <= 128
+            or not isinstance(details, list) or len(details) != len(gaps)
+            or not isinstance(lifecycle, list)):
+        return None
+    expected, entries = set(), []
+    for gap in gaps:
+        if (not isinstance(gap, dict) or not isinstance(gap.get('position_id'), str)
+                or not gap['position_id'] or gap.get('reason') != 'tp_first_crossing_transition_missing'):
+            return None
+        expected.add((gap['position_id'], gap['reason']))
+    if len(expected) != len(gaps):
+        return None
+    seen = set()
+    for detail in details:
+        if (not isinstance(detail, dict)
+                or not isinstance(detail.get('position_id'), str)
+                or not isinstance(detail.get('reason'), str)):
+            return None
+        pair = (detail.get('position_id'), detail.get('reason'))
+        if (pair not in expected or pair in seen
+                or detail.get('source_disposition') != 'sampled_grid_exhausted_before_signal'
+                or detail.get('historical_recovery_proven') is not False
+                or not isinstance(detail.get('signal_id'), str) or not detail['signal_id']):
+            return None
+        seen.add(pair)
+        matches = [r for r in lifecycle if isinstance(r, dict)
+                   and r.get('position_key') == 'record:' + pair[0]
+                   and r.get('signal_id') == detail['signal_id']]
+        if len(matches) != 1:
+            return None
+        buy = matches[0].get('buy_fill_identity')
+        if not isinstance(buy, str) or len(buy) != 64 or any(c not in '0123456789abcdef' for c in buy):
+            return None
+        entries.append([matches[0]['position_key'], buy, detail['signal_id'], pair[1], detail['source_disposition']])
+    return {'schema': 'holding_source_gap_identity_v1', 'gaps': sorted(entries)}
+
+
+def _holding_identity(incident):
+    identity = incident.get('source_gap_identity')
+    if (incident.get('stage') != 'holding_profit_exit' or incident.get('scope') != 'report'
+            or incident.get('reason') != 'source_gap' or incident.get('status') != 'source_gap'
+            or not isinstance(identity, dict) or identity.get('schema') != 'holding_source_gap_identity_v1'):
+        return None
+    rows = identity.get('gaps')
+    if (not isinstance(rows, list) or not 0 < len(rows) <= 128
+            or any(not isinstance(r, list) or len(r) != 5
+                   or not all(isinstance(v, str) and v for v in r)
+                   or not r[0].startswith('record:') or len(r[1]) != 64
+                   or any(c not in '0123456789abcdef' for c in r[1])
+                   or r[3:] != ['tp_first_crossing_transition_missing', 'sampled_grid_exhausted_before_signal']
+                   for r in rows)
+            or len({tuple(r) for r in rows}) != len(rows)):
+        return None
+    return {'schema': identity['schema'], 'gaps': sorted(rows)}
+
+
 def fingerprint(incident):
     # An owner transfer is not a new incident. Missing hashes keep a stable
     # expected-path identity; observation time and run ID never enter this key.
     fields = [incident.get(k) for k in IDENTITY_KEYS]
+    identity = _holding_identity(incident)
+    if identity is not None:
+        fields.append(identity)
+        return hashlib.sha256(json.dumps(fields, separators=(',', ':'), sort_keys=True).encode()).hexdigest()
     if incident.get('stage')=='policy_generation':
         fields += [incident.get('source_generation'),incident.get('code_sha256'),incident.get('artifact')]
         return hashlib.sha256(json.dumps(fields,separators=(',',':')).encode()).hexdigest()
@@ -64,6 +139,31 @@ def bound_observation(details, incident, report_date):
                 and b.get("generation") == observed.get("report_sha256")
                 for b in details.get("semantic_source_bindings", []))
     return observed, bound
+
+
+def migrate_holding_gap_incidents(state, details, report_date):
+    """Upgrade delivery keys only against the exact already-observed bytes.
+
+    A legacy report with another hash cannot prove the same original gaps.
+    Never infer delivery, recovery or equivalence from a count or reason alone.
+    """
+    migration = {}
+    for old, incident in (state.get('semantic_incidents') or {}).items():
+        if not isinstance(incident, dict):
+            continue
+        observed, bound = bound_observation(details, incident, report_date)
+        identity = observed.get('source_gap_identity')
+        candidate = dict(incident, source_gap_identity=identity)
+        if (incident.get('source_gap_identity') is None
+                and bound and observed.get('native_validated') is True
+                and observed.get('observation_complete') is True
+                and observed.get('status') == 'source_gap'
+                and incident.get('generation') == observed.get('report_sha256')
+                and incident.get('target_date') == observed.get('target_date')
+                and _holding_identity(candidate) is not None):
+            incident['source_gap_identity'] = identity
+        migration[old] = fingerprint(incident)
+    return migration
 
 
 def closure_verified(incident, observed, bound):

@@ -3404,3 +3404,40 @@ def test_observer_final_check_rejects_kst_date_rollover(tmp_path, monkeypatch):
     assert outcome.severity == 'fail'
     assert 'observer_check_crossed_kst_date_boundary' in outcome.summary
     assert outcome.details['submission_bottleneck_monitor_publication_recheck']['stable'] is False
+
+
+def test_holding_native_source_gap_identity_reaches_alert_without_truncating_population(tmp_path):
+    from src.tests.test_holding_exit_sentinel import _semantic_flow
+    from src.tests.test_notify_error_detection_admin import _holding_gap_fixture
+    from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
+    from src.engine.error_detectors.artifact_freshness import _semantic_alert_candidates
+    event, mechanical, rows, lineage, at = _semantic_flow()
+    rows.append(event(2, 'exit_signal', lineage))
+    semantics = audit_profit_exit_flow(rows, target_date='2026-10-09', load_votes=lambda _: [],
+                                      mechanical_policy_receipt=mechanical, consumed_pid=42)
+    gaps, alert, _, _ = _holding_gap_fixture()
+    semantics.update(status='source_gap', semantic_status='source_gap', findings=[],
+        policy_binding_gaps=[], runtime_consumption_gaps=[],
+        **{k:gaps[k] for k in ('source_gaps','source_gap_details')})
+    original=semantics['lifecycle'][0]
+    original.update(position_key='record:42', signal_id='signal-1', buy_fill_identity='b'*64)
+    path=tmp_path/'data/report/holding_exit_sentinel/holding_exit_sentinel_2026-10-09.json'
+    path.parent.mkdir(parents=True)
+    report=dict(target_date='2026-10-09',as_of=semantics['as_of'],source_generation=semantics['source_generation'],profit_exit_semantics=semantics)
+    path.write_text(json.dumps(report))
+    observed=_holding_profit_exit_semantics(tmp_path,'2026-10-09')
+    assert observed['native_validated'] is True
+    assert observed['source_gap_identity'] == alert['source_gap_identity']
+    alerts=_semantic_alert_candidates('holding_profit_exit',observed,'2026-10-09')
+    assert alerts[0]['source_gap_identity']==alert['source_gap_identity']
+    assert alerts[0]['affected']==1
+    # A missing detail disables stable deduplication, without clearing the warning.
+    semantics['source_gap_details']=[]
+    path.write_text(json.dumps(report))
+    observed=_holding_profit_exit_semantics(tmp_path,'2026-10-09')
+    assert observed['status']=='source_gap'
+    assert observed['source_gap_identity'] is None
+    # Broken generation still fails the native contract entirely.
+    report['source_generation']='0'*64
+    path.write_text(json.dumps(report))
+    assert _holding_profit_exit_semantics(tmp_path,'2026-10-09')['status']=='source_invalid'

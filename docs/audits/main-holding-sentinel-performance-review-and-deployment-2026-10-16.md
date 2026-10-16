@@ -34,3 +34,20 @@
 구현→self review→보완→재리뷰 뒤 **2,679개 회귀 PASS**(21.61초), 변경 Python 2개 compile, 문서 print-only parser·link·diff 검사를 통과했다. 리뷰 범위 미해결 finding은 0이며 원 WARN/unknown을 성공이나 0원으로 바꾸지 않는다. entry_cancel_wait/rising_missed/auxiliary/holding_vote 네 capability 구성 해시가 실제 selected release와 모두 동일함을 확인했다. 원 exact-code fixture를 재사용하며 같은 fixture를 다시 생성하지 않았다. 증거: `capabilities-unchanged.json`.
 
 승인된 후속은 clean immutable release 생성→현재 정책/PREOPEN·PID·broker/WS 확인→정규 ordered drain/select/start→새 PID 소비→기동 이후 새 holding/BUY 보고서→정확한 보고서 SHA를 소비한 full detector다. 기동 전 보고서·이전 PASS·selector만으로 종료하지 않는다. 배포 terminal/실제 지연/남은 source acceptance는 후속 영수증을 아래에 추가한다.
+
+
+## 13:26 실제 성능 배포와 기동 후 수용
+
+성능 커밋 `59c92909783e967397a8d774bab60cd22ec78c96`를 정규 ordered 경로로 배포했다. 13:26:11 terminal PASS, Main PID3600286/start18867646이다. 이전 wrapper의 늦은 완료는 새 기동 수용에서 제외했다. 새 native holding 보고서는13:26:42/asof 이후 생성됐고 실제6.42초·peak469120KiB, SHA `05b25da618a84a5a767fc8cb1941040d2d9eea8180f347a53e37d5f0a483262a`다. policy/runtime gap과 native finding은0, 과거 first-crossing5건은 source_gap으로 보존됐다. BUY는13:27:26/SHA1814bce3ef0070429075afb9465b7e80be0c8f4ddeac2efddb34f85d871f0b17, completed/bounded_no_applicable_observations/unmet0이다. native 정규 full13:29:27은 두 SHA를 직접 소비하고 FAIL0·health6PASS를 확인했다. 수동13:28 full의 resource-wait는 수용 PASS로 사용하지 않았다.
+
+broker KR/NXT 재동기화·현재 Main036930 1주 및 수동042660/475150 보존·미체결0, 새 PID/transport epoch의 fixed5종목0B/0D 실제 수신을 확인했다. bootstrap JSON/env·prepared index·수동 제외·원 editable checklist bytes는 모두 불변이다. 이 수용은 자연 TP 새 양성 표본·실현 비용 회복·경제적 성과를 증명하지 않는다. 증거: 같은 tmp 디렉터리의 ordered-deploy-result, postrestart-holding-timing/native, natural-postrestart-full-detector, postdeploy-release-set/frozen-check, postrestart-ws-receipts/snapshot JSON.
+
+## 13:30 동일 결손 반복 통지 원인과 보완
+
+사용자 경보13:30:17은 위05b 보고서의 동일5개 결손이다. 기존 semantic fingerprint가 generation과 release별 absolute artifact 경로를 포함해 재게시/재배포를 새 사건으로 취급했다. 새로운 원천 결손으로 판정할 증거는 없다. 원 기록을 새로 만들 수 없으므로 source_gap 경고는 유지한다.
+
+보고서 검증 이후 전체 source_gaps/details/lifecycle을 대조해 position·BUY fill identity·signal·원 사유·sampled-grid 소진 disposition을 결속한다. native v2·정확한 full census·유일 identity·추가 finding/정책/런타임 gap 부재를 만족한 missing-crossing만 최대128개로 안정 식별한다. 하나라도 누락·모호·변경·다른 결손이면 기존 generation 기반으로 계속 경보를 낸다. 다른 stage의 identity·cooldown·delivery/retry·거래 동작은 그대로다.
+
+기존 발송 key 이행은 같은 원 보고서 SHA·날짜·native complete binding으로만 허용한다. 이미 식별된 사건을 다른 identity로 덮어쓰는 초기 결함을 회귀에서 재현하고 수정했다. 발송하지 않은 경보를 발송 완료로 이행하지 않으며 원 세대와 파일 경로는 관측 provenance로 보존한다. 다른 과거 세대는 동등하다고 추정하지 않으므로 처음 한 차례 신규 통지가 가능하다. fake sender 회귀와 private state 사본으로 검증하며 운영 Telegram 수동 발송·state 삭제/수동 편집은 하지 않는다.
+
+기존 producer/monitor/notifier와 기존 test 모듈만 보완한다. source_gap 상태 및 미복구 disposition·원 source bytes·정책/quantity/provider/threshold/safety는 유지한다. 구현→리뷰→보완→재리뷰, 관련9개 모듈 **2,707개 PASS(20.97초)**를 확인했다. 마지막 exact binding 조건 보완 뒤 notifier/artifact 회귀와 compile/diff/parser를 재확인한다. 새 release 선택·기동 후 native 소비·정규 notifier의 동일 사건 중복 억제는 별도 후속 수용이다.

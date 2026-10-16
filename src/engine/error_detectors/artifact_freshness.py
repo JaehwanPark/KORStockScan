@@ -509,6 +509,7 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         return dict(meta, **_semantic_failure(exc))
     status = semantics["status"]
+    from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
     return {
         **meta, "native_validated": True, "observation_complete": True,
         "source_generation": semantics.get("source_generation"), "observed_at": report.get("as_of"),
@@ -523,6 +524,7 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
         } else []),
         "signal_count": (semantics.get("funnel") or {}).get("tp_signal_snapshots", 0),
         "source_gap_count": len(semantics.get("source_gaps") or []),
+        "source_gap_identity": holding_gap_identity(semantics),
         "invalid_count": len(semantics.get("findings") or []),
         "semantic_status": semantics.get("semantic_status", status),
         "lifecycle_counts": dict(Counter(row.get("lifecycle_state") for row in semantics.get("lifecycle", []))),
@@ -2097,6 +2099,8 @@ def _semantic_alert_candidates(name, semantics, source_date):
             expected_overdue=semantics.get("expected_overdue", False),
             artifact=semantics.get("artifact"), generation=semantics.get("report_sha256"),
             source_generation=semantics.get("source_generation"),
+            source_gap_identity=semantics.get("source_gap_identity") if name == "holding_profit_exit" else None,
+            affected=semantics.get("source_gap_count") if name == "holding_profit_exit" and reason == "source_gap" else None,
             observation_generation=semantics.get("observation_generation"),
             policy_hash=semantics.get("policy_file_sha256"),
             owner="holding_exit_sentinel" if name == "holding_profit_exit" else name,

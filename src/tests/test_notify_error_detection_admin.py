@@ -609,3 +609,115 @@ def test_partial_delivery_retries_only_failed_batch(tmp_path,monkeypatch):
     assert len(json.loads(state.read_text())['notified_incident_fingerprints'])==3
     assert notifier.notify_from_report(report,mode='full',log_file='',state_file=state)=='sent'
     assert 'distinct_d' in messages[-1] and 'distinct_a' not in messages[-1]
+
+
+def _holding_gap_fixture():
+    from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
+    semantics = dict(schema='holding_profit_exit_semantics_v2', status='source_gap', semantic_status='source_gap',
+        findings=[], policy_binding_gaps=[], runtime_consumption_gaps=[],
+        source_gaps=[dict(position_id='42', reason='tp_first_crossing_transition_missing')],
+        source_gap_details=[dict(position_id='42', reason='tp_first_crossing_transition_missing',
+            signal_id='signal-1', source_disposition='sampled_grid_exhausted_before_signal', historical_recovery_proven=False)],
+        lifecycle=[dict(position_key='record:42', signal_id='signal-1', buy_fill_identity='b'*64)])
+    identity = holding_gap_identity(semantics)
+    alert = dict(source_date='2026-10-16', target_date='2026-10-16', stage='holding_profit_exit',
+        scope='report', reason='source_gap', status='source_gap', generation='a'*64, artifact='/release-one/report',
+        owner='HoldingProfitExitSourceContractRepair', source_gap_identity=identity)
+    observed = dict(source_date=alert['source_date'], target_date=alert['target_date'], status='source_gap',
+        findings=['source_gap'], native_validated=True, observation_complete=True,
+        report_sha256=alert['generation'], source_gap_identity=identity)
+    details = dict(semantic_alerts=[alert], holding_profit_exit_semantics=observed,
+        semantic_source_bindings=[dict(stage=alert['stage'], as_of_date='2026-10-16',
+            source_date=alert['source_date'], target_date=alert['target_date'], status='source_gap', generation=alert['generation'])])
+    return semantics, alert, observed, details
+
+
+def test_holding_original_gap_deduplicates_regeneration_but_keeps_unresolved(tmp_path, monkeypatch):
+    import copy
+    from src.engine.monitoring.semantic_incident_contract import fingerprint
+    _, alert, observed, details = _holding_gap_fixture()
+    report, state = tmp_path/'report.json', tmp_path/'state.json'
+    sent=[]
+    monkeypatch.setattr(notifier, '_load_telegram_config', lambda: ('fake', 'fake'))
+    monkeypatch.setattr(notifier, '_send_telegram', lambda *_: sent.append(1))
+    def notify():
+        report.write_text(json.dumps(dict(target_date='2026-10-16', results=[dict(detector_id='artifact_freshness', details=details)])))
+        return notifier.notify_from_report(report, mode='full', log_file='', state_file=state)
+    assert notify() == 'sent'
+    key=fingerprint(alert)
+    alert.update(generation='c'*64, artifact='/different-release/report')
+    observed['report_sha256']=alert['generation']
+    details['semantic_source_bindings'][0]['generation']=alert['generation']
+    assert notify() == 'duplicate_incident'
+    persisted=json.loads(state.read_text())
+    assert persisted['notified_incident_fingerprints'] == [key]
+    assert persisted['semantic_incidents'][key]['generation'] == 'c'*64
+    assert not persisted['historical_semantic_incidents']
+    # Unobservable/missing alert rounds cannot manufacture recovery.
+    details['semantic_alerts']=[]
+    assert notify() == 'no_alert'
+    assert json.loads(state.read_text())['active_incident_count'] == 1
+    details['semantic_alerts']=[alert]
+    # Distinct BUY, signal, position or population must alert even at the same count.
+    for index, value in ((0,'record:43'),(1,'d'*64),(2,'signal-2')):
+        changed=copy.deepcopy(alert)
+        changed['source_gap_identity']['gaps'][0][index]=value
+        observed['source_gap_identity']=changed['source_gap_identity']
+        details['semantic_alerts']=[changed]
+        assert notify() == 'sent'
+    assert len(sent)==4
+
+
+def test_holding_gap_legacy_delivery_upgrade_requires_exact_native_bytes(tmp_path, monkeypatch):
+    from src.engine.monitoring.semantic_incident_contract import fingerprint
+    _, alert, observed, details = _holding_gap_fixture()
+    legacy={k:v for k,v in alert.items() if k!='source_gap_identity'}
+    old_key=fingerprint(legacy)
+    report=tmp_path/'report.json'
+    report.write_text(json.dumps(dict(target_date='2026-10-16', results=[dict(detector_id='artifact_freshness', details=details)])))
+    monkeypatch.setattr(notifier, '_load_telegram_config', lambda: ('fake', 'fake'))
+    sent=[]
+    monkeypatch.setattr(notifier, '_send_telegram', lambda *_: sent.append(1))
+    for defect in (None, 'hash', 'partial', 'binding', 'undelivered'):
+        state=tmp_path/f'{defect}.json'
+        old=dict(legacy)
+        if defect=='hash':old['generation']='e'*64
+        if defect in {'partial','binding'}:old['generation']='f'*64
+        if defect=='partial':observed['observation_complete']=False
+        if defect=='binding':details['semantic_source_bindings']=[]
+        report.write_text(json.dumps(dict(target_date='2026-10-16', results=[dict(detector_id='artifact_freshness', details=details)])))
+        key=fingerprint(old)
+        state.write_text(json.dumps(dict(semantic_incidents={key:old}, notified_incident_fingerprints=[] if defect=='undelivered' else [key])))
+        result=notifier.notify_from_report(report, mode='full', log_file='', state_file=state)
+        assert result == ('duplicate_incident' if defect is None else 'sent')
+        if defect is None:
+            assert not sent
+            assert json.loads(state.read_text())['notified_incident_fingerprints']==[fingerprint(alert)]
+        observed['observation_complete']=True
+        details['semantic_source_bindings']=[dict(stage=alert['stage'], as_of_date='2026-10-16',
+            source_date=alert['source_date'], target_date=alert['target_date'], status='source_gap', generation=alert['generation'])]
+
+
+def test_holding_gap_identity_rejects_partial_ambiguous_or_other_losses():
+    import copy
+    from src.engine.monitoring.semantic_incident_contract import holding_gap_identity, fingerprint
+    semantics, alert, _, _ = _holding_gap_fixture()
+    for defect in ('missing', 'duplicate', 'extra', 'reason', 'signal', 'buy', 'invalid_type', 'policy', 'runtime', 'finding'):
+        value=copy.deepcopy(semantics)
+        if defect=='missing':value.pop('source_gap_details')
+        if defect=='duplicate':value['source_gap_details']*=2
+        if defect=='extra':value['source_gaps'].append(dict(position_id='43',reason='unknown'))
+        if defect=='reason':value['source_gaps'][0]['reason']='other_gap'
+        if defect=='signal':value['source_gap_details'][0]['signal_id']='unobserved'
+        if defect=='buy':value['lifecycle'][0]['buy_fill_identity']='z'*64
+        if defect=='invalid_type':value['source_gap_details'][0]['position_id']=[]
+        if defect=='policy':value['policy_binding_gaps']=['missing']
+        if defect=='runtime':value['runtime_consumption_gaps']=['missing']
+        if defect=='finding':value['findings']=['invalid']
+        assert holding_gap_identity(value) is None, defect
+    missing=dict(alert, source_gap_identity=None)
+    assert fingerprint(missing)!=fingerprint(dict(missing,generation='f'*64))
+    assert fingerprint(alert)!=fingerprint(dict(alert,reason='other_gap'))
+    changed=json.loads(json.dumps(alert));changed['source_gap_identity']['gaps'].append(
+        ['record:43','d'*64,'signal-2','tp_first_crossing_transition_missing','sampled_grid_exhausted_before_signal'])
+    assert fingerprint(alert)!=fingerprint(changed)

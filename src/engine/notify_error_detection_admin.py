@@ -17,7 +17,8 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "error_detection_telegram_notify_state.json"
 
 from src.engine.monitoring.semantic_incident_contract import (
-    STAGE_HOOKS, fingerprint as semantic_fingerprint, reconcile,
+    STAGE_HOOKS, fingerprint as semantic_fingerprint, reconcile, migrate_holding_gap_incidents,
+    bound_observation,
 )
 
 SEMANTIC_ALERT_STAGES = frozenset(STAGE_HOOKS)
@@ -144,6 +145,16 @@ def _alert_results(report: dict) -> list[dict]:
                 or (value.get("status") == "unobservable" and not value.get("expected_overdue"))
                 or not value.get("reason") or not value.get("owner")):
                 continue
+            if value.get('source_gap_identity') is not None:
+                observed, bound = bound_observation(item.get('details') or {}, value, report.get('target_date'))
+                if (not bound or observed.get('native_validated') is not True
+                        or observed.get('observation_complete') is not True
+                        or observed.get('report_sha256') != value.get('generation')
+                        or observed.get('status') != value.get('status')
+                        or observed.get('source_date') != value.get('source_date')
+                        or observed.get('target_date') != value.get('target_date')
+                        or observed.get('source_gap_identity') != value['source_gap_identity']):
+                    value = {k: v for k, v in value.items() if k != 'source_gap_identity'}
             alerts.append({"detector_id": "artifact_freshness", "severity": "warning",
                 "summary": value["reason"], "semantic_incident": value,
                 "recommended_action": f"{value['owner']}: {value.get('closure_test', '')}"})
@@ -282,15 +293,16 @@ def _notify_from_report_locked(
         state['last_observation_epoch'] = report_epoch
     # Migrate delivered fingerprints without treating an owner rename as a
     # recurrence. Delivery receipts and unresolved observations remain distinct.
-    migration = {old: semantic_fingerprint(row) for old, row in
-                 (state.get("semantic_incidents") or {}).items() if isinstance(row, dict)}
+    details = next((r.get("details") or {} for r in report.get("results", [])
+                    if isinstance(r, dict) and r.get("detector_id") == "artifact_freshness"), {})
+    migration = migrate_holding_gap_incidents(state, details, report.get("target_date"))
     if "active_incident_fingerprints" in state:
         state["active_incident_fingerprints"] = [migration.get(k, k) for k in state["active_incident_fingerprints"]]
     delivered = set(state.get("notified_incident_fingerprints",
                               state.get("active_incident_fingerprints", [])))
     delivered = {migration.get(k, k) for k in delivered}
-    details = next((r.get("details") or {} for r in report.get("results", [])
-                    if isinstance(r, dict) and r.get("detector_id") == "artifact_freshness"), {})
+    if "notified_incident_fingerprints" in state:
+        state["notified_incident_fingerprints"] = sorted(delivered)
     state = reconcile(state, details, report.get("target_date"),
         [r["semantic_incident"] for r in fail_results if isinstance(r.get("semantic_incident"), dict)],
         source_matches=lambda i: _semantic_source_matches(report, {"details": details}, i))
