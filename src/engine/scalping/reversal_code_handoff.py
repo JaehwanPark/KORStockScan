@@ -38,6 +38,24 @@ def validate_receipt(receipt, *, day, commit, root, bundle_sha, pointer_sha):
     return receipt
 
 
+def _validated_origin_receipt(data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha):
+    """Reuse native sealed ancestry under the approved pipeline-reference scope."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    source = path(data_root, day, origin_commit, bundle_sha)
+    if not source.exists():
+        return None
+    receipt = N._read(source)
+    validate_receipt(receipt, day=day, commit=origin_commit, root=origin_root,
+                     bundle_sha=bundle_sha, pointer_sha=pointer_sha)
+    for name, expected in {**receipt['source_hashes'], **receipt['code_hashes']}.items():
+        if not N.source_receipt_matches(dict(path=name, sha256=expected), data_root=data_root):
+            raise ValueError('active_policy_origin_receipt_source_changed:' + name)
+    refs = {**receipt['source_hashes'], **receipt['code_hashes']}
+    refs[str(source.resolve())] = P.file_hash(source)
+    return dict(bundle_sha256=bundle_sha, source_hashes=refs,
+                verification_basis='native_sealed_code_handoff_pipeline_references')
+
+
 def validate(bundle,data_root,*,original_error):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.infrastructure.runtime_release_router import selected_release
@@ -168,9 +186,11 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm):
         raise ValueError('active_policy_code_handoff_parity_invalid')
     if any(d!=C.definition(b) for b,d in bundle['continuous_reversal']['operating_manifest']['definitions'].items()):
         raise ValueError('active_policy_code_handoff_definition_changed')
-    output=subprocess.check_output([str(origin_root/'.venv/bin/python'),'-B','-c',_ORIGIN_SCRIPT,str(Path(data_root).resolve()),day],
-        cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=120)
-    checked=json.loads(output)
+    checked=_validated_origin_receipt(data_root,day,origin_root,previous,bundle['bundle_sha256'],P.file_hash(pointer))
+    if checked is None:
+        output=subprocess.check_output([str(origin_root/'.venv/bin/python'),'-B','-c',_ORIGIN_SCRIPT,str(Path(data_root).resolve()),day],
+            cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=120)
+        checked=json.loads(output)
     if (checked['bundle_sha256']!=bundle['bundle_sha256'] or pointer.read_bytes()!=before
             or selection_path.read_bytes()!=selection_before):
         raise ValueError('active_policy_code_handoff_parent_changed')
@@ -191,6 +211,7 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm):
         origin_selection_sha256=selection_sha,
         current_pointer_sha256=P.file_hash(pointer),source_hashes=sources,code_hashes=codes,
         pipeline_source_validation=N.PIPELINE_REFERENCE_VALIDATION,
+        origin_verification_basis=checked.get('verification_basis','native_origin_validator'),
         pipeline_source_reference_count=sum(N.is_pipeline_source_reference(p,data_root=data_root) for p in sources),
         policy_reselected=False,provider_called=False,actual_pid_consumed=False,source_semantics_repair=True))
     dest=path(data_root,day,commit,bundle['bundle_sha256']);dest.parent.mkdir(parents=True,exist_ok=True)

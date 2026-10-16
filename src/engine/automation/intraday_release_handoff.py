@@ -734,7 +734,7 @@ REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
     ),
     'src/engine/scalping/reversal_code_handoff.py': (
         'f73faae0d4eb1e4f844d2cc7b6ab27f0c03316cb6d2aa85a8dbbae44e43c9fec',
-        '16cde5253c71d887894716d36ca8ca2614e0fa0cb835c79ffaf28103b2df8bfd',
+        '5fc405a276c114e9ac6966b3d56b662863a5e01ccc4bb61c133db916f9448ab9',
     ),
     'src/engine/scalping/reversal_source_diagnostics.py': (
         'f3d66158bbeae90f8258333d90efb45e652ca95d6b4ef5f868066e0509c18783',

@@ -38,6 +38,36 @@ def test_policy_reference_exclusion_keeps_reports_and_other_raw_strict(tmp_path)
         assert not N.source_receipt_matches(record, data_root=tmp_path)
 
 
+def test_code_handoff_reuses_native_origin_without_raw_or_subprocess(tmp_path, monkeypatch):
+    from src.engine.scalping import reversal_code_handoff as H
+    from src.engine.scalping import continuous_reversal_postclose as P
+    origin = tmp_path / 'origin'
+    control = tmp_path / 'issued-report.json'
+    control.write_text('issued')
+    code = tmp_path / 'origin-code.py'
+    code.write_text('same native code')
+    pipeline = tmp_path / 'pipeline_events/pipeline_events_2026-10-15.jsonl'
+    day, commit, bundle, pointer = '2026-10-16', 'a' * 40, 'b' * 64, 'c' * 64
+    record = P.seal(dict(schema=H.SCHEMA, authority=H.AUTHORITY, target_date=day,
+        release_commit=commit, release_root=str(origin), bundle_sha256=bundle,
+        current_pointer_sha256=pointer, policy_reselected=False, provider_called=False,
+        source_hashes={str(control):P.file_hash(control),str(pipeline):'d'*64},
+        code_hashes={str(code):P.file_hash(code)}))
+    path = H.path(tmp_path,day,commit,bundle)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(record))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('unexpected origin process')
+    monkeypatch.setattr(H.subprocess,'check_output',forbidden)
+    checked = H._validated_origin_receipt(tmp_path,day,origin,commit,bundle,pointer)
+    assert checked['source_hashes'][str(pipeline)] == 'd'*64
+    assert checked['source_hashes'][str(code)] == P.file_hash(code)
+    assert checked['source_hashes'][str(path)] == P.file_hash(path)
+    control.write_text('changed')
+    with pytest.raises(ValueError,match='origin_receipt_source_changed'):
+        H._validated_origin_receipt(tmp_path,day,origin,commit,bundle,pointer)
+
+
 def session(root, **kw):
     return D.DigestSession(root, '2026-10-14', role='observer', generation={'code':'test'}, **kw)
 
