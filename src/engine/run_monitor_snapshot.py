@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
@@ -95,6 +96,7 @@ def main() -> int:
     error_kind = ""
     error_message = ""
     result: dict[str, str] = {}
+    validation = None
     if not args.skip_lock:
         lock_handle = open(lock_path, "a+", encoding="utf-8")
         try:
@@ -117,11 +119,15 @@ def main() -> int:
             lock_handle.close()
             return 0
     try:
-        result = save_monitor_snapshots_for_date_with_profile(
-            target_date,
-            profile=args.profile,
-            io_delay_sec=max(0.0, float(args.io_delay_sec)),
-        )
+        from src.engine.infrastructure.validation_digest_session import postclose_session
+        from src.utils.constants import DATA_DIR
+        session = postclose_session(DATA_DIR,target_date) if args.profile == 'postclose_exit' else nullcontext()
+        with session as validation:
+            result = save_monitor_snapshots_for_date_with_profile(
+                target_date,
+                profile=args.profile,
+                io_delay_sec=max(0.0, float(args.io_delay_sec)),
+            )
     except Exception as exc:
         status = "failed"
         error_kind = type(exc).__name__
@@ -145,6 +151,7 @@ def main() -> int:
                 "error_kind": error_kind or None,
                 "error": error_message or None,
                 "snapshots": result if status == "success" else {},
+                "validation_io": validation.stats if validation is not None else None,
             },
             ensure_ascii=False,
         )

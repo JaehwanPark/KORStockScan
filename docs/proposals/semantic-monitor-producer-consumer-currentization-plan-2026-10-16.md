@@ -318,3 +318,5 @@ source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10
 실측에서 손절 확인은 약10분간 수행됐고 같은 원천 검증이 여러 단계에서 반복됐다. native 손절 CLI에도 기존 postclose invocation-local digest session을 적용해 첫 전체 검증은 수행하고 같은 stat/ctime 세대의 후속 digest만 메모리에서 재사용한다. 라이브러리 기본 검증은 유지하며 세션은 호출 종료 시 폐기하고 persistent 판정 캐시를 만들지 않는다. full/reused bytes와 시간은 별도 진단으로 기록한다.
 
 실자료 대사에서 옛 gzip와 sidecar가 함께 있을 때 새 inode 경로가 기존 valid_empty를 source_gap으로 바꾸는 호환성 차이를 추가로 발견했다. 갱신 전 source-window gate에서 중단했으며 새 보고서는 쓰지 않았다. 원 identity 영수증 없는 옛 gzip은 기존 bounded gzip byte-generation 계약을 그대로 유지하고, 새 영수증이 있는 원천만 inode 인계 경로를 사용한다. 기존 전체 날짜의 frozen window 일치와 별도 회귀로 확인한다.
+
+보유 재생성 PID의 중간 계측은 논리 읽기17.86GB·물리 읽기12.26GB였으며 task-local 직접 builder 호출에는 세션이 없었다. 정규 `run_monitor_snapshot` CLI의 postclose_exit 경계에도 같은 invocation-local session을 적용한다. 원본 전체 해시를 처음 한 번 검증하고 원천 세대 변경은 계속 탐지하며, normal intraday/library 호출과 원 producer 오류·lock·wrapper-only gate는 보존한다. 실패 경로에서도 세션이 닫히는 실제 CLI 회귀로 확인한다.

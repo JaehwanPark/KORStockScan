@@ -233,3 +233,32 @@ def test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract(sna
     assert day['projection']==dict(path=archived.name,size=archived.stat().st_size,
         sha256=hashlib.sha256(archived.read_bytes()).hexdigest())
     assert 'snapshot_identity' not in day['projection']
+
+
+@pytest.mark.parametrize('profile',['postclose_exit','intraday_light'])
+@pytest.mark.parametrize('fails',[False,True])
+def test_native_snapshot_cli_scopes_reuse_and_closes_session_on_failure(tmp_path,monkeypatch,capsys,profile,fails):
+    import sys
+    from src.engine import run_monitor_snapshot as cli
+    from src.engine.infrastructure.validation_digest_session import ACTIVE
+    from src.utils import constants
+    raw=tmp_path/'large.bin';raw.write_bytes(b'x'*(2*1024*1024))
+    monkeypatch.setattr(constants,'DATA_DIR',tmp_path)
+    monkeypatch.setenv('MONITOR_SNAPSHOT_FROM_WRAPPER','1')
+    monkeypatch.setattr(sys,'argv',['run_monitor_snapshot','--date','2026-10-16','--profile',profile,
+        '--skip-lock','--lock-file',str(tmp_path/'snapshot.lock')])
+    def build(*a,**k):
+        assert (ACTIVE.get() is not None)==(profile=='postclose_exit')
+        assert byte_generation(raw)==byte_generation(raw)
+        if fails:raise ValueError('original_producer_failure')
+        return {'snapshot_manifest':'unchanged-native-manifest'}
+    monkeypatch.setattr(cli,'save_monitor_snapshots_for_date_with_profile',build)
+    assert cli.main()==(1 if fails else 0)
+    assert ACTIVE.get() is None
+    assert not (tmp_path/'runtime/validation_digests').exists()
+    result=json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    if profile=='postclose_exit':
+        assert result['validation_io']['full_reads']==result['validation_io']['reused_reads']==1
+    else:assert result['validation_io'] is None
+    if fails:assert result['error']=='original_producer_failure' and result['snapshots']=={}
+    else:assert result['snapshots']=={'snapshot_manifest':'unchanged-native-manifest'}

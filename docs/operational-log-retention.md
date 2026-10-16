@@ -66,6 +66,10 @@ input windows, all-scope/stop consumers and bootstrap bind the same logical
 source through this receipt; their census, cost and policy checks stay required.
 Metadata consumers verify compressed bytes without decoding huge timelines,
 and the existing explicit digest session can reuse unchanged generations.
+The native postclose snapshot and stop CLIs share this invocation-local session
+through their full producer/publication boundary. Intraday snapshots and normal
+library callers retain full native reads; no persistent validator verdict is
+published. Diagnostic full/reused bytes remain separate from semantic results.
 Content-consuming research streams gzip and checks CRC. Old archives without
 an original-identity receipt cannot fabricate a former raw inode or close an
 existing source gap.
