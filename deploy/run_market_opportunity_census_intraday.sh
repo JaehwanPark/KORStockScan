@@ -21,6 +21,10 @@ VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 LOCK_FILE="${MARKET_OPPORTUNITY_CENSUS_LOCK_FILE:-$PROJECT_DIR/tmp/run_market_opportunity_census_intraday.lock}"
 LOG_FILE="${MARKET_OPPORTUNITY_CENSUS_LOG_FILE:-$PROJECT_DIR/logs/run_market_opportunity_census_intraday.log}"
+
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "run_market_opportunity_census_intraday" "$LOG_FILE" || \
+  echo "[OWNED_LOG_ROTATION_WARNING] internal rollover failed; work continues" >&2
+
 REFRESH_REPORT="${MARKET_OPPORTUNITY_CENSUS_REFRESH_REPORT:-auto}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"

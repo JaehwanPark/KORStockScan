@@ -171,6 +171,22 @@ class ResourceUsageDetector(BaseDetector):
                     f"Disk free {disk_free:.0f}MB approaching {disk_free_min}MB"
                 )
 
+        capacity = (PROJECT_ROOT / 'data').resolve() / 'report/log_retention/tmp_capacity.json'
+        if capacity.exists():
+            try:
+                from src.engine.infrastructure.log_retention import read_json
+                census = read_json(capacity)
+                at = census.get('at')
+                if type(at) not in (int,float) or not 0 <= time.time()-at <= 2*86400:
+                    warnings.append('Temporary storage capacity census stale or invalid')
+                elif census.get('capacity_inventory_complete') is not True:
+                    warnings.append('Temporary storage capacity census incomplete; pinned evidence preserved')
+                elif census.get('capacity_warning') is True or census.get('growth_warning') is True:
+                    warnings.append('Temporary storage capacity/growth budget exceeded; pinned evidence preserved')
+                details['tmp_retention_capacity'] = {k:census.get(k) for k in
+                    ('at','total_bytes','limit_bytes','capacity_inventory_complete','growth_bytes','growth_warning')}
+            except (OSError, ValueError, TypeError):
+                warnings.append('Temporary storage capacity census unreadable')
         severity, summary = self._classify(issues, warnings)
         return DetectionResult(
             detector_id=self.id,
@@ -230,24 +246,35 @@ class ResourceUsageDetector(BaseDetector):
         if last_ts > 0 and now_ts - last_ts < 1800:
             details["log_rotate_trigger"] = "cooldown_active"
             return
-        rotate_script = PROJECT_ROOT / "deploy" / "run_logs_rotation_cleanup_cron.sh"
-        if not rotate_script.exists():
-            details["log_rotate_trigger"] = "script_not_found"
-            return
+        # This bounded lane never runs raw/Parquet or postclose compaction.
+        import uuid
+        run_id = uuid.uuid4().hex
+        workspace = (PROJECT_ROOT / "data").resolve().parent
+        terminal = workspace / "tmp" / ("log_retention_" + run_id + ".json")
         try:
             result = subprocess.run(
-                ["bash", str(rotate_script), "30"],
+                [str(PROJECT_ROOT / ".venv/bin/python"), "-m",
+                 "src.engine.infrastructure.log_retention", "--workspace", str(workspace),
+                 "--apply", "--run-id", run_id, "--terminal", str(terminal)],
                 capture_output=True,
                 text=True,
                 timeout=30,
                 cwd=str(PROJECT_ROOT),
             )
-            self._write_rotate_cooldown_ts(now_ts)
-            details["log_rotate_trigger"] = "ok"
+            from src.engine.infrastructure.log_retention import read_json
+            receipt = read_json(terminal) if terminal.exists() else {}
+            valid = (result.returncode == 0 and not terminal.is_symlink()
+                     and receipt.get("status") == "complete" and receipt.get("run_id") == run_id
+                     and receipt.get("apply") is True and receipt.get("lane") == "closed_operational_logs")
+            if valid:
+                self._write_rotate_cooldown_ts(now_ts)
+            details["log_rotate_trigger"] = "ok" if valid else "failed"
+            details["log_rotate_exit_code"] = result.returncode
+            details["log_rotate_terminal"] = str(terminal)
             details["log_rotate_output"] = (
                 result.stdout.strip().rsplit("\n", 1)[-1] if result.stdout else ""
             )
-        except (subprocess.TimeoutExpired, OSError) as e:
+        except (subprocess.TimeoutExpired, OSError, ValueError) as e:
             details["log_rotate_trigger"] = f"error: {e}"
 
     @staticmethod

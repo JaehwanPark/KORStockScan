@@ -446,10 +446,17 @@ class TestResourceUsageDetector:
         calls = []
 
         def fake_run(*args, **kwargs):
+            import json
+            from pathlib import Path
             calls.append((args, kwargs))
+            cmd = args[0]
+            terminal = Path(cmd[cmd.index('--terminal')+1]); terminal.parent.mkdir(parents=True, exist_ok=True)
+            terminal.write_text(json.dumps(dict(status='complete', apply=True, lane='closed_operational_logs',
+                run_id=cmd[cmd.index('--run-id')+1])))
 
             class Result:
                 stdout = "rotated\n"
+                returncode = 0
 
             return Result()
 
@@ -491,7 +498,7 @@ class TestResourceUsageDetector:
             details = {}
             ResourceUsageDetector(dry_run=False)._auto_rotate_logs(details)
 
-        assert details["log_rotate_trigger"] == "script_not_found"
+        assert details["log_rotate_trigger"].startswith("error:")
         assert not cooldown_state.exists()
 
     def test_log_rotate_timeout_does_not_write_cooldown(self, tmp_path):
@@ -523,3 +530,25 @@ class TestResourceUsageDetector:
 
         assert details["log_rotate_trigger"].startswith("error:")
         assert not cooldown_state.exists()
+
+
+@pytest.mark.parametrize('defect', ['nonzero','missing','wrong_run','wrong_lane','not_applied','symlink'])
+def test_cleanup_failure_never_receives_success_cooldown(tmp_path, monkeypatch, defect):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from src.engine.error_detectors import resource_usage as mod
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', tmp_path)
+    cooldown = tmp_path/'cooldown'; monkeypatch.setattr(ResourceUsageDetector, '_ROTATE_COOLDOWN_STATE', cooldown)
+    def run(cmd, **kwargs):
+        terminal = Path(cmd[cmd.index('--terminal')+1]); terminal.parent.mkdir(parents=True,exist_ok=True)
+        receipt = dict(status='complete', run_id=cmd[cmd.index('--run-id')+1], apply=True, lane='closed_operational_logs')
+        if defect == 'wrong_run': receipt['run_id'] = 'previous'
+        if defect == 'wrong_lane': receipt['lane'] = 'full_compaction'
+        if defect == 'not_applied': receipt['apply'] = False
+        if defect != 'missing': terminal.write_text(json.dumps(receipt))
+        if defect == 'symlink':
+            target = terminal.with_suffix('.source'); terminal.rename(target); terminal.symlink_to(target)
+        return SimpleNamespace(returncode=7 if defect == 'nonzero' else 0, stdout='ok')
+    monkeypatch.setattr(mod.subprocess, 'run', run)
+    details = {}; ResourceUsageDetector(dry_run=False)._auto_rotate_logs(details)
+    assert details['log_rotate_trigger'] != 'ok' and not cooldown.exists()

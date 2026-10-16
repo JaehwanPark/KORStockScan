@@ -19,6 +19,10 @@ COOLDOWN_STATE_FILE="${BUY_FUNNEL_SENTINEL_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp
 # freshness contract even after a successful run. Explicit overrides remain.
 COOLDOWN_SEC="${BUY_FUNNEL_SENTINEL_COOLDOWN_SEC:-0}"
 LOG_FILE="${BUY_FUNNEL_SENTINEL_LOG_FILE:-$PROJECT_DIR/logs/run_buy_funnel_sentinel.log}"
+
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "run_buy_funnel_sentinel_intraday" "$LOG_FILE" || \
+  echo "[OWNED_LOG_ROTATION_WARNING] internal rollover failed; work continues" >&2
+
 DRY_RUN="${BUY_FUNNEL_SENTINEL_DRY_RUN:-0}"
 USE_CACHE="${BUY_FUNNEL_SENTINEL_USE_CACHE:-1}"
 USE_SUMMARY="${BUY_FUNNEL_SENTINEL_USE_SUMMARY:-1}"

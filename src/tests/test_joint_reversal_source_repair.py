@@ -294,7 +294,7 @@ def test_fresh_disconnected_print_cannot_become_complete_no_match(gap):
     assert state.coverage_source_censored==1
     receipt=dict(native_source_current=True,selected_branch_truth=dict(state.coverage_snapshot),
         selected_lifecycle_counts=state.coverage_counts,source_censored_count=state.coverage_source_censored)
-    assert native_wait_result(receipt,{})[0]=='source_unavailable'
+    assert native_wait_result(receipt,{})[0]=='observation_incomplete'
 
 
 def test_partial_source_wait_uses_original_residence_and_event_wakeup(monkeypatch):

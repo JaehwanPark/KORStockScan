@@ -764,7 +764,7 @@ def _native_preassessment_terminal_valid(row, actor, bundle):
         and _reversal_lifecycle_diagnostic(proof) is not None)
 
 
-def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False):
+def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False, historical=False):
     """A native FALSE observation proves coverage, never machine/AI acceptance."""
     import ast
     try:
@@ -817,7 +817,7 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False):
                         for b,d in readiness['branch_descriptors'].items()} != receipt.get('selected_branch_truth')):
                 return False
         if result in {'pattern_not_matched','observation_incomplete'} or feature_gap:
-            if receipt.get('native_source_current') is not True:return False
+            if not historical and receipt.get('native_source_current') is not True:return False
             if not allow_incomplete:
                 counts=receipt.get('selected_lifecycle_counts') or {}
                 if (not isinstance(counts,dict) or not isinstance(receipt.get('selected_branch_truth'),dict)
@@ -859,7 +859,10 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False):
             and all(type(receipt.get(k)) is int and receipt[k] > 0
                     for k in ('native_epoch', 'native_sequence'))
             and type(receipt.get('observed_seconds')) in (int, float)
-            and math.isfinite(receipt['observed_seconds']) and receipt['observed_seconds'] > 0
+            and math.isfinite(receipt['observed_seconds'])
+            # A first exact trade has a zero-duration interval. It can prove
+            # missing features, never a complete no-match observation.
+            and (receipt['observed_seconds'] >= 0 if feature_gap else receipt['observed_seconds'] > 0)
             and int(fields.get('zero_base_ws_exact_0b_count', 0)) > 0
             and int(fields.get('zero_base_ws_signed_0b_count', 0)) > 0
             and int(fields.get('zero_base_ws_exact_0d_count', 0)) > 0
@@ -958,6 +961,36 @@ def _probe_verified_pending(row, *, feature_gap=False):
         return dict(pending_count=receipt['selected_pending_count'], unknown_count=unknown,
                     source_censored_count=receipt['source_censored_count'])
     except (KeyError, ValueError, TypeError, SyntaxError, RecursionError):
+        return None
+
+
+def _probe_verified_history(row):
+    """Historical evaluations prove neither current executable data nor no-match."""
+    import ast
+    if not _probe_verified_no_match(row, allow_incomplete=True, historical=True):
+        return None
+    try:
+        f = row['fields']; r = f['native_observation_receipt']
+        if isinstance(r, str):
+            try: r = json.loads(r)
+            except ValueError: r = ast.literal_eval(r)
+        counts = r['selected_lifecycle_counts']; truth = r['selected_branch_truth']
+        if (r.get('reason') not in {'no_matching_pattern','required_window_incomplete'}
+                or not isinstance(counts, dict) or not 0 < len(counts) <= 512 or set(counts) != set(truth)
+                or any(v not in {'TRUE','FALSE','UNKNOWN'} for v in truth.values())
+                or any(not isinstance(v,dict) or not set(v) <= {'TRUE','FALSE','UNKNOWN'}
+                    or any(type(n) is not int or n < 0 for n in v.values()) for v in counts.values())
+                or type(r.get('source_censored_count')) is not int or r['source_censored_count'] < 0):
+            return None
+        known = sum(v.get('TRUE',0)+v.get('FALSE',0) for v in counts.values())
+        reason = f.get('zero_base_probe_reason')
+        if known <= 0 or not (
+            reason == 'native_history_observed_current_source_stale' and r.get('native_source_current') is False
+            or reason == 'native_history_observed_with_source_gap' and r.get('native_source_current') is True
+                and r['source_censored_count'] > 0):
+            return None
+        return {'known_count': known}
+    except (KeyError, TypeError, ValueError, SyntaxError, RecursionError):
         return None
 
 
@@ -1083,6 +1116,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
     wait_total = boundary_waits = source_waits = unclassified_waits = 0
     pending_total = pending_verified = pending_unknown = pending_censored = 0
     feature_gap_total = feature_gap_verified = feature_gap_unknown = 0
+    history_total = history_verified = history_known = 0
     wait_reasons = Counter()
 
     def native_watch_claim(fields, symbol, at, route):
@@ -1183,6 +1217,16 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
             else:
                 covered_by_route[str(route or 'UNKNOWN')] += 1
                 healthy("machine_probe", row, route)
+        elif result == 'observation_incomplete' and reason in {
+                'native_history_observed_current_source_stale', 'native_history_observed_with_source_gap'}:
+            observed['probe_history_only'] += 1
+            history_total += 1
+            proof = _probe_verified_history(row)
+            if proof is not None:
+                history_verified += 1
+                history_known += proof['known_count']
+            record('machine_probe', reason if proof else 'native_history_unverified', row,
+                   diagnostic=True, code=row.get('stock_code'), route=route)
         elif result == 'observation_incomplete':
             observed['probe_observation_incomplete']+=1
             pending_total += 1
@@ -1467,6 +1511,11 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
             "count": pending_total, "verified_pending_count": pending_verified,
             "unclassified_count": pending_total-pending_verified, "unknown_count": pending_unknown,
             "source_censored_count": pending_censored, "runtime_effect": False,
+            "machine_admission_proven": False, "pattern_no_match_proven": False},
+        "native_history_observations": {"schema": "submission_monitor_native_history_census_v1",
+            "count": history_total, "verified_count": history_verified,
+            "unclassified_count": history_total-history_verified, "known_count": history_known,
+            "runtime_effect": False, "current_source_coverage_proven": False,
             "machine_admission_proven": False, "pattern_no_match_proven": False},
         "native_feature_gap_observations": {"schema": "submission_monitor_native_feature_gap_census_v1",
             "count": feature_gap_total, "verified_count": feature_gap_verified,
@@ -3475,6 +3524,22 @@ def observation_health_projection(result):
     if valid_feature_gap:
         allowed_diagnostics.add('machine_probe:required_branch_feature_missing')
     require(not feature_gap_n or valid_feature_gap, 'native_feature_gap_observation_not_verified')
+    history = obj(gap.get('native_history_observations'))
+    history_n = obj(gap.get('observed')).get('probe_history_only', 0)
+    history_reasons = {'machine_probe:native_history_observed_current_source_stale',
+                       'machine_probe:native_history_observed_with_source_gap'}
+    valid_history = (history.get('schema') == 'submission_monitor_native_history_census_v1'
+        and count(history_n, minimum=1) and count(history.get('count'), minimum=1)
+        and count(history.get('verified_count'), minimum=1)
+        and history['count'] == history['verified_count'] == history_n
+        and count(history.get('unclassified_count'), maximum=0)
+        and count(history.get('known_count'), minimum=history_n)
+        and all(history.get(k) is False for k in ('runtime_effect', 'current_source_coverage_proven',
+                                                'machine_admission_proven', 'pattern_no_match_proven'))
+        and all(count(obj(gap.get('diagnostics')).get(k, 0)) for k in history_reasons)
+        and sum(obj(gap.get('diagnostics')).get(k, 0) for k in history_reasons) == history_n)
+    if valid_history: allowed_diagnostics.update(history_reasons)
+    require(not history_n or valid_history, 'native_history_observation_not_verified')
     diagnostics = obj(gap.get('diagnostics'))
     scoped = obj(gap.get('diagnostics_by_scope'))
     totals = Counter()
@@ -3499,7 +3564,7 @@ def observation_health_projection(result):
         and set(observed) <= {'probe_results', 'probe_assessed', 'entry_traces', 'machine_assessed',
             'auxiliary_required', 'auxiliary_called', 'auxiliary_cost_bound',
             'auxiliary_pending', 'auxiliary_pending_bound', 'auxiliary_transport_unavailable',
-            'probe_observation_incomplete', 'probe_native_no_match', 'probe_feature_missing'}
+            'probe_observation_incomplete', 'probe_native_no_match', 'probe_feature_missing', 'probe_history_only'}
         and all(count(v) for v in observed.values()))
     expected_gap = ('gap_observed' if diagnostics or gap.get('issues') else 'observed_no_gap' if any(observed.values())
                     else 'unobservable')

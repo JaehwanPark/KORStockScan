@@ -4542,3 +4542,41 @@ def test_feature_gap_health_requires_verified_census_and_never_grants_coverage(t
     assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
     assert health['full_coverage_proven'] is False and health['runtime_effect'] is False
     assert json.dumps(result,sort_keys=True)==original
+
+
+@pytest.mark.parametrize('duration', [0, 0.0, -1, float('nan')])
+def test_first_exact_trade_feature_gap_is_not_an_observer_contract_failure(tmp_path, duration):
+    now = monitor.stamp('2026-10-16T14:56:50+09:00')
+    row = _native_feature_gap_probe(now)
+    f = row['fields']; r = f['native_observation_receipt']; b = f['zero_base_branch_readiness']
+    r.update(observed_seconds=duration, native_sequence=1, selected_branch_truth={'G2':'UNKNOWN'},
+             selected_lifecycle_counts={'G2':{'UNKNOWN':1}})
+    b.update(native_sequence=1, branch_descriptors={'G2':b['branch_descriptors']['G2']})
+    proof = monitor._probe_verified_pending(row, feature_gap=True)
+    assert (proof is not None) == (duration == 0)
+    assert monitor._probe_verified_no_match(row) is False
+    _source_gap_files(tmp_path, now, probes=[row])
+    gap = monitor.source_gap_semantics(tmp_path, now)
+    assert gap['probe_route_source_covered_counts'] == {}
+    assert gap['native_feature_gap_observations']['verified_count'] == int(duration == 0)
+
+
+@pytest.mark.parametrize('defect', [None, 'zero_history','current','pid','epoch','bad_counts'])
+def test_history_receipt_is_separate_from_current_source_and_cannot_grant_coverage(tmp_path, defect):
+    now = monitor.stamp('2026-10-16T14:56:50+09:00')
+    row = _native_no_match_probe(now, receipt_format='dict'); f = row['fields']; r = f['native_observation_receipt']
+    f.update(zero_base_probe_result='observation_incomplete',
+             zero_base_probe_reason='native_history_observed_current_source_stale')
+    r.update(native_source_current=False, source_censored_count=0,
+             selected_lifecycle_counts={'G1':{'FALSE':20},'G2':{'FALSE':10}})
+    if defect == 'zero_history': r['selected_lifecycle_counts'] = {'G1':{'UNKNOWN':1},'G2':{'UNKNOWN':2}}
+    if defect == 'current': r['native_source_current'] = True
+    if defect == 'pid': r['process_pid'] = 999
+    if defect == 'epoch': r['native_epoch'] = 0
+    if defect == 'bad_counts': r['selected_lifecycle_counts']['G1']['FALSE'] = True
+    assert (monitor._probe_verified_history(row) is not None) == (defect is None)
+    assert monitor._probe_verified_no_match(row) is False
+    _source_gap_files(tmp_path, now, probes=[row]); gap = monitor.source_gap_semantics(tmp_path,now)
+    assert gap['probe_route_source_covered_counts'] == {}
+    assert gap['native_history_observations']['verified_count'] == int(defect is None)
+    assert gap['native_history_observations']['current_source_coverage_proven'] is False

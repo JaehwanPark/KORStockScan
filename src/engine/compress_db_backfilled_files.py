@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -193,7 +194,7 @@ def _snapshot_json_boundary_valid(path: Path) -> bool:
         return False
 
 
-def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
+def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
     """Return (compressed, saved_bytes_estimate)."""
     if not path.exists() or not path.is_file():
         return False, 0
@@ -224,6 +225,10 @@ def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
     ):
         tmp_path.unlink(missing_ok=True)
         raise OSError(f"gzip_size_mismatch:{path.name}:{restored_size}/{original_size}")
+    for reference in custody or []:
+        if hashlib.sha256(Path(reference['path']).read_bytes()).hexdigest() != reference['sha256']:
+            tmp_path.unlink(missing_ok=True)
+            raise ValueError('storage_custody_changed_during_compression')
     os.replace(tmp_path, gz_path)
     if path.name.startswith("pipeline_events_") and path.suffix == ".jsonl":
         stat = gz_path.stat()
@@ -233,6 +238,9 @@ def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
                 "schema": "pipeline_raw_archive_identity_v1",
                 "logical_path": str(path),
                 "logical_content_sha256": logical_digest.hexdigest(),
+                "logical_size_bytes": original_size,
+                "storage_custody": custody or [],
+                "storage_disposition": "verified_gzip_representation_original_receipts_preserved",
                 "archive_generation": {
                     "device": stat.st_dev,
                     "inode": stat.st_ino,
@@ -244,16 +252,16 @@ def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
             },
         )
     path.unlink()
-    return True, original_size
+    return True, original_size - gz_path.stat().st_size
 
 
 def _gzip_file_with_jsonl_generation_lock(
-    path: Path, *, dry_run: bool
+    path: Path, *, dry_run: bool, custody=None
 ) -> tuple[bool, int]:
     """Compact one JSONL generation without racing strict replay readers."""
 
     with jsonl_artifact_generation_lock(path, exclusive=True):
-        return _gzip_file(path, dry_run=dry_run)
+        return _gzip_file(path, dry_run=dry_run, custody=custody)
 
 
 def _gzip_jsonl_file_unlocked(
@@ -335,6 +343,8 @@ def _gzip_jsonl_file(
 
 def _postclose_source_protection(target_date: date, today: date) -> str | None:
     """Keep native source representations until handoff and policy-day expiry."""
+    if target_date >= today:
+        return 'current_or_future_source_date'
     day = target_date.isoformat()
     status_path = POSTCLOSE_STATUS_DIR / f"threshold_cycle_postclose_{day}.status.json"
     if not status_path.exists() and not status_path.is_symlink():
@@ -368,14 +378,48 @@ def _postclose_source_protection(target_date: date, today: date) -> str | None:
                 or controller.get('whole_native_chain_done_claimed') is not True):
             return 'postclose_controller_not_closed'
         from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
-        if done_terminal_receipt_issues(controller_path, day, started_after_ns=0,
-                                       generation_only=True):
+        issues = done_terminal_receipt_issues(controller_path, day, started_after_ns=0,
+                                             generation_only=True)
+        if ('strict_checklist_generation_stale' in issues and set(issues) <= {
+                'strict_checklist_generation_stale', 'strict_generation_changed_during_recheck'}):
+            # Archival custody may bind the original bytes after the policy
+            # day. Never reseal a historical PASS against today's checklist.
+            strict_path = Path(str(controller.get('verification_attempt_path') or ''))
+            if strict_path.is_symlink() or strict_path.stat().st_size > 8*1024*1024:
+                return 'postclose_historical_strict_untrusted'
+            raw = strict_path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != controller.get('verification_attempt_sha256'):
+                return 'postclose_historical_strict_changed'
+            sha = (json.loads(raw).get('generation_binding') or {}).get('checklist_sha256')
+            if not isinstance(sha, str) or not re.fullmatch('[0-9a-f]{64}', sha):
+                return 'postclose_historical_checklist_identity_missing'
+            snapshot = DATA_DIR / 'runtime/policy_bootstrap/historical_checklists' / (sha + '.md')
+            if (snapshot.is_symlink() or snapshot.stat().st_size > 8*1024*1024
+                    or hashlib.sha256(snapshot.read_bytes()).hexdigest() != sha):
+                return 'postclose_historical_checklist_unverified'
+            issues = done_terminal_receipt_issues(controller_path, day, started_after_ns=0,
+                                                  generation_only=True, checklist_snapshot=snapshot)
+        if issues:
             return 'postclose_controller_receipt_invalid'
     except (OSError, ValueError, TypeError):
         return 'postclose_custody_receipt_missing_or_invalid'
     return None
 
-def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
+def _storage_custody(target_date):
+    """References only; the preceding native gate owns their validity."""
+    path = POSTCLOSE_CONTROLLER_DIR / f'postclose_done_controller_{target_date}.json'
+    if not path.exists(): return []
+    raw = path.read_bytes(); controller = json.loads(raw)
+    strict = Path(controller['verification_attempt_path']); strict_raw = strict.read_bytes()
+    sha = json.loads(strict_raw)['generation_binding']['checklist_sha256']
+    snapshot = DATA_DIR / 'runtime/policy_bootstrap/historical_checklists' / (sha + '.md')
+    refs = [dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest()),
+            dict(path=str(strict), sha256=hashlib.sha256(strict_raw).hexdigest())]
+    if snapshot.exists(): refs.append(dict(path=str(snapshot),sha256=sha))
+    return refs
+
+
+def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None) -> dict:
     cutoff = today - timedelta(days=retention_days)
     stats = {
         "cutoff": cutoff.isoformat(),
@@ -429,6 +473,8 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
         target_date = _date_from_pipeline_file(path)
         if target_date is None or target_date > cutoff:
             continue
+        if pipeline_dates is not None and target_date not in pipeline_dates:
+            continue
         if protected(target_date):
             continue
         stats["pipeline"]["scanned"] += 1
@@ -439,13 +485,16 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
                 continue
             stats["pipeline"]["verified"] += 1
             compressed, saved = _gzip_file_with_jsonl_generation_lock(
-                path, dry_run=dry_run
+                path, dry_run=dry_run, custody=_storage_custody(target_date)
             )
             if compressed:
                 stats["pipeline"]["compressed"] += 1
                 stats["pipeline"]["saved_bytes"] += saved
         except Exception as exc:
             stats["errors"].append(f"pipeline:{path.name}:{exc}")
+
+    if pipeline_dates is not None:
+        return stats
 
     # monitor snapshot *.json only (already compressed .gz excluded)
     for path in sorted(MONITOR_SNAPSHOT_DIR.glob("*_*.json")):
@@ -631,6 +680,8 @@ def main() -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="Scan and verify only; do not compress"
     )
+    parser.add_argument('--pipeline-date', action='append', type=date.fromisoformat,
+                        help='Limit storage repair to these pipeline dates; preserve other families')
     args = parser.parse_args()
 
     if args.days < 0:
@@ -642,7 +693,8 @@ def main() -> int:
         print(f"[DASHBOARD_ARCHIVE_ERROR] invalid --date: {args.today}")
         return 2
 
-    stats = run(retention_days=args.days, today=today, dry_run=args.dry_run)
+    stats = run(retention_days=args.days, today=today, dry_run=args.dry_run,
+                pipeline_dates=set(args.pipeline_date) if args.pipeline_date else None)
     mode = "DRY_RUN" if args.dry_run else "RUN"
     print(f"[DASHBOARD_ARCHIVE_{mode}] cutoff={stats['cutoff']}")
     if stats.get('skipped_postclose_protected'):

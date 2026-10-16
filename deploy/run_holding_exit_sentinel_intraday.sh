@@ -16,6 +16,10 @@ LOCK_FILE="${HOLDING_EXIT_SENTINEL_LOCK_FILE:-$PROJECT_DIR/tmp/run_holding_exit_
 COOLDOWN_STATE_FILE="${HOLDING_EXIT_SENTINEL_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp/run_holding_exit_sentinel_success.state}"
 COOLDOWN_SEC="${HOLDING_EXIT_SENTINEL_COOLDOWN_SEC:-240}"
 LOG_FILE="${HOLDING_EXIT_SENTINEL_LOG_FILE:-$PROJECT_DIR/logs/run_holding_exit_sentinel.log}"
+
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "run_holding_exit_sentinel_intraday" "$LOG_FILE" || \
+  echo "[OWNED_LOG_ROTATION_WARNING] internal rollover failed; work continues" >&2
+
 DRY_RUN="${HOLDING_EXIT_SENTINEL_DRY_RUN:-0}"
 USE_CACHE="${HOLDING_EXIT_SENTINEL_USE_CACHE:-1}"
 IONICE_CLASS="${HOLDING_EXIT_SENTINEL_IONICE_CLASS:-2}"

@@ -8065,6 +8065,8 @@ def recover_final_sell_receipt(target_stock: dict[str, Any]) -> bool:
                         == "WATCHING"
                         and str(revived_record.stock_code or "").strip()[:6] == code
                     )
+                    from src.engine.scalping.main_fixed_watch import persisted_watch_identity
+                    revived_watch_fields = persisted_watch_identity(revived_record) if committed_pair else {}
             except Exception:
                 return False
             if committed_pair:
@@ -8081,6 +8083,7 @@ def recover_final_sell_receipt(target_stock: dict[str, Any]) -> bool:
                     new_watch_id=new_watch_id,
                     revived_position_tag=revived_position_tag,
                     revived_at_ts=now.timestamp(),
+                    fixed_watch_fields=revived_watch_fields,
                 )
                 clear_sell_receipt_recovery(target_id)
                 return True
@@ -9060,6 +9063,8 @@ def _handle_scalp_revive_sell_execution(
                 f"실매도가: {position_weighted_sell_price:,}원 / 수익률: {profit_rate}%"
             )
 
+            from src.engine.scalping.main_fixed_watch import revived_watch_identity
+            revived_watch_fields = revived_watch_identity(record, symbol=code, now_epoch=now.timestamp())
             new_record = RecommendationHistory(
                 rec_date=now.date(),
                 stock_code=code,
@@ -9070,6 +9075,7 @@ def _handle_scalp_revive_sell_execution(
                 trade_type="SCALP",
                 position_tag=revived_position_tag,
                 prob=record.prob,
+                **revived_watch_fields,
             )
             session.add(new_record)
             session.flush()
@@ -9157,6 +9163,7 @@ def _handle_scalp_revive_sell_execution(
         new_watch_id=new_watch_id,
         revived_position_tag=revived_position_tag,
         revived_at_ts=now.timestamp(),
+        fixed_watch_fields=revived_watch_fields,
     )
     clear_sell_receipt_recovery(target_id)
     return True
@@ -9169,6 +9176,7 @@ def _apply_scalp_revive_memory_state(
     new_watch_id: int,
     revived_position_tag: str,
     revived_at_ts: float | None = None,
+    fixed_watch_fields: dict | None = None,
 ) -> None:
     try:
         POSITION_PEAK_LEDGER.remove_for_stock(target_stock)
@@ -9190,6 +9198,12 @@ def _apply_scalp_revive_memory_state(
     )
     move_orders_to_terminal(target_stock, reason="sell_revive_cleanup")
     _clear_runtime_keys(target_stock, _SELL_REVIVE_RESET_KEYS)
+    if fixed_watch_fields:
+        target_stock.update(fixed_watch_fields)
+        target_stock["_fixed_first_exact_receipt_epoch"] = 0.0
+        # No pre-sell scanner identity or route can stand in for the new watch.
+        for key in ("market_data_route", "broker_route", "source_signature"):
+            target_stock.pop(key, None)
 
 
 def _clear_split_entry_shadow_state(target_stock: dict[str, Any]) -> None:

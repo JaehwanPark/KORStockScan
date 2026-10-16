@@ -4246,3 +4246,27 @@ def test_frozen_history_keeps_full_tape_and_copies_mutable_children():
     first['recent_trade_ticks'][0]['extra'].value=999
     assert second['recent_trade_ticks'][0]['nested'][0]['value']==0
     assert second['recent_trade_ticks'][0]['extra'].value==0
+
+
+def test_exact_probe_trace_distinguishes_wire_from_normalization_and_freezes_before_release():
+    import threading
+    from src.engine.kiwoom_websocket import KiwoomWSManager
+    manager = KiwoomWSManager.__new__(KiwoomWSManager)
+    manager.lock = threading.RLock(); manager._market_data_transport_epoch = 7
+    manager._exact_probe_item_leases = {'123456_AL':dict(lease_id='lease',epoch=7)}
+    manager._micro_reversion_registration_receipt = {'items':{'123456_AL':dict(
+        registration_transport_epoch=7, receipt_count_by_type={})}}
+    trace = manager.exact_probe_source_trace('123456_AL','lease')
+    assert trace['first_unobserved_boundary_by_type']['0B'] == 'wire_receive'
+    manager._record_exact_probe_wire_receipt({'item':'123456_AL','type':'0B','values':{}},100)
+    trace = manager.exact_probe_source_trace('123456_AL','lease')
+    assert trace['first_unobserved_boundary_by_type']['0B'] == 'normalized_receive'
+    assert trace['broker_ack_observed'] is None and trace['order_authority'] is False
+    manager._record_exact_probe_wire_receipt({'item':'123456_NX','type':'0D'},101)
+    manager._micro_reversion_registration_receipt['items']['123456_AL']['receipt_count_by_type']['0B'] = 1
+    complete = manager.exact_probe_source_trace('123456_AL','lease')
+    assert complete['first_unobserved_boundary_by_type']['0B'] == 'native_consumer_not_proven_here'
+    manager._exact_probe_item_leases.clear(); manager._micro_reversion_registration_receipt['items'].clear()
+    assert complete['lease']['wire_receipt_count_by_type'] == {'0B':1}
+    assert trace['registration']['receipt_count_by_type'] == {}
+    assert manager.exact_probe_source_trace('123456_AL','lease')['lease_bound'] is False

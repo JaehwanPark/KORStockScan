@@ -70,6 +70,13 @@ class ProcessSafeRotatingFileHandler(RotatingFileHandler):
             self.stream.close()
             self.stream = None
 
+    def doRollover(self):
+        # The writer closes its own inode. Retention never deletes numeric
+        # backups from another generation or process while emitting a record.
+        self._close_stream()
+        from src.engine.infrastructure.log_retention import close_module_generation
+        close_module_generation(self.baseFilename, owner="module:" + Path(self.baseFilename).name)
+
     def emit(self, record):
         lock_fd = -1
         try:
@@ -108,36 +115,12 @@ def _resolve_caller_filename(explicit: str | None = None) -> str:
 
 
 def _run_log_maintenance_if_needed():
-    global _MAINTENANCE_RAN_AT
+    """Retention belongs to the closed-generation owner, never a log emitter.
 
-    now_ts = time.time()
-    if now_ts - _MAINTENANCE_RAN_AT < 3600:
-        return
-
-    retention_days = max(1, int(getattr(TRADING_RULES, "LOG_RETENTION_DAYS", 14) or 14))
-    cutoff_ts = now_ts - (retention_days * 86400)
-    candidate_dirs = [LOGS_DIR, LEGACY_LOGS_DIR]
-
-    for log_dir in candidate_dirs:
-        try:
-            if not os.path.isdir(log_dir):
-                continue
-
-            for entry in os.scandir(log_dir):
-                if not entry.is_file():
-                    continue
-                if ".log" not in entry.name:
-                    continue
-                if entry.stat().st_mtime >= cutoff_ts:
-                    continue
-                try:
-                    os.remove(entry.path)
-                except FileNotFoundError:
-                    pass
-        except Exception as exc:
-            print(f"[WARN] 로그 정리 중 오류 발생 ({log_dir}): {exc}")
-
-    _MAINTENANCE_RAN_AT = now_ts
+    Kept as a compatibility hook for existing callers. A filename containing
+    '.log' is not evidence of ownership, closure or permission to delete.
+    """
+    return
 
 
 def _get_module_logger(caller_filename: str, level: str):

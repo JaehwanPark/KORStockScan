@@ -31,6 +31,10 @@ LOCK_FILE="${INTRADAY_WS_FRESHNESS_MONITOR_LOCK_FILE:-$PROJECT_DIR/tmp/run_intra
 COOLDOWN_STATE_FILE="${INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp/run_intraday_ws_freshness_monitor_success.state}"
 COOLDOWN_SEC="${INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC:-720}"
 LOG_FILE="${INTRADAY_WS_FRESHNESS_MONITOR_LOG_FILE:-$PROJECT_DIR/logs/run_intraday_ws_freshness_monitor.log}"
+
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "run_intraday_ws_freshness_monitor" "$LOG_FILE" || \
+  echo "[OWNED_LOG_ROTATION_WARNING] internal rollover failed; work continues" >&2
+
 INCREMENTAL_STATE_PATH="${INTRADAY_WS_FRESHNESS_MONITOR_INCREMENTAL_STATE_PATH:-$PROJECT_DIR/data/runtime/intraday_ws_freshness_monitor/intraday_ws_freshness_monitor_${TARGET_DATE}.json}"
 IONICE_CLASS="${INTRADAY_WS_FRESHNESS_MONITOR_IONICE_CLASS:-2}"
 IONICE_LEVEL="${INTRADAY_WS_FRESHNESS_MONITOR_IONICE_LEVEL:-7}"

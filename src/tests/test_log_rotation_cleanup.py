@@ -1008,7 +1008,7 @@ def test_log_rotation_cleanup_defers_conflicting_gzip_and_finishes_micro_lane(
     assert not list(log_dir.glob("*.tmp.*"))
     assert not micro_source.exists()
     assert micro_source.with_suffix(".jsonl.gz").exists()
-    assert not stale_tmp.exists()
+    assert stale_tmp.exists()  # Unknown temporary evidence has no owner expiry manifest.
     assert "micro_reversion_storage_status=pass" in result.stdout
     assert "archive_compressed=2" in result.stdout
     assert "archive_generation_compressed=2" in result.stdout

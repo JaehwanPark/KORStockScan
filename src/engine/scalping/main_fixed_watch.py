@@ -117,6 +117,34 @@ def new_admission_id(now_epoch: float, route: dict) -> str:
     return f"FIXED-{trade_date}-{symbol}-{route['bucket']}-{route['route']}-{uuid.uuid4().hex[:12]}"
 
 
+def revived_watch_identity(source, *, symbol: str, now_epoch: float) -> dict:
+    """Carry a proven fixed owner into a new watch, never infer it from a name.
+
+    The completed row retains its original admission. A successor has a new
+    admission and warmup; session routing is resolved again after restart.
+    """
+    get = source.get if isinstance(source, dict) else lambda key: getattr(source, key, None)
+    if get("watch_origin") != WATCH_ORIGIN:
+        return {}
+    spec_for(symbol)
+    route = session_route(now_epoch, symbol)
+    fields = dict(watch_origin=WATCH_ORIGIN, entry_armed_at_epoch=0.0)
+    if route is not None:
+        fields.update(watch_admission_id=new_admission_id(now_epoch, route),
+                      watch_generation_id=generation_id(now_epoch, route),
+                      entry_armed_at_epoch=now_epoch, market_session_bucket=route["bucket"],
+                      effective_venue=route["venue"], venue_resolution="main_fixed_watch_session_route")
+    return fields
+
+
+def persisted_watch_identity(source) -> dict:
+    get = source.get if isinstance(source, dict) else lambda key: getattr(source, key, None)
+    if get("watch_origin") != WATCH_ORIGIN:
+        return {}
+    return {key: get(key) for key in ("watch_origin", "watch_admission_id", "watch_generation_id",
+            "entry_armed_at_epoch", "market_session_bucket", "effective_venue", "venue_resolution")}
+
+
 def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
     """Admission requires a recent verified flat account and no unbound intent."""
     from src.engine.scalping.ai_market_snapshot import broker_symbol_verified_flat

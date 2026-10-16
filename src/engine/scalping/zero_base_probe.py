@@ -30,11 +30,27 @@ RESULT_SCHEMA = "zero_base_probe_result_v2"
 LEGACY_RESULT_SCHEMA = "zero_base_probe_result_v1"
 
 
+def native_history_summary(receipt):
+    """Historical coverage is diagnostic; current freshness owns execution."""
+    counts = receipt.get('selected_lifecycle_counts') or {}
+    totals = {key: sum(v.get(key, 0) for v in counts.values()
+                      if isinstance(v, dict) and type(v.get(key, 0)) is int and v.get(key, 0) >= 0)
+              for key in ('TRUE', 'FALSE', 'UNKNOWN')}
+    return dict(schema='probe_history_and_current_source_v1',
+                historical_evaluations=totals, historical_known_count=totals['TRUE']+totals['FALSE'],
+                source_censored_count=receipt.get('source_censored_count'),
+                observed_seconds=receipt.get('observed_seconds'),
+                current_native_source=receipt.get('native_source_current'),
+                execution_authority=False, historical_observation_allows_order=False)
+
+
 def native_wait_result(receipt, readiness):
     """A censored observation is neither a source error nor a failed pattern."""
     if receipt.get('reason')=='scope_or_generation_mismatch':
         return 'policy_unavailable','scope_or_generation_mismatch'
     if receipt.get('native_source_current') is False or receipt.get('reason')=='state_absent':
+        if native_history_summary(receipt)['historical_known_count']:
+            return 'observation_incomplete','native_history_observed_current_source_stale'
         return 'source_unavailable','native_source_stale_or_absent'
     if receipt.get('selected_pending_count',0):
         return 'observation_incomplete','confirmation_pending_at_residence_end'
@@ -42,6 +58,8 @@ def native_wait_result(receipt, readiness):
     if any(v.get('TRUE',0)>0 for v in counts.values()):
         return 'observation_incomplete','native_confirmation_not_consumed_before_expiry'
     if receipt.get('source_censored_count',0):
+        if native_history_summary(receipt)['historical_known_count']:
+            return 'observation_incomplete','native_history_observed_with_source_gap'
         return 'source_unavailable','native_observation_source_censored'
     truth=receipt.get('selected_branch_truth') or {}
     if truth and all(v=='FALSE' and counts.get(b,{}).get('FALSE',0)>0 for b,v in truth.items()):
@@ -863,6 +881,7 @@ def run_zero_base_probe(
                     'NXT' if route == 'nxt_only' else 'SOR', session,
                     now=now(), item=item, family_sha256=family)
                 result['native_observation_receipt'] = native_receipt
+                result['native_history_summary'] = native_history_summary(native_receipt)
                 result['residence_remaining_seconds'] = max(0, native_wait_deadline_epoch-now())
                 if native_snapshot is not None:
                     from src.engine.scalping.entry_deadline import EntryDeadline
@@ -1032,6 +1051,12 @@ def run_zero_base_probe(
     finally:
         # Reuse the last exact read with its original clocks. Only failures
         # before that boundary need a terminal memory read. Never skip cleanup.
+        try:
+            source_trace = getattr(ws_manager, 'exact_probe_source_trace', None)
+            if callable(source_trace):
+                result['ws_source_trace'] = source_trace(item, lease_id)
+        except Exception as exc:
+            result['source_trace_error'] = type(exc).__name__
         try:
             result['ws_observation_terminal'] = result.get('ws_observation_pre_machine') or probe_ws_observation(
                     probe_ws_snapshot(ws_manager, code=code, route=route), code=code,

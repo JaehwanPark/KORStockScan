@@ -399,3 +399,19 @@ def test_fixed_watch_block_case_keeps_exact_identity_and_source_gap():
     assert report["incomplete_attempt_identity_count"] == 0
     assert report["rows"][0]["watch_origin"] == fixed.WATCH_ORIGIN
     assert report["rows"][0]["watch_admission_id"] == "FIXED-a1"
+
+
+@pytest.mark.parametrize('symbol', ['005930','036930','034020'])
+def test_revived_fixed_identity_persists_then_rebinds_venue_without_inheriting_warmup(symbol):
+    from types import SimpleNamespace
+    before = dict(watch_origin=fixed.WATCH_ORIGIN, watch_admission_id='original',
+                  watch_generation_id='original', entry_armed_at_epoch=epoch(8), effective_venue='NXT')
+    fields = fixed.revived_watch_identity(before, symbol=symbol, now_epoch=epoch(10))
+    restored = fixed.persisted_watch_identity(SimpleNamespace(**fields))
+    assert restored == fields
+    assert restored['watch_origin'] == fixed.WATCH_ORIGIN
+    assert restored['watch_admission_id'] != before['watch_admission_id']
+    assert restored['entry_armed_at_epoch'] == epoch(10)
+    assert restored['effective_venue'] == 'KRX'
+    assert before['effective_venue'] == 'NXT'
+    assert fixed.revived_watch_identity({}, symbol=symbol, now_epoch=epoch(10)) == {}

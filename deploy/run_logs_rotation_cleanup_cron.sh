@@ -2092,52 +2092,8 @@ run_data_maintenance() {
   local remove_rc=0
   local find_path=""
   local tmp_dir="$PROJECT_DIR/tmp"
-  if [[ -d "$tmp_dir" ]]; then
-    find_path="$(mktemp "$LOG_DIR/.cleanup_find_tmp.XXXXXX")"
-    if ! collect_find_results "tmp_retention_census" "$find_path" \
-      "$tmp_dir" -mindepth 1 -maxdepth 2 \( \
-        -path "$tmp_dir/codex_worktrees/*" -o \
-        -name 'workorder-*' -o \
-        -name 'workorder_*' \
-      \) -mtime "+$TMP_MAINTENANCE_RETENTION_DAYS" -prune; then
-      maintenance_lane_failure_count=$((maintenance_lane_failure_count + 1))
-    fi
-    while IFS= read -r -d '' stale_tmp_path; do
-      remove_rc=0
-      rm -rf -- "$stale_tmp_path" || remove_rc=$?
-      if [[ ! -e "$stale_tmp_path" && ! -L "$stale_tmp_path" ]]; then
-        tmp_deleted_count=$((tmp_deleted_count + 1))
-        if [[ "$remove_rc" -ne 0 ]]; then
-          echo "[DATA_MAINTENANCE_DELETE_ANOMALOUS_RC] lane=tmp path=${stale_tmp_path} removed=true rm_rc=${remove_rc}"
-        fi
-      else
-        echo "[DATA_MAINTENANCE_DELETE_FAIL] lane=tmp path=${stale_tmp_path} preserved=true cleanup_will_continue=true"
-        maintenance_lane_failure_count=$((maintenance_lane_failure_count + 1))
-      fi
-    done <"$find_path"
-    rm -f "$find_path"
-
-    find_path="$(mktemp "$LOG_DIR/.cleanup_find_refactor_tmp.XXXXXX")"
-    if ! collect_find_results "refactor_tmp_retention_census" "$find_path" \
-      "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name 'refactor_dry_run_*' \
-      -mtime "+$REFRACTOR_DRY_RUN_RETENTION_DAYS" -prune; then
-      maintenance_lane_failure_count=$((maintenance_lane_failure_count + 1))
-    fi
-    while IFS= read -r -d '' stale_tmp_path; do
-      remove_rc=0
-      rm -rf -- "$stale_tmp_path" || remove_rc=$?
-      if [[ ! -e "$stale_tmp_path" && ! -L "$stale_tmp_path" ]]; then
-        tmp_deleted_count=$((tmp_deleted_count + 1))
-        if [[ "$remove_rc" -ne 0 ]]; then
-          echo "[DATA_MAINTENANCE_DELETE_ANOMALOUS_RC] lane=refactor_tmp path=${stale_tmp_path} removed=true rm_rc=${remove_rc}"
-        fi
-      else
-        echo "[DATA_MAINTENANCE_DELETE_FAIL] lane=refactor_tmp path=${stale_tmp_path} preserved=true cleanup_will_continue=true"
-        maintenance_lane_failure_count=$((maintenance_lane_failure_count + 1))
-      fi
-    done <"$find_path"
-    rm -f "$find_path"
-  fi
+  # Unknown temporary evidence/worktrees are never expired by name or mtime.
+  # The bounded owner-manifest lane below is the only tmp deletion owner.
 
   find_path="$(mktemp "$LOG_DIR/.cleanup_find_cache.XXXXXX")"
   if ! collect_find_results "cache_retention_census" "$find_path" \
@@ -2280,6 +2236,13 @@ run_data_maintenance() {
 if ! run_data_maintenance; then
   data_maintenance_failure_count=$((data_maintenance_failure_count + 1))
   echo "[DATA_MAINTENANCE_FAIL] compression_verify_failures=${compression_verify_failure_count} cleanup_will_continue=true"
+fi
+
+if ! PYTHONPATH="$KORSTOCKSCAN_CODE_ROOT" "$PYTHON_BIN" -m src.engine.infrastructure.log_retention \
+  --workspace "$PROJECT_DIR" --apply --include-tmp \
+  --terminal "$PROJECT_DIR/data/report/log_retention/postclose_${TARGET_DATE}.json"; then
+  data_maintenance_failure_count=$((data_maintenance_failure_count + 1))
+  echo "[OWNED_RETENTION_FAIL] exact_terminal_required=true"
 fi
 
 active_deleted_count=0

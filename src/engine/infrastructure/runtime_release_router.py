@@ -47,7 +47,7 @@ LEGACY_TAGS = {
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = CRON_TARGETS
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel",
-              "pre-submit-source", "holding-exit-sentinel", "error-detection")
+              "pre-submit-source", "holding-exit-sentinel", "error-detection", "log-retention")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
 STARTUP_CONSUMPTION_TIMEOUT_SEC = 150
@@ -884,6 +884,12 @@ def make_plan(
         ]
     elif operation == "buy-funnel":
         command = ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), target_date]
+    elif operation == "log-retention":
+        command = ["/bin/bash", str(root / "deploy/run_with_owned_log.sh"),
+                   "--owner", "log_retention_daily", "--log", str(workspace / "logs/log_retention_daily.log"),
+                   str(root / ".venv/bin/python"), "-m", "src.engine.infrastructure.log_retention",
+                   "--workspace", str(workspace), "--apply", "--include-tmp", "--include-metrics", "--terminal",
+                   str(workspace / "data/report/log_retention" / (target_date + ".json"))]
     elif operation == "error-detection":
         command = ["/bin/bash", str(root / "deploy/run_with_owned_log.sh"),
                    "--owner", "error_detection_cron", "--log",

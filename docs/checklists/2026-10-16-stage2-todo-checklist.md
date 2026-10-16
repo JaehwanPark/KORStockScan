@@ -172,6 +172,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
 
 - [ ] `[HoldingProfitExitSourceContractRepair] Main 보유 익절 원천·재생·의미 계약 수리` (`Due: 2026-10-16`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
+  - 14:11:56 통합922b9cbc3 배포·재기동 완료: 요청91ff/e04를 포함한 새PID3729660/start19142841의 실제 소비·release-set·원 정책/수동 제외 보존 확인. 기동후holding14:12:23 native7.35초/새 결속 결손0, BUY14:13:46 현재PID/세대 verified·scanner 코호트 partial, full14:14:32 새실패0. broker 전후수량·미체결0·원장동일, fixed5 실제0B/0D 확인. 과거TP5건·역사적세대/자연편입·부분보유/경제성OPEN 유지. [최종 검증](../audits/main-probe-partial-integrated-deployment-review-2026-10-16.md#실제-배포와-기동-후-검증).
   - 10/16 부분 보유 통합 승인:91ff/e04 native 이관 수리를 현재48968ade9에 통합한다. CANCEL_PENDING·결손 주문·대사 미완료와 기존 SELL 소유권 회귀10건을 재현·보완했고 관련3,673개 및 exact-source50개 PASS다. 원 정책/수동 제외를 보존한 ordered 배포와 기동 후 새 보고서/PID/broker/WS 수용으로 확인하며 자연 부분 체결·경제성 및 과거5 source_gap은 별도 유지한다. [통합 배포 검토](../audits/main-probe-partial-integrated-deployment-review-2026-10-16.md).
   - 13:55 배포 수용: 48968ade9/PID3646205/start18963364의 기동 후 native6.56초·정규 full exact SHA/FAIL0, KRX/NXT 잔고·미체결0·새 epoch fixed5 실수신을 확인했다. 정규13:50 첫 stable 통지 후13:55 새 보고서 세대도 동일 key/duplicate_incident·추가 통지0이다. [최종 검증](/home/ubuntu/KORStockScan/tmp/holding-sentinel-performance-20261016/incident-final-verification.json). 원 과거5건 복원·mandatory TP 자연 양성·비용/경제성 OPEN 및 원 Acceptance는 그대로 유지한다.
   - 13:30 반복 경보 보완: [성능 배포·동일 결손 식별 리뷰](../audits/main-holding-sentinel-performance-review-and-deployment-2026-10-16.md). 59c/PID3600286 기동 후 native6.42초·full exact SHA/FAIL0을 확인했으나 과거5개 source_gap은 보존한다. report 해시·릴리스 경로에 따른 재통지는 native full gap census의 position/BUY/signal/reason으로 제한 식별한다. 원 발송 기록은 같은 보고서 SHA에 한해 이행하며 새 결손/부분 검증은 계속 경보한다. 기존 OPEN·경제성·자연 TP 수용과 수동/retired custody는 유지한다.
@@ -240,3 +241,12 @@ selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한�
 09:49 cold timeout의 실패 이력을 보존하고 같은 배포 owner에서 기존 transition TTL120초/의미 검증을 유지한다. 단일 역사파일 content-hash 준비와 native phase 비용을 구분해 실제 PID/ACK/고정5개 수용을 확인한다. 원 운영 checklist bytes는 유지한다.
 
 10:13:11 같은-PID native 복구/PID3083694와 원4개 SELL ACK·고정5개를 확인했다.10:20 자연 full observer 회복과10:22:17 전체 FAIL0(경고1/PASS6)을 대조했다. 원150초 timeout·I/O/원천 결손·다음 optional 야간 OPEN은 유지하며 상세 감사 근거를 따른다. canonical 당일 checklist는 SHA394a2f6e… 그대로다.
+
+## 승인된 장기 관측·원천·로그 통합 수리
+
+- `NonfixedDispatchReadinessReview1012`: 사용자 승인으로 물리5개 중 장기4개·단기1개로 배분한다. TTL/현재 원천 freshness/주문·수량 안전장치는 유지한다. 과거 유효 관측과 현재 실행 가능 원천을 분리하고, 443670·007610의 수신0건은 local REG→wire→normalized→native 경계 영수증으로 추적한다. 구독 송신을 broker ACK로 표시하지 않는다.
+- `AuxiliaryCircuitRecoveryRepair1012`: 매도 후 재감시 생성·복구에서 Main fixed-watch 신원과 거래소를 영속 보존하고 새 admission/warmup을 부여한다. 15:01 경보의 첫 체결 구간0초 필수 피처 부족을 검증 가능한 원천 부족으로 분리한다. 오래된 원천의 주문 차단·unknown 신원 차단은 유지한다.
+- `DirectFamilyPreopenPolicyHandoff`: 사용자 지정04c1a4d65와 위 수리를 통합하고 기존 손절 기준을 유지한다. 코드 검증 후 승인된 ordered 배포·재기동, 원 정책/당일 env/PID 소비와 신규 observer를 확인한다. [통합 검토](../audits/long4-source-retention-integration-review-2026-10-16.md).
+- [ ] `[OperationalLogRetentionRepair1016] 작성자 로그 회전·보관·역사 원천 압축 적용 확인` (`Due: 2026-10-16`, `Slot: INTRADAY`, `TimeWindow: 통합 배포 후`, `Track: RuntimeStability`)
+  - Source: [운영 계약](../operational-log-retention.md), [원 점검](/home/ubuntu/KORStockScan/tmp/log-retention-audit-20261016-114851/report.md).
+  - Acceptance: LR01~LR09의 cron/닫힌 세대/열린 FD·pin·참조 보호, 실패 cooldown 미갱신, 독립 달력 주기, 당시 strict/checklist 원본을 보존한 검증 압축, tmp 보호·용량 경보, journal 설정을 실제 적용 영수증으로 확인한다. 증거 미확인 파일은 삭제하지 않는다. 자연 만료 삭제·새 신호·실제 주문/경제 성과는 코드 PASS와 구분한다.

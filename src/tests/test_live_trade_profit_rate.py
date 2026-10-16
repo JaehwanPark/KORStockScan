@@ -1281,9 +1281,11 @@ def test_replacement_terminal_absence_query_never_overwrites_newer_receipt(
     assert finalize_calls == []
 
 
+@pytest.mark.parametrize('fixed_owner', [False, True])
 def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
     monkeypatch,
     tmp_path,
+    fixed_owner,
 ):
     old_record = type(
         "Record",
@@ -1293,7 +1295,7 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
             "buy_price": 10_000.0,
             "buy_qty": 10,
             "stock_name": "REVIVE",
-            "stock_code": "123456",
+            "stock_code": "005930" if fixed_owner else "123456",
             "prob": 0.8,
             "status": "SELL_ORDERED",
             "sell_price": 0,
@@ -1355,9 +1357,13 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
 
             return _Session()
 
+    if fixed_owner:
+        old_record.watch_origin = 'MAIN_FIXED_WATCH'
+        old_record.watch_admission_id = 'original-admission'
+        old_record.watch_generation_id = 'original-generation'
     stock = {
         "id": 7,
-        "code": "123456",
+        "code": "005930" if fixed_owner else "123456",
         "name": "REVIVE",
         "status": "SELL_ORDERED",
         "buy_price": 10_000.0,
@@ -1401,10 +1407,10 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
         receipts._handle_scalp_revive_sell_execution(
             target_id=7,
             target_stock=stock,
-            code="123456",
+            code="005930" if fixed_owner else "123456",
             exec_price=10_100,
             exec_qty=10,
-            now=datetime(2026, 8, 26, 9, 30, tzinfo=timezone(timedelta(hours=9))),
+            now=datetime(2026, 10, 16, 9, 30, tzinfo=timezone(timedelta(hours=9))),
             profit_rate=0.0,
             safe_buy_price=10_000,
             strategy="SCALPING",
@@ -1430,6 +1436,17 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
     assert [stage for stage, _fields in logged] == ["sell_completed"]
     assert not (tmp_path / "7.json").exists()
 
+
+    if fixed_owner:
+        assert db.records[100].watch_origin == stock['watch_origin'] == 'MAIN_FIXED_WATCH'
+        assert stock['watch_admission_id'] != 'original-admission'
+        assert stock['watch_admission_id'] == db.records[100].watch_admission_id
+        assert stock['effective_venue'] == db.records[100].effective_venue == 'KRX'
+        assert stock['_fixed_first_exact_receipt_epoch'] == 0
+        assert stock['_scalp_revive_min_quote_ts'] > 0
+        assert old_record.watch_admission_id == 'original-admission'
+    else:
+        assert not getattr(db.records[100], 'watch_origin', None)
 
 def test_sell_execution_message_relabels_pending_stop_loss_when_realized_profit():
     bus = _Bus()

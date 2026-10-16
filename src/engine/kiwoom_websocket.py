@@ -3372,6 +3372,7 @@ class KiwoomWSManager:
             # =========================================================
             if trnm == "REAL" and "data" in msg_dict:
                 for d in msg_dict["data"]:
+                    self._record_exact_probe_wire_receipt(d, packet_received_at.timestamp())
                     values = d.get("values", {})
                     if not values:
                         continue
@@ -5660,6 +5661,42 @@ class KiwoomWSManager:
             return future
 
 
+
+    def _record_exact_probe_wire_receipt(self, row, received_epoch):
+        """Bounded receipt counts before normalization; never a broker ACK."""
+        if not isinstance(row, dict) or row.get('type') not in {'0B', '0D'}:
+            return
+        item = str(row.get('item') or '').strip().upper()
+        with self.lock:
+            lease = getattr(self, '_exact_probe_item_leases', {}).get(item)
+            if not lease or lease.get('epoch') != self._market_data_transport_epoch:
+                return
+            counts = lease.setdefault('wire_receipt_count_by_type', {})
+            kind = row['type']; counts[kind] = counts.get(kind, 0) + 1
+            lease.setdefault('wire_first_received_epoch_by_type', {}).setdefault(kind, received_epoch)
+            lease.setdefault('wire_last_received_epoch_by_type', {})[kind] = received_epoch
+
+    def exact_probe_source_trace(self, item, lease_id):
+        """Freeze the exact lease's diagnostics before REMOVE discards its state."""
+        import copy
+        with self.lock:
+            lease = getattr(self, '_exact_probe_item_leases', {}).get(item, {})
+            registration = getattr(self, '_micro_reversion_registration_receipt', {}).get('items', {}).get(item, {})
+            bound = lease.get('lease_id') == lease_id and lease.get('epoch') == self._market_data_transport_epoch
+            registration_bound = bound and registration.get('registration_transport_epoch') == lease.get('epoch')
+            wire = lease.get('wire_receipt_count_by_type', {}) if bound else {}
+            normalized = registration.get('receipt_count_by_type', {}) if registration_bound else {}
+            first_missing = {kind: ('lease_binding' if not bound else
+                'local_reg_receipt' if not registration_bound else
+                'wire_receive' if not wire.get(kind, 0) else
+                'normalized_receive' if not normalized.get(kind, 0) else 'native_consumer_not_proven_here')
+                for kind in ('0B', '0D')}
+            return copy.deepcopy(dict(schema='exact_probe_source_trace_v1', item=item, lease_id=lease_id,
+                transport_epoch=self._market_data_transport_epoch, lease_bound=bound,
+                registration_basis='local_sent_registry_not_broker_ack', broker_ack_observed=None,
+                lease=lease if bound else {}, registration=registration if registration_bound else {},
+                first_unobserved_boundary_by_type=first_missing, runtime_effect=False,
+                order_authority=False))
 
     def _record_micro_reversion_registration_receipt(
         self, *, item, realtime_type, observed_at_epoch

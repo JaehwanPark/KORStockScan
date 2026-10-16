@@ -9,6 +9,10 @@ TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 . "$SCRIPT_DIR/cpu_affinity_profile.sh"
 LOCK_FILE="${MONITOR_SNAPSHOT_LOCK_FILE:-$PROJECT_DIR/tmp/run_monitor_snapshot.lock}"
 LOG_FILE="${MONITOR_SNAPSHOT_LOG_FILE:-$PROJECT_DIR/logs/run_monitor_snapshot.log}"
+
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "run_monitor_snapshot_safe" "$LOG_FILE" || \
+  echo "[OWNED_LOG_ROTATION_WARNING] internal rollover failed; work continues" >&2
+
 TIMEOUT_SEC="${MONITOR_SNAPSHOT_TIMEOUT_SEC:-1200}"
 ALLOW_PREOPEN_WITH_BOT="${ALLOW_PREOPEN_FULL_BUILD_WITH_BOT:-0}"
 PROFILE="${MONITOR_SNAPSHOT_PROFILE:-full}"

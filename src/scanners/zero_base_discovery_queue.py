@@ -22,7 +22,7 @@ RESULTS = {
     "pattern_not_matched", "observation_incomplete",
 }
 ACTIONS = {"ENTER_NOW", "RECHECK", "BLOCK"}
-MAX_LONG_PROBES = 3  # Operator-approved allocation within the five physical probes.
+MAX_LONG_PROBES = 4  # Operator-approved allocation; retain one short physical slot.
 
 
 @dataclass

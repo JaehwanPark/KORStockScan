@@ -372,3 +372,66 @@ def test_archive_broken_native_status_symlink_fails_closed(tmp_path):
     archive.POSTCLOSE_STATUS_DIR.mkdir(parents=True)
     (archive.POSTCLOSE_STATUS_DIR / 'threshold_cycle_postclose_2026-10-02.status.json').symlink_to(tmp_path / 'missing_status')
     assert archive._postclose_source_protection(date(2026, 10, 2), date(2026, 10, 7)) == 'postclose_status_untrusted'
+
+
+@pytest.mark.parametrize('defect', [None, 'snapshot_changed','strict_changed','other_failure','policy_day'])
+def test_historical_storage_uses_original_receipt_and_checklist_without_resealing(tmp_path, monkeypatch, defect):
+    import hashlib
+    from src.engine.automation import postclose_done_controller as controller
+    monkeypatch.setattr(archive, 'DATA_DIR', tmp_path)
+    archive.POSTCLOSE_STATUS_DIR.mkdir(parents=True); archive.POSTCLOSE_CONTROLLER_DIR.mkdir(parents=True)
+    (archive.POSTCLOSE_STATUS_DIR/'threshold_cycle_postclose_2026-10-02.status.json').write_text(
+        json.dumps(dict(target_date='2026-10-02', status='succeeded', exit_code=0)))
+    raw = b'original checklist\r\n'; sha = hashlib.sha256(raw).hexdigest()
+    snap = tmp_path/'runtime/policy_bootstrap/historical_checklists'/f'{sha}.md'; snap.parent.mkdir(parents=True); snap.write_bytes(raw)
+    strict = tmp_path/'strict.json'; strict.write_text(json.dumps(dict(generation_binding=dict(checklist_sha256=sha))))
+    path = archive.POSTCLOSE_CONTROLLER_DIR/'postclose_done_controller_2026-10-02.json'
+    path.write_text(json.dumps(dict(date='2026-10-02', status='done', whole_native_chain_done_claimed=True,
+        verification_attempt_path=str(strict), verification_attempt_sha256=hashlib.sha256(strict.read_bytes()).hexdigest())))
+    original = {p:p.read_bytes() for p in (path,strict,snap)}; calls=[]
+    def verify(*a, **kw):
+        calls.append(kw)
+        if defect == 'other_failure': return ['strict_stage_set_stale']
+        return [] if kw.get('checklist_snapshot') == snap else ['strict_checklist_generation_stale']
+    monkeypatch.setattr(controller, 'done_terminal_receipt_issues', verify)
+    if defect == 'snapshot_changed': snap.write_text('changed')
+    if defect == 'strict_changed': strict.write_text('{}')
+    reason = archive._postclose_source_protection(date(2026,10,2), date(2026,10,6 if defect=='policy_day' else 7))
+    assert (reason is None) == (defect is None)
+    if defect is None:
+        assert len(calls) == 2 and all(kw['generation_only'] for kw in calls)
+        assert all(p.read_bytes() == raw for p,raw in original.items())
+
+
+def test_pipeline_custody_change_preserves_plain_original(tmp_path):
+    import hashlib
+    path = tmp_path/'pipeline_events_2026-10-08.jsonl'
+    original = b'{"source":"original"}\r\n'*100
+    path.write_bytes(original)
+    receipt = tmp_path/'strict.json'; receipt.write_text('changed')
+    with pytest.raises(ValueError, match='storage_custody_changed'):
+        archive._gzip_file(path, dry_run=False, custody=[dict(path=str(receipt),
+            sha256=hashlib.sha256(b'original').hexdigest())])
+    assert path.read_bytes() == original
+    assert not path.with_suffix('.jsonl.gz').exists()
+
+
+def test_pipeline_date_scope_preserves_other_families(tmp_path, monkeypatch):
+    pipeline = tmp_path/'pipeline'; pipeline.mkdir()
+    snapshots = tmp_path/'snapshots'; snapshots.mkdir()
+    selected = pipeline/'pipeline_events_2026-10-08.jsonl'
+    other = pipeline/'pipeline_events_2026-10-12.jsonl'
+    today = pipeline/'pipeline_events_2026-10-16.jsonl'
+    for p in (selected,other,today): p.write_text('{"source":"original"}\n'*100)
+    snapshot = snapshots/'trade_review_2026-10-08.json'; snapshot.write_text('{}')
+    monkeypatch.setattr(archive,'PIPELINE_EVENTS_DIR',pipeline)
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',snapshots)
+    monkeypatch.setattr(archive,'_parquet_partition_exists',lambda *args: True)
+    stats = archive.run(retention_days=0,today=date(2026,10,16),dry_run=False,
+                        pipeline_dates={date(2026,10,8),date(2026,10,16)})
+    assert stats['pipeline']['compressed'] == 1 and not stats['errors']
+    assert not selected.exists() and other.exists() and today.exists() and snapshot.exists()
+    assert stats['postclose_protection_reasons']['2026-10-16'] == 'current_or_future_source_date'
+    receipt = json.loads(selected.with_suffix('.jsonl.gz.archive_receipt.json').read_bytes())
+    assert receipt['logical_size_bytes'] == other.stat().st_size
+    assert stats['pipeline']['saved_bytes'] == other.stat().st_size-selected.with_suffix('.jsonl.gz').stat().st_size

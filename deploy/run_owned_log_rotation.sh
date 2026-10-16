@@ -179,4 +179,8 @@ rm -f "$tmp_gzip"
 trap - EXIT
 rm -- "$plain_archive"
 write_receipt "rotated_verified" "owner_preopen_rollover" "$source_size" "$source_sha" "$gzip_archive" "$archive_sha"
+PYTHONPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" "$PYTHON_BIN" \
+  -m src.engine.infrastructure.log_retention --workspace "$PROJECT_DIR" \
+  --register-active "$LOG_PATH" --register-closed "$gzip_archive" --owner "$OWNER" \
+  --source-sha256 "$source_sha" --archive-sha256 "$archive_sha"
 echo "[OWNED_LOG_ROTATED] owner=${OWNER} log=${LOG_PATH} size_bytes=${source_size} source_sha256=${source_sha} archive=${gzip_archive} archive_sha256=${archive_sha} active_recreated=true"

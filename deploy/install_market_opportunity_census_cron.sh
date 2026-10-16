@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 WRAPPER="$PROJECT_DIR/deploy/run_market_opportunity_census_intraday.sh"
 RECEIPT="$PROJECT_DIR/data/runtime/market_opportunity_census/installed_trigger.json"
+mkdir -p "$PROJECT_DIR/data/runtime"
+exec 9>"$PROJECT_DIR/data/runtime/runtime_release_set.lock"
+flock -n -x 9 || { echo "runtime_release_transition_in_progress" >&2; exit 1; }
 TMP_CRON="$(mktemp)"
 trap 'rm -f "$TMP_CRON" "$TMP_CRON.filtered" "$TMP_CRON.lines"' EXIT
 
@@ -20,10 +23,10 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
 # market opportunity census source-only capture (5m cadence; 15:30-16:00 transition excluded)
-*/5 8 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_NXT_PREMARKET_5MIN
-*/5 9-14 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_5MIN
-0-30/5 15 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN
-*/5 16-19 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_AFTERMARKET_5MIN
+*/5 8 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner market_opportunity_census_cron --log $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log $WRAPPER \$(TZ=Asia/Seoul date +\%F) # MARKET_OPPORTUNITY_CENSUS_NXT_PREMARKET_5MIN
+*/5 9-14 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner market_opportunity_census_cron --log $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log $WRAPPER \$(TZ=Asia/Seoul date +\%F) # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_5MIN
+0-30/5 15 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner market_opportunity_census_cron --log $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log $WRAPPER \$(TZ=Asia/Seoul date +\%F) # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN
+*/5 16-19 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner market_opportunity_census_cron --log $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log $WRAPPER \$(TZ=Asia/Seoul date +\%F) # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_AFTERMARKET_5MIN
 EOF
 
 crontab "$TMP_CRON"
