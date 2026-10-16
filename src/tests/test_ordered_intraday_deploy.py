@@ -785,11 +785,17 @@ def _mock_adoption_preflight(d, monkeypatch, reject=None):
     monkeypatch.setattr(D.H, "verify_candidate_delay_code", code("delay"))
     monkeypatch.setattr(D.H, "verify_candidate_stop_code", code("stop"))
     monkeypatch.setattr(D.H, "verify_candidate_holding_vote_code", code("holding"))
+    def active(*args):
+        calls.append('active_policy')
+        if reject == 'active_policy': raise ValueError('candidate_validation_rejected')
+        return dict(status='pass',receipt_path=str(prior_handoff),receipt_sha256=D.H._sha(prior_handoff),
+                    pointer_path=str(d.selection),pointer_sha256=D.H._sha(d.selection))
+    monkeypatch.setattr(D, 'verify_candidate_active_policy', active)
     d._preflight_native_verified = False
     return calls
 
 
-@pytest.mark.parametrize("rejected", ["intraday_release_handoff", "runtime_policy_bootstrap", "delay", "stop", "holding"])
+@pytest.mark.parametrize("rejected", ["intraday_release_handoff", "runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy"])
 def test_adoption_native_preflight_failure_never_replaces_old_hold(driver, monkeypatch, rejected):
     d = driver; _, _, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
     original = {path: path.read_bytes() for path in (d.hold, failed_path, prior_path, d.selection, d.checklist)}
@@ -805,7 +811,7 @@ def test_adoption_preflight_native_checks_precede_capture_and_acquire(driver, mo
     hold_before = d.hold.read_bytes()
     calls = _mock_adoption_preflight(d, monkeypatch)
     d.preflight()
-    assert calls == ["src.engine.automation.intraday_release_handoff", "src.engine.automation.runtime_policy_bootstrap", "delay", "stop", "holding"]
+    assert calls == ["src.engine.automation.intraday_release_handoff", "src.engine.automation.runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy"]
     assert d._preflight_native_verified is True
     assert d.hold.read_bytes() == hold_before
     d.acquire_hold()
@@ -999,3 +1005,45 @@ def test_stopped_policy_code_handoff_uses_only_proven_original_ancestry(stopped_
         assert str(d.hold) not in result['source_hashes'] and str(d.selection) not in result['source_hashes']
         assert str(status_path) in result['source_hashes']
     assert before==(d.selection.read_bytes(),status_path.read_bytes(),policy.read_bytes())
+
+
+@pytest.mark.parametrize('damage', [None, 'missing', 'seal', 'pointer', 'origin', 'code', 'source', 'race'])
+def test_candidate_active_policy_preflight_is_source_bound_and_read_only(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import reversal_code_handoff as C, mechanistic_entry_runtime_policy as N
+    data=tmp_path/'data';root=data/'runtime/mechanistic_entry_policy';root.mkdir(parents=True)
+    pointer=root/'current.json';pointer.write_text(json.dumps({'bundle_sha256':'b'*64}))
+    selection=data/'runtime/runtime_release_selection.json'
+    selection.write_text(json.dumps(dict(release_root='/old',git_commit='a'*40)))
+    monkeypatch.setattr(N,'root',lambda data:root)
+    monkeypatch.setattr(N,'validate',lambda *a,**k:None)
+    (root/'generations').mkdir();(root/'generations'/('b'*64+'.json')).write_text(json.dumps(dict(bundle_sha256='b'*64,target_date='2026-10-16')))
+    code=tmp_path/'code.py';code.write_text('reviewed code')
+    source=tmp_path/'source.json';source.write_text('sealed source')
+    codes={str(code):D.H._sha(code)};monkeypatch.setattr(C,'code_hashes',lambda:codes)
+    receipt=C.P.seal(dict(schema=C.SCHEMA,authority=C.AUTHORITY,target_date='2026-10-16',release_commit='c'*40,
+        release_root=str(tmp_path),bundle_sha256='b'*64,current_pointer_sha256=D.H._sha(pointer),
+        origin_root='/old',origin_commit='a'*40,origin_selection_sha256=D.H._sha(selection),
+        policy_reselected=False,provider_called=False,actual_pid_consumed=False,
+        code_hashes=codes,source_hashes={str(source):D.H._sha(source)}))
+    if damage=='pointer':receipt['current_pointer_sha256']='x'
+    if damage=='origin':receipt['origin_commit']='foreign'
+    if damage=='code':receipt['code_hashes']={str(code):'0'*64}
+    receipt=C.P.seal(receipt)
+    if damage=='seal':receipt['artifact_content_sha256']='0'*64
+    dest=C.path(data,'2026-10-16','c'*40,'b'*64);dest.parent.mkdir(parents=True);dest.write_text(json.dumps(receipt))
+    if damage=='missing':dest.unlink()
+    if damage=='source':source.write_text('tampered')
+    def matches(ref,**kwargs):
+        if damage=='race':pointer.write_text('{}')
+        return D.H._sha(ref['path'])==ref['sha256']
+    monkeypatch.setattr(N,'source_receipt_matches',matches)
+    before=selection.read_bytes()
+    if damage:
+        with pytest.raises((ValueError,OSError)):
+            D.verify_candidate_active_policy(tmp_path,tmp_path,'c'*40,'2026-10-16')
+    else:
+        result=D.verify_candidate_active_policy(tmp_path,tmp_path,'c'*40,'2026-10-16')
+        assert result['status']=='pass' and result['receipt_sha256']==D.H._sha(dest)
+    assert selection.read_bytes()==before
+    assert not (data/'runtime/operator_startup_hold.json').exists()
+    assert not (tmp_path/'restart.flag').exists()

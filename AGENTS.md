@@ -50,6 +50,13 @@ Keep current strategy state in Plan Rebase §5/§7/§8 and executable owners in 
 - If official repository documents, SDK/specs, portal guidance, or observed packets conflict or leave semantics undefined, do not guess. Preserve raw provenance, fail closed for semantic/runtime promotion, and open a source-quality or contract gap with tests.
 - Official protocol evidence does not override KORStockScan hard safety. Never relax stale/conflict, broker/account/order/quantity/cooldown, provider, threshold, cap, bot-state, or hard/protect/emergency guards solely because an upstream example permits a call.
 
+### 4.2 Approved Release Transition Checklist
+
+- Before draining Main, follow [runtime release routing](docs/runtime-release-routing.md): pin the current selector/PID/start ticks, build a clean candidate, validate the exact active-policy code handoff and native parity, and validate delay/stop/holding family code contracts. A prepared next-session policy is not this handoff. Missing or invalid candidate evidence must stop preflight while the incumbent remains running.
+- Use the candidate's `ordered_intraday_deploy` only after the review gate and explicit deployment/restart authority. Preserve the original policy/PREOPEN/strict/controller and failed-attempt bytes. Never stop first and manufacture the missing receipt afterward, delete a startup hold, or bypass native validation.
+- After launch, verify exact PID consumption and publish the current observer generation through its existing producer/lock before the first full health sweep. A prior PID's report, exit zero, or partial publication is not current health validation. Keep actual source failures visible.
+- A failed transition uses the documented recovery path for its exact phase and ownership. Record failure and recovery separately. For lossless compression, validate both archive integrity and active consumers' logical-source contracts; preserve original policy and historical checklist evidence.
+
 ## 5. Codebase Work Review And Fix Loop
 
 - Every modification closes through `implementation -> self review -> supplemental fixes -> re-review -> targeted validation -> result report`. Use `$korstockscan-review-gate` when available; fix in-scope findings without waiting for another instruction.

@@ -53,6 +53,41 @@ def _digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def verify_candidate_active_policy(workspace, candidate, commit, day):
+    """Require the complete candidate code handoff before Main can be drained."""
+    from src.engine.scalping import reversal_code_handoff as C
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    data = Path(workspace)/'data'
+    pointer = N.root(data)/'current.json'
+    if not pointer.exists():
+        raise ValueError('deployment_active_policy_pointer_missing')
+    selection = data/'runtime/runtime_release_selection.json'
+    selection_raw, pointer_raw = selection.read_bytes(), pointer.read_bytes()
+    selected, ptr = json.loads(selection_raw), json.loads(pointer_raw)
+    bundle = N._read(N.root(data)/'generations'/(ptr['bundle_sha256']+'.json'))
+    N.validate(bundle, target_date=bundle['target_date'])
+    receipt_path = C.path(data, day, commit, bundle['bundle_sha256'])
+    receipt_raw = receipt_path.read_bytes()
+    receipt = json.loads(receipt_raw)
+    C.validate_receipt(receipt, day=day, commit=commit, root=candidate,
+                       bundle_sha=bundle['bundle_sha256'], pointer_sha=_digest(pointer_raw))
+    if (receipt.get('origin_root') != selected.get('release_root')
+            or receipt.get('origin_commit') != selected.get('git_commit')
+            or receipt.get('origin_selection_sha256') != _digest(selection_raw)
+            or receipt.get('actual_pid_consumed') is not False
+            or receipt['code_hashes'] != C.code_hashes()):
+        raise ValueError('deployment_candidate_active_policy_unbound')
+    for path, sha in {**receipt['source_hashes'], **receipt['code_hashes']}.items():
+        if not N.source_receipt_matches(dict(path=path, sha256=sha), data_root=data):
+            raise ValueError('deployment_candidate_active_policy_source_changed:' + path)
+    if (selection.read_bytes() != selection_raw or pointer.read_bytes() != pointer_raw
+            or receipt_path.read_bytes() != receipt_raw or receipt['code_hashes'] != C.code_hashes()):
+        raise ValueError('deployment_candidate_active_policy_generation_changed')
+    return dict(status='pass', receipt_path=str(receipt_path), receipt_sha256=_digest(receipt_raw),
+                pointer_path=str(pointer), pointer_sha256=_digest(pointer_raw),
+                candidate_commit=commit, bundle_sha256=bundle['bundle_sha256'], policy_effect='unchanged')
+
+
 def _metadata_signature(path):
     info = Path(path).lstat()
     return tuple(getattr(info, "st_" + name) for name in (
@@ -388,6 +423,11 @@ class Deployment:
         _atomic(self.directory / 'candidate-stop-code.json', _json_bytes(stop_check))
         holding_check = H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit)
         _atomic(self.directory / 'candidate-holding-vote-code.json', _json_bytes(holding_check))
+        active_check = verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day)
+        _atomic(self.directory/'candidate-active-policy-code.json', _json_bytes(active_check))
+        self.frozen = dict(self.frozen)
+        self.frozen[active_check['receipt_path']] = active_check['receipt_sha256']
+        self.frozen[active_check['pointer_path']] = active_check['pointer_sha256']
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
         self.document_before = self.checklist.read_bytes()
         self.document_after = subprocess.check_output(['git', '-C', str(self.candidate), 'show',

@@ -369,3 +369,36 @@ def test_error_detection_loop_writes_each_health_report_but_logs_one_incident(mo
     assert errors == ['[ERROR_DETECTION] cron_completion: terminal failure']
     assert len(alerts) == 1 and alerts[0][0] == 'SYSTEM_HEALTH_ALERT'
     assert alerts[0][1]['audience'] == 'ADMIN_ONLY'
+
+
+@pytest.mark.parametrize('producer', [0, 1])
+def test_startup_observer_uses_existing_owners_and_no_notification(tmp_path, monkeypatch, producer):
+    (tmp_path/'tmp').mkdir()
+    calls=[]
+    class Child:
+        def __init__(self,args,**kwargs):
+            calls.append((args,kwargs))
+            self.returncode=producer if len(calls)==1 else 0
+        def poll(self):return self.returncode
+    monkeypatch.setattr(bot_main.subprocess,'Popen',Child)
+    monkeypatch.setattr(bot_main,'_startup_consumption_check',lambda identity:dict(status='ready'))
+    identity=dict(process_started_monotonic=0.,workspace=tmp_path,release_root=tmp_path,
+                  target_date='2026-10-16',pid=123)
+    result=bot_main._refresh_startup_observer(identity,monotonic=lambda:30.,heartbeat=lambda:None)
+    assert result['status']=='attempted' and result['producer_exit']==producer
+    assert 'src.engine.buy_funnel_sentinel' in calls[0][0]
+    assert 'src.engine.monitoring.submission_bottleneck_monitor' in calls[1][0]
+    assert ('--source-only' in calls[1][0]) == bool(producer)
+    assert all('--notify' not in args and opts['start_new_session'] for args,opts in calls)
+
+
+def test_startup_observer_busy_or_expired_never_starts_unowned_child(tmp_path, monkeypatch):
+    import fcntl
+    (tmp_path/'tmp').mkdir()
+    identity=dict(process_started_monotonic=0.,workspace=tmp_path,release_root=tmp_path,
+                  target_date='2026-10-16',pid=123)
+    monkeypatch.setattr(bot_main.subprocess,'Popen',lambda *a,**k:pytest.fail('no child after deadline'))
+    with (tmp_path/'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        result=bot_main._refresh_startup_observer(identity,monotonic=lambda:130.,heartbeat=lambda:None)
+    assert result['reason']=='startup_observer_owner_busy'

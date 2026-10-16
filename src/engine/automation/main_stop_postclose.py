@@ -395,6 +395,43 @@ def sources(root, day):
     return result
 
 
+def _archived_pipeline_source(path, expected, *, verify_full=False):
+    """Validate the archiver's lossless representation of a sealed raw input.
+
+    Monitoring uses the original publisher hash plus the exact archive inode
+    receipt. Full research validation still decodes every byte and checks CRC.
+    This does not reseal a report or accept new/missing logical sources.
+    """
+    import stat
+    archive = Path(str(path) + '.gz')
+    before = archive.lstat()
+    if path.is_symlink() or path.exists() or not stat.S_ISREG(before.st_mode):
+        raise ValueError('stop_pipeline_archive_not_regular')
+    receipt_path = Path(str(archive) + '.archive_receipt.json')
+    if receipt_path.is_symlink():
+        raise ValueError('stop_pipeline_archive_receipt_invalid')
+    receipt, receipt_sha = bounded(receipt_path, 128 * 1024)
+    generation = receipt.get('archive_generation') or {}
+    observed = dict(device=before.st_dev, inode=before.st_ino,
+                    size_bytes=before.st_size, mtime_ns=before.st_mtime_ns)
+    if (receipt.get('schema') != 'pipeline_raw_archive_identity_v1'
+            or receipt.get('logical_path') != str(path)
+            or receipt.get('logical_content_sha256') != expected.get('sha256')
+            or receipt.get('logical_size_bytes') != expected.get('size')
+            or receipt.get('runtime_effect') is not False
+            or receipt.get('allowed_runtime_apply') is not False
+            or generation != observed):
+        raise ValueError('stop_pipeline_archive_receipt_invalid')
+    if verify_full:
+        sha, size, _ = _vote_watch_content(archive, max_bytes=expected['size'])
+        if sha != expected['sha256'] or size != expected['size']:
+            raise ValueError('stop_pipeline_archive_bytes_changed')
+    if (list(source_stat(archive.lstat())) != list(source_stat(before))
+            or path.exists() or path.is_symlink()
+            or bounded(receipt_path, 128 * 1024)[1] != receipt_sha):
+        raise ValueError('stop_pipeline_archive_changed_during_read')
+
+
 def source_events(path, census, *, references=False):
     """Bound each line and expose undecodable source instead of dropping it."""
     with open_text_auto(path, errors='strict') as handle:
@@ -478,7 +515,12 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
         observed_votes = verify_vote_watch_binding(root, day, report.get('vote_watch_binding'),
             future_unconsumed=(not verify_full and sealed_sources
                 and all(cell['status'] != 'selected' for cell in bundle['cells'].values())))
-    if report.get('source_catalog_sha256')!=policy.digest([str(p) for p in sources(root,day)]):
+    inventory = report.get('source_inventory', {})
+    catalog = []
+    for physical in sources(root, day):
+        logical = str(physical)[:-3] if str(physical).endswith('.jsonl.gz') else str(physical)
+        catalog.append(logical if logical in inventory and not Path(logical).exists() else str(physical))
+    if report.get('source_catalog_sha256') != policy.digest(catalog):
         raise ValueError('stop_raw_source_set_changed')
     for label in ('parent_receipt','snapshot_receipt'):
         ref=report.get(label) or {}
@@ -491,6 +533,10 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     for path, expected in expected_files.items():
         before = report['dependency_stats'].get(path)
         physical = Path(path)
+        if (path in inventory and physical.parent == Path(root)/'pipeline_events'
+                and physical.name.endswith('.jsonl') and not physical.exists()):
+            _archived_pipeline_source(physical, expected, verify_full=verify_full)
+            continue
         if path in report.get('vote_source_inventory', {}) and not physical.exists():
             ref = (report.get('vote_watch_binding') or {}).get(path) or {}
             if (physical.is_symlink() or ref.get('path') != path or ref.get('stat') != before

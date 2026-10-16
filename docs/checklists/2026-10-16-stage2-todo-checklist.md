@@ -250,3 +250,5 @@ selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한�
 - [ ] `[OperationalLogRetentionRepair1016] 작성자 로그 회전·보관·역사 원천 압축 적용 확인` (`Due: 2026-10-16`, `Slot: INTRADAY`, `TimeWindow: 통합 배포 후`, `Track: RuntimeStability`)
   - Source: [운영 계약](../operational-log-retention.md), [원 점검](/home/ubuntu/KORStockScan/tmp/log-retention-audit-20261016-114851/report.md).
   - Acceptance: LR01~LR09의 cron/닫힌 세대/열린 FD·pin·참조 보호, 실패 cooldown 미갱신, 독립 달력 주기, 당시 strict/checklist 원본을 보존한 검증 압축, tmp 보호·용량 경보, journal 설정을 실제 적용 영수증으로 확인한다. 증거 미확인 파일은 삭제하지 않는다. 자연 만료 삭제·새 신호·실제 주문/경제 성과는 코드 PASS와 구분한다.
+
+장기4개 통합 후속: 67c0cee49의 원 failed transition을 보존한 복구/PID18623 소비를 확인했다. `DirectFamilyPreopenPolicyHandoff`는 drain 전 active policy 인계 강제 검사와 기동 직후 observer 게시 순서를 수리·최종 PID로 수용한다. `OperationalLogRetentionRepair1016`는 과거4일 검증 압축12,174,530,638bytes 절감 및 당시 증거 보존을 확인했고, 손절 원천 소비의 gzip 전환 오판 수리 후 detector 재검증을 소유한다. 손절 수치와 원 정책은 유지한다. 상세 결과는 기존 통합 검토에 기록한다.

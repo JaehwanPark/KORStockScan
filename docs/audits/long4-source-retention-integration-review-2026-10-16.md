@@ -53,3 +53,14 @@
 앞으로 active policy 코드 인계 영수증 게시/검증을 drain 전에 수행한다.37개 native 정책 파일은 선행922b9cbc3의 검증본과 모두 동일하므로 원76,800행/128scope/594hit parity를 SHA로 재사용한다. 새 재생을 수행했다고 보고하지 않는다. 변경된 인계 함수 자체는 별도의 변조/실패/경합 회귀로 검증한다.
 
 중단 코드 인계와 기존 배포/원천 회귀288개 PASS. 검증 로그: [stopped-code-handoff-tests.log](/home/ubuntu/KORStockScan/tmp/long4-retention-integrated-20261016/stopped-code-handoff-tests.log).
+
+
+## 반복 누락 방지와 압축 소비 계약 후속 수리
+
+67c0cee49는 15:53:21 정규 중단 복구를 완료했다(PID18623/start19751300). 원628771e9c 실패는 보존했다. 재기동 직후 구 PID observer가778/851초로 오래되어 15:53/15:54 경보가 발생했고 15:55 정규 게시에서 현재 세대가 확인됐다. 새 기동은 정확한 PID 소비·transition 완료 뒤 기존 Sentinel/observer owner 잠금과 원150초 deadline 안에서 게시를 시도한 후 첫 full 검사를 수행한다. 게시 실패·실제 의미 결손은 숨기지 않는다.
+
+과거10/08·12·13·14 네 pipeline의 SHA/크기/gzip round-trip 및 원 controller/strict/checklist custody를 확인해 압축했다. 실제 절감12,174,530,638bytes(11.34GiB), unverified skip0.10/15·16은 보호했다. 압축 이후 Main stop의 물리 경로 목록 검사가 손실 없는 .jsonl→.gz 전환을 새 원천으로 오인하여 `stop_raw_source_set_changed`를 냈고, 이것이 역사 checklist 검증 fallback도 막았다. 원 report에 봉인된 SHA/크기·정확한 archive inode/세대 receipt를 소비하도록 수리했다. full 연구 검증은 gzip 전체 decode/CRC를 유지한다. 새 late source·누락·변조·잘못된 receipt/symlink는 계속 실패한다. 손절 숫자와 원 정책/strict/controller는 변경하지 않는다.
+
+배포 preflight는 active policy의 candidate commit/root, origin selector, pointer, 전체 contract code, 원천 및 봉인 receipt를 drain 전에 검증한다. 누락은 기존 Main이 살아 있는 상태에서 실패한다. AGENTS와 runtime-release-routing에 동일 필수 순서를 명시했다. stopped recovery는 별도 실패 phase/native ancestry 계약을 유지한다.
+
+후속 stop archive167개, 배포·기동·역사 검증2,265개, 최종 관련 회귀516개 PASS. Python compile/diff 및 문서 print-only parser를 수행한다. 이 수용은 원천 보관/소비·기동 절차에 한정하며 실제 신규 신호·주문·경제성과를 증명하지 않는다. 증거는 동일 tmp 디렉터리의 `pipeline-compression.log`, `stop-archive-tests.log`, `preflight-startup-tests.log`, `followup-final-tests.log`에 보존한다.

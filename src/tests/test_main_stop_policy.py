@@ -1284,3 +1284,34 @@ def test_future_vote_waits_for_native_partial_append_to_finish(tmp_path, monkeyp
         result=post._future_unconsumed_vote_tail(tmp_path,'2026-10-12',path,None)
         future.result(timeout=2)
     assert result[2]==len(raw) and path.read_bytes()==raw
+
+
+@pytest.mark.parametrize('damage', [None, 'hash', 'size', 'inode', 'path', 'receipt', 'new_source', 'bytes', 'symlink'])
+def test_pipeline_archive_preserves_native_stop_binding_only_for_exact_source(tmp_path, damage):
+    import gzip
+    _, report, _, raw = publication(tmp_path)
+    content = raw.read_bytes()
+    archive = Path(str(raw)+'.gz')
+    archive.write_bytes(gzip.compress(content))
+    raw.unlink()
+    st = archive.stat()
+    receipt = dict(schema='pipeline_raw_archive_identity_v1', logical_path=str(raw),
+        logical_content_sha256=report['source_inventory'][str(raw)]['sha256'],
+        logical_size_bytes=len(content), runtime_effect=False, allowed_runtime_apply=False,
+        archive_generation=dict(device=st.st_dev,inode=st.st_ino,size_bytes=st.st_size,mtime_ns=st.st_mtime_ns))
+    if damage == 'hash':receipt['logical_content_sha256']='0'*64
+    if damage == 'size':receipt['logical_size_bytes']+=1
+    if damage == 'inode':receipt['archive_generation']['inode']+=1
+    if damage == 'path':receipt['logical_path']=str(raw)+'foreign'
+    sidecar=Path(str(archive)+'.archive_receipt.json');sidecar.write_text(json.dumps(receipt))
+    if damage == 'receipt':sidecar.unlink()
+    if damage == 'new_source':raw.with_name(raw.stem+'.late.jsonl').write_text('{}\n')
+    if damage == 'bytes':archive.write_bytes(gzip.compress(b'changed'))
+    if damage == 'symlink':raw.symlink_to(tmp_path/'absent')
+    if damage:
+        with pytest.raises((ValueError,OSError)):
+            post.read_committed(tmp_path,'2026-10-12')
+    else:
+        result=post.read_committed(tmp_path,'2026-10-12',verify_full=True)
+        assert result[1] == report
+        assert post.handoff(tmp_path,'2026-10-13')[1]['status']=='verified_carried'
