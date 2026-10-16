@@ -19,13 +19,13 @@ from typing import Any, Iterable, Mapping
 
 from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
+from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_json_object_strict_receipt
 
 KST = timezone(timedelta(hours=9))
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SYMBOL_MASTER_DIR = (
-    PROJECT_ROOT / "data" / "report" / "micro_reversion_economic_reference"
-)
+# DATA_DIR resolves the trusted deployment mount; strict reads still reject
+# symlinks below that mount and pin the original artifact generation.
+SYMBOL_MASTER_DIR = DATA_DIR / "report" / "micro_reversion_economic_reference"
 
 MAX_QUOTE_AGE_MS = 1_000.0
 PRE_ANCHOR_LOOKBACK_SEC = 120.0

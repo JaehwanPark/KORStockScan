@@ -1723,16 +1723,6 @@ if [ "$RUN_SIM_POST_SELL_FEEDBACK" = "true" ] || [ "$RUN_SIM_POST_SELL_FEEDBACK"
     --evaluate-sim \
     --materialize-monitor-snapshot
 fi
-if [ "$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" = "true" ] || [ "$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" = "1" ]; then
-  wait_for_postclose_resources "rising_missed_intraday_feedback_postclose"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.rising_missed_intraday_feedback \
-    --target-date "$TARGET_DATE" \
-    --print-summary
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.md" \
-    "rising_missed_intraday_feedback_postclose"
-fi
 # Rising Missed scout entry and dedicated studies retired 2026-09-18.
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
   wait_for_postclose_resources "observation_source_quality_preflight"
@@ -1765,6 +1755,19 @@ PY_PREFLIGHT_READER
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
     "observation_source_quality_preflight"
+fi
+
+# Preflight can quarantine defective raw rows. Bind feedback to the surviving
+# generation so its downstream classifier never consumes pre-exclusion input.
+if [ "$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" = "true" ] || [ "$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" = "1" ]; then
+  wait_for_postclose_resources "rising_missed_intraday_feedback_postclose"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.rising_missed_intraday_feedback \
+    --target-date "$TARGET_DATE" \
+    --print-summary
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.md" \
+    "rising_missed_intraday_feedback_postclose"
 fi
 
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then

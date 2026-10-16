@@ -700,7 +700,9 @@ def test_pre_submit_receipt_binds_sealed_source_generation(tmp_path, monkeypatch
     assert mod.stage_receipt_issues(reports, day, "pre_submit_delay", code_hash="fixture-code") == []
 
     raw.write_text(raw.read_text() + json.dumps({**event, "record_id": 2}) + "\n")
-    assert "pre_submit_delay:raw_generation_changed" in mod.stage_receipt_issues(
+    # The sealed ledger validates the raw generation before a stage-level
+    # digest comparison, so drift invalidates that ledger at the first guard.
+    assert "pre_submit_delay:family_source_ledger_missing_or_invalid" in mod.stage_receipt_issues(
         reports, day, "pre_submit_delay", code_hash="fixture-code",
     )
 
@@ -717,7 +719,7 @@ def test_pre_submit_receipt_binds_sealed_source_generation(tmp_path, monkeypatch
         runner=drift_during_consumer,
     )
     assert result["status"] == "failed"
-    assert "pipeline_source_quality:raw_generation_changed" in result["issues"]
+    assert "pipeline_source_quality:family_source_ledger_missing_or_invalid" in result["issues"]
 
 
 def test_summary_handoff_tracks_later_active_stage_generation(stage_environment):

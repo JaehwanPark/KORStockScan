@@ -1,12 +1,97 @@
+import gzip
+import hashlib
+import importlib.util
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from src.engine.monitoring import entry_turn_point_replay as mod
 from src.engine.monitoring import rising_missed_intraday_feedback as feedback
 from src.engine import sniper_state_handlers as handlers
 
 KST = timezone(timedelta(hours=9))
+
+
+def _managed_master_reader(tmp_path, monkeypatch):
+    from src.utils import constants
+
+    shared = tmp_path / "shared_data"
+    directory = shared / "report" / "micro_reversion_economic_reference"
+    directory.mkdir(parents=True)
+    release = tmp_path / "release"
+    source = release / "src" / "engine" / "monitoring" / "entry_turn_point_replay.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(Path(mod.__file__).read_bytes())
+    (release / "data").symlink_to(shared, target_is_directory=True)
+    monkeypatch.setattr(constants, "DATA_DIR", shared)
+    spec = importlib.util.spec_from_file_location("managed_entry_turn_fixture", source)
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+
+    class FixtureMaster:
+        symbol_count = 1
+
+        @classmethod
+        def from_payload(cls, payload, *, require_canonical_owner):
+            assert require_canonical_owner is True
+            if payload != {"fixture_id": "valid"}:
+                raise ValueError("fixture_master_invalid")
+            return cls()
+
+    monkeypatch.setattr(loaded, "VerifiedSymbolMaster", FixtureMaster)
+    return loaded, directory
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_managed_data_mount_preserves_strict_master_generation(
+    tmp_path, monkeypatch, compressed
+):
+    loaded, directory = _managed_master_reader(tmp_path, monkeypatch)
+    logical = directory / "micro_reversion_symbol_master_2026-10-16.json"
+    payload = b'{"fixture_id":"valid"}'
+    physical = logical.with_suffix(".json.gz") if compressed else logical
+    physical.write_bytes(gzip.compress(payload) if compressed else payload)
+
+    master, binding = loaded.load_verified_symbol_master("2026-10-16")
+
+    assert master is not None
+    assert binding["status"] == "verified"
+    assert Path(binding["path"]) == logical
+    assert Path(binding["physical_path"]) == physical
+    assert binding["artifact_sha256"] == hashlib.sha256(payload).hexdigest()
+    assert binding["raw_artifact_sha256"] == hashlib.sha256(physical.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("unsafe", ["artifact_symlink", "nested_symlink", "invalid_latest", "plain_gzip_conflict"])
+def test_managed_data_mount_keeps_unsafe_latest_master_closed(
+    tmp_path, monkeypatch, unsafe
+):
+    loaded, directory = _managed_master_reader(tmp_path, monkeypatch)
+    previous = directory / "micro_reversion_symbol_master_2026-10-15.json"
+    previous.write_text('{"fixture_id":"valid"}')
+    latest = directory / "micro_reversion_symbol_master_2026-10-16.json"
+    if unsafe == "artifact_symlink":
+        latest.symlink_to(previous)
+    elif unsafe == "nested_symlink":
+        outside = tmp_path / "outside"
+        directory.rename(outside)
+        directory.symlink_to(outside, target_is_directory=True)
+        latest.write_text('{"fixture_id":"valid"}')
+    elif unsafe == "plain_gzip_conflict":
+        latest.write_text('{"fixture_id":"valid"}')
+        latest.with_suffix(".json.gz").write_bytes(gzip.compress(b'{"fixture_id":"different"}'))
+    else:
+        latest.write_text('{"fixture_id":"invalid"}')
+
+    master, binding = loaded.load_verified_symbol_master("2026-10-16")
+
+    assert master is None
+    assert binding["status"] == "invalid"
+    assert binding["source_date"] == "2026-10-16"
+    assert binding["selection_policy"] == "no_fallback_after_latest_eligible_invalid"
 
 
 def _observation(epoch: float, bid: float, ask: float) -> dict:

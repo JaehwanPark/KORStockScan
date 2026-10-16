@@ -110,6 +110,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
 
 - [ ] `[PostcloseStructuralPolicyCompletion1011] rising_missed 정책 생성 코드·원천 세대 계약 검증` (`Due: 2026-10-16`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - 10/16 정규 장후 보완: source 감사 격리6행 이후 상승누락 보고서를 생성하도록 순서를 수리하고, 관리 release의 공용 DATA_DIR mount로 종목원장을 읽는다. 하위 링크/손상/충돌 거부와 기존 정책·원 실패를 보존한다. 진행 중 원 run082096071의 코드를 바꾸지 않고 검증 후 영향 산출물과 직접 후행만 재생성한다. source16 strict/controller·10/19 준비는 DirectFamilyPreopenPolicyHandoff와 결속하며 실제 PREOPEN/PID·비용 후 성과는 미리 완료 처리하지 않는다. [운영 보완](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md#13-eod-이후-원천-세대원장-경로-보완).
   - Source: [runtime_approval_summary_2026-10-14.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-14.json)
   - <!-- POLICY_GENERATION_CAPABILITY_TASK -->
   - 정책 생성 코드 계약: family=`rising_missed`, status=`unverified`, findings=`['policy_generation_unverified']`.

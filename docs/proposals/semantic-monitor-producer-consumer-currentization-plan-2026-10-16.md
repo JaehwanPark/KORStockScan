@@ -275,3 +275,11 @@
 보조연구의 전면 교체 비권고와800회 누적 사용량을 유지한다. 같은 seed와 actual 요청/응답을 재사용해 native 인계를 확인하고 주성 AFTER/SOR·10만원 이상, 기타 비삼성 PRE/NXT·2만~10만원의 두 개선 scope만 기존 CAS publisher로 적용한다. 새 연구 호출은 없다. cursor 코드 owner는 `PreSubmitSemanticCurrentization1016`, 보조정책 owner는 `DirectFamilySourceRepairCompactAuxiliary`, 실제 종목 수신 결손은 `NonfixedDispatchReadinessReview1012`를 유지한다.
 
 003540·417860의 local 송신·연결 success·귀속 unknown·실제 wire0은 분리한다. 기존 bounded probe/회전을 유지하고 새 exact source가 생기기 전 정상화하지 않는다. [통합 리뷰](../audits/main-source-cursor-and-auxiliary-integration-review-2026-10-16.md)의 정지 전 정책 인계·native parity·delay/stop/holding gate 후 정규 전환, 새 PID/observer/full detector와 보조 binding 소비를 각각 확인한다.
+
+## 13. EOD 이후 원천 세대·원장 경로 보완
+
+source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10/16·2,622행과 원 경고4종목을 보존한다. 정규 장후 원 run은082096071이며 진행 중 코드·입력을 교체하지 않는다.
+
+상승누락 보고서는 원천 감사 preflight의 격리 완료 뒤 생성한다. 감사가 결함 행을 제거한 경우 격리 이전 보고서의 source hash/count를 현재 입력으로 승계하지 않는다. 정상·복구 모드의 기존 검증된 preflight 재사용과 live reader 보호, 자원·EOD gate는 유지한다. 관리 릴리스의 종목원장 조회는 공용 DATA_DIR의 검증된 mount를 사용하고, 하위 링크·plain/gzip 충돌·손상된 최신 세대는 기존 strict reader가 계속 거부한다. 퇴역 collector나 정책 발행기를 복원하지 않는다.
+
+기존 원본·실패·원천 격리 영수증을 보존한 뒤 영향 producer와 직접 소비자만 재생성하고 tower/checklist/strict/controller·10/19 준비로 닫는다. 현재 기계정책·비용·custody·runtime env·provider·주문·수량·hard safety는 바꾸지 않는다. 실제 완료 영수증과 의미적 잔여는 기존 DirectFamilyPreopenPolicyHandoff 및 PostcloseStructuralPolicyCompletion1011 owner에 기록한다.

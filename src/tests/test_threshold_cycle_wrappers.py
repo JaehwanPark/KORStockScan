@@ -8,6 +8,51 @@ def _text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def test_rising_feedback_consumes_post_exclusion_preflight_generation(tmp_path):
+    import subprocess
+
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    rising = script.index('if [ "$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE"')
+    preflight = script.index('if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT"')
+    end = script.index('if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION"', max(rising, preflight))
+    body = script[min(rising, preflight):end]
+    source = tmp_path / "source-generation"
+    source.write_text("unfiltered")
+    python_stub = tmp_path / "python-stub"
+    python_stub.write_text("#!/bin/sh\nexit 1\n")
+    python_stub.chmod(0o700)
+    prefix = '''set -eu
+wait_for_postclose_resources() { :; }
+wait_for_report_artifact() { :; }
+run_postclose_cmd() {
+  case "$*" in
+    *src.engine.observation_source_quality_audit*) printf filtered > "$SOURCE_GENERATION" ;;
+    *src.engine.monitoring.rising_missed_intraday_feedback*)
+      [[ "$(cat "$SOURCE_GENERATION")" == filtered ]] || return 42
+      printf feedback_verified
+      ;;
+    *) return 43 ;;
+  esac
+}
+'''
+    result = subprocess.run(
+        ["bash", "-c", prefix + body],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "PROJECT_DIR": str(tmp_path),
+            "VENV_PY": str(python_stub),
+            "TARGET_DATE": "2026-10-16",
+            "SOURCE_GENERATION": str(source),
+            "POSTCLOSE_RECOVERY_REUSE_MODE": "false",
+            "RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE": "true",
+            "RUN_OBSERVATION_SOURCE_QUALITY_AUDIT": "true",
+        },
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "feedback_verified" in result.stdout
+
+
 @pytest.mark.parametrize('cost_exit', [0, 47])
 def test_cost_source_precedes_fact_and_quantity_generation_without_new_hard_gate(cost_exit):
     import os, subprocess
