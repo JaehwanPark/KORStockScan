@@ -45,7 +45,9 @@ def begin_coverage(stock, now, *, generation=None):
         legs=buy_fill_legs_from_runtime(stock)
         # Native identity legs contain order/execution/quantity, not clocks.
         # The receipt consumer sets these position clocks when accepting BUY.
-        has_add=bool(stock.get('_add_receipt_filled_by_order_no'))
+        entry_orders = stock.get('_entry_receipt_filled_by_order_no') or {}
+        has_add=bool(stock.get('_add_receipt_filled_by_order_no') or any(
+            leg.get('order_no') not in entry_orders for leg in (stock.get('holding_buy_fill_legs') or [])))
         stamp=stock.get('last_add_at') if has_add else stock.get('buy_time')
         if isinstance(stamp,str):stamp=datetime.fromisoformat(stamp)
         if (isinstance(stamp,datetime) and generation and legs
@@ -237,7 +239,8 @@ def assemble_votes(root, output, source, sources):
                 if not segment.exists():continue
                 before=byte_generation(segment);sources[str(segment)]=before
                 for vote in iter_path_events_file(segment,source['position_key']):
-                    if vote.get('path_id')!=source.get('path_id','EXIT_TRAILING_TP'):continue
+                    if (source.get('path_id','EXIT_TRAILING_TP') is not None
+                        and vote.get('path_id')!=source.get('path_id','EXIT_TRAILING_TP')):continue
                     try:
                         ref=_verified_request(root,output,vote,sources) if vote['status']=='VALID' else None
                         yield {**vote,'actual_input_ref':ref,'actual_input_verified':ref is not None}

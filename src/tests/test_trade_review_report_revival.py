@@ -58,10 +58,12 @@ def test_shared_rebound_lineage_keeps_one_position_cost_and_exact_decision_join(
               reason="shared_main_rebound_input_preflight_blocked",
               preflight_primary_blocker="tick_context_stale"),
         event("holding_path_signal_snapshot", path_id="ADD_REBOUND",
-              signal_id="signal-1", decision="PASS", buy_fill_identity="identity-1"),
+              signal_id="signal-1", decision="PASS", buy_fill_identity="a" * 64,
+              policy_sha256="c" * 64, vote_count=2),
         event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
               position_episode_id="episode-1", scale_in_decision_id="decision-1",
-              buy_fill_identity="identity-1", machine_bundle_sha256="b" * 64),
+              buy_fill_identity="a" * 64, machine_bundle_sha256="b" * 64,
+              holding_path_vote_policy_sha256="c" * 64),
         event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry",
               actual_order_submitted=True, position_episode_id="episode-1",
               scale_in_decision_id="decision-1", broker_order_no_list="0029199",
@@ -106,7 +108,7 @@ def test_shared_rebound_lineage_does_not_join_unrelated_fill_or_invent_cost():
          "realized_pnl_krw": None, "profit_rate": None},
     )
     assert result["unjoined_fill_count"] == 1
-    assert result["decision_rows"][0]["status"] == "lineage_gap_valid_vote"
+    assert result["decision_rows"][0]["status"] == "lineage_gap_buy_fill_identity"
     assert result["position_terminal"]["realized_pnl_krw"] is None
 
 
@@ -116,10 +118,12 @@ def test_shared_rebound_lineage_separates_partial_add_fill_from_full_fill():
                                        stage, {"id": "48376", **fields}, "")
     events = [
         event("holding_path_signal_snapshot", path_id="ADD_REBOUND",
-              signal_id="signal-1", decision="PASS", buy_fill_identity="identity-1"),
+              signal_id="signal-1", decision="PASS", buy_fill_identity="a" * 64,
+              policy_sha256="c" * 64, vote_count=2),
         event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
               position_episode_id="episode-1", scale_in_decision_id="decision-1",
-              buy_fill_identity="identity-1"),
+              buy_fill_identity="a" * 64, machine_bundle_sha256="b" * 64,
+              holding_path_vote_policy_sha256="c" * 64),
         event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry",
               actual_order_submitted=True, position_episode_id="episode-1",
               scale_in_decision_id="decision-1", broker_order_no_list="0029199",
@@ -139,6 +143,31 @@ def test_shared_rebound_lineage_separates_partial_add_fill_from_full_fill():
     assert decision["exact_filled_qty"] == 1
     assert decision["status"] == "partial_fill_completed_exact_cost"
     assert result["incremental_add_effect_status"] == "unidentified_without_paired_no_add"
+
+
+@pytest.mark.parametrize("gap", [None, "missing_buy", "malformed_buy", "missing_bundle", "wrong_vote_policy", "one_vote"])
+def test_rebound_lineage_requires_bound_buy_and_policy_even_with_exact_fill(gap):
+    def event(stage, **fields):
+        return report_mod.HoldingEvent("2026-10-16 10:00:00", "TEST", "005930", stage, fields, "")
+    identity = None if gap == "missing_buy" else "invalid" if gap == "malformed_buy" else "a" * 64
+    events = [
+        event("avg_down_shared_rebound_signal", source_signal_id="s", scale_in_decision_id="d",
+              position_episode_id="p", buy_fill_identity=identity,
+              machine_bundle_sha256=None if gap == "missing_bundle" else "b" * 64,
+              holding_path_vote_policy_sha256="c" * 64),
+        event("holding_path_signal_snapshot", path_id="ADD_REBOUND", signal_id="s", decision="PASS",
+              buy_fill_identity=identity, policy_sha256="d" * 64 if gap == "wrong_vote_policy" else "c" * 64,
+              vote_count=1 if gap == "one_vote" else 2),
+        event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry", actual_order_submitted=True,
+              position_episode_id="p", scale_in_decision_id="d", broker_order_no_list="100", submitted_qty=1),
+        event("scale_in_executed", add_reason="shared_main_rebound_entry", actual_order_submitted=True,
+              position_episode_id="p", scale_in_decision_id="d", order_no="100", execution_no="200", fill_qty=1),
+    ]
+    result = report_mod._avg_down_rebound_lineage(dict(id=42, code="005930", strategy="SCALPING"), events,
+        dict(strict_completion_status="eligible", fill_cost_reconciled=True, realized_pnl_krw=100, profit_rate=.2))
+    row = result["decision_rows"][0]
+    assert (row["status"] == "completed_exact_cost") is (gap is None)
+    assert row["valid_vote_count"] == (1 if gap is None else 0)
 
 
 def test_structured_trailing_projection_flags_wrong_partition_and_missing_id(

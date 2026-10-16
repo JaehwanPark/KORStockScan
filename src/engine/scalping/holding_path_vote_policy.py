@@ -63,6 +63,13 @@ def source_quality_from_observation(observation: dict[str, Any]) -> dict[str, An
             available_actual_population_ids_ref=population.get('db_completed_main_ids_ref'),
             available_actual_population_count=population.get('canonical_main_completed_rows'),
         )
+    elif replay.get('source_status') == 'sealed_partition_vote_inputs':
+        quality.update(replay_cohort_status='sealed_partition_vote_inputs',
+            strict_completed_ids=replay.get('strict_completed_position_ids') or [],
+            excluded_by_id=replay.get('partition_excluded_by_position_id') or {},
+            main_completed_ids_role='available_actual_population_reference',
+            available_actual_population_ids_ref=population.get('db_completed_main_ids_ref'),
+            available_actual_population_count=population.get('canonical_main_completed_rows'))
     return quality
 
 

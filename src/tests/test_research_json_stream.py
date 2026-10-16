@@ -20,6 +20,20 @@ def test_stream_keeps_every_timeline_and_fill_without_large_display_fields(tmp_p
     assert list(storage.iter_tree(tmp_path/'out',body['buy_fill_legs_ref']))==trade['buy_fill_legs']
 
 
+def test_stream_preserves_signal_receipts_and_strict_admission_fields(tmp_path):
+    signal=dict(stage='holding_path_signal_snapshot',fields=dict(path_id='ADD_REBOUND',
+        signal_id='signal-1',buy_fill_identity='a'*64,decision='PASS',vote_count=2))
+    trade=dict(id=7,status='COMPLETED',strategy='SCALPING',profit_rate=.2,
+        strict_completion_status='eligible',strict_completion_reasons=[],rec_date=DAY,
+        terminal_population_scope='real_record_bound',timeline=[signal])
+    path=tmp_path/'source.json';path.write_text(json.dumps({'sections':{'completed_trade_projection':[trade]}}))
+    body,_=next(completed_rows(path,tmp_path/'out'))
+    assert body['strict_completion_status']=='eligible' and body['profit_rate']==.2
+    signals=list(storage.iter_tree(tmp_path/'out',body['holding_path_signal_snapshots_ref']))
+    assert signals[0]['fields']['signal_id']=='signal-1'
+    assert signals[0]['fields']['buy_fill_identity']=='a'*64
+
+
 @pytest.mark.parametrize('raw',['{"sections":{"completed_trade_projection":[{"id":"x","id":"y"}]}}',
     '{"sections":{"completed_trade_projection":[]}} trailing',
     '{"sections":{"completed_trade_projection":[{"timeline":['])
@@ -77,7 +91,8 @@ def test_large_verified_completed_projection_is_automatically_assembled(tmp_path
     )
     quality = source_quality_from_observation(holding)
     assert quality['completed_population_complete'] is False
-    assert quality['replay_cohort_status'] == 'source_gap_partitioned_vote_inputs_unavailable'
+    assert quality['replay_cohort_status'] == 'sealed_partition_vote_inputs'
+    assert quality['excluded_by_id']['main:1']
     assert quality['available_actual_population_count'] == 1
     assert quality['available_actual_population_ids_ref']['count'] == 1
     assert holding['holding_path_vote_replay']['economic_replay_observed'] is False

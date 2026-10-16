@@ -191,6 +191,13 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(replay,monkeypatch)
     again, _ = DIAG.observe_snapshot('005930','NXT','NXT_PREMARKET',now=T+122,
         item='005930_NX',family_sha256=new['continuous_reversal']['family_sha256'])
     assert receipt['reason'] == 'ready' and again == observed
+    from src.engine.scalping.avg_down_rebound import evaluate_native_rebound
+    rebound = evaluate_native_rebound(dict(machine_bundle_sha256=new['bundle_sha256'],
+        continuous_reversal=new['continuous_reversal']), stock_code='005930',
+        ws_data={'last_realtime_type_item': {'0B': '005930_NX'}}, session='NXT_PREMARKET', now_ts=T+122)
+    assert rebound['should_add'] is True
+    assert rebound['machine_policy_version'] == V.SCHEMA
+    assert rebound['machine_family_sha256'] == new['continuous_reversal']['family_sha256']
     assert runtime._CLAIMS == before_claims
     assert before_ready == [[r['claimed'] for r in s.ready] for s in runtime._STATES.values()]
     expected=dict(snapshot=observed, family_sha256=new['continuous_reversal']['family_sha256'], snapshot_sha256='a'*64)

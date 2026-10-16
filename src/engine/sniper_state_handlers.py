@@ -88647,6 +88647,8 @@ def handle_holding_state(
             source_clock_captured_at=assessment.get("source_clock_captured_at"),
             source_timing=assessment.get("source_timing"),
             machine_bundle_sha256=assessment.get("machine_bundle_sha256"),
+            machine_family_sha256=assessment.get("machine_family_sha256"),
+            native_source_status=assessment.get("native_source_status"),
             policy_status=assessment.get("policy_status"),
             effective_venue=assessment.get("effective_venue"),
             session_bucket=assessment.get("session_bucket"),
@@ -89584,10 +89586,16 @@ def _evaluate_scale_in_signal(
             or source.get("trade_date") != datetime.fromtimestamp(now_ts, tz=_KST).date().isoformat()
             or ai_engine is None or not hasattr(ai_engine, "evaluate_main_rebound_entry")):
         return None
+    from src.engine.scalping.avg_down_rebound import holding_policy_position_tag
+    try:
+        policy_position_tag = holding_policy_position_tag(stock)
+    except (ValueError, TypeError):
+        stock["_main_rebound_entry_assessment"] = {"reason": "shared_main_holding_policy_identity_invalid"}
+        return None
     signal = ai_engine.evaluate_main_rebound_entry(
         stock_code=code, ws_data=ws_data, recent_ticks=list(ws_data.get("recent_trade_ticks") or []),
         recent_candles=source["recent_candles"], candle_meta=source["candle_meta"],
-        now_ts=now_ts, position_tag=stock.get("position_tag"),
+        now_ts=now_ts, position_tag=policy_position_tag,
     )
     stock["_main_rebound_entry_assessment"] = dict(signal)
     if not signal.get("should_add") or not all(signal.get(key) for key in (
@@ -89617,6 +89625,9 @@ def _evaluate_scale_in_signal(
     _log_holding_pipeline(stock, code, "avg_down_shared_rebound_signal",
         source_signal_id=signal["source_signal_id"], machine_bundle_sha256=signal["machine_bundle_sha256"],
         machine_policy_version=signal["machine_policy_version"],
+        machine_family_sha256=signal.get("machine_family_sha256"),
+        native_signal_id=signal.get("native_signal_id"),
+        rebound_branches=signal.get("rebound_branches"),
         holding_path_vote_signal_id=signal["source_signal_id"],
         holding_path_vote_decision=add_snapshot.get("decision"),
         holding_path_vote_policy_sha256=add_snapshot.get("policy_sha256"),
@@ -89885,6 +89896,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 or action.get("stock_code") != code
                 or action.get("position_basis") != [stock.get("buy_price"), stock.get("buy_qty")]
                 or not 0 <= now_ts - _safe_float(action.get("signal_observed_at"), 0) <= 2.0
+                or ("native_signal_expires_at" in action and not now_ts <=
+                    _safe_float(action.get("native_signal_expires_at"), float("nan")))
                 or action.get("source_signal_id") == stock.get("last_avg_down_rebound_signal_id")):
             return {"status": "blocked", "reason": "shared_rebound_permit_missing_or_stale", "qty": 0}
         current_net = calculate_net_profit_rate(stock.get("buy_price"), ws_data.get("curr"))
@@ -90780,6 +90793,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         if (action.get("signal_market_digest") != _main_rebound_source_digest({key: ws_data.get(key)
                     for key in ("curr", "recent_trade_ticks")})
                 or not 0 <= time.time() - _safe_float(action.get("signal_observed_at"), 0) <= 2.0
+                or ("native_signal_expires_at" in action and not time.time() <=
+                    _safe_float(action.get("native_signal_expires_at"), float("nan")))
                 or action.get("position_basis") != [stock.get("buy_price"), stock.get("buy_qty")]
                 or final_price >= _safe_float(stock.get("buy_price"), 0)
                 or calculate_net_profit_rate(stock.get("buy_price"), final_price) <= max(

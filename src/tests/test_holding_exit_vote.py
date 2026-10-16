@@ -593,6 +593,56 @@ def test_exact_buy_fill_receipt_survives_two_restarts_and_add_leg(tmp_path):
     assert buy_fill_identity_from_runtime(restored) == new_identity
 
 
+@pytest.mark.parametrize("clear_owner", ["receipt", "cancel"])
+def test_buy_identity_survives_two_add_bundles_partial_cancel_and_restart(tmp_path, clear_owner):
+    from src.engine import sniper_execution_receipts as receipts
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.ai.holding_exit_vote import buy_fill_legs_from_runtime
+    stock = dict(id=42, code="005930", buy_time="2026-10-16 10:00:00",
+        buy_price=10000., buy_qty=1, entry_filled_qty=1,
+        _entry_receipt_filled_by_order_no={"100": 1},
+        _entry_receipt_executions_by_order_no={"100": {"1": {"cumulative_qty": 1}}})
+    identities = {persist_buy_fill_receipt(stock, tmp_path)}
+    for order in ("200", "300"):
+        stock.update(pending_add_order=True, pending_add_qty=2,
+            _add_receipt_filled_by_order_no={order: 1},
+            _add_receipt_executions_by_order_no={order: {"2": {"cumulative_qty": 1}}})
+        stock["buy_qty"] += 1
+        identity = persist_buy_fill_receipt(stock, tmp_path)
+        assert identity not in identities
+        identities.add(identity)
+        (receipts if clear_owner == "receipt" else handlers)._clear_pending_add_meta(stock)
+        assert "pending_add_order" not in stock
+        assert buy_fill_identity_from_runtime(stock) == identity
+        assert sum(row["qty"] for row in buy_fill_legs_from_runtime(stock)) == stock["buy_qty"]
+        restored = {key: stock[key] for key in ("id", "code", "buy_time", "buy_price", "buy_qty")}
+        assert restore_buy_fill_receipt(restored, tmp_path) == "restored"
+        assert buy_fill_identity_from_runtime(restored) == identity
+        stock = restored
+
+
+def test_v1_buy_receipt_restores_as_retained_identity_without_rewriting(tmp_path):
+    stock = dict(id=42, code="005930", buy_time="2026-10-16 10:00:00",
+        buy_price=10000., buy_qty=2, entry_filled_qty=1,
+        _entry_receipt_filled_by_order_no={"100": 1},
+        _entry_receipt_executions_by_order_no={"100": {"1": {"cumulative_qty": 1}}},
+        _add_receipt_filled_by_order_no={"200": 1},
+        _add_receipt_executions_by_order_no={"200": {"2": {"cumulative_qty": 1}}})
+    identity = persist_buy_fill_receipt(stock, tmp_path)
+    path = tmp_path / "runtime/holding_buy_fill_receipts/42.json"
+    body = json.loads(path.read_text())
+    body["schema"] = "holding_buy_fill_receipt_v1"
+    body["receipt_fields"].pop("holding_buy_fill_legs")
+    path.write_text(json.dumps(body))
+    before = path.read_bytes()
+    restored = {key: stock[key] for key in ("id", "code", "buy_time", "buy_price", "buy_qty")}
+    assert restore_buy_fill_receipt(restored, tmp_path) == "restored"
+    restored.pop("_add_receipt_filled_by_order_no")
+    restored.pop("_add_receipt_executions_by_order_no")
+    assert buy_fill_identity_from_runtime(restored) == identity
+    assert path.read_bytes() == before
+
+
 def test_exact_buy_fill_receipt_matches_db_naive_kst_buy_time(tmp_path):
     from datetime import datetime
     from zoneinfo import ZoneInfo

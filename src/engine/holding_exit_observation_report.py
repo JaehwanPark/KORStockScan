@@ -2753,17 +2753,13 @@ def _partitioned_holding_report(target_date,month_start,result,out,assembly):
         research_candidate=None,decision_authority='existing_mechanical_selector')
     market_tuning.update(raw_census_complete=census_complete,eligible_evaluation_complete=eligible_complete,
                          universal_evaluation=result['common_population_evaluation'])
-    # Universal outcome refs do not contain the original vote signal ledger.
-    # Keep that consumer's baseline-prior contract, with an explicit missing
-    # replay cohort; never relabel universal outcomes as observed AI votes.
-    votes = summarize_holding_path_votes(
-        [], load_events=lambda _: [],
+    from src.engine.scalping.holding_path_vote_replay import summarize_frozen_holding_path_votes
+    votes = summarize_frozen_holding_path_votes(
+        assembly,manifest['partitions_ref'],clean_start=window['evaluation_start_date'],
         model=str(getattr(TRADING_RULES, 'OPENAI_HOLDING_EXIT_VOTE_MODEL',
                           'gpt-5.4-nano') or 'gpt-5.4-nano'),
     )
-    votes.update(source_status='source_gap_partitioned_vote_inputs_unavailable',
-                 available_actual_population_ids_ref=actual_ref,
-                 economic_replay_observed=False)
+    votes.update(available_actual_population_ids_ref=actual_ref)
     from src.engine.scalping.holding_vote_experiment import native_research
     votes['vote_numeric_research']=native_research(_data_root(),target_date,trailing_assembly=assembly)
     from src.engine.monitoring.policy_generation_contract import native

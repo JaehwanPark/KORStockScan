@@ -117,6 +117,37 @@ def test_buy_fill_identity_store_failure_blocks_later_add(monkeypatch):
     assert result == {"allowed": False, "reason": "buy_fill_identity_store_gap"}
 
 
+def test_shared_rebound_actual_receipt_keeps_identity_after_complete_and_restart(monkeypatch, tmp_path):
+    from src.engine.ai.holding_exit_vote import (
+        buy_fill_identity_from_runtime, buy_fill_legs_from_runtime,
+        persist_buy_fill_receipt, restore_buy_fill_receipt,
+    )
+    stock = dict(id=42, code='123456', name='TEST', strategy='SCALPING', position_tag='SCANNER',
+        status='HOLDING', buy_price=10000, buy_qty=1, buy_time=datetime(2026,10,16,9,tzinfo=receipts._KST),
+        entry_filled_qty=1, _entry_receipt_filled_by_order_no={'100':1},
+        _entry_receipt_executions_by_order_no={'100':{'1':{'cumulative_qty':1}}},
+        pending_add_order=True,pending_add_type='AVG_DOWN',pending_add_reason='shared_main_rebound_entry',
+        pending_add_qty=1,pending_add_ord_no='200')
+    before=persist_buy_fill_receipt(stock,tmp_path)
+    monkeypatch.setattr(receipts,'ACTIVE_TARGETS',[stock])
+    monkeypatch.setattr(receipts,'highest_prices',{})
+    monkeypatch.setattr(receipts,'_get_fast_state',lambda code:None)
+    monkeypatch.setattr(receipts,'_update_db_for_add',lambda *a,**k:None)
+    monkeypatch.setattr(receipts,'record_add_history_event',lambda *a,**k:None)
+    monkeypatch.setattr(receipts,'_request_broker_snapshot_refresh',lambda *a,**k:None)
+    monkeypatch.setattr(receipts,'_log_holding_pipeline',lambda *a,**k:None)
+    receipts.handle_real_execution(dict(code='123456',type='BUY',order_no='200',execution_no='2',
+        price=9950,qty=1,order_qty=1,remaining_qty=0))
+    assert stock['buy_qty']==2 and 'pending_add_order' not in stock
+    assert stock['reversal_add_state']=='POST_ADD_EVAL'
+    identity=buy_fill_identity_from_runtime(stock)
+    assert identity and identity!=before
+    assert len(buy_fill_legs_from_runtime(stock))==2
+    restored={key:stock[key] for key in ('id','code','buy_time','buy_price','buy_qty')}
+    assert restore_buy_fill_receipt(restored,tmp_path)=='restored'
+    assert buy_fill_identity_from_runtime(restored)==identity
+
+
 def test_initial_quantity_cap_depth_and_following_tick_require_bound_source(monkeypatch):
     from src.engine.scalping.position_sizing_allocator import ScalpingSizingContext
     from src.trading.market import quote_consistency
@@ -15301,7 +15332,7 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "pending_add_reason", ["reversal_add_ok", "shallow_volatility_avg_down"]
+    "pending_add_reason", ["reversal_add_ok", "shallow_volatility_avg_down", "shared_main_rebound_entry"]
 )
 def test_reversal_add_post_eval_starts_on_execution_receipt(
     monkeypatch, pending_add_reason
@@ -40131,6 +40162,20 @@ def test_shared_rebound_signal_has_episode_and_policy_without_budget_query(monke
     assert stock["_main_rebound_entry_permit"] == action
     stock["last_avg_down_rebound_signal_id"] = action["source_signal_id"]
     assert state_handlers._evaluate_scale_in_signal(**kwargs) is None
+
+
+def test_native_rebound_deadline_is_not_extended_by_holding_permit(monkeypatch):
+    stock, kwargs = _shared_rebound_fixture(monkeypatch)
+    original = kwargs['ai_engine'].evaluate_main_rebound_entry
+    kwargs['ai_engine'].evaluate_main_rebound_entry = lambda **kw: dict(
+        original(**kw), native_signal_expires_at=2000.1)
+    action = state_handlers._evaluate_scale_in_signal(**kwargs)
+    monkeypatch.setattr(state_handlers.time, 'time', lambda: 2000.2)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, 'get_deposit',
+        lambda *a, **kw: pytest.fail('expired native signal reached account'))
+    result = state_handlers.execute_scale_in_order(stock=stock,code='005930',
+        ws_data=kwargs['ws_data'],action=action,admin_id='test')
+    assert result['reason']=='shared_rebound_permit_missing_or_stale'
 
 
 @pytest.mark.parametrize("gap", ["position", "day", "source", "signal", "ai", "not_down", "sim", "exit"])

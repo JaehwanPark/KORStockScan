@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import math
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from src.engine.ai.holding_exit_vote import (
     MARKETS, PATH_IDS, PATH_POLICY_BY_MARKET, input_snapshot_id,
@@ -42,6 +42,10 @@ def _candidate_policies(
     path_id: str, base: dict[str, Any],
 ) -> list[tuple[str, dict[str, Any]]]:
     """Bounded single-axis and interacting quorum/freshness alternatives."""
+    if path_id == "ADD_REBOUND":
+        # ADD timing belongs to the selected Main machine. Its incumbent
+        # confirmation can be replayed, but this exit owner cannot tune it.
+        return []
     choices = {
         "window_sec": (120.0, 240.0),
         "min_votes": (3,),
@@ -75,8 +79,100 @@ def _candidate_policies(
     return candidates
 
 
+def compact_signal(event):
+    """Original decision fields needed for replay; no reconstructed votes."""
+    fields=event.get('fields') if isinstance(event.get('fields'),dict) else {}
+    return dict(stage='holding_path_signal_snapshot',fields={key:fields.get(key) for key in (
+        'path_id','market','session_key','position_key','buy_fill_identity','signal_id',
+        'signal_at','policy_sha256','decision','vote_count')})
+
+
+def freeze_replay_trade(trade, root, output, sources):
+    """Seal the original per-position vote inputs alongside the bounded cohort."""
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.lifecycle.research_json_stream import TRADE_FIELDS
+    from src.engine.ai.holding_vote_replay_source import assemble_votes, SCHEMA
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    position_key='record:'+_trade_id(trade)
+    source=dict(schema=SCHEMA,position_key=position_key,
+                store_name=path_vote_store_path(root,position_key).name,path_id=None)
+    return dict(schema='holding_path_frozen_trade_v1',
+        trade={key:trade.get(key) for key in TRADE_FIELDS},
+        source_gap=trade.get('holding_path_projection_gap') or trade.get('projection_source_gap'),
+        signals_ref=trade.get('holding_path_signal_snapshots_ref') or storage.write_tree(output,
+            (compact_signal(event) for event in trade.get('timeline') or []
+             if isinstance(event,dict) and event.get('stage')=='holding_path_signal_snapshot')),
+        buys_ref=trade.get('buy_fill_legs_ref') or storage.write_tree(output,trade.get('buy_fill_legs') or []),
+        votes=assemble_votes(root,output,source,sources))
+
+
+def summarize_frozen_holding_path_votes(assembly, partitions, *, model, clean_start):
+    """Use the same strict admission and replay on sealed partition inputs."""
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.automation.main_trailing_all_scope_research import _sealed
+    from src.engine.ai.holding_vote_replay_source import _verify_projection
+    from src.engine.holding_exit_observation_report import _strict_completed_reasons,_is_valid_completed_trade
+    gaps={};frozen_count=0
+    current_votes={}
+    def bounded_rows(reference):
+        rows=[];size=0
+        for row in storage.iter_tree(assembly,reference):
+            size+=len(storage.encoded(row))
+            if size>16*1024*1024:
+                raise ValueError('frozen_vote_position_partition_required')
+            rows.append(row)
+        return rows
+    def trades():
+        nonlocal frozen_count
+        for part in storage.iter_tree(assembly,partitions):
+            payload=_sealed(assembly/part['path'],expected=part.get('artifact_sha256'))
+            for position in payload['positions']:
+                if position['evidence_kind']!='actual_completed':continue
+                ref=position.get('holding_path_diagnostic_ref')
+                if not ref:
+                    gaps[position['position_key']]=['frozen_vote_trade_missing'];continue
+                rows=list(storage.iter_tree(assembly,ref))
+                if len(rows)!=1 or rows[0].get('schema')!='holding_path_frozen_trade_v1':
+                    raise ValueError('holding_path_frozen_trade_invalid')
+                frozen_count+=1;frozen=rows[0];trade=frozen['trade']
+                reasons=_strict_completed_reasons(trade,clean_start=clean_start)
+                if position['position_key']!='main:'+_trade_id(trade):
+                    reasons.append('frozen_vote_position_identity_mismatch')
+                if not _is_valid_completed_trade(trade):reasons.append('completed_trade_invalid')
+                if frozen.get('source_gap'):reasons.append(frozen['source_gap'])
+                if reasons:
+                    gaps[_trade_id(trade)]=sorted(set(reasons));continue
+                vote_ref=frozen['votes']
+                try:
+                    trade=dict(trade,buy_fill_legs=bounded_rows(frozen['buys_ref']),
+                        timeline=bounded_rows(frozen['signals_ref']))
+                    rows=bounded_rows(vote_ref['events_ref']) if vote_ref.get('status')=='source_bound' else []
+                except ValueError as exc:
+                    if str(exc)!='frozen_vote_position_partition_required':raise
+                    gaps[_trade_id(trade)]=[str(exc)];continue
+                current_votes.clear()
+                # A retained VALID verdict without its exact original input
+                # is evidence loss, not an eligible model observation.
+                for row in rows:
+                    if row.get('status')=='VALID' and row.get('actual_input_verified') is True:
+                        try:
+                            _verify_projection(row['actual_input_ref'],row)
+                        except (ValueError,OSError,KeyError,TypeError):
+                            row['actual_input_verified']=False
+                current_votes['record:'+_trade_id(trade)]=[
+                    dict(row,status='INSUFFICIENT',excluded_reason='original_vote_input_unverified')
+                    if row.get('status')=='VALID' and row.get('actual_input_verified') is not True else row
+                    for row in rows]
+                yield trade
+    result=summarize_holding_path_votes(trades(),load_events=lambda key:current_votes[key],model=model)
+    result.update(source_status='sealed_partition_vote_inputs' if frozen_count else
+        'source_gap_partitioned_vote_inputs_unavailable',frozen_position_count=frozen_count,
+        partition_excluded_by_position_id=gaps,economic_replay_observed=False)
+    return result
+
+
 def summarize_holding_path_votes(
-    strict_trades: list[dict[str, Any]],
+    strict_trades: Iterable[dict[str, Any]],
     *,
     load_events: Callable[[str], list[dict[str, Any]]],
     model: str,
@@ -89,7 +185,7 @@ def summarize_holding_path_votes(
             cells[f"{path}|{market}"] = {
                 "path_id": path, "market": market,
                 "runtime_policy_sha256": input_snapshot_id(base),
-                "strict_completed_position_count": len(strict_trades),
+                "strict_completed_position_count": 0,
                 "signal_count": 0, "eligible_signal_count": 0,
                 "vote_count": 0, "invalid_vote_count": 0,
                 "zero_vote_signals": 0, "one_vote_signals": 0,
@@ -109,8 +205,10 @@ def summarize_holding_path_votes(
                 "allowed_runtime_apply": False,
             }
     exclusions: dict[str, list[str]] = {}
+    strict_ids=[]
     for trade in strict_trades:
         trade_id = _trade_id(trade)
+        strict_ids.append(trade_id)
         if not trade_id:
             exclusions["missing_id"] = ["strict_trade_id_missing"]
             continue
@@ -221,6 +319,7 @@ def summarize_holding_path_votes(
                 )
                 candidate["decision_counts"][candidate_result["decision"]] += 1
     for cell in cells.values():
+        cell['strict_completed_position_count']=len(strict_ids)
         cell["status"] = (
             "replay_ready_economics_missing" if cell["eligible_signal_count"]
             else "source_gap_no_replayable_signal"
@@ -228,8 +327,8 @@ def summarize_holding_path_votes(
     return {
         "schema": "holding_path_vote_postclose_replay_v1",
         "decision_authority": "research_only_no_runtime_apply",
-        "strict_completed_position_ids": [_trade_id(row) for row in strict_trades],
-        "strict_population_count": len(strict_trades),
+        "strict_completed_position_ids": strict_ids,
+        "strict_population_count": len(strict_ids),
         "path_market": cells,
         "excluded_by_position_id": exclusions,
         "selected_policy": None,

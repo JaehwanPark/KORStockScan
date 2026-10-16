@@ -8729,6 +8729,34 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
         assert new_bar["source_signal_id"] != result["source_signal_id"]
 
 
+def test_shared_rebound_current_policy_uses_canonical_scope_without_legacy_fallback(monkeypatch):
+    from src.engine.scalping import entry_candle_context as candles, avg_down_rebound as adapter
+    engine = _build_engine()
+    monkeypatch.setattr(engine, '_call_openai_safe', lambda *a, **k: pytest.fail('unexpected provider'))
+    monkeypatch.setattr(engine, '_build_entry_screen_hot_payload', lambda *a, **k: pytest.fail('legacy path'))
+    monkeypatch.setattr(candles, 'resolve_entry_candle_session', lambda **k: 'krx_regular')
+    monkeypatch.setattr(candles, 'build_entry_candle_context', lambda *a, **k: _allowed_entry_candle_context())
+    monkeypatch.setattr(openai_module, 'ai_input_preflight', lambda _: dict(allowed=True))
+    scopes=[]
+    family=dict(schema='continuous_reversal_policy_v6',family_sha256='f'*64)
+    def resolve(**kw):
+        scopes.append(kw)
+        return dict(enabled=True,machine_bundle_sha256='b'*64,continuous_reversal=family)
+    monkeypatch.setattr(openai_module,'resolve_live_prompt_policy',resolve)
+    calls=[]
+    def native(live, **kw):
+        calls.append(kw)
+        assert live['continuous_reversal']==family
+        return dict(should_add=True,source_signal_id='s'*64,machine_policy_version=family['schema'])
+    monkeypatch.setattr(adapter,'evaluate_native_rebound',native)
+    result=engine.evaluate_main_rebound_entry(stock_code='005930',
+        ws_data=dict(market_suffix='_AL',market_route='krx_nxt_integrated'),
+        recent_ticks=[],recent_candles=[],candle_meta={},now_ts=2000,position_tag='SCANNER')
+    assert result['should_add'] and result['effective_venue']=='KRX'
+    assert scopes[0]['position_tag']=='SCANNER' and scopes[0]['effective_venue']=='KRX'
+    assert calls[0]['session']=='krx_regular'
+
+
 def test_local_async_capture_binding_survives_provider_metadata_limit(monkeypatch,tmp_path):
     from src.engine.scalping import ai_decision_trace as trace
     engine=_build_engine();wire=[]

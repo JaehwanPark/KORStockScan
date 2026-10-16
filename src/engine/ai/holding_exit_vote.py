@@ -768,7 +768,11 @@ def buy_fill_identity_from_legs(legs: Any) -> str | None:
 
 def buy_fill_legs_from_runtime(stock: dict[str, Any]) -> list[dict[str, Any]] | None:
     """Reconcile runtime receipt maps into exact broker BUY fill identities."""
-    legs = []
+    retained = stock.get("holding_buy_fill_legs")
+    if retained is not None and not buy_fill_identity_from_legs(retained):
+        return None
+    legs = copy.deepcopy(retained or [])
+    by_execution = {(row["order_no"], row["execution_no"]): row for row in legs}
     for prefix in ("entry", "add"):
         fills = stock.get(f"_{prefix}_receipt_filled_by_order_no") or {}
         executions = stock.get(f"_{prefix}_receipt_executions_by_order_no") or {}
@@ -798,8 +802,14 @@ def buy_fill_legs_from_runtime(stock: dict[str, Any]) -> list[dict[str, Any]] | 
             for cumulative, execution in sorted(ordered):
                 if cumulative <= prior:
                     return None
-                legs.append({"order_no": order, "execution_no": execution,
-                             "qty": cumulative - prior})
+                leg = {"order_no": order, "execution_no": execution,
+                       "qty": cumulative - prior}
+                existing = by_execution.get((order, execution))
+                if existing is not None and existing != leg:
+                    return None
+                if existing is None:
+                    legs.append(leg)
+                    by_execution[(order, execution)] = leg
                 prior = cumulative
             if prior != filled_qty:
                 return None
@@ -815,13 +825,14 @@ def buy_fill_identity_from_runtime(stock: dict[str, Any]) -> str | None:
     return buy_fill_identity_from_legs(buy_fill_legs_from_runtime(stock))
 
 
-_BUY_FILL_RECEIPT_SCHEMA = "holding_buy_fill_receipt_v1"
+_BUY_FILL_RECEIPT_SCHEMA = "holding_buy_fill_receipt_v2"
 _BUY_FILL_RECEIPT_KEYS = (
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_executions_by_order_no",
     "_add_receipt_filled_by_order_no",
     "_add_receipt_executions_by_order_no",
     "entry_filled_qty",
+    "holding_buy_fill_legs",
 )
 _BUY_FILL_RECEIPT_MAX_BYTES = 262144
 
@@ -874,6 +885,9 @@ def persist_buy_fill_receipt(
             or not isinstance(qty, int) or isinstance(qty, bool)
             or qty <= 0 or sum(leg["qty"] for leg in legs) != qty):
         raise ValueError("exact_buy_fill_receipt_incomplete")
+    # Position-lifetime identity survives cancellation/full-fill cleanup and
+    # the next ADD bundle's empty pending receipt maps.
+    stock["holding_buy_fill_legs"] = copy.deepcopy(legs)
     fields = {key: copy.deepcopy(stock.get(key)) for key in _BUY_FILL_RECEIPT_KEYS}
     payload = {
         "schema": _BUY_FILL_RECEIPT_SCHEMA,
@@ -998,7 +1012,8 @@ def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str
             payload = json.loads(handle.read().decode("ascii"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return "receipt_unreadable"
-    if not isinstance(payload, dict) or payload.get("schema") != _BUY_FILL_RECEIPT_SCHEMA:
+    if not isinstance(payload, dict) or payload.get("schema") not in {
+            "holding_buy_fill_receipt_v1", _BUY_FILL_RECEIPT_SCHEMA}:
         return "receipt_schema_invalid"
     if payload.get("source") not in {
         "accepted_broker_execution", "legacy_path_vote_exact_buy_legs",
@@ -1022,14 +1037,18 @@ def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str
     except (TypeError, ValueError):
         return "position_price_missing"
     fields = payload.get("receipt_fields")
-    if not isinstance(fields, dict) or set(fields) != set(_BUY_FILL_RECEIPT_KEYS):
+    expected = set(_BUY_FILL_RECEIPT_KEYS)
+    if payload["schema"] == "holding_buy_fill_receipt_v1":
+        expected.remove("holding_buy_fill_legs")
+    if not isinstance(fields, dict) or set(fields) != expected:
         return "receipt_fields_invalid"
-    candidate = {**stock, **fields}
+    candidate = {**stock, "holding_buy_fill_legs": None, **fields}
     legs = buy_fill_legs_from_runtime(candidate)
     if (legs is None or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
             or buy_fill_identity_from_legs(legs) != payload.get("buy_fill_identity")):
         return "receipt_identity_conflict"
     stock.update(copy.deepcopy(fields))
+    stock["holding_buy_fill_legs"] = copy.deepcopy(legs)
     stock.pop("buy_fill_identity_store_gap", None)
     return "restored"
 

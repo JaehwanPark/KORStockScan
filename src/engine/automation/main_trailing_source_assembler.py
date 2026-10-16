@@ -407,6 +407,9 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
                 if str(trade.get('strategy') or '').upper() not in {'SCALP','SCALPING'}:
                     gaps['non_main_trade']+=1;continue
                 from src.engine.ai.holding_vote_replay_source import assemble_votes
+                from src.engine.scalping.holding_path_vote_replay import freeze_replay_trade
+                position['holding_path_diagnostic_ref']=storage.write_tree(output,
+                    [freeze_replay_trade(trade,root,output,sources)])
                 event_ref=storage.write_tree(output,iter(events))
                 first = next(storage.iter_tree(output,event_ref), {})
                 source = position.get('holding_vote_source') or first.get('holding_vote_source')

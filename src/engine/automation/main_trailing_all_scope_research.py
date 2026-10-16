@@ -32,6 +32,7 @@ MAX_PARTITIONS = 1024
 MAX_POSITIONS = 20000
 MAX_SHARED_BYTES = 64 * 1024 * 1024
 CODE_PATHS = ('ai/holding_exit_vote.py','ai/holding_vote_replay_source.py',
+              'scalping/holding_path_vote_replay.py','scalping/avg_down_rebound.py',
               'scalping/ai_decision_trace.py','ai_engine_openai.py','sniper_state_handlers.py','automation/main_trailing_all_scope_research.py', 'lifecycle/holding_window_generation.py',
               'automation/main_trailing_path_projection.py',
               'lifecycle/research_input_budget.py', 'lifecycle/research_admission.py',

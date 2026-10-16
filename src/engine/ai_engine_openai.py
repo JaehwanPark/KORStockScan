@@ -12518,6 +12518,9 @@ class GPTSniperEngine:
         try:
             session = resolve_entry_candle_session(now_ts=now_ts)
             venue = resolve_entry_candle_venue(ws_data, session=session)
+            # Main's regular integrated candle scope is KRX; native signal
+            # storage still uses the exact item-derived SOR partition.
+            venue = resolve_entry_candle_venue(ws_data, venue=venue, session=session)
             cohort = (venue.upper(), session.upper())
             # Resolve through the exact Main entry owner, including its
             # activation, same-stage, position-tag and scope constraints.
@@ -12528,11 +12531,12 @@ class GPTSniperEngine:
                 effective_venue=venue, session_bucket=session,
                 now=datetime.fromtimestamp(now_ts, tz=policy_owner.KST))
             if (live.get("enabled") is not True or not live.get("machine_bundle_sha256")
-                    or not isinstance(live.get("mechanistic_threshold_policy"), dict)):
+                    or not (isinstance(live.get("continuous_reversal"), dict)
+                            or isinstance(live.get("mechanistic_threshold_policy"), dict))):
                 return {**blocked, "reason": "shared_main_entry_policy_scope_missing",
                         "policy_status": live.get("status")}
             bundle = {"bundle_sha256": live["machine_bundle_sha256"],
-                      "machine_policy": live["mechanistic_threshold_policy"]}
+                      "machine_policy": live.get("mechanistic_threshold_policy")}
             # Explicit list and auxiliary-fetch OFF prevent the neutral context
             # builder from acquiring any extra source for ADD observations.
             meta = dict(candle_meta or {})
@@ -12578,6 +12582,11 @@ class GPTSniperEngine:
                     "machine_bundle_sha256": bundle["bundle_sha256"],
                     "policy_status": live.get("status"),
                     "effective_venue": venue, "session_bucket": session}
+            if live.get("continuous_reversal"):
+                from src.engine.scalping.avg_down_rebound import evaluate_native_rebound
+                signal = evaluate_native_rebound(live, stock_code=stock_code,
+                    ws_data=ws_data, session=session, now_ts=now_ts)
+                return {**signal, "effective_venue": venue, "session_bucket": session}
             exact = self._build_entry_screen_hot_payload(
                 ws_data, recent_ticks, recent_candles, candle_context=context,
             )

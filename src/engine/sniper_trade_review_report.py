@@ -2837,11 +2837,21 @@ def _avg_down_rebound_lineage(
                                   "status": "lineage_gap_signal_identity"})
             continue
         seen_decisions.add(decision_id)
+        def valid_hash(value):
+            return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+        identity = fields.get("buy_fill_identity")
+        policy_hash = fields.get("holding_path_vote_policy_sha256")
+        identity_valid = valid_hash(identity)
+        policy_valid = valid_hash(fields.get("machine_bundle_sha256")) and valid_hash(policy_hash)
         matching_votes = [vote for vote in vote_by_signal.get(signal_id, [])
-                          if vote.fields.get("path_id") == "ADD_REBOUND"
+                          if identity_valid and policy_valid
+                          and vote.fields.get("path_id") == "ADD_REBOUND"
                           and vote.fields.get("decision") == "PASS"
+                          and vote.fields.get("policy_sha256") == policy_hash
+                          and _safe_int(vote.fields.get("vote_count"), 0) >= 2
                           and vote.fields.get("buy_fill_identity")
-                          == fields.get("buy_fill_identity")]
+                          == identity]
         matching_submits = [row for row in submit_by_decision.get(decision_id, [])
                             if row.fields.get("position_episode_id") == episode_id]
         matching_fills = [row for row in fill_by_decision.get(decision_id, [])
@@ -2864,7 +2874,11 @@ def _avg_down_rebound_lineage(
         fill_quality = ("full" if valid_fills and filled_qty == submitted_qty
                         else "partial" if valid_fills else
                         "lineage_gap" if matching_fills else "no_fill")
-        if not matching_votes:
+        if not identity_valid:
+            status = "lineage_gap_buy_fill_identity"
+        elif not policy_valid:
+            status = "lineage_gap_policy_identity"
+        elif not matching_votes:
             status = "lineage_gap_valid_vote"
         elif not matching_submits:
             status = "valid_signal_no_submit"
@@ -2941,7 +2955,11 @@ def _avg_down_rebound_lineage(
             )
         ),
         "valid_add_vote_snapshot_count": sum(
-            row.fields.get("decision") == "PASS" for row in votes
+            row.fields.get("decision") == "PASS"
+            and isinstance(row.fields.get("buy_fill_identity"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", row.fields["buy_fill_identity"]) is not None
+            and _safe_int(row.fields.get("vote_count"), 0) >= 2
+            for row in votes
         ),
         "decision_rows": decision_rows,
         "unjoined_submit_count": sum(

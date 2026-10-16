@@ -12,7 +12,12 @@ from . import research_storage as storage
 TRADE_FIELDS=frozenset(('id','record_id','strategy','stock_code','code','status',
     'main_automatic_management_allowed','first_buy_at_epoch','buy_fill_quantity','buy_fill_amount',
     'trailing_replay_cost_model','actual_cost_reconciliation','entry_quote_route','entry_quote_item',
-    'holding_ai_required','holding_vote_source','holding_ai_policy_sha256','trailing_entry_context','trailing_situation_pin'))
+    'holding_ai_required','holding_vote_source','holding_ai_policy_sha256','trailing_entry_context','trailing_situation_pin',
+    'rec_date','completion_observed_date','entry_mode','terminal_population_scope',
+    'prior_entry_snapshot_receipt','prior_fill_snapshot_receipts','sell_quantity_conserved',
+    'terminal_profit_rate_reconciled','realized_pnl_krw_source','realized_pnl_krw',
+    'broker_actual_cost_observed','broker_actual_fees_taxes_krw','profit_rate',
+    'strict_completion_status','strict_completion_reasons','exact_sell_fill_time'))
 
 
 class Reader:
@@ -112,6 +117,7 @@ def completed_rows(path,output_root):
     """Yield original trade metadata and a separate complete quote path ref."""
     def trade(reader):
         body={};reference=None
+        signals=[];signal_bytes=0
         def bounded(r,limit):
             try:return r.value(limit)
             except ValueError as exc:
@@ -121,14 +127,24 @@ def completed_rows(path,output_root):
                 r.skip();body['projection_source_gap']='normalized_field_unbounded'
                 return None
         def field(key,r):
-            nonlocal reference
+            nonlocal reference,signal_bytes
             if key=='timeline':
                 def projected():
+                    nonlocal signal_bytes
                     for event in r.array(lambda r:bounded(r,2*1024*1024)):
                         if event is None:
                             yield dict(kind='SOURCE_GAP',known_at=None,reason='normalized_event_unbounded')
                             continue
                         if not isinstance(event,dict):raise ValueError('research_legacy_timeline_invalid')
+                        if event.get('stage')=='holding_path_signal_snapshot':
+                            from src.engine.scalping.holding_path_vote_replay import compact_signal
+                            signal=compact_signal(event)
+                            signal_bytes+=len(storage.encoded(signal))
+                            if signal_bytes<=1024*1024:
+                                signals.append(signal)
+                            else:
+                                signals.clear()
+                                body['holding_path_projection_gap']='signal_projection_capacity_exceeded'
                         if event.get('stage')!='scalp_trailing_input_transition':continue
                         fields=event.get('fields') or {};quote=fields.get('universal_trailing_quote')
                         if isinstance(quote,str):quote=json.loads(quote)
@@ -149,6 +165,7 @@ def completed_rows(path,output_root):
             else:r.skip()
             return iter(())
         for _ in reader.fields(field):pass
+        body['holding_path_signal_snapshots_ref']=storage.write_tree(output_root,signals)
         return body,reference or storage.write_tree(output_root,[])
     with Path(path).open('r',encoding='utf-8') as handle:
         reader=Reader(handle)

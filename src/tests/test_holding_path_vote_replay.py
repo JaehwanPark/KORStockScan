@@ -718,7 +718,87 @@ def test_postclose_keeps_strict_population_and_null_economics():
                for candidate in tp_grid)
     assert cell["cost_after_paired_ev_krw"] is None
     assert report["selected_policy"] is None
+    assert report["path_market"]["ADD_REBOUND|REGULAR"]["candidate_grid"] == []
     assert report["allowed_runtime_apply"] is False
+
+
+@pytest.mark.parametrize('input_state', ['valid', 'unverified', 'changed_after_seal'])
+def test_partitioned_postclose_replays_frozen_add_inputs_with_null_economics(tmp_path, monkeypatch, input_state):
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.ai import holding_exit_vote as vote, holding_vote_replay_source as evidence
+    from src.engine.scalping import ai_decision_trace as writer
+    from src.engine.scalping.holding_path_vote_replay import summarize_frozen_holding_path_votes
+    from src.engine.scalping.pre_submit_delay_initial_policy import digest, _atomic
+    from datetime import datetime, timezone
+    at=datetime(2026,10,16,1,tzinfo=timezone.utc).timestamp()
+    path='ADD_REBOUND';market='REGULAR'
+    rows=_events(path,market,base_at=at+1,session_key='2026-10-16')
+    monkeypatch.setattr(writer,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(writer,'trace_enabled',lambda:True)
+    monkeypatch.setattr(writer,'_now',lambda:datetime.fromtimestamp(at,ZoneInfo('Asia/Seoul')))
+    store=vote.path_vote_store_path(tmp_path,'record:7')
+    for index,row in enumerate(rows):
+        payload=dict(input_schema=vote.PATH_PROMPT_VERSION,requested_paths=[path],
+            position_key='record:7',buy_fill_identity=BUY_IDENTITY,market=market,session_key='2026-10-16',
+            position=dict(buy_price=100,curr_price=99+index*.01),
+            source=dict(route='KRX',transport_epoch='1'),flow={},quote={},source_quality=dict(allowed=True))
+        hashes=vote.path_vote_input_hashes(payload,model=row['model'])
+        payload['input_snapshot_id']=hashes['input_snapshot_id']
+        captured=writer.capture_ai_request(prompt='Original holding prompt',user_input=json.dumps(payload),
+            endpoint_name='holding_path_vote',request_id=f'original-{index}',symbol='005930',
+            require_json=True,model=row['model'],schema_name=vote.PATH_PROMPT_VERSION,
+            metadata=dict(holding_provider_contract=dict(instructions='Original holding prompt',model=row['model'])))
+        row.update(request_payload_sha256=hashes['request_payload_sha256'],
+            input_snapshot_id=hashes['input_snapshot_id'],prompt_sha256=captured['ai_prompt_sha256'],
+            actual_request_reference=dict(schema='holding_actual_request_reference_v1',
+                date=captured['ai_input_payload_store_date'],request_id=captured['ai_decision_trace_id'],
+                request_envelope_sha256=captured['ai_request_envelope_sha256'],
+                payload_sha256=captured['ai_input_payload_sha256'],prompt_sha256=captured['ai_prompt_sha256'],
+                response_sha256='e'*64,replay_exact=True))
+        monkeypatch.setattr(vote.time,'time',lambda row=row:row['received_at']+.1)
+        assert vote.append_path_events_file(store,'record:7',[row])[1]=='appended'
+    votes=evidence.assemble_votes(tmp_path,tmp_path,dict(schema=evidence.SCHEMA,
+        position_key='record:7',store_name=store.name,path_id=None),{})
+    original_rows=list(storage.iter_tree(tmp_path,votes['events_ref']))
+    assert all(row['actual_input_verified'] for row in original_rows)
+    if input_state=='unverified':
+        votes['events_ref']=storage.write_tree(tmp_path,
+            (dict(row,actual_input_verified=False) for row in original_rows))
+    legs=[dict(BUY_LEGS[0],at='2026-10-16T01:00:00+00:00')]
+    signal=dict(stage='holding_path_signal_snapshot',fields=dict(path_id=path,market=market,
+        session_key='2026-10-16',position_key='record:7',buy_fill_identity=BUY_IDENTITY,
+        signal_id='add-1',signal_at=at+20,policy_sha256=input_snapshot_id(PATH_POLICY_BY_MARKET[(path,market)]),
+        decision='PASS',vote_count=2))
+    trade=dict(id=7,rec_date='2026-10-16',completion_observed_date='2026-10-16',
+        status='COMPLETED',strategy='SCALPING',profit_rate=.2,strict_completion_status='eligible',
+        strict_completion_reasons=[],entry_mode='normal',terminal_population_scope='real_record_bound',
+        sell_quantity_conserved=True,terminal_profit_rate_reconciled=True,
+        realized_pnl_krw_source='broker_actual_fee_reconciled',realized_pnl_krw=100,
+        broker_actual_cost_observed=True,broker_actual_fees_taxes_krw=20,
+        exact_sell_fill_time='2026-10-16T01:01:00+00:00')
+    frozen=dict(schema='holding_path_frozen_trade_v1',trade=trade,source_gap=None,
+        signals_ref=storage.write_tree(tmp_path,[signal]),buys_ref=storage.write_tree(tmp_path,legs),
+        votes=votes)
+    partition=dict(positions=[dict(position_key='main:7',evidence_kind='actual_completed',
+        holding_path_diagnostic_ref=storage.write_tree(tmp_path,[frozen]))])
+    partition['artifact_sha256']=digest(partition);_atomic(tmp_path/'part.json',partition)
+    refs=storage.write_tree(tmp_path,[dict(path='part.json')])
+    if input_state=='changed_after_seal':
+        from pathlib import Path
+        Path(original_rows[0]['actual_input_ref']['payload']['path']).write_text('{}\n')
+    result=summarize_frozen_holding_path_votes(tmp_path,refs,model='gpt-5.4-nano',clean_start='2026-06-05')
+    assert result['strict_population_count']==1
+    assert result['source_status']=='sealed_partition_vote_inputs'
+    cell=result['path_market']['ADD_REBOUND|REGULAR']
+    assert cell['eligible_signal_count']==int(input_state=='valid')
+    assert cell['cost_after_paired_ev_krw'] is None and cell['candidate_grid']==[]
+    assert result['allowed_runtime_apply'] is False
+    if input_state=='valid':
+        resident=summarize_holding_path_votes([dict(trade,timeline=[signal],buy_fill_legs=legs)],
+            load_events=lambda _:rows,model='gpt-5.4-nano')
+        assert resident['path_market']==result['path_market']
+    else:
+        assert result['excluded_by_position_id']['7']==['signal_replay_mismatch']
 
 
 def test_postclose_reads_full_position_ledger_without_silent_truncation(tmp_path):

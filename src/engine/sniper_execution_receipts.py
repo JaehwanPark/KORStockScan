@@ -808,6 +808,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "swing_live_order_dry_run",
 )
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
+    "holding_buy_fill_legs",
     *ENTRY_SPLIT_ECONOMIC_RECEIPT_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
@@ -1043,6 +1044,7 @@ _NXT_TP1_PARTIAL_RESET_KEYS = (
 )
 _SELL_EXECUTION_RECEIPT_STATE_KEY = "_sell_execution_receipt_state"
 _SELL_REVIVE_RESET_KEYS = (
+    "holding_buy_fill_legs",
     *_NXT_TP1_PARTIAL_RESET_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
@@ -1179,6 +1181,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "sell_cancel_reconciliation_retry_at",
 )
 _SELL_COMPLETE_RESET_KEYS = (
+    "holding_buy_fill_legs",
     *_NXT_TP1_PARTIAL_RESET_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
@@ -10768,6 +10771,7 @@ def _handle_add_buy_execution(
     now_ts = time.time()
     target_stock["last_add_time"] = now_ts
     if add_type == "AVG_DOWN" and pending_add_reason in {
+        "shared_main_rebound_entry",
         "reversal_add_ok",
         "aggressive_reversal_add_ok",
         "shallow_volatility_avg_down",
