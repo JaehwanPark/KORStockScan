@@ -872,3 +872,43 @@ def test_publish_preserves_concurrent_work_checklist(driver,monkeypatch):
     assert d.checklist.read_bytes()==before
     assert d.state['checklist_sha256']==D._digest(before)
     assert d.selection.read_bytes()==d.published
+
+
+@pytest.mark.parametrize('module',['src.engine.automation.intraday_release_handoff',
+    'src.engine.automation.runtime_policy_bootstrap'])
+@pytest.mark.parametrize('damage',[None,'reviewed_pair','other_code','cache','missing','symlink','oversize','flag'])
+def test_predecessor_digest_session_requires_same_reviewed_cli_and_cache(tmp_path,module,damage):
+    previous,candidate=tmp_path/'old',tmp_path/'new'
+    relative=module.replace('.','/')+'.py'
+    cache='src/engine/infrastructure/validation_digest_session.py'
+    raw="REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {'path': ('old','new')}\ndef main():\n    return '--validation-session'\n"
+    for root in (previous,candidate):
+        (root/relative).parent.mkdir(parents=True,exist_ok=True);(root/relative).write_text(raw)
+        (root/cache).parent.mkdir(parents=True,exist_ok=True);(root/cache).write_text('DIGEST_CONTRACT=1\n')
+    if damage=='reviewed_pair':(previous/relative).write_text(raw.replace("('old','new')","('old','reviewed')"))
+    elif damage=='other_code':(previous/relative).write_text(raw+'OTHER_VALIDATION=1\n')
+    elif damage=='cache':(previous/cache).write_text('DIGEST_CONTRACT=2\n')
+    elif damage=='missing':(previous/relative).unlink()
+    elif damage=='symlink':(previous/relative).unlink();(previous/relative).symlink_to(candidate/relative)
+    elif damage=='oversize':(previous/relative).write_text('#'*(2*1024*1024+1))
+    elif damage=='flag':
+        for root in (previous,candidate):(root/relative).write_text(raw.replace('--validation-session','--unsupported'))
+    expected=damage is None or damage=='reviewed_pair' and module.endswith('.intraday_release_handoff')
+    before={p:p.read_bytes() for root in (previous,candidate) for p in root.rglob('*.py') if p.exists()}
+    assert D._compatible_validation_session(previous,candidate,module) is expected
+    assert all(p.read_bytes()==value for p,value in before.items())
+
+
+@pytest.mark.parametrize('compatible',[False,True])
+def test_run_json_uses_predecessor_session_only_when_compatible_and_keeps_timeout(tmp_path,monkeypatch,compatible):
+    d=object.__new__(D.Deployment);d.candidate=tmp_path/'new';d.validation_session='a'*32
+    previous=tmp_path/'old';calls=[]
+    monkeypatch.setattr(D,'_compatible_validation_session',lambda *a:compatible)
+    def run(argv,**kwargs):
+        calls.append((argv,kwargs));return subprocess.CompletedProcess(argv,0,'{"status":"pass"}','')
+    monkeypatch.setattr(D.subprocess,'run',run)
+    assert d.run_json(previous,'src.engine.automation.runtime_policy_bootstrap','--verify',timeout=17)=={'status':'pass'}
+    argv,options=calls[0]
+    assert ('--validation-session' in argv) is compatible
+    if compatible:assert argv[-2:]==['--validation-session',d.validation_session]
+    assert options['timeout']==17 and options['cwd']==previous

@@ -6,6 +6,7 @@ forces process termination, resets monitor cursors or regenerates postclose work
 from __future__ import annotations
 
 import argparse
+import ast
 import fcntl
 import hashlib
 import json
@@ -216,6 +217,49 @@ def execute(driver):
         raise
 
 
+
+def _compatible_validation_session(previous, candidate, module):
+    """Opt in only to the reviewed CLI/cache implementation, without executing it."""
+    if module not in {'src.engine.automation.intraday_release_handoff',
+                       'src.engine.automation.runtime_policy_bootstrap'}:
+        return False
+    def read(root, relative):
+        path=Path(root)/relative
+        before=_metadata_signature(path)
+        if not stat.S_ISREG(before[2]) or not 0 < before[6] <= 2*1024*1024:
+            raise ValueError('validation_cli_source_not_bounded_regular')
+        descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+        with os.fdopen(descriptor,'rb') as handle:
+            opened=os.fstat(handle.fileno())
+            identity=tuple(getattr(opened,'st_'+name) for name in (
+                'dev','ino','mode','nlink','uid','gid','size','mtime_ns','ctime_ns'))
+            if identity!=before:
+                raise ValueError('validation_cli_descriptor_changed')
+            raw=handle.read(2*1024*1024+1)
+        if len(raw)!=before[6] or _metadata_signature(path)!=before:
+            raise ValueError('validation_cli_source_changed')
+        return raw
+    try:
+        cache='src/engine/infrastructure/validation_digest_session.py'
+        if read(previous,cache)!=read(candidate,cache):return False
+        relative=module.replace('.','/')+'.py'
+        old,new=read(previous,relative),read(candidate,relative)
+        if b'--validation-session' not in new:return False
+        def contract(raw):
+            tree=ast.parse(raw)
+            # Only this reviewed code-pin table differs in the incumbent CLI.
+            # Its values do not implement flags or cache behavior; all other
+            # module syntax, including every validation call, must be identical.
+            for node in tree.body:
+                if (module.endswith('.intraday_release_handoff') and isinstance(node,ast.Assign)
+                        and len(node.targets)==1 and isinstance(node.targets[0],ast.Name)
+                        and node.targets[0].id=='REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES'):
+                    node.value=ast.Constant(value='reviewed_receipt_source_pairs')
+            return ast.dump(tree,include_attributes=False)
+        return contract(old)==contract(new)
+    except (OSError,ValueError,SyntaxError,UnicodeError):
+        return False
+
 class Deployment:
     def __init__(self, workspace, candidate, day, confirm, *, adopt_failed_hold=False):
         if confirm != CONFIRM:
@@ -239,10 +283,12 @@ class Deployment:
         self.preserve_editable_checklist = True
 
     def run_json(self, root, module, *args, timeout=120):
-        # Predecessors may predate this opt-in CLI. Their native full path stays.
-        if root == self.candidate and module in {
-                'src.engine.automation.intraday_release_handoff',
-                'src.engine.automation.runtime_policy_bootstrap'}:
+        # Compatible predecessors share this invocation's digest session too.
+        # Older/different CLI or cache code retains its native full path.
+        if (module in {'src.engine.automation.intraday_release_handoff',
+                       'src.engine.automation.runtime_policy_bootstrap'}
+                and (root == self.candidate
+                     or _compatible_validation_session(root,self.candidate,module))):
             args = (*args, '--validation-session', self.validation_session)
         result = subprocess.run([str(root / '.venv/bin/python'), '-B', '-m', module, *args],
             cwd=root, env={**os.environ, 'PYTHONPATH': str(root)}, capture_output=True, text=True, timeout=timeout)

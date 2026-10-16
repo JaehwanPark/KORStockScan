@@ -146,3 +146,14 @@ bdd461fde 최초 일반 preflight는 원 PID 부재로 selector 전 차단됐다
 09:25 자연 보고서는 현재 PID3016558의 별도 tp_situation_policy_receipt_missing을 드러냈다. native PID archive는 manifest env의 situation_policy를 포함하지만 sentinel은 bare manifest receipt를 current PID에 먼저 넣어 동일 PID의 정상 augmented archive를 conflict로 제외했다. 기존 holding_exit_sentinel._profit_exit_bootstrap_binding에서 원 manifest/hash/verification/as-of 검증 뒤, 동일 env의 typed policy를 native PreparedTrailingPolicy.prepare로 검증하여 augmented copy로 비교한다. 원 manifest/receipt/archive는 바꾸지 않는다. 실제 다른 vector/변조/다른 날짜·미래/as-of/상충 PID는 계속 거부한다. 새5개 양·음성 회귀를 포함한6 suites2364 PASS와 실제 현재 PID+036930 original signal의 native scoped audit에서 policy/runtime binding gap0을 확인했다. [현재 PID 재현](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/current-typed-receipt-native-036930-rehearsal.json). source gap과비용 미상은 그대로다.
 
 이 추가 sentinel 수리는 native-v6/네 family generation/optional hash를 바꾸지 않으며 방금 발행한0c461429 fixture를 그대로 검증한다. 최종 새 commit에서 정상 ordered 배포를 수행하고 실제 native036930 ACK·49342 runtime WATCHING 및 고정5개, 정규 의미 보고서·전체 detector를 수용한다.
+
+
+## 기존 PID preflight 반복 읽기와120초 timeout 보완
+
+01136801e의 첫 두 실행은 detector lock 대기로 상태 변경 전 중단됐다. 기존 full detector가 끝난09:39:58 새 native 시도가 preflight를 시작했으나 기존bdd의 H --verify가120초에 timeout됐다. phase preflight/selector 불변/Main3016558 계속 실행이며 원 status와 로그를 남긴다. 단계 마감시간을 늘리지 않는다.
+
+기존 Deployment.run_json은 candidate에만 validation-session을 전달했다. 현재 predecessor도 같은 CLI/digest 기능을 갖고 있어 큰 immutable 원천을 호출 안/사이에서 반복 읽었다. 같은 automation 파일의 compatibility reader는 두 root의 digest 구현 전체 bytes와 해당 CLI 전체 AST가 같을 때만 predecessor에도 같은 session UUID를 전달한다. H의 검토된 overnight receipt source-pair 한 상수 값만 CLI 호환성 비교에서 분리하며 모든 검증 호출·parser·동작은 같아야 한다. 이 비교가 source-pair 수용이나 semantic PASS를 대신하지 않는다. legacy/다른 CLI 또는 cache 구현은 원 native full 경로를 유지한다.
+
+각 code source는2MiB 이하 regular/no-follow로 읽고 descriptor/경로 전후 identity를 대조한다. 데이터 파일 stat·source set·기대 hash·날짜·정책·hard safety·native 의미 검사·120초 timeout은 그대로다. session의 기존 digest 저장소/TTL/무효화 규칙을 바꾸지 않는다. compatibility proof는 호출 옵션만 고르고 actual verdict는 각 native subprocess가 다시 만든다.
+
+18개 compatibility/옵션·deadline 경계 회귀를 포함한6 suites2389 PASS, descriptor identity 보완 후 automation suite156 PASS와 현재bdd→후보의 실제 두 CLI compatibility true를 확인했다. [실제 코드 호환성](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/predecessor-actual-cli-compatibility.json). 새 후보를 clean immutable release로 만들고 실제 preflight validation_io·원 deadline 내 통과·PID·ACK·고정5개·정규 detector로 확인한다. 예상 읽기 절감을 실제 측정으로 확대하지 않는다.

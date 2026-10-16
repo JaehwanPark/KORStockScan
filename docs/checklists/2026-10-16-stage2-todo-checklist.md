@@ -220,3 +220,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 036930 SOR venue UNKNOWN terminal ACK와 revive49342의 실제 편입을 기존 HoldingProfitExitSourceContractRepair/DirectFamilyPreopenPolicyHandoff에서 확인한다. 원 거래소/비용 미상·수동456010 제외·원4개 key를 보존하고 duplicate watch/guard 완화 없이 자연5개 편입으로 닫는다. 상세 배포 리뷰를 따른다.
 
 현재 PID의 bare/typed receipt 비교 결함도 같은 source-only owner에서 수리했다. 원 manifest/env/archive와 native0c461429 fixture를 유지하고 최종 PID/036930 ACK/고정5개·정규 detector로 확인한다. 상세 원인/시험은 위 감사 근거를 따른다.
+
+predecessor native preflight 반복 읽기/120초 timeout도 같은 DirectFamilyPreopenPolicyHandoff가 소유한다. 정확히 같은 CLI/cache에 session을 전달하고 원 deadline/의미 검증을 유지한다. 실제 native validation_io·새 PID·036930 ACK·5개 편입·최종 detector로 수용하며 원 timeout을 보존한다.
