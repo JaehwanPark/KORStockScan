@@ -308,6 +308,25 @@ def test_native_diagnostics_project_progress_features_and_stale_boundary(monkeyp
     assert stale['branch_descriptors'][bid]['detector_truth']=='UNKNOWN'
 
 
+@pytest.mark.parametrize('bad_quote', ['missing', 'crossed', 'stale'])
+def test_native_readiness_discloses_unusable_quote_without_changing_detector(monkeypatch, bad_quote):
+    D, state, source, bid, candidate = _diagnostic_backend(monkeypatch, 'A19', 120)
+    row = list(source[-1]); row[0] += 1; row[2] += 1
+    if bad_quote == 'missing': row[4] = None
+    elif bad_quote == 'crossed': row[4], row[5] = 102, 101
+    else: row[10] = 5001
+    state.observe(row, symbol='000001', venue='NXT', session='NXT_PREMARKET')
+    before = (dict(state.coverage_snapshot), copy.deepcopy(state.ready), copy.deepcopy(state.cumulative.pending))
+    now = row[0] + .1
+    readiness = D.branch_readiness(candidate, now=now, deadline=now+5)
+    descriptor = readiness['branch_descriptors'][bid]
+    assert descriptor['native_quote_usable'] is False
+    assert descriptor['feature_availability'] == 'incomplete'
+    assert 'executable_quote' in descriptor['missing_inputs']
+    assert descriptor['detector_truth'] == 'UNKNOWN'
+    assert before == (dict(state.coverage_snapshot), state.ready, state.cumulative.pending)
+
+
 def test_cumulative_refinement_descriptor_keeps_original_requirements_optional():
     from src.engine.scalping import reversal_source_diagnostics as D
     original,next_id=next(iter(GROUP['refinements']['F29'].items()))

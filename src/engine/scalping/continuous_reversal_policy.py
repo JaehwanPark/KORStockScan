@@ -312,7 +312,7 @@ def compose(response,policy):
         entry_auxiliary_policy_identity=identity,
         entry_auxiliary_policy_identity_version=identity['schema'] if identity else None,
         entry_ai_effective_assessment=dict(effective_verdict='PASS' if passed else
-            'VETO' if not errors and verdict=='VETO' else 'INSUFFICIENT',
+            verdict if not errors and verdict in {'CAUTION', 'VETO'} else 'INSUFFICIENT',
             assessment_source='continuous_reversal_validated_screen', contract_valid=not errors),
         entry_ai_raw_risk_verdict=verdict,entry_ai_risk_verdict=verdict,entry_ai_advisory_verdict=verdict,
         entry_ai_risk_codes=response.get('risk_codes',[]) if isinstance(response,dict) else [],

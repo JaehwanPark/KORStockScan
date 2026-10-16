@@ -35,6 +35,17 @@ OUTCOME_SCHEMA = "ai_decision_outcome_label_v1"
 CONTEXT_CANDIDATE_SCHEMA = "ai_canonical_context_candidate_v1"
 DECISION_LAYERS_SCHEMA = "ai_entry_decision_layers_v1"
 OUTCOME_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
+_PROVIDER_TRANSPORT_STAGES = frozenset({
+    'reserved', 'adapter_entered', 'request_built_before_capture',
+    'capture_started', 'capture_finished', 'http_prepare_completed',
+    'executor_enqueued', 'executor_started', 'sdk_started', 'sdk_finished',
+    'response_received', 'caller_adapter_finished', 'future_settled',
+})
+_PROVIDER_DEADLINE_FIELDS = frozenset({
+    'budget_before_transport_ms', 'response_reserve_ms',
+    'configured_transport_limit_ms', 'timeout_override_ms',
+    'original_deadline_epoch', 'original_deadline_perf',
+})
 
 OBSERVATION_CONTRACT = {
     "metric_role": "ai_decision_quality_observation",
@@ -2306,10 +2317,20 @@ def record_ai_decision_trace(
             } if isinstance(merged.get('entry_local_stage_timings_ms'), dict) else {},
             "provider_stage_monotonic": {
                 key: value for key, value in (merged.get('provider_stage_monotonic') or {}).items()
-                if key in {'reserved', 'adapter_entered', 'executor_enqueued', 'executor_started',
-                           'sdk_started', 'sdk_finished', 'response_received', 'caller_adapter_finished', 'future_settled'}
+                if key in _PROVIDER_TRANSPORT_STAGES
+                and type(value) in (int, float) and math.isfinite(value) and value >= 0
+            } if isinstance(merged.get('provider_stage_monotonic'), dict) and not bool(merged.get('cache_hit')) else {},
+            "provider_stage_remaining_ms": {
+                key: value for key, value in (merged.get('provider_stage_remaining_ms') or {}).items()
+                if key in _PROVIDER_TRANSPORT_STAGES
+                and type(value) in (int, float) and math.isfinite(value) and value >= 0
+            } if isinstance(merged.get('provider_stage_remaining_ms'), dict) and not bool(merged.get('cache_hit')) else {},
+            "provider_deadline_budget": {
+                key: value for key, value in (merged.get('provider_deadline_budget') or {}).items()
+                if key in _PROVIDER_DEADLINE_FIELDS
                 and type(value) in (int, float) and math.isfinite(value)
-            } if isinstance(merged.get('provider_stage_monotonic'), dict) else {},
+                and (value >= 0 or key == 'timeout_override_ms')
+            } if isinstance(merged.get('provider_deadline_budget'), dict) and not bool(merged.get('cache_hit')) else {},
             "entry_local_stage_clocks": {
                 key: value for key, value in (
                     merged.get('entry_local_stage_clocks', {}).items()

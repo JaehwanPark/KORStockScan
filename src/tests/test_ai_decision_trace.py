@@ -28,6 +28,30 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
+@pytest.mark.parametrize('cache_hit', [False, True])
+def test_transport_capture_clocks_and_original_budget_survive_trace(monkeypatch, tmp_path, cache_hit):
+    _enable(monkeypatch, tmp_path)
+    clocks = dict(adapter_entered=100., request_built_before_capture=100.1,
+                  capture_started=100.2, capture_finished=100.8,
+                  http_prepare_completed=100.9, sdk_started=101.)
+    remaining = dict(capture_started=800., capture_finished=200., sdk_started=0.)
+    budget = dict(budget_before_transport_ms=1000., response_reserve_ms=0.,
+                  configured_transport_limit_ms=5000., timeout_override_ms=-1,
+                  original_deadline_epoch=1792114488., original_deadline_perf=101.)
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='capture-clock', action='WAIT',
+        evaluation_attempt_id='capture-attempt', cache_hit=cache_hit,
+        provider_stage_monotonic=dict(clocks, token='do-not-store', future_settled=float('nan')),
+        provider_stage_remaining_ms=dict(remaining, token=100., executor_started=-1.),
+        provider_deadline_budget=dict(budget, token='do-not-store', unexpected=100.)),
+        prompt_type='scalping_entry', prompt_version='fixture',
+        result_source='cache' if cache_hit else 'timeout', provider_called=not cache_hit)
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row['provider_stage_monotonic'] == ({} if cache_hit else clocks)
+    assert row['provider_stage_remaining_ms'] == ({} if cache_hit else remaining)
+    assert row['provider_deadline_budget'] == ({} if cache_hit else budget)
+    assert row['actual_order_submitted'] is False
+
+
 def test_async_request_binding_survives_capture_return_and_actual_trace(monkeypatch,tmp_path):
     _enable(monkeypatch,tmp_path)
     binding=dict(async_request_id='generation:key',async_producer_pid=123,

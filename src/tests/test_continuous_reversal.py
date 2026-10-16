@@ -140,6 +140,22 @@ def test_dated_publish_loader_nonentry_and_schema_failure(tmp_path):
     with pytest.raises(ValueError):native.load_effective(data_root=tmp_path,target_date='2026-10-07')
 
 
+@pytest.mark.parametrize('verdict,errors', [('CAUTION', []), ('INSUFFICIENT', []),
+                                         ('VETO', []), ('CAUTION', ['invalid_fact'])])
+def test_effective_auxiliary_verdict_preserves_valid_nonpass_without_buy_authority(monkeypatch, verdict, errors):
+    from src.engine.scalping import continuous_reversal_policy as policy
+    monkeypatch.setattr(policy, 'validate_response', lambda *args, **kwargs: errors)
+    context = dict(continuous_reversal_assessment=dict(action='ENTER_NOW'),
+                   continuous_reversal_input={}, continuous_reversal_arm='fixture',
+                   machine_bundle_sha256='b'*64)
+    result = policy.compose(dict(risk_verdict=verdict), context)
+    assert result['entry_ai_effective_assessment']['effective_verdict'] == (
+        verdict if not errors else 'INSUFFICIENT')
+    assert result['entry_ai_screen_pass'] is False
+    assert result['action'] == ('DROP' if verdict == 'VETO' and not errors else 'WAIT')
+    assert result['entry_ai_effective_assessment']['contract_valid'] is (not errors)
+
+
 def test_reversal_reports_reach_runtime_summary_and_nextday_projection(tmp_path, monkeypatch):
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     from src.engine import runtime_approval_summary as summary
