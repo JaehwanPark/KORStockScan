@@ -40,3 +40,10 @@
 기동 후 구 cursor 이관의10분 관측 창 확보 시간을 `raw_source_unobservable_with_summary`로 세던 추가 오경보를 발견했다. 원천이 실제 unobservable일 때만 해당 결손을 내고 partial window는 `raw_observation_window_pending`으로 표시한다. malformed/backlog 결손과 기존 incident를 보존하고 완전한 관측을 확보하기 전에는 healthy/recovered로 바꾸지 않는다. 관련3,092개 PASS 후 같은 승인/인계 절차로 후속 배포한다.
 
 10/15 완결 원천을10/16 발행·10/19 target으로 격리 재계산했다. qualified267개/P0 220개/price pairs255개를 보존했고 상황 UNKNOWN267→29, 실제 상황15종+UNKNOWN, cell97→195, 양수 price cell0으로 초기0초를 유지한다. native capture163개에서 anchor238개를 exact join했으며 원천 날짜 전체 제외0이다. 원 호가 clock/hash169개·generation/epoch70개 제외와 native/parent 미확인 표본은 보존했다. canonical10/16 정책/과거 sealed stage를 바꾸지 않았다. 후속 cursor 코드 세대와는 같은 qualified projection을 native 검증 후 재사용해 최종 artifact를 결속한다.
+
+
+## 후속 소비자 인계 결함과 수정
+
+첫 기동의 Sentinel producer는 `summary_contract_migration_parser_predecessor_unverified`로 실패했다. Main 정책/PID 소비 성공과 감시 producer 실패를 분리하여 보존한다. pipeline_event_summary의 producer publish 메서드 변경으로 파일 SHA가8500f482…로 바뀌었지만 summary migration owner의 CURRENT pin이b1b1e59a…였다. complete AST에서 `ProducerSummaryCompactor._publish` 이외 모든 parser/aggregate/checkpoint/callback 코드는 동일함을 확인했다. 원 parser/callback 쌍과 기존 세대들의 허용 관계를 보존하면서 정확한 b1→8500 인계를 추가했다. default callback과 실제 funnel callback, archive/append-only/변조/경합 및 BUY/감시를 포함한1,095개 PASS다.
+
+원 b1 parser owner가 기존 checkpoint1672470738부터1707394599까지 실제 suffix만 이어 읽었다(`rebuilt=false`, 원 정책/PID 변경0). 원 manifest는 증거 디렉터리에 보존했다. 추가 code handoff의 c8366cfb0 후보는 미선택이며, cursor 보완과 이 parser 수리를 함께 최종 후보로 배포한다. 최종 배포 전 실제 native migration을 기존 producer lock 아래에서 검증하고, 첫 full 감시의 새 PID/source generation을 확인한다.

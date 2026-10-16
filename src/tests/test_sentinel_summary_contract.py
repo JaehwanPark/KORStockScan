@@ -446,3 +446,20 @@ def test_real_cli_rejects_unbound_or_modified_callbacks(tmp_path, monkeypatch, m
         assert manifest.read_bytes() == original
         assert not (manifest.parent / 'contract_migrations').exists()
     _intercept_real_funnel_cli(monkeypatch, inspect_callbacks)
+
+
+@pytest.mark.parametrize('parser_callback',[False,True])
+def test_recent_producer_projection_migrates_exact_baseline_parser_without_replay(tmp_path,parser_callback):
+    raw,options,manifest,original,rows=predecessor(tmp_path,parser_callback=parser_callback,
+        parser_contract=C.BASE_PARSER,buy_owner=C.CURRENT_BUY_OWNER)
+    if parser_callback:
+        callback=hashlib.sha256('\n'.join([inspect.getsource(P.default_reason_label),C.BASE_PARSER]).encode()).hexdigest()
+        revise(manifest,callback_contract=callback);original=manifest.read_bytes()
+    offset=raw.stat().st_size
+    with raw.open('a') as stream:stream.write(json.dumps(event(2))+'\n')
+    rows,meta=P.update_and_load_pipeline_event_summaries(**options)
+    assert sum(r['event_count'] for r in rows)==2 and meta['rebuilt'] is False
+    assert meta['start_raw_offset']==offset
+    proof=meta['contract_migration'];assert proof['from_parser']==C.BASE_PARSER
+    assert proof['to_parser']==C.CURRENT_PARSER
+    assert Path(proof['original_manifest_archive']).read_bytes()==original
