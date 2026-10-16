@@ -51,3 +51,21 @@ broker KR/NXT 재동기화·현재 Main036930 1주 및 수동042660/475150 보�
 기존 발송 key 이행은 같은 원 보고서 SHA·날짜·native complete binding으로만 허용한다. 이미 식별된 사건을 다른 identity로 덮어쓰는 초기 결함을 회귀에서 재현하고 수정했다. 발송하지 않은 경보를 발송 완료로 이행하지 않으며 원 세대와 파일 경로는 관측 provenance로 보존한다. 다른 과거 세대는 동등하다고 추정하지 않으므로 처음 한 차례 신규 통지가 가능하다. fake sender 회귀와 private state 사본으로 검증하며 운영 Telegram 수동 발송·state 삭제/수동 편집은 하지 않는다.
 
 기존 producer/monitor/notifier와 기존 test 모듈만 보완한다. source_gap 상태 및 미복구 disposition·원 source bytes·정책/quantity/provider/threshold/safety는 유지한다. 구현→리뷰→보완→재리뷰, 관련9개 모듈 **2,707개 PASS(20.97초)**를 확인했다. 마지막 exact binding 조건 보완 뒤 notifier/artifact 회귀와 compile/diff/parser를 재확인한다. 새 release 선택·기동 후 native 소비·정규 notifier의 동일 사건 중복 억제는 별도 후속 수용이다.
+
+
+## 동일 사건 알림 수리의 실제 배포·소비
+
+소스 커밋 `48968ade9022fcfaf69b9c081f703be3324d33c0`를 `holding-gap-incident-20261016-48968ade9` 불변 release로 배포했다. 정규 ordered terminal은13:42:08.954319 PASS, Main PID3646205/start18963364이다. 이전59c/PID3600286은13:40:49에 정상 drain됐다. 기존37개 native 정책 파일이 같아 원 exact parity를 재사용하되 새 리뷰/시험을 새 code handoff에 결속했다. 정책 재선택·bootstrap JSON/env·prepared index·수동 제외·원 editable checklist 변경은0이다. 관련2,707개 회귀 후 최종 결속 조건을 보완하고287개 targeted 회귀·compile·diff·print-only parser를 다시 통과했다.
+
+기동 이후 직접 생성한 native holding은13:42:30.150812/SHA46f9de3c4d835f6d88c9f9f88e4974dc991536cb6e6a0e0f9adb79c0c565aa0a,6.56초/peak484908KiB였다. 새 PID를 포함하고 policy/runtime gap·native finding0, 원5개 source_gap 그대로다. 새 BUY는13:43:19/completed, 현재3646205 actor가 결속됐다. coverage partial은 기록된 guard/cohort 대기이며 unmet_conditions[]다. scanner 분모의 자연 평가가 없다는 상태를 fixed-watch 관측으로 대체하거나 full PASS로 만들지 않는다.
+
+수동 full13:43:34는 정확한 위 holding SHA를 검증하고 FAIL0·health6PASS였다. 정규13:45:23은 resource contention/deferred로 수용하지 않았다. 정규 Main full13:46:39는 기동 후13:45:05 holding SHA99ea377fdf7adaeaf16463adbb6935552dbaa806f357d6e233d484c369bb7d92를 native complete로 소비했고, BUY13:45:40/SHAa9532767ae5b485cf364b8d0ae1a553e06c1e9b9ef88c81e67daedf38a7bbe41의 completed·current actor verified·bounded pending을 확인했다. 원 policy_generation 두 warning 및 holding 원5건은 유지한다.
+
+13:50:17 정규 notifier는 원 발송 기록에 없던 새 identity를 최초1회 통지하고 실제 운영 state에 기록했다. 원 legacy 보고서012cc9…와 새 보고서99ea…가 달라 같은 bytes의 무통지 이행 근거가 없었던 경우다. runtime state를 지우거나 발송했다고 수동 조작하지 않았다.13:51:48 정규 full이 이후 holding13:50:07/SHAd37ca3be491124d8bbbb70fef26ff67fd07c172f8045348fa0837170e96d3e35를 소비한 결과를 실제 운영 state 사본으로 재생하자 duplicate_incident·추가 발송0이었다. 이 private 재생은 fake sender만 사용했고 운영 발송 완료로 기록하지 않았다. 다음 예약 주기의 실제 결과를 아래에 별도 기록한다.
+
+KRX/NXT 모두 complete·inventory/open-order row valid·native checkpoint digest·query/journal generation 일치를 확인했다. 전후 Main036930 1주와 수동042660 10주/475150 20주가 같고 미체결0이다. fixed5종목은 새 PID/commit/transport epoch1792125715887487에서 실제0B/0D를 받았다. REG 전송만으로 수신을 인정하지 않는다. 원5개 미기록 전이의 복원·신규 mandatory TP 양성 영수증·실현 비용/수익 성과는 이번 알림 수리로 증명하지 않는다.
+
+증거는 정규 workspace `tmp/holding-sentinel-performance-20261016/`의 incident-* 파일이다. 특히 incident-review-validation, incident-ordered-deploy-result, incident-postrestart-holding-timing/native, incident-natural-postrestart-full-detector, incident-notify-state-first-stable, incident-natural-notifier-first-report, incident-operating-state-new-generation-replay, incident-broker-before-after, incident-postrestart-ws-receipts, incident-postdeploy-frozen-check를 구분해 보존한다.13:45 defer 및 predecessor BUY13:40 관측도 보존하고 새 기동 증거로 사용하지 않는다.
+
+
+13:55:18 정규 full/notifier에서 실제 후속 세대까지 수용했다. holding SHA가99ea…→d37ca…로 바뀌고 native_validated/observation_complete=True·원5건 source_gap 상태가 유지됐으며, 운영 state의 사건 key는 d233f7ee1fd7ed0dd59e62099e37e9bf6daa06543bf6552ef9fdd77d6a899828로 동일했다. wrapper 결과는 **duplicate_incident**, last_seen13:55:18·last_sent13:50:17 불변으로 **추가 통지0건**이다. 최종 source·PID·hold 제거·동결5개 파일도 재확인했다. 구현/배포 및 오늘 동일 사건의 재통지 수리는 닫고, 원5건 미복구·다음 mandatory TP 자연 양성·경제성 OPEN은 기존 owner에 유지한다. 최종 증거: `tmp/holding-sentinel-performance-20261016/incident-final-verification.json`, `incident-native-second-notification.log`, 두 정규 report/state 사본. 미래의 새로운 결손·사유·BUY/signal 변경이나 부분 관측에 대한 새 경보는 계속 허용한다.

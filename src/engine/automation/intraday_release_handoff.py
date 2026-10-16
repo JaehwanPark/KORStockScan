@@ -802,6 +802,11 @@ REVIEWED_SOURCE_GAP_CROSSING_SOURCES = {
 }
 
 
+# Exact reviewed probe partial custody and native WS adoption consumer bytes.
+# Review: docs/audits/main-probe-partial-integrated-deployment-review-2026-10-16.md.
+REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES = {'src/engine/sniper_state_handlers.py': ('bb6108b506bebfb957f7257bbf4e466837f19a48eff6a742a245f5c3b3e57dcf', '81a29f9f19090487a48983120f9395e29565603c108d42481915b9ca3b0ab35c'), 'src/engine/sniper_execution_receipts.py': ('dc4a57286b38f72c96e538e7eb3851f806af1b9c07e0145f3f5aed51ea00bbe1', 'c6e5a208c32165ca112b5f33643494030df79302680e4b93f316a91696d7e7a1'), 'src/engine/kiwoom_sniper_v2.py': ('bb8cc6f224428a073f60826f8aa70e97d4b68b0383c907d681b8be5473a2d7c6', 'e1f43d4d08a0606db678c59f5755b94fbb976ef4ce55ece812ecc00e97c8973e'), 'src/engine/kiwoom_websocket.py': ('e60b5435694e74fc9afa65101b4b407af4da365d07dbac0b38263c66bf8e8921', '9aca69dc06a8fffee8999d8c8c2cdece1760e9fdb21e3c8eddf8cda87a6da9e2')}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -836,7 +841,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_SOURCE_GAP_CROSSING_SOURCES.get(name),
+        if pair in (REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES.get(name),
+                    REVIEWED_SOURCE_GAP_CROSSING_SOURCES.get(name),
                     REVIEWED_ENTRY_CONSUMER_SOURCES.get(name),
                     REVIEWED_ENTRY_LATENCY_SOURCES.get(name),
                     REVIEWED_ENTRY_BOUNDARY_SOURCES.get(name),

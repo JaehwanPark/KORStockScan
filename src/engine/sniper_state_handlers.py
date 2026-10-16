@@ -46247,7 +46247,26 @@ def _entry_split_probe_exit_authority_active(stock: dict) -> bool:
         or stock.get("exit_token")
         or stock.get("fast_exit_token")
         or stock.get("exit_requested")
+        or stock.get("sell_order_time")
+        or _has_active_sell_order_pending(stock)
         or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
+    )
+
+
+def _entry_split_probe_orders_terminal(stock: dict) -> bool:
+    """Require positive local terminal evidence, retaining broker gap custody."""
+    orders = stock.get("pending_entry_orders")
+    return bool(
+        isinstance(orders, list) and orders
+        and not stock.get("entry_cancel_terminal_reconciliation_required")
+        and not stock.get("entry_cancel_reconciliation_required")
+        and all(
+            isinstance(order, dict)
+            and str(order.get("ord_no") or "").strip()
+            and str(order.get("status") or "").upper() in {"FILLED", "CANCELLED", "REJECTED"}
+            and not order.get("cancel_terminal_pending")
+            for order in orders
+        )
     )
 
 
@@ -46345,7 +46364,7 @@ def _finalize_entry_split_probe_partial_position(
             }
         ):
             return False
-        if _has_open_pending_entry_orders(stock):
+        if not _entry_split_probe_orders_terminal(stock):
             return False
         bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
         entry_bundle_id = str(stock.get("entry_bundle_id") or "").strip()
@@ -78528,6 +78547,12 @@ def _cancel_pending_entry_orders(
                     code, reason="initial_quantity_local_order_absent",
                 )
                 return "pending"
+            if (stock.get("entry_split_probe_phase") in {
+                    "residual_submitted", "residual_partial_submitted"}
+                    and not _entry_split_probe_orders_terminal(stock)):
+                # CANCEL_PENDING/unknown/missing local orders retain the existing
+                # broker reconciliation owner. Absence of OPEN is not terminal.
+                return "pending"
             # A fill/cancel receipt can finish the last leg between the
             # reconciler's open-order check and this locked cancellation path.
             if _finalize_entry_split_probe_partial_position(
@@ -79123,6 +79148,10 @@ def _cancel_pending_entry_orders(
             reason=str(cancel_reason or "residual_orders_cancelled"),
         ):
             return "cancelled"
+        if (stock.get("entry_split_probe_phase") in {
+                "residual_submitted", "residual_partial_submitted"}
+                and not _entry_split_probe_orders_terminal(stock)):
+            return "pending"
         _clear_pending_entry_meta(
             stock,
             preserve_probe_runtime=_entry_split_probe_exit_authority_active(stock),

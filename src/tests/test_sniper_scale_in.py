@@ -30583,13 +30583,15 @@ def test_reconcile_probe_uncertain_cancel_keeps_bundle_open(monkeypatch, result)
     before = deepcopy(stock)
     state_handlers._reconcile_pending_entry_orders(stock, "123456", "SCALPING")
     assert {key: stock[key] for key in before} == before
-    assert "sell_odno" not in stock
+    assert stock.get("sell_odno") == before.get("sell_odno")
     assert "entry_split_probe_partial_complete_qty" not in stock
 
 
 @pytest.mark.parametrize("authority", [
     {"exit_token": "stop-owner"}, {"exit_requested": True},
     {"fast_exit_token": "fast-stop-owner"},
+    {"sell_odno": "S1"}, {"sell_ord_no": "S2"}, {"sell_order_time": 999.0},
+    {"pending_sell_msg": "sell awaiting receipt"},
     {"entry_split_probe_exit_bundle_id": "exit-bundle"}, {"status": "SELL_ORDERED"},
 ])
 def test_reconcile_partial_entry_cannot_overwrite_existing_exit(monkeypatch, authority):
@@ -30608,7 +30610,7 @@ def test_reconcile_partial_entry_cannot_overwrite_existing_exit(monkeypatch, aut
         stock, "123456", reason="submitted_residual_orders_terminal")
     state_handlers._reconcile_pending_entry_orders(stock, "123456", "SCALPING")
     assert {key: stock[key] for key in before} == before
-    assert "sell_odno" not in stock
+    assert stock.get("sell_odno") == before.get("sell_odno")
     assert "entry_split_probe_partial_complete_qty" not in stock
 
 
@@ -30626,6 +30628,34 @@ def test_probe_terminal_fill_race_keeps_partial_holding_contract(monkeypatch):
     assert stock["entry_split_probe_phase"] == "partial_complete"
     assert stock["entry_split_probe_partial_complete_qty"] == 1
     assert stock["status"] == "HOLDING"
+
+
+@pytest.mark.parametrize("changes", [
+    {"pending_entry_orders": [{"ord_no": "B2", "status": "CANCEL_PENDING", "qty": 8}]},
+    {"pending_entry_orders": [{"ord_no": "B2", "status": "UNKNOWN", "qty": 8}]},
+    {"pending_entry_orders": []},
+    {"entry_cancel_terminal_reconciliation_required": True},
+    {"entry_cancel_reconciliation_required": True},
+    {"pending_entry_orders": [{"ord_no": "B2", "status": "CANCELLED", "cancel_terminal_pending": True}]},
+])
+def test_probe_partial_holding_preserves_unresolved_terminal_custody(monkeypatch, changes):
+    monkeypatch.setattr(state_handlers, "update_probe_runtime_bundle",
+                        lambda *a, **kw: pytest.fail("unconfirmed terminal finalized"))
+    stock = {
+        "id": 1, "code": "123456", "strategy": "SCALPING",
+        "status": "HOLDING", "buy_qty": 1, "entry_requested_qty": 9,
+        "entry_split_probe_requested_qty": 9,
+        "entry_split_probe_bundle_id": "123456-probe-terminal-pending",
+        "entry_bundle_id": "123456-probe-terminal-pending",
+        "entry_split_probe_phase": "residual_submitted",
+        "pending_entry_orders": [{"ord_no": "B2", "status": "CANCELLED", "qty": 8}],
+        **changes,
+    }
+    before = deepcopy(stock)
+    assert not state_handlers._finalize_entry_split_probe_partial_position(
+        stock, "123456", reason="submitted_residual_orders_terminal")
+    assert state_handlers._cancel_pending_entry_orders(stock, "123456", force=True) == "pending"
+    assert stock == before
 
 
 @pytest.mark.parametrize("changes", [

@@ -58,7 +58,8 @@ NATIVE_SELECTION = handoff._selection
                                      'REVIEWED_POSTCLOSE_READ_SOURCES',
                                      'REVIEWED_CARRIED_VOTE_PREFIX_SOURCES',
                                      'REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES',
-                                     'REVIEWED_PREASSESSMENT_OBSERVER_SOURCES'])
+                                     'REVIEWED_PREASSESSMENT_OBSERVER_SOURCES',
+                                     'REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES'])
 @pytest.mark.parametrize('damage', [None, 'after', 'before', 'dirty', 'origin_digest'])
 def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypatch, damage, name, review_map):
     import hashlib
@@ -66,6 +67,7 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     before, after = b'def runtime(): return 1\n', b'def runtime(): return 2\n'
     pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
     monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_CONSUMER_SOURCES', {})
+    monkeypatch.setattr(handoff, 'REVIEWED_PROBE_PARTIAL_INTEGRATION_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_LATENCY_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_BOUNDARY_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_ENTRY_RESPONSE_SOURCES', {})
