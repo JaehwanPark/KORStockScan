@@ -453,6 +453,7 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
             "rows": 0,
         },
         "skipped_unverified": 0,
+        "retained_holding_policy_source_count": 0,
         "skipped_postclose_protected": 0,
         "postclose_protection_reasons": {},
         "errors": [],
@@ -505,6 +506,12 @@ def run(*, retention_days: int, today: date, dry_run: bool, pipeline_dates=None)
         if target_date > cutoff:
             continue
         if protected(target_date):
+            continue
+        # Published holding policies recursively verify these exact plain
+        # report bytes through their original summary/stage receipts. Closed
+        # postclose custody alone does not make that ancestry gzip compatible.
+        if kind == 'holding_exit_observation':
+            stats['retained_holding_policy_source_count'] += 1
             continue
         stats["snapshots"]["scanned"] += 1
         try:

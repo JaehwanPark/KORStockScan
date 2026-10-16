@@ -82,6 +82,43 @@ def test_run_uses_snapshot_manifest_without_db_fallback(tmp_path, monkeypatch):
     assert stats["skipped_unverified"] == 0
 
 
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_archive_preserves_native_holding_policy_source_handoff(tmp_path, monkeypatch, dry_run):
+    import hashlib
+    from src.engine.scalping import holding_path_vote_policy as policy
+    from src.engine.scalping.holding_path_vote_replay import summarize_holding_path_votes
+    from src.engine.automation import postclose_summary_handoff as summary
+    directory=tmp_path/'report/monitor_snapshots';directory.mkdir(parents=True)
+    pipeline=tmp_path/'pipeline';pipeline.mkdir()
+    source_date='2026-10-08';target_date='2026-10-12'
+    replay=summarize_holding_path_votes([],load_events=lambda _:[],model='gpt-5.4-nano')
+    observation=dict(date=source_date,holding_path_vote_replay=replay,
+        completed_population_quality=dict(complete=False,db_completed_main_ids=[],
+            strict_completed_position_ids=[],source_gap_ids=[],excluded_all_reasons={},source_gap_dates=[]))
+    path=directory/f'holding_exit_observation_{source_date}.json'
+    original=json.dumps(observation).encode();path.write_bytes(original)
+    bundle=policy.create_bundle(source_date=source_date,target_date=target_date,
+        source_report_sha256=hashlib.sha256(original).hexdigest(),replay=replay,
+        source_quality=policy.source_quality_from_observation(observation))
+    summary_path=tmp_path/'report/runtime_approval_summary'/f'runtime_approval_summary_{source_date}.json'
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(json.dumps(dict(holding_path_vote_policy=dict(
+        status=policy.publication_status(bundle),source_date=source_date,target_date=target_date,
+        bundle_sha256=bundle['bundle_sha256'],policy_set_sha256=bundle['policy_set_sha256'],
+        source_report_sha256=bundle['source_report_sha256'],cell_count=len(bundle['cells'])))))
+    monkeypatch.setattr(summary,'stage_receipt_issues',lambda *a,**kw:[])
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',directory)
+    monkeypatch.setattr(archive,'PIPELINE_EVENTS_DIR',pipeline)
+    monkeypatch.setattr(archive,'_postclose_source_protection',lambda *a:None)
+    monkeypatch.setattr(archive,'_snapshot_manifest_verifies',lambda *a:True)
+    policy.verify_source_handoff(tmp_path,bundle)
+    stats=archive.run(retention_days=1,today=date(2026,10,16),dry_run=dry_run)
+    policy.verify_source_handoff(tmp_path,bundle)
+    assert path.read_bytes()==original and not path.with_suffix('.json.gz').exists()
+    assert stats['retained_holding_policy_source_count']==1
+    assert stats['snapshots']['compressed']==0
+
+
 def test_run_does_not_compress_manifested_corrupt_snapshot(tmp_path, monkeypatch):
     snapshot_dir = tmp_path / "monitor_snapshots"
     snapshot_dir.mkdir(parents=True)

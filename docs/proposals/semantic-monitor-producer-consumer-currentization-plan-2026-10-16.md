@@ -291,3 +291,11 @@ source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10
 격리된 native replay에서 호가 9,665바이트와 파생 feature 77,987바이트의 결합 레코드 87,655바이트를 재현했다. 32개 `new_observations`는 정상 계산 결과이며 source gap이나 잘림으로 처리하지 않는다. 이 목록을 기존 content-addressed tree로 분할하고 캐시 소비 시 hash/count 검증 후 복원한다. 64KiB 물리 row·256KiB leaf·64MiB 캐시 한도, 후보·분류·경제성 계약은 유지한다. 단일 관측 자체가 분할 한도를 넘으면 기존 무캐시 streaming으로 동일 feature를 소비하며 유효 관측을 버리지 않는다.
 
 소유 모듈은 기존 `automation/main_trailing_partitioned_research.py`와 대응 테스트다. 분할 전후 원 관측의 전수 일치·한 번 분류·변조 거부·무캐시 보존 및 native 연구/holding 회귀를 검증한 후 복구한다. 기존 네 산출물의 완전한 manifest가 없으면 세 파일의 존재만으로 완료나 재사용 영수증을 만들지 않는다. 불완전 snapshot은 수리된 producer로 다시 생성하고, 별도 성공한 정책 stage는 native 계약 검증 후 재사용한다. owner는 `HoldingProfitExitSourceContractRepair`이며 다음 영업일 준비와 실제 PREOPEN/PID 수용은 구분한다.
+
+## 15. 압축 후 보유 정책의 원문 ancestry 보존
+
+네 snapshot의 파일 발행 성공 뒤 native 소비 검증에서 `incumbent_unverified`를 발견했다. 현재 정책의 재귀적 handoff는 과거 보유 보고서의 정확한 plain JSON·summary·strict 영수증을 요구하지만 archive가 닫힌 날짜라는 이유로 해당 원문을 제거했다. gzip 무결성만으로 이 소비 계약을 증명할 수 없다.
+
+기존 `compress_db_backfilled_files`는 `holding_exit_observation` 원문을 정책 lineage source로 보존하고 별도 retained count를 기록한다. 다른 검증된 snapshot/pipeline의 기존 압축과 현재 날짜 보호를 유지한다. 전체 소비자가 논리 plain/gzip 계약으로 전환되기 전 작은 정책 원문을 제거하지 않는다. 압축본은 그대로 보존하며10/7·10/8·10/12·10/13·10/14의 복원은 각 원 정책의 source_report_sha256과 decoded bytes·날짜가 정확히 일치할 때만 수행한다. 원 정책·summary·strict bytes는 수정하지 않는다.
+
+회귀는 실제 policy/summary를 만든 뒤 archive를 실행하고 native verify_source_handoff가 계속 통과하는지 확인한다. 수정 전 일반·dry-run 경로의 차이를 재현하며 다른 snapshot의 압축 회귀를 유지한다. 소유자는 `OperationalLogRetentionRepair1016` 및 `HoldingProfitExitSourceContractRepair`다. 소비 검증 실패를 숨기거나 file publication 성공으로 완료 처리하지 않는다.

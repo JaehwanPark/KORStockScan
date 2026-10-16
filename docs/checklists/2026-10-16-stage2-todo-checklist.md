@@ -254,6 +254,7 @@ selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한�
 - `AuxiliaryCircuitRecoveryRepair1012`: 매도 후 재감시 생성·복구에서 Main fixed-watch 신원과 거래소를 영속 보존하고 새 admission/warmup을 부여한다. 15:01 경보의 첫 체결 구간0초 필수 피처 부족을 검증 가능한 원천 부족으로 분리한다. 오래된 원천의 주문 차단·unknown 신원 차단은 유지한다.
 - `DirectFamilyPreopenPolicyHandoff`: 사용자 지정04c1a4d65와 위 수리를 통합하고 기존 손절 기준을 유지한다. 코드 검증 후 승인된 ordered 배포·재기동, 원 정책/당일 env/PID 소비와 신규 observer를 확인한다. [통합 검토](../audits/long4-source-retention-integration-review-2026-10-16.md).
 - [ ] `[OperationalLogRetentionRepair1016] 작성자 로그 회전·보관·역사 원천 압축 적용 확인` (`Due: 2026-10-16`, `Slot: INTRADAY`, `TimeWindow: 통합 배포 후`, `Track: RuntimeStability`)
+  - 10/16 장후 보완: archive가 과거 holding 원문을 제거해 현재 정책의 재귀 handoff가 incumbent_unverified가 되는 결함을 확인했다. 보유 정책 원문은 압축 제거 대상에서 보존하고, 기존 gzip과 원 정책 해시가 일치하는5개 원문만 복원한다. 실제 policy→archive→native verify 회귀와 다음 장전 소비를 [후속 계약](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md#15-압축-후-보유-정책의-원문-ancestry-보존)으로 확인하며 원 실패·정책·summary/strict는 보존한다.
   - Source: [운영 계약](../operational-log-retention.md), [원 점검](/home/ubuntu/KORStockScan/tmp/log-retention-audit-20261016-114851/report.md).
   - Acceptance: LR01~LR09의 cron/닫힌 세대/열린 FD·pin·참조 보호, 실패 cooldown 미갱신, 독립 달력 주기, 당시 strict/checklist 원본을 보존한 검증 압축, tmp 보호·용량 경보, journal 설정을 실제 적용 영수증으로 확인한다. 증거 미확인 파일은 삭제하지 않는다. 자연 만료 삭제·새 신호·실제 주문/경제 성과는 코드 PASS와 구분한다.
 
