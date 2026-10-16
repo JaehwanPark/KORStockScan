@@ -90,16 +90,14 @@ def validate_sources(bundle,data_root):
                 or {c['key']:c for c in report['cells']}!=f[name+"_cells"]):
             raise ValueError("reversal_v2_report_binding_invalid")
         for record in report.get("results_sources",[])+report.get("source_receipts",[]):
-            path=Path(record["path"])
-            if native._source_hash(str(path),native._signature(path))!=record["sha256"]:
+            if not native.source_receipt_matches(record, data_root=data_root):
                 raise ValueError("reversal_v2_frozen_source_changed")
     for cell in f['auxiliary_cells'].values():
         for policy in cell['payload']['phase_policies'].values():
             records=policy.get('actual_response_evidence') or []
             if isinstance(records,dict):records=[records]
             for record in records:
-                path=Path(record['path'])
-                if native._source_hash(str(path),native._signature(path))!=record['sha256']:
+                if not native.source_receipt_matches(record, data_root=data_root):
                     raise ValueError('reversal_v2_phase_actual_evidence_changed')
     return bundle
 

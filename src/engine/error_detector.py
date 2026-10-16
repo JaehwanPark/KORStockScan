@@ -177,6 +177,21 @@ class ErrorDetectionEngine:
         )
 
     def run_all(self) -> list[DetectionResult]:
+        if self.mode not in {"full", "artifact_only"}:
+            return self._run_all()
+        from src.engine.infrastructure.validation_digest_session import DigestSession, code_generation
+        day = self.postclose_source_date or datetime.now(KST).date().isoformat()
+        session = DigestSession(PROJECT_ROOT / "data", day, role="observer",
+            generation={"code": code_generation(), "caller": "error_detector",
+                        "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+        with session.activate():
+            results = self._run_all()
+        for result in results:
+            if result.detector_id == "artifact_freshness":
+                result.details = {**result.details, "validation_io": dict(session.stats)}
+        return results
+
+    def _run_all(self) -> list[DetectionResult]:
         results: list[DetectionResult] = list(self.initialization_failures)
         for detector in self.detectors:
             try:

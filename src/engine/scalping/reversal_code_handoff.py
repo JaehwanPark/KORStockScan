@@ -79,8 +79,7 @@ def validate(bundle,data_root,*,original_error):
         'src.engine.scalping.continuous_reversal_policy_v6',fromlist=['contract_modules']).contract_modules()} | {str(Path(__file__).resolve())}
     if set(r['code_hashes'])!=current:raise ValueError('active_policy_code_membership_changed')
     for name,expected in {**r['source_hashes'],**r['code_hashes']}.items():
-        p=Path(name)
-        if N._source_hash(str(p),N._signature(p))!=expected:
+        if not N.source_receipt_matches(dict(path=name,sha256=expected),data_root=data_root):
             raise ValueError('active_policy_code_handoff_source_changed:'+name)
     if N._read(pointer)['bundle_sha256']!=bundle['bundle_sha256']:
         raise ValueError('active_policy_code_handoff_pointer_changed')
@@ -137,7 +136,7 @@ refs={}
 for name,identity in list(opened.items()):
     p=Path(name);st=p.stat()
     if identity!=(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns):raise ValueError('origin_source_changed_during_validation')
-    with p.open('rb') as f:refs[name]=hashlib.file_digest(f,'sha256').hexdigest()
+    refs[name]=N._source_hash(name,N._signature(p))
 print(json.dumps(dict(bundle_sha256=b['bundle_sha256'],source_hashes=refs)))
 '''
 
@@ -191,6 +190,8 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm):
         origin_root=str(origin_root),origin_commit=previous,bundle_sha256=bundle['bundle_sha256'],
         origin_selection_sha256=selection_sha,
         current_pointer_sha256=P.file_hash(pointer),source_hashes=sources,code_hashes=codes,
+        pipeline_source_validation=N.PIPELINE_REFERENCE_VALIDATION,
+        pipeline_source_reference_count=sum(N.is_pipeline_source_reference(p,data_root=data_root) for p in sources),
         policy_reselected=False,provider_called=False,actual_pid_consumed=False,source_semantics_repair=True))
     dest=path(data_root,day,commit,bundle['bundle_sha256']);dest.parent.mkdir(parents=True,exist_ok=True)
     if dest.exists() and N._read(dest)!=r:raise ValueError('active_policy_code_handoff_receipt_conflict')

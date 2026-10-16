@@ -459,17 +459,8 @@ def _receipt_market_axes(
         else "unknown"
     )
 
-    actual_venue = str(stock.get("broker_actual_execution_venue") or "").strip().upper()
-    if actual_venue not in {"KRX", "NXT"}:
-        actual_venue = "UNKNOWN"
-    actual_venue_source = (
-        str(stock.get("broker_actual_execution_venue_source") or "").strip()
-        if actual_venue in {"KRX", "NXT"}
-        else "official_exchange_fields_ambiguous_or_missing"
-    )
-    if not actual_venue_source:
-        actual_venue_source = "official_exchange_fields_ambiguous_or_missing"
-
+    from src.trading.market.execution_venue import execution_venue_fields
+    assigned_venue = execution_venue_fields(stock, observed_at=receipt_at)
     return {
         "session_contract_version": session_contract_version or "unknown",
         "decision_market_scope": decision_market_scope or "UNKNOWN",
@@ -477,8 +468,7 @@ def _receipt_market_axes(
         "market_data_route": market_data_route or "unknown",
         "preferred_market_data_route": preferred_market_data_route or "unknown",
         "broker_route_requested": requested_route or "UNKNOWN",
-        "actual_execution_venue": actual_venue,
-        "actual_execution_venue_source": actual_venue_source,
+        **assigned_venue,
     }
 
 
@@ -876,6 +866,8 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "broker_route_requested",
     "actual_execution_venue",
     "actual_execution_venue_source",
+    "actual_execution_venue_verified",
+    "execution_venue_override",
     "exit_receipt_submission_custody_source_gap",
     "exit_receipt_submission_custody_retry_required",
     "_sell_submit_receipt_proof",
@@ -1441,11 +1433,19 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
         # SOR may confirm the order/execution while leaving the actual venue
         # explicitly unresolved. Receipt custody can ACK that terminal without
         # promoting its venue, economic provenance or scanner coverage.
+        from src.trading.market.execution_venue import execution_venue_fields, SOR_KRX_AUTHORITY
+        assigned = execution_venue_fields(fields, observed_at=observed_at)
+        assigned_gap = (assigned["execution_venue_override"] == SOR_KRX_AUTHORITY
+            and fields.get("actual_execution_venue") == fields.get("exit_effective_venue") == "KRX"
+            and fields.get("actual_execution_venue_source") == SOR_KRX_AUTHORITY
+            and fields.get("execution_venue_override") == SOR_KRX_AUTHORITY
+            and fields.get("actual_execution_venue_verified") is False)
+        legacy_gap = (fields.get("actual_execution_venue") == fields.get("exit_effective_venue") == "UNKNOWN"
+            and fields.get("actual_execution_venue_source") == "official_exchange_fields_ambiguous_or_missing")
         known_venue_gap = (fields.get("broker_execution_provenance_complete") is False
-            and all(fields.get(key) == "UNKNOWN" for key in (
-                "actual_execution_venue", "broker_actual_execution_venue", "exit_effective_venue"))
-            and all(fields.get(key) == "official_exchange_fields_ambiguous_or_missing" for key in (
-                "actual_execution_venue_source", "broker_actual_execution_venue_source"))
+            and fields.get("broker_actual_execution_venue") == "UNKNOWN"
+            and fields.get("broker_actual_execution_venue_source") == "official_exchange_fields_ambiguous_or_missing"
+            and (legacy_gap or assigned_gap)
             and fields.get("broker_route") == fields.get("broker_route_requested") == "SOR"
             and fields.get("main_lifecycle_broker_raw_envelope_schema") == "kiwoom_websocket_order_execution_00_values_v1"
             and fields.get("main_lifecycle_broker_raw_source_type") == "00"
@@ -9108,7 +9108,7 @@ def _handle_scalp_revive_sell_execution(
             try:
                 record_post_sell_candidate(
                     recommendation_id=target_id,
-                    stock=target_stock,
+                    stock={**target_stock, **sell_receipt_snapshot},
                     code=code,
                     sell_time=now,
                     buy_price=safe_buy_price,

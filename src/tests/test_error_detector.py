@@ -21,6 +21,39 @@ from src.engine.error_detectors.base import (
 )
 
 
+def test_artifact_checks_reuse_digests_between_invocations_but_run_semantics(monkeypatch, tmp_path):
+    import hashlib
+    import src.engine.error_detector as module
+    from src.engine.infrastructure import validation_digest_session as D
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    data = tmp_path / 'data'
+    data.mkdir()
+    source = data / 'large-report.json'
+    source.write_bytes(b'a' * (D.MIN_BYTES + 1))
+    monkeypatch.setattr(module, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(D, 'code_generation', lambda: {'code': 'same-reviewed-generation'})
+    engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
+    engine.mode = 'artifact_only'
+    engine.postclose_source_date = None
+    calls = []
+    def check():
+        calls.append(N._source_hash(str(source), N._signature(source)))
+        return [DetectionResult(detector_id='artifact_freshness', category='artifact',
+            severity='warning' if len(calls) == 3 else 'pass', summary='fresh semantic check')]
+    engine._run_all = check
+    first = engine.run_all()[0]
+    N._HASH_CACHE.clear()
+    second = engine.run_all()[0]
+    assert first.details['validation_io']['full_reads'] == 1
+    assert second.details['validation_io']['full_reads'] == 0
+    assert second.details['validation_io']['reused_reads'] == 1
+    source.write_bytes(b'b' * (D.MIN_BYTES + 1))
+    third = engine.run_all()[0]
+    assert third.severity == 'warning'
+    assert third.details['validation_io']['full_reads'] == 1
+    assert len(calls) == 3 and calls[0] == calls[1] != calls[2]
+
+
 class TestBaseDetector:
     def test_detection_result_defaults(self):
         result = DetectionResult(

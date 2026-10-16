@@ -293,6 +293,21 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
     assert direct["strict_completion_status"] == "excluded"
     assert "source_gap_broker_actual_cost_missing" in direct["strict_completion_reasons"]
 
+    from dataclasses import replace
+    from src.trading.market.execution_venue import SOR_KRX_AUTHORITY
+    sor = replace(event, timestamp="2026-10-16 09:23:49", fields={**event.fields,
+        "order_no": "0015649", "execution_no": "30414",
+        "main_lifecycle_execution_occurred_at": "2026-10-16T09:23:48+09:00",
+        "sell_execution_receipt_economics_complete": "False"})
+    assigned = report_mod._completed_trade_projection(base, [buy_event, sor], base)
+    assert assigned["exact_sell_fill_time"] == "2026-10-16T09:23:48+09:00"
+    assert assigned["effective_venue"] == "KRX"
+    assert assigned["broker_actual_execution_venue"] == "UNKNOWN"
+    assert assigned["execution_venue_override"] == SOR_KRX_AUTHORITY
+    assert assigned["actual_execution_venue_verified"] is False
+    assert assigned["realized_pnl_krw"] is None
+    assert assigned["strict_completion_status"] == "excluded"
+
     event.fields["main_lifecycle_execution_occurrence_time_source"] = "missing"
     no_clock = report_mod._completed_trade_projection(base, [buy_event, event], base)
     assert no_clock["strict_completion_status"] == "excluded"

@@ -296,13 +296,11 @@ def _validate_sources(bundle, data_root, *, code_root=None):
         if name=='machine' and f['effective_mode']=='intraday' and report.get('registration_activation')!=f['registration_activation']:
             raise ValueError('v6_intraday_report_authority_changed')
         for record in report.get('source_receipts',[]) + report.get('results_sources',[]):
-            p = Path(record['path'])
-            if N._source_hash(str(p), N._signature(p)) != record['sha256']:
+            if not N.source_receipt_matches(record, data_root=data_root):
                 raise ValueError('v6_frozen_source_changed')
     for key,route in scopes():
         for record in f['auxiliary_cells'][key]['routes'][route].get('actual_response_evidence',[]):
-            p=Path(record['path'])
-            if N._source_hash(str(p),N._signature(p))!=record['sha256']:
+            if not N.source_receipt_matches(record, data_root=data_root):
                 raise ValueError('v6_actual_response_source_changed')
     if f.get('code_refresh') is not None:
         _validate_code_refresh(bundle, data_root)
@@ -318,8 +316,7 @@ def _validate_sources(bundle, data_root, *, code_root=None):
         if receipt.get('operator_receipt')==Q.AUTHORITY:
             Q.validate_request(receipt,check_sources=False)
             for record in receipt['source_receipts']:
-                p=N.source_path(record['path'])
-                if N._source_hash(str(p),N._signature(p))!=record['sha256']:
+                if not N.source_receipt_matches(record, data_root=data_root):
                     raise ValueError('v6_cumulative_frozen_source_changed')
     if f.get('registration_code_transition') is not None:
         from src.engine.scalping import reversal_manual_registration as M

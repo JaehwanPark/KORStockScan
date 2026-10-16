@@ -5688,7 +5688,7 @@ def test_fast_sell_final_nonzero_remaining_never_completes():
     assert state.get("sell_receipt_position_complete") is not True
 
 
-@pytest.mark.parametrize('damage',[None,'venue','venue_source','broker_venue','exit_venue','route','route_request',
+@pytest.mark.parametrize('damage',[None,'operator_assigned','operator_assigned_invalid_authority','venue','venue_source','broker_venue','exit_venue','route','route_request',
     'envelope','packet','ingress','clock','session_clock','session_schema','custody','quantity','remaining','buy','simulation','tamper'])
 def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkeypatch,damage):
     from copy import deepcopy
@@ -5719,6 +5719,11 @@ def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkey
         custody=('exit_receipt_submission_custody_committed',False),quantity=('sell_execution_receipt_quantity_contract_complete',False),
         remaining=('remaining_sell_qty',1),buy=('holding_path_buy_fill_identity','bad'))
     if damage in changes:fields[changes[damage][0]]=changes[damage][1]
+    if str(damage).startswith('operator_assigned'):
+        from src.trading.market.execution_venue import execution_venue_fields
+        fields.update(broker_actual_exchange_code='0',broker_actual_exchange_name='SOR',broker_sor_flag='Y')
+        fields.update(execution_venue_fields(fields,observed_at=now),exit_effective_venue='KRX')
+        if damage=='operator_assigned_invalid_authority':fields['execution_venue_override']='unapproved'
     if damage=='simulation':stock['simulation_book']='probe'
     leg=receipts._build_sell_lifecycle_outbox_leg(stock,code='036930',target_id=49294,now=now,
         stage='sell_completed',event_fields=fields);original=deepcopy(leg);captured=[]
@@ -5729,12 +5734,12 @@ def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkey
         return dict(pipeline=pipeline,stock_code=code,stage=stage,record_id=record_id,fields=normalized,
             structured_append_succeeded=True,structured_append_status='raw_appended')
     monkeypatch.setattr(receipts,'emit_pipeline_event',emit)
-    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (damage is None)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (damage in (None,'operator_assigned'))
     assert leg==original
-    if damage is None:
+    if damage in (None,'operator_assigned'):
         assert captured[0]['native_receipt_execution_venue_status']=='unknown_preserved'
         assert captured[0]['native_receipt_source_gap']=='actual_execution_venue_unresolved'
         assert captured[0]['broker_execution_provenance_complete']=='False'
-        assert captured[0]['actual_execution_venue']=='UNKNOWN'
+        assert captured[0]['actual_execution_venue']==('KRX' if damage=='operator_assigned' else 'UNKNOWN')
         assert captured[0]['main_lifecycle_actual_cost_status']=='cost_source_unavailable'
         assert 'main_lifecycle_id' not in captured[0] and 'attempt_id' not in captured[0]

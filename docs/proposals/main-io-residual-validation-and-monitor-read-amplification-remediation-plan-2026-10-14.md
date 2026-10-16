@@ -228,3 +228,10 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 
 
 09:49 native cold preflight timeout은 원 시도/현재 PID를 보존한다. 전환용 digest TTL120초는 장후600초와 구분한다. 같은 현재 PID/code/root/date/새 UUID의 기존 native content-hash API로 가장 큰 역사파일1개만 사전 읽고 즉시 정규 배포를 실행한다. 판정·원천·정책·deadline/TTL 변경은 없으며 각 native 검증은 다시 수행한다. 실제 준비 비용과 phase 재사용/성공은 위 배포 리뷰에 구분해 기록한다.
+
+
+### 10/16 사용자 승인: pipeline 원장과 정책 소비 검증의 분리
+
+정책 발행·기동·상시 감시는 발행된 보고서에 봉인된 canonical 일별 pipeline 참조를 검증하며 과거 원장을 재해시하지 않는다. 연구 producer가 원천을 검증하고 날짜·경로·해시를 봉인하는 책임은 유지한다. 소비 단계의 성공은 원천 현재 내용/존재의 재검증을 뜻하지 않는다. 정책·보고서·코드·다른 원천 결속은 유지한다. full/artifact detector는 기존 generation별 observer digest session으로 변경되지 않은 대용량 의존성을 재사용하며 semantic check를 매번 실행하고 validation_io를 남긴다. timeout·주문·수량·provider·hard safety는 바꾸지 않는다.
+
+SOR 미식별 체결의 KRX 사용자 지정과 35beec0f 통합·리뷰·배포 수용은 [전용 감사 기록](../audits/main-sor-krx-and-pipeline-validation-deployment-review-2026-10-16.md)을 따른다. 기존 OPEN owner와 원 실패/경제성 결손은 유지한다.

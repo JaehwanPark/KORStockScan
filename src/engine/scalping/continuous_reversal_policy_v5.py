@@ -170,13 +170,11 @@ def validate_sources(bundle, data_root, *, code_root=None):
                 or {c['key']:c for c in report['cells']} != f[name+'_cells']):
             raise ValueError('v5_report_binding_invalid')
         for record in report.get('source_receipts',[]) + report.get('results_sources',[]):
-            p = Path(record['path'])
-            if N._source_hash(str(p), N._signature(p)) != record['sha256']:
+            if not N.source_receipt_matches(record, data_root=data_root):
                 raise ValueError('v5_frozen_source_changed')
     for key,route in scopes():
         for record in f['auxiliary_cells'][key]['routes'][route].get('actual_response_evidence',[]):
-            p=Path(record['path'])
-            if N._source_hash(str(p),N._signature(p))!=record['sha256']:
+            if not N.source_receipt_matches(record, data_root=data_root):
                 raise ValueError('v5_actual_response_source_changed')
     return bundle
 

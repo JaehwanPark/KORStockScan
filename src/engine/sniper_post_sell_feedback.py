@@ -484,6 +484,8 @@ def _post_sell_execution_route_contract(
         if sell_dt.tzinfo is None
         else sell_dt
     )
+    from src.trading.market.execution_venue import execution_venue_fields
+    assignment = execution_venue_fields(source, observed_at=resolved_sell_dt)
     context = resolve_market_session(resolved_sell_dt)
     broker_route = str(
         source.get("last_sell_execution_broker_route_requested")
@@ -504,7 +506,7 @@ def _post_sell_execution_route_contract(
         or ""
     ).strip().lower()
     route_resolution = "explicit_market_data_route"
-    if not market_data_route:
+    if market_data_route in {"", "unknown", "-"}:
         market_data_route = str(
             context.preferred_market_data_route or ""
         ).strip().lower()
@@ -519,8 +521,9 @@ def _post_sell_execution_route_contract(
             "reason": "broker_and_ws_route_missing",
             "broker_route": broker_route or "-",
             "expected_market_route": market_data_route or "-",
-            "venue": "UNKNOWN",
+            "venue": assignment["actual_execution_venue"],
             "session": "unknown",
+            **assignment,
         }
 
     session = str(
@@ -551,6 +554,9 @@ def _post_sell_execution_route_contract(
     ).strip()
     if venue == "UNKNOWN":
         venue_source = "official_exchange_fields_ambiguous_or_missing"
+    if assignment["execution_venue_override"]:
+        venue = assignment["actual_execution_venue"]
+        venue_source = assignment["actual_execution_venue_source"]
 
     expected_session_route = str(
         context.preferred_market_data_route or ""
@@ -589,6 +595,9 @@ def _post_sell_execution_route_contract(
             "expected_market_route": market_data_route,
             "venue": venue,
             "session": session,
+            "actual_execution_venue_source": venue_source,
+            "actual_execution_venue_verified": assignment["actual_execution_venue_verified"],
+            "execution_venue_override": assignment["execution_venue_override"],
         }
     return {
         "status": "route_contract_ready",
@@ -603,6 +612,8 @@ def _post_sell_execution_route_contract(
         "broker_route_requested": broker_route,
         "actual_execution_venue": venue,
         "actual_execution_venue_source": venue_source,
+        "actual_execution_venue_verified": assignment["actual_execution_venue_verified"],
+        "execution_venue_override": assignment["execution_venue_override"],
     }
 
 
@@ -1006,6 +1017,11 @@ def record_post_sell_candidate(
                 "actual_execution_venue_source",
                 "official_exchange_fields_ambiguous_or_missing",
             ),
+            "actual_execution_venue_verified": receipt_route.get("actual_execution_venue_verified", False),
+            "execution_venue_override": receipt_route.get("execution_venue_override"),
+            **{key: stock.get(key) for key in (
+                "broker_actual_execution_venue", "broker_actual_execution_venue_source",
+                "broker_actual_exchange_code", "broker_actual_exchange_name", "broker_sor_flag")},
             "market_axes_source_quality_status": receipt_route.get(
                 "status", "route_source_quality_blocked"
             ),

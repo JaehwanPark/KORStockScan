@@ -920,6 +920,44 @@ def test_post_sell_route_contract_preserves_nxt_close_only_session(monkeypatch):
     assert fallback_route["session"] == "nxt_aftermarket"
 
 
+def test_operator_sor_krx_assignment_preserves_broker_truth_and_quote_route():
+    from src.trading.market.execution_venue import execution_venue_fields, SOR_KRX_AUTHORITY
+    from src.engine.sniper_execution_receipts import _receipt_market_axes
+    source = dict(broker_actual_execution_venue='UNKNOWN',
+        broker_actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing',
+        broker_actual_exchange_code='0', broker_actual_exchange_name='SOR', broker_sor_flag='Y',
+        broker_execution_provenance_complete=False, broker_route='SOR', market_data_route='krx_nxt_integrated')
+    original = dict(source)
+    at = datetime.fromisoformat('2026-10-16T16:30:00+09:00')
+    axes = _receipt_market_axes(source, observed_at=at, requested_route_keys=('broker_route',))
+    assert axes['actual_execution_venue'] == 'KRX'
+    assert axes['execution_venue_override'] == SOR_KRX_AUTHORITY
+    assert axes['actual_execution_venue_verified'] is False
+    assert axes['market_data_route'] == 'krx_nxt_integrated'
+    assert axes['broker_route_requested'] == 'SOR'
+    assert source == original
+    for patch in [dict(broker_actual_execution_venue='NXT'), dict(broker_actual_exchange_code='2'),
+                  dict(broker_sor_flag='N'), dict(broker_actual_execution_venue='CONFLICT')]:
+        assert execution_venue_fields({**source, **patch}, observed_at=at)['execution_venue_override'] is None
+    assert execution_venue_fields(source, observed_at=at.replace(day=15))['actual_execution_venue'] == 'UNKNOWN'
+
+
+def test_operator_sor_feedback_reference_route_does_not_invent_execution_proof():
+    from src.trading.market.execution_venue import SOR_KRX_AUTHORITY
+    at = datetime.fromisoformat('2026-10-16T09:23:48+09:00')
+    route = feedback_mod._post_sell_execution_route_contract(dict(
+        broker_actual_execution_venue='UNKNOWN',
+        broker_actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing',
+        broker_actual_exchange_code='0', broker_actual_exchange_name='SOR', broker_sor_flag='Y',
+        broker_route_requested='SOR', market_data_route='unknown', market_session_regime='KRX_REGULAR'), sell_dt=at)
+    assert route['status'] == 'route_contract_ready'
+    assert route['venue'] == 'KRX'
+    assert route['actual_execution_venue_verified'] is False
+    assert route['execution_venue_override'] == SOR_KRX_AUTHORITY
+    assert route['expected_market_route'] == 'krx_only'
+    assert route['broker_route'] == 'SOR'
+
+
 def test_post_sell_dual_sor_preserves_unknown_venue_and_null_cost(
     monkeypatch, tmp_path
 ):

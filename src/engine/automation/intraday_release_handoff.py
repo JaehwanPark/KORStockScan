@@ -692,9 +692,65 @@ REVIEWED_CARRIED_VOTE_PREFIX_SOURCES = {
 
 # Completed overnight SELL receipts use their sealed broker/BUY identity only.
 REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES = {
+    'src/engine/error_detector.py': (
+        '6da85a87a0d32d2a2815ee452353394afc2abaeac009084d1f69aa1d2934f875',
+        'aa985ea3012432a1499f140725a5e8782476cf4e4edb6028a56ba31679c39a02',
+    ),
+    'src/engine/holding_exit_observation_report.py': (
+        '2ec0a7be672eb04044a9094b7ee445af66cef17720df83efe24e6148110ded03',
+        'da364a9f0a6933158e95046f82e7669f0609244c51cd8f35e119949cc0bc0969',
+    ),
+    'src/engine/scalping/ai_decision_trace.py': (
+        'de1eb13ce98abe99980a387e87ab852764d6a4b8f94a24c0c1540234d6e478f4',
+        '4ca36bfcf257cb8dc39738cff5e71b3da32f458e8e9febabc31f4acef1277bc4',
+    ),
+    'src/engine/scalping/continuous_reversal_policy.py': (
+        '3522757d44f2cb9201892757dc40a0a9650e2c962709d15b2f7b99b737987627',
+        '2c83f7afad5355cda14ef76eb82793ffb1cb982d4e158d260aa71d3c4f1c6cbd',
+    ),
+    'src/engine/scalping/continuous_reversal_policy_v2.py': (
+        '1ccf5f2ab3bca1e5f6fbb09d7173979fe48f0019ae1aed8e95df279dcd47fad8',
+        'bdee85eff700fae45e0725066180b3336985fec25af49819d01928ccfe06d4c6',
+    ),
+    'src/engine/scalping/continuous_reversal_policy_v3.py': (
+        '905232875ec6767cb4169fd9c8935ccf800f05fa7e3316687398518cae54f0fb',
+        '3a8fe901212facfd9a5a8782c3054dd4926c81074777477478317fa294c23dff',
+    ),
+    'src/engine/scalping/continuous_reversal_policy_v4.py': (
+        'f37709fb11b2b13006b268c401541749d18e8845de16174b9b6736dfd16ea3d4',
+        'f0305941b0d09eb4d6955b296c0fec5b4cb6400f81bfd1b6fa0a18cac306f962',
+    ),
+    'src/engine/scalping/continuous_reversal_policy_v5.py': (
+        '1d60a547a5730ff34da9c144a14feedfa322e09604bde84a46aafd04999941f6',
+        'b222050e81150a95751bcb7f4614e61dadc3ded1232bc76cae81b010b3a7c1e7',
+    ),
+    'src/engine/scalping/continuous_reversal_policy_v6.py': (
+        '568c46b69d35a9c6d4ab03ab92b10c609c711cd311706508e287e1d1431f81f7',
+        'd669d8831add3b2a62d51e0e2c98baa7e6eb8e45d45f574d75883fb260cec273',
+    ),
+    'src/engine/scalping/mechanistic_entry_runtime_policy.py': (
+        '671f655287ff452f4dc5162c754c98a9e05e9397eb2a9e217f34fc193db1104d',
+        '04525b236b3192f1e5464bc9381f2681e628a8b66eaa98daad639c0e212e40a3',
+    ),
+    'src/engine/scalping/reversal_code_handoff.py': (
+        'f73faae0d4eb1e4f844d2cc7b6ab27f0c03316cb6d2aa85a8dbbae44e43c9fec',
+        '16cde5253c71d887894716d36ca8ca2614e0fa0cb835c79ffaf28103b2df8bfd',
+    ),
+    'src/engine/scalping/reversal_source_diagnostics.py': (
+        'f3d66158bbeae90f8258333d90efb45e652ca95d6b4ef5f868066e0509c18783',
+        'bf7dd538048888ce9793ccdf39a6c5c4a463c9e3379f4c3c5c1a09173f543eb8',
+    ),
     'src/engine/sniper_execution_receipts.py': (
         'dc4a57286b38f72c96e538e7eb3851f806af1b9c07e0145f3f5aed51ea00bbe1',
-        '49e76d6b956ae3af34ff2d790741a47fb2db1652dc36c146fbfb22477d32a826',
+        '14faf52dc561d6f0f3f859cae9ea2ec69a7d9dc298f7ddda691bb2e665654880',
+    ),
+    'src/engine/sniper_post_sell_feedback.py': (
+        '8b6d50ce6c5693338942fcbfeeb397d8ac13f244188cc6a8ec50229c19efe501',
+        '8fcbf7de95acc2e5ba3121be0f20ece3bbefc7bd22fb57cc4cebe938115fc2d9',
+    ),
+    'src/engine/sniper_trade_review_report.py': (
+        '5267041fe305ab93d636e3fe27f6633c86bddd49f7250418c2898ca55706cefd',
+        'fd08e8db61295786759280e46ddaa4d8198a04053d6c702495a26cee76346c39',
     ),
 }
 

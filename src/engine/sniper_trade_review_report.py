@@ -2419,9 +2419,17 @@ def _completed_trade_projection(
     occurrence_time = str(
         terminal_fields.get("main_lifecycle_execution_occurred_at") or ""
     )
+    clock_receipt_bound = (
+        terminal_fields.get("decision_authority") == "broker_sell_fill_observation_only"
+        and quantity_conserved
+        and str(terminal_fields.get("order_no") or "").isdigit()
+        and str(terminal_fields.get("execution_no") or "").isdigit()
+        and str(terminal_fields.get("sell_execution_receipt_quantity_contract_complete")).lower() == "true"
+        and str(terminal_fields.get("sell_execution_receipt_unit_fill_consistent")).lower() == "true"
+    )
     exact_fill_time = (
         occurrence_time
-        if (configured_receipt or actual_reconciled)
+        if (configured_receipt or actual_reconciled or clock_receipt_bound)
         and occurrence_source == "official_fid_908"
         and _parse_dt(occurrence_time) is not None
         else None
@@ -2503,6 +2511,9 @@ def _completed_trade_projection(
         "execution_receipt_exact_configured_cost" if configured_receipt else
         "source_gap_unknown"
     )
+    from src.trading.market.execution_venue import execution_venue_fields
+    assigned_venue = execution_venue_fields(terminal_fields,
+        observed_at=terminal_fields.get("broker_execution_observed_at") or occurrence_time)
     return {
         "id": trade.get("id"),
         "rec_date": trade.get("rec_date"),
@@ -2511,8 +2522,10 @@ def _completed_trade_projection(
         "status": "COMPLETED",
         "strategy": trade.get("strategy"),
         "position_tag": trade.get("position_tag"),
-        "effective_venue": terminal_fields.get("main_lifecycle_venue")
-        or terminal_fields.get("effective_venue"),
+        "effective_venue": (assigned_venue["actual_execution_venue"]
+            if assigned_venue["execution_venue_override"] else
+            terminal_fields.get("main_lifecycle_venue") or terminal_fields.get("effective_venue")),
+        **assigned_venue,
         "market_session_bucket": terminal_fields.get("main_lifecycle_session_bucket")
         or terminal_fields.get("market_session_bucket"),
         "broker_actual_execution_venue": terminal_fields.get(

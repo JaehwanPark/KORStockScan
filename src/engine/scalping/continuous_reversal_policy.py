@@ -363,6 +363,7 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
             {k:v for k,v in report.items() if k!='artifact_content_sha256'})!=report['artifact_content_sha256']:
             raise ValueError('continuous_reversal_latest_source_mismatch')
     handoff=dict(schema='continuous_reversal_consumer_v1',source_date=day,publication_date=publication,
+        pipeline_source_validation=native.PIPELINE_REFERENCE_VALIDATION,
         effective_date=effective,policy_bundle_sha256=bundle['bundle_sha256'],family_sha256=family['family_sha256'],
         machine_report_sha256=family['machine_report_sha256'],auxiliary_report_sha256=family['auxiliary_report_sha256'],
         machine_cells_sha256=digest(family['machine_cells']),auxiliary_cells_sha256=digest(family['auxiliary_cells']),

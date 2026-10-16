@@ -11,6 +11,33 @@ import pytest
 from src.engine.infrastructure import validation_digest_session as D
 
 
+def test_policy_pipeline_reference_never_opens_raw_and_survives_archive(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    path = tmp_path / 'pipeline_events/pipeline_events_2026-10-15.jsonl'
+    record = dict(path=str(path), sha256='a' * 64)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('policy consumer opened raw pipeline')
+    monkeypatch.setattr(N, '_source_hash', forbidden)
+    assert N.source_receipt_matches(record, data_root=tmp_path)
+    assert N.source_receipt_matches({**record, 'path': 'data/pipeline_events/' + path.name}, data_root=tmp_path)
+    assert not N.source_receipt_matches({**record, 'sha256': 'invalid'}, data_root=tmp_path)
+    with pytest.raises(ValueError, match='before_clean_baseline'):
+        N.source_receipt_matches({**record, 'path': str(path.with_name('pipeline_events_2026-06-04.jsonl'))}, data_root=tmp_path)
+
+
+def test_policy_reference_exclusion_keeps_reports_and_other_raw_strict(tmp_path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    for relative in ['report/result.json', 'other/pipeline_events_2026-10-15.jsonl',
+                     'pipeline_events/not_a_daily_pipeline.jsonl']:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('original')
+        record = dict(path=str(path), sha256=hashlib.sha256(b'original').hexdigest())
+        assert N.source_receipt_matches(record, data_root=tmp_path)
+        path.write_text('changed')
+        assert not N.source_receipt_matches(record, data_root=tmp_path)
+
+
 def session(root, **kw):
     return D.DigestSession(root, '2026-10-14', role='observer', generation={'code':'test'}, **kw)
 

@@ -359,6 +359,49 @@ def _source_hash(path: str, signature: tuple) -> str:
     return _cached_source_hash(str(source_path(path)), signature)
 
 
+PIPELINE_REFERENCE_VALIDATION = "producer_sealed_pipeline_reference_no_raw_rehash"
+
+
+def is_pipeline_source_reference(path, *, data_root=None):
+    """Recognize only canonical daily pipeline ledgers, without opening them."""
+    anchor = Path(data_root).absolute() if data_root is not None else _SOURCE_ANCHOR.get()
+    if anchor is None:
+        return False
+    path = Path(path)
+    if not path.is_absolute():
+        if path.parts[:2] != ("data", "pipeline_events") or ".." in path.parts:
+            return False
+        path = anchor.joinpath(*path.parts[1:])
+    if path.parent.resolve() != (anchor / "pipeline_events").resolve():
+        return False
+    match = re.fullmatch(r"pipeline_events_(\d{4}-\d{2}-\d{2})\.jsonl(?:\.gz)?", path.name)
+    if match is None:
+        return False
+    try:
+        day = date.fromisoformat(match[1])
+    except ValueError:
+        return False
+    if day < date(2026, 6, 5):
+        raise ValueError("machine_policy_pipeline_reference_before_clean_baseline")
+    return True
+
+
+def source_receipt_matches(record, *, data_root=None):
+    """Validate sealed references; policy consumers do not rehash raw pipelines.
+
+    The containing report/bundle is still byte- and content-hash verified.
+    Research producers retain full raw validation. This is an explicit scope
+    change, never a cached claim that the raw file was just revalidated.
+    """
+    expected = record.get("sha256")
+    if not isinstance(expected, str) or not re.fullmatch("[0-9a-f]{64}", expected):
+        return False
+    if is_pipeline_source_reference(record["path"], data_root=data_root):
+        return True
+    path = source_path(record["path"])
+    return _source_hash(str(path), _signature(path)) == expected
+
+
 def _cached_source_hash(path: str, signature: tuple) -> str:
     """Bounded physical-file digest cache; lexical provenance stays in signature.
 
