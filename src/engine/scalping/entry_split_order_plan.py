@@ -1822,7 +1822,7 @@ def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _event_date(event: dict[str, Any]) -> str:
-    for key in ("date", "target_date", "source_date", "trading_date", "signal_date"):
+    for key in ("date", "target_date", "source_date", "trading_date", "signal_date", "emitted_date"):
         value = str(event.get(key) or "").strip()
         if len(value) >= 10:
             return value[:10]
@@ -6541,13 +6541,29 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     if isinstance(atomic_lineage, dict) and atomic_lineage.get("schema") == ATOMIC_SIZING_LINEAGE_SCHEMA:
         # A bounded model refresh also owns the current reader projection. Keeping
         # the old atomic verdict here made corrected readers ineffective forever.
-        allowed_events, _ = _source_quality_filtered_events(
+        allowed_events, excluded_events = _source_quality_filtered_events(
             events, {target_date: _source_quality_summary(target_date)})
         current_generation["reader_projection"] = _atomic_sizing_projection_identity(
             projection, current_generation.get("stage_census"))
         current_lineage = build_atomic_execution_sizing_lineage(target_date, allowed_events,
             source_generation=current_generation,
             registry_events=registry if registry_contract.get("status") == "verified" else None)
+        # Producer coverage and the actual reader population must both survive
+        # quality filtering. A nonempty source must never become ready-empty.
+        stages = ("entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+                  "order_leg_sent", "order_bundle_submitted")
+        observed = Counter(str(_event_fields(event).get("stage") or "") for event in allowed_events)
+        expected = current_generation.get("stage_census") or {}
+        conservation = {stage: {"expected": expected[stage].get("valid_count"),
+                                "observed": observed[stage]}
+                        for stage in stages if isinstance(expected.get(stage), dict)}
+        mismatch = any(type(row["expected"]) is not int or row["expected"] != row["observed"]
+                       for row in conservation.values())
+        current_lineage["reader_population_conservation"] = dict(
+            status="source_gap" if mismatch else "verified" if conservation else "legacy_census_unavailable",
+            stages=conservation, quality_excluded_count=excluded_events)
+        if mismatch:
+            current_lineage.update(status="source_gap", selection_blocked=True)
         current_lineage["registry_source"] = registry_contract
         atomic = report["input_summary"]["atomic_execution_sizing"]
         atomic["lineage"] = current_lineage

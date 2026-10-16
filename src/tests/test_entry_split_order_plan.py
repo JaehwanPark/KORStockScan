@@ -5455,7 +5455,8 @@ def test_execution_census_uses_logical_gzip_source_and_preserves_seal(monkeypatc
 
 
 @pytest.mark.parametrize('has_atomic_lineage', [False, True])
-def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path, has_atomic_lineage):
+@pytest.mark.parametrize('wrapped_projection', [False, True])
+def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path, has_atomic_lineage, wrapped_projection):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-09-17"
     path, _ = split_plan.report_paths(target)
@@ -5468,13 +5469,20 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
             "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA}, candidate_grid=[])
     if has_atomic_lineage:
         plan, leg, bundle, source = _atomic_lineage_fixture(target)
+        events = [plan, leg, bundle]
+        source['stage_census'] = {event['stage']: {'valid_count':1} for event in events}
+        if wrapped_projection:
+            events = [dict(stage=event['stage'], emitted_date=target,
+                emitted_at=event['emitted_at'], record_id=event['record_id'],
+                fields={k:v for k,v in event.items() if k not in {'stage','source_date','emitted_at','record_id'}})
+                for event in events]
         original['input_summary']['atomic_execution_sizing'] = dict(
             status='fail', daily_plan_observed_count=1, daily_plan_invalid_count=0,
             lineage=dict(schema=split_plan.ATOMIC_SIZING_LINEAGE_SCHEMA,
                          source_generation=source, status='source_gap'))
         monkeypatch.setattr(split_plan, '_atomic_sizing_source_generation', lambda _day: copy.deepcopy(source))
         monkeypatch.setattr(split_plan, '_bounded_execution_projection', lambda _day: (
-            [plan,leg,bundle], {'status':'ready','sources':[]}))
+            events, {'status':'ready','sources':[]}))
         monkeypatch.setattr(split_plan, '_source_quality_summary', lambda _day: {'tuning_input_allowed':True})
     split_plan._write_json(path, original)
     monkeypatch.setattr(split_plan, "_execution_registry_snapshot", lambda: ([], {"status": "verified", "tail_hash": "0" * 64}))
@@ -5485,6 +5493,10 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
     assert first["recommended_policy"]["runtime_apply_allowed"] is False
     if has_atomic_lineage:
         assert first['input_summary']['atomic_execution_sizing']['status']=='pass'
+        lineage = first['input_summary']['atomic_execution_sizing']['lineage']
+        assert lineage['counts']['valid_plan_count'] == 1
+        assert lineage['counts']['unique_leg_orders'] == 1
+        assert lineage['reader_population_conservation']['status'] == 'verified'
         assert first['execution_model_validation']['source_inventory']['original_atomic_contract']==original['input_summary']['atomic_execution_sizing']
     before = path.read_bytes()
     second = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
@@ -5500,6 +5512,12 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
     split_plan._write_json(split_plan.policy_path(target), policy)
     with pytest.raises(ValueError, match="cached_generation_invalid"):
         split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+    if has_atomic_lineage:
+        monkeypatch.setattr(split_plan, '_source_quality_summary', lambda _day: {'tuning_input_allowed':False})
+        excluded = split_plan.refresh_execution_model_only(target, prepared_effective_date='2026-09-21')
+        atomic = excluded['input_summary']['atomic_execution_sizing']
+        assert atomic['status']=='fail' and atomic['selection_blocked'] is True
+        assert atomic['lineage']['reader_population_conservation']['status']=='source_gap'
 
 
 def test_native_report_above_raw_shard_bound_uses_bounded_refresh(monkeypatch,tmp_path):
