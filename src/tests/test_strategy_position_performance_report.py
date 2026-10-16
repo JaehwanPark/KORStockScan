@@ -1377,6 +1377,7 @@ def test_legacy_fact_sync_repairs_unproved_zero_economics_to_null_and_keeps_sour
     from src.engine.lifecycle.holding_window_generation import capture_window
     day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=True)
     window_before=capture_window(tmp_path,[day])
+    source_identities={p:archive_identity(p) for p in [path,path.with_suffix('.completed_projection.json')]}
     engine=create_engine('sqlite:///:memory:');TradePerformanceFact.__table__.create(engine);StrategyPositionPerformanceDaily.__table__.create(engine)
     class DB:
         def init_db(self):pass
@@ -1399,7 +1400,12 @@ def test_legacy_fact_sync_repairs_unproved_zero_economics_to_null_and_keeps_sour
         assert row.completion_census_run_id==receipt['completed_census_run_ids'][0]
     assert report_mod._saved_fact_generation_issue(day) is None
     assert quantity._quantity_fact_generation_issue(day) is None
-    assert capture_window(tmp_path,[day])==window_before
+    current_window=capture_window(tmp_path,[day])
+    assert window_before['dependencies'][day]['status']=='source_gap'
+    assert current_window['dependencies'][day]['status']=='observed'
+    assert current_window['input_window_generation_sha256']!=window_before['input_window_generation_sha256']
+    assert current_window['dependencies'][day]['cost_generation']['status']=='cost_source_unavailable'
+    assert {p:archive_identity(p) for p in source_identities}==source_identities
 
 
 def test_legacy_canonical_stream_handles_native_exponents_and_unicode_across_read_chunks(tmp_path,monkeypatch):
@@ -1459,3 +1465,362 @@ def test_legacy_canonical_stream_cannot_silently_drop_oversized_selected_termina
     sidecar.write_text(json.dumps(value))
     with pytest.raises(report_mod.FactSyncSourceError,match='selected_metadata_partition_required'):
         report_mod._legacy_original_stream(sidecar,day)
+
+
+def test_legacy_proof_output_only_publishes_after_all_native_source_guards(tmp_path,monkeypatch):
+    from pathlib import Path
+    from src.engine.lifecycle.broker_cost_reconciliation import receipt_path
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    output={'stale':'discard'}
+    assert report_mod._legacy_original_generation_issue(day,validated_proof=output)==(False,None)
+    assert output=={}
+    value=report_mod._load_completion_fact_projection(day,path);status=_write_legacy_status(day,value)
+    assert report_mod._legacy_original_generation_issue(day,validated_proof=output)==(True,None)
+    reference=status['completion_snapshot_source']['legacy_original_validation']
+    assert output==json.loads(Path(reference['path']).read_bytes())
+    cost=receipt_path(tmp_path,day,'49013');cost.parent.mkdir(parents=True);cost.write_text('{}')
+    valid,issue=report_mod._legacy_original_generation_issue(day,validated_proof=output)
+    assert valid is True and issue is not None and output=={}
+
+
+def test_legacy_proof_output_remains_empty_if_source_changes_during_final_guard(tmp_path,monkeypatch):
+    from src.engine.lifecycle import snapshot_archive
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    value=report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+    original=snapshot_archive.snapshot_identity
+    def changed(p):
+        result=original(p)
+        if p==path.with_suffix('.completed_projection.json'):
+            with path.open('ab') as h:h.write(b' ')
+        return result
+    monkeypatch.setattr(snapshot_archive,'snapshot_identity',changed)
+    output={'stale':'discard'}
+    valid,issue=report_mod._legacy_original_generation_issue(day,validated_proof=output)
+    assert valid is True and issue is not None and output=={}
+
+
+def _legacy_raw_original(tmp_path, monkeypatch, *, large=True):
+    """Original raw-only postclose: zero entry-day rows, one prior-day exit."""
+    import hashlib
+    from pathlib import Path
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    old_day, old_path = _legacy_unreceipted_original(tmp_path, monkeypatch, large=large)
+    raw = json.loads(old_path.read_bytes())
+    day = '2026-09-29'
+    raw['date'] = day
+    row = raw['sections']['completed_trade_projection'][0]
+    row.update(id=48376, rec_date='2026-09-28', buy_time='2026-09-28T11:48:12',
+               sell_time=day+'T13:37:11', completion_observed_date=day)
+    raw['sections']['recent_trades'] = []
+    raw['metrics']['total_trades'] = 0
+    raw['meta']['sell_completed_event_ids'] = ['48376']
+    raw['meta'].pop('completed_census_manifest')
+    census = completed_census_manifest(raw)
+    census.pop('actual_cost_source_generation')
+    raw['meta']['completed_census_manifest'] = census
+    path = old_path.with_name(f'trade_review_{day}.json')
+    path.write_text(json.dumps(raw, ensure_ascii=False, separators=(',', ':')))
+    for previous in (old_path, old_path.with_suffix('.completed_projection.json'), Path(str(old_path)+'.gz')):
+        previous.unlink()
+    older = copy.deepcopy(raw)
+    older['meta']['snapshot_profile'] = 'full'
+    Path(str(path)+'.gz').write_bytes(gzip.compress(json.dumps(older).encode()))
+    manifest_path = path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    manifest_path.parent.mkdir()
+    kinds = ['holding_exit_observation', 'post_sell_feedback', 'trade_review']
+    manifest = dict(target_date=day, profile='postclose_exit', generated_at='2026-09-30 03:07:03',
+        snapshot_kinds=kinds,
+        snapshot_paths={kind:str(path if kind=='trade_review' else path.parent/f'{kind}_{day}.json') for kind in kinds},
+        snapshot_sha256={kind:hashlib.sha256(path.read_bytes()).hexdigest() if kind=='trade_review' else 'a'*64 for kind in kinds})
+    manifest_path.write_text(json.dumps(manifest))
+    return day, path
+
+
+def _rewrite_raw_legacy_proof(day, status, transform):
+    """Forge all small digests to test native binding, not accidental hash loss."""
+    import hashlib
+    from pathlib import Path
+    reference = status['completion_snapshot_source']['legacy_original_validation']
+    old = Path(reference['path'])
+    body = json.loads(old.read_bytes())
+    transform(body)
+    body['artifact_sha256'] = report_mod._canonical_sha256({k:v for k,v in body.items() if k!='artifact_sha256'})
+    path = old.with_name(body['artifact_sha256']+'.json')
+    raw = json.dumps(body).encode()
+    path.write_bytes(raw)
+    status['completion_snapshot_source']['legacy_original_validation'] = dict(path=str(path),size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+    status['artifact_sha256'] = report_mod._canonical_sha256({k:v for k,v in status.items() if k!='artifact_sha256'})
+    report_mod._status_path(day).write_text(json.dumps(status))
+    return body
+
+
+def test_legacy_raw_original_verifies_native_manifest_and_prior_day_completion_without_adopting_entry_fact(tmp_path, monkeypatch):
+    import hashlib
+    from pathlib import Path
+    from src.engine.scalping.initial_quantity_source_cache import completion_overlay
+    from src.engine.scalping import initial_quantity_policy as quantity
+    day,path = _legacy_raw_original(tmp_path, monkeypatch)
+    manifest = path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    sources = [path,Path(str(path)+'.gz'),manifest]
+    before = {p:(archive_identity(p),hashlib.sha256(p.read_bytes()).hexdigest()) for p in sources}
+    value = report_mod._load_completion_fact_projection(day,path)
+    assert path.stat().st_size > 4*1024*1024
+    assert value['sections']['recent_trades'] == []
+    assert value['metrics'] == {'total_trades':0,'canonical_completed_trades':1}
+    completed = value['sections']['completed_trade_projection'][0]
+    assert (completed['id'],completed['rec_date'],completed['completion_observed_date']) == (48376,'2026-09-28',day)
+    assert completed['broker_actual_cost_observed'] is False
+    assert completed['broker_actual_fees_taxes_krw'] is None
+    quality = {}
+    facts,warnings = report_mod._build_trade_fact_rows(day,completion_snapshot=path,completion_census_quality=quality)
+    assert facts == [] and warnings == []
+    status = _write_legacy_status(day,value)
+    proof = json.loads(Path(status['completion_snapshot_source']['legacy_original_validation']['path']).read_bytes())
+    assert proof['projection_kind'] == 'original_snapshot'
+    assert proof['projection'] == proof['snapshot']
+    assert proof['original_sidecar_artifact_sha256'] is None
+    assert proof['original_snapshot_manifest']['sha256'] == before[manifest][1]
+    monkeypatch.setattr(report_mod,'_legacy_original_stream',lambda *a,**k:pytest.fail('original raw stream repeated'))
+    monkeypatch.setattr(report_mod,'load_monitor_snapshot',lambda *a,**k:pytest.fail('original JSON decoded'))
+    assert report_mod._saved_fact_generation_issue(day) is None
+    assert quantity._quantity_fact_generation_issue(day) is None
+    # The completion belongs to entry28, outside the initial quantity window.
+    overlay = completion_overlay([], as_of=day,data_dir=tmp_path,entry_on_or_after=day,
+        entry_generations={},validate_day=lambda _:pytest.fail('legacy source promoted to overlay'))
+    assert list(overlay) == [] and overlay.completion_generations == {}
+    assert not path.with_suffix('.completed_projection.json').exists()
+    assert not path.with_suffix('.fact_projection.json').exists()
+    assert {p:(archive_identity(p),hashlib.sha256(p.read_bytes()).hexdigest()) for p in sources} == before
+
+
+@pytest.mark.parametrize('mutation',['missing_manifest','wrong_date','wrong_profile','wrong_path','wrong_sha','malformed_manifest','missing_kind','duplicate_kind','source_changed','wrong_census','filtered_scope','filtered_code','filtered_since','model_actual_cost','current_cost','manifest_fifo','manifest_symlink','unknown_schema','partial_manifest','clock','early_clock','other_member_path','other_member_sha'])
+def test_legacy_raw_original_rejects_unbound_native_manifest_or_census(tmp_path,monkeypatch,mutation):
+    import hashlib
+    import os
+    from src.engine.lifecycle.broker_cost_reconciliation import receipt_path
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=False)
+    manifest_path = path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    manifest = json.loads(manifest_path.read_bytes())
+    if mutation == 'missing_manifest': manifest_path.unlink()
+    elif mutation == 'wrong_date': manifest['target_date'] = '2026-09-28'
+    elif mutation == 'wrong_profile': manifest['profile'] = 'full'
+    elif mutation == 'wrong_path': manifest['snapshot_paths']['trade_review'] = str(tmp_path/'foreign.json')
+    elif mutation == 'wrong_sha': manifest['snapshot_sha256']['trade_review'] = 'f'*64
+    elif mutation == 'malformed_manifest': manifest = []
+    elif mutation == 'missing_kind': manifest['snapshot_kinds'].remove('trade_review')
+    elif mutation == 'duplicate_kind': manifest['snapshot_kinds'].append('trade_review')
+    elif mutation == 'unknown_schema': manifest['schema'] = 'foreign_receipt_v1'
+    elif mutation == 'partial_manifest':
+        manifest['snapshot_kinds'] = ['trade_review']
+        manifest['snapshot_paths'] = {'trade_review':str(path)}
+        manifest['snapshot_sha256'] = {'trade_review':manifest['snapshot_sha256']['trade_review']}
+    elif mutation == 'clock': manifest['generated_at'] = 'not-a-clock'
+    elif mutation == 'early_clock': manifest['generated_at'] = '2026-09-28 23:59:59'
+    elif mutation == 'other_member_path': manifest['snapshot_paths']['post_sell_feedback'] = '/foreign/root/report.json'
+    elif mutation == 'other_member_sha': manifest['snapshot_sha256']['post_sell_feedback'] = 'invalid'
+    elif mutation == 'source_changed':
+        with path.open('ab') as h:h.write(b' ')
+    elif mutation == 'current_cost':
+        cost = receipt_path(tmp_path,day,'48376');cost.parent.mkdir(parents=True);cost.write_text('{}')
+    elif mutation == 'manifest_fifo': manifest_path.unlink();os.mkfifo(manifest_path)
+    elif mutation == 'manifest_symlink':
+        saved = manifest_path.with_suffix('.saved');manifest_path.rename(saved);manifest_path.symlink_to(saved)
+    else:
+        raw = json.loads(path.read_bytes())
+        if mutation == 'wrong_census': raw['meta']['completed_census_manifest']['projected_count'] = 2
+        elif mutation == 'filtered_scope': raw['scope'] = 'all'
+        elif mutation == 'filtered_code': raw['code'] = '066570'
+        elif mutation == 'filtered_since': raw['since'] = '09:00:00'
+        elif mutation == 'model_actual_cost': raw['meta']['actual_cost_source_generation'] = {'count':0}
+        path.write_text(json.dumps(raw))
+        manifest['snapshot_sha256']['trade_review'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if mutation not in {'missing_manifest','manifest_fifo','manifest_symlink'}:
+        manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day,path)
+    assert not list((tmp_path/'report/strategy_position_fact_sync').glob('legacy_sources/*/*.json'))
+
+
+@pytest.mark.parametrize('mutation',['manifest_bytes','manifest_sha','manifest_path','manifest_omitted','raw_sha','kind','sidecar_seal','foreign_root'])
+def test_legacy_raw_original_replay_rejects_resealed_proof_conflicts_without_source_rescan(tmp_path,monkeypatch,mutation):
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=False)
+    value = report_mod._load_completion_fact_projection(day,path)
+    status = _write_legacy_status(day,value)
+    def mutate(body):
+        if mutation == 'manifest_sha': body['original_snapshot_manifest']['sha256'] = 'f'*64
+        elif mutation == 'manifest_path': body['original_snapshot_manifest']['path'] = str(tmp_path/'foreign.json')
+        elif mutation == 'manifest_omitted': body.pop('original_snapshot_manifest')
+        elif mutation == 'raw_sha':
+            body['projection']['sha256'] = 'f'*64;body['snapshot']['sha256'] = 'f'*64
+        elif mutation == 'kind': body['projection_kind'] = 'completed_sidecar'
+        elif mutation == 'sidecar_seal': body['original_sidecar_artifact_sha256'] = 'f'*64
+    if mutation == 'manifest_bytes':
+        manifest = path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+        with manifest.open('ab') as h:h.write(b' ')
+    elif mutation != 'foreign_root': _rewrite_raw_legacy_proof(day,status,mutate)
+    monkeypatch.setattr(report_mod,'_legacy_original_stream',lambda *a,**k:pytest.fail('original raw replayed'))
+    output = {'old':'remove'}
+    kwargs = {'data_dir':tmp_path/'foreign'} if mutation == 'foreign_root' else {}
+    legacy,issue = report_mod._legacy_original_generation_issue(day,status,validated_proof=output,**kwargs)
+    assert legacy is True and issue is not None and output == {}
+
+
+def test_legacy_raw_original_keeps_native_manifest_and_logical_identity_after_lossless_compression(tmp_path,monkeypatch):
+    from pathlib import Path
+    from src.engine import compress_db_backfilled_files as archive
+    from src.engine.scalping import initial_quantity_policy as quantity
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=False)
+    value = report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+    proof = value['_native_source_proof']
+    Path(str(path)+'.gz').unlink()  # isolated older, different-generation gzip
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',path.parent)
+    assert archive._gzip_file(path,dry_run=False)[0]
+    monkeypatch.setattr(report_mod,'_legacy_original_stream',lambda *a,**k:pytest.fail('archived raw replayed'))
+    assert report_mod._saved_fact_generation_issue(day) is None
+    assert quantity._quantity_fact_generation_issue(day) is None
+    assert report_mod._load_completion_fact_projection(day,path)['_native_source_proof'] == proof
+
+
+@pytest.mark.parametrize('with_proof',[False,True])
+def test_legacy_raw_original_never_adopts_bare_old_gzip_as_lossless_original(tmp_path,monkeypatch,with_proof):
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=False)
+    if with_proof:
+        value = report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+    path.unlink()
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day,path)
+
+
+@pytest.mark.parametrize('when',['stream','scalar','proof_validation'])
+def test_legacy_raw_original_manifest_mutation_during_admission_or_replay_fails_closed(tmp_path,monkeypatch,when):
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=False)
+    manifest = path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    def change():
+        with manifest.open('ab') as h:h.write(b' ')
+    if when == 'stream':
+        original = report_mod._legacy_original_stream
+        def raced(*a,**k):
+            result = original(*a,**k);change();return result
+        monkeypatch.setattr(report_mod,'_legacy_original_stream',raced)
+    elif when == 'scalar':
+        original = report_mod._stream_original_fact_projection
+        def raced(*a,**k):
+            result = original(*a,**k);change();return result
+        monkeypatch.setattr(report_mod,'_stream_original_fact_projection',raced)
+    else:
+        from src.engine.lifecycle import snapshot_archive
+        value = report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+        original = snapshot_archive.snapshot_identity
+        def raced(p):
+            result = original(p);change();return result
+        monkeypatch.setattr(snapshot_archive,'snapshot_identity',raced)
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day,path)
+
+
+@pytest.mark.parametrize('replacement',['fifo','regular'])
+def test_legacy_raw_original_scalar_prefix_read_pins_regular_fd_before_open(tmp_path,monkeypatch,replacement):
+    import os
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=False)
+    native_open = os.open
+    opened = 0
+    def replaced(candidate, flags, *args, **kwargs):
+        nonlocal opened
+        if str(candidate) == str(path):
+            opened += 1
+            if opened == 2:  # after full original proof; before scalar header read
+                path.rename(path.with_suffix('.saved'))
+                if replacement == 'fifo': os.mkfifo(path)
+                else: path.write_text('{}')
+        return native_open(candidate,flags,*args,**kwargs)
+    monkeypatch.setattr(report_mod.os,'open',replaced)
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day,path)
+    assert opened == 2
+    assert not list((tmp_path/'report/strategy_position_fact_sync').glob('legacy_sources/*/*.json'))
+
+
+def _archive_raw_before_legacy_proof(day,path,monkeypatch):
+    from pathlib import Path
+    from src.engine import compress_db_backfilled_files as archive
+    Path(str(path)+'.gz').unlink()  # unrelated old generation is never adopted
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',path.parent)
+    assert archive._gzip_file(path,dry_run=False)[0]
+    assert not path.exists()
+    assert not list(report_mod._FACT_SYNC_STATUS_DIR.glob('legacy_sources/*/*.json'))
+
+
+def test_legacy_raw_original_can_create_first_proof_from_native_verified_archive(tmp_path,monkeypatch):
+    import hashlib
+    from pathlib import Path
+    from src.engine.lifecycle.snapshot_archive import archived_receipt
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=True)
+    original_identity = archive_identity(path)
+    original_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    _archive_raw_before_legacy_proof(day,path,monkeypatch)
+    archive = archived_receipt(path)
+    gz = Path(str(path)+'.gz');receipt_path=Path(str(gz)+'.archive_receipt.json')
+    immutable = {p:(archive_identity(p),p.read_bytes()) for p in (gz,receipt_path)}
+    value = report_mod._load_completion_fact_projection(day,path)
+    status = _write_legacy_status(day,value)
+    proof = json.loads(Path(status['completion_snapshot_source']['legacy_original_validation']['path']).read_bytes())
+    assert proof['projection_kind']=='original_snapshot'
+    assert proof['snapshot']==proof['projection']==dict(path=str(path),identity=original_identity,sha256=original_sha)
+    assert archive['original_identity']==original_identity
+    assert value['metrics']==dict(total_trades=0,canonical_completed_trades=1)
+    assert value['sections']['completed_trade_projection'][0]['rec_date']=='2026-09-28'
+    assert report_mod._saved_fact_generation_issue(day) is None
+    assert {p:(archive_identity(p),p.read_bytes()) for p in immutable}==immutable
+    assert not path.exists() and not path.with_suffix('.completed_projection.json').exists()
+
+
+@pytest.mark.parametrize('mutation',['logical_path','logical_sha','original_identity','missing_receipt','bare_old_gzip','crc','truncated','decoded_bytes','wrong_census','source_race','manifest_race'])
+def test_legacy_raw_original_archive_first_requires_native_receipt_crc_decoded_sha_and_census(tmp_path,monkeypatch,mutation):
+    import hashlib
+    from pathlib import Path
+    from src.engine.lifecycle.snapshot_archive import file_identity
+    day,path = _legacy_raw_original(tmp_path,monkeypatch,large=False)
+    original = path.read_bytes()
+    _archive_raw_before_legacy_proof(day,path,monkeypatch)
+    gz=Path(str(path)+'.gz');receipt_path=Path(str(gz)+'.archive_receipt.json')
+    receipt=json.loads(receipt_path.read_bytes())
+    if mutation == 'logical_path':receipt['logical_path']=str(tmp_path/'foreign.json')
+    elif mutation == 'logical_sha':receipt['logical_content_sha256']='f'*64
+    elif mutation == 'original_identity':receipt['original_identity']['size']+=1
+    elif mutation == 'missing_receipt':receipt_path.unlink()
+    elif mutation in {'bare_old_gzip','crc','truncated','decoded_bytes','wrong_census'}:
+        raw = original
+        if mutation in {'bare_old_gzip','wrong_census'}:
+            body=json.loads(original)
+            if mutation=='bare_old_gzip':body['meta']['snapshot_profile']='full'
+            else:body['meta']['completed_census_manifest']['projected_count']=2
+            raw=json.dumps(body).encode()
+        elif mutation=='decoded_bytes':raw=original+b' '
+        compressed=gzip.compress(raw)
+        if mutation=='crc':compressed=compressed[:-8]+bytes([compressed[-8]^1])+compressed[-7:]
+        elif mutation=='truncated':compressed=compressed[:-5]
+        gz.write_bytes(compressed)
+        # Even a recomputed physical envelope cannot replace original decoded
+        # bytes, full EOF/CRC, or the manifest and original full census.
+        receipt['archive_generation']=file_identity(gz.stat())
+        receipt['archive_sha256']=hashlib.sha256(compressed).hexdigest()
+        if mutation=='wrong_census':
+            receipt['logical_content_sha256']=hashlib.sha256(raw).hexdigest()
+            receipt['logical_size_bytes']=len(raw);receipt['original_identity']['size']=len(raw)
+            manifest_path=path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+            manifest=json.loads(manifest_path.read_bytes())
+            manifest['snapshot_sha256']['trade_review']=receipt['logical_content_sha256']
+            manifest_path.write_text(json.dumps(manifest))
+    elif mutation in {'source_race','manifest_race'}:
+        original_stream=report_mod._legacy_original_stream
+        def changed(*a,**k):
+            value=original_stream(*a,**k)
+            target=gz if mutation=='source_race' else path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+            with target.open('ab') as handle:handle.write(b' ')
+            return value
+        monkeypatch.setattr(report_mod,'_legacy_original_stream',changed)
+    if mutation!='missing_receipt':receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day,path)
+    assert not path.exists()
+    assert not list(report_mod._FACT_SYNC_STATUS_DIR.glob('legacy_sources/*/*.json'))

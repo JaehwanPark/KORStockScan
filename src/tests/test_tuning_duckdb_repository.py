@@ -66,9 +66,14 @@ def test_bounded_partition_binding_never_opens_obsolete_corrupt_file(tmp_path, m
     (old/"broken.parquet").write_bytes(b"not parquet")
     with TuningDuckDBRepository(Path(":memory:"),read_only=False) as repo:
         assert repo.register_parquet_dataset("pipeline_events",start_date="2026-10-06",end_date="2026-10-07")
+        assert repo.registered_parquet_files["pipeline_events"] == tuple(
+            tmp_path / "pipeline_events" / ("date=" + day) / "part.parquet"
+            for day in ("2026-10-06", "2026-10-07")
+        )
         assert len(repo.query("SELECT * FROM v_pipeline_events"))==2
         with pytest.raises(ValueError,match="source_missing"):
             repo.register_parquet_dataset("pipeline_events",start_date="2026-10-08",end_date="2026-10-08")
+        assert "pipeline_events" not in repo.registered_parquet_files
         with pytest.raises(ValueError,match="incomplete"):
             repo.register_parquet_dataset("pipeline_events",start_date="2026-10-06")
 
@@ -163,6 +168,8 @@ def test_verified_event_empty_is_not_missing_or_stale(tmp_path,monkeypatch):
   with pytest.raises(ValueError,match='receipt_missing'):repo.register_parquet_dataset('post_sell',start_date=day,end_date=day)
   assert builder.process_single_date('post_sell',day)==(0,0)
   assert repo.register_parquet_dataset('post_sell',start_date=day,end_date=day)
+  assert repo.registered_parquet_files['post_sell']==()
   assert repo.query('select * from v_post_sell').empty
   (source/'post_sell_evaluations_2026-10-06.jsonl').write_text('{}\n')
   with pytest.raises(ValueError,match='receipt_invalid'):repo.register_parquet_dataset('post_sell',start_date=day,end_date=day)
+  assert 'post_sell' not in repo.registered_parquet_files

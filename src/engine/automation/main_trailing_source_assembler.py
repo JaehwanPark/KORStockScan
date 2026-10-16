@@ -70,6 +70,100 @@ def read(path):
     return value,before
 
 
+def _bounded_calendar_source(path):
+    """Read diagnostic bytes only after a bounded regular-file intake."""
+    import io
+    import os
+    import stat
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    limit=4*1024*1024
+    path=Path(path)
+    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+        raise ValueError('all_scope_calendar_source_path_invalid')
+    before=path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size>limit:
+        raise ValueError('all_scope_calendar_source_unbounded_or_nonregular')
+    with Claim(limit*10+1):
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        try:
+            opened=os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or source_stat(opened)!=source_stat(before):
+                raise ValueError('all_scope_calendar_source_changed')
+            with os.fdopen(fd,'rb',closefd=False) as handle:
+                physical=handle.read(limit+1)
+            if (len(physical)!=before.st_size or source_stat(os.fstat(fd))!=source_stat(before)
+                    or source_stat(path.lstat())!=source_stat(before)):
+                raise ValueError('all_scope_calendar_source_changed')
+        finally:
+            os.close(fd)
+        if path.suffix=='.gz':
+            with gzip.GzipFile(fileobj=io.BytesIO(physical)) as handle:
+                raw=handle.read(limit+1)
+            # Reading through EOF validates every gzip member and its CRC.
+            if len(raw)>limit:
+                raise ValueError('all_scope_calendar_decoded_source_unbounded')
+        else:
+            raw=physical
+        def unique_pairs(pairs):
+            result={}
+            for key,value in pairs:
+                if key in result:
+                    raise ValueError('all_scope_calendar_duplicate_key')
+                result[key]=value
+            return result
+        value=json.loads(raw,object_pairs_hook=unique_pairs)
+        if source_stat(path.lstat())!=source_stat(before):
+            raise ValueError('all_scope_calendar_source_changed')
+        return value,dict(path=path.name,size=len(physical),sha256=hashlib.sha256(physical).hexdigest())
+
+
+def partial_publication_calendar_diagnostic(root, day):
+    """Explain an original partial report without turning it into postclose."""
+    from src.utils import market_day
+    import zlib
+    trading,reason=market_day.get_krx_trading_day_status(date.fromisoformat(day))
+    if trading is not False:
+        return None
+    logical=Path(root)/'report/monitor_snapshots'/f'trade_review_{day}.json'
+    physical=logical if logical.exists() or logical.is_symlink() else Path(str(logical)+'.gz')
+    try:
+        value,generation=_bounded_calendar_source(physical)
+        meta=value.get('meta');metrics=value.get('metrics');sections=value.get('sections')
+        if (value.get('date')!=day or value.get('code') or value.get('since')
+                or value.get('scope')!='entered' or not isinstance(meta,dict)
+                or meta.get('snapshot_profile')!='intraday_light'
+                or not isinstance(metrics,dict) or not isinstance(sections,dict)):
+            return None
+        census=meta.get('completed_census_manifest') or {}
+        metric_keys=('total_trades','completed_trades','canonical_completed_trades','entered_rows','open_trades',
+                     'open_scalp_position_projection_count','full_fill_events','partial_fill_events','carry_completed_rows')
+        census_keys=('raw_terminal_count','raw_completion_event_count','projected_count','valid_profit_count',
+                     'strict_count','excluded_count','unobserved_count')
+        row_keys=('recent_trades','completed_trade_projection','open_scalp_position_projection','completed_trades','open_trades')
+        zero=(isinstance(census,dict) and not meta.get('warnings')
+              and all(type(metrics.get(k)) is int and metrics[k]==0 for k in metric_keys)
+              and all(type(census.get(k)) is int and census[k]==0 for k in census_keys)
+              and meta.get('sell_completed_event_ids')==[] and census.get('raw_terminal_ids')==[]
+              and all(type(meta.get(k)) is int and meta[k]==0 for k in (
+                  'completion_event_id_count','completion_event_unresolved_id_count'))
+              and all(sections.get(k)==[] for k in row_keys))
+        holding_events=metrics.get('holding_events')
+        return dict(date=day,publication_status='not_due',calendar_reason=reason,
+            calendar_owner='src.utils.market_day:get_krx_trading_day_status',
+            calendar_source=byte_generation(Path(market_day.__file__)),
+            original_snapshot_profile=meta['snapshot_profile'],original_native_postclose_status='unverified_partial',
+            source_path=str(physical),source_generation=generation,
+            observed_counts={k:metrics.get(k) for k in metric_keys},
+            original_census_counts={k:census.get(k) for k in census_keys} if isinstance(census,dict) else None,
+            original_holding_event_count=holding_events,zero_trade_observations=zero,
+            source_gap_preserved=True,native_postclose_valid_empty=False,
+            original_metrics=metrics,original_source_receipts=meta.get('trailing_event_source_receipts'),
+            original_receipt_role='original_cutoff_reference_no_later_source_merge',
+            runtime_effect=False,allowed_runtime_apply=False)
+    except (OSError,ValueError,TypeError,KeyError,AttributeError,EOFError,RecursionError,zlib.error):
+        return None
+
+
 def universe(root, day):
     directory=Path(root)/'report/micro_reversion_economic_reference'
     candidates=[p for p in directory.glob('micro_reversion_symbol_master_????-??-??.json*')
@@ -255,19 +349,38 @@ def _operating(root, day, sources, gaps):
     return sorted(operating)
 
 
-def large_completed_sources(root,raw,day,output,dependency):
+def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
     """Stream a legacy projection sealed by its original census producer."""
     from src.engine.lifecycle.research_json_stream import completed_rows
     from src.engine.scalping.pre_submit_delay_initial_policy import number
+    from src.engine.lifecycle.snapshot_archive import present
     sidecar=raw.with_suffix('.completed_projection.json')
+    if not present(sidecar):sidecar=raw
     receipt_path=Path(str(sidecar)+'.dependencies.json')
-    receipt,receipt_generation=read(receipt_path)
     generation=byte_generation(sidecar)
-    if (receipt.get('schema')!='holding_projection_dependency_receipt_v1'
+    retained = not receipt_path.is_file()
+    if retained:
+        from src.engine.lifecycle.holding_window_generation import verified_legacy_projection_dependency
+        receipt,bound_generation=verified_legacy_projection_dependency(root,day,projection_generation=generation)
+        if receipt['observed_actual_cost_source_generation']!=dependency['cost_generation']:
+            raise ValueError('all_scope_large_completed_cost_generation_changed')
+        receipt_generation=None
+        if sources is not None:
+            validation=bound_generation['legacy_validation']
+            proof=Path(root)/'report/strategy_position_fact_sync/legacy_sources'/day/validation['proof']['path']
+            status=Path(root)/'report/strategy_position_fact_sync'/validation['status']['path']
+            sources[str(proof)]=validation['proof'];sources[str(status)]=validation['status']
+            original_manifest=receipt.get('original_snapshot_manifest')
+            if original_manifest is not None:
+                manifest_path=Path(original_manifest['path'])
+                sources[str(manifest_path)]={**original_manifest,'path':manifest_path.name}
+    else:
+        receipt,receipt_generation=read(receipt_path)
+    if (not retained and (receipt.get('schema')!='holding_projection_dependency_receipt_v1'
         or receipt.get('date')!=day or receipt.get('projection')!=generation
         or receipt.get('artifact_sha256')!=digest({k:v for k,v in receipt.items() if k!='artifact_sha256'})
         or not receipt.get('census_sha256') or receipt.get('meta',{}).get('snapshot_profile')!='postclose_exit'
-        or receipt.get('meta',{}).get('actual_cost_source_generation')!=dependency['cost_generation']):
+        or receipt.get('meta',{}).get('actual_cost_source_generation')!=dependency['cost_generation'])):
         raise ValueError('all_scope_large_completed_receipt_invalid')
     from src.engine.lifecycle.snapshot_archive import snapshot_identity
     identity=snapshot_identity(raw)
@@ -330,7 +443,13 @@ def large_completed_sources(root,raw,day,output,dependency):
             position['source_reference']={'path':str(sidecar),'id':position['position_key'],'projection_generation':generation}
             yield trade,position,storage.iter_tree(output,event_ref)
     if count!=receipt.get('completed_count'):raise ValueError('all_scope_large_completed_census_changed')
-    if byte_generation(sidecar)!=generation or byte_generation(receipt_path)!=receipt_generation:
+    if byte_generation(sidecar)!=generation:
+        raise ValueError('all_scope_large_completed_source_changed')
+    if retained:
+        current,current_generation=verified_legacy_projection_dependency(root,day,projection_generation=generation)
+        if current!=receipt or current_generation!=bound_generation:
+            raise ValueError('all_scope_large_completed_source_changed')
+    elif byte_generation(receipt_path)!=receipt_generation:
         raise ValueError('all_scope_large_completed_source_changed')
 
 
@@ -378,29 +497,41 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
         raise ValueError('all_scope_parent_manifest_invalid')
     parent_copy=output/'parent.json';_atomic(parent_copy,parent)
     sources={str(parent_path):parent_generation,master_source['path']:master_source['generation']}
-    gaps=Counter();as_of=time.time() if as_of is None else number(as_of)
+    gaps=Counter();publication_diagnostics=[];as_of=time.time() if as_of is None else number(as_of)
     if as_of is None or as_of<datetime.fromisoformat(source_date+'T00:00:00+09:00').timestamp():
         raise ValueError('all_scope_assembly_cutoff_invalid')
     operating=_operating(root,source_date,sources,gaps)
     from src.engine.holding_exit_observation_report import _verified_trade_review_projection
     def records():
-        from src.engine.lifecycle.snapshot_archive import present
+        from src.engine.lifecycle.snapshot_archive import present, identity_available
         for day in days:
             dependency=window['dependencies'][day]
+            calendar=partial_publication_calendar_diagnostic(root,day)
+            if calendar is not None:
+                calendar['original_window_status']=dependency['status']
+                publication_diagnostics.append(calendar)
+                sources[calendar['source_path']]=calendar['source_generation']
             if dependency['status']=='source_gap': gaps['completed_snapshot_source_gap']+=1;continue
             raw=root/'report/monitor_snapshots'/f'trade_review_{day}.json'
             if not present(raw):
                 if date.fromisoformat(day).weekday()<5: gaps['completed_snapshot_missing']+=1
                 continue
             sidecar=raw.with_suffix('.completed_projection.json')
-            if present(sidecar) and byte_generation(sidecar)['size']>4*1024*1024:
-                sources[str(sidecar)]=byte_generation(sidecar)
-                receipt=Path(str(sidecar)+'.dependencies.json');sources[str(receipt)]=byte_generation(receipt)
-                cohort=large_completed_sources(root,raw,day,output,dependency)
+            projection=sidecar if present(sidecar) else raw
+            empty_archive=(dependency.get('projection') or {}).get('source_basis')=='current_native_gzip_empty_postclose'
+            if not empty_archive and not identity_available(projection):
+                gaps['completed_snapshot_unverified']+=1;continue
+            if not empty_archive and identity_available(raw) and byte_generation(projection)['size']>4*1024*1024:
+                sources[str(projection)]=byte_generation(projection)
+                receipt=Path(str(projection)+'.dependencies.json')
+                if receipt.is_file():sources[str(receipt)]=byte_generation(receipt)
+                cohort=large_completed_sources(root,raw,day,output,dependency,sources=sources)
             else:
-                projection=_verified_trade_review_projection(raw,day,data_root=root)
+                original_sources={}
+                projection=_verified_trade_review_projection(raw,day,data_root=root,source_generations=original_sources)
                 if projection is None: gaps['completed_snapshot_unverified']+=1;continue
-                sources[str(sidecar)]=byte_generation(sidecar)
+                if original_sources:sources.update(original_sources)
+                else:sources[str(sidecar)]=byte_generation(sidecar)
                 def resident(projection=projection,sidecar=sidecar):
                     for trade in projection['sections']['completed_trade_projection']:
                         positions,paths=completed_sources([trade])
@@ -480,7 +611,8 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
         source_data_root=str(root),source_generations_ref=source_ref,
         assembly_code_contract_sha256=code,assembly_input_generation_sha256=signature,
         assembly_inventory_ref=inventory_ref,input_window_generation_sha256=window['input_window_generation_sha256'],
-        assembly_census={'source_gaps':dict(gaps),'quarantined':quarantined_ref,'excluded_native_sources_ref':excluded_ref},
+        assembly_census={'source_gaps':dict(gaps),'quarantined':quarantined_ref,'excluded_native_sources_ref':excluded_ref,
+            'publication_due_diagnostics':publication_diagnostics},
         candidates=candidates,situation_classifier_grid=grid,
         operating=operating,coverage={},runtime_effect=False,allowed_runtime_apply=False)
     manifest['artifact_sha256']=digest(manifest)

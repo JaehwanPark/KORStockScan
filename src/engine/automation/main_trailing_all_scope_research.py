@@ -49,8 +49,10 @@ CODE_PATHS = ('ai/holding_exit_vote.py','ai/holding_vote_replay_source.py',
               'scalping/trailing_exit_decision.py', 'scalping/trailing_threshold_policy.py',
               'scalping/trailing_mechanical_policy.py', 'scalping/pre_submit_delay_initial_policy.py',
               'sniper_trade_review_report.py', 'holding_exit_observation_report.py',
+              'strategy_position_performance_report.py',
               'scalping/position_peak_ledger.py', 'scalping/holding_profit_exit_semantics.py',
               'lifecycle/broker_cost_source.py', 'lifecycle/broker_cost_reconciliation.py',
+              '../utils/market_day.py',
               '../utils/pipeline_event_logger.py',
               '../trading/market/session_contract.py')
 

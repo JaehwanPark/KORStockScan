@@ -232,7 +232,7 @@ def _legacy_value_reader(handle):
     return reader
 
 
-def _legacy_original_stream(sidecar, target_date):
+def _legacy_original_stream(sidecar, target_date, *, projection_kind="completed_sidecar", expected_raw_sha=None):
     """Verify the original full self-seal and census using bounded JSON values.
 
     Canonical fragments are spooled to temporary files to sort object keys.
@@ -243,8 +243,10 @@ def _legacy_original_stream(sidecar, target_date):
     import io
     import shutil
     import stat
+    import zlib
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, source_stat
     from src.engine.sniper_trade_review_report import completed_census_manifest
+    from src.engine.lifecycle.snapshot_archive import archived_receipt
     fields = {'id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
         'buy_price', 'buy_qty', 'buy_time', 'sell_price', 'sell_time', 'profit_rate',
         'holding_seconds', 'add_count', 'avg_down_count', 'pyramid_count',
@@ -354,15 +356,28 @@ def _legacy_original_stream(sidecar, target_date):
         return value
     if sidecar.is_symlink() or any(p.is_symlink() for p in sidecar.parents):
         raise FactSyncSourceError('legacy_fact_source_path_invalid')
-    before = sidecar.lstat()
+    archive_path = Path(str(sidecar)+'.gz')
+    receipt_path = Path(str(archive_path)+'.archive_receipt.json')
+    generation_guard = _completion_source_signature([sidecar, archive_path, receipt_path])
+    archive = None if sidecar.exists() else archived_receipt(sidecar)
+    physical = sidecar if archive is None else archive_path
+    if physical.is_symlink():
+        raise FactSyncSourceError('legacy_fact_source_path_invalid')
+    before = physical.lstat()
     if not stat.S_ISREG(before.st_mode):
         raise FactSyncSourceError('legacy_fact_source_size_or_type_invalid')
-    fd = os.open(sidecar, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    logical_size = before.st_size if archive is None else archive['logical_size_bytes']
+    if (archive is not None and projection_kind == 'original_snapshot'
+            and archive['logical_content_sha256'] != expected_raw_sha):
+        raise FactSyncSourceError('legacy_fact_original_manifest_generation_changed')
+    fd = os.open(physical, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         if source_stat(os.fstat(fd)) != source_stat(before):
             raise FactSyncSourceError('legacy_fact_source_changed')
         with os.fdopen(fd, 'rb', closefd=False) as source, tempfile.TemporaryFile() as output:
-            with io.TextIOWrapper(source, encoding='utf-8', newline='') as handle:
+            import gzip
+            binary = gzip.GzipFile(fileobj=source) if archive is not None else source
+            with io.TextIOWrapper(binary, encoding='utf-8', newline='') as handle:
                 reader = _legacy_value_reader(OriginalTextBytes(handle))
                 header = canonical(reader, output)
                 reader.spaces()
@@ -370,12 +385,25 @@ def _legacy_original_stream(sidecar, target_date):
                     raise FactSyncSourceError('legacy_fact_source_trailing_data')
                 actual = sha(output)
             if (source_stat(os.fstat(fd)) != source_stat(before)
-                    or source_stat(sidecar.lstat()) != source_stat(before)):
+                    or source_stat(physical.lstat()) != source_stat(before)
+                    or generation_guard != _completion_source_signature([sidecar, archive_path, receipt_path])):
                 raise FactSyncSourceError('legacy_fact_source_changed')
+    except (OSError, EOFError, zlib.error) as exc:
+        raise FactSyncSourceError('legacy_fact_source_archive_or_read_invalid') from exc
     finally:
         os.close(fd)
-    if observations.get('declared_sha256') != actual or original_size != before.st_size:
+    if projection_kind not in {'completed_sidecar', 'original_snapshot'}:
+        raise FactSyncSourceError('legacy_fact_projection_kind_invalid')
+    if (original_size != logical_size
+            or archive is not None and original_sha.hexdigest() != archive['logical_content_sha256']):
         raise FactSyncSourceError('legacy_fact_source_self_seal_invalid')
+    if projection_kind == 'completed_sidecar':
+        if observations.get('declared_sha256') != actual:
+            raise FactSyncSourceError('legacy_fact_source_self_seal_invalid')
+    elif (not re.fullmatch(r'[0-9a-f]{64}', str(expected_raw_sha or ''))
+            or original_sha.hexdigest() != expected_raw_sha
+            or observations.get('declared_sha256') is not None):
+        raise FactSyncSourceError('legacy_fact_original_manifest_generation_changed')
     if (not isinstance(header, dict) or not isinstance(header.get('meta'), dict)
             or not isinstance(header.get('sections'), dict) or not isinstance(header.get('metrics'), dict)):
         raise FactSyncSourceError('legacy_fact_source_shape_invalid')
@@ -396,7 +424,8 @@ def _legacy_original_stream(sidecar, target_date):
     if 'actual_cost_source_generation' not in meta and isinstance(census, dict) and 'actual_cost_source_generation' not in census:
         expected.pop('actual_cost_source_generation')
     ids = [str(row.get('id') or '') for row in rows]
-    if (header.get('schema') != 'trade_review_completed_projection_sidecar_v1'
+    if ((projection_kind == 'completed_sidecar' and header.get('schema') != 'trade_review_completed_projection_sidecar_v1')
+            or (projection_kind == 'original_snapshot' and header.get('scope') != 'entered')
             or header.get('date') != target_date or header.get('code') or header.get('since')
             or meta.get('snapshot_profile') != 'postclose_exit' or meta.get('warnings')
             or not isinstance(census, dict) or census != expected
@@ -414,13 +443,56 @@ def _legacy_original_stream(sidecar, target_date):
             or any(row.get('status') != 'COMPLETED' or row.get('completion_observed_date') != target_date for row in rows)):
         raise FactSyncSourceError('legacy_fact_source_census_invalid')
     header['sections'] = {'completed_trade_projection': rows}
-    header['artifact_sha256'] = actual
+    if projection_kind == 'completed_sidecar':
+        header['artifact_sha256'] = actual
     header['_verified_original_bytes'] = dict(size=original_size, sha256=original_sha.hexdigest())
     return header
 
 
-def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=None):
-    """Validate a retained native proof without rescanning historical sources."""
+def _legacy_snapshot_manifest(target_date, *, data_dir=None, reference=None, expected_raw_sha=None):
+    """Retain the exact original manifest; it never creates historical DONE."""
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    root = Path(DATA_DIR if data_dir is None else data_dir).resolve()
+    raw = root/'report/monitor_snapshots'/f'trade_review_{target_date}.json'
+    path = raw.parent/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
+    if reference is not None and (not isinstance(reference, dict) or reference.get('path') != str(path)):
+        raise FactSyncSourceError('legacy_fact_original_manifest_path_invalid')
+    value, content = _legacy_source_json(path, MAX_METADATA_BYTES)
+    observed = dict(path=str(path), size=len(content), sha256=hashlib.sha256(content).hexdigest())
+    if not isinstance(value, dict):
+        raise FactSyncSourceError('legacy_fact_original_manifest_invalid')
+    try:
+        generated_at = datetime.strptime(value.get('generated_at'), '%Y-%m-%d %H:%M:%S')
+    except (TypeError, ValueError) as exc:
+        raise FactSyncSourceError('legacy_fact_original_manifest_clock_invalid') from exc
+    kinds = value.get('snapshot_kinds')
+    paths = value.get('snapshot_paths')
+    hashes = value.get('snapshot_sha256')
+    if (set(value) != {'target_date', 'profile', 'generated_at', 'snapshot_kinds', 'snapshot_paths', 'snapshot_sha256'}
+            or generated_at.strftime('%Y-%m-%d %H:%M:%S') != value['generated_at']
+            or generated_at.date().isoformat() < target_date
+            or reference is not None and observed != reference
+            or value.get('target_date') != target_date or value.get('profile') != 'postclose_exit'
+            or not isinstance(kinds, list) or any(not isinstance(k, str) for k in kinds)
+            or len(kinds) != len(set(kinds))
+            or set(kinds) != {'trade_review', 'post_sell_feedback', 'holding_exit_observation'}
+            or not isinstance(paths, dict) or not isinstance(hashes, dict)
+            or set(paths) != set(kinds) or set(hashes) != set(kinds)
+            or any(paths[kind] != str(raw.parent/f'{kind}_{target_date}.json')
+                   or not re.fullmatch(r'[0-9a-f]{64}', str(hashes[kind] or '')) for kind in kinds)
+            or expected_raw_sha is not None and hashes['trade_review'] != expected_raw_sha):
+        raise FactSyncSourceError('legacy_fact_original_manifest_invalid')
+    return value, observed
+
+
+def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=None, validated_proof=None):
+    """Validate a retained native proof without rescanning historical sources.
+
+    Optional caller storage receives the verified proof only after every final
+    source guard passes; failures and non-legacy sources leave it empty.
+    """
+    if validated_proof is not None:
+        validated_proof.clear()
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     from src.engine.lifecycle.snapshot_archive import snapshot_identity, archived_receipt
@@ -448,18 +520,28 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
             raise FactSyncSourceError('legacy_fact_source_proof_path_invalid')
         directory = root / 'report/monitor_snapshots'
         originals = [directory/f'trade_review_{target_date}.json', directory/f'trade_review_{target_date}.completed_projection.json']
+        manifest_path = directory/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
         guarded = [status_path, path] + [p for logical in originals for p in (
             logical, Path(str(logical)+'.gz'), Path(str(logical)+'.gz.archive_receipt.json'))]
-        before = _completion_source_signature(guarded)
+        before = _completion_source_signature([*guarded, manifest_path])
+        guarded.append(manifest_path)
         body, raw = _legacy_source_json(path, MAX_METADATA_BYTES)
         if (len(raw) != reference.get('size') or hashlib.sha256(raw).hexdigest() != reference.get('sha256')
                 or body.get('artifact_sha256') != _canonical_sha256({k:v for k,v in body.items() if k!='artifact_sha256'})
                 or path.name != str(body.get('artifact_sha256')) + '.json'
                 or body.get('schema') != 'strategy_position_legacy_original_source_v1'
-                or body.get('validation_contract') != 'original_sidecar_selfseal_and_completed_census_stream_v1'
+                or body.get('validation_contract') not in {'original_sidecar_selfseal_and_completed_census_stream_v1',
+                    'original_snapshot_manifest_and_completed_census_stream_v1'}
                 or body.get('date') != target_date or body.get('runtime_effect') is not False
                 or body.get('allowed_runtime_apply') is not False):
             raise FactSyncSourceError('legacy_fact_source_proof_invalid')
+        kind = body.get('projection_kind', 'completed_sidecar')
+        if kind not in {'completed_sidecar', 'original_snapshot'}:
+            raise FactSyncSourceError('legacy_fact_projection_kind_invalid')
+        expected_contract = ('original_snapshot_manifest_and_completed_census_stream_v1' if kind == 'original_snapshot'
+                             else 'original_sidecar_selfseal_and_completed_census_stream_v1')
+        if body['validation_contract'] != expected_contract:
+            raise FactSyncSourceError('legacy_fact_projection_kind_invalid')
         value = body.get('scalar_projection')
         if (not isinstance(value, dict) or value.get('schema') != 'trade_review_fact_projection_v1'
                 or value.get('date') != target_date or value.get('source_scope') != 'entered'
@@ -475,7 +557,8 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
                 or body.get('original_actual_cost_source_generation') is not None
                 or type(body.get('original_actual_cost_generation_field_present')) is not bool
                 or (value.get('meta') or {}).get('actual_cost_source_generation') is not None
-                or not re.fullmatch(r'[0-9a-f]{64}', str(body.get('original_sidecar_artifact_sha256') or ''))
+                or kind == 'completed_sidecar' and not re.fullmatch(r'[0-9a-f]{64}', str(body.get('original_sidecar_artifact_sha256') or ''))
+                or kind == 'original_snapshot' and body.get('original_sidecar_artifact_sha256') is not None
                 or receipt.get('actual_cost_source_generation') != costs
                 or source.get('actual_cost_source_generation') != costs
                 or receipt.get('completed_census_run_ids') != [census.get('run_id')]
@@ -483,9 +566,10 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
                 or source.get('scalar_projection_sha256') != value.get('artifact_sha256')):
             raise FactSyncSourceError('legacy_fact_source_cost_or_census_changed')
         directory = root / 'report/monitor_snapshots'
-        for kind, logical in (('snapshot', directory/f'trade_review_{target_date}.json'),
-                              ('projection', directory/f'trade_review_{target_date}.completed_projection.json')):
-            generation = body.get(kind) or {}
+        for role, logical in (('snapshot', directory/f'trade_review_{target_date}.json'),
+                              ('projection', directory/f'trade_review_{target_date}.json' if kind == 'original_snapshot'
+                               else directory/f'trade_review_{target_date}.completed_projection.json')):
+            generation = body.get(role) or {}
             identity = snapshot_identity(logical)
             if (generation.get('identity') != identity or generation.get('path') != str(logical)
                     or not re.fullmatch(r'[0-9a-f]{64}', str(generation.get('sha256') or ''))):
@@ -494,6 +578,12 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
                 archive = archived_receipt(logical)
                 if archive.get('logical_content_sha256') != generation['sha256']:
                     raise FactSyncSourceError('legacy_fact_original_generation_changed')
+        if kind == 'original_snapshot':
+            if (body['projection'] != body['snapshot']
+                    or not isinstance(body.get('original_snapshot_manifest'), dict)):
+                raise FactSyncSourceError('legacy_fact_original_manifest_generation_changed')
+            _legacy_snapshot_manifest(target_date, data_dir=root,
+                reference=body.get('original_snapshot_manifest'), expected_raw_sha=body['snapshot']['sha256'])
         projection = body['projection']
         expected_source = dict(schema='strategy_position_fact_snapshot_source_v1', source_date=target_date,
             projection=dict(path=Path(projection['path']).name, size=projection['identity']['size'],
@@ -507,6 +597,8 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
         if (before != _completion_source_signature(guarded)
                 or source_generation(root, target_date) != costs):
             raise FactSyncSourceError('legacy_fact_source_changed')
+        if validated_proof is not None:
+            validated_proof.update(body)
         return True, None
     except (OSError, ValueError, TypeError, KeyError, FactSyncSourceError) as exc:
         if str(exc).startswith('shared_research_budget_'):
@@ -519,7 +611,7 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
 
 def _load_legacy_original_fact_projection(target_date, path, sidecar, sources, before):
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation, digest
-    from src.engine.lifecycle.snapshot_archive import generation, snapshot_identity
+    from src.engine.lifecycle.snapshot_archive import generation, snapshot_identity, present
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
     reuse_sources = [*sources, _status_path(target_date)]
@@ -547,7 +639,16 @@ def _load_legacy_original_fact_projection(target_date, path, sidecar, sources, b
     costs = source_generation(DATA_DIR, target_date)
     if costs.get('count') != 0 or costs.get('official_source_sha256'):
         raise FactSyncSourceError('legacy_fact_source_cost_generation_unverified')
-    header = _legacy_original_stream(sidecar, target_date)
+    raw_original = not present(sidecar)
+    native_manifest, manifest_reference = (None, None)
+    projection_path = path if raw_original else sidecar
+    if raw_original:
+        native_manifest, manifest_reference = _legacy_snapshot_manifest(target_date)
+        header = _legacy_original_stream(path, target_date, projection_kind='original_snapshot',
+            expected_raw_sha=native_manifest['snapshot_sha256']['trade_review'])
+        header['snapshot_identity'] = snapshot_identity(path)
+    else:
+        header = _legacy_original_stream(sidecar, target_date)
     if (header.get('snapshot_identity') != snapshot_identity(path)
             or (header.get('meta') or {}).get('actual_cost_source_generation') is not None):
         raise FactSyncSourceError('legacy_fact_original_snapshot_binding_invalid')
@@ -556,14 +657,19 @@ def _load_legacy_original_fact_projection(target_date, path, sidecar, sources, b
     value = _stream_original_fact_projection(target_date, path, sidecar, native, verified_completion=header)
     body = dict(schema='strategy_position_legacy_original_source_v1', date=target_date,
         validation_contract='original_sidecar_selfseal_and_completed_census_stream_v1',
-        snapshot=dict(path=str(path), identity=snapshot_identity(path), sha256=generation(path)['sha256']),
-        projection=dict(path=str(sidecar), identity=snapshot_identity(sidecar),
+        snapshot=dict(path=str(path), identity=snapshot_identity(path),
+                      sha256=header['_verified_original_bytes']['sha256'] if raw_original else generation(path)['sha256']),
+        projection=dict(path=str(projection_path), identity=snapshot_identity(projection_path),
                         sha256=header['_verified_original_bytes']['sha256']),
-        original_sidecar_artifact_sha256=header['artifact_sha256'],
+        original_sidecar_artifact_sha256=header.get('artifact_sha256') if not raw_original else None,
         original_actual_cost_source_generation=(header.get('meta') or {}).get('actual_cost_source_generation'),
         original_actual_cost_generation_field_present='actual_cost_source_generation' in header['meta'],
         observed_actual_cost_source_generation=costs, scalar_projection=value,
         runtime_effect=False, allowed_runtime_apply=False)
+    if raw_original:
+        body.update(projection_kind='original_snapshot',
+            validation_contract='original_snapshot_manifest_and_completed_census_stream_v1',
+            original_snapshot_manifest=manifest_reference)
     body['artifact_sha256'] = _canonical_sha256(body)
     if len(json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()) > MAX_METADATA_BYTES:
         raise FactSyncSourceError('legacy_fact_source_proof_partition_required')
@@ -585,7 +691,7 @@ def _load_legacy_original_fact_projection(target_date, path, sidecar, sources, b
         raise FactSyncSourceError('legacy_fact_source_changed')
     projection = body['projection']
     value['_native_source_proof'] = dict(schema='strategy_position_fact_snapshot_source_v1', source_date=target_date,
-        projection=dict(path=sidecar.name, size=projection['identity']['size'], sha256=projection['sha256'],
+        projection=dict(path=projection_path.name, size=projection['identity']['size'], sha256=projection['sha256'],
                         snapshot_identity=header['snapshot_identity']), fact_projection=None,
         source_basis='native_original_snapshot_stream', scalar_projection_sha256=value['artifact_sha256'],
         actual_cost_source_generation=costs,
@@ -639,30 +745,53 @@ def _stream_original_fact_projection(target_date, path, sidecar, native, *, veri
         return value
     def read_first_array(logical, expected_key):
         physical = logical if logical.exists() else Path(str(logical)+'.gz')
-        opener = gzip.open if physical.suffix == '.gz' else open
+        import io
+        import stat
+        from src.engine.lifecycle.holding_window_generation import source_stat
+        if physical.is_symlink() or any(p.is_symlink() for p in physical.parents):
+            raise FactSyncSourceError('legacy_fact_source_path_invalid')
+        before = physical.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise FactSyncSourceError('legacy_fact_source_size_or_type_invalid')
+        fd = os.open(physical, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         header, rows = {}, ResidentFacts([])
-        with opener(physical, 'rt', encoding='utf-8') as handle:
-            reader = _legacy_value_reader(handle)
-            reader.take('{')
-            first = True; seen = set()
-            while True:
-                if not first: reader.take(',')
-                key = reader.value(1024); reader.take(':'); first = False
-                if not isinstance(key, str) or key in seen or len(seen) > 256:
-                    raise FactSyncSourceError('completion_snapshot_legacy_header_invalid')
-                seen.add(key)
-                if key == 'sections':
-                    reader.take('{')
-                    if reader.value(1024) != expected_key:
-                        raise FactSyncSourceError('completion_snapshot_legacy_layout_invalid')
-                    reader.take(':')
-                    for projected in reader.array(row): rows.append(projected)
-                    return header, rows
-                if key in {'date', 'code', 'scope', 'since', 'meta', 'metrics', 'schema'}:
-                    header[key] = reader.value(MAX_METADATA_BYTES)
-                else:
-                    # Header fields are bounded before traversing any timeline.
-                    reader.value(MAX_METADATA_BYTES)
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or source_stat(opened) != source_stat(before):
+                raise FactSyncSourceError('legacy_fact_source_changed')
+            with os.fdopen(fd, 'rb', closefd=False) as source:
+                binary = gzip.GzipFile(fileobj=source) if physical.suffix == '.gz' else source
+                with io.TextIOWrapper(binary, encoding='utf-8', newline='') as handle:
+                    return read_header(handle, expected_key, header, rows)
+        finally:
+            try:
+                if (source_stat(os.fstat(fd)) != source_stat(before)
+                        or source_stat(physical.lstat()) != source_stat(before)):
+                    raise FactSyncSourceError('legacy_fact_source_changed')
+            finally:
+                os.close(fd)
+    def read_header(handle, expected_key, header, rows):
+        reader = _legacy_value_reader(handle)
+        reader.take('{')
+        first = True; seen = set()
+        while True:
+            if not first: reader.take(',')
+            key = reader.value(1024); reader.take(':'); first = False
+            if not isinstance(key, str) or key in seen or len(seen) > 256:
+                raise FactSyncSourceError('completion_snapshot_legacy_header_invalid')
+            seen.add(key)
+            if key == 'sections':
+                reader.take('{')
+                if reader.value(1024) != expected_key:
+                    raise FactSyncSourceError('completion_snapshot_legacy_layout_invalid')
+                reader.take(':')
+                for projected in reader.array(row): rows.append(projected)
+                return header, rows
+            if key in {'date', 'code', 'scope', 'since', 'meta', 'metrics', 'schema'}:
+                header[key] = reader.value(MAX_METADATA_BYTES)
+            else:
+                # Header fields are bounded before traversing any timeline.
+                reader.value(MAX_METADATA_BYTES)
     header, rows = read_first_array(path, 'recent_trades')
     if not isinstance(header.get('meta'), dict) or not isinstance(header.get('metrics'), dict):
         raise FactSyncSourceError('completion_snapshot_legacy_header_invalid')
@@ -693,7 +822,7 @@ def _stream_original_fact_projection(target_date, path, sidecar, native, *, veri
 def _load_completion_fact_projection(target_date: str, completion_snapshot: Path) -> dict:
     """Read only the native producer's bounded, untruncated scalar fact input."""
     from src.engine.lifecycle.holding_window_generation import _capture_day, MAX_PROJECTION_BYTES, MAX_METADATA_BYTES
-    from src.engine.lifecycle.snapshot_archive import logical_path, read_bytes, generation
+    from src.engine.lifecycle.snapshot_archive import logical_path, read_bytes, generation, present
     from src.engine.lifecycle.broker_cost_reconciliation import digest
     from src.engine.lifecycle.research_input_budget import Claim
     expected = Path(DATA_DIR) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
@@ -705,10 +834,12 @@ def _load_completion_fact_projection(target_date: str, completion_snapshot: Path
     receipt_path = Path(str(sidecar) + '.dependencies.json')
     sources = [candidate for logical in (path, sidecar, fact_path) for candidate in (
         logical, Path(str(logical) + '.gz'), Path(str(logical) + '.gz.archive_receipt.json'))] + [receipt_path]
+    original_manifest = path.parent/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
+    sources.append(original_manifest)
     try:
         before = _completion_source_signature(sources)
         if not receipt_path.exists() and not fact_path.exists() and (
-                sidecar.is_file() or _legacy_original_generation_issue(target_date)[0]):
+                present(sidecar) or original_manifest.is_file() or _legacy_original_generation_issue(target_date)[0]):
             return _load_legacy_original_fact_projection(target_date, path, sidecar, sources, before)
         native = _capture_day(DATA_DIR, path.parent, target_date)
         if native.get('profile') != 'postclose_exit' or native.get('status') not in {'observed', 'valid_empty'}:

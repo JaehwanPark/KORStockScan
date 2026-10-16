@@ -210,11 +210,15 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     assert all(p.read_bytes()==b for p,b in before.items())
 
 
-@pytest.mark.parametrize('family', ['entry_cancel_wait', 'rising_missed', 'holding_vote', 'auxiliary'])
-def test_reviewed_successor_binds_current_family_code(family):
+@pytest.mark.parametrize('review_map', [
+    'REVIEWED_SUCCESSORS', 'REVIEWED_PRESERVED_SOURCE_SUCCESSORS',
+    'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS', 'REVIEWED_DELAY_SOURCE_SUCCESSORS',
+])
+def test_reviewed_successor_binds_current_family_code(review_map):
     """Shared handler edits must renew the preserved-report capability review."""
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    assert handoff.REVIEWED_SUCCESSORS[family][1] == generation.code_generation(family)
+    for family, (_, successor) in getattr(handoff, review_map).items():
+        assert successor == generation.code_generation(family)
 
 
 @pytest.mark.parametrize('family,prior', [

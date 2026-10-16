@@ -13,6 +13,7 @@ import argparse
 import gzip
 import json
 import hashlib
+import math
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -63,6 +64,17 @@ def _empty_metrics() -> Dict[str, int]:
         "full_fill_count": 0,
         "partial_fill_count": 0,
     }
+
+
+def _valid_profit_rate(value: Any) -> bool:
+    # JSON booleans are Python ints, but never economic observations. Numeric
+    # strings and non-finite values likewise do not prove a completed return.
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _build_event_id(event: Dict[str, Any], *, source_sha256: str | None = None) -> str | None:
@@ -180,9 +192,7 @@ def _count_jsonl_metrics(
                     seen_post_sell_ids.add(event_id)
                 outcome = str(event.get("outcome") or "")
                 profit_rate = event.get("profit_rate")
-                if outcome in {"GOOD_EXIT", "COMPLETED"} and isinstance(
-                    profit_rate, (int, float)
-                ):
+                if outcome in {"GOOD_EXIT", "COMPLETED"} and _valid_profit_rate(profit_rate):
                     metrics["trade_count"] += 1
                     metrics["completed_count"] += 1
                 if outcome == "MISSED_UPSIDE":
@@ -272,36 +282,62 @@ def _count_duckdb_metrics(
             [start_date.isoformat(), end_date.isoformat()],
         )
 
-        post_sell_df = repo.query(
-            """
+        # Judge each original file before union_by_name can coerce BOOLEAN or
+        # VARCHAR profits into a numeric type contributed by another day.
+        post_sell_row = {key: 0 for key in ("trade_count", "completed_count", "missed_upside")}
+        post_sell_files = repo.registered_parquet_files["post_sell"]
+
+        def file_generation(path):
+            value = path.stat()
+            return (value.st_dev, value.st_ino, value.st_size,
+                    value.st_mtime_ns, value.st_ctime_ns)
+
+        source_generations = {path: file_generation(path) for path in post_sell_files}
+        for path in post_sell_files:
+            post_sell_df = repo.query(
+                """
+            WITH post_sell_validity AS (
+                SELECT *,
+                    (
+                        typeof(profit_rate) IN (
+                            'TINYINT', 'SMALLINT', 'INTEGER', 'BIGINT', 'HUGEINT',
+                            'UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT', 'UHUGEINT',
+                            'FLOAT', 'DOUBLE'
+                        )
+                        OR starts_with(typeof(profit_rate), 'DECIMAL(')
+                    ) AND isfinite(TRY_CAST(profit_rate AS DOUBLE)) AS valid_profit_rate
+                FROM read_parquet(?)
+            )
             SELECT
                 SUM(
                     CASE
                         WHEN outcome IN ('GOOD_EXIT', 'COMPLETED')
-                          AND TRY_CAST(profit_rate AS DOUBLE) IS NOT NULL
+                          AND valid_profit_rate
                         THEN 1 ELSE 0
                     END
                 ) AS trade_count,
                 SUM(
                     CASE
                         WHEN outcome IN ('GOOD_EXIT', 'COMPLETED')
-                          AND TRY_CAST(profit_rate AS DOUBLE) IS NOT NULL
+                          AND valid_profit_rate
                         THEN 1 ELSE 0
                     END
                 ) AS completed_count,
                 SUM(CASE WHEN outcome = 'MISSED_UPSIDE' THEN 1 ELSE 0 END) AS missed_upside
-            FROM v_post_sell
+            FROM post_sell_validity
             WHERE emitted_date BETWEEN ? AND ?
             """,
-            [start_date.isoformat(), end_date.isoformat()],
-        )
+                [str(path), start_date.isoformat(), end_date.isoformat()],
+            )
+            counts = post_sell_df.fillna(0).iloc[0].to_dict() if not post_sell_df.empty else {}
+            for key in post_sell_row:
+                post_sell_row[key] += int(counts.get(key, 0))
+        if any(file_generation(path) != source_generations[path] for path in post_sell_files):
+            raise ValueError("shadow_diff_post_sell_parquet_changed_during_read")
 
     metrics = _empty_metrics()
     pipeline_row = (
         pipeline_df.fillna(0).iloc[0].to_dict() if not pipeline_df.empty else {}
-    )
-    post_sell_row = (
-        post_sell_df.fillna(0).iloc[0].to_dict() if not post_sell_df.empty else {}
     )
     for key in metrics:
         value = pipeline_row.get(key, post_sell_row.get(key, 0))

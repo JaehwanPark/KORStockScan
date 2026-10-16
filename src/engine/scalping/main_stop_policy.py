@@ -52,6 +52,9 @@ def implementation_paths():
         'scalping/trailing_exit_decision.py','scalping/holding_path_vote_policy.py',
         'ai/holding_vote_replay_source.py','ai/holding_exit_vote.py','sniper_state_handlers.py',
         'ai_prompt_contracts.py','ai_response_contracts.py',
+        'strategy_position_performance_report.py','holding_exit_observation_report.py',
+        'automation/main_trailing_source_assembler.py',
+        '../utils/market_day.py',
         'lifecycle/holding_window_generation.py','lifecycle/snapshot_archive.py')
 
 

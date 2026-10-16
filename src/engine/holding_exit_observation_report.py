@@ -356,11 +356,33 @@ def _load_saved_snapshots(
 
 
 def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path | None = None,
-                                      metadata_only: bool = False) -> dict | None:
-    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity
+                                      metadata_only: bool = False, source_generations: dict | None = None) -> dict | None:
+    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity, identity_available
     path = logical_path(path)
     data_root = _data_root() if data_root is None else data_root
     sidecar = path.with_suffix(".completed_projection.json")
+    if not identity_available(path) and Path(str(path)+'.gz').is_file():
+        expected = Path(data_root).resolve()/'report/monitor_snapshots'/f'trade_review_{target_date}.json'
+        if path.resolve() != expected:
+            return None
+        path = expected
+        from src.engine.lifecycle.holding_window_generation import verified_archived_empty_projection
+        try:
+            value, observed = verified_archived_empty_projection(data_root, target_date)
+        except (OSError,ValueError,TypeError,KeyError) as exc:
+            if str(exc).startswith(('shared_research_budget_', 'holding_input_partition_required')):
+                raise
+            return None
+        budget = _INPUT_BUDGET.get()
+        if budget is not None:
+            from src.engine.lifecycle.research_input_budget import Claim
+            budget.enter_context(Claim(observed['logical_size'] * 8))
+        if source_generations is not None:
+            physical=Path(str(path)+'.gz')
+            source_generations[str(physical)]={k:observed[k] for k in ('path','size','sha256')}
+            manifest=path.parent/'manifests'/observed['original_native_manifest']['path']
+            source_generations[str(manifest)]=observed['original_native_manifest']
+        return value
     if not present(sidecar):
         return None
     if metadata_only and generation(sidecar)['size'] > 4 * 1024 * 1024:
@@ -382,6 +404,7 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
             budget.enter_context(Claim(len(raw)*8))
         projected = json.loads(raw)
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+        from src.engine.lifecycle.holding_window_generation import completed_projection_census_issue
         costs = source_generation(data_root, target_date)
         recorded_costs = (projected.get("meta") or {}).get("actual_cost_source_generation")
         if recorded_costs != costs and (recorded_costs is not None or costs["count"] or costs.get("official_source_sha256")):
@@ -398,7 +421,7 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
             or projected.get("date") != target_date
             or projected.get("code") or projected.get("since")
             or identity != expected_identity or declared != actual
-            or verify_completed_census_manifest(projected, target_date) is not None
+            or completed_projection_census_issue(projected, target_date, costs=costs) is not None
             or not isinstance((projected.get("sections") or {}).get(
                 "open_scalp_position_projection"), list)):
             return None
@@ -411,6 +434,7 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
 
 def _collect_completed_trade_rows(
     snapshots: list[dict],
+    *, data_root: Path | None = None,
 ) -> tuple[list[dict], list[dict]]:
     rows: list[dict] = []
     gaps: list[dict] = []
@@ -447,6 +471,11 @@ def _collect_completed_trade_rows(
             or snapshot_date >= COMPLETED_CENSUS_CONTRACT_FROM
         ):
             issue = verify_completed_census_manifest(snapshot, snapshot_date)
+            if issue:
+                from src.engine.lifecycle.holding_window_generation import completed_projection_census_issue
+                from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+                issue=completed_projection_census_issue(snapshot,snapshot_date,
+                    costs=source_generation(_data_root() if data_root is None else data_root,snapshot_date))
             if issue:
                 gaps.append({"date": snapshot_date, "reason": issue})
                 continue
@@ -2812,7 +2841,8 @@ def _build_holding_exit_observation_report(
         return guarded
 
     dates = _date_range(safe_month_start, safe_date)
-    from src.engine.lifecycle.holding_window_generation import capture_window, verify_window
+    from src.engine.lifecycle.holding_window_generation import capture_window, verify_window, completed_projection_census_issue
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     input_window = capture_window(_data_root(), dates)
     isolated_dates = [day for day,row in input_window['dependencies'].items() if row['status'] == 'source_gap']
     trade_snapshots, trade_snapshot_paths = _load_saved_snapshots('trade_review', dates, excluded_dates=isolated_dates)
@@ -2832,9 +2862,8 @@ def _build_holding_exit_observation_report(
         and (str(snapshot.get("date") or "") < COMPLETED_CENSUS_CONTRACT_FROM
              or (snapshot.get("meta") or {}).get("snapshot_profile")
              == "postclose_exit")
-        and verify_completed_census_manifest(
-            snapshot, str(snapshot.get("date") or "")
-        ) is None
+        and completed_projection_census_issue(snapshot, str(snapshot.get("date") or ""),
+            costs=source_generation(_data_root(),str(snapshot.get("date") or ""))) is None
     ]
     loaded_trade_dates = {str(item.get("date") or "") for item in trade_snapshots}
     for missing_date in dates:

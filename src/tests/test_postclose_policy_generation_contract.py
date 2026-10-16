@@ -82,6 +82,43 @@ def test_native_cutover_reports_unverified_without_reopening_legacy():
     assert after["observation_complete"] is False
 
 
+@pytest.mark.parametrize('component', [
+    'strategy_position_performance_report.py',
+    'automation/main_trailing_source_assembler.py',
+    'holding_exit_observation_report.py',
+    '../utils/market_day.py',
+])
+def test_holding_contracts_invalidate_when_original_source_validator_changes(monkeypatch, component):
+    from src.engine.lifecycle import holding_window_generation as window
+    from src.engine.scalping import holding_vote_experiment as vote
+    from src.engine.scalping import main_stop_policy as stop
+    from src.engine.automation import main_trailing_all_scope_research as trailing
+    engine = generation.ENGINE.resolve()
+    component_path = (engine / component).resolve()
+    original_bytes = component_path.read_bytes()
+    before = (generation.code_generation('holding_vote'), vote.code_sha(), trailing.code_contract(), stop.implementation_sha())
+    auxiliary_before = generation.code_generation('auxiliary')
+    cached = window.cached_code_generation
+    original_sha = trailing.hashlib.sha256
+
+    def changed(paths):
+        values = cached(paths)
+        for path in tuple(values):
+            if Path(path).resolve() == component_path:
+                values[path] = 'f' * 64
+        return values
+
+    def changed_bytes(value=b'', *args, **kwargs):
+        return original_sha(b'changed_original_source_validation' if value == original_bytes else value,
+                            *args, **kwargs)
+
+    monkeypatch.setattr(window, 'cached_code_generation', changed)
+    monkeypatch.setattr(trailing.hashlib, 'sha256', changed_bytes)
+    after = (generation.code_generation('holding_vote'), vote.code_sha(), trailing.code_contract(), stop.implementation_sha())
+    assert all(current != previous for previous, current in zip(before, after))
+    assert generation.code_generation('auxiliary') == auxiliary_before
+
+
 def test_fixture_schema_and_component_types_are_verified(tmp_path):
     import hashlib
     path=attest(tmp_path,'auxiliary')

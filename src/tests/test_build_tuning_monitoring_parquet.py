@@ -339,6 +339,100 @@ def _same_clock_event(**changes):
         "pipeline": "ENTRY_PIPELINE", "stage": "diagnostic_a", "fields": {"value": 1}, **changes}
 
 
+@pytest.mark.parametrize("profit_rate,expected", [
+    (None, 0), (True, 0), (False, 0), (float("nan"), 0),
+    (float("inf"), 0), (float("-inf"), 0), ("0", 0), ("NaN", 0),
+    (0, 1), (0.0, 1), (-.4, 1), (1.25, 1),
+], ids=["missing", "bool-true", "bool-false", "nan", "inf", "negative-inf",
+        "numeric-string", "nan-string", "zero-int", "zero-float", "loss", "profit"])
+def test_shadow_completion_requires_finite_numeric_profit_on_raw_and_parquet(
+    monkeypatch, tmp_path, profit_rate, expected,
+):
+    day, _, _, shadow = _identity_test_source(monkeypatch, tmp_path, [_same_clock_event()])
+    process_single_date("pipeline_events", day)
+    post_source = shadow.POST_SELL_DIR / f"post_sell_evaluations_{day}.jsonl"
+    post_source.write_text(json.dumps({
+        "post_sell_id": "completion-economics", "signal_date": str(day),
+        "outcome": "COMPLETED", "profit_rate": profit_rate,
+    }) + "\n")
+    process_single_date("post_sell", day)
+    raw = shadow._count_jsonl_metrics(day, day)
+    parquet = shadow._count_duckdb_metrics(day, day)
+    assert raw["trade_count"] == raw["completed_count"] == expected
+    assert parquet["trade_count"] == parquet["completed_count"] == expected
+    assert shadow._build_diff(raw, parquet)["all_match"] is True
+
+
+def test_shadow_does_not_promote_signal_or_missing_profit_to_completion(monkeypatch, tmp_path):
+    day, _, _, shadow = _identity_test_source(monkeypatch, tmp_path, [_same_clock_event()])
+    process_single_date("pipeline_events", day)
+    events = [
+        {"post_sell_id": "signal", "signal_date": str(day), "outcome": "EXIT_SIGNAL", "profit_rate": .8},
+        {"post_sell_id": "missing", "signal_date": str(day), "outcome": "COMPLETED", "profit_rate": None},
+        {"post_sell_id": "zero", "signal_date": str(day), "outcome": "COMPLETED", "profit_rate": .0},
+    ]
+    source = shadow.POST_SELL_DIR / f"post_sell_evaluations_{day}.jsonl"
+    source.write_text("".join(json.dumps(event) + "\n" for event in events))
+    process_single_date("post_sell", day)
+    frame = pd.read_parquet(parquet_builder.ANALYTICS_ROOT / f"post_sell/date={day}/post_sell_{day:%Y%m%d}.parquet")
+    assert frame["outcome"].tolist() == ["EXIT_SIGNAL", "COMPLETED", "COMPLETED"]
+    assert pd.isna(frame.iloc[1]["profit_rate"])
+    assert frame.iloc[2]["profit_rate"] == .0
+    for metrics in (shadow._count_jsonl_metrics(day, day), shadow._count_duckdb_metrics(day, day)):
+        assert metrics["trade_count"] == metrics["completed_count"] == 1
+    assert shadow._valid_profit_rate(10 ** 1000) is False
+
+
+@pytest.mark.parametrize("invalid_profit", [True, False, "0.4", "NaN"])
+def test_shadow_checks_each_original_post_sell_type_before_two_day_union(
+    monkeypatch, tmp_path, invalid_profit,
+):
+    day, pipeline_source, _, shadow = _identity_test_source(monkeypatch, tmp_path, [_same_clock_event()])
+    last = date(2026, 7, 27)
+    process_single_date("pipeline_events", day)
+    pipeline_source.with_name(f"pipeline_events_{last}.jsonl").write_text(json.dumps(
+        _same_clock_event(emitted_date=str(last), emitted_at=f"{last}T09:00:00+09:00")
+    ) + "\n")
+    process_single_date("pipeline_events", last)
+    for current, profit in ((day, invalid_profit), (last, .5)):
+        events = [{"post_sell_id": str(current), "signal_date": str(current),
+                   "outcome": "COMPLETED", "profit_rate": profit}]
+        if current == day:
+            events.append({"post_sell_id": "missed", "signal_date": str(current),
+                           "outcome": "MISSED_UPSIDE", "profit_rate": None})
+        source = shadow.POST_SELL_DIR / f"post_sell_evaluations_{current}.jsonl"
+        source.write_text("".join(json.dumps(event) + "\n" for event in events))
+        process_single_date("post_sell", current)
+    raw = shadow._count_jsonl_metrics(day, last)
+    parquet = shadow._count_duckdb_metrics(day, last)
+    assert raw["trade_count"] == raw["completed_count"] == 1
+    assert parquet["trade_count"] == parquet["completed_count"] == 1
+    assert raw["missed_upside"] == parquet["missed_upside"] == 1
+    assert shadow._build_diff(raw, parquet)["all_match"] is True
+
+
+def test_shadow_rejects_post_sell_parquet_change_during_count(monkeypatch, tmp_path):
+    from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
+    day, _, _, shadow = _identity_test_source(monkeypatch, tmp_path, [_same_clock_event()])
+    process_single_date("pipeline_events", day)
+    source = shadow.POST_SELL_DIR / f"post_sell_evaluations_{day}.jsonl"
+    source.write_text(json.dumps({"post_sell_id": "finite", "signal_date": str(day),
+                                  "outcome": "COMPLETED", "profit_rate": .4}) + "\n")
+    process_single_date("post_sell", day)
+    original_query = TuningDuckDBRepository.query
+
+    def query_then_change(self, sql, params=None):
+        result = original_query(self, sql, params)
+        if "WITH post_sell_validity" in sql:
+            with Path(params[0]).open("ab") as handle:
+                handle.write(b"changed after native read")
+        return result
+
+    monkeypatch.setattr(TuningDuckDBRepository, "query", query_then_change)
+    with pytest.raises(ValueError, match="post_sell_parquet_changed_during_read"):
+        shadow._count_duckdb_metrics(day, day)
+
+
 def test_same_clock_stages_fields_and_native_ids_survive_with_exact_duplicate_collapsed(monkeypatch, tmp_path):
     base = _same_clock_event()
     rows = [base, _same_clock_event(stage="diagnostic_b"), _same_clock_event(fields={"value": 2}),
