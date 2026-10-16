@@ -74,3 +74,11 @@ class ControlReceipts:
             broker_result=request.get("broker_result", "unobserved") if request else "unobserved",
             connection_responses=responses[-4:], attribution="request_identity_or_unknown",
             response_scope="connection_not_item_unless_bound", order_authority=False))
+
+    def snapshot(self):
+        """Keep connection evidence after REMOVE has discarded the item registry."""
+        return deepcopy(dict(schema="ws_connection_control_evidence_v1", transport_epoch=self.epoch,
+            request_counts=self.counts, response_counts=self.response_counts,
+            requests=list(self.requests)[-16:], responses=list(self.responses)[-16:],
+            retained_request_limit=16, retained_response_limit=16,
+            attribution="request_identity_or_unknown", order_authority=False))

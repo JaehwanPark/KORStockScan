@@ -4454,3 +4454,21 @@ def test_bound_rejection_preserves_local_registration_and_targets_only_original_
     assert manager.exact_probe_control_failure('010140_AL','original-lease') == 'exact_probe_registration_rejected'
     assert manager.exact_probe_control_failure('010140_AL','replacement-lease') == ''
     assert manager._registered_item_epochs['010140_AL'] == 8
+
+
+def test_connection_projection_preserves_remove_response_after_registry_cleanup():
+    manager = _exact_probe_manager()
+    manager._exact_probe_item_leases['010140_AL'] = {'lease_id':'lease-1','epoch':8}
+    async def scenario():
+        assert await manager._release_exact_probe_item('010140_AL','lease-1')
+        await manager._handle_message(json.dumps({'trnm':'REMOVE','return_code':0}))
+    asyncio.run(scenario())
+    assert '010140_AL' not in manager._registered_item_epochs
+    with manager.lock:
+        snapshot = manager._control_receipts.snapshot()
+    assert snapshot['requests'][-1]['lease_ids']['010140_AL'] == 'lease-1'
+    assert snapshot['responses'][-1]['trnm'] == 'REMOVE'
+    assert snapshot['responses'][-1]['broker_result'] == 'success'
+    assert snapshot['order_authority'] is False
+    snapshot['responses'][-1]['broker_result'] = 'changed-copy'
+    assert manager._control_receipts.responses[-1]['broker_result'] == 'success'

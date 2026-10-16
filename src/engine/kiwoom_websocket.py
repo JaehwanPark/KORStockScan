@@ -2309,6 +2309,7 @@ class KiwoomWSManager:
                         "transport_epoch": self._market_data_transport_epoch,
                         "registered_items": sorted({item for items in self._registered_items_by_code.values() for item in items}),
                         "registration_basis": "local_sent_registry_not_broker_ack",
+                        "control_evidence": self._control_receipts.snapshot(),
                         "connection_available": self.websocket is not None and self._session_ready.is_set(),
                         "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
                     }
