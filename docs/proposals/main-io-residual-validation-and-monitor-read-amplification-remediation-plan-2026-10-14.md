@@ -218,3 +218,5 @@ RIO2 또는 wrapper 구현 때에는 소유 운영 문서와 checklist를 같은
 
 
 036930의 확인된 SOR SELL은 venue UNKNOWN을 보존한 typed custody ACK로 닫는다. 기존 native terminal/BUY/TP/qty/custody/packet-clock 검증과 source-gap 표기를 요구하며 거래소·비용·전략 권한을 승격하지 않는다. 앞선 세 key와 새036930 ACK, native revive 후 고정5개 실제 편입, 최신 수동 제외 보존·새 generation fixture/PID·자연 detector를 수용한다. 원인·동시 재기동/정지 복구 증거는 위 배포 리뷰에 보존한다.
+
+현재 PID와 native archive의 typed receipt shape도 같은 manifest env로 검증해 비교한다. 실제 conflict는 보존하며 정책/runtime 값을 바꾸지 않는다. 원인·회귀·원036930 scoped audit 및 detector-lock timeout은 위 배포 리뷰에 기록한다.

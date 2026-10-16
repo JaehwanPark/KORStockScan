@@ -218,3 +218,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 09:06:39 추가 policy_binding_gap은 HoldingProfitExitSourceContractRepair가 소유한다. legacy BASE 원 target pin/hash와 native record/symbol을 보존·결속하는 보고서 수리를 같은 배포 owner에 인계한다.75d preflight 중단과 원 실패를 보존하며 새 natural 보고서/의미 detector로 닫는다. 원 first-crossing/비용 미상 OPEN은 별도다.
 
 036930 SOR venue UNKNOWN terminal ACK와 revive49342의 실제 편입을 기존 HoldingProfitExitSourceContractRepair/DirectFamilyPreopenPolicyHandoff에서 확인한다. 원 거래소/비용 미상·수동456010 제외·원4개 key를 보존하고 duplicate watch/guard 완화 없이 자연5개 편입으로 닫는다. 상세 배포 리뷰를 따른다.
+
+현재 PID의 bare/typed receipt 비교 결함도 같은 source-only owner에서 수리했다. 원 manifest/env/archive와 native0c461429 fixture를 유지하고 최종 PID/036930 ACK/고정5개·정규 detector로 확인한다. 상세 원인/시험은 위 감사 근거를 따른다.

@@ -139,3 +139,10 @@ bdd461fde 최초 일반 preflight는 원 PID 부재로 selector 전 차단됐다
 고정 목록은005930/034020/403870/196170/036930의5개다. 실제3016558은 WATCHING4개였고 036930은 완료49294의 ACK가 미완료라 revive49342/WATCHING의 DB 생성 후 런타임 attach가 보류됐다. source DB readonly 대사로 나머지4개 WATCHING과49342를 확인했다.456010은 고정 목록이 아니며 수동 제외 때문에5→4가 된 것이 아니다. 원 ACK 수리 후 native revive/현재 PID의 실제5개 편입으로 닫는다. 상시감시 충돌 guard를 낮추거나 중복 watch를 생성하지 않는다. [DB 대사](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/fixed-watch-five-readonly-db.json).
 
 036930 보완6 suites **2365 PASS/14.10초**, compile·diff·print-only parser PASS다. 기존3182 검증과 중복 합산하지 않는다. 새 generation fixture와 승인 배포/자연4-key ACK·5개 편입·최종 detector는 별도 후속 수용이다.
+
+
+새 holding generation0c461429…의 native isolated fixture91 PASS/네트워크·주문0을 발행했고 네 family reader와 delay/stop/holding 세 code gate 및 optional calendar를 검증했다.8ddb 배포는 기존 full detector를 기다리다60초 native drain timeout으로 공유 상태 변경 전 차단됐다. 원 로그를 보존한다.
+
+09:25 자연 보고서는 현재 PID3016558의 별도 tp_situation_policy_receipt_missing을 드러냈다. native PID archive는 manifest env의 situation_policy를 포함하지만 sentinel은 bare manifest receipt를 current PID에 먼저 넣어 동일 PID의 정상 augmented archive를 conflict로 제외했다. 기존 holding_exit_sentinel._profit_exit_bootstrap_binding에서 원 manifest/hash/verification/as-of 검증 뒤, 동일 env의 typed policy를 native PreparedTrailingPolicy.prepare로 검증하여 augmented copy로 비교한다. 원 manifest/receipt/archive는 바꾸지 않는다. 실제 다른 vector/변조/다른 날짜·미래/as-of/상충 PID는 계속 거부한다. 새5개 양·음성 회귀를 포함한6 suites2364 PASS와 실제 현재 PID+036930 original signal의 native scoped audit에서 policy/runtime binding gap0을 확인했다. [현재 PID 재현](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/current-typed-receipt-native-036930-rehearsal.json). source gap과비용 미상은 그대로다.
+
+이 추가 sentinel 수리는 native-v6/네 family generation/optional hash를 바꾸지 않으며 방금 발행한0c461429 fixture를 그대로 검증한다. 최종 새 commit에서 정상 ordered 배포를 수행하고 실제 native036930 ACK·49342 runtime WATCHING 및 고정5개, 정규 의미 보고서·전체 detector를 수용한다.

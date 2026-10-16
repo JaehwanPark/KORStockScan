@@ -1352,3 +1352,39 @@ def test_semantics_uses_each_verified_pid_policy_after_same_day_restart():
         mechanical_policy_receipt=later, consumed_pids=[42,43], mechanical_receipts_by_pid={42: older, 43: later})
     assert result["semantic_status"] == "pass"
     assert result["mechanical_policy_sha256_by_pid"]["42"] != result["mechanical_policy_sha256_by_pid"]["43"]
+
+
+@pytest.mark.parametrize('damage',[None,'no_archive','typed_hash','typed_parent','archive_conflict'])
+def test_current_typed_pid_receipt_matches_native_archive_without_false_conflict(tmp_path,monkeypatch,damage):
+    from copy import deepcopy
+    from src.engine.scalping import trailing_situation_policy as typed
+    from src.engine.automation.runtime_policy_bootstrap import _digest_json
+    monkeypatch.setattr(sentinel,'DATA_DIR',tmp_path)
+    day='2026-09-28';pid=42
+    policy=typed.initial_bundle(MECHANICAL['market_values'],parent_sha256=MECHANICAL['market_values_sha256'],
+        source_date='2026-09-25',target_date=day,parent_classifier_parameters=MECHANICAL['classifier_parameters'])
+    if damage=='typed_hash':policy['policy_sha256']='f'*64
+    elif damage=='typed_parent':policy['parent_sha256']='f'*64
+    manifest=dict(target_date=day,env_overrides={typed.ENV_KEY:json.dumps(policy)},
+        scalp_trailing_mechanical_policy_receipt=MECHANICAL)
+    manifest['manifest_sha256']=_digest_json(manifest)
+    verification=dict(target_date=day,manifest_sha256=manifest['manifest_sha256'],status='pass',passed=True,
+        pid=pid,pid_passed=True,pid_env_available=True,verified_at=day+'T09:00:00+09:00')
+    root=tmp_path/'runtime/policy_bootstrap';root.mkdir(parents=True)
+    (root/f'runtime_policy_bootstrap_{day}.json').write_text(json.dumps(manifest))
+    (root/f'runtime_policy_bootstrap_verify_{day}.json').write_text(json.dumps(verification))
+    augmented={**MECHANICAL,'situation_policy':deepcopy(policy)}
+    archived=deepcopy(augmented)
+    if damage=='archive_conflict':archived['market_values_sha256']='f'*64
+    prior=dict(schema='holding_profit_pid_verification_v1',target_date=day,pid=pid,
+        manifest_sha256=manifest['manifest_sha256'],mechanical_policy_receipt=archived,
+        verified_at=day+'T09:00:00+09:00')
+    prior['receipt_sha256']=_digest_json(prior)
+    archive=root/'verified_holding_profit_pid'/day;archive.mkdir(parents=True)
+    if damage!='no_archive':(archive/f'holding_profit_pid_{pid}_{manifest["manifest_sha256"]}.json').write_text(json.dumps(prior))
+    before={p:p.read_bytes() for p in root.rglob('*.json')}
+    receipt,consumed=sentinel._profit_exit_bootstrap_binding(day,datetime.fromisoformat(day+'T09:01:00+09:00'))
+    if damage in ('typed_hash','typed_parent'):assert receipt is None and consumed=={}
+    elif damage=='archive_conflict':assert receipt==augmented and pid not in consumed
+    else:assert receipt==augmented and consumed=={pid:augmented}
+    assert all(p.read_bytes()==raw for p,raw in before.items())

@@ -1193,6 +1193,16 @@ def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime) -> tuple[d
                 or verified_at.timestamp() > as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
                 or receipt != baseline_receipt(manifest["env_overrides"], source=receipt["source"])):
             return None, {}
+        # The native PID archive binds the typed policy from this exact
+        # manifest environment. Compare the same receipt shape for the current
+        # PID, or its valid archive would look like a conflicting vector.
+        from src.engine.scalping.trailing_situation_policy import ENV_KEY, PreparedTrailingPolicy
+        typed_raw = manifest["env_overrides"].get(ENV_KEY)
+        typed_policy = json.loads(typed_raw) if typed_raw is not None else None
+        if typed_policy is not None:
+            PreparedTrailingPolicy.prepare(typed_policy, target_date=target_date,
+                parent_sha256=receipt["market_values_sha256"])
+        receipt = {**receipt, "situation_policy": typed_policy}
         pid = verification.get("pid")
         consumed = (pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
                     and verification.get("pid_passed") is True
