@@ -212,3 +212,24 @@ def test_stop_cli_reuses_digests_without_persistent_validator_state(tmp_path, mo
     assert observed['full_reads']==observed['reused_reads']==1
     assert ACTIVE.get() is None
     assert not (tmp_path/'runtime/validation_digests').exists()
+
+
+def test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract(snapshot, monkeypatch):
+    import hashlib
+    from src.engine import log_archive_service as snapshots
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    monkeypatch.setattr(snapshots,'MONITOR_SNAPSHOT_DIR',snapshot.parent)
+    payload=dict(date='2026-10-08',metrics={'canonical_completed_trades':0},
+        meta={'snapshot_profile':'postclose_exit','sell_completed_event_ids':[]},
+        sections={'completed_trade_projection':[],'open_scalp_position_projection':[]})
+    payload['meta']['completed_census_manifest']=completed_census_manifest(payload)
+    snapshots.save_monitor_snapshot('trade_review','2026-10-08',payload)
+    archived=Path(str(snapshot)+'.gz')
+    with gzip.open(archived,'wb') as handle:handle.write(snapshot.read_bytes())
+    snapshot.unlink()
+    window=capture_window(snapshot.parents[2],['2026-10-08'])
+    day=window['dependencies']['2026-10-08']
+    assert day['status']=='valid_empty'
+    assert day['projection']==dict(path=archived.name,size=archived.stat().st_size,
+        sha256=hashlib.sha256(archived.read_bytes()).hexdigest())
+    assert 'snapshot_identity' not in day['projection']

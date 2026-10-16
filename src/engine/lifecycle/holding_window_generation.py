@@ -138,8 +138,8 @@ def _capture_day_inputs(root, directory, day, budget):
     sidecar = raw.with_suffix(".completed_projection.json")
     # The bounded sidecar is authoritative only with its original snapshot
     # identity. Preserve that binding as well as the sidecar's bytes.
-    from .snapshot_archive import present, snapshot_identity
-    if present(raw) and present(sidecar):
+    from .snapshot_archive import present, snapshot_identity, identity_available
+    if identity_available(raw) and present(sidecar):
         receipt = Path(str(sidecar) + '.dependencies.json')
         if receipt.is_file():
             if receipt.stat().st_size > MAX_METADATA_BYTES:
