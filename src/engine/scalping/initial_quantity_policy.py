@@ -252,7 +252,10 @@ def _quantity_fact_generation_issue(day):
     Oversized legacy snapshots need the original bounded native projection;
     a missing projection is a dated source gap, not a reason to exhaust RAM.
     """
-    from src.engine.strategy_position_performance_report import _saved_fact_generation_issue
+    from src.engine.strategy_position_performance_report import _saved_fact_generation_issue, _legacy_original_generation_issue
+    legacy, issue = _legacy_original_generation_issue(day, data_dir=DATA_DIR)
+    if legacy:
+        return issue
     from src.engine.log_archive_service import MONITOR_SNAPSHOT_DIR
     from src.engine.lifecycle.holding_window_generation import _capture_day, MAX_PROJECTION_BYTES, source_stat
     from src.engine.lifecycle.research_input_budget import Claim

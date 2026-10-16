@@ -13943,6 +13943,193 @@ def test_materialized_label_role_distinguishes_fixed_gap_from_maturity(due, have
     assert report["labels"][0] == label  # input immutable
 
 
+def _compact_price_diagnostic_fixture():
+    binding = dict(schema="compact_request_binding_supplement_v1", status="exact_request_bound",
+                   decision_trace_id="compact-original", original_trace_payload_sha256="a"*64,
+                   archived_payload_sha256="a"*64, request_envelope_sha256="b"*64, findings=[],
+                   compact_source_scope=dict(symbol="005930", market="REGULAR", venue="SOR", source_item="005930_AL"),
+                   runtime_effect=False, allowed_runtime_apply=False, canonical_primary_eligibility_changed=False)
+    binding["sha256"] = quality._sha256(binding)
+    label = dict(decision_trace_id="compact-original", decision_stage="entry_screen", stock_code="005930",
+                 decision_ts="2026-09-17T10:00:00+09:00", effective_venue="KRX", session_bucket="KRX_REGULAR",
+                 outcome_request_code="005930_AL", source_quality_status="pass", primary_payload_sha256="a"*64,
+                 snapshot_id="original-snapshot", market_data_route="krx_nxt_integrated", broker_route="SOR",
+                 primary_cohort_eligible=False, primary_cohort_exclusion_reasons=["canonical_context_missing"],
+                 entry_primary_decision_owner="mechanistic_entry_adjudicator",
+                 entry_ai_role="auxiliary_risk_screen_pass_veto_no_promotion",
+                 entry_auxiliary_response_contract_valid=None, entry_ai_screen_status="not_evaluated_transport",
+                 compact_request_binding=binding, horizon_metrics={"10m": dict(end_return_pct=0.5, sample_count=10,
+                    counterfactual_only=True, window_basis="post_decision_same_route",
+                    window_start="2026-09-17T10:00:00+09:00", observed_venue="KRX", observed_session_bucket="KRX_REGULAR")})
+    return quality.annotate_materialized_label_contract(dict(schema=quality.LABEL_REPORT_SCHEMA,
+        target_date="2026-09-17", labels=[label], outcome_as_of="2026-09-17T11:00:00+09:00",
+        price_source_provenance=[dict(stock_code="005930", effective_venue="KRX", session_bucket="KRX_REGULAR",
+            request_code="005930_AL", response_request_code="005930_AL", request_base_dt="20260917",
+            coverage_start="2026-09-17T09:00:00+09:00", coverage_end="2026-09-17T10:09:00+09:00",
+            source_quality_status="pass_target_window_available", fetch_error=None)], **quality.OFFLINE_CONTRACT))
+
+
+def test_compact_diagnostic_available_is_separate_from_primary_economics_and_response():
+    report = _compact_price_diagnostic_fixture()
+    before = deepcopy(report)
+    projection = quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)
+    assert projection["status_counts"] == {"available": 1}
+    assert projection["rows"][0]["auxiliary_response_contract_valid"] is None
+    assert report == before
+    assert report["label_contract_status_counts"] == {"source_gap": 1}
+    assert not report["labels"][0]["primary_cohort_eligible"]
+    assert projection["economic_acceptance_eligible"] is False
+    assert projection["net_ev_pct"] is None
+    assert projection["actual_completed_profit"] is False
+    assert quality.validate_compact_diagnostic_price_path(projection, report, source_file_sha256="f"*64)
+    projection["status_counts"] = {"source_gap": 1}
+    assert not quality.validate_compact_diagnostic_price_path(projection, report, source_file_sha256="f"*64)
+
+
+@pytest.mark.parametrize("mutation", ["historical_hash", "bad_binding_seal", "other_trace", "other_symbol",
+    "other_item", "other_venue", "other_market", "other_owner", "other_role", "other_date", "other_route", "missing_price",
+    "short_price_window", "missing_metric", "wrong_metric_route", "nan_metric", "future_asof", "duplicate_trace",
+    "session_clock_conflict", "coverage_session_clock_conflict", "naive_clock"])
+def test_compact_diagnostic_preserves_original_source_gaps(mutation):
+    report = _compact_price_diagnostic_fixture()
+    row = report["labels"][0]
+    binding = row["compact_request_binding"]
+    if mutation == "historical_hash":
+        binding["status"] = "archive_identity_verified_trace_hash_mismatch"
+        binding["original_trace_payload_sha256"] = "c"*64
+    elif mutation == "bad_binding_seal": binding["sha256"] = "c"*64
+    elif mutation == "other_trace": binding["decision_trace_id"] = "other"
+    elif mutation == "other_symbol": binding["compact_source_scope"]["symbol"] = "000660"
+    elif mutation == "other_item": binding["compact_source_scope"]["source_item"] = "005930_NX"
+    elif mutation == "other_venue": binding["compact_source_scope"]["venue"] = "KRX"
+    elif mutation == "other_market": binding["compact_source_scope"]["market"] = "AFTER"
+    elif mutation == "other_owner": row["entry_primary_decision_owner"] = "retired_owner"
+    elif mutation == "other_role": row["entry_ai_role"] = "primary_decider"
+    elif mutation == "other_date": row["decision_ts"] = "2026-09-18T10:00:00+09:00"
+    elif mutation == "other_route": report["price_source_provenance"][0]["response_request_code"] = "005930_NX"
+    elif mutation == "missing_price": report["price_source_provenance"] = []
+    elif mutation == "short_price_window": report["price_source_provenance"][0]["coverage_end"] = "2026-09-17T10:08:00+09:00"
+    elif mutation == "missing_metric": row["horizon_metrics"] = {}
+    elif mutation == "wrong_metric_route": row["horizon_metrics"]["10m"]["observed_venue"] = "NXT"
+    elif mutation == "nan_metric": row["horizon_metrics"]["10m"]["end_return_pct"] = "nan"
+    elif mutation == "future_asof": report["outcome_as_of"] = "2026-09-16T10:00:00+09:00"
+    elif mutation == "duplicate_trace": report["labels"].append(deepcopy(row))
+    elif mutation == "naive_clock": row["decision_ts"] = "2026-09-17T10:00:00"
+    elif mutation == "session_clock_conflict":
+        row["decision_ts"] = "2026-09-17T19:00:00+09:00"
+        row["horizon_metrics"]["10m"]["window_start"] = row["decision_ts"]
+        report["outcome_as_of"] = "2026-09-17T20:00:00+09:00"
+        report["price_source_provenance"][0]["coverage_end"] = "2026-09-17T19:09:00+09:00"
+    elif mutation == "coverage_session_clock_conflict":
+        row["decision_ts"] = "2026-09-17T15:29:00+09:00"
+        row["horizon_metrics"]["10m"]["window_start"] = row["decision_ts"]
+        report["outcome_as_of"] = "2026-09-17T16:00:00+09:00"
+        report["price_source_provenance"][0]["coverage_end"] = "2026-09-17T15:38:00+09:00"
+    if mutation != "bad_binding_seal":
+        binding["sha256"] = quality._sha256({k:v for k,v in binding.items() if k != "sha256"})
+        if mutation == "duplicate_trace": report["labels"][1] = deepcopy(row)
+    projection = quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)
+    assert projection["status_counts"] == {"source_gap": len(report["labels"])}
+
+
+def test_compact_diagnostic_pending_is_a_fixed_original_horizon():
+    report = _compact_price_diagnostic_fixture()
+    report["outcome_as_of"] = "2026-09-17T10:05:00+09:00"
+    report["labels"][0]["horizon_metrics"] = {}
+    assert quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)["status_counts"] == {"pending": 1}
+    report["outcome_as_of"] = "2026-09-17T10:10:00+09:00"
+    assert quality.build_compact_diagnostic_price_path(report, source_file_sha256="f"*64)["status_counts"] == {"source_gap": 1}
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_compact_diagnostic_reuse_preserves_native_bytes_and_current_consumer(monkeypatch, tmp_path, compressed):
+    from src.engine.error_detectors import artifact_freshness as consumer
+    target = "2026-09-17"
+    lpath = tmp_path/"data/report/ai_decision_outcome_labels"/f"ai_decision_outcome_labels_{target}.json"
+    cpath = tmp_path/"control.json"
+    lpath.parent.mkdir(parents=True)
+    labels = _compact_price_diagnostic_fixture()
+    control = dict(schema=quality.CONTROL_SCHEMA, target_date=target, materialization_schema=quality.DAILY_MATERIALIZATION_SCHEMA,
+                   label_report_sha256=quality._sha256(labels), input_trace_count=1, **quality.OFFLINE_CONTRACT)
+    control["control_manifest_sha256"] = quality._sha256(control)
+    raw = json.dumps(labels, indent=2).encode()
+    physical = lpath.with_suffix(".json.gz") if compressed else lpath
+    physical.write_bytes(gzip.compress(raw, mtime=0) if compressed else raw)
+    cpath.write_text(json.dumps(control, indent=3))
+    originals = physical.read_bytes(), cpath.read_bytes()
+    monkeypatch.setattr(quality, "control_path", lambda _: cpath)
+    monkeypatch.setattr(quality, "label_report_path", lambda _: lpath)
+    monkeypatch.setattr(quality, "source_label_input_receipt", lambda *_a, **_k: dict(generation_stable=True,
+        source_manifest_sha256="a"*64, source_trace_count=1, source_outcome_count=1, implementation_sha256="new"))
+    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: pytest.fail("no original source/provider replay"))
+    monkeypatch.setattr(consumer, "_continuous_reversal_result_semantics", lambda *_a: {"status":"candidate_selected", "findings":[]})
+    for _ in range(2):
+        result = quality.reuse_source_label_materialization(target, write=True, migrate=True)
+        assert result["compact_diagnostic_status_counts"] == {"available": 1}
+        assert (physical.read_bytes(), cpath.read_bytes()) == originals
+        observed = consumer._auxiliary_result_semantics(tmp_path, target)
+        assert observed["status"] == "candidate_selected"  # primary selection remains independent
+        assert observed["compact_diagnostic_price_path"]["status_counts"] == {"available": 1}
+    assert not (lpath.parent/"revisions").exists()
+    projection = json.loads(quality.compact_diagnostic_path(target).read_bytes())
+    projection["status_counts"] = {"available": 9}
+    quality.compact_diagnostic_path(target).write_text(json.dumps(projection))
+    observed = consumer._auxiliary_result_semantics(tmp_path, target)
+    assert observed["status"] == "candidate_selected"
+    assert observed["compact_diagnostic_price_path"]["status"] == "source_invalid"
+    assert (physical.read_bytes(), cpath.read_bytes()) == originals
+    quality._publish_compact_diagnostic_price_path(target, labels)
+    labels["labels"][0]["stock_code"] = "000660"
+    changed = json.dumps(labels).encode()
+    physical.write_bytes(gzip.compress(changed, mtime=0) if compressed else changed)
+    observed = consumer._auxiliary_result_semantics(tmp_path, target)
+    assert observed["status"] == "candidate_selected"
+    assert observed["compact_diagnostic_price_path"]["status"] == "source_invalid"
+
+
+def test_compact_diagnostic_publisher_and_consumer_reject_special_sources(monkeypatch, tmp_path):
+    import os
+    from src.engine.error_detectors import artifact_freshness as consumer
+    target = "2026-09-17"
+    logical = tmp_path/"data/report/ai_decision_outcome_labels"/f"ai_decision_outcome_labels_{target}.json"
+    logical.parent.mkdir(parents=True)
+    os.mkfifo(logical)
+    monkeypatch.setattr(quality, "label_report_path", lambda _: logical)
+    with pytest.raises(ValueError, match="source_path_invalid"):
+        quality._publish_compact_diagnostic_price_path(target, _compact_price_diagnostic_fixture())
+    logical.with_suffix(".compact_diagnostic.json").write_text("{}")
+    assert consumer._compact_diagnostic_price_path_semantics(tmp_path, target)["status"] == "source_invalid"
+
+
+def test_compact_diagnostic_late_gzip_alias_switch_fails_closed(monkeypatch, tmp_path):
+    from src.engine.error_detectors import artifact_freshness as consumer
+    target = "2026-09-17"
+    logical = tmp_path/"data/report/ai_decision_outcome_labels"/f"ai_decision_outcome_labels_{target}.json"
+    logical.parent.mkdir(parents=True)
+    labels = _compact_price_diagnostic_fixture()
+    raw = json.dumps(labels).encode()
+    logical.with_suffix(".json.gz").write_bytes(gzip.compress(raw, mtime=0))
+    monkeypatch.setattr(quality, "label_report_path", lambda _: logical)
+    original_write = quality._atomic_write_json
+    def switch_after_publish(path, value):
+        original_write(path, value)
+        logical.write_bytes(raw)  # Same content, a different logical selection.
+    monkeypatch.setattr(quality, "_atomic_write_json", switch_after_publish)
+    with pytest.raises(ValueError, match="source_generation_changed"):
+        quality._publish_compact_diagnostic_price_path(target, labels)
+    logical.unlink()
+    original_read = consumer._semantic_object
+    def switch_after_projection(path, **kwargs):
+        value = original_read(path, **kwargs)
+        if path.name.endswith(".compact_diagnostic.json"):
+            logical.write_bytes(raw)
+        return value
+    monkeypatch.setattr(consumer, "_semantic_object", switch_after_projection)
+    observed = consumer._compact_diagnostic_price_path_semantics(tmp_path, target)
+    assert observed["status"] == "source_invalid"
+    assert observed["findings"] == ["compact_diagnostic_projection_generation_changed"]
+
+
 @pytest.mark.parametrize("compressed", [False, True])
 def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_path, capsys, compressed):
     target = "2026-09-17"

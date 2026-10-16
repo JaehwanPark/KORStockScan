@@ -772,6 +772,10 @@ def label_report_path(target_date: str) -> Path:
     return LABEL_REPORT_DIR / f"ai_decision_outcome_labels_{target_date}.json"
 
 
+def compact_diagnostic_path(target_date: str) -> Path:
+    return label_report_path(target_date).with_suffix(".compact_diagnostic.json")
+
+
 def baseline_path(target_date: str) -> Path:
     return BASELINE_REPORT_DIR / f"ai_decision_quality_baseline_{target_date}.json"
 
@@ -27938,6 +27942,183 @@ def build_daily_materialization_reports(
     }
 
 
+def build_compact_diagnostic_price_path(report: dict[str, Any], *, source_file_sha256: str) -> dict[str, Any]:
+    """Observe original compact attempts and price windows; never a primary cohort.
+
+    The legacy canonical-context and economic labels remain authoritative for
+    their original roles.  Even a failed AI response can have an observed price
+    path, so response validity is reported separately rather than inferred.
+    """
+    target = report.get("target_date")
+    labels = report.get("labels")
+    if (report.get("schema") != LABEL_REPORT_SCHEMA or not isinstance(labels, list)
+            or not _is_sha256(source_file_sha256)
+            or not isinstance(target, str) or target < "2026-06-05"
+            or date.fromisoformat(target).isoformat() != target
+            or any(not isinstance(row, dict) for row in labels)
+            or any(report.get(k) != v for k, v in OFFLINE_CONTRACT.items())
+            or any(report.get(k) is not v for k, v in (("runtime_effect", False),
+                ("allowed_runtime_apply", False), ("actual_order_submitted", False), ("broker_order_forbidden", True)))):
+        raise ValueError("compact_diagnostic_source_contract_invalid")
+    def clock(value):
+        try:
+            parsed = datetime.fromisoformat(str(value)) if value else None
+        except (TypeError, ValueError):
+            return None
+        return _parse_ts(value) if parsed and parsed.tzinfo is not None else None
+    as_of = clock(report.get("outcome_as_of"))
+    provenance = report.get("price_source_provenance") or []
+    if not isinstance(provenance, list):
+        raise ValueError("compact_diagnostic_price_provenance_invalid")
+    identities = Counter(str(row.get("decision_trace_id") or "") for row in labels)
+    rows = []
+    for label in labels:
+        identity = str(label.get("decision_trace_id") or "")
+        binding = label.get("compact_request_binding")
+        binding = binding if isinstance(binding, dict) else {}
+        scope = binding.get("compact_source_scope") or {}
+        scope = scope if isinstance(scope, dict) else {}
+        required = PRIMARY_HORIZON_BY_STAGE.get(_stage(label.get("decision_stage")))
+        decision = clock(label.get("decision_ts"))
+        end = decision + timedelta(minutes=int(required[:-1])) if decision and required else None
+        reasons = []
+        if label.get("decision_stage") not in {"entry", "entry_screen"}:
+            status = "not_applicable"
+        else:
+            if (not identity or identities[identity] != 1 or not decision or not end
+                    or decision.date().isoformat() != target or not as_of or as_of < decision):
+                reasons.append("original_attempt_identity_or_clock_invalid")
+            body = {k: v for k, v in binding.items() if k != "sha256"}
+            if (binding.get("schema") != "compact_request_binding_supplement_v1"
+                    or binding.get("sha256") != _sha256(body)
+                    or binding.get("status") != "exact_request_bound"
+                    or binding.get("findings") != []
+                    or binding.get("decision_trace_id") != identity
+                    or not _is_sha256(label.get("primary_payload_sha256"))
+                    or binding.get("original_trace_payload_sha256") != label.get("primary_payload_sha256")
+                    or binding.get("archived_payload_sha256") != label.get("primary_payload_sha256")
+                    or not _is_sha256(binding.get("request_envelope_sha256"))
+                    or binding.get("runtime_effect") is not False
+                    or binding.get("allowed_runtime_apply") is not False
+                    or binding.get("canonical_primary_eligibility_changed") is not False):
+                reasons.append("exact_original_compact_request_unproven")
+            expected_sessions = {"REGULAR": {"KRX_REGULAR"},
+                                 "AFTER": {"KRX_NXT_AFTERMARKET", "NXT_AFTERMARKET"},
+                                 "PRE": {"PREMARKET_KRX_LIKE", "NXT_PREMARKET"}}
+            code = label.get("stock_code")
+            item = label.get("outcome_request_code")
+            if (label.get("entry_primary_decision_owner") != "mechanistic_entry_adjudicator"
+                    or label.get("entry_ai_role") != "auxiliary_risk_screen_pass_veto_no_promotion"
+                    or label.get("source_quality_status") != "pass"
+                    or scope.get("symbol") != code or not re.fullmatch(r"[0-9]{6}", str(code or ""))
+                    or scope.get("source_item") != item or not item
+                    or scope.get("venue") not in {"KRX", "NXT", "SOR"}
+                    or _request_code_for_venue(code, scope.get("venue")) != item
+                    or _exact_outcome_request_code(label, label) != item
+                    or _session(label.get("session_bucket")) not in expected_sessions.get(str(scope.get("market")), set())
+                    or not decision or not _timestamp_in_session(decision, label.get("session_bucket"))
+                    or not _venue_session_consistent(label.get("effective_venue"), label.get("session_bucket"))):
+                reasons.append("original_compact_owner_or_scope_unproven")
+            coverage = [p for p in provenance if isinstance(p, dict)
+                        and p.get("stock_code") == code
+                        and _venue(p.get("effective_venue")) == _venue(label.get("effective_venue"))
+                        and _session(p.get("session_bucket")) == _session(label.get("session_bucket"))
+                        and p.get("request_code") == item and p.get("response_request_code") == item
+                        and p.get("request_base_dt") == str(target).replace("-", "")
+                        and p.get("source_quality_status") == "pass_target_window_available"
+                        and not p.get("fetch_error")
+                        and (clock(p.get("coverage_start")) is not None)
+                        and (clock(p.get("coverage_end")) is not None)
+                        and _timestamp_in_session(clock(p["coverage_start"]), label.get("session_bucket"))
+                        and _timestamp_in_session(clock(p["coverage_end"]), label.get("session_bucket"))]
+            coverage = [p for p in coverage if decision and clock(p["coverage_start"]) <= decision
+                        and clock(p["coverage_start"]).date().isoformat() == target
+                        and clock(p["coverage_end"]).date().isoformat() == target]
+            if not coverage:
+                reasons.append("original_exact_route_price_provenance_unproven")
+            metrics = label.get("horizon_metrics")
+            metric = (metrics.get(required) or {}) if isinstance(metrics, dict) else {}
+            complete = (isinstance(metric, dict) and _number(metric.get("end_return_pct")) is not None
+                        and type(metric.get("sample_count")) is int and metric["sample_count"] > 0
+                        and metric.get("counterfactual_only") is True
+                        and metric.get("window_basis") == "post_decision_same_route"
+                        and clock(metric.get("window_start")) == decision
+                        and _venue(metric.get("observed_venue")) == _venue(label.get("effective_venue"))
+                        and _session(metric.get("observed_session_bucket")) == _session(label.get("session_bucket"))
+                        and end is not None and as_of is not None and as_of >= end
+                        # Completed minute candles have minute-open timestamps.
+                        and any(_parse_ts(p["coverage_end"]) + timedelta(minutes=1) >= end for p in coverage))
+            if reasons:
+                status = "source_gap"
+            elif complete:
+                status = "available"
+            elif end and as_of and as_of < end:
+                status = "pending"
+                reasons.append("required_original_price_horizon_not_due")
+            else:
+                status = "source_gap"
+                reasons.append("fixed_required_original_price_window_missing")
+        rows.append(dict(decision_trace_id=identity, stock_code=label.get("stock_code"),
+                         decision_ts=label.get("decision_ts"), status=status, reasons=sorted(set(reasons)),
+                         source_label_sha256=_sha256(label), compact_request_sha256=binding.get("sha256"),
+                         compact_source_scope=scope, effective_venue=label.get("effective_venue"),
+                         session_bucket=label.get("session_bucket"), outcome_request_code=label.get("outcome_request_code"),
+                         required_horizon=required, required_window_end=end.isoformat() if end else None,
+                         auxiliary_response_contract_valid=label.get("entry_auxiliary_response_contract_valid"),
+                         auxiliary_response_status=label.get("entry_ai_screen_status")))
+    body = dict(OFFLINE_CONTRACT, schema="compact_auxiliary_diagnostic_price_path_v1", target_date=target,
+                source_label_file_sha256=source_file_sha256, source_label_content_sha256=_sha256(report),
+                source_labels_sha256=_sha256(labels), source_as_of=report.get("outcome_as_of"),
+                original_label_count=len(labels), rows=rows,
+                status_counts=dict(Counter(row["status"] for row in rows)),
+                metric_role="diagnostic_price_path", decision_authority="report_only_original_attempt_price_observation",
+                primary_decision_metric=None,
+                validation_scope="original_source_identity_and_price_path_not_native_execution_or_economics",
+                forbidden_uses=[*OFFLINE_CONTRACT["forbidden_uses"], "canonical_primary_promotion",
+                                "policy_selection", "realized_or_counterfactual_economic_acceptance"],
+                primary_cohort_eligibility_changed=False, economic_acceptance_eligible=False,
+                net_ev_pct=None, actual_completed_profit=False,
+                owner="ai_decision_quality_original_compact_request_and_price_source")
+    return {**body, "artifact_content_sha256": _sha256(body)}
+
+
+def validate_compact_diagnostic_price_path(projection: dict, report: dict, *, source_file_sha256: str) -> bool:
+    try:
+        return projection == build_compact_diagnostic_price_path(report, source_file_sha256=source_file_sha256)
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        return False
+
+
+def _publish_compact_diagnostic_price_path(target_date: str, labels: dict) -> dict:
+    """Publish a separate observation; leave native label/control bytes intact."""
+    path = existing_or_gzip_path(label_report_path(target_date))
+    signature = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > 64 * 1024 * 1024:
+        raise ValueError("compact_diagnostic_source_path_invalid")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as physical:
+        if signature(os.fstat(physical.fileno())) != signature(before):
+            raise ValueError("compact_diagnostic_source_generation_changed")
+        stream = gzip.GzipFile(fileobj=physical, mode="rb") if path.suffix == ".gz" else physical
+        try:
+            raw = stream.read(64 * 1024 * 1024 + 1)
+        finally:
+            if stream is not physical:
+                stream.close()
+        if signature(os.fstat(physical.fileno())) != signature(before):
+            raise ValueError("compact_diagnostic_source_generation_changed")
+    if len(raw) > 64 * 1024 * 1024 or _sha256(json.loads(raw)) != _sha256(labels):
+        raise ValueError("compact_diagnostic_source_generation_changed")
+    projection = build_compact_diagnostic_price_path(labels, source_file_sha256=hashlib.sha256(raw).hexdigest())
+    if signature(before) != signature(path.lstat()) or existing_or_gzip_path(label_report_path(target_date)) != path:
+        raise ValueError("compact_diagnostic_source_generation_changed")
+    _atomic_write_json(compact_diagnostic_path(target_date), projection)
+    if signature(before) != signature(path.lstat()) or existing_or_gzip_path(label_report_path(target_date)) != path:
+        raise ValueError("compact_diagnostic_source_generation_changed")
+    return projection
+
+
 def annotate_materialized_label_contract(report: dict[str, Any]) -> dict[str, Any]:
     """Add diagnostic lineage without upgrading raw price paths to economics."""
     from copy import deepcopy
@@ -28129,6 +28310,7 @@ def _write_source_label_materialization_unlocked(target_date: str, reports: dict
         "control": _load_json(control_path(target_date)), "mature": _load_json(path)})
     if errors:
         raise ValueError("source_label_written_contract_invalid:" + ",".join(errors))
+    _publish_compact_diagnostic_price_path(target_date, labels)
 
 
 def reuse_source_label_materialization(target_date: str, *, write: bool, migrate: bool = False) -> dict | None:
@@ -28149,8 +28331,10 @@ def reuse_source_label_materialization(target_date: str, *, write: bool, migrate
         if any((c := (x.get("evaluation_label_contract") or {}).get("diagnostic_price_path") or {}).get("status") == "pending"
                and (end := _parse_ts(c.get("required_window_end"))) and as_of >= end for x in labels.get("labels") or []):
             return None
+        projection = _publish_compact_diagnostic_price_path(target_date, labels) if write else None
         return {"schema": DAILY_MATERIALIZATION_SCHEMA, "target_date": target_date,
                 "status": "unchanged_source_labels_reused", "candidate_execution_performed": False,
+                "compact_diagnostic_status_counts": projection.get("status_counts") if projection else None,
                 "artifact_paths": {"control": str(control_path(target_date)), "mature": str(label_report_path(target_date))},
                 **OFFLINE_CONTRACT}
     for name, artifact, schema in (("control", control, CONTROL_SCHEMA), ("labels", labels, LABEL_REPORT_SCHEMA)):
@@ -28166,6 +28350,17 @@ def reuse_source_label_materialization(target_date: str, *, write: bool, migrate
         raise ValueError("legacy_migration_source_census_mismatch")
     before = _sha256(labels)
     current_errors = validate_daily_materialization_reports(target_date=target_date, reports={"control": control, "mature": labels})
+    if not current_errors:
+        # This is an additive read projection of unchanged native artifacts.
+        # In particular, do not rebind old control inputs to this code revision.
+        projection = _publish_compact_diagnostic_price_path(target_date, labels) if write else None
+        return {"schema": DAILY_MATERIALIZATION_SCHEMA, "target_date": target_date,
+                "status": "unchanged_source_labels_diagnostic_observed",
+                "candidate_execution_performed": False, "price_provider_calls": 0,
+                "label_report_sha256": before, "original_native_artifacts_unchanged": True,
+                "compact_diagnostic_path": str(compact_diagnostic_path(target_date)),
+                "compact_diagnostic_status_counts": projection.get("status_counts") if projection else None,
+                **OFFLINE_CONTRACT}
     if current_errors:
         labels = annotate_materialized_label_contract(labels)
     # A code-only custody repair can rebind readiness without recalculating

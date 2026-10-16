@@ -1829,11 +1829,42 @@ def _auxiliary_scope_contract(value, report, source_date, scope):
     return errors
 
 
+def _compact_diagnostic_price_path_semantics(root: Path, source_date: str) -> dict[str, Any]:
+    """A separate observation never upgrades canonical/economic eligibility."""
+    from src.engine.scalping import ai_decision_quality as owner
+    logical = root / "data/report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{source_date}.json"
+    path = logical.with_suffix(".compact_diagnostic.json")
+    if not path.exists() and not path.is_symlink():
+        return dict(status="not_observed", findings=["compact_diagnostic_projection_missing"],
+                    artifact=str(path), primary_cohort_eligibility_changed=False)
+    try:
+        actual = existing_or_gzip_path(logical)
+        source_before, projection_before = actual.stat(), path.stat()
+        labels, source_sha = _semantic_object(logical)
+        projection, sha = _semantic_object(path, limit=8 * 1024 * 1024)
+        if (labels.get("target_date") != source_date
+                or not owner.validate_compact_diagnostic_price_path(projection, labels, source_file_sha256=source_sha)):
+            raise ValueError("compact_diagnostic_projection_contract_invalid")
+        if (_observer_file_signature(source_before) != _observer_file_signature(actual.stat())
+                or _observer_file_signature(projection_before) != _observer_file_signature(path.stat())
+                or existing_or_gzip_path(logical) != actual):
+            raise ValueError("compact_diagnostic_projection_generation_changed")
+        return dict(status="observed", findings=[], status_counts=projection["status_counts"],
+                    original_label_count=projection["original_label_count"],
+                    source_label_file_sha256=source_sha, source_label_content_sha256=projection["source_label_content_sha256"],
+                    artifact=str(path), report_sha256=sha, metric_role="diagnostic_price_path",
+                    primary_cohort_eligibility_changed=False, economic_acceptance_eligible=False,
+                    actual_completed_profit=False, runtime_effect=False)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+        return dict(status="source_invalid", findings=[str(exc)], artifact=str(path),
+                    primary_cohort_eligibility_changed=False, economic_acceptance_eligible=False)
+
+
 def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     """Audit the bounded AI-stage receipt; selection is not live consumption."""
     reversal = _continuous_reversal_result_semantics(root, source_date, 'auxiliary')
     if reversal is not None:
-        return reversal
+        return {**reversal, "compact_diagnostic_price_path": _compact_diagnostic_price_path_semantics(root, source_date)}
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
 
     terminal_path = (root / "data/report/postclose_stage_terminal" / source_date
@@ -2105,6 +2136,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             "paired_comparable_count": economic_compared,
             "outcome_label_source_gap_count": label_gap_count,
             "independent_price_path_counts": independent_path_counts,
+            "compact_diagnostic_price_path": _compact_diagnostic_price_path_semantics(root, source_date),
             "first_source_gap": first_gap,
             "source_lineage_counts": lineage,
             "source_date": source_date, "report_sha256": report["artifact_content_sha256"],

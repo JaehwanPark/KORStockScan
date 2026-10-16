@@ -1136,3 +1136,326 @@ def test_native_fact_scalar_preserves_terminal_scale_in_presence(tmp_path,monkey
     value=report_mod._load_completion_fact_projection(day,path)
     row=value['sections']['completed_trade_projection'][0]
     assert {key:row[key] for key in ('add_count','avg_down_count','pyramid_count') if key in row}==counts
+
+
+def _legacy_unreceipted_original(tmp_path, monkeypatch, *, large=True):
+    from pathlib import Path
+    from src.engine import log_archive_service as archive
+    from src.engine.scalping import initial_quantity_policy as quantity
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    day = '2026-09-30'
+    directory = tmp_path/'report/monitor_snapshots'; directory.mkdir(parents=True)
+    monkeypatch.setattr(report_mod, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(report_mod, '_FACT_SYNC_STATUS_DIR', tmp_path/'report/strategy_position_fact_sync')
+    monkeypatch.setattr(report_mod, '_enrich_scanner_provenance', lambda facts,*a,**k: facts)
+    monkeypatch.setattr(quantity, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', directory)
+    row = dict(id=49013, rec_date=day, code='066570', name='original', strategy='SCALPING',
+        position_tag='SCANNER', status='COMPLETED', buy_price=214500, buy_qty=2,
+        buy_time=day+'T11:48:12', sell_price=215000, sell_time=day+'T13:37:11',
+        profit_rate=0.0, realized_pnl_krw=0, add_count=0, avg_down_count=0, pyramid_count=0,
+        timeline=[{'sequence':i,'observation':'x'*10000} for i in range(530 if large else 2)])
+    complete = dict(row, completion_observed_date=day, terminal_population_scope='real_record_bound',
+        strict_completion_status='excluded', strict_completion_reasons=['source_gap_broker_actual_cost_missing'],
+        broker_actual_cost_observed=False, broker_actual_fees_taxes_krw=None,
+        realized_pnl_krw_source='configured_comparison_model', configured_fee_estimate_krw=989,
+        actual_cost_reconciliation={'status':'cost_source_unavailable'})
+    meta = dict(snapshot_profile='postclose_exit', warnings=[], sell_completed_event_ids=['49013'],
+        completion_event_id_count=1, completed_census_input_sha256='c'*64,
+        trailing_event_source_receipts=[{'path':'original-source','sha256':'a'*64}])
+    raw = dict(date=day, code=None, scope='entered', since=None, meta=meta,
+        metrics=dict(total_trades=1, canonical_completed_trades=1),
+        sections=dict(recent_trades=[row], completed_trade_projection=[complete],open_scalp_position_projection=[]))
+    census=completed_census_manifest(raw);census.pop('actual_cost_source_generation')
+    meta['completed_census_manifest']=census
+    path=directory/f'trade_review_{day}.json';path.write_text(json.dumps(raw,ensure_ascii=False,separators=(',',':')))
+    value=dict(schema='trade_review_completed_projection_sidecar_v1',date=day,code=None,since=None,
+        meta=meta,metrics=raw['metrics'],sections=dict(completed_trade_projection=[complete],open_scalp_position_projection=[]),
+        snapshot_identity=archive_identity(path))
+    value['artifact_sha256']=report_mod._canonical_sha256(value)
+    sidecar=path.with_suffix('.completed_projection.json');sidecar.write_text(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+    older=dict(raw, meta={**meta,'snapshot_profile':'full'})
+    Path(str(path)+'.gz').write_bytes(gzip.compress(json.dumps(older).encode()))
+    return day,path
+
+
+def archive_identity(path):
+    from src.engine.lifecycle.snapshot_archive import file_identity
+    return file_identity(path.lstat())
+
+
+def _write_legacy_status(day, value):
+    proof=value['_native_source_proof']; census=value['meta']['completed_census_manifest']
+    return report_mod._write_status(day, dict(status='succeeded',
+        completed_census_run_ids=[census['run_id']], completed_census_projection_sha256=[census['projection_sha256']],
+        actual_cost_source_generation=proof['actual_cost_source_generation'], completion_snapshot_source=proof))
+
+
+def test_legacy_unreceipted_native_original_is_verified_once_without_rewriting_sources(tmp_path,monkeypatch):
+    from src.engine.scalping import initial_quantity_policy as quantity
+    import hashlib
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch)
+    sources=[path,path.with_suffix('.completed_projection.json'),path.with_suffix('.json.gz')]
+    before={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
+    quality={};facts,warnings=report_mod._build_trade_fact_rows(day,completion_snapshot=path,completion_census_quality=quality)
+    assert warnings==[] and len(facts)==1
+    assert facts[0]['profit_rate'] is None and facts[0]['realized_pnl_krw'] is None
+    assert facts[0]['economics_source_status']=='source_gap_broker_actual_cost_missing'
+    assert facts[0]['actual_cost_source_generation'] is None
+    assert quality['actual_cost_source_generation']['status']=='cost_source_unavailable'
+    value=report_mod._load_completion_fact_projection(day,path);status=_write_legacy_status(day,value)
+    assert 'legacy_original_validation' in status['completion_snapshot_source']
+    assert not path.with_suffix('.completed_projection.json.dependencies.json').exists()
+    assert not path.with_suffix('.fact_projection.json').exists()
+    monkeypatch.setattr(report_mod,'_legacy_original_stream',lambda *a:pytest.fail('original stream repeated'))
+    monkeypatch.setattr(report_mod,'load_monitor_snapshot',lambda *a:pytest.fail('large JSON decoded'))
+    assert report_mod._saved_fact_generation_issue(day) is None
+    assert quantity._quantity_fact_generation_issue(day) is None
+    assert {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}==before
+
+
+@pytest.mark.parametrize('mutation',['self_seal','census','row','source_receipts','snapshot_identity','trailing_data','cost','wrong_date'])
+def test_legacy_unreceipted_original_rejects_invalid_native_evidence(tmp_path,monkeypatch,mutation):
+    from src.engine.lifecycle.broker_cost_reconciliation import receipt_path
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    sidecar=path.with_suffix('.completed_projection.json');value=json.loads(sidecar.read_bytes())
+    if mutation=='self_seal':value['artifact_sha256']='0'*64
+    elif mutation=='census':value['meta']['completed_census_manifest']['raw_terminal_count']=0
+    elif mutation=='row':value['sections']['completed_trade_projection'][0]['buy_qty']=3
+    elif mutation=='source_receipts':value['meta']['trailing_event_source_receipts'][0]['sha256']='b'*64
+    elif mutation=='snapshot_identity':value['snapshot_identity']['size']+=1
+    elif mutation=='wrong_date':value['date']='2026-09-29'
+    elif mutation=='cost':
+        p=receipt_path(tmp_path,day,'49013');p.parent.mkdir(parents=True);p.write_text('{}')
+    if mutation not in {'self_seal','cost'}:
+        value['artifact_sha256']=report_mod._canonical_sha256({k:v for k,v in value.items() if k!='artifact_sha256'})
+    sidecar.write_text(json.dumps(value))
+    if mutation=='trailing_data':
+        with sidecar.open('ab') as h:h.write(b' {}')
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day,path)
+    assert not list((tmp_path/'report/strategy_position_fact_sync').glob('legacy_sources/*/*.json'))
+
+
+@pytest.mark.parametrize('mutation',['source','projection','proof_bytes','proof_ref','cost','status_census','proof_symlink','proof_fifo'])
+def test_legacy_native_proof_rejects_changed_sources_or_forged_receipts_without_restream(tmp_path,monkeypatch,mutation):
+    from pathlib import Path
+    from src.engine.lifecycle.broker_cost_reconciliation import receipt_path
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    value=report_mod._load_completion_fact_projection(day,path);status=_write_legacy_status(day,value)
+    proof=Path(status['completion_snapshot_source']['legacy_original_validation']['path'])
+    if mutation=='source':
+        with path.open('ab') as h:h.write(b' ')
+    elif mutation=='projection':
+        with path.with_suffix('.completed_projection.json').open('ab') as h:h.write(b' ')
+    elif mutation=='proof_bytes':
+        with proof.open('ab') as h:h.write(b' ')
+    elif mutation=='proof_ref':status['completion_snapshot_source']['legacy_original_validation']['sha256']='f'*64
+    elif mutation=='status_census':status['completed_census_run_ids']=['f'*24]
+    elif mutation=='cost':
+        p=receipt_path(tmp_path,day,'49013');p.parent.mkdir(parents=True);p.write_text('{}')
+    elif mutation=='proof_symlink':
+        saved=proof.with_suffix('.saved');proof.rename(saved);proof.symlink_to(saved)
+    elif mutation=='proof_fifo':
+        import os
+        proof.unlink();os.mkfifo(proof)
+    if mutation in {'proof_ref','status_census'}:
+        status['artifact_sha256']=report_mod._canonical_sha256({k:v for k,v in status.items() if k!='artifact_sha256'})
+        report_mod._status_path(day).write_text(json.dumps(status))
+    monkeypatch.setattr(report_mod,'_legacy_original_stream',lambda *a:pytest.fail('large source reread'))
+    assert report_mod._saved_fact_generation_issue(day) is not None
+
+
+def test_legacy_native_proof_reused_by_explicit_cli_without_large_stream(tmp_path,monkeypatch):
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    value=report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+    original=value['_native_source_proof']
+    monkeypatch.setattr(report_mod,'_legacy_original_stream',lambda *a:pytest.fail('historical source repeated'))
+    monkeypatch.setattr(report_mod,'_stream_original_fact_projection',lambda *a,**k:pytest.fail('historical scalar re-extracted'))
+    assert report_mod._load_completion_fact_projection(day,path)['_native_source_proof']==original
+
+
+def test_legacy_native_proof_retains_logical_identity_after_native_compression(tmp_path,monkeypatch):
+    from pathlib import Path
+    from src.engine import compress_db_backfilled_files as archive
+    from src.engine.scalping import initial_quantity_policy as quantity
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    value=report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+    original=value['_native_source_proof']
+    # This synthetic old gzip is a different generation; native archive may
+    # begin only after it is removed in this isolated test fixture.
+    Path(str(path)+'.gz').unlink()
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',path.parent)
+    for p in (path,path.with_suffix('.completed_projection.json')):
+        assert archive._gzip_file(p,dry_run=False)[0]
+    monkeypatch.setattr(report_mod,'_legacy_original_stream',lambda *a:pytest.fail('compressed source decoded again'))
+    assert report_mod._saved_fact_generation_issue(day) is None
+    assert quantity._quantity_fact_generation_issue(day) is None
+    assert report_mod._load_completion_fact_projection(day,path)['_native_source_proof']==original
+
+
+@pytest.mark.parametrize('mutation',['duplicate_field','boolean_count','no_source_receipts','scalar_value_unbounded','metric_bool','nested_depth','event_count_bool','meta_shape','metrics_shape','row_shape'])
+def test_legacy_stream_has_strict_bounded_canonical_json_contract(tmp_path,monkeypatch,mutation):
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    sidecar=path.with_suffix('.completed_projection.json');value=json.loads(sidecar.read_bytes())
+    if mutation=='meta_shape':value['meta']=[]
+    elif mutation=='metrics_shape':value['metrics']=[]
+    elif mutation=='row_shape':value['sections']['completed_trade_projection']=[42]
+    elif mutation=='metric_bool':value['metrics']['canonical_completed_trades']=True
+    elif mutation=='nested_depth':
+        nested=0
+        for _ in range(80):nested=[nested]
+        value['sections']['open_scalp_position_projection']=[nested]
+    elif mutation=='event_count_bool':value['meta']['completion_event_id_count']=True
+    elif mutation=='boolean_count':value['meta']['completed_census_manifest']['strict_count']=False
+    elif mutation=='no_source_receipts':value['meta']['trailing_event_source_receipts']=[]
+    elif mutation=='scalar_value_unbounded':value['sections']['completed_trade_projection'][0]['timeline']=[{'text':'x'*(1024*1024)}]
+    value['artifact_sha256']=report_mod._canonical_sha256({k:v for k,v in value.items() if k!='artifact_sha256'})
+    raw=json.dumps(value)
+    if mutation=='duplicate_field':raw=raw.replace('"snapshot_profile": "postclose_exit"','"snapshot_profile": "postclose_exit", "snapshot_profile": "postclose_exit"')
+    sidecar.write_text(raw)
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod._load_completion_fact_projection(day,path)
+
+
+@pytest.mark.parametrize('when',['during_native_validation','during_fact_write','during_bounded_verification'])
+def test_legacy_native_generation_races_fail_closed_and_preserve_database(tmp_path,monkeypatch,when):
+    from datetime import date
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from src.database.models import TradePerformanceFact,StrategyPositionPerformanceDaily
+    from src.engine.scalping import scale_in_split_order_plan
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    engine=create_engine('sqlite:///:memory:');TradePerformanceFact.__table__.create(engine);StrategyPositionPerformanceDaily.__table__.create(engine)
+    class DB:
+        def init_db(self):pass
+        def analyze_performance_tables(self):pass
+        @contextmanager
+        def get_session(self):
+            with Session(engine) as session, session.begin():yield session
+    monkeypatch.setattr(report_mod,'_DB',DB());monkeypatch.setattr(scale_in_split_order_plan,'_query_actual_fill_inventory',lambda _:[])
+    with Session(engine) as session,session.begin():
+        session.add(TradePerformanceFact(recommendation_id=49013,rec_date=date.fromisoformat(day),stock_code='066570',strategy='SCALPING',position_tag='SCANNER',status='COMPLETED',profit_rate=0,realized_pnl_krw=0))
+    if when=='during_native_validation':
+        original=report_mod._legacy_original_stream
+        def changed(*a,**k):
+            result=original(*a,**k)
+            with path.open('ab') as h:h.write(b' ')
+            return result
+        monkeypatch.setattr(report_mod,'_legacy_original_stream',changed)
+    elif when=='during_fact_write':
+        original=Session.bulk_insert_mappings
+        def changed(*a,**k):
+            result=original(*a,**k)
+            with path.open('ab') as h:h.write(b' ')
+            return result
+        monkeypatch.setattr(Session,'bulk_insert_mappings',changed)
+    else:
+        value=report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+        from src.engine.lifecycle import snapshot_archive
+        original=snapshot_archive.snapshot_identity
+        def changed(p):
+            result=original(p)
+            if p==path.with_suffix('.completed_projection.json'):
+                with path.open('ab') as h:h.write(b' ')
+            return result
+        monkeypatch.setattr(snapshot_archive,'snapshot_identity',changed)
+        assert report_mod._saved_fact_generation_issue(day) is not None
+        return
+    with pytest.raises(report_mod.FactSyncSourceError):report_mod.sync_trade_performance_for_date(day,completion_snapshot=path)
+    with Session(engine) as session:
+        assert session.get(TradePerformanceFact,49013).profit_rate==0
+        assert session.get(TradePerformanceFact,49013).realized_pnl_krw==0
+
+
+def test_legacy_fact_sync_repairs_unproved_zero_economics_to_null_and_keeps_source_window(tmp_path,monkeypatch):
+    from datetime import date
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from src.database.models import TradePerformanceFact,StrategyPositionPerformanceDaily
+    from src.engine.scalping import scale_in_split_order_plan,initial_quantity_policy as quantity
+    from src.engine.lifecycle.holding_window_generation import capture_window
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=True)
+    window_before=capture_window(tmp_path,[day])
+    engine=create_engine('sqlite:///:memory:');TradePerformanceFact.__table__.create(engine);StrategyPositionPerformanceDaily.__table__.create(engine)
+    class DB:
+        def init_db(self):pass
+        def analyze_performance_tables(self):pass
+        @contextmanager
+        def get_session(self):
+            with Session(engine) as session,session.begin():yield session
+    monkeypatch.setattr(report_mod,'_DB',DB());monkeypatch.setattr(scale_in_split_order_plan,'_query_actual_fill_inventory',lambda _:[])
+    with Session(engine) as session,session.begin():
+        session.add(TradePerformanceFact(recommendation_id=49013,rec_date=date.fromisoformat(day),stock_code='066570',strategy='SCALPING',position_tag='SCANNER',status='COMPLETED',profit_rate=0,realized_pnl_krw=0))
+    result=report_mod.sync_trade_performance_for_date(day,completion_snapshot=path)
+    assert result['status']=='succeeded' and result['fact_count']==1
+    receipt=json.loads(report_mod._status_path(day).read_bytes())
+    assert receipt['economics_valid_completed_count']==0 and receipt['economics_missing_completed_count']==1
+    with Session(engine) as session:
+        row=session.get(TradePerformanceFact,49013)
+        assert row.profit_rate is None and row.realized_pnl_krw is None
+        assert row.economics_source_status=='source_gap_broker_actual_cost_missing'
+        assert row.actual_cost_source_generation is None and row.broker_actual_fees_taxes_krw is None
+        assert row.completion_census_run_id==receipt['completed_census_run_ids'][0]
+    assert report_mod._saved_fact_generation_issue(day) is None
+    assert quantity._quantity_fact_generation_issue(day) is None
+    assert capture_window(tmp_path,[day])==window_before
+
+
+def test_legacy_canonical_stream_handles_native_exponents_and_unicode_across_read_chunks(tmp_path,monkeypatch):
+    import io
+    from src.engine.lifecycle import research_json_stream
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    sidecar=path.with_suffix('.completed_projection.json');value=json.loads(sidecar.read_bytes())
+    value['sections']['open_scalp_position_projection']=[{'unicode':'관측','fraction':1e-20,'nested':{'b':2,'a':1}}]
+    value['artifact_sha256']=report_mod._canonical_sha256({k:v for k,v in value.items() if k!='artifact_sha256'})
+    sidecar.write_text(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+    def tiny_fill(self):
+        self.buffer=self.buffer[self.offset:];self.offset=0
+        text=self.handle.read(1);self.buffer+=text;self.eof=not text
+        return bool(text)
+    monkeypatch.setattr(research_json_stream.Reader,'fill',tiny_fill)
+    assert report_mod._load_completion_fact_projection(day,path)['date']==day
+
+
+def test_legacy_sidecar_byte_sha_is_captured_during_the_single_canonical_stream(tmp_path,monkeypatch):
+    import hashlib
+    from src.engine.lifecycle import snapshot_archive
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    sidecar=path.with_suffix('.completed_projection.json')
+    # A native JSON sidecar remains valid with insignificant CRLF whitespace;
+    # the byte generation must preserve those bytes while the self-seal uses
+    # the existing canonical JSON contract.
+    value=json.loads(sidecar.read_bytes());sidecar.write_bytes(json.dumps(value,indent=2).replace('\n','\r\n').encode())
+    expected=hashlib.sha256(sidecar.read_bytes()).hexdigest()
+    native_generation=snapshot_archive.generation
+    def no_sidecar_second_hash(p):
+        assert p!=sidecar,'sidecar was rescanned for its byte SHA'
+        return native_generation(p)
+    monkeypatch.setattr(snapshot_archive,'generation',no_sidecar_second_hash)
+    value=report_mod._load_completion_fact_projection(day,path)
+    assert value['_native_source_proof']['projection']['sha256']==expected
+
+
+def test_quantity_legacy_generation_does_not_leak_canonical_fact_root_into_isolated_context(tmp_path,monkeypatch):
+    from src.engine.scalping import initial_quantity_policy as quantity
+    from src.engine import log_archive_service as archive
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    value=report_mod._load_completion_fact_projection(day,path);_write_legacy_status(day,value)
+    isolated=tmp_path/'isolated';isolated.mkdir()
+    monkeypatch.setattr(quantity,'DATA_DIR',isolated)
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',isolated/'report/monitor_snapshots')
+    assert quantity._quantity_fact_generation_issue(day)=='trade_review_snapshot_missing'
+    assert report_mod._legacy_original_generation_issue(day)==(True,None)
+    assert report_mod._legacy_original_generation_issue(day,data_dir=isolated)==(False,None)
+
+
+def test_legacy_canonical_stream_cannot_silently_drop_oversized_selected_terminal_metadata(tmp_path,monkeypatch):
+    day,path=_legacy_unreceipted_original(tmp_path,monkeypatch,large=False)
+    sidecar=path.with_suffix('.completed_projection.json');value=json.loads(sidecar.read_bytes())
+    value['sections']['completed_trade_projection'][0]['exit_signal']={
+        'inferred':False,'binding_status':'same_order_generation','debug':[{'trace':'x'*10000} for _ in range(60)]}
+    value['artifact_sha256']=report_mod._canonical_sha256({k:v for k,v in value.items() if k!='artifact_sha256'})
+    sidecar.write_text(json.dumps(value))
+    with pytest.raises(report_mod.FactSyncSourceError,match='selected_metadata_partition_required'):
+        report_mod._legacy_original_stream(sidecar,day)
