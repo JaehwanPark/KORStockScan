@@ -164,3 +164,34 @@ bdd461fde 최초 일반 preflight는 원 PID 부재로 selector 전 차단됐다
 a01b84d79의09:47:58 native preflight는 호환 기존bdd CLI에 같은 UUID를 전달했지만09:49:59 기존120초에서 timeout됐다. selector/Main3016558은 그대로이며 원 failed attempt는 보존한다.112초 관측의 논리16.60GB/물리16.28GB와 원 digest metadata의 경로·크기 발견을 대조하면 역사10/12–10/15 pipeline4개15,473,647,020바이트가 cold 원천이다. metadata의 이전 digest/판정은 재사용하지 않는다.
 
 transition digest TTL은120초이며 postclose600초와 다르다. TTL/deadline/의미 검증은 늘리거나 생략하지 않는다. 새 시도 전 가장 큰 역사10/13 파일7,394,107,688바이트만 genuine 현재 PID/start/cwd/code/root/date와 새 UUID의 기존 transition_session으로 새로 읽는다. native identity 전후 검사 후 content digest만 게시하고 어떤 PASS/선택/정책/영수증도 만들지 않는다. 즉시 같은 UUID로 정규 ordered driver/잠금/120초 검증을 실행한다. 만료·source/PID/code 변경·불일치는 원 full 재검증 또는 실패다. 전체4개를 미리 읽으면120초 수명을 소진할 수 있으므로 단일 큰 파일로 준비를 제한한다. cold 준비 I/O와 각 native phase I/O/소요시간을 분리해 기록하며 단축을 미리 주장하지 않는다.
+
+
+## c94c66973 실제 기동 소비·150초 실패와 같은 PID의 제한 복구
+
+단일 파일 cold 준비22.65초/7,394,107,688바이트 후 기존 PID H39.34초(논리10.11GB·재사용8.05GB)와 bootstrap5.36초(과거4개15.47GB 해시 재사용)가 PASS였다. native drain09:58:57 뒤 후보 H prepare63.75초·bootstrap6.23초가 PASS이고10:00:11 launcher가 시작됐다. 이 실제 단계 비용은 전체 반복 I/O 해소나 warm≥90% 수용과 다르다.
+
+Main3083694/start_ticks17636435의 native bootstrap PID PASS와 H consume PASS10:02:31을 확인했다. 그러나 최종 H verify에서120초 cache가 만료되어 역사 raw16.997GB를 다시 읽었고132.93초가 걸렸다. 배포기의 기존 startup consumption deadline은150초이며10:02:42 `deployment_pid_attestation_timeout`으로 실패/보호 hold를 발행했다. 원150초 시도는 FAIL이다. timeout 뒤 정규 full detector와 읽기가 겹쳤다. 최종 native H verify 자체는 PASS였지만 launcher의 selector 기록은 failed transition으로 거부됐다. 이 실패를 startup PASS로 소급하지 않는다.
+
+10:03 정규 startup outbox recovery는 원49294/036930/order0015649/execution30414를 typed custody receipt로 append/ACK하고 journal을 제거했다. 거래소UNKNOWN/provenance false/actual_execution_venue_unresolved·비용 unavailable는 그대로다.10:04:05/10:05/10:06 native loop는 watching5/holding0이다. [036930 실제 ACK](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/native-sell-036930-terminal-acceptance.json). 수동456010 파일 SHA9d169aed…도 불변이다.
+
+승인된 실패 지점 복구는 동일 선택본·PID/start/cwd·supervisor·정책 manifest·원 H consumed·bootstrap PASS와 정확한 이 배포의 hold만 대상으로 한다. detector가 끝난 뒤 정규 잠금 안에서 단일 content hash 준비 및 기존120초 native H/bootstrap 전체 검증을 새로 수행한다. 어떤 사전검증도 실패하면 상태 변경0이다. 원 failed status/hold/selector/consumed bytes를 recovery 하위 불변 증거로 봉인하고 원 FAIL/SHA를 현재 owner에 별도 연결한 뒤 native PID provenance recorder와 원 D.attest를 실행한다. fresh native 검증과 같은 PID의 최종 attestation 이후에만 정확한 자기 hold를 해제한다. 재시작·주문·다른 hold 제거·deadline 연장0이며 복구 성공과 원 startup150초 실패를 분리한다. pending/source gap·자연 야간 수용은 원 owner에 유지한다.
+
+
+같은 PID의 제한 복구는10:13:11.968154 PASS다. [native 복구 영수증](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/live-native-attestation-recovery.json), [원150초 FAIL 불변 증거](/home/ubuntu/KORStockScan/data/runtime/release_transitions/2026-10-16/c94c669738d9b2c1d9bec78af9967a80ed6c02a3/recoveries/b6134abe3c614f1387c28806958fe404/failed-status.json). 새 full PID 검증/기존 D.attest/현재 selector·singleton·PID/start/cwd·native startup ready를 확인한 뒤 자기 hold만 해제했고 추가 재기동은0이다. 현재 selected c94c669738d9b2c1d9bec78af9967a80ed6c02a3/Main3083694/start17636435다.
+
+독립 read-only 대사는 native startup ready·bootstrap PID PASS·hold/restart 없음·optional UID1000 calendar true/역사17개 SHA 불변·원4개 SELL journal 부재·실제 watching5·WS 현재 PID/root/commit/connected/writer_loss0/projection_errors0을 확인했다. 실제 DB의 최신49342–49346 WATCHING5와 원49294/49300/49328/49267 COMPLETED를 조회했으며 오래된 DB WATCHING을 현재 cohort로 세지 않았다. WS registry는 local sent 근거이고 broker REG ACK로 확대하지 않는다. [최종 native 대사](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/final-native-acceptance.json).
+
+원 보호파일 대사의 selector/verify는 이 승인 인계로 변경됐고, 수동 제외·canonical checklist는 다른 세션의 최신 SHA9d169aed…/394a2f6e…를 보존했다. 나머지 정책/준비 원본은 불변이다. 일부 오래된 error log는 동시 cleanup 뒤 부재다. size baseline만으로 원 prefix bytes 보존을 증명하지 않으며 부재·회전은 관측 공백으로 기록한다. 우리 작업은 원 error/실패를 삭제하지 않았다.10:08–10:13의 stale observer/failed startup/I/O·swap FAIL은 보존하고 후속 current-PID 자연 검사로 따로 수용한다. 전체 FAIL0은 아직 주장하지 않는다.
+
+10:00 기준일 정규 holding 보고서의 새 code 소비 결과는 policy_binding_gaps0/runtime_consumption_gaps0, status source_gap다. 원49328/49267/49300/49340의 tp_first_crossing_transition_missing4건과 비용 unavailable를 유지한다. 이 과거 원천 공백 및036930 actual_execution_venue_unresolved는 경제성/complete로 합성하지 않으며 HoldingProfitExitSourceContractRepair가 소유한다. 다음 자연 optional 야간은 MainMarketWeaknessPostcloseObservation1008 OPEN, cold startup150초 비용 수용은 DirectFamilyPreopenPolicyHandoff의 원 실패 증거와 함께 유지한다.
+
+
+## 10:22 정규 전체 수용 — 현재 FAIL0과 보존한 원 실패
+
+10:15 Buy Funnel은 원130초 제한에서124로 실패했고 source-only fallback은 missing_stale_or_noncurrent_sentinel_evidence를 정확히 게시했다.10:10 실행은 selector/transition 복구 중 observer_generation_changed_during_run으로 deferred였으며 둘 다 원 상태·이력을 유지한다.10:20 정규 재시도는10:20:34.869562 full/completed로 회복했다. 건강 상태는 bounded_source_quality_observation/warning_pending이며 scanner identified0/fixed-watch identified16을 구분한다. 평가 전 source-quality 차단·native incomplete/no-match 진단과 partial/current_observation_verified false/full_coverage_proven false를 보존한다. 실제 source gap이나 부재를 PASS/빈 모집단으로 채우지 않는다.
+
+10:22:17 정규 전체 검사7개는 artifact_freshness warning, cron/auth/log/process/resource/lock6개 PASS로 **FAIL0**이다. 현재 PID/root/commit과 startup consumption ready를 대조했고 source code 변경 없이 나온 자연 결과다. 앞선 I/O wait 최대69.35%·swap/10:18:22 analyze_target HTTP budget timeout1건 및07:55 첫 기동의 I/O 오류를 삭제하지 않았다.10:22 이후 상태를 당시07:55 무오류로 소급하거나 향후 모든 기동을 보장하지 않는다. [정규 FAIL0 불변 스냅샷](/home/ubuntu/KORStockScan/tmp/postclose-read-reduction-deploy-20261016-0740/full-detector-fail0-20261016-102217.json).
+
+최종 현재 고정 상시감시는005930/034020/403870/196170/036930의5개이며10:22:13 runtime watching5/holding0이다. 원036930 ACK가 회복된 뒤49342가 실제 편입됐고 journal을 강제 편집하거나 watch 충돌 guard를 완화하지 않았다. 최종 source code는 c94c66973 선택본과 동일하며 추가 artifact-cache 구조 변경을 운영에 넣지 않았다. 코드2389 대상 회귀/선행 수리 회귀·각 generation fixture와 이미 완료한 native 검증을 유지하고 이 문서 종결은 diff/링크·owner/print-only parser만 검증한다.
+
+남은 수용은 원4건의 first-crossing source gap/비용 unavailable/036930 실제 venue unresolved, sparse scanner/보조평가 lineage 및 optional 다음 자연 야간이다. 각각 기존 HoldingProfitExitSourceContractRepair, NonfixedDispatchReadinessReview1012·DirectFamilyPreopenPolicyHandoff, MainMarketWeaknessPostcloseObservation1008에서 실제 원천·다음 자연 세대로 확인한다. 운영 FAIL0은 complete 원천/경제성 PASS가 아니다. native cold150초 최초 시도 실패와 후속 같은-PID 복구는 위 원 FAIL/복구 영수증으로 구분해 보존한다.

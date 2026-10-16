@@ -224,3 +224,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 predecessor native preflight 반복 읽기/120초 timeout도 같은 DirectFamilyPreopenPolicyHandoff가 소유한다. 정확히 같은 CLI/cache에 session을 전달하고 원 deadline/의미 검증을 유지한다. 실제 native validation_io·새 PID·036930 ACK·5개 편입·최종 detector로 수용하며 원 timeout을 보존한다.
 
 09:49 cold timeout의 실패 이력을 보존하고 같은 배포 owner에서 기존 transition TTL120초/의미 검증을 유지한다. 단일 역사파일 content-hash 준비와 native phase 비용을 구분해 실제 PID/ACK/고정5개 수용을 확인한다. 원 운영 checklist bytes는 유지한다.
+
+10:13:11 같은-PID native 복구/PID3083694와 원4개 SELL ACK·고정5개를 확인했다.10:20 자연 full observer 회복과10:22:17 전체 FAIL0(경고1/PASS6)을 대조했다. 원150초 timeout·I/O/원천 결손·다음 optional 야간 OPEN은 유지하며 상세 감사 근거를 따른다. canonical 당일 checklist는 SHA394a2f6e… 그대로다.
