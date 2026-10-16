@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import hashlib
 
@@ -1174,6 +1175,85 @@ def test_atomic_sizing_lineage_resolves_exact_immediate_plan_leg_index():
     report = split_plan.build_atomic_execution_sizing_lineage(
         "2026-09-28", [plan, leg, bundle], source_generation=source)
     assert "submit_leg_plan_quantity_or_index_invalid" in report["rows"][0]["source_quality_reasons"]
+
+
+def _atomic_residual_fixture():
+    from types import SimpleNamespace
+    from src.engine.scalping import entry_cancel_wait_runtime as runtime
+    day = "2026-09-28"
+    plan, leg, bundle, source = _atomic_lineage_fixture(day)
+    core = copy.deepcopy(plan["entry_execution_sizing_plan"])
+    core["legs"][0]["execution_phase"] = "immediate"
+    core["legs"][1]["execution_phase"] = "after_verified_probe_fill"
+    sha = split_plan._canonical_sha256(core)
+    for event in (plan, leg, bundle):
+        event.update(entry_execution_sizing_plan_id=f"entry-sizing-{sha[:24]}",
+                     entry_execution_sizing_plan_sha256=sha)
+    plan["entry_execution_sizing_plan"] = core
+    leg.update(entry_split_order_probe_first_applied="True",
+               entry_split_order_probe_bundle_id="probe-1", owner_registry_intent_id="intent-1")
+    stock = dict(id="record-1", code="005930", entry_split_probe_bundle_id="probe-1",
+                 entry_split_probe_requested_qty=3)
+    owner = SimpleNamespace(owner_type="main_scalping", owner_id="main_scalping:record-1",
+                            client_intent_id="residual-client")
+    stock["entry_split_probe_submit_source"] = runtime.probe_submit_source(stock,
+        parent_id="attempt-1", account_key="account-1", owner_context=owner,
+        planned_qty=3, source_date=day)
+    at = datetime.fromisoformat(day+"T10:01:00+09:00").timestamp()
+    fields = runtime.residual_submission_fields(stock, {"tag":"entry_split_probe_residual_1"},
+        owner_context=owner, account_key="account-1", intent_id="intent-2", order_no="0023456",
+        qty=2, price=10000, route="KRX", now_ts=at)
+    residual = {**fields, "stage":"order_leg_sent", "source_date":day,
+        "record_id":"record-1", "stock_code":"005930", "effective_venue":"KRX",
+        "market_session_bucket":"KRX_REGULAR", "residual_source_only":"True",
+        "tag":"entry_split_probe_residual_1", "actual_order_submitted":True,
+        "broker_order_no":"0023456", "requested_qty":"2", "submitted_qty":"2", "broker_route":"KRX"}
+    registry = _atomic_registry_rows(day, 1, 1)
+    registry.extend({**row, "intent_id":"intent-2", "broker_order_no":"0023456",
+                     "client_intent_id":"residual-client", "execution_no":"execution-2"}
+                    for row in _atomic_registry_rows(day, 2, 2))
+    return day, [plan, leg, residual, bundle], source, registry
+
+
+def test_atomic_residual_sealed_parent_joins_distinct_intents_without_source_rewrite():
+    day, events, source, registry = _atomic_residual_fixture()
+    original = copy.deepcopy(events)
+    result = split_plan.build_atomic_execution_sizing_lineage(day, events,
+        source_generation=source, registry_events=registry)
+    assert events == original
+    assert result["status"] == "ready"
+    assert result["counts"]["unique_leg_orders"] == 2
+    assert result["counts"]["unjoined_submit_count"] == 0
+    row = result["rows"][0]
+    assert row["owner_registry_intent_ids"] == ["intent-1", "intent-2"]
+    assert row["submitted_qty"] == row["filled_qty"] == 3
+    assert row["cost_krw"] is None
+    assert row["terminal_state"] == "partial_open"
+    assert row["submitted_legs"][1]["resolved_plan_leg_index"] == 2
+    assert row["submitted_legs"][1]["leg_index"] is None
+    assert row["residual_plan_bindings"][0]["original_event_sha256"] == split_plan._canonical_sha256(original[2])
+
+
+@pytest.mark.parametrize("fault", ["hash", "parent", "bundle", "owner", "quantity", "tag",
+                                  "registry", "client", "explicit_conflict", "phase"])
+def test_atomic_residual_rejects_unproven_binding(fault):
+    day, events, source, registry = _atomic_residual_fixture()
+    event = events[2]
+    if fault == "hash":
+        event["entry_cancel_wait_submission_context"] = "{}"
+    elif fault == "parent": event["buy_parent_id"] = "other"
+    elif fault == "bundle": events[1]["entry_split_order_probe_bundle_id"] = "other"
+    elif fault == "owner": event["buy_owner_id"] = "main_scalping:other"
+    elif fault == "quantity": event["submitted_qty"] = 3
+    elif fault == "tag": event["tag"] = "entry_split_probe_residual_2"
+    elif fault == "registry": registry = []
+    elif fault == "client": event["buy_owner_client_intent_id"] = "other"
+    elif fault == "explicit_conflict": event["entry_execution_sizing_plan_id"] = "other"
+    elif fault == "phase": event["residual_source_only"] = False
+    result = split_plan.build_atomic_execution_sizing_lineage(day, events,
+        source_generation=source, registry_events=registry)
+    assert result["status"] == "source_gap"
+    assert result["counts"]["unjoined_submit_count"] == 1
 
 
 def test_atomic_sizing_lineage_quarantines_wrong_attempt_and_changed_plan():
@@ -5374,7 +5454,8 @@ def test_execution_census_uses_logical_gzip_source_and_preserves_seal(monkeypatc
     assert not path.exists() or fault=='alias_conflict'
 
 
-def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path):
+@pytest.mark.parametrize('has_atomic_lineage', [False, True])
+def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path, has_atomic_lineage):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-09-17"
     path, _ = split_plan.report_paths(target)
@@ -5385,6 +5466,16 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
             "entry_execution_sizing_plan_schema": split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA,
             "entry_execution_sizing_policy": split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
             "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA}, candidate_grid=[])
+    if has_atomic_lineage:
+        plan, leg, bundle, source = _atomic_lineage_fixture(target)
+        original['input_summary']['atomic_execution_sizing'] = dict(
+            status='fail', daily_plan_observed_count=1, daily_plan_invalid_count=0,
+            lineage=dict(schema=split_plan.ATOMIC_SIZING_LINEAGE_SCHEMA,
+                         source_generation=source, status='source_gap'))
+        monkeypatch.setattr(split_plan, '_atomic_sizing_source_generation', lambda _day: copy.deepcopy(source))
+        monkeypatch.setattr(split_plan, '_bounded_execution_projection', lambda _day: (
+            [plan,leg,bundle], {'status':'ready','sources':[]}))
+        monkeypatch.setattr(split_plan, '_source_quality_summary', lambda _day: {'tuning_input_allowed':True})
     split_plan._write_json(path, original)
     monkeypatch.setattr(split_plan, "_execution_registry_snapshot", lambda: ([], {"status": "verified", "tail_hash": "0" * 64}))
     first = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
@@ -5392,6 +5483,9 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
     assert first["cumulative_state"] == original["cumulative_state"]
     assert first["recommended_policy"]["missing_bucket_action"] == "keep_original_order"
     assert first["recommended_policy"]["runtime_apply_allowed"] is False
+    if has_atomic_lineage:
+        assert first['input_summary']['atomic_execution_sizing']['status']=='pass'
+        assert first['execution_model_validation']['source_inventory']['original_atomic_contract']==original['input_summary']['atomic_execution_sizing']
     before = path.read_bytes()
     second = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
     assert first == second and path.read_bytes() == before

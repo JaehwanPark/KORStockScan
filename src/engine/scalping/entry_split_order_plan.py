@@ -3272,6 +3272,104 @@ def _atomic_sizing_registry_terminal(
         "partial_open" if verified_qty > 0 else "open")
 
 
+def _atomic_residual_plan_binding(event, plans, attempts, submits, registry_state):
+    """Resolve an observed residual through its original sealed probe and journal.
+
+    The returned fields are a reader projection, never a rewritten source event.
+    A symbol/quantity match alone cannot supply a missing plan identity.
+    """
+    from src.engine.scalping.strategy_owner_components import digest
+
+    if (event.get("stage") != "order_leg_sent"
+            or event.get("entry_execution_sizing_plan_id")
+            or event.get("entry_execution_sizing_plan_sha256")
+            or not _safe_bool(event.get("residual_source_only"))):
+        return None
+    try:
+        context = _atomic_sizing_core(event.get("entry_cancel_wait_submission_context"))
+        source = context["probe_submit_source"]
+        day = str(event.get("source_date") or event.get("emitted_date") or _event_date(event))[:10]
+        record = str(event.get("record_id") or "")
+        parent = str(event.get("buy_parent_id") or "")
+        keys = attempts.get((day, record, parent), set())
+        if len(keys) != 1:
+            return None
+        key = next(iter(keys))
+        plan = plans[key]
+        row = plan["row"]
+        tag = str(event.get("tag") or "")
+        match = re.fullmatch(r"entry_split_probe_residual_([1-9][0-9]*)", tag)
+        if not match:
+            return None
+        index = int(match.group(1)) + 1
+        legs = [leg for leg in plan["core"].get("legs", [])
+                if leg.get("execution_phase") == "after_verified_probe_fill"
+                and leg.get("leg_index") == index]
+        intent = str(event.get("owner_registry_intent_id") or "")
+        journal = registry_state.get(intent, {})
+        order = str(event.get("broker_order_no") or event.get("ord_no") or "")
+        quantity = _safe_int(event.get("submitted_qty"), -1)
+        initial = [item for item in submits if item.get("stage") == "order_leg_sent"
+                   and str(item.get("entry_submit_attempt_id") or item.get("buy_parent_id") or "") == parent
+                   and str(item.get("record_id") or "") == record
+                   and item.get("entry_execution_sizing_plan_id") == key[3]
+                   and item.get("entry_execution_sizing_plan_sha256") == key[4]
+                   and _safe_bool(item.get("entry_split_order_probe_first_applied"))
+                   and _safe_int(item.get("entry_split_order_leg_index"), -1) == 0]
+        initial = list({_canonical_sha256(item): item for item in initial}.values())
+        if (len(initial) != 1 or row["source_quality_reasons"]
+                or context.get("schema") != "entry_cancel_wait_submitted_paired_v2"
+                or context.get("sha256") != digest({k: v for k, v in context.items() if k != "sha256"})
+                or source.get("schema") != "entry_probe_submit_source_v1"
+                or source.get("sha256") != digest({k: v for k, v in source.items() if k != "sha256"})
+                or context.get("source_date") != day or source.get("source_date") != day
+                or source.get("record_id") != record or source.get("initial_parent_id") != parent
+                or context.get("parent_id") != "residual:" + parent
+                or source.get("bundle_id") != initial[0].get("entry_split_order_probe_bundle_id")
+                or source.get("position_cycle_id") != str(event.get("buy_position_cycle_id") or "")
+                or source.get("planned_qty") != row["plan_requested_qty"]
+                or context.get("child_id") != tag or len(legs) != 1
+                or quantity <= 0 or quantity != legs[0].get("qty")
+                or str(quantity) != str(event.get("submitted_qty"))
+                or str(quantity) != str(event.get("requested_qty"))
+                or quantity != context.get("requested_qty")
+                or quantity != _safe_int(event.get("requested_qty"), -1)
+                or context.get("timeout_owner") != "entry_split_probe_residual_runtime"
+                or context.get("economic_eligible") is not False
+                or context.get("observation_only") is not True
+                or context.get("actual_timeout_sec") is not None
+                or context.get("candidate_timeout_secs") != []
+                or not intent or not order
+                or journal.get("order_date") != day or journal.get("side") != "BUY"
+                or journal.get("action") != "NEW" or journal.get("owner_type") != "main_scalping"
+                or str(journal.get("broker_order_no") or "") != order
+                or journal.get("quantity") != quantity
+                or context.get("owner_client_intent_id") != journal.get("client_intent_id")
+                or event.get("buy_owner_client_intent_id") != journal.get("client_intent_id")
+                or any(source.get(k) != event.get(field) or source.get(k) != journal.get(jkey)
+                       for k, field, jkey in (("stock_code", "stock_code", "symbol"),
+                           ("owner_id", "buy_owner_id", "owner_id"),
+                           ("account_key", "buy_account_key", "account_key")))
+                or source.get("stock_code") != row["stock_code"]
+                or context.get("stock_code") != row["stock_code"]
+                or source.get("owner_id") != "main_scalping:" + record
+                or context.get("broker_route") != event.get("broker_route")
+                or context.get("broker_route") != journal.get("route")
+                or event.get("effective_venue") != row["effective_venue"]
+                or event.get("market_session_bucket") != row["market_session_bucket"]):
+            return None
+        return dict(event, entry_execution_sizing_plan_id=key[3],
+                    entry_execution_sizing_plan_sha256=key[4],
+                    entry_execution_sizing_action_receipt_id=row["action_receipt_id"],
+                    _atomic_residual_plan_index=index,
+                    _atomic_residual_binding=dict(context_sha256=context["sha256"],
+                        probe_source_sha256=source["sha256"], registry_intent_id=intent,
+                        original_event_sha256=_canonical_sha256(event),
+                        basis="original_probe_context_exact_plan_and_registry"))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def build_atomic_execution_sizing_lineage(
     target_date: str,
     events: list[dict[str, Any]],
@@ -3444,7 +3542,14 @@ def build_atomic_execution_sizing_lineage(
         if len(keys) > 1:
             for key in keys:
                 plans[key]["row"]["source_quality_reasons"].append("attempt_multiple_plans")
-    for event in submits:
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+    try:
+        registry_state = OrderOwnerRegistry._state(registry_events or [])
+    except (KeyError, TypeError, ValueError):
+        registry_state = {}
+    for original_event in submits:
+        event = (_atomic_residual_plan_binding(original_event, plans, attempts,
+                                               submits, registry_state) or original_event)
         day = str(event.get("source_date") or event.get("emitted_date")
                   or _event_date(event) or "")[:10]
         record = str(event.get("record_id") or "")
@@ -3487,7 +3592,12 @@ def build_atomic_execution_sizing_lineage(
             planned_legs = core.get("legs") if isinstance(core.get("legs"), list) else []
             immediate_legs = [leg for leg in planned_legs if isinstance(leg, dict)
                               and leg.get("execution_phase") == "immediate"]
-            if immediate_legs:
+            residual_index = event.get("_atomic_residual_plan_index")
+            if residual_index is not None:
+                matched = [leg for leg in planned_legs if isinstance(leg, dict)
+                           and leg.get("execution_phase") == "after_verified_probe_fill"
+                           and leg.get("leg_index") == residual_index]
+            elif immediate_legs:
                 matched = [leg for leg in immediate_legs
                            if _safe_int(leg.get("leg_index"), -1) == leg_index]
             else:
@@ -3612,8 +3722,10 @@ def build_atomic_execution_sizing_lineage(
             row["broker_route"] = next(iter(routes), None)
         intents = {str(event.get("owner_registry_intent_id") or "")
                    for event in leg_events if event.get("owner_registry_intent_id")}
-        if len(intents) > 1:
-            row["source_quality_reasons"].append("multiple_registry_intents_for_plan")
+        if intents and len(intents) != len(leg_events):
+            row["source_quality_reasons"].append("registry_intent_reused_or_missing_for_plan")
+        row["residual_plan_bindings"] = [event["_atomic_residual_binding"]
+                                        for event in leg_events if event.get("_atomic_residual_binding")]
         row["owner_registry_intent_ids"] = sorted(intents)
         row["execution_ids"] = []
         row["remaining_order_qty"] = None
@@ -6425,6 +6537,29 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
                 or _load_json(immutable_policy) != current_policy):
             raise ValueError("execution_model_cached_generation_invalid")
         return report
+    original_atomic = copy.deepcopy(report.get("input_summary", {}).get("atomic_execution_sizing"))
+    if isinstance(atomic_lineage, dict) and atomic_lineage.get("schema") == ATOMIC_SIZING_LINEAGE_SCHEMA:
+        # A bounded model refresh also owns the current reader projection. Keeping
+        # the old atomic verdict here made corrected readers ineffective forever.
+        allowed_events, _ = _source_quality_filtered_events(
+            events, {target_date: _source_quality_summary(target_date)})
+        current_generation["reader_projection"] = _atomic_sizing_projection_identity(
+            projection, current_generation.get("stage_census"))
+        current_lineage = build_atomic_execution_sizing_lineage(target_date, allowed_events,
+            source_generation=current_generation,
+            registry_events=registry if registry_contract.get("status") == "verified" else None)
+        current_lineage["registry_source"] = registry_contract
+        atomic = report["input_summary"]["atomic_execution_sizing"]
+        atomic["lineage"] = current_lineage
+        atomic["daily_real_submit_resolved_plan_count"] = sum(
+            len(row.get("residual_plan_bindings", [])) for row in current_lineage["rows"])
+        atomic["daily_real_submit_unresolved_plan_count"] = current_lineage["counts"]["unjoined_submit_count"]
+        atomic["status"] = ("fail" if atomic.get("daily_plan_invalid_count")
+                            or current_lineage["status"] != "ready" else
+                            "pass" if atomic.get("daily_plan_observed_count") else "natural_first_use_pending")
+        atomic["selection_blocked"] = atomic["status"] == "fail"
+        atomic["natural_first_use_pending"] = atomic["status"] == "natural_first_use_pending"
+        report["recommended_policy"]["atomic_execution_sizing_contract_status"] = atomic["status"]
     native = _load_entry_events(target_date, rows=events)
     replay = build_entry_opportunity_replays(target_date, native)
     validation = build_execution_model_validation(target_date, events, replay["rows"], registry,
@@ -6434,7 +6569,7 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
         "replay": replay, "effective_date": prepared_effective_date})
     prior = report.get("execution_model_refresh") or {}
     validation["source_inventory"] = {
-        "original_atomic_contract": report.get("input_summary", {}).get("atomic_execution_sizing"),
+        "original_atomic_contract": original_atomic,
         "original_native_replay_counts": report.get("input_summary", {}).get("daily_diagnostic", {}).get("entry_opportunity_executable_replay", {}).get("counts"),
         "historical_invalid_row_first_reason": "unknown_not_reconstructed_from_lossy_projection",
         "original_parent_asof": report.get("generated_at"),
@@ -6593,7 +6728,8 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         registry_events=registry if registry_contract.get("status") == "verified" else None,
     )
     atomic_lineage["registry_source"] = registry_contract
-    if daily_atomic_plan_invalid_count or daily_atomic_plan_missing_submit_count:
+    if (daily_atomic_plan_invalid_count or (daily_atomic_plan_missing_submit_count
+                                           and atomic_lineage["counts"]["unjoined_submit_count"])):
         atomic_contract_status = "fail"
     elif (date.fromisoformat(target_date) >= ATOMIC_SIZING_LINEAGE_REQUIRED_FROM_DATE
           and atomic_lineage["status"] != "ready"):
@@ -7072,6 +7208,9 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 "daily_real_submit_missing_plan_count": (
                     daily_atomic_plan_missing_submit_count
                 ),
+                "daily_real_submit_resolved_plan_count": sum(
+                    len(row.get("residual_plan_bindings", [])) for row in atomic_lineage["rows"]),
+                "daily_real_submit_unresolved_plan_count": atomic_lineage["counts"]["unjoined_submit_count"],
                 "selection_blocked": atomic_contract_status == "fail",
                 "natural_first_use_pending": (
                     atomic_contract_status == "natural_first_use_pending"

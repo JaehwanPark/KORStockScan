@@ -1026,6 +1026,41 @@ def test_custody_capture_is_bounded_queued_and_never_writes_synchronously(tmp_pa
     assert checkpoint.enqueue(snapshot,query_generation=[1,2,3,4])=='source_gap'
 
 
+@pytest.mark.parametrize('fault', ['none','late_terminal','wrong_identity','source_gap','open_order'])
+def test_current_checkpoint_does_not_require_pre_checkpoint_research_dispatch(tmp_path, monkeypatch, fault):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import main_custody_checkpoint as checkpoint
+    from src.trading.order import owner_custody_registry as custody
+    data=tmp_path/'data';path=data/'runtime/order_owner_registry.jsonl';path.parent.mkdir(parents=True)
+    day='2026-10-16';rows=[];previous='0'*64
+    common=dict(schema=custody.REGISTRY_SCHEMA,intent_id='residual-1',account_key='fixture',
+        owner_type='main_scalping',owner_id='main_scalping:42',symbol='123456',position_id='p1',
+        side='BUY',action='NEW',order_date=day,quantity=2,filled_qty=0,broker_order_no='B1')
+    for event,clock in [('ORDER_BOUND','10:00:00'),('ORDER_TERMINAL','16:00:00' if fault=='late_terminal' else '10:01:00')]:
+        row={**common,'event':event,'state':event,'observed_at_kst':day+'T'+clock+'+09:00','previous_hash':previous}
+        row['event_hash']=__import__('hashlib').sha256(previous.encode()+custody.OrderOwnerRegistry._canonical(row)).hexdigest()
+        previous=row['event_hash'];rows.append(row)
+    path.write_text(''.join(json.dumps(r)+'\n' for r in rows));path.with_suffix('.jsonl.lock').touch()
+    registry=custody.OrderOwnerRegistry(path)
+    monkeypatch.setattr(checkpoint,'DATA_DIR',data);monkeypatch.setattr(custody,'broker_account_key',lambda:'fixture')
+    monkeypatch.setattr(custody,'default_order_owner_registry',lambda:registry)
+    snapshot=dict(captured_at=datetime(2026,10,16,15,31,tzinfo=ZoneInfo('Asia/Seoul')).timestamp(),
+        successful_exchanges={'KRX','NXT'},inventory_rows_valid=True,open_order_rows_valid=True,
+        open_orders_request_succeeded=True,unverified_open_order_codes=set(),inventory_by_code={},
+        open_qty_by_code={'123456':{'BUY':2}} if fault=='open_order' else {})
+    native=checkpoint.publish(snapshot,query_generation=checkpoint.journal_generation())
+    unknown=checkpoint.digest(['order',day,'42','fixture','different' if fault=='wrong_identity' else 'B1'])
+    ledger={day:dict(coverage_verified=fault!='source_gap',unclassified_identities=[unknown])}
+    result=checkpoint.view(native,registry.verified_events_snapshot(),ledger,day=day,
+                           current_generation=checkpoint.journal_generation())
+    assert result['status']==('verified_empty' if fault=='none' else 'unknown')
+    if fault=='none':
+        assert result['checkpoint_superseded_historical_dispatch_count']==1
+        assert result['historical_terminal_or_profit_inferred'] is False
+        assert ledger[day]['unclassified_identities']==[unknown]
+
+
 def test_complete_future_population_can_select_while_history_gap_is_preserved():
     scope=['KRX','KRX_REGULAR','KRX','standard']
     actual=[]

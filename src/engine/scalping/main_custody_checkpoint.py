@@ -196,16 +196,55 @@ def view(checkpoint, registry, by_date, *, day, current_generation, assessed_at=
             or not {"KRX", "NXT"} <= set(snapshot.get("successful_exchanges") or [])
         ):
             raise ValueError("custody_checkpoint_broker_coverage_invalid")
-        if any(
-            not r.get("coverage_verified") or r.get("unclassified_identities")
-            for d, r in by_date.items()
-            if c["source_date"] <= d <= day
-        ):
-            raise ValueError("since_checkpoint_dispatch_continuity_missing")
         # Reconcile broker facts against the journal at capture, then check all
         # subsequent Main activity. Later fills do not rewrite the snapshot.
         state = OrderOwnerRegistry._state(registry[:count])
         current_state = OrderOwnerRegistry._state(registry)
+        # A later complete account checkpoint can establish current custody even
+        # when an earlier same-day residual lacks its research submission event.
+        # Only exact terminal journal identities in the sealed checkpoint prefix
+        # qualify. Historical dispatch, terminal-cost and economic gaps remain.
+        prior_terminal_ids = set()
+        bound = set()
+        terminal_clocks = {}
+        for event in registry[:count]:
+            identity = event.get("intent_id")
+            if event.get("event") == "ORDER_BOUND":
+                bound.add(identity)
+            if event.get("event") == "ORDER_TERMINAL":
+                try:
+                    observed = datetime.fromisoformat(event["observed_at_kst"])
+                    if observed.tzinfo is not None:
+                        terminal_clocks.setdefault(identity, []).append(observed.timestamp())
+                except (KeyError, TypeError, ValueError):
+                    pass
+        for identity, row in state.items():
+            terminal_times = terminal_clocks.get(identity, [])
+            if (row.get("account_key") == c["account_key"]
+                    and row.get("owner_type") == "main_scalping"
+                    and row.get("side") == "BUY" and row.get("action") == "NEW"
+                    and row.get("order_date") == c["source_date"]
+                    and row.get("state") == "ORDER_TERMINAL"
+                    and terminal_times and max(terminal_times) <= at
+                    and identity in bound
+                    and row.get("broker_order_no")
+                    and str(row.get("owner_id") or "").startswith("main_scalping:")):
+                prior_terminal_ids.add(digest(["order", c["source_date"],
+                    row["owner_id"].removeprefix("main_scalping:"), c["account_key"],
+                    str(row["broker_order_no"])]))
+        superseded = 0
+        for source_day, coverage in by_date.items():
+            if not c["source_date"] <= source_day <= day:
+                continue
+            unknown = set(coverage.get("unclassified_identities") or [])
+            if (not coverage.get("coverage_verified")
+                    or (unknown and (source_day != c["source_date"]
+                                     or not unknown <= prior_terminal_ids))):
+                raise ValueError("since_checkpoint_dispatch_continuity_missing")
+            superseded += len(unknown)
+        if superseded:
+            result["checkpoint_superseded_historical_dispatch_count"] = superseded
+            result["historical_terminal_or_profit_inferred"] = False
         manual = OrderOwnerRegistry._manual_disposition(registry, c["account_key"])
         symbols = set(snapshot["inventory_by_code"]) | {
             r.get("symbol")
@@ -285,6 +324,7 @@ def view(checkpoint, registry, by_date, *, day, current_generation, assessed_at=
         ):
             raise ValueError("custody_checkpoint_open_order_partition_unknown")
         return dict(
+            result,
             status="verified_empty",
             known_open_count=0,
             blocker=None,

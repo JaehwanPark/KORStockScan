@@ -43,19 +43,23 @@ from src.engine.monitoring import policy_generation_validation as validation
 # Review: docs/audits/nonfixed-source-continuity-review-2026-10-16.md.
 # Long4/fixed-watch and 04c holding/replay integration; original reports stay unchanged.
 # Review: docs/audits/long4-source-retention-integration-review-2026-10-16.md.
+# Lossless logical-source readers and checkpoint-relative current custody were
+# reviewed after the 10/16 close. Keep every original source generation and
+# require independent current fixtures; this never certifies historical results.
+# Review: docs/audits/postclose-semantic-recovery-review-2026-10-16.md.
 REVIEWED_SUCCESSORS = {
     'entry_cancel_wait': (
         'd8583947a62ffe15318b2819f6f4824b8835a7fc5865c5b00f85b8eb427620b0',
-        'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
+        '106d1f5e6226dc99fce0779fc7c7f8fb0bbea357b29500cabe8ce0c95d869f7c'),
     'rising_missed': (
         'dfe2d56deef10ebaf4f2aa6e3edd6215f769d08ba8ac123808459c2cc8fb720f',
-        'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'),
+        '3ea3b1623f5c476c13b32685de01f1cf93c50accc2ad587c3f67627dc618a4f8'),
     'auxiliary': (
         '88a496105946f292ae3c85028be6276009738742a0916f7c9965c9c9ba6959df',
-        'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
+        '472deb895d32ecb7e74d2ec7179e52b801d389bc77958dd853f41869a39c1dd8'),
     'holding_vote': (
         'b2087e97e70fc145620d3440c4fddafd633ab8e45d3aa492fffec17a7b04bcab',
-        '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd'),
+        'af126e5d7ea2460844158eaadffb1624192ade1686a2b3e2877a25c4b4722f42'),
 }
 
 # The next dated native report already carries the formerly reviewed successor.
@@ -66,29 +70,29 @@ REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
     # current capability does not promote their comparison/selection state.
     'entry_cancel_wait': (
         'b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0',
-        'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
+        '106d1f5e6226dc99fce0779fc7c7f8fb0bbea357b29500cabe8ce0c95d869f7c'),
     'rising_missed': (
         'dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3',
-        'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'),
+        '3ea3b1623f5c476c13b32685de01f1cf93c50accc2ad587c3f67627dc618a4f8'),
     'holding_vote': (
         '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
-        '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd'),
+        'af126e5d7ea2460844158eaadffb1624192ade1686a2b3e2877a25c4b4722f42'),
 }
 
 
 # The actual 4c65523b2 source generation is also preserved if already reported.
 REVIEWED_DEPLOYED_SOURCE_SUCCESSORS = {
-    'entry_cancel_wait': ('6d6a294941f6337d48420514d40e36891d25b44dc09bd914be0831d897794d4c', 'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
-    'rising_missed': ('0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed', 'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'),
-    'auxiliary': ('711184e6d93f27e3d8f4bdd97598f4880f752332f850763b32b434560b460f8e', 'df0247a1bbed3e52af5b315911a1051c1bb94f8d39a444e04e341b23dcf6f786'),
-    'holding_vote': ('e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278', '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd'),
+    'entry_cancel_wait': ('6d6a294941f6337d48420514d40e36891d25b44dc09bd914be0831d897794d4c', '106d1f5e6226dc99fce0779fc7c7f8fb0bbea357b29500cabe8ce0c95d869f7c'),
+    'rising_missed': ('0f6c455328de656c920956be0b2a24fec57db08f8b4e7b3e2fa7db43249ff7ed', '3ea3b1623f5c476c13b32685de01f1cf93c50accc2ad587c3f67627dc618a4f8'),
+    'auxiliary': ('711184e6d93f27e3d8f4bdd97598f4880f752332f850763b32b434560b460f8e', '472deb895d32ecb7e74d2ec7179e52b801d389bc77958dd853f41869a39c1dd8'),
+    'holding_vote': ('e213bbe524aa7575f8e9c784cf43db77b9c194dee5bfc03b943a8175fc655278', 'af126e5d7ea2460844158eaadffb1624192ade1686a2b3e2877a25c4b4722f42'),
 }
 
 
 # Delay situation/zero-cell observer repair touches shared handler metadata.
 # Preserve the selected predecessor's report generation and require a new fixture.
 # Review: docs/audits/pre-submit-semantic-implementation-review-2026-10-16.md.
-REVIEWED_DELAY_SOURCE_SUCCESSORS = {'rising_missed': ('ea1ac91b6e080d96f3a0d61dca47575c101862ba6fe77fed36fc6170687f3e08', 'd34e62d6e82d7dc5889485606e587317ef4b1d4def433c95d4614f27d989b8d5'), 'holding_vote': ('dfd762fa2b9d15799e4951bc5624effa58f8efdec29cb85939ba9d5e21765d58', '4f6f2e9351fb4a328b0b296828fd85c45a032a7a17eca91b8da3896f2bdd27cd')}
+REVIEWED_DELAY_SOURCE_SUCCESSORS = {'rising_missed': ('ea1ac91b6e080d96f3a0d61dca47575c101862ba6fe77fed36fc6170687f3e08', '3ea3b1623f5c476c13b32685de01f1cf93c50accc2ad587c3f67627dc618a4f8'), 'holding_vote': ('dfd762fa2b9d15799e4951bc5624effa58f8efdec29cb85939ba9d5e21765d58', 'af126e5d7ea2460844158eaadffb1624192ade1686a2b3e2877a25c4b4722f42')}
 
 
 def _historical_fixture(contract, data, family):
