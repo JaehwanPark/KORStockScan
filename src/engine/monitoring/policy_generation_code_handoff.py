@@ -57,6 +57,15 @@ REVIEWED_SUCCESSORS = {
 # The next dated native report already carries the formerly reviewed successor.
 # Preserve that report too; do not relabel it as the older source generation.
 REVIEWED_PRESERVED_SOURCE_SUCCESSORS = {
+    # Exact 10/15 native reports retained after source-census and residual
+    # custody repairs. Revalidate their original fixtures and source bodies;
+    # current capability does not promote their comparison/selection state.
+    'entry_cancel_wait': (
+        'b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0',
+        'a164112c82cfa2d225be971f5197d0a7bff9dee07d4223ea7a3b3ccce20f3de4'),
+    'rising_missed': (
+        'dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3',
+        '684090396e36144e6b79a33aacf55f8f63c3bd9260e534d58e2aefcdcd30f2e9'),
     'holding_vote': (
         '5658a73a4aeb866c3124370eddc500ce27dd2e15589ba2ef4d7c35c7231a83c2',
         '2cdbab10ad57c817ba2117d43699ba2fe79a96fe73e5e00e5667bacaeffd2d3e'),

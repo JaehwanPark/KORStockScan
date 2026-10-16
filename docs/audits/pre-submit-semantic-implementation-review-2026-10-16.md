@@ -47,3 +47,14 @@
 첫 기동의 Sentinel producer는 `summary_contract_migration_parser_predecessor_unverified`로 실패했다. Main 정책/PID 소비 성공과 감시 producer 실패를 분리하여 보존한다. pipeline_event_summary의 producer publish 메서드 변경으로 파일 SHA가8500f482…로 바뀌었지만 summary migration owner의 CURRENT pin이b1b1e59a…였다. complete AST에서 `ProducerSummaryCompactor._publish` 이외 모든 parser/aggregate/checkpoint/callback 코드는 동일함을 확인했다. 원 parser/callback 쌍과 기존 세대들의 허용 관계를 보존하면서 정확한 b1→8500 인계를 추가했다. default callback과 실제 funnel callback, archive/append-only/변조/경합 및 BUY/감시를 포함한1,095개 PASS다.
 
 원 b1 parser owner가 기존 checkpoint1672470738부터1707394599까지 실제 suffix만 이어 읽었다(`rebuilt=false`, 원 정책/PID 변경0). 원 manifest는 증거 디렉터리에 보존했다. 추가 code handoff의 c8366cfb0 후보는 미선택이며, cursor 보완과 이 parser 수리를 함께 최종 후보로 배포한다. 최종 배포 전 실제 native migration을 기존 producer lock 아래에서 검증하고, 첫 full 감시의 새 PID/source generation을 확인한다.
+
+
+## 현행 장후 capability 재대사 보완
+
+bbb9d46b7 전이는17:18:23.838565에 완료했고PID157049/start20261178의 exact 정책 소비를 검증했다. 실제 b1→8500 parser 이관은 원 checkpoint1707394599부터1725882736까지18,488,137B만 이어 읽었으며 rebuilt=false와 원 manifest archive를 확인했다. 새 PID의 Sentinel producer는 success이며 전체 observer는 scanner 평가 모집단 미관측을 partial로 보존했다.
+
+전체 감시에서10/15 실제 취소대기 b2a2017… 및 상승누락 dde49a… 보고서 세대가 exact successor 목록에 없음을 추가 확인했다. 원 fixture의 Git05b78a401/77eaf86fe와 현재 component bytes를 대사하여 두 origin generation을 재현했다. 취소대기 차이는 잔여 주문 source-only 귀속, 봉인 census의 plain/gzip 검증 및 bounded projection, stop release 관측과 delay bootstrap 검증 경계이며 현재 source/comparison/publication/reader fixture를 독립 검증했다. 상승누락 자체 producer/선정 모듈은 동일하고 공유 handler·delay bootstrap·공통 contract membership 파일이 변경됐다.
+
+기존 exact preserved-source map에 두 쌍만 추가하고 원 보고서/fixture/원천 hash·comparison/handoff를 보존한다. 실제 native probe에서 두 family의 current_code_capability_verified=true, 취소대기 model_unvalidated/incumbent_carried, 상승누락 valid_empty/incumbent_carried가 유지됐다. 권한·source·receipt·보고서 경합·미등록 쌍 거부를 포함한571개 PASS, compile/diff PASS. 증거: capability-source-review.json, capability-native-probe.json, verified-capability-successor-tests.log. 기존571개 시험 대상 코드와 구 코드 시험 로그를 구분했다. 이 보완은 신규 정책 선정이나 경제성 승격이 아니다.
+
+최종 delay 재계산은 qualified267/P0 220/price pair255와 동일한 source SHA를 유지하며 source_decode_passes=0, minimal_projection_reused=true로 완료했다. policy SHA f8c911dd…/code contract ae1aac66…이며 추가 capability map 변경은 delay contract 구성 파일을 바꾸지 않는다.

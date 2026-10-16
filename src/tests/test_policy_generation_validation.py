@@ -168,7 +168,8 @@ def test_fixture_publication_rejects_dirty_or_untracked_source(monkeypatch):
 
 
 @pytest.mark.parametrize('family', ['entry_cancel_wait','rising_missed','holding_vote','auxiliary'])
-@pytest.mark.parametrize('review_map', ['REVIEWED_SUCCESSORS', 'REVIEWED_PRESERVED_SOURCE_SUCCESSORS'])
+@pytest.mark.parametrize('review_map', ['REVIEWED_SUCCESSORS', 'REVIEWED_PRESERVED_SOURCE_SUCCESSORS',
+    'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS', 'REVIEWED_DELAY_SOURCE_SUCCESSORS'])
 @pytest.mark.parametrize('damage', [None,'unreviewed_old','unreviewed_current','source','contract',
     'fixture_code','plan','report_path','state','missing','authority','receipt'])
 def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage, review_map):
@@ -184,6 +185,8 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     observed=generation.observations(tmp_path,DAY,data_root=data)[0]
     monkeypatch.setattr(handoff,'REVIEWED_SUCCESSORS',{})
     monkeypatch.setattr(handoff,'REVIEWED_PRESERVED_SOURCE_SUCCESSORS',{})
+    monkeypatch.setattr(handoff,'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS',{})
+    monkeypatch.setattr(handoff,'REVIEWED_DELAY_SOURCE_SUCCESSORS',{})
     monkeypatch.setattr(handoff,review_map,{family:(old,current)})
     if damage=='unreviewed_old':monkeypatch.setattr(handoff,review_map,{family:('b'*64,current)})
     elif damage=='unreviewed_current':monkeypatch.setattr(handoff,review_map,{family:(old,'b'*64)})
@@ -212,6 +215,16 @@ def test_reviewed_successor_binds_current_family_code(family):
     """Shared handler edits must renew the preserved-report capability review."""
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     assert handoff.REVIEWED_SUCCESSORS[family][1] == generation.code_generation(family)
+
+
+@pytest.mark.parametrize('family,prior', [
+    ('entry_cancel_wait','b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0'),
+    ('rising_missed','dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3'),
+])
+def test_preserved_oct15_reports_bind_exact_current_capability(family, prior):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    assert handoff.REVIEWED_PRESERVED_SOURCE_SUCCESSORS[family] == (
+        prior, generation.code_generation(family))
 
 
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink'])
