@@ -42,3 +42,49 @@
 실제 실행 결과와 commit/PID는 배포 terminal 및 이 기록의 후속 항목에 추가한다. source code PASS, 배포/PID, 새 자연 crossing, 과거 5건 및 실제 비용 후 성과를 각각 구분한다. 과거 5건의 정확한 전이 원문은 이번 진단으로 생기지 않으므로 후속 detector가 같은 역사적 gap을 보고할 수 있다. 신규 자연 전이에 receipt가 생성되는지는 배포 뒤 별도 확인한다.
 
 기존 실행 owner는 `HoldingProfitExitSourceContractRepair`, `DirectFamilyPreopenPolicyHandoff` 및 각 source-repair family다. 새 stable ID나 별도 경제성 gate는 추가하지 않는다. 실제 비용 분해, 원문 미발견 request, native forward path·모델/holdout의 기존 OPEN은 이전 인계 기록대로 보존한다.
+
+## 실제 배포와 기동 후 보고서 검증
+
+- 배포 commit은 `63b758ac8e98ace56e62419b677f374449fd724f`, immutable root는 `/home/ubuntu/KORStockScan-runtime-releases/source-gap-crossing-final-20261016-63b758ac8`다. 사용자 승인 범위에서 정규 `ordered_intraday_deploy`를 실행했다. 원 PID drain 12:42:42.203624 → selector 게시 12:42:42.222175 → 시작 12:43:03.894902 → 새 PID attestation 12:43:31.898090 → 독립 검증 완료 12:43:43.140264 순서로 terminal PASS다.
+- 새 Main PID `3474098`, start ticks `18613546`, 실제 cwd는 위 release의 `src`다. 정책 소비 검증은 12:43:18 PASS이며 원 bootstrap JSON/env·prepared pointer의 바이트는 보존했다. 기존 Main 수량과 수동 제외 custody도 유지했다. 선택, PID, 계좌 조회는 실제 새 매매·체결·경제성의 증명이 아니다.
+- 12:45 경보가 인용한 `d5c505c91c81ccc3c17dc8a183b7865debf6d653301f29b039af923af1669772` 보고서는 **기동 전 12:35:08 기준**이다. 이것을 기동 후 보고서 수용 근거로 사용한 것은 잘못이었다. 12:45 정규 holding 작업도 이전 완료 시각 기준 cooldown으로 skip됐다. 시작 순서 PASS만으로 보고서 수용을 닫지 않는다.
+- 현재 selected release의 정규 wrapper를 12:48:10 실행해 12:53:49 완료했다. 새 보고서 기준 시각은 `2026-10-16T12:48:12.927626+09:00`, SHA는 `61d71cc17641a7a20708f429ad50fe806d68d3d66547c9a7c4759b7f07374d1e`, 원천 generation은 `47c6e9a107a609420a57d487ad6b349aceca1ffe7d19bd4c7538b3c5f12f5d0a`다. body/semantic 시각·generation 일치, 소비 PID 목록의 `3474098`, policy/runtime gap 빈 배열을 확인했다.
+- 12:54:22 후속 full detector가 **위 새 보고서의 정확한 SHA/generation**을 native 검증했다. `native_validated=true`, `observation_complete=true`, 새 native finding은 0이다. 역사적 전이 결손 5건에는 새 `source_gap_details`가 붙었으며 원문 복구를 주장하지 않는다. 새 독립 crossing stage의 자연 event는 0이므로 새 자연 crossing 생산까지 확인됐다고 주장하지 않는다.
+- 영수증은 정규 workspace의 `tmp/source-gap-final-release-deploy-20261016/{ordered-deploy-result,postrestart-identity-and-policy,postrestart-holding-native,postrestart-holding-full-detector,final-verification}.json`에 보존한다. 코드 검증의 network/provider 0은 테스트/fixture 범위의 주장이다. 정규 Main 기동 뒤 기존 운영 조회와 구분한다.
+
+## BUY partial의 실제 검증 실패 수리
+
+13:00 이전 BUY 보고서의 `entry_split_verification_invalid:manifest_contract`는 전일 보고서 검증 영수증의 native code hash가 `ed738295a7de91c3972c8360b655d222b26f69e4d1976b2ef27c2c0f0e660c5c`에 묶인 데서 발생했다. 현재 native hash는 `bf3c8b69f4c92270f8084bbb44373aa213af1dc94da22d91cf4cbd23e300d37f`다. source-gap 수리로 native 모듈이 바뀌었는데 배포 뒤 관측 소비자의 검증 영수증을 갱신하는 단계가 빠졌다. 기동 성공 또는 과거 PASS를 현재 소비 수용으로 대체할 수 없다.
+
+기존 migration/변조/세대 계약 회귀 **56개 PASS** 뒤, selected release의 bounded `entry_split_monitor_projection` worker로 report alias와 immutable 원본을 모두 native 재검증했다. 원 보고서 SHA `7944f30f4717fe379a254896f434f7f97cf800a66a1f5dad5fad701d2e1ab4e5`와 generation `b659cce09505f73353d17a4fe609739db30bf656e13fbe8c24d42857cfe5470e`는 그대로다. 보고서 재계산·정책 승격·Main 재기동 없이 관측용 검증 영수증만 발급했다. 후속 reader는 `observed/verified`, issues `{}`, full report read **0 bytes**, metadata **18,606 bytes**다.
+
+정규 13:00:52 BUY 보고서가 새 영수증을 소비했고 `execution_or_bootstrap_not_verified`와 `split_projection_not_verified`가 사라졌다. 13:01:57 full detector는 **FAIL 0건**, 프로세스/인증/크론/자원/잠금 6개 PASS, artifact WARNING이다. 근거는 `entry-split-{prior-verification,reverification}.json`, `entry-execution-reverified.json`, `post-buy-repair-full-detector.json`이다. 이전 FAIL 보고서도 삭제하지 않았다.
+
+BUY의 `semantic_status=partial`, `warning_pending/bounded_source_quality_observation`은 여전히 실제 입력 조건을 표현한다. 12:55 기준 현재 PID의 probe 13개 중 10개가 residence 종료 시 `native_source_stale_or_absent`, 1개는 `required_branch_feature_missing`, 1개는 `route_snapshot_missing`, 1개는 검증된 native no-match다. 예를 들어 062970은 초기에 exact 0B/0D를 받았지만 종료 시 0B age 5.064초, 0D age 4.865초이며 native source current=false였다. 초기 수신 성공은 종료 시 fresh 입력의 증명이 아니다. 새 scanner 기계 평가 분모도 0이어서 전체 Main 평가 0으로 확대하지 않는다. 원천 만료/입력 부족·과거 미확정·실제 기계/보조/제출 결과는 PASS로 바꾸지 않는다. 기존 `AuxiliaryCircuitRecoveryRepair1012`, `NonfixedDispatchReadinessReview1012`의 자연 원천 수용을 유지한다.
+
+다음 배포 수용은 코드·정책·PID와 별도로 **변경된 native verifier의 report/projection 영수증 재검증 → 기동 이후 새 보고서 → 그 SHA를 소비한 detector**까지 확인해야 한다. 이번 기록은 이 단계를 자동화했다고 주장하지 않는다.
+
+## Holding 5분 39초 지연의 측정과 개선 순서
+
+운영 보고서는 339초 걸렸다. 실행 중 단일 Python thread가 약 99% CPU를 사용했고, 두 표본 사이 `rchar=951,327,309`, `read_bytes=692,842,496`이 변하지 않은 채 CPU 시간이 증가했다. 모든 stage의 wall time을 계측한 것은 아니지만, source wait/정지 대신 반복 계산의 영향이 크다는 실행 증거다. 전체 보고서를 다시 생성하지 않고 frozen scope projection과 제한된 순수 함수 profile로 확인했다.
+
+| 입력 | 캐시 크기 | 전체 event | 동일 시각 집계 적격 | 기존 scope 분류의 후보 거리 평가 |
+| --- | ---: | ---: | ---: | ---: |
+| 10/16 | 206,004,078 bytes | 35,411 | 35,375 | 103,930,542 |
+| 10/15 | 478,787,144 bytes | 102,240 | 0 | 732,575,710 |
+
+원 raw는 증분 처리됐으며 두 캐시 모두 `rebuilt=false`다. 그러나 holding reader는 `compact_index_enabled=false`, `cache_body_rescanned=true`여서 두 일자의 약 685MB를 매번 전량 decode·materialize한다. 전일 보존 event의 시각은 13:33:25~20:24:28뿐이라 12:48 동일 시각 집계는 0인데, `_partition_events_by_venue_session`에는 전일 전체가 다시 전달된다. 이것은 전일 오전 활동/완전성이 0이라는 증명이 아니다.
+
+가장 큰 계산 결함은 위 함수의 implicit event마다 동일 record의 모든 explicit 후보에 대해 `min(abs(delta))`를 구하고 동률 후보를 찾으려고 다시 전수 순회하는 구조다. 이번 입력의 두 번 거리 계산 합계는 **836,506,252회**다. 전일 worst record 49267만 explicit 20,880 × implicit 7,485 구조다. 제한 profile에서도 `min`, generator, `timedelta.total_seconds`, `abs`가 비용의 대부분이다.
+
+시간별 후보 인덱스·이분 검색 prototype은 같은 시각의 상충 scope와 좌우 동률을 보존한다. 10/16 worst record의 2,045개 표본은 0.249→0.013초, 전일 2,027개 표본은 0.383→0.017초였고 각 기존 함수 결과가 완전히 일치했다. 전체 scope projection의 prototype 처리 시간은 당일 0.209초/전일 0.760초다. 당일 전체 quality counts도 새 native report와 정확히 일치했다. **이것은 제한된 검색 prototype의 측정이며 운영 전체 보고서 개선율이나 배포 완료가 아니다.**
+
+구체적인 우선순위는 다음과 같다.
+
+1. 동일 attempt의 scope 후보를 시각별로 한 번 정렬·인덱싱해 nearest 검색을 `O(log n)`으로 바꾼다. 동률 conflict, missing, 같은 timestamp 다중 scope와 event 순서는 보존한다. 직접적인 8.37억 회 반복 제거가 최우선이다.
+2. 전일 native cache의 고정 generation에 대해 verified 시간 인덱스/집계 receipt를 만들고 동일 cutoff에 필요한 범위만 재사용한다. same-time 원천 없음과 검증된 valid-empty를 구분하며 `None`/빈 집계의 기존 의미를 유지한다. 전체 native 검증을 hash 확인만으로 대체하지 않는다.
+3. 현재 `event_generation(events)`를 caller와 auditor가 각각 수행한다. 동일 호출 입력의 중복 직렬화·hash를 제거하되 reader가 최종 filtered 원천 generation을 한 번 검증하도록 책임을 유지한다.
+4. session·5/10/30분·각 scope 집계에서 stage별 전수 순회를 반복한다. stage/attempt 집합을 한 번 집계하고 시간창별로 재사용한다. real/probe/수동 custody와 scope 분모는 보존한다.
+5. 8개 signal snapshot마다 vote ledger를 읽는 구조는 6개 position별 불변 snapshot으로 호출 내 재사용할 수 있다. 이 입력에서는 2개 position이 2번 읽혔다. 정책 ancestry 6단계의 source도 각 hash/read_text 두 번을 같은 고정 bytes 한 번으로 합칠 수 있으나, 단독 원천은 약 13.8MB여서 scope 검색보다 우선순위가 낮다.
+
+분석 증거는 `holding-performance-analysis.json`과 두 `holding-scope-perf-projection-YYYY-MM-DD.jsonl`에 보존한다. 원 raw 재전수·추가 API·주문은 실행하지 않았다. prototype의 첫 시도에서 mixed timezone 정규화를 누락해 실패했으며, native parser와 같은 KST 정규화로 수정하고 위 일치 검증을 통과했다. 성능 개선 운영 코드는 이번 분석에서 아직 변경하지 않았다.
