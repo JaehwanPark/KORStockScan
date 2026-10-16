@@ -91,3 +91,48 @@
 | DirectFamilySourceRepairCompactAuxiliary | [10/16 보조 평가](../../data/report/reversal_auxiliary_tuning/2026-10-16/evaluation.json) | code472deb89… fixture84 PASS. 원 요청/응답·membership·누적 예산을 보존한 정상 producer→선택/발행→reader의 새 세대 검증. 새 provider 호출이나 과거 보고서 restamp로 대체하지 않음 |
 
 위 source body·해시·과거 contract는 그대로다. 새 fixture만으로 서로 다른 과거 code hash를 현재 generation으로 승격하지 않는다. 이19일 기존 owner의 Acceptance는 첫 Main 기동 완료나 실제 경제성을 증명하는 gate와 구분한다.
+
+
+## 10/17 후속 전수 검토와 재생성
+
+앞 절의 00:17 판정과 영수증은 당시 이력이다. 후속 사용자 지시는 발견한 기계적·의미적 결함의 수리·리뷰·재생성·재검증 반복이며, 최신 선택은 `c63d44bcb048e4ffd66d811c98a8913d7e0fdefe`다. `68be02a77`의 원천 연결·custody, `bd550f123`의 기계 완료 기록, `272083f42`/`c63d44bcb`의 발행 모집단 보완을 포함한다. Main은 EOD 뒤 정지 상태이고 실제 다음 PID는 아직 없다. 원 live 정책 8809c82e…는 유지하며, 10/19 후보 `8071b2f4386dfec0e1e9379d1ada3a0b94aea4ff5d4f02ebbc5c35db7ca5bb0d`를 native CAS로 준비했다. machine family 수치·보조 membership·provider/주문/수량/timeout 권한은 바꾸지 않았다.
+
+| 확정 결함 | 수리·리뷰·실제 소비 근거 |
+| --- | --- |
+| 분할진입 bounded refresh가 과거 atomic 판정을 계속 복사 | 같은 원천 세대의 현재 reader로 원 계획·action·계좌·owner·bundle·probe residual·registry intent를 검증. 원 leg 0과 계획 leg 1의 의미를 대사하고, 정상 복수 leg의 서로 다른 intent를 허용한다. 잔여 주문 0043364/0043365도 봉인된 context와 정확한 journal만으로 연결 |
+| 새 refresh의 compact 날짜 처리 누락 | 실발행 비교에서 emitted_date를 읽지 못해 9개 원 계획이 빈 목록으로 사라지는 회귀를 발견. 원 실패 세대 보존 후 날짜 처리와 producer→reader stage별 보존 검사를 추가. 원 stage가 없음을 나타내는 빈 census와 잘못된 null도 구분. 최종 실제 발행은 계획 8·deferred 1·주문 10, 격리/미연결 0·보존 verified |
+| 과거 연구 결손이 현재 custody까지 unknown 처리 | 같은 날짜의 원 ORDER_BOUND·ORDER_TERMINAL identity와 checkpoint 이전 시각, 검증 journal prefix·계좌 조회 세대를 모두 요구. 역사적 잔여 6건 때문에 가려졌던 현재 Main 보유 3건을 known_open으로 확인. 과거 비용·terminal proof 결손을 해소했다고 추정하지 않음 |
+| 기계평가 뒤 보조평가 조기 종료 시 완료 정보 유실 | circuit/lock/common-provider 반환에도 원 machine capture를 보존. 현재 WAIT/DROP와 보조 미호출을 유지. 과거 aidt-7dbc…의 해시·snapshot·record·route·PID/start·시각이 일치하는 원 관측 1개만 보고서에 연결. duplicate·conflict·잘못된 날짜·미래 capture·이미 소비한 capture 거부. 원 trace/payload bytes 불변 |
+| 현재 fixture와 이전 보고서 생성 세대 분리 | cancel/rising/auxiliary/holding을 실제 native producer로 재생성. 4 family 모두 native_validated=true/verified이며 현재 fixture만 과거 report에 덧붙인 판정이 아님. 원 보고서·immutable generation·실패 이력 보존 |
+
+관련 수리는 562건, 기계 완료 기록은 824건, 발행 보존은 323건 및 마지막 빈 census 보완 262건을 통과했다. 겹치는 검증 실행을 고유 합계로 더하지 않는다. compile/diff와 실자료 검증을 별도로 수행했다. 보유 보고서 재생성은156.049초, 거래·매도 후속·누락진입 prefix 3개의 SHA는 그대로이며 4-artifact native manifest도 검증했다. 같은 immutable 원천을 전체 체인으로 반복 재실행하지 않고 영향을 받은 source/audit·holding·stop·delay·summary consumer만 갱신한다.
+
+### 활성 장후 결과의 의미 대사
+
+| 논리 작업 / owner | 검토한 결과·판정 | 결손 영향·직접 소비·다음 경계 |
+| --- | --- | --- |
+| EOD·archive / 설치 owner | EOD source 10/16·DB2,622행, 4개 짧은 이력 제외·namespace86 별도. archive 원 terminal 보존 | 짧은 이력은 기동 결함이나 0건 연구가 아님. 원천은 논리 hash가 검증된 압축 인계 유지 |
+| Main 기계 / main_machine_policy | 62partition, 유효4,530,988행·pre-refresh26 제외. 비교22scope·machine48cell·native128scope는 다른 분모 | 유효 carry, 새 후보의 비용 후 우월성을 주장하지 않음. 10/19 PREOPEN·PID 소비는 기존 DirectFamilyPreopenPolicyHandoff |
+| 품질·legacy / legacy_machine_report | 유효344,472행·원 결함6행 제외 보존. 기계58=평가35(원 연결 복구1 포함)+source-invalid16+contract-invalid7, 미계상0 | 계약-invalid7과 source-invalid16은 격리. 기록 복구는 보조응답·실제 주문·경제성 생성이 아님 |
+| 보조 / main_auxiliary_policy | 원 요청 census100=completed47+planned53, missing0. 10scope의 common22pairs/expected50 | comparison_complete는 정산·격리 완료. 전100호출 실행이나 모든 비교쌍 성공을 의미하지 않음. 이번 재생성은 stored 결과만 사용, 추가 provider0 |
+| outcome_labels | 34=29mature+5partial, supplement20exact/14trace mismatch | 경과한 window의 원 가격·문맥 부재는 미래 maturity 대기로 숨기지 않음. original source가 없으면 ETA null·경제성 제외 |
+| 완료 거래·초기 수량 | completed census9·valid profit_rate9, strict 비용 적격0. 당일 entry의 completed5/holding3 별도 | 비용 종목일/주문 차이 및 cycle 배분 불명은 null·기존 carry. 0을 무거래·무수익으로 해석하지 않음 |
+| 분할진입 / DirectFamilySourceRepairEntrySplit | 현재 atomic 계획8·주문10 연결, resolved residual2·미연결0. 전체 model attempt28/intent26/투영주문19/부모join15는 별도 분모 | strict 실제 비용 완료0·paired 운영 model source_gap 유지. 원 terminal/cost와 같은 frozen 주문 범위의 holdout을 요구하며 임의 추정하지 않음 |
+| cancel / DirectFamilySourceRepairEntryCancelWait | 현재 custody known_open3. 당일 연구 parent9와 옛 잔여 제출6건 결손을 분리 | 역사 미수집9/30·10/1, known-unresolved10·기존 원 terminal/cost 미확인 보존. 이전 표의9/29 결손은 최신 census에서 해소됨. 현재 계좌 보유가 역사 비용 완결을 뜻하지 않음 |
+| 보유·익절·손절 / HoldingProfitExitSourceContractRepair | holding504population/32partition, 20,832scope는 원 종목×route/session. native code 검증 완료, 숫자 EXIT 연구 experiment_not_armed | TP 최초 전이5·완료 snapshot gap4/unverified9·forward unobserved482 등 실제 결손 보존. 손절9cell 기존 수치 유지, 비용·실제/CF 분모 혼합 금지 |
+| 제출지연 / pre_submit_delay | default0초·기존 nonzero2cell, 231cell의 기존 선택값 | quote/hash185·epoch70·부모호환29 등 각 분모 분리. 새 runtime 임계값 적용 없이 최종 코드에 맞는 native ledger·generation 재검증 |
+| 상승누락 / PostcloseStructuralPolicyCompletion1011 | 정상 native regeneration·valid_empty·incumbent_preserved | 원천 coverage를 검증한 유효 빈 집합이며 source_missing을 0으로 덮은 것이 아님 |
+| WS/lookup attention / 기존 freshness owner | source missing[]·diagnostic 생성, integrated selection source_gap·valid paired0 | fill receipt missing2,190·invalid20, 실제 full/partial0. 진단 생성과 attention 선택/비용 후 효과를 구분. 퇴역 ADM/LDM을 복원하지 않음 |
+| 시장약세 advisory | 00:40 실행으로 source10/16 completed_with_source_gaps. native47·natural trace58·native binding34, outcome U58 | replay의 source_epoch_unverified488,114로 label index0. 원시 시각/epoch 없이 결과를 만들어 연결하지 않음. 자연/CF source gap, 과거 등록 정책 재선정·Main 승격 금지. 이전 deferred 판정은 당시 이력 |
+| 선택적 삼성 frozen sidecar | 사용자가 삭제한 과거 observations를 복원하지 않음. 과거 source seal 검증 실패 보존 | Main 정책/기동 필수 stage가 아니며 연구 성공으로 대체하지 않음. 이번 작업에서 해당 연구의 별도 종료 또는 예약 호출 제거를 주장하지 않음 |
+| 최종 인계 / summary_handoff·controller·finalization | 위 최신 source들을 다시 소비하여 tower·19일 checklist·strict·controller·prepared를 갱신 | 최종 영수증을 아래에 기록. 다음 영업일 07:35 PREOPEN·07:55 기동·새 PID·자연 실현손익은 아직 not_yet_due |
+
+수리한 코드 범위의 결함과 복구할 수 없는 과거 증거 결손을 분리한다. 원천이 없는 비용·익절 전이·고정 window·source epoch에는 종료시각이나 실현 성과를 만들지 않는다. 기존 source repair/자연 수용 owner의 원 Acceptance는 유지하며 동일 입력 재실행으로 이 결손이 사라진다고 주장하지 않는다.
+
+직접 근거: [실발행 atomic 보존](../../tmp/postclose-monitoring-20261016/final-atomic-publication-c63d44bcb.json), [기계 58건 정산](../../tmp/postclose-monitoring-20261016/review-machine-completion-recovery.json), [4 family native 검증](../../tmp/postclose-monitoring-20261016/final-native-policy-generations-c63d44bcb.json), [현재 custody](../../tmp/postclose-monitoring-20261016/review-native-current-custody.json), [보유 재생성](../../tmp/postclose-monitoring-20261016/holding-current-fixture-refresh-68be02a77-verification.json), [후속 릴리스 선택](../../tmp/postclose-monitoring-20261016/handoff-c63d44bcb/selection-after.json).
+
+### 비영업일 의미 점검 owner 인계 보완
+
+- 토요일의 당일 체크리스트 부재를 장후 결함으로 오인하던 경로를 수정했다. 당일 체크리스트가 있으면 그것을 우선하며, 없는 비영업일에만 같은 sweep에서 native 검증한 DONE controller와 다음 영업일 prepared PASS의 source/target/generation/selected release가 일치할 때 기존 다음 영업일 OPEN stable ID를 연결한다. 원래 관측일과 원천일은 보존하며 다른 원천일 경고에는 인계를 확장하지 않는다.
+- 실제 PID 소비나 정책 활성화는 생성하지 않는다. 잘못된 날짜·세대·검증 실패·중복 인계·영업일 체크리스트 부재는 계속 실패로 드러낸다. 동일 원천을 다시 읽지 않고 이미 검증된 sweep 결과를 사용한다.
+- self review와 보완 후 artifact freshness/coverage 회귀 315 passed, Python compile 및 diff check 통과. 다음 릴리스 선택 뒤 native finalization과 독립 detector로 실제 주말 인계를 재확인한다.

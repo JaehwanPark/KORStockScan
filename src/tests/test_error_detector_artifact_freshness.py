@@ -65,6 +65,96 @@ from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
 
 
+def _weekend_owner_case(monkeypatch, tmp_path):
+    from src.engine.error_detectors import artifact_freshness as owner
+    day, source, target = '2026-10-17', '2026-10-16', '2026-10-19'
+    calls = []
+    def owners(root, requested):
+        calls.append(requested)
+        if requested == target:
+            return {'HoldingProfitExitSourceContractRepair'}
+        raise ValueError('current_checklist_missing')
+    monkeypatch.setattr(owner, '_current_semantic_owners', owners)
+    monkeypatch.setattr(owner, 'is_krx_trading_day', lambda d: d.weekday() < 5)
+    monkeypatch.setattr(owner, '_semantic_due_target', lambda now: target)
+    selection = dict(status='receipt_selected', source_date=source, target_date=target,
+                     prepared_source_date=source, generation='a'*64, findings=[])
+    handoff = dict(status='done', source_date=source, observation_date=day,
+                   bound_target_date=target, next_due_target_date=target,
+                   report_sha256='a'*64, findings=[], prepared=dict(
+                       status='pass', source_date=source, target_date=target, findings=[],
+                       selected_release_commit='b'*40, actual_pid_consumed=False, runtime_effect=False))
+    observations = [dict(stage='postclose_handoff', semantics=handoff)]
+    now = datetime(2026, 10, 17, 1, 30, tzinfo=ZoneInfo('Asia/Seoul'))
+    return owner, now, selection, observations, calls
+
+
+def test_weekend_owner_uses_verified_next_session_without_changing_observation_date(monkeypatch, tmp_path):
+    owner, now, selection, observations, calls = _weekend_owner_case(monkeypatch, tmp_path)
+    owners, context = owner._semantic_owner_context(tmp_path, now, selection, observations)
+    assert owners == {'HoldingProfitExitSourceContractRepair'}
+    assert context['as_of_date'] == '2026-10-17'
+    assert context['owner_checklist_date'] == '2026-10-19'
+    assert context['basis'] == 'verified_next_session_handoff'
+    assert calls == ['2026-10-17', '2026-10-19']
+
+
+@pytest.mark.parametrize('object_name,key,value', [
+    ('selection', 'status', 'source_invalid'), ('selection', 'findings', ['invalid']),
+    ('selection', 'source_date', '2026-10-17'), ('selection', 'target_date', '2026-10-20'),
+    ('selection', 'prepared_source_date', '2026-10-15'), ('selection', 'generation', 'c'*64),
+    ('handoff', 'status', 'blocked'), ('handoff', 'findings', ['generation_invalid']),
+    ('handoff', 'observation_date', '2026-10-16'), ('handoff', 'bound_target_date', '2026-10-20'),
+    ('handoff', 'next_due_target_date', '2026-10-20'),
+    ('prepared', 'status', 'fail'), ('prepared', 'findings', ['stale']),
+    ('prepared', 'source_date', '2026-10-15'), ('prepared', 'target_date', '2026-10-20'),
+    ('prepared', 'selected_release_commit', None), ('prepared', 'actual_pid_consumed', True),
+    ('prepared', 'runtime_effect', True), ('prepared', 'actual_pid_consumed', None),
+])
+def test_weekend_owner_rejects_unverified_handoff(monkeypatch, tmp_path, object_name, key, value):
+    owner, now, selection, observations, calls = _weekend_owner_case(monkeypatch, tmp_path)
+    handoff = observations[0]['semantics']
+    objects = dict(selection=selection, handoff=handoff, prepared=handoff['prepared'])
+    objects[object_name][key] = value
+    with pytest.raises(ValueError, match='current_checklist_missing'):
+        owner._semantic_owner_context(tmp_path, now, selection, observations)
+    assert calls == ['2026-10-17']
+
+
+def test_missing_trading_day_owner_cannot_borrow_future_checklist(monkeypatch, tmp_path):
+    owner, now, selection, observations, calls = _weekend_owner_case(monkeypatch, tmp_path)
+    monkeypatch.setattr(owner, 'is_krx_trading_day', lambda d: True)
+    with pytest.raises(ValueError, match='current_checklist_missing'):
+        owner._semantic_owner_context(tmp_path, now, selection, observations)
+    assert calls == ['2026-10-17']
+
+
+def test_current_checklist_takes_priority_even_when_empty(monkeypatch, tmp_path):
+    owner, now, selection, observations, calls = _weekend_owner_case(monkeypatch, tmp_path)
+    monkeypatch.setattr(owner, '_current_semantic_owners', lambda *args: set())
+    owners, context = owner._semantic_owner_context(tmp_path, now, {}, [])
+    assert owners == set()
+    assert context['basis'] == 'current_checklist'
+    assert context['owner_checklist_date'] == '2026-10-17'
+
+
+@pytest.mark.parametrize('duplicate', [False, True])
+def test_weekend_owner_requires_one_verified_handoff(monkeypatch, tmp_path, duplicate):
+    owner, now, selection, observations, calls = _weekend_owner_case(monkeypatch, tmp_path)
+    observations = observations * 2 if duplicate else []
+    with pytest.raises(ValueError, match='current_checklist_missing'):
+        owner._semantic_owner_context(tmp_path, now, selection, observations)
+
+
+def test_weekend_owner_requires_existing_next_session_checklist(monkeypatch, tmp_path):
+    owner, now, selection, observations, calls = _weekend_owner_case(monkeypatch, tmp_path)
+    def missing(*args):
+        raise ValueError('current_checklist_missing')
+    monkeypatch.setattr(owner, '_current_semantic_owners', missing)
+    with pytest.raises(ValueError, match='current_checklist_missing'):
+        owner._semantic_owner_context(tmp_path, now, selection, observations)
+
+
 @pytest.mark.parametrize("owner", ["machine", "auxiliary", "handoff"])
 def test_semantic_generation_race_is_unobservable_not_corruption(tmp_path, monkeypatch, owner):
     day = "2026-10-02"

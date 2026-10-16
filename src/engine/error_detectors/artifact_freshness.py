@@ -2134,7 +2134,7 @@ def _optional_weakness_semantics(root, now):
 
 
 def _current_semantic_owners(root, day):
-    """Project only today's parsed OPEN stable IDs; no historical fallback."""
+    """Project unique parsed OPEN stable IDs from one exact checklist."""
     from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
     owners = Counter()
     path = root / 'docs/checklists' / (day + '-stage2-todo-checklist.md')
@@ -2147,6 +2147,51 @@ def _current_semantic_owners(root, day):
         if match:
             owners[match[1]] += 1
     return {key for key, count in owners.items() if count == 1}
+
+
+def _semantic_owner_context(root, now, selection, observations):
+    """Use a future owner only across a verified nontrading-day handoff.
+
+    Reuse this sweep's native closure/readiness checks; do not reread raw
+    sources, manufacture a calendar-day checklist, or borrow historical IDs.
+    """
+    day = _today_kst_str(now)
+    context = dict(as_of_date=day, owner_checklist_date=day, basis='current_checklist')
+    try:
+        return _current_semantic_owners(root, day), context
+    except ValueError as exc:
+        if str(exc) != 'current_checklist_missing':
+            raise
+    target = _semantic_due_target(now)
+    source = selection.get('source_date')
+    handoffs = [item['semantics'] for item in observations
+                if item.get('stage') == 'postclose_handoff'
+                and item.get('semantics', {}).get('source_date') == source]
+    if (is_krx_trading_day(datetime.fromisoformat(day).date())
+            or selection.get('status') != 'receipt_selected' or selection.get('findings')
+            or not isinstance(source, str) or not source < day < target
+            or selection.get('target_date') != target
+            or selection.get('prepared_source_date') != source or len(handoffs) != 1):
+        raise ValueError('current_checklist_missing')
+    handoff = handoffs[0]
+    prepared = handoff.get('prepared') or {}
+    if (handoff.get('status') != 'done' or handoff.get('findings')
+            or not handoff.get('report_sha256')
+            or handoff.get('report_sha256') != selection.get('generation')
+            or handoff.get('observation_date') != day
+            or handoff.get('bound_target_date') != target
+            or handoff.get('next_due_target_date') != target
+            or prepared.get('status') != 'pass' or prepared.get('findings')
+            or prepared.get('source_date') != source or prepared.get('target_date') != target
+            or not prepared.get('selected_release_commit')
+            or prepared.get('actual_pid_consumed') is not False
+            or prepared.get('runtime_effect') is not False):
+        raise ValueError('current_checklist_missing')
+    owners = _current_semantic_owners(root, target)
+    context.update(owner_checklist_date=target, basis='verified_next_session_handoff',
+                   source_date=source, controller_sha256=handoff['report_sha256'],
+                   selected_release_commit=prepared['selected_release_commit'])
+    return owners, context
 
 
 def _semantic_alerts(name, semantics, source_date, *, current_owners=None, as_of_date=None):
@@ -3436,14 +3481,21 @@ class ArtifactFreshnessDetector(BaseDetector):
             alerts.extend(_semantic_alerts('entry_cancel_wait_tuning', cancel_wait, cancel_wait_day))
         details['semantic_alerts'] = alerts
         owner_day = _today_kst_str(now_dt)
+        owner_context = dict(as_of_date=owner_day, owner_checklist_date=owner_day,
+                             basis='current_checklist')
         try:
-            current_owners = _current_semantic_owners(PROJECT_ROOT, owner_day)
+            current_owners, owner_context = _semantic_owner_context(
+                PROJECT_ROOT, now_dt, selection, observations)
             owner_error = None
         except (OSError, ValueError, TypeError) as exc:
             current_owners, owner_error = set(), type(exc).__name__ + ':' + str(exc)
         for alert in alerts:
-            _project_semantic_owner(alert, current_owners, owner_day)
-        details['semantic_owner_projection'] = dict(as_of_date=owner_day, open_ids=sorted(current_owners), error=owner_error)
+            eligible = (owner_context['basis'] == 'current_checklist'
+                        or alert.get('source_date') == owner_context.get('source_date'))
+            _project_semantic_owner(alert, current_owners if eligible else set(), owner_day)
+            alert['owner_checklist_date'] = owner_context['owner_checklist_date']
+            alert['owner_projection_basis'] = owner_context['basis']
+        details['semantic_owner_projection'] = dict(owner_context, open_ids=sorted(current_owners), error=owner_error)
         from src.engine.monitoring.error_detector_coverage import validate_semantic_coverage
         coverage = validate_semantic_coverage(owner_day, active_alerts=alerts, owner_error=owner_error)
         details['functional_semantic_coverage'] = coverage
