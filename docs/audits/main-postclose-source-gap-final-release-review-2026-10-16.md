@@ -64,6 +64,12 @@ BUY의 `semantic_status=partial`, `warning_pending/bounded_source_quality_observ
 
 다음 배포 수용은 코드·정책·PID와 별도로 **변경된 native verifier의 report/projection 영수증 재검증 → 기동 이후 새 보고서 → 그 SHA를 소비한 detector**까지 확인해야 한다. 이번 기록은 이 단계를 자동화했다고 주장하지 않는다.
 
+### 13:06 최종 현재 세대 재점검
+
+정규 13:05:45.854058 BUY 보고서에서 `unmet_conditions=[]`, `reason=recorded_guard_or_cohort_pending`, 원천 커버리지 incident=`recovered`를 확인했다. 현재 10분 probe 13개 중 9개가 검증된 native 원천 커버리지이며 current machine/source issues는 모두 `{}`다. `partial/warning_pending`은 식별된 scanner 기계 평가가 아직 없는 대기 상태로 보존하고 기계 PASS·주문·전체 자연 관측 완료를 주장하지 않는다. 이전 10개의 만료 표본은 마지막 원천이 3.029~27.998초 전인 반면 실제 packet→native 반영은 0.754~8.202ms였다. 이 표본은 수신 뒤 수초의 로컬 정체를 뒷받침하지 않는다. 원 표본/결손은 보존하며 현재 회복과 구분한다.
+
+정규 후속 holding도 13:06:06 완료됐다. 새 기준 시각 `2026-10-16T13:00:05.562981+09:00`, SHA `04045bd4957565e6dd2504ed0d6cbdb08d39e3827200bda6af45788e331fe7e3`, generation `c55c7bd09de83eabde317e399bcc92c84089200b5a39660bcf50307ba57bcd52`를 확인한다. 현재 PID 소비와 policy/runtime gap 빈 배열을 다시 대조했다. 13:06:37 full detector가 이 holding 원문과 13:05 BUY 원문의 정확한 SHA를 소비했고 **FAIL 0건/일반 health 6개 PASS**다. 과거 holding 원천 결손 5개 및 전일 entry_cancel_wait/rising_missed policy-generation warning은 유지한다. `final-verification.json`, `holding-native-current-1300.json`, `buy-observer-current-1305.json`, `current-buy-health-full-detector.json`, `buy-native-expiry-clock-diagnosis.json`을 최종 근거로 사용한다.
+
 ## Holding 5분 39초 지연의 측정과 개선 순서
 
 운영 보고서는 339초 걸렸다. 실행 중 단일 Python thread가 약 99% CPU를 사용했고, 두 표본 사이 `rchar=951,327,309`, `read_bytes=692,842,496`이 변하지 않은 채 CPU 시간이 증가했다. 모든 stage의 wall time을 계측한 것은 아니지만, source wait/정지 대신 반복 계산의 영향이 크다는 실행 증거다. 전체 보고서를 다시 생성하지 않고 frozen scope projection과 제한된 순수 함수 profile로 확인했다.
