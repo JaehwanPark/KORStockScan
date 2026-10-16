@@ -2948,13 +2948,48 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
 ]
 
 
+def _postclose_main_absent():
+    import subprocess
+    try:
+        result = subprocess.run(['pgrep','-f',r'(^|[[:space:]/])bot_main[.]py([[:space:]]|$)'],
+            stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=2,check=False)
+        return result.returncode == 1
+    except (OSError,subprocess.TimeoutExpired):
+        return False
+
+
 def _closed_submission_observer_evidence(payload, root, source_day, current_day):
     """Attest a closed day's retained observation without claiming current coverage."""
-    if (not source_day or source_day >= current_day or payload.get('date') != source_day
+    if (not source_day or source_day > current_day or payload.get('date') != source_day
             or payload.get('execution_status') != 'completed'
             or payload.get('semantic_status') not in {'partial', 'validated'}):
         return None
     try:
+        closure = None
+        if source_day == current_day:
+            selected_path=Path(root)/'data/runtime/runtime_release_selection.json'
+            selected,selected_sha=_observer_small_object(selected_path,limit=1024*1024)
+            eod_path=Path(root)/'data/runtime/update_kospi_status'/f'update_kospi_{source_day}.json'
+            eod,eod_sha=_observer_small_object(eod_path,limit=1024*1024)
+            finished=_observer_clock(eod.get('finished_at'))
+            selected_at=_observer_clock(selected.get('selected_at_kst'))
+            next_day=selected.get('next_operating_date')
+            if not isinstance(next_day,str) or date.fromisoformat(next_day).isoformat()!=next_day:
+                return None
+            db=eod.get('db_state') or {}
+            if (selected.get('approval_scope')!='after_postclose_deploy_for_next_regular_start'
+                    or selected.get('actual_pid_consumed') is not False
+                    or selected.get('actual_pid_receipt') is not None
+                    or next_day<=source_day
+                    or eod.get('target_date')!=source_day
+                    or eod.get('status') not in {'completed','completed_with_warnings'}
+                    or db.get('latest_quote_date')!=source_day
+                    or type(db.get('rows_on_latest_date')) is not int or db['rows_on_latest_date']<=0
+                    or finished is None or selected_at is None or selected_at<finished
+                    or finished.date().isoformat()!=source_day or not _postclose_main_absent()):
+                return None
+            closure=dict(status='same_day_eod_closed_next_start_selected',eod_sha256=eod_sha,
+                         selection_sha256=selected_sha)
         terminal, _ = _observer_small_object(Path(root) / 'data/report/threshold_cycle_postclose_status' /
             f'threshold_cycle_postclose_{source_day}.status.json', limit=1024 * 1024)
         if terminal.get('target_date') != source_day or terminal.get('status') != 'succeeded':
@@ -2965,7 +3000,12 @@ def _closed_submission_observer_evidence(payload, root, source_day, current_day)
             return None
         for path in candidates:
             if _submission_observer_generation_issue(payload, root, selection_path=path) is None:
+                if closure and (_observer_small_object(selected_path,limit=1024*1024)[1]!=selected_sha
+                        or _observer_small_object(eod_path,limit=1024*1024)[1]!=eod_sha
+                        or not _postclose_main_absent()):
+                    return None
                 return dict(status='historical_generation_verified', selection_path=str(path),
+                    closure=closure,
                     selection_sha256=payload['observer_generation']['selection_sha256'],
                     semantic_status=payload['semantic_status'],
                     source_gap_preserved=payload.get('source_gap_semantics'),
@@ -3185,7 +3225,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                     continue
                 if aid == "submission_bottleneck_monitor":
                     historical = _closed_submission_observer_evidence(observer_snapshot[0], PROJECT_ROOT,
-                        source_day, _today_kst_str(now_dt))
+                        source_day or today, _today_kst_str(now_dt))
                     if historical is not None:
                         try:
                             unchanged = _observer_file_signature(artifact_path.lstat()) == observer_snapshot[2]

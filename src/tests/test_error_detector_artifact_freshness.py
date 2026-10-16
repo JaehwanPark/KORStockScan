@@ -3498,3 +3498,58 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
     result=detector._optional_weakness_semantics(tmp_path,now)
     assert result['findings']==['optional_research_calendar_unverified']
     assert result['native_validated'] is False
+
+
+@pytest.mark.parametrize('damage',['none','active_main','unknown_main','eod_missing','eod_failed','eod_date','eod_db','eod_late','selection_scope','pid_consumed','pid_receipt','next_date','bad_next_date','terminal','archive'])
+def test_same_day_closed_observer_requires_exact_eod_and_no_live_main(tmp_path,monkeypatch,damage):
+    mod,root,now,path,report,_,_,selector,selection=_current_observer_fixture(tmp_path,monkeypatch)
+    archived=root/'data/runtime/postclose_recovery/2026-10-14/recovery/selection-before.json'
+    archived.parent.mkdir(parents=True);archived.write_bytes(selector.read_bytes())
+    current={**selection,'actual_pid_consumed':False,'actual_pid_receipt':None,
+        'approval_scope':'after_postclose_deploy_for_next_regular_start',
+        'next_operating_date':'2026-10-15','selected_at_kst':'2026-10-14T21:00:00+09:00'}
+    terminal=root/'data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_2026-10-14.status.json'
+    terminal.parent.mkdir(parents=True);terminal.write_text(json.dumps(dict(target_date='2026-10-14',status='succeeded')))
+    eod_path=root/'data/runtime/update_kospi_status/update_kospi_2026-10-14.json';eod_path.parent.mkdir(parents=True)
+    eod=dict(target_date='2026-10-14',status='completed_with_warnings',finished_at='2026-10-14T20:56:06+09:00',
+        db_state=dict(latest_quote_date='2026-10-14',rows_on_latest_date=2600))
+    monkeypatch.setattr(mod,'_postclose_main_absent',lambda:damage not in {'active_main','unknown_main'})
+    if damage=='eod_failed':eod['status']='failed'
+    elif damage=='eod_date':eod['target_date']='2026-10-13'
+    elif damage=='eod_db':eod['db_state']['rows_on_latest_date']=0
+    elif damage=='eod_late':eod['finished_at']='2026-10-14T22:00:00+09:00'
+    elif damage=='selection_scope':current['approval_scope']='ordered_intraday'
+    elif damage=='pid_consumed':current['actual_pid_consumed']=True
+    elif damage=='pid_receipt':current['actual_pid_receipt']=selection['actual_pid_receipt']
+    elif damage=='next_date':current['next_operating_date']='2026-10-14'
+    elif damage=='bad_next_date':current['next_operating_date']='later'
+    elif damage=='terminal':terminal.write_text('{}')
+    elif damage=='archive':archived.write_text('{}')
+    if damage!='eod_missing':eod_path.write_text(json.dumps(eod))
+    selector.write_text(json.dumps(current))
+    assessment=mod._closed_submission_observer_evidence(report,root,'2026-10-14','2026-10-14')
+    if damage!='none':assert assessment is None;return
+    assert assessment['closure']['status']=='same_day_eod_closed_next_start_selected'
+    assert assessment['source_gap_preserved']==report['source_gap_semantics']
+    assert assessment['current_generation_verified'] is assessment['current_observation_verified'] is assessment['full_coverage_proven'] is False
+    _isolate_submission_artifact_check(mod,root,now.replace(hour=22),monkeypatch)
+    result=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.severity=='warning'
+    assert result.details['submission_bottleneck_monitor_status']=='historical_observation_only'
+
+
+@pytest.mark.parametrize('returncode,absent',[(0,False),(1,True),(2,False)])
+def test_postclose_main_absence_requires_successful_process_scan(monkeypatch,returncode,absent):
+    import subprocess
+    from src.engine.error_detectors import artifact_freshness as mod
+    monkeypatch.setattr(subprocess,'run',lambda *a,**k:subprocess.CompletedProcess(a,returncode))
+    assert mod._postclose_main_absent() is absent
+
+
+def test_postclose_main_absence_timeout_is_unknown(monkeypatch):
+    import subprocess
+    from src.engine.error_detectors import artifact_freshness as mod
+    def timeout(*a,**k):
+        raise subprocess.TimeoutExpired(a,2)
+    monkeypatch.setattr(subprocess,'run',timeout)
+    assert mod._postclose_main_absent() is False

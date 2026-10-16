@@ -273,3 +273,7 @@ selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한�
   - 추가 승인: raw117/summary118의 as-of 행 유실을v3 cursor로 수리하고7d62534e3 누적 보조연구를 통합한다. 실제118행 count/hash parity와3,211개 영향 회귀 후 native active-policy 인계·delay/stop/holding gate→정규 배포/재기동→새 PID/observer를 검증한다. 주성 AFTER/SOR·10만원 이상 및 기타 비삼성 PRE/NXT·2만~10만원의 보조후보는 현행 actual 응답을 재사용해 재검증 후 CAS 발행한다. 새 AI 호출0·800/800 예산 보존. 003540/417860 수신0과 과거 결손은 기존 원천 owner에 남긴다. [통합 리뷰](../audits/main-source-cursor-and-auxiliary-integration-review-2026-10-16.md).
   - 잔여 실행: 자연 v4 intent→5 horizon 및10/16 정규 장후→10/19 준비/소비를 DirectFamilyPreopenPolicyHandoff에 연결한다. Due: 2026-10-16; Slot: POSTCLOSE; TimeWindow: 정규20:05 이후 장후 및 다음 운영일 PREOPEN 인계; Track: runtime-source-contract. 과거15일 격리 재계산은 완료(267건, UNKNOWN29,195cell)했으며 정규16일 terminal을 대체하지 않는다.
   - 기존 경고 수용은 HoldingProfitExitSourceContractRepair/NonfixedDispatchReadinessReview1012/OperationalLogRetentionRepair1016/MainMarketWeaknessPostcloseObservation1008의 원 Acceptance를 유지한다. 감시 구현·시험 통과를 해당 원천·경제성 완료로 사용하지 않는다.
+
+장후 관측 세대 보완: Main 종료 뒤 다음 기동용 릴리스를 선택한 같은 날에도, 정확한 EOD/DB·성공 terminal·Main 부재·원 selector/observer 봉인이 모두 유효할 때만 마감 관측으로 검증한다. 현재 PID 관측/완전성 PASS로 승격하지 않고 원 source gap을 보존한다. [운영 계약 §17](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md#17-eod-종료-후-관측-세대의-의미-구분).
+
+삼성 선택 연구 원천 삭제 확인: 사용자가 과거 원천을 의도적으로 삭제했음을 확인하여 이번 세션이 추가한 복구 작업을 취소했다. 삭제 원천을 복원하거나 연구 성공으로 대체하지 않는다. 남아 있는 optional forward 검증은 과거 후보의 source seal을 재확인하기 때문에 실패하며, 당일 분석은 별도의 당일 관측·가격·체결 자료를 사용한다. Main 정책·기동의 필수 조건이 아니다. 과거 연구 종료 또는 예약 호출 제거는 이 확인과 구분한다.

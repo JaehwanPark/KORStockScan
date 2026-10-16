@@ -320,3 +320,9 @@ source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10
 실자료 대사에서 옛 gzip와 sidecar가 함께 있을 때 새 inode 경로가 기존 valid_empty를 source_gap으로 바꾸는 호환성 차이를 추가로 발견했다. 갱신 전 source-window gate에서 중단했으며 새 보고서는 쓰지 않았다. 원 identity 영수증 없는 옛 gzip은 기존 bounded gzip byte-generation 계약을 그대로 유지하고, 새 영수증이 있는 원천만 inode 인계 경로를 사용한다. 기존 전체 날짜의 frozen window 일치와 별도 회귀로 확인한다.
 
 보유 재생성 PID의 중간 계측은 논리 읽기17.86GB·물리 읽기12.26GB였으며 task-local 직접 builder 호출에는 세션이 없었다. 정규 `run_monitor_snapshot` CLI의 postclose_exit 경계에도 같은 invocation-local session을 적용한다. 원본 전체 해시를 처음 한 번 검증하고 원천 세대 변경은 계속 탐지하며, normal intraday/library 호출과 원 producer 오류·lock·wrapper-only gate는 보존한다. 실패 경로에서도 세션이 닫히는 실제 CLI 회귀로 확인한다.
+
+## 17. EOD 종료 후 관측 세대의 의미 구분
+
+Main이 자연 종료한 뒤 다음 정상 기동용 릴리스만 선택한 경우, 종료 전 observer를 새 PID의 보고서로 검증할 수 없다. 같은 날의 마감 관측은 정확한 EOD 완료·당일 DB 날짜/양수 행수·EOD 이후 다음 영업일 전용 선택·미소비 selector·Main 부재·성공한 Main 장후 terminal·봉인된 원 selector와 observer 세대의 검증을 모두 요구한다. selector/EOD 세대와 Main 부재를 재확인하고, 불명확한 process scan·잘못된 날짜·누락/실패·서명 불일치는 기존 실패를 유지한다.
+
+이 경로는 historical_generation_verified와 원 source gap만 보존한다. current_generation_verified/current_observation_verified/full_coverage_proven/runtime_effect는 모두 false이며, 신규 PID의 원천 관측이나 자연 주문·경제성을 증명하지 않는다. 기존 과거 날짜 검증과 장중/current-PID 검증은 유지한다. 삼성 선택 연구의 사용자가 삭제한 임시 원천은 복구 대상으로 등록하지 않으며, 남아 있는 선택 검증의 과거 봉인 의존성과 Main 기동 권한을 구분한다.
