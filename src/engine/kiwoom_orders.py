@@ -20,6 +20,7 @@ from src.utils import kiwoom_utils
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.risk.manual_control_exclusion import evaluate_main_bot_control_exclusion
 from src.trading.market import session_contract
+from src.trading.entry.physical_send_guard import EntrySendGuardBlocked
 from src.trading.config.native_owner_policy import (
     SymbolOwnerPolicyError,
     resolve_symbol_owner_policy,
@@ -754,7 +755,8 @@ def _parse_kiwoom_amount(value, *, field_name):
     return int(float(normalized))
 
 
-def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
+def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5,
+                                entry_send_context=None, entry_owner_context=None):
     """POST once, then refresh token and retry once only for Kiwoom auth/token failures."""
     active_headers = dict(headers or {})
     provided_token = (
@@ -777,7 +779,17 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         if not admission.admitted:
             raise RuntimeError(f"account_read_shared_rate_deferred:{admission.reason}")
     from src.utils.kiwoom_transport_telemetry import measured_http_call, record_decoded_response
-    response = measured_http_call(requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=active_headers, json=payload, timeout=timeout)
+    send_receipts = []
+    send_hooks = {}
+    if entry_send_context is not None:
+        from src.trading.entry.physical_send_guard import check_entry_send_context
+        def before_first_call():
+            send_receipts.append(check_entry_send_context(
+                entry_send_context,
+                api_id=api_label if active_headers.get("api-id") == api_label else "header_api_mismatch",
+                owner_context=entry_owner_context, payload=payload))
+        send_hooks["before_call"] = before_first_call
+    response = measured_http_call(requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=active_headers, json=payload, timeout=timeout, **send_hooks)
     http_rate_limit_recorded = False
     if read_api and response.status_code == 429:
         kiwoom_utils.record_kiwoom_read_rate_limit(
@@ -795,6 +807,8 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         record_decoded_response(response, data)
     except Exception:
         return response, {}
+    if send_receipts:
+        data = {**data, "entry_send_guard_receipts": list(send_receipts)}
 
     is_success = str(data.get("rt_cd", data.get("return_code", ""))) == "0"
     if (
@@ -858,8 +872,22 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
             raise RuntimeError(
                 f"account_read_shared_rate_deferred:{retry_admission.reason}"
             )
+    if entry_send_context is not None:
+        def before_retry_call():
+            try:
+                send_receipts.append(check_entry_send_context(
+                    entry_send_context,
+                    api_id=api_label if retry_headers.get("api-id") == api_label else "header_api_mismatch",
+                    owner_context=entry_owner_context, payload=payload))
+            except EntrySendGuardBlocked as exc:
+                # The first POST was a decoded auth rejection. No uncertain
+                # transport response is ever admitted to this retry branch.
+                exc.attempts = 1
+                exc.auth_response = data
+                raise
+        send_hooks["before_call"] = before_retry_call
     retry_response = measured_http_call(
-        requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}.auth_retry", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=retry_headers, json=payload, timeout=timeout
+        requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}.auth_retry", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=retry_headers, json=payload, timeout=timeout, **send_hooks
     )
     retry_http_rate_limit_recorded = False
     if read_api and retry_response.status_code == 429:
@@ -878,6 +906,8 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         record_decoded_response(retry_response, retry_data)
     except Exception:
         return retry_response, {}
+    if send_receipts:
+        retry_data = {**retry_data, "entry_send_guard_receipts": list(send_receipts)}
     retry_success = (
         retry_response.status_code == 200
         and str(retry_data.get("rt_cd", retry_data.get("return_code", ""))) == "0"
@@ -2044,6 +2074,7 @@ def send_buy_order_market(
     owner_context=None,
     now=None,
     venue_eligibility=None,
+    entry_send_context=None,
 ):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
@@ -2201,9 +2232,23 @@ def send_buy_order_market(
         return owner_block
 
     try:
-        res, data = _post_kiwoom_with_auth_retry(
-            url, headers, payload, "kt10000", timeout=5
-        )
+        send_kwargs = ({"entry_send_context": entry_send_context,
+                        "entry_owner_context": context}
+                       if entry_send_context is not None else {})
+        try:
+            res, data = _post_kiwoom_with_auth_retry(
+                url, headers, payload, "kt10000", timeout=5, **send_kwargs)
+        except EntrySendGuardBlocked as exc:
+            blocked = exc.response()
+            registry_block = _finish_owner_registry_intent(
+                owner_registry, owner_intent_id, response=blocked)
+            if registry_block is not None:
+                blocked["owner_registry_finalize_gap"] = registry_block
+            if owner_intent_id:
+                blocked["owner_registry_intent_id"] = owner_intent_id
+            return _with_order_route_provenance(
+                blocked, route_resolution=submit_provenance,
+                broker_route_attempted=exc.attempts > 0)
 
         is_success = (
             str(data.get("rt_cd", "")) == "0" or str(data.get("return_code", "")) == "0"
@@ -2271,6 +2316,7 @@ def send_buy_order(
     owner_context=None,
     now=None,
     venue_eligibility=None,
+    entry_send_context=None,
 ):
     """
     Legacy wrapper for send_buy_order_market.
@@ -2290,6 +2336,8 @@ def send_buy_order(
         owner_context=owner_context,
         now=now,
         venue_eligibility=venue_eligibility,
+        **({"entry_send_context": entry_send_context}
+           if entry_send_context is not None else {}),
     )
 
 

@@ -713,6 +713,17 @@ def audit_observation(bundle,observation):
     adapted=copy.deepcopy(observation)
     arm=bundle['continuous_reversal']['auxiliary_cells'][a['cell_key']]['routes'][a['route']]['payload']['arm']
     adapted['source']['auxiliary_request']['prompt']=G.projector(value['input_version']).PROMPT+G.projector(value['input_version']).ARM_SUFFIXES[arm]
+    calculation=adapted['source']['assessment'].get('entry_source_quote_calculation')
+    if calculation:
+        # Original overlay and calculation bytes were verified above. This is
+        # only the existing native comparison view, never a rewritten receipt.
+        from src.engine.scalping.entry_machine_source_recovery import audit_quote_calculation
+        audit_quote_calculation(a,request)
+        calculation['root_request']['prompt']=adapted['source']['auxiliary_request']['prompt']
+        calculation['root_request_sha256']=P.digest(calculation['root_request'])
+        calculation['calculation_request_sha256']=P.digest(adapted['source']['auxiliary_request'])
+        adapted['runtime_consumption']['continuous_reversal']['assessment_sha256']=hashlib.sha256(
+            _json_bytes(adapted['source']['assessment'])).hexdigest()
     adapted['runtime_consumption']['continuous_reversal']['arm']=arm
     adapted['runtime_consumption']['continuous_reversal']['prompt_sha256']=P.digest(adapted['source']['auxiliary_request']['prompt'])
     return V.audit_observation(bundle,adapted)

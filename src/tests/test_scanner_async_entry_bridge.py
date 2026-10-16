@@ -255,7 +255,8 @@ def test_native_ack_exception_is_before_acceptance_and_cleans_only_original(monk
 
 @pytest.mark.parametrize('origin', ['scanner', 'fixed_watch'])
 @pytest.mark.parametrize('compact', ['v1', 'v2'])
-@pytest.mark.parametrize('outcome', ['accepted', 'no_response', 'exception', 'final_deadline', 'delay_capacity', 'delay_armed'])
+@pytest.mark.parametrize('outcome', ['accepted', 'no_response', 'exception', 'final_deadline', 'delay_capacity', 'delay_armed',
+                                     'context_block', 'local_guard_block', 'auth_guard_block'])
 def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monkeypatch, origin, compact, outcome):
     """Real resolver, WATCHING, receipt/sizing/price/final guards; no network."""
     from src.tests.test_mechanistic_entry_runtime_policy import initial
@@ -293,6 +294,10 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
     monkeypatch.setattr(handlers, 'EVENT_BUS', SimpleNamespace(publish=lambda *a, **k:None))
     monkeypatch.setattr(handlers, '_publish_buy_signal_submission_notice', lambda *a, **k:None)
     stages=[]
+    dispositions = []
+    from src.engine.scalping import scanner_async_eval as async_owner
+    monkeypatch.setattr(async_owner, 'record_async_disposition',
+        lambda result, disposition, reason, **facts: dispositions.append((disposition, reason, facts)))
     monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda s, c, stage, **k:stages.append((stage,k)))
     if outcome.startswith('delay_'):
         from collections import OrderedDict, Counter
@@ -382,7 +387,10 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
     if outcome.startswith('delay_'):
         stock['market_session_bucket']='KRX_REGULAR'
     original=replace(original,state_version=handlers._scanner_async_entry_state_version(stock))
+    time_policy_receipt = handlers._entry_quote_time_policy().to_dict()
+    payload['entry_ai_quote_time_policy_receipt'] = time_policy_receipt
     original=replace(original, ai_payload=payload, prepared_context=dict(
+        final_entry_refresh_fields={'entry_ai_quote_time_policy_receipt': time_policy_receipt},
         recent_ticks=_trusted_orderbook_touch_ticks(price=10000,hhmm='13:55'),
         recent_candles=_micro_vwap_candles(price=10000), candle_context={}))
     coordinator._ready[original.request_id]=original
@@ -405,8 +413,19 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
             return None
         if outcome == 'exception':
             raise RuntimeError('controlled broker transport uncertainty')
+        if outcome in {'local_guard_block', 'auth_guard_block'}:
+            attempted = outcome == 'auth_guard_block'
+            return dict(return_code='ENTRY_SEND_GUARD_BLOCKED', entry_send_guard_blocked=True,
+                return_msg='original_entry_deadline_expired', broker_order_attempted=attempted,
+                physical_send_attempt_count=int(attempted),
+                entry_send_guard_receipt={'allowed': False, 'reason': 'original_entry_deadline_expired'},
+                rejected_auth_response={'return_code': '8005'} if attempted else None)
         return dict(return_code='0', ord_no='0000001', broker_route='SOR')
     monkeypatch.setattr(handlers.kiwoom_orders, 'send_buy_order', adapter)
+    if outcome == 'context_block':
+        def invalid_context(*args, **kwargs):
+            raise ValueError('controlled_initial_context_invalid')
+        monkeypatch.setattr(handlers, '_main_initial_physical_send_context', invalid_context)
     if outcome == 'final_deadline':
         real_owner_context = handlers.main_owner_context
         def late_owner(*args, **kwargs):
@@ -429,13 +448,27 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
                 consume()
         else:
             consume()
-        expected = 0 if outcome == 'final_deadline' or outcome.startswith('delay_') else 1
+        expected = 0 if outcome in {'final_deadline', 'context_block'} or outcome.startswith('delay_') else 1
         if len(calls) != expected:
             pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in ('reason','skip_reason','block_reason','submit_call_outcome','sizing_block_reason')}) for s,f in stages[-12:]]))
         if calls:
             assert calls[0][0][0] == '005930' and calls[0][0][1] > 0
         if outcome == 'accepted':
             assert any(stage=='order_bundle_submitted' for stage,_ in stages)
+        if outcome in {'context_block', 'local_guard_block', 'auth_guard_block'}:
+            failed = next(fields for stage, fields in stages if stage == 'order_bundle_failed')
+            attempted = outcome == 'auth_guard_block'
+            terminal_reason = ('entry_physical_send_context_block' if outcome == 'context_block'
+                               else 'entry_physical_send_guard_block')
+            assert failed['broker_submit_attempt_count'] == int(attempted)
+            assert failed['order_bundle_failure_mode'] == (
+                'broker_submit_failed_or_unacknowledged' if attempted else 'pre_broker_blocked')
+            assert failed['broker_order_forbidden'] is (not attempted)
+            assert failed['entry_send_guard_terminal_reason'] == terminal_reason
+            assert failed['physical_send_attempt_count'] == int(attempted)
+            returned = [event for event in dispositions if event[0] == 'entry_path_returned']
+            assert returned[-1][1] == terminal_reason
+            assert returned[-1][2]['async_entry_broker_attempts'] == int(attempted)
         if outcome=='delay_armed':
             if '_pre_submit_delay_pending' not in stock:
                 pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in (

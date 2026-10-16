@@ -80,6 +80,26 @@ _LATENCY_TRUE_OFI_DIRECT_CANARY_FORBIDDEN_USES = (
 _KST = timezone(timedelta(hours=9))
 
 
+def resolved_quote_time_policy(**owner_values):
+    """Combine actual stage owners without inventing another config parser."""
+    if not owner_values:
+        # Runtime-only import: the Main adapter supplies resolved configuration.
+        # Its explicit-values call below terminates this delegation.
+        from src.engine.sniper_state_handlers import _entry_quote_time_policy
+        return _entry_quote_time_policy()
+    from src.trading.entry.quote_time_policy import configured_quote_time_policy
+    from src.trading.market.quote_consistency import QuoteConsistencyConfig
+    from src.engine.scalping.ai_market_snapshot import _FRESH_MS
+
+    return configured_quote_time_policy(
+        latency_safe_ms=_CONFIG.max_ws_age_ms_for_safe,
+        latency_caution_ms=_CONFIG.max_ws_age_ms_for_caution,
+        canonical_input_max_age_ms=_FRESH_MS,
+        consistency_ws_max_age_ms=QuoteConsistencyConfig.from_env().max_ws_age_ms,
+        **owner_values,
+    )
+
+
 def _orderbook_stability_for_frame(
     code: str, ws_data: dict[str, Any] | None
 ) -> dict[str, Any]:
@@ -5084,6 +5104,7 @@ def evaluate_live_buy_entry(
             "position_tag": stock.get("position_tag"),
             "market_data_health": getattr(quote_health, "market_data_health", None),
             "input_quote_source_receipt": source_receipt,
+            "quote_time_policy_receipt": resolved_quote_time_policy().to_dict(),
         },
     )
     policy = _ENTRY_POLICY.evaluate(
@@ -5509,6 +5530,7 @@ def evaluate_live_buy_entry(
         "quote_stale": latency.quote_stale,
         "market_data_health": getattr(quote_health, "market_data_health", None),
         "input_quote_source_receipt": source_receipt,
+        "quote_time_policy_receipt": resolved_quote_time_policy().to_dict(),
         "cached_quote_received_epoch": getattr(quote_health, "quote_received_epoch", None),
         "cached_quote_receive_age_ms": getattr(quote_health, "quote_receive_age_ms", None),
         "latency_danger_reasons": latency_danger_reasons,

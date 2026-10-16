@@ -9,6 +9,7 @@ import threading
 import math
 import re
 import bisect
+from copy import deepcopy
 from types import SimpleNamespace
 from datetime import datetime
 from urllib.parse import urlsplit
@@ -28,6 +29,58 @@ from src.engine.scalping_feature_packet import _select_recent_ticks_with_source
 
 RESULT_SCHEMA = "zero_base_probe_result_v2"
 LEGACY_RESULT_SCHEMA = "zero_base_probe_result_v1"
+_SOURCE_WAIT_LOCK = threading.Lock()
+_SOURCE_WAITERS = {}
+
+
+class _ExactProbeSourceWait:
+    """Coalesce quote wakes for a probe actually waiting on this transport."""
+
+    def __init__(self, ws_manager, item):
+        self.manager_id = id(ws_manager)
+        self.item = item
+        self.key = None
+
+    def __enter__(self):
+        return self
+
+    def sequence(self, transport_epoch, *, active):
+        from src.engine.scalping.reversal_source_diagnostics import observation_sequence
+
+        # The manager's snapshot lock is never acquired under this lock. Ingress
+        # may therefore publish under its own lock before taking this one.
+        with _SOURCE_WAIT_LOCK:
+            if active and self.key is None and type(transport_epoch) is int and transport_epoch > 0:
+                self.key = (self.manager_id, self.item, transport_epoch)
+                row = _SOURCE_WAITERS.setdefault(self.key, {"count": 0, "pending": False})
+                row["count"] += 1
+            if self.key is not None:
+                _SOURCE_WAITERS[self.key]["pending"] = False
+            return observation_sequence(self.item)
+
+    def __exit__(self, *_exc):
+        with _SOURCE_WAIT_LOCK:
+            if self.key is not None:
+                row = _SOURCE_WAITERS[self.key]
+                row["count"] -= 1
+                if not row["count"]:
+                    del _SOURCE_WAITERS[self.key]
+
+
+def notify_exact_probe_source(ws_manager, *, item, transport_epoch):
+    """Notify published 0D only for an active exact probe; never run its FSM."""
+    if type(transport_epoch) is not int or transport_epoch <= 0:
+        return False
+    key = (id(ws_manager), item, transport_epoch)
+    with _SOURCE_WAIT_LOCK:
+        row = _SOURCE_WAITERS.get(key)
+        if row is None or row["pending"]:
+            return False
+        from src.engine.scalping.reversal_source_diagnostics import notify_observation
+
+        row["pending"] = True
+        notify_observation(item)
+    return True
 
 
 def native_history_summary(receipt):
@@ -383,69 +436,76 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
         deadline = min(deadline, residence_deadline)
         empty_deadline = min(empty_deadline, residence_deadline)
     expected_transport=getattr(ws_manager,'_market_data_transport_epoch',None)
-    while True:
-        issue=readiness_guard() if readiness_guard is not None else ''
-        if issue:
-            ws_data={};source_reason=issue
-            break
-        snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
-        transport=snapshot.get('market_data_transport_epoch')
-        if expected_transport is None and type(transport) is int:expected_transport=transport
-        if expected_transport is not None and transport not in (None,expected_transport):
-            ws_data={};source_reason='transport_changed_during_source_wait'
-            break
-        ws_data, source_reason = exact_probe_ws_data(
-            snapshot, code=code, route=route, after_epoch=after_epoch,
-            now_epoch=now(),
-        )
-        observation = probe_ws_observation(
-            snapshot, code=code, route=route, after_epoch=after_epoch, now_epoch=now(),
-        )
-        if (ws_data and observation["exact_0b_count"] >= min_exact_0b_count
-                and time.monotonic() - started >= min_warmup_sec):
-            break
-        if (
-            not observation["exact_0b_count"]
-            and not observation["exact_0d_count"]
-            and observation["latest_0b_ms"] is None
-            and observation["latest_0d_ms"] is None
-            and time.monotonic() >= empty_deadline
-        ):
-            empty_source_flushed = True
-            break
-        if time.monotonic() >= deadline:
-            first_ms = observation.get('first_0b_ms')
-            # Native ingestion already observes real prints during source wait;
-            # never restart its history at the fifth print or borrow a lease.
-            covered = (max(0., now()-after_epoch-first_ms/1000)
-                       if first_ms is not None else 0.)
-            window_left = max(0., required_window_sec-covered)
-            if (not residence_wait and residence_deadline is not None
-                    and (observation['exact_0b_count'] or observation['exact_0d_count'])
-                    and time.monotonic()+window_left < residence_deadline):
-                deadline = residence_deadline
-                residence_wait = True
-                continue
-            one_sided = bool(observation["exact_0b_count"]) != bool(observation["exact_0d_count"])
-            if (not residence_wait and not partial_extension_applied
-                    and partial_extension_sec > 0 and one_sided):
-                deadline = started + max(0.0, timeout_sec) + min(2.0, partial_extension_sec)
-                if residence_deadline is not None:
-                    deadline = min(deadline, residence_deadline)
-                partial_extension_applied = True
-            else:
+    item = probe_item(code, route)
+    with _ExactProbeSourceWait(ws_manager, item) as source_wait:
+        while True:
+            sequence = source_wait.sequence(expected_transport, active=residence_wait)
+            issue=readiness_guard() if readiness_guard is not None else ''
+            if issue:
+                ws_data={};source_reason=issue
                 break
-        remaining = deadline - time.monotonic()
-        if (not observation['exact_0b_count'] and not observation['exact_0d_count']
-                and observation['latest_0b_ms'] is None and observation['latest_0d_ms'] is None):
-            remaining=min(remaining,empty_deadline-time.monotonic())
-        if remaining > 0:
-            if residence_wait:
-                from src.engine.scalping.reversal_source_diagnostics import observation_sequence, wait_observation
-                item = probe_item(code, route)
-                wait_observation(item, observation_sequence(item), min(1., remaining))
-            else:
-                time.sleep(min(max(0.01, poll_interval_sec), remaining))
+            snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
+            transport=snapshot.get('market_data_transport_epoch')
+            if expected_transport is None and type(transport) is int:
+                expected_transport = transport
+                if residence_wait:
+                    # Bind the notification scope before checking this learned
+                    # transport again; a packet can arrive after this snapshot.
+                    continue
+            if expected_transport is not None and transport not in (None,expected_transport):
+                ws_data={};source_reason='transport_changed_during_source_wait'
+                break
+            ws_data, source_reason = exact_probe_ws_data(
+                snapshot, code=code, route=route, after_epoch=after_epoch,
+                now_epoch=now(),
+            )
+            observation = probe_ws_observation(
+                snapshot, code=code, route=route, after_epoch=after_epoch, now_epoch=now(),
+            )
+            if (ws_data and observation["exact_0b_count"] >= min_exact_0b_count
+                    and time.monotonic() - started >= min_warmup_sec):
+                break
+            if (
+                not observation["exact_0b_count"]
+                and not observation["exact_0d_count"]
+                and observation["latest_0b_ms"] is None
+                and observation["latest_0d_ms"] is None
+                and time.monotonic() >= empty_deadline
+            ):
+                empty_source_flushed = True
+                break
+            if time.monotonic() >= deadline:
+                first_ms = observation.get('first_0b_ms')
+                # Native ingestion already observes real prints during source wait;
+                # never restart its history at the fifth print or borrow a lease.
+                covered = (max(0., now()-after_epoch-first_ms/1000)
+                           if first_ms is not None else 0.)
+                window_left = max(0., required_window_sec-covered)
+                if (not residence_wait and residence_deadline is not None
+                        and (observation['exact_0b_count'] or observation['exact_0d_count'])
+                        and time.monotonic()+window_left < residence_deadline):
+                    deadline = residence_deadline
+                    residence_wait = True
+                    continue
+                one_sided = bool(observation["exact_0b_count"]) != bool(observation["exact_0d_count"])
+                if (not residence_wait and not partial_extension_applied
+                        and partial_extension_sec > 0 and one_sided):
+                    deadline = started + max(0.0, timeout_sec) + min(2.0, partial_extension_sec)
+                    if residence_deadline is not None:
+                        deadline = min(deadline, residence_deadline)
+                    partial_extension_applied = True
+                else:
+                    break
+            remaining = deadline - time.monotonic()
+            if (not observation['exact_0b_count'] and not observation['exact_0d_count']
+                    and observation['latest_0b_ms'] is None and observation['latest_0d_ms'] is None):
+                remaining=min(remaining,empty_deadline-time.monotonic())
+            if remaining > 0:
+                if residence_wait:
+                    from src.engine.scalping.reversal_source_diagnostics import wait_observation
+                    wait_observation(item, sequence, min(1., remaining))
+                else:
+                    time.sleep(min(max(0.01, poll_interval_sec), remaining))
     elapsed = time.monotonic() - started
     observation = probe_ws_observation(snapshot,code=code,route=route,after_epoch=after_epoch,now_epoch=now())
     if ws_data and elapsed < max(0.0, min_warmup_sec):
@@ -478,6 +538,40 @@ def probe_ws_snapshot(ws_manager, *, code: str, route: str) -> dict:
     if callable(reader):
         return reader(code, item) or {}
     return ws_manager.get_latest_data(code) or {}
+
+
+def _wait_for_probe_quote_retry(ws_manager, *, pending, code, route,
+                               after_epoch, budget, readiness_guard, now):
+    """Await one post-failure 0D within the original observed signal budget."""
+    from src.engine.scalping.entry_machine_source_recovery import observer_quote_refresh
+    from src.engine.scalping.reversal_source_diagnostics import wait_observation
+
+    item = probe_item(code, route)
+    with _ExactProbeSourceWait(ws_manager, item) as source_wait:
+        while True:
+            sequence = source_wait.sequence(pending["transport_epoch"], active=True)
+            issue = readiness_guard()
+            if issue:
+                return {}, {"allowed": False, "reason": issue}
+            if budget.remaining() <= 0:
+                return {}, {"allowed": False, "reason": "original_native_deadline_expired"}
+            snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
+            refresh = observer_quote_refresh(pending, snapshot, now=now())
+            if refresh.get("clear"):
+                return {}, refresh
+            if refresh.get("allowed"):
+                data, reason = exact_probe_ws_data(
+                    snapshot, code=code, route=route, after_epoch=after_epoch,
+                    now_epoch=now(),
+                )
+                if data and budget.remaining() > 0:
+                    return data, refresh
+                if not data:
+                    return {}, {**refresh, "allowed": False, "reason": reason}
+            remaining = budget.remaining()
+            if remaining <= 0:
+                return {}, {**refresh, "allowed": False, "reason": "original_native_deadline_expired"}
+            wait_observation(item, sequence, min(1.0, remaining))
 
 
 def exact_probe_rest_sources(ticks, candle_meta, *, request_code, now_epoch,
@@ -982,20 +1076,74 @@ def run_zero_base_probe(
                 result["reason"] = "ws_tick_source_changed_before_machine"
                 result["machine_source_gap_kind"] = "trusted_tape_source_insufficient"
                 return result
+        observation_context = None
+        if native_budget is not None:
+            from src.engine.scalping.reversal_source_diagnostics import _PROCESS_START_TICKS
+            observation_context = dict(
+                schema="entry_source_quote_observer_v1", snapshot=deepcopy(native_snapshot),
+                family_sha256=family, deadline_epoch=native_budget.epoch,
+                deadline_perf=native_budget.perf, observer_pid=os.getpid(),
+                observer_start_ticks=_PROCESS_START_TICKS,
+            )
         try:
-            machine = ai_engine.analyze_target(
-                candidate.get("name") or code, ws_data, ticks, candles,
-                strategy="SCALPING", prompt_profile="watching", machine_only=True,
-                **({'entry_input_deadline_epoch': native_budget.epoch,
-                    'entry_input_deadline_perf': native_budget.perf} if native_budget is not None else {}),
-                metadata_extra={
-                    "position_tag": "SCANNER",
-                    "source_event_stage": "zero_base_probe_machine_only_v1",
-                    "zero_base_source_sha256": claim.get("source_sha256"),
-                    "zero_base_route": route,
-                },
-                candle_context=context,
-            ) or {}
+            for calculation_index in range(2):
+                machine = ai_engine.analyze_target(
+                    candidate.get("name") or code, ws_data, ticks, candles,
+                    strategy="SCALPING", prompt_profile="watching", machine_only=True,
+                    **({'entry_input_deadline_epoch': native_budget.epoch,
+                        'entry_input_deadline_perf': native_budget.perf,
+                        'entry_source_recovery_observation': observation_context}
+                       if native_budget is not None else {}),
+                    metadata_extra={
+                        "position_tag": "SCANNER",
+                        "source_event_stage": "zero_base_probe_machine_only_v1",
+                        "zero_base_source_sha256": claim.get("source_sha256"),
+                        "zero_base_route": route,
+                    },
+                    candle_context=context,
+                ) or {}
+                if calculation_index or observation_context is None:
+                    break
+                from src.engine.scalping.entry_machine_source_recovery import (
+                    probe_quote_retry_pending, observer_quote_context,
+                )
+                pending = probe_quote_retry_pending(
+                    machine, observation_context, ws_data, now=now(),
+                )
+                if pending is None:
+                    break
+                result["quote_recovery_parent"] = {
+                    key: deepcopy(machine.get(key)) for key in (
+                        "evaluation_attempt_id", "machine_observation_sha256",
+                        "machine_evaluation_status", "machine_capture_status",
+                    )
+                }
+                refreshed, retry = _wait_for_probe_quote_retry(
+                    ws_manager, pending=pending, code=code, route=route,
+                    after_epoch=registered_epoch, budget=native_budget,
+                    readiness_guard=source_readiness_guard, now=now,
+                )
+                result["quote_recovery_delivery"] = retry
+                if not refreshed:
+                    break
+                # Rebuild the canonical view over the same candle/tape inputs.
+                # The context builder cannot fetch auxiliary sources here.
+                with kiwoom_utils.entry_source_budget(native_budget):
+                    native_budget.require()
+                    context = context_builder(
+                        token, code, refreshed, venue=venue, session=session,
+                        limit=40, model_bar_limit=20, now_ts=now(), recent_candles=candles,
+                        source_meta=dict(candle_meta, multi_timeframe_auxiliary_fetch=False),
+                        include_investor_source=False,
+                    )
+                    native_budget.require()
+                if not isinstance(context, dict):
+                    raise ValueError("quote_recovery_candle_context_missing")
+                ws_data = refreshed
+                observation_context = observer_quote_context(pending)
+                result["quote_recovery_retry_attempt_count"] = 1
+            if calculation_index and machine.get("machine_evaluation_status") == "assessed":
+                result["quote_recovery_recalculation_count"] = 1
         except Exception as exc:
             result["result"] = "policy_unavailable"
             result["reason"] = "machine_exception:" + type(exc).__name__

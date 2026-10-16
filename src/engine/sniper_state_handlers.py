@@ -40,6 +40,8 @@ from src.engine.scalping.entry_machine_source_recovery import (
     pending_after_failure as pending_machine_source_recovery,
     recovery_refresh as machine_source_recovery_refresh,
     trace_fields as machine_source_recovery_trace_fields,
+    register_pending_target as register_machine_source_recovery_target,
+    quote_retry_claim as machine_source_quote_retry_claim,
 )
 from src.trading.market import session_contract
 from src.engine.automation.source_quality_clean_baseline import (
@@ -1501,6 +1503,36 @@ def _env_or_rule_bool(name: str, default: bool = False) -> bool:
     if raw is not None:
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
     return _rule_bool(name, default)
+
+
+def _pre_ai_quote_max_age_sec() -> float:
+    """Resolve the canonical prefixed setting for admission and recovery."""
+    value = _env_float(
+        "KORSTOCKSCAN_SCALP_PRE_AI_MAX_WS_AGE_SEC",
+        _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0),
+    )
+    return max(0.1, value) if math.isfinite(value) else 3.0
+
+
+def _quote_refresh_max_age_ms() -> int:
+    return _safe_int(
+        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
+        _safe_int(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700), 700),
+    )
+
+
+def _entry_quote_time_policy():
+    from src.engine.sniper_entry_latency import resolved_quote_time_policy
+
+    return resolved_quote_time_policy(
+        pre_ai_max_age_ms=_pre_ai_quote_max_age_sec() * 1000.0,
+        refresh_max_age_ms=_quote_refresh_max_age_ms(),
+        submit_transport_max_age_ms=_env_or_rule_int(
+            "SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", 2000
+        ),
+        consistency_enabled=_quote_consistency_runtime_enabled(),
+        refresh_enabled=_env_bool("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", True),
+    )
 
 
 def _runtime_apply_date_for_policy_guard() -> str:
@@ -15849,10 +15881,10 @@ def _scanner_ws_stale_backoff_recovered(ws_data: dict | None) -> bool:
     if curr <= 0:
         return False
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
-    fresh_quote_max_sec = max(0.1, _env_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0))
+    fresh_quote_max_sec = _pre_ai_quote_max_age_sec()
     return bool(
         quote_age_sec is not None
-        and quote_age_sec <= fresh_quote_max_sec
+        and 0.0 <= quote_age_sec <= fresh_quote_max_sec
         and not _boolish_true(ws_data.get("quote_stale"))
     )
 
@@ -16558,7 +16590,7 @@ def _rising_missed_submit_safety_backoff_recovered(
     )
     fresh_quote = bool(
         quote_age_sec is not None
-        and quote_age_sec <= fresh_quote_max_sec
+        and 0.0 <= quote_age_sec <= fresh_quote_max_sec
         and not _boolish_true(ws_data.get("quote_stale"))
         and not _boolish_true(stock.get("quote_stale"))
     )
@@ -17635,7 +17667,7 @@ def _scanner_promotion_price_consistency_fields(
     )
     ws_price = _safe_int(ws_data.get("curr"), 0)
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
-    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    max_age_sec = _pre_ai_quote_max_age_sec()
     realtime_type_ts = ws_data.get("last_realtime_type_ts")
     realtime_type_ts = realtime_type_ts if isinstance(realtime_type_ts, dict) else {}
     last_0b_ts = _safe_float(realtime_type_ts.get("0B"), 0.0)
@@ -18062,7 +18094,7 @@ def _scanner_fast_precheck_fields_impl(
     anchor_time = armed_time or added_time
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
     curr = _safe_int(ws_data.get("curr"), 0)
-    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    max_age_sec = _pre_ai_quote_max_age_sec()
     realtime_type_ts = ws_data.get("last_realtime_type_ts")
     realtime_type_ts = realtime_type_ts if isinstance(realtime_type_ts, dict) else {}
     last_0b_age_sec = None
@@ -30978,13 +31010,7 @@ def _pre_submit_refresh_real_ws_snapshot(
         fields["pre_submit_ws_snapshot_refresh_reason"] = "disabled"
         return base, fields
     fields["pre_submit_ws_snapshot_refresh_enabled"] = True
-    max_age_ms = _safe_int(
-        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
-        _safe_int(
-            getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700),
-            700,
-        ),
-    )
+    max_age_ms = _quote_refresh_max_age_ms()
     if context_max_age_ms is not None:
         if type(context_max_age_ms) is not int or context_max_age_ms < 0:
             fields["pre_submit_ws_snapshot_refresh_reason"] = (
@@ -31102,7 +31128,7 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     sources = snapshot.get("sources")
     sources = sources if isinstance(sources, dict) else {}
-    fields = {}
+    fields = {"entry_ai_quote_time_policy_receipt": _entry_quote_time_policy().to_dict()}
     try:
         limits = [
             sources.get(name, {}).get("freshness_limit_ms")
@@ -48865,7 +48891,7 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(
 
     base_age_ms = ws_trade_receive_age_ms(base, now_ts=time.time())
     base_age = base_age_ms / 1000.0 if base_age_ms is not None else None
-    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    max_age_sec = _pre_ai_quote_max_age_sec()
     near_stale_buffer_sec = min(0.5, max(0.0, max_age_sec * 0.2))
     base_history = base.get("strength_momentum_history") or []
     base_history_count = len(base_history) if hasattr(base_history, "__len__") else 0
@@ -48965,7 +48991,7 @@ def _pre_ai_refresh_quote_ws_snapshot(
 
     base_quote_age_ms = ws_quote_receive_age_ms(base, now_ts=time.time())
     base_age = base_quote_age_ms / 1000.0 if base_quote_age_ms is not None else None
-    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    max_age_sec = _pre_ai_quote_max_age_sec()
     if base_age is not None:
         fields["pre_ai_ws_snapshot_refresh_input_age_ms"] = round(base_age * 1000.0, 3)
     if (
@@ -49043,7 +49069,7 @@ def _update_ai_quote_freshness_fields(ws_data: dict | None) -> dict:
         ws_data["quote_age_ms"] = quote_age_ms
         ws_data["quote_age_source"] = "canonical_adopted_quote_receive"
         max_quote_age_ms = int(
-            float(_rule("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0) or 3.0) * 1000.0
+            _pre_ai_quote_max_age_sec() * 1000.0
         )
         stale_max_ms = max(1, max_quote_age_ms)
         ws_data["ai_quote_stale_max_ms"] = stale_max_ms
@@ -49608,6 +49634,17 @@ def _commit_watching_entry_evaluation(
             # Source rejection precedes evaluation. Preserve the clock of any
             # completed decision; a source lease cannot erase a prior veto.
             stock[MACHINE_SOURCE_RECOVERY_KEY] = pending
+        register_machine_source_recovery_target(stock, pending)
+    if pending is not None and pending.get('schema') == 'entry_source_quote_recovery_v2':
+        # Register before checking the producer. A 0D received while the
+        # preflight result was being consumed must not become a lost wakeup.
+        try:
+            if WS_MANAGER is not None and hasattr(WS_MANAGER, 'get_exact_item_data'):
+                from src.engine.scalping.entry_machine_source_recovery import notify_pending_quote
+                source = WS_MANAGER.get_exact_item_data(code, pending['item'])
+                notify_pending_quote(code, pending['item'], source, now=time.time())
+        except (ValueError, TypeError, KeyError, AttributeError, OSError):
+            pass  # The normal Main loop retains fail-closed source validation.
     return pending
 
 
@@ -49681,12 +49718,29 @@ def _resolve_watching_state_change_refresh(
     if source_refresh is not None:
         if source_refresh.get("clear"):
             _mutate_stock_state(stock, pop_fields=[MACHINE_SOURCE_RECOVERY_KEY])
+            register_machine_source_recovery_target(stock, None)
         else:
             if last_ai_time > 0 and source_now - last_ai_time <= cooldown_sec:
                 source_refresh.update(
                     allowed=False, suppress_normal_refresh=True,
                     reason="machine_source_wait_completed_decision_cooldown",
                 )
+            if source_refresh.get("allowed") and source_refresh.get("quote_only"):
+                # Reuse the unchanged, still-live native root. No new claim,
+                # native-ready sample, event ID or five-second clock is minted.
+                try:
+                    with ENTRY_LOCK:
+                        if (stock.get("status") != "WATCHING" or _safe_int(stock.get("buy_qty"), 0) > 0
+                                or _has_open_pending_entry_orders(stock)):
+                            raise ValueError("machine_source_quote_target_no_longer_watching")
+                        claim = machine_source_quote_retry_claim(stock, source_refresh, now=source_now)
+                        stock['_continuous_reversal_pending_claim'] = claim
+                        stock['_entry_native_deadline_binding'] = dict(
+                            claim_token=claim['token'], deadline_perf=pending_source['deadline_perf'])
+                    return {**source_refresh, 'event_id': claim['snapshot'][0]['event_id']}
+                except (ValueError, TypeError, KeyError) as exc:
+                    return {**source_refresh, 'allowed': False, 'suppress_normal_refresh': True,
+                            'reason': str(exc)}
             if not (source_refresh.get("allowed")
                     and main_fixed_watch.is_fixed_watch(stock)):
                 return source_refresh
@@ -52748,7 +52802,7 @@ def _strength_momentum_source_quality_block_reason(
     result = result if isinstance(result, dict) else {}
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     reason = str(result.get("reason") or "").strip().lower()
-    max_ws_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    max_ws_age_sec = _pre_ai_quote_max_age_sec()
     max_ws_age_ms = max_ws_age_sec * 1000.0
     refresh_reason = (
         str(result.get("pre_ai_ws_snapshot_refresh_reason") or "").strip().lower()
@@ -52883,7 +52937,7 @@ def _scanner_rising_strength_ai_recheck_ready(
             **context,
             "reason": context.get("skip_reason") or "scanner_context_not_qualified",
         }
-    max_ws_age_ms = max(0.0, _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0) * 1000.0)
+    max_ws_age_ms = max(0.0, _pre_ai_quote_max_age_sec() * 1000.0)
     quote_age = _safe_float(fields.get("quote_age_ms"), -1.0)
     refresh_age = _safe_float(fields.get("refresh_age_ms"), -1.0)
     refresh_reason = str(fields.get("refresh_reason") or "").strip().lower()
@@ -53010,7 +53064,7 @@ def _strength_momentum_stability_recheck_decision(
                 ),
             ),
         )
-    max_ws_age_ms = max(0.0, _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0) * 1000.0)
+    max_ws_age_ms = max(0.0, _pre_ai_quote_max_age_sec() * 1000.0)
     tick_age_ms = _numeric_or_none(fields.get("tick_latest_age_ms"))
     quote_age_ms = _numeric_or_none(fields.get("quote_age_ms"))
     refresh_age_ms = _numeric_or_none(fields.get("refresh_age_ms"))
@@ -60739,7 +60793,7 @@ def _scanner_async_entry_state_version(stock: dict) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
 
-def _scanner_async_quote_is_fresh(ws_data: dict, *, now_ts: float, native_fixed_watch: bool = False) -> bool:
+def _scanner_async_quote_is_fresh(ws_data: dict, *, now_ts: float, native_fixed_watch: bool = False, validated_native_claim: dict | None = None) -> bool:
     if _safe_int((ws_data or {}).get("curr"), 0) <= 0:
         return False
     _update_ai_quote_freshness_fields(ws_data)
@@ -60754,8 +60808,30 @@ def _scanner_async_quote_is_fresh(ws_data: dict, *, now_ts: float, native_fixed_
         # The canonical quote freshness above owns the native limit. The
         # scanner's extra transport-age bound is not a fixed-watch guard.
         return True
+    if validated_native_claim:
+        # A verified native source uses the same canonical quote owner for
+        # fixed and discovered watches. Generic scanner frames keep the extra
+        # transport bound. This never certifies the downstream submit price.
+        try:
+            event = validated_native_claim["snapshot"][0]
+            source = ws_quote_source_receipt(ws_data, now_ts=now_ts)
+            from src.trading.market.session_contract import market_source_partition_venue
+            source_venue = market_source_partition_venue(event["source_item"])
+            expected_route = {"SOR": "krx_nxt_integrated", "NXT": "nxt_only", "KRX": "krx_only"}.get(source_venue)
+            if (source_venue == event["venue"]
+                    and source.get("market_route") == expected_route
+                    and source.get("source_type") in {"0B", "0D"}
+                    and source.get("item") == event["source_item"]
+                    and type(source.get("transport_epoch")) is int
+                    and source["transport_epoch"] == event["native_epoch"]
+                    and source["transport_epoch"] == ws_data.get("market_data_transport_epoch")
+                    and source.get("market_route")):
+                return True
+        except (KeyError, TypeError, IndexError):
+            pass
+        return False
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
-    return bool(quote_age_sec is not None and quote_age_sec <= 2.0)
+    return bool(quote_age_sec is not None and 0.0 <= quote_age_sec <= 2.0)
 
 
 def _scanner_async_entry_cache_key(
@@ -61259,6 +61335,155 @@ def _async_entry_deadline_expired(stock):
                 or (perf > 0 and time.perf_counter() >= perf))
 
 
+def _initial_native_result_for_send(stock, code):
+    """Use this live result or the exact prior admitted arm, within its TTL."""
+    from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION
+    original = (ASYNC_CONSUMPTION.get() or {}).get("original_result")
+    if original is None:
+        arm = stock.get("_entry_arm_native_owner")
+        if not arm:
+            return None
+        from src.trading.entry.physical_send_guard import retained_initial_native_result
+        bound = stock.get("_async_entry_decision_deadline") or {}
+        original = retained_initial_native_result(arm.get("request_id"))
+        if (original is None or original.code != code
+                or original.request_id != bound.get("request_id")
+                or original.ai_payload.get("evaluation_attempt_id") != arm.get("evaluation_attempt_id")
+                or original.ai_payload.get("evaluation_attempt_id") != bound.get("evaluation_attempt_id")
+                or original.ai_payload.get("ai_decision_trace_id") != arm.get("ai_decision_trace_id")
+                or original.ai_payload.get("ai_decision_trace_id") != bound.get("ai_decision_trace_id")
+                or original.native_claim.get("token") != arm.get("native_claim_token")
+                or original.deadline_epoch != bound.get("deadline_epoch")
+                or original.deadline_perf != bound.get("deadline_perf")):
+            raise ValueError("initial_send_deferred_native_result_unavailable_or_changed")
+    if not original.native_claim:
+        if (original.ai_payload.get("continuous_reversal_applied")
+                or getattr(original, "generation_kind", None) == "fixed_watch"
+                or str(original.ai_payload.get("entry_mechanistic_policy_version") or "").startswith(
+                    "continuous_reversal_policy_v")):
+            raise ValueError("initial_send_native_claim_missing")
+        return None
+    return original
+
+
+def _main_initial_physical_send_context(
+    stock, code, ws_data, *, owner_context, quantity, broker_route,
+    order_type, broker_price, sequential_first=False,
+):
+    """Bind the verified native result to this initial BUY, never a later leg."""
+    original = _initial_native_result_for_send(stock, code)
+    if original is None:
+        return None
+    from src.trading.entry.physical_send_guard import (
+        PhysicalEntrySendContext, canonical_binding,
+    )
+    machine = _machine_primary_entry_provenance_fields(
+        thaw_scanner_async_value(original.ai_payload))
+    evaluation = str(original.ai_payload.get("evaluation_attempt_id") or "")
+    trace = str(original.ai_payload.get("ai_decision_trace_id") or "")
+    if (not evaluation or not trace or machine.get("evaluation_attempt_id") != evaluation
+            or original.code != code):
+        raise ValueError("initial_send_original_identity_invalid")
+    prepared = thaw_scanner_async_value(original.prepared_context)
+    original_claim = thaw_scanner_async_value(original.native_claim)
+    candle_context = prepared.get("candle_context") or {}
+    quote = ws_quote_source_receipt(ws_data, now_ts=time.time())
+    policy = _entry_quote_time_policy()
+    from src.trading.entry.quote_time_policy import active_contract_receipt
+    original_time_policy = original.ai_payload.get("entry_ai_quote_time_policy_receipt")
+    prepared_time_policy = (prepared.get("final_entry_refresh_fields") or {}).get(
+        "entry_ai_quote_time_policy_receipt")
+    if (canonical_binding(active_contract_receipt(thaw_scanner_async_value(original_time_policy or {})))
+            != canonical_binding(policy.active_contract_dict())
+            or canonical_binding(active_contract_receipt(thaw_scanner_async_value(prepared_time_policy or {})))
+            != canonical_binding(policy.active_contract_dict())):
+        raise ValueError("initial_send_prepared_ai_time_policy_binding_changed")
+    age_limit = policy.budget_for("physical_send")
+    if policy.consistency_enabled:
+        age_limit = min(age_limit, policy.budget_for("consistency"))
+    expected_decision = canonical_binding({"machine": machine,
+                                          "ai_decision_trace_id": trace})
+    state_version = _scanner_async_entry_state_version(stock)
+    deadline_binding = canonical_binding(stock.get("_async_entry_decision_deadline") or {})
+    arm_binding = canonical_binding(stock.get("_entry_arm_native_owner") or {})
+    initial_bundle_digest = (stock.get("initial_quantity_bundle") or {}).get(
+        "bundle_content_sha256") if sequential_first else None
+
+    def read_binding():
+        current = stock.get("last_watching_ai_machine_primary_fields") or {}
+        projected = {key: current.get(key) for key in machine}
+        if (_scanner_async_entry_state_version(stock) != state_version
+                or canonical_binding(stock.get("_async_entry_decision_deadline") or {}) != deadline_binding
+                or canonical_binding(stock.get("_entry_arm_native_owner") or {}) != arm_binding
+                or (sequential_first and (stock.get("initial_quantity_bundle") or {}).get(
+                    "bundle_content_sha256") != initial_bundle_digest)
+                or current.get("evaluation_attempt_id") != evaluation
+                or not _machine_submit_revision_is_current(stock, current)
+                or _has_retired_entry_source(stock)):
+            raise ValueError("initial_send_machine_or_owner_changed")
+        if (kiwoom_orders.is_buy_side_paused()
+                or kiwoom_orders.is_buy_side_time_blocked(datetime.now(_KST))
+                or evaluate_main_bot_control_exclusion(
+                    code, target_date=datetime.now(_KST).date(), new_entry=True).excluded):
+            raise ValueError("initial_send_current_buy_or_manual_veto")
+        from src.engine.scalping.reversal_current_backend import backend
+        from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
+        surviving_snapshot = validate_claim_with_receipt(
+            original_claim, backend(original_claim)._GENERATION,
+            now=time.time(), live_clock=True)
+        assessment = current.get("entry_mechanistic_policy_decision") or {}
+        policy_version = assessment.get("policy_version")
+        if policy_version in {"continuous_reversal_policy_v5", "continuous_reversal_policy_v6"}:
+            if policy_version == "continuous_reversal_policy_v6":
+                from src.engine.scalping.reversal_extended_union import definition_hash
+            else:
+                from src.engine.scalping.reversal_operating_auxiliary import definition_hash
+            remaining = {branch + ":" + definition_hash(branch)
+                         for branch in surviving_snapshot[0]["branch_signals"]}
+            if not remaining.intersection(assessment["matched_policy_refs"]):
+                raise ValueError("reversal_all_requested_signals_invalidated")
+        from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
+        validate_submit(DATA_DIR, current, now=time.time())
+        bundle_hash = current.get("machine_bundle_sha256") or current.get("policy_bundle_hash")
+        if bundle_hash:
+            from src.engine.scalping.mechanistic_entry_runtime_policy import validate_attempt_generation
+            if not validate_attempt_generation(bundle_hash, data_root=DATA_DIR)["allowed"]:
+                raise ValueError("initial_send_policy_generation_changed")
+        return (canonical_binding({"machine": projected,
+                                   "ai_decision_trace_id": stock.get("last_watching_ai_decision_trace_id")}),
+                canonical_binding(_entry_quote_time_policy().active_contract_dict()))
+
+    def read_snapshot():
+        if WS_MANAGER is None:
+            raise ValueError("initial_send_ws_manager_missing")
+        latest = _read_prepared_entry_ws_snapshot(WS_MANAGER, code, candle_context)
+        if candle_context:
+            from src.engine.scalping.entry_machine_source_recovery import select_prepared_route
+            latest = select_prepared_route(code, latest, candle_context)
+        return latest
+
+    return PhysicalEntrySendContext(
+        operation="INITIAL_QUANTITY_LEG0" if sequential_first else "ENTRY_BUY",
+        owner_identity=tuple(getattr(owner_context, key) for key in (
+            "owner_type", "owner_id", "position_id", "client_intent_id")),
+        code=code, quantity=quantity, broker_route=broker_route,
+        order_type=str(order_type), broker_price=str(int(broker_price)) if broker_price else "",
+        evaluation_attempt_id=evaluation, ai_decision_trace_id=trace,
+        decision_binding=expected_decision,
+        source_policy_binding=canonical_binding(policy.active_contract_dict()),
+        source_policy_receipt=canonical_binding(policy.to_dict()),
+        source_policy_version=policy.version, max_quote_age_ms=age_limit,
+        original_deadline_epoch=original.deadline_epoch,
+        original_deadline_perf=original.deadline_perf,
+        source_item=quote.get("item"), source_market_route=quote.get("market_route"),
+        source_transport_epoch=quote.get("transport_epoch"),
+        source_type=quote.get("source_type"), source_route_sequence=quote.get("route_sequence"),
+        quote_observed_epoch=quote.get("observed_epoch"),
+        best_bid=quote.get("best_bid"), best_ask=quote.get("best_ask"),
+        current_price=ws_data.get("curr"), snapshot_reader=read_snapshot,
+        binding_reader=read_binding)
+
+
 def _log_async_commit(coordinator, result, stock, code, stage, **fields):
     # This report-only stage has no state or order side effects. Do not queue
     # _log_entry_pipeline's mutable stock and its execution-stage hooks.
@@ -61472,6 +61697,7 @@ def _resolve_scanner_async_entry_ai(
                 ws_data,
                 now_ts=now_epoch,
                 native_fixed_watch=fixed_watch,
+                validated_native_claim=claim if native_valid and claim else None,
             ),
             position_or_pending_order_present=bool(
                 _safe_int(stock.get("buy_qty"), 0) > 0
@@ -61575,6 +61801,9 @@ def _resolve_scanner_async_entry_ai(
                 ai_decision_trace_id=result.ai_payload.get('ai_decision_trace_id'),
                 deadline_epoch=result.deadline_epoch, deadline_perf=result.deadline_perf)
         _record_async_disposition(result, 'accepted_to_entry_path', decision.reason, **revalidation_fields)
+        if result.native_claim:
+            from src.trading.entry.physical_send_guard import retain_initial_native_result
+            retain_initial_native_result(result)
         from src.engine.scalping.trailing_situation_policy import freeze_shared_entry_context
         original_context = resolved['prepared_context']
         if _safe_int(stock.get('buy_qty'), 0) <= 0:
@@ -62974,8 +63203,8 @@ def _handle_watching_strategy_branch(
                     )
                 )
             )
-            if watching_state_refresh.get("reason") == "machine_source_fresh_retry":
-                ai_call_trigger_reason = "machine_source_fresh_retry"
+            if watching_state_refresh.get("reason") in {"machine_source_fresh_retry", "machine_source_quote_fresh_retry"}:
+                ai_call_trigger_reason = watching_state_refresh["reason"]
             ai_call_executed = False
             ai_call_completed_at = now_ts
             wait6579_probe_entry_unlock = {
@@ -66696,8 +66925,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             now_ts=now_ts,
         )
     )
+    native_refresh_kwargs = {}
+    if strategy == "SCALPING" and not opening_rotation_active:
+        try:
+            native_original = _initial_native_result_for_send(stock, code)
+        except ValueError as exc:
+            _log_entry_pipeline(stock, code, "entry_physical_send_context_block",
+                reason=str(exc), actual_order_submitted=False, broker_order_forbidden=True,
+                broker_order_attempted=False)
+            _set_async_terminal(stock, "entry_physical_send_context_block")
+            return False
+        if native_original is not None:
+            native_prepared = thaw_scanner_async_value(native_original.prepared_context)
+            native_refresh_kwargs = {
+                "refresh_even_if_input_fresh": True,
+                "prepared_route_context": native_prepared.get("candle_context") or {},
+            }
     ws_data, pre_submit_ws_snapshot_refresh = _pre_submit_refresh_real_ws_snapshot(
-        code, ws_data, strategy
+        code, ws_data, strategy, **native_refresh_kwargs
     )
     pre_submit_rest_orderbook_refresh = {}
     rising_missed_rest_recheck_for_ws_stale = (
@@ -70735,6 +70980,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     successful_orders = []
     broker_submit_attempt_count = 0
     broker_submit_success_response_count = 0
+    physical_send_block_fields = {}
     entry_split_order_submit_fields = {
         "entry_split_order_policy_applied": bool(
             submit_revalidation_fields.get("entry_split_order_policy_applied")
@@ -71464,6 +71710,34 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             # no physical call, fabricated broker response, or resubmission.
             _set_async_terminal(stock,'result_deadline_expired')
             break
+        entry_send_kwargs = {}
+        if (strategy == "SCALPING" and not opening_rotation_active
+                and planned_order.get("entry_split_order_leg_index") in (None, 0)):
+            try:
+                entry_send_context = _main_initial_physical_send_context(
+                    stock, code, ws_data, owner_context=buy_owner_context,
+                    quantity=qty, broker_route=submit_dmst_stex_tp,
+                    order_type=order_resolution["effective_order_type"],
+                    broker_price=order_resolution["effective_order_price"],
+                    sequential_first=sequential_first)
+                if entry_send_context is not None:
+                    entry_send_kwargs["entry_send_context"] = entry_send_context
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
+                physical_send_block_fields = {
+                    "entry_send_guard_terminal_reason": "entry_physical_send_context_block",
+                    "entry_send_guard_reason": str(exc),
+                    "physical_send_attempt_count": 0, "broker_order_attempted": False,
+                }
+                _log_entry_pipeline(
+                    stock, code, "entry_physical_send_context_block",
+                    reason=str(exc), actual_order_submitted=False,
+                    broker_order_forbidden=True, broker_order_attempted=False)
+                _set_async_terminal(stock, "entry_physical_send_context_block",
+                    async_entry_physical_send_blocked=True,
+                    async_entry_physical_send_attempts=0,
+                    async_entry_broker_attempts=broker_submit_attempt_count)
+                break
         try:
             guard = stock.get('_async_consumption_guard')
             if isinstance(guard, dict):
@@ -71488,6 +71762,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 dmst_stex_tp=submit_dmst_stex_tp,
                 owner_context=buy_owner_context,
                 venue_eligibility=submit_venue_eligibility,
+                **entry_send_kwargs,
             )
         except Exception:
             if not sequential_first:
@@ -71510,6 +71785,37 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         actual_order_submitted=False, runtime_effect=False)
                 except Exception as exc:
                     log_error(f"[ENTRY_CANCEL_WAIT_UNCERTAIN_RECEIPT_GAP] code={code} reason={type(exc).__name__}")
+            break
+        if isinstance(res, dict) and res.get("entry_send_guard_blocked") is True:
+            # A known local veto is not an ambiguous broker response. Keep
+            # any persisted leg intent under its existing reconciliation owner.
+            physical_attempts = _safe_int(res.get("physical_send_attempt_count"), 0)
+            if res.get("broker_order_attempted") is False and physical_attempts == 0:
+                broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
+                guard = stock.get("_async_consumption_guard")
+                if isinstance(guard, dict):
+                    guard["async_entry_broker_attempts"] = max(
+                        0, guard.get("async_entry_broker_attempts", 0) - 1)
+            physical_send_block_fields = {
+                "entry_send_guard_terminal_reason": "entry_physical_send_guard_block",
+                "entry_send_guard_reason": res.get("return_msg"),
+                "entry_send_guard_receipt": res.get("entry_send_guard_receipt"),
+                "physical_send_attempt_count": physical_attempts,
+                "broker_order_attempted": res.get("broker_order_attempted"),
+                "rejected_auth_response": res.get("rejected_auth_response"),
+            }
+            _log_entry_pipeline(
+                stock, code, "entry_physical_send_guard_block",
+                reason=res.get("return_msg"),
+                entry_send_guard_receipt=res.get("entry_send_guard_receipt"),
+                physical_send_attempt_count=res.get("physical_send_attempt_count"),
+                broker_order_attempted=res.get("broker_order_attempted"),
+                rejected_auth_response=res.get("rejected_auth_response"),
+                actual_order_submitted=False, broker_order_forbidden=True)
+            _set_async_terminal(stock, "entry_physical_send_guard_block",
+                async_entry_physical_send_blocked=True,
+                async_entry_physical_send_attempts=physical_attempts,
+                async_entry_broker_attempts=broker_submit_attempt_count)
             break
         if sequential_first:
             try:
@@ -72109,6 +72415,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 broker_submit_attempt_count,
                 broker_submit_success_response_count,
             ),
+            **physical_send_block_fields,
         )
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
@@ -72127,7 +72434,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     **swing_entry_micro_fields,
                 },
             )
-        _set_async_terminal(stock, 'order_bundle_failed')
+        _set_async_terminal(stock, physical_send_block_fields.get(
+            "entry_send_guard_terminal_reason", "order_bundle_failed"))
         return False
 
     if swing_order_dry_run:
@@ -73029,6 +73337,7 @@ def _activate_entry_arm(
             evaluation_attempt_id=original.ai_payload.get('evaluation_attempt_id'),
             ai_decision_trace_id=original.ai_payload.get('ai_decision_trace_id'),
             native_signal_id=event.get('signal_id') or event.get('event_id'),
+            native_claim_token=original.native_claim.get('token'),
             producer_pid=os.getpid(), producer_start_ticks=async_eval._PROCESS_START)
     _mutate_stock_state(
         stock,

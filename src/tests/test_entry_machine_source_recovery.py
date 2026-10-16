@@ -375,3 +375,339 @@ def test_corrupt_pending_receipt_cannot_create_retry_or_crash(damage):
     elif damage == "scope": stock[R.STATE_KEY]["scope"] = None
     elif damage == "timing": stock[R.STATE_KEY]["source_timing"] = "bad"
     assert not R.recovery_refresh(stock, ws, now=NOW + .2)["allowed"]
+
+
+def quote_pending(monkeypatch, *, missing_quote=False):
+    monkeypatch.setattr(R.time, "time", lambda: NOW)
+    stock, ws = pending()
+    stock.update(status="WATCHING", buy_qty=0)
+    rows = ws["realtime_type_snapshots_by_route"][KEY]
+    rows["0B"].update(route_sequence=30)
+    rows["0D"].update(route_sequence=40, observed_epoch=NOW - 4)
+    ws["source_recovery_lease"] = dict(schema="entry_source_lease_v1", item="005930_AL",
+        transport_epoch=1, registration_epoch=1, registration_sent_at_epoch=NOW - 10,
+        realtime_types=["0B", "0D"], physical_probe_lease_id=None,
+        physical_probe_lease_epoch=None, physical_probe_lease_removing=False,
+        physical_probe_lease_adopted=False, interval_started_epoch=None)
+    claim = dict(token="original-native-token", generation="f" * 64,
+        snapshot=[dict(symbol="005930", venue="SOR", source_item="005930_AL",
+            native_epoch=1, native_sequence=30, signal_id="root-signal", event_id="root-event",
+            epoch=NOW - .5, entry_ask=275500, market="AFTER"), {}])
+    if missing_quote:
+        rows.pop("0D")
+    decision = source_failure(ws) if not missing_quote else source_failure(fixture()[0])
+    preflight = dict(blockers=["bbo_missing" if missing_quote else "bbo_stale"], feature_blockers=[])
+    decision.update(R.capture_quote_failure(preflight, ws, claim,
+                    deadline_perf=R.time.perf_counter() + 4.5))
+    stock.pop(R.STATE_KEY)
+    stock[R.STATE_KEY] = R.pending_after_failure(stock, decision, now=NOW, cooldown_sec=90)
+    return stock, ws, claim
+
+
+def receive_quote(ws):
+    rows = ws["realtime_type_snapshots_by_route"][KEY]
+    quote = deepcopy(rows.get("0D") or fixture()[0]["realtime_type_snapshots_by_route"][KEY]["0D"])
+    quote.update(route_sequence=41, observed_epoch=NOW + .1)
+    quote["orderbook"]["asks"][0]["price"] = 275600
+    quote["market_source_latency"] = dict(schema="market_source_latency_v1", item="005930_AL",
+        transport_epoch=1, route_sequence=41, packet_received_epoch=NOW + .09)
+    rows["0D"] = quote
+
+
+@pytest.mark.parametrize("missing_quote", [False, True])
+def test_exact_quote_only_recovery_preserves_original_signal_and_deadline(monkeypatch, missing_quote):
+    stock, ws, claim = quote_pending(monkeypatch, missing_quote=missing_quote)
+    pending = deepcopy(stock[R.STATE_KEY])
+    assert pending["schema"] == R.QUOTE_SCHEMA
+    assert pending["expires_at"] == claim["snapshot"][0]["epoch"] + 5
+    receive_quote(ws)
+    original_tape = deepcopy(ws["realtime_type_snapshots_by_route"][KEY]["0B"])
+    refresh = R.recovery_refresh(stock, ws, now=NOW + .2)
+    assert refresh["allowed"] and refresh["quote_only"]
+    assert refresh["reason"] == "machine_source_quote_fresh_retry"
+    assert ws["realtime_type_snapshots_by_route"][KEY]["0B"] == original_tape
+    receipt = R.evaluation_quote_receipt(dict(claim, entry_quote_recovery_parent=pending), ws,
+                                         now=NOW + .2, evaluation_attempt_id="new-evaluation")
+    raw = dict(evaluation_attempt_id="new-evaluation", entry_source_quote_recovery=receipt,
+               quote=dict(best_bid=receipt["calculation_best_bid"], best_ask=receipt["calculation_best_ask"]))
+    R.validate_evaluation_quote_receipt(receipt, claim["snapshot"][0], raw)
+    assert receipt["native_entry_ask"] == 275500
+    assert receipt["calculation_best_ask"] == 275600
+    assert claim["snapshot"][0]["entry_ask"] == 275500
+    assert stock[R.STATE_KEY] == pending
+
+
+@pytest.mark.parametrize("damage", ["old_packet", "no_packet", "wrong_packet_sequence", "wrong_packet_item",
+    "wrong_packet_epoch", "future_packet", "same_sequence", "lease", "epoch", "stale_tape",
+    "changed_tape", "expired", "provider_late", "crossed", "zero_quantity"])
+def test_quote_only_recovery_requires_actual_post_failure_packet_and_unchanged_sources(monkeypatch, damage):
+    stock, ws, _ = quote_pending(monkeypatch)
+    receive_quote(ws)
+    rows = ws["realtime_type_snapshots_by_route"][KEY]
+    quote, tape = rows["0D"], rows["0B"]
+    now = NOW + .2
+    if damage == "old_packet": quote["market_source_latency"]["packet_received_epoch"] = NOW - .1
+    elif damage == "no_packet": quote["market_source_latency"].pop("packet_received_epoch")
+    elif damage == "wrong_packet_sequence": quote["market_source_latency"]["route_sequence"] = 40
+    elif damage == "wrong_packet_item": quote["market_source_latency"]["item"] = "000660_AL"
+    elif damage == "wrong_packet_epoch": quote["market_source_latency"]["transport_epoch"] = 2
+    elif damage == "future_packet": quote["market_source_latency"]["packet_received_epoch"] = NOW + 1
+    elif damage == "same_sequence": quote["route_sequence"] = 40
+    elif damage == "lease": ws["source_recovery_lease"]["registration_sent_at_epoch"] = NOW + .05
+    elif damage == "epoch": ws["market_data_transport_epoch"] = 2
+    elif damage == "stale_tape": tape["observed_epoch"] = NOW - 4
+    elif damage == "changed_tape": tape["current_price"] = 275400
+    elif damage == "expired": now = NOW + 4.5
+    elif damage == "provider_late": tape["provider_trade_epoch"] = NOW - 20
+    elif damage == "crossed": quote["orderbook"]["asks"][0]["price"] = 275400
+    elif damage == "zero_quantity": quote["orderbook"]["asks"][0]["volume"] = 0
+    assert not R.recovery_refresh(stock, ws, now=now)["allowed"]
+
+
+def test_quote_retry_main_handoff_consumes_once_without_new_native_claim(monkeypatch):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.scalping import reversal_source_diagnostics as native
+    from src.engine.scalping import reversal_current_backend as backend
+    stock, ws, original = quote_pending(monkeypatch)
+    receive_quote(ws)
+    monkeypatch.setattr(H.time, "time", lambda: NOW + .2)
+    monkeypatch.setattr(H, "WS_MANAGER", None)
+    monkeypatch.setattr(native, "claim_snapshot_with_receipt", lambda *a, **kw: pytest.fail("must reuse root"))
+    monkeypatch.setattr(native, "validate_claim_with_receipt", lambda claim, *a, **kw: claim["snapshot"])
+    monkeypatch.setattr(backend, "backend", lambda *a: SimpleNamespace(_GENERATION="f" * 64))
+    ready = H._resolve_watching_state_change_refresh(stock, ws, now_ts=NOW + .2, last_ai_time=0, cooldown_sec=90)
+    assert ready["allowed"] and ready["quote_only"]
+    admitted = stock["_continuous_reversal_pending_claim"]
+    assert admitted["snapshot"] == original["snapshot"] and admitted["token"] == original["token"]
+    assert stock[R.STATE_KEY]["retry_count"] == 1
+    assert not R.recovery_refresh(stock, ws, now=NOW + .3)["allowed"]
+
+
+def test_pending_quote_wake_is_coalesced_and_does_not_increment_native_counts(monkeypatch):
+    import threading
+    from src.engine.monitoring import runtime_performance as metrics
+    stock, ws, _ = quote_pending(monkeypatch)
+    receive_quote(ws)
+    event = threading.Event()
+    metrics.set_native_ready_event(event)
+    counts = deepcopy(metrics._COVERAGE)
+    R.register_pending_target(stock, stock[R.STATE_KEY])
+    try:
+        assert not R.notify_pending_quote("005930", "005930_NX", ws, now=NOW + .2)
+        assert not event.is_set()
+        assert R.notify_pending_quote("005930", "005930_AL", ws, now=NOW + .2)
+        event.clear()
+        assert not R.notify_pending_quote("005930", "005930_AL", ws, now=NOW + .2)
+        assert not event.is_set() and metrics._COVERAGE == counts
+    finally:
+        metrics.set_native_ready_event(None)
+        R.register_pending_target(stock, None)
+
+
+@pytest.mark.parametrize("blocker", ["tape_stale", "current_price_missing", "source_time_skew",
+    "candle_missing", "required_feature_tape_stale", "realtime_type_route_conflict"])
+def test_quote_retry_does_not_generalize_other_source_or_feature_failures(monkeypatch, blocker):
+    _stock, ws, claim = quote_pending(monkeypatch)
+    assert R.capture_quote_failure(dict(blockers=["bbo_stale", blocker]), ws, claim) == {}
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_new_union_calculation_uses_actual_ask_spread_and_geometry_without_rewriting_proof(locked):
+    from src.tests.test_reversal_extended_policy import FIXTURES
+    from src.engine.scalping import reversal_extended_union as union
+    fixture = deepcopy(next(iter(FIXTURES.values())))
+    event, source = fixture["event"], fixture["source"]
+    original = deepcopy((event, source))
+    arm = union.V1.ARMS[-1]
+    root_input, prompt, schema = union.production_request(source, arm, event=event)
+    root_result = (dict(event=event, signal_set_hash=R._digest(root_input["signals"])), root_input, prompt, schema)
+    ask = event["entry_ask"] * 1.002
+    bid = ask if locked else event["entry_ask"]
+    receipt = dict(schema=R.QUOTE_SCHEMA, native_entry_ask=event["entry_ask"],
+        native_root_event=deepcopy(event),
+        calculation_best_ask=ask, calculation_best_bid=bid, quote_observed_epoch=event["epoch"] + .2,
+        original_deadline_epoch=event["epoch"] + 5, sha256="d" * 64)
+    result = R.apply_quote_calculation(root_result, receipt)
+    assessment, inp, actual_prompt, actual_schema = result
+    assessment["entry_source_quote_recovery"] = receipt
+    assert (event, source) == original
+    assert inp["common_context"]["entry_ask"] == ask
+    assert inp["entry_setup_evidence_v1"]["facts"]["entry_ask"] == ask
+    assert inp["common_context"]["entry_geometry"]["target_price"] == pytest.approx(ask * 1.004 / .9977)
+    assert inp["signals"][0]["observed_signal"] == root_input["signals"][0]["observed_signal"]
+    assert [s["ref"] for s in inp["signals"]] == [s["ref"] for s in root_input["signals"]]
+    assert actual_prompt == prompt
+    assert inp["entry_source_quote_recovery"]["native_entry_ask"] == event["entry_ask"]
+    assert ("ENTRY_SPREAD_CONCERN" in inp["entry_setup_evidence_v1"]["risk_fact_bindings"]) is not locked
+    request = dict(input=inp, prompt=actual_prompt, response_schema=actual_schema)
+    a, native_request = R.audit_quote_calculation(assessment, request)
+    assert native_request == dict(input=root_input, prompt=prompt, response_schema=schema)
+    assert a["signal_set_hash"] == root_result[0]["signal_set_hash"]
+    response = dict(schema=union.VERSION, decision_scope="COMMON_OPPORTUNITY",
+        assessed_signal_refs=[s["ref"] for s in inp["signals"]], risk_verdict="PASS",
+        risk_codes=["NO_BLOCKING_RISK"], supporting_fact_ids=["observed_machine_signal"],
+        contradicting_fact_ids=[], confidence=50)
+    assert union.validate_response(response, inp, arm=arm) == []
+    wrong = deepcopy(request)
+    wrong["input"]["entry_setup_evidence_v1"]["facts"]["entry_ask"] += 1
+    with pytest.raises(ValueError, match="calculation_request_invalid"):
+        R.audit_quote_calculation(assessment, wrong)
+
+
+def test_packet_between_failure_and_pending_registration_is_rechecked(monkeypatch):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.monitoring import runtime_performance as metrics
+    import threading
+    stock, ws, claim = quote_pending(monkeypatch)
+    decision = source_failure(ws)
+    decision.update(R.capture_quote_failure(dict(blockers=["bbo_stale"]), ws, claim,
+                    deadline_perf=R.time.perf_counter() + 4.5))
+    receive_quote(ws)
+    stock.pop(R.STATE_KEY)
+    monkeypatch.setattr(H.time, "time", lambda: NOW + .2)
+    monkeypatch.setattr(H, "WS_MANAGER", SimpleNamespace(get_exact_item_data=lambda *a: deepcopy(ws)))
+    event = threading.Event()
+    metrics.set_native_ready_event(event)
+    try:
+        result = H._commit_watching_entry_evaluation(stock, "005930", decision,
+            completed_at=NOW + .2, cooldown_sec=90, strategy="SCALPING")
+        assert result["schema"] == R.QUOTE_SCHEMA and result["failed_at"] == NOW
+        assert event.is_set()
+    finally:
+        metrics.set_native_ready_event(None)
+        R.register_pending_target(stock, None)
+
+
+@pytest.mark.parametrize("spread", [.05, .15, .4])
+def test_current_spread_filters_existing_branches_without_synthesizing_a_signal(monkeypatch, spread):
+    from src.engine.scalping import reversal_extended_catalog as catalog
+    monkeypatch.setattr(catalog, "definition", lambda bid: dict(filters={"spread_max": {"narrow": .1, "wide": .3}[bid]}))
+    event = dict(confirmation_price=100, entry_ask=100.05,
+        branch_signals={bid: dict(signal_id=bid, entry_ask=100.05, confirmation_price=100,
+                                  decision_phase="MOMENTUM_CROSS") for bid in ("narrow", "wide")})
+    snapshot = (event, dict(branch_inputs={"narrow": {}, "wide": {}}))
+    original = deepcopy(snapshot)
+    receipt = dict(native_root_event=deepcopy(event), calculation_best_bid=100, calculation_best_ask=100 + spread)
+    if spread > .3:
+        with pytest.raises(ValueError, match="current_quote_invalidates_native_branches"):
+            R.calculation_snapshot(snapshot, receipt)
+    else:
+        calculation = R.calculation_snapshot(snapshot, receipt)
+        expected = ["narrow", "wide"] if spread < .1 else ["wide"]
+        assert sorted(calculation[0]["branch_signals"]) == expected
+        assert receipt["calculation_branch_ids"] == expected
+        assert "unconfirmed-third-branch" not in calculation[0]["branch_signals"]
+    assert snapshot == original
+
+
+@pytest.mark.parametrize("version,overlay", [(5, False), (6, False), (6, True)])
+def test_actual_native_observation_audits_accept_bound_current_quote_calculation(monkeypatch, tmp_path, version, overlay):
+    from datetime import datetime
+    from src.engine.scalping import continuous_reversal_policy_v5 as v5
+    from src.engine.scalping import continuous_reversal_policy_v6 as v6
+    from src.engine.scalping import ai_decision_trace as trace
+    from src.engine.scalping import reversal_auxiliary_intraday as overlays
+    from src.engine.scalping import reversal_auxiliary_registry as registry
+    from src.engine.scalping import continuous_reversal_postclose as common
+    if version == 5:
+        from src.tests.test_reversal_path_policy import state, feed, row
+        bid, detector = state("SA", monkeypatch)
+        for i in range(62):
+            feed(detector, row(i))
+        snapshot = detector.snapshot(feed(detector, row(62, 100.2))[0])
+        policy = v5
+    else:
+        from src.tests.test_reversal_extended_policy import FIXTURES
+        fixture = deepcopy(next(iter(FIXTURES.values())))
+        snapshot = (fixture["event"], fixture["source"])
+        policy = v6
+    event, _ = snapshot
+    catalog, union = policy.C, policy.A
+    key = catalog.cell_key(event["symbol"], event["market"], event["confirmation_price"])
+    route, arm = event["venue"], union.V1.ARMS[-1]
+    day = datetime.fromtimestamp(event["epoch"], policy.K.KST).date().isoformat()
+    family = dict(schema=policy.SCHEMA, family_sha256="f" * 64, source_date=day,
+        publication_date=day, effective_date=day, execution_manifest_hash="e" * 64,
+        machine_cells={key: dict(routes={route: dict(backend=f"union_v{version}",
+            payload=dict(branches=[catalog.branch(bid) for bid in event["branch_signals"]]),
+            scope_execution_hash="c" * 64)})},
+        auxiliary_cells={key: dict(routes={route: dict(payload=dict(arm=arm, binding=union.binding(arm)))})})
+    monkeypatch.setattr(policy, "validate_family", lambda *a, **kw: None)
+    root_result = policy.assess(family, snapshot, symbol=event["symbol"], session=event["market"])
+    bundle = dict(bundle_sha256="b" * 64, continuous_reversal=family)
+    if overlay:
+        value = registry.definition(arm, prompt=union.PROMPT + union.ARM_SUFFIXES[arm] + "Use supplied facts.\n",
+                                    input_version=union.VERSION)
+        registry.register(tmp_path, value)
+        value = registry.compact_definition(value, research_wire_contract={"schema": "fixture_wire_contract"})
+        registry.register(tmp_path, value)
+        monkeypatch.setattr(overlays, "selected_definition", lambda *a, **kw: (value, None))
+        monkeypatch.setattr(overlays, "inherited", lambda *a, **kw: {v5.scope_id(key, route): value["registry_sha256"]})
+        from src.utils import constants
+        monkeypatch.setattr(constants, "DATA_DIR", tmp_path)
+        root_result = overlays.apply_request(tmp_path, bundle, snapshot, root_result)
+    ask = event["entry_ask"] * 1.00001
+    receipt = dict(schema=R.QUOTE_SCHEMA, parent_attempt_id="source-failure", parent_observation_sha256="a" * 64,
+        evaluation_attempt_id="quote-calculation", native_snapshot_sha256=R._digest(snapshot),
+        native_root_event=deepcopy(event), native_signal_id=event["signal_id"], native_event_id=event["event_id"],
+        native_epoch=event["epoch"], native_entry_ask=event["entry_ask"], original_deadline_epoch=event["epoch"] + 5,
+        failed_at=event["epoch"] + .05, source_item=event["source_item"], transport_epoch=event["native_epoch"],
+        original_quote_sequence=4, quote_sequence=5, quote_packet_received_epoch=event["epoch"] + .1,
+        quote_observed_epoch=event["epoch"] + .2, evaluated_at=event["epoch"] + .3,
+        calculation_best_bid=event["entry_ask"], calculation_best_ask=ask,
+        native_snapshot_rewritten=False, provider_called_before_recovery=False)
+    receipt["sha256"] = R._digest(receipt)
+    assessment, inp, prompt, schema = R.apply_quote_calculation(root_result, receipt, data_root=tmp_path)
+    assessment["entry_source_quote_recovery"] = receipt
+    records = []
+    monkeypatch.setattr(trace, "trace_enabled", lambda: True)
+    monkeypatch.setattr(trace, "_now", lambda: datetime.fromtimestamp(event["epoch"] + .4, policy.K.KST))
+    monkeypatch.setattr(trace, "_append_jsonl", lambda path, record: records.append(record))
+    raw = dict(stock_code=event["symbol"], session_bucket=event["market"], evaluation_attempt_id="quote-calculation",
+               entry_machine_input_as_of=event["epoch"] + .2, entry_source_quote_recovery=receipt,
+               quote=dict(best_bid=event["entry_ask"], best_ask=ask))
+    context = dict(family_sha256=family["family_sha256"], source_date=day, publication_date=day, effective_date=day,
+        machine_component_sha256=common.digest(family["machine_cells"]), auxiliary_component_sha256=common.digest(family["auxiliary_cells"]),
+        snapshot_read_at=event["epoch"] + .3, input_sha256=common.digest(inp), prompt_sha256=common.digest(prompt),
+        response_schema_sha256=common.digest(schema), arm=arm)
+    trace.capture_machine_observation(exact_payload=raw, setup_evidence=inp["entry_setup_evidence_v1"], assessment=assessment,
+        bundle_sha256=bundle["bundle_sha256"], reversal_context=context,
+        reversal_request=dict(input=inp, prompt=prompt, response_schema=schema))
+    auditor = overlays.audit_observation if overlay else policy.audit_observation
+    payload, verified = auditor(bundle, records[0])
+    assert payload["branches"] and verified["new_scope_consumption"]
+    assert records[0]["source"]["assessment"]["event"]["entry_ask"] == event["entry_ask"]
+    assert records[0]["source"]["auxiliary_request"]["input"]["entry_setup_evidence_v1"]["facts"]["entry_ask"] == ask
+    assert records[0]["label_context"]["reference_price"] == ask
+    assert records[0]["label_context"]["entry_source_quote_label"]["decision_epoch"] == receipt["evaluated_at"]
+    import hashlib
+    for damage in ("facts_ask", "common_ask", "signal_spread", "geometry", "spread_unit", "spread_duplicate"):
+        forged = deepcopy(records[0])
+        calculation = forged["source"]["assessment"]["entry_source_quote_calculation"]
+        root_input = calculation["root_request"]["input"]
+        if damage == "facts_ask": root_input["entry_setup_evidence_v1"]["facts"]["entry_ask"] *= 1.1
+        elif damage == "common_ask": root_input["common_context"]["entry_ask"] *= 1.1
+        elif damage == "signal_spread": root_input["signals"][0]["facts"]["spread_pct"] = 1234
+        elif damage == "geometry": root_input["common_context"]["entry_geometry"]["target_price"] *= 1.1
+        else:
+            spread_fact = next((fact for fact in root_input["entry_setup_evidence_v1"]["contradicting_facts"]
+                                if fact["id"].endswith("/observed_spread")), None)
+            if spread_fact is None:
+                continue
+            if damage == "spread_unit": spread_fact["unit"] = "basis_points"
+            else: root_input["entry_setup_evidence_v1"]["contradicting_facts"].append(deepcopy(spread_fact))
+        calculation["root_request_sha256"] = R._digest(calculation["root_request"])
+        forged["runtime_consumption"]["continuous_reversal"]["assessment_sha256"] = hashlib.sha256(
+            trace._json_bytes(forged["source"]["assessment"])).hexdigest()
+        with pytest.raises(ValueError):
+            auditor(bundle, forged)
+
+
+@pytest.mark.parametrize("receipt,proof", [(None, {}), ({}, None), (None, None)])
+def test_malformed_or_dropped_quote_proof_is_a_bounded_value_error(receipt, proof):
+    assessment = dict(entry_source_quote_recovery=receipt, entry_source_quote_calculation=proof)
+    if receipt is not None or proof is not None:
+        with pytest.raises(ValueError):
+            R.audit_quote_calculation(assessment, {})
+    with pytest.raises(ValueError, match="receipt_missing"):
+        R.validate_evaluation_quote_receipt(None, {}, dict(entry_source_quote_recovery={"schema": R.QUOTE_SCHEMA}))

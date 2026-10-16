@@ -584,6 +584,36 @@ def log_snapshot():
     log_info('[RUNTIME_PERFORMANCE] ' + json.dumps(value, separators=(',', ':')))
 
 
+def notify_source_recovery_target(symbol, *, original_epoch, now):
+    """Prioritize one existing quote-recovery target without a native sample.
+
+    The recovery owner has already checked its exact source and original
+    deadline. This changes scheduling only; native-ready/claim counts remain
+    untouched and the Main consumer repeats all guards before calculation.
+    """
+    global _NATIVE_HINT_SEQUENCE
+    if (type(original_epoch) not in (int, float) or type(now) not in (int, float)
+            or not math.isfinite(original_epoch) or not math.isfinite(now)
+            or not 0 <= now - original_epoch < 5):
+        return False
+    code = str(symbol)[:6]
+    if len(code) != 6 or not code.isdigit():
+        return False
+    with _LOCK:
+        event = _NATIVE_READY_EVENT
+        if event is None:
+            return False
+        _NATIVE_HINT_SEQUENCE += 1
+        _NATIVE_VISIT_TOKENS[code] = _NATIVE_HINT_SEQUENCE
+        _NATIVE_VISIT_HINTS[code] = original_epoch
+        _NATIVE_VISIT_HINTS.move_to_end(code)
+        while len(_NATIVE_VISIT_HINTS) > 128:
+            old_code, _ = _NATIVE_VISIT_HINTS.popitem(last=False)
+            _NATIVE_VISIT_TOKENS.pop(old_code, None)
+    event.set()
+    return True
+
+
 def record_native_ready(B, symbol, venue, item, market, epoch):
     global _NATIVE_HINT_SEQUENCE
     from contextlib import ExitStack

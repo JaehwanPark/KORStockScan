@@ -9083,6 +9083,7 @@ class GPTSniperEngine:
         entry_input_deadline_perf=None,
         machine_only=False,
         reversal_signal_claim=None,
+        entry_source_recovery_observation=None,
     ):
         from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV, SHA_ENV
 
@@ -9798,6 +9799,11 @@ class GPTSniperEngine:
                         for key, value in machine_source_invalid_fields.items()
                         if not key.startswith("entry_source_invalid_")
                     }
+            from src.engine.scalping.entry_machine_source_recovery import capture_quote_failure
+            quote_recovery_source = capture_quote_failure(
+                candle_preflight, ws_data, reversal_signal_claim,
+                deadline_perf=entry_input_deadline_perf,
+                observation=entry_source_recovery_observation if machine_only else None)
             return self._annotate_analysis_result(
                 _merge_runtime_fields(
                     {
@@ -9817,6 +9823,7 @@ class GPTSniperEngine:
                         ),
                         "ai_decision_outcome_eligible": False,
                         "provider_called": False,
+                        **quote_recovery_source,
                         "machine_evaluation_status": (
                             "required_feature_blocked_before_assessment"
                             if feature_input_blocked
@@ -10038,9 +10045,17 @@ class GPTSniperEngine:
                             claim_snapshot_with_receipt as claim_snapshot, validate_claim_with_receipt)
                         if machine_only:
                             from src.engine.scalping.reversal_source_diagnostics import observe_snapshot, _PROCESS_START_TICKS
-                            snapshot, observation = observe_snapshot(symbol, _explicit_item_venue(item),
-                                machine_exact['session_bucket'], now=snapshot_now, item=item,
-                                family_sha256=reversal_family['family_sha256'], live_clock=True)
+                            if entry_source_recovery_observation is not None:
+                                if entry_source_recovery_observation.get('family_sha256') != reversal_family['family_sha256']:
+                                    raise ValueError('machine_source_quote_observer_policy_changed')
+                                from src.engine.scalping.entry_machine_source_recovery import validated_observer_snapshot
+                                observation = {}
+                                snapshot = validated_observer_snapshot(entry_source_recovery_observation,
+                                    now=snapshot_now, receipt_out=observation)
+                            else:
+                                snapshot, observation = observe_snapshot(symbol, _explicit_item_venue(item),
+                                    machine_exact['session_bucket'], now=snapshot_now, item=item,
+                                    family_sha256=reversal_family['family_sha256'], live_clock=True)
                             claim = None
                             machine_exact['evaluation_role'] = 'probe_observation'
                             machine_exact['native_observation_receipt'] = observation
@@ -10078,8 +10093,21 @@ class GPTSniperEngine:
                             symbol,_explicit_item_venue(item),machine_exact['session_bucket'],now=snapshot_now,item=item)
                         if reversal_signal_claim and snapshot and not 0<=snapshot_now-snapshot[0]['epoch']<=5:snapshot=None
                     reversal_snapshot_as_of = time.time()
+                    from src.engine.scalping.entry_machine_source_recovery import evaluation_quote_receipt
+                    quote_recovery_receipt = evaluation_quote_receipt(
+                        reversal_signal_claim, ws_data, now=reversal_snapshot_as_of,
+                        evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
+                        observation=entry_source_recovery_observation if machine_only else None)
+                    if quote_recovery_receipt is not None:
+                        from src.engine.scalping.entry_machine_source_recovery import calculation_snapshot
+                        snapshot = calculation_snapshot(snapshot, quote_recovery_receipt)
+                        machine_exact['entry_source_quote_recovery'] = quote_recovery_receipt
                     machine_assessment, reversal_input, reversal_prompt, reversal_schema = timed_entry_call('entry_machine_assess', assess,
                         reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
+                    if quote_recovery_receipt is not None:
+                        machine_assessment['entry_source_quote_recovery'] = quote_recovery_receipt
+                        from src.engine.scalping.entry_machine_source_recovery import validate_evaluation_quote_receipt
+                        validate_evaluation_quote_receipt(quote_recovery_receipt, snapshot[0], machine_exact)
                     from src.engine.monitoring.runtime_performance import mark_signal
                     mark_signal(machine_assessment.get('signal_id') or machine_assessment.get('event_id'), 'machine')
                     if reversal_family.get('schema') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
@@ -10088,6 +10116,12 @@ class GPTSniperEngine:
                         machine_assessment, reversal_input, reversal_prompt, reversal_schema = timed_entry_call('entry_wire', apply_request,
                             DATA_DIR, entry_setup_live_policy, snapshot,
                             (machine_assessment, reversal_input, reversal_prompt, reversal_schema))
+                    if quote_recovery_receipt is not None:
+                        from src.engine.scalping.entry_machine_source_recovery import apply_quote_calculation
+                        from src.utils.constants import DATA_DIR
+                        machine_assessment, reversal_input, reversal_prompt, reversal_schema = apply_quote_calculation(
+                            (machine_assessment, reversal_input, reversal_prompt, reversal_schema),
+                            quote_recovery_receipt, data_root=DATA_DIR)
                     # Source telemetry must not change the pinned research
                     # kernel, selected rule, feature values or auxiliary input.
                     from src.engine.scalping.reversal_source_diagnostics import project

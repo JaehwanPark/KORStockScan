@@ -21,7 +21,7 @@ import time
 import re
 import tempfile
 from collections import Counter, defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from statistics import fmean
 from typing import Any, Callable, Iterable, Mapping
@@ -4982,6 +4982,21 @@ def _load_machine_observation_rows_uncached(
                 lifecycle_by_symbol[event.get("stock_code")].append(event)
             for capture in observations:
                 context = dict(capture.get("label_context") or {})
+                decision_ts = capture["captured_at"]
+                quote_raw = _as_dict(_as_dict(capture.get("source")).get("exact_payload"))
+                if quote_raw.get("entry_source_quote_recovery") is not None:
+                    from src.engine.scalping.entry_machine_source_recovery import quote_label_reference
+                    try:
+                        quote_label = quote_label_reference(quote_raw, _as_dict(capture["source"].get("assessment")))
+                        if (context.get("entry_source_quote_label") != quote_label
+                                or context.get("reference_price") != quote_label["reference_price"]
+                                or context.get("reference_price_type") != "executable_ask"
+                                or quote_label["decision_epoch"] > datetime.fromisoformat(capture["captured_at"]).timestamp()):
+                            raise ValueError("quote_recovery_label_reference_mismatch")
+                        decision_ts = datetime.fromtimestamp(quote_label["decision_epoch"], timezone.utc).isoformat()
+                    except (KeyError, TypeError, ValueError, IndexError):
+                        counts["quote_recovery_label_source_gap"] += 1
+                        continue
                 captured_action = str(_as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or "").upper()
                 if captured_action in {"BLOCK", "RECHECK", "ENTER_NOW", "SOURCE_INVALID"}:
                     counts["machine_capture_action_" + captured_action.lower()] += 1
@@ -5067,7 +5082,7 @@ def _load_machine_observation_rows_uncached(
                         continue
                 pending = {
                     **context,
-                    "decision_ts": capture["captured_at"],
+                    "decision_ts": decision_ts,
                     # Use the exact composed-AI trace only for downstream
                     # lifecycle correlation. The machine digest remains the
                     # immutable case identity below.
@@ -5108,7 +5123,7 @@ def _load_machine_observation_rows_uncached(
                     outcome_price_gap = "outcome_route_unproven"
                     counts["outcome_route_unproven"] += 1
                 elif context.get("outcome_request_code"):
-                    decision_time = quality._parse_ts(capture["captured_at"])
+                    decision_time = quality._parse_ts(decision_ts)
                     first_observation = (min((timestamp for price in
                         prices_by_symbol[context.get("stock_code")] if
                         quality._same_route(pending, price)
@@ -5236,7 +5251,7 @@ def _load_machine_observation_rows_uncached(
                             scanner_promotion_identity_source
                         ),
                         "scanner_promotion_ids": scanner_promotion_ids,
-                        "decision_ts": capture["captured_at"],
+                        "decision_ts": decision_ts,
                         "source_date": day,
                         "stock_code": context.get("stock_code"),
                         "decision_snapshot_id": context.get("snapshot_id"),

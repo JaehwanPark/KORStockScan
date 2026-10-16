@@ -43,7 +43,8 @@ def demand(api_id, source):
 
 
 def measured_http_call(call, url, *, telemetry_owner, telemetry_class='runtime_required',
-                       telemetry_code='not_applicable', telemetry_logical_id=None, **kwargs):
+                       telemetry_code='not_applicable', telemetry_logical_id=None,
+                       before_call=None, **kwargs):
     global _SERIAL
     headers = kwargs.get('headers') or {}
     api = str(headers.get('api-id') or ('oauth' if '/oauth' in url else 'unknown'))[:16]
@@ -94,6 +95,31 @@ def measured_http_call(call, url, *, telemetry_owner, telemetry_class='runtime_r
             _DETAIL_LOSS['recent_attempt_evictions'] += 1
             _DETAIL_LOSS['recent_inflight_evictions'] += _RECENT[0]['outcome'] == 'inflight_unknown'
         _RECENT.append(record)
+    if before_call is not None:
+        try:
+            # No telemetry lock is held while the caller rechecks its source
+            # and intent. A lock wait above must consume the original deadline.
+            before_call()
+        except BaseException:
+            # Bookkeeping was provisional: this call never reached the HTTP
+            # client. Preserve physical-attempt equations and count local vetoes
+            # separately, including a minute evicted while the guard ran.
+            with _LOCK:
+                counts['started'] -= 1
+                counts['local_not_sent'] += 1
+                _TOTAL['started'] -= 1
+                _TOTAL['local_not_sent'] += 1
+                if _MINUTES.get(minute_key) is minute:
+                    minute['started'] -= 1
+                    minute['local_not_sent'] += 1
+                else:
+                    _EVICTED_MINUTES['started'] -= 1
+                    _EVICTED_MINUTES['local_not_sent'] += 1
+                try:
+                    _RECENT.remove(record)
+                except ValueError:
+                    pass
+            raise
     outcome = 'exception'
     status = None
     try:

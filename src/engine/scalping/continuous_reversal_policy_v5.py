@@ -23,7 +23,8 @@ def contract_modules():
     from src.engine.scalping import reversal_operating_runtime as R
     from src.engine.scalping import reversal_operating_backend as D
     from src.engine.scalping import reversal_operating_outbox as O
-    return (*V4.contract_modules(), A, R, D, O, __import__(__name__, fromlist=['*']))
+    from src.engine.scalping import entry_machine_source_recovery as QUOTE_RECOVERY
+    return (*V4.contract_modules(), A, R, D, O, QUOTE_RECOVERY, __import__(__name__, fromlist=['*']))
 
 
 def scopes():
@@ -376,6 +377,8 @@ def audit_observation(bundle, observation):
             or not math.isfinite(clock) or not observed<=clock<=captured.timestamp()):
         raise ValueError('v5_observation_clock_invalid')
     event=a.get('event')
+    from src.engine.scalping.entry_machine_source_recovery import validate_evaluation_quote_receipt
+    validate_evaluation_quote_receipt(a.get('entry_source_quote_recovery'), event, raw)
     if event is None:
         if a.get('action')!='BLOCK' or a.get('reason')!='no_current_operating_signal':raise ValueError('v5_nonentry_receipt_invalid')
         return {},dict(policy_sha256=f['execution_manifest_hash'],leaf='NO_CURRENT_OPERATING_SIGNAL')
@@ -387,6 +390,8 @@ def audit_observation(bundle, observation):
     if a.get('action')=='ENTER_NOW' and any(digest(request.get(k))!=native.get(v) for k,v in
             [('input','input_sha256'),('prompt','prompt_sha256'),('response_schema','response_schema_sha256')]):
         raise ValueError('v5_auxiliary_request_hash_mismatch')
+    from src.engine.scalping.entry_machine_source_recovery import audit_quote_calculation
+    a, request = audit_quote_calculation(a, request)
     if cell['backend']=='registered_v4':
         replay,_,_,_=V4.assess(f['native_parent_bundle']['continuous_reversal'],(event,None),symbol=event['symbol'],session=event['market'],build_request=False)
         for field in ('action','reason','policy_version','cell_key','route','primary_branch','matched_branches','auxiliary_arm','machine_component_sha256'):

@@ -2476,6 +2476,51 @@ class KiwoomWSManager:
         """Register a signal-only callback; the monitor reads the bounded journal."""
         self._fast_exit_wakeup = callback if callable(callback) else None
 
+    def _source_recovery_lease_locked(self, item):
+        """Freeze existing local subscription custody; never imply broker ACK."""
+        epoch = self._market_data_transport_epoch
+        registration = (self._micro_reversion_registration_receipt.get("items") or {}).get(item) or {}
+        lease = self._exact_probe_item_leases.get(item) or {}
+        return {
+            "schema": "entry_source_lease_v1",
+            "item": item,
+            "transport_epoch": epoch,
+            "registration_epoch": self._registered_item_epochs.get(item),
+            "registration_sent_at_epoch": (
+                registration.get("registration_sent_at_epoch")
+                if registration.get("registration_transport_epoch") == epoch else None
+            ),
+            "realtime_types": sorted(self._registered_item_types.get(item) or ()),
+            "physical_probe_lease_id": lease.get("lease_id"),
+            "physical_probe_lease_epoch": lease.get("epoch"),
+            "physical_probe_lease_adopted": lease.get("adopted"),
+            "physical_probe_lease_removing": lease.get("removing"),
+            "interval_started_epoch": lease.get("interval_started_epoch"),
+        }
+
+    def _notify_published_quote_source_locked(self, code, target, source):
+        """Wake exact source consumers only after their 0D snapshot is visible."""
+        item = source.get("item")
+        epoch = source.get("transport_epoch")
+        if (source.get("realtime_type") != "0D"
+                or type(epoch) is not int or epoch <= 0
+                or epoch != self._market_data_transport_epoch
+                or self._normalize_code(item) != code
+                or source.get("market_route") != self._ws_item_route(item)
+                or item not in self._registered_items_by_code.get(code, ())
+                or self._registered_item_epochs.get(item) != epoch
+                or "0D" not in self._registered_item_types.get(item, ())):
+            return
+        route_key = f"{self._ws_item_market_suffix(item) or 'KRX'}|{self._ws_item_route(item)}"
+        published = (target.get("realtime_type_snapshots_by_route") or {}).get(route_key) or {}
+        if published.get("0D") is not source:
+            return
+        from src.engine.scalping.zero_base_probe import notify_exact_probe_source
+        from src.engine.scalping.entry_machine_source_recovery import notify_pending_quote
+
+        notify_exact_probe_source(self, item=item, transport_epoch=epoch)
+        notify_pending_quote(code, item, target, now=time.time())
+
     def _start_micro_reversion_forward_collector(self):
         """Lazy-load the default-off observer without changing subscriptions."""
 
@@ -4666,6 +4711,9 @@ class KiwoomWSManager:
                                             if packet_epoch is not None else None),
                                     }
                                     route_snapshot[real_type] = realtime_snapshot
+                                    target["source_recovery_lease"] = self._source_recovery_lease_locked(
+                                        realtime_snapshot["item"]
+                                    )
                                     if real_type == '0B':
                                         # Consumer of the existing normalized envelope only.
                                         # No broker parsing, provider calls, disk replay or orders.
@@ -4685,7 +4733,6 @@ class KiwoomWSManager:
                                                 realtime_snapshot['item'], market_bucket(reversal_session), now_update_ts)
                                         except (ValueError, TypeError, KeyError, AttributeError):
                                             pass  # Diagnostics cannot change ingress or native admission.
-
                                     quiet_state = route_snapshot["_quiet_tape_state"]
                                     if real_type in {"0B", "0D"}:
                                         if real_type == "0D":
@@ -4724,6 +4771,16 @@ class KiwoomWSManager:
                                             ),
                                         )
                             target["time"] = datetime.now().strftime("%H:%M:%S")
+                            if real_type == "0D":
+                                published_depth = (
+                                    (target.get("realtime_type_snapshots_by_route") or {}).get(
+                                        f"{market_suffix or 'KRX'}|{market_route or 'unknown'}"
+                                    ) or {}
+                                ).get("0D")
+                                if isinstance(published_depth, dict):
+                                    self._notify_published_quote_source_locked(
+                                        item_code[:6], target, published_depth
+                                    )
 
                             if not target.get(
                                 "_first_tick_logged"
@@ -5914,6 +5971,8 @@ class KiwoomWSManager:
             )
             target = store.get(item if observation_only else code)
             snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
+            if snapshot:
+                snapshot["source_recovery_lease"] = self._source_recovery_lease_locked(item)
         return self._finish_snapshot(snapshot) if snapshot else {}
 
     def adopt_zero_base_probe_target(self, payload):

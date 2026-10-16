@@ -1276,6 +1276,14 @@ def capture_machine_observation(
             ),
         )
     )
+    from src.engine.scalping.entry_machine_source_recovery import quote_label_reference
+    quote_label = quote_label_reference(exact_payload, assessment)
+    if quote_label is not None:
+        if quote_label['decision_epoch'] > now.timestamp():
+            raise ValueError('quote_recovery_label_capture_clock_before_evaluation')
+        context.update(reference_price_type=quote_label['reference_price_type'],
+                       reference_price=quote_label['reference_price'],
+                       entry_source_quote_label=quote_label)
     source, redacted = _sanitize(
         {
             "exact_payload": exact_payload,
