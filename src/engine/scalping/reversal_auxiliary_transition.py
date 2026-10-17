@@ -77,9 +77,15 @@ def validate_actual(req, result):
         max_output_tokens=expected['max_output_tokens'],reasoning=expected['reasoning'],temperature=expected['temperature'])
 
 
-def prepare(data_root,research_report,bundle,*,scopes=None):
+def prepare(data_root,research_report,bundle,*,scopes=None,ledger_data_root=None,operating_day=None):
     from src.engine.scalping import reversal_auxiliary_research as R
     report=I.read(research_report)
+    from src.engine.scalping import reversal_auxiliary_input_transition as J
+    if report.get('schema')==J.REPORT_SCHEMA:
+        return J.prepare(data_root,research_report,bundle,scopes=scopes,
+            ledger_data_root=ledger_data_root,operating_day=operating_day)
+    if ledger_data_root is not None or operating_day is not None:
+        raise ValueError('auxiliary_transition_legacy_root_or_day_override_invalid')
     if not report.get('research_complete') or report['observed_current_pointer']['bundle_sha256']!=bundle['bundle_sha256']:
         raise ValueError('auxiliary_transition_research_parent_invalid')
     chosen={r['scope']:r for r in report['selected_research_candidates']}
@@ -156,7 +162,10 @@ def prepare(data_root,research_report,bundle,*,scopes=None):
     return manifest
 
 
-def validate_manifest(data_root,manifest,bundle):
+def validate_manifest(data_root,manifest,bundle,*,cached_only=False):
+    from src.engine.scalping import reversal_auxiliary_input_transition as J
+    if manifest.get('schema')==J.SCHEMA:
+        return J.validate_manifest(data_root,manifest,bundle,cached_only=cached_only)
     if (manifest.get('schema')!=SCHEMA or manifest.get('artifact_content_sha256')!=P.seal(manifest)['artifact_content_sha256']
             or manifest.get('base_bundle_sha256')!=bundle['bundle_sha256']
             or manifest.get('reader_code_hashes')!=I.code_hashes() or manifest.get('wire_contract')!=W.contract()
@@ -222,7 +231,8 @@ def publish(data_root,manifest,*,confirm,now=None):
         with (N.root(Path(data_root))/'publisher.lock').open('a') as mlock:
             fcntl.flock(mlock,fcntl.LOCK_EX)
             bundle=N.load_effective(data_root=Path(data_root),target_date=day)
-            validate_manifest(data_root,manifest,bundle)
+            from src.engine.scalping import reversal_auxiliary_input_transition as J
+            validate_manifest(data_root,manifest,bundle,cached_only=manifest.get('schema')==J.SCHEMA)
             before=I.current(data_root,bundle,day=day)
             ident=manifest['artifact_content_sha256']
             if before and before.get('transition_manifest_sha256')==ident and not before.get('rollback_reason'):
@@ -231,6 +241,9 @@ def publish(data_root,manifest,*,confirm,now=None):
                 raise ValueError('auxiliary_transition_parent_cas_failed')
             bindings=I.effective_bindings(data_root,bundle,day=day)
             if P.digest(bindings)!=manifest['base_bindings_sha256']:raise ValueError('auxiliary_transition_incumbent_changed')
+            from src.engine.scalping import reversal_auxiliary_input_transition as J
+            if manifest.get('schema')==J.SCHEMA:
+                J.register_definitions(data_root,manifest)
             bindings.update(manifest['changes'])
             body=P.seal(dict(schema=I.SCHEMA,authority=confirm,day=day,effective_from=clock.isoformat(),
                 base_bundle_sha256=bundle['bundle_sha256'],base_family_sha256=bundle['continuous_reversal']['family_sha256'],

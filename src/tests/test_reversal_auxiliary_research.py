@@ -393,6 +393,85 @@ def test_next_study_grant_rejects_resealed_funding_changes(setup, change):
         Q.budget(root)
 
 
+def _fund_research_to_2000(root):
+    _fund_research_to_1400(root)
+    Q.authorize_next_study(root, confirm=Q.NEXT_STUDY_AUTHORITY,
+        approval_reference='User: additional 600; total 2000')
+
+
+def test_direct_grant_preserves_1997_spent_3_remaining_and_enforces_2047(setup):
+    root,*_=setup
+    old,old_path=campaign(setup,name='before-direct')
+    _fund_research_to_2000(root)
+    before=Q.budget(root);original=Q.grant(root)
+    historical={path:path.read_bytes() for path in Q.root(root).rglob('*.json')}
+    with S.Store(root) as store:
+        for i in range(1997):
+            store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)',
+                ('prior-direct-'+str(i),original['budget_key']))
+    approval='User: add 47 attempts; total 2047; direct 50-pair comparison'
+    result=Q.authorize_direct_comparison(root,confirm=Q.DIRECT_AUTHORITY,approval_reference=approval)
+    assert result['call_limit']==2047 and result['budget_key']==before['budget_key']
+    assert Q.grant(root)==original and all(path.read_bytes()==value for path,value in historical.items())
+    assert T.read(old_path)==old and Q.validate_campaign(root,old)==result
+    with S.Store(root,readonly=True) as store:
+        assert store.budget_used(result['budget_key'])==1997
+        assert result['call_limit']-store.budget_used(result['budget_key'])==50
+    assert Q.authorize_direct_comparison(root,confirm=Q.DIRECT_AUTHORITY,approval_reference=approval)==result
+    with pytest.raises(ValueError,match='immutable_conflict'):
+        Q.authorize_direct_comparison(root,confirm=Q.DIRECT_AUTHORITY,approval_reference='different reference')
+    new,path=campaign(setup,name='direct-2047')
+    assert new['call_limit']==2047 and Q.validate_campaign(root,new)==result
+    with S.Store(root) as store:
+        for i in range(49):
+            store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)',
+                ('direct-study-'+str(i),original['budget_key']))
+    def uncertain(*args,**kwargs):raise TimeoutError('uncertain attempt stays charged')
+    called=T.calls(root,'2026-10-07',campaign_path=path,transport=uncertain,max_new_calls=1)
+    assert called['new_calls']==1 and called['call_budget']['used_after']==2047
+    assert called['research_funding_sha256']==result['funding_sha256']
+    assert T.calls(root,'2026-10-07',campaign_path=old_path,
+        transport=lambda *a,**k:pytest.fail('direct budget must not reset'))['new_calls']==0
+
+
+@pytest.mark.parametrize('confirm,approval',[
+    ('unapproved','User'),(Q.DIRECT_AUTHORITY,''),(Q.DIRECT_AUTHORITY,' '),
+])
+def test_direct_grant_requires_explicit_authority(setup,confirm,approval):
+    root,*_=setup;campaign(setup);_fund_research_to_2000(root)
+    with pytest.raises(ValueError,match='direct_authority_required'):
+        Q.authorize_direct_comparison(root,confirm=confirm,approval_reference=approval)
+    assert Q.budget(root)['call_limit']==2000
+    assert not (Q.root(root)/'allowance-topup-2047.json').exists()
+
+
+def test_direct_grant_cannot_skip_2000_predecessor(setup):
+    root,*_=setup;campaign(setup);_fund_research_to_1400(root)
+    with pytest.raises(ValueError,match='previous_funding_required'):
+        Q.authorize_direct_comparison(root,confirm=Q.DIRECT_AUTHORITY,approval_reference='User')
+
+
+@pytest.mark.parametrize('missing',[400,600,800,1400,2000])
+def test_direct_grant_rejects_any_missing_predecessor(setup,missing):
+    root,*_=setup;campaign(setup);_fund_research_to_2000(root)
+    Q.authorize_direct_comparison(root,confirm=Q.DIRECT_AUTHORITY,approval_reference='User')
+    (Q.root(root)/f'allowance-topup-{missing}.json').unlink()
+    with pytest.raises(ValueError,match='research_.*(required|invalid)'):Q.budget(root)
+
+
+@pytest.mark.parametrize('change',[
+    {'previous_funding_sha256':'0'*64},{'from_limit':1400},{'call_limit':2048},
+    {'budget_key':'research_auxiliary:new-date'},{'authority':'unapproved'},
+    {'allowed_runtime_apply':True},{'approval_reference':''},
+])
+def test_direct_grant_rejects_resealed_funding_changes(setup,change):
+    root,*_=setup;campaign(setup);_fund_research_to_2000(root)
+    Q.authorize_direct_comparison(root,confirm=Q.DIRECT_AUTHORITY,approval_reference='User')
+    path=Q.root(root)/'allowance-topup-2047.json'
+    P.write(path,P.seal(dict(Q.read(path),**change)))
+    with pytest.raises(ValueError,match='direct_funding_invalid'):Q.budget(root)
+
+
 def _missing_key_attempt(root, value, *, defect=None):
     contract = Q.not_sent_executor_contract()
     with S.Store(root) as store:

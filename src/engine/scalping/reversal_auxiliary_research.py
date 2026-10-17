@@ -25,6 +25,8 @@ DISCRIMINATIVE_LIMIT = 1400
 DISCRIMINATIVE_AUTHORITY = 'USER_APPROVED_ADDITIONAL_600_TOTAL_1400_RESEARCH_CALLS_20261017'
 NEXT_STUDY_LIMIT = 2000
 NEXT_STUDY_AUTHORITY = 'USER_APPROVED_ADDITIONAL_600_TOTAL_2000_RESEARCH_CALLS_20261017'
+DIRECT_LIMIT = 2047
+DIRECT_AUTHORITY = 'USER_APPROVED_ADDITIONAL_47_TOTAL_2047_DIRECT_RESEARCH_CALLS_20261017'
 SOURCE_SCOPE_AUTHORITY = 'USER_APPROVED_CUMULATIVE_AUXILIARY_RESEARCH_SCOPE_20261016'
 NOT_SENT_RECOVERY_AUTHORITY = 'RESEARCH_ONLY_VERIFIED_CREDENTIALS_NOT_SENT_RECOVERY'
 
@@ -61,7 +63,7 @@ def budget(data_root):
     base = grant(data_root)
     path = root(data_root) / 'allowance-topup-400.json'
     if not path.exists():
-        if any((root(data_root)/f'allowance-topup-{n}.json').exists() for n in (600,800,1400,2000)):
+        if any((root(data_root)/f'allowance-topup-{n}.json').exists() for n in (600,800,1400,2000,2047)):
             raise ValueError('auxiliary_research_previous_funding_required')
         return base
     topup = read(path)
@@ -122,7 +124,41 @@ def budget(data_root):
                 or any(value.get(key) != expected for key, expected in P.AUTH.items())):
             raise ValueError('auxiliary_research_next_study_funding_invalid')
         result.update(call_limit=NEXT_STUDY_LIMIT, funding_sha256=value['artifact_content_sha256'])
+    direct = root(data_root) / 'allowance-topup-2047.json'
+    if direct.exists():
+        value = read(direct)
+        if (result['call_limit'] != NEXT_STUDY_LIMIT or value.get('schema') != SCHEMA
+                or value.get('research_id') != RESEARCH_ID
+                or value.get('authority') != DIRECT_AUTHORITY
+                or value.get('previous_funding_sha256') != result['funding_sha256']
+                or value.get('from_limit') != NEXT_STUDY_LIMIT
+                or value.get('call_limit') != DIRECT_LIMIT
+                or value.get('budget_key') != base['budget_key']
+                or not isinstance(value.get('approval_reference'), str)
+                or not value['approval_reference'].strip()
+                or any(value.get(key) != expected for key, expected in P.AUTH.items())):
+            raise ValueError('auxiliary_research_direct_funding_invalid')
+        result.update(call_limit=DIRECT_LIMIT, funding_sha256=value['artifact_content_sha256'])
     return result
+
+
+def authorize_direct_comparison(data_root, *, confirm, approval_reference):
+    """Append 47 attempts to the existing budget; never reset prior charges."""
+    if (confirm != DIRECT_AUTHORITY or not isinstance(approval_reference, str)
+            or not approval_reference.strip()):
+        raise ValueError('auxiliary_research_direct_authority_required')
+    with S.Store(data_root):
+        previous = budget(data_root)
+        if previous['call_limit'] not in {NEXT_STUDY_LIMIT, DIRECT_LIMIT}:
+            raise ValueError('auxiliary_research_previous_funding_required')
+        funding = read(root(data_root) / 'allowance-topup-2000.json')
+        value = P.seal(dict(schema=SCHEMA, research_id=RESEARCH_ID,
+            authority=DIRECT_AUTHORITY,
+            previous_funding_sha256=funding['artifact_content_sha256'],
+            from_limit=NEXT_STUDY_LIMIT, call_limit=DIRECT_LIMIT,
+            budget_key=previous['budget_key'], approval_reference=approval_reference, **P.AUTH))
+        immutable(root(data_root) / 'allowance-topup-2047.json', value)
+    return budget(data_root)
 
 
 def authorize_next_study(data_root, *, confirm, approval_reference):
@@ -607,7 +643,7 @@ def validate_campaign(data_root, campaign):
     if (ref != {k: v[k] for k in fields}
             or campaign['config_sha256'] != v['config']['artifact_content_sha256']
             or campaign['call_limit'] not in {
-                LIMIT, TOPUP_LIMIT, CONTINUATION_LIMIT, FOLLOWUP_LIMIT, DISCRIMINATIVE_LIMIT, NEXT_STUDY_LIMIT}
+                LIMIT, TOPUP_LIMIT, CONTINUATION_LIMIT, FOLLOWUP_LIMIT, DISCRIMINATIVE_LIMIT, NEXT_STUDY_LIMIT, DIRECT_LIMIT}
             or campaign['call_limit'] > a['call_limit']
             or campaign['source_date'] not in dates
             or any(p['day'] not in dates for p in campaign['pairs'])
