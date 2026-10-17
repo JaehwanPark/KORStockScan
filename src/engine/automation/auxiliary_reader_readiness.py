@@ -8,7 +8,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.utils.constants import DATA_DIR
 
@@ -32,6 +35,143 @@ def verify_bound_sources(receipt: dict) -> None:
         path = Path(name)
         if not path.is_file() or _sha(path) != expected:
             raise ValueError('auxiliary_reader_readiness_source_changed:' + str(path))
+    overlay = receipt.get('target_overlay')
+    if overlay is not None:
+        if (not isinstance(overlay, dict) or set(overlay) != {'path', 'sha256', 'artifact_content_sha256'}
+                or not isinstance(overlay['path'], str)):
+            raise ValueError('auxiliary_reader_readiness_overlay_receipt_invalid')
+        path = Path(overlay['path'])
+        if overlay['sha256'] is None and overlay['artifact_content_sha256'] is not None:
+            raise ValueError('auxiliary_reader_readiness_overlay_receipt_invalid')
+        if overlay['sha256'] is not None and (not isinstance(overlay['sha256'], str)
+                or not isinstance(overlay['artifact_content_sha256'], str)):
+            raise ValueError('auxiliary_reader_readiness_overlay_receipt_invalid')
+        unchanged = (not path.exists() and not path.is_symlink() if overlay['sha256'] is None
+                     else path.is_file() and not path.is_symlink() and _sha(path) == overlay['sha256'])
+        if not unchanged:
+            _verify_runtime_overlay_successor(receipt)
+
+
+def _verify_runtime_overlay_successor(receipt):
+    """Allow only a native same-day descendant after real machine activation."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import reversal_auxiliary_intraday as reader
+
+    target_date = receipt['target_date']
+    if datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat() != target_date:
+        raise ValueError('auxiliary_reader_readiness_overlay_changed')
+    data = Path(receipt['data_root'])
+    observed = receipt['target_overlay']
+    expected_path = reader.root(data) / 'days' / target_date / (receipt['bundle_sha256'] + '.json')
+    if Path(observed['path']) != expected_path or expected_path.is_symlink():
+        raise ValueError('auxiliary_reader_readiness_overlay_path_invalid')
+    active_pointer = native.root(data) / 'current.json'
+    before = _sha(active_pointer)
+    pointer = native._read(active_pointer)
+    if (pointer.get('bundle_sha256') != receipt['bundle_sha256']
+            or pointer.get('effective_date') != target_date):
+        raise ValueError('auxiliary_reader_readiness_overlay_not_activated')
+    bundle = native.load_effective(data_root=data, target_date=target_date)
+    if not bundle or bundle.get('bundle_sha256') != receipt['bundle_sha256']:
+        raise ValueError('auxiliary_reader_readiness_overlay_not_activated')
+    current = reader.current(data, bundle, day=target_date)
+    if current is None or reader.read(expected_path) != current:
+        raise ValueError('auxiliary_reader_readiness_overlay_changed')
+    record = current
+    seen = set()
+    expected = observed['artifact_content_sha256']
+    found = False
+    while record is not None:
+        ident = record['artifact_content_sha256']
+        if (ident in seen or record.get('day') != target_date
+                or record.get('base_bundle_sha256') != receipt['bundle_sha256']):
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+        seen.add(ident)
+        generation = reader.root(data) / 'generations' / (ident + '.json')
+        if reader.read(generation) != record:
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+        reader.validate_record(data, record, bundle, check_definitions=True)
+        evidenced = any(record.get(key) for key in ('evaluation_sha256', 'transition_manifest_sha256',
+                                                    'contract_repair_manifest_sha256'))
+        if not evidenced and not (record.get('rollback_reason') and record.get('previous_overlay_sha256')):
+            raise ValueError('auxiliary_reader_readiness_overlay_publication_proof_missing')
+        if ident == expected:
+            found = True
+            break
+        previous = record.get('previous_overlay_sha256')
+        if previous is None:
+            found = expected is None
+            break
+        if not isinstance(previous, str) or re.fullmatch('[a-f0-9]{64}', previous) is None:
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+        record = reader.read(reader.root(data) / 'generations' / (previous + '.json'))
+        if record.get('artifact_content_sha256') != previous:
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+    if (not found or _sha(active_pointer) != before
+            or reader.current(data, bundle, day=target_date) != current
+            or reader.read(expected_path) != current):
+        raise ValueError('auxiliary_reader_readiness_overlay_changed')
+
+
+def _registry_sources(data_root, registry, identities, sources):
+    """Validate effective definitions and seal their immutable original parents."""
+    pending = list(identities)
+    visited = set()
+    while pending:
+        ident = pending.pop()
+        if ident in visited:
+            continue
+        visited.add(ident)
+        path = registry.directory(data_root) / (ident + '.json')
+        actual = _sha(path)
+        if sources.setdefault(str(path), actual) != actual:
+            raise ValueError('auxiliary_reader_readiness_source_changed:' + str(path))
+        value = registry.load(data_root, ident)
+        for name in ('research_registry_sha256', 'production_parent_registry_sha256'):
+            if value.get(name):
+                pending.append(value[name])
+
+
+def _target_overlay(data_root, bundle, target_date, reader, registry, inherited, sources):
+    """Inspect the dated runtime overlay without registering or publishing it."""
+    path = reader.root(data_root) / 'days' / target_date / (bundle['bundle_sha256'] + '.json')
+    observed = dict(path=str(path), sha256=None, artifact_content_sha256=None)
+    overlay = reader.current(data_root, bundle, day=target_date)
+    if overlay is None:
+        # A source may appear after the native read; never seal its absence then.
+        if path.exists() or path.is_symlink():
+            raise ValueError('auxiliary_reader_readiness_overlay_changed')
+        _registry_sources(data_root, registry, inherited.values(), sources)
+        return inherited, observed
+    observed.update(sha256=_sha(path), artifact_content_sha256=overlay['artifact_content_sha256'])
+    if reader.read(path) != overlay:
+        raise ValueError('auxiliary_reader_readiness_overlay_changed')
+    lineage = reader.lineage_sources(data_root, bundle, overlay)
+    for reference in lineage:
+        previous = sources.setdefault(reference['path'], reference['sha256'])
+        if previous != reference['sha256']:
+            raise ValueError('auxiliary_reader_readiness_source_changed:' + reference['path'])
+        generation = Path(reference['path'])
+        if generation.parent.resolve() == (reader.root(data_root) / 'generations').resolve():
+            old = reader.read(generation).get('code_hashes')
+            if old is not None and old != reader.code_hashes():
+                from src.engine.scalping import reversal_auxiliary_compatibility as compatibility
+                proof = compatibility.validate(data_root, bundle, generation, old, reader.code_hashes())
+                proof_path = compatibility.path(data_root, bundle, generation, reader.code_hashes())
+                for dependency in [proof_path, proof['evidence_path']] + [
+                        item['path'] for item in proof['frozen_readers']]:
+                    name = str(dependency)
+                    actual = _sha(Path(dependency))
+                    if sources.setdefault(name, actual) != actual:
+                        raise ValueError('auxiliary_reader_readiness_source_changed:' + name)
+    bindings = {**inherited, **overlay['bindings']}
+    identities = set(bindings.values()) | set(reader.rollback_bindings(data_root, bundle, overlay).values())
+    _registry_sources(data_root, registry, identities, sources)
+    # Seal before revalidation so mutations during validation remain observable.
+    reader.validate_record(data_root, overlay, bundle, check_definitions=True)
+    if reader.current(data_root, bundle, day=target_date) != overlay:
+        raise ValueError('auxiliary_reader_readiness_overlay_changed')
+    return bindings, observed
 
 
 def verify_auxiliary_reader(
@@ -43,7 +183,7 @@ def verify_auxiliary_reader(
     from src.engine.scalping import reversal_auxiliary_compatibility as compatibility
     from src.engine.scalping import reversal_auxiliary_registry as registry
 
-    data_root = Path(data_root)
+    data_root = Path(data_root).resolve()
     if bundle is None:
         bundle = (native.load(data_root=data_root, target_date=target_date) if preparation
                   else native.load_effective(data_root=data_root, target_date=target_date))
@@ -89,9 +229,12 @@ def verify_auxiliary_reader(
     inherited = reader.inherited(data_root, bundle)
     if inherited != refs:
         raise ValueError('auxiliary_reader_inheritance_changed')
+    effective, overlay = _target_overlay(data_root, bundle, target_date, reader, registry,
+                                         inherited, sources)
     result.update(status='pass', bundle_sha256=bundle['bundle_sha256'],
                   auxiliary_source_path=str(source), auxiliary_source_sha256=source_sha,
-                  reader_code_hashes=current_hashes, scope_count=len(inherited),
+                  reader_code_hashes=current_hashes, scope_count=len(effective),
+                  target_overlay=overlay, data_root=str(data_root),
                   compatibility_path=str(compatibility_path) if compatibility_path else None,
                   compatibility_status='verified' if compatibility_path else 'not_required_same_readers',
                   source_hashes=sources)

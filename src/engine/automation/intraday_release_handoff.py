@@ -871,6 +871,21 @@ REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES = {
 }
 
 
+# Exact 10/19 prepared-policy origin to the reviewed auxiliary input opt-in.
+# Registry projection is scope-bound and machine ENTER_NOW-only; the SDK adds
+# the selected input contract to provider identity. Delay/holding/stop numeric
+# policies, provider selection, order authority and hard guards stay unchanged.
+# Review: docs/audits/main-auxiliary-direct-current-combined-comparison-review-2026-10-17.md.
+REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES = {
+    'src/engine/scalping/reversal_auxiliary_registry.py': (
+        'a9ca6ebc7b924fcb8de2dc4b141d99500aacc5f3700fe566b3fea190b24cbd31',
+        '5702bd5b558ca0e61c52eb4c3679c4f57d6bc877629ea9635ad6f0143fe413da'),
+    'src/engine/ai_engine_openai.py': (
+        'b5c8b6e262678c5354ced1fd30ae4d20b974e50fbb01187b4ab2a9df61a010d7',
+        '194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584'),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -916,7 +931,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES.get(name),
+        if pair in (REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES.get(name),
+                    REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES.get(name),
                     REVIEWED_CURSOR_ASOF_SOURCES.get(name),
                     REVIEWED_NONFIXED_CONTINUITY_SOURCES.get(name),
                     REVIEWED_DELAY_SITUATION_SOURCES.get(name),

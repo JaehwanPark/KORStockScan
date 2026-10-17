@@ -163,6 +163,9 @@ def prepare(data_root,research_report,bundle,*,scopes=None,ledger_data_root=None
 
 
 def validate_manifest(data_root,manifest,bundle,*,cached_only=False):
+    from src.engine.scalping import reversal_auxiliary_next_session as B
+    if manifest.get('schema')==B.SCHEMA:
+        return B.validate_manifest(data_root,manifest,bundle,cached_only=cached_only)
     from src.engine.scalping import reversal_auxiliary_input_transition as J
     if manifest.get('schema')==J.SCHEMA:
         return J.validate_manifest(data_root,manifest,bundle,cached_only=cached_only)
@@ -209,6 +212,9 @@ def validate_published(data_root,record,bundle):
     m=I.read(folder(data_root)/(record['transition_manifest_sha256']+'.json'))
     if m['artifact_content_sha256']!=record['transition_manifest_sha256']:
         raise ValueError('auxiliary_transition_identity_changed')
+    from src.engine.scalping import reversal_auxiliary_next_session as B
+    if m.get('schema')==B.SCHEMA:
+        return B.validate_published(data_root,record,bundle,manifest=m)
     validate_manifest(data_root,m,bundle)
     # Subsequent scope rollbacks retain the original manifest as lineage only.
     if not record.get('rollback_reason') and any(record['bindings'].get(s)!=v for s,v in m['changes'].items()):

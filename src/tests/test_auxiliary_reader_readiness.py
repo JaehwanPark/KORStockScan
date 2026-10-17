@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from datetime import datetime as real_datetime
 
 import pytest
 
@@ -45,6 +46,8 @@ def source_pair(tmp_path, monkeypatch):
     inherited_calls = []
     monkeypatch.setattr(reader, 'code_hashes', lambda: new_hashes)
     monkeypatch.setattr(reader, 'inherited', lambda *_: inherited_calls.append(True) or copy.deepcopy(refs))
+    monkeypatch.setattr(registry, 'load', lambda data, ident: json.loads(
+        (registry.directory(data) / (ident + '.json')).read_text()))
     return dict(data=data, bundle=bundle, source=source, refs=refs, evidence=evidence,
                 old=old, new_hashes=new_hashes, inherited_calls=inherited_calls,
                 receipt=compatibility.path(data, bundle, source, new_hashes))
@@ -105,6 +108,240 @@ def test_same_readers_do_not_require_a_compatibility_receipt(source_pair):
     result = gate.verify_auxiliary_reader('2026-10-12', data_root=f['data'], bundle=f['bundle'])
     assert result['status'] == 'pass'
     assert result['compatibility_path'] is None
+
+
+@pytest.fixture
+def target_overlay(source_pair, monkeypatch):
+    f = source_pair
+    ident = 'd' * 64
+    parent = 'e' * 64
+    original = 'f' * 64
+    day = '2026-10-19'
+    value = policy.seal(dict(schema=reader.SCHEMA, authority=reader.AUTHORITY,
+        day=day, base_bundle_sha256=f['bundle']['bundle_sha256'],
+        evaluation_sha256='1' * 64, previous_overlay_sha256=None,
+        bindings={'future-scope|nxt': ident}))
+    path = reader.root(f['data']) / 'days' / day / (f['bundle']['bundle_sha256'] + '.json')
+    _sealed(path, value)
+    generation = reader.root(f['data']) / 'generations' / (value['artifact_content_sha256'] + '.json')
+    _sealed(generation, value)
+    proof = f['data'] / 'proof.json'
+    proof.write_text('original immutable provider/source proof\n')
+    manifest = f['data'] / 'transition.json'
+    _sealed(manifest, dict(sources=[dict(path=str(proof), sha256=policy.file_hash(proof))]))
+    definitions = {
+        ident: dict(production_parent_registry_sha256=parent, research_registry_sha256=original),
+        parent: dict(research_registry_sha256=original), original: {}, 'c' * 64: {},
+    }
+    for key, body in definitions.items():
+        _sealed(registry.directory(f['data']) / (key + '.json'), body)
+    calls = []
+    monkeypatch.setattr(reader, 'current', lambda data, bundle, *, day=None: copy.deepcopy(value))
+    monkeypatch.setattr(reader, 'validate_record', lambda *a, **k: calls.append(k))
+    monkeypatch.setattr(reader, 'rollback_bindings', lambda *a, **k: {})
+    monkeypatch.setattr(reader, 'lineage_sources', lambda *a, **k: [
+        dict(path=str(p), sha256=policy.file_hash(p)) for p in (generation, manifest, proof)])
+    monkeypatch.setattr(registry, 'load', lambda data, key: copy.deepcopy(definitions[key]))
+    return {**f, 'day': day, 'overlay': value, 'day_path': path, 'proof': proof,
+            'manifest': manifest, 'generation': generation, 'definitions': definitions,
+            'validated': calls, 'production_parent': registry.directory(f['data']) / (parent + '.json')}
+
+
+def test_target_overlay_is_checked_and_all_effective_definition_parents_are_sealed(target_overlay):
+    f = target_overlay
+    result = gate.verify_auxiliary_reader(f['day'], data_root=f['data'], preparation=True, bundle=f['bundle'])
+    assert result['scope_count'] == 2
+    assert result['target_overlay'] == dict(path=str(f['day_path']), sha256=policy.file_hash(f['day_path']),
+        artifact_content_sha256=f['overlay']['artifact_content_sha256'])
+    assert f['validated'] == [dict(check_definitions=True)]
+    for path in (f['proof'], f['manifest'], f['generation'], f['production_parent']):
+        assert result['source_hashes'][str(path)] == policy.file_hash(path)
+    assert result['actual_pid_consumed'] is result['provider_called'] is result['order_submitted'] is False
+    gate.verify_bound_sources(result)
+
+
+@pytest.mark.parametrize('dependency', ['day_path', 'proof', 'manifest', 'generation', 'production_parent'])
+def test_sealed_target_overlay_rejects_changed_proof_or_registry_parent(target_overlay, dependency):
+    f = target_overlay
+    result = gate.verify_auxiliary_reader(f['day'], data_root=f['data'], bundle=f['bundle'])
+    f[dependency].write_text('changed after preparation\n')
+    with pytest.raises(ValueError, match='source_changed|overlay_changed'):
+        gate.verify_bound_sources(result)
+
+
+def test_target_overlay_sources_changing_during_native_validation_fail(target_overlay, monkeypatch):
+    f = target_overlay
+    monkeypatch.setattr(reader, 'validate_record', lambda *a, **k: f['proof'].write_text('raced proof\n'))
+    with pytest.raises(ValueError, match='source_changed'):
+        gate.verify_auxiliary_reader(f['day'], data_root=f['data'], bundle=f['bundle'])
+
+
+def test_target_overlay_seals_original_reader_compatibility_dependencies(target_overlay, monkeypatch):
+    f = target_overlay
+    ancestor = reader.root(f['data']) / 'generations' / ('a' * 64 + '.json')
+    _sealed(ancestor, dict(code_hashes={f['old'].name: policy.file_hash(f['old'])}))
+    original = reader.lineage_sources
+    monkeypatch.setattr(reader, 'lineage_sources', lambda *a: original(*a) + [
+        dict(path=str(ancestor), sha256=policy.file_hash(ancestor))])
+    # The source report and overlay generation have separately bound receipts.
+    overlay_proof = f['data'] / 'overlay-reader-compatibility.json'
+    _sealed(overlay_proof, dict(status='pass'))
+    validate = compatibility.validate
+    path = compatibility.path
+    monkeypatch.setattr(compatibility, 'path', lambda data, bundle, source, hashes:
+        overlay_proof if source == ancestor else path(data, bundle, source, hashes))
+    monkeypatch.setattr(compatibility, 'validate', lambda data, bundle, source, old, new:
+        dict(evidence_path=str(f['evidence']), frozen_readers=[dict(path=str(f['old']))])
+        if source == ancestor else validate(data, bundle, source, old, new))
+    result = gate.verify_auxiliary_reader(f['day'], data_root=f['data'], bundle=f['bundle'])
+    assert result['source_hashes'][str(overlay_proof)] == policy.file_hash(overlay_proof)
+    overlay_proof.unlink()
+    with pytest.raises(ValueError, match='source_changed'):
+        gate.verify_bound_sources(result)
+
+
+def test_target_overlay_must_match_its_exact_day_pointer(target_overlay):
+    f = target_overlay
+    _sealed(f['day_path'], dict(bindings={}))
+    with pytest.raises(ValueError, match='overlay_changed'):
+        gate.verify_auxiliary_reader(f['day'], data_root=f['data'], bundle=f['bundle'])
+
+
+def test_target_overlay_change_during_validation_is_not_relabelled_as_current(target_overlay, monkeypatch):
+    f = target_overlay
+    observations = iter([f['overlay'], policy.seal(dict(bindings={}))])
+    monkeypatch.setattr(reader, 'current', lambda *a, **k: next(observations))
+    with pytest.raises(ValueError, match='overlay_changed'):
+        gate.verify_auxiliary_reader(f['day'], data_root=f['data'], bundle=f['bundle'])
+
+
+def test_legacy_no_overlay_absence_is_sealed_without_registration(source_pair, monkeypatch):
+    f = source_pair
+    monkeypatch.setattr(registry, 'register', lambda *a, **k: pytest.fail('registered during readiness'))
+    result = gate.verify_auxiliary_reader('2026-10-19', data_root=f['data'], bundle=f['bundle'])
+    assert result['target_overlay']['sha256'] is None
+    gate.verify_bound_sources(result)
+    _sealed(Path(result['target_overlay']['path']), dict(bindings={}))
+    with pytest.raises(ValueError, match='overlay_changed'):
+        gate.verify_bound_sources(result)
+
+
+def test_no_overlay_still_seals_inherited_compact_original_registry_parent(source_pair):
+    f = source_pair
+    parent = registry.directory(f['data']) / ('e' * 64 + '.json')
+    _sealed(parent, dict(input_version='fixture'))
+    _sealed(registry.directory(f['data']) / ('c' * 64 + '.json'),
+        dict(research_registry_sha256='e' * 64, input_version='fixture'))
+    result = gate.verify_auxiliary_reader('2026-10-19', data_root=f['data'], bundle=f['bundle'])
+    assert result['source_hashes'][str(parent)] == policy.file_hash(parent)
+    parent.write_text('changed original parent\n')
+    with pytest.raises(ValueError, match='source_changed'):
+        gate.verify_bound_sources(result)
+
+
+def test_relative_data_root_is_frozen_before_a_later_consumer_changes_cwd(source_pair, monkeypatch):
+    f = source_pair
+    monkeypatch.chdir(f['data'].parent)
+    result = gate.verify_auxiliary_reader('2026-10-19', data_root=Path('data'), bundle=f['bundle'])
+    assert result['data_root'] == str(f['data'])
+    assert all(Path(name).is_absolute() for name in result['source_hashes'])
+    monkeypatch.chdir(f['data'].parent.parent)
+    gate.verify_bound_sources(result)
+
+
+def test_overlay_appearing_after_no_overlay_read_cannot_be_sealed_as_absent(source_pair, monkeypatch):
+    f = source_pair
+    path = reader.root(f['data']) / 'days/2026-10-19' / (f['bundle']['bundle_sha256'] + '.json')
+    def appeared(*a, **k):
+        _sealed(path, dict(bindings={}))
+        return None
+    monkeypatch.setattr(reader, 'current', appeared)
+    with pytest.raises(ValueError, match='overlay_changed'):
+        gate.verify_auxiliary_reader('2026-10-19', data_root=f['data'], bundle=f['bundle'])
+
+
+def _runtime_successor(f, monkeypatch, *, ancestor=True):
+    result = gate.verify_auxiliary_reader(f['day'], data_root=f['data'], bundle=f['bundle'])
+    if not ancestor:
+        result['target_overlay'].update(sha256=None, artifact_content_sha256=None)
+    class TargetDay:
+        @classmethod
+        def now(cls, zone):
+            return real_datetime(2026, 10, 19, 10, 0, tzinfo=zone)
+    monkeypatch.setattr(gate, 'datetime', TargetDay)
+    active = native.root(f['data']) / 'current.json'
+    _sealed(active, dict(bundle_sha256=f['bundle']['bundle_sha256'], effective_date=f['day']))
+    monkeypatch.setattr(native, 'load_effective', lambda **kwargs: f['bundle'])
+    next_record = policy.seal({**f['overlay'], 'previous_overlay_sha256':
+        f['overlay']['artifact_content_sha256'] if ancestor else None, 'change_note': 'native successor'})
+    generation = reader.root(f['data']) / 'generations' / (next_record['artifact_content_sha256'] + '.json')
+    _sealed(generation, next_record)
+    _sealed(f['day_path'], next_record)
+    monkeypatch.setattr(reader, 'current', lambda *args, **kwargs: copy.deepcopy(next_record))
+    return result, next_record, generation, active
+
+
+@pytest.mark.parametrize('ancestor', [True, False])
+def test_real_target_day_native_descendant_or_first_publication_preserves_readiness(target_overlay, monkeypatch, ancestor):
+    result, _, _, _ = _runtime_successor(target_overlay, monkeypatch, ancestor=ancestor)
+    gate.verify_bound_sources(result)
+
+
+@pytest.mark.parametrize('damage', ['not_activated', 'other_bundle', 'other_day', 'missing_parent',
+                                  'not_descendant', 'missing_proof', 'root_rollback_without_proof',
+                                  'invalid_parent', 'active_pointer_race'])
+def test_same_day_overlay_changes_cannot_bypass_activation_ancestry_or_native_proof(target_overlay, monkeypatch, damage):
+    f = target_overlay
+    result, successor, generation, active = _runtime_successor(f, monkeypatch)
+    if damage == 'not_activated':
+        _sealed(active, dict(bundle_sha256='0' * 64, effective_date=f['day']))
+    elif damage in {'other_bundle', 'other_day', 'missing_parent', 'not_descendant', 'missing_proof',
+                    'root_rollback_without_proof', 'invalid_parent'}:
+        updated = dict(successor)
+        if damage == 'other_bundle':
+            updated['base_bundle_sha256'] = '0' * 64
+        elif damage == 'other_day':
+            updated['day'] = '2026-10-18'
+        elif damage == 'missing_parent':
+            updated['previous_overlay_sha256'] = '0' * 64
+        elif damage == 'not_descendant':
+            updated['previous_overlay_sha256'] = None
+        elif damage == 'missing_proof':
+            updated.pop('evaluation_sha256')
+        elif damage == 'root_rollback_without_proof':
+            updated.pop('evaluation_sha256')
+            updated.update(rollback_reason='unproven root', previous_overlay_sha256=None)
+        elif damage == 'invalid_parent':
+            updated['previous_overlay_sha256'] = '../outside-generation'
+        updated = policy.seal(updated)
+        _sealed(reader.root(f['data']) / 'generations' / (updated['artifact_content_sha256'] + '.json'), updated)
+        _sealed(f['day_path'], updated)
+        monkeypatch.setattr(reader, 'current', lambda *a, **k: copy.deepcopy(updated))
+    elif damage == 'active_pointer_race':
+        monkeypatch.setattr(reader, 'validate_record', lambda *a, **k: _sealed(active, dict(changed=True)))
+    with pytest.raises((OSError, ValueError), match='overlay|No such file'):
+        gate.verify_bound_sources(result)
+
+
+def test_active_machine_from_previous_date_cannot_authorize_new_overlay(target_overlay, monkeypatch):
+    f = target_overlay
+    result, _, _, active = _runtime_successor(f, monkeypatch)
+    _sealed(active, dict(bundle_sha256=f['bundle']['bundle_sha256'], effective_date='2026-10-16'))
+    with pytest.raises(ValueError, match='not_activated'):
+        gate.verify_bound_sources(result)
+
+
+def test_same_day_native_rollback_retains_proven_ancestor_without_new_evaluation(target_overlay, monkeypatch):
+    f = target_overlay
+    result, successor, _, _ = _runtime_successor(f, monkeypatch)
+    changed = dict(successor)
+    changed.pop('evaluation_sha256')
+    changed['rollback_reason'] = 'approved native rollback'
+    changed = policy.seal(changed)
+    _sealed(reader.root(f['data']) / 'generations' / (changed['artifact_content_sha256'] + '.json'), changed)
+    _sealed(f['day_path'], changed)
+    monkeypatch.setattr(reader, 'current', lambda *a, **k: copy.deepcopy(changed))
+    gate.verify_bound_sources(result)
 
 
 @pytest.mark.parametrize('dependency', ['receipt', 'evidence', 'old', 'definition'])
