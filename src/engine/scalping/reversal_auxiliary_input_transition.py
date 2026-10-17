@@ -94,6 +94,11 @@ def _baseline(data_root, bundle, expected_parent):
         if str(path) in seen:return
         seen.add(str(path));paths.add(str(path))
         value=I.read(path)
+        # inherited() caches its top-level registry dependencies. Always read
+        # their immutable parent chain too, including entries subsequently
+        # overridden by the anchored overlay, so cold/warm closures agree.
+        for ident in set(value.get('auxiliary_registry_bindings',{}).values()):
+            G.load(data_root,ident)
         old=value.get('auxiliary_reader_code_hashes',value.get('code_hashes'))
         if old is not None and old!=I.code_hashes():
             receipt=C.validate(data_root,bundle,path,old,I.code_hashes())

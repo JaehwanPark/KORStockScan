@@ -403,3 +403,27 @@ def test_warm_cache_keeps_the_read_research_allowance_receipt(prepared_input):
     assert str(grant) in {ref['path'] for ref in m['sources']}
     grant.unlink()
     with pytest.raises(OSError):X.validate_manifest(f.policy,m,f.bundle)
+
+
+def test_inherited_registry_parent_closure_is_identical_after_reader_cache_warms(prepared_input,monkeypatch):
+    f=prepared_input
+    parent=G.load(f.ledger,f.candidate['research_registry_sha256'])
+    G.register(f.policy,parent);G.register(f.policy,f.candidate)
+    inherited={sid:f.candidate['registry_sha256'] for sid in f.protocol['bindings']}
+    source=N.root(f.policy)/'sources'/('reversal-'+f.bundle['continuous_reversal']['auxiliary_report_sha256']+'.json')
+    P.write(source,P.seal(dict(auxiliary_registry_bindings=inherited,auxiliary_reader_code_hashes=I.code_hashes())))
+    overlay=P.seal(dict(schema=I.SCHEMA,authority=I.AUTHORITY,day='2026-10-19',effective_from='2026-10-19T07:00:00+09:00',
+        base_bundle_sha256=f.bundle['bundle_sha256'],base_family_sha256=f.bundle['continuous_reversal']['family_sha256'],
+        detector_manifest_hash='d'*64,bindings=f.protocol['bindings'],code_hashes=I.code_hashes()))
+    P.write(I.root(f.policy)/'generations'/(overlay['artifact_content_sha256']+'.json'),overlay)
+    P.write(I.root(f.policy)/'current.json',overlay)
+    calls=[0]
+    def cached_inherited(*args):
+        calls[0]+=1
+        if calls[0]==1:G.load(f.policy,f.candidate['registry_sha256'])
+        return inherited
+    monkeypatch.setattr(I,'inherited',cached_inherited)
+    manifest=prepare(f)
+    assert str(G.directory(f.policy)/(parent['registry_sha256']+'.json')) in manifest['baseline_dependency_paths']
+    J._VERIFIED.clear()
+    assert X.validate_manifest(f.policy,manifest,f.bundle)==manifest and calls[0]>=2
