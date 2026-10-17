@@ -1358,6 +1358,19 @@ def test_verified_code_successor_does_not_reopen_completed_research(monkeypatch,
     assert json.dumps(summary,sort_keys=True)==original
 
 
+def test_verified_code_successor_resolves_trusted_release_data_mount(monkeypatch,tmp_path):
+    from src.engine.monitoring import policy_generation_code_handoff as H
+    data=tmp_path/'data';data.mkdir();release=tmp_path/'release';release.mkdir()
+    (release/'data').symlink_to(data,target_is_directory=True)
+    monkeypatch.setattr(mod,'EV_REPORT_DIR',release/'data/report/threshold_cycle_ev')
+    def projection(observed,root):
+        assert root==data.resolve()
+        return dict(observed,status='verified',findings=[])
+    monkeypatch.setattr(H,'current_fixture_observation',projection)
+    tasks,_=_project_generation_warning(_generation_warning_summary())
+    assert tasks==[]
+
+
 def test_generation_warning_keeps_repair_owner_and_valid_preopen_independent():
     summary = _generation_warning_summary()
     summary["sources"]["compact_auxiliary"] = _direct_source(

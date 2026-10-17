@@ -2196,7 +2196,7 @@ def _project_direct_tasks(
                 or capability.get("repair_owner", task_id) != task_id):
             raise RuntimeError("policy generation capability owner/date mismatch")
         from src.engine.monitoring.policy_generation_code_handoff import current_fixture_observation
-        capability = current_fixture_observation(capability, EV_REPORT_DIR.parent.parent)
+        capability = current_fixture_observation(capability, EV_REPORT_DIR.parent.parent.resolve())
         findings = capability.get("findings") or []
         if not findings:
             continue
