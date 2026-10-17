@@ -311,6 +311,12 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     have consumed the original manifest and still be the exact live process.
     No policy bytes, producer selection or research acceptance are rewritten.
     """
+    if (DATA_DIR/'runtime/policy_bootstrap/code_handoffs'/day).exists():
+        from src.engine.automation.prepared_policy_code_handoff import verify as verify_prepared_code
+        prepared = verify_prepared_code(DATA_DIR, day, family=family, policy_sha=policy_sha,
+                                        expected=expected, paths=paths, actual=actual)
+        if prepared is not None:
+            return prepared
     _today(day, None)
     root, commit = _selection(require_selected_cwd=False)
     code_root, code_commit = root, commit
@@ -851,6 +857,18 @@ REVIEWED_CURSOR_ASOF_SOURCES = {
 }
 
 
+# Exact prepared 10/19 origin to the reviewed quote-delivery consumer bytes.
+# No numeric policy, provider or order authority changes cross this boundary.
+REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES = {
+    'src/engine/ai_engine_openai.py': (
+        'b5c8b6e262678c5354ced1fd30ae4d20b974e50fbb01187b4ab2a9df61a010d7',
+        'fb228f284ff0898c1f260149b653d03c71f8f17f1544fe5bf46cc0aa396c0cc4'),
+    'src/engine/sniper_state_handlers.py': (
+        '669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+        'bc7885265ca7f0f59d2fec49eb56c114d7759b641f68fa80d3285fe9f48429e0'),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -891,7 +909,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_CURSOR_ASOF_SOURCES.get(name),
+        if pair in (REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES.get(name),
+                    REVIEWED_CURSOR_ASOF_SOURCES.get(name),
                     REVIEWED_NONFIXED_CONTINUITY_SOURCES.get(name),
                     REVIEWED_DELAY_SITUATION_SOURCES.get(name),
                     REVIEWED_LONG4_SOURCE_RETENTION_SOURCES.get(name),

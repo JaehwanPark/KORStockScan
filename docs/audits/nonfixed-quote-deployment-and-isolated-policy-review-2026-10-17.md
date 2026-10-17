@@ -1,0 +1,9 @@
+# 비상시 호가 수리 배포 및 격리 정책 검증 — 2026-10-17
+
+사용자가 배포와 격리 정책 읽기·스키마·코드 호환성 검증을 명시했다. 원 구현 `683c67d27`의 호가 전달·원 5초·물리 전송 계약을 유지하며, 운영 Main은 종료 상태로 둔다. 선택 릴리스와 실제 PID 소비를 구분한다.
+
+최초 네트워크 차단·원 파일시스템 읽기 전용 namespace에서 128범위 next-session Main 정책의 schema/source와 수치·멤버십 불변이 통과했다. auxiliary reader compatibility receipt와 delay/holding/stop의 이전 코드 인계가 누락돼 첫 검증은 FAIL로 보존했다.
+
+`automation.prepared_policy_code_handoff`는 기존 완전 검증된 prepared 원본의 내용 해시·동일 target·원 정책·정확한 코드 inventory 및 검토된 원/후속 소스만 결속한다. 원 controller/summary/Main candidate의 과거 바이트를 보존하여 다음 현재 세대의 발행과 혼동하지 않는다. 현재 delay/holding/stop 정책은 별도로 실제 파일을 검증한다. 숫자 successor, 정책 변경, 날짜 연장, 새 PID 소비를 승인하지 않는다. 신규 모듈 소유 위치는 자동화 인계 계약인 `src/engine/automation`이며 engine root에 추가하지 않았다.
+
+실행 결과와 원 실패는 [배포 증거](../../tmp/nonfixed-quote-deployment-20261017/)에 보존한다. 실제 선택·새 prepared full verification과 최종 수용은 후속 결과에 기재한다. 새 TTL 선정은 요구하지 않는다. 이 기록은 휴장일 실제 호가/주문/체결 및 실현 성과 검증이 아니다.

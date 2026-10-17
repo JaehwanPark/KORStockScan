@@ -219,3 +219,12 @@ quote consistency와 observer refresh는 과거 10/16 준비 env에서 활성 �
 0B/0D 저장 원천의 고정·조건부 age 후보는 비교했으나 새 운영 상한을 선정/발행하지 않았다. 이는 기존 700ms의 영구 고정도 승인된 완화도 아니다. 실제 경로의 시각·원천·현재 quote 검증과 조건별 정책 적용 계약이 후속 판단 근거다.
 
 운영 정책 포인터·환경·선택 릴리스·배포·재기동·provider·주문은 변경/실행하지 않았다. V5/V6의 계산/검증 dependency에 회복 모듈을 포함했으므로 실제 전환 전에는 깨끗한 후보 commit에 대해 exact active-policy code handoff와 native parity를 새로 검증해야 한다. 기존 다음 세션 준비나 이번 테스트를 그 영수증·PID 소비·자연 제출·실현 손익으로 재사용하지 않는다.
+
+
+## 11. 승인된 배포의 prepared 정책 코드 인계
+
+2026-10-17 사용자가 배포 및 격리 정책 읽기·스키마·코드 호환성 검증을 명시했다. 기존 next-session 정책 수치/멤버십과 actual-PID 승인 경계를 유지한다. 새 시간상한 선정은 배포 선행 조건이 아니다.
+
+`automation.prepared_policy_code_handoff`는 기존 완전 검증된 원 prepared manifest/env/verification과 당시 controller/summary/Main 정책 영수증을 내용 해시로 원본 보존한다. 같은 target의 기존 delay 및 incumbent-carry holding/stop 정책만 exact 원 정책 해시·원 코드 inventory·검토된 원/후속 코드 해시 쌍으로 인계한다. 현재 정책 파일은 별도로 불변 검증하고 숫자 successor·다른 날짜·변경 코드/증거·재선정은 거부한다. 과거 closure 보존은 현재 closure나 PID 소비가 아니다.
+
+발행은 Main 부재와 release-set/selector 잠금 아래 수행하며, 네트워크 및 쓰기 경계가 있는 격리 namespace에서 native reader와 bootstrap을 실행한다. 실제 선택 전에 원 정책 의미 불변과 native 신호 parity를 확인한다. 변경 capability generation은 기존 독립 fixture producer로 새 검증을 발행한다. 기존 당일 PREOPEN/PID 기동 검증은 유지한다. 세부 결과는 [배포 검증 기록](../audits/nonfixed-quote-deployment-and-isolated-policy-review-2026-10-17.md)에 남긴다.
