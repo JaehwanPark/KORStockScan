@@ -29,3 +29,17 @@ Evidence: `/home/ubuntu/KORStockScan/tmp/snapshot-routing-repair-20261018/`. `py
 기존 모든 문서·AGENTS·수동관리 설정 bytes와 선택본에서 제거됐던 역사 문서12개를 보존한다. 소스는 선택본과 이번 bootstrap 수리의 검증된 전체 tree를 사용하고, 퇴역 소스2개는 Git 원본을 보존한 채 선택본과 같은 제거 상태를 따른다. requirements 파일의 검증된 상태를 가져오더라도 공유 .venv 패키지를 설치·변경하지 않는다. 전후 선택/정책/준비·동시문서 변경은 CAS로 확인한다.
 
 통합은 별도 index/tree에서 검증 후 수행하고 실제 변경 파일의 원본 hash를 재확인한다. 문서와 운영 원천을 checkout/reset으로 덮어쓰지 않는다. SourceControlReconciliation1018의 실제 main 전진·최종 clean 확인 결과는 후속 완료 기록으로 남긴다. 10/19 PREOPEN/PID·자연 생산/경제성은 원 owner를 유지한다.
+
+## Source Control 통합 완료
+
+08:18:03에 원 main `c938ace0610aeec2e68dde9a024e0b82579a1c3b`를 통합 commit `63cc30e2b0cc64f87d97fb933609d4a227edbc55`로 CAS 전진했다. tree는 `6fa32d04ff235b563ec67650563c27d10a0a6d2d`다. 부모는 수리 commit `9afd16cdc`이며 검증된 선택900까지의 누적 이력을 함께 보존한다. 08:18:19 검증에서 `git status --porcelain`은 빈 결과였다. 이 완료 기록은 후속 문서 commit으로 남긴다.
+
+별도 index의 tree/전체 bytes SHA256을 후보와 결속하고 index.lock·release-set lock을 잡은 뒤 계획304경로의 preimage bytes/mode와 문서·수동설정1,304파일을 확인했다. 적용 후 같은1,304파일의 bytes/mode 및 보호11개 해시가 모두 일치했다. 기존 역사 문서12개도 보존됐고 live data/runtime 파일은 덮어쓰지 않았다. 수리본C와 통합본의 source/deploy/requirements1,251경로는 모두 같으며 추가 차이70경로는 문서69개와 기존 수동관리 설정1개뿐이다. 이 파일 상태를 반영하기 위해 .venv 패키지를 변경하지 않았다.
+
+독립 리뷰에서 transaction의 lock 소유권·완료 후 영수증 실패·최종 원문 재확인·index 결속·mode 경합·초기 실패 정리의6개 문제를 수정한 후 재리뷰 finding0을 확인했다. 격리 Git 시험9개는 정상 CAS, preimage bytes/mode·준비 index·별도 staging 변조 거부, 쓰기 후 동시 bytes/mode 보존과 rollback, commit 후 영수증 실패에서도 ref/index 및 다른 Git lock 보존, 초기 backup 실패의 자체 lock 정리를 검증했다. 실제 정책이나 canonical Git에 실패를 주입하지 않았다.
+
+최종 통합 후보에서 router/snapshot276개와 location gate3개가 통과했고 Python292파일 compile·shell5파일 syntax·print-only parser를 확인했다. 이번 보존 overlay의 diff check는 CRLF 증거 bytes를 유지한 설정으로 통과했다. 원 main부터 누적 선택본까지의 diff check에는 기존 `market_eligibility_source.py:205` EOF 공백1건이 남는다. 이번 실행 수리와 무관한 선택본 원문을 임의 정규화하지 않았다.
+
+통합 뒤 실제 cron readback도8필수+3snapshot을 통과했다. 선택본은 계속 `900234d791b0bf31797cd4e823d0ae40296f790b`이며 새 거래 릴리스 생성이나 Main 재기동은 이 작업에 필요하지 않다. 실제 default async 수동 terminal success와 source-control 완료를10/19 자연 PREOPEN/PID·주문·경제성의 완료로 해석하지 않는다.
+
+추가 근거: `reconciliation-plan.json`, `reconciliation-candidate.json`, `reconciliation-preserved-files.json`, `reconciliation-fault-test-review.json`, `reconciliation-journal.json`, `main-publication-preflight.json`, `main-publication-verification.json`, `main-publication-output.json`, `pytest-reconciled-candidate.txt`, `pytest-location-gate.txt`, `reconciled-static-validation.json`, `parser-reconciled-candidate.txt`, `cron-check-after-integration.json`, `default-async-verification.json`.

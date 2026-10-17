@@ -21,9 +21,10 @@
   - Acceptance: exact3행만 변경·기존8route/일시/로그owner 보존, invalid/부분/중복·동시변경 차단, 선택root/오염env 거부, 원자적 완료 읽기·쓰기/실패worker·cooldown 회귀, 독립 리뷰·수정·재리뷰·parser, 적용 후 새 terminal과 selected 코드 확인. 자연10/19 Main 소비는 기존 DirectFamilyPreopenPolicyHandoff가 유지한다.
   - 완료: bootstrap 수리 `9afd16cdc`·독립 리뷰 후 회귀276개/compile/shell/parser PASS. 정확3cron행만 적용하고8필수+3snapshot readback 및 재변환 동일을 확인했다. 기존900234d79의 async 경로에서10/18 새 terminal success·보고서3개/3.916초, 보호11파일 불변을 확인했다. 첫 dispatch-only 수동 시도는 종결을 확인하지 못한 원본으로 보존하며 완료대기 호출과 구별한다. Main 재기동/provider/주문0이며 자연10/19 소비는 별도다. [적용 결과](../audits/snapshot-cron-release-binding-and-source-control-integration-review-2026-10-18.md).
 
-- [ ] `[SourceControlReconciliation1018] 검증된 누적 배포 코드와 원문을 보존한 Source Control 통합` (`Due: 2026-10-18`, `Slot: ADHOC`, `TimeWindow: snapshot 경로 수리 후`, `Track: RuntimeStability`)
+- [x] `[SourceControlReconciliation1018] 검증된 누적 배포 코드와 원문을 보존한 Source Control 통합` (`Due: 2026-10-18`, `Slot: ADHOC`, `TimeWindow: snapshot 경로 수리 후`, `Track: RuntimeStability`)
   - Source: 사용자 100개 Source Control 변경 지적 및 다음 액션 실행 지시, [파일별 분류](/home/ubuntu/KORStockScan/tmp/source-control-inventory-20261018/inventory.json).
   - 범위/Acceptance: 원102개 bytes·Git index/ref·선택본·cron을 백업하고 검증된900의 누적200개 commit/소스와 이번 bootstrap 수리를 main에 통합한다. 현행 문서·삭제됐던 역사 문서·수동관리 설정·원 실패 및 봉인 증거는 원 bytes를 보존하며 동시 변경은 CAS로 재검토한다. 독립 리뷰·필요 회귀·compile/shell/parser·clean 상태와 기존 선택/PREOPEN 불변을 확인한다. .venv 패키지 변경·Main 강제 기동·외부 sync는 실행하지 않는다.
+  - 완료: 08:18 `63cc30e2b`로 main 전진 후 clean을 확인했다. 검증된 bootstrap `9afd16cdc`의 전체 실행 소스와 같고, 원102개 백업·현재 문서/수동설정1,304파일 bytes/mode·보호11해시를 보존했다. 계획304경로만 반영하고 독립 재리뷰 finding0·통합 후보 회귀276/격리 Git 실패9/location3·Python292/shell5/parser를 통과했다. 기존 선택본의 EOF 공백1건은 원문으로 보존하고 이번 overlay diff check는 통과했다. 기존900234d79 및10/19 정책/PREOPEN은 동일하며 cron8+3 readback PASS, Main 재기동/패키지/provider/주문/외부 sync0다. [최종 통합 근거](../audits/snapshot-cron-release-binding-and-source-control-integration-review-2026-10-18.md#source-control-통합-완료).
 
 - [x] `[CompletedResearchDuplicateCleanup1018] 완료 연구 복제본·테스트 임시자료 정리` (`Due: 2026-10-18`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: 사용자 불필요한 완료 연구 데이터 삭제 지시, [정리 검토](../audits/completed-research-duplicate-data-cleanup-review-2026-10-18.md).
