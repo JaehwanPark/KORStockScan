@@ -103,6 +103,18 @@ REVIEWED_DELAY_SOURCE_SUCCESSORS = {'rising_missed': ('ea1ac91b6e080d96f3a0d61dc
 REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS = {'entry_cancel_wait': ('2e0ba14946a5e9e191a95529971e103136679957ddd7458678ed6c27a0e4a234', '4ba29d895111f69ebfda0eb72076270579f4a49af0b46b74cf16e762ea9647db'), 'rising_missed': ('e9f1620fd55d335d1db3ccad52f1211440b5d2df57ddf45988e2012ecf6ed874', '676d7922cd257b940012445f9c0f1bd7eb905fb649e9492728b0bce097769962'), 'auxiliary': ('d04bcb11a28f731c1af5c332d33d49774f977a01a2ac90463df50865186fa6b0', '2cfae7da4242e371d3e3a335b7915c2615c384aaa0747a358df315cde0a991b4'), 'holding_vote': ('057c1274c876450cc5f97a918899c96c85fed7dadb408ea6af445c67808c4fce', '8322022b48cd30484741f23c1f6f906a547e8a3145920645b022dba0d2d0fedf')}
 
 
+# Exact original 10/16 report to the reviewed auxiliary input/research reader.
+# Preserve the prior prepared pair and its historical fixtures independently.
+# This is code capability only: a fresh exact-generation fixture remains
+# mandatory, and comparison/selection state and runtime authority stay intact.
+# Review: docs/audits/main-auxiliary-direct-current-combined-comparison-review-2026-10-17.md.
+REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS = {
+    'auxiliary': (
+        'd04bcb11a28f731c1af5c332d33d49774f977a01a2ac90463df50865186fa6b0',
+        'dea0b4f9d124372e48413635f5f82fbf3f0fbd6477a4f1beaca6769a68e9990b'),
+}
+
+
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -144,6 +156,9 @@ def current_fixture_observation(observed, data):
     prepared = REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS.get(family)
     if prepared and actual_pair == prepared:
         pair = prepared
+    auxiliary_input = REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS.get(family)
+    if auxiliary_input and actual_pair == auxiliary_input:
+        pair = auxiliary_input
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
