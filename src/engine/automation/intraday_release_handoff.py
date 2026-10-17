@@ -886,6 +886,18 @@ REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES = {
 }
 
 
+# Exact original 10/19 prepared-policy code to the reviewed post-auxiliary
+# nonexecution recovery and final AI-expiry guards. The original policy code
+# predates the selected release; receipts must retain that original digest.
+# Delay, holding and stop numeric policy bytes and SELL custody are unchanged.
+# Review: docs/audits/main-post-auxiliary-priority-repair-review-2026-10-17.md.
+REVIEWED_POST_AUX_GUARD_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+        'b18dab5939fd13ab09c7e24463785b1677324e3957a3efd07e60d82c085fc235'),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -931,7 +943,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES.get(name),
+        if pair in (REVIEWED_POST_AUX_GUARD_SOURCES.get(name),
+                    REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES.get(name),
                     REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES.get(name),
                     REVIEWED_CURSOR_ASOF_SOURCES.get(name),
                     REVIEWED_NONFIXED_CONTINUITY_SOURCES.get(name),
