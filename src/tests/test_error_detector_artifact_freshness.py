@@ -696,6 +696,315 @@ def test_quantity_completion_observer_same_record_foreign_custody_remains_confli
         detector._quantity_completion_overlay_observation(tmp_path, '2026-09-28', census, [row], reader)
 
 
+def _allocated_completion_observer_fixture(tmp_path, monkeypatch):
+    from src.tests.test_initial_quantity_producer_consumer_repair import (
+        _allocated_quantity_fact, _quantity_completion_overlay_fixture, _quality,
+    )
+    from src.engine.scalping import initial_quantity_source_cache as cache, initial_quantity_policy as producer
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation, record_source_projector
+    data = tmp_path/'data'
+    _quality(data, '2026-10-08')
+    fact = _allocated_quantity_fact(data, record_id=1)
+    original, _ = _quantity_completion_overlay_fixture(data, monkeypatch, identity={
+        key:fact[key] for key in ('rec_date','buy_price','buy_qty','buy_time','sell_price','sell_time','quantity_research_cost')})
+    original.update({key:fact[key] for key in ('rec_date','buy_price','buy_qty','buy_time')})
+    costs = source_generation(data, '2026-10-08')
+    from src.engine import strategy_position_performance_report as native
+    status_path = native._status_path('2026-10-08')
+    generation = dict(issue=producer._quantity_fact_generation_issue('2026-10-08'),
+        path=str(status_path), sha256=hashlib.sha256(status_path.read_bytes()).hexdigest(), cost_generation=costs)
+    assert generation['issue'] is None
+    original['fact_generation'] = {**generation, 'cost_generation':record_source_projector(costs)('1')}
+    overlaid = cache.completion_overlay([original], as_of='2026-10-08', data_dir=data,
+        entry_on_or_after='2026-09-29', entry_generations={'2026-10-08':generation}, validate_day=lambda day:None)
+    _, census = producer.completed_trade_fact_census('2026-10-08', data_dir=data,
+        fact_rows=overlaid, entry_on_or_after='2026-09-29')
+    assert census['all_completed_initial_trades'] == 1 and census['actual_completed_net_pnl_krw'] is None
+    def read(path, *, expected_sha=None, limit=512*1024):
+        raw = Path(path).read_bytes()
+        assert len(raw) <= limit
+        if expected_sha is not None: assert hashlib.sha256(raw).hexdigest() == expected_sha
+        return json.loads(raw)
+    return overlaid, census, read
+
+
+def test_quantity_completion_observer_accepts_allocated_compact_generations_with_null_actual_pnl(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    rows, census, read = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    result = detector._quantity_completion_overlay_observation(
+        tmp_path, '2026-10-08', census, rows, read)
+    assert result['postclose_as_of_completed_population_count'] == 1
+    assert rows[0]['profit_rate'] is None and rows[0]['realized_pnl_krw'] is None
+
+
+@pytest.mark.parametrize('tamper', [False, True])
+def test_pinned_quantity_completion_reuses_admitted_receipts_only_after_native_equality(tmp_path, monkeypatch, tamper):
+    import copy
+    import gc
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    from src.engine.lifecycle import research_input_budget as budget
+    rows, census, _ = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    original = copy.deepcopy(list(rows))
+    if tamper:
+        rows[0]['quantity_research_cost']['allocated_net_pnl_krw'] += 1
+    before = budget.health()['used_bytes']
+    def run():
+        return cache.completion_overlay(rows, as_of='2026-10-08', data_dir=tmp_path/'data',
+            entry_on_or_after='2026-09-29', entry_generations=census['persisted_fact_generations'],
+            validate_day=None, source_generations=census['completion_overlay_generations'])
+    if tamper:
+        with pytest.raises(ValueError, match='quantity_shared_fact_census_mismatch'): run()
+        assert rows[0]['quantity_research_cost']['allocated_net_pnl_krw'] == original[0]['quantity_research_cost']['allocated_net_pnl_krw']+1
+    else:
+        reconstructed = run()
+        assert reconstructed == original
+        assert reconstructed.claim is rows.claim and reconstructed[0] is rows[0]
+        assert reconstructed[0]['quantity_research_cost'] is rows[0]['quantity_research_cost']
+        gc.collect()
+        assert budget.health()['used_bytes'] == before
+
+
+@pytest.mark.parametrize('empty_last_day', [False, True])
+def test_pinned_quantity_completion_daily_cache_preserves_repeated_and_empty_native_days(tmp_path, monkeypatch, empty_last_day):
+    from src.tests.test_initial_quantity_producer_consumer_repair import _quantity_completion_overlay_fixture
+    from src.engine import strategy_position_performance_report as native, log_archive_service as archive
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    original, _ = _quantity_completion_overlay_fixture(tmp_path, monkeypatch)
+    _, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, day='2026-10-09')
+    if empty_last_day:
+        payload = json.loads(path.read_bytes())
+        payload['sections']['completed_trade_projection'] = []
+        payload['metrics']['canonical_completed_trades'] = 0
+        payload['meta']['sell_completed_event_ids'] = []
+        payload['meta']['completed_census_manifest'] = completed_census_manifest(payload)
+        archive.save_monitor_snapshot('trade_review', '2026-10-09', payload)
+        frozen = native._load_completion_fact_projection('2026-10-09', path)
+        manifest = frozen['meta']['completed_census_manifest']
+        native._write_status('2026-10-09', dict(status='valid_empty', consumer_ready=True,
+            completed_census_run_ids=[manifest['run_id']], completed_census_projection_sha256=[manifest['projection_sha256']],
+            actual_cost_source_generation=frozen['meta']['actual_cost_source_generation'],
+            completion_snapshot_source=frozen['_native_source_proof']))
+    rows = cache.completion_overlay([original], as_of='2026-10-09', data_dir=tmp_path,
+        entry_on_or_after='2026-09-29', entry_generations={}, validate_day=lambda day:None)
+    rebuilt = cache.completion_overlay(rows, as_of='2026-10-09', data_dir=tmp_path,
+        entry_on_or_after='2026-09-29', entry_generations={}, validate_day=None,
+        source_generations=rows.completion_generations)
+    assert rebuilt == rows and rebuilt.claim is rows.claim and rebuilt[0] is rows[0]
+    assert rebuilt.completion_generations == rows.completion_generations
+    assert rebuilt.completion_overlay_summary == rows.completion_overlay_summary
+    assert rows[0]['completion_source_date'] == ('2026-10-08' if empty_last_day else '2026-10-09')
+
+
+@pytest.mark.parametrize('oversize', [False, True])
+def test_quantity_completion_status_scan_uses_native_metadata_contract(tmp_path, monkeypatch, oversize):
+    from src.engine import strategy_position_performance_report as native
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    from src.engine.lifecycle.broker_cost_reconciliation import record_source_projector
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    rows, census, _ = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    path = native._status_path('2026-10-08')
+    receipt = json.loads(path.read_bytes())
+    receipt.pop('artifact_sha256')
+    receipt['retained_source_metadata'] = 'x'*(MAX_METADATA_BYTES if oversize else 140*1024)
+    native._write_status('2026-10-08', receipt)
+    assert path.stat().st_size > 128*1024
+    generation = {**census['persisted_fact_generations']['2026-10-08'],
+                  'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+    rows[0]['fact_generation'] = {**generation, 'cost_generation':
+        record_source_projector(generation['cost_generation'])('1')}
+    def run():
+        return cache.completion_overlay(rows, as_of='2026-10-08', data_dir=tmp_path/'data',
+            entry_on_or_after='2026-09-29', entry_generations={'2026-10-08':generation}, validate_day=lambda day:None)
+    if oversize:
+        with pytest.raises(ValueError, match='quantity_completion_metadata_invalid'): run()
+    else:
+        assert path.stat().st_size < MAX_METADATA_BYTES
+        actual = run()
+        assert actual[0]['quantity_research_cost'] == rows[0]['quantity_research_cost']
+        assert actual[0]['profit_rate'] is None and actual[0]['realized_pnl_krw'] is None
+
+
+@pytest.mark.parametrize('damage', ['completion_reference', 'entry_reference', 'entry_record',
+    'full_completion', 'full_entry', 'receipt', 'missing_receipt', 'cross_record_receipt', 'invented_actual_pnl'])
+def test_quantity_completion_observer_rejects_allocated_proof_or_receipt_divergence(tmp_path, monkeypatch, damage):
+    from src.engine.error_detectors import artifact_freshness as detector
+    rows, census, read = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    row = rows[0]
+    if damage == 'completion_reference': row['completion_generation']['generation_sha256'] = 'f'*64
+    elif damage == 'entry_reference': row['fact_generation']['cost_generation']['quantity_research_cost_generation']['parent_generation_sha256'] = 'f'*64
+    elif damage == 'entry_record': row['fact_generation']['cost_generation']['quantity_research_cost_generation']['record_id'] = '999'
+    elif damage == 'full_completion': row['completion_generation'] = census['completion_overlay_generations']['2026-10-08']
+    elif damage == 'full_entry': row['fact_generation'] = census['persisted_fact_generations']['2026-10-08']
+    elif damage == 'receipt': row['quantity_research_cost']['allocated_net_pnl_krw'] = 99999
+    elif damage == 'missing_receipt': row.pop('quantity_research_cost')
+    elif damage == 'cross_record_receipt': row['quantity_research_cost']['record_id'] = '999'
+    else: row['realized_pnl_krw'] = 0
+    with pytest.raises(ValueError, match='quantity_completion_overlay_'):
+        detector._quantity_completion_overlay_observation(tmp_path, '2026-10-08', census, rows, read)
+
+
+@pytest.mark.parametrize('damage', [None, 'missing_receipt', 'wrong_receipt'])
+def test_full_quantity_monitor_reads_native_allocated_replay_without_inventing_actual_economics(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import initial_quantity_policy as producer, initial_quantity_refresh_evaluation as evaluator
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    from src.tests.test_initial_quantity_producer_consumer_repair import parent_fixture
+    full_native_validator = producer.refresh_quantity_stage_terminal_valid
+    rows, _, _ = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    parent, parent_path = parent_fixture(tmp_path/'native_parent_fixture')
+    day = '2026-10-08'; shared = {}
+    report = producer.build_initial_quantity_replay(day, data_dir=tmp_path/'data', fact_rows=rows,
+        entry_on_or_after=producer.refresh_window(parent), path_cache=shared)
+    timeout = build_timeout_research(day, data_dir=tmp_path/'data', fact_rows=rows,
+        entry_on_or_after=producer.refresh_window(parent), path_cache=shared, replay=report)
+    evaluation = evaluator.evaluate(report, parent_policy=parent,
+        parent_policy_file_sha256=producer._file_sha256(parent_path), timeout_research=timeout,
+        terminal_receipt=producer._natural_refresh_terminal_receipt(report))
+    assert evaluation['economic_sample_status'] == 'cost_eligible'
+    assert report['census']['actual_completed_net_pnl_krw'] is None
+    assert report['census']['research_completed_net_pnl_krw'] == 190
+    if damage:
+        fact = report['census']['input_fact_rows'][0]
+        if damage == 'missing_receipt': fact.pop('quantity_research_cost')
+        else: fact['quantity_research_cost']['record_id'] = '999'
+        report['census']['input_manifest_sha256'] = producer._digest(report['census']['input_fact_rows'])
+        report['report_content_sha256'] = producer._digest({k:v for k,v in report.items() if k != 'report_content_sha256'})
+        evaluation['report_content_sha256'] = report['report_content_sha256']
+        timeout['report_content_sha256'] = producer._digest({k:v for k,v in timeout.items() if k != 'report_content_sha256'})
+    directory = tmp_path/'data/report/initial_entry_quantity_type_policy'/f'refresh_postclose_{day}'
+    directory.mkdir(parents=True, exist_ok=True)
+    stage = dict(schema_version='initial_entry_quantity_refresh_stage_v1',
+        stage='initial_entry_quantity_refresh', source_date=day, generation_kind='refresh',
+        stage_status='complete_source_only', terminal=True, runtime_apply_allowed=False,
+        runtime_effect=False, actual_order_submitted=False, all_completed_initial_trades=1,
+        applied_policy_lineage_schema='initial_quantity_trade_policy_binding_v1', decision='carry_parent',
+        following_bar_source_status='cap_profile_only', timeout_research_status='source_bound')
+    for name, payload, content_key in [('report', report, 'report_content_sha256'),
+            ('evaluation', evaluation, None), ('parent_policy', parent, 'policy_content_sha256'),
+            ('timeout_research', timeout, 'report_content_sha256')]:
+        path = directory/(name+'.json'); path.write_text(json.dumps(payload))
+        stage[name+'_path'] = str(path)
+        stage[name+'_file_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        stage[name+'_content_sha256'] = payload[content_key] if content_key else producer._digest(payload)
+    stage['terminal_receipt'] = producer._natural_refresh_terminal_receipt(report)
+    stage['pid_receipt'] = None
+    stage['receipt_content_sha256'] = producer._digest(stage)
+    (directory/f'initial_quantity_refresh_stage_{day}.json').write_text(json.dumps(stage))
+    if not damage: assert full_native_validator(stage)
+    result = _initial_quantity_semantics(tmp_path, day)
+    if damage:
+        assert result['status'] == 'source_invalid'
+        assert any(item.startswith('initial_quantity_stage_invalid:') for item in result['findings'])
+    else:
+        assert result['economic_sample_status'] == 'cost_eligible'
+        assert result['postclose_completed_trade_count'] == 1
+        assert result['postclose_stage_status'] == 'source_gap'  # No policy/fill lineage was manufactured.
+        assert result['findings'] == ['initial_quantity_economic_source_gap']
+
+
+@pytest.mark.parametrize('projected', [False, True])
+def test_full_quantity_monitor_accepts_real_initial_seed_without_successor_or_natural_gate(tmp_path, monkeypatch, projected):
+    from src.engine.scalping import initial_quantity_policy as producer
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    rows, _, _ = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    day = '2026-10-08'
+    report = producer.build_initial_quantity_replay(day, data_dir=tmp_path/'data', fact_rows=rows)
+    if projected: monkeypatch.setattr(projection, 'CHILD_LIMIT', 8*1024)
+    directory = tmp_path/'data/report/initial_entry_quantity_type_policy'/f'refresh_postclose_{day}'
+    stage = producer.publish_initial_quantity_candidate(report, output_dir=directory/'generations/initial-seed')
+    assert producer.initial_quantity_stage_terminal_valid(stage)
+    assert 'evaluation_path' not in stage and 'decision' not in stage
+    stage_path = directory/'generations/initial-seed'/f'initial_quantity_stage_{day}.json'
+    (directory/'committed_stage.json').write_text(json.dumps(dict(schema='initial_quantity_stage_reference_v2',
+        source_date=day, stage_path=str(stage_path), stage_sha256=hashlib.sha256(stage_path.read_bytes()).hexdigest())))
+    result = _initial_quantity_semantics(tmp_path, day)
+    assert result['findings'] == []
+    assert result['postclose_stage_status'] == 'initial_policy_seed'
+    assert result['trade_policy_binding_status'] == 'not_required_initial_policy'
+    assert result['economic_sample_status'] == 'cost_eligible'
+    assert result['runtime_pid_status'] == 'not_observed'
+    assert result['bounded_contract_validated'] is True and result['native_validated'] is False
+
+
+def test_issued_quantity_ancestry_survives_later_native_source_change_without_weakening_current_stage(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.scalping import initial_quantity_policy as producer, initial_quantity_activation as activation
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    rows, _, _ = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(projection, 'CHILD_LIMIT', 8*1024)
+    data = tmp_path/'data'; day = '2026-10-08'
+    report = producer.build_initial_quantity_replay(day, data_dir=data, fact_rows=rows)
+    from src.engine.scalping.initial_quantity_following_bars import build_following_bar_source
+    following = build_following_bar_source(report, fetch=lambda code, base, limit: (
+        [{'source_timestamp': '20261008100000', '저가': 10000},
+         {'source_timestamp': '20261008100100', '저가': 9900}],
+        dict(api_id='ka10080', request_code=code, request_base_dt=base)))
+    directory = data/'report/initial_entry_quantity_type_policy/initial-issued'
+    stage = producer.publish_initial_quantity_candidate(report, output_dir=directory, following_bars=following)
+    stage_path = directory/f'initial_quantity_stage_{day}.json'
+    selected = activation.select_initial_quantity_baseline(stage_path, data/'runtime/initial_quantity')
+    current_path = data/'runtime/initial_quantity/current.json'
+    def reader():
+        def read(path, *, expected_sha=None, limit=1024*1024):
+            value, sha = detector._semantic_object(path, limit=limit)
+            if expected_sha is not None: assert sha == expected_sha
+            return value
+        return read
+    before = detector._quantity_current_observation(current_path, '2026-10-09', reader())
+    assert before[activation.ENV_FILE] == selected['policy_file']
+    scalar = data/'report/monitor_snapshots'/f'trade_review_{day}.fact_projection.json'
+    scalar.write_bytes(scalar.read_bytes()+b' ')
+    # Approved issuance ancestry remains a fact; current-day source evidence
+    # must still reject the very same changed native scalar.
+    after = detector._quantity_current_observation(current_path, '2026-10-09', reader())
+    assert after == before
+    with pytest.raises(ValueError, match='quantity_monitor_source_changed'):
+        detector._quantity_stage_observation(stage, day, reader(), stage_path=stage_path, data_root=data)
+
+
+@pytest.mark.parametrize('damage', [None, 'receipt', 'generation', 'net', 'actual_claim', 'price', 'qty'])
+def test_quantity_following_source_uses_bound_research_cost_without_canonical_actual_profit(tmp_path, monkeypatch, damage):
+    import copy
+    from src.engine.scalping import initial_quantity_policy as producer
+    from src.engine.scalping.initial_quantity_following_bars import build_following_bar_source, following_bar_source_valid
+    rows, _, _ = _allocated_completion_observer_fixture(tmp_path, monkeypatch)
+    report = producer.build_initial_quantity_replay('2026-10-08', data_dir=tmp_path/'data', fact_rows=rows)
+    if damage == 'receipt': report['trades'][0]['quantity_research_cost']['record_id'] = '999'
+    elif damage == 'generation':
+        report['census']['input_fact_rows'][0]['actual_cost_source_generation']['quantity_research_cost_generation']['receipts'][0]['content_sha256'] = 'f'*64
+    elif damage == 'net': report['trades'][0]['actual_net_pnl_krw'] += 1
+    elif damage == 'actual_claim': report['trades'][0]['actual_execution_cost'] = True
+    elif damage == 'price': report['census']['input_fact_rows'][0]['buy_price'] += 1
+    elif damage == 'qty': report['census']['input_fact_rows'][0]['buy_qty'] += 1
+    if damage:
+        report['census']['input_manifest_sha256'] = producer._digest(report['census']['input_fact_rows'])
+        report['report_content_sha256'] = producer._digest({k:v for k,v in report.items() if k != 'report_content_sha256'})
+        with pytest.raises(ValueError, match='following_bar_input_invalid'):
+            build_following_bar_source(report, fetch=lambda *args:pytest.fail('invalid research cost reached fetch'))
+        return
+    before = copy.deepcopy(report)
+    calls = []
+    def fetch(code, base, limit):
+        calls.append((code, base, limit))
+        return ([{'source_timestamp':'20261008100000', '저가':10000},
+                 {'source_timestamp':'20261008100100', '저가':9900}],
+                dict(api_id='ka10080', request_code=code, request_base_dt=base))
+    following = build_following_bar_source(report, fetch=fetch)
+    assert len(calls) == 1 and following_bar_source_valid(following, report)
+    evidence = following['trades'][report['trades'][0]['trade_id']]
+    assert evidence['status'] != 'fact_identity_missing'
+    assert evidence['cost_basis'] == 'broker_confirmed_total_allocated'
+    assert evidence['actual_execution_cost'] is False and evidence['weight_realized_net_pnl_krw'] == 190
+    assert evidence['research_cost_receipt_sha256'] == rows[0]['quantity_research_cost']['receipt_sha256']
+    assert report == before and rows[0]['realized_pnl_krw'] is None and rows[0]['profit_rate'] is None
+    changed = copy.deepcopy(following)
+    changed['trades'][report['trades'][0]['trade_id']]['actual_execution_cost'] = True
+    changed['report_content_sha256'] = producer._digest({k:v for k,v in changed.items() if k != 'report_content_sha256'})
+    assert not following_bar_source_valid(changed, report)
+
+
 @pytest.mark.parametrize('damage', ['population', 'omitted_generation', 'record',
                                   'invented_zero_cost', 'clock', 'original_fact',
                                   'summary', 'future_day'])

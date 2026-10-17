@@ -63,10 +63,67 @@
 
 ## 5 리뷰 게이트와 배포 인계
 
-분담 구현 후 생산자/소비자·권한·비용/시간·크기·경합 교차 리뷰와 수정·재리뷰를 반복했다. 통합 표적 회귀 729 PASS/72.09초, 기존 code handoff 표적 422 PASS를 확인했다. 마지막 다일 receipt의 producer/reader 필드 크기 불일치도 수정했다. 실제 14일·8포지션 배분으로 만든 16KiB 초과 영수증은 두 원문 reader에서 보존하고 256KiB 초과는 명시 거부하는 161개 영향 회귀가 통과했다. 전체 보고서·일반 scalar 한도는 그대로다. 성능 증거의 고정 hash는 이 마지막 원문 fallback 필드 한도 수정 전이며 측정 경로는 native fact projection을 사용한다. 원래 측정 hash를 사후 변경하지 않는다. 이후 누적 후보 최종 검증·배포 영수증을 아래에 기록한다. Python compile·shell `bash -n`·diff·로컬 링크·print-only parser를 완료 조건으로 유지한다.
+분담 구현 후 생산자/소비자·권한·비용/시간·크기·경합 교차 리뷰와 수정·재리뷰를 반복했다. 통합 표적 회귀 729 PASS/72.09초, 기존 code handoff 표적 422 PASS를 확인했다. 마지막 다일 receipt의 producer/reader 필드 크기 불일치도 수정했다. 14일·8포지션 fixture를 같은 배분 생산자로 계산한 17,532바이트 영수증은 두 원문 reader에서 보존하고 256KiB 초과는 명시 거부하는 161개 영향 회귀가 통과했다. 전체 보고서·일반 scalar 한도는 그대로다. 성능 증거의 고정 hash는 이 마지막 원문 fallback 필드 한도 수정 전이며 측정 경로는 native fact projection을 사용한다. 원래 측정 hash를 사후 변경하지 않는다. 이후 누적 후보 최종 검증·배포 영수증을 아래에 기록한다. Python compile·shell `bash -n`·diff·로컬 링크·print-only parser를 완료 조건으로 유지한다.
 
 배포는 새 선택 `3abcc524c`를 누적 보존한 clean 후보의 정확 source쌍·fresh holding capability fixture·원 정책/128범위 native parity·기존 두 PRE overlay·숫자 불변·next-session `current_full_contract`를 확인한 뒤 selector를 마지막에 CAS 발행한다. 원 7f2552 정책 origin과 원 영수증은 보존하며 포괄적 호환 예외를 만들지 않는다.
 
 기동·실제 PID·자연 생산/ack·새 경제성은 선택 배포와 다른 증거다. 이번 수리는 49294의 원형 증거 및 더 오래된 날짜의 미해결 정산을 복구 완료로 꾸미지 않는다. 해당 원천/경제성은 기존 `InitialQuantityProducerConsumerRepair1010`, 실제 10/19 PREOPEN/PID는 `DirectFamilyPreopenPolicyHandoff`가 계속 소유한다.
 
 누적 후보 검증: `3abcc524c`와 수량 비용 수리를 통합한 뒤 비용/보고서/수량/timeout/지연 계약 회귀 **781 PASS/69.80초**, 영향 Python35개 compile·장후 wrapper `bash -n`·diff 검사를 통과했다. 최종 전략 원문 reader SHA는 `00dc2d63df6ef91ff258507696efd3b348650f7b36db1ad6f789e9e3294d6bd4`, 비용 세대 reader는 `db9f1d2db58d6e766b9a18db22e643c4bdc748c8580d8b364cc36d6066b129d5`다. 두 source의 원 7f2552 origin 직접 인계를 결속하고 holding capability는 `6c4734c5e4204b36faf3d72ee873a429147d7a6e5a3a019d55fee29f4e145137`로 재검증한다. 기존 지연 연구의 인계쌍과 변경하지 않은 가족은 보존한다.
+
+## 6 다음 정규 기동용 배포
+
+- 선택 커밋: `e12256decc5bb61e560462520ec7cd9965b0f7b2`, release `/home/ubuntu/KORStockScan-runtime-releases/quantity-broker-cost-20261017-e12256dec`. 부모는 이번 수리 `86543ad2b`와 직전 선택 `3abcc524c`다. canonical의 무관한 dirty 소스는 통합하지 않았다.
+- 발행: **2026-10-17 23:21:25 KST**, 실제 selector·39파일 발행 뒤 **23:23:09 KST `deployed_and_policy_verified`**. native release/detector/selector/stage/publisher lock·source CAS·selector 마지막 발행·실패 rollback 경계를 사용했다. 원 준비/실패/이전 영수증을 보존했다.
+- 추가 검증: 정확 코드 인계 547 PASS와 지연 계약 66 PASS, 네트워크 차단 새 holding fixture116 PASS. 나머지 세 가족은 기존의 정확 세대 fixture를 검증했다. native 128범위·76,800행·598신호는 원 코드와 신호 hash가 같았다.
+- 정식 격리 summary는 새로 계산해 성공했고 controller는 `done`, blocked reason0이다. 최종 준비본과 **실제 발행 직후 `current_full_contract` PASS/findings0**를 확인했다.
+- 미래 bundle `da16f85fc5da9e602035029ba0255be057ea6094c684dda78e7655f1b8d02155`, overlay `a2b35e7d79e2db8b06daa98a92eb5a2b94066618155eb1be3e3096b275031125`. 원 env/수치 정책 영수증4개·128개 binding·승인된 두 PRE 변경·rollback·기존 10/19 OPEN6개가 같다. 현재 Main/보조/수량 포인터는 보존했다.
+- 발행 목록39개·39,168,295B의 source SHA/대상 이전 SHA를 독립 대조했다. 계획 SHA `fadfd911c8b115674152dc702731330802d15afc579bdeabeb29a99db1d70a88`. 비용 원천·pending·연구 index·actual 비용·fact 발행 대상은 0개다. 보호 비용/fact inventory의 작은 bytes만 검증하고 대형 원문4개는 stat 및 기존 native 증명을 유지했다.
+- Main 강제 기동·재시작·실제 provider/API·주문은 수행하지 않았다. `actual_pid_consumed=false`; **10/19 07:35 PREOPEN→07:55 Main**의 실제 소비와 이후 정규 장후 비용 생산/소비 ack는 기존 자연 수용 owner에서 확인한다. 경제성 갱신 적격이 생기기 전에는 현재 수량/분할/timeout 정책값을 유지한다.
+
+배포/검증 증거: `/home/ubuntu/KORStockScan/data/report/initial_quantity_broker_cost_deployment/2026-10-17/attempts/reviewed-v1/`. `deployment.json`, `published-native-verification.json`, `host-after-private.json`, `publication-plan.json`과 보존된 원본/rollback bytes가 소유한다. `validation/manifest.json`에는 실제8/9 admission·마지막781회귀·성능3회·공식 참조의 compact 원 증거23개와 SHA를 복사해 보존했다. 실제 거래의 full grid 정책 재선정이나 정확 정산 완료를 배포 근거로 꾸미지 않았다.
+
+## 7 마지막 감시 소비자 후속 결함과 보완
+
+e122의 사후 읽기 전용 `postpublication-verification.json`도 PASS(strict/controller issues0, current full·release/cron/PREOPEN/start 경로 보존)였다. 그 뒤 새 배분 자료를 감시 소비자에 대입하는 추가 리뷰에서 다음 두 결함을 확인해 같은 `InitialQuantityBrokerCostClosure1017`을 재개했다. 원 e122 배포/검증 bytes는 그대로 보존하며, 운영에 아직 없는 새 배분 자료를 소비하지 않은 과거 PASS를 그 경로의 검증으로 간주하지 않는다.
+
+1. 감시기가 compact `completion_generation`/`fact_generation`을 전체 native 증명과 직접 비교해 정상 overlay를 `quantity_completion_overlay_row_binding_invalid`로 거부했다. 원 terminal과 연구 영수증의 직접 일치도 검사해야 한다.
+2. stage 생산자는 전체 보고서를 stream으로 쓰지만 감시 child reader는 4MiB다. 새 1,000건 적격 fact만 4,899,640B이므로 합법적인 비어 있지 않은 결과가 크기 때문에 거부된다. 원 보고서의 한도 확대 대신 생산자 소유의 bounded native 검증 요약/영수증을 마지막 감시까지 연결해야 한다.
+
+고치는 범위는 compact 참조/영수증 검증, 감시용 요약 생산·소비·원본/source/code 결속, 구 stage 호환 및 표적 회귀/성능이다. canonical 실제 비용이나 정책값 변경은 포함하지 않는다. 후속 불변 후보의 리뷰·검증·재배포 및 마지막 소비자 결과를 이 절에 이어 기록한다.
+
+3. 실제 native 생산 경로의 1,000건 재생에서 상태 metadata의 소비 한도128KiB가 native512KiB와 달라 정상140KiB 영수증을 거부했다. native 소유 상수로 일치시켰다. 이어 census 재검증에서 여러 날짜의 decoded metadata를 누적해 기존64MiB 공통 예산을 초과하는 결함을 확인했다. 1,000개 비용 영수증을 그대로 유지하고 일자별 검증 메모리를 해제하는 보완·재검증을 진행한다. 앞선 실패 로그를 보존하며 아직 성능 PASS로 표시하지 않는다.
+
+
+### 7.1 후속 검증 범위와 원 실패 보존
+
+- 수량·분할·timeout·projection 표적8개 모듈 **613 PASS/40.42초**, 별도 영향 수량/감시289 PASS/32.59초 및 projection19 PASS를 확인했다. 테스트 수는 겹칠 수 있어 합산하지 않는다. 마지막 ancestry 역할 보완 후 그 경로를 다시 검증한다.
+- 더 넓은 탐색 검증은 **853 PASS/3 FAIL**에서 중단하고 실패 원인을 분리했다. 정확 e122 부모를 새 격리 worktree에 고정한 동일3개 검증에서도 **3 FAIL/21.92초**로 재현됐다. `test_snapshot_archive`의 해당 fixture는 native archive receipt 없이 임의 gzip 후 원본을 지워 `valid_empty`를 기대하고, entry sizing의 두 fixture는 기록되지 않은 `reversal_cumulative_data.json` 읽기를 요구한다. 이번 diff가 만든 회귀로 표시하지 않으며 source-gap/미기록 입력 guard를 완화해 PASS를 만들지 않는다. 원 실패와 부모 재현 로그를 보존하고 전체 코드베이스 테스트 PASS로 보고하지 않는다.
+- 실제 native 생산 경로의 큰 fixture는 1,000개 배분 영수증/총비용1,000원을 보존하고 **1,000=초기 적격1+추가매수999 제외**를 대사했다. report/timeout은 각각 약10MiB이고 bounded projection은 약172KiB다. full native validator·공통 원천 의미 관측·마지막 감시 결과가 같고, warm에서는 큰 두 child를 열지 않는다. 이 시험은 1,000건 모수/제외/감시 처리 시험이며 1,000건 전부의 경제성 grid throughput은 아니다. 별도60건×240 grid 측정과 구분한다.
+- 초기 fixture가 생산자 단계의 마지막 `frozen` decoded 문서를 소비자 단계까지 보관해 예산을 중복 점유한 실패도 구분했다. 원천/영수증 필드는 삭제하지 않고 실제 별도 worker의 수명을 반영해 생산자 임시 객체만 해제했다. 생산 코드의 날짜별 해제·동일 행/claim 재사용 보완은 유지한다. 정량 최종 성능/소스 SHA는 다음 절의 새 독립 결과에 고정한다.
+- 이미 승인된 과거 정책의 ancestry와 현재 일일 stage 감시에 같은 live-source 검사를 적용하면 비용 정정 뒤 기존 정책이 무효로 보이는 후속 결함도 보완한다. 과거 발행 증명/선언 child/정책 연결은 유지하고 현재 원천·비용·코드의 최신 검사는 당일 stage가 맡는다. 최초 정책에 자연소비·우월성 요건을 추가하지 않는다.
+- KST 자정 이후 같은 작업 ID를10/18 실행 문서로 이관했다. source10/16·publication10/18·target10/19와 원10/19 OPEN6개는 유지한다.
+
+후행 가격의 마지막 소비도 보완했다. `initial_quantity_following_bars`가 canonical `realized_pnl_krw=None`을 연구 거래의 배분 net과 비교해 `fact_identity_missing`으로 누락시키던 경로를 수정했다. 연구 비용 세대/영수증·basis/금액/시각을 검증하고 검증 원장의 거래대금/수량으로 진입 가격 기준을 계산한다. 결과의 가중치에도 `actual_execution_cost=false`와 연구 영수증 SHA를 전달한다. 기존 API 확정 비용 경로·ka10080 요청/파서·route/요청 예산은 변경하지 않았고 실제 provider 호출은0이다. 새 승인/위조 반례7개와 genuine public 초기 seed/기본정책 선택을 포함한 표적10개가 통과했다.
+
+
+### 7.2 최종 후속 코드 검증
+
+- 마지막 역할/후행 가격 보완을 포함한 표적8모듈 **622 PASS/41.31초**, 별도 의미 감시 **100 PASS/5.54초(303 deselected)**. 영향 Python8개 compile·장후 wrapper bash 문법·diff·print-only parser·로컬 링크 검사를 통과했다. 원천/비용/행 참조·권한·claim 수명·현재/과거 역할·후행 연구 비용을 독립 리뷰 후 수정·재리뷰하여 이 범위의 미해결 결함0이다. 앞선 탐색3FAIL은 부모 재현 근거와 함께 보존한다.
+- 마지막 변경이 모두 고정된 뒤 CPU 경합 없이 실제 native1000 경로를 다시 측정했다. source/tool SHA와 전후 동일성은 `large-semantic-native-uncontended-result.json`이 소유한다(SHA `d630b6c164e015ec077a2f2ba844515abaa9a922dd866283a0d61f031a033a3c`). provider/운영 발행0, 원형 실패와 이전 성공 결과는 별도 보존한다.
+
+| 지표 | 최종 결과 |
+| --- | ---: |
+| 원형 비용 영수증 / 비용 보존 | 1,000건 / 1,000원 |
+| 모수 / 초기 적격 / 추가매수 제외 | 1,000 / 1 / 999 |
+| 전체 report / timeout | 10,046,468 / 10,431,556B |
+| native 검증 후 감시 projection | 174,633B |
+| cold 생산·전체 검증 | 16.3709초 |
+| warm 전체 감시 3회 | 45.107 / 44.355 / 44.455ms |
+| warm 대형 두 child read | 0 |
+| warm metadata read 3회 합계 | 547,980B |
+| managed peak / 기존 한도 | 64,482,680 / 67,108,864B |
+| 종료 후 managed 잔여 | 0B |
+| process peak RSS | 237,856KiB |
+
+canonical 실제 손익은 NULL을 유지하며 적격1건의 연구 손익은 fixture39원이다. 이 값을 실제 추가 수익으로 사용하지 않는다. 64MiB는 관리 대상 resident admission이며 process RSS 전체의 상한으로 부르지 않는다. native 상태171KiB/일과 scalar 약1.14MiB/일의 합법적 입력을 날짜별로 검증한다. 네 capability의 code generation은 e122와 같으므로 기존 정확 세대 fixture를 native 명령으로 재검증한다. 후속 릴리스 준비/발행 결과는 아래에 별도 기록한다.

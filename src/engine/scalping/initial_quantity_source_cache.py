@@ -265,6 +265,18 @@ def _completion_json(path, maximum):
     return value, dict(path=str(path), size=len(raw), sha256=hashlib.sha256(raw).hexdigest())
 
 
+def completion_source_paths(data_dir, day):
+    """Canonical native completion inventory, including absent archive variants."""
+    directory = Path(data_dir) / 'report/monitor_snapshots'
+    raw = directory / f'trade_review_{day}.json'
+    sidecar = raw.with_suffix('.completed_projection.json')
+    scalar = raw.with_suffix('.fact_projection.json')
+    paths = [path for logical in (raw, sidecar, scalar) for path in (
+        logical, Path(str(logical)+'.gz'), Path(str(logical)+'.gz.archive_receipt.json'))]
+    return paths + [Path(data_dir)/'report/strategy_position_fact_sync'/f'strategy_position_fact_sync_{day}.status.json',
+                    Path(str(sidecar)+'.dependencies.json')]
+
+
 def _completion_day(data_dir, day, *, read=None, expected=None):
     """Join small native fact seals, without revisiting a historical timeline."""
     import re
@@ -278,9 +290,7 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
     scalar_path = raw_path.with_suffix('.fact_projection.json')
     status_path = Path(data_dir) / 'report/strategy_position_fact_sync' / f'strategy_position_fact_sync_{day}.status.json'
     dependency_path = Path(str(sidecar) + '.dependencies.json')
-    sources = [p for logical in (raw_path, sidecar, scalar_path) for p in (
-        logical, Path(str(logical) + '.gz'), Path(str(logical) + '.gz.archive_receipt.json'))]
-    sources += [status_path, dependency_path]
+    sources = completion_source_paths(data_dir, day)
     before = facts._completion_source_signature(sources)
     def metadata(path, maximum, reference=None):
         if read is None:
@@ -448,7 +458,9 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
     from collections import Counter
     from src.engine import strategy_position_performance_report as facts
     from src.engine.scalping.initial_quantity_policy import _timestamp, _number
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
     original = list(rows)
+    original_by_id = {str(row['recommendation_id']): row for row in original}
     current = {str(row['recommendation_id']): dict(row) for row in original}
     if len(current) != len(original):
         raise ValueError('quantity_completion_entry_identity_conflict')
@@ -471,6 +483,11 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
     # Reconstructing a pinned replay uses the same terminal join, with bounded
     # receipt/scalar reads. It does not repeat the native large-source hashes.
     decoded = {}
+    # Pinned reconstruction validates an already admitted cohort. Keep only
+    # this date's decoded documents; historical rows that differ from their
+    # final version retain their document owners until a later observation
+    # replaces them, so a retained receipt never outlives its budget claim.
+    historical_documents = {}
     def bounded_read(path, *, expected_sha=None, limit):
         physical = path if path.exists() else Path(str(path) + '.gz')
         signature = facts._completion_source_signature([path, Path(str(path) + '.gz')])
@@ -498,7 +515,9 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
         day = match[1]
         if not entry_on_or_after <= day <= as_of:
             continue
-        receipt, _ = _completion_json(path, 128 * 1024)
+        if source_generations is not None:
+            decoded.clear()
+        receipt, _ = _completion_json(path, MAX_METADATA_BYTES)
         proof = receipt.get('completion_snapshot_source')
         if proof is None or (isinstance(proof, dict) and proof.get('source_basis') == 'native_original_snapshot_stream'):
             continue
@@ -587,17 +606,37 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
                            completion_generation=generation_reference,
                            completion_observed_scale_in_fields=observed_counts,
                            completion_scale_in_observations=count_sources)
+            if source_generations is not None:
+                if updated == original_by_id[rid]:
+                    # These are the exact same admitted immutable row objects,
+                    # not an unaccounted second copy of the allocation receipts.
+                    updated = original_by_id[rid]
+                    historical_documents.pop(rid, None)
+                else:
+                    historical_documents[rid] = tuple(item[1] for item in decoded.values())
             current[rid] = updated
             if original_status != 'COMPLETED':
                 overlays.add(rid)
+        if source_generations is not None:
+            loaded = completed = terminal = None
+            decoded.clear()
     if source_generations is not None and generations != source_generations:
         raise ValueError('quantity_completion_generation_changed')
     if source_generations is not None and any(row.get('completion_generation')
             and str(row['recommendation_id']) not in seen_terminal for row in original):
         raise ValueError('quantity_completion_entry_binding_conflict')
-    verify_completion_overlay_generations(generations, data_dir=data_dir,
-        read=bounded_read if source_generations is not None else None)
-    result = ResidentFacts(list(current.values()))
+    if source_generations is not None:
+        if list(current.values()) != original:
+            raise ValueError('quantity_shared_fact_census_mismatch')
+        historical_documents.clear()
+        for day, expected in generations.items():
+            decoded.clear()
+            verify_completion_overlay_generations({day: expected}, data_dir=data_dir, read=bounded_read)
+        decoded.clear()
+        result = ResidentFacts(original, claim=rows.claim if isinstance(rows, ResidentFacts) else None)
+    else:
+        verify_completion_overlay_generations(generations, data_dir=data_dir)
+        result = ResidentFacts(list(current.values()))
     if any('quantity_research_cost_generation' in (gen.get('cost_generation') or {})
            for gen in entry_generations.values() if isinstance(gen, dict)):
         result.persisted_fact_generations = entry_generations

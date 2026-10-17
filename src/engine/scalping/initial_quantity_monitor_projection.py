@@ -1,0 +1,471 @@
+"""Producer-verified bounded quantity observations; never policy inputs.
+
+Full immutable reports remain the authority. Only their publishing worker runs
+the full native and semantic gates. Readers check that proof, exact source file
+identities and current cost generations, without reopening large child reports.
+This has the same local trusted-writer boundary as entry_split_monitor_projection.
+"""
+from __future__ import annotations
+
+from collections import Counter
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+
+from src.engine.scalping import entry_split_monitor_projection as files
+
+SCHEMA = 'initial_quantity_monitor_projection_v1'
+RECEIPT = 'initial_quantity_monitor_validation_v1'
+MANIFEST = 'initial_quantity_monitor_manifest_v1'
+# Structured native metadata uses the existing 4MiB child budget. Original
+# reports/timeouts keep their larger producer limits and are never warm-read.
+MAX_BYTES = 4 * 1024 * 1024
+MAX_REFERENCES = 8192
+CHILD_LIMIT = 4 * 1024 * 1024
+
+
+def manifest_path(stage_path):
+    return Path(stage_path).with_suffix('.monitor.json')
+
+
+def _digest(value):
+    return hashlib.sha256(files._canonical(value)).hexdigest()
+
+
+def _native_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True,
+        separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+def _code():
+    from src.engine.lifecycle.holding_window_generation import cached_code_generation
+    engine = Path(__file__).resolve().parents[1]
+    names = set('''scalping/initial_quantity_monitor_projection.py
+scalping/entry_split_monitor_projection.py
+scalping/initial_quantity_policy.py
+scalping/initial_quantity_source_cache.py
+scalping/initial_quantity_refresh_evaluation.py
+scalping/initial_quantity_timeout_research.py
+scalping/initial_quantity_following_bars.py
+scalping/initial_quantity_timeout.py
+scalping/initial_quantity_activation.py
+scalping/initial_quantity_legacy_reader.py
+scalping/initial_quantity_cap_observation.py
+scalping/initial_quantity_type.py
+scalping/entry_execution_sizing_plan.py
+scalping/entry_split_order_plan.py
+scalping/pre_submit_delay_initial_policy.py
+scalping/mechanistic_entry_runtime_policy.py
+lifecycle/broker_cost_reconciliation.py
+lifecycle/broker_cost_allocation.py
+lifecycle/broker_cost_source.py
+lifecycle/holding_window_generation.py
+lifecycle/research_storage.py
+lifecycle/research_input_budget.py
+lifecycle/research_disk_budget.py
+lifecycle/snapshot_archive.py
+infrastructure/validation_digest_session.py
+strategy_position_performance_report.py
+sniper_trade_review_report.py
+sniper_position_tags.py
+log_archive_service.py
+trade_profit.py
+error_detectors/artifact_freshness.py'''.split())
+    from src.engine.scalping.initial_quantity_refresh_evaluation import EXECUTION_READERS
+    names.update('scalping/'+name for name in EXECUTION_READERS)
+    paths = [engine/name for name in sorted(names)]
+    paths.extend(engine.parent/relative for relative in (
+        'trading/order/tick_utils.py', 'trading/order/split_execution_math.py',
+        'utils/jsonl_io.py'))
+    observed = cached_code_generation(paths)
+    return {str(path.relative_to(engine.parent)): observed[str(path)] for path in paths}
+
+
+def _identity(path):
+    path = Path(path)
+    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+        raise ValueError('quantity_monitor_source_symlink')
+    if not path.exists():
+        return None
+    full = files._identity(path)
+    return {'stat': [full[key] for key in
+        ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns', 'mode', 'uid', 'gid', 'nlink')],
+        'parent': [full['parent_dev'], full['parent_ino']]}
+
+
+def _dependencies(stage_path, stage, report, data_root):
+    """Exact known native source inventory, including absent archive variants."""
+    from src.engine.scalping.initial_quantity_source_cache import completion_source_paths
+    from src.engine.scalping.mechanistic_entry_runtime_policy import is_pipeline_source_reference
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    paths = {Path(stage_path)}
+    paths.update(Path(value) for key, value in stage.items()
+                 if key.endswith('_path') and isinstance(value, str))
+    census = report.get('census') or {}
+    entries = census.get('persisted_fact_generations', {})
+    completions = census.get('completion_overlay_generations', {})
+    for day in set(entries) | set(completions):
+        paths.update(completion_source_paths(data_root, day))
+        paths.add(Path(data_root)/'report/monitor_snapshots/manifests'/
+            ('monitor_snapshot_manifest_'+day+'_postclose_exit.json'))
+        status_path = (Path(data_root)/'report/strategy_position_fact_sync'/
+            ('strategy_position_fact_sync_'+day+'.status.json'))
+        if status_path.is_file() and not status_path.is_symlink() and status_path.stat().st_size <= MAX_METADATA_BYTES:
+            try:
+                status, _ = files._read(status_path, MAX_METADATA_BYTES)
+            except (OSError, ValueError):
+                # A native-known invalid fact status can legitimately produce
+                # a source-gap stage; pin its bytes/identity without inventing
+                # any deeper proof that its own parser rejected.
+                status = {}
+            legacy = ((status.get('completion_snapshot_source') or {}).get('legacy_original_validation') or {})
+            if isinstance(legacy, dict) and isinstance(legacy.get('path'), str):
+                candidate = Path(legacy['path'])
+                expected = status_path.parent/'legacy_sources'/day
+                if (candidate.is_absolute() and candidate.parent == expected
+                        and candidate.suffix == '.json' and len(candidate.stem) == 64
+                        and all(letter in '0123456789abcdef' for letter in candidate.stem)):
+                    paths.add(candidate)
+    for generation in entries.values():
+        if generation.get('path'):
+            paths.add(Path(generation['path']))
+    for key in ('source_quality_by_entry_date', 'source_quality_by_exit_date'):
+        for generation in census.get(key, {}).values():
+            if generation.get('artifact'):
+                paths.add(Path(generation['artifact']))
+    for generation in (report.get('pipeline_source_receipts') or {}).values():
+        if generation.get('path') and not is_pipeline_source_reference(generation['path'], data_root=data_root):
+            paths.add(Path(generation['path']))
+        lifecycle = generation.get('capture_lifecycle_generation') or {}
+        paths.update(Path(item['path']) for item in lifecycle.get('files', []))
+    pid = stage.get('pid_receipt') or {}
+    for receipt in pid.get('daily_pid_receipts', []):
+        if receipt.get('archive_path'):
+            paths.add(Path(receipt['archive_path']))
+        elif pid.get('data_root') and receipt.get('entry_date'):
+            base = Path(pid['data_root'])/'runtime/policy_bootstrap'
+            day = receipt['entry_date']
+            paths.update((base/('runtime_policy_bootstrap_'+day+'.json'),
+                base/('runtime_policy_bootstrap_'+day+'.env'),
+                base/('runtime_policy_bootstrap_verify_'+day+'.json')))
+    if len(paths) > MAX_REFERENCES or any(not path.is_absolute() for path in paths):
+        raise ValueError('quantity_monitor_reference_budget_or_path')
+    return {str(path): _identity(path) for path in sorted(paths)}
+
+
+def _directories(report, data_root):
+    result = {}
+    for generation in (report.get('pipeline_source_receipts') or {}).values():
+        lifecycle = generation.get('capture_lifecycle_generation')
+        if lifecycle is None:
+            continue
+        path = Path(data_root)/'runtime/initial_quantity/cap_capture_receipts'/lifecycle['source_date']
+        if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+            raise ValueError('quantity_monitor_source_symlink')
+        names = sorted(item.name for item in path.glob('*.json')) if path.exists() else []
+        if len(names) > 4096:
+            raise ValueError('quantity_monitor_lifecycle_budget')
+        result[str(path)] = {'exists': path.exists(), 'files': names}
+    return result
+
+
+def _check_directories(expected):
+    for name, generation in expected.items():
+        path = Path(name)
+        if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+            raise ValueError('quantity_monitor_source_symlink')
+        names = sorted(item.name for item in path.glob('*.json')) if path.exists() else []
+        if len(names) > 4096 or {'exists': path.exists(), 'files': names} != generation:
+            raise ValueError('quantity_monitor_lifecycle_changed')
+
+
+def _cost_signature(data_root, costs):
+    """Compact physical census of exactly the cold-verified cost inputs."""
+    root = Path(data_root)
+    output = {}
+    def file(path):
+        if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+            raise ValueError('quantity_monitor_cost_source_symlink')
+        if not path.exists():
+            return None
+        info = path.stat()
+        import stat
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('quantity_monitor_cost_source_regular_required')
+        return [getattr(info, 'st_'+key) for key in
+                ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns', 'mode', 'uid', 'gid', 'nlink')]
+    paths = set()
+    for item in costs:
+        day = item['source_date']
+        actual = root/'runtime/holding_actual_costs'/day
+        if actual.is_symlink():
+            raise ValueError('quantity_monitor_cost_source_symlink')
+        names = sorted(p.name for p in actual.glob('*.json')) if actual.exists() else []
+        if len(names) > 10000:
+            raise ValueError('quantity_monitor_cost_source_count')
+        output[str(actual)] = {'files': names, 'exists': actual.exists()}
+        paths.update(actual/name for name in names)
+        research = root/'runtime/initial_quantity_research_costs'/day
+        paths.add(research/'index.json')
+        paths.add(root/'runtime/holding_broker_cost_sources'/(day+'.json'))
+        for source in item['generation'].get('quantity_research_cost_generation', {}).get('source_dates', []):
+            paths.add(root/'runtime/holding_broker_cost_sources'/(source['source_date']+'.json'))
+        for receipt in item['generation'].get('quantity_research_cost_generation', {}).get('receipts', []):
+            paths.add(research/'generations'/(receipt['content_sha256']+'.json'))
+    if len(paths) > 20000:
+        raise ValueError('quantity_monitor_cost_source_count')
+    # Group common parent paths; 1000 admitted receipts stay well below 1MiB.
+    for path in sorted(paths):
+        output.setdefault(str(path.parent), {}).setdefault('entries', {})[path.name] = file(path)
+    return output
+
+
+def _costs(report, data_root):
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    census = report.get('census') or {}
+    expected = []
+    for day, generation in census.get('persisted_fact_generations', {}).items():
+        if isinstance(generation, dict) and isinstance(generation.get('cost_generation'), dict):
+            expected.append({'source_date': day, 'generation': generation['cost_generation']})
+    for day, generation in census.get('completion_overlay_generations', {}).items():
+        costs = (generation.get('completion_snapshot_source') or {}).get('actual_cost_source_generation')
+        if isinstance(costs, dict):
+            expected.append({'source_date': day, 'generation': costs})
+    expected = list({(item['source_date'], _digest(item['generation'])): item
+                     for item in expected}.values())
+    # Each of the native 256 dates may have distinct entry/completion views.
+    if len(expected) > 512:
+        raise ValueError('quantity_monitor_cost_date_budget')
+    for item in expected:
+        costs, day = item['generation'], item['source_date']
+        dates = costs.get('quantity_research_cost_generation', {}).get('source_dates')
+        kwargs = {'additional_source_dates': [row['source_date'] for row in dates]} if dates is not None else {}
+        if source_generation(data_root, day, **kwargs) != costs:
+            raise ValueError('quantity_monitor_cost_generation_changed')
+    return expected
+
+
+def _observation(stage, report, evaluation, data_root):
+    from src.engine.error_detectors.artifact_freshness import _quantity_postclose_stage_observation
+    def bounded_read(path, *, limit=1024*1024, expected_sha=None):
+        value, record = files._read(Path(path), limit)
+        if expected_sha is not None and record['sha256'] != expected_sha:
+            raise ValueError('quantity_monitor_native_source_changed')
+        return value
+    return _quantity_postclose_stage_observation(Path(data_root).parent,
+        stage['source_date'], stage, report, evaluation, bounded_read)
+
+
+def publish(stage_path, stage, report, *, data_root):
+    """Publish only for oversized children, after full native validation."""
+    if not any(Path(stage[name+'_path']).stat().st_size > CHILD_LIMIT
+               for name in ('report', 'timeout_research') if name+'_path' in stage):
+        return None
+    from src.engine.scalping import initial_quantity_policy as native
+    data_root = Path(data_root).resolve()
+    code = _code()
+    before = _dependencies(stage_path, stage, report, data_root)
+    directories_before = _directories(report, data_root)
+    saved_stage, stage_file = files._read(Path(stage_path), MAX_BYTES)
+    if saved_stage != stage:
+        raise ValueError('quantity_monitor_stage_file_mismatch')
+    if (report.get('report_content_sha256') != stage.get('report_content_sha256')
+            or _native_digest({key: value for key, value in report.items() if key != 'report_content_sha256'}) != stage['report_content_sha256']):
+        raise ValueError('quantity_monitor_report_binding_invalid')
+    validate = native.refresh_quantity_stage_terminal_valid if stage.get('generation_kind') == 'refresh' else native.initial_quantity_stage_terminal_valid
+    if not validate(stage):
+        raise ValueError('quantity_monitor_native_stage_invalid')
+    evaluation = json.loads(Path(stage['evaluation_path']).read_bytes()) if 'evaluation_path' in stage else None
+    observation = _observation(stage, report, evaluation, data_root)
+    issued = {'report': {'source_date': report['source_date'],
+        'report_content_sha256': report['report_content_sha256'],
+        'census': {'input_manifest_sha256': report['census']['input_manifest_sha256']}}}
+    for name in ('candidate', 'candidate_policy', 'parent_policy'):
+        if name+'_path' in stage:
+            value, _ = files._read(Path(stage[name+'_path']), CHILD_LIMIT)
+            issued['candidate' if name == 'candidate_policy' else name] = value
+    costs = _costs(report, data_root)
+    cost_signature = _cost_signature(data_root, costs)
+    issued_sources = {str(Path(stage_path)): before[str(Path(stage_path))]}
+    issued_hashes = {str(Path(stage_path)): stage_file['sha256']}
+    for name, child in stage.items():
+        if name.endswith('_path'):
+            expected = stage.get(name[:-5]+'_file_sha256')
+            if not isinstance(expected, str) or len(expected) != 64:
+                raise ValueError('quantity_monitor_issued_child_hash_missing')
+            issued_sources[str(Path(child))] = before[str(Path(child))]
+            issued_hashes[str(Path(child))] = expected
+    projection = dict(schema=SCHEMA, source_date=stage['source_date'], data_root=str(data_root),
+        stage_content_sha256=stage['receipt_content_sha256'], issued=issued,
+        observation=observation,
+        coverage=dict(input_fact_count=len(report['census']['input_fact_rows']),
+            input_manifest_sha256=report['census']['input_manifest_sha256'],
+            trade_count=len(report['trades']), trades_sha256=_digest(report['trades']),
+            status_counts=dict(Counter(str(row.get('status')) for row in report['census']['input_fact_rows'])),
+            full_native_stage_validated=True, full_semantic_census_validated=True),
+        native_validation_scope='full_stage_policy_timeout_census_and_native_completion',
+        dependencies=before, issued_sources=issued_sources, issued_file_sha256=issued_hashes,
+        cost_generations=[{'source_date': item['source_date'],
+            'generation_sha256': _digest(item['generation'])} for item in costs],
+        cost_source_inventory=cost_signature, source_directories=directories_before, code=code,
+        decision_authority='report_only', runtime_effect=False, runtime_apply_allowed=False,
+        actual_order_submitted=False)
+    if len(files._canonical(projection)) > MAX_BYTES:
+        raise ValueError('quantity_monitor_projection_budget')
+    if (before != _dependencies(stage_path, stage, report, data_root)
+            or directories_before != _directories(report, data_root) or code != _code()):
+        raise ValueError('quantity_monitor_source_changed')
+    base = Path(stage_path).parent/'monitor_generations'
+    ident = _digest(projection)
+    base.mkdir(exist_ok=True)
+    lock_path = Path(stage_path).parent/'.monitor.lock'
+    with os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if (lock_path.stat().st_dev, lock_path.stat().st_ino) != (os.fstat(lock.fileno()).st_dev, os.fstat(lock.fileno()).st_ino):
+            raise ValueError('quantity_monitor_lock_changed')
+        if before != _dependencies(stage_path, stage, report, data_root):
+            raise ValueError('quantity_monitor_source_changed')
+        if costs != _costs(report, data_root) or cost_signature != _cost_signature(data_root, costs) or code != _code():
+            raise ValueError('quantity_monitor_cost_generation_changed')
+        path = base/(ident+'.projection.json')
+        files._write_atomic(path, projection, MAX_BYTES, immutable=True)
+        pointer = dict(schema=MANIFEST, source_date=stage['source_date'],
+            stage_content_sha256=stage['receipt_content_sha256'],
+            projection_path=str(path), projection_sha256=native._file_sha256(path),
+            projection_content_sha256=ident, code=code,
+            decision_authority='report_only', runtime_effect=False, runtime_apply_allowed=False,
+            actual_order_submitted=False)
+        previous = manifest_path(stage_path)
+        if previous.exists():
+            _, record = files._read(previous, 65536)
+            with previous.open('rb') as original:
+                old = original.read(65537)
+            if len(old) > 65536 or files._identity(previous) != record['identity']:
+                raise ValueError('quantity_monitor_manifest_changed')
+            archived = base/(hashlib.sha256(old).hexdigest()+'.manifest.json')
+            if not archived.exists():
+                with archived.open('xb') as handle:
+                    handle.write(old)
+                    handle.flush(); os.fsync(handle.fileno())
+        files._write_atomic(previous, pointer, 65536)
+        if (before != _dependencies(stage_path, stage, report, data_root)
+                or cost_signature != _cost_signature(data_root, costs)
+                or projection['source_directories'] != _directories(report, data_root) or code != _code()):
+            raise ValueError('quantity_monitor_source_changed')
+    return pointer
+
+
+def read_verified(stage_path, stage, *, read, data_root=None, role='current_stage'):
+    """Return a native proof or None for the unchanged bounded legacy reader."""
+    if role not in {'current_stage', 'issued_ancestry'}:
+        raise ValueError('quantity_monitor_role_invalid')
+    pointer_path = manifest_path(stage_path)
+    if not pointer_path.exists() and not pointer_path.is_symlink():
+        return None
+    pointer = read(pointer_path, limit=65536)
+    code = _code() if role == 'current_stage' else None
+    if (pointer.get('schema') != MANIFEST or (role == 'current_stage' and pointer.get('code') != code)
+            or pointer.get('source_date') != stage.get('source_date')
+            or pointer.get('stage_content_sha256') != stage.get('receipt_content_sha256')):
+        raise ValueError('quantity_monitor_manifest_invalid')
+    path = Path(pointer['projection_path'])
+    if (path.parent != Path(stage_path).parent/'monitor_generations'
+            or path.name != pointer.get('projection_content_sha256')+'.projection.json'):
+        raise ValueError('quantity_monitor_projection_path_invalid')
+    value = read(path, limit=MAX_BYTES, expected_sha=pointer['projection_sha256'])
+    if (value.get('schema') != SCHEMA or _digest(value) != pointer['projection_content_sha256']
+            or value.get('stage_content_sha256') != stage.get('receipt_content_sha256')
+            or value.get('code') != pointer.get('code')
+            or not isinstance(value.get('code'), dict) or not value['code']
+            or any(not isinstance(name, str) or not isinstance(sha, str) or len(sha) != 64
+                   or any(letter not in '0123456789abcdef' for letter in sha)
+                   for name, sha in value['code'].items())
+            or value.get('native_validation_scope') != 'full_stage_policy_timeout_census_and_native_completion'
+            or value.get('coverage', {}).get('full_native_stage_validated') is not True
+            or value.get('coverage', {}).get('full_semantic_census_validated') is not True):
+        raise ValueError('quantity_monitor_projection_invalid')
+    for body in (pointer, value):
+        if (body.get('decision_authority') != 'report_only' or body.get('runtime_effect') is not False
+                or body.get('runtime_apply_allowed') is not False
+                or body.get('actual_order_submitted') is not False):
+            raise ValueError('quantity_monitor_authority_invalid')
+    coverage, observation = value['coverage'], value['observation']
+    if (value.get('source_date') != stage.get('source_date')
+            or coverage.get('trade_count') != stage.get('all_completed_initial_trades')
+            or coverage.get('trade_count') != observation.get('postclose_completed_trade_count')
+            or coverage.get('input_fact_count') != observation.get('postclose_input_fact_count')
+            or coverage.get('input_manifest_sha256') != value['issued']['report']['census']['input_manifest_sha256']
+            or sum(coverage.get('status_counts', {}).values()) != coverage.get('input_fact_count')
+            or coverage.get('input_fact_count') != coverage.get('trade_count') + sum(observation.get('postclose_exclusion_reasons', {}).values())):
+        raise ValueError('quantity_monitor_coverage_invalid')
+    dependencies = value['dependencies']
+    if not isinstance(dependencies, dict) or len(dependencies) > MAX_REFERENCES:
+        raise ValueError('quantity_monitor_reference_budget')
+    root = Path(value['data_root'])
+    if (not root.is_absolute() or root.resolve() != root
+            or (data_root is not None and root != Path(data_root).resolve())
+            or str(Path(stage_path)) not in dependencies):
+        raise ValueError('quantity_monitor_data_root_invalid')
+    expected_issued = {str(Path(stage_path))}
+    expected_issued.update(str(Path(child)) for name, child in stage.items() if name.endswith('_path'))
+    issued_sources, issued_hashes = value.get('issued_sources'), value.get('issued_file_sha256')
+    if (not isinstance(issued_sources, dict) or set(issued_sources) != expected_issued
+            or not isinstance(issued_hashes, dict) or set(issued_hashes) != expected_issued
+            or any(issued_sources[name] != dependencies.get(name) for name in expected_issued)
+            or any(issued_hashes[str(Path(child))] != stage.get(name[:-5]+'_file_sha256')
+                   for name, child in stage.items() if name.endswith('_path'))):
+        raise ValueError('quantity_monitor_issued_binding_invalid')
+    issued_before = {name: _identity(Path(name)) for name in issued_sources}
+    if issued_before != issued_sources:
+        raise ValueError('quantity_monitor_issued_source_changed')
+    if read(Path(stage_path), limit=MAX_BYTES, expected_sha=issued_hashes[str(Path(stage_path))]) != stage:
+        raise ValueError('quantity_monitor_stage_file_mismatch')
+    if role == 'issued_ancestry':
+        # An approved policy retains its original issued evidence. Later cost
+        # corrections/archives and new native code affect current research,
+        # never add a fresh economic or natural-consumption adoption hurdle.
+        if issued_before != {name: _identity(Path(name)) for name in issued_sources}:
+            raise ValueError('quantity_monitor_issued_source_changed')
+        return {'issued': value['issued'], 'observation': value['observation']}
+    before = {name: _identity(Path(name)) for name in dependencies}
+    if before != dependencies:
+        raise ValueError('quantity_monitor_source_changed')
+    _check_directories(value['source_directories'])
+    # Every cold-verified receipt/index/official alias is stat-bound, including
+    # absent aliases and the full actual-cost directory census. Warm readers do
+    # not repeatedly decode N native receipts, and corrections invalidate proof.
+    inventory = value['cost_source_inventory']
+    def current_cost_inventory():
+        observed = {}
+        import stat
+        for parent, group in inventory.items():
+            directory = Path(parent)
+            if not directory.is_relative_to(root/'runtime'):
+                raise ValueError('quantity_monitor_cost_source_path_invalid')
+            if directory.is_symlink() or any(p.is_symlink() for p in directory.parents):
+                raise ValueError('quantity_monitor_cost_source_symlink')
+            row = {}
+            if 'files' in group:
+                row.update(files=sorted(p.name for p in directory.glob('*.json')) if directory.exists() else [], exists=directory.exists())
+            for name in group.get('entries', {}):
+                if not isinstance(name, str) or Path(name).name != name:
+                    raise ValueError('quantity_monitor_cost_source_path_invalid')
+                path = directory/name
+                if path.is_symlink():
+                    raise ValueError('quantity_monitor_cost_source_symlink')
+                info = path.stat() if path.exists() else None
+                if info is not None and not stat.S_ISREG(info.st_mode):
+                    raise ValueError('quantity_monitor_cost_source_regular_required')
+                row.setdefault('entries', {})[name] = None if info is None else [getattr(info, 'st_'+key) for key in
+                    ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns', 'mode', 'uid', 'gid', 'nlink')]
+            observed[parent] = row
+        return observed
+    if current_cost_inventory() != inventory:
+        raise ValueError('quantity_monitor_cost_generation_changed')
+    if (before != {name: _identity(Path(name)) for name in dependencies}
+            or current_cost_inventory() != inventory or code != _code()):
+        raise ValueError('quantity_monitor_source_changed')
+    _check_directories(value['source_directories'])
+    return {'issued': value['issued'], 'observation': value['observation']}

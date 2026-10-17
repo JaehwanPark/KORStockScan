@@ -29,6 +29,21 @@ _SOURCE_META_FIELDS = (
     "continuous_next_key_missing", "continuous_page_limit_reached",
     "latest_source_timestamp", "source_time_basis", "truncated_window",
 )
+_RESEARCH_WEIGHT_FIELDS = ('cost_basis', 'actual_execution_cost', 'research_cost_receipt_sha256')
+
+
+def _fact_economics_match(row, fact):
+    if row.get('cost_basis') != 'broker_confirmed_total_allocated':
+        return fact.get('realized_pnl_krw') == row.get('actual_net_pnl_krw')
+    from src.engine.scalping.initial_quantity_policy import _quantity_research_fact_cost
+    receipt = _quantity_research_fact_cost(fact)
+    return (receipt.get('status') == 'research_cost_allocated'
+            and row.get('actual_execution_cost') is False
+            and row.get('quantity_research_cost') == receipt
+            and row.get('research_cost_receipt_sha256') == receipt.get('receipt_sha256')
+            and row.get('cost_available_at') == receipt.get('cost_available_at')
+            and row.get('actual_net_pnl_krw') == receipt.get('allocated_net_pnl_krw')
+            and row.get('actual_profit_rate') == receipt.get('allocated_profit_rate'))
 
 
 def _valid_replay(report: Any) -> bool:
@@ -102,7 +117,7 @@ def build_following_bar_source(
                 or str(fact.get("stock_code") or "") != str(row.get("stock_code") or "")
                 or not row.get("stock_code")
                 or str(fact.get("status") or "").upper() != "COMPLETED"
-                or fact.get("realized_pnl_krw") != row.get("actual_net_pnl_krw")):
+                or not _fact_economics_match(row, fact)):
             results[trade_id] = {"status": "fact_identity_missing"}
             continue
         if (row.get("shapes") or {}).get("parent", {}).get("status") != "paired":
@@ -197,6 +212,9 @@ def build_following_bar_source(
                         if fill + timedelta(seconds=60) < at
                         and at + timedelta(seconds=60) <= end]
             anchor = _positive_price(fact.get("buy_price"))
+            if row.get('cost_basis') == 'broker_confirmed_total_allocated':
+                receipt = row['quantity_research_cost']
+                anchor = receipt['buy_amount_krw'] / receipt['buy_qty']
             lower = [(at, low) for at, low in observed if anchor and low < anchor]
             first_lower = min(lower, key=lambda item: item[0], default=None)
             lowest = min(lower, key=lambda item: item[1], default=None)
@@ -232,6 +250,9 @@ def build_following_bar_source(
                 "time_resolution_sec": 60,
                 "broker_fill_or_cancel_proof": False,
             }
+    for row in winners:
+        if row.get('cost_basis') == 'broker_confirmed_total_allocated':
+            results[row['trade_id']].update({key: row[key] for key in _RESEARCH_WEIGHT_FIELDS})
     weighted = {}
     for quantity_type in sorted({row["quantity_type"] for row in winners}):
         linked = [results[row["trade_id"]] for row in winners]
@@ -306,6 +327,11 @@ def following_bar_source_valid(source: Any, replay: dict[str, Any]) -> bool:
         for trade_id, trade in winners.items():
             row = source["trades"][trade_id]
             if not isinstance(row, dict) or not str(row.get("status") or ""):
+                return False
+            if any(key in row for key in _RESEARCH_WEIGHT_FIELDS) and (
+                    trade.get('cost_basis') != 'broker_confirmed_total_allocated'
+                    or row.get('actual_execution_cost') is not False
+                    or any(row.get(key) != trade.get(key) for key in _RESEARCH_WEIGHT_FIELDS)):
                 return False
             if row.get("first_lower_at") is not None:
                 if (row.get("quantity_type") != trade["quantity_type"]

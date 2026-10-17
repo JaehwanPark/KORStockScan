@@ -580,7 +580,8 @@ def _main_stop_semantics(root, source_date, *, now):
         return dict(meta, status="source_invalid", findings=["main_stop_committed_binding_invalid"])
 
 
-def _quantity_stage_observation(stage, source_date, read):
+def _quantity_stage_observation(stage, source_date, read, *, stage_path=None, data_root=None,
+                                projection_role='current_stage'):
     """Observe issued bounded generations; full replay remains a producer gate."""
     from src.engine.scalping.initial_quantity_policy import _digest, REPORT_SCHEMA
     schema = stage.get('schema_version')
@@ -595,6 +596,11 @@ def _quantity_stage_observation(stage, source_date, read):
             or any(stage.get(key) is not False for key in ('runtime_apply_allowed', 'runtime_effect', 'actual_order_submitted'))
             or stage.get('receipt_content_sha256') != _digest({k:v for k,v in stage.items() if k != 'receipt_content_sha256'})):
         raise ValueError('quantity_stage_envelope_invalid')
+    if stage_path is not None:
+        from src.engine.scalping.initial_quantity_monitor_projection import read_verified
+        projection = read_verified(stage_path, stage, read=read, data_root=data_root, role=projection_role)
+        if projection is not None:
+            return {**projection['issued'], 'monitor_projection_observation': projection['observation']}
     def child(name, hash_name=None):
         path = Path(stage[name + '_path'])
         if not path.is_absolute(): raise ValueError('quantity_stage_child_path_invalid')
@@ -714,7 +720,9 @@ def _quantity_current_observation(current_path, target_date, read):
                 or stage.get('receipt_content_sha256') != current['stage_receipt_content_sha256']
                 or policy.get('candidate_stage_receipt_content_sha256') != current['stage_receipt_content_sha256']):
             raise ValueError('quantity_current_policy_binding_invalid')
-        issued = _quantity_stage_observation(stage, current['source_date'], read)
+        issued = _quantity_stage_observation(stage, current['source_date'], read, stage_path=stage_path,
+            data_root=next((parent.resolve() for parent in current_path.parents if parent.name == 'data'), None),
+            projection_role='issued_ancestry')
         candidate_name = 'candidate' if stage.get('generation_kind') == 'refresh' else 'candidate_policy'
         if (policy.get('candidate_policy_file_sha256') != stage.get(candidate_name + '_file_sha256')
                 or policy.get('candidate_policy_content_sha256') != stage.get(candidate_name + '_content_sha256')
@@ -806,8 +814,9 @@ def _quantity_completion_overlay_observation(root, source_date, census, facts, r
         return {'postclose_as_of_completed_population_count': completed}
     from src.engine.scalping.initial_quantity_source_cache import (
         completion_fact_scope, verify_completion_overlay_generations,
-        QUANTITY_FACT_STRATEGIES,
+        completion_generation_reference, QUANTITY_FACT_STRATEGIES,
     )
+    from src.engine.lifecycle.broker_cost_reconciliation import record_source_projector
     from src.engine.scalping.initial_quantity_policy import _timestamp
     from src.engine.sniper_position_tags import normalize_strategy
     data_root, data_generation = _quantity_data_mount_generation(root)
@@ -819,6 +828,13 @@ def _quantity_completion_overlay_observation(root, source_date, census, facts, r
         day: {str(row['recommendation_id']): row for row in rows}
         for day, rows in terminals.items()
     }
+    completion_references = {day: completion_generation_reference(generation)
+                             for day, generation in generations.items()}
+    entry_generations = census.get('persisted_fact_generations') or {}
+    entry_projectors = {day: record_source_projector(generation['cost_generation'])
+        for day, generation in entry_generations.items()
+        if isinstance(generation, dict) and isinstance(generation.get('cost_generation'), dict)
+        and 'quantity_research_cost_generation' in generation['cost_generation']}
     start = census.get('entry_on_or_after', '2026-06-05')
     if (not isinstance(start, str) or date.fromisoformat(start).isoformat() != start
             or not '2026-06-05' <= start <= source_date):
@@ -853,19 +869,26 @@ def _quantity_completion_overlay_observation(root, source_date, census, facts, r
     for row in tagged:
         day = row.get('completion_source_date')
         native = native_by_day.get(day, {}).get(str(row.get('recommendation_id')))
+        entry_day = str(row.get('rec_date'))
+        entry_generation = entry_generations.get(entry_day)
+        if entry_day in entry_projectors:
+            # Entry facts are projected before completion receipts are overlaid;
+            # mirror that producer's record-only reference without receipt dates.
+            entry_generation = {**entry_generation, 'cost_generation':
+                entry_projectors[entry_day](str(row.get('recommendation_id')))}
         if (native is None or latest_day.get(str(row.get('recommendation_id'))) != day
-                or row['completion_generation'] != generations.get(day)
+                or row['completion_generation'] != completion_references.get(day)
                 or str(row.get('status')).upper() != 'COMPLETED'
                 or row.get('original_fact_status') is None
                 or not isinstance(row.get('fact_generation'), dict)
-                or row['fact_generation'] != (census.get('persisted_fact_generations') or {}).get(str(row.get('rec_date')))):
+                or row['fact_generation'] != entry_generation):
             raise ValueError('quantity_completion_overlay_row_binding_invalid')
         for field in ('rec_date', 'stock_code', 'strategy', 'position_tag', 'status',
                       'buy_price', 'buy_qty', 'sell_price', 'profit_rate',
                       'realized_pnl_krw', 'economics_source_status',
                       'actual_cost_reconciliation_status', 'actual_cost_source_generation',
                       'completion_census_run_id', 'completion_census_projection_sha256',
-                      'broker_actual_fees_taxes_krw'):
+                      'broker_actual_fees_taxes_krw', 'quantity_research_cost'):
             actual, expected = row.get(field), native.get(field)
             if field == 'rec_date':
                 actual, expected = str(actual), str(expected)
@@ -928,6 +951,56 @@ def _quantity_completion_overlay_observation(root, source_date, census, facts, r
                 postclose_original_fact_status_counts=original_counts,
                 postclose_completion_overlay_summary=summary,
                 postclose_completion_overlay_generation_count=len(generations))
+
+
+def _quantity_postclose_stage_observation(root, source_date, stage, report, evaluation, read):
+    """Shared seed/refresh census observations; never execution authority."""
+    from src.engine.scalping.initial_quantity_policy import _digest
+    from src.engine.scalping.initial_quantity_refresh_evaluation import economic_sample_status
+    refresh = stage.get('generation_kind') == 'refresh'
+    count = stage['all_completed_initial_trades']
+    decision = stage.get('decision') if refresh else 'initial_policy_seed'
+    census = report['census']
+    facts, excluded = census['input_fact_rows'], census['excluded']
+    if (not isinstance(facts, list) or not isinstance(excluded, dict)
+            or any(not isinstance(row, dict) for row in facts)
+            or any(type(n) is not int or n < 0 for n in excluded.values())
+            or census['fact_rows_read'] != len(facts)
+            or census['all_completed_initial_trades'] != count
+            or count != len(report['trades'])
+            or len(facts) != count + sum(excluded.values())
+            or census.get('input_manifest_sha256') != _digest(facts)
+            or report['source_date'] != source_date
+            or refresh and (not isinstance(evaluation, dict)
+                or evaluation.get('report_content_sha256') != report['report_content_sha256']
+                or evaluation.get('source_date') != source_date)
+            or not refresh and evaluation is not None):
+        raise ValueError('quantity_input_census_binding_invalid')
+    observation = _quantity_completion_overlay_observation(root, source_date, census, facts, read)
+    benign = {'not_completed', 'other_strategy', 'other_custody', 'scale_in_position',
+              'before_refresh_start', 'duplicate_fact', 'date_outside_baseline_or_as_of'}
+    gaps = {key:n for key,n in excluded.items() if n and key not in benign}
+    economic = economic_sample_status(report)
+    binding = evaluation.get('trade_policy_binding_status') if refresh else 'not_required_initial_policy'
+    if refresh and (economic not in {'valid_empty', 'cost_eligible', 'source_gap', 'cost_missing'}
+            or evaluation.get('economic_sample_status') != economic
+            or binding not in {'valid_empty', 'bound', 'partial', 'source_gap'}
+            or count == 0 and binding != ('valid_empty' if economic == 'valid_empty' else 'source_gap')
+            or count > 0 and binding not in {'bound', 'partial'}):
+        raise ValueError('quantity_evaluation_observation_status_invalid')
+    source_gap = bool(gaps or economic in {'source_gap', 'cost_missing'} or binding in {'partial', 'source_gap'})
+    observation.update(policy_refresh_decision=decision,
+        postclose_input_fact_count=len(facts),
+        postclose_completed_input_count=sum(str(row.get('status', '')).upper() == 'COMPLETED' for row in facts),
+        postclose_exclusion_reasons=excluded, postclose_source_gap_reasons=gaps,
+        economic_sample_status=economic, trade_policy_binding_status=binding,
+        following_bar_source_status=stage.get('following_bar_source_status'),
+        bundle_observation_scope='dedicated_multi_leg_journal_only',
+        postclose_stage_status=('source_gap' if source_gap else 'valid_empty'
+            if count == 0 and decision == 'carry_parent' else decision),
+        postclose_completed_trade_count=count,
+        postclose_semantic_findings=['initial_quantity_economic_source_gap'] if source_gap else [])
+    return observation
 
 
 def _initial_quantity_semantics_native(
@@ -1041,60 +1114,14 @@ def _initial_quantity_semantics_native(
             if stage_path.is_symlink() or stage_path.stat().st_size > 1024 * 1024:
                 raise ValueError("stage_untrusted_or_oversize")
             stage = read(stage_path, expected_sha=stage_expected_sha)
-            observed = _quantity_stage_observation(stage, source_date, read)
-            count = stage["all_completed_initial_trades"]
-            decision = stage["decision"]
-            report, evaluation = observed['report'], observed['evaluation']
-            census = report['census']
-            facts, excluded = census['input_fact_rows'], census['excluded']
-            if (not isinstance(facts, list) or not isinstance(excluded, dict)
-                    or any(not isinstance(row, dict) for row in facts)
-                    or any(type(n) is not int or n < 0 for n in excluded.values())
-                    or census['fact_rows_read'] != len(facts)
-                    or census['all_completed_initial_trades'] != count
-                    or count != len(report['trades'])
-                    or len(facts) != count + sum(excluded.values())
-                    or census.get('input_manifest_sha256') != _digest(facts)
-                    or evaluation['report_content_sha256'] != report['report_content_sha256']
-                    or report['source_date'] != source_date
-                    or evaluation['source_date'] != source_date):
-                raise ValueError('quantity_input_census_binding_invalid')
-            details.update(_quantity_completion_overlay_observation(
-                root, source_date, census, facts, read))
-            benign = {'not_completed', 'other_strategy', 'other_custody',
-                      'scale_in_position', 'before_refresh_start', 'duplicate_fact',
-                      'date_outside_baseline_or_as_of'}
-            gaps = {k:n for k,n in excluded.items() if n and k not in benign}
-            economic = evaluation['economic_sample_status']
-            binding = evaluation['trade_policy_binding_status']
-            from src.engine.scalping.initial_quantity_refresh_evaluation import economic_sample_status
-            if (economic not in {'valid_empty', 'cost_eligible', 'source_gap', 'cost_missing'}
-                    or economic != economic_sample_status(report)
-                    or binding not in {'valid_empty', 'bound', 'partial', 'source_gap'}
-                    or (count == 0 and binding != ('valid_empty' if economic == 'valid_empty' else 'source_gap'))
-                    or (count > 0 and binding not in {'bound', 'partial'})):
-                raise ValueError('quantity_evaluation_observation_status_invalid')
-            source_gap = bool(gaps or economic in {'source_gap', 'cost_missing'}
-                              or binding in {'partial', 'source_gap'})
-            details.update(
-                policy_refresh_decision=decision,
-                postclose_input_fact_count=len(facts),
-                postclose_completed_input_count=sum(
-                    isinstance(row, dict) and str(row.get('status', '')).upper() == 'COMPLETED'
-                    for row in facts),
-                postclose_exclusion_reasons=excluded,
-                postclose_source_gap_reasons=gaps,
-                economic_sample_status=economic,
-                trade_policy_binding_status=evaluation['trade_policy_binding_status'],
-                following_bar_source_status=stage.get('following_bar_source_status'),
-                bundle_observation_scope='dedicated_multi_leg_journal_only')
-            details["postclose_stage_status"] = (
-                'source_gap' if source_gap else
-                "valid_empty" if count == 0 and decision == "carry_parent"
-                else decision)
-            details["postclose_completed_trade_count"] = count
-            if source_gap:
-                details['findings'].append('initial_quantity_economic_source_gap')
+            observed = _quantity_stage_observation(stage, source_date, read, stage_path=stage_path,
+                                                   data_root=(root/'data').resolve())
+            observation = (dict(observed['monitor_projection_observation'])
+                if 'monitor_projection_observation' in observed else
+                _quantity_postclose_stage_observation(root, source_date, stage,
+                    observed['report'], observed.get('evaluation'), read))
+            details['findings'].extend(observation.pop('postclose_semantic_findings'))
+            details.update(observation)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             details["findings"].append(
                 "initial_quantity_stage_invalid:" + type(exc).__name__)

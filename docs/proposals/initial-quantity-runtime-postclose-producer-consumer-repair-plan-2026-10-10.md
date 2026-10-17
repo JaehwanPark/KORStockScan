@@ -321,6 +321,12 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle.broker_cost_source --date "$TARG
 - 복수 포지션·익일 매도·부분 체결·미청산·수동 잔여·정수 반올림·원천 누락/정정·계좌 충돌·clock 역전·손상 exact 파일·동시 index 발행·예산/크기 제한의 반례를 검증한다.
 - 비용 세대 전체는 공통 metadata에 한 번만 저장하고 거래별로는 해당 record/날짜의 증명만 전달한다. 비용 세대나 완료 원천 전체를 거래마다 복제하는 제곱 증가를 금지한다.
 - 영수증 필드는 생산자와 모든 bounded 원문/sidecar reader가 같은 256KiB 한도를 사용한다. 다일 분할 체결의 16KiB 초과 정상 영수증을 누락시키지 않고 256KiB 초과는 명시 거부한다. 일반 scalar/전체 보고서 한도를 넓혀 우회하지 않는다.
+- 의미 감시기는 공통 함수로 만든 compact completion/fact 참조를 원 native 전체 증명과 결속한다. 구 전체 참조도 유지하며, terminal의 연구 비용 영수증과 fact의 영수증이 다르거나 사라진 경우를 거부한다.
+- 당일 stage 관측과 이미 승인된 정책의 issued ancestry 관측을 명시적으로 구분한다. 당일 관측은 현재 원천·비용·코드를 재검증한다. 과거 승인 이력은 발행 당시 증명·원 stage/선언 child·정책 연결을 검증하며, 이후 비용 정정·원천 압축·검증 코드 변경만으로 유효한 기존 정책을 무효화하거나 최초 채택 허들을 추가하지 않는다.
+- 생산자가 허용하는 4MiB 초과 연구 보고서/timeout 결과도 마지막 감시 소비자에 도달해야 한다. 기존 scalping projection 역할 안에서 생산자가 native 검증 후 bounded 감시 요약·증명을 발행하고, 감시기는 원 stage/보고서의 실제 identity·SHA·검증 code·모수/제외·원천 결손 의미를 확인한다. 원 보고서 bytes·정책 검증은 보존하고 감시의 전체 파일 한도 확대나 hash만 있는 요약으로 우회하지 않는다. 구 작은 보고서는 기존 reader를 유지한다.
+- 실제 계약으로 생성한 1,000건 이상/4MiB 초과 입력의 감시까지 연결하고, compact/full 참조·연구 영수증 누락/변조·요약 변조/교체·원천 교체·구 stage·불변 세대·cold/warm 및 감시 hot path의 대형 원문 미해독을 회귀 검증한다. 일자별 증명/projector는 한 번 준비해 건별 전체 세대 복사를 반복하지 않는다.
 - 실제 봉인 자료의 연구 적격/제외 ID와 비용 보존식을 대사하고, 적격 비어 있지 않은 fixture의 전체 비용→연구→재생 성능을 측정한다. 0건 경로의 빠른 시간을 성능 증거로 삼지 않는다.
+- 후행 가격 소비자는 검증된 연구 배분 손익을 canonical 실제 손익(NULL)과 직접 비교해 누락시키지 않는다. native 비용 세대/거래별 영수증·금액/수량·확보 시각을 결속한 뒤 연구용 순이익과 가중평균을 사용하고, 후행 결과에도 비용 기준·actual_execution_cost=false·연구 영수증 SHA를 전달한다. 거래별 API 확정 비용 경로와 원 요청/route/시간/예산 guard는 보존한다.
+- 완료 census 재검증은 일자별 native metadata를 제한 없이 보관하지 않는다. 전체 1,000건의 연구 비용 영수증·제외 사유를 유지한 상태로 기존 64MiB 공통 resident 예산 안에서 일자별 증명을 검증·해제한다. 예산 확대나 비적격 거래의 영수증 삭제로 성능 검증을 통과시키지 않는다.
 - 최초 정책의 별도 경제/자연소비 허들을 추가하지 않는다. 수리 코드 검증·선택 배포·정규 장후 자연 생산·실제 PID 소비·비용 후 성과는 각각의 근거로 보고한다.
-- 당일 보완 owner는 `InitialQuantityBrokerCostClosure1017`다. 기존 `InitialQuantityProducerConsumerRepair1010`의 남은 역사 원천/정산·경제성 Acceptance와 `DirectFamilyPreopenPolicyHandoff`의 실제 소비 조건은 유지한다.
+- 보완 owner는 동일한 `InitialQuantityBrokerCostClosure1017`이며 현재 실행은 [10/18 체크리스트](../checklists/2026-10-18-stage2-todo-checklist.md)에 이관했다. 기존 `InitialQuantityProducerConsumerRepair1010`의 남은 역사 원천/정산·경제성 Acceptance와 `DirectFamilyPreopenPolicyHandoff`의 실제 소비 조건은 유지한다.

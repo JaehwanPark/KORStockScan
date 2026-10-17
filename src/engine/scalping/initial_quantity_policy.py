@@ -2416,10 +2416,12 @@ def publish_refresh_quantity_evaluation(
     stage = {**body, "receipt_content_sha256": _digest(body)}
     stage_path = output_dir / f"initial_quantity_refresh_stage_{day}.json"
     stage_sha = _write_immutable_json(stage_path, stage)
+    from src.engine.scalping.initial_quantity_monitor_projection import publish as publish_monitor_projection
+    monitor_projection = publish_monitor_projection(stage_path, stage, report, data_root=DATA_DIR)
     if report.get("evaluation_algorithm") == REPAIR_VERSION:
         from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
         import fcntl
-        if not refresh_quantity_stage_terminal_valid(stage):
+        if monitor_projection is None and not refresh_quantity_stage_terminal_valid(stage):
             raise ValueError("quantity_generation_validation_failed")
         with (base_output / ".commit.lock").open("a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -2852,6 +2854,8 @@ def publish_initial_quantity_candidate(
     receipt = {**body, "receipt_content_sha256": _digest(body)}
     receipt_path = output_dir / f"initial_quantity_stage_{source_date}.json"
     _write_immutable_json(receipt_path, receipt)
+    from src.engine.scalping.initial_quantity_monitor_projection import publish as publish_monitor_projection
+    publish_monitor_projection(receipt_path, receipt, report, data_root=DATA_DIR)
     return receipt
 
 

@@ -16,6 +16,9 @@ from src.engine.scalping.entry_split_order_plan import build_initial_quantity_ty
 VERSION = 'initial_quantity_execution_cost_split_v2'
 SELECTION_VERSION = 'initial_quantity_all_trade_ev_selection_v3'
 VALID_OUTCOMES = {'paired', 'partial_unfilled', 'modeled_no_fill'}
+EXECUTION_READERS = ('initial_quantity_refresh_evaluation.py', 'initial_quantity_timeout_research.py',
+                     'initial_quantity_policy.py', 'initial_quantity_cap_observation.py',
+                     'initial_quantity_timeout.py', 'entry_split_order_plan.py')
 _VERIFIED_EXECUTIONS = OrderedDict()
 
 
@@ -38,9 +41,8 @@ def _execution_key(trade,path,source,grid):
     import hashlib
     from src.engine.scalping.initial_quantity_source_cache import encode
     from src.engine.scalping.initial_quantity_policy import _digest
-    readers=('initial_quantity_refresh_evaluation.py','initial_quantity_timeout_research.py','initial_quantity_policy.py','initial_quantity_cap_observation.py','initial_quantity_timeout.py','entry_split_order_plan.py')
     return _digest(dict(trade=trade,path=encode(path),source=source,grid=grid,
-                        readers={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in readers}))
+                        readers={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in EXECUTION_READERS}))
 
 
 def modeled_parent(row):
