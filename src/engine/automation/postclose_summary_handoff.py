@@ -1775,8 +1775,13 @@ def _stage_output_issues(report_dir, day, stage):
                 policy, report = _read(paths['pre_submit_delay_policy']), _read(paths['pre_submit_delay_tuning'])
                 validate(policy, report)
                 verify_source(Path(report_dir).parent, report)
-                if report.get('source_date') != day or policy.get('code_contract_sha256') != code_contract():
+                if report.get('source_date') != day:
                     raise ValueError('source_date_or_release_code_changed')
+                if policy.get('code_contract_sha256') != code_contract():
+                    from src.engine.scalping.pre_submit_delay_tuning import _verify_runtime_code_contract
+                    # Preserve only the same exact prepared policy through its
+                    # reviewed target-date code handoff; source checks stay full.
+                    _verify_runtime_code_contract(policy, policy['effective_from'])
                 ledger_path = stage_input_paths(report_dir, day, stage)['pre_submit_delay_source_ledger']
                 if ledger_path.exists() and _load_json(ledger_path).get('compact_source_sha256') != report.get('source_sha256'):
                     raise ValueError('source_ledger_generation_changed')

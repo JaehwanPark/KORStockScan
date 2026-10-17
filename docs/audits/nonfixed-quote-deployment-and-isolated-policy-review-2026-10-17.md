@@ -10,3 +10,6 @@
 
 
 반복 검증에서 native 요약 발행기가 원 frozen holding replay의 코드 세대를 새 코드로 재구성하려는 누락을 확인했다. 검증된 기존 incumbent carry는 정상 reader의 exact source/code handoff를 통과한 후 원 파일을 보존한다. 새로운 실제 source를 가진 current-code 발행은 기존 경로를 유지한다. source 변경·영수증 결손·numeric successor·다른 날짜는 허용하지 않는다. 관련 2,662개 회귀검사 및 static/diff 검증을 통과했다. 실제 활성화/주문 성과를 추가 수용으로 주장하지 않는다.
+
+
+whole-native-chain 단계에서 과거 delay report의 code hash를 현재 코드와 직접 비교하는 마지막 소비자 누락도 확인했다. 전체 원천·ledger·날짜 검증을 유지하고, 동일 정책/원 코드 inventory를 가진 effective target의 검증된 prepared code handoff만 수용한다. source 변경·날짜 변경·영수증 결손·ledger 불일치는 계속 실패한다. 최종 관련 회귀검사 2,758 PASS이며 원 보고서와 정책 파일은 재선정/재작성하지 않는다.

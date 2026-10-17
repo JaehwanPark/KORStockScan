@@ -8,6 +8,33 @@ import pytest
 from src.engine.automation import postclose_summary_handoff as mod
 
 
+@pytest.mark.parametrize('fault', [None, 'missing_handoff', 'source', 'date', 'ledger'])
+def test_delay_stage_preserves_only_exact_prepared_code_handoff(tmp_path,monkeypatch,fault):
+    from src.engine.scalping import pre_submit_delay_initial_policy as I,pre_submit_delay_tuning as T
+    reports=tmp_path/'data/report';reports.mkdir(parents=True)
+    report=reports/'report.json';policy=reports/'policy.json';ledger=reports/'ledger.json'
+    report.write_text(json.dumps({'source_date':'2026-10-15' if fault=='date' else '2026-10-16','source_sha256':'source'}))
+    policy.write_text(json.dumps({'schema':'pre_submit_delay_policy_v2','source_date':'2026-10-16','code_contract_sha256':'original','effective_from':'2026-10-19'}))
+    if fault=='ledger':ledger.write_text(json.dumps({'compact_source_sha256':'different'}))
+    monkeypatch.setattr(mod,'stage_artifacts',lambda *a:{'pre_submit_delay_tuning':report,'pre_submit_delay_policy':policy})
+    monkeypatch.setattr(mod,'stage_input_paths',lambda *a:{'pre_submit_delay_source_ledger':ledger})
+    monkeypatch.setattr(I,'validate',lambda *a:None)
+    monkeypatch.setattr(I,'code_contract',lambda:'current')
+    calls=[]
+    def source(*args):
+        calls.append('source')
+        if fault=='source':raise ValueError('source_changed')
+    def code(value,day):
+        assert value['code_contract_sha256']=='original' and day=='2026-10-19'
+        calls.append('code')
+        if fault=='missing_handoff':raise ValueError('prepared_receipt_missing')
+    monkeypatch.setattr(I,'verify_source',source);monkeypatch.setattr(T,'_verify_runtime_code_contract',code)
+    issues=mod._safe_stage_output_issues(reports,'2026-10-16','pre_submit_delay')
+    assert bool(issues)==bool(fault)
+    if fault is None:assert calls==['source','code']
+    if fault in {'source','date'}:assert calls==['source']
+
+
 
 
 def test_machine_barrier_waits_for_exact_inputs_and_allows_scoped_recovery(tmp_path, monkeypatch):
