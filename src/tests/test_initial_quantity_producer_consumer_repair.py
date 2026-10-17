@@ -103,7 +103,7 @@ def test_holdout_changes_acceptance_never_train_choice_or_next_best():
     rows=[]
     for day in ('2026-10-05','2026-10-06','2026-10-07'):
         for i in range(20):
-            rows.append(dict(trade_id=f'{day}:{i}',entry_date=day,actual_net_pnl_krw=10,actual_profit_rate=1,
+            rows.append(dict(trade_id=f'{day}:{i}',entry_date=day,actual_net_pnl_krw=10,actual_profit_rate=1,modeled_parent_net_pnl_krw=10,original_notional_krw=1000,
                 cap_candidates={mode:dict(status='partial_unfilled',candidate_net_pnl_krw=value,candidate_net_pct_on_parent_notional=value/10) for mode,value in [('cap_10pct',20),('cap_15pct',15)]}))
     selected,metrics=cap_selection(rows,'parent_5stage',30)
     assert selected=='cap_10pct'
@@ -113,6 +113,127 @@ def test_holdout_changes_acceptance_never_train_choice_or_next_best():
     assert selected=='parent_5stage'
     assert metrics['cap_10pct']['train_selected_candidate_sha256']==before
     assert metrics['cap_15pct']['selection_eligible'] is False
+
+
+def _prevalidated_joint_selection(tmp_path, monkeypatch, outcomes, *, algorithm=None,
+                                 shapes=None, following=None):
+    """Exercise aggregation/selection after independently validated source intake.
+
+    Source protocol validation has integration coverage below; this fixture
+    controls each paired economic outcome without inventing broker data.
+    """
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.scalping import initial_quantity_refresh_evaluation as evaluation
+    from src.engine.scalping import initial_quantity_timeout_research as timeout_module
+    from src.engine.scalping import initial_quantity_following_bars as following_module
+    parent, path = parent_fixture(tmp_path)
+    days = ('2026-10-05', '2026-10-06', '2026-10-07')
+    rows, facts, cases = [], [], []
+    grid = {mode: dict(mode=mode, shape=(shapes or {}).get(mode, 'parent'),
+                      horizon=None, reserve=5) for mode in outcomes}
+    for day in days:
+        for index in range(20):
+            tid = f'{day}:{index}'
+            parent_net = 20. if index % 2 == 0 else -18.
+            rows.append(dict(trade_id=tid, record_id=tid, entry_date=day,
+                             quantity_type='KRX_PARENT', actual_net_pnl_krw=parent_net,
+                             actual_profit_rate=parent_net / 10))
+            facts.append(dict(recommendation_id=tid, sell_time=day+'T10:00:00+09:00'))
+            for key, callback in outcomes.items():
+                result = callback(day, index, parent_net)
+                candidate, status = result if isinstance(result, tuple) else (result, 'paired')
+                cases.append(dict(trade_id=tid, key=key, outcome=dict(status=status,
+                    candidate_net_pnl_krw=candidate, modeled_parent_net_pnl_krw=parent_net,
+                    candidate_net_pct_on_parent_notional=candidate / 10,
+                    parent_net_pct_on_parent_notional=parent_net / 10,
+                    verified_price_cross_count=1)))
+    report = dict(trades=rows, source_date=days[-1], report_content_sha256='c'*64,
+                  census=dict(input_fact_rows=facts, entry_on_or_after=policy.refresh_window(parent), excluded={}))
+    evidence = tmp_path / 'joint'
+    evidence.mkdir()
+    timeout = dict(joint_grid=grid, joint_evidence_root=str(evidence.resolve()),
+                   joint_outcomes_ref=storage.write_tree(evidence, cases), census=report['census'])
+    monkeypatch.setattr(evaluation, 'replay_valid', lambda _: True)
+    monkeypatch.setattr(timeout_module, 'timeout_research_valid', lambda *a, **kw: True)
+    monkeypatch.setattr(following_module, 'following_bar_source_valid', lambda *a: True)
+    receipt = dict(actual_pid_consumed=True, policy_content_sha256=parent['policy_content_sha256'],
+                   daily_pid_receipts=[dict(entry_date=day, pid=123, verified_at=day+'T08:00:00+09:00') for day in days])
+    return evaluation.evaluate(report, parent_policy=parent, parent_policy_file_sha256=policy._file_sha256(path),
+        pid_receipt=receipt, terminal_receipt=dict(report_content_sha256=report['report_content_sha256'],
+            terminal=True, costed_completed_trade_count=len(rows)), timeout_research=timeout,
+        enforce_trade_lineage=False, following_bars=following, evaluation_algorithm=algorithm)
+
+
+def test_joint_selection_ranks_all_trade_ev_and_keeps_v2_frozen(tmp_path, monkeypatch):
+    from src.engine.scalping.initial_quantity_refresh_evaluation import VERSION, SELECTION_VERSION
+    outcomes = {'cap_10pct': lambda day, i, p: 15 if p > 0 else -7,
+                'cap_15pct': lambda day, i, p: 23 if p > 0 else -19}
+    result = _prevalidated_joint_selection(tmp_path / 'current', monkeypatch, outcomes)
+    choice = result['type_decisions']['KRX_PARENT']
+    assert result['evaluation_algorithm'] == SELECTION_VERSION
+    assert result['global_blockers'] == [] and result['state'] == 'eligible_source_only'
+    assert choice['selected_ratio_mode'] == 'cap_10pct'
+    assert choice['joint_candidate_metrics']['cap_10pct']['train']['winner_weighted_delta_pct'] < 0
+    assert choice['joint_candidate_metrics']['cap_10pct']['train']['mean_delta_pct'] == pytest.approx(.3)
+    old = _prevalidated_joint_selection(tmp_path / 'legacy', monkeypatch, outcomes, algorithm=VERSION)
+    assert old['evaluation_algorithm'] == VERSION
+    assert old['type_decisions']['KRX_PARENT']['selected_ratio_mode'] == 'cap_15pct'
+
+
+def test_joint_selection_rejects_winner_gain_with_worse_all_trade_profit(tmp_path, monkeypatch):
+    result = _prevalidated_joint_selection(tmp_path, monkeypatch,
+        {'cap_10pct': lambda day, i, p: 25 if p > 0 else -30})
+    choice = result['type_decisions']['KRX_PARENT']
+    metric = choice['joint_candidate_metrics']['cap_10pct']
+    assert metric['train']['winner_weighted_delta_pct'] > 0
+    assert metric['train']['delta'] < 0 and metric['train_eligible'] is False
+    assert choice['train_selected_candidate'] is None
+    assert result['state'] == 'carry_parent'
+
+
+def test_joint_partial_and_no_fill_remain_in_same_denominator(tmp_path, monkeypatch):
+    statuses = ('paired', 'partial_unfilled', 'modeled_no_fill')
+    result = _prevalidated_joint_selection(tmp_path, monkeypatch,
+        {'cap_10pct': lambda day, i, p: (0 if i % 3 == 2 else p + 6, statuses[i % 3])})
+    metric = result['type_decisions']['KRX_PARENT']['joint_candidate_metrics']['cap_10pct']['train']
+    assert metric['count'] == 40 and metric['coverage'] == 1
+    deltas = [(0 if i % 3 == 2 else (20 if i % 2 == 0 else -18) + 6)
+              - (20 if i % 2 == 0 else -18) for i in range(20)]
+    assert metric['mean_delta_pct'] == pytest.approx(sum(deltas) / 20 / 10)
+
+
+def test_joint_holdout_cannot_choose_next_candidate_or_change_train_sha(tmp_path, monkeypatch):
+    outcomes = {'cap_10pct': lambda day, i, p: p + 6,
+                'cap_15pct': lambda day, i, p: p + 4}
+    before = _prevalidated_joint_selection(tmp_path / 'before', monkeypatch, outcomes)
+    outcomes['cap_10pct'] = lambda day, i, p: p - 100 if day == '2026-10-07' else p + 6
+    after = _prevalidated_joint_selection(tmp_path / 'after', monkeypatch, outcomes)
+    a, b = (value['type_decisions']['KRX_PARENT'] for value in (before, after))
+    assert a['train_selected_candidate'] == b['train_selected_candidate'] == 'cap_10pct'
+    assert a['train_selected_candidate_sha256'] == b['train_selected_candidate_sha256']
+    assert a['holdout_passed'] is True and b['holdout_passed'] is False
+    assert b['selected_ratio_mode'] == 'parent_5stage'
+
+
+def test_joint_train_following_coverage_is_independent_of_holdout(tmp_path, monkeypatch):
+    outcomes = {'cap_10pct': lambda day, i, p: p + 6}
+    train_links = {f'{day}:{i}': dict(first_lower_elapsed_from_fill_minute=2)
+                   for day in ('2026-10-05', '2026-10-06') for i in range(0, 20, 2)}
+    before = _prevalidated_joint_selection(tmp_path / 'before', monkeypatch, outcomes,
+        shapes={'cap_10pct': 'two_leg_0_1tick'}, following=dict(trades=train_links,
+            weighted_by_type={'KRX_PARENT': dict(observed_minute_lower_count=20)}))
+    holdout_links = {f'2026-10-07:{i}': dict(first_lower_elapsed_from_fill_minute=2) for i in range(0, 20, 2)}
+    after = _prevalidated_joint_selection(tmp_path / 'after', monkeypatch, outcomes,
+        shapes={'cap_10pct': 'two_leg_0_1tick'}, following=dict(trades={**train_links, **holdout_links},
+            weighted_by_type={'KRX_PARENT': dict(observed_minute_lower_count=30)}))
+    a, b = (value['type_decisions']['KRX_PARENT'] for value in (before, after))
+    assert a['train_selected_candidate'] == b['train_selected_candidate'] == 'cap_10pct'
+    assert a['train_selected_candidate_sha256'] == b['train_selected_candidate_sha256']
+
+
+def test_refresh_unknown_selection_algorithm_fails_closed():
+    with pytest.raises(ValueError, match='refresh_selection_algorithm_invalid'):
+        cap_selection([], 'parent_5stage', 30, evaluation_algorithm='future-unknown')
 
 
 def test_joint_replay_probe_is_two_slots_and_price_time_bound():
@@ -153,6 +274,25 @@ def test_cost_only_warm_features_do_not_decode_pipeline(tmp_path,monkeypatch):
     assert corrected['report_content_sha256']!=cold['report_content_sha256']
 
 
+def test_refresh_original_notional_is_fact_bound_and_old_rows_remain_readable(tmp_path):
+    day = '2026-10-08'
+    _quality(tmp_path, day)
+    report = policy.build_initial_quantity_replay(day, data_dir=tmp_path,
+        fact_rows=[actual_fact()], entry_on_or_after='2026-09-29')
+    assert report['trades'][0]['original_notional_krw'] == 100000
+    assert policy.initial_replay_economics_valid(report)
+    changed = copy.deepcopy(report)
+    changed['trades'][0]['original_notional_krw'] = 1
+    changed['report_content_sha256'] = policy._digest({k: v for k, v in changed.items()
+                                                     if k != 'report_content_sha256'})
+    assert policy.initial_replay_economics_valid(changed) is False
+    legacy = copy.deepcopy(report)
+    del legacy['trades'][0]['original_notional_krw']
+    legacy['report_content_sha256'] = policy._digest({k: v for k, v in legacy.items()
+                                                    if k != 'report_content_sha256'})
+    assert policy.initial_replay_economics_valid(legacy)
+
+
 def parent_fixture(tmp_path):
     from src.engine.scalping.initial_quantity_activation import build_initial_quantity_baseline
     from src.engine.scalping.initial_quantity_following_bars import build_following_bar_source
@@ -183,6 +323,41 @@ def test_v2_same_date_successors_and_consumer_pointer(tmp_path):
     ref=json.loads((base/'committed_stage.json').read_bytes());ref['stage_sha256']='0'*64
     (base/'committed_stage.json').write_text(json.dumps(ref))
     with pytest.raises(ValueError,match='quantity_stage_reference_invalid'):policy.committed_refresh_stage_path(base,day)
+
+
+def test_public_stage_validator_preserves_v2_and_accepts_v3_selection(tmp_path, monkeypatch):
+    from src.engine.scalping.initial_quantity_refresh_evaluation import VERSION, SELECTION_VERSION
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    parent, path = parent_fixture(tmp_path)
+    day = '2026-10-08'
+    report = policy.build_initial_quantity_replay(day, data_dir=tmp_path, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent))
+    timeout = build_timeout_research(day, data_dir=tmp_path, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent), replay=report)
+    original = policy.evaluate_refresh_quantity_candidate
+    def frozen_v2(*args, **kwargs):
+        kwargs.setdefault('evaluation_algorithm', VERSION)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(policy, 'evaluate_refresh_quantity_candidate', frozen_v2)
+    old_stage = policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+        parent_policy_path=path, output_dir=tmp_path/'old', timeout_research=timeout,
+        terminal_receipt=policy._natural_refresh_terminal_receipt(report))
+    monkeypatch.setattr(policy, 'evaluate_refresh_quantity_candidate', original)
+    assert policy.refresh_quantity_stage_terminal_valid(old_stage)
+    assert json.loads(Path(old_stage['evaluation_path']).read_bytes())['evaluation_algorithm'] == VERSION
+    stage = policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+        parent_policy_path=path, output_dir=tmp_path/'current', timeout_research=timeout,
+        terminal_receipt=policy._natural_refresh_terminal_receipt(report))
+    assert policy.refresh_quantity_stage_terminal_valid(stage)
+    evaluation_path = Path(stage['evaluation_path'])
+    evaluation = json.loads(evaluation_path.read_bytes())
+    assert evaluation['evaluation_algorithm'] == SELECTION_VERSION
+    evaluation['evaluation_algorithm'] = 'future-unknown'
+    evaluation_path.write_text(json.dumps(evaluation))
+    changed = {**stage, 'evaluation_file_sha256': policy._file_sha256(evaluation_path)}
+    changed['receipt_content_sha256'] = policy._digest({k: v for k, v in changed.items()
+                                                       if k != 'receipt_content_sha256'})
+    assert policy.refresh_quantity_stage_terminal_valid(changed) is False
 
 
 def test_refresh_publication_accepts_only_the_known_release_data_link(tmp_path, monkeypatch):

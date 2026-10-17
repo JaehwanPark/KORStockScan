@@ -1136,6 +1136,108 @@ def test_atomic_sizing_lineage_joins_plan_and_one_leg_without_double_count():
     assert row["terminal_state"] == "not_observed"
 
 
+def test_compact_execution_dates_preserve_112_event_population_without_source_rewrite():
+    day = "2026-10-16"
+    stages = {"entry_execution_sizing_plan": 9, "order_leg_sent": 10,
+              "order_bundle_submitted": 8, "entry_ai_economic_plan_observed": 22,
+              "entry_ai_economic_decision_available": 22, "entry_probe_conditional_receipt_observed": 28,
+              "entry_ai_economic_source_gap": 13}
+    events = [dict(stage=stage, emitted_date=day,
+                   emitted_at=f"{day}T14:00:00+09:00", record_id=str(index),
+                   fields={"entry_submit_attempt_id": f"attempt-{index}"})
+              for stage, count in stages.items() for index in range(count)]
+    original = copy.deepcopy(events)
+    details = []
+    allowed, excluded = split_plan._source_quality_filtered_events(events,
+        {day: {"tuning_input_allowed": True}}, exclusion_details=details)
+    assert len(allowed) == 112 and excluded == 0 and details == []
+    assert all(event["source_date"] == day for event in allowed)
+    assert all("entry_submit_attempt_id" in event for event in allowed)
+    assert events == original
+
+
+@pytest.mark.parametrize("timestamp", ["2026-10-16T10:00:00+09:00", "2026-10-15T15:00:00Z"])
+def test_execution_source_date_uses_emitted_at_and_kst_day(timestamp):
+    allowed, excluded = split_plan._source_quality_filtered_events(
+        [dict(stage="order_leg_sent", emitted_at=timestamp)],
+        {"2026-10-16": {"tuning_input_allowed": True}})
+    assert excluded == 0 and allowed[0]["source_date"] == "2026-10-16"
+
+
+def test_atomic_sizing_census_rejects_unexplained_deficit_even_when_no_rows_survive():
+    day = "2026-10-16"
+    plan, leg, bundle, source = _atomic_lineage_fixture(day)
+    source["stage_census"] = {event["stage"]: {"valid_count": 1}
+                              for event in (plan, leg, bundle)}
+    for events in ([], [plan, leg]):
+        lineage = split_plan.build_atomic_execution_sizing_lineage(day, events,
+            source_generation=source)
+        assert lineage["status"] == "source_gap" and lineage["selection_blocked"] is True
+        assert lineage["source_quality_reason"] == "producer_stage_census_mismatch"
+        row = lineage["reader_population_conservation"]["stages"]["order_bundle_submitted"]
+        assert row == dict(expected=1, observed=0, verified_excluded=0, unobserved=1, unexpected=0)
+
+
+def test_atomic_sizing_census_preserves_explicit_stage_exclusion_without_blanket_block():
+    day = "2026-10-16"
+    plan, leg, bundle, source = _atomic_lineage_fixture(day)
+    excluded_event = dict(stage="entry_execution_sizing_plan_block", emitted_date=day,
+                          record_id="bad-record", entry_submit_attempt_id="bad-attempt")
+    source["stage_census"] = {event["stage"]: {"valid_count": 1}
+                              for event in (plan, leg, bundle, excluded_event)}
+    details = []
+    allowed, excluded = split_plan._source_quality_filtered_events(
+        [plan, leg, bundle, excluded_event],
+        {day: {"tuning_input_allowed": True,
+               "hard_blocking_stages": ["entry_execution_sizing_plan_block"]}},
+        exclusion_details=details)
+    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
+        source_generation=source, source_quality_exclusions=details)
+    assert excluded == 1 and lineage["status"] == "ready"
+    assert lineage["counts"]["valid_plan_count"] == 1
+    assert lineage["source_quality_exclusions"][0]["record_id"] == "bad-record"
+    assert lineage["reader_population_conservation"]["verified_quality_excluded_count"] == 1
+    assert lineage["reader_population_conservation"]["stages"]["entry_execution_sizing_plan_block"]["unobserved"] == 0
+    corrupt = copy.deepcopy(details)
+    corrupt[0]["source_quality_contract"]["hard_blocking_stages"] = []
+    assert split_plan.build_atomic_execution_sizing_lineage(day, allowed,
+        source_generation=source, source_quality_exclusions=corrupt)["status"] == "source_gap"
+
+
+@pytest.mark.parametrize("fault", ["missing_date", "invalid_date", "preflight_missing", "global_block"])
+def test_atomic_census_does_not_accept_unknown_or_globally_blocked_rows_as_verified_exclusions(fault):
+    day = "2026-10-16"
+    event = dict(stage="entry_execution_sizing_plan", emitted_date=day, record_id="record-1")
+    quality = {day: {"tuning_input_allowed": True}}
+    if fault == "missing_date":
+        event.pop("emitted_date")
+    elif fault == "invalid_date":
+        event["emitted_date"] = "2026-10-99"
+    elif fault == "preflight_missing":
+        quality = {}
+    else:
+        quality[day]["tuning_input_allowed"] = False
+    details = []
+    allowed, excluded = split_plan._source_quality_filtered_events([event], quality,
+        exclusion_details=details)
+    source = dict(status="ready", source_date=day, generation_sha256="a" * 64,
+                  stage_census={event["stage"]: {"valid_count": 1}})
+    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
+        source_generation=source, source_quality_exclusions=details)
+    assert allowed == [] and excluded == 1
+    assert lineage["status"] == "source_gap"
+    assert len(lineage["reader_population_conservation"]["unverified_quality_exclusions"]) == 1
+
+
+@pytest.mark.parametrize("invalid_count", [-1, True, "0"])
+def test_atomic_census_rejects_invalid_declared_count(invalid_count):
+    lineage = split_plan.build_atomic_execution_sizing_lineage("2026-10-16", [],
+        source_generation=dict(status="ready", source_date="2026-10-16",
+            generation_sha256="a" * 64,
+            stage_census={"entry_execution_sizing_plan": {"valid_count": invalid_count}}))
+    assert lineage["status"] == "source_gap"
+
+
 def test_atomic_sizing_lineage_resolves_exact_immediate_plan_leg_index():
     plan, leg, bundle, source = _atomic_lineage_fixture()
     core = {**plan["entry_execution_sizing_plan"], "total_qty": 1,
@@ -1232,6 +1334,70 @@ def test_atomic_residual_sealed_parent_joins_distinct_intents_without_source_rew
     assert row["submitted_legs"][1]["resolved_plan_leg_index"] == 2
     assert row["submitted_legs"][1]["leg_index"] is None
     assert row["residual_plan_bindings"][0]["original_event_sha256"] == split_plan._canonical_sha256(original[2])
+
+
+def test_wrapped_compact_residual_survives_quality_normalization_and_census_join():
+    day, events, source, registry = _atomic_residual_fixture()
+    wrapped = [dict(stage=event["stage"], emitted_date=day,
+        emitted_at=event.get("emitted_at", day+"T10:01:00+09:00"),
+        record_id=event["record_id"], fields={key: value for key, value in event.items()
+            if key not in {"stage", "source_date", "emitted_at", "record_id"}})
+        for event in events]
+    original = copy.deepcopy(wrapped)
+    source["stage_census"] = {
+        "entry_execution_sizing_plan": {"valid_count": 1},
+        "order_leg_sent": {"valid_count": 2}, "order_bundle_submitted": {"valid_count": 1}}
+    details = []
+    allowed, excluded = split_plan._source_quality_filtered_events(wrapped,
+        {day: {"tuning_input_allowed": True}}, exclusion_details=details)
+    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
+        source_generation=source, registry_events=registry, source_quality_exclusions=details)
+    assert excluded == 0 and wrapped == original
+    assert lineage["status"] == "ready"
+    assert lineage["counts"]["unjoined_submit_count"] == 0
+    assert len(lineage["rows"][0]["residual_plan_bindings"]) == 1
+    assert lineage["reader_population_conservation"]["status"] == "verified"
+
+
+def test_full_input_reader_preserves_residual_parent_context_and_registry_identity(monkeypatch, tmp_path):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    day, events, source, registry = _atomic_residual_fixture()
+    wrapped = [dict(stage=event['stage'], pipeline='ENTRY_PIPELINE', emitted_date=day,
+        emitted_at=event.get('emitted_at', day+'T10:01:00+09:00'),
+        record_id=event['record_id'], stock_code=event['stock_code'],
+        fields={key: value for key, value in event.items()
+                if key not in {'stage', 'source_date', 'emitted_at', 'record_id', 'stock_code'}})
+        for event in events]
+    path = data_dir/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    _write_jsonl(path, wrapped)
+    original = path.read_bytes()
+    source['stage_census'] = {stage: dict(valid_count=sum(event['stage'] == stage for event in events))
+        for stage in ('entry_execution_sizing_plan', 'entry_execution_sizing_plan_block',
+                      'order_leg_sent', 'order_bundle_submitted')}
+    quality = dict(status='pass', tuning_input_allowed=True, hard_blocking_stages=[])
+    monkeypatch.setattr(split_plan, '_source_quality_summary', lambda _day: quality)
+    monkeypatch.setattr(split_plan, 'is_date_allowed', lambda *_: True)
+    rows, _ = split_plan._iter_input_events(day)
+    details = []
+    allowed, excluded = split_plan._source_quality_filtered_events(rows, {day: quality},
+        exclusion_details=details)
+    lineage = split_plan.build_atomic_execution_sizing_lineage(day, allowed,
+        source_generation=source, registry_events=registry, source_quality_exclusions=details)
+    assert path.read_bytes() == original
+    assert excluded == 0 and lineage['status'] == 'ready'
+    assert lineage['reader_population_conservation']['status'] == 'verified'
+    assert lineage['counts']['unjoined_submit_count'] == 0
+    assert len(lineage['rows'][0]['residual_plan_bindings']) == 1
+    assert lineage['rows'][0]['submitted_qty'] == lineage['rows'][0]['filled_qty'] == 3
+    # The actual full-report consumer must use the same projection and outcome.
+    monkeypatch.setattr(split_plan, '_atomic_sizing_source_generation', lambda _day: source)
+    monkeypatch.setattr(split_plan, '_execution_registry_snapshot',
+        lambda: (registry, dict(status='verified')))
+    report = split_plan.build_report(day, write=False)
+    atomic = report['input_summary']['atomic_execution_sizing']
+    assert atomic['lineage']['status'] == 'ready'
+    assert atomic['lineage']['counts']['unjoined_submit_count'] == 0
+    assert len(atomic['lineage']['rows'][0]['residual_plan_bindings']) == 1
 
 
 @pytest.mark.parametrize("fault", ["hash", "parent", "bundle", "owner", "quantity", "tag",
@@ -5396,6 +5562,25 @@ def test_large_pipeline_and_threshold_logs_reuse_one_execution_projection(monkey
     assert projection_calls == [day]
     assert len(events) == 1
     assert summary["execution_projection_reused_source_names"] == ["threshold_events"]
+
+
+def test_input_reader_never_assigns_target_day_to_undated_event(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-10-16"
+    path = split_plan._pipeline_events_path(day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(stage="entry_execution_sizing_plan_block",
+                                  record_id="undated-record"))+"\n")
+    monkeypatch.setattr(split_plan, "_source_quality_summary", lambda _day: {"tuning_input_allowed": True})
+    monkeypatch.setattr(split_plan, "is_date_allowed", lambda _day, _policy: True)
+    rows, summary = split_plan._iter_input_events(day)
+    assert len(rows) == 1 and rows[0]["source_date"] == ""
+    details = []
+    allowed, excluded = split_plan._source_quality_filtered_events(rows,
+        {day: {"tuning_input_allowed": True}}, exclusion_details=details)
+    assert allowed == [] and excluded == 1
+    assert details[0]["reason"] == "source_date_missing_or_invalid"
+    assert summary["excluded_pre_baseline_count"] == 0
 
 
 def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(monkeypatch, tmp_path):

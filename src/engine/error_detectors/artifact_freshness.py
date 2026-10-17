@@ -620,6 +620,13 @@ def _quantity_stage_observation(stage, source_date, read):
                 or parent['effective_from'] > source_date):
             raise ValueError('quantity_stage_parent_contract_invalid')
         evaluation = child('evaluation')
+        from src.engine.scalping.initial_quantity_refresh_evaluation import VERSION, SELECTION_VERSION
+        execution_version = report.get('evaluation_algorithm')
+        selection_version = evaluation.get('evaluation_algorithm')
+        if (execution_version not in {None, VERSION}
+                or (execution_version == VERSION and selection_version not in {VERSION, SELECTION_VERSION})
+                or (execution_version is None and selection_version is not None)):
+            raise ValueError('quantity_stage_selection_algorithm_invalid')
         if (stage.get('applied_policy_lineage_schema') != 'initial_quantity_trade_policy_binding_v1'
                 or stage.get('decision') not in {'carry_parent', 'eligible_source_only'}
                 or _digest(evaluation) != stage['evaluation_content_sha256']

@@ -98,11 +98,12 @@
 
   - 완료: `a41ebc84f` 다음 정규 기동용 배포, 격리 read/schema/code·128범위 parity·사후 current_full_contract PASS. 기존 env/정책·원 6개 OPEN·actual_pid_consumed=false 보존. [최종 배포 검증](../audits/nonfixed-quote-deployment-and-isolated-policy-review-2026-10-17.md).
 
-- [ ] `[InitialQuantityResearchRepair1017] 최초 수량 연구 입력·비용 대사와 전체 거래 EV 선정 수리` (`Due: 2026-10-17`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+- [x] `[InitialQuantityResearchRepair1017] 최초 수량 연구 입력·비용 대사와 전체 거래 EV 선정 수리` (`Due: 2026-10-17`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: 사용자 다음액션 실행 및 익절 가중 후보 생성·전체 거래 비용 후 EV 최종 선정 확정, [수량 후속 연구 계약](../proposals/initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md#7-2026-10-17-후속-연구-실행-계약).
   - 범위: 최신 선택 코드 기준 격리 작업본에서 IQ171–IQ175의 재현 여부·원천 세대를 고정하고 남은 날짜/입력 보존 및 v3 선정기를 수정한다. 비용·capture는 거래/attempt별 검증 복구·역사 결손·추가 원천 대기를 구별한다.
   - Acceptance: bounded 원천/fact 및 실제 이벤트 모수 대사, 전체 거래 EV·순이익 선정·원금/비용/부분체결·독립 holdout·v2/v3 stage 호환 회귀, 적격 fixture 성능·실제 source-gap 구분, 코드리뷰·수정·재리뷰와 print-only 문서 검증. 새 정책의 경제성·PREOPEN/PID 자연 소비는 별도 영수증으로 확인한다.
-  - 진행: 선택 c5aeda844 기준 작업본 고정. 현재 fact16/완료13/보유3·비용 적격0, 입력 검증3일 PASS, compact 실행112/112 소비. 정확 비용 집계의 공식 계약 미정은 임의 배분 없이 원천 결손으로 보존하며 선정 v3와 구 평가 reader 호환을 검증 중이다.
+  - 완료: `c4467c424` 격리 구현·독립 리뷰·수정·회귀900개와 보완 의미감시71개 PASS, 입력3일·compact112/112·실제 lineage8발행/1유예/10leg PASS. v3 전체 거래 EV 선정과 구 v2 reader 호환, 전수 fixture 결과 동등·캐시·성능 예산을 검증했다. [최종 실행·배포 검토](../audits/initial-quantity-research-execution-review-2026-10-17.md).
+  - 배포: 10/19 다음 정규 기동용 선택·준비본 발행, native current_full_contract·strict/controller·release/cron/PREOPEN/start 경로 대사 PASS. 기존 정책값·승인 보조2개·원 OPEN6개 유지, 재시작/주문0·actual_pid_consumed=false다. fact16/완료13/보유3·비용 적격0의 정확 비용/귀속 결손은 InitialQuantityProducerConsumerRepair1010, 실제 PREOPEN/PID는 DirectFamilyPreopenPolicyHandoff가 계속 소유한다.
 
 
 - [x] `[PreSubmitDelaySituationResearch1017] 매수 지연 선정 근거·재점검 연결·단기 관측 연구 구현` (`Due: 2026-10-17`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)

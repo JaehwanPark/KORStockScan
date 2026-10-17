@@ -215,6 +215,8 @@ CALIBRATION_EVENT_KEYS = frozenset(
         "buy_owner_type",
         "buy_owner_id",
         "buy_account_key",
+        "buy_owner_client_intent_id",
+        "buy_position_cycle_id",
         "owner_registry_intent_id",
         "buy_registry_mode",
         "broker_submission_reconciliation_required",
@@ -222,6 +224,13 @@ CALIBRATION_EVENT_KEYS = frozenset(
         "broker_route",
         "dmst_stex_tp",
         "entry_split_order_leg_index",
+        # Residuals retain the sealed parent/probe and owner identities needed
+        # by the offline lineage reader; these fields grant no order authority.
+        "entry_split_order_probe_first_applied",
+        "entry_split_order_probe_bundle_id",
+        "entry_cancel_wait_submission_context",
+        "residual_source_only",
+        "tag",
         "entry_price_plan_schema",
         "entry_price_plan_id",
         "entry_price_plan_owner",
@@ -1824,12 +1833,10 @@ def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
 def _event_date(event: dict[str, Any]) -> str:
     for key in ("date", "target_date", "source_date", "trading_date", "signal_date", "emitted_date"):
         value = str(event.get(key) or "").strip()
-        if len(value) >= 10:
+        if len(value) >= 10 and _valid_iso_date(value[:10]):
             return value[:10]
-    ts = str(
-        event.get("timestamp") or event.get("created_at") or event.get("ts") or ""
-    ).strip()
-    return ts[:10] if len(ts) >= 10 else ""
+    observed_at = _event_dt(event)
+    return observed_at.date().isoformat() if observed_at is not None else ""
 
 
 def _event_dt(event: dict[str, Any]) -> datetime | None:
@@ -1923,8 +1930,8 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
             if event.get("stage") in {"entry_execution_sizing_plan", "entry_probe_conditional_receipt_observed"}:
                 native_plan_events.extend(_load_entry_events(target_date, rows=[event]))
             fields = _event_fields(event)
-            event_date = _event_date(fields) or target_date
-            if not is_date_allowed(event_date, clean_policy):
+            event_date = _event_date(fields)
+            if event_date and not is_date_allowed(event_date, clean_policy):
                 excluded_pre_baseline += 1
                 continue
             stage = str(fields.get("stage") or fields.get("event") or "").strip()
@@ -2309,21 +2316,35 @@ def _serialize_variant_value_map(
 def _source_quality_filtered_events(
     events: list[dict[str, Any]],
     source_quality_by_date: dict[str, dict[str, Any]],
+    *,
+    exclusion_details: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     included: list[dict[str, Any]] = []
     excluded = 0
-    for fields in events:
+    for event in events:
+        fields = _event_fields(event)
         source_date = str(fields.get("source_date") or _event_date(fields) or "")[:10]
-        quality = source_quality_by_date.get(
-            source_date, {"tuning_input_allowed": False}
-        )
+        quality = source_quality_by_date.get(source_date, {})
         stage = str(fields.get("stage") or fields.get("event") or "").strip()
-        if quality.get("tuning_input_allowed") is not True or stage in set(
-            quality.get("hard_blocking_stages") or []
-        ):
+        reason = (
+            "source_date_missing_or_invalid" if not _valid_iso_date(source_date) else
+            "source_quality_preflight_missing" if source_date not in source_quality_by_date else
+            "source_quality_input_blocked" if quality.get("tuning_input_allowed") is not True else
+            "source_quality_stage_excluded" if stage in set(quality.get("hard_blocking_stages") or []) else
+            None)
+        if reason:
             excluded += 1
+            if exclusion_details is not None:
+                contract = _source_quality_contract(quality)
+                exclusion_details.append(dict(
+                    stage=stage, source_date=source_date or None,
+                    record_id=fields.get("record_id"),
+                    attempt_id=fields.get("entry_submit_attempt_id") or fields.get("buy_parent_id"),
+                    event_sha256=_canonical_sha256(fields), reason=reason,
+                    source_quality_contract=contract,
+                    source_quality_contract_sha256=_source_quality_contract_sha256(quality)))
             continue
-        included.append(fields)
+        included.append({**fields, "source_date": source_date})
     return included, excluded
 
 
@@ -3376,6 +3397,7 @@ def build_atomic_execution_sizing_lineage(
     *,
     source_generation: dict[str, Any] | None = None,
     registry_events: list[dict[str, Any]] | None = None,
+    source_quality_exclusions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Reconcile plan rows and real leg orders without counting bundle events twice.
 
@@ -3750,17 +3772,59 @@ def build_atomic_execution_sizing_lineage(
     stage_census = source_generation.get("stage_census")
     producer_counts = None
     census_mismatch = False
+    conservation: dict[str, Any] = dict(status="legacy_census_unavailable", stages={},
+        quality_excluded_count=len(source_quality_exclusions or []))
     if isinstance(stage_census, dict):
+        # Account for both missing and extra reader rows. Only identified,
+        # contract-bound stage exclusions may explain a smaller population.
         producer_counts = {
-            stage: {name: _safe_int((stage_census.get(stage) or {}).get(name), 0)
+            stage: {name: (stage_census.get(stage, {}).get(name, 0)
+                          if isinstance(stage_census.get(stage, {}), dict) else None)
                     for name in ("raw_event_count", "valid_count", "excluded_count",
                                  "quarantined_count", "unobserved_count")}
             for stage in census_stages
         }
         retained = Counter(event["stage"] for event in selected)
-        census_mismatch = any(
-            retained[stage] > producer_counts[stage]["valid_count"] for stage in census_stages
-        )
+        verified_exclusions: Counter[str] = Counter()
+        unverified_exclusions = []
+        seen_exclusions = set()
+        for exclusion in source_quality_exclusions or []:
+            if exclusion.get("stage") not in census_stages:
+                continue
+            contract = exclusion.get("source_quality_contract")
+            if not isinstance(contract, dict):
+                unverified_exclusions.append(exclusion)
+                continue
+            identity = exclusion.get("event_sha256")
+            if (exclusion.get("reason") != "source_quality_stage_excluded"
+                    or exclusion.get("source_date") != target_date
+                    or not _valid_generation_id(identity)
+                    or identity in seen_exclusions
+                    or contract.get("tuning_input_allowed") is not True
+                    or exclusion["stage"] not in contract.get("hard_blocking_stages", [])
+                    or exclusion.get("source_quality_contract_sha256")
+                       != _source_quality_contract_sha256(contract)):
+                unverified_exclusions.append(exclusion)
+                continue
+            seen_exclusions.add(identity)
+            verified_exclusions[exclusion["stage"]] += 1
+        conservation_rows = {}
+        for stage in sorted(census_stages):
+            expected = producer_counts[stage]["valid_count"]
+            valid_expected = type(expected) is int and expected >= 0
+            observed = retained[stage]
+            excluded = verified_exclusions[stage]
+            conservation_rows[stage] = dict(
+                expected=expected, observed=observed, verified_excluded=excluded,
+                unobserved=max(0, expected - observed - excluded) if valid_expected else None,
+                unexpected=max(0, observed + excluded - expected) if valid_expected else None)
+            if not valid_expected or observed + excluded != expected:
+                census_mismatch = True
+        census_mismatch = census_mismatch or bool(unverified_exclusions)
+        conservation = dict(status="source_gap" if census_mismatch else "verified",
+            stages=conservation_rows, quality_excluded_count=len(source_quality_exclusions or []),
+            verified_quality_excluded_count=sum(verified_exclusions.values()),
+            unverified_quality_exclusions=unverified_exclusions)
     projection = source_generation.get("reader_projection")
     projection_ready = (not isinstance(projection, dict)
                         or projection.get("status") in {"ready", "valid_empty"})
@@ -3783,6 +3847,8 @@ def build_atomic_execution_sizing_lineage(
     return {"schema": ATOMIC_SIZING_LINEAGE_SCHEMA, "source_date": target_date,
             "status": status, "source_generation": source_generation,
             "producer_source_counts": producer_counts,
+            "reader_population_conservation": conservation,
+            "source_quality_exclusions": source_quality_exclusions or [],
             "source_quality_reason": quality_reason,
             "counts": counts, "rows": rows,
             "unjoined_submits": unjoined_submits,
@@ -6541,29 +6607,16 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     if isinstance(atomic_lineage, dict) and atomic_lineage.get("schema") == ATOMIC_SIZING_LINEAGE_SCHEMA:
         # A bounded model refresh also owns the current reader projection. Keeping
         # the old atomic verdict here made corrected readers ineffective forever.
-        allowed_events, excluded_events = _source_quality_filtered_events(
-            events, {target_date: _source_quality_summary(target_date)})
+        quality_exclusions: list[dict[str, Any]] = []
+        allowed_events, _ = _source_quality_filtered_events(
+            events, {target_date: _source_quality_summary(target_date)},
+            exclusion_details=quality_exclusions)
         current_generation["reader_projection"] = _atomic_sizing_projection_identity(
             projection, current_generation.get("stage_census"))
         current_lineage = build_atomic_execution_sizing_lineage(target_date, allowed_events,
             source_generation=current_generation,
-            registry_events=registry if registry_contract.get("status") == "verified" else None)
-        # Producer coverage and the actual reader population must both survive
-        # quality filtering. A nonempty source must never become ready-empty.
-        stages = ("entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
-                  "order_leg_sent", "order_bundle_submitted")
-        observed = Counter(str(_event_fields(event).get("stage") or "") for event in allowed_events)
-        expected = current_generation.get("stage_census") or {}
-        conservation = {stage: {"expected": expected[stage].get("valid_count", 0),
-                                "observed": observed[stage]}
-                        for stage in stages if isinstance(expected.get(stage), dict)}
-        mismatch = any(type(row["expected"]) is not int or row["expected"] != row["observed"]
-                       for row in conservation.values())
-        current_lineage["reader_population_conservation"] = dict(
-            status="source_gap" if mismatch else "verified" if conservation else "legacy_census_unavailable",
-            stages=conservation, quality_excluded_count=excluded_events)
-        if mismatch:
-            current_lineage.update(status="source_gap", selection_blocked=True)
+            registry_events=registry if registry_contract.get("status") == "verified" else None,
+            source_quality_exclusions=quality_exclusions)
         current_lineage["registry_source"] = registry_contract
         atomic = report["input_summary"]["atomic_execution_sizing"]
         atomic["lineage"] = current_lineage
@@ -6674,9 +6727,9 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         daily_load_summary.pop("_entry_opportunity_plan_events", []))
     daily_load_summary["entry_opportunity_executable_replay"] = executable_replay
     daily_events.extend(executable_replay["quantity_leg_events"])
-    daily_allowed_events, daily_excluded_source_quality = (
-        _source_quality_filtered_events(daily_events, {target_date: source_quality})
-    )
+    daily_quality_exclusions: list[dict[str, Any]] = []
+    daily_allowed_events, daily_excluded_source_quality = _source_quality_filtered_events(
+        daily_events, {target_date: source_quality}, exclusion_details=daily_quality_exclusions)
     daily_counts, _ = _quality_counts(
         daily_allowed_events, {"tuning_input_allowed": True}
     )
@@ -6742,6 +6795,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     atomic_lineage = build_atomic_execution_sizing_lineage(
         target_date, daily_allowed_events, source_generation=atomic_source,
         registry_events=registry if registry_contract.get("status") == "verified" else None,
+        source_quality_exclusions=daily_quality_exclusions,
     )
     atomic_lineage["registry_source"] = registry_contract
     if (daily_atomic_plan_invalid_count or (daily_atomic_plan_missing_submit_count

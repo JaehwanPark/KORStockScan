@@ -904,6 +904,43 @@ def test_quantity_unknown_parent_is_not_a_valid_empty_stage(tmp_path, monkeypatc
     assert result['status'] == 'source_invalid'
 
 
+@pytest.mark.parametrize('version,execution,expected', [
+    ('initial_quantity_execution_cost_split_v2', 'initial_quantity_execution_cost_split_v2', 'valid_empty'),
+    ('initial_quantity_all_trade_ev_selection_v3', 'initial_quantity_execution_cost_split_v2', 'valid_empty'),
+    ('unregistered_selection_v9', 'initial_quantity_execution_cost_split_v2', 'source_invalid'),
+    (None, 'initial_quantity_execution_cost_split_v2', 'source_invalid'),
+    (None, None, 'valid_empty'),
+    ('initial_quantity_all_trade_ev_selection_v3', None, 'source_invalid'),
+    ('initial_quantity_all_trade_ev_selection_v3', 'unknown_execution_v9', 'source_invalid'),
+    ('initial_quantity_execution_cost_split_v2', 'unknown_execution_v9', 'source_invalid'),
+])
+def test_quantity_monitor_authenticates_selection_version(tmp_path, monkeypatch, version, execution, expected):
+    from src.engine.scalping.initial_quantity_policy import _digest
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    stage_path = _quantity_semantic_stage(tmp_path)
+    stage = json.loads(stage_path.read_bytes())
+    report_path = Path(stage['report_path'])
+    report = json.loads(report_path.read_bytes())
+    if execution is not None:
+        report['evaluation_algorithm'] = execution
+    report['report_content_sha256'] = _digest({k:v for k,v in report.items() if k != 'report_content_sha256'})
+    report_path.write_text(json.dumps(report))
+    stage['report_file_sha256'] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    stage['report_content_sha256'] = report['report_content_sha256']
+    evaluation_path = Path(stage['evaluation_path'])
+    evaluation = json.loads(evaluation_path.read_bytes())
+    evaluation['report_content_sha256'] = report['report_content_sha256']
+    if version is not None:
+        evaluation['evaluation_algorithm'] = version
+    evaluation_path.write_text(json.dumps(evaluation))
+    stage['evaluation_file_sha256'] = hashlib.sha256(evaluation_path.read_bytes()).hexdigest()
+    stage['evaluation_content_sha256'] = _digest(evaluation)
+    _reseal_quantity_stage(stage_path, stage)
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == expected
+    assert result['observation_complete'] is (expected == 'valid_empty')
+
+
 @pytest.mark.parametrize('economic,binding', [('cost_eligible','bound'), ('valid_empty','bound')])
 def test_quantity_issued_evaluation_contradiction_is_invalid(tmp_path, monkeypatch, economic, binding):
     from src.engine.scalping.initial_quantity_policy import _digest
