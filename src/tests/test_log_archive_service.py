@@ -775,6 +775,83 @@ def test_completion_artifact_roundtrip(tmp_path):
     assert loaded["next_prompt_hint"] == "completion artifact를 확인하세요."
 
 
+@pytest.mark.parametrize("failure_stage", ["dump", "replace"])
+def test_completion_artifact_write_failure_preserves_previous_bytes(
+    tmp_path, monkeypatch, failure_stage
+):
+    artifact = tmp_path / "monitor_snapshot_completion_2026-10-16_intraday_light.json"
+    previous = b'{"status":"success","generation":"previous"}\n'
+    artifact.write_bytes(previous)
+
+    def fail_dump(payload, handle, **kwargs):
+        handle.write('{"status":"failed",')
+        handle.flush()
+        raise OSError("fixture_completion_dump_failed")
+
+    def fail_replace(source, destination):
+        assert Path(source).parent == artifact.parent
+        assert Path(destination) == artifact
+        raise OSError("fixture_completion_replace_failed")
+
+    if failure_stage == "dump":
+        monkeypatch.setattr(runtime.json, "dump", fail_dump)
+    else:
+        monkeypatch.setattr(runtime.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match=f"fixture_completion_{failure_stage}_failed"):
+        runtime.write_completion_artifact(artifact, {"status": "failed"})
+
+    assert artifact.read_bytes() == previous
+    assert set(tmp_path.iterdir()) == {artifact}
+
+
+def test_completion_artifact_readers_keep_complete_generation_during_partial_writes(
+    tmp_path, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    day, profile = "2026-10-16", "intraday_light"
+    monkeypatch.setattr(runtime, "TMP_DIR", tmp_path)
+    artifact = runtime.completion_artifact_path(day, profile)
+
+    def generation(number):
+        return {"target_date": day, "profile": profile, "status": "success",
+                "generation": number, "detail": str(number) * 2048}
+
+    previous = generation(0)
+    runtime.write_completion_artifact(artifact, previous)
+    partial_written, finish_write = Event(), Event()
+
+    def paused_dump(payload, handle, **kwargs):
+        encoded = json.dumps(payload, **kwargs)
+        midpoint = len(encoded) // 2
+        handle.write(encoded[:midpoint])
+        handle.flush()
+        partial_written.set()
+        assert finish_write.wait(timeout=5), "reader did not release completion writer"
+        handle.write(encoded[midpoint:])
+
+    monkeypatch.setattr(runtime.json, "dump", paused_dump)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        for number in range(1, 9):
+            partial_written.clear()
+            finish_write.clear()
+            following = generation(number)
+            writer = executor.submit(runtime.write_completion_artifact, artifact, following)
+            try:
+                assert partial_written.wait(timeout=5), "writer did not reach partial output"
+                for _ in range(16):
+                    assert runtime.load_completion_artifact(day, profile) == previous
+            finally:
+                finish_write.set()
+            assert writer.result(timeout=5) == artifact
+            assert runtime.load_completion_artifact(day, profile) == following
+            previous = following
+
+    assert set(tmp_path.iterdir()) == {artifact}
+
+
 def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):
     archive_dir = tmp_path / "log_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)

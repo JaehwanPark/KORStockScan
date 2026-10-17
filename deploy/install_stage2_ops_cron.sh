@@ -37,9 +37,9 @@ cat >> "$TMP_CRON" <<EOF
 0,5,10,15,20 15 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_intraday_ws_freshness_monitor_cron --log $PROJECT_DIR/logs/run_intraday_ws_freshness_monitor_cron.log $PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh # INTRADAY_WS_FRESHNESS_MONITOR_5MIN
 */5 16-18 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_intraday_ws_freshness_monitor_cron --log $PROJECT_DIR/logs/run_intraday_ws_freshness_monitor_cron.log $PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh # INTRADAY_WS_FRESHNESS_MONITOR_AFTERMARKET_5MIN
 0-50/5 19 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_intraday_ws_freshness_monitor_cron --log $PROJECT_DIR/logs/run_intraday_ws_freshness_monitor_cron.log $PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh # INTRADAY_WS_FRESHNESS_MONITOR_AFTERMARKET_5MIN
-35-55/20 9 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron --log $PROJECT_DIR/logs/run_monitor_snapshot_cron.log $PROJECT_DIR/deploy/run_monitor_snapshot_incremental_cron.sh # RUN_MONITOR_SNAPSHOT_INTRADAY_INC_09
-*/20 10-11 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron --log $PROJECT_DIR/logs/run_monitor_snapshot_cron.log $PROJECT_DIR/deploy/run_monitor_snapshot_incremental_cron.sh # RUN_MONITOR_SNAPSHOT_INTRADAY_INC_10_11
-0 12 * * 1-5 MONITOR_SNAPSHOT_START_JITTER_SEC=0 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron --log $PROJECT_DIR/logs/run_monitor_snapshot_cron.log $PROJECT_DIR/deploy/run_monitor_snapshot_incremental_cron.sh # RUN_MONITOR_SNAPSHOT_1200
+35-55/20 9 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron --log $PROJECT_DIR/logs/run_monitor_snapshot_cron.log bash $PROJECT_DIR/deploy/run_runtime_release.sh monitor-snapshot \$(TZ=Asia/Seoul date +\%F) # RUN_MONITOR_SNAPSHOT_INTRADAY_INC_09
+*/20 10-11 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron --log $PROJECT_DIR/logs/run_monitor_snapshot_cron.log bash $PROJECT_DIR/deploy/run_runtime_release.sh monitor-snapshot \$(TZ=Asia/Seoul date +\%F) # RUN_MONITOR_SNAPSHOT_INTRADAY_INC_10_11
+0 12 * * 1-5 MONITOR_SNAPSHOT_START_JITTER_SEC=0 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron --log $PROJECT_DIR/logs/run_monitor_snapshot_cron.log bash $PROJECT_DIR/deploy/run_runtime_release.sh monitor-snapshot \$(TZ=Asia/Seoul date +\%F) # RUN_MONITOR_SNAPSHOT_1200
 EOF
 
 crontab "$TMP_CRON"

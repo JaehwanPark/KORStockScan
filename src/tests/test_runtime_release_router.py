@@ -877,6 +877,181 @@ def test_cron_preserves_unrelated_env_schedule_date_and_logs(tmp_path):
     assert router.render_crontab(after, tmp_path) == after
 
 
+def snapshot_cron(workspace):
+    logger = (
+        f"bash {workspace}/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron "
+        f"--log {workspace}/logs/run_monitor_snapshot_cron.log "
+    )
+    producer = f"{workspace}/deploy/run_monitor_snapshot_incremental_cron.sh"
+    return "\n".join([
+        f"35-55/20 9 * * 1-5 {logger}{producer} # RUN_MONITOR_SNAPSHOT_INTRADAY_INC_09",
+        f"*/20 10-11 * * 1-5 {logger}{producer} # RUN_MONITOR_SNAPSHOT_INTRADAY_INC_10_11",
+        f"0 12 * * 1-5 MONITOR_SNAPSHOT_START_JITTER_SEC=0 {logger}{producer} # RUN_MONITOR_SNAPSHOT_1200",
+    ]) + "\n"
+
+
+def test_snapshot_cron_changes_only_three_inner_commands_and_is_idempotent(tmp_path):
+    incumbent = router.render_crontab(original_cron(tmp_path), tmp_path)
+    before = incumbent + snapshot_cron(tmp_path)
+    after = router.render_crontab(before, tmp_path)
+    date_arg = r" $(TZ=Asia/Seoul date +\%F)"
+    expected = before.replace(
+        f"{tmp_path}/deploy/run_monitor_snapshot_incremental_cron.sh",
+        f"bash {tmp_path}/deploy/run_runtime_release.sh monitor-snapshot{date_arg}",
+    )
+    assert after == expected
+    assert sum(a != b for a, b in zip(before.splitlines(), after.splitlines())) == 3
+    assert len(before.splitlines()) == len(after.splitlines())
+    assert after.startswith(incumbent)
+    assert after.count("--owner run_monitor_snapshot_cron ") == 3
+    assert after.count(f"--log {tmp_path}/logs/run_monitor_snapshot_cron.log ") == 3
+    assert "0 12 * * 1-5 MONITOR_SNAPSHOT_START_JITTER_SEC=0 " in after
+    assert router.render_crontab(after, tmp_path) == after
+
+
+@pytest.mark.parametrize("kept", [1, 2])
+def test_partial_snapshot_group_fails_closed(tmp_path, kept):
+    before = original_cron(tmp_path) + "\n".join(snapshot_cron(tmp_path).splitlines()[:kept]) + "\n"
+    with pytest.raises(ValueError, match="cron_snapshot_target_missing_or_duplicate"):
+        router.render_crontab(before, tmp_path)
+
+
+def test_strict_cron_transform_requires_snapshot_presence_without_breaking_legacy_api(tmp_path):
+    before = original_cron(tmp_path)
+    assert router.render_crontab(before, tmp_path)
+    with pytest.raises(ValueError, match="cron_snapshot_target_missing_or_duplicate"):
+        router.render_crontab(before, tmp_path, require_snapshot_group=True)
+
+
+@pytest.mark.parametrize("mode", ["--check-cron", "--install-cron"])
+@pytest.mark.parametrize("with_snapshots", [False, True])
+def test_operational_cron_cli_requires_all_snapshot_tags_before_any_install(
+    release, monkeypatch, capsys, mode, with_snapshots
+):
+    workspace, _, _, _ = release
+    before = original_cron(workspace) + (snapshot_cron(workspace) if with_snapshots else "")
+    current = router.render_crontab(before, workspace)
+    monkeypatch.setattr(router, "__file__", str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+    monkeypatch.setattr(router.sys, "argv", ["router", mode])
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **k: current)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("must not write the crontab"))
+    monkeypatch.setattr(router.os, "execvpe", lambda *a: pytest.fail("cron mode cannot execute a worker"))
+    assert router.main() == (0 if with_snapshots else 2)
+    captured = capsys.readouterr()
+    if with_snapshots:
+        assert json.loads(captured.out)["snapshot_targets"] == 3
+    else:
+        assert "cron_snapshot_target_missing_or_duplicate" in captured.err
+        assert not captured.out
+        assert not list((workspace / "tmp").glob("runtime-release-cron-*"))
+
+
+@pytest.mark.parametrize("duplicate_index", [0, 1, 2])
+def test_duplicate_snapshot_tag_fails_closed(tmp_path, duplicate_index):
+    snapshots = snapshot_cron(tmp_path)
+    before = original_cron(tmp_path) + snapshots + snapshots.splitlines()[duplicate_index] + "\n"
+    with pytest.raises(ValueError, match="cron_snapshot_target_missing_or_duplicate"):
+        router.render_crontab(before, tmp_path)
+
+
+@pytest.mark.parametrize("routed", [False, True])
+@pytest.mark.parametrize("damage", [
+    "echo", "conditional", "printf", "wrong_owner", "wrong_log", "inner_echo",
+    "selected_path", "without_logger", "wrong_operation",
+])
+def test_snapshot_cron_rejects_deceptive_or_changed_execution_owner(tmp_path, routed, damage):
+    before = router.render_crontab(original_cron(tmp_path), tmp_path) + snapshot_cron(tmp_path)
+    if routed:
+        before = router.render_crontab(before, tmp_path)
+    lines = before.splitlines()
+    target = lines[-1]
+    logger = f"bash {tmp_path}/deploy/run_with_owned_log.sh"
+    producer = (f"bash {tmp_path}/deploy/run_runtime_release.sh monitor-snapshot"
+                if routed else f"{tmp_path}/deploy/run_monitor_snapshot_incremental_cron.sh")
+    if damage in {"echo", "conditional", "printf"}:
+        prefix = {"echo": "echo ", "conditional": "false && ", "printf": "printf '%s' "}[damage]
+        target = target.replace(logger, prefix + logger)
+    elif damage == "wrong_owner":
+        target = target.replace("--owner run_monitor_snapshot_cron", "--owner another_worker")
+    elif damage == "wrong_log":
+        target = target.replace("logs/run_monitor_snapshot_cron.log", "logs/another_worker.log")
+    elif damage == "inner_echo":
+        target = target.replace(producer, "echo " + producer)
+    elif damage == "selected_path":
+        target = target.replace(producer, "/immutable-release/deploy/run_monitor_snapshot_incremental_cron.sh")
+    elif damage == "without_logger":
+        start = target.index(logger)
+        target = target[:start] + target[target.index(producer, start):]
+    else:
+        target = target.replace(producer, producer + "-unexpected")
+    lines[-1] = target
+    with pytest.raises(ValueError, match="cron_command_unrecognized:monitor-snapshot"):
+        router.render_crontab("\n".join(lines) + "\n", tmp_path)
+
+
+@pytest.mark.parametrize("routed", [False, True])
+@pytest.mark.parametrize("argument", [
+    "--print-plan", "2026-10-16", "--workspace /recovery", "--record-pid 1234",
+    "--resolve-effective-today", "--install-cron", "; echo changed", "&& echo changed",
+])
+def test_snapshot_cron_rejects_extra_arguments_and_recovery_modes(tmp_path, routed, argument):
+    before = original_cron(tmp_path) + snapshot_cron(tmp_path)
+    if routed:
+        before = router.render_crontab(before, tmp_path)
+    before = before.replace(" # RUN_MONITOR_SNAPSHOT_1200", f" {argument} # RUN_MONITOR_SNAPSHOT_1200")
+    with pytest.raises(ValueError, match="cron_arguments_unrecognized:monitor-snapshot"):
+        router.render_crontab(before, tmp_path)
+
+
+def test_routed_snapshot_requires_explicit_canonical_kst_date(tmp_path):
+    before = router.render_crontab(original_cron(tmp_path) + snapshot_cron(tmp_path), tmp_path)
+    before = before.replace(r"monitor-snapshot $(TZ=Asia/Seoul date +\%F)", "monitor-snapshot", 1)
+    with pytest.raises(ValueError, match="cron_target_date_unrecognized:monitor-snapshot"):
+        router.render_crontab(before, tmp_path)
+
+
+def test_snapshot_cron_preserves_leading_environment_and_redirections(tmp_path):
+    before = original_cron(tmp_path) + snapshot_cron(tmp_path).replace(
+        "MONITOR_SNAPSHOT_START_JITTER_SEC=0 ", "MONITOR_SNAPSHOT_START_JITTER_SEC=0 KEEP='a value' "
+    ).replace(" # RUN_MONITOR_", " >> /existing-snapshot.log 2>&1 # RUN_MONITOR_")
+    after = router.render_crontab(before, tmp_path)
+    assert "MONITOR_SNAPSHOT_START_JITTER_SEC=0 KEEP='a value' " in after
+    assert after.count(" >> /existing-snapshot.log 2>&1 # RUN_MONITOR_") == 3
+    assert router.render_crontab(after, tmp_path) == after
+
+
+@pytest.mark.parametrize("with_snapshots", [False, True])
+def test_cron_check_reports_pipeline_and_snapshot_counts_separately(release, monkeypatch, capsys, with_snapshots):
+    workspace, _, _, _ = release
+    before = original_cron(workspace) + (snapshot_cron(workspace) if with_snapshots else "")
+    current = router.render_crontab(before, workspace)
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **k: current)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("read-only check cannot install"))
+    router.manage_cron(workspace, False)
+    assert json.loads(capsys.readouterr().out) == {
+        "cron_routing_verified": True, "required_targets": 8,
+        "snapshot_targets": 3 if with_snapshots else 0,
+    }
+    assert not (workspace / "data/runtime/runtime_release_cron.lock").exists()
+
+
+def test_snapshot_install_uses_existing_backup_compare_write_and_readback(release, monkeypatch, capsys):
+    workspace, _, _, _ = release
+    before = router.render_crontab(original_cron(workspace), workspace) + snapshot_cron(workspace)
+    after = router.render_crontab(before, workspace)
+    readings = iter([before, before, after])
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **k: next(readings))
+    writes = []
+    monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: writes.append((command, kwargs["input"])))
+    router.manage_cron(workspace, True)
+    assert writes == [(["crontab", "-"], after)]
+    reports = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    backup = Path(reports[0]["cron_backup"])
+    assert (backup / "before.crontab").read_text() == before
+    assert (backup / "after.crontab").read_text() == after
+    assert reports[-1]["required_targets"] == 8 and reports[-1]["snapshot_targets"] == 3
+
+
 def test_old_five_am_finalization_migrates_without_changing_other_jobs(tmp_path):
     current = router.render_crontab(original_cron(tmp_path), tmp_path)
     old = current.replace("35 5 * * *", "0 5 * * *").replace(
@@ -976,6 +1151,83 @@ def test_archive_recovery_preserves_explicit_source_date(release,monkeypatch):
     command,env=captured[0]
     assert command[-1]=='0' and env['TARGET_DATE']=='2026-10-07'
     assert env['PROJECT_DIR']==str(root)
+
+
+def test_snapshot_plan_targets_selected_incremental_wrapper_with_exact_date(release):
+    workspace, root, _, _ = release
+    plan = router.make_plan(workspace, root, "a" * 40, "monitor-snapshot", "2026-10-19")
+    assert "monitor-snapshot" not in router.OWNED
+    assert plan["command"] == [
+        "/bin/bash", str(root / "deploy/run_monitor_snapshot_incremental_cron.sh"), "2026-10-19",
+    ]
+    assert plan["cwd"] == str(root)
+    assert plan["git_commit"] == "a" * 40
+    assert plan["policy_authority"] == "existing_exact_date_gates_unchanged"
+
+
+def test_snapshot_route_overrides_inherited_workspace_environment_for_child(release, monkeypatch):
+    workspace, root, manifest, _ = release
+    before = manifest.read_bytes()
+    monkeypatch.setattr(router, "__file__", str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+    monkeypatch.setattr(router.sys, "argv", ["router", "monitor-snapshot", "2026-10-19"])
+    for key in ("PROJECT_DIR", "PYTHONPATH", "VENV_PY", "KORSTOCKSCAN_PROJECT_DIR",
+                "KORSTOCKSCAN_PYTHON_BIN", "KORSTOCKSCAN_RUNTIME_GIT_COMMIT", "PYTHONHOME"):
+        monkeypatch.setenv(key, "/mutable-or-previous-release")
+    monkeypatch.setenv("MONITOR_SNAPSHOT_START_JITTER_SEC", "0")
+    monkeypatch.setenv("MONITOR_SNAPSHOT_ASYNC", "1")
+    changed = []
+    monkeypatch.setattr(router.os, "chdir", lambda path: changed.append(path))
+    executed = []
+    monkeypatch.setattr(router.os, "execvpe", lambda executable, command, env: executed.append((executable, command, env)))
+    assert router.main() == 0
+    assert changed == [str(root)]
+    executable, command, env = executed[0]
+    assert executable == "/bin/bash"
+    assert command == ["/bin/bash", str(root / "deploy/run_monitor_snapshot_incremental_cron.sh"), "2026-10-19"]
+    for key in ("PROJECT_DIR", "PYTHONPATH", "KORSTOCKSCAN_PROJECT_DIR"):
+        assert env[key] == str(root)
+    for key in ("VENV_PY", "KORSTOCKSCAN_PYTHON_BIN"):
+        assert env[key] == str(root / ".venv/bin/python")
+    assert env["KORSTOCKSCAN_RUNTIME_GIT_COMMIT"] == "a" * 40
+    assert "PYTHONHOME" not in env
+    assert env["MONITOR_SNAPSHOT_START_JITTER_SEC"] == "0" and env["MONITOR_SNAPSHOT_ASYNC"] == "1"
+    assert manifest.read_bytes() == before
+
+
+def test_snapshot_print_plan_never_dispatches_or_records_pid(release, monkeypatch, capsys):
+    workspace, root, manifest, _ = release
+    before = manifest.read_bytes()
+    monkeypatch.setattr(router, "__file__", str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+    monkeypatch.setattr(router.sys, "argv", ["router", "monitor-snapshot", "2026-10-19", "--print-plan"])
+    monkeypatch.setattr(router.os, "execvpe", lambda *a: pytest.fail("plan cannot dispatch"))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("plan cannot start a process"))
+    assert router.main() == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["command"][-1] == "2026-10-19" and plan["cwd"] == str(root)
+    assert manifest.read_bytes() == before
+
+
+@pytest.mark.parametrize("damage", ["missing", "invalid"])
+def test_snapshot_route_fails_closed_without_valid_selection(release, monkeypatch, capsys, damage):
+    workspace, _, manifest, _ = release
+    if damage == "missing":
+        manifest.unlink()
+    else:
+        manifest.write_text("{}")
+    monkeypatch.setattr(router, "__file__", str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+    monkeypatch.setattr(router.sys, "argv", ["router", "monitor-snapshot", "2026-10-19"])
+    monkeypatch.setattr(router.os, "execvpe", lambda *a: pytest.fail("invalid selection cannot dispatch"))
+    assert router.main() == 2
+    assert "runtime_release_route_blocked" in capsys.readouterr().err
+
+
+def test_snapshot_route_cannot_select_recovery_workspace(release, monkeypatch, capsys):
+    workspace, _, _, _ = release
+    monkeypatch.setattr(router, "__file__", str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+    monkeypatch.setattr(router.sys, "argv", ["router", "monitor-snapshot", "--workspace", str(workspace)])
+    monkeypatch.setattr(router.os, "execvpe", lambda *a: pytest.fail("recovery selector cannot dispatch"))
+    assert router.main() == 2
+    assert "runtime_pid_workspace_record_only" in capsys.readouterr().err
 
 
 def test_scheduled_finalizer_argument_resolves_through_runtime_router(

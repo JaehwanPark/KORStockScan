@@ -44,10 +44,18 @@ LEGACY_TAGS = {
     "POSTCLOSE_FINALIZATION_2155": "finalize",
     "POSTCLOSE_FINALIZATION_0600": "finalize",
 }
+# These are three schedule identities for one observer operation. Keep them
+# separate from the uniquely scheduled pipeline operations in TAGS/OWNED.
+SNAPSHOT_CRON_TAGS = frozenset({
+    "RUN_MONITOR_SNAPSHOT_INTRADAY_INC_09",
+    "RUN_MONITOR_SNAPSHOT_INTRADAY_INC_10_11",
+    "RUN_MONITOR_SNAPSHOT_1200",
+})
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = CRON_TARGETS
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel",
-              "pre-submit-source", "holding-exit-sentinel", "error-detection", "log-retention")
+              "pre-submit-source", "holding-exit-sentinel", "error-detection", "log-retention",
+              "monitor-snapshot")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
 STARTUP_CONSUMPTION_TIMEOUT_SEC = 150
@@ -884,6 +892,10 @@ def make_plan(
         ]
     elif operation == "buy-funnel":
         command = ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), target_date]
+    elif operation == "monitor-snapshot":
+        # The existing cron owns logging. Pin the selected entrypoint directly;
+        # its safe wrapper and async child inherit the same release environment.
+        command = ["/bin/bash", str(root / "deploy/run_monitor_snapshot_incremental_cron.sh"), target_date]
     elif operation == "log-retention":
         command = ["/bin/bash", str(root / "deploy/run_with_owned_log.sh"),
                    "--owner", "log_retention_daily", "--log", str(workspace / "logs/log_retention_daily.log"),
@@ -959,11 +971,13 @@ def make_plan(
     }
 
 
-def render_crontab(original: str, workspace: Path) -> str:
-    """Replace the eight installed command prefixes, preserving schedules/env/tails.
+def render_crontab(original: str, workspace: Path, *, require_snapshot_group: bool = False) -> str:
+    """Route pipeline owners and the installed snapshot group without rescheduling.
 
-    Missing, duplicate or unfamiliar entrypoints fail closed. Other services,
-    machine timers and intraday observers are deliberately outside this router.
+    The eight pipeline owners are required. The snapshot group must contain
+    all three unique tags when present; the operational CLI also requires its
+    presence. Legacy pure transforms can omit it. Unknown command shapes fail
+    closed; other services, timers and intraday observers remain untouched.
     """
     router = f"bash {workspace}/deploy/run_runtime_release.sh"
     legacy_start = (
@@ -979,13 +993,15 @@ def render_crontab(original: str, workspace: Path) -> str:
         r"""(?:[A-Za-z_][A-Za-z0-9_]*=(?:[^\s'";&|<>]+|'[^']*'|"[^"]*")+\s+)*"""
     )
     seen: list[str] = []
+    seen_snapshots: list[str] = []
     result = []
     for line in original.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             result.append(line)
             continue
         tag = line.rsplit("#", 1)[-1].strip() if "#" in line else ""
-        op = TAGS.get(tag) or LEGACY_TAGS.get(tag)
+        snapshot = tag in SNAPSHOT_CRON_TAGS
+        op = "monitor-snapshot" if snapshot else TAGS.get(tag) or LEGACY_TAGS.get(tag)
         if tag == "RUNTIME_RELEASE_START" or (
             "/usr/bin/tmux new-session -d -s bot " in line
             and f"cd {workspace}/src " in line
@@ -994,7 +1010,10 @@ def render_crontab(original: str, workspace: Path) -> str:
         if op is None:
             result.append(line)
             continue
-        seen.append(op)
+        if snapshot:
+            seen_snapshots.append(tag)
+        else:
+            seen.append(op)
         scheduled = re.fullmatch(r"(\s*(?:\S+\s+){5})(.+)", line)
         if not scheduled:
             raise ValueError("cron_schedule_invalid")
@@ -1002,7 +1021,17 @@ def render_crontab(original: str, workspace: Path) -> str:
         prefix = env_prefix.match(command).group()
         command = command[len(prefix) :]
         desired = f"{router} {op}"
-        if op in OWNED:
+        if snapshot:
+            # Keep the canonical logging owner. Only its inner producer moves
+            # behind the release selector; the selected router need not know
+            # this newly added operation.
+            logger = (
+                f"bash {workspace}/deploy/run_with_owned_log.sh --owner run_monitor_snapshot_cron "
+                f"--log {workspace}/logs/run_monitor_snapshot_cron.log "
+            )
+            desired = logger + desired
+            old = logger + f"{workspace}/deploy/run_monitor_snapshot_incremental_cron.sh"
+        elif op in OWNED:
             script, owner = OWNED[op]
             old = (
                 f"bash {workspace}/deploy/run_with_owned_log.sh --owner {owner} "
@@ -1023,9 +1052,13 @@ def render_crontab(original: str, workspace: Path) -> str:
         if matched is None:
             raise ValueError(f"cron_command_unrecognized:{op}")
         tail = command[len(matched) :]
+        date_arg = r" $(TZ=Asia/Seoul date +\%F)"
+        if snapshot and matched == old:
+            # Legacy incremental cron resolved the date inside its wrapper.
+            # The routed schedule passes that same KST date explicitly.
+            tail = date_arg + tail
         arguments, marker, comment = tail.partition("#")
-        if op in OWNED or op == "paired-replay":
-            date_arg = r" $(TZ=Asia/Seoul date +\%F)"
+        if op in OWNED or op == "paired-replay" or snapshot:
             if op == "finalize" and arguments.startswith(date_arg):
                 arguments = arguments[len(date_arg) :]
             elif op != "finalize" and not arguments.startswith(date_arg):
@@ -1055,29 +1088,41 @@ def render_crontab(original: str, workspace: Path) -> str:
         result.append(line)
     if not REQUIRED_CRON_TARGETS.issubset(seen) or len(seen) != len(set(seen)):
         raise ValueError("cron_target_missing_or_duplicate")
+    if (seen_snapshots or require_snapshot_group) and (
+        set(seen_snapshots) != SNAPSHOT_CRON_TAGS
+        or len(seen_snapshots) != len(SNAPSHOT_CRON_TAGS)
+    ):
+        raise ValueError("cron_snapshot_target_missing_or_duplicate")
     return "\n".join(result) + "\n"
 
 
-def manage_cron(workspace: Path, install: bool) -> None:
+def _cron_routing_status(crontab: str) -> dict:
+    """Describe an already validated cron without conflating observer slots."""
+    snapshot_count = sum(
+        line.rsplit("#", 1)[-1].strip() in SNAPSHOT_CRON_TAGS
+        for line in crontab.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    return {
+        "cron_routing_verified": True,
+        "required_targets": len(REQUIRED_CRON_TARGETS),
+        "snapshot_targets": snapshot_count,
+    }
+
+
+def manage_cron(workspace: Path, install: bool, *, require_snapshot_group: bool = False) -> None:
     if not install:
         old = subprocess.check_output(["crontab", "-l"], text=True)
-        if render_crontab(old, workspace) != old:
+        if render_crontab(old, workspace, require_snapshot_group=require_snapshot_group) != old:
             raise ValueError("cron_release_routing_not_installed")
-        print(
-            json.dumps(
-                {
-                    "cron_routing_verified": True,
-                    "required_targets": len(REQUIRED_CRON_TARGETS),
-                }
-            )
-        )
+        print(json.dumps(_cron_routing_status(old)))
         return
     # Serialize router installs. Re-read just before writing to avoid clobbering
     # an unrelated session's edits observed during validation.
     with (workspace / "data/runtime/runtime_release_cron.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         old = subprocess.check_output(["crontab", "-l"], text=True)
-        new = render_crontab(old, workspace)
+        new = render_crontab(old, workspace, require_snapshot_group=require_snapshot_group)
         if new != old:
             backup_dir = Path(
                 tempfile.mkdtemp(prefix="runtime-release-cron-", dir=workspace / "tmp")
@@ -1090,14 +1135,7 @@ def manage_cron(workspace: Path, install: bool) -> None:
             if subprocess.check_output(["crontab", "-l"], text=True) != new:
                 raise ValueError("cron_install_readback_mismatch")
             print(json.dumps({"cron_backup": str(backup_dir)}))
-        print(
-            json.dumps(
-                {
-                    "cron_routing_verified": True,
-                    "required_targets": len(REQUIRED_CRON_TARGETS),
-                }
-            )
-        )
+        print(json.dumps(_cron_routing_status(new)))
 
 
 def native_custody_environment(workspace: Path) -> dict[str, str]:
@@ -1201,9 +1239,9 @@ def main() -> int:
                 raise ValueError("cron_mode_cannot_execute_operation")
             if args.install_cron:
                 with runtime_release_set_lock(workspace):
-                    manage_cron(workspace, True)
+                    manage_cron(workspace, True, require_snapshot_group=True)
             else:
-                manage_cron(workspace, False)
+                manage_cron(workspace, False, require_snapshot_group=True)
             return 0
         if args.check_release_set:
             if args.operation or args.print_plan:
