@@ -984,6 +984,27 @@ def _runtime_consumption_state(
     return "pending", "not_due", receipt
 
 
+def _holding_vote_publication_bundle(*, source_date, target_date, source_report_sha256,
+                                     replay, source_quality):
+    """Retain an exact prepared incumbent through a verified code handoff."""
+    from src.engine.scalping import holding_path_vote_policy as V
+    from src.engine.scalping.holding_vote_experiment import code_sha
+    path = V.policy_path(DATA_DIR, target_date)
+    if path.is_file():
+        prior = V.load_bundle(DATA_DIR, target_date, require_current_code=False)
+        if (prior.get('schema') == V.SUCCESSOR_SCHEMA
+                and prior.get('selection_mode') == 'incumbent_carry'
+                and prior.get('code_sha256') != code_sha()):
+            # The ordinary reader verifies the exact original policy/source/code
+            # receipt. Rebuilding would relabel the frozen research generation.
+            prior = V.load_bundle(DATA_DIR, target_date, source_report_sha256=source_report_sha256)
+            if prior.get('source_date') != source_date:
+                raise ValueError('holding_vote_prepared_source_date_changed')
+            return prior, True
+    return create_holding_vote_policy(source_date=source_date, target_date=target_date,
+        source_report_sha256=source_report_sha256, replay=replay, source_quality=source_quality), False
+
+
 def build_runtime_approval_summary(
     target_date: str, *, include_swing: bool = True, include_producer_gap: bool = True
 ) -> dict[str, Any]:
@@ -1523,7 +1544,7 @@ def build_runtime_approval_summary(
         }
         if not trailing_error and holding_path_votes.get("schema") == "holding_path_vote_postclose_replay_v1":
             try:
-                bundle = create_holding_vote_policy(
+                bundle, preserved_incumbent = _holding_vote_publication_bundle(
                     source_date=target_date, target_date=policy_target_date,
                     source_report_sha256=_sha(trailing_path),
                     replay=holding_path_votes,
@@ -1533,8 +1554,9 @@ def build_runtime_approval_summary(
                     bundle, target_date=policy_target_date,
                     source_report_sha256=_sha(trailing_path),
                 )
-                _atomic_write(policy_file, json.dumps(bundle, ensure_ascii=False,
-                                                    indent=2, sort_keys=True) + "\n")
+                if not preserved_incumbent:
+                    _atomic_write(policy_file, json.dumps(bundle, ensure_ascii=False,
+                                                        indent=2, sort_keys=True) + "\n")
                 holding_vote_policy_receipt = {
                     "status": holding_vote_publication_status(bundle),
                     "source_date": target_date, "target_date": policy_target_date,

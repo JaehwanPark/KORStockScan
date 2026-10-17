@@ -860,6 +860,7 @@ REVIEWED_CURSOR_ASOF_SOURCES = {
 # Exact prepared 10/19 origin to the reviewed quote-delivery consumer bytes.
 # No numeric policy, provider or order authority changes cross this boundary.
 REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES = {
+    'src/engine/runtime_approval_summary.py': ('d5cdd024e395aaeb78b7eacbb7cfad077694a2baeccd56125d0d9909c3f3ae11', '91dbb00d92f0aeb51de17f92dc0bea31591f1d41ad3bcab24579c8cb3c1dd14d'),
     'src/engine/ai_engine_openai.py': (
         'b5c8b6e262678c5354ced1fd30ae4d20b974e50fbb01187b4ab2a9df61a010d7',
         'fb228f284ff0898c1f260149b653d03c71f8f17f1544fe5bf46cc0aa396c0cc4'),

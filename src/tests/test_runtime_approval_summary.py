@@ -210,6 +210,41 @@ def test_mechanical_carried_selection_keeps_lineage_without_claiming_natural_lif
     assert tampered["mechanical_closed_loop_attribution"]["actual_pid_consumed"] is False
 
 
+@pytest.mark.parametrize('fault', [None, 'source', 'receipt'])
+def test_summary_preserves_only_verified_prepared_incumbent(monkeypatch, tmp_path, fault):
+    from src.engine.scalping import holding_path_vote_policy as V, holding_vote_experiment as E
+    data=_patch(monkeypatch,tmp_path)
+    path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('frozen')
+    prior=dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='old',source_date='2026-10-16')
+    calls=[]
+    def load(*args,**kw):
+        calls.append(kw)
+        if kw.get('require_current_code') is not False and fault:
+            raise ValueError('original_source_changed' if fault=='source' else 'code_handoff_missing')
+        return prior
+    monkeypatch.setattr(V,'load_bundle',load)
+    monkeypatch.setattr(E,'code_sha',lambda:'new')
+    monkeypatch.setattr(mod,'create_holding_vote_policy',lambda **kw: pytest.fail('frozen policy rebuilt'))
+    args=dict(source_date='2026-10-16',target_date='2026-10-19',source_report_sha256='source',replay={},source_quality={})
+    if fault:
+        with pytest.raises(ValueError):mod._holding_vote_publication_bundle(**args)
+    else:
+        bundle,preserved=mod._holding_vote_publication_bundle(**args)
+        assert bundle is prior and preserved is True
+        assert calls[-1]['source_report_sha256']=='source'
+    assert path.read_text()=='frozen'
+
+
+def test_summary_current_code_policy_can_publish_updated_source(monkeypatch,tmp_path):
+    from src.engine.scalping import holding_path_vote_policy as V,holding_vote_experiment as E
+    data=_patch(monkeypatch,tmp_path);path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('old source')
+    monkeypatch.setattr(V,'load_bundle',lambda *a,**kw: dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='current'))
+    monkeypatch.setattr(E,'code_sha',lambda:'current')
+    monkeypatch.setattr(mod,'create_holding_vote_policy',lambda **kw: {'new_source':kw['source_report_sha256']})
+    assert mod._holding_vote_publication_bundle(source_date='2026-10-16',target_date='2026-10-19',
+        source_report_sha256='new',replay={},source_quality={})==({'new_source':'new'},False)
+
+
 def test_summary_publishes_estimated_holding_vote_policy_without_realized_ev(
     monkeypatch, tmp_path,
 ):
