@@ -48,6 +48,11 @@ _DEPOSIT_API_FETCH_LOCKS = {}
 _LAST_SUCCESSFUL_DEPOSIT_BY_KEY = {}
 _ORDERABLE_AMOUNT_CACHE = {}
 _LOCAL_SELL_NO_CALL_TOKEN = object()
+class _LocalBuyNoCallToken(str):
+    """JSON-safe marker whose object identity is lost on serialization."""
+
+
+_LOCAL_BUY_NO_CALL_TOKEN = _LocalBuyNoCallToken("process_local_buy_no_call_v1")
 KST = ZoneInfo("Asia/Seoul")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _AFTERMARKET_SOR_CANARY_SCHEMA = "krx_aftermarket_sor_canary_approval_v1"
@@ -551,6 +556,25 @@ def _finish_owner_registry_intent(
             ),
             owner_registry_intent_id=intent_id,
         )
+
+
+def _local_buy_no_call_response(response, *, reserved_intent_id=None):
+    """Tag only a local branch reached before any physical BUY attempt."""
+    result = dict(response)
+    result.update(_local_buy_reserved_intent_id=reserved_intent_id,
+                  _local_buy_no_call_token=_LOCAL_BUY_NO_CALL_TOKEN,
+                  broker_order_attempted=False, physical_send_attempt_count=0)
+    return result
+
+
+def is_verified_local_buy_no_call_response(response):
+    # Decoded remote flags are not evidence that the adapter never sent.
+    return bool(isinstance(response, dict)
+        and response.get("_local_buy_no_call_token") is _LOCAL_BUY_NO_CALL_TOKEN
+        and response.get("broker_order_attempted") is False
+        and type(response.get("physical_send_attempt_count")) is int
+        and response["physical_send_attempt_count"] == 0
+        and not str(response.get("ord_no") or response.get("odno") or "").strip())
 
 
 def is_verified_local_sell_no_call_response(response):
@@ -2088,7 +2112,8 @@ def send_buy_order_market(
     from src.trading.config.owner_retirement import new_entry_retired
     context = _owner_registry_context(owner_context)
     if context is not None and new_entry_retired(code, context.owner_type):
-        return _owner_registry_block_response("symbol_owner_permanently_retired")
+        return _local_buy_no_call_response(
+            _owner_registry_block_response("symbol_owner_permanently_retired"))
     time_block_override_reason = str(time_block_override_reason or "").strip()
     allow_time_block_override = (
         bool(allow_time_block_override)
@@ -2100,12 +2125,12 @@ def send_buy_order_market(
         msg = f"[TRADING_PAUSED_BLOCK] buy order blocked 종목:{clean_code}, 상태:{get_pause_state_label()}"
         log_info(msg)
         EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
-        return {
+        return _local_buy_no_call_response({
             "rt_cd": "PAUSED",
             "return_code": "PAUSED",
             "return_msg": get_pause_state_label(),
             "ord_no": "",
-        }
+        })
 
     order_now = now if now is not None else datetime.now(KST)
     buy_window_blocked = is_scalping_buy_window_blocked(order_now)
@@ -2117,12 +2142,12 @@ def send_buy_order_market(
         label = get_buy_side_time_block_label()
         msg = f"[BUY_TIME_BLOCK] buy order blocked 종목:{clean_code}, 상태:{label}"
         log_info(msg)
-        return {
+        return _local_buy_no_call_response({
             "rt_cd": "BUY_TIME_BLOCKED",
             "return_code": "BUY_TIME_BLOCKED",
             "return_msg": label,
             "ord_no": "",
-        }
+        })
     if buy_time_blocked and allow_time_block_override:
         clean_code = str(code)[:6]
         log_info(
@@ -2188,7 +2213,7 @@ def send_buy_order_market(
             side="buy",
         )
         blocked.update(canary_provenance)
-        return blocked
+        return _local_buy_no_call_response(blocked)
     normalized_type = order_preflight.effective_order_type
     if order_preflight.remapped:
         normalized_price = 0
@@ -2229,7 +2254,7 @@ def send_buy_order_market(
         order_date=order_now.date(),
     )
     if owner_block is not None:
-        return owner_block
+        return _local_buy_no_call_response(owner_block)
 
     try:
         send_kwargs = ({"entry_send_context": entry_send_context,
@@ -2246,6 +2271,8 @@ def send_buy_order_market(
                 blocked["owner_registry_finalize_gap"] = registry_block
             if owner_intent_id:
                 blocked["owner_registry_intent_id"] = owner_intent_id
+            if exc.attempts == 0:
+                blocked = _local_buy_no_call_response(blocked, reserved_intent_id=owner_intent_id)
             return _with_order_route_provenance(
                 blocked, route_resolution=submit_provenance,
                 broker_route_attempted=exc.attempts > 0)

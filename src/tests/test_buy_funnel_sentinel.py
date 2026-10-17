@@ -4721,3 +4721,227 @@ def test_late_leg_ack_matches_original_call_and_tag():
     rows[2].fields["entry_submit_attempt_id"] = "different-call"
     result = sentinel._machine_primary_entry_funnel(rows)
     assert result["evaluation_ledger"][0]["final_state"] == "pending_broker_reconciliation"
+
+
+def _scoped_funnel_event(stage="entry_async_disposition", *, origin="fixed_watch", **extra):
+    import hashlib
+    from datetime import datetime
+    day, symbol, bucket, route = "2026-10-16", "403870", "krx_regular", "krx_nxt_integrated"
+    fields = {
+        "evaluation_attempt_id": "eval-native", "ai_decision_trace_id": "trace-native",
+        "async_request_id": "request-native", "async_disposition": "worker_completed",
+        "async_machine_action": "ENTER_NOW", "async_auxiliary_status": "pass",
+        "effective_venue": "KRX", "market_session_bucket": bucket,
+        "entry_machine_bundle_sha256": "b" * 64,
+        "async_producer_pid": "123", "async_producer_start_ticks": "456",
+    }
+    if origin == "fixed_watch":
+        fields.update(watch_origin="MAIN_FIXED_WATCH", scanner_promotion_id="None",
+            watch_admission_id=f"FIXED-{day}-{symbol}-{bucket}-{route}-abcdef123456",
+            watch_generation_id=hashlib.sha256(f"{day}|{symbol}|{bucket}|{route}".encode()).hexdigest())
+    elif origin == "scanner":
+        fields.update(scanner_promotion_id="promotion-native", policy_bundle_hash="b" * 64)
+    fields.update(extra)
+    return sentinel.PipelineEvent(datetime(2026, 10, 16, 10), "ENTRY_PIPELINE", stage,
+                                  "fixture", symbol, "1", fields)
+
+
+def test_main_scoped_funnel_preserves_scanner_scope_and_observes_fixed_watch_send():
+    worker = _scoped_funnel_event()
+    main = _scoped_funnel_event(async_disposition="accepted_to_entry_path")
+    sent = _scoped_funnel_event("order_leg_sent", broker_order_no="order-native",
+        entry_mechanistic_action="ENTER_NOW", entry_ai_screen_status="pass",
+        entry_primary_decision_owner="mechanistic_entry_adjudicator",
+        policy_bundle_hash="b" * 64, entry_submit_attempt_id="call-native",
+        pipeline_lifecycle_population_scope="real_record_bound")
+    scanner = _scoped_funnel_event(origin="scanner", evaluation_attempt_id="eval-scanner")
+    result = sentinel._machine_primary_entry_funnel([worker, worker, main, sent, sent, scanner])
+    assert result["metric_scope"] == "scanner_only_legacy_compatibility"
+    assert result["ai_pass_count"] == 0  # Existing scanner-only contract remains unchanged.
+    scoped = result["main_scoped_funnel"]
+    assert scoped["overall"]["pass_returned_observed_count"] == 2
+    assert scoped["cohorts"]["fixed_watch"]["pass_returned_observed_count"] == 1
+    assert scoped["cohorts"]["scanner"]["pass_returned_observed_count"] == 1
+    assert scoped["overall"]["pass_main_accepted_observed_count"] == 1
+    assert scoped["overall"]["pass_physical_send_observed_count"] == 1
+    assert scoped["overall"]["pass_physical_send_unobservable_count"] == 1
+    assert scoped["overall"]["pass_broker_acceptance_observed_count"] == 1
+    assert scoped["overall"]["pass_real_record_bound_observed_count"] == 1
+    assert scoped["pass_count_conservation"] and scoped["cohort_count_conservation"]
+
+
+def test_main_scoped_returned_only_unknown_identity_stays_unobservable():
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(origin="unknown")])
+    assert result["overall"]["pass_returned_observed_count"] == 1
+    assert result["cohorts"]["unknown"]["pass_returned_observed_count"] == 1
+    row = result["evaluation_ledger"][0]
+    assert row["physical_send_observed"] is None
+    assert row["broker_acceptance_observed"] is None
+    assert row["main_accepted_observed"] is False
+    assert result["overall"]["source_status"] == "source_gap"
+    assert result["full_denominator_proven"] is False
+    assert sentinel._main_scoped_entry_funnel([])["overall"]["source_status"] == "unobservable"
+
+
+def test_main_scoped_same_evaluation_with_both_origins_is_one_conflicting_cohort():
+    result = sentinel._main_scoped_entry_funnel([
+        _scoped_funnel_event(), _scoped_funnel_event(origin="scanner")])
+    assert result["overall"]["evaluation_count"] == 1
+    assert result["cohorts"]["unknown"]["evaluation_count"] == 1
+    assert "evaluation_native_identity_conflict" in result["evaluation_ledger"][0]["identity_issues"]
+    assert result["cohorts"]["fixed_watch"]["evaluation_count"] == 0
+    assert result["cohorts"]["scanner"]["evaluation_count"] == 0
+
+
+def test_main_scoped_missing_id_never_joins_neighbouring_pass_or_order():
+    worker = _scoped_funnel_event()
+    missing = _scoped_funnel_event("order_leg_sent", evaluation_attempt_id="", broker_order_no="wrong-order")
+    result = sentinel._main_scoped_entry_funnel([worker, missing])
+    assert result["overall"]["pass_physical_send_observed_count"] == 0
+    assert result["evaluation_ledger"][0]["physical_send_observed"] is None
+    assert result["evaluation_ledger"][0]["broker_order_numbers"] == []
+
+
+def test_main_scoped_retry_trace_and_adapter_counter_are_not_new_physical_orders():
+    rows = [_scoped_funnel_event(), _scoped_funnel_event(ai_decision_trace_id="trace-retry",
+             async_entry_broker_attempts="3", broker_order_attempted="false")]
+    result = sentinel._main_scoped_entry_funnel(rows)
+    assert result["overall"]["pass_returned_observed_count"] == 1
+    assert result["evaluation_ledger"][0]["ai_decision_trace_ids"] == ["trace-native", "trace-retry"]
+    assert result["evaluation_ledger"][0]["physical_send_observed"] is None
+    assert result["evaluation_ledger"][0]["pass_binding_issues"] == ["pass_trace_ambiguous"]
+
+
+def test_main_scoped_different_trace_cannot_link_pass_to_another_response_submission():
+    sent = _scoped_funnel_event("order_leg_sent", ai_decision_trace_id="trace-other",
+        async_machine_action="BLOCK", async_auxiliary_status="veto", broker_order_no="order-other")
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), sent])
+    assert result["overall"]["evaluation_count"] == 1
+    assert result["cohorts"]["fixed_watch"]["evaluation_count"] == 1
+    assert result["overall"]["pass_returned_observed_count"] == 1
+    assert result["overall"]["phase_broker_acceptance_observed_count"] == 1
+    assert result["overall"]["pass_broker_acceptance_observed_count"] == 0
+    assert result["overall"]["pass_physical_send_unobservable_count"] == 1
+    assert result["overall"]["source_status"] == "source_gap"
+
+
+def test_main_scoped_absent_trace_and_runtime_are_unobservable_not_exact():
+    event = _scoped_funnel_event(ai_decision_trace_id="", async_producer_pid="", async_producer_start_ticks="")
+    result = sentinel._main_scoped_entry_funnel([event])
+    row = result["evaluation_ledger"][0]
+    assert row["runtime_identity_status"] == "unobservable"
+    assert row["runtime_identities"] == []
+    assert row["pass_binding_issues"] == ["pass_trace_unobserved", "runtime_identity_unobserved"]
+
+
+def test_main_scoped_missing_runtime_preserves_independent_receipt_without_pass_causality():
+    worker = _scoped_funnel_event(async_producer_pid="", async_producer_start_ticks="")
+    event = _scoped_funnel_event("order_leg_sent", broker_order_no="order-native",
+        async_producer_pid="", async_producer_start_ticks="")
+    result = sentinel._main_scoped_entry_funnel([worker, event])
+    assert result["overall"]["pass_returned_observed_count"] == 1
+    assert result["overall"]["pass_broker_acceptance_observed_count"] == 0
+    assert result["overall"]["phase_broker_acceptance_observed_count"] == 1
+    assert result["evaluation_ledger"][0]["pass_binding_issues"] == ["runtime_identity_unobserved"]
+    assert all(result.get(key) for key in ("window_policy", "sample_floor",
+        "primary_decision_metric", "source_quality_gate", "forbidden_uses"))
+
+
+def test_main_scoped_census_keeps_cash_excluded_evaluations():
+    from datetime import datetime
+    events = _cash_exclusion_events()
+    for event in events:
+        event.fields.update(evaluation_attempt_id=f"eval-{event.record_id}",
+            ai_decision_trace_id=f"trace-{event.record_id}",
+            entry_primary_decision_owner="mechanistic_entry_adjudicator",
+            entry_mechanistic_action="ENTER_NOW", entry_ai_screen_status="pass",
+            effective_venue="KRX", market_session_bucket="KRX_REGULAR", policy_bundle_hash="b" * 64)
+    result = sentinel._calculate_event_summary(events,
+        start_at=datetime(2026, 9, 11, 10), end_at=datetime(2026, 9, 11, 10, 3))
+    assert result["cash_shortfall_exclusion"]["excluded_attempt_count"] == 20
+    legacy = result["machine_primary_entry_funnel"]
+    assert legacy["ai_pass_count"] == 0
+    assert legacy["main_scoped_funnel"]["overall"]["pass_returned_observed_count"] == 20
+    assert legacy["main_scoped_funnel"]["decision_population"] == "loaded_events_before_cash_shortfall_exclusion"
+
+
+def test_main_scoped_native_zero_wire_terminal_does_not_hide_another_unknown_call():
+    zero = _scoped_funnel_event("entry_submit_attempt_finished", entry_submit_attempt_id="call-zero",
+        local_not_sent_contract="main_initial_entry_not_sent_v1", known_local_not_sent="true",
+        physical_send_attempt_count="0", broker_order_attempted="false")
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), zero])
+    assert result["evaluation_ledger"][0]["physical_send_observed"] is False
+    assert result["overall"]["pass_known_not_sent_count"] == 1
+    unknown = _scoped_funnel_event("order_leg_no_response", entry_submit_attempt_id="call-uncertain")
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), zero, unknown])
+    assert result["evaluation_ledger"][0]["physical_send_observed"] is None
+    sent = _scoped_funnel_event("entry_submit_attempt_finished", entry_submit_attempt_id="call-sent",
+                               physical_send_attempt_count="1")
+    assert sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), zero, sent])["evaluation_ledger"][0]["physical_send_observed"] is True
+
+
+def test_main_scoped_uncontracted_start_stage_does_not_prove_physical_send():
+    start = _scoped_funnel_event("order_api_start", entry_submit_attempt_id="call-start")
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), start])
+    assert result["evaluation_ledger"][0]["physical_send_observed"] is None
+
+
+@pytest.mark.parametrize("stage", ["initial_entry_known_not_sent", "entry_local_not_sent", "entry_physical_send_guard_block",
+    "original_async_result_not_sent_terminal", "entry_physical_send_context_block"])
+def test_main_scoped_native_zero_wire_stages_survive_source_cache(stage):
+    from dataclasses import replace
+    event = _scoped_funnel_event(stage, entry_submit_attempt_id="local-call",
+        local_not_sent_contract="main_initial_entry_not_sent_v1", known_local_not_sent=True,
+        physical_send_attempt_count=0)
+    row = sentinel._payload_to_cache_row(dict(event_type="pipeline_event", emitted_at=event.emitted_at.isoformat(),
+        pipeline=event.pipeline, stage=stage, stock_name=event.stock_name, stock_code=event.stock_code,
+        record_id=event.record_id, fields=event.fields))
+    assert row is not None
+    event = replace(event, fields=row["fields"])
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), event, event])
+    assert result["overall"]["pass_known_not_sent_count"] == 1
+
+
+def test_main_scoped_conflicting_evaluation_alias_cannot_attach_a_broker_receipt():
+    sent = _scoped_funnel_event("order_leg_sent", entry_evaluation_attempt_id="unrelated-eval",
+                               broker_order_no="wrong-order")
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), sent])
+    assert result["overall"]["pass_broker_acceptance_observed_count"] == 0
+    assert result["evaluation_ledger"][0]["physical_send_observed"] is None
+    assert result["identity_rejection_reason_counts"] == {"evaluation_alias_conflict": 1}
+    assert result["overall"]["source_status"] == "source_gap"
+
+
+@pytest.mark.parametrize("tamper", ["generation", "actor", "fake_zero"])
+def test_main_scoped_identity_and_missing_physical_contract_fail_closed(tamper):
+    event = _scoped_funnel_event()
+    if tamper == "generation":
+        event.fields["watch_generation_id"] = "f" * 64
+    elif tamper == "actor":
+        event = _scoped_funnel_event(async_producer_pid="another-pid")
+    else:
+        event.fields.update(known_local_not_sent="true", physical_send_attempt_count="0",
+                            entry_submit_attempt_id="call-fake")
+    result = sentinel._main_scoped_entry_funnel([_scoped_funnel_event(), event])
+    assert result["evaluation_ledger"][0]["physical_send_observed"] is None
+    if tamper != "fake_zero":
+        assert result["overall"]["source_status"] == "source_gap"
+
+
+def test_main_scoped_markdown_uses_overall_and_labels_scanner_compatibility():
+    from datetime import timedelta
+    from src.tests.submit_drought_fixtures import make_report
+    event = _scoped_funnel_event()
+    report = make_report("2026-10-16", events=[event])
+    summary = sentinel._summarize_events([event], start_at=event.emitted_at-timedelta(seconds=1),
+                                         end_at=event.emitted_at+timedelta(seconds=1))
+    report.update(current={"session": summary, "windows": {}},
+        baseline={"date": None, "same_time_summary": None},
+        policy={"report_only": True, "live_runtime_effect": False, "forbidden_automations": []},
+        followup={"operator_action_required": False, "route": "report", "owner": "sentinel", "runtime_effect": False},
+        recommended_actions=[])
+    rendered = sentinel.build_markdown(report)
+    assert "Main 전체 정확 평가 합집합" in rendered
+    assert "PASS반환=1" in rendered
+    assert "물리전송미관측=1" in rendered
+    assert "scanner_only_legacy_compatibility" in rendered

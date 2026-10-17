@@ -355,3 +355,69 @@ def test_dynamic_leg_submit_intent_rejects_elapsed_slot(tmp_path):
             tmp_path, initial, leg_index=0, submit_price=10000,
             owner_client_intent_id="owner:first",
             now_epoch=first["cancel_request_by_epoch"])
+
+
+def test_known_not_sent_first_leg_is_durable_terminal_not_a_later_leg_permission(tmp_path):
+    from src.engine.scalping.initial_quantity_bundle_state import persist_initial_bundle_not_sent, bundle_is_terminal
+    from src.engine.scalping.initial_quantity_timeout import next_bundle_timeout_action
+    initial = new_bundle_state(attempt_id="not-sent", code="005930", target_id="101",
+        schedule=_initial()["schedule"], requested_qty=4, schema=SCHEMA_DYNAMIC_PRICE,
+        planned_legs=[{**leg, "price": 0} for leg in _initial()["planned_legs"]])
+    create_indexed_bundle(tmp_path, initial)
+    start = initial["schedule"]["order_start_at_epoch"]
+    intent = persist_dynamic_leg_submit_intent(tmp_path, initial, leg_index=0,
+        submit_price=10000, owner_client_intent_id="owner:not-sent", now_epoch=start)
+    terminal = persist_initial_bundle_not_sent(tmp_path, intent,
+        owner_client_intent_id="owner:not-sent", reason="execution_price_changed_reprice_required",
+        now_epoch=start+1)
+    assert bundle_state_valid(terminal) and bundle_is_terminal(terminal)
+    assert terminal["leg_states"][0]["state"] == "TERMINAL_NOT_SENT"
+    assert terminal["leg_states"][1] == {"state": "NOT_SUBMITTED"}
+    assert terminal["schedule"] == initial["schedule"]
+    from src.engine.scalping.initial_quantity_bundle_state import _digest
+    for key,value in (("filled_qty",1),("broker_order_no","0000123"),("ordered_qty",1)):
+        forged=deepcopy(terminal)
+        forged["leg_states"][0][key]=value
+        forged["bundle_content_sha256"]=_digest({k:v for k,v in forged.items() if k!="bundle_content_sha256"})
+        assert not bundle_state_valid(forged)
+    forged=deepcopy(terminal)
+    proof=forged["leg_states"][0]["not_sent_receipt"]
+    proof["intent_parent_sha256"]="f"*64
+    proof["content_sha256"]=_digest({k:v for k,v in proof.items() if k!="content_sha256"})
+    forged["bundle_content_sha256"]=_digest({k:v for k,v in forged.items() if k!="bundle_content_sha256"})
+    assert not bundle_state_valid(forged)
+    for now in [start+1, start+31, start+61]:
+        assert next_bundle_timeout_action(terminal["schedule"], terminal["leg_states"], now_epoch=now)["action"] == "DONE"
+    assert retire_indexed_bundle(tmp_path, terminal)
+    assert read_bundle_for_target(tmp_path, "005930", "101") == (terminal, "target_bundle_terminal")
+    assert recover_bundle_state(bundle_state_path(tmp_path,"not-sent"), intent,
+        indexed_journal_authority=True) == (terminal, "bundle_journal_ahead")
+    with pytest.raises(ValueError):
+        next_bundle_state(terminal, 1, {"state": "SUBMIT_INTENT", "submit_intent_at_epoch": start+31,
+            "submit_price": 10000, "owner_client_intent_id": "owner:later"})
+    # Same evaluated attempt cannot reopen; a genuinely new attempt can own this target.
+    with pytest.raises(ValueError):
+        create_indexed_bundle(tmp_path, initial)
+    later = new_bundle_state(attempt_id="new-evaluation", code="005930", target_id="101",
+        schedule=initial["schedule"], planned_legs=initial["planned_legs"],
+        requested_qty=4, schema=SCHEMA_DYNAMIC_PRICE)
+    create_indexed_bundle(tmp_path, later)
+    assert read_bundle_for_target(tmp_path,"005930","101")[0] == later
+
+
+@pytest.mark.parametrize("bad_state", ["OPEN", "UNCERTAIN"])
+def test_known_not_sent_never_closes_sent_or_uncertain_journal(tmp_path, bad_state):
+    from src.engine.scalping.initial_quantity_bundle_state import persist_initial_bundle_not_sent
+    initial = new_bundle_state(attempt_id="uncertain", code="005930", target_id="101",
+        schedule=_initial()["schedule"], requested_qty=4, schema=SCHEMA_DYNAMIC_PRICE,
+        planned_legs=[{**leg, "price":0} for leg in _initial()["planned_legs"]])
+    create_indexed_bundle(tmp_path, initial)
+    start=initial["schedule"]["order_start_at_epoch"]
+    intent=persist_dynamic_leg_submit_intent(tmp_path,initial,leg_index=0,
+        submit_price=10000,owner_client_intent_id="owner:uncertain",now_epoch=start)
+    uncertain=persist_dynamic_leg_submit_response(tmp_path,intent,leg_index=0,
+        broker_order_no="0000123" if bad_state == "OPEN" else None,owner_exact=bad_state == "OPEN")
+    with pytest.raises(ValueError,match="state_conflict"):
+        persist_initial_bundle_not_sent(tmp_path,uncertain,owner_client_intent_id="owner:uncertain",
+            reason="forged-local",now_epoch=start+1)
+    assert read_bundle_for_target(tmp_path,"005930","101")[0] == uncertain

@@ -16,7 +16,7 @@ import json
 import os
 import stat
 import tempfile
-from collections import Counter, defaultdict
+from collections import ChainMap, Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -57,6 +57,9 @@ ENTRY_STAGES = {
     "order_leg_fail",
     "order_leg_sent",
     "order_leg_owner_registry_reconciliation_required",
+    "initial_entry_known_not_sent",
+    "original_async_result_not_sent_terminal",
+    "entry_physical_send_context_block",
 }
 HOLDING_STAGES = {"holding_started"}
 SOURCE_HANDOFF_STAGES = {"prev_close_gainer_entry_ai_handoff"}
@@ -106,6 +109,8 @@ BLOCKER_STAGES = {
     "entry_armed_expired_after_wait",
     "entry_arm_expired",
     "entry_submit_identity_reconciliation_blocked",
+    "entry_local_not_sent",
+    "entry_physical_send_guard_block",
     "pre_submit_weak_context_late_entry_guard_block",
     "real_weak_pullback_entry_block",
     *UPSTREAM_BLOCK_STAGES,
@@ -2457,6 +2462,11 @@ def _calculate_event_summary(events, *, start_at, end_at, summary_rows=None):
     )
     # Input liveness is independent of the cash-eligible decision population.
     result["latest_event_at"] = raw["latest_event_at"]
+    # The legacy drought population excludes proven cash failures. The Main
+    # phase census must still retain those returned/accepted evaluations.
+    result["machine_primary_entry_funnel"]["main_scoped_funnel"] = raw[
+        "machine_primary_entry_funnel"
+    ]["main_scoped_funnel"]
     result["cash_shortfall_exclusion"] = {
         "schema": "submit_drought_cash_shortfall_exclusion_v1",
         "runtime_effect": False,
@@ -3110,6 +3120,236 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
     }
 
 
+def _main_scoped_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
+    """Count loaded Main evidence once per exact evaluation, across both origins.
+
+    A provider PASS, Main acceptance, physical send and broker acceptance are
+    different observations. Missing receipts never become observed zero sends.
+    The legacy scanner funnel below retains its own reconciliation contract.
+    """
+    absent = {"", "none", "null", "unknown", "-", "0"}
+
+    def value(fields, *names):
+        for name in names:
+            result = _safe_str(fields.get(name)).strip()
+            if result.lower() not in absent:
+                return result
+        return ""
+
+    def truth(raw):
+        return _safe_str(raw).strip().lower() in {"true", "1"}
+
+    grouped: dict[tuple[str, str, str], list[PipelineEvent]] = defaultdict(list)
+    missing_identity = 0
+    identity_rejection_reasons: Counter[str] = Counter()
+    for event in events:
+        if event.pipeline != "ENTRY_PIPELINE":
+            continue
+        fields = event.fields
+        relevant = (_is_machine_primary_event(event)
+                    or event.stage == "entry_async_disposition")
+        # Historical sim/CF and retired-owner observations cannot become Main.
+        population = value(fields, "pipeline_lifecycle_population_scope").lower()
+        if population and any(part in population for part in ("sim", "counterfactual", "episode", "widget")):
+            continue
+        aliases = {value(fields, name) for name in ("evaluation_attempt_id", "entry_evaluation_attempt_id",
+                                                  "entry_mechanistic_evaluation_id")} - {""}
+        if len(aliases) > 1:
+            missing_identity += 1
+            identity_rejection_reasons["evaluation_alias_conflict"] += 1
+            continue
+        evaluation = value(fields, "evaluation_attempt_id", "entry_evaluation_attempt_id",
+                           "entry_mechanistic_evaluation_id")
+        if not relevant and not evaluation:
+            continue
+        if not evaluation or not event.stock_code:
+            missing_identity += int(relevant)
+            identity_rejection_reasons["evaluation_or_symbol_missing"] += int(relevant)
+            continue
+        source_day = value(fields, "async_request_source_date") or event.emitted_at.date().isoformat()
+        try:
+            if date.fromisoformat(source_day).isoformat() != source_day:
+                raise ValueError("noncanonical_source_date")
+        except ValueError:
+            missing_identity += 1
+            identity_rejection_reasons["request_source_date_invalid"] += 1
+            continue
+        grouped[(source_day, evaluation, event.stock_code)].append(event)
+
+    ledger = []
+    for (day, evaluation, symbol), rows in sorted(grouped.items()):
+        # Include downstream rows only when the exact evaluation has a machine
+        # or async receipt. Never borrow a neighbouring symbol/time attempt.
+        if not any(_is_machine_primary_event(e) or e.stage == "entry_async_disposition" for e in rows):
+            continue
+        identities = set()
+        issues = set()
+        traces, requests, actors, records = set(), set(), set(), set()
+        pass_evidence, accepted_evidence, physical_evidence, broker_evidence = set(), set(), set(), set()
+        known_not_sent_calls, submit_calls = set(), set()
+        dispositions = set()
+        record_bound = False
+        order_numbers = set()
+        for event in rows:
+            fields = event.fields
+            trace = value(fields, "ai_decision_trace_id")
+            request = value(fields, "async_request_id", "scanner_async_request_id")
+            if trace:
+                traces.add(trace)
+            if request:
+                requests.add(request)
+            pid, start = value(fields, "async_producer_pid"), value(fields, "async_producer_start_ticks")
+            if pid and start:
+                actors.add((pid, start))
+            if event.record_id and str(event.record_id).isdigit():
+                records.add(str(event.record_id))
+            record_bound |= fields.get("pipeline_lifecycle_population_scope") == "real_record_bound"
+            # The async producer names its exact policy hash differently. This
+            # is a declared alias, not an identity inferred from symbol/time.
+            native_fields = fields
+            if not value(fields, "policy_bundle_hash", "machine_bundle_sha256",
+                         "entry_setup_live_policy_candidate_contract_sha256"):
+                native_fields = ChainMap({"policy_bundle_hash": value(fields, "entry_machine_bundle_sha256")}, fields)
+            native = PipelineEvent(event.emitted_at, event.pipeline, event.stage,
+                                   event.stock_name, event.stock_code, event.record_id, native_fields)
+            fixed = value(fields, "watch_origin") == "MAIN_FIXED_WATCH"
+            components = (_machine_primary_fixed_watch_identity_components(native) if fixed
+                          else _machine_primary_identity_components(native))
+            valid = (_machine_primary_fixed_watch_identity_valid(native) if fixed
+                     else bool(_machine_primary_evaluation_key(native)))
+            if valid:
+                identities.add(("fixed_watch" if fixed else "scanner", tuple(components.items())))
+            elif fixed and all(value(components, key) for key in components):
+                issues.add("fixed_watch_identity_invalid")
+            action = value(fields, "async_machine_action", "entry_mechanistic_action").upper()
+            screen = value(fields, "async_auxiliary_status", "entry_ai_screen_status").lower()
+            if action == "ENTER_NOW" and screen == "pass":
+                pass_evidence.add(event.stage)
+            if event.stage == "entry_async_disposition":
+                disposition = value(fields, "async_disposition")
+                if disposition:
+                    dispositions.add(disposition)
+                if disposition == "accepted_to_entry_path":
+                    accepted_evidence.add("async_accepted_to_entry_path")
+            order = value(fields, "broker_order_no", "entry_submit_broker_order_no", "order_no")
+            if event.stage in {"order_leg_sent", "order_bundle_submitted"} and order:
+                broker_evidence.add("successful_submission_response_with_order_identity")
+                order_numbers.add(order)
+            if (event.stage == "entry_submit_attempt_finished"
+                    and value(fields, "entry_submit_attempt_id")
+                    and truth(fields.get("submit_call_broker_accepted"))):
+                broker_evidence.add("submit_call_broker_accepted_receipt")
+            # Generic actual_order_submitted and async broker-attempt counters
+            # are report/adapter fields, not proof of a physical HTTP call.
+            count = finite_number(fields.get("physical_send_attempt_count"))
+            if count is not None and count > 0:
+                physical_evidence.add("physical_send_attempt_count")
+            call = value(fields, "entry_submit_attempt_id")
+            if call:
+                submit_calls.add(call)
+            if (call and fields.get("local_not_sent_contract") == "main_initial_entry_not_sent_v1"
+                    and truth(fields.get("known_local_not_sent")) and count == 0):
+                known_not_sent_calls.add(call)
+        if len(actors) > 1:
+            issues.add("evaluation_runtime_identity_conflict")
+        if len(identities) > 1:
+            issues.add("evaluation_native_identity_conflict")
+        if not identities:
+            issues.add("native_cohort_identity_unobserved")
+        cohort = next(iter(identities))[0] if len(identities) == 1 and not issues else "unknown"
+        if broker_evidence:
+            physical_evidence.add("broker_acceptance_proves_send")
+        # One zero-wire retry does not prove another call on this evaluation
+        # was unsent. Only the native terminal contract closes every seen call.
+        known_not_sent = bool(submit_calls and known_not_sent_calls == submit_calls)
+        # Keep the evaluation census distinct from causal phase attribution.
+        # Multiple AI responses on one evaluation may represent retries; a
+        # PASS on one trace cannot authorize a submission on another trace.
+        binding_issues = set(issues) if pass_evidence else set()
+        if pass_evidence and not actors:
+            binding_issues.add("runtime_identity_unobserved")
+        if pass_evidence and len(traces) != 1:
+            binding_issues.add("pass_trace_ambiguous" if traces else "pass_trace_unobserved")
+        ledger.append({
+            "evaluation_key": "|".join((day, evaluation, symbol)),
+            "source_date": day, "evaluation_attempt_id": evaluation, "stock_code": symbol,
+            "cohort": cohort, "identity_issues": sorted(issues),
+            "native_identities": [{"cohort": origin, **dict(parts)} for origin, parts in sorted(identities)],
+            "ai_decision_trace_ids": sorted(traces), "async_request_ids": sorted(requests),
+            "runtime_identities": [list(actor) for actor in sorted(actors)],
+            "runtime_identity_status": "conflicting" if len(actors) > 1 else "observed" if actors else "unobservable",
+            "record_ids": sorted(records), "real_record_bound_observed": record_bound,
+            "auxiliary_pass_returned_observed": bool(pass_evidence),
+            "pass_evidence": sorted(pass_evidence),
+            "pass_to_submission_binding": "source_gap" if binding_issues else "exact" if pass_evidence else "not_applicable",
+            "pass_binding_issues": sorted(binding_issues),
+            "main_accepted_observed": bool(accepted_evidence),
+            "main_acceptance_evidence": sorted(accepted_evidence),
+            "main_dispositions": sorted(dispositions),
+            "physical_send_observed": True if physical_evidence else False if known_not_sent else None,
+            "physical_send_evidence": sorted(physical_evidence),
+            "known_not_sent_submit_call_ids": sorted(known_not_sent_calls),
+            "submit_call_ids": sorted(submit_calls),
+            "broker_acceptance_observed": True if broker_evidence else None,
+            "broker_acceptance_evidence": sorted(broker_evidence),
+            "broker_order_numbers": sorted(order_numbers),
+            "first_observed_at": min(e.emitted_at for e in rows).isoformat(),
+            "last_observed_at": max(e.emitted_at for e in rows).isoformat(),
+        })
+
+    def summarize(rows):
+        passed = [r for r in rows if r["auxiliary_pass_returned_observed"]]
+        bound = [r for r in passed if r["pass_to_submission_binding"] == "exact"]
+        accepted = sum(r["main_accepted_observed"] for r in bound)
+        sent = sum(r["physical_send_observed"] is True for r in bound)
+        unsent = sum(r["physical_send_observed"] is False for r in bound)
+        broker_accepted = sum(r["broker_acceptance_observed"] is True for r in bound)
+        return {
+            "evaluation_count": len(rows),
+            "pass_returned_observed_count": len(passed),
+            "pass_real_record_bound_observed_count": sum(r["real_record_bound_observed"] for r in passed),
+            "pass_binding_source_gap_count": len(passed) - len(bound),
+            "pass_main_accepted_observed_count": accepted,
+            "pass_main_acceptance_unobserved_count": len(passed) - accepted,
+            "pass_physical_send_observed_count": sent,
+            "pass_known_not_sent_count": unsent,
+            "pass_physical_send_unobservable_count": len(passed) - sent - unsent,
+            "pass_broker_acceptance_observed_count": broker_accepted,
+            "pass_broker_acceptance_unobserved_count": len(passed) - broker_accepted,
+            # Independent phase observations remain visible when a causal
+            # PASS -> submission association is unproven.
+            "phase_main_accepted_observed_count": sum(r["main_accepted_observed"] for r in rows),
+            "phase_physical_send_observed_count": sum(r["physical_send_observed"] is True for r in rows),
+            "phase_broker_acceptance_observed_count": sum(r["broker_acceptance_observed"] is True for r in rows),
+            "source_status": "source_gap" if any(r["identity_issues"] or r["pass_binding_issues"] for r in rows) else "observed" if rows else "unobservable",
+        }
+
+    cohorts = {cohort: summarize([r for r in ledger if r["cohort"] == cohort])
+               for cohort in ("scanner", "fixed_watch", "unknown")}
+    overall = summarize(ledger)
+    if missing_identity:
+        overall["source_status"] = "source_gap"
+    return {
+        "schema": "main_scoped_entry_funnel_v1", "metric_scope": "scanner_fixed_watch_exact_evaluation_union",
+        "metric_role": "funnel_count", "decision_authority": "source_only_attribution", "runtime_effect": False,
+        "window_policy": "caller_loaded_source_window_not_full_history",
+        "sample_floor": "not_applicable_observed_counts_only",
+        "primary_decision_metric": "exact_evaluation_phase_counts_with_unobservable_remainder",
+        "source_quality_gate": "native_identity_single_trace_single_runtime_for_pass_causal_attribution",
+        "identity_contract": "source_date_evaluation_attempt_id_symbol_with_native_cohort_validation",
+        "count_semantics": "distinct_evaluations_not_provider_calls_orders_fills_or_pnl",
+        "source_coverage": "loaded_events_only_full_historical_denominator_unproven",
+        "decision_population": "loaded_events_before_cash_shortfall_exclusion",
+        "full_denominator_proven": False, "identity_missing_event_count": missing_identity,
+        "identity_rejection_reason_counts": dict(sorted(identity_rejection_reasons.items())),
+        "overall": overall, "cohorts": cohorts,
+        "cohort_count_conservation": sum(c["evaluation_count"] for c in cohorts.values()) == len(ledger),
+        "pass_count_conservation": sum(c["pass_returned_observed_count"] for c in cohorts.values()) == overall["pass_returned_observed_count"],
+        "evaluation_ledger": ledger[-1024:], "ledger_omitted_evaluation_count": max(0, len(ledger)-1024),
+        "forbidden_uses": ["runtime_apply", "broker_order", "fill_proof", "realized_economics"],
+    }
+
+
 def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
     """Diagnostic machine -> AI screen -> submit funnel with explicit identity.
 
@@ -3575,6 +3815,8 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     sizing_valid = sizing_chain_counts["sizing_plan_valid"]
     return {
         "schema": "machine_primary_entry_funnel_v2",
+        "metric_scope": "scanner_only_legacy_compatibility",
+        "main_scoped_funnel": _main_scoped_entry_funnel(events),
         "metric_role": "funnel_count",
         "decision_authority": "source_only_attribution",
         "runtime_effect": False,
@@ -5725,6 +5967,8 @@ def build_markdown(report: dict[str, Any]) -> str:
         if isinstance(session.get("machine_primary_entry_funnel"), dict)
         else {}
     )
+    scoped_funnel = machine_funnel.get("main_scoped_funnel") or {}
+    scoped_overall = scoped_funnel.get("overall") or {}
     source_invalid = (
         machine_funnel.get("source_invalid_decomposition")
         if isinstance(machine_funnel.get("source_invalid_decomposition"), dict)
@@ -5794,13 +6038,29 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- AI actions: `events={session.get('ai_action_event_counts') or {}}, "
         f"unique={session.get('ai_action_unique_counts') or {}}`",
         f"- budget/AI lineage: `{session.get('budget_ai_lineage') or {}}`",
-        f"- machine SOURCE_INVALID: `evaluations={source_invalid.get('evaluation_count', 0)}, "
+        f"- Main 전체 정확 평가 합집합 (관측 근거): `PASS반환={scoped_overall.get('pass_returned_observed_count')}, "
+        f"PASS연계Main인수={scoped_overall.get('pass_main_accepted_observed_count')}, "
+        f"물리전송확인={scoped_overall.get('pass_physical_send_observed_count')}, "
+        f"물리전송미관측={scoped_overall.get('pass_physical_send_unobservable_count')}, "
+        f"broker접수확인={scoped_overall.get('pass_broker_acceptance_observed_count')}, "
+        f"source={scoped_overall.get('source_status', 'unobservable')}`",
+        f"- Main 단계별 독립 관측: `Main인수={scoped_overall.get('phase_main_accepted_observed_count')}, "
+        f"물리전송확인={scoped_overall.get('phase_physical_send_observed_count')}, "
+        f"broker접수확인={scoped_overall.get('phase_broker_acceptance_observed_count')}, "
+        f"PASS연결원천결손={scoped_overall.get('pass_binding_source_gap_count')}`; "
+        "서로 다른 AI trace의 PASS와 제출을 연결하지 않음",
+        f"- Main 원천 범위: `{scoped_funnel.get('source_coverage', 'unobservable')}`; "
+        "반환·인수·전송·접수는 별도 단계이며 미관측은 미전송 0건을 뜻하지 않음",
+        f"- Main cohort별 정확 평가: `{scoped_funnel.get('cohorts') or {}}`",
+        f"- 기존 machine funnel 범위: `{machine_funnel.get('metric_scope', 'legacy_scanner_scope_unlabelled')}`; "
+        "기존 scanner 수치를 상시감시 포함 전체 수치로 사용하지 않음",
+        f"- scanner machine SOURCE_INVALID: `evaluations={source_invalid.get('evaluation_count', 0)}, "
         f"classified={source_invalid.get('classified_count', 0)}, "
         f"unclassified={source_invalid.get('unclassified_count', 0)}, "
         f"coverage={source_invalid.get('coverage_pct')}`",
-        f"- machine SOURCE_INVALID primary categories: `{source_invalid.get('primary_category_counts') or {}}`",
-        f"- machine SOURCE_INVALID primary blockers: `{source_invalid.get('primary_blocker_counts') or {}}`",
-        f"- machine promotion lifecycle: `unique={promotion_lifecycle.get('unique_promotion_count', 0)}, "
+        f"- scanner machine SOURCE_INVALID primary categories: `{source_invalid.get('primary_category_counts') or {}}`",
+        f"- scanner machine SOURCE_INVALID primary blockers: `{source_invalid.get('primary_blocker_counts') or {}}`",
+        f"- scanner machine promotion lifecycle: `unique={promotion_lifecycle.get('unique_promotion_count', 0)}, "
         f"ever_source_invalid={promotion_lifecycle.get('ever_source_invalid_count', 0)}, "
         f"latest_source_invalid={promotion_lifecycle.get('latest_source_invalid_count', 0)}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",

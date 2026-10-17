@@ -17,7 +17,7 @@ from src.engine.scalping.initial_quantity_type import QUANTITY_TYPES, kst_timest
 
 MAX_BUNDLE_WAIT_SEC = 1200
 SCHEDULE_SCHEMA = "initial_quantity_bundle_timeout_schedule_v1"
-_TERMINAL_STATES = {"TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED"}
+_TERMINAL_STATES = {"TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED", "TERMINAL_NOT_SENT"}
 _OPEN_STATES = {"OPEN", "PARTIAL", "CANCEL_REQUESTED"}
 
 
@@ -45,6 +45,26 @@ def _terminal_proof_valid(item: dict[str, Any], state: str, slot: dict[str, Any]
                 and _identity(item.get("owner_registry_receipt_id"))
                 and not str(item.get("broker_order_no") or "").strip()
                 and item.get("skip_reason") == "insufficient_time_for_cancel_confirmation")
+    if state == "TERMINAL_NOT_SENT":
+        proof = item.get("not_sent_receipt")
+        if not isinstance(proof, dict):
+            return False
+        try:
+            proof_digest = _digest({key: value for key, value in proof.items()
+                                   if key != "content_sha256"})
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            proof.get("schema") == "initial_quantity_known_not_sent_v1"
+            and proof.get("content_sha256") == proof_digest
+            and proof.get("broker_order_attempted") is False
+            and type(proof.get("physical_send_attempt_count")) is int
+            and proof["physical_send_attempt_count"] == 0
+            and proof.get("confirmed_at_epoch") == confirmed_at
+            and _identity(proof.get("reason"))
+            and _identity(proof.get("owner_client_intent_id"))
+            and proof.get("owner_client_intent_id") == item.get("owner_client_intent_id")
+            and not item.get("broker_order_no"))
     ordered = item.get("ordered_qty")
     filled = item.get("filled_qty")
     cancelled = item.get("cancelled_qty")
@@ -162,11 +182,24 @@ def next_bundle_timeout_action(
             or not isinstance(now_epoch, (int, float))
             or not math.isfinite(now_epoch)):
         return {"action": "BLOCK_INVALID_TIMEOUT_CONTRACT"}
+    if not all(isinstance(item, dict) for item in leg_states):
+        return {"action": "BLOCK_INVALID_LEG_STATE"}
     overdue = now_epoch > schedule["bundle_deadline_epoch"]
+    if leg_states[0].get("state") == "TERMINAL_NOT_SENT":
+        # A proven-unsent initial leg closes the whole attempt. Later slots do
+        # not acquire authority to turn that failed initial entry into a BUY.
+        if (any(item.get("state") != "NOT_SUBMITTED" for item in leg_states[1:])
+                or not _terminal_proof_valid(leg_states[0], "TERMINAL_NOT_SENT",
+                                             schedule["slots"][0], now_epoch)):
+            return {"action": "BLOCK_INVALID_TIMEOUT_CONTRACT"}
+        return {"action": "DONE", "reason": "initial_entry_known_not_sent",
+                "budget_breached": overdue}
     for index, (slot, item) in enumerate(zip(schedule["slots"], leg_states)):
         if not isinstance(item, dict):
             return {"action": "BLOCK_INVALID_LEG_STATE", "leg_index": index}
         state = item.get("state")
+        if state == "TERMINAL_NOT_SENT":
+            return {"action": "BLOCK_INVALID_LEG_STATE", "leg_index": index}
         if state in _TERMINAL_STATES:
             if not _terminal_proof_valid(item, state, slot, now_epoch):
                 return {"action": "RECONCILE", "leg_index": index,

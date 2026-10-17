@@ -1440,3 +1440,80 @@ def test_successor_buy_waits_for_terminal_and_uses_fresh_p1_price(
     assert handler._initial_quantity_submit_successor_leg(
         stock, "005930", leg_index=1)[0] is False
     assert len(sends) == 1
+
+
+@pytest.mark.parametrize("scenario", ["no_owner", "fresh_rejected", "old_rejected", "bound", "ambiguous", "wrong_async", "wrong_bundle", "inventory"])
+@pytest.mark.parametrize("sequential", [False, True])
+def test_known_not_sent_closes_only_exact_initial_custody(tmp_path, monkeypatch, scenario, sequential):
+    from types import SimpleNamespace
+    from src.engine import sniper_state_handlers as handler
+    from src.tests.test_initial_quantity_bundle_state import _initial
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, new_bundle_state, create_indexed_bundle,
+        persist_dynamic_leg_submit_intent, read_bundle_for_target)
+    start=_initial()["schedule"]["order_start_at_epoch"]
+    monkeypatch.setattr(handler,"DATA_DIR",tmp_path)
+    monkeypatch.setattr(handler.time,"time",lambda:start+1)
+    monkeypatch.setattr(handler,"_log_entry_pipeline",lambda *a,**k:None)
+    monkeypatch.setattr(handler,"submit_attempt_machine_lineage",lambda *a:{"evaluation_attempt_id":"evaluation"})
+    owner=SimpleNamespace(client_intent_id="owner:leg0")
+    stock={"id":"101","status":"BUY_ORDERED" if sequential else "WATCHING","buy_qty":0,
+        "last_watching_ai_decision_trace_id":"trace",
+        "_async_entry_submission_identity":{"evaluation_attempt_id":"evaluation","ai_decision_trace_id":"trace"}}
+    row = None if scenario == "no_owner" else dict(state="INTENT_REJECTED",intent_id="reserved-this-call",
+        client_intent_id="owner:leg0",symbol="005930",side="BUY",action="NEW",quantity=1,
+        route="KRX",order_date="2026-09-28")
+    if scenario == "bound": row.update(state="ORDER_BOUND",broker_order_no="0000123")
+    if scenario == "ambiguous": row.update(state="INTENT_AMBIGUOUS")
+    monkeypatch.setattr(handler,"default_order_owner_registry",lambda:SimpleNamespace(intent_for_client=lambda **_:row))
+    response=handler.kiwoom_orders._local_buy_no_call_response(
+        {"return_code":"ENTRY_SEND_GUARD_BLOCKED"},
+        reserved_intent_id=None if scenario == "old_rejected" else "reserved-this-call")
+    if sequential:
+        initial=new_bundle_state(attempt_id="evaluation",code="005930",target_id="101",
+            schedule=_initial()["schedule"],requested_qty=4,schema=SCHEMA_DYNAMIC_PRICE,
+            planned_legs=[{**leg,"price":0} for leg in _initial()["planned_legs"]])
+        base=tmp_path/"runtime/initial_quantity/bundles"
+        create_indexed_bundle(base,initial)
+        intent=persist_dynamic_leg_submit_intent(base,initial,leg_index=0,submit_price=10000,
+            owner_client_intent_id="owner:leg0",now_epoch=start)
+        stock.update(initial_quantity_bundle=intent,initial_quantity_bundle_indexed=True)
+    if scenario == "wrong_async": stock["_async_entry_submission_identity"]["evaluation_attempt_id"]="old-evaluation"
+    if scenario == "wrong_bundle":
+        if not sequential: return
+        stock["id"]="other-target"
+    if scenario == "inventory": stock["buy_qty"]=1
+    before=deepcopy(stock)
+    result=handler._initial_entry_known_not_sent(stock,"005930",owner_context=owner,
+        reason="execution_price_changed_reprice_required",local_response=response)
+    assert result["known_local_not_sent"] and result["physical_send_attempt_count"]==0
+    if scenario in {"no_owner","fresh_rejected"}:
+        assert "local_not_sent_custody_gap" not in result
+        assert stock["status"]=="WATCHING" and "_async_entry_submission_identity" not in stock
+        assert stock["_async_entry_nonexecution_identity"]["evaluation_attempt_id"]=="evaluation"
+        if sequential:
+            terminal,status=read_bundle_for_target(base,"005930","101")
+            assert status=="target_bundle_terminal"
+            assert terminal["leg_states"][0]["state"]=="TERMINAL_NOT_SENT"
+            assert "initial_quantity_bundle" not in stock
+            # Crash after terminal journal, before stock cleanup: normal reconciler
+            # finishes handoff without a new submit/cancel or broker reconciliation.
+            restored=deepcopy(before)  # saved SUBMIT_INTENT, newer durable NOT_SENT journal
+            monkeypatch.setattr(handler,"_initial_quantity_submit_successor_leg",lambda *a,**k:pytest.fail("later leg BUY"))
+            monkeypatch.setattr(handler,"_request_broker_snapshot_refresh",lambda *a,**k:pytest.fail("known-unsent broker lookup"))
+            handler._reconcile_pending_entry_orders(restored,"005930","SCALPING")
+            assert restored["status"]=="WATCHING" and "initial_quantity_bundle" not in restored
+            assert "_async_entry_submission_identity" not in restored
+            assert restored["_async_entry_nonexecution_identity"]["evaluation_attempt_id"]=="evaluation"
+            detached={**deepcopy(before), "strategy":"SCALPING"}
+            detached.pop("initial_quantity_bundle")
+            detached.pop("initial_quantity_bundle_indexed")
+            monkeypatch.setattr(handler,"_manual_control_exclusion_blocked",lambda *a,**k:False)
+            handler.handle_buy_ordered_state(detached,"005930")
+            assert detached["status"]=="WATCHING" and "initial_quantity_bundle" not in detached
+            assert "_async_entry_submission_identity" not in detached
+    else:
+        assert "local_not_sent_custody_gap" in result
+        assert stock==before
+        if sequential:
+            assert read_bundle_for_target(base,"005930","101")[0]==intent

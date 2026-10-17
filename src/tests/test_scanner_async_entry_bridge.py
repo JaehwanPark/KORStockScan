@@ -256,7 +256,7 @@ def test_native_ack_exception_is_before_acceptance_and_cleans_only_original(monk
 @pytest.mark.parametrize('origin', ['scanner', 'fixed_watch'])
 @pytest.mark.parametrize('compact', ['v1', 'v2'])
 @pytest.mark.parametrize('outcome', ['accepted', 'no_response', 'exception', 'final_deadline', 'delay_capacity', 'delay_armed',
-                                     'context_block', 'local_guard_block', 'auth_guard_block'])
+                                     'context_block', 'local_guard_block', 'auth_guard_block', 'local_preflight_block', 'forged_local_guard', 'prepare_first_outbox_error', 'prepare_second_outbox_error'])
 def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monkeypatch, origin, compact, outcome):
     """Real resolver, WATCHING, receipt/sizing/price/final guards; no network."""
     from src.tests.test_mechanistic_entry_runtime_policy import initial
@@ -313,6 +313,8 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
         monkeypatch.setattr(delay,'load_runtime_policy',lambda **k:{'status':'loaded','delay_sec':30,
             'schema':'pre_submit_delay_policy_v2','policy_sha256':'f'*64})
     # External account/source facts are fixed; execution validators stay real.
+    monkeypatch.setattr(handlers, 'default_order_owner_registry',
+        lambda:SimpleNamespace(intent_for_client=lambda **_:None))
     monkeypatch.setattr(handlers.kiwoom_orders, 'get_deposit', lambda *a, **k:1000000)
     monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_meta', lambda:dict(source='fixture',account_deposit=1000000))
     monkeypatch.setattr(handlers.kiwoom_orders, 'get_last_deposit_errors', lambda:[])
@@ -413,15 +415,43 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
             return None
         if outcome == 'exception':
             raise RuntimeError('controlled broker transport uncertainty')
-        if outcome in {'local_guard_block', 'auth_guard_block'}:
+        if outcome == 'local_preflight_block':
+            return handlers.kiwoom_orders._local_buy_no_call_response(dict(
+                return_code='ORDER_TYPE_PREFLIGHT_BLOCKED', return_msg='nxt_market_to_best_limit'))
+        if outcome in {'local_guard_block', 'auth_guard_block', 'forged_local_guard'}:
             attempted = outcome == 'auth_guard_block'
-            return dict(return_code='ENTRY_SEND_GUARD_BLOCKED', entry_send_guard_blocked=True,
+            response = dict(return_code='ENTRY_SEND_GUARD_BLOCKED', entry_send_guard_blocked=True,
                 return_msg='original_entry_deadline_expired', broker_order_attempted=attempted,
                 physical_send_attempt_count=int(attempted),
                 entry_send_guard_receipt={'allowed': False, 'reason': 'original_entry_deadline_expired'},
                 rejected_auth_response={'return_code': '8005'} if attempted else None)
+            return response if attempted or outcome == 'forged_local_guard' else handlers.kiwoom_orders._local_buy_no_call_response(response)
         return dict(return_code='0', ord_no='0000001', broker_route='SOR')
     monkeypatch.setattr(handlers.kiwoom_orders, 'send_buy_order', adapter)
+    if outcome.startswith('prepare_'):
+        original_request=handlers._resolve_live_entry_order_request
+        def sequential_request(**kwargs):
+            result=original_request(**kwargs)
+            kwargs['planned_order']['initial_quantity_sequential_continuation']={}
+            return result
+        monkeypatch.setattr(handlers,'_resolve_live_entry_order_request',sequential_request)
+        original_prepare=handlers._initial_quantity_prepare_first_submit
+        def failing_prepare(target, code, planned_order, **kwargs):
+            target['last_watching_ai_machine_primary_fields']['continuous_reversal_opportunity_key']='a'*64
+            planned_order['initial_quantity_sequential_continuation']={
+                'planned_legs':[dict(leg_index=0,qty=kwargs['qty'],price=0,
+                    route=kwargs['route'],tag=planned_order['tag'])],
+                'requested_qty':kwargs['qty'],'quantity_type':'KRX_PARENT',
+                'policy_file_sha256':'a'*64,'total_wait_sec':60,
+                'decision_at':datetime.fromtimestamp(clock-1,policy.KST).isoformat()}
+            return original_prepare(target,code,planned_order,**kwargs)
+        monkeypatch.setattr(handlers,'_initial_quantity_prepare_first_submit',failing_prepare)
+        from src.engine.scalping import reversal_operating_outbox
+        def failing_outbox(data_root,key,state,**kwargs):
+            if state == ('intent_assigned' if outcome=='prepare_first_outbox_error' else 'submission_reconciliation'):
+                raise ValueError('controlled_outbox_failure')
+            return {}
+        monkeypatch.setattr(reversal_operating_outbox,'advance',failing_outbox)
     if outcome == 'context_block':
         def invalid_context(*args, **kwargs):
             raise ValueError('controlled_initial_context_invalid')
@@ -448,27 +478,46 @@ def test_retained_pass_reaches_real_submit_body_and_adapter_once(tmp_path, monke
                 consume()
         else:
             consume()
-        expected = 0 if outcome in {'final_deadline', 'context_block'} or outcome.startswith('delay_') else 1
+        expected = 0 if outcome in {'final_deadline', 'context_block'} or outcome.startswith(('delay_','prepare_')) else 1
         if len(calls) != expected:
             pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in ('reason','skip_reason','block_reason','submit_call_outcome','sizing_block_reason')}) for s,f in stages[-12:]]))
         if calls:
             assert calls[0][0][0] == '005930' and calls[0][0][1] > 0
         if outcome == 'accepted':
             assert any(stage=='order_bundle_submitted' for stage,_ in stages)
-        if outcome in {'context_block', 'local_guard_block', 'auth_guard_block'}:
+        if outcome in {'context_block', 'local_guard_block', 'auth_guard_block', 'local_preflight_block', 'forged_local_guard'}:
             failed = next(fields for stage, fields in stages if stage == 'order_bundle_failed')
-            attempted = outcome == 'auth_guard_block'
+            attempted = outcome in {'auth_guard_block', 'forged_local_guard'}
             terminal_reason = ('entry_physical_send_context_block' if outcome == 'context_block'
+                               else 'entry_local_not_sent' if outcome == 'local_preflight_block'
                                else 'entry_physical_send_guard_block')
             assert failed['broker_submit_attempt_count'] == int(attempted)
             assert failed['order_bundle_failure_mode'] == (
                 'broker_submit_failed_or_unacknowledged' if attempted else 'pre_broker_blocked')
             assert failed['broker_order_forbidden'] is (not attempted)
             assert failed['entry_send_guard_terminal_reason'] == terminal_reason
-            assert failed['physical_send_attempt_count'] == int(attempted)
+            assert failed['physical_send_attempt_count'] == (None if outcome == 'forged_local_guard' else int(attempted))
+            assert failed['known_local_not_sent'] is (not attempted)
+            if not attempted:
+                assert '_async_entry_submission_identity' not in stock
+                assert stock['_async_entry_nonexecution_identity']['evaluation_attempt_id'] == 'eval-original'
+            else:
+                assert stock['_async_entry_submission_identity']['evaluation_attempt_id'] == 'eval-original'
             returned = [event for event in dispositions if event[0] == 'entry_path_returned']
             assert returned[-1][1] == terminal_reason
             assert returned[-1][2]['async_entry_broker_attempts'] == int(attempted)
+        if outcome.startswith('prepare_'):
+            failed=next(fields for stage,fields in stages if stage=='order_bundle_failed')
+            assert failed['broker_submit_attempt_count']==0
+            assert failed['order_bundle_failure_mode']=='pre_broker_blocked'
+            assert failed['known_local_not_sent'] is True
+            assert failed['physical_send_attempt_count']==0
+            assert 'initial_quantity_bundle' not in stock
+            if outcome=='prepare_second_outbox_error':
+                assert stock['initial_quantity_last_terminal_bundle']['leg_states'][0]['state']=='TERMINAL_NOT_SENT'
+                assert stock['status']=='WATCHING'
+            else:
+                assert not list((tmp_path/'runtime/initial_quantity/bundles/target_index').glob('*.json'))
         if outcome=='delay_armed':
             if '_pre_submit_delay_pending' not in stock:
                 pytest.fail(json.dumps([(s,{k:v for k,v in f.items() if k in (

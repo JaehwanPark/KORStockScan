@@ -101,6 +101,9 @@ class PhysicalEntrySendContext:
     snapshot_reader: Callable[[], Mapping[str, Any]] = field(repr=False, compare=False)
     binding_reader: Callable[[], tuple[str, str]] = field(repr=False, compare=False)
 
+    ai_authority_expires_epoch: float | None = None
+    ai_authority_expires_perf: float | None = None
+
     def check(self, *, api_id, owner_context, payload) -> dict:
         receipt = {"schema": "main_initial_physical_send_guard_v1",
                    "operation": self.operation,
@@ -168,6 +171,15 @@ class PhysicalEntrySendContext:
             receipt.update(checked_epoch=now, checked_perf=perf)
             if now >= self.original_deadline_epoch or perf >= self.original_deadline_perf:
                 reject("original_entry_deadline_expired")
+            expiry = (self.ai_authority_expires_epoch, self.ai_authority_expires_perf)
+            if expiry != (None, None):
+                if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0
+                       for v in expiry):
+                    reject("ai_authority_expiry_invalid")
+                receipt.update(ai_authority_expires_epoch=expiry[0],
+                               ai_authority_expires_perf=expiry[1])
+                if now > expiry[0] or perf > expiry[1]:
+                    reject("ai_authority_expired_before_physical_send")
             quote = ws_quote_source_receipt(snapshot, now_ts=now)
             receipt["quote_source_receipt"] = quote
             if any(snapshot.get(key) for key in (

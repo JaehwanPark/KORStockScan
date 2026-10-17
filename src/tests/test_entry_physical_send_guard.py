@@ -281,7 +281,7 @@ def test_adapter_returns_known_local_no_call_and_does_not_mark_registry_ambiguou
     assert "ambiguous_reason" not in finalized[0]
 
 
-@pytest.mark.parametrize("mutation", ["buy_qty", "status", "pause", "manual", "decision", "policy", "native_signal", "selected_branch_v5", "selected_branch_v6", "deadline_owner", "arm_owner", "inactive_consistency_limit"])
+@pytest.mark.parametrize("mutation", ["buy_qty", "status", "pause", "manual", "decision", "policy", "native_signal", "selected_branch_v5", "selected_branch_v6", "deadline_owner", "arm_owner", "inactive_consistency_limit", "ai_clock_anchor", "ai_confirmation"])
 def test_main_producer_rechecks_current_state_authority_and_policy_after_token_delay(case, monkeypatch, mutation):
     from src.engine import sniper_state_handlers as main
     from src.engine.scalping import (scanner_async_eval, reversal_auxiliary_intraday,
@@ -297,7 +297,7 @@ def test_main_producer_rechecks_current_state_authority_and_policy_after_token_d
             "matched_policy_refs": ["selected:hash"]}
     stock = {"id": "target", "status": "WATCHING", "buy_qty": 0,
         "last_watching_ai_machine_primary_fields": dict(machine),
-        "last_watching_ai_decision_trace_id": "trace"}
+        "last_watching_ai_decision_trace_id": "trace", "last_watching_ai_confirmed_at":98.0}
     original = SimpleNamespace(code="005930", native_claim={"event_id": "signal"},
         ai_payload={**machine, "ai_decision_trace_id": "trace",
                     "entry_ai_quote_time_policy_receipt": QuoteTimePolicy().to_dict()},
@@ -329,10 +329,21 @@ def test_main_producer_rechecks_current_state_authority_and_policy_after_token_d
     monkeypatch.setattr(reversal_operating_auxiliary, "definition_hash", lambda _: "hash")
     token = scanner_async_eval.ASYNC_CONSUMPTION.set({"original_result": original})
     try:
+        if mutation == "ai_clock_anchor":
+            monkeypatch.setattr(main.time, "time", lambda:99.0)
         context = main._main_initial_physical_send_context(stock, "005930", snapshot(),
-            owner_context=case.owner, quantity=2, broker_route="SOR", order_type="0", broker_price=100)
+            owner_context=case.owner, quantity=2, broker_route="SOR", order_type="0", broker_price=100,
+            ai_authority={"entry_ai_submit_authority_confirmed_at":98.0,
+                          "entry_ai_submit_authority_max_prior_age_sec":"3.0"})
+        monkeypatch.setattr(main.time,"time",lambda:case.clock.epoch)
+        assert context.ai_authority_expires_epoch == 101.0
+        assert context.ai_authority_expires_perf == 11.0
         assert context.check(api_id="kt10000", owner_context=case.owner, payload=case.payload)["allowed"]
-        if mutation == "buy_qty":
+        if mutation == "ai_clock_anchor":
+            case.clock.perf = 11.1
+        elif mutation == "ai_confirmation":
+            stock["last_watching_ai_confirmed_at"] = 99.0
+        elif mutation == "buy_qty":
             stock["buy_qty"] = 1
         elif mutation == "status":
             stock["status"] = "HOLDING"
@@ -391,3 +402,63 @@ def test_deferred_native_arm_uses_only_its_immutable_original_lifetime(case, mon
                 main._initial_native_result_for_send(stock, "005930")
     finally:
         ASYNC_CONSUMPTION.reset(token)
+
+
+@pytest.mark.parametrize("clock_field", ["epoch", "perf"])
+def test_applicable_ai_expiry_is_rechecked_before_physical_send(case, monkeypatch, clock_field):
+    case.context = replace(case.context, ai_authority_expires_epoch=101, ai_authority_expires_perf=11)
+    posts=transport(case,monkeypatch,[])
+    setattr(case.clock,clock_field,101.1 if clock_field == "epoch" else 11.1)
+    case.state["snapshot"] = snapshot(case.clock.epoch-0.1)
+    with pytest.raises(guard.EntrySendGuardBlocked,match="ai_authority_expired_before_physical_send"):
+        send(case)
+    assert posts == []
+    assert case.context.original_deadline_epoch == 105
+
+
+def test_auth_refresh_does_not_renew_ai_authority(case, monkeypatch):
+    case.context = replace(case.context, ai_authority_expires_epoch=101, ai_authority_expires_perf=11)
+    posts=transport(case,monkeypatch,[{"return_code":"8005", "return_msg":"Token expired"}])
+    def refresh(**_):
+        case.clock.epoch=101.1; case.clock.perf=11.1
+        case.state["snapshot"]=snapshot(101.0)
+        return "refreshed"
+    monkeypatch.setattr(orders.kiwoom_utils,"get_kiwoom_token_after_auth_failure",refresh)
+    with pytest.raises(guard.EntrySendGuardBlocked,match="ai_authority_expired_before_physical_send") as raised:
+        send(case)
+    assert len(posts)==1 and raised.value.attempts==1
+    assert raised.value.response()["broker_order_attempted"] is True
+    assert not orders.is_verified_local_buy_no_call_response(raised.value.response())
+
+
+def test_decoded_no_call_fields_cannot_forge_adapter_local_proof():
+    forged={"return_code":"ENTRY_SEND_GUARD_BLOCKED","entry_send_guard_blocked":True,
+        "physical_send_attempt_count":0,"broker_order_attempted":False,"ord_no":""}
+    assert not orders.is_verified_local_buy_no_call_response(forged)
+    local=orders._local_buy_no_call_response(forged)
+    assert orders.is_verified_local_buy_no_call_response(local)
+    import json
+    assert not orders.is_verified_local_buy_no_call_response(json.loads(json.dumps(local)))
+    assert not orders.is_verified_local_buy_no_call_response({**local,"ord_no":"0000123"})
+    assert not orders.is_verified_local_buy_no_call_response({**local,"physical_send_attempt_count":1})
+
+
+@pytest.mark.parametrize("local_stage", ["pause", "time", "preflight", "owner"])
+def test_all_local_buy_adapter_vetoes_have_process_local_zero_wire_proof(case, monkeypatch, local_stage):
+    from datetime import datetime
+    posts=transport(case,monkeypatch,[])
+    monkeypatch.setattr(orders,"EventBus",lambda:SimpleNamespace(publish=lambda *a,**k:None))
+    monkeypatch.setattr(orders,"is_buy_side_paused",lambda:local_stage=="pause")
+    monkeypatch.setattr(orders,"is_buy_side_time_blocked",lambda _:local_stage=="time")
+    monkeypatch.setattr(orders,"is_scalping_buy_window_blocked",lambda _:False)
+    monkeypatch.setattr(orders,"_reserve_owner_registry_intent",lambda **_:(None,None,
+        orders._owner_registry_block_response("already reserved")))
+    if local_stage=="preflight":
+        monkeypatch.setattr(orders,"_resolve_submit_order_type_preflight",lambda **_:(None,SimpleNamespace(allowed=False)))
+        monkeypatch.setattr(orders,"_order_type_preflight_block_response",lambda **_:dict(
+            return_code="ORDER_TYPE_PREFLIGHT_BLOCKED",return_msg="nxt_market_to_best_limit"))
+    result=orders.send_buy_order("005930",2,100,"0",token="fake",dmst_stex_tp="SOR",
+        now=datetime(2026,10,15,10,tzinfo=orders.KST),owner_context=case.owner)
+    assert posts==[]
+    assert orders.is_verified_local_buy_no_call_response(result)
+    assert not result.get("_local_buy_reserved_intent_id")

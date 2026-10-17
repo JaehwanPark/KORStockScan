@@ -26,11 +26,11 @@ SCHEMA_DYNAMIC_PRICE = "initial_quantity_bundle_state_v2"
 TARGET_INDEX_SCHEMA = "initial_quantity_bundle_target_index_v1"
 _STATES = {"NOT_SUBMITTED", "SUBMIT_INTENT", "OPEN", "PARTIAL",
            "CANCEL_REQUESTED", "TERMINAL_FILLED", "TERMINAL_CANCELLED",
-           "TERMINAL_SKIPPED", "UNCERTAIN"}
-_TERMINAL = {"TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED"}
+           "TERMINAL_SKIPPED", "TERMINAL_NOT_SENT", "UNCERTAIN"}
+_TERMINAL = {"TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED", "TERMINAL_NOT_SENT"}
 _TRANSITIONS = {
     "NOT_SUBMITTED": {"SUBMIT_INTENT", "TERMINAL_SKIPPED"},
-    "SUBMIT_INTENT": {"OPEN", "UNCERTAIN"},
+    "SUBMIT_INTENT": {"OPEN", "UNCERTAIN", "TERMINAL_NOT_SENT"},
     "UNCERTAIN": {"OPEN", "PARTIAL", "CANCEL_REQUESTED"},
     "OPEN": {"PARTIAL", "CANCEL_REQUESTED", "TERMINAL_FILLED"},
     "PARTIAL": {"CANCEL_REQUESTED", "TERMINAL_FILLED"},
@@ -95,6 +95,17 @@ def bundle_target_index_path(base_dir: Path, code: str, target_id: str) -> Path:
     return Path(base_dir) / "target_index" / f"{key}.json"
 
 
+def bundle_is_terminal(state: dict[str, Any]) -> bool:
+    """Classify an already validated journal, including an unsent first leg."""
+    statuses = state.get("leg_states")
+    if not isinstance(statuses, list) or not statuses or not all(
+            isinstance(item, dict) for item in statuses):
+        return False
+    if statuses[0].get("state") == "TERMINAL_NOT_SENT":
+        return all(item.get("state") == "NOT_SUBMITTED" for item in statuses[1:])
+    return all(item.get("state") in _TERMINAL for item in statuses)
+
+
 def bundle_state_valid(state: Any) -> bool:
     if not isinstance(state, dict):
         return False
@@ -151,6 +162,20 @@ def bundle_state_valid(state: Any) -> bool:
                     or not isinstance(status, dict)
                     or status.get("state") not in _STATES):
                 return False
+            if status["state"] == "TERMINAL_NOT_SENT":
+                proof = status.get("not_sent_receipt") or {}
+                if (index != 0 or state["schema"] != SCHEMA_DYNAMIC_PRICE
+                        or set(status) != {"state", "submit_price", "owner_client_intent_id",
+                            "submit_intent_at_epoch", "terminal_confirmed",
+                            "terminal_confirmed_at_epoch", "not_sent_receipt"}
+                        or not bundle_is_terminal(state)
+                        or any(proof.get(key) != state[key]
+                               for key in ("attempt_id", "code", "target_id"))
+                        or proof.get("quantity") != leg["qty"]
+                        or proof.get("route") != leg["route"]
+                        or proof.get("submit_price") != status.get("submit_price")
+                        or proof.get("intent_parent_sha256") != state["parent_content_sha256"]):
+                    return False
             if state["schema"] == SCHEMA_DYNAMIC_PRICE:
                 submitted = status["state"] not in {
                     "NOT_SUBMITTED", "TERMINAL_SKIPPED",
@@ -179,7 +204,7 @@ def bundle_state_valid(state: Any) -> bool:
                     and (not isinstance(order_no, str)
                          or not re.fullmatch(r"[0-9]{7}", order_no))):
                 return False
-            if status["state"] in {"NOT_SUBMITTED", "SUBMIT_INTENT",
+            if status["state"] in {"NOT_SUBMITTED", "SUBMIT_INTENT", "TERMINAL_NOT_SENT",
                                    "TERMINAL_SKIPPED"} and order_no:
                 return False
             if status["state"] not in {"NOT_SUBMITTED", "TERMINAL_SKIPPED"}:
@@ -195,7 +220,7 @@ def bundle_state_valid(state: Any) -> bool:
                 confirmed = status.get("terminal_confirmed_at_epoch")
                 if (not isinstance(confirmed, (int, float))
                         or isinstance(confirmed, bool)
-                        or (status["state"] != "TERMINAL_SKIPPED"
+                        or (status["state"] not in {"TERMINAL_SKIPPED", "TERMINAL_NOT_SENT"}
                             and status.get("ordered_qty") != leg["qty"])
                         or (status["state"] != "TERMINAL_SKIPPED"
                             and confirmed < status["submit_intent_at_epoch"])
@@ -239,6 +264,10 @@ def _transition_valid(previous: dict[str, Any], next_state: dict[str, Any]) -> b
     old_state = old["state"]
     new_state = new["state"]
     if old_state in _TERMINAL:
+        return False
+    if new_state == "TERMINAL_NOT_SENT" and (index != 0 or
+            new["not_sent_receipt"].get("intent_parent_sha256") !=
+            previous["bundle_content_sha256"]):
         return False
     if (old.get("broker_order_no")
             and new.get("broker_order_no") != old["broker_order_no"]):
@@ -448,6 +477,50 @@ def persist_dynamic_leg_submit_response(
     return successor
 
 
+def persist_initial_bundle_not_sent(
+    base_dir: Path, observed: dict[str, Any], *, owner_client_intent_id: str,
+    reason: str, now_epoch: float,
+) -> dict[str, Any]:
+    """Close only a proven local zero-wire first intent; never an uncertain leg.
+
+    The caller owns process-local proof that no POST occurred and exact owner
+    reconciliation. This journal retains the prepared intent instead of
+    fabricating a broker cancellation or granting a replacement order.
+    """
+    if (not bundle_state_valid(observed) or observed["schema"] != SCHEMA_DYNAMIC_PRICE
+            or not isinstance(reason, str) or not reason.strip()
+            or type(now_epoch) not in (int, float) or not math.isfinite(now_epoch)):
+        raise ValueError("initial_bundle_not_sent_input_invalid")
+    indexed, status = read_bundle_for_target(base_dir, observed["code"], observed["target_id"])
+    if status not in {"target_bundle_loaded", "target_bundle_terminal"} or indexed is None:
+        raise ValueError("initial_bundle_not_sent_index_conflict")
+    first = indexed["leg_states"][0]
+    if (indexed["attempt_id"] != observed["attempt_id"]
+            or first.get("owner_client_intent_id") != owner_client_intent_id):
+        raise ValueError("initial_bundle_not_sent_owner_conflict")
+    if first["state"] == "TERMINAL_NOT_SENT":
+        if first["not_sent_receipt"]["reason"] != reason:
+            raise ValueError("initial_bundle_not_sent_reason_conflict")
+        return indexed
+    if (indexed != observed or first["state"] != "SUBMIT_INTENT"
+            or first.get("broker_order_no")
+            or any(item["state"] != "NOT_SUBMITTED" for item in indexed["leg_states"][1:])):
+        raise ValueError("initial_bundle_not_sent_state_conflict")
+    proof = dict(schema="initial_quantity_known_not_sent_v1", reason=reason,
+        attempt_id=observed["attempt_id"], code=observed["code"], target_id=observed["target_id"],
+        owner_client_intent_id=owner_client_intent_id, quantity=observed["planned_legs"][0]["qty"],
+        route=observed["planned_legs"][0]["route"], submit_price=first["submit_price"],
+        broker_order_attempted=False, physical_send_attempt_count=0,
+        confirmed_at_epoch=now_epoch, intent_parent_sha256=observed["bundle_content_sha256"])
+    proof["content_sha256"] = _digest(proof)
+    successor = next_bundle_state(observed, 0, {**first,
+        "state": "TERMINAL_NOT_SENT", "terminal_confirmed": True,
+        "terminal_confirmed_at_epoch": now_epoch, "not_sent_receipt": proof})
+    save_bundle_state_cas(bundle_state_path(base_dir, observed["attempt_id"]), successor,
+                          expected_parent_sha256=observed["bundle_content_sha256"])
+    return successor
+
+
 def _target_index_valid(index: Any, *, code: str, target_id: str) -> bool:
     if not isinstance(index, dict):
         return False
@@ -496,8 +569,7 @@ def read_bundle_for_target(base_dir: Path, code: str,
                 bundle["bundle_content_sha256"] !=
                 index["initial_bundle_content_sha256"])):
         return None, "target_bundle_identity_or_journal_invalid"
-    if index["phase"] == "terminal" and any(
-            item["state"] not in _TERMINAL for item in bundle["leg_states"]):
+    if index["phase"] == "terminal" and not bundle_is_terminal(bundle):
         return None, "target_terminal_index_journal_not_terminal"
     return bundle, ("target_bundle_terminal" if index["phase"] == "terminal"
                     else "target_bundle_loaded")
@@ -572,9 +644,7 @@ def create_indexed_bundle(base_dir: Path, initial: dict[str, Any]) -> Path:
 
 def retire_indexed_bundle(base_dir: Path, terminal: dict[str, Any]) -> bool:
     """Keep a durable terminal tombstone across a stock-state handoff crash."""
-    if (not bundle_state_valid(terminal)
-            or any(item["state"] not in _TERMINAL
-                   for item in terminal["leg_states"])):
+    if not bundle_state_valid(terminal) or not bundle_is_terminal(terminal):
         raise ValueError("initial_bundle_not_terminal")
     base_dir = Path(base_dir)
     index_path = bundle_target_index_path(

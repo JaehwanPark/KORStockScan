@@ -483,3 +483,10 @@ def test_timeout_research_retains_completed_denominator_when_source_blocked(monk
         "first_post_fill_lower_count"] == 1
     assert report_without_start["selections"]["KRX_THIN_HIGH_TICK"][
         "decision_to_order_start_count"] == 0
+
+
+@pytest.mark.parametrize("bad", [None, [], 1, "SUBMIT_INTENT"])
+def test_malformed_first_leg_is_a_block_not_exception(bad):
+    plan = _schedule(legs=2, total=60, reserve=5)
+    assert next_bundle_timeout_action(plan, [bad, {"state":"NOT_SUBMITTED"}],
+        now_epoch=plan["order_start_at_epoch"])["action"] == "BLOCK_INVALID_LEG_STATE"

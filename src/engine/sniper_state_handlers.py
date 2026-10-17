@@ -12388,6 +12388,11 @@ def _canonicalize_rising_missed_venue_fields(
 _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
     {
         "ai_confirmed_terminal_no_budget",
+        "initial_entry_known_not_sent",
+        "original_async_result_not_sent_terminal",
+        "entry_local_not_sent",
+        "entry_physical_send_guard_block",
+        "entry_physical_send_context_block",
         "rising_missed_tick_speed_entry_block",
         "entry_submit_identity_reconciliation_blocked",
         "auth_zero_qty",
@@ -40632,6 +40637,8 @@ def _entry_ai_submit_authority_fields(
             confirmed_at if fresh_prior else 0.0
         ),
         "entry_ai_submit_authority_max_prior_age_sec": f"{max_prior_age_sec:.1f}",
+        "entry_ai_submit_authority_expires_at_epoch": (
+            confirmed_at + max_prior_age_sec if fresh_prior else 0.0),
         "forbidden_uses": (
             "score_threshold_mutation,provider_route_change,quantity_cap_release,"
             "broker_guard_bypass,stale_quote_bypass,tuning_auto_apply_authority"
@@ -61368,7 +61375,7 @@ def _initial_native_result_for_send(stock, code):
 
 def _main_initial_physical_send_context(
     stock, code, ws_data, *, owner_context, quantity, broker_route,
-    order_type, broker_price, sequential_first=False,
+    order_type, broker_price, sequential_first=False, ai_authority=None,
 ):
     """Bind the verified native result to this initial BUY, never a later leg."""
     original = _initial_native_result_for_send(stock, code)
@@ -61409,10 +61416,24 @@ def _main_initial_physical_send_context(
     initial_bundle_digest = (stock.get("initial_quantity_bundle") or {}).get(
         "bundle_content_sha256") if sequential_first else None
 
+    ai_confirmed_at = stock.get("last_watching_ai_confirmed_at")
+    ai_expiry_epoch = ai_expiry_perf = None
+    if ai_authority is not None:
+        confirmed = _safe_float(ai_authority.get("entry_ai_submit_authority_confirmed_at"), 0.0)
+        max_age = _safe_float(ai_authority.get("entry_ai_submit_authority_max_prior_age_sec"), 0.0)
+        if confirmed <= 0 or max_age <= 0 or confirmed != ai_confirmed_at:
+            raise ValueError("initial_send_ai_authority_expiry_missing")
+        ai_expiry_epoch = _safe_float(ai_authority.get(
+            "entry_ai_submit_authority_expires_at_epoch"), confirmed + max_age)
+        if not math.isfinite(ai_expiry_epoch) or ai_expiry_epoch <= confirmed:
+            raise ValueError("initial_send_ai_authority_expiry_invalid")
+        ai_expiry_perf = original.deadline_perf + (ai_expiry_epoch - original.deadline_epoch)
+
     def read_binding():
         current = stock.get("last_watching_ai_machine_primary_fields") or {}
         projected = {key: current.get(key) for key in machine}
-        if (_scanner_async_entry_state_version(stock) != state_version
+        if ((ai_authority is not None and stock.get("last_watching_ai_confirmed_at") != ai_confirmed_at)
+                or _scanner_async_entry_state_version(stock) != state_version
                 or canonical_binding(stock.get("_async_entry_decision_deadline") or {}) != deadline_binding
                 or canonical_binding(stock.get("_entry_arm_native_owner") or {}) != arm_binding
                 or (sequential_first and (stock.get("initial_quantity_bundle") or {}).get(
@@ -61481,7 +61502,8 @@ def _main_initial_physical_send_context(
         quote_observed_epoch=quote.get("observed_epoch"),
         best_bid=quote.get("best_bid"), best_ask=quote.get("best_ask"),
         current_price=ws_data.get("curr"), snapshot_reader=read_snapshot,
-        binding_reader=read_binding)
+        binding_reader=read_binding, ai_authority_expires_epoch=ai_expiry_epoch,
+        ai_authority_expires_perf=ai_expiry_perf)
 
 
 def _log_async_commit(coordinator, result, stock, code, stage, **fields):
@@ -66159,6 +66181,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _set_async_terminal(stock, "machine_submit_lineage_rejected:" + reason)
             return False
         receipt = submit_attempt_machine_lineage(stock, code)
+        prior_nonexecution = stock.get('_async_entry_nonexecution_identity') or {}
+        if (prior_nonexecution.get('evaluation_attempt_id')
+                and prior_nonexecution.get('evaluation_attempt_id') == receipt.get('evaluation_attempt_id')
+                and prior_nonexecution.get('ai_decision_trace_id')
+                == stock.get('last_watching_ai_decision_trace_id')):
+            _set_async_terminal(stock, 'original_async_result_not_sent_terminal')
+            _log_entry_pipeline(stock, code, 'original_async_result_not_sent_terminal',
+                actual_order_submitted=False, broker_order_forbidden=True,
+                **prior_nonexecution.get('physical_disposition', {}))
+            return False
         prior_async_submit = stock.get('_async_entry_submission_identity') or {}
         if (prior_async_submit.get('evaluation_attempt_id')
                 and prior_async_submit.get('evaluation_attempt_id') == receipt.get('evaluation_attempt_id')
@@ -71635,6 +71667,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     stock, action="ENTRY_BUY",
                     ordinal=f"{request['tag']}:{broker_submit_attempt_count}"))
         except (OwnerRegistryError, TypeError, ValueError) as exc:
+            broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
+            physical_send_block_fields = dict(known_local_not_sent=True,
+                physical_send_attempt_count=0, broker_order_attempted=False,
+                local_not_sent_reason="initial_quantity_owner_intent_block:" + type(exc).__name__,
+                local_not_sent_contract="main_initial_entry_not_sent_v1",
+                entry_send_guard_terminal_reason="initial_quantity_owner_intent_block")
             _log_entry_pipeline(
                 stock, code, "initial_quantity_owner_intent_block",
                 reason=type(exc).__name__, actual_order_submitted=False,
@@ -71657,18 +71695,35 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             buy_owner_policy_fields = {"buy_owner_policy_observation_gap":
                                        type(exc).__name__}
         if sequential_first:
-            try:
-                first_intent, intent_status = _initial_quantity_prepare_first_submit(
-                    stock, code, planned_order, qty=qty,
-                    broker_price=broker_price, submit_price=price,
-                    route=submit_dmst_stex_tp,
-                    now_ts=time.time(), owner_context=buy_owner_context,
-                    probe_ai_action=str(entry_ai_submit_authority.get(
-                        "entry_ai_submit_authority_action") or ""),
-                    probe_wait_contract=wait_probe_required)
-            except (KeyError, TypeError, ValueError, OSError) as exc:
-                first_intent, intent_status = None, type(exc).__name__
+            # Lock the empty-to-intent transition so an error cannot make us
+            # classify a different invocation's recovered intent as unsent.
+            with ENTRY_LOCK:
+                prior_prepare_bundle = stock.get("initial_quantity_bundle")
+                try:
+                    first_intent, intent_status = _initial_quantity_prepare_first_submit(
+                        stock, code, planned_order, qty=qty,
+                        broker_price=broker_price, submit_price=price,
+                        route=submit_dmst_stex_tp,
+                        now_ts=time.time(), owner_context=buy_owner_context,
+                        probe_ai_action=str(entry_ai_submit_authority.get(
+                            "entry_ai_submit_authority_action") or ""),
+                        probe_wait_contract=wait_probe_required)
+                except (KeyError, TypeError, ValueError, OSError) as exc:
+                    first_intent, intent_status = None, type(exc).__name__
+                if first_intent is None:
+                    if (prior_prepare_bundle is None
+                            and ((stock.get("initial_quantity_bundle") or {}).get("leg_states") or [{}])[0].get("state") == "SUBMIT_INTENT"):
+                        physical_send_block_fields = _initial_entry_known_not_sent(
+                            stock, code, owner_context=buy_owner_context,
+                            reason="first_intent_prepare_failed:" + intent_status)
             if first_intent is None:
+                broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
+                physical_send_block_fields = {**dict(known_local_not_sent=True,
+                    physical_send_attempt_count=0, broker_order_attempted=False,
+                    local_not_sent_reason="first_intent_prepare_failed:" + intent_status,
+                    local_not_sent_contract="main_initial_entry_not_sent_v1",
+                    entry_send_guard_terminal_reason="initial_quantity_first_intent_block"),
+                    **physical_send_block_fields}
                 _log_entry_pipeline(
                     stock, code, "initial_quantity_first_intent_block",
                     reason=intent_status, actual_order_submitted=False,
@@ -71704,10 +71759,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 log_error(f'[PROBE_SUBMIT_SOURCE] {code} prepare {type(exc).__name__}:{exc}')
         # The local exact-date listing read consumes the original entry deadline.
         # Observation admission and a live NXT quote are not listing authority.
-        submit_venue_eligibility = _entry_order_venue_eligibility(code)
+        try:
+            submit_venue_eligibility = _entry_order_venue_eligibility(code)
+        except Exception as exc:
+            physical_send_block_fields = _initial_entry_known_not_sent(
+                stock, code, owner_context=buy_owner_context,
+                reason="venue_read_failed:" + type(exc).__name__)
+            broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
+            break
         if _async_entry_deadline_expired(stock):
-            # Preserve any already-recorded intent for its existing owner;
-            # no physical call, fabricated broker response, or resubmission.
+            physical_send_block_fields = _initial_entry_known_not_sent(
+                stock, code, owner_context=buy_owner_context,
+                reason="result_deadline_expired")
+            broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
             _set_async_terminal(stock,'result_deadline_expired')
             break
         entry_send_kwargs = {}
@@ -71719,16 +71783,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     quantity=qty, broker_route=submit_dmst_stex_tp,
                     order_type=order_resolution["effective_order_type"],
                     broker_price=order_resolution["effective_order_price"],
-                    sequential_first=sequential_first)
+                    sequential_first=sequential_first, ai_authority=entry_ai_submit_authority)
                 if entry_send_context is not None:
                     entry_send_kwargs["entry_send_context"] = entry_send_context
-            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            except Exception as exc:
                 broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
-                physical_send_block_fields = {
-                    "entry_send_guard_terminal_reason": "entry_physical_send_context_block",
-                    "entry_send_guard_reason": str(exc),
-                    "physical_send_attempt_count": 0, "broker_order_attempted": False,
-                }
+                physical_send_block_fields = _initial_entry_known_not_sent(
+                    stock, code, owner_context=buy_owner_context,
+                    reason="entry_physical_send_context_block:" + str(exc))
+                physical_send_block_fields["entry_send_guard_terminal_reason"] = "entry_physical_send_context_block"
                 _log_entry_pipeline(
                     stock, code, "entry_physical_send_context_block",
                     reason=str(exc), actual_order_submitted=False,
@@ -71786,35 +71849,57 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 except Exception as exc:
                     log_error(f"[ENTRY_CANCEL_WAIT_UNCERTAIN_RECEIPT_GAP] code={code} reason={type(exc).__name__}")
             break
+        verified_not_sent = kiwoom_orders.is_verified_local_buy_no_call_response(res)
+        if verified_not_sent:
+            broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
+            guard = stock.get("_async_consumption_guard")
+            if isinstance(guard, dict):
+                guard["async_entry_broker_attempts"] = max(
+                    0, guard.get("async_entry_broker_attempts", 0) - 1)
+            physical_send_block_fields = _initial_entry_known_not_sent(
+                stock, code, owner_context=buy_owner_context,
+                reason=str(res.get("return_msg") or res.get("return_code") or "local_buy_veto"),
+                local_response=res)
+            stage = ("entry_physical_send_guard_block" if res.get("entry_send_guard_blocked")
+                     else "entry_local_not_sent")
+            physical_send_block_fields.update(
+                entry_send_guard_terminal_reason=stage,
+                entry_send_guard_receipt=res.get("entry_send_guard_receipt"))
+            _log_entry_pipeline(stock, code, stage, reason=res.get("return_msg"),
+                actual_order_submitted=False, broker_order_forbidden=True,
+                **physical_send_block_fields)
+            _set_async_terminal(stock, stage,
+                async_entry_physical_send_blocked=True,
+                async_entry_physical_send_attempts=0,
+                async_entry_broker_attempts=broker_submit_attempt_count)
+            break
         if isinstance(res, dict) and res.get("entry_send_guard_blocked") is True:
-            # A known local veto is not an ambiguous broker response. Keep
-            # any persisted leg intent under its existing reconciliation owner.
-            physical_attempts = _safe_int(res.get("physical_send_attempt_count"), 0)
-            if res.get("broker_order_attempted") is False and physical_attempts == 0:
-                broker_submit_attempt_count = max(0, broker_submit_attempt_count - 1)
-                guard = stock.get("_async_consumption_guard")
-                if isinstance(guard, dict):
-                    guard["async_entry_broker_attempts"] = max(
-                        0, guard.get("async_entry_broker_attempts", 0) - 1)
+            # Auth retry may already have sent once; remote-looking metadata
+            # without our local token also cannot clear broker custody.
+            if sequential_first:
+                try:
+                    _initial_quantity_record_submit_response(stock, code, leg_index=0,
+                        response=res, expected_route=submit_dmst_stex_tp,
+                        owner_context=buy_owner_context)
+                except (KeyError, TypeError, ValueError, OSError):
+                    _request_broker_snapshot_refresh(code,
+                        reason="initial_quantity_guard_response_reconciliation_gap")
+            physical_attempts = res.get("physical_send_attempt_count")
             physical_send_block_fields = {
                 "entry_send_guard_terminal_reason": "entry_physical_send_guard_block",
                 "entry_send_guard_reason": res.get("return_msg"),
                 "entry_send_guard_receipt": res.get("entry_send_guard_receipt"),
-                "physical_send_attempt_count": physical_attempts,
-                "broker_order_attempted": res.get("broker_order_attempted"),
+                "physical_send_attempt_count": physical_attempts if type(physical_attempts) is int and physical_attempts > 0 else None,
+                "known_local_not_sent": False,
+                "broker_order_attempted": True if type(physical_attempts) is int and physical_attempts > 0 else None,
                 "rejected_auth_response": res.get("rejected_auth_response"),
             }
-            _log_entry_pipeline(
-                stock, code, "entry_physical_send_guard_block",
-                reason=res.get("return_msg"),
-                entry_send_guard_receipt=res.get("entry_send_guard_receipt"),
-                physical_send_attempt_count=res.get("physical_send_attempt_count"),
-                broker_order_attempted=res.get("broker_order_attempted"),
-                rejected_auth_response=res.get("rejected_auth_response"),
-                actual_order_submitted=False, broker_order_forbidden=True)
+            _log_entry_pipeline(stock, code, "entry_physical_send_guard_block",
+                reason=res.get("return_msg"), actual_order_submitted=False,
+                broker_order_forbidden=True, **physical_send_block_fields)
             _set_async_terminal(stock, "entry_physical_send_guard_block",
                 async_entry_physical_send_blocked=True,
-                async_entry_physical_send_attempts=physical_attempts,
+                async_entry_physical_send_attempts=physical_send_block_fields["physical_send_attempt_count"],
                 async_entry_broker_attempts=broker_submit_attempt_count)
             break
         if sequential_first:
@@ -72377,7 +72462,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
 
     if not successful_orders:
-        if stock.get("entry_split_probe_bundle_id"):
+        if stock.get("entry_split_probe_bundle_id") and not stock.get("initial_quantity_bundle"):
             preserve_probe_position = _safe_int(stock.get("buy_qty"), 0) > 0
             if stock.get("entry_split_probe_phase") != "aborted":
                 _abort_entry_split_probe_residual(
@@ -78160,7 +78245,6 @@ def _initial_quantity_prepare_first_submit(
             binding=dict(target_id=target_id,code=code,primary_branch=reversal.get('continuous_reversal_primary_branch'),
                          phase=reversal.get('continuous_reversal_phase')))
     base_dir = DATA_DIR / "runtime" / "initial_quantity" / "bundles"
-    create_indexed_bundle(base_dir, bundle)
     if reversal.get('continuous_reversal_opportunity_key'):
         from src.engine.scalping.reversal_operating_outbox import advance
         advance(DATA_DIR,reversal['continuous_reversal_opportunity_key'],'intent_assigned',binding=dict(
@@ -78168,6 +78252,7 @@ def _initial_quantity_prepare_first_submit(
             matched_policy_refs=reversal.get('continuous_reversal_matched_policy_refs'),
             still_valid_policy_refs=reversal.get('continuous_reversal_still_valid_policy_refs'),
             signal_set_hash=reversal.get('continuous_reversal_signal_set_hash')))
+    create_indexed_bundle(base_dir, bundle)
     _mutate_stock_state(stock, set_fields={
         "initial_quantity_bundle": bundle,
         "initial_quantity_bundle_indexed": True,
@@ -78177,9 +78262,6 @@ def _initial_quantity_prepare_first_submit(
         submit_price=submit_price,
         owner_client_intent_id=owner_context.client_intent_id,
         now_epoch=now_ts)
-    if reversal.get('continuous_reversal_opportunity_key'):
-        advance(DATA_DIR,reversal['continuous_reversal_opportunity_key'],'submission_reconciliation',
-                binding=dict(attempt_id=attempt_id,native_bundle_path=str(base_dir)))
     _mutate_stock_state(stock, set_fields={
         "initial_quantity_bundle": intent,
         "status": "BUY_ORDERED",
@@ -78195,7 +78277,95 @@ def _initial_quantity_prepare_first_submit(
             "probe_confirmation_last_signature": "",
         } if probe_market else {}),
     })
+    if reversal.get('continuous_reversal_opportunity_key'):
+        advance(DATA_DIR,reversal['continuous_reversal_opportunity_key'],'submission_reconciliation',
+                binding=dict(attempt_id=attempt_id,native_bundle_path=str(base_dir)))
     return intent, "first_submit_intent_persisted"
+
+
+def _initial_entry_known_not_sent(stock, code, *, owner_context, reason, local_response=None):
+    """Close only a call-local proven-unsent initial entry, never broker custody.
+
+    Callers are pre-adapter branches or verify the adapter's process-local token.
+    A separate tombstone consumes this PASS without claiming it was submitted.
+    """
+    fields = dict(known_local_not_sent=True, physical_send_attempt_count=0,
+        broker_order_attempted=False, local_not_sent_reason=reason,
+        local_not_sent_contract="main_initial_entry_not_sent_v1",
+        entry_send_guard_terminal_reason="entry_local_not_sent")
+    try:
+        with ENTRY_LOCK:
+            bundle = stock.get("initial_quantity_bundle")
+            lineage = submit_attempt_machine_lineage(stock, code) or {}
+            evaluation = lineage.get("evaluation_attempt_id")
+            trace = stock.get("last_watching_ai_decision_trace_id")
+            identity = dict(stock.get("_async_entry_submission_identity") or {})
+            if not evaluation or not trace or (identity and (
+                    identity.get("evaluation_attempt_id") != evaluation
+                    or identity.get("ai_decision_trace_id") != trace)):
+                raise ValueError("known_not_sent_other_async_identity")
+            if isinstance(bundle, dict) and (bundle.get("attempt_id") != evaluation
+                    or bundle.get("code") != code
+                    or bundle.get("target_id") != str(stock.get("id") or "")):
+                raise ValueError("known_not_sent_other_bundle_identity")
+            if (_has_open_pending_entry_orders(stock) or _entry_bundle_filled_qty(stock)
+                    or _safe_int(stock.get("buy_qty"), 0)):
+                raise ValueError("known_not_sent_existing_inventory_custody")
+            row = default_order_owner_registry().intent_for_client(context=owner_context)
+            if row is not None:
+                if (not isinstance(local_response, dict)
+                        or not kiwoom_orders.is_verified_local_buy_no_call_response(local_response)
+                        or not local_response.get("_local_buy_reserved_intent_id")
+                        or row.get("intent_id") != local_response["_local_buy_reserved_intent_id"]):
+                    raise ValueError("known_not_sent_preexisting_owner_custody")
+                if (row.get("state") != "INTENT_REJECTED" or row.get("broker_order_no")
+                        or row.get("symbol") != code or row.get("side") != "BUY"
+                        or row.get("action") != "NEW"
+                        or row.get("client_intent_id") != owner_context.client_intent_id):
+                    raise ValueError("known_not_sent_existing_owner_custody")
+                if isinstance(bundle, dict):
+                    leg = bundle["planned_legs"][0]
+                    if (row.get("route") != leg["route"] or row.get("quantity") != leg["qty"]
+                            or row.get("order_date") != datetime.fromtimestamp(
+                                bundle["schedule"]["order_start_at_epoch"], _KST).date().isoformat()):
+                        raise ValueError("known_not_sent_owner_binding_changed")
+            if isinstance(bundle, dict):
+                from src.engine.scalping.initial_quantity_bundle_state import (
+                    persist_initial_bundle_not_sent, retire_indexed_bundle,
+                )
+                base = DATA_DIR / "runtime" / "initial_quantity" / "bundles"
+                terminal = persist_initial_bundle_not_sent(base, bundle,
+                    owner_client_intent_id=owner_context.client_intent_id,
+                    reason=reason, now_epoch=time.time())
+                _mutate_stock_state(stock, set_fields={"initial_quantity_bundle": terminal})
+                retire_indexed_bundle(base, terminal)
+                _mutate_stock_state(stock, set_fields={
+                    "initial_quantity_last_terminal_bundle": copy.deepcopy(terminal),
+                    "status": "WATCHING"}, pop_fields=["initial_quantity_bundle",
+                        "initial_quantity_bundle_indexed", "entry_requested_qty", "requested_buy_qty"])
+                _clear_pending_entry_meta(stock)
+                fields["local_not_sent_bundle_sha256"] = terminal["bundle_content_sha256"]
+                reversal = stock.get("last_watching_ai_machine_primary_fields") or {}
+                if reversal.get("continuous_reversal_opportunity_key"):
+                    from src.engine.scalping.reversal_operating_outbox import advance
+                    try:
+                        advance(DATA_DIR, reversal["continuous_reversal_opportunity_key"], "reconciled",
+                            binding=dict(attempt_id=terminal["attempt_id"],
+                                disposition="known_not_sent", bundle_content_sha256=terminal["bundle_content_sha256"]))
+                    except (ValueError, OSError) as exc:
+                        fields["local_not_sent_outbox_gap"] = type(exc).__name__
+            if not identity:
+                identity = dict(evaluation_attempt_id=evaluation, ai_decision_trace_id=trace)
+            identity["physical_disposition"] = dict(fields)
+            stock["_async_entry_nonexecution_identity"] = identity
+            stock.pop("_async_entry_submission_identity", None)
+    except (OwnerRegistryError, ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
+        # The wire disposition is known, but a conflicting durable owner must
+        # remain visible and cannot be overwritten by this local observation.
+        fields["local_not_sent_custody_gap"] = str(exc)
+    _log_entry_pipeline(stock, code, "initial_entry_known_not_sent",
+        actual_order_submitted=False, broker_order_forbidden=True, **fields)
+    return fields
 
 
 def _initial_quantity_record_submit_response(
@@ -81724,7 +81894,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     initial_bundle = stock.get("initial_quantity_bundle")
     if isinstance(initial_bundle, dict):
         from src.engine.scalping.initial_quantity_bundle_state import (
-            bundle_state_valid, recover_bundle_state,
+            bundle_is_terminal, bundle_state_valid, recover_bundle_state,
         )
         from src.engine.scalping.initial_quantity_timeout import (
             next_bundle_timeout_action,
@@ -81758,9 +81928,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                 index_status == "target_bundle_terminal"
                 and indexed is not None
                 and indexed["attempt_id"] == initial_bundle["attempt_id"]
-                and all(item["state"] in {
-                    "TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED",
-                } for item in initial_bundle["leg_states"])
+                and bundle_is_terminal(indexed)
             )
             if not terminal_index and (
                     index_status != "target_bundle_loaded" or indexed is None
@@ -81788,6 +81956,11 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
             indexed_journal_authority=(
                 stock.get("initial_quantity_bundle_indexed") is True),
         )
+        if (recovered is not None and recovery_status == "bundle_journal_ahead"
+                and recovered["leg_states"][0].get("state") == "TERMINAL_NOT_SENT"):
+            _mutate_stock_state(stock, set_fields={"initial_quantity_bundle": recovered})
+            initial_bundle = recovered
+            recovery_status = "bundle_journal_current"
         if recovered is None or recovery_status == "bundle_journal_ahead":
             if recovered is not None:
                 _mutate_stock_state(stock, set_fields={
@@ -81913,9 +82086,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                 runtime_effect=True)
             return
         if (decision.get("action") in {"DONE", "BLOCK_LATE_TERMINAL"}
-                and all(item["state"] in {
-                    "TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED",
-                } for item in initial_bundle["leg_states"])):
+                and bundle_is_terminal(initial_bundle)):
             terminal_filled_qty = sum(
                 _safe_int(item.get("filled_qty"), 0)
                 for item in initial_bundle["leg_states"]
@@ -81944,17 +82115,30 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                         runtime_effect=True,
                     )
                     return
+            not_sent_fields = {}
+            terminal_pop_fields = ["initial_quantity_bundle", "initial_quantity_bundle_indexed"]
+            if initial_bundle["leg_states"][0].get("state") == "TERMINAL_NOT_SENT":
+                old_identity = stock.get("_async_entry_submission_identity") or {}
+                if old_identity.get("evaluation_attempt_id") == initial_bundle["attempt_id"]:
+                    proof = initial_bundle["leg_states"][0]["not_sent_receipt"]
+                    not_sent_fields["_async_entry_nonexecution_identity"] = {**old_identity,
+                        "physical_disposition": dict(known_local_not_sent=True,
+                            physical_send_attempt_count=0, broker_order_attempted=False,
+                            local_not_sent_contract="main_initial_entry_not_sent_v1",
+                            local_not_sent_reason=proof["reason"],
+                            local_not_sent_bundle_sha256=initial_bundle["bundle_content_sha256"])}
+                    terminal_pop_fields.append("_async_entry_submission_identity")
             _mutate_stock_state(
                 stock,
                 set_fields={
+                    **not_sent_fields,
                     "initial_quantity_last_terminal_bundle": copy.deepcopy(initial_bundle),
                     "initial_quantity_budget_breached":
                         decision.get("action") == "BLOCK_LATE_TERMINAL",
                     **({"status": "HOLDING" if terminal_filled_qty > 0 else "WATCHING"}
                        if stock.get("status") == "BUY_ORDERED" else {}),
                 },
-                pop_fields=["initial_quantity_bundle",
-                            "initial_quantity_bundle_indexed"],
+                pop_fields=terminal_pop_fields,
             )
             _clear_pending_entry_meta(stock)
             return
@@ -92601,9 +92785,12 @@ def handle_buy_ordered_state(stock, code):
                     "initial_quantity_bundle": recovered,
                     "initial_quantity_bundle_indexed": True,
                 })
-                _request_broker_snapshot_refresh(
-                    code, reason="initial_quantity_target_journal_recovered",
-                )
+                if recovered["leg_states"][0].get("state") == "TERMINAL_NOT_SENT":
+                    _reconcile_pending_entry_orders(stock, code, strategy)
+                else:
+                    _request_broker_snapshot_refresh(
+                        code, reason="initial_quantity_target_journal_recovered",
+                    )
                 return
             if recovery_status != "target_index_absent":
                 _log_entry_pipeline(
