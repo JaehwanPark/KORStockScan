@@ -28,3 +28,16 @@
 - [검토 코드 세대](/home/ubuntu/KORStockScan/tmp/probe-partial-integrated-20261016/reviewed-code-generations.json)
 
 실제 provider·계좌·주문·Telegram 호출은 코드 검증에서 수행하지 않았다. 정규 Main 재기동 이후의 기존 운영 호출과 구분한다. shell/wrapper 변경은 없으므로 bash 검증은 생략한다. 정책 grid 연구·경제성 재산출과 무관한 거래 suite는 실행하지 않는다.
+
+## 실제 배포와 기동 후 검증
+
+- 실행 커밋: `922b9cbc370c4c6c002b3c1fcdb3ed061719e4a2`. 요청91ff/e04와 이전48968ade9·59c929097·문서00b8e4f를 모두 조상으로 포함한다. canonical workspace의 무관한 변경은 통합하지 않았다.
+- 정규 ordered 전환은 `2026-10-16T14:11:56.925358+09:00` complete/pass. 기존PID3646205에서 **PID3729660/start19142841**로 바뀌었고 실제cwd·selector·정책 소비 및 release-set 검증이 일치한다. startup hold는 없다.
+- 후보 delay/stop/holding 검증 모두pass. 네 family의 현재 fixture는 pass이며 변경 rising_missed86·holding_vote93건을 새 코드에서 네트워크 차단으로 실행했다. native 기계 계약37개 파일은 동일하여 원 exact parity를 검증·재사용했으며 새 재생을 실행한 것으로 표시하지 않는다. 원 정책JSON/env·PREOPEN prepared index·수동 제외·editable checklist는 전환 동안 모두 동일했다.
+- 기동 후 holding **14:12:23**, 계산 **7.35초**, native full 검증 및 정확한 보고서SHA 결속 성공. 현재PID가 consumed_pids에 포함되고 findings/policy_binding_gaps/runtime_consumption_gaps는 비어 있다. 과거 최초 TP 전이 결손5건은 그대로다.
+- 기동 후 BUY 원천14:12:55/observer14:13:46은 현재PID/start·코드 세대·보고서SHA가 검증됐다. 실행completed, semantic partial, warning_pending/recorded_guard_or_cohort_pending, unmet_conditions=[]다. scanner의 식별 평가0 및 현재 probe 관측창 부족을 full coverage나 정상 제출로 바꾸지 않는다.
+- 14:14:32 전체 탐지는 artifact_freshness warning와 나머지6개pass다. 새 runtime failure0이며 기존5 source_gap, 10/15 entry_cancel_wait/rising_missed native generation 미검증, BUY 코호트 대기는 남는다. 배포전 자료로 기동후 정상화를 주장하지 않았다.
+- broker native checkpoint의 전후digest·KRX/NXT·inventory/open-order 응답·registry generation이 검증됐다. 재기동 전후005930 2주, 수동042660 10주/475150 20주와 미체결0이 같고 journal event_count1641/tail도 동일하다. 전환 중 새 주문 또는 중복 주문 원장 추가0이다.
+- WS producer는 같은 새PID/start/commit이며 고정5종목 전부 새 transport epoch 이후 실제0B·0D가 확인됐다. native 구독 이관의 자연 ENTER_NOW 편입과 부분 체결 후 terminal 보유 전환은 아직 새 실제 사례로 검증하지 않았으며 기존OPEN을 유지한다.
+
+[최종 검증 기록](/home/ubuntu/KORStockScan/tmp/probe-partial-integrated-20261016/final-verification.json)에 배포/새PID·정책 보존·broker/WS·새 보고서/탐지기 및 해시를 묶었다. 이후 checklist에 이 수용 결과만 추가한다. 전환 중 보존한 checklist 해시와 이후 문서 갱신을 구분한다. 코드 배포는 완료이며 실제 비용 후 성과는 미검증이다.

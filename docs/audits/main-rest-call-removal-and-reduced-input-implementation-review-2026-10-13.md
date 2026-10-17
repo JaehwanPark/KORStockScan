@@ -57,3 +57,26 @@
 기동 전 읽기 전용 검증에서 frozen source 중 현 체크리스트 한 파일만 원 봉인과 달랐다. 정책·env·PREOPEN·prepared/controller/summary 원본은 일치한다. 기존 Git 체크리스트가 봉인 SHA와 일치함을 확인하고 최신 편집본과 함께 보존한다. 배포는 release-set/detector lock 안에서 정확한 원본으로 predecessor를 검증하고 정상 종료 뒤 최종 candidate 문서를 발행한다. source mismatch를 무시하거나 임의 receipt를 만들지 않는다.
 
 `REVIEWED_REST_REDUCTION_SOURCES`는 원 PREOPEN commit의 Main/initial-entry 두 파일 SHA에서 이번 검토한 SHA로의 정확한 쌍만 허용한다. 다른 bytes·변조 baseline·dirty source·원 code digest 불일치는 여전히 거절한다. stop/delay 정책 값·active pointer·auxiliary scope 정의/threshold/Provider·원5초·최종 quote/account/order/quantity/custody는 유지한다. active code handoff와 이미 있는 다음날 후보의 동일정책 code refresh, 실제 PID 검증·자연 관측 결과는 `tmp/rest-removal-deployment-20261013/`와 ordered transition에서 따로 기록한다. 약세 WR0~WR5 구현/재연구나 주문은 이번 승인 범위에 포함하지 않는다.
+
+## 7. 배포/PID 검증과 초기 자연 관측
+
+**배포·재기동 완료:** `main-rest-reduction-20261013` / commit `932bb3a1294e3e5b318cdb565fefa87f11d6e28b`, Main PID `3517912` / start ticks `13710100` / cwd `/home/ubuntu/KORStockScan-runtime-releases/main-rest-reduction-20261013/src`. [Ordered transition](../../data/runtime/release_transitions/2026-10-13/932bb3a1294e3e5b318cdb565fefa87f11d6e28b/status.json)은19:35:06.322 graceful drain→19:35:06.337 selection→19:37:00.534 launcher PID receipt→19:37:46.080 bootstrap/소비 재검증 PASS를 기록한다. 강제 종료·hold/monitor/lease 수동 초기화는 없고 전환의 startup hold/restart flag는 종료됐다.
+
+[완료 영수증](../../tmp/rest-removal-deployment-20261013/completion.json)은 당일 원 bundle `d906615b11d8d9175930a0c7e1bed3f7d7f1c7dd237a129814c7629de49f0a5b`의128/128 scope 소비, 원 active pointer/정책/PREOPEN/env/frozen source hash 유지, 새 Main/WS producer PID·root·commit 일치를 확인한다. 10/14 후보는 동일정책 code refresh bundle `bc5a09dbb3daee8754e1688c95fa221354fce54fc6151033cd0433084ee9c3a5`와 보조 reader128 scope 준비 PASS이며 내일의 실제 활성/PID 소비는 아직 아니다. 최종 체크리스트 bytes는 candidate Git SHA `9342ee0829d1d4adbe169e9f2686555e837931c0aac79994d2969e87d15dbcc8`로 봉인됐고 후속 관측 기록을 위해 다시 편집하지 않았다.
+
+실제 불변 릴리스 안에서 CR0~CR8·소스/계좌·holding/retirement·native handoff/ordered deployment/부트스트랩·보조 reader를 함께 회귀해 **1,461 passed /1 deselected /2 warnings**를 확인했다. 위 퇴역 CLI 테스트1개 제외를 유지하며, 실행 경로 변경 없이 테스트 파일명을 바로잡은 최초 no-tests-run 로그도 보존한다. source hash20파일·Python compile·wrapper `bash -n`·Git diff 검사·최종 current owner parser를 검증한다. 기존 workspace index와 무관한 경로를 덮어쓰지 않았다.
+
+초기 자연 관측은 [19:41:16 snapshot](../../tmp/rest-removal-deployment-20261013/observation-194116/summary.json)까지다. 상시5종목 모두 `_AL`/정확 SOR route의0B·0D 수신을 확인했다. discovery queue1,409개 중24 probe terminal 기록을 확인했고, 결손·지연·시장폐장·native 미확인은 원 사유로 남았다.19건 source_unavailable·2건 required_feature_insufficient를 성공으로 변환하지 않았다.1건 trace는 `not_requested_machine_source_invalid`이며 신규 정상 auxiliary/제출/체결/손익을 증명하지 않는다. manual 잔고2종목의 자동 편입 제외를 실제 startup 로그에서 확인했다.
+
+| Main 물리 시작 window | 기간 | started | 분당 started |
+| --- | --- | --- | --- |
+| 이전 PID3387032 |180.64초|116|38.53|
+| 새 PID3517912 |182.37초|17|5.59|
+
+각 PID의 같은 reset identity 내 cumulative snapshot delta로 계산했다. 이전 minute detail eviction은 누적 started 합계와 별개이며 삭제된 recent128만으로 전체를 재계산하지 않았다. **시장 입력·기동 상태·유효 신호 수요가 달라 이 수치를 확정 절감률이나 동일 부하 성능 개선율로 주장하지 않는다.** 새 PID 관측 구간에서 `entry_capacity_prefetch`·Radar `ka20006`·투자자 `ka10059`·대상 없는 복구 `kt00008/kt00007/ka10076`는 lifetime physical started0이다. ka10075/kt00005 필요 대사, discovery 각1page와 신호 후 probe candle1은 남아 있다. 관측한 loop p95는305ms이나 최대33.03초·cold pipeline source replay 최대35.97초가 남아 전체 지연 수리를 완료하지 않았다.
+
+[19:40 정규 cron 검증](../../tmp/rest-removal-deployment-20261013/scheduled-census-verification.json)은 새 선택본의 wrapper가 `external_bbo_collection_enabled=false`, valid capture4, native DONE을 기록했음을 확인한다. 수동 capture/report 재생성 없이 CR6의 실제 scheduled consumer까지 적용됐다. 순위 capture의 잔여 요청/품질과 외부 BBO OFF를 구별하며 CF coverage/경제성을 정상값으로 보충하지 않는다.
+
+19:36:26 초기 daemon의 `strict_checklist_generation_stale`와19:38:15 I/O wait 경고는 역사로 보존한다. [새 commit의 자연19:39:35 탐지](../../tmp/rest-removal-deployment-20261013/natural-error-detection.json)는 selected release/PID consumed, process/resource PASS와 finalization `recovered_late`를 기록해 현재 generation-stale 실패는 회복됐음을 확인했다. 원06:50 이후 회복 이력·기존 policy-generation/미완료 실행 경고는 남아 있어 전 시스템 GREEN을 주장하지 않는다. 추가 provider/주문·외부 sync·후속 약세 연구는 실행하지 않았다.
+
+이번 코드/배포/PID gate의 미해결 finding은0이다. 기존 `DirectFamilySourceRepairMainMechanisticEntry`의 더 긴 목적별 REST/WS 자연 관측·cold source replay, `NonfixedDispatchReadinessReview1012`의 source/native/cleanup, `AuxiliaryCircuitRecoveryRepair1012`의 정상 응답/제출과 비용 후 경제성은 각 기존 Acceptance로 남는다. 신규 품질/경제성 선행 gate나 중복 OPEN은 추가하지 않았다.

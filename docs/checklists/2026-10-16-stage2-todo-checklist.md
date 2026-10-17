@@ -42,8 +42,6 @@
 
 ## 실행 항목
 
-현재 보조 연구 인계: `DirectFamilySourceRepairCompactAuxiliary`의 하위 작업으로 [누적 보조 연구 실행 검토](../audits/main-cumulative-auxiliary-research-implementation-review-2026-10-16.md)를 추가했다. 원 Acceptance·Due·봉인 source 영수증은 보존한다. 10개 원천일·현재 기계 확인점 14,005건을 census하고 67쌍 실제 비교를 마쳤다. 전체 교체 비권고, 두 scope 탐색 후보이며 정책 발행·배포·재기동은 사용자 지시 대기다. 과거 수동관리 이관·원천 결손을 실현손익이나 정상 차단으로 바꾸지 않는다. 이 인계는 OPEN 완료나 장후 finalization 완료 영수증이 아니다.
-
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-15.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-15.json)
   - 판정 기준: source_date=`2026-10-15`, apply_date=`2026-10-16`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=verified); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=09d592da2dc7c980401cd4999ecfaad2d306d85d89a5c8f7c6fa5cdc0fd0993d, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
@@ -138,7 +136,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
 
 - [ ] `[AuxiliaryCircuitRecoveryRepair1012] 보조판정 회로·제출 증빙의 다음 정상 신호 수용` (`Due: 2026-10-16`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 다음 정상 attempt`, `Track: RuntimeStability`)
-  - 10/16 우선순위 보완: [원천·보조 계약 리뷰](../audits/main-submit-priority-source-and-auxiliary-contract-review-2026-10-16.md)의 삼성2건 원 budget/capture clock trace 누락과 HPSP4건 CAUTION→INSUFFICIENT 분류 결함을 격리 작업본에서 수리한다. 원 deadline·AI 입력/응답/연구와 PASS 조건을 유지하며 다음 실제 PID의 capture 전후·잔여 budget·canonical CAUTION을 확인한다. 코드 검증은 실제 지연 감소·제출·경제성 수용을 대체하지 않는다. 기존 Acceptance/History와 OPEN을 유지한다.
   - 19:40 세션 경계 추가 결함: 이전PID가 완료 결과 회수 전에 fixed-watch route conflict를 던져 스나이퍼 스레드가 종료됐다. 원 queue로 결과를 소비·거절·정리하고 pending 물리 작업을 유지하도록 수리했다. 원 구현 실패8개/새 구현 통과 및 관련151개·계약1,808개 PASS. 첫847607658 배포는19:42:59 완료됐으나 이 추가 수리는 새 rising/holding fixture와 ordered 재배포 후 현재 PID/정규 탐지로 닫는다. 19:44 자동 수동 이관으로 append된 삼성전자 제외 행과 기존 prefix를 보존한다. [추가 수리](../audits/main-entry-price-progress-deployment-review-2026-10-15.md#1940-세션-경계-치명적-예외-추가-수리).
   - 후속 사용자 승인 수리: 조기 source/non-entry 결과·trace의 원 async6필드 누락과 정책893개 경로 객체 재생성 비용을 보완했다. 원 구현의 ID 유실2개 재현, 전체 file/symlink/inode/ctime 검증 유지, 동일 입력50회 검증 p95 10.867→5.488ms를 확인했다. 7b2e421e3은 기존 운영05b78a401의 ancestor로 이미 포함되며 후속 통합에도 보존한다. 코드리뷰·회귀 후 ordered 배포/새 PID·정규 detector 수용은 DirectFamilyPreopenPolicyHandoff와 연결한다. 전체 자연 지연·AI/PASS→주문 수용은 별도이며 원5초·priority·동시성·정책·안전장치는 유지한다. [후속 수리](../audits/main-entry-price-progress-deployment-review-2026-10-15.md#후속-승인에-따른-요청-결속검증-비용-수리).
   - 19:06 새 API/artifact 경보 재발: 19:05:49 현재 PID의 provider12/timeout7/응답5(CAUTION4·VETO1·PASS0), native→claim p95 4.880초/준비 queue max23.45ms를 확인했다. 원5초 안 Main 인수·로컬 검증 비용 축소와 미연결 관측1건/완료봉 원천 대사가 다음 작업이며 새 runtime 수리는 미실행이다. 19:04 비실패는 역사적 결과로 보존하고 현재 수용은 미완료다. [재발 진단](../audits/main-entry-price-progress-deployment-review-2026-10-15.md#1906-api-및-artifact-경보-재발--현재-수용-미완료).
@@ -164,8 +161,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - [ ] `[NonfixedDispatchReadinessReview1012] 혼합 관측·0D 이력·probe 편입 및 신규 등록의 자연 수용` (`Due: 2026-10-16`, `Slot: INTRADAY`, `TimeWindow: 승인된 적용 후 정규5분 연속3회`, `Track: RuntimeStability`)
   - 10/16 후속 승인 수리: 같은 exact lease의 검증된 수신 이력을 Main으로 연속 인계하고 원5초/precheck·원 신호 영수증을 연결했다. REG/REMOVE local 송신·서버 응답·wire/정규화/native를 분리하고 불명 귀속은 unknown으로 유지한다. 리뷰·교차 회귀 후 정책 인계 선검증→ordered 배포→새 PID/observer/health를 확인한다. 과거 무수신/자연 제출/경제성은 이 OPEN owner의 원 Acceptance를 유지한다. [수리 리뷰](../audits/nonfixed-source-continuity-review-2026-10-16.md).
   - 배포 후 재리뷰: 0004e9863/PID305600의 정규 기동·정책 소비와19:05 full FAIL0을 확인했다. 공통 코드 변경으로 남은 rising/holding capability 경고2건은 원 보고서를 보존한 정확 successor 연결·새 native fixture로 추가 보완한다. 최초 배포 경고와 최종 전환 결과는 [후속 리뷰](../audits/nonfixed-source-continuity-capability-followup-2026-10-16.md)에서 분리한다.
-  - 10/16 사용자 지정 최우선 수리: 최초 선택59c929097 기준 격리 worktree에서 native 관측→Main 이관의 REMOVE/REG 경합과 blocking 최종화 영수증 누락을 수리했다. exact item·transport epoch·0B/0D·원 physical lease·native5초를 보존하고 관측 snapshot을 실행 호가로 복사하지 않는다. 실패한 정확한 임시 PROBE_READY만 만료하고 최초 실패/정리 영수증을 함께 보존한다. 기존 보유·확정 감시·다른 owner/route 및 슬롯5/long3·60/150초는 유지한다. 원 구현 회귀4개 실패 재현, 보완 후 관련729개 PASS 및 최신 배포48968ade9 통합 후 탐지기·알림 계약 포함1,016개 PASS·compile·diff 검증. 배포·재기동은 사용자 요청으로 미실행이며 코드 검증과 이후 실제 PID 소비/정상 신호 편입·AI·제출은 별도다. [리뷰와 배포 대기 범위](../audits/main-nonfixed-native-handoff-repair-review-2026-10-16.md).
-  - 10/16 우선순위 보완: [원천·보조 계약 리뷰](../audits/main-submit-priority-source-and-auxiliary-contract-review-2026-10-16.md)의 PID3083694 probe36건 중 stale14·source-censored3·feature UNKNOWN1을 원 결손으로 보존한다. 별도 native 호가 누락/역전/stale 회귀에서 readiness의 호가 부적격 표시 누락을 재현해 진단을 수리하며 detector/ready/pending와 슬롯·TTL·freshness는 유지한다. 셀트리온 원 UNKNOWN의 당시 native quote는 결손으로 남기고 배포 후 exact item/epoch/sequence의 자연 receipt로 기존 Acceptance를 확인한다.
   - 다음 보완:17:57:01 라온시큐어 no-match 원본의 raw_ready_count1(다른 scope 포함)과 selected_ready_count0을 observer가 혼동해 미분류 처리했다. `_probe_verified_no_match`에서 전체/선택 scope 카운트를 분리하고 선택 TRUE·pending·stale·다른 PID는 계속 거부한다. 이번 최종화 수리와 별도로 미적용이며 원본 재생·거부 회귀가 closure다. [근거와 범위](../audits/main-finalization-live-vote-read-race-repair-2026-10-15.md).
   - 10/15 비상시 원천7건 추적: [등록·첫 수신·exact 원천 리뷰](../audits/main-nonfixed-registration-source-gap-review-2026-10-15.md). 기한 내 REG 후 future 완료 지연의 연결 결함1건을 재현해 수리했고 표적342개 검증을 통과했다. 같은 lease/item/epoch·원3초 전송 예산·원 residence/native 마감과 cleanup을 보존한다. 늦은 전송2건은 timeout, 등록 후 exact 쌍 미확인4건은 원천 대기로 유지한다. 격리 작업 트리 코드 검증이며 배포·재기동·자연 복구/제출은 미실행이다. 별도 적용 후 동일 lease의 timely local REG→원천 검사→원 마감/cleanup과 Main disposition을 확인한다. VI 결속·슬롯 추가 증설·TTL 변경은 포함하지 않는다.
   - 10/15 사용자 확정: 전체5 내 장기 슬롯2→3개 및 두 cycle의 적격 대기/장기 대기 진단값 연결. 별도 적용 전 용량 비교·부하실험·추가 확인은 생략하며 코드 리뷰·보완·기능 회귀는 수행한다. 이전 long2 보존 조건은 이번 지정 변경에 한해 대체한다. [변경 계약](../proposals/main-nonfixed-observation-and-submit-bottleneck-remediation-plan-2026-10-14.md#13-2026-10-15-사용자-확정--장기-슬롯3-및-대기-계측-연결). [구현 리뷰](../audits/main-long-probe-and-weak-veto-scope-review-2026-10-15.md).
@@ -179,11 +174,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - [ ] `[HoldingProfitExitSourceContractRepair] Main 보유 익절 원천·재생·의미 계약 수리` (`Due: 2026-10-16`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
   - 10/16 정규 장후 신규 결함: native 보유 연구 feature 87,655바이트가 64KiB cache row 한도를 넘어 실패했다. 정상 관측32개를 기존 tree로 무손실 분할·검증 복원하고 단일 과대 관측은 기존 streaming으로 보존한다. 원 실패·완료 prefix를 보존하며 세 파일만으로 snapshot 완료를 주장하지 않는다. [수리 범위](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md#14-장후-보유-연구-캐시의-물리-레코드-분할). 코드 검증 뒤 native exit snapshot→stop/summary/strict/controller→10/19 준비를 재점검하며 역사적 TP5건·비용 결손·실제 다음 PID 수용은 별도 유지한다.
   - 14:11:56 통합922b9cbc3 배포·재기동 완료: 요청91ff/e04를 포함한 새PID3729660/start19142841의 실제 소비·release-set·원 정책/수동 제외 보존 확인. 기동후holding14:12:23 native7.35초/새 결속 결손0, BUY14:13:46 현재PID/세대 verified·scanner 코호트 partial, full14:14:32 새실패0. broker 전후수량·미체결0·원장동일, fixed5 실제0B/0D 확인. 과거TP5건·역사적세대/자연편입·부분보유/경제성OPEN 유지. [최종 검증](../audits/main-probe-partial-integrated-deployment-review-2026-10-16.md#실제-배포와-기동-후-검증).
-  - 10/16 부분 보유 통합 승인:91ff/e04 native 이관 수리를 현재48968ade9에 통합한다. CANCEL_PENDING·결손 주문·대사 미완료와 기존 SELL 소유권 회귀10건을 재현·보완했고 관련3,673개 및 exact-source50개 PASS다. 원 정책/수동 제외를 보존한 ordered 배포와 기동 후 새 보고서/PID/broker/WS 수용으로 확인하며 자연 부분 체결·경제성 및 과거5 source_gap은 별도 유지한다. [통합 배포 검토](../audits/main-probe-partial-integrated-deployment-review-2026-10-16.md).
-  - 13:55 배포 수용: 48968ade9/PID3646205/start18963364의 기동 후 native6.56초·정규 full exact SHA/FAIL0, KRX/NXT 잔고·미체결0·새 epoch fixed5 실수신을 확인했다. 정규13:50 첫 stable 통지 후13:55 새 보고서 세대도 동일 key/duplicate_incident·추가 통지0이다. [최종 검증](/home/ubuntu/KORStockScan/tmp/holding-sentinel-performance-20261016/incident-final-verification.json). 원 과거5건 복원·mandatory TP 자연 양성·비용/경제성 OPEN 및 원 Acceptance는 그대로 유지한다.
-  - 13:30 반복 경보 보완: [성능 배포·동일 결손 식별 리뷰](../audits/main-holding-sentinel-performance-review-and-deployment-2026-10-16.md). 59c/PID3600286 기동 후 native6.42초·full exact SHA/FAIL0을 확인했으나 과거5개 source_gap은 보존한다. report 해시·릴리스 경로에 따른 재통지는 native full gap census의 position/BUY/signal/reason으로 제한 식별한다. 원 발송 기록은 같은 보고서 SHA에 한해 이행하며 새 결손/부분 검증은 계속 경보한다. 기존 OPEN·경제성·자연 TP 수용과 수동/retired custody는 유지한다.
-  - 10/16 성능 개선 승인: [holding 읽기·계산 및 배포 리뷰](../audits/main-holding-sentinel-performance-review-and-deployment-2026-10-16.md). scope 후보 전수 검색·전일 cache 전량 읽기·중복 hash를 줄이고 원 native 전체 보고서 parity를 확인한다. 기존 정책·원 source-gap·현재 일자 원 fields를 보존하며 코드리뷰/회귀 후 정규 ordered 배포·새 PID·기동 이후 보고서/탐지기 SHA 수용으로 확인한다. 원 Acceptance/기한은 유지한다.
-  - 10/16 추가 승인: 최종4c65523b2 기반 source-gap 수리를 통합하고 필수 최초 TP 전이를 상세256행 cap과 분리한다. 과거5건은 원 source-gap/비용 null을 보존하고 원 cap 소진 시각을 설명한다. [통합·전이 수리 및 배포 수용](../audits/main-postclose-source-gap-final-release-review-2026-10-16.md)의 코드 리뷰·fresh fixture·원 정책 보존 검증 후 정규 ordered 배포/재기동과 새 PID 소비를 확인한다. 원 Acceptance/기한·수동/retired custody·hard safety는 유지한다.
   - 20:00 후속 결함: live naive KST→마감 판단/HOLD 시각 결속과 명시적 수동 보유 분모를 수리한다. 미결 주문·exit token·대사·unknown custody·과거/미래/비유한 HOLD는 계속 미확인이다. 관련253개·배포/세대1,853개 회귀 통과, 원 구현8개 실패 재현. 알테오젠49300의 오늘 원 terminal HOLD 부재는 그대로 OPEN이며 원천/대사 및 다음 자연 terminal 영수증을 확인한다. 배포/현재 observer 세대는 DirectFamilyPreopenPolicyHandoff로 연결한다. [수리 리뷰](../audits/main-entry-price-progress-deployment-review-2026-10-15.md#2000-종료-검사-실패--시각과-수동-custody-계약-수리).
   - 10/15 추가 수리: [preset·비용 시각·수동 이관 계약 리뷰](../audits/main-holding-preset-cost-clock-and-manual-handoff-contract-repair-2026-10-15.md). 연구 +0.4/-3/1800/0.0023·공통 pin·실효 preset·등록 대기/완료를 병렬로 결속하고 원 ISO 비용 시각을 불변 소비한다. 기존 비상시 등록 완료 연결 수리와 선택본451b6c1ec 기준 격리 커밋으로 준비한다. 과거 partial-fill/preset 원천 결손·실현 비용 null을 보존하며 배포·PID 소비·자연 receipt·경제성은 미수용으로 남긴다. 재기동·정책/제외 파일·주문 변경 없이 기존 Acceptance/History와 OPEN을 유지한다.
   - 10/15 주성49294 추가 연구: [하드스톱 전체 흐름 연구](../audits/main-jusung-hard-stop-pattern-and-full-flow-research-2026-10-15.md), [동결 검증](../../tmp/jusung-pattern-flow-research-20261015/verification.json). 당시bb480/PID2039852에서 보유 path63행 전부 입력 결손·provider0, trailing256개 한도 소진, stop 원천 비용시각 문자열↔재생 epoch 불일치를 확인했다. 별도 preset -1.4%와 공통 stop 원천의 분리·수동 이관 종료도 재생에 결속해야 한다. 기존 scope의 source/consumer 수리 대상으로 인계하며 구현·배포 완료로 닫지 않는다. 수동관리 이관은14:41:28 증거 기준 유지, 제외 해제·매도·재기동·provider/정책 변경 권한 없음. 기계 패턴 후보는 기존 누적 정책 반영 연구로 분리하고 원 보조 연구를 보존한다.
@@ -211,43 +201,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - History: 10/14 계획, 10/15 누적 연구 38개 가설·19,892개 관측 대안과 reviewed 15개 scope 변경/7개 승계를 계승한다. 성공 보존율/표본/EV/새 날짜 gate는 추가하지 않는다. 코드·준비와 실제 등록/활성/PID/자연 거래/실현 성과는 별도 상태다.
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
 
-
-## 장후 반복 읽기 개선의 격리 구현 인계
-
-사용자10/16 추가 승인으로 SOR 미식별 체결의 KRX 소비값·원본 분리, 정책 발행/기동의 pipeline raw 재해시 제외, full detector digest 세션과 frozen 매도 후 metadata를 보완한다. `35beec0f`도 통합하며 리뷰·검증 후 배포/재기동한다. 기존 `DirectFamilyPreopenPolicyHandoff`/`HoldingProfitExitSourceContractRepair`가 native PID·실제 읽기량·다음 자연 체결/관측 수용을 소유하고 원 OPEN/경제성 결손을 유지한다. [수리·배포 리뷰](../audits/main-sor-krx-and-pipeline-validation-deployment-review-2026-10-16.md).
-
-기존 `DirectFamilyPreopenPolicyHandoff`가 반복 검증으로 실패한 장후 인계 경로의 적용·현재성 수용을 계속 소유한다. OPEN stable ID·기한·원 Acceptance는 바꾸지 않는다. 사용자10/16 지시로 controller/prepare CLI의 실행 내 digest 공유와 delay 단일 패스 검증을 별도 작업본에 구현했다. [구현·반복 리뷰](../audits/main-postclose-read-reduction-implementation-review-2026-10-16.md), [운영 계약](../proposals/main-io-residual-validation-and-monitor-read-amplification-remediation-plan-2026-10-14.md#장후-cli-실행-내-재사용-보완--2026-10-16)을 따른다.
-
-이 체크리스트는 구현 작업본의 인계 초안이다. 원 작업공간의 봉인된10/16 checklist·선택본·정책·controller/prepared는 변경하지 않았다. 구현 검증은 배포·PREOPEN/PID 소비·정규 장후 성능 수용과 별개다. 적용할 때 기존 source/code/date/native handoff 검증을 수행하며 원 정책 코드 계약 차이를 무시하거나 기존 준비본을 새 코드로 재라벨링하지 않는다. 세대 전체 게시의 원자성과 프로세스 사이 재사용은 이번 구현 대상이 아니다.
-
-사용자 후속 배포·07:55 확인 지시를 수용했다. 기존 `DirectFamilyPreopenPolicyHandoff`의 원 수용 기준으로 정규 PREOPEN/첫 기동과 후속 ordered 배포를 검증한다. [배포 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md). 원 운영 체크리스트와 이미 봉인된 정책/PREOPEN bytes는 별도 보호한다.
-
-580d5865b의 selected-phase 실패와 정지 복구는 같은 `DirectFamilyPreopenPolicyHandoff`가 소유한다. 원 native PID 증거·정책·봉인 체크리스트와 실패 attempt/hold를 보존하고, 검토 source-pair 및 새 attempt에서 native 소비를 확인한다. 상세는 위 배포 리뷰를 따른다.
-
-추가 승인된6cf45b5c 통합·optional code/calendar 재결속은 기존 `MainMarketWeaknessPostcloseObservation1008`와 `DirectFamilyPreopenPolicyHandoff`가 각자의 설치/선택·PID 수용을 소유한다. 원 enabled/notify/source floor/설치 역사·후보/outbox와 야간 예산을 유지하고 다음 자연 야간 수용은 OPEN이다. [통합·배포 리뷰](../audits/main-postclose-read-reduction-deployment-review-2026-10-16.md#6cf45b5c-통합과-optional-codecalendar-인계).
-
-현재 승인 배포는 세 overnight SELL 완료 outbox의 엄격한 broker/BUY 결속 ACK 수리를 포함한다. 원 record49300/49328/49267과 leg hash를 보존하고 native PID·세 key ACK·terminal 및 다음 detector로 운영 수용한다. 비용 미상/기존 연구 OPEN은 유지한다. 동일 배포 owner와 위 감사 근거를 사용하며 수동 주문/journal 편집은 하지 않는다.
-
-08:36:58 b4d23f658 native 배포/PID 수용과08:37 세 SELL key ACK 및 optional code/calendar verify를 확인했다. 후속08:42 observer의 lazy auxiliary 부재와 sentinel clock 혼용은 동일 배포 owner에서 보완·새 PID/자연 cron/detector 수용한다. 원 FAIL·partial/source gap·비용 미상 및 다음 optional 자연 야간 OPEN은 유지한다. 위 배포 리뷰의 원인/시험/종결 증거를 따른다.
-
-3c814c05c의08:57:51 native PID와09:00:35 holding 정규 DONE을 확인했다.09:01:47 의미 영수증 누락은 후속 native_validated/observation_complete 소비로 닫고 기존 source/policy/economics 공백은 HoldingProfitExitSourceContractRepair에 유지한다. 시도0·strict pending 부재만 남은 observer 경계는 같은 배포 owner에서 추가 수리·native 수용한다. 원 운영 checklist bytes와 OPEN stable ID는 유지한다.
-
-09:06:39 추가 policy_binding_gap은 HoldingProfitExitSourceContractRepair가 소유한다. legacy BASE 원 target pin/hash와 native record/symbol을 보존·결속하는 보고서 수리를 같은 배포 owner에 인계한다.75d preflight 중단과 원 실패를 보존하며 새 natural 보고서/의미 detector로 닫는다. 원 first-crossing/비용 미상 OPEN은 별도다.
-
-036930 SOR venue UNKNOWN terminal ACK와 revive49342의 실제 편입을 기존 HoldingProfitExitSourceContractRepair/DirectFamilyPreopenPolicyHandoff에서 확인한다. 원 거래소/비용 미상·수동456010 제외·원4개 key를 보존하고 duplicate watch/guard 완화 없이 자연5개 편입으로 닫는다. 상세 배포 리뷰를 따른다.
-
-현재 PID의 bare/typed receipt 비교 결함도 같은 source-only owner에서 수리했다. 원 manifest/env/archive와 native0c461429 fixture를 유지하고 최종 PID/036930 ACK/고정5개·정규 detector로 확인한다. 상세 원인/시험은 위 감사 근거를 따른다.
-
-predecessor native preflight 반복 읽기/120초 timeout도 같은 DirectFamilyPreopenPolicyHandoff가 소유한다. 정확히 같은 CLI/cache에 session을 전달하고 원 deadline/의미 검증을 유지한다. 실제 native validation_io·새 PID·036930 ACK·5개 편입·최종 detector로 수용하며 원 timeout을 보존한다.
-
-11:35 후속 관측에서 delay source ledger 내부의 과거 pipeline 재해시와 observer role 공통 잠금 경합을 확인했다. 기존 owner의 잔여 결함으로 지연·수량 정책 소비의 봉인 참조 검증과 generation별 잠금을 보완한다. [SOR/pipeline 재리뷰](../audits/main-sor-krx-and-pipeline-validation-deployment-review-2026-10-16.md)의 추가 배포·현재 PID·실측 I/O 수용을 따르며 원 실패와 자연 관측/경제성 OPEN은 유지한다.
-
-selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한계를 같은 owner에서 보완한다. 원 실패·기동 hold·당일 intraday 실제 소비 증거를 보존하고 exact frozen generation 검증 후 정식 중단 복구를 수행한다. 정책 재선정·임계치 변경·native 소비 합성은 하지 않는다.
-
-09:49 cold timeout의 실패 이력을 보존하고 같은 배포 owner에서 기존 transition TTL120초/의미 검증을 유지한다. 단일 역사파일 content-hash 준비와 native phase 비용을 구분해 실제 PID/ACK/고정5개 수용을 확인한다. 원 운영 checklist bytes는 유지한다.
-
-10:13:11 같은-PID native 복구/PID3083694와 원4개 SELL ACK·고정5개를 확인했다.10:20 자연 full observer 회복과10:22:17 전체 FAIL0(경고1/PASS6)을 대조했다. 원150초 timeout·I/O/원천 결손·다음 optional 야간 OPEN은 유지하며 상세 감사 근거를 따른다. canonical 당일 checklist는 SHA394a2f6e… 그대로다.
-
 ## 승인된 장기 관측·원천·로그 통합 수리
 
 - `NonfixedDispatchReadinessReview1012`: 사용자 승인으로 물리5개 중 장기4개·단기1개로 배분한다. TTL/현재 원천 freshness/주문·수량 안전장치는 유지한다. 과거 유효 관측과 현재 실행 가능 원천을 분리하고, 443670·007610의 수신0건은 local REG→wire→normalized→native 경계 영수증으로 추적한다. 구독 송신을 broker ACK로 표시하지 않는다.
@@ -259,6 +212,7 @@ selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한�
   - 10/16 장후 보완: archive가 과거 holding 원문을 제거해 현재 정책의 재귀 handoff가 incumbent_unverified가 되는 결함을 확인했다. 보유 정책 원문은 압축 제거 대상에서 보존하고, 기존 gzip과 원 정책 해시가 일치하는5개 원문만 복원한다. 실제 policy→archive→native verify 회귀와 다음 장전 소비를 [후속 계약](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md#15-압축-후-보유-정책의-원문-ancestry-보존)으로 확인하며 원 실패·정책·summary/strict는 보존한다.
   - Source: [운영 계약](../operational-log-retention.md), [원 점검](/home/ubuntu/KORStockScan/tmp/log-retention-audit-20261016-114851/report.md).
   - Acceptance: LR01~LR09의 cron/닫힌 세대/열린 FD·pin·참조 보호, 실패 cooldown 미갱신, 독립 달력 주기, 당시 strict/checklist 원본을 보존한 검증 압축, tmp 보호·용량 경보, journal 설정을 실제 적용 영수증으로 확인한다. 증거 미확인 파일은 삭제하지 않는다. 자연 만료 삭제·새 신호·실제 주문/경제 성과는 코드 PASS와 구분한다.
+
 
 장기4개 통합 후속: 67c0cee49의 원 failed transition을 보존한 복구/PID18623 소비를 확인했다. `DirectFamilyPreopenPolicyHandoff`는 drain 전 active policy 인계 강제 검사와 기동 직후 observer 게시 순서를 수리·최종 PID로 수용한다. `OperationalLogRetentionRepair1016`는 과거4일 검증 압축12,174,530,638bytes 절감 및 당시 증거 보존을 확인했고, 손절 원천 소비의 gzip 전환 오판 수리 후 detector 재검증을 소유한다. 손절 수치와 원 정책은 유지한다. 상세 결과는 기존 통합 검토에 기록한다.
 
@@ -274,6 +228,9 @@ selected 단계의 영수증 ABI 불일치와 PREOPEN 전용 중단 복구 한�
   - 잔여 실행: 자연 v4 intent→5 horizon 및10/16 정규 장후→10/19 준비/소비를 DirectFamilyPreopenPolicyHandoff에 연결한다. Due: 2026-10-16; Slot: POSTCLOSE; TimeWindow: 정규20:05 이후 장후 및 다음 운영일 PREOPEN 인계; Track: runtime-source-contract. 과거15일 격리 재계산은 완료(267건, UNKNOWN29,195cell)했으며 정규16일 terminal을 대체하지 않는다.
   - 기존 경고 수용은 HoldingProfitExitSourceContractRepair/NonfixedDispatchReadinessReview1012/OperationalLogRetentionRepair1016/MainMarketWeaknessPostcloseObservation1008의 원 Acceptance를 유지한다. 감시 구현·시험 통과를 해당 원천·경제성 완료로 사용하지 않는다.
 
-장후 관측 세대 보완: Main 종료 뒤 다음 기동용 릴리스를 선택한 같은 날에도, 정확한 EOD/DB·성공 terminal·Main 부재·원 selector/observer 봉인이 모두 유효할 때만 마감 관측으로 검증한다. 현재 PID 관측/완전성 PASS로 승격하지 않고 원 source gap을 보존한다. [운영 계약 §17](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md#17-eod-종료-후-관측-세대의-의미-구분).
+
+## 삭제한 선택 연구 원천의 처리
 
 삼성 선택 연구 원천 삭제 확인: 사용자가 과거 원천을 의도적으로 삭제했음을 확인하여 이번 세션이 추가한 복구 작업을 취소했다. 삭제 원천을 복원하거나 연구 성공으로 대체하지 않는다. 남아 있는 optional forward 검증은 과거 후보의 source seal을 재확인하기 때문에 실패하며, 당일 분석은 별도의 당일 관측·가격·체결 자료를 사용한다. Main 정책·기동의 필수 조건이 아니다. 과거 연구 종료 또는 예약 호출 제거는 이 확인과 구분한다.
+
+장후 관측 세대 보완: Main 종료 뒤 다음 기동용 릴리스를 선택한 같은 날에도, 정확한 EOD/DB·성공 terminal·Main 부재·원 selector/observer 봉인이 모두 유효할 때만 마감 관측으로 검증한다. 현재 PID 관측/완전성 PASS로 승격하지 않고 원 source gap을 보존한다. [운영 계약 §17](../proposals/semantic-monitor-producer-consumer-currentization-plan-2026-10-16.md#17-eod-종료-후-관측-세대의-의미-구분).

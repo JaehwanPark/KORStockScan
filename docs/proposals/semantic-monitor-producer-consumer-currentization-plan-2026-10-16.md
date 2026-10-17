@@ -300,8 +300,6 @@ source10/16의 EOD는20:56:06에 완료됐다. 수집2,622/2,626, DB 최신일10
 
 회귀는 실제 policy/summary를 만든 뒤 archive를 실행하고 native verify_source_handoff가 계속 통과하는지 확인한다. 수정 전 일반·dry-run 경로의 차이를 재현하며 다른 snapshot의 압축 회귀를 유지한다. 소유자는 `OperationalLogRetentionRepair1016` 및 `HoldingProfitExitSourceContractRepair`다. 소비 검증 실패를 숨기거나 file publication 성공으로 완료 처리하지 않는다.
 
-추가 리뷰에서 완료 축약본의 input window도 원 trade_review의 inode/ctime을 고정함을 확인했다. 따라서 clean baseline6/5 이후 거래 리뷰 원문도 기존 보존 통계와 분리해 retained_trade_window_source_count로 남긴다. 정상 native snapshot의 valid_empty window조차 원문 압축 제거 뒤 generation_changed가 되는 것을 격리 재현했다. 새 보존 규칙 후 같은 window 검증이 유지되며, baseline 이전 archive-only 거래 리뷰와 일반 검증된 snapshot의 압축은 유지한다. 이 보완은 현재 실행 코드를 교체하지 않고 체인 종료 후 다음 정상 기동용 릴리스에 반영한다.
-
 
 ## 16. 사용자 지시 후 논리 원천 인계를 갖춘 압축으로 전환
 

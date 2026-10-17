@@ -15,10 +15,11 @@
 
 ## 실행 항목
 
-- [ ] `[SnapshotCronReleaseBindingRepair1018] snapshot 감시 cron과 비동기 소비의 선택 릴리스 결속 수리` (`Due: 2026-10-18`, `Slot: ADHOC`, `TimeWindow: 승인 후 제한된 검증·적용`, `Track: RuntimeStability`)
+- [x] `[SnapshotCronReleaseBindingRepair1018] snapshot 감시 cron과 비동기 소비의 선택 릴리스 결속 수리` (`Due: 2026-10-18`, `Slot: ADHOC`, `TimeWindow: 승인 후 제한된 검증·적용`, `Track: RuntimeStability`)
   - Source: 사용자 다음 액션 실행 지시, [실행 경로 누락 점검](/home/ubuntu/KORStockScan/tmp/source-control-runtime-coverage-20261018/report.md), [운영 계약](../runtime-release-routing.md#snapshot-cron-release-binding).
   - 범위: 기존 snapshot3개 schedule의 공용 bootstrap을 선택900234d79에 연결하고 safe/Python/async 자식의 같은 code root를 검증한다. 기존 Main 선택·정책/PREOPEN·수량/custody·주문/provider 권한은 보존한다.
   - Acceptance: exact3행만 변경·기존8route/일시/로그owner 보존, invalid/부분/중복·동시변경 차단, 선택root/오염env 거부, 원자적 완료 읽기·쓰기/실패worker·cooldown 회귀, 독립 리뷰·수정·재리뷰·parser, 적용 후 새 terminal과 selected 코드 확인. 자연10/19 Main 소비는 기존 DirectFamilyPreopenPolicyHandoff가 유지한다.
+  - 완료: bootstrap 수리 `9afd16cdc`·독립 리뷰 후 회귀276개/compile/shell/parser PASS. 정확3cron행만 적용하고8필수+3snapshot readback 및 재변환 동일을 확인했다. 기존900234d79의 async 경로에서10/18 새 terminal success·보고서3개/3.916초, 보호11파일 불변을 확인했다. 첫 dispatch-only 수동 시도는 종결을 확인하지 못한 원본으로 보존하며 완료대기 호출과 구별한다. Main 재기동/provider/주문0이며 자연10/19 소비는 별도다. [적용 결과](../audits/snapshot-cron-release-binding-and-source-control-integration-review-2026-10-18.md).
 
 - [ ] `[SourceControlReconciliation1018] 검증된 누적 배포 코드와 원문을 보존한 Source Control 통합` (`Due: 2026-10-18`, `Slot: ADHOC`, `TimeWindow: snapshot 경로 수리 후`, `Track: RuntimeStability`)
   - Source: 사용자 100개 Source Control 변경 지적 및 다음 액션 실행 지시, [파일별 분류](/home/ubuntu/KORStockScan/tmp/source-control-inventory-20261018/inventory.json).

@@ -30,7 +30,7 @@
 - 선택본 기준 확장 회귀373개 PASS. 작업공간 통합 후 관련 회귀368개 PASS. 두 수는 중복되는 서로 다른 source tree의 검증이며 합산하지 않는다.
 - 범위: queue/runtime/probe/Main attach, 약세 history/scope, 고정·비고정 Main, 가격 drift, AI authority, DANGER/stale/broker/quantity 및 async entry bridge. 기존 pandas 경고1건 외 검증 실패 없음.
 - 변경 Python compile 및 `git diff --check` PASS. 문서·체크리스트의 print-only parser와 링크 검증 PASS. 두 기존 stable ID는 현재 체크리스트에서 각각 하나의 OPEN owner로 파싱됐다. 외부 sync는 실행하지 않았다.
-- [입력·원본 보관 manifest](/home/ubuntu/KORStockScan/tmp/entry-slots-weak-veto-20261015/input-manifest.json), [최종 소스 manifest](/home/ubuntu/KORStockScan/tmp/entry-slots-weak-veto-20261015/output-manifest.json), [요청 변경분](/home/ubuntu/KORStockScan/tmp/entry-slots-weak-veto-20261015/workspace-requested-delta.patch), [작업공간 회귀](/home/ubuntu/KORStockScan/tmp/entry-slots-weak-veto-20261015/workspace-tests-final.log), [선택본 회귀](/home/ubuntu/KORStockScan/tmp/entry-slots-weak-veto-20261015/targeted-tests-final.log).
+- [입력·원본 보관 manifest](../../tmp/entry-slots-weak-veto-20261015/input-manifest.json), [최종 소스 manifest](../../tmp/entry-slots-weak-veto-20261015/output-manifest.json), [요청 변경분](../../tmp/entry-slots-weak-veto-20261015/workspace-requested-delta.patch), [작업공간 회귀](../../tmp/entry-slots-weak-veto-20261015/workspace-tests-final.log), [선택본 회귀](../../tmp/entry-slots-weak-veto-20261015/targeted-tests-final.log).
 
 ## 미실행과 후속 상태
 

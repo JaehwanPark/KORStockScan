@@ -59,3 +59,21 @@ P0 spread bp는 238개 기준점에 존재한다. 원 신호 기준가격·정�
 rising/holding의 원 보고서→현재 코드 generation 쌍과 새로운 독립 fixture를 구분했다. summary parser의 신규 stage와, 선택c5에서 존재하던 funnel owner hash 불일치는 정확한 callback/의존 함수 AST 동등성을 확인한 후 predecessor 쌍을 보완했다. producer summary의 stage profile 확장은 원 거부 조건을 유지한다. 미검증 profile을 호환이라고 표시하지 않는다.
 
 [코드 인계 검토](/home/ubuntu/KORStockScan/tmp/pre-submit-delay-research-20261017/compatibility-fixtures/review-result.json)는 인계/요약/세대 관련2,920개 회귀와 네트워크 차단 fixture419개(133/86/116/84)의 통과를 기록한다. fixture는 아직 canonical 게시용 clean-release 증명이 아니며, 정식 release의 private CoW 준비에서 다시 검증한다. 원 정책·machine/aux 포인터·128개 보조 binding·승인된 두 PRE 변경·원 선택 bytes는 보존했다.
+
+## 최신 수량 선택본 통합과 다음 정규 기동용 배포
+
+동시 승인 작업의 선택본 `c4467c424`를 재인수해 두 부모를 보존한 통합 커밋 `3abcc524c65edaf979cd7e7fd1499123b6531d2f`를 만들었다. 수량 관련8개 파일은 c446과, 지연 구현/인계13개 파일은 검토된769와 byte-identical이다. 통합 영향8개 파일 회귀1,337개(48.94초)·변경30개 Python compile·diff 검증을 통과했다. [통합 검증](/home/ubuntu/KORStockScan/tmp/pre-submit-delay-research-20261017/merged-validation.json)에 결과를 보존했다.
+
+배포 전 원 실패를 그대로 남겼다. 최초 pre-seal과 V2의 host selector 원자 교체 경합, V3의 보유판정 원장, V4의 주문 소유권 원장의 CoW 장치ID 변경을 각각 별도로 진단했다. 실제 host 원천은 봉인 stat/SHA와 같았다. 최종 V5는 private selector upper와, 원래 물리 원장·기존 lock inode의 읽기 전용 연결을 사용한다. 동일 바이트 교체도 SHA+5개 stat CAS로 감지하고, 원천 ledger를 복제하거나 잠금을 만들지 않는다. 원천 보존 커널 회귀·어댑터9개 반례·최종 CAS/영수증 실패 rollback 회귀와 독립 재리뷰를 통과했다. 근거는 [V5 원천 검증](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_deployment/2026-10-17/attempts/reviewed-v5/file-and-directory-physical-source-regression.json)과 [44개 변경 계획 독립 리뷰](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_deployment/2026-10-17/attempts/reviewed-v5/independent-publication-plan-review.json)다.
+
+실제 clean release의 세 가족 원7f→현재 코드 인계·128범위/76,800행/598신호 parity mismatch0·네 가족 네트워크 차단 fixture419개(133/86/84/116)를 통과했다. source10/16 summary/strict/controller와 target10/19 `current_full_contract`를 확인한 뒤 기존 native lock·17개 원천 CAS·8개 기존 alias 백업·selector-last 순서로44개 준비 파일을 게시했다. 원 정책·env 전체 bytes, 현재 Main/보조/수량 pointer, 128개 연결·rollback 및 승인된 두 PRE 변경·기존10/19 OPEN6개를 보존했다.
+
+22:56:35 KST에 실제 선택을 게시했고 22:58:18에 host native 전체 재검증 PASS/findings0을 받았다. 다음 기동 bundle은 `e94fddffc8620bc0f788794add090919732983be4a2966cd84f05c89cbce0b23`, 보조 overlay는 `e3e7926d8f30c8e164fdd2a420e4412b22370a03e8a753155220aa8f9ba3e4b5`다. [배포 결과](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_deployment/2026-10-17/attempts/reviewed-v5/deployment.json), [게시 후 전체 검증](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_deployment/2026-10-17/attempts/reviewed-v5/published-native-verification.json)에 정확한 source10/16→target10/19·선택 commit·실제 시각을 남겼다. 실제 PID 소비는 false이며 다음10/19 07:35 PREOPEN→07:55 Main의 원 `DirectFamilyPreopenPolicyHandoff`에서 확인한다. 자연1/3/5초 관측·재점검·주문·비용후 성과는 대기 상태다.
+
+## 게시 후 전체 감시 결과와 잔여 범위
+
+[원문 전체 감시](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_deployment/2026-10-17/attempts/reviewed-v5/postpublication-health-original.json)는 PASS4/WARN2/FAIL1이며 전체 GREEN으로 처리하지 않았다. 7개 초기화/결과·보고서 계약 오류0·선택 코드 provenance·release-set·cron8개 연결은 정상이고, 네트워크·변경 차단 시도·운영 변경은0, canonical 상태/영구 cache는 불변이다. 기존 memory-only session에서 full1.900GB/reuse8.549GB·11.08초였다. native prepared 전체 재검증은 이 단계에서 반복하지 않았다.
+
+FAIL은 `update_kospi`의 기존 요일 오탐이다. 실제 설치 `5 20 * * 1-5`와 달리 cron completion/산출물 등록부가 토요일에도21:05 이후 당일 표식을 요구한다. c5의16:11 점검은 같은 항목이 not_yet_due여서 결함이 드러나지 않았고, 해당 감시 코드는 c5/c446/3abcc에서 같았다. 원 FAIL을 보존한다. 수정 소유 파일은 `error_detectors/cron_completion.py`, `artifact_freshness.py`, `schedule_contract.py`이며, 다음 조치는 월~금 설치 일정의 expectedness 결속이다. 단순 trading_day_only 변경으로 평일 휴장일 skipped receipt 확인까지 생략하지 않는다. 종료 기준은 토요일 마감 후 미예정·월요일 미완료 FAIL·평일 휴장 skipped receipt 유효·cron 조회불가 unknown 보존이다. [분류 기록](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_deployment/2026-10-17/attempts/reviewed-v5/postpublication-health-classification.json)에 원문 hash와 별도 잔여를 남겼으며 이번 연구 코드의 정상 결과로 덮지 않았다.
+
+WARN의 `main_trailing_research_handoff_invalid`는 c5 원문부터 존재한다. 기존10/19 OPEN `HoldingProfitExitSourceContractRepair`의 정확한 원세대→현 코드 인계/재검증 담당을 유지한다. 최초 수량의 비용/귀속 결손과 기존 설정 오류 로그2건도 보존했다. 이번 작업이 전체 장후 경제성이나 모든 감시기 결함을 해소했다고 주장하지 않는다.

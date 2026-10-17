@@ -11,3 +11,4 @@
 011170 # machine_owner_scope lotte_chemical_low_price_two_leg_owner
 108320 # machine_owner_scope lx_semicon_low_price_two_leg_owner
 456010 # operator_manual_control
+005930 # auto_hard_stop_handoff source=preset_hard_stop_after_quote_confirmation exit=scalp_preset_hard_stop_pct profit=-1.47% peak=-0.23%

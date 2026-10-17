@@ -16,3 +16,17 @@ whole-native-chain 단계에서 과거 delay report의 code hash를 현재 코�
 
 
 체크리스트 소비자의 마지막 검토에서, 네 계열의 current fixture projection은 이미 verified인데 과거 raw contract의 unverified만 읽어 완료된 코드 작업 세 개를 재개하는 누락을 확인했다. 기존 검증된 report-only projection을 소비하도록 연결하고 경제성/원천 결손의 독립 owner는 유지한다. raw report와 summary의 과거 계약은 변경하지 않는다. 최종 관련 2,844 PASS 및 compile/name/diff 검증을 마쳤다.
+
+
+## 최종 배포 및 수용
+
+- 선택 릴리스: `/home/ubuntu/KORStockScan-runtime-releases/nonfixed-quote-20261017-a41ebc84f`, commit `a41ebc84fab4021380166c474142aa7d0ae00da1`. 원 선택 `7f2552aed`와 원 정책/장후/시도 바이트는 [배포 증거](../../tmp/nonfixed-quote-deployment-20261017/)에 보존했다.
+- 실제 selector 발행: `2026-10-17T10:14:26.065105+09:00`. 공유 파일의 사후 native 전체 검증은 `2026-10-17T10:16:11.953740+09:00`에 `current_full_contract` PASS/findings0으로 마감했다. 준비된 selector의 시간과 실제 발행 시간을 별도 영수증으로 구분했다.
+- 격리 namespace에서 네트워크 차단·원 파일시스템 읽기 전용 및 검증 소유 출력/임시 디렉터리 복제본을 사용했다. Main/auxiliary/delay/holding/stop policy read·schema·code contract PASS. typed bootstrap은 provider_called=false, broker_called=false, order_submitted=false를 유지했다.
+- 원 next-session Main 정책의 수치·멤버십 불변, native confirmation 128범위/76,800행/598hit, baseline/candidate signal SHA 일치·불일치0. 원 21개 구현 파일의 SHA도 유지했다.
+- 관련 회귀 2,845 PASS. 네 current-generation fixture는 entry-cancel-wait133/rising86/auxiliary84/holding116 PASS이며 원 historical fixture를 현재 성과로 바꾸지 않았다. Python compile/name·문서 링크·print-only parser·diff 검증을 수행했다.
+- 준비본의 env_overrides 전체와 delay/holding/stop/initial-quantity 영수증은 원 준비본과 같다. Root 활성 Main policy pointer와 live PREOPEN/env는 변경하지 않았다. 새 TTL, provider/수량/threshold/cap/주문 권한을 추가하지 않았다.
+- native source16 summary→strict/controller DONE→target19 prepared 및 독립 전체 검증 PASS. 원 natural/economic/source gaps와 기존 6개 OPEN ID를 유지했다. code capability의 source report는 과거 unverified로 보존하고, 별도 현재 fixture 검증만 소비한다.
+- actual_pid_consumed=false, 운영 Main/감독 프로세스 기동 없음. 다음 정규 10/19 PREOPEN07:35→Main07:55의 실제 활성화/PID 및 자연 quote/submit/fill/비용 성과는 기존 owner `DirectFamilyPreopenPolicyHandoff` 등의 미래 수용이다. 휴장일 검증으로 quote stale 미판정의 실제 감소를 주장하지 않는다.
+
+[최종 배포 영수증](../../tmp/nonfixed-quote-deployment-20261017/deployment.json), [공유 파일 전체 검증](../../tmp/nonfixed-quote-deployment-20261017/published-native-verification.json), [격리 검증](../../tmp/nonfixed-quote-deployment-20261017/isolated-validation.json), [발행 원본/계획](../../tmp/nonfixed-quote-deployment-20261017/publication-plan.json)을 보존한다. 최초 누락·읽기 전용 scratch/lock 경계 실패·후속 코드 보완과 private native 시도도 각각 보존했다. 실제 정책/주문/자연 성과로 혼동하지 않는다.

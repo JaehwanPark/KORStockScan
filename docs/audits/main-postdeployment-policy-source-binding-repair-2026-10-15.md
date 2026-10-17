@@ -32,3 +32,18 @@
 - 12:40 정규 관측에서 stop native 정책·delay/bootstrap 결속은 검증됐지만, 배포 전12:35의 `entry_execution_tuning_receipt_contract`가 `historical_unresolved`로 남아 최근10분 규칙에서 현재 미상 사건으로 다시 집계됐다. 사용자 후속 경보와 동일하다. 원 실패를 삭제하거나 recovered로 바꾸지 않는다.
 - 후속 보완은 이 정확한 두 delay/bootstrap mismatch에 한정한다. 사건의 마지막 관측이 검증된 현재 PID 탄생 이전이고, 현재 bootstrap/PID·split native projection·delay/env/hash가 모두 검증된 경우에만 과거 사건으로 분류한다. 현재 PID에서 발생한 실패, 다른 원인, 원천/정책 결손, 불완전 증거는 계속 실패다. 실제 원 보고서의 읽기 전용 재계산은 `warning_pending`이며 원 incident bytes/status를 유지한다.
 - 관련978개 회귀 PASS. 완전한 제출/경제성 수용을 주장하지 않으며 현재 관측 없음은 pending으로 남긴다. 첫 기동 점검의 heartbeat16초/I/O wait36.45% 실패도 원본에 보존하고 후속 새 점검에서 재확인한다. 한계치를 완화하지 않는다.
+
+## 후속 통합 배포 영수증
+
+- 최종 실행 코드: `bb4808c77087231b072efbd3ea12271fbb3889c6`, 경로 `/home/ubuntu/KORStockScan-runtime-releases/policy-custody-incident-integrated-20261015-bb4808c77`.
+- ordered transition12:51:18 `complete/pass`; 실제 PID2039852/start10014770·cwd·selector·bootstrap 소비 PASS. 공유 문서 갱신 후 public handoff 검증도 PASS, startup hold/restart flag 없음. WebSocket은 같은 PID/commit으로12:52:28 갱신됐다.
+- 사용자40b931254의 handler/scanner/queue3개 실행 파일이 원 커밋 bytes와 정확히 일치한다. 후속본 active policy33 module은 직전 선택과 동일해서 방금 측정한128 scopes·76,800rows·607hits/mismatch0 증거를 재사용했다. 정책 원본·PREOPEN·bootstrap은 보존한다.
+- 후속 관측/탐지기978개 및 handoff/deployer1,402개 PASS. compile·diff·문서 print-only parser PASS. 기존 통합3,148개 및 추가 active-policy 경계1,529개와 중복되는 검증이므로 합산하지 않는다.
+- 12:50 정규 관측은 `observer_waiting_ordered_startup_completion`으로 게시/알림을 보류했다.12:52:31 새 detector는 실패0, 과정 중 heartbeat/I/O 실패가 재발하지 않았다. 현재 남은 경고는 첫 현재 관측 대기와06:50 이후 장전 복구 이력이며, 다음 정규 게시·탐지기 동일 run/hash를 별도로 확인한다.
+- 증거: [배포 로그](../../tmp/postdeploy-binding-error-20261015-1206/incident-successor/deployment.log), [사용자 커밋 실제 소비](../../tmp/postdeploy-binding-error-20261015-1206/incident-successor/deployed-user-commit-integration.json), [문서 편집 후 handoff 검증](../../tmp/postdeploy-binding-error-20261015-1206/incident-successor/postdeploy-handoff-verify.json), [과거 사건 원본 재계산](../../tmp/postdeploy-binding-error-20261015-1206/incident-readonly-replay.json).
+
+## 최종 수용
+
+12:56:34 정규 producer가 run `4d4a10a1933143f59b529c6e87fdc2bd`를 게시했고,12:57:12 detector가 동일 run/hash·새bb4808c77/PID2039852를 소비했다.12:58:04 최종 수용15조건 모두 PASS.4개 정책 capability는 모두 verified/findings0이며 stop native 원천·실제 PID 소비도 정상이다. 현재 detector fail/critical/error0, startup hold 없음. [최종 수용 영수증](../../tmp/postdeploy-binding-error-20261015-1206/incident-successor/accepted-final.json).
+
+첫 신규 원천 검증 중12:56:02 I/O wait38.96% 경보가 있었고, 계산 완료 후12:57:12에는 resource/process 점검이 PASS로 돌아왔다. 이 초기 검증 비용과 원 경보는 보존한다. 남은 warning은 `bounded_source_quality_observation`의 불완전 관측과06:50 이후 장전 복구 이력이다. 기존 정책 검증 경고나 현재 최종화 실패로 재분류하지 않는다. 자연 제출·체결·비용 후 성과 및 원천 결손 수용은 기존 OPEN owner를 유지한다.

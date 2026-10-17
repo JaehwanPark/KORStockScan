@@ -1,6 +1,16 @@
 # Joint 정책·원천 연결·AI 입력 지연 구현 리뷰 — 2026-10-13
 
-구현·반복 리뷰와 표적 검증을 완료했다. P1 신규4정의를 등록하고 10/14 작업본 기계·보조 후보를 준비했다. 최종 불변 release 결속·배포·재기동·PID 소비는 별도이며, 현재 운영 성능·HTTP 성공·주문·실현 손익의 완료로 해석하지 않는다.
+기존 구현의 반복 리뷰·보완과 승인된 배포·재기동을 완료했다. 17:10 KST 기준 최종 릴리스의 실제 PID에서 기존 기계정책128경로 소비를 확인했다. P1 신규4정의는 10/14 후보로 최종 코드에 결속했으며, 아직 신규 정책의 PID 소비를 뜻하지 않는다. 실제 AI 지연 개선·주문·실현 손익은 별도 자연 관측 대상이다.
+
+## 최종 배포 결과 — 17:10 KST
+
+- [완료 증빙](../../tmp/joint-operating-deployment-20261013/completion.json): `main-joint-source-20261013-v2`, commit `afd16c5502da1d012d62c1bbe8b07797f1c53efa`, ubuntu PID `3208863`, start ticks `12814322`.
+- [순차 전환](../../tmp/joint-operating-deployment-20261013/deployment.json): 기존 PID 종료17:05:41.840 → 선택 전환17:05:41.856 → 새 기동·bootstrap·장중 인계·PID 검증17:07:01 PASS. 미결 startup hold나 추가 재기동은 없다. 체크리스트 편집본을 보존하고 최종 후보의 동일 문서로 발행했다.
+- [native PID 영수증](../../data/runtime/mechanistic_entry_policy/consumed/2026-10-13/3208863.json): 오늘 bundle `d906615b11d8d9175930a0c7e1bed3f7d7f1c7dd237a129814c7629de49f0a5b` 유지,128경로 실제 소비. 보조 reader128경로 검증 PASS. Main heartbeat 나이1.525초와5개 감시 thread alive 확인.
+- 통합 AFTER의 상시5종목 `_AL` 등록·실수신과 비상시 개별 SOR lease 관측을 확인했다. 17:06:37~17:10:24의 Main/AI/Kiwoom/state-handler 오류 로그 bounded tail에서 신규 오류0건이다. 전체 시장 기회 포착률이나 AI 응답 속도 개선을 주장하지 않는다.
+- 최종 [회귀1,024건](../../tmp/joint-operating-deployment-20261013/final-v2-tests.log), [새 코드 호환성·joint 활성화92건](../../tmp/joint-operating-deployment-20261013/code-handoff-tests.log), [불변 후보 정책·보조·replay134건](../../tmp/joint-operating-deployment-20261013/release-policy-tests.log) 통과. 중복 합산하지 않는다. compile·shell·diff·print-only parser와 audit 링크 검증도 통과했다.
+- [10/14 최종 후보](../../tmp/joint-operating-deployment-20261013/future-candidate-v2.json): bundle `558ae54825febab2806a76bb665c5a5ab4e3e4b9b5054c69dea00affbd269a61`, 최종 release commit 결속·native source/direct handoff128경로 PASS, 당일 current 변경0. 등록 request `452ffe29985ca9afb612a96a265437a2004712407ef9c67016f0e0b36c51577d`; 앞선 미소비 준비본은 superseded 역사 증빙이다.
+- 당일 코드 호환성은 기존 원천778개·새 contract code33개를 검증한다. 원천 약1.55GB는 기존 파일을 읽은 합계이며 새 복제본이 아니다. 최초 후보 loader 검증6.35초와 이후 native dependency/hash cache를 구분한다. 원장/data/log 복사0, 추가 연구 Provider 호출0, 작업트리·index 보존. 별도 약세 WR0–WR5 신규 구현은 이번 범위에서 제외했다.
 
 ## 승인된 배포 전 재리뷰
 
@@ -53,7 +63,7 @@
 
 [10/12 disposition](../../tmp/joint-operating-implementation-20261013/historical-epoch-disposition.json)에 retained closed source owner가 증명하는3개 collector epoch와 frozen normalization의 원 제외를 보존했다. PRE15,347·REGULAR496,054·AFTER33,853행, 합계545,254행의 `source_epoch_unverified`는 보완하지 않았다. 해당 owner에서 다른 역사 epoch를 승인하는 원 증거를 찾지 못했으며, 미검사 archive까지 영구 복구 불가라고 주장하지 않는다. 현재 epoch·native epoch를 대신 주입하거나 허용 목록을 확대하지 않는다. 이 제외는 P1 지정 초기 채택의 추가 승인 gate가 아니다.
 
-## 실제 준비 상태와 후속 인계
+## 최초 구현 당시 준비 상태와 후속 인계 — 최종 상태는 상단 참조
 
 - 등록 request: `8d624a144de50727a98193dab77d5fd93cf4c87d0003db42a41b7e36660f8e09`; 리뷰 전 request `7d892a54...`는 불변 archive에 보존하며 superseded다. [intake 근거](../../tmp/joint-operating-implementation-20261013/registration-intake.json).
 - 기계 component: `1367332c81bc4ac996459e769bf18e278727055caed128ab3d6a0dbf9165fcd6`; 보조 component: `bd930dfce6afaadc726a436472a848ffb4646ea97825a2d517b569bedc8dcbb8`. AI comparison_complete=false, 새 실제 Provider 호출0이다.
@@ -61,4 +71,4 @@
 - 원 운영 pointer d906와 선택 v7를 유지했다. 당일 적용·배포·재기동은 하지 않았다. 배포 전 최종 reviewed immutable release commit/실행 code·reader 증빙에 후보를 다시 결속하고 `DirectFamilyPreopenPolicyHandoff`의 native strict/PREOPEN 검증을 수행한다. 낡은 code pin으로 기동하지 않는다.
 - 자연 수용은 기존 `NonfixedDispatchReadinessReview1012`와 `AuxiliaryCircuitRecoveryRepair1012`에 연결한다. 다음 날짜 checklist로 stable ID와 Acceptance/History를 이전하고, 과거07:55~08:15 완료나 이 문서 자체로 미래 실행 권한을 만들지 않는다. source-ready→native→claim→machine→AI→Main 소비를 같은 lease/attempt에서 확인한다.
 
-이번 리뷰 범위에서 남은 구현 결함은 발견하지 못했다. 최종 release 결속/배포·자연 성능/실제 주문·경제성은 별도 미완료 상태다. 다른 미커밋 작업본은 보존했다.
+반복 리뷰에서 확인한 이번 범위의 결함을 수정하고 표적 검증을 통과했다. 최종 release 결속·배포·재기동은 상단 증빙으로 완료했고, 자연 성능·실제 주문·경제성의 수용은 기존 OPEN owner에 남긴다. 다른 미커밋 작업본은 보존했다.

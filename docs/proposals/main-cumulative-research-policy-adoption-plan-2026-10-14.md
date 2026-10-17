@@ -10,10 +10,10 @@
 
 ## 2. 확인한 기준과 증거
 
-- [누적 연구 결과](/home/ubuntu/KORStockScan/docs/audits/main-machine-cumulative-missed-rise-and-enter-failure-research-review-2026-10-14.md): 고정 가설 25개, 22개 scope, A/F 조합 8,432개. F 개선 12개 scope, A 개선 또는 동률 추가 성공 5개 scope, 두 효과를 함께 보인 J 10개 scope.
-- **정정본** [cumulative-result.json](/home/ubuntu/KORStockScan/tmp/main-machine-joint-research-20261014/corrected/cumulative-result.json)의 SHA256은 `afa281aa051636505a1e4ed34eb2ac64fae53c5bf55706b3a644635c8a95436e`이다. 같은 디렉터리의 manifest, label 검증, native root parity, 원천 보정 receipt를 함께 소비한다. 상위 디렉터리의 정정 전 result는 등록 근거로 사용하지 않는다.
+- [누적 연구 결과](../audits/main-machine-cumulative-missed-rise-and-enter-failure-research-review-2026-10-14.md): 고정 가설 25개, 22개 scope, A/F 조합 8,432개. F 개선 12개 scope, A 개선 또는 동률 추가 성공 5개 scope, 두 효과를 함께 보인 J 10개 scope.
+- **정정본** [cumulative-result.json](../../tmp/main-machine-joint-research-20261014/corrected/cumulative-result.json)의 SHA256은 `afa281aa051636505a1e4ed34eb2ac64fae53c5bf55706b3a644635c8a95436e`이다. 같은 디렉터리의 manifest, label 검증, native root parity, 원천 보정 receipt를 함께 소비한다. 상위 디렉터리의 정정 전 result는 등록 근거로 사용하지 않는다.
 - 10/14 연구 기준 bundle은 `99c894cb018ee594c9767bb6b9d9de544e1019587fb5379605136e0adbb48215`, family는 `c366914f1a2a76d85bceacd406e6c377f1fb32b2b50d757fb195484ab783ff8c`이며 **당시** current pointer와 같았다. 10/15 연구 baseline은 `1f069c6894b5b9a7fa3f9450a9a306ff41469346e1318b20b18fcaee7e490637`로 재고정했다.
-- 10/14 연구 코드는 `ff32b99b3…`, 당시 후속 선택은 `f8dc4431d…`였다. 10/15 연구는 `policy-custody-incident-integrated-20261015-bb4808c77`을 사용한다. 실제 구현 때 [선택 릴리스](/home/ubuntu/KORStockScan/data/runtime/runtime_release_selection.json)와 [현재 정책](/home/ubuntu/KORStockScan/data/runtime/mechanistic_entry_policy/current.json)을 다시 결속한다. 이 연구는 현재 PID를 독립 검증한 결과가 아니다.
+- 10/14 연구 코드는 `ff32b99b3…`, 당시 후속 선택은 `f8dc4431d…`였다. 10/15 연구는 `policy-custody-incident-integrated-20261015-bb4808c77`을 사용한다. 실제 구현 때 [선택 릴리스](../../data/runtime/runtime_release_selection.json)와 [현재 정책](../../data/runtime/mechanistic_entry_policy/current.json)을 다시 결속한다. 이 연구는 현재 PID를 독립 검증한 결과가 아니다.
 - 24개 partition의 raw 5,261,652행 중 유효 3,831,217행, 제외 1,430,435행이다. 10/13은 애프터 19:36:41~20:00:00의 18,688행만 적격이었다. 누적 비교의 소스 범위가 10/13 전체 장을 대표한다고 표현하지 않는다.
 
 원천·결과를 운영 등록에 사용할 때 필요한 작은 근거/정의/manifest/검증 receipt를 기존 등록 archive로 이관하고 SHA와 상대경로 해석을 검증한다. 임시 디렉터리의 수명에 runtime validation을 의존시키지 않는다. 대용량 raw의 중복 복제는 피하고 기존 보존 owner와 원천 generation ref를 연결한다.
@@ -35,7 +35,7 @@
 
 ### 3.2 연구에서 뽑은 J와 실제 selector를 구분
 
-[연구 selector](/home/ubuntu/KORStockScan/tmp/main-machine-joint-research-20261014/corrected/select_joint.py)는 '새 W 존재 + 기존 F 제거'를 두 축의 효과를 보여 주는 J 표의 포함 조건으로 사용했다. **운영 selector의 필수 조건으로 옮기지 않는다.** F만 유효하거나 A만 유효한 정책도 선택 대상이다.
+[연구 selector](../../tmp/main-machine-joint-research-20261014/corrected/select_joint.py)는 '새 W 존재 + 기존 F 제거'를 두 축의 효과를 보여 주는 J 표의 포함 조건으로 사용했다. **운영 selector의 필수 조건으로 옮기지 않는다.** F만 유효하거나 A만 유효한 정책도 선택 대상이다.
 
 `highest_fraction_joint`는 J 집합 안의 최고 비율이다. A/F/current까지 합친 전체 승자를 뜻하지 않는다. 또한 `opportunity_joint`는 성공 수를 우선한 연구 대안이다. 운영에서 이를 자동으로 `JOINT_BALANCED` 고정 선택하면 사용자 승률 우선 기준과 충돌한다.
 
@@ -135,7 +135,7 @@ A는 기존 하락반전의 선행 발생에 종속시키지 않는다. 각 root
 
 ## 8. 10/15 추가 연구의 반영 보완
 
-38가설 버전의 근거는 [추가 연구 검토](../audits/main-machine-cumulative-dual-track-research-review-2026-10-15.md), [frozen manifest](/home/ubuntu/KORStockScan/tmp/main-machine-cumulative-research-20261015/frozen-manifest.json), [reviewed 결과](/home/ubuntu/KORStockScan/tmp/main-machine-cumulative-research-20261015/result-reviewed.json), [검증 receipt](/home/ubuntu/KORStockScan/tmp/main-machine-cumulative-research-20261015/validation.json)다. reviewed 결과 SHA256은 `2a0663bcf24378574d101371855266dd2bd6f9810dc80599f2aae68002eef956`이다. 원 10/14 자료와 초기 selector 결과는 보존하고 제안은 `recommendation` 필드를 소비한다. raw `winner`의 0% 동률·U만 증가를 개선으로 등록하지 않는다. 이후 가격 전진 연구가 바꾼 세 범위와 최신 결과 신원은 §10을 우선한다.
+38가설 버전의 근거는 [추가 연구 검토](../audits/main-machine-cumulative-dual-track-research-review-2026-10-15.md), [frozen manifest](../../tmp/main-machine-cumulative-research-20261015/frozen-manifest.json), [reviewed 결과](../../tmp/main-machine-cumulative-research-20261015/result-reviewed.json), [검증 receipt](../../tmp/main-machine-cumulative-research-20261015/validation.json)다. reviewed 결과 SHA256은 `2a0663bcf24378574d101371855266dd2bd6f9810dc80599f2aae68002eef956`이다. 원 10/14 자료와 초기 selector 결과는 보존하고 제안은 `recommendation` 필드를 소비한다. raw `winner`의 0% 동률·U만 증가를 개선으로 등록하지 않는다. 이후 가격 전진 연구가 바꾼 세 범위와 최신 결과 신원은 §10을 우선한다.
 
 원천 검토는 9개 날짜·27개 partition, 적격 입력은 기존 8개 날짜·3,831,217행이다. 추가 10/14 325,775행은 원천 epoch 계약으로 제외됐다. 10/15도 epoch 입증 미비여서 제외했다. 새 가설 13개를 실제 검증했으나 새 독립 날짜 검증을 확보한 것은 아니다. 새 날짜 대기를 정책 채택의 추가 조건으로 만들지는 않는다.
 
@@ -177,7 +177,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 10. 10/15 가격 전진·회복 유형 연구 반영
 
-사용자 후속 연구 지시에 따라 [사전 고정 계획](main-entry-price-progress-and-situation-research-plan-2026-10-15.md)과 [실행 검토](../audits/main-entry-price-progress-and-situation-research-review-2026-10-15.md)를 추가했다. 15:22:36 KST 동결 시점 parent는 §8과 같은 `1f069c…`이며, 선택본 `451b6c1ec…`의 관련 기계 의존 파일 28개가 기존 연구본과 byte 동일했다. 기존 결과를 보존한 별도 버전에서 새 A17~A20/F23~F30을 추가했다. 50가설·35,558개 대안의 [결과](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/result.json) SHA256은 `5210ddad3d5ec1c74b942cbf6b49b65d2ecd9c44d8d963644487e4f4654b8363`이다. 운영 등록/발행 승인을 뜻하지 않는다.
+사용자 후속 연구 지시에 따라 [사전 고정 계획](main-entry-price-progress-and-situation-research-plan-2026-10-15.md)과 [실행 검토](../audits/main-entry-price-progress-and-situation-research-review-2026-10-15.md)를 추가했다. 15:22:36 KST 동결 시점 parent는 §8과 같은 `1f069c…`이며, 선택본 `451b6c1ec…`의 관련 기계 의존 파일 28개가 기존 연구본과 byte 동일했다. 기존 결과를 보존한 별도 버전에서 새 A17~A20/F23~F30을 추가했다. 50가설·35,558개 대안의 [결과](../../tmp/main-entry-price-progress-research-20261015/result.json) SHA256은 `5210ddad3d5ec1c74b942cbf6b49b65d2ecd9c44d8d963644487e4f4654b8363`이다. 운영 등록/발행 승인을 뜻하지 않는다.
 
 48개 정책 scope와 원천 전체 1,876종목을 census했고, 유효 입력은 8개 날짜·1,809종목·3,831,217행이다. 적격 확인점이 있는 22 scope 중 15개 제안을 유지하되 아래 세 범위만 이전 최선안에서 변경한다. 26개 scope는 `no_eligible_confirmation`, 관측됐으나 개선 없는 7개는 current 유지다. SOR `_AL`을 독립 KRX/NXT 원천으로 복제하지 않는다. 동결 입력의 10/14·10/15 제외를 그대로 보존했다.
 
@@ -199,12 +199,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 4. **성능:** 기존 native/label 236,597개를 재사용했고 새 label은 10,687개만 계산했다. partition 합계96.87초·집계16.04초·집계 최대RSS 약1.18GiB다. runtime은 기존 공유 상태에서 특징을 계산하고 새 per-tick IO/API를 추가하지 않는다. 장후는 동일 hash별 cache·bounded partition을 사용하며, live p95/p99 개선은 실제 구현 후 같은 입력 benchmark로 확인한다.
 5. **수리 인계:** 기계 특징·root·등록/선정 구현은 보유 수리와 독립이다. 실제 preset/trailing/manual 종료·실현 비용과 결합할 때 기존 `HoldingProfitExitSourceContractRepair`의 context/path·cost 시각·preset 실효값·전이/peak/pin·custody/terminal 증거를 문의한다. 수리 commit·선택·PID·과거 원본 재생·자연 영수증을 구분하며 소실된 과거 원천을 복구된 것으로 간주하지 않는다.
 
-13개 표적 시험, 독립 feature 1,236,420개·root series203개·label430개 대조, 기존19,892개 대안 보존, 전체 분수 순위·scope·partition·봉인 검증이 통과했다. [검증 receipt](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/validation.json)의 errors는0이다. 이는 오프라인 연구 검증이며 §6의 운영 archive/registry/selector/CAS/자연 소비 완료가 아니다. 현재 작업은 중복 checklist OPEN을 생성하거나 보유 수리 코드를 수정하지 않는다.
+13개 표적 시험, 독립 feature 1,236,420개·root series203개·label430개 대조, 기존19,892개 대안 보존, 전체 분수 순위·scope·partition·봉인 검증이 통과했다. [검증 receipt](../../tmp/main-entry-price-progress-research-20261015/validation.json)의 errors는0이다. 이는 오프라인 연구 검증이며 §6의 운영 archive/registry/selector/CAS/자연 소비 완료가 아니다. 현재 작업은 중복 checklist OPEN을 생성하거나 보유 수리 코드를 수정하지 않는다.
 
 ## 11. 10/15 별도 작업본 구현과 배포 대기 인계
 
 - 작업본: `/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015`, branch `codex/cumulative-policy-adoption-20261015`, 기준 commit `c938ace0610aeec2e68dde9a024e0b82579a1c3b`. 운영 데이터·임시 디렉터리는 공유하지 않는다. 동시 진행 중인 원 작업본 변경은 그대로 보존한다.
-- [catalog](../../src/engine/scalping/reversal_cumulative_catalog.py), [고정 정의 resource](../../src/engine/scalping/reversal_cumulative_data.json), [detector](../../src/engine/scalping/reversal_cumulative_runtime.py), [등록 owner](../../src/engine/scalping/reversal_cumulative_registration.py), [장후 owner](../../src/engine/scalping/reversal_cumulative_postclose.py)가 새 계약을 소유한다. 과거 joint v1과 기존 auxiliary prompt/binding은 유지한다.
+- [catalog](/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015/src/engine/scalping/reversal_cumulative_catalog.py), [고정 정의 resource](/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015/src/engine/scalping/reversal_cumulative_data.json), [detector](/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015/src/engine/scalping/reversal_cumulative_runtime.py), [등록 owner](/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015/src/engine/scalping/reversal_cumulative_registration.py), [장후 owner](/home/ubuntu/KORStockScan-worktrees/cumulative-policy-adoption-20261015/src/engine/scalping/reversal_cumulative_postclose.py)가 새 계약을 소유한다. 과거 joint v1과 기존 auxiliary prompt/binding은 유지한다.
 - 후보는 수동 연구의 16개 A·22개 F다. 구현은 22개 scope의 원 membership 전체에 같은 고정 표현을 적용하므로 26,928개 표현을 제공한다. 연구에서 실제 hit가 없었던 A와 같은 결과의 별칭도 포함된다. 새 가설·특징·임계값을 자동 탐색하는 기능은 추가하지 않는다. 관측된 19,892개 연구 대안과 계산을 대조한다.
 - initial 지정안은 reviewed `recommendation`의 변경 15개 scope·승계 7개 scope다. 초기 등록은 기술 계약을 검증하며 새 독립 날짜·성공 보존율·표본/EV gate를 추가하지 않는다. 이후에는 실제 current와 고정 대안을 각자의 동일 원천 누적 승률로 비교한다. 동일 비율·동일 W 수 또는 비교 불완전이면 current를 유지한다.
 - 모든 원 root 확인을 만든 뒤 유한 의존성 순서로 F를 평가한다. 내부 원 branch는 운영 OR/AI 요청에 포함하지 않는다. 새로운 상승 지속 root는 FIRST 반전에 종속되지 않는다. 비선정 후보는 장후에만 비교한다.

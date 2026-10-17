@@ -1,6 +1,6 @@
 # 비상시감시 호가 시간정책·기회 전달 상세 점검 및 보완계획 — 2026-10-17
 
-후속 상태: 사용자 구현 지시에 따른 격리 구현·반복 리뷰·표적 검증 완료. 현재 구현 결과는 [구현 리뷰](../audits/nonfixed-quote-opportunity-delivery-implementation-review-2026-10-17.md)와 §10이 소유한다. 아래 §1–§9는 구현 전 점검·계획 당시 기록으로 보존한다.
+후속 상태: 격리 구현·반복 리뷰·표적 검증 뒤 사용자 명시 배포 지시에 따라 `a41ebc84f`를 다음 정규 기동용으로 배포하고 격리/공유 파일의 정책 read·schema·code 및 전체 준비 검증을 마쳤다. [구현 리뷰](../audits/nonfixed-quote-opportunity-delivery-implementation-review-2026-10-17.md)·§10은 원 구현, [최종 배포 검증](../audits/nonfixed-quote-deployment-and-isolated-policy-review-2026-10-17.md)·§11은 배포를 소유한다. 실제 PID 소비와 자연 성과는 아직 확인하지 않았다. 새 TTL 선정은 배포 선행 조건이 아니다. 아래 §1–§9는 구현 전 점검·계획 당시 기록으로 보존한다.
 
 ## 1. 이번 결정
 

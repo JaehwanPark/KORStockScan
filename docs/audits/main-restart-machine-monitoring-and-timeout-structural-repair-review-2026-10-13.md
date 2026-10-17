@@ -1,5 +1,20 @@
 # 10/13 최신 Main 재기동 점검 및 시간초과 구조 수리
 
+## 최종 배포·재기동 결과 — 18:36 KST
+
+승인된 반복 리뷰·보완·배포·재기동을 완료했다. [최종 완료 영수증](../../tmp/timeout-structural-deployment-20261013/document-rebind/completion.json)의 선택 릴리스는 `main-timeout-structure-20261013-v4`, commit `a72d0c47753305d23da6a3f4e38f4d14a585f387`, 실제 Main PID `3387032`, start ticks `13340462`, cwd는 해당 릴리스의 `src`다. 기존 Main 종료 `18:33:24.710` → 선택 전환 `18:33:24.725` → 새 PID attestation `18:34:51` → bootstrap/인계 최종 검증 `18:35:11` 순서로 닫혔다. [후속 PID 재검증](../../tmp/timeout-structural-deployment-20261013/document-rebind/final-pid-verification.json)도 PASS이며 startup hold/restart flag가 남아 있지 않다.
+
+- 최종 실행 코드는 [1,168건 통과 릴리스](../../tmp/timeout-structural-deployment-20261013/retry/release-tests.log) `0a26f1b9a`와 동일하다. 마지막 commit은 병행 REST 점검이 추가한 체크리스트 문단을 보존하는 문서 결속만 포함하며, [검증 재사용 근거](../../tmp/timeout-structural-deployment-20261013/document-rebind/validation-reuse.json)의 Git runtime tree 동일성을 확인했다. 새 코드 수정 없이 같은 suite를 반복하지 않았다. compile·diff·문서 링크·8개 OPEN ID·print-only parser를 검증했다.
+- 기존 당일 bundle `d906615b11d8d9175930a0c7e1bed3f7d7f1c7dd237a129814c7629de49f0a5b`와 정책/threshold/Provider/원 기한을 유지했고 새 PID에서 **128/128 scope 소비**를 확인했다. 10/14 후보는 동일 정책으로 bundle `56ccf7127199f62c2b873fd1611f444ba274abd58fa6b5de4f8c28878952e075`에 code refresh했고 [보조 reader 128경로 준비 검증](../../tmp/timeout-structural-deployment-20261013/document-rebind/future-reader-validation.json)을 통과했다. 내일 정책의 실제 활성화·PID 소비는 아직 아니다.
+- [18:36:47 전수 관측](../../tmp/timeout-structural-deployment-20261013/document-rebind/observation-183647/summary.json): 상시5종목 모두 exact `_AL`의 0B/0D 수신. 체결/호가 sequence는 삼성350/501, 두산52/152, HPSP22/83, 알테오젠14/44, 주성45/141이다. 얇은 체결의 age가 존재하므로 전 종목의 모든 순간 source-ready 또는 기계 정상평가를 주장하지 않는다. 새 PID와 5개 thread heartbeat를 확인했다.
+- [비상시 종목·route 전수표](../../tmp/timeout-structural-deployment-20261013/document-rebind/observation-183647/nonfixed-census.csv) 1,388행은 terminal8 + 진행5 + 새 PID 이후 미claim1,375로 대사했다. terminal8은 원천 미충족7(route snapshot 없음5, WS 등록 timeout1, 0B age 초과1)과 기존 Main 대상 충돌1이다. 누적 큐 전체가 평가 완료된 것이 아니다. 새 PID의 자연 AI trace는0이며 시간초과 연쇄·HALF_OPEN 회복·실제 제출 효과는 기존 `AuxiliaryCircuitRecoveryRepair1012`/`NonfixedDispatchReadinessReview1012`에서 OPEN으로 유지한다.
+- KRX/NXT 전시장 inventory 및 미체결 검증을 자연 주기 영수증으로 확인했다. 수동관리 `042660`/`475150`은 Main 인수에서 계속 제외되고 신규 자동주문/중복 제출 증거는 없다. 인위적 Provider replay·broker 시험 주문·수동 threshold/env 변경·외부 sync는0이다.
+- [최종 릴리스의 자동 오류검출](../../tmp/timeout-structural-deployment-20261013/document-rebind/natural-error-detection.json)은 새 code provenance를 확인했다. machine/auxiliary 경고는 실제 `continuous_reversal_execution_not_completed:main_machine_policy`와 byte generation으로 표시되며 10/13과 incumbent10/12 의미 판정이 별도로 남는다. 기존4 family의 `policy_generation_unverified` 및 과거 cutoff 이후 회복 경고는 보존했다. 이들을 이번 배포로 새로 생긴 실패나 전체 GREEN으로 바꾸지 않았다.
+
+병행 문서 편집으로 `18:25:35` 체크리스트 hash가 바뀌어 v3 인계가 일시 `intraday_preserved_generation_changed`가 됐고 손절 결속 경고도 파생됐다. [원 편집본과 봉인본](../../tmp/timeout-structural-deployment-20261013/document-rebind/stage.json)을 모두 보존하고 CAS로 기존 운영 원천을 복구한 뒤 검증했다. 마지막 순차 전환은 편집본을 그대로 발행해 SHA `d14dc309fdbbead24767e6c53c34004f0265b37364e751f6d5b4262027c88cbc`로 새 PID에 결속했다. 다른 작업의 문단을 삭제하거나 실행 권한을 전용하지 않았다.
+
+**잔여 성능 결손:** 같은 실행 코드의 v3 기동 관측에서 `pipeline_source_replay` 최대58.400초와 Main loop60.362초가 있었다. 원 incumbent 복구 PID에서도 같은 원장 reader의25.201초 지연이 있어 이번 응답 수리에서 새로 바뀐 코드 경로는 아니다. 이후 v3 loop p95는0.577초였지만 cold 원장 재읽기 병목은 남는다. `18:25:56` I/O wait39.55% 경고도 보존하며 이후 자동 resource 검사는 PASS였다. [동일 PID별 성능 원문](../../tmp/timeout-structural-deployment-20261013/retry/performance-window.json)을 기존 지연 owner에 인계한다. 이번 배포로 전체 지연 해결·자연 AI 성공·주문·경제성 완료를 주장하지 않는다.
+
 ## 후속 승인에 따른 배포 전 재리뷰
 
 사용자는 “코드리뷰후 수정보완 반복하고 배포 및 재기동 승인”으로 이번 수리의 배포·재기동을 명시 승인했다. 기존 운영 commit `afd16c5502da1d012d62c1bbe8b07797f1c53efa` 대비 앞선 수리 10파일을 확인했고, 별도 작업본을 일괄 배포하지 않는다. 당일 정책·threshold·모델·원 native 기한은 유지한다.

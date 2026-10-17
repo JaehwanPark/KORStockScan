@@ -169,7 +169,6 @@ e632의 durable transport epoch는 매 연결의 LOGIN ACK 이후 구독/ready �
 
 현재 bundle1f069c6894b5b9a7fa3f9450a9a306ff41469346e1318b20b18fcaee7e490637의 exact128 scope/76,800 입력을 old27e와 승인 통합본에 독립 실행했다.607 확인 신호와 SHA72a8e589d1c1288f684d16c8aa66bcf5d1787671358ce7063551627fef0e2d0d가 일치하며 broker/provider0이다. 실제 원천을 재생하거나 원 epoch/예약을 지우지 않았다. 정지 복구는 release-set/detector locks 아래 원 failed selector/hold/transition과 last consumed27e PID/start/cwd·모든 정책 봉인을 재확인한다. 기존 native origin reader에 필요한 원 selection을 기동 hold 아래 잠시 복원해 승인된 source-exact receipt만 발행한 뒤, 새 commit의 독립 stopped transition에서 실제 predecessor27e를 인계한다. 원 실패 경로는 변경하지 않고 새 hold/selector는 원 바이트 CAS로 전환한다. native prepare/bootstrap/auxiliary/launcher/PID 검증을 모두 다시 실행하며 정책·후보·원 report를 재선정/재작성하지 않는다.
 
-
 ## 10:33 재기동 중 관측 게시 경합
 
 da17555f2에 a179bb42d/92785b7da/e6326b0b1/87fda9479를 통합 배포했다.10:31:42 Main1703840/start9177845가 실제 소비했고 native 정책·custody를 보존했다. optional 야간 연구는 기존 설치/예약/notify 설정을 유지한 native installer rebind14항목을 확인했으며 실제 야간 실행은 기존 OPEN 수용이다.

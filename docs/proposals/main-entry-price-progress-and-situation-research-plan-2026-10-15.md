@@ -2,13 +2,13 @@
 
 ## 1. 범위와 선행조건
 
-사용자 “연구를 진행하라. 수리 완료 확인이 필요할 경우 문의하라”에 따른 독립 진입 연구다. [주성 하드스톱 조사](/home/ubuntu/KORStockScan/docs/audits/main-jusung-hard-stop-pattern-and-full-flow-research-2026-10-15.md)에서 확인한 가격 무진전·정보 전달 차이를 모든 적격 종목·시장에 비교한다. 보유·장후 재생 계약 수리는 다른 세션의 소유이며 이 연구가 수정하지 않는다. 실제 preset/트레일링/수동 이관 이후 순손익을 결합해야 하는 단계에서 그 수리의 완료 증거가 필요하다. 기존 진입 label 연구는 기다리지 않고 수행한다.
+사용자 “연구를 진행하라. 수리 완료 확인이 필요할 경우 문의하라”에 따른 독립 진입 연구다. [주성 하드스톱 조사](../audits/main-jusung-hard-stop-pattern-and-full-flow-research-2026-10-15.md)에서 확인한 가격 무진전·정보 전달 차이를 모든 적격 종목·시장에 비교한다. 보유·장후 재생 계약 수리는 다른 세션의 소유이며 이 연구가 수정하지 않는다. 실제 preset/트레일링/수동 이관 이후 순손익을 결합해야 하는 단계에서 그 수리의 완료 증거가 필요하다. 기존 진입 label 연구는 기다리지 않고 수행한다.
 
-작업 소유 위치는 [격리 연구 디렉터리](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/)다. production 모듈·정책 pointer·보조 프롬프트/응답·수동관리·provider·주문·배포·재기동은 변경하지 않는다. 미래 자동 작업이나 중복 checklist owner를 만들지 않는다.
+작업 소유 위치는 [격리 연구 디렉터리](../../tmp/main-entry-price-progress-research-20261015/)다. production 모듈·정책 pointer·보조 프롬프트/응답·수동관리·provider·주문·배포·재기동은 변경하지 않는다. 미래 자동 작업이나 중복 checklist owner를 만들지 않는다.
 
 ## 2. 동결한 기준
 
-[manifest](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/manifest.json)는 기존 [누적 두 축 연구](main-machine-cumulative-dual-track-research-plan-2026-10-15.md)의 27개 불변 partition, source/feature/label/code hash와 38개 가설을 이어받는다. 새 가설은 A17~A20, F23~F30의 12개이며 실행 결과를 보기 전에 고정했다.
+[manifest](../../tmp/main-entry-price-progress-research-20261015/manifest.json)는 기존 [누적 두 축 연구](main-machine-cumulative-dual-track-research-plan-2026-10-15.md)의 27개 불변 partition, source/feature/label/code hash와 38개 가설을 이어받는다. 새 가설은 A17~A20, F23~F30의 12개이며 실행 결과를 보기 전에 고정했다.
 
 현재 bundle `1f069c6894b5b9a7fa3f9450a9a306ff41469346e1318b20b18fcaee7e490637`은 parent와 같다. 선택본 `451b6c1ec84fafa563d95381e95c814ac2b2b18b`의 관련 기계 의존 코드 28개가 기존 연구 실행본 `bb4808c77087231b072efbd3ea12271fbb3889c6`와 byte 동일함을 확인했다. 따라서 **검증된 과거 current 신호·기존 A membership·라벨을 재사용**하고, 새 특징·root·확인점만 계산한다. 기존 특징을 재계산해 cached 값과 대조하며 모든 기존 대안을 남긴다. 새 기계 전수 재생이나 현재 PID 소비를 수행한 것으로 부르지 않는다.
 
@@ -67,6 +67,6 @@ current/A-only/F-only/J(`F(current) OR A`) 전체를 누적 `W/(W+STOP+TIMEOUT)`
 
 ## 7. 실행 결과 연결
 
-[실행 검토](../audits/main-entry-price-progress-and-situation-research-review-2026-10-15.md)와 [검증 receipt](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/validation.json)에 결과를 남겼다. 27개 partition·48 scope·전체35,558개 대안을 비교했고 이전 최선안이 바뀐 범위는 세 곳이다. 13개 표적 시험과 독립 원천 대조가 통과했다. 주성의 무진전·약세를 일괄 차단할 근거는 확인되지 않았다. 기존 가설·임계값은 결과를 보고 변경하지 않았다.
+[실행 검토](../audits/main-entry-price-progress-and-situation-research-review-2026-10-15.md)와 [검증 receipt](../../tmp/main-entry-price-progress-research-20261015/validation.json)에 결과를 남겼다. 27개 partition·48 scope·전체35,558개 대안을 비교했고 이전 최선안이 바뀐 범위는 세 곳이다. 13개 표적 시험과 독립 원천 대조가 통과했다. 주성의 무진전·약세를 일괄 차단할 근거는 확인되지 않았다. 기존 가설·임계값은 결과를 보고 변경하지 않았다.
 
 진입 연구의 완료는 보유·재생 수리 완료를 전제로 하지 않는다. 수리 인계가 필요한 실제 종료·비용 축은 별도로 남겼다. 최신 제안은 [정책 반영 계획 §10](main-cumulative-research-policy-adoption-plan-2026-10-14.md#10-1015-가격-전진회복-유형-연구-반영)을 소비하며 연구 결과를 운영 등록 영수증으로 사용하지 않는다.

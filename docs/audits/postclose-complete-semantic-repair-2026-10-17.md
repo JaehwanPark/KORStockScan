@@ -1,6 +1,6 @@
 # 장후 전체 생산자·소비자 정밀 수리와 다음 기동 준비
 
-원천일은 2026-10-16, 다음 영업일은 2026-10-19다. 점검 시작 선택은 b8ca6f665이며 실제 Main은 EOD 후 자연 정지 상태다. 10/17 당일 체크리스트는 없고 10/19의 기존 실행 owner로 인계한다. 이 문서는 사용자 지시의 구현·리뷰·재생성 작업 기록이며 마지막 절의 native 영수증 전에는 완료를 주장하지 않는다.
+원천일은 2026-10-16, 다음 영업일은 2026-10-19다. 점검 시작 선택은 b8ca6f665이며 실제 Main은 EOD 후 자연 정지 상태다. 10/17 당일 체크리스트는 없고 10/19의 기존 실행 owner로 인계한다. 이 문서는 사용자 지시의 구현·리뷰·재생성 작업 기록이며 최종 판정은 마지막 절의 현재 native 영수증과 원 결손 구분을 따른다.
 
 이전 검토는 수량의 native terminal과 부모 유지 결과를 확인했으나 실제 fact 생산 세대와 입력 제외를 충분히 대사하지 못했다. dispatcher 7개와 direct summary 9개는 전체 작업 모수가 아니다. 설치 cron·wrapper·내부 side producer로 확인한 34개 논리 작업을 아래와 같이 다시 대조했다. 새 job·stage·서비스를 만든 숫자가 아니다.
 
@@ -15,12 +15,12 @@
 | 누적 수량의 이월 완료 전이 | 10/15 원 fact의 HOLDING4가 10/16 완료9건 안에 있으나 entry-day DB만 읽어 not_completed로 탈락했다. 원 DB·snapshot·영수증은 보존하고, 작은 완료일 projection을 정확한 ID/원 추천일/실제 BUY/owner/terminal/census/cost로 메모리에 결합한다. | 실제 대사 COMPLETED9/HOLDING7→COMPLETED13/HOLDING3. 평가일 이전·서로 다른 terminal·다른 owner·세대 경합은 거부한다. 명시된 추가매수 횟수는 단조성 검증 후 반영하여 초기진입 경제성에서 제외하고, 없는 횟수는 원 entry 관측을 유지한다. 비용 NULL은 그대로다. |
 | IQ174 실제 비용 | completed5와 원 완료 모수의 배분 실패를 record/order별로 대사한다. 삼성 10원·HPSP 20원 공식 일지/주문 필드 합계 차이와 다중 포지션을 보존한다. | 공식 upstream 현재953e5dbff123f437ab4d11a78a95191a685eb51f의 spec/core/Postman을 재확인. 새 API·임의 배분·actual 비용 모델 대체 없음 |
 | IQ175 capture lifecycle | 후행453/finish1의 미종료5를 조기 fixed exit2와 native PID drain3에 연결한다. 시작/종료/교체/정리/shutdown/다음 PID의 dead-process 관측을 기존 큐와 작은 영수증으로 기록한다. | queued와 durable·원 PID/attempt/plan을 분리. 과거 finish를 만들지 않고 후보별 관측 horizon을 평가하며 짧은 관측을 전20분 부족으로 일괄 폐기하지 않음 |
-| all-scope trailing | holding 연구의 코드 해시가 최신 AI/실행 코드와 달라 10/19 실제 reader가 거부했는데 전체 준비 PASS가 이를 설명하지 못했다. 현재 코드·target·봉인 세대의 작은 관측을 summary/detector로 연결하고 원 producer를 갱신한다. | 작은 관측은 full native replay가 아니다. 실제 selector/bootstrap 검증은 원 native verifier 유지, optional 연구는 기존 부모 유지 경계 보존 |
+| all-scope trailing | holding 연구의 코드 해시가 최신 AI/실행 코드와 달라 10/19 기동 준비 검증의 native reader가 거부했는데 전체 준비 PASS가 이를 설명하지 못했다. 현재 코드·target·봉인 세대의 작은 관측을 summary/detector로 연결하고 원 producer를 갱신한다. | 작은 관측은 full native replay가 아니다. 실제 selector/bootstrap 검증은 원 native verifier 유지, optional 연구는 기존 부모 유지 경계 보존 |
 | WS 공식 master | 경제 원천 report는 당일 canonical payload를 가졌지만 standalone master 발행이 빠져 9/16 metadata가 소비됐다. 기존 verified payload와 원 공식 metadata 바이트를 대사해 기존 발행 파일을 생성한다. | 네트워크·퇴역 collector 재생 없이 기존 원본만 사용. 잘못된 날짜/원천/authority/동일 경로 충돌은 거부 |
 | WS zero-base attach 소비 | 당일 작은 native cache의 정확한 attach에 session이 있지만 legacy promoted/scan-generation 조건 때문에 zero-base lineage10건에서 누락된다. | 원 promotion/code/record/source/time 결속으로 실제 보존된 session만 소비한다. 통합 route를 물리 체결 venue로 바꾸지 않으며 BBO·실제 체결 결손은 유지한다. 후속 리뷰·native 재생성 대상 |
 | 시장기회 active scanner 연결 | active zero-base claim/result/attach와 legacy upstream consumer의 불일치가 upstream0에 포함된다. 설치 owned-log cron4행을 읽지 못하는 오래된 기대값과 단일 예정 capture 구간의 불가능한 최소3회 조건도 확인했다. | 발견·승격·실주문을 구분하고 정확한 원 식별자·시간·route·source lineage를 검증한다. 외부524 opportunity episode를 Main 실제 발굴실패524건으로 해석하지 않는다. 후속 리뷰·native 재생성 대상 |
 | machine stage 선택 상태 | 원 native operating comparison은 선택된 machine component인데 stage의 schema 분기 누락으로 no_valid_candidate로 기록됐다. | 새 producer 분기를 수리하고, 현재 overview는 검증된 native terminal/report와 원 stage 실행 영수증·code SHA를 함께 제시한다. 원 stage/aux 바이트는 보존하며 reporting 수정을 위해 provider 연구를 재실행하지 않는다. operator 초기 계약에 새 경제성 gate를 요구하지 않는다. |
-| Parquet identity/보존 | 같은 record·시각의 다른 stage/content가 합쳐질 수 있는 식별자와 같은 집계만 보는 shadow 검증을 수리한다. native ID 또는 전체 원문 fingerprint, 정확 중복/충돌/날짜 제외, source→output 보존과 실제 출력 바이트를 검증한다. | 실제 10행 차이는 날짜 필터 제외이며 10건 유실로 주장하지 않는다. 현재일 원천 식별 비교와 기존 3일 집계 비교 범위를 공개하고 불일치를 실패로 전파 |
+| Parquet identity/보존 | 같은 record·시각의 다른 stage/content가 합쳐질 수 있는 식별자와 같은 집계만 보는 shadow 검증을 수리한다. native ID 또는 전체 원문 fingerprint, 정확 중복/충돌/날짜 제외, source→output 보존과 실제 출력 바이트를 검증한다. | 초기 10행 차이를 날짜 필터 제외로 추정한 판단은 철회했다. 최종 native 대사는 344472→344472, 정확 중복0·날짜 제외0이다. 현재일 원천 식별 비교와 기존 3일 집계 비교 범위를 공개하고 불일치를 실패로 전파 |
 
 ## 전체 작업별 최초 대조
 
@@ -172,3 +172,36 @@
 마지막 union 보완은 성공한 bounded 등록의 정확한 원 파일 tuple을 재사용하고 각 파일에서 실제 숫자형·finite를 먼저 판정한 count만 합친다. 원 producer/Parquet·손익/NULL/시각·다른 집계는 바꾸지 않는다. 실패한 등록의 stale tuple과 읽는 중 파일 변경도 거부한다. v8의84건·compile/diff/print-only parser가4.230초에 통과했으며, v7 이후 변경은 이 집계/저장소·기존 테스트4파일뿐이고 나머지14개 source SHA는 같다. v7의1083건과 이 추가 gate를 연결해 검증하며 서로 다른 시도의 통과 건수를 고유 테스트 합계로 더하지 않는다. [최종 후속 source 결속](../../tmp/postclose-complete-repair-20261017/supplemental-integration-v8-attestation.json), [자가 리뷰](../../tmp/postclose-complete-repair-20261017/shadow-completed-profit-original-type-union-repair-self-review.json). 독립 동일 fixture 대사와 새 선택 코드의 정식 shadow consumer 실행은 별도 마감한다.
 
 독립 최종 gate도84건 통과·source stable·finding0으로 닫았다. 원2일 fixture를 다시 작성하지 않고 byte SHA·5stat를 보존한 채 raw1/Parquet2→raw1/Parquet1과 모든 집계 일치를 확인했다. [동일 fixture 독립 검증](../../tmp/postclose-complete-repair-20261017/shadow-original-type-before-union-independent-final.json). 미해결 in-scope 코드 지적은0이며, 다음 단계는 이 exact source 커밋의 선택·정식 재생성·마지막 소비자 검증이다. 코드 gate만으로 이를 완료했다고 주장하지 않는다.
+
+## 7f2552aed 최종 native 실행과 다음 영업일 인계
+
+최종 선택 코드는 `7f2552aedde8fec6ef904a43105827907e50dfc8`, 실행 루트는 `/home/ubuntu/KORStockScan-runtime-releases/postclose-complete-20261017-7f2552aed`다. 아래 실행은 이 exact 코드에서 source16→target19로 수행했다. 원 be86/14038/16a 실행과 실패 시도는 각각 보존하고, 기존 산출물의 현재 검증을 새 생성으로 바꾸지 않았다.
+
+| 최종 단계 | 실제 결과와 범위 |
+| --- | --- |
+| 현재 family fixture | cancel133·rising86·auxiliary84·holding_vote116건 통과. 현재4개 code generation에 결속하고 원 과거 fixture는 보존했다. |
+| 원09/29 fact | native8.639초. 원 raw/manifest 전체 census로48376의09/28진입→09/29완료를 복구했다. entry-day29 fact는0이며, 수량의09/29이후 매수 기간에 이 거래를 편입하지 않았다. |
+| 수량 현재 검증 | native2.479초. 원14038 생성의 immutable artifact와 receipt를 그대로 재사용했다. 전체16fact=완료13+보유3, 비용/수량 결손 완료13·경제 적격0·실제 손익 NULL이다. 6개 유형의10/15/20/25/25% 단계 및 기존 분할/timeout을 유지한다. committed pointer만 동일 바이트로 원자 재발행했으며 immutable4파일은 SHA·5stat가 같다. |
+| cancel/rising/auxiliary | native190.357/0.255/0.780초. cancel의 원09/30은 회복했지만10/01·실제 terminal/비용 결손은 유지한다. rising은 valid-empty·부모 유지, auxiliary는 저장 응답 평가만 수행했다. provider 연구를 다시 실행하지 않았다. |
+| holding suffix | native140.482초·4산출물 성공. 완료 prefix3개는 재생성하지 않았다. 실제 완료13, 연구508=기존504+실제/대안4, master2605×8=20840scope다. 잘못된 완료 snapshot source-gap4→0, 원천 미검증9→4를 구분한다. |
+| Main-stop와 trailing | Main-stop native150.940초·9cell 부모 유지, 별도 전체 native trailing21.671초 PASS. 새 후보 무장·수치 override가 없으며 holding 이후 정확한 원천을 소비한다. |
+| shadow 최종 소비 | native94.004초·10개 집계 일치·pipeline344472→344472·날짜 제외0·잘못된 식별자0. 원 producer/Parquet를 다시 만들지 않았다. 현재 post_sell9건의 중요 경제·terminal 필드는 원천과 직접 대조했으며, system metrics는10/16 전체1440분·23:59:01까지 누락/추가0이다. |
+| 정식 최종화 | native625.861초·06:37:52 DONE. summary→strict/controller→보관→prepared19→detector를 마쳤다. controller의 원 run/producer code 귀속은 보존했다. |
+| 독립 전체 준비 검증 | 79.794초·`current_full_contract` PASS/findings0. source16·target19·선택7f·정책/원천/소비자 결속을 확인했으며 실제 다음 PID 소비는 false다. |
+
+[원 native 실행 기록](../../tmp/postclose-complete-repair-20261017/native-operations.jsonl), [수량 현재 의미 대사](../../tmp/postclose-complete-repair-20261017/quantity-native-after-original-window-recovery-final-semantic-verification.json), [holding 모수 차이](../../tmp/postclose-complete-repair-20261017/holding-7f2552a-derived-research-population-delta.json), [중요9행 원천/Parquet 대사](../../tmp/postclose-complete-repair-20261017/post-sell-nine-critical-economic-field-source-parquet-exact-review.json), [독립 full 준비 검증](../../tmp/postclose-complete-repair-20261017/final-next-preopen-full-verification.json).
+
+34개 논리 작업은 실행9·기계/보조11·holding10·최종 소비자4로 중복 없이 분담했다. 각 원 native의 귀속·모수·제외·경제성·마지막 소비자를 점검하고, 변경 영향 생산자만 위 순서로 재생성했다. [전체34개 현재 계약 대사](../../tmp/postclose-complete-repair-20261017/final-active-work-recheck.json)는9.792초 PASS이며, 이 작은 대사 자체가 모든 원천 전체 재생성을 수행했다고 주장하지 않는다. 상세 의미 점검은 [실행9](../../tmp/postclose-complete-repair-20261017/final-semantic-group-execution.json), [기계/보조11](../../tmp/postclose-complete-repair-20261017/final-semantic-group-machine.json), [holding10](../../tmp/postclose-complete-repair-20261017/final-semantic-group-holding.json), [최종 소비자4](../../tmp/postclose-complete-repair-20261017/final-semantic-group-final-consumers.json)를 결합한다.
+
+최종 native controller 호출에서는 전체 읽기171회/7256764303B와 동일 호출 내 재사용2330회/55507255766B를 기록했다. 이는 호출 내 중복 검증 재사용량이며 별도 전체 준비 검증을 생략하거나 전체 실행시간 개선율을 측정한 값이 아니다. 독립 full 검증은 첫 전체 원천 검증과 변경 검출을 유지했다. 보관 정리06:36:06의 최신 tmp census는8338474421/8589934592B·용량/증가 경고false·삭제0·오류0이다. 과거 백업의 무손실 압축 보존 지도와 원 failed bytes, 정책·완료 snapshot·연구 원천을 보존했다. 정규 log retention의 오래된 system metric17행 정리는 당일10/16의1440분 보존 대사와 구분한다.
+
+현재 보존 원천으로 복원되지 않는 과거 기록과 아직 수용하지 않은 미래 동작은 다음과 같이 남긴다.
+
+- 수량 fact의 COMPLETED13개와 holding의 native 완료13개는 같은 집합이 아니다. 수량에만49266, holding에만48376이 있다.49266의 canonical sell_time/profit NULL을 실제 완료 체결로 승격하지 않는다. 양쪽 비용 적격0은 각각 원 분모에서 판정하며 실제 비용13건을0원/추정 EV로 채우지 않는다.
+- holding의 원 intraday_light4일(10/01·05·09·11)은 여전히 raw 미검증이다. 비거래일05·09·11의 publication not_due 진단은 원 partial을 full-EOD 빈 모집단으로 바꾸지 않는다. 과거 최초 익절 전이5건도 미복구다. 선택 코드의 향후 durable 전이 기록 보완과 기존169건 검증은 현재 source parity로 확인했지만 새 PID 자연 수용은 아직 없다.
+- cancel의10/01 및 terminal/비용, split의 운영 대응 표본, outcome labels의14개 과거 해시 원천, WS의 실제 fill/BBO/종료 관측 등은 각 감사의 원 결손·제외로 유지한다. 보조평가의 원 저장 응답·회원 모수·지표와 기계정책의 원 비교 결과도 보존하며 경제성 완료나 provider 신규 실행으로 바꾸지 않는다. 사용자가 삭제한 삼성 선택 연구 원천은 복원하지 않았고 기동 필수 조건으로 편입하지 않았다.
+- 독립 health06:38:04는7개 검사 실행·초기화 실패0·런타임/운영 변경0이며 전체 severity는 **warning**이다. 실제 TP5·수량 경제성·EOD 단기 이력4종목·closed submit coverage 미검증과 바이트가 같은 과거 오류 로그 경고를 보존했다. 현재 오류 burst는 없지만 이를7개 검사 모두 PASS 또는 역사 결손 전부 해소로 보고하지 않는다.
+
+10/19의 기존6개 OPEN stable ID는 그대로다. PREOPEN07:35→Main07:55의 실제 cron routing과 선택 릴리스 위임을 확인했고, 새 준비 bundle은 `c475308c41e8d2bfa5b35c3333d53f9daa18e72e0b15d6e4bf182d38fa61e9b3`다. 원16 live bundle·env·bootstrap은 보존했다. 실제 당일 활성화·PID 소비는 `DirectFamilyPreopenPolicyHandoff`, 새 capture/비용은 `InitialQuantityProducerConsumerRepair1010`, 새 익절 전이는 `HoldingProfitExitSourceContractRepair`, 자연 보관 수용은 `OperationalLogRetentionRepair1016`의 기존 Acceptance로 확인한다. 주말 Main을 기동하지 않았으며 다음 broker 응답·주문·경제 성과를 미리 보장했다고 주장하지 않는다.
+
+마지막 [독립 전체 결속](../../tmp/postclose-complete-repair-20261017/global-final-postclose-closure-independent-7f2552aed.json)은34개 ID의 중복/누락0·현재 선택 코드·full 준비 검증·실제 health warning·최신 capacity와4개 의미 감사의 정확한 SHA를 확인해 PASS/findings0으로 마감했다. 부모 세션도 게시된4개 감사와 준비/health SHA를 다시 대조했다. 이 범위의 미해결 코드 결함과 필수 재생성 대기는0이다. 원천 결손을 전부 복구했다는 뜻은 아니며, 위 과거 결손과 미래 자연 수용의6개 OPEN owner를 그대로 인계한다. W의 native10/19 체크리스트 바이트를 보존한 채 작업트리의 기록만 그 최신 결과로 맞췄다.

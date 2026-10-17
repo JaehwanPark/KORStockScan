@@ -1,5 +1,7 @@
 # Main REST 호출량 절감과 WS 재사용 계획 — 2026-10-08
 
+**2026-10-13 후속 점검:** 아래는 원 계획의 이력이다. [현재 구현·성능·잔여 호출 점검](../audits/main-rest-call-reduction-implementation-performance-and-excessive-calls-audit-2026-10-13.md)에서 계측/체결 WS 대체의 실제 소비와 반복 capacity·분봉·Radar·계좌/외부 관측 호출을 확인했다. 사용자가 판정 품질을 낮춰서라도 불필요 호출을 제거하도록 요청하여 [호출 제거·입력 간소화 계획](main-rest-excessive-call-removal-and-input-quality-relaxation-plan-2026-10-13.md)이 현재 CR0~CR8 변경 명세를 소유한다. 아래의 완전한 판정 parity·전시장 관측 completeness·수정주가/현재봉 보충 유지 조건 중 선택 입력 범위는 새 명세로 대체한다. 현재 episode/widget은 자동 exit/cancel/retry까지 영구 퇴역이며 역사 잔고는 operator-managed다. 아래의 잔여 episode callback 유지/flat 대사 조건을 현행 Main의 조회·실행·기동 선행 조건으로 적용하지 않는다. Main/manual·최종 quote/account/order/수량 hard safety는 현행 계약을 따른다.
+
 ## 1. 결정과 범위
 
 **기존 WS의 정확한 체결·호가·완성봉을 재사용하고, REST만 제공하는 원천은 유지한다.** 새 WS 세션이나 전시장 구독 확대부터 시작하지 않는다. 조사 대상은 `kt00011`에 한정하지 않은 저장소 전체 키움 호출 경로다. [전체 조사](../audits/main-rest-api-ws-callsite-and-load-audit-2026-10-08.md), [호출·참조 위치 TSV](../audits/main-rest-ws-callsite-inventory-2026-10-08.tsv), [증거 manifest](../../data/report/main_rest_ws_audit/2026-10-08/read-only-1031-1038/manifest.json)를 함께 본다. 정적 목록은 조사 시점의 46종 API/86개 endpoint 지정 지점이며, 현재 활성 호출량과 혼동하지 않는다.

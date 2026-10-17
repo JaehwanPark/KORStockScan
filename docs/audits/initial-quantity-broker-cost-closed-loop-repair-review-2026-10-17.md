@@ -127,3 +127,17 @@ e122의 사후 읽기 전용 `postpublication-verification.json`도 PASS(strict/
 | process peak RSS | 237,856KiB |
 
 canonical 실제 손익은 NULL을 유지하며 적격1건의 연구 손익은 fixture39원이다. 이 값을 실제 추가 수익으로 사용하지 않는다. 64MiB는 관리 대상 resident admission이며 process RSS 전체의 상한으로 부르지 않는다. native 상태171KiB/일과 scalar 약1.14MiB/일의 합법적 입력을 날짜별로 검증한다. 네 capability의 code generation은 e122와 같으므로 기존 정확 세대 fixture를 native 명령으로 재검증한다. 후속 릴리스 준비/발행 결과는 아래에 별도 기록한다.
+
+
+## 8 후속 릴리스 실제 배포 완료 (2026-10-18)
+
+- 선택 source commit **`900234d791b0bf31797cd4e823d0ae40296f790b`**, release `/home/ubuntu/KORStockScan-runtime-releases/quantity-broker-cost-monitor-20261018-900234d79`. 부모 e122와 그 이전3abcc 지연 수리를 누적 보존했다. 원 작업공간의 동시 source 변경은 덮어쓰지 않았다.
+- 독립 재리뷰 후 helper12개/후보를 봉인하고 원본17 source 및 비용/fact inventory를 새로 고정했다. 네트워크/host write를 차단한14 CoW 격리에서 정확 코드 인계·native128범위/76,800행/598신호 mismatch0·네 기존 정확 세대 fixture가 통과했다. 새 summary는 `succeeded`, controller는 `done`/blocked0, 최종 준비본은 `current_full_contract PASS/findings0`이다.
+- **00:17:34 KST selector 발행 → 00:19:16 KST `deployed_and_policy_verified`**. 실제 발행 후 native `current_full_contract PASS/findings0`를 확인했다. native lock/CAS·selector 마지막 발행·전체 실패 rollback 경계를 유지했다.
+- 독립 대조한 발행34파일/39,147,740B, 계획 SHA `d3e62554fae7e9c32bd0ef4b637f0b72f3fb001209969c4212ea5d6505ea443d`. 모든 source/대상 이전 SHA를 재검사했다. 운영 비용 원천·pending·연구 index/history·actual 비용·fact 발행 대상0개이며 기존 현재 Main/보조/수량 포인터를 보존했다.
+- 미래 bundle `ac6545f5ba6b8c18676600bdb6eda1578be5f8f92a4671156579e4b202248054`, overlay `fb961076e4b151cb48e7c4a23b5453c6d6d827caa95efd1eafd2505af4a7ba20`, transition `786e3b5a0eaadfee1771d7f7ff79028fbb6247bfb7b3f110e75ef677ad176afd`. 수치 env·정책 영수증4개·128 bindings·승인된 두 PRE 변경·rollback·10/19 기존 OPEN6개가 같다.
+- 완료 범위는 수리 코드·생산자/마지막 소비자·자료/성능·선택 배포 및 다음 정규 기동용 정책 검증이다. 최초 정책에 우월성/자연소비 허들을 추가하지 않았다. 기존 정책 수치 변경·실제 provider/API 호출·주문·Main 강제 기동/재시작0이며 `actual_pid_consumed=false`다. **10/19 07:35 PREOPEN→07:55 Main**의 실제 소비는 `DirectFamilyPreopenPolicyHandoff`, 정규 장후의 새 비용 생산/ack·원형49294 결손·실제 경제성은 `InitialQuantityProducerConsumerRepair1010`가 계속 소유한다.
+
+증거 owner는 `/home/ubuntu/KORStockScan/data/report/initial_quantity_broker_cost_deployment/2026-10-17/attempts/reviewed-v2/`다. `deployment.json`, `published-native-verification.json`, `publication-plan.json`, `host-after-private.json`과 `validation/manifest.json`이 실제 발행과 최종 검증을 구분한다. 마지막 읽기 전용 release/cron/PREOPEN/start·strict/controller·현재 full 검증 결과는 같은 곳의 `postpublication-verification.json`에 기록한다. 원 v1·실패·이전 성공 증거는 수정하지 않았다.
+
+최종 읽기 전용 사후 검증도 **00:21:59 KST PASS**다. 실제900 선택을 기준으로 release-set/cron 및 PREOPEN/start print-plan, native current_full_contract(findings0), strict issues0, controller issues0, 기존128/두PRE/rollback·보호 원천/비용/fact와 Main 부재를 재확인했다. provider_calls/orders/runtime_restarted=0이며 실제 PID 소비는false다. 이번 코드/자료/선택 배포 owner는 종료하고 자연 수용 owner만 기존10/19 일정에 유지한다.

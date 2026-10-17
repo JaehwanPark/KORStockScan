@@ -16,13 +16,13 @@
 
 | 근거 | 내용 |
 |---|---|
-| [manifest](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/manifest.json) | 원천·코드·과거 결과 봉인 283개, SHA256 `8f60c9f3f894650cf0841a49f971a047386553849adfd73bf68ed98bfd6b09a7` |
-| [결과](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/result.json) | 48 scope, 50가설·35,558대안, SHA256 `5210ddad3d5ec1c74b942cbf6b49b65d2ecd9c44d8d963644487e4f4654b8363` |
-| [전체 대안 ledger](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/variants.jsonl.gz) | current/A/F/J, scope 및 branch F, membership hash와 추가·제거 수 |
-| [유형 진단](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/diagnostics.json) | 종목군·시장·가격대별 상황/매수 압력/한 spread 범위 분할 |
-| [이전 제안 대비 차이](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/supplement.json) | 같은 key 기준 이전 제안→새 제안, 신규 A 순수 추가분, 날짜·종목·자원 |
-| [실제 ENTER_NOW 대조](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/actual-enter-check.json) | 원천으로 연결되는 과거 실제 기계 캡처 240개; 보조 PASS·체결과 구분 |
-| [독립 검증](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/validation.json) | 원천/feature/root/label/기존 대안/선택/범위 검증, errors 0 |
+| [manifest](../../tmp/main-entry-price-progress-research-20261015/manifest.json) | 원천·코드·과거 결과 봉인 283개, SHA256 `8f60c9f3f894650cf0841a49f971a047386553849adfd73bf68ed98bfd6b09a7` |
+| [결과](../../tmp/main-entry-price-progress-research-20261015/result.json) | 48 scope, 50가설·35,558대안, SHA256 `5210ddad3d5ec1c74b942cbf6b49b65d2ecd9c44d8d963644487e4f4654b8363` |
+| [전체 대안 ledger](../../tmp/main-entry-price-progress-research-20261015/variants.jsonl.gz) | current/A/F/J, scope 및 branch F, membership hash와 추가·제거 수 |
+| [유형 진단](../../tmp/main-entry-price-progress-research-20261015/diagnostics.json) | 종목군·시장·가격대별 상황/매수 압력/한 spread 범위 분할 |
+| [이전 제안 대비 차이](../../tmp/main-entry-price-progress-research-20261015/supplement.json) | 같은 key 기준 이전 제안→새 제안, 신규 A 순수 추가분, 날짜·종목·자원 |
+| [실제 ENTER_NOW 대조](../../tmp/main-entry-price-progress-research-20261015/actual-enter-check.json) | 원천으로 연결되는 과거 실제 기계 캡처 240개; 보조 PASS·체결과 구분 |
+| [독립 검증](../../tmp/main-entry-price-progress-research-20261015/validation.json) | 원천/feature/root/label/기존 대안/선택/범위 검증, errors 0 |
 
 비교 기준은 기존 누적 `W/(W+STOP+TIMEOUT)` → W 수 → 동일 membership current canonical → 고정 ID다. 비용률 0.0023, 실제 entry ask, 비용 후 +0.4% 목표/-3% 손절의 1,800초 선도달 label을 유지했다. TIMEOUT은 실제 손실이 아니며 U는 실패·0원으로 채우지 않았다. 성공 보존율·최소 표본/일수·새 holdout·추가 EV를 선정 조건에 넣지 않았다. 같은 자료에서 탐색·선택했으므로 독립 미래 성능 검증은 아니다.
 
@@ -89,7 +89,7 @@ scope별 승률 우선 선택의 집계다. 직전 대비 승률은 약 0.062%p 
 
 실제 기계 캡처라고 해도 후행 결과는 **가정한 ask 진입의 CF label**이다. 보조 PASS, 제출·체결, 실제 preset 종료·실현 순손익은 아니다. 좁은 날짜·세션과 많은 원천 제외 때문에 위 표를 전 시장 실거래 성능으로 확대할 수 없다. ENTER_NOW뿐 아니라 추가 탐지·미체결 경로도 연구할 수 있음을 확인했으나, 보조 PASS 모집단 전체의 경제성은 이번에 새로 입증하지 않았다.
 
-[주성 전체 흐름 조사](/home/ubuntu/KORStockScan/docs/audits/main-jusung-hard-stop-pattern-and-full-flow-research-2026-10-15.md)에서 확인한 compact 보조 입력의 정보 차이는 유지된다. 당시 보조는 매수 비중·10체결 수익률·spread를 받았지만 세션 하락·고점/저점 구조·완료봉 문맥은 받지 않았다. 이번 연구는 원 보조 prompt/input/response·membership·지표를 보존한 별도 비교다. 기존 PASS를 새 문맥을 본 PASS로 재해석하지 않고, 입력 확장이 필요하다면 별도 version과 같은 입력 원천의 paired 비교로 다룬다. provider 호출은 0이다.
+[주성 전체 흐름 조사](main-jusung-hard-stop-pattern-and-full-flow-research-2026-10-15.md)에서 확인한 compact 보조 입력의 정보 차이는 유지된다. 당시 보조는 매수 비중·10체결 수익률·spread를 받았지만 세션 하락·고점/저점 구조·완료봉 문맥은 받지 않았다. 이번 연구는 원 보조 prompt/input/response·membership·지표를 보존한 별도 비교다. 기존 PASS를 새 문맥을 본 PASS로 재해석하지 않고, 입력 확장이 필요하다면 별도 version과 같은 입력 원천의 paired 비교로 다룬다. provider 호출은 0이다.
 
 ## 6. 전 범위 실행·성능·원천 한계
 
@@ -113,7 +113,7 @@ partition 계산 합계 96.87초, 최장 partition 11.86초, 집계 16.04초다.
 
 기존 19,892개 대안의 counts·추가/제거·동일 membership이 전부 보존됐고, 전체 35,558개 대안의 분수 순위, scope48·partition27·봉인283 검증에서 errors 0이다. 계산 정확성·계약 검증과 runtime 탐지 구현의 parity는 구분한다. 운영 typed definition/등록 archive/selector/CAS/PID 소비는 아직 수행하지 않았다.
 
-[최종 리뷰 receipt](/home/ubuntu/KORStockScan/tmp/main-entry-price-progress-research-20261015/final-review.json)는 세 문서의 링크43개·표13개, 현재 보유 수리/장전 handoff owner 각각1개, 결과 해시·추가/제거 산술·실제 캡처 census를 확인했다. Python compile·`git diff --check`·print-only parser가 통과했고 parser 출력은25개 작업이다. 생산 코드 변경이 없어 거래 suite·장후 전체 재생성·provider·외부 동기화·재기동은 실행하지 않았다. runtime 신규 탐지와 실제 보유·청산 결과는 별도 미검증이다.
+[최종 리뷰 receipt](../../tmp/main-entry-price-progress-research-20261015/final-review.json)는 세 문서의 링크43개·표13개, 현재 보유 수리/장전 handoff owner 각각1개, 결과 해시·추가/제거 산술·실제 캡처 census를 확인했다. Python compile·`git diff --check`·print-only parser가 통과했고 parser 출력은25개 작업이다. 생산 코드 변경이 없어 거래 suite·장후 전체 재생성·provider·외부 동기화·재기동은 실행하지 않았다. runtime 신규 탐지와 실제 보유·청산 결과는 별도 미검증이다.
 
 리뷰에서 두산의 순 TIMEOUT4 감소를 “TIMEOUT4만 제거”로 단순화하지 않고 제거5·추가1로 분리했다. 일반 PRE 중가의 이전 제안은 scope F06이고 새 F25는 branch 정제임을 명시했다. 실제 캡처 240개의 범위를 10/12 AFTER로 한정하고, 신규 A 전체 합집합과 기존 모든 후보에도 없던 순수 추가분을 구분했다. 전체 승률과 W 수 감소를 함께 공개했다.
 

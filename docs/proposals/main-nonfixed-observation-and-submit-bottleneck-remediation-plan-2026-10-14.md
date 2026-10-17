@@ -1,6 +1,6 @@
 # Main 비고정 관측 및 제출 병목 개선계획 — 2026-10-14
 
-상태: **후속 사용자 지시로 계획 리뷰·보완 및 구현을 진행한다. 코드 리뷰·수정보완·표적 검증 완료 후 배포와 Main 재기동이 명시적으로 승인됐다.** 코드/소비 계약 수용과 실제 배포·PID·자연 증거는 각각 기록한다.
+상태: **계획 리뷰·보완, B0–B4 구현, 반복 코드 리뷰·수리·표적 검증 및 승인된 배포·Main 재기동을 완료했다.** 실제 릴리스 `f8dc4431d`와 PID378870/start1473429의 native128/auxiliary128scope 소비를 확인했다. 전체 observer 검증은 남은 source gap 때문에 partial이며 자연 기계/보조 표본·전체 Main 성능·경제성은 pending이다.
 
 목표: 정상 입력과 유효 신호가 기존 Main 경로에 제때 도달하게 하고, 실제 중단 원인을 정확히 연결한다. 주문 수 증가나 PASS 비율 상승을 단독 성공 기준으로 삼지 않는다.
 
@@ -159,6 +159,16 @@ B0으로 비교 분모를 먼저 확정한다. B1/B2는 각각 독립 fixture·�
 3쌍 고정5/비고정5 및 holding/order component 비교에서는 완료 target 방문이9번째→1번째로 바뀌고 전체12개·보호 위치가 유지됐다. helper p95는 약3.7→8.6µs로 늘었다. 이 추가 약5µs 비용을 숨기지 않으며 전체 Main CPU/I/O/guard 지연 개선은 아직 `performance_not_established`다. 실제 전체 부하가 모든 pair에서 악화되면 기존 종료 기준으로 수리 조합의 성능 변경을 재검토한다.
 
 릴리스 검증과 실제 배포 결과는 후속 [구현 리뷰](../audits/main-nonfixed-submit-bottleneck-implementation-review-2026-10-14.md)와 `data/report/main_nonfixed_submit_deployment/2026-10-14`의 봉인 자료로 기록한다. 코드 source pair·sealed prompt generation·문서 publication·실제 PID 소비·자연 성능·경제성은 각각 대사한다.
+
+## 12. 배포 후 수용과 남은 source 계약
+
+13:05:27 기존 Main 정상 종료·선택,13:07:20 ordered transition PASS를 확인했다. [최종 소비 검증](/home/ubuntu/KORStockScan/data/report/main_nonfixed_submit_deployment/2026-10-14/postdeployment-verification.json)에 릴리스·PID·원 native policy/PREOPEN/env/prepared byte 보존·128scope·별도 auxiliary generation과 원문 source hash를 기록했다. 기동13:06:54의 strict checklist 경보는13:07:11 소비 영수증 이전 상태였고, 이후 원 snapshot의 현재 PID 검증으로 recovered_late에 복귀했다. 과거08:49:10 지연 복구 이력은 보존한다.
+
+`submission_bottleneck_monitor.partial`은 유지한다. 원10/13 entry_split 보고서459,131,089B는 현재8,388,608B consumer 제한을 넘는다. 후보3938B 정책은 runtime_apply_allowed=false·bucket0이며 실제657B operator incumbent과 분리된다. 해시-only storage/reuse receipt나 작은 Markdown으로 전체 보고서의 의미 검증을 대신하지 않는다. scanner 평가 표본 부재도 snapshot의 cumulative decode/tail/cache/raw generation 완전성 증거가 없으므로 무조건 valid_empty로 바꾸지 않는다. fixed 표본을 scanner 평가로 대입하지 않는다.
+
+후속 closure owner는 기존 `DirectFamilySourceRepairEntrySplit`다. producer가 native 원 report/policy/generation/source SHA에 묶인 작은 immutable observation projection을 발행하고, 기존 monitor가8MiB 내에서 읽어 source/economic blocker·비설치 후보·현재 incumbent을 각각 보존해야 한다. source/hash/부분 tail/회전 충돌은 실패로 남긴다. 기존 `NonfixedDispatchReadinessReview1012`는 scanner source completeness receipt와 실제 승인 이후의 자연 판정 표본을 대사한다. 이 추가 경계 진단은 대형 보고 재생성, 읽기 한도 확대, alert suppression 또는 신규 매매 권한을 실행하지 않았다.
+
+정규13:10/13:15/13:20의 새 릴리스 보고 실행을 관측했다. 최초 cold validation97파일/약11.60GB/36.45초와13:20 warm full hash0회·3.36초 및 해당 실행 physical read약49.7MB를 구분한다. 원 자연3슬롯 실행은 전체 source 검증·기계/보조 실제 판정·p95 목표·비용 후 성과의 완료가 아니다. 최신 봉인 health13:26:54는 resource PASS/I/O wait12.19%, postclose_finalization recovered_late다. 전체 Main 성능은 계속 performance_not_established다.
 
 
 ## 13. 2026-10-15 사용자 확정 — 장기 슬롯3 및 대기 계측 연결

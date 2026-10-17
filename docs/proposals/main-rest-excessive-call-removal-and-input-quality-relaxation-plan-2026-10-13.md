@@ -6,6 +6,8 @@
 
 **구현 결과:** CR0~CR8을 작업본에 구현하고 반복 리뷰·수정을 수행했다. [구현 리뷰·검증](../audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md)이 최종 코드/시험/남은 실제 수용 상태를 소유한다. 751개 영향 범위 회귀, Python13파일 compile, wrapper syntax 및 문서 parser를 검증한다. 배포/PID와 자연 전체 호출 절감률은 이번 코드 완료에 포함하지 않는다. 아래 원 계획의 읽기 전용/미구현 문구는 최초 이력이다.
 
+**후속 배포 결과:** 사용자 배포·재기동 승인 후 `main-rest-reduction-20261013` / commit `932bb3a1294e3e5b318cdb565fefa87f11d6e28b`를 선택하고 Main PID `3517912`의 정책128/128 scope·상시5종목 WS 실수신을 확인했다. 원 정책/PREOPEN/active pointer는 유지했다. release 회귀1,461건, 목적 없는 선조회0과 19:40 scheduled census의 BBO OFF를 검증했다. 짧은 자연 호출 window는116회/180.64초→17회/182.37초이나 시장 입력/기동 상태가 달라 확정 절감률·동일 부하 성능으로 승격하지 않는다. 기존 cold source replay 지연과 자연 주문/경제성은 미완료다. [후속 배포 리뷰 §7](../audits/main-rest-call-removal-and-reduced-input-implementation-review-2026-10-13.md#7-배포pid-검증과-초기-자연-관측)이 실제 영수증을 소유하며 본문의 미배포 문구는 최초 코드 완료 시점의 이력이다.
+
 ## 1. 결정·범위·현재 인계
 
 사용자는 절감계획의 구현·성능·잔여 호출 점검을 요청하며, **판정 품질요건을 완화하더라도 불필요하고 과도한 호출을 제거할 수 있게 점검**하도록 지시했다. 따라서 10/8 계획의 완전한 입력/판정 parity, 전시장 관측 coverage, 수정주가 이력·현재봉 보충을 무조건 유지하는 접근을 변경한다. 소비 없는 조회를 먼저 없애고 선택 입력·발굴 범위·관측 정밀도를 줄인다. 호출을 줄이기 위한 새 계측/worker/구독 증설부터 시작하지 않는다.

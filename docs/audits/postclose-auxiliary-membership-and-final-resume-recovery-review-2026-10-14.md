@@ -48,3 +48,9 @@ Implementation → self review → 보완 → re-review: 위 두 결함의 produ
 보완 구현→self review→fixture/alias 선택 수정→re-review를 수행했다. 역사 observer 정상과 archive/seal/code/terminal/당일/미완료 거부, 새벽 후보 정상과 cutoff/다른 날짜/source·PREOPEN·각 bootstrap 파일 거부, origin source/authority/mode/date/generation/full source/parent 거부를 검증한다. 최종 코드의 fresh33모듈·128scope parity와 표적검증을 완료한 후 필요한 native 후행 소비만 재결속한다. 최종 수치와 실제 배포/준비 결과는 전수 점검 기록에 남긴다.
 
 최종 보완 검증은 401 pytest PASS·compile/bash/diff·print-only parser PASS다. 현재10/15 owner7개는 고유하며 미종결4ID의 Acceptance/History를 이전했다. 최종 fresh parity는 native33 중source-only2파일 변경,128scope/76,800row/621hit·동일 signal SHA·mismatch0·provider0/orderfalse다. 실제 BDF origin의 10/15 rollover 검증은 current99c와826 source hashes를 반환했고, 역사 observer는 원 selector e880896a와 partial 결손을 보존한 historical_generation_verified였다. 외부 sync·추가 provider/주문·Main 기동은 실행하지 않았다.
+
+## 실제 운영·준비 종결 영수증
+
+최종 selected source release는4691d2a70a404fce0ac0b984bb4695ff167867a0이며 Main은 native 완료f16256ef8ca0446ab2df3cee9fad19b1/BDF23:58:11 원본을 보존한다. 이미 성공한 Main의 실패-resume 재호출 거부는 별도 실패/로그 근거로 남기고, 원 terminal을 SHA9b3e0114…로 복원한 뒤 independent summary consumer만 재실행했다. 원 Main/PID를 새 code로 relabel하지 않았다.
+
+7개 stage current checks issues0, summary2909eed59403467395985bb82c0205b9·00:52:01, 전체 strict fd75ff8c823149b5a2719be1d518e507 PASS/whole_chain_verified·Controller00:57:34 DONE다.10/15 prepared01:00:32는4691d2a70 및 efff1827… candidate를 결속하며 current full contract PASS/findings0·Controller full recheck issues0이다.01:01:55 canonical full detector는fail0/warning·mutation0으로 종결했다. 실제 future finalization/PREOPEN/PID·경제성은 별도 수용이며 [전수 점검](postclose-monitoring-and-next-session-readiness-2026-10-14.md)에 모든 결과/결손/owner/closure를 기록했다.

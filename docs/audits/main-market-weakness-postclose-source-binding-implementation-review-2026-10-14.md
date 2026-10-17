@@ -65,3 +65,15 @@ label은 실제 ask·비용률 .0023·1800초·비용 후 +.4%/soft −3% 선도
 최종 표적 검증은 동일 8 suites **263 passed**(기존 251개+추가 12개)다. 변경 Python 5개 compile/Ruff, 핵심 구현·repair 회귀 4개 Black 정합, 공백 검사 및 문서 print-only parser가 통과했다. 검토 문서/owner 구간 로컬 링크32개 정상, parser task25개 중 현행 약세 owner1개다. 자동화 회귀의 기존 서식은 최소 수정하고 저장 오류의 새 defer 계약을 확인했으며 최종 변경 부분 6개도 재통과했다. 신규 모듈·장중 호출/기록·기존 보조 연구 입력/응답·매매 정책/권한 변경은 없다.
 
 이번 재리뷰 범위의 미해결 코드 결함은 0이다. 배포·예약 code rebind·원 운영 자료 재계산·실제 Telegram 발송·PID 소비·경제성은 실행하거나 입증하지 않았다. 최신 작업본 hash를 선택 release와 재결속하기 전까지 위 테스트 결과를 실운영 적용으로 해석하지 않는다. 후속 owner는 동일 `MainMarketWeaknessPostcloseObservation1008`이며 AUTO 봉인과 다른 OPEN 작업을 재작성하지 않는다.
+
+## 후속 배포 승인 실행
+
+사용자의 “배포승인” 이후 **2026-10-14 09:26 KST**에 선택 릴리스와 자기 야간 예약 재결속을 완료했다. 앞 절의 미배포 표시는 각 리뷰 시점의 이력이며, 현행 배포 결과는 아래 영수증이 소유한다.
+
+- 선택 릴리스: `/home/ubuntu/KORStockScan-runtime-releases/main-market-weakness-20261014-5fb4c0a33`, commit `5fb4c0a33a9df2b26e5fab4740576ce746a8cc93`. 실제 현행 부모 `01d9fefa4234b421fb0b2c74683562aa8a9c7358` 위에 약세 모듈3개·회귀2개·관련 문서4개만 결합했다. [원천/빌드 SHA](../../data/report/main_market_weakness_deployment/2026-10-14/build.json), [불변 release의 263개 테스트 통과](../../data/report/main_market_weakness_deployment/2026-10-14/release-tests.txt).
+- [배포 결과](../../data/report/main_market_weakness_deployment/2026-10-14/deployment-result.json)는 `deployed_optional_verified`다. release-set/selection과 기존 detector 잠금 아래 선택을 전환했다. 착수 당시 Main·supervisor는 이미 없었고 정지 상태를 유지했다. 과거 PID receipt를 새 PID 소비로 전용하지 않았으며 `actual_pid_consumed=false`다.
+- 원 정책·당일 PREOPEN/env/manifest와 이전 소비 receipt를 보존한 [인계 검증](../../data/report/main_market_weakness_deployment/2026-10-14/preserved-preopen-handoff.json)이 통과했다. 이것은 원 검증 세대 보존이며 Main 시작·재시작·새 정책 활성화가 아니다. 당일 최초 기동의 기존 15분 창을 연장하지 않으며 차기 PREOPEN 준비는 해당 날짜의 정책/원천 owner가 담당한다.
+- [Optional 설정](../../data/report/main_market_weakness_deployment/2026-10-14/installation-after.json)의 `enabled=true`, `notify_enabled=true`, 설치 이력·원 source floor를 보존했다. KST `40 0-5,21-23 * * *` 한 행과 reviewed code hash를 재조회했다. 다른 cron 행과 연구 일별/후보/outbox 이력은 변하지 않았다.
+- [필수 cron 8개 경로](../../data/report/main_market_weakness_deployment/2026-10-14/cron-routing-after.json), [선택 release 집합](../../data/report/main_market_weakness_deployment/2026-10-14/release-set-after.json), [실제 wrapper의 장중 차단](../../data/report/main_market_weakness_deployment/2026-10-14/outside-window-verified.json)을 확인했다. `outside_night_window`는 기존 owned log에만 남았고 연구 namespace의 파일/mtime/inode는 그대로였다. 장중 연구와 실제 Telegram 발송은 없었다.
+
+첫 자연 수용은 **10/14 21:40부터의 허용 예약**이다. EOD/일반 장후 작업·시간/자원 gate로 보류될 수 있으며 다음 허용 슬롯에서 기존 예산 내 재개한다. 새 코드의 terminal→누적→후보→알림 disposition은 아직 관측하지 않았고, 실제 유의미한 숫자 발견이나 수익 개선을 주장하지 않는다. 기존 `MainMarketWeaknessPostcloseObservation1008`은 이 자연 수용을 위해 OPEN으로 유지한다.
