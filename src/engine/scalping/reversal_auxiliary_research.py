@@ -499,7 +499,7 @@ def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
               purpose='evaluation', include_keys=(), native_current=False, resolved_only=False,
               native_output_tokens_override=None, compact_wire=False, compact_candidate_only=False,
               source_scope_sha256=None, causal_prefix=False, causal_candidate_only=False,
-              risk_role_mode=None):
+              risk_role_mode=None, risk_role_roles=None):
     from src.engine.scalping import reversal_auxiliary_tuning as T
     from src.engine.scalping import continuous_reversal_policy_v5 as V
     allowance = grant(data_root)
@@ -540,6 +540,12 @@ def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
                 or G.load(data_root,candidate)['input_version'] != X.U.VERSION):
             raise ValueError('auxiliary_research_risk_role_input_unsupported')
         cfg['risk_role_contract'] = X.contract(risk_role_mode)
+        if risk_role_roles is not None:
+            if risk_role_roles not in (['candidate'], ['current','candidate']):
+                raise ValueError('auxiliary_research_risk_role_roles_invalid')
+            cfg['risk_role_roles'] = list(risk_role_roles)
+    elif risk_role_roles is not None:
+        raise ValueError('auxiliary_research_risk_role_contract_missing')
     if compact_wire:
         from src.engine.scalping import reversal_auxiliary_research_wire as W
         cfg['compact_wire_contract'] = W.contract()
@@ -581,6 +587,11 @@ def context(data_root, experiment):
                 or v['config'].get('native_current_contract')
                 or v['config'].get('causal_prefix_contract')):
             raise ValueError('auxiliary_research_risk_role_contract_invalid')
+        if ('risk_role_roles' in v['config'] and
+                v['config']['risk_role_roles'] not in (['candidate'],['current','candidate'])):
+            raise ValueError('auxiliary_research_risk_role_roles_invalid')
+    elif 'risk_role_roles' in v['config']:
+        raise ValueError('auxiliary_research_risk_role_contract_missing')
     return v
 
 

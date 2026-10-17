@@ -291,3 +291,61 @@ def test_present_malformed_risk_contract_cannot_be_silently_treated_as_baseline(
     P.write(Q.directory(root,'tampered')/'configuration.json',P.seal(dict(configuration,config=changed)))
     with pytest.raises(ValueError,match='risk_role_'):
         Q.context(root,'tampered')
+
+
+def test_both_roles_exact_same_input_isolates_prompt_and_reuses_requests(risk_campaign):
+    from src.engine.ai import offline_comparison_store as S
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_research as Q
+    from src.engine.scalping import reversal_auxiliary_tuning as T
+    root,parent,machine,sid,current,snapshot = risk_campaign
+    original=G.load(root,current['research_registry_sha256'])
+    new=G.definition(original['base_arm'],prompt=original['prompt']+'\nCompare current evidence only.\n',
+        hypothesis='Fixture isolates wording',input_version=U.VERSION)
+    G.register(root,new)
+    candidate=G.compact_definition(new,research_wire_contract=original.get('research_wire_contract',OLD_W.contract()))
+    G.register(root,candidate)
+    Q.configure(root,experiment='candidate-role',candidate=candidate['registry_sha256'],scopes=[sid],
+        seed='frozen',max_pairs=1,risk_role_mode='ROLE_VOCAB_PATH')
+    candidate_only=T.prepare(root,'2026-10-07',machine,parent,research='candidate-role')
+    Q.configure(root,experiment='both-role',candidate=candidate['registry_sha256'],scopes=[sid],
+        seed='frozen',max_pairs=1,risk_role_mode='ROLE_VOCAB_PATH',risk_role_roles=['current','candidate'])
+    campaign=T.prepare(root,'2026-10-07',machine,parent,research='both-role')
+    path=Q.directory(root,'both-role')/'campaigns'/(campaign['artifact_content_sha256']+'.json')
+    pair=campaign['pairs'][0]
+    assert pair['requests']['candidate']==candidate_only['pairs'][0]['requests']['candidate']
+    assert pair['requests']['current']!=candidate_only['pairs'][0]['requests']['current']
+    cfg=Q.context(root,'both-role')['config']
+    logical=T.research_logical_input(snapshot,current,cfg,'current')
+    assert logical==T.research_logical_input(snapshot,candidate,cfg,'candidate')
+    assert logical==X.project(G.production_request(snapshot,current)[0],expected_contract=X.contract('ROLE_VOCAB_PATH'))
+    with S.Store(root,readonly=True) as store:
+        a=store.request(pair['requests']['current']);b=store.request(pair['requests']['candidate'])
+        assert a['candidate_input']==b['candidate_input']
+        assert a['candidate']['response_schema']==b['candidate']['response_schema']
+        assert a['candidate']['system_prompt']!=b['candidate']['system_prompt']
+        assert a==T.research_request(snapshot,current,dict(cfg,risk_role_roles=['candidate']),'candidate')
+    actual=[]
+    def transport(req,timeout_sec):
+        actual.append(req['paired_replay_id']);wire=req['candidate_input']
+        return dict(provider_provenance=dict(response_id='fixture-'+req['paired_replay_id']),
+            candidate_response=dict(assessed={s['ref']:True for s in wire['signals']},
+                screen=dict(verdict='PASS',risk='NO_BLOCKING_RISK',fact=W.encode(logical)[2]['observed_machine_signal']),confidence=50))
+    assert T.calls(root,'2026-10-07',campaign_path=path,transport=transport)['new_calls']==2
+    ev=T.evaluate(root,'2026-10-07',campaign_path=path)
+    assert ev['comparison_complete'] and all(not row['excluded'] for row in ev['pairs'])
+    assert ev['offline_input_roles']==['current','candidate']
+    assert T.calls(root,'2026-10-07',campaign_path=path,transport=transport)['new_calls']==0
+    assert len(actual)==2
+
+
+@pytest.mark.parametrize('roles',[[],None,False,'candidate',['current'],['candidate','current'],['candidate','candidate']])
+def test_tampered_roles_do_not_silently_restore_baseline(risk_campaign,roles):
+    from src.engine.scalping import reversal_auxiliary_research as Q
+    root,_,_,sid,registry,_=risk_campaign
+    configuration=Q.configure(root,experiment='bad-roles',candidate=registry['registry_sha256'],
+        scopes=[sid],seed='frozen',max_pairs=1,risk_role_mode='ROLE')
+    changed=P.seal(dict(configuration['config'],risk_role_roles=roles))
+    P.write(Q.directory(root,'bad-roles')/'configuration.json',P.seal(dict(configuration,config=changed)))
+    with pytest.raises(ValueError,match='risk_role_roles_invalid'):
+        Q.context(root,'bad-roles')

@@ -5524,6 +5524,9 @@ class GPTSniperEngine:
             reasoning_effort=registered_auxiliary['reasoning_effort']
             target_temp=None
             metadata_extra=dict(metadata_extra or {},auxiliary_registry_sha256=auxiliary_registry_sha256)
+            if registered_auxiliary.get('production_input_contract') is not None and auxiliary_identity_context is not None:
+                auxiliary_identity_context=dict(auxiliary_identity_context,
+                    production_input_contract=copy.deepcopy(registered_auxiliary['production_input_contract']))
             if auxiliary_envelope:
                 metadata_extra['auxiliary_wire_envelope']=dict(contract=auxiliary_envelope['contract'],hashes=auxiliary_envelope['hashes'])
         request = self._build_openai_response_request(

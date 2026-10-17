@@ -61,6 +61,9 @@ def provider_identity(payload, context):
         options={k:payload[k] for k in ('max_output_tokens','temperature','reasoning') if k in payload},
         input_contract=version, normalizer_version='continuous_reversal_effective_screen_v1',
         projector_validator_sha256={p.name:_source_hash(str(p), _signature(p)) for p in paths})
+    if 'production_input_contract' in context:
+        from src.engine.scalping import reversal_auxiliary_production_input as M
+        semantic['production_input_contract'] = copy.deepcopy(M.validate(context['production_input_contract']))
     identity = dict(schema=IDENTITY_SCHEMA, semantic=semantic, identity_sha256=P.digest(semantic),
         provenance={k:context.get(k) for k in ('registry_sha256','overlay_sha256','bundle_sha256')})
     identity['provenance'].update(request_payload_sha256=P.digest(payload),
@@ -87,6 +90,9 @@ def validate_identity(value):
         or any(not re.fullmatch('[a-f0-9]{64}',str(provenance.get(k)))
                for k in ('request_payload_sha256','response_schema_sha256'))):
         raise ValueError('auxiliary_identity_definition_invalid')
+    if 'production_input_contract' in semantic:
+        from src.engine.scalping import reversal_auxiliary_production_input as M
+        M.validate(semantic['production_input_contract'])
     return value
 
 
@@ -144,6 +150,12 @@ def validate(value):
                 or not re.fullmatch('[a-f0-9]{64}',value.get('research_registry_sha256',''))
                 or not isinstance(value.get('research_wire_contract'),dict)):
             raise ValueError('auxiliary_registry_wire_contract_invalid')
+    if 'production_input_contract' in value or 'production_parent_registry_sha256' in value:
+        from src.engine.scalping import reversal_auxiliary_production_input as M
+        if (value['schema']!=SCHEMA_V2 or value['input_version']!=M.U.VERSION
+                or not re.fullmatch('[a-f0-9]{64}', str(value.get('production_parent_registry_sha256')))):
+            raise ValueError('auxiliary_registry_production_input_invalid')
+        M.validate(value.get('production_input_contract'))
     return value
 
 
@@ -174,6 +186,20 @@ def register(data_root, value):
     return value['registry_sha256']
 
 
+def production_definition(compact_value, *, scope_ids):
+    """Build a separate scoped opt-in; never rewrite or register its parent."""
+    validate(compact_value)
+    if compact_value['schema']!=SCHEMA_V2 or 'production_input_contract' in compact_value:
+        raise ValueError('auxiliary_production_parent_invalid')
+    from src.engine.scalping import reversal_auxiliary_production_input as M
+    body=copy.deepcopy(compact_value)
+    body.update(production_input_contract=M.contract(scope_ids),
+                production_parent_registry_sha256=compact_value['registry_sha256'])
+    body.pop('registry_sha256')
+    body['registry_sha256']=P.digest(body)
+    return validate(body)
+
+
 def load(data_root, ident):
     if not isinstance(ident, str) or not re.fullmatch('[a-f0-9]{64}', ident):
         raise ValueError('auxiliary_registry_id_invalid')
@@ -185,7 +211,13 @@ def load(data_root, ident):
         original=validate(_read(directory(data_root)/(value['research_registry_sha256']+'.json')))
         if original['schema']!=SCHEMA or original['registry_sha256']!=value['research_registry_sha256']:
             raise ValueError('auxiliary_registry_research_identity_changed')
-        if compact_definition(original,research_wire_contract=value['research_wire_contract'])!=value:
+        expected=compact_definition(original,research_wire_contract=value['research_wire_contract'])
+        if 'production_input_contract' in value:
+            parent=validate(_read(directory(data_root)/(value['production_parent_registry_sha256']+'.json')))
+            if parent!=expected:
+                raise ValueError('auxiliary_production_parent_changed')
+            expected=production_definition(parent,scope_ids=value['production_input_contract']['scope_ids'])
+        if expected!=value:
             raise ValueError('auxiliary_registry_research_binding_changed')
     return value
 
@@ -205,6 +237,10 @@ def production_request(snapshot, value):
     A=projector(value['input_version'])
     event, source = snapshot
     inp, _, schema = A.production_request(source, value['base_arm'], event=event)
+    if 'production_input_contract' in value:
+        from src.engine.scalping import reversal_auxiliary_production_input as M
+        inp=M.project(inp,expected_contract=value['production_input_contract'])
+        schema=A.response_schema(inp)
     return inp, value['prompt'], schema
 
 
@@ -216,6 +252,11 @@ def request(snapshot, value):
     if req['candidate_input']['schema']!=value['input_version']:
         raise ValueError('auxiliary_registry_snapshot_version_mismatch')
     req['candidate'].update(system_prompt=value['prompt'], prompt_version=binding(value)['prompt_version'])
+    if 'production_input_contract' in value:
+        inp, _, schema=production_request(snapshot,value)
+        req.update(candidate_input=inp,candidate_input_sha256=P.digest(inp))
+        req['candidate'].update(response_schema=schema,response_schema_sha256=P.digest(schema),
+            production_input_contract=copy.deepcopy(value['production_input_contract']))
     req['paired_replay_id'] = P.digest([A.opportunity(snapshot[0]), 'UNION',
                                       {k:req[k] for k in ('candidate_input','candidate','control','stage')}])
     if value['schema']==SCHEMA_V2:
@@ -226,6 +267,9 @@ def request(snapshot, value):
 
 def envelope(logical_input, value):
     validate(value)
+    if 'production_input_contract' in value:
+        from src.engine.scalping import reversal_auxiliary_production_input as M
+        M.validate_projected(logical_input,expected_contract=value['production_input_contract'])
     schema=projector(value['input_version']).response_schema(logical_input)
     if value['schema']==SCHEMA_V2:
         from src.engine.scalping import reversal_auxiliary_wire as W
@@ -236,6 +280,9 @@ def envelope(logical_input, value):
 
 def decode_response(raw, logical_input, value):
     validate(value)
+    if 'production_input_contract' in value:
+        from src.engine.scalping import reversal_auxiliary_production_input as M
+        M.validate_projected(logical_input,expected_contract=value['production_input_contract'])
     if value['schema']==SCHEMA_V2:
         from src.engine.scalping import reversal_auxiliary_wire as W
         return W.decode(raw,logical_input,value['base_arm'])

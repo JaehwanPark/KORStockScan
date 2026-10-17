@@ -248,7 +248,10 @@ def prepare(data_root, day, machine, parent, *, research=None):
                         current_registry=old, candidate_registry=cfg['candidate_registry'], requests={})
             comp = 'aux-pair:'+P.digest([sid,old,cfg['candidate_registry'],'confirmation_replay'])
             if context and cfg.get('risk_role_contract'):
-                comp = 'aux-pair:'+P.digest([comp,'research_risk_role',cfg['risk_role_contract']])
+                identity = [comp,'research_risk_role',cfg['risk_role_contract']]
+                if 'risk_role_roles' in cfg:
+                    identity.append(cfg['risk_role_roles'])
+                comp = 'aux-pair:'+P.digest(identity)
             for role, registry in [('current',old),('candidate',cfg['candidate_registry'])]:
                 definition = G.load(data_root, registry)
                 req = research_request(snap, definition, cfg, role) if context else G.request(snap, definition)
@@ -323,7 +326,7 @@ def research_request(snapshot, registry, cfg, role):
         req=E.transform_request(req,G.production_request(snapshot,registry)[0],
                                 contract=cfg['causal_prefix_contract'],
                                 source_prefix=snapshot[1].get('research_prefix_evidence'))
-    if cfg.get('risk_role_contract') and role == 'candidate':
+    if cfg.get('risk_role_contract') and role in cfg.get('risk_role_roles',['candidate']):
         from src.engine.scalping import reversal_auxiliary_risk_role_experiment as X
         req=X.transform_request(req,G.production_request(snapshot,registry)[0],
                                 contract=cfg['risk_role_contract'])
@@ -344,7 +347,7 @@ def research_logical_input(snapshot, registry, cfg, role='candidate'):
         from src.engine.scalping import reversal_auxiliary_causal_experiment as E
         return E.project(value,expected_contract=cfg['causal_prefix_contract'],
                          source_prefix=snapshot[1].get('research_prefix_evidence'))
-    if cfg.get('risk_role_contract') and role == 'candidate':
+    if cfg.get('risk_role_contract') and role in cfg.get('risk_role_roles',['candidate']):
         from src.engine.scalping import reversal_auxiliary_risk_role_experiment as X
         return X.project(value,expected_contract=cfg['risk_role_contract'])
     return value
@@ -585,6 +588,8 @@ def evaluate(data_root, day, *, campaign_path=None):
     if cfg.get('risk_role_contract'):
         result=P.seal(dict(result,offline_input_experiment=cfg['risk_role_contract'],
             operating_compatibility='requires_separate_input_implementation'))
+        if 'risk_role_roles' in cfg:
+            result=P.seal(dict(result,offline_input_roles=cfg['risk_role_roles']))
     from src.engine.monitoring.policy_generation_contract import native
     result.pop('artifact_content_sha256',None)
     result['policy_generation']=native(result,family='auxiliary',day=day,data_root=data_root,
