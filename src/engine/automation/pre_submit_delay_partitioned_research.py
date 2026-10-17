@@ -124,7 +124,7 @@ def project(rows, db):
         stage = row.get('stage')
         horizon = initial.number(fields.get('target_delay_sec')) if stage == 'pre_submit_delay_quote_observed' else -1
         if stage not in {'pre_submit_delay_committed','pre_submit_delay_quote_observed'} or (
-                stage == 'pre_submit_delay_quote_observed' and horizon not in initial.HORIZONS):
+                stage == 'pre_submit_delay_quote_observed' and horizon not in owner.OBSERVATION_HORIZONS):
             continue
         sha = fields.get('_source_fields_sha256') or owner._digest(fields)
         db.execute('INSERT INTO events(intent,stage,horizon,sha,body) VALUES (?,?,?,?,?) '
@@ -407,7 +407,7 @@ def validate(policy, report, *, target_date=None):
             publication_date=report['publication_date'],effective_date=report['effective_date'],
             source_sha256=report['source_sha256'],code_contract_sha256=report['code_contract_sha256'],
             source_receipt=report.get('source_receipt'),_algorithm=report['algorithm'],
-            _projection_contract=report.get('source_projection_contract_sha256') if report['algorithm']==initial.LEGACY_ALGORITHM or report.get('mapping_version')==initial.LEGACY_MAPPING_VERSION else None,
+            _projection_contract=initial.frozen_projection_contract(report),
             _mapping_version=report.get('mapping_version'))
         # Physical layout belongs to its own verified generation. Selection and
         # split must match by canonical semantic digests, independently of it.

@@ -130,6 +130,20 @@ REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS = {
 }
 
 
+# Original 10/16 report generations to the reviewed delay observation repair
+# and bounded shard reader. Numeric policies and historical results retain
+# their own contracts; independent exact-current fixtures remain mandatory.
+# Review: docs/audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md.
+REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS = {
+    'rising_missed': (
+        'e9f1620fd55d335d1db3ccad52f1211440b5d2df57ddf45988e2012ecf6ed874',
+        '5f8cd733ba9fb8b4733f3bafbc5a9431d45d6638713934daf74ba144844d74a5'),
+    'holding_vote': (
+        '057c1274c876450cc5f97a918899c96c85fed7dadb408ea6af445c67808c4fce',
+        'e06ee4b2d6d09410dd81d88cb661b6a18df2ca1dea2e7e81823a7d6e03d24b46'),
+}
+
+
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -177,6 +191,9 @@ def current_fixture_observation(observed, data):
     post_aux_guard = REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS.get(family)
     if post_aux_guard and actual_pair == post_aux_guard:
         pair = post_aux_guard
+    delay_research = REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS.get(family)
+    if delay_research and actual_pair == delay_research:
+        pair = delay_research
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']

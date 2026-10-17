@@ -4705,3 +4705,196 @@ def test_delay_cursor_partial_append_and_legacy_generation_do_not_lose_boundary(
     changed=monitor.pre_submit_delay_source_semantics(tmp_path,now+timedelta(seconds=1),second['cursor'])
     assert changed['sources']['raw']=='partial'
     assert sum(v['count'] for v in changed['cursor']['minutes'].values())==1
+
+
+def _delay_semantic_fixture(tmp_path, *, grid=False, anchor='signal_ready', observation_only=None,
+                            quote_horizons=(0,), selected=0, terminal=None, recheck=None,
+                            commit_updates=None, quote_updates=None, extra_terminals=()):
+    """Create all three physical source paths with the same exact rows."""
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor, execution_projection_identity
+    day = '2026-10-16'
+    started = monitor.stamp(day + 'T10:00:00+09:00')
+    base = dict(event_type='pipeline_event', pipeline='ENTRY_PIPELINE', stock_code='005930',
+                stock_name='test', record_id=9, emitted_date=day)
+    fields = dict(delay_intent_id='source-intent', anchor_kind=anchor,
+                  market_session_bucket='krx_regular', route='KRX_NXT_INTEGRATED',
+                  decision_committed_at_epoch=started.timestamp(), decision_source_sha256='a'*64,
+                  selected_delay_sec=selected)
+    if observation_only is not None:
+        fields['observation_only'] = observation_only
+    if grid:
+        fields.update(observation_grid_version='legacy_and_short_clock_v1',
+                      observation_horizons_sec=[0, 1, 3, 5, 30, 60, 120, 180],
+                      observation_tolerance_sec=.25)
+    fields.update(commit_updates or {})
+    rows = [dict(base, stage='pre_submit_delay_committed', emitted_at=started.isoformat(), fields=fields)]
+    for horizon in quote_horizons:
+        quote = dict(fields, target_delay_sec=horizon, quote_valid=True,
+                     quote_route='KRX_NXT_INTEGRATED', quote_observed_at_epoch=started.timestamp()+horizon,
+                     quote_offset_sec=horizon)
+        if horizon in (1, 3, 5):
+            quote.update(quote_contract_version=2, target_due_at_epoch=started.timestamp()+horizon)
+        quote.update((quote_updates or {}).get(horizon, {}))
+        rows.append(dict(base, stage='pre_submit_delay_quote_observed',
+                         emitted_at=(started+timedelta(seconds=horizon)).isoformat(), fields=quote))
+    receipts = [('pre_submit_delay_intent_terminal', terminal),
+                ('pre_submit_delay_recheck_observed', recheck)]
+    receipts.extend(('pre_submit_delay_intent_terminal', row) for row in extra_terminals)
+    for stage, receipt in receipts:
+        if receipt is not None:
+            offset, payload = receipt
+            rows.append(dict(base, stage=stage,
+                emitted_at=(started+timedelta(seconds=offset)).isoformat(), fields=dict(fields, **payload)))
+    raw = tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    raw.parent.mkdir(exist_ok=True)
+    raw.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    compact = tmp_path/'threshold_cycle'/f'date={day}'/'family=pre_submit_delay'
+    compact.mkdir(parents=True, exist_ok=True)
+    (compact/'part-execution-1000.jsonl').write_text(''.join(json.dumps(dict(row,
+        family='pre_submit_delay', execution_source_event_sha256=execution_projection_identity(row)))+'\n'
+        for row in rows))
+    writer = ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries', mode='shadow')
+    for row in rows:
+        writer.submit(row)
+    writer.flush()
+    return started, rows
+
+
+@pytest.mark.parametrize('anchor,observation_only', [('signal_ready', None), ('price_ready', True),
+                                                    ('price_ready', 'True')])
+def test_delay_incomplete_observation_reports_horizons_without_order_terminal_requirement(
+        tmp_path, anchor, observation_only):
+    started, _ = _delay_semantic_fixture(tmp_path, anchor=anchor, observation_only=observation_only)
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert 'intent_terminal_missing' not in result['issues']
+    assert result['issues']['observation_horizon_missing'] == 4
+    assert result['horizon_states'] == {'missing': 4, 'observed_valid': 1}
+    assert result['diagnostics']['observation_only_no_order_terminal_required'] == 1
+
+
+@pytest.mark.parametrize('grid,horizons,total', [(False, (0,30,60,120,180), 5),
+                                               (True, (0,1,3,5,30,60,120,180), 8)])
+def test_delay_expected_horizons_are_bound_to_each_source_grid(tmp_path, grid, horizons, total):
+    started, _ = _delay_semantic_fixture(tmp_path, grid=grid, quote_horizons=horizons)
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['sources'] == {'raw':'complete', 'summary':'complete', 'compact':'complete'}
+    assert result['issues'] == {}
+    assert result['horizon_states'] == {'observed_valid': total}
+    assert result['healthy']['observation_completed'] == 1
+
+
+def test_delay_short_grid_distinguishes_not_due_and_persistence_pending(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, grid=True)
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=2))
+    assert result['horizon_states'] == {'not_due': 6, 'observed_valid': 1, 'persistence_pending': 1}
+    assert result['issues'] == {}
+    assert not any('queue_pending' in key for key in result['diagnostics'])
+
+
+def test_delay_early_censor_does_not_hide_previously_overdue_horizon(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, grid=True, terminal=(61, {
+        'observation_only': True, 'terminal_reason':'process_shutdown_observation_censored'}))
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['horizon_states'] == {'censored': 3, 'missing': 4, 'observed_valid': 1}
+    assert result['issues']['observation_horizon_missing'] == 4
+    assert 'intent_terminal_missing' not in result['issues']
+
+
+def test_delay_observation_terminal_cannot_close_actual_armed_intent(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
+        quote_horizons=(0,30,60,120,180), terminal=(183, {
+            'observation_only':True, 'terminal_reason':'observation_expired_without_quote'}))
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues']['intent_terminal_missing'] == 1
+    assert result['issues']['selected_due_completion_missing'] == 1
+    assert result['diagnostics']['observation_terminal_does_not_close_order_intent'] == 1
+
+
+def test_delay_direct_expiry_terminal_closes_actual_intent_without_erasing_research_missing(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
+        terminal=(61, {'terminal_reason':'recheck_not_ready_before_expiry'}))
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert 'intent_terminal_missing' not in result['issues']
+    assert 'selected_due_completion_missing' not in result['issues']
+    assert result['issues']['observation_horizon_missing'] == 4
+    assert result['horizon_states'].get('censored', 0) == 0
+
+
+def test_delay_recheck_admission_is_pending_only_until_its_exact_deadline(tmp_path):
+    started = monitor.stamp('2026-10-16T10:00:00+09:00')
+    _, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
+        recheck=(31, {'recheck_status':'admitted', 'successor_request_id':'successor',
+                     'due_at_epoch':started.timestamp()+30,
+                     'recheck_submitted_at_epoch':started.timestamp()+31,
+                     'recheck_deadline_epoch':started.timestamp()+100}))
+    pending = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=70))
+    assert pending['recheck_states'] == {'admitted':1}
+    assert pending['diagnostics']['selected_due_recheck_pending'] == 1
+    assert 'selected_due_completion_missing' not in pending['issues']
+    expired = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=101))
+    assert expired['issues']['selected_due_completion_missing'] == 1
+
+
+def test_delay_wrong_parent_terminal_cannot_satisfy_intent(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
+        quote_horizons=(0,30,60,120,180), terminal=(61, {
+            'decision_source_sha256':'b'*64, 'terminal_reason':'recheck_not_ready_before_expiry'}))
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues']['intent_decision_binding_invalid'] == 1
+    assert result['issues']['intent_terminal_missing'] == 1
+
+
+def test_delay_unknown_grid_does_not_invent_new_horizon_expectations(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, grid=True, quote_horizons=(0,),
+        commit_updates={'observation_grid_version':'future_unrecognized_grid'})
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues']['observation_grid_contract_invalid'] == 1
+    assert 'observation_horizon_missing' not in result['issues']
+    assert 'zero_second_quote_missing' not in result['issues']
+    assert result['horizon_states'] == {}
+
+
+def test_delay_recorded_invalid_short_contract_is_not_called_absent(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, grid=True,
+        quote_horizons=(0,1,3,5,30,60,120,180), quote_updates={1:{'quote_contract_version':1}})
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues'] == {'short_quote_contract_invalid':1}
+    assert result['horizon_states'] == {'observed_invalid':1, 'observed_valid':7}
+
+
+def test_delay_late_short_quote_cannot_claim_valid_clock(tmp_path):
+    started = monitor.stamp('2026-10-16T10:00:00+09:00')
+    _delay_semantic_fixture(tmp_path, grid=True, quote_horizons=(0,1,3,5,30,60,120,180),
+        quote_updates={1:{'quote_observed_at_epoch':started.timestamp()+1.251, 'quote_offset_sec':1.251}})
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues'] == {'quote_clock_validity_conflict':1}
+    assert result['horizon_states'] == {'observed_late_or_early':1, 'observed_valid':7}
+
+
+@pytest.mark.parametrize('outcome', ['broker_accepted', 'returned_true', 'returned_false', 'returned_other', 'raised'])
+def test_delay_legacy_submit_outcome_is_an_actual_terminal_receipt(tmp_path, outcome):
+    started, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
+        quote_horizons=(0,30,60,120,180), terminal=(61, {'submit_call_outcome':outcome}))
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues'] == {}
+    assert result['healthy']['intent_terminal_missing'] == 1
+
+
+def test_delay_short_clock_accepts_real_producer_offset_precision(tmp_path):
+    started = monitor.stamp('2026-10-16T10:00:00+09:00')
+    _delay_semantic_fixture(tmp_path, grid=True, quote_horizons=(0,1,3,5,30,60,120,180),
+        quote_updates={3:{'quote_observed_at_epoch':started.timestamp()+3.23456,
+                          'actual_offset_sec':3.235}})
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues'] == {}
+    assert result['horizon_states'] == {'observed_valid':8}
+
+
+def test_delay_duplicate_actual_terminals_are_visible_without_losing_either_receipt(tmp_path):
+    started, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
+        quote_horizons=(0,30,60,120,180), terminal=(61, {'submit_call_outcome':'returned_false'}),
+        extra_terminals=[(62, {'terminal_reason':'recheck_not_ready_before_expiry'})])
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues'] == {'intent_terminal_duplicate':1}
+    assert sum(row['stage'] == 'pre_submit_delay_intent_terminal'
+               for row in result['cursor']['delay_events']) == 2

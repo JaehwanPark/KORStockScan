@@ -898,6 +898,47 @@ REVIEWED_POST_AUX_GUARD_SOURCES = {
 }
 
 
+# Exact original 10/19 policy to the reviewed delay research/source repair.
+# Existing numeric selection, zero-delay policy and machine/auxiliary decisions
+# remain unchanged. New quote/recheck receipts and bounded research reads do
+# not authorize a numeric successor or replace original source qualification.
+# Review: docs/audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md.
+REVIEWED_DELAY_RESEARCH_SOURCES = {
+    'src/engine/scalping/pre_submit_delay_initial_policy.py': (
+        '9bf1914b5445ad687d2480352cb01d6ca3ab742709175a3ba7181d1747499edc',
+        '9cc8929c2bd319694ac86d73e4128013825bf5fdf98289b1b26edadb36ce3a77'),
+    'src/engine/scalping/pre_submit_delay_tuning.py': (
+        'c2fb791a41e35c326ca874562c332fac0e7ea16cda0066fc82f34679cd93ef1a',
+        '288e04bcbef55ab04a59585b7ecee7a79838ccf9eae6437205f39fec8812d1e4'),
+    'src/engine/scalping/pre_submit_delay_observation.py': (
+        '5128d73f6d45777c5671fd26a774dae5d4839203035607b5bb53a9bcc860e964',
+        'aff325d1d6f49496bb4548295cae57431980f7d28efb43156cffc61b44bfafa9'),
+    'src/engine/sniper_state_handlers.py': (
+        '669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+        '9d21e30b7cb3070992bfd96c5e7083937686c6441fe6042b72599e879b7efe01'),
+    'src/engine/lifecycle/research_storage.py': (
+        'fa93d4ac728999184e3d238d9050cb51898b9f62780e80929786385421b719af',
+        'bc936e55d483e9e58995924b139cd13f423ce911e60a50c6b63859855f711f3e'),
+    'src/engine/automation/pre_submit_delay_partitioned_research.py': (
+        '1f92ea9be98b4a9d0cce66d4105959b21eb03b5d060c501d628b9cef2cc73d65',
+        '848ec2b494d8f040348627bf381278602a220606c288c2784cac95d785dcabb7'),
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e',
+        '60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23'),
+}
+# These dependencies existed but were absent from the original sealed delay
+# inventory. Bind their reviewed bytes without adding them to its old digest.
+REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
+    '7f2552aedde8fec6ef904a43105827907e50dfc8',
+    'bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256',
+)] = {
+    'src/engine/pipeline_event_summary.py':
+        'fc39f13b5b026c628345268953daec046cf1277f88b9f3b1bcef4833f34e99af',
+    'src/utils/threshold_cycle_registry.py':
+        '5e914fc73837324d312a97672b0aa7d8bd49c788bcd54ff7e0a6ab3c0d08ce8a',
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -943,7 +984,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_POST_AUX_GUARD_SOURCES.get(name),
+        if pair in (REVIEWED_DELAY_RESEARCH_SOURCES.get(name),
+                    REVIEWED_POST_AUX_GUARD_SOURCES.get(name),
                     REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES.get(name),
                     REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES.get(name),
                     REVIEWED_CURSOR_ASOF_SOURCES.get(name),

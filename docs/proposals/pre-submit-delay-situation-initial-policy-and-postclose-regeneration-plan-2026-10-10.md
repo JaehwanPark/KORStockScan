@@ -144,21 +144,21 @@ Kiwoom request/response/FID/REG/REMOVE/recovery 수정이 필요하면 구현 �
 2. **P0 유효 여부와 당시 입력만으로** 기준 모집단을 고정한다. Pd의 등락·최저가·나중의 체결 여부·검증 결과는 모집단 선정에 쓰지 않는다.
 3. 같은 anchor·세션·정책 호환 집합에서 `anchor_at, canonical opportunity_id` 순 정렬한 앞 70%/뒤 30%를 기본 학습/검증으로 한다. n≥2에서 양쪽 최소 1개, n=1은 계산만 가능하다. parent와 child는 같은 partition을 상속하며 유형마다 다시 쪼개지 않는다. 일수·실체결 수·10 terminal/3 holdout 거래수 gate를 초기 가격 정책에 추가하지 않는다.
 4. 학습 기회의 관측 구간이 검증 시작에 닿으면 purge한다. 관측 종료는 **가장 늦게 존재하는 quote가 아니라 후보 비교의 예정 horizon 끝**으로 정해 결손 때문에 overlap이 사라진 것으로 처리하지 않는다. 이 purge 규칙도 검증 가격을 보기 전에 고정한다.
-5. 후보별 기초 통계는 해당 P0/Pd pair로 계산한다. 후보 grid는 30/60/120/180초이며 학습 유효 pair가 0인 horizon만 `unsupported`로 제외한다. 나머지 후보는 공통으로 관측된 같은 학습 기회에서 비교한다. 공통 집합이 비면 `insufficient_comparable_pairs`로 선정만 유보하고 각 horizon의 유효 계산은 남긴다. 검증 결손이나 개선값을 보고 후보 목록·분할·비교 집합을 바꾸지 않는다. 관측 구간 purge는 원 grid의 최대 180초와 허용오차를 기준으로 먼저 고정해 후보 지원 여부와 순환하지 않게 한다.
+5. 현행 `qualified_anchor_candidate_paired_chronological_split_v3`는 후보별 P0/Pd pair로 비교한다. 실행 후보 grid는 30/60/120/180초이며 학습 유효 pair가 0인 horizon만 `unsupported`로 제외한다. 후보마다 관측 수가 달라도 해당 유효 계산을 유지하고, 후보 둘의 공통 기회 비교를 보조 진단으로 제시한다. 모든 후보의 교집합은 선정 필수 조건이 아니다. 검증 결손이나 개선값을 보고 후보 목록·분할을 바꾸지 않는다. 관측 구간 purge는 원 grid의 최대 180초와 허용오차를 기준으로 먼저 고정한다. 이전 v2 공통집합 알고리즘은 역사 영수증의 원 계약으로만 검증한다.
 6. 비교 집합 수·분모·제외·예정 horizon·purge·source/partition hash를 보고서에 봉인한다. 전체 raw, anchor 유효, train, validation, purge, retry 제외, horizon missing 수의 보존식을 검사한다.
 
 ### 5.2 선정 목적과 초기정책 조건
 
 기회별 `improvement_bp(d) = (ask_0 - ask_d) / ask_0 × 10000`을 계산하고 평균·중앙값·p10/p90·개선/악화/동일률·pair coverage를 산출한다. 이 값은 호가 가격 개선이며 체결/순익/실행 가능한 전량 fill로 명명하지 않는다. 실제 비용·손익은 해당 원천이 있는 별도 부록에 남긴다.
 
-학습 공통 집합에서 평균 개선이 가장 큰 지연 하나를 고정한다. 동률은 더 짧은 지연이다. 고정 지연의 별도 검증에서 방향과 tail·coverage를 확인하고 결과를 아래대로 결정한다. 초기 버전은 기존 가격 알고리즘을 확장하며 수십 개 경계값/모델을 탐색하지 않는다.
+후보별 유효 학습 pair의 평균 개선이 가장 큰 지연 하나를 고정한다. 동률은 더 짧은 지연이다. 고정 지연의 별도 검증에서 방향과 tail·coverage를 확인하고 결과를 아래대로 결정한다. 검증 실패 뒤 차순위를 다시 고르지 않는다. 초기 버전은 기존 가격 알고리즘을 확장하며 수십 개 경계값/모델을 탐색하지 않는다.
 
 | 결과 | v2 cell 값·근거 |
 | --- | --- |
 | 학습·검증의 같은 후보가 모두 평균 개선 >0, 각 split 유효 독립 pair 존재 | 해당 지연, `selection_basis=paired_quote_initial`, `evidence_grade=estimated_provisional` |
 | 고정 비교 후보가 학습·검증 모두 악화 또는 가격 차이 없음 | 0초, `selection_basis=paired_quote_immediate`와 비교한 지연을 기록 |
 | 학습 양수이나 관측된 검증 평균이 0 이하, 또는 학습 비양수이나 검증 양수 | 해당 cell은 기존 동작 0초, `selection_basis=incumbent_on_unconfirmed_pattern`; 차순위 재선정·parent 양수 덮어쓰기 금지 |
-| 공통 학습·독립 검증 부족, 검증 pair 결손, 세부 유형 미지원 | 해당 child는 `unsupported`; 지원된 같은 세션·같은 anchor의 상위 cell을 사용하고 fallback 경로를 기록 |
+| 유효 학습·독립 검증 부족, 검증 pair 결손, 세부 유형 미지원 | 해당 child는 `unsupported`; 지원된 같은 세션·같은 anchor의 상위 cell을 사용하고 fallback 경로를 기록 |
 | 상위 cell도 미지원 | `default_delay_sec=0`, `selection_basis=unsupported_existing_behavior`; 학습 성공으로 집계하지 않음 |
 
 초기정책 발행에는 실행 지원 anchor인 `price_ready`의 적격 기회에서 최소 한 개의 유효 P0/Pd 비교가 있어야 한다. 이는 가격 계산의 원천 조건이다. 양수 지연 선정에는 별도의 비중복 학습·검증 pair가 각각 필요하며, 단일 pair로 발행할 수 있는 것은 근거 한계를 표시한 0초 baseline이다. 부족한 cell까지 양수 지연으로 채우지 않는다. 모든 선정값이 0이면 `initial_baseline_immediate`, 양수 cell이 있으면 `initial_timing_policy_selected`다. 둘을 모두 `validated_edge`나 비용 후 경제성 성공으로 표시하지 않는다. 초기 cell의 작은 N과 coverage·tail을 그대로 공개한다. 실제 체결·청산·양의 실현 EV를 초기 도입의 추가 승인 gate로 요구하지 않는다.
@@ -364,3 +364,22 @@ PYTHONPATH=. .venv/bin/python -m src.engine.automation.postclose_summary_handoff
 ## 잔여 구현 실행 기록 — 2026-10-10
 
 [반복 리뷰·실제 원천·성능 근거](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)를 따른다. 전수 streaming/shard·전역 중복/split·부모 승계와 0초 초기값·정식 writer/consumer 연결을 구현했다. 코드 수용과 W5 발행/chain, 10/12 자연 PID 수용을 분리한다. 최종 v6 발행·native finalization DONE·10/12 `current_full_contract=pass`까지 수용했다. 실제 적용일 PID·경제 결과만 별도 자연 관측으로 남는다.
+
+## 후속 상황 연구·단기 관측 실행 — 2026-10-17
+
+[구현·독립 리뷰·실제 원천 재분석](../audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md)은 사용자 "다음액션을 진행하라"의 실행 기록이다. 기존 source 10/16·effective 10/19 정책의 원 bytes와 0초 결과를 보존하고, 봉인된 population·split·선정 이유를 별도 보고서로 설명한다. 새로운 초기정책이나 적용 영수증을 합성하지 않는다.
+
+- `pre_submit_delay_research_review`는 `src/engine/automation`의 독립 오프라인 보고서 소유자다. manifest·정책/보고서·모든 evidence tree와 exact compact를 제한된 예산으로 읽어 기준점/독립 기회·후보별 통계·공통 기회 비교·날짜/종목 기여·실제 fallback을 산출한다. 합산 bp는 기여 진단이며 EV가 아니다. 현재 원천에 없는 원 신호 기준가격·단기 호가·재점검 PASS·비용 성과는 미관측/null이다.
+- 신규 관측 grid는 `legacy_and_short_clock_v1`, `0/1/3/5/30/60/120/180`이다. 실행 정책 후보 `0/30/60/120/180`은 별도 계약을 유지한다. 1/3/5초의 관측 오차는 목표시각 이후 250ms 이내이며, legacy 시점의 3초 허용오차를 적용하지 않는다. 단기 비교는 P0도 250ms 이내에 실제 관측되어야 한다. 늦은 현재 snapshot을 지난 horizon의 정상 표본으로 채우지 않는다.
+- 등록·동시 기회·큐 상한을 유지하고 회차당 horizon 처리 8개로 제한한다. 동일 물리 snapshot은 공유한다. 원 신호 기준가격은 원 immutable native claim과 판정의 정책·scope·신호·종목/item·시각·가격이 일치할 때만 hash에 결속한다. 현재 호가를 원 신호 가격으로 사용하지 않는다.
+- 실제 대기는 원 intent→정확한 successor 요청/완료→제출 또는 종결을 보존한다. due 만료와 pause/veto 등 조기 반환의 기한 초과 경로도 영수증을 남기되, 미만료·전송 불확실 상태는 기존 owner를 유지한다. 관측 전용 종료는 주문 종결을 대신하지 않는다.
+- 의미감시는 commit별 grid·기회 ID·같은 watermark를 사용한다. `not_due`, 저장 유예, 유효/무효/시각 초과 관측, 명시 중단, 실제 누락을 구별한다. 늦은 종료 기록으로 이미 발생한 결손을 지우지 않으며 표기 route/venue 누락은 제외 조건이 아니다.
+- 과거 projection의 선정 재검증은 그 projection의 봉인된 qualification hash를 유지한다. 실제 원천 byte/ledger 검증과 새 cache의 현재 계약·candidate code handoff는 독립적으로 계속 검증한다.
+
+실행 예시는 다음과 같다. 기존 정책·pointer를 변경하는 명령이 아니다.
+
+```bash
+PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.automation.pre_submit_delay_research_review --data-root /home/ubuntu/KORStockScan/data --source-date 2026-10-16 --output-dir /home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_review/2026-10-16/attempts/20261017-reviewed
+```
+
+향후 실제 관측은 검증된 코드의 정식 인계와 자연 PASS가 필요하다. 10/19 PREOPEN/PID 소비는 기존 `DirectFamilyPreopenPolicyHandoff`의 소유이며, 단기 표본 부족은 현재 0초 초기정책의 추가 승인 gate가 아니다.

@@ -17,10 +17,15 @@ from types import ModuleType
 
 PREVIOUS_PARSER = '1ddc6f33db48db5fec69ec36297119741caebf42444f95e5a6d2e67f4795eeb2'
 BASE_PARSER = 'b1b1e59a99c09c79304d9db7cfd731fe47deb1afb9926303c7ba7d1d9ea03116'
-CURRENT_PARSER = '8500f48239f82c9959ece854b6358df1502ff43d7ce7ec5336dc06853959b2e4'
+# The successor only adds the new producer's recheck observation stage.
+# Legacy parsing and callback definitions are byte/AST identical; the stopped
+# next-session transition has no old producer emitting that new stage.
+PRE_RECHECK_PARSER = '8500f48239f82c9959ece854b6358df1502ff43d7ce7ec5336dc06853959b2e4'
+CURRENT_PARSER = 'fc39f13b5b026c628345268953daec046cf1277f88b9f3b1bcef4833f34e99af'
 PREVIOUS_BUY_OWNER = '83d8b3d9e41f496e7f868789d635472fd5ebd994489f3db31bbb1f670565f468'
 INTERMEDIATE_BUY_OWNER = 'd487b4041fff24f690f78bef9bbfea1bdbf6dedd59c70095585b23e9fe1005e7'
-CURRENT_BUY_OWNER = '332ffe2791e389741af907e3fa304352a0abea01e222053a20bff2ba2de7400b'
+PRE_SCOPED_BUY_OWNER = '332ffe2791e389741af907e3fa304352a0abea01e222053a20bff2ba2de7400b'
+CURRENT_BUY_OWNER = '6c41ee5823caa738bdc40c6da07e8b5fe4714976a9efc7668e90dac33a325993'
 LIMIT = 32 * 1024 * 1024
 SUMMARY_LIMIT = 128 * 1024 * 1024
 DEFINITIONS = {
@@ -100,6 +105,7 @@ def _callback_predecessors(callbacks, parser_path):
     from src.engine import pipeline_event_summary as parser
     _parser_dependencies(parser)
     original, parser_only, funnel_old, funnel_intermediate, base_parser = [], [], [], [], []
+    pre_recheck_parser, funnel_pre_scoped = [], []
     funnel = tuple(getattr(f, '__name__', None) for f in callbacks) == (
         '_blocker_label_from_stage_fields', '_is_ignored_event')
     for callback in callbacks:
@@ -125,8 +131,10 @@ def _callback_predecessors(callbacks, parser_path):
         original.extend((source, owner_sha))
         parser_only.extend((source, prior_owner))
         base_parser.extend((source, BASE_PARSER if owner == parser_path else owner_sha))
+        pre_recheck_parser.extend((source, PRE_RECHECK_PARSER if owner == parser_path else owner_sha))
         funnel_old.extend((source, PREVIOUS_BUY_OWNER if funnel else prior_owner))
         funnel_intermediate.extend((source, INTERMEDIATE_BUY_OWNER if funnel else prior_owner))
+        funnel_pre_scoped.extend((source, PRE_SCOPED_BUY_OWNER if funnel else prior_owner))
     digest = lambda parts: hashlib.sha256('\n'.join(parts).encode()).hexdigest()
     if funnel:
         # These are reviewed parser/owner pairs, not independent allowlists.
@@ -134,15 +142,18 @@ def _callback_predecessors(callbacks, parser_path):
         predecessors = {
             (PREVIOUS_PARSER, digest(funnel_old)),
             (PREVIOUS_PARSER, digest(funnel_intermediate)),
-            (CURRENT_PARSER, digest(funnel_intermediate)),
+            (PRE_RECHECK_PARSER, digest(funnel_intermediate)),
+            (PRE_RECHECK_PARSER, digest(funnel_pre_scoped)),
+            (PRE_RECHECK_PARSER, digest(pre_recheck_parser)),
             (BASE_PARSER, digest(funnel_intermediate)),
-            (BASE_PARSER, digest(base_parser)),
+            (BASE_PARSER, digest(funnel_pre_scoped)),
         }
     else:
         # Preserve the existing parser-only migration for unchanged external
         # callbacks and the pinned native default_reason_label callback.
         predecessors = {(PREVIOUS_PARSER, digest(parser_only)),
-                        (BASE_PARSER, digest(base_parser))}
+                        (BASE_PARSER, digest(base_parser)),
+                        (PRE_RECHECK_PARSER, digest(pre_recheck_parser))}
     return digest(original), predecessors
 
 
@@ -153,7 +164,8 @@ def _verify_predecessor(*, manifest, manifest_path, raw_path, summary_path,
     parser_path = Path(parser_path).resolve()
     if (parser_contract != CURRENT_PARSER
             or hashlib.sha256(_read(parser_path, LIMIT)).hexdigest() != CURRENT_PARSER
-            or manifest.get('parser_contract') not in {PREVIOUS_PARSER, BASE_PARSER, CURRENT_PARSER}):
+            or manifest.get('parser_contract') not in {
+                PREVIOUS_PARSER, BASE_PARSER, PRE_RECHECK_PARSER, CURRENT_PARSER}):
         _fail('parser_predecessor_unverified')
     actual_callback, predecessors = _callback_predecessors(callbacks, parser_path)
     predecessor = (manifest.get('parser_contract'), manifest.get('callback_contract'))
