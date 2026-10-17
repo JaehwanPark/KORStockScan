@@ -885,8 +885,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         'src/engine/scalping/holding_path_vote_policy.py': {'validate_successor', 'verify_source_handoff'},
     }
     def revision_bytes(revision, name):
+        # Contract inventories retain their original keys, including ../utils.
+        # Git object paths require a canonical repository-relative spelling.
+        normalized = os.path.normpath(name)
+        if os.path.isabs(normalized) or normalized == '..' or normalized.startswith('../'):
+            raise ValueError('entry_consumer_code_path_outside_release')
         try:
-            return subprocess.check_output(['git', '-C', str(root), 'show', revision + ':' + name],
+            return subprocess.check_output(['git', '-C', str(root), 'show', revision + ':' + normalized],
                                            stderr=subprocess.DEVNULL, timeout=10)
         except (OSError, subprocess.SubprocessError) as exc:
             raise ValueError('entry_consumer_code_source_missing') from exc

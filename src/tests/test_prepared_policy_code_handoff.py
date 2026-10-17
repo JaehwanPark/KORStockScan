@@ -113,3 +113,23 @@ def test_original_closure_can_advance_without_rewriting_historical_authority(pre
     # The current policy remains independently pinned despite historical retention.
     (data/'policy.json').write_text('{"different":true}')
     with pytest.raises(ValueError):C.verify(data,DAY,**args,actual=actual)
+
+
+def test_native_code_inventory_accepts_utils_paths_and_rejects_escape(tmp_path):
+    import subprocess
+    import hashlib
+    root=tmp_path/'repo';root.mkdir()
+    own=root/'src/engine/automation/intraday_release_handoff.py'
+    own.parent.mkdir(parents=True);own.write_bytes(Path(H.__file__).read_bytes())
+    utility=root/'src/utils/market_day.py';utility.parent.mkdir();utility.write_text('value = 1\n')
+    subprocess.run(['git','init','-q',str(root)],check=True)
+    subprocess.run(['git','-C',str(root),'add','.'],check=True)
+    subprocess.run(['git','-C',str(root),'-c','user.name=Test','-c','user.email=test@example.invalid',
+                    'commit','-qm','fixture'],check=True)
+    commit=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+    expected=C._digest({'market_day':hashlib.sha256(utility.read_bytes()).hexdigest()})
+    assert H._verify_entry_code_delta(root,commit,commit,
+        {'market_day':'src/engine/../utils/market_day.py'},expected)==[]
+    (tmp_path/'outside.py').write_text('private fixture\n')
+    with pytest.raises(ValueError,match='outside_release'):
+        H._verify_entry_code_delta(root,commit,commit,{'outside':'../outside.py'},expected)
