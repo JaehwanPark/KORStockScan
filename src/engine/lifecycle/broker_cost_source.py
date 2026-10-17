@@ -7,6 +7,7 @@ Reference: Kiwoom-Securities/Kiwoom-REST-API 953e5dbff123f437ab4d11a78a95191a685
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import fcntl
@@ -15,6 +16,8 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
+import uuid
 
 from .broker_cost_reconciliation import KST, digest
 
@@ -22,6 +25,11 @@ SCHEMA = "holding_official_broker_cost_source_v1"
 MAX_BYTES = 4 * 1024 * 1024
 MAX_PAGES = 4
 REFERENCE = "953e5dbff123f437ab4d11a78a95191a685eb51f"
+PENDING_SCHEMA = "holding_broker_cost_pending_v1"
+MAX_PENDING_DATES = 512
+MAX_PENDING_RECORDS = 10000
+DEFAULT_DRAIN_DATES = 2
+DRAIN_BUDGET_SEC = 150
 LISTS = {"ka10170": "tdy_trde_diary", "ka10076": "cntr",
          "kt00015_buy": "trst_ovrl_trde_prps_array",
          "kt00015_sell": "trst_ovrl_trde_prps_array"}
@@ -131,6 +139,311 @@ def load_source(data_root, target_date):
     if len(raw) > MAX_BYTES:
         raise ValueError("broker_cost_source_size_limit")
     return validate(json.loads(raw), target_date)
+
+
+def _archive_source(data_root, target_date, previous):
+    """Retain the original alias bytes before a later observation replaces it."""
+    if previous is None:
+        return
+    path = source_path(data_root, target_date)
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES or validate(json.loads(raw), target_date) != previous:
+        raise ValueError("broker_cost_source_changed_before_archive")
+    directory = path.parent / "generations" / target_date
+    if directory.is_symlink() or directory.parent.is_symlink():
+        raise ValueError("broker_cost_history_path_invalid")
+    directory.mkdir(parents=True, exist_ok=True)
+    archived = directory / (previous["source_sha256"] + ".json")
+    if archived.is_symlink():
+        raise ValueError("broker_cost_history_path_invalid")
+    fd, temporary = tempfile.mkstemp(prefix=".generation-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, archived)
+        except FileExistsError:
+            # An incomplete or foreign generation must never replace evidence.
+            if archived.is_symlink():
+                raise ValueError("broker_cost_history_path_invalid")
+            with archived.open("rb") as handle:
+                if handle.read(MAX_BYTES + 1) != raw:
+                    raise ValueError("broker_cost_history_collision")
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _pending_path(data_root):
+    return Path(data_root) / "runtime/holding_broker_cost_pending/state.json"
+
+
+@contextmanager
+def _pending_lock(data_root, name="state", *, blocking=True):
+    path = _pending_path(data_root).with_name(name + ".lock")
+    if any(p.is_symlink() for p in (path, path.parent, path.parent.parent)):
+        raise ValueError("broker_cost_pending_path_invalid")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _pending_load(data_root):
+    path = _pending_path(data_root)
+    if path.is_symlink() or path.parent.is_symlink():
+        raise ValueError("broker_cost_pending_path_invalid")
+    if not path.exists():
+        return {"schema": PENDING_SCHEMA, "dates": {}}
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES:
+        raise ValueError("broker_cost_pending_size_limit")
+    value = json.loads(raw)
+    if (not isinstance(value, dict) or value.get("schema") != PENDING_SCHEMA
+            or value.get("queue_sha256") != digest({k: v for k, v in value.items() if k != "queue_sha256"})
+            or not isinstance(value.get("dates"), dict) or len(value["dates"]) > MAX_PENDING_DATES):
+        raise ValueError("broker_cost_pending_contract_invalid")
+    count = 0
+    for source_date, entry in value["dates"].items():
+        source_path(data_root, source_date)
+        if not isinstance(entry, dict) or not isinstance(entry.get("records"), dict):
+            raise ValueError("broker_cost_pending_record_invalid")
+        for key in ("last_attempt_day",):
+            if key in entry:
+                source_path(data_root, entry[key])
+        if "last_attempt_at" in entry:
+            _clock(datetime.fromisoformat(entry["last_attempt_at"]))
+        for key, record in entry["records"].items():
+            if not isinstance(record, dict):
+                raise ValueError("broker_cost_pending_record_invalid")
+            completion = record.get("completion_date", "")
+            source_path(data_root, completion)
+            record_id = record.get("record_id", "")
+            if (not isinstance(record_id, str) or not record_id.isdigit() or int(record_id) <= 0
+                    or key != completion + ":" + record_id or source_date > completion
+                    or record.get("status") not in {"pending", "resolved", "expired"}
+                    or not isinstance(record.get("reasons"), list)
+                    or isinstance(record.get("revision"), bool)
+                    or not isinstance(record.get("revision"), int) or record["revision"] < 1):
+                raise ValueError("broker_cost_pending_record_invalid")
+            _reasons(record["reasons"])
+        count += len(entry["records"])
+    if count > MAX_PENDING_RECORDS:
+        raise ValueError("broker_cost_pending_population_limit")
+    return value
+
+
+def _pending_save(data_root, value):
+    if (len(value["dates"]) > MAX_PENDING_DATES
+            or sum(len(v["records"]) for v in value["dates"].values()) > MAX_PENDING_RECORDS):
+        raise ValueError("broker_cost_pending_population_limit")
+    value["queue_sha256"] = digest({k: v for k, v in value.items() if k != "queue_sha256"})
+    atomic(_pending_path(data_root), value)
+    return value
+
+
+def _clock(now):
+    value = now or datetime.now(KST)
+    if value.tzinfo is None:
+        raise ValueError("broker_cost_clock_timezone_missing")
+    return value.astimezone(KST)
+
+
+def _reasons(values):
+    if isinstance(values, dict):
+        values = [reason for value in values.values()
+                  for reason in (value if isinstance(value, (list, tuple, set)) else [value])]
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple, set)) or not values or len(values) > 32 or any(
+            not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", v) for v in values):
+        raise ValueError("broker_cost_pending_reasons_invalid")
+    return sorted(set(values))
+
+
+def enqueue_pending(data_root, completion_date, required_dates, record_ids, reasons, *, now=None):
+    """Persist unresolved consumer records; this function never uses transport.
+
+    An explicit new unresolved observation reopens a resolved record revision.
+    Expired rows remain visible and are not automatically retried.
+    """
+    source_path(data_root, completion_date)
+    dates = sorted(set(required_dates))
+    ids = sorted({str(v) for v in record_ids})
+    reasons = _reasons(reasons)
+    if (not dates or not ids or len(dates) > MAX_PENDING_DATES
+            or len(ids) > MAX_PENDING_RECORDS
+            or any(not v.isdigit() or int(v) <= 0 for v in ids)):
+        raise ValueError("broker_cost_pending_request_invalid")
+    for day in dates:
+        source_path(data_root, day)
+        if day > completion_date:
+            raise ValueError("broker_cost_pending_source_after_completion")
+    at = _clock(now).isoformat()
+    with _pending_lock(data_root):
+        queue = _pending_load(data_root)
+        changed = False
+        for day in dates:
+            entry = queue["dates"].setdefault(day, {"records": {}})
+            for record_id in ids:
+                key = completion_date + ":" + record_id
+                old = entry["records"].get(key)
+                if old is None:
+                    entry["records"][key] = {"completion_date": completion_date,
+                        "record_id": record_id, "reasons": reasons, "status": "pending",
+                        "revision": 1, "enqueued_at": at}
+                    changed = True
+                else:
+                    merged = sorted(set(old["reasons"]) | set(reasons))
+                    _reasons(merged)
+                    if old["status"] == "resolved":
+                        old.update(status="pending", revision=old["revision"] + 1, enqueued_at=at)
+                        changed = True
+                    if merged != old["reasons"]:
+                        old["reasons"] = merged
+                        changed = True
+        return _pending_save(data_root, queue) if changed else queue
+
+
+def resolve_pending(data_root, completion_date, record_ids,
+                    reason="consumer_cost_reconciled", *, now=None):
+    """Acknowledge only records whose consumer has verified a persisted receipt."""
+    source_path(data_root, completion_date)
+    ids = {str(v) for v in record_ids}
+    if any(not v.isdigit() or int(v) <= 0 for v in ids):
+        raise ValueError("broker_cost_pending_record_invalid")
+    _reasons(reason)
+    at = _clock(now).isoformat()
+    with _pending_lock(data_root):
+        queue = _pending_load(data_root)
+        changed = False
+        for entry in queue["dates"].values():
+            for record in entry["records"].values():
+                if (record["completion_date"] == completion_date and record["record_id"] in ids
+                        and record["status"] != "resolved"):
+                    record.update(status="resolved", resolved_at=at, resolution_reason=reason)
+                    changed = True
+        return _pending_save(data_root, queue) if changed else queue
+
+
+def _budget(deadline):
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("broker_cost_collection_budget_exhausted")
+
+
+def drain_pending(data_root, target_date, *, transport=None, now=None,
+                  max_dates=DEFAULT_DRAIN_DATES, budget_seconds=DRAIN_BUDGET_SEC):
+    """Collect TARGET then at most one prior date, inside the existing job budget.
+
+    Date claims are durable before transport, including interrupted attempts.
+    A successful source observation never acknowledges individual record costs.
+    """
+    source_path(data_root, target_date)
+    clock = _clock(now)
+    today = clock.date()
+    if target_date > today.isoformat():
+        raise ValueError("broker_cost_date_outside_supported_window")
+    if (isinstance(max_dates, bool) or not isinstance(max_dates, int)
+            or not 1 <= max_dates <= DEFAULT_DRAIN_DATES
+            or isinstance(budget_seconds, bool) or not 0 < budget_seconds <= DRAIN_BUDGET_SEC):
+        raise ValueError("broker_cost_pending_budget_invalid")
+    result = {"schema": "holding_broker_cost_pending_drain_v1", "source_date": target_date,
+              "started_at": clock.isoformat(), "observed_at": clock.isoformat(),
+              "status": "observed", "attempts": [],
+              "expired_dates": [], "authority": "source_only_no_order_or_position_mutation"}
+    deadline = time.monotonic() + budget_seconds
+    with _pending_lock(data_root, "drain", blocking=False) as acquired:
+        if not acquired:
+            return {**result, "status": "drain_in_progress"}
+        with _pending_lock(data_root):
+            queue = _pending_load(data_root)
+            for day, entry in queue["dates"].items():
+                if day < "2026-09-29" or (today - date.fromisoformat(day)).days > 60:
+                    changed = False
+                    for record in entry["records"].values():
+                        if record["status"] == "pending":
+                            record.update(status="expired", expired_at=clock.isoformat(),
+                                expiry_reason="broker_cost_date_outside_supported_window",
+                                next_action="retain_unknown_require_external_verified_cost_source")
+                            changed = True
+                    if changed:
+                        result["expired_dates"].append(day)
+            queue["dates"].setdefault(target_date, {"records": {}})
+            due = sorted((day for day, entry in queue["dates"].items()
+                          if day < target_date and any(r["status"] == "pending" for r in entry["records"].values())
+                          and entry.get("last_attempt_day") != today.isoformat()),
+                         key=lambda day: (queue["dates"][day].get("last_attempt_day", ""), day))
+            _pending_save(data_root, queue)
+        for day in [target_date, *due[:max_dates - 1]]:
+            if _clock(now).date() != today:
+                result["status"] = "calendar_boundary_deferred"
+                break
+            if time.monotonic() >= deadline:
+                result["status"] = "budget_deferred"
+                break
+            with _pending_lock(data_root):
+                queue = _pending_load(data_root)
+                entry = queue["dates"][day]
+                # A final same-day source may supersede an early observation;
+                # historical source dates still have exactly one daily claim.
+                early = entry.get("last_attempt_at", "")
+                final_same_day = (day == today.isoformat() and early
+                    and datetime.fromisoformat(early).hour < 20 <= clock.hour)
+                if entry.get("last_attempt_day") == today.isoformat() and not final_same_day:
+                    result["attempts"].append({"source_date": day, "status": "already_attempted_today",
+                        "last_collection_status": entry.get("last_collection_status"),
+                        "source_sha256": entry.get("last_source_sha256"),
+                        "last_attempt_id": entry.get("last_attempt_id"),
+                        "last_attempt_receipt_sha256": entry.get("last_attempt_receipt_sha256")})
+                    if entry.get("last_collection_status") != "observed":
+                        result["status"] = "source_gap"
+                    continue
+                if day != target_date and not any(r["status"] == "pending" for r in entry["records"].values()):
+                    continue
+                attempt_id = clock.strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex
+                entry.update(last_attempt_day=today.isoformat(), last_attempt_at=clock.isoformat(),
+                             last_attempt_id=attempt_id, last_collection_status="attempt_started")
+                _pending_save(data_root, queue)
+            attempt = {"source_date": day, "attempt_id": attempt_id, "started_at": clock.isoformat(),
+                       "previous_source_sha256": None, "source_sha256": None}
+            try:
+                previous = load_source(data_root, day)
+                attempt["previous_source_sha256"] = previous["source_sha256"] if previous else None
+                source = collect(data_root, day, transport=transport, now=now, deadline=deadline)
+                attempt.update(status="observed", source_sha256=source["source_sha256"],
+                    source_changed=attempt["previous_source_sha256"] != source["source_sha256"],
+                    source_observed_at=source["observed_at"],
+                    rows={name: len(rows(source, name)) for name in source["observations"]})
+            except (ValueError, OSError, TypeError, KeyError, TimeoutError) as exc:
+                attempt.update(status="source_gap", reason=str(exc), actual_cost=None)
+                result["status"] = "source_gap"
+            attempt["observed_at"] = _clock(now).isoformat()
+            attempt["receipt_sha256"] = digest(attempt)
+            atomic(_pending_path(data_root).parent / "attempts" / day / (attempt_id + ".json"), attempt)
+            with _pending_lock(data_root):
+                queue = _pending_load(data_root)
+                queue["dates"][day].update(last_collection_status=attempt["status"],
+                    last_source_sha256=attempt["source_sha256"], last_attempt_receipt_sha256=attempt["receipt_sha256"])
+                _pending_save(data_root, queue)
+            result["attempts"].append(attempt)
+        with _pending_lock(data_root):
+            queue = _pending_load(data_root)
+            result["queue_sha256"] = queue.get("queue_sha256")
+            result["pending_dates"] = sorted(day for day, entry in queue["dates"].items()
+                if any(r["status"] == "pending" for r in entry["records"].values()))
+        result["observed_at"] = _clock(now).isoformat()
+        result["receipt_sha256"] = digest(result)
+        return result
 
 
 def rows(source, name):
@@ -281,7 +594,7 @@ def _check_pages(pages, meta, key):
         raise ValueError("broker_cost_response_size_limit")
 
 
-def collect(data_root, target_date, *, transport=None, now=None, refresh=False):
+def collect(data_root, target_date, *, transport=None, now=None, refresh=False, deadline=None):
     """One account/day request set; unchanged retries use the verified receipt."""
     fixed_clock = now
     now = now or datetime.now(KST)
@@ -291,6 +604,7 @@ def collect(data_root, target_date, *, transport=None, now=None, refresh=False):
     today = now.astimezone(KST).date()
     if not date(2026, 9, 29) <= day <= today or (today - day).days > 60:
         raise ValueError("broker_cost_date_outside_supported_window")
+    _budget(deadline)
     path = source_path(data_root, target_date)
     if path.parent.is_symlink() or path.with_suffix(".lock").is_symlink():
         raise ValueError("broker_cost_source_path_invalid")
@@ -317,11 +631,12 @@ def collect(data_root, target_date, *, transport=None, now=None, refresh=False):
         if previous and (previous["local_account_key_sha256"] != alias_sha
                 or previous.get("provider_config_sha256", provider_sha) != provider_sha):
             raise ValueError("broker_cost_account_or_provider_changed")
-        if (previous and not refresh and previous["observed_at"][:10] == today.isoformat()
+        if (previous and not refresh and datetime.fromisoformat(previous["observed_at"]).astimezone(KST).date() == today
                 and previous.get("provider_config_sha256") == provider_sha
                 and (day < today or datetime.fromisoformat(previous["observed_at"]).astimezone(KST).hour >= 20)):
             return previous
         if transport is None:
+            _budget(deadline)
             token = K.get_kiwoom_token(config=config)
             if not token:
                 raise ValueError("broker_cost_token_unavailable")
@@ -332,7 +647,9 @@ def collect(data_root, target_date, *, transport=None, now=None, refresh=False):
                     max_retries=2, return_meta=True, request_owner="holding_broker_cost_postclose",
                     request_class=K.REQUEST_CLASS_SOURCE_ONLY, read_rate_max_wait_sec=3,
                     request_timeout=(5, 15))
+        _budget(deadline)
         account, meta = transport("ka00001", {})
+        _budget(deadline)
         _check_pages(account, meta, "ka00001")
         if len(account) != 1 or not re.fullmatch(r"\d{10}", str(account[0].get("acctNo", ""))):
             raise ValueError("broker_cost_account_identity_invalid")
@@ -355,7 +672,9 @@ def collect(data_root, target_date, *, transport=None, now=None, refresh=False):
         if previous and "ka10076" in previous["observations"] and day != today:
             observations["ka10076"] = previous["observations"]["ka10076"]
         for key, api, payload in requests:
+            _budget(deadline)
             pages, meta = transport(api, payload)
+            _budget(deadline)
             _check_pages(pages, meta, key)
             observed_at = fixed_clock or datetime.now(KST)
             observations[key] = {"api_id": api, "request": payload, "pages": pages,
@@ -370,6 +689,7 @@ def collect(data_root, target_date, *, transport=None, now=None, refresh=False):
                  "observations": observations, "authority": "source_only_no_order_or_position_mutation"}
         value["source_sha256"] = digest(value)
         validate(value, target_date)
+        _archive_source(data_root, target_date, previous)
         atomic(path, value)
         return value
 
@@ -378,14 +698,21 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--drain-pending", action="store_true")
     args = parser.parse_args(argv)
+    if args.drain_pending and args.refresh:
+        parser.error("--refresh cannot bypass the pending daily retry budget")
     from src.utils.constants import DATA_DIR
     try:
-        source = collect(DATA_DIR, args.date, refresh=args.refresh)
-        result = {"status": "observed", "source_date": args.date,
+        if args.drain_pending:
+            result = drain_pending(DATA_DIR, args.date)
+            code = 0 if result["status"] == "observed" else 2
+        else:
+            source = collect(DATA_DIR, args.date, refresh=args.refresh)
+            result = {"status": "observed", "source_date": args.date,
                           "source_sha256": source["source_sha256"],
                           "rows": {name: len(rows(source, name)) for name in source["observations"]}}
-        code = 0
+            code = 0
     except (ValueError, OSError, TypeError, KeyError) as exc:
         result = {"status": "source_gap", "source_date": args.date,
                   "reason": str(exc), "actual_cost": None}

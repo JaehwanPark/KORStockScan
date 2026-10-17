@@ -263,10 +263,63 @@ Q0에서 현재 적용 부모에 대한 기존 refresh 수치도 봉인한다. �
 | 단계 | 작업·산출물 | 종료 조건 |
 | --- | --- | --- |
 | 1 입력 보존 | 최신 release/정책/원천 SHA, 날짜별 fact·실행 모수와 제외 ID; bounded reader와 emitted 시각 정규화·공통 census | 생산 입력 = 정상 소비 + 검증된 제외 + 명시 미관측. 미설명 결손은 source gap이며 0행 ready 금지. 과거16/112는 봉인 fixture에서만 고정 기대값으로 사용한다. |
-| 2 비용·후행 종료 | record별 비용·custody·완료 identity 사유와 attempt별 수집 시작/종료/중단 disposition | 검증 복구·회복 불가·추가 근거 대기를 구별한다. 주문별 비용 집계 의미가 공식 문서에서 미정이면 임의 배분하지 않는다. 역사 terminal을 재작성하지 않고 신규 lifecycle의 중단/재시작/queue 계약을 검증한다. |
+| 2 비용·후행 종료 | record별 비용·custody·완료 identity 사유와 attempt별 수집 시작/종료/중단 disposition | 검증 복구·회복 불가·추가 근거 대기를 구별한다. 공식 문서에서 의미가 미정인 주문별 비용 집계를 exact 비용으로 간주하지 않는다. §8의 사용자 승인 총비용 배분은 연구 전용으로 구분해 사용한다. 역사 terminal을 재작성하지 않고 신규 lifecycle의 중단/재시작/queue 계약을 검증한다. |
 | 3 선정기 | `initial_quantity_all_trade_ev_selection_v3`; 원거래 기준금액·동일 비교 비용·부분체결/미체결 보존 | 학습의 전체 거래 평균 EV 개선 → 원화 순이익 개선 순으로 후보 하나를 고정한다. 독립 holdout의 EV·순이익 비악화를 검증한다. 익절 가중 성과 개선은 필수조건이 아니다. 기존 표본/coverage/날짜/형상·시간 위험 요건은 변경하지 않는다. |
-| 4 결합 재생 | 여섯 유형의 부모/10·15·20% cap × 기존 형상 × T≤1200초 결과와 원모수·결손표 | 실행 가능 순차 leg/probe/취소 확인 시간에 맞춘 같은 거래 비교. 실제 비용 적격0이면 경제성은 미평가이며 현 정책을 유지한다. |
+| 4 결합 재생 | 여섯 유형의 부모/10·15·20% cap × 기존 형상 × T≤1200초 결과와 원모수·결손표 | 실행 가능 순차 leg/probe/취소 확인 시간에 맞춘 같은 거래 비교. canonical exact 비용 또는 §8의 승인된 연구 배분 비용이 검증된 적격 거래가 모두 0건이면 경제성은 미평가이며 현 정책을 유지한다. |
 | 5 검증·성능 | 실제 자료 점검 + 적격 전수 fixture의 cold/warm/비용 증분·원천 변경 실행, wall/CPU/RSS/I/O | 결과 동등성과 기존 예산 준수를 검증한다. 선정 의미 변경과 실행 결과의 성능 비교를 분리한다. 0건 처리 결함본의 빠른 시간을 정상 전수 기준으로 쓰지 않는다. |
 | 6 발행·인계 | 새 평가 버전의 불변 stage 또는 명시 부모 유지, 구 stage reader·선정 정책·PREOPEN 준비 검증 | 새 코드/정책 준비·선택·PID 소비·자연 주문·경제성을 각각 보고한다. 최초 정책에 배포 전 자연소비나 갱신 경제 요건을 소급 적용하지 않는다. |
 
 실행 owner와 결과는 현재 일일 체크리스트의 `InitialQuantityResearchRepair1017` 및 실행일 audit가 소유한다. 정책·원천 세대가 달라지면 앞선 결과를 그대로 승계하지 않는다.
+
+
+## 8 2026-10-17 비용 생산자·소비자 보완 계약
+
+사용자는 **키움 확정 총비용을 매수·매도 거래대금에 따라 배분하여 수량 연구에 사용하고, 거래별 API 확정 비용과 구분**하도록 확정했다. 같은 종목의 복수 거래를 단순 제외하거나 정산 자료가 언젠가 생기기를 기다리는 상태를 구현 완료로 보지 않는다.
+
+### 8.1 비용의 의미와 데이터 경계
+
+- `broker_confirmed_total_allocated`는 키움의 날짜·종목별 확정 관측 총비용을 해당 날짜의 BUY+SELL 거래대금으로 배분한 연구 비용이다. `actual_execution_cost=false`, `economics_scope=initial_quantity_research_only`를 반드시 전달한다.
+- 정수 원화 배분은 거래대금 비례 계산 후 최대 나머지 방식으로 합계를 보존한다. Main으로 확인되지 않은 거래금액의 몫은 별도로 남겨 Main에 전가하지 않는다. 식별되지 않은 거래를 임의로 Main custody로 만들지 않는다.
+- 익일 청산은 실제 매수·매도 체결 날짜별 원천을 각각 사용한다. 미청산 포지션의 확인된 체결도 비용 몫을 남기며, 청산·취소 terminal을 만들지 않는다.
+- 연구 배분 비용으로 canonical actual 수수료·실현손익·profit_rate·strict 완료 상태를 변경하지 않는다. 수량 후보의 익절 가중치·전체 거래 비용 후 EV·순이익에는 승인된 연구 비용을 일관되게 사용하고 비용 기준을 표시한다.
+- 실제 계좌·Main owner·record·체결 수량/가격/일자·완료 terminal이 검증되어야 한다. 모의/CF/수동/퇴역 owner의 비용은 Main 실제 비용으로 승격하지 않는다.
+
+### 8.2 구현 및 마지막 소비자
+
+| 단계 | 소유 코드/산출물 | 검증·종료 조건 |
+| --- | --- | --- |
+| 공식 원천 | `lifecycle/broker_cost_source.py` | 기존 ka00001·ka10170·ka10076·kt00015의 실전 계좌/연속조회/날짜 계약 유지. 주문별 수수료 합산을 최종 비용으로 가정하지 않는다. |
+| 연구 비용 생산자 | `lifecycle/broker_cost_allocation.py` | 전체 거래/미청산의 확인 체결을 선구성하고 날짜·종목 총비용을 배분한다. 배분+별도 잔여 몫=공식 총비용, 중복 체결/초과 거래금액/미확인 custody/보유수량을 초과한 선행 매도/최종 완료 뒤 체결은 거부한다. |
+| 보고서/영수증 | `sniper_trade_review_report.py`, `runtime/initial_quantity_research_costs/<완료일>/` | 기본 보고서는 읽기 전용. 장후 snapshot writer만 비용 영수증·불변 세대·의존 날짜 index를 기록한다. 잘못된 exact 파일을 다른 경로로 정상화하지 않는다. |
+| 세대/정정 | `broker_cost_reconciliation.source_generation` | index가 가리키는 불변 영수증과 실제 의존하는 과거 원천 SHA를 결속한다. 현재 원천과 다른 영수증은 연구 입력에서 제외하고 재생산한다. 과거 원본과 정정 전 세대는 보존한다. |
+| bounded 전달 | log archive·strategy performance·initial quantity source cache | 전체 보고서→bounded fact→완료 overlay→수량 연구→수량/분할/timeout replay까지 비용 기준·영수증·최초 확보 시각을 보존한다. 사라진 영수증은 오래된 값으로 보충하지 않는다. |
+| 선정기 | 수량 v3 | persisted index·record/원천 SHA가 일치하는 연구 비용만 인정한다. holdout 이후 확보된 비용을 학습에 사용하지 않으며 배분 자료를 구 v2로 우회하지 않는다. |
+
+- 같은 매도 체결의 재관측은 원 native receipt 신원·원 clock·경제/수량/route/owner payload가 모두 일치할 때만 하나의 체결로 해석하고 재관측 횟수·원천 digest를 남긴다. 같은 주문/체결번호의 충돌은 결손으로 보존한다.
+- 전일 매수의 연구 custody는 검증된 원 BUY ledger와 계좌/intent/주문/체결/수량/금액이 일치하는 bounded registry로 연결한다. 명시된 수동/외부 owner·veto·충돌을 과거 Main 기록으로 대체하지 않는다. stale 로컬 정리만으로 broker 체결/terminal을 확정하지 않는다.
+- 부분 청산의 DB 정수 가격과 원 체결 가중평균 가격을 구분한다. 원 fact 가격을 별도 결속하고 기존 단가 일치 guard를 유지하면서 연구 계산에는 원 체결 총금액/수량을 사용한다. canonical 가격은 수정하지 않는다.
+
+### 8.3 정규 장후 운영과 정산 대기
+
+기존 `deploy/run_threshold_cycle_postclose.sh`의 비용 단계는 같은 resource owner와 180초 외부 timeout 안에서 다음 경로를 호출한다. 새 cron은 추가하지 않는다.
+
+```bash
+PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE" --drain-pending
+```
+
+- TARGET를 먼저 처리하고 과거 대기 날짜는 한 번에 최대1개 추가한다. 150초 소프트 예산은 기존 요청 사이에서 확인하고, 진행 중 transport의 최종 제한은 기존 180초 외부 timeout이 맡는다.
+- 실제 KST 날짜별 claim을 호출 전에 기록한다. 같은 날 실패·중단을 성공으로 표시하거나 무한 재조회하지 않는다. 당일 20시 전 관측은 같은 날 최종 TARGET 관측으로 갱신할 수 있다. 수집 성공만으로 거래의 비용 해결을 승인하지 않는다.
+- 보고서 소비자가 검증된 exact/연구 영수증을 기록한 뒤에만 해당 record를 acknowledge한다. 미해결은 다음 날짜에 재조회하고 지원 기간 밖이면 `expired`와 추가 검증 원천 필요 사유를 보존한다.
+- 과거 날짜의 원 ka10076 관측은 보존한다. 날짜 필터가 없는 ka10076을 과거 실적으로 새로 조회하지 않는다. 동일 날짜 계좌 원천 정정은 원 bytes를 불변 history에 저장한 후 alias를 변경한다.
+- 기존 수집 지원 범위는 2026-09-29 이후이면서 현재 KST 날짜부터 60일 이내다. 기간 밖의 결손은 외부 검증 원천 필요 상태로 남긴다. 대기 상태는 4MiB·512 source 날짜·10,000 record/date 의무로 제한한다.
+- 대기 상태는 `runtime/holding_broker_cost_pending/state.json`, 실제 시도는 별도 불변 attempt 영수증이다. 중복 enqueue/ack는 멱등이며 동시 수집·갱신과 기존 상태를 보존한다.
+
+다음 정규 기동용 코드 배포는 원 준비 정책의 `7f2552` source→검토한 후속 source의 정확한 두 경로쌍 인계와 새 holding capability fixture를 요구한다. 원 report capability `057c127…`에서 정확한 후속 세대로 직접 검증하며 과거 호환성을 포괄 허용하지 않는다. 기존 미래 정책값·128개 보조 binding·승인된 두 PRE 변경·rollback을 보존하고 native `current_full_contract`를 검증한다. 코드 배포 준비를 위해 운영 비용/index/fact를 임의 생성하지 않는다.
+
+### 8.4 필수 검증과 완료 구분
+
+- 복수 포지션·익일 매도·부분 체결·미청산·수동 잔여·정수 반올림·원천 누락/정정·계좌 충돌·clock 역전·손상 exact 파일·동시 index 발행·예산/크기 제한의 반례를 검증한다.
+- 비용 세대 전체는 공통 metadata에 한 번만 저장하고 거래별로는 해당 record/날짜의 증명만 전달한다. 비용 세대나 완료 원천 전체를 거래마다 복제하는 제곱 증가를 금지한다.
+- 실제 봉인 자료의 연구 적격/제외 ID와 비용 보존식을 대사하고, 적격 비어 있지 않은 fixture의 전체 비용→연구→재생 성능을 측정한다. 0건 경로의 빠른 시간을 성능 증거로 삼지 않는다.
+- 최초 정책의 별도 경제/자연소비 허들을 추가하지 않는다. 수리 코드 검증·선택 배포·정규 장후 자연 생산·실제 PID 소비·비용 후 성과는 각각의 근거로 보고한다.
+- 당일 보완 owner는 `InitialQuantityBrokerCostClosure1017`다. 기존 `InitialQuantityProducerConsumerRepair1010`의 남은 역사 원천/정산·경제성 Acceptance와 `DirectFamilyPreopenPolicyHandoff`의 실제 소비 조건은 유지한다.

@@ -1622,6 +1622,7 @@ def _buy_parent_handoff_projection(
     A matching count, symbol or order number alone cannot supply a parent.
     This projection never changes an order or a runtime holding.
     """
+    holding_events, _ = _quantity_sell_receipt_observations(holding_events)
     registry: dict[str, list[dict]] = defaultdict(list)
     policy_generation = policy_generation or {}
     by_order: dict[tuple[str, str, str], set[str]] = defaultdict(set)
@@ -1759,20 +1760,23 @@ def _buy_parent_handoff_projection(
         journal = registry.get(intent, [])
         if not journal and not single_owner:
             reasons.append("registry_intent_missing")
-        immutable = ("account_key", "order_date", "broker_order_no", "owner_type",
+        immutable = ("account_key", "order_date", "owner_type",
                      "owner_id", "symbol", "side", "action", "route", "quantity")
         if journal and any(
             any(row.get(name) != journal[0].get(name) for name in immutable)
             for row in journal[1:]
         ):
             reasons.append("registry_intent_conflict")
+        bound = [row for row in journal if row.get("broker_order_no")]
+        anchor = bound[0] if bound else (journal[0] if journal else {})
         if journal and (
-            (journal[0].get("account_key"), journal[0].get("order_date"),
-             str(journal[0].get("broker_order_no") or ""),
-             journal[0].get("owner_type"), journal[0].get("owner_id"),
-             journal[0].get("symbol"), journal[0].get("side"),
-             journal[0].get("action"), journal[0].get("route"),
-             _safe_int(journal[0].get("quantity"), -1))
+            len({str(row["broker_order_no"]) for row in bound}) != 1
+            or (anchor.get("account_key"), anchor.get("order_date"),
+             str(anchor.get("broker_order_no") or ""),
+             anchor.get("owner_type"), anchor.get("owner_id"),
+             anchor.get("symbol"), anchor.get("side"),
+             anchor.get("action"), anchor.get("route"),
+             _safe_int(anchor.get("quantity"), -1))
             != (account, source_date, order, "main_scalping", owner, code,
                 "BUY", "NEW", route, submitted)
             or by_order[(account, source_date, order)] != {intent}
@@ -1831,8 +1835,9 @@ def _buy_parent_handoff_projection(
         # execution set is distinct from partial/cancel terminal reconciliation.
         full_fill_terminal = bool(cumulative == submitted > 0 and verified_fills
             and len(journal_fills) == len(verified_fills) and any(
-                row.get('event')=='FILL_RECORDED' and row.get('state')=='ORDER_TERMINAL'
-                and _safe_int(row.get('filled_qty'),-1)==submitted for row in journal))
+                row.get("state") == "ORDER_TERMINAL"
+                and _safe_int(row.get("filled_qty"), -1) == submitted
+                for row in journal))
         registry_terminal = registry_terminal or full_fill_terminal
         if (not single_owner and cumulative == submitted > 0
             and not registry_terminal):
@@ -2044,9 +2049,84 @@ def _load_buy_parent_handoff_projection(
     return result
 
 
+def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
+    """Collapse only unchanged, broker-clock-bound native receipt observations.
+
+    Input bytes remain untouched. An order/execution collision without a complete
+    native identity, original broker clock and equal payload stays a ledger gap.
+    """
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    grouped = defaultdict(list)
+    for index, event in enumerate(events):
+        if event.stage == "sell_completed":
+            grouped[(event.code, str(event.fields.get("order_no") or ""),
+                     str(event.fields.get("execution_no") or ""))].append((index, event))
+    replacements, removed, audit = {}, set(), []
+    for key, observations in grouped.items():
+        if len(observations) < 2 or not all(key):
+            continue
+        try:
+            wrappers = [event for _, event in observations
+                        if event.fields.get("native_receipt_identity_schema")]
+            if not wrappers:
+                continue
+            native = wrappers[0].fields
+            native_fields = {k: v for k, v in native.items() if k.startswith("native_receipt_")}
+            record = str(native["id"])
+            if (native.get("native_receipt_identity_schema") != "broker_position_sell_receipt_v1"
+                    or native.get("native_receipt_position_key") != "record:" + record
+                    or str(native.get("native_receipt_record_id")) != record
+                    or native.get("native_receipt_stock_code") != key[0]
+                    or native.get("native_receipt_order_no") != key[1]
+                    or native.get("native_receipt_execution_no") != key[2]
+                    or native.get("native_receipt_buy_fill_identity") != native.get("holding_path_buy_fill_identity")
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(native.get("holding_path_buy_fill_identity") or ""))
+                    or str(native.get("broker_execution_provenance_complete")).lower() != "true"
+                    or native.get("broker_execution_time_source") != "official_fid_908"
+                    or native.get("decision_authority") != "broker_sell_fill_observation_only"
+                    or native.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+                    or str(native.get("actual_order_submitted")).lower() != "true"
+                    or str(native.get("broker_order_forbidden")).lower() != "false"):
+                continue
+            def clock(value, *, allow_naive=False):
+                value = datetime.fromisoformat(str(value))
+                if value.tzinfo is None and not allow_naive:
+                    raise ValueError("sell_receipt_original_clock_timezone_missing")
+                return value.replace(tzinfo=ZoneInfo("Asia/Seoul")) if value.tzinfo is None else value.astimezone(ZoneInfo("Asia/Seoul"))
+            occurred = clock(native["broker_execution_observed_at"])
+            received = clock(native["broker_execution_received_at"])
+            if (clock(native["native_receipt_observed_at"]) != received or occurred > received
+                    or occurred.microsecond or native.get("broker_execution_time_raw") != occurred.strftime("%H%M%S")):
+                continue
+            payload = {k: v for k, v in native.items() if not k.startswith("native_receipt_")}
+            evidence = hashlib.sha256()
+            for _, event in observations:
+                fields = event.fields
+                wrapper = {k: v for k, v in fields.items() if k.startswith("native_receipt_")}
+                if (event.code != key[0] or clock(event.timestamp, allow_naive=True) < occurred
+                        or {k: v for k, v in fields.items() if not k.startswith("native_receipt_")} != payload
+                        or wrapper and wrapper != native_fields):
+                    raise ValueError("sell_receipt_reobservation_conflict")
+                evidence.update((digest(dict(timestamp=event.timestamp, code=event.code,
+                    stage=event.stage, fields=fields)) + "\n").encode("ascii"))
+            first_index, first = observations[0]
+            replacements[first_index] = HoldingEvent(occurred.replace(tzinfo=None).isoformat(sep=" "),
+                first.name, first.code, first.stage, dict(first.fields), first.raw_line)
+            removed.update(index for index, _ in observations[1:])
+            audit.append(dict(order_no=key[1], execution_no=key[2], record_id=record,
+                native_identity_sha256=digest(native_fields), original_occurred_at=occurred.isoformat(),
+                original_received_at=received.isoformat(), first_observed_at=observations[0][1].timestamp,
+                last_observed_at=observations[-1][1].timestamp, observation_count=len(observations),
+                reobserved_count=len(observations)-1, source_event_digests_sha256=evidence.hexdigest()))
+        except (ValueError, TypeError, KeyError, OverflowError):
+            continue
+    return [replacements.get(index, event) for index, event in enumerate(events) if index not in removed], audit
+
+
 def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict:
     """Reconcile broker fill deltas for one completed position, fail closed."""
 
+    events, receipt_observations = _quantity_sell_receipt_observations(events)
     reasons: list[str] = []
     buy_orders: dict[str, int] = {}
     sell_orders: dict[str, int] = {}
@@ -2266,6 +2346,7 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         "sell_order_count": len(sell_orders),
         "buy_fill_legs": buy_fill_legs,
         "sell_fill_legs": sell_fill_legs,
+        "sell_receipt_reobservation_audit": receipt_observations,
     }
 
 
@@ -2345,14 +2426,262 @@ def _sell_balance_reconciliation_generation_status(
     return "normalized_contract_bound"
 
 
+def _verified_cost_custody(trade: dict, ledger: dict, rows) -> dict:
+    """Supply absent exact-cost context only from fully verified Main custody."""
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    record = str(trade.get("id") or "")
+    owners = [row for row in rows if str(row.get("record_id")) == record]
+    if any(not isinstance(row.get("account_key"), str) or not row["account_key"].strip()
+           for row in owners):
+        return {}
+    accounts = {row.get("account_key") for row in owners}
+    if (not owners or not record or len(accounts) != 1 or not next(iter(accounts), None)
+            or ledger["buy_filled_qty"] <= 0
+            or any(row.get("source_quality_reasons")
+                   or row.get("state") not in {"full", "partial_terminal"}
+                   or row.get("owner_type") != "main_scalping"
+                   or row.get("owner_id") != "main_scalping:" + record
+                   for row in owners)
+            or sum(_safe_int(row.get("filled_qty"), 0) for row in owners)
+               != ledger["buy_filled_qty"]):
+        return {}
+    return {"owner": "main", "account_scope_sha256": digest(["broker_account", next(iter(accounts))])}
+
+
+def _quantity_registry_index(registry_events):
+    owners, claims = defaultdict(list), defaultdict(list)
+    for row in registry_events:
+        if row.get("broker_order_no"):
+            claims[(str(row.get("order_date")), str(row["broker_order_no"]))].append(row)
+        if row.get("side") == "BUY" and row.get("action") == "NEW":
+            for owner in {row.get("owner_id"), row.get("position_id")} - {None, ""}:
+                owners[owner].append(row)
+    return owners, claims
+
+
+def _quantity_registry_fill_custody(trade: dict, ledger: dict, registry_events: list[dict],
+                                    generation: dict, *, registry_index=None) -> list[dict]:
+    """Prove research BUY custody from the exact verified registry fill census.
+
+    This does not create submit/parent, CANCEL, broker terminal, or Main execution
+    authority. Unfilled intents remain separately visible in the proof.
+    """
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    record = str(trade.get("id") or "")
+    owner, stock = "main_scalping:" + record, str(trade.get("code") or "")[:6]
+    legs = ledger.get("buy_fill_legs") or []
+    if generation.get("status") != "verified" or not legs:
+        return []
+    try:
+        indexed = {}
+        for leg in legs:
+            key = (str(leg["at"])[:10], str(leg["order_no"]), str(leg["execution_no"]))
+            if key in indexed:
+                return []
+            indexed[key] = leg
+        owners, order_claims = registry_index if registry_index is not None else _quantity_registry_index(registry_events)
+        selected = owners.get(owner, [])
+        if not selected or any(row.get("owner_id") != owner or row.get("owner_type") != "main_scalping"
+                or row.get("symbol") != stock or row.get("position_id", owner) != owner
+                for row in selected):
+            return []
+        intents = defaultdict(list)
+        for row in selected:
+            if not row.get("intent_id"):
+                return []
+            intents[row["intent_id"]].append(row)
+        output, accepted, unfilled = [], set(), []
+        accounts = set()
+        for intent, journal in intents.items():
+            immutable = ("account_key", "order_date", "owner_type", "owner_id", "symbol", "side", "action", "route", "quantity")
+            anchor = journal[0]
+            if any(any(row.get(k) != anchor.get(k) for k in immutable) for row in journal):
+                return []
+            orders = {str(row["broker_order_no"]) for row in journal if row.get("broker_order_no")}
+            fills = [row for row in journal if row.get("event") == "FILL_RECORDED"]
+            if not fills:
+                unfilled.append(intent)
+                continue
+            if (len(orders) != 1 or not any(row.get("event") == "ORDER_BOUND" for row in journal)
+                    or not anchor.get("account_key") or anchor.get("route") not in {"KRX", "NXT", "SOR"}):
+                return []
+            order = next(iter(orders))
+            claims = order_claims.get((str(anchor["order_date"]), order), [])
+            if any(row.get("intent_id") != intent or row.get("account_key") != anchor["account_key"]
+                    or row.get("owner_id") != owner or row.get("owner_type") != "main_scalping"
+                    or row.get("side") != "BUY" or row.get("action") != "NEW" for row in claims):
+                return []
+            cumulative, amount = 0, 0.0
+            for fill in fills:
+                key = (str(anchor["order_date"]), order, str(fill.get("execution_no") or ""))
+                leg = indexed.get(key)
+                if key in accepted or leg is None or leg.get("route") != anchor["route"]:
+                    return []
+                delta, price = _safe_int(leg.get("qty"), -1), _safe_float(leg.get("price"), -1)
+                cumulative += delta; amount += delta * price
+                if (delta <= 0 or price <= 0 or _safe_int(fill.get("filled_qty"), -1) != cumulative
+                        or abs(_safe_float(fill.get("fill_amount"), -1) - amount) > 0.000001):
+                    return []
+                accepted.add(key)
+            # A complete exact fill census proves zero order residual. A stale
+            # local terminal transition alone cannot provide any of these fills.
+            if cumulative != _safe_int(anchor.get("quantity"), -1):
+                return []
+            accounts.add(str(anchor["account_key"]))
+            output.append(dict(record_id=record, owner_type="main_scalping", owner_id=owner,
+                account_key=anchor["account_key"], state="full", filled_qty=cumulative,
+                source_quality_reasons=[], intent_id=intent, order_id=order,
+                order_date=anchor["order_date"], route=anchor["route"],
+                custody_basis="verified_registry_and_exact_broker_fill_census",
+                registry_source_sha256=generation["sha256"], registry_tail_hash=generation["tail_hash"],
+                fill_event_sha256=digest(fills), fill_clock_source="original_broker_receipt",
+                terminal_observed=False, cost_krw=None))
+        if accepted != set(indexed) or len(accounts) != 1:
+            return []
+        unfilled = sorted(unfilled)
+        for row in output:
+            row["unfilled_registry_intent_ids"] = unfilled[:32]
+            row["unfilled_registry_intent_count"] = len(unfilled)
+            row["unfilled_registry_intents_sha256"] = digest(unfilled)
+        return output
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return []
+
+
+def _quantity_research_custody(prepared_records, native_rows):
+    """Join prior/current BUY fills to a bounded local, hash-verified journal."""
+    from src.engine.lifecycle.broker_cost_allocation import custody_account
+    selected, missing = {}, []
+    native_by_record = defaultdict(list)
+    for row in native_rows:
+        native_by_record[str(row.get("record_id"))].append(row)
+    for trade, _, _, ledger in prepared_records:
+        record = str(trade.get("id") or "")
+        rows = native_by_record.get(record, [])
+        try:
+            custody_account(record, ledger["buy_fill_legs"], rows,
+                            allow_open=str(trade.get("status")).upper() != "COMPLETED")
+            selected[record] = rows
+        except (ValueError, TypeError, KeyError, ArithmeticError):
+            selected[record] = rows
+            incomplete = {"position_quantity_or_parent_census_unreconciled",
+                          "full_buy_registry_terminal_unobserved"}
+            contradictory = any(
+                row.get("owner_type") != "main_scalping"
+                or row.get("owner_id") != "main_scalping:" + record
+                or not row.get("account_key")
+                or set(row.get("source_quality_reasons") or []) - (incomplete |
+                    ({"terminal_owner_unreconciled"} if not row.get("filled_qty") else set()))
+                for row in rows)
+            if not contradictory:
+                missing.append((trade, ledger))
+    generation = {"status": "not_required", "source_only": True}
+    if not missing:
+        return selected, generation
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerRegistryError
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    from src.engine.lifecycle.research_input_budget import Claim
+    path = Path(DATA_DIR) / "runtime/order_owner_registry.jsonl"
+    try:
+        before = source_stat(path.stat())
+        if path.is_symlink() or before[2] > 4 * 1024 * 1024:
+            raise ValueError("quantity_research_registry_partition_required")
+        with Claim(before[2] * 8):
+            registry = OrderOwnerRegistry(path).verified_events_snapshot(max_bytes=4 * 1024 * 1024)
+            sha = hashlib.sha256()
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(65536), b""):
+                    sha.update(block)
+            if source_stat(path.stat()) != before:
+                raise ValueError("quantity_research_registry_changed_during_report")
+            generation = dict(status="verified", path=str(path), size=before[2], stat=list(before),
+                sha256=sha.hexdigest(), tail_hash=registry[-1]["event_hash"] if registry else "0" * 64,
+                source_only=True, maximum_source_bytes=4 * 1024 * 1024)
+            registry_index = _quantity_registry_index(registry)
+            for trade, ledger in missing:
+                proof = _quantity_registry_fill_custody(trade, ledger, registry, generation,
+                                                      registry_index=registry_index)
+                record = str(trade["id"])
+                native_accounts = {row.get("account_key") for row in selected[record]}
+                if proof and (not native_accounts or native_accounts == {proof[0]["account_key"]}):
+                    selected[record] = proof
+    except (OSError, ValueError, TypeError, KeyError, OwnerRegistryError) as exc:
+        if str(exc).startswith("shared_research_budget_") or "changed_during_report" in str(exc) or "changed_during_read" in str(exc):
+            raise
+        generation = dict(status="source_gap", reason=str(exc), path=str(path), source_only=True)
+    return selected, generation
+
+
+def _verify_quantity_research_registry(generation):
+    if generation.get("status") == "verified":
+        from src.engine.lifecycle.holding_window_generation import source_stat
+        if list(source_stat(Path(generation["path"]).stat())) != generation["stat"]:
+            raise ValueError("quantity_research_registry_changed_during_report")
+
+
+def _quantity_research_position(trade: dict, events: list[HoldingEvent], ledger: dict,
+                                custody_rows: list[dict]) -> dict:
+    events, _ = _quantity_sell_receipt_observations(events)
+    terminal = next((event for event in reversed(events) if event.stage == "sell_completed"), None)
+    completed_at = _parse_dt(terminal.timestamp) if terminal else None
+    if completed_at is not None:
+        completed_at = (completed_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                        if completed_at.tzinfo is None else completed_at.astimezone(ZoneInfo("Asia/Seoul")))
+    reasons = list(ledger["strict_completion_reasons"])
+    if terminal and (terminal.fields.get("decision_authority") != "broker_sell_fill_observation_only"
+            or str(terminal.fields.get("actual_order_submitted")).lower() != "true"
+            or str(terminal.fields.get("broker_order_forbidden")).lower() != "false"
+            or terminal.fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"):
+        reasons.append("source_gap_final_sell_authority")
+    terminal_observed = bool(terminal and "source_gap_final_sell_authority" not in reasons
+                             and _safe_int(terminal.fields.get("remaining_sell_qty"), -1) == 0)
+    return dict(record_id=str(trade.get("id") or ""), symbol=str(trade.get("code") or "")[:6],
+        status=str(trade.get("status") or "").upper(),
+        completion_observed_date=completed_at.date().isoformat() if completed_at else None,
+        completed_at=completed_at.isoformat() if completed_at else None,
+        terminal_observed=terminal_observed,
+        buy_legs=ledger["buy_fill_legs"], sell_legs=ledger["sell_fill_legs"],
+        fact_buy_price=trade.get("buy_price"),
+        fact_sell_price=trade.get("sell_price") if str(trade.get("status")).upper() == "COMPLETED" else None,
+        custody_rows=[row for row in custody_rows if str(row.get("record_id")) == str(trade.get("id"))],
+        execution_source_quality_reasons=sorted(set(reasons)))
+
+
+def _quantity_research_source_dates(positions: list[dict], target_date: str) -> list[str]:
+    dates = {target_date}
+    for position in positions:
+        for leg in position["buy_legs"] + position["sell_legs"]:
+            at = _parse_dt(str(leg.get("at") or ""))
+            if at is not None:
+                at = at.replace(tzinfo=ZoneInfo("Asia/Seoul")) if at.tzinfo is None else at.astimezone(ZoneInfo("Asia/Seoul"))
+                dates.add(at.date().isoformat())
+    return sorted(dates)
+
+
+def _quantity_research_pending_reasons(rows: list[dict]) -> list[str]:
+    """Queue bounded reason codes; retain full source detail in each receipt."""
+    reasons = set()
+    for row in rows:
+        detail = str(row["quantity_research_cost"].get("reason") or "research_cost_source_unresolved")
+        for issue in detail.split(";"):
+            code = issue.partition(":")[0]
+            reasons.add(code if re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", code)
+                        else "research_cost_source_unresolved")
+    ordered = sorted(reasons)
+    return (ordered if len(ordered) <= 32 else
+            ordered[:31] + ["research_cost_additional_reasons_in_receipts"])
+
+
 def _completed_trade_projection(
     trade: dict, events: list[HoldingEvent], compiled: dict,
     *, cost_receipt: dict | None = None, knowledge_cutoff: float | None = None,
     broker_cost_source: dict | None = None, cost_custody_rows=(), cost_peer_records=(),
+    execution_ledger: dict | None = None,
 ) -> dict | None:
     """Keep the full canonical completion census separate from display recovery."""
     if str(trade.get("status") or "").upper() != "COMPLETED":
         return None
+    events, _ = _quantity_sell_receipt_observations(events)
     profit = trade.get("canonical_profit_rate", trade.get("profit_rate"))
     profit = _safe_float(profit, default=float("nan"))
     if not math.isfinite(profit):
@@ -2364,7 +2693,7 @@ def _completed_trade_projection(
          if event.stage == "sell_completion_reconciliation_gap"), None
     )
     terminal_fields = terminal.fields if terminal else {}
-    ledger = _completed_execution_ledger(trade, events)
+    ledger = execution_ledger if execution_ledger is not None else _completed_execution_ledger(trade, events)
     terminal_observed_date = str(terminal.timestamp)[:10] if terminal else None
     sell_date = str(trade.get("sell_time") or "")[:10]
     completion_observed_date = terminal_observed_date or sell_date or None
@@ -2431,6 +2760,7 @@ def _completed_trade_projection(
     if not configured_receipt or not math.isfinite(configured_pnl):
         configured_pnl = None
     from src.engine.lifecycle.broker_cost_reconciliation import digest, reconcile
+    verified_custody = _verified_cost_custody(trade, ledger, cost_custody_rows)
     completed_at = _parse_dt(terminal.timestamp) if terminal else None
     if completed_at is not None and completed_at.tzinfo is None:
         completed_at = completed_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
@@ -2438,8 +2768,9 @@ def _completed_trade_projection(
         cost_receipt, context={
             "position_key": f"record:{trade.get('id')}",
             "symbol": str(trade.get("code") or "")[:6],
-            "owner": terminal_fields.get("holding_cost_owner"),
-            "account_scope_sha256": terminal_fields.get("holding_cost_account_scope_sha256"),
+            "owner": terminal_fields.get("holding_cost_owner") or verified_custody.get("owner"),
+            "account_scope_sha256": terminal_fields.get("holding_cost_account_scope_sha256")
+                or verified_custody.get("account_scope_sha256"),
             "buy_fill_identity": digest(ledger["buy_fill_legs"]),
             "completion_observed_date": completion_observed_date,
             "completed_at": completed_at.timestamp() if completed_at else None,
@@ -3358,6 +3689,8 @@ def strategy_fact_projection_rows(rows: list[dict]) -> list[dict]:
     result = []
     for row in rows:
         projected = {key: row.get(key) for key in fields}
+        if "quantity_research_cost" in row:
+            projected["quantity_research_cost"] = row["quantity_research_cost"]
         for name, keys in {
             'exit_signal': ('exit_rule', 'sell_reason_type'),
             'ai_review_summary': ('headline',),
@@ -3375,7 +3708,11 @@ def build_trade_review_report(
     since_time: str | None = None,
     top_n: int = 10,
     scope: str = "entered",
+    *,
+    write_research_costs: bool = False,
 ) -> dict:
+    if write_research_costs and (code or since_time):
+        raise ValueError("quantity_research_cost_requires_unfiltered_population")
     guarded = guard_stdin_heavy_build(
         snapshot_kind="trade_review",
         target_date=target_date,
@@ -3388,6 +3725,8 @@ def build_trade_review_report(
         },
     )
     if guarded is not None:
+        if write_research_costs:
+            raise ValueError("quantity_research_cost_write_requires_native_report_build")
         return guarded
 
     normalized_code = str(code).strip()[:6] if code else None
@@ -3495,19 +3834,13 @@ def build_trade_review_report(
     )
     per_stage = Counter(event.stage for event in events)
 
-    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-    actual_cost_source_generation = source_generation(DATA_DIR, target_date)
-    from src.engine.lifecycle.broker_cost_source import load_source
-    broker_cost_source = None
-    try:
-        broker_cost_source = load_source(DATA_DIR, target_date)
-    except (OSError, ValueError, TypeError, KeyError):
-        warnings.append("Official broker cost source contract invalid; actual costs excluded")
     knowledge_cutoff = datetime.now(ZoneInfo("Asia/Seoul")).timestamp()
-    compiled_rows = []
-    completed_projection = []
-    open_projection = []
-    avg_down_rebound_lineage_rows = []
+    custody_rows = (buy_parent_handoff.get("rows", [])
+                    if trailing_source_status == "structured_partition_read" else [])
+    prepared_records = []
+    research_positions = []
+    # Allocation needs every confirmed BUY/SELL turnover, including open peers.
+    # Build the complete execution population before projecting any completed row.
     for trade in trade_rows:
         matched = _match_trade_events(trade, all_events)
         prior_date = str(trade.get("rec_date") or "")[:10]
@@ -3518,6 +3851,50 @@ def build_trade_review_report(
             )
             matched.sort(key=_event_sort_key)
         compiled = _build_trade_row(trade, matched)
+        ledger = _completed_execution_ledger(trade, matched)
+        prepared_records.append((trade, matched, compiled, ledger))
+    research_custody, research_registry_generation = _quantity_research_custody(prepared_records, custody_rows)
+    for trade, matched, _, ledger in prepared_records:
+        research_positions.append(_quantity_research_position(trade, matched, ledger,
+            research_custody.get(str(trade.get("id") or ""), [])))
+    required_dates = _quantity_research_source_dates(research_positions, target_date)
+    from src.engine.lifecycle.broker_cost_source import load_source
+    sources_by_date = {}
+    source_errors = {}
+    for source_date in required_dates:
+        try:
+            sources_by_date[source_date] = load_source(DATA_DIR, source_date)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            sources_by_date[source_date] = None
+            source_errors[source_date] = type(exc).__name__
+    if source_errors:
+        warnings.append("Official broker cost source contract invalid; affected research costs excluded")
+    broker_cost_source = sources_by_date.get(target_date)
+    from src.engine.lifecycle.broker_cost_allocation import (
+        build_research_cost_allocations, persist_research_costs, validate_research_cost,
+    )
+    allocated = build_research_cost_allocations(sources_by_date, research_positions)
+    research_costs = {}
+    for position in research_positions:
+        if position["status"] != "COMPLETED":
+            continue
+        record = position["record_id"]
+        research_costs[record] = validate_research_cost(allocated.get(record),
+            record_id=record, symbol=position["symbol"],
+            buy_legs=position["buy_legs"], sell_legs=position["sell_legs"],
+            custody_rows=position["custody_rows"],
+            completion_date=position["completion_observed_date"], knowledge_cutoff=knowledge_cutoff)
+    _verify_quantity_research_registry(research_registry_generation)
+    if write_research_costs:
+        persist_research_costs(DATA_DIR, target_date, research_costs, required_dates)
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    actual_cost_source_generation = source_generation(DATA_DIR, target_date)
+    compiled_rows = []
+    completed_projection = []
+    open_projection = []
+    avg_down_rebound_lineage_rows = []
+    for trade, matched, compiled, ledger in prepared_records:
+        prior_date = str(trade.get("rec_date") or "")[:10]
         compiled_rows.append(compiled)
         from src.engine.lifecycle.broker_cost_reconciliation import load_receipt
         cost_receipt = None
@@ -3529,9 +3906,9 @@ def build_trade_review_report(
         projected = _completed_trade_projection(trade, matched, compiled,
                                                cost_receipt=cost_receipt,
                                                knowledge_cutoff=knowledge_cutoff,
-                                               broker_cost_source=broker_cost_source,
-                                               cost_custody_rows=(buy_parent_handoff.get("rows", [])
-                                                   if trailing_source_status == "structured_partition_read" else []),
+                                               broker_cost_source=(broker_cost_source if cost_source_error is None else None),
+                                               cost_custody_rows=custody_rows,
+                                               execution_ledger=ledger,
                                                cost_peer_records=[r.get("id") for r in trade_rows
                                                    if str(r.get("code") or "")[:6] == str(trade.get("code") or "")[:6]
                                                    and _safe_float(r.get("buy_qty"), 0) > 0])
@@ -3545,6 +3922,8 @@ def build_trade_review_report(
         ):
             projected["trailing_event_source_status"] = trailing_source_status
             projected["trailing_event_source_sha256"] = trailing_source_sha256
+            projected["quantity_research_cost"] = research_costs[str(trade.get("id") or "")]
+            compiled["quantity_research_cost"] = projected["quantity_research_cost"]
             if prior_date < target_date:
                 projected["prior_entry_snapshot_receipt"] = prior_entry_receipts.get(
                     prior_date, {"status": "source_gap_entry_snapshot_missing"}
@@ -3623,6 +4002,31 @@ def build_trade_review_report(
 
     if source_generation(DATA_DIR, target_date) != actual_cost_source_generation:
         raise ValueError("actual_cost_generation_changed_during_report")
+    for source_date in required_dates:
+        try:
+            current_source = load_source(DATA_DIR, source_date)
+        except (OSError, ValueError, TypeError, KeyError):
+            current_source = None
+        if current_source != sources_by_date[source_date]:
+            raise ValueError("research_cost_source_changed_during_report")
+    _verify_quantity_research_registry(research_registry_generation)
+    if write_research_costs:
+        from src.engine.lifecycle.broker_cost_source import enqueue_pending, resolve_pending
+        exact_records = [str(row["id"]) for row in completed_projection
+                         if row["broker_actual_cost_observed"] is True]
+        research_records = [str(row["id"]) for row in completed_projection
+                            if str(row["id"]) not in set(exact_records)
+                            and row["quantity_research_cost"].get("status") == "research_cost_allocated"]
+        resolved = set(exact_records + research_records)
+        pending = [row for row in completed_projection if str(row["id"]) not in resolved]
+        if pending:
+            reasons = _quantity_research_pending_reasons(pending)
+            enqueue_pending(DATA_DIR, target_date, required_dates,
+                            [str(row["id"]) for row in pending], reasons)
+        if exact_records:
+            resolve_pending(DATA_DIR, target_date, exact_records, reason="consumer_exact_cost_reconciled")
+        if research_records:
+            resolve_pending(DATA_DIR, target_date, research_records, reason="consumer_research_cost_allocated")
     report = {
         "date": target_date,
         "code": normalized_code,
@@ -3632,6 +4036,13 @@ def build_trade_review_report(
         "meta": {
             "warnings": warnings,
             "official_broker_cost_source_sha256": (broker_cost_source or {}).get("source_sha256"),
+            "quantity_research_cost_source_dates": required_dates,
+            "quantity_research_custody_registry_generation": research_registry_generation,
+            "quantity_research_cost_source_errors": source_errors,
+            "quantity_research_cost_position_count": len(research_positions),
+            "quantity_research_cost_status_counts": dict(Counter(
+                value.get("status") for value in research_costs.values())),
+            "quantity_research_cost_persisted": write_research_costs,
             "sell_completed_event_ids": sorted(sell_completed_event_ids),
             "completion_event_id_count": len(completion_event_ids),
             "completion_event_unresolved_id_count": len(unresolved_completion_ids),

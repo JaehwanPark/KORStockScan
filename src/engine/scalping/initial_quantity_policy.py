@@ -321,6 +321,7 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
     end = date.fromisoformat(as_of)
     from src.engine.strategy_position_performance_report import _saved_fact_generation_issue, _status_path
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    from src.engine.lifecycle.broker_cost_reconciliation import record_source_projector
     from src.engine.lifecycle.research_input_budget import Claim
     from sqlalchemy import text
     from src.engine.scalping.initial_quantity_source_cache import QUANTITY_FACT_STRATEGIES, QUANTITY_FACT_CUSTODIES
@@ -348,9 +349,11 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
             generations[day] = {"path":str(path), "sha256":_file_sha256(path) if path.is_file() else None,
                                 "issue":issue,"cost_generation":costs}
         rows=[]
+        generation_projectors = {day: record_source_projector(gen['cost_generation']) for day, gen in generations.items()}
         for fact in query.order_by(TradePerformanceFact.recommendation_id).yield_per(256):
             row = {k:(value.isoformat() if isinstance(value,(date,datetime)) else value) for k,value in zip(keys,fact)}
-            row["fact_generation"] = generations[row["rec_date"]]
+            gen = generations[row['rec_date']]
+            row["fact_generation"] = {**gen, 'cost_generation': generation_projectors[row['rec_date']](str(row['recommendation_id']))}
             resident.grow(len(json.dumps(row,default=str).encode())*8)
             rows.append(row)
         for day,gen in generations.items():
@@ -368,6 +371,72 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
                     or gen['cost_generation'] != source_generation(DATA_DIR, day)):
                 raise ValueError('quantity_fact_generation_changed_during_snapshot')
         return overlaid
+
+
+def _quantity_research_fact_cost(fact):
+    """Validate an approved quantity-only receipt without changing actual facts."""
+    from src.engine.lifecycle.broker_cost_allocation import validate_research_fact_cost
+    receipt = validate_research_fact_cost(fact.get('quantity_research_cost'),
+        record_id=str(fact.get('recommendation_id') or ''), symbol=str(fact.get('stock_code') or ''),
+        buy_qty=fact.get('buy_qty'), buy_price=fact.get('buy_price'),
+        sell_qty=fact.get('buy_qty'), sell_price=fact.get('sell_price'),
+        completion_date=str(fact.get('completion_source_date') or fact.get('completion_observed_date') or fact.get('rec_date') or ''))
+    if receipt.get('status') != 'research_cost_allocated':
+        return receipt
+    try:
+        from src.engine.lifecycle.broker_cost_reconciliation import digest
+        generation = fact.get('actual_cost_source_generation')
+        if isinstance(generation, str):
+            generation = json.loads(generation)
+        research = generation['quantity_research_cost_generation']
+        if re.fullmatch(r'[0-9a-f]{64}', str(generation.get('sha256') or '')) is None:
+            raise ValueError('quantity_research_cost_generation_invalid')
+        if 'projection_scope' in research and (
+                research.get('projection_scope') != 'record'
+                or research.get('record_id') != receipt['record_id']
+                or research.get('parent_generation_sha256') != generation['sha256']
+                or re.fullmatch(r'[0-9a-f]{64}', str(research.get('research_generation_sha256') or '')) is None):
+            raise ValueError('quantity_research_cost_record_generation_invalid')
+        references = [ref for ref in research['receipts'] if ref.get('record_id') == receipt['record_id']]
+        if (generation.get('schema') != 'holding_actual_cost_source_generation_v1'
+                or generation.get('completion_date') != receipt['completion_observed_date']
+                or len(references) != 1
+                or references[0].get('content_sha256') != digest(receipt)
+                or references[0].get('receipt_sha256') != receipt['receipt_sha256']
+                or re.fullmatch(r'[0-9a-f]{64}', str(references[0].get('sha256') or '')) is None):
+            raise ValueError('quantity_research_cost_receipt_generation_unbound')
+        for source in receipt['sources']:
+            references = [ref for ref in research['source_dates'] if ref.get('source_date') == source['source_date']]
+            if (len(references) != 1 or references[0].get('source_sha256') != source['source_sha256']
+                    or re.fullmatch(r'[0-9a-f]{64}', str(references[0].get('sha256') or '')) is None):
+                raise ValueError('quantity_research_cost_source_generation_unbound')
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {'status': 'research_cost_invalid', 'reason': str(exc)}
+    return receipt
+
+
+def _quantity_research_replay_costs_valid(report):
+    """Bind research-only money to the canonical NULL-preserving input fact."""
+    try:
+        facts = {str(fact['recommendation_id']): fact for fact in report['census']['input_fact_rows']}
+        for row in report['trades']:
+            fact = facts[str(row['record_id'])]
+            if fact.get('quantity_research_cost') is not None and fact.get('economics_source_status') != 'broker_actual_cost_reconciled':
+                receipt = _quantity_research_fact_cost(fact)
+                if (receipt.get('status') != 'research_cost_allocated'
+                        or row.get('quantity_research_cost') != receipt
+                        or row.get('cost_basis') != 'broker_confirmed_total_allocated'
+                        or row.get('actual_execution_cost') is not False
+                        or row.get('research_cost_receipt_sha256') != receipt.get('receipt_sha256')
+                        or row.get('cost_available_at') != receipt.get('cost_available_at')
+                        or row.get('actual_net_pnl_krw') != receipt.get('allocated_net_pnl_krw')
+                        or row.get('actual_profit_rate') != receipt.get('allocated_profit_rate')):
+                    return False
+            elif any(key in row for key in ('quantity_research_cost', 'research_cost_receipt_sha256', 'cost_available_at')):
+                return False
+        return True
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return False
 
 
 def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] | None = None,
@@ -395,6 +464,8 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
         if source_census is not None else getattr(raw_source, 'completion_generations', {}))
     completion_summary = (source_census.get('completion_overlay_summary', {})
         if source_census is not None else getattr(raw_source, 'completion_overlay_summary', {}))
+    persisted_generations = (source_census.get('persisted_fact_generations', {}) if source_census is not None
+        else getattr(raw_source, 'persisted_fact_generations', None))
     if (not isinstance(completion_generations, dict) or not isinstance(completion_summary, dict)
             or completion_summary and completion_summary.get('as_of') != as_of):
         raise ValueError('quantity_shared_fact_census_mismatch')
@@ -446,6 +517,8 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
         qty = _number(fact.get("buy_qty"))
         profit = _number(fact.get("profit_rate"))
         pnl = _number(fact.get("realized_pnl_krw"))
+        actual = fact.get("economics_source_status") == "broker_actual_cost_reconciled"
+        research_cost = None
         if not rid or not str(fact.get("stock_code") or ""):
             exclusions["identity_missing"] += 1
             continue
@@ -459,15 +532,29 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
             exclusions["before_refresh_start"] += 1
             continue
         if (buy_price is None or buy_price <= 0 or sell_price is None or sell_price <= 0
-                or qty is None or qty <= 0 or not qty.is_integer()
-                or profit is None or pnl is None):
+                or qty is None or qty <= 0 or not qty.is_integer()):
             exclusions["terminal_cost_or_quantity_missing"] += 1
+            continue
+        if not actual and fact.get('quantity_research_cost') is not None:
+            research_cost = _quantity_research_fact_cost(fact)
+            if research_cost.get('status') != 'research_cost_allocated':
+                exclusions['quantity_research_cost_pending' if research_cost.get('status') == 'research_cost_pending'
+                           else 'quantity_research_cost_invalid'] += 1
+                continue
+            profit = _number(research_cost.get('allocated_profit_rate'))
+            pnl = _number(research_cost.get('allocated_net_pnl_krw'))
+            # Integer canonical averages can round a partial-fill ledger. The
+            # sealed receipt binds that original fact while research uses the
+            # observed ledger turnover for its comparison and EV denominator.
+            buy_price = research_cost['buy_amount_krw'] / research_cost['buy_qty']
+            sell_price = research_cost['sell_amount_krw'] / research_cost['sell_qty']
+        if profit is None or pnl is None:
+            exclusions['terminal_cost_or_quantity_missing'] += 1
             continue
         expected_pnl = calculate_net_realized_pnl(buy_price, sell_price, qty,
                                                    cost_rate=cost_rate)
         expected_profit = calculate_net_profit_rate(buy_price, sell_price,
                                                     cost_rate=cost_rate)
-        actual = fact.get("economics_source_status") == "broker_actual_cost_reconciled"
         if actual:
             fees = _number(fact.get("broker_actual_fees_taxes_krw"))
             notional = buy_price * qty
@@ -489,6 +576,11 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                     or abs(actual_expected - pnl) > 1
                     or abs(100 * actual_expected / notional - profit) > 0.02):
                 exclusions["actual_cost_identity_or_amount_invalid"] += 1
+                continue
+        elif research_cost is not None:
+            if (not fact.get('completion_census_run_id')
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(fact.get('completion_census_projection_sha256') or ''))):
+                exclusions['quantity_research_cost_completion_binding_missing'] += 1
                 continue
         elif (fact.get("economics_source_status") not in (None, "configured_comparison_model", "fixed_comparison_cost_model")
               or buy_at.date() >= date(2026, 9, 29)):
@@ -513,7 +605,12 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                    "completion_source_date": fact['completion_source_date'],
                    "fact_generation": fact.get('fact_generation')}
                   if fact.get('completion_generation') else {}),
-               "cost_basis": "broker_actual" if actual else "historical_comparison_model",
+               "cost_basis": ("broker_actual" if actual else "broker_confirmed_total_allocated"
+                              if research_cost is not None else "historical_comparison_model"),
+               **({'actual_execution_cost': False, 'quantity_research_cost': research_cost,
+                   'research_cost_receipt_sha256': research_cost['receipt_sha256'],
+                   'cost_available_at': research_cost['cost_available_at']}
+                  if research_cost is not None else {}),
                "modeled_parent_net_pnl_krw": _costed_fixed_exit_pnl(
                     [(int(qty), buy_price)], sell_price, cost_rate)}
         prior = rows.get(rid)
@@ -528,17 +625,18 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
         else:
             exclusions["duplicate_fact"] += 1
     result = sorted(rows.values(), key=lambda item: (item["entry_date"], item["record_id"]))
+    exact_economics = [row for row in result if row['cost_basis'] != 'broker_confirmed_total_allocated']
     entry_days = sorted({row["entry_date"] for row in result})
     exit_days = sorted({row["exit_date"] for row in result})
     census = {"census_source": "trade_performance_facts",
                     **({"entry_on_or_after": entry_on_or_after} if refresh_start else {}),
                     "all_completed_initial_trades": len(result),
                     "actual_completed_net_pnl_krw": (round(sum(
-                        row["realized_net_pnl_krw"] for row in result), 3)
-                        if result else None),
+                        row["realized_net_pnl_krw"] for row in exact_economics), 3)
+                        if exact_economics else None),
                     "actual_completed_mean_profit_rate_pct": (
-                        round(sum(row["profit_rate"] for row in result) / len(result), 6)
-                        if result else None),
+                        round(sum(row["profit_rate"] for row in exact_economics) / len(exact_economics), 6)
+                        if exact_economics else None),
                     "fact_rows_read": len(source), "excluded": dict(sorted(exclusions.items())),
                     "as_of_completed_population_count": sum(str(f.get('status')).upper() == 'COMPLETED'
                         for f in source if isinstance(f, dict)),
@@ -546,11 +644,17 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
                     "completion_overlay_summary": completion_summary,
                     "cost_rate": cost_rate, "input_fact_rows": source,
                     "input_manifest_sha256": _digest(source),
-                    "persisted_fact_generations": {str(f.get("rec_date")): f["fact_generation"] for f in source if isinstance(f,dict) and isinstance(f.get("fact_generation"),dict)},
+                    "persisted_fact_generations": (persisted_generations if persisted_generations is not None else
+                        {str(f.get("rec_date")): f["fact_generation"] for f in source if isinstance(f,dict) and isinstance(f.get("fact_generation"),dict)}),
                     "source_quality_by_entry_date": {
                         day: _source_quality_state(day, data_dir) for day in entry_days},
                     "source_quality_by_exit_date": {
                         day: _source_quality_state(day, data_dir) for day in exit_days}}
+    if any(row['cost_basis'] == 'broker_confirmed_total_allocated' for row in result):
+        census.update(research_cost_basis_counts=dict(sorted(Counter(row['cost_basis'] for row in result).items())),
+            research_completed_net_pnl_krw=round(sum(row['realized_net_pnl_krw'] for row in result), 3),
+            research_completed_mean_profit_rate_pct=round(sum(row['profit_rate'] for row in result) / len(result), 6),
+            actual_execution_cost_complete=False)
     if source_census is not None and census != source_census:
         raise ValueError('quantity_shared_fact_census_mismatch')
     return result, census
@@ -1633,7 +1737,12 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                      "modeled_parent_net_pnl_krw": trade["modeled_parent_net_pnl_krw"],
                      "actual_profit_rate": trade["profit_rate"],
                      "actual_net_pnl_krw": trade["realized_net_pnl_krw"],
-                     **({"original_notional_krw": trade["buy_price"] * trade["buy_qty"],
+                     **({key: trade[key] for key in ('cost_basis', 'actual_execution_cost',
+                          'quantity_research_cost', 'research_cost_receipt_sha256', 'cost_available_at')}
+                        if trade.get('cost_basis') == 'broker_confirmed_total_allocated' else {}),
+                     **({"original_notional_krw": (trade['quantity_research_cost']['buy_amount_krw']
+                             if trade.get('cost_basis') == 'broker_confirmed_total_allocated'
+                             else trade["buy_price"] * trade["buy_qty"]),
                          "cap_source": cap_source,
                          "cap_candidates": cap_candidates}
                         if entry_on_or_after else {}),
@@ -1864,6 +1973,12 @@ def initial_replay_economics_valid(report: Any) -> bool:
         from src.engine.scalping.initial_quantity_refresh_evaluation import replay_valid
         return replay_valid(report)
     from src.engine.scalping.initial_quantity_legacy_reader import initial_replay_economics_valid as legacy
+    if (isinstance(report, dict) and (any('quantity_research_cost' in row for row in (report.get('trades') or [])
+                                        if isinstance(row, dict))
+            or any('quantity_research_cost' in fact for fact in ((report.get('census') or {}).get('input_fact_rows') or [])
+                   if isinstance(fact, dict)))
+            and not _quantity_research_replay_costs_valid(report)):
+        return False
     return legacy(report)
 
 

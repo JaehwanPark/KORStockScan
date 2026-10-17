@@ -245,6 +245,7 @@ def _legacy_original_stream(sidecar, target_date, *, projection_kind="completed_
     import stat
     import zlib
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, source_stat
+    from src.engine.lifecycle.broker_cost_allocation import CACHED_RECEIPT_MAX_BYTES
     from src.engine.sniper_trade_review_report import completed_census_manifest
     from src.engine.lifecycle.snapshot_archive import archived_receipt
     fields = {'id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
@@ -256,7 +257,7 @@ def _legacy_original_stream(sidecar, target_date, *, projection_kind="completed_
         'realized_pnl_krw', 'configured_fee_estimate_krw', 'strict_completion_reasons',
         'sell_submission_owner_id', 'sell_submission_account_key', 'cumulative_sell_qty',
         'attempt_id', 'sell_order_no', 'sell_execution_no', 'exit_execution_broker_route',
-        'exit_signal', 'actual_cost_reconciliation'}
+        'exit_signal', 'actual_cost_reconciliation', 'quantity_research_cost'}
     observations = {}
     original_sha = hashlib.sha256()
     original_size = 0
@@ -285,7 +286,8 @@ def _legacy_original_stream(sidecar, target_date, *, projection_kind="completed_
                    or len(pointer) == 3 and pointer[:2] == ('sections', 'completed_trade_projection'))
         if not special:
             try:
-                value = reader.value(MAX_METADATA_BYTES)
+                value = reader.value(CACHED_RECEIPT_MAX_BYTES if pointer[-1:] == ('quantity_research_cost',)
+                                     else MAX_METADATA_BYTES)
             except ValueError as exc:
                 if str(exc) != 'research_legacy_json_field_partition_required':
                     raise
@@ -707,6 +709,7 @@ def _stream_original_fact_projection(target_date, path, sidecar, native, *, veri
     """Recover a small dated fact census from unchanged original native bytes."""
     import gzip
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, MAX_PROJECTION_BYTES
+    from src.engine.lifecycle.broker_cost_allocation import CACHED_RECEIPT_MAX_BYTES
     from src.engine.lifecycle.broker_cost_reconciliation import digest
     from src.engine.scalping.initial_quantity_source_cache import ResidentFacts
     scalar = {'id', 'rec_date', 'code', 'name', 'strategy', 'position_tag', 'status',
@@ -715,7 +718,7 @@ def _stream_original_fact_projection(target_date, path, sidecar, native, *, veri
         'scanner_promotion_id', 'effective_venue', 'market_session_bucket',
         'completion_observed_date', 'terminal_population_scope', 'strict_completion_status',
         'broker_actual_cost_observed', 'broker_actual_fees_taxes_krw', 'realized_pnl_krw_source',
-        'realized_pnl_krw', 'configured_fee_estimate_krw'}
+        'realized_pnl_krw', 'configured_fee_estimate_krw', 'quantity_research_cost'}
     nested = {'exit_signal': {'exit_rule', 'sell_reason_type', 'inferred', 'binding_status'},
               'ai_review_summary': {'headline'}, 'gatekeeper_replay': {'action', 'action_key', 'allow_entry'},
               'actual_cost_reconciliation': {'status'}}
@@ -723,7 +726,7 @@ def _stream_original_fact_projection(target_date, path, sidecar, native, *, veri
         value = {}
         def field(key, current):
             if key in scalar:
-                value[key] = current.value(16*1024)
+                value[key] = current.value(CACHED_RECEIPT_MAX_BYTES if key == 'quantity_research_cost' else 16*1024)
             elif key in nested:
                 current.spaces()
                 if current.peek() != '{':
@@ -1451,6 +1454,8 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
     completion_by_id = {str(item.get("id") or ""): item for item in projection
                         if isinstance(item, dict)}
     census = (report.get("meta") or {}).get("completed_census_manifest") or {}
+    from src.engine.lifecycle.broker_cost_reconciliation import record_source_projector
+    cost_projector = record_source_projector(census.get('actual_cost_source_generation') or {})
     facts: list[dict[str, Any]] = []
     for row in rows:
         strategy = normalize_strategy(row.get("strategy"))
@@ -1568,7 +1573,9 @@ def _trade_fact_rows_from_report(target_date: str, report: dict) -> list[dict[st
                     (completed_source.get("actual_cost_reconciliation") or {}).get("status", "cost_source_unavailable")
                     if main_completion and identity_bound else None
                 ),
-                "actual_cost_source_generation": (census.get("actual_cost_source_generation") if main_completion else None),
+                "actual_cost_source_generation": (cost_projector(str(row.get('id') or ''),
+                    (completed_source or {}).get('quantity_research_cost'))
+                    if main_completion and census.get('actual_cost_source_generation') is not None else None),
                 "completion_census_run_id": census.get("run_id") if main_completion else None,
                 "completion_census_projection_sha256": (
                     census.get("projection_sha256") if main_completion else None

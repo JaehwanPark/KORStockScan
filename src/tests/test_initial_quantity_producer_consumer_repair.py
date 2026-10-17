@@ -65,6 +65,246 @@ def test_actual_cost_census_accepts_broker_cost_not_configured_rate(tmp_path):
     assert len(good)==1 and census['excluded']=={'actual_cost_identity_or_amount_invalid':1}
 
 
+def _allocated_quantity_fact(tmp_path, *, record_id=7):
+    from src.tests.test_broker_cost_source import broker_fixture
+    from src.engine.lifecycle.broker_cost_allocation import build_research_cost_allocations
+    source, context, _, _ = broker_fixture(tmp_path)
+    context['custody_rows'][0]['filled_qty'] = 2
+    context['custody_rows'][0].update(record_id=record_id, owner_id=f'main_scalping:{record_id}')
+    position = dict(record_id=str(record_id), symbol='005930', status='COMPLETED', terminal_observed=True,
+        buy_legs=context['buy_legs'], sell_legs=context['sell_legs'], custody_rows=context['custody_rows'],
+        completed_at='2026-10-08T10:01:00+09:00', completion_observed_date='2026-10-08')
+    receipt = build_research_cost_allocations({'2026-10-08': source}, [position])[str(record_id)]
+    assert receipt['status'] == 'research_cost_allocated', receipt.get('reason')
+    from src.engine.lifecycle.broker_cost_allocation import persist_research_costs
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    persist_research_costs(tmp_path, '2026-10-08', {str(record_id): receipt}, ['2026-10-08'])
+    return {**actual_fact(record_id), 'buy_price': 10000, 'buy_qty': 2, 'sell_price': 10100,
+            'buy_time': '2026-10-08T10:00:00+09:00', 'sell_time': '2026-10-08T10:01:00+09:00',
+            'profit_rate': None, 'realized_pnl_krw': None, 'broker_actual_fees_taxes_krw': None,
+            'economics_source_status': 'source_gap_broker_actual_cost_missing',
+            'actual_cost_reconciliation_status': 'actual_cost_unallocated', 'quantity_research_cost': receipt,
+            'actual_cost_source_generation': source_generation(tmp_path, '2026-10-08')}
+
+
+def _fractional_allocated_quantity_fact(tmp_path, *, record_id=7):
+    from src.engine.lifecycle import broker_cost_source as official, broker_cost_allocation as allocation
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    day = '2026-10-08'
+    def transport(api, payload):
+        result = {'return_code': 0}
+        if api == 'ka00001': result['acctNo'] = '1234567890'
+        elif api == 'ka10170': result[official.LISTS[api]] = [dict(stk_cd='005930', buy_qty='3', sell_qty='3',
+            buy_amt='30050', sell_amt='30100', cmsn_alm_tax='10', pl_amt='40')]
+        else: result['trst_ovrl_trde_prps_array' if api == 'kt00015' else official.LISTS[api]] = []
+        return [result], dict(page_count=1, continuous_terminal_received=True)
+    source = official.collect(tmp_path, day, transport=transport, now=datetime.fromisoformat(day+'T21:00:00+09:00'))
+    def leg(side, second, qty, price, execution):
+        return dict(at=f'{day}T10:0{int(side == "SELL")}:{second:02d}+09:00', qty=qty, price=price,
+            order_no=str(record_id*2+int(side == 'SELL')), execution_no=str(execution), route='KRX')
+    position = dict(record_id=str(record_id), symbol='005930', status='COMPLETED', terminal_observed=True,
+        fact_buy_price=10017, fact_sell_price=10033, completed_at=day+'T10:01:02+09:00',
+        completion_observed_date=day, buy_legs=[leg('BUY', 0, 2, 10000, 1), leg('BUY', 1, 1, 10050, 2)],
+        sell_legs=[leg('SELL', 0, 1, 10000, 3), leg('SELL', 1, 1, 10000, 4), leg('SELL', 2, 1, 10100, 5)],
+        custody_rows=[dict(record_id=record_id, owner_type='main_scalping', owner_id=f'main_scalping:{record_id}',
+            account_key='test_account', state='full', filled_qty=3, source_quality_reasons=[])])
+    receipt = allocation.build_research_cost_allocations({day: source}, [position])[str(record_id)]
+    assert receipt['status'] == 'research_cost_allocated', receipt
+    allocation.persist_research_costs(tmp_path, day, {str(record_id): receipt}, [day])
+    return {**actual_fact(record_id), 'buy_price': 10017, 'buy_qty': 3, 'sell_price': 10033,
+        'buy_time': day+'T10:00:00+09:00', 'sell_time': day+'T10:01:02+09:00',
+        'profit_rate': None, 'realized_pnl_krw': None, 'broker_actual_fees_taxes_krw': None,
+        'economics_source_status': 'source_gap_broker_actual_cost_missing',
+        'actual_cost_reconciliation_status': 'actual_cost_unallocated', 'quantity_research_cost': receipt,
+        'actual_cost_source_generation': source_generation(tmp_path, day)}
+
+
+def test_fractional_partial_fill_ledger_economics_preserves_integer_fact_reference(tmp_path):
+    fact = _fractional_allocated_quantity_fact(tmp_path)
+    original = copy.deepcopy(fact)
+    _quality(tmp_path, '2026-10-08')
+    rows, _ = policy.completed_trade_fact_census('2026-10-08', data_dir=tmp_path,
+        fact_rows=[fact], entry_on_or_after='2026-09-29')
+    assert len(rows) == 1 and rows[0]['realized_net_pnl_krw'] == 40
+    assert rows[0]['buy_price'] == 30050/3 and rows[0]['sell_price'] == 30100/3
+    assert fact == original and fact['profit_rate'] is None and fact['sell_price'] == 10033
+    report = policy.build_initial_quantity_replay('2026-10-08', data_dir=tmp_path,
+        fact_rows=[fact], entry_on_or_after='2026-09-29')
+    assert report['trades'][0]['original_notional_krw'] == 30050
+    assert report['trades'][0]['modeled_parent_net_pnl_krw'] == pytest.approx(
+        50-30100*report['census']['cost_rate'])
+    assert policy.initial_replay_economics_valid(report)
+    assert policy._quantity_research_fact_cost({**fact, 'sell_price': 10034})['status'] == 'research_cost_invalid'
+    forged = copy.deepcopy(report)
+    forged['trades'][0]['original_notional_krw'] = 30051
+    forged['report_content_sha256'] = policy._digest({k:v for k,v in forged.items() if k != 'report_content_sha256'})
+    assert policy.initial_replay_economics_valid(forged) is False
+
+
+def _multidate_quantity_receipt(tmp_path):
+    from src.engine.lifecycle import broker_cost_source as official, broker_cost_allocation as allocation
+    days = [(date(2026, 9, 29)+timedelta(days=i)).isoformat() for i in range(18)
+            if (date(2026, 9, 29)+timedelta(days=i)).weekday() < 5]
+    qty = len(days)
+    sources = {}
+    for day in days:
+        def transport(api, payload):
+            result = {'return_code': 0}
+            if api == 'ka00001': result['acctNo'] = '1234567890'
+            elif api == 'ka10170': result[official.LISTS[api]] = [dict(stk_cd='005930',
+                buy_qty=str(qty*8 if day == days[0] else 0), sell_qty='8',
+                buy_amt=str(qty*80000 if day == days[0] else 0), sell_amt='80800',
+                cmsn_alm_tax='8', pl_amt='792')]
+            else: result['trst_ovrl_trde_prps_array' if api == 'kt00015' else official.LISTS[api]] = []
+            return [result], dict(page_count=1, continuous_terminal_received=True)
+        sources[day] = official.collect(tmp_path, day, transport=transport,
+            now=datetime.fromisoformat(day+'T21:00:00+09:00'))
+    position = dict(record_id='1', symbol='005930', status='COMPLETED', terminal_observed=True,
+        completion_observed_date=days[-1], completed_at=days[-1]+'T10:01:00+09:00',
+        buy_legs=[dict(at=days[0]+'T10:00:00+09:00', qty=qty, price=10000, order_no='1', execution_no='1', route='KRX')],
+        sell_legs=[dict(at=day+'T10:01:00+09:00', qty=1, price=10100, order_no=str(i+2),
+            execution_no=str(i+2), route='KRX') for i,day in enumerate(days)],
+        custody_rows=[dict(record_id=1, owner_type='main_scalping', owner_id='main_scalping:1',
+            account_key='test_account', state='full', filled_qty=qty, source_quality_reasons=[])])
+    positions = []
+    for rid in range(1, 9):
+        item = copy.deepcopy(position)
+        item['record_id'] = str(rid)
+        item['custody_rows'][0].update(record_id=rid, owner_id=f'main_scalping:{rid}')
+        for index, leg in enumerate(item['buy_legs']+item['sell_legs']):
+            leg.update(order_no=str(rid*100+index), execution_no=str(rid*100+index))
+        positions.append(item)
+    position = positions[0]
+    receipt = allocation.build_research_cost_allocations(sources, positions)['1']
+    assert receipt['status'] == 'research_cost_allocated', receipt
+    assert allocation.validate_research_cost(receipt, record_id='1', symbol='005930',
+        buy_legs=position['buy_legs'], sell_legs=position['sell_legs'], custody_rows=position['custody_rows'],
+        completion_date=days[-1]) == receipt
+    assert 16*1024 < len(json.dumps(receipt).encode()) < allocation.CACHED_RECEIPT_MAX_BYTES
+    allocation.persist_research_costs(tmp_path, days[-1], {'1': receipt}, days)
+    return receipt
+
+
+@pytest.mark.parametrize('oversize', [False, True])
+def test_native_original_streams_bound_multidate_quantity_receipt_by_its_own_contract(tmp_path, monkeypatch, oversize):
+    from src.engine import strategy_position_performance_report as native
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    from src.engine.lifecycle.broker_cost_allocation import CACHED_RECEIPT_MAX_BYTES
+    receipt = _multidate_quantity_receipt(tmp_path)
+    day = receipt['completion_observed_date']
+    if oversize: receipt = {**receipt, 'untrusted_padding': 'x'*CACHED_RECEIPT_MAX_BYTES}
+    _, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, day=day, identity=dict(
+        rec_date=receipt['sources'][0]['source_date'], buy_price=10000, buy_qty=receipt['buy_qty'],
+        buy_time=receipt['sources'][0]['source_date']+'T10:00:00+09:00', sell_price=10100,
+        sell_time=receipt['completed_at'], completion_observed_date=day, quantity_research_cost=receipt),
+        meta_overrides=dict(completed_census_input_sha256='c'*64, completion_event_id_count=1,
+            trailing_event_source_receipts=[dict(path='fixture-completion-source', sha256='a'*64)]))
+    sidecar = path.with_suffix('.completed_projection.json')
+    source = json.loads(sidecar.read_bytes())
+    native_reference = dict(census_sha256=digest(source['meta']['completed_census_manifest']),
+        projection=dict(snapshot_identity=source['snapshot_identity']))
+    if oversize:
+        with pytest.raises(ValueError, match='research_legacy_json_field_partition_required'):
+            native._stream_original_fact_projection(day, path, sidecar, native_reference)
+        with pytest.raises(native.FactSyncSourceError, match='selected_metadata_partition_required'):
+            native._legacy_original_stream(sidecar, day)
+    else:
+        scalar = native._stream_original_fact_projection(day, path, sidecar, native_reference)
+        assert scalar['sections']['completed_trade_projection'][0]['quantity_research_cost'] == receipt
+        original = native._legacy_original_stream(sidecar, day)
+        assert original['sections']['completed_trade_projection'][0]['quantity_research_cost'] == receipt
+        assert scalar['sections']['completed_trade_projection'][0]['profit_rate'] is None
+
+
+def test_quantity_allocated_research_cost_never_rewrites_canonical_actual_economics(tmp_path):
+    fact = _allocated_quantity_fact(tmp_path)
+    original = copy.deepcopy(fact)
+    _quality(tmp_path, '2026-10-08')
+    rows, census = policy.completed_trade_fact_census('2026-10-08', data_dir=tmp_path,
+        fact_rows=[fact], entry_on_or_after='2026-09-29')
+    assert fact == original and census['input_fact_rows'][0] == original
+    assert len(rows) == 1 and rows[0]['realized_net_pnl_krw'] == 190
+    assert rows[0]['profit_rate'] == .95
+    assert rows[0]['cost_basis'] == 'broker_confirmed_total_allocated'
+    assert rows[0]['actual_execution_cost'] is False
+    assert census['actual_completed_net_pnl_krw'] is None
+    assert census['actual_completed_mean_profit_rate_pct'] is None
+    assert census['research_completed_net_pnl_krw'] == 190
+    assert census['actual_execution_cost_complete'] is False
+    assert original['profit_rate'] is None and original['realized_pnl_krw'] is None
+
+
+@pytest.mark.parametrize('fault', ['owner', 'actual_flag', 'seal', 'amount', 'partial_fact', 'completion', 'missing_binding'])
+def test_quantity_allocated_research_cost_rejects_identity_amount_and_authority_gaps(tmp_path, fault):
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    fact = _allocated_quantity_fact(tmp_path)
+    receipt = fact['quantity_research_cost']
+    if fault == 'owner': receipt['owner'] = 'manual'
+    elif fault == 'actual_flag': receipt['actual_execution_cost'] = True
+    elif fault == 'amount': receipt['allocated_net_pnl_krw'] = 99999
+    elif fault == 'partial_fact': fact['buy_qty'] = 1
+    elif fault == 'completion': fact['completion_source_date'] = '2026-10-09'
+    elif fault == 'missing_binding': fact['completion_census_run_id'] = None
+    if fault == 'seal': receipt['receipt_sha256'] = 'f'*64
+    else: receipt['receipt_sha256'] = digest({k:v for k,v in receipt.items() if k != 'receipt_sha256'})
+    rows, census = policy.completed_trade_fact_census('2026-10-08', data_dir=tmp_path,
+        fact_rows=[fact], entry_on_or_after='2026-09-29')
+    assert rows == []
+    assert sum(census['excluded'].values()) == 1
+    assert census['actual_completed_net_pnl_krw'] is None
+
+
+@pytest.mark.parametrize('fault', ['absent_index', 'receipt_seal', 'receipt_content', 'source_logical', 'source_missing'])
+def test_quantity_cost_admission_requires_native_record_and_original_source_generation(tmp_path, fault):
+    fact = _allocated_quantity_fact(tmp_path)
+    generation = fact['actual_cost_source_generation']['quantity_research_cost_generation']
+    if fault == 'absent_index': fact['actual_cost_source_generation'].pop('quantity_research_cost_generation')
+    elif fault == 'receipt_seal': generation['receipts'][0]['receipt_sha256'] = 'f'*64
+    elif fault == 'receipt_content': generation['receipts'][0]['content_sha256'] = 'f'*64
+    elif fault == 'source_logical': generation['source_dates'][0]['source_sha256'] = 'f'*64
+    else: generation['source_dates'] = []
+    rows, census = policy.completed_trade_fact_census('2026-10-08', data_dir=tmp_path,
+        fact_rows=[fact], entry_on_or_after='2026-09-29')
+    assert rows == [] and census['excluded'] == {'quantity_research_cost_invalid': 1}
+
+
+@pytest.mark.parametrize('fault', ['generation_sha', 'scope', 'record', 'parent', 'research_sha'])
+def test_quantity_cost_admission_rejects_unbound_compact_record_generations(tmp_path, fault):
+    from src.engine.lifecycle.broker_cost_reconciliation import record_source_projector
+    fact = _allocated_quantity_fact(tmp_path)
+    fact['actual_cost_source_generation'] = record_source_projector(fact['actual_cost_source_generation'])(
+        str(fact['recommendation_id']), fact['quantity_research_cost'])
+    assert policy._quantity_research_fact_cost(fact)['status'] == 'research_cost_allocated'
+    generation = fact['actual_cost_source_generation']
+    research = generation['quantity_research_cost_generation']
+    if fault == 'generation_sha': generation['sha256'] = 'invalid'
+    elif fault == 'scope': research['projection_scope'] = 'unknown'
+    elif fault == 'record': research['record_id'] = '999'
+    elif fault == 'parent': research['parent_generation_sha256'] = 'f'*64
+    else: research['research_generation_sha256'] = 'invalid'
+    assert policy._quantity_research_fact_cost(fact)['status'] == 'research_cost_invalid'
+
+
+def test_allocated_cost_replay_preserves_positive_weights_and_same_comparison_costs(tmp_path):
+    fact = _allocated_quantity_fact(tmp_path)
+    _quality(tmp_path, '2026-10-08')
+    report = policy.build_initial_quantity_replay('2026-10-08', data_dir=tmp_path,
+        fact_rows=[fact], entry_on_or_after='2026-09-29')
+    row = report['trades'][0]
+    assert row['actual_net_pnl_krw'] == 190 and row['actual_execution_cost'] is False
+    assert report['selections']['SAFE_UNKNOWN']['winner_weight_sum_krw'] == 190
+    assert row['modeled_parent_net_pnl_krw'] != row['actual_net_pnl_krw']
+    assert row['quantity_research_cost'] == fact['quantity_research_cost']
+    assert policy.initial_replay_economics_valid(report)
+    forged = copy.deepcopy(report)
+    forged['trades'][0]['actual_execution_cost'] = True
+    forged['report_content_sha256'] = policy._digest({k:v for k,v in forged.items() if k != 'report_content_sha256'})
+    assert policy.initial_replay_economics_valid(forged) is False
+    from src.engine.scalping.initial_quantity_refresh_evaluation import evaluate, VERSION
+    with pytest.raises(ValueError, match='refresh_research_cost_requires_v3_selection'):
+        evaluate(report, parent_policy={}, evaluation_algorithm=VERSION)
+
+
 @pytest.mark.parametrize('case,expected', [('empty', None), ('missing_cost', None),
                                          ('measured_zero', 0), ('partial_valid', 800)])
 def test_actual_census_keeps_missing_aggregate_distinct_from_measured_zero(tmp_path, case, expected):
@@ -116,7 +356,7 @@ def test_holdout_changes_acceptance_never_train_choice_or_next_best():
 
 
 def _prevalidated_joint_selection(tmp_path, monkeypatch, outcomes, *, algorithm=None,
-                                 shapes=None, following=None):
+                                 shapes=None, following=None, cost_available_at=None):
     """Exercise aggregation/selection after independently validated source intake.
 
     Source protocol validation has integration coverage below; this fixture
@@ -138,6 +378,8 @@ def _prevalidated_joint_selection(tmp_path, monkeypatch, outcomes, *, algorithm=
             rows.append(dict(trade_id=tid, record_id=tid, entry_date=day,
                              quantity_type='KRX_PARENT', actual_net_pnl_krw=parent_net,
                              actual_profit_rate=parent_net / 10))
+            if cost_available_at is not None and day < days[-1]:
+                rows[-1]['cost_available_at'] = cost_available_at
             facts.append(dict(recommendation_id=tid, sell_time=day+'T10:00:00+09:00'))
             for key, callback in outcomes.items():
                 result = callback(day, index, parent_net)
@@ -234,6 +476,19 @@ def test_joint_train_following_coverage_is_independent_of_holdout(tmp_path, monk
 def test_refresh_unknown_selection_algorithm_fails_closed():
     with pytest.raises(ValueError, match='refresh_selection_algorithm_invalid'):
         cap_selection([], 'parent_5stage', 30, evaluation_algorithm='future-unknown')
+
+
+def test_v3_cannot_use_costs_first_available_in_holdout_for_train_selection(tmp_path, monkeypatch):
+    from src.engine.scalping.initial_quantity_refresh_evaluation import VERSION
+    outcomes = {'cap_10pct': lambda day, i, p: p + 6}
+    result = _prevalidated_joint_selection(tmp_path/'current', monkeypatch, outcomes,
+        cost_available_at='2026-10-07T08:00:00+09:00')
+    assert len(result['purged_trade_ids']) == 40 and result['train_trade_ids'] == []
+    assert result['type_decisions']['KRX_PARENT']['train_selected_candidate'] is None
+    old = _prevalidated_joint_selection(tmp_path/'old', monkeypatch, outcomes, algorithm=VERSION,
+        cost_available_at='2026-10-07T08:00:00+09:00')
+    assert old['purged_trade_ids'] == []
+    assert old['type_decisions']['KRX_PARENT']['selected_ratio_mode'] == 'cap_10pct'
 
 
 def test_joint_replay_probe_is_two_slots_and_price_time_bound():
@@ -1105,7 +1360,7 @@ def test_native_capture_loss_is_isolated_before_joint_policy_selection(tmp_path)
 
 
 def _quantity_completion_overlay_fixture(tmp_path, monkeypatch, *, day='2026-10-08', actual=False,
-                                         terminal_price=101000, identity=None):
+                                         terminal_price=101000, identity=None, meta_overrides=None):
     from src.engine import log_archive_service as archive
     from src.engine import strategy_position_performance_report as native
     from src.engine.lifecycle import broker_cost_reconciliation as costs
@@ -1145,6 +1400,7 @@ def _quantity_completion_overlay_fixture(tmp_path, monkeypatch, *, day='2026-10-
                  metrics=dict(total_trades=0,canonical_completed_trades=1),
                  sections=dict(recent_trades=[],strategy_position_fact_projection=strategy_fact_projection_rows([]),
                                completed_trade_projection=[row],open_scalp_position_projection=[]))
+    payload['meta'].update(meta_overrides or {})
     payload['meta']['completed_census_manifest']=completed_census_manifest(payload)
     path=archive.save_monitor_snapshot('trade_review',day,payload)
     source=native._load_completion_fact_projection(day,path)
@@ -1160,6 +1416,75 @@ def _overlay_for_test(tmp_path, rows, *, as_of='2026-10-08', issue=None):
     from src.engine.scalping.initial_quantity_source_cache import completion_overlay
     return completion_overlay(rows, as_of=as_of, data_dir=tmp_path, entry_on_or_after='2026-09-29',
         entry_generations={'2026-10-08':{'issue':issue}}, validate_day=lambda day:None)
+
+
+@pytest.mark.parametrize('fractional', [False, True])
+def test_bounded_completion_projection_retains_quantity_receipt_without_global_pnl(monkeypatch, tmp_path, fractional):
+    from src.engine import strategy_position_performance_report as native
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    fact = (_fractional_allocated_quantity_fact if fractional else _allocated_quantity_fact)(tmp_path, record_id=1)
+    receipt = fact['quantity_research_cost']
+    identity = dict(rec_date='2026-10-08', buy_price=fact['buy_price'], buy_qty=fact['buy_qty'],
+        buy_time=fact['buy_time'], sell_price=fact['sell_price'], sell_time=fact['sell_time'],
+        quantity_research_cost=receipt)
+    original, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, identity=identity)
+    original.update({key:fact[key] for key in ('rec_date', 'buy_price', 'buy_qty', 'buy_time')})
+    projected = native._load_completion_fact_projection('2026-10-08', path)
+    assert projected['sections']['completed_trade_projection'][0]['quantity_research_cost'] == receipt
+    completed = [{**row, 'strategy': 'SCALPING'} for row in projected['sections']['completed_trade_projection']]
+    canonical = native._trade_fact_rows_from_report('2026-10-08', {
+        'meta': projected['meta'], 'sections': {'recent_trades': completed,
+        'completed_trade_projection': completed}})
+    assert canonical[0]['profit_rate'] is None and canonical[0]['realized_pnl_krw'] is None
+    overlaid = _overlay_for_test(tmp_path, [original])
+    assert overlaid[0]['quantity_research_cost'] == receipt
+    assert overlaid[0]['profit_rate'] is None and overlaid[0]['realized_pnl_krw'] is None
+    assert overlaid[0]['actual_cost_source_generation']['quantity_research_cost_generation']['projection_scope'] == 'record'
+    assert overlaid[0]['completion_generation']['schema'] == 'initial_quantity_completion_generation_reference_v1'
+    assert overlaid.completion_generations['2026-10-08']['completion_snapshot_source']['actual_cost_source_generation']['quantity_research_cost_generation'].get('projection_scope') is None
+    _quality(tmp_path, '2026-10-08')
+    report = policy.build_initial_quantity_replay('2026-10-08', data_dir=tmp_path,
+        fact_rows=overlaid, entry_on_or_after='2026-09-29')
+    assert report['trades'][0]['actual_net_pnl_krw'] == receipt['allocated_net_pnl_krw']
+    assert report['trades'][0]['actual_execution_cost'] is False
+    assert policy.initial_replay_economics_valid(report)
+    serialized = json.loads(json.dumps(report))
+    timeout = build_timeout_research('2026-10-08', data_dir=tmp_path,
+        fact_rows=serialized['census']['input_fact_rows'], entry_on_or_after='2026-09-29', replay=serialized)
+    assert timeout['census'] == serialized['census']
+
+
+def test_native_fact_record_cost_generations_remain_linear_for_1000_positions():
+    from src.engine import strategy_position_performance_report as native
+    day = '2026-10-08'
+    generation = dict(schema='holding_actual_cost_source_generation_v1', completion_date=day,
+        count=0, sha256='g'*64, status='cost_source_unavailable', quantity_research_cost_generation=dict(
+            receipts=[dict(record_id=str(rid), sha256='a'*64, content_sha256='b'*64, receipt_sha256='c'*64)
+                      for rid in range(1, 1001)],
+            source_dates=[dict(source_date=day, sha256='d'*64, source_sha256='e'*64)]))
+    original = copy.deepcopy(generation)
+    completed = [dict(id=rid, rec_date=day, code='005930', strategy='SCALPING', position_tag='SCANNER',
+        status='COMPLETED', buy_price=100, buy_qty=4, buy_time=day+'T09:30:00+09:00',
+        sell_price=110, sell_time=day+'T09:35:00+09:00', completion_observed_date=day,
+        terminal_population_scope='real_record_bound', strict_completion_status='excluded',
+        quantity_research_cost=dict(sources=[dict(source_date=day)])) for rid in range(1, 1001)]
+    report = dict(meta=dict(completed_census_manifest=dict(actual_cost_source_generation=generation)),
+        sections=dict(recent_trades=completed, completed_trade_projection=completed))
+    converted = native._trade_fact_rows_from_report(day, report)
+    costs = [row['actual_cost_source_generation'] for row in converted]
+    assert len(costs) == 1000 and generation == original
+    assert all(len(cost['quantity_research_cost_generation']['receipts']) == 1 for cost in costs)
+    assert all(cost['quantity_research_cost_generation']['parent_generation_sha256'] == generation['sha256'] for cost in costs)
+    assert sum(len(json.dumps(cost)) for cost in costs) < 2 * 1024 * 1024
+    assert all(row['profit_rate'] is None and row['realized_pnl_krw'] is None for row in converted)
+
+
+def test_newer_completion_without_research_receipt_clears_stale_cost(monkeypatch, tmp_path):
+    original, _ = _quantity_completion_overlay_fixture(tmp_path, monkeypatch)
+    original['quantity_research_cost'] = {'stale': True}
+    overlaid = _overlay_for_test(tmp_path, [original])
+    assert 'quantity_research_cost' not in overlaid[0]
+    assert overlaid[0]['profit_rate'] is None and overlaid[0]['realized_pnl_krw'] is None
 
 
 @pytest.mark.parametrize('actual',[False,True])
@@ -1307,6 +1632,33 @@ def test_completion_overlay_cache_key_contains_terminal_generation_even_with_sam
     first=cache.fingerprint([trade],raw,600)
     second=cache.fingerprint([{**trade,'completion_generation':{'sha256':'b'*64}}],raw,600)
     assert first!=second
+
+
+def test_allocated_cost_price_cache_reuses_only_identical_execution_inputs(tmp_path, monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    captures = {}
+    monkeypatch.setattr(policy, '_quantity_capture_lifecycle_sources', lambda *a: (copy.deepcopy(captures), []))
+    raw = tmp_path/'pipeline_events/pipeline_events_2026-10-07.jsonl'
+    raw.parent.mkdir(); raw.write_bytes(b'')
+    trade = dict(trade_id='fact:1', record_id='1', stock_code='005930', entry_date='2026-10-07',
+        exit_date='2026-10-08', entry_at_fact_buy_time='2026-10-07T09:30:00', exit_at='2026-10-08T10:00:00',
+        buy_qty=4, buy_price=100, sell_price=110, cost_basis='broker_confirmed_total_allocated',
+        completion_generation={'sha256': 'a'*64}, fact_generation={'sha256': 'b'*64})
+    first = cache.fingerprint([trade], raw, 600)
+    assert first['schema'] == 'initial_quantity_source_features_v6'
+    changed_cost = {**trade, 'completion_generation': {'sha256': 'c'*64},
+        'fact_generation': {'sha256': 'd'*64}, 'realized_net_pnl_krw': 20, 'cost_available_at': 'later'}
+    assert cache.fingerprint([changed_cost], raw, 600) == first
+    for field, value in [('record_id', '2'), ('entry_at_fact_buy_time', '2026-10-07T09:31:00'),
+                         ('exit_at', '2026-10-08T10:01:00'), ('buy_qty', 5), ('buy_price', 101), ('sell_price', 111)]:
+        assert cache.fingerprint([{**trade, field: value}], raw, 600) != first
+    assert cache.fingerprint([trade], raw, 1200) != first
+    raw.write_bytes(b'changed')
+    assert cache.fingerprint([trade], raw, 600) != first
+    raw.write_bytes(b'')
+    before_capture = cache.fingerprint([trade], raw, 600)
+    captures['changed'] = 'source'
+    assert cache.fingerprint([trade], raw, 600) != before_capture
 
 
 def test_quantity_database_reader_overlays_carry_only_in_memory_and_keeps_entry_receipt(tmp_path,monkeypatch):

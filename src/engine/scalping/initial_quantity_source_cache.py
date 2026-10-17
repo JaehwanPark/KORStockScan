@@ -53,6 +53,15 @@ class ResidentFacts(BoundedRows):
             for row in rows:self.append(row)
 
 
+def completion_generation_reference(generation):
+    """New research generations have one shared native proof, not N copies."""
+    costs = (generation.get('completion_snapshot_source') or {}).get('actual_cost_source_generation') or {}
+    if 'quantity_research_cost_generation' not in costs:
+        return generation
+    return dict(schema='initial_quantity_completion_generation_reference_v1',
+                source_date=generation['source_date'], generation_sha256=hashlib.sha256(storage.encoded(generation)).hexdigest())
+
+
 def encode(value):
     if isinstance(value,datetime):return {'__quantity_datetime__':value.isoformat()}
     if isinstance(value,dict):return {k:encode(v) for k,v in value.items()}
@@ -83,11 +92,19 @@ def fingerprint(trades,path,horizon):
     readers['utils/jsonl_io.py']=engine.parent/'utils/jsonl_io.py'
     reader={name:hashlib.sha256(path.read_bytes()).hexdigest()
             for name,path in readers.items()}
-    return dict(schema='initial_quantity_source_features_v5',source=leaf,
+    legacy_fields = ('trade_id','record_id','stock_code','entry_date','exit_date',
+                     'entry_at_fact_buy_time','exit_at','completion_generation','fact_generation')
+    # Cost allocation is independently checked against the complete native
+    # generations. Price-feature reuse depends on execution inputs, so a new
+    # confirmed-cost observation must not decode the same raw price partition.
+    execution_fields = ('trade_id','record_id','stock_code','entry_date','exit_date',
+                        'entry_at_fact_buy_time','exit_at','buy_qty','buy_price','sell_price')
+    allocated = any(r.get('cost_basis') == 'broker_confirmed_total_allocated' for r in trades)
+    return dict(schema='initial_quantity_source_features_v6' if allocated else 'initial_quantity_source_features_v5',source=leaf,
                 archive=byte_generation(archive) if archive.exists() else None,
                 capture_lifecycle_generation=captures,
                 reader=reader, horizon=horizon,
-                trades=[{k:r.get(k) for k in ('trade_id','record_id','stock_code','entry_date','exit_date','entry_at_fact_buy_time','exit_at','completion_generation','fact_generation')} for r in trades])
+                trades=[{k:r.get(k) for k in (execution_fields if r.get('cost_basis') == 'broker_confirmed_total_allocated' else legacy_fields)} for r in trades])
 
 
 def _read_index(path):
@@ -395,6 +412,8 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
     originals = {str(row['id']): row for row in converted}
     for terminal in projected:
         source = originals[str(terminal['recommendation_id'])]
+        if 'quantity_research_cost' in source:
+            terminal['quantity_research_cost'] = source['quantity_research_cost']
         for key in ('add_count', 'avg_down_count', 'pyramid_count'):
             if key not in source:
                 terminal.pop(key, None)
@@ -498,6 +517,7 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
             raise ValueError('quantity_completion_projection_missing')
         completed, generation = loaded
         generations[day] = generation
+        generation_reference = completion_generation_reference(generation)
         native_observation_count += len(completed)
         for terminal in completed:
             rid = str(terminal['recommendation_id'])
@@ -557,8 +577,14 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
                         'completion_census_run_id', 'completion_census_projection_sha256', 'broker_actual_fees_taxes_krw'):
                 value = terminal.get(key)
                 updated[key] = value.isoformat() if isinstance(value, datetime) else value
+            # Research receipts never change canonical actual economics. A newer
+            # terminal without one must also clear any stale inherited receipt.
+            if 'quantity_research_cost' in terminal:
+                updated['quantity_research_cost'] = terminal['quantity_research_cost']
+            else:
+                updated.pop('quantity_research_cost', None)
             updated.update(original_fact_status=original_status, completion_source_date=day,
-                           completion_generation=generation,
+                           completion_generation=generation_reference,
                            completion_observed_scale_in_fields=observed_counts,
                            completion_scale_in_observations=count_sources)
             current[rid] = updated
@@ -572,6 +598,9 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
     verify_completion_overlay_generations(generations, data_dir=data_dir,
         read=bounded_read if source_generations is not None else None)
     result = ResidentFacts(list(current.values()))
+    if any('quantity_research_cost_generation' in (gen.get('cost_generation') or {})
+           for gen in entry_generations.values() if isinstance(gen, dict)):
+        result.persisted_fact_generations = entry_generations
     result.completion_generations = generations
     result.completion_overlay_summary = dict(schema='initial_quantity_completion_overlay_v1',
         as_of=as_of, overlaid_record_ids=sorted(overlays), overlaid_completed_count=len(overlays),

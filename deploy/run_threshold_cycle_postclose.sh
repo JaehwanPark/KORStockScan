@@ -1804,9 +1804,11 @@ fi
 wait_for_postclose_resources "holding_broker_cost_source"
 # Freeze official cost provenance before trade facts and quantity refresh bind
 # its generation. Missing costs remain unknown and never block protection or
-# become a new initial-policy approval gate.
+# become a new initial-policy approval gate. Drain TARGET plus at most one
+# unresolved prior source date; the collector's 150s budget stays inside this
+# existing 180s timeout. Only verified consumer receipts acknowledge costs.
 if ! run_postclose_cmd timeout 180 env PYTHONPATH=. "$VENV_PY" \
-  -m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE"; then
+  -m src.engine.lifecycle.broker_cost_source --date "$TARGET_DATE" --drain-pending; then
   echo "[WARN] official holding costs unavailable; preserve source gap date=$TARGET_DATE" >&2
 fi
 

@@ -1,5 +1,6 @@
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -182,3 +183,271 @@ def test_unit_http_default_cannot_reach_real_account_service(monkeypatch):
                         lambda *_a, **_kw: pytest.fail("network send escaped test isolation"))
     with pytest.raises(requests.exceptions.RequestException, match="unit_test_http_not_mocked"):
         requests.post("https://api.kiwoom.com/api/dostk/acnt", json={})
+
+
+def pending(tmp_path, *, records=(7,), days=(DAY,), completion="2026-10-09"):
+    return C.enqueue_pending(tmp_path, completion, days, records,
+                             ["broker_cost_pending"], now=NOW)
+
+
+def pending_record(tmp_path, day=DAY, record_id="7", completion="2026-10-09"):
+    return C._pending_load(tmp_path)["dates"][day]["records"][completion + ":" + record_id]
+
+
+def test_pending_enqueue_is_idempotent_bounded_and_never_collects(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "collect", lambda *_a, **_kw: pytest.fail("enqueue used provider"))
+    first = pending(tmp_path)
+    path = C._pending_path(tmp_path)
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    assert pending(tmp_path) == first
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    assert pending_record(tmp_path)["status"] == "pending"
+    with pytest.raises(ValueError, match="request_invalid"):
+        pending(tmp_path, records=("not-an-id",))
+    with pytest.raises(ValueError, match="source_after_completion"):
+        pending(tmp_path, days=("2026-10-10",))
+    with pytest.raises(ValueError, match="reasons_invalid"):
+        C.enqueue_pending(tmp_path, "2026-10-09", [DAY], [7], ["not a reason"])
+    assert path.read_bytes() == before[0]
+
+
+def test_pending_source_dates_persist_across_completion_dates_and_ack_only_matching_records(tmp_path):
+    pending(tmp_path, records=(7, 8))
+    C.enqueue_pending(tmp_path, "2026-10-10", [DAY], [7], {"cost": ["source_pending"]}, now=NOW)
+    C.resolve_pending(tmp_path, "2026-10-09", [7], reason="verified_research_receipt", now=NOW)
+    assert pending_record(tmp_path)["status"] == "resolved"
+    assert pending_record(tmp_path, record_id="8")["status"] == "pending"
+    assert pending_record(tmp_path, completion="2026-10-10")["status"] == "pending"
+    pending(tmp_path)
+    assert pending_record(tmp_path)["revision"] == 2
+    assert pending_record(tmp_path)["status"] == "pending"
+
+
+def test_drain_collects_target_then_one_prior_and_preserves_intraday_orders(tmp_path):
+    old, _, transport, calls = broker_fixture(tmp_path)
+    original = C.source_path(tmp_path, DAY).read_bytes()
+    pending(tmp_path)
+    pending(tmp_path, days=("2026-10-07",), records=(8,))
+    calls.clear()
+    next_day = NOW + timedelta(days=1)
+    result = C.drain_pending(tmp_path, "2026-10-09", transport=transport, now=next_day)
+    assert [r["source_date"] for r in result["attempts"]] == ["2026-10-09", "2026-10-07"]
+    assert len(calls) == 9  # five TARGET transports, four historical transports
+    assert sum(api == "ka10076" for api, _ in calls) == 1
+    assert pending_record(tmp_path)["status"] == "pending"
+    calls.clear()
+    result = C.drain_pending(tmp_path, "2026-10-09", transport=transport, now=next_day)
+    assert [r["source_date"] for r in result["attempts"]] == ["2026-10-09", DAY]
+    assert result["attempts"][0]["status"] == "already_attempted_today"
+    assert len(calls) == 4
+    updated = C.load_source(tmp_path, DAY)
+    assert updated["observations"]["ka10076"] == old["observations"]["ka10076"]
+    archived = C.source_path(tmp_path, DAY).parent / "generations" / DAY / (old["source_sha256"] + ".json")
+    assert archived.read_bytes() == original
+    receipt = result["attempts"][1]
+    assert receipt["previous_source_sha256"] == old["source_sha256"]
+    assert receipt["source_sha256"] == updated["source_sha256"]
+    assert receipt["source_changed"] is True
+    assert receipt["receipt_sha256"] == digest({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+    calls.clear()
+    C.drain_pending(tmp_path, "2026-10-09", transport=transport, now=next_day)
+    assert calls == []
+
+
+def test_verified_ack_stops_retry_until_explicit_new_unresolved_record(tmp_path):
+    _, _, transport, calls = broker_fixture(tmp_path)
+    pending(tmp_path)
+    C.resolve_pending(tmp_path, "2026-10-09", [7], now=NOW)
+    calls.clear()
+    result = C.drain_pending(tmp_path, "2026-10-09", transport=transport, now=NOW + timedelta(days=1))
+    assert [r["source_date"] for r in result["attempts"]] == ["2026-10-09"]
+    assert result["pending_dates"] == []
+    pending(tmp_path, records=(8,))
+    calls.clear()
+    result = C.drain_pending(tmp_path, "2026-10-10", transport=transport, now=NOW + timedelta(days=2))
+    assert [r["source_date"] for r in result["attempts"]] == ["2026-10-10", DAY]
+    assert pending_record(tmp_path)["status"] == "resolved"
+    assert pending_record(tmp_path, record_id="8")["status"] == "pending"
+
+
+def test_pending_expiry_is_terminal_explicit_and_original_source_is_preserved(tmp_path):
+    old, _, transport, calls = broker_fixture(tmp_path)
+    original = C.source_path(tmp_path, DAY).read_bytes()
+    pending(tmp_path)
+    calls.clear()
+    later = NOW + timedelta(days=61)
+    result = C.drain_pending(tmp_path, later.date().isoformat(), transport=transport, now=later)
+    assert result["expired_dates"] == [DAY]
+    record = pending_record(tmp_path)
+    assert record["status"] == "expired"
+    assert record["expiry_reason"] == "broker_cost_date_outside_supported_window"
+    assert record["next_action"] == "retain_unknown_require_external_verified_cost_source"
+    assert result["pending_dates"] == []
+    assert C.source_path(tmp_path, DAY).read_bytes() == original
+    assert C.load_source(tmp_path, DAY) == old
+    pending(tmp_path)
+    assert pending_record(tmp_path)["status"] == "expired"
+
+
+def test_failed_prior_claim_is_not_retried_until_next_kst_day_and_keeps_source(tmp_path):
+    old, _, transport, calls = broker_fixture(tmp_path)
+    original = C.source_path(tmp_path, DAY).read_bytes()
+    pending(tmp_path)
+    next_day = NOW + timedelta(days=1)
+    def incomplete(api, payload):
+        pages, meta = transport(api, payload)
+        if payload.get("base_dt") == "20261008":
+            meta["continuous_terminal_received"] = False
+        return pages, meta
+    result = C.drain_pending(tmp_path, "2026-10-09", transport=incomplete, now=next_day)
+    assert result["status"] == "source_gap"
+    assert result["attempts"][1]["status"] == "source_gap"
+    assert C.source_path(tmp_path, DAY).read_bytes() == original
+    assert pending_record(tmp_path)["status"] == "pending"
+    calls.clear()
+    C.drain_pending(tmp_path, "2026-10-09", transport=incomplete, now=next_day)
+    assert calls == []
+    result = C.drain_pending(tmp_path, "2026-10-10", transport=transport, now=next_day + timedelta(days=1))
+    assert result["attempts"][1]["source_sha256"] != old["source_sha256"]
+
+
+def test_failed_target_daily_claim_never_becomes_observed_on_unchanged_retry(tmp_path):
+    _, _, transport, calls = broker_fixture(tmp_path)
+    def incomplete(api, payload):
+        pages, meta = transport(api, payload)
+        meta["continuous_terminal_received"] = False
+        return pages, meta
+    first = C.drain_pending(tmp_path, "2026-10-09", transport=incomplete, now=NOW + timedelta(days=1))
+    assert first["status"] == "source_gap"
+    calls.clear()
+    second = C.drain_pending(tmp_path, "2026-10-09", transport=incomplete, now=NOW + timedelta(days=1))
+    assert second["status"] == "source_gap"
+    assert second["attempts"][0]["last_collection_status"] == "source_gap"
+    assert second["attempts"][0]["last_attempt_receipt_sha256"] == first["attempts"][0]["receipt_sha256"]
+    assert calls == []
+
+
+def test_early_target_can_freeze_final_same_day_orders_without_repeating_prior_claim(tmp_path):
+    _, _, transport, calls = broker_fixture(tmp_path)
+    pending(tmp_path)
+    early = NOW.replace(hour=18) + timedelta(days=1)
+    C.drain_pending(tmp_path, "2026-10-09", transport=transport, now=early)
+    calls.clear()
+    final = C.drain_pending(tmp_path, "2026-10-09", transport=transport, now=early.replace(hour=21))
+    assert [r["source_date"] for r in final["attempts"]] == ["2026-10-09"]
+    assert len(calls) == 5
+    assert sum(api == "ka10076" for api, _ in calls) == 1
+
+
+def test_generation_collision_preserves_current_source_bytes(tmp_path):
+    source, _, transport, _ = broker_fixture(tmp_path)
+    path = C.source_path(tmp_path, DAY)
+    original = path.read_bytes()
+    archived = path.parent / "generations" / DAY / (source["source_sha256"] + ".json")
+    archived.parent.mkdir(parents=True)
+    archived.write_bytes(b"foreign-incomplete-generation\n")
+    with pytest.raises(ValueError, match="history_collision"):
+        C.collect(tmp_path, DAY, transport=transport, now=NOW + timedelta(days=1))
+    assert path.read_bytes() == original
+    assert archived.read_bytes() == b"foreign-incomplete-generation\n"
+
+
+def test_drain_budget_stops_before_next_transport_and_never_promotes_partial_source(tmp_path, monkeypatch):
+    _, _, transport, calls = broker_fixture(tmp_path)
+    pending(tmp_path)
+    ticks = [0.0]
+    monkeypatch.setattr(C.time, "monotonic", lambda: ticks[0])
+    def slow(api, payload):
+        value = transport(api, payload)
+        ticks[0] += 90
+        return value
+    calls.clear()
+    result = C.drain_pending(tmp_path, "2026-10-09", transport=slow,
+                             now=NOW + timedelta(days=1), budget_seconds=100)
+    assert len(calls) == 2
+    assert result["status"] == "budget_deferred"
+    assert result["attempts"][0]["reason"] == "broker_cost_collection_budget_exhausted"
+    assert C.load_source(tmp_path, "2026-10-09") is None
+    assert pending_record(tmp_path)["status"] == "pending"
+    assert C._pending_load(tmp_path)["dates"][DAY].get("last_attempt_day") is None
+
+
+def test_drain_lock_prevents_duplicate_calls_and_concurrent_enqueue_is_not_lost(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    _, _, transport, calls = broker_fixture(tmp_path)
+    pending(tmp_path)
+    entered, release = Event(), Event()
+    def paused(api, payload):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(3)
+        return transport(api, payload)
+    calls.clear()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(C.drain_pending, tmp_path, "2026-10-09", transport=paused,
+                             now=NOW + timedelta(days=1))
+        try:
+            assert entered.wait(3)
+            before = len(calls)
+            second = C.drain_pending(tmp_path, "2026-10-09", transport=transport,
+                                     now=NOW + timedelta(days=1))
+            assert second["status"] == "drain_in_progress"
+            assert len(calls) == before
+            pending(tmp_path, records=(8,))
+            C.resolve_pending(tmp_path, "2026-10-09", [7], now=NOW)
+        finally:
+            release.set()
+        assert future.result(timeout=3)["status"] == "observed"
+    assert pending_record(tmp_path)["status"] == "resolved"
+    assert pending_record(tmp_path, record_id="8")["status"] == "pending"
+    assert len(calls) == 9
+
+
+def test_pending_correction_archives_exact_old_bytes_and_cache_uses_kst_date(tmp_path):
+    old, _, transport, calls = broker_fixture(tmp_path)
+    path = C.source_path(tmp_path, DAY)
+    original = path.read_bytes()
+    def corrected(api, payload):
+        pages, meta = transport(api, payload)
+        if api == "ka10170":
+            pages[0]["tdy_trde_diary"][0]["cmsn_alm_tax"] = "20"
+            pages[0]["tdy_trde_diary"][0]["pl_amt"] = "180"
+        return pages, meta
+    # The UTC date is still DAY, but the actual KST collection day is DAY+1.
+    next_morning = (NOW + timedelta(days=1)).replace(hour=1).astimezone(timezone.utc)
+    new = C.collect(tmp_path, DAY, transport=corrected, now=next_morning)
+    assert new["source_sha256"] != old["source_sha256"]
+    archived = path.parent / "generations" / DAY / (old["source_sha256"] + ".json")
+    assert archived.read_bytes() == original
+    calls.clear()
+    assert C.collect(tmp_path, DAY, transport=corrected,
+                     now=next_morning.astimezone(C.KST)) == new
+    assert calls == []
+
+
+def test_corrupt_pending_state_fails_closed_without_calls_or_overwrite(tmp_path):
+    _, _, transport, calls = broker_fixture(tmp_path)
+    pending(tmp_path)
+    path = C._pending_path(tmp_path)
+    state = json.loads(path.read_text())
+    state["dates"][DAY]["records"]["2026-10-09:7"]["status"] = "resolved"
+    path.write_text(json.dumps(state))
+    bad = path.read_bytes()
+    calls.clear()
+    with pytest.raises(ValueError, match="pending_contract_invalid"):
+        C.drain_pending(tmp_path, "2026-10-09", transport=transport, now=NOW + timedelta(days=1))
+    assert path.read_bytes() == bad
+    assert calls == []
+
+
+def test_cli_pending_uses_existing_date_report_and_rejects_refresh_bypass(tmp_path, monkeypatch):
+    from src.utils import constants
+    monkeypatch.setattr(constants, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(C, "drain_pending", lambda root, day: {
+        "status": "source_gap", "source_date": day, "attempts": [], "pending_dates": [DAY]})
+    assert C.main(["--date", DAY, "--drain-pending"]) == 2
+    report = tmp_path / "report/holding_broker_cost_source" / (DAY + ".json")
+    assert json.loads(report.read_text())["pending_dates"] == [DAY]
+    with pytest.raises(SystemExit):
+        C.main(["--date", DAY, "--drain-pending", "--refresh"])

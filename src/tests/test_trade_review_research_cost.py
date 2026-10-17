@@ -1,0 +1,409 @@
+"""Research allocation remains separate from canonical broker execution costs."""
+from copy import deepcopy
+from dataclasses import replace
+
+import pytest
+
+from src.engine import sniper_trade_review_report as review
+from src.engine.lifecycle import broker_cost_reconciliation as exact
+from src.tests.test_broker_cost_reconciliation import fixture, seal
+
+
+def custody(record=1, *, qty=2, state="full"):
+    return dict(record_id=str(record), state=state, filled_qty=qty,
+                source_quality_reasons=[], owner_type="main_scalping",
+                owner_id=f"main_scalping:{record}", account_key="research-test-account")
+
+
+def test_exact_receipt_can_bind_verified_custody_when_terminal_cost_context_is_absent():
+    trade, events, ledger, context, receipt = fixture()
+    events = [replace(event, fields={key:value for key,value in event.fields.items()
+              if key not in {"holding_cost_owner", "holding_cost_account_scope_sha256"}})
+              for event in events]
+    receipt["account_scope_sha256"] = exact.digest(["broker_account", "research-test-account"])
+    seal(receipt)
+    row = review._completed_trade_projection(trade, events, {}, cost_receipt=receipt,
+                                            cost_custody_rows=[custody()])
+    assert row["economics_status"] == "actual_cost_reconciled"
+    assert row["broker_actual_fees_taxes_krw"] == 10
+    assert row["realized_pnl_krw"] == 190
+
+
+@pytest.mark.parametrize("fault", ["owner", "quantity", "open", "missing_account", "source_gap", "explicit_conflict"])
+def test_exact_cost_context_fallback_never_invents_custody(fault):
+    trade, events, _, _, receipt = fixture()
+    events = [replace(event, fields={key:value for key,value in event.fields.items()
+              if key not in {"holding_cost_owner", "holding_cost_account_scope_sha256"}})
+              for event in events]
+    owner = custody()
+    if fault == "owner": owner["owner_type"] = "manual"
+    elif fault == "quantity": owner["filled_qty"] = 1
+    elif fault == "open": owner["state"] = "cancel_pending"
+    elif fault == "missing_account": owner["account_key"] = None
+    elif fault == "source_gap": owner["source_quality_reasons"] = ["fill_census_mismatch"]
+    else:
+        events[-1] = replace(events[-1], fields={**events[-1].fields, "holding_cost_owner": "manual"})
+    receipt["account_scope_sha256"] = exact.digest(["broker_account", "research-test-account"])
+    seal(receipt)
+    row = review._completed_trade_projection(trade, events, {}, cost_receipt=receipt,
+                                            cost_custody_rows=[owner])
+    assert row["broker_actual_fees_taxes_krw"] is None
+    assert row["realized_pnl_krw"] is None
+    assert row["economics_status"] == "actual_cost_invalid"
+
+
+def setup_report(monkeypatch, tmp_path, *, allocation_status="research_cost_allocated", native=False):
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle import broker_cost_source as source
+    trade, events, _, _, _ = fixture()
+    trade.update(name="Test", position_tag="SCANNER", buy_time=events[0].timestamp,
+                 sell_time=events[-1].timestamp)
+    events = [replace(event, fields={**event.fields, "id":"1"}) for event in events]
+    opened = {**trade, "id":2, "status":"HOLDING", "rec_date":"2026-10-07",
+              "buy_qty":1, "buy_time":"2026-10-07 15:00:00", "sell_time":None,
+              "sell_price":None, "profit_rate":None}
+    prior_buy = replace(events[0], timestamp="2026-10-07 15:00:00", fields={
+        **events[0].fields, "id":"2", "order_no":"20", "execution_no":"21",
+        "fill_qty":1, "order_filled_qty":1, "order_requested_qty":1})
+    events.append(prior_buy)
+    owners = [custody(), custody(2, qty=1, state="partial_open")]
+    calls = dict(load_dates=[], positions=[], persist=[], enqueue=[], resolve=[], events=events)
+    monkeypatch.setattr(review, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(review, "guard_stdin_heavy_build", lambda **kw: None)
+    monkeypatch.setattr(review, "load_monitor_snapshot", lambda *a: None)
+    monkeypatch.setattr(review, "_iter_target_lines", lambda *a, **kw: [])
+    monkeypatch.setattr(review, "_fetch_trade_rows", lambda *a: ([trade,opened], []))
+    monkeypatch.setattr(review, "_fetch_open_scalp_rows", lambda *a: ([], []))
+    monkeypatch.setattr(review, "_fetch_completed_trade_rows_by_ids", lambda *a: ([], []))
+    monkeypatch.setattr(review, "_load_holding_projection_events_from_structured",
+                        lambda *a: (events, "structured_partition_read", []))
+    monkeypatch.setattr(review, "_load_buy_parent_handoff_projection", lambda *a: {
+        "rows":owners, "counts":{}, "source_quality_status":"verified"})
+    monkeypatch.setattr(review, "_prior_entry_fill_events", lambda *a: ({}, {}))
+    monkeypatch.setattr(review, "find_gatekeeper_snapshot_for_trade", lambda *a: None)
+    monkeypatch.setattr(exact, "load_receipt", lambda *a: None)
+    if native:
+        return calls
+    monkeypatch.setattr(exact, "source_generation", lambda *a, **kw: {"status":"unchanged"})
+    monkeypatch.setattr(source, "load_source", lambda root, day: calls["load_dates"].append(day))
+    receipt = dict(schema="initial_quantity_broker_total_allocated_cost_v1", status=allocation_status,
+        record_id="1", allocated_fees_taxes_krw=10 if allocation_status=="research_cost_allocated" else None,
+        allocated_net_pnl_krw=190 if allocation_status=="research_cost_allocated" else None,
+        allocated_profit_rate=.95 if allocation_status=="research_cost_allocated" else None,
+        reason=None if allocation_status=="research_cost_allocated" else "broker_cost_source_missing")
+    def build(sources, positions):
+        calls["positions"] = deepcopy(positions)
+        return {"1":receipt}
+    monkeypatch.setattr(allocation, "build_research_cost_allocations", build)
+    monkeypatch.setattr(allocation, "validate_research_cost", lambda receipt, **kw: receipt)
+    monkeypatch.setattr(allocation, "persist_research_costs", lambda *a: calls["persist"].append(a))
+    monkeypatch.setattr(source, "enqueue_pending", lambda *a: calls["enqueue"].append(a))
+    monkeypatch.setattr(source, "resolve_pending", lambda *a, **kw: calls["resolve"].append((a, kw)))
+    return calls
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_two_pass_report_includes_open_buy_and_keeps_allocated_cost_separate(monkeypatch, tmp_path, write):
+    calls = setup_report(monkeypatch, tmp_path)
+    result = review.build_trade_review_report("2026-10-08", write_research_costs=write)
+    positions = {row["record_id"]:row for row in calls["positions"]}
+    assert set(positions) == {"1", "2"}
+    assert positions["1"]["terminal_observed"] is True
+    assert positions["2"]["status"] == "HOLDING"
+    assert positions["2"]["buy_legs"][0]["qty"] == 1
+    assert positions["2"]["sell_legs"] == [] and positions["2"]["terminal_observed"] is False
+    assert set(calls["load_dates"]) == {"2026-10-07", "2026-10-08"}
+    completed = result["sections"]["completed_trade_projection"][0]
+    assert completed["quantity_research_cost"]["allocated_net_pnl_krw"] == 190
+    assert completed["broker_actual_fees_taxes_krw"] is None
+    assert completed["realized_pnl_krw"] is None
+    assert "source_gap_broker_actual_cost_missing" in completed["strict_completion_reasons"]
+    assert completed["strict_completion_status"] == "excluded"
+    facts = result["sections"]["strategy_position_fact_projection"]
+    assert next(row for row in facts if row["id"]==1)["quantity_research_cost"] == completed["quantity_research_cost"]
+    assert len(calls["persist"]) == int(write)
+    assert calls["enqueue"] == []
+    assert len(calls["resolve"]) == int(write)
+
+
+def test_unresolved_research_cost_enqueues_prior_dates_only_with_write(monkeypatch, tmp_path):
+    calls = setup_report(monkeypatch, tmp_path, allocation_status="research_cost_pending")
+    review.build_trade_review_report("2026-10-08")
+    assert calls["persist"] == calls["enqueue"] == calls["resolve"] == []
+    review.build_trade_review_report("2026-10-08", write_research_costs=True)
+    assert len(calls["enqueue"]) == 1
+    _, completion, dates, records, reasons = calls["enqueue"][0]
+    assert completion == "2026-10-08" and dates == ["2026-10-07", "2026-10-08"]
+    assert records == ["1"] and reasons == ["broker_cost_source_missing"]
+    assert calls["resolve"] == []
+
+
+def test_filtered_report_cannot_persist_partial_research_population():
+    with pytest.raises(ValueError, match="unfiltered_population"):
+        review.build_trade_review_report("2026-10-08", code="123456", write_research_costs=True)
+
+
+def test_multiple_missing_dates_remain_queueable_canonical_reason_codes(tmp_path):
+    from src.engine.lifecycle import broker_cost_source as source
+    detail = "research_cost_official_source_missing:2026-10-07;research_cost_official_source_missing:2026-10-08"
+    row = {"quantity_research_cost":{"reason":detail}}
+    reasons = review._quantity_research_pending_reasons([row])
+    assert reasons == ["research_cost_official_source_missing"]
+    queued = source.enqueue_pending(tmp_path, "2026-10-08", ["2026-10-07","2026-10-08"], ["1"], reasons)
+    assert set(queued["dates"]) == {"2026-10-07", "2026-10-08"}
+    assert row["quantity_research_cost"]["reason"] == detail
+
+
+def test_cached_stdin_guard_cannot_silently_skip_requested_cost_producer(monkeypatch):
+    monkeypatch.setattr(review, "load_monitor_snapshot", lambda *a: {})
+    frozen = {"date":"2026-10-08", "cached":True}
+    monkeypatch.setattr(review, "guard_stdin_heavy_build", lambda **kw: frozen)
+    assert review.build_trade_review_report("2026-10-08") is frozen
+    with pytest.raises(ValueError, match="requires_native_report_build"):
+        review.build_trade_review_report("2026-10-08", write_research_costs=True)
+
+
+def test_corrupt_exact_receipt_cannot_be_masked_by_whole_position_fallback(monkeypatch, tmp_path):
+    from src.engine.lifecycle import broker_cost_source as source
+    setup_report(monkeypatch, tmp_path)
+    monkeypatch.setattr(exact, "load_receipt", lambda *a: (_ for _ in ()).throw(ValueError("corrupt_exact_receipt")))
+    monkeypatch.setattr(source, "load_source", lambda *a: {"source_sha256":"a"*64})
+    def forbidden(**kwargs):
+        pytest.fail("corrupt exact receipt must not be replaced by a different cost basis")
+    monkeypatch.setattr(source, "reconcile_position", lambda *a, **kw: forbidden(**kw))
+    result = review.build_trade_review_report("2026-10-08")
+    row = result["sections"]["completed_trade_projection"][0]
+    assert row["economics_status"] == "actual_cost_invalid"
+    assert row["broker_actual_fees_taxes_krw"] is row["realized_pnl_krw"] is None
+    assert row["broker_actual_cost_observed"] is False
+    assert row["strict_completion_status"] == "excluded"
+
+
+def test_native_research_allocation_uses_open_turnover_without_promoting_canonical_cost(monkeypatch, tmp_path):
+    from datetime import datetime
+    from src.engine.lifecycle import broker_cost_source as source
+    calls = setup_report(monkeypatch, tmp_path, native=True)
+    # The known open BUY competes with the completed record for this day's cost.
+    calls["events"][-1] = replace(calls["events"][-1], timestamp="2026-10-08 09:59:00")
+    for index, event in enumerate(calls["events"]):
+        fields = {**event.fields}
+        fields["order_no"] = {"B":"11", "S":"12"}.get(fields["order_no"], fields["order_no"])
+        fields["execution_no"] = {"B1":"1", "S1":"2", "S2":"3"}.get(fields["execution_no"], fields["execution_no"])
+        calls["events"][index] = replace(event, fields=fields)
+    def transport(api, request):
+        response = {"return_code":0}
+        if api == "ka00001": response["acctNo"] = "1234567890"
+        else:
+            key = "trst_ovrl_trde_prps_array" if api=="kt00015" else source.LISTS[api]
+            response[key] = ([{"stk_cd":"123456", "buy_qty":"3", "sell_qty":"2",
+                              "buy_amt":"30000", "sell_amt":"20200",
+                              "cmsn_alm_tax":"25", "pl_amt":"175"}]
+                             if api=="ka10170" else [])
+        return [response], {"page_count":1,"continuous_terminal_received":True}
+    transport.account_key = "research-test-account"
+    source.collect(tmp_path, "2026-10-08", transport=transport,
+                   now=datetime(2026,10,8,21,tzinfo=source.KST))
+    result = review.build_trade_review_report("2026-10-08", write_research_costs=True)
+    row = result["sections"]["completed_trade_projection"][0]
+    allocated = row["quantity_research_cost"]
+    assert allocated["status"] == "research_cost_allocated", allocated
+    assert allocated["allocated_fees_taxes_krw"] == 20
+    assert allocated["allocated_net_pnl_krw"] == 180
+    assert row["broker_actual_fees_taxes_krw"] is row["realized_pnl_krw"] is None
+    assert row["strict_completion_status"] == "excluded"
+    index = tmp_path/"runtime/initial_quantity_research_costs/2026-10-08/index.json"
+    import json
+    assert json.loads(index.read_text())["source_dates"] == ["2026-10-08"]
+
+
+def reobserved_sell_fixture():
+    trade, events, _, _, _ = fixture()
+    base = events[-1]
+    original = replace(base, timestamp="2026-10-08 10:01:02", fields={**base.fields,
+        "id":"1", "holding_path_buy_fill_identity":"a"*64,
+        "broker_execution_provenance_complete":True,
+        "broker_execution_time_source":"official_fid_908",
+        "broker_execution_time_raw":"100101",
+        "broker_execution_observed_at":"2026-10-08T10:01:01+09:00",
+        "broker_execution_received_at":"2026-10-08T10:01:01.500000+09:00"})
+    repeated = replace(original, timestamp="2026-10-08 10:20:00", fields={**original.fields,
+        "native_receipt_identity_schema":"broker_position_sell_receipt_v1",
+        "native_receipt_position_key":"record:1", "native_receipt_record_id":"1",
+        "native_receipt_stock_code":"123456", "native_receipt_order_no":"S",
+        "native_receipt_execution_no":"S2", "native_receipt_buy_fill_identity":"a"*64,
+        "native_receipt_observed_at":"2026-10-08T10:01:01.500000+09:00"})
+    return trade, events[:-1] + [original, repeated]
+
+
+def test_native_sell_reobservation_retains_original_broker_clock_and_evidence():
+    trade, events = reobserved_sell_fixture()
+    before = deepcopy(events)
+    ledger = review._completed_execution_ledger(trade, events)
+    assert "source_gap_duplicate_sell_execution" not in ledger["strict_completion_reasons"]
+    assert ledger["sell_filled_qty"] == 2
+    assert ledger["sell_fill_legs"][-1]["at"] == "2026-10-08 10:01:01"
+    audit = ledger["sell_receipt_reobservation_audit"][0]
+    assert audit["reobserved_count"] == 1
+    assert audit["last_observed_at"] == "2026-10-08 10:20:00"
+    assert len(audit["native_identity_sha256"]) == len(audit["source_event_digests_sha256"]) == 64
+    position = review._quantity_research_position(trade, events, ledger, [])
+    assert position["completed_at"] == "2026-10-08T10:01:01+09:00"
+    assert events == before
+
+
+@pytest.mark.parametrize("fault", ["quantity", "fees", "owner", "account", "route", "authority", "clock", "source_gap", "native_identity", "unwrapped", "unknown"])
+def test_sell_identity_collision_without_full_unchanged_native_proof_stays_excluded(fault):
+    trade, events = reobserved_sell_fixture()
+    fields = dict(events[-1].fields)
+    mutations = {"quantity":("main_lifecycle_exit_qty",2), "fees":("main_lifecycle_fees_taxes_krw",0),
+        "owner":("holding_cost_owner","manual"), "account":("holding_cost_account_scope_sha256","c"*64),
+        "route":("broker_route","NXT"), "authority":("actual_order_submitted",False),
+        "clock":("native_receipt_observed_at","2026-10-08T10:02:01+09:00"),
+        "source_gap":("broker_execution_provenance_complete",False),
+        "native_identity":("native_receipt_execution_no","S3"), "unknown":("future_unclassified_field","changed")}
+    if fault == "unwrapped": fields = {k:v for k,v in fields.items() if not k.startswith("native_receipt_")}
+    else:
+        key,value = mutations[fault]; fields[key] = value
+    events[-1] = replace(events[-1],fields=fields)
+    ledger = review._completed_execution_ledger(trade, events)
+    assert "source_gap_duplicate_sell_execution" in ledger["strict_completion_reasons"]
+    assert ledger["sell_receipt_reobservation_audit"] == []
+
+
+def registry_fill_fixture():
+    trade, _, ledger, _, _ = fixture()
+    anchor = dict(intent_id="intent-1", account_key="acct", order_date="2026-10-08",
+        owner_id="main_scalping:1", owner_type="main_scalping", position_id="main_scalping:1",
+        symbol="123456", side="BUY",action="NEW",route="SOR",quantity=2)
+    reserved={**anchor,"event":"INTENT_RESERVED","state":"INTENT_RESERVED"}
+    bound={**anchor,"event":"ORDER_BOUND","state":"ORDER_BOUND","broker_order_no":"B"}
+    filled={**bound,"event":"FILL_RECORDED","execution_no":"B1","filled_qty":2,"fill_amount":20000}
+    stale={**bound,"event":"STALE_TERMINAL_SNAPSHOT_RECONCILED","state":"ORDER_TERMINAL","filled_qty":2,"fill_amount":20000,"event_hash":"b"*64}
+    generation=dict(status="verified",sha256="a"*64,tail_hash="b"*64)
+    return trade,ledger,[reserved,bound,filled,stale],generation
+
+
+def test_prior_carry_registry_custody_requires_exact_fills_and_never_creates_parent_or_terminal():
+    trade,ledger,rows,generation=registry_fill_fixture()
+    proof=review._quantity_registry_fill_custody(trade,ledger,rows,generation)
+    assert len(proof)==1 and proof[0]["filled_qty"]==2
+    assert proof[0]["owner_id"]=="main_scalping:1" and proof[0]["account_key"]=="acct"
+    assert proof[0]["state"]=="full" and proof[0]["terminal_observed"] is False
+    assert "parent_id" not in proof[0] and proof[0]["cost_krw"] is None
+
+
+@pytest.mark.parametrize("fault", ["missing_fill", "wrong_fill", "stale_only", "bound_order", "owner", "account", "route", "extra_execution", "partial", "unverified"])
+def test_prior_registry_custody_rejects_ambiguous_or_stale_only_sources(fault):
+    trade,ledger,rows,generation=registry_fill_fixture()
+    if fault=="missing_fill": rows=[r for r in rows if r["event"]!="FILL_RECORDED"]
+    elif fault=="wrong_fill": rows[2]["fill_amount"]=19999
+    elif fault=="stale_only": rows=rows[-1:]
+    elif fault=="bound_order": rows.append({**rows[1],"broker_order_no":"OTHER"})
+    elif fault=="owner": rows[0]["owner_id"]="manual:1"
+    elif fault=="account": rows[1]["account_key"]="other"
+    elif fault=="route": rows[1]["route"]="NXT"
+    elif fault=="extra_execution": rows.append({**rows[2],"execution_no":"B2","filled_qty":3,"fill_amount":30000})
+    elif fault=="partial":
+        for row in rows: row["quantity"]=3
+    else: generation["status"]="source_gap"
+    assert review._quantity_registry_fill_custody(trade,ledger,rows,generation)==[]
+
+
+def test_research_registry_read_is_bounded_and_detects_source_change(monkeypatch,tmp_path):
+    from src.engine.lifecycle import research_input_budget as budget
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+    trade,ledger,rows,_=registry_fill_fixture()
+    path=tmp_path/"runtime/order_owner_registry.jsonl";path.parent.mkdir();path.write_text("{}\n")
+    monkeypatch.setattr(review,"DATA_DIR",tmp_path)
+    monkeypatch.setattr(OrderOwnerRegistry,"verified_events_snapshot",lambda *a,**kw:deepcopy(rows))
+    selected,generation=review._quantity_research_custody([(trade,[],{},ledger)],[])
+    assert selected["1"][0]["filled_qty"]==2
+    assert generation["status"]=="verified" and budget.health()["used_bytes"]==0
+    path.write_text("{}\n{}\n")
+    with pytest.raises(ValueError,match="quantity_research_registry_changed_during_report"):
+        review._verify_quantity_research_registry(generation)
+    with path.open("wb") as handle: handle.truncate(4*1024*1024+1)
+    selected,generation=review._quantity_research_custody([(trade,[],{},ledger)],[])
+    assert selected["1"]==[] and generation["status"]=="source_gap"
+    assert generation["reason"]=="quantity_research_registry_partition_required"
+    assert budget.health()["used_bytes"]==0
+
+
+def test_research_registry_budget_failure_cannot_be_silently_demoted_to_missing(monkeypatch,tmp_path):
+    from src.engine.lifecycle import research_input_budget as budget
+    trade,ledger,_,_=registry_fill_fixture()
+    path=tmp_path/"runtime/order_owner_registry.jsonl";path.parent.mkdir();path.write_text("{}\n")
+    monkeypatch.setattr(review,"DATA_DIR",tmp_path)
+    with budget.Claim(budget.LIMIT_BYTES):
+        with pytest.raises(ValueError,match="shared_research_budget_partition_resume_required"):
+            review._quantity_research_custody([(trade,[],{},ledger)],[])
+
+
+@pytest.mark.parametrize("fault", ["owner", "account", "intent"])
+def test_research_registry_rejects_foreign_claim_of_same_exact_order(fault):
+    trade,ledger,rows,generation=registry_fill_fixture()
+    foreign={**rows[2]}
+    foreign[{"owner":"owner_id","account":"account_key","intent":"intent_id"}[fault]]="foreign"
+    rows.append(foreign)
+    assert review._quantity_registry_fill_custody(trade,ledger,rows,generation)==[]
+
+
+@pytest.mark.parametrize("fault", ["chain", "missing_lock"])
+def test_research_registry_corruption_is_local_gap_preserving_verified_native_rows(monkeypatch,tmp_path,fault):
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerRegistryError
+    trade,ledger,_,_=registry_fill_fixture()
+    path=tmp_path/"runtime/order_owner_registry.jsonl";path.parent.mkdir();path.write_text("{}\n")
+    monkeypatch.setattr(review,"DATA_DIR",tmp_path)
+    def broken(*a,**kw):
+        if fault=="chain": raise OwnerRegistryError("owner_registry_hash_chain_invalid")
+        raise FileNotFoundError("registry_lock_missing")
+    monkeypatch.setattr(OrderOwnerRegistry,"verified_events_snapshot",broken)
+    native=[custody(record=2)]
+    native_ledger={**ledger}
+    other={**trade,"id":2}
+    selected,generation=review._quantity_research_custody([(trade,[],{},ledger),(other,[],{},native_ledger)],native)
+    assert selected["1"]==[] and selected["2"]==native
+    assert generation["status"]=="source_gap"
+
+
+@pytest.mark.parametrize("fault", ["manual", "foreign_account", "explicit_conflict"])
+def test_verified_registry_cannot_override_contradictory_native_custody(monkeypatch,tmp_path,fault):
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+    trade,ledger,rows,_=registry_fill_fixture()
+    path=tmp_path/"runtime/order_owner_registry.jsonl";path.parent.mkdir();path.write_text("{}\n")
+    monkeypatch.setattr(review,"DATA_DIR",tmp_path)
+    monkeypatch.setattr(OrderOwnerRegistry,"verified_events_snapshot",lambda *a,**kw:deepcopy(rows))
+    native=custody();native["account_key"]="acct";native["filled_qty"]=1
+    if fault=="manual":native["owner_id"]="manual:1"
+    elif fault=="foreign_account":native["account_key"]="foreign"
+    else:native["source_quality_reasons"]=["registry_submit_identity_mismatch"]
+    selected,_=review._quantity_research_custody([(trade,[],{},ledger)],[native])
+    assert selected["1"]==[native]
+
+
+def test_registry_concurrent_change_during_native_read_is_fatal(monkeypatch,tmp_path):
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry,OwnerRegistryConflict
+    trade,ledger,_,_=registry_fill_fixture()
+    path=tmp_path/"runtime/order_owner_registry.jsonl";path.parent.mkdir();path.write_text("{}\n")
+    monkeypatch.setattr(review,"DATA_DIR",tmp_path)
+    def changed(*a,**kw):raise OwnerRegistryConflict("owner_registry_changed_during_read")
+    monkeypatch.setattr(OrderOwnerRegistry,"verified_events_snapshot",changed)
+    with pytest.raises(OwnerRegistryConflict,match="owner_registry_changed_during_read"):
+        review._quantity_research_custody([(trade,[],{},ledger)],[])
+
+
+def test_native_handoff_accepts_reserve_bind_exact_full_fill_and_keeps_conflicting_order_closed():
+    trade,ledger,journal,_=registry_fill_fixture()
+    _,events,_,_,_=fixture()
+    fields=dict(actual_order_submitted=True,broker_order_no="B",buy_account_key="acct",
+        buy_parent_id="parent",buy_child_id="parent:0",entry_submit_attempt_id="parent",
+        owner_registry_intent_id="intent-1",buy_owner_id="main_scalping:1",buy_owner_type="main_scalping",
+        broker_route="SOR",submitted_qty=2,requested_qty=2,buy_planned_qty=2,buy_registry_mode="registered")
+    sent=dict(stage="order_leg_sent",emitted_date="2026-10-08",record_id=1,stock_code="123456",fields=fields)
+    fills=[replace(e,fields={**e.fields,"id":"1"}) for e in events]
+    result=review._buy_parent_handoff_projection("2026-10-08",[sent],journal,fills,[trade])
+    assert result["counts"]["valid"]==1 and result["rows"][0]["state"]=="full"
+    conflict=journal+[{**journal[1],"broker_order_no":"OTHER"}]
+    result=review._buy_parent_handoff_projection("2026-10-08",[sent],conflict,fills,[trade])
+    assert result["counts"]["valid"]==0
+    assert result["rows"][0]["state"]=="quarantined"

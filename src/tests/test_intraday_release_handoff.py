@@ -126,6 +126,53 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     assert frozen == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
 
 
+@pytest.mark.parametrize('name', [
+    'src/engine/strategy_position_performance_report.py',
+    'src/engine/lifecycle/broker_cost_reconciliation.py',
+])
+@pytest.mark.parametrize('damage', [None, 'before', 'after', 'dirty', 'verifier', 'origin_digest'])
+def test_quantity_cost_handoff_requires_exact_original_and_reviewed_sources(tmp_path, monkeypatch, name, damage):
+    """The new allowance cannot admit another economic source or dirty release."""
+    import hashlib
+    import subprocess
+    root = Path(handoff.__file__).resolve().parents[3]
+    own = 'src/engine/automation/intraday_release_handoff.py'
+    before = subprocess.check_output(['git', '-C', str(root), 'show',
+        '7f2552aedde8fec6ef904a43105827907e50dfc8:' + name])
+    after = (root / name).read_bytes()
+    verifier = (root / own).read_bytes()
+    pair = handoff.REVIEWED_QUANTITY_RESEARCH_COST_SOURCES[name]
+    assert pair == (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
+    expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True,
+        separators=(',', ':')).encode()).hexdigest()
+    if damage == 'before':
+        before += b'\n# unreviewed origin\n'
+    if damage == 'after':
+        after += b'\n# unreviewed successor\n'
+    for relative, body in ((name, after), (own, verifier)):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+    def revision(command, **_kwargs):
+        if command[-1].endswith(':' + own):
+            return verifier
+        return before if command[-1].startswith(OLD + ':') else after
+    monkeypatch.setattr(handoff.subprocess, 'check_output', revision)
+    if damage == 'dirty':
+        (tmp_path / name).write_bytes(after + b'\n# uncommitted source\n')
+    if damage == 'verifier':
+        (tmp_path / own).write_bytes(verifier + b'\n# uncommitted verifier\n')
+    if damage == 'origin_digest':
+        expected = '0' * 64
+    frozen = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    if damage:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(tmp_path, NEW, OLD, {name: name}, expected)
+    else:
+        assert handoff._verify_entry_code_delta(tmp_path, NEW, OLD, {name: name}, expected) == [name]
+    assert frozen == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+
+
 def _json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))

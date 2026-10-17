@@ -203,6 +203,8 @@ def _save_trade_review_fact_projection(path: Path, payload: dict, completed: dic
     completions = []
     for row in completed['sections']['completed_trade_projection']:
         projected = {key: row.get(key) for key in fields}
+        if 'quantity_research_cost' in row:
+            projected['quantity_research_cost'] = row['quantity_research_cost']
         # Presence is meaningful: a missing completion-day scale-in history
         # cannot be replaced with a synthetic zero from the entry-day display.
         projected.update({key: row[key] for key in ('add_count', 'avg_down_count', 'pyramid_count') if key in row})
@@ -686,6 +688,7 @@ def save_monitor_snapshots_for_date_with_profile(
                 since_time=None,
                 top_n=300,
                 scope="entered",
+                write_research_costs=normalized_profile == 'postclose_exit',
             ),
         ),
         (

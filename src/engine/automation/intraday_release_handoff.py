@@ -898,6 +898,21 @@ REVIEWED_POST_AUX_GUARD_SOURCES = {
 }
 
 
+# Exact 7f2552 prepared-policy sources to the reviewed quantity-only cost
+# producer/reader repair. Research allocation never becomes canonical actual
+# holding economics, custody, policy values or execution authority. Existing
+# prepared-origin, full inventory, source hash and target-date checks remain.
+# Review: docs/proposals/initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md section 8.
+REVIEWED_QUANTITY_RESEARCH_COST_SOURCES = {
+    'src/engine/strategy_position_performance_report.py': (
+        '4b7e718a1f8a2e9838095b618067729a94901cc41423e274a9ef07ee464d8bd4',
+        '405910c69a3743e9587e7ec344185d98f3db222d740222651d497b772243ec00'),
+    'src/engine/lifecycle/broker_cost_reconciliation.py': (
+        '9b30d53d288834e7e3ae372bd8460e1275a392b6b058181b79ee83e7160f2588',
+        'db9f1d2db58d6e766b9a18db22e643c4bdc748c8580d8b364cc36d6066b129d5'),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -943,7 +958,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_POST_AUX_GUARD_SOURCES.get(name),
+        if pair in (REVIEWED_QUANTITY_RESEARCH_COST_SOURCES.get(name),
+                    REVIEWED_POST_AUX_GUARD_SOURCES.get(name),
                     REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES.get(name),
                     REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES.get(name),
                     REVIEWED_CURSOR_ASOF_SOURCES.get(name),

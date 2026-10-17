@@ -275,7 +275,7 @@ def execution_case(trade, path, source, *, mode, shape, horizon, reserve=5):
 
 
 def replay_valid(report):
-    from src.engine.scalping.initial_quantity_policy import _digest, _cap_candidate_trade, get_trade_cost_rate
+    from src.engine.scalping.initial_quantity_policy import _digest, _cap_candidate_trade, get_trade_cost_rate, _quantity_research_replay_costs_valid
     from src.engine.scalping.initial_quantity_legacy_reader import initial_replay_economics_valid as legacy
     try:
         if (report.get('report_content_sha256')!=_digest({k:v for k,v in report.items() if k!='report_content_sha256'})
@@ -283,15 +283,20 @@ def replay_valid(report):
         # Preserve old shape aggregate conservation, while v2 cap economics
         # are validated with the new reader rather than silently reinterpreted.
         copy={**report,'generation_kind':'initial_completed_trade_seed'}
-        if not legacy(copy):return False
+        if not legacy(copy) or not _quantity_research_replay_costs_valid(report):return False
         facts={str(r['recommendation_id']):r for r in report['census']['input_fact_rows']}
         for row in report['trades']:
             fact=facts[str(row['record_id'])];source=row['cap_source']
+            receipt = row.get('quantity_research_cost') if row.get('cost_basis') == 'broker_confirmed_total_allocated' else None
+            notional = receipt['buy_amount_krw'] if receipt else fact['buy_qty'] * fact['buy_price']
             if ('original_notional_krw' in row and
                 (finite_number(row['original_notional_krw']) is None or
-                 row['original_notional_krw'] != fact['buy_qty'] * fact['buy_price'])):
+                 row['original_notional_krw'] != notional)):
                 return False
-            trade=dict(buy_qty=fact['buy_qty'],buy_price=fact['buy_price'],sell_price=fact['sell_price'],realized_net_pnl_krw=row['actual_net_pnl_krw'])
+            trade=dict(buy_qty=fact['buy_qty'],
+                buy_price=receipt['buy_amount_krw']/receipt['buy_qty'] if receipt else fact['buy_price'],
+                sell_price=receipt['sell_amount_krw']/receipt['sell_qty'] if receipt else fact['sell_price'],
+                realized_net_pnl_krw=row['actual_net_pnl_krw'])
             if any(value!=_cap_candidate_trade(trade,source,mode,report['census']['cost_rate']) for mode,value in row['cap_candidates'].items()):return False
         return True
     except (TypeError,ValueError,KeyError,OverflowError):return False
@@ -304,6 +309,8 @@ def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, 
     from src.engine.scalping.initial_quantity_activation import refresh_parent_policy_valid
     version = _selection_version(evaluation_algorithm)
     legacy = version == VERSION
+    if legacy and any(row.get('cost_basis') == 'broker_confirmed_total_allocated' for row in report.get('trades', [])):
+        raise ValueError('refresh_research_cost_requires_v3_selection')
     if (not refresh_parent_policy_valid(parent_policy) or not replay_valid(report)
         or report['census'].get('entry_on_or_after')!=refresh_window(parent_policy)
         or any(r['entry_date']<refresh_window(parent_policy) for r in report['trades'])):
@@ -332,7 +339,10 @@ def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, 
     # A position's observation horizon is never split across train/holdout.
     split_at=kst_timestamp(cut+'T00:00:00+09:00') if cut else None
     facts={str(r['recommendation_id']):r for r in report['census']['input_fact_rows']}
-    purged=[r['trade_id'] for r in bound if r['entry_date']<cut and kst_timestamp(facts[str(r['record_id'])]['sell_time'])>=split_at]
+    purged=[r['trade_id'] for r in bound if r['entry_date']<cut and
+        (kst_timestamp(facts[str(r['record_id'])]['sell_time'])>=split_at or
+         not legacy and r.get('cost_available_at') is not None and
+         (kst_timestamp(r['cost_available_at']) is None or kst_timestamp(r['cost_available_at'])>=split_at))]
     train=[r for r in bound if r['entry_date']<cut and r['trade_id'] not in purged]
     test=[r for r in bound if r['entry_date']==cut]
     blockers=[]
@@ -475,7 +485,10 @@ def joint_evidence_valid(timeout, *, replay=None):
             tid,key=item['trade_id'],item['key'];identity=(tid,key)
             if identity!=next(expected_ids,None):return False
             count+=1;r=rows[tid];f=facts[str(r['record_id'])];cfg=grid[key]
-            trade=dict(buy_qty=f['buy_qty'],buy_price=f['buy_price'],sell_price=f['sell_price'],exit_at=f['sell_time'],
+            receipt = r.get('quantity_research_cost') if r.get('cost_basis') == 'broker_confirmed_total_allocated' else None
+            trade=dict(buy_qty=f['buy_qty'],
+                       buy_price=receipt['buy_amount_krw']/receipt['buy_qty'] if receipt else f['buy_price'],
+                       sell_price=receipt['sell_amount_krw']/receipt['sell_qty'] if receipt else f['sell_price'],exit_at=f['sell_time'],
                        quantity_type=r['quantity_type'],comparison_cost_rate=timeout['census']['cost_rate'])
             if tid!=active:
                 if not finish():return False

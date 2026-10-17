@@ -7,6 +7,7 @@ rewritten into invented per-fill allocations. Missing values remain unknown.
 from __future__ import annotations
 
 from datetime import datetime
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -17,6 +18,9 @@ SCHEMA = "holding_actual_cost_settlement_v1"
 MAX_BYTES = 256 * 1024
 MAX_GENERATION_BYTES = 32 * 1024 * 1024
 KST = ZoneInfo("Asia/Seoul")
+RESEARCH_COST_INDEX_SCHEMA = "initial_quantity_research_cost_index_v1"
+RESEARCH_COST_MAX_DATES = 120
+RESEARCH_COST_MAX_RECORDS = 10000
 
 
 def digest(value) -> str:
@@ -65,7 +69,7 @@ def load_receipt(data_root: Path, completion_date: str, record_id: str) -> dict 
     return value
 
 
-def source_generation(data_root: Path, completion_date: str) -> dict:
+def source_generation(data_root: Path, completion_date: str, *, additional_source_dates=None) -> dict:
     directory = receipt_path(data_root, completion_date, "1").parent
     if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
         raise ValueError("cost_source_directory_symlink")
@@ -104,6 +108,123 @@ def source_generation(data_root: Path, completion_date: str) -> dict:
         if len(raw) > SOURCE_MAX_BYTES:
             raise ValueError("broker_cost_source_size_limit")
         result["official_source_sha256"] = hashlib.sha256(raw).hexdigest()
+    # Preserve old generations byte-for-byte until the dedicated quantity
+    # producer publishes its own dependency index. Prior entry-date cost
+    # corrections then invalidate only reports that actually depend on them.
+    research = Path(data_root) / "runtime/initial_quantity_research_costs" / completion_date
+    index_path = research / "index.json"
+    if additional_source_dates is not None or index_path.exists():
+        if any(p.is_symlink() for p in (research, research.parent, index_path)):
+            raise ValueError("research_cost_generation_symlink")
+        index = None
+        indexed_receipts = []
+        if index_path.exists():
+            if index_path.stat().st_size > MAX_GENERATION_BYTES:
+                raise ValueError("research_cost_index_size_limit")
+            with index_path.open("rb") as handle:
+                index_raw = handle.read(MAX_GENERATION_BYTES + 1)
+            if len(index_raw) > MAX_GENERATION_BYTES:
+                raise ValueError("research_cost_index_size_limit")
+            index = json.loads(index_raw)
+            if (index.get("schema") != RESEARCH_COST_INDEX_SCHEMA
+                    or index.get("completion_date") != completion_date
+                    or index.get("index_sha256") != digest({k: v for k, v in index.items() if k != "index_sha256"})
+                    or not isinstance(index.get("receipts"), dict)
+                    or len(index["receipts"]) > RESEARCH_COST_MAX_RECORDS):
+                raise ValueError("research_cost_index_invalid")
+            for record, expected in sorted(index["receipts"].items()):
+                if not isinstance(expected, str) or len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+                    raise ValueError("research_cost_receipt_reference_invalid")
+                path = research / "generations" / (expected + ".json")
+                if (not record.isdigit() or int(record) <= 0 or path.is_symlink() or path.parent.is_symlink()
+                        or not path.is_file() or path.stat().st_size > MAX_BYTES):
+                    raise ValueError("research_cost_receipt_generation_invalid")
+                with path.open("rb") as handle:
+                    raw = handle.read(MAX_BYTES + 1)
+                total_bytes += len(raw)
+                if len(raw) > MAX_BYTES or total_bytes > MAX_GENERATION_BYTES:
+                    raise ValueError("research_cost_generation_size_limit")
+                receipt = json.loads(raw)
+                if digest(receipt) != expected:
+                    raise ValueError("research_cost_index_receipt_mismatch")
+                indexed_receipts.append({"record_id": record, "sha256": hashlib.sha256(raw).hexdigest(),
+                                         "content_sha256": digest(receipt),
+                                         "receipt_sha256": receipt.get("receipt_sha256")})
+        dates = sorted(set(additional_source_dates if additional_source_dates is not None
+                           else (index or {}).get("source_dates", [])))
+        if len(dates) > RESEARCH_COST_MAX_DATES:
+            raise ValueError("research_cost_dependency_date_limit")
+        sources = []
+        for day in dates:
+            if (datetime.strptime(day, "%Y-%m-%d").date().isoformat() != day
+                    or day > completion_date):
+                raise ValueError("research_cost_dependency_date_invalid")
+            path = source_path(data_root, day)
+            if path.is_symlink() or path.parent.is_symlink():
+                raise ValueError("research_cost_source_dependency_symlink")
+            if path.exists():
+                if path.stat().st_size > SOURCE_MAX_BYTES:
+                    raise ValueError("research_cost_source_dependency_size_limit")
+                with path.open("rb") as handle:
+                    raw = handle.read(SOURCE_MAX_BYTES + 1)
+                if len(raw) > SOURCE_MAX_BYTES:
+                    raise ValueError("research_cost_source_dependency_size_limit")
+                total_bytes += len(raw)
+                if total_bytes > MAX_GENERATION_BYTES:
+                    raise ValueError("research_cost_generation_size_limit")
+                try:
+                    decoded = json.loads(raw)
+                except (ValueError, UnicodeError):
+                    decoded = None
+                logical = decoded.get("source_sha256") if isinstance(decoded, dict) else None
+                sources.append({"source_date": day, "sha256": hashlib.sha256(raw).hexdigest(),
+                                "source_sha256": logical,
+                                **({"status": "source_invalid"} if logical is None else {})})
+            else:
+                sources.append({"source_date": day, "status": "source_missing", "sha256": None})
+        allocation = {"source_dates": sources, "receipts": indexed_receipts}
+        result["quantity_research_cost_generation"] = allocation
+        result["sha256"] = digest({"actual_receipts": rows, "quantity_research": allocation})
+    return result
+
+
+def prepare_record_source_generation(generation: dict) -> dict | None:
+    research = generation.get("quantity_research_cost_generation")
+    if not isinstance(research, dict):
+        return None
+    return {"generation": generation, "research_generation_sha256": digest(research),
+            "receipts": {row["record_id"]: row for row in research.get("receipts", [])},
+            "sources": {row["source_date"]: row for row in research.get("source_dates", [])}}
+
+
+def record_source_projector(generation: dict):
+    prepared = prepare_record_source_generation(generation)
+    return lambda record_id, receipt=None: record_source_generation(
+        generation, record_id, receipt, projection_index=prepared)
+
+
+def record_source_generation(generation: dict, record_id, receipt=None, *, projection_index=None) -> dict:
+    """Keep the full native generation in shared metadata, project one fact only.
+
+    Full receipt populations must never be serialized into every trade. The
+    parent identity and native fact seal bind this compact view to its producer.
+    """
+    research = generation.get("quantity_research_cost_generation")
+    if not isinstance(research, dict):
+        return generation
+    prepared = projection_index if projection_index is not None else prepare_record_source_generation(generation)
+    if prepared["generation"] is not generation:
+        raise ValueError("research_cost_generation_projection_context_mismatch")
+    record = str(record_id)
+    dates = {part.get("source_date") for part in (receipt or {}).get("sources", [])}
+    result = {k: v for k, v in generation.items() if k != "quantity_research_cost_generation"}
+    result["quantity_research_cost_generation"] = {
+        "projection_scope": "record", "record_id": record,
+        "parent_generation_sha256": generation["sha256"],
+        "research_generation_sha256": prepared["research_generation_sha256"],
+        "receipts": [deepcopy(prepared["receipts"][record])] if record in prepared["receipts"] else [],
+        "source_dates": [deepcopy(prepared["sources"][day]) for day in sorted(dates) if day in prepared["sources"]],
+    }
     return result
 
 

@@ -130,6 +130,18 @@ REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS = {
 }
 
 
+# Direct original 10/16 report to the reviewed quantity cost reader. Its
+# research-only projection changes shared code identities, not actual holding
+# economics. Preserve every older target and independently require the exact
+# current holding fixture; do not chain earlier historical contracts forward.
+# Review: docs/proposals/initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md section 8.
+REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS = {
+    'holding_vote': (
+        '057c1274c876450cc5f97a918899c96c85fed7dadb408ea6af445c67808c4fce',
+        'c0185f857d10816b5447edb29ae842bd89fca0138f1fa30feffb9bfd9e9b6b43'),
+}
+
+
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -177,6 +189,9 @@ def current_fixture_observation(observed, data):
     post_aux_guard = REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS.get(family)
     if post_aux_guard and actual_pair == post_aux_guard:
         pair = post_aux_guard
+    quantity_cost = REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS.get(family)
+    if quantity_cost and actual_pair == quantity_cost:
+        pair = quantity_cost
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
