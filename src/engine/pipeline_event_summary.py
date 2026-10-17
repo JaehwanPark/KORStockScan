@@ -117,6 +117,7 @@ EXECUTION_SUMMARY_STAGES = frozenset({
     "entry_async_disposition", "scanner_async_result_commit", "native_signal_lifecycle", "zero_base_probe_result",
     "pre_submit_delay_committed", "pre_submit_delay_quote_observed",
     "pre_submit_delay_intent_terminal",
+    "pre_submit_delay_recheck_observed",
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
     "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
     "entry_ai_economic_decision_available", "entry_machine_watch_terminal",

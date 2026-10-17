@@ -25,7 +25,7 @@ NATIVE_SELECTION = handoff._selection
                                   'src/engine/automation/main_stop_postclose.py',
                                   'src/engine/automation/runtime_policy_bootstrap.py',
                                   'src/engine/lifecycle/holding_window_generation.py'])
-@pytest.mark.parametrize('review_map', ['REVIEWED_POST_AUX_GUARD_SOURCES',
+@pytest.mark.parametrize('review_map', ['REVIEWED_DELAY_RESEARCH_SOURCES', 'REVIEWED_POST_AUX_GUARD_SOURCES',
                                      'REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES',
                                      'REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES',
                                      'REVIEWED_ENTRY_CONSUMER_SOURCES',
@@ -73,6 +73,7 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     own = 'src/engine/automation/intraday_release_handoff.py'
     before, after = b'def runtime(): return 1\n', b'def runtime(): return 2\n'
     pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
+    monkeypatch.setattr(handoff, 'REVIEWED_DELAY_RESEARCH_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_POST_AUX_GUARD_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES', {})
     monkeypatch.setattr(handoff, 'REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES', {})

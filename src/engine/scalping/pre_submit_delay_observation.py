@@ -4,13 +4,21 @@ The registry contains scalars, never stocks/WS objects. No subscriptions,
 workers, REST calls or order authority are created here.
 """
 from collections import Counter, OrderedDict
+from collections.abc import Mapping
 import heapq
+import math
 import threading
 import time
+from .pre_submit_delay_tuning import (
+    OBSERVATION_GRID_VERSION, OBSERVATION_HORIZONS,
+    SHORT_RESEARCH_HORIZONS as SHORT_HORIZONS,
+    SHORT_OBSERVATION_TOLERANCE_SEC as SHORT_TOLERANCE_SEC,
+)
 
 MAX_ACTIVE = 128
 MAX_PER_SYMBOL = 16
 MAX_DUE_PER_TURN = 8
+MAX_HORIZONS_PER_TURN = 8
 LIFETIME_SEC = 183
 _LOCK = threading.RLock()
 _ACTIVE = {}
@@ -19,6 +27,69 @@ _COUNTERS = Counter()
 _SINK = None
 _EXPIRIES = []
 _RECENT = OrderedDict()
+
+
+def observation_contract():
+    """Research sampling only; runtime policy candidates remain unchanged."""
+    return dict(observation_grid_version=OBSERVATION_GRID_VERSION,
+                observation_horizons_sec=list(OBSERVATION_HORIZONS),
+                observation_tolerance_sec=SHORT_TOLERANCE_SEC)
+
+
+def signal_reference_fields(result, *, machine_sha256=None, evaluation_attempt_id=None):
+    """Read the already validated native confirmation; never use a live quote.
+
+    Operating claims bind a scope execution generation, whereas the machine
+    parent is the whole execution manifest. The frozen assessment binds both.
+    No native revalidation, snapshot rehash or provider work happens here.
+    """
+    payload = getattr(result, 'ai_payload', None)
+    claim = getattr(result, 'native_claim', None)
+    if not isinstance(payload, Mapping) or not isinstance(claim, Mapping):
+        return {}
+    machine = payload.get('machine_observation_sha256')
+    if (not isinstance(machine, str) or len(machine) != 64
+            or any(c not in '0123456789abcdef' for c in machine)
+            or machine_sha256 is not None and machine_sha256 != machine
+            or evaluation_attempt_id is not None and evaluation_attempt_id != payload.get('evaluation_attempt_id')):
+        return {}
+    assessment = payload.get('entry_mechanistic_policy_decision')
+    snapshot = claim.get('snapshot')
+    if (not isinstance(assessment, Mapping) or not isinstance(snapshot, (tuple, list))
+            or not snapshot or not isinstance(snapshot[0], Mapping)):
+        return {}
+    event = snapshot[0]
+    proof = assessment.get('event')
+    if not isinstance(proof, Mapping):
+        return {}
+    generation = assessment.get('scope_execution_hash') or assessment.get('family_sha256')
+    token = claim.get('token')
+    if (not isinstance(token, str) or len(token) != 64 or any(c not in '0123456789abcdef' for c in token)
+            or not isinstance(generation, str) or len(generation) != 64
+            or any(c not in '0123456789abcdef' for c in generation)
+            or claim.get('generation') != generation
+            or assessment.get('machine_component_sha256') != payload.get('entry_mechanistic_policy_sha256')
+            or not assessment.get('machine_component_sha256')
+            or event.get('symbol') != getattr(result, 'code', None)
+            or not isinstance(event.get('source_item'), str) or not event['source_item']):
+        return {}
+    for key in ('symbol', 'source_item', 'market', 'venue', 'native_epoch', 'native_sequence',
+                'event_id', 'signal_id', 'epoch', 'confirmation_price'):
+        if event.get(key) != proof.get(key):
+            return {}
+    for field, key in (('continuous_reversal_event_id', 'event_id'),
+                       ('continuous_reversal_signal_id', 'signal_id')):
+        if payload.get(field) != event.get(key) or assessment.get(key) != event.get(key):
+            return {}
+    identity = event.get('signal_id') or event.get('event_id')
+    price, epoch, completed = event.get('confirmation_price'), event.get('epoch'), getattr(result, 'completed_epoch', None)
+    if (not isinstance(identity, str) or not 0 < len(identity) <= 512
+            or any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in (price, epoch, completed))
+            or epoch > completed):
+        return {}
+    return dict(signal_reference_contract_version='native_confirmation_price_v1',
+        original_signal_reference_price=price, original_signal_reference_epoch=epoch,
+        original_signal_id=identity)
 
 
 def configure_sink(sink):
@@ -180,7 +251,8 @@ def prune(now=None):
 def health():
     with _LOCK:
         return {**_COUNTERS, "active": len(_ACTIVE), "heap_items": sum(map(len, _HEAPS.values())),
-                "capacity": MAX_ACTIVE, "max_due_per_turn": MAX_DUE_PER_TURN}
+                "capacity": MAX_ACTIVE, "max_due_per_turn": MAX_DUE_PER_TURN,
+                "max_horizons_per_turn": MAX_HORIZONS_PER_TURN}
 
 
 def register_pass_result(result):
@@ -206,6 +278,8 @@ def register_pass_result(result):
     epoch = (result.prepared_context.get("ws_data") or {}).get("market_data_transport_epoch")
     commit = dict(delay_intent_id=identity, decision_committed_at_epoch=result.completed_epoch,
                   anchor_contract_version=4,
+                  **observation_contract(),
+                  **signal_reference_fields(result, machine_sha256=machine),
                   signal_ready_at_epoch=result.completed_epoch, anchor_kind="signal_ready",
                   route=route, quote_transport_epoch=epoch, delay_policy_sha256=None,
                   original_machine_observation_sha256=machine, planned_qty=None,
@@ -221,6 +295,7 @@ def register_pass_result(result):
                   actual_order_submitted=False, runtime_effect=False, broker_order_forbidden=True)
     commit["decision_source_sha256"] = decision_source_sha256(commit)
     return register(result.code, {"id": identity, "committed_at_epoch": result.completed_epoch,
-                    "remaining_sec": [0, 30, 60, 120, 180], "route": route,
+                    "remaining_sec": list(OBSERVATION_HORIZONS), "route": route,
+                    **observation_contract(),
                     "quote_transport_epoch": epoch, "decision_source_sha256": commit["decision_source_sha256"]},
                     commit=commit)

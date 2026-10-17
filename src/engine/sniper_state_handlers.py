@@ -61731,6 +61731,9 @@ def _resolve_scanner_async_entry_ai(
             now_epoch=now_epoch,
             native_validation_error=native_validation_error,
         )
+        _observe_pre_submit_delay_recheck(stock, code, result=result,
+            recheck_status='completed', terminal_reason=decision.reason,
+            recheck_commit_allowed=bool(decision.allowed))
         result_snapshot_id = str(
             result.ai_payload.get("ai_decision_snapshot_id")
             or result.ai_payload.get("ai_input_snapshot_id")
@@ -62084,6 +62087,9 @@ def _resolve_scanner_async_entry_ai(
             # A PASS from an unrelated concurrent opportunity cannot resolve it.
             due.setdefault('successor_request_id', context.request_id)
             due.setdefault('successor_submitted_epoch', submitted_epoch)
+            _observe_pre_submit_delay_recheck(stock, code, recheck_status='admitted',
+                recheck_submitted_at_epoch=submitted_epoch,
+                recheck_deadline_epoch=context.deadline_epoch)
         if fixed_watch:
             stock['_fixed_watch_async_claim'] = copy.deepcopy(claim)
         _mutate_stock_state(
@@ -65808,11 +65814,14 @@ def _observe_entry_submit_finished(stock, code, outcome):
             delay_intent_id=delay_intent["id"],
             decision_source_sha256=delay_intent.get("decision_source_sha256"),
             selected_delay_sec=delay_intent["delay_sec"],
+            **_pre_submit_delay_terminal_lineage(delay_intent),
+            entry_submit_attempt_id=attempt_fields.get('entry_submit_attempt_id'),
             committed_at_epoch=delay_intent["committed_at_epoch"],
             submit_finished_at_epoch=time.time(),
             original_machine_observation_sha256=delay_intent.get("machine_observation_sha256"),
-            resolved_machine_attempt_id=delay_intent.get("resolved_machine_attempt_id"),
-            resolved_machine_observation_sha256=delay_intent.get("resolved_machine_observation_sha256"),
+            terminal_reason=str((stock.get('_async_consumption_guard') or {}).get('reason')
+                                or ('submit_call_returned_true' if outcome is True else
+                                    'submit_call_returned_false' if outcome is False else outcome)),
             submit_call_outcome=outcome,
             submit_call_broker_accepted=broker_accepted,
             actual_order_submitted=broker_accepted,
@@ -65906,6 +65915,9 @@ def expire_untriggered_pre_submit_delay(stock, code, *, now_mono=None, reason="t
     pending = (stock.get("_pre_submit_delay_pending") or stock.get("_pre_submit_delay_due")) if isinstance(stock, dict) else None
     if not isinstance(pending, dict) or (now_mono if now_mono is not None else time.monotonic()) < pending["due_monotonic"]:
         return False
+    _observe_pre_submit_delay_recheck(stock, code,
+        recheck_status='expired' if reason == 'recheck_not_ready_before_expiry' else 'not_ready',
+        terminal_reason=reason)
     stock.pop("_pre_submit_delay_pending", None)
     stock.pop("_pre_submit_delay_due", None)
     stock["_pre_submit_delay_last_terminal_key"] = pending["machine_key"]
@@ -65913,6 +65925,7 @@ def expire_untriggered_pre_submit_delay(stock, code, *, now_mono=None, reason="t
         stock["_pre_submit_delay_last_terminal_parent"] = pending["promotion_id"]
     _log_pre_submit_delay_event(stock, code, "pre_submit_delay_intent_terminal",
         delay_intent_id=pending["id"], selected_delay_sec=pending["delay_sec"],
+        **_pre_submit_delay_terminal_lineage(pending),
         decision_source_sha256=pending.get("decision_source_sha256"),
         committed_at_epoch=pending["committed_at_epoch"],
         terminal_finished_at_epoch=time.time(),
@@ -65921,6 +65934,64 @@ def expire_untriggered_pre_submit_delay(stock, code, *, now_mono=None, reason="t
         runtime_effect=True,
         decision_authority="bounded_pre_submit_delay_existing_submit_path")
     return True
+
+
+def _pre_submit_delay_terminal_lineage(intent):
+    """Small immutable links to real recheck/submit evidence, never inferred fills."""
+    machine_key = intent.get('machine_key') or ()
+    return dict(original_evaluation_attempt_id=(machine_key[0] if machine_key else None),
+        successor_request_id=intent.get('successor_request_id'),
+        successor_evaluation_attempt_id=intent.get('successor_evaluation_attempt_id'),
+        successor_machine_observation_sha256=intent.get('successor_machine_observation_sha256'),
+        due_at_epoch=intent.get('due_epoch'),
+        recheck_submitted_at_epoch=intent.get('successor_submitted_epoch'),
+        recheck_completed_at_epoch=intent.get('successor_completed_epoch'),
+        recheck_deadline_epoch=intent.get('successor_deadline_epoch'),
+        resolved_machine_attempt_id=intent.get('resolved_machine_attempt_id'),
+        resolved_machine_observation_sha256=intent.get('resolved_machine_observation_sha256'))
+
+
+def _observe_pre_submit_delay_recheck(stock, code, *, recheck_status, result=None,
+                                      terminal_reason=None, **facts):
+    """Record only this intent's admitted native successor without new work."""
+    pending = (stock.get('_pre_submit_delay_due') or stock.get('_pre_submit_delay_pending')) if isinstance(stock, dict) else None
+    if not isinstance(pending, dict) or pending.get('schema') != 'pre_submit_delay_policy_v2':
+        return False
+    request_id = pending.get('successor_request_id')
+    if result is not None and (not request_id or result.request_id != request_id):
+        return False
+    emitted = pending.setdefault('_research_recheck_emitted', [])
+    if recheck_status in emitted:
+        return False
+    if facts.get('recheck_deadline_epoch') is not None:
+        pending['successor_deadline_epoch'] = facts['recheck_deadline_epoch']
+    if result is not None:
+        payload = result.ai_payload
+        pending['successor_completed_epoch'] = result.completed_epoch
+        pending['successor_deadline_epoch'] = result.deadline_epoch
+        pending['successor_evaluation_attempt_id'] = payload.get('evaluation_attempt_id')
+        pending['successor_machine_observation_sha256'] = payload.get('machine_observation_sha256')
+        facts.update(recheck_submitted_at_epoch=result.submitted_epoch,
+            recheck_completed_at_epoch=result.completed_epoch,
+            recheck_deadline_epoch=result.deadline_epoch,
+            successor_evaluation_attempt_id=payload.get('evaluation_attempt_id'),
+            successor_machine_observation_sha256=payload.get('machine_observation_sha256'),
+            recheck_entry_action=payload.get('entry_mechanistic_action'),
+            recheck_auxiliary_effective_action=_pre_submit_delay_auxiliary_verdict(payload),
+            recheck_native_status=result.status,
+            recheck_machine_policy_sha256=payload.get('entry_mechanistic_policy_sha256'),
+            recheck_ai_policy_sha256=payload.get('entry_ai_soft_policy_sha256'))
+    fields = _pre_submit_delay_terminal_lineage(pending)
+    fields.update(facts)
+    queued = _log_pre_submit_delay_event(stock, code, 'pre_submit_delay_recheck_observed',
+        delay_intent_id=pending['id'], decision_source_sha256=pending.get('decision_source_sha256'),
+        recheck_status=recheck_status, terminal_reason=terminal_reason,
+        **fields, actual_order_submitted=False, broker_order_forbidden=True,
+        runtime_effect=False, observation_only=True,
+        decision_authority='source_only_pre_submit_delay_recheck')
+    if queued:
+        emitted.append(recheck_status)
+    return queued
 
 
 def pre_submit_delay_due_matches(due, policy, machine_fields, decision_type,
@@ -65976,16 +66047,21 @@ def _pre_submit_delay_auxiliary_verdict(machine_fields):
 
 
 def _observe_pre_submit_delay_state_quote(stock, code, ws_data, *, now_ts=None, depth_digest=None,
-                                          prepared_depth=None):
+                                          prepared_depth=None, max_horizons=None):
     """Sample an existing local WS snapshot; this never requests or submits."""
     state = stock.get("_pre_submit_delay_observation") if isinstance(stock, dict) else None
     if not isinstance(state, dict):
-        return
+        return 0
     from src.engine.scalping.pre_submit_delay_tuning import quote_source_sha256
+    from src.engine.scalping.pre_submit_delay_observation import (
+        MAX_HORIZONS_PER_TURN, SHORT_HORIZONS, SHORT_TOLERANCE_SEC, OBSERVATION_GRID_VERSION)
+    budget = MAX_HORIZONS_PER_TURN if max_horizons is None else min(MAX_HORIZONS_PER_TURN, max(0, max_horizons))
     now = float(now_ts if now_ts is not None else time.time())
     remaining = state.get("remaining_sec") or []
-    while remaining and now >= float(state["committed_at_epoch"]) + float(remaining[0]):
+    processed = 0
+    while remaining and processed < budget and now >= float(state["committed_at_epoch"]) + float(remaining[0]):
         horizon = remaining.pop(0)
+        processed += 1
         offset = now - float(state["committed_at_epoch"])
         intended_route = str(state.get("route") or "").strip().upper()
         matched_depth = (prepared_depth[0] if prepared_depth is not None else
@@ -66019,7 +66095,9 @@ def _observe_pre_submit_delay_state_quote(stock, code, ws_data, *, now_ts=None, 
             "orderbook": matched_depth.get("orderbook"),
         }, sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
             if depth_bound else None)
-        within_window = abs(offset - float(horizon)) <= 3.0
+        short = (horizon in SHORT_HORIZONS and state.get('observation_grid_version') == OBSERVATION_GRID_VERSION)
+        within_window = (0 <= offset - float(horizon) <= SHORT_TOLERANCE_SEC if short
+                         else abs(offset - float(horizon)) <= 3.0)
         source_valid = bool(
             within_window and quote_route and intended_route and quote_route == intended_route
             and len(str(state.get("decision_source_sha256") or "")) == 64
@@ -66050,7 +66128,7 @@ def _observe_pre_submit_delay_state_quote(stock, code, ws_data, *, now_ts=None, 
             source_reason = "price_or_depth_invalid"
         quote_receipt = dict(
             delay_intent_id=state["id"], target_delay_sec=horizon,
-            actual_offset_sec=round(offset, 3), ask_price=ask, best_bid=bid,
+            actual_offset_sec=offset if short else round(offset, 3), ask_price=ask, best_bid=bid,
             ask_qty=ask_qty, route=intended_route, quote_route=quote_route,
             quote_transport_epoch=transport_epoch,
             route_depth_source_sha256=depth_source_sha256,
@@ -66063,10 +66141,16 @@ def _observe_pre_submit_delay_state_quote(stock, code, ws_data, *, now_ts=None, 
             ws_last_0d_epoch=depth_epoch or None, ws_last_0d_age_sec=depth_age,
             actual_order_submitted=False, broker_order_forbidden=True,
             runtime_effect=False, decision_authority="source_only_pre_submit_delay_observation")
+        if short:
+            quote_receipt.update(quote_contract_version=2,
+                observation_grid_version=OBSERVATION_GRID_VERSION,
+                observation_tolerance_sec=SHORT_TOLERANCE_SEC,
+                target_due_at_epoch=float(state['committed_at_epoch']) + float(horizon))
         quote_receipt["quote_source_sha256"] = quote_source_sha256(quote_receipt)
         _log_pre_submit_delay_event(stock, code, "pre_submit_delay_quote_observed", **quote_receipt)
     if not remaining:
         stock.pop("_pre_submit_delay_observation", None)
+    return processed
 
 
 def _install_pre_submit_delay_observation(stock, code, state):
@@ -66081,15 +66165,17 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
     from src.engine.scalping import pre_submit_delay_observation as observations
     now = float(now_ts if now_ts is not None else time.time())
     states = observations.take_due(code, now)
+    budget = observations.MAX_HORIZONS_PER_TURN
     legacy = stock.get("_pre_submit_delay_observation") if isinstance(stock, dict) else None
     if isinstance(legacy, dict):
-        _observe_pre_submit_delay_state_quote(stock, code, ws_data, now_ts=now)
+        budget -= _observe_pre_submit_delay_state_quote(stock, code, ws_data, now_ts=now,
+                                                       max_horizons=budget)
     depths = {}
     for state in states:
         prepared_depth = None
         # The common one-opportunity path needs no extra depth scan/hash.
         # Several same-symbol intents reuse one exact route-owned snapshot.
-        if len(states) > 1:
+        if budget > 0:
             key = (state["route"], str(state.get("quote_transport_epoch")))
             if key not in depths:
                 depth = _pre_submit_delay_exact_depth(ws_data, state["route"], code)
@@ -66101,8 +66187,9 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
             prepared_depth = depths[key]
         shell = {"_pre_submit_delay_observation": state, "name": state["name"]}
         try:
-            _observe_pre_submit_delay_state_quote(shell, code, ws_data, now_ts=now,
-                depth_digest=prepared_depth[1] if prepared_depth else None, prepared_depth=prepared_depth)
+            budget -= _observe_pre_submit_delay_state_quote(shell, code, ws_data, now_ts=now,
+                depth_digest=prepared_depth[1] if prepared_depth else None, prepared_depth=prepared_depth,
+                max_horizons=budget)
         finally:
             observations.advance(code, state)
 
@@ -70254,6 +70341,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             session=stock.get("market_session_bucket"),
         )
         from src.engine.scalping.pre_submit_delay_initial_policy import situation, situation_fields
+        from src.engine.scalping.pre_submit_delay_observation import (
+            observation_contract, OBSERVATION_HORIZONS, signal_reference_fields)
+        from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION
+        original_delay_result = (ASYNC_CONSUMPTION.get() or {}).get('original_result')
+        frozen_signal_reference = signal_reference_fields(original_delay_result,
+            machine_sha256=machine_key[1], evaluation_attempt_id=machine_key[0])
         decision_type["machine_situation"] = situation(machine_fields)
         decision_type["parent_compatibility"] = [str(machine_fields.get(key) or "legacy") for key in (
             "entry_mechanistic_policy_sha256", "entry_ai_soft_policy_sha256")]
@@ -70298,7 +70391,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             delay_id = uuid4().hex
             decision_receipt = dict(
                 delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
-                anchor_contract_version=4, anchor_kind='price_ready',
+                anchor_contract_version=4, anchor_kind='price_ready', **observation_contract(),
+                **frozen_signal_reference,
                 selected_delay_sec=delay_policy['delay_sec'],
                 evaluation_attempt_id=machine_key[0],
                 entry_mechanistic_policy_sha256=machine_fields.get('entry_mechanistic_policy_sha256'),
@@ -70334,7 +70428,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             }
             stock["_pre_submit_delay_observation"] = {
                 "id": delay_id, "committed_at_epoch": committed_at,
-                "remaining_sec": list(DELAYS_SEC), "route": quote_route,
+                "remaining_sec": list(OBSERVATION_HORIZONS), "route": quote_route,
+                **observation_contract(),
                 "quote_transport_epoch": decision_receipt["quote_transport_epoch"],
                 "decision_source_sha256": decision_receipt["decision_source_sha256"],
             }
@@ -70377,7 +70472,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             delay_id = uuid4().hex
             decision_receipt = dict(
                 delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
-                anchor_contract_version=4, anchor_kind='price_ready',
+                anchor_contract_version=4, anchor_kind='price_ready', **observation_contract(),
+                **frozen_signal_reference,
                 selected_delay_sec=delay_policy['delay_sec'],
                 evaluation_attempt_id=machine_key[0],
                 entry_mechanistic_policy_sha256=machine_fields.get('entry_mechanistic_policy_sha256'),
@@ -70396,14 +70492,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             decision_receipt["decision_source_sha256"] = decision_source_sha256(decision_receipt)
             stock["_pre_submit_delay_commit_key"] = machine_key
             stock["_pre_submit_delay_zero_intent"] = {
-                "id": delay_id, "delay_sec": 0.0,
+                "id": delay_id, "delay_sec": 0.0, "machine_key": machine_key,
                 "committed_at_epoch": committed_at,
                 "machine_observation_sha256": machine_key[1],
                 "decision_source_sha256": decision_receipt["decision_source_sha256"],
             }
             stock["_pre_submit_delay_observation"] = {
                 "id": delay_id, "committed_at_epoch": committed_at,
-                "remaining_sec": list(DELAYS_SEC), "route": quote_route,
+                "remaining_sec": list(OBSERVATION_HORIZONS), "route": quote_route,
+                **observation_contract(),
                 "quote_transport_epoch": decision_receipt["quote_transport_epoch"],
                 "decision_source_sha256": decision_receipt["decision_source_sha256"],
             }
@@ -83790,6 +83887,14 @@ def handle_watching_state(
         raise
     finally:
         try:
+            # Pause/veto/session returns can happen before the regular due
+            # branch. They cannot keep an already expired delay intent alive.
+            pending_delay = stock.get('_pre_submit_delay_due') or stock.get('_pre_submit_delay_pending')
+            if (isinstance(pending_delay, dict)
+                    and pending_delay.get('schema') == 'pre_submit_delay_policy_v2'
+                    and guard.get('reason') != 'entry_execution_exception_or_uncertain'
+                    and time.monotonic() > pending_delay['due_monotonic'] + 5.0):
+                expire_untriggered_pre_submit_delay(stock, code, reason='recheck_not_ready_before_expiry')
             result = owner.get('original_result')
             if result is not None:
                 if isinstance(result, ScannerAsyncEvalResult):
@@ -84328,7 +84433,7 @@ def _handle_watching_state_impl(
     due_delay = stock.get("_pre_submit_delay_due")
     if (isinstance(due_delay, dict) and due_delay.get("schema") == "pre_submit_delay_policy_v2"
             and time.monotonic() > due_delay["due_monotonic"] + 5.0):
-        stock.pop("_pre_submit_delay_due", None)
+        expire_untriggered_pre_submit_delay(stock, code, reason="recheck_not_ready_before_expiry")
         _set_async_terminal(stock, 'recheck_not_ready_before_expiry')
         return
 

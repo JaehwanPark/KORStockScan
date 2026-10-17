@@ -37,6 +37,7 @@ CONTRACT_PATHS = (
     'src/engine/scalping/reversal_registered_catalog.py',
     'src/engine/sniper_state_handlers.py', 'src/engine/kiwoom_sniper_v2.py',
     'src/engine/scalping/scanner_async_eval.py', 'src/utils/pipeline_event_logger.py',
+    'src/engine/pipeline_event_summary.py', 'src/utils/threshold_cycle_registry.py',
     'src/engine/automation/runtime_policy_bootstrap.py',
     'src/engine/automation/postclose_summary_handoff.py',
     'src/engine/runtime_approval_summary.py',
@@ -78,6 +79,13 @@ def projection_contract():
                    'decision_keys':owner._DECISION_SOURCE_KEYS, 'quote_keys':owner._QUOTE_SOURCE_KEYS,
                    'minimal_fields':sorted(owner._V2_SOURCE_FIELDS),
                    'stages':sorted(owner.SOURCE_STAGES), 'mapping':MANIFEST, 'mapping_version':MAPPING_VERSION,
+                   'observation_contract': {
+                       'grid': owner.OBSERVATION_GRID_VERSION,
+                       'horizons': owner.OBSERVATION_HORIZONS,
+                       'short_horizons': owner.SHORT_RESEARCH_HORIZONS,
+                       'short_tolerance_sec': owner.SHORT_OBSERVATION_TOLERANCE_SEC,
+                       'implementation': inspect.getsource(owner.observation_horizons),
+                   },
                    'native_definitions':DEFINITIONS})
 
 
@@ -235,7 +243,8 @@ def _stats(values, denominator):
 
 def project_rows(rows):
     """Verify exact legacy/new receipts without changing their source bytes."""
-    from .pre_submit_delay_tuning import decision_source_sha256, _quote_source_issue
+    from .pre_submit_delay_tuning import (decision_source_sha256, _quote_source_issue,
+        OBSERVATION_HORIZONS, SHORT_RESEARCH_HORIZONS, SHORT_OBSERVATION_TOLERANCE_SEC)
     commits, quotes, conflicts, reasons = {}, defaultdict(dict), set(), Counter()
     for row in rows:
         fields = row.get("fields")
@@ -253,7 +262,7 @@ def project_rows(rows):
             commits[identity] = fields
         elif row.get("stage") == "pre_submit_delay_quote_observed":
             horizon = number(fields.get("target_delay_sec"))
-            if horizon in HORIZONS:
+            if horizon in OBSERVATION_HORIZONS:
                 if horizon in quotes[identity] and quotes[identity][horizon] != fields:
                     conflicts.add((identity, horizon))
                 quotes[identity][horizon] = fields
@@ -320,7 +329,15 @@ def project_rows(rows):
         zero = valid.get(0)
         pairs = {int(horizon): (float(zero["ask_price"]) - float(quote["ask_price"]))
                  / float(zero["ask_price"]) * 10000 for horizon, quote in valid.items()
-                 if horizon and zero}
+                 if horizon in HORIZONS[1:] and zero}
+        # Short horizons remain diagnostic. They never enter the executable
+        # policy grid, and their baseline cannot be a late legacy P0 sample.
+        short_zero = (zero if zero and number(zero.get('actual_offset_sec')) is not None
+                      and 0 <= number(zero.get('actual_offset_sec')) <= SHORT_OBSERVATION_TOLERANCE_SEC
+                      else None)
+        short_pairs = {int(horizon): (float(short_zero['ask_price']) - float(quote['ask_price']))
+                       / float(short_zero['ask_price']) * 10000 for horizon, quote in valid.items()
+                       if horizon in SHORT_RESEARCH_HORIZONS and short_zero}
         situation_source = fields.get('_native_situation_projection')
         if situation_source and (not isinstance(situation_source, dict)
                 or situation_source.get('native_observation_sha256') != fields.get('original_machine_observation_sha256')
@@ -336,6 +353,43 @@ def project_rows(rows):
                        "p0_valid": zero is not None, "pairs": pairs,
                        "situation": kind, "execution_context": "ALL",
                        "decision_source_sha256": fields["decision_source_sha256"]}
+        frozen_type = fields.get('delay_decision_type')
+        if isinstance(frozen_type, str):
+            try:
+                frozen_type = json.loads(frozen_type) if len(frozen_type) <= 8192 else None
+            except ValueError:
+                frozen_type = None
+        reference_price = number(fields.get('original_signal_reference_price'))
+        reference_epoch = number(fields.get('original_signal_reference_epoch'))
+        reference_id = fields.get('original_signal_id')
+        reference_valid = (fields.get('signal_reference_contract_version') == 'native_confirmation_price_v1'
+                           and reference_price is not None and reference_price > 0
+                           and reference_epoch is not None and 0 < reference_epoch <= stamp
+                           and isinstance(reference_id, str) and 0 < len(reference_id) <= 512)
+        opportunity.update(
+            original_machine_observation_sha256=machine,
+            native_evaluation_attempt_id=native if native_bound else None,
+            independent_opportunity_sha256=(digest([identity[0], identity[1], machine, native, parent])
+                                           if native_bound else None),
+            research_short_pairs=short_pairs,
+            research_short_p0_valid=short_zero is not None,
+            execution_features={
+                'schema': 'pre_submit_delay_frozen_execution_features_v1',
+                'planned_qty': planned_qty,
+                'price_cap': number(fields.get('price_cap')),
+                'decision_type': (frozen_type if isinstance(frozen_type, dict)
+                                  and frozen_type.get('schema') == 'pre_submit_delay_decision_type_v1'
+                                  else None),
+                'p0_ask': number(zero.get('ask_price')) if zero else None,
+                'p0_bid': number(zero.get('best_bid')) if zero else None,
+                'p0_ask_qty': number(zero.get('ask_qty')) if zero else None,
+                'p0_actual_offset_sec': number(zero.get('actual_offset_sec')) if zero else None,
+                'p0_source_age_sec': (number(zero['quote_observed_at_epoch']) - number(zero['ws_last_0d_epoch'])
+                                      if zero else None),
+                'original_signal_reference_price': reference_price if reference_valid else None,
+                'original_signal_reference_epoch': reference_epoch if reference_valid else None,
+                'original_signal_id': reference_id if reference_valid else None,
+            })
         if situation_source:
             opportunity['situation_projection'] = situation_source
         # A retry is an alias only when its native evaluation and immutable
@@ -508,6 +562,18 @@ def build_initial(rows, *, source_date, publication_date, effective_date, source
     return report, policy
 
 
+def frozen_projection_contract(report):
+    """Selection validation reuses the sealed qualification generation.
+
+    This is not fresh source qualification: source bytes/ledgers and the
+    candidate code handoff retain their independent verification owners.
+    """
+    value = report.get('source_projection_contract_sha256')
+    if not isinstance(value, str) or len(value) != 64 or any(c not in '0123456789abcdef' for c in value):
+        raise ValueError('initial_delay_projection_contract_invalid')
+    return value
+
+
 def validate(policy, report, *, target_date=None):
     if policy.get('storage_schema') or report.get('storage_schema'):
         from src.engine.automation.pre_submit_delay_partitioned_research import validate as validate_sharded
@@ -557,7 +623,7 @@ def validate(policy, report, *, target_date=None):
         source_sha256=report['source_sha256'], code_contract_sha256=report['code_contract_sha256'],
         _projected=(projected, report['census']), source_receipt=report.get('source_receipt'),
         _algorithm=report['algorithm'],
-        _projection_contract=report.get('source_projection_contract_sha256') if report['algorithm']==LEGACY_ALGORITHM or report.get('mapping_version')==LEGACY_MAPPING_VERSION else None,
+        _projection_contract=frozen_projection_contract(report),
         _mapping_version=report.get('mapping_version'))
     if digest(rebuilt_policy) != digest(policy) or digest(rebuilt_report) != digest(report):
         raise ValueError('initial_delay_deterministic_selection_invalid')

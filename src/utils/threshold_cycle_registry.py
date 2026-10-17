@@ -19,6 +19,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "pre_submit_delay_committed": "pre_submit_delay",
     "pre_submit_delay_quote_observed": "pre_submit_delay",
     "pre_submit_delay_intent_terminal": "pre_submit_delay",
+    "pre_submit_delay_recheck_observed": "pre_submit_delay",
     "entry_execution_sizing_plan": "dynamic_entry_price_resolver",
     "entry_ai_economic_plan_observed": "dynamic_entry_price_resolver",
     "entry_ai_economic_source_gap": "dynamic_entry_price_resolver",

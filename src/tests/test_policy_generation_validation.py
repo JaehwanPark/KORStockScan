@@ -171,7 +171,8 @@ def test_fixture_publication_rejects_dirty_or_untracked_source(monkeypatch):
 @pytest.mark.parametrize('review_map', ['REVIEWED_SUCCESSORS', 'REVIEWED_PRESERVED_SOURCE_SUCCESSORS',
     'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS', 'REVIEWED_DELAY_SOURCE_SUCCESSORS',
     'REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS',
-    'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS', 'REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS'])
+    'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS', 'REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS',
+    'REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS'])
 @pytest.mark.parametrize('damage', [None,'unreviewed_old','unreviewed_current','source','contract',
     'fixture_code','plan','report_path','state','missing','authority','receipt'])
 def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage, review_map):
@@ -192,6 +193,7 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     monkeypatch.setattr(handoff,'REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS',{})
     monkeypatch.setattr(handoff,'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS',{})
     monkeypatch.setattr(handoff,'REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS',{})
+    monkeypatch.setattr(handoff,'REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS',{})
     monkeypatch.setattr(handoff,review_map,{family:(old,current)})
     if damage=='unreviewed_old':monkeypatch.setattr(handoff,review_map,{family:('b'*64,current)})
     elif damage=='unreviewed_current':monkeypatch.setattr(handoff,review_map,{family:(old,'b'*64)})
@@ -235,7 +237,7 @@ def test_reviewed_successor_binds_current_family_code(review_map):
             assert successor == prepared[1]
             direct = (handoff.REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS if family == 'auxiliary'
                       else handoff.REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS if family == 'holding_vote'
-                      else handoff.REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS)
+                      else handoff.REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS)
             assert direct[family] == (prepared[0], current)
         else:
             assert successor == current
@@ -264,9 +266,14 @@ def test_post_aux_guard_successor_preserves_exact_original_reports_and_prior_tar
         assert handoff.REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS[family] == pair
     assert handoff.REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS == {
         'rising_missed': (original_pairs['rising_missed'][0],
+            'b47474ed46cc63f090ccf14ce40b6d53b1d1518cba43211e648a1ee1b0f2aa36'),
+        'holding_vote': (original_pairs['holding_vote'][0],
+            '02b637bfb01bb9f01b4d8b33672d2ae0d9be74ff07c3ee972608f0c55beaf2e5')}
+    assert handoff.REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS == {
+        'rising_missed': (original_pairs['rising_missed'][0],
                          generation.code_generation('rising_missed')),
         'holding_vote': (original_pairs['holding_vote'][0],
-                        '02b637bfb01bb9f01b4d8b33672d2ae0d9be74ff07c3ee972608f0c55beaf2e5')}
+            'e06ee4b2d6d09410dd81d88cb661b6a18df2ca1dea2e7e81823a7d6e03d24b46')}
     assert handoff.REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS == {
         'holding_vote': (original_pairs['holding_vote'][0],
                          generation.code_generation('holding_vote'))}
@@ -310,6 +317,8 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     ('rising_missed', 'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS'),
     ('holding_vote', 'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS'),
     ('holding_vote', 'REVIEWED_QUANTITY_COST_SOURCE_SUCCESSORS'),
+    ('rising_missed', 'REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS'),
+    ('holding_vote', 'REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS'),
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])

@@ -42,6 +42,19 @@ def test_changed_leaf_or_count_cannot_be_accepted(tmp_path):
         list(store.iter_tree(tmp_path, ref))
 
 
+def test_grown_shard_is_rejected_before_open_or_full_hash(tmp_path, monkeypatch):
+    from pathlib import Path
+    ref = store.write_tree(tmp_path, [{'id':1}])
+    shard = tmp_path/ref['path']
+    with shard.open('r+b') as handle:
+        handle.truncate(8*1024*1024)
+    def forbidden_open(*args, **kwargs):
+        raise AssertionError('grown shard must fail before reading')
+    monkeypatch.setattr(Path,'open',forbidden_open)
+    with pytest.raises(ValueError,match='generation_changed'):
+        list(store.iter_tree(tmp_path,ref))
+
+
 def test_empty_tree_and_record_budget_and_cleanup_on_failure(tmp_path):
     ref = store.write_tree(tmp_path, [])
     assert ref['count'] == 0 and list(store.iter_tree(tmp_path, ref)) == []

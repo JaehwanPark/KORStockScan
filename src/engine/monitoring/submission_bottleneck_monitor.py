@@ -35,7 +35,10 @@ MIN_PROMOTIONS = 10
 SOURCE_WINDOW_SEC = 600
 SOURCE_TAIL_BYTES = 32 * 1024 * 1024
 DELAY_STAGES = frozenset({"pre_submit_delay_committed", "pre_submit_delay_quote_observed",
-                          "pre_submit_delay_intent_terminal"})
+                          "pre_submit_delay_intent_terminal", "pre_submit_delay_recheck_observed"})
+_DELAY_LEGACY_HORIZONS = (0, 30, 60, 120, 180)
+_DELAY_RESEARCH_GRID = "legacy_and_short_clock_v1"
+_DELAY_RESEARCH_HORIZONS = (0, 1, 3, 5, 30, 60, 120, 180)
 DELAY_RAW_BUDGET = 32 * 1024 * 1024
 DELAY_WINDOW_SEC = 600
 DELAY_SUMMARY_GRACE_SEC = 150
@@ -1639,6 +1642,36 @@ def attach_source_gap_semantics(result, semantics):
         result["notification_pending"].append(key)
 
 
+def _delay_source_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        value = float(value)
+        return value if math.isfinite(value) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _delay_observation_grid(commit):
+    """Read only the grid declared by this commit, never the newest default."""
+    version = commit.get("observation_grid_version")
+    horizons = commit.get("observation_horizons_sec")
+    tolerance = commit.get("observation_tolerance_sec")
+    if all(value in (None, "", "None") for value in (version, horizons, tolerance)):
+        return "legacy_five_horizons_v1", _DELAY_LEGACY_HORIZONS
+    if isinstance(horizons, str):
+        try:
+            horizons = json.loads(horizons)
+        except (TypeError, ValueError):
+            return None
+    if (version != _DELAY_RESEARCH_GRID or not isinstance(horizons, list)
+            or any(isinstance(value, bool) for value in horizons)
+            or tuple(horizons) != _DELAY_RESEARCH_HORIZONS
+            or _delay_source_number(tolerance) != .25):
+        return None
+    return version, _DELAY_RESEARCH_HORIZONS
+
+
 def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     """Incremental raw/compact/summary and intent receipts; no order authority."""
     from src.engine.scalping.pre_submit_delay_tuning import expected_route_for_session
@@ -1653,7 +1686,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
     raw_path = data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
     prior_today = isinstance(prior_cursor, dict) and prior_cursor.get("date") == day
     previous = prior_cursor if prior_today else {}
-    migrated = bool(previous and previous.get("delay_cursor_contract_version") != 3)
+    migrated = bool(previous and previous.get("delay_cursor_contract_version") != 4)
     if migrated:
         previous = {}
     if previous and (type(previous.get("offset")) is not int
@@ -1661,9 +1694,10 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                      or not isinstance(previous.get("delay_events"), list)
                      or stamp(previous.get("coverage_started_at")) is None):
         previous = {}
-    cursor = {"date": day, "delay_cursor_contract_version": 3, "offset": 0, "device": None, "inode": None,
+    cursor = {"date": day, "delay_cursor_contract_version": 4, "offset": 0, "device": None, "inode": None,
               "coverage_started_at": None, "minutes": {}, "delay_events": []}
     issues, diagnostics, healthy, examples = Counter(), Counter(), Counter(), []
+    horizon_states, horizon_states_by_grid, recheck_states = Counter(), Counter(), Counter()
     if migrated:
         diagnostics['raw_cursor_contract_migrated'] += 1
     issue_scopes, healthy_scopes = Counter(), Counter()
@@ -1746,7 +1780,24 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                         "situation_key": fields.get("situation_key"),
                         "situation_source_status": fields.get("situation_source_status"),
                         "observation_only": fields.get("observation_only"),
+                        "observation_grid_version": fields.get("observation_grid_version"),
+                        "observation_horizons_sec": fields.get("observation_horizons_sec"),
+                        "observation_tolerance_sec": fields.get("observation_tolerance_sec"),
+                        "quote_contract_version": fields.get("quote_contract_version"),
+                        "quote_observed_at_epoch": fields.get("quote_observed_at_epoch"),
+                        "actual_offset_sec": fields.get("actual_offset_sec"),
+                        "quote_offset_sec": fields.get("quote_offset_sec"),
+                        "target_due_at_epoch": fields.get("target_due_at_epoch"),
+                        "decision_source_sha256": fields.get("decision_source_sha256"),
+                        "recheck_status": fields.get("recheck_status"),
+                        "successor_request_id": fields.get("successor_request_id"),
+                        "successor_evaluation_attempt_id": fields.get("successor_evaluation_attempt_id"),
+                        "recheck_submitted_at_epoch": fields.get("recheck_submitted_at_epoch"),
+                        "recheck_completed_at_epoch": fields.get("recheck_completed_at_epoch"),
+                        "recheck_deadline_epoch": fields.get("recheck_deadline_epoch"),
+                        "due_at_epoch": fields.get("due_at_epoch"),
                         "terminal_reason": fields.get("terminal_reason"),
+                        "submit_call_outcome": fields.get("submit_call_outcome"),
                         "target_delay_sec": fields.get("target_delay_sec"),
                         "selected_delay_sec": fields.get("selected_delay_sec"),
                         "route": str(fields.get("route") or ""),
@@ -1999,74 +2050,204 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
             if not row["delay_intent_id"]:
                 continue
             identity = (row.get("stock_code", ""), row.get("record_id", ""), row["delay_intent_id"])
-            group = by_intent.setdefault(identity, {"commit": None, "quotes": set(),
-                                                    "quote_rows": [], "terminal": None})
+            group = by_intent.setdefault(identity, {"commit": None, "quote_rows": [],
+                                                    "terminals": [], "rechecks": []})
             if row["stage"] == "pre_submit_delay_committed":
                 group["commit"] = row
             elif row["stage"] == "pre_submit_delay_quote_observed":
-                try:
-                    horizon = float(row["target_delay_sec"])
-                    if not math.isfinite(horizon) or horizon not in (0, 30, 60, 120, 180):
-                        raise ValueError("quote_horizon_invalid")
-                    group["quotes"].add(horizon)
-                except (ValueError, TypeError):
-                    issues["quote_horizon_invalid"] += 1
                 group["quote_rows"].append(row)
             elif row["stage"] == "pre_submit_delay_intent_terminal":
-                group["terminal"] = row
+                group["terminals"].append(row)
+            elif row["stage"] == "pre_submit_delay_recheck_observed":
+                group["rechecks"].append(row)
         for identity, group in by_intent.items():
             commit = group["commit"]
             if not commit:
+                for quote in group["quote_rows"]:
+                    if _delay_source_number(quote.get("target_delay_sec")) not in _DELAY_RESEARCH_HORIZONS:
+                        issues["quote_horizon_invalid"] += 1
                 continue
             committed_route = commit["route"] or expected_route_for_session(commit["session_bucket"]) or ""
-            for quote in group["quote_rows"]:
+            scope = committed_route or "UNKNOWN"
+            grid = _delay_observation_grid(commit)
+            if grid is None:
+                issues["observation_grid_contract_invalid"] += 1
+                issue_scopes[f"observation_grid_contract_invalid|{scope}"] += 1
+            grid_version, expected_horizons = grid or ("invalid", ())
+            observation_only = (commit.get("anchor_kind") == "signal_ready"
+                                or str(commit.get("observation_only")).lower() == "true")
+            committed_epoch = _delay_source_number(commit.get("decision_committed_at_epoch"))
+            committed_epoch = committed_epoch if committed_epoch is not None else stamp(commit["at"]).timestamp()
+            age = now.timestamp() - committed_epoch
+            decision_hash = commit.get("decision_source_sha256")
+            bound_terminals, bound_rechecks, quotes = [], [], {}
+            for receipt in group["terminals"] + group["rechecks"] + group["quote_rows"]:
+                if decision_hash and receipt.get("decision_source_sha256") != decision_hash:
+                    issues["intent_decision_binding_invalid"] += 1
+                    issue_scopes[f"intent_decision_binding_invalid|{scope}"] += 1
+                    continue
+                if receipt["stage"] == "pre_submit_delay_intent_terminal":
+                    if (not receipt.get("terminal_reason") and receipt.get("submit_call_outcome") not in {
+                            "broker_accepted", "returned_true", "returned_false", "returned_other", "raised", "not_returned"}):
+                        issues["intent_terminal_receipt_invalid"] += 1
+                        issue_scopes[f"intent_terminal_receipt_invalid|{scope}"] += 1
+                        continue
+                    bound_terminals.append(receipt)
+                    continue
+                if receipt["stage"] == "pre_submit_delay_recheck_observed":
+                    bound_rechecks.append(receipt)
+                    continue
+                quote = receipt
                 if ((quote["route"] and quote["route"].upper() != committed_route.upper())
                         or (quote["quote_route"] and quote["quote_route"].upper() != committed_route.upper())):
                     issues["quote_commit_route_mismatch"] += 1
-                    issue_scopes[f"quote_commit_route_mismatch|{committed_route or 'UNKNOWN'}"] += 1
+                    issue_scopes[f"quote_commit_route_mismatch|{scope}"] += 1
                 else:
                     healthy["quote_commit_route_mismatch"] += 1
-                    healthy_scopes[f"quote_commit_route_mismatch|{committed_route or 'UNKNOWN'}"] += 1
-            age = (now - stamp(commit["at"])).total_seconds()
-            if age >= 30 and 0 not in group["quotes"] and 0.0 not in group["quotes"]:
+                    healthy_scopes[f"quote_commit_route_mismatch|{scope}"] += 1
+                horizon = _delay_source_number(quote.get("target_delay_sec"))
+                if horizon not in expected_horizons:
+                    issues["quote_horizon_invalid"] += 1
+                    issue_scopes[f"quote_horizon_invalid|{scope}"] += 1
+                    continue
+                observed_epoch = _delay_source_number(quote.get("quote_observed_at_epoch"))
+                observed_offset = _delay_source_number(quote.get("actual_offset_sec"))
+                if observed_offset is None:
+                    observed_offset = _delay_source_number(quote.get("quote_offset_sec"))
+                short_contract_invalid = horizon in (1, 3, 5) and (
+                        str(quote.get("quote_contract_version")) != "2"
+                        or quote.get("observation_grid_version") != _DELAY_RESEARCH_GRID
+                        or _delay_source_number(quote.get("observation_tolerance_sec")) != .25
+                        or _delay_source_number(quote.get("target_due_at_epoch")) != committed_epoch + horizon
+                        or observed_epoch is None or observed_offset is None
+                        or abs((observed_epoch - committed_epoch) - observed_offset) > .001)
+                if short_contract_invalid:
+                    issues["short_quote_contract_invalid"] += 1
+                    issue_scopes[f"short_quote_contract_invalid|{scope}"] += 1
+                if horizon in quotes:
+                    issues["quote_horizon_duplicate"] += 1
+                    issue_scopes[f"quote_horizon_duplicate|{scope}"] += 1
+                else:
+                    quotes[horizon] = dict(quote, source_contract_invalid=short_contract_invalid)
+            actual_terminals = [row for row in bound_terminals
+                                if str(row.get("observation_only")).lower() != "true"]
+            observation_terminals = [row for row in bound_terminals
+                                     if str(row.get("observation_only")).lower() == "true"]
+            actual_terminal = actual_terminals[-1] if actual_terminals else None
+            if len(actual_terminals) > 1:
+                issues["intent_terminal_duplicate"] += len(actual_terminals) - 1
+                issue_scopes[f"intent_terminal_duplicate|{scope}"] += len(actual_terminals) - 1
+            # A late shutdown/censor receipt cannot erase already-overdue
+            # missing observations. An order terminal does not stop research.
+            closure_epoch = min((stamp(row["at"]).timestamp() for row in observation_terminals), default=None)
+            for horizon in expected_horizons:
+                quote = quotes.get(horizon)
+                if quote is not None:
+                    offset = _delay_source_number(quote.get("actual_offset_sec"))
+                    if offset is None:
+                        offset = _delay_source_number(quote.get("quote_offset_sec"))
+                    observed = _delay_source_number(quote.get("quote_observed_at_epoch"))
+                    if observed is not None:
+                        # The legacy producer rounded actual_offset_sec to
+                        # milliseconds; classify timing from the source clock.
+                        offset = observed - committed_epoch
+                    tolerance = .25 if horizon in (1, 3, 5) else 3.0
+                    lower = horizon if horizon in (1, 3, 5) else horizon - tolerance
+                    if quote.get("source_contract_invalid"):
+                        state = "observed_invalid"
+                    elif offset is not None and (offset < lower or offset > horizon + tolerance):
+                        state = "observed_late_or_early"
+                        if str(quote.get("quote_valid")).lower() == "true":
+                            issues["quote_clock_validity_conflict"] += 1
+                            issue_scopes[f"quote_clock_validity_conflict|{scope}"] += 1
+                    else:
+                        state = "observed_valid" if str(quote.get("quote_valid")).lower() == "true" else "observed_invalid"
+                    healthy["observation_horizon_missing"] += 1
+                    healthy_scopes[f"observation_horizon_missing|{scope}|{grid_version}|{horizon:g}"] += 1
+                elif closure_epoch is not None and closure_epoch <= committed_epoch + horizon + 30:
+                    state = "censored"
+                elif age < horizon:
+                    state = "not_due"
+                elif age < horizon + 30:
+                    # Raw evidence alone cannot prove that an absent row is
+                    # queued. Keep the established persistence grace explicit.
+                    state = "persistence_pending"
+                else:
+                    state = "missing"
+                    if horizon:
+                        issues["observation_horizon_missing"] += 1
+                        issue_scopes[f"observation_horizon_missing|{scope}|{grid_version}|{horizon:g}"] += 1
+                        if len(examples) < 3:
+                            examples.append(dict(reason="observation_horizon_missing",
+                                delay_intent_id=identity[2], stock_code=identity[0], record_id=identity[1],
+                                target_delay_sec=horizon, observation_grid_version=grid_version))
+                horizon_states[state] += 1
+                horizon_states_by_grid[f"{grid_version}|{horizon:g}|{state}"] += 1
+            if grid and age >= 30 and 0 not in quotes and not (
+                    closure_epoch is not None and closure_epoch <= committed_epoch + 30):
                 issues["zero_second_quote_missing"] += 1
-                issue_scopes[f"zero_second_quote_missing|{committed_route or 'UNKNOWN'}"] += 1
+                issue_scopes[f"zero_second_quote_missing|{scope}"] += 1
                 if len(examples) < 3:
                     examples.append({"reason": "zero_second_quote_missing", "delay_intent_id": identity[2],
                                      "stock_code": identity[0], "record_id": identity[1]})
-            elif 0 in group["quotes"] or 0.0 in group["quotes"]:
+            elif 0 in quotes:
                 healthy["zero_second_quote_missing"] += 1
-                healthy_scopes[f"zero_second_quote_missing|{committed_route or 'UNKNOWN'}"] += 1
-            observation_only = commit.get("anchor_kind") == "signal_ready"
-            observation_complete = set((0, 30, 60, 120, 180)) <= group["quotes"]
-            if observation_only and observation_complete:
+                healthy_scopes[f"zero_second_quote_missing|{scope}"] += 1
+            observation_complete = bool(expected_horizons) and set(expected_horizons) <= set(quotes)
+            if observation_complete:
                 healthy["observation_completed"] += 1
-            if age >= 300 and group["terminal"] is None and not (observation_only and observation_complete):
-                issues["intent_terminal_missing"] += 1
-                issue_scopes[f"intent_terminal_missing|{committed_route or 'UNKNOWN'}"] += 1
-            elif group["terminal"] is not None or (observation_only and observation_complete):
+            if observation_only:
+                diagnostics["observation_only_no_order_terminal_required"] += 1
+                # Retain the existing healthy key for compatible alert closure;
+                # no broker terminal is inferred or manufactured here.
                 healthy["intent_terminal_missing"] += 1
-                healthy_scopes[f"intent_terminal_missing|{committed_route or 'UNKNOWN'}"] += 1
-            try:
-                selected = float(commit.get('selected_delay_sec'))
-                if not math.isfinite(selected) or selected not in (0,30,60,120,180):
-                    raise ValueError('selected_delay_invalid')
-            except (ValueError,TypeError):
+                healthy_scopes[f"intent_terminal_missing|{scope}"] += 1
+            elif age >= 300 and actual_terminal is None:
+                issues["intent_terminal_missing"] += 1
+                issue_scopes[f"intent_terminal_missing|{scope}"] += 1
+            elif actual_terminal is not None:
+                healthy["intent_terminal_missing"] += 1
+                healthy_scopes[f"intent_terminal_missing|{scope}"] += 1
+            if not observation_only and observation_terminals and actual_terminal is None:
+                diagnostics["observation_terminal_does_not_close_order_intent"] += 1
+            selected = _delay_source_number(commit.get("selected_delay_sec"))
+            if selected not in _DELAY_LEGACY_HORIZONS:
                 selected = None
                 if not observation_only:
-                    diagnostics['selected_due_instrumentation_gap'] += 1
-            for horizon in (30, 60, 120, 180):
-                if age >= horizon + 30 and horizon not in group["quotes"]:
-                    if horizon == selected and group['terminal'] is None:
-                        issues['selected_due_completion_missing'] += 1
-                        issue_scopes[f"selected_due_completion_missing|{committed_route or 'UNKNOWN'}"] += 1
-                        if len(examples) < 3:
-                            examples.append(dict(reason='selected_due_completion_missing',
-                                delay_intent_id=identity[2], stock_code=identity[0], record_id=identity[1],
-                                selected_delay_sec=selected, original_commit_at=commit['at'],
-                                source_request_status='instrumentation_gap'))
-                    else:
-                        diagnostics[f"due_horizon_unobserved:{horizon}"] += 1
+                    diagnostics["selected_due_instrumentation_gap"] += 1
+            valid_rechecks = []
+            for row in bound_rechecks:
+                status = row.get("recheck_status")
+                due = _delay_source_number(row.get("due_at_epoch"))
+                submitted = _delay_source_number(row.get("recheck_submitted_at_epoch"))
+                completed = _delay_source_number(row.get("recheck_completed_at_epoch"))
+                deadline = _delay_source_number(row.get("recheck_deadline_epoch"))
+                if (not decision_hash or selected in (None, 0)
+                        or status not in {"admitted", "completed", "expired", "not_ready"}
+                        or due != committed_epoch + selected
+                        or (status in {"admitted", "completed"} and (
+                            not row.get("successor_request_id") or submitted is None or deadline is None
+                            or submitted < due or submitted > deadline))
+                        or (status == "completed" and (completed is None or completed < submitted))):
+                    issues["recheck_receipt_invalid"] += 1
+                    issue_scopes[f"recheck_receipt_invalid|{scope}"] += 1
+                    continue
+                valid_rechecks.append(row)
+                recheck_states[status] += 1
+            if not observation_only and selected and age >= selected + 30 and actual_terminal is None:
+                last_recheck = max(valid_rechecks, key=lambda row: stamp(row["at"]), default=None)
+                deadline = _delay_source_number((last_recheck or {}).get("recheck_deadline_epoch"))
+                if (last_recheck and last_recheck.get("recheck_status") == "admitted"
+                        and deadline is not None and now.timestamp() <= deadline):
+                    diagnostics["selected_due_recheck_pending"] += 1
+                else:
+                    issues["selected_due_completion_missing"] += 1
+                    issue_scopes[f"selected_due_completion_missing|{scope}"] += 1
+                    if len(examples) < 3:
+                        examples.append(dict(reason="selected_due_completion_missing",
+                            delay_intent_id=identity[2], stock_code=identity[0], record_id=identity[1],
+                            selected_delay_sec=selected, original_commit_at=commit["at"],
+                            source_request_status=(last_recheck or {}).get("recheck_status", "instrumentation_gap")))
     elif summary_status == "complete" and any(
             stamp(key.split("|", 1)[0]) >= now - timedelta(seconds=DELAY_WINDOW_SEC)
             for key in summary_minutes):
@@ -2090,6 +2271,9 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
             "sources": {"raw": raw_status, "summary": summary_status, "compact": compact_status},
             "issues": dict(sorted(issues.items())), "diagnostics": dict(sorted(diagnostics.items())),
             "healthy": dict(sorted(healthy.items())),
+            "horizon_states": dict(sorted(horizon_states.items())),
+            "horizon_states_by_grid": dict(sorted(horizon_states_by_grid.items())),
+            "recheck_states": dict(sorted(recheck_states.items())),
             "issues_by_scope": dict(sorted(issue_scopes.items())),
             "healthy_by_scope": dict(sorted(healthy_scopes.items())),
             "examples": examples, "summary_last_writer_pid": manifest.get("last_writer_pid"),

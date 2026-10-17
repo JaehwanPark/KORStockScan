@@ -63,8 +63,10 @@
 
 ## 5 리뷰 게이트와 배포 인계
 
-분담 구현 후 생산자/소비자·권한·비용/시간·크기·경합 교차 리뷰와 수정·재리뷰를 반복했다. 통합 표적 회귀 729 PASS/72.09초, 기존 code handoff 표적 422 PASS를 확인했다. 마지막 multi-date receipt의 producer/reader 필드 크기 불일치를 추가 수정·검증하며 그 이후 최종 검증과 배포 영수증을 아래에 기록한다. Python compile·shell `bash -n`·diff·로컬 링크·print-only parser를 완료 조건으로 유지한다.
+분담 구현 후 생산자/소비자·권한·비용/시간·크기·경합 교차 리뷰와 수정·재리뷰를 반복했다. 통합 표적 회귀 729 PASS/72.09초, 기존 code handoff 표적 422 PASS를 확인했다. 마지막 다일 receipt의 producer/reader 필드 크기 불일치도 수정했다. 실제 14일·8포지션 배분으로 만든 16KiB 초과 영수증은 두 원문 reader에서 보존하고 256KiB 초과는 명시 거부하는 161개 영향 회귀가 통과했다. 전체 보고서·일반 scalar 한도는 그대로다. 성능 증거의 고정 hash는 이 마지막 원문 fallback 필드 한도 수정 전이며 측정 경로는 native fact projection을 사용한다. 원래 측정 hash를 사후 변경하지 않는다. 이후 누적 후보 최종 검증·배포 영수증을 아래에 기록한다. Python compile·shell `bash -n`·diff·로컬 링크·print-only parser를 완료 조건으로 유지한다.
 
 배포는 새 선택 `3abcc524c`를 누적 보존한 clean 후보의 정확 source쌍·fresh holding capability fixture·원 정책/128범위 native parity·기존 두 PRE overlay·숫자 불변·next-session `current_full_contract`를 확인한 뒤 selector를 마지막에 CAS 발행한다. 원 7f2552 정책 origin과 원 영수증은 보존하며 포괄적 호환 예외를 만들지 않는다.
 
 기동·실제 PID·자연 생산/ack·새 경제성은 선택 배포와 다른 증거다. 이번 수리는 49294의 원형 증거 및 더 오래된 날짜의 미해결 정산을 복구 완료로 꾸미지 않는다. 해당 원천/경제성은 기존 `InitialQuantityProducerConsumerRepair1010`, 실제 10/19 PREOPEN/PID는 `DirectFamilyPreopenPolicyHandoff`가 계속 소유한다.
+
+누적 후보 검증: `3abcc524c`와 수량 비용 수리를 통합한 뒤 비용/보고서/수량/timeout/지연 계약 회귀 **781 PASS/69.80초**, 영향 Python35개 compile·장후 wrapper `bash -n`·diff 검사를 통과했다. 최종 전략 원문 reader SHA는 `00dc2d63df6ef91ff258507696efd3b348650f7b36db1ad6f789e9e3294d6bd4`, 비용 세대 reader는 `db9f1d2db58d6e766b9a18db22e643c4bdc748c8580d8b364cc36d6066b129d5`다. 두 source의 원 7f2552 origin 직접 인계를 결속하고 holding capability는 `6c4734c5e4204b36faf3d72ee873a429147d7a6e5a3a019d55fee29f4e145137`로 재검증한다. 기존 지연 연구의 인계쌍과 변경하지 않은 가족은 보존한다.

@@ -320,6 +320,7 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle.broker_cost_source --date "$TARG
 
 - 복수 포지션·익일 매도·부분 체결·미청산·수동 잔여·정수 반올림·원천 누락/정정·계좌 충돌·clock 역전·손상 exact 파일·동시 index 발행·예산/크기 제한의 반례를 검증한다.
 - 비용 세대 전체는 공통 metadata에 한 번만 저장하고 거래별로는 해당 record/날짜의 증명만 전달한다. 비용 세대나 완료 원천 전체를 거래마다 복제하는 제곱 증가를 금지한다.
+- 영수증 필드는 생산자와 모든 bounded 원문/sidecar reader가 같은 256KiB 한도를 사용한다. 다일 분할 체결의 16KiB 초과 정상 영수증을 누락시키지 않고 256KiB 초과는 명시 거부한다. 일반 scalar/전체 보고서 한도를 넓혀 우회하지 않는다.
 - 실제 봉인 자료의 연구 적격/제외 ID와 비용 보존식을 대사하고, 적격 비어 있지 않은 fixture의 전체 비용→연구→재생 성능을 측정한다. 0건 경로의 빠른 시간을 성능 증거로 삼지 않는다.
 - 최초 정책의 별도 경제/자연소비 허들을 추가하지 않는다. 수리 코드 검증·선택 배포·정규 장후 자연 생산·실제 PID 소비·비용 후 성과는 각각의 근거로 보고한다.
 - 당일 보완 owner는 `InitialQuantityBrokerCostClosure1017`다. 기존 `InitialQuantityProducerConsumerRepair1010`의 남은 역사 원천/정산·경제성 Acceptance와 `DirectFamilyPreopenPolicyHandoff`의 실제 소비 조건은 유지한다.

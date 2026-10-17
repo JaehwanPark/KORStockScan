@@ -33,10 +33,26 @@ FAMILY = "pre_submit_delay"
 PRICE_PATTERN_SCHEMA = "pre_submit_delay_price_pattern_v1"
 PRICE_PATTERN_ALGORITHM = "same_intent_paired_quote_chronological_v1"
 DELAYS_SEC = (0.0, 30.0, 60.0, 120.0, 180.0)
+OBSERVATION_GRID_VERSION = "legacy_and_short_clock_v1"
+SHORT_RESEARCH_HORIZONS = (1, 3, 5)
+OBSERVATION_HORIZONS = (0, 1, 3, 5, 30, 60, 120, 180)
+SHORT_OBSERVATION_TOLERANCE_SEC = .25
+_OBSERVATION_CONTRACT_KEYS = (
+    "observation_grid_version", "observation_horizons_sec", "observation_tolerance_sec",
+)
+_SHORT_QUOTE_CONTRACT_KEYS = (
+    "quote_contract_version", "observation_grid_version", "observation_tolerance_sec",
+    "target_due_at_epoch",
+)
+_SIGNAL_REFERENCE_KEYS = (
+    'signal_reference_contract_version', 'original_signal_reference_price',
+    'original_signal_reference_epoch', 'original_signal_id',
+)
 SOURCE_STAGES = frozenset({
     "pre_submit_delay_committed",
     "pre_submit_delay_quote_observed",
     "pre_submit_delay_intent_terminal",
+    "pre_submit_delay_recheck_observed",
 })
 REPORT_DIR = DATA_DIR / "report" / "pre_submit_delay_tuning"
 POLICY_DIR = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
@@ -63,6 +79,19 @@ _V2_SOURCE_FIELDS = frozenset(_DECISION_SOURCE_KEYS + _QUOTE_SOURCE_KEYS + (
     'primary_branch_id','matched_branch_ids','entry_action','auxiliary_effective_action',
     'entry_auxiliary_policy_identity','entry_auxiliary_policy_identity_version',
     'situation_definition_refs','situation_mapping_version','situation_key','situation_source_status','selected_delay_sec',
+    *_OBSERVATION_CONTRACT_KEYS, *_SHORT_QUOTE_CONTRACT_KEYS,
+    *_SIGNAL_REFERENCE_KEYS,
+    'observation_only', 'observation_closed_at_epoch', 'terminal_finished_at_epoch',
+    'terminal_reason', 'submit_call_outcome', 'submit_call_broker_accepted',
+    'actual_order_submitted', 'committed_at_epoch', 'submit_finished_at_epoch',
+    'resolved_machine_attempt_id', 'resolved_machine_observation_sha256',
+    'recheck_status', 'successor_request_id', 'successor_evaluation_attempt_id',
+    'recheck_submitted_at_epoch', 'recheck_completed_at_epoch', 'recheck_deadline_epoch',
+    'due_at_epoch', 'entry_submit_attempt_id', 'original_request_id',
+    'recheck_commit_allowed', 'recheck_entry_action', 'recheck_auxiliary_effective_action',
+    'recheck_native_status', 'recheck_machine_policy_sha256', 'recheck_ai_policy_sha256',
+    'successor_machine_observation_sha256',
+    'delay_decision_type', 'price_cap',
 ))
 
 
@@ -85,6 +114,10 @@ def decision_source_sha256(fields: dict[str, Any]) -> str:
                  'situation_key', 'situation_source_status', 'selected_delay_sec')
     if fields.get('entry_auxiliary_policy_identity_version') not in (None,'','None','null'):
         keys += ('entry_auxiliary_policy_identity_version','entry_auxiliary_policy_identity')
+    if any(key in fields for key in _OBSERVATION_CONTRACT_KEYS):
+        keys += _OBSERVATION_CONTRACT_KEYS
+    if fields.get('signal_reference_contract_version') not in (None, '', 'None', 'null'):
+        keys += _SIGNAL_REFERENCE_KEYS
     proof = fields.get('entry_auxiliary_policy_identity')
     if isinstance(proof, str):
         try:
@@ -96,7 +129,29 @@ def decision_source_sha256(fields: dict[str, Any]) -> str:
 
 
 def quote_source_sha256(fields: dict[str, Any]) -> str:
-    return _digest({key: str(fields.get(key)) for key in _QUOTE_SOURCE_KEYS})
+    keys = _QUOTE_SOURCE_KEYS
+    if str(fields.get('quote_contract_version')) == '2':
+        keys += _SHORT_QUOTE_CONTRACT_KEYS
+    return _digest({key: str(fields.get(key)) for key in keys})
+
+
+def observation_horizons(fields: dict[str, Any]) -> tuple[int, ...] | None:
+    """Recognize bound research grids without extending executable policy values."""
+    if not any(key in fields for key in _OBSERVATION_CONTRACT_KEYS):
+        return tuple(int(value) for value in DELAYS_SEC)
+    horizons = fields.get('observation_horizons_sec')
+    if isinstance(horizons, str):
+        try:
+            horizons = json.loads(horizons)
+        except ValueError:
+            return None
+    if (fields.get('observation_grid_version') != OBSERVATION_GRID_VERSION
+            or not isinstance(horizons, (list, tuple))
+            or any(isinstance(value, bool) for value in horizons)
+            or tuple(horizons) != OBSERVATION_HORIZONS
+            or _number(fields.get('observation_tolerance_sec')) != SHORT_OBSERVATION_TOLERANCE_SEC):
+        return None
+    return OBSERVATION_HORIZONS
 
 
 def expected_route_for_session(session: Any) -> str | None:
@@ -119,6 +174,19 @@ def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | 
     observed = _number(quote.get("quote_observed_at_epoch"))
     offset = _number(quote.get("actual_offset_sec"))
     horizon = _number(quote.get("target_delay_sec"))
+    horizons = observation_horizons(commit)
+    short = horizon in SHORT_RESEARCH_HORIZONS
+    if horizons is None or horizon not in horizons:
+        return 'quote_observation_contract_invalid'
+    if short:
+        if (str(quote.get('quote_contract_version')) != '2'
+                or quote.get('observation_grid_version') != OBSERVATION_GRID_VERSION
+                or _number(quote.get('observation_tolerance_sec')) != SHORT_OBSERVATION_TOLERANCE_SEC
+                or committed is None
+                or _number(quote.get('target_due_at_epoch')) != committed + horizon):
+            return 'quote_observation_contract_invalid'
+    elif quote.get('quote_contract_version') not in (None, '', 1, '1'):
+        return 'quote_observation_contract_invalid'
     depth = _number(quote.get("ws_last_0d_epoch"))
     depth_sha = str(quote.get("route_depth_source_sha256") or "")
     if (str(quote.get("quote_source_sha256") or "") != quote_source_sha256(quote)
@@ -126,7 +194,8 @@ def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | 
             or horizon is None or depth is None
             or len(depth_sha) != 64 or any(char not in "0123456789abcdef" for char in depth_sha)
             or abs(observed - committed - offset) > .01
-            or abs(offset - horizon) > 3.0
+            or (not 0 <= offset - horizon <= SHORT_OBSERVATION_TOLERANCE_SEC
+                if short else abs(offset - horizon) > 3.0)
             or not 0 <= observed - depth <= .7):
         return "quote_clock_or_hash_invalid"
     if (str(quote.get("route") or "") != str(commit.get("route") or "")
@@ -1190,6 +1259,12 @@ def build_report(
                 commits[attempt] = fields
         elif stage == "pre_submit_delay_quote_observed":
             second = _number(fields.get("target_delay_sec"))
+            if (second in SHORT_RESEARCH_HORIZONS
+                    and str(fields.get('quote_contract_version')) == '2'
+                    and fields.get('observation_grid_version') == OBSERVATION_GRID_VERSION):
+                # The original report/selector owns only its legacy grid.
+                # Short-clock qualification belongs to the v2 projection.
+                continue
             if second not in DELAYS_SEC:
                 invalid["sample_duplicate_or_horizon_invalid"] += 1
             elif second in samples[attempt]:
@@ -1203,7 +1278,10 @@ def build_report(
                 invalid["sample_duplicate_or_horizon_invalid"] += 1
             else:
                 samples[attempt][second] = fields
-        else:
+        elif stage == "pre_submit_delay_intent_terminal":
+            if str(fields.get('observation_only')).lower() == 'true':
+                # A stopped observer does not close the broker intent.
+                continue
             if attempt in terminals and terminals[attempt] != fields:
                 invalid["terminal_conflict"] += 1
                 terminal_conflicts.add(attempt)
@@ -1257,14 +1335,14 @@ def build_report(
             terminal_status["unbound_or_clock_invalid"] += 1
         else:
             valid_terminals += 1
-            if terminal.get("terminal_reason"):
-                terminal_status["unsubmitted_expired"] += 1
-            elif str(terminal.get("submit_call_broker_accepted") or "").lower() == "true":
+            if str(terminal.get("submit_call_broker_accepted") or "").lower() == "true":
                 terminal_status["broker_ack_execution_terminal_unobserved"] += 1
             elif str(terminal.get("submit_call_outcome") or "") in {
                 "raised", "not_returned", "returned_other",
             }:
                 terminal_status["response_uncertain"] += 1
+            elif not terminal.get("submit_call_outcome") and terminal.get("terminal_reason"):
+                terminal_status["unsubmitted_expired"] += 1
             else:
                 terminal_status["no_broker_ack_observed"] += 1
     type_by_attempt = {}

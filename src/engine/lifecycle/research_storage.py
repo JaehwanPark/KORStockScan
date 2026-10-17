@@ -10,11 +10,12 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import stat
 import tempfile
 from .research_disk_budget import temporary, INDEX_LIMIT
 
 from .research_input_budget import Claim
-from .holding_window_generation import byte_generation
+from .holding_window_generation import byte_generation, source_stat
 
 SCHEMA = 'bounded_research_evidence_tree_v1'
 RECORD_BYTES = 64 * 1024
@@ -239,12 +240,20 @@ def iter_tree(root, reference):
                 yield row
             return
         path = safe_path(root, ref['path'])
-        before = byte_generation(path)
-        if before['size'] != ref['size'] or before['sha256'] != ref['sha256'] or before['size'] > 4*1024*1024:
+        before = path.stat()
+        if (type(ref.get('size')) is not int or not 0 <= ref['size'] <= 4*1024*1024
+                or not stat.S_ISREG(before.st_mode) or before.st_size != ref['size']):
             raise ValueError('research_shard_generation_changed')
-        with Claim(before['size']*8):
-            body = json.loads(path.read_bytes())
-            if byte_generation(path) != before or body.get('schema') != SCHEMA or body.get('count') != ref['count']:
+        with Claim(before.st_size*8):
+            # Validate the actual bounded bytes once. A grown or replaced file
+            # cannot turn a small sealed reference into an unbounded hash/read.
+            with path.open('rb') as handle:
+                raw = handle.read(ref['size'] + 1)
+            if (len(raw) != ref['size'] or hashlib.sha256(raw).hexdigest() != ref['sha256']
+                    or source_stat(path.stat()) != source_stat(before)):
+                raise ValueError('research_shard_generation_changed')
+            body = json.loads(raw)
+            if body.get('schema') != SCHEMA or body.get('count') != ref['count']:
                 raise ValueError('research_shard_contract_invalid')
             count = 0
             if body.get('kind') == 'leaf':

@@ -35,7 +35,7 @@ def predecessor(tmp_path, *, parser_callback=False, parser_contract=None, buy_ow
     parts = []
     for callback in callbacks:
         if callback is not None:
-            parts.extend((inspect.getsource(callback), C.PREVIOUS_PARSER if parser_callback
+            parts.extend((inspect.getsource(callback), (parser_contract or C.PREVIOUS_PARSER) if parser_callback
                           else buy_owner or C.PREVIOUS_BUY_OWNER))
     source['callback_contract'] = hashlib.sha256('\n'.join(parts).encode()).hexdigest()
     source['parser_contract'] = parser_contract or C.PREVIOUS_PARSER
@@ -245,7 +245,7 @@ def _intercept_real_funnel_cli(monkeypatch, inspect_callbacks):
 @pytest.mark.parametrize('same_parser', [False, True])
 def test_real_module_cli_migrates_exact_predecessor_without_runtime_reads(tmp_path, monkeypatch, same_parser):
     _, options, manifest, original, _ = predecessor(tmp_path,
-        parser_contract=C.CURRENT_PARSER if same_parser else C.PREVIOUS_PARSER,
+        parser_contract=C.PRE_RECHECK_PARSER if same_parser else C.PREVIOUS_PARSER,
         buy_owner=C.INTERMEDIATE_BUY_OWNER if same_parser else C.PREVIOUS_BUY_OWNER)
     native_update = P.update_and_load_pipeline_event_summaries
     expected_contracts = C._callback_predecessors(
@@ -272,7 +272,7 @@ def test_real_module_cli_migrates_exact_predecessor_without_runtime_reads(tmp_pa
 @pytest.mark.parametrize('append', [False, True])
 def test_same_parser_owner_migration_preserves_archival_and_suffix(tmp_path, monkeypatch, append):
     raw, options, manifest, original, _ = predecessor(tmp_path,
-        parser_contract=C.CURRENT_PARSER, buy_owner=C.INTERMEDIATE_BUY_OWNER)
+        parser_contract=C.PRE_RECHECK_PARSER, buy_owner=C.INTERMEDIATE_BUY_OWNER)
     start = raw.stat().st_size
     if append:
         with raw.open('a') as stream:
@@ -295,7 +295,8 @@ def test_same_parser_owner_migration_preserves_archival_and_suffix(tmp_path, mon
     monkeypatch.setattr(builtins, 'open', guarded)
     rows, meta = P.update_and_load_pipeline_event_summaries(**options)
     receipt = meta['contract_migration']
-    assert receipt['from_parser'] == receipt['to_parser'] == C.CURRENT_PARSER
+    assert receipt['from_parser'] == C.PRE_RECHECK_PARSER
+    assert receipt['to_parser'] == C.CURRENT_PARSER
     assert receipt['from_callback'] != receipt['to_callback']
     assert receipt['from_callback'] == json.loads(original)['callback_contract']
     assert not meta['rebuilt'] and meta['start_raw_offset'] == start
@@ -327,6 +328,10 @@ def test_parser_and_callback_owner_pairs_cannot_be_crossed(tmp_path, parser_kind
 def test_current_parser_does_not_adopt_previous_default_parser_callback(tmp_path):
     _, options, manifest, original, _ = predecessor(tmp_path,
         parser_callback=True, parser_contract=C.CURRENT_PARSER)
+    prior_callback = hashlib.sha256('\n'.join([
+        inspect.getsource(P.default_reason_label), C.PREVIOUS_PARSER]).encode()).hexdigest()
+    revise(manifest, callback_contract=prior_callback)
+    original = manifest.read_bytes()
     with pytest.raises(RuntimeError, match='callback_predecessor_unverified'):
         P.update_and_load_pipeline_event_summaries(**options)
     assert manifest.read_bytes() == original
@@ -345,7 +350,7 @@ def test_same_parser_migration_preserves_complete_previous_migration_chain(tmp_p
     # receipt and original archive, entirely inside this private source fixture.
     first_receipt = C.archive_predecessor(dict(
         schema='native_summary_contract_migration_v1',
-        from_parser=C.PREVIOUS_PARSER, to_parser=C.CURRENT_PARSER,
+        from_parser=C.PREVIOUS_PARSER, to_parser=C.PRE_RECHECK_PARSER,
         from_callback=first_source['callback_contract'], to_callback=intermediate_callback,
         original_checkpoint=first_source['checkpoint_digest'],
         original_manifest_sha256=hashlib.sha256(first_original).hexdigest(),
@@ -356,7 +361,7 @@ def test_same_parser_migration_preserves_complete_previous_migration_chain(tmp_p
         decision_authority='report_only', runtime_effect=False,
         historical_rebuild_performed=False), manifest)
     first_archive = Path(first_receipt['original_manifest_archive'])
-    revise(manifest, parser_contract=C.CURRENT_PARSER,
+    revise(manifest, parser_contract=C.PRE_RECHECK_PARSER,
            callback_contract=intermediate_callback, contract_migration=first_receipt)
     previous_checkpoint = manifest.read_bytes()
     start = raw.stat().st_size
@@ -387,7 +392,8 @@ def test_same_parser_migration_preserves_complete_previous_migration_chain(tmp_p
     assert json.loads(second_archive.read_text())['contract_migration'] == first_receipt
     assert second_receipt['original_manifest_sha256'] == hashlib.sha256(previous_checkpoint).hexdigest()
     assert second_receipt['original_checkpoint'] == json.loads(previous_checkpoint)['checkpoint_digest']
-    assert second_receipt['from_parser'] == second_receipt['to_parser'] == C.CURRENT_PARSER
+    assert second_receipt['from_parser'] == C.PRE_RECHECK_PARSER
+    assert second_receipt['to_parser'] == C.CURRENT_PARSER
     assert second_receipt['from_callback'] == intermediate_callback != second_receipt['to_callback']
     assert sum(reads) == raw.stat().st_size - start
     assert not meta['rebuilt'] and meta['start_raw_offset'] == start
@@ -451,7 +457,7 @@ def test_real_cli_rejects_unbound_or_modified_callbacks(tmp_path, monkeypatch, m
 @pytest.mark.parametrize('parser_callback',[False,True])
 def test_recent_producer_projection_migrates_exact_baseline_parser_without_replay(tmp_path,parser_callback):
     raw,options,manifest,original,rows=predecessor(tmp_path,parser_callback=parser_callback,
-        parser_contract=C.BASE_PARSER,buy_owner=C.CURRENT_BUY_OWNER)
+        parser_contract=C.BASE_PARSER,buy_owner=C.PRE_SCOPED_BUY_OWNER)
     if parser_callback:
         callback=hashlib.sha256('\n'.join([inspect.getsource(P.default_reason_label),C.BASE_PARSER]).encode()).hexdigest()
         revise(manifest,callback_contract=callback);original=manifest.read_bytes()
@@ -463,3 +469,81 @@ def test_recent_producer_projection_migrates_exact_baseline_parser_without_repla
     proof=meta['contract_migration'];assert proof['from_parser']==C.BASE_PARSER
     assert proof['to_parser']==C.CURRENT_PARSER
     assert Path(proof['original_manifest_archive']).read_bytes()==original
+
+
+def test_recheck_parser_change_is_only_new_producer_stage():
+    """No old stage/callback semantics are inferred from an arbitrary new SHA."""
+    import subprocess
+    root = Path(P.__file__).resolve().parents[2]
+    name = 'src/engine/pipeline_event_summary.py'
+    previous = subprocess.check_output(['git', '-C', str(root), 'show',
+        'c5aeda844dfab36146d04e6305cb29508cd47d4f:'+name])
+    current = Path(P.__file__).read_bytes()
+    addition = b'    "pre_submit_delay_recheck_observed",\n'
+    assert current.count(addition) == 1 and addition not in previous
+    assert current.replace(addition, b'') == previous
+    assert hashlib.sha256(previous).hexdigest() == C.PRE_RECHECK_PARSER
+    assert hashlib.sha256(current).hexdigest() == C.CURRENT_PARSER
+    old_producer = subprocess.check_output(['git', '-C', str(root), 'show',
+        'c5aeda844dfab36146d04e6305cb29508cd47d4f:src/engine/sniper_state_handlers.py'])
+    assert b'pre_submit_delay_recheck_observed' not in old_producer
+
+
+@pytest.mark.parametrize('parser_callback', [False, True])
+def test_pre_recheck_parser_migration_reads_legacy_suffix_without_rebuild(tmp_path, parser_callback):
+    raw, options, manifest, original, _ = predecessor(tmp_path,
+        parser_callback=parser_callback, parser_contract=C.PRE_RECHECK_PARSER,
+        buy_owner=C.CURRENT_BUY_OWNER)
+    offset = raw.stat().st_size
+    new_event = event(2)
+    with raw.open('a') as stream:
+        stream.write(json.dumps(new_event)+'\n')
+    rows, meta = P.update_and_load_pipeline_event_summaries(**options)
+    assert meta['start_raw_offset'] == offset and meta['rebuilt'] is False
+    assert meta['contract_migration']['from_parser'] == C.PRE_RECHECK_PARSER
+    assert meta['contract_migration']['to_parser'] == C.CURRENT_PARSER
+    assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes() == original
+    assert sum(row['event_count'] for row in rows) == 2
+    assert any(row['stage'] == new_event['stage'] for row in rows)
+
+
+def test_scoped_funnel_owner_change_preserves_exact_callback_definitions():
+    import ast
+    import subprocess
+    root = Path(B.__file__).resolve().parents[2]
+    old = subprocess.check_output(['git', '-C', str(root), 'show',
+        'd942ba69b4d4d51da5ad846ecb4ddd1ba4e46b8d^:src/engine/buy_funnel_sentinel.py'])
+    assert hashlib.sha256(old).hexdigest() == C.PRE_SCOPED_BUY_OWNER
+    assert hashlib.sha256(Path(B.__file__).read_bytes()).hexdigest() == C.CURRENT_BUY_OWNER
+    old_tree = ast.parse(old)
+    for name in ('_safe_str', '_blocker_label_from_stage_fields', '_is_ignored_event'):
+        original = next(node for node in old_tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
+        actual = ast.parse(inspect.getsource(getattr(B, name))).body[0]
+        assert ast.dump(original, include_attributes=False) == ast.dump(actual, include_attributes=False)
+        assert hashlib.sha256(ast.dump(actual, include_attributes=False).encode()).hexdigest() == C.DEFINITIONS['buy:'+name]
+
+
+def test_pre_scoped_owner_and_pre_recheck_parser_migrate_exact_pair(tmp_path):
+    _, options, manifest, original, _ = predecessor(tmp_path,
+        parser_contract=C.PRE_RECHECK_PARSER, buy_owner=C.PRE_SCOPED_BUY_OWNER)
+    rows, meta = P.update_and_load_pipeline_event_summaries(**options)
+    assert meta['rebuilt'] is False and sum(row['event_count'] for row in rows) == 1
+    assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes() == original
+
+
+def test_expanded_producer_stage_profile_cannot_migrate_as_same_profile(tmp_path):
+    _, options, manifest, _, _ = predecessor(tmp_path,
+        parser_contract=C.PRE_RECHECK_PARSER, buy_owner=C.CURRENT_BUY_OWNER)
+    original = manifest.read_bytes()
+    with pytest.raises(RuntimeError, match='source_guard_failed'):
+        P.update_and_load_pipeline_event_summaries(**options, summary_stages=P.PRODUCER_SUMMARY_STAGES)
+    assert manifest.read_bytes() == original
+    assert not (manifest.parent/'contract_migrations').exists()
+
+
+def test_new_parser_cannot_inherit_unproduced_intermediate_owner_pair(tmp_path):
+    _, options, manifest, original, _ = predecessor(tmp_path,
+        parser_contract=C.CURRENT_PARSER, buy_owner=C.INTERMEDIATE_BUY_OWNER)
+    with pytest.raises(RuntimeError, match='callback_predecessor_unverified'):
+        P.update_and_load_pipeline_event_summaries(**options)
+    assert manifest.read_bytes() == original
