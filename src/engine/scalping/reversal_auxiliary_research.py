@@ -23,6 +23,8 @@ FOLLOWUP_LIMIT = 800
 FOLLOWUP_AUTHORITY = 'USER_APPROVED_COMPLETE_RESEARCH_TOTAL_800_CALLS_20261008'
 DISCRIMINATIVE_LIMIT = 1400
 DISCRIMINATIVE_AUTHORITY = 'USER_APPROVED_ADDITIONAL_600_TOTAL_1400_RESEARCH_CALLS_20261017'
+NEXT_STUDY_LIMIT = 2000
+NEXT_STUDY_AUTHORITY = 'USER_APPROVED_ADDITIONAL_600_TOTAL_2000_RESEARCH_CALLS_20261017'
 SOURCE_SCOPE_AUTHORITY = 'USER_APPROVED_CUMULATIVE_AUXILIARY_RESEARCH_SCOPE_20261016'
 NOT_SENT_RECOVERY_AUTHORITY = 'RESEARCH_ONLY_VERIFIED_CREDENTIALS_NOT_SENT_RECOVERY'
 
@@ -59,7 +61,7 @@ def budget(data_root):
     base = grant(data_root)
     path = root(data_root) / 'allowance-topup-400.json'
     if not path.exists():
-        if any((root(data_root)/f'allowance-topup-{n}.json').exists() for n in (600,800,1400)):
+        if any((root(data_root)/f'allowance-topup-{n}.json').exists() for n in (600,800,1400,2000)):
             raise ValueError('auxiliary_research_previous_funding_required')
         return base
     topup = read(path)
@@ -105,7 +107,41 @@ def budget(data_root):
                 or any(value.get(key) != expected for key, expected in P.AUTH.items())):
             raise ValueError('auxiliary_research_discriminative_funding_invalid')
         result.update(call_limit=DISCRIMINATIVE_LIMIT, funding_sha256=value['artifact_content_sha256'])
+    next_study = root(data_root) / 'allowance-topup-2000.json'
+    if next_study.exists():
+        value = read(next_study)
+        if (result['call_limit'] != DISCRIMINATIVE_LIMIT or value.get('schema') != SCHEMA
+                or value.get('research_id') != RESEARCH_ID
+                or value.get('authority') != NEXT_STUDY_AUTHORITY
+                or value.get('previous_funding_sha256') != result['funding_sha256']
+                or value.get('from_limit') != DISCRIMINATIVE_LIMIT
+                or value.get('call_limit') != NEXT_STUDY_LIMIT
+                or value.get('budget_key') != base['budget_key']
+                or not isinstance(value.get('approval_reference'), str)
+                or not value['approval_reference'].strip()
+                or any(value.get(key) != expected for key, expected in P.AUTH.items())):
+            raise ValueError('auxiliary_research_next_study_funding_invalid')
+        result.update(call_limit=NEXT_STUDY_LIMIT, funding_sha256=value['artifact_content_sha256'])
     return result
+
+
+def authorize_next_study(data_root, *, confirm, approval_reference):
+    """Append 600 attempts; preserve previous spending and unused allowance."""
+    if (confirm != NEXT_STUDY_AUTHORITY or not isinstance(approval_reference, str)
+            or not approval_reference.strip()):
+        raise ValueError('auxiliary_research_next_study_authority_required')
+    with S.Store(data_root):
+        previous = budget(data_root)
+        if previous['call_limit'] not in {DISCRIMINATIVE_LIMIT, NEXT_STUDY_LIMIT}:
+            raise ValueError('auxiliary_research_previous_funding_required')
+        funding = read(root(data_root) / 'allowance-topup-1400.json')
+        value = P.seal(dict(schema=SCHEMA, research_id=RESEARCH_ID,
+            authority=NEXT_STUDY_AUTHORITY,
+            previous_funding_sha256=funding['artifact_content_sha256'],
+            from_limit=DISCRIMINATIVE_LIMIT, call_limit=NEXT_STUDY_LIMIT,
+            budget_key=previous['budget_key'], approval_reference=approval_reference, **P.AUTH))
+        immutable(root(data_root) / 'allowance-topup-2000.json', value)
+    return budget(data_root)
 
 
 def authorize_discriminative(data_root, *, confirm, approval_reference):
@@ -324,6 +360,65 @@ def current_bindings(data_root, parent):
     return value['bindings']
 
 
+def prior_attempt_inventory(data_root, keys, *, before_epoch, exclude_generations=()):
+    """Read all retained memberships and both response landing locations.
+
+    Superseded/non-research generations and imported legacy attempts matter.
+    Uncertain attempts conservatively count as prior exposure. This function
+    only reports provenance; it does not reset, refund, retry or publish.
+    """
+    import math
+    from collections import defaultdict
+    wanted = sorted(set(keys))
+    if (not wanted or any(not isinstance(k,str) or not k for k in wanted)
+            or type(before_epoch) not in (int,float) or not math.isfinite(before_epoch)
+            or before_epoch <= 0):
+        raise ValueError('auxiliary_prior_inventory_arguments_invalid')
+    excluded = set(exclude_generations)
+    categories = defaultdict(set);proofs = [];descriptors = {};objects = {}
+    with S.Store(data_root,readonly=True) as store:
+        for start in range(0,len(wanted),400):
+            chunk = wanted[start:start+400]
+            query = '''SELECT DISTINCT gp.generation,g.descriptor_obj,m.request_id,o.value,
+                at.attempt,at.created,at.state,at.source,at.result_obj,ar.result_obj
+                FROM members m JOIN strings o ON o.id=m.opportunity
+                JOIN partition_members pm ON pm.member_id=m.id
+                JOIN generation_parts gp ON gp.partition_id=pm.partition_id
+                JOIN generations g ON g.generation=gp.generation
+                JOIN attempts at ON at.request_id=m.request_id
+                LEFT JOIN attempt_responses ar ON ar.attempt=at.attempt
+                WHERE o.value IN ('''+','.join('?' for _ in chunk)+') AND at.created<?'
+            for gen,desc,rid,key,attempt,created,state,source,aobj,robj in store.db.execute(query,(*chunk,before_epoch)):
+                if gen in excluded:
+                    continue
+                observed = []
+                for obj in sorted({v for v in (aobj,robj) if v is not None}):
+                    if obj not in objects:
+                        record = store.get(obj)
+                        prov = record.get('result',{}).get('provider_provenance') or {}
+                        objects[obj] = dict(object_id=obj,record_sha256=P.digest(record),
+                            provider=prov.get('provider'),response_id=prov.get('response_id'),
+                            provider_none=prov.get('provider_none'))
+                    observed.append(objects[obj])
+                actual = any(v['response_id'] and v['provider_none'] is not True for v in observed)
+                category = 'actual_response' if actual else 'uncertain_prior_attempt'
+                categories[key].add(category)
+                if gen is not None and gen not in descriptors:
+                    value = store.get(desc)
+                    descriptors[gen] = dict(descriptor_obj=desc,descriptor_sha256=P.digest(value),
+                        schema=value.get('schema'),source_date=value.get('source_date'))
+                proofs.append(dict(source_key=key,generation=gen,request_id=rid,attempt=attempt,
+                    created_epoch=created,state=state,source=source,attempt_result_obj=aobj,
+                    attempt_response_obj=robj,observed=observed,classification=category))
+    # No inferred "not sent" exception exists here. Even a local historical
+    # error stays conservatively excluded unless a separate exact repair owns it.
+    return P.seal(dict(schema='auxiliary_prior_attempt_inventory_v1',
+        before_epoch=before_epoch,requested_keys_sha256=P.digest(wanted),requested_key_count=len(wanted),
+        excluded_generations=sorted(excluded),blocked_source_keys=sorted(categories),
+        classifications={k:sorted(v) for k,v in sorted(categories.items())},
+        generations=descriptors,proofs=proofs,unknown_counts_as_exposed=True,**P.AUTH))
+
+
 def immutable(path, value):
     if Path(path).exists():
         if read(path) != value:
@@ -403,7 +498,8 @@ def authorize(data_root, *, confirm, source_dates, approval_reference):
 def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
               purpose='evaluation', include_keys=(), native_current=False, resolved_only=False,
               native_output_tokens_override=None, compact_wire=False, compact_candidate_only=False,
-              source_scope_sha256=None, causal_prefix=False, causal_candidate_only=False):
+              source_scope_sha256=None, causal_prefix=False, causal_candidate_only=False,
+              risk_role_mode=None):
     from src.engine.scalping import reversal_auxiliary_tuning as T
     from src.engine.scalping import continuous_reversal_policy_v5 as V
     allowance = grant(data_root)
@@ -438,6 +534,12 @@ def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
         cfg['causal_prefix_contract'] = E.contract()
         if causal_candidate_only:
             cfg['causal_prefix_roles'] = ['candidate']
+    if risk_role_mode is not None:
+        from src.engine.scalping import reversal_auxiliary_risk_role_experiment as X
+        if (native_current or causal_prefix
+                or G.load(data_root,candidate)['input_version'] != X.U.VERSION):
+            raise ValueError('auxiliary_research_risk_role_input_unsupported')
+        cfg['risk_role_contract'] = X.contract(risk_role_mode)
     if compact_wire:
         from src.engine.scalping import reversal_auxiliary_research_wire as W
         cfg['compact_wire_contract'] = W.contract()
@@ -471,6 +573,14 @@ def context(data_root, experiment):
             raise ValueError('auxiliary_research_causal_prefix_contract_invalid')
     elif v['config'].get('causal_prefix_roles'):
         raise ValueError('auxiliary_research_causal_prefix_contract_missing')
+    if 'risk_role_contract' in v['config']:
+        from src.engine.scalping import reversal_auxiliary_risk_role_experiment as X
+        contract = v['config']['risk_role_contract']
+        if (not isinstance(contract,dict)
+                or contract != X.contract(contract.get('mode'))
+                or v['config'].get('native_current_contract')
+                or v['config'].get('causal_prefix_contract')):
+            raise ValueError('auxiliary_research_risk_role_contract_invalid')
     return v
 
 
@@ -486,7 +596,7 @@ def validate_campaign(data_root, campaign):
     if (ref != {k: v[k] for k in fields}
             or campaign['config_sha256'] != v['config']['artifact_content_sha256']
             or campaign['call_limit'] not in {
-                LIMIT, TOPUP_LIMIT, CONTINUATION_LIMIT, FOLLOWUP_LIMIT, DISCRIMINATIVE_LIMIT}
+                LIMIT, TOPUP_LIMIT, CONTINUATION_LIMIT, FOLLOWUP_LIMIT, DISCRIMINATIVE_LIMIT, NEXT_STUDY_LIMIT}
             or campaign['call_limit'] > a['call_limit']
             or campaign['source_date'] not in dates
             or any(p['day'] not in dates for p in campaign['pairs'])

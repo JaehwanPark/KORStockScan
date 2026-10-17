@@ -300,6 +300,99 @@ def _fund_research_to_800(root):
     Q.authorize_followup(root, confirm=Q.FOLLOWUP_AUTHORITY, approval_reference='User: total 800')
 
 
+def _fund_research_to_1400(root):
+    _fund_research_to_800(root)
+    Q.authorize_discriminative(root, confirm=Q.DISCRIMINATIVE_AUTHORITY,
+        approval_reference='User: additional 600; total 1400')
+
+
+def test_next_study_grant_preserves_1363_spent_and_37_unspent_then_enforces_2000(setup):
+    root, b, m, sid, v = setup
+    old, old_path = campaign(setup, name='before-2000')
+    _fund_research_to_1400(root)
+    scope = Q.authorize_source_scope(root, source_dates=['2026-10-07', '2026-10-15'],
+        as_of='2026-10-15', confirm=Q.SOURCE_SCOPE_AUTHORITY, approval_reference='User: cumulative')
+    original = Q.grant(root)
+    historical = {path:path.read_bytes() for path in Q.root(root).rglob('*.json')}
+    with S.Store(root) as store:
+        for i in range(1363):
+            store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)',
+                ('prior-study-' + str(i), original['budget_key']))
+    approval = 'User: increase allowance and execute next study; additional 600 total 2000'
+    result = Q.authorize_next_study(root, confirm=Q.NEXT_STUDY_AUTHORITY, approval_reference=approval)
+    assert result['call_limit'] == 2000 and result['budget_key'] == original['budget_key']
+    assert Q.grant(root) == original and Q.source_scope(root, scope['artifact_content_sha256']) == scope
+    assert all(path.read_bytes() == value for path,value in historical.items())
+    assert T.read(old_path) == old and Q.validate_campaign(root, old)['call_limit'] == 2000
+    with S.Store(root, readonly=True) as store:
+        assert store.budget_used(original['budget_key']) == 1363
+        assert result['call_limit'] - store.budget_used(original['budget_key']) == 637
+    assert Q.authorize_next_study(root, confirm=Q.NEXT_STUDY_AUTHORITY, approval_reference=approval) == result
+    with pytest.raises(ValueError, match='immutable_conflict'):
+        Q.authorize_next_study(root, confirm=Q.NEXT_STUDY_AUTHORITY, approval_reference='different reference')
+    new, path = campaign(setup, name='after-2000')
+    assert new['call_limit'] == 2000 and Q.validate_campaign(root, new) == result
+    with S.Store(root) as store:
+        for i in range(636):
+            store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)',
+                ('new-study-' + str(i), original['budget_key']))
+    def uncertain(*args, **kwargs):
+        raise TimeoutError('outcome unknown remains charged')
+    called = T.calls(root, '2026-10-07', campaign_path=path, transport=uncertain, max_new_calls=1)
+    assert called['new_calls'] == 1 and called['call_budget']['used_after'] == 2000
+    assert called['research_funding_sha256'] == result['funding_sha256']
+    assert T.calls(root, '2026-10-07', campaign_path=old_path,
+        transport=lambda *a, **k:pytest.fail('budget must not reset'))['new_calls'] == 0
+
+
+@pytest.mark.parametrize('confirm,approval', [
+    ('unapproved', 'User'), (Q.NEXT_STUDY_AUTHORITY, ''), (Q.NEXT_STUDY_AUTHORITY, ' '),
+])
+def test_next_study_grant_requires_explicit_authority(setup, confirm, approval):
+    root, *_ = setup
+    campaign(setup)
+    _fund_research_to_1400(root)
+    with pytest.raises(ValueError, match='next_study_authority_required'):
+        Q.authorize_next_study(root, confirm=confirm, approval_reference=approval)
+    assert Q.budget(root)['call_limit'] == 1400
+    assert not (Q.root(root) / 'allowance-topup-2000.json').exists()
+
+
+def test_next_study_grant_cannot_skip_1400_predecessor(setup):
+    root, *_ = setup
+    campaign(setup)
+    _fund_research_to_800(root)
+    with pytest.raises(ValueError, match='previous_funding_required'):
+        Q.authorize_next_study(root, confirm=Q.NEXT_STUDY_AUTHORITY, approval_reference='User')
+
+
+@pytest.mark.parametrize('missing', [400, 600, 800, 1400])
+def test_next_study_grant_rejects_any_missing_predecessor(setup, missing):
+    root, *_ = setup
+    campaign(setup)
+    _fund_research_to_1400(root)
+    Q.authorize_next_study(root, confirm=Q.NEXT_STUDY_AUTHORITY, approval_reference='User')
+    (Q.root(root) / f'allowance-topup-{missing}.json').unlink()
+    with pytest.raises(ValueError, match='research_.*(required|invalid)'):
+        Q.budget(root)
+
+
+@pytest.mark.parametrize('change', [
+    {'previous_funding_sha256':'0' * 64}, {'from_limit':800}, {'call_limit':2001},
+    {'budget_key':'research_auxiliary:new-date'}, {'authority':'unapproved'},
+    {'allowed_runtime_apply':True}, {'approval_reference':''},
+])
+def test_next_study_grant_rejects_resealed_funding_changes(setup, change):
+    root, *_ = setup
+    campaign(setup)
+    _fund_research_to_1400(root)
+    Q.authorize_next_study(root, confirm=Q.NEXT_STUDY_AUTHORITY, approval_reference='User')
+    path = Q.root(root) / 'allowance-topup-2000.json'
+    P.write(path, P.seal(dict(Q.read(path), **change)))
+    with pytest.raises(ValueError, match='next_study_funding_invalid'):
+        Q.budget(root)
+
+
 def _missing_key_attempt(root, value, *, defect=None):
     contract = Q.not_sent_executor_contract()
     with S.Store(root) as store:

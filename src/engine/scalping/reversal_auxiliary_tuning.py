@@ -247,6 +247,8 @@ def prepare(data_root, day, machine, parent, *, research=None):
                         snapshot_obj=snapshot_obj, outcome=p['outcome'],
                         current_registry=old, candidate_registry=cfg['candidate_registry'], requests={})
             comp = 'aux-pair:'+P.digest([sid,old,cfg['candidate_registry'],'confirmation_replay'])
+            if context and cfg.get('risk_role_contract'):
+                comp = 'aux-pair:'+P.digest([comp,'research_risk_role',cfg['risk_role_contract']])
             for role, registry in [('current',old),('candidate',cfg['candidate_registry'])]:
                 definition = G.load(data_root, registry)
                 req = research_request(snap, definition, cfg, role) if context else G.request(snap, definition)
@@ -321,6 +323,10 @@ def research_request(snapshot, registry, cfg, role):
         req=E.transform_request(req,G.production_request(snapshot,registry)[0],
                                 contract=cfg['causal_prefix_contract'],
                                 source_prefix=snapshot[1].get('research_prefix_evidence'))
+    if cfg.get('risk_role_contract') and role == 'candidate':
+        from src.engine.scalping import reversal_auxiliary_risk_role_experiment as X
+        req=X.transform_request(req,G.production_request(snapshot,registry)[0],
+                                contract=cfg['risk_role_contract'])
     return req
 
 
@@ -338,6 +344,9 @@ def research_logical_input(snapshot, registry, cfg, role='candidate'):
         from src.engine.scalping import reversal_auxiliary_causal_experiment as E
         return E.project(value,expected_contract=cfg['causal_prefix_contract'],
                          source_prefix=snapshot[1].get('research_prefix_evidence'))
+    if cfg.get('risk_role_contract') and role == 'candidate':
+        from src.engine.scalping import reversal_auxiliary_risk_role_experiment as X
+        return X.project(value,expected_contract=cfg['risk_role_contract'])
     return value
 
 
@@ -572,6 +581,9 @@ def evaluate(data_root, day, *, campaign_path=None):
         **(dict(research=c['research'],campaign_path=str(canonical.resolve())) if c.get('research') else {}),**P.AUTH))
     if cfg.get('causal_prefix_contract'):
         result=P.seal(dict(result,offline_input_experiment=cfg['causal_prefix_contract'],
+            operating_compatibility='requires_separate_input_implementation'))
+    if cfg.get('risk_role_contract'):
+        result=P.seal(dict(result,offline_input_experiment=cfg['risk_role_contract'],
             operating_compatibility='requires_separate_input_implementation'))
     from src.engine.monitoring.policy_generation_contract import native
     result.pop('artifact_content_sha256',None)
