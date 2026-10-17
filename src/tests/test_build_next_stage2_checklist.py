@@ -1341,6 +1341,23 @@ def _project_generation_warning(summary):
     )
 
 
+@pytest.mark.parametrize('economic_gap', [False, True])
+def test_verified_code_successor_does_not_reopen_completed_research(monkeypatch,economic_gap):
+    from src.engine.monitoring import policy_generation_code_handoff as H
+    summary=_generation_warning_summary()
+    if economic_gap:
+        summary['sources']['compact_auxiliary']=_direct_source('compact_auxiliary',comparison_status='source_gap',first_blocker='real_source_gap')
+    original=json.dumps(summary,sort_keys=True)
+    monkeypatch.setattr(H,'current_fixture_observation',lambda observed,data:dict(observed,status='verified',findings=[],current_code_capability_verified=True))
+    tasks,actions=_project_generation_warning(summary)
+    assert bool(tasks)==economic_gap
+    if economic_gap:
+        assert tasks[0].task_id=='DirectFamilySourceRepairCompactAuxiliary'
+        assert 'real_source_gap' in '\n'.join(tasks[0].lines)
+        assert 'POLICY_GENERATION_CAPABILITY_TASK' not in '\n'.join(tasks[0].lines)
+    assert json.dumps(summary,sort_keys=True)==original
+
+
 def test_generation_warning_keeps_repair_owner_and_valid_preopen_independent():
     summary = _generation_warning_summary()
     summary["sources"]["compact_auxiliary"] = _direct_source(

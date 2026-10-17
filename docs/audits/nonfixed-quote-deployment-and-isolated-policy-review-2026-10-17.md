@@ -13,3 +13,6 @@
 
 
 whole-native-chain 단계에서 과거 delay report의 code hash를 현재 코드와 직접 비교하는 마지막 소비자 누락도 확인했다. 전체 원천·ledger·날짜 검증을 유지하고, 동일 정책/원 코드 inventory를 가진 effective target의 검증된 prepared code handoff만 수용한다. source 변경·날짜 변경·영수증 결손·ledger 불일치는 계속 실패한다. 최종 관련 회귀검사 2,758 PASS이며 원 보고서와 정책 파일은 재선정/재작성하지 않는다.
+
+
+체크리스트 소비자의 마지막 검토에서, 네 계열의 current fixture projection은 이미 verified인데 과거 raw contract의 unverified만 읽어 완료된 코드 작업 세 개를 재개하는 누락을 확인했다. 기존 검증된 report-only projection을 소비하도록 연결하고 경제성/원천 결손의 독립 owner는 유지한다. raw report와 summary의 과거 계약은 변경하지 않는다. 최종 관련 2,844 PASS 및 compile/name/diff 검증을 마쳤다.
