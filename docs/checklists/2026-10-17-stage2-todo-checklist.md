@@ -23,3 +23,9 @@
   - Source: 사용자 명시 배포·격리 프로세스 정책 읽기/스키마/코드 호환성 검증 지시, [배포 검증 기록](../audits/nonfixed-quote-deployment-and-isolated-policy-review-2026-10-17.md).
   - 범위: 원 정책/장후/PREOPEN 영수증을 보존하고 exact code handoff·네트워크 차단 격리 검증 뒤 다음 정규 기동용 선택을 갱신한다. 새 TTL 선정은 필수가 아니다. 운영 봇의 주말 기동·당일 PREOPEN 우회·수치 재선정·실주문은 포함하지 않는다.
   - Acceptance: 새 코드의 원 128범위 native parity, 원 prepared 정책의 정확한 해시·reader·지연/보유/손절 코드 인계, current full preparation 검증 및 선택 CAS. 원 active pointer/env 불변·실제 PID 소비 false를 각각 확인한다.
+
+- [ ] `[InitialQuantityResearchRepair1017] 최초 수량 연구 입력·비용 대사와 전체 거래 EV 선정 수리` (`Due: 2026-10-17`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - Source: 사용자 다음액션 실행 및 익절 가중 후보 생성·전체 거래 비용 후 EV 최종 선정 확정, [수량 후속 연구 계약](../proposals/initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md#7-2026-10-17-후속-연구-실행-계약).
+  - 범위: 최신 선택 코드 기준 격리 작업본에서 IQ171–IQ175의 재현 여부·원천 세대를 고정하고 남은 날짜/입력 보존 및 v3 선정기를 수정한다. 비용·capture는 거래/attempt별 검증 복구·역사 결손·추가 원천 대기를 구별한다.
+  - Acceptance: bounded 원천/fact 및 실제 이벤트 모수 대사, 전체 거래 EV·순이익 선정·원금/비용/부분체결·독립 holdout·v2/v3 stage 호환 회귀, 적격 fixture 성능·실제 source-gap 구분, 코드리뷰·수정·재리뷰와 print-only 문서 검증. 새 정책의 경제성·PREOPEN/PID 자연 소비는 별도 영수증으로 확인한다.
+  - 진행: 선택 c5aeda844 기준 작업본 고정. 현재 fact16/완료13/보유3·비용 적격0, 입력 검증3일 PASS, compact 실행112/112 소비. 정확 비용 집계의 공식 계약 미정은 임의 배분 없이 원천 결손으로 보존하며 선정 v3와 구 평가 reader 호환을 검증 중이다.

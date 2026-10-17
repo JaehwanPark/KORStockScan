@@ -114,14 +114,18 @@ def test_cap_selection_keeps_losses_in_costed_population():
     rows = []
     for day in ("2026-09-28", "2026-09-29", "2026-09-30"):
         rows.append({"trade_id": day, "entry_date": day,
+                     "original_notional_krw": 1000,
                      "actual_net_pnl_krw": -10.0, "actual_profit_rate": -1.0,
+                     "modeled_parent_net_pnl_krw": -10.0,
                      "cap_candidates": {
                          mode: {"status": "paired",
                                 "candidate_net_pnl_krw": -5.0,
                                 "candidate_net_pct_on_parent_notional": -0.5}
                          for mode in ("cap_10pct", "cap_15pct", "cap_20pct")}})
         rows.append({"trade_id": f"{day}-win", "entry_date": day,
+                     "original_notional_krw": 1000,
                      "actual_net_pnl_krw": 20.0, "actual_profit_rate": 2.0,
+                     "modeled_parent_net_pnl_krw": 20.0,
                      "cap_candidates": {
                          mode: {"status": "paired",
                                 "candidate_net_pnl_krw": 25.0,
@@ -135,16 +139,24 @@ def test_cap_selection_keeps_losses_in_costed_population():
     assert _refresh_cap_decision(rows, "parent_5stage", 3)[0] == "cap_10pct"
 
 
-def test_cap_selection_requires_winner_weighted_gain():
+def test_cap_selection_accepts_loss_reduction_without_winner_gain():
+    from src.engine.scalping.initial_quantity_refresh_evaluation import cap_selection, VERSION
     rows = []
     for day in ("2026-09-28", "2026-09-29", "2026-09-30"):
-        rows.append({"trade_id": day, "entry_date": day,
-                     "actual_net_pnl_krw": 20.0, "actual_profit_rate": 2.0,
-                     "cap_candidates": {"cap_10pct": {
-                         "status": "paired", "candidate_net_pnl_krw": 22.0,
-                         "candidate_net_pct_on_parent_notional": 1.5}}})
+        for label, parent, candidate in (("win", 20., 15.), ("loss", -18., -7.)):
+            rows.append({"trade_id": f"{day}-{label}", "entry_date": day,
+                         "original_notional_krw": 1000,
+                         "actual_net_pnl_krw": parent, "actual_profit_rate": parent / 10,
+                         "modeled_parent_net_pnl_krw": parent,
+                         "cap_candidates": {"cap_10pct": {
+                             "status": "partial_unfilled", "candidate_net_pnl_krw": candidate,
+                             "candidate_net_pct_on_parent_notional": candidate / 10}}})
     selected, metrics = _refresh_cap_decision(rows, "parent_5stage", 3)
-    assert selected == "parent_5stage"
+    assert selected == "cap_10pct"
+    assert metrics[selected]["train"]["mean_delta_pct"] == pytest.approx(.3)
+    assert metrics[selected]["train"]["score"] < metrics[selected]["train"]["parent_score"]
+    # Re-reading a sealed v2 selection retains its former winner hurdle.
+    assert cap_selection(rows, "parent_5stage", 3, evaluation_algorithm=VERSION)[0] == "parent_5stage"
 
 
 def test_cap_selection_reserves_latest_date_as_independent_holdout():
@@ -152,7 +164,9 @@ def test_cap_selection_reserves_latest_date_as_independent_holdout():
     for day in ("2026-09-28", "2026-09-29", "2026-09-30"):
         for suffix in ("a", "b"):
             rows.append({"trade_id": f"{day}-{suffix}", "entry_date": day,
+                         "original_notional_krw": 1000,
                          "actual_net_pnl_krw": 20.0, "actual_profit_rate": 2.0,
+                         "modeled_parent_net_pnl_krw": 20.0,
                          "cap_candidates": {"cap_10pct": {
                              "status": "paired", "candidate_net_pnl_krw": 25.0,
                              "candidate_net_pct_on_parent_notional": 2.5}}})
@@ -169,6 +183,26 @@ def test_cap_selection_reserves_latest_date_as_independent_holdout():
     assert metrics["cap_10pct"]["coverage"] > 0.8
     assert metrics["cap_10pct"]["holdout_coverage"] == 0.5
     assert metrics["cap_10pct"]["selection_eligible"] is False
+
+
+@pytest.mark.parametrize('missing', ['modeled_parent_net_pnl_krw', 'original_notional_krw'])
+def test_cap_selection_never_uses_actual_cost_or_candidate_fill_denominator(missing):
+    rows = []
+    for day in ('2026-10-05', '2026-10-06', '2026-10-07'):
+        for i in range(20):
+            rows.append(dict(trade_id=f'{day}:{i}', entry_date=day,
+                actual_net_pnl_krw=20, actual_profit_rate=2,
+                modeled_parent_net_pnl_krw=18, original_notional_krw=1000,
+                cap_candidates={'cap_10pct': dict(status='partial_unfilled',
+                    candidate_net_pnl_krw=25, candidate_net_pct_on_parent_notional=2.5)}))
+    selected, metrics = _refresh_cap_decision(rows, 'parent_5stage', 30)
+    assert selected == 'cap_10pct'
+    assert metrics[selected]['train']['mean_delta_pct'] == pytest.approx(.7)
+    assert metrics[selected]['train']['parent_score'] == pytest.approx(1.8)
+    for row in rows:
+        del row[missing]
+    selected, _ = _refresh_cap_decision(rows, 'parent_5stage', 30)
+    assert selected == 'parent_5stage'
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

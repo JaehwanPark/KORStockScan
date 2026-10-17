@@ -1,8 +1,9 @@
-"""Version two quantity refresh: causal execution and train-only selection.
+"""Versioned quantity refresh: causal execution and train-only selection.
 
 Owns offline quantity evaluation, never price discovery, orders or pointers.
 The same comparison cost model is applied to both arms; realized PnL supplies
 winner weights only. Missing sources are excluded, not incumbent earnings.
+Execution evidence retains v2; new selection uses all-trade EV in v3.
 """
 from __future__ import annotations
 from collections import Counter, defaultdict, OrderedDict
@@ -13,6 +14,7 @@ from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_sc
 from src.engine.scalping.entry_split_order_plan import build_initial_quantity_type_legs
 
 VERSION = 'initial_quantity_execution_cost_split_v2'
+SELECTION_VERSION = 'initial_quantity_all_trade_ev_selection_v3'
 VALID_OUTCOMES = {'paired', 'partial_unfilled', 'modeled_no_fill'}
 _VERIFIED_EXECUTIONS = OrderedDict()
 
@@ -46,9 +48,40 @@ def modeled_parent(row):
     return value if finite_number(value) is not None else row['actual_net_pnl_krw']
 
 
-def cap_selection(rows, parent_mode, minimum_count):
+def _selection_version(value):
+    version = SELECTION_VERSION if value is None else value
+    if version not in {VERSION, SELECTION_VERSION}:
+        raise ValueError('refresh_selection_algorithm_invalid')
+    return version
+
+
+def _comparison_parent(row, value):
+    parent = finite_number(value.get('modeled_parent_net_pnl_krw'))
+    return parent if parent is not None else finite_number(row.get('modeled_parent_net_pnl_krw'))
+
+
+def _cap_delta_pct(row, value):
+    """Use the original trade notional, never the candidate filled amount."""
+    notional = finite_number(row.get('original_notional_krw'))
+    if notional is None:
+        quantity, price = finite_number(row.get('buy_qty')), finite_number(row.get('buy_price'))
+        notional = quantity * price if quantity and price else None
+    if notional is not None and notional > 0:
+        parent = _comparison_parent(row, value)
+        if parent is None:
+            return None
+        return 100 * (value['candidate_net_pnl_krw'] - parent) / notional
+    parent_pct = finite_number(value.get('parent_net_pct_on_parent_notional'))
+    if parent_pct is not None:
+        return value['candidate_net_pct_on_parent_notional'] - parent_pct
+    return None
+
+
+def cap_selection(rows, parent_mode, minimum_count, *, evaluation_algorithm=None):
     """Freeze one train winner before looking at any holdout outcomes."""
     from src.engine.scalping.initial_quantity_policy import _CAP_MODES, _digest
+    version = _selection_version(evaluation_algorithm)
+    legacy = version == VERSION
     dates = sorted({row['entry_date'] for row in rows})
     if not dates:
         return parent_mode, {}
@@ -58,32 +91,47 @@ def cap_selection(rows, parent_mode, minimum_count):
     metrics, ranks = {}, []
     for mode in _CAP_MODES:
         def measure(cohort):
-            valid = [r for r in cohort if (r.get('cap_candidates') or {}).get(mode, {}).get('status') in VALID_OUTCOMES]
+            valid = [r for r in cohort if (r.get('cap_candidates') or {}).get(mode, {}).get('status') in VALID_OUTCOMES
+                     and (legacy or _comparison_parent(r, r['cap_candidates'][mode]) is not None)]
             values = [r['cap_candidates'][mode] for r in valid]
-            delta = sum(v['candidate_net_pnl_krw'] - v.get('modeled_parent_net_pnl_krw', modeled_parent(r)) for r,v in zip(valid,values))
+            def parent_net(row, value):
+                return value.get('modeled_parent_net_pnl_krw', modeled_parent(row)) if legacy else _comparison_parent(row, value)
+            delta = sum(v['candidate_net_pnl_krw'] - parent_net(r, v) for r,v in zip(valid,values))
             winners = [(r,v) for r,v in zip(valid,values) if r['actual_net_pnl_krw'] > 0 and r['actual_profit_rate'] > 0]
             weight = sum(r['actual_net_pnl_krw'] for r,v in winners)
             score = sum(r['actual_net_pnl_krw'] * v['candidate_net_pct_on_parent_notional'] for r,v in winners)/weight if weight else None
             parent_score = sum(r['actual_net_pnl_krw'] * v.get('parent_net_pct_on_parent_notional',r['actual_profit_rate']) for r,v in winners)/weight if weight else None
+            if not legacy:
+                winner_deltas = [_cap_delta_pct(row, value) for row, value in winners]
+                parent_score = (score - sum(row['actual_net_pnl_krw'] * change for (row, value), change in zip(winners, winner_deltas)) / weight
+                                if weight and all(change is not None for change in winner_deltas) else None)
             daily = defaultdict(float)
             for r,v in zip(valid,values):
-                daily[r['entry_date']] += v['candidate_net_pnl_krw'] - v.get('modeled_parent_net_pnl_krw', modeled_parent(r))
-            return dict(count=len(valid), coverage=len(valid)/len(cohort) if cohort else 0., delta=delta, score=score, parent_score=parent_score, daily=dict(daily), candidate_net=sum(v['candidate_net_pnl_krw'] for v in values))
+                daily[r['entry_date']] += v['candidate_net_pnl_krw'] - parent_net(r, v)
+            result = dict(count=len(valid), coverage=len(valid)/len(cohort) if cohort else 0., delta=delta, score=score, parent_score=parent_score, daily=dict(daily), candidate_net=sum(v['candidate_net_pnl_krw'] for v in values))
+            if not legacy:
+                # Both arms use each original trade's notional. The paired
+                # parent amount is modeled with the same comparison costs.
+                deltas = [_cap_delta_pct(row, value) for row, value in zip(valid, values)]
+                result['mean_delta_pct'] = sum(deltas) / len(deltas) if deltas and all(value is not None for value in deltas) else None
+            return result
         a,b = measure(train), measure(test)
+        score_ok = (a['score'] is not None and a['parent_score'] is not None and a['score'] > a['parent_score'] + 1e-6) if legacy else a['mean_delta_pct'] is not None and a['mean_delta_pct'] > 0
         eligible = (len(dates) >= 3 and a['count'] >= minimum_count and a['coverage'] >= .8 and a['delta'] > 0
-                    and a['score'] is not None and a['parent_score'] is not None and a['score']>a['parent_score']+1e-6 and a['daily'] and min(a['daily'].values()) >= -.001)
+                    and score_ok and a['daily'] and min(a['daily'].values()) >= -.001)
         metrics[mode] = dict(train=a, holdout=b, train_eligible=bool(eligible), selection_eligible=False,
                              paired_count=a['count']+b['count'], delta_net_pnl_krw=a['delta']+b['delta'],
                              winner_weighted_net_pct=a['score'], candidate_net_pnl_krw=a['candidate_net']+b['candidate_net'],
                              train_paired_count=a['count'],holdout_paired_count=b['count'],holdout_date=holdout,
                              coverage=(a['count']+b['count'])/len(rows),holdout_coverage=b['coverage'])
         if eligible and mode != parent_mode:
-            ranks.append((a['score'], a['delta'], -list(_CAP_MODES).index(mode), mode))
+            ranks.append((a['score'] if legacy else a['mean_delta_pct'], a['delta'], -list(_CAP_MODES).index(mode), mode))
     winner = max(ranks)[-1] if ranks else parent_mode
     if ranks:
-        metrics[winner]['train_selected_candidate_sha256'] = _digest({'mode':winner, 'version':VERSION})
+        metrics[winner]['train_selected_candidate_sha256'] = _digest({'mode':winner, 'version':version})
         b=metrics[winner]['holdout']
-        metrics[winner]['selection_eligible'] = b['count'] > 0 and b['coverage'] >= .8 and b['delta'] >= 0
+        metrics[winner]['selection_eligible'] = (b['count'] > 0 and b['coverage'] >= .8 and b['delta'] >= 0
+            and (legacy or b['mean_delta_pct'] is not None and b['mean_delta_pct'] >= 0))
     return (winner if ranks and metrics[winner]['selection_eligible'] else parent_mode), metrics
 
 
@@ -239,6 +287,10 @@ def replay_valid(report):
         facts={str(r['recommendation_id']):r for r in report['census']['input_fact_rows']}
         for row in report['trades']:
             fact=facts[str(row['record_id'])];source=row['cap_source']
+            if ('original_notional_krw' in row and
+                (finite_number(row['original_notional_krw']) is None or
+                 row['original_notional_krw'] != fact['buy_qty'] * fact['buy_price'])):
+                return False
             trade=dict(buy_qty=fact['buy_qty'],buy_price=fact['buy_price'],sell_price=fact['sell_price'],realized_net_pnl_krw=row['actual_net_pnl_krw'])
             if any(value!=_cap_candidate_trade(trade,source,mode,report['census']['cost_rate']) for mode,value in row['cap_candidates'].items()):return False
         return True
@@ -246,9 +298,12 @@ def replay_valid(report):
 
 
 def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, following_bars=None,
-             timeout_research=None, parent_policy_file_sha256=None, enforce_trade_lineage=True):
+             timeout_research=None, parent_policy_file_sha256=None, enforce_trade_lineage=True,
+             evaluation_algorithm=None):
     from src.engine.scalping.initial_quantity_policy import _digest, _TYPES, _SHAPES, _CAP_MODES, refresh_window
     from src.engine.scalping.initial_quantity_activation import refresh_parent_policy_valid
+    version = _selection_version(evaluation_algorithm)
+    legacy = version == VERSION
     if (not refresh_parent_policy_valid(parent_policy) or not replay_valid(report)
         or report['census'].get('entry_on_or_after')!=refresh_window(parent_policy)
         or any(r['entry_date']<refresh_window(parent_policy) for r in report['trades'])):
@@ -309,20 +364,26 @@ def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, 
             minimum=30
             shape_change=config['shape']!=incumbent[1] or config['horizon']!=incumbent[2]
             following=(following_bars or {}).get('weighted_by_type',{}).get(name,{})
-            winner_count=sum(r['actual_net_pnl_krw']>0 and r['actual_profit_rate']>0 for r in train_rows_by_type[name]+test_rows_by_type[name])
-            following_ok=bool(winner_count and following.get('observed_minute_lower_count',0)/winner_count>=.8)
-            eligible=(a['count']>=minimum and a['coverage']>=.8 and a['delta']>0 and a['winner_weighted_delta_pct'] is not None
-                      and a['winner_weighted_delta_pct']>1e-6
+            if legacy:
+                winner_count=sum(r['actual_net_pnl_krw']>0 and r['actual_profit_rate']>0 for r in train_rows_by_type[name]+test_rows_by_type[name])
+                following_ok=bool(winner_count and following.get('observed_minute_lower_count',0)/winner_count>=.8)
+            else:
+                train_winners=[r for r in train_rows_by_type[name] if r['actual_net_pnl_krw']>0 and r['actual_profit_rate']>0]
+                linked=sum(((following_bars or {}).get('trades',{}).get(r['trade_id']) or {}).get('first_lower_elapsed_from_fill_minute') is not None for r in train_winners)
+                following_ok=bool(train_winners and linked/len(train_winners)>=.8)
+            score_ok=(a['winner_weighted_delta_pct'] is not None and a['winner_weighted_delta_pct']>1e-6) if legacy else a['mean_delta_pct'] is not None and a['mean_delta_pct']>0
+            eligible=(a['count']>=minimum and a['coverage']>=.8 and a['delta']>0 and score_ok
                       and (not shape_change or a['mean_delta_pct'] is not None and a['mean_delta_pct']>.10
                            and a['verified_cross_count']>0 and following_ok)
                       and len(a['daily'])>=2 and min(a['daily'].values())>=-.001)
             metrics[key]={'train':a,'train_eligible':eligible}
-            if eligible:ranked.append((a['winner_weighted_delta_pct'],a['delta'],key))
+            if eligible:ranked.append((a['winner_weighted_delta_pct'] if legacy else a['mean_delta_pct'],a['delta'],key))
         winner=max(ranked)[-1] if ranked else None
         approved=False;holdout=None
         if winner:
             holdout=measure(test_rows_by_type[name],winner)
-            approved=bool(holdout['count'] and holdout['coverage']>=.8 and holdout['delta']>=0)
+            approved=bool(holdout['count'] and holdout['coverage']>=.8 and holdout['delta']>=0
+                and (legacy or holdout['mean_delta_pct'] is not None and holdout['mean_delta_pct']>=0))
         config=timeout_research['joint_grid'][winner] if winner and approved and not blockers and name!='SAFE_UNKNOWN' else None
         decisions[name]=dict(selected_shape=config['shape'] if config else incumbent[1],selected_ratio_mode=config['mode'] if config else incumbent[0],
                              selected_total_wait_sec=config['horizon'] if config and config['horizon']!=incumbent[2] else None,
@@ -332,7 +393,7 @@ def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, 
                              train_selected_candidate_sha256=_digest(timeout_research['joint_grid'][winner]) if winner else None,
                              holdout=holdout,holdout_passed=approved)
     changed=any(d['selected_shape']!=parent_policy['type_policies'][n].get('selected_shape','parent') or d['selected_ratio_mode']!=parent_policy['type_policies'][n].get('ratio_mode','parent_5stage') or d['selected_total_wait_sec'] is not None for n,d in decisions.items())
-    return dict(schema_version='initial_entry_quantity_refresh_evaluation_v1',evaluation_algorithm=VERSION,generation_kind='refresh',source_date=report['source_date'],
+    return dict(schema_version='initial_entry_quantity_refresh_evaluation_v1',evaluation_algorithm=version,generation_kind='refresh',source_date=report['source_date'],
                 parent_policy_content_sha256=parent_policy['policy_content_sha256'],report_content_sha256=report['report_content_sha256'],
                 state='eligible_source_only' if changed and not blockers else 'carry_parent',global_blockers=blockers,type_decisions=decisions,
                 parent_policy_bound_trade_count=len(bound),excluded_trade_ids=excluded,purged_trade_ids=purged,

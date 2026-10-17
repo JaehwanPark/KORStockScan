@@ -1633,7 +1633,8 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                      "modeled_parent_net_pnl_krw": trade["modeled_parent_net_pnl_krw"],
                      "actual_profit_rate": trade["profit_rate"],
                      "actual_net_pnl_krw": trade["realized_net_pnl_krw"],
-                     **({"cap_source": cap_source,
+                     **({"original_notional_krw": trade["buy_price"] * trade["buy_qty"],
+                         "cap_source": cap_source,
                          "cap_candidates": cap_candidates}
                         if entry_on_or_after else {}),
                      "source_gap": paths.get(trade["trade_id"], {}).get("source_gap", []),
@@ -2488,6 +2489,8 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
               or any(key.startswith("timeout_research_") and key !=
                      "timeout_research_status" for key in receipt)):
             return False
+        selection_version = ({"evaluation_algorithm": evaluation.get("evaluation_algorithm")}
+                             if report.get("evaluation_algorithm") == REPAIR_VERSION else {})
         expected = evaluate_refresh_quantity_candidate(
             report, parent_policy=parent,
             pid_receipt=receipt["pid_receipt"],
@@ -2496,7 +2499,8 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
                             == "source_bound" else None),
             timeout_research=timeout_research,
             parent_policy_file_sha256=receipt["parent_policy_file_sha256"],
-            enforce_trade_lineage=bool(receipt.get("applied_policy_lineage_schema")))
+            enforce_trade_lineage=bool(receipt.get("applied_policy_lineage_schema")),
+            **selection_version)
         if receipt.get("decision") == "eligible_source_only":
             if (receipt.get("candidate_status") != "source_only"
                     or not isinstance(timeout_research, dict)):
