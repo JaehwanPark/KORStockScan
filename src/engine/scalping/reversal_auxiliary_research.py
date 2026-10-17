@@ -21,7 +21,10 @@ CONTINUATION_LIMIT = 600
 CONTINUATION_AUTHORITY = 'USER_APPROVED_COMPLETE_RESEARCH_TOTAL_600_CALLS_20261008'
 FOLLOWUP_LIMIT = 800
 FOLLOWUP_AUTHORITY = 'USER_APPROVED_COMPLETE_RESEARCH_TOTAL_800_CALLS_20261008'
+DISCRIMINATIVE_LIMIT = 1400
+DISCRIMINATIVE_AUTHORITY = 'USER_APPROVED_ADDITIONAL_600_TOTAL_1400_RESEARCH_CALLS_20261017'
 SOURCE_SCOPE_AUTHORITY = 'USER_APPROVED_CUMULATIVE_AUXILIARY_RESEARCH_SCOPE_20261016'
+NOT_SENT_RECOVERY_AUTHORITY = 'RESEARCH_ONLY_VERIFIED_CREDENTIALS_NOT_SENT_RECOVERY'
 
 
 def root(data_root):
@@ -56,7 +59,7 @@ def budget(data_root):
     base = grant(data_root)
     path = root(data_root) / 'allowance-topup-400.json'
     if not path.exists():
-        if any((root(data_root)/f'allowance-topup-{n}.json').exists() for n in (600,800)):
+        if any((root(data_root)/f'allowance-topup-{n}.json').exists() for n in (600,800,1400)):
             raise ValueError('auxiliary_research_previous_funding_required')
         return base
     topup = read(path)
@@ -87,7 +90,163 @@ def budget(data_root):
                 or value.get('budget_key') != base['budget_key'] or not value.get('approval_reference')):
             raise ValueError('auxiliary_research_followup_invalid')
         result.update(call_limit=FOLLOWUP_LIMIT, funding_sha256=value['artifact_content_sha256'])
+    discriminative = root(data_root) / 'allowance-topup-1400.json'
+    if discriminative.exists():
+        value = read(discriminative)
+        if (result['call_limit'] != FOLLOWUP_LIMIT or value.get('schema') != SCHEMA
+                or value.get('research_id') != RESEARCH_ID
+                or value.get('authority') != DISCRIMINATIVE_AUTHORITY
+                or value.get('previous_funding_sha256') != result['funding_sha256']
+                or value.get('from_limit') != FOLLOWUP_LIMIT
+                or value.get('call_limit') != DISCRIMINATIVE_LIMIT
+                or value.get('budget_key') != base['budget_key']
+                or not isinstance(value.get('approval_reference'), str)
+                or not value['approval_reference'].strip()
+                or any(value.get(key) != expected for key, expected in P.AUTH.items())):
+            raise ValueError('auxiliary_research_discriminative_funding_invalid')
+        result.update(call_limit=DISCRIMINATIVE_LIMIT, funding_sha256=value['artifact_content_sha256'])
     return result
+
+
+def authorize_discriminative(data_root, *, confirm, approval_reference):
+    """Append the approved 600 attempts to the existing 800-attempt budget."""
+    if (confirm != DISCRIMINATIVE_AUTHORITY or not isinstance(approval_reference, str)
+            or not approval_reference.strip()):
+        raise ValueError('auxiliary_research_discriminative_authority_required')
+    with S.Store(data_root):
+        previous = budget(data_root)
+        if previous['call_limit'] not in {FOLLOWUP_LIMIT, DISCRIMINATIVE_LIMIT}:
+            raise ValueError('auxiliary_research_previous_funding_required')
+        funding = read(root(data_root) / 'allowance-topup-800.json')
+        value = P.seal(dict(schema=SCHEMA, research_id=RESEARCH_ID,
+            authority=DISCRIMINATIVE_AUTHORITY,
+            previous_funding_sha256=funding['artifact_content_sha256'],
+            from_limit=FOLLOWUP_LIMIT, call_limit=DISCRIMINATIVE_LIMIT,
+            budget_key=previous['budget_key'], approval_reference=approval_reference, **P.AUTH))
+        immutable(root(data_root) / 'allowance-topup-1400.json', value)
+    return budget(data_root)
+
+
+def not_sent_executor_contract():
+    """Identify the sole recoverable executor guard, before client creation."""
+    import ast
+    from src.engine.scalping import ai_decision_quality as executor
+    path = Path(executor.__file__)
+    tree = ast.parse(path.read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+        and node.name == 'execute_openai_prompt_v2_candidate')
+    guards = [node for node in function.body if isinstance(node, ast.If)
+        and isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not)
+        and isinstance(node.test.operand, ast.Name) and node.test.operand.id == 'keys'
+        and len(node.body) == 1 and isinstance(node.body[0], ast.Raise)
+        and isinstance(node.body[0].exc, ast.Call)
+        and isinstance(node.body[0].exc.func, ast.Name) and node.body[0].exc.func.id == 'RuntimeError'
+        and len(node.body[0].exc.args) == 1
+        and isinstance(node.body[0].exc.args[0], ast.Constant)
+        and node.body[0].exc.args[0].value == 'openai_api_key_unavailable']
+    clients = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == 'OpenAI']
+    sends = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == 'create'
+        and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'responses']
+    if (len(guards) != 1 or len(clients) != 1 or len(sends) != 1
+            or not guards[0].body[0].lineno < clients[0].lineno < sends[0].lineno):
+        raise ValueError('auxiliary_research_not_sent_executor_contract_invalid')
+    return dict(executor_source_sha256=P.file_hash(path),
+        executor_raise_line=guards[0].body[0].lineno)
+
+
+def requeue_not_sent(data_root, campaign_path, *, proof):
+    """Requeue only proven missing-key failures; retain every attempt and charge.
+
+    No generic uncertain-attempt reset is supported. Reconciliation precedes
+    inspection so delayed responses and journal records cannot be bypassed.
+    """
+    from src.engine.scalping import reversal_auxiliary_tuning as T
+    contract = not_sent_executor_contract()
+    if (not isinstance(proof, dict) or proof.get('authority') != NOT_SENT_RECOVERY_AUTHORITY
+            or not isinstance(proof.get('approval_reference'), str)
+            or not proof['approval_reference'].strip()
+            or any(proof.get(key) != value for key, value in contract.items())
+            or not isinstance(proof.get('attempt_ids'), list) or not proof['attempt_ids']
+            or any(not isinstance(ident, str) or not re.fullmatch('[0-9a-f]{32}', ident)
+                   for ident in proof['attempt_ids'])
+            or len(set(proof['attempt_ids'])) != len(proof['attempt_ids'])):
+        raise ValueError('auxiliary_research_not_sent_proof_invalid')
+    campaign = T.read(campaign_path)
+    campaign, _, _ = T.load_campaign(data_root, campaign['source_date'], campaign_path)
+    if not campaign.get('research'):
+        raise ValueError('auxiliary_research_not_sent_research_only')
+    allowance = validate_campaign(data_root, campaign)
+    recovery_rows = []
+    with S.Store(data_root) as store:
+        store.reconcile()
+        if store.activation().get('writer_enabled') is not True:
+            raise ValueError('auxiliary_research_not_sent_writer_disabled')
+        T.validate_campaign(store, campaign)
+        before = store.budget_used(allowance['budget_key'])
+        request_ids = sorted({rid for pair in campaign['pairs'] for rid in pair['requests'].values()})
+        for rid in request_ids:
+            state, result_obj = store.db.execute('SELECT state,result_obj FROM requests WHERE id=?', (rid,)).fetchone()
+            if state != 'reserved':
+                continue
+            if result_obj is not None:
+                raise ValueError('auxiliary_research_not_sent_request_has_result')
+            attempts = store.db.execute('SELECT attempt,state,result_obj,source FROM attempts WHERE request_id=? ORDER BY attempt',
+                (rid,)).fetchall()
+            if not attempts:
+                raise ValueError('auxiliary_research_not_sent_attempt_unproven')
+            verified = []
+            for ident, attempt_state, obj, source in attempts:
+                if (ident not in proof['attempt_ids'] or attempt_state != 'reserved'
+                        or obj is None or source != 'provider'):
+                    raise ValueError('auxiliary_research_not_sent_attempt_unproven')
+                keys = {r[0] for r in store.db.execute('SELECT budget_key FROM attempt_budgets WHERE attempt=?', (ident,))}
+                if keys != {allowance['budget_key']}:
+                    raise ValueError('auxiliary_research_not_sent_foreign_budget')
+                response_objs = {r[0] for r in store.db.execute('SELECT result_obj FROM attempt_responses WHERE attempt=?', (ident,))}
+                if obj not in response_objs:
+                    raise ValueError('auxiliary_research_not_sent_response_unproven')
+                hashes = []
+                for response_obj in sorted(response_objs):
+                    record = store.get(response_obj)
+                    frames = record.get('error_frames')
+                    if (set(record) != {'error_type', 'error_frames', 'validation_errors', 'transport_invoked'}
+                            or record['error_type'] != 'RuntimeError' or record['transport_invoked'] is not True
+                            or record['validation_errors'] != ['provider_attempt_uncertain']
+                            or not isinstance(frames, list) or len(frames) != 2
+                            or any(not isinstance(frame, dict) for frame in frames)
+                            or frames[0].get('file') != Path(T.__file__).name
+                            or frames[0].get('function') != 'calls'
+                            or type(frames[0].get('line')) is not int or frames[0]['line'] <= 0
+                            or frames[1] != dict(file='ai_decision_quality.py',
+                                function='execute_openai_prompt_v2_candidate', line=contract['executor_raise_line'])):
+                        raise ValueError('auxiliary_research_not_sent_response_unproven')
+                    hashes.append(P.digest(record))
+                verified.append(dict(attempt_id=ident, response_sha256=hashes))
+            recovery_rows.append(dict(request_id=rid,
+                request_sha256=P.digest(store.request(rid)), attempts=verified))
+        if not recovery_rows:
+            return P.seal(dict(status='no_reserved_requests', campaign_sha256=campaign['artifact_content_sha256'],
+                requeued_requests=0, budget_used_unchanged=before, **P.AUTH))
+        receipt = P.seal(dict(schema='auxiliary_research_not_sent_recovery_v1',
+            authority=NOT_SENT_RECOVERY_AUTHORITY, campaign_sha256=campaign['artifact_content_sha256'],
+            research_id=RESEARCH_ID, proof=proof, code_sha256=P.file_hash(__file__),
+            reason='missing_credentials_guard_before_openai_client_and_send', requests=recovery_rows,
+            budget_key=allowance['budget_key'], budget_used_unchanged=before,
+            requeued_requests=len(recovery_rows), attempts_preserved=True, **P.AUTH))
+        for row in recovery_rows:
+            updated = store.db.execute("UPDATE requests SET state='planned' WHERE id=? AND state='reserved' AND result_obj IS NULL",
+                (row['request_id'],))
+            if updated.rowcount != 1:
+                raise ValueError('auxiliary_research_not_sent_request_changed')
+        if store.budget_used(allowance['budget_key']) != before:
+            raise ValueError('auxiliary_research_not_sent_budget_changed')
+        # The complete receipt and state changes commit together. A filesystem
+        # publication failure cannot erase the durable recovery evidence.
+        store.checkpoint('auxiliary-not-sent-recovery:' + receipt['artifact_content_sha256'], receipt)
+    immutable(root(data_root) / 'not-sent-recoveries' / (receipt['artifact_content_sha256'] + '.json'), receipt)
+    return receipt
 
 
 def authorize_followup(data_root, *, confirm, approval_reference):
@@ -244,7 +403,7 @@ def authorize(data_root, *, confirm, source_dates, approval_reference):
 def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
               purpose='evaluation', include_keys=(), native_current=False, resolved_only=False,
               native_output_tokens_override=None, compact_wire=False, compact_candidate_only=False,
-              source_scope_sha256=None):
+              source_scope_sha256=None, causal_prefix=False, causal_candidate_only=False):
     from src.engine.scalping import reversal_auxiliary_tuning as T
     from src.engine.scalping import continuous_reversal_policy_v5 as V
     allowance = grant(data_root)
@@ -267,6 +426,18 @@ def configure(data_root, *, experiment, candidate, scopes, seed, max_pairs,
         cfg['native_output_tokens_override'] = native_output_tokens_override
     if resolved_only:
         cfg['resolved_only'] = True
+    if (type(causal_prefix) is not bool or type(causal_candidate_only) is not bool
+            or (causal_candidate_only and not causal_prefix)):
+        raise ValueError('auxiliary_research_causal_prefix_config_invalid')
+    if causal_prefix:
+        from src.engine.scalping import reversal_auxiliary_causal_experiment as E
+        # No native-current proof may accidentally make an input experiment
+        # publishable through the existing registry-only publisher.
+        if native_current or G.load(data_root, candidate)['input_version'] != E.U.VERSION:
+            raise ValueError('auxiliary_research_causal_prefix_input_unsupported')
+        cfg['causal_prefix_contract'] = E.contract()
+        if causal_candidate_only:
+            cfg['causal_prefix_roles'] = ['candidate']
     if compact_wire:
         from src.engine.scalping import reversal_auxiliary_research_wire as W
         cfg['compact_wire_contract'] = W.contract()
@@ -292,6 +463,14 @@ def context(data_root, experiment):
         raise ValueError('auxiliary_research_context_invalid')
     if v.get('source_scope_sha256'):
         source_scope(data_root, v['source_scope_sha256'])
+    if v['config'].get('causal_prefix_contract'):
+        from src.engine.scalping import reversal_auxiliary_causal_experiment as E
+        if (v['config']['causal_prefix_contract'] != E.contract()
+                or v['config'].get('native_current_contract')
+                or v['config'].get('causal_prefix_roles') not in (None,['candidate'])):
+            raise ValueError('auxiliary_research_causal_prefix_contract_invalid')
+    elif v['config'].get('causal_prefix_roles'):
+        raise ValueError('auxiliary_research_causal_prefix_contract_missing')
     return v
 
 
@@ -306,7 +485,8 @@ def validate_campaign(data_root, campaign):
         dates = source_scope(data_root, v['source_scope_sha256'])['source_dates']
     if (ref != {k: v[k] for k in fields}
             or campaign['config_sha256'] != v['config']['artifact_content_sha256']
-            or campaign['call_limit'] not in {LIMIT, TOPUP_LIMIT, CONTINUATION_LIMIT, FOLLOWUP_LIMIT}
+            or campaign['call_limit'] not in {
+                LIMIT, TOPUP_LIMIT, CONTINUATION_LIMIT, FOLLOWUP_LIMIT, DISCRIMINATIVE_LIMIT}
             or campaign['call_limit'] > a['call_limit']
             or campaign['source_date'] not in dates
             or any(p['day'] not in dates for p in campaign['pairs'])

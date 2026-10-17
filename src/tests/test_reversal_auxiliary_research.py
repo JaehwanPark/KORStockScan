@@ -294,6 +294,211 @@ def test_continuation_preserves_400_campaign_and_unknown_charges(setup):
         Q.authorize_continuation(root,confirm='bad',approval_reference='bad')
 
 
+def _fund_research_to_800(root):
+    Q.authorize_topup(root, confirm=Q.TOPUP_AUTHORITY, approval_reference='User: total 400')
+    Q.authorize_continuation(root, confirm=Q.CONTINUATION_AUTHORITY, approval_reference='User: total 600')
+    Q.authorize_followup(root, confirm=Q.FOLLOWUP_AUTHORITY, approval_reference='User: total 800')
+
+
+def _missing_key_attempt(root, value, *, defect=None):
+    contract = Q.not_sent_executor_contract()
+    with S.Store(root) as store:
+        selected = {p['opportunity_key']:p for p in value['pairs']}
+        candidates = [selected[key]['requests'][role]
+            for key in value['selector']['selected_keys'] for role in ('current', 'candidate')]
+        rid = next(ident for ident in candidates if store.db.execute(
+            'SELECT state FROM requests WHERE id=?', (ident,)).fetchone()[0] == 'planned')
+        attempt = store.reserve(rid, store.activation()['writer_epoch'],
+            budget_key=Q.grant(root)['budget_key'], call_limit=200)
+        record = dict(error_type='RuntimeError', transport_invoked=True,
+            validation_errors=['provider_attempt_uncertain'], error_frames=[
+                dict(file='reversal_auxiliary_tuning.py', function='calls', line=415),
+                dict(file='ai_decision_quality.py', function='execute_openai_prompt_v2_candidate',
+                    line=contract['executor_raise_line'])])
+        if defect == 'timeout': record['error_type'] = 'TimeoutError'
+        if defect == 'unknown_frame': record['error_frames'][-1]['line'] += 1
+        if defect == 'result': record['result'] = {'provider_provenance':{'response_id':'actual-response'}}
+        if defect != 'unlanded': store.finish(attempt, record)
+        if defect == 'foreign_budget':
+            store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)', (attempt, 'another-budget'))
+        if defect == 'ambiguous_prior':
+            store.db.execute('INSERT INTO attempts VALUES(?,?,?,?,?,?,?)',
+                ('a' * 32, rid, 'reserved', None, 'test', 0, 'provider'))
+    proof = dict(contract, authority=Q.NOT_SENT_RECOVERY_AUTHORITY,
+        approval_reference='User: continue approved research; exact guard proves no send', attempt_ids=[attempt])
+    return rid, attempt, proof
+
+
+def test_requeue_not_sent_preserves_attempt_charge_and_journal_then_allows_actual_attempt(setup):
+    root, *_ = setup
+    value, path = campaign(setup)
+    rid, attempt, proof = _missing_key_attempt(root, value)
+    with S.Store(root, readonly=True) as store:
+        before = store.db.execute('SELECT * FROM attempts WHERE attempt=?', (attempt,)).fetchone()
+    receipt = Q.requeue_not_sent(root, path, proof=proof)
+    assert receipt['requeued_requests'] == 1 and receipt['budget_used_unchanged'] == 1
+    assert receipt['requests'][0]['attempts'][0]['attempt_id'] == attempt
+    with S.Store(root) as store:
+        store.reconcile()
+        assert store.db.execute('SELECT state FROM requests WHERE id=?', (rid,)).fetchone()[0] == 'planned'
+        assert store.db.execute('SELECT * FROM attempts WHERE attempt=?', (attempt,)).fetchone() == before
+        assert store.budget_used(Q.grant(root)['budget_key']) == 1
+        assert store.checkpoint('auxiliary-not-sent-recovery:' + receipt['artifact_content_sha256']) == receipt
+    assert Q.requeue_not_sent(root, path, proof=proof)['requeued_requests'] == 0
+    result = T.calls(root, '2026-10-07', campaign_path=path, transport=transport, max_new_calls=1)
+    assert result['new_calls'] == 1 and result['call_budget']['used_after'] == 2
+    with S.Store(root, readonly=True) as store:
+        assert store.db.execute('SELECT count(*) FROM attempts WHERE request_id=?', (rid,)).fetchone()[0] == 2
+
+
+@pytest.mark.parametrize('defect', ['timeout', 'unknown_frame', 'unlanded', 'foreign_budget', 'ambiguous_prior'])
+def test_requeue_not_sent_never_resets_genuine_or_ambiguous_uncertainty(setup, defect):
+    root, *_ = setup
+    value, path = campaign(setup)
+    rid, attempt, proof = _missing_key_attempt(root, value, defect=defect)
+    with pytest.raises(ValueError, match='not_sent_'):
+        Q.requeue_not_sent(root, path, proof=proof)
+    with S.Store(root, readonly=True) as store:
+        assert store.db.execute('SELECT state FROM requests WHERE id=?', (rid,)).fetchone()[0] == 'reserved'
+        assert store.budget_used(Q.grant(root)['budget_key']) == 1
+    assert not list((Q.root(root) / 'not-sent-recoveries').glob('*.json'))
+
+
+def test_requeue_not_sent_reconciles_actual_late_response_and_does_not_requeue(setup):
+    root, *_ = setup
+    value, path = campaign(setup)
+    rid, attempt, proof = _missing_key_attempt(root, value)
+    with S.Store(root) as store:
+        store.land_response(attempt, dict(result=dict(provider_provenance={'response_id':'late-actual'})))
+    assert Q.requeue_not_sent(root, path, proof=proof)['requeued_requests'] == 0
+    with S.Store(root, readonly=True) as store:
+        assert store.db.execute('SELECT state FROM requests WHERE id=?', (rid,)).fetchone()[0] == 'completed'
+        assert store.budget_used(Q.grant(root)['budget_key']) == 1
+
+
+@pytest.mark.parametrize('change', [
+    {'authority':'unapproved'}, {'approval_reference':''}, {'executor_source_sha256':'0' * 64},
+    {'executor_raise_line':1}, {'attempt_ids':['0' * 32]},
+])
+def test_requeue_not_sent_requires_exact_frozen_executor_and_attempt_authority(setup, change):
+    root, *_ = setup
+    value, path = campaign(setup)
+    rid, _, proof = _missing_key_attempt(root, value)
+    with pytest.raises(ValueError, match='not_sent_'):
+        Q.requeue_not_sent(root, path, proof=dict(proof, **change))
+    with S.Store(root, readonly=True) as store:
+        assert store.db.execute('SELECT state FROM requests WHERE id=?', (rid,)).fetchone()[0] == 'reserved'
+
+
+def test_real_transport_missing_credentials_fails_before_any_reservation(setup, monkeypatch):
+    from src.engine.scalping import ai_decision_quality as executor
+    root, *_ = setup
+    _, path = campaign(setup)
+    monkeypatch.setattr(executor, '_offline_openai_api_keys', lambda:[])
+    monkeypatch.setattr(executor, 'execute_openai_prompt_v2_candidate',
+        lambda *a, **k:pytest.fail('missing credentials must never reach executor'))
+    with S.Store(root, readonly=True) as store:
+        attempts_before = store.db.execute('SELECT count(*) FROM attempts').fetchone()[0]
+    with pytest.raises(ValueError, match='research_credential_unavailable'):
+        T.calls(root, '2026-10-07', campaign_path=path, max_new_calls=1)
+    with S.Store(root, readonly=True) as store:
+        assert store.db.execute('SELECT count(*) FROM attempts').fetchone()[0] == attempts_before
+        assert store.budget_used(Q.grant(root)['budget_key']) == 0
+
+
+def test_discriminative_extension_preserves_chain_scope_and_cumulative_charges(setup):
+    root, b, m, sid, v = setup
+    old, old_path = campaign(setup, name='before-extension')
+    _fund_research_to_800(root)
+    scope = Q.authorize_source_scope(root, source_dates=['2026-10-07', '2026-10-15'],
+        as_of='2026-10-15', confirm=Q.SOURCE_SCOPE_AUTHORITY, approval_reference='User: cumulative')
+    historical = {path: path.read_bytes() for path in Q.root(root).rglob('*.json')}
+    original = Q.grant(root)
+    with S.Store(root) as store:
+        for i in range(800):
+            store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)',
+                ('prior-completed-or-uncertain-' + str(i), original['budget_key']))
+    assert T.calls(root, '2026-10-07', campaign_path=old_path, transport=transport)['new_calls'] == 0
+    approval = 'User 2026-10-17: execute detailed study, additional 600 attempts, total 1400'
+    grant = Q.authorize_discriminative(root, confirm=Q.DISCRIMINATIVE_AUTHORITY,
+        approval_reference=approval)
+    assert grant['call_limit'] == 1400 and grant['budget_key'] == original['budget_key']
+    assert Q.grant(root) == original
+    assert all(path.read_bytes() == content for path, content in historical.items())
+    assert Q.source_scope(root, scope['artifact_content_sha256']) == scope
+    assert T.read(old_path) == old and Q.validate_campaign(root, old)['call_limit'] == 1400
+    assert Q.authorize_discriminative(root, confirm=Q.DISCRIMINATIVE_AUTHORITY,
+        approval_reference=approval) == grant
+    with pytest.raises(ValueError, match='immutable_conflict'):
+        Q.authorize_discriminative(root, confirm=Q.DISCRIMINATIVE_AUTHORITY,
+            approval_reference='different authority record must not replace the original')
+    new, path = campaign(setup, name='after-extension')
+    assert new['call_limit'] == 1400 and Q.validate_campaign(root, new) == grant
+    def uncertain(*args, **kwargs):
+        raise TimeoutError('provider outcome unknown')
+    called = T.calls(root, '2026-10-07', campaign_path=path, transport=uncertain, max_new_calls=1)
+    assert called['new_calls'] == 1 and called['call_budget']['used_after'] == 801
+    assert called['research_funding_sha256'] == grant['funding_sha256']
+    with S.Store(root) as store:
+        for i in range(599):
+            store.db.execute('INSERT INTO attempt_budgets VALUES(?,?)',
+                ('other-experiment-or-date-' + str(i), original['budget_key']))
+    assert T.calls(root, '2026-10-07', campaign_path=path,
+        transport=lambda *a, **k: pytest.fail('exhausted shared budget'))['new_calls'] == 0
+    with S.Store(root, readonly=True) as store:
+        assert store.budget_used(original['budget_key']) == 1400
+
+
+@pytest.mark.parametrize('confirm,approval', [
+    ('unapproved', 'User'), (Q.DISCRIMINATIVE_AUTHORITY, ''),
+    (Q.DISCRIMINATIVE_AUTHORITY, '   '), (Q.DISCRIMINATIVE_AUTHORITY, True),
+])
+def test_discriminative_extension_requires_explicit_authority(setup, confirm, approval):
+    root, *_ = setup
+    campaign(setup)
+    _fund_research_to_800(root)
+    with pytest.raises(ValueError, match='discriminative_authority_required'):
+        Q.authorize_discriminative(root, confirm=confirm, approval_reference=approval)
+    assert Q.budget(root)['call_limit'] == 800
+    assert not (Q.root(root) / 'allowance-topup-1400.json').exists()
+
+
+def test_discriminative_extension_cannot_skip_preceding_allowances(setup):
+    root, *_ = setup
+    campaign(setup)
+    with pytest.raises(ValueError, match='previous_funding_required'):
+        Q.authorize_discriminative(root, confirm=Q.DISCRIMINATIVE_AUTHORITY,
+            approval_reference='User: additional 600')
+
+
+@pytest.mark.parametrize('missing', [400, 600, 800])
+def test_discriminative_extension_rejects_missing_chain_links(setup, missing):
+    root, *_ = setup
+    campaign(setup)
+    _fund_research_to_800(root)
+    Q.authorize_discriminative(root, confirm=Q.DISCRIMINATIVE_AUTHORITY, approval_reference='User')
+    (Q.root(root) / f'allowance-topup-{missing}.json').unlink()
+    with pytest.raises(ValueError, match='research_(previous_funding_required|followup_invalid|discriminative_funding_invalid)'):
+        Q.budget(root)
+
+
+@pytest.mark.parametrize('change', [
+    {'schema': 'wrong'}, {'research_id': 'another-research'}, {'authority': 'unapproved'},
+    {'previous_funding_sha256': '0' * 64}, {'from_limit': 600}, {'call_limit': 1401},
+    {'budget_key': 'research_auxiliary:new-session'}, {'approval_reference': ''},
+    {'approval_reference': '  '}, {'allowed_runtime_apply': True},
+])
+def test_discriminative_extension_rejects_resealed_funding_changes(setup, change):
+    root, *_ = setup
+    campaign(setup)
+    _fund_research_to_800(root)
+    Q.authorize_discriminative(root, confirm=Q.DISCRIMINATIVE_AUTHORITY, approval_reference='User')
+    path = Q.root(root) / 'allowance-topup-1400.json'
+    P.write(path, P.seal(dict(Q.read(path), **change)))
+    with pytest.raises(ValueError, match='discriminative_funding_invalid'):
+        Q.budget(root)
+
+
 def test_format_only_control_retains_exact_original_request(setup,monkeypatch):
     from src.engine.scalping import reversal_auxiliary_research_wire as W
     root,b,m,sid,v=setup

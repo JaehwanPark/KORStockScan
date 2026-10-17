@@ -249,12 +249,7 @@ def prepare(data_root, day, machine, parent, *, research=None):
             comp = 'aux-pair:'+P.digest([sid,old,cfg['candidate_registry'],'confirmation_replay'])
             for role, registry in [('current',old),('candidate',cfg['candidate_registry'])]:
                 definition = G.load(data_root, registry)
-                req = (R.request(snap, definition, cfg.get('native_current_contract'),
-                                 output_tokens_override=cfg.get('native_output_tokens_override'))
-                       if context and role == 'current' and definition['schema']!=G.SCHEMA_V2 else G.request(snap, definition))
-                if context and definition['schema']!=G.SCHEMA_V2 and cfg.get('compact_wire_contract') and (role == 'candidate' or not cfg.get('compact_candidate_only')):
-                    from src.engine.scalping import reversal_auxiliary_research_wire as W
-                    req=W.request(req,G.production_request(snap,definition)[0],cfg['compact_wire_contract'])
+                req = research_request(snap, definition, cfg, role) if context else G.request(snap, definition)
                 rid,_ = store.add_request(req)
                 mid = store.add_member(comp,p['opportunity_key'],role,rid,p['outcome']['status'])
                 pair['requests'][role] = rid
@@ -310,18 +305,40 @@ def load_campaign(data_root, day, campaign_path=None):
     return c, out, canonical
 
 
-def expected_request(data_root, campaign, pair, role, snapshot, registry):
+def research_request(snapshot, registry, cfg, role):
+    """Apply only explicitly sealed offline request interventions."""
     req = G.request(snapshot,registry)
-    if campaign.get('research') and registry['schema']!=G.SCHEMA_V2:
+    if registry['schema']!=G.SCHEMA_V2:
         from src.engine.scalping import reversal_auxiliary_research as R
-        cfg = R.context(data_root,campaign['research']['experiment'])['config']
         if role == 'current':
             req = R.request(snapshot,registry,cfg.get('native_current_contract'),
                              output_tokens_override=cfg.get('native_output_tokens_override'))
         if cfg.get('compact_wire_contract') and (role == 'candidate' or not cfg.get('compact_candidate_only')):
             from src.engine.scalping import reversal_auxiliary_research_wire as W
             req = W.request(req,G.production_request(snapshot,registry)[0],cfg['compact_wire_contract'])
+    if cfg.get('causal_prefix_contract') and role in cfg.get('causal_prefix_roles',['current','candidate']):
+        from src.engine.scalping import reversal_auxiliary_causal_experiment as E
+        req=E.transform_request(req,G.production_request(snapshot,registry)[0],
+                                contract=cfg['causal_prefix_contract'],
+                                source_prefix=snapshot[1].get('research_prefix_evidence'))
     return req
+
+
+def expected_request(data_root, campaign, pair, role, snapshot, registry):
+    if campaign.get('research'):
+        from src.engine.scalping import reversal_auxiliary_research as R
+        cfg = R.context(data_root,campaign['research']['experiment'])['config']
+        return research_request(snapshot,registry,cfg,role)
+    return G.request(snapshot,registry)
+
+
+def research_logical_input(snapshot, registry, cfg, role='candidate'):
+    value=G.production_request(snapshot,registry)[0]
+    if cfg.get('causal_prefix_contract') and role in cfg.get('causal_prefix_roles',['current','candidate']):
+        from src.engine.scalping import reversal_auxiliary_causal_experiment as E
+        return E.project(value,expected_contract=cfg['causal_prefix_contract'],
+                         source_prefix=snapshot[1].get('research_prefix_evidence'))
+    return value
 
 
 def response_projection(result, req, logical_input, registry):
@@ -342,12 +359,16 @@ def calls(data_root, day, *, stop_epoch=None, transport=None, campaign_path=None
     if max_new_calls is not None and (type(max_new_calls) is not int or max_new_calls < 0):
         raise ValueError('auxiliary_batch_limit_invalid')
     research_grant = None
+    cfg = {}
     if c.get('research'):
         from src.engine.scalping import reversal_auxiliary_research as R
         research_grant = R.validate_campaign(data_root,c)
+        cfg=R.context(data_root,c['research']['experiment'])['config']
     limit = research_grant['call_limit'] if research_grant else LIMIT
-    if transport is None:
-        from src.engine.scalping.ai_decision_quality import execute_openai_prompt_v2_candidate
+    native_transport = transport is None
+    credential_keys = None
+    if native_transport:
+        from src.engine.scalping.ai_decision_quality import execute_openai_prompt_v2_candidate, _offline_openai_api_keys
         transport = execute_openai_prompt_v2_candidate
     with S.Store(data_root) as store:
         validate_campaign(store,c); store.reconcile()
@@ -391,11 +412,15 @@ def calls(data_root, day, *, stop_epoch=None, transport=None, campaign_path=None
                 wanted=expected_request(data_root,c,pair,role,snapshot,registry)
                 if any(req.get(k)!=wanted.get(k) for k in ('paired_replay_id','candidate_input','candidate','control','stage')):
                     raise ValueError('auxiliary_pair_request_changed')
-                logical_input=G.production_request(snapshot,registry)[0]
+                logical_input=research_logical_input(snapshot,registry,cfg,role)
+                if native_transport and credential_keys is None:
+                    credential_keys = _offline_openai_api_keys()
+                    if not credential_keys:
+                        raise ValueError('auxiliary_research_credential_unavailable')
                 attempt=store.reserve(rid,fence,budget_key=key,call_limit=limit,additional_budget_keys=[] if research_grant else [origin])
                 result=None
                 try:
-                    result=transport(req,timeout_sec=30)
+                    result=transport(req,timeout_sec=30,**({'api_keys':credential_keys} if native_transport else {}))
                     decoded,errors=response_projection(result,req,logical_input,registry)
                     record=dict(result=result,validation_errors=errors,transport_invoked=True)
                 except Exception as exc:
@@ -447,10 +472,11 @@ def evaluate(data_root, day, *, campaign_path=None):
     resolution_rows=[]
     with S.Store(data_root) as store:
         rows=validate_campaign(store,c)
-        grant=None
+        grant=None;cfg={}
         if c.get('research'):
             from src.engine.scalping import reversal_auxiliary_research as R
             grant=R.validate_campaign(data_root,c)
+            cfg=R.context(data_root,c['research']['experiment'])['config']
         budget_key=grant['budget_key'] if grant else 'postclose_auxiliary:'+day
         budget_limit=grant['call_limit'] if grant else LIMIT
         budget_used=store.budget_used(budget_key)
@@ -467,7 +493,8 @@ def evaluate(data_root, day, *, campaign_path=None):
                     raise ValueError('auxiliary_pair_request_changed')
                 if r[4]!='completed' or not r[5]:reasons.append(role+':'+r[4]);continue
                 record=store.get(r[5]); result=record.get('result',{})
-                response,errors=response_projection(result,req,G.production_request(snapshot,registry)[0],registry)
+                logical_input=research_logical_input(snapshot,registry,cfg,role)
+                response,errors=response_projection(result,req,logical_input,registry)
                 if errors or not (result.get('provider_provenance') or {}).get('response_id'):
                     reasons.append(role+':invalid_response');continue
                 verdicts[role]=response['risk_verdict']
@@ -543,6 +570,9 @@ def evaluate(data_root, day, *, campaign_path=None):
         eligible_census=c['eligible_census'],not_sampled_budget=c['not_sampled_budget'],
         state='evaluated',call_limit=c['call_limit'],
         **(dict(research=c['research'],campaign_path=str(canonical.resolve())) if c.get('research') else {}),**P.AUTH))
+    if cfg.get('causal_prefix_contract'):
+        result=P.seal(dict(result,offline_input_experiment=cfg['causal_prefix_contract'],
+            operating_compatibility='requires_separate_input_implementation'))
     from src.engine.monitoring.policy_generation_contract import native
     result.pop('artifact_content_sha256',None)
     result['policy_generation']=native(result,family='auxiliary',day=day,data_root=data_root,
