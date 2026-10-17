@@ -132,6 +132,33 @@ def _registry_sources(data_root, registry, identities, sources):
                 pending.append(value[name])
 
 
+def _runtime_overlay_generations(data_root, bundle, target_date, reader, overlay, sources):
+    """Follow runtime ancestry explicitly; flat proof sources may be historical."""
+    result = {}
+    record = overlay
+    while record is not None:
+        ident = record.get('artifact_content_sha256')
+        if (not isinstance(ident, str) or re.fullmatch('[a-f0-9]{64}', ident) is None
+                or ident in result or record.get('day') != target_date
+                or record.get('base_bundle_sha256') != bundle['bundle_sha256']
+                or record.get('schema') != reader.SCHEMA or record.get('authority') != reader.AUTHORITY):
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+        path = reader.root(data_root) / 'generations' / (ident + '.json')
+        actual = _sha(path)
+        if sources.setdefault(str(path), actual) != actual or reader.read(path) != record:
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+        result[ident] = (path.resolve(), record)
+        previous = record.get('previous_overlay_sha256')
+        if previous is None:
+            break
+        if not isinstance(previous, str) or re.fullmatch('[a-f0-9]{64}', previous) is None:
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+        record = reader.read(reader.root(data_root) / 'generations' / (previous + '.json'))
+        if record.get('artifact_content_sha256') != previous:
+            raise ValueError('auxiliary_reader_readiness_overlay_ancestry_invalid')
+    return {path: value for path, value in result.values()}
+
+
 def _target_overlay(data_root, bundle, target_date, reader, registry, inherited, sources):
     """Inspect the dated runtime overlay without registering or publishing it."""
     path = reader.root(data_root) / 'days' / target_date / (bundle['bundle_sha256'] + '.json')
@@ -146,24 +173,25 @@ def _target_overlay(data_root, bundle, target_date, reader, registry, inherited,
     observed.update(sha256=_sha(path), artifact_content_sha256=overlay['artifact_content_sha256'])
     if reader.read(path) != overlay:
         raise ValueError('auxiliary_reader_readiness_overlay_changed')
+    runtime_generations = _runtime_overlay_generations(
+        data_root, bundle, target_date, reader, overlay, sources)
     lineage = reader.lineage_sources(data_root, bundle, overlay)
     for reference in lineage:
         previous = sources.setdefault(reference['path'], reference['sha256'])
         if previous != reference['sha256']:
             raise ValueError('auxiliary_reader_readiness_source_changed:' + reference['path'])
-        generation = Path(reference['path'])
-        if generation.parent.resolve() == (reader.root(data_root) / 'generations').resolve():
-            old = reader.read(generation).get('code_hashes')
-            if old is not None and old != reader.code_hashes():
-                from src.engine.scalping import reversal_auxiliary_compatibility as compatibility
-                proof = compatibility.validate(data_root, bundle, generation, old, reader.code_hashes())
-                proof_path = compatibility.path(data_root, bundle, generation, reader.code_hashes())
-                for dependency in [proof_path, proof['evidence_path']] + [
-                        item['path'] for item in proof['frozen_readers']]:
-                    name = str(dependency)
-                    actual = _sha(Path(dependency))
-                    if sources.setdefault(name, actual) != actual:
-                        raise ValueError('auxiliary_reader_readiness_source_changed:' + name)
+    for generation, record in runtime_generations.items():
+        old = record.get('code_hashes')
+        if old is not None and old != reader.code_hashes():
+            from src.engine.scalping import reversal_auxiliary_compatibility as compatibility
+            proof = compatibility.validate(data_root, bundle, generation, old, reader.code_hashes())
+            proof_path = compatibility.path(data_root, bundle, generation, reader.code_hashes())
+            for dependency in [proof_path, proof['evidence_path']] + [
+                    item['path'] for item in proof['frozen_readers']]:
+                name = str(dependency)
+                actual = _sha(Path(dependency))
+                if sources.setdefault(name, actual) != actual:
+                    raise ValueError('auxiliary_reader_readiness_source_changed:' + name)
     bindings = {**inherited, **overlay['bindings']}
     identities = set(bindings.values()) | set(reader.rollback_bindings(data_root, bundle, overlay).values())
     _registry_sources(data_root, registry, identities, sources)

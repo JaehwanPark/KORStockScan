@@ -178,11 +178,18 @@ def test_target_overlay_sources_changing_during_native_validation_fail(target_ov
 
 def test_target_overlay_seals_original_reader_compatibility_dependencies(target_overlay, monkeypatch):
     f = target_overlay
-    ancestor = reader.root(f['data']) / 'generations' / ('a' * 64 + '.json')
-    _sealed(ancestor, dict(code_hashes={f['old'].name: policy.file_hash(f['old'])}))
-    original = reader.lineage_sources
-    monkeypatch.setattr(reader, 'lineage_sources', lambda *a: original(*a) + [
-        dict(path=str(ancestor), sha256=policy.file_hash(ancestor))])
+    ancestor_record = policy.seal({**f['overlay'],
+        'code_hashes': {f['old'].name: policy.file_hash(f['old'])}})
+    ancestor = reader.root(f['data']) / 'generations' / (ancestor_record['artifact_content_sha256'] + '.json')
+    _sealed(ancestor, ancestor_record)
+    updated = policy.seal({**f['overlay'], 'previous_overlay_sha256': ancestor_record['artifact_content_sha256']})
+    f['overlay'].clear()
+    f['overlay'].update(updated)
+    generation = reader.root(f['data']) / 'generations' / (updated['artifact_content_sha256'] + '.json')
+    _sealed(generation, updated)
+    _sealed(f['day_path'], updated)
+    monkeypatch.setattr(reader, 'lineage_sources', lambda *a: [
+        dict(path=str(p), sha256=policy.file_hash(p)) for p in (generation, ancestor, f['manifest'], f['proof'])])
     # The source report and overlay generation have separately bound receipts.
     overlay_proof = f['data'] / 'overlay-reader-compatibility.json'
     _sealed(overlay_proof, dict(status='pass'))
@@ -198,6 +205,51 @@ def test_target_overlay_seals_original_reader_compatibility_dependencies(target_
     overlay_proof.unlink()
     with pytest.raises(ValueError, match='source_changed'):
         gate.verify_bound_sources(result)
+
+
+def _historical_source_generation(f, monkeypatch, *, linked=False, wrong_bundle=False):
+    historical = policy.seal({**f['overlay'], 'day': f['day'] if wrong_bundle else '2026-10-16',
+        'base_bundle_sha256': '0' * 64 if wrong_bundle else f['bundle']['bundle_sha256'],
+        'code_hashes': {f['old'].name: policy.file_hash(f['old'])}})
+    path = reader.root(f['data']) / 'generations' / (historical['artifact_content_sha256'] + '.json')
+    _sealed(path, historical)
+    original = reader.lineage_sources
+    monkeypatch.setattr(reader, 'lineage_sources', lambda *a: original(*a) + [
+        dict(path=str(path), sha256=policy.file_hash(path))])
+    if linked:
+        updated = policy.seal({**f['overlay'], 'previous_overlay_sha256': historical['artifact_content_sha256']})
+        f['overlay'].clear()
+        f['overlay'].update(updated)
+        _sealed(f['day_path'], updated)
+        _sealed(reader.root(f['data']) / 'generations' / (updated['artifact_content_sha256'] + '.json'), updated)
+    return path
+
+
+@pytest.mark.parametrize('damage', [False, True])
+def test_flat_historical_source_is_hash_bound_without_cross_date_current_compatibility(target_overlay, monkeypatch, damage):
+    f = target_overlay
+    historical = _historical_source_generation(f, monkeypatch)
+    validate = compatibility.validate
+    def exact_owner(data, bundle, source, old, new):
+        assert Path(source) != historical, 'historical source assigned to target-day runtime compatibility'
+        return validate(data, bundle, source, old, new)
+    monkeypatch.setattr(compatibility, 'validate', exact_owner)
+    result = gate.verify_auxiliary_reader(f['day'], data_root=f['data'], preparation=True, bundle=f['bundle'])
+    assert result['source_hashes'][str(historical)] == policy.file_hash(historical)
+    if damage:
+        historical.write_text('changed original research generation\n')
+        with pytest.raises(ValueError, match='source_changed'):
+            gate.verify_bound_sources(result)
+    else:
+        gate.verify_bound_sources(result)
+
+
+@pytest.mark.parametrize('wrong_bundle', [False, True])
+def test_foreign_generation_cannot_be_hidden_inside_actual_runtime_previous_chain(target_overlay, monkeypatch, wrong_bundle):
+    f = target_overlay
+    _historical_source_generation(f, monkeypatch, linked=True, wrong_bundle=wrong_bundle)
+    with pytest.raises(ValueError, match='overlay_ancestry_invalid'):
+        gate.verify_auxiliary_reader(f['day'], data_root=f['data'], bundle=f['bundle'])
 
 
 def test_target_overlay_must_match_its_exact_day_pointer(target_overlay):
