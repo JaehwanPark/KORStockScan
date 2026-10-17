@@ -115,6 +115,21 @@ REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS = {
 }
 
 
+# Exact original 10/16 reports to the reviewed post-auxiliary guard repair.
+# Only shared entry-handler bytes changed in these family generations. Keep
+# their original contracts, states and fixtures; independently validate the
+# current capability without granting selection, runtime or profit authority.
+# Review: docs/audits/main-post-auxiliary-priority-repair-review-2026-10-17.md.
+REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS = {
+    'rising_missed': (
+        'e9f1620fd55d335d1db3ccad52f1211440b5d2df57ddf45988e2012ecf6ed874',
+        'b47474ed46cc63f090ccf14ce40b6d53b1d1518cba43211e648a1ee1b0f2aa36'),
+    'holding_vote': (
+        '057c1274c876450cc5f97a918899c96c85fed7dadb408ea6af445c67808c4fce',
+        '02b637bfb01bb9f01b4d8b33672d2ae0d9be74ff07c3ee972608f0c55beaf2e5'),
+}
+
+
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -159,6 +174,9 @@ def current_fixture_observation(observed, data):
     auxiliary_input = REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS.get(family)
     if auxiliary_input and actual_pair == auxiliary_input:
         pair = auxiliary_input
+    post_aux_guard = REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS.get(family)
+    if post_aux_guard and actual_pair == post_aux_guard:
+        pair = post_aux_guard
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']

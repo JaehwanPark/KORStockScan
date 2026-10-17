@@ -170,7 +170,8 @@ def test_fixture_publication_rejects_dirty_or_untracked_source(monkeypatch):
 @pytest.mark.parametrize('family', ['entry_cancel_wait','rising_missed','holding_vote','auxiliary'])
 @pytest.mark.parametrize('review_map', ['REVIEWED_SUCCESSORS', 'REVIEWED_PRESERVED_SOURCE_SUCCESSORS',
     'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS', 'REVIEWED_DELAY_SOURCE_SUCCESSORS',
-    'REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS'])
+    'REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS',
+    'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS'])
 @pytest.mark.parametrize('damage', [None,'unreviewed_old','unreviewed_current','source','contract',
     'fixture_code','plan','report_path','state','missing','authority','receipt'])
 def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage, review_map):
@@ -189,6 +190,7 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     monkeypatch.setattr(handoff,'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS',{})
     monkeypatch.setattr(handoff,'REVIEWED_DELAY_SOURCE_SUCCESSORS',{})
     monkeypatch.setattr(handoff,'REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS',{})
+    monkeypatch.setattr(handoff,'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS',{})
     monkeypatch.setattr(handoff,review_map,{family:(old,current)})
     if damage=='unreviewed_old':monkeypatch.setattr(handoff,review_map,{family:('b'*64,current)})
     elif damage=='unreviewed_current':monkeypatch.setattr(handoff,review_map,{family:(old,'b'*64)})
@@ -209,6 +211,8 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
         assert result['native_validated'] is False and result['runtime_effect'] is False
         assert result['allowed_runtime_apply'] is False and result['source_generation']==observed['source_generation']
         assert result['contract_sha256']==observed['contract_sha256']
+        assert all(result[key] == observed[key] for key in
+                   ('source_state', 'comparison_state', 'handoff_state'))
     assert all(p.read_bytes()==b for p,b in before.items())
 
 
@@ -217,7 +221,7 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS', 'REVIEWED_DELAY_SOURCE_SUCCESSORS',
 ])
 def test_reviewed_successor_binds_current_family_code(review_map):
-    """Retained auxiliary targets do not silently chain to a new reader."""
+    """Historical targets cannot silently chain to a newer family reader."""
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     for family, (_, successor) in getattr(handoff, review_map).items():
         current = generation.code_generation(family)
@@ -225,10 +229,12 @@ def test_reviewed_successor_binds_current_family_code(review_map):
             # Historical tables remain available to their exact old readers.
             # The new reader needs its own direct source pair; no transitive
             # promotion of any other historical report is implied.
-            assert family == 'auxiliary'
+            assert family in {'auxiliary', 'rising_missed', 'holding_vote'}
             prepared = handoff.REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS[family]
             assert successor == prepared[1]
-            assert handoff.REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS[family] == (prepared[0], current)
+            direct = (handoff.REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS if family == 'auxiliary'
+                      else handoff.REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS)
+            assert direct[family] == (prepared[0], current)
         else:
             assert successor == current
 
@@ -242,30 +248,76 @@ def test_auxiliary_input_successor_preserves_prior_prepared_pair():
         'auxiliary': (old, generation.code_generation('auxiliary'))}
 
 
+def test_post_aux_guard_successor_preserves_exact_original_reports_and_prior_targets():
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    original_pairs = {
+        'rising_missed': (
+            'e9f1620fd55d335d1db3ccad52f1211440b5d2df57ddf45988e2012ecf6ed874',
+            '676d7922cd257b940012445f9c0f1bd7eb905fb649e9492728b0bce097769962'),
+        'holding_vote': (
+            '057c1274c876450cc5f97a918899c96c85fed7dadb408ea6af445c67808c4fce',
+            '8322022b48cd30484741f23c1f6f906a547e8a3145920645b022dba0d2d0fedf'),
+    }
+    for family, pair in original_pairs.items():
+        assert handoff.REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS[family] == pair
+    assert handoff.REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS == {
+        family: (pair[0], generation.code_generation(family))
+        for family, pair in original_pairs.items()}
+
+
 @pytest.mark.parametrize('family,prior', [
     ('entry_cancel_wait','b2a2017deb606554fbe1c9d481426786b3a8ab463c948ee84cd8ab856eddfca0'),
     ('rising_missed','dde49a32b7299deabf981e9f3a734a9da3019ba3f4e3eb7abbaff91dd3d01fa3'),
 ])
-def test_preserved_oct15_reports_bind_exact_current_capability(family, prior):
+def test_preserved_oct15_reports_retain_their_reviewed_capability_target(family, prior):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    assert handoff.REVIEWED_PRESERVED_SOURCE_SUCCESSORS[family] == (
-        prior, generation.code_generation(family))
+    expected_target = (generation.code_generation(family) if family == 'entry_cancel_wait'
+                       else handoff.REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS[family][1])
+    assert handoff.REVIEWED_PRESERVED_SOURCE_SUCCESSORS[family] == (prior, expected_target)
 
 
-@pytest.mark.parametrize('review_map', ['REVIEWED_SUCCESSORS', 'REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS'])
+@pytest.mark.parametrize('family', ['rising_missed', 'holding_vote'])
+def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tmp_path, family):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    data=tmp_path/'data'
+    _,report,_,_,_,_=_fixture(data,family)
+    payload=json.loads(report.read_text())
+    native=payload['holding_path_vote_replay'] if family=='holding_vote' else payload
+    contract=native['policy_generation']
+    old=handoff.REVIEWED_PRESERVED_SOURCE_SUCCESSORS[family][0]
+    contract.update(code_sha256=old,
+        retry_key=generation.digest([family,contract['source_generation'],old,contract['source_state']]))
+    contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
+    report.write_text(json.dumps(payload))
+    observed=generation.observations(tmp_path,DAY,data_root=data)[0]
+    before=report.read_bytes()
+    result=handoff.current_fixture_observation(observed,data)
+    assert result['status']=='unverified'
+    assert result.get('current_code_capability_verified') is not True
+    assert report.read_bytes()==before
+
+
+@pytest.mark.parametrize('family,review_map', [
+    ('auxiliary', 'REVIEWED_SUCCESSORS'),
+    ('auxiliary', 'REVIEWED_AUXILIARY_INPUT_SOURCE_SUCCESSORS'),
+    ('rising_missed', 'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS'),
+    ('holding_vote', 'REVIEWED_POST_AUX_GUARD_SOURCE_SUCCESSORS'),
+])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])
-def test_successor_requires_preserved_prior_fixture_and_independent_current_fixture(tmp_path, monkeypatch, damage, review_map):
+def test_successor_requires_preserved_prior_fixture_and_independent_current_fixture(tmp_path, monkeypatch, damage, review_map, family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    data=tmp_path/'data'; family='auxiliary'
+    data=tmp_path/'data'
     _,report,_,current_path,value,seal_current=_fixture(data,family)
-    payload=json.loads(report.read_text());contract=payload['policy_generation']
+    payload=json.loads(report.read_text())
+    native=payload['holding_path_vote_replay'] if family=='holding_vote' else payload
+    contract=native['policy_generation']
     old='a'*64; current=contract['code_sha256']
     historical=dict(value,code_sha256=old)
     if damage=='authority':historical['allowed_runtime_apply']=True
     historical['receipt_sha256']=generation.digest({k:v for k,v in historical.items() if k!='receipt_sha256'})
     if damage=='seal':historical['receipt_sha256']='b'*64
-    path=data/'report/postclose_generation_validation'/('auxiliary_'+old+'.json')
+    path=data/'report/postclose_generation_validation'/(family+'_'+old+'.json')
     path.write_text(json.dumps(historical))
     reference=dict(path=str(path),sha256=validation.file_sha(path))
     contract.update(code_sha256=old,fixture_receipt=reference,
