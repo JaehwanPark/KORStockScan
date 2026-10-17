@@ -133,3 +133,40 @@ def test_native_code_inventory_accepts_utils_paths_and_rejects_escape(tmp_path):
     (tmp_path/'outside.py').write_text('private fixture\n')
     with pytest.raises(ValueError,match='outside_release'):
         H._verify_entry_code_delta(root,commit,commit,{'outside':'../outside.py'},expected)
+
+
+@pytest.mark.parametrize('family,expected', [
+    ('pre_submit_delay', 'bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256'),
+    ('holding_vote', '6c664915b34289cddceeaf20399cce45f5e9e3f3373fdeae885910043f343112'),
+    ('main_stop', '687c06b51d0e4b581f1927151b31483d5f979e438cc67a726e6718f84bead533'),
+])
+def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch, family, expected):
+    """Bind reviewed bytes to the real frozen origin, without issuing a receipt."""
+    import hashlib
+    from src.engine.scalping import pre_submit_delay_initial_policy as delay
+    from src.engine.scalping import holding_vote_experiment as holding
+    from src.engine.scalping import main_stop_policy as stop
+    root = Path(H.__file__).resolve().parents[3]
+    origin = '7f2552aedde8fec6ef904a43105827907e50dfc8'
+    candidate = 'b' * 40
+    paths = ({name:name for name in delay.CONTRACT_PATHS} if family == 'pre_submit_delay'
+             else {name:'src/engine/'+name for name in
+                   (holding._code_paths() if family == 'holding_vote' else stop.implementation_paths())})
+    real_git = H.subprocess.check_output
+    def fixture_revision(command, **kwargs):
+        revision, name = command[-1].split(':', 1)
+        return (root/name).read_bytes() if revision == candidate else real_git(command, **kwargs)
+    monkeypatch.setattr(H.subprocess, 'check_output', fixture_revision)
+    before = {name:(root/name).read_bytes() for name in paths.values()}
+    changed = H._verify_entry_code_delta(root, candidate, origin, paths, expected)
+    assert 'src/engine/sniper_state_handlers.py' in changed
+    assert before == {name:(root/name).read_bytes() for name in paths.values()}
+    if family == 'pre_submit_delay':
+        extensions = H.REVIEWED_DELAY_CONTRACT_EXTENSIONS[(origin, expected)]
+        assert set(extensions) == {'src/engine/pipeline_event_summary.py', 'src/utils/threshold_cycle_registry.py'}
+        assert all(hashlib.sha256((root/name).read_bytes()).hexdigest() == digest
+                   for name, digest in extensions.items())
+        for name, pair in H.REVIEWED_DELAY_RESEARCH_SOURCES.items():
+            prior = real_git(['git', '-C', str(root), 'show', origin+':'+name])
+            assert pair == (hashlib.sha256(prior).hexdigest(),
+                            hashlib.sha256((root/name).read_bytes()).hexdigest())
