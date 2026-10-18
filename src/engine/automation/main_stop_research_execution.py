@@ -363,8 +363,39 @@ def _decision_measurement(value, iterations=20000):
         scope='loaded_pure_soft_and_protect_decisions_not_full_main_or_capture')
 
 
+def _execution_terminal(output_root, report, *, start, cpu, before, digests, owns_digest_session):
+    """Bind the finished report to measurement after managed-resource cleanup.
+
+    The already sealed report/experiment never references this later receipt,
+    avoiding a circular performance or source dependency. Receipt writing and
+    final publisher-lock release are explicitly outside the measured boundary.
+    """
+    observed,reference=_sealed_read(output_root/'report.json')
+    if (observed!=report or observed.get('report_sha256')!=policy.digest(
+            {k:v for k,v in observed.items() if k!='report_sha256'})):
+        raise ValueError('stop_research_terminal_report_changed')
+    measurement=_measurement(start,cpu,before)
+    measurement['scope']='run_entry_through_report_commit_and_resource_cleanup_excludes_terminal_receipt_write_and_lock_release'
+    receipt=dict(schema='main_stop_execution_terminal_v1',status='completed_report_only',
+        finished_at=datetime.now(KST).isoformat(),source_date=report['source_date'],target_date=report['target_date'],
+        report_reference=reference,report_sha256=report['report_sha256'],
+        input_receipt_sha256=report['input_receipt_sha256'],source_sha256=report['source_sha256'],
+        code_sha256=report['code_sha256'],performance_reference=report['performance_reference'],
+        metrics=dict(end_to_end=measurement,digest_session=dict(digests.stats,session_complete=owns_digest_session)),
+        metric_contract=dict(metric_role='diagnostic',decision_authority='report_only',
+            window_policy='one_research_invocation_through_managed_resource_cleanup',
+            sample_floor='one_measured_invocation_not_live_performance_authority',
+            primary_decision_metric='end_to_end_wall_seconds',source_quality_gate='sealed_report_and_exact_source_code_binding',
+            forbidden_uses=['live_promotion','orders','full_main_latency_pass','actual_pnl']),
+        allowed_runtime_apply=False,policy_mutated=False,actual_order_submitted=False)
+    receipt['receipt_sha256']=policy.digest(receipt)
+    _bounded_write(output_root/f"execution_terminal_{receipt['receipt_sha256']}.json",receipt)
+
+
 def run_research(*, data_root, output_root, source_date, target_date, input_report, cost_data_root=None):
     """Stream every opportunity into bounded evidence; reuse failed-run caches."""
+    full_start,full_cpu,full_io=time.perf_counter(),time.process_time(),_io()
+    from src.engine.infrastructure.validation_digest_session import ACTIVE,postclose_session
     data_root=Path(data_root).resolve(strict=True)
     cost_root=Path(cost_data_root).resolve(strict=True) if cost_data_root is not None else data_root
     output_root=_output_path(data_root,output_root,input_report,cost_root)
@@ -379,10 +410,18 @@ def run_research(*, data_root, output_root, source_date, target_date, input_repo
         if (output_root/'report.json').exists():raise ValueError('stop_research_attempt_already_sealed')
         token=post._DEADLINE.set(time.monotonic()+MAX_SECONDS)
         try:
-            with use(output_root,durable_limit=2*1024**3,temp_limit=2*1024**3), ExitStack() as resources:
-                return _run_research(data_root=data_root,output_root=output_root,source_date=source_date,
-                    target_date=target_date,input_report=input_report,cost_data_root=cost_root,state=state,
-                    resources=resources)
+            with use(output_root,durable_limit=2*1024**3,temp_limit=2*1024**3):
+                with ExitStack() as resources:
+                    active_before=ACTIVE.get()
+                    digests=resources.enter_context(postclose_session(data_root,source_date))
+                    # The inner native session shares this exact ACTIVE binding;
+                    # finalization and report validation retain the same cache.
+                    report=_run_research(data_root=data_root,output_root=output_root,source_date=source_date,
+                        target_date=target_date,input_report=input_report,cost_data_root=cost_root,state=state,
+                        resources=resources)
+                _execution_terminal(output_root,report,start=full_start,cpu=full_cpu,before=full_io,
+                    digests=digests,owns_digest_session=digests is not active_before)
+                return report
         except (Exception, KeyboardInterrupt) as exc:
             failure=dict(schema='main_stop_execution_failure_v1',status='incomplete',
                 source_date=source_date,target_date=target_date,reason=type(exc).__name__+':'+str(exc)[:1024],
@@ -522,11 +561,12 @@ def _run_research(*, data_root, output_root, source_date, target_date, input_rep
         if research_code_generation()!=code_generation:raise ValueError('stop_research_code_changed_during_execution')
         if external_index is not None and _external_index_measurement(output_root,inventory)!=external_index:
             raise ValueError('stop_research_external_index_measurement_changed')
-        digest_metrics=dict(digests.stats)
+        digest_metrics=dict(digests.stats,session_complete=False,
+                            measurement_boundary='before_experiment_finalization_and_report_publication')
     post.checkpoint()
     pure=_decision_measurement(parent)
     total=_measurement(measured_start,measured_cpu,before)
-    total['scope']='source_validation_index_replay_economic_overlay_and_pure_decisions_excludes_final_serialization'
+    total['scope']='source_validation_index_replay_economic_overlay_and_pure_decisions_before_experiment_finalization_and_report_publication'
     performance=dict(schema='main_stop_performance_v1',status='measured',
         scope='offline_research_and_pure_decisions',source_sha256=source_sha,code_sha256=code_sha,
         research_code_generation=code_generation,

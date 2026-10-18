@@ -76,6 +76,79 @@ def tree_bytes(root):
             for path in root.rglob('*') if path.is_file()}
 
 
+def large_source_fixture(tmp_path,monkeypatch):
+    """Real native source exceeding the unchanged digest-session byte floor."""
+    args,native=fixture(tmp_path,monkeypatch)
+    source=Path(next(iter(native['source_inventory'])))
+    with source.open('a') as handle:
+        for _ in range(300):
+            handle.write(json.dumps(dict(stage='unrelated_test_observation',fields={'padding':'x'*4096}))+'\n')
+    parents={f'{role}|{market}':baseline() for role in policy.ROLES for market in policy.MARKETS}
+    post.publish(args['data_root'],args['source_date'],args['target_date'],parents=parents,
+        parent_receipt=native['parent_receipt'],snapshot_receipt=native['snapshot_receipt'],
+        source_paths=[source],experiments={},completed=[],economic_sources={})
+    return args,source
+
+
+def test_full_invocation_shares_source_digest_through_finalization_and_measures_cleanup(tmp_path,monkeypatch):
+    from src.engine.infrastructure import validation_digest_session as digest_session
+    args,source=large_source_fixture(tmp_path,monkeypatch)
+    prepared=economic_boundary(monkeypatch)
+    original=digest_session.DigestSession.digest
+    observations=[]
+    def measured(session,path):
+        before=session.stats['full_reads']
+        result=original(session,path)
+        if Path(path)==source:
+            observations.append((id(session),session.stats['full_reads']-before))
+        return result
+    monkeypatch.setattr(digest_session.DigestSession,'digest',measured)
+    writer=run._bounded_write
+    def after_cleanup(path,value):
+        if value.get('schema')=='main_stop_execution_terminal_v1':
+            assert prepared.closed and digest_session.ACTIVE.get() is None
+        return writer(path,value)
+    monkeypatch.setattr(run,'_bounded_write',after_cleanup)
+    report=run.run_research(**args)
+    assert report['historical_experiment'] is not None
+    assert len(observations)>=3 and len({session for session,_ in observations})==1
+    assert sum(full for _,full in observations)==1
+    terminals=list(args['output_root'].glob('execution_terminal_*.json'))
+    assert len(terminals)==1
+    terminal=json.loads(terminals[0].read_text())
+    assert terminal['receipt_sha256']==policy.digest({k:v for k,v in terminal.items() if k!='receipt_sha256'})
+    assert terminal['report_sha256']==report['report_sha256']
+    assert terminal['report_reference']['sha256']==hashlib.sha256((args['output_root']/'report.json').read_bytes()).hexdigest()
+    stats=terminal['metrics']['digest_session']
+    assert stats['session_complete'] and stats['full_reads']==1 and stats['full_bytes']==source.stat().st_size
+    assert stats['wall_seconds']>0 and stats['thread_io_delta'] is not None
+    phase=json.loads(Path(report['performance_path']).read_text())
+    assert not phase['metrics']['digest_session']['session_complete']
+    assert 'before_experiment_finalization' in phase['metrics']['total']['scope']
+    whole=terminal['metrics']['end_to_end']
+    assert whole['wall_seconds']>=phase['metrics']['total']['wall_seconds']
+    assert whole['cpu_seconds']>=phase['metrics']['total']['cpu_seconds']
+    assert whole['io_delta']['rchar']>=phase['metrics']['total']['io_delta']['rchar']
+    assert terminal['allowed_runtime_apply'] is False and terminal['policy_mutated'] is False
+
+
+def test_shared_digest_still_rejects_source_mutated_at_finalization(tmp_path,monkeypatch):
+    from src.engine.scalping import main_stop_experiment as experiment
+    from src.engine.infrastructure import validation_digest_session as digest_session
+    args,source=large_source_fixture(tmp_path,monkeypatch)
+    original=experiment.finalize_experiment
+    def changed(*values,**kwargs):
+        with source.open('a') as handle:handle.write('\n')
+        return original(*values,**kwargs)
+    monkeypatch.setattr(experiment,'finalize_experiment',changed)
+    with pytest.raises(ValueError,match='source_generation_changed'):
+        run.run_research(**args)
+    assert digest_session.ACTIVE.get() is None
+    assert not (args['output_root']/'report.json').exists()
+    assert not list(args['output_root'].glob('execution_terminal_*.json'))
+    assert json.loads((args['output_root']/'progress.json').read_text())['status']=='incomplete'
+
+
 def test_native_roundtrip_streams_all_opportunities_and_keeps_policy_bytes(tmp_path, monkeypatch):
     args, _ = fixture(tmp_path, monkeypatch, eligible=True, count=20)
     before = tree_bytes(args['data_root'])
