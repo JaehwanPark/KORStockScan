@@ -168,13 +168,13 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
         assert set(extensions) == {'src/engine/pipeline_event_summary.py', 'src/utils/threshold_cycle_registry.py',
                                    'src/engine/infrastructure/main_policy_loading.py'}
         # The original 59-source generation retains its original extension.
-        # Current cold-start preparation is a separate complete 75-source
+        # Current cold-start preparation is a separate complete 76-source
         # generation; never relabel current bytes as that historical source.
         assert all(hashlib.sha256(real_git(['git','-C',str(root),'show',
             HISTORICAL_PREPARATION_COMMIT+':'+name])).hexdigest() == digest
             for name, digest in extensions.items())
         trigger='src/engine/sniper_state_handlers.py'
-        variant=H.REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS[(trigger,H._sha(root/trigger))]
+        variant=H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS[(trigger,H._sha(root/trigger))]
         assert H._sha(root/variant['selector_path'])==variant['selector_sha256']
         current_extensions=variant['contract_extensions'][(origin,expected)]
         assert set(current_extensions)==set(extensions)
@@ -193,6 +193,8 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
                 reviewed.add(H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES[name][1])
             if name in H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES:
                 reviewed.add(H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES[name][1])
+            if name in H.REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES:
+                reviewed.add(H.REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES[name][1])
             assert current in reviewed
 
 
@@ -301,10 +303,10 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     trigger_sha=H._sha(canonical/trigger)
     dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha]
     if generation=='current_startup':
-        variant=H.REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS[(trigger,trigger_sha)]
+        variant=H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS[(trigger,trigger_sha)]
         assert H._sha(canonical/variant['selector_path'])==variant['selector_sha256']
         dependencies=variant['dependencies']
-    assert len(dependencies)==(75 if generation=='current_startup' else 59)
+    assert len(dependencies)==(76 if generation=='current_startup' else 59)
     for name in (*CONTRACT_PATHS,own,*dependencies):
         destination=fixture/name
         destination.parent.mkdir(parents=True,exist_ok=True)

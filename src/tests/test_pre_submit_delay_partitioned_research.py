@@ -36,6 +36,28 @@ def test_whole_split_and_metrics_equal_supported_resident_reference(tmp_path,mon
     assert prepared.lookup(target_date=reference['effective_date'],market='REGULAR')['delay_sec']==60
 
 
+def test_ordinary_verifier_keeps_evidence_owned_disposable_scratch(tmp_path, monkeypatch):
+    import tempfile
+    from src.engine.infrastructure import startup_validation_code_context as context
+    reference, _ = fixture(tmp_path/'source', monkeypatch)
+    report, policy = build(reference, tmp_path/'evidence')
+    original = tempfile.TemporaryDirectory
+    parents = []
+    def observed(*args, **kwargs):
+        if kwargs.get('prefix') == '.verify-': parents.append(Path(kwargs['dir']))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(tempfile, 'TemporaryDirectory', observed)
+    monkeypatch.setenv('TMPDIR', str(tmp_path/'untrusted-env'))
+    assert context.validate_preparation_delay_selection(None, None) is False
+    before = {str(p.relative_to(report.evidence_root)): p.read_bytes()
+        for p in report.evidence_root.rglob('*') if p.is_file()}
+    initial.validate(policy, report)
+    assert parents == [report.evidence_root]
+    assert before == {str(p.relative_to(report.evidence_root)): p.read_bytes()
+        for p in report.evidence_root.rglob('*') if p.is_file()}
+    assert not list(report.evidence_root.glob('.verify-*'))
+
+
 def test_sharded_population_survives_changed_layout_and_legacy_limits(tmp_path,monkeypatch):
     report,policy = fixture(tmp_path/'source',monkeypatch)
     monkeypatch.setattr(initial,'MAX_OPPORTUNITIES',2)

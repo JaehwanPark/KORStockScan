@@ -33,6 +33,16 @@ CODE_FILES = (
 )
 
 
+def test_source_closure_merge_never_overwrites_original_intake_generation():
+    sources = {'/original/policy.json': 'a'*64, '/original/absent': None}
+    validation._merge_source_hashes(sources, {'/original/policy.json': 'a'*64, '/new/shard': 'b'*64})
+    before = dict(sources)
+    for extra in ({'/new/other': 'c'*64, '/original/policy.json': 'd'*64}, {'/original/absent': 'e'*64}):
+        with pytest.raises(ValueError, match='startup_source_binding_conflict'):
+            validation._merge_source_hashes(sources, extra)
+        assert sources == before
+
+
 @pytest.fixture
 def native_preparation_cli(tmp_path):
     """Run the unchanged native CLI dispatcher over tiny private source checks.
@@ -405,6 +415,51 @@ def test_last_native_recheck_cannot_change_a_protected_source_then_publish_pass(
     assert "startup_source_changed" in " ".join(final["findings"])
 
 
+@pytest.mark.parametrize('phase', ['native_recheck', 'final_binding'])
+def test_consumer_only_membership_change_at_final_recheck_never_publishes_pass(
+        transaction, monkeypatch, phase):
+    # A nested membership leaf is learned by the isolated consumer, so it is
+    # absent from the initial request's headers/code/source closure.
+    shard = transaction['workspace'] / 'nested-membership.json'
+    shard.write_text('{"original_membership": true}\n')
+    original_sha = validation._sha(shard)
+    loader = transaction['loader']
+    marker = "    if mode == 'missing_consumer':"
+    text = loader.read_text()
+    assert text.count(marker) == 1
+    loader.write_text(text.replace(marker,
+        f"    rows['pre_submit_delay']['source_hashes'][{str(shard)!r}] = "
+        f"hashlib.sha256(pathlib.Path({str(shard)!r}).read_bytes()).hexdigest()\n" + marker))
+    changed = []
+    def mutate():
+        shard.write_text('{"original_membership": false}\n')
+        changed.append(True)
+    if phase == 'native_recheck':
+        def native(*args):
+            mutate()
+            return {'status': 'pass'}
+        monkeypatch.setattr(validation, '_native_preparation_check', native)
+    else:
+        calls = []
+        def bind(*args):
+            calls.append(True)
+            if len(calls) == 2:
+                mutate()
+            return transaction['binding']
+        monkeypatch.setattr(validation, '_bind_execution', bind)
+    final, receipt = _run(transaction)
+    request = json.loads((receipt.parent / 'request.json').read_text())
+    child = json.loads((receipt.parent / 'child.json').read_text())
+    assert str(shard) not in request['source_hashes']
+    assert child['consumer_results']['pre_submit_delay']['source_hashes'][str(shard)] == original_sha
+    assert changed == [True] and child['status'] == 'passed'
+    assert (receipt.parent / 'isolation.jsonl').read_bytes() == b''
+    _assert_failed_terminal(final, receipt)
+    assert final['failure_phase'] == 'recheck' and final['child_terminated'] is True
+    assert final.get('protected_sources_unchanged') is not True
+    assert 'startup_source_changed:' + str(shard) in ' '.join(final['findings'])
+
+
 @pytest.mark.parametrize('phase', ['intake', 'recheck'])
 def test_failed_native_preparation_preserves_bounded_stats_in_failed_terminal(
         transaction, native_preparation_cli, monkeypatch, phase):
@@ -702,6 +757,8 @@ def test_parent_independently_rejects_malformed_or_unbound_child_semantics(defec
 def test_native_cli_closure_is_collected_from_executed_native_boundaries(native_preparation_cli):
     code,data=native_preparation_cli
     package=code/'src/engine/scalping';package.mkdir();(package/'__init__.py').touch()
+    (code/'src/engine/automation/pre_submit_delay_partitioned_research.py').write_text('def validate(*a,**k): return None\n')
+    (package/'pre_submit_delay_initial_policy.py').write_text('# No delay policy in this native Main-only collection fixture.\n')
     (package/'mechanistic_entry_runtime_policy.py').write_text('''from src.utils.constants import DATA_DIR
 import json
 

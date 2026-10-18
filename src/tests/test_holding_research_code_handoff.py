@@ -32,6 +32,7 @@ ORIGINAL_DIGESTS = {
 GENERATIONS = {
     'historical_9d': '9d2201141aeae409fe960ff7795a1340718a7146',
     'historical_a8': 'a8f063105bbb1d8a3676e55ad5377990a87594df',
+    'historical_8a8': '8a8fd0ba1845a69b0a829f5c4bcd551a602aea7e',
     'completed_current': REAL_GIT(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
 }
 PAIRS = {
@@ -41,18 +42,25 @@ PAIRS = {
                           **H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES},
 }
 PAIRS['historical_a8'] = dict(PAIRS['completed_current'])
+PAIRS['historical_8a8'] = {**PAIRS['completed_current'],
+    'src/engine/automation/pre_submit_delay_partitioned_research.py':
+        H.REVIEWED_DELAY_RESEARCH_SOURCES['src/engine/automation/pre_submit_delay_partitioned_research.py']}
+PAIRS['completed_current'].update(H.REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES)
 DEPENDENCIES = {
     generation: H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[TRIGGER][pairs[TRIGGER][1]]
     for generation, pairs in PAIRS.items()
 }
 READONLY_VARIANT = H.REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS[(TRIGGER, PAIRS['completed_current'][TRIGGER][1])]
-DEPENDENCIES['completed_current'] = READONLY_VARIANT['dependencies']
+PARENT_VARIANT = H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS[(TRIGGER, PAIRS['completed_current'][TRIGGER][1])]
+DEPENDENCIES['historical_8a8'] = READONLY_VARIANT['dependencies']
+DEPENDENCIES['completed_current'] = PARENT_VARIANT['dependencies']
 # Every positive verification checks the full closure. Negative probes cover
 # each old dependency plus distinct new source, cost and startup helper roles.
 DEPENDENCY_CASES = {
     'historical_9d': tuple(DEPENDENCIES['historical_9d']),
     'historical_a8': ('src/engine/infrastructure/main_policy_loading.py',
                       'src/engine/scalping/reversal_evaluation_context.py'),
+    'historical_8a8': ('src/engine/infrastructure/startup_validation_code_context.py',),
     'completed_current': (*DEPENDENCIES['historical_9d'],
         'src/engine/scalping/main_stop_runtime_source.py',
         'src/engine/lifecycle/holding_research_cost.py',
@@ -65,7 +73,8 @@ DEPENDENCY_CASES = {
         'src/engine/automation/main_startup_validation.py',
         'src/engine/automation/auxiliary_reader_readiness.py',
         'src/engine/scalping/continuous_reversal_policy_v6.py',
-        'src/engine/scalping/reversal_auxiliary_source_handoff.py'),
+        'src/engine/scalping/reversal_auxiliary_source_handoff.py',
+        'src/engine/automation/pre_submit_delay_partitioned_research.py'),
 }
 
 
@@ -180,7 +189,7 @@ def test_native_handoff_rechecks_helper_and_provenance_closure(candidate, depend
 def test_generation_closures_are_separate_and_every_dependency_is_git_bound(candidate):
     c = candidate
     assert len(c.dependencies) == {'historical_9d': 2, 'historical_a8': 59,
-                                   'completed_current': 75}[c.generation]
+                                   'historical_8a8': 75, 'completed_current': 76}[c.generation]
     for name, expected in c.dependencies.items():
         assert hashlib.sha256(c.committed[name]).hexdigest() == expected
         assert c.committed[name] == REAL_GIT(['git', '-C', str(c.git_root), 'show', c.commit+':'+name])
@@ -229,7 +238,7 @@ def test_prepared_verify_reexecutes_native_dependency_guard(prepared, candidate,
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize('candidate', ['historical_a8', 'completed_current'], indirect=True)
+@pytest.mark.parametrize('candidate', ['historical_a8', 'historical_8a8', 'completed_current'], indirect=True)
 @pytest.mark.parametrize('family', tuple(FAMILY_PATHS))
 def test_native_three_family_inventories_preserve_original_digests(candidate, family):
     c = candidate
@@ -241,7 +250,7 @@ def test_native_three_family_inventories_preserve_original_digests(candidate, fa
     assert before == {name: (c.root/name).read_bytes() for name in c.committed}
 
 
-@pytest.mark.parametrize('candidate', ['completed_current'], indirect=True)
+@pytest.mark.parametrize('candidate', ['historical_8a8', 'completed_current'], indirect=True)
 def test_readonly_delay_extension_requires_its_complete_generation(candidate):
     c = candidate
     expected = ORIGINAL_DIGESTS['pre_submit_delay']
@@ -254,7 +263,9 @@ def test_readonly_delay_extension_requires_its_complete_generation(candidate):
     old_context = REAL_GIT(['git', '-C', str(ROOT), 'show', GENERATIONS['historical_a8']+':'+selector])
     (c.root/selector).write_bytes(old_context)
     c.committed[selector] = old_context
-    with pytest.raises(ValueError, match='entry_consumer_contract_extension_unreviewed'):
+    error = ('entry_consumer_reviewed_dependency_unreviewed' if c.generation == 'completed_current'
+             else 'entry_consumer_contract_extension_unreviewed')
+    with pytest.raises(ValueError, match=error):
         NATIVE_VERIFY(c.root, c.commit, ORIGIN, FAMILY_PATHS['pre_submit_delay'], expected)
 
 
@@ -276,5 +287,25 @@ def test_readonly_variant_rejects_mixed_reviewed_generations(candidate, name):
     c.committed[name] = old
     # Both generations are individually reviewed. Combining their files must
     # still fail the one complete dependency map selected by the context.
+    with pytest.raises(ValueError, match='entry_consumer_reviewed_dependency_unreviewed'):
+        c.verify()
+
+
+@pytest.mark.parametrize('candidate', ['completed_current'], indirect=True)
+@pytest.mark.parametrize('name', [
+    'src/engine/infrastructure/startup_validation_code_context.py',
+    'src/engine/automation/pre_submit_delay_partitioned_research.py',
+])
+def test_parent_validation_variant_rejects_mixed_original_readonly_generation(candidate, name):
+    c = candidate
+    assert c.verify() == [TRIGGER]
+    assert hashlib.sha256(c.committed[READONLY_VARIANT['selector_path']]).hexdigest() == READONLY_VARIANT['selector_sha256']
+    assert hashlib.sha256(c.committed[PARENT_VARIANT['selector_path']]).hexdigest() == PARENT_VARIANT['selector_sha256']
+    old = REAL_GIT(['git', '-C', str(ROOT), 'show', GENERATIONS['historical_8a8']+':'+name])
+    assert old != c.committed[name]
+    (c.root/name).write_bytes(old)
+    c.committed[name] = old
+    # Either selector is reviewed on its own. Neither a new validation owner with
+    # the old context nor an old validation owner with the new context may pass.
     with pytest.raises(ValueError, match='entry_consumer_reviewed_dependency_unreviewed'):
         c.verify()

@@ -498,6 +498,20 @@ def bind_main_preparation(root, commit, data_root, intake):
     for refs in histories.values():
         _pairs({name: ref['sha256'] for name, ref in refs.items()},
                {name: actual[name] for name in refs})
+    # A delay rebuild is observed in this same native verification process.
+    # Bind its actual immutable documents and selected implementation bytes to
+    # the request/source CAS; this grants no standalone selection authority.
+    for item in closure.get('delay_selections', {}).values():
+        for ref in item['artifacts'].values():
+            if sources.setdefault(ref['path'], ref['sha256']) != ref['sha256']:
+                raise ValueError('startup_delay_native_source_conflict')
+        for relative, expected_sha in item['native_code_inventory'].items():
+            path = selected / relative
+            git_sha = hashlib.sha256(subprocess.check_output(
+                ['git', '-C', str(selected), 'show', original_commit + ':' + relative])).hexdigest()
+            if _sha(path) != expected_sha or git_sha != expected_sha:
+                raise ValueError('startup_delay_native_code_git_changed')
+            sources[str(path)] = expected_sha
     proof = dict(schema=MAIN_PROOF_SCHEMA, target_date=day, policy_path=str(policy),
         policy_sha256=bundle['bundle_sha256'], policy_file_sha256=_sha(policy),
         execution_release_root=str(root), execution_release_commit=commit,
@@ -535,6 +549,7 @@ def _check_native_closure(proof):
             or io.get('remaining_entries') != 0
             or binding.get('boot_id') != _read('/proc/sys/kernel/random/boot_id', maximum=128).decode().strip()):
         raise ValueError('startup_main_native_closure_invalid')
+    _delay_selection_records(proof)
     entries = closure.get('digest_entries')
     if (not isinstance(entries, dict) or len(entries) > 4096
             or len(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()) > 512 * 1024):
@@ -779,6 +794,164 @@ def _main_context(*, digest_only=False):
     except (OSError, ValueError, KeyError, TypeError):
         _CONTEXT = {'valid': False}
         raise
+
+
+def _delay_selection_records(proof):
+    from src.engine.scalping import pre_submit_delay_initial_policy as I
+    from src.engine.infrastructure.validation_digest_session import identity
+    records = proof['closure'].get('delay_selections', {})
+    if not isinstance(records, dict) or len(records) > 16:
+        raise ValueError('startup_delay_selection_closure_invalid')
+    for key, item in records.items():
+        if (not isinstance(item, dict) or item.get('schema') != 'startup_native_delay_selection_v1'
+                or item.get('run_id') != proof['closure']['run_id']
+                or item.get('parent_full_selection_recomputed') is not True
+                or item.get('child_recomputed') is not False
+                or item.get('target_date') not in (None, proof['target_date'])
+                or key != _digest([item.get('policy_sha256'), item.get('target_date')])
+                or set(item.get('artifacts', {})) != {'policy', 'report'}):
+            raise ValueError('startup_delay_selection_closure_invalid')
+        root = Path(item['evidence_root'])
+        if root.resolve(strict=True) != root or root.is_symlink():
+            raise ValueError('startup_delay_evidence_alias')
+        values = {}
+        for name, ref in item['artifacts'].items():
+            path = root / (name + '.json')
+            if (ref.get('path') != str(path) or identity(path) != ref.get('identity')
+                    or proof['source_hashes'].get(str(path)) != ref.get('sha256')
+                    or _sha(path) != ref.get('sha256')):
+                raise ValueError('startup_delay_artifact_generation_changed')
+            values[name] = _json(path)
+        policy, report = values['policy'], values['report']
+        data_root = Path(proof['policy_path']).parents[3]
+        expected_root = data_root/'threshold_cycle/pre_submit_delay_policy/generations'/_digest([report, policy])
+        if root != expected_root:
+            raise ValueError('startup_delay_policy_generation_unbound')
+        if (item.get('documents_sha256') != _digest([policy, report])
+                or item.get('report_sha256') != _digest(report)
+                or item.get('policy_sha256') != policy.get('policy_sha256')
+                or item.get('source_sha256') != policy.get('source_sha256')
+                or item.get('code_contract_sha256') != policy.get('code_contract_sha256')
+                or item.get('effective_from') != policy.get('effective_from')
+                or item.get('expires_on') != policy.get('expires_on')
+                or not item['effective_from'] <= proof['target_date'] <= item['expires_on']
+                or item.get('tree_refs') != {key: report.get(key) for key in
+                    ('qualified_projection_ref', 'partitions_ref', 'cells_ref')}):
+            raise ValueError('startup_delay_selection_binding_invalid')
+        inventory = item.get('native_code_inventory')
+        if (not isinstance(inventory, dict) or set(inventory) != set(I.CONTRACT_PATHS)
+                or _digest(inventory) != item.get('native_code_sha256')):
+            raise ValueError('startup_delay_native_code_inventory_invalid')
+        for relative, expected in inventory.items():
+            path = Path(proof['selected_release_root']) / relative
+            if (path.resolve(strict=True) != path or not _hex(expected)
+                    or proof['source_hashes'].get(str(path)) != expected or _sha(path) != expected):
+                raise ValueError('startup_delay_native_code_changed')
+    return records
+
+
+def validate_preparation_delay_selection(policy, report, *, target_date=None):
+    """Recheck source trees; delegate only the parent's observed SQL rebuild.
+
+    The same invocation's native full verification executed that rebuild
+    before isolation. Ordinary consumers retain the complete native algorithm.
+    """
+    proof = _main_context(digest_only=True)
+    if proof is None:
+        return False
+    request = _CONTEXT['request']
+    contract = request['candidate_code_handoffs'].get('pre_submit_delay') or {}
+    bound = request['manifest'].get('pre_submit_delay_handoff') or {}
+    if (contract.get('policy_sha256') != policy.get('policy_sha256')
+            or bound.get('policy_path') != str(getattr(policy, 'evidence_root', '') / Path('policy.json'))
+            or target_date not in (None, request['target_date'])):
+        raise ValueError('startup_delay_request_binding_invalid')
+    records = _delay_selection_records(proof)
+    matched = [v for v in records.values() if v['policy_sha256'] == policy.get('policy_sha256')]
+    root = getattr(report, 'evidence_root', None)
+    if (not matched or root is None or getattr(policy, 'evidence_root', None) != root
+            or any(v['evidence_root'] != str(root) or v['documents_sha256'] != _digest([policy, report])
+                   for v in matched)):
+        raise ValueError('startup_delay_selection_unobserved_or_changed')
+    sources = _delay_tree_sources(root, report)
+    delegated = _CONTEXT['delegation'].setdefault('delay_selections', {})
+    delegated[policy['policy_sha256']] = dict(
+        parent_full_selection_recomputed=True, child_recomputed=False,
+        child_headers_and_physical_logical_trees_reverified=True,
+        documents_sha256=_digest([policy, report]), evidence_root=str(root), source_hashes=sources)
+    return True
+
+
+def _delay_tree_sources(root, report):
+    """Reverify the native trees, including every nested membership leaf."""
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.lifecycle.research_input_budget import Claim
+    from src.engine.infrastructure.validation_digest_session import identity
+    sources = {}
+    def physical(ref, depth=0):
+        if depth > 16:
+            raise ValueError('research_tree_depth_invalid')
+        if ref.get('kind') == 'inline':
+            return
+        if type(ref.get('size')) is not int or not 0 <= ref['size'] <= 4*1024*1024:
+            raise ValueError('research_shard_generation_changed')
+        path = storage.safe_path(root, ref['path'])
+        before = identity(path)
+        with Claim(ref['size']*8):
+            raw = _read(path, maximum=ref['size'])
+            if (len(raw) != ref['size'] or hashlib.sha256(raw).hexdigest() != ref['sha256']
+                    or identity(path) != before):
+                raise ValueError('startup_delay_shard_generation_changed')
+            if sources.setdefault(str(path), ref['sha256']) != ref['sha256']:
+                raise ValueError('startup_delay_shard_reference_conflict')
+            body = json.loads(raw)
+            for child in body.get('children', []):
+                physical(child, depth+1)
+    for key in ('qualified_projection_ref', 'partitions_ref', 'cells_ref'):
+        for row in storage.iter_tree(root, report[key]):
+            if key == 'partitions_ref':
+                for _ in storage.iter_tree(root, row['membership']):
+                    pass
+                physical(row['membership'])
+        physical(report[key])
+    return sources
+
+
+def preparation_delay_source_hashes():
+    if _main_context(digest_only=True) is None:
+        return {}
+    sources = {}
+    for item in _CONTEXT['delegation'].get('delay_selections', {}).values():
+        for path, sha in item['source_hashes'].items():
+            if sources.setdefault(path, sha) != sha:
+                raise ValueError('startup_delay_child_source_conflict')
+    return sources
+
+
+def verify_preparation_delay_delegation(proof, delegation, request, consumer):
+    """Parent mandatory exact-set check; also reusable for fresh source CAS."""
+    records = _delay_selection_records(proof)
+    bound = request['manifest'].get('pre_submit_delay_handoff') or {}
+    ident = bound.get('policy_sha256')
+    matched = [v for v in records.values() if v['policy_sha256'] == ident]
+    actual = delegation.get('delay_selections', {})
+    if not matched:
+        configured = _json(bound['policy_path']) if bound.get('policy_path') else {}
+        if actual or configured.get('storage_schema') == 'pre_submit_delay_sharded_evidence_v3':
+            raise ValueError('startup_delay_child_selection_unobserved')
+        return
+    if set(actual) != {ident} or consumer.get('status') != 'loaded':
+        raise ValueError('startup_delay_child_selection_missing')
+    item = matched[0]
+    if item['artifacts']['policy']['path'] != bound.get('policy_path'):
+        raise ValueError('startup_delay_child_policy_unbound')
+    report = _json(item['artifacts']['report']['path'])
+    sources = _delay_tree_sources(Path(item['evidence_root']), report)
+    expected = dict(parent_full_selection_recomputed=True, child_recomputed=False,
+        child_headers_and_physical_logical_trees_reverified=True,
+        documents_sha256=item['documents_sha256'],evidence_root=item['evidence_root'],source_hashes=sources)
+    if actual[ident] != expected or any(consumer.get('source_hashes', {}).get(p) != s for p,s in sources.items()):
+        raise ValueError('startup_delay_child_selection_changed')
 
 
 def verify_validation_main_code(bundle, paths, actual):

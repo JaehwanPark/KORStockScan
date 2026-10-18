@@ -191,15 +191,18 @@ capture=run_id!='0'
 from src.engine.infrastructure.validation_digest_session import postclose_session
 from src.utils.constants import DATA_DIR
 closure=dict(schema='startup_native_machine_closure_v1', run_id=run_id, manifests={}, bundles={},
-    frozen_inventories={}, frozen_validations={}, digest_entries={})
+    frozen_inventories={}, frozen_validations={}, digest_entries={}, delay_selections={})
 if capture:
     from pathlib import Path
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import reversal_auxiliary_next_session as A
+    from src.engine.automation import pre_submit_delay_partitioned_research as D
+    from src.engine.scalping import pre_submit_delay_initial_policy as I
     original_load=N.load
     original_inventory=A._frozen_inventory
     original_frozen=A._verify_frozen
     original_manifest=A.validate_manifest
+    original_delay=D.validate
     def load(*args,**kwargs):
         result=original_load(*args,**kwargs)
         if result:
@@ -232,10 +235,46 @@ if capture:
             sha256=A._hash(path),bundle_sha256=bundle['bundle_sha256'],target_date=bundle['target_date'],
             dependencies=A._dependencies(value),database=database,database_source_identities=database_identities)
         return result
+    def delay(policy,report,**kwargs):
+        before=I.digest([policy,report])
+        root=Path(report.evidence_root).resolve(strict=True)
+        if Path(report.evidence_root)!=root or Path(policy.evidence_root)!=root:
+            raise ValueError('startup_native_delay_evidence_alias')
+        result=original_delay(policy,report,**kwargs)
+        if result is not None:
+            raise ValueError('startup_native_delay_result_invalid')
+        if before!=I.digest([policy,report]) or Path(report.evidence_root)!=root or Path(policy.evidence_root)!=root:
+            raise ValueError('startup_native_delay_arguments_changed')
+        from src.engine.infrastructure.validation_digest_session import identity
+        refs={}
+        for name,value in (('policy',policy),('report',report)):
+            path=root/(name+'.json'); prior=identity(path)
+            if path.stat().st_size>I.MAX_BYTES:
+                raise ValueError('startup_native_delay_artifact_unbounded')
+            with path.open('rb') as handle:raw=handle.read(I.MAX_BYTES+1)
+            if len(raw)>I.MAX_BYTES or json.loads(raw)!=value or identity(path)!=prior:
+                raise ValueError('startup_native_delay_artifact_changed')
+            refs[name]=dict(path=str(path),sha256=hashlib.sha256(raw).hexdigest(),identity=prior)
+        selected=Path(I.__file__).resolve().parents[3]
+        inventory={name:hashlib.sha256((selected/name).read_bytes()).hexdigest() for name in I.CONTRACT_PATHS}
+        observed=dict(schema='startup_native_delay_selection_v1',run_id=run_id,
+            evidence_root=str(root),documents_sha256=before,artifacts=refs,
+            policy_sha256=policy['policy_sha256'],report_sha256=I.digest(report),
+            source_sha256=policy['source_sha256'],code_contract_sha256=policy['code_contract_sha256'],
+            target_date=kwargs.get('target_date'),effective_from=policy['effective_from'],expires_on=policy['expires_on'],
+            tree_refs={key:report[key] for key in ('qualified_projection_ref','partitions_ref','cells_ref')},
+            native_code_inventory=inventory,native_code_sha256=I.digest(inventory),
+            parent_full_selection_recomputed=True,child_recomputed=False)
+        key=I.digest([policy['policy_sha256'],kwargs.get('target_date')])
+        previous=closure['delay_selections'].setdefault(key,observed)
+        if previous!=observed or len(closure['delay_selections'])>16:
+            raise ValueError('startup_native_delay_selection_conflict')
+        return result
     N.load=load
     A._frozen_inventory=inventory
     A._verify_frozen=frozen
     A.validate_manifest=manifest
+    D.validate=delay
 session=None
 try:
     with postclose_session(DATA_DIR,source_date) as session:
@@ -435,7 +474,7 @@ def _bind_execution(workspace, execution_root, intake, candidate):
             execution_release_root=str(root), execution_release_commit=commit,
             source_hashes=sources, origin=origin, changed_consumer_paths=changed,
             status='verified', policy_effect='unchanged')
-        contract_sources.update(sources)
+        _merge_source_hashes(contract_sources, sources)
 
     delay = manifest.get('pre_submit_delay_handoff') or {}
     if delay.get('code_contract_sha256'):
@@ -457,7 +496,7 @@ def _bind_execution(workspace, execution_root, intake, candidate):
             {name: 'src/engine/' + name for name in vote._code_paths()})
     from src.engine.infrastructure.startup_validation_code_context import bind_main_preparation
     main = bind_main_preparation(root, commit, workspace / 'data', intake)
-    contract_sources.update(main['source_hashes'])
+    _merge_source_hashes(contract_sources, main['source_hashes'])
     return dict(basis='reviewed_candidate_handoff' if candidate else 'selected',
                 root=str(root), commit=commit, contracts=contracts, main_preparation=main,
                 source_hashes=contract_sources)
@@ -579,6 +618,12 @@ def _recheck(sources, *, main_preparation=None):
             raise ValueError('startup_source_changed:' + str(name))
 
 
+def _merge_source_hashes(sources, additions):
+    if any(path in sources and sources[path] != sha for path, sha in additions.items()):
+        raise ValueError('startup_source_binding_conflict')
+    sources.update(additions)
+
+
 def _ticks(pid):
     return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
 
@@ -667,7 +712,7 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
         binding = _bind_execution(workspace, Path(execution_root), intake, candidate)
         root = Path(binding['root'])
         sources = dict(intake['source_hashes'])
-        sources.update(binding.get('source_hashes') or {})
+        _merge_source_hashes(sources, binding.get('source_hashes') or {})
         sources.update(_code_sources(root))
         for name in ['src/bot_main.py', 'src/run_bot.sh',
                      'src/engine/automation/main_startup_validation.py',
@@ -763,6 +808,9 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
                     or any(delegation.get(k) is not False for k in ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))):
                 raise ValueError('startup_child_native_delegation_invalid')
             final['native_validation_delegation'] = delegation
+            from src.engine.infrastructure.startup_validation_code_context import verify_preparation_delay_delegation
+            verify_preparation_delay_delegation(proof, delegation, request,
+                child['consumer_results']['pre_submit_delay'])
         if (child['isolation'].get('filesystem_write_root') != str(directory)
                 or child['isolation'].get('process_group') != process.pid
                 or child['isolation'].get('session_id') != process.pid):
@@ -791,6 +839,8 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
         if _environment_sources(workspace, target_date, intake['receipt']['env_path']) != env_sources:
             raise ValueError('startup_environment_inputs_changed')
         _recheck(sources)
+        for row in final['consumer_results'].values():
+            _recheck(row.get('source_hashes') or {}, main_preparation=binding.get('main_preparation'))
         final.update(status='passed', load_check_passed=True, protected_sources_unchanged=True,
                      failure_phase=None)
     except (OSError, ValueError, TypeError, KeyError, ImportError, subprocess.SubprocessError) as exc:
@@ -846,7 +896,12 @@ def child_main(request_path):
             data_root=Path(request['data_root']), env=os.environ, validation=True)
         result['consumer_results'] = report['consumer_results']
         if request.get('main_preparation_code_handoff') is not None:
-            from src.engine.infrastructure.startup_validation_code_context import validation_delegation_receipt
+            from src.engine.infrastructure.startup_validation_code_context import (
+                validation_delegation_receipt, preparation_delay_source_hashes)
+            delay_sources = result['consumer_results']['pre_submit_delay']['source_hashes']
+            for path, sha in preparation_delay_source_hashes().items():
+                if delay_sources.setdefault(path, sha) != sha:
+                    raise ValueError('startup_delay_child_source_conflict')
             result['native_validation_delegation'] = validation_delegation_receipt()
         if (report.get('schema') != 'main_policy_loading_v1'
                 or report.get('target_date') != request['target_date']

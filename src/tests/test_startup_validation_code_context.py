@@ -125,6 +125,7 @@ result = verify_validation_consumer_code(request['target_date'], family='pre_sub
 def test_no_context_leaves_normal_native_guard_untouched():
     assert C.verify_validation_consumer_code(DAY, family='pre_submit_delay', policy_sha='a'*64,
         expected='b'*64, paths={'source': RELATIVE}, actual='c'*64) is None
+    assert C.validate_preparation_delay_selection(None, None) is False
 
 
 def test_install_outside_real_os_isolation_is_refused(request_fixture):
@@ -356,7 +357,8 @@ def test_reviewed_main_code_pairs_are_exact_and_origin_is_not_relabelled():
 
 
 @pytest.mark.parametrize('change',['selector','selected_head','candidate_head','request_alias'])
-def test_installed_main_context_rechecks_control_generation_per_digest(request_fixture,monkeypatch,change):
+@pytest.mark.parametrize('consumer', ['digest', 'delay_selection'])
+def test_installed_main_context_rechecks_control_generation_per_digest(request_fixture,monkeypatch,change,consumer):
     import threading,time
     f=_main_fixture(request_fixture,monkeypatch); run=request_fixture['run']
     if change=='selector':
@@ -389,7 +391,7 @@ import time
 (run/'ready').write_text('installed')
 while not (run/'continue').exists(): time.sleep(.01)
 from src.engine.infrastructure.validation_digest_session import reused_digest
-reused_digest({str(f['raw'])!r})
+{'reused_digest(' + repr(str(f['raw'])) + ')' if consumer == 'digest' else 'C.validate_preparation_delay_selection(None, None)'}
 """)
     finally:
         worker.join(timeout=25)
@@ -398,6 +400,207 @@ reused_digest({str(f['raw'])!r})
     assert not worker.is_alive() and not errors,errors
     assert result.returncode!=0
     assert 'startup_' in result.stderr,result.stderr
+
+
+@pytest.mark.parametrize('damage', [None, 'missing_shard', 'corrupt_shard', 'membership', 'selection', 'unobserved'])
+def test_native_sharded_delay_preparation_delegates_observed_rebuild_in_real_isolation(
+        request_fixture, monkeypatch, damage):
+    from src.engine.automation import pre_submit_delay_partitioned_research as P
+    from src.engine.scalping import pre_submit_delay_initial_policy as I
+    from src.tests.test_pre_submit_delay_partitioned_research import fixture
+    main = _main_fixture(request_fixture, monkeypatch)
+    data = Path(request_fixture['request']['data_root'])
+    reference, _ = fixture(data, monkeypatch)
+    from src.engine.automation.pre_submit_delay_source_ledger import seal
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
+    for directory in sorted((data/'threshold_cycle').glob('date=*/family=pre_submit_delay')):
+        day = directory.parent.name.removeprefix('date=')
+        rows = [json.loads(line) for path in directory.glob('part-execution-*.jsonl')
+            for line in path.read_text().splitlines()]
+        raw = data/'pipeline_events'/('pipeline_events_'+day+'.jsonl')
+        raw.parent.mkdir(exist_ok=True)
+        raw.write_text(''.join(json.dumps({**row, 'event_type': 'pipeline_event'})+'\n' for row in rows))
+        seal(data, day)
+        reference['source_receipt']['ledger_generations'][day] = byte_generation(family_source_ledger_path(data, day))
+    report, policy = P.build(reference['qualified_projection'], reference['census'],
+        output_root=data/'producer-evidence', source_date=reference['source_date'],
+        publication_date='2026-10-18', effective_date=DAY,
+        source_sha256=reference['source_sha256'], code_contract_sha256=I.code_contract(request_fixture['root']),
+        source_receipt=reference['source_receipt'])
+    pointer = I.publish(data, report, policy, expected_incumbent=None)
+    report_path, policy_path, _, manifest = I.committed_paths(data, reference['source_date'])
+    expected_lookup = I.PreparedPolicy.from_artifacts(policy, report, target_date=DAY).lookup(
+        target_date=DAY, market='REGULAR')
+    # Execute the exact collection hook embedded in the parent subprocess.
+    # Its original validator is the real SQL whole-population implementation;
+    # the small Main closure fixture is independent of this delay verdict.
+    import ast
+    from src.engine.automation import main_startup_validation as V
+    tree = ast.parse(Path(V.__file__).read_text())
+    native = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_native_preparation_check')
+    script = next(n.value.value for n in ast.walk(native) if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == 'script' for t in n.targets))
+    hook = next(n for n in ast.walk(ast.parse(script)) if isinstance(n, ast.FunctionDef) and n.name == 'delay')
+    namespace = dict(I=I, Path=Path, hashlib=hashlib, json=json, original_delay=P.validate,
+        run_id=request_fixture['run'].name, closure=main['proof']['closure'])
+    namespace['closure']['delay_selections'] = {}
+    exec(compile(ast.Module(body=[hook], type_ignores=[]), '<actual native delay collector>', 'exec'), namespace)
+    durable_policy, durable_report = I._read(policy_path), I._read(report_path)
+    namespace['delay'](durable_policy, durable_report, target_date=DAY)
+    collected = next(iter(namespace['closure']['delay_selections'].values()))
+    assert collected['parent_full_selection_recomputed'] is True
+    if damage is None:
+        from copy import deepcopy
+        original = namespace['original_delay']
+        saved = deepcopy(namespace['closure']['delay_selections'])
+        namespace['closure']['delay_selections'] = {}
+        namespace['original_delay'] = lambda *a, **kw: False
+        with pytest.raises(ValueError, match='startup_native_delay_result_invalid'):
+            namespace['delay'](durable_policy, durable_report, target_date=DAY)
+        assert namespace['closure']['delay_selections'] == {}
+        def failed(*a, **kw): raise ValueError('native_rebuild_failed')
+        namespace['original_delay'] = failed
+        with pytest.raises(ValueError, match='native_rebuild_failed'):
+            namespace['delay'](durable_policy, durable_report, target_date=DAY)
+        assert namespace['closure']['delay_selections'] == {}
+        namespace['original_delay'] = original
+        namespace['closure']['delay_selections'] = deepcopy(saved)
+        next(iter(namespace['closure']['delay_selections'].values()))['documents_sha256'] = '0'*64
+        with pytest.raises(ValueError, match='startup_native_delay_selection_conflict'):
+            namespace['delay'](durable_policy, durable_report, target_date=DAY)
+        assert next(iter(namespace['closure']['delay_selections'].values()))['documents_sha256'] == '0'*64
+        namespace['closure']['delay_selections'] = saved
+    # Snapshot actual selected release code, which is byte-identical to the
+    # native hook's delay inventory (the candidate changes only one docstring).
+    for name, sha in collected['native_code_inventory'].items():
+        path = request_fixture['selected']/name
+        assert C._sha(path) == sha
+        main['proof']['source_hashes'][str(path)] = sha
+    for ref in collected['artifacts'].values():
+        main['proof']['source_hashes'][ref['path']] = ref['sha256']
+    req = request_fixture['request']
+    req['source_hashes'].update(main['proof']['source_hashes'])
+    req['candidate_code_handoffs']['pre_submit_delay']['policy_sha256'] = policy['policy_sha256']
+    req['manifest']['pre_submit_delay_handoff']['policy_sha256'] = policy['policy_sha256']
+    req['manifest']['pre_submit_delay_handoff']['policy_path'] = str(policy_path)
+    if damage == 'unobserved': namespace['closure']['delay_selections'] = {}
+    _write_request(request_fixture, req)
+    native_env = dict(KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED='true',
+        KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE=str(policy_path),
+        KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256=manifest['manifest_sha256'],
+        KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE=DAY)
+    if damage in {'missing_shard', 'corrupt_shard', 'membership'}:
+        shard = report_path.parent/report['qualified_projection_ref']['path']
+        if damage == 'membership':
+            from src.engine.lifecycle import research_storage as S
+            partition = next(S.iter_tree(report_path.parent, report['partitions_ref']))
+            shard = report_path.parent/partition['membership']['path']
+        if damage == 'missing_shard': shard.unlink()
+        else: shard.write_text('{}')
+    before = {str(path): (C._sha(path), path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+        for path in data.rglob('*') if path.is_file()}
+    result = _child(request_fixture, MAIN_CHILD_SETUP + f"""
+from src.engine.scalping import pre_submit_delay_tuning as T
+from src.engine.scalping import pre_submit_delay_initial_policy as I
+from src.engine.automation import pre_submit_delay_partitioned_research as P
+out = T.prepare_runtime_policy(target_date={DAY!r}, env={native_env!r}, data_root=pathlib.Path({str(data)!r}))
+if {damage!r} in ('missing_shard', 'corrupt_shard', 'membership', 'unobserved'):
+    assert out['status'] == 'preparation_invalid', out
+    assert T._PREPARED_DELAY_POLICY is None
+else:
+    assert out['status'] == 'prepared', out
+    assert out['policy_sha256'] == {policy['policy_sha256']!r}
+    selected = T._PREPARED_DELAY_POLICY.lookup(target_date={DAY!r}, market='REGULAR')
+    assert selected == {expected_lookup!r}, selected
+    if {damage!r} == 'selection':
+        report, policy = I._read(pathlib.Path({str(report_path)!r})), I._read(pathlib.Path({str(policy_path)!r}))
+        report['price_ready_pair_n'] += 1
+        policy['report_sha256'] = I.digest({{k:v for k,v in report.items() if k!='policy_sha256'}})
+        policy['policy_sha256'] = I.digest({{k:v for k,v in policy.items() if k!='policy_sha256'}})
+        report['policy_sha256'] = policy['policy_sha256']
+        try: I.validate(policy, report, target_date={DAY!r})
+        except ValueError as exc:
+            assert str(exc) == 'startup_delay_request_binding_invalid', str(exc)
+        else: raise AssertionError('native selection recomputation was bypassed')
+    receipt = C.validation_delegation_receipt()
+    checked = receipt['delay_selections'][{policy['policy_sha256']!r}]
+    assert checked['parent_full_selection_recomputed'] is True
+    assert checked['child_recomputed'] is False
+    assert checked['child_headers_and_physical_logical_trees_reverified'] is True
+    for path, sha in C.preparation_delay_source_hashes().items():
+        assert out['source_hashes'].setdefault(path, sha) == sha
+    (run/'delay-result.json').write_text(json.dumps(dict(delegation=receipt,
+        consumer=dict(status='loaded', source_hashes=out['source_hashes']))))
+assert not list(run.glob('.verify-*'))
+assert_no_forbidden_attempts()
+""")
+    assert result.returncode == 0, result.stderr
+    assert (request_fixture['run']/'audit.jsonl').read_bytes() == b''
+    after = {str(path): (C._sha(path), path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+        for path in data.rglob('*') if path.is_file()}
+    assert before == after
+    assert pointer.exists()
+    assert not list(data.rglob('.verify-*'))
+    if damage is None:
+        from copy import deepcopy
+        result = json.loads((request_fixture['run']/'delay-result.json').read_text())
+        C.verify_preparation_delay_delegation(main['proof'], result['delegation'], req, result['consumer'])
+        sources = result['consumer']['source_hashes']
+        assert len(sources) > 2
+        for change in ('missing', 'unknown', 'child_recomputed', 'source_missing'):
+            value = deepcopy(result)
+            if change == 'missing': value['delegation']['delay_selections'] = {}
+            elif change == 'unknown': value['delegation']['delay_selections']['0'*64] = {}
+            elif change == 'child_recomputed':
+                value['delegation']['delay_selections'][policy['policy_sha256']]['child_recomputed'] = True
+            else:
+                shard = next(iter(value['delegation']['delay_selections'][policy['policy_sha256']]['source_hashes']))
+                value['consumer']['source_hashes'].pop(shard)
+            with pytest.raises(ValueError, match='startup_delay_child_selection_'):
+                C.verify_preparation_delay_delegation(main['proof'], value['delegation'], req, value['consumer'])
+        shard = next(iter(result['delegation']['delay_selections'][policy['policy_sha256']]['source_hashes']))
+        Path(shard).write_bytes(b'{}')
+        with pytest.raises(ValueError, match='research_shard_generation_changed'):
+            C.verify_preparation_delay_delegation(main['proof'], result['delegation'], req, result['consumer'])
+        with pytest.raises(ValueError, match='startup_source_changed'):
+            V._recheck(sources)
+
+
+@pytest.mark.parametrize('damage', ['pid', 'invalid_context'])
+def test_delegated_delay_selection_rejects_stale_context(request_fixture, monkeypatch, damage):
+    _main_fixture(request_fixture, monkeypatch)
+    result = _child(request_fixture, MAIN_CHILD_SETUP + f"""
+if {damage!r} == 'pid': C._CONTEXT['pid'] += 1
+else: C._CONTEXT['valid'] = False
+C.validate_preparation_delay_selection(None, None)
+""")
+    assert result.returncode != 0
+    assert 'startup_code_context_' in result.stderr
+    assert not list(request_fixture['run'].glob('.verify-*'))
+
+
+def test_delay_physical_source_collection_obeys_claim_and_rejects_alias_generations(tmp_path, monkeypatch):
+    from src.engine.lifecycle import research_storage as S, research_input_budget as B
+    ref = S.write_tree(tmp_path, iter(()))
+    path = tmp_path/ref['path']; raw = path.read_bytes(); replacement = raw+b' '
+    changed = {**ref, 'sha256':hashlib.sha256(replacement).hexdigest(), 'size':len(replacement)}
+    # Isolate the second physical-source/CAS walk. End-to-end tests above run
+    # the actual logical/physical native reader and all nested membership rows.
+    def rows(root, reference):
+        if reference is changed: path.write_bytes(replacement)
+        return iter(())
+    monkeypatch.setattr(S, 'iter_tree', rows)
+    report = dict(qualified_projection_ref=ref, partitions_ref=changed, cells_ref=ref)
+    used = B.health()['used_bytes']
+    with monkeypatch.context() as limits:
+        limits.setattr(B, 'LIMIT_BYTES', used+1)
+        with pytest.raises(ValueError, match='shared_research_budget_partition_resume_required'):
+            C._delay_tree_sources(tmp_path, report)
+    assert B.health()['used_bytes'] == used
+    with pytest.raises(ValueError, match='startup_delay_shard_reference_conflict'):
+        C._delay_tree_sources(tmp_path, report)
+    assert B.health()['used_bytes'] == used
 
 
 def test_ordinary_digest_session_does_not_opt_in_new_reporting_consumers(tmp_path,monkeypatch):

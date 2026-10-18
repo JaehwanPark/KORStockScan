@@ -398,6 +398,9 @@ def validate(policy, report, *, target_date=None):
             raise ValueError('initial_delay_generation_invalid')
     if target_date and not policy['effective_from']<=target_date<=policy['expires_on']:
         raise ValueError('initial_delay_date_invalid')
+    from src.engine.infrastructure.startup_validation_code_context import validate_preparation_delay_selection
+    if validate_preparation_delay_selection(policy,report,target_date=target_date):
+        return
     # Rebuild from the frozen *whole* population. Shard-local winners or split
     # labels never authorize a policy. Verifier scratch is removed on exit.
     import tempfile
