@@ -28,6 +28,15 @@ SCHEMA = 'main_policy_load_exit_validation_v1'
 ROOT = Path(__file__).resolve().parents[3]
 MAX_JSON = 8 * 1024 * 1024
 MAX_SOURCE = 64 * 1024 * 1024
+# Historical observation flags remain literal data in the native bootstrap.
+# This exact exception belongs to that producer, not custody or arbitrary shell
+# settings. Keep the existing values and the launcher's overlay order intact.
+BOOTSTRAP_OBSERVATION_ENV_KEYS = frozenset({
+    'SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED',
+    'SCALP_MICRO_REVERSION_DISCOVERY_ENABLED',
+    'SCALP_MICRO_REVERSION_OBSERVER_ENABLED',
+    'SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED',
+})
 
 
 def _digest(value):
@@ -100,22 +109,98 @@ def _git(root, *args):
                                    text=True, stderr=subprocess.PIPE, timeout=30).strip()
 
 
-def _native_preparation_check(selected_root, target_date):
+def _native_preparation_check(selected_root, target_date, source_date):
+    if date.fromisoformat(source_date).isoformat() != source_date:
+        raise ValueError('startup_native_preparation_source_date_invalid')
+    # The selected CLI still performs its full current-contract verification.
+    # Reuse only digests already read in this one child; the existing postclose
+    # context neither loads nor writes a persistent cache and clears on exit.
+    # Keep diagnostics on stderr so the native stdout/exit contract is intact.
+    script = r'''import json,runpy,sys
+sys.path.insert(0,sys.argv.pop(1))
+source_date=sys.argv.pop(1)
+from src.engine.infrastructure.validation_digest_session import postclose_session
+from src.utils.constants import DATA_DIR
+session=None
+try:
+    with postclose_session(DATA_DIR,source_date) as session:
+        runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
+finally:
+    if session is not None:
+        print('P5_NATIVE_VALIDATION_IO='+json.dumps(dict(source_date=source_date,
+            stats=session.stats,remaining_entries=len(session.entries)),sort_keys=True),file=sys.stderr)
+'''
     command = [str(selected_root / '.venv/bin/python'), '-I', '-B', '-c',
-               "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')",
-               str(selected_root), '--verify',
+               script, str(selected_root), source_date, '--verify',
                '--target-date', target_date]
     env = _safe_process_environment()
-    result = subprocess.run(command, cwd=selected_root, env=env, capture_output=True,
-                            text=True, timeout=180, check=False)
+    diagnostic_receipt = dict(source_date=source_date, target_date=target_date,
+                              exit_code=None, status='not_observed', native_validation_io=None)
+    try:
+        result = subprocess.run(command, cwd=selected_root, env=env, capture_output=True,
+                                text=True, timeout=180, check=False)
+    except subprocess.TimeoutExpired as exc:
+        # A killed child cannot attest its context cleanup or complete counters.
+        diagnostic_receipt.update(status='timeout', diagnostics_status='unavailable_child_timeout')
+        error = ValueError('startup_native_preparation_timeout')
+        error.native_preparation_check = diagnostic_receipt
+        raise error from exc
+    diagnostic_receipt['exit_code'] = result.returncode
+
+    def fail(message):
+        error = ValueError(message)
+        error.native_preparation_check = diagnostic_receipt
+        raise error
+
+    records = [line.removeprefix('P5_NATIVE_VALIDATION_IO=')
+               for line in result.stderr.splitlines() if line.startswith('P5_NATIVE_VALIDATION_IO=')]
+    try:
+        if len(records) != 1 or len(records[0]) > 8192:
+            raise ValueError('diagnostic_count_or_size')
+        diagnostics = json.loads(records[0])
+        stats = diagnostics['stats']
+        if (set(diagnostics) != {'source_date', 'stats', 'remaining_entries'}
+                or diagnostics['source_date'] != source_date
+                or type(diagnostics['remaining_entries']) is not int or diagnostics['remaining_entries'] != 0
+                or set(stats) - {'full_reads', 'full_bytes', 'reused_reads', 'reused_bytes',
+                    'cache_status', 'role', 'generation_sha256', 'pid', 'wall_seconds',
+                    'thread_io_delta', 'peak_process_rss_kib'}
+                or stats['role'] != 'postclose'
+                or stats['cache_status'] not in {'invocation_memory_only', 'storage_unavailable_full_fallback'}
+                or type(stats['pid']) is not int or stats['pid'] <= 0
+                or not isinstance(stats['generation_sha256'], str)
+                or not re.fullmatch('[0-9a-f]{64}', stats['generation_sha256'])
+                or type(stats['wall_seconds']) not in (int, float)
+                or not 0 <= stats['wall_seconds'] < float('inf')
+                or any(type(stats[key]) is not int or stats[key] < 0
+                       for key in ('full_reads', 'full_bytes', 'reused_reads', 'reused_bytes'))):
+            raise ValueError('diagnostic_contract')
+        if ('peak_process_rss_kib' in stats
+                and (type(stats['peak_process_rss_kib']) is not int or stats['peak_process_rss_kib'] < 0)):
+            raise ValueError('diagnostic_rss')
+        io_delta = stats['thread_io_delta']
+        if io_delta is not None and (not isinstance(io_delta, dict)
+                or set(io_delta) != {'rchar', 'read_bytes', 'write_bytes'}
+                or any(type(v) is not int or v < 0 for v in io_delta.values())):
+            raise ValueError('diagnostic_io')
+        diagnostic_receipt.update(native_validation_io=diagnostics, diagnostics_status='observed')
+    except (ValueError, KeyError, TypeError):
+        diagnostic_receipt['diagnostics_status'] = 'invalid_or_missing'
     try:
         value = json.loads(result.stdout.splitlines()[-1])
-    except (ValueError, IndexError) as exc:
-        raise ValueError('startup_native_preparation_result_invalid') from exc
+        if not isinstance(value, dict):
+            raise ValueError('native_object_required')
+    except (ValueError, IndexError):
+        diagnostic_receipt['status'] = 'invalid_result'
+        fail('startup_native_preparation_result_invalid')
+    diagnostic_receipt['status'] = ('pass' if result.returncode == 0
+        and value.get('status') == 'pass' and not value.get('findings') else 'fail')
     if result.returncode or value.get('status') != 'pass' or value.get('findings'):
-        raise ValueError('startup_native_preparation_failed:' +
-                         ','.join(map(str, value.get('findings') or [])))
-    return value
+        fail('startup_native_preparation_failed:' +
+             ','.join(map(str, value.get('findings') or [])))
+    if diagnostic_receipt['diagnostics_status'] != 'observed':
+        fail('startup_native_preparation_diagnostics_invalid')
+    return {**value, 'native_validation_io': diagnostics}
 
 
 def _intake(workspace, target_date):
@@ -164,7 +249,7 @@ def _intake(workspace, target_date):
             or manifest.get('manifest_sha256') != receipt.get('manifest_content_sha256')
             or manifest['manifest_sha256'] != _digest({k: v for k, v in manifest.items() if k != 'manifest_sha256'})):
         raise ValueError('startup_prepared_manifest_invalid')
-    native = _native_preparation_check(selected_root, target_date)
+    native = _native_preparation_check(selected_root, target_date, receipt['source_date'])
     if native.get('selected_release_commit') != selected_commit:
         raise ValueError('startup_native_selection_mismatch')
     _recheck(sources)
@@ -234,8 +319,10 @@ def _bind_execution(workspace, execution_root, intake, candidate):
                 root=str(root), commit=commit, contracts=contracts, source_hashes=contract_sources)
 
 
-def _assignment_values(path):
+def _assignment_values(path, *, source_role='policy'):
     """Accept only data assignments, never expansions or executable shell."""
+    if source_role not in ('policy', 'bootstrap', 'custody'):
+        raise ValueError('startup_environment_source_role_invalid')
     with _open_source(path, MAX_JSON) as source:
         raw = source.read(MAX_JSON + 1)
     if len(raw) > MAX_JSON:
@@ -248,7 +335,9 @@ def _assignment_values(path):
         if match is None:
             raise ValueError('startup_environment_assignment_required')
         key, rhs = match.groups()
-        if not key.startswith('KORSTOCKSCAN_'):
+        if (not key.startswith('KORSTOCKSCAN_')
+                and not (source_role == 'bootstrap'
+                         and key in BOOTSTRAP_OBSERVATION_ENV_KEYS)):
             raise ValueError('startup_environment_policy_namespace_required')
         words = shlex.split(rhs, comments=False, posix=True)
         if len(words) > 1:
@@ -304,9 +393,10 @@ env -0
 '''
     safe_bootstrap = directory / 'bootstrap-assignments.env'
     safe_custody = directory / 'custody-assignments.env'
-    for original, destination in [(Path(bootstrap_env), safe_bootstrap),
-                                   (root / 'data/config/native_owner_custody.env', safe_custody)]:
-        values = _assignment_values(original) if original.exists() else {}
+    for original, destination, role in [
+            (Path(bootstrap_env), safe_bootstrap, 'bootstrap'),
+            (root / 'data/config/native_owner_custody.env', safe_custody, 'custody')]:
+        values = _assignment_values(original, source_role=role) if original.exists() else {}
         destination.write_text(''.join(f'export {key}={shlex.quote(value)}\n' for key, value in sorted(values.items())))
     process = subprocess.run(['/bin/bash', '-c', script, 'main-policy-env', str(root),
                               target_date, str(safe_bootstrap), str(safe_custody)], capture_output=True,
@@ -407,6 +497,7 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
     process = None
     try:
         intake = _intake(workspace, target_date)
+        final['native_preparation_checks'] = {'intake': intake.get('native_verification')}
         binding = _bind_execution(workspace, Path(execution_root), intake, candidate)
         root = Path(binding['root'])
         sources = dict(intake['source_hashes'])
@@ -495,7 +586,8 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
         _recheck(sources)
         for row in final['consumer_results'].values():
             _recheck(row.get('source_hashes') or {})
-        _native_preparation_check(intake['selected_root'], target_date)
+        final['native_preparation_checks']['recheck'] = _native_preparation_check(
+            intake['selected_root'], target_date, intake['receipt']['source_date'])
         if date.fromisoformat(target_date) < datetime.now(KST).date():
             raise ValueError('startup_target_expired_during_validation')
         if _bind_execution(workspace, root, intake, candidate) != binding:
@@ -507,6 +599,10 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
                      failure_phase=None)
     except (OSError, ValueError, TypeError, KeyError, ImportError, subprocess.SubprocessError) as exc:
         # Keep reasons bounded. No raw environment or captured stderr is published.
+        native_check = getattr(exc, 'native_preparation_check', None)
+        if native_check is not None:
+            phase = 'intake' if final['failure_phase'] == 'intake' else 'recheck'
+            final.setdefault('native_preparation_checks', {})[phase] = native_check
         final['findings'].append(type(exc).__name__ + ':' + str(exc)[:1000])
     finally:
         if process is not None:

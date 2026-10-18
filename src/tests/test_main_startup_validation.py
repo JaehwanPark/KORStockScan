@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+import ast
 
 import pytest
 
@@ -30,6 +31,134 @@ CODE_FILES = (
     "src/engine/infrastructure/startup_validation_code_context.py",
     "src/engine/infrastructure/main_policy_environment.sh",
 )
+
+
+@pytest.fixture
+def native_preparation_cli(tmp_path):
+    """Run the unchanged native CLI dispatcher over tiny private source checks.
+
+    Family semantic verification is isolated here, not replaced in production.
+    The selected digest owner, process boundary and runpy/CLI dispatch are real.
+    """
+    code = tmp_path / 'selected'
+    data = code / 'data'
+    data.mkdir(parents=True)
+    for package in ('src', 'src/utils', 'src/engine', 'src/engine/automation',
+                    'src/engine/infrastructure'):
+        directory = code / package
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / '__init__.py').touch()
+    (code / '.venv').symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+    shutil.copyfile(ROOT / 'src/engine/infrastructure/validation_digest_session.py',
+                    code / 'src/engine/infrastructure/validation_digest_session.py')
+    (code / 'src/utils/constants.py').write_text(f'from pathlib import Path\nDATA_DIR=Path({str(data)!r})\n')
+    source = data / 'source.bin'
+    source.write_bytes(b'a' * (2 * 1024 * 1024))
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    (data / 'mode.txt').write_text('pass')
+    owner = (ROOT / 'src/engine/automation/next_preopen_readiness.py').read_text()
+    dispatcher = next(node for node in ast.parse(owner).body
+                      if isinstance(node, ast.FunctionDef) and node.name == 'main')
+    main_source = ast.get_source_segment(owner, dispatcher)
+    prelude = f'''"""Private semantic fixture; original native CLI dispatcher below."""
+import argparse,json,subprocess,sys
+from src.utils.constants import DATA_DIR
+from src.engine.infrastructure import validation_digest_session as digest_owner
+def verify_prepared(target_date, *, require_today=False):
+    assert sys.argv[1:]==['--verify','--target-date',{DAY!r}]
+    assert target_date=={DAY!r} and require_today is False
+    active=digest_owner.ACTIVE.get()
+    assert active is not None and active.binding['day']=='2026-10-16'
+    path=DATA_DIR/'source.bin'
+    mode=(DATA_DIR/'mode.txt').read_text()
+    assert digest_owner.reused_digest(path)=={expected!r}
+    if mode=='changed':
+        path.write_bytes(b'b'*path.stat().st_size)
+    if digest_owner.reused_digest(path)!={expected!r}:
+        raise ValueError('native_source_changed')
+    if mode=='fail':
+        return dict(status='fail', findings=['native_semantic_failure'])
+    return dict(status='pass', findings=[], target_date=target_date,
+                validation_scope='current_full_contract', actual_pid_consumed=False)
+'''
+    (code / 'src/engine/automation/next_preopen_readiness.py').write_text(
+        prelude + '\n' + main_source + '\nif __name__=="__main__":\n    raise SystemExit(main())\n')
+    return code, data
+
+
+def test_native_preparation_context_keeps_cli_full_scope_and_cold_invocation_boundary(native_preparation_cli):
+    code, data = native_preparation_cli
+    results = [validation._native_preparation_check(code, DAY, '2026-10-16') for _ in range(2)]
+    for result in results:
+        assert result['validation_scope'] == 'current_full_contract'
+        assert result['actual_pid_consumed'] is False
+        io = result['native_validation_io']
+        assert io['source_date'] == '2026-10-16'
+        assert io['remaining_entries'] == 0
+        assert io['stats']['cache_status'] == 'invocation_memory_only'
+        assert io['stats']['full_reads'] == io['stats']['reused_reads'] == 1
+        assert io['stats']['full_bytes'] == io['stats']['reused_bytes'] == 2 * 1024 * 1024
+    assert results[0]['native_validation_io']['stats']['pid'] != results[1]['native_validation_io']['stats']['pid']
+    assert not (data / 'runtime/validation_digests').exists()
+
+
+@pytest.mark.parametrize('mode', ['fail', 'changed'])
+def test_native_preparation_context_never_reuses_pass_or_changed_source(
+        native_preparation_cli, monkeypatch, mode):
+    code, data = native_preparation_cli
+    (data / 'mode.txt').write_text(mode)
+    original_run = validation.subprocess.run
+    observed = []
+    def record(*args, **kwargs):
+        result = original_run(*args, **kwargs)
+        observed.append(result)
+        return result
+    monkeypatch.setattr(validation.subprocess, 'run', record)
+    with pytest.raises(ValueError, match='startup_native_preparation_failed'):
+        validation._native_preparation_check(code, DAY, '2026-10-16')
+    result, = observed
+    assert result.returncode == 1
+    native = json.loads(result.stdout.splitlines()[-1])
+    if mode == 'changed':
+        assert native['reason'] == 'native_source_changed'
+    else:
+        assert native['findings'] == ['native_semantic_failure']
+    line, = [line for line in result.stderr.splitlines() if line.startswith('P5_NATIVE_VALIDATION_IO=')]
+    io = json.loads(line.removeprefix('P5_NATIVE_VALIDATION_IO='))
+    assert io['remaining_entries'] == 0
+    assert io['stats']['full_reads'] == (2 if mode == 'changed' else 1)
+    assert io['stats']['reused_reads'] == (0 if mode == 'changed' else 1)
+    assert not (data / 'runtime/validation_digests').exists()
+
+
+def test_native_preparation_rejects_missing_context_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setattr(validation.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(dict(status='pass', findings=[])), stderr=''))
+    with pytest.raises(ValueError, match='startup_native_preparation_diagnostics_invalid'):
+        validation._native_preparation_check(tmp_path, DAY, '2026-10-16')
+
+
+@pytest.mark.parametrize('failure', ['exit', 'findings'])
+def test_native_preparation_diagnostic_status_requires_full_result_contract(
+        native_preparation_cli, monkeypatch, failure):
+    code, _ = native_preparation_cli
+    original_run = validation.subprocess.run
+    def contradictory(*args, **kwargs):
+        result = original_run(*args, **kwargs)
+        if failure == 'exit':
+            result.returncode = 1
+        else:
+            native = json.loads(result.stdout.splitlines()[-1])
+            native['findings'] = ['native_failure_despite_status']
+            result.stdout = json.dumps(native) + '\n'
+        return result
+    monkeypatch.setattr(validation.subprocess, 'run', contradictory)
+    with pytest.raises(ValueError, match='startup_native_preparation_failed') as captured:
+        validation._native_preparation_check(code, DAY, '2026-10-16')
+    receipt = captured.value.native_preparation_check
+    assert receipt['status'] == 'fail'
+    assert receipt['diagnostics_status'] == 'observed'
+    assert receipt['native_validation_io']['stats']['full_reads'] == 1
 
 
 @pytest.fixture
@@ -100,7 +229,7 @@ def load_main_policies(**kwargs):
     bootstrap.write_text("KORSTOCKSCAN_FIXTURE_POLICY=bound\n")
     intake = dict(
         selected_root=code, selected_commit=commit, receipt_path=receipt,
-        receipt={"env_path": str(bootstrap), "activation_candidate": {}},
+        receipt={"env_path": str(bootstrap), "activation_candidate": {}, "source_date": "2026-10-16"},
         manifest={"target_date": DAY, "env_overrides": {}},
         source_hashes={str(protected): validation._sha(protected), str(receipt): validation._sha(receipt),
                        str(bootstrap): validation._sha(bootstrap)},
@@ -108,9 +237,10 @@ def load_main_policies(**kwargs):
     binding = dict(basis="reviewed_candidate_handoff", root=str(code), commit=commit, contracts={})
     monkeypatch.setattr(validation, "_intake", lambda *args: intake)
     monkeypatch.setattr(validation, "_bind_execution", lambda *args: binding)
+    native_check = validation._native_preparation_check
     monkeypatch.setattr(validation, "_native_preparation_check", lambda *args: {"status": "pass"})
     state = {"mode": "passed", "workspace": workspace, "code": code, "protected": protected,
-             "intake": intake, "binding": binding, "loader": loader}
+             "intake": intake, "binding": binding, "loader": loader, "native_check": native_check}
 
     def compose(*args, **kwargs):
         return {"PATH": os.defpath, "PYTHONPATH": str(code), "PYTHONDONTWRITEBYTECODE": "1",
@@ -235,6 +365,45 @@ def test_last_native_recheck_cannot_change_a_protected_source_then_publish_pass(
     assert "startup_source_changed" in " ".join(final["findings"])
 
 
+@pytest.mark.parametrize('phase', ['intake', 'recheck'])
+def test_failed_native_preparation_preserves_bounded_stats_in_failed_terminal(
+        transaction, native_preparation_cli, monkeypatch, phase):
+    code, data = native_preparation_cli
+    (data / 'mode.txt').write_text('fail')
+    def failing_native(*args):
+        return transaction['native_check'](code, DAY, '2026-10-16')
+    monkeypatch.setattr(validation, '_intake' if phase == 'intake' else '_native_preparation_check',
+                        failing_native)
+    final, receipt = _run(transaction)
+    _assert_failed_terminal(final, receipt)
+    assert final['failure_phase'] == phase
+    check = final['native_preparation_checks'][phase]
+    assert check['status'] == 'fail' and check['exit_code'] == 1
+    assert check['diagnostics_status'] == 'observed'
+    assert check['native_validation_io']['remaining_entries'] == 0
+    assert check['native_validation_io']['stats']['full_reads'] == 1
+    assert check['native_validation_io']['stats']['reused_reads'] == 1
+    assert not (data / 'runtime/validation_digests').exists()
+
+
+def test_native_preparation_timeout_keeps_unknown_counters_without_raw_output(transaction, monkeypatch):
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 180, output='PRIVATE_STDOUT', stderr='PRIVATE_STDERR')
+    def failing_intake(*args):
+        with pytest.MonkeyPatch.context() as isolated:
+            isolated.setattr(validation.subprocess, 'run', timed_out)
+            return transaction['native_check'](transaction['code'], DAY, '2026-10-16')
+    monkeypatch.setattr(validation, '_intake', failing_intake)
+    final, receipt = _run(transaction)
+    _assert_failed_terminal(final, receipt)
+    check = final['native_preparation_checks']['intake']
+    assert check['status'] == 'timeout' and check['exit_code'] is None
+    assert check['native_validation_io'] is None
+    assert check['diagnostics_status'] == 'unavailable_child_timeout'
+    assert 'PRIVATE_' not in receipt.read_text()
+    assert 'remaining_entries' not in check
+
+
 def test_any_native_code_dependency_change_is_bound_before_child(transaction, monkeypatch):
     def changed_loader(*args, **kwargs):
         values = transaction["compose"](*args, **kwargs)
@@ -319,6 +488,91 @@ def test_environment_data_parser_preserves_quoted_shell_characters_as_literal_da
     source = tmp_path / "input.env"
     source.write_text("export KORSTOCKSCAN_X='$(touch injected)'\n")
     assert validation._assignment_values(source) == {"KORSTOCKSCAN_X": "$(touch injected)"}
+    assert not (tmp_path / "injected").exists()
+
+
+@pytest.mark.parametrize("role", ["policy", "custody"])
+@pytest.mark.parametrize("key", sorted(validation.BOOTSTRAP_OBSERVATION_ENV_KEYS))
+def test_bootstrap_observation_keys_do_not_expand_other_input_roles(tmp_path, role, key):
+    source = tmp_path / "input.env"
+    source.write_text(f"export {key}=false\n")
+    with pytest.raises(ValueError, match="startup_environment_policy_namespace_required"):
+        validation._assignment_values(source, source_role=role)
+
+
+@pytest.mark.parametrize("key", [
+    "SCALP_MICRO_REVERSION_UNKNOWN_ENABLED", "SCALP_MICRO_REVERSION_OBSERVER_ENABLED_EXTRA",
+    "SCALP_STOP", "PATH", "BASH_ENV", "PYTHONPATH", "LD_PRELOAD",
+])
+def test_bootstrap_role_does_not_allow_arbitrary_nonpolicy_names(tmp_path, key):
+    source = tmp_path / "input.env"
+    source.write_text(f"{key}=untrusted\n")
+    with pytest.raises(ValueError, match="startup_environment_policy_namespace_required"):
+        validation._assignment_values(source, source_role="bootstrap")
+
+
+@pytest.mark.parametrize("rhs", ["$(touch injected)", "`touch injected`", "$HOME", "false; touch injected"])
+def test_bootstrap_observation_allowlist_never_allows_shell_expressions(tmp_path, rhs):
+    source = tmp_path / "input.env"
+    source.write_text(f"SCALP_MICRO_REVERSION_OBSERVER_ENABLED={rhs}\n")
+    with pytest.raises(ValueError):
+        validation._assignment_values(source, source_role="bootstrap")
+    assert not (tmp_path / "injected").exists()
+
+
+def test_environment_unknown_input_role_fails_closed(tmp_path):
+    source = tmp_path / "input.env"
+    source.write_text("KORSTOCKSCAN_X=bound\n")
+    with pytest.raises(ValueError, match="startup_environment_source_role_invalid"):
+        validation._assignment_values(source, source_role="operator")
+
+
+def test_native_bootstrap_observation_values_survive_literal_parser_and_shared_environment(tmp_path, monkeypatch):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap_owner
+    from src.engine.scalping.micro_reversion.observation_adapter import ObserverFeatureFlags
+
+    code = tmp_path / "project"
+    for directory in (code / "src/engine/infrastructure", code / ".venv/bin", code / "data/config"):
+        directory.mkdir(parents=True)
+    shutil.copyfile(ROOT / "src/engine/infrastructure/main_policy_environment.sh",
+                    code / "src/engine/infrastructure/main_policy_environment.sh")
+    python = code / ".venv/bin/python"
+    python.write_text("#!/bin/sh\nprintf '%s\\n' 'export KORSTOCKSCAN_STUB_NATIVE=true'\n")
+    python.chmod(0o755)
+    expected = {
+        "SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED": "false",
+        "SCALP_MICRO_REVERSION_DISCOVERY_ENABLED": "true",
+        "SCALP_MICRO_REVERSION_OBSERVER_ENABLED": "true",
+        "SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED": "false",
+        "KORSTOCKSCAN_LITERAL_FIXTURE": "$(touch injected)",
+        "KORSTOCKSCAN_OWNER_LAYER": "bootstrap",
+    }
+    # The native writer owns quoting and the manifest; only its policy inputs
+    # are a private fixture. No real preparation or provider is invoked.
+    monkeypatch.setattr(bootstrap_owner, "build_manifest", lambda *a, **k: {
+        "target_date": DAY, "env_overrides": dict(expected)})
+    prepared = code / "prepared"
+    prepared.mkdir()
+    manifest = bootstrap_owner.write_bootstrap(DAY, output_dir=prepared)
+    source = Path(manifest["env_file"])
+    before = source.read_bytes()
+    parsed = validation._assignment_values(source, source_role="bootstrap")
+    assert all(parsed[key] == value for key, value in expected.items())
+    (code / "data/config/native_owner_custody.env").write_text(
+        "export KORSTOCKSCAN_OWNER_LAYER=custody\n")
+    run = tmp_path / "private"
+    run.mkdir(mode=0o700)
+    environment = validation._compose_environment(code, DAY, source, run)
+    for key, value in expected.items():
+        assert environment[key] == ("custody" if key == "KORSTOCKSCAN_OWNER_LAYER" else value)
+    for key in validation.BOOTSTRAP_OBSERVATION_ENV_KEYS:
+        monkeypatch.setenv(key, environment[key])
+    flags = ObserverFeatureFlags.from_env()
+    assert (flags.depth_capture_enabled, flags.discovery_enabled,
+            flags.observer_enabled, flags.path_capture_enabled) == (False, True, True, False)
+    assert source.read_bytes() == before
+    assert hashlib.sha256(before).hexdigest() == manifest["env_sha256"]
+    assert not (code / "src/injected").exists()
     assert not (tmp_path / "injected").exists()
 
 
