@@ -52,8 +52,10 @@ def prepare(root, inventory, loader, census):
     # Cache identity includes the native decoder owner, even when a test or
     # observer wraps the callback without changing the producer contract.
     loader_source=Path(__file__).with_name('main_stop_postclose.py')
+    projection_source=Path(__file__).with_name('main_stop_source_projection.py')
     decoder=policy.digest(dict(index=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        loader=hashlib.sha256(loader_source.read_bytes()).hexdigest()))
+        loader=hashlib.sha256(loader_source.read_bytes()).hexdigest(),
+        projection=hashlib.sha256(projection_source.read_bytes()).hexdigest()))
     for name,generation in inventory.items():
         identity=policy.digest(dict(path=name,generation=generation,decoder=decoder))
         directory=Path(root)/'source_index'/identity

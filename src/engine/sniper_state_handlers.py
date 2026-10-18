@@ -28280,6 +28280,26 @@ def _fast_exit_execution_route_fields(
     }
 
 
+def _main_stop_normal_exit_fields(stock, code, *, at, mark_price, exit_rule):
+    """Observe either native normal-exit path without changing its disposition."""
+    if exit_rule not in {'scalp_trailing_take_profit', 'daily_limit_up_immediate_exit'}:
+        return {}
+    try:
+        from src.engine.scalping.main_stop_policy import normal_exit_decision_source
+        context = stock.get('_main_stop_current_quote_context')
+        if (not isinstance(context, dict) or context.get('at') != at or not context.get('complete')
+                or _is_scalp_simulated_position(stock, stock.get('strategy'))
+                or not _capture_main_stop_observation(stock, code, context, force=True)):
+            raise ValueError('stop_normal_exit_exact_quote_source_gap')
+        receipt = normal_exit_decision_source(stock, at=at,
+            price=context['bid'] if exit_rule == 'scalp_trailing_take_profit' else mark_price,
+            executable_bid=context['bid'], mark_price=mark_price, exit_rule=exit_rule)
+        return {'main_stop_normal_exit_decision':json.dumps(
+            receipt, sort_keys=True, separators=(',', ':'), allow_nan=False)}
+    except Exception as exc:
+        return {'main_stop_normal_exit_decision_gap':type(exc).__name__ + ':' + str(exc)}
+
+
 def _dispatch_scalp_preset_exit(
     *,
     stock,
@@ -28368,6 +28388,10 @@ def _dispatch_scalp_preset_exit(
     )
     stock["last_exit_reason"] = reason
     exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+    exit_fields = dict(extra_fields or {})
+    exit_fields.pop('main_stop_normal_exit_decision', None)
+    exit_fields.update(_main_stop_normal_exit_fields(stock, code, at=now_ts,
+        mark_price=curr_p, exit_rule=exit_rule))
     _log_holding_pipeline(
         stock,
         code,
@@ -28383,7 +28407,7 @@ def _dispatch_scalp_preset_exit(
         curr_price=curr_p,
         buy_price=buy_p,
         buy_qty=expected_qty,
-        **(extra_fields or {}),
+        **exit_fields,
     )
 
     if _is_scalp_simulated_position(stock, strategy):
@@ -29332,6 +29356,222 @@ def _observe_scalp_trailing_first_crossing(stock, code, *, mechanical_fields,
             state['inflight'] = False
 
 
+def _main_stop_quote_context(stock, code, *, snapshot, quote_receipt, executable_bid,
+        bid_source, rest_snapshot, quality, nxt_quality, quote_received_at, bid_received_at,
+        market_type, exit_allowed_by_clock, price_usable, now_ts, evaluator,
+        holding_profit_rate_at_eval):
+    """Share exact existing quote/depth validation across native exit branches."""
+    depth_receipt = quote_receipt.get("depth_receipt")
+    depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
+    depth_row = None
+    route_records = snapshot.get("realtime_type_snapshots_by_route")
+    if isinstance(route_records, dict):
+        for records in route_records.values():
+            row = records.get("0D") if isinstance(records, dict) else None
+            if (isinstance(row, dict)
+                    and all(row.get(key) == depth_receipt.get(key)
+                            for key in ("item", "market_route",
+                                        "transport_epoch", "observed_epoch"))
+                    and row.get("item") and row.get("observed_epoch") is not None):
+                depth_row = row
+                break
+    def exact_bid_depth(source: dict, bid: int) -> int:
+        book = source.get("orderbook")
+        bids = book.get("bids") if isinstance(book, dict) else None
+        level = bids[0] if isinstance(bids, list) and bids else None
+        if isinstance(level, dict):
+            if _safe_int(level.get("price"), 0) != bid:
+                return 0
+            raw = level.get("volume") if "volume" in level else level.get("qty")
+        elif _safe_int(source.get("best_bid"), 0) == bid:
+            raw = source.get("best_bid_qty")
+        else:
+            return 0
+        amount = _safe_float(raw, None)
+        return int(amount) if amount is not None and amount > 0 and amount.is_integer() else 0
+    if bid_source == "fresh_rest_executable_bid":
+        executable_bid_qty = exact_bid_depth(rest_snapshot or {}, executable_bid)
+    elif depth_row is not None:
+        executable_bid_qty = exact_bid_depth(depth_row, executable_bid)
+    else:
+        executable_bid_qty = 0
+    quote_state_for_tuning = str(
+        quality.get("quote_consistency_state") or ""
+    ).lower()
+    if bid_source == "fresh_rest_executable_bid":
+        bid_identity_proven = bool(
+            (rest_snapshot or {}).get("source") == "ka10004_rest_orderbook"
+            and str((rest_snapshot or {}).get("stock_code") or "").strip()[:6]
+            == str(code or "").strip()[:6]
+            and (rest_snapshot or {}).get("request_code")
+        )
+    elif bid_source == "fresh_nxt_0d_executable_bid":
+        bid_identity_proven = bool(
+            nxt_quality.get("nxt_trailing_bid_guard_applied") is True
+            and depth_row is not None
+            and _safe_int(depth_row.get("best_bid"), executable_bid)
+                == executable_bid
+            and _safe_float(depth_row.get("observed_epoch"), 0.0)
+                == quote_received_at
+            and str(depth_row.get("item") or "")
+                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_item") or "")
+            and str(depth_row.get("market_route") or "")
+                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_route") or "")
+        )
+    else:
+        bid_identity_proven = bool(
+            quote_receipt.get("source_type") in {"0B", "0D"}
+            and quote_receipt.get("item")
+            and quote_receipt.get("market_route")
+            and quote_receipt.get("transport_epoch") is not None
+            and _safe_int(quote_receipt.get("best_bid"), 0) == executable_bid
+            and depth_receipt.get("item") == quote_receipt.get("item")
+            and depth_receipt.get("market_route") == quote_receipt.get("market_route")
+            and depth_receipt.get("transport_epoch")
+                == quote_receipt.get("transport_epoch")
+            and _safe_float(depth_receipt.get("observed_epoch"), 0.0)
+                == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
+            and depth_row is not None
+        )
+    grid_source_complete = bool(
+        market_type and exit_allowed_by_clock and bid_received_at is not None
+        and price_usable and executable_bid_qty > 0
+        and bid_identity_proven
+        and not stock.get("scalp_trailing_arm_persist_gap")
+        and quote_state_for_tuning not in {
+            "", "missing", "diverged", "blocked", "stale", "conflict",
+            "invalid", "unavailable",
+        }
+        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
+    )
+    # Retain only the current validated evaluation context. A normal exit may
+    # capture this exact quote once even inside the regular one-second cadence.
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    stop_context = dict(at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
+        quote=quote_receipt, complete=grid_source_complete, market=market_type,
+        evaluator=evaluator, decision_profit_pct=holding_profit_rate_at_eval,
+        position_key=position_cycle_id(stock), quantity=stock.get('buy_qty'),
+        buy_price=stock.get('buy_price'), pending_exit=bool(stock.get('exit_requested')))
+    stop_context.update(bid_identity_proven=bid_identity_proven,
+        quote_state_for_tuning=quote_state_for_tuning,
+        operational_ws_0d_best_bid=_safe_int(depth_row.get('best_bid'), 0) if depth_row else None,
+        operational_ws_0d_best_bid_qty=exact_bid_depth(depth_row, _safe_int(depth_row.get('best_bid'), 0)) if depth_row else None,
+        operational_rest_best_bid_qty=exact_bid_depth(rest_snapshot, _safe_int(rest_snapshot.get('best_bid'), 0)) if rest_snapshot else None)
+    return stop_context
+
+
+def _prepare_main_stop_limit_up_quote(stock, code, *, ws_data, quote_fields, now_ts, profit_rate):
+    """Observe the already evaluated quote before early normal limit-up exits."""
+    try:
+        bid, source = _trusted_scalp_trailing_bid(ws_data, code=code,
+            quote_fields=quote_fields, now_ts=now_ts)
+        times = ws_data.get('last_realtime_type_ts')
+        received_at = _safe_float(times.get('0D') if isinstance(times, dict)
+            else ws_data.get('last_ws_update_ts'), None)
+        if received_at is not None and not 0 < received_at <= now_ts:
+            received_at = None
+        session = session_contract.resolve_market_session(datetime.fromtimestamp(float(now_ts), tz=_KST))
+        context = _main_stop_quote_context(stock, code, snapshot=ws_data,
+            quote_receipt=ws_quote_source_receipt(ws_data, now_ts=now_ts), executable_bid=bid,
+            bid_source=source, rest_snapshot=None, quality=quote_fields, nxt_quality={},
+            quote_received_at=received_at,
+            bid_received_at=received_at if source == 'fresh_ws_executable_bid' else None,
+            market_type=scalp_trailing_market_type_at(now_ts),
+            exit_allowed_by_clock=not session.blocker and session.exit_allowed_by_clock,
+            price_usable=bid > 0, now_ts=now_ts, evaluator='normal',
+            holding_profit_rate_at_eval=profit_rate)
+        stock['_main_stop_current_quote_context'] = context
+    except Exception as exc:
+        stock.pop('_main_stop_current_quote_context', None)
+        stock['main_stop_source_gap'] = 'limit_up_quote:' + type(exc).__name__
+
+
+def _capture_main_stop_observation(stock, code, context, *, force=False):
+    """Reuse this evaluation's validated quote through the existing bounded sink."""
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    if not isinstance(context, dict):
+        return False
+    now_ts = context['at']
+    quote = context['quote']
+    key = (now_ts, context['bid'], context['position_key'], context['quantity'], context['buy_price'],
+           (stock.get('main_stop_policy_pin') or {}).get('pin_sha256'), context['complete'],
+           quote.get('item'), quote.get('market_route'), quote.get('transport_epoch'), quote.get('observed_epoch'))
+    if (context['position_key'] != position_cycle_id(stock)
+            or context['quantity'] != stock.get('buy_qty') or context['buy_price'] != stock.get('buy_price')):
+        return False
+    if stock.get('_main_stop_last_captured_quote') == key:
+        return True
+    if force:
+        from src.engine.scalping.main_stop_policy import pin_values
+        pin_values(stock.get('main_stop_policy_pin'), context['position_key'])
+        previous = stock.get('_main_stop_last_captured_quote')
+        if previous and previous[0] >= now_ts:
+            return False
+    if (stock.get('strategy') != 'SCALPING' or _safe_int(stock.get('buy_qty'), 0) <= 0
+            or _is_scalp_simulated_position(stock, 'SCALPING')
+            or (force and (not context['complete'] or context['pending_exit'] or stock.get('exit_requested')))
+            or (not force and now_ts - _safe_float(stock.get('main_stop_source_at'), 0) < 1.0)):
+        return False
+    executable_bid, executable_bid_qty = context['bid'], context['bid_qty']
+    quote_receipt, grid_source_complete = context['quote'], context['complete']
+    market_type, evaluator = context['market'], context['evaluator']
+    holding_profit_rate_at_eval = context['decision_profit_pct']
+    stock['main_stop_source_at'] = now_ts
+    try:
+        from src.engine.scalping.main_stop_policy import source_row, enqueue_source
+        from src.engine.ai.holding_vote_replay_source import runtime_source
+        _main_stop_values(stock, now_ts)
+        vote_source = runtime_source(stock,
+            position_key=_scalp_holding_source_position_key(stock, code),
+            buy_fill_identity=buy_fill_identity_from_runtime(stock),
+            market=market_type, now=now_ts,
+            policy=_holding_path_policy_for("EXIT_SOFT_STOP", market_type),
+            data_root=DATA_DIR, model=str(getattr(TRADING_RULES,"OPENAI_HOLDING_EXIT_VOTE_MODEL","gpt-5.4-nano")),
+            path_id="EXIT_SOFT_STOP")
+        post_add_vote_source = runtime_source(stock,
+            position_key=_scalp_holding_source_position_key(stock, code),
+            buy_fill_identity=buy_fill_identity_from_runtime(stock),
+            market=market_type, now=now_ts,
+            policy=_holding_path_policy_for('EXIT_POST_ADD_FAIL', market_type),
+            data_root=DATA_DIR, model=vote_source['model'], path_id='EXIT_POST_ADD_FAIL')
+        features=stock.get('last_reversal_features') or {}
+        post_add_inputs=dict(active=stock.get('reversal_add_state')=='POST_ADD_EVAL',
+            executed_at=stock.get('reversal_add_executed_at'),
+            floor=float(stock.get('reversal_add_profit_floor',-1.0)),
+            eval_sec=_rule_int('REVERSAL_ADD_POST_EVAL_SEC',25),
+            feature_usable=not bool(reversal_feature_source_quality(features).get('reversal_feature_stale')) if features else True,
+            large_sell_print=features.get('large_sell_print_detected',False),
+            tick_acceleration=features.get('tick_acceleration_ratio',1.0))
+        row = source_row(stock, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
+            quote=quote_receipt, coverage_complete=grid_source_complete,
+            cost_model=stock.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
+            post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
+            preset_stop=_main_stop_preset_observation(stock, now_ts=now_ts, evaluator=evaluator),
+            decision_profit_pct=holding_profit_rate_at_eval,
+            automatic_management_allowed=not bool(stock.get("manual_control_exclusion_blocked")
+                or stock.get("manual_control_hard_stop_handoff_pending")
+                or stock.get("manual_control_hard_stop_handoff_inflight")),
+            runtime_flags=dict(
+                grace_enabled=_rule_bool("SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)
+                    and not bool(stock.get("main_stop_pin_persistence") or stock.get("main_stop_clock_unobserved")),
+                protect_enabled=_env_or_rule_bool("SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True),
+                handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False),
+                vote_max_worsen_pct=_rule("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.8)))
+        accepted = enqueue_source(stock,code,row)
+        if not accepted:
+            stock['main_stop_source_gap']='observation_queue_rejected'
+            stock['main_stop_source_rejected_count']=stock.get('main_stop_source_rejected_count',0)+1
+        stock["main_stop_source_at"] = now_ts
+        if accepted:
+            # Normal capture may establish the existing position's first pin.
+            key = key[:5] + ((stock.get('main_stop_policy_pin') or {}).get('pin_sha256'),) + key[6:]
+            stock["_main_stop_last_captured_quote"] = key
+        return accepted
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        stock['main_stop_source_gap'] = type(exc).__name__
+    return False
+
+
 def _observe_scalp_trailing_input_transition(
     stock: dict,
     code: str,
@@ -29526,141 +29766,19 @@ def _observe_scalp_trailing_input_transition(
     except Exception as exc:
         stock['tp_first_crossing_source_gap'] = type(exc).__name__
         log_error(f'[TP_FIRST_CROSSING_SOURCE] {code} {type(exc).__name__}')
-    depth_receipt = quote_receipt.get("depth_receipt")
-    depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
-    depth_row = None
-    route_records = snapshot.get("realtime_type_snapshots_by_route")
-    if isinstance(route_records, dict):
-        for records in route_records.values():
-            row = records.get("0D") if isinstance(records, dict) else None
-            if (isinstance(row, dict)
-                    and all(row.get(key) == depth_receipt.get(key)
-                            for key in ("item", "market_route",
-                                        "transport_epoch", "observed_epoch"))
-                    and row.get("item") and row.get("observed_epoch") is not None):
-                depth_row = row
-                break
-    def exact_bid_depth(source: dict, bid: int) -> int:
-        book = source.get("orderbook")
-        bids = book.get("bids") if isinstance(book, dict) else None
-        level = bids[0] if isinstance(bids, list) and bids else None
-        if isinstance(level, dict):
-            if _safe_int(level.get("price"), 0) != bid:
-                return 0
-            raw = level.get("volume") if "volume" in level else level.get("qty")
-        elif _safe_int(source.get("best_bid"), 0) == bid:
-            raw = source.get("best_bid_qty")
-        else:
-            return 0
-        amount = _safe_float(raw, None)
-        return int(amount) if amount is not None and amount > 0 and amount.is_integer() else 0
-    if bid_source == "fresh_rest_executable_bid":
-        executable_bid_qty = exact_bid_depth(rest_snapshot or {}, executable_bid)
-    elif depth_row is not None:
-        executable_bid_qty = exact_bid_depth(depth_row, executable_bid)
-    else:
-        executable_bid_qty = 0
-    quote_state_for_tuning = str(
-        quality.get("quote_consistency_state") or ""
-    ).lower()
-    if bid_source == "fresh_rest_executable_bid":
-        bid_identity_proven = bool(
-            (rest_snapshot or {}).get("source") == "ka10004_rest_orderbook"
-            and str((rest_snapshot or {}).get("stock_code") or "").strip()[:6]
-            == str(code or "").strip()[:6]
-            and (rest_snapshot or {}).get("request_code")
-        )
-    elif bid_source == "fresh_nxt_0d_executable_bid":
-        bid_identity_proven = bool(
-            nxt_quality.get("nxt_trailing_bid_guard_applied") is True
-            and depth_row is not None
-            and _safe_int(depth_row.get("best_bid"), executable_bid)
-                == executable_bid
-            and _safe_float(depth_row.get("observed_epoch"), 0.0)
-                == quote_received_at
-            and str(depth_row.get("item") or "")
-                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_item") or "")
-            and str(depth_row.get("market_route") or "")
-                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_route") or "")
-        )
-    else:
-        bid_identity_proven = bool(
-            quote_receipt.get("source_type") in {"0B", "0D"}
-            and quote_receipt.get("item")
-            and quote_receipt.get("market_route")
-            and quote_receipt.get("transport_epoch") is not None
-            and _safe_int(quote_receipt.get("best_bid"), 0) == executable_bid
-            and depth_receipt.get("item") == quote_receipt.get("item")
-            and depth_receipt.get("market_route") == quote_receipt.get("market_route")
-            and depth_receipt.get("transport_epoch")
-                == quote_receipt.get("transport_epoch")
-            and _safe_float(depth_receipt.get("observed_epoch"), 0.0)
-                == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
-            and depth_row is not None
-        )
-    grid_source_complete = bool(
-        market_type and exit_allowed_by_clock and bid_received_at is not None
-        and decision.price_usable and executable_bid_qty > 0
-        and bid_identity_proven
-        and not stock.get("scalp_trailing_arm_persist_gap")
-        and quote_state_for_tuning not in {
-            "", "missing", "diverged", "blocked", "stale", "conflict",
-            "invalid", "unavailable",
-        }
-        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
-    )
-    # Reuse the same validated quote. One source receipt per second per position
-    # bounds telemetry; missing cadence remains explicit in the causal replay.
-    if (stock.get("strategy") == "SCALPING" and _safe_int(stock.get("buy_qty"), 0) > 0
-            and not _is_scalp_simulated_position(stock, "SCALPING")
-            and now_ts - _safe_float(stock.get("main_stop_source_at"), 0) >= 1.0):
-        stock['main_stop_source_at'] = now_ts
-        try:
-            from src.engine.scalping.main_stop_policy import source_row, enqueue_source
-            from src.engine.ai.holding_vote_replay_source import runtime_source
-            _main_stop_values(stock, now_ts)
-            vote_source = runtime_source(stock,
-                position_key=_scalp_holding_source_position_key(stock, code),
-                buy_fill_identity=buy_fill_identity_from_runtime(stock),
-                market=market_type, now=now_ts,
-                policy=_holding_path_policy_for("EXIT_SOFT_STOP", market_type),
-                data_root=DATA_DIR, model=str(getattr(TRADING_RULES,"OPENAI_HOLDING_EXIT_VOTE_MODEL","gpt-5.4-nano")),
-                path_id="EXIT_SOFT_STOP")
-            post_add_vote_source = runtime_source(stock,
-                position_key=_scalp_holding_source_position_key(stock, code),
-                buy_fill_identity=buy_fill_identity_from_runtime(stock),
-                market=market_type, now=now_ts,
-                policy=_holding_path_policy_for('EXIT_POST_ADD_FAIL', market_type),
-                data_root=DATA_DIR, model=vote_source['model'], path_id='EXIT_POST_ADD_FAIL')
-            features=stock.get('last_reversal_features') or {}
-            post_add_inputs=dict(active=stock.get('reversal_add_state')=='POST_ADD_EVAL',
-                executed_at=stock.get('reversal_add_executed_at'),
-                floor=float(stock.get('reversal_add_profit_floor',-1.0)),
-                eval_sec=_rule_int('REVERSAL_ADD_POST_EVAL_SEC',25),
-                feature_usable=not bool(reversal_feature_source_quality(features).get('reversal_feature_stale')) if features else True,
-                large_sell_print=features.get('large_sell_print_detected',False),
-                tick_acceleration=features.get('tick_acceleration_ratio',1.0))
-            row = source_row(stock, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
-                quote=quote_receipt, coverage_complete=grid_source_complete,
-                cost_model=stock.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
-                post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
-                preset_stop=_main_stop_preset_observation(stock, now_ts=now_ts, evaluator=evaluator),
-                decision_profit_pct=holding_profit_rate_at_eval,
-                automatic_management_allowed=not bool(stock.get("manual_control_exclusion_blocked")
-                    or stock.get("manual_control_hard_stop_handoff_pending")
-                    or stock.get("manual_control_hard_stop_handoff_inflight")),
-                runtime_flags=dict(
-                    grace_enabled=_rule_bool("SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)
-                        and not bool(stock.get("main_stop_pin_persistence") or stock.get("main_stop_clock_unobserved")),
-                    protect_enabled=_env_or_rule_bool("SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True),
-                    handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False),
-                    vote_max_worsen_pct=_rule("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.8)))
-            if not enqueue_source(stock,code,row):
-                stock['main_stop_source_gap']='observation_queue_rejected'
-                stock['main_stop_source_rejected_count']=stock.get('main_stop_source_rejected_count',0)+1
-            stock["main_stop_source_at"] = now_ts
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            stock['main_stop_source_gap'] = type(exc).__name__
+    stop_context = _main_stop_quote_context(stock, code, snapshot=snapshot,
+        quote_receipt=quote_receipt, executable_bid=executable_bid, bid_source=bid_source,
+        rest_snapshot=rest_snapshot, quality=quality, nxt_quality=nxt_quality,
+        quote_received_at=quote_received_at, bid_received_at=bid_received_at,
+        market_type=market_type, exit_allowed_by_clock=exit_allowed_by_clock,
+        price_usable=decision.price_usable, now_ts=now_ts, evaluator=evaluator,
+        holding_profit_rate_at_eval=holding_profit_rate_at_eval)
+    executable_bid_qty = stop_context['bid_qty']
+    grid_source_complete = stop_context['complete']
+    bid_identity_proven = stop_context['bid_identity_proven']
+    quote_state_for_tuning = stop_context['quote_state_for_tuning']
+    stock['_main_stop_current_quote_context'] = stop_context
+    _capture_main_stop_observation(stock, code, stop_context)
     grid_decisions = {
         str(candidate): evaluate_trailing_take_profit(
             peak_price=peak_price,
@@ -30042,18 +30160,10 @@ def _observe_scalp_trailing_input_transition(
             nxt_trailing_bid_guard_ws_0d_route=nxt_quality.get(
                 "nxt_trailing_bid_guard_ws_0d_route"
             ),
-            operational_ws_0d_best_bid=(
-                _safe_int(depth_row.get("best_bid"), 0) if depth_row else None
-            ),
-            operational_ws_0d_best_bid_qty=(
-                exact_bid_depth(depth_row, _safe_int(depth_row.get("best_bid"), 0))
-                if depth_row else None
-            ),
+            operational_ws_0d_best_bid=stop_context['operational_ws_0d_best_bid'],
+            operational_ws_0d_best_bid_qty=stop_context['operational_ws_0d_best_bid_qty'],
             operational_rest_best_bid=(rest_snapshot or {}).get("best_bid"),
-            operational_rest_best_bid_qty=exact_bid_depth(
-                rest_snapshot or {},
-                _safe_int((rest_snapshot or {}).get("best_bid"), 0),
-            ) if rest_snapshot else None,
+            operational_rest_best_bid_qty=stop_context['operational_rest_best_bid_qty'],
             operational_executable_spread_bps=spread_bps,
             operational_quote_warn_tick_floor_bps=quote_warn_tick_floor_bps,
             operational_mark_to_bid_gap_bps=operational_shadow_row[
@@ -30716,6 +30826,11 @@ def _evaluate_and_dispatch_fast_scalp_exit(
         buy_price=buy_price, now_ts=observed_at, source_stage="fast_stop"):
         return False
 
+    # Capture the exact already validated normal-exit quote before the claim
+    # turns pending_exit on. This has no effect on the claim/order result.
+    if exit_rule == 'scalp_trailing_take_profit' and not retry_pending:
+        _main_stop_normal_exit_fields(stock, code, at=observed_at,
+            mark_price=mark_price, exit_rule=exit_rule)
     exit_token = existing_exit_token or uuid4().hex
     with ENTRY_LOCK:
         if stock.get("manual_control_hard_stop_handoff_inflight") or stock.get("manual_control_exclusion_blocked"):
@@ -86371,6 +86486,10 @@ def handle_holding_state(
         )
         return
 
+    if daily_limit_up_triggered and strategy == "SCALPING":
+        _prepare_main_stop_limit_up_quote(stock, code, ws_data=ws_data,
+            quote_fields=holding_quote_fields, now_ts=now_ts, profit_rate=profit_rate)
+
     if stock.get("exit_mode") == "SCALP_PRESET_TP":
         if daily_limit_up_triggered:
             log_info(
@@ -87667,6 +87786,8 @@ def handle_holding_state(
         )
         _mutate_stock_state(stock, set_fields={"last_exit_reason": reason})
         exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+        exit_extra_fields.update(_main_stop_normal_exit_fields(stock, code, at=now_ts,
+            mark_price=curr_p, exit_rule=exit_rule))
         _log_holding_pipeline(
             stock,
             code,

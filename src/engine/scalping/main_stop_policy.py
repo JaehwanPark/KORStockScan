@@ -48,6 +48,8 @@ def finite(value):
 
 def implementation_paths():
     return ('automation/main_stop_postclose.py','automation/main_stop_source_index.py',
+        'automation/main_stop_source_projection.py','scalping/holding_vote_exit_models.py',
+        'scalping/main_stop_experiment.py',
         'scalping/main_stop_policy.py','scalping/main_stop_replay.py',
         'scalping/trailing_exit_decision.py','scalping/holding_path_vote_policy.py',
         'ai/holding_vote_replay_source.py','ai/holding_exit_vote.py','sniper_state_handlers.py',
@@ -437,6 +439,43 @@ def release_source(stock, *, at, auto_source, average_price, current_price,
         forbidden_uses=['operator_veto_release','new_order_authority','actual_profit_claim'],
         actual_order_submitted=False,allowed_runtime_apply=False,actual_realized_net_krw=None)
     return {**body,'source_sha256':digest(body)}
+
+
+NORMAL_EXIT_RULES = frozenset({'scalp_trailing_take_profit', 'daily_limit_up_immediate_exit'})
+
+
+def normal_exit_decision_source(stock, *, at, price, executable_bid, mark_price, exit_rule):
+    """Observe an existing normal exit decision; no fill or submit authority.
+
+    The native dispatcher emits this with its existing exit_signal. A later
+    native completed/custody receipt must independently prove full closure.
+    """
+    from .position_peak_ledger import position_cycle_id
+    key = position_cycle_id(stock)
+    pinned = stock.get('main_stop_policy_pin') or {}
+    pin_values(pinned, key)
+    qty, average = stock.get('buy_qty'), stock.get('buy_price')
+    if (exit_rule not in NORMAL_EXIT_RULES or stock.get('strategy') != 'SCALPING'
+            or not stock.get('id') or pinned['market'] not in MARKETS
+            or not all(finite(x) and x > 0 for x in (at, price, executable_bid, mark_price, qty, average))
+            or (exit_rule == 'scalp_trailing_take_profit' and price != executable_bid)
+            or (exit_rule == 'daily_limit_up_immediate_exit' and price != mark_price)
+            or type(stock.get('add_count', 0)) is not int or stock.get('add_count', 0) != 0
+            or any(stock.get(name) for name in ('manual_control_exclusion_blocked',
+                'manual_control_hard_stop_handoff_pending', 'manual_control_hard_stop_handoff_inflight',
+                'pending_add_qty', 'pending_add_ord_no', 'pending_add_ord_nos'))):
+        raise ValueError('stop_normal_exit_decision_unidentified')
+    body = dict(schema='main_stop_normal_exit_decision_v1', position_key=key,
+        record_id=stock['id'], pin_sha256=pinned['pin_sha256'], role=pinned['role'],
+        market=pinned['market'], owner='main', quantity=qty, buy_basis_krw=qty*average,
+        decision_at=at, decision_price=price, executable_bid=executable_bid, mark_price=mark_price,
+        decision_price_basis='executable_bid' if exit_rule == 'scalp_trailing_take_profit' else 'mark_price',
+        exit_rule=exit_rule, source_stage='exit_signal',
+        automatic_management_allowed=True, manual=False, pending_add=False,
+        quantity_source_status='runtime_observed_not_terminal',
+        add_count=0, status='decision_observed', actual_order_submitted=False,
+        actual_realized_net_krw=None, allowed_runtime_apply=False)
+    return {**body, 'source_sha256':digest(body)}
 
 
 def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model, vote_source,

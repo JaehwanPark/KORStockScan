@@ -451,6 +451,8 @@ def _archived_pipeline_source(path, expected, *, verify_full=False):
 
 def source_events(path, census, *, references=False):
     """Bound each line and expose undecodable source instead of dropping it."""
+    isolation_digest = hashlib.sha256()
+    isolated = 0
     with open_text_auto(path, errors='strict') as handle:
         while True:
             checkpoint()
@@ -458,20 +460,41 @@ def source_events(path, census, *, references=False):
             line=handle.readline(2*1024*1024+1)
             if not line:break
             if len(line.encode())>2*1024*1024:
-                # Isolate this physical record without retaining its full body.
-                # Its role is unverified, so numeric selection stays fail-closed;
-                # a source-gap carry can still preserve the verified incumbent.
+                # A private spool validates the entire record without making
+                # the mixed event resident. Only a proven disjoint producer
+                # stage can be excluded; unknown/damaged stop scope still blocks.
+                from .main_stop_source_projection import classify_disjoint_event, SPOOL_LIMIT
+                from src.engine.lifecycle.research_disk_budget import temporary
+                spool_limit = SPOOL_LIMIT
                 digest=hashlib.sha256(line.encode());size=len(line.encode())
-                complete=line.endswith('\n')
-                while not complete:
-                    checkpoint()
-                    tail=handle.readline(65536)
-                    if not tail:break
-                    raw=tail.encode();digest.update(raw);size+=len(raw)
-                    complete=tail.endswith('\n')
+                complete=line.endswith('\n');disjoint=None
+                with temporary(spool_limit), tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as spool:
+                    spool.write(line)
+                    while not complete:
+                        checkpoint()
+                        tail=handle.readline(65536)
+                        if not tail:break
+                        raw=tail.encode();digest.update(raw);size+=len(raw)
+                        if size <= spool_limit:spool.write(tail)
+                        complete=tail.endswith('\n')
+                    if complete and size <= spool_limit:
+                        spool.seek(0)
+                        try:disjoint=classify_disjoint_event(spool, checkpoint=checkpoint)
+                        except (ValueError, RecursionError):
+                            # A persistent deadline failure is not malformed
+                            # JSON and must preserve the native resume path.
+                            checkpoint()
                 census['oversized_raw_rows']+=1
                 census['oversized_raw_bytes']+=size
-                census['unidentifiable_raw_rows']+=1
+                if disjoint:
+                    isolated += 1
+                    census['isolated_disjoint_oversized_rows'] += 1
+                    census['isolated_disjoint_oversized_bytes'] += size
+                    census['isolated_disjoint_stage:'+disjoint] += 1
+                    identity = dict(offset=offset, size_bytes=size, line_sha256=digest.hexdigest(),stage=disjoint)
+                    isolation_digest.update(storage.encoded(identity)+b'\n')
+                else:
+                    census['unidentifiable_raw_rows']+=1
                 if not complete:census['oversized_unterminated_raw_rows']+=1
                 if census['oversized_raw_rows']<=8:
                     census[f'oversized_raw_record:{path}:{offset}:{digest.hexdigest()}']+=1
@@ -485,6 +508,8 @@ def source_events(path, census, *, references=False):
                 census['unidentifiable_raw_rows']+=1
                 continue
             yield (row,offset,hashlib.sha256(line.encode()).hexdigest()) if references else row
+    if isolated:
+        census[f'isolated_oversized_set_sha256:{path}:{isolation_digest.hexdigest()}'] += 1
 
 
 def read_committed(root, day, *, pointer=None, verify_full=False):
@@ -708,7 +733,12 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                 grid = {k:v for k,v in grid.items() if k=='parent' or (k.split(':')[0] in contract['allowed_keys']
                     and abs(getattr(v,k.split(':')[0])-getattr(parent,k.split(':')[0]))<=contract['max_daily_change'][k.split(':')[0]])}
                 stats = {k:v for k,v in stats.items() if k in grid}
+                if contract.get('schema') == 'main_stop_experiment_v2':
+                    if (contract['cell'] != cell or contract['candidate_grid'] !=
+                            {name:asdict(value) for name,value in grid.items()}):
+                        raise ValueError('stop_experiment_registered_grid_or_cell_changed')
             work[cell]=(grid,counts,stats,contract)
+        observed_bounds = {}
         for position in source_index.positions(prepared_sources,directory,census,checkpoint=checkpoint):
             checkpoint()
             cell,key,first,last=position.cell,position.key,position.first,position.last
@@ -719,6 +749,13 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                 continue
             grid,counts,stats,contract=work[cell]
             counts['positions']+=1
+            in_experiment_window = True
+            if contract and contract.get('schema') == 'main_stop_experiment_v2':
+                in_experiment_window = contract['source_start_at'] <= first <= last <= contract['source_end_at']
+                if in_experiment_window:
+                    previous_bounds = observed_bounds.get(cell, (first,last))
+                    observed_bounds[cell] = (min(first,previous_bounds[0]),max(last,previous_bounds[1]))
+                else:counts['outside_registered_experiment_window'] += 1
             path_rows=position.rows
             from src.engine.ai.holding_vote_replay_source import assemble_votes, PreparedVotes
             first_row = next(path_rows(), {})
@@ -761,7 +798,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
             # Entire positions are split. No samples from one holding cross
             # train/holdout, and the full max grace horizon is embargoed.
             split=None
-            if contract:
+            if contract and in_experiment_window:
                 if last<contract['split_at']-contract['embargo_sec']:split='train'
                 elif first>contract['split_at']+contract['embargo_sec']:split='holdout'
             actual_row=db.execute('SELECT body FROM actual WHERE id=?',(str(first_row.get('record_id')),)).fetchone()
@@ -792,6 +829,10 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
             if len(evidence)>64:evidence.pop(0)
         for cell,parent in parents.items():
             grid,counts,stats,contract=work[cell]
+            if contract and contract.get('schema') == 'main_stop_experiment_v2':
+                source_seal,_=bounded(contract['source_seal']['path'])
+                if observed_bounds.get(cell) != (source_seal['observed_start_at'],source_seal['observed_end_at']):
+                    raise ValueError('stop_experiment_observed_window_unverified')
             winner,status=choose(stats,contract)
             if census.get('unidentifiable_raw_rows') or census.get('unidentifiable'):
                 winner,status=None,'source_gap'
