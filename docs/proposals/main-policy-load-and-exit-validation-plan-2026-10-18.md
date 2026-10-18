@@ -222,3 +222,5 @@ P6는958d35b2b·source10/16·target10/19의54개 파일/선택본을 발행하�
 부분 체결은 원 매도 주문의 종료가 아니다. 잔여 주문이 살아 있는 동안 원 제출 세대·문맥·취소 저널을 보존하고, durable receipt successor가 재기동 복원을 소유한다. 신규 주문 pending 상태를 만들지 않고 정확한 기존 주문에만 취소 저장을 허용한다. 기존 문맥 유실 복구는 원 이벤트/registry/DB/receipt 대조와 승인된 ordered drain 후 native writer를 사용한다. 실제 취소·잔여 체결·terminal은 새 PID의 자연 영수증으로 따로 수용한다.
 
 역사 연구는 동일 source-date의 원 bytes와 정책을 유지한다. 공용 owner registry가 다음 날짜의 별도 owner 주문으로 증가한 경우 원 prefix SHA 및 전체 hash chain을 검증해 구분한다. 과거 owner/날짜, prefix 변조, chain 결손은 검증 실패다. 잠금 파일은 연구 입력이 아니며 실제 vote jsonl/gzip은 계속 inventory에 포함한다. 동기 AI 관측은 exact request와 native PID/observation을 사용하고 비동기 식별자를 만들어 채우지 않는다. 상세 검토는 [복구 감사](../audits/preopen-alert-repair-2026-10-19.md)에 기록한다.
+
+PREOPEN 이후 현재 체크리스트에 다른 실행 owner가 추가돼도 그 편집본을 보존한다. 원 strict receipt의 SHA와 정확히 일치하는 원문만 native 역사 snapshot으로 보존·재사용하며, 원 prepared/controller/strict 결속과 실제 predecessor 검증은 유지한다. snapshot 부재·변조·symlink 또는 잘못된 원문은 전환을 차단한다. 현재 문서를 과거 내용으로 교체하거나 새 문서로 원 strict를 다시 봉인하지 않는다.

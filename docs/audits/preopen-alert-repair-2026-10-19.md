@@ -53,3 +53,5 @@ all-scope trailing 원 보고서는 수량 수리 전 코드 계약84746d였고 
 추가 검토에서 registry의 빈 줄을 event 수로 세는 경계를 보완했다. 같은 날짜 append가 빈 줄 때문에 건너뛰어질 수 없도록 native parser와 같은 유효 행 수를 사용하며 회귀를 추가했다. 중간6a083ab4c 연구 실행은 SIGINT로 종료하고 부분 산출물을 보존했다. 새 동기 관측기 바이트는 기존 original/selected 두 출처와의 정확한 SHA pair만 인계 허용 목록에 추가했다. 넓은 경로 허용이나 검증 생략은 없다. 추가350개 테스트 PASS이며 최종 후보로 다시 사전검사한다.
 
 최종 사전검사는 observer와 연구/부분 매도 수정의 의존 파일 등록 누락을 Main 종료 전에 차단했다. 과거 허용 목록은 유지하고, 검토한76개 의존성 전체 세대와 원 delay/stop/holding3개 계약의 확장 목록을 별도로 결속했다. 파일별 대체 해시를 섞지 않으며 원 코드와 선택894 코드에서 새 코드로의 정확한 쌍만 허용한다. 현재 세대 테스트의 변조 대상도 실제 소비하는 확장 목록에 맞춰 누락·잘못된 해시·다른 family 거부를 검증한다. 기존 실패 로그와 선택/PID는 보존한다.
+
+de3e541d9의4개 native gate 및2,757개 회귀는 PASS였다. ordered preflight는 다른 세션이 현재 체크리스트에 추가한 `SubmissionMonitorSyncLineage1019` 때문에 원 strict SHA와 다름을 감지해 Main 종료 전에 실패했다. 원 strict SHA `cda2da608d4c11d9e09495b75bb18675a9a750aad2c1bb88f4b6007ab326e034`와 정확히 일치하는 기존 bytes 및 현재 편집본을 모두 보존했다. native `preserve_checklist`는 원 strict SHA가 일치하는 명시적 원문을 immutable 역사 snapshot으로 보존하고, 이후 현재 문서가 바뀌었을 때도 그 정확한 snapshot만 재사용한다. 현재 문서 교체·새 strict 발행·다른 owner 삭제는 없으며 잘못된 원문, snapshot 변조/symlink, 원 prepared hash 불일치를 거부한다. 이 변경은 native PID 증명이나 정책/원천 검사를 생략하지 않는다.

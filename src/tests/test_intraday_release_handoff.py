@@ -766,6 +766,39 @@ def test_v5_next_session_candidate_cannot_fall_through_to_intraday_v2(fixture,mo
  with pytest.raises(ValueError,match='requires_next_session_activation'):
   handoff.activate_main_v2(DAY,pid=2,confirm='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION',now=NOW)
 
+@pytest.mark.parametrize('damage', [None, 'wrong_original', 'missing_snapshot',
+                                   'corrupt_snapshot', 'symlink_snapshot', 'wrong_prepared_hash'])
+def test_preserve_exact_native_checklist_keeps_concurrent_owner_edits(tmp_path, monkeypatch, damage):
+    import hashlib
+    data=tmp_path/'data';monkeypatch.setattr(handoff,'DATA_DIR',data)
+    original=b'original strict-bound native checklist\n'
+    expected=hashlib.sha256(original).hexdigest()
+    source=tmp_path/'docs/checklists'/(DAY+'-stage2-todo-checklist.md')
+    source.parent.mkdir(parents=True);edited=b'current checklist with another owner\n';source.write_bytes(edited)
+    receipt=data/'runtime/policy_bootstrap/prepared'/DAY/'attempt/receipt.json'
+    _json(receipt,dict(status='prepared_verified',target_date=DAY,source_date='2026-10-01'))
+    _json(receipt.parent.parent/'latest.json',dict(receipt_path=str(receipt),
+        receipt_sha256='0'*64 if damage=='wrong_prepared_hash' else handoff._sha(receipt)))
+    strict=data/'strict.json';_json(strict,dict(generation_binding=dict(checklist_sha256=expected)))
+    _json(data/'report/postclose_done_controller/postclose_done_controller_2026-10-01.json',
+          dict(verification_attempt_path=str(strict)))
+    if damage=='missing_snapshot':
+        with pytest.raises(ValueError):handoff.preserve_checklist(DAY)
+    elif damage in {'wrong_original','wrong_prepared_hash'}:
+        with pytest.raises(ValueError):
+            handoff.preserve_checklist(DAY,original_content=b'wrong' if damage=='wrong_original' else original)
+    else:
+        result=handoff.preserve_checklist(DAY,original_content=original)
+        snapshot=Path(result['path']);assert snapshot.read_bytes()==original
+        if damage=='corrupt_snapshot':snapshot.write_bytes(b'corrupt')
+        elif damage=='symlink_snapshot':
+            other=tmp_path/'other';other.write_bytes(original);snapshot.unlink();snapshot.symlink_to(other)
+        if damage:
+            with pytest.raises(ValueError):handoff.preserve_checklist(DAY)
+        else:assert handoff.preserve_checklist(DAY)==result
+    assert source.read_bytes()==edited
+
+
 @pytest.mark.parametrize('damage', [None, 'git_bytes', 'snapshot', 'postclose_generated', 'generated_corrupt',
                                    'git_missing', 'git_missing_without_snapshot', 'git_missing_corrupt_snapshot'])
 def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fixture, monkeypatch, damage):

@@ -214,7 +214,7 @@ def _native_predecessor(day, commit, previous, previous_commit, identity, path, 
                 frozen_files=value['frozen_files'])
 
 
-def preserve_checklist(day):
+def preserve_checklist(day, *, original_content=None):
     """Save the exact already-sealed document before authorized owner edits."""
     index=DATA_DIR/'runtime/policy_bootstrap/prepared'/day/'latest.json'
     ref=_read(index);prepared_path=Path(ref['receipt_path'])
@@ -227,11 +227,23 @@ def preserve_checklist(day):
     strict=_read(controller['verification_attempt_path'])
     expected=strict['generation_binding']['checklist_sha256']
     source=DATA_DIR.parent/'docs/checklists'/(day+'-stage2-todo-checklist.md')
-    content=source.read_bytes()
+    dest=DATA_DIR/'runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
+    content=source.read_bytes() if original_content is None else original_content
+    if not isinstance(content, bytes) or not 0 < len(content) <= 2*1024*1024:
+        raise ValueError('intraday_checklist_original_content_invalid')
+    # An editable checklist can advance after native PREOPEN. Reuse only the
+    # immutable document whose bytes still match the original strict receipt;
+    # never replace the edited operating checklist or reseal its new content.
+    if (original_content is None and hashlib.sha256(content).hexdigest()!=expected
+            and dest.is_file() and not dest.is_symlink()):
+        if not 0 < dest.stat().st_size <= 2*1024*1024:
+            raise ValueError('intraday_historical_checklist_snapshot_changed')
+        content=dest.read_bytes()
     if hashlib.sha256(content).hexdigest()!=expected:
         raise ValueError('intraday_checklist_not_current_sealed_generation')
-    dest=DATA_DIR/'runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
     dest.parent.mkdir(parents=True,exist_ok=True)
+    if dest.is_symlink():
+        raise ValueError('intraday_historical_checklist_snapshot_changed')
     if dest.exists():
         if dest.read_bytes()!=content:raise ValueError('intraday_historical_checklist_snapshot_changed')
     else:
