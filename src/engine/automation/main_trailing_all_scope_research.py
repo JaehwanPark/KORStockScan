@@ -24,7 +24,10 @@ from src.engine.scalping.trailing_mechanical_policy import market_values_hash
 from src.engine.scalping.trailing_mechanical_policy import classifier_hash
 from src.engine.automation.main_trailing_path_projection import load_or_build
 from src.engine.scalping.trailing_situation_policy import initial_bundle, research_registered_grid
-from src.engine.scalping.universal_trailing_replay import summarize_partitions, common_evaluation
+from src.engine.scalping.universal_trailing_replay import (
+    summarize_partitions, common_evaluation, actual_cost_available_epoch,
+    research_entry_window_start, apply_research_entry_window,
+)
 
 SCHEMA = 'main_all_scope_exit_research_v1'
 INPUT_SCHEMA = 'main_all_scope_exit_input_manifest_v1'
@@ -49,11 +52,18 @@ CODE_PATHS = ('ai/holding_exit_vote.py','ai/holding_vote_replay_source.py',
               'scalping/trailing_exit_decision.py', 'scalping/trailing_threshold_policy.py',
               'scalping/trailing_mechanical_policy.py', 'scalping/pre_submit_delay_initial_policy.py',
               'sniper_trade_review_report.py', 'holding_exit_observation_report.py',
-              'strategy_position_performance_report.py',
+              'strategy_position_performance_report.py', 'trade_profit.py',
               'scalping/position_peak_ledger.py', 'scalping/holding_profit_exit_semantics.py',
+              'scalping/trailing_entry_research_source.py',
+              'scalping/entry_execution_sizing_plan.py',
+              'scalping/initial_quantity_policy.py',
+              'scalping/main_stop_replay.py', 'scalping/main_stop_policy.py',
+              'scalping/holding_vote_exit_models.py',
               'lifecycle/broker_cost_source.py', 'lifecycle/broker_cost_reconciliation.py',
               '../utils/market_day.py',
               '../utils/pipeline_event_logger.py',
+              '../utils/kiwoom_utils.py',
+              '../trading/order/owner_custody_registry.py',
               '../trading/market/session_contract.py')
 
 
@@ -73,6 +83,9 @@ def _cost_revision_result(previous):
     for identity, context in result['population_context'].items():
         if context['evidence_kind'] != 'actual_completed':
             continue
+        # A revised cost source invalidates the old knowledge clock together
+        # with its economics, matching a clean replay's empty reconciliation.
+        context['actual_cost_available_at'] = None
         for outcome in result['minimal_results'][identity].values():
             if outcome.get('actual_pnl_krw') is not None:
                 outcome.update(status='source_gap', reason='actual_completed_cost_or_terminal_unverified',
@@ -203,6 +216,7 @@ def _run(manifest_path, *, input_root, output_root, dry_run, resume, budget):
         scope_claim.close()
         budget.enter_context(Claim(len(json.dumps(scope).encode()) * 8))
     window = capture_window(root, manifest['consumed_dates'])
+    entry_window_start = research_entry_window_start(manifest['consumed_dates'])
     contract = code_contract()
     parent = manifest['approved_parent_receipt']
     candidates = manifest.get('candidates', {})
@@ -220,7 +234,8 @@ def _run(manifest_path, *, input_root, output_root, dry_run, resume, budget):
             raise ValueError('all_scope_partition_dependency_unverified')
         costs = {day:window['dependencies'][day]['cost_generation'] for day in dates}
         context = {'source_date':manifest['source_date'], 'as_of':manifest['as_of'],
-                   'consumed_dates':sorted(dates), 'schema':INPUT_SCHEMA}
+                   'consumed_dates':sorted(dates), 'schema':INPUT_SCHEMA,
+                   'research_entry_window_start_at':entry_window_start}
         generation = digest([part['artifact_sha256'], context, costs, parent, candidates, contract])
         source_base = digest([part['artifact_sha256'], context, parent, candidates, contract])
         index_path = out / 'source_dependencies' / (source_base + '.json')
@@ -307,12 +322,18 @@ def _run(manifest_path, *, input_root, output_root, dry_run, resume, budget):
             positions = payload['positions']
             if len(positions) > 500:
                 raise ValueError('all_scope_partition_position_budget_exceeded')
+            positions = [apply_research_entry_window(row, window_start_at=entry_window_start)
+                         for row in positions]
+            entry_window_excluded = sum(bool(row.get('research_entry_window_exclusion')) for row in positions)
+            if entry_window_excluded:
+                counters['entry_before_research_window'] += entry_window_excluded
             positions = [{**row, 'entry_at':None} if number(row.get('entry_at')) is None
                           or number(row['entry_at']) > as_of else row for row in positions]
             for row in positions:
                 actual = row.get('actual_cost_reconciliation') or {}
-                if row.get('evidence_kind') == 'actual_completed' and (number(actual.get('known_at')) is None
-                        or number(actual['known_at']) > as_of):
+                actual_available = actual_cost_available_epoch(actual)
+                if row.get('evidence_kind') == 'actual_completed' and (actual_available is None
+                        or actual_available > as_of):
                     row['actual_cost_reconciliation'] = {}
             # Old actual-cost revisions never reuse a stale reconciled row.
             if payload.get('cost_generations') != costs:

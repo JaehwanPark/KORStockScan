@@ -174,6 +174,8 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
             reviewed = {pair[1]}
             if name in H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES:
                 reviewed.add(H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES[name][1])
+            if name in H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES:
+                reviewed.add(H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES[name][1])
             assert current in reviewed
 
 
@@ -276,7 +278,8 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     canonical = Path(H.__file__).resolve().parents[3]
     fixture = tmp_path/'code'
     own = 'src/engine/automation/intraday_release_handoff.py'
-    for name in (*CONTRACT_PATHS,own):
+    dependencies = next(iter(H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES['src/engine/sniper_state_handlers.py'].values()))
+    for name in (*CONTRACT_PATHS,own,*dependencies):
         destination=fixture/name
         destination.parent.mkdir(parents=True,exist_ok=True)
         destination.write_bytes((canonical/name).read_bytes())

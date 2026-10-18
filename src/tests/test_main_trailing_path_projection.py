@@ -66,7 +66,11 @@ def test_dense_segmented_path_preserves_m1_state_and_candidate_outcomes(tmp_path
     monkeypatch.setattr(projection,'PIECE_BYTES',16*1024)
     before=health()['used_bytes']
     streamed=research.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False)
-    expected=replay.summarize_partitions([p],{'dense':events},{},incumbent={
+    # Public research adds the same causal window metadata before replay.
+    # Compare full outputs from equivalent inputs, including that metadata.
+    resident_position=replay.apply_research_entry_window(p,
+        window_start_at=replay.research_entry_window_start(manifest['consumed_dates']))
+    expected=replay.summarize_partitions([resident_position],{'dense':events},{},incumbent={
         'market_values':manifest['approved_parent_receipt']['market_values'],
         'classifier_parameters':manifest['approved_parent_receipt']['classifier_parameters']})
     checkpoint=research._sealed(Path(streamed['partition_results'][0]['path']))

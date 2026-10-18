@@ -77,6 +77,7 @@ def test_new_classifier_generation_does_not_require_future_hash_on_original_ai_h
         pin=typed.pin_context(source,position_key=identity,entry_at=clock,classifier=config)
         original[identity]=deepcopy(pin)
         context.update(entry_at=clock,observation_end_at=clock+2,completion_at=clock+2,
+            actual_cost_available_at=clock+2,
             evidence_kind='actual_completed',buy_basis_krw=1000,entry_context=source,
             operating_ai_required=True,situation_pin=pin)
         for sha,row in part['minimal_results'][identity].items():

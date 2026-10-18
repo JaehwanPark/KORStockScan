@@ -107,7 +107,7 @@ parent는 child PID/start ticks·run ID·기대 execution root/commit과 동일�
 | P5 | 검증된 불변 후보의 실제10/19 준비 세대로 사전 로딩 후 종료 1회 | 실행 권한 확보 후 실제 코드·원천의 child 로딩/종료 receipt, 운영 보호 hash 불변·외부 호출0 확인. 운영 selector를 옮기지 않고 후보임을 표시 |
 | P6 | 허용된 배포 시 선택본/세대 결속 확인, 거래일 재확인 계약 인계 | 변경 없으면 사전 결과를 재사용하고 당일 활성화·운영 PID만 확인. 변경 있으면 영향 범위의 사전 검증을 다시 수행하고 원 실패/이력을 보존 |
 
-P5 실행·P6 배포는 이 문서 작성의 실행 범위가 아니다. 구현 요청과 실제 실행 권한에 맞춰 진행한다. 운영 release source/hash에 공통 로더가 새로 들어가면 기존 code-handoff/native parity·family contract 절차로 인계하며, 원천 코드 해시를 검증에서 제외해 통과시키지 않는다.
+P5 실행·P6 배포는 이 문서 작성의 실행 범위가 아니다. 사용자 후속 지시에 따라 **P5 불변 후보 검증은 모든 연구작업 종료 후** 진행한다. 이후 사용자의 `57a4659f4` 통합 배포본 준비 지시에 따라 코드 통합·오프라인 회귀·후보 디렉터리 구성은 먼저 진행한다. 실제 준비 세대의 P5 child 검증은 모든 연구작업 종료까지 실행하지 않으며 기존 P0~P4 코드 검증을 P5 완료로 바꾸지 않는다. 연구 종료 시 실제 통합 코드·원천·정책 세대를 다시 고정한다. 운영 release source/hash에 공통 로더가 새로 들어가면 기존 code-handoff/native parity·family contract 절차로 인계하며, 원천 코드 해시를 검증에서 제외해 통과시키지 않는다.
 
 ## 6. 필수 수용 행렬
 
@@ -165,3 +165,11 @@ P5 실행·P6 배포는 이 문서 작성의 실행 범위가 아니다. 구현 
 실제 selected900의10/19 준비본은 native `current_full_contract` PASS/findings0·source10/16·actual_pid_consumed=false를 읽기 전용으로 확인했다. 실제 원문 파일로 만든 fixture의 Main child는 실제 시각·대상10/19로12개 consumer를 검증해 금지 시도0·정상 종료했고, 원천 변조는 실패했다. 별도 genuine V6 producer→loader→backend→auxiliary 시험은128route를 확인하며 원 current와 PID 기록을 보존했다. 이는 운영 정책 세대의 실제 candidate child 실행이나 운영 PID 소비를 대신하지 않는다.
 
 배포 시에는 새 source와 frozen delay code-handoff의 원 계보를 보존하고, split reader 변경에 따른 quantity monitor/research 코드 세대 영수증을 기존 producer가 현행화해야 한다. 원 정책·과거 영수증을 고쳐 쓰거나 전체 보고서를 무조건 재생성하지 않는다. 실제 운영 준비 세대를 사용한 P5 검증과 P6 배포/운영 PID는 해당 단계 근거를 별도로 남기며 미확인을 PASS로 바꾸지 않는다. 상세 시험·수정 근거는 [구현 검토 기록](../audits/main-policy-load-and-exit-implementation-review-2026-10-18.md)에 정리한다.
+
+## 10. 57a4659f4 통합 배포 후보 준비
+
+사용자 후속 지시에 따라 정책 로딩 검증 `590fccd7002082db3fbd02dd4fe3a47de5a39174`와 보유 연구 `57a4659f471044f8c8a59db53fc01b12d194333a`를 함께 포함한다. 연구 branch의 선행6개 commit을 보존하며 현재 선택900에 누적된 코드·source-control/snapshot 경로 수리를 계승한다. 다른 세션의 미완료 코드나 이후 commit을 자동 포함하지 않는다.
+
+이번 종결은 통합 코드·리뷰·오프라인 회귀와 표준 공유 mount를 갖춘 선택 전 배포 후보 구성이다. 공통 상태 처리 코드가 frozen delay/stop/holding inventory와 교차하므로 원7f 계보와 exact reviewed source pair를 검증한다. 새 진입 연구 도우미도 검토한 코드 closure에 결속하며 원 정책 digest는 보존한다. 세대가 바뀌면 과거 code-handoff를 그대로 재사용하지 않는다.
+
+실제 준비 정책의 child 로딩(P5)은 **다른 세션의 연구작업이 끝난 뒤** 최종 코드·원천·정책·선택본을 다시 고정하고 실행한다. 이번 준비에서는 code-handoff·정책/PREOPEN/strict/controller·quantity monitor 세대 영수증을 발행하거나 selector를 옮기지 않는다. P6 배포·Main 재기동도 수행하지 않는다. 결과와 정확한 후보 commit/root는 [통합 후보 검토](../audits/main-policy-holding-integrated-candidate-review-2026-10-18.md) 및 그 근거 manifest를 따른다.

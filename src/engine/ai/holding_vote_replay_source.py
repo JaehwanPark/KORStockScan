@@ -179,7 +179,7 @@ def _source_row(pointer):
     return json.loads(line)
 
 
-def _verify_projection(projection, vote):
+def _verify_projection(projection, vote, *, candidate_position=None):
     ref=vote.get('actual_request_reference') or {}
     if (ref.get('schema')!='holding_actual_request_reference_v1' or ref.get('replay_exact') is not True
             or not re.fullmatch('[0-9a-f]{64}',str(ref.get('response_sha256')))):
@@ -210,6 +210,54 @@ def _verify_projection(projection, vote):
     contract=payload['holding_provider_contract']
     if contract.get('instructions')!=prompt['sanitized_prompt'] or contract.get('model')!=vote['model']:
         raise ValueError('holding_provider_definition_mismatch')
+    if candidate_position is not None:
+        _verify_cf_input_position(actual,vote,candidate_position)
+
+
+def _verify_cf_input_position(actual,vote,expected):
+    """The original request must describe this unchanged initial position.
+
+    The native age producer emits integer seconds. Only the same request
+    second is admitted here; an older evaluation-age clock without its own
+    original receipt stays unobserved. No timestamp or input is rewritten.
+    """
+    def finite(value):return type(value) in (float,int) and math.isfinite(value)
+    if (not isinstance(expected,dict) or type(expected.get('qty')) is not int or expected['qty']<=0
+            or any(not finite(expected.get(key)) or expected[key]<=0 for key in ('buy_basis_krw','entry_at','first_sell_at'))
+            or not finite(expected.get('sell_cost_rate')) or not 0<=expected['sell_cost_rate']<.05
+            or not finite(vote.get('requested_at'))
+            or expected.get('schema')!='cf_original_holding_equivalence_v1'
+            or expected.get('sha256')!=input_snapshot_id({k:v for k,v in expected.items() if k!='sha256'})
+            or actual.get('position_key')!=expected.get('position_key')
+            or actual.get('buy_fill_identity')!=expected.get('buy_fill_identity')
+            or not expected['entry_at']<=vote['requested_at']<expected['first_sell_at']):
+        raise ValueError('cf_holding_request_position_unproven')
+    position=actual.get('position')
+    flow=actual.get('flow')
+    if not isinstance(position,dict) or not isinstance(flow,dict):
+        raise ValueError('cf_holding_request_context_shape')
+    lifecycle=flow.get('position_lifecycle',{})
+    if not isinstance(lifecycle,dict):raise ValueError('cf_holding_request_context_shape')
+    price=expected['buy_basis_krw']/expected['qty']
+    for key,target in (('memory_qty',expected['qty']),('broker_qty',expected['qty']),('average_entry_price',price)):
+        value=lifecycle.get(key)
+        if value is not None and (not finite(value) or value!=target):
+            raise ValueError('cf_holding_request_lifecycle_not_equivalent')
+    if (not finite(position.get('buy_price')) or position['buy_price']!=price
+            or not finite(position.get('held_sec'))
+            or position['held_sec']!=int(vote['requested_at']-expected['entry_at'])
+            or position.get('reversal_add_state') not in (None,'')
+            or position.get('reversal_add_executed_at') not in (None,0,0.0,'')
+            or any(not finite(position.get(key)) for key in ('curr_price','profit_rate','peak_profit','drawdown_from_peak_pct'))
+            or position['curr_price']<=0):
+        raise ValueError('cf_holding_request_position_not_equivalent')
+    from src.engine.trade_profit import calculate_net_profit_rate
+    profit=calculate_net_profit_rate(price,position['curr_price'],cost_rate=expected['sell_cost_rate'])
+    if (position['profit_rate']!=profit or position['peak_profit']<profit
+            or abs(position['drawdown_from_peak_pct']-max(0.,position['peak_profit']-profit))>1e-9):
+        raise ValueError('cf_holding_request_profit_not_equivalent')
+    if lifecycle.get('scale_in_filled_qty') not in (None,0):
+        raise ValueError('cf_holding_request_add_unmodeled')
 
 
 def _verified_request(root, output, vote, sources):
@@ -264,7 +312,8 @@ class PreparedVotes:
         self.db.execute('CREATE TABLE votes(at REAL,body TEXT)')
         for row in storage.iter_tree(reference['root'],reference['events_ref']):
             if row['status']=='VALID' and row.get('actual_input_verified'):
-                try:_verify_projection(row['actual_input_ref'],row)
+                try:_verify_projection(row['actual_input_ref'],row,
+                    candidate_position=reference.get('candidate_position_equivalence'))
                 except (ValueError,OSError,KeyError,TypeError):row={**row,'actual_input_verified':False}
             self.db.execute('INSERT INTO votes VALUES (?,?)',(row['requested_at'],storage.encoded(row).decode()))
         self.db.execute('CREATE INDEX vote_clock ON votes(at)')

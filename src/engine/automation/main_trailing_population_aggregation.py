@@ -10,7 +10,7 @@ import math
 from zoneinfo import ZoneInfo
 
 from src.engine.lifecycle import research_storage as storage
-from src.engine.scalping.universal_trailing_replay import _cohort_day, SLIPPAGE_BPS
+from src.engine.scalping.universal_trailing_replay import _cohort_day, SLIPPAGE_BPS, training_cost_available
 from src.engine.scalping.pre_submit_delay_initial_policy import number, digest
 
 EVIDENCE = ('actual_completed','actual_entry_alternative_exit','enter_pass_opportunity_cf')
@@ -38,30 +38,44 @@ def aggregate(partitions, *, output_root):
                 for candidate,body in value['outcomes'].items():
                     db.execute('INSERT INTO outcomes VALUES (?,?,?)',(identity,candidate,storage.encoded(body).decode()))
         db.execute('CREATE TABLE cohort (id TEXT PRIMARY KEY,evidence TEXT,entry REAL,end REAL,day TEXT,'
-                   'verified INTEGER,split TEXT) WITHOUT ROWID')
+                   'verified INTEGER,split TEXT,cost_unavailable INTEGER) WITHOUT ROWID')
         for identity,row,_ in storage.records(db):
             if not row['common']: continue
             context=row['context']; evidence=context['evidence_kind']
             if evidence not in EVIDENCE: raise ValueError('universal_population_evidence_invalid')
             day,verified=_cohort_day(context,evidence)
-            db.execute('INSERT INTO cohort VALUES (?,?,?,?,?,?,?)',(identity,evidence,context['entry_at'],
-                context['observation_end_at'],day,int(verified),'train'))
+            db.execute('INSERT INTO cohort VALUES (?,?,?,?,?,?,?,?)',(identity,evidence,context['entry_at'],
+                context['observation_end_at'],day,int(verified),'train',0))
         db.execute('CREATE INDEX cohort_membership ON cohort(evidence,split,entry,id)')
         strata={}
         for evidence in EVIDENCE:
             days=[d for d, in db.execute('SELECT DISTINCT day FROM cohort WHERE evidence=? ORDER BY day',(evidence,))]
             split=max(1,min(len(days)-1,int(len(days)*.7))) if len(days)>1 else len(days)
             train_days,holdout_days=days[:split],days[split:]
+            cutoff=None
             if holdout_days:
                 db.execute("UPDATE cohort SET split='holdout' WHERE evidence=? AND day>=?",(evidence,holdout_days[0]))
                 cutoff=db.execute("SELECT min(entry) FROM cohort WHERE evidence=? AND split='holdout'",(evidence,)).fetchone()[0]
+            if evidence=='actual_completed':
+                # Check the original train membership before either purge so
+                # overlapping path/cost gaps retain both audit explanations.
+                # Update only a non-indexed flag while streaming the cursor.
+                for identity,body in db.execute(
+                    'SELECT c.id,r.body FROM cohort c JOIN records r ON r.id=c.id '
+                    "WHERE c.evidence=? AND c.split='train' ORDER BY c.entry,c.id",(evidence,)):
+                    if not training_cost_available(json.loads(body)['context'],cutoff):
+                        db.execute('UPDATE cohort SET cost_unavailable=1 WHERE id=?',(identity,))
+            if cutoff is not None:
                 db.execute("UPDATE cohort SET split='purged' WHERE evidence=? AND split='train' AND end>=?",(evidence,cutoff))
-            def ids(cohort=None):
+            db.execute("UPDATE cohort SET split='purged' WHERE evidence=? AND split='train' AND cost_unavailable=1",(evidence,))
+            def ids(cohort=None, *, cost_unavailable=False):
                 condition='evidence=?'+(' AND split=?' if cohort else '')
+                if cost_unavailable: condition+=' AND cost_unavailable=1'
                 args=(evidence,cohort) if cohort else (evidence,)
                 return storage.write_tree(output_root,(i for i, in db.execute(
                     'SELECT id FROM cohort WHERE '+condition+' ORDER BY entry,id',args)))
             qualified=ids();train,held,purged=ids('train'),ids('holdout'),ids('purged')
+            cost_unavailable=ids(cost_unavailable=True)
             verified=not bool(db.execute('SELECT 1 FROM cohort WHERE evidence=? AND verified=0 LIMIT 1',(evidence,)).fetchone())
             metrics={}
             for name,candidate in aliases.items():
@@ -95,6 +109,7 @@ def aggregate(partitions, *, output_root):
                                            'large_loss_worsened_ids_ref':storage.write_tree(output_root,(i for i,d,_,p in deltas() if d<0 and p<0)),
                                            'slippage_ev_pct':stress}
             strata[evidence]={'common_ids_ref':qualified,'train_ids_ref':train,'holdout_ids_ref':held,'purged_ids_ref':purged,
+                'cost_unavailable_train_ids_ref':cost_unavailable,
                 'train_days':train_days,'holdout_days':holdout_days,'metrics':metrics,'completion_date_verified':verified,
                 'existing_selector_sample_floor_met':evidence=='actual_completed' and verified and len(days)>=7
                     and train['count']>=30 and held['count']>=10 and len(holdout_days)>=2,

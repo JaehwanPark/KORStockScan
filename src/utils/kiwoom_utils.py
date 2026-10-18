@@ -641,6 +641,9 @@ def _kiwoom_token_file_lock():
 # ==========================================
 # 1. API 설정 및 공통 유틸리티
 # ==========================================
+KIWOOM_BASE_URL_PROVENANCE = {'status':'unobserved'}
+
+
 def get_kiwoom_base_url():
     """
     스마트 URL 스위치 (운영/모의투자 자동 감지)
@@ -648,6 +651,10 @@ def get_kiwoom_base_url():
     자동으로 모의투자 URL 또는 실투자 URL을 세팅합니다.
     """
 
+    global KIWOOM_BASE_URL_PROVENANCE
+    # Clear the previous successful read before resolving a new generation.
+    # This observer never changes the existing URL/fallback or token behavior.
+    KIWOOM_BASE_URL_PROVENANCE = {'status':'unobserved'}
     # GCP에는 dev_path가 있고, AWS에는 없으므로 알아서 분기됩니다!
     target_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else DEV_PATH
 
@@ -656,11 +663,18 @@ def get_kiwoom_base_url():
             conf = json.load(f)
             # config에 명시된 URL이 있으면 가져오고, 없으면 실투자 URL을 기본값으로 씁니다.
             base_url = conf.get("KIWOOM_BASE_URL", "https://api.kiwoom.com")
+            KIWOOM_BASE_URL_PROVENANCE = dict(status='observed',
+                origin=base_url if isinstance(base_url,str) and base_url in ('https://api.kiwoom.com','https://mockapi.kiwoom.com') else None,
+                explicit_origin=isinstance(conf.get('KIWOOM_BASE_URL'),str)
+                    and bool(conf['KIWOOM_BASE_URL'].strip()),
+                credential_present=isinstance(conf.get('KIWOOM_APPKEY'),str)
+                    and bool(conf['KIWOOM_APPKEY'].strip()))
             # Also called for each market-cache scope, not only at startup.
             # Successful resolution must be silent on both stdout and stderr;
             # keep reading the origin so cache isolation stays unchanged.
             return base_url
     except Exception as e:
+        KIWOOM_BASE_URL_PROVENANCE = {'status':'source_gap'}
         # Startup diagnostics must stay on stderr even if file logging fails.
         print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}", file=sys.stderr)
         return "https://api.kiwoom.com"

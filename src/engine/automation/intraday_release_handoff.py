@@ -963,6 +963,44 @@ REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES = {
         'ab335b38a3aff9362bd17a29fde787b425a4478f60e0d328c7b60553800cc21e',
         '4454e6051c47ef959f0b8201526901fe5bd2dfff3b25aaa5593605cf7f53cd33'),
 }
+# Exact original 7f policy code to the reviewed 57a4659f4 holding research
+# integration. Original policies, economics, stop/trailing thresholds and order
+# authority remain unchanged. Changed research functions tighten causal cost,
+# original-position equivalence and source provenance; runtime changes only
+# attach/clear research references on the existing entry/holding log path.
+# Review: docs/audits/main-policy-holding-integrated-candidate-review-2026-10-18.md.
+REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES = {
+    'src/engine/sniper_state_handlers.py': (
+        '669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+        'd3a264a90a04bc2f4c6f760f221586e461e8eda8abe389727b846d812a48d9dd'),
+    'src/engine/ai/holding_vote_replay_source.py': (
+        '6aa1db742f4f2354c17ed9bd24cfb1bcfaace5e0130a8d0dceef84343ea6a428',
+        '51a90688f175c9fc242367811e4aab8c2509d1287e8b92d3cdf340badc68421a'),
+    'src/engine/automation/main_trailing_source_assembler.py': (
+        'edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+        '39449970d0024236ccaaed2eb996b8b1222f9ec804450071c090dd6eb4bd2955'),
+    'src/engine/scalping/holding_vote_exit_models.py': (
+        'ae90fb096a17677d313e6d3865d03468b6375f8a1fabe78749ee5aa48190de90',
+        'd62e05a36ce59bf7db16f6eae8354f77fdf00b992146fd6e2f0bd2bbed4a2a1b'),
+    'src/engine/scalping/universal_trailing_replay.py': (
+        '7e8826902ef8a93320455fc5136184834709775629e2f0677445562d7733726e',
+        'b3dbcee3a3d2de49e4b58ee71b7d444e4acadb4b515454d03b2ab956aef7f17e'),
+}
+# The reviewed handler introduces a source-only helper outside the historical
+# inventories. Its real-account provenance reader is part of that same source
+# closure. Check both exact bytes and candidate Git objects on EVERY native
+# handoff verification, without changing the original frozen policy digests.
+# Historical handlers do not acquire these new dependencies.
+REVIEWED_HOLDING_RESEARCH_DEPENDENCIES = {
+    'src/engine/sniper_state_handlers.py': {
+        'd3a264a90a04bc2f4c6f760f221586e461e8eda8abe389727b846d812a48d9dd': {
+            'src/engine/scalping/trailing_entry_research_source.py':
+                'b5e66cf46adbf666ca73271fea1c775ef68874849fdd06fd723b88334233ad41',
+            'src/utils/kiwoom_utils.py':
+                'ecef123abab917af0a8a9de934d927b40e561ec1b91836f010814ca9b9117120',
+        },
+    },
+}
 # Bind omitted historical dependencies and the new shared startup consumer to
 # reviewed bytes without adding them to the original sealed policy digest.
 REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
@@ -1007,10 +1045,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     own_name = 'src/engine/automation/intraday_release_handoff.py'
     if (root / own_name).read_bytes() != revision_bytes(commit, own_name):
         raise ValueError('entry_consumer_dirty_verifier')
-    original_hashes, changed = {}, []
+    original_hashes, changed, runtime_hashes = {}, [], {}
     extensions = REVIEWED_DELAY_CONTRACT_EXTENSIONS.get((origin, expected), {})
     for key, name in paths.items():
         after = (root / name).read_bytes()
+        runtime_hashes[os.path.normpath(name)] = hashlib.sha256(after).hexdigest()
         if name in extensions:
             if hashlib.sha256(after).hexdigest() != extensions[name] or after != revision_bytes(commit, name):
                 raise ValueError('entry_consumer_contract_extension_unreviewed:' + name)
@@ -1023,7 +1062,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.get(name),
+        if pair in (REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES.get(name),
+                    REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.get(name),
                     REVIEWED_QUANTITY_RESEARCH_COST_SOURCES.get(name),
                     REVIEWED_DELAY_RESEARCH_SOURCES.get(name),
                     REVIEWED_POST_AUX_GUARD_SOURCES.get(name),
@@ -1087,6 +1127,17 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if projection(before) != projection(after):
             raise ValueError('entry_consumer_unreviewed_change:' + name)
         changed.append(name)
+    for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
+        dependencies = generations.get(runtime_hashes.get(trigger), {})
+        for name, expected_sha in dependencies.items():
+            path = root / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('entry_consumer_reviewed_dependency_missing:' + name)
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != expected_sha:
+                raise ValueError('entry_consumer_reviewed_dependency_unreviewed:' + name)
+            if raw != revision_bytes(commit, name):
+                raise ValueError('entry_consumer_reviewed_dependency_dirty:' + name)
     original_digest = hashlib.sha256(json.dumps(original_hashes, sort_keys=True,
         separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode('ascii')).hexdigest()
     if original_digest != expected:
