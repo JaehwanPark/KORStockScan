@@ -560,11 +560,10 @@ def _main_stop_semantics(root, source_date, *, now):
         trailing = dict(status='not_observed', findings=[])
         holding_path = data_root/'report/monitor_snapshots'/f'holding_exit_observation_{source_date}.json'
         if holding_path.exists():
-            from src.engine.automation.main_trailing_research_handoff import observe_extension
+            from src.engine.monitoring.main_trailing_currentness import observe
             try:
                 holding, _ = _semantic_object(holding_path, limit=4*1024*1024)
-                trailing = observe_extension(holding, target_date=bundle['target_date'],
-                    required=(holding.get('meta') or {}).get('snapshot_profile') == 'postclose_exit')
+                trailing = observe(data_root, holding, target_date=bundle['target_date'])
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 trailing = dict(status='source_invalid', findings=[str(exc)])
         findings = list(consumed['findings']) + [

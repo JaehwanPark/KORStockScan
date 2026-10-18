@@ -17,3 +17,11 @@
 캐시 탐색의 증거 보호·권한 거부·partial census 회귀 및 cleanup/finalization 98개 통과. 후속 정책 코드 인계·장전 준비·intraday 인계 2,646개 회귀가 통과했다. 추가 수량/당일 인계 보완 후 관련7모듈 최종2,967개와 원/발행/현재3세대 코드 변조 회귀3개가 통과했다. 이 수치는 중복이 있어 합산하지 않는다. 성공과 선택 경합·변조·다른 원본·07:35 이후·실행 PID·미완료 controller 거부를 검증했으며 Python compile, shell syntax, diff, print-only 문서 parser도 수행한다. 자기 리뷰→보완→재리뷰에서 이 변경 범위 미해결 지적0이다. 최종 native generation과 실제 배포/PID는 별도 검증한다.
 
 기존12개 준비/정책/선택/보고서 및 원 snapshot11개 2,457,982,550bytes는 [작업 증거](../../tmp/preopen-alert-repair-20261019/)에 보존했다. 재생성·배포·실제 PID·자연 신호/비용 성과는 아직 완료로 표시하지 않는다. 기존 `DirectFamilyPreopenPolicyHandoff`, `OperationalLogRetentionRepair1016`, `InitialQuantityProducerConsumerRepair1010`, `HoldingProfitExitSourceContractRepair`의 Acceptance를 유지한다.
+
+## 현재성 관측 분리와 마지막 검사 복구
+
+`postclose_finalization --recover-closed-target --resume-final-detector`는 최종 detector만 실패한 가장 최근 native 시도에서 원 controller/strict/snapshot/cleanup 세대·실제 완료 시각·선택 release를 검증한다. 원 로그와 실패 보고서는 immutable receipt 폴더에 보존한다. cleanup 또는 policy/PREOPEN을 다시 발행하지 않으며 새 full detector와 동일 세대 검증이 통과해야 wrapper가 정식 DONE을 남긴다. 51개 회귀 및 compile/shell/diff/parser가 통과했다. 07:42:33 실제 cleanup 완료, 07:53:46 finalization/최종 detector DONE을 분리한다.
+
+10/19 PREOPEN은07:50:46 완료됐고 Main PID274478의 선택894 소비는07:55:50 launcher 영수증으로 확인했다. 기동 observer는 기준일10/16 raw inode 교체를 발견하여 원 요약 cursor를 재사용하지 않았다. 원 요약/manifest를 보관한 정식 allow-bootstrap 재생성을 통해 현재 원천을 다시 읽고 검증한다. 과거 raw를 수정하거나 cursor만 옮기지 않는다.
+
+all-scope trailing 원 보고서는 수량 수리 전 코드 계약84746d였고 현재894 계약은ddca6b다. 원 holding을 다시 쓰면 이미 확정된 PREOPEN·holding 정책 SHA를 깨뜨리므로 monitoring 소유 `main_trailing_currentness.py`에서 별도 native 전체 원천·partition·산술 재검증을 발행한다. health는 원 holding/report 세대, 동일 source/target/scope 및 parent policy, 현재 코드와 새 native report 결속만 관측한다. 원 계약 실패를 original_findings로 남기고 새 검증의 근거를 분리한다. 이 영수증은 bootstrap/정책 소비자에게 허용되지 않으며 원 source gap·비용 null·거래 성과 상태를 변경하지 않는다. module은 engine root 대신 monitoring 패키지에 두고 exact generation 변조/날짜/원천/권한/정책/scope 거부와 native producer failure를 회귀 검증한다.
