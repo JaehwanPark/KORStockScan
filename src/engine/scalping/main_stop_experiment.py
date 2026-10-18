@@ -7,6 +7,8 @@ time and are report-only. Neither artifact grants operator or order authority.
 from __future__ import annotations
 
 from dataclasses import asdict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date
 import fcntl
 import json
@@ -20,6 +22,7 @@ from .main_stop_policy import MARKETS, ROLES, TUNABLE, StopValues, bounded_objec
 
 PREREGISTRATION_SCHEMA = "main_stop_preregistration_v1"
 SOURCE_SEAL_SCHEMA = "main_stop_experiment_source_seal_v1"
+PREPARATION_SCHEMA = "main_stop_experiment_preparation_v1"
 SCHEMA = "main_stop_experiment_v2"
 MAX_BYTES = 1024 * 1024
 MAX_SOURCES = 4096
@@ -30,6 +33,99 @@ PARAMETERS = {
     "minimum_paired_ev_krw", "max_censoring_ratio", "max_standard_error_krw",
     "candidate_grid", "source_start_at", "source_end_at", "hypothesis",
 }
+OPTIONAL_PARAMETERS = {"selection_cost_grade", "selection_quantity_status"}
+COST_GRADES = ("exact_execution", "exact_position_total", "broker_total_allocated")
+_PUBLISHED_SOURCES = ContextVar('main_stop_publisher_verified_sources', default=None)
+
+
+def _published_source_identity(name,expected):
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    path=Path(name)
+    if path.exists():
+        _safe_path(path)
+        return ['physical',list(source_stat(path.stat()))]
+    if path.parent.name=='pipeline_events' and path.name.endswith('.jsonl'):
+        from src.engine.automation.main_stop_postclose import _archived_pipeline_source
+        _archived_pipeline_source(path,expected,verify_full=False)
+        archive=Path(str(path)+'.gz');receipt=Path(str(archive)+'.archive_receipt.json')
+        return ['archive',list(source_stat(archive.lstat())),list(source_stat(receipt.lstat()))]
+    raise ValueError('stop_experiment_source_generation_changed')
+
+
+@contextmanager
+def published_source_context(inventory, dependency_stats):
+    """Reuse only publisher-sealed bytes whose native file identity still holds.
+
+    The native committed reader first checks report/policy/source/catalog and
+    dependency bindings. No standalone experiment, publisher or preflight
+    enters this scope; those retain full byte verification. Check identities
+    before and after semantic validation to reject replacement during a read.
+    Lossless archives retain the original logical hash and exact native archive
+    custody; absent raw data without that verified custody remains invalid.
+    """
+    trusted={}
+    for name,expected in inventory.items():
+        observed=_published_source_identity(name,expected)
+        if observed[0]=='physical' and dependency_stats.get(name)!=observed[1]:
+            raise ValueError('stop_experiment_source_generation_changed')
+        trusted[name]=(expected,observed)
+    token=_PUBLISHED_SOURCES.set(trusted)
+    try:
+        yield
+        for name,(expected,observed) in trusted.items():
+            if _published_source_identity(name,expected)!=observed:
+                raise ValueError('stop_experiment_source_generation_changed')
+    finally:_PUBLISHED_SOURCES.reset(token)
+
+
+def selection_cost_grade(contract):
+    """One frozen economic population; old contracts retain strict exact costs."""
+    grade = (contract or {}).get("selection_cost_grade", "exact_execution")
+    if grade not in COST_GRADES:
+        raise ValueError("stop_selection_cost_grade_invalid")
+    return grade
+
+
+def selection_quantity_status(contract):
+    status=(contract or {}).get('selection_quantity_status','full_fill')
+    if status not in {'full_fill','settled_partial'}:
+        raise ValueError('stop_selection_quantity_status_invalid')
+    return status
+
+
+def validate_cost_selection(evidence, contract):
+    """Runtime rechecks the exact grade used by the native selector, no pooling."""
+    if "selection_cost_grade" not in contract:
+        return
+    costs = evidence.get("cost_selection") or {}
+    grade = selection_cost_grade(contract)
+    if (costs.get("schema") != "main_stop_cost_selection_v1"
+            or costs.get("selection_cost_grade") != grade
+            or costs.get('selection_quantity_status') != selection_quantity_status(contract)
+            or costs.get("comparison_metric") != "causal_modeled_exit_net_krw"
+            or costs.get("actual_cost_usage") != "source_eligibility_only"
+            or costs.get('denominator_policy') != 'all_registered_positions_including_unknown_cost_or_source'
+            or costs.get("actual_profit_claimed") is not False
+            or set(costs.get("aggregates_by_grade", {})) != set(COST_GRADES)
+            or costs["aggregates_by_grade"][grade] != evidence.get("aggregates")
+            or costs.get("cost_selection_sha256") != digest({k:v for k,v in costs.items()
+                                                             if k != "cost_selection_sha256"})):
+        raise ValueError("stop_selection_cost_evidence_invalid")
+    # Every candidate shares the same observed position intersection. Grades
+    # remain separate even if their individual samples do not pass the floor.
+    for grouped in costs["aggregates_by_grade"].values():
+        if set(grouped) != set(evidence["aggregates"]):
+            raise ValueError("stop_selection_cost_evidence_invalid")
+        for split in ("train", "holdout"):
+            if len({(row.get(split + "_n"), row.get(split + "_total"))
+                    for row in grouped.values()}) > 1:
+                raise ValueError("stop_selection_cost_denominator_mismatch")
+        from .main_stop_replay import choose
+        choose(grouped,contract)  # Validate every reported grade, never pool it.
+    for split in ('train','holdout'):
+        if len({row[split+'_total'] for grouped in costs['aggregates_by_grade'].values()
+                for row in grouped.values()})>1:
+            raise ValueError('stop_selection_cost_denominator_mismatch')
 
 
 def _sha(value):
@@ -107,8 +203,13 @@ def _read_reference(reference, schema, hash_key):
 
 def _validate_parameters(parameters):
     p = parameters
-    if not isinstance(p, dict) or set(p) != PARAMETERS:
+    if (not isinstance(p, dict) or not PARAMETERS <= set(p)
+            or not set(p) <= PARAMETERS | OPTIONAL_PARAMETERS):
         raise ValueError("stop_experiment_parameters_invalid")
+    selection_cost_grade(p)
+    selection_quantity_status(p)
+    if 'selection_quantity_status' in p and 'selection_cost_grade' not in p:
+        raise ValueError('stop_selection_quantity_requires_cost_contract')
     if (any(not _sha(p[k]) for k in ("parent_sha256", "code_sha256", "operator_lock_sha256"))
             or not isinstance(p["hypothesis"], str) or not p["hypothesis"].strip()
             or len(p["hypothesis"]) > 4096
@@ -204,17 +305,33 @@ def _verify_inventory(inventory):
     for name, expected in inventory.items():
         if not isinstance(name, str) or not Path(name).is_absolute() or not isinstance(expected, dict):
             raise ValueError("stop_experiment_source_inventory_invalid")
+        trusted=(_PUBLISHED_SOURCES.get() or {}).get(name)
+        if trusted is not None:
+            if trusted[0]!=expected or _published_source_identity(name,expected)!=trusted[1]:
+                raise ValueError('stop_experiment_source_generation_changed')
+            continue
+        path=_safe_path(name)
+        if not path.exists() and path.parent.name=='pipeline_events' and path.name.endswith('.jsonl'):
+            from src.engine.automation.main_stop_postclose import _archived_pipeline_source
+            _archived_pipeline_source(path,expected,verify_full=True)
+            continue
         if byte_generation(_safe_path(name)) != expected:
             raise ValueError("stop_experiment_source_generation_changed")
 
 
-def _verify_performance(reference, code_sha, *, mode, source_sha):
+def _verify_performance(reference, code_sha, *, mode, source_sha, require_native=False):
     if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
         raise ValueError("stop_performance_gate_unverified")
     body, byte_sha = bounded_object(_safe_path(reference["path"]), MAX_BYTES)
-    if (byte_sha != reference["sha256"] or body.get("schema") != "main_stop_performance_v1"
-            or body.get("code_sha256") != code_sha):
+    if byte_sha != reference["sha256"] or body.get("code_sha256") != code_sha:
         raise ValueError("stop_performance_gate_unverified")
+    if body.get('schema') == 'main_stop_performance_v2':
+        from src.engine.automation.main_stop_performance import validate_receipt
+        validate_receipt(body,code_sha=code_sha,source_sha=source_sha,
+                         require_full=mode=='prospective')
+        return
+    if body.get('schema') != 'main_stop_performance_v1' or (require_native and mode=='prospective'):
+        raise ValueError('stop_performance_native_producer_required')
     if mode == "historical_report_only":
         if (body.get("status") != "measured" or body.get("scope") != "offline_research_and_pure_decisions"
                 or body.get("allowed_runtime_apply") is not False or body.get("source_sha256") != source_sha
@@ -227,9 +344,25 @@ def _verify_performance(reference, code_sha, *, mode, source_sha):
         raise ValueError("stop_performance_gate_unverified")
 
 
-def finalize_experiment(directory, preregistration, *, source_inventory,
-                        performance_receipt, observed_start_at, observed_end_at):
-    """Seal the actually consumed source after cutoff, without rewriting freeze.
+def require_native_publication_performance(contract):
+    """New numeric authority always requires native, fully covered evidence.
+
+    Legacy artifact validators deliberately retain their original semantics
+    for incumbent reads/carry. Cost grade omission must not grant a new policy
+    publication the legacy label-only performance contract.
+    """
+    if (not isinstance(contract,dict) or not _sha(contract.get('code_sha256'))
+            or not _sha(contract.get('source_sha256')) or not isinstance(contract.get('performance_receipt'),dict)):
+        raise ValueError('stop_publication_experiment_unverified')
+    if contract.get('mode','prospective')!='prospective':
+        raise ValueError('stop_historical_experiment_report_only')
+    _verify_performance(contract.get('performance_receipt'),contract.get('code_sha256'),
+        mode='prospective',source_sha=contract.get('source_sha256'),require_native=True)
+
+
+def seal_experiment_sources(directory, preregistration, *, source_inventory,
+                            observed_start_at, observed_end_at):
+    """Seal consumed source before performance measurement; grants no authority.
 
     Bounds come from the source producer's complete consumed census. Its caller
     must enforce them on replay rows too; this module never infers event time
@@ -245,8 +378,6 @@ def finalize_experiment(directory, preregistration, *, source_inventory,
         raise ValueError("stop_experiment_source_window_invalid")
     inventory = _plain(source_inventory)
     _verify_inventory(inventory)
-    performance = _plain(performance_receipt)
-    _verify_performance(performance, p["code_sha256"], mode=registered["mode"], source_sha=digest(inventory))
     seal = dict(schema=SOURCE_SEAL_SCHEMA, preregistration=preregistration,
                 source_sha256=digest(inventory), source_inventory=inventory,
                 source_start_at=p["source_start_at"], source_end_at=p["source_end_at"],
@@ -264,6 +395,55 @@ def finalize_experiment(directory, preregistration, *, source_inventory,
             raise ValueError("stop_experiment_clock_regressed")
         seal = old
     source_ref = _write_immutable(seal_path, seal, "source_seal_sha256")
+    return source_ref
+
+
+def prepare_experiment(preregistration, source_seal):
+    """A source-bound evaluation input, deliberately not a runtime contract."""
+    registered=_validate_registration(_read_reference(
+        preregistration,PREREGISTRATION_SCHEMA,'preregistration_sha256'))
+    seal=_read_reference(source_seal,SOURCE_SEAL_SCHEMA,'source_seal_sha256')
+    if seal['preregistration']!=preregistration:
+        raise ValueError('stop_experiment_preparation_source_mismatch')
+    body=dict(registered['parameters'],schema=PREPARATION_SCHEMA,cell=registered['cell'],
+        mode=registered['mode'],frozen_at=registered['frozen_at'],source_sha256=seal['source_sha256'],
+        preregistration=_plain(preregistration),source_seal=_plain(source_seal),allowed_runtime_apply=False)
+    body['preparation_sha256']=digest(body)
+    validate_preparation(body,parent_sha=body['parent_sha256'],source_sha=body['source_sha256'],
+                         code_sha=body['code_sha256'])
+    return body
+
+
+def validate_preparation(preparation, *, parent_sha, source_sha, code_sha):
+    """Validate native registration/seal without accepting a performance verdict."""
+    c=preparation
+    if not isinstance(c,dict) or c.get('schema')!=PREPARATION_SCHEMA:
+        raise ValueError('stop_experiment_preparation_invalid')
+    expected=PARAMETERS|(set(c)&OPTIONAL_PARAMETERS)|{'schema','cell','mode','frozen_at','source_sha256',
+        'preregistration','source_seal','allowed_runtime_apply','preparation_sha256'}
+    if (set(c)!=expected or c['preparation_sha256']!=digest({k:v for k,v in c.items() if k!='preparation_sha256'})
+            or c['parent_sha256']!=parent_sha or c['source_sha256']!=source_sha or c['code_sha256']!=code_sha
+            or c['allowed_runtime_apply'] is not False):
+        raise ValueError('stop_experiment_preparation_invalid')
+    registered=_validate_registration(_read_reference(c['preregistration'],PREREGISTRATION_SCHEMA,'preregistration_sha256'))
+    if (set(registered['parameters'])!=set(c)&(PARAMETERS|OPTIONAL_PARAMETERS)
+            or any(c[k]!=registered['parameters'][k] for k in registered['parameters'])
+            or any(c[k]!=registered[k] for k in ('cell','mode','frozen_at'))):
+        raise ValueError('stop_experiment_preregistration_changed')
+    _validate_source_seal(c,source_sha)
+    return c
+
+
+def finalize_experiment(directory, preregistration, *, source_inventory,
+                        performance_receipt, observed_start_at, observed_end_at):
+    """Bind real measured performance after source/evaluation preparation."""
+    source_ref=seal_experiment_sources(directory,preregistration,source_inventory=source_inventory,
+        observed_start_at=observed_start_at,observed_end_at=observed_end_at)
+    registered=_validate_registration(_read_reference(preregistration,PREREGISTRATION_SCHEMA,'preregistration_sha256'))
+    p=registered['parameters'];seal=_read_reference(source_ref,SOURCE_SEAL_SCHEMA,'source_seal_sha256')
+    performance=_plain(performance_receipt)
+    _verify_performance(performance,p['code_sha256'],mode=registered['mode'],source_sha=seal['source_sha256'],
+                        require_native=True)
     contract = dict(p, schema=SCHEMA, cell=registered["cell"], mode=registered["mode"],
                     frozen_at=registered["frozen_at"], source_sha256=seal["source_sha256"],
                     preregistration=_plain(preregistration), source_seal=source_ref,
@@ -285,7 +465,7 @@ def validate_experiment_v2(contract, *, parent_sha, source_sha, code_sha,
     An offline report consumer may explicitly set ``require_promotion=False``.
     Existing operator-key, performance and economic selection gates still apply.
     """
-    expected = PARAMETERS | {"schema", "cell", "mode", "frozen_at", "source_sha256",
+    expected = PARAMETERS | (set(contract) & OPTIONAL_PARAMETERS if isinstance(contract,dict) else set()) | {"schema", "cell", "mode", "frozen_at", "source_sha256",
                              "preregistration", "source_seal", "performance_receipt",
                              "allowed_runtime_apply", "experiment_sha256"}
     c = contract
@@ -296,11 +476,19 @@ def validate_experiment_v2(contract, *, parent_sha, source_sha, code_sha,
         raise ValueError("stop_experiment_binding_invalid")
     registered = _validate_registration(_read_reference(
         c["preregistration"], PREREGISTRATION_SCHEMA, "preregistration_sha256"))
-    if (any(c[k] != registered["parameters"][k] for k in PARAMETERS)
+    if (set(registered['parameters']) != set(c) & (PARAMETERS | OPTIONAL_PARAMETERS)
+            or any(c[k] != registered["parameters"][k] for k in registered['parameters'])
             or any(c[k] != registered[k] for k in ("cell", "mode", "frozen_at"))):
         raise ValueError("stop_experiment_preregistration_changed")
     if require_promotion and c["mode"] != "prospective":
         raise ValueError("stop_historical_experiment_report_only")
+    _validate_source_seal(c,source_sha)
+    _verify_performance(c["performance_receipt"], code_sha, mode=c["mode"], source_sha=source_sha,
+                        require_native='selection_cost_grade' in c)
+    return c
+
+
+def _validate_source_seal(c,source_sha):
     seal = _read_reference(c["source_seal"], SOURCE_SEAL_SCHEMA, "source_seal_sha256")
     if (set(seal) != {"schema", "preregistration", "source_sha256", "source_inventory",
                       "source_start_at", "source_end_at", "observed_start_at", "observed_end_at",
@@ -315,8 +503,7 @@ def validate_experiment_v2(contract, *, parent_sha, source_sha, code_sha,
             or not max(c["frozen_at"], c["source_end_at"]) <= seal["finalized_at"] <= _clock()):
         raise ValueError("stop_experiment_source_seal_invalid")
     _verify_inventory(seal["source_inventory"])
-    _verify_performance(c["performance_receipt"], code_sha, mode=c["mode"], source_sha=source_sha)
-    return c
+    return seal
 
 
 def publish_experiment_manifest(output_path, contracts, *, data_root, source_date,
@@ -371,6 +558,7 @@ def publish_experiment_manifest(output_path, contracts, *, data_root, source_dat
             if not isinstance(parent,StopValues):parent=StopValues.parse(parent)
             validate_experiment_v2(contract,parent_sha=digest(asdict(parent)),source_sha=source_sha,
                                    code_sha=code_sha,require_promotion=True)
+            require_native_publication_performance(contract)
             authorities[cell]=stop_key_authority(root,target_date,contract['allowed_keys'])
             if authorities[cell]['sha256']!=contract['operator_lock_sha256']:
                 raise ValueError('stop_experiment_operator_source_changed')

@@ -38,6 +38,7 @@ MAX_REPORT_BYTES = 1024 * 1024
 COST_GRADES = ('exact_execution', 'exact_position_total', 'broker_total_allocated')
 RESEARCH_CODE_PATHS = (
     'automation/main_stop_research_execution.py', 'automation/operator_policy_succession.py',
+    'scalping/main_stop_quantity_source.py', 'scalping/main_stop_runtime_source.py',
     'lifecycle/main_stop_research_cost.py', 'lifecycle/broker_cost_allocation.py',
     'lifecycle/broker_cost_reconciliation.py', 'lifecycle/broker_cost_source.py',
     'lifecycle/research_storage.py', 'lifecycle/research_disk_budget.py',
@@ -133,21 +134,8 @@ def _operator_snapshot(data_root, target_date):
 
 
 def _economic_matches_position(economic, source):
-    quantity=economic.get('quantity_basis') or {}
-    terminal=economic.get('terminal_observation') or {}
-    return bool(economic.get('schema')=='main_stop_research_cost_v1'
-        and economic.get('artifact_sha256')==policy.digest({k:v for k,v in economic.items() if k!='artifact_sha256'})
-        and economic.get('status')=='eligible' and economic.get('economics_scope')=='main_stop_research_only'
-        and economic.get('manual_exit') is False and economic.get('runtime_effect') is False
-        and economic.get('allowed_runtime_apply') is False
-        and economic.get('custody_status')=='verified_registry_fill_census'
-        and economic.get('fill_state') in {'fully_closed','fully_closed_multi_fill'}
-        and (economic.get('main_exit_source') or {}).get('status')=='verified_native_decision_submit_chain'
-        and economic.get('evidence_grade') in COST_GRADES
-        and str(economic.get('record_id'))==str(source.get('record_id'))
-        and quantity.get('buy_qty')==source.get('quantity')
-        and quantity.get('sell_qty')==source.get('quantity') and quantity.get('residual_qty')==0
-        and str(terminal.get('code'))==str(source.get('item')).split('_',1)[0])
+    from src.engine.lifecycle.main_stop_research_cost import selection_grade
+    return source is not None and selection_grade(economic,source) is not None
 
 
 def _paired_metrics(cell, outcomes, source, economic, admitted):
@@ -156,14 +144,18 @@ def _paired_metrics(cell, outcomes, source, economic, admitted):
     numerical=bool(policy.finite(basis) and basis>0 and all(
         all(policy.finite(row.get(k)) for k in ('modeled_net_krw','mae_pct','exposure_sec'))
         for row in outcomes.values()))
-    all_grades=cell.setdefault('paired_metrics',{})
+    cohort=parent.get('quantity_status')
+    same_cohort=cohort in {'full_fill','settled_partial'} and all(
+        row.get('quantity_status')==cohort for row in outcomes.values())
+    all_grades=cell.setdefault('settled_partial_paired_metrics' if cohort=='settled_partial' else 'paired_metrics',{})
     for grade in COST_GRADES:
         stats=all_grades.setdefault(grade,{})
         for name,row in outcomes.items():
             if name=='parent':continue
             stat=stats.setdefault(name,dict(n=0,delta_sum_krw=0.,delta_sum_squares_krw=0.,
-                delta_sum_bps=0.,mae_worse_count=0,exposure_longer_count=0))
-            if not (admitted and numerical and economic.get('evidence_grade')==grade):continue
+                delta_sum_bps=0.,mae_worse_count=0,exposure_longer_count=0,
+                quantity_cohort='settled_partial' if cohort=='settled_partial' else 'full_fill'))
+            if not (admitted and same_cohort and numerical and economic.get('evidence_grade')==grade):continue
             delta=row['modeled_net_krw']-parent['modeled_net_krw']
             stat['n']+=1;stat['delta_sum_krw']+=delta;stat['delta_sum_squares_krw']+=delta*delta
             stat['delta_sum_bps']+=10000.*delta/basis
@@ -173,7 +165,7 @@ def _paired_metrics(cell, outcomes, source, economic, admitted):
 
 def _finish_paired_metrics(cells):
     for cell in cells.values():
-        for candidates_by_grade in cell.get('paired_metrics',{}).values():
+        for candidates_by_grade in list(cell.get('paired_metrics',{}).values())+list(cell.get('settled_partial_paired_metrics',{}).values()):
             for stat in candidates_by_grade.values():
                 n=stat['n'];valid=bool(n and not cell['mixed_parent_values'])
                 stat.update(evidence_kind='paired_modeled_cost_adjusted_delta_not_actual_profit',
@@ -190,73 +182,19 @@ def _finish_paired_metrics(cells):
                         stat[key]=None
 
 
-def _snapshot_diagnostics(rows, parent, normal_decision=None):
-    counts = Counter();minimum = None;first_soft = None;first_preset = None
-    first_at = last_at = None; first_source = last_source = normal_source = None
-    tail=dict(observations=0,first_at=None,last_at=None)
-    for row in rows:
-        counts['observations'] += 1
-        if normal_source is not None:
-            tail['observations']+=1
-            if policy.finite(row.get('at')):
-                tail['first_at']=row['at'] if tail['first_at'] is None else min(tail['first_at'],row['at'])
-                tail['last_at']=row['at'] if tail['last_at'] is None else max(tail['last_at'],row['at'])
-        if row.get('schema') != 'main_stop_source_v1':
-            counts['lifecycle_receipts'] += 1
-            continue
-        if first_source is None:first_source=row
-        last_source=row
-        at, profit = row.get('at'), row.get('decision_profit_pct')
-        if policy.finite(at):
-            first_at = at if first_at is None else min(first_at, at)
-            last_at = at if last_at is None else max(last_at, at)
-        if row.get('source_sha256') != policy.digest({k:v for k,v in row.items() if k!='source_sha256'}):
-            counts['invalid_source_seal'] += 1
-            continue
-        if (normal_decision is not None and row.get('at')==normal_decision['decision_at']
-                and row.get('bid')==normal_decision['executable_bid']):
-            if normal_source is not None:raise ValueError('stop_research_normal_exit_source_ambiguous')
-            normal_source=row
-        for name in ('partial_fill','pending_add','pending_exit','manual'):
-            if row.get(name):counts[name] += 1
-        for name in ('coverage_complete','automatic_management_allowed'):
-            if row.get(name) is not True:counts[name+':false_or_missing'] += 1
-        if policy.finite(profit):
-            minimum = profit if minimum is None else min(minimum, profit)
-            if profit <= parent.soft_stop_pct and first_soft is None:first_soft = at
-        if row.get('role') == 'SCALP_PRESET_TP':
-            try:
-                decision = preset_decision(row)
-                if decision and decision.disposition in {'exit_candidate','manual_handoff'}:
-                    if first_preset is None:first_preset=at
-                    counts['preset:'+decision.disposition] += 1
-            except (ValueError, KeyError, TypeError):counts['preset_receipt_invalid_or_missing'] += 1
-    return dict(counts=dict(counts),minimum_observed_decision_profit_pct=minimum,
-                first_observed_soft_at=first_soft,first_observed_preset_at=first_preset,
-                first_at=first_at,last_at=last_at,
-                source_endpoints=dict(first=first_source,last=last_source,normal_exit=normal_source,
-                    normal_decision_expected=normal_decision is not None,excluded_tail=tail),
-                observation_kind='source_diagnostics_not_actual_stop_or_profit')
+def _snapshot_diagnostics(rows, parent, normal_decision=None, *, support_soft_threshold=None):
+    from src.engine.scalping.main_stop_replay import source_diagnostics
+    return source_diagnostics(rows, parent, normal_decision,support_soft_threshold=support_soft_threshold)
 
 
 def _terminal_outcome(endpoints, economic):
-    from src.engine.scalping.main_stop_replay import normal_exit_terminal_outcome
-    try:
-        if endpoints.get('normal_decision_expected') and endpoints.get('normal_exit') is None:
-            raise ValueError('stop_terminal_exact_original_decision_row_missing')
-        result=normal_exit_terminal_outcome(first_row=endpoints.get('first'),
-            last_row=endpoints.get('normal_exit') or endpoints.get('last'),economic=economic)
-        return result,None
-    except ValueError as exc:
-        return None,str(exc)
+    from src.engine.scalping.main_stop_replay import terminal_from_endpoints
+    return terminal_from_endpoints(endpoints, economic)
 
 
 def _prefix_rows(rows, terminal):
-    for row in rows:
-        yield row
-        if terminal is not None and row.get('source_sha256')==terminal['last_source_sha256']:
-            return
-    if terminal is not None:raise ValueError('stop_research_terminal_source_not_replayed')
+    from src.engine.scalping.main_stop_replay import terminal_prefix
+    yield from terminal_prefix(rows, terminal)
 
 
 def _cached_outcomes(path, identity, grid, parent, parent_verified, terminal, reason):
@@ -283,7 +221,8 @@ def _position_outcomes(position, directory, default_parent, code_sha, vote_sourc
     except (KeyError, TypeError, ValueError):
         parent, parent_verified = default_parent, False
     grid = {k:v for k,v in candidates(parent).items() if k=='parent' or k.startswith('grace_sec:')}
-    source = first.get('holding_vote_source')
+    from src.engine.scalping.main_stop_replay import vote_assembly_source
+    source = vote_assembly_source(position.rows())
     reference = assemble_votes(directory['data'], directory['output'], source, vote_sources) if source else None
     logical = {k:v for k,v in reference.items() if k!='root'} if reference else None
     base_identity = policy.digest(dict(code=code_sha,position=position.key,source=position.source_sha256,
@@ -316,7 +255,8 @@ def _position_outcomes(position, directory, default_parent, code_sha, vote_sourc
                     return dict(snap,source_verified=True)
                 except (ValueError,OSError,KeyError,TypeError):return dict(source_verified=False)
             with position.materialized(directory['output']) as materialized:
-                diagnostics=_snapshot_diagnostics(materialized(),parent,normal_decision)
+                support_threshold=max(v.soft_stop_pct for v in grid.values())
+                diagnostics=_snapshot_diagnostics(materialized(),parent,normal_decision,support_soft_threshold=support_threshold)
                 observed=diagnostics.pop('source_endpoints')
                 if endpoints is not None and endpoints!=observed:
                     raise ValueError('stop_research_endpoint_cache_changed')
@@ -338,7 +278,8 @@ def _position_outcomes(position, directory, default_parent, code_sha, vote_sourc
                         source_evidence_preserved=True),
                     operating_contract=holding_contracts(observed_prefix()),
                     diagnostics=diagnostics,
-                    outcomes={name:replay(observed_prefix(),v,vote_reader=vote_reader,terminal_outcome=terminal)
+                    outcomes={name:replay(observed_prefix(),v,vote_reader=vote_reader,terminal_outcome=terminal,
+                        support_soft_threshold=support_threshold)
                               for name,v in grid.items()})
         finally:prepared.close()
     value['sha256']=policy.digest(value)
@@ -510,7 +451,7 @@ def _run_research(*, data_root, output_root, source_date, target_date, input_rep
                 state['first']=position.first if state['first'] is None else min(state['first'],position.first)
                 state['last']=position.last if state['last'] is None else max(state['last'],position.last)
                 outcomes=value['outcomes'];common=all(v.get('status')=='modeled' for v in outcomes.values())
-                economic_match=_economic_matches_position(cost,original_row)
+                economic_match=_economic_matches_position(cost,value['diagnostics'].get('economic_binding_source'))
                 row=dict(position_key=position.key,record_id=original_row.get('record_id'),
                     cell=position.cell,first_at=position.first,last_at=position.last,
                     parent_values=value['parent_values'],parent_verified=value['parent_verified'],
@@ -520,6 +461,7 @@ def _run_research(*, data_root, output_root, source_date, target_date, input_rep
                     terminal_source_gap=value['terminal_reason'],common_modeled=common,replay_cache_hit=cached)
                 group=position.cell if position.cell in valid_cells else 'UNMAPPED'
                 cell=state['cells'].setdefault(group,dict(opportunities=0,parent_outcomes=Counter(),
+                    native_support=Counter(),quantity_cohorts=Counter(),supported_decision_windows=0,
                     economic=Counter(),terminal_source_gaps=Counter(),common_modeled=0,eligible_paired=0,parent_values=value['parent_values'],
                     parent_verified=value['parent_verified'],mixed_parent_values=False,
                     first_at=position.first,last_at=position.last))
@@ -528,9 +470,15 @@ def _run_research(*, data_root, output_root, source_date, target_date, input_rep
                 cell['mixed_parent_values'] |= cell['parent_values']!=value['parent_values']
                 cell['first_at']=min(cell['first_at'],position.first);cell['last_at']=max(cell['last_at'],position.last)
                 result=outcomes['parent'];reason=result['status']+':'+str(result['reason'])
+                support=value['diagnostics']['native_support']
+                cell['native_support'][support['status']]+=1
+                cell['supported_decision_windows']+=support['supported_windows']['windows']
+                cell['quantity_cohorts'][result.get('quantity_status','unknown')]+=1
                 cell['parent_outcomes'][reason]+=1;state['parent_outcomes'][reason]+=1
                 cell['economic'][cost['status']]+=1;cell['common_modeled']+=int(common)
-                admitted=common and economic_match and value['parent_verified']
+                admitted=(common and economic_match and value['parent_verified']
+                    and result.get('quantity_status') in {'full_fill','settled_partial'}
+                    and all(v.get('quantity_status')==result['quantity_status'] for v in outcomes.values()))
                 cell['eligible_paired']+=int(admitted)
                 _paired_metrics(cell,outcomes,original_row,cost,admitted)
                 if value['terminal_reason']:cell['terminal_source_gaps'][value['terminal_reason']]+=1
@@ -646,13 +594,120 @@ def _run_research(*, data_root, output_root, source_date, target_date, input_rep
     return report
 
 
+def historical_support_census(*, data_root, output_root, input_report, source_date, target_date):
+    """Revalidate selected old index rows; never reconstruct missing native calls.
+
+    This audit inherits the previous full raw inventory claim. It pins current
+    index bytes and rechecks selected raw lines only, with no economic overlay.
+    """
+    data_root=Path(data_root).resolve(strict=True)
+    output_root=_output_path(data_root,output_root,input_report,data_root)
+    prior_path=Path(input_report).absolute()
+    if prior_path.parent==output_root or prior_path.parent in output_root.parents:
+        raise ValueError('stop_support_output_overlaps_prior_attempt')
+    output_root.mkdir(parents=True,exist_ok=True)
+    start,cpu,before=time.perf_counter(),time.process_time(),_io()
+    code_generation=research_code_generation()
+    lock_path=output_root/'.execution.lock'
+    if lock_path.is_symlink():raise ValueError('stop_research_output_symlink')
+    with lock_path.open('a') as lock:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError as exc:raise ValueError('stop_research_attempt_running') from exc
+        if (output_root/'report.json').exists():raise ValueError('stop_research_attempt_already_sealed')
+        token=post._DEADLINE.set(time.monotonic()+MAX_SECONDS)
+        positions_seen=0
+        try:
+            with use(output_root,durable_limit=512*1024**2,temp_limit=2*1024**3):
+                with source_index.prior_sealed_indexes(prior_path) as (prepared,proof,stats,prior):
+                    if prior['source_date']!=source_date or prior['target_date']!=target_date:
+                        raise ValueError('stop_support_prior_date_mismatch')
+                    for name in stats:
+                        source=Path(name).resolve()
+                        if output_root==source or output_root in source.parents:
+                            raise ValueError('stop_research_output_overlaps_input')
+                    support_counts=Counter();quantity=Counter();evaluators=Counter();rows_census=Counter();cells={}
+                    windows=decisions=conditional=0
+                    def evidence_rows():
+                        nonlocal positions_seen,windows,decisions,conditional
+                        for position in source_index.positions(prepared,output_root/'position_sort',rows_census,
+                                checkpoint=post.checkpoint):
+                            first=next(position.rows(),{})
+                            try:parent=policy.StopValues.parse(first.get('source_stop_values'))
+                            except (TypeError,ValueError):
+                                value=dict(position_key=position.key,cell=position.cell,status='source_gap',
+                                    reason='original_stop_values_unverified',native_support=None)
+                                support_counts['source_gap']+=1
+                            else:
+                                diagnostics=_snapshot_diagnostics(position.rows(),parent)
+                                diagnostics.pop('source_endpoints')
+                                support=diagnostics['native_support'];support_counts[support['status']]+=1
+                                quantity.update(support['quantity_census']);evaluators.update(support['evaluator_census'])
+                                windows+=support['supported_windows']['windows'];decisions+=support['supported_windows']['decisions']
+                                operating=holding_contracts(position.rows())
+                                conditional+=int(operating['conditional_certificate'] is not None)
+                                value=dict(position_key=position.key,record_id=first.get('record_id'),cell=position.cell,
+                                    first_at=position.first,last_at=position.last,source_sha256=position.source_sha256,
+                                    status=support['status'],native_support=support,diagnostics=diagnostics,
+                                    operating_contract=operating,actual_profit_verified=False,allowed_runtime_apply=False)
+                            cell=cells.setdefault(position.cell,dict(positions=0,statuses=Counter()))
+                            cell['positions']+=1;cell['statuses'][value['status']]+=1
+                            positions_seen+=1
+                            yield value
+                    evidence=storage.write_tree(output_root,evidence_rows())
+                    if positions_seen!=prior.get('position_count'):
+                        raise ValueError('stop_support_prior_population_changed')
+                    if rows_census['indexed_references']!=prior.get('source_census',{}).get('raw',0):
+                        raise ValueError('stop_support_prior_reference_population_changed')
+                    if any(source_stat(Path(name).stat())!=stat for name,stat in stats.items()):
+                        raise ValueError('stop_support_selected_sources_changed')
+                    for reference in [proof['prior_report'],proof['prior_input_receipt'],*proof['current_index_references']]:
+                        if _sealed_read(reference['path'])[1]!=reference:
+                            raise ValueError('stop_support_prior_binding_changed')
+                    if research_code_generation()!=code_generation:
+                        raise ValueError('stop_research_code_changed_during_execution')
+                    report=dict(schema='main_stop_historical_support_census_v1',status='completed_report_only',
+                        source_date=source_date,target_date=target_date,prior_source_provenance=proof,
+                        current_code_generation=code_generation,current_code_sha256=policy.digest(code_generation),
+                        position_count=positions_seen,source_support=dict(support_counts),
+                        source_reference_census=dict(rows_census),evaluator_census=dict(evaluators),quantity_census=dict(quantity),
+                        supported_windows=windows,supported_decisions=decisions,conditional_certificate_positions=conditional,
+                        cells=cells,position_evidence=evidence,
+                        population_scope='prior_sealed_index_selected_rows_only',
+                        selected_row_bytes_revalidated=True,full_current_raw_generation_rehashed=False,
+                        historical_index_byte_hash_previously_pinned=False,
+                        missing_native_decisions_reconstructed=False,missing_quantity_receipts_reconstructed=False,
+                        protection_scope='source_unsupported_no_active_source_bound_generator',
+                        policy_mutated=False,selected_policy=None,economics_evaluated=False,
+                        actual_profit_verified=False,actual_order_submitted=False,allowed_runtime_apply=False,
+                        metrics=_measurement(start,cpu,before))
+                    report['metrics']['scope']='entry_through_selected_rows_validation_before_report_commit_and_resource_cleanup'
+                    report['report_sha256']=policy.digest(report)
+                    _bounded_write(output_root/'report.json',report)
+                    return report
+        except (Exception,KeyboardInterrupt) as exc:
+            failure=dict(schema='main_stop_support_census_failure_v1',status='incomplete',
+                reason=type(exc).__name__+':'+str(exc)[:1024],position_count=positions_seen,
+                allowed_runtime_apply=False,policy_mutated=False)
+            failure['receipt_sha256']=policy.digest(failure)
+            _bounded_write(output_root/'failures'/f"{failure['receipt_sha256']}.json",failure)
+            raise
+        finally:post._DEADLINE.reset(token)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root',required=True);parser.add_argument('--output-root',required=True)
     parser.add_argument('--date',required=True);parser.add_argument('--target',required=True)
     parser.add_argument('--input-report',required=True)
     parser.add_argument('--cost-data-root')
+    parser.add_argument('--support-census-only',action='store_true')
     args=parser.parse_args()
+    if args.support_census_only:
+        if args.cost_data_root:raise ValueError('support_census_has_no_cost_overlay')
+        result=historical_support_census(data_root=args.data_root,output_root=args.output_root,
+            input_report=args.input_report,source_date=args.date,target_date=args.target)
+        print(json.dumps({k:result[k] for k in ('status','position_count','source_support','supported_decisions')},ensure_ascii=False))
+        return
     result=run_research(data_root=args.data_root,output_root=args.output_root,source_date=args.date,
                         target_date=args.target,input_report=args.input_report,cost_data_root=args.cost_data_root)
     print(json.dumps({k:result[k] for k in ('status','source_date','position_count','parent_outcomes','selected_policy')},ensure_ascii=False))

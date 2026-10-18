@@ -28,6 +28,7 @@ from .snapshot_archive import snapshot_identity
 
 SCHEMA = "main_stop_research_cost_v1"
 SCOPE = "main_stop_research_only"
+COST_GRADES = ("exact_execution", "exact_position_total", "broker_total_allocated")
 MAX_RECORDS = allocation.MAX_RECORDS
 MAX_COMPACT_RESIDENT_BYTES = 64 * 1024 * 1024
 MAX_REGISTRY_BYTES = 4 * 1024 * 1024
@@ -657,3 +658,108 @@ def prepare_economic_record(record, *, data_root, source_date, knowledge_cutoff=
             return deepcopy(result)
     result["artifact_sha256"] = exact.digest(result)
     return deepcopy(result)
+
+
+def selection_grade(economic, source):
+    """Eligibility for one modeled comparison, never an actual-PnL relabel.
+
+    The normal publisher obtains ``economic`` from this module's native batch
+    producer. This check additionally binds that result to the exact source
+    position; a self-seal alone is not a substitute for the native producer.
+    """
+    quantity = economic.get('quantity_basis') or {}
+    terminal = economic.get('terminal_observation') or {}
+    grade = economic.get('evidence_grade')
+    from src.engine.scalping.main_stop_quantity_source import validate_quantity_source
+    from src.engine.ai.holding_exit_vote import buy_fill_identity_from_legs
+    proof=source.get('quantity_source') or {}
+    try:
+        exact_quantity=(validate_quantity_source(proof,position_key=source['position_key'],at=source['at'],
+            quantity=source['quantity'],buy_basis_krw=source['buy_basis_krw'])
+            and proof.get('buy_fill_identity')==buy_fill_identity_from_legs(terminal.get('buy_fill_legs'))
+            and max(allocation._clock(leg['at']).timestamp() for leg in terminal['buy_fill_legs'])<=source['at']
+            <=allocation._clock(terminal['terminal_fill_time']).timestamp())
+    except (KeyError,TypeError,ValueError):exact_quantity=False
+    valid = (economic.get('schema') == SCHEMA and economic.get('economics_scope') == SCOPE
+        and economic.get('artifact_sha256') == exact.digest({k:v for k,v in economic.items() if k != 'artifact_sha256'})
+        and economic.get('status') == 'eligible' and grade in COST_GRADES and exact_quantity
+        and economic.get('manual_exit') is False and economic.get('runtime_effect') is False
+        and economic.get('allowed_runtime_apply') is False and economic.get('canonical_pnl_mutated') is False
+        and economic.get('custody_status') == 'verified_registry_fill_census'
+        and economic.get('fill_state') in {'fully_closed', 'fully_closed_multi_fill'}
+        and (economic.get('main_exit_source') or {}).get('status') == 'verified_native_decision_submit_chain'
+        and str(economic.get('record_id')) == str(source.get('record_id'))
+        and quantity.get('buy_qty') == source.get('quantity')
+        and quantity.get('sell_qty') == source.get('quantity') and quantity.get('residual_qty') == 0
+        and str(terminal.get('code')) == str(source.get('item')).split('_', 1)[0]
+        and economic.get('actual_execution_cost') is (grade == 'exact_execution')
+        and (grade != 'exact_position_total' or economic.get('actual_position_cost') is True))
+    return grade if valid else None
+
+
+def selection_source_generation(data_root, days):
+    """Pin present and absent native dependencies before a normal publication.
+
+    Completion batches are decoded one day at a time by the caller. Every
+    input is rechecked at commit/consume, including a formerly absent receipt.
+    """
+    root = Path(data_root).absolute()
+    paths = [root / 'runtime/order_owner_registry.jsonl']
+    generations = {}
+    for day in sorted(set(days)):
+        if date.fromisoformat(day).isoformat() != day:
+            raise ValueError('stop_research_source_date_invalid')
+        raw = root / 'report/monitor_snapshots' / f'trade_review_{day}.json'
+        sidecar = raw.with_suffix('.completed_projection.json')
+        paths.extend(p for logical in (raw, sidecar) for p in
+            (logical, Path(str(logical)+'.gz'), Path(str(logical)+'.gz.archive_receipt.json')))
+        paths.append(Path(str(sidecar)+'.dependencies.json'))
+        generations[day] = exact.source_generation(root, day)
+    signatures = {name: list(value) if value is not None else None
+                  for name,value in _signature(paths).items()}
+    files = {str(path): byte_generation(path) for path in paths if path.is_file()}
+    return dict(schema='main_stop_selection_sources_v1', source_dates=sorted(generations),
+                files=files, path_signatures=signatures, cost_generations=generations)
+
+
+def verify_selection_source_generation(data_root, expected, *, verify_full=False):
+    """Routine committed consumption checks identity without rehashing reports.
+
+    Native cost generations still receive their existing bounded semantic
+    validation. Large immutable completed reports are byte-verified at publish
+    and on explicit full verification, never on every routine observer read.
+    """
+    root=Path(data_root).absolute()
+    if (expected.get('schema')!='main_stop_selection_sources_v1'
+            or not isinstance(expected.get('path_signatures'),dict)
+            or not isinstance(expected.get('files'),dict)
+            or sorted(expected.get('cost_generations',{}))!=expected.get('source_dates')):
+        raise ValueError('stop_native_selection_cost_generation_changed')
+    observed={name:list(value) if value is not None else None for name,value in
+              _signature([Path(name) for name in expected['path_signatures']]).items()}
+    if observed!=expected['path_signatures']:
+        raise ValueError('stop_native_selection_cost_generation_changed')
+    for day,generation in expected['cost_generations'].items():
+        if exact.source_generation(root,day)!=generation:
+            raise ValueError('stop_native_selection_cost_generation_changed')
+    if verify_full:
+        for name,generation in expected['files'].items():
+            if byte_generation(Path(name))!=generation:
+                raise ValueError('stop_native_selection_cost_generation_changed')
+    return True
+
+
+def selection_completed_evidence(data_root, days):
+    """Real bounded batch producer for normal postclose; no caller cost claims."""
+    root = Path(data_root).absolute()
+    for day in sorted(set(days)):
+        with prepare_economic_source(root, day) as prepared:
+            if prepared.status != 'verified':
+                yield dict(source_date=day,native_batch_diagnostic=dict(
+                    status=prepared.status,reason=prepared.reason))
+                continue
+            for record in prepared.rows:
+                economic = prepare_economic_record({'id':record}, data_root=root,
+                                                    source_date=day, prepared=prepared)
+                yield dict(id=record, source_date=day, main_stop_economic_source=economic)
+            prepared.validate_unchanged()

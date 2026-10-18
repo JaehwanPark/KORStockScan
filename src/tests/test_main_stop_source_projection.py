@@ -187,3 +187,47 @@ def test_other_oversized_scopes_stay_global_source_gaps(tmp_path, stage):
     assert list(source_events(path, census)) == []
     assert census['unidentifiable_raw_rows'] == 1
     assert census['isolated_disjoint_oversized_rows'] == 0
+
+
+def test_native_same_clock_evaluation_generations_survive_union_and_conflicts(tmp_path):
+    from copy import deepcopy
+    from src.engine.automation import main_stop_source_index as index
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.engine.scalping import main_stop_policy as policy
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,research_evaluation
+    stock=stage_stock();q=research_quote(stock,at=1000.,bid=9990,profit=-.1)
+    first=research_evaluation(stock,q);second=research_evaluation(stock,q)
+    assert first['evaluation_generation']<second['evaluation_generation']
+    def write(path,rows):
+        path.write_text(''.join(json.dumps(dict(stage='main_stop_source',fields={'main_stop_source':r}))+'\n' for r in rows))
+    source=tmp_path/'source.jsonl';duplicate=tmp_path/'duplicate.jsonl'
+    write(source,[q,first,second]);write(duplicate,[q,first])
+    prepared=index.prepare(tmp_path/'index',{str(p):byte_generation(p) for p in (source,duplicate)},source_events,Counter())
+    census=Counter();positions=index.positions(prepared,tmp_path/'sort',census)
+    position=next(positions);observed=list(position.rows())
+    assert observed==[q,first,second]
+    assert census['deduplicated']==3
+    with pytest.raises(StopIteration):next(positions)
+    conflicting=deepcopy(first);conflicting['decision_profit_pct']=-.2
+    conflicting['source_sha256']=policy.digest({k:v for k,v in conflicting.items() if k!='source_sha256'})
+    write(duplicate,[q,conflicting])
+    prepared=index.prepare(tmp_path/'index2',{str(p):byte_generation(p) for p in (source,duplicate)},source_events,Counter())
+    positions=index.positions(prepared,tmp_path/'sort2',Counter());position=next(positions)
+    assert list(position.rows())==[q,{},second]
+    positions.close()
+
+
+def test_same_clock_quote_and_native_stage_order_is_not_a_payload_hash_sort(tmp_path):
+    from src.engine.automation import main_stop_source_index as index
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,research_evaluation
+    stock=stage_stock();events=[]
+    for price in (9990,9980,9970,9960,9950,9940):
+        q=research_quote(stock,at=1000.,bid=price,profit=(price/10000-1)*100)
+        events.extend([q,research_evaluation(stock,q)])
+    source=tmp_path/'native.jsonl'
+    source.write_text(''.join(json.dumps(dict(stage='main_stop_source',fields={'main_stop_source':r}))+'\n' for r in events))
+    prepared=index.prepare(tmp_path/'index',{str(source):byte_generation(source)},source_events,Counter())
+    positions=index.positions(prepared,tmp_path/'sort',Counter());position=next(positions)
+    assert list(position.rows())==events
+    positions.close()

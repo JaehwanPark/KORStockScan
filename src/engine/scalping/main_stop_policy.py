@@ -50,6 +50,12 @@ def implementation_paths():
     return ('automation/main_stop_postclose.py','automation/main_stop_source_index.py',
         'automation/main_stop_source_projection.py','scalping/holding_vote_exit_models.py',
         'scalping/main_stop_experiment.py',
+        'automation/main_stop_performance.py','scalping/main_stop_runtime_source.py',
+        'scalping/main_stop_quantity_source.py',
+        'scalping/initial_quantity_bundle_state.py',
+        'lifecycle/main_stop_research_cost.py','lifecycle/broker_cost_allocation.py',
+        'lifecycle/broker_cost_reconciliation.py','lifecycle/broker_cost_source.py',
+        'kiwoom_sniper_v2.py','sniper_execution_receipts.py',
         'scalping/main_stop_policy.py','scalping/main_stop_replay.py',
         'scalping/trailing_exit_decision.py','scalping/holding_path_vote_policy.py',
         'ai/holding_vote_replay_source.py','ai/holding_exit_vote.py','sniper_state_handlers.py',
@@ -269,6 +275,8 @@ def validate_bundle(bundle, target):
                 raise ValueError('stop_exact_key_succession_invalid')
             contract = validate_experiment(evidence.get('experiment'), parent_sha=digest(asdict(before)),
                 source_sha=auth.get('source_sha256'), code_sha=auth.get('code_sha256'))
+            from .main_stop_experiment import validate_cost_selection
+            validate_cost_selection(evidence,contract)
             name, status = choose(evidence.get('aggregates') or {}, contract)
             if (status != 'selected' or name != evidence.get('selected_candidate')
                     or asdict(candidates(before)[name]) != cell['values']
@@ -287,6 +295,21 @@ def load_bundle(path, sha, target, *, require_current_code=True):
     value,actual_sha = bounded_object(path)
     if actual_sha != sha:
         raise ValueError("stop_bundle_byte_hash_invalid")
+    # Native runtime inputs come from the publisher's immutable generation.
+    # Its committed reader rechecks the sealed dependency identities/catalog,
+    # then validates all experiment semantics without rehashing raw ledgers at
+    # every loader/pin startup. Arbitrary standalone bundles remain full-read.
+    source=Path(path).absolute()
+    if (require_current_code and source.name=='policy.json' and source.parent.parent.name=='generations'
+            and source.parent.parent.parent.name=='main_stop_confirmation'
+            and source.parent.parent.parent.parent.name=='threshold_cycle'):
+        from src.engine.automation import main_stop_postclose as post
+        root=source.parents[4]
+        pointer,_=bounded_object(post.committed_path(root,value['source_date']).with_name('target_'+target+'.json'))
+        native,_,receipt,directory=post.read_committed(root,value['source_date'],pointer=pointer)
+        if (source!=directory/'policy.json' or receipt['policy_byte_sha256']!=sha or native!=value):
+            raise ValueError('stop_loader_committed_generation_mismatch')
+        return native
     if require_current_code and value.get('code_sha256')!=implementation_sha():
         verify_runtime_code_contract(value, target)
     return validate_bundle(value, target)
@@ -478,9 +501,20 @@ def normal_exit_decision_source(stock, *, at, price, executable_bid, mark_price,
     return {**body, 'source_sha256':digest(body)}
 
 
+
+def next_source_observation_generation(stock, *, minimum=0):
+    prior = stock.get('_main_stop_source_observation_generation', 0)
+    if type(prior) is not int or prior < 0 or type(minimum) is not int or minimum < 0:
+        raise ValueError('native_source_observation_generation_invalid')
+    value = max(prior, minimum) + 1
+    stock['_main_stop_source_observation_generation'] = value
+    return value
+
+
 def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model, vote_source,
                automatic_management_allowed=False, runtime_flags=None, decision_profit_pct=None, seal=True,
-               post_add_vote_source=None, post_add_inputs=None, preset_stop=None):
+               post_add_vote_source=None, post_add_inputs=None, preset_stop=None,
+               native_decision_required=False, capture_evaluator=None):
     """Project the already supplied holding snapshot; no I/O or new collection."""
     value = stock.get('main_stop_policy_pin') or {}
     from .position_peak_ledger import position_cycle_id
@@ -516,6 +550,22 @@ def source_row(stock, *, at, bid, bid_qty, quote, coverage_complete, cost_model,
         coverage_complete=bool(coverage_complete),
         capture_rejected_count=stock.get('main_stop_source_rejected_count',0),
         partial_fill=bool(stock.get('entry_partial_fill_deferred_notice')))
+    if native_decision_required:
+        from .main_stop_quantity_source import build_quantity_source
+        prior_generation = stock.get('_main_stop_quote_generation', 0)
+        if type(prior_generation) is not int or prior_generation < 0:
+            raise ValueError('native_quote_generation_invalid')
+        generation = prior_generation + 1
+        body.update(native_decision_required=True, capture_evaluator=capture_evaluator,
+                    observation_role='shared_quote', quantity_source=build_quantity_source(stock, at=at),
+                    quote_generation=generation,
+                    source_observation_generation=next_source_observation_generation(stock),
+                    quote_id=digest(dict(position_key=body['position_key'], pin_sha256=body['pin_sha256'],
+                                         at=at, generation=generation)))
+        stock['_main_stop_quote_generation'] = generation
+        # A notification is not order/fill evidence. Legacy raw remains unchanged;
+        # this new producer carries an independently validated quantity contract.
+        body.pop('partial_fill')
     flags = runtime_flags or {}
     body.update({key: flags.get(key) for key in (
         'grace_enabled', 'protect_enabled', 'handoff_enabled', 'vote_max_worsen_pct')})
@@ -597,10 +647,11 @@ def _submit_source(code,name,record_id,row):
 def enqueue_source(stock,code,row):
     """Freeze before disposition; retain the existing shared queue budgets."""
     pending = _DEFERRED_SOURCES.get()
+    if pending is None and _SOURCE_SINK is None:return False
+    if pending is not None and len(pending) >= 2:return False
+    raw = json.dumps(row, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    if len(raw.encode()) > 64 * 1024:return False
     if pending is not None:
-        if len(pending) >= 2:return False
-        raw = json.dumps(row, sort_keys=True, separators=(',', ':'), allow_nan=False)
-        if len(raw.encode()) > 64 * 1024:return False
         pending.append((stock, code, stock.get('name') or code, stock.get('id'), raw))
         return True
-    return _submit_source(code, stock.get('name') or code, stock.get('id'), row)
+    return _submit_source(code, stock.get('name') or code, stock.get('id'), raw)

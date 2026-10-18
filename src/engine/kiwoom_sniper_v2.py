@@ -12212,6 +12212,15 @@ def _restore_holding_runtime_state(targets):
                 )
             else:
                 stock["buy_fill_identity_restore_status"] = fill_restore
+                from src.engine.scalping.main_stop_quantity_source import (
+                    restore_terminal_quantity_source,
+                )
+                # Source-only terminal recovery after native BUY receipts. An
+                # active bundle remains owned by its existing runtime path.
+                stock["main_stop_quantity_restore_status"] = restore_terminal_quantity_source(
+                    stock, bundle_root=DATA_DIR / "runtime/initial_quantity/bundles",
+                    at=time.time(),
+                )
 
         if stock.get("buy_time") and not stock.get("holding_started_at"):
             stock["holding_started_at"] = stock.get("buy_time")

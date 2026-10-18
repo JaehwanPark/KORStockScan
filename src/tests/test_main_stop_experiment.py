@@ -54,10 +54,24 @@ def performance(tmp_path, inventory, *, mode="prospective"):
     return dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
-def finalize(tmp_path, monkeypatch, ref, *, mode="prospective", at=3500.):
+def isolate_legacy_performance_gate(monkeypatch):
+    """Only legacy artifact/downstream contract tests use this explicit seam.
+
+    The archived v1 label fixture is not native full-performance evidence. Keep
+    its original validator semantics while testing unrelated immutable/source
+    contracts. Separate strict authority tests never install this isolation.
+    """
+    verify=experiment._verify_performance
+    def legacy(reference,code_sha,*,mode,source_sha,require_native=False):
+        return verify(reference,code_sha,mode=mode,source_sha=source_sha,require_native=False)
+    monkeypatch.setattr(experiment,'_verify_performance',legacy)
+
+
+def finalize(tmp_path, monkeypatch, ref, *, mode="prospective", at=3500.,isolate_native_gate=True):
     monkeypatch.setattr(experiment.time, "time", lambda: at)
     inventory = source(tmp_path)
     measured = performance(tmp_path, inventory, mode=mode)
+    if mode=='prospective' and isolate_native_gate:isolate_legacy_performance_gate(monkeypatch)
     c = experiment.finalize_experiment(tmp_path / "registry", ref,
         source_inventory=inventory, performance_receipt=measured,
         observed_start_at=200., observed_end_at=2700.)
@@ -87,6 +101,27 @@ def test_producers_freeze_before_source_then_finalize_without_rewriting(tmp_path
     assert len(list(tmp_path.rglob("experiment_1_*.json"))) == 1
 
 
+def test_source_seal_and_research_preparation_exist_before_any_performance_contract(tmp_path,monkeypatch):
+    ref,p=register(tmp_path,monkeypatch,selection_cost_grade='broker_total_allocated')
+    monkeypatch.setattr(experiment.time,'time',lambda:3500.)
+    inventory=source(tmp_path)
+    sealed=experiment.seal_experiment_sources(tmp_path/'registry',ref,source_inventory=inventory,
+        observed_start_at=200.,observed_end_at=2700.)
+    prepared=experiment.prepare_experiment(ref,sealed)
+    assert prepared['schema']=='main_stop_experiment_preparation_v1'
+    assert 'performance_receipt' not in prepared and prepared['allowed_runtime_apply'] is False
+    assert not list(tmp_path.rglob('experiment_1_*.json'))
+    with pytest.raises(ValueError,match='binding_invalid'):
+        validate(prepared,inventory)
+    # A performance gate failure preserves real source evidence, never a final
+    # runtime contract. Later measurement can bind this exact same source seal.
+    with pytest.raises(ValueError,match='native_producer_required'):
+        experiment.finalize_experiment(tmp_path/'registry',ref,source_inventory=inventory,
+            performance_receipt=performance(tmp_path,inventory),observed_start_at=200.,observed_end_at=2700.)
+    assert experiment.prepare_experiment(ref,sealed)==prepared
+    assert not list(tmp_path.rglob('experiment_1_*.json'))
+
+
 def test_historical_study_uses_real_freeze_time_and_never_promotes(tmp_path, monkeypatch):
     ref, _ = register(tmp_path, monkeypatch, mode="historical_report_only", at=3500.)
     contract, inventory = finalize(tmp_path, monkeypatch, ref, mode="historical_report_only")
@@ -95,6 +130,36 @@ def test_historical_study_uses_real_freeze_time_and_never_promotes(tmp_path, mon
     assert validate(contract, inventory, promote=False) == contract
     with pytest.raises(ValueError, match="historical_experiment_report_only"):
         validate(contract, inventory)
+
+
+def test_cost_grade_is_frozen_without_pooling_or_promoting_legacy_performance(tmp_path,monkeypatch):
+    ref,p=register(tmp_path,monkeypatch,selection_cost_grade='broker_total_allocated')
+    original=json.loads(__import__('pathlib').Path(ref['path']).read_text())
+    assert original['parameters']['selection_cost_grade']=='broker_total_allocated'
+    with pytest.raises(ValueError,match='native_producer_required'):
+        finalize(tmp_path,monkeypatch,ref,isolate_native_gate=False)
+    # Revision conflict persists even if a different grade has more samples.
+    monkeypatch.setattr(experiment.time,'time',lambda:1001.)
+    p['selection_cost_grade']='exact_execution'
+    with pytest.raises(ValueError,match='revision_conflict'):
+        experiment.register_experiment(tmp_path/'registry',experiment_id='grace-study',
+            revision=1,cell='SCANNER|REGULAR',parameters=p)
+
+
+@pytest.mark.parametrize('grade',[None,'exact_execution','broker_total_allocated'])
+def test_new_prospective_finalization_requires_native_performance_even_without_cost_grade(tmp_path,monkeypatch,grade):
+    changes={} if grade is None else {'selection_cost_grade':grade}
+    ref,_=register(tmp_path,monkeypatch,**changes)
+    with pytest.raises(ValueError,match='native_producer_required'):
+        finalize(tmp_path,monkeypatch,ref,isolate_native_gate=False)
+    assert list(tmp_path.rglob('source_seal_*.json'))
+    assert not list(tmp_path.rglob('experiment_1_*.json'))
+
+
+@pytest.mark.parametrize('grade',['mixed','actual','exact_execution+broker_total_allocated',None])
+def test_unregistered_or_pooled_cost_grade_is_not_accepted(tmp_path,monkeypatch,grade):
+    with pytest.raises(ValueError,match='cost_grade_invalid'):
+        register(tmp_path,monkeypatch,selection_cost_grade=grade)
 
 
 @pytest.mark.parametrize("forbidden", ["frozen_at", "source_sha256", "performance_receipt", "allowed_runtime_apply"])
@@ -190,7 +255,7 @@ def test_historical_measurement_cannot_satisfy_prospective_gate(tmp_path, monkey
     inventory = source(tmp_path)
     measured = performance(tmp_path, inventory, mode="historical_report_only")
     monkeypatch.setattr(experiment.time, "time", lambda: 3500.)
-    with pytest.raises(ValueError, match="performance_gate_unverified"):
+    with pytest.raises(ValueError, match="native_producer_required"):
         experiment.finalize_experiment(tmp_path / "registry", ref, source_inventory=inventory,
             performance_receipt=measured, observed_start_at=200., observed_end_at=2700.)
 
@@ -273,6 +338,7 @@ def native_contract(tmp_path, monkeypatch, *, revision=1, mode='prospective', se
             metrics={'fixture_only':True},unresolved_findings=['live_capture_latency_not_measured'])
     performance_ref=seal(tmp_path/f'performance_{revision}.json',measured)
     monkeypatch.setattr(experiment.time,'time',lambda:base+2000)
+    if mode=='prospective':isolate_legacy_performance_gate(monkeypatch)
     contract=experiment.finalize_experiment(tmp_path/'registry',ref,
         source_inventory=original['source_inventory'],performance_receipt=performance_ref,
         observed_start_at=base,observed_end_at=base+1108)
@@ -308,6 +374,16 @@ def test_prospective_manifest_producer_native_reader_and_publisher(tmp_path,monk
             parents=args['parents'],parent_receipt=parent,snapshot_receipt=original['snapshot_receipt'],
             source_paths=[source_path],experiments=post.bounded(output)[0],completed=completed,
             economic_sources=original['economic_sources'])
+
+
+def test_new_manifest_does_not_republish_legacy_performance_as_new_authority(tmp_path,monkeypatch):
+    original=experiment._verify_performance
+    contract,args,_=native_contract(tmp_path,monkeypatch)
+    monkeypatch.setattr(experiment,'_verify_performance',original)
+    output=tmp_path/'prepared/experiments_2026-10-12.json'
+    with pytest.raises(ValueError,match='native_producer_required'):
+        experiment.publish_experiment_manifest(output,{'SCANNER|REGULAR':contract},**args)
+    assert not output.exists()
 
 
 def test_manifest_replacement_requires_cas_and_preserves_original_bytes(tmp_path,monkeypatch):

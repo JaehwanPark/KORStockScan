@@ -11,6 +11,7 @@ from src.engine.scalping import main_stop_policy as policy
 from src.engine.scalping import main_stop_replay as replay
 from src.engine.scalping import holding_vote_exit_models as add_models
 from src.engine.scalping.position_peak_ledger import position_cycle_id
+from src.tests.test_main_stop_runtime_source import evaluation_stream
 
 
 @pytest.fixture(autouse=True)
@@ -75,21 +76,27 @@ def normal_terminal(rows, *, kind='observed_normal_exit'):
 def test_recovery_and_earlier_stop_remain_in_same_identified_cohort():
     rows = observations()
     endpoint = normal_terminal(rows)
-    prior = replay.replay(rows, baseline(), terminal_outcome=endpoint)
-    early = replay.replay(rows, replace(baseline(), grace_sec=0), terminal_outcome=endpoint)
+    prior = replay.replay(evaluation_stream(rows), baseline(), terminal_outcome=endpoint)
+    early = replay.replay(evaluation_stream(rows), replace(baseline(), grace_sec=0), terminal_outcome=endpoint)
     assert prior['status'] == early['status'] == 'modeled'
     assert prior['reason'] == 'observed_normal_exit_endpoint'
     assert early['reason'] == 'scalp_soft_stop_pct'
     assert prior['modeled_net_krw'] > 0 > early['modeled_net_krw']
     assert prior['actual_realized_net_krw'] is None
     assert prior['terminal_source_sha256'] == endpoint['source_reference']['sha256']
-    assert replay.replay(rows, baseline())['status'] == 'censored'
+    assert replay.replay(evaluation_stream(rows), baseline())['status'] == 'censored'
 
 
 def native_terminal_case(tmp_path, *, decision_second=3):
     from src.tests import test_main_stop_research_cost as cost_fixture
     stock = dict(id=1, code='005930', strategy='SCALPING', buy_qty=2, buy_price=10000.)
     at = datetime.fromisoformat(cost_fixture.DAY + 'T10:00:00+09:00').timestamp()
+    from src.engine import sniper_execution_receipts as native_receipts
+    stock.update(entry_requested_qty=2,requested_buy_qty=2,
+        pending_entry_orders=[dict(ord_no='11',qty=2,filled_qty=0,status='OPEN')])
+    native_receipts._resolve_entry_effective_fill_qty(target_stock=stock,code='005930',order_no='11',
+        exec_price=10000,exec_qty=2,order_qty=2,remaining_qty=0,cumulative_exec_amount=20000,
+        execution_no='101',unit_exec_qty=2,unit_exec_price=10000)
     stock['main_stop_policy_pin'] = policy.pin(position_key=position_cycle_id(stock),
         role='SCANNER', market='REGULAR', target=cost_fixture.DAY, baseline=baseline())
     rows = []
@@ -98,6 +105,7 @@ def native_terminal_case(tmp_path, *, decision_second=3):
         rows.append(policy.source_row(stock, at=stamp, bid=10000*(1+profit/100), bid_qty=2,
             quote=dict(market_route='SOR', item='005930', transport_epoch=1, observed_epoch=stamp),
             coverage_complete=True, automatic_management_allowed=True, decision_profit_pct=profit,
+            native_decision_required=True,capture_evaluator="normal",
             cost_model=dict(buy_cost_krw=0., sell_cost_rate=.0023, known_at=at-1,
                 source_sha256='a'*64, actual_broker_cost=False), vote_source=None,
             runtime_flags=dict(grace_enabled=True, protect_enabled=True,
@@ -123,8 +131,8 @@ def native_terminal_case(tmp_path, *, decision_second=3):
 def test_native_decision_and_cost_overlay_bind_recovery_without_actual_profit_claim(tmp_path):
     _, rows, economic = native_terminal_case(tmp_path)
     endpoint = replay.normal_exit_terminal_outcome(first_row=rows[0], last_row=rows[-1], economic=economic)
-    prior = replay.replay(rows, baseline(), terminal_outcome=endpoint)
-    early = replay.replay(rows, replace(baseline(), grace_sec=0), terminal_outcome=endpoint)
+    prior = replay.replay(evaluation_stream(rows), baseline(), terminal_outcome=endpoint)
+    early = replay.replay(evaluation_stream(rows), replace(baseline(), grace_sec=0), terminal_outcome=endpoint)
     assert prior['status'] == early['status'] == 'modeled'
     assert prior['modeled_net_krw'] > 0 > early['modeled_net_krw']
     assert prior['actual_realized_net_krw'] is None
@@ -213,23 +221,23 @@ def test_normal_endpoint_rejects_unbound_or_unidentified_lifecycle(change):
         value['exit_rule'] = value['receipt_binding']['exit_rule'] = 'scalp_hard_stop_pct'
         seal(value['receipt_binding'], 'sha256')
     seal(value)
-    assert replay.replay(rows, baseline(), terminal_outcome=value)['reason'] == 'terminal_outcome_unbound'
+    assert replay.replay(evaluation_stream(rows), baseline(), terminal_outcome=value)['reason'] == 'terminal_outcome_unbound'
 
 
 def test_horizon_mark_never_becomes_economic_terminal():
     rows = observations()
-    result = replay.replay(rows, baseline(), terminal_outcome=normal_terminal(rows, kind='horizon_mark'))
+    result = replay.replay(evaluation_stream(rows), baseline(), terminal_outcome=normal_terminal(rows, kind='horizon_mark'))
     assert result['status'] == 'censored'
     assert result['reason'] == 'horizon_mark_not_terminal'
     assert result['modeled_net_krw'] is None
 
 
-@pytest.mark.parametrize('flag', ['manual', 'pending_add', 'partial_fill', 'other_exit'])
+@pytest.mark.parametrize('flag', ['manual', 'pending_add', 'other_exit'])
 def test_endpoint_cannot_erase_observed_lifecycle_censoring(flag):
     rows = observations()
     rows[2][flag] = True
     seal(rows[2])
-    result = replay.replay(rows, baseline(), terminal_outcome=normal_terminal(rows))
+    result = replay.replay(evaluation_stream(rows), baseline(), terminal_outcome=normal_terminal(rows))
     assert result['status'] == 'censored'
     assert result['modeled_net_krw'] is None
 
@@ -238,16 +246,16 @@ def test_endpoint_cannot_erase_observed_lifecycle_censoring(flag):
 def test_preset_no_safety_can_reach_normal_common_soft(enabled, hard, grace):
     rows = observations(profits=(-.1, -3.2), role='SCALP_PRESET_TP',
         preset_enabled=enabled, preset_hard=hard, preset_grace=grace)
-    result = replay.replay(rows, replace(baseline(), grace_sec=0))
+    result = replay.replay(evaluation_stream(rows), replace(baseline(), grace_sec=0))
     assert result['status'] == 'modeled'
     assert result['reason'] == 'scalp_soft_stop_pct'
 
 
 def test_preset_still_precedes_common_and_terminal():
     rows = observations(role='SCALP_PRESET_TP')
-    result = replay.replay(rows, replace(baseline(), grace_sec=0), terminal_outcome=normal_terminal(rows))
-    assert result['status'] == 'censored'
-    assert result['reason'] == 'preset_safety_precedes_soft_policy'
+    result = replay.replay(evaluation_stream(rows), replace(baseline(), grace_sec=0), terminal_outcome=normal_terminal(rows))
+    assert result['status'] == 'unreachable'
+    assert result['reason'] == 'native_preset_safety_precedes_common_soft'
 
 
 def test_add_clock_consumes_actual_operating_context_producer_without_rewriting(monkeypatch):
@@ -356,7 +364,8 @@ def test_exact_quote_capture_overrides_cadence_once_without_io_or_partial_infere
     assert decision['mark_price'] == context['bid']+17
     assert decision['quantity_source_status'] == 'runtime_observed_not_terminal'
     assert 'partial_fill' not in decision
-    assert captured[0]['partial_fill'] is True  # Known historical producer gap stays visible.
+    assert 'partial_fill' not in captured[0]
+    assert captured[0]['quantity_source']['status'] == 'unknown'  # Known historical producer gap stays visible.
     assert len(captured) == 1 and captured[0]['at'] == context['at']
     stock['exit_requested'] = True
     again = handlers._main_stop_normal_exit_fields(stock, '005930', at=context['at'],
@@ -455,3 +464,292 @@ def test_native_early_preset_limit_up_captures_source_without_changing_exit(monk
     else:
         assert not captured and signal['main_stop_normal_exit_decision_gap']
         assert 'main_stop_normal_exit_decision' not in signal
+
+
+def test_legacy_shared_quotes_never_authorize_a_normal_soft_decision():
+    source=observations()
+    result=replay.replay(source,replace(baseline(),grace_sec=0),terminal_outcome=normal_terminal(source))
+    assert result['status']=='source_unsupported'
+    assert result['reason']=='actual_common_soft_decision_unobserved'
+    diagnostics=replay.source_diagnostics(source,baseline())
+    assert diagnostics['counts']['shared_quotes']==4
+    assert diagnostics['native_support']['whole_population_scanned'] is True
+    assert diagnostics['native_support']['supported_windows']['decisions']==0
+    assert diagnostics['native_support']['status']=='source_unsupported'
+
+
+def test_real_normal_clock_and_mark_basis_advance_decision_without_rewriting_quote():
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,stage_inputs
+    from src.engine.scalping.main_stop_runtime_source import evaluation_source
+    stock=stage_stock();events=[];original=[]
+    for n,profit in enumerate((-.1,-3.5)):
+        q=research_quote(stock,at=1000.+n,bid=9990,profit=-.1,cost=observations()[0]['cost_model'])
+        q['cost_model']=dict(q['cost_model'],known_at=999.);seal(q)
+        original.append(deepcopy(q));events.append(q)
+        events.append(evaluation_source(stock,quote_source=q,at=1000.2+n,evaluator='normal',stage='common_soft',
+            decision_price=10000*(1+profit/100),decision_price_basis='mark_price',decision_profit_pct=profit,
+            priority_status='reached',quote_max_age_sec=3.,decision_inputs=stage_inputs(q['cost_model'])))
+    result=replay.replay(events,replace(baseline(),grace_sec=0))
+    assert result['status']=='modeled' and result['crossing_at']==1001.2
+    assert result['quantity_status']=='full_fill'
+    assert [events[0],events[2]]==original
+    # Different mark-based crossing and executable bid remain separately bound.
+    assert result['modeled_net_krw']==pytest.approx(9990*10*.9977-100000)
+
+
+@pytest.mark.parametrize('fault',['quantity','anchor','predecessor','legacy','generation_loss'])
+def test_actual_evaluation_requires_quantity_generation_and_scope(fault):
+    source=list(evaluation_stream(observations(role='SCALP_PRESET_TP',preset_hard=-4.5)))
+    target=next(row for row in source if row.get('stage')=='common_soft')
+    if fault=='quantity':target['quantity_source']=None
+    elif fault=='anchor':target['evaluation_id']='f'*64
+    elif fault=='predecessor':target['preset_predecessor']['source_sha256']='f'*64
+    elif fault=='legacy':target['legacy_broker_recovered']=True
+    elif fault=='generation_loss':target['evaluation_rejected_count']=1
+    seal(target)
+    result=replay.replay(source,replace(baseline(),grace_sec=0))
+    assert result['status'] in {'source_gap','source_unsupported'}
+    assert result['modeled_net_krw'] is None
+
+
+def test_whole_population_support_counts_survive_early_counterfactual_crossing():
+    source=list(evaluation_stream(observations()))
+    result=replay.replay(source,replace(baseline(),grace_sec=0))
+    assert result['status']=='modeled'
+    assert result['source_support']['common_soft_decisions_seen']==2
+    census=replay.source_diagnostics(source,baseline())
+    assert census['native_support']['supported_windows']['decisions']==4
+    assert census['native_support']['evaluator_census']=={'normal:common_soft':4}
+    assert census['economic_binding_source']['quantity_source']['status']=='full_fill'
+
+
+@pytest.mark.parametrize('fault',['coverage','route','gap','manual','basis'])
+def test_terminal_bridge_cannot_hide_unobserved_tail_source_change(fault):
+    raw=observations();events=list(evaluation_stream(raw[:-1]))
+    last=deepcopy(raw[-1])
+    if fault=='coverage':last['coverage_complete']=False
+    elif fault=='route':last['route']='OTHER'
+    elif fault=='gap':last['at']+=4;last['quote_at']+=4
+    elif fault=='manual':last['manual']=True
+    elif fault=='basis':last['buy_basis_krw']+=1
+    seal(last);events.append(last)
+    endpoint=normal_terminal([raw[0],last])
+    result=replay.replay(events,baseline(),terminal_outcome=endpoint)
+    assert result['status']!='modeled' and result['modeled_net_krw'] is None
+
+
+def test_legacy_preset_skip_is_unsupported_not_observed_unreachability():
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,research_evaluation
+    stock=stage_stock(role='SCALP_PRESET_TP')
+    receipt=policy.preset_stop_receipt(stock,at=1000.,evaluator='normal',hard_pct=-1.4,
+        grace_sec=0,emergency_pct=-4.5,held_sec=100.,enabled=False)
+    quote=research_quote(stock,at=1000.,bid=9600,profit=-4.,preset=receipt)
+    actual=research_evaluation(stock,quote,stage='preset_safety',preset=receipt,legacy=True)
+    result=replay.replay([quote,actual],baseline())
+    assert result['status']=='source_unsupported'
+    assert result['reason']=='legacy_recovered_decision_scope_unsupported'
+
+
+@pytest.mark.parametrize('fault',[None,'prefix_below','first_full_below','missing_touch','active_touch','loss','clock_gap'])
+def test_initial_unknown_quantity_only_skips_a_proven_common_no_exit_prefix(fault):
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,stage_inputs
+    from src.engine.scalping.main_stop_runtime_source import evaluation_source
+    stock=stage_stock();events=[]
+    for n in range(3):
+        stock['entry_requested_qty']=stock['requested_buy_qty']=11 if n==0 else 10
+        at=1000.+n+(4 if fault=='clock_gap' and n else 0)
+        profit=-.1 if n<2 else -3.5
+        if fault=='prefix_below' and n==0:profit=-3.2
+        if fault=='first_full_below' and n==1:profit=-3.2
+        q=research_quote(stock,at=at,bid=10000*(1+profit/100),profit=profit,
+            cost=dict(buy_cost_krw=0.,sell_cost_rate=.0023,known_at=999.,source_sha256='a'*64))
+        inputs=stage_inputs(q['cost_model'])
+        if fault=='missing_touch' and n==0:inputs.pop('soft_stop_micro_grace_started_at')
+        if fault=='active_touch' and n==0:inputs['soft_stop_micro_grace_started_at']=990.
+        if fault=='loss':stock['main_stop_evaluation_rejected_count']=1
+        e=evaluation_source(stock,quote_source=q,at=at,evaluator='normal',stage='common_soft',
+            decision_price=q['bid'],decision_price_basis='mark_price',decision_profit_pct=profit,
+            priority_status='reached',quote_max_age_sec=3.,decision_inputs=inputs)
+        events.extend([q,e])
+    result=replay.replay(events,replace(baseline(),grace_sec=0),support_soft_threshold=-3.)
+    if fault is None:
+        assert result['status']=='modeled'
+        assert result['excluded_initial_quantity_decisions']==1
+        assert result['comparison_start']['at']==1001.
+        diagnostic=replay.source_diagnostics(events,baseline(),support_soft_threshold=-3.)
+        assert diagnostic['comparison_prefix']['whole_lifecycle_no_exit_prefix_proven'] is True
+        assert diagnostic['comparison_prefix']['excluded_initial_quantity_decisions']==1
+        assert diagnostic['economic_binding_source']['at']==1001.
+    else:
+        assert result['status']!='modeled',result
+        assert result['modeled_net_krw'] is None
+        if fault=='first_full_below':assert result['reason']=='pre_crossing_source_missing'
+
+
+def test_initial_missing_depth_keeps_actual_gate_and_never_models_a_crossing():
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,stage_inputs
+    from src.engine.scalping.main_stop_runtime_source import evaluation_source
+    stock=stage_stock();events=[]
+    for n,profit in enumerate((-.1,-.1,-3.5)):
+        q=research_quote(stock,at=1000.+n,bid=10000*(1+profit/100),profit=profit,
+            cost=dict(buy_cost_krw=0.,sell_cost_rate=.0023,known_at=999.,source_sha256='a'*64))
+        if n==0:
+            q.update(bid=None,bid_qty=None,quote_at=None,coverage_complete=False,item=None,route=None,transport_epoch=None)
+            seal(q)
+        actual=evaluation_source(stock,quote_source=q,at=1000.+n,evaluator='normal',stage='common_soft',
+            decision_price=10000*(1+profit/100),decision_price_basis='mark_price',decision_profit_pct=profit,
+            priority_status='reached',quote_max_age_sec=3.,decision_inputs=stage_inputs(q['cost_model']))
+        events.extend([q,actual])
+    result=replay.replay(events,replace(baseline(),grace_sec=0))
+    assert result['status']=='modeled' and result['excluded_initial_quote_decisions']==1
+    assert result['comparison_start']['at']==1001.
+    census=replay.source_diagnostics(events,baseline())
+    assert census['native_support']['evaluator_census']=={'normal:common_soft':3}
+    assert census['native_support']['gaps']['actual_decision_quote_source_gap']==1
+    crossing=deepcopy(events[:2]);crossing[1]['decision_profit_pct']=-4.
+    seal(crossing[1])
+    outcome=replay.replay(crossing,replace(baseline(),grace_sec=0))
+    assert outcome['status']=='source_unsupported' and outcome['modeled_net_krw'] is None
+
+
+def test_missing_actual_evaluation_generation_never_grants_an_earlier_start():
+    events=list(evaluation_stream(observations()))
+    dropped=[row for row in events if row.get('evaluation_generation')!=1]
+    outcome=replay.replay(dropped,replace(baseline(),grace_sec=0))
+    assert outcome['status']=='source_gap' and outcome['reason']=='native_evaluation_generation_missing'
+    dropped=[row for row in events if row.get('evaluation_generation')!=2]
+    outcome=replay.replay(dropped,baseline(),terminal_outcome=normal_terminal(observations()))
+    assert outcome['status']=='source_gap' and outcome['reason']=='native_evaluation_generation_missing'
+
+
+@pytest.mark.parametrize('fault',['quantity_unknown','pending_exit','future_cost','cost_rate'])
+def test_last_quote_without_soft_evaluation_still_needs_terminal_quantity_and_cost(fault):
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,research_evaluation
+    stock=stage_stock();events=[];quotes=[]
+    for n,profit in enumerate((-.1,-.2,.5)):
+        quote=research_quote(stock,at=1000.+n,bid=10000*(1+profit/100),profit=profit,
+            cost=dict(buy_cost_krw=0.,sell_cost_rate=.0023,known_at=999.,source_sha256='a'*64))
+        quotes.append(quote);events.append(quote)
+        if n<2:events.append(research_evaluation(stock,quote))
+    last=quotes[-1]
+    if fault=='quantity_unknown':
+        last['quantity_source']['status']='unknown'
+        seal(last['quantity_source'])
+    elif fault=='pending_exit':last['pending_exit']=True
+    elif fault=='future_cost':last['cost_model']['known_at']=2000.
+    elif fault=='cost_rate':last['cost_model']['sell_cost_rate']=-1.
+    seal(last)
+    result=replay.replay(events,baseline(),terminal_outcome=normal_terminal(quotes))
+    assert result['status']!='modeled' and result['modeled_net_krw'] is None
+
+
+def test_preset_predecessor_keeps_its_own_quote_and_price_basis():
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,stage_inputs
+    from src.engine.scalping.main_stop_runtime_source import evaluation_source
+    stock=stage_stock(role='SCALP_PRESET_TP');at=1000.
+    preset=policy.preset_stop_receipt(stock,at=at,evaluator='normal',hard_pct=-1.4,
+        grace_sec=0,emergency_pct=-4.5,held_sec=100.,enabled=True)
+    q1=research_quote(stock,at=at,bid=9990,profit=-.1,preset=preset,
+        cost=dict(buy_cost_krw=0.,sell_cost_rate=.0023,known_at=999.,source_sha256='a'*64))
+    first=evaluation_source(stock,quote_source=q1,at=at,evaluator='normal',stage='preset_safety',
+        decision_price=9991,decision_price_basis='mark_price',decision_profit_pct=-.09,
+        priority_status='reached',quote_max_age_sec=3.,preset_stop=preset,
+        decision_inputs={'handoff_enabled':False})
+    q2=research_quote(stock,at=at,bid=9992,profit=-.08,preset=preset,cost=q1['cost_model'])
+    second=evaluation_source(stock,quote_source=q2,at=at,evaluator='normal',stage='common_soft',
+        decision_price=9992,decision_price_basis='executable_bid',decision_profit_pct=-.08,
+        priority_status='reached',quote_max_age_sec=3.,preset_predecessor=first,
+        decision_inputs=stage_inputs(q2['cost_model']))
+    result=replay.replay([q1,first,q2,second],baseline())
+    assert result['status']=='censored' and result['reason']=='crossing_not_observed'
+    assert result['source_support']['common_soft_decisions_seen']==1
+
+
+def test_preset_uses_actual_stage_handoff_flag_instead_of_shared_quote():
+    events=list(evaluation_stream(observations((-.1,-1.5),role='SCALP_PRESET_TP')))
+    preset=next(value for value in reversed(events) if value.get('stage')=='preset_safety')
+    quote=next(value for value in events if value.get('source_sha256')==preset['quote_source_sha256'])
+    assert quote['handoff_enabled'] is False
+    preset['decision_inputs']['handoff_enabled']=True;seal(preset)
+    assert replay.native_preset_decision(quote,preset).disposition=='manual_handoff'
+    del preset['decision_inputs']['handoff_enabled'];seal(preset)
+    with pytest.raises(ValueError,match='native_preset_decision_inputs_missing'):
+        replay.evaluation_binding(preset,quote)
+
+
+def test_supported_quote_claim_survives_recent_quote_eviction():
+    from src.engine.lifecycle.research_input_budget import health
+    baseline_bytes=health()['used_bytes']
+    events=list(evaluation_stream(observations(tuple([-.1]*7))))
+    with replay.bound_evaluations(events) as (stream,state):
+        for index,(quote,evaluation) in enumerate(stream):
+            if index==1:
+                before=health()['used_bytes'];state['pin_supported_quote'](quote)
+                claimed=health()['used_bytes']-before;first=quote
+        assert state['first_supported_quote'] is first and claimed>0
+        # Four recent quotes, original first and separately pinned supported
+        # quote retain independent reservations through the entire join.
+        assert health()['used_bytes']>=baseline_bytes+claimed
+    assert health()['used_bytes']==baseline_bytes
+
+
+def test_detached_diagnostic_endpoint_and_copy_keep_their_budget_claims():
+    import gc
+    from src.engine.lifecycle.research_input_budget import health
+    gc.collect();baseline_bytes=health()['used_bytes']
+    diagnostics=replay.source_diagnostics(evaluation_stream(observations()),baseline())
+    endpoint=diagnostics['source_endpoints']['first']
+    economic=diagnostics['economic_binding_source']
+    encoded=json.dumps(diagnostics,allow_nan=False)
+    clone=deepcopy(endpoint)
+    del diagnostics;gc.collect()
+    assert health()['used_bytes']>baseline_bytes and json.loads(encoded)['source_endpoints']['first']==endpoint
+    del endpoint,economic;gc.collect()
+    assert health()['used_bytes']>baseline_bytes and clone['schema']=='main_stop_source_v1'
+    del clone;gc.collect()
+    assert health()['used_bytes']==baseline_bytes
+
+
+@pytest.mark.parametrize('fault',[None,'buy','record','stop_cycle_key','missing','path','schema'])
+def test_actual_vote_binds_native_record_and_proven_buy_generation(fault):
+    from src.tests.test_main_stop_runtime_source import stage_stock,research_quote,stage_inputs
+    from src.engine.scalping.main_stop_runtime_source import evaluation_source
+    from src.engine.ai import holding_exit_vote,holding_vote_replay_source
+    stock=stage_stock();events=[]
+    for n,profit in enumerate((-.1,-3.2)):
+        at=1000.+n;cost=dict(buy_cost_krw=0.,sell_cost_rate=.0023,known_at=999.,source_sha256='a'*64)
+        quote=research_quote(stock,at=at,bid=10000*(1+profit/100),profit=profit,cost=cost)
+        vote=holding_vote_replay_source.runtime_source(stock,position_key=f"record:{stock['id']}",
+            buy_fill_identity=holding_exit_vote.buy_fill_identity_from_runtime(stock),
+            market=quote['market'],now=at,policy={},data_root=None,model='fixture',path_id='EXIT_SOFT_STOP')
+        inputs=dict(stage_inputs(cost),holding_ai_required=True,holding_vote_source=vote)
+        actual=evaluation_source(stock,quote_source=quote,at=at,evaluator='normal',stage='common_soft',
+            decision_price=quote['bid'],decision_price_basis='executable_bid',decision_profit_pct=profit,
+            priority_status='reached',quote_max_age_sec=3.,decision_inputs=inputs)
+        if n==1 and fault:
+            changed=actual['decision_inputs']['holding_vote_source']
+            if fault=='buy':changed['buy_fill_identity']='f'*64
+            elif fault=='record':changed['position_key']='record:999'
+            elif fault=='stop_cycle_key':changed['position_key']=quote['position_key']
+            elif fault=='path':changed['path_id']='EXIT_TRAILING_TP'
+            elif fault=='schema':changed['schema']='unbound_vote_source'
+            else:actual['decision_inputs']['holding_vote_source']=None
+            seal(actual)
+        events.extend((quote,actual))
+    calls=[]
+    def original_vote(row,at):
+        calls.append(at)
+        return dict(decision='PASS',source_verified=True,max_defer_sec=0.)
+    result=replay.replay(events,replace(baseline(),grace_sec=0,protect_emergency_pct=-4.),
+        vote_reader=original_vote)
+    if fault:
+        assert result['status']=='source_gap' and result['modeled_net_krw'] is None
+        assert result['reason']==('holding_vote_buy_generation_mismatch' if fault=='buy'
+            else 'holding_vote_reference_unbound' if fault=='missing'
+            else 'holding_vote_native_path_mismatch' if fault in {'path','schema'}
+            else 'holding_vote_record_generation_mismatch')
+        assert not calls
+    else:
+        assert result['status']=='modeled' and calls==[1001.]
+    assert events[0]['position_key'].startswith('target:')
+    assert events[1]['decision_inputs']['holding_vote_source']['position_key'].startswith('record:')

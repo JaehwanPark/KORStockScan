@@ -116,6 +116,85 @@ def result(data, costs, prepared, record=1, cutoff=None):
         knowledge_cutoff=cutoff, cost_data_root=costs, prepared=prepared)
 
 
+def test_normal_selection_consumes_real_batch_and_preserves_allocated_grade(tmp_path,monkeypatch):
+    import shutil
+    data,costs,_,_,_=setup(tmp_path)
+    shutil.copytree(costs/'runtime',data/'runtime',dirs_exist_ok=True)
+    calls=[];original=stop._native_projection
+    def observed(*args):calls.append(args);return original(*args)
+    monkeypatch.setattr(stop,'_native_projection',observed)
+    before=stop.selection_source_generation(data,[DAY])
+    rows=list(stop.selection_completed_evidence(data,[DAY]))
+    assert len(calls)==1 and len(rows)==2
+    economics=rows[0]['main_stop_economic_source']
+    from src.engine import sniper_execution_receipts
+    from src.engine.scalping.main_stop_quantity_source import build_quantity_source
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    stock=dict(id=1,code='005930',strategy='SCALPING',entry_requested_qty=2,requested_buy_qty=2,
+        pending_entry_orders=[dict(ord_no='11',qty=2,filled_qty=0,status='OPEN')])
+    sniper_execution_receipts._resolve_entry_effective_fill_qty(target_stock=stock,code='005930',
+        order_no='11',exec_price=10000,exec_qty=2,order_qty=2,remaining_qty=0,
+        cumulative_exec_amount=20000,execution_no='101',unit_exec_qty=2,unit_exec_price=10000)
+    stock.update(buy_qty=2,buy_price=10000.)
+    at=allocation._clock(DAY+' 10:00:01').timestamp()
+    source=dict(record_id=1,quantity=2,item='005930_AL',buy_basis_krw=20000.,at=at,
+        position_key=position_cycle_id(stock),quantity_source=build_quantity_source(stock,at=at))
+    assert stop.selection_grade(economics,source)=='broker_total_allocated'
+    assert economics['actual_execution_cost'] is False
+    assert economics['original_economics_scope']=='initial_quantity_research_only'
+    assert stop.selection_source_generation(data,[DAY])==before
+    wrong=deepcopy(economics);wrong['actual_execution_cost']=True
+    wrong['artifact_sha256']=exact.digest({k:v for k,v in wrong.items() if k!='artifact_sha256'})
+    assert stop.selection_grade(wrong,source) is None
+    assert stop.selection_grade(economics,{**source,'quantity':3}) is None
+    # Late cost corrections and custody mutations each invalidate the normal
+    # publisher input identity; the original report stays untouched.
+    path=official.source_path(data,DAY)
+    raw=path.read_bytes();path.write_bytes(raw+b'\n')
+    assert stop.selection_source_generation(data,[DAY])!=before
+
+
+def test_normal_batch_closes_claims_after_consumer_abandonment(tmp_path,monkeypatch):
+    import shutil
+    data,costs,_,_,_=setup(tmp_path)
+    shutil.copytree(costs/'runtime',data/'runtime',dirs_exist_ok=True)
+    closed=[];original=stop.PreparedEconomicSource.close
+    def close(self):closed.append(self);return original(self)
+    monkeypatch.setattr(stop.PreparedEconomicSource,'close',close)
+    stream=stop.selection_completed_evidence(data,[DAY])
+    next(stream);stream.close()
+    assert len(closed)==1 and not closed[0]._memory_claims and not closed[0].rows
+
+
+def test_routine_selection_consumer_never_rehashes_large_native_reports(tmp_path,monkeypatch):
+    import shutil
+    data,costs,_,sidecar,_=setup(tmp_path)
+    shutil.copytree(costs/'runtime',data/'runtime',dirs_exist_ok=True)
+    expected=stop.selection_source_generation(data,[DAY])
+    original=stop.byte_generation;reads=[]
+    def counted(path):reads.append(str(path));return original(path)
+    monkeypatch.setattr(stop,'byte_generation',counted)
+    assert stop.verify_selection_source_generation(data,expected)
+    assert reads==[]
+    assert stop.verify_selection_source_generation(data,expected,verify_full=True)
+    assert str(sidecar) in reads
+    reads.clear()
+    sidecar.write_bytes(sidecar.read_bytes()+b'\n')
+    with pytest.raises(ValueError,match='cost_generation_changed'):
+        stop.verify_selection_source_generation(data,expected)
+    assert reads==[]
+
+
+def test_absent_native_source_appearance_invalidates_routine_selection_without_hashing(tmp_path,monkeypatch):
+    expected=stop.selection_source_generation(tmp_path,[DAY])
+    registry_path=tmp_path/'runtime/order_owner_registry.jsonl'
+    registry_path.parent.mkdir();registry_path.write_text('{}\n')
+    def forbidden(*args,**kwargs):raise AssertionError('unexpected full native hash')
+    monkeypatch.setattr(stop,'byte_generation',forbidden)
+    with pytest.raises(ValueError,match='cost_generation_changed'):
+        stop.verify_selection_source_generation(tmp_path,expected)
+
+
 def test_later_cost_overlay_reuses_original_native_fills_without_mutation(tmp_path):
     data, costs, rows, sidecar, receipts = setup(tmp_path)
     originals = {path: path.read_bytes() for path in (sidecar, sidecar.with_suffix(sidecar.suffix + ".dependencies.json"))}

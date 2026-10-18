@@ -29433,8 +29433,12 @@ def _main_stop_quote_context(stock, code, *, snapshot, quote_receipt, executable
                 == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
             and depth_row is not None
         )
+    config = QuoteConsistencyConfig.from_env()
+    quote_max_age_sec = (config.max_rest_age_ms if bid_source == 'fresh_rest_executable_bid'
+                         else config.max_ws_age_ms) / 1000.0
     grid_source_complete = bool(
         market_type and exit_allowed_by_clock and bid_received_at is not None
+        and 0 <= now_ts - bid_received_at <= quote_max_age_sec
         and price_usable and executable_bid_qty > 0
         and bid_identity_proven
         and not stock.get("scalp_trailing_arm_persist_gap")
@@ -29451,7 +29455,8 @@ def _main_stop_quote_context(stock, code, *, snapshot, quote_receipt, executable
         quote=quote_receipt, complete=grid_source_complete, market=market_type,
         evaluator=evaluator, decision_profit_pct=holding_profit_rate_at_eval,
         position_key=position_cycle_id(stock), quantity=stock.get('buy_qty'),
-        buy_price=stock.get('buy_price'), pending_exit=bool(stock.get('exit_requested')))
+        buy_price=stock.get('buy_price'), pending_exit=bool(stock.get('exit_requested')),
+        quote_max_age_sec=quote_max_age_sec)
     stop_context.update(bid_identity_proven=bid_identity_proven,
         quote_state_for_tuning=quote_state_for_tuning,
         operational_ws_0d_best_bid=_safe_int(depth_row.get('best_bid'), 0) if depth_row else None,
@@ -29486,7 +29491,7 @@ def _prepare_main_stop_limit_up_quote(stock, code, *, ws_data, quote_fields, now
         stock['main_stop_source_gap'] = 'limit_up_quote:' + type(exc).__name__
 
 
-def _capture_main_stop_observation(stock, code, context, *, force=False):
+def _capture_main_stop_observation(stock, code, context, *, force=False, decision_capture=False):
     """Reuse this evaluation's validated quote through the existing bounded sink."""
     from src.engine.scalping.position_peak_ledger import position_cycle_id
     if not isinstance(context, dict):
@@ -29505,11 +29510,11 @@ def _capture_main_stop_observation(stock, code, context, *, force=False):
         from src.engine.scalping.main_stop_policy import pin_values
         pin_values(stock.get('main_stop_policy_pin'), context['position_key'])
         previous = stock.get('_main_stop_last_captured_quote')
-        if previous and previous[0] >= now_ts:
+        if previous and (previous[0] > now_ts or (previous[0] == now_ts and not decision_capture)):
             return False
     if (stock.get('strategy') != 'SCALPING' or _safe_int(stock.get('buy_qty'), 0) <= 0
             or _is_scalp_simulated_position(stock, 'SCALPING')
-            or (force and (not context['complete'] or context['pending_exit'] or stock.get('exit_requested')))
+            or (force and ((not context['complete'] and not decision_capture) or context['pending_exit'] or stock.get('exit_requested')))
             or (not force and now_ts - _safe_float(stock.get('main_stop_source_at'), 0) < 1.0)):
         return False
     executable_bid, executable_bid_qty = context['bid'], context['bid_qty']
@@ -29518,7 +29523,7 @@ def _capture_main_stop_observation(stock, code, context, *, force=False):
     holding_profit_rate_at_eval = context['decision_profit_pct']
     stock['main_stop_source_at'] = now_ts
     try:
-        from src.engine.scalping.main_stop_policy import source_row, enqueue_source
+        from src.engine.scalping.main_stop_policy import source_row, enqueue_source, digest
         from src.engine.ai.holding_vote_replay_source import runtime_source
         _main_stop_values(stock, now_ts)
         vote_source = runtime_source(stock,
@@ -29545,6 +29550,7 @@ def _capture_main_stop_observation(stock, code, context, *, force=False):
         row = source_row(stock, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
             quote=quote_receipt, coverage_complete=grid_source_complete,
             cost_model=stock.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
+            native_decision_required=True, capture_evaluator=evaluator,
             post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
             preset_stop=_main_stop_preset_observation(stock, now_ts=now_ts, evaluator=evaluator),
             decision_profit_pct=holding_profit_rate_at_eval,
@@ -29557,6 +29563,9 @@ def _capture_main_stop_observation(stock, code, context, *, force=False):
                 protect_enabled=_env_or_rule_bool("SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True),
                 handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False),
                 vote_max_worsen_pct=_rule("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.8)))
+        # The cached quote must describe exactly the submitted immutable body;
+        # later cost/vote mutation cannot change a previously sealed source.
+        row = copy.deepcopy(row)
         accepted = enqueue_source(stock,code,row)
         if not accepted:
             stock['main_stop_source_gap']='observation_queue_rejected'
@@ -29566,10 +29575,114 @@ def _capture_main_stop_observation(stock, code, context, *, force=False):
             # Normal capture may establish the existing position's first pin.
             key = key[:5] + ((stock.get('main_stop_policy_pin') or {}).get('pin_sha256'),) + key[6:]
             stock["_main_stop_last_captured_quote"] = key
+            stock["_main_stop_last_quote_source"] = dict(row, source_sha256=digest(row))
         return accepted
     except (OSError, ValueError, KeyError, TypeError) as exc:
         stock['main_stop_source_gap'] = type(exc).__name__
     return False
+
+
+
+def _observe_main_stop_evaluation(stock, code, *, at, evaluator, stage, decision_price,
+        decision_price_basis, decision_profit_pct, priority_status='reached', preset_stop=None,
+        preset_predecessor=None, legacy_broker_recovered=False, decision_inputs=None):
+    """Capture an actually reached native stage without changing its disposition.
+
+    A normal call owns its own receipt even when fast already captured this
+    quote inside the shared one-second observation cadence. No new quote/IO.
+    """
+    try:
+        from src.engine.scalping.main_stop_runtime_source import evaluation_source, evaluation_reference
+        from src.engine.scalping.main_stop_policy import enqueue_source, digest
+        context = stock.get('_main_stop_current_quote_context')
+        if (not isinstance(context, dict) or context.get('at') != at or context.get('evaluator') != evaluator):
+            # Preserve the actual gate call even when its quote projection is
+            # missing. Null quote facts never become executable-price evidence.
+            from src.engine.scalping.position_peak_ledger import position_cycle_id
+            context = dict(at=at, evaluator=evaluator, quote={}, bid=None, bid_qty=None,
+                complete=False, market=(stock.get('main_stop_policy_pin') or {}).get('market'),
+                position_key=position_cycle_id(stock), quantity=stock.get('buy_qty'),
+                buy_price=stock.get('buy_price'), pending_exit=bool(stock.get('exit_requested')),
+                decision_profit_pct=decision_profit_pct,
+                quote_max_age_sec=QuoteConsistencyConfig.from_env().max_ws_age_ms / 1000.0)
+        previous = stock.get('_main_stop_last_quote_source')
+        # Only quote/position facts are shared. Actual stage, clock, price basis
+        # and predecessor are always freshly supplied by the native caller.
+        shared = isinstance(previous, dict) and all((
+            previous.get('position_key') == context['position_key'],
+            previous.get('quantity') == context['quantity'],
+            previous.get('buy_basis_krw') == context['quantity'] * context['buy_price'],
+            previous.get('pin_sha256') == (stock.get('main_stop_policy_pin') or {}).get('pin_sha256'),
+            previous.get('bid') == context['bid'], previous.get('bid_qty') == context['bid_qty'],
+            previous.get('coverage_complete') is context['complete'],
+            previous.get('item') == context['quote'].get('item'),
+            previous.get('route') == context['quote'].get('market_route'),
+            previous.get('transport_epoch') == context['quote'].get('transport_epoch'),
+            previous.get('quote_at') == context['quote'].get('observed_epoch'),
+            previous.get('pending_exit') == bool(stock.get('exit_requested')),
+            previous.get('manual') == bool(stock.get('manual_control_exclusion_blocked')),
+            previous.get('automatic_management_allowed') == (not bool(stock.get('manual_control_exclusion_blocked')
+                or stock.get('manual_control_hard_stop_handoff_pending') or stock.get('manual_control_hard_stop_handoff_inflight'))),
+            previous.get('add_count') == stock.get('add_count', 0),
+            previous.get('pending_add') == bool(stock.get('pending_add_qty') or stock.get('pending_add_ord_no') or stock.get('pending_add_ord_nos')),
+            previous.get('protect_line') == stock.get('trailing_stop_price'),
+        ))
+        if not shared:
+            if not _capture_main_stop_observation(stock, code, context, force=True, decision_capture=True):
+                raise ValueError('native_evaluation_quote_capture_gap')
+            previous = stock.get('_main_stop_last_quote_source')
+        if (not isinstance(previous, dict)
+                or previous.get('manual') != bool(stock.get('manual_control_exclusion_blocked'))
+                or previous.get('pending_exit') != bool(stock.get('exit_requested'))
+                or previous.get('automatic_management_allowed') != (not bool(stock.get('manual_control_exclusion_blocked')
+                    or stock.get('manual_control_hard_stop_handoff_pending') or stock.get('manual_control_hard_stop_handoff_inflight')))):
+            raise ValueError('native_evaluation_custody_generation_changed')
+        if stage == 'common_soft':
+            from src.engine.ai.holding_vote_replay_source import runtime_source
+            decision_inputs = dict(decision_inputs or {})
+            vote = runtime_source(stock,
+                position_key=_scalp_holding_source_position_key(stock, code),
+                buy_fill_identity=buy_fill_identity_from_runtime(stock), market=context['market'], now=at,
+                policy=_holding_path_policy_for('EXIT_SOFT_STOP', context['market']),
+                data_root=DATA_DIR, model=str(getattr(TRADING_RULES, 'OPENAI_HOLDING_EXIT_VOTE_MODEL', 'gpt-5.4-nano')),
+                path_id='EXIT_SOFT_STOP')
+            decision_inputs.update(holding_vote_source=vote, holding_ai_required=True,
+                cost_model=stock.get('_trailing_entry_cost_model'))
+        receipt = evaluation_source(stock, quote_source=previous, at=at, evaluator=evaluator,
+            stage=stage, decision_price=decision_price, decision_price_basis=decision_price_basis,
+            decision_profit_pct=decision_profit_pct, priority_status=priority_status,
+            preset_stop=preset_stop, preset_predecessor=preset_predecessor,
+            legacy_broker_recovered=legacy_broker_recovered,
+            quote_max_age_sec=context['quote_max_age_sec'], decision_inputs=decision_inputs, seal=False)
+        if not enqueue_source(stock, code, receipt):
+            raise ValueError('native_evaluation_queue_rejected')
+        sealed = dict(receipt, source_sha256=digest(receipt))
+        if stage == 'preset_safety' and evaluator == 'normal':
+            stock['_main_stop_normal_preset_evaluation'] = evaluation_reference(sealed)
+        return sealed
+    except Exception as exc:
+        stock['main_stop_evaluation_source_gap'] = str(exc)[:160]
+        stock['main_stop_evaluation_rejected_count'] = stock.get('main_stop_evaluation_rejected_count', 0) + 1
+        return None
+
+
+def _observe_main_stop_preset_evaluation(stock, code, *, at, evaluator, decision_price,
+        decision_price_basis, profit_rate, hard_pct, emergency_pct, grace_sec, held_sec,
+        legacy=False, handoff_enabled=None):
+    try:
+        from src.engine.scalping.main_stop_policy import preset_stop_receipt
+        preset = preset_stop_receipt(stock, at=at, evaluator=evaluator, hard_pct=hard_pct,
+            emergency_pct=emergency_pct, grace_sec=grace_sec, held_sec=held_sec, enabled=not legacy)
+        return _observe_main_stop_evaluation(stock, code, at=at, evaluator=evaluator,
+            stage='preset_safety', decision_price=decision_price, decision_price_basis=decision_price_basis,
+            decision_profit_pct=profit_rate, priority_status='blocked_legacy' if legacy else 'reached',
+            preset_stop=preset, legacy_broker_recovered=bool(legacy),
+            decision_inputs=dict(handoff_enabled=(
+                _env_or_rule_bool('HARD_STOP_MANUAL_HANDOFF_ENABLED', False)
+                if handoff_enabled is None else handoff_enabled)))
+    except Exception as exc:
+        stock['main_stop_evaluation_source_gap'] = type(exc).__name__
+        return None
 
 
 def _observe_scalp_trailing_input_transition(
@@ -30580,10 +30693,17 @@ def _evaluate_and_dispatch_fast_scalp_exit(
     if hard_stop_pct is None:
         hard_stop_pct = _main_stop_values(stock, observed_at).hard_stop_pct
     held_sec = _resolve_holding_elapsed_sec(stock, now_ts=observed_at)
+    stop_handoff_enabled = _env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False)
     safety = safety_decision(profit_pct=profit_rate, hard_pct=hard_stop_pct,
         emergency_pct=emergency_pct, protect_pct=protect_pct,
         held_sec=held_sec, preset_grace_sec=_safe_float(stock.get("hard_stop_grace_sec"), 0),
-        handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False))
+        handoff_enabled=stop_handoff_enabled)
+    if fast_stop_enabled:
+        _observe_main_stop_preset_evaluation(stock, code, at=observed_at, evaluator='fast',
+            decision_price=decision_price, decision_price_basis=('executable_bid' if trusted_bid > 0 and decision_price == trusted_bid else 'mark_price'), profit_rate=profit_rate,
+            hard_pct=hard_stop_pct, emergency_pct=emergency_pct,
+            grace_sec=_safe_float(stock.get("hard_stop_grace_sec"), 0), held_sec=held_sec,
+            handoff_enabled=stop_handoff_enabled)
     if fast_stop_enabled and safety.disposition in {"exit_candidate", "manual_handoff"}:
         exit_rule = safety.rule
         trigger_kind = {"scalp_hard_stop_emergency": "emergency_stop", "scalp_protect_profit_stop": "protect_stop"}.get(exit_rule, "hard_stop")
@@ -46589,6 +46709,11 @@ def _finalize_entry_split_probe_partial_position(
         filled_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
         if not 0 < filled_qty < requested_qty:
             return False
+        try:
+            from src.engine.scalping.main_stop_quantity_source import retain_quantity_source
+            retain_quantity_source(stock, at=time.time())
+        except Exception as exc:
+            stock['main_stop_quantity_source_gap'] = type(exc).__name__
         move_orders_to_terminal(stock, reason="entry_split_probe_partial_complete")
         _mutate_stock_state(
             stock,
@@ -73483,6 +73608,11 @@ def _clear_pending_entry_meta(stock, *, preserve_probe_runtime=False):
                 reason='entry_attempt_cleared_without_position'):
             _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
     with ENTRY_LOCK:
+        try:
+            from src.engine.scalping.main_stop_quantity_source import retain_quantity_source
+            retain_quantity_source(stock, at=time.time())
+        except Exception as exc:
+            stock['main_stop_quantity_source_gap'] = type(exc).__name__
         move_orders_to_terminal(stock, reason="pending_entry_meta_cleared")
         clear_keys = [
             "pending_entry_orders",
@@ -86548,6 +86678,13 @@ def handle_holding_state(
         )
         preset_held_sec = _resolve_holding_elapsed_sec(stock, now_ts=now_ts)
         preset_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
+        _prepare_main_stop_limit_up_quote(stock, code, ws_data=ws_data,
+            quote_fields=holding_quote_fields, now_ts=now_ts, profit_rate=profit_rate)
+        _observe_main_stop_preset_evaluation(stock, code, at=now_ts, evaluator='normal',
+            decision_price=curr_p, decision_price_basis='mark_price', profit_rate=profit_rate,
+            hard_pct=preset_hard_stop_pct, emergency_pct=preset_hard_stop_emergency_pct,
+            grace_sec=preset_hard_stop_grace_sec, held_sec=preset_held_sec,
+            legacy=legacy_broker_recovered)
 
         if legacy_broker_recovered:
             _mutate_stock_state(
@@ -87294,6 +87431,22 @@ def handle_holding_state(
             )
             exit_rule = "scalp_hard_stop_pct"
 
+        if not is_sell_signal:
+            predecessor = stock.get('_main_stop_normal_preset_evaluation')
+            if not isinstance(predecessor, dict) or predecessor.get('at') != now_ts:
+                predecessor = None
+            _observe_main_stop_evaluation(stock, code, at=now_ts, evaluator='normal',
+                stage='common_soft', decision_price=curr_p, decision_price_basis='mark_price',
+                decision_profit_pct=profit_rate, preset_predecessor=predecessor,
+                legacy_broker_recovered=bool(legacy_broker_recovered),
+                decision_inputs=dict(
+                    grace_enabled=_rule_bool('SCALP_SOFT_STOP_MICRO_GRACE_ENABLED', True)
+                        and not bool(stock.get('main_stop_pin_persistence') or stock.get('main_stop_clock_unobserved')),
+                    after_add=bool(stock.get('reversal_add_used')) or stock.get('reversal_add_state') == 'POST_ADD_EVAL',
+                    handoff_enabled=_env_or_rule_bool('HARD_STOP_MANUAL_HANDOFF_ENABLED', False),
+                    protect_enabled=_env_or_rule_bool('SCALP_PROTECT_TRAILING_SMOOTH_ENABLED', True),
+                    vote_max_worsen_pct=_rule('HOLDING_FLOW_OVERRIDE_WORSEN_PCT', 0.8),
+                    soft_stop_micro_grace_started_at=stock.get('soft_stop_micro_grace_started_at')))
         if not is_sell_signal and profit_rate <= dynamic_stop_pct:
             from src.engine.scalping.main_stop_policy import soft_decision
             stop_values = _main_stop_values(stock, now_ts)

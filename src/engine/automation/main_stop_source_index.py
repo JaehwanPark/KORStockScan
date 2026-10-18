@@ -4,7 +4,7 @@ Owns no live collection. Source rows remain in the original pipeline ledger;
 sealed indexes contain offsets and hashes, never duplicate AI/quote bodies.
 """
 from collections import Counter, OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 from pathlib import Path
@@ -18,7 +18,7 @@ from src.engine.lifecycle.holding_window_generation import byte_generation
 from src.utils.jsonl_io import open_text_auto
 
 PARTITIONS = 16
-SCHEMA = 'main_stop_source_reference_index_v1'
+SCHEMA = 'main_stop_source_reference_index_v2'
 
 
 def extract(event):
@@ -85,10 +85,32 @@ def prepare(root, inventory, loader, census):
                             counts['unidentifiable']+=1;continue
                         cell=str(row.get('role',''))+'|'+str(row.get('market',''))
                         bucket=int(hashlib.sha256(key.encode()).hexdigest()[:8],16)%PARTITIONS
+                        evaluation=row.get('schema')=='main_stop_evaluation_source_v1'
                         kind=('1' if row.get('schema')=='main_stop_handoff_source_v1' else
-                              '2' if row.get('schema')=='main_stop_release_source_v1' else '0')
-                        record=dict(id=f'{key}|{float(at):020.6f}|{kind}',position_key=key,at=at,
+                              '2' if row.get('schema')=='main_stop_release_source_v1' else
+                              '0e' if evaluation else '0')
+                        # An actual normal decision and a fast/shared quote can
+                        # have the same clock. Preserve distinct evaluation
+                        # generations; conflicting bodies of one ID stay visible.
+                        generation_id=row.get('evaluation_generation')
+                        suffix=('|'+f'{generation_id:020d}'+'|'+str(row.get('evaluation_id'))
+                                if evaluation and type(generation_id) is int and generation_id>0 else
+                                '|invalid|'+policy.digest([row.get('evaluator'),row.get('stage'),row.get('evaluation_id')])
+                                if evaluation else '')
+                        observation=row.get('source_observation_generation')
+                        native_id=row.get('evaluation_id') if evaluation else row.get('quote_id')
+                        if type(observation) is int and observation>0 and isinstance(native_id,str):
+                            kind='0n';suffix='|'+f'{observation:020d}'+'|'+native_id
+                        record=dict(id=f'{key}|{float(at):030.9f}|{kind}{suffix}',position_key=key,at=at,
                             cell=cell,offset=offset,line_sha256=line_sha,content_sha256=policy.digest(row))
+                        record['source_schema']=row.get('schema')
+                        if native_id:record['event_anchor']=str(row.get('schema'))+'|'+str(native_id)
+                        if evaluation:
+                            record.update(evaluator=row.get('evaluator'),stage=row.get('stage'),
+                                evaluation_id=row.get('evaluation_id'),quote_source_sha256=row.get('quote_source_sha256'))
+                            counts['evaluation:'+str(row.get('evaluator'))+':'+str(row.get('stage'))]+=1
+                        elif row.get('schema')=='main_stop_source_v1':
+                            counts['shared_quote_rows']+=1
                         raw=storage.encoded(record)+b'\n'
                         used+=len(raw)
                         if used>INDEX_LIMIT:raise ValueError('stop_daily_reference_spool_budget_exceeded')
@@ -106,6 +128,81 @@ def prepare(root, inventory, loader, census):
         census.update(body['census'])
         result.append((directory,body))
     return result
+
+
+@contextmanager
+def prior_sealed_indexes(report_path):
+    with ExitStack() as resources:
+        yield _prior_sealed_indexes(report_path,resources)
+
+
+def _prior_sealed_indexes(report_path, resources):
+    """Read an earlier sealed census without pretending to rehash its raw files.
+
+    The prior report owns population/source inventory. Selected rows are still
+    re-read and checked by Position.rows; unselected raw bytes have no new claim.
+    """
+    from src.engine.lifecycle.research_input_budget import Claim
+    def read(path):
+        path=Path(path).absolute()
+        if path.is_symlink() or any(p.is_symlink() for p in path.parents):
+            raise ValueError('stop_prior_index_path_invalid')
+        resources.enter_context(Claim(path.stat().st_size*8))
+        return policy.bounded_object(path)
+    report_path=Path(report_path).absolute()
+    report,report_sha=read(report_path)
+    if (report.get('schema')!='main_stop_execution_research_v1'
+            or report.get('status')!='completed_report_only'
+            or report.get('report_sha256')!=policy.digest({k:v for k,v in report.items() if k!='report_sha256'})
+            or report.get('allowed_runtime_apply') is not False
+            or report.get('policy_mutated') is not False
+            or report.get('code_sha256')!=policy.digest(report.get('research_code_generation'))):
+        raise ValueError('stop_prior_research_report_invalid')
+    receipt_path=Path(report['input_receipt'])
+    if receipt_path.absolute()!=report_path.parent/'input_receipt.json':
+        raise ValueError('stop_prior_input_path_invalid')
+    receipt,receipt_sha=read(receipt_path)
+    if (receipt.get('receipt_sha256')!=policy.digest({k:v for k,v in receipt.items() if k!='receipt_sha256'})
+            or receipt.get('receipt_sha256')!=report.get('input_receipt_sha256')
+            or receipt.get('source_sha256')!=report.get('source_sha256')
+            or receipt.get('source_date')!=report.get('source_date')
+            or receipt.get('code_sha256')!=report.get('code_sha256')
+            or receipt.get('research_code_generation')!=report.get('research_code_generation')
+            or receipt.get('original_report')!=report.get('original_report')
+            or receipt.get('allowed_runtime_apply') is not False):
+        raise ValueError('stop_prior_input_binding_invalid')
+    inventory=receipt.get('source_inventory')
+    if not isinstance(inventory,dict) or len(inventory)>4096 or policy.digest(inventory)!=report['source_sha256']:
+        raise ValueError('stop_prior_inventory_invalid')
+    files=report['research_code_generation']['files']
+    decoder=policy.digest(dict(index=files['automation/main_stop_source_index.py'],
+        loader=files['automation/main_stop_postclose.py'],projection=files['automation/main_stop_source_projection.py']))
+    prepared=[];references=[];stats={}
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    for name,generation in inventory.items():
+        source=Path(name)
+        if (source.is_symlink() or any(p.is_symlink() for p in source.parents)
+                or not source.is_file() or source.stat().st_size!=generation.get('size')):
+            raise ValueError('stop_prior_selected_source_path_changed')
+        stats[name]=source_stat(source.stat())
+        identity=policy.digest(dict(path=name,generation=generation,decoder=decoder))
+        directory=report_path.parent/'source_index'/identity
+        path=directory/'index.json';body,sha=read(path)
+        if (body.get('schema') not in {'main_stop_source_reference_index_v1',SCHEMA}
+                or body.get('identity')!=identity or body.get('source')!=name
+                or body.get('generation')!=generation
+                or body.get('sha256')!=policy.digest({k:v for k,v in body.items() if k!='sha256'})):
+            raise ValueError('stop_prior_index_binding_invalid')
+        prepared.append((directory,body));references.append(dict(path=str(path),sha256=sha))
+    if sum(body.get('census',{}).get('raw',0) for _,body in prepared)!=report.get('source_census',{}).get('raw',0):
+        raise ValueError('stop_prior_index_population_changed')
+    proof=dict(prior_report=dict(path=str(report_path),sha256=report_sha),
+        prior_input_receipt=dict(path=str(receipt_path),sha256=receipt_sha),
+        prior_source_inventory_sha256=report['source_sha256'],prior_decoder_sha256=decoder,
+        current_index_references=references,historical_index_byte_hash_previously_pinned=False,
+        full_current_raw_generation_rehashed=False,
+        population_scope='prior_sealed_index_selected_rows_only',allowed_runtime_apply=False)
+    return prepared,proof,stats,report
 
 
 class Position:
@@ -158,10 +255,19 @@ def positions(prepared, directory, census, *, checkpoint=lambda:None):
         relevant=[(root,body) for root,body in prepared if str(bucket) in body['partitions']]
         if not relevant:continue
         with storage.index(directory) as db:
+            db.execute('CREATE TABLE event_anchors (anchor TEXT PRIMARY KEY,ordering_id TEXT,sha TEXT)')
             for root,body in relevant:
                 for ref in storage.iter_tree(root,body['partitions'][str(bucket)]):
                     checkpoint()
+                    census['indexed_references']+=1
                     storage.put(db,ref['id'],dict(ref,path=body['source']),content_sha=ref['content_sha256'])
+                    anchor=ref.get('event_anchor')
+                    if anchor:
+                        prior=db.execute('SELECT ordering_id,sha FROM event_anchors WHERE anchor=?',(anchor,)).fetchone()
+                        if prior is None:
+                            db.execute('INSERT INTO event_anchors VALUES (?,?,?)',(anchor,ref['id'],ref['content_sha256']))
+                        elif prior!=(ref['id'],ref['content_sha256']):
+                            db.execute('UPDATE records SET conflicted=1 WHERE id IN (?,?)',(prior[0],ref['id']))
             db.execute('CREATE TABLE positions (id TEXT PRIMARY KEY,cell TEXT,first_at REAL,last_at REAL)')
             for raw,conflict in db.execute('SELECT body,conflicted FROM records ORDER BY id'):
                 ref=json.loads(raw)

@@ -16,6 +16,7 @@ from src.engine.lifecycle import research_storage as storage
 from src.engine.scalping import main_stop_policy as policy
 from src.engine.scalping.main_stop_experiment import validate_experiment_v2
 from src.tests.test_main_stop_policy import baseline, publication, rows
+from src.tests.test_main_stop_runtime_source import evaluation_stream
 
 
 class EconomicSource:
@@ -44,8 +45,11 @@ def economic_boundary(monkeypatch, *, eligible=False, grade='exact_execution'):
             reason=None if eligible else 'native_completion_missing', evidence_grade=grade,
             quantity_basis=dict(buy_qty=10, sell_qty=10, residual_qty=0),
             manual_exit=False, runtime_effect=False, custody_status='verified_registry_fill_census',
-            fill_state='fully_closed', main_exit_source=dict(status='verified_native_decision_submit_chain'),
-            terminal_observation=dict(code='005930'), allowed_runtime_apply=False)
+            fill_state='fully_closed', canonical_pnl_mutated=False, actual_execution_cost=grade=='exact_execution',
+            actual_position_cost=grade=='exact_position_total', main_exit_source=dict(status='verified_native_decision_submit_chain'),
+            terminal_observation=dict(code='005930',terminal_fill_time='2026-10-12 23:59:00',
+                buy_fill_legs=[dict(order_no='0000123',execution_no='E1',qty=10,at='2026-10-12 09:00:00')]),
+            allowed_runtime_apply=False)
         result['artifact_sha256'] = policy.digest(result)
         return result
 
@@ -60,7 +64,7 @@ def fixture(tmp_path, monkeypatch, *, eligible=False, count=4):
         population = (row for index in range(count)
                       for row in rows(1791766800.+index*100, index+1))
         source.write_text(''.join(json.dumps(dict(stage='main_stop_source',
-            fields={'main_stop_source': row}))+'\n' for row in population))
+            fields={'main_stop_source': row}))+'\n' for row in evaluation_stream(population)))
         parents = {f'{role}|{market}': baseline() for role in policy.ROLES for market in policy.MARKETS}
         _, native = post.publish(data, '2026-10-12', '2026-10-13', parents=parents,
             parent_receipt=parent, snapshot_receipt=native['snapshot_receipt'],
@@ -335,7 +339,8 @@ def test_exact_position_total_is_separate_and_unsealed_costs_cannot_enter():
         main_exit_source=dict(status='verified_native_decision_submit_chain'),
         quantity_basis=dict(buy_qty=10, sell_qty=10, residual_qty=0), terminal_observation=dict(code='005930'))
     economic['artifact_sha256'] = policy.digest(economic)
-    assert run._economic_matches_position(economic, source)
+    # A sealed aggregate alone does not identify the original BUY generation.
+    assert not run._economic_matches_position(economic, source)
     economic['quantity_basis']['sell_qty'] = 9
     assert not run._economic_matches_position(economic, source)
 
@@ -360,7 +365,7 @@ def test_native_normal_exit_prefix_preserves_postdecision_tail_without_interpola
                 ('grace_enabled','protect_enabled','handoff_enabled','vote_max_worsen_pct')}))
     source=data/'pipeline_events'/f'pipeline_events_{DAY}.jsonl';source.parent.mkdir(parents=True)
     source.write_text(''.join(json.dumps(dict(stage='main_stop_source',fields={'main_stop_source':row}))+'\n'
-                              for row in emitted))
+                              for row in evaluation_stream(emitted)))
     parent=seal(data/'parent.json',{'values':asdict(baseline())})
     snapshot=seal(data/'snapshot.json',{'date':DAY})
     parents={f'{role}|{market}':baseline() for role in policy.ROLES for market in policy.MARKETS}
@@ -382,12 +387,12 @@ def test_native_normal_exit_prefix_preserves_postdecision_tail_without_interpola
         assert row['terminal_source_gap'] is None
         assert row['replay_window']['kind']=='verified_normal_exit_prefix'
         assert row['replay_window']['end_at']==original_last['at']
-        assert row['replay_window']['excluded_tail']['observations']==2
+        assert row['replay_window']['excluded_tail']['observations']==5
         assert row['replay_window']['source_evidence_preserved'] is True
         assert row['outcomes']['parent']['modeled_net_krw']>0
         assert row['outcomes']['grace_sec:0']['modeled_net_krw']<0
         assert row['common_modeled'] and row['economic_position_match']
-        assert row['diagnostics']['counts']['observations']==6
+        assert row['diagnostics']['counts']['observations']==12
 
 
 def test_offline_cost_owner_code_change_invalidates_research_even_when_runtime_family_matches(tmp_path,monkeypatch):
@@ -413,8 +418,8 @@ def test_metrics_keep_common_denominator_grades_and_correct_standard_error():
     cell = dict(mixed_parent_values=False)
     source = dict(buy_basis_krw=10000.)
     def sample(delta):
-        return {'parent': dict(modeled_net_krw=0., mae_pct=-1., exposure_sec=10.),
-                'grace_sec:0': dict(modeled_net_krw=delta, mae_pct=-2., exposure_sec=5.)}
+        return {'parent': dict(modeled_net_krw=0., mae_pct=-1., exposure_sec=10.,quantity_status='full_fill'),
+                'grace_sec:0': dict(modeled_net_krw=delta, mae_pct=-2., exposure_sec=5.,quantity_status='full_fill')}
     for delta in (1., 3., 5., 7.):
         run._paired_metrics(cell, sample(delta), source, {'evidence_grade': 'exact_execution'}, True)
     run._paired_metrics(cell, sample(999.), source, {'evidence_grade': 'broker_total_allocated'}, True)
@@ -425,3 +430,59 @@ def test_metrics_keep_common_denominator_grades_and_correct_standard_error():
     assert stat['standard_error_krw'] == pytest.approx(math.sqrt(20/3/4))
     assert stat['mean_delta_bps'] == 4. and stat['mae_worse_count'] == 4
     assert cell['paired_metrics']['broker_total_allocated']['grace_sec:0']['n'] == 1
+
+
+def test_historical_census_revalidates_selected_rows_without_rehash_or_cost(tmp_path,monkeypatch):
+    args,_=fixture(tmp_path,monkeypatch)
+    prior=run.run_research(**args)
+    old=tree_bytes(args['output_root']);source_before=tree_bytes(args['data_root'])
+    source_paths=set(json.loads((args['output_root']/'input_receipt.json').read_text())['source_inventory'])
+    original_generation=run.byte_generation
+    def guarded(path):
+        assert str(path) not in source_paths,'historical census must not claim a fresh full raw hash'
+        return original_generation(path)
+    monkeypatch.setattr(run,'byte_generation',guarded)
+    monkeypatch.setattr(cost,'prepare_economic_source',lambda *a,**k:pytest.fail('cost overlay forbidden in support census'))
+    output=tmp_path/'support'
+    result=run.historical_support_census(data_root=args['data_root'],output_root=output,
+        input_report=args['output_root']/'report.json',source_date=args['source_date'],target_date=args['target_date'])
+    assert result['position_count']==prior['position_count']==4
+    assert result['supported_decisions']==36
+    assert result['economics_evaluated'] is False and result['selected_row_bytes_revalidated'] is True
+    assert result['full_current_raw_generation_rehashed'] is False
+    assert result['historical_index_byte_hash_previously_pinned'] is False
+    assert tree_bytes(args['output_root'])==old and tree_bytes(args['data_root'])==source_before
+    assert len(list(storage.iter_tree(output,result['position_evidence'])))==4
+    with pytest.raises(ValueError,match='already_sealed'):
+        run.historical_support_census(data_root=args['data_root'],output_root=output,
+            input_report=args['output_root']/'report.json',source_date=args['source_date'],target_date=args['target_date'])
+
+
+@pytest.mark.parametrize('fault',['raw','index','input','report'])
+def test_historical_census_rejects_changed_source_binding_and_preserves_failure(tmp_path,monkeypatch,fault):
+    args,_=fixture(tmp_path,monkeypatch);run.run_research(**args)
+    if fault=='raw':
+        inventory=json.loads((args['output_root']/'input_receipt.json').read_text())['source_inventory']
+        path=Path(next(iter(inventory)))
+        body=path.read_text();path.write_text(body.replace('9990','9991',1))
+    else:
+        path=(next((args['output_root']/'source_index').glob('*/index.json')) if fault=='index'
+            else args['output_root']/('input_receipt.json' if fault=='input' else 'report.json'))
+        body=json.loads(path.read_text());body['changed']=True;path.write_text(json.dumps(body))
+    output=tmp_path/'support'
+    with pytest.raises(ValueError):
+        run.historical_support_census(data_root=args['data_root'],output_root=output,
+            input_report=args['output_root']/'report.json',source_date=args['source_date'],target_date=args['target_date'])
+    assert not (output/'report.json').exists()
+    assert len(list((output/'failures').glob('*.json')))==1
+
+
+def test_metrics_keep_settled_partial_out_of_full_quantity_cohort():
+    cell=dict(mixed_parent_values=False)
+    outcomes={name:dict(quantity_status='settled_partial',modeled_net_krw=value,mae_pct=-1.,exposure_sec=2.)
+        for name,value in [('parent',1.),('candidate',2.)]}
+    run._paired_metrics(cell,outcomes,{'buy_basis_krw':10000.},{'evidence_grade':'exact_execution'},True)
+    run._finish_paired_metrics({'cell':cell})
+    assert 'paired_metrics' not in cell
+    assert cell['settled_partial_paired_metrics']['exact_execution']['candidate']['n']==1
+    assert cell['settled_partial_paired_metrics']['exact_execution']['candidate']['quantity_cohort']=='settled_partial'

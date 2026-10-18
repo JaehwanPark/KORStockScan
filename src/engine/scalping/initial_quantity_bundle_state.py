@@ -315,9 +315,10 @@ def next_bundle_state(previous: dict[str, Any], leg_index: int,
     return successor
 
 
-def read_bundle_state(path: Path) -> dict[str, Any] | None:
+def read_bundle_state(path: Path, *, read_object=None) -> dict[str, Any] | None:
     try:
-        state = json.loads(Path(path).read_bytes())
+        state = (json.loads(Path(path).read_bytes()) if read_object is None
+                 else read_object(Path(path)))
     except (OSError, ValueError, UnicodeError):
         return None
     return (state if bundle_state_valid(state)
@@ -545,21 +546,24 @@ def _target_index_valid(index: Any, *, code: str, target_id: str) -> bool:
 
 
 def read_bundle_for_target(base_dir: Path, code: str,
-                           target_id: str) -> tuple[dict[str, Any] | None, str]:
+                           target_id: str, *, read_object=None) -> tuple[dict[str, Any] | None, str]:
     """Recover the exact journal for a target after in-memory state is lost."""
     try:
         index_path = bundle_target_index_path(base_dir, code, target_id)
     except ValueError:
         return None, "target_identity_invalid"
     try:
-        index = json.loads(index_path.read_bytes())
+        index = (json.loads(index_path.read_bytes()) if read_object is None
+                 else read_object(index_path))
     except FileNotFoundError:
         return None, "target_index_absent"
     except (OSError, ValueError, UnicodeError):
         return None, "target_index_unreadable"
     if not _target_index_valid(index, code=code, target_id=target_id):
         return None, "target_index_invalid"
-    bundle = read_bundle_state(bundle_state_path(base_dir, index["attempt_id"]))
+    journal_path = bundle_state_path(base_dir, index["attempt_id"])
+    bundle = (read_bundle_state(journal_path) if read_object is None else
+              read_bundle_state(journal_path, read_object=read_object))
     if (bundle is None or bundle["code"] != code
             or bundle["target_id"] != target_id
             or bundle["attempt_id"] != index["attempt_id"]
