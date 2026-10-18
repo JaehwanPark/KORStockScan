@@ -256,7 +256,7 @@ class Source:
                 buys, sells = legs
                 parsed_buys, parsed_sells = allocation._legs(buys), allocation._legs(sells)
                 permitted = {'source_gap_sell_leg_configured_cost', 'source_gap_actual_cost_missing',
-                             'source_gap_broker_actual_cost_missing'}
+                             'source_gap_broker_actual_cost_missing', 'source_gap_exact_cost_missing'}
                 if (trade.get('status') != 'COMPLETED' or not parsed_buys or not parsed_sells
                     or set(trade.get('strict_completion_reasons') or []) - permitted
                     or trade.get('sell_quantity_conserved') is not True

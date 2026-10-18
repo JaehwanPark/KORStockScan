@@ -72,6 +72,41 @@ def test_native_registry_allocation_and_raw_source_are_bound_without_actual_muta
     assert trade==original
 
 
+@pytest.mark.parametrize('additional_reason',[None,'source_gap_duplicate_sell_execution','unknown_completion_reason'])
+def test_native_missing_exact_cost_label_allows_allocated_research_only(tmp_path,monkeypatch,additional_reason):
+    from src.tests.test_broker_cost_reconciliation import fixture as native_fixture
+    from src.engine import sniper_trade_review_report as producer
+    raw,events,_,_,_=native_fixture()
+    raw.update(code='005930',rec_date=DAY)
+    for event in events:
+        event.timestamp=event.timestamp.replace('2026-10-08',DAY)
+        event.code='005930'
+        event.fields['order_no']={'B':'0000011','S':'0000012'}[event.fields['order_no']]
+        event.fields['execution_no']={'B1':'101','S1':'102','S2':'103'}[event.fields['execution_no']]
+    events[-1].fields.update(profit_rate=.8,
+        main_lifecycle_execution_occurred_at=DAY+'T10:01:01+09:00')
+    trade=producer._completed_trade_projection(raw,events,{})
+    assert 'source_gap_exact_cost_missing' in trade['strict_completion_reasons']
+    if additional_reason:trade['strict_completion_reasons'].append(additional_reason)
+    original=deepcopy(trade);data,costs=tmp_path/'data',tmp_path/'costs'
+    item=dict(record_id='1',symbol='005930',status='COMPLETED',terminal_observed=True,
+        completion_observed_date=DAY,completed_at=DAY+'T10:01:01+09:00',
+        buy_legs=trade['buy_fill_legs'],sell_legs=trade['sell_fill_legs'])
+    registry(data,item,monkeypatch)
+    with adapter.Source(data,cost_data_root=costs) as prepared:
+        item['custody_rows']=prepared._custody(trade,item['buy_legs'])
+    observed=source(costs,buy_qty=2,sell_qty=2,buy_amount=20000,sell_amount=20200,cost=10)
+    official.atomic(official.source_path(costs,DAY),observed)
+    receipts=allocation.build_research_cost_allocations({DAY:observed},[item])
+    allocation.persist_research_costs(costs,DAY,receipts,[DAY])
+    with adapter.Source(data,cost_data_root=costs) as prepared:
+        result=prepared.record(trade,completion_date=DAY)
+    assert result['status']==('source_gap' if additional_reason else 'research_cost_allocated'),result
+    assert result['allocated_net_pnl_krw']==(None if additional_reason else 190)
+    assert result['actual_pnl_krw'] is None and result['selector_eligible'] is False
+    assert trade==original
+
+
 @pytest.mark.parametrize('damage',['unknown','raw_missing','raw_changed','receipt_changed','terminal','residual','duplicate','custody','future'])
 def test_cost_gaps_never_become_zero_or_exact_cost(tmp_path,monkeypatch,damage):
     data,costs,trade,receipt=fixture(tmp_path,monkeypatch)
