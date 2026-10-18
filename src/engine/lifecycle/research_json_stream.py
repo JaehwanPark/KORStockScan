@@ -17,7 +17,8 @@ TRADE_FIELDS=frozenset(('id','record_id','strategy','stock_code','code','status'
     'prior_entry_snapshot_receipt','prior_fill_snapshot_receipts','sell_quantity_conserved',
     'terminal_profit_rate_reconciled','realized_pnl_krw_source','realized_pnl_krw',
     'broker_actual_cost_observed','broker_actual_fees_taxes_krw','profit_rate',
-    'strict_completion_status','strict_completion_reasons','exact_sell_fill_time'))
+    'strict_completion_status','strict_completion_reasons','exact_sell_fill_time',
+    'position_residual_qty','terminal_decision_authority','sell_time_forbidden_for_intraday_horizon'))
 
 
 class Reader:

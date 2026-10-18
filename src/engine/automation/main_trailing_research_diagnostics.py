@@ -127,7 +127,14 @@ def _observation(position, events, parent, cutoff):
 
 
 def build(manifest_path, *, input_root, report_path):
-    """Consume sealed input and replay outputs; produce no operational files."""
+    """Consume sealed input/results; bounded cost evidence, no operational files."""
+    from src.engine.lifecycle.research_disk_budget import use
+    output = Path(report_path).resolve().parent
+    with use(output), storage.index(output / 'scratch') as allocated_index:
+        return _build(manifest_path,input_root=input_root,report_path=report_path,allocated_index=allocated_index)
+
+
+def _build(manifest_path, *, input_root, report_path, allocated_index):
     root, report_path = Path(input_root).resolve(), Path(report_path).resolve()
     output = report_path.parent
     before = byte_generation(report_path)
@@ -145,6 +152,9 @@ def build(manifest_path, *, input_root, report_path):
     cohort_counts, statuses = Counter(), Counter()
     comparisons = defaultdict(lambda: dict(n=0, delta=0., notional=0., percent=0.))
     result_ids = set()
+    allocated_counts = Counter()
+    allocated_comparisons = defaultdict(lambda: dict(n=0, delta=0., notional=0.))
+    from src.engine.lifecycle.holding_research_cost import valid_annotation
     for reference in storage.iter_tree(output, report['partition_results_ref']):
         checkpoint = _sealed(_source_path(output, reference['path']))
         if checkpoint['artifact_sha256'] != reference['artifact_sha256']:
@@ -163,6 +173,12 @@ def build(manifest_path, *, input_root, report_path):
             statuses[(kind, baseline['status'], baseline.get('reason'))] += 1
             basis = number(context.get('buy_basis_krw'))
             base_net = number(baseline.get('modeled_net_pnl_krw'))
+            allocated = context.get('holding_research_cost')
+            if allocated is not None and not valid_annotation(allocated,dict(context,position_key=identity)):
+                raise ValueError('holding_research_cost_annotation_invalid')
+            if allocated is not None and kind == 'actual_completed':
+                storage.put(allocated_index,identity,dict(identity=identity,**allocated))
+                allocated_counts[allocated['status']] += 1
             for name, sha in aliases.items():
                 outcome = row['outcomes'][sha]
                 net = number(outcome.get('modeled_net_pnl_krw'))
@@ -170,6 +186,17 @@ def build(manifest_path, *, input_root, report_path):
                         or baseline.get('status') != 'modeled_full_exit'
                         or outcome.get('status') != 'modeled_full_exit'):
                     continue
+                if (kind == 'actual_entry_alternative_exit' and allocated is not None
+                        and allocated.get('status') == 'research_cost_allocated'):
+                    reference = number(allocated.get('allocated_net_pnl_krw'))
+                    total_basis = number(allocated.get('buy_basis_krw'))
+                    known = cost_known_epoch(allocated.get('cost_available_at'))
+                    if reference is None or total_basis is None or total_basis <= 0 or known is None or known > manifest['as_of']:
+                        raise ValueError('holding_research_cost_annotation_economics_invalid')
+                    diagnostic = allocated_comparisons[name]
+                    diagnostic['n'] += 1
+                    diagnostic['delta'] += net-max(base_net,reference)
+                    diagnostic['notional'] += total_basis
                 metric = comparisons[(kind, name)]
                 metric['n'] += 1
                 metric['delta'] += net-base_net
@@ -211,6 +238,14 @@ def build(manifest_path, *, input_root, report_path):
                             for k,n in sorted(statuses.items(), key=lambda x:str(x[0]))],
         observation_counts=[dict(evidence_kind=k[0], state=k[1], count=n) for k,n in sorted(observed.items())],
         position_observations=observations, exit_only_comparisons=metrics,
+        holding_allocated_cost_rows_ref=storage.write_tree(output,(value for _,value,_ in storage.records(allocated_index))),
+        holding_allocated_cost_status_counts=dict(allocated_counts),
+        holding_allocated_cost_comparisons=[dict(candidate=name,paired_count=value['n'],
+            candidate_minus_max_parent_allocated_net_krw=value['delta'],
+            notional_weighted_delta_pct=100*value['delta']/value['notional'],
+            economics_scope='main_holding_exit_research_only',actual_execution_cost=False,
+            actual_pnl_krw=None,selector_eligible=False,allowed_runtime_apply=False)
+            for name,value in sorted(allocated_comparisons.items())],
         economic_comparison_state='paired_modeled' if metrics else 'source_or_execution_insufficient',
         selector_metrics_redefined=False, actual_profit_verified=False, runtime_effect=False, allowed_runtime_apply=False,
         metric_contract=dict(metric_role='funnel_count', decision_authority='report_only',

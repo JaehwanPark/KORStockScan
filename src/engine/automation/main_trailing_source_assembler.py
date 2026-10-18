@@ -25,7 +25,7 @@ from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMast
 SCHEMA = 'main_all_scope_exit_automatic_source_v1'
 
 
-def input_inventory(root,days,master_path,parent_path):
+def input_inventory(root,days,master_path,parent_path,*,cost_data_root=None):
     if not days: raise ValueError('all_scope_assembly_date_window_empty')
     paths={Path(master_path),Path(parent_path)}
     for day in days:
@@ -37,6 +37,9 @@ def input_inventory(root,days,master_path,parent_path):
             if (path.name.endswith(('.json', '.json.gz')) and not path.name.endswith('.archive_receipt.json')
                     and identity_available(path)):
                 paths.add(logical_path(path))
+    from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory
+    paths.update(cost_inventory(cost_data_root or root, days))
+    paths.add(Path(root)/'runtime/order_owner_registry.jsonl')
     paths.update((Path(root)/'runtime/holding_path_votes').glob('*.jsonl*'))
     paths.update((Path(root)/'runtime/mechanistic_entry_policy/decisions'/days[-1]).glob('*/*.json'))
     from src.engine.lifecycle.snapshot_archive import present
@@ -54,7 +57,8 @@ def verify_inventory(manifest, assembly_root):
     root=Path(manifest['source_data_root']).resolve()
     _,master=universe(root,manifest['source_date'])
     current=input_inventory(root,manifest['consumed_dates'],master['path'],
-        root/'runtime/policy_bootstrap'/f"runtime_policy_bootstrap_{manifest['source_date']}.json")
+        root/'runtime/policy_bootstrap'/f"runtime_policy_bootstrap_{manifest['source_date']}.json",
+        cost_data_root=manifest.get('holding_research_cost_data_root'))
     from itertools import zip_longest
     if any(old!=new for old,new in zip_longest(
             storage.iter_tree(assembly_root,manifest['assembly_inventory_ref']),current)):
@@ -694,14 +698,15 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
         raise ValueError('all_scope_large_completed_source_changed')
 
 
-def assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False):
+def assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False, cost_data_root=None):
     from src.engine.lifecycle.research_disk_budget import use
-    with use(output),storage.compact_trees():
+    from src.engine.lifecycle.holding_research_cost import Source
+    with use(output),storage.compact_trees(),Source(root,cost_data_root=cost_data_root,knowledge_cutoff=as_of) as costs:
         return _assemble(root,output,source_date=source_date,target_date=target_date,
-            start_date=start_date,as_of=as_of,immutable=immutable)
+            start_date=start_date,as_of=as_of,immutable=immutable,costs=costs)
 
 
-def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False):
+def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False, costs):
     root,output=Path(root).resolve(),Path(output).resolve()
     if output==root or output.is_relative_to(root):
         raise ValueError('all_scope_isolated_assembly_required')
@@ -715,8 +720,8 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
     parent_path=root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{source_date}.json'
     parent,parent_generation=read(parent_path)
     from .main_trailing_all_scope_research import code_contract
-    code=code_contract();inventory=input_inventory(root,days,master_source['path'],parent_path)
-    signature=digest([source_date,target_date,days,as_of,code,window['input_window_generation_sha256'],inventory])
+    code=code_contract();inventory=input_inventory(root,days,master_source['path'],parent_path,cost_data_root=costs.cost_root)
+    signature=digest([source_date,target_date,days,as_of,code,window['input_window_generation_sha256'],inventory,str(costs.cost_root)])
     if immutable:
         output=output/'generations'/signature
         output.mkdir(parents=True,exist_ok=True)
@@ -742,6 +747,8 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
     gaps=Counter();publication_diagnostics=[];as_of=time.time() if as_of is None else number(as_of)
     if as_of is None or as_of<datetime.fromisoformat(source_date+'T00:00:00+09:00').timestamp():
         raise ValueError('all_scope_assembly_cutoff_invalid')
+    costs.cutoff=as_of
+    costs.sources=sources
     operating=_operating(root,source_date,sources,gaps)
     from src.engine.holding_exit_observation_report import _verified_trade_review_projection
     def records():
@@ -785,6 +792,7 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
             for trade,position,events in cohort:
                 if str(trade.get('strategy') or '').upper() not in {'SCALP','SCALPING'}:
                     gaps['non_main_trade']+=1;continue
+                position['holding_research_cost']=costs.record(trade,completion_date=day,assembly_root=output)
                 from src.engine.ai.holding_vote_replay_source import assemble_votes
                 from src.engine.scalping.holding_path_vote_replay import freeze_replay_trade
                 position['holding_path_diagnostic_ref']=storage.write_tree(output,
@@ -863,7 +871,7 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
         if byte_generation(Path(name))!=generation: raise ValueError('all_scope_assembly_source_changed')
     verify_window(root,window)
     source_ref=storage.write_tree(output,({'path':name,'generation':generation} for name,generation in sorted(sources.items())))
-    if input_inventory(root,days,master_source['path'],parent_path)!=inventory:
+    if input_inventory(root,days,master_source['path'],parent_path,cost_data_root=costs.cost_root)!=inventory:
         raise ValueError('all_scope_assembly_inventory_changed')
     inventory_ref=storage.write_tree(output,inventory)
     from src.engine.scalping.trailing_situation_policy import registered_research_grid
@@ -874,7 +882,7 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
         approved_parent_receipt=parent['scalp_trailing_mechanical_policy_receipt'],
         approved_parent_source={'path':'parent.json','sha256':byte_generation(parent_copy)['sha256']},
         consumed_dates=days,partitions_ref=partition_ref,population_ids_ref=population_ref,
-        source_data_root=str(root),source_generations_ref=source_ref,
+        source_data_root=str(root),holding_research_cost_data_root=str(costs.cost_root),source_generations_ref=source_ref,
         assembly_code_contract_sha256=code,assembly_input_generation_sha256=signature,
         assembly_inventory_ref=inventory_ref,input_window_generation_sha256=window['input_window_generation_sha256'],
         assembly_census={'source_gaps':dict(gaps),'quarantined':quarantined_ref,'excluded_native_sources_ref':excluded_ref,
