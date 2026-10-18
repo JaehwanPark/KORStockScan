@@ -9,6 +9,7 @@
 - 후속 release의 동일 정책 코드 인계는 선택된 predecessor의 native 검증을 통과한 immutable 원 준비 증거를 이어받는다. `previous_handoff`는 현재 선택 commit/family의 정식 경로만 허용하며 원 정책·원 코드 digest·전체 source·날짜·clean candidate를 재검증한다. 바뀐 controller/summary 경로에 과거 원문을 복원하지 않는다. 선택 경합·원천 변조·다른 family/정책/준비 원본은 거부한다. 이는 정책 발행·PREOPEN·PID 권한이 아니다.
 - trailing 경고는 보고서 code contract와958 실제 계약의 불일치다. 기존 producer의 completion prefix→fact→quantity→holding suffix를 통해 현재 코드의 새 세대를 생성한 뒤 summary/strict/controller/준비와 연결한다.
 - 초기 수량 경고의 기존 완료 모수13건은 비용/수량 결손으로 제외됐다. 운영 research cost index가 없음을 확인했다. 기존 공식 저장 자료를 native producer로 연결하며 배분 연구 비용을 canonical 실제 비용으로 바꾸지 않는다. 복구 불가 부분은 null/제외를 유지한다.
+- 실제 재생성에서 `quantity_pipeline_record_partition_required`를 추가 재현했다. 첫 대형 행은 `strategy_owner_replay_seed_observed`/`record_id=null`이며 수량 거래 범위 밖이다. 64KiB 상한은 유지하고 대형 행 전체의 최상위 식별자를 구조적으로 확인한 뒤 범위 밖만 배제·계수한다. 관련 거래·식별자 누락·중복 키·잘린 구조는 계속 실패한다. 다음 행을 잃지 않는 Unicode/후행 식별자 회귀를 포함한 수량253개 PASS로 검증했다. 정상 fact/비용 의미·원천 hash·세대 CAS는 유지한다.
 
 ## 검증과 진행
 

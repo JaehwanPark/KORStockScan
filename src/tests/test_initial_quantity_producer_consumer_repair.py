@@ -16,6 +16,28 @@ from src.tests.test_initial_quantity_policy import _cap_context, _quality, _fact
 from src.tests.test_initial_quantity_timeout import _research_trade_path
 
 
+@pytest.mark.parametrize('late_identity', [False, True])
+@pytest.mark.parametrize('padding', ['x' * 150000, '\uac00' * 30000])
+def test_oversized_unrelated_pipeline_row_preserves_next_record(late_identity, padding):
+    import io
+    fields = {'record_id': None, 'fields': {'payload': padding}}
+    if late_identity:
+        fields = dict(reversed(list(fields.items())))
+    relevant = json.dumps({'record_id': 7, 'fields': {}}) + '\n'
+    source = relevant + json.dumps(fields, ensure_ascii=False) + '\n' + relevant
+    receipt = {}
+    assert list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, receipt)) == [relevant, relevant]
+    assert receipt == {'oversized_out_of_cohort_records': 1}
+
+
+@pytest.mark.parametrize('identity', ['"record_id":7,', '', '"record_id":null,"record_id":8,'])
+def test_oversized_relevant_or_unidentified_pipeline_row_stays_blocked(identity):
+    import io
+    source = '{' + identity + '"fields":{"payload":"' + 'x' * 150000 + '"}}\n'
+    with pytest.raises(ValueError):
+        list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, {}))
+
+
 def test_native_fact_sync_preserves_null_real_zero_and_provenance(monkeypatch,tmp_path):
     from src.engine import strategy_position_performance_report as mod
     from src.engine.scalping import scale_in_split_order_plan as scale

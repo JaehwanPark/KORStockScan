@@ -667,6 +667,50 @@ def _record_id(raw: str) -> str:
     return match.group(1) or match.group(2)
 
 
+def _quantity_pipeline_rows(handle, records, receipt):
+    """Keep bounded rows; drain only proven out-of-cohort oversized records."""
+    from src.engine.lifecycle.research_json_stream import Reader
+
+    class Line:
+        def __init__(self, first):
+            self.first = first
+            self.done = first.endswith('\n')
+
+        def read(self, size):
+            if self.first:
+                value, self.first = self.first[:size], self.first[size:]
+                return value
+            if self.done:
+                return ''
+            value = handle.readline(size)
+            self.done = not value or value.endswith('\n')
+            return value
+
+    while raw := handle.readline(64 * 1024 + 1):
+        if len(raw.encode('utf-8')) <= 64 * 1024:
+            yield raw
+            continue
+        identity = {}
+
+        def field(key, reader):
+            if key == 'record_id':
+                value = reader.value(1024)
+                if value is not None and (isinstance(value, bool) or not isinstance(value, (int, str))):
+                    raise ValueError('quantity_pipeline_record_identity_invalid')
+                identity[key] = '' if value is None else str(value)
+            else:
+                reader.skip()
+            return iter(())
+
+        reader = Reader(Line(raw))
+        for _ in reader.fields(field):
+            pass
+        reader.spaces()
+        if reader.peek() or 'record_id' not in identity or identity['record_id'] in records:
+            raise ValueError('quantity_pipeline_record_partition_required')
+        receipt['oversized_out_of_cohort_records'] = receipt.get('oversized_out_of_cohort_records', 0) + 1
+
+
 def _exit_at(trade: dict[str, Any]) -> datetime | None:
     return _timestamp(trade.get("exit_at"))
 
@@ -811,9 +855,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
             for trade in group:
                 result[trade["trade_id"]]["source_path"] = str(path)
         with open_text_auto(path) as handle:
-            for raw in iter(lambda: handle.readline(64 * 1024 + 1), ""):
-                if len(raw.encode("utf-8")) > 64 * 1024:
-                    raise ValueError("quantity_pipeline_record_partition_required")
+            scan_receipt = source_receipts[day] if source_receipts is not None else {}
+            for raw in _quantity_pipeline_rows(handle, records, scan_receipt):
                 rid = _record_id(raw)
                 group = records.get(rid)
                 if not group:
