@@ -14,6 +14,7 @@ DAY = '2026-10-19'
 COMMIT = 'b'*40
 ORIGIN = 'a'*40
 NOW = datetime(2026,10,17,12,tzinfo=ZoneInfo('Asia/Seoul'))
+HISTORICAL_PREPARATION_COMMIT = 'a8f063105bbb1d8a3676e55ad5377990a87594df'
 
 
 @pytest.fixture
@@ -166,8 +167,19 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
         extensions = H.REVIEWED_DELAY_CONTRACT_EXTENSIONS[(origin, expected)]
         assert set(extensions) == {'src/engine/pipeline_event_summary.py', 'src/utils/threshold_cycle_registry.py',
                                    'src/engine/infrastructure/main_policy_loading.py'}
-        assert all(hashlib.sha256((root/name).read_bytes()).hexdigest() == digest
-                   for name, digest in extensions.items())
+        # The original 59-source generation retains its original extension.
+        # Current cold-start preparation is a separate complete 75-source
+        # generation; never relabel current bytes as that historical source.
+        assert all(hashlib.sha256(real_git(['git','-C',str(root),'show',
+            HISTORICAL_PREPARATION_COMMIT+':'+name])).hexdigest() == digest
+            for name, digest in extensions.items())
+        trigger='src/engine/sniper_state_handlers.py'
+        variant=H.REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS[(trigger,H._sha(root/trigger))]
+        assert H._sha(root/variant['selector_path'])==variant['selector_sha256']
+        current_extensions=variant['contract_extensions'][(origin,expected)]
+        assert set(current_extensions)==set(extensions)
+        assert all(hashlib.sha256((root/name).read_bytes()).hexdigest()==digest
+                   for name,digest in current_extensions.items())
         for name, pair in H.REVIEWED_DELAY_RESEARCH_SOURCES.items():
             prior = real_git(['git', '-C', str(root), 'show', origin+':'+name])
             assert pair[0] == hashlib.sha256(prior).hexdigest()
@@ -277,26 +289,43 @@ def test_resolve_origin_rejects_selector_change_during_native_verification(prepa
         C.resolve_prepared_code_origin(data,DAY,**args)
 
 
-def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_path, monkeypatch):
+@pytest.mark.parametrize('generation',['historical_preparation','current_startup'])
+def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_path, monkeypatch,generation):
     import hashlib
     from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
     canonical = Path(H.__file__).resolve().parents[3]
     fixture = tmp_path/'code'
     own = 'src/engine/automation/intraday_release_handoff.py'
-    dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES['src/engine/sniper_state_handlers.py'][
-        H._sha(canonical/'src/engine/sniper_state_handlers.py')]
+    real_git = H.subprocess.check_output
+    trigger='src/engine/sniper_state_handlers.py'
+    trigger_sha=H._sha(canonical/trigger)
+    dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha]
+    if generation=='current_startup':
+        variant=H.REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS[(trigger,trigger_sha)]
+        assert H._sha(canonical/variant['selector_path'])==variant['selector_sha256']
+        dependencies=variant['dependencies']
+    assert len(dependencies)==(75 if generation=='current_startup' else 59)
     for name in (*CONTRACT_PATHS,own,*dependencies):
         destination=fixture/name
         destination.parent.mkdir(parents=True,exist_ok=True)
-        destination.write_bytes((canonical/name).read_bytes())
+        raw=((canonical/name).read_bytes() if generation=='current_startup' or name==own else
+             real_git(['git','-C',str(canonical),'show',HISTORICAL_PREPARATION_COMMIT+':'+name]))
+        destination.write_bytes(raw)
+        if name in dependencies:
+            assert hashlib.sha256(raw).hexdigest()==dependencies[name]
     origin = '7f2552aedde8fec6ef904a43105827907e50dfc8'
-    candidate = 'd'*40
-    real_git = H.subprocess.check_output
+    H.subprocess.run(['git','init','-q',str(fixture)],check=True)
+    def commit():
+        H.subprocess.run(['git','-C',str(fixture),'add','.'],check=True)
+        H.subprocess.run(['git','-C',str(fixture),'-c','user.name=Fixture',
+            '-c','user.email=fixture@example.invalid','commit','-qm','exact private source generation'],check=True)
+        return real_git(['git','-C',str(fixture),'rev-parse','HEAD'],text=True).strip()
+    candidate=commit()
     def revision(command, **kwargs):
         rev, name = command[-1].split(':',1)
-        if rev == candidate:
-            return (fixture/name).read_bytes()
-        return real_git(['git','-C',str(canonical),'show',rev+':'+name],**kwargs)
+        if rev==origin:
+            return real_git(['git','-C',str(canonical),'show',rev+':'+name],**kwargs)
+        return real_git(command,**kwargs)
     monkeypatch.setattr(H.subprocess,'check_output',revision)
     paths={name:name for name in CONTRACT_PATHS}
     expected='bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256'
@@ -306,16 +335,18 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
         final_pair = H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(name,
             H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(name, pair))
         assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == final_pair[1]
-    # Model a clean committed candidate with an unknown replacement. The Git
-    # fixture returns those same bytes, so rejection must be semantic/code-pair,
-    # rather than the dirty-worktree check.
+    # Commit each unknown replacement to its real private Git object, so the
+    # rejection remains source-contract validation rather than a dirty tree.
     unknown = fixture/'src/engine/scalping/pre_submit_delay_tuning.py'
+    original=unknown.read_bytes()
     unknown.write_text(unknown.read_text()+'\nUNKNOWN_STARTUP_CHANGE = True\n')
+    candidate=commit()
     with pytest.raises(ValueError,match='entry_consumer_unreviewed_change'):
         H._verify_entry_code_delta(fixture,candidate,origin,paths,expected)
-    unknown.write_bytes((canonical/'src/engine/scalping/pre_submit_delay_tuning.py').read_bytes())
+    unknown.write_bytes(original)
     new_helper=fixture/'src/engine/infrastructure/main_policy_loading.py'
     new_helper.write_text(new_helper.read_text()+'\nUNKNOWN_HELPER_CHANGE = True\n')
+    candidate=commit()
     with pytest.raises(ValueError,match='entry_consumer_contract_extension_unreviewed'):
         H._verify_entry_code_delta(fixture,candidate,origin,paths,expected)
 

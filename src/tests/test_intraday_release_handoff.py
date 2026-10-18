@@ -1204,7 +1204,14 @@ def completed_research_git_candidate(tmp_path):
     subprocess.run(['git', 'clone', '--shared', '--no-checkout', '-q', str(canonical), str(root)], check=True)
     own = 'src/engine/automation/intraday_release_handoff.py'
     handler = 'src/engine/sniper_state_handlers.py'
-    dependencies = handoff.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[handler][handoff._sha(canonical/handler)]
+    # This fixture copies current source bytes. Bind the entire exact current
+    # preparation generation, rather than combining its selector with the
+    # historical 59-file closure (historical generations have separate tests).
+    variant = handoff.REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS[(
+        handler, handoff._sha(canonical/handler))]
+    assert handoff._sha(canonical/variant['selector_path']) == variant['selector_sha256']
+    dependencies = variant['dependencies']
+    assert len(dependencies) == 75
     inventories = {
         'main_stop': {key: 'src/engine/'+key for key in stop.implementation_paths()},
         'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()},
