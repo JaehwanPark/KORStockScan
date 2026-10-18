@@ -281,10 +281,13 @@ def _validate_sources(bundle, data_root, *, code_root=None):
         return bundle
     N.validate(f['native_parent_bundle'],target_date=f['native_parent_bundle']['target_date'])
     V4.validate_sources(f['native_parent_bundle'], data_root)
-    for module in contract_modules():
-        p = Path(code_root)/'src/engine/scalping'/Path(module.__file__).name if code_root else Path(module.__file__)
-        if N._source_hash(str(p), N._signature(p)) != f['contract_file_sha256'].get(p.name):
-            raise ValueError('v6_contract_code_changed:' + p.name)
+    code_paths = {Path(m.__file__).name: str(Path(m.__file__)) for m in contract_modules()}
+    actual_code = {name: N._source_hash(path, N._signature(path)) for name, path in code_paths.items()}
+    changed = [name for name, actual in actual_code.items() if actual != f['contract_file_sha256'].get(name)]
+    if changed:
+        from src.engine.infrastructure.startup_validation_code_context import verify_validation_main_code
+        if not verify_validation_main_code(bundle, code_paths, actual_code):
+            raise ValueError('v6_contract_code_changed:' + changed[0])
     for name in ('machine','auxiliary'):
         p = N.root(Path(data_root))/'sources'/('reversal-'+f[name+'_report_sha256']+'.json')
         if file_hash(p) != f['report_file_sha256'][name]:

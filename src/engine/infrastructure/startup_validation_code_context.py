@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 
 SCHEMA = 'main_startup_validation_code_context_v1'
 PROOF_SCHEMA = 'main_startup_validation_consumer_code_handoff_v1'
@@ -24,6 +25,35 @@ _FAMILIES = {
 }
 _CONTEXT = None
 _MAX_JSON = 8 * 1024 * 1024
+# Exact source-only cold preparation repairs. Filled with reviewed Git bytes;
+# no AST fallback, runtime authority, or policy resealing is granted here.
+REVIEWED_PREPARATION_SOURCES = {'src/engine/scalping/continuous_reversal_policy_v4.py': ('9b1e7ba3fefb6df1c6dc20a0c336f30b006ce982f38764c819a91f5e3f091e4f',
+                                                          '85b0611a73c4d7fbbc3b2c2e264a0f7858f78f604f8e58e5face4f760ad4b437'),
+ 'src/engine/scalping/continuous_reversal_policy_v5.py': ('aad55bc63fbca8ac95d5ec451dea2c741cb857d324959241e5d809b40b7b5278',
+                                                          '5f0ce37100b6453c0d143c79007ca45ba77466ffad40f7298a802709c926acb8'),
+ 'src/engine/scalping/continuous_reversal_policy_v6.py': ('b357d2491d064cf331e8951124fba237043798caacf8da11ed130fb394230d79',
+                                                          'eca7f2f2a46d2b4e8f1739e53e6c59d19fd70951c1e2fd786dd8c712201f2460'),
+ 'src/engine/scalping/entry_machine_source_recovery.py': ('0445f51d0cef807be7639cc41d83581efc015922379c5000fd852b5545f89693',
+                                                          '89845a56178c7b2a7322317a5f0c3f9ea2344b0514efc7241d0c5a846acea712'),
+ 'src/engine/scalping/reversal_anchor_index.py': ('db0c746e27c1f7b914d9250a7336f9fdbb0040756209590e13ff0b309b045dd1',
+                                                  '1070133ec9af5500ab139a25f77f2ad9aef3049e9232d341d89188a689a7c37b'),
+ 'src/engine/scalping/reversal_auxiliary_input_transition.py': ('9e1a206b22e83512eb544201c92b707aca965ef195f8a3698da138a248ccb8cb',
+                                                                '07f6af4e43b8fb69a9f1e414d60a4930c7063074f78ffdb0a80789987070cbcb'),
+ 'src/engine/scalping/reversal_auxiliary_next_session.py': ('c1dffd84447b3b8d5d23eece11d0e48fece8e0467dc439c6f2458ca6fd89b726',
+                                                            '301bbe9cc29efa2be9ed9f84b4d919ab1f9adaeae7b2e36ec45a58f3842bdefa'),
+ 'src/engine/scalping/reversal_current_backend.py': ('341b69b19717fa4b994619bb9ea28f76b13362e379f4c494929ad9d4d33ac329',
+                                                     'c831b0366ee488eddb9f709ef7811c44cceef58646c1b1e00b2bcc3eb55f4153'),
+ 'src/engine/scalping/reversal_evaluation_context.py': ('c3d732d937787fd881ebf8f47437f4164ba01582611bc332fe23fd784ed3fc43',
+                                                        'b5753ae20f5d8385f7ccf942131d591d5b4feb2dd1f7c278903c74f504201d72'),
+ 'src/engine/scalping/reversal_extended_runtime.py': ('718b0669d34bf232674c0c2948802c73d2b2bf2a1bdfd2c29c0363a235f19ffc',
+                                                      'f6a6b1c7319cf06e29cd08b73f4955e52f4e35f8142978b02999cc47ed976a9b'),
+ 'src/engine/scalping/reversal_operating_backend.py': ('9ed32405a902a2de68aa9e5e9ed995d81425d6d76e3279c775d60448e57686f8',
+                                                       'df60d4ef78cca385b9b7b57a9c82a74efb8d943da6855ac34dd6bf1ebb24b0a6'),
+ 'src/engine/scalping/reversal_operating_runtime.py': ('06d73bedadc04750c9679e2ff7c1e082e7c889972f5398490da6d0163865bb56',
+                                                       '344a03decd050bbd6767e0073c96b8da6384b9ad329e41a70e1ad7f62066533e'),
+ 'src/engine/scalping/reversal_path_runtime.py': ('476641e53d6c49a0c0c143f11e5a66a59c49d31ab49ee0c4eca7876a65760ced',
+                                                  'ffc5e5f6d1f4f50733a7a22d0112c85fdaeaf4b22a319a86f41bd2f89ec5ea36')}
+MAIN_PROOF_SCHEMA = 'startup_main_preparation_code_handoff_v1'
 
 
 def _digest(value):
@@ -274,9 +304,22 @@ def install_validation_code_context(request: dict) -> None:
         raise ValueError('startup_code_context_handoffs_required')
     for family, proof in proofs.items():
         _proof(proof, family, request)
+    if request.get('main_preparation_code_handoff') is not None:
+        _main_proof(request['main_preparation_code_handoff'], request)
     _isolation(request)
     _CONTEXT = dict(valid=True, pid=os.getpid(), start_ticks=_read('/proc/self/stat', maximum=65536).decode().rsplit(')', 1)[1].split()[19],
                     request=request, request_path=str(request_path), request_sha256=_sha(request_path))
+    _CONTEXT['request_identity'] = _request_identity(request_path)
+    if request.get('main_preparation_code_handoff') is not None:
+        proof = request['main_preparation_code_handoff']
+        _CONTEXT['main_anchor_identities'] = {path: _request_identity(path)
+            for path in proof['source_hashes']}
+        _CONTEXT['delegation'] = dict(digest_reused_reads=0, digest_reused_bytes=0, auxiliary_manifests=[])
+        from src.engine.infrastructure.validation_digest_session import ACTIVE
+        if ACTIVE.get() is not None:
+            _CONTEXT = {'valid': False}
+            raise ValueError('startup_code_context_digest_owner_already_active')
+        ACTIVE.set(_PreparationDigests())
 
 
 def verify_validation_consumer_code(day, *, family, policy_sha, expected, paths, actual):
@@ -310,3 +353,516 @@ def verify_validation_consumer_code(day, *, family, policy_sha, expected, paths,
     except (OSError, ValueError, TypeError, KeyError):
         _CONTEXT = {'valid': False}
         raise
+
+
+def _main_inventories(bundle):
+    result = []
+    seen = set()
+    while bundle:
+        family = bundle.get('continuous_reversal') or {}
+        ident = bundle.get('bundle_sha256')
+        if ident in seen or len(result) >= 4 or not _hex(ident):
+            raise ValueError('startup_main_inventory_cycle_or_identity')
+        seen.add(ident)
+        expected = family.get('contract_file_sha256')
+        if (family.get('schema') not in {'continuous_reversal_policy_v4',
+                'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}
+                or not isinstance(expected, dict) or not expected
+                or not all(isinstance(k, str) and Path(k).name == k and _hex(v)
+                           for k, v in expected.items())):
+            raise ValueError('startup_main_inventory_invalid')
+        result.append(dict(bundle_sha256=ident, target_date=bundle['target_date'],
+            family_sha256=family['family_sha256'], schema=family['schema'], expected=expected,
+            origin_commit=family['release_commit']))
+        bundle = family.get('native_parent_bundle')
+    return result
+
+
+def _code_path(name):
+    if name == 'session_contract.py':
+        return 'src/trading/market/' + name
+    if name == 'ai_engine_openai.py':
+        return 'src/engine/' + name
+    if not isinstance(name, str) or Path(name).name != name or not name.endswith('.py'):
+        raise ValueError('startup_main_code_name_invalid')
+    return 'src/engine/scalping/' + name
+
+
+def _pairs(expected, actual):
+    if not isinstance(expected, dict) or not expected or set(expected) != set(actual):
+        raise ValueError('startup_main_code_inventory_changed')
+    for relative, old in expected.items():
+        current = actual[relative]
+        if not _hex(old) or not _hex(current):
+            raise ValueError('startup_main_code_digest_invalid')
+        if old != current and REVIEWED_PREPARATION_SOURCES.get(relative) != (old, current):
+            raise ValueError('startup_main_code_pair_unreviewed:' + relative)
+
+
+def _historical_code_refs(manifest):
+    root = Path(manifest['frozen_validator_root'])
+    refs = {}
+    for name, expected in manifest['semantic_code_hashes'].items():
+        relative = _code_path(name)
+        path = root / relative
+        if path.resolve(strict=True) != path or _sha(path) != expected:
+            raise ValueError('startup_main_historical_code_changed')
+        refs[relative] = dict(path=str(path), sha256=expected)
+    return refs
+
+
+def bind_main_preparation(root, commit, data_root, intake):
+    """Parent-only Git attestation after this invocation's full native verify."""
+    import subprocess
+    root = Path(root).resolve(strict=True)
+    data_root = Path(data_root).resolve(strict=True)
+    selected = Path(intake['selected_root']).resolve(strict=True)
+    original_commit = intake['selected_commit']
+    native = intake['native_verification']
+    closure = native.get('native_machine_closure')
+    day = intake['manifest']['target_date']
+    if (native.get('status') != 'pass' or native.get('findings')
+            or native.get('validation_scope') != 'current_full_contract'
+            or native.get('target_date') != day or native.get('selected_release_commit') != original_commit
+            or not isinstance(closure, dict)):
+        raise ValueError('startup_main_native_full_validation_required')
+    policy = data_root / 'runtime/mechanistic_entry_policy/candidates' / ('policy_' + day + '.json')
+    bundle = _json(policy)
+    if (bundle.get('bundle_sha256') != intake['receipt']['activation_candidate']['bundle_sha256']
+            or bundle['bundle_sha256'] not in closure.get('bundles', {})):
+        raise ValueError('startup_main_native_bundle_unobserved')
+    inventories = _main_inventories(bundle)
+    expected = {}
+    inventory_attestations = {}
+    for item in inventories:
+        if not _hex(item['origin_commit'], 40):
+            raise ValueError('startup_main_inventory_origin_invalid')
+        verified = {}
+        for name, value in item['expected'].items():
+            relative = _code_path(name)
+            original = hashlib.sha256(subprocess.check_output(['git', '-C', str(selected),
+                'show', item['origin_commit'] + ':' + relative])).hexdigest()
+            if original != value:
+                raise ValueError('startup_main_inventory_git_origin_changed')
+            verified[relative] = original
+            expected[relative] = _sha(selected / relative)
+        inventory_attestations[item['bundle_sha256']] = dict(origin_commit=item['origin_commit'],
+            code_hashes=verified)
+    manifests = closure.get('manifests')
+    if not isinstance(manifests, dict) or not 1 <= len(manifests) <= 16:
+        raise ValueError('startup_main_manifest_closure_required')
+    sources = {str(policy): _sha(policy),
+        str(data_root / 'runtime/runtime_release_selection.json'): _sha(data_root / 'runtime/runtime_release_selection.json')}
+    histories = {}
+    for ident, observed in manifests.items():
+        manifest = _json(observed['path'])
+        if (manifest.get('artifact_content_sha256') != ident or _sha(observed['path']) != observed['sha256']
+                or observed['bundle_sha256'] != bundle['bundle_sha256'] or observed['target_date'] != day):
+            raise ValueError('startup_main_manifest_closure_changed')
+        sources[observed['path']] = observed['sha256']
+        histories[ident] = _historical_code_refs(manifest)
+        for relative, ref in histories[ident].items():
+            sources[ref['path']] = ref['sha256']
+            selected_hash = _sha(selected / relative)
+            if expected.setdefault(relative, selected_hash) != selected_hash:
+                raise ValueError('startup_main_origin_inventory_conflict')
+        for field in ('next_session_code_hashes', 'reader_code_hashes'):
+            for name, value in manifest[field].items():
+                if expected.setdefault(_code_path(name), value) != value:
+                    raise ValueError('startup_main_origin_inventory_conflict')
+    # These entry/configuration owners are not all in the historical inventory.
+    # Bind their exact original/current bytes without adding retroactive keys.
+    for relative in REVIEWED_PREPARATION_SOURCES:
+        old = hashlib.sha256(subprocess.check_output(
+            ['git', '-C', str(selected), 'show', original_commit + ':' + relative])).hexdigest()
+        if expected.setdefault(relative, old) != old:
+            raise ValueError('startup_main_origin_inventory_conflict')
+    actual = {}
+    for relative, old in expected.items():
+        for checkout, revision, digest in ((selected, original_commit, old), (root, commit, None)):
+            path = checkout / relative
+            if path.resolve(strict=True) != path or path.is_symlink():
+                raise ValueError('startup_main_source_alias')
+            value = _sha(path)
+            git_value = hashlib.sha256(subprocess.check_output(
+                ['git', '-C', str(checkout), 'show', revision + ':' + relative])).hexdigest()
+            if value != git_value or (digest is not None and value != digest):
+                raise ValueError('startup_main_source_git_or_origin_changed')
+            sources[str(path)] = value
+            if checkout == root:
+                actual[relative] = value
+    _pairs(expected, actual)
+    for item in inventories:
+        values = {_code_path(name): value for name, value in item['expected'].items()}
+        _pairs(values, {name: actual[name] for name in values})
+    for refs in histories.values():
+        _pairs({name: ref['sha256'] for name, ref in refs.items()},
+               {name: actual[name] for name in refs})
+    proof = dict(schema=MAIN_PROOF_SCHEMA, target_date=day, policy_path=str(policy),
+        policy_sha256=bundle['bundle_sha256'], policy_file_sha256=_sha(policy),
+        execution_release_root=str(root), execution_release_commit=commit,
+        selected_release_root=str(selected), selected_release_commit=original_commit,
+        original_code_hashes=expected, runtime_code_hashes=actual, inventories=inventories,
+        inventory_git_attestations=inventory_attestations,
+        historical_semantic_code_sources=histories,
+        source_hashes=sources, closure=closure,
+        native_verification={k: v for k, v in native.items() if k != 'native_machine_closure'},
+        delegation_basis='same_invocation_selected_native_full_verification',
+        policy_effect='unchanged', runtime_effect=False, allowed_runtime_apply=False,
+        actual_pid_consumed=False)
+    _check_native_closure(proof)
+    return proof
+
+
+def _check_native_closure(proof):
+    """Check generations, not a cached verdict, for delegated process-only work."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure.validation_digest_session import identity
+    closure = proof['closure']
+    native = proof['native_verification']
+    binding = closure.get('digest_binding') or {}
+    data_root = Path(proof['policy_path']).parents[3]
+    io = native.get('native_validation_io') or {}
+    if (closure.get('schema') != 'startup_native_machine_closure_v1' or not _hex(closure.get('run_id'), 32)
+            or native.get('status') != 'pass' or native.get('findings')
+            or native.get('validation_scope') != 'current_full_contract'
+            or native.get('target_date') != proof['target_date']
+            or native.get('selected_release_commit') != proof['selected_release_commit']
+            or binding.get('role') != 'postclose' or binding.get('day') != native.get('source_date')
+            or binding.get('lexical_root') != str(data_root)
+            or binding.get('resolved_root') != str(data_root.resolve(strict=True))
+            or binding.get('pid') != (io.get('stats') or {}).get('pid')
+            or io.get('remaining_entries') != 0
+            or binding.get('boot_id') != _read('/proc/sys/kernel/random/boot_id', maximum=128).decode().strip()):
+        raise ValueError('startup_main_native_closure_invalid')
+    entries = closure.get('digest_entries')
+    if (not isinstance(entries, dict) or len(entries) > 4096
+            or len(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()) > 512 * 1024):
+        raise ValueError('startup_main_digest_closure_unbounded')
+    for path, entry in entries.items():
+        if (not isinstance(entry, dict) or set(entry) != {'identity', 'digest', 'created'}
+                or not _hex(entry.get('digest'))
+                or identity(path) != entry.get('identity')
+                or entry['identity'][4] < 1024 * 1024
+                or entry['identity'][2] != Path(binding['resolved_root']).stat().st_dev
+                or entry['identity'][8] != os.getuid()
+                or type(entry['created']) not in (int, float) or not 0 <= time.time() - entry['created'] <= 600
+                or not Path(path).resolve().is_relative_to(binding['resolved_root'])):
+            raise ValueError('startup_main_digest_generation_changed')
+    manifests = closure.get('manifests')
+    if not isinstance(manifests, dict) or not 1 <= len(manifests) <= 16:
+        raise ValueError('startup_main_manifest_closure_invalid')
+    for ident, observed in manifests.items():
+        manifest = _json(observed['path'])
+        if (_sha(observed['path']) != observed['sha256']
+                or manifest.get('artifact_content_sha256') != ident
+                or ident != _digest({k: v for k, v in manifest.items() if k != 'artifact_content_sha256'})
+                or observed.get('bundle_sha256') != proof['policy_sha256']
+                or manifest.get('base_bundle_sha256') != proof['policy_sha256']
+                or observed.get('target_date') != proof['target_date']):
+            raise ValueError('startup_main_manifest_binding_invalid')
+        paths = {ref['path'] for ref in manifest['sources']}
+        paths.update(manifest['ledger_pack_paths']); paths.update(manifest['baseline_dependency_paths'])
+        dependencies = observed.get('dependencies')
+        if (not isinstance(dependencies, list) or len(dependencies) > 8192
+                or len(dependencies) != len(paths) or {v[0] for v in dependencies} != paths):
+            raise ValueError('startup_main_manifest_dependency_set_changed')
+        for path, signature in dependencies:
+            if json.loads(json.dumps(N._signature(path))) != signature:
+                raise ValueError('startup_main_manifest_dependency_changed')
+        frozen_root = manifest['frozen_validator_root']
+        from src.engine.scalping import reversal_auxiliary_next_session as A
+        inventory = closure.get('frozen_inventories', {}).get(frozen_root)
+        frozen = closure.get('frozen_validations', {}).get(manifest['source_manifest']['path'])
+        if (inventory != manifest['frozen_inventory'] or not inventory
+                or _git_head(frozen_root) != manifest['frozen_validator_commit']
+                or not isinstance(frozen, dict) or frozen.get('root') != frozen_root
+                or frozen.get('bundle_path') != manifest['source_bundle']['path']
+                or frozen.get('result') != manifest['frozen_validation']
+                or frozen.get('invocation') != dict(executable=str(Path(frozen_root)/'.venv/bin/python'),
+                    arguments=['-B','-c'],script_sha256=hashlib.sha256(A._FROZEN_SCRIPT.encode()).hexdigest(),
+                    cwd=frozen_root,source_manifest=manifest['source_manifest']['path'],
+                    source_bundle=manifest['source_bundle']['path'],
+                    environment=dict(PYTHONPATH=frozen_root,PYTHONDONTWRITEBYTECODE='1'),
+                    parent_environment='sanitized_p5_native_verification')):
+            raise ValueError('startup_main_frozen_native_validation_unbound')
+        # Original frozen source bytes are in native dependency signatures and
+        # are also rehashed by the native prepare validator below.
+        if not set(inventory).issubset(paths):
+            raise ValueError('startup_main_frozen_inventory_incomplete')
+        if json.loads(json.dumps(A._database_signature(manifest))) != observed['database']:
+            raise ValueError('startup_main_manifest_database_changed')
+    _native_logical_sources(proof)
+
+
+def _native_logical_sources(proof, *, verify_ledger=False):
+    """Finite selected-ledger evidence, never a byte hash of its global DB."""
+    from src.engine.infrastructure.validation_digest_session import identity
+    from src.engine.scalping import reversal_auxiliary_next_session as A
+    from src.engine.scalping import reversal_auxiliary_input_transition as J
+    from src.engine.ai import offline_comparison_store as S
+    native = proof['native_verification']
+    if (native.get('status') != 'pass' or native.get('findings')
+            or native.get('validation_scope') != 'current_full_contract'
+            or proof.get('delegation_basis') != 'same_invocation_selected_native_full_verification'):
+        raise ValueError('startup_logical_native_validation_required')
+    result = {}
+    observed_manifests = proof['closure']['manifests']
+    if not isinstance(observed_manifests, dict) or not 1 <= len(observed_manifests) <= 16:
+        raise ValueError('startup_logical_manifest_set_invalid')
+    for ident, observed in observed_manifests.items():
+        manifest = _json(observed['path'])
+        if (_sha(observed['path']) != observed['sha256']
+                or manifest.get('artifact_content_sha256') != ident
+                or ident != _digest({k:v for k,v in manifest.items() if k != 'artifact_content_sha256'})
+                or manifest['base_bundle_sha256'] != proof['policy_sha256']
+                or observed['target_date'] != proof['target_date']):
+            raise ValueError('startup_logical_manifest_changed')
+        database = json.loads(json.dumps(A._database_signature(manifest)))
+        if database != observed['database']:
+            raise ValueError('startup_logical_database_changed')
+        identities = observed.get('database_source_identities') or {}
+        if set(identities) != {v[0] for v in (database or ()) if v is not None}:
+            raise ValueError('startup_logical_database_identity_set_changed')
+        if database and verify_ledger:
+            with S.Store(manifest['ledger_data_root'], readonly=True) as store:
+                store.db.execute('BEGIN')
+                actual = J._ledger_fingerprint(store, manifest['ledger_metadata'])
+            if (actual != manifest['ledger_metadata']['fingerprint_sha256']
+                    or json.loads(json.dumps(A._database_signature(manifest))) != database):
+                raise ValueError('startup_logical_ledger_changed')
+        if database and manifest.get('policy_data_root') != str(Path(proof['policy_path']).parents[3]):
+            raise ValueError('startup_logical_data_root_changed')
+        for index, signature in enumerate(database or ()):
+            if signature is None:
+                continue
+            path = signature[0]
+            if identity(path) != identities[path]:
+                raise ValueError('startup_logical_database_identity_changed')
+            row = result.setdefault(path,dict(schema='startup_native_logical_source_v1', path=path,
+                source_kind='sqlite_ledger_container' if index == 0 else 'sqlite_ledger_wal',
+                identity=identities[path], native_signature=signature, manifest_proofs={},
+                policy_data_root=manifest['policy_data_root'],
+                source_run_id=proof['closure']['run_id'], target_date=proof['target_date'],
+                policy_sha256=proof['policy_sha256'], runtime_effect=False, allowed_runtime_apply=False))
+            if row['identity'] != identities[path] or row['native_signature'] != signature:
+                raise ValueError('startup_logical_database_conflict')
+            row['manifest_proofs'][ident] = dict(path=observed['path'],sha256=observed['sha256'],
+                ledger_data_root=manifest['ledger_data_root'],
+                ledger_metadata_sha256=_digest(manifest['ledger_metadata']),
+                ledger_fingerprint_sha256=manifest['ledger_metadata']['fingerprint_sha256'])
+    return {path:{**row,'receipt_sha256':_digest(row)} for path,row in result.items()}
+
+
+def preparation_logical_sources():
+    """P5-only typed sources; ordinary/native runtime callers keep full reads."""
+    proof = _main_context()
+    return {} if proof is None else _native_logical_sources(proof)
+
+
+def verify_preparation_logical_sources(proof, receipts):
+    """Parent/P6 exact-set check after request binding; recheck finite native rows.
+
+    Callers retain their original request, release, selector and source CAS.
+    No old digest TTL or cached verification verdict is reused here.
+    """
+    expected = _native_logical_sources(proof, verify_ledger=True)
+    if not isinstance(receipts, dict) or receipts != expected:
+        raise ValueError('startup_logical_source_set_changed')
+    return expected
+
+
+def _main_proof(proof, request):
+    if (not isinstance(proof, dict) or proof.get('schema') != MAIN_PROOF_SCHEMA
+            or proof.get('target_date') != request['target_date']
+            or proof.get('execution_release_root') != request['execution_release_root']
+            or proof.get('execution_release_commit') != request['execution_release_commit']
+            or proof.get('closure', {}).get('run_id') != request['run_id']
+            or proof.get('policy_effect') != 'unchanged'
+            or proof.get('delegation_basis') != 'same_invocation_selected_native_full_verification'
+            or any(proof.get(k) is not False for k in ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))
+            or any((request.get('expected_policy_hashes') or {}).get(k) != proof.get('policy_sha256')
+                   for k in ('main_machine', 'main_auxiliary'))):
+        raise ValueError('startup_main_preparation_proof_invalid')
+    sources = proof.get('source_hashes')
+    _check_sources(sources)
+    if any(request['source_hashes'].get(path) != value for path, value in sources.items()):
+        raise ValueError('startup_main_preparation_sources_unbound')
+    data = Path(request['data_root'])
+    path = data / 'runtime/mechanistic_entry_policy/candidates' / ('policy_' + request['target_date'] + '.json')
+    if proof.get('policy_path') != str(path) or _sha(path) != proof.get('policy_file_sha256'):
+        raise ValueError('startup_main_preparation_policy_changed')
+    bundle = _json(path)
+    if bundle.get('bundle_sha256') != proof['policy_sha256'] or _main_inventories(bundle) != proof.get('inventories'):
+        raise ValueError('startup_main_preparation_inventory_changed')
+    selected = Path(proof['selected_release_root'])
+    if _git_head(selected) != proof['selected_release_commit']:
+        raise ValueError('startup_main_preparation_selected_changed')
+    selector = _json(data / 'runtime/runtime_release_selection.json')
+    if (selector.get('release_root') != str(selected)
+            or selector.get('git_commit') != proof['selected_release_commit']):
+        raise ValueError('startup_main_preparation_selector_changed')
+    expected, actual = proof['original_code_hashes'], proof['runtime_code_hashes']
+    required = {}
+    inventory_attestations = {}
+    for item in proof['inventories']:
+        if not _hex(item['origin_commit'], 40):
+            raise ValueError('startup_main_inventory_origin_invalid')
+        values = {_code_path(name): value for name, value in item['expected'].items()}
+        inventory_attestations[item['bundle_sha256']] = dict(origin_commit=item['origin_commit'],
+            code_hashes=values)
+        for name, value in item['expected'].items():
+            relative = _code_path(name)
+            required[relative] = _sha(selected / relative)
+        _pairs(values, {name: actual[name] for name in values})
+    if inventory_attestations != proof.get('inventory_git_attestations'):
+        raise ValueError('startup_main_inventory_git_attestation_changed')
+    histories = {}
+    for ident, observed in proof['closure']['manifests'].items():
+        manifest = _json(observed['path'])
+        histories[ident] = _historical_code_refs(manifest)
+        for relative, ref in histories[ident].items():
+            if sources.get(ref['path']) != ref['sha256']:
+                raise ValueError('startup_main_historical_code_unbound')
+            value = _sha(selected / relative)
+            if required.setdefault(relative, value) != value:
+                raise ValueError('startup_main_origin_inventory_conflict')
+        for field in ('next_session_code_hashes', 'reader_code_hashes'):
+            for name, value in manifest[field].items():
+                if required.setdefault(_code_path(name), value) != value:
+                    raise ValueError('startup_main_origin_inventory_conflict')
+    for relative in REVIEWED_PREPARATION_SOURCES:
+        old = _sha(selected / relative)
+        if required.setdefault(relative, old) != old:
+            raise ValueError('startup_main_origin_inventory_conflict')
+    if required != expected or histories != proof.get('historical_semantic_code_sources'):
+        raise ValueError('startup_main_exact_code_closure_required')
+    _pairs(expected, actual)
+    for refs in histories.values():
+        _pairs({name: ref['sha256'] for name, ref in refs.items()},
+               {name: actual[name] for name in refs})
+    for relative, old in expected.items():
+        if (_sha(selected / relative) != old or _sha(ROOT / relative) != actual[relative]
+                or sources.get(str(selected / relative)) != old
+                or sources.get(str(ROOT / relative)) != actual[relative]):
+            raise ValueError('startup_main_preparation_code_changed')
+    _check_native_closure(proof)
+
+
+def _request_identity(path):
+    from src.engine.infrastructure.validation_digest_session import identity
+    return identity(path)
+
+
+def _main_context(*, digest_only=False):
+    global _CONTEXT
+    if _CONTEXT is None:
+        return None
+    try:
+        c = _CONTEXT
+        if c.get('valid') is not True:
+            raise ValueError('startup_code_context_invalid')
+        _isolation(c['request'])
+        if (os.getpid() != c['pid'] or _request_identity(c['request_path']) != c['request_identity']
+                or (not digest_only and (_git_head(ROOT) != c['request']['execution_release_commit']
+                    or _sha(c['request_path']) != c['request_sha256']))):
+            raise ValueError('startup_code_context_execution_changed')
+        proof = c['request'].get('main_preparation_code_handoff')
+        if not isinstance(proof, dict):
+            raise ValueError('startup_main_preparation_proof_required')
+        if (_git_head(proof['selected_release_root']) != proof['selected_release_commit']
+                or _git_head(ROOT) != c['request']['execution_release_commit']
+                or any(_request_identity(path) != before
+                       for path, before in c['main_anchor_identities'].items())):
+            raise ValueError('startup_main_preparation_anchor_changed')
+        return proof
+    except (OSError, ValueError, KeyError, TypeError):
+        _CONTEXT = {'valid': False}
+        raise
+
+
+def verify_validation_main_code(bundle, paths, actual):
+    proof = _main_context()
+    if proof is None:
+        return False
+    item = next((v for v in proof['inventories'] if v['bundle_sha256'] == bundle.get('bundle_sha256')), None)
+    family = bundle.get('continuous_reversal') or {}
+    expected = family.get('contract_file_sha256')
+    if (item is None or item['expected'] != expected or item['schema'] != family.get('schema')
+            or item['target_date'] != bundle.get('target_date')
+            or set(paths) != set(expected) or set(actual) != set(expected)):
+        raise ValueError('startup_main_native_inventory_unbound')
+    for name, old in expected.items():
+        relative = _code_path(name)
+        if (str(Path(paths[name]).resolve(strict=True)) != str(ROOT / relative)
+                or proof['runtime_code_hashes'].get(relative) != actual[name]
+                or _sha(paths[name]) != actual[name]):
+            raise ValueError('startup_main_native_code_unbound')
+    _pairs({_code_path(name): old for name, old in expected.items()},
+           {_code_path(name): value for name, value in actual.items()})
+    return True
+
+
+def validation_auxiliary_preparation(manifest, bundle, data_root):
+    proof = _main_context()
+    if proof is None:
+        return None
+    item = proof['closure']['manifests'].get(manifest.get('artifact_content_sha256'))
+    if (not isinstance(item, dict) or bundle.get('bundle_sha256') != proof['policy_sha256']
+            or bundle.get('target_date') != proof['target_date']
+            or str(Path(data_root).resolve()) != _CONTEXT['request']['data_root']
+            or _json(item['path']) != manifest or _sha(item['path']) != item['sha256']):
+        raise ValueError('startup_main_auxiliary_preparation_unbound')
+    _check_native_closure(proof)
+    ident = manifest['artifact_content_sha256']
+    if ident not in _CONTEXT['delegation']['auxiliary_manifests']:
+        _CONTEXT['delegation']['auxiliary_manifests'].append(ident)
+    historical = proof['historical_semantic_code_sources'][ident]
+    original = {**proof['original_code_hashes'], **{name: ref['sha256'] for name, ref in historical.items()}}
+    return dict(manifest=manifest, frozen_inventory=manifest['frozen_inventory'],
+        frozen_validation=manifest['frozen_validation'],
+        original_code_hashes=original, runtime_code_hashes=proof['runtime_code_hashes'],
+        delegation_basis=proof['delegation_basis'])
+
+
+class _PreparationDigests:
+    """Read-only, process-bound reuse of bytes hashed by the same P5 intake."""
+    def digest(self, path):
+        if _CONTEXT is None:
+            return None
+        if _CONTEXT.get('valid') is not True:
+            raise ValueError('startup_code_context_invalid')
+        item = _CONTEXT['request'].get('main_preparation_code_handoff')
+        if not isinstance(item, dict):
+            return None
+        entry = item['closure']['digest_entries'].get(str(Path(path).absolute()))
+        if entry is None:
+            return None
+        proof = _main_context(digest_only=True)
+        if proof is None:
+            return None
+        from src.engine.infrastructure.validation_digest_session import identity
+        if identity(path) != entry['identity'] or not 0 <= time.time() - entry['created'] <= 600:
+            raise ValueError('startup_main_digest_generation_changed')
+        _CONTEXT['delegation']['digest_reused_reads'] += 1
+        _CONTEXT['delegation']['digest_reused_bytes'] += entry['identity'][4]
+        return entry['digest']
+
+
+def preparation_source_digest(path):
+    """Only the P5 parent attestation; ordinary digest sessions do not opt in."""
+    return _PreparationDigests().digest(path)
+
+
+def validation_delegation_receipt():
+    proof = _main_context()
+    if proof is None:
+        return None
+    return dict(schema='startup_native_validation_delegation_v1',
+        basis=proof['delegation_basis'], source_native_pid=proof['closure']['digest_binding']['pid'],
+        target_date=proof['target_date'], policy_sha256=proof['policy_sha256'],
+        run_id=proof['closure']['run_id'], request_sha256=_CONTEXT['request']['request_sha256'],
+        parent_validation_scope=proof['native_verification']['validation_scope'],
+        child_semantic_validation='native_validators_executed',
+        **_CONTEXT['delegation'], runtime_effect=False, actual_pid_consumed=False,
+        allowed_runtime_apply=False)

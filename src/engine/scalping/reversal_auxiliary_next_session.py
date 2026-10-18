@@ -74,7 +74,7 @@ def _frozen_inventory(root):
     return {str(path): _hash(path) for path in paths}
 
 
-def _semantic_code_parity(source, frozen_root):
+def _semantic_code_parity(source, frozen_root, validation_proof=None):
     """The reviewed dispatcher is the sole changed research-reader surface."""
     current_root = Path(__file__).resolve().parents[3]
     pins = dict(source['input_transition_code_hashes'])
@@ -86,7 +86,9 @@ def _semantic_code_parity(source, frozen_root):
         if name == 'reversal_auxiliary_transition.py':
             continue
         current = _source_path(current_root, name)
-        _require(_hash(current) == expected, 'current_semantic_code_changed:' + name)
+        actual = _hash(current)
+        _require(actual == expected or _validation_code_pair(current, expected, actual, validation_proof),
+                 'current_semantic_code_changed:' + name)
         result[name] = expected
     return result
 
@@ -99,18 +101,44 @@ def _code_reference(root, name, digest):
     return dict(path=str(path.resolve()), sha256=digest)
 
 
-def _canonical_baseline_sources(refs, paths, origin):
+def _canonical_baseline_sources(refs, paths, origin, validation_proof=None):
     """Preserve historical paths when identical code moves to a new release."""
     current = Path(__file__).resolve().parents[3]
     def canonical(path):
         path = Path(path)
         if path.is_relative_to(current / 'src'):
             historical = Path(origin) / path.relative_to(current)
-            _require(_hash(historical) == _hash(path), 'historical_reader_origin_changed')
+            old, actual = _hash(historical), _hash(path)
+            _require(old == actual or _validation_code_pair(path, old, actual, validation_proof),
+                     'historical_reader_origin_changed')
             return str(historical)
         return str(path)
-    return ([dict(path=canonical(ref['path']), sha256=ref['sha256']) for ref in refs],
+    return ([dict(path=canonical(ref['path']), sha256=(
+                _hash(canonical(ref['path'])) if validation_proof and Path(ref['path']).is_relative_to(current / 'src')
+                else ref['sha256'])) for ref in refs],
             sorted(set(canonical(path) for path in paths)))
+
+
+def _validation_code_pair(path, expected, actual, proof):
+    if proof is None:
+        return False
+    root = Path(__file__).resolve().parents[3]
+    path = Path(path)
+    if not path.resolve(strict=True).is_relative_to(root / 'src'):
+        return False
+    relative = str(path.resolve().relative_to(root))
+    return (proof['original_code_hashes'].get(relative) == expected
+            and proof['runtime_code_hashes'].get(relative) == actual)
+
+
+def _validation_code_inventory(expected, actual, proof):
+    if expected == actual:
+        return True
+    if proof is None or not isinstance(expected, dict) or set(expected) != set(actual):
+        return False
+    root = Path(__file__).resolve().parents[3]
+    return all(old == actual[name] or _validation_code_pair(_source_path(root, name), old, actual[name], proof)
+               for name, old in expected.items())
 
 
 _FROZEN_SCRIPT = r'''
@@ -198,7 +226,8 @@ def _publication_cas(data_root, bundle, prepared_path):
 
 
 def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
-            target_bundle_path, prepared_path, code_origin_root=None):
+            target_bundle_path, prepared_path, code_origin_root=None, _validation_manifest=None,
+            source_code_handoff_path=None):
     """Return a sealed proof without writing policies, reports or registries."""
     data_root = Path(data_root).resolve(); frozen_root = Path(frozen_root).resolve()
     source_manifest_path = Path(source_manifest_path).resolve()
@@ -207,6 +236,29 @@ def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
     code_origin_root = Path(code_origin_root or Path(__file__).resolve().parents[3]).resolve()
     source = I.read(source_manifest_path); original = N._read(source_bundle_path)
     bundle = N._read(target_bundle_path); day = bundle['target_date']
+    source_code_handoff = None
+    source_code_reference = None
+    if source_code_handoff_path is not None:
+        from src.engine.scalping import reversal_auxiliary_source_handoff as H
+        source_code_reference = _reference(Path(source_code_handoff_path).resolve(strict=True))
+        source_code_handoff = H.validate(data_root, _read_reference(source_code_reference),
+            source_manifest_path=source_manifest_path, source_bundle_path=source_bundle_path,
+            target_bundle_path=target_bundle_path, frozen_root=frozen_root)
+        source_code_reference['artifact_content_sha256'] = source_code_handoff['artifact_content_sha256']
+    validation_proof = None
+    if _validation_manifest is not None:
+        from src.engine.infrastructure.startup_validation_code_context import validation_auxiliary_preparation
+        validation_proof = validation_auxiliary_preparation(_validation_manifest, bundle, data_root)
+        _require(validation_proof is not None
+            and _validation_manifest['source_manifest']['path'] == str(source_manifest_path)
+            and _validation_manifest['source_bundle']['path'] == str(source_bundle_path)
+            and _validation_manifest['target_bundle']['path'] == str(target_bundle_path)
+            and _validation_manifest['prepared_reference']['path'] == str(Path(prepared_path).resolve())
+            and _validation_manifest['frozen_validator_root'] == str(frozen_root)
+            and _validation_manifest['code_origin_root'] == str(code_origin_root),
+            'validation_delegation_arguments_changed')
+        _require(_validation_manifest.get('source_code_handoff') == source_code_reference,
+                 'validation_source_handoff_changed')
     N.validate(original, target_date=original['target_date']); N.validate(bundle, target_date=day)
     _require(source.get('schema') == J.SCHEMA and source.get('status') == 'prepared'
         and source['base_bundle_sha256'] == original['bundle_sha256']
@@ -220,15 +272,18 @@ def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
              'approved_scopes_required')
     _require(target_bundle_path == N.root(data_root) / 'generations' / (bundle['bundle_sha256'] + '.json'),
              'immutable_target_generation_required')
-    inventory = _frozen_inventory(frozen_root)
-    semantic = _semantic_code_parity(source, frozen_root)
-    frozen = _verify_frozen(frozen_root, source_manifest_path, source_bundle_path)
+    inventory = (_frozen_inventory(frozen_root) if validation_proof is None
+                 else validation_proof['frozen_inventory'])
+    code_proof = source_code_handoff or validation_proof
+    semantic = _semantic_code_parity(source, frozen_root, code_proof)
+    frozen = (_verify_frozen(frozen_root, source_manifest_path, source_bundle_path) if validation_proof is None
+              else validation_proof['frozen_validation'])
     _require(frozen == dict(schema='frozen_auxiliary_input_validation_v1',
         source_manifest_sha256=source['artifact_content_sha256'], source_bundle_sha256=original['bundle_sha256'],
         verified_pairs=50, verified_raw_responses=100, input_transition_code_hashes=source['input_transition_code_hashes'],
         network_forbidden=True, provider_called=False, policy_published=False), 'frozen_validation_invalid')
     bindings, baseline_sources, baseline_paths = _bindings(data_root, bundle)
-    baseline_sources, baseline_paths = _canonical_baseline_sources(baseline_sources, baseline_paths, code_origin_root)
+    baseline_sources, baseline_paths = _canonical_baseline_sources(baseline_sources, baseline_paths, code_origin_root, code_proof)
     _require(len(bindings) == 128 and bindings == source['base_bindings'], 'baseline_changed')
     behaviors = {}
     for sid in selected:
@@ -240,8 +295,14 @@ def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
             _reference(target_bundle_path), _reference(prepared_path)] + source['sources'] + baseline_sources
     for path, digest in inventory.items():
         refs.append(dict(path=path, sha256=digest))
-    refs.extend(_code_reference(code_origin_root, name, digest)
-                for name, digest in {**semantic, **_code_hashes()}.items())
+    next_code = (_code_hashes() if validation_proof is None else _validation_manifest['next_session_code_hashes'])
+    _require(_validation_code_inventory(next_code, _code_hashes(), validation_proof), 'next_session_code_changed')
+    refs.extend(_code_reference(frozen_root if source_code_handoff else code_origin_root, name, digest)
+                for name, digest in semantic.items())
+    refs.extend(_code_reference(code_origin_root, name, digest) for name, digest in next_code.items())
+    if source_code_handoff is not None:
+        refs.append({k: source_code_reference[k] for k in ('path', 'sha256')})
+        refs.extend(dict(path=path, sha256=digest) for path, digest in source_code_handoff['source_hashes'].items())
     sources = {ref['path']: ref for ref in refs}
     _require(len(sources) > 0, 'sources_missing')
     return P.seal(dict(schema=SCHEMA, status='prepared', policy_data_root=str(data_root),
@@ -251,7 +312,7 @@ def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
         frozen_validator_root=str(frozen_root), frozen_validator_commit=FROZEN_COMMIT,
         code_origin_root=str(code_origin_root),
         frozen_inventory=inventory, frozen_validation=frozen, semantic_code_hashes=semantic,
-        next_session_code_hashes=_code_hashes(), reader_code_hashes=I.code_hashes(), wire_contract=W.contract(),
+        next_session_code_hashes=next_code, reader_code_hashes=I.code_hashes(), wire_contract=W.contract(),
         base_bindings=bindings, base_bindings_sha256=P.digest(bindings), expected_parent=None,
         changes=copy.deepcopy(source['changes']), rollback_bindings=copy.deepcopy(source['rollback_bindings']),
         registry_definitions=copy.deepcopy(source['registry_definitions']), scopes=copy.deepcopy(source['scopes']),
@@ -260,6 +321,7 @@ def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
         ledger_metadata=copy.deepcopy(source['ledger_metadata']),
         publication_cas=_publication_cas(data_root, bundle, prepared_path),
         sources=[sources[path] for path in sorted(sources)], verified_pairs=50, verified_raw_responses=100,
+        **({'source_code_handoff': source_code_reference} if source_code_reference is not None else {}),
         source_labels_rewritten=False, new_provider_calls=0, policy_published=False,
         actual_pid_consumed=False, actual_order_submitted=False))
 
@@ -278,12 +340,14 @@ def _database_signature(manifest):
 
 
 def validate_manifest(data_root, manifest, bundle, *, cached_only=False):
+    from src.engine.infrastructure.startup_validation_code_context import validation_auxiliary_preparation
+    delegation = validation_auxiliary_preparation(manifest, bundle, data_root)
     _require(manifest.get('schema') == SCHEMA and manifest.get('status') == 'prepared'
         and manifest.get('artifact_content_sha256') == P.seal(manifest)['artifact_content_sha256']
         and manifest.get('policy_data_root') == str(Path(data_root).resolve())
         and manifest.get('base_bundle_sha256') == bundle['bundle_sha256']
         and manifest.get('bundle_target_date') == bundle['target_date']
-        and manifest.get('next_session_code_hashes') == _code_hashes()
+        and _validation_code_inventory(manifest.get('next_session_code_hashes'), _code_hashes(), delegation)
         and manifest.get('reader_code_hashes') == I.code_hashes()
         and manifest.get('wire_contract') == W.contract(), 'manifest_invalid')
     key = (str(Path(data_root).resolve()), manifest['artifact_content_sha256'], bundle['bundle_sha256'])
@@ -309,7 +373,10 @@ def validate_manifest(data_root, manifest, bundle, *, cached_only=False):
     rebuilt = prepare(data_root, source_manifest_path=manifest['source_manifest']['path'],
         source_bundle_path=manifest['source_bundle']['path'], frozen_root=manifest['frozen_validator_root'],
         target_bundle_path=manifest['target_bundle']['path'], prepared_path=manifest['prepared_reference']['path'],
-        code_origin_root=manifest['code_origin_root'])
+        code_origin_root=manifest['code_origin_root'],
+        **({'_validation_manifest': manifest} if delegation is not None else {}),
+        **({'source_code_handoff_path': manifest['source_code_handoff']['path']}
+           if manifest.get('source_code_handoff') is not None else {}))
     # Mutable publication selectors are consumed only by the future publisher.
     # Monday's normal PREOPEN activation must not invalidate the research proof.
     rebuilt['publication_cas'] = manifest['publication_cas']

@@ -38,9 +38,13 @@ def _digest(value):
         separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
 
 
-def _sources(*paths):
+def _sources(*paths, logical_source_receipts=None):
     """Bind stable native sources with bounded memory, including large reports."""
     result = {}
+    logical = {}
+    if logical_source_receipts is not None:
+        from src.engine.infrastructure.startup_validation_code_context import preparation_logical_sources
+        logical = preparation_logical_sources()
     def identity(stat):
         return (stat.st_dev, stat.st_ino, stat.st_mode, stat.st_size,
                 stat.st_mtime_ns, stat.st_ctime_ns)
@@ -50,6 +54,14 @@ def _sources(*paths):
         path = Path(item)
         if path.is_symlink():
             raise ValueError('startup_policy_source_symlink')
+        if str(path) in logical:
+            logical_source_receipts[str(path)] = logical[str(path)]
+            continue
+        from src.engine.infrastructure.startup_validation_code_context import preparation_source_digest
+        reused = preparation_source_digest(path)
+        if reused is not None:
+            result[str(path)] = reused
+            continue
         sha = hashlib.sha256()
         with path.open('rb') as source:
             before = identity(os.fstat(source.fileno()))
@@ -129,7 +141,9 @@ def load_main_policies(*, target_date: str, observed_at: datetime,
                 if not bundle:
                     raise ValueError('main_machine_policy_missing')
                 path = N.preparation_path(data_root, target_date)
-                source_hashes = _sources(path, *(name for name in dependencies if Path(name).is_file()))
+                logical_sources = {}
+                source_hashes = _sources(path, *(name for name in dependencies if Path(name).is_file()),
+                    logical_source_receipts=logical_sources)
                 if not N.dependencies_unchanged(dependencies):
                     raise ValueError('main_machine_dependency_changed_during_loading')
             finally:
@@ -147,6 +161,7 @@ def load_main_policies(*, target_date: str, observed_at: datetime,
                     raise ValueError('main_machine_prepared_backend_generation_mismatch')
             results['main_machine'] = _loaded(bundle, native_status='prepared_content_loaded',
                 policy_sha256=bundle['bundle_sha256'], source_hashes=source_hashes,
+                logical_source_receipts=logical_sources,
                 scope_keys=scopes, backend_generation_sha256=backend_generation)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             results['main_machine'] = _failure(exc)
@@ -159,8 +174,13 @@ def load_main_policies(*, target_date: str, observed_at: datetime,
             preparation=validation, bundle=bundle)
         if native.get('status') not in {'pass', 'not_required'}:
             raise ValueError('main_auxiliary_reader_not_verified')
+        logical = {}
+        if validation:
+            from src.engine.infrastructure.startup_validation_code_context import preparation_logical_sources
+            logical = preparation_logical_sources()
         return _loaded(native, native_status=native['status'], policy_sha256=native.get('bundle_sha256'),
             source_hashes=native.get('source_hashes'),
+            logical_source_receipts=logical,
             status='parent_only' if native['status'] == 'not_required' else 'loaded')
     if validation:
         consume('main_auxiliary', auxiliary)

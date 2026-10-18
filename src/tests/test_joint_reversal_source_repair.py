@@ -9,6 +9,63 @@ from src.engine.scalping import reversal_extended_state as S
 from src.engine.scalping import reversal_extended_auxiliary as A
 from src.engine.scalping import continuous_reversal as K
 
+
+
+@pytest.fixture
+def joint_frozen_source(tmp_path):
+    """Restore exact historical bytes for tests; never tune or promote them.
+
+    Keep only the five immutable inputs consumed by these tests, independent
+    of workspace data symlinks, operational policies, and mutable tmp reports.
+    """
+    import gzip
+    import hashlib
+    import io
+    import json
+    from pathlib import Path
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    assets = Path(__file__).parent/'fixtures/reversal_joint_registration'
+    manifest_raw = (assets/'manifest.json').read_bytes()
+    assert hashlib.sha256(manifest_raw).hexdigest() == '5f5d0647b07a9b1f601593524330cee76365ecc063015c53a8a32cde1b4fb724'
+    manifest = json.loads(manifest_raw)
+    assert manifest['use'] == 'test_only_immutable_input_not_tuning_or_promotion'
+    assert manifest['original_parent_bundle_sha256'] == J.PARENT
+    assert len(manifest['files']) == 5
+    assert sum(r['bytes'] for r in manifest['files']) == 7864175
+    target = tmp_path/'frozen-joint-inputs'
+    for receipt in manifest['files']:
+        path = assets/receipt['fixture_file']
+        assert path.parent == assets and not path.is_symlink()
+        with path.open('rb') as handle:
+            compressed = handle.read(receipt['gzip_bytes']+1)
+        assert len(compressed) == receipt['gzip_bytes']
+        assert hashlib.sha256(compressed).hexdigest() == receipt['gzip_sha256']
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as handle:
+            raw = handle.read(receipt['bytes']+1)
+        assert len(raw) == receipt['bytes']
+        assert hashlib.sha256(raw).hexdigest() == receipt['sha256']
+        relative = Path(receipt['original_relative_path'])
+        assert not relative.is_absolute() and '..' not in relative.parts
+        restored = target/relative
+        restored.parent.mkdir(parents=True, exist_ok=True)
+        restored.write_bytes(raw)
+        assert restored.read_bytes() == raw
+    data = target/'data'
+    parent_path = N.root(data)/'generations'/(J.PARENT+'.json')
+    parent = json.loads(parent_path.read_bytes())
+    assert parent['bundle_sha256'] == J.PARENT == N.digest({k:v for k,v in parent.items() if k!='bundle_sha256'})
+    family = parent['continuous_reversal']['native_parent_bundle']['continuous_reversal']
+    for name in ('machine', 'auxiliary'):
+        source = N.root(data)/'sources'/('reversal-'+family[name+'_report_sha256']+'.json')
+        value = json.loads(source.read_bytes())
+        assert value == P.seal(value)
+        assert value['artifact_content_sha256'] == family[name+'_report_sha256']
+    evidence = target/'tmp/main-machine-joint-research-20261013/operating-application-plan-evidence.json'
+    assert P.file_hash(evidence) == J.EVIDENCE_FILE_SHA256
+    assert P.file_hash(evidence.parent/'opportunity-frontier-result.json') == J.RESEARCH_RESULT
+    return dict(data=data, parent=parent, evidence=evidence)
+
 T=datetime(2026,10,13,16,20,tzinfo=K.KST).timestamp()
 def row(i,p=110000,qty=1):return [T+i,1,i+1,p,p,p+1,qty,1,1,'036930_AL',0]
 def feed(state,values):
@@ -149,12 +206,12 @@ def test_anchor_writer_coalesces_new_streams_and_catches_up_during_write(tmp_pat
     assert callbacks.pop()()['structured_append_succeeded']
     assert len(writes)==2 and len(writes[-1])==1 and not I._PENDING
 
-def test_new_stream_anchor_is_initialized_after_nonempty_day_restore(monkeypatch):
+def test_new_stream_anchor_is_initialized_after_nonempty_day_restore(monkeypatch, joint_frozen_source):
     from src.engine.scalping import reversal_path_runtime as R
     from src.engine.scalping import continuous_reversal_policy_v6 as V
     from pathlib import Path
     import json
-    bundle=json.loads((Path(__file__).resolve().parents[2]/'data/runtime/mechanistic_entry_policy/generations'/f'{J.PARENT}.json').read_text())
+    bundle=joint_frozen_source['parent']
     # This is a frozen read, never configure or mutate a runtime policy file.
     f=bundle['continuous_reversal']['native_parent_bundle']['continuous_reversal']
     monkeypatch.setattr(R,'_FAMILY',f);monkeypatch.setattr(R,'_GENERATION',f['family_sha256'])
@@ -222,12 +279,12 @@ def test_incomplete_restore_resumes_on_existing_preparation_cadence(tmp_path,mon
     assert len(R._ANCHORS)==10
 
 
-def test_union_state_receives_late_restored_anchor_without_replaying_old_confirmations(monkeypatch):
+def test_union_state_receives_late_restored_anchor_without_replaying_old_confirmations(monkeypatch, joint_frozen_source):
     from src.engine.scalping import reversal_extended_runtime as E
     from src.engine.scalping import reversal_path_runtime as R
     from pathlib import Path
     import json
-    f=json.loads((Path(__file__).resolve().parents[2]/'data/runtime/mechanistic_entry_policy/generations'/(J.PARENT+'.json')).read_text())['continuous_reversal']
+    f=joint_frozen_source['parent']['continuous_reversal']
     monkeypatch.setattr(E,'_FAMILY',f);monkeypatch.setattr(E,'_STATES',{});monkeypatch.setattr(E,'observe_native',lambda *a:None)
     monkeypatch.setattr(R,'_ANCHORS',{})
     def envelope(seq,price):return dict(observed_epoch=T+seq,provider_trade_epoch=T+seq,trade_price=price,
@@ -336,7 +393,7 @@ def test_approved_selector_uses_own_whole_opportunity_denominator_and_carries_in
     assert R.select_variant(groups,sid,current,metrics,authority=R.SELECTION_AUTHORITY)['branch_ids']==current
 
 
-def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,monkeypatch):
+def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,monkeypatch,joint_frozen_source):
     import json
     from pathlib import Path
     from src.engine.scalping import reversal_joint_registration as R
@@ -346,9 +403,9 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,mo
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import reversal_auxiliary_registry as G
     from src.engine.scalping import reversal_auxiliary_intraday as I
-    repo=Path(__file__).resolve().parents[2];original_root=N.root(repo/'data')
-    parent=json.loads((original_root/'generations'/(J.PARENT+'.json')).read_text())
-    evidence=repo/'tmp/main-machine-joint-research-20261013/operating-application-plan-evidence.json'
+    original_root=N.root(joint_frozen_source['data'])
+    parent=joint_frozen_source['parent']
+    evidence=joint_frozen_source['evidence']
     frozen=tmp_path/'evidence.json';frozen.write_bytes(evidence.read_bytes())
     result_source=tmp_path/'frontier.json';result_source.write_bytes((evidence.parent/'opportunity-frontier-result.json').read_bytes())
     request=P.seal(dict(schema=R.SCHEMA,kind='REPLACE',operator_receipt=R.AUTHORITY,

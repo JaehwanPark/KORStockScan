@@ -60,8 +60,8 @@ def load(root,day):
     cursors=value.get('cursors',{}) if value['schema']==SCHEMA else {}
     return records,cursors,gaps
 
-def save(root,day,anchors,cursors,*,unobservable_streams=()):
-    from src.engine.scalping.mechanistic_entry_runtime_policy import _atomic_write_json
+def index_payload(day,anchors,cursors,*,unobservable_streams=()):
+    """Build and validate native bytes without acquiring publication authority."""
     body=dict(schema=SCHEMA,day=day,anchors=[dict(key=list(k),row=v,
         source_ref=dict(item=k[2],epoch=v[1],sequence=v[2],received_epoch=v[0],price=v[3]))
         for k,v in sorted(anchors.items()) if k[4]==day],cursors=cursors,
@@ -70,6 +70,11 @@ def save(root,day,anchors,cursors,*,unobservable_streams=()):
         raise ValueError('session_anchor_index_invalid_first_fact')
     body['content_sha256']=digest(body)
     if len(json.dumps(body).encode())>LIMIT:raise ValueError('session_anchor_index_budget_exceeded')
+    return body
+
+def save(root,day,anchors,cursors,*,unobservable_streams=()):
+    from src.engine.scalping.mechanistic_entry_runtime_policy import _atomic_write_json
+    body=index_payload(day,anchors,cursors,unobservable_streams=unobservable_streams)
     path=location(root,day);path.parent.mkdir(parents=True,exist_ok=True);_atomic_write_json(path,body)
     return dict(structured_append_succeeded=True,anchor_count=len(body['anchors']))
 

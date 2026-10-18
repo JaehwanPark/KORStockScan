@@ -1,12 +1,16 @@
 """Reviewed generations retain exact source closure without new policy authority."""
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from src.engine.automation import intraday_release_handoff as H
 from src.engine.automation import prepared_policy_code_handoff as C
+from src.engine.scalping.main_stop_policy import implementation_paths
+from src.engine.scalping.holding_vote_experiment import _code_paths
+from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
 from src.tests.test_prepared_policy_code_handoff import prepared
 
 ORIGIN = '7f2552aedde8fec6ef904a43105827907e50dfc8'
@@ -15,8 +19,19 @@ TRIGGER = 'src/engine/sniper_state_handlers.py'
 ROOT = Path(H.__file__).resolve().parents[3]
 NATIVE_VERIFY = H._verify_entry_code_delta
 REAL_GIT = H.subprocess.check_output
+FAMILY_PATHS = {
+    'pre_submit_delay': {name: name for name in CONTRACT_PATHS},
+    'main_stop': {name: 'src/engine/'+name for name in implementation_paths()},
+    'holding_vote': {name: 'src/engine/'+name for name in _code_paths()},
+}
+ORIGINAL_DIGESTS = {
+    'pre_submit_delay': 'bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256',
+    'main_stop': '687c06b51d0e4b581f1927151b31483d5f979e438cc67a726e6718f84bead533',
+    'holding_vote': '6c664915b34289cddceeaf20399cce45f5e9e3f3373fdeae885910043f343112',
+}
 GENERATIONS = {
     'historical_9d': '9d2201141aeae409fe960ff7795a1340718a7146',
+    'historical_a8': 'a8f063105bbb1d8a3676e55ad5377990a87594df',
     'completed_current': REAL_GIT(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
 }
 PAIRS = {
@@ -25,19 +40,32 @@ PAIRS = {
                           **H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES,
                           **H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES},
 }
+PAIRS['historical_a8'] = dict(PAIRS['completed_current'])
 DEPENDENCIES = {
     generation: H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[TRIGGER][pairs[TRIGGER][1]]
     for generation, pairs in PAIRS.items()
 }
+READONLY_VARIANT = H.REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS[(TRIGGER, PAIRS['completed_current'][TRIGGER][1])]
+DEPENDENCIES['completed_current'] = READONLY_VARIANT['dependencies']
 # Every positive verification checks the full closure. Negative probes cover
 # each old dependency plus distinct new source, cost and startup helper roles.
 DEPENDENCY_CASES = {
     'historical_9d': tuple(DEPENDENCIES['historical_9d']),
+    'historical_a8': ('src/engine/infrastructure/main_policy_loading.py',
+                      'src/engine/scalping/reversal_evaluation_context.py'),
     'completed_current': (*DEPENDENCIES['historical_9d'],
         'src/engine/scalping/main_stop_runtime_source.py',
         'src/engine/lifecycle/holding_research_cost.py',
         'src/engine/infrastructure/main_prompt_policy_loading.py',
-        'src/engine/lifecycle/research_input_budget.py'),
+        'src/engine/lifecycle/research_input_budget.py',
+        'src/engine/infrastructure/main_policy_loading.py',
+        'src/engine/scalping/reversal_evaluation_context.py',
+        'src/engine/scalping/reversal_anchor_index.py',
+        'src/engine/infrastructure/startup_validation_code_context.py',
+        'src/engine/automation/main_startup_validation.py',
+        'src/engine/automation/auxiliary_reader_readiness.py',
+        'src/engine/scalping/continuous_reversal_policy_v6.py',
+        'src/engine/scalping/reversal_auxiliary_source_handoff.py'),
 }
 
 
@@ -47,13 +75,15 @@ def digest(value):
 
 @pytest.fixture(params=tuple(GENERATIONS))
 def candidate(tmp_path, monkeypatch, request):
-    """Use exact 9d/current Git objects, never current bytes under an old label."""
+    """Use exact historical/current Git objects, never current bytes under an old label."""
     generation = request.param
     commit = GENERATIONS[generation]
     pairs = PAIRS[generation]
     dependencies = DEPENDENCIES[generation]
     root = tmp_path / 'source'
     names = {OWN, *pairs, *dependencies}
+    if generation != 'historical_9d':
+        names.update(os.path.normpath(name) for paths in FAMILY_PATHS.values() for name in paths.values())
     git_root=ROOT
     if generation=='completed_current':
         # A real private commit permits validation before the caller commits
@@ -82,6 +112,8 @@ def candidate(tmp_path, monkeypatch, request):
         if ref == commit:
             return committed[name]
         assert ref == ORIGIN
+        if name not in original:
+            original[name] = REAL_GIT(['git', '-C', str(ROOT), 'show', ORIGIN+':'+name])
         return original[name]
     monkeypatch.setattr(H.subprocess, 'check_output', revision)
     def verify(name=TRIGGER, *, alias=None):
@@ -147,7 +179,8 @@ def test_native_handoff_rechecks_helper_and_provenance_closure(candidate, depend
 
 def test_generation_closures_are_separate_and_every_dependency_is_git_bound(candidate):
     c = candidate
-    assert len(c.dependencies) == (2 if c.generation == 'historical_9d' else 59)
+    assert len(c.dependencies) == {'historical_9d': 2, 'historical_a8': 59,
+                                   'completed_current': 75}[c.generation]
     for name, expected in c.dependencies.items():
         assert hashlib.sha256(c.committed[name]).hexdigest() == expected
         assert c.committed[name] == REAL_GIT(['git', '-C', str(c.git_root), 'show', c.commit+':'+name])
@@ -194,3 +227,54 @@ def test_prepared_verify_reexecutes_native_dependency_guard(prepared, candidate,
     with pytest.raises(ValueError, match='entry_consumer_reviewed_dependency_unreviewed'):
         C.verify(data, '2026-10-19', **args, actual=actual)
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('candidate', ['historical_a8', 'completed_current'], indirect=True)
+@pytest.mark.parametrize('family', tuple(FAMILY_PATHS))
+def test_native_three_family_inventories_preserve_original_digests(candidate, family):
+    c = candidate
+    paths = FAMILY_PATHS[family]
+    assert len(paths) == {'pre_submit_delay': 28, 'main_stop': 44, 'holding_vote': 23}[family]
+    before = {name: (c.root/name).read_bytes() for name in c.committed}
+    changed = NATIVE_VERIFY(c.root, c.commit, ORIGIN, paths, ORIGINAL_DIGESTS[family])
+    assert TRIGGER in changed
+    assert before == {name: (c.root/name).read_bytes() for name in c.committed}
+
+
+@pytest.mark.parametrize('candidate', ['completed_current'], indirect=True)
+def test_readonly_delay_extension_requires_its_complete_generation(candidate):
+    c = candidate
+    expected = ORIGINAL_DIGESTS['pre_submit_delay']
+    name = 'src/engine/infrastructure/main_policy_loading.py'
+    old = H.REVIEWED_DELAY_CONTRACT_EXTENSIONS[(ORIGIN, expected)][name]
+    assert old == 'da58eb3fc403b5117cba011d6bb92f6e15790248d181ada4b73b263d38e073db'
+    assert READONLY_VARIANT['contract_extensions'][(ORIGIN, expected)][name] == hashlib.sha256(c.committed[name]).hexdigest()
+    assert name in NATIVE_VERIFY(c.root, c.commit, ORIGIN, FAMILY_PATHS['pre_submit_delay'], expected)
+    selector = READONLY_VARIANT['selector_path']
+    old_context = REAL_GIT(['git', '-C', str(ROOT), 'show', GENERATIONS['historical_a8']+':'+selector])
+    (c.root/selector).write_bytes(old_context)
+    c.committed[selector] = old_context
+    with pytest.raises(ValueError, match='entry_consumer_contract_extension_unreviewed'):
+        NATIVE_VERIFY(c.root, c.commit, ORIGIN, FAMILY_PATHS['pre_submit_delay'], expected)
+
+
+@pytest.mark.parametrize('candidate', ['completed_current'], indirect=True)
+@pytest.mark.parametrize('name', [
+    'src/engine/infrastructure/main_policy_loading.py',
+    'src/engine/scalping/reversal_evaluation_context.py',
+    'src/engine/scalping/entry_machine_source_recovery.py',
+    'src/engine/scalping/reversal_anchor_index.py',
+    'src/engine/automation/main_startup_validation.py',
+    'src/engine/infrastructure/startup_validation_code_context.py',
+])
+def test_readonly_variant_rejects_mixed_reviewed_generations(candidate, name):
+    c = candidate
+    assert c.verify() == [TRIGGER]
+    old = REAL_GIT(['git', '-C', str(ROOT), 'show', GENERATIONS['historical_a8']+':'+name])
+    assert old != c.committed[name]
+    (c.root/name).write_bytes(old)
+    c.committed[name] = old
+    # Both generations are individually reviewed. Combining their files must
+    # still fail the one complete dependency map selected by the context.
+    with pytest.raises(ValueError, match='entry_consumer_reviewed_dependency_unreviewed'):
+        c.verify()

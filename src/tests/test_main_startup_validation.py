@@ -98,8 +98,45 @@ def test_native_preparation_context_keeps_cli_full_scope_and_cold_invocation_bou
         assert io['stats']['cache_status'] == 'invocation_memory_only'
         assert io['stats']['full_reads'] == io['stats']['reused_reads'] == 1
         assert io['stats']['full_bytes'] == io['stats']['reused_bytes'] == 2 * 1024 * 1024
+        assert result['native_process_lifecycle']['child_terminated'] is True
+        assert result['native_process_lifecycle']['descendants_drained'] is True
+        assert result['native_process_lifecycle']['cleanup_required'] is False
     assert results[0]['native_validation_io']['stats']['pid'] != results[1]['native_validation_io']['stats']['pid']
     assert not (data / 'runtime/validation_digests').exists()
+
+
+def test_native_timeout_terminates_owned_frozen_child_without_touching_unrelated_child(tmp_path):
+    pid_path = tmp_path/'frozen.pid'
+    script = "import subprocess,sys,time; from pathlib import Path; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']); Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(60)"
+    unrelated = subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],start_new_session=True)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            validation._run_native_validation([sys.executable,'-c',script,str(pid_path)],
+                cwd=tmp_path,env=validation._safe_process_environment(),timeout=.3)
+        life=caught.value.native_process_lifecycle
+        assert life['cleanup_required'] and life['child_terminated'] and life['descendants_drained']
+        assert unrelated.poll() is None
+        path=Path('/proc')/pid_path.read_text()/'stat'
+        assert not path.exists() or path.read_text().rsplit(')',1)[1].split()[0]=='Z'
+    finally:
+        unrelated.kill(); unrelated.wait(timeout=5)
+
+
+def test_native_interrupt_also_closes_the_owned_session(tmp_path,monkeypatch):
+    original=subprocess.Popen.communicate
+    first=True
+    def interrupt(process,*args,**kwargs):
+        nonlocal first
+        if first:
+            first=False
+            raise KeyboardInterrupt()
+        return original(process,*args,**kwargs)
+    monkeypatch.setattr(subprocess.Popen,'communicate',interrupt)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        validation._run_native_validation([sys.executable,'-c','import time;time.sleep(60)'],
+            cwd=tmp_path,env=validation._safe_process_environment())
+    assert caught.value.native_process_lifecycle['child_terminated']
+    assert caught.value.native_process_lifecycle['descendants_drained']
 
 
 @pytest.mark.parametrize('mode', ['fail', 'changed'])
@@ -107,13 +144,13 @@ def test_native_preparation_context_never_reuses_pass_or_changed_source(
         native_preparation_cli, monkeypatch, mode):
     code, data = native_preparation_cli
     (data / 'mode.txt').write_text(mode)
-    original_run = validation.subprocess.run
+    original_run = validation._run_native_validation
     observed = []
     def record(*args, **kwargs):
         result = original_run(*args, **kwargs)
         observed.append(result)
         return result
-    monkeypatch.setattr(validation.subprocess, 'run', record)
+    monkeypatch.setattr(validation, '_run_native_validation', record)
     with pytest.raises(ValueError, match='startup_native_preparation_failed'):
         validation._native_preparation_check(code, DAY, '2026-10-16')
     result, = observed
@@ -132,8 +169,11 @@ def test_native_preparation_context_never_reuses_pass_or_changed_source(
 
 
 def test_native_preparation_rejects_missing_context_diagnostics(tmp_path, monkeypatch):
-    monkeypatch.setattr(validation.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(
-        a[0], 0, stdout=json.dumps(dict(status='pass', findings=[])), stderr=''))
+    def missing(*args, **kwargs):
+        result = subprocess.CompletedProcess(args[0], 0, stdout=json.dumps(dict(status='pass', findings=[])), stderr='')
+        result.native_process_lifecycle = {'child_terminated': True, 'descendants_drained': True}
+        return result
+    monkeypatch.setattr(validation, '_run_native_validation', missing)
     with pytest.raises(ValueError, match='startup_native_preparation_diagnostics_invalid'):
         validation._native_preparation_check(tmp_path, DAY, '2026-10-16')
 
@@ -142,7 +182,7 @@ def test_native_preparation_rejects_missing_context_diagnostics(tmp_path, monkey
 def test_native_preparation_diagnostic_status_requires_full_result_contract(
         native_preparation_cli, monkeypatch, failure):
     code, _ = native_preparation_cli
-    original_run = validation.subprocess.run
+    original_run = validation._run_native_validation
     def contradictory(*args, **kwargs):
         result = original_run(*args, **kwargs)
         if failure == 'exit':
@@ -152,7 +192,7 @@ def test_native_preparation_diagnostic_status_requires_full_result_contract(
             native['findings'] = ['native_failure_despite_status']
             result.stdout = json.dumps(native) + '\n'
         return result
-    monkeypatch.setattr(validation.subprocess, 'run', contradictory)
+    monkeypatch.setattr(validation, '_run_native_validation', contradictory)
     with pytest.raises(ValueError, match='startup_native_preparation_failed') as captured:
         validation._native_preparation_check(code, DAY, '2026-10-16')
     receipt = captured.value.native_preparation_check
@@ -391,7 +431,7 @@ def test_native_preparation_timeout_keeps_unknown_counters_without_raw_output(tr
         raise subprocess.TimeoutExpired(args[0], 180, output='PRIVATE_STDOUT', stderr='PRIVATE_STDERR')
     def failing_intake(*args):
         with pytest.MonkeyPatch.context() as isolated:
-            isolated.setattr(validation.subprocess, 'run', timed_out)
+            isolated.setattr(validation, '_run_native_validation', timed_out)
             return transaction['native_check'](transaction['code'], DAY, '2026-10-16')
     monkeypatch.setattr(validation, '_intake', failing_intake)
     final, receipt = _run(transaction)
@@ -657,3 +697,72 @@ def test_parent_independently_rejects_malformed_or_unbound_child_semantics(defec
     }[defect]
     with pytest.raises(ValueError, match=expected_error):
         validation._validate_child_result(child, CONSUMER_IDS, expected)
+
+
+def test_native_cli_closure_is_collected_from_executed_native_boundaries(native_preparation_cli):
+    code,data=native_preparation_cli
+    package=code/'src/engine/scalping';package.mkdir();(package/'__init__.py').touch()
+    (package/'mechanistic_entry_runtime_policy.py').write_text('''from src.utils.constants import DATA_DIR
+import json
+
+def load(*args,**kwargs):
+    return json.loads((DATA_DIR/'bundle.json').read_text())
+''')
+    ident='a'*64;bundle=dict(bundle_sha256='b'*64,target_date=DAY,continuous_reversal={'family_sha256':'c'*64})
+    (data/'bundle.json').write_text(json.dumps(bundle))
+    path=data/'runtime/mechanistic_entry_policy/auxiliary/transitions'/(ident+'.json')
+    path.parent.mkdir(parents=True);path.write_text(json.dumps({'artifact_content_sha256':ident}))
+    (package/'reversal_auxiliary_next_session.py').write_text('''from pathlib import Path
+from types import SimpleNamespace
+import hashlib,json
+I=SimpleNamespace(read=lambda path:json.loads(Path(path).read_text()))
+_FROZEN_SCRIPT='private_native_collection_fixture'
+def _hash(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def _frozen_inventory(root):return {str(Path(root)/'bundle.json'):_hash(Path(root)/'bundle.json')}
+def _verify_frozen(root,manifest,bundle):return {'schema':'native_fixture_verified','bundle_sha256':_hash(bundle)}
+def _dependencies(manifest):return []
+def _database_signature(manifest):return None
+def validate_manifest(data_root,manifest,bundle,**kwargs):
+    _frozen_inventory(data_root)
+    _verify_frozen(data_root,Path(data_root)/'bundle.json',Path(data_root)/'bundle.json')
+    return manifest
+''')
+    cli=code/'src/engine/automation/next_preopen_readiness.py';text=cli.read_text()
+    marker="    return dict(status='pass', findings=[], target_date=target_date,"
+    calls=f'''    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_auxiliary_next_session as A
+    b=N.load(data_root=DATA_DIR,target_date=target_date)
+    A.validate_manifest(DATA_DIR,A.I.read({str(path)!r}),b)
+'''
+    assert marker in text;cli.write_text(text.replace(marker,calls+marker,1))
+    run_id='1'*32
+    result=validation._native_preparation_check(code,DAY,'2026-10-16',run_id)
+    closure=result['native_machine_closure']
+    assert closure['run_id']==run_id
+    assert closure['bundles'][bundle['bundle_sha256']]['family_sha256']=='c'*64
+    assert closure['manifests'][ident]['sha256']==hashlib.sha256(path.read_bytes()).hexdigest()
+    assert closure['frozen_inventories'][str(data)][str(data/'bundle.json')]
+    assert closure['frozen_validations'][str(data/'bundle.json')]['result']['schema']=='native_fixture_verified'
+    assert closure['digest_binding']['pid']==result['native_validation_io']['stats']['pid']
+    assert closure['digest_entries'][str(data/'source.bin')]['digest']==hashlib.sha256((data/'source.bin').read_bytes()).hexdigest()
+    assert result['native_validation_io']['remaining_entries']==0
+
+
+def test_parent_child_source_recheck_keeps_cap_and_independent_digest_authority(tmp_path,monkeypatch):
+    from src.engine.infrastructure import startup_validation_code_context as C
+    from src.engine.infrastructure.validation_digest_session import identity
+    raw=tmp_path/'large.bin';raw.write_bytes(b'a'*2048)
+    expected=hashlib.sha256(raw.read_bytes()).hexdigest()
+    proof={'closure':{'digest_entries':{str(raw):{'identity':identity(raw),'digest':expected}}}}
+    # Full closure schema has its own real-isolation suite. Exercise this
+    # consumer's independent expected digest/stat comparison without 65 MiB IO.
+    monkeypatch.setattr(C,'_check_native_closure',lambda value:None)
+    monkeypatch.setattr(validation,'MAX_SOURCE',1024)
+    validation._recheck({str(raw):expected},main_preparation=proof)
+    with pytest.raises(ValueError,match='delegated_source_changed'):
+        validation._recheck({str(raw):'0'*64},main_preparation=proof)
+    with pytest.raises(ValueError,match='not_regular_bounded'):
+        validation._recheck({str(raw):expected})
+    raw.write_bytes(b'b'*2048)
+    with pytest.raises(ValueError,match='delegated_source_changed'):
+        validation._recheck({str(raw):expected},main_preparation=proof)

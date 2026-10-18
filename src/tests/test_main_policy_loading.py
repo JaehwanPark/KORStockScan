@@ -195,7 +195,7 @@ def test_native_entry_preparation_does_not_record_pid_or_enter_live_reader(tmp_p
     configured = []
     monkeypatch.setattr(B, 'configure_bundle', lambda value, **kwargs: configured.append((value, kwargs)))
     assert E.prepare_policy_loading(data_root=tmp_path, day=TARGET, preparation=True) is bundle
-    assert configured == [(bundle, {'data_root': tmp_path, 'day': TARGET})]
+    assert configured == [(bundle, {'data_root': tmp_path, 'day': TARGET, 'read_only': True})]
 
 
 def test_live_invalid_trailing_retains_existing_startup_exception(tmp_path, monkeypatch):
@@ -336,6 +336,20 @@ def test_genuine_v6_prepared_bundle_loads_all_routes_without_current_or_pid_muta
     old = V5.stage(root, '2026-10-07', '2026-10-07', issued, aux,
         target_date='2026-10-08', release_commit='a' * 40)
     V5.validate_sources(old, root)
+    from src.tests.test_reversal_startup_readonly import guarded_child
+    v5_child_root = root.parent / 'v5-cold-check'
+    v5_child_root.mkdir()
+    v5_sources = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    cold_v5 = guarded_child(v5_child_root, f"""
+from src.engine.scalping import reversal_evaluation_context as E
+from src.engine.scalping import reversal_current_backend as B
+loaded = E.prepare_policy_loading(data_root=Path({str(root)!r}), day='2026-10-08', preparation=True)
+(run/'result.json').write_text(json.dumps(dict(bundle_sha256=loaded['bundle_sha256'],
+    backend_generation=B.backend()._GENERATION)))
+""")
+    assert cold_v5['bundle_sha256'] == old['bundle_sha256']
+    assert cold_v5['backend_generation'] == old['continuous_reversal']['family_sha256']
+    assert {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()} == v5_sources
     changes = P.seal(dict(schema='main_extended_registration_request_v1', kind='ADD',
         parent_bundle_sha256=old['bundle_sha256'], operator_receipt=ER.AUTHORITY,
         research_batch_sha256=C.RESEARCH_BATCH_SHA256, target_date='2026-10-12', source_receipts=[],
@@ -377,6 +391,25 @@ def test_genuine_v6_prepared_bundle_loads_all_routes_without_current_or_pid_muta
             value = getattr(module, name, None)
             if getattr(value, '__name__', '').startswith('src.engine.scalping.'):
                 pending.append(value)
+    # Run this genuine v6 generation in a fresh OS-isolated child as well as
+    # the same-process reader. Production/setup imports in pytest cannot hide
+    # cold collector imports or anchor-index writes in the child.
+    from src.tests.test_reversal_startup_readonly import guarded_child
+    source_before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    cold = guarded_child(root.parent, f"""
+from src.engine.scalping import reversal_evaluation_context as E
+from src.engine.scalping import reversal_current_backend as B
+from src.engine.automation.auxiliary_reader_readiness import verify_auxiliary_reader
+loaded = E.prepare_policy_loading(data_root=Path({str(root)!r}), day='2026-10-12', preparation=True)
+auxiliary = verify_auxiliary_reader('2026-10-12', data_root=Path({str(root)!r}), preparation=True, bundle=loaded)
+assert auxiliary['status'] == 'pass'
+(run/'result.json').write_text(json.dumps(dict(bundle_sha256=loaded['bundle_sha256'],
+    backend_generation=B.backend()._GENERATION, scope_count=auxiliary['scope_count'])))
+""")
+    assert cold['bundle_sha256'] == prepared['bundle_sha256']
+    assert cold['backend_generation'] == prepared['continuous_reversal']['family_sha256']
+    assert cold['scope_count'] > 0
+    assert {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()} == source_before
     loaded = E.prepare_policy_loading(data_root=root, day='2026-10-12', preparation=True)
     assert loaded['bundle_sha256'] == prepared['bundle_sha256']
     assert B.backend()._GENERATION == prepared['continuous_reversal']['family_sha256']

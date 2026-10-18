@@ -109,43 +109,170 @@ def _git(root, *args):
                                    text=True, stderr=subprocess.PIPE, timeout=30).strip()
 
 
-def _native_preparation_check(selected_root, target_date, source_date):
+def _run_native_validation(command, *, cwd, env, timeout=180):
+    """Own the selected CLI and its native frozen verifier as one session.
+
+    The native verifier uses ordinary subprocess.run without creating a new
+    session. Keep cleanup independent from successful diagnostic production.
+    """
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, close_fds=True,
+        start_new_session=True)
+    ticks = _ticks(process.pid)
+    lifecycle = dict(pid=process.pid, start_ticks=ticks, process_group=process.pid,
+        session_id=process.pid, ownership_basis='dedicated_native_verifier_session',
+        child_terminated=False, descendants_drained=False)
+
+    def members():
+        found = []
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdecimal():
+                continue
+            try:
+                fields = (entry/'stat').read_text().rsplit(')', 1)[1].split()
+                if (int(fields[2]) == process.pid and int(fields[3]) == process.pid
+                        and int(fields[19]) >= int(ticks) and fields[0] != 'Z'):
+                    found.append(int(entry.name))
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+        return found
+
+    result = None
+    error = None
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    except BaseException as exc:
+        error = exc
+    finally:
+        remaining = members()
+        lifecycle['cleanup_required'] = bool(remaining)
+        if remaining:
+            # Only this fresh session can have these group/session identifiers;
+            # require the captured start identity while its leader still lives.
+            if process.poll() is None and _ticks(process.pid) != ticks:
+                raise ValueError('startup_native_preparation_process_identity_changed')
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.communicate(timeout=10)
+        deadline = time.monotonic() + 5
+        while members() and time.monotonic() < deadline:
+            time.sleep(.01)
+        lifecycle.update(child_terminated=process.poll() is not None,
+                         descendants_drained=not members())
+    if error is not None:
+        error.native_process_lifecycle = lifecycle
+        raise error
+    if not lifecycle['descendants_drained'] or lifecycle['cleanup_required']:
+        error = ValueError('startup_native_preparation_descendant_leak')
+        error.native_process_lifecycle = lifecycle
+        raise error
+    result.native_process_lifecycle = lifecycle
+    return result
+
+
+def _native_preparation_check(selected_root, target_date, source_date, capture_machine=False):
     if date.fromisoformat(source_date).isoformat() != source_date:
         raise ValueError('startup_native_preparation_source_date_invalid')
+    if capture_machine is not False and (not isinstance(capture_machine, str)
+            or re.fullmatch('[0-9a-f]{32}', capture_machine) is None):
+        raise ValueError('startup_native_preparation_run_id_invalid')
     # The selected CLI still performs its full current-contract verification.
     # Reuse only digests already read in this one child; the existing postclose
     # context neither loads nor writes a persistent cache and clears on exit.
     # Keep diagnostics on stderr so the native stdout/exit contract is intact.
-    script = r'''import json,runpy,sys
+    script = r'''import hashlib,json,runpy,sys
 sys.path.insert(0,sys.argv.pop(1))
 source_date=sys.argv.pop(1)
+run_id=sys.argv.pop(1)
+capture=run_id!='0'
 from src.engine.infrastructure.validation_digest_session import postclose_session
 from src.utils.constants import DATA_DIR
+closure=dict(schema='startup_native_machine_closure_v1', run_id=run_id, manifests={}, bundles={},
+    frozen_inventories={}, frozen_validations={}, digest_entries={})
+if capture:
+    from pathlib import Path
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_auxiliary_next_session as A
+    original_load=N.load
+    original_inventory=A._frozen_inventory
+    original_frozen=A._verify_frozen
+    original_manifest=A.validate_manifest
+    def load(*args,**kwargs):
+        result=original_load(*args,**kwargs)
+        if result:
+            closure['bundles'][result['bundle_sha256']]=dict(target_date=result['target_date'],
+                family_sha256=result['continuous_reversal']['family_sha256'])
+        return result
+    def inventory(root):
+        result=original_inventory(root)
+        closure['frozen_inventories'][str(Path(root).resolve())]=result
+        return result
+    def frozen(root,manifest,bundle):
+        result=original_frozen(root,manifest,bundle)
+        closure['frozen_validations'][str(Path(manifest).resolve())]=dict(
+            root=str(Path(root).resolve()),bundle_path=str(Path(bundle).resolve()),result=result,
+            invocation=dict(executable=str(Path(root)/'.venv/bin/python'),arguments=['-B','-c'],
+                script_sha256=hashlib.sha256(A._FROZEN_SCRIPT.encode()).hexdigest(),
+                cwd=str(Path(root)),source_manifest=str(manifest),source_bundle=str(bundle),
+                environment=dict(PYTHONPATH=str(root),PYTHONDONTWRITEBYTECODE='1'),
+                parent_environment='sanitized_p5_native_verification'))
+        return result
+    def manifest(data_root,value,bundle,**kwargs):
+        result=original_manifest(data_root,value,bundle,**kwargs)
+        path=Path(data_root)/'runtime/mechanistic_entry_policy/auxiliary/transitions'/(value['artifact_content_sha256']+'.json')
+        if A.I.read(path)!=value:
+            raise ValueError('startup_native_manifest_path_changed')
+        from src.engine.infrastructure.validation_digest_session import identity
+        database=A._database_signature(value)
+        database_identities={v[0]:identity(v[0]) for v in (database or ()) if v is not None}
+        closure['manifests'][value['artifact_content_sha256']]=dict(path=str(path.resolve()),
+            sha256=A._hash(path),bundle_sha256=bundle['bundle_sha256'],target_date=bundle['target_date'],
+            dependencies=A._dependencies(value),database=database,database_source_identities=database_identities)
+        return result
+    N.load=load
+    A._frozen_inventory=inventory
+    A._verify_frozen=frozen
+    A.validate_manifest=manifest
 session=None
 try:
     with postclose_session(DATA_DIR,source_date) as session:
-        runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
+        try:
+            runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
+        finally:
+            if capture:
+                closure['digest_entries']=session.entries
+                closure['digest_binding']=session.binding
+                print('P5_NATIVE_MACHINE_CLOSURE='+json.dumps(closure,sort_keys=True),file=sys.stderr)
 finally:
     if session is not None:
         print('P5_NATIVE_VALIDATION_IO='+json.dumps(dict(source_date=source_date,
             stats=session.stats,remaining_entries=len(session.entries)),sort_keys=True),file=sys.stderr)
 '''
     command = [str(selected_root / '.venv/bin/python'), '-I', '-B', '-c',
-               script, str(selected_root), source_date, '--verify',
+               script, str(selected_root), source_date, capture_machine or '0', '--verify',
                '--target-date', target_date]
     env = _safe_process_environment()
     diagnostic_receipt = dict(source_date=source_date, target_date=target_date,
                               exit_code=None, status='not_observed', native_validation_io=None)
     try:
-        result = subprocess.run(command, cwd=selected_root, env=env, capture_output=True,
-                                text=True, timeout=180, check=False)
+        result = _run_native_validation(command, cwd=selected_root, env=env)
     except subprocess.TimeoutExpired as exc:
         # A killed child cannot attest its context cleanup or complete counters.
         diagnostic_receipt.update(status='timeout', diagnostics_status='unavailable_child_timeout')
+        diagnostic_receipt['native_process_lifecycle'] = getattr(exc, 'native_process_lifecycle', None)
         error = ValueError('startup_native_preparation_timeout')
         error.native_preparation_check = diagnostic_receipt
         raise error from exc
+    except BaseException as exc:
+        diagnostic_receipt.update(status='fail', diagnostics_status='unavailable_native_process_failure',
+            native_process_lifecycle=getattr(exc, 'native_process_lifecycle', None))
+        exc.native_preparation_check = diagnostic_receipt
+        raise
     diagnostic_receipt['exit_code'] = result.returncode
+    diagnostic_receipt['native_process_lifecycle'] = result.native_process_lifecycle
 
     def fail(message):
         error = ValueError(message)
@@ -200,10 +327,22 @@ finally:
              ','.join(map(str, value.get('findings') or [])))
     if diagnostic_receipt['diagnostics_status'] != 'observed':
         fail('startup_native_preparation_diagnostics_invalid')
-    return {**value, 'native_validation_io': diagnostics}
+    if capture_machine:
+        rows = [line.removeprefix('P5_NATIVE_MACHINE_CLOSURE=') for line in result.stderr.splitlines()
+                if line.startswith('P5_NATIVE_MACHINE_CLOSURE=')]
+        if len(rows) != 1 or len(rows[0].encode()) > MAX_JSON:
+            fail('startup_native_machine_closure_missing_or_unbounded')
+        closure = json.loads(rows[0])
+        if (closure.get('schema') != 'startup_native_machine_closure_v1'
+                or not closure.get('bundles') or not closure.get('manifests')
+                or closure.get('digest_binding', {}).get('pid') != diagnostics['stats']['pid']):
+            fail('startup_native_machine_closure_invalid')
+        value = {**value, 'native_machine_closure': closure}
+    return {**value, 'native_validation_io': diagnostics,
+            'native_process_lifecycle': result.native_process_lifecycle}
 
 
-def _intake(workspace, target_date):
+def _intake(workspace, target_date, run_id=None):
     from src.engine.infrastructure.runtime_release_router import selected_release
     from src.utils.market_day import is_krx_trading_day
     day = date.fromisoformat(target_date)
@@ -249,7 +388,8 @@ def _intake(workspace, target_date):
             or manifest.get('manifest_sha256') != receipt.get('manifest_content_sha256')
             or manifest['manifest_sha256'] != _digest({k: v for k, v in manifest.items() if k != 'manifest_sha256'})):
         raise ValueError('startup_prepared_manifest_invalid')
-    native = _native_preparation_check(selected_root, target_date, receipt['source_date'])
+    native = _native_preparation_check(selected_root, target_date, receipt['source_date'],
+                                       False if run_id is None else run_id)
     if native.get('selected_release_commit') != selected_commit:
         raise ValueError('startup_native_selection_mismatch')
     _recheck(sources)
@@ -315,8 +455,12 @@ def _bind_execution(workspace, execution_root, intake, candidate):
         bundle = holding_native.load_bundle(workspace / 'data', manifest['target_date'], require_current_code=False)
         bind_contract('holding_vote', bundle['bundle_sha256'], bundle['code_sha256'],
             {name: 'src/engine/' + name for name in vote._code_paths()})
+    from src.engine.infrastructure.startup_validation_code_context import bind_main_preparation
+    main = bind_main_preparation(root, commit, workspace / 'data', intake)
+    contract_sources.update(main['source_hashes'])
     return dict(basis='reviewed_candidate_handoff' if candidate else 'selected',
-                root=str(root), commit=commit, contracts=contracts, source_hashes=contract_sources)
+                root=str(root), commit=commit, contracts=contracts, main_preparation=main,
+                source_hashes=contract_sources)
 
 
 def _assignment_values(path, *, source_role='policy'):
@@ -416,9 +560,21 @@ env -0
     return values
 
 
-def _recheck(sources):
+def _recheck(sources, *, main_preparation=None):
+    entries = {}
+    if main_preparation is not None:
+        from src.engine.infrastructure.startup_validation_code_context import _check_native_closure
+        _check_native_closure(main_preparation)
+        entries = main_preparation['closure']['digest_entries']
     for name, expected in sources.items():
-        actual = _sha(name) if Path(name).exists() or Path(name).is_symlink() else None
+        entry = entries.get(str(Path(name).absolute()))
+        if entry is not None:
+            from src.engine.infrastructure.validation_digest_session import identity
+            if identity(name) != entry['identity'] or entry['digest'] != expected:
+                raise ValueError('startup_delegated_source_changed:' + str(name))
+            actual = entry['digest']
+        else:
+            actual = _sha(name) if Path(name).exists() or Path(name).is_symlink() else None
         if actual != expected:
             raise ValueError('startup_source_changed:' + str(name))
 
@@ -477,6 +633,16 @@ def _validate_child_result(child, expected_ids, expected_policy_hashes):
         for path, sha in row['source_hashes'].items():
             if not isinstance(path, str) or not Path(path).is_absolute() or not re.fullmatch('[0-9a-f]{64}', str(sha)):
                 raise ValueError('startup_child_consumer_source_invalid:' + name)
+        logical = row.get('logical_source_receipts', {})
+        if (not isinstance(logical, dict)
+                or (logical and name not in {'main_machine', 'main_auxiliary'})):
+            raise ValueError('startup_child_logical_source_owner_invalid')
+        for path, receipt in logical.items():
+            if (not isinstance(path, str) or not Path(path).is_absolute()
+                    or path in row['source_hashes'] or not isinstance(receipt, dict)
+                    or receipt.get('schema') != 'startup_native_logical_source_v1'
+                    or receipt.get('path') != path):
+                raise ValueError('startup_child_logical_source_invalid')
         if name in expected_policy_hashes and row.get('policy_sha256') != expected_policy_hashes[name]:
             raise ValueError('startup_child_wrong_policy:' + name)
 
@@ -496,7 +662,7 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
                  child_terminated=False, load_check_passed=False, failure_phase='intake')
     process = None
     try:
-        intake = _intake(workspace, target_date)
+        intake = _intake(workspace, target_date, run_id)
         final['native_preparation_checks'] = {'intake': intake.get('native_verification')}
         binding = _bind_execution(workspace, Path(execution_root), intake, candidate)
         root = Path(binding['root'])
@@ -544,7 +710,8 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
                        expected_env_sha256=final['expected_env_sha256'], source_hashes=sources,
                        manifest=intake['manifest'], consumer_ids=sorted(CONSUMER_IDS),
                        expected_policy_hashes=_expected_policy_hashes(intake),
-                       candidate_code_handoffs=binding.get('contracts') or {})
+                       candidate_code_handoffs=binding.get('contracts') or {},
+                       main_preparation_code_handoff=binding.get('main_preparation'))
         request['request_sha256'] = _digest(request)
         _atomic(directory / 'request.json', request)
         final['input_manifest_sha256'] = request['request_sha256']
@@ -578,6 +745,24 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
             final['findings'].extend(child.get('findings') or ['startup_child_failed'])
             raise ValueError('startup_policy_loading_failed')
         _validate_child_result(child, request['consumer_ids'], request['expected_policy_hashes'])
+        if binding.get('main_preparation') is not None:
+            delegation = child.get('native_validation_delegation') or {}
+            proof = binding['main_preparation']
+            if (delegation.get('schema') != 'startup_native_validation_delegation_v1'
+                    or delegation.get('run_id') != run_id
+                    or delegation.get('request_sha256') != request['request_sha256']
+                    or delegation.get('policy_sha256') != proof['policy_sha256']
+                    or delegation.get('target_date') != target_date
+                    or delegation.get('source_native_pid') != proof['closure']['digest_binding']['pid']
+                    or delegation.get('basis') != proof['delegation_basis']
+                    or delegation.get('parent_validation_scope') != 'current_full_contract'
+                    or delegation.get('child_semantic_validation') != 'native_validators_executed'
+                    or set(delegation.get('auxiliary_manifests', [])) != set(proof['closure']['manifests'])
+                    or any(type(delegation.get(k)) is not int or delegation[k] < 0
+                           for k in ('digest_reused_reads', 'digest_reused_bytes'))
+                    or any(delegation.get(k) is not False for k in ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))):
+                raise ValueError('startup_child_native_delegation_invalid')
+            final['native_validation_delegation'] = delegation
         if (child['isolation'].get('filesystem_write_root') != str(directory)
                 or child['isolation'].get('process_group') != process.pid
                 or child['isolation'].get('session_id') != process.pid):
@@ -585,7 +770,18 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
         final['failure_phase'] = 'recheck'
         _recheck(sources)
         for row in final['consumer_results'].values():
-            _recheck(row.get('source_hashes') or {})
+            _recheck(row.get('source_hashes') or {}, main_preparation=binding.get('main_preparation'))
+        logical = {}
+        for row in final['consumer_results'].values():
+            for path, receipt in (row.get('logical_source_receipts') or {}).items():
+                if path in logical and logical[path] != receipt:
+                    raise ValueError('startup_child_logical_source_conflict')
+                logical[path] = receipt
+        if binding.get('main_preparation') is not None:
+            from src.engine.infrastructure.startup_validation_code_context import verify_preparation_logical_sources
+            verify_preparation_logical_sources(binding['main_preparation'], logical)
+        elif logical:
+            raise ValueError('startup_child_logical_sources_without_native_proof')
         final['native_preparation_checks']['recheck'] = _native_preparation_check(
             intake['selected_root'], target_date, intake['receipt']['source_date'])
         if date.fromisoformat(target_date) < datetime.now(KST).date():
@@ -649,6 +845,9 @@ def child_main(request_path):
             observed_at=load_clock,
             data_root=Path(request['data_root']), env=os.environ, validation=True)
         result['consumer_results'] = report['consumer_results']
+        if request.get('main_preparation_code_handoff') is not None:
+            from src.engine.infrastructure.startup_validation_code_context import validation_delegation_receipt
+            result['native_validation_delegation'] = validation_delegation_receipt()
         if (report.get('schema') != 'main_policy_loading_v1'
                 or report.get('target_date') != request['target_date']
                 or report.get('runtime_effect') is not False

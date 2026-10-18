@@ -139,12 +139,15 @@ def prepare(*, data_root, day):
         raise
 
 
-def configure_policy_content(bundle, *, data_root, day):
+def configure_policy_content(bundle, *, data_root, day, read_only=False):
     """Shared in-memory backend setup; never attests a runtime PID."""
     from src.engine.scalping import reversal_current_backend as D
     if bundle and bundle.get('continuous_reversal', {}).get('schema') in {
             'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
-        D.configure_bundle(bundle, data_root=data_root, day=day)
+        if read_only:
+            D.configure_bundle(bundle, data_root=data_root, day=day, read_only=True)
+        else:
+            D.configure_bundle(bundle, data_root=data_root, day=day)
     return bundle
 
 
@@ -157,7 +160,7 @@ def prepare_policy_loading(*, data_root, day, preparation=False):
     """
     if preparation:
         bundle = N.load(data_root=Path(data_root), target_date=day)
-        return configure_policy_content(bundle, data_root=data_root, day=day)
+        return configure_policy_content(bundle, data_root=data_root, day=day, read_only=True)
     with N.verified_evaluation(data_root=data_root, target_date=day) as bundle:
         return configure_policy_content(bundle, data_root=data_root, day=day)
 

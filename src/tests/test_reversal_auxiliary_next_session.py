@@ -19,6 +19,7 @@ from src.engine.ai import offline_comparison_store as S
 
 SIDS = ['034020|PRE|20000_TO_100000|NXT', '196170|PRE|GE_100000|NXT']
 VERIFY_FROZEN = B._verify_frozen
+SEMANTIC_CODE_PARITY = B._semantic_code_parity
 
 
 @pytest.fixture
@@ -298,3 +299,84 @@ def test_frozen_validation_errors_remain_controlled_source_gaps(carry,monkeypatc
     with pytest.raises(ValueError,match='auxiliary_next_session_frozen_validation_failed') as caught:
         VERIFY_FROZEN(f.frozen,f.source_path,f.old_path)
     assert caught.value.__cause__ is not None
+
+
+def test_os_delegation_rebuilds_native_semantics_without_relaunching_frozen_process(carry, monkeypatch):
+    from src.engine.infrastructure import startup_validation_code_context as context
+    f=carry; manifest=prepare(f)
+    proof=dict(manifest=manifest,frozen_inventory=manifest['frozen_inventory'],
+        frozen_validation=manifest['frozen_validation'],original_code_hashes={},runtime_code_hashes={})
+    # Only the OS proof is isolated here; its real-kernel binding has a separate
+    # suite. Native prepare still rebuilds scope, registry, sources and ledger.
+    def verified(value,bundle,data):
+        assert value==manifest and bundle==f.target and Path(data)==f.data
+        return proof
+    monkeypatch.setattr(context,'validation_auxiliary_preparation',verified)
+    def forbidden(*args):raise AssertionError('delegated frozen process/Git was relaunched')
+    monkeypatch.setattr(B,'_frozen_inventory',forbidden)
+    monkeypatch.setattr(B,'_verify_frozen',forbidden)
+    B._VERIFIED.clear()
+    assert B.validate_manifest(f.data,manifest,f.target)==manifest
+    B._VERIFIED.clear()
+    f.bindings[next(k for k in f.bindings if k not in SIDS)]='z'*64
+    with pytest.raises(ValueError,match='baseline_changed'):
+        B.validate_manifest(f.data,manifest,f.target)
+
+
+def test_validation_manifest_argument_without_real_context_does_not_bypass_frozen_proof(carry):
+    f=carry;manifest=prepare(f)
+    with pytest.raises(ValueError,match='validation_delegation_arguments_changed'):
+        B.prepare(f.data,source_manifest_path=f.source_path,source_bundle_path=f.old_path,
+            frozen_root=f.frozen,target_bundle_path=f.target_path,prepared_path=f.prepared,
+            _validation_manifest=manifest)
+
+
+@pytest.mark.parametrize('changed',['handoff','original_source'])
+def test_formal_source_handoff_connects_prepare_cold_and_warm_native_consumers(carry,tmp_path,monkeypatch,changed):
+    """Private Git/code-shape fixture; frozen economic replay stays isolated.
+
+    The real source-pair algorithm, H producer/validator, A native preparation,
+    sealed source/dependency inventory and warm-cache invalidation are exercised.
+    This is not an operational research or publication PASS.
+    """
+    from src.tests.test_reversal_auxiliary_source_handoff import source as source_fixture
+    from src.engine.scalping import reversal_auxiliary_source_handoff as H
+    f=source_fixture.__wrapped__(carry,tmp_path,monkeypatch)
+    monkeypatch.setattr(B,'__file__',str(H._code_path(f.current,'reversal_auxiliary_next_session.py')))
+    monkeypatch.setattr(X,'__file__',str(H._code_path(f.current,'reversal_auxiliary_transition.py')))
+    monkeypatch.setattr(I,'code_hashes',lambda:dict(f.source['reader_code_hashes']))
+    monkeypatch.setattr(B,'_semantic_code_parity',SEMANTIC_CODE_PARITY)
+    calls=[]
+    def frozen(*args):
+        calls.append(args)
+        return dict(schema='frozen_auxiliary_input_validation_v1',source_manifest_sha256=f.source['artifact_content_sha256'],
+            source_bundle_sha256=N._read(f.original_path)['bundle_sha256'],verified_pairs=50,verified_raw_responses=100,
+            input_transition_code_hashes=f.source['input_transition_code_hashes'],network_forbidden=True,
+            provider_called=False,policy_published=False)
+    monkeypatch.setattr(B,'_verify_frozen',frozen)
+    value=H.build(f.data,previous_manifest_path=f.previous_path,previous_overlay_path=f.overlay_path,
+        target_bundle_path=f.target_path)
+    path=tmp_path/'source-code-handoff.json';P.write(path,value)
+    prepared=tmp_path/'new-prepared.json';P.write(prepared,dict(schema='next_preopen_readiness_v1',
+        status='prepared_verified',source_date=f.target['source_date'],target_date=f.target['target_date'],
+        selected_release_commit=f.current_commit,activation_candidate={'bundle_sha256':f.target['bundle_sha256']}))
+    args=dict(source_manifest_path=f.source_path,source_bundle_path=f.original_path,frozen_root=f.frozen,
+        target_bundle_path=f.target_path,prepared_path=prepared)
+    with pytest.raises(ValueError,match='current_semantic_code_changed'):
+        B.prepare(f.data,**args)
+    manifest=B.prepare(f.data,**args,source_code_handoff_path=path)
+    assert len(calls)==1
+    assert manifest['source_code_handoff']=={**B._reference(path),'artifact_content_sha256':value['artifact_content_sha256']}
+    assert manifest['semantic_code_hashes']==f.previous['semantic_code_hashes']
+    assert {r['path']:r['sha256'] for r in manifest['sources']}.items()>=value['source_hashes'].items()
+    assert str(path) in dict(B._dependencies(manifest))
+    B._VERIFIED.clear()
+    assert B.validate_manifest(f.data,manifest,f.target)==manifest
+    assert len(calls)==2
+    def unexpected(*args,**kwargs):raise AssertionError('warm cache rebuilt immutable handoff')
+    monkeypatch.setattr(H,'validate',unexpected)
+    assert B.validate_manifest(f.data,manifest,f.target)==manifest
+    modified=path if changed=='handoff' else f.source_path
+    modified.write_bytes(modified.read_bytes()+b' ')
+    with pytest.raises(ValueError,match='source_changed'):
+        B.validate_manifest(f.data,manifest,f.target)

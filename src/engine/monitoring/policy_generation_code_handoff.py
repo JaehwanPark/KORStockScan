@@ -177,6 +177,16 @@ REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS = {
 }
 
 
+# Read-only startup preparation changes auxiliary's V6 reader bytes. Preserve
+# the original 10/16 report and every prior target; this separate exact pair
+# requires both the original fixture and an independent current fixture.
+REVIEWED_STARTUP_READONLY_SOURCE_SUCCESSORS = {
+    'auxiliary': (
+        'd04bcb11a28f731c1af5c332d33d49774f977a01a2ac90463df50865186fa6b0',
+        '00e4f1813805e520e9daed86fa1b71b55c06f76c7128b4ad7762d978ab956822'),
+}
+
+
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -235,6 +245,11 @@ def current_fixture_observation(observed, data):
                         and observed.get('source_date') == '2026-10-16')
     if integrated_match:
         pair = integrated
+    readonly = REVIEWED_STARTUP_READONLY_SOURCE_SUCCESSORS.get(family)
+    readonly_match = (readonly is not None and actual_pair == readonly
+                     and observed.get('source_date') == '2026-10-16')
+    if readonly_match:
+        pair = readonly
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
@@ -266,7 +281,7 @@ def current_fixture_observation(observed, data):
                 or fixture['code_sha256'] != pair[1]):
             raise ValueError('successor_historical_contract_changed')
         historical_fixture = _historical_fixture(contract, data, family)
-        if integrated_match and historical_fixture is None:
+        if (integrated_match or readonly_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
         current = generation.native(native, family=family, day=observed['source_date'], data_root=data,
             source_state=contract['source_state'], comparison_state=contract['comparison_state'],

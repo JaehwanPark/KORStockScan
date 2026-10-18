@@ -4,12 +4,16 @@ from src.engine.scalping import reversal_extended_runtime as V6
 _ACTIVE=OLD
 
 
-def configure_bundle(bundle,*,data_root,day):
+def configure_bundle(bundle,*,data_root,day,read_only=False):
     global _ACTIVE
     if bundle.get('continuous_reversal',{}).get('schema')=='continuous_reversal_policy_v6':
-        V6.configure(bundle['continuous_reversal'],data_root,day);_ACTIVE=V6
+        if read_only:V6.configure(bundle['continuous_reversal'],data_root,day,read_only=True)
+        else:V6.configure(bundle['continuous_reversal'],data_root,day)
+        _ACTIVE=V6
     else:
-        OLD.configure_bundle(bundle,data_root=data_root,day=day);_ACTIVE=OLD
+        if read_only:OLD.configure_bundle(bundle,data_root=data_root,day=day,read_only=True)
+        else:OLD.configure_bundle(bundle,data_root=data_root,day=day)
+        _ACTIVE=OLD
 
 
 def backend(claim=None):

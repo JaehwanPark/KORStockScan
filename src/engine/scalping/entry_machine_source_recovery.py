@@ -13,7 +13,6 @@ import re
 import threading
 import time
 
-from src.engine.scalping.ai_market_snapshot import route_partitioned_ws_view
 
 STATE_KEY = "entry_machine_source_recovery"
 _STATUSES = {
@@ -149,6 +148,8 @@ def _number(value):
 
 def select_prepared_route(code, ws, context):
     """Project route rows before validating aggregate price; never invent rows."""
+    # Inventory readers hash this module without initializing live collectors.
+    from src.engine.scalping.ai_market_snapshot import route_partitioned_ws_view
     view, partition = route_partitioned_ws_view(ws, context)
     if not partition.get("used"):
         return ws
