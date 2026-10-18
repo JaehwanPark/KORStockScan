@@ -18,6 +18,20 @@
 
 기존12개 준비/정책/선택/보고서 및 원 snapshot11개 2,457,982,550bytes는 [작업 증거](../../tmp/preopen-alert-repair-20261019/)에 보존했다. 재생성·배포·실제 PID·자연 신호/비용 성과는 아직 완료로 표시하지 않는다. 기존 `DirectFamilyPreopenPolicyHandoff`, `OperationalLogRetentionRepair1016`, `InitialQuantityProducerConsumerRepair1010`, `HoldingProfitExitSourceContractRepair`의 Acceptance를 유지한다.
 
+## 10/19 원천 재생성과 정지 상태 전환
+
+native completion prefix와 holding suffix가 각각06:48:59,06:57:17 완료됐다. stop stage는07:06:25 완료됐고 새 정책 `e6d31662f21d7785c3ddcc7e5e361482e3d7e03486216403f3491542f3238f7b`의9개 cell이 모두 baseline carry이며 수치는 원 정책과 같다. trailing은 새 generation `4ffbfa609639acf02268343fdc8176971cd3c1f8024100731403fcfbcbea8821`이다.
+
+수량 native CLI는 성공했으며 stage generation `714a841f0f5570c1e56470f510928e21e4adfb4c5d9380b8ecdd36b865c11cce`는 carry_parent다. 완료13건 중 연구 배분 비용이 검증된8건을 평가했고 연구 비용 무효1건·terminal 비용/수량 결손4건은 제외했다. 실제 실행 비용 완전성은 false이고 실제 완료 net PnL은 null이다. 8건의 counterfactual 경로는 식별된 대형 행 결손으로 제외했다. 역사적 holding first-crossing5건은 복구됐다고 주장하지 않는다.
+
+선택958 검증기는 새 원천을 재평가할 때 원 대형 행 오류를 재현했고, 후보894의 수량 검증은 통과했으나 holding 인계에서 차단됐다. 실패 시도를 보존했다. Main/supervisor·당일 PREOPEN·live bootstrap 부재 아래 실제 정책 인계, delay/holding 코드 차이, stop native committed reader, native 신호128scope/76,800행/598hit 일치와 검토 영수증을 검증한 뒤894를 정지 상태로 선택했다. 이 선택은 P5 성공이나 기동 수용이 아니며 새 source/controller/prepared와 격리 로더·PREOPEN·PID 검증을 후행 필수로 유지한다.
+
+holding 실패는 선택을 맞춘 뒤에도 남았고, 새 observation SHA와 원 정책의 고정 source SHA 불일치로 확정했다. 기존 정책은 별도 원문으로 보존했다. 사용자 승인 범위의 명시적 재생성에서 native `create_bundle`/`validate_bundle`/`load_bundle`과 기존 summary stage lock·release lock·원천/정책 CAS를 사용했다. 새 bundle `22c4fe91c865e5e95212e9ce35eb6449594136fcf1ebe80fa2a2e43b14049eac`의12개 cell, policy set `ce7c4677ee9f930cfdb9f5ad0f17b585a9c65593e4b3ba47f0db019e57feabcc`와 incumbent carry는 원 정책과 동일하다. 과거 연구를 현재 실행 성과로 재분류하지 않는다.
+
+첫 선택 시도는 journal owner 진입만으로 변경된 current cursor를 active-policy source가 감지해 중단됐다. selector는 바뀌지 않았고 entries/written은0이었다. 원 빈 transaction과 실패 로그를 보존하고, native release-set/selector lock 및 CAS 아래 정확한 원 verified transaction bytes로 cursor만 복원했다. 두 번째 선택은 같은 native locks와 atomic CAS를 사용했다. [선택 영수증](../../tmp/preopen-alert-repair-20261019/selection-publication.json)과 [빈 시도 복구 영수증](../../tmp/preopen-alert-repair-20261019/empty-transition-cursor-recovery.json)을 분리한다.
+
+native summary stage 성공 후 전체 controller는 `done`, blockers0을 기록했다. 이어 native stopped rebind로 Main 후보 `281990305206840ad58d38944b87d9237b261d6eb5d012222517a236054975c8`를 생성했다. 보조 reader는 원 후보의 원 source와 새 후보의 새 source를 각각 검증하고 원128개 binding 일치를 확인했다. 새 정책 source를 반영한 controller 재검증과 최초 prepared도 통과했다. 07:34 native 보조 publisher가 overlay `5b3164ff2b19811895493da402bd832809f5afb01692b1c34aa4a5408c4b1c03`를 게시했으며128개 binding·승인2 PRE 변경·rollback 및 registry 정의가 원본과 같다. [게시 영수증](../../tmp/preopen-alert-repair-20261019/auxiliary-rebind/publication.json). 이것은 실제 PID 소비가 아니다. 07:34:38부터 정식 finalization 복구를 실행해 cleanup과 최종 detector terminal을 확인한다.
+
 ## 현재성 관측 분리와 마지막 검사 복구
 
 `postclose_finalization --recover-closed-target --resume-final-detector`는 최종 detector만 실패한 가장 최근 native 시도에서 원 controller/strict/snapshot/cleanup 세대·실제 완료 시각·선택 release를 검증한다. 원 로그와 실패 보고서는 immutable receipt 폴더에 보존한다. cleanup 또는 policy/PREOPEN을 다시 발행하지 않으며 새 full detector와 동일 세대 검증이 통과해야 wrapper가 정식 DONE을 남긴다. 51개 회귀 및 compile/shell/diff/parser가 통과했다. 07:42:33 실제 cleanup 완료, 07:53:46 finalization/최종 detector DONE을 분리한다.
