@@ -83,7 +83,7 @@ def test_automatic_native_binding_warm_reuse_and_new_file_invalidation(tmp_path,
     assert research._sealed(manifest)['assembly_input_generation_sha256']!=payload['assembly_input_generation_sha256']
 
 
-def _issued_trailing_receipt(root, monkeypatch, *, account_scope=None):
+def _issued_trailing_receipt(root, monkeypatch, *, account_scope=None, plan_known_at=None):
     from datetime import datetime
     from src.engine.scalping import trailing_entry_research_source as bridge
     from src.engine.scalping import entry_execution_sizing_plan as sizing
@@ -103,7 +103,8 @@ def _issued_trailing_receipt(root, monkeypatch, *, account_scope=None):
     trace_row=json.loads(trace.read_text())
     trace_row['machine_observation_sha256']=result['machine_observation_sha256']
     trace.write_text(json.dumps(trace_row)+'\n')
-    known=datetime.fromisoformat(DAY+'T09:00:01.200+09:00').timestamp()
+    known=(datetime.fromisoformat(DAY+'T09:00:01.200+09:00').timestamp()
+           if plan_known_at is None else plan_known_at)
     action=_receipt(evaluation_attempt_id='native-1',machine_observation_sha256=original['machine_observation_sha256'],
                     machine_bundle_sha256='a'*64)
     monkeypatch.setattr(sizing,'runtime_entry_execution_sizing_policy',lambda:(None,'disabled_baseline'))
@@ -199,7 +200,8 @@ def test_runtime_plan_serializer_native_join_and_observed_forward_path(tmp_path,
     assert not gaps.get('trailing_plan_source_invalid')
 
 
-def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',order_route='KRX',execution_venue='KRX'):
+def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',order_route='KRX',execution_venue='KRX',
+                             official_actual_cost=False):
     """Original producer wires, sealed completed source, then the public assembler."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -218,12 +220,17 @@ def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',or
     monkeypatch.setattr(kiwoom_utils,'KIWOOM_BASE_URL_PROVENANCE',{})
     assert kiwoom_utils.get_kiwoom_base_url()=='https://api.kiwoom.com'
     account=bridge.runtime_account_scope();assert account==digest(['broker_account','test_account'])
-    root=tmp_path/'source';receipt,known,_=_issued_trailing_receipt(root,monkeypatch,account_scope=account)
+    # Native completed-ledger observation clocks have second precision. This
+    # separate fixture starts its issued plan on that exact boundary from birth.
+    plan_known_at=datetime.fromisoformat(DAY+'T09:00:02+09:00').timestamp() if official_actual_cost else None
+    root=tmp_path/'source';receipt,known,_=_issued_trailing_receipt(root,monkeypatch,account_scope=account,
+        plan_known_at=plan_known_at)
     _emit_trailing_source(root,monkeypatch,receipt,known,forward=False)
     def iso(clock):return datetime.fromtimestamp(clock,ZoneInfo('Asia/Seoul')).isoformat()
     # Native completed legs carry the requested broker route; execution venue
     # remains a separate broker fact. Neither changes the quote-data route.
-    buy=dict(at=iso(known),order_no='BUY-1',execution_no='FILL-1',qty=2,price=102,amount_krw=204,route=order_route)
+    buy_order,buy_execution=('11','1') if official_actual_cost else ('BUY-1','FILL-1')
+    buy=dict(at=iso(known),order_no=buy_order,execution_no=buy_execution,qty=2,price=102,amount_krw=204,route=order_route)
     identity=vote.buy_fill_identity_from_legs([buy]);policy=vote.PATH_POLICY_BY_MARKET[('EXIT_TRAILING_TP','REGULAR')]
     stock=dict(id=7,code='005930',buy_time=known,buy_qty=2,buy_price=102,
         _trailing_entry_cost_model=receipt['cost_model'])
@@ -231,15 +238,15 @@ def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',or
     monkeypatch.setattr(votes,'PROCESS_STARTED_AT',known-10)
     # Runtime begins coverage at the exact accepted native BUY, not a backfill.
     stock['buy_time']=datetime.fromtimestamp(known,ZoneInfo('Asia/Seoul'))
-    stock['_entry_receipt_filled_by_order_no']={'BUY-1':2}
-    stock['_entry_receipt_executions_by_order_no']={'BUY-1':{'FILL-1':{'cumulative_qty':2}}}
+    stock['_entry_receipt_filled_by_order_no']={buy_order:2}
+    stock['_entry_receipt_executions_by_order_no']={buy_order:{buy_execution:{'cumulative_qty':2}}}
     vote.persist_buy_fill_receipt(stock,root)
     votes.begin_coverage(stock,known+.1,generation=identity)
     submit=logger.emit_pipeline_event('ENTRY_PIPELINE','TEST','005930','order_leg_sent',record_id=7,
         fields=dict(buy_account_key='other_account' if fault=='account' else 'test_account',
             buy_owner_type='main_scalping',buy_owner_id='main_scalping:7',buy_registry_mode='registry_managed',
             owner_registry_intent_id='original-intent',pipeline_lifecycle_population_scope='real_record_bound',
-            actual_order_submitted=True,broker_order_forbidden=False,order_no='BUY-1',qty=2,
+            actual_order_submitted=True,broker_order_forbidden=False,order_no=buy_order,qty=2,
             broker_route='NXT' if fault=='order_route' else order_route,entry_split_submitted_at=iso(known)),observed_at_epoch=known)
     assert submit['structured_append_succeeded']
     monkeypatch.setattr(writer,'DATA_DIR',root);monkeypatch.setattr(writer,'trace_enabled',lambda:True)
@@ -323,8 +330,13 @@ def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',or
     if fault=='add':trade['buy_fill_legs'].append({**buy,'at':iso(known+20),'order_no':'BUY-2'})
     if fault=='first_sell':trade['sell_fill_legs'][0]['at']=iso(known+20)
     if fault=='carry_original':trade['buy_fill_legs'][0]['at']=iso(known-86400)
+    projection_meta={};cutoff=known+120
+    if official_actual_cost:
+        trade,projection_meta,cutoff=_official_completed_from_same_native_position(
+            root,monkeypatch,known=known,order_route=order_route,buy_order=buy_order,buy_execution=buy_execution)
     payload=dict(date=DAY,metrics={'canonical_completed_trades':1},meta=dict(snapshot_profile='postclose_exit',sell_completed_event_ids=['7']),
         sections=dict(completed_trade_projection=[trade],open_scalp_position_projection=[]))
+    payload['meta'].update(projection_meta)
     payload['meta']['completed_census_manifest']=completed_census_manifest(payload)
     monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',root/'report/monitor_snapshots')
     archive.save_monitor_snapshot('trade_review',DAY,payload)
@@ -337,7 +349,7 @@ def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',or
                     changed+=1;row['holding_raw_user_input']=row['holding_raw_user_input'].replace('"buy_price":102','"buy_price":101')
             path.write_text(''.join(json.dumps(row)+'\n' for row in lines))
         assert changed==2
-    manifest=source.assemble(root,tmp_path/'assembly',source_date=DAY,target_date=TARGET,start_date=DAY,as_of=known+120)
+    manifest=source.assemble(root,tmp_path/'assembly',source_date=DAY,target_date=TARGET,start_date=DAY,as_of=cutoff)
     report=research._sealed(manifest);positions=[];paths={}
     for part in storage.iter_tree(manifest.parent,report['partitions_ref']):
         value=research._sealed(manifest.parent/part['path']);positions+=value['positions'];paths.update(value['paths'])
@@ -350,6 +362,104 @@ def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',or
         assert paired['common_ids']==[pos['position_key']],(result['status'],result['reason'])
     assert all(path.read_bytes()==raw for path,raw in original_bytes.items())
     return pos,result,report
+
+
+def _official_completed_from_same_native_position(root,monkeypatch,*,known,order_route,buy_order,buy_execution):
+    """Feed original fill/quote wires and fake official responses to real producers."""
+    from copy import deepcopy
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine import sniper_trade_review_report as review
+    from src.engine.lifecycle import broker_cost_source as costs
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    from src.utils import pipeline_event_logger as logger
+    def iso(clock):return datetime.fromtimestamp(clock,ZoneInfo('Asia/Seoul')).isoformat()
+    common=dict(pipeline_lifecycle_population_scope='real_record_bound',actual_order_submitted=True,
+        broker_order_forbidden=False,broker_route=order_route)
+    fills=[('position_rebased_after_fill',known,dict(order_no=buy_order,execution_no=buy_execution,
+        fill_qty=2,order_filled_qty=2,order_requested_qty=2,order_remaining_qty=0,fill_price=102,
+        fill_quality='FULL_FILL',receipt_quantity_contract_complete=True,receipt_unit_fill_consistent=True,
+        receipt_economics_complete=True)),
+        ('sell_completed',known+91,dict(order_no='12',execution_no='2',main_lifecycle_exit_qty=2,
+        main_lifecycle_exit_price=103,cumulative_sell_qty=2,remaining_sell_qty=0,
+        decision_authority='broker_sell_fill_observation_only',sell_execution_receipt_quantity_contract_complete=True,
+        sell_execution_receipt_unit_fill_consistent=True,sell_execution_receipt_economics_complete=False,
+        main_lifecycle_execution_occurrence_time_source='official_fid_908',
+        main_lifecycle_execution_occurred_at=iso(known+91)))]
+    for stage,clock,fields in fills:
+        assert logger.emit_pipeline_event('HOLDING_PIPELINE','TEST','005930',stage,record_id=7,
+            fields={**common,**fields},observed_at_epoch=clock)['structured_append_succeeded']
+    monkeypatch.setattr(review,'DATA_DIR',root)
+    events,status,event_receipts=review._load_holding_projection_events_from_structured(DAY)
+    assert status=='structured_partition_read'
+    assert sum(event.stage=='scalp_trailing_input_transition' for event in events)==90
+    calls=[]
+    diary=dict(stk_cd='005930',buy_qty='2',sell_qty='2',buy_amt='204',sell_amt='206',cmsn_alm_tax='1',pl_amt='1')
+    orders=[dict(stk_cd='005930',ord_no=order,io_tp_nm=side,cntr_qty='2',cntr_pric=price,oso_qty='0',ord_stt='체결')
+        for order,side,price in ((buy_order,'+매수','102'),('12','-매도','103'))]
+    def transport(api,payload):
+        calls.append(api);body={'return_code':0}
+        if api=='ka00001':body['acctNo']='1234567890'
+        elif api=='ka10170':body[costs.LISTS[api]]=[deepcopy(diary)]
+        elif api=='ka10076':body[costs.LISTS[api]]=deepcopy(orders)
+        elif api=='kt00015':body['trst_ovrl_trde_prps_array']=[]
+        else:pytest.fail('unexpected external transport: '+str(api))
+        return [body],dict(page_count=1,continuous_terminal_received=True)
+    transport.account_key='test_account'
+    cost_clock=datetime.fromisoformat(DAY+'T21:00:00+09:00')
+    official=costs.collect(root,DAY,transport=transport,now=cost_clock)
+    assert calls==['ka00001','ka10170','kt00015','kt00015','ka10076']
+    custody=[dict(record_id=7,state='full',filled_qty=2,source_quality_reasons=[],
+        owner_type='main_scalping',owner_id='main_scalping:7',account_key='test_account')]
+    row=review._completed_trade_projection(dict(id=7,code='005930',rec_date=DAY,strategy='SCALPING',
+        status='COMPLETED',buy_qty=2,buy_price=102,sell_price=103,profit_rate=0),events,{'entry_mode':'normal'},
+        broker_cost_source=official,cost_custody_rows=custody,cost_peer_records=[7],knowledge_cutoff=cost_clock.timestamp()+1)
+    assert row['strict_completion_status']=='eligible',row['strict_completion_reasons']
+    assert row['main_automatic_management_allowed'] is True
+    assert row['buy_fill_legs'][0]['amount_krw']==204
+    assert row['actual_cost_reconciliation']['allocation_scope']=='broker_day_symbol_whole_position'
+    assert row['actual_cost_reconciliation']['actual_fees_taxes_krw']==row['realized_pnl_krw']==1
+    assert row['actual_cost_reconciliation']['cost_available_at']==cost_clock.isoformat()
+    return row,dict(actual_cost_source_generation=source_generation(root,DAY),
+        trailing_event_source_receipts=event_receipts,knowledge_cutoff=cost_clock.timestamp()+1),cost_clock.timestamp()+1
+
+
+def test_actual_cost_and_original_holding_ai_producers_reach_public_replay_common_population(tmp_path,monkeypatch):
+    from src.engine.automation.main_trailing_partitioned_research import checkpoint_results
+    from src.engine.ai.holding_vote_replay_source import PreparedVotes
+    from datetime import datetime
+    cf,_,assembled=_cf_original_ai_pipeline(tmp_path,monkeypatch,official_actual_cost=True)
+    root=tmp_path/'source';assembly=tmp_path/'assembly';out=tmp_path/'public-research'
+    original_bytes={path:path.read_bytes() for path in root.rglob('*') if path.is_file()}
+    observed_votes=[];original_snapshot=PreparedVotes.snapshot
+    def observe_original_snapshot(self,*args,**kwargs):
+        snapshot=original_snapshot(self,*args,**kwargs)
+        observed_votes.append((bool(self.reference.get('candidate_position_equivalence')),
+            snapshot.get('decision'),snapshot.get('vote_count')))
+        return snapshot
+    monkeypatch.setattr(PreparedVotes,'snapshot',observe_original_snapshot)
+    result=research.run(assembly/'manifest.json',input_root=assembly,output_root=out,dry_run=False)
+    common=set(storage.iter_tree(out,result['common_population_evaluation']['common_ids_ref']))
+    assert common=={'7','alternative:7',cf['position_key']}
+    outcomes={};contexts={}
+    for reference in storage.iter_tree(out,result['partition_results_ref']):
+        checkpoint=research._sealed(out/reference['path'])
+        for part in checkpoint_results(checkpoint,out):
+            outcomes.update(part['minimal_results']);contexts.update(part['population_context'])
+    for row in outcomes['7'].values():
+        assert row['status']=='modeled_full_exit'
+        assert row['actual_pnl_krw']==1
+        assert row['modeled_net_pnl_krw'] is not None and row['modeled_net_pnl_krw']!=row['actual_pnl_krw']
+    for row in outcomes[cf['position_key']].values():
+        assert row['status']=='modeled_full_exit' and row['actual_pnl_krw'] is None
+        assert row['modeled_net_pnl_krw'] is not None
+    assert cf['operating_ai_required'] is True and cf['holding_vote_replay_ref']['status']=='source_bound'
+    assert {(False,'PASS',2),(True,'PASS',2)}<=set(observed_votes)
+    assert contexts['7']['operating_ai_required'] is True
+    assert contexts['7']['actual_cost_available_at']==datetime.fromisoformat(DAY+'T21:00:00+09:00').timestamp()
+    assert result['actual_pid_consumed'] is result['allowed_runtime_apply'] is False
+    assert assembled['population_ids_ref']['count']==3
+    assert all(path.read_bytes()==raw for path,raw in original_bytes.items())
 
 
 @pytest.mark.parametrize('verdict',['PASS','VETO'])
