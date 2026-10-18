@@ -4,7 +4,7 @@
 
 휴장일에도 다음 거래일의 준비 정책으로 **실제 Main과 같은 정책 로더를 별도 프로세스에서 실행하고, 로딩 결과를 대조한 뒤 감시·외부 통신·주문 초기화 전에 종료**할 수 있도록 보완한다. 준비본 생성만 확인하고 거래일 당일까지 로딩 결함 발견을 미루는 공백을 없앤다.
 
-원 작성 시에는 계획 단계였고, 후속 사용자 지시로 **계획 리뷰·보완 및 구현·코드리뷰·수정·재리뷰**를 진행했다. 아래 진입점과 검증 경로는 격리 작업본에 구현했다. 현재 선택900에는 아직 배포하지 않았으며, 운영 Main 기동·정책 활성화·주문은 실행하지 않았다. 구현 결과와 시험·잔여 배포 경계는 §9를 따른다.
+원 작성 시에는 계획 단계였고, 후속 사용자 지시로 **계획 리뷰·보완 및 구현·코드리뷰·수정·재리뷰**를 진행했다. 아래 진입점과 검증 경로는 격리 작업본에 구현했다. §9 기록 시점에는 선택900에 아직 배포하지 않았으며, 운영 Main 기동·정책 활성화·주문을 실행하지 않았다. 해당 구현 결과와 잔여 경계는 §9, 최신 실행 승인과 결과는 §12를 따른다.
 
 검토 기준은 [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md) §1–§8과 [10/18 실행 소유자](../checklists/2026-10-18-stage2-todo-checklist.md)다. 계획 작성 시 조회 기준 workspace는 `7c241ea21619ce3153f1a338f1b846b0313a894f`, 선택 릴리스는 `900234d791b0bf31797cd4e823d0ae40296f790b`이며 selector는 `actual_pid_consumed=false`, 다음 적용일 `2026-10-19`를 기록한다. 이번 예시는 원천일10/16·실행일10/18·정책 대상일10/19를 구분한다. 구현 착수 시 selector·준비본·현재 코드와 source hashes를 다시 고정한다.
 
@@ -107,7 +107,7 @@ parent는 child PID/start ticks·run ID·기대 execution root/commit과 동일�
 | P5 | 검증된 불변 후보의 실제10/19 준비 세대로 사전 로딩 후 종료 1회 | 실행 권한 확보 후 실제 코드·원천의 child 로딩/종료 receipt, 운영 보호 hash 불변·외부 호출0 확인. 운영 selector를 옮기지 않고 후보임을 표시 |
 | P6 | 허용된 배포 시 선택본/세대 결속 확인, 거래일 재확인 계약 인계 | 변경 없으면 사전 결과를 재사용하고 당일 활성화·운영 PID만 확인. 변경 있으면 영향 범위의 사전 검증을 다시 수행하고 원 실패/이력을 보존 |
 
-P5 실행·P6 배포는 이 문서 작성의 실행 범위가 아니다. 사용자 후속 지시에 따라 **P5 불변 후보 검증은 모든 연구작업 종료 후** 진행한다. 이후 사용자의 `57a4659f4` 통합 배포본 준비 지시에 따라 코드 통합·오프라인 회귀·후보 디렉터리 구성은 먼저 진행한다. 실제 준비 세대의 P5 child 검증은 모든 연구작업 종료까지 실행하지 않으며 기존 P0~P4 코드 검증을 P5 완료로 바꾸지 않는다. 연구 종료 시 실제 통합 코드·원천·정책 세대를 다시 고정한다. 운영 release source/hash에 공통 로더가 새로 들어가면 기존 code-handoff/native parity·family contract 절차로 인계하며, 원천 코드 해시를 검증에서 제외해 통과시키지 않는다.
+P5 실행·P6 배포는 이 문서 작성의 실행 범위가 아니다. 사용자 최신 지시에 따라 **P5 불변 후보 검증은 모든 연구작업 종료 뒤에도 별도 실행 지시를 받은 후** 진행한다. 연구 종결을 P5 실행 권한으로 간주하지 않는다. 이후 사용자의 `57a4659f4` 통합 배포본 준비 지시에 따라 코드 통합·오프라인 회귀·후보 디렉터리 구성은 먼저 진행한다. 실제 준비 세대의 P5 child 검증은 모든 연구작업 종료와 사용자의 별도 실행 지시 전까지 실행하지 않으며 기존 P0~P4 코드 검증을 P5 완료로 바꾸지 않는다. 연구 종료 시 실제 통합 코드·원천·정책 세대를 다시 고정한다. 운영 release source/hash에 공통 로더가 새로 들어가면 기존 code-handoff/native parity·family contract 절차로 인계하며, 원천 코드 해시를 검증에서 제외해 통과시키지 않는다.
 
 ## 6. 필수 수용 행렬
 
@@ -172,4 +172,47 @@ P5 실행·P6 배포는 이 문서 작성의 실행 범위가 아니다. 사용�
 
 이번 종결은 통합 코드·리뷰·오프라인 회귀와 표준 공유 mount를 갖춘 선택 전 배포 후보 구성이다. 공통 상태 처리 코드가 frozen delay/stop/holding inventory와 교차하므로 원7f 계보와 exact reviewed source pair를 검증한다. 새 진입 연구 도우미도 검토한 코드 closure에 결속하며 원 정책 digest는 보존한다. 세대가 바뀌면 과거 code-handoff를 그대로 재사용하지 않는다.
 
-실제 준비 정책의 child 로딩(P5)은 **다른 세션의 연구작업이 끝난 뒤** 최종 코드·원천·정책·선택본을 다시 고정하고 실행한다. 이번 준비에서는 code-handoff·정책/PREOPEN/strict/controller·quantity monitor 세대 영수증을 발행하거나 selector를 옮기지 않는다. P6 배포·Main 재기동도 수행하지 않는다. 결과와 정확한 후보 commit/root는 [통합 후보 검토](../audits/main-policy-holding-integrated-candidate-review-2026-10-18.md) 및 그 근거 manifest를 따른다.
+실제 준비 정책의 child 로딩(P5)은 **다른 세션의 연구작업 종료 및 사용자의 별도 실행 지시 후** 최종 코드·원천·정책·선택본을 다시 고정하고 실행한다. 이번 준비에서는 code-handoff·정책/PREOPEN/strict/controller·quantity monitor 세대 영수증을 발행하거나 selector를 옮기지 않는다. P6 배포·Main 재기동도 수행하지 않는다. 결과와 정확한 후보 commit/root는 [통합 후보 검토](../audits/main-policy-holding-integrated-candidate-review-2026-10-18.md) 및 그 근거 manifest를 따른다.
+
+## 11. 잔여 연구 종결 인계
+
+현재 원천·등록 가설 범위 stop/holding 연구를 종결했다. stop 최종 격리 commit은 `eb8e18cefacad23a298fd237093732e0f0977d70`, holding 엄격 비용 후속은 별도 `3ab6916e28ee3301402c6ac8b64fbc2090f49000`이다. [stop 종결 검토](../audits/main-stop-remaining-research-closure-review-2026-10-18.md)와 [보유 계획 §17](main-all-symbol-all-market-trailing-and-replay-improvement-plan-2026-10-10.md#17-2026-10-18-현재-원천-범위-연구-종결)을 인수 근거로 삼는다. stop 고정 workload 성능 판정 `blocked`와 실제 소비 결과는 수치 정책 승인·경제 개선·운영 적용과 분리한다.
+
+§10의 기존 통합 후보는 이 후속 commit들을 자동 포함하지 않는다. 별도로 승인된 통합 owner는 다음 후보에서 실제 포함 commit·원천·정책·code-handoff를 다시 대사해야 한다. 이번 연구는 코드 통합·실제 준비 세대 child·배포를 실행하지 않았다. **연구가 종료됐어도 P5는 사용자의 별도 실행 지시 전 보류**하며 `MainPolicyLoadAndExitValidation1018`은 해당 실행 owner로 OPEN을 유지한다. 실제10/19 PREOPEN/PID·자연 terminal/손익은 기존 owner가 계속 소유한다.
+
+## 12. 최종 연구 통합과 P5·P6 실행 승인
+
+사용자 최신 지시로 연구 종결 확인 후 `9d2201141aeae409fe960ff7795a1340718a7146`에 최종 stop `eb8e18cefacad23a298fd237093732e0f0977d70`과 holding 비용 `3ab6916e28ee3301402c6ac8b64fbc2090f49000`을 통합하고, 실제10/19 준비 세대의 P5 사전 로딩을 실행한 뒤 통과하면 P6 배포를 이어간다. §5·§10·§11의 별도 지시 대기는 이 승인으로 해제됐다. 이전 연구의 CPU 기준 미충족과 수치 후보 발행 차단은 유지하며 신규 grace0 정책 승인으로 바꾸지 않는다.
+
+실행일10/18·원천10/16·대상10/19를 분리한다. 최종 clean 후보의 원 정책/code 계보·native parity·필수 소비자와 변경된 quantity/capability 세대를 검증한다. P5는 selector 이동 전 격리 child에서 실제12consumer를 로딩하고 종료·외부 부작용 차단·보호 hash를 확인한다. 통과 후 기존 native producer로 다음 정규 기동 준비를 만들고 잠금·CAS 아래 선택을 발행한다. 이전 준비본·원 정책·strict/controller·실패 시도는 별도 원문으로 보존한다.
+
+현재 Main이 없는 비거래일이므로 강제 기동하지 않는다. P6의 선택·준비 완료와 실제10/19 PREOPEN·운영 PID·자연 fill/손익은 별도이며 후자는 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다. P5의 `actual_pid_consumed=false`와 초기 부모 승계·hard safety·Main/manual custody는 유지한다. 구현·검토·수정·재리뷰·표적 검증 후 각 단계의 실제 영수증으로 결과를 기록한다.
+
+
+## 13. P5 cold 준비 경로와 전체 선정 검증 근거 전달
+
+실제 P5의 원 실패4회와 보완 이력은 [통합 실행 검토](../audits/main-research-integrated-p5-p6-deployment-review-2026-10-18.md)에 보존한다. 기계·보조 cold import 부작용과 준비 anchor 쓰기는 소비 경로를 수리한다. 추가 소규모 실제 OS 시험에서 진입지연의 sharded 검증은 원천 디렉터리에 scratch를 만들고 SQLite index로 전체 선정 재계산을 수행함을 확인했다. 단순 private scratch 이동 뒤에도 SQLite 차단이 남으므로 이 중간안의 시험 성공을 P5 통과로 취급하지 않는다.
+
+보완 계약은 OS의 SQLite·네트워크·프로세스·운영 잠금 차단을 유지한다. 부모의 **동일 native 준비 검증 호출**에서 원 검증기가 전체 모집단 선정 재계산을 실제 성공한 직후에만 정확한 policy/report 의미 해시·원천 root/ref·선정 코드와 인자를 관측한다. 전체 native CLI 성공, 동일 run/request/선택본·코드·원천 신원을 결속한 근거만 해당 child로 전달한다. 과거 PASS, 관측하지 않은 receipt, 형제 실행 또는 새 원천을 대신 사용하지 않는다.
+
+child는 원 native validator의 header·날짜·code 계약을 실행하고 전체 qualified projection/partition/cell과 중첩 membership 자료의 물리·논리 무결성을 검사한다. 전체 선정 재계산 결과만 그 정확한 부모 근거와 대사하며, active 문맥에서 근거 누락·변조·혼합은 실패한다. 정상 운영·장후 호출은 기존 전체 재계산을 유지한다. 부모에서 재계산한 범위와 child에서 재검증한 범위를 영수증에 구분하고 격리/원천 조건을 완화하지 않는다.
+
+이 보완은 P5 코드 검토·OS 회귀·실제 준비 세대 실행을 닫은 후 P6를 진행하는 기존 순서를 유지한다. source10/16·실행10/18·target10/19, 수치 정책·Main/manual custody·hard safety 및 실제10/19 PREOPEN/PID owner는 §12와 같다.
+
+## 14. 통합 후보 실제 P5와 P6 인계
+
+지정9d·최종 stop eb8·holding3ab·기존 선택900의 계보를 보존한 통합 commit은 `958d35b2b03f0a37462c1c0121fc14c108e709b8`이다. 원 부모의 delay27개와 현재28개 코드 계약을 실제 origin Git 선언에 따라 구분하고 기존 원 정책 digest를 유지한다. [실제 P5](/home/ubuntu/KORStockScan/data/report/main_startup_validation/2026-10-19/ce996f74c04f41269c3605964c3c3f46/final.json)는 필수12개 소비 경로·부작용 시도0·child exit0/종료·부모 종료 후 native/CAS 검사를 통과했다. 원 실패4개와 과거 준비본은 보존한다. 운영 PID 소비나 경제적 개선으로 승격하지 않는다.
+
+P6는 성공한 P5의 exact source/정책/코드 계약을 인수한다. 선택 환경파일의 null은 실제 부재 CAS로 소비하고, private CoW는 봉인된 실제 호스트 namespace와 엄격한 전체 격리 가드를 확인하는 단일 native 호출로 구분한다. 호스트 준비 전후 및 발행 전후의 원 P5 identity 검사는 유지한다. 새 준비/선택 세대 발행 후에는 canonical router로 **해당 최종 세대의 P5를 다시 실행**하고 이전 성공이나 generation-required marker를 덮어쓰지 않는 별도 완료 영수증을 남긴다. 진행과 실제 terminal은 [통합 배포 검토](../audits/main-research-integrated-p5-p6-deployment-review-2026-10-18.md)가 소유한다.
+
+## 15. 최종 배포·사전 로딩 종결
+
+P6는958d35b2b·source10/16·target10/19의54개 파일/선택본을 발행하고 호스트 current_full_contract PASS/findings0으로 종결했다. 표준 canonical 명령으로 실행한 [최종 세대 P5](/home/ubuntu/KORStockScan/data/report/main_startup_validation/2026-10-19/fc98c7d7f0eb42e99515e65b4b6514ba/final.json)도 passed다. 부모와 실행본 모두958이며 원 선언28개·필수12consumer(11 loaded/holding_prompt native parent_only)·금지 부작용0·child exit0/종료 및 부모의 마지막 native/CAS를 확인했다.
+
+원 최초 P5·required marker·이전 준비/정책·실패 영수증은 유지하고 [최종 완료 영수증](/home/ubuntu/KORStockScan/tmp/main-research-policy-deployment-20261018/p5-final-generation-completion-01.json)을 별도 봉인했다. cron8+snapshot3/release-set과 다음 PREOPEN/start의 print-plan을 확인했다. 현재 범위 연구·통합·P5/P6 기술 작업은 종료한다. 정책수치·수탁·hard safety를 유지했고 실제 Main 기동/provider/주문은 수행하지 않았다. actual_pid_consumed=false이며 실제10/19 PREOPEN/PID·자연 수용은 기존 owner와 Acceptance를 유지한다.
+
+## 16. PREOPEN 코드 인계의 첫 장중 전환 승계
+
+당일 PREOPEN이 이미 검증된 prepared code handoff를 소비했다면 최초 Main 기동 commit과 정책 원 code commit은 다를 수 있다. ordered 배포의 delay 사전검사는 원 코드 digest 불일치에 한해 현재 선택본의 정식 prepared 영수증과 전체 frozen source·policy·날짜·scope를 검증하고, 그 검증된 원 commit에서 후보까지의 기존 코드 차이 검사를 수행한다. 다른 실패는 그대로 중단하며 incumbent는 계속 실행한다.
+
+기존 release-set/detector/selector lock 아래 native 사전검증과 drain이 끝난 뒤, selector 게시 전에 기존 prepared publisher가 원 영수증을 새 후보로 승계한다. publisher의 Main/supervisor 부재·원문 snapshot·source CAS·immutable receipt 검사는 유지한다. 정책·PREOPEN·controller 원문을 재발행하지 않는다. 승계 실패는 새 selector 게시를 중단하고 그 단계의 원 실패와 startup hold를 보존한다. 이후 prepare→start→PID 확인은 기존 ordered 경로를 따른다. [10/19 실행 검토](../audits/preopen-alert-repair-2026-10-19.md).

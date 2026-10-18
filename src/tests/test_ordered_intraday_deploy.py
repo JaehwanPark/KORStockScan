@@ -1047,3 +1047,77 @@ def test_candidate_active_policy_preflight_is_source_bound_and_read_only(tmp_pat
     assert selection.read_bytes()==before
     assert not (data/'runtime/operator_startup_hold.json').exists()
     assert not (tmp_path/'restart.flag').exists()
+
+
+@pytest.mark.parametrize('fault',[None,'other_failure','unverified_origin','changed_manifest','changed_candidate'])
+def test_prepared_delay_origin_preflight_remains_read_only(tmp_path,monkeypatch,fault):
+    from src.engine.automation import prepared_policy_code_handoff as P
+    from src.engine.scalping import pre_submit_delay_initial_policy as delay
+    data=tmp_path/'data';data.mkdir();manifest=tmp_path/'manifest.json'
+    manifest.write_text(json.dumps(dict(pre_submit_delay_handoff=dict(policy_sha256='policy',code_contract_sha256='original'))))
+    monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda _:manifest)
+    monkeypatch.setattr(D.H,'DATA_DIR',data)
+    def original(*a):raise ValueError('other_failure' if fault=='other_failure' else 'entry_consumer_original_code_contract_invalid')
+    monkeypatch.setattr(D.H,'verify_candidate_delay_code',original)
+    monkeypatch.setattr(D.R,'selected_release',lambda _:(tmp_path/'previous','previous'))
+    monkeypatch.setattr(delay,'CONTRACT_PATHS',('source.py',))
+    calls=[]
+    def resolve(*a,**kw):
+        calls.append(kw)
+        return dict(basis='wrong' if fault=='unverified_origin' else 'verified_selected_prepared_code_handoff',
+                    origin_commit='origin',sources={})
+    monkeypatch.setattr(P,'resolve_prepared_code_origin',resolve)
+    def delta(*args):
+        assert args==(tmp_path/'candidate','candidate','origin',{'source.py':'source.py'},'original')
+        if fault=='changed_manifest':manifest.write_text('{}')
+        if fault=='changed_candidate':raise ValueError('candidate_dirty')
+        return ['source.py']
+    monkeypatch.setattr(D.H,'_verify_entry_code_delta',delta)
+    monkeypatch.setattr(P,'issue',lambda *a,**kw:pytest.fail('preflight must not publish'))
+    if fault:
+        with pytest.raises(ValueError):D.verify_candidate_delay_code('day',tmp_path/'candidate','candidate')
+    else:
+        result=D.verify_candidate_delay_code('day',tmp_path/'candidate','candidate')
+        assert result['status']=='pass' and result['actual_pid_consumed'] is False
+        assert result['prepared_code_origin']['origin_commit']=='origin'
+        assert calls[0]['selected_commit']=='previous' and calls[0]['policy_sha']=='policy'
+
+
+@pytest.mark.parametrize('changed',[False,True])
+def test_prepared_delay_inheritance_preserves_native_issuer_and_source_cas(tmp_path,monkeypatch,changed):
+    from src.engine.automation import prepared_policy_code_handoff as P
+    source=tmp_path/'source';source.write_text('original')
+    original=tmp_path/'prepared';original.write_text(json.dumps(dict(verification_path='original-verification')))
+    previous=tmp_path/'previous';previous.write_text(json.dumps(dict(prepared_receipt=str(original),
+        original_prepared_receipt='original-prepared',policy_sha256='policy',original_code_sha256='code',paths={'key':'source.py'})))
+    check=dict(prepared_code_origin=dict(sources={str(source):D.H._sha(source)},code_handoff_receipt_path=str(previous)))
+    calls=[];monkeypatch.setattr(P,'issue',lambda *a,**kw:calls.append((a,kw)) or {'verified':True})
+    if changed:
+        source.write_text('changed')
+        with pytest.raises(ValueError,match='source_changed'):D.inherit_prepared_delay_code(tmp_path,'day',tmp_path/'candidate',check)
+        assert calls==[]
+    else:
+        assert D.inherit_prepared_delay_code(tmp_path,'day',tmp_path/'candidate',check)=={'verified':True}
+        assert calls[0][1]['previous_handoff']==previous
+        assert calls[0][1]['origin_verification']=='original-verification'
+        assert calls[0][1]['confirm']==P.AUTHORITY
+
+
+@pytest.mark.parametrize('fail',[False,True])
+def test_prepared_inheritance_happens_after_drain_before_selection(driver,monkeypatch,fail):
+    d=driver;d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D,'_main_pids',lambda:[])
+    before=d.selection.read_bytes();d.prepared_delay_check={'prepared_code_origin':{'test':'bound'}}
+    calls=[]
+    def inherit(workspace,day,candidate,check):
+        assert d.phase=='drained' and d.hold.read_bytes()==d.hold_bytes
+        assert d.selection.read_bytes()==before and check==d.prepared_delay_check
+        calls.append(True)
+        if fail:raise ValueError('native_issuer_refused')
+    monkeypatch.setattr(D,'inherit_prepared_delay_code',inherit)
+    if fail:
+        with pytest.raises(ValueError,match='native_issuer_refused'):d.publish()
+        assert d.selection.read_bytes()==before and d.phase=='drained'
+    else:
+        d.publish();assert d.phase=='selected' and d.selection.read_bytes()!=before
+    assert calls==[True]

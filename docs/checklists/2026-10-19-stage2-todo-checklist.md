@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-19`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 첫 장중 코드 전환은 이미 소비된 prepared delay의 원 commit과 source를 사전검증하고 drain 후 selector 게시 전에 정식 영수증을 승계한다. 실패 시 새 선택/기동을 진행하지 않으며 기존 정책 수치와 원 PREOPEN을 유지한다.
   - 코드 전환 뒤 trailing 연구의 현재성은 원 PREOPEN holding 원문을 유지한 별도 native 재검증 영수증으로 확인한다. 날짜·scope·원 parent policy 일치, 새 전체 원천/산술 검증, 현재 코드/세대 결속이 필수이며 보고서 전용 영수증은 runtime apply 권한이 아니다. 재기동 observer는 기준일 raw inode 변경을 정식 요약 재생성 후 다시 검증한다.
   - Source: [runtime_approval_summary_2026-10-16.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-16.json)
   - 판정 기준: source_date=`2026-10-16`, apply_date=`2026-10-19`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=False, handoff=blocked); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=e6d31662f21d7785c3ddcc7e5e361482e3d7e03486216403f3491542f3238f7b, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.

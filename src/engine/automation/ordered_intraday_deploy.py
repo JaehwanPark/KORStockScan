@@ -28,6 +28,54 @@ from src.engine.infrastructure import runtime_release_router as R
 CONFIRM = 'APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART'
 
 
+def verify_candidate_delay_code(day, root, commit):
+    """Retain a natively verified prepared origin across the first live handoff."""
+    manifest_path = H.bootstrap.manifest_path(day)
+    manifest_raw = manifest_path.read_bytes() if manifest_path.exists() else None
+    try:
+        return H.verify_candidate_delay_code(day, root, commit)
+    except ValueError as exc:
+        if str(exc) != 'entry_consumer_original_code_contract_invalid':
+            raise
+    from src.engine.automation import prepared_policy_code_handoff as P
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    manifest = json.loads(manifest_raw)
+    bound = manifest['pre_submit_delay_handoff']
+    selected, selected_commit = R.selected_release(H.DATA_DIR.parent)
+    paths = {name: name for name in CONTRACT_PATHS}
+    origin = P.resolve_prepared_code_origin(H.DATA_DIR, day, family='pre_submit_delay',
+        policy_sha=bound['policy_sha256'], expected=bound['code_contract_sha256'], paths=paths,
+        selected_root=selected, selected_commit=selected_commit)
+    if origin['basis'] != 'verified_selected_prepared_code_handoff':
+        raise ValueError('deployment_prepared_delay_origin_required')
+    changed = H._verify_entry_code_delta(root, commit, origin['origin_commit'], paths,
+                                         bound['code_contract_sha256'])
+    if manifest_path.read_bytes() != manifest_raw:
+        raise ValueError('deployment_prepared_delay_manifest_changed')
+    return dict(status='pass', target_date=day, origin_commit=origin['origin_commit'],
+                release_commit=commit, changed_consumer_paths=changed,
+                policy_effect='unchanged', actual_pid_consumed=False, prepared_code_origin=origin)
+
+
+def inherit_prepared_delay_code(workspace, day, candidate, check):
+    """Run under ordered locks after drain, before selection; no policy writes."""
+    origin = check.get('prepared_code_origin')
+    if not origin:
+        return None
+    from src.engine.automation import prepared_policy_code_handoff as P
+    if any(H._sha(path) != sha for path, sha in origin['sources'].items()):
+        raise ValueError('deployment_prepared_delay_source_changed')
+    previous_path = Path(origin['code_handoff_receipt_path'])
+    previous = P._read(previous_path)
+    prepared = P._read(previous['prepared_receipt'])
+    return P.issue(Path(workspace)/'data', day, family='pre_submit_delay',
+        policy_sha=previous['policy_sha256'], expected=previous['original_code_sha256'],
+        paths=previous['paths'], release_root=candidate,
+        prepared_receipt=previous['original_prepared_receipt'],
+        origin_verification=prepared['verification_path'], confirm=P.AUTHORITY,
+        previous_handoff=previous_path)
+
+
 @contextmanager
 def detector_transition_lock(workspace, timeout=60):
     """Drain the existing detector before any deployment mutation.
@@ -417,7 +465,8 @@ class Deployment:
         else:
             path, _ = H._paths(self.day, self.previous_commit)
             self.frozen = H._read(path)['frozen_files']
-        code_check = H.verify_candidate_delay_code(self.day, self.candidate, self.commit)
+        code_check = verify_candidate_delay_code(self.day, self.candidate, self.commit)
+        self.prepared_delay_check = code_check
         _atomic(self.directory / 'candidate-delay-code.json', _json_bytes(code_check))
         stop_check = H.verify_candidate_stop_code(self.day, self.candidate, self.commit)
         _atomic(self.directory / 'candidate-stop-code.json', _json_bytes(stop_check))
@@ -426,6 +475,9 @@ class Deployment:
         active_check = verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day)
         _atomic(self.directory/'candidate-active-policy-code.json', _json_bytes(active_check))
         self.frozen = dict(self.frozen)
+        self.frozen.update((code_check.get('prepared_code_origin') or {}).get('sources', {}))
+        # The selector is transition provenance, asserted separately below.
+        self.frozen.pop(str(self.selection), None)
         self.frozen[active_check['receipt_path']] = active_check['receipt_sha256']
         self.frozen[active_check['pointer_path']] = active_check['pointer_sha256']
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
@@ -662,6 +714,9 @@ class Deployment:
         self.published = _json_bytes(value)
         with (self.workspace / 'data/runtime/runtime_release_selection.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assert_unchanged()
+            inherit_prepared_delay_code(self.workspace, self.day, self.candidate,
+                                        getattr(self, 'prepared_delay_check', {}))
             self.assert_unchanged()
             _atomic(self.selection, self.published)
             if getattr(self, 'preserve_editable_checklist', False):
