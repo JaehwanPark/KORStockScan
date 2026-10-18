@@ -24,26 +24,41 @@ from .main_trailing_all_scope_research import _sealed, _source_path
 SCHEMA = 'main_trailing_completed_minute_path_diagnostics_v1'
 HORIZONS = (1, 3, 5, 10, 20, 30, 60)
 KST = ZoneInfo('Asia/Seoul')
+# This is this offline reader's temporary-copy resource ceiling, not a native
+# revision validity rule. completed_history.MAX_DATABASE_BYTES admits writes
+# before insertion (publish lines 151/172); a valid commit can overshoot it.
+# One daily private copy holds DB+WAL together and is removed before the next.
+MAX_COPY_CARRIER_BYTES = 512 * 1024 * 1024
+COPY_CHUNK_BYTES = 64 * 1024
 
 
 def carrier_generation(path):
     """SQLite's logical carrier includes the optional WAL, never the SHM cache."""
     path = Path(path)
     if path.is_symlink() or any(p.is_symlink() for p in path.parents):
-        raise ValueError('minute_history_path_or_budget_invalid')
+        raise ValueError('minute_history_path_invalid')
     if not path.exists():
         raise ValueError('minute_history_not_stored')
     result = {'schema':'minute_history_db_wal_carrier_v1'}
+    present, total = [], 0
     for key, source in (('database',path),('wal',Path(str(path)+'-wal'))):
         if source.is_symlink():
-            raise ValueError('minute_history_path_or_budget_invalid')
+            raise ValueError('minute_history_path_invalid')
         if not source.exists():
             result[key] = None
             continue
         info = source.stat()
-        if not stat.S_ISREG(info.st_mode) or info.st_size > completed_history.MAX_DATABASE_BYTES:
-            raise ValueError('minute_history_path_or_budget_invalid')
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('minute_history_path_invalid')
+        total += info.st_size
+        present.append((key,source))
+    # Admit the combined carrier before any potentially large hash/copy read.
+    if total > MAX_COPY_CARRIER_BYTES:
+        raise ValueError('minute_history_copy_resource_budget_exceeded')
+    for key,source in present:
         result[key] = byte_generation(source)
+    if sum(value['size'] for key,value in result.items() if key in {'database','wal'} and value) > MAX_COPY_CARRIER_BYTES:
+        raise ValueError('minute_history_copy_resource_budget_exceeded')
     return result
 
 
@@ -68,7 +83,7 @@ def _snapshot(root, day):
             with original.open('rb') as source, copied.open('xb') as output:
                 remaining = before[key]['size']
                 while True:
-                    chunk = source.read(min(65536,remaining+1))
+                    chunk = source.read(min(COPY_CHUNK_BYTES,remaining+1))
                     if not chunk: break
                     remaining -= len(chunk)
                     if remaining < 0:
@@ -369,6 +384,9 @@ def _build(manifest_path, *, input_root, data_root, retained):
         excluded_alternative_exit_count=len(populations)-len(rows),
         status_counts=[dict(evidence_kind=k[0],status=k[1],reason=k[2],count=v) for k,v in sorted(counts.items(),key=lambda x:str(x[0]))],
         rows=sorted(rows,key=lambda x:x['identity']), source_revisions=sources,
+        copy_resource_contract=dict(max_daily_db_plus_wal_bytes=MAX_COPY_CARRIER_BYTES,
+            streaming_chunk_bytes=COPY_CHUNK_BYTES, concurrent_daily_copies=1,
+            native_writer_soft_cap_is_read_validity_limit=False),
         model=dict(cost_rate=.0023,target_net_pct=.4,stop_net_pct=-3,
             entry_reference='native_ask_or_verified_buy_leg_no_fill_assumption',
             use='completed_bar_price_bounds_only', executable_ordering=False,

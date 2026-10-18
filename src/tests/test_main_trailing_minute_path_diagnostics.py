@@ -96,6 +96,49 @@ def test_wal_carrier_is_copied_without_source_sqlite_writes(tmp_path,monkeypatch
         assert {p.name:(p.read_bytes(),p.stat().st_mtime_ns) for p in path.parent.iterdir()} == originals
 
 
+def test_public_publisher_transaction_can_overshoot_its_soft_cap_and_remain_readable(tmp_path,monkeypatch):
+    path,_=publish(tmp_path,bars(10))
+    # Scale the writer's cap to one byte above a real, already published DB.
+    # The production transaction is unchanged and its insert crosses the cap.
+    cap=path.stat().st_size+1
+    monkeypatch.setattr(history,'MAX_DATABASE_BYTES',cap)
+    _,receipt=publish(tmp_path,bars(400),now=clock('16:00:00'))
+    assert path.stat().st_size>cap
+    identity=history.key(('real','native-test'),'005930',DAY)
+    native=history.read(tmp_path,identity,now=clock('16:00:00'),limit=400,
+        include_forming=False,revision=receipt['shared_history_revision_sha256'])
+    assert native is not None and len(native[0])==400
+    before=diagnostic.carrier_generation(path)
+    result,issue=diagnostic.series(tmp_path,DAY,'005930',as_of=clock('16:00:00'))
+    assert issue is None and len(result['bars'])==400
+    assert result['revision_sha256']==receipt['shared_history_revision_sha256']
+    assert diagnostic.carrier_generation(path)==before
+    assert history.publish(tmp_path,identity,bars(401),
+        dict(api_id='ka10080',request_code='005930',rest_received_ts_ms=int(clock('16:01:00')*1000)),
+        now=clock('16:01:00')) is False  # The next write is correctly denied.
+
+
+def test_copy_resource_ceiling_is_combined_db_wal_and_checked_before_hashing(tmp_path,monkeypatch):
+    path,_=publish(tmp_path,bars(2),now=clock('09:02:00'))
+    with closing(sqlite3.connect(path)) as keeper:
+        keeper.execute('SELECT count(*) FROM current').fetchone()
+        publish(tmp_path,bars(10))
+        db_size=path.stat().st_size;wal_size=Path(str(path)+'-wal').stat().st_size
+        assert db_size>1 and wal_size>1
+        cap=max(db_size,wal_size)+1
+        assert db_size<=cap and wal_size<=cap and db_size+wal_size>cap
+        monkeypatch.setattr(diagnostic,'MAX_COPY_CARRIER_BYTES',cap)
+        monkeypatch.setattr(diagnostic,'byte_generation',lambda *a:pytest.fail('unadmitted carrier hashed'))
+        result,issue=diagnostic.series(tmp_path,DAY,'005930',as_of=clock())
+        assert result is None and issue=='minute_history_copy_resource_budget_exceeded'
+
+
+def test_invalid_path_is_not_mislabeled_as_resource_exclusion(tmp_path):
+    source=tmp_path/'source';path,_=publish(source,bars(10))
+    linked=tmp_path/'linked';linked.symlink_to(source,target_is_directory=True)
+    assert diagnostic.series(linked,DAY,'005930',as_of=clock())[1]=='minute_history_path_invalid'
+
+
 def test_as_of_reads_available_historical_revision_behind_future_current(tmp_path):
     _,early = publish(tmp_path,bars(2),now=clock('09:02:00'))
     publish(tmp_path,bars(10))
