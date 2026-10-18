@@ -423,11 +423,29 @@ def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes,
         request = request_index.get(request_id)
         request_valid = False
         if request is not None:
+            binding = mapping(request.get('continuous_reversal_request_binding'))
+            bound_native = mapping(binding.get('continuous_reversal_consumption'))
+            # Synchronous Main calls have no async envelope. Their immutable
+            # machine observation, native PID and exact request hashes own the
+            # join; never invent an async id or join by symbol/time alone.
+            synchronous_identity = (
+                not any(identity(request) + identity(row))
+                and request.get('async_request_id') is None
+                and row.get('async_request_id') is None
+                and binding.get('binding_status') == 'matched'
+                and binding.get('request_id') == request_id
+                and binding.get('machine_observation_sha256') == key
+                and identity(bound_native, native=True) == producer
+                and valid_identity(producer)
+                and all(bound_native.get(field) == native.get(field) for field in
+                        ('family_sha256', 'bundle_sha256', 'input_sha256', 'prompt_sha256')))
+            asynchronous_identity = (
+                identity(request) == identity(row) == producer
+                and bool(request.get('async_request_id'))
+                and request.get('async_request_id') == row.get('async_request_id'))
             request_valid = (request.get('schema') == 'ai_decision_request_provenance_v1'
                 and request.get('endpoint') == 'analyze_target'
-                and identity(request) == identity(row) == producer
-                and bool(request.get('async_request_id'))
-                and request.get('async_request_id') == row.get('async_request_id')
+                and (asynchronous_identity or synchronous_identity)
                 and all(digest(request.get(field)) and request.get(field) == row.get(field)
                         for field in ('prompt_sha256', 'request_envelope_sha256'))
                 and digest(request.get('sanitized_user_input_sha256'))

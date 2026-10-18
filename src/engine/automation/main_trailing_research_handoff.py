@@ -70,7 +70,8 @@ def _verify_report(path, *, target_date, parent_sha256, memo_budget):
         manifest.get('holding_research_cost_data_root') or data_root,manifest['consumed_dates'])}
     for source in storage.iter_tree(root,manifest['source_generations_ref']):
         p=Path(source['path'])
-        if (not p.resolve().is_relative_to(data_root) and p.resolve() not in cost_paths) or byte_generation(p)!=source['generation']:
+        from .main_trailing_source_assembler import source_generation_matches
+        if (not p.resolve().is_relative_to(data_root) and p.resolve() not in cost_paths) or not source_generation_matches(data_root,manifest['source_date'],p,source['generation']):
             raise ValueError('main_trailing_research_source_changed')
     checked_paths=set()
     for part in storage.iter_tree(root,manifest['partitions_ref']):

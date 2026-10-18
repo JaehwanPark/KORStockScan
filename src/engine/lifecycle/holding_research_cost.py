@@ -8,6 +8,7 @@ from contextlib import ExitStack
 from datetime import date
 from decimal import Decimal
 import json
+import hashlib
 import os
 import stat
 from pathlib import Path
@@ -21,6 +22,45 @@ from .research_input_budget import Claim
 SCHEMA = 'main_holding_research_cost_v1'
 SCOPE = 'main_holding_exit_research_only'
 MAX_REGISTRY_BYTES = 4 * 1024 * 1024
+
+
+def historical_registry_generation_matches(path, generation, source_date):
+    """Accept only a verified original prefix plus unrelated later-day owners.
+
+    Historical orders, existing historical owners, rewrites, invalid hash chains
+    and ambiguous dates still invalidate research. This never changes custody.
+    """
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerRegistryError
+    path = Path(path)
+    try:
+        cutoff = date.fromisoformat(source_date)
+        before = path.stat()
+        size = generation['size']
+        if (path.name != 'order_owner_registry.jsonl' or path.parent.name != 'runtime'
+                or path.is_symlink() or any(p.is_symlink() for p in path.parents)
+                or not stat.S_ISREG(before.st_mode) or type(size) is not int
+                or not 0 < size <= before.st_size <= MAX_REGISTRY_BYTES):
+            return False
+        with Claim(before.st_size * 12 + 4096):
+            with path.open('rb') as stream:
+                prefix = stream.read(size)
+            if (len(prefix) != size or not prefix.endswith(b'\n')
+                    or hashlib.sha256(prefix).hexdigest() != generation['sha256']):
+                return False
+            events = OrderOwnerRegistry(path).verified_events_snapshot(max_bytes=MAX_REGISTRY_BYTES)
+            count = prefix.count(b'\n')
+            historical_owners = {
+                row.get('owner_id') for row in events[:count]
+                if date.fromisoformat(row['order_date']) <= cutoff
+            }
+            for row in events[count:]:
+                if (date.fromisoformat(row['order_date']) <= cutoff
+                        or not row.get('owner_id') or row['owner_id'] in historical_owners
+                        or row.get('side') not in {'BUY', 'SELL'}):
+                    return False
+        return source_stat(path.stat()) == source_stat(before)
+    except (OSError, ValueError, KeyError, TypeError, OwnerRegistryError):
+        return False
 
 
 def _json(path, before, maximum):
@@ -77,10 +117,12 @@ def _seal(body):
 
 class Source:
     """One bounded registry and four cost objects, released at batch completion."""
-    def __init__(self, data_root, *, cost_data_root=None, knowledge_cutoff=None, sources=None):
+    def __init__(self, data_root, *, cost_data_root=None, knowledge_cutoff=None, sources=None,
+                 registry_source_date=None):
         self.root = Path(data_root).resolve()
         self.cost_root = Path(cost_data_root or data_root).resolve()
         self.cutoff = knowledge_cutoff
+        self.registry_source_date = registry_source_date
         self.sources = sources if sources is not None else {}
         self.cache = OrderedDict()
         self.registry = None
@@ -169,7 +211,12 @@ class Source:
                 tail_hash=registry[-1]['event_hash'] if registry else '0' * 64)
             self.sources[str(path)] = generation
         if path.is_symlink() or any(p.is_symlink() for p in path.parents) or source_stat(path.stat()) != self.registry_stat:
-            raise ValueError('holding_research_cost_registry_changed')
+            refreshed_stat = source_stat(path.stat())
+            if (not self.registry_source_date or not historical_registry_generation_matches(
+                    path, self.registry_generation, self.registry_source_date)
+                    or source_stat(path.stat()) != refreshed_stat):
+                raise ValueError('holding_research_cost_registry_changed')
+            self.registry_stat = refreshed_stat
         row = dict(trade, code=trade.get('code') or trade.get('stock_code'))
         return _quantity_registry_fill_custody(row, {'buy_fill_legs': buys}, self.registry,
             self.registry_generation, registry_index=self.registry_index)

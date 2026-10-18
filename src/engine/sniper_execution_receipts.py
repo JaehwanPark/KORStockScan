@@ -2166,6 +2166,14 @@ def _clear_pending_sell_submit_after_successor_persisted(
         )
     ):
         return False
+    if _active_partial_sell_receipt(target_stock, order_no):
+        # A partial fill is not the end of this order. Its original intent is
+        # still required to fsync a cancel request for the unfilled remainder.
+        # Keep pending=false: a known broker order must not become a new submit.
+        target_stock.pop("sell_pending_submit_successor_persist_required", None)
+        target_stock.pop("sell_pending_submit_durability_clear_required", None)
+        target_stock.pop("exit_receipt_submission_custody_retry_required", None)
+        return True
     if not clear_pending_sell_submit_custody(target_id, generation=generation):
         target_stock.update(
             {
@@ -2183,6 +2191,20 @@ def _clear_pending_sell_submit_after_successor_persisted(
     for field_name in _SELL_PENDING_SUBMIT_RUNTIME_KEYS:
         target_stock.pop(field_name, None)
     return True
+
+
+def _active_partial_sell_receipt(target_stock: dict[str, Any], order_no: str) -> bool:
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if not isinstance(state, dict) or state.get("final") is True:
+        return False
+    expected = _safe_int(state.get("expected_qty"), 0)
+    filled = _safe_int(state.get("cumulative_qty"), 0)
+    return bool(
+        order_no
+        and str(state.get("order_no") or "").strip() == order_no
+        and 0 < filled < expected
+        and _safe_int(state.get("remaining_qty"), -1) == expected - filled
+    )
 
 
 def _pending_sell_submit_custody_retry_snapshot(
@@ -4189,6 +4211,32 @@ def _validated_sell_pending_submit_context(
     return context, "pending_submit_context_exact"
 
 
+def _validated_sell_order_context(target_stock: dict[str, Any]):
+    """Retain exact known-order custody for cancel, never for a fresh submit."""
+    context, reason = _validated_sell_pending_submit_context(target_stock)
+    if context is not None or target_stock.get("sell_submit_pending") is not False:
+        return context, reason
+    proof = target_stock.get("_sell_submit_receipt_proof")
+    if not isinstance(proof, dict):
+        return None, reason
+    order_no = str(target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or "").strip()
+    if not (
+        str(target_stock.get("status") or "").upper() == "SELL_ORDERED"
+        and proof.get("schema") == "sell_submit_receipt_proof_v1"
+        and proof.get("custody_emitted") is True
+        and re.fullmatch(r"[0-9]{7}", order_no) is not None
+        and int(order_no) > 0
+        and proof.get("order_no") == order_no
+        and _safe_int(proof.get("target_id"), 0) == _safe_int(target_stock.get("id"), 0)
+        and proof.get("code") == str(target_stock.get("code") or "").strip()[:6]
+        and proof.get("generation") == target_stock.get("sell_submit_generation")
+        and proof.get("submit_context_sha256") == target_stock.get("sell_submit_context_sha256")
+        and _safe_int(proof.get("requested_qty"), 0) == _safe_int(target_stock.get("sell_submit_requested_qty"), 0)
+    ):
+        return None, "known_sell_order_context_mismatch"
+    return _validated_sell_pending_submit_context({**target_stock, "sell_submit_pending": True})
+
+
 def _validated_sell_cancel_intent(
     intent: Any,
     *,
@@ -4577,7 +4625,7 @@ def persist_pending_sell_cancel_intent_custody(
 ) -> bool:
     """Fsync an exact cancel intent before the first kt10003 instruction."""
 
-    context, reason = _validated_sell_pending_submit_context(target_stock)
+    context, reason = _validated_sell_order_context(target_stock)
     target_id = _safe_int(target_stock.get("id"), 0)
     path = _sell_pending_submit_path(target_id)
     code = str(target_stock.get("code") or "").strip()[:6]
@@ -4753,7 +4801,7 @@ def persist_pending_sell_cancel_ack_custody(
 ) -> bool:
     """Fsync one exact cancel ACK without releasing the pending generation."""
 
-    context, reason = _validated_sell_pending_submit_context(target_stock)
+    context, reason = _validated_sell_order_context(target_stock)
     target_id = _safe_int(target_stock.get("id"), 0)
     path = _sell_pending_submit_path(target_id)
     normalized_code = str(target_stock.get("code") or "").strip()[:6]
@@ -4991,7 +5039,11 @@ def persist_pending_sell_definitive_reject_outcome(
 ) -> bool:
     """Fsync a no-order terminal response before DB rollback can commit."""
 
-    context, reason = _validated_sell_pending_submit_context(target_stock)
+    context, reason = (
+        _validated_sell_order_context(target_stock)
+        if outcome_kind in {"cancel_ack_terminal_absence_reconciled", "cancel_intent_terminal_absence_reconciled"}
+        else _validated_sell_pending_submit_context(target_stock)
+    )
     target_id = _safe_int(target_stock.get("id"), 0)
     path = _sell_pending_submit_path(target_id)
     normalized_code = str(target_stock.get("code") or "").strip()[:6]
@@ -5941,7 +5993,12 @@ def _persist_sell_receipt_recovery_or_interlock(
     if isinstance(state, dict):
         proof = target_stock.get("_sell_submit_receipt_proof")
         if isinstance(proof, dict) and proof.get("custody_emitted") is True:
-            state.pop(_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY, None)
+            if _active_partial_sell_receipt(target_stock, str(proof.get("order_no") or "")):
+                state[_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY] = (
+                    _pending_sell_submit_custody_retry_snapshot(target_stock)
+                )
+            else:
+                state.pop(_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY, None)
         elif target_stock.get("exit_receipt_submission_custody_retry_required") is True:
             state[_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY] = (
                 _pending_sell_submit_custody_retry_snapshot(target_stock)
@@ -7965,6 +8022,12 @@ def _complete_standard_sell_runtime_after_db(
 ) -> None:
     """Publish runtime terminal state only after durable DB completion."""
 
+    if (target_stock.get("sell_submit_generation")
+            and isinstance(target_stock.get("_sell_submit_receipt_proof"), dict)
+            and not _clear_pending_sell_submit_after_successor_persisted(
+                target_stock, target_id=target_id, code=code)):
+        log_error(f"[SELL_FINAL_PENDING_CUSTODY_CLEAR_DEFERRED] {code} id={target_id}")
+        return
     try:
         POSITION_PEAK_LEDGER.remove_for_stock(target_stock)
     except Exception as exc:

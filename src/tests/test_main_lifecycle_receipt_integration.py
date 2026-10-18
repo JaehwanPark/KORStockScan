@@ -1758,6 +1758,69 @@ def test_sell_local_no_call_requires_exact_process_attestation(code, tamper):
     assert result["return_code"] == response["return_code"]
 
 
+def _partial_sell_cancel_stock(monkeypatch):
+    stock = _exact_sell_execution_stock()
+    monkeypatch.setattr(execution_receipts, "_log_holding_pipeline", lambda *a, **k: {
+        "structured_append_succeeded": True, "structured_append_status": "raw_appended"})
+    assert execution_receipts.persist_pending_sell_submit_custody(stock)
+    assert execution_receipts._bind_pending_sell_execution_receipt(
+        target_stock=stock, target_id=stock["id"], code=stock["code"],
+        order_no="0000456", execution_no="0000002")
+    stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+        "order_no": "0000456", "position_qty": 2, "expected_qty": 2,
+        "cumulative_qty": 1, "aggregate_cumulative_qty": 1,
+        "remaining_qty": 1, "final": False,
+    }
+    assert execution_receipts._persist_sell_receipt_recovery_or_interlock(
+        stock, code=stock["code"], reason="partial_fill")
+    return stock
+
+
+def test_partial_sell_retains_cancel_custody_across_restart(monkeypatch):
+    stock = _partial_sell_cancel_stock(monkeypatch)
+    assert stock["sell_submit_pending"] is False
+    assert execution_receipts._sell_pending_submit_path(stock["id"]).exists()
+    assert not execution_receipts.persist_pending_sell_submit_custody(stock)
+    restarted = {"id": stock["id"], "code": stock["code"], "buy_qty": 2}
+    state, reason = sniper_sync._restore_sell_receipt_recovery(
+        target_stock=restarted, record=SimpleNamespace(id=stock["id"], buy_qty=2),
+        code=stock["code"], broker_remaining_qty=1)
+    assert state is not None and reason == "journal_exact_match"
+    assert restarted["sell_submit_pending"] is False
+    assert restarted["status"] == "SELL_ORDERED"
+    assert execution_receipts.persist_pending_sell_cancel_intent_custody(
+        restarted, order_no="0000456", broker_route="SOR")
+    assert execution_receipts.pending_sell_cancel_intent_exact(
+        restarted, code=stock["code"], order_no="0000456")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("id", 999), ("code", "999999"), ("status", "HOLDING"),
+    ("sell_odno", "0009999"), ("sell_submit_generation", "a" * 32),
+    ("sell_submit_context_sha256", "b" * 64), ("sell_submit_requested_qty", 3),
+    ("sell_submit_intended_route", "NXT"),
+])
+def test_partial_sell_cancel_rejects_changed_order_context(monkeypatch, field, value):
+    stock = _partial_sell_cancel_stock(monkeypatch)
+    stock[field] = value
+    assert not execution_receipts.persist_pending_sell_cancel_intent_custody(
+        stock, order_no="0000456", broker_route="SOR")
+
+
+def test_partial_sell_context_clears_only_after_terminal_successor(monkeypatch):
+    stock = _partial_sell_cancel_stock(monkeypatch)
+    stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY].update(
+        final=True, cumulative_qty=2, aggregate_cumulative_qty=2, remaining_qty=0)
+    monkeypatch.setattr(execution_receipts, "POSITION_PEAK_LEDGER", SimpleNamespace(remove_for_stock=lambda stock: None))
+    monkeypatch.setattr(execution_receipts, "move_orders_to_terminal", lambda *a, **k: None)
+    monkeypatch.setattr(execution_receipts, "highest_prices", {})
+    execution_receipts._complete_standard_sell_runtime_after_db(
+        target_stock=stock, target_id=stock["id"], code=stock["code"],
+        now=datetime.now(), order_no="0000456")
+    assert not execution_receipts._sell_pending_submit_path(stock["id"]).exists()
+    assert "sell_submit_generation" not in stock
+
+
 def test_sell_submit_custody_append_gap_retries_from_durable_receipt_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

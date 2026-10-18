@@ -39,3 +39,13 @@ native summary stage 성공 후 전체 controller는 `done`, blockers0을 기록
 10/19 PREOPEN은07:50:46 완료됐고 Main PID274478의 선택894 소비는07:55:50 launcher 영수증으로 확인했다. 기동 observer는 기준일10/16 raw inode 교체를 발견하여 원 요약 cursor를 재사용하지 않았다. 원 요약/manifest를 보관한 정식 allow-bootstrap 재생성을 통해 현재 원천을 다시 읽고 검증한다. 과거 raw를 수정하거나 cursor만 옮기지 않는다.
 
 all-scope trailing 원 보고서는 수량 수리 전 코드 계약84746d였고 현재894 계약은ddca6b다. 원 holding을 다시 쓰면 이미 확정된 PREOPEN·holding 정책 SHA를 깨뜨리므로 monitoring 소유 `main_trailing_currentness.py`에서 별도 native 전체 원천·partition·산술 재검증을 발행한다. health는 원 holding/report 세대, 동일 source/target/scope 및 parent policy, 현재 코드와 새 native report 결속만 관측한다. 원 계약 실패를 original_findings로 남기고 새 검증의 근거를 분리한다. 이 영수증은 bootstrap/정책 소비자에게 허용되지 않으며 원 source gap·비용 null·거래 성과 상태를 변경하지 않는다. module은 engine root 대신 monitoring 패키지에 두고 exact generation 변조/날짜/원천/권한/정책/scope 거부와 native producer failure를 회귀 검증한다.
+
+## 08:12 이후 부분 매도·관측·연구 원천 후속
+
+- 두산에너빌리티49344·알테오젠49346은 사용자의 명시적 답변에 따라 `manual_operator`로 등록했다. 08:09:52 process_health PASS를 확인했다. 자동 손실 인계 원문과 실패한 첫 marker 기록도 보존했다.
+- 큐리옥스49362의 원 주문0002471은 3주 중1주 체결, 잔여2주다. 부분 체결 successor를 저장하면서 pre-call 문맥/저널을 지워 취소 의도 저장이 막혔다. 부분 체결 동안 원 문맥과 동일 주문 증명을 보존하고, 재기동 시 기존 receipt journal에서 복원한다. 취소 경로는 정확한 원 주문·세대·해시 증명을 요구하며 신규 제출 검증은 그대로 유지한다. 완전 체결/DB 완료 후 원 세대를 정리한다. 기존49362 복구는 원 제출 이벤트·체결 이벤트·검증된 owner registry·DB·원 receipt의 일치를 먼저 확인하고, 승인된 ordered drain 이후에만 native journal writer로 수행한다. 취소 ACK/terminal을 만들지 않는다.
+- 공식 Kiwoom HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`를 현재 조회했다. `kiwoom_docs`는 없으며 specs/core client/realtime decoder, packaged `kt10003`/`kt00007`/`ka10075`/`00`, PRD/MOCK Postman을 대조했다. 요청·parser·route·수량 계약 변경은 없다. 조회 시각/파일 해시는 `tmp/preopen-alert-repair-20261019/sell-partial-official-reference.json`에 보존했다.
+- 동기 analyze_target의 async ID 부재를 오판한 provider lineage 검증을 수정했다. 동기 경로는 원 request ID, machine observation, native PID/start ticks, request/input/prompt 해시를 모두 결속한다. 비동기 결속 및 서로 다른 호출 혼합 거부는 유지한다. 관련857개 테스트 PASS.
+- 분할매수 report/policy 원본을 유지한 native projection 재검증이 PASS했다. 이전 verification pointer를 별도 보존했다. 세대 `0a27e98626486dc68733fa94848e4e61b055ff1be1b5ec506a720e9121ce63ba`.
+- trailing 재생성358081ec…는 오늘 owner registry append와 입력이 아닌 vote lock 파일 증가로 마지막 inventory 검증이 실패했다. 실패 산출물을 보존한다. 원 prefix SHA와 전체 registry hash chain을 검증하고, source date 이후이면서 과거 owner와 겹치지 않는 BUY/SELL append만 역사 연구에서 분리한다. 과거 owner·날짜 변경, 원문 변경, 잘못된 chain, 알 수 없는 날짜는 계속 실패한다. vote의 실제 jsonl/gzip은 유지하고 lock 파일은 입력에서 제외한다. 실제 policy/PREOPEN/holding snapshot을 재작성하지 않는다.
+- 부분 매도/연구 통합409개, 동기 관측857개 테스트 PASS. 전체 native trailing 재생성·새 후보 preflight·승인된 재기동·최종 PID/observer 검증은 이 기록 시점 진행 중이다. 수량 비용 결손과 holding first-crossing5건은 원천 OPEN이다.

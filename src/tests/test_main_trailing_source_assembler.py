@@ -60,6 +60,20 @@ def fixture(root):
     return path,native
 
 
+def test_inventory_ignores_vote_locks_but_keeps_native_vote_bytes(tmp_path):
+    root = tmp_path/'source'
+    fixture(root)
+    master = next((root/'report/micro_reversion_economic_reference').glob('*.json'))
+    parent = root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{DAY}.json'
+    before = source.input_inventory(root, [DAY], master, parent)
+    votes = root/'runtime/holding_path_votes'
+    votes.mkdir(parents=True)
+    (votes/'new.jsonl.lock').touch()
+    assert source.input_inventory(root, [DAY], master, parent) == before
+    (votes/'new.jsonl').write_text('{}\n')
+    assert source.input_inventory(root, [DAY], master, parent) != before
+
+
 def test_automatic_native_binding_warm_reuse_and_new_file_invalidation(tmp_path,monkeypatch):
     root=tmp_path/'source';path,native=fixture(root);assembly=tmp_path/'assembly';out=tmp_path/'research'
     manifest=source.assemble(root,assembly,source_date=DAY,target_date=TARGET,start_date=DAY)

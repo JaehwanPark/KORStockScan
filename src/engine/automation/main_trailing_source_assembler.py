@@ -40,7 +40,8 @@ def input_inventory(root,days,master_path,parent_path,*,cost_data_root=None):
     from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory
     paths.update(cost_inventory(cost_data_root or root, days))
     paths.add(Path(root)/'runtime/order_owner_registry.jsonl')
-    paths.update((Path(root)/'runtime/holding_path_votes').glob('*.jsonl*'))
+    paths.update(p for p in (Path(root)/'runtime/holding_path_votes').glob('*.jsonl*')
+                 if p.name.endswith(('.jsonl', '.jsonl.gz')))
     paths.update((Path(root)/'runtime/mechanistic_entry_policy/decisions'/days[-1]).glob('*/*.json'))
     from src.engine.lifecycle.snapshot_archive import present
     return [{'path':str(p.resolve()),'generation':byte_generation(p)} for p in sorted(paths)
@@ -59,10 +60,25 @@ def verify_inventory(manifest, assembly_root):
     current=input_inventory(root,manifest['consumed_dates'],master['path'],
         root/'runtime/policy_bootstrap'/f"runtime_policy_bootstrap_{manifest['source_date']}.json",
         cost_data_root=manifest.get('holding_research_cost_data_root'))
-    from itertools import zip_longest
-    if any(old!=new for old,new in zip_longest(
-            storage.iter_tree(assembly_root,manifest['assembly_inventory_ref']),current)):
+    if not inventory_matches(root, manifest['source_date'],
+            list(storage.iter_tree(assembly_root,manifest['assembly_inventory_ref'])), current):
         raise ValueError('all_scope_assembly_inventory_changed')
+
+
+def source_generation_matches(root, source_date, path, generation):
+    if byte_generation(path) == generation:
+        return True
+    if Path(path) != Path(root)/'runtime/order_owner_registry.jsonl':
+        return False
+    from src.engine.lifecycle.holding_research_cost import historical_registry_generation_matches
+    return historical_registry_generation_matches(path, generation, source_date)
+
+
+def inventory_matches(root, source_date, original, current):
+    if [row['path'] for row in original] != [row['path'] for row in current]:
+        return False
+    return all(old == new or source_generation_matches(root, source_date,
+               old['path'], old['generation']) for old, new in zip(original, current))
 
 
 def read(path):
@@ -701,7 +717,8 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
 def assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False, cost_data_root=None):
     from src.engine.lifecycle.research_disk_budget import use
     from src.engine.lifecycle.holding_research_cost import Source
-    with use(output),storage.compact_trees(),Source(root,cost_data_root=cost_data_root,knowledge_cutoff=as_of) as costs:
+    with use(output),storage.compact_trees(),Source(root,cost_data_root=cost_data_root,knowledge_cutoff=as_of,
+                                                  registry_source_date=source_date) as costs:
         return _assemble(root,output,source_date=source_date,target_date=target_date,
             start_date=start_date,as_of=as_of,immutable=immutable,costs=costs)
 
@@ -868,10 +885,11 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
                                                   for i,_,n in storage.records(db,conflicts=True)))
         excluded_ref=storage.write_tree(output,(json.loads(b) for b, in db.execute('SELECT body FROM exclusions ORDER BY id')))
     for name,generation in sources.items():
-        if byte_generation(Path(name))!=generation: raise ValueError('all_scope_assembly_source_changed')
+        if not source_generation_matches(root,source_date,Path(name),generation): raise ValueError('all_scope_assembly_source_changed')
     verify_window(root,window)
     source_ref=storage.write_tree(output,({'path':name,'generation':generation} for name,generation in sorted(sources.items())))
-    if input_inventory(root,days,master_source['path'],parent_path,cost_data_root=costs.cost_root)!=inventory:
+    if not inventory_matches(root,source_date,inventory,
+            input_inventory(root,days,master_source['path'],parent_path,cost_data_root=costs.cost_root)):
         raise ValueError('all_scope_assembly_inventory_changed')
     inventory_ref=storage.write_tree(output,inventory)
     from src.engine.scalping.trailing_situation_policy import registered_research_grid

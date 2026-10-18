@@ -51,6 +51,36 @@ def fixture(tmp_path, monkeypatch):
     return data,costs,trade,receipts['1']
 
 
+@pytest.mark.parametrize('mutation', ['future_owner', 'historical_owner', 'historical_date', 'rewrite', 'broken_chain'])
+def test_closed_registry_prefix_accepts_only_unrelated_future_owners(tmp_path, monkeypatch, mutation):
+    from datetime import date, timedelta
+    data, costs, trade, _ = fixture(tmp_path, monkeypatch)
+    path = data/'runtime/order_owner_registry.jsonl'
+    generation = adapter.byte_generation(path)
+    future = (date.fromisoformat(DAY) + timedelta(days=1)).isoformat()
+    with adapter.Source(data, cost_data_root=costs, registry_source_date=DAY) as prepared:
+        original = prepared.record(trade, completion_date=DAY)
+        if mutation == 'rewrite':
+            path.write_bytes(path.read_bytes().replace(b'test_account', b'bad__account'))
+        elif mutation == 'broken_chain':
+            with path.open('a') as stream: stream.write('{}\n')
+        else:
+            from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerOrderContext
+            owner = 'main_scalping:1' if mutation == 'historical_owner' else 'main_scalping:2'
+            context = OwnerOrderContext(owner_type='main_scalping', owner_id=owner,
+                position_id=owner, client_intent_id='later-' + mutation)
+            OrderOwnerRegistry(path).reserve(context=context, symbol=trade['code'], side='BUY',
+                quantity=1, route='KRX', order_date=DAY if mutation == 'historical_date' else future)
+        expected = mutation == 'future_owner'
+        assert adapter.historical_registry_generation_matches(path, generation, DAY) is expected
+        old = [{'path': str(path), 'generation': generation}]
+        current = [{'path': str(path), 'generation': adapter.byte_generation(path)}]
+        assert assembler.inventory_matches(data, DAY, old, current) is expected
+        if expected:
+            assert prepared.record(trade, completion_date=DAY) == original
+            assert prepared.sources[str(path)] == generation
+
+
 def test_native_registry_allocation_and_raw_source_are_bound_without_actual_mutation(tmp_path,monkeypatch):
     data,costs,trade,receipt = fixture(tmp_path,monkeypatch)
     original=deepcopy(trade);before=budget.health()['used_bytes']

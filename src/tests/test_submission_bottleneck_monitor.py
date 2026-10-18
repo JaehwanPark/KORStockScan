@@ -2294,6 +2294,33 @@ def test_provider_lineage_never_joins_symbol_or_time_when_exact_request_binding_
     assert result['source_gaps']['response_request_unresolved'] == 1
 
 
+@pytest.mark.parametrize('tamper', [None, 'pid', 'observation', 'request', 'input', 'binding_missing', 'one_async'])
+def test_synchronous_provider_lineage_requires_exact_native_binding(tmp_path, tamper):
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    request, trace = requests[0], traces[0]
+    for row in (request, trace):
+        for field in ('async_request_id', 'async_producer_pid', 'async_producer_start_ticks'):
+            row[field] = None
+    binding = dict(binding_status='matched', request_id=request['request_id'],
+        machine_observation_sha256=observations[0]['machine_observation_sha256'],
+        continuous_reversal_consumption=dict(trace['continuous_reversal_consumption']))
+    request['continuous_reversal_request_binding'] = binding
+    if tamper == 'pid': binding['continuous_reversal_consumption']['pid'] = 999
+    if tamper == 'observation': binding['machine_observation_sha256'] = 'e'*64
+    if tamper == 'request': binding['request_id'] = 'wrong'
+    if tamper == 'input': binding['continuous_reversal_consumption']['input_sha256'] = 'e'*64
+    if tamper == 'binding_missing': request.pop('continuous_reversal_request_binding')
+    if tamper == 'one_async': request['async_producer_pid'] = 123
+    write()
+    result = monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=16384)
+    assert result['request_prepared_count'] == (1 if tamper is None else 0)
+    if tamper is None:
+        assert result['issues'] == {}
+        assert result['provider_transmission_attempt_count'] == 1
+    else:
+        assert result['issues']['reversal_provider_request_hash_or_identity_mismatch'] == 1
+
+
 def test_provider_lineage_request_only_is_unresolved_and_partial_without_fabricated_timeout(tmp_path):
     now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=(None,))
     write(trace_values=[])
