@@ -15,6 +15,13 @@
 
 ## 실행 항목
 
+- [ ] `[MainPolicyLoadAndExitValidation1018] 다음 거래일 정책의 Main 공통 로딩·확인 후 종료 경로 구현` (`Due: 2026-10-19`, `Slot: IMPLEMENTATION`, `TimeWindow: P0~P4 코드 종결 후 P5 불변 후보 검증`, `Track: RuntimeStability`)
+  - Source: 사용자 계획 리뷰·보완 및 구현·코드리뷰·수정 반복 지시, [보완안](../proposals/main-policy-load-and-exit-validation-plan-2026-10-18.md), [구현 검토](../audits/main-policy-load-and-exit-implementation-review-2026-10-18.md).
+  - 범위: 실제 producer→env precedence→Main native consumer/cache/기록 부작용을 확정하고, 같은 공통 로더를 쓰는 별도 검증 child를 감시·외부 통신·주문 초기화 전에 종료한다. 현재10/18·원천10/16·대상10/19와 선택본/검증 후보 신원을 분리하고 당일 활성화 계약은 유지한다.
+  - Acceptance: 휴장일·평일의 비어 있지 않은 실제 로더 경로, 미래/current 차이·operator/retirement·필수12consumer의 object/scope/hash 대조, invalid 반환·변조·cache·동시 변경·크래시/timeout·격리/부작용 시도 실패를 검증한다. exact child PID/start ticks·종료·원자적 terminal·운영 보호 hash 불변, source/code handoff·운영 동등성 회귀·리뷰→수정→재리뷰를 확인한다. 검증 receipt는 actual_pid_consumed/runtime_effect=false다.
+  - 경계/인계: 후속 지시로 코드·격리 시험은 승인됐다. 운영 배포·Main 재기동·정책/selector·provider/주문·패키지는 변경하지 않는다. P5의 실제 준비 세대 후보 실행은 아직 미실행이며 이 owner에 남긴다. 실제10/19 PREOPEN 활성화·운영 PID는 [DirectFamilyPreopenPolicyHandoff](2026-10-19-stage2-todo-checklist.md)가 유지하고 자연 주문·추가 경제성 승인을 기술 로딩 조건으로 붙이지 않는다.
+  - 진행: P0~P4 구현·독립 리뷰·수정·재리뷰를 마쳤다. 실제 Main 조기 분기·공통 env·12consumer·Landlock/seccomp·parent terminal을 연결했고 delay 실패 cache·미래 split 권한·부작용 import·literal env·코드 계보/확장 결속을 수리했다. 실제 native producer128route와 Main child 양성/변조 실패를 검증했다. selected900의10/19 준비본 읽기 전용 current_full_contract 검증은 PASS이며 실제 candidate 세대 실행·운영 적용의 PASS로 간주하지 않는다.
+
 - [x] `[SnapshotCronReleaseBindingRepair1018] snapshot 감시 cron과 비동기 소비의 선택 릴리스 결속 수리` (`Due: 2026-10-18`, `Slot: ADHOC`, `TimeWindow: 승인 후 제한된 검증·적용`, `Track: RuntimeStability`)
   - Source: 사용자 다음 액션 실행 지시, [실행 경로 누락 점검](/home/ubuntu/KORStockScan/tmp/source-control-runtime-coverage-20261018/report.md), [운영 계약](../runtime-release-routing.md#snapshot-cron-release-binding).
   - 범위: 기존 snapshot3개 schedule의 공용 bootstrap을 선택900234d79에 연결하고 safe/Python/async 자식의 같은 code root를 검증한다. 기존 Main 선택·정책/PREOPEN·수량/custody·주문/provider 권한은 보존한다.

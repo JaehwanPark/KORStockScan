@@ -139,6 +139,29 @@ def prepare(*, data_root, day):
         raise
 
 
+def configure_policy_content(bundle, *, data_root, day):
+    """Shared in-memory backend setup; never attests a runtime PID."""
+    from src.engine.scalping import reversal_current_backend as D
+    if bundle and bundle.get('continuous_reversal', {}).get('schema') in {
+            'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+        D.configure_bundle(bundle, data_root=data_root, day=day)
+    return bundle
+
+
+def prepare_policy_loading(*, data_root, day, preparation=False):
+    """Load native content without activating a pointer or recording consumption.
+
+    Preparation uses the native dated candidate reader, whose provenance and
+    code validators remain mandatory. The live reader still requires current
+    activation. Neither branch changes the observed clock.
+    """
+    if preparation:
+        bundle = N.load(data_root=Path(data_root), target_date=day)
+        return configure_policy_content(bundle, data_root=data_root, day=day)
+    with N.verified_evaluation(data_root=data_root, target_date=day) as bundle:
+        return configure_policy_content(bundle, data_root=data_root, day=day)
+
+
 def _prepare_verified(*, data_root, day):
     """Obtain one trusted immutable view and prepare its current consumer."""
     global _CONFIGURED, _CONSUMED
@@ -171,7 +194,7 @@ def _prepare_verified(*, data_root, day):
             if (configured is None or configured[0] != key or configured[1] is not bundle
                     or getattr(D.backend(), '_GENERATION', None) != bundle['continuous_reversal'].get('family_sha256')):
                 _CONFIGURED = None
-                D.configure_bundle(bundle, data_root=data_root, day=day)
+                configure_policy_content(bundle, data_root=data_root, day=day)
                 _CONFIGURED = (key, bundle)
             extra = _identities(_extra_paths(data_root, day, commit))
             consumed = _CONSUMED

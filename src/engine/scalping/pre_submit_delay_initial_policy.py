@@ -33,6 +33,7 @@ MAX_CELLS = 4096
 CONTRACT_PATHS = (
     'src/engine/scalping/pre_submit_delay_initial_policy.py',
     'src/engine/scalping/pre_submit_delay_tuning.py',
+    'src/engine/infrastructure/main_policy_loading.py',
     'src/engine/scalping/pre_submit_delay_observation.py',
     'src/engine/scalping/reversal_registered_catalog.py',
     'src/engine/sniper_state_handlers.py', 'src/engine/kiwoom_sniper_v2.py',

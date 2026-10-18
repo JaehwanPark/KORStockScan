@@ -12,6 +12,14 @@ from pathlib import Path
 # 🚀 [핵심 1] 단독 실행을 위한 루트 경로 탐지
 # ==========================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if __name__ == '__main__' and '--validate-startup' in sys.argv[1:]:
+    # This branch runs before DB, logging, Telegram, calendar and engine imports.
+    # The dedicated child installs mandatory isolation before loading policies.
+    if len(sys.argv) != 3 or sys.argv[1] != '--validate-startup':
+        raise SystemExit('usage: bot_main.py --validate-startup REQUEST_JSON')
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.engine.automation.main_startup_validation import child_main
+    raise SystemExit(child_main(sys.argv[2]))
 _STARTUP_HOLD = PROJECT_ROOT / 'data/runtime/operator_startup_hold.json'
 if __name__ == '__main__' and (_STARTUP_HOLD.exists() or _STARTUP_HOLD.is_symlink()):
     raise SystemExit('operator_postclose_startup_hold_active')

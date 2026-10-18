@@ -493,7 +493,7 @@ PROJECT_DIR="$(cd .. && pwd)"
 export_runtime_source_provenance() { :; }
 record_threshold_runtime_env_pid_handoff() { :; }
 korstockscan_nproc() { echo 1; }
-''' + source[start:end]
+''' + (Path(__file__).parents[1] / 'engine/infrastructure/main_policy_environment.sh').read_text() + '\n' + source[start:end]
     marker = tmp_path / 'child-spawned'
     result = subprocess.run(['bash', '-c', script], cwd=tmp_path / 'src',
                             env={**os.environ, 'AUXILIARY_TEST_GATE_EXIT': str(gate_exit),

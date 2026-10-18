@@ -20,7 +20,13 @@ from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from src.engine.kiwoom_orders import describe_buy_capacity
+def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=None,
+                          max_budget=None, allow_min_one_share_over_budget=False):
+    """Keep policy loading pure; import broker infrastructure at allocation."""
+    from src.engine.kiwoom_orders import describe_buy_capacity as describe
+    return describe(current_price, total_deposit, ratio, safety_ratio=safety_ratio,
+        max_budget=max_budget, allow_min_one_share_over_budget=allow_min_one_share_over_budget)
+
 
 FORMULA_VERSION = "entry_type_5stage_cap25_v1"
 ROLLBACK_FORMULA_VERSION = "flat_10_fallback"

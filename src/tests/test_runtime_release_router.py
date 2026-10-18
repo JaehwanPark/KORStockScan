@@ -11,6 +11,28 @@ import pytest
 from src.engine.infrastructure import runtime_release_router as router
 
 
+def test_policy_load_validation_routes_without_start_or_cron_mutation(tmp_path):
+    workspace, release = tmp_path / 'workspace', tmp_path / 'release'
+    runtime = workspace / 'data/runtime'
+    runtime.mkdir(parents=True)
+    hold = runtime / 'operator_startup_hold.json'
+    hold.write_text('{"protected":true}')
+    plan = router.make_plan(workspace, release, 'a' * 40, 'validate-startup', '2026-10-19')
+    assert plan['command'] == [str(release / '.venv/bin/python'), '-B', '-m',
+        'src.engine.automation.main_startup_validation', '--workspace', str(workspace),
+        '--target-date', '2026-10-19']
+    assert plan['cwd'] == str(release)
+    assert 'validate-startup' not in router.TAGS.values()
+    assert hold.read_text() == '{"protected":true}'
+
+
+def test_policy_load_validation_requires_explicit_target_date(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(router, 'selected_release', lambda workspace: (tmp_path, 'a' * 40))
+    monkeypatch.setattr(sys, 'argv', ['router', 'validate-startup'])
+    assert router.main() == 2
+    assert 'startup_validation_target_date_required' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('damage', [None, 'root', 'commit', 'invalid_selection'])
 def test_detector_rechecks_current_selection_after_wrapper_lock(tmp_path, monkeypatch, damage):
     workspace = tmp_path / 'project'

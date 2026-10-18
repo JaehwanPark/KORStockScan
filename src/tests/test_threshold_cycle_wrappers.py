@@ -573,7 +573,7 @@ def test_launcher_native_receipt_checks_all_stages(tmp_path, failed_stage):
     import os, subprocess
     script = _text('src/run_bot.sh')
     start = script.index('record_threshold_runtime_env_pid_handoff() {')
-    end = script.index('\napply_retired_runtime_policy_env()', start)
+    end = script.index('\n}\n', start) + 3
     work = tmp_path / 'src'; work.mkdir()
     python = tmp_path / '.venv/bin/python'; python.parent.mkdir(parents=True)
     marker = tmp_path / 'stages'

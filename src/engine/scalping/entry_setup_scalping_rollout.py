@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -77,12 +77,15 @@ CONTRACT = {
 
 
 def load_auto_promotion(
-    *, now: datetime | None = None, env: dict[str, str] | None = None
+    *, now: datetime | None = None, env: dict[str, str] | None = None,
+    preparation_target_date: str | None = None,
 ) -> dict[str, Any] | None:
     """Load the immutable all-session V2.15+ promotion authority.
 
     This is deliberately independent of the durable V2.14 rollout: an absent,
     malformed, or not-yet-effective pin cannot promote a newer prompt.
+    ``preparation_target_date`` validates future content only and labels the
+    result non-executable; normal decision authority always reloads real time.
     """
 
     source = os.environ if env is None else env
@@ -104,7 +107,7 @@ def load_auto_promotion(
             return result
         current = (now or datetime.now(KST)).astimezone(KST)
         effective = datetime.fromisoformat(payload["effective_from"])
-        if effective.tzinfo is None or effective > current:
+        if not _content_date_valid(effective, current, preparation_target_date):
             return {**result, "reason": "auto_promotion_not_effective"}
         if any(
             type(payload.get(key)) is not type(value) or payload.get(key) != value
@@ -121,14 +124,18 @@ def load_auto_promotion(
             != "all_sessions_v2_15_plus_auto_promotion_2026_09_14"
         ):
             return result
-        return {"valid": True, "sha256": digest, "path": path, "payload": payload}
+        return {"valid": True, "sha256": digest, "path": path, "payload": payload,
+                **({"preparation_target_date": preparation_target_date, "execution_authority": False}
+                   if preparation_target_date is not None else {})}
     except (OSError, ValueError, TypeError, KeyError):
         return result
 
 
 def load_rollout(
-    *, now: datetime | None = None, env: dict[str, str] | None = None
+    *, now: datetime | None = None, env: dict[str, str] | None = None,
+    preparation_target_date: str | None = None,
 ) -> dict[str, Any] | None:
+    """Read the pinned rollout; explicit preparation never grants execution."""
     source = os.environ if env is None else env
     path, digest = source.get(PATH_ENV, ""), source.get(SHA_ENV, "")
     if not path and not digest:
@@ -145,7 +152,7 @@ def load_rollout(
             return result
         current = (now or datetime.now(KST)).astimezone(KST)
         effective = datetime.fromisoformat(payload["effective_from"])
-        if effective.tzinfo is None or effective > current:
+        if not _content_date_valid(effective, current, preparation_target_date):
             return {**result, "reason": "rollout_not_effective"}
         if any(
             type(payload.get(k)) is not type(v) or payload.get(k) != v
@@ -159,9 +166,23 @@ def load_rollout(
             return result
         if payload.get("operator_authority") != "all_scalping_v2_14_2026_09_11":
             return result
-        return {"valid": True, "sha256": digest, "path": path, "payload": payload}
+        return {"valid": True, "sha256": digest, "path": path, "payload": payload,
+                **({"preparation_target_date": preparation_target_date, "execution_authority": False}
+                   if preparation_target_date is not None else {})}
     except (OSError, ValueError, TypeError, KeyError):
         return result
+
+
+def _content_date_valid(effective, observed, target_date):
+    """Select content without substituting a future wall clock or live grant."""
+    if effective.tzinfo is None:
+        return False
+    if target_date is None:
+        return effective <= observed
+    target = date.fromisoformat(target_date)
+    if target.isoformat() != target_date:
+        return False
+    return effective.astimezone(KST).date() <= target
 
 
 def scope_authorized(
@@ -186,10 +207,12 @@ def scope_authority_mode(venue: Any, session: Any) -> str:
 
 
 def authorized_scopes(
-    *, env: dict[str, str] | None = None, now: datetime | None = None
+    *, env: dict[str, str] | None = None, now: datetime | None = None,
+    preparation_target_date: str | None = None,
 ) -> frozenset[str]:
-    rollout = load_rollout(env=env, now=now)
-    auto_promotion = load_auto_promotion(env=env, now=now)
+    kwargs = ({"preparation_target_date": preparation_target_date} if preparation_target_date is not None else {})
+    rollout = load_rollout(env=env, now=now, **kwargs)
+    auto_promotion = load_auto_promotion(env=env, now=now, **kwargs)
 
     scopes = set(SCOPES) if rollout and rollout.get("valid") is True else set()
     if auto_promotion and auto_promotion.get("valid") is True:

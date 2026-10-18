@@ -158,6 +158,83 @@ def verify(data, day, *, family, policy_sha, expected, paths, actual, now=None):
                 policy_effect='unchanged', actual_pid_consumed=False)
 
 
+def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, paths,
+                                 selected_root, selected_commit):
+    """Authenticate the frozen policy origin before reviewing a new candidate.
+
+    A new readiness generation can name today's selected release while its
+    unchanged policy still carries an older code contract. Resolve that chain
+    through the selected release's existing native handoff; never invent a new
+    origin, publish a receipt, or treat candidate code as selected code.
+    """
+    from src.engine.infrastructure.runtime_release_router import selected_release
+    if family not in FAMILIES or not isinstance(paths, dict) or not paths:
+        raise ValueError('prepared_code_origin_contract_invalid')
+    _clock(day)
+    data = Path(data).resolve(strict=True)
+    root = Path(selected_root).resolve(strict=True)
+    selector = data / 'runtime/runtime_release_selection.json'
+    selector_sha = _sha(selector)
+    if selected_release(data.parent) != (root, selected_commit):
+        raise ValueError('prepared_code_origin_selection_mismatch')
+    def selected_hashes(inventory, *, missing_allowed=False):
+        result = {}
+        for key, name in inventory.items():
+            if (not isinstance(key, str) or not isinstance(name, str)
+                    or not (root / name).resolve(strict=False).is_relative_to(root)):
+                raise ValueError('prepared_code_origin_path_invalid')
+            path = root / name
+            if missing_allowed and not path.exists() and not path.is_symlink():
+                return None
+            result[key] = _sha(path)
+        return result
+    code_hashes = selected_hashes(paths, missing_allowed=True)
+    actual = _digest(code_hashes) if code_hashes is not None else None
+    selected_paths = paths
+    sources = {str(selector): selector_sha}
+    result = dict(origin_commit=selected_commit, basis='selected_exact_code_contract',
+                  selected_release_root=str(root), selected_release_commit=selected_commit,
+                  original_code_sha256=expected, selected_runtime_code_sha256=actual)
+    if actual != expected:
+        from src.engine.automation import intraday_release_handoff as H
+        path = receipt_path(data, day, selected_commit, family)
+        receipt_sha = _sha(path)
+        receipt = _read(path)
+        selected_paths = receipt.get('paths')
+        if not isinstance(selected_paths, dict) or not selected_paths:
+            raise ValueError('prepared_code_origin_inventory_invalid')
+        code_hashes = selected_hashes(selected_paths)
+        actual = _digest(code_hashes)
+        proof = verify(data, day, family=family, policy_sha=policy_sha,
+                       expected=expected, paths=selected_paths, actual=actual)
+        if proof is None:
+            raise ValueError('prepared_code_origin_handoff_missing')
+        if (_sha(path) != receipt_sha or proof.get('origin_commit') != receipt.get('origin_commit')
+                or proof.get('policy_effect') != 'unchanged'
+                or proof.get('actual_pid_consumed') is not False):
+            raise ValueError('prepared_code_origin_handoff_changed')
+        extensions = H.REVIEWED_DELAY_CONTRACT_EXTENSIONS.get((proof['origin_commit'], expected), {})
+        expected_paths = dict(selected_paths)
+        expected_paths.update({name:name for name in extensions if name not in selected_paths.values()})
+        if paths != expected_paths:
+            raise ValueError('prepared_code_origin_inventory_extension_unreviewed')
+        sources[str(path)] = receipt_sha
+        sources.update(receipt['sources'])
+        result.update(origin_commit=proof['origin_commit'],
+                      basis='verified_selected_prepared_code_handoff',
+                      selected_runtime_code_sha256=actual,
+                      reviewed_extension_hashes={name:digest for name,digest in extensions.items()
+                                                 if name not in selected_paths.values()},
+                      code_handoff_receipt_path=str(path), code_handoff_receipt_sha256=receipt_sha)
+    sources.update({str(root / name):code_hashes[key] for key,name in selected_paths.items()})
+    if (_sha(selector) != selector_sha or selected_release(data.parent) != (root, selected_commit)
+            or any(_sha(name) != digest for name, digest in sources.items())):
+        raise ValueError('prepared_code_origin_sources_changed')
+    result['sources'] = sources
+    result['selected_paths'] = selected_paths
+    return result
+
+
 def issue(data, day, *, family, policy_sha, expected, paths, release_root,
           prepared_receipt, origin_verification, confirm):
     """Issue under the deployment caller's release-set and selection locks."""

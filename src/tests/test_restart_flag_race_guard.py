@@ -142,7 +142,7 @@ def test_release_source_root_change_requires_drained_supervisor_reload():
 
 
 def test_launcher_clears_intraday_pins_before_loading_dated_authority():
-    source = Path("src/run_bot.sh").read_text()
+    source = Path("src/engine/infrastructure/main_policy_environment.sh").read_text()
     reset = source.split("reset_runtime_policy_env_before_handoff() {", 1)[1].split(
         "\n}", 1
     )[0]
@@ -181,7 +181,7 @@ def test_launcher_imports_selected_release_despite_inherited_pythonpath(tmp_path
 
 
 def test_launcher_clears_auto_promotion_pins_before_loading_handoff():
-    source = Path("src/run_bot.sh").read_text()
+    source = Path("src/engine/infrastructure/main_policy_environment.sh").read_text()
     reset = source.split("reset_runtime_policy_env_before_handoff() {", 1)[1].split(
         "\n}", 1
     )[0]

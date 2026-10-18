@@ -12517,8 +12517,14 @@ def run_sniper(is_test_mode=False):
     from src.utils.logger import log_error, log_info
 
     log_info(f"[DEBUG] run_sniper started at {datetime.now()}")
-    from src.engine.scalping.pre_submit_delay_tuning import prepare_runtime_policy
-    run_sniper.pre_submit_delay_preparation = prepare_runtime_policy()
+    from src.engine.infrastructure.main_policy_loading import load_main_policies
+    from src.utils.constants import DATA_DIR
+    policy_clock = datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul'))
+    run_sniper.policy_loading = load_main_policies(
+        target_date=os.getenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE') or policy_clock.date().isoformat(),
+        observed_at=policy_clock, data_root=DATA_DIR, env=os.environ)
+    run_sniper.pre_submit_delay_preparation = run_sniper.policy_loading['delay_preparation']
+    run_sniper.trailing_situation_preparation = run_sniper.policy_loading['trailing_preparation']
     from src.engine.scalping.pre_submit_delay_observation import configure_sink
     configure_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
@@ -12527,10 +12533,6 @@ def run_sniper(is_test_mode=False):
     configure_stop_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
     configure_anchor_sink(_SCANNER_OBSERVATION_QUEUE.submit)
-    from src.engine.scalping.trailing_situation_policy import prepare_runtime as prepare_trailing_situations
-    run_sniper.trailing_situation_preparation = prepare_trailing_situations(env=os.environ,
-        parent_sha256=os.getenv('KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256'),
-        target_date=os.getenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE') or datetime.now().date().isoformat())
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
     run_sniper.last_broker_snapshot_refresh_time = 0

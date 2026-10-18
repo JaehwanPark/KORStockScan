@@ -311,6 +311,11 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     have consumed the original manifest and still be the exact live process.
     No policy bytes, producer selection or research acceptance are rewritten.
     """
+    from src.engine.infrastructure.startup_validation_code_context import verify_validation_consumer_code
+    validation = verify_validation_consumer_code(day, family=family, policy_sha=policy_sha,
+        expected=expected, paths=paths, actual=actual)
+    if validation is not None:
+        return validation
     if (DATA_DIR/'runtime/policy_bootstrap/code_handoffs'/day).exists():
         from src.engine.automation.prepared_policy_code_handoff import verify as verify_prepared_code
         prepared = verify_prepared_code(DATA_DIR, day, family=family, policy_sha=policy_sha,
@@ -941,8 +946,25 @@ REVIEWED_DELAY_RESEARCH_SOURCES = {
         '082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e',
         '60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23'),
 }
-# These dependencies existed but were absent from the original sealed delay
-# inventory. Bind their reviewed bytes without adding them to its old digest.
+# Exact original prepared-policy bytes to the shared read-only startup loader.
+# The delay cache gains explicit content date/root and loading receipts; its
+# runtime selection and source qualification remain unchanged. Main prepares
+# delay/trailing through the same helper before its existing sink initialization.
+# No prepared validation grants execution, rewrites a policy or attests a PID.
+# Review: docs/proposals/main-policy-load-and-exit-validation-plan-2026-10-18.md.
+REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES = {
+    'src/engine/scalping/pre_submit_delay_initial_policy.py': (
+        '9bf1914b5445ad687d2480352cb01d6ca3ab742709175a3ba7181d1747499edc',
+        '0853914ebbc643de4301b87209c9db106662bd60485146b0d16e495b77c0cd33'),
+    'src/engine/scalping/pre_submit_delay_tuning.py': (
+        'c2fb791a41e35c326ca874562c332fac0e7ea16cda0066fc82f34679cd93ef1a',
+        'c5fdf030c87f4faf94a70ecf1d2c4c40a753b4da6069a58ed105f5e43cb76605'),
+    'src/engine/kiwoom_sniper_v2.py': (
+        'ab335b38a3aff9362bd17a29fde787b425a4478f60e0d328c7b60553800cc21e',
+        '4454e6051c47ef959f0b8201526901fe5bd2dfff3b25aaa5593605cf7f53cd33'),
+}
+# Bind omitted historical dependencies and the new shared startup consumer to
+# reviewed bytes without adding them to the original sealed policy digest.
 REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
     '7f2552aedde8fec6ef904a43105827907e50dfc8',
     'bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256',
@@ -951,6 +973,8 @@ REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
         'fc39f13b5b026c628345268953daec046cf1277f88b9f3b1bcef4833f34e99af',
     'src/utils/threshold_cycle_registry.py':
         '5e914fc73837324d312a97672b0aa7d8bd49c788bcd54ff7e0a6ab3c0d08ce8a',
+    'src/engine/infrastructure/main_policy_loading.py':
+        'da58eb3fc403b5117cba011d6bb92f6e15790248d181ada4b73b263d38e073db',
 }
 
 
@@ -999,7 +1023,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_QUANTITY_RESEARCH_COST_SOURCES.get(name),
+        if pair in (REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.get(name),
+                    REVIEWED_QUANTITY_RESEARCH_COST_SOURCES.get(name),
                     REVIEWED_DELAY_RESEARCH_SOURCES.get(name),
                     REVIEWED_POST_AUX_GUARD_SOURCES.get(name),
                     REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES.get(name),
