@@ -49,3 +49,5 @@ all-scope trailing 원 보고서는 수량 수리 전 코드 계약84746d였고 
 - 분할매수 report/policy 원본을 유지한 native projection 재검증이 PASS했다. 이전 verification pointer를 별도 보존했다. 세대 `0a27e98626486dc68733fa94848e4e61b055ff1be1b5ec506a720e9121ce63ba`.
 - trailing 재생성358081ec…는 오늘 owner registry append와 입력이 아닌 vote lock 파일 증가로 마지막 inventory 검증이 실패했다. 실패 산출물을 보존한다. 원 prefix SHA와 전체 registry hash chain을 검증하고, source date 이후이면서 과거 owner와 겹치지 않는 BUY/SELL append만 역사 연구에서 분리한다. 과거 owner·날짜 변경, 원문 변경, 잘못된 chain, 알 수 없는 날짜는 계속 실패한다. vote의 실제 jsonl/gzip은 유지하고 lock 파일은 입력에서 제외한다. 실제 policy/PREOPEN/holding snapshot을 재작성하지 않는다.
 - 부분 매도/연구 통합409개, 동기 관측857개 테스트 PASS. 전체 native trailing 재생성·새 후보 preflight·승인된 재기동·최종 PID/observer 검증은 이 기록 시점 진행 중이다. 수량 비용 결손과 holding first-crossing5건은 원천 OPEN이다.
+
+추가 검토에서 registry의 빈 줄을 event 수로 세는 경계를 보완했다. 같은 날짜 append가 빈 줄 때문에 건너뛰어질 수 없도록 native parser와 같은 유효 행 수를 사용하며 회귀를 추가했다. 중간6a083ab4c 연구 실행은 SIGINT로 종료하고 부분 산출물을 보존했다. 새 동기 관측기 바이트는 기존 original/selected 두 출처와의 정확한 SHA pair만 인계 허용 목록에 추가했다. 넓은 경로 허용이나 검증 생략은 없다. 추가350개 테스트 PASS이며 최종 후보로 다시 사전검사한다.

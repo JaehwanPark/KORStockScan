@@ -48,7 +48,7 @@ def historical_registry_generation_matches(path, generation, source_date):
                     or hashlib.sha256(prefix).hexdigest() != generation['sha256']):
                 return False
             events = OrderOwnerRegistry(path).verified_events_snapshot(max_bytes=MAX_REGISTRY_BYTES)
-            count = prefix.count(b'\n')
+            count = sum(bool(line.strip()) for line in prefix.splitlines())
             historical_owners = {
                 row.get('owner_id') for row in events[:count]
                 if date.fromisoformat(row['order_date']) <= cutoff

@@ -1435,6 +1435,12 @@ REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS = {('src/engine/sniper_state_handle
                                                                                                                'selector_sha256': '7b3bfea027c860e2fbe329b7ea193c1c10cb95875952ef21045bd687deeb435c'}}
 
 
+# Exact reviewed report-only synchronous lineage extension; see 2026-10-19 repair audit.
+REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e', '1c0746f95b03e908ad867540af945d0bfb1abd927d34a8d89954634e6c56baf4'), ('60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23', '1c0746f95b03e908ad867540af945d0bfb1abd927d34a8d89954634e6c56baf4'))
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1524,6 +1530,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
+        if pair in REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ()):
+            changed.append(name)
+            continue
         if pair in (REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES.get(repository_name(name)),
                     REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(repository_name(name)),
                     REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(repository_name(name)),

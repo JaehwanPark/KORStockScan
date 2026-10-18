@@ -51,11 +51,13 @@ def fixture(tmp_path, monkeypatch):
     return data,costs,trade,receipts['1']
 
 
-@pytest.mark.parametrize('mutation', ['future_owner', 'historical_owner', 'historical_date', 'rewrite', 'broken_chain'])
+@pytest.mark.parametrize('mutation', ['future_owner', 'historical_owner', 'historical_date', 'historical_after_blank', 'rewrite', 'broken_chain'])
 def test_closed_registry_prefix_accepts_only_unrelated_future_owners(tmp_path, monkeypatch, mutation):
     from datetime import date, timedelta
     data, costs, trade, _ = fixture(tmp_path, monkeypatch)
     path = data/'runtime/order_owner_registry.jsonl'
+    if mutation == 'historical_after_blank':
+        path.write_bytes(b'\n' + path.read_bytes())
     generation = adapter.byte_generation(path)
     future = (date.fromisoformat(DAY) + timedelta(days=1)).isoformat()
     with adapter.Source(data, cost_data_root=costs, registry_source_date=DAY) as prepared:
@@ -70,7 +72,7 @@ def test_closed_registry_prefix_accepts_only_unrelated_future_owners(tmp_path, m
             context = OwnerOrderContext(owner_type='main_scalping', owner_id=owner,
                 position_id=owner, client_intent_id='later-' + mutation)
             OrderOwnerRegistry(path).reserve(context=context, symbol=trade['code'], side='BUY',
-                quantity=1, route='KRX', order_date=DAY if mutation == 'historical_date' else future)
+                quantity=1, route='KRX', order_date=DAY if mutation in {'historical_date', 'historical_after_blank'} else future)
         expected = mutation == 'future_owner'
         assert adapter.historical_registry_generation_matches(path, generation, DAY) is expected
         old = [{'path': str(path), 'generation': generation}]
