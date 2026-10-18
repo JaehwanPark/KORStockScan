@@ -6,6 +6,7 @@ Git identity and unchanged bytes. It issues no operational handoff or PID claim.
 """
 from __future__ import annotations
 
+import ast
 from datetime import date
 import hashlib
 import json
@@ -411,6 +412,53 @@ def _historical_code_refs(manifest):
     return refs
 
 
+_DELAY_CONTRACT_OWNER = 'src/engine/scalping/pre_submit_delay_initial_policy.py'
+
+
+def _delay_contract_paths(raw):
+    """Read the immutable origin declaration without importing its module."""
+    declarations = [node.value for node in ast.parse(raw).body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == 'CONTRACT_PATHS' for target in node.targets)]
+    if len(declarations) != 1 or not isinstance(declarations[0], ast.Tuple):
+        raise ValueError('startup_delay_native_contract_declaration_invalid')
+    paths = ast.literal_eval(declarations[0])
+    if (not 1 <= len(paths) <= 128 or any(not isinstance(path, str)
+            or not path.startswith('src/') or not path.endswith('.py')
+            or str(Path(path)) != path or '..' in Path(path).parts for path in paths)
+            or len(set(paths)) != len(paths) or _DELAY_CONTRACT_OWNER not in paths):
+        raise ValueError('startup_delay_native_contract_declaration_invalid')
+    return list(paths)
+
+
+def _attest_delay_inventory(selected, commit, records, sources):
+    """Parent-only exact Git origin; the child consumes no Git subprocess."""
+    import subprocess
+    if not records:
+        return None
+    selected = Path(selected)
+    if (selected.resolve(strict=True) != selected or not _hex(commit, 40)
+            or _git_head(selected) != commit):
+        raise ValueError('startup_delay_native_inventory_origin_changed')
+    raw = subprocess.check_output(['git', '-C', str(selected), 'show', commit + ':' + _DELAY_CONTRACT_OWNER])
+    paths = _delay_contract_paths(raw)
+    inventory = {}
+    for relative in paths:
+        path = selected / relative
+        original = raw if relative == _DELAY_CONTRACT_OWNER else subprocess.check_output(
+            ['git', '-C', str(selected), 'show', commit + ':' + relative])
+        expected = hashlib.sha256(original).hexdigest()
+        if path.resolve(strict=True) != path or _sha(path) != expected:
+            raise ValueError('startup_delay_native_code_git_changed')
+        if sources.setdefault(str(path), expected) != expected:
+            raise ValueError('startup_delay_native_source_conflict')
+        inventory[relative] = expected
+    if any(item.get('native_code_inventory') != inventory for item in records.values()):
+        raise ValueError('startup_delay_native_code_inventory_invalid')
+    return dict(schema='startup_delay_native_inventory_git_v1', origin_commit=commit,
+        selected_release_root=str(selected), declaration_path=str(selected/_DELAY_CONTRACT_OWNER),
+        declaration_sha256=inventory[_DELAY_CONTRACT_OWNER], contract_paths=paths, code_hashes=inventory)
+
+
 def bind_main_preparation(root, commit, data_root, intake):
     """Parent-only Git attestation after this invocation's full native verify."""
     import subprocess
@@ -505,19 +553,15 @@ def bind_main_preparation(root, commit, data_root, intake):
         for ref in item['artifacts'].values():
             if sources.setdefault(ref['path'], ref['sha256']) != ref['sha256']:
                 raise ValueError('startup_delay_native_source_conflict')
-        for relative, expected_sha in item['native_code_inventory'].items():
-            path = selected / relative
-            git_sha = hashlib.sha256(subprocess.check_output(
-                ['git', '-C', str(selected), 'show', original_commit + ':' + relative])).hexdigest()
-            if _sha(path) != expected_sha or git_sha != expected_sha:
-                raise ValueError('startup_delay_native_code_git_changed')
-            sources[str(path)] = expected_sha
+    delay_inventory = _attest_delay_inventory(selected, original_commit,
+        closure.get('delay_selections', {}), sources)
     proof = dict(schema=MAIN_PROOF_SCHEMA, target_date=day, policy_path=str(policy),
         policy_sha256=bundle['bundle_sha256'], policy_file_sha256=_sha(policy),
         execution_release_root=str(root), execution_release_commit=commit,
         selected_release_root=str(selected), selected_release_commit=original_commit,
         original_code_hashes=expected, runtime_code_hashes=actual, inventories=inventories,
         inventory_git_attestations=inventory_attestations,
+        delay_inventory_git_attestation=delay_inventory,
         historical_semantic_code_sources=histories,
         source_hashes=sources, closure=closure,
         native_verification={k: v for k, v in native.items() if k != 'native_machine_closure'},
@@ -797,11 +841,27 @@ def _main_context(*, digest_only=False):
 
 
 def _delay_selection_records(proof):
-    from src.engine.scalping import pre_submit_delay_initial_policy as I
     from src.engine.infrastructure.validation_digest_session import identity
     records = proof['closure'].get('delay_selections', {})
     if not isinstance(records, dict) or len(records) > 16:
         raise ValueError('startup_delay_selection_closure_invalid')
+    origin = proof.get('delay_inventory_git_attestation')
+    if records:
+        selected = Path(proof['selected_release_root'])
+        declaration = selected/_DELAY_CONTRACT_OWNER
+        if (not isinstance(origin, dict) or origin.get('schema') != 'startup_delay_native_inventory_git_v1'
+                or origin.get('origin_commit') != proof['selected_release_commit']
+                or origin.get('selected_release_root') != str(selected)
+                or selected.resolve(strict=True) != selected
+                or _git_head(selected) != proof['selected_release_commit']
+                or origin.get('declaration_path') != str(declaration)
+                or declaration.resolve(strict=True) != declaration
+                or _sha(declaration) != origin.get('declaration_sha256')
+                or proof['source_hashes'].get(str(declaration)) != origin.get('declaration_sha256')
+                or origin.get('contract_paths') != _delay_contract_paths(_read(declaration))
+                or not isinstance(origin.get('code_hashes'), dict)
+                or set(origin['code_hashes']) != set(origin['contract_paths'])):
+            raise ValueError('startup_delay_native_inventory_attestation_invalid')
     for key, item in records.items():
         if (not isinstance(item, dict) or item.get('schema') != 'startup_native_delay_selection_v1'
                 or item.get('run_id') != proof['closure']['run_id']
@@ -839,7 +899,7 @@ def _delay_selection_records(proof):
                     ('qualified_projection_ref', 'partitions_ref', 'cells_ref')}):
             raise ValueError('startup_delay_selection_binding_invalid')
         inventory = item.get('native_code_inventory')
-        if (not isinstance(inventory, dict) or set(inventory) != set(I.CONTRACT_PATHS)
+        if (not isinstance(inventory, dict) or inventory != origin['code_hashes']
                 or _digest(inventory) != item.get('native_code_sha256')):
             raise ValueError('startup_delay_native_code_inventory_invalid')
         for relative, expected in inventory.items():

@@ -479,6 +479,9 @@ def test_native_sharded_delay_preparation_delegates_observed_rebuild_in_real_iso
         main['proof']['source_hashes'][str(path)] = sha
     for ref in collected['artifacts'].values():
         main['proof']['source_hashes'][ref['path']] = ref['sha256']
+    main['proof']['delay_inventory_git_attestation'] = C._attest_delay_inventory(
+        request_fixture['selected'], request_fixture['original_commit'],
+        namespace['closure']['delay_selections'], main['proof']['source_hashes'])
     req = request_fixture['request']
     req['source_hashes'].update(main['proof']['source_hashes'])
     req['candidate_code_handoffs']['pre_submit_delay']['policy_sha256'] = policy['policy_sha256']
@@ -743,3 +746,85 @@ def test_logical_source_rechecks_native_selected_rows_and_unknown_db_keeps_full_
     logical={}
     assert M._sources(unrelated,logical_source_receipts=logical)=={str(unrelated):C._sha(unrelated)}
     assert logical=={}
+
+
+@pytest.fixture(scope='module')
+def delay_contract_origins(tmp_path_factory):
+    """Exact historical/current Git bytes, committed into private checkouts.
+
+    These are source-inventory fixtures, not native selection/P5 verdicts.
+    """
+    result = {}
+    for label, revision, count in (('original', '900234d791b0bf31797cd4e823d0ae40296f790b', 27),
+                                   ('current', 'HEAD', 28)):
+        root = tmp_path_factory.mktemp('delay-origin-' + label)
+        raw = subprocess.check_output(['git', '-C', str(ROOT), 'show', revision + ':' + C._DELAY_CONTRACT_OWNER])
+        paths = C._delay_contract_paths(raw)
+        assert len(paths) == count
+        inventory = {}
+        for relative in paths:
+            value = subprocess.check_output(['git', '-C', str(ROOT), 'show', revision + ':' + relative])
+            path = root/relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(value)
+            inventory[relative] = hashlib.sha256(value).hexdigest()
+        _git(root, 'init', '-q')
+        commit = _commit(root, 'Exact ' + label + ' delay inventory bytes')
+        records = {str(target): {'native_code_inventory':dict(inventory)} for target in (None, DAY)}
+        result[label] = dict(root=root, commit=commit, inventory=inventory, paths=paths, records=records)
+    assert set(result['current']['paths']) - set(result['original']['paths']) == {
+        'src/engine/infrastructure/main_policy_loading.py'}
+    return result
+
+
+@pytest.mark.parametrize('label', ['original', 'current'])
+def test_delay_inventory_attests_exact_origin_declaration_not_current_keys(delay_contract_origins, label):
+    case = delay_contract_origins[label]
+    sources = {}
+    proof = C._attest_delay_inventory(case['root'], case['commit'], case['records'], sources)
+    assert proof['contract_paths'] == case['paths']
+    assert proof['code_hashes'] == case['inventory']
+    assert proof['origin_commit'] == case['commit']
+    assert proof['declaration_sha256'] == case['inventory'][C._DELAY_CONTRACT_OWNER]
+    assert sources == {str(case['root']/path): sha for path, sha in case['inventory'].items()}
+
+
+@pytest.mark.parametrize('damage', ['missing', 'extra', 'digest', 'mixed_old_new',
+                                   'mixed_new_old', 'origin_commit', 'source_conflict'])
+def test_delay_inventory_rejects_unknown_or_mixed_origin(delay_contract_origins, damage):
+    from copy import deepcopy
+    case = delay_contract_origins['current' if damage == 'mixed_new_old' else 'original']
+    records = deepcopy(case['records']); commit = case['commit']; sources = {}
+    first = next(iter(records.values()))['native_code_inventory']
+    if damage == 'missing': first.pop(next(iter(first)))
+    elif damage == 'extra': first['src/engine/infrastructure/main_policy_loading.py'] = '0'*64
+    elif damage == 'digest': first[next(iter(first))] = '0'*64
+    elif damage == 'mixed_old_new': first.update(delay_contract_origins['current']['inventory'])
+    elif damage == 'mixed_new_old': records[next(iter(records))]['native_code_inventory'] = delay_contract_origins['original']['inventory']
+    elif damage == 'origin_commit': commit = '0'*40
+    else: sources[str(case['root']/C._DELAY_CONTRACT_OWNER)] = '0'*64
+    with pytest.raises(ValueError, match='startup_delay_native_'):
+        C._attest_delay_inventory(case['root'], commit, records, sources)
+
+
+@pytest.mark.parametrize('damage', ['dirty', 'symlink', 'unknown_committed'])
+def test_delay_inventory_requires_actual_files_and_exact_git_objects(delay_contract_origins, tmp_path, damage):
+    import shutil
+    case = delay_contract_origins['original']
+    root = tmp_path/'source'; shutil.copytree(case['root'], root)
+    path = root/C._DELAY_CONTRACT_OWNER
+    if damage == 'symlink':
+        saved = path.with_suffix('.saved'); path.rename(saved); path.symlink_to(saved)
+        commit = case['commit']
+    else:
+        path.write_bytes(path.read_bytes() + b'\n# Changed origin file.\n')
+        commit = _commit(root, 'Unknown new source bytes') if damage == 'unknown_committed' else case['commit']
+    with pytest.raises(ValueError, match='startup_delay_native_'):
+        C._attest_delay_inventory(root, commit, case['records'], {})
+
+
+@pytest.mark.parametrize('expression', ["('src/unknown.py',)", "(OWNER,)",
+    "('src/../bad.py', OWNER)", "(OWNER, OWNER)", "[OWNER]", "(False, OWNER)"])
+def test_delay_inventory_declaration_is_literal_unique_and_canonical(expression):
+    declaration = expression.replace('OWNER', repr(C._DELAY_CONTRACT_OWNER))
+    if expression == '(OWNER,)': declaration = '(dynamic_path,)'
+    with pytest.raises(ValueError):
+        C._delay_contract_paths(('CONTRACT_PATHS = ' + declaration).encode())
