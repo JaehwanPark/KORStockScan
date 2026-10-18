@@ -2,6 +2,8 @@
 
 작성일: 2026-10-10 KST
 
+최신 연구 상태: **2026-10-18의 §16 후속 실험·진입 이력·비용 소비 수리**, [후속 실행 검토](../audits/main-holding-exit-followup-research-execution-review-2026-10-18.md)를 따른다. 전체20,840범위를 유지하고495행의 경로·진입 이력·등록 연관 분석과 연구 배분비용8건을 실제 소비했다. 최종 대상 회귀284 PASS이며 초기정책 변경·신규 경제 개선·운영 발행/PID 소비는 없다. §14 실행안·§15 선행 실제 실행과 아래10/10 완료·배포 기록은 각 시점의 근거로 보존한다.
+
 최신 수용 정정(10/10 21:27 KST): [정책 생성 구조 재점검](../audits/main-trailing-delay-policy-generation-structural-review-2026-10-10.md)의 TG1–TG4는 미해결이다. 아래 완료는 부모 계승 발행·분할 처리·검증된 운영 준비의 이력이다. 정상 완료 adapter의 원 holding-AI 증빙 누락, 신규 classifier SHA와 과거 pin의 순환 일치 조건, 대용량 시장 후보 미전달 및 일반 악화 전수 veto를 검증하지 못했으므로 **신규 학습 정책 생성까지 전체 구현 완료로 해석하지 않는다. 데이터 축적만으로 닫을 수 없다.** 보완 우선순위·종료 검사는 위 감사와 잔여계획의 최신 상태를 따른다.
 
 상태: **AT0–AT7·TP1–TP7와 잔여 W0–W5의 구현·반복 리뷰·정식 발행·승인 배포·기동 준비를 완료했다.** `MainAllScopeTrailingReplay`는 완료다. 최종 릴리스는 `main-trailing-delay-residual-20261010-v6` / `78f2c1d784fd5043d5b5bc0fedd7b963f8fe42d4`이며 [실행 감사](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)와 [최종 준비 영수증](../../data/report/main_trailing_delay_deployment/2026-10-10/final-residual-readiness.json)을 따른다. 10/12 실제 PID 소비와 실현 경제성은 미관측이며 기존 적용일 owner에서 확인한다. 아래 이전 문서·부분 배포 기록은 당시 이력이다.
@@ -422,3 +424,310 @@ AT-F7–AT-F10을 추가하고 TP1–TP7을 실제 loader·observer·classifier�
 ## 잔여 구현 실행 기록 — 2026-10-10
 
 [반복 리뷰·실제 원천·성능 근거](../audits/main-trailing-delay-residual-implementation-review-2026-10-10.md)를 따른다. 전수 streaming/shard·전역 중복/split·부모 승계와 0초 초기값·정식 writer/consumer 연결을 구현했다. 코드 수용과 W5 발행/chain, 10/12 자연 PID 수용을 분리한다. 최종 v6 발행·native finalization DONE·10/12 `current_full_contract=pass`까지 수용했다. 실제 적용일 PID·경제 결과만 별도 자연 관측으로 남는다.
+
+## 14. 2026-10-18 연구 실행안 — 원천 확보와 생산·소비 계약부터 경제 비교까지
+
+### 14.1 연구 질문·범위·확인 기준
+
+연구 질문은 **동일한 진입·수량·후행 관측에서 청산만 변경했을 때 비용 후 기대수익과 원화 순이익이 개선되는가**다. 기계 진입 라벨·보조판정 원응답·membership을 보존하고 별도 보유 연구로 연결한다. 진입 선택이나 수량 변경의 효과를 청산 개선으로 합산하지 않는다. 실험은 시작 전 보유 판단, 시작 후 이익 보존, 신호 이후 체결 손실을 나누며 세 구간별 모집단과 손익 기여를 보고한다.
+
+조사 기준은 workspace `7c241ea21619ce3153f1a338f1b846b0313a894f`의 아래 함수들이다. 선택 릴리스는 `900234d791b0bf31797cd4e823d0ae40296f790b`, 다음 운영일은10/19, selector의 `actual_pid_consumed=false`다. 이 기록은 운영 PID 확인이나 자연 데이터 전수 재생 결과가 아니다. 병행 수정은 보존하고 실제 착수 때 코드·파일 SHA를 다시 고정한다.
+
+전체 종목·시장 범위는 §3의 universe/session/route/custody를 그대로 사용한다. **전체 범위 처리, 실제 관측 coverage, 경제 평가 적격성은 서로 다른 분모**다. 자료가 없는 범위까지 결과와 사유는 남기되 전 종목의 연속 tick/depth를 이미 보유한다고 가정하지 않는다. 연구기간은 clean baseline과 현행 forward 경계 모두를 만족해야 하며 현재 후자는2026-09-29다. 더 오래된 자료는 원천 복원·계약 검증용으로 분리한다.
+
+아래 `HX-*`, `R*`, 원천 상태와 산출물 이름은 이 실행안의 제안 식별자다. 현재 런타임에 이미 존재하는 enum·field·CLI라고 해석하지 않는다. 현행 코드의 실제 이름은 §14.3에서 별도로 명시한다.
+
+### 14.2 현재 확인한 계약 공백과 선행 수리
+
+| ID | 현재 코드에서 확인한 사실 | 필요한 보완과 종료 검사 |
+| --- | --- | --- |
+| HX-01 | [source assembler](../../src/engine/automation/main_trailing_source_assembler.py)의 `_trace_rows()`는 native event에서 `planned_qty`, `buy_basis_krw`, `entry_cost_model`, `execution_plan_sha256`, `entry_depth_verified`, `trailing_entry_context`를 읽는다. 이 조사에서 `execution_plan_sha256`·`entry_depth_verified`의 운영 native 생산 경로는 확인되지 않았다. | 실제 실행계획 owner가 생산하는 불변 receipt를 exact attempt에 연결한다. 소비 필드를 임의로 채우거나 실제 주문이 없는 기회를 제출됐다고 표시하지 않는다. 실제 producer→저장→decode→assembler의 비어 있지 않은 fixture가 required field를 모두 공급해야 한다. |
+| HX-02 | 같은 함수는 event의 `universal_trailing_quote` 하나로 `path_events`를 시작한다. 보유 전용 `_observe_scalp_trailing_input_transition()`에는 quote 생산이 있으나 미체결 기회의 연속 후행 stream을 이 함수에 연결하는 경로는 확인되지 않았다. | 기존 공유 market-data owner의 route/epoch별 후행 저장을 기회와 연결한다. 시작 quote 하나를 후행 경로로 인정하지 않는다. 실제 SELL 뒤 연장도 같은 자료 계약을 요구한다. 누락·종료·구독 실패가 명시된 구간 manifest와 실제 후행 event 소비로 닫는다. |
+| HX-03 | CF의 `entry_at`은 현재 보조판정 `decision_ts`다. 실제 `freeze_entry_operating_context()`의 계획·비용 모델은 제출 직전에 생성된다. `freeze_shared_entry_context()`도 accepted-entry의 `completed_epoch`를 anchor로 사용한다. | 결정·계획 가용·모델 체결·최초 실제 체결 시각을 분리한다. 나중에 생성된 계획을 PASS 시점 가상 체결에 소급 사용하지 않는다. 실제 pin 시점과 문서의 첫 BUY 표현을 명시적으로 정합화한다. |
+| HX-04 | [event logger](../../src/utils/pipeline_event_logger.py)의 `emit_pipeline_event()`는 `fields` 값을 문자열로 저장한다. 보유 quote/context/pin은 JSON 문자열이며 `completed_sources()`가 이를 decode한다. | raw JSON object라고 가정하는 소비를 금지한다. 저장 타입→decode 타입→정규 타입의 단일 adapter를 검사한다. 원문·SHA는 보존하고 잘못된 JSON, `"False"`, `"None"`, 숫자 문자열을 암묵적 truthy/0으로 처리하지 않는다. |
+| HX-05 | `_trailing_entry_cost_model.known_at`의 실제 생산값은 `operating_context.frozen_at`인 timezone 포함 ISO 문자열이다. [ADD 모델](../../src/engine/scalping/holding_vote_exit_models.py)의 `record_generation()`은 `finite(known_at)` 숫자만 받고, universal `_replay_cursor()`도 `number(known_at)`로 ISO를 거부한다. 반대로 universal의 `known_at=None`은 해당 검사를 건너뛴다. | `main_stop_replay.cost_known_epoch()`와 같은 명시적 ISO/epoch adapter를 연결한다. ADD/universal/stop에서 정상 ISO와 같은 epoch의 결과가 같고 naive/future/missing/nonfinite는 거부해야 한다. 원 시각은 보존한다. ADD 세대 삭제와 `cost_model_not_known_at_entry` 오제외 반례를 포함한다. 실제 함수의 무I/O 최소재현에서 ISO 거부/epoch 통과 차이를 확인했으며 코드 수리·pytest 수용은 아직 아니다. |
+| HX-06 | 보유 관측은 상태변화/heartbeat와 position sample 상한을 갖는다. universal replay는 native depth sequence 연속성을 검사한다. | sample 번호와 native depth sequence를 구분한다. bounded history의 중첩분은 원 sequence로 중복 제거하고 빠진 구간은 복구 가능한 source에만 연결한다. 단순 상한 확대·sequence 재번호화로 연속성을 만들지 않는다. |
+| HX-07 | `_replay_cursor()`는 depth 부족에 따른 부분 매도 후 `partial_depth_residual_unobserved`로 검열한다. 실제/가상 ADD, 잔량 체결을 모두 끝까지 지원한다고 단정할 수 없다. | 미지원 branch는 census와 검열에 남긴다. 잔량 재생을 확장할 때 주문 가격/유효기간·다음 depth·체결 중복 소비 방지·수량 보존을 함께 구현한다. 지원 전에는 해당 후보의 종결 손익을 만들지 않는다. |
+| HX-08 | [exact 비용 reader](../../src/engine/lifecycle/broker_cost_reconciliation.py)는 `runtime/holding_actual_costs/<completion_date>/<record_id>.json`을 읽지만 이 조사에서 해당 schema의 자동 writer는 확인되지 않았다. 별도 공식 전체 활동 대사 producer는 존재한다. | reader가 있다는 이유로 전 거래의 exact-execution 비용 파일을 필수 입수 목표로 삼지 않는다. 실제 producer가 있는 whole-position 비용, 연구 배분, 모델 비용을 §14.7대로 분리한다. 미확인 writer의 자연 생산을 기다리는 종료 조건을 두지 않는다. |
+| HX-09 | [자동 원천 테스트](../../src/tests/test_main_trailing_source_assembler.py)의 native binding 사례는 처리 `complete`와 함께 `common_ids_ref.count == 0`을 기대한다. | 처리 완료/부모 계승과 경제 재생 완료를 분리한다. 새 생산 연결은 실제 producer 출력으로 적격 actual·CF fixture가 각각 1개 이상 평가되는 테스트와 source-gap 제외 테스트를 모두 통과해야 한다. 이는 코드 계약 테스트이며 자연 표본 최소치나 새 경제 승인 문턱이 아니다. |
+| HX-10 | `completed_sources()`의 leg 부재 fallback은 `buy_fill_quantity`를 읽지만 완료 execution ledger의 실제 생산명은 `buy_filled_qty`다. | fill leg가 정상인 기존 행은 보존한다. leg가 없는 행은 producer/schema를 확인한 versioned mapping과 수량/금액 대사 없이 복구하지 않는다. 올바른 이름이 존재해도 최종 누적 수량을 최초 진입 수량으로 간주하지 않는다. |
+| HX-11 | `broker_cost_source._position_result()`는 whole-position `actual_cost_reconciled`에 `source_sha256`·`receipt_sha256`을 생산한다. trade review는 이를 전달하지만 universal actual replay는 `raw_sha256`도 무조건 요구한다. | exact-execution과 whole-position scope별 원 provenance를 검증하는 adapter를 마련한다. `source_sha256`을 의미 확인 없이 `raw_sha256`으로 복사하지 않는다. 실제 whole-position producer→완료 projection→재생의 정상 fixture와 변조/다중 owner 거부 fixture로 닫는다. |
+
+HX 항목은 확인한 코드 경로의 수리 요구다. 현재 모든 운영 거래에서 같은 장애가 발생했다는 빈도·경제 피해 주장은 하지 않는다. 10/18 사용자 정정에 따라 별도 보유·재생 계약 수리 세션을 전제로 하지 않는다. 이번 `MainAllScopeTrailingReplay`가 연구에 필요한 생산/소비·ADD/비용 시각 수리를 직접 소유한다. 기존 checklist 식별자는 별도 수리의 진행/완료 증거가 아니다. 과거 미저장 원천은 코드 수리와 구별하고 다른 연구의 공통 함수 변경은 실제 diff와 테스트로 조율한다.
+
+### 14.3 변수·생산자·소비자 사전
+
+R0에서 아래 실제 이름을 바탕으로 기계 검증 가능한 사전을 만든다. 각 항목에는 `producer module/function/callsite`, 저장 artifact와 JSON path, schema/version, 소비 module/function, wire/저장/정규 타입, 단위·부호, event/known 시각, identity/route, null 의미, 변환 함수, 해당 fixture를 기록한다. 이 메타데이터는 제안 연구 산출물이며 새로운 runtime 필드가 아니다.
+
+| 현행 값·필드 | 실제 생산/저장 | 실제 소비·의미와 검사 |
+| --- | --- | --- |
+| `machine_observation_sha256`, `evaluation_attempt_id`, `canonical_opportunity_id` | `ai_decision_payloads`의 native 기계 관측과 `ai_decision_trace`의 연결 | assembler `_native_index()`/`_trace_rows()`; symbol/time 근접 매칭 금지, 원 observation hash와 attempt 일치 |
+| `entry_mechanistic_policy_decision.event` | 원 기계 평가 envelope | `_trace_rows()`가 참조하는 event 위치. 보조 trace 최상위와 혼동 금지 |
+| `decision_ts`, `entry_ai_risk_verdict` | `ai_decision_trace`의 timezone 포함 문자열·canonical verdict | projected `auxiliary_verdict`, CF `auxiliary_completed_at`로 변환. PASS/CAUTION/VETO/INSUFFICIENT 원문 보존 |
+| `planned_qty` → `position.qty` | 현재 CF는 native event에서 읽음; 해당 native 생산 연결을 HX-01에서 확정 | 양의 정수 주수. 실제 `buy_qty`, 목표 수량, probe 수량과 구분 |
+| `buy_basis_krw` | CF는 native event, 실제 완료는 fill leg 금액/수량 정규화 | 총 매수대금 원화. 주당 `buy_price`를 그대로 대입하지 않음 |
+| `execution_plan_sha256`, `entry_depth_verified` | 현재 CF required consumer는 있으나 producer 연결 미확인 | 원 실행계획·당시 ask/잔량·유효기간·route를 검증한 receipt에서만 생성. hash 존재/boolean true만으로 경제 적격화 금지 |
+| `_trailing_entry_cost_model` → quote.`entry_cost_model` → position.`cost_model` | submit 전 `freeze_entry_operating_context()` → Main 보유 observer → `completed_sources()` | `buy_cost_krw`는 원화, `sell_cost_rate`는 비율(0.0023=0.23%), `known_at`은 원 ISO를 보존하고 정규 epoch와 분리 |
+| `trailing_replay_cost_model` | trade projection에 있으면 `completed_sources()`가 우선 소비 | 다른 모델보다 우선하는 이유·producer·동일 원 receipt를 검사. 이름이 존재한다는 이유로 0비용 기본값을 넣지 않음 |
+| `universal_trailing_quote` | `_observe_scalp_trailing_input_transition()` → `_log_holding_pipeline()` → 문자열 JSON | `completed_sources()` decode 후 `kind=QUOTE` 검사. CF native event의 같은 이름에 자동 존재한다고 간주 금지 |
+| quote.`event_at`, `known_at` | `quote_projection()`에 전달한 원 호가/로컬 가용 epoch seconds | 거래소 HHmmss, `received_at_ms`, 로그 기록시각과 구분. 계산 가능한 시각은 known_at 기준 |
+| quote.`sequence`, `sample_sequence` | 각각 native depth `route_sequence`, 보유 관측 sequence | 재생 연속성은 native 원천 기준. heartbeat 번호로 depth 연속성을 증명하지 않음 |
+| quote.`route`, `item`, `transport_epoch` | 동일 snapshot의 `market_route`, 원 item, 연결 epoch | `recent_depth_ticks_by_route`/`recent_trade_ticks_by_route`와 함께 검증. symbol 6자리만으로 KRX/NXT/SOR를 병합하지 않음 |
+| quote.`bid`, `ask`, `bid_qty`, `trade_peak_price` | 실행 가능 호가·잔량·관측 고점을 `quote_projection()`이 봉인 | 가격 원화, 잔량 주수. trade peak를 그 가격에서 매도 가능한 bid로 간주 금지 |
+| `sell_execution_plan.valid_until/limit_price/quantity/quote_source_sha256` | quote projection의 제한된 재생 계획 | 실제 제출 receipt 아님. 후보별 주문 가정·잔량·유효기간 평가에만 사용 |
+| `trailing_entry_context`, `trailing_situation_pin` | `freeze_shared_entry_context()`/상황 pin → position/event JSON 문자열 | `pin_context()`/`validate_pin()`; `feature_sha256`, `classifier_sha256`, `classification_origin_hash`의 서로 다른 대상을 검증 |
+| `buy_fill_legs`, `sell_fill_legs` | canonical trade projection 및 검증된 체결 leg | `completed_sources()`의 정상 첫 BUY 시각은 `buy_fill_legs[0].at`에서 읽음. ADD/종결의 체결 관측 순서와 주문 ACK 순서를 구별 |
+| `first_buy_at_epoch` | 이번 조사에서 `completed_sources()` fallback reader만 확인; 해당 projection producer 미확인 | 존재를 가정해 required input으로 두지 않음. leg 없는 역사 행의 진입시각을 손익/로그 시각으로 추정하지 않음 |
+| `holding_vote_source`, `holding_vote_replay_ref` | `holding_vote_replay_source.runtime_source()` 및 `assemble_votes()` | 원 요청·응답·모델·policy·crossing hash를 exact join. 후보가 다른 질문을 만들면 원 응답 재사용 금지 |
+| `actual_cost_reconciliation` | exact receipt 대사 또는 별도 whole-position 공식 활동 대사 | `status`, `exact_pnl_krw`, `exact_profit_rate`, `receipt_sha256`와 scope별 source provenance. 현재 whole-position `source_sha256`/consumer `raw_sha256` 불일치는 HX-11 수리 대상. 연구 배분을 actual로 변환 금지 |
+
+필드가 다른 stage에서 같은 이름으로 쓰이면 stage/schema를 사전 key에 포함한다. `entry_depth_verified`처럼 소비만 확인한 항목은 `producer_unverified`로 명시하며 구현 완료 목록에 넣지 않는다. rename은 단일 versioned adapter에만 두고 alias 기간·충돌 시 거부·제거 조건을 기록한다. canonical 입력에는 누락/오타/단위 불일치를 검사하되 vendor 원문에 새 필드가 생겼다는 이유만으로 전체 원천을 폐기하지 않는다.
+
+현재 quote의 `event_at` 인수는 거래소 체결시각이 아니라 `bid_received_at` 로컬 수신시각이다. `trade_peak_price`도 runtime `peak_price` 인수이므로 이름만으로 특정 원천의 체결 최고가라고 보증하지 않는다. `ws_data` compact는 해당 route의 top-of-book/tape projection이며 원 10호가 전체·숨은 잔량·거래소 주문 대기열을 보관한 자료가 아니다.
+
+CF 계획·후행 연결은 원 native event를 수정하지 않고 원 ID/hash를 참조하는 별도 versioned receipt로 생산한다. 최초 ENTER_NOW부터 기존 공유 원천의 구간 참조를 붙이고, 보조 결과/계획 가용/관측 종료를 후속 receipt로 연결한다. PASS 시점 이전의 필요한 구간을 확보하지 못했으면 그 공백을 그대로 남긴다. 현재 `entry_at=decision_ts`와 새 modeled fill anchor를 동일한 필드 의미로 섞지 않고 schema 변경·호환 adapter를 함께 검증한다.
+
+### 14.4 시각·수량·원천 가용성의 불변식
+
+1. 원본 ISO·거래소 시각·수신 epoch/ms는 그대로 보관한다. 정규화는 명시적 timezone과 단위가 있는 adapter에서 한 번 한다. naive datetime의 의미가 source 계약에 없으면 현재 KST로 추정하지 않는다.
+2. 기존 `decision_ts`와 별도로 계획 생성/가용, 모델 entry fill, 실제 first BUY를 구별한다. CF 모델 체결은 `max(원 신호, 유효 PASS 가용시각, 계획 가용시각)` 이후이면서 해당 계획의 유효구간 안이어야 한다. 사전에 동결된 유효 계획도 허용하되 원 attempt·route에 결속한다. 체결 이전 자료는 당시 state 준비에만, 체결 이후 자료는 후행 평가에 사용한다. 계획이 없으면 기회 census/가격경로 진단까지만 수행한다.
+3. 실제 entry context는 원 anchor를 보존한다. first BUY 전에 알려진 값만 사용하며, context 재생성이나 후보 classifier 학습에 미래 결과를 사용하지 않는다. 문서의 첫 BUY pin과 현재 accepted-entry anchor 차이를 숨기지 않는다.
+4. 모델 비용은 진입 당시 가용해야 한다. 실제/연구 정산 비용은 진입 이후 확정될 수 있지만 후보 학습 cutoff 이전에 알려진 버전만 사용한다. 실제 비용까지 `known_at ≤ entry_at`을 요구해 모든 정상 거래를 제외하지 않는다.
+5. target/probe/submitted/filled/cancel-confirmed/remaining 수량을 구별한다. 체결번호·주문번호·날짜·side·route·owner가 같은 원 receipt로 수량 보존을 검사하며 ACK나 현재 미체결 0만으로 과거 terminal을 만들지 않는다.
+6. manual handoff 시각 이후 자동 정책 재생은 검열한다. 수동 매도의 실제 경제 기록은 별도 owner로 보존한다. retired episode/widget 잔량은 Main에 편입하지 않는다.
+7. sampling 누락, 실제 무체결, 거래정지, 세션 종료는 다른 상태다. 수집 공백에 선형 가격/잔량 보간을 넣거나 source gap을 WEAK/no-fill/손익0으로 바꾸지 않는다.
+
+### 14.5 키움 원천의 확보 가능성 확인 절차
+
+공식 upstream은2026-10-18 확인 SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`다. 해당 tree에는 `kiwoom_docs`가 없으므로 문서가 있다고 가정하지 않고 packaged spec·SDK·Postman·공식 포털을 교차 확인한다. 확인한 API 존재와 해당 계좌·날짜의 실제 데이터 확보 성공은 별개다. 인증·실계좌 조회·구독은 이번 계획 검토에서 실행하지 않는다.
+
+각 원천은 다음 제안 분류로 관리한다. 원 API가 지원하는 능력과 로컬 보관 여부는 별도 열로 둔다.
+
+- `local_verified`: 원 bytes/원천일/route/identity/coverage가 검증돼 재사용 가능.
+- `official_fetchable_unverified`: 공식 조회 방법은 있으나 요청 날짜·페이지·계좌/경로의 실제 coverage는 아직 미확인.
+- `requires_live_capture`: 당시 수집해야 하는 자료. 기존 로컬 보관본이 있으면 복원 가능성을 먼저 검사.
+- `official_semantics_unconfirmed`: API 또는 필드는 있지만 필요한 귀속·시간·단위 의미가 공식 근거로 확정되지 않음.
+- `historical_unrecoverable`: 보관본·공식 조회 경로·기간을 확인한 뒤에도 필요한 과거 정보가 복원 불가능하다고 확정한 경우만 사용.
+
+세부 공식 원천 목록은 §14.12에 고정한다. 확보 가능 원천은 consumer가 사용하지 않는다는 이유로 누락시키지 않고 기존 adapter 유무·pagination·요청 날짜·route·writer·재시도 owner를 함께 기록한다. 반대로 문서에서 못 찾았다는 이유만으로 곧바로 확보 불가로 분류하지 않는다.
+
+수집/복원 순서는 **로컬 raw·lossless archive → 기존 검증 projection → 공식 날짜/기간 조회 → 앞으로의 자연 수집**이다. 복원 요청 원장에는 요청 범위, 원 endpoint/body, upstream SHA, 모든 continuation, 최초/최종 시각, 종목·시장별 covered interval, raw SHA, 정상 종료/제한 도달/미확인, 소비자가 사용할 수 있는 정밀도를 남긴다. pagination 상한 도달을 조회 완료로 표시하지 않는다. 동일 과거 gap에 새 근거 없이 반복 호출하지 않는다.
+
+공식 포털은 현재 국내 조회5회/초, 토큰별 WS1세션·실시간200종목을 안내한다. [공식 사용안내](https://openapi.kiwoom.com/intro). 기존 공유 limiter·활성 보유/실행 lease를 보존하고 연구용 구독이 이를 축출하지 못하게 한다. 모든 종목의 모든 시장을 동시에 연속 호가로 관측할 수 있다고 약속하지 않는다. 종목 마스터 전체와 모든 유효 route/session의 처리 대사를 유지하고, 실제 tick/depth 관측은 예산·수집기간·미관측 구간을 공개한다. 전 범위의 완전한 과거 order-book 재생이 필수라면 현재 원천의 한계를 명시하고 별도 데이터 제공 계약이 검증되기 전 완료를 주장하지 않는다.
+
+### 14.6 단계별 실행·책임·산출물
+
+아래 파일 이름은 격리 실행 root 아래의 제안 산출물이다. 기존 `source assembler → all_scope_research → holding report → handoff`가 유일한 정식 생산 경로이며 별도 경쟁 publisher를 만들지 않는다. 새 검증 코드가 필요하면 기존 automation/scalping/lifecycle 역할 패키지에 배치하고 engine root에 모듈을 추가하지 않는다.
+
+| 단계 | 실제 작업과 owner 경계 | 입력 → 산출물 | 종료 조건 |
+| --- | --- | --- | --- |
+| R0 계약 동결 | 연구 owner가 코드/정책/원천·공식 능력 사전 작성. 보유 수리 owner와 함수 단위 변경 소유권 대사 | 원 코드·기존 source → `source-contract-audit.json`, `source-capability-matrix.json`, `research-run-manifest.json` | required field별 producer/callsite/consumer/타입/단위/fixture 존재 또는 명시적 미지원. producer 없는 required consumer를 ready로 표시한 항목0 |
+| R1 모집단·복구 분류 | 기존 assembler/universe/native trace/체결 ledger를 같은 cutoff로 대사 | 전 종목×유효 route/session, 실제 보유, native 기회 → `population-census.json` 및 구간별 참조 | 전체 scope에 disposition, 실제·대체·CF·보조 대조군 분리, 중복/제외/미관측 분모 보존, 원천별 복구 작업 지정 |
+| R2 생산 계약 보완 | HX-01~11의 실제 producer/consumer 수리. 기존 보유 수리와 중복 작업 금지 | 실제 writer output → 봉인 input partition/원 receipt | 실제 serialize/decode 경유 계약 시험, 정상 비어 있지 않은 actual·CF fixture, 실패주입·review/fix/re-review 완료. 부재 raw를 fixture로 복구했다고 보고하지 않음 |
+| R3 제한 복원·수집 | 기존 공식 read adapter·공유 limiter·collector owner를 통해 허용된 원천 확보. 없는 adapter는 먼저 구현·리뷰 | 원 API/보관 자료 → raw·receipt·coverage manifest | 가능한 날짜/원천의 완료 또는 정확한 종료 사유, 원문 보존, 과거 수집 시각 위조0, 준비 root에만 새 세대 |
+| R4 기준 재현 | runtime 공통 trailing/strength/session/AI deferral 함수를 그대로 사용 | 검증된 actual 경로 → 기준 정책 decision/trigger/intent/fill/terminal 비교표 | 비교 가능한 decision·최초 crossing·수량 전이 일치. 비교 불가 구간은 검열. 실제 fill과 모델 fill의 차이는 실행 모델 오차로 별도 기록 |
+| R5 후보 실험 | §14.8의 등록된 단일축 후보·시간순 검증 | 같은 진입/수량/경로 → `paired-candidate-results`·상황별 진단 | 공통 적격 ID와 제외 민감도, 후보별 실제/CF·비용 등급, tail/자본 점유 및 runtime 성능 검사 |
+| R6 초기·후속 정책 생성 | 기존 상황 selector/부모 계승/장후 handoff만 사용 | 원 parent hash+평가 → 전체 scope 초기 bundle 또는 qualified successor | 범위 누락0, 부족 범위 parent_carry, CF를 actual로 승격0, 원 승인 초기값에 새 경제 gate 추가0 |
+| R7 정식 인계 | 기존 장후 owner가 정확 source/target date·strict/controller 인계. 배포·PID는 기존 승인 경로 | 연구 결과 → 정식 summary/정책 receipt → 별도 release/PID receipt | 코드 검증·연구완료·정식발행·배포·PID·자연경제 각각 별도 상태. 준비본만으로 실현 성과 완료 금지 |
+
+R0/R1/실험 등록과 이번 작업이 소유하는 보유 수리는 병행한다. R2/R3는 원천 종류별로 독립 진행한다. R4/R5에서 사용하는 계약만 선행 수리를 요구하며, 미지원 CF 때문에 정상 actual 전체를 중단하거나 반대로 CF 결손을 숨겨 완료하지 않는다. 전역 preflight/identity/source isolation 자체가 깨지면 전체 평가를 중단한다.
+
+실행 backlog는 당일 checklist의 `MainAllScopeTrailingReplay` 후속 owner가 연구 연결과 결과를 소유한다. 공통 연구 수리는 이번 owner가 처리하며, `DirectFamilyPreopenPolicyHandoff`의 실제 PREOPEN/PID acceptance는 그대로 유지한다. 과거 완료를 다시 여는 근거는 위 HX 신규 계약 공백이며 이미 완료된 일반 리뷰를 반복하기 위한 것이 아니다.
+
+### 14.7 실제·가상·비용 증거 수준
+
+`actual_completed`, `actual_entry_alternative_exit`, `enter_pass_opportunity_cf`를 분리한다. 보조 CAUTION/VETO는 별도 대조군으로 보존하며 현행 CF 경제 모집단의 PASS 조건을 조용히 넓히지 않는다. 모든 거래는 full/partial, ADD 포함 여부, 수동 이관, terminal/censored를 함께 표시한다.
+
+| 비용/경로 등급 | 허용 사용 | 금지 |
+| --- | --- | --- |
+| 거래별 확인 또는 유일하게 대사된 whole-position 실제 비용 | 확인된 실제 완료 순손익 | 비용 귀속이 불명확한 거래까지 실제 비용 확대 |
+| `broker_confirmed_total_allocated` 연구 배분 | 별도 보유 연구 소비 계약이 마련된 경우 연구 손익·민감도 | 현행 `economics_scope=initial_quantity_research_only`를 보유 actual 승인으로 전용, canonical 비용/profit_rate 덮어쓰기 |
+| entry 전에 동결된 모델 비용 | 기준/후보 동일 가정의 모델 비교 | 실제 확정 비용·실현 수익으로 표시 |
+| 실행 가능한 연속 tick/depth | 관측된 범위의 체결 가능성·정책 재생 | 숨은 잔량·queue position·시장 충격이 완전히 알려졌다는 주장 |
+| 체결 당시 BBO 또는 OHLC만 복원 | 가격경로 진단·사전에 정의한 상하한/민감도 | depth 없는 full fill, 같은 봉 고저 순서, 원 AI 응답/주문시각 합성 |
+
+확정 총비용 배분의 현재 소유권은 [10/17 비용 검토](../audits/initial-quantity-broker-cost-closed-loop-repair-review-2026-10-17.md)다. 재사용은 해당 기존 producer의 원 증거·배분 보존식을 유지한 별도 보유 연구 consumer 계약으로 설계하고, 이 문서만으로 승인 범위를 변경하지 않는다. 실제 비용이 없는 거래도 모집단에서 삭제하지 않으며 지원되는 모델 연구와 actual 평가의 분모를 각각 보여준다.
+
+### 14.8 등록할 실험과 경제 평가
+
+| 순서 | 실험 | 고정/비교와 질문 |
+| --- | --- | --- |
+| E0 | 현재 정책 재현 | 당시 source/policy/fast·normal/유예·preset·hard safety 우선순위 재현. 기계의 기존 +0.4/-3/1800 라벨과 실제 운영 종료 결과는 병렬 보존 |
+| E1 | 시작률 단일축 | `registered_research_grid()`의 기존 부모 인접 후보. weak/strong·M1 고정. 빨리 시작한 이익 보존과 조기 청산 후 놓친 상승 비교 |
+| E2 | weak/strong 폭 각각 | 시작률·M1 고정. 정상 눌림 허용과 이익 반납의 비용 후 차이 |
+| E3 | 기존 네 상황의 추가 설명력 | HIGH_VARIABILITY/TREND_CONTINUATION/REBOUND_RANGE/BASE와 시장 부모 비교. 종목별 영구 임계값과 대규모 교차 grid를 먼저 만들지 않음 |
+| E4 | 보유 중 강약 전환 | M1 기존 값과 후보를 별도 실험. 가격 전진·체결 압력·스프레드/잔량·회복을 당시 정보로 계산. 진입 pin을 사후 재분류하지 않음 |
+| E5 | 시작 전 정체·반등 실패 | 30/60/120/180초 관측창별 유지/조건부 조기 청산 가설. 무진전 하나만으로 자동 청산 결론을 내리지 않음. 새로운 실주문 owner가 아니라 연구 비교 |
+| E6 | 기존 보유 AI 유예 효과 | 원 요청·응답이 같은 crossing에서만 운영 비교. 질문시점/입력이 달라지면 검열, 별도 mechanical_only_cf는 운영 AI 성과로 표시하지 않음 |
+| E7 | 검증된 조합 | 단일축 결과를 보고 사전에 등록한 제한된 조합만 이후 기간에서 평가. 같은 holdout으로 반복 선택·재검증하지 않음 |
+
+트레일링 `start_pct`는 peak 순수익률이고 되돌림폭은 고점 대비 실행 가능한 bid 하락률이다. 단위가 모두 %여도 분모와 비용 반영이 다르므로 하나의 손익보장 수치로 해석하지 않는다. 하드스톱 완화·수동 veto·브로커/수량/신선도 guard 변경은 위 후보 축에 포함하지 않는다.
+
+순수 청산 효과의 별도 연구 진단은 같은 적격 ID의 `candidate_net_replay - parent_net_replay`로 정의한다. 제안 이름은 `exit_only_paired_delta_net_krw`이며 현재 구현/발행된 필드가 아니다. 기준/후보 모두 같은 비용·체결 가정으로 비교하고 실제 손익과 혼합한 인과 효과라고 부르지 않는다.
+
+**현행 actual-completed selector는 `candidate - max(parent modeled, actual realized)`의 실제 실현 하한을 보존한 보수적 비교를 사용한다.** `universal_trailing_replay.common_evaluation()`/`_aggregate_streamed_evaluation()`와 `trailing_situation_policy`의 기존 집계·선정 계약을 유지한다. 새 exit-only 진단으로 기존 지표의 의미·실현 하한·선정 기준을 덮어쓰지 않는다. 기존 상황 집계의 `equal_weight_avg_profit_pct`, `notional_weighted_ev_pct`, `paired_delta_net_krw`와 범용 집계의 `paired_ev_pct`를 각각 실제 분모·참조값과 함께 표시하고 새 진단은 별도 열로 출력한다. 연구 배분 비용의 사용도 §14.7의 별도 계약을 따른다. 일별 손익·이익→손실 전환·이익 반납·tail loss·보유시간/자본 점유·실행 슬리피지·source/censor 비율을 함께 보고한다. 승률은 보조지표다.
+
+후보별 유리한 ID만 남기지 않고 부모/후보 공통 적격 집합과 각 탈락 집합·사유·차이를 함께 보고한다. 같은 position/겹친 후행 경로는 시간순 train/holdout을 넘어 섞지 않는다. 실제 SELL 이후 경로가 필요한 후보는 해당 관측을 요구한다. 비용 revision/late response를 과거 cutoff에서 알고 있던 값으로 소급 사용하지 않는다. 불확실성·날짜/종목 집중도와 기존 family의 표본/선정 계약을 보고하며 새 임의 표본 수·승률·EV 문턱은 추가하지 않는다.
+
+자동화가 소비할 새 지표는 Rebase의 `metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, `forbidden_uses`를 선언한다. 상태·진단 지표만 추가하고 이를 threshold 권한으로 사용하지 않는다.
+
+### 14.9 장후 재생성과 실제 지원 명령
+
+현재 정상 생산 경로는 `log_archive_service(profile=postclose_exit)` → `build_holding_exit_observation_report(all_scope_research=True)` → `main_trailing_source_assembler.assemble()` → `main_trailing_all_scope_research.run()` → holding report 확장·handoff다. `assemble()`에는 독립 CLI가 없다. CLI가 있는 것처럼 모듈명이나 `--date/--output-root`를 추정해 실행하지 않는다.
+
+재생성은 비용/완료 원천 → 해당 원천일 projection → 새 불변 assembly → replay → selector → summary/strict/controller 순서다. source date와 target trading date를 구별하고 달력 owner로 다음 거래일을 결정한다. 원 실패·기존 policy/PREOPEN·historical receipt는 보존하며 새 산출물은 별도 generation에 쓴다. 부모 동등 초기정책 생성과 개선 후보 선정의 완료를 구분한다. 이미 소실된 depth/AI/내부 계획을 재생성 작업이 만들어 준다고 가정하지 않는다.
+
+아래는 **검증된 입력 manifest가 준비된 뒤** 사용하는 현존 offline CLI 형식이다. placeholder 경로는 R0의 run manifest에 기록한 실제 격리 경로로 치환한다. 이 문서 검토에서는 실행하지 않는다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.automation.main_trailing_all_scope_research \
+  --input-manifest /ABS/ISOLATED/ASSEMBLY/manifest.json \
+  --input-root /ABS/ISOLATED/ASSEMBLY --dry-run
+
+PYTHONPATH=. .venv/bin/python -m src.engine.automation.main_trailing_all_scope_research \
+  --input-manifest /ABS/ISOLATED/ASSEMBLY/manifest.json \
+  --input-root /ABS/ISOLATED/ASSEMBLY \
+  --output-root /ABS/ISOLATED/RESEARCH --resume
+```
+
+출력 root가 없는 CLI는 preflight로만 끝난다. 경제 재생은 output root와 기존 admission/disk/input budget을 사용한다. `complete`만 보지 말고 population/common IDs·actual/CF 평가/검열·비용·runtime apply 상태를 읽는다. source/header preflight는 producer 계약 전수 통과나 경제 평가 완료와 다르다.
+
+정식 장후 재생성은 기존 `run_threshold_cycle_postclose.sh`의 `postclose_exit`/safe-wrapper 인계를 따른다. wrapper gate를 우회한 `run_monitor_snapshot` 직접 실행, 운영 DATA_DIR를 쓰는 `main_stop_postclose`를 격리 연구 명령으로 제시하지 않는다. 공식 read adapter의 검증 전 실제 계좌 호출이나 전수 장후작업을 먼저 수행하지 않는다.
+
+### 14.10 성능 구현 조건
+
+1. Runtime은 기존 공유 snapshot과 이미 준비된 policy/context만 사용한다. 새 동기 REST/AI/정산 조회와 report 전체 읽기는0이다. 필수 주문·체결·custody 영수증을 손실 가능한 진단 queue로 옮기지 않는다.
+2. 시장 source는 route/epoch별 한 번 저장하고 opportunity/position은 segment 참조를 공유한다. position의 latch/peak/잔량/AI 상태는 공유하지 않는다. 원 native sequence·중복·gap을 보존한다.
+3. 장후는 immutable partition을 한 번 decode하고 후보 독립 feature를 공유한다. 동일 vector dedup, candidate block/streaming, checkpoint resume를 사용하고 마지막 후보와 반례만 상세 결과를 유지한다. 전체 모집단·제외 근거는 보존한다.
+4. 비용 정정이 최종 손익만 바꾸면 economic 집계만 갱신한다. 순수익 기준 arm/정책 경로·학습 가용시각도 바뀌면 영향 replay/selection까지 무효화한다. 비용 변경을 무조건 집계 전용으로 제한하지 않는다.
+5. §10의 기존 측정·합산 예산을 재사용한다. 동일 universe·기간·후보·적격 ID로 baseline/candidate 각3회 비교하며 p95/p99 판단 지연, queue drain, source gap, CPU/RSS/read bytes를 기록한다. 원천 누락·표본 축소·후보 삭제로 얻은 속도 개선은 수용하지 않는다.
+6. REST/WS 한도, 운영 수집 우선순위, disk/input budgets를 유지한다. 예산 초과는 분할/재개·명시적 미수집으로 처리하며 cap 상향이나 무제한 구독으로 감추지 않는다.
+
+### 14.11 검증·수용과 결과 보고
+
+문서 검토 다음의 구현은 아래 실제 테스트 owner를 확장한다. 없는 test/module 이름을 실행했다고 보고하지 않는다.
+
+| 검증 | 기존 파일 | 추가해야 할 핵심 반례 |
+| --- | --- | --- |
+| native 생산→소비 | [source assembler tests](../../src/tests/test_main_trailing_source_assembler.py) | 실제 producer output의 native ID/plan/후행 연결, producer 필드 삭제·오타·다른 attempt/route, complete이지만 경제0과 실제 평가 성공 구분 |
+| 정규화·기회/실제 재생 | [all scope tests](../../src/tests/test_main_all_scope_trailing.py), [path projection tests](../../src/tests/test_main_trailing_path_projection.py) | ISO/epoch/ms·JSON 문자열·bool/null, 동일 시각 순서, 미래 plan/cost/context, BBO-only/OHLC-only의 경제 승격 차단 |
+| 보유/ADD/AI | [holding path replay tests](../../src/tests/test_holding_path_vote_replay.py), [holding report tests](../../src/tests/test_holding_exit_observation_report.py) | 정상 ISO 비용의 ADD 세대 보존, 원 AI 미호출/입력 부족, 후보 질문 변경, 수동 이관/부분체결·잔량 수량 보존 |
+| 경제 정책 생성 | [structural generability tests](../../src/tests/test_trailing_delay_structural_generability.py) | 실제 생산 fixture로 parent carry/변경 후보 분리, 공통 ID와 비용 등급, sparse 전범위 결과, CF→actual 금지 |
+| 분할/정정/재개 | [partitioned tests](../../src/tests/test_main_trailing_partitioned_research.py), [log archive tests](../../src/tests/test_log_archive_service.py) | native gap/중복/epoch 전환, 64KiB row 초과, 과거 비용 revision, late 원천·새 파일, 중단 후 재개=clean recompute |
+| 공식 원천 adapter | [broker cost tests](../../src/tests/test_broker_cost_source.py), [reconciliation tests](../../src/tests/test_broker_cost_reconciliation.py), 해당 기존 Kiwoom helper 테스트 | 전일·날짜 지정, continuation 반복/중단, route 혼합, 주문/체결번호 혼동, 비용 총합≠per-fill 비용, 문서 미정의 필드의 거부 |
+
+정상 경로 테스트는 consumer 입력 dict를 손으로 채우는 것만으로 닫지 않고 실제 producer의 serializer·저장·decoder를 거쳐야 한다. 네 유형·모든 등록 scope·삼성/비삼성/신규 임의 종목·full/partial/ADD·수동/retired·세션 경계의 계약 fixture를 포함한다. 외부 provider/실계좌는 fixture 검사에서 호출하지 않는다.
+
+수용은 (a) 필드/producer 계약, (b) 공식 원천 수집과 coverage, (c) 기준 재현, (d) 후보 경제성, (e) 성능, (f) 정식 인계, (g) 별도 승인된 실제 PID/자연 성과로 구분한다. unavailable 자료가 남으면 해당 연구 분기의 한계를 명시한다. 구조적으로 없는 자료를 기다리며 무한 재생하거나 parent_carry를 개선 정책 생성 성공으로 보고하지 않는다.
+
+각 결과는 `결정 → 원 source/producer/consumer 증거 → 다음 action/owner → 종료 검사` 순서로 남긴다. 이번 문서 검증에서는 코드 pytest·API/provider·장후 재생성·정책 발행·배포·재기동을 수행하지 않는다.
+
+### 14.12 공식 제공 원천과 로컬 생산 차이 — 2026-10-18 확인
+
+공식 조회 시각은2026-10-18 08:23:59~08:25:35 KST, upstream SHA는 `953e5dbff123f437ab4d11a78a95191a685eb51f`다. `git ls-remote`와 독립 checkout의 SHA가 일치했다. `kiwoom_docs` 부재를 확인하고 `kiwoom/specs.py`, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/core/client.py`, `kiwoom/core/ws_client.py`, `kiwoom/realtime/{packets,schemas,decoders,stream}.py`, `postman/kiwoom-openapi.postman_collection.json`의 해당 PRD/MOCK 요청과 공식 `/intro`를 대조했다. 개별0B/0D/1h 포털 페이지 조회는 실패했으므로 그 페이지의 확인되지 않은 의미는 보완 근거로 사용하지 않았다.
+
+아래는 [고정 revision 공식 스펙](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/953e5dbff123f437ab4d11a78a95191a685eb51f/kiwoom/_data/kiwoom_api_spec.json), [REST/continuation 구현](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/953e5dbff123f437ab4d11a78a95191a685eb51f/kiwoom/core/client.py), [WS 패킷 구현](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/953e5dbff123f437ab4d11a78a95191a685eb51f/kiwoom/realtime/packets.py)을 확인한 제공 범위다. 응답 실제 확보·보관기간 전수 검증은 수행하지 않았다. wire/parser 구현 전에 그때의 공식 HEAD를 다시 확인하고 로컬 [Official Kiwoom Reference Gate](../kiwoom-api-data-contract.md)를 적용한다.
+
+| 원천/공식 수단 | 정확한 요청·응답 필드 또는 FID | 확보 범위·로컬 실행 과제·금지되는 대체 |
+| --- | --- | --- |
+| 종목/시장 master: `ka10099`, `ka10100` | ka10099 요청 `mrkt_tp` → `list[].code/marketCode/marketName/state/orderWarning/nxtEnable`; ka10100 요청 `stk_cd` → top-level `code/marketCode/.../nxtEnable` | 현재 master 제공. 응답 nesting을 공통으로 추정하지 않음. 과거 기준일 요청 없음. 연구일 당시 snapshot과 verified master를 사용하며 현재 NXT 편입을 과거에 소급하지 않음 |
+| 실시간 체결: `0B` | `20` HHmmss, `10` 현재가, `27/28` ask/bid, `15` signed 체결량, `13` 누적량, `14` 누적대금 | 기존 공유 WS owner를 사용. 가격 원화/수량 주, `14`는 백만원. 가격 부호와 체결 방향 부호를 분리. 원 item/route/수신시각/epoch 보관 |
+| 실시간 호가: `0D` | `21` 호가시각, ask41–50/bid51–60, ask qty61–70/bid qty71–80, totals121/125 | 당시 저장한 연속 book 원천으로만 과거 depth 재생. 현행 compact top-of-book만으로 전체10단계를 복원하지 않음 |
+| 현재 book: `ka10004` | `sel_fpr_bid/buy_fpr_bid`, `sel_fpr_req/buy_fpr_req` 및 후속 호가 | 과거 날짜 인수 없음. 현재 snapshot은 현재 원천. `bid_req_base_tm`의 공식 설명은 YYYYMMDD이므로 이름만 보고 HHmmss 추정 금지; 의미 미확정 시 raw 보존/승격 금지 |
+| 당일/전일 체결 당시 BBO: `ka10084` | `tdy_pred=1/2`, `tic_min=0/1`, `tm`; `tdy_pred_cntr[].tm/cur_prc/pri_sel_bid_unit/pri_buy_bid_unit/cntr_trde_qty/stex_tp` | **확보 가능한 복구 후보**. 당시 depth 수량은 제공하지 않음. 현행 `get_recent_signed_trades_ka10084()`는 당일 고정·단일 페이지·기본10행이며 연구용 전일/pagination/BBO producer가 아님. 기존 negative-veto 의미를 보존한 별도 역할 adapter가 필요 |
+| 최근 체결: `ka10003` | `cntr_infr[]`, `tm/cur_prc`, 우선호가·체결량/강도 | 날짜 인수 없음. 같은 `acc_trde_prica`도 ka10003은 원, ka10084는 백만원이므로 API별 unit adapter 필요. 이름만으로 공통 scaling 금지 |
+| 틱 OHLC: `ka10079` | `stk_cd/tic_scope/upd_stkpc_tp`, `stk_tic_chart_qry[].cntr_tm` | 요청 날짜 인수 없음, 이번 공식 spec에서 과거 보존기간·최대 페이지 보장 미확인. 받은 기간만 검증. 틱 차트로 당시 bid/ask/depth/체결방향을 합성하지 않음 |
+| 분봉: `ka10080` | `base_dt/tic_scope/upd_stkpc_tp`, `stk_min_pole_chart_qry[]` | 날짜 지정 가능. `get_minute_candles_ka10080_with_meta(base_dt,explicit_request_code,...)` 재사용 검토. 완료봉·정정/수정주가·종목 route·페이지 종료 검증. 봉 내부 crossing·full fill 증거로 사용 금지 |
+| 실시간 계좌 체결: `00` | `9201` 계좌, `9203` 주문, `909` 체결번호, `908` 시각, `910/911`, `914/915` 가격/량, `904` 원주문, `2134/2136` venue/SOR | 날짜·계좌 scope·원 receipt와 결속. `938/939` 당일 수수료/세금을 개별 fill 확정 비용으로 단정 금지 |
+| 날짜별 주문/체결: `kt00007`, `kt00009` | 모두 `ord_dt`; 07의 `ord_no/ori_ord/cntr_qty/cntr_uv/ord_remnq/cnfm_qty/ord_tm/cnfm_tm`; 09의 `ord_no/cntr_no/cntr_tm/cntr_qty/cntr_uv` | **kt00009는 날짜별 체결번호·체결시각 복구 후보**. 이번 src 검색에서는 로컬 사용 producer 미확인. 공식 제공됨/로컬 미수집으로 등록하고 날짜+계좌+venue+주문+체결 identity·pagination을 검증한 read adapter를 먼저 마련 |
+| 현재 미체결/체결: `ka10075`, `ka10076` | ka10075 `oso[].tm`은 주문시각 HHmmss; ka10076 `cntr[].ord_tm`은 주문시각 HHmmss. 주문 식별자 `ord_no/orig_ord_no` | 날짜 요청 없음. 두 주문시각을 체결 발생시각으로 대체하지 않음. ka10076 `ord_no`는 해당 번호보다 과거 체결 조회 기준이며 exact 주문 filter가 아님. 과거 날짜에 오늘 결과를 붙이지 않음. 현재 미체결0을 과거 terminal로 사용 금지 |
+| 정산 비용: `kt00015` | `strt_dt/end_dt/tp/dmst_stex_tp`; `trde_dt/cntr_dt/trde_no/orig_deal_no/trde_amt/exct_amt/cmsn/trde_agri_tax/tax_sum_cmsn/proc_tm` | 날짜 범위 조회 가능. `trde_no`는 주문번호가 아님. 기존 `broker_cost_source.collect()`의 BUY/SELL 원천을 재사용. 정확 귀속 미확정이면 연구 배분/미배분으로 분리 |
+| 거래일지/손익: `ka10170`, 관련 `ka10072/73/74/77` | `base_dt`, `tdy_trde_diary/cmsn_alm_tax/pl_amt`와 totals | ka10170 최근2개월 명시. 다른 API의 기간을 동일하다고 추정하지 않음. ka10074는 실현손익 발생일만 행을 만들므로 무행=거래0/비용0 금지. 기존 비용 producer는 ka10170·kt00015·당일 ka10076 수집을 이미 수행 |
+| 장운영/VI: `0s`, `1h`, `ka10054` | `0s.215`, `1h.1223/1224`, VI 목록/시각 | 기존 session owner와 당시 원 receipt 사용. ka10054 과거 날짜 요청 없음. 현재 목록으로 과거 전체 정지 이력을 보장하지 않음. 미정의 `1h.9068` 의미는 추정하지 않음 |
+| 내부 원천·반사실 | 실제 원 prompt/response, policy pin, receive/decision clock, transport epoch, 가상 주문 체결·queue | 미저장 내부 시각/AI/정책 문맥은 키움에서 복구 불가. 실행하지 않은 가상 주문의 실제 fill은 원리적으로 관측 불가. queue position/hidden liquidity는 검토 API에서 제공 근거 미확인. 각각 로컬 미기록·반사실 관측불가·검토 API 미제공을 구분 |
+
+`available_not_ingested`, `available_not_requested`, `request_failed`, `partial_window`, `retention_expired`, `not_recorded_locally`, `official_semantics_unconfirmed`, `not_provided_by_reviewed_api`, `counterfactual_unobservable`를 상세 사유로 구분한다. 이 이름들은 제안 inventory 값이며 운영 enum을 변경한 것이 아니다. 특히 `not_provided_by_reviewed_api`를 키움 전체에서 절대 제공되지 않는다는 뜻으로 사용하지 않는다. `retention_expired`는 공식 보존기간 또는 provider의 명시적 조회가능 경계/기간 오류로 만료가 입증된 경우만 사용한다. 단순 실패·빈 응답은 만료 증거가 아니다. 무거래·조건·route 오류를 먼저 분리하고 불명확하면 coverage 미확인으로 남긴다.
+
+R3의 우선 복구는 보존기간이 짧은 ka10084의 당일/전일 자료와 날짜별 체결 식별자, 그 다음 검증 가능한 비용/분봉이다. 요청 당일/전일의 정확한 달력 의미와 거래일 경계는 공식 응답으로 확인한다. 오래된 주성 사례의 depth/내부 시각이 없으면 현재 호가나 다른 날의 자료로 채우지 않는다. 외부 원천의 과거 시각과 오늘 조회한 가용시각을 둘 다 보존하고 당시 runtime이 알고 있던 정보로 소급하지 않는다.
+
+### 14.13 실행안 리뷰·검증 기록
+
+- 생산/소비·재생, 비용/AI/ADD/시각·권한, 공식 API 가용성의 세 독립 리뷰를 수행했다. 실제실현 하한과 새 진단의 분리, 첫 BUY fallback의 생산 미확인, 사전 계획의 시각 조건, universal ISO 비용 거부, whole-position 비용 hash 불일치, API별 nesting/주문시각, 보존기간 만료 조건을 보완했다. 변경부 재리뷰에서 문서의 미해결 지적0건을 확인했다. HX-01~11의 코드·원천 수리는 OPEN이다.
+- 로컬 링크는 이 계획60개와 당일 checklist14개가 존재하며 fence·신규 owner anchor를 검사했다. print-only parser는24개 항목을 출력하고 `MainAllScopeTrailingReplay`를10/18 문서의 단일 현재 OPEN owner, Due10/19로 인식했다. `git diff --check`를 통과했다. 병행 손절 연구 계획/checklist와 기존10/19 원 Acceptance는 보존했다.
+- 이번 변경은 이 계획의 §14와 최신 상태 안내, 당일 checklist의 해당 후속 owner다. 코드 pytest/compile·실제 원천 재수집·경제 재생·정책 발행·배포·재시작·외부 Project/Calendar sync는 실행하지 않았다. 공식 공개 저장소/포털 조회와 무I/O 함수 반례 확인은 계좌/provider 호출·경제성 수용이 아니다.
+
+
+## 15. 2026-10-18 연구 실행 결과와 잔여 수용
+
+실행 owner는 당일 checklist `MainAllScopeTrailingReplay`다. 별도 보유·재생 수리 세션의 완료를 전제하지 않는다. [실제 실행 검토](../audits/main-holding-exit-research-execution-review-2026-10-18.md)가 source/code/attempt/결과의 증거를 소유한다.
+
+### 15.1 수리·원천 계약
+
+격리 branch `codex/holding-exit-research-20261018`에 `0ab270be080c1154e5a2a6b0f5a51cad65aa796b` → `d07c3ee3f406d9f324331369698558e430f23a71` → `7dc2a934e3a0a45ff6eca7600c35a41ceda83cb2`를 보존했다. 최종 코드 계약은 `2df6ba7d0a9ddc2a7f2dcec6f780c49473c0050b7be641d64b0b4062fedd3d12`다. 실제 실행계획 receipt·문자열 JSON decode·정확한 BUY 세대/후행 quote·ISO 비용시각·scope별 비용 provenance·시간순 train 비용 가용성·cost-only resume·별도 exit-only 진단을 수리했다.
+
+CF는 원 actual과 진입/수량/원가/계정 namespace/비용/route/세대/수동관리·원 AI 입력이 동등할 때만 원 holding vote를 연결한다. 합성 fixture에서 실제 producer→저장→public assembler→replay를 거쳐 VALID PASS2/VETO2 소비와 다른 modeled 결과를 확인했다. 가상 보유가 없었던 과거 기회에는 보유 AI를 생성하지 않는다. runtime 계정 진단은 기존 config read의 메모리 provenance를 재사용하며 추가 config I/O·계좌 조회·주문 권한을 만들지 않는다.
+
+완료일 파일의9/28 진입 carry48376 1건을 발견했다. assembler와 일반/분할 public replay는 실제 `consumed_dates`의 최소일 KST00:00과 clean baseline을 경계로 사용한다. actual1+alternative1의 ID·entry·분모·기존 gap을 유지하고 별도 제외 사유를 남긴다. 원천을 나중에 복구해도 경계 전 진입이 튜닝에 편입되지 않으며 정각 진입은 허용한다. 선언 경계는 checkpoint/source context에도 결속했다.
+
+[원천 계약 사전 v2](/home/ubuntu/KORStockScan/tmp/holding-exit-research-20261018/source-audit/source-contract-audit-v2.json)는22개 계약·102개 코드 참조·23개 코드 파일과 실제 producer/저장/consumer·타입·단위·시각·identity를 검증했다. [공식 원천 능력15종](/home/ubuntu/KORStockScan/tmp/holding-exit-research-20261018/source-audit/source-capability-matrix.json)은 로컬 미수집·공식 복구 후보·실시간 수집 필요·의미 미확정·반사실 관측불가를 분리한다. 기존14파일 원 audit와18필드 catalog는 보존했다. 공식 source 검토는 새 계좌/API 요청·구독의 실행 증거가 아니다.
+
+### 15.2 실제 분모·초기정책·연구 방향
+
+원천일 master2,605종목×8route/session=20,840범위를 처리했다. PRE는SOR/NXT, REGULAR와AFTER는각SOR/KRX/NXT다. scope는 등록/처리 범위이며 당시 전 종목의 연속 tick/depth 확보를 뜻하지 않는다. source일 구간9/29~10/16의 완료 census는 진입 전 carry를 포함할 수 있다. 원 보고서의 `raw_census_complete=false`, scope별 source 상태와 제외 ID를 보존한다.
+
+v1/v3 실제 재생은 actual_completed13·actual_entry_alternative_exit13·ENTER_NOW+PASS CF482를 별도 처리했다. 공통 경제 적격은0이다. 원 custody boolean을 변경하거나 미확인 비용을0으로 채우지 않았고, 기존 수량 연구 전용 배분 비용을 holding actual로 전용하지 않았다. 보유 AI5,465행은 모두 INSUFFICIENT/provider_called=true0으로 AI HOLD/유예 성과가 아니다. 원천일 미청산3건은 별도 우측 검열 census로 유지한다.
+
+장후 원천 재생성 경로의 **초기정책 생성은 가능**하다. 연구 부모의 시작0.4%·weak0.4%·strong0.8%를3시장×4기존 상황의12개 parent_carry cell로 생성했다. 전 범위를 위한 공통 구성이며 개별 종목20,840개의 학습 정책이 아니다. 최초 부모 계승에 추가 경제 허들을 붙이지 않는다. 신규 개선값의 경제 우위를 입증하거나 운영 정책을 발행한 것은 아니다.
+
+분봉 진단495행(실제13+CF482) 중460행은 해당일 revision에 연결됐고 진입 후 완료봉이 하나라도 있는 경우는411행이다. CF49행은 후행 완료봉이 없고35행은 exact item/route/revision·auth scope/보관 결손이다. partial minute을 제외했으므로 진입부터 요청 종료까지 전체 horizon을 관측한 행은0이다. CF6종목 중 주성260/482의 중첩 경로를 독립 거래·승률로 계산하지 않는다.
+
+후속 비교는 시작 전 즉시 악화/지연 회복/상승 지속, 시작 후 이익 보존, 신호 이후 체결 손실로 나눈다. 시장/venue/session은 별도 조건으로 유지하고 당시 생산된 입력만 사용한다. event 순서와 진입 기준가격·원 수탁/비용을 입증한 뒤 시작률·weak/strong을 비교하며 시간순 및 종목·날짜·겹친 경로 cluster를 분리한다. 사전 등록 numeric18개·상황 가설2개를 보존하고 새 E4/E5/E7 조합을 사후로 등록 완료 처리하지 않는다. 주성 OHLC의 사후 반등만으로 하드스톱 오판이나 안전선 완화를 결론 내리지 않는다.
+
+### 15.3 검증·성능과 남은 단계
+
+최종13개 파일524 PASS/75.87초,23개 변경 Python 파일 compile, 최신8개 production module Ruff, task3개 commit 전체 diff check를 통과하고 독립 재리뷰의 미해결 지적0을 확인했다. 초기 실패·중단·fixture 보완 영수증은 덮어쓰지 않는다. 더 넓은 pre-AI12실패 중 대표1건만 동일 base 재현했고12건 전체를 개별로 baseline이라고 주장하지 않는다.
+
+실제 v1 fresh replay는995.454초에 완료했다. 기존 완료 보고서 digest 검증은cold55.892초/warm중앙5.442초였으나 이를 동일 fresh replay의 speedup으로 계산하지 않는다. 분봉 writer128MiB admission softcap을 reader source-invalid 한도로 오용한 별도 결함을 수리했고 수정 진단은5.455초에 완료했다.64MiB managed Claim과 실제 process RSS는 별도 지표다.
+
+최종 [v3 완료 영수증](/home/ubuntu/KORStockScan/tmp/holding-exit-research-20261018/attempts/reviewed-v3/terminal.json)은 v1과같은 source/cutoff/window/IDs/grid에서 신규 산출물 cold1회와 completed-report resume3회를 완료했다. cold 합계336.454초, warm5.460/5.503/5.530초, 전체 invocation362.301초다. 네 번의 semantic 결과가 같고 원본·보호 정책/selector/env가 불변이다. 누적 peak RSS193,100KiB와 managed Claim64MiB(종료 used0)를 구별한다. OS page cache cold·Main 지연 비악화·cold/warm 작업 간 인과적 가속비를 주장하지 않는다. v2는 native/private 봉인 인코더 차이로 OUT 생성 전 종료됐고 원 script·log·실패 영수증을 보존했다. [독립 결과 대사](/home/ubuntu/KORStockScan/tmp/holding-exit-research-20261018/v3-output-review.json)에서 범위/ID·정책·경제 적격0·분봉 horizon 수치와 보호 세대를 확인했다.
+
+HX09 후속은 공식 비용 생산→완료 projection→archive→assembler→공개 재생의 actual/대체청산/CF 양성 시험을 추가했다. 가짜 공식 응답의 비용1원·실현손익1원과 원 AI PASS2건을 실제 생산·소비했으며 actual/model/CF 손익을 분리했다. 해당 모듈122 PASS/16.59초·독립 신규1 PASS/4.52초·지적0으로 종결했다. 기존524개와121개는 중복되므로 합산하지 않는다. 시험만 바꾼 commit `1bf35e6c258cdcda373c813432b52725898f22ab`과 [후속 종결](/home/ubuntu/KORStockScan/tmp/holding-exit-research-20261018/code-review-closure-v4.json)을 보존했고 production SHA·실제 v3 원천/보고서는 동일하다. 합성 계약 검증이 자연 경제성 증거를 대신하지 않는다.
+
+현재 owner는 경제 비교 적격 원천, 별도 holding 연구 배분 consumer, 미지원 ADD/부분잔량·실제 SELL 이후 경로와 후속 실험을 OPEN으로 유지한다. 복구 불가능한 과거 내부 AI/계획과 가상 실제 fill의 자연 생산을 기다리는 종료 조건은 두지 않는다. 선택900/PREOPEN 정책·수동 제외를 변경하지 않았고 운영 발행·배포·Main 재기동·계좌/API 조회·신규 구독·provider 호출·주문은 실행하지 않는다. 실제 PREOPEN/PID 수용은 기존 DirectFamilyPreopenPolicyHandoff의 별도 수용이다.
+
+## 16. 2026-10-18 후속 실험·진입 이력·비용 소비 수리
+
+[후속 실행 검토](../audits/main-holding-exit-followup-research-execution-review-2026-10-18.md)가 실험 등록·실제 결과·첫 비용 undercoverage와 보완 결과를 소유한다. 격리 `a4a51fd8b`의 최초 실행과 `57a4659f4`의 비용 소비 시각 수리를 분리한다. 실행 owner는 같은 `MainAllScopeTrailingReplay`이며 별도 수리 세션을 기다리지 않는다.
+
+### 16.1 실제로 추가 활용한 원천
+
+- 전체2,605종목·8route/session=20,840범위를 재생 census에 유지했다. 등록 범위와 관측 coverage는 다르다. 실제13+CF482=495행을 다루며 대체청산13은 독립 거래로 중복 합산하지 않는다.
+- 진입 전에 가용한 native named revision으로120봉 OHLC 특징227행(실제3+CF224)을 복원했다. 전일 봉 포함34행·내부 공백157행, 마지막 봉 경과 중앙84.6분이다. 같은 원천을 공유하는 revision64개를 decode·cache163회 재사용했다. 기존6특징의 spread/session VWAP·가격 조정 등가성과 과거 실제 소비를 입증한 것이 아니므로 원 pin·AI를 변경하지 않았다.
+- 고정120초 prefix와 후행10/60분을 연결한 연관 분석은176행(실제3+CF173)·304개 row-window·23개 중첩군이다. 원495행의 결측 사유는 모두 남겼다. 내부 완료봉 관측과 전체 horizon 관측0건을 구분한다. 이번 시간순 분할은 이미 보았던 기간의 탐색 분석이며 새 holdout 검증으로 부르지 않는다.
+- 별도 holding 연구 비용 consumer는 원 승인8건을 원scope `initial_quantity_research_only`로 연결했다. 최초5건만 연결된 것은 체결 발생시각과 projection 최초 관측시각의 의미 혼동이었다. 원 producer의 exact 신원·payload digest·가용시각/재관측 감사로3건을 연결했고 허용 시차는0이다. 원5건 결과와 최초 terminal을 보존했다. 비용4,065원·배분 연구 순액19,535원은 과거 관측8건의 참고이며 개선액/실제 자동성과가 아니다. 49294 부적격·미청산3건·다중BUY terminal의 구분은 유지한다.
+
+### 16.2 연구 판정
+
+ENTER_NOW+PASS와 후행 자료를 추가 활용할 수 있지만 실제 fill·원 holding AI·연속 수탁·대체청산 비용을 생성하지 않는다. 진입 OHLC 네 특징은 별도 설명변수다. 이번 `upward_efficient` 양성은0이어서 새 상승 지속 유형의 효과 비교는 불가하다. 시장 외 상황 구분 연구는 유지하되 오래된 원천/내부 공백을 현 상황으로 간주하거나 기존6특징 분류기를 대체하지 않는다.
+
+주성의 특징 복원163행·연관119행은 모두CF다.10/15 실제49294의 진입 특징은 결손이며 그날 진입120초 이후60분 관측봉은 -3% 비교선 접촉·+0.4% 목표 미접촉이다. 다른 날 반등·CF를 합쳐 하드스톱 오판이나 수동 이관 후 자동 성과를 결론 내리지 않는다. 신호 snapshot→기록상 완료 간격도 주문/브로커 latency와 구별한다.
+
+시작률·weak/strong 개선값의 경제 우위는 미입증이다. 선행 연구의12cell 부모 계승 초기값·classifier=null과 정책 hash를 그대로 보존했으며 새 정책을 생성·발행하지 않았다. 초기값에 추가 경제 승인 허들을 붙이지 않는다.
+
+### 16.3 수용 범위와 다음 owner
+
+최초 네 진단 단계12.748초·peak RSS61,336KiB, 별도 비용 재실행0.142초·24,496KiB를 관측했다.64MiB는 managed Claim 한도이며 종료 used0이다. 이전 전체 재생과 다른 작업이어서 가속비·Main 지연 비악화를 주장하지 않는다. 최종 대상 통합284 PASS/8compile/Ruff/diff-check와 독립 코드·결과 검토로 닫았다. 실제 초기 비용5건 결과와 원 실패·원 source/정책/PREOPEN·보호9해시는 보존했다.
+
+별도 관측 terminal 배분비용의 diagnostic 소비 수리는 완료했다. 잔여 `MainAllScopeTrailingReplay`는 당시 입력의 경과시간/공백·실행 가능 기준가격·연속 순서를 입증한 범위의 정책 비교, ADD/부분잔량 lifecycle·실제 SELL 뒤 경로 및 신호→제출→체결 신원 연결을 소유한다. 원천이 없는 과거 내부 판정·가상 실제 fill을 대기 조건으로 두지 않으며 이번 자료로 비교 불가인 가설은 그대로 구분한다. 실제 PREOPEN/PID는 기존 `DirectFamilyPreopenPolicyHandoff`의 수용이고 P5는 이번 연구에서 실행하지 않았다. 운영 배포·재기동·외부 조회/구독·provider·주문·Project/Calendar sync는 없다.
+
+
+## 17. 2026-10-18 현재 원천 범위 연구 종결
+
+사용자의 잔여연구 종결 지시에 따라 §15–§16의 기존 실행과 [보유 비용 소비 후속 검토 §6](../audits/main-holding-research-cost-consumer-followup-review-2026-10-18.md#6-native-비용-결손-사유-보완과-최종-별도-대사)의 결과를 대사했다. 이번 원천·가설 범위의 `MainAllScopeTrailingReplay`를 종결한다. §15–§16의 당시 OPEN 기록은 역사로 보존하며, 신규 정책의 경제 우위·운영 적용 완료로 바꾸지 않는다.
+
+- 별도 holding 배분비용 adapter는 `d81a80778`→`3ab6916e2`에서 public assembler·분할 재생·진단에 연결했다. native producer의 `source_gap_exact_cost_missing` 상태명 누락까지 수리하고 정상 생산→소비·duplicate/unknown 사유 거부를 검증했다. 전체 비용행은 managed SQLite/참조로 보관하며 4slot cache·exact stat/종료 해시 대사와 공유64MiB admission을 유지한다.
+- 최종 실제 비용 전용 attempt03은 원508개(13 actual/13 alternative/482 CF), 엄격 비용 provenance5건·경제 paired0건, 원247개 nullable outcome·초기정책·사용19개 의존 세대를 보존했다. native 비용 label 수리 후20 PASS와 독립 재리뷰 지적0, wall23.513초·CPU22.421초·peak RSS168,648KiB·종료 shared used0을 확인했다. 전체12GB fresh replay 또는 Main 성능 비교로 확대하지 않는다.
+- 병행 `57a4659f4`의 관측 terminal 참고8건은 등록된 native 재관측 audit의 발생·최초 관측 시각 bridge를 소비한 별도 계약이다. 공통5건의 영수증·비용·net 참고값은 같고 추가3건의 증명 범위는 분리한다. 두 branch를 통합 검증한 것으로 부르지 않으며 어느 쪽도 canonical 실제 비용·손익·자동관리 적격을 변경하지 않는다.
+- 경과시간/내부 공백이 있는 OHLC227행과 탐색적 연관176행은 원6특징·원 AI·연속 실행 가능 경로를 증명하지 않는다. 현재 cohort의 시작률/weak/strong 우위, ADD/부분잔량 lifecycle, SELL 이후 미저장 경로, exact signal→intent→order→fill bridge는 해당 입력으로 비교 불가라는 결론으로 닫는다. E4/E5/E7의 새 전략을 구현·실행했다고 처리하지 않는다. 새로운 원천·가설은 별도 사전 등록 실험이며 같은 과거의 자연 표본 축적을 기다리는 blocker는 두지 않는다.
+
+원12cell 초기 부모 계승과 원천·보조 AI·수탁/수동 제외·비용·selector/PREOPEN은 보존했다. 이후 자연 원천·실제 PREOPEN/PID는 기존10/19 owner의 별도 수용이다. P5는 **모든 연구 종료 뒤에도 사용자의 별도 실행 지시 전까지 보류**한다. 운영 발행·배포·Main 재기동·외부 계좌/API·구독·provider·주문·외부 sync는 실행하지 않았다.

@@ -53,7 +53,7 @@ SNAPSHOT_CRON_TAGS = frozenset({
 })
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = CRON_TARGETS
-OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel",
+OPERATIONS = ("start", "restart", "validate-startup", *OWNED, "paired-replay", "eod", "archive", "buy-funnel",
               "pre-submit-source", "holding-exit-sentinel", "error-detection", "log-retention",
               "monitor-snapshot")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
@@ -890,6 +890,10 @@ def make_plan(
             str(root / "deploy" / f"run_{script}.sh"),
             "--resolve-effective-today" if operation == "finalize" else target_date,
         ]
+    elif operation == "validate-startup":
+        command = [str(root / '.venv/bin/python'), '-B', '-m',
+                   'src.engine.automation.main_startup_validation',
+                   '--workspace', str(workspace), '--target-date', target_date]
     elif operation == "buy-funnel":
         command = ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), target_date]
     elif operation == "monitor-snapshot":
@@ -1253,6 +1257,8 @@ def main() -> int:
             return 0
         if not args.operation:
             raise ValueError("operation_required")
+        if args.operation == 'validate-startup' and args.target_date is None:
+            raise ValueError('startup_validation_target_date_required')
         target_date=args.target_date or datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
         plan = make_plan(workspace, root, commit, args.operation, target_date)
         if args.print_plan:
