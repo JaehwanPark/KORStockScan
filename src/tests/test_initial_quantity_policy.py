@@ -776,7 +776,18 @@ def _context_for_initial_baseline():
     )
 
 
-def test_all_completed_trades_remain_in_denominator_and_no_cross_costs(tmp_path):
+@pytest.fixture
+def resident_budget_restored():
+    import gc
+    from src.engine.lifecycle.research_input_budget import health
+    before = health()['used_bytes']
+    assert before >= 0
+    yield
+    gc.collect()
+    assert health()['used_bytes'] == before
+
+
+def test_all_completed_trades_remain_in_denominator_and_no_cross_costs(tmp_path, resident_budget_restored):
     day = "2026-09-23"
     _quality(tmp_path, day)
     terminal_rows = [

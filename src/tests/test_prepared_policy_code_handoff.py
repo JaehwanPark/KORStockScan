@@ -179,6 +179,8 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
                 reviewed.add(H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES[name][1])
             if name in H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES:
                 reviewed.add(H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES[name][1])
+            if name in H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES:
+                reviewed.add(H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES[name][1])
             assert current in reviewed
 
 
@@ -301,7 +303,8 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     changed = H._verify_entry_code_delta(fixture,candidate,origin,paths,expected)
     assert set(H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES).issubset(changed)
     for name, pair in H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.items():
-        final_pair = H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(name, pair)
+        final_pair = H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(name,
+            H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(name, pair))
         assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == final_pair[1]
     # Model a clean committed candidate with an unknown replacement. The Git
     # fixture returns those same bytes, so rejection must be semantic/code-pair,
@@ -318,18 +321,23 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
 
 
 @pytest.mark.parametrize('prepared', ['main_stop', 'holding_vote'], indirect=True)
+@pytest.mark.parametrize('addition,key', [
+    ('src/engine/../utils/new_source.py', '../utils/new_source.py'),
+    ('src/engine/lifecycle/research_input_budget.py', 'lifecycle/research_input_budget.py'),
+])
 @pytest.mark.parametrize('fault', [None, 'missing', 'extra', 'full_key', 'normalized_key',
                                    'bad_extension_prefix', 'other_family'])
-def test_engine_relative_extension_preserves_native_family_keys(prepared, monkeypatch, fault):
+def test_engine_relative_extension_preserves_native_family_keys(prepared, monkeypatch, fault, addition, key):
     data, root, args, selector = _origin_resolution_arguments(prepared)
-    addition = 'src/engine/../utils/new_source.py'
     extensions = {addition: 'd'*64}
     monkeypatch.setitem(H.REVIEWED_DELAY_CONTRACT_EXTENSIONS, (ORIGIN, args['expected']), extensions)
-    args['paths'] = {**args['paths'], '../utils/new_source.py': addition}
-    if fault == 'missing': args['paths'].pop('../utils/new_source.py')
+    args['paths'] = {**args['paths'], key: addition}
+    if fault == 'missing': args['paths'].pop(key)
     elif fault == 'extra': args['paths']['unreviewed.py'] = 'src/engine/unreviewed.py'
     elif fault == 'full_key': args['paths'] = {'consumer.py': 'consumer.py', addition: addition}
-    elif fault == 'normalized_key': args['paths'] = {'consumer.py': 'consumer.py', 'src/utils/new_source.py': addition}
+    elif fault == 'normalized_key':
+        import os
+        args['paths'] = {'consumer.py': 'consumer.py', os.path.normpath(addition): addition}
     elif fault == 'bad_extension_prefix':
         monkeypatch.setitem(H.REVIEWED_DELAY_CONTRACT_EXTENSIONS, (ORIGIN, args['expected']),
                             {'src/utils/new_source.py': 'd'*64})

@@ -26,12 +26,63 @@ def completion_fact_scope(row):
             and str(row.get('position_tag') or '').upper() in QUANTITY_FACT_CUSTODIES)
 
 
+def _copy_resident(value, memo=None):
+    """Copy admitted data once, preserving shared owners within a deep copy."""
+    from copy import copy, deepcopy
+    result = type(value).__new__(type(value))
+    base = dict if isinstance(value, dict) else list
+    base.__init__(result)
+    if memo is None:
+        # A shallow copy shares payload references but owns its reservation.
+        claim = copy(value.claim)
+        try:
+            result.__dict__.update(value.__dict__)
+            result.claim = claim
+            (dict.update if base is dict else list.extend)(result, value)
+        except BaseException:
+            result.__dict__.clear()
+            base.clear(result)
+            claim.close()
+            raise
+        return result
+    previous = set(memo)
+    memo[id(value)] = result
+    try:
+        # Claim.__deepcopy__ admits bytes before any row is duplicated. Memo
+        # preserves shared list/partition owners without reacquiring twice.
+        result.__dict__.update(deepcopy(value.__dict__, memo))
+        if base is dict:
+            for key, item in value.items():
+                dict.__setitem__(result, deepcopy(key, memo), deepcopy(item, memo))
+        else:
+            # These rows are covered by the copied claim. BoundedRows.append
+            # would charge the original reservation again during reconstruction.
+            list.extend(result, (deepcopy(item, memo) for item in value))
+    except BaseException:
+        # Keep caller-owned memo entries and original claims untouched. A
+        # failed clone may survive in an exception traceback or caller memo.
+        for key in set(memo) - previous:
+            copied = memo.pop(key)
+            if isinstance(copied, Claim):
+                copied.close()
+        result.__dict__.clear()
+        base.clear(result)
+        raise
+    return result
+
+
 class ResidentPaths(dict):
     """Keep the shared claim alive for the entire retained feature lifetime."""
     def __init__(self):
         super().__init__()
         self.claim=Claim(0)
         self.partitions=[]
+
+    def __copy__(self):
+        return _copy_resident(self)
+
+    def __deepcopy__(self, memo):
+        return _copy_resident(self, memo)
 
 
 class BoundedRows(list):
@@ -42,6 +93,12 @@ class BoundedRows(list):
     def append(self, value):
         self.claim.grow(len(storage.encoded(encode(value)))*8)
         super().append(value)
+
+    def __copy__(self):
+        return _copy_resident(self)
+
+    def __deepcopy__(self, memo):
+        return _copy_resident(self, memo)
 
 
 class ResidentFacts(BoundedRows):
@@ -90,6 +147,7 @@ def fingerprint(trades,path,horizon):
         'initial_quantity_policy.py','initial_quantity_source_cache.py',
         'initial_quantity_cap_observation.py','initial_quantity_type.py')}
     readers['utils/jsonl_io.py']=engine.parent/'utils/jsonl_io.py'
+    readers['lifecycle/research_input_budget.py']=engine/'lifecycle/research_input_budget.py'
     reader={name:hashlib.sha256(path.read_bytes()).hexdigest()
             for name,path in readers.items()}
     legacy_fields = ('trade_id','record_id','stock_code','entry_date','exit_date',

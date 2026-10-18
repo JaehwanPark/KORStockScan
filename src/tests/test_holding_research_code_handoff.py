@@ -22,7 +22,8 @@ GENERATIONS = {
 PAIRS = {
     'historical_9d': H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES,
     'completed_current': {**H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES,
-                          **H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES},
+                          **H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES,
+                          **H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES},
 }
 DEPENDENCIES = {
     generation: H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[TRIGGER][pairs[TRIGGER][1]]
@@ -35,7 +36,8 @@ DEPENDENCY_CASES = {
     'completed_current': (*DEPENDENCIES['historical_9d'],
         'src/engine/scalping/main_stop_runtime_source.py',
         'src/engine/lifecycle/holding_research_cost.py',
-        'src/engine/infrastructure/main_prompt_policy_loading.py'),
+        'src/engine/infrastructure/main_prompt_policy_loading.py',
+        'src/engine/lifecycle/research_input_budget.py'),
 }
 
 
@@ -52,7 +54,22 @@ def candidate(tmp_path, monkeypatch, request):
     dependencies = DEPENDENCIES[generation]
     root = tmp_path / 'source'
     names = {OWN, *pairs, *dependencies}
-    committed = {name: REAL_GIT(['git', '-C', str(ROOT), 'show', commit+':'+name])
+    git_root=ROOT
+    if generation=='completed_current':
+        # A real private commit permits validation before the caller commits
+        # its final candidate. Historical 9d still reads only original objects.
+        # This never labels dirty working-tree bytes as an old Git generation.
+        import subprocess
+        git_root=tmp_path/'current-git'
+        subprocess.run(['git','clone','--shared','--no-checkout','-q',str(ROOT),str(git_root)],check=True)
+        for name in names:
+            path=git_root/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_bytes((ROOT/name).read_bytes())
+        subprocess.run(['git','-C',str(git_root),'add','--force',*sorted(names)],check=True)
+        subprocess.run(['git','-C',str(git_root),'-c','user.name=fixture','-c','user.email=fixture@example.test',
+                        'commit','-qm','frozen current reviewed dependency generation'],check=True)
+        commit=REAL_GIT(['git','-C',str(git_root),'rev-parse','HEAD'],text=True).strip()
+    committed = {name: REAL_GIT(['git', '-C', str(git_root), 'show', commit+':'+name])
                  for name in names}
     for name, raw in committed.items():
         path = root / name
@@ -72,7 +89,7 @@ def candidate(tmp_path, monkeypatch, request):
         expected = digest({name: hashlib.sha256(original[name]).hexdigest()})
         return NATIVE_VERIFY(root, commit, ORIGIN, {name: path_name}, expected)
     return SimpleNamespace(root=root, committed=committed, original=original, verify=verify,
-        pairs=pairs, dependencies=dependencies, generation=generation, commit=commit)
+        pairs=pairs, dependencies=dependencies, generation=generation, commit=commit,git_root=git_root)
 
 
 @pytest.mark.parametrize('candidate,name', [
@@ -82,7 +99,7 @@ def test_real_reviewed_pairs_preserve_exact_original_and_integrated_sources(cand
     c = candidate
     pair = c.pairs[name]
     assert tuple(hashlib.sha256(raw).hexdigest() for raw in (c.original[name], c.committed[name])) == pair
-    assert c.committed[name] == REAL_GIT(['git', '-C', str(ROOT), 'show', c.commit+':'+name])
+    assert c.committed[name] == REAL_GIT(['git', '-C', str(c.git_root), 'show', c.commit+':'+name])
     before = {str(path): path.read_bytes() for path in c.root.rglob('*.py')}
     assert c.verify(name) == [name]
     assert before == {str(path): path.read_bytes() for path in c.root.rglob('*.py')}
@@ -133,7 +150,7 @@ def test_generation_closures_are_separate_and_every_dependency_is_git_bound(cand
     assert len(c.dependencies) == (2 if c.generation == 'historical_9d' else 59)
     for name, expected in c.dependencies.items():
         assert hashlib.sha256(c.committed[name]).hexdigest() == expected
-        assert c.committed[name] == REAL_GIT(['git', '-C', str(ROOT), 'show', c.commit+':'+name])
+        assert c.committed[name] == REAL_GIT(['git', '-C', str(c.git_root), 'show', c.commit+':'+name])
     assert c.verify() == [TRIGGER]
 
 

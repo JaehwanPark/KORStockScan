@@ -57,6 +57,7 @@ def _code_paths():
         "automation/main_stop_source_index.py",
         "lifecycle/broker_cost_reconciliation.py",
         "lifecycle/research_storage.py",
+        "lifecycle/research_input_budget.py",
     )
     return names + ("lifecycle/holding_window_generation.py", "lifecycle/snapshot_archive.py")
 

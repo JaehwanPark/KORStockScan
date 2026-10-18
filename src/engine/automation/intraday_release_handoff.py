@@ -1055,6 +1055,22 @@ REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES = {'src/engine/automation/main_s
  'src/utils/threshold_cycle_registry.py': ('41c0a941d66a66bd1e6827960e225439e4af185f1d5635939a362f8345096541',
                                            '5e914fc73837324d312a97672b0aa7d8bd49c788bcd54ff7e0a6ab3c0d08ce8a')}
 
+# Shared Claim ownership and its direct policy-code consumers. These exact
+# source pairs supplement, rather than replace, the reviewed research pairs.
+# The helper was already in delay's original digest; stop/holding add it as a
+# separately verified extension and retain their original 17/22-key digests.
+REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES = {
+    'src/engine/lifecycle/research_input_budget.py': (
+        'a29ba8caeddd652e764e1a760218006038cc83ebc9aec89e5b78055598eedcf2',
+        '4e831253a975345863bc216623fe12618cc933510ed0154360b38ac068906c63'),
+    'src/engine/scalping/main_stop_policy.py': (
+        '74600db4eb6897546f266ee87cd3f7001d5562ca8668dbd08ba15371484cafad',
+        'a9a5f40ac773590816900becaa0f1c9ee5d83203c524d7bb855ee50116675f93'),
+    'src/engine/scalping/holding_vote_experiment.py': (
+        '0086eb212c3187c5b89e8680adacb28d96aad56d7f45e96788839f0824bdeaae',
+        '93633c0a9cea34837dd3bea2297dcb5305eb23651133e67d3788bc4fa2ad1007'),
+}
+
 # The original stop digest covers 17 keys. Added current implementation keys
 # are verified separately, without rewriting that sealed historical digest.
 REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
@@ -1076,6 +1092,7 @@ REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
  'src/engine/lifecycle/broker_cost_reconciliation.py': 'db9f1d2db58d6e766b9a18db22e643c4bdc748c8580d8b364cc36d6066b129d5',
  'src/engine/lifecycle/broker_cost_source.py': '62a88c219868754055c8754a43fb5976c453aa70c81422fd97e410a8ae995c86',
  'src/engine/lifecycle/main_stop_research_cost.py': '0b76f9039325382ce8aa685e069b8783c333021ac1b9dc82f24f452b2b2768c7',
+ 'src/engine/lifecycle/research_input_budget.py': '4e831253a975345863bc216623fe12618cc933510ed0154360b38ac068906c63',
  'src/engine/log_archive_service.py': 'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
  'src/engine/monitoring/runtime_performance.py': '80089ba158ce24d79df5f37de8d521321bc2a40f988d5f394e354db637cce78d',
  'src/engine/scalping/exit_safety_monitor.py': 'a7dac48b1659431f15e187021856d5482d4d13426c442b73aba40d8918622b4c',
@@ -1086,6 +1103,12 @@ REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
  'src/engine/scalping/main_stop_runtime_source.py': 'fb32767aee777ed660ec0db018b5419e6f12f09a5644882425f79a954bd32978',
  'src/engine/sniper_execution_receipts.py': '978dcd47d83709b245dfe8e2983b450d6559f39c9716fe47cce5a475b1eee4b6',
  'src/engine/sniper_trade_utils.py': 'c816ae517e1557d9b79dd9338658458f3fde5929467b7a7879c64c70a42611ac'}
+
+REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
+    '7f2552aedde8fec6ef904a43105827907e50dfc8',
+    '6c664915b34289cddceeaf20399cce45f5e9e3f3373fdeae885910043f343112',
+)] = {'src/engine/lifecycle/research_input_budget.py':
+      '4e831253a975345863bc216623fe12618cc933510ed0154360b38ac068906c63'}
 
 # All three native families include this exact handler. Bind its integrated
 # source/quantity/reader and holding/helper closure on every verification;
@@ -1116,7 +1139,7 @@ REVIEWED_HOLDING_RESEARCH_DEPENDENCIES['src/engine/sniper_state_handlers.py']['5
  'src/engine/lifecycle/holding_research_cost.py': 'ef309953ea56261e38e1238ed2c61a4bcbd5e77f61677ee01fa30433bc077dd3',
  'src/engine/lifecycle/holding_window_generation.py': '52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
  'src/engine/lifecycle/main_stop_research_cost.py': '0b76f9039325382ce8aa685e069b8783c333021ac1b9dc82f24f452b2b2768c7',
- 'src/engine/lifecycle/research_input_budget.py': 'a29ba8caeddd652e764e1a760218006038cc83ebc9aec89e5b78055598eedcf2',
+ 'src/engine/lifecycle/research_input_budget.py': '4e831253a975345863bc216623fe12618cc933510ed0154360b38ac068906c63',
  'src/engine/lifecycle/research_json_stream.py': 'fbca117c876a62659255914b5771772cdcbdb3e58a904e566a402959379f3df0',
  'src/engine/lifecycle/research_storage.py': 'bc936e55d483e9e58995924b139cd13f423ce911e60a50c6b63859855f711f3e',
  'src/engine/lifecycle/snapshot_archive.py': '9b1a0ac18db7fde52f609db45950b9fb631376f401fa565088a9831dd80ad42a',
@@ -1131,7 +1154,7 @@ REVIEWED_HOLDING_RESEARCH_DEPENDENCIES['src/engine/sniper_state_handlers.py']['5
  'src/engine/scalping/holding_vote_exit_models.py': '084f6e6036bc9a3807fe68f2b389fc02d628905d7ba0b08d58e451667547c481',
  'src/engine/scalping/initial_quantity_bundle_state.py': '3dd0ad1be14e821d9b402184aba9b68ee989cf7d8ee45fb47206bdcf3e39da70',
  'src/engine/scalping/main_stop_experiment.py': 'd7a23d1742d1b73ddd75af876839eb03500f8ef4baad23d33f0d007102720ffa',
- 'src/engine/scalping/main_stop_policy.py': '8d7bcb0bf87db0dc2a44c99f41e67249831463af8157d23688f0c82e5362bc07',
+ 'src/engine/scalping/main_stop_policy.py': 'a9a5f40ac773590816900becaa0f1c9ee5d83203c524d7bb855ee50116675f93',
  'src/engine/scalping/main_stop_quantity_source.py': 'dd49bd2d6543adfa0e653974e31c37be7aed752b6e279a58e33ceca846ea240e',
  'src/engine/scalping/main_stop_replay.py': '4121f176553433e2d07cdc1b8466c4a54edfa6cf00bbe09bde4e12a74258730d',
  'src/engine/scalping/main_stop_runtime_source.py': 'fb32767aee777ed660ec0db018b5419e6f12f09a5644882425f79a954bd32978',
@@ -1210,7 +1233,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(repository_name(name)),
+        if pair in (REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(repository_name(name)),
+                    REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(repository_name(name)),
                     REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES.get(name),
                     REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.get(name),
                     REVIEWED_QUANTITY_RESEARCH_COST_SOURCES.get(name),

@@ -1232,15 +1232,24 @@ def test_completed_research_preserves_original_policy_digest_with_real_git(compl
         '7f2552aedde8fec6ef904a43105827907e50dfc8', inventories[family], digests[family])
     assert 'src/engine/sniper_state_handlers.py' in changed
     if family == 'main_stop':
-        assert len(inventories[family]) == 43
+        assert len(inventories[family]) == 44
         extensions = handoff.REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
             '7f2552aedde8fec6ef904a43105827907e50dfc8', digests[family])]
-        assert len(extensions) == 26 and set(extensions) <= set(changed)
+        assert len(extensions) == 27 and set(extensions) <= set(changed)
+        assert len(inventories[family]) - len(extensions) == 17
+    if family == 'holding_vote':
+        extensions = handoff.REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
+            '7f2552aedde8fec6ef904a43105827907e50dfc8', digests[family])]
+        assert len(inventories[family]) == 23
+        assert set(extensions) == {'src/engine/lifecycle/research_input_budget.py'}
+        assert len(inventories[family]) - len(extensions) == 22
+        assert set(extensions) <= set(changed)
     assert before == {str(p): handoff._sha(p) for p in (root/'src').rglob('*.py')}
 
 
 @pytest.mark.parametrize('source', ['src/engine/scalping/main_stop_runtime_source.py',
-    'src/engine/lifecycle/holding_research_cost.py', 'src/engine/infrastructure/main_prompt_policy_loading.py'])
+    'src/engine/lifecycle/holding_research_cost.py', 'src/engine/infrastructure/main_prompt_policy_loading.py',
+    'src/engine/lifecycle/research_input_budget.py'])
 @pytest.mark.parametrize('fault', ['changed_committed', 'changed_dirty', 'git_object_changed',
                                    'missing', 'symlink', 'parent_symlink'])
 def test_completed_research_rejects_changed_or_unbound_transitive_source(
@@ -1264,9 +1273,53 @@ def test_completed_research_rejects_changed_or_unbound_transitive_source(
     else:
         directory = path.parent;saved = directory.with_name(directory.name+'_saved')
         directory.rename(saved);directory.symlink_to(saved, target_is_directory=True)
-    # Delay's old inventory omits these files; the exact handler trigger must
-    # still close their native transitive source contract.
-    with pytest.raises(ValueError, match='reviewed_dependency_dirty' if fault == 'git_object_changed' else ''):
+    # Delay directly owns budget.py; the remaining omitted dependencies are
+    # enforced by its exact handler closure. Both reject different Git bytes.
+    error = None
+    if fault == 'git_object_changed':
+        error = ('entry_consumer_dirty_release' if source in inventories['pre_submit_delay'].values()
+                 else 'reviewed_dependency_dirty')
+    with pytest.raises(ValueError, match=error):
         handoff._verify_entry_code_delta(root, commit,
             '7f2552aedde8fec6ef904a43105827907e50dfc8',
             inventories['pre_submit_delay'], digests['pre_submit_delay'])
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote'])
+def test_shared_budget_bytes_invalidate_current_native_policy_generation(tmp_path, monkeypatch, family):
+    """The equal-current-digest path also binds Claim; no compatibility receipt is needed."""
+    from src.engine.scalping import main_stop_policy as stop
+    from src.engine.scalping import holding_vote_experiment as holding
+    module = stop if family == 'main_stop' else holding
+    paths = stop.implementation_paths() if family == 'main_stop' else holding._code_paths()
+    code = stop.implementation_sha if family == 'main_stop' else holding.code_sha
+    engine = Path(module.__file__).parents[1]
+    target = tmp_path/'src/engine'
+    for name in paths:
+        path=target/name;path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes((engine/name).read_bytes())
+    assert paths.count('lifecycle/research_input_budget.py') == 1
+    monkeypatch.setattr(module,'__file__',str(target/'scalping'/Path(module.__file__).name))
+    before = code()
+    budget = target/'lifecycle/research_input_budget.py'
+    original=budget.read_bytes();budget.write_bytes(original+b'\n# Different admitted memory generation.\n')
+    assert code() != before
+    budget.write_bytes(original)
+    assert code() == before
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote'])
+@pytest.mark.parametrize('fault', ['missing_extension', 'wrong_hash', 'wrong_family'])
+def test_budget_extension_cannot_change_the_original_policy_inventory(
+        completed_research_git_candidate, monkeypatch, family, fault):
+    root,commit,inventories,digests=completed_research_git_candidate
+    origin='7f2552aedde8fec6ef904a43105827907e50dfc8'
+    key=(origin,digests[family]);name='src/engine/lifecycle/research_input_budget.py'
+    extensions=dict(handoff.REVIEWED_DELAY_CONTRACT_EXTENSIONS[key])
+    paths=dict(inventories[family]);expected=digests[family]
+    if fault=='missing_extension':extensions.pop(name)
+    elif fault=='wrong_hash':extensions[name]='0'*64
+    elif fault=='wrong_family':expected=digests['holding_vote' if family=='main_stop' else 'main_stop']
+    monkeypatch.setitem(handoff.REVIEWED_DELAY_CONTRACT_EXTENSIONS,key,extensions)
+    with pytest.raises(ValueError):
+        handoff._verify_entry_code_delta(root,commit,origin,paths,expected)
