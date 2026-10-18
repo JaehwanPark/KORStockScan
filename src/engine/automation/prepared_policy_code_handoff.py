@@ -250,7 +250,7 @@ def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, pat
 
 
 def issue(data, day, *, family, policy_sha, expected, paths, release_root,
-          prepared_receipt, origin_verification, confirm):
+          prepared_receipt, origin_verification, confirm, previous_handoff=None):
     """Issue under the deployment caller's release-set and selection locks."""
     from src.engine.infrastructure.runtime_release_router import validate_release, selected_release
     from src.engine.automation import intraday_release_handoff as H
@@ -266,10 +266,30 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
     commit = subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     validate_release(data.parent, dict(schema='runtime_release_selection_v1', workspace=str(data.parent),
                                       release_root=str(root), git_commit=commit))
-    prepared, manifest = _origin(prepared_receipt, family, day)
+    selected_root, selected_commit = selected_release(data.parent)
+    previous = None
+    historical = None
+    if previous_handoff is not None:
+        previous_path = receipt_path(data, day, selected_commit, family)
+        if Path(previous_handoff) != previous_path:
+            raise ValueError('prepared_code_previous_handoff_not_selected')
+        previous = _read(previous_path)
+        previous_sha = _sha(previous_path)
+        previous_actual = _digest({key:_sha(selected_root/name) for key,name in paths.items()})
+        verified = verify(data, day, family=family, policy_sha=policy_sha, expected=expected,
+                          paths=paths, actual=previous_actual)
+        if (verified is None or verified.get('release_commit') != selected_commit
+                or _sha(previous_path) != previous_sha
+                or previous.get('original_prepared_receipt') != str(prepared_receipt)):
+            raise ValueError('prepared_code_previous_handoff_changed')
+        historical = previous['historical_snapshots']
+        # Reuse only the native verifier's immutable original coordinates.
+        # Never restore historical aliases over the current controller/policy.
+        prepared, manifest = _origin(previous['prepared_receipt'], family, day, historical)
+    else:
+        prepared, manifest = _origin(prepared_receipt, family, day)
     origin = prepared['selected_release_commit']
-    _, selected_commit = selected_release(data.parent)
-    if selected_commit not in {origin, commit}:
+    if previous is None and selected_commit not in {origin, commit}:
         raise ValueError('prepared_code_selection_changed')
     policy_path, policy_code = _policy(data, day, family, manifest)
     if (str(origin_verification) != prepared['verification_path']
@@ -285,8 +305,9 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
     frozen = Path(data)/'runtime/policy_bootstrap/code_handoffs/frozen'
     frozen.mkdir(parents=True, exist_ok=True)
     for source in historical_paths:
-        before = _sha(source)
-        raw = source.read_bytes()
+        physical = Path(historical[str(source)]) if historical is not None else source
+        before = _sha(physical)
+        raw = physical.read_bytes()
         if hashlib.sha256(raw).hexdigest() != before:
             raise ValueError('prepared_code_origin_changed')
         destination = frozen/(before+'.snapshot')
@@ -295,11 +316,16 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
                 handle.write(raw)
         except FileExistsError:
             pass
-        if _sha(destination) != before or _sha(source) != before:
+        if _sha(destination) != before or _sha(physical) != before:
             raise ValueError('prepared_code_frozen_origin_changed')
         snapshots[str(source)] = str(destination)
     sources = {name:_sha(name) for name in snapshots.values()}
     sources[str(policy_path)] = _sha(policy_path)
+    if previous is not None:
+        if (_sha(previous_path) != previous_sha
+                or selected_release(data.parent) != (selected_root, selected_commit)):
+            raise ValueError('prepared_code_previous_handoff_changed')
+        sources[str(previous_path)] = previous_sha
     body = dict(schema=SCHEMA, authority=confirm, family=family, target_date=day,
                 release_root=str(root), release_commit=commit, origin_commit=origin,
                 policy_sha256=policy_sha, original_code_sha256=expected, runtime_code_sha256=actual,
@@ -307,6 +333,9 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
                 original_prepared_receipt=str(prepared_receipt), historical_snapshots=snapshots,
                 origin_verification=snapshots[str(origin_verification)], sources=sources, policy_effect='unchanged',
                 actual_pid_consumed=False, policy_published=False, provider_called=False, broker_called=False)
+    if previous is not None:
+        body['previous_handoff'] = dict(path=str(previous_path), sha256=previous_sha,
+                                       release_commit=selected_commit)
     body['receipt_sha256'] = _digest(body)
     destination = receipt_path(data, day, commit, family)
     if destination.exists() and _read(destination) != body:

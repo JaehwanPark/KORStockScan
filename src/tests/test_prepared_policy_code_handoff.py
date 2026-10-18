@@ -95,6 +95,48 @@ def test_missing_receipt_keeps_ordinary_native_path(tmp_path,monkeypatch):
     assert C.verify(tmp_path,DAY,family='main_stop',policy_sha='x',expected='x',paths={},actual='x') is None
 
 
+@pytest.mark.parametrize('fault', [None, 'unselected', 'frozen_source', 'policy', 'origin', 'selection_race'])
+def test_successive_issue_uses_selected_frozen_origin_without_rewriting_aliases(prepared, monkeypatch, fault):
+    import subprocess
+    data, old_root, args, actual, previous, pp = prepared
+    new_root = old_root.with_name('successor'); new_root.mkdir()
+    (new_root/'consumer.py').write_bytes((old_root/'consumer.py').read_bytes())
+    new_commit = 'c'*40
+    monkeypatch.setattr(subprocess, 'check_output', lambda *a, **kw: new_commit+'\n')
+    previous_path = C.receipt_path(data, DAY, COMMIT, args['family'])
+    original = C._read(pp)
+    controller = Path(original['controller_path'])
+    controller.write_text('{"status":"new current generation"}')
+    before = {p: p.read_bytes() for p in (pp, controller, previous_path, data/'policy.json')}
+    passed_previous = previous_path
+    if fault == 'unselected': passed_previous = previous_path.with_name('other.json')
+    elif fault == 'frozen_source':
+        Path(previous['historical_snapshots'][str(controller)]).write_text('tampered')
+    elif fault == 'policy': (data/'policy.json').write_text('{"changed":true}')
+    elif fault == 'origin': pp = pp.with_name('unrelated-prepared.json')
+    elif fault == 'selection_race':
+        count = 0
+        def selected(*a):
+            nonlocal count
+            count += 1
+            return (old_root, COMMIT) if count < 3 else (new_root, new_commit)
+        monkeypatch.setattr(R, 'selected_release', selected)
+    def issue():
+        return C.issue(data, DAY, **args, release_root=new_root, prepared_receipt=pp,
+                       origin_verification=Path(original['verification_path']),
+                       confirm=C.AUTHORITY, previous_handoff=passed_previous)
+    if fault:
+        with pytest.raises((ValueError, OSError, KeyError)): issue()
+        assert not C.receipt_path(data, DAY, new_commit, args['family']).exists()
+    else:
+        receipt = issue()
+        assert receipt['origin_commit'] == ORIGIN
+        assert receipt['previous_handoff']['sha256'] == C._sha(previous_path)
+        assert all(p.read_bytes() == raw for p, raw in before.items())
+        monkeypatch.setattr(R, 'selected_release', lambda *a: (new_root, new_commit))
+        assert C.verify(data, DAY, **args, actual=actual)['policy_effect'] == 'unchanged'
+
+
 def test_target_expiry_is_not_renewed():
     C._clock(DAY,NOW)
     C._clock(DAY,NOW.replace(day=19))

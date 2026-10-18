@@ -2096,8 +2096,14 @@ run_data_maintenance() {
   # The bounded owner-manifest lane below is the only tmp deletion owner.
 
   find_path="$(mktemp "$LOG_DIR/.cleanup_find_cache.XXXXXX")"
+  # Shared evidence and private deployment workdirs have independent owners.
+  # Never traverse them for disposable interpreter/tool caches, even when a
+  # preserved OS-isolation workdir is intentionally unreadable (mode 000).
   if ! collect_find_results "cache_retention_census" "$find_path" \
-    "$PROJECT_DIR" -path "$PROJECT_DIR/.venv" -prune -o \( \
+    "$PROJECT_DIR" \( -path "$PROJECT_DIR/.venv" -o \
+      -path "$PROJECT_DIR/.git" -o -path "$PROJECT_DIR/data" -o \
+      -path "$PROJECT_DIR/logs" -o -path "$PROJECT_DIR/tmp" -o \
+      -path "$PROJECT_DIR/docs" \) -prune -o \( \
       -type d -name '__pycache__' -o \
       -type d -name '.pytest_cache' -o \
       -type d -name '.mypy_cache' -o \

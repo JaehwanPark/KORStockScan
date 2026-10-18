@@ -1,0 +1,17 @@
+# 10/19 PREOPEN 경고 수리와 실행 검증
+
+원천일은 2026-10-16, 적용 대상은 2026-10-19다. 사용자는 경고 수리·재생성·재기동을 지시했다. 최초 선택은 `958d35b2b03f0a37462c1c0121fc14c108e709b8`이며 Main/supervisor 부재를 확인했다. 기존 원 정책, 수동/퇴역 custody, 수량·threshold·provider·hard safety는 유지한다. 원 05:41 실패와 10/18 P5/P6 PASS는 각 당시 증거로 보존한다.
+
+## 재현과 수리 범위
+
+- 05:35 finalization은 controller/summary를 갱신한 뒤 cleanup에서 실패했다. 일반 캐시 탐색이 보존된 배포 격리 `work` 디렉터리(mode 000)에 진입했다. 준비 재생성은 후행 단계라 실행되지 않았으며 native 검증은 `prepared_source_or_release_changed`였다.
+- 캐시 탐색은 `.venv/.git/data/logs/tmp/docs`를 소유권 경계에서 제외한다. 증거 내부 캐시·권한·원천을 보존하고, 일반 코드 범위 읽기 실패는 계속 cleanup 실패로 처리한다. 부분 탐색 결과로 삭제하지 않는다. 운영 계약은 [로그 보관](../operational-log-retention.md)을 따른다.
+- 후속 release의 동일 정책 코드 인계는 선택된 predecessor의 native 검증을 통과한 immutable 원 준비 증거를 이어받는다. `previous_handoff`는 현재 선택 commit/family의 정식 경로만 허용하며 원 정책·원 코드 digest·전체 source·날짜·clean candidate를 재검증한다. 바뀐 controller/summary 경로에 과거 원문을 복원하지 않는다. 선택 경합·원천 변조·다른 family/정책/준비 원본은 거부한다. 이는 정책 발행·PREOPEN·PID 권한이 아니다.
+- trailing 경고는 보고서 code contract와958 실제 계약의 불일치다. 기존 producer의 completion prefix→fact→quantity→holding suffix를 통해 현재 코드의 새 세대를 생성한 뒤 summary/strict/controller/준비와 연결한다.
+- 초기 수량 경고의 기존 완료 모수13건은 비용/수량 결손으로 제외됐다. 운영 research cost index가 없음을 확인했다. 기존 공식 저장 자료를 native producer로 연결하며 배분 연구 비용을 canonical 실제 비용으로 바꾸지 않는다. 복구 불가 부분은 null/제외를 유지한다.
+
+## 검증과 진행
+
+캐시 탐색의 증거 보호·권한 거부·partial census 회귀 및 cleanup/finalization 98개 통과. 후속 정책 코드 인계·장전 준비·intraday 인계 2,646개 회귀가 통과했다. 성공과 선택 경합·변조·다른 원본 거부를 검증했으며 Python compile, shell syntax, diff, print-only 문서 parser도 통과했다. 자기 리뷰→보완→재리뷰에서 이 변경 범위 미해결 지적0이다. 최종 native generation과 실제 배포/PID는 별도 검증한다.
+
+기존12개 준비/정책/선택/보고서 및 원 snapshot11개 2,457,982,550bytes는 [작업 증거](../../tmp/preopen-alert-repair-20261019/)에 보존했다. 재생성·배포·실제 PID·자연 신호/비용 성과는 아직 완료로 표시하지 않는다. 기존 `DirectFamilyPreopenPolicyHandoff`, `OperationalLogRetentionRepair1016`, `InitialQuantityProducerConsumerRepair1010`, `HoldingProfitExitSourceContractRepair`의 Acceptance를 유지한다.
