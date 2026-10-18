@@ -139,6 +139,39 @@ def test_invalid_path_is_not_mislabeled_as_resource_exclusion(tmp_path):
     assert diagnostic.series(linked,DAY,'005930',as_of=clock())[1]=='minute_history_path_invalid'
 
 
+@pytest.mark.parametrize('public_entry', ['series', 'build'])
+def test_native_bar_payload_admitted_before_json_read_and_budget_is_not_source_gap(tmp_path,monkeypatch,public_entry):
+    source,assembled,manifest=source_manifest(tmp_path)
+    rows=bars(2)
+    rows[0]['large_native_extra']='x'*(2*1024*1024)
+    path,_=publish(source,rows,now=clock('09:02:00'))
+    before=diagnostic.carrier_generation(path)
+    monkeypatch.setattr(history,'read',lambda *a,**k:pytest.fail('unadmitted native JSON reader called'))
+    with pytest.raises(ValueError,match='shared_research_budget_partition_resume_required'):
+        if public_entry=='series':
+            diagnostic.series(source,DAY,'005930',as_of=clock())
+        else:
+            diagnostic.build(manifest,input_root=assembled,data_root=source)
+    assert diagnostic.carrier_generation(path)==before
+
+
+def test_selected_native_payload_byte_count_uses_utf8_bytes_without_changing_bars(tmp_path):
+    path,_=publish(tmp_path,bars(2),now=clock('09:02:00'))
+    with closing(sqlite3.connect(path)) as db:
+        for fingerprint,raw in db.execute('SELECT hash,content FROM bars').fetchall():
+            db.execute('UPDATE bars SET content=? WHERE hash=?',
+                (json.dumps(json.loads(raw),ensure_ascii=False),fingerprint))
+        db.commit()
+        expected=db.execute('SELECT sum(length(CAST(content AS BLOB))) FROM bars').fetchone()[0]
+        chars=db.execute('SELECT sum(length(content)) FROM bars').fetchone()[0]
+    assert expected>chars
+    before=diagnostic.carrier_generation(path)
+    source,issue=diagnostic.series(tmp_path,DAY,'005930',as_of=clock())
+    assert issue is None and source['selected_bar_payload_bytes']==expected
+    assert source['bar_decode_expansion_factor']==32 and len(source['bars'])==2
+    assert diagnostic.carrier_generation(path)==before
+
+
 def test_as_of_reads_available_historical_revision_behind_future_current(tmp_path):
     _,early = publish(tmp_path,bars(2),now=clock('09:02:00'))
     publish(tmp_path,bars(10))

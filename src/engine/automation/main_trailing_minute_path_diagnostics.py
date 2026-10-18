@@ -30,6 +30,7 @@ KST = ZoneInfo('Asia/Seoul')
 # One daily private copy holds DB+WAL together and is removed before the next.
 MAX_COPY_CARRIER_BYTES = 512 * 1024 * 1024
 COPY_CHUNK_BYTES = 64 * 1024
+BAR_DECODE_EXPANSION_FACTOR = 32
 
 
 def carrier_generation(path):
@@ -99,6 +100,12 @@ def _snapshot(root, day):
 
 
 def _read_series(snapshot, day, item, *, as_of):
+    # Native row count does not bound JSON/deepcopy bytes of a stored bar.
+    with Claim(0) as decoded:
+        return _read_series_admitted(snapshot, day, item, as_of=as_of, decoded=decoded)
+
+
+def _read_series_admitted(snapshot, day, item, *, as_of, decoded):
     if type(as_of) not in (int,float) or not math.isfinite(as_of) or as_of <= 0:
         return None, 'minute_history_cutoff_invalid'
     path = snapshot['read_root']/'runtime/main_minute_history'/day/'completed.sqlite3'
@@ -173,6 +180,17 @@ def _read_series(snapshot, day, item, *, as_of):
         count = len(manifest['bar_hashes'])
         if not 0 < count <= completed_history.MAX_ROWS:
             return None, 'minute_history_revision_count_invalid'
+        # Admit exact UTF-8 payload bytes before the public reader parses and
+        # deep-copies them. SQLite length(TEXT) counts characters, not bytes.
+        marks = ','.join('?' for _ in manifest['bar_hashes'])
+        with closing(sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=.025)) as db:
+            db.execute('PRAGMA query_only=ON')
+            found, payload_bytes = db.execute(
+                'SELECT count(*),coalesce(sum(length(CAST(content AS BLOB))),0) '
+                'FROM bars WHERE hash IN ('+marks+')', manifest['bar_hashes']).fetchone()
+        if found != count or type(payload_bytes) is not int or payload_bytes <= 0:
+            return None, 'minute_history_native_reader_rejected'
+        decoded.grow(payload_bytes * BAR_DECODE_EXPANSION_FACTOR)
         value = completed_history.read(snapshot['read_root'], manifest['identity'], now=as_of, limit=count,
                                        include_forming=False, revision=revision)
         if value is None:
@@ -208,9 +226,13 @@ def _read_series(snapshot, day, item, *, as_of):
                     comparable_chart_identity_sha256=digest(chart_identity),
                     eligible_acquisition_sessions=sorted(acquisition_sessions),
                     source_completed_bar_count=len(bars), diagnostic_day_bar_count=len(normalized),
+                    selected_bar_payload_bytes=payload_bytes,
+                    bar_decode_expansion_factor=BAR_DECODE_EXPANSION_FACTOR,
                     adjustment=manifest['identity']['adjustment'],
                     adjustment_equivalence_to_reference='unproven'), None
-    except (OSError, ValueError, TypeError, KeyError, OverflowError, sqlite3.Error, zlib.error):
+    except (OSError, ValueError, TypeError, KeyError, OverflowError, sqlite3.Error, zlib.error) as exc:
+        if str(exc) == 'shared_research_budget_partition_resume_required':
+            raise
         return None, 'minute_history_source_contract_invalid'
 
 
@@ -221,6 +243,8 @@ def series(root, day, item, *, as_of):
             result = _read_series(snapshot,day,item,as_of=as_of)
         return result
     except (OSError,ValueError,TypeError,OverflowError) as exc:
+        if str(exc) == 'shared_research_budget_partition_resume_required':
+            raise
         issue = str(exc) if str(exc).startswith('minute_history_') else 'minute_history_source_contract_invalid'
         return None, issue
 
@@ -359,6 +383,8 @@ def _build(manifest_path, *, input_root, data_root, retained):
             sources.extend(day_sources)
             rows.extend(day_rows)
         except (OSError,ValueError,TypeError,OverflowError) as exc:
+            if str(exc) == 'shared_research_budget_partition_resume_required':
+                raise
             issue = str(exc) if str(exc).startswith('minute_history_') else 'minute_history_source_contract_invalid'
             for (group_day,_), positions in groups.items():
                 if group_day == day:
