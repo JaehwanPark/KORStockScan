@@ -1558,6 +1558,20 @@ REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS = {('src/engine/sniper_state_
                                                                                                                'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
                                                                                                                'selector_sha256': '1c0746f95b03e908ad867540af945d0bfb1abd927d34a8d89954634e6c56baf4'}}
 
+# One complete successor of the reviewed partial-sell generation. Historical
+# generations remain immutable; selection requires the exact repaired reader.
+REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/reversal_auxiliary_source_handoff.py',
+        'selector_sha256': 'f5724a19f06ef4417226c801259e00378217b8e6ebd49355cad2d21e4ad15c0f',
+        'dependencies': {**value['dependencies'], 'src/engine/scalping/reversal_auxiliary_source_handoff.py': 'f5724a19f06ef4417226c801259e00378217b8e6ebd49355cad2d21e4ad15c0f'},
+        'contract_extensions': {origin: {path: ('f5724a19f06ef4417226c801259e00378217b8e6ebd49355cad2d21e4ad15c0f' if path == 'src/engine/scalping/reversal_auxiliary_source_handoff.py' else sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_AUXILIARY_HISTORY_SOURCES = {'src/engine/scalping/reversal_auxiliary_source_handoff.py': (
+    'f114eaa85987d72d2361a25e7d5aa2fa41ac5fcf6ad74992c0fe40658e038d82', 'f5724a19f06ef4417226c801259e00378217b8e6ebd49355cad2d21e4ad15c0f')}
+
 REVIEWED_PARTIAL_SELL_RESEARCH_SOURCE_PAIRS = {'src/engine/automation/main_trailing_research_handoff.py': (('7220a496df445299ce758f8d79eee0205fa51e1fdacc9440503f1854c9fda677',
                                                               'f0e4cbe8ba222e361f9726fea04408dfe9b2dc2b40ac7db23106f4d543e2eda6'),
                                                              ('23b05aac5bbf6bf20d4463ccdc4f9ffc290c759cfab269540d1afefbbea0a117',
@@ -1632,7 +1646,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
+                         REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS,
                          REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS,
                          REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS):
@@ -1641,7 +1656,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 continue
             selector = variant['selector_path']
             path = root / selector
-            if (variants is REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS
+            if (variants in (REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
+                             REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS)
                     and not path.exists() and not path.is_symlink()):
                 # Earlier immutable preparations predate this selector. Their
                 # complete historical dependency generation still verifies.
@@ -1670,7 +1686,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (pair in REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ())
-                or pair in REVIEWED_PARTIAL_SELL_RESEARCH_SOURCE_PAIRS.get(name, ())):
+                or pair in REVIEWED_PARTIAL_SELL_RESEARCH_SOURCE_PAIRS.get(name, ())
+                or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)
             continue
         if pair in (REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES.get(repository_name(name)),

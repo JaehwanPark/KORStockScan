@@ -130,12 +130,13 @@ def _git_references(root):
     return {str(path):_sha(path) for path in paths}
 
 
-def _inspect(data_root, previous_manifest_path, previous_overlay_path, *, check_git):
+def _inspect(data_root, previous_manifest_path, previous_overlay_path, *, check_git, execution_root=None):
     from src.engine.infrastructure import startup_validation_code_context as C
     from src.engine.scalping import reversal_auxiliary_next_session as A
     from src.engine.scalping import reversal_auxiliary_input_transition as J
     from src.engine.scalping import reversal_auxiliary_intraday as I
     from src.engine.scalping import reversal_auxiliary_registry as G
+    execution_root = Path(execution_root or ROOT)
     data_root = Path(data_root).resolve(strict=True)
     previous, previous_ref = _read(previous_manifest_path)
     overlay, overlay_ref = _read(previous_overlay_path)
@@ -209,9 +210,9 @@ def _inspect(data_root, previous_manifest_path, previous_overlay_path, *, check_
     for historical_root, inventory in ((frozen, semantic), (origin, previous['next_session_code_hashes']),
                                        (origin, previous['reader_code_hashes'])):
         for name, expected in sorted(inventory.items()):
-            old_path, current_path = _code_path(historical_root, name), _code_path(ROOT, name)
+            old_path, current_path = _code_path(historical_root, name), _code_path(execution_root, name)
             _require(_sha(old_path) == expected, 'historical_code_changed')
-            actual = _sha(current_path); relative = str(current_path.relative_to(ROOT))
+            actual = _sha(current_path); relative = str(current_path.relative_to(execution_root))
             _require(actual == expected or C.reviewed_preparation_pair(relative, expected, actual),
                      'unreviewed_code_pair:' + relative)
             # Semantic originals retain their own historical identity even
@@ -220,13 +221,13 @@ def _inspect(data_root, previous_manifest_path, previous_overlay_path, *, check_
             refs[str(old_path)] = expected; current_refs[str(current_path)] = actual
     # The evidence owner and the exact pair registry are themselves part of the
     # current clean-Git closure. There is no OS validation-context delegation.
-    for path in (ROOT/'src/engine/scalping/reversal_auxiliary_source_handoff.py',
-                 ROOT/'src/engine/infrastructure/startup_validation_code_context.py'):
+    for path in (execution_root/'src/engine/scalping/reversal_auxiliary_source_handoff.py',
+                 execution_root/'src/engine/infrastructure/startup_validation_code_context.py'):
         current_refs[str(path)] = _sha(path)
-    commit = _git_identity(ROOT, current_refs, check_git=check_git)
+    commit = _git_identity(execution_root, current_refs, check_git=check_git)
     refs.update(current_refs)
     origin_commit = C._git_head(origin)
-    for root in (ROOT, origin, frozen):
+    for root in (execution_root, origin, frozen):
         refs.update(_git_references(root))
     for ident in source['registry_definitions']:
         path = G.directory(data_root)/(ident+'.json')
@@ -236,7 +237,7 @@ def _inspect(data_root, previous_manifest_path, previous_overlay_path, *, check_
         source_manifest=source_ref, source_bundle=original_ref, previous_target_bundle=prior_ref,
         code_origin_root=str(origin), code_origin_commit=origin_commit,
         frozen_validator_root=str(frozen), frozen_validator_commit=A.FROZEN_COMMIT,
-        execution_release_root=str(ROOT), execution_release_commit=commit,
+        execution_release_root=str(execution_root), execution_release_commit=commit,
         original_code_hashes=original_codes, runtime_code_hashes=runtime_codes,
         current_code_references=current_refs, source_hashes=refs,
         base_bindings=copy.deepcopy(source['base_bindings']), effective_bindings=expected_bindings,
@@ -252,9 +253,10 @@ def inspect_previous(data_root, *, previous_manifest_path, previous_overlay_path
     return P.seal(_inspect(data_root, previous_manifest_path, previous_overlay_path, check_git=True))
 
 
-def _build(data_root, previous_manifest_path, previous_overlay_path, target_bundle_path, *, check_git):
+def _build(data_root, previous_manifest_path, previous_overlay_path, target_bundle_path, *, check_git, execution_root=None):
     from src.engine.scalping import reversal_auxiliary_next_session as A
-    body = _inspect(data_root, previous_manifest_path, previous_overlay_path, check_git=check_git)
+    body = _inspect(data_root, previous_manifest_path, previous_overlay_path, check_git=check_git,
+                    execution_root=execution_root)
     target, ref = _read(target_bundle_path)
     _bundle(target); N.validate(target, target_date=target['target_date'])
     _require(str(N.root(Path(data_root).resolve())/'generations'/(target['bundle_sha256']+'.json')) == ref['path'],
@@ -265,6 +267,8 @@ def _build(data_root, previous_manifest_path, previous_overlay_path, target_bund
         and target['continuous_reversal']['release_commit'] == body['execution_release_commit'],
         'target_generation_invalid')
     bindings, refs, paths = A._bindings(data_root, target)
+    if execution_root is not None:
+        refs, paths = A._canonical_baseline_sources(refs, paths, execution_root)
     _require(bindings == body['base_bindings'] and len(bindings) == 128, 'target_baseline_changed')
     for sid in SCOPES:
         _require(A._scope_behavior(target, sid) == body['scope_behavior'][sid]['source'], 'target_scope_behavior_changed')
@@ -293,6 +297,16 @@ def validate(data_root, handoff, *, source_manifest_path, source_bundle_path, ta
         _require(handoff[key]['path'] == str(Path(path)), 'consumer_path_changed')
     _require(handoff['frozen_validator_root'] == str(Path(frozen_root)), 'consumer_frozen_root_changed')
     expected = _build(data_root, handoff['previous_manifest']['path'], handoff['previous_overlay']['path'],
-                      target_bundle_path, check_git=False)
+                      target_bundle_path, check_git=False, execution_root=handoff['execution_release_root'])
     _require(expected == handoff, 'artifact_or_source_changed')
+    # Rebuild the immutable historical issue at its original code root. A
+    # later reader must separately preserve every reviewed runtime semantic
+    # byte; moving code does not change the original target release identity.
+    from src.engine.infrastructure import startup_validation_code_context as C
+    for relative, original in handoff['runtime_code_hashes'].items():
+        _require(relative.startswith('src/engine/') and '..' not in Path(relative).parts,
+                 'runtime_code_path_invalid')
+        actual = _sha(ROOT/relative)
+        _require(actual == original or C.reviewed_preparation_pair(relative, original, actual),
+                 'unreviewed_runtime_reader:' + relative)
     return handoff

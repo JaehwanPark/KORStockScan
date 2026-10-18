@@ -346,7 +346,7 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     trigger_sha=H._sha(canonical/trigger)
     dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha]
     if generation in {'issued_startup','current_startup'}:
-        variants=(H.REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS if generation=='current_startup'
+        variants=(H.REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS if generation=='current_startup'
                   else H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS)
         variant=variants[(trigger,trigger_sha)]
         if generation=='current_startup':

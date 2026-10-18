@@ -63,8 +63,32 @@ def stopped_recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(D.H,'_native_predecessor',native)
     for name in ('delay','stop','holding_vote'):
         monkeypatch.setattr(D.H,'verify_candidate_'+name+'_code',lambda *a:dict(status='pass'))
+    monkeypatch.setattr(D,'verify_candidate_active_policy',lambda *a:dict(status='pass',
+        receipt_path=str(policy),receipt_sha256=D.H._sha(policy),
+        pointer_path=str(policy),pointer_sha256=D.H._sha(policy)))
     d=D.StoppedDeploymentRecovery(tmp_path,candidate,day,D.CONFIRM)
     return d, status_path, policy
+
+
+def test_stopped_recovery_requires_active_policy_before_hold_transfer(stopped_recovery, monkeypatch):
+    d,status,policy=stopped_recovery
+    before=d.selection.read_bytes(),d.hold.read_bytes(),status.read_bytes()
+    def reject(*args):raise ValueError('active source changed')
+    monkeypatch.setattr(D,'verify_candidate_active_policy',reject)
+    with pytest.raises(ValueError,match='active source changed'):d.preflight()
+    assert before==(d.selection.read_bytes(),d.hold.read_bytes(),status.read_bytes())
+
+
+def test_stopped_recovery_freezes_prepared_origin_and_uses_native_inheritance(stopped_recovery, monkeypatch, tmp_path):
+    d,status,policy=stopped_recovery
+    source=tmp_path/'prepared-origin.json';source.write_text('immutable origin')
+    check=dict(status='pass',prepared_code_origin=dict(sources={str(source):D.H._sha(source)}))
+    monkeypatch.setattr(D,'verify_candidate_delay_code',lambda *a:check)
+    d.preflight()
+    assert d.prepared_delay_check==check and d.frozen[str(source)]==D.H._sha(source)
+    assert str(d.selection) not in d.frozen
+    source.write_text('different generation')
+    with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
 
 
 @pytest.mark.parametrize('damage',[None,'phase','error','date','hold','selection','original','native',

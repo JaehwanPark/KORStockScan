@@ -913,13 +913,20 @@ class StoppedDeploymentRecovery(Deployment):
         else:
             native = _stopped_intraday_predecessor(self.day, self.previous,
                 self.previous_commit, identity, failed_path)
-        checks = dict(delay=H.verify_candidate_delay_code(self.day, self.candidate, self.commit),
+        checks = dict(delay=verify_candidate_delay_code(self.day, self.candidate, self.commit),
             stop=H.verify_candidate_stop_code(self.day, self.candidate, self.commit),
-            holding=H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit))
+            holding=H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit),
+            active=verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day))
+        self.prepared_delay_check = checks['delay']
         self.directory = self.workspace / 'data/runtime/release_transitions' / self.day / self.commit
         self.directory.mkdir(parents=True, exist_ok=False)
         self.old = prior
         self.frozen = dict(native['frozen_files'])
+        self.frozen.update((checks['delay'].get('prepared_code_origin') or {}).get('sources', {}))
+        self.frozen.pop(str(self.selection), None)
+        active = checks['active']
+        self.frozen.update({active['receipt_path']: active['receipt_sha256'],
+                            active['pointer_path']: active['pointer_sha256']})
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
         self.document_before = self.document_after = self.checklist.read_bytes()
         self.state = dict(schema='ordered_intraday_deployment_v1', authority=CONFIRM,

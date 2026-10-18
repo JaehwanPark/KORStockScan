@@ -139,6 +139,36 @@ def test_native_source_owner_is_readonly_and_runtime_validation_spawns_nothing(s
     assert before=={p:p.read_bytes() for p in f.data.rglob('*') if p.is_file()}
 
 
+@pytest.mark.parametrize('damage', [None, 'current_semantics', 'historical_semantics',
+                                   'historical_commit', 'historical_root', 'target_commit'])
+def test_historical_issue_survives_reader_move_only_with_exact_sources(source, monkeypatch, tmp_path, damage):
+    import shutil
+    f=source
+    monkeypatch.setattr(A,'__file__',str(H._code_path(f.current,'reversal_auxiliary_next_session.py')))
+    def bindings(*args):
+        path=Path(A.__file__).parent/'reversal_auxiliary_input_transition.py'
+        return f.bindings,[dict(path=str(path),sha256=sha(path.read_bytes()))],[str(path)]
+    monkeypatch.setattr(A,'_bindings',bindings)
+    value=build(f);before=copy.deepcopy(value)
+    moved=tmp_path/'later-reader';shutil.copytree(f.current,moved)
+    monkeypatch.setattr(H,'ROOT',moved)
+    monkeypatch.setattr(A,'__file__',str(H._code_path(moved,'reversal_auxiliary_next_session.py')))
+    name='reversal_auxiliary_input_transition.py'
+    if damage=='current_semantics':H._code_path(moved,name).write_text('unreviewed reader\n')
+    elif damage=='historical_semantics':H._code_path(f.current,name).write_text('changed historical code\n')
+    elif damage=='historical_commit':(f.current/'.git/HEAD').write_text('0'*40+'\n')
+    elif damage=='historical_root':value=P.seal(dict(value,execution_release_root=str(moved)))
+    elif damage=='target_commit':value=P.seal(dict(value,execution_release_commit='0'*40))
+    monkeypatch.setattr(H.subprocess,'check_output',lambda *a,**k:pytest.fail('runtime subprocess'))
+    if damage:
+        with pytest.raises(ValueError):validate(f,value)
+    else:
+        assert validate(f,value)==before
+        assert value['execution_release_root']==str(f.current)
+        assert value['execution_release_commit']==f.current_commit
+        assert all(value[key] is False for key in H.AUTHORITY_FALSE)
+
+
 @pytest.mark.parametrize('fault',['dirty','untracked','unknown_pair','frozen','origin','symlink','ancestor_symlink'])
 def test_unreviewed_source_cannot_create_a_handoff(source,monkeypatch,fault):
     f=source;name='reversal_auxiliary_input_transition.py'

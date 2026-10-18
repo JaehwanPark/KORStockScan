@@ -224,3 +224,5 @@ P6는958d35b2b·source10/16·target10/19의54개 파일/선택본을 발행하�
 역사 연구는 동일 source-date의 원 bytes와 정책을 유지한다. 공용 owner registry가 다음 날짜의 별도 owner 주문으로 증가한 경우 원 prefix SHA 및 전체 hash chain을 검증해 구분한다. 과거 owner/날짜, prefix 변조, chain 결손은 검증 실패다. 잠금 파일은 연구 입력이 아니며 실제 vote jsonl/gzip은 계속 inventory에 포함한다. 동기 AI 관측은 exact request와 native PID/observation을 사용하고 비동기 식별자를 만들어 채우지 않는다. 상세 검토는 [복구 감사](../audits/preopen-alert-repair-2026-10-19.md)에 기록한다.
 
 PREOPEN 이후 현재 체크리스트에 다른 실행 owner가 추가돼도 그 편집본을 보존한다. 원 strict receipt의 SHA와 정확히 일치하는 원문만 native 역사 snapshot으로 보존·재사용하며, 원 prepared/controller/strict 결속과 실제 predecessor 검증은 유지한다. snapshot 부재·변조·symlink 또는 잘못된 원문은 전환을 차단한다. 현재 문서를 과거 내용으로 교체하거나 새 문서로 원 strict를 다시 봉인하지 않는다.
+
+보조 source-code handoff의 재검증은 원 발행 root/commit과 baseline 경로를 유지하고 현재 consumer 의미 코드의 동일성/검토된 정확한 쌍을 따로 검사한다. 새 릴리스가 과거 정책의 발행 신원을 변경하지 않는다. selected 단계 실패는 기존 stopped recovery가 원 실패/hold/실제 predecessor proof를 재검증하며, active-policy와 prepared delay source 동결·승계를 모두 통과해야 기동 보류를 정식 해제할 수 있다.
