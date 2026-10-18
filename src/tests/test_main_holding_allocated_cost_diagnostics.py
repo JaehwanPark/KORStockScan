@@ -1,9 +1,11 @@
 """Native allocation producer to a separately saved holding diagnostic."""
 
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import datetime
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -429,3 +431,222 @@ def test_registration_cannot_expand_economics_or_custody_authority(tmp_path, fie
     with pytest.raises(ValueError, match="registration_binding"):
         D.run(**args)
     assert not args["output_root"].exists()
+
+
+def clock_bridge_fixture(tmp_path, delay=1):
+    """Native receipt audit and cost producer against an older observation clock."""
+    from datetime import timedelta
+    from src.engine import sniper_trade_review_report as review
+    from src.engine.scalping.universal_trailing_replay import completed_sources
+
+    args = fixture(tmp_path)
+    data = json.loads(args["source_acceptance"].read_bytes())
+    original = data["positions"][0]
+    leg = original["sell_legs"][0]
+    occurred = datetime.fromisoformat(original["completed_at"])
+    received = occurred + timedelta(microseconds=500000)
+    first = occurred + timedelta(seconds=delay)
+    fields = dict(
+        id="1",
+        order_no=leg["order_no"],
+        execution_no=leg["execution_no"],
+        holding_path_buy_fill_identity="a" * 64,
+        broker_execution_provenance_complete=True,
+        broker_execution_time_source="official_fid_908",
+        broker_execution_time_raw=occurred.strftime("%H%M%S"),
+        broker_execution_observed_at=occurred.isoformat(),
+        broker_execution_received_at=received.isoformat(),
+        decision_authority="broker_sell_fill_observation_only",
+        pipeline_lifecycle_population_scope="real_record_bound",
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        main_lifecycle_exit_qty=leg["qty"],
+        main_lifecycle_sell_price=leg["price"],
+        broker_route=leg["route"],
+    )
+    wrapper = dict(
+        native_receipt_identity_schema="broker_position_sell_receipt_v1",
+        native_receipt_position_key="record:1",
+        native_receipt_record_id=1,
+        native_receipt_stock_code=original["symbol"],
+        native_receipt_order_no=leg["order_no"],
+        native_receipt_execution_no=leg["execution_no"],
+        native_receipt_buy_fill_identity="a" * 64,
+        native_receipt_observed_at=received.isoformat(),
+    )
+    events = [
+        review.HoldingEvent(
+            first.replace(tzinfo=None).isoformat(sep=" "),
+            "test",
+            original["symbol"],
+            "sell_completed",
+            fields,
+            "original",
+        ),
+        review.HoldingEvent(
+            (first + timedelta(seconds=60)).replace(tzinfo=None).isoformat(sep=" "),
+            "test",
+            original["symbol"],
+            "sell_completed",
+            {**fields, **wrapper},
+            "reobservation",
+        ),
+    ]
+    collapsed, audits = review._quantity_sell_receipt_observations(events)
+    assert len(collapsed) == 1 and len(audits) == 1
+    assert collapsed[0].timestamp == occurred.replace(tzinfo=None).isoformat(sep=" ")
+    data["summary"] = [
+        dict(
+            record_id="1",
+            symbol=original["symbol"],
+            status="COMPLETED",
+            terminal_observed=True,
+            completed_at=original["completed_at"],
+            allocation_status="research_cost_allocated",
+            receipt_reobservations=audits,
+        )
+    ]
+    data["code_sha256"] = {
+        str(D.NATIVE_AUDIT_PRODUCER): hashlib.sha256(
+            D.NATIVE_AUDIT_PRODUCER.read_bytes()
+        ).hexdigest()
+    }
+    legacy = dict(
+        id=1,
+        status="COMPLETED",
+        buy_fill_legs=original["buy_legs"],
+        sell_fill_legs=[{**leg, "at": first.replace(tzinfo=None).isoformat(sep=" ")}],
+    )
+    normalized, _ = completed_sources([legacy])
+    carrier = Path(data["sidecar_extraction"]["source_path"])
+    write(
+        carrier,
+        dict(
+            legacy_completed_trade=legacy,
+            native_observations=[asdict(event) for event in events],
+        ),
+    )
+    carrier_ref = {**ref(carrier), "path": carrier.name}
+    data["sidecar_extraction"].update(
+        source_byte_sha256=ref(carrier)["sha256"], source_size=carrier.stat().st_size
+    )
+    write(args["source_acceptance"], data)
+    partition_path = args["input_root"] / "partition.json"
+    part = json.loads(partition_path.read_bytes())
+    for row in part["positions"]:
+        if row["evidence_kind"] == "actual_completed":
+            row["source_reference"]["projection_generation"] = carrier_ref
+        if row["position_key"] == "1":
+            row["completion_at"] = normalized[0]["completion_at"]
+    part = write(partition_path, part, seal=True)
+    manifest = json.loads(args["input_manifest"].read_bytes())
+    manifest["partitions_ref"] = storage.write_tree(
+        args["input_root"],
+        [dict(path=partition_path.name, artifact_sha256=digest(part))],
+    )
+    write(args["input_manifest"], manifest, seal=True)
+    update_registration(args)
+    return args
+
+
+@pytest.mark.parametrize("delay", [1, 7])
+def test_native_clock_bridge_preserves_exact_occurrence_receipt_and_observation(
+    tmp_path, delay
+):
+    args = clock_bridge_fixture(tmp_path, delay)
+    result = D.run(**args)
+    row = result["actual_completed_rows"][0]
+    assert result["allocated_terminal_reference_count"] == 2
+    bridge = row["terminal_clock_binding"]
+    assert bridge["mode"] == "registered_native_reobservation_audit"
+    assert (
+        bridge["timestamp_tolerance_seconds"] == 0
+        and bridge["raw_source_events_reverified_here"] is False
+    )
+    assert row["original_completion_at"] - D._clock(row["completed_at"]) == delay
+    audit = bridge["receipt_reobservations"][0]
+    assert D._clock(audit["original_occurred_at"]) == D._clock(row["completed_at"])
+    assert D._leg_clock(audit["first_observed_at"]) == row["original_completion_at"]
+    assert (
+        row["automatic_management_allowed"] is False
+        and result["economic_eligible_count"] == 0
+    )
+    assert (
+        result["actual_completed_rows"][2]["allocation_status"]
+        == "research_cost_invalid"
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "record",
+        "order",
+        "execution",
+        "native_hash",
+        "event_hash",
+        "received_before",
+        "received_after_first",
+        "first_clock",
+        "occurred_clock",
+        "future_last",
+        "count",
+        "duplicate",
+        "producer",
+        "missing",
+    ],
+)
+def test_native_clock_bridge_never_uses_tolerance_or_unbound_audit(tmp_path, fault):
+    args = clock_bridge_fixture(tmp_path)
+    data = json.loads(args["source_acceptance"].read_bytes())
+    audit = data["summary"][0]["receipt_reobservations"][0]
+    if fault == "record":
+        audit["record_id"] = "2"
+    if fault == "order":
+        audit["order_no"] = "99"
+    if fault == "execution":
+        audit["execution_no"] = "99"
+    if fault == "native_hash":
+        audit["native_identity_sha256"] = ""
+    if fault == "event_hash":
+        audit["source_event_digests_sha256"] = ""
+    if fault == "received_before":
+        audit["original_received_at"] = DAY + "T09:00:00+09:00"
+    if fault == "received_after_first":
+        audit["original_received_at"] = DAY + "T10:01:02+09:00"
+    if fault == "first_clock":
+        audit["first_observed_at"] = DAY + " 10:01:02"
+    if fault == "occurred_clock":
+        audit["original_occurred_at"] = DAY + "T10:00:59+09:00"
+    if fault == "future_last":
+        audit["last_observed_at"] = DAY + " 23:00:00"
+    if fault == "count":
+        audit["reobserved_count"] = 2
+    if fault == "duplicate":
+        data["summary"][0]["receipt_reobservations"].append(deepcopy(audit))
+    if fault == "producer":
+        data["code_sha256"][str(D.NATIVE_AUDIT_PRODUCER)] = "a" * 64
+    if fault == "missing":
+        data["summary"] = []
+    write(args["source_acceptance"], data)
+    update_registration(args)
+    result = D.build(**args)
+    assert len(result["actual_completed_rows"]) == 4
+    assert result["allocated_terminal_reference_count"] == 1
+    assert (
+        result["actual_completed_rows"][0]["reason"]
+        == "original_position_binding_mismatch"
+    )
+
+
+def test_native_clock_bridge_does_not_bypass_cost_knowledge_cutoff(tmp_path):
+    args = clock_bridge_fixture(tmp_path)
+    update_registration(
+        args, lambda r, s: s.update(knowledge_cutoff=NOW.timestamp() - 0.001)
+    )
+    result = D.build(**args)
+    assert result["allocated_terminal_reference_count"] == 0
+    assert (
+        result["actual_completed_rows"][0]["reason"]
+        == "research_cost_after_knowledge_cutoff"
+    )

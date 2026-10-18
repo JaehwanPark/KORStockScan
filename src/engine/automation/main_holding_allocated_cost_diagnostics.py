@@ -28,6 +28,7 @@ MAX_NATIVE_BYTES = 4 * 1024 * 1024
 MAX_RECORDS = 10000
 MAX_FILES = 2048
 OUTPUT_NAME = 'holding-allocated-cost-diagnostics.json'
+NATIVE_AUDIT_PRODUCER = Path(__file__).parents[1] / 'sniper_trade_review_report.py'
 
 
 def _path(value):
@@ -172,7 +173,81 @@ def _source_population(reader, manifest, root):
     return rows, counts
 
 
-def _position_binding(original, normalized, acceptance):
+def _leg_clock(value):
+    """Only native fill/observation labels, explicitly owned as KST naive."""
+    parsed = datetime.fromisoformat(value)
+    return _clock(parsed.replace(tzinfo=reconciliation.KST).isoformat() if parsed.tzinfo is None else value)
+
+
+def _terminal_clock_binding(original, normalized, acceptance, *, knowledge_cutoff):
+    try:
+        occurred, projected = _clock(original['completed_at']), _clock(normalized['completion_at'])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if occurred == projected:
+        return dict(mode='same_terminal_clock', broker_terminal_occurred_at=original['completed_at'],
+                    original_projection_completion_at=normalized['completion_at'])
+    # A registered native producer proved unchanged broker-clock-bound receipt
+    # reobservations. Its audit is a reference to that proof, not a newly read
+    # raw event or permission to accept an approximate timestamp.
+    producer = [(path, sha) for path, sha in acceptance.get('code_sha256', {}).items()
+                if Path(path).name == NATIVE_AUDIT_PRODUCER.name]
+    if len(producer) != 1 or producer[0][1] != hashlib.sha256(NATIVE_AUDIT_PRODUCER.read_bytes()).hexdigest():
+        return None
+    summaries = [row for row in acceptance.get('summary', []) if row.get('record_id') == original['record_id']]
+    if len(summaries) != 1:
+        return None
+    summary = summaries[0]
+    if (summary.get('symbol') != original['symbol'] or summary.get('status') != 'COMPLETED'
+            or summary.get('terminal_observed') is not True
+            or summary.get('completed_at') != original['completed_at']
+            or summary.get('allocation_status') != 'research_cost_allocated'):
+        return None
+    sells = original['sell_legs']
+    clocks = [_leg_clock(leg['at']) for leg in sells]
+    if not clocks or max(clocks) != occurred:
+        return None
+    terminal_legs = [leg for leg, at in zip(sells, clocks) if at == occurred]
+    audits = summary.get('receipt_reobservations')
+    if not isinstance(audits, list) or not audits:
+        return None
+    linked, identities = [], set()
+    try:
+        for audit in audits:
+            if not isinstance(audit, dict):
+                return None
+            identity = (audit['order_no'], audit['execution_no'])
+            if identity in identities:
+                return None
+            identities.add(identity)
+            legs = [leg for leg in sells if (leg['order_no'], leg['execution_no']) == identity]
+            at, received = _clock(audit['original_occurred_at']), _clock(audit['original_received_at'])
+            first, last = _leg_clock(audit['first_observed_at']), _leg_clock(audit['last_observed_at'])
+            if (len(legs) != 1 or audit['record_id'] != original['record_id']
+                    or _leg_clock(legs[0]['at']) != at or at != int(at)
+                    or not at <= received <= first <= last <= knowledge_cutoff
+                    or type(audit['observation_count']) is not int or audit['observation_count'] < 2
+                    or type(audit['reobserved_count']) is not int
+                    or audit['reobserved_count'] != audit['observation_count'] - 1
+                    or any(not isinstance(audit.get(key), str) or len(audit[key]) != 64
+                           or any(c not in '0123456789abcdef' for c in audit[key])
+                           for key in ('native_identity_sha256', 'source_event_digests_sha256'))):
+                return None
+            linked.append((legs[0], at, first, audit))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    final = [audit for leg, at, first, audit in linked if at == occurred and first == projected]
+    # Every terminal fill must have the same exact projection/occurrence bridge.
+    if len(final) != len(terminal_legs) or not final:
+        return None
+    return dict(mode='registered_native_reobservation_audit',
+        broker_terminal_occurred_at=original['completed_at'], original_projection_completion_at=normalized['completion_at'],
+        source_audit_producer_path=producer[0][0], source_audit_producer_sha256=producer[0][1],
+        source_summary_sha256=digest(summary), receipt_reobservations=final,
+        raw_source_events_reverified_here=False, timestamp_tolerance_seconds=0)
+
+
+def _position_binding(original, normalized, acceptance, *, knowledge_cutoff):
     """Bind the same original record; initial qty need not equal post-ADD qty."""
     source = normalized.get('source_reference') or {}
     carrier = acceptance['sidecar_extraction']
@@ -183,20 +258,20 @@ def _position_binding(original, normalized, acceptance):
             or source.get('path') != carrier['source_path']
             or source.get('projection_generation') != expected
             or normalized.get('terminal_status') != 'COMPLETED'
-            or original.get('terminal_observed') is not True
-            or normalized.get('completion_at') != _clock(original['completed_at'])):
-        return False
+            or original.get('terminal_observed') is not True):
+        return None
     # Native fill timestamps are explicitly KST-naive, unlike knowledge clocks.
-    first = min(datetime.fromisoformat(leg['at']).replace(tzinfo=reconciliation.KST).timestamp()
-                if datetime.fromisoformat(leg['at']).tzinfo is None else _clock(leg['at'])
-                for leg in original['buy_legs'])
-    return normalized.get('entry_at') == first
+    first = min(_leg_clock(leg['at']) for leg in original['buy_legs'])
+    if normalized.get('entry_at') != first:
+        return None
+    return _terminal_clock_binding(original, normalized, acceptance, knowledge_cutoff=knowledge_cutoff)
 
 
 def build(*, registration, input_manifest, input_root, source_acceptance, cost_root, output_root):
     """Build a new report from registered immutable local artifacts only."""
     started = time.monotonic()
-    modules = (__file__, allocation.__file__, official.__file__, reconciliation.__file__, storage.__file__)
+    modules = (__file__, allocation.__file__, official.__file__, reconciliation.__file__, storage.__file__,
+               NATIVE_AUDIT_PRODUCER)
     code = {str(_path(module)): hashlib.sha256(Path(module).read_bytes()).hexdigest() for module in modules}
     paths = {k: _path(v) for k, v in dict(registration=registration, input_manifest=input_manifest,
         input_root=input_root, source_acceptance=source_acceptance, cost_root=cost_root,
@@ -293,7 +368,8 @@ def build(*, registration, input_manifest, input_root, source_acceptance, cost_r
                     if (rebuilt.get(identity) != receipt or identity not in index['receipts']
                             or receipt_values[index['receipts'][identity]] != receipt):
                         raise ValueError('allocated_diagnostic_original_allocation_mismatch')
-                    if not _position_binding(original, normalized, acceptance):
+                    clock_binding = _position_binding(original, normalized, acceptance, knowledge_cutoff=cutoff)
+                    if not clock_binding:
                         row.update(allocation_status='research_cost_invalid', reason='original_position_binding_mismatch')
                     elif result['status'] != 'research_cost_allocated':
                         row.update(allocation_status=result['status'], reason=result.get('reason'))
@@ -307,6 +383,7 @@ def build(*, registration, input_manifest, input_root, source_acceptance, cost_r
                             observed_buy_amount_krw=receipt['buy_amount_krw'], observed_sell_amount_krw=receipt['sell_amount_krw'],
                             buy_fill_identity=receipt['buy_fill_identity'], sell_fill_identity=receipt['sell_fill_identity'],
                             custody_sha256=receipt['custody_sha256'], account_scope_sha256=receipt['account_scope_sha256'],
+                            terminal_clock_binding=clock_binding,
                             buy_leg_count=len(original['buy_legs']), sell_leg_count=len(original['sell_legs']),
                             source_parts=receipt['sources'])
                         for part in receipt['sources']:
