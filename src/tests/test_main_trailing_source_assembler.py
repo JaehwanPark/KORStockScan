@@ -201,7 +201,7 @@ def test_runtime_plan_serializer_native_join_and_observed_forward_path(tmp_path,
 
 
 def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',order_route='KRX',execution_venue='KRX',
-                             official_actual_cost=False):
+                             official_actual_cost=False,buy_order_number=None):
     """Original producer wires, sealed completed source, then the public assembler."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -229,7 +229,7 @@ def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',or
     def iso(clock):return datetime.fromtimestamp(clock,ZoneInfo('Asia/Seoul')).isoformat()
     # Native completed legs carry the requested broker route; execution venue
     # remains a separate broker fact. Neither changes the quote-data route.
-    buy_order,buy_execution=('11','1') if official_actual_cost else ('BUY-1','FILL-1')
+    buy_order,buy_execution=(buy_order_number or '11','1') if official_actual_cost else ('BUY-1','FILL-1')
     buy=dict(at=iso(known),order_no=buy_order,execution_no=buy_execution,qty=2,price=102,amount_krw=204,route=order_route)
     identity=vote.buy_fill_identity_from_legs([buy]);policy=vote.PATH_POLICY_BY_MARKET[('EXIT_TRAILING_TP','REGULAR')]
     stock=dict(id=7,code='005930',buy_time=known,buy_qty=2,buy_price=102,

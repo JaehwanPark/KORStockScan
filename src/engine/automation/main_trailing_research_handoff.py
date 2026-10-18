@@ -65,9 +65,12 @@ def _verify_report(path, *, target_date, parent_sha256, memo_budget):
     window=capture_window(data_root,manifest['consumed_dates'])
     if window['input_window_generation_sha256']!=report['input_window_generation_sha256']:
         raise ValueError('main_trailing_research_cost_window_changed')
+    from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory
+    cost_paths={p.resolve() for p in cost_inventory(
+        manifest.get('holding_research_cost_data_root') or data_root,manifest['consumed_dates'])}
     for source in storage.iter_tree(root,manifest['source_generations_ref']):
         p=Path(source['path'])
-        if not p.resolve().is_relative_to(data_root) or byte_generation(p)!=source['generation']:
+        if (not p.resolve().is_relative_to(data_root) and p.resolve() not in cost_paths) or byte_generation(p)!=source['generation']:
             raise ValueError('main_trailing_research_source_changed')
     checked_paths=set()
     for part in storage.iter_tree(root,manifest['partitions_ref']):

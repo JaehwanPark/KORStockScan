@@ -832,7 +832,7 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
         context[identity] = {key:position.get(key) for key in (
             'entry_at', 'evidence_kind', 'symbol', 'buy_basis_krw', 'entry_context', 'completion_at',
             'situation_pin', 'operating_ai_required', 'research_entry_window_start_at',
-            'research_entry_window_exclusion')}
+            'research_entry_window_exclusion','holding_research_cost')}
         if context[identity]['entry_context'] is not None:
             import json
             if len(json.dumps(context[identity]['entry_context'], allow_nan=False).encode()) > 2048:
