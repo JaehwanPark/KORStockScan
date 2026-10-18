@@ -428,8 +428,25 @@ def _future_guard(data_root, manifest, bundle, *, committed=None):
     from src.engine.infrastructure import runtime_release_router as router
     root = Path(data_root).resolve(); workspace = root.parent
     current = datetime.now(I.K.KST); day = manifest['operating_day']
-    _require(day > current.date().isoformat()
-        and _next_trading_day(date.fromisoformat(bundle['source_date'])) == day, 'future_target_required')
+    future = day > current.date().isoformat()
+    if not future:
+        from src.engine.automation.next_preopen_readiness import PREOPEN_START
+        from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
+        from src.engine.scalping import continuous_reversal_policy_v6 as policy
+        proof = bundle['continuous_reversal'].get('code_refresh') or {}
+        stopped = proof.get('stopped_postclose_preparation') or {}
+        _require(day == current.date().isoformat()
+            and current.time().replace(tzinfo=None) < PREOPEN_START
+            and stopped.get('target_date') == day
+            and stopped.get('source_date') == bundle['source_date']
+            and stopped.get('publication_date') == bundle['source_date']
+            and manifest.get('source_code_handoff') is not None,
+            'future_target_required')
+        policy._validate_code_refresh(bundle, root)
+        controller = root / 'report/postclose_done_controller' / ('postclose_done_controller_' + bundle['source_date'] + '.json')
+        _require(not done_terminal_receipt_issues(controller, bundle['source_date'], started_after_ns=0),
+                 'stopped_source_not_closed')
+    _require(_next_trading_day(date.fromisoformat(bundle['source_date'])) == day, 'future_target_required')
     selected_root, selected_commit = router.selected_release(workspace)
     _require(selected_root == Path(__file__).resolve().parents[3]
         and bundle['continuous_reversal']['release_commit'] == selected_commit, 'selected_release_changed')

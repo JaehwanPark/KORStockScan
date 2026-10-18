@@ -333,7 +333,7 @@ def test_resolve_origin_rejects_selector_change_during_native_verification(prepa
         C.resolve_prepared_code_origin(data,DAY,**args)
 
 
-@pytest.mark.parametrize('generation',['historical_preparation','current_startup'])
+@pytest.mark.parametrize('generation',['historical_preparation','issued_startup','current_startup'])
 def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_path, monkeypatch,generation):
     import hashlib
     from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
@@ -344,16 +344,21 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     trigger='src/engine/sniper_state_handlers.py'
     trigger_sha=H._sha(canonical/trigger)
     dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha]
-    if generation=='current_startup':
-        variant=H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS[(trigger,trigger_sha)]
-        assert H._sha(canonical/variant['selector_path'])==variant['selector_sha256']
+    if generation in {'issued_startup','current_startup'}:
+        variants=(H.REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS if generation=='current_startup'
+                  else H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS)
+        variant=variants[(trigger,trigger_sha)]
+        if generation=='current_startup':
+            assert H._sha(canonical/variant['selector_path'])==variant['selector_sha256']
         dependencies=variant['dependencies']
-    assert len(dependencies)==(76 if generation=='current_startup' else 59)
+    assert len(dependencies)==(59 if generation=='historical_preparation' else 76)
     for name in (*CONTRACT_PATHS,own,*dependencies):
         destination=fixture/name
         destination.parent.mkdir(parents=True,exist_ok=True)
+        source_commit=('958d35b2b03f0a37462c1c0121fc14c108e709b8' if generation=='issued_startup'
+                       else HISTORICAL_PREPARATION_COMMIT)
         raw=((canonical/name).read_bytes() if generation=='current_startup' or name==own else
-             real_git(['git','-C',str(canonical),'show',HISTORICAL_PREPARATION_COMMIT+':'+name]))
+             real_git(['git','-C',str(canonical),'show',source_commit+':'+name]))
         destination.write_bytes(raw)
         if name in dependencies:
             assert hashlib.sha256(raw).hexdigest()==dependencies[name]
@@ -379,6 +384,18 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
         final_pair = H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(name,
             H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(name, pair))
         assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == final_pair[1]
+    if generation == 'current_startup':
+        for name in ('src/engine/infrastructure/startup_validation_code_context.py',
+                     'src/engine/scalping/reversal_auxiliary_next_session.py',
+                     'src/engine/scalping/reversal_auxiliary_source_handoff.py'):
+            dependency = fixture/name
+            original_dependency = dependency.read_bytes()
+            dependency.write_bytes(original_dependency + b'\nUNREVIEWED_STOPPED_CARRY = True\n')
+            candidate = commit()
+            with pytest.raises(ValueError, match='reviewed_dependency_unreviewed'):
+                H._verify_entry_code_delta(fixture, candidate, origin, paths, expected)
+            dependency.write_bytes(original_dependency)
+            candidate = commit()
     # Commit each unknown replacement to its real private Git object, so the
     # rejection remains source-contract validation rather than a dirty tree.
     unknown = fixture/'src/engine/scalping/pre_submit_delay_tuning.py'

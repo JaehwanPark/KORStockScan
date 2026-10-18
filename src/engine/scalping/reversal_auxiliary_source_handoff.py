@@ -212,7 +212,7 @@ def _inspect(data_root, previous_manifest_path, previous_overlay_path, *, check_
             old_path, current_path = _code_path(historical_root, name), _code_path(ROOT, name)
             _require(_sha(old_path) == expected, 'historical_code_changed')
             actual = _sha(current_path); relative = str(current_path.relative_to(ROOT))
-            _require(actual == expected or C.REVIEWED_PREPARATION_SOURCES.get(relative) == (expected, actual),
+            _require(actual == expected or C.reviewed_preparation_pair(relative, expected, actual),
                      'unreviewed_code_pair:' + relative)
             # Semantic originals retain their own historical identity even
             # when a later next-session reader already uses current bytes.

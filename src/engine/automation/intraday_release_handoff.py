@@ -1350,6 +1350,91 @@ REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS = {('src/engine/sniper_st
                                                                                                                'selector_sha256': 'df3407a49b012152ee894db86b5052a681ccf6122db5c459cf743747e8f95ba6'}}
 
 
+# Exact stopped PREOPEN auxiliary carry; preserve prior dependency generations.
+# Review: docs/audits/preopen-alert-repair-2026-10-19.md.
+REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS = {('src/engine/sniper_state_handlers.py', '5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf'): {'contract_extensions': {('7f2552aedde8fec6ef904a43105827907e50dfc8', 'bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256'): {'src/engine/infrastructure/main_policy_loading.py': '12e3efee0307e875da8f8f011df656db056a0adfd1c8ea821f8574a3d4feb57b',
+                                                                                                                                                                                                                                                          'src/engine/pipeline_event_summary.py': 'fc39f13b5b026c628345268953daec046cf1277f88b9f3b1bcef4833f34e99af',
+                                                                                                                                                                                                                                                          'src/utils/threshold_cycle_registry.py': '5e914fc73837324d312a97672b0aa7d8bd49c788bcd54ff7e0a6ab3c0d08ce8a'}},
+                                                                                                               'dependencies': {'src/database/db_manager.py': '6577bc9847a7decace8ad701f2ea628e6f49e687e30296aa0c4c977212b82672',
+                                                                                                                                'src/database/models.py': '7afc7e63a5fdb334df889c5d6ed0a91dd16b1ca077cdf498558f8289077ad784',
+                                                                                                                                'src/engine/ai/holding_exit_vote.py': '9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b',
+                                                                                                                                'src/engine/ai/holding_vote_replay_source.py': '51a90688f175c9fc242367811e4aab8c2509d1287e8b92d3cdf340badc68421a',
+                                                                                                                                'src/engine/ai_prompt_contracts.py': '53c589056f5732e550616a371fa95fd63fdcb92341d50216d18d91795aa4c1e5',
+                                                                                                                                'src/engine/ai_response_contracts.py': 'f94031a3776b4aba1045593ee0f9fd2f5432b88f68b97faad43e549f0b83004b',
+                                                                                                                                'src/engine/automation/auxiliary_reader_readiness.py': '2d96e61045539ad81d6ef8dcec0ce40543d6bf0bebdfcdc5fb197153c0a016b2',
+                                                                                                                                'src/engine/automation/main_holding_allocated_cost_diagnostics.py': '7f1bf1c32568b004f2913bf8e1705d8b003e21dc6f8916784282df202291c313',
+                                                                                                                                'src/engine/automation/main_startup_validation.py': '81a290d5f5a63accf15753f56f5e1761676afde8d06236718270804c69d0c1d4',
+                                                                                                                                'src/engine/automation/main_stop_performance.py': '692e986c6379d24591e390db04407de78ac43fe5acdf7ccf06fa595f132923d4',
+                                                                                                                                'src/engine/automation/main_stop_postclose.py': 'c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5',
+                                                                                                                                'src/engine/automation/main_stop_runtime_workload.py': '9f3acc7324e3a218c430a96b751245d5610cedc5a33cb912f7ab870efe8beb38',
+                                                                                                                                'src/engine/automation/main_stop_source_index.py': '89155d656e6c28a6eaa045d206a68897f04d1825fdb339a818053579f049b559',
+                                                                                                                                'src/engine/automation/main_stop_source_projection.py': 'd02e54b9f3a1233b4c2c7e0462916e3e8b789c3dd6afe0b6e35a4230856250cb',
+                                                                                                                                'src/engine/automation/main_trailing_all_scope_research.py': 'a51359c9c0864e055c4c71cb240760f11ca7de265530aa22ac378a70c30af01b',
+                                                                                                                                'src/engine/automation/main_trailing_source_assembler.py': 'e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                                                                                                'src/engine/automation/pre_submit_delay_partitioned_research.py': 'df3407a49b012152ee894db86b5052a681ccf6122db5c459cf743747e8f95ba6',
+                                                                                                                                'src/engine/dashboard_data_repository.py': 'fa291db63c49d3e6fd8161c3369b114aba0dd4f6e1d28f1a075478fe7123ec84',
+                                                                                                                                'src/engine/holding_exit_observation_report.py': '8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db',
+                                                                                                                                'src/engine/infrastructure/main_policy_loading.py': '12e3efee0307e875da8f8f011df656db056a0adfd1c8ea821f8574a3d4feb57b',
+                                                                                                                                'src/engine/infrastructure/main_prompt_policy_loading.py': '563976e1aa7a8867a330a1db0e897023ab87f9c56784264841029bdf8a6cb4f1',
+                                                                                                                                'src/engine/infrastructure/startup_validation_code_context.py': '7b3bfea027c860e2fbe329b7ea193c1c10cb95875952ef21045bd687deeb435c',
+                                                                                                                                'src/engine/kiwoom_orders.py': '3d31672f0dfab9080cfca4623aa280c1e2f850db43435241c5d0b8b669ce5702',
+                                                                                                                                'src/engine/kiwoom_sniper_v2.py': 'd3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da',
+                                                                                                                                'src/engine/lifecycle/broker_cost_allocation.py': 'f2ce924c4239f51e4d267e56c1ffae92978600b400796a935b6d30994e9f7783',
+                                                                                                                                'src/engine/lifecycle/broker_cost_reconciliation.py': 'db9f1d2db58d6e766b9a18db22e643c4bdc748c8580d8b364cc36d6066b129d5',
+                                                                                                                                'src/engine/lifecycle/broker_cost_source.py': '62a88c219868754055c8754a43fb5976c453aa70c81422fd97e410a8ae995c86',
+                                                                                                                                'src/engine/lifecycle/holding_research_cost.py': 'ef309953ea56261e38e1238ed2c61a4bcbd5e77f61677ee01fa30433bc077dd3',
+                                                                                                                                'src/engine/lifecycle/holding_window_generation.py': '52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
+                                                                                                                                'src/engine/lifecycle/main_stop_research_cost.py': '0b76f9039325382ce8aa685e069b8783c333021ac1b9dc82f24f452b2b2768c7',
+                                                                                                                                'src/engine/lifecycle/research_input_budget.py': '4e831253a975345863bc216623fe12618cc933510ed0154360b38ac068906c63',
+                                                                                                                                'src/engine/lifecycle/research_json_stream.py': 'fbca117c876a62659255914b5771772cdcbdb3e58a904e566a402959379f3df0',
+                                                                                                                                'src/engine/lifecycle/research_storage.py': 'bc936e55d483e9e58995924b139cd13f423ce911e60a50c6b63859855f711f3e',
+                                                                                                                                'src/engine/lifecycle/snapshot_archive.py': '9b1a0ac18db7fde52f609db45950b9fb631376f401fa565088a9831dd80ad42a',
+                                                                                                                                'src/engine/log_archive_service.py': 'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
+                                                                                                                                'src/engine/monitoring/runtime_performance.py': '80089ba158ce24d79df5f37de8d521321bc2a40f988d5f394e354db637cce78d',
+                                                                                                                                'src/engine/scalping/continuous_reversal_policy_v4.py': '85b0611a73c4d7fbbc3b2c2e264a0f7858f78f604f8e58e5face4f760ad4b437',
+                                                                                                                                'src/engine/scalping/continuous_reversal_policy_v5.py': '5f0ce37100b6453c0d143c79007ca45ba77466ffad40f7298a802709c926acb8',
+                                                                                                                                'src/engine/scalping/continuous_reversal_policy_v6.py': 'eca7f2f2a46d2b4e8f1739e53e6c59d19fd70951c1e2fd786dd8c712201f2460',
+                                                                                                                                'src/engine/scalping/entry_machine_source_recovery.py': '89845a56178c7b2a7322317a5f0c3f9ea2344b0514efc7241d0c5a846acea712',
+                                                                                                                                'src/engine/scalping/entry_setup_live_policy.py': '7899aff816388574b57dd51d44156547b433f3fc153f1ea69bfde15b04d82512',
+                                                                                                                                'src/engine/scalping/entry_setup_scalping_rollout.py': '368f9007ea9f3d248bc2242e660f3e8d4f589dcb90a26993303b61ded3aba0d9',
+                                                                                                                                'src/engine/scalping/entry_split_order_plan.py': 'aa1e130239521229201759708c9ebf1e156a20ba1f88704c3607992043a65617',
+                                                                                                                                'src/engine/scalping/exit_safety_monitor.py': 'a7dac48b1659431f15e187021856d5482d4d13426c442b73aba40d8918622b4c',
+                                                                                                                                'src/engine/scalping/holding_path_vote_policy.py': 'bbac620a904ee015a9245a0d032dcbf3f615984b2c0c5e7c13dc904092dcc1aa',
+                                                                                                                                'src/engine/scalping/holding_prompt_live_policy.py': 'b8229b59d6633a27b025427a07485bbe759a798452bebac45c97c8298deed1bd',
+                                                                                                                                'src/engine/scalping/holding_vote_exit_models.py': '084f6e6036bc9a3807fe68f2b389fc02d628905d7ba0b08d58e451667547c481',
+                                                                                                                                'src/engine/scalping/initial_quantity_bundle_state.py': '3dd0ad1be14e821d9b402184aba9b68ee989cf7d8ee45fb47206bdcf3e39da70',
+                                                                                                                                'src/engine/scalping/main_stop_experiment.py': 'd7a23d1742d1b73ddd75af876839eb03500f8ef4baad23d33f0d007102720ffa',
+                                                                                                                                'src/engine/scalping/main_stop_policy.py': 'a9a5f40ac773590816900becaa0f1c9ee5d83203c524d7bb855ee50116675f93',
+                                                                                                                                'src/engine/scalping/main_stop_quantity_source.py': 'dd49bd2d6543adfa0e653974e31c37be7aed752b6e279a58e33ceca846ea240e',
+                                                                                                                                'src/engine/scalping/main_stop_replay.py': '4121f176553433e2d07cdc1b8466c4a54edfa6cf00bbe09bde4e12a74258730d',
+                                                                                                                                'src/engine/scalping/main_stop_runtime_source.py': 'fb32767aee777ed660ec0db018b5419e6f12f09a5644882425f79a954bd32978',
+                                                                                                                                'src/engine/scalping/position_sizing_allocator.py': 'c3decb9a56f14d81c27e7628034468185876c1c06c2b3aae1d5baf17da9b8029',
+                                                                                                                                'src/engine/scalping/reversal_anchor_index.py': '1070133ec9af5500ab139a25f77f2ad9aef3049e9232d341d89188a689a7c37b',
+                                                                                                                                'src/engine/scalping/reversal_auxiliary_input_transition.py': '07f6af4e43b8fb69a9f1e414d60a4930c7063074f78ffdb0a80789987070cbcb',
+                                                                                                                                'src/engine/scalping/reversal_auxiliary_next_session.py': 'c32689f592a5f6558d3404bd9b5495330aefc45715feddf8e579c171d74901c1',
+                                                                                                                                'src/engine/scalping/reversal_auxiliary_source_handoff.py': 'f114eaa85987d72d2361a25e7d5aa2fa41ac5fcf6ad74992c0fe40658e038d82',
+                                                                                                                                'src/engine/scalping/reversal_current_backend.py': 'c831b0366ee488eddb9f709ef7811c44cceef58646c1b1e00b2bcc3eb55f4153',
+                                                                                                                                'src/engine/scalping/reversal_evaluation_context.py': 'b5753ae20f5d8385f7ccf942131d591d5b4feb2dd1f7c278903c74f504201d72',
+                                                                                                                                'src/engine/scalping/reversal_extended_runtime.py': 'f6a6b1c7319cf06e29cd08b73f4955e52f4e35f8142978b02999cc47ed976a9b',
+                                                                                                                                'src/engine/scalping/reversal_operating_backend.py': 'df60d4ef78cca385b9b7b57a9c82a74efb8d943da6855ac34dd6bf1ebb24b0a6',
+                                                                                                                                'src/engine/scalping/reversal_operating_runtime.py': '344a03decd050bbd6767e0073c96b8da6384b9ad329e41a70e1ad7f62066533e',
+                                                                                                                                'src/engine/scalping/reversal_path_runtime.py': 'ffc5e5f6d1f4f50733a7a22d0112c85fdaeaf4b22a319a86f41bd2f89ec5ea36',
+                                                                                                                                'src/engine/scalping/trailing_entry_research_source.py': 'b5e66cf46adbf666ca73271fea1c775ef68874849fdd06fd723b88334233ad41',
+                                                                                                                                'src/engine/scalping/trailing_exit_decision.py': '11221ba40df78f181b1c5a8236a8481bd7dad75351c94f36d2ce84a53a8ca61a',
+                                                                                                                                'src/engine/scalping/universal_trailing_replay.py': '70055c43944d7dac085826c416fd6fffb42bd0a38bde96e928c5ed5b550a4b4f',
+                                                                                                                                'src/engine/sniper_execution_receipts.py': '978dcd47d83709b245dfe8e2983b450d6559f39c9716fe47cce5a475b1eee4b6',
+                                                                                                                                'src/engine/sniper_trade_utils.py': 'c816ae517e1557d9b79dd9338658458f3fde5929467b7a7879c64c70a42611ac',
+                                                                                                                                'src/engine/strategy_position_performance_report.py': '00dc2d63df6ef91ff258507696efd3b348650f7b36db1ad6f789e9e3294d6bd4',
+                                                                                                                                'src/trading/market/session_contract.py': '3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
+                                                                                                                                'src/trading/order/owner_custody_registry.py': '95bd5b8696115567a3549f99532d072cd57b0773f7537a41f7272ff773669001',
+                                                                                                                                'src/utils/constants.py': '72021194611922de3e7c4399770fa98b488035753b24a9fce62f12115bb1c0c6',
+                                                                                                                                'src/utils/kiwoom_utils.py': 'ecef123abab917af0a8a9de934d927b40e561ec1b91836f010814ca9b9117120',
+                                                                                                                                'src/utils/market_day.py': 'ef42333260854caa6c69b12488b62d16e6ea58c1e32b8edc48ffeefd66206ca8',
+                                                                                                                                'src/utils/pipeline_event_logger.py': '58dd5b4ba0ce91a248cebf8a608974caba13080226e139e779f512500b4b4c5f'},
+                                                                                                               'selector_path': 'src/engine/infrastructure/startup_validation_code_context.py',
+                                                                                                               'selector_sha256': '7b3bfea027c860e2fbe329b7ea193c1c10cb95875952ef21045bd687deeb435c'}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1403,13 +1488,19 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS,
+                         REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS,
                          REVIEWED_STARTUP_READONLY_DEPENDENCY_VARIANTS):
             variant = variants.get((trigger, trigger_sha))
             if not variant:
                 continue
             selector = variant['selector_path']
             path = root / selector
+            if (variants is REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS
+                    and not path.exists() and not path.is_symlink()):
+                # Earlier immutable preparations predate this selector. Their
+                # complete historical dependency generation still verifies.
+                continue
             if path.is_symlink() or not path.is_file():
                 raise ValueError('entry_consumer_reviewed_dependency_missing:' + selector)
             selector_sha = hashlib.sha256(candidate_bytes(selector)).hexdigest()

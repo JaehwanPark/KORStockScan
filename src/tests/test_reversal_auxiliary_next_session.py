@@ -194,6 +194,38 @@ def test_future_publication_retry_returns_original_generation(carry):
     assert len(list((I.root(f.data)/'generations').glob('*.json')))==1
 
 
+@pytest.mark.parametrize('fault', [None, 'cutoff', 'proof', 'source', 'preopen', 'pid', 'code_refresh'])
+def test_same_day_carry_requires_stopped_native_proof_and_closed_source(carry, monkeypatch, fault):
+    from src.engine.automation import postclose_done_controller as done, ordered_intraday_deploy as ordered
+    from src.engine.scalping import continuous_reversal_policy_v6 as policy
+    f = carry
+    f.target['continuous_reversal']['code_refresh'] = dict(stopped_postclose_preparation=dict(
+        source_date='2026-10-16', publication_date='2026-10-16', target_date='2026-10-19'))
+    P.write(f.target_path, f.target); P.write(f.candidate_path, f.target)
+    m = prepare(f)
+    m['source_code_handoff'] = {'native_proof': True}
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 19, 7, 35 if fault == 'cutoff' else 20, tzinfo=I.K.KST)
+    monkeypatch.setattr(B, 'datetime', Clock)
+    checks = []
+    def validate(bundle, data):
+        checks.append('code')
+        if fault == 'code_refresh': raise ValueError('v6_code_refresh_policy_changed')
+    monkeypatch.setattr(policy, '_validate_code_refresh', validate)
+    monkeypatch.setattr(done, 'done_terminal_receipt_issues', lambda *a, **k: ['invalid'] if fault == 'source' else [])
+    if fault == 'proof': f.target['continuous_reversal']['code_refresh'] = {}
+    if fault == 'preopen': P.write(f.data/'report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-10-19.status.json', {})
+    if fault == 'pid': monkeypatch.setattr(ordered, '_main_pids', lambda: [123])
+    if fault:
+        with pytest.raises(ValueError): B._future_guard(f.data, m, f.target)
+    else:
+        assert B._future_guard(f.data, m, f.target).date().isoformat() == '2026-10-19'
+        assert checks == ['code']
+    assert not list((I.root(f.data)/'days').glob('**/*.json'))
+
+
 @pytest.mark.parametrize('field',['bindings','changes','rollback_bindings','previous_overlay_sha256','effective_mode',
                                  'effective_from','revoked_overlays','revoked_scope_overlays'])
 def test_idempotent_retry_rejects_resealed_extra_behavior(carry,field):

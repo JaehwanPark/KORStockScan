@@ -30,12 +30,31 @@ def test_oversized_unrelated_pipeline_row_preserves_next_record(late_identity, p
     assert receipt == {'oversized_out_of_cohort_records': 1}
 
 
-@pytest.mark.parametrize('identity', ['"record_id":7,', '', '"record_id":null,"record_id":8,'])
-def test_oversized_relevant_or_unidentified_pipeline_row_stays_blocked(identity):
+@pytest.mark.parametrize('identity', ['', '"record_id":null,"record_id":8,'])
+def test_oversized_unidentified_pipeline_row_stays_blocked(identity):
     import io
     source = '{' + identity + '"fields":{"payload":"' + 'x' * 150000 + '"}}\n'
     with pytest.raises(ValueError):
         list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, {}))
+
+
+def test_oversized_relevant_row_marks_only_identified_trade_unusable(tmp_path):
+    day = '2026-10-08'
+    _quality(tmp_path, day)
+    pipeline = tmp_path/'pipeline_events'; pipeline.mkdir()
+    oversized = json.dumps(dict(record_id=1, fields=dict(payload='x'*150000)))
+    (pipeline/f'pipeline_events_{day}.jsonl').write_text(oversized+'\n{}\n')
+    rows, _ = policy.completed_trade_fact_census(day, data_dir=tmp_path,
+        fact_rows=[actual_fact(1), actual_fact(2)], entry_on_or_after='2026-09-29')
+    receipts = {}
+    paths = policy._join_post_fill_paths_uncached(rows, data_dir=tmp_path, source_receipts=receipts)
+    for row in rows:
+        path = paths[row['trade_id']]
+        assert path['source_gap'] == (['pipeline_record_partition_required'] if row['record_id']=='1' else [])
+        if row['record_id']=='1':
+            assert policy._paired_candidate(row, path, 'two_leg_0_1tick')['status']=='path_source_gap'
+            assert policy._paired_candidate(row, path, 'parent')['status']=='paired'
+    assert receipts[day]['oversized_in_cohort_record_ids']==['1']
 
 
 def test_native_fact_sync_preserves_null_real_zero_and_provenance(monkeypatch,tmp_path):

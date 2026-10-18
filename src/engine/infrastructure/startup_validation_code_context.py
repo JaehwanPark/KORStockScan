@@ -41,7 +41,7 @@ REVIEWED_PREPARATION_SOURCES = {'src/engine/scalping/continuous_reversal_policy_
  'src/engine/scalping/reversal_auxiliary_input_transition.py': ('9e1a206b22e83512eb544201c92b707aca965ef195f8a3698da138a248ccb8cb',
                                                                 '07f6af4e43b8fb69a9f1e414d60a4930c7063074f78ffdb0a80789987070cbcb'),
  'src/engine/scalping/reversal_auxiliary_next_session.py': ('c1dffd84447b3b8d5d23eece11d0e48fece8e0467dc439c6f2458ca6fd89b726',
-                                                            '301bbe9cc29efa2be9ed9f84b4d919ab1f9adaeae7b2e36ec45a58f3842bdefa'),
+                                                            'c32689f592a5f6558d3404bd9b5495330aefc45715feddf8e579c171d74901c1'),
  'src/engine/scalping/reversal_current_backend.py': ('341b69b19717fa4b994619bb9ea28f76b13362e379f4c494929ad9d4d33ac329',
                                                      'c831b0366ee488eddb9f709ef7811c44cceef58646c1b1e00b2bcc3eb55f4153'),
  'src/engine/scalping/reversal_evaluation_context.py': ('c3d732d937787fd881ebf8f47437f4164ba01582611bc332fe23fd784ed3fc43',
@@ -55,6 +55,22 @@ REVIEWED_PREPARATION_SOURCES = {'src/engine/scalping/continuous_reversal_policy_
  'src/engine/scalping/reversal_path_runtime.py': ('476641e53d6c49a0c0c143f11e5a66a59c49d31ab49ee0c4eca7876a65760ced',
                                                   'ffc5e5f6d1f4f50733a7a22d0112c85fdaeaf4b22a319a86f41bd2f89ec5ea36')}
 MAIN_PROOF_SCHEMA = 'startup_main_preparation_code_handoff_v1'
+
+# Preserve both the issued preparation and its reviewed same-day stopped carry.
+# Evidence: docs/audits/preopen-alert-repair-2026-10-19.md.
+REVIEWED_PREPARATION_HISTORY = {
+    'src/engine/scalping/reversal_auxiliary_next_session.py': {
+        ('c1dffd84447b3b8d5d23eece11d0e48fece8e0467dc439c6f2458ca6fd89b726',
+         '301bbe9cc29efa2be9ed9f84b4d919ab1f9adaeae7b2e36ec45a58f3842bdefa'),
+        ('301bbe9cc29efa2be9ed9f84b4d919ab1f9adaeae7b2e36ec45a58f3842bdefa',
+         'c32689f592a5f6558d3404bd9b5495330aefc45715feddf8e579c171d74901c1'),
+    },
+}
+
+
+def reviewed_preparation_pair(relative, old, current):
+    return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
+            or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
 
 
 def _digest(value):
@@ -396,7 +412,7 @@ def _pairs(expected, actual):
         current = actual[relative]
         if not _hex(old) or not _hex(current):
             raise ValueError('startup_main_code_digest_invalid')
-        if old != current and REVIEWED_PREPARATION_SOURCES.get(relative) != (old, current):
+        if old != current and not reviewed_preparation_pair(relative, old, current):
             raise ValueError('startup_main_code_pair_unreviewed:' + relative)
 
 

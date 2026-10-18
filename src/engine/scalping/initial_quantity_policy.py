@@ -668,7 +668,7 @@ def _record_id(raw: str) -> str:
 
 
 def _quantity_pipeline_rows(handle, records, receipt):
-    """Keep bounded rows; drain only proven out-of-cohort oversized records."""
+    """Keep bounded rows and isolate identifiable oversized record gaps."""
     from src.engine.lifecycle.research_json_stream import Reader
 
     class Line:
@@ -706,9 +706,15 @@ def _quantity_pipeline_rows(handle, records, receipt):
         for _ in reader.fields(field):
             pass
         reader.spaces()
-        if reader.peek() or 'record_id' not in identity or identity['record_id'] in records:
+        if reader.peek() or 'record_id' not in identity:
             raise ValueError('quantity_pipeline_record_partition_required')
-        receipt['oversized_out_of_cohort_records'] = receipt.get('oversized_out_of_cohort_records', 0) + 1
+        if identity['record_id'] in records:
+            affected = receipt.setdefault('oversized_in_cohort_record_ids', [])
+            if identity['record_id'] not in affected:
+                affected.append(identity['record_id'])
+                affected.sort()
+        else:
+            receipt['oversized_out_of_cohort_records'] = receipt.get('oversized_out_of_cohort_records', 0) + 1
 
 
 def _exit_at(trade: dict[str, Any]) -> datetime | None:
@@ -1067,6 +1073,9 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                     "epoch": str(fields.get("classifier_transport_epoch")
                                                  or fields.get("market_data_transport_epoch") or ""),
                                     "stage": stage})
+        for rid in scan_receipt.get('oversized_in_cohort_record_ids', []):
+            for trade in records[rid]:
+                result[trade['trade_id']]['source_gap'].append('pipeline_record_partition_required')
         try:
             stat_after = path.stat()
             source_stable = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) == (
