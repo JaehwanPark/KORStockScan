@@ -82,7 +82,7 @@ def test_actual_main_watching_statement_forwards_created_coordinator(monkeypatch
     from src.engine import kiwoom_sniper_v2 as M, sniper_state_handlers as H
     from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
     from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
-    tree=ast.parse(inspect.getsource(M.run_sniper))
+    tree=ast.parse(inspect.getsource(M._run_sniper_iterations))
     calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call)
         and isinstance(n.func,ast.Name) and n.func.id=='handle_watching_state'
         and not any(k.arg=='scanner_async_generation' for k in n.keywords)]
@@ -114,10 +114,15 @@ def test_actual_main_restores_entry_guard_history_after_exit_monitor_before_loop
     from src.engine import kiwoom_sniper_v2 as M, sniper_state_handlers as H
     tree = ast.parse(inspect.getsource(M.run_sniper))
     parent = next(n for n in ast.walk(tree) if isinstance(n, ast.Try)
-                  and any(isinstance(s, ast.While) for s in n.body)
+                  and any(isinstance(s, ast.For) and isinstance(s.iter, ast.Call)
+                          and isinstance(s.iter.func, ast.Name)
+                          and s.iter.func.id == '_run_sniper_iterations' for s in n.body)
                   and 'ENTRY_GUARD_SOURCE_PREPARED' in ast.unparse(n))
-    while_index = next(i for i, n in enumerate(parent.body) if isinstance(n, ast.While))
-    preparation = parent.body[:while_index]
+    iteration_index = next(i for i, n in enumerate(parent.body)
+                           if isinstance(n, ast.For) and isinstance(n.iter, ast.Call)
+                           and isinstance(n.iter.func, ast.Name)
+                           and n.iter.func.id == '_run_sniper_iterations')
+    preparation = parent.body[:iteration_index]
     assert len(preparation) == 1
     calls = []
     monkeypatch.setattr(H, '_rule_bool', lambda *a: enabled)
@@ -365,7 +370,7 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
     coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
     runtime={'scanner_async_eval_coordinator':coordinator}
     from src.engine import kiwoom_sniper_v2 as M
-    tree=ast.parse(inspect.getsource(M.run_sniper))
+    tree=ast.parse(inspect.getsource(M._run_sniper_iterations))
     main_call=next(n for n in ast.walk(tree) if isinstance(n,ast.Call)
         and isinstance(n.func,ast.Name) and n.func.id=='handle_watching_state'
         and not any(k.arg=='scanner_async_generation' for k in n.keywords))
@@ -387,7 +392,7 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
         assert refresh['allowed'] and refresh['reason']=='fixed_watch_async_pending'
         if outer_drain:
             from src.engine import kiwoom_sniper_v2 as M
-            tree=ast.parse(inspect.getsource(M.run_sniper))
+            tree=ast.parse(inspect.getsource(M._run_sniper_iterations))
             node=next(n for n in ast.walk(tree) if isinstance(n,ast.For)
                 and ast.unparse(n.target)=='async_result'
                 and 'drain_completed' in ast.unparse(n.iter))

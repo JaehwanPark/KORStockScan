@@ -9,12 +9,12 @@ from src.engine.scalping.initial_quantity_bundle_state import new_bundle_state, 
 from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
 
 
-def native_stock(*, filled=4, ordered=4):
+def native_stock(*, filled=4, ordered=4, code='005930'):
     from src.engine import sniper_execution_receipts as receipts
-    stock = dict(id=101, code='005930', strategy='SCALPING', status='BUY_ORDERED',
+    stock = dict(id=101, code=code, strategy='SCALPING', status='BUY_ORDERED',
         entry_requested_qty=ordered, requested_buy_qty=ordered,
         pending_entry_orders=[dict(ord_no='0000123', qty=ordered, filled_qty=0, status='OPEN')])
-    result = receipts._resolve_entry_effective_fill_qty(target_stock=stock, code='005930',
+    result = receipts._resolve_entry_effective_fill_qty(target_stock=stock, code=code,
         order_no='0000123', exec_price=10000, exec_qty=filled, order_qty=ordered,
         remaining_qty=ordered-filled, cumulative_exec_amount=10000*filled,
         execution_no='E1', unit_exec_qty=filled, unit_exec_price=10000)

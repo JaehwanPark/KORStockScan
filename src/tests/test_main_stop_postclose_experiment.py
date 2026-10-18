@@ -241,7 +241,8 @@ def native_grade_case(tmp_path,monkeypatch,*,grade='broker_total_allocated',miss
     _,performance=perf.measure_capture_pair(root/'capture-performance.json',scenarios=[scenario()],
         baseline=baseline(),candidate=baseline(),source_sha256=policy.digest(inventory))
     verify=experiment._verify_performance
-    def isolated_performance(reference,code_sha,*,mode,source_sha,require_native=False):
+    def isolated_performance(reference,code_sha,*,mode,source_sha,require_native=False,
+                             required_cell=None,experiment_parameters=None,selected_values=None):
         return verify(reference,code_sha,mode='historical_report_only',source_sha=source_sha,require_native=False)
     monkeypatch.setattr(experiment,'_verify_performance',isolated_performance)
     monkeypatch.setattr(experiment,'_clock',lambda:base+1200)

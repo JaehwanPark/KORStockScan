@@ -172,7 +172,8 @@ def test_native_endpoint_rejects_missing_or_different_decision_and_completion(tm
 def test_dispatch_records_normal_decision_without_interfering_with_existing_exit(monkeypatch, fault):
     from src.engine import sniper_state_handlers as handlers
     rows = observations()
-    stock = dict(id=10, code='005930', strategy='SCALPING', buy_price=10000., buy_qty=10)
+    stock = dict(id=10, code='005930', strategy='SCALPING', buy_price=10000., buy_qty=10,
+        status='HOLDING', exit_token='native-fast-claim', exit_requested=True)
     stock['main_stop_policy_pin'] = policy.pin(position_key=position_cycle_id(stock),
         role='SCANNER', market='REGULAR', target='2026-10-16', baseline=baseline())
     if fault == 'pin': stock['main_stop_policy_pin']['pin_sha256'] = 'invalid'
@@ -180,7 +181,8 @@ def test_dispatch_records_normal_decision_without_interfering_with_existing_exit
     if fault == 'observer_failure':
         def broken(*args, **kwargs): raise RuntimeError('observation_failed')
         monkeypatch.setattr(policy, 'normal_exit_decision_source', broken)
-    stock['_main_stop_current_quote_context'] = dict(at=rows[-1]['at'], bid=rows[-1]['bid'], complete=True)
+    stock['_main_stop_current_quote_context'] = dict(at=rows[-1]['at'], bid=rows[-1]['bid'], complete=True,
+        evaluator='fast')
     monkeypatch.setattr(handlers, '_capture_main_stop_observation', lambda *a, **k: fault != 'capture_failure')
     logs = []
     monkeypatch.setattr(handlers, '_remember_exit_context', lambda **kwargs: None)
@@ -192,6 +194,9 @@ def test_dispatch_records_normal_decision_without_interfering_with_existing_exit
     handlers._dispatch_scalp_preset_exit(stock=stock, code='005930', now_ts=rows[-1]['at'],
         curr_p=rows[-1]['bid'], buy_p=10000., profit_rate=.5, peak_profit=.8, strategy='SCALPING',
         sell_reason_type='PROFIT', reason='already decided', exit_rule='scalp_trailing_take_profit', fast_exit=True)
+    if fault == 'manual':
+        assert logs == []  # The native ownership guard precedes observer metadata.
+        return
     signal = logs[0][1]
     assert logs[-1][0] == ('simulated' if fault == 'simulated' else 'scalp_fast_exit_deferred_for_reconciliation')
     if fault is None:
@@ -753,3 +758,101 @@ def test_actual_vote_binds_native_record_and_proven_buy_generation(fault):
         assert result['status']=='modeled' and calls==[1001.]
     assert events[0]['position_key'].startswith('target:')
     assert events[1]['decision_inputs']['holding_vote_source']['position_key'].startswith('record:')
+
+
+def native_lane_rows():
+    """New synthetic calls use actual producers; no historical row is upgraded."""
+    from src.engine.scalping import main_stop_runtime_source as runtime
+    from src.tests.test_main_stop_runtime_source import stage_stock,stage_inputs
+    stock=stage_stock(role='SCALP_PRESET_TP')
+    runtime.ensure_observation_epoch(stock)
+    result=[];predecessor=None
+    cost=dict(buy_cost_krw=0.,sell_cost_rate=.0023,known_at=999.,source_sha256='a'*64)
+    for owner,stage,at,profit in (
+            ('normal','preset_safety',1000.,-.1),('normal','common_soft',1000.,-.1),
+            ('fast','preset_safety',1001.01,-.1),
+            ('normal','preset_safety',1001.,-3.2),('normal','common_soft',1001.,-3.2)):
+        view=runtime.observation_view(stock)
+        runtime.reserve_observation_generations(stock,view,quote=True)
+        quote=policy.source_row(view,at=at,bid=10000*(1+profit/100),bid_qty=100,
+            quote=dict(market_route='KRX',item='005930',transport_epoch=1,observed_epoch=at),
+            coverage_complete=True,automatic_management_allowed=True,cost_model=cost,vote_source=None,
+            runtime_flags=stage_inputs(cost),decision_profit_pct=profit,
+            native_decision_required=True,capture_evaluator=owner,seal=False)
+        quote.update(runtime.observation_source_identity(view));seal(quote)
+        runtime.reserve_observation_generations(stock,view,evaluation=True)
+        lane=runtime.reserve_evaluation_lane(stock,view,owner)
+        preset=(policy.preset_stop_receipt(view,at=at,evaluator=owner,hard_pct=-5.,
+            grace_sec=0,emergency_pct=-5.5,held_sec=100,enabled=True) if stage=='preset_safety' else None)
+        evaluation=runtime.evaluation_source(view,quote_source=quote,at=at,evaluator=owner,stage=stage,
+            decision_price=quote['bid'],decision_price_basis='executable_bid',decision_profit_pct=profit,
+            priority_status='reached',quote_max_age_sec=3.,preset_stop=preset,
+            preset_predecessor=predecessor if stage=='common_soft' else None,
+            decision_inputs=stage_inputs(cost) if stage=='common_soft' else {'handoff_enabled':False},seal=False)
+        evaluation.update(lane);seal(evaluation)
+        if owner=='normal' and stage=='preset_safety':predecessor=runtime.evaluation_reference(evaluation)
+        result.extend((quote,evaluation))
+    return result
+
+
+def test_native_lane_order_uses_actual_index_without_rewriting_caller_clocks(tmp_path):
+    from collections import Counter
+    from src.engine.automation import main_stop_postclose as post,main_stop_source_index as index
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    events=native_lane_rows();original=deepcopy(events)
+    source=tmp_path/'holding_pipeline_2026-10-16.jsonl'
+    source.write_text(''.join(json.dumps(dict(stage='main_stop_source',fields=dict(main_stop_source=row)))+'\n'
+        for row in events))
+    census=Counter();refs=index.prepare(tmp_path/'index',{str(source):byte_generation(source)},post.source_events,census)
+    for position in index.positions(refs,tmp_path/'positions',census):
+        rows=list(position.rows())
+        assert [row['evaluation_generation'] for row in rows if row['schema']==replay.EVALUATION_SCHEMA]==[1,2,4,5,3]
+        with replay.bound_evaluations(iter(rows)) as (bound,state):
+            observed=list(bound)
+            assert not [row for row,ev in observed if row['schema']=='main_stop_contract_gap']
+            assert state['evaluation_global_prefix']==5
+            assert state['evaluation_lane_previous']=={'normal':4,'fast':1}
+        result=replay.replay(iter(rows),replace(baseline(),grace_sec=0,protect_emergency_pct=-4.))
+        assert result['status']=='modeled' and result['crossing_at']==1001.
+        assert result['source_support']['native_evaluations_seen']==5
+    assert events==original
+
+
+@pytest.mark.parametrize('fault',['missing_fast','duplicate_fast','missing_normal','quote_scope','lane_vector',
+    'runtime_incarnation','mixed_legacy','predecessor_lane'])
+def test_native_lane_integrity_remains_strict_after_an_early_crossing(fault):
+    events=native_lane_rows()
+    if fault=='missing_fast':events=[row for row in events if row.get('evaluator')!='fast']
+    elif fault=='duplicate_fast':events.append(deepcopy(events[5]))
+    elif fault=='missing_normal':events.pop(7)
+    elif fault=='quote_scope':events[6]['source_runtime_incarnation']='f'*32;seal(events[6])
+    elif fault=='lane_vector':events[9]['evaluation_lane_generations']={'normal':3,'fast':2};seal(events[9])
+    elif fault=='runtime_incarnation':
+        for row in events[4:6]:row['source_runtime_incarnation']='f'*32;seal(row)
+        events[5]['quote_source_sha256']=events[4]['source_sha256'];seal(events[5])
+    elif fault=='mixed_legacy':
+        for row in events[4:6]:
+            for key in ('evaluation_lane_scope','source_runtime_pid','source_runtime_incarnation',
+                'evaluation_lane_generation','evaluation_lane_generations'):row.pop(key,None)
+            seal(row)
+        events[5]['quote_source_sha256']=events[4]['source_sha256'];seal(events[5])
+    else:
+        events[9]['evaluation_lane_generation']=5
+        events[9]['evaluation_lane_generations']={'normal':5,'fast':0}
+        seal(events[9])
+    events.sort(key=lambda row:(row['at'],row['source_observation_generation']))
+    result=replay.replay(iter(events),replace(baseline(),grace_sec=0,protect_emergency_pct=-4.))
+    assert result['status']=='source_gap' and result['modeled_net_krw'] is None
+    assert result['allowed_runtime_apply'] is False
+
+
+def test_native_lane_pending_claims_close_on_early_context_exit():
+    from src.engine.lifecycle.research_input_budget import health
+    events=native_lane_rows();events.sort(key=lambda row:(row['at'],row['source_observation_generation']))
+    before=health()['used_bytes']
+    with replay.bound_evaluations(iter(events)) as (bound,state):
+        for row,ev in bound:
+            if ev and ev['evaluation_generation']==4:break
+        assert state['evaluation_global_prefix']==2
+        assert health()['used_bytes']>before
+    assert health()['used_bytes']==before

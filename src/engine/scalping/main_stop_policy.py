@@ -51,6 +51,12 @@ def implementation_paths():
         'automation/main_stop_source_projection.py','scalping/holding_vote_exit_models.py',
         'scalping/main_stop_experiment.py',
         'automation/main_stop_performance.py','scalping/main_stop_runtime_source.py',
+        'automation/main_stop_runtime_workload.py','scalping/exit_safety_monitor.py',
+        'monitoring/runtime_performance.py','sniper_trade_utils.py','kiwoom_orders.py',
+        '../database/db_manager.py','../database/models.py',
+        '../utils/pipeline_event_logger.py','../trading/order/owner_custody_registry.py',
+        '../trading/market/session_contract.py','../utils/constants.py',
+        'log_archive_service.py','dashboard_data_repository.py',
         'scalping/main_stop_quantity_source.py',
         'scalping/initial_quantity_bundle_state.py',
         'lifecycle/main_stop_research_cost.py','lifecycle/broker_cost_allocation.py',
@@ -593,14 +599,22 @@ def defer_source_capture():
         yield
     finally:
         _DEFERRED_SOURCES.reset(token)
-        for stock, code, name, record_id, raw in pending:
+        for stock, code, name, record_id, epoch, raw in pending:
             try:
                 accepted = _submit_source(code, name, record_id, raw)
             except Exception:
                 accepted = False
             if not accepted:
-                stock['main_stop_source_gap'] = 'observation_queue_rejected'
-                stock['main_stop_source_rejected_count'] = stock.get('main_stop_source_rejected_count', 0) + 1
+                from src.engine.sniper_entry_state import ENTRY_LOCK
+                with ENTRY_LOCK:
+                    if epoch is not None and stock.get('_main_stop_observation_epoch') != epoch:
+                        key = 'main_stop_source_superseded_rejected_count'
+                        stock[key] = stock.get(key, 0) + 1
+                        stock['main_stop_source_superseded_rejection'] = dict(record_id=record_id,
+                            source_lifecycle_epoch=epoch, kind='deferred_queue', reason='observation_queue_rejected')
+                    else:
+                        stock['main_stop_source_gap'] = 'observation_queue_rejected'
+                        stock['main_stop_source_rejected_count'] = stock.get('main_stop_source_rejected_count', 0) + 1
 
 
 def configure_source_sink(sink):
@@ -649,9 +663,18 @@ def enqueue_source(stock,code,row):
     pending = _DEFERRED_SOURCES.get()
     if pending is None and _SOURCE_SINK is None:return False
     if pending is not None and len(pending) >= 2:return False
+    # An evaluator-local receipt remains bound to its original BUY lifecycle
+    # even if the live object is replaced before queue admission or draining.
+    # Only old callers with no record field retain the compatibility fallback.
+    record_id = row['record_id'] if 'record_id' in row else stock.get('id')
+    if 'record_id' in row and not (
+            type(record_id) is int and record_id > 0
+            or type(record_id) is str and record_id.isascii() and record_id.isdecimal()
+                and bool(record_id.lstrip('0'))):
+        return False
     raw = json.dumps(row, sort_keys=True, separators=(',', ':'), allow_nan=False)
     if len(raw.encode()) > 64 * 1024:return False
     if pending is not None:
-        pending.append((stock, code, stock.get('name') or code, stock.get('id'), raw))
+        pending.append((stock, code, stock.get('name') or code, record_id, row.get('source_lifecycle_epoch'), raw))
         return True
-    return _submit_source(code, stock.get('name') or code, stock.get('id'), raw)
+    return _submit_source(code, stock.get('name') or code, record_id, raw)

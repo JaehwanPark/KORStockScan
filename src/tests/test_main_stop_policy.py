@@ -528,7 +528,7 @@ def publication(tmp_path, *, experiment=False, actual=True):
     from src.engine.scalping import main_stop_experiment as contracts
     with pytest.MonkeyPatch.context() as legacy_fixture:
         if experiment:
-            legacy_fixture.setattr(contracts,'require_native_publication_performance',lambda contract:None)
+            legacy_fixture.setattr(contracts,'require_native_publication_performance',lambda contract,**kwargs:None)
         bundle,report=post.publish(tmp_path,'2026-10-12','2026-10-13',parents=parents,parent_receipt=parent,
             snapshot_receipt=snapshot,source_paths=[source],experiments=contract,completed=complete,economic_sources=dict(files={cost['path']:post.byte_generation(Path(cost['path']))},cost_generations={}))
     return bundle,report,parent,source

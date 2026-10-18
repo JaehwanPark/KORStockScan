@@ -2482,6 +2482,25 @@ def test_sell_cancel_exact_success_releases_generation_after_db_commit(monkeypat
     assert db.updates[0]["status"] == "HOLDING"
     assert generation
 
+    # Exact cancellation releases the old owner; the ordinary dispatcher may
+    # now create a different generation through the same custody boundary.
+    stock.update(strategy="SCALPING", buy_price=10000)
+    monkeypatch.setattr(handlers, "DB", db)
+    monkeypatch.setattr(handlers, "_confirm_cancel_or_reload_remaining",
+                        sniper_trade_utils.confirm_cancel_or_reload_remaining)
+    monkeypatch.setattr(handlers, "_sell_side_open_time_block_fields", lambda **kwargs: {})
+    sends = []
+    monkeypatch.setattr(handlers, "_send_exit_best_ioc", lambda *a, **k:
+                        sends.append((a, k)) or {"return_code": "0", "ord_no": "0000009"})
+    handlers._dispatch_scalp_preset_exit(stock=stock, code=stock["code"],
+        now_ts=handlers.time.time(), curr_p=9800, buy_p=10000, profit_rate=-2,
+        peak_profit=0, strategy="SCALPING", sell_reason_type="LOSS",
+        reason="after exact cancellation", exit_rule="scalp_preset_hard_stop_pct")
+    assert len(sends) == 1
+    assert stock["sell_submit_generation"] != generation
+    assert stock["buy_qty"] == stock["sell_submit_requested_qty"] == 7
+    assert receipts._sell_pending_submit_path(stock["id"]).exists()
+
 
 def test_sell_cancel_ack_is_durable_and_reused_until_terminal_absence(monkeypatch):
     from src.engine import sniper_execution_receipts as receipts

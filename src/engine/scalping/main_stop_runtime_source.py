@@ -6,11 +6,251 @@ an actual caller/stage to the original shared quote and its immutable policy.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import fields
+from datetime import date, datetime
+from itertools import count
+import math
+import os
+import re
+from uuid import uuid4
 
-from .main_stop_policy import digest, finite, next_source_observation_generation
+from .main_stop_policy import StopValues, digest, finite, next_source_observation_generation
 
 EVALUATION_SCHEMA = 'main_stop_evaluation_source_v1'
 STAGES = {'preset_safety', 'common_soft'}
+
+# Only the pure source builders and their native identity/clock helpers consume
+# this view. Quote contexts and prior source receipts have their own bounded
+# capture in the caller; arbitrary trading state is never copied.
+SOURCE_VIEW_KEYS = frozenset({
+    'id', 'record_id', 'code', 'stock_code', 'strategy', 'status', 'position_tag',
+    'position_peak_cycle_id', 'buy_time', 'holding_started_at', 'order_time',
+    'entry_split_probe_filled_at', 'scalp_holding_source_position_token',
+    'scalp_live_simulator', 'simulation_book', 'buy_qty', 'buy_price',
+    'main_stop_policy_pin', 'main_stop_pin_persistence', 'main_stop_clock_unobserved',
+    '_main_stop_typed_values', '_main_stop_position_key', '_main_stop_source_values',
+    'manual_control_exclusion_blocked', 'manual_control_hard_stop_handoff_pending',
+    'manual_control_hard_stop_handoff_inflight', 'exit_requested', 'exit_token',
+    'exit_mode', 'hard_stop_pct', 'hard_stop_emergency_pct', 'hard_stop_grace_sec',
+    'protect_profit_pct', 'trailing_stop_price', 'pyramid_count', 'last_add_type',
+    'add_count', 'pending_add_qty', 'pending_add_ord_no', 'pending_add_order',
+    'pending_add_ord_nos', 'scale_in_submit_reserved_qty',
+    'entry_cancel_terminal_reconciliation_required', 'entry_reprice_cancel_terminal_pending',
+    'owner_registry_reconciliation_required', 'entry_partial_fill_deferred_notice',
+    'post_add_economic_generation', 'last_reversal_features', 'reversal_add_state',
+    'reversal_add_executed_at', 'reversal_add_profit_floor', 'reversal_add_used',
+    'soft_stop_micro_grace_started_at', '_trailing_entry_cost_model',
+    '_entry_receipt_filled_by_order_no', '_entry_receipt_executions_by_order_no',
+    '_entry_receipt_requested_by_order_no', '_entry_receipt_filled_amount_by_order_no',
+    '_entry_receipt_economics_complete_by_order_no', 'holding_buy_fill_legs',
+    '_add_receipt_filled_by_order_no', '_add_receipt_executions_by_order_no',
+    'entry_filled_qty', 'add_filled_qty', 'initial_quantity_bundle',
+    'initial_quantity_last_terminal_bundle', '_main_stop_quantity_source',
+    'pending_entry_orders', 'entry_requested_qty', 'requested_buy_qty',
+    'entry_split_probe_bundle_id', 'entry_split_order_probe_first_applied',
+    'entry_split_probe_requested_qty', 'entry_split_probe_target_qty',
+    'entry_split_probe_phase', 'entry_split_probe_abort_reason',
+    'entry_split_probe_partial_complete_qty', 'holding_path_vote_ledger',
+    'holding_vote_coverage_started_at', 'holding_vote_coverage_checked_at',
+    'holding_vote_coverage_birth_at', 'holding_vote_coverage_pid',
+    'holding_path_vote_store_gap', 'holding_vote_coverage_store_gap',
+    'holding_vote_coverage_generation', 'main_stop_source_rejected_count',
+    'main_stop_evaluation_rejected_count', '_main_stop_quote_generation',
+    '_main_stop_evaluation_generation', '_main_stop_source_observation_generation',
+    '_main_stop_observation_epoch',
+    '_main_stop_evaluation_lane_generations',
+})
+
+# Native quantity trees admit 4096 nodes/depth 12/256 children/1024 characters.
+# A complete quote adds an envelope around that proof. The aggregate byte
+# admission matches the existing bounded BUY runtime receipt (256 KiB), using
+# an upper bound without JSON encoding, hashing, I/O or arbitrary __deepcopy__.
+OBSERVATION_MAX_BYTES = 262144
+OBSERVATION_MAX_NODES = 8192
+OBSERVATION_MAX_DEPTH = 16
+_ESCAPED_CHARACTERS = re.compile(r'[\x00-\x1f"\\\x7f-\U0010ffff]')
+_OBSERVATION_EPOCHS = count(1)
+EVALUATION_LANE_SCOPE = 'native_evaluator_lifecycle_v1'
+RUNTIME_SOURCE_PID = os.getpid()
+RUNTIME_SOURCE_INCARNATION = uuid4().hex
+
+
+def ensure_observation_epoch(stock):
+    """Assign an in-process lifecycle ticket under the caller's state lock.
+
+    Native lifecycle reset removes this field, including same-ID resets. The
+    ticket is source concurrency metadata, not a broker/order identity or a
+    persisted cross-process identity.
+    """
+    if type(stock) is not dict:
+        raise ValueError('native_observation_stock_invalid')
+    if '_main_stop_observation_epoch' not in stock:
+        stock['_main_stop_observation_epoch'] = next(_OBSERVATION_EPOCHS)
+    value = stock['_main_stop_observation_epoch']
+    if type(value) is not int or value <= 0:
+        raise ValueError('native_observation_epoch_invalid')
+    return value
+
+
+def reserve_evaluation_lane(stock, view, evaluator):
+    """Reserve one actual caller lane; keep original global IDs and clocks.
+
+    The caller owns ENTRY_LOCK and reserves the global evaluation generation
+    in the same section. Only two native evaluator lanes can exist. A complete
+    counts vector lets consumers check global presence independently of the
+    order imposed by the callers' original decision-clock arguments.
+    """
+    if (type(stock) is not dict or type(view) is not dict or stock is view
+            or type(evaluator) is not str or evaluator not in ('normal', 'fast')):
+        raise ValueError('native_evaluation_lane_invalid')
+    epoch = stock.get('_main_stop_observation_epoch')
+    if type(epoch) is not int or epoch <= 0 or view.get('_main_stop_observation_epoch') != epoch:
+        raise ValueError('native_evaluation_lane_epoch_invalid')
+    prior = stock.get('_main_stop_evaluation_lane_generations', {'normal': 0, 'fast': 0})
+    if (type(prior) is not dict or set(prior) != {'normal', 'fast'}
+            or any(type(value) is not int or value < 0 for value in prior.values())):
+        raise ValueError('native_evaluation_lane_generation_invalid')
+    identity = observation_source_identity(view)
+    current = dict(prior)
+    current[evaluator] += 1
+    global_generation = stock.get('_main_stop_evaluation_generation')
+    if type(global_generation) is not int or global_generation != sum(current.values()):
+        raise ValueError('native_evaluation_lane_global_generation_unbound')
+    stock['_main_stop_evaluation_lane_generations'] = current
+    view['_main_stop_evaluation_lane_generations'] = dict(current)
+    return dict(identity,
+        evaluation_lane_generation=current[evaluator], evaluation_lane_generations=dict(current),
+    )
+
+
+def observation_source_identity(view):
+    """Name this actual runtime/lifecycle scope; never infer a historical one."""
+    epoch = view.get('_main_stop_observation_epoch') if type(view) is dict else None
+    if type(epoch) is not int or epoch <= 0:
+        raise ValueError('native_evaluation_lane_epoch_invalid')
+    return dict(evaluation_lane_scope=EVALUATION_LANE_SCOPE, source_lifecycle_epoch=epoch,
+        source_runtime_pid=RUNTIME_SOURCE_PID, source_runtime_incarnation=RUNTIME_SOURCE_INCARNATION)
+
+
+def _string_size(value):
+    # Every escaped code point takes at most twelve ASCII bytes (a surrogate
+    # pair); ordinary ASCII takes one. No serializer runs in the state lock.
+    return 2 + len(value) + 11 * len(_ESCAPED_CHARACTERS.findall(value))
+
+
+def _copy_observation_tree(value, budget, *, max_nodes, max_depth):
+    remaining = max_nodes
+
+    def charge(size):
+        budget[0] -= size
+        if budget[0] < 0:
+            raise ValueError('native_observation_budget_exceeded')
+
+    def copy_value(item, depth=0):
+        nonlocal remaining
+        remaining -= 1
+        if remaining < 0 or depth > max_depth:
+            raise ValueError('native_observation_budget_exceeded')
+        kind = type(item)
+        if kind is dict:
+            if len(item) > 256:
+                raise ValueError('native_observation_budget_exceeded')
+            charge(2 + len(item) * 2)
+            result = {}
+            for key, child in item.items():
+                if type(key) is not str or len(key) > 240:
+                    raise ValueError('native_observation_key_invalid')
+                charge(_string_size(key))
+                result[key] = copy_value(child, depth + 1)
+            return result
+        if kind in (list, tuple):
+            if len(item) > 256:
+                raise ValueError('native_observation_budget_exceeded')
+            charge(2 + len(item))
+            children = [copy_value(child, depth + 1) for child in item]
+            return tuple(children) if kind is tuple else children
+        if kind is str:
+            if len(item) > 1024:
+                raise ValueError('native_observation_budget_exceeded')
+            charge(_string_size(item))
+        elif kind is int:
+            charge(2 + item.bit_length() // 3)
+        elif kind is float:
+            if not math.isfinite(item):
+                raise ValueError('native_observation_value_invalid')
+            charge(32)
+        elif item is None or kind is bool:
+            charge(5)
+        elif kind in (date, datetime):
+            charge(128)
+        elif kind is StopValues:
+            for field in fields(StopValues):
+                scalar = getattr(item, field.name)
+                if type(scalar) not in (int, float) or not finite(scalar):
+                    raise ValueError('native_observation_value_invalid')
+                copy_value(scalar, depth + 1)
+        else:
+            raise ValueError('native_observation_value_invalid')
+        return item
+
+    return copy_value(value)
+
+
+def bounded_observation_copy(value):
+    """Detach one source envelope under fixed admission limits; no authority."""
+    return _copy_observation_tree(value, [OBSERVATION_MAX_BYTES],
+        max_nodes=OBSERVATION_MAX_NODES, max_depth=OBSERVATION_MAX_DEPTH)
+
+
+def observation_view(stock):
+    """Capture declared inputs while the caller holds its short state lock.
+
+    The vote source consumes only each ledger row's persisted_at. Preserve that
+    exact projection, including missing values, without copying AI responses or
+    rewriting the original ledger. The native runtime tail admits 192 rows.
+    Every other retained field is copied without interpreting its semantics.
+    """
+    if type(stock) is not dict:
+        raise ValueError('native_observation_stock_invalid')
+    budget = [OBSERVATION_MAX_BYTES]
+    result = {}
+    for key in SOURCE_VIEW_KEYS:
+        if key not in stock:
+            continue
+        value = stock[key]
+        if key == 'holding_path_vote_ledger' and value is not None:
+            if type(value) is not list or len(value) > 192 or any(type(row) is not dict for row in value):
+                raise ValueError('native_observation_vote_ledger_invalid')
+            value = [{k: row[k] for k in ('persisted_at',) if k in row} for row in value]
+        budget[0] -= 2 + _string_size(key)
+        result[key] = _copy_observation_tree(value, budget, max_nodes=4096, max_depth=12)
+    return result
+
+
+def reserve_observation_generations(stock, view, *, quote=False, evaluation=False, minimum=0):
+    """Reserve unique live counters under the caller's lock, before pure work.
+
+    Validation is atomic: an invalid counter never partially mutates either
+    mapping. A later builder failure leaves the reservation visible as a gap.
+    Local builders receive reserved-1 and retain their existing increment API.
+    """
+    if (type(stock) is not dict or type(view) is not dict or stock is view
+            or type(quote) is not bool or type(evaluation) is not bool
+            or quote == evaluation or type(minimum) is not int or minimum < 0):
+        raise ValueError('native_observation_reservation_invalid')
+    keys = ('_main_stop_quote_generation', '_main_stop_evaluation_generation',
+            '_main_stop_source_observation_generation')
+    current = {key: stock.get(key, 0) for key in keys}
+    if any(type(value) is not int or value < 0 for value in current.values()):
+        raise ValueError('native_observation_generation_invalid')
+    key = keys[0] if quote else keys[1]
+    generation = current[key] + 1
+    observation = max(current[keys[2]], minimum) + 1
+    stock[key] = generation
+    stock[keys[2]] = observation
+    view[key] = generation - 1
+    view[keys[2]] = observation - 1
+    return {key: generation, keys[2]: observation}
 
 
 

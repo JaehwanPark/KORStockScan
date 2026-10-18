@@ -1025,6 +1025,8 @@ _POSITION_PEAK_RESET_KEYS = (
     "_main_stop_evaluation_generation", "_main_stop_source_observation_generation",
     "_main_stop_normal_preset_evaluation", "_main_stop_last_quote_source",
     "_main_stop_current_quote_context", "_main_stop_last_captured_quote",
+    "_main_stop_quote_context_by_evaluator", "_main_stop_observation_epoch",
+    "_main_stop_normal_exit_observation", "_main_stop_evaluation_lane_generations",
     "main_stop_evaluation_rejected_count", "main_stop_evaluation_source_gap",
     "_main_stop_quantity_source", "main_stop_quantity_source_gap",
     "main_stop_quantity_restore_source", "main_stop_quantity_restore_status",

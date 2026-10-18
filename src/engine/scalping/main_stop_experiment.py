@@ -319,16 +319,38 @@ def _verify_inventory(inventory):
             raise ValueError("stop_experiment_source_generation_changed")
 
 
-def _verify_performance(reference, code_sha, *, mode, source_sha, require_native=False):
+def _verify_measured_parameters(body,parameters,selected_values=None):
+    """Bind measured values to preregistration, then to the actual winner."""
+    try:
+        baseline=asdict(StopValues.parse(body.get('baseline_values')))
+        candidate=asdict(StopValues.parse(body.get('candidate_values')))
+        grid=parameters['candidate_grid']
+        if (not isinstance(grid,dict) or digest(baseline)!=parameters['parent_sha256']
+                or digest(baseline)!=digest(asdict(StopValues.parse(grid.get('parent'))))):
+            raise ValueError('stop_performance_parent_not_measured')
+        if digest(candidate) not in {digest(asdict(StopValues.parse(value))) for value in grid.values()}:
+            raise ValueError('stop_performance_candidate_not_preregistered')
+        if selected_values is not None and digest(candidate)!=digest(asdict(StopValues.parse(selected_values))):
+            raise ValueError('stop_performance_selected_values_not_measured')
+    except (KeyError,TypeError,AttributeError) as exc:
+        raise ValueError('stop_performance_parameters_unverified') from exc
+
+
+def _verify_performance(reference, code_sha, *, mode, source_sha, require_native=False,
+                        required_cell=None, experiment_parameters=None,selected_values=None):
     if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
         raise ValueError("stop_performance_gate_unverified")
     body, byte_sha = bounded_object(_safe_path(reference["path"]), MAX_BYTES)
     if byte_sha != reference["sha256"] or body.get("code_sha256") != code_sha:
         raise ValueError("stop_performance_gate_unverified")
-    if body.get('schema') == 'main_stop_performance_v2':
+    if body.get('schema') in {'main_stop_performance_v2','main_stop_performance_v3'}:
         from src.engine.automation.main_stop_performance import validate_receipt
         validate_receipt(body,code_sha=code_sha,source_sha=source_sha,
                          require_full=mode=='prospective')
+        if mode=='prospective' and required_cell is not None and required_cell not in body.get('coverage_cells',[]):
+            raise ValueError('stop_performance_cell_not_measured')
+        if mode=='prospective' and experiment_parameters is not None:
+            _verify_measured_parameters(body,experiment_parameters,selected_values)
         return
     if body.get('schema') != 'main_stop_performance_v1' or (require_native and mode=='prospective'):
         raise ValueError('stop_performance_native_producer_required')
@@ -344,7 +366,7 @@ def _verify_performance(reference, code_sha, *, mode, source_sha, require_native
         raise ValueError("stop_performance_gate_unverified")
 
 
-def require_native_publication_performance(contract):
+def require_native_publication_performance(contract,*,selected_values=None):
     """New numeric authority always requires native, fully covered evidence.
 
     Legacy artifact validators deliberately retain their original semantics
@@ -352,12 +374,15 @@ def require_native_publication_performance(contract):
     publication the legacy label-only performance contract.
     """
     if (not isinstance(contract,dict) or not _sha(contract.get('code_sha256'))
-            or not _sha(contract.get('source_sha256')) or not isinstance(contract.get('performance_receipt'),dict)):
+            or not _sha(contract.get('source_sha256')) or not isinstance(contract.get('performance_receipt'),dict)
+            or contract.get('cell') not in {role+'|'+market for role in ROLES for market in MARKETS}):
         raise ValueError('stop_publication_experiment_unverified')
     if contract.get('mode','prospective')!='prospective':
         raise ValueError('stop_historical_experiment_report_only')
     _verify_performance(contract.get('performance_receipt'),contract.get('code_sha256'),
-        mode='prospective',source_sha=contract.get('source_sha256'),require_native=True)
+        mode='prospective',source_sha=contract.get('source_sha256'),require_native=True,
+        required_cell=contract.get('cell','missing'),experiment_parameters=contract,
+        selected_values=selected_values)
 
 
 def seal_experiment_sources(directory, preregistration, *, source_inventory,
@@ -443,7 +468,7 @@ def finalize_experiment(directory, preregistration, *, source_inventory,
     p=registered['parameters'];seal=_read_reference(source_ref,SOURCE_SEAL_SCHEMA,'source_seal_sha256')
     performance=_plain(performance_receipt)
     _verify_performance(performance,p['code_sha256'],mode=registered['mode'],source_sha=seal['source_sha256'],
-                        require_native=True)
+                        require_native=True,required_cell=registered['cell'],experiment_parameters=p)
     contract = dict(p, schema=SCHEMA, cell=registered["cell"], mode=registered["mode"],
                     frozen_at=registered["frozen_at"], source_sha256=seal["source_sha256"],
                     preregistration=_plain(preregistration), source_seal=source_ref,

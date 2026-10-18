@@ -113,9 +113,13 @@ def test_shared_cadence_never_erases_actual_normal_call(monkeypatch, order):
 
 
 def test_native_receipt_failure_is_source_only_and_next_receipt_exposes_loss(monkeypatch):
+    from src.engine.scalping.main_stop_runtime_source import ensure_observation_epoch, observation_source_identity
     from src.engine import sniper_state_handlers as handlers
     stock=stage_stock()
+    ensure_observation_epoch(stock)
     quote=research_quote(stock,at=1000.,bid=9900,profit=-1.)
+    quote.update(observation_source_identity(stock))
+    quote['source_sha256']=policy.digest({k:v for k,v in quote.items() if k!='source_sha256'})
     stock['_main_stop_last_quote_source']=quote
     stock['_main_stop_current_quote_context']=dict(at=1000.,bid=9900,bid_qty=100,
         quote=dict(item=quote['item'],market_route=quote['route'],transport_epoch=1,observed_epoch=1000.),
@@ -440,11 +444,21 @@ def test_native_revive_resets_only_completed_cycle_source_state(monkeypatch):
         _main_stop_quantity_source=deepcopy(quote['quantity_source']),
         _main_stop_last_quote_source=quote,_main_stop_normal_preset_evaluation={'old':True},
         _main_stop_current_quote_context={'old':True},_main_stop_last_captured_quote=('old',),
+        _main_stop_quote_context_by_evaluator={'normal': {'old': True}, 'fast': {'old': True}},
+        _main_stop_observation_epoch=23,
+        _main_stop_normal_exit_observation={'old': True},
+        _main_stop_evaluation_lane_generations={'normal': 1, 'fast': 2},
+        main_stop_source_superseded_rejected_count=9,
+        main_stop_source_superseded_rejection={'record_id': 'prior-cycle'},
         main_stop_quantity_restore_source={'old':True},main_stop_quantity_source_gap='old',
         main_stop_quantity_restore_status='terminal_quantity_source_restored')
     # Ordinary observations never erase a loss within the still-open cycle.
     second=research_evaluation(stock,quote,at=1000.2)
     assert second['evaluation_rejected_count']==1 and second['evaluation_generation']==2
+    assert set(stock['_main_stop_quote_context_by_evaluator']) == {'normal', 'fast'}
+    assert stock['_main_stop_observation_epoch'] == 23
+    assert stock['_main_stop_normal_exit_observation'] == {'old': True}
+    assert stock['_main_stop_evaluation_lane_generations']['fast'] == 2
     old_cycle=position_cycle_id(stock)
     stock['historical_custody_receipt']={'original_owner':'Main','cycle':old_cycle}
     monkeypatch.setattr(receipts.POSITION_PEAK_LEDGER,'remove_for_stock',lambda stock:None)
@@ -452,7 +466,10 @@ def test_native_revive_resets_only_completed_cycle_source_state(monkeypatch):
     monkeypatch.setattr(receipts,'move_orders_to_terminal',lambda *a,**k:None)
     receipts._apply_scalp_revive_memory_state(target_stock=stock,code='005930',new_watch_id=102,
         revived_position_tag='SCANNER',revived_at_ts=1001.)
-    assert not any(key.startswith('_main_stop') or key.startswith('main_stop_') for key in stock)
+    assert {key for key in stock if key.startswith('_main_stop') or key.startswith('main_stop_')} == {
+        'main_stop_source_superseded_rejected_count', 'main_stop_source_superseded_rejection'}
+    assert stock['main_stop_source_superseded_rejected_count'] == 9
+    assert stock['main_stop_source_superseded_rejection'] == {'record_id': 'prior-cycle'}
     assert stock['historical_custody_receipt']['cycle']==old_cycle
     assert set(receipts._POSITION_PEAK_RESET_KEYS)<=set(receipts._SELL_COMPLETE_RESET_KEYS)
     assert set(receipts._POSITION_PEAK_RESET_KEYS)<=set(receipts._SELL_REVIVE_RESET_KEYS)
@@ -467,9 +484,13 @@ def test_native_revive_resets_only_completed_cycle_source_state(monkeypatch):
 
 
 def test_native_preset_uses_current_handoff_flag_instead_of_shared_quote(monkeypatch):
+    from src.engine.scalping.main_stop_runtime_source import ensure_observation_epoch, observation_source_identity
     from src.engine import sniper_state_handlers as handlers
     stock=stage_stock(role='SCALP_PRESET_TP')
+    ensure_observation_epoch(stock)
     quote=research_quote(stock,at=1000.,bid=9800,profit=-2.)
+    quote.update(observation_source_identity(stock))
+    quote['source_sha256']=policy.digest({k:v for k,v in quote.items() if k!='source_sha256'})
     stock['_main_stop_last_quote_source']=quote
     stock['_main_stop_current_quote_context']=dict(at=1000.2,bid=9800,bid_qty=100,
         quote=dict(item=quote['item'],market_route=quote['route'],transport_epoch=1,observed_epoch=1000.),
@@ -481,3 +502,261 @@ def test_native_preset_uses_current_handoff_flag_instead_of_shared_quote(monkeyp
         hard_pct=-1.4,emergency_pct=-2.4,grace_sec=0,held_sec=20,handoff_enabled=True)
     assert event['quote_source_sha256']==quote['source_sha256']
     assert quote['handoff_enabled'] is False and event['decision_inputs']['handoff_enabled'] is True
+
+
+def test_observation_view_matches_native_producers_and_detaches_only_consumed_state():
+    import os
+    from datetime import date
+    from src.engine.ai.holding_exit_vote import buy_fill_identity_from_runtime
+    from src.engine.ai.holding_vote_replay_source import runtime_source
+    from src.engine.scalping.main_stop_quantity_source import build_quantity_source
+    from src.engine.scalping.main_stop_runtime_source import observation_view, bounded_observation_copy
+    stock = stage_stock()
+    original_quote = research_quote(stock, at=1000., bid=9950, profit=-.5)
+    stock.update(_main_stop_quantity_source=original_quote['quantity_source'],
+        holding_vote_coverage_pid=os.getpid(), holding_vote_coverage_started_at=900.,
+        holding_vote_coverage_checked_at=1000., holding_vote_coverage_birth_at=900.,
+        holding_vote_coverage_generation=buy_fill_identity_from_runtime(stock),
+        holding_path_vote_ledger=[{'persisted_at': 990., 'original_ai': {'response': ['unchanged']}}, {}],
+        buy_time=datetime(2026, 10, 12, 9), unrelated_unbounded_state=object())
+    ledger = deepcopy(stock['holding_path_vote_ledger'])
+    view = observation_view(stock)
+    assert 'unrelated_unbounded_state' not in view
+    assert view['holding_path_vote_ledger'] == [{'persisted_at': 990.}, {}]
+    assert build_quantity_source(view, at=1001.) == build_quantity_source(stock, at=1001.)
+    assert research_quote(view, at=1001., bid=9940, profit=-.6) == research_quote(
+        deepcopy({k: v for k, v in stock.items() if k != 'unrelated_unbounded_state'}),
+        at=1001., bid=9940, profit=-.6)
+    args = dict(position_key='record:101', buy_fill_identity=buy_fill_identity_from_runtime(stock),
+        market='REGULAR', now=1001., policy={'original': True}, data_root='unused', model='original')
+    assert runtime_source(view, **args) == runtime_source(stock, **args)
+    stock['_entry_receipt_executions_by_order_no']['0000123']['E1']['cumulative_qty'] = 999
+    stock['main_stop_policy_pin']['role'] = 'changed'
+    stock['holding_path_vote_ledger'][0]['persisted_at'] = 2000.
+    assert view['_entry_receipt_executions_by_order_no']['0000123']['E1']['cumulative_qty'] == 10
+    assert view['main_stop_policy_pin']['role'] == 'SCANNER'
+    assert view['holding_path_vote_ledger'][0]['persisted_at'] == 990.
+    assert ledger[0]['original_ai'] == stock['holding_path_vote_ledger'][0]['original_ai']
+    values = policy.StopValues(-3., 60, 20, 8, 3, .67, 1., -5., -4., -2., -.3)
+    immutable = (values, date(2026, 10, 12), datetime(2026, 10, 12, 9))
+    copied = bounded_observation_copy(immutable)
+    assert all(a is b for a, b in zip(immutable, copied))
+
+
+def test_observation_view_retains_native_quantity_pending_veto_without_inference():
+    from src.engine.scalping.main_stop_quantity_source import build_quantity_source
+    from src.engine.scalping.main_stop_runtime_source import observation_view
+    stock = stage_stock()
+    stock['pending_add_order'] = {'qty': 1, 'status': 'OPEN'}
+    original = deepcopy(stock)
+    result = build_quantity_source(observation_view(stock), at=1000.)
+    assert result == build_quantity_source(stock, at=1000.)
+    assert result['status'] == 'unknown' and result['proof'] is None
+    assert stock == original
+
+
+def test_observation_view_covers_actual_source_read_keys():
+    import ast
+    import inspect
+    import textwrap
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.sniper_scale_in import resolve_holding_elapsed_sec
+    from src.engine.ai.holding_vote_replay_source import runtime_source
+    from src.engine.scalping import main_stop_quantity_source as quantity
+    from src.engine.scalping.main_stop_runtime_source import SOURCE_VIEW_KEYS
+
+    functions = (policy.source_row, policy.protect_line_origin, policy.preset_stop_receipt,
+        evaluation_source, quantity.build_quantity_source, quantity._pending,
+        position_cycle_id, runtime_source, resolve_holding_elapsed_sec,
+        handlers._main_stop_preset_observation, handlers._is_scalp_simulator_target,
+        handlers._scalp_holding_source_position_key)
+    consumed = set()
+    for function in functions:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == 'stock'
+                    and node.func.attr == 'get' and node.args
+                    and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+                consumed.add(node.args[0].value)
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == 'stock'
+                    and node.func.attr == 'get' and node.args and isinstance(node.args[0], ast.Name)):
+                for generator in (entry for entry in ast.walk(tree) if isinstance(entry, ast.comprehension)):
+                    if (isinstance(generator.target, ast.Name) and generator.target.id == node.args[0].id
+                            and isinstance(generator.iter, (ast.Tuple, ast.List))):
+                        consumed.update(element.value for element in generator.iter.elts
+                            if isinstance(element, ast.Constant) and isinstance(element.value, str))
+    # Dynamic-key consumers are explicit native contracts, rather than inferred
+    # solely from literal .get calls in the AST above.
+    consumed.update(quantity.FILL_KEYS)
+    consumed.add(quantity.RETAINED_KEY)
+    consumed.update(f'_{prefix}_receipt_{kind}_by_order_no'
+        for prefix in ('entry', 'add') for kind in ('filled', 'executions'))
+    consumed.update(f'{prefix}_filled_qty' for prefix in ('entry', 'add'))
+    assert consumed <= SOURCE_VIEW_KEYS, sorted(consumed - SOURCE_VIEW_KEYS)
+    # Handler input views also consume local lifecycle facts. Their live source
+    # cache is intentionally captured separately and is not part of this view.
+    for function in (handlers._capture_main_stop_observation, handlers._observe_main_stop_evaluation):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+        consumed = {node.args[0].value for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == 'view'
+            and node.func.attr == 'get' and node.args and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)}
+        assert consumed <= SOURCE_VIEW_KEYS, sorted(consumed - SOURCE_VIEW_KEYS)
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), object(), {1: 'bad'},
+    {'x' * 241: 1}, ['x'] * 257, 'x' * 1025])
+def test_bounded_observation_copy_rejects_invalid_or_unbounded_values(value):
+    from src.engine.scalping.main_stop_runtime_source import bounded_observation_copy
+    with pytest.raises(ValueError, match='native_observation_'):
+        bounded_observation_copy(value)
+
+
+def test_observation_admission_bounds_depth_nodes_total_bytes_and_native_vote_tail():
+    from src.engine.scalping.main_stop_runtime_source import bounded_observation_copy, observation_view
+    deep = None
+    for _ in range(18):
+        deep = [deep]
+    with pytest.raises(ValueError, match='budget_exceeded'):
+        bounded_observation_copy(deep)
+    with pytest.raises(ValueError, match='budget_exceeded'):
+        bounded_observation_copy([[None] * 256 for _ in range(33)])
+    with pytest.raises(ValueError, match='budget_exceeded'):
+        bounded_observation_copy(['\U0001f600' * 1024 for _ in range(24)])
+    ledger = [dict(persisted_at=float(i), original_ai={'not_copied': object()}) for i in range(192)]
+    projected = observation_view({'holding_path_vote_ledger': ledger})
+    assert len(projected['holding_path_vote_ledger']) == 192
+    assert projected['holding_path_vote_ledger'][-1] == {'persisted_at': 191.}
+    with pytest.raises(ValueError, match='vote_ledger_invalid'):
+        observation_view({'holding_path_vote_ledger': ledger + [{}]})
+    # Independently admissible fields share one aggregate 256 KiB budget.
+    with pytest.raises(ValueError, match='budget_exceeded'):
+        observation_view({'last_reversal_features': ['x' * 1024] * 180,
+            '_trailing_entry_cost_model': ['x' * 1024] * 180})
+
+
+@pytest.mark.parametrize('bad', [True, 1., '1', -1])
+@pytest.mark.parametrize('key', ['_main_stop_quote_generation', '_main_stop_evaluation_generation',
+    '_main_stop_source_observation_generation'])
+def test_generation_reservation_rejects_all_invalid_live_counters_atomically(key, bad):
+    from src.engine.scalping.main_stop_runtime_source import reserve_observation_generations
+    live, view = {key: bad}, {'original': [1]}
+    originals = deepcopy((live, view))
+    with pytest.raises(ValueError, match='generation_invalid'):
+        reserve_observation_generations(live, view, quote=True)
+    assert (live, view) == originals
+
+
+@pytest.mark.parametrize('kwargs', [{}, {'quote': True, 'evaluation': True}, {'quote': 1},
+    {'evaluation': 'yes'}, {'quote': True, 'minimum': True}, {'quote': True, 'minimum': -1}])
+def test_generation_reservation_rejects_ambiguous_calls_atomically(kwargs):
+    from src.engine.scalping.main_stop_runtime_source import reserve_observation_generations
+    live, view = {}, {'original': [1]}
+    with pytest.raises(ValueError, match='reservation_invalid'):
+        reserve_observation_generations(live, view, **kwargs)
+    assert live == {} and view == {'original': [1]}
+
+
+def test_reserved_generations_remain_unique_when_native_builders_finish_in_reverse_order():
+    from threading import Lock
+    from concurrent.futures import ThreadPoolExecutor
+    from src.engine.scalping.main_stop_runtime_source import observation_view, reserve_observation_generations
+    live = stage_stock()
+    lock = Lock()
+    def reserve(_):
+        with lock:
+            view = observation_view(live)
+            reservation = reserve_observation_generations(live, view, quote=True)
+        return view, reservation
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        views = list(pool.map(reserve, range(8)))
+    rows = [research_quote(view, at=1000., bid=9950, profit=-.5) for view, _ in reversed(views)]
+    assert sorted(row['quote_generation'] for row in rows) == list(range(1, 9))
+    assert sorted(row['source_observation_generation'] for row in rows) == list(range(1, 9))
+    assert len({row['quote_id'] for row in rows}) == 8
+    assert live['_main_stop_quote_generation'] == 8
+    with lock:
+        view = observation_view(live)
+        reserved = reserve_observation_generations(live, view, evaluation=True, minimum=20)
+    event = research_evaluation(view, rows[0])
+    assert event['evaluation_generation'] == reserved['_main_stop_evaluation_generation'] == 1
+    assert event['source_observation_generation'] == reserved['_main_stop_source_observation_generation'] == 21
+    assert live['_main_stop_source_observation_generation'] == 21
+    # Reserved but failed work leaves an observable gap; it is never reused.
+    with lock:
+        reserve_observation_generations(live, observation_view(live), evaluation=True)
+        next_view = observation_view(live)
+        reserve_observation_generations(live, next_view, evaluation=True)
+    assert research_evaluation(next_view, rows[0])['evaluation_generation'] == 3
+
+
+def test_observation_epoch_distinguishes_same_identity_lifecycle_reset():
+    from src.engine.scalping.main_stop_runtime_source import ensure_observation_epoch, observation_view
+    stock = stage_stock()
+    first = ensure_observation_epoch(stock)
+    frozen = observation_view(stock)
+    assert ensure_observation_epoch(stock) == first
+    second_stock = stage_stock()
+    second = ensure_observation_epoch(second_stock)
+    assert second > first and position_cycle_id(second_stock) == position_cycle_id(stock)
+    stock.pop('_main_stop_observation_epoch')  # Native reset owns this removal.
+    renewed = ensure_observation_epoch(stock)
+    assert renewed > second
+    assert frozen['_main_stop_observation_epoch'] == first
+    assert frozen['main_stop_policy_pin'] == stock['main_stop_policy_pin']
+
+
+@pytest.mark.parametrize('invalid', [True, False, 0, -1, 1., '1', None])
+def test_observation_epoch_rejects_corrupted_ticket_without_replacing_it(invalid):
+    from src.engine.scalping.main_stop_runtime_source import ensure_observation_epoch
+    stock = {'_main_stop_observation_epoch': invalid}
+    with pytest.raises(ValueError, match='native_observation_epoch_invalid'):
+        ensure_observation_epoch(stock)
+    assert stock == {'_main_stop_observation_epoch': invalid}
+
+
+def test_native_lane_reservation_preserves_global_ids_and_exact_two_actor_vector():
+    from src.engine.scalping.main_stop_runtime_source import (ensure_observation_epoch,
+        observation_view, reserve_observation_generations, reserve_evaluation_lane,
+        observation_source_identity)
+    stock=stage_stock();ensure_observation_epoch(stock)
+    identity=observation_source_identity(stock)
+    records=[]
+    for owner in ('fast','normal','normal','fast'):
+        view=observation_view(stock)
+        reserve_observation_generations(stock,view,evaluation=True)
+        receipt=reserve_evaluation_lane(stock,view,owner)
+        assert sum(receipt['evaluation_lane_generations'].values())==stock['_main_stop_evaluation_generation']
+        assert all(receipt[key]==value for key,value in identity.items())
+        records.append(receipt)
+    assert [row['evaluation_lane_generation'] for row in records]==[1,1,2,2]
+    assert records[0]['evaluation_lane_generations']=={'normal':0,'fast':1}
+    assert stock['_main_stop_evaluation_lane_generations']=={'normal':2,'fast':2}
+
+
+@pytest.mark.parametrize('bad', [{}, {'normal':True,'fast':0}, {'normal':0,'fast':-1},
+    {'normal':0,'fast':0,'unknown':0}, {'normal':1.,'fast':0}])
+def test_native_lane_bad_map_is_rejected_without_mutation(bad):
+    from src.engine.scalping.main_stop_runtime_source import (ensure_observation_epoch,
+        observation_view,reserve_evaluation_lane)
+    stock=stage_stock();ensure_observation_epoch(stock)
+    stock['_main_stop_evaluation_generation']=1
+    stock['_main_stop_evaluation_lane_generations']=bad
+    view=observation_view(stock);before=deepcopy((stock,view))
+    with pytest.raises(ValueError,match='lane_generation_invalid'):
+        reserve_evaluation_lane(stock,view,'normal')
+    assert (stock,view)==before
+
+
+def test_native_lane_never_relabels_an_unobserved_legacy_global_prefix():
+    from src.engine.scalping.main_stop_runtime_source import (ensure_observation_epoch,
+        observation_view,reserve_evaluation_lane)
+    stock=stage_stock();ensure_observation_epoch(stock)
+    stock['_main_stop_evaluation_generation']=3
+    view=observation_view(stock);before=deepcopy((stock,view))
+    with pytest.raises(ValueError,match='lane_global_generation_unbound'):
+        reserve_evaluation_lane(stock,view,'normal')
+    assert (stock,view)==before

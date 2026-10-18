@@ -62,7 +62,8 @@ def isolate_legacy_performance_gate(monkeypatch):
     contracts. Separate strict authority tests never install this isolation.
     """
     verify=experiment._verify_performance
-    def legacy(reference,code_sha,*,mode,source_sha,require_native=False):
+    def legacy(reference,code_sha,*,mode,source_sha,require_native=False,
+               required_cell=None,experiment_parameters=None,selected_values=None):
         return verify(reference,code_sha,mode=mode,source_sha=source_sha,require_native=False)
     monkeypatch.setattr(experiment,'_verify_performance',legacy)
 

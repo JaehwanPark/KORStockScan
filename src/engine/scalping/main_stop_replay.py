@@ -8,6 +8,25 @@ from .holding_vote_exit_models import cost_known_epoch
 
 SCHEMA = 'main_stop_research_v1'
 EVALUATION_SCHEMA = 'main_stop_evaluation_source_v1'
+_LANE_SCOPE_FIELDS = ('evaluation_lane_scope', 'source_lifecycle_epoch',
+                      'source_runtime_pid', 'source_runtime_incarnation')
+
+
+def _evaluation_lane_scope(value):
+    # Epoch alone existed before evaluator lanes. Preserve that legacy branch;
+    # any new lane/runtime marker requires the complete new typed contract.
+    markers = ('evaluation_lane_scope', 'evaluation_lane_generation',
+               'evaluation_lane_generations', 'source_runtime_pid', 'source_runtime_incarnation')
+    if not any(key in value for key in markers):
+        return None
+    if (value.get('evaluation_lane_scope') != 'native_evaluator_lifecycle_v1'
+            or any(type(value.get(k)) is not int or value[k] <= 0
+                   for k in ('source_lifecycle_epoch', 'source_runtime_pid'))
+            or not isinstance(value.get('source_runtime_incarnation'), str)
+            or len(value['source_runtime_incarnation']) != 32
+            or any(c not in '0123456789abcdef' for c in value['source_runtime_incarnation'])):
+        raise ValueError('native_evaluation_lane_scope_invalid')
+    return tuple(value[key] for key in _LANE_SCOPE_FIELDS)
 
 
 class _RetainedSource(dict):
@@ -69,6 +88,18 @@ def evaluation_binding(value, quote, *, preset_predecessor=None, preset_quote=No
         evaluator=value['evaluator'],stage=value['stage'],at=value['at'],generation=value['evaluation_generation'])
     if value.get('evaluation_id')!=digest(anchor):
         raise ValueError('native_evaluation_generation_unbound')
+    lane_scope = _evaluation_lane_scope(value)
+    if lane_scope != _evaluation_lane_scope(quote):
+        raise ValueError('native_evaluation_quote_scope_unbound')
+    if lane_scope is not None:
+        lanes = value.get('evaluation_lane_generations')
+        if (type(lanes) is not dict or set(lanes) != {'normal', 'fast'}
+                or any(type(v) is not int or v < 0 for v in lanes.values())
+                or type(value.get('evaluation_lane_generation')) is not int
+                or value['evaluation_lane_generation'] <= 0
+                or lanes[value['evaluator']] != value['evaluation_lane_generation']
+                or sum(lanes.values()) != value['evaluation_generation']):
+            raise ValueError('native_evaluation_lane_generation_unbound')
     if value['stage']=='preset_safety' and (not isinstance(value.get('decision_inputs'),dict)
             or type(value['decision_inputs'].get('handoff_enabled')) is not bool):
         raise ValueError('native_preset_decision_inputs_missing')
@@ -90,7 +121,7 @@ def evaluation_binding(value, quote, *, preset_predecessor=None, preset_quote=No
                 reason=vote_quantity_identity_error(vote_source,record_id=quote.get('record_id'),
                     buy_fill_identity=quantity.get('buy_fill_identity'))
                 if reason:raise ValueError(reason)
-        if value['role']=='SCALP_PRESET_TP' and not value['legacy_broker_recovered']:
+        if (value['role']=='SCALP_PRESET_TP' or lane_scope is not None and value.get('preset_predecessor') is not None) and not value['legacy_broker_recovered']:
             reference=value.get('preset_predecessor')
             predecessor=preset_predecessor
             if (not isinstance(reference,dict) or reference.get('schema')!='main_stop_evaluation_reference_v1'
@@ -98,6 +129,9 @@ def evaluation_binding(value, quote, *, preset_predecessor=None, preset_quote=No
                     or any(reference.get(k)!=predecessor.get(k) for k in
                         ('evaluation_id','source_sha256','at','evaluator','stage','position_key','pin_sha256'))):
                 raise ValueError('normal_preset_predecessor_unbound')
+            if lane_scope is not None and (_evaluation_lane_scope(predecessor) != lane_scope
+                    or predecessor.get('evaluation_lane_generation', 0) + 1 != value['evaluation_lane_generation']):
+                raise ValueError('normal_preset_lane_predecessor_unbound')
             evaluation_binding(predecessor,preset_quote)
             if (predecessor['stage']!='preset_safety' or predecessor['evaluator']!='normal'
                     or predecessor['priority_status']!='reached'
@@ -175,10 +209,55 @@ def bound_evaluations(rows):
     """Join tiny native decisions to bounded recent quotes, never infer a call."""
     from src.engine.lifecycle.research_input_budget import Claim
     quotes=OrderedDict();claims={};first_claim=None;preset_claim=None;supported_claim=None;unsupported_pending=set()
+    global_pending = {}
     state=dict(first_quote=None,last_quote=None,quote_count=0,evaluation_count=0,
         common_soft_count=0,unsupported=Counter(),coverage_generation=0,previous_quote_at=None,
         previous_quote_identity=None,bridge_unsupported=False,preset_predecessor=None,preset_quote=None,
-        coverage_discontinuity=False,previous_evaluation_generation=0)
+        coverage_discontinuity=False,previous_evaluation_generation=0,
+        evaluation_order_mode=None,evaluation_lane_scope=None,
+        evaluation_scope_broken=False,
+        evaluation_lane_previous={'normal':0,'fast':0},evaluation_global_prefix=0,
+        evaluation_global_counts={'normal':0,'fast':0},evaluation_global_required=0)
+    def admit_lane(value):
+        if state['evaluation_scope_broken']:
+            return 'native_evaluation_scope_mixed'
+        scope = _evaluation_lane_scope(value)
+        mode = 'lane' if scope is not None else 'legacy'
+        if state['evaluation_order_mode'] not in (None,mode):
+            state['evaluation_scope_broken']=True
+            return 'native_evaluation_scope_mixed'
+        state['evaluation_order_mode'] = mode
+        if scope is None:
+            return None
+        if state['evaluation_lane_scope'] not in (None,scope):
+            state['evaluation_scope_broken']=True
+            return 'native_evaluation_runtime_scope_changed'
+        state['evaluation_lane_scope'] = scope
+        evaluator = value['evaluator']
+        generation = value['evaluation_generation']
+        if generation <= state['evaluation_global_prefix'] or generation in global_pending:
+            return 'native_evaluation_global_generation_duplicate'
+        if value['evaluation_lane_generation'] <= state['evaluation_lane_previous'][evaluator]:
+            return 'native_evaluation_lane_generation_duplicate'
+        if value['evaluation_lane_generation'] != state['evaluation_lane_previous'][evaluator]+1:
+            return 'native_evaluation_lane_generation_missing'
+        # Only displaced observations remain resident. Normal in-order rows
+        # release their admission immediately; overflow requests a partition.
+        claim = Claim(1024)
+        global_pending[generation] = (evaluator,dict(value['evaluation_lane_generations']),claim)
+        state['evaluation_lane_previous'][evaluator] = value['evaluation_lane_generation']
+        state['evaluation_global_required'] = max(state['evaluation_global_required'],generation)
+        while state['evaluation_global_prefix']+1 in global_pending:
+            next_generation = state['evaluation_global_prefix']+1
+            owner,counts,held = global_pending.pop(next_generation)
+            held.close()
+            expected = dict(state['evaluation_global_counts'])
+            expected[owner] += 1
+            if counts != expected:
+                return 'native_evaluation_lane_vector_conflict'
+            state['evaluation_global_counts'] = counts
+            state['evaluation_global_prefix'] = next_generation
+        return None
     def pin_supported(quote):
         nonlocal supported_claim
         if supported_claim is None:
@@ -243,11 +322,16 @@ def bound_evaluations(rows):
                     state['unsupported'][str(exc)]+=1
                     yield dict(schema='main_stop_contract_gap',reason=str(exc)),None
                     continue
-                if value['evaluation_generation']!=state['previous_evaluation_generation']+1:
-                    yield dict(schema='main_stop_contract_gap',reason='native_evaluation_generation_missing'),None
-                    state['previous_evaluation_generation']=value['evaluation_generation']
+                lane_reason = admit_lane(value)
+                if lane_reason:
+                    yield dict(schema='main_stop_contract_gap',reason=lane_reason),None
                     continue
-                state['previous_evaluation_generation']=value['evaluation_generation']
+                if state['evaluation_order_mode']=='legacy':
+                    if value['evaluation_generation']!=state['previous_evaluation_generation']+1:
+                        yield dict(schema='main_stop_contract_gap',reason='native_evaluation_generation_missing'),None
+                        state['previous_evaluation_generation']=value['evaluation_generation']
+                        continue
+                    state['previous_evaluation_generation']=value['evaluation_generation']
                 if value['stage']=='common_soft':state['common_soft_count']+=1
                 unsupported_pending.discard(value.get('quote_source_sha256'))
                 if value['stage']=='preset_safety' and value['evaluator']=='normal':
@@ -261,12 +345,16 @@ def bound_evaluations(rows):
             else:yield value,None
         if unsupported_pending:
             yield dict(schema='main_stop_contract_gap',reason='unsupported_quote_without_actual_decision'),None
+        if global_pending:
+            yield dict(schema='main_stop_contract_gap',reason='native_evaluation_global_generation_missing'),None
     try:yield stream(),state
     finally:
         for claim in claims.values():claim.close()
         if first_claim is not None:first_claim.close()
         if preset_claim is not None:preset_claim.close()
         if supported_claim is not None:supported_claim.close()
+        for _,_,claim in global_pending.values():claim.close()
+        global_pending.clear()
         state.pop('pin_supported_quote',None)
         quotes.clear();claims.clear()
 
@@ -480,6 +568,17 @@ def replay(rows, values, *, vote_reader=None, post_add_generation=False, termina
         result=_replay_decisions(bound,values,vote_reader=vote_reader,
             post_add_generation=post_add_generation,terminal_outcome=terminal_outcome,source=source,
             support_soft_threshold=support_soft_threshold)
+        # A caller's earlier clock can sort before an already observed fast
+        # lane. Complete the new scope's global presence check before returning
+        # economics. Tail rows establish integrity only; they never rewrite an
+        # earlier decision/clock. Legacy sources retain their original reads.
+        if source['evaluation_order_mode']=='lane':
+            for row,evaluation in bound:
+                if row.get('schema')=='main_stop_contract_gap':
+                    if result['status']!='source_gap':
+                        result=dict(result,status='source_gap',reason=row['reason'],modeled_net_krw=None)
+            if source['evaluation_global_prefix']<source['evaluation_global_required'] and result['status']!='source_gap':
+                result=dict(result,status='source_gap',reason='native_evaluation_global_generation_missing',modeled_net_krw=None)
         result['source_support']=dict(shared_quotes_seen=source['quote_count'],
             native_evaluations_seen=source['evaluation_count'],common_soft_decisions_seen=source['common_soft_count'],
             unsupported=dict(source['unsupported']))

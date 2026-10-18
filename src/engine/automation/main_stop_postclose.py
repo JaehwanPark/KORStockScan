@@ -1021,7 +1021,8 @@ def _commit_candidate(root,day,target,directory,generation,research,cells,author
     for cell in cells.values():
         if cell.get('status')=='selected':
             evidence=cell.get('selection_evidence')
-            require_native_publication_performance(evidence.get('experiment') if isinstance(evidence,dict) else None)
+            require_native_publication_performance(evidence.get('experiment') if isinstance(evidence,dict) else None,
+                selected_values=cell.get('values'))
     research_sha=policy.digest(research)
     bundle=dict(schema=policy.SCHEMA,source_date=day,target_date=target,valid_until=target,
         research_sha256=research_sha,cells=cells,parent_receipt=research['parent_receipt'],operator_sources=authority_sources,
