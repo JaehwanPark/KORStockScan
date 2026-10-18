@@ -24,7 +24,9 @@ from src.engine.scalping.trailing_mechanical_policy import market_values_hash
 from src.engine.scalping.trailing_mechanical_policy import classifier_hash
 from src.engine.automation.main_trailing_path_projection import load_or_build
 from src.engine.scalping.trailing_situation_policy import initial_bundle, research_registered_grid
-from src.engine.scalping.universal_trailing_replay import summarize_partitions, common_evaluation
+from src.engine.scalping.universal_trailing_replay import (
+    summarize_partitions, common_evaluation, actual_cost_available_epoch,
+)
 
 SCHEMA = 'main_all_scope_exit_research_v1'
 INPUT_SCHEMA = 'main_all_scope_exit_input_manifest_v1'
@@ -51,6 +53,11 @@ CODE_PATHS = ('ai/holding_exit_vote.py','ai/holding_vote_replay_source.py',
               'sniper_trade_review_report.py', 'holding_exit_observation_report.py',
               'strategy_position_performance_report.py',
               'scalping/position_peak_ledger.py', 'scalping/holding_profit_exit_semantics.py',
+              'scalping/trailing_entry_research_source.py',
+              'scalping/entry_execution_sizing_plan.py',
+              'scalping/initial_quantity_policy.py',
+              'scalping/main_stop_replay.py', 'scalping/main_stop_policy.py',
+              'scalping/holding_vote_exit_models.py',
               'lifecycle/broker_cost_source.py', 'lifecycle/broker_cost_reconciliation.py',
               '../utils/market_day.py',
               '../utils/pipeline_event_logger.py',
@@ -73,6 +80,9 @@ def _cost_revision_result(previous):
     for identity, context in result['population_context'].items():
         if context['evidence_kind'] != 'actual_completed':
             continue
+        # A revised cost source invalidates the old knowledge clock together
+        # with its economics, matching a clean replay's empty reconciliation.
+        context['actual_cost_available_at'] = None
         for outcome in result['minimal_results'][identity].values():
             if outcome.get('actual_pnl_krw') is not None:
                 outcome.update(status='source_gap', reason='actual_completed_cost_or_terminal_unverified',
@@ -311,8 +321,9 @@ def _run(manifest_path, *, input_root, output_root, dry_run, resume, budget):
                           or number(row['entry_at']) > as_of else row for row in positions]
             for row in positions:
                 actual = row.get('actual_cost_reconciliation') or {}
-                if row.get('evidence_kind') == 'actual_completed' and (number(actual.get('known_at')) is None
-                        or number(actual['known_at']) > as_of):
+                actual_available = actual_cost_available_epoch(actual)
+                if row.get('evidence_kind') == 'actual_completed' and (actual_available is None
+                        or actual_available > as_of):
                     row['actual_cost_reconciliation'] = {}
             # Old actual-cost revisions never reuse a stale reconciled row.
             if payload.get('cost_generations') != costs:

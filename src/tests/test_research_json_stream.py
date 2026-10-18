@@ -11,11 +11,12 @@ from src.tests.test_main_trailing_source_assembler import fixture,DAY,TARGET
 
 def test_stream_keeps_every_timeline_and_fill_without_large_display_fields(tmp_path):
     event={'stage':'scalp_trailing_input_transition','fields':{'universal_trailing_quote':json.dumps(quote(1,DAY+'T09:00:01'))}}
-    trade={'id':'main:1','strategy':'SCALPING','irrelevant':'x'*(5*1024*1024),'buy_fill_legs':[{'at':DAY+'T09:00:00','qty':10,'amount_krw':1000}],
+    trade={'id':'main:1','strategy':'SCALPING','buy_filled_qty':10,'buy_fill_amount':1000,'irrelevant':'x'*(5*1024*1024),'buy_fill_legs':[{'at':DAY+'T09:00:00','qty':10,'amount_krw':1000}],
         'sell_fill_legs':[{'at':DAY+'T09:00:01'}],'timeline':[event]}
     path=tmp_path/'source.json';path.write_text(json.dumps({'meta':{'unused':[1,2]},'sections':{'completed_trade_projection':[trade]}}))
     rows=list(completed_rows(path,tmp_path/'out'));body,events=rows[0]
     assert len(rows)==1 and body['id']=='main:1' and 'irrelevant' not in body
+    assert body['buy_filled_qty'] == 10 and body['buy_fill_amount'] == 1000
     assert list(storage.iter_tree(tmp_path/'out',events))==[quote(1,DAY+'T09:00:01')]
     assert list(storage.iter_tree(tmp_path/'out',body['buy_fill_legs_ref']))==trade['buy_fill_legs']
 

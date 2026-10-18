@@ -28,7 +28,7 @@ def input_inventory(root,days,master_path,parent_path):
     paths={Path(master_path),Path(parent_path)}
     for day in days:
         for namespace,stem in (('ai_decision_trace','ai_decision_trace'),('ai_decision_payloads','ai_decision_payloads'),('ai_decision_prompts','ai_decision_prompts'),
-                               ('ai_decision_requests','ai_decision_requests')):
+                               ('ai_decision_requests','ai_decision_requests'), ('pipeline_events','pipeline_events')):
             paths.update((Path(root)/namespace).glob(stem+'_'+day+'.jsonl*'))
         from src.engine.lifecycle.snapshot_archive import logical_path, identity_available
         for path in (Path(root)/'report/monitor_snapshots').glob('trade_review_'+day+'*.json*'):
@@ -230,7 +230,7 @@ def _native_index(root,days,sources,gaps,db):
                     source=row['source'];assessment=source['assessment'];event=assessment.get('event') or {}
                     if assessment.get('action')!='ENTER_NOW':continue
                     if not (assessment.get('canonical_opportunity_id') and row['label_context'].get('evaluation_attempt_id')):continue
-                    fields={k:event[k] for k in ('at','event_id','native_epoch','planned_qty','buy_basis_krw','entry_cost_model','item','source_item',
+                    fields={k:event[k] for k in ('at','event_id','native_epoch','entry_ask','planned_qty','buy_basis_krw','entry_cost_model','item','source_item',
                         'execution_plan_sha256','entry_depth_verified','trailing_entry_context','universal_trailing_quote') if k in event}
                     minimal={'canonical_opportunity_id':assessment['canonical_opportunity_id'],
                         'machine_observation_sha256':identity,'evaluation_attempt_id':row['label_context']['evaluation_attempt_id'],
@@ -246,6 +246,139 @@ def _native_index(root,days,sources,gaps,db):
                         'THEN excluded.body ELSE native.body END',(identity,body,semantic))
                 except (ValueError,TypeError,KeyError,AttributeError):gaps['native_payload_binding_invalid']+=1
         if byte_generation(path)!=generation:raise ValueError('all_scope_native_payload_changed')
+
+
+def _entry_plan_index(root, days, sources, gaps, db):
+    """Index original producer receipts and quoted paths without materializing a day.
+
+    Only the new receipt/ref fields are consumed. Historical unbound pipeline
+    observations remain unbound; symbol or nearby timestamps are never joins.
+    """
+    from src.engine.scalping.trailing_entry_research_source import validate
+    from src.engine.scalping.universal_trailing_replay import quote_source_digest, MAX_QUOTE_ENVELOPE_BYTES
+    db.execute('CREATE TABLE trailing_plans(sha TEXT PRIMARY KEY, observation TEXT, attempt TEXT, known REAL, body TEXT) WITHOUT ROWID')
+    db.execute('CREATE INDEX trailing_plan_identity ON trailing_plans(observation,attempt)')
+    db.execute('CREATE TABLE trailing_quotes(plan TEXT, clock REAL, sequence INTEGER, sha TEXT, body TEXT, '
+               'PRIMARY KEY(plan,clock,sequence,sha)) WITHOUT ROWID')
+    limit = 2*1024*1024
+    for day in days:
+        path = select_stream(root, 'pipeline_events', day, sources)
+        if path is None: continue
+        generation = sources[str(path)]
+        opener = gzip.open if path.suffix == '.gz' else open
+        with opener(path, 'rb') as handle, Claim(limit*8):
+            while True:
+                offset=handle.tell(); raw=handle.readline(limit+1)
+                if not raw: break
+                relevant = b'trailing_entry_plan_receipt' in raw
+                if len(raw)>limit or not raw.endswith(b'\n'):
+                    while raw and not raw.endswith(b'\n'): raw=handle.readline(storage.RECORD_BYTES)
+                    gaps['trailing_plan_pipeline_envelope_unread']+=1
+                    continue
+                if not relevant: continue
+                try:
+                    event=json.loads(raw);fields=event.get('fields') or {}
+                    reference=dict(path=str(path),decoded_offset=offset,sha256=hashlib.sha256(raw).hexdigest())
+                    if event.get('stage')=='entry_execution_sizing_plan':
+                        receipt=validate(fields.get('trailing_entry_plan_receipt'))
+                        if event.get('stock_code')!=receipt['symbol']:
+                            raise ValueError('trailing_plan_event_symbol_mismatch')
+                        value=dict(receipt=receipt,source_reference=reference)
+                        db.execute('INSERT OR IGNORE INTO trailing_plans VALUES(?,?,?,?,?)',(
+                            receipt['receipt_sha256'],receipt['machine_observation_sha256'],
+                            receipt['evaluation_attempt_id'],receipt['known_at'],storage.encoded(value).decode()))
+                    elif event.get('stage')=='scalp_trailing_input_transition':
+                        plan=fields.get('trailing_entry_plan_receipt_sha256')
+                        if not isinstance(plan,str) or len(plan)!=64: continue
+                        quote=fields.get('universal_trailing_quote')
+                        if isinstance(quote,str): quote=json.loads(quote)
+                        if (not isinstance(quote,dict) or quote.get('kind')!='QUOTE'
+                                or quote.get('source_sha256')!=quote_source_digest(quote)
+                                or type(quote.get('sequence')) is not int
+                                or type(quote.get('known_at')) not in (int,float)
+                                or number(quote['known_at']) is None
+                                or len(storage.encoded(quote))>MAX_QUOTE_ENVELOPE_BYTES):
+                            raise ValueError('trailing_plan_forward_quote_invalid')
+                        value=dict(quote=quote,symbol=event.get('stock_code'),source_reference=reference,
+                            holding_link=fields.get('trailing_entry_plan_holding_link'))
+                        db.execute('INSERT OR IGNORE INTO trailing_quotes VALUES(?,?,?,?,?)',(
+                            plan,quote['known_at'],quote['sequence'],quote['source_sha256'],storage.encoded(value).decode()))
+                except (ValueError,TypeError,KeyError,AttributeError):
+                    gaps['trailing_plan_source_invalid']+=1
+        if byte_generation(path)!=generation: raise ValueError('trailing_plan_pipeline_changed')
+
+
+def _bound_entry_plan(db, position, projected, *, as_of, gaps):
+    from src.engine.scalping.trailing_entry_research_source import model_entry, epoch
+    native=db.execute('SELECT body FROM native WHERE id=? AND conflict=0',
+        (position.get('machine_observation_sha256'),)).fetchone()
+    native=json.loads(native[0]) if native else None
+    if (not native or native['evaluation_attempt_id']!=position['native_evaluation_id']
+            or native['symbol']!=position['symbol'] or native['bundle_sha256']!=projected['machine_hash']):
+        gaps['trailing_plan_native_original_unverified']+=1
+        position['entry_plan_source_status']='trailing_plan_native_original_unverified'
+        return None
+    try:
+        native_signal=epoch(native['fields'].get('at'))
+        if (not native_signal <= epoch(native['captured_at']) <= epoch(position['auxiliary_completed_at'])
+                or native_signal != epoch(position['native_signal_at'])):
+            raise ValueError('trailing_plan_native_anchor_clock_conflict')
+    except (ValueError,TypeError,KeyError,OverflowError):
+        gaps['trailing_plan_native_anchor_clock_conflict']+=1
+        position['entry_plan_source_status']='trailing_plan_native_anchor_clock_conflict'
+        return None
+    # An original signal ask can anchor a price-only diagnostic even when an
+    # execution plan is absent. It is never a modeled fill, quantity or basis.
+    position.update(entry_reference_ask=native['fields'].get('entry_ask'),
+                    entry_reference_role='native_entry_ask_price_path_only')
+    matches=db.execute('SELECT body FROM trailing_plans WHERE observation=? AND attempt=? AND known<=? LIMIT 2',(
+        position.get('machine_observation_sha256'),position['native_evaluation_id'],as_of or float('inf'))).fetchall()
+    if len(matches)!=1:
+        reason='trailing_plan_source_missing' if not matches else 'trailing_plan_multiple_attempt_plans'
+        gaps[reason]+=1
+        position['entry_plan_source_status']=reason
+        return None
+    value=json.loads(matches[0][0]);receipt=value['receipt']
+    try:
+        if epoch(native['captured_at'])>epoch(receipt['known_at']):
+            raise ValueError('trailing_plan_precedes_native_capture')
+        model=model_entry(receipt,symbol=position['symbol'],attempt=position['native_evaluation_id'],
+            observation_sha=position.get('machine_observation_sha256'),bundle_sha=projected['machine_hash'],
+            route=position['route'],signal_at=position['native_signal_at'],
+            pass_at=position['auxiliary_completed_at'],as_of=as_of)
+    except (ValueError,TypeError,KeyError) as exc:
+        reason=str(exc); gaps[reason]+=1
+        position.update(entry_plan_source_status=reason,entry_plan_source_reference=value['source_reference'])
+        return None
+    position.update(model,entry_plan_source_status='bound_visible_depth_model',
+                    entry_plan_source_reference=value['source_reference'])
+    plan=receipt['receipt_sha256']
+    count=db.execute('SELECT COUNT(*) FROM trailing_quotes WHERE plan=? AND clock>=? AND clock<=?',
+        (plan,model['entry_at'],as_of or float('inf'))).fetchone()[0]
+    if not count:
+        gaps['trailing_plan_bound_forward_path_unobserved']+=1
+    position['forward_source_status']='bound_observations' if count else 'unobserved'
+    def quotes():
+        from src.engine.scalping.trailing_entry_research_source import validate_holding_link
+        generation = None
+        for (body,) in db.execute('SELECT body FROM trailing_quotes WHERE plan=? AND clock>=? AND clock<=? '
+                'ORDER BY clock,sequence,sha',(plan,model['entry_at'],as_of or float('inf'))):
+            row=json.loads(body)
+            if row['symbol']!=position['symbol']:
+                gaps['trailing_plan_forward_symbol_mismatch']+=1
+                yield dict(kind='SOURCE_GAP', known_at=None)
+            else:
+                try:
+                    link=validate_holding_link(row.get('holding_link'),receipt=receipt,quote=row['quote'])
+                    current=(link['position_key'],link['buy_fill_identity'],link['first_buy_at'])
+                    if generation is not None and current!=generation:
+                        raise ValueError('trailing_plan_forward_generation_changed')
+                    generation=current
+                    yield row['quote']
+                except (ValueError,TypeError,KeyError,OverflowError):
+                    gaps['trailing_plan_forward_holding_link_invalid']+=1
+                    yield dict(kind='SOURCE_GAP',known_at=None)
+    return quotes()
 
 
 def _trace_rows(root, days, sources, gaps, exclude=lambda *args:None,db=None,as_of=None):
@@ -314,13 +447,17 @@ def _trace_rows(root, days, sources, gaps, exclude=lambda *args:None,db=None,as_
                     owner='main',automatic_management_allowed=True,symbol=projected['symbol'],entry_at=clock,
                     qty=event.get('planned_qty'),buy_basis_krw=event.get('buy_basis_krw'),cost_model=event.get('entry_cost_model') or {},
                     route=projected['route'],item=event.get('item') or event.get('source_item'),entry_action='ENTER_NOW',auxiliary_effective_verdict='PASS',
-                    machine_observation_sha256=assessment.get('observation_sha256'),native_evaluation_id=projected['evaluation_attempt_id'],
+                    machine_observation_sha256=assessment.get('observation_sha256') or original.get('machine_observation_sha256'),native_evaluation_id=projected['evaluation_attempt_id'],
                     native_signal_at=native_clock,auxiliary_completed_at=clock,
-                    execution_plan_sha256=event.get('execution_plan_sha256'),entry_depth_verified=event.get('entry_depth_verified') is True,
+                    entry_reference_ask=None,entry_reference_role='native_entry_ask_price_path_only',
+                    execution_plan_sha256=None,entry_depth_verified=False,
                     entry_context=event.get('trailing_entry_context'),operating_ai_required=True,
                     source_reference={'path':str(path),'decoded_offset':start,'size':handle.tell()-start,
                         'encoding':'gzip' if path.suffix=='.gz' else 'plain','sha256':hashlib.sha256(raw).hexdigest()})
                 if not path_events: gaps['native_forward_path_unobserved']+=1
+                if db is not None:
+                    bound_path=_bound_entry_plan(db,position,projected,as_of=as_of,gaps=gaps)
+                    if bound_path is not None: path_events=bound_path
                 yield position,path_events
         if byte_generation(path)!=generation: raise ValueError('all_scope_native_trace_changed')
 
@@ -564,6 +701,7 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
             value={'reason':reason,'source_reference':reference}
             db.execute('INSERT OR IGNORE INTO exclusions VALUES (?,?)',(digest(value),storage.encoded(value).decode()))
         _native_index(root,days,sources,gaps,db)
+        _entry_plan_index(root,days,sources,gaps,db)
         # Dedup whole populations before any replay/selection, not partition by
         # partition. Position and CF identities stay in disjoint namespaces.
         for position,events in records():

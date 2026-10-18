@@ -17,6 +17,7 @@ from .trailing_mechanical_strength import classify_ws_history, _rows_by_item, HI
 from .trailing_mechanical_policy import normalize_values, START_MARKETS, market_values_hash, classifier_hash
 from .trailing_threshold_policy import market_type_at, closed_exit_gap
 from .trailing_situation_policy import PreparedPin, pin_context, validate_pin
+from .main_stop_replay import cost_known_epoch
 
 SCHEMA = "main_universal_trailing_replay_v1"
 MAX_EVENTS = 100000
@@ -219,7 +220,10 @@ def completed_sources(trades):
         valid_legs = isinstance(legs, list) and all(isinstance(leg, dict) for leg in legs)
         first_leg = legs[0] if valid_legs and legs else {}
         reconstructed_adds = []
-        entry = number(trade.get('first_buy_at_epoch'))
+        # Aggregate completed quantity is not the first BUY. Without its
+        # native legs neither an entry clock nor the intervening ADD path is
+        # proven, even if an older projection carries an apparent first clock.
+        entry = None
         if legs:
             try:
                 if not valid_legs:
@@ -250,8 +254,8 @@ def completed_sources(trades):
             sell_clocks = []
         positions.append(dict(position_key=identity, evidence_kind='actual_completed', owner='main',
             automatic_management_allowed=trade.get('main_automatic_management_allowed') is True,
-            entry_at=entry, qty=first_leg.get('qty') if legs else trade.get('buy_fill_quantity'),
-            buy_basis_krw=first_leg.get('amount_krw') if legs else trade.get('buy_fill_amount'), cost_model=model,
+            entry_at=entry, qty=first_leg.get('qty'),
+            buy_basis_krw=first_leg.get('amount_krw'), cost_model=model,
             route=trade.get('entry_quote_route') or first_quote.get('route'),
             item=trade.get('entry_quote_item') or first_quote.get('item'),
             terminal_status=trade.get('status'), actual_cost_reconciliation=trade.get('actual_cost_reconciliation'),
@@ -260,6 +264,10 @@ def completed_sources(trades):
         positions[-1].update(holding_vote_source=trade.get('holding_vote_source') or first_quote.get('holding_vote_source'),
             entry_context=entry_context, situation_pin=entry_pin,
                              completion_at=max(sell_clocks) if sell_clocks else None)
+        if not legs:
+            positions[-1].update(source_gap='completed_buy_fill_ledger_missing',
+                completed_buy_filled_qty=trade.get('buy_filled_qty'),
+                completed_buy_fill_amount=trade.get('buy_fill_amount'))
         paths[identity] = events
     return positions, paths
 
@@ -401,6 +409,104 @@ def _replay(position, events, vector, *, typed_policy=None, classifier_config=No
         classifier_config=classifier_config)['one']
 
 
+def actual_cost_available_epoch(actual):
+    """Latest native settlement knowledge, distinct from entry-model time.
+
+    Old exact-statement projections exposed only numeric known_at. Official
+    whole-position projections require both aware ISO settlement clocks; a
+    missing/invalid native clock never falls back to the old optional alias.
+    """
+    if (not isinstance(actual, dict) or actual.get('status') != 'actual_cost_reconciled'
+        or actual.get('actual_execution_cost') is False
+        or actual.get('economics_scope') is not None
+        or actual.get('cost_basis') == 'broker_confirmed_total_allocated'):
+        return None
+    scope = actual.get('allocation_scope')
+    if scope is not None and not isinstance(scope, str):
+        return None
+    whole = scope in {'broker_settled_whole_position', 'broker_day_symbol_whole_position'}
+    if scope not in (None, 'exact_execution') and not whole:
+        return None
+    native = ('cost_available_at', 'reconciled_at')
+    if whole or any(key in actual for key in native):
+        try:
+            clocks = [datetime.fromisoformat(actual[key]) for key in native]
+            if any(clock.tzinfo is None or clock.utcoffset() is None for clock in clocks):
+                return None
+            available, reconciled = (clock.timestamp() for clock in clocks)
+            return reconciled if 0 < available <= reconciled else None
+        except (ValueError, TypeError, KeyError, OverflowError, OSError):
+            return None
+    value = actual.get('known_at')
+    return cost_known_epoch(value) if type(value) in (int, float) else None
+
+
+def training_cost_available(context, cutoff):
+    """An actual outcome may train only after its settlement was knowable.
+
+    The absence of a holdout does not supply a missing cost clock. Alternative
+    exits and opportunity counterfactuals keep their separate model contract.
+    """
+    if not isinstance(context, dict):
+        return False
+    if context.get('evidence_kind') != 'actual_completed':
+        return True
+    known = context.get('actual_cost_available_at')
+    try:
+        if type(known) not in (int, float) or not math.isfinite(known) or known <= 0:
+            return False
+        if cutoff is None:
+            return True
+        return (type(cutoff) in (int, float) and math.isfinite(cutoff)
+                and cutoff > 0 and known <= cutoff)
+    except OverflowError:
+        return False
+
+
+def _actual_cost_provenance_valid(actual, *, completed_at=None):
+    """Validate each native cost projection without relabeling source hashes.
+
+    The assembler binds the original producer and its source generation. Exact
+    execution statements expose raw_sha256; the official whole-position owner
+    exposes source_sha256 and seals the complete projected result instead.
+    Research allocation receipts never satisfy either actual-cost contract.
+    """
+    def sha(value):
+        return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+    if (not isinstance(actual, dict) or actual.get('status') != 'actual_cost_reconciled'
+        or number(actual.get('exact_pnl_krw')) is None
+        or number(actual.get('exact_profit_rate')) is None
+        or not sha(actual.get('receipt_sha256'))
+        or actual.get('actual_execution_cost') is False
+        or actual.get('economics_scope') is not None
+        or actual.get('cost_basis') == 'broker_confirmed_total_allocated'):
+        return False
+    scope = actual.get('allocation_scope')
+    if scope is not None and not isinstance(scope, str):
+        return False
+    if scope in (None, 'exact_execution'):
+        return (sha(actual.get('raw_sha256'))
+                and (not any(key in actual for key in ('cost_available_at', 'reconciled_at'))
+                     or actual_cost_available_epoch(actual) is not None))
+    if scope not in {'broker_settled_whole_position', 'broker_day_symbol_whole_position'}:
+        return False
+    if (not sha(actual.get('source_sha256')) or actual.get('reason') is not None
+        or number(actual.get('actual_fees_taxes_krw')) is None
+        or number(actual['actual_fees_taxes_krw']) < 0):
+        return False
+    try:
+        if digest({k:v for k,v in actual.items() if k != 'receipt_sha256'}) != actual['receipt_sha256']:
+            return False
+        # Official settlement timestamps are aware ISO, not entry-model clocks.
+        known_at = actual_cost_available_epoch(actual)
+        available = cost_known_epoch(actual.get('cost_available_at'))
+        return (known_at is not None and available is not None
+                and completed_at is not None and completed_at > 0 and available >= completed_at)
+    except (ValueError, TypeError, KeyError, OverflowError, OSError):
+        return False
+
+
 def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_config=None, duplicate=None):
     """First crossing, current session permission, partial execution, censoring."""
     identity = str(position.get("position_key") or position.get("opportunity_id") or "")
@@ -413,6 +519,8 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
     if (not identity or evidence not in {"actual_completed", "actual_entry_alternative_exit", "enter_pass_opportunity_cf"}
         or position.get("owner") != "main" or position.get("automatic_management_allowed") is not True):
         return stop("position_identity_or_custody_unverified")
+    if position.get('source_gap'):
+        return stop(str(position['source_gap']))
     entry = number(position.get("entry_at"))
     qty, basis = number(position.get("qty")), number(position.get("buy_basis_krw"))
     model = position.get("cost_model") or {}
@@ -421,7 +529,8 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
         or entry <= 0 or qty <= 0 or not qty.is_integer() or basis <= 0 or buy_cost < 0 or not 0 <= sell_rate < .05
         or not model.get("source_sha256")):
         return stop("execution_plan_or_cost_model_missing")
-    if model.get('known_at') is not None and (number(model['known_at']) is None or number(model['known_at']) > entry):
+    cost_known_at = cost_known_epoch(model.get('known_at'))
+    if cost_known_at is None or cost_known_at > entry:
         return stop('cost_model_not_known_at_entry')
     if evidence == "enter_pass_opportunity_cf" and (
         position.get("entry_action") != "ENTER_NOW" or position.get("auxiliary_effective_verdict") != "PASS"
@@ -434,10 +543,8 @@ def _replay_cursor(position, prepared, vector, *, typed_policy=None, classifier_
     vector = {market: normalize_values(vector[market]) for market in START_MARKETS}
     if evidence == "actual_completed":
         actual = position.get("actual_cost_reconciliation") or {}
-        if (position.get("terminal_status") != "COMPLETED" or actual.get("status") != "actual_cost_reconciled"
-            or number(actual.get("exact_pnl_krw")) is None
-            or number(actual.get("exact_profit_rate")) is None
-            or not actual.get('receipt_sha256') or not actual.get('raw_sha256')):
+        if (position.get("terminal_status") != "COMPLETED"
+            or not _actual_cost_provenance_valid(actual, completed_at=number(position.get('completion_at')))):
             return stop("actual_completed_cost_or_terminal_unverified")
         result["actual_pnl_krw"] = number(actual["exact_pnl_krw"])
     if 'operating_ai_required' in position and position['operating_ai_required'] is None:
@@ -699,6 +806,9 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
             if len(json.dumps(context[identity]['entry_context'], allow_nan=False).encode()) > 2048:
                 context[identity]['entry_context'] = None
         context[identity]['entry_at'] = number(position.get('entry_at'))
+        context[identity]['actual_cost_available_at'] = (
+            actual_cost_available_epoch(position.get('actual_cost_reconciliation'))
+            if position.get('evidence_kind') == 'actual_completed' else None)
         context[identity]['observation_end_at'] = (primary.observation_end_at if variants else max(
             (number(event.get('known_at')) or 0 for event in events), default=number(position.get('entry_at')) or 0))
         # No candidate x event details retained. Each candidate state is local.
@@ -772,7 +882,10 @@ def common_evaluation(partitions):
         train_days, holdout_days = ordered_days[:split], ordered_days[split:]
         train, holdout = ([i for i in ids if days[i] in selected] for selected in (train_days, holdout_days))
         cutoff = min((context[i]['entry_at'] for i in holdout), default=None)
-        purged = [i for i in train if cutoff is not None and context[i]['observation_end_at'] >= cutoff]
+        cost_unavailable = [i for i in train if not training_cost_available(context[i], cutoff)]
+        cost_unavailable_set = set(cost_unavailable)
+        purged = [i for i in train if i in cost_unavailable_set
+                  or cutoff is not None and context[i]['observation_end_at'] >= cutoff]
         purged_set = set(purged)
         train = [i for i in train if i not in purged_set]
         metrics = {}
@@ -804,6 +917,7 @@ def common_evaluation(partitions):
         completion_verified = all(receipt[1] for receipt in day_receipts.values())
         eligible = evidence == 'actual_completed' and completion_verified and len(ordered_days)>=7 and len(train)>=30 and len(holdout)>=10 and len(holdout_days)>=2
         strata[evidence] = {'common_ids':ids, 'train_ids':train, 'holdout_ids':holdout, 'purged_ids':purged,
+                           'cost_unavailable_train_ids':cost_unavailable,
                            'train_days':train_days, 'holdout_days':holdout_days, 'metrics':metrics,
                            'completion_date_verified':completion_verified,
                            'existing_selector_sample_floor_met':eligible,
@@ -856,7 +970,10 @@ def _aggregate_streamed_evaluation(partitions, aliases, context, common, unique)
         train = [i for i in ids if days[i] in train_days]
         holdout = [i for i in ids if days[i] in holdout_days]
         cutoff = min((context[i]['entry_at'] for i in holdout), default=None)
-        purged = [i for i in train if cutoff is not None and context[i]['observation_end_at'] >= cutoff]
+        cost_unavailable = [i for i in train if not training_cost_available(context[i], cutoff)]
+        cost_unavailable_set = set(cost_unavailable)
+        purged = [i for i in train if i in cost_unavailable_set
+                  or cutoff is not None and context[i]['observation_end_at'] >= cutoff]
         purged_set = set(purged)
         train = [i for i in train if i not in purged_set]
         for cohort, identities in (('train',train), ('holdout',holdout)):
@@ -865,6 +982,7 @@ def _aggregate_streamed_evaluation(partitions, aliases, context, common, unique)
             for sha in unique:
                 accumulators[evidence,cohort,sha] = {'values':[], 'adverse':[], 'loss':[], 'ids':[], 'stress':[[],[],[]]}
         strata[evidence] = {'common_ids':ids, 'train_ids':train, 'holdout_ids':holdout,
+            'cost_unavailable_train_ids':cost_unavailable,
             'purged_ids':purged, 'train_days':train_days, 'holdout_days':holdout_days,
             'completion_date_verified':all(receipt[1] for receipt in day_receipts.values()),
             'metrics':{}, 'existing_selector_sample_floor_met':evidence=='actual_completed'

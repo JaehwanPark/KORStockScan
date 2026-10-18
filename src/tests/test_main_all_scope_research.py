@@ -61,10 +61,22 @@ def test_default_preflight_and_dry_run_never_write_source_or_output(tmp_path):
         research.run(root/'manifest.json',input_root=root,output_root=root/'result')
 
 
-def test_checkpoint_resume_cost_only_revision_reuses_source_and_matches_clean_recompute(tmp_path, monkeypatch):
+@pytest.mark.parametrize('cost_clock', ['known', 'future', 'missing'])
+def test_checkpoint_resume_cost_only_revision_reuses_source_and_matches_clean_recompute(tmp_path, monkeypatch,cost_clock):
     root,output=fixture(tmp_path)
+    manifest=research._sealed(root/'manifest.json')
+    part_path=root/manifest['partitions'][0]['path']
+    payload=research._sealed(part_path)
+    if cost_clock=='future':
+        payload['positions'][0]['actual_cost_reconciliation']['known_at']=manifest['as_of']+1
+    elif cost_clock=='missing':
+        payload['positions'][0]['actual_cost_reconciliation'].pop('known_at')
+    payload.pop('artifact_sha256')
+    manifest['partitions'][0]['artifact_sha256']=write(part_path,payload)
+    manifest.pop('artifact_sha256');write(root/'manifest.json',manifest)
     first=research.run(root/'manifest.json',input_root=root,output_root=output,dry_run=False)
     assert first['counters']['decoded_partitions']==2
+    original_checkpoint=Path(first['partition_results'][0]['path']).read_bytes()
     again=research.run(root/'manifest.json',input_root=root,output_root=output,dry_run=False,resume=True)
     assert again['counters']=={'checkpoint_reused':2}
     path=receipt_path(root,'2026-10-07','1');path.parent.mkdir(parents=True);path.write_text('{"revision":1}')
@@ -79,6 +91,10 @@ def test_checkpoint_resume_cost_only_revision_reuses_source_and_matches_clean_re
     assert len(revised['common_population_evaluation']['common_ids'])==1
     assert first['initial_policy']==revised['initial_policy']
     assert len(list((output/'partitions').glob('*.json')))==3
+    assert Path(first['partition_results'][0]['path']).read_bytes()==original_checkpoint
+    revised_result=sealed(Path(revised['partition_results'][0]['path']))['result']
+    assert revised_result['population_context']['main:0']['actual_cost_available_at'] is None
+    assert all(row['actual_pnl_krw'] is None for row in revised_result['minimal_results']['main:0'].values())
     monkeypatch.setattr(research, '_sealed', sealed)
     clean=research.run(root/'manifest.json', input_root=root, output_root=tmp_path/'clean', dry_run=False)
     assert revised['common_population_evaluation'] == clean['common_population_evaluation']

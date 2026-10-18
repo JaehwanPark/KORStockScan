@@ -70,6 +70,189 @@ def test_automatic_native_binding_warm_reuse_and_new_file_invalidation(tmp_path,
     assert research._sealed(manifest)['assembly_input_generation_sha256']!=payload['assembly_input_generation_sha256']
 
 
+def _issued_trailing_receipt(root, monkeypatch):
+    from datetime import datetime
+    from src.engine.scalping import trailing_entry_research_source as bridge
+    from src.engine.scalping import entry_execution_sizing_plan as sizing
+    from src.tests.test_entry_execution_sizing_plan import _priced, _receipt
+    trace, native=fixture(root)
+    from src.engine.scalping import ai_decision_trace as capture
+    monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED','true')
+    monkeypatch.setattr(capture,'DATA_DIR',root)
+    monkeypatch.setattr(capture,'_now',lambda:datetime.fromisoformat(DAY+'T09:00:00.100+09:00'))
+    native.unlink()  # Replace only this test's handwritten bootstrap row.
+    result=capture.capture_machine_observation(
+        exact_payload=dict(stock_code='005930',evaluation_attempt_id='native-1',best_ask=102),
+        setup_evidence={},assessment=dict(action='ENTER_NOW',canonical_opportunity_id='original-canonical',
+            event=dict(at=DAY+'T09:00:00+09:00',source_item='005930',native_epoch=1,entry_ask=102)),bundle_sha256='a'*64)
+    assert result['machine_capture_status']=='captured'
+    original=json.loads(native.read_text())
+    trace_row=json.loads(trace.read_text())
+    trace_row['machine_observation_sha256']=result['machine_observation_sha256']
+    trace.write_text(json.dumps(trace_row)+'\n')
+    known=datetime.fromisoformat(DAY+'T09:00:01.200+09:00').timestamp()
+    action=_receipt(evaluation_attempt_id='native-1',machine_observation_sha256=original['machine_observation_sha256'],
+                    machine_bundle_sha256='a'*64)
+    monkeypatch.setattr(sizing,'runtime_entry_execution_sizing_policy',lambda:(None,'disabled_baseline'))
+    monkeypatch.setattr(sizing,'runtime_mechanistic_entry_price_policy',lambda:({},'disabled_baseline'))
+    # The actual price owner emits str(epoch); native depth retains int(epoch).
+    orders=[{**_priced(dict(qty=2,price=102)), 'entry_price_epoch':'1', 'entry_price_captured_at':known}]
+    _,fields=sizing.compose_entry_execution_sizing_plan(orders,expected_total_qty=2,action_receipt=action,
+        quantity_policy_version='baseline',split_policy_version='baseline')
+    receipt=bridge.capture(symbol='005930',position_key='record:7',action_receipt=action,sizing_fields=fields,
+        cap_context={'ask_depth_source':dict(observed_epoch=known-.1,item='005930',market_route='KRX',
+            transport_epoch=1,source_type='ws_0D_bound_snapshot',levels=[dict(price_krw=102,quantity=10)])},
+        cost_model=dict(buy_cost_krw=0,sell_cost_rate=.0023,source_sha256='c'*64,
+            known_at=DAY+'T09:00:01.100+09:00',actual_broker_cost=False),entry_context=None,known_at=known)
+    assert receipt.get('status')!='source_gap',receipt
+    return receipt,known,native
+
+
+def _emit_trailing_source(root, monkeypatch, receipt, known, *, forward=True, holding_fault=None):
+    from src.utils import pipeline_event_logger as logger
+    from src.engine.scalping.universal_trailing_replay import quote_source_digest
+    from src.tests.test_main_all_scope_trailing import quote
+    monkeypatch.setattr(logger,'DATA_DIR',root)
+    monkeypatch.setattr(logger,'log_info',lambda *a,**kw:None)
+    monkeypatch.setattr(logger,'_get_producer_compactor',lambda:None)
+    monkeypatch.setattr(logger,'threshold_family_for_stage',lambda *a:None)
+    plan=logger.emit_pipeline_event('ENTRY_PIPELINE','TEST','005930','entry_execution_sizing_plan',
+        fields={'trailing_entry_plan_receipt':json.dumps(receipt)},observed_at_epoch=known)
+    assert plan['structured_append_succeeded'] is True
+    if forward:
+        from src.engine.scalping.trailing_entry_research_source import install, holding_link
+        event=quote(1,DAY+'T09:00:01.300',qty=2)
+        event=json.loads(json.dumps(event).replace('123456','005930'))
+        event['quote_snapshot_sha256']=digest(event['ws_data'])
+        event['sell_execution_plan']['quote_source_sha256']=event['quote_snapshot_sha256']
+        event['sell_execution_plan']['quantity']=2
+        event['source_sha256']=quote_source_digest(event)
+        stock={'buy_time':known+.01}
+        install(stock,receipt)
+        link=holding_link(stock,position_key='record:7',buy_fill_identity='e'*64,known_at=event['known_at'])
+        if holding_fault and link:
+            if holding_fault=='missing':link=None
+            else:
+                if holding_fault=='position':link['position_key']='record:8'
+                if holding_fault=='pre_plan':link['first_buy_at']=known-1
+                if holding_fault=='future_buy':link['first_buy_at']=known+1
+                link['sha256']=digest({k:v for k,v in link.items() if k!='sha256'})
+        result=logger.emit_pipeline_event('HOLDING_PIPELINE','TEST','005930','scalp_trailing_input_transition',
+            fields={'trailing_entry_plan_receipt_sha256':receipt['receipt_sha256'],
+                    'trailing_entry_plan_holding_link':json.dumps(link),
+                    'universal_trailing_quote':json.dumps(event)},observed_at_epoch=known+.1)
+        assert result['structured_append_succeeded'] is True
+
+
+def _read_trailing_source(root, known):
+    import sqlite3
+    db=sqlite3.connect(':memory:');sources={};gaps=Counter()
+    try:
+        source._native_index(root,[DAY],sources,gaps,db)
+        source._entry_plan_index(root,[DAY],sources,gaps,db)
+        rows=[]
+        for position,events in source._trace_rows(root,[DAY],sources,gaps,db=db,as_of=known+2):
+            rows.append((position,list(events)))
+        return rows,gaps
+    finally:
+        db.close()
+
+
+def test_runtime_plan_serializer_native_join_and_observed_forward_path(tmp_path,monkeypatch):
+    root=tmp_path/'source'
+    receipt,known,native=_issued_trailing_receipt(root,monkeypatch)
+    before=native.read_bytes()
+    _emit_trailing_source(root,monkeypatch,receipt,known)
+    rows,gaps=_read_trailing_source(root,known)
+    assert len(rows)==1
+    position,events=rows[0]
+    assert position['entry_plan_source_status']=='bound_visible_depth_model'
+    assert position['qty']==2 and position['buy_basis_krw']==204
+    assert position['entry_reference_ask']==102
+    assert position['entry_reference_role']=='native_entry_ask_price_path_only'
+    assert position['entry_at']==known and position['entry_at']>position['auxiliary_completed_at']
+    assert position['cost_model']['known_at_original']==DAY+'T09:00:01.100+09:00'
+    assert position['entry_depth_verified'] is True and len(events)==1
+    assert position['operating_ai_required'] is True  # Never fabricate an AI-free original.
+    assert native.read_bytes()==before
+    assert not gaps.get('trailing_plan_source_invalid')
+
+
+@pytest.mark.parametrize('damage',['hash','future_cost','wrong_route','conditional','depth','missing_forward','different_attempt',
+    'future_price','stale_price','bool_epoch','ambiguous_epoch','wrong_price','unknown_order_type',
+    'price_owner','price_source_hash','price_leg_id','malformed_depth'])
+def test_runtime_plan_missing_or_conflicting_inputs_never_invent_entry_or_path(tmp_path,monkeypatch,damage):
+    root=tmp_path/'source'
+    receipt,known,_=_issued_trailing_receipt(root,monkeypatch)
+    from src.engine.scalping.entry_execution_sizing_plan import _content_sha256
+    if damage=='future_cost':receipt['cost_model']['known_at']=known+10
+    elif damage=='wrong_route':receipt['ask_depth_source']['market_route']='NXT'
+    elif damage=='conditional':
+        receipt['execution_plan']['legs'][0]['execution_phase']='after_verified_probe_fill'
+        receipt['execution_plan_sha256']=_content_sha256(receipt['execution_plan'])
+    elif damage=='depth':receipt['ask_depth_source']['levels'][0]['quantity']=1
+    elif damage=='malformed_depth':receipt['ask_depth_source']=['bad']
+    elif damage=='different_attempt':
+        receipt['evaluation_attempt_id']='other'
+        receipt['execution_plan']['action_receipt_id']='other'
+        receipt['execution_plan_sha256']=_content_sha256(receipt['execution_plan'])
+    elif damage in {'future_price','stale_price','bool_epoch','ambiguous_epoch','wrong_price','unknown_order_type',
+                    'price_owner','price_source_hash','price_leg_id'}:
+        price=receipt['execution_plan']['price_candidates'][0]
+        if damage=='future_price':price['captured_at']=known+3600
+        elif damage=='stale_price':price['captured_at']=known-3600
+        elif damage=='bool_epoch':
+            price['epoch']=True;receipt['ask_depth_source']['transport_epoch']=True
+        elif damage=='ambiguous_epoch':price['epoch']='01'
+        elif damage=='wrong_price':price['numeric_price']+=1
+        elif damage=='unknown_order_type':price['order_type_code']='INVALID'
+        elif damage=='price_owner':price['source']='other_owner'
+        elif damage=='price_source_hash':price['source_receipt_sha256']='f'*64
+        elif damage=='price_leg_id':price['price_leg_id']='other_leg'
+        receipt['execution_plan_sha256']=_content_sha256(receipt['execution_plan'])
+    receipt['receipt_sha256']=digest({k:v for k,v in receipt.items() if k!='receipt_sha256'})
+    if damage=='hash':receipt['receipt_sha256']='f'*64
+    _emit_trailing_source(root,monkeypatch,receipt,known,forward=damage!='missing_forward')
+    rows,gaps=_read_trailing_source(root,known)
+    assert len(rows)==1
+    position,events=rows[0]
+    if damage=='missing_forward':
+        assert position['entry_depth_verified'] is True
+        assert events==[] and gaps['trailing_plan_bound_forward_path_unobserved']==1
+    else:
+        assert position['entry_depth_verified'] is False and events==[]
+        assert position['entry_plan_source_status']!='bound_visible_depth_model'
+
+
+@pytest.mark.parametrize('fault',['missing','position','pre_plan','future_buy'])
+def test_runtime_plan_forward_path_requires_same_position_and_initial_buy(tmp_path,monkeypatch,fault):
+    root=tmp_path/'source';receipt,known,_=_issued_trailing_receipt(root,monkeypatch)
+    _emit_trailing_source(root,monkeypatch,receipt,known,holding_fault=fault)
+    rows,gaps=_read_trailing_source(root,known)
+    assert rows[0][0]['entry_depth_verified'] is True
+    assert rows[0][1]==[dict(kind='SOURCE_GAP',known_at=None)]
+    assert gaps['trailing_plan_forward_holding_link_invalid']==1
+
+
+@pytest.mark.parametrize('fault',['reentry','add','missing_buy','old_buy','different_position'])
+def test_runtime_plan_diagnostic_pointer_cannot_cross_holding_generations(tmp_path,monkeypatch,fault):
+    from src.engine.scalping import trailing_entry_research_source as bridge
+    receipt,known,_=_issued_trailing_receipt(tmp_path/'source',monkeypatch)
+    stock={'buy_time':known+.01};bridge.install(stock,receipt)
+    assert bridge.holding_link(stock,position_key='record:7',buy_fill_identity='e'*64,known_at=known+.1)
+    generation='e'*64;position='record:7'
+    if fault=='reentry':stock['buy_time']=known+.05
+    if fault=='add':generation='f'*64
+    if fault=='missing_buy':stock.pop('buy_time')
+    if fault=='old_buy':stock['buy_time']=known-1
+    if fault=='different_position':position='record:8'
+    assert bridge.holding_link(stock,position_key=position,buy_fill_identity=generation,known_at=known+.1) is None
+    assert '_trailing_entry_plan_receipt_sha256' not in stock
+    assert '_trailing_entry_plan_binding' not in stock
+    bridge.install(stock,receipt);bridge.clear(stock)
+    assert bridge.holding_link(stock,position_key='record:7',buy_fill_identity='e'*64,known_at=known+.1) is None
+
+
 def test_conflicting_native_or_clock_after_cutoff_is_excluded(tmp_path):
     root=tmp_path/'source';path,native=fixture(root)
     original=json.loads(native.read_text());other={**original,'label_context':{**original['label_context'],'evaluation_attempt_id':'other'}}

@@ -188,7 +188,13 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
                             variants[sha]=_prepared(factory,config,count=count,end=end,last_add=last_add,cache_root=Path(scratch),
                                 quota=quota,counters=counters)
                     paths[identity]=PreparedVariants(variants)
+                from src.engine.scalping.universal_trailing_replay import actual_cost_available_epoch
                 positions=payload['positions']
+                positions = [{**p, 'actual_cost_reconciliation':{}}
+                    if p.get('evidence_kind') == 'actual_completed' and (
+                        actual_cost_available_epoch(p.get('actual_cost_reconciliation') or {}) is None
+                        or actual_cost_available_epoch(p.get('actual_cost_reconciliation') or {}) > manifest['as_of'])
+                    else p for p in positions]
                 if payload.get('cost_generations')!={d:window['dependencies'][d]['cost_generation'] for d in part['consumed_dates']}:
                     positions=[{**p,'actual_cost_reconciliation':{}} if p.get('evidence_kind')=='actual_completed' else p for p in positions]
                 # Retain one position's results. All numeric candidates share

@@ -4,6 +4,7 @@ Observation and replay only; no new exit rule, order, or account request.
 """
 
 from .main_stop_policy import digest, finite
+from .main_stop_replay import cost_known_epoch
 from .position_peak_ledger import position_cycle_id
 
 
@@ -28,6 +29,7 @@ def record_generation(stock, receipt, *, at, completed):
     """Called by the existing authoritative ADD receipt consumer."""
     stock.pop("post_add_economic_generation", None)
     model = stock.get("_trailing_entry_cost_model") or {}
+    known_at = cost_known_epoch(model.get("known_at"))
     qty, basis = stock.get("buy_qty"), stock.get("buy_price")
     if (
         not completed
@@ -37,8 +39,9 @@ def record_generation(stock, receipt, *, at, completed):
         or qty <= 0
         or not finite(basis)
         or basis <= 0
-        or not finite(model.get("known_at"))
-        or model["known_at"] > at
+        or not finite(at)
+        or known_at is None
+        or known_at > at
         or not finite(model.get("buy_cost_krw"))
         or model["buy_cost_krw"] != 0
         or model.get("allocation")

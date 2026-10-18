@@ -598,6 +598,49 @@ def test_post_add_aggregate_and_hard_priority_are_independent_of_votes():
     )
 
 
+@pytest.mark.parametrize('clock', ['2026-10-08T09:59:59+09:00',
+    '2026-10-08T00:59:59+00:00', '2026-10-08T00:59:59Z'])
+def test_completed_add_generation_accepts_native_cost_clock_without_rewriting_it(clock):
+    from datetime import datetime
+    from src.engine.scalping.holding_vote_exit_models import record_generation
+    stamp = datetime.fromisoformat('2026-10-08T10:00:00+09:00').timestamp()
+    stock = dict(id=7, code='005930', pending_add_type='AVG_DOWN', buy_qty=2,
+        buy_price=10000.0, _trailing_entry_cost_model=dict(known_at=clock,
+            buy_cost_krw=0, sell_cost_rate=.0023, source_sha256='a'*64,
+            allocation='frozen_configured_round_trip_rate_on_sell_model_only',
+            actual_broker_cost=False))
+    receipt = dict(economics_complete=True, order_no='ADD', execution_no='1', qty=1)
+    original = copy.deepcopy(stock['_trailing_entry_cost_model'])
+    value = record_generation(stock, receipt, at=stamp, completed=True)
+    numeric = copy.deepcopy(stock)
+    numeric['_trailing_entry_cost_model']['known_at'] = datetime.fromisoformat(clock).timestamp()
+    assert value == record_generation(numeric, receipt, at=stamp, completed=True)
+    assert value['quantity'] == 2 and value['actual_profit_verified'] is False
+    assert stock['_trailing_entry_cost_model'] == original
+    assert stock['post_add_economic_generation'] == value
+
+
+@pytest.mark.parametrize('fault', ['missing', 'naive', 'future', 'nonfinite', 'bool',
+    'not_completed', 'incomplete_economics', 'pyramid', 'bad_event_clock'])
+def test_add_generation_rejects_unproven_cost_time_and_incomplete_fill(fault):
+    from datetime import datetime
+    from src.engine.scalping.holding_vote_exit_models import record_generation
+    stamp = datetime.fromisoformat('2026-10-08T10:00:00+09:00').timestamp()
+    stock = dict(id=7, code='005930', pending_add_type='AVG_DOWN', buy_qty=2,
+        buy_price=10000.0, post_add_economic_generation={'old': True},
+        _trailing_entry_cost_model=dict(known_at='2026-10-08T09:59:59+09:00',
+            buy_cost_krw=0, source_sha256='a'*64,
+            allocation='frozen_configured_round_trip_rate_on_sell_model_only'))
+    receipt = dict(economics_complete=fault != 'incomplete_economics')
+    clocks = dict(missing=None, naive='2026-10-08T09:59:59',
+        future='2026-10-08T10:00:01+09:00', nonfinite=float('nan'), bool=True)
+    if fault in clocks: stock['_trailing_entry_cost_model']['known_at'] = clocks[fault]
+    if fault == 'pyramid': stock['pending_add_type'] = 'PYRAMID'
+    if fault == 'bad_event_clock': stamp = float('nan')
+    assert record_generation(stock, receipt, at=stamp, completed=fault != 'not_completed') is None
+    assert 'post_add_economic_generation' not in stock
+
+
 def test_original_request_stop_replay_reaches_selector_and_successor(
     tmp_path, monkeypatch
 ):

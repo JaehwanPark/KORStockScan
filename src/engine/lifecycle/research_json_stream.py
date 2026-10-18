@@ -10,7 +10,7 @@ from .research_input_budget import Claim
 from . import research_storage as storage
 
 TRADE_FIELDS=frozenset(('id','record_id','strategy','stock_code','code','status',
-    'main_automatic_management_allowed','first_buy_at_epoch','buy_fill_quantity','buy_fill_amount',
+    'main_automatic_management_allowed','first_buy_at_epoch','buy_fill_quantity','buy_filled_qty','buy_fill_amount',
     'trailing_replay_cost_model','actual_cost_reconciliation','entry_quote_route','entry_quote_item',
     'holding_ai_required','holding_vote_source','holding_ai_policy_sha256','trailing_entry_context','trailing_situation_pin',
     'rec_date','completion_observed_date','entry_mode','terminal_population_scope',

@@ -20454,6 +20454,9 @@ def _exit_signal_submission_fields(stock: dict, code: str, fields: dict) -> dict
 
 
 def _log_holding_pipeline(stock, code, stage, **fields):
+    if stage == 'sell_completed':
+        from src.engine.scalping.trailing_entry_research_source import clear as clear_trailing_plan
+        clear_trailing_plan(stock)
     if stage=='sell_completed' and isinstance(stock.get('_initial_quantity_cap_trace'),dict):
         from src.engine.scalping.initial_quantity_cap_observation import interrupt
         trace=stock['_initial_quantity_cap_trace']
@@ -29887,12 +29890,17 @@ def _observe_scalp_trailing_input_transition(
     from src.engine.scalping.universal_trailing_replay import quote_source_digest
     if universal_quote.get('kind') == 'QUOTE':
         universal_quote['source_sha256'] = quote_source_digest(universal_quote)
+    from src.engine.scalping.trailing_entry_research_source import holding_link as trailing_holding_link
+    trailing_link = trailing_holding_link(stock, position_key=position_key,
+        buy_fill_identity=holding_generation, known_at=now_ts)
     try:
         _log_holding_pipeline(
             stock,
             code,
             "scalp_trailing_input_transition",
             universal_trailing_quote=json.dumps(universal_quote, sort_keys=True, separators=(',', ':')),
+            trailing_entry_plan_receipt_sha256=stock.get('_trailing_entry_plan_receipt_sha256'),
+            trailing_entry_plan_holding_link=json.dumps(trailing_link, sort_keys=True, separators=(',', ':')),
             trailing_entry_context=json.dumps(stock.get('trailing_entry_context'), sort_keys=True, separators=(',', ':')),
             classification_origin_hash=(stock.get('trailing_situation_pin') or {}).get('classification_origin_hash'),
             trailing_situation_pin=json.dumps(stock.get('trailing_situation_pin'), sort_keys=True, separators=(',', ':')),
@@ -66197,6 +66205,9 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
 @probe_submission_scope()
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
+    if _safe_int(stock.get('buy_qty'), 0) <= 0:
+        from src.engine.scalping.trailing_entry_research_source import clear as clear_trailing_plan
+        clear_trailing_plan(stock)
     if isinstance(stock.get("initial_quantity_bundle"), dict):
         # The legacy loop submits every planned order in one invocation. Until
         # its replacement has durable per-leg intent and terminal recovery,
@@ -70748,11 +70759,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         cap_source = _initial_quantity_cap_research_context(
             sizing_context, sizing_decision, ws_data=ws_data,
             now_ts=cap_observed_at)
+        trailing_plan_source = None
+        if _safe_int(stock.get('buy_qty'), 0) <= 0:
+            from src.engine.scalping.trailing_entry_research_source import capture as capture_trailing_plan
+            trailing_plan_source = capture_trailing_plan(
+                symbol=code, position_key=_scalp_holding_source_position_key(stock, code),
+                action_receipt=machine_action_receipt or {},
+                sizing_fields=entry_execution_sizing_fields, cap_context=cap_source,
+                cost_model=stock.get('_trailing_entry_cost_model'),
+                entry_context=stock.get('trailing_entry_context'), known_at=cap_observed_at)
+            # This pointer is diagnostic only. A failed capture clears the
+            # previous attempt instead of attributing a later holding to it.
+            from src.engine.scalping.trailing_entry_research_source import install as install_trailing_plan
+            install_trailing_plan(stock, trailing_plan_source)
         _log_entry_pipeline(
             stock,
             code,
             "entry_execution_sizing_plan",
             requested_qty=requested_qty,
+            trailing_entry_plan_receipt=json.dumps(trailing_plan_source, sort_keys=True, separators=(',', ':')),
             initial_quantity_cap_research_context=cap_source,
             actual_order_submitted=False,
             broker_order_forbidden=False,
