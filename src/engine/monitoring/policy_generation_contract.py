@@ -77,6 +77,14 @@ COMPONENTS = {
         "automation/runtime_policy_bootstrap.py",
     ),
 }
+# The shared fixture producer and readers use the same resident-memory Claim
+# contract. A helper-only change requires a distinct capability/fixture path;
+# it must not reuse a formerly current receipt or rewrite a historical one.
+COMMON_CODE_COMPONENTS = (
+    "monitoring/policy_generation_contract.py",
+    "lifecycle/holding_window_generation.py",
+    "lifecycle/research_input_budget.py",
+)
 STEPS = ("source", "comparison", "selection", "publication", "reader")
 OWNERS = {
     "entry_cancel_wait": "DirectFamilySourceRepairEntryCancelWait",
@@ -91,8 +99,7 @@ def code_generation(family):
 
     names = (
         *COMPONENTS[family],
-        "monitoring/policy_generation_contract.py",
-        "lifecycle/holding_window_generation.py",
+        *COMMON_CODE_COMPONENTS,
     )
     values = cached_code_generation([ENGINE / name for name in names])
     return digest({name: values[str(ENGINE / name)] for name in names})

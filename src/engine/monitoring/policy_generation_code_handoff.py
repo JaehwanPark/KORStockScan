@@ -156,6 +156,27 @@ REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS = {
 }
 
 
+# Direct frozen 10/16 native reports to the reviewed integrated research code.
+# The shared Claim helper is now a capability dependency, so all four families
+# have new fixture paths. Preserve every previous pair and receipt; this is
+# source/reader capability, not economic selection or runtime/performance PASS.
+# Review: docs/audits/main-research-integrated-p5-p6-deployment-review-2026-10-18.md.
+REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS = {
+    'entry_cancel_wait': (
+        '2e0ba14946a5e9e191a95529971e103136679957ddd7458678ed6c27a0e4a234',
+        '4bf8bb24955fa5889d9090bcbbee1fd317493f0841d2a5a46566453291a5e907'),
+    'rising_missed': (
+        'e9f1620fd55d335d1db3ccad52f1211440b5d2df57ddf45988e2012ecf6ed874',
+        '7fa7a62c8bd2f75b7218cee881ea1cffd41c4ade083b97fc73c0559693447aeb'),
+    'auxiliary': (
+        'd04bcb11a28f731c1af5c332d33d49774f977a01a2ac90463df50865186fa6b0',
+        'a249dbc9baa7fb5e05a36481cf476083de6c8b7ad369e3b26ceb7f3ba74373b5'),
+    'holding_vote': (
+        '057c1274c876450cc5f97a918899c96c85fed7dadb408ea6af445c67808c4fce',
+        'e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea'),
+}
+
+
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -209,6 +230,11 @@ def current_fixture_observation(observed, data):
     delay_research = REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS.get(family)
     if delay_research and actual_pair == delay_research:
         pair = delay_research
+    integrated = REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS.get(family)
+    integrated_match = (integrated is not None and actual_pair == integrated
+                        and observed.get('source_date') == '2026-10-16')
+    if integrated_match:
+        pair = integrated
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
@@ -240,6 +266,8 @@ def current_fixture_observation(observed, data):
                 or fixture['code_sha256'] != pair[1]):
             raise ValueError('successor_historical_contract_changed')
         historical_fixture = _historical_fixture(contract, data, family)
+        if integrated_match and historical_fixture is None:
+            raise ValueError('successor_integrated_historical_fixture_required')
         current = generation.native(native, family=family, day=observed['source_date'], data_root=data,
             source_state=contract['source_state'], comparison_state=contract['comparison_state'],
             handoff_state=contract['handoff_state'])

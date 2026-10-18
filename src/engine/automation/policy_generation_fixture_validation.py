@@ -19,8 +19,7 @@ from src.engine.monitoring import policy_generation_validation as validation
 def _assert_committed(family):
     paths = [*validation.plan_identity(family),
              *('src/engine/'+name for name in generation.COMPONENTS[family]),
-             'src/engine/monitoring/policy_generation_contract.py',
-             'src/engine/lifecycle/holding_window_generation.py']
+             *('src/engine/'+name for name in generation.COMMON_CODE_COMPONENTS)]
     status = subprocess.check_output(['git','status','--porcelain','--',*paths],
                                      cwd=validation.ROOT,text=True)
     if status.strip():

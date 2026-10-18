@@ -10,10 +10,14 @@ import pytest
 from src.engine import kiwoom_sniper_v2 as main
 
 
-# The refactor's immutable input is 9e78afd1194233d87c4d340ba2f1981d340d88d4.
+# The loop's immutable input is 9e78afd1194233d87c4d340ba2f1981d340d88d4.
+# The integrated startup comes from 9d2201141aeae409fe960ff7795a1340718a7146:
+# its native policy loader replaces the earlier separate preparation calls.
+# Re-inlining the unchanged loop must match that commit's entire run_sniper,
+# including its early returns and original exception/cleanup boundary.
 # These are AST hashes, independent of indentation, comments and line numbers.
 ORIGINAL_LOOP_AST = 'a549e790d27ed4e4b86a14cfb46187cfec7dcee51f1fa869a84195e3f3dc04a5'
-ORIGINAL_RUN_AST = '33b88984bb49cdc94d3d8f82d0c495edd35038d067cca86a9f4ccb1a253aee5a'
+INTEGRATED_RUN_AST = '601b654822e925f5aede0fb2ed9268fb450818fe203f5a9c956ef406b2192707'
 STARTUP_BINDINGS = {
     'is_test_mode', 'targets', 'admin_id', 'radar', 'ai_engine',
     'last_db_poll_time', 'last_msg_min', 'scanner_ws_reg_last_emit_ts',
@@ -64,7 +68,7 @@ def test_live_startup_consumes_native_iterator_with_original_exception_and_clean
     # Replacing only the invocation with the original body reconstructs the
     # whole pre-refactor function: startup, continue/break, catches and cleanup.
     parent.body[idx] = _native_loop()
-    assert _digest(function) == ORIGINAL_RUN_AST
+    assert _digest(function) == INTEGRATED_RUN_AST
 
 
 @pytest.mark.parametrize('exception', [RuntimeError('native phase failed'), KeyboardInterrupt()])
