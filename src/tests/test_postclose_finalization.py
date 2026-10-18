@@ -27,6 +27,36 @@ def test_storage_lane_recovery_requires_explicit_closed_target_recovery(tmp_path
     assert '"$CLEANUP_RUNNER" 30 "${cleanup_recovery_args[@]}"' in script
 
 
+@pytest.mark.parametrize('prefix_rc',[0,1])
+def test_detector_resume_executes_only_fresh_detector_after_prefix_validation(tmp_path,prefix_rc):
+    project=tmp_path/'project';project.mkdir()
+    _write_ready_predecessors(project)
+    cleanup=project/'cleanup.sh';detector=project/'detector.sh';python=project/'python'
+    _write_executable(cleanup,'echo unexpected-cleanup >> "$PROJECT_DIR/order.txt"\nexit 87\n')
+    _write_executable(detector,'echo detector >> "$PROJECT_DIR/order.txt"\n')
+    _write_executable(python,'''\
+if [[ "${1:-}" == *postclose_finalization_generation.py ]]; then
+  echo prefix >> "$PROJECT_DIR/order.txt"
+  [[ "$PREFIX_RC" == 0 ]] || exit "$PREFIX_RC"
+  echo '{"chain_sha256":"chain","snapshot_sha256":"snapshot","cleanup_finished_at":"original-time"}'
+  exit 0
+fi
+if [[ "${1:-}" == -m ]]; then echo unexpected-producer >> "$PROJECT_DIR/order.txt"; exit 99; fi
+body="$(cat)"
+if [[ "$body" == *capture_final_detector_receipt* ]]; then echo 'cron-retry report';
+elif [[ "$body" == *capture_finalization_generation* || "$body" == *"receipt=json.loads"* ]]; then echo 'chain snapshot';
+elif [[ "$body" == *is_krx_trading_day* ]]; then echo '2026-09-03';
+fi
+''')
+    result=subprocess.run(['bash',str(WRAPPER),TARGET_DATE,'--recover-closed-target','--resume-final-detector'],
+        env={**_base_env(project,cleanup,detector),'VENV_PY':str(python),'PREFIX_RC':str(prefix_rc)},
+        text=True,capture_output=True,timeout=20)
+    assert result.returncode==prefix_rc,result.stdout+result.stderr
+    assert (project/'order.txt').read_text().splitlines()==(['prefix','detector'] if not prefix_rc else ['prefix'])
+    assert ('[DONE] postclose_finalization' in result.stdout)==(not prefix_rc)
+    if not prefix_rc:assert 'original-time' in result.stdout
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body, encoding="utf-8")

@@ -306,3 +306,119 @@ def capture_final_detector_receipt(
         "report_sha256": _sha(path),
         "timestamp": report["timestamp"],
     }
+
+
+def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
+    """Reuse only an unchanged native prefix whose last detector failed.
+
+    This runs under the finalizer lock before its next START. It grants no
+    activation authority and never writes controller, policy or DONE markers.
+    """
+    from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
+    from src.engine.infrastructure.runtime_release_router import selected_release
+    import os
+    import stat
+    import uuid
+
+    project = Path(project).resolve(strict=True)
+    data = (project / 'data').resolve(strict=True)
+    selected, commit = selected_release(data.parent)
+    if selected != project:
+        raise FinalizationGenerationError('retry_selected_release_mismatch')
+    paths = {
+        'finalization_log': project / 'logs/postclose_finalization_cron.log',
+        'cleanup_log': project / 'logs/log_rotation_cleanup_cron.log',
+        'failed_detector': data / 'report/error_detection' / f'error_detection_{target_date}.json',
+    }
+    def stable_read(path):
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 16 * 1024 * 1024:
+            raise FinalizationGenerationError('retry_bounded_regular_source_required')
+        identity = lambda item: (item.st_dev,item.st_ino,item.st_size,item.st_mtime_ns,item.st_ctime_ns)
+        with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW),'rb') as stream:
+            opened=os.fstat(stream.fileno());raw=stream.read(16*1024*1024+1)
+            if identity(opened)!=identity(os.fstat(stream.fileno())):
+                raise FinalizationGenerationError('retry_source_changed')
+        after = path.lstat()
+        if (not stat.S_ISREG(after.st_mode) or len(raw)!=before.st_size
+                or identity(before)!=identity(opened) or identity(before)!=identity(after)):
+            raise FinalizationGenerationError('retry_source_changed')
+        return raw
+    frozen = {name:stable_read(path) for name,path in paths.items()}
+    log = frozen['finalization_log'].decode()
+    start = f'[START] postclose_finalization target_date={target_date} '
+    segment = log[log.rfind(start):] if start in log else ''
+    lines = segment.splitlines()
+    failure = f'[FAIL] postclose_finalization target_date={target_date} reason=final_detector_failed'
+    if (not lines or lines[-1] != failure or 'recovery=true' not in lines[0]
+            or '[INFO] postclose_finalization controller_terminal_receipt={"issues": [], "status": "pass"}' not in lines
+            or f'[INFO] postclose_finalization cleanup_done target_date={target_date}' not in lines
+            or f'[INFO] postclose_finalization target_date={target_date} cleanup=done detector_handoff=started' not in lines):
+        raise FinalizationGenerationError('retry_requires_failed_native_detector_suffix')
+    cleanup = frozen['cleanup_log'].decode().splitlines()
+    cleanup_starts = [i for i, line in enumerate(cleanup)
+                      if line.startswith('[START] log_rotation_cleanup ')]
+    terminal = cleanup[-1] if cleanup else ''
+    if (not cleanup_starts
+            or f'target_date={target_date} ' not in cleanup[cleanup_starts[-1]]
+            or not terminal.startswith(f'[DONE] log_rotation_cleanup target_date={target_date} ')):
+        raise FinalizationGenerationError('retry_cleanup_not_successful_latest_attempt')
+    def stamp(line, key):
+        match = re.search(r'\b' + key + r'=([^ ]+)', line)
+        value = datetime.fromisoformat(match.group(1)) if match else None
+        if value is None or value.tzinfo is None:
+            raise FinalizationGenerationError('retry_clock_unbound')
+        return value
+    started = stamp(lines[0], 'started_at')
+    cleanup_started = stamp(cleanup[cleanup_starts[-1]], 'started_at')
+    cleanup_finished = stamp(terminal, 'finished_at')
+    failed = json.loads(frozen['failed_detector'])
+    failed_at = datetime.fromisoformat(failed['timestamp'])
+    controller_path = data / 'report/postclose_done_controller' / f'postclose_done_controller_{target_date}.json'
+    controller = _load(controller_path, 'retry_controller_missing')
+    generated = datetime.fromisoformat(controller['generated_at'])
+    if (failed.get('mode') != 'full' or failed.get('target_date') != target_date
+            or failed.get('postclose_recovery') is not True or failed.get('summary_severity') != 'fail'
+            or failed_at.tzinfo is None or generated.tzinfo is None
+            or not started <= generated <= cleanup_started <= cleanup_finished <= failed_at
+            or failed_at.timestamp() > paths['finalization_log'].stat().st_mtime + 1):
+        raise FinalizationGenerationError('retry_prefix_clock_or_detector_invalid')
+    generation = capture_finalization_generation(project, target_date)
+    issues = done_terminal_receipt_issues(controller_path, target_date, started_after_ns=0,
+                                         generation_only=True)
+    if issues:
+        raise FinalizationGenerationError('retry_controller_invalid:' + ','.join(issues))
+    if (selected_release(data.parent) != (selected, commit)
+            or any(stable_read(path) != frozen[name] for name, path in paths.items())):
+        raise FinalizationGenerationError('retry_source_changed')
+    folder = data / 'report/postclose_finalization_recovery' / target_date / uuid.uuid4().hex
+    folder.mkdir(parents=True, exist_ok=False)
+    originals = {}
+    for name, raw in frozen.items():
+        destination = folder / (name + '.original')
+        with destination.open('xb') as stream:
+            stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+        originals[name] = dict(path=str(destination), sha256=hashlib.sha256(raw).hexdigest())
+    receipt = dict(schema='postclose_detector_suffix_recovery_v1', source_date=target_date,
+        selected_release_root=str(selected), selected_release_commit=commit,
+        original_started_at=started.isoformat(), cleanup_finished_at=cleanup_finished.isoformat(),
+        failed_detector_at=failed_at.isoformat(), originals=originals, generation=generation,
+        controller_sha256=_sha(controller_path), recovery_code_sha256=_sha(Path(__file__)),
+        runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False)
+    destination = folder / 'receipt.json'
+    with destination.open('x') as stream:
+        json.dump(receipt, stream, sort_keys=True, indent=2); stream.flush(); os.fsync(stream.fileno())
+    return dict(receipt_path=str(destination), receipt_sha256=_sha(destination),
+                original_started_at=receipt['original_started_at'],
+                cleanup_finished_at=receipt['cleanup_finished_at'],
+                chain_sha256=generation['chain_sha256'], snapshot_sha256=generation['snapshot_sha256'])
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Validate and preserve a failed native detector suffix.')
+    parser.add_argument('--resume-prefix', action='store_true', required=True)
+    parser.add_argument('project', type=Path)
+    parser.add_argument('source_date')
+    arguments = parser.parse_args()
+    print(json.dumps(capture_detector_retry_prefix(arguments.project, arguments.source_date), sort_keys=True))

@@ -13,10 +13,68 @@ from src.engine.automation.postclose_finalization_generation import (
     capture_finalization_generation,
     finalization_marker_issues,
     snapshot_kinds_for_date,
+    capture_detector_retry_prefix,
 )
 
 
 DAY = "2026-09-28"
+
+
+def _retry_fixture(root, monkeypatch):
+    _fixture(root)
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.engine.automation import postclose_done_controller as controller
+    monkeypatch.setattr(router,'selected_release',lambda _: (root,'a'*40))
+    calls=[]
+    monkeypatch.setattr(controller,'done_terminal_receipt_issues',lambda *a,**kw:calls.append(kw) or [])
+    log=root/'logs';log.mkdir()
+    (log/'postclose_finalization_cron.log').write_text(
+        f'[START] postclose_finalization target_date={DAY} effective_date=2026-09-29 recovery=true started_at=2026-09-29T07:00:00+0900\n'
+        '[INFO] postclose_finalization controller_terminal_receipt={"issues": [], "status": "pass"}\n'
+        f'[INFO] postclose_finalization cleanup_done target_date={DAY}\n'
+        f'[INFO] postclose_finalization target_date={DAY} cleanup=done detector_handoff=started\n'
+        f'[FAIL] postclose_finalization target_date={DAY} reason=final_detector_failed\n')
+    (log/'log_rotation_cleanup_cron.log').write_text(
+        f'[START] log_rotation_cleanup target_date={DAY} started_at=2026-09-29T07:02:00+0900\n'
+        f'[DONE] log_rotation_cleanup target_date={DAY} finished_at=2026-09-29T07:03:00+0900\n')
+    path=root/'data/report/postclose_done_controller'/f'postclose_done_controller_{DAY}.json'
+    body=json.loads(path.read_bytes());body['generated_at']='2026-09-29T07:01:00+09:00'
+    _write_json(path,body);_write_json(Path(body['attempt_path']),body)
+    failed=root/'data/report/error_detection'/f'error_detection_{DAY}.json'
+    _write_json(failed,dict(mode='full',target_date=DAY,postclose_recovery=True,summary_severity='fail',timestamp='2026-09-29T07:04:00+09:00'))
+    return log,failed,calls
+
+
+def test_detector_suffix_retry_preserves_native_prefix_and_failure(tmp_path,monkeypatch):
+    log,failed,calls=_retry_fixture(tmp_path,monkeypatch)
+    before={p:p.read_bytes() for p in (log/'postclose_finalization_cron.log',log/'log_rotation_cleanup_cron.log',failed)}
+    result=capture_detector_retry_prefix(tmp_path,DAY)
+    receipt=json.loads(Path(result['receipt_path']).read_bytes())
+    assert receipt['generation']==capture_finalization_generation(tmp_path,DAY)
+    assert receipt['runtime_effect'] is False and receipt['allowed_runtime_apply'] is False
+    assert calls==[dict(started_after_ns=0,generation_only=True)]
+    assert all(p.read_bytes()==raw for p,raw in before.items())
+    assert Path(receipt['originals']['failed_detector']['path']).read_bytes()==before[failed]
+
+
+@pytest.mark.parametrize('defect',['cleanup_failed','new_cleanup','new_finalization','wrong_detector_date','changed_summary','late_controller','symlink'])
+def test_detector_suffix_retry_rejects_changed_or_incomplete_prefix(tmp_path,monkeypatch,defect):
+    log,failed,_=_retry_fixture(tmp_path,monkeypatch)
+    cleanup=log/'log_rotation_cleanup_cron.log';finalization=log/'postclose_finalization_cron.log'
+    if defect=='cleanup_failed':cleanup.write_text(cleanup.read_text().replace('[DONE]','[FAIL]'))
+    elif defect=='new_cleanup':cleanup.write_text(cleanup.read_text()+f'[START] log_rotation_cleanup target_date={DAY} started_at=2026-09-29T07:05:00+0900\n')
+    elif defect=='new_finalization':finalization.write_text(finalization.read_text()+f'[START] postclose_finalization target_date={DAY} recovery=true\n')
+    elif defect=='wrong_detector_date':
+        body=json.loads(failed.read_bytes());body['target_date']='2026-09-27';_write_json(failed,body)
+    elif defect=='changed_summary':
+        (tmp_path/'data/report/runtime_approval_summary'/f'runtime_approval_summary_{DAY}.json').write_text('{}')
+    elif defect=='late_controller':
+        path=tmp_path/'data/report/postclose_done_controller'/f'postclose_done_controller_{DAY}.json'
+        body=json.loads(path.read_bytes());body['generated_at']='2026-09-29T07:06:00+09:00';_write_json(path,body)
+    else:
+        target=cleanup.with_suffix('.original');cleanup.rename(target);cleanup.symlink_to(target)
+    with pytest.raises(FinalizationGenerationError):capture_detector_retry_prefix(tmp_path,DAY)
+    assert not (tmp_path/'data/report/postclose_finalization_recovery').exists()
 
 
 def _write_json(path: Path, payload: dict) -> str:

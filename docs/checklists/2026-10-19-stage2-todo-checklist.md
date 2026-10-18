@@ -120,6 +120,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
 
 - [ ] `[OperationalLogRetentionRepair1016] 작성자 로그 회전·보관·역사 원천 압축 적용 확인` (`Due: 2026-10-19`, `Slot: INTRADAY`, `TimeWindow: 통합 배포 후`, `Track: RuntimeStability`)
+  - detector 후행 실패 복구는 원 controller/strict/cleanup 세대와 실제 완료 시각을 보존하고 검증된 suffix만 재실행한다. 원 실패·정리 영수증을 별도 보관하며 새 full detector와 동일 세대 검증이 통과해야 정식 finalization DONE을 발행한다. PREOPEN 이후 원천을 다시 쓰거나 실패를 수동 완료로 바꾸지 않는다.
   - 10/19 추가 수리: 일반 캐시 탐색의 shared evidence/격리 work 진입을 차단한다. 실제 캐시 범위 읽기 실패·partial census는 계속 실패하며 권한/증거를 변경하지 않는다. [실행 검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 10/16→10/19 인계: 원 Acceptance·Source·이력은 아래 그대로 보존한다. 과거 PID는 당시 이력이며 현재 Main은 EOD 뒤 자연 정지 상태다. c63d44bcb는 당시의 선택 이력이다. 이후 선택은 runtime release selector와 최신 검증 기록으로 확인하며 실제 PREOPEN/PID·자연 성과와 구분한다. [이번 검토](../audits/postclose-semantic-recovery-review-2026-10-16.md).
   - 10/17 추가 계약: Parquet source receipt의 물리 파일 고정이 무손실 압축 뒤 consumer를 거부하는 결함을 수리한다. 원 decoded SHA/크기와 producer CRC 검증 후 archive inode/ctime 세대를 봉인하며, health는 작은 issued 세대만 점검하고 full native 검증은 원 producer/finalizer가 소유한다. [전체 수리](../audits/postclose-complete-semantic-repair-2026-10-17.md).

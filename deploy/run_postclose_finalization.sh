@@ -45,8 +45,11 @@ elif [[ -n "${2:-}" ]]; then
   exit 2
 fi
 cleanup_recovery_args=()
+RESUME_FINAL_DETECTOR=false
 if [[ "${3:-}" == "--recover-storage-only" && "$RECOVERY_MODE" == "true" && $# -eq 3 ]]; then
   cleanup_recovery_args+=(--recover-storage-only)
+elif [[ "${3:-}" == "--resume-final-detector" && "$RECOVERY_MODE" == "true" && $# -eq 3 ]]; then
+  RESUME_FINAL_DETECTOR=true
 elif [[ -n "${3:-}" || $# -gt 3 ]]; then
   echo "[FAIL] postclose_finalization reason=unknown_cleanup_recovery_mode"
   exit 2
@@ -113,6 +116,15 @@ exec 8>"$PROJECT_DIR/tmp/postclose_finalization_${TARGET_DATE}.lock"
 if ! flock -n 8; then
   echo "[SKIP] postclose_finalization target_date=${TARGET_DATE} reason=active_owner"
   exit 75
+fi
+resume_receipt=""
+if [[ "$RESUME_FINAL_DETECTOR" == "true" ]]; then
+  resume_receipt="$(env PYTHONPATH=. "$VENV_PY" \
+    "$SCRIPT_DIR/../src/engine/automation/postclose_finalization_generation.py" \
+    --resume-prefix "$PROJECT_DIR" "$TARGET_DATE")" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=detector_resume_prefix_invalid"
+    exit 1
+  }
 fi
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[START] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} recovery=${RECOVERY_MODE} wait_timeout_sec=${WAIT_TIMEOUT_SEC} hard_deadline_kst=${HARD_DEADLINE_KST} started_at=${started_at}"
@@ -242,6 +254,8 @@ run_final_detector() {
     bash "$ERROR_DETECTION_RUNNER" "${detector_args[@]}"
 }
 
+finalization_generation=""
+if [[ "$RESUME_FINAL_DETECTOR" != "true" ]]; then
 waited=0
 while true; do
   if [[ "$RECOVERY_MODE" != "true" && "$ALLOW_NONCURRENT_TARGET" != "true" ]]; then
@@ -431,6 +445,16 @@ PY
       exit 1
     fi
   fi
+fi
+
+else
+  finalization_generation="$("$VENV_PY" - "$resume_receipt" <<'PY'
+import json,sys
+receipt=json.loads(sys.argv[1])
+print(receipt['chain_sha256'],receipt['snapshot_sha256'])
+PY
+)"
+  echo "[INFO] postclose_finalization target_date=${TARGET_DATE} prefix_reused=${resume_receipt}"
 fi
 
 # The child detector reports its live ancestor as pending, never as PASS.
