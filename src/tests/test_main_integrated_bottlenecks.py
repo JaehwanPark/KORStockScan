@@ -404,7 +404,7 @@ def test_fixed_watch_delivery_precedes_slow_recovery_without_displacing_safety(m
     assert targets[0] is recovery
     # Execute the actual loop condition: delayed heavy work must not jump
     # ahead again after sorting, and ordinary WATCHING retains its old flush.
-    tree = ast.parse(inspect.getsource(M.run_sniper))
+    tree = ast.parse(inspect.getsource(M._run_sniper_iterations))
     node = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
                 and 'scanner_precheck_seen' in ast.unparse(n.test)
                 and 'scanner_heavy_eval_flushed' in ast.unparse(n.test))

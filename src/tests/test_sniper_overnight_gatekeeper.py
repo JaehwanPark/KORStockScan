@@ -325,7 +325,7 @@ def test_run_scalping_overnight_gatekeeper_returns_false_when_disabled(monkeypat
 
 
 def test_run_sniper_eod_holding_fallback_is_permanently_disabled():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     tree = ast.parse(source)
 
     fallback_assign = None

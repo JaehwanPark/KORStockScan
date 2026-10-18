@@ -547,10 +547,12 @@ def test_selected_receipt_cannot_use_discovery_only_source_check(tmp_path):
 def test_post_add_aggregate_and_hard_priority_are_independent_of_votes():
     from src.tests.test_main_stop_policy import rows, baseline
     from src.engine.scalping import main_stop_replay as replay
-    from src.engine.scalping.main_stop_policy import digest
+    from src.engine.scalping.main_stop_policy import digest, soft_decision
 
     values = list(rows())
-    # Rebaseline from a completed actual ADD; no candidate ADD is simulated.
+    # A synthetic aggregate and shared quotes do not prove a completed native
+    # ADD or an actual normal decision. Do not manufacture a common-soft call
+    # at the hard-stop quote: native hard safety exits before that boundary.
     first = values[0]
     aggregate = dict(
         schema="verified_post_add_generation_v1",
@@ -587,15 +589,22 @@ def test_post_add_aggregate_and_hard_priority_are_independent_of_votes():
         post_add_generation=True,
         vote_reader=lambda *_: pytest.fail("hard safety requested AI"),
     )
-    assert result["status"] == "modeled" and result["reason"] == "scalp_hard_stop_pct"
+    assert result["status"] == "source_unsupported"
+    assert result["reason"] == "actual_common_soft_decision_unobserved"
+    assert result["modeled_net_krw"] is None
+    # Preserve numerical hard priority as a pure decision test. It requires
+    # neither an AI vote nor an unsupported whole-position ADD replay.
+    hard = soft_decision(baseline(), profit_pct=values[-1]["decision_profit_pct"],
+        now=values[-1]["at"], after_add=True)
+    assert hard.disposition == "exit_candidate" and hard.rule == "scalp_hard_stop_pct"
     values[2]["pending_add"] = True
     values[2]["source_sha256"] = digest(
         {k: v for k, v in values[2].items() if k != "source_sha256"}
     )
-    assert (
-        replay.replay(values, baseline(), post_add_generation=True)["status"]
-        == "source_gap"
-    )
+    pending = replay.replay(values, baseline(), post_add_generation=True)
+    assert pending["status"] == "source_unsupported"
+    assert pending["reason"] == "actual_common_soft_decision_unobserved"
+    assert pending["modeled_net_krw"] is None
 
 
 @pytest.mark.parametrize('clock', ['2026-10-08T09:59:59+09:00',
@@ -659,6 +668,9 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
     from src.engine.scalping.position_peak_ledger import position_cycle_id
     from src.tests.test_holding_path_vote_replay import _events, BUY_IDENTITY
     from src.tests.test_main_stop_policy import baseline
+    from src.tests.test_main_stop_runtime_source import evaluation_stream
+    from src.engine import sniper_execution_receipts as native_receipts
+    from src.engine.sniper_state_handlers import _scalp_holding_source_position_key
 
     parent, original, choices, name, contract, _, numeric = fixture(tmp_path)
     monkeypatch.setattr(writer, "DATA_DIR", tmp_path)
@@ -681,7 +693,17 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
             buy_price=100.0,
             buy_qty=1,
         )
+        stock.update(entry_requested_qty=1, requested_buy_qty=1,
+            pending_entry_orders=[dict(ord_no='BUY-1', qty=1, filled_qty=0, status='OPEN')])
+        filled = native_receipts._resolve_entry_effective_fill_qty(
+            target_stock=stock, code='005930', order_no='BUY-1', exec_price=100,
+            exec_qty=1, order_qty=1, remaining_qty=0, cumulative_exec_amount=100,
+            execution_no='FILL-1', unit_exec_qty=1, unit_exec_price=100)
+        assert filled['status'] != 'invalid'
         position = position_cycle_id(stock)
+        vote_position = _scalp_holding_source_position_key(stock, stock['code'])
+        assert vote_position == f"record:{stock['id']}" and vote_position != position
+        assert vote.buy_fill_identity_from_runtime(stock) == BUY_IDENTITY
         values = replace(baseline(), soft_stop_pct=-0.5, grace_sec=0)
         stock["main_stop_policy_pin"] = stop.pin(
             position_key=position,
@@ -694,16 +716,16 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
             "EXIT_SOFT_STOP",
             "REGULAR",
             verdicts=("VETO", "VETO"),
-            position_key=position,
+            position_key=vote_position,
             session_key=day,
             base_at=at + 2,
         )
-        store = vote.path_vote_store_path(tmp_path, position)
+        store = vote.path_vote_store_path(tmp_path, vote_position)
         for j, event in enumerate(votes):
             payload = dict(
                 input_schema=vote.PATH_PROMPT_VERSION,
                 requested_paths=["EXIT_SOFT_STOP"],
-                position_key=position,
+                position_key=vote_position,
                 buy_fill_identity=BUY_IDENTITY,
                 market="REGULAR",
                 session_key=day,
@@ -753,13 +775,13 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
                 vote.time, "time", lambda event=event: event["received_at"] + 0.1
             )
             assert (
-                vote.append_path_events_file(store, position, [event])[1] == "appended"
+                vote.append_path_events_file(store, vote_position, [event])[1] == "appended"
             )
         source = dict(
             schema=evidence.SCHEMA,
             path_id="EXIT_SOFT_STOP",
             required=True,
-            position_key=position,
+            position_key=vote_position,
             buy_fill_identity=BUY_IDENTITY,
             store_name=store.name,
             market="REGULAR",
@@ -775,6 +797,12 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
         out.mkdir()
         reference = evidence.assemble_votes(tmp_path, out, source, inventory)
         assert reference["status"] == "source_bound"
+        original_vote_bytes = store.read_bytes()
+        original_request_bytes = {
+            path: path.read_bytes() for path in
+            (writer._request_path(day), writer._payload_path(day), writer._prompt_path(day))
+        }
+        original_vote_membership = copy.deepcopy(votes)
         rows = []
         for n in range(150):
             bid = 99.9 if n < 30 else 99.2 - (n - 30) * 0.005
@@ -788,10 +816,12 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
                     quote=dict(
                         market_route="krx_only",
                         item="005930",
-                        transport_epoch="1",
+                        transport_epoch=1,
                         observed_epoch=at + n,
                     ),
                     coverage_complete=True,
+                    native_decision_required=True,
+                    capture_evaluator='normal',
                     automatic_management_allowed=True,
                     runtime_flags=dict(
                         grace_enabled=True,
@@ -808,6 +838,8 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
                     vote_source=dict(source, observed_at=at + n),
                 )
             )
+        rows = list(evaluation_stream(rows))
+        assert sum(row.get('stage') == 'common_soft' for row in rows) == 150
         reader = evidence.PreparedVotes(reference, out)
         try:
             outcomes = experiment.stop_outcomes(
@@ -818,6 +850,9 @@ def test_original_request_stop_replay_reaches_selector_and_successor(
             )
         finally:
             reader.close()
+        assert store.read_bytes() == original_vote_bytes
+        assert votes == original_vote_membership
+        assert all(path.read_bytes() == raw for path, raw in original_request_bytes.items())
         assert all(x["status"] == "modeled" for x in outcomes.values()), {
             k: (v["status"], v.get("reason")) for k, v in outcomes.items()
         }

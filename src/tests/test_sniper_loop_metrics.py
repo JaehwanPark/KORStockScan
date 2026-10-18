@@ -391,9 +391,9 @@ def test_run_sniper_loop_calls_ensure_state_handler_deps():
     """The main loop refreshes state-handler bindings each iteration."""
     import ast
     import inspect
-    from src.engine.kiwoom_sniper_v2 import run_sniper
+    from src.engine.kiwoom_sniper_v2 import _run_sniper_iterations
 
-    function = ast.parse(inspect.getsource(run_sniper)).body[0]
+    function = ast.parse(inspect.getsource(_run_sniper_iterations)).body[0]
     loop = next(node for node in ast.walk(function)
                 if isinstance(node, ast.While)
                 and isinstance(node.test, ast.Constant)

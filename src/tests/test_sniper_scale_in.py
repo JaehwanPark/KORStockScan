@@ -32971,6 +32971,8 @@ def test_fast_exit_receipt_first_response_is_corroboration_only(
         "buy_qty": 2,
         "rt_ai_prob": 0.50,
         "fast_exit_broker_route": "SOR",
+        "exit_token": "native-fast-claim",
+        "exit_requested": True,
     }
 
     def receipt_first_submit(*args, **kwargs):

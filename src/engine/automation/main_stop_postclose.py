@@ -6,12 +6,14 @@ numerical selection authority. Missing cells retain their verified parent.
 from __future__ import annotations
 import argparse
 from collections import Counter
+from copy import deepcopy
 from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import date, timedelta
 import hashlib
 import gzip
 import json
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -404,6 +406,20 @@ def sources(root, day):
     return result
 
 
+def source_dates(root, paths, day):
+    """Inverse of the native daily/late catalog, not an arbitrary basename."""
+    expected=Path(root).resolve()/'pipeline_events';result=set()
+    for value in paths:
+        path=Path(value)
+        match=re.fullmatch(r'pipeline_events_(\d{4}-\d{2}-\d{2})(?:\.late)?\.jsonl(?:\.gz)?',path.name)
+        if (path.parent.resolve()!=expected or not match
+                or not '2026-09-29'<=match[1]<=day
+                or date.fromisoformat(match[1]).isoformat()!=match[1]):
+            raise ValueError('stop_native_source_partition_invalid')
+        result.add(match[1])
+    return sorted(result)
+
+
 def _archived_pipeline_source(path, expected, *, verify_full=False):
     """Validate the archiver's lossless representation of a sealed raw input.
 
@@ -451,6 +467,8 @@ def _archived_pipeline_source(path, expected, *, verify_full=False):
 
 def source_events(path, census, *, references=False):
     """Bound each line and expose undecodable source instead of dropping it."""
+    isolation_digest = hashlib.sha256()
+    isolated = 0
     with open_text_auto(path, errors='strict') as handle:
         while True:
             checkpoint()
@@ -458,20 +476,41 @@ def source_events(path, census, *, references=False):
             line=handle.readline(2*1024*1024+1)
             if not line:break
             if len(line.encode())>2*1024*1024:
-                # Isolate this physical record without retaining its full body.
-                # Its role is unverified, so numeric selection stays fail-closed;
-                # a source-gap carry can still preserve the verified incumbent.
+                # A private spool validates the entire record without making
+                # the mixed event resident. Only a proven disjoint producer
+                # stage can be excluded; unknown/damaged stop scope still blocks.
+                from .main_stop_source_projection import classify_disjoint_event, SPOOL_LIMIT
+                from src.engine.lifecycle.research_disk_budget import temporary
+                spool_limit = SPOOL_LIMIT
                 digest=hashlib.sha256(line.encode());size=len(line.encode())
-                complete=line.endswith('\n')
-                while not complete:
-                    checkpoint()
-                    tail=handle.readline(65536)
-                    if not tail:break
-                    raw=tail.encode();digest.update(raw);size+=len(raw)
-                    complete=tail.endswith('\n')
+                complete=line.endswith('\n');disjoint=None
+                with temporary(spool_limit), tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as spool:
+                    spool.write(line)
+                    while not complete:
+                        checkpoint()
+                        tail=handle.readline(65536)
+                        if not tail:break
+                        raw=tail.encode();digest.update(raw);size+=len(raw)
+                        if size <= spool_limit:spool.write(tail)
+                        complete=tail.endswith('\n')
+                    if complete and size <= spool_limit:
+                        spool.seek(0)
+                        try:disjoint=classify_disjoint_event(spool, checkpoint=checkpoint)
+                        except (ValueError, RecursionError):
+                            # A persistent deadline failure is not malformed
+                            # JSON and must preserve the native resume path.
+                            checkpoint()
                 census['oversized_raw_rows']+=1
                 census['oversized_raw_bytes']+=size
-                census['unidentifiable_raw_rows']+=1
+                if disjoint:
+                    isolated += 1
+                    census['isolated_disjoint_oversized_rows'] += 1
+                    census['isolated_disjoint_oversized_bytes'] += size
+                    census['isolated_disjoint_stage:'+disjoint] += 1
+                    identity = dict(offset=offset, size_bytes=size, line_sha256=digest.hexdigest(),stage=disjoint)
+                    isolation_digest.update(storage.encoded(identity)+b'\n')
+                else:
+                    census['unidentifiable_raw_rows']+=1
                 if not complete:census['oversized_unterminated_raw_rows']+=1
                 if census['oversized_raw_rows']<=8:
                     census[f'oversized_raw_record:{path}:{offset}:{digest.hexdigest()}']+=1
@@ -485,6 +524,8 @@ def source_events(path, census, *, references=False):
                 census['unidentifiable_raw_rows']+=1
                 continue
             yield (row,offset,hashlib.sha256(line.encode()).hexdigest()) if references else row
+    if isolated:
+        census[f'isolated_oversized_set_sha256:{path}:{isolation_digest.hexdigest()}'] += 1
 
 
 def read_committed(root, day, *, pointer=None, verify_full=False):
@@ -511,8 +552,6 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     if report.get('code_sha256')!=code_sha():
         if verify_full:
             raise ValueError('stop_code_generation_changed')
-        policy.verify_runtime_code_contract(bundle, bundle['target_date'])
-    policy.validate_bundle(bundle,bundle['target_date'])
     if bundle.get('operator_sources') != operator_sources(root,bundle['target_date']):
         raise ValueError('stop_operator_sources_changed')
     observed_votes = {}
@@ -576,6 +615,9 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
         if verify_full and byte_generation(Path(path)) != expected:
             raise ValueError('stop_native_source_bytes_changed')
     economic = report.get('economic_sources') or {}
+    if economic.get('native_selection'):
+        from src.engine.lifecycle.main_stop_research_cost import verify_selection_source_generation
+        verify_selection_source_generation(root,economic['native_selection'],verify_full=verify_full)
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     for cost_day, expected in economic.get('cost_generations', {}).items():
         if source_generation(Path(root), cost_day) != expected:
@@ -594,6 +636,14 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
         for _ in storage.iter_tree(directory, ref): pass
     elif byte_generation(storage.safe_path(directory, ref['path']))['sha256'] != ref['sha256']:
         raise ValueError('stop_census_manifest_changed')
+    from src.engine.scalping.main_stop_experiment import published_source_context
+    # All bytes were verified above in full mode. Routine mode uses the native
+    # publisher's exact identities/archive custody. Both avoid a second raw
+    # scan during semantic validation and approved consumer-code handoff.
+    with published_source_context(inventory,report['dependency_stats']):
+        if report.get('code_sha256')!=code_sha():
+            policy.verify_runtime_code_contract(bundle,bundle['target_date'])
+        policy.validate_bundle(bundle,bundle['target_date'])
     return bundle,report,pointer,directory
 
 
@@ -624,29 +674,74 @@ def completed_evidence(root, days):
 
 def publish(root, day, target, *, parents, parent_receipt, source_paths, snapshot_receipt,
             experiments=None, completed=(), economic_sources=None):
+    return _run_publication(root,day,target,parents=parents,parent_receipt=parent_receipt,
+        source_paths=source_paths,snapshot_receipt=snapshot_receipt,experiments=experiments,
+        completed=completed,economic_sources=economic_sources)
+
+
+def prepare_policy_candidate(root, day, target, *, output_root, parents, parent_receipt,
+                             source_paths, snapshot_receipt, experiments, completed=(),economic_sources=None):
+    """Run the native expensive evaluation before performance is available.
+
+    Output has a preparation schema and no policy/key/order authority. It is
+    kept outside the native data root. A later commit consumes the same sealed
+    aggregates only after validating finalized prospective experiments.
+    """
+    from src.engine.scalping.main_stop_experiment import _safe_path
+    destination=_safe_path(output_root).resolve();source_root=_safe_path(root).resolve()
+    if destination==source_root or source_root in destination.parents or destination in source_root.parents:
+        raise ValueError('stop_preparation_output_scope_invalid')
+    return _run_publication(root,day,target,parents=parents,parent_receipt=parent_receipt,
+        source_paths=source_paths,snapshot_receipt=snapshot_receipt,experiments=experiments,
+        completed=completed,economic_sources=economic_sources,preparation_root=destination)
+
+
+def _run_publication(root, day, target, *, parents, parent_receipt, source_paths, snapshot_receipt,
+                     experiments=None, completed=(),economic_sources=None,preparation_root=None):
     from src.engine.lifecycle.research_disk_budget import use
+    from src.engine.infrastructure.validation_digest_session import postclose_session
     token=_DEADLINE.set(time.monotonic()+MAX_RESEARCH_SECONDS)
+    owned_completed=None
     try:
-        with use(Path(root)/'threshold_cycle/main_stop_confirmation',
+        work_root=Path(preparation_root) if preparation_root else Path(root)/'threshold_cycle/main_stop_confirmation'
+        with postclose_session(root,day), use(work_root,
                  durable_limit=2*1024**3,temp_limit=2*1024**3):
+            # New grade-aware reservations consume the native cost producer,
+            # never caller-injected allocation dictionaries. Legacy contracts
+            # keep their exact-cost input contract without acquiring a grade.
+            if any('selection_cost_grade' in c for c in (experiments or {}).values()):
+                from src.engine.lifecycle.main_stop_research_cost import (
+                    selection_source_generation, selection_completed_evidence)
+                days=source_dates(root,source_paths,day)
+                native=selection_source_generation(root,days)
+                economic_sources=deepcopy(economic_sources or {})
+                economic_sources['native_selection']=native
+                economic_sources['files']={**economic_sources.get('files',{}),**native['files']}
+                economic_sources['cost_generations']=native['cost_generations']
+                completed=selection_completed_evidence(root,days)
+                owned_completed=completed
             return _publish(root,day,target,parents=parents,parent_receipt=parent_receipt,
                 source_paths=source_paths,snapshot_receipt=snapshot_receipt,
-                experiments=experiments,completed=completed,economic_sources=economic_sources)
+                experiments=experiments,completed=completed,economic_sources=economic_sources,
+                preparation_root=preparation_root)
     except (ValueError,MemoryError) as exc:
         if isinstance(exc,MemoryError) or any(word in str(exc) for word in ('budget','deadline','unbounded')):
             # Preserve the incumbent/pointers and completed per-position caches.
             # This bounded failure receipt is not a successful target policy.
-            _atomic(Path(root)/'report/main_stop_confirmation'/f'resume_{day}.json',dict(
+            failure_root=Path(preparation_root) if preparation_root else Path(root)/'report/main_stop_confirmation'
+            _atomic(failure_root/f'resume_{day}.json',dict(
                 schema='main_stop_resume_v1',source_date=day,target_date=target,status='incomplete',
                 reason=str(exc),parent_receipt=parent_receipt,policy_mutated=False,
                 target_policy_published=False,resume_root=str(Path(root)/'threshold_cycle/main_stop_confirmation'),
                 next_action='repair_budget_or_source_then_resume_same_verified_dependencies'))
         raise
-    finally:_DEADLINE.reset(token)
+    finally:
+        if owned_completed is not None:owned_completed.close()
+        _DEADLINE.reset(token)
 
 
 def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapshot_receipt,
-             experiments=None, completed=(), economic_sources=None):
+             experiments=None, completed=(), economic_sources=None,preparation_root=None):
     root=Path(root)
     checkpoint()
     algorithm_sha=code_sha()
@@ -671,12 +766,13 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
         source_catalog_sha256=source_catalog_sha,
         input_stat_identity=input_stat_identity))
     pointer_path=committed_path(root,day)
-    if pointer_path.exists():
+    if preparation_root is None and pointer_path.exists():
         pointer,_=bounded(pointer_path)
         if pointer['generation']==generation:
             previous,report,_,_=read_committed(root,day)
             return previous,report
-    directory=root/'threshold_cycle/main_stop_confirmation/generations'/generation
+    work_root=Path(preparation_root) if preparation_root else root/'threshold_cycle/main_stop_confirmation'
+    directory=work_root/'generations'/generation
     source_sha=policy.digest(inventory)
     if len(experiments or {}) > 1:raise ValueError("stop_one_cell_experiment_required")
     census=Counter();cells={};evidence=[]
@@ -686,6 +782,10 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
         db.execute('CREATE TABLE actual (id TEXT PRIMARY KEY, body TEXT, day TEXT)')
         for row in completed:
             checkpoint()
+            if row.get('native_batch_diagnostic'):
+                issue=row['native_batch_diagnostic']
+                census['economic_source:'+str(issue.get('status'))+':'+str(issue.get('reason'))]+=1
+                continue
             if not economic_sources.get('files'):raise ValueError('stop_completed_source_inventory_missing')
             key=str(row.get('id') or row.get('record_id') or '')
             if not key:raise ValueError('stop_completed_identity_missing')
@@ -693,13 +793,17 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
             if len(raw)>storage.RECORD_BYTES:raise ValueError('stop_completed_record_unbounded')
             db.execute('INSERT INTO actual VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body, day=excluded.day WHERE excluded.day>=day',
                 (key,raw.decode(),row['source_date']))
-        prepared_sources=source_index.prepare(root/'threshold_cycle/main_stop_confirmation',inventory,source_events,census)
+        prepared_sources=source_index.prepare(work_root,inventory,source_events,census)
         work={}
         for cell,parent in parents.items():
             grid=candidates(parent);counts=Counter();stats={name:dict(train_n=0,train_total=0,train_delta=0.,train_delta_sq=0.,holdout_n=0,holdout_total=0,holdout_delta=0.,holdout_delta_sq=0.,train_safety_regressions=0,holdout_safety_regressions=0) for name in grid if name!='parent'}
             contract=(experiments or {}).get(cell)
             if contract:
-                validate_experiment(contract,parent_sha=policy.digest(asdict(parent)),source_sha=source_sha,code_sha=algorithm_sha)
+                validator=validate_experiment
+                if preparation_root is not None:
+                    from src.engine.scalping.main_stop_experiment import validate_preparation
+                    validator=validate_preparation
+                validator(contract,parent_sha=policy.digest(asdict(parent)),source_sha=source_sha,code_sha=algorithm_sha)
                 from .operator_policy_succession import stop_key_authority
                 if stop_key_authority(root,target,contract['allowed_keys'])['sha256'] != contract['operator_lock_sha256']:
                     raise ValueError('stop_operator_sources_changed')
@@ -708,7 +812,14 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                 grid = {k:v for k,v in grid.items() if k=='parent' or (k.split(':')[0] in contract['allowed_keys']
                     and abs(getattr(v,k.split(':')[0])-getattr(parent,k.split(':')[0]))<=contract['max_daily_change'][k.split(':')[0]])}
                 stats = {k:v for k,v in stats.items() if k in grid}
-            work[cell]=(grid,counts,stats,contract)
+                if contract.get('schema') in {'main_stop_experiment_v2','main_stop_experiment_preparation_v1'}:
+                    if (contract['cell'] != cell or contract['candidate_grid'] !=
+                            {name:asdict(value) for name,value in grid.items()}):
+                        raise ValueError('stop_experiment_registered_grid_or_cell_changed')
+            from src.engine.scalping.main_stop_experiment import COST_GRADES
+            grade_stats={grade:deepcopy(stats) for grade in COST_GRADES}
+            work[cell]=(grid,counts,stats,contract,grade_stats)
+        observed_bounds = {}
         for position in source_index.positions(prepared_sources,directory,census,checkpoint=checkpoint):
             checkpoint()
             cell,key,first,last=position.cell,position.key,position.first,position.last
@@ -717,17 +828,33 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                 row=dict(position_key=key,cell=cell,status='source_gap',reason='scope_unmapped')
                 db.execute('INSERT INTO census VALUES (?,?)',(key,storage.encoded(row).decode()))
                 continue
-            grid,counts,stats,contract=work[cell]
+            grid,counts,stats,contract,grade_stats=work[cell]
             counts['positions']+=1
+            in_experiment_window = True
+            if contract and contract.get('schema') in {'main_stop_experiment_v2','main_stop_experiment_preparation_v1'}:
+                in_experiment_window = contract['source_start_at'] <= first <= last <= contract['source_end_at']
+                if in_experiment_window:
+                    previous_bounds = observed_bounds.get(cell, (first,last))
+                    observed_bounds[cell] = (min(first,previous_bounds[0]),max(last,previous_bounds[1]))
+                else:counts['outside_registered_experiment_window'] += 1
             path_rows=position.rows
             from src.engine.ai.holding_vote_replay_source import assemble_votes, PreparedVotes
             first_row = next(path_rows(), {})
-            source = first_row.get('holding_vote_source')
+            actual_row=db.execute('SELECT body FROM actual WHERE id=?',(str(first_row.get('record_id')),)).fetchone()
+            actual=json.loads(actual_row[0]) if actual_row else {}
+            economic=actual.get('main_stop_economic_source') or {}
+            from src.engine.scalping.main_stop_replay import prepare_terminal_prefix
+            support_soft_threshold=max(value.soft_stop_pct for value in grid.values())
+            _,terminal,terminal_diagnostics=prepare_terminal_prefix(path_rows,economic,parent=parents[cell],
+                support_soft_threshold=support_soft_threshold)
+            from src.engine.scalping.main_stop_replay import vote_assembly_source
+            source=vote_assembly_source(path_rows())
             reference = assemble_votes(root, directory, source, vote_sources) if source else None
             logical_votes = ({k:v for k,v in reference.items() if k!='root'} if reference else None)
             cache_key=policy.digest(dict(code=algorithm_sha,position=key,source=position.source_sha256,
-                votes=storage.logical_value(logical_votes),grid={k:asdict(v) for k,v in grid.items()}))
-            cache=root/'threshold_cycle/main_stop_confirmation/replay_cache'/f'{cache_key}.json'
+                votes=storage.logical_value(logical_votes),grid={k:asdict(v) for k,v in grid.items()},
+                terminal=terminal))
+            cache=work_root/'replay_cache'/f'{cache_key}.json'
             outcomes=None
             operating_contract=None
             if cache.exists():
@@ -750,8 +877,14 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                             except (ValueError, OSError, TypeError, KeyError):
                                 return dict(source_verified=False)
                         with position.materialized(directory) as prepared_rows:
-                            operating_contract=holding_contracts(prepared_rows())
-                            outcomes={name:replay(prepared_rows(),value, vote_reader=vote_reader) for name,value in grid.items()}
+                            # Prefix selection uses an original exact decision
+                            # row; no post-terminal quotes or interpolation.
+                            from src.engine.scalping.main_stop_replay import terminal_prefix
+                            def replay_rows():return terminal_prefix(prepared_rows(),terminal)
+                            operating_contract=holding_contracts(replay_rows())
+                            outcomes={name:replay(replay_rows(),value, vote_reader=vote_reader,
+                                terminal_outcome=terminal,support_soft_threshold=support_soft_threshold)
+                                for name,value in grid.items()}
                     finally:prepared.close()
                 cached=dict(cache_key=cache_key,outcomes=outcomes,operating_contract=operating_contract)
                 cached['sha256']=policy.digest(cached)
@@ -761,52 +894,92 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
             # Entire positions are split. No samples from one holding cross
             # train/holdout, and the full max grace horizon is embargoed.
             split=None
-            if contract:
+            if contract and in_experiment_window:
                 if last<contract['split_at']-contract['embargo_sec']:split='train'
                 elif first>contract['split_at']+contract['embargo_sec']:split='holdout'
-            actual_row=db.execute('SELECT body FROM actual WHERE id=?',(str(first_row.get('record_id')),)).fetchone()
-            actual=json.loads(actual_row[0]) if actual_row else {}
             cost=actual.get('actual_cost_reconciliation') or {}
             economic_source=(actual.get('status')=='COMPLETED'
                 and actual.get('main_automatic_management_allowed') is True
                 and cost.get('status')=='actual_cost_reconciled'
                 and all(policy.finite(cost.get(k)) for k in ('exact_pnl_krw','exact_profit_rate'))
                 and bool(cost.get('receipt_sha256') and cost.get('raw_sha256')))
-            counts['actual_cost_verified' if economic_source else 'actual_cost_or_terminal_gap']+=1
+            from src.engine.scalping.main_stop_experiment import selection_cost_grade,selection_quantity_status
+            from src.engine.lifecycle.main_stop_research_cost import selection_grade
+            # Quantity may become settled after the shared quote was captured.
+            # Bind economics to the first verified actual soft evaluation,
+            # retaining that evaluation's own clock and quantity receipt.
+            economic_binding=terminal_diagnostics.get('economic_binding_source')
+            native_grade=selection_grade(economic,economic_binding) if economic and economic_binding else None
+            selected_grade=selection_cost_grade(contract)
+            grade_aware=bool(contract and 'selection_cost_grade' in contract)
+            if grade_aware:economic_source=native_grade==selected_grade
+            quantity_status=selection_quantity_status(contract)
+            same_quantity_population=all(x.get('quantity_status')==quantity_status for x in outcomes.values())
+            counts['actual_cost_verified' if economic_source and selected_grade=='exact_execution'
+                   else 'cost_grade_verified:'+str(native_grade) if native_grade else 'actual_cost_or_terminal_gap']+=1
             common=economic_source and all(x['status']=='modeled' for x in outcomes.values())
-            if split:
-                for stat in stats.values():stat[split+'_total']+=1
-            if split and common:
-                for name,row in outcomes.items():
-                    if name=='parent':continue
-                    stat=stats[name];stat[split+'_n']+=1
-                    delta=row['modeled_net_krw']-incumbent['modeled_net_krw']
-                    stat[split+'_delta']+=delta
-                    stat[split+'_delta_sq']+=delta*delta
-                    stat[split+'_safety_regressions']+=int(row['mae_pct']<incumbent['mae_pct'] or row['exposure_sec']>incumbent['exposure_sec'])
+            if grade_aware:common=common and same_quantity_population
+            populations=[(stats,common,True)]
+            if grade_aware:
+                populations=[(group,native_grade==grade and same_quantity_population and all(x['status']=='modeled' for x in outcomes.values()),
+                              True) for grade,group in grade_stats.items()]
+            for grouped,admitted,in_population in populations:
+                if split and in_population:
+                    for stat in grouped.values():stat[split+'_total']+=1
+                if split and admitted:
+                    for name,row in outcomes.items():
+                        if name=='parent':continue
+                        stat=grouped[name];stat[split+'_n']+=1
+                        delta=row['modeled_net_krw']-incumbent['modeled_net_krw']
+                        stat[split+'_delta']+=delta
+                        stat[split+'_delta_sq']+=delta*delta
+                        stat[split+'_safety_regressions']+=int(row['mae_pct']<incumbent['mae_pct'] or row['exposure_sec']>incumbent['exposure_sec'])
             summary=dict(position_key=key,cell=cell,status=incumbent['status'],reason=incumbent['reason'],
-                actual_cost_verified=economic_source, split=split, common=common,
-                operating_contract=operating_contract)
+                actual_cost_verified=economic_source and selected_grade=='exact_execution', split=split, common=common,
+                economic_grade=native_grade, economic_artifact_sha256=economic.get('artifact_sha256'),
+                economic_source_status=economic.get('status'),economic_source_reason=economic.get('reason'),
+                quantity_status=incumbent.get('quantity_status'),same_quantity_population=same_quantity_population,
+                original_economics_scope=economic.get('original_economics_scope'),
+                actual_execution_cost=economic.get('actual_execution_cost') is True,
+                terminal_reason=terminal_diagnostics.get('terminal_reason'),
+                excluded_tail=terminal_diagnostics.get('excluded_tail'), operating_contract=operating_contract)
             db.execute('INSERT INTO census VALUES (?,?)',(key,storage.encoded(summary).decode()))
             evidence.append(summary)
             if len(evidence)>64:evidence.pop(0)
         for cell,parent in parents.items():
-            grid,counts,stats,contract=work[cell]
+            grid,counts,stats,contract,grade_stats=work[cell]
+            cost_selection=None
+            if contract and 'selection_cost_grade' in contract:
+                grade=selection_cost_grade(contract);stats=grade_stats[grade]
+                cost_selection=dict(schema='main_stop_cost_selection_v1',selection_cost_grade=grade,
+                    selection_quantity_status=selection_quantity_status(contract),
+                    comparison_metric='causal_modeled_exit_net_krw',actual_cost_usage='source_eligibility_only',
+                    denominator_policy='all_registered_positions_including_unknown_cost_or_source',
+                    actual_profit_claimed=False,aggregates_by_grade=grade_stats)
+                cost_selection['cost_selection_sha256']=policy.digest(cost_selection)
+            if contract and contract.get('schema') in {'main_stop_experiment_v2','main_stop_experiment_preparation_v1'}:
+                source_seal,_=bounded(contract['source_seal']['path'])
+                if observed_bounds.get(cell) != (source_seal['observed_start_at'],source_seal['observed_end_at']):
+                    raise ValueError('stop_experiment_observed_window_unverified')
             winner,status=choose(stats,contract)
             if census.get('unidentifiable_raw_rows') or census.get('unidentifiable'):
                 winner,status=None,'source_gap'
             selected=grid[winner] if winner else parent
-            authority={} if not winner else dict(allowed_keys=[winner.split(':')[0]],
+            authority={} if not winner or preparation_root is not None else dict(allowed_keys=[winner.split(':')[0]],
                 operator_lock_sha256=contract['operator_lock_sha256'],experiment_sha256=contract['experiment_sha256'],
                 source_sha256=source_sha,code_sha256=algorithm_sha,target_date=target,
                 parent_values_sha256=policy.digest(asdict(parent)))
             cells[cell]=dict(status=status,values=asdict(selected),parent_values=asdict(parent),authority=authority,
                 source_census=dict(counts),selection_evidence=dict(holdout_verified=bool(winner),
                     comparison_kind='modeled_alternative_exit_not_actual_profit',selected_candidate=winner,
-                    aggregates=stats,experiment=contract),rollback_values=asdict(parent))
+                    aggregates=stats,experiment=contract,cost_selection=cost_selection),rollback_values=asdict(parent))
         opportunity_census=storage.write_tree(directory,(json.loads(body) for body, in db.execute('SELECT body FROM census ORDER BY id')))
     if code_sha()!=algorithm_sha:raise ValueError('stop_code_changed_during_research')
     checkpoint()
+    if economic_sources.get('native_selection'):
+        from src.engine.lifecycle.main_stop_research_cost import selection_source_generation
+        if selection_source_generation(root,economic_sources['native_selection']['source_dates']) != economic_sources['native_selection']:
+            raise ValueError('stop_native_selection_cost_generation_changed')
     if vote_watch(root,day)!=vote_watch_sha:raise ValueError('stop_vote_source_set_changed')
     if policy.digest([str(p) for p in sources(root,day)])!=source_catalog_sha:
         raise ValueError('stop_raw_source_set_changed')
@@ -830,10 +1003,30 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
         census_dependencies=census_dependencies(directory,opportunity_census),
         dependency_stats=dependency_stats,
         census=dict(census),examples=evidence,actual_order_submitted=False,actual_profit_verified=False)
+    if preparation_root is not None:
+        from src.engine.scalping.main_stop_experiment import _write_immutable
+        prepared=dict(schema='main_stop_policy_preparation_v1',status='prepared_report_only',
+            data_root=str(root.absolute()),research=research,cells=cells,operator_sources=authority_sources,
+            allowed_runtime_apply=False,policy_mutated=False,target_policy_published=False,
+            required_next='finalized_prospective_experiment_and_full_performance_before_commit')
+        prepared['preparation_sha256']=policy.digest(prepared)
+        ref=_write_immutable(directory/'preparation.json',prepared,'preparation_sha256')
+        return prepared,ref
+    return _commit_candidate(root,day,target,directory,generation,research,cells,authority_sources)
+
+
+def _commit_candidate(root,day,target,directory,generation,research,cells,authority_sources):
+    """Small authority boundary; expensive preparation never enters this early."""
+    from src.engine.scalping.main_stop_experiment import require_native_publication_performance
+    for cell in cells.values():
+        if cell.get('status')=='selected':
+            evidence=cell.get('selection_evidence')
+            require_native_publication_performance(evidence.get('experiment') if isinstance(evidence,dict) else None,
+                selected_values=cell.get('values'))
     research_sha=policy.digest(research)
     bundle=dict(schema=policy.SCHEMA,source_date=day,target_date=target,valid_until=target,
-        research_sha256=research_sha,cells=cells,parent_receipt=parent_receipt,operator_sources=authority_sources,
-        code_sha256=algorithm_sha)
+        research_sha256=research_sha,cells=cells,parent_receipt=research['parent_receipt'],operator_sources=authority_sources,
+        code_sha256=research['code_sha256'])
     bundle['policy_sha256']=policy.digest(bundle);policy.validate_bundle(bundle,target)
     report=dict(research,research_sha256=research_sha,status='published_policy',policy_sha256=bundle['policy_sha256'])
     report['report_sha256']=policy.digest(report)
@@ -844,12 +1037,130 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     pointer=dict(schema='main_stop_committed_v1',source_date=day,target_date=target,generation=generation,
         policy_byte_sha256=hashlib.sha256((directory/'policy.json').read_bytes()).hexdigest(),
         report_byte_sha256=hashlib.sha256((directory/'report.json').read_bytes()).hexdigest())
+    # Verify the new immutable generation before changing any native alias or
+    # committed pointer. A failed final source check preserves the incumbent.
+    read_committed(root,day,pointer=pointer,verify_full=True)
     # Aliases are compatibility surfaces; readers use the single atomic pointer.
     _atomic(policy.policy_path(root,target),bundle);_atomic(report_path(root,day),report)
+    pointer_path=committed_path(root,day)
     _atomic(pointer_path,pointer)
-    read_committed(root,day,verify_full=True)
     _atomic(pointer_path.with_name('target_'+target+'.json'),pointer)
     return bundle,report
+
+
+def commit_prepared_policy(root, preparation, *, experiments):
+    """Consume native prepared aggregates after all final authority checks.
+
+    No performance verdict is injected or skipped. Source bytes and current
+    dependencies are revalidated, while the expensive price replay and cost
+    decoding are reused from the immutable native preparation generation.
+    """
+    from src.engine.scalping.main_stop_experiment import (
+        _read_reference,prepare_experiment,validate_cost_selection)
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    from src.engine.lifecycle.research_disk_budget import use
+    from src.engine.lifecycle.main_stop_research_cost import verify_selection_source_generation
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    from .operator_policy_succession import stop_key_authority
+    root=Path(root).absolute()
+    prepared=_read_reference(preparation,'main_stop_policy_preparation_v1','preparation_sha256')
+    if (prepared.get('status')!='prepared_report_only' or prepared.get('data_root')!=str(root)
+            or any(prepared.get(key) is not False for key in
+                   ('allowed_runtime_apply','policy_mutated','target_policy_published'))):
+        raise ValueError('stop_preparation_binding_invalid')
+    research=deepcopy(prepared['research']);cells=deepcopy(prepared['cells'])
+    day=research['source_date'];target=research['target_date'];algorithm=research['code_sha256']
+    inputs={key:cell['selection_evidence']['experiment'] for key,cell in cells.items()
+            if cell['selection_evidence'].get('experiment')}
+    if (set(cells)!={f'{r}|{m}' for r in policy.ROLES for m in policy.MARKETS}
+            or not isinstance(experiments,dict) or set(experiments)!=set(inputs) or len(inputs)!=1
+            or algorithm!=code_sha() or not '2026-09-29'<=day<target):
+        raise ValueError('stop_preparation_contract_set_changed')
+    token=_DEADLINE.set(time.monotonic()+MAX_RESEARCH_SECONDS)
+    try:
+        with postclose_session(root,day),use(root/'threshold_cycle/main_stop_confirmation',
+                durable_limit=2*1024**3,temp_limit=2*1024**3):
+            inventory=research['source_inventory']
+            catalog=[]
+            for path in sources(root,day):
+                logical=str(path)[:-3] if str(path).endswith('.jsonl.gz') else str(path)
+                catalog.append(logical if logical in inventory and not Path(logical).exists() else str(path))
+            if (research['source_sha256']!=policy.digest(inventory)
+                    or research['source_catalog_sha256']!=policy.digest(catalog)
+                    or research['vote_watch_sha256']!=vote_watch(root,day)
+                    or prepared['operator_sources']!=operator_sources(root,target)):
+                raise ValueError('stop_preparation_source_set_changed')
+            expected_files={**inventory,**research.get('vote_source_inventory',{}),
+                            **research.get('economic_sources',{}).get('files',{})}
+            observed={}
+            for name,expected in expected_files.items():
+                path=Path(name)
+                if (name in inventory and path.parent==root/'pipeline_events'
+                        and path.name.endswith('.jsonl') and not path.exists()):
+                    _archived_pipeline_source(path,expected,verify_full=True)
+                    observed[name]=research['dependency_stats'][name]
+                else:observed.update(verified_dependency_stats({name:expected}))
+            if observed!=research['dependency_stats']:
+                raise ValueError('stop_preparation_dependency_changed')
+            for key in ('parent_receipt','snapshot_receipt'):
+                ref=research[key]
+                if bounded(ref['path'],8*1024*1024)[1]!=ref['sha256']:
+                    raise ValueError('stop_preparation_native_source_changed')
+            economic=research.get('economic_sources') or {}
+            if economic.get('native_selection'):
+                verify_selection_source_generation(root,economic['native_selection'],verify_full=True)
+            for cost_day,expected in economic.get('cost_generations',{}).items():
+                if source_generation(root,cost_day)!=expected:
+                    raise ValueError('stop_preparation_cost_source_changed')
+            for key,cell in cells.items():
+                checkpoint()
+                if cell.get('authority')!={}:raise ValueError('stop_preparation_has_authority')
+                before=policy.StopValues.parse(cell['parent_values'])
+                if key not in inputs:
+                    expected_status=('source_gap' if research['census'].get('unidentifiable_raw_rows')
+                        or research['census'].get('unidentifiable') else 'baseline_carry')
+                    if cell['values']!=cell['parent_values'] or cell['status']!=expected_status:
+                        raise ValueError('stop_preparation_unregistered_change')
+                    continue
+                contract=validate_experiment(experiments[key],parent_sha=policy.digest(asdict(before)),
+                    source_sha=research['source_sha256'],code_sha=algorithm)
+                # Exact source seal, original registration and every parameter
+                # must match the computation performed before measurement.
+                if prepare_experiment(contract['preregistration'],contract['source_seal'])!=inputs[key]:
+                    raise ValueError('stop_preparation_experiment_changed')
+                auth=stop_key_authority(root,target,contract['allowed_keys'])
+                if auth['sha256']!=contract['operator_lock_sha256']:
+                    raise ValueError('stop_operator_sources_changed')
+                evidence=cell['selection_evidence']
+                validate_cost_selection(evidence,contract)
+                winner,status=choose(evidence['aggregates'],contract)
+                if research['census'].get('unidentifiable_raw_rows') or research['census'].get('unidentifiable'):
+                    winner,status=None,'source_gap'
+                values=asdict(candidates(before)[winner]) if winner else asdict(before)
+                if (status!=cell['status'] or winner!=evidence['selected_candidate'] or values!=cell['values']
+                        or evidence['holdout_verified'] is not bool(winner)):
+                    raise ValueError('stop_preparation_result_changed')
+                evidence['experiment']=contract
+                if winner:
+                    cell['authority']=dict(allowed_keys=[winner.split(':')[0]],
+                        operator_lock_sha256=contract['operator_lock_sha256'],
+                        experiment_sha256=contract['experiment_sha256'],source_sha256=research['source_sha256'],
+                        code_sha256=algorithm,target_date=target,parent_values_sha256=policy.digest(asdict(before)))
+            origin=Path(preparation['path']).parent
+            if census_dependencies(origin,research['opportunity_census'])!=research['census_dependencies']:
+                raise ValueError('stop_preparation_census_changed')
+            # A final generation names both native preparation and finalized
+            # contracts. Its terminal receipt refers one-way to these inputs.
+            generation=policy.digest(dict(preparation=preparation,experiments=experiments,
+                                         source_date=day,target_date=target,code=algorithm))
+            directory=root/'threshold_cycle/main_stop_confirmation/generations'/generation
+            storage.copy_tree(origin,directory,research['opportunity_census'])
+            research['census_dependencies']=census_dependencies(directory,research['opportunity_census'])
+            research['preparation_receipt']=deepcopy(preparation)
+            if algorithm!=code_sha():raise ValueError('stop_code_changed_during_research')
+            checkpoint()
+            return _commit_candidate(root,day,target,directory,generation,research,cells,prepared['operator_sources'])
+    finally:_DEADLINE.reset(token)
 
 
 def handoff(root,target, *, effective_env=None, require_terminal=False):
@@ -893,7 +1204,7 @@ def runtime_consumption(root, bundle):
         if not live:continue
         if len(current)>=8:raise ValueError('stop_live_loader_census_unbounded')
         loaded,loaded_sha=bounded(receipt['policy_file'])
-        policy.validate_bundle(loaded,bundle['target_date'])
+        policy.load_bundle(receipt['policy_file'],loaded_sha,bundle['target_date'])
         if (loaded_sha!=receipt['policy_byte_sha256']
                 or loaded['policy_sha256']!=receipt['policy_sha256']
                 or policy.digest({k:c['values'] for k,c in loaded['cells'].items()})!=receipt.get('loaded_cells_sha256')):
@@ -939,7 +1250,7 @@ def main():
         experiment_path=Path(DATA_DIR)/'runtime/research/main_stop_confirmation'/f'experiments_{args.date}.json'
         experiments=bounded(experiment_path)[0] if experiment_path.exists() else {}
         paths=sources(DATA_DIR,args.date)
-        days=sorted({p.name.split('_')[-1][:10] for p in paths})
+        days=source_dates(DATA_DIR,paths,args.date)
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
         files={}
         for day in days:

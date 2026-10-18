@@ -28283,6 +28283,53 @@ def _fast_exit_execution_route_fields(
     }
 
 
+def _main_stop_normal_exit_fields(stock, code, *, at, mark_price, exit_rule, evaluator='normal'):
+    """Observe either native normal-exit path without changing its disposition."""
+    if exit_rule not in {'scalp_trailing_take_profit', 'daily_limit_up_immediate_exit'}:
+        return {}
+    try:
+        from src.engine.scalping.main_stop_policy import normal_exit_decision_source, digest
+        from src.engine.scalping.main_stop_runtime_source import observation_view, bounded_observation_copy, ensure_observation_epoch
+        _main_stop_values(stock, at)
+        with ENTRY_LOCK:
+            ensure_observation_epoch(stock)
+            view = observation_view(stock)
+            context = (stock.get('_main_stop_quote_context_by_evaluator') or {}).get(evaluator)
+            if not isinstance(context, dict) or context.get('at') != at:
+                context = stock.get('_main_stop_current_quote_context')
+            context = bounded_observation_copy(context)
+            cached = bounded_observation_copy(stock.get('_main_stop_normal_exit_observation'))
+        allowed_evaluators = {'normal', 'normal_rest_recovery'} if evaluator == 'normal' else {'fast', 'fast_rest_confirmed'}
+        if (not isinstance(context, dict) or context.get('at') != at or not context.get('complete')
+                or context.get('evaluator') not in allowed_evaluators
+                or _is_scalp_simulated_position(view, view.get('strategy'))):
+            raise ValueError('stop_normal_exit_exact_quote_source_gap')
+        # Build from the entry view so the existing manual/quantity/pin checks
+        # also apply to reuse. Only an already observed identical decision may
+        # survive its own subsequent exit claim; never fabricate a new quote.
+        receipt = normal_exit_decision_source(view, at=at,
+            price=context['bid'] if exit_rule == 'scalp_trailing_take_profit' else mark_price,
+            executable_bid=context['bid'], mark_price=mark_price, exit_rule=exit_rule)
+        key = (view['_main_stop_observation_epoch'], evaluator, at, exit_rule,
+               digest(context), receipt['source_sha256'])
+        if not (isinstance(cached, dict) and cached.get('key') == key
+                and cached.get('receipt') == receipt):
+            if not _capture_main_stop_observation(stock, code, context, force=True, source_view=view):
+                raise ValueError('stop_normal_exit_exact_quote_source_gap')
+            with ENTRY_LOCK:
+                if (stock.get('_main_stop_observation_epoch') == view['_main_stop_observation_epoch']
+                        and (stock.get('main_stop_policy_pin') or {}).get('pin_sha256') == receipt['pin_sha256']
+                        and stock.get('buy_qty') == view.get('buy_qty') and stock.get('buy_price') == view.get('buy_price')):
+                    current = stock.get('_main_stop_normal_exit_observation') or {}
+                    current_at = (current.get('receipt') or {}).get('decision_at', 0)
+                    if current_at <= at:
+                        stock['_main_stop_normal_exit_observation'] = dict(key=key,receipt=receipt)
+        return {'main_stop_normal_exit_decision':json.dumps(
+            receipt, sort_keys=True, separators=(',', ':'), allow_nan=False)}
+    except Exception as exc:
+        return {'main_stop_normal_exit_decision_gap':type(exc).__name__ + ':' + str(exc)}
+
+
 def _dispatch_scalp_preset_exit(
     *,
     stock,
@@ -28315,6 +28362,41 @@ def _dispatch_scalp_preset_exit(
     fast_exit_broker_route = (
         str(stock.get("fast_exit_broker_route") or "").strip().upper()
     )
+    dispatch_exit_token = str(stock.get("exit_token") or "").strip()
+    dispatch_sell_generation = str(stock.get("sell_submit_generation") or "").strip()
+
+    def _dispatch_owner_current(*, allow_pending_cancel: bool = False) -> bool:
+        # Called only under ENTRY_LOCK. An earlier holding precheck is not
+        # ownership: the fast evaluator can claim while quote/account work runs.
+        current_token = str(stock.get("exit_token") or "").strip()
+        current_generation = str(stock.get("sell_submit_generation") or "").strip()
+        pending_fields = _active_sell_order_pending_fields(stock)
+        # Preserve the existing exact-cancel reconciliation entry. Its native
+        # owner must release the old generation before a replacement can pass
+        # the final check below; a positive inventory result cannot release it.
+        pending_cancel = bool(
+            allow_pending_cancel
+            and str(orig_ord_no or "").strip()
+            and dispatch_sell_generation
+            and current_generation == dispatch_sell_generation
+            and str(stock.get("preset_tp_ord_no") or "").strip() == str(orig_ord_no).strip()
+            and all(field in {"sell_odno", "sell_ord_no"}
+                    and str(stock.get(field) or "").strip() == str(orig_ord_no).strip()
+                    for field in pending_fields)
+        )
+        return bool(
+            not stock.get("manual_control_hard_stop_handoff_inflight")
+            and not stock.get("manual_control_exclusion_blocked")
+            and str(stock.get("status") or "").strip().upper() == "HOLDING"
+            and _safe_int(stock.get("buy_qty"), 0) == expected_qty
+            and (pending_cancel or (not stock.get("sell_submit_pending")
+                                    and not current_generation and not pending_fields))
+            and (
+                bool(dispatch_exit_token) and current_token == dispatch_exit_token
+                if fast_exit
+                else not current_token and not stock.get("exit_requested")
+            )
+        )
 
     def _defer_fast_exit_retry(
         retry_reason: str,
@@ -28325,16 +28407,19 @@ def _dispatch_scalp_preset_exit(
         if not fast_exit:
             return False
         retry_at = float(now_ts) + max(0.25, float(retry_delay_sec))
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": "HOLDING",
-                "exit_requested": False,
-                "fast_exit_retry_pending": True,
-                "fast_exit_retry_reason": retry_reason,
-                "fast_exit_retry_at": retry_at,
-            },
-        )
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "HOLDING",
+                    "exit_requested": False,
+                    "fast_exit_retry_pending": True,
+                    "fast_exit_retry_reason": retry_reason,
+                    "fast_exit_retry_at": retry_at,
+                },
+            )
         _log_holding_pipeline(
             stock,
             code,
@@ -28361,16 +28446,23 @@ def _dispatch_scalp_preset_exit(
         )
         return True
 
-    _remember_exit_context(
-        stock=stock,
-        exit_rule=exit_rule,
-        reason=reason,
-        peak_profit=peak_profit,
-        held_sec=preset_held_sec,
-        current_ai_score=preset_ai_score,
-    )
-    stock["last_exit_reason"] = reason
-    exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+    with ENTRY_LOCK:
+        if not _dispatch_owner_current(allow_pending_cancel=True):
+            return False
+        _remember_exit_context(
+            stock=stock,
+            exit_rule=exit_rule,
+            reason=reason,
+            peak_profit=peak_profit,
+            held_sec=preset_held_sec,
+            current_ai_score=preset_ai_score,
+        )
+        stock["last_exit_reason"] = reason
+        exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+    exit_fields = dict(extra_fields or {})
+    exit_fields.pop('main_stop_normal_exit_decision', None)
+    exit_fields.update(_main_stop_normal_exit_fields(stock, code, at=now_ts,
+        mark_price=curr_p, exit_rule=exit_rule, evaluator='fast' if fast_exit else 'normal'))
     _log_holding_pipeline(
         stock,
         code,
@@ -28386,7 +28478,7 @@ def _dispatch_scalp_preset_exit(
         curr_price=curr_p,
         buy_price=buy_p,
         buy_qty=expected_qty,
-        **(extra_fields or {}),
+        **exit_fields,
     )
 
     if _is_scalp_simulated_position(stock, strategy):
@@ -28406,19 +28498,22 @@ def _dispatch_scalp_preset_exit(
         str(orig_ord_no or "").strip()
         and not str(stock.get("sell_submit_generation") or "").strip()
     ):
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": "SELL_ORDERED",
-                "exit_requested": True,
-                "sell_cancel_reconciliation_required": True,
-                "sell_cancel_reconciliation_source": (
-                    "legacy_preset_tp_missing_exact_pending_generation"
-                ),
-                "fast_exit_retry_pending": bool(fast_exit),
-                "fast_exit_retry_reason": "legacy_preset_tp_custody_interlock",
-            },
-        )
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "SELL_ORDERED",
+                    "exit_requested": True,
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "legacy_preset_tp_missing_exact_pending_generation"
+                    ),
+                    "fast_exit_retry_pending": bool(fast_exit),
+                    "fast_exit_retry_reason": "legacy_preset_tp_custody_interlock",
+                },
+            )
         _log_holding_pipeline(
             stock,
             code,
@@ -28596,36 +28691,39 @@ def _dispatch_scalp_preset_exit(
             1.0,
             _safe_float(_rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30), 30.0),
         )
-        unresolved_sell_exposure = bool(
-            str(orig_ord_no or "").strip()
-            or stock.get("sell_submit_pending") is True
-            or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
-        )
-        preserved_status = "SELL_ORDERED" if unresolved_sell_exposure else "HOLDING"
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": preserved_status,
-                "exit_requested": bool(unresolved_sell_exposure),
-                "sell_cancel_reconciliation_required": True,
-                "sell_cancel_reconciliation_source": remaining_confirmation_source,
-                "sell_cancel_reconciliation_retry_at": retry_at,
-                "fast_exit_retry_pending": bool(fast_exit),
-                "fast_exit_retry_reason": "cancel_inventory_confirmation_unknown",
-                "fast_exit_retry_at": retry_at,
-            },
-        )
-        if target_id and DB is not None:
-            try:
-                with DB.get_session() as session:
-                    session.query(RecommendationHistory).filter_by(id=target_id).update(
-                        {"status": preserved_status}
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            unresolved_sell_exposure = bool(
+                str(orig_ord_no or "").strip()
+                or stock.get("sell_submit_pending") is True
+                or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
+            )
+            preserved_status = "SELL_ORDERED" if unresolved_sell_exposure else "HOLDING"
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": preserved_status,
+                    "exit_requested": bool(unresolved_sell_exposure),
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": remaining_confirmation_source,
+                    "sell_cancel_reconciliation_retry_at": retry_at,
+                    "fast_exit_retry_pending": bool(fast_exit),
+                    "fast_exit_retry_reason": "cancel_inventory_confirmation_unknown",
+                    "fast_exit_retry_at": retry_at,
+                },
+            )
+            if target_id and DB is not None:
+                try:
+                    with DB.get_session() as session:
+                        session.query(RecommendationHistory).filter_by(id=target_id).update(
+                            {"status": preserved_status}
+                        )
+                except Exception as exc:
+                    log_error(
+                        f"[SELL_CANCEL_RECONCILIATION] {stock.get('name')}({code}) "
+                        f"DB HOLDING preserve failed: {exc}"
                     )
-            except Exception as exc:
-                log_error(
-                    f"[SELL_CANCEL_RECONCILIATION] {stock.get('name')}({code}) "
-                    f"DB HOLDING preserve failed: {exc}"
-                )
         _log_holding_pipeline(
             stock,
             code,
@@ -28647,28 +28745,31 @@ def _dispatch_scalp_preset_exit(
         )
         return
     if remaining_confirmation_state == "verified_zero":
-        set_fields = {
-            "status": "SELL_ORDERED",
-            "exit_requested": True,
-            "sell_cancel_reconciliation_required": True,
-            "sell_cancel_reconciliation_source": remaining_confirmation_source,
-            "sell_cancel_reconciliation_retry_at": float(now_ts)
-            + max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30)),
-        }
-        if orig_ord_no:
-            set_fields["sell_odno"] = str(orig_ord_no)
-        _mutate_stock_state(stock, set_fields=set_fields)
-        if target_id and DB is not None:
-            try:
-                with DB.get_session() as session:
-                    session.query(RecommendationHistory).filter_by(id=target_id).update(
-                        {"status": "SELL_ORDERED"}
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            set_fields = {
+                "status": "SELL_ORDERED",
+                "exit_requested": True,
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": remaining_confirmation_source,
+                "sell_cancel_reconciliation_retry_at": float(now_ts)
+                + max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30)),
+            }
+            if orig_ord_no:
+                set_fields["sell_odno"] = str(orig_ord_no)
+            _mutate_stock_state(stock, set_fields=set_fields)
+            if target_id and DB is not None:
+                try:
+                    with DB.get_session() as session:
+                        session.query(RecommendationHistory).filter_by(id=target_id).update(
+                            {"status": "SELL_ORDERED"}
+                        )
+                except Exception as exc:
+                    log_error(
+                        f"[SELL_CANCEL_ZERO_INVENTORY] {stock.get('name')}({code}) "
+                        f"DB reconciliation state failed: {exc}"
                     )
-            except Exception as exc:
-                log_error(
-                    f"[SELL_CANCEL_ZERO_INVENTORY] {stock.get('name')}({code}) "
-                    f"DB reconciliation state failed: {exc}"
-                )
         _log_holding_pipeline(
             stock,
             code,
@@ -28752,29 +28853,29 @@ def _dispatch_scalp_preset_exit(
             .strip()
             .upper()
         )
-        sell_submit_context_fields = _new_sell_submit_context_fields(
-            stock,
-            code,
-            requested_qty=rem_qty,
-            started_at=exit_order_sent_at,
-            intended_route=intended_sell_route,
-            intended_effective_venue=_holding_sell_execution_cohort(
-                exit_order_sent_at,
-                intended_sell_route,
-            ),
-            intended_session_bucket=_holding_sell_execution_session_bucket(
-                exit_order_sent_at
-            ),
-        )
-        sell_submit_generation = str(
-            sell_submit_context_fields["sell_submit_generation"]
-        )
-        sell_submit_context_sha256 = str(
-            sell_submit_context_fields["sell_submit_context_sha256"]
-        )
         with ENTRY_LOCK:
-            if stock.get("manual_control_hard_stop_handoff_inflight") or stock.get("manual_control_exclusion_blocked"):
+            if not _dispatch_owner_current():
                 return False
+            sell_submit_context_fields = _new_sell_submit_context_fields(
+                stock,
+                code,
+                requested_qty=rem_qty,
+                started_at=exit_order_sent_at,
+                intended_route=intended_sell_route,
+                intended_effective_venue=_holding_sell_execution_cohort(
+                    exit_order_sent_at,
+                    intended_sell_route,
+                ),
+                intended_session_bucket=_holding_sell_execution_session_bucket(
+                    exit_order_sent_at
+                ),
+            )
+            sell_submit_generation = str(
+                sell_submit_context_fields["sell_submit_generation"]
+            )
+            sell_submit_context_sha256 = str(
+                sell_submit_context_fields["sell_submit_context_sha256"]
+            )
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -29335,6 +29436,474 @@ def _observe_scalp_trailing_first_crossing(stock, code, *, mechanical_fields,
             state['inflight'] = False
 
 
+def _main_stop_quote_context(stock, code, *, snapshot, quote_receipt, executable_bid,
+        bid_source, rest_snapshot, quality, nxt_quality, quote_received_at, bid_received_at,
+        market_type, exit_allowed_by_clock, price_usable, now_ts, evaluator,
+        holding_profit_rate_at_eval):
+    """Share exact existing quote/depth validation across native exit branches."""
+    depth_receipt = quote_receipt.get("depth_receipt")
+    depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
+    depth_row = None
+    route_records = snapshot.get("realtime_type_snapshots_by_route")
+    if isinstance(route_records, dict):
+        for records in route_records.values():
+            row = records.get("0D") if isinstance(records, dict) else None
+            if (isinstance(row, dict)
+                    and all(row.get(key) == depth_receipt.get(key)
+                            for key in ("item", "market_route",
+                                        "transport_epoch", "observed_epoch"))
+                    and row.get("item") and row.get("observed_epoch") is not None):
+                depth_row = row
+                break
+    def exact_bid_depth(source: dict, bid: int) -> int:
+        book = source.get("orderbook")
+        bids = book.get("bids") if isinstance(book, dict) else None
+        level = bids[0] if isinstance(bids, list) and bids else None
+        if isinstance(level, dict):
+            if _safe_int(level.get("price"), 0) != bid:
+                return 0
+            raw = level.get("volume") if "volume" in level else level.get("qty")
+        elif _safe_int(source.get("best_bid"), 0) == bid:
+            raw = source.get("best_bid_qty")
+        else:
+            return 0
+        amount = _safe_float(raw, None)
+        return int(amount) if amount is not None and amount > 0 and amount.is_integer() else 0
+    if bid_source == "fresh_rest_executable_bid":
+        executable_bid_qty = exact_bid_depth(rest_snapshot or {}, executable_bid)
+    elif depth_row is not None:
+        executable_bid_qty = exact_bid_depth(depth_row, executable_bid)
+    else:
+        executable_bid_qty = 0
+    quote_state_for_tuning = str(
+        quality.get("quote_consistency_state") or ""
+    ).lower()
+    if bid_source == "fresh_rest_executable_bid":
+        bid_identity_proven = bool(
+            (rest_snapshot or {}).get("source") == "ka10004_rest_orderbook"
+            and str((rest_snapshot or {}).get("stock_code") or "").strip()[:6]
+            == str(code or "").strip()[:6]
+            and (rest_snapshot or {}).get("request_code")
+        )
+    elif bid_source == "fresh_nxt_0d_executable_bid":
+        bid_identity_proven = bool(
+            nxt_quality.get("nxt_trailing_bid_guard_applied") is True
+            and depth_row is not None
+            and _safe_int(depth_row.get("best_bid"), executable_bid)
+                == executable_bid
+            and _safe_float(depth_row.get("observed_epoch"), 0.0)
+                == quote_received_at
+            and str(depth_row.get("item") or "")
+                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_item") or "")
+            and str(depth_row.get("market_route") or "")
+                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_route") or "")
+        )
+    else:
+        bid_identity_proven = bool(
+            quote_receipt.get("source_type") in {"0B", "0D"}
+            and quote_receipt.get("item")
+            and quote_receipt.get("market_route")
+            and quote_receipt.get("transport_epoch") is not None
+            and _safe_int(quote_receipt.get("best_bid"), 0) == executable_bid
+            and depth_receipt.get("item") == quote_receipt.get("item")
+            and depth_receipt.get("market_route") == quote_receipt.get("market_route")
+            and depth_receipt.get("transport_epoch")
+                == quote_receipt.get("transport_epoch")
+            and _safe_float(depth_receipt.get("observed_epoch"), 0.0)
+                == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
+            and depth_row is not None
+        )
+    config = QuoteConsistencyConfig.from_env()
+    quote_max_age_sec = (config.max_rest_age_ms if bid_source == 'fresh_rest_executable_bid'
+                         else config.max_ws_age_ms) / 1000.0
+    grid_source_complete = bool(
+        market_type and exit_allowed_by_clock and bid_received_at is not None
+        and 0 <= now_ts - bid_received_at <= quote_max_age_sec
+        and price_usable and executable_bid_qty > 0
+        and bid_identity_proven
+        and not stock.get("scalp_trailing_arm_persist_gap")
+        and quote_state_for_tuning not in {
+            "", "missing", "diverged", "blocked", "stale", "conflict",
+            "invalid", "unavailable",
+        }
+        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
+    )
+    # Retain only the current validated evaluation context. A normal exit may
+    # capture this exact quote once even inside the regular one-second cadence.
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    stop_context = dict(at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
+        quote=quote_receipt, complete=grid_source_complete, market=market_type,
+        evaluator=evaluator, decision_profit_pct=holding_profit_rate_at_eval,
+        position_key=position_cycle_id(stock), quantity=stock.get('buy_qty'),
+        buy_price=stock.get('buy_price'), pending_exit=bool(stock.get('exit_requested')),
+        quote_max_age_sec=quote_max_age_sec)
+    stop_context.update(bid_identity_proven=bid_identity_proven,
+        quote_state_for_tuning=quote_state_for_tuning,
+        operational_ws_0d_best_bid=_safe_int(depth_row.get('best_bid'), 0) if depth_row else None,
+        operational_ws_0d_best_bid_qty=exact_bid_depth(depth_row, _safe_int(depth_row.get('best_bid'), 0)) if depth_row else None,
+        operational_rest_best_bid_qty=exact_bid_depth(rest_snapshot, _safe_int(rest_snapshot.get('best_bid'), 0)) if rest_snapshot else None)
+    return stop_context
+
+
+def _prepare_main_stop_limit_up_quote(stock, code, *, ws_data, quote_fields, now_ts, profit_rate):
+    """Observe the already evaluated quote before early normal limit-up exits."""
+    try:
+        bid, source = _trusted_scalp_trailing_bid(ws_data, code=code,
+            quote_fields=quote_fields, now_ts=now_ts)
+        times = ws_data.get('last_realtime_type_ts')
+        received_at = _safe_float(times.get('0D') if isinstance(times, dict)
+            else ws_data.get('last_ws_update_ts'), None)
+        if received_at is not None and not 0 < received_at <= now_ts:
+            received_at = None
+        session = session_contract.resolve_market_session(datetime.fromtimestamp(float(now_ts), tz=_KST))
+        context = _main_stop_quote_context(stock, code, snapshot=ws_data,
+            quote_receipt=ws_quote_source_receipt(ws_data, now_ts=now_ts), executable_bid=bid,
+            bid_source=source, rest_snapshot=None, quality=quote_fields, nxt_quality={},
+            quote_received_at=received_at,
+            bid_received_at=received_at if source == 'fresh_ws_executable_bid' else None,
+            market_type=scalp_trailing_market_type_at(now_ts),
+            exit_allowed_by_clock=not session.blocker and session.exit_allowed_by_clock,
+            price_usable=bid > 0, now_ts=now_ts, evaluator='normal',
+            holding_profit_rate_at_eval=profit_rate)
+        _store_main_stop_quote_context(stock, context)
+    except Exception as exc:
+        with ENTRY_LOCK:
+            slots = dict(stock.get('_main_stop_quote_context_by_evaluator') or {})
+            slots.pop('normal', None)
+            stock['_main_stop_quote_context_by_evaluator'] = slots
+            current = stock.get('_main_stop_current_quote_context')
+            if not isinstance(current, dict) or current.get('evaluator') in {'normal', 'normal_rest_recovery'}:
+                stock.pop('_main_stop_current_quote_context', None)
+            stock['main_stop_source_gap'] = 'limit_up_quote:' + type(exc).__name__
+
+
+def _store_main_stop_quote_context(stock, context):
+    """Retain at most one exact context per native evaluator, never a timeline."""
+    from src.engine.scalping.main_stop_runtime_source import bounded_observation_copy
+    evaluator = context.get('evaluator')
+    slot = {'normal': 'normal', 'normal_rest_recovery': 'normal',
+            'fast': 'fast', 'fast_rest_confirmed': 'fast', 'fast_prearm': 'fast_prearm'}.get(evaluator)
+    if slot is None:
+        raise ValueError('native_quote_context_evaluator_invalid')
+    frozen = bounded_observation_copy(context)
+    with ENTRY_LOCK:
+        slots = stock.get('_main_stop_quote_context_by_evaluator') or {}
+        slots = {key: value for key, value in slots.items() if key in {'normal', 'fast', 'fast_prearm'}}
+        slots[slot] = frozen
+        stock['_main_stop_quote_context_by_evaluator'] = slots
+        stock['_main_stop_current_quote_context'] = frozen
+    return frozen
+
+
+def _record_main_stop_observation_failure(stock, view, reason, *, evaluation=False):
+    """Keep old-lifecycle source failure visible without censoring a new BUY."""
+    with ENTRY_LOCK:
+        epoch = view.get('_main_stop_observation_epoch') if isinstance(view, dict) else None
+        if epoch is not None and stock.get('_main_stop_observation_epoch') != epoch:
+            key = 'main_stop_source_superseded_rejected_count'
+            stock[key] = stock.get(key, 0) + 1
+            stock['main_stop_source_superseded_rejection'] = dict(
+                record_id=view.get('id'), source_lifecycle_epoch=epoch,
+                kind='evaluation' if evaluation else 'quote', reason=str(reason)[:160])
+            return
+        if evaluation:
+            stock['main_stop_evaluation_source_gap'] = str(reason)[:160]
+            key = 'main_stop_evaluation_rejected_count'
+            stock[key] = stock.get(key, 0) + 1
+        else:
+            stock['main_stop_source_gap'] = str(reason)[:160]
+            if reason == 'observation_queue_rejected':
+                key = 'main_stop_source_rejected_count'
+                stock[key] = stock.get(key, 0) + 1
+
+
+def _capture_main_stop_observation(stock, code, context, *, force=False, decision_capture=False,
+                                   source_view=None, return_source=False, source_reserved=False):
+    """Build from this evaluator's view; publish only bounded immutable sources.
+
+    Disk-backed first-pin recovery precedes the short snapshot/counter lock.
+    Builders, hashes and queue admission run outside the trading state lock.
+    """
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    from src.engine.scalping.main_stop_runtime_source import (
+        observation_view, bounded_observation_copy, reserve_observation_generations, ensure_observation_epoch,
+        observation_source_identity)
+    if not isinstance(context, dict):
+        return False
+    now_ts = context['at']
+    view = None
+    try:
+        if source_view is None:
+            _main_stop_values(stock, now_ts)
+        with ENTRY_LOCK:
+            ensure_observation_epoch(stock)
+            view = source_view if source_view is not None else dict(id=stock.get('id'),
+                _main_stop_observation_epoch=stock['_main_stop_observation_epoch'])
+            if source_view is None:
+                view = observation_view(stock)
+            context = bounded_observation_copy(context)
+            quote = context['quote']
+            automatic = not bool(view.get('manual_control_exclusion_blocked')
+                or view.get('manual_control_hard_stop_handoff_pending')
+                or view.get('manual_control_hard_stop_handoff_inflight'))
+            key = (now_ts, context['bid'], context['position_key'], context['quantity'], context['buy_price'],
+                   (view.get('main_stop_policy_pin') or {}).get('pin_sha256'), context['complete'],
+                   quote.get('item'), quote.get('market_route'), quote.get('transport_epoch'), quote.get('observed_epoch'),
+                   bool(view.get('exit_requested')), bool(view.get('manual_control_exclusion_blocked')), automatic,
+                   view.get('add_count', 0), bool(view.get('pending_add_qty') or view.get('pending_add_ord_no') or view.get('pending_add_ord_nos')),
+                   view.get('trailing_stop_price'))
+            if (context['position_key'] != position_cycle_id(view)
+                    or context['quantity'] != view.get('buy_qty') or context['buy_price'] != view.get('buy_price')):
+                return False
+            if (stock.get('_main_stop_observation_epoch') != view.get('_main_stop_observation_epoch')
+                    or position_cycle_id(stock) != position_cycle_id(view)
+                    or (stock.get('main_stop_policy_pin') or {}).get('pin_sha256')
+                        != (view.get('main_stop_policy_pin') or {}).get('pin_sha256')):
+                raise ValueError('native_observation_position_generation_changed')
+            if not source_reserved and stock.get('_main_stop_last_captured_quote') == key:
+                previous = stock.get('_main_stop_last_quote_source')
+                return bounded_observation_copy(previous) if return_source else True
+            previous_key = stock.get('_main_stop_last_captured_quote')
+            if force:
+                if previous_key and (previous_key[0] > now_ts or (previous_key[0] == now_ts and not decision_capture)):
+                    # A different evaluator's newer quote cannot invalidate an
+                    # actually reached older stage with its own original input.
+                    if not decision_capture:
+                        return False
+            if (view.get('strategy') != 'SCALPING' or _safe_int(view.get('buy_qty'), 0) <= 0
+                    or _is_scalp_simulated_position(view, 'SCALPING')
+                    or (force and not decision_capture and (not context['complete'] or context['pending_exit'] or view.get('exit_requested')))
+                    or (not force and now_ts - _safe_float(stock.get('main_stop_source_at'), 0) < 1.0)):
+                return False
+            if not source_reserved:
+                reserve_observation_generations(stock, view, quote=True)
+            else:
+                ticket = view.pop('_main_stop_quote_reservation', None)
+                keys = ('_main_stop_quote_generation', '_main_stop_source_observation_generation')
+                if (type(ticket) is not tuple or len(ticket) != 2
+                        or any(type(value) is not int or value <= 0 for value in ticket)
+                        or any(view.get(key) != value - 1 or type(view.get(key)) is not int
+                               or type(stock.get(key)) is not int or stock[key] < value
+                               for key, value in zip(keys, ticket))):
+                    raise ValueError('native_observation_reservation_invalid')
+            stock['main_stop_source_at'] = max(now_ts, _safe_float(stock.get('main_stop_source_at'), 0))
+        if force:
+            from src.engine.scalping.main_stop_policy import pin_values
+            pin_values(view.get('main_stop_policy_pin'), context['position_key'])
+        executable_bid, executable_bid_qty = context['bid'], context['bid_qty']
+        quote_receipt, grid_source_complete = context['quote'], context['complete']
+        market_type, evaluator = context['market'], context['evaluator']
+        holding_profit_rate_at_eval = context['decision_profit_pct']
+        from src.engine.scalping.main_stop_policy import source_row, enqueue_source, digest
+        from src.engine.ai.holding_vote_replay_source import runtime_source
+        vote_source = runtime_source(view,
+            position_key=_scalp_holding_source_position_key(view, code),
+            buy_fill_identity=buy_fill_identity_from_runtime(view),
+            market=market_type, now=now_ts,
+            policy=_holding_path_policy_for("EXIT_SOFT_STOP", market_type),
+            data_root=DATA_DIR, model=str(getattr(TRADING_RULES,"OPENAI_HOLDING_EXIT_VOTE_MODEL","gpt-5.4-nano")),
+            path_id="EXIT_SOFT_STOP")
+        post_add_vote_source = runtime_source(view,
+            position_key=_scalp_holding_source_position_key(view, code),
+            buy_fill_identity=buy_fill_identity_from_runtime(view),
+            market=market_type, now=now_ts,
+            policy=_holding_path_policy_for('EXIT_POST_ADD_FAIL', market_type),
+            data_root=DATA_DIR, model=vote_source['model'], path_id='EXIT_POST_ADD_FAIL')
+        features=view.get('last_reversal_features') or {}
+        post_add_inputs=dict(active=view.get('reversal_add_state')=='POST_ADD_EVAL',
+            executed_at=view.get('reversal_add_executed_at'),
+            floor=float(view.get('reversal_add_profit_floor',-1.0)),
+            eval_sec=_rule_int('REVERSAL_ADD_POST_EVAL_SEC',25),
+            feature_usable=not bool(reversal_feature_source_quality(features).get('reversal_feature_stale')) if features else True,
+            large_sell_print=features.get('large_sell_print_detected',False),
+            tick_acceleration=features.get('tick_acceleration_ratio',1.0))
+        row = source_row(view, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
+            quote=quote_receipt, coverage_complete=grid_source_complete,
+            cost_model=view.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
+            native_decision_required=True, capture_evaluator=evaluator,
+            post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
+            preset_stop=_main_stop_preset_observation(view, now_ts=now_ts, evaluator=evaluator),
+            decision_profit_pct=holding_profit_rate_at_eval,
+            automatic_management_allowed=not bool(view.get("manual_control_exclusion_blocked")
+                or view.get("manual_control_hard_stop_handoff_pending")
+                or view.get("manual_control_hard_stop_handoff_inflight")),
+            runtime_flags=dict(
+                grace_enabled=_rule_bool("SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)
+                    and not bool(view.get("main_stop_pin_persistence") or view.get("main_stop_clock_unobserved")),
+                protect_enabled=_env_or_rule_bool("SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True),
+                handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False),
+                vote_max_worsen_pct=_rule("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.8)))
+        row = copy.deepcopy(row)
+        row['state_snapshot_basis'] = 'actual_evaluator_entry' if source_view is not None else 'quote_capture_entry'
+        row.update(observation_source_identity(view))
+        accepted = enqueue_source(stock, code, row)
+        sealed = dict(row, source_sha256=digest(row))
+        with ENTRY_LOCK:
+            if not accepted:
+                _record_main_stop_observation_failure(stock, view, 'observation_queue_rejected')
+            elif (stock.get('_main_stop_observation_epoch') == view['_main_stop_observation_epoch']
+                    and position_cycle_id(stock) == row['position_key']
+                    and (stock.get('main_stop_policy_pin') or {}).get('pin_sha256') == row['pin_sha256']):
+                # This cache is bound to the immutable pin, independent of the
+                # mutable quote. Preserve the pre-existing allocation/hash reuse.
+                stock['_main_stop_source_values'] = view['_main_stop_source_values']
+                current = stock.get('_main_stop_last_quote_source') or {}
+                if current.get('quote_generation', 0) <= row['quote_generation']:
+                    stock['_main_stop_last_captured_quote'] = key
+                    stock['_main_stop_last_quote_source'] = sealed
+        return sealed if accepted and return_source else accepted
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _record_main_stop_observation_failure(stock, view, type(exc).__name__)
+    return False
+
+
+
+def _observe_main_stop_evaluation(stock, code, *, at, evaluator, stage, decision_price,
+        decision_price_basis, decision_profit_pct, priority_status='reached', preset_stop=None,
+        preset_predecessor=None, legacy_broker_recovered=False, decision_inputs=None):
+    """Capture an actually reached native stage without changing its disposition.
+
+    A normal call owns its own receipt even when fast already captured this
+    quote inside the shared one-second observation cadence. No new quote/IO.
+    """
+    view = None
+    try:
+        from src.engine.scalping.main_stop_runtime_source import (evaluation_source, evaluation_reference,
+            observation_view, bounded_observation_copy, reserve_observation_generations, ensure_observation_epoch,
+            observation_source_identity, reserve_evaluation_lane)
+        from src.engine.scalping.main_stop_policy import enqueue_source, digest
+        from src.engine.scalping.position_peak_ledger import position_cycle_id
+        _main_stop_values(stock, at)
+        with ENTRY_LOCK:
+            ensure_observation_epoch(stock)
+            view = dict(id=stock.get('id'), _main_stop_observation_epoch=stock['_main_stop_observation_epoch'])
+            view = observation_view(stock)
+            slots = stock.get('_main_stop_quote_context_by_evaluator') or {}
+            context = slots.get(evaluator)
+            if not isinstance(context, dict) or context.get('at') != at:
+                context = stock.get('_main_stop_current_quote_context')
+            context = bounded_observation_copy(context)
+            previous = bounded_observation_copy(stock.get('_main_stop_last_quote_source'))
+            decision_inputs = bounded_observation_copy(decision_inputs)
+            preset_stop = bounded_observation_copy(preset_stop)
+            preset_predecessor = bounded_observation_copy(preset_predecessor)
+            if (not isinstance(context, dict) or context.get('at') != at or context.get('evaluator') != evaluator):
+                context = dict(at=at, evaluator=evaluator, quote={}, bid=None, bid_qty=None,
+                    complete=False, market=(view.get('main_stop_policy_pin') or {}).get('market'),
+                    position_key=position_cycle_id(view), quantity=view.get('buy_qty'),
+                    buy_price=view.get('buy_price'), pending_exit=bool(view.get('exit_requested')),
+                    decision_profit_pct=decision_profit_pct,
+                    quote_max_age_sec=QuoteConsistencyConfig.from_env().max_ws_age_ms / 1000.0)
+            # Only quote/position facts are shared. Actual stage, clock, price basis
+            # and predecessor are always freshly supplied by the native caller.
+            shared = isinstance(previous, dict) and previous.get('at', float('inf')) <= at and all((
+                all(previous.get(key) == value for key,value in observation_source_identity(view).items()),
+                previous.get('position_key') == context['position_key'],
+                previous.get('quantity') == context['quantity'],
+                previous.get('buy_basis_krw') == context['quantity'] * context['buy_price'],
+                previous.get('pin_sha256') == (view.get('main_stop_policy_pin') or {}).get('pin_sha256'),
+                previous.get('bid') == context['bid'], previous.get('bid_qty') == context['bid_qty'],
+                previous.get('coverage_complete') is context['complete'],
+                previous.get('item') == context['quote'].get('item'),
+                previous.get('route') == context['quote'].get('market_route'),
+                previous.get('transport_epoch') == context['quote'].get('transport_epoch'),
+                previous.get('quote_at') == context['quote'].get('observed_epoch'),
+                previous.get('pending_exit') == bool(view.get('exit_requested')),
+                previous.get('manual') == bool(view.get('manual_control_exclusion_blocked')),
+                previous.get('automatic_management_allowed') == (not bool(view.get('manual_control_exclusion_blocked')
+                    or view.get('manual_control_hard_stop_handoff_pending') or view.get('manual_control_hard_stop_handoff_inflight'))),
+                previous.get('add_count') == view.get('add_count', 0),
+                previous.get('pending_add') == bool(view.get('pending_add_qty') or view.get('pending_add_ord_no') or view.get('pending_add_ord_nos')),
+                previous.get('protect_line') == view.get('trailing_stop_price'),
+            ))
+            quote_reservation = None
+            if not shared:
+                quote_reservation = reserve_observation_generations(stock, view, quote=True)
+            evaluation_reservation = reserve_observation_generations(stock, view, evaluation=True,
+                minimum=(quote_reservation['_main_stop_source_observation_generation']
+                         if quote_reservation else previous.get('source_observation_generation', 0)))
+            evaluation_lane = reserve_evaluation_lane(stock, view, evaluator)
+            if quote_reservation:
+                for key, value in quote_reservation.items():
+                    view[key] = value - 1
+                view['_main_stop_quote_reservation'] = (quote_reservation['_main_stop_quote_generation'],
+                    quote_reservation['_main_stop_source_observation_generation'])
+        if not shared:
+            previous = _capture_main_stop_observation(stock, code, context, force=True,
+                decision_capture=True, source_view=view, return_source=True, source_reserved=True)
+            if not isinstance(previous, dict):
+                raise ValueError('native_evaluation_quote_capture_gap')
+        # Bind the actual gate to its entry view, not the later live custody
+        # after another evaluator has claimed/submitted the same position.
+        if (previous.get('manual') != bool(view.get('manual_control_exclusion_blocked'))
+                or previous.get('pending_exit') != bool(view.get('exit_requested'))
+                or previous.get('automatic_management_allowed') != (not bool(view.get('manual_control_exclusion_blocked')
+                    or view.get('manual_control_hard_stop_handoff_pending') or view.get('manual_control_hard_stop_handoff_inflight')))):
+            raise ValueError('native_evaluation_custody_snapshot_unbound')
+        if stage == 'common_soft':
+            from src.engine.ai.holding_vote_replay_source import runtime_source
+            decision_inputs = dict(decision_inputs or {})
+            vote = runtime_source(view,
+                position_key=_scalp_holding_source_position_key(view, code),
+                buy_fill_identity=buy_fill_identity_from_runtime(view), market=context['market'], now=at,
+                policy=_holding_path_policy_for('EXIT_SOFT_STOP', context['market']),
+                data_root=DATA_DIR, model=str(getattr(TRADING_RULES, 'OPENAI_HOLDING_EXIT_VOTE_MODEL', 'gpt-5.4-nano')),
+                path_id='EXIT_SOFT_STOP')
+            decision_inputs.update(holding_vote_source=vote, holding_ai_required=True,
+                cost_model=view.get('_trailing_entry_cost_model'))
+        with ENTRY_LOCK:
+            if (stock.get('_main_stop_observation_epoch') != view.get('_main_stop_observation_epoch')
+                    or position_cycle_id(stock) != position_cycle_id(view)
+                    or (stock.get('main_stop_policy_pin') or {}).get('pin_sha256')
+                        != (view.get('main_stop_policy_pin') or {}).get('pin_sha256')):
+                raise ValueError('native_observation_position_generation_changed')
+            for key, value in evaluation_reservation.items():
+                view[key] = value - 1
+        receipt = evaluation_source(view, quote_source=previous, at=at, evaluator=evaluator,
+            stage=stage, decision_price=decision_price, decision_price_basis=decision_price_basis,
+            decision_profit_pct=decision_profit_pct, priority_status=priority_status,
+            preset_stop=preset_stop, preset_predecessor=preset_predecessor,
+            legacy_broker_recovered=legacy_broker_recovered,
+            quote_max_age_sec=context['quote_max_age_sec'], decision_inputs=decision_inputs, seal=False)
+        receipt['state_snapshot_basis'] = 'actual_evaluator_entry'
+        receipt.update(evaluation_lane)
+        if not enqueue_source(stock, code, receipt):
+            raise ValueError('native_evaluation_queue_rejected')
+        sealed = dict(receipt, source_sha256=digest(receipt))
+        if stage == 'preset_safety' and evaluator == 'normal':
+            reference = evaluation_reference(sealed)
+            with ENTRY_LOCK:
+                current = stock.get('_main_stop_normal_preset_evaluation')
+                if (stock.get('_main_stop_observation_epoch') == view['_main_stop_observation_epoch']
+                        and position_cycle_id(stock) == receipt['position_key']
+                        and (stock.get('main_stop_policy_pin') or {}).get('pin_sha256') == receipt['pin_sha256']
+                        and (not isinstance(current, dict) or current.get('at', 0) <= at)):
+                    stock['_main_stop_normal_preset_evaluation'] = reference
+        return sealed
+    except Exception as exc:
+        _record_main_stop_observation_failure(stock, view, str(exc), evaluation=True)
+        return None
+
+
+def _observe_main_stop_preset_evaluation(stock, code, *, at, evaluator, decision_price,
+        decision_price_basis, profit_rate, hard_pct, emergency_pct, grace_sec, held_sec,
+        legacy=False, handoff_enabled=None):
+    try:
+        from src.engine.scalping.main_stop_policy import preset_stop_receipt
+        preset = preset_stop_receipt(stock, at=at, evaluator=evaluator, hard_pct=hard_pct,
+            emergency_pct=emergency_pct, grace_sec=grace_sec, held_sec=held_sec, enabled=not legacy)
+        return _observe_main_stop_evaluation(stock, code, at=at, evaluator=evaluator,
+            stage='preset_safety', decision_price=decision_price, decision_price_basis=decision_price_basis,
+            decision_profit_pct=profit_rate, priority_status='blocked_legacy' if legacy else 'reached',
+            preset_stop=preset, legacy_broker_recovered=bool(legacy),
+            decision_inputs=dict(handoff_enabled=(
+                _env_or_rule_bool('HARD_STOP_MANUAL_HANDOFF_ENABLED', False)
+                if handoff_enabled is None else handoff_enabled)))
+    except Exception as exc:
+        stock['main_stop_evaluation_source_gap'] = type(exc).__name__
+        return None
+
+
 def _observe_scalp_trailing_input_transition(
     stock: dict,
     code: str,
@@ -29529,141 +30098,19 @@ def _observe_scalp_trailing_input_transition(
     except Exception as exc:
         stock['tp_first_crossing_source_gap'] = type(exc).__name__
         log_error(f'[TP_FIRST_CROSSING_SOURCE] {code} {type(exc).__name__}')
-    depth_receipt = quote_receipt.get("depth_receipt")
-    depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
-    depth_row = None
-    route_records = snapshot.get("realtime_type_snapshots_by_route")
-    if isinstance(route_records, dict):
-        for records in route_records.values():
-            row = records.get("0D") if isinstance(records, dict) else None
-            if (isinstance(row, dict)
-                    and all(row.get(key) == depth_receipt.get(key)
-                            for key in ("item", "market_route",
-                                        "transport_epoch", "observed_epoch"))
-                    and row.get("item") and row.get("observed_epoch") is not None):
-                depth_row = row
-                break
-    def exact_bid_depth(source: dict, bid: int) -> int:
-        book = source.get("orderbook")
-        bids = book.get("bids") if isinstance(book, dict) else None
-        level = bids[0] if isinstance(bids, list) and bids else None
-        if isinstance(level, dict):
-            if _safe_int(level.get("price"), 0) != bid:
-                return 0
-            raw = level.get("volume") if "volume" in level else level.get("qty")
-        elif _safe_int(source.get("best_bid"), 0) == bid:
-            raw = source.get("best_bid_qty")
-        else:
-            return 0
-        amount = _safe_float(raw, None)
-        return int(amount) if amount is not None and amount > 0 and amount.is_integer() else 0
-    if bid_source == "fresh_rest_executable_bid":
-        executable_bid_qty = exact_bid_depth(rest_snapshot or {}, executable_bid)
-    elif depth_row is not None:
-        executable_bid_qty = exact_bid_depth(depth_row, executable_bid)
-    else:
-        executable_bid_qty = 0
-    quote_state_for_tuning = str(
-        quality.get("quote_consistency_state") or ""
-    ).lower()
-    if bid_source == "fresh_rest_executable_bid":
-        bid_identity_proven = bool(
-            (rest_snapshot or {}).get("source") == "ka10004_rest_orderbook"
-            and str((rest_snapshot or {}).get("stock_code") or "").strip()[:6]
-            == str(code or "").strip()[:6]
-            and (rest_snapshot or {}).get("request_code")
-        )
-    elif bid_source == "fresh_nxt_0d_executable_bid":
-        bid_identity_proven = bool(
-            nxt_quality.get("nxt_trailing_bid_guard_applied") is True
-            and depth_row is not None
-            and _safe_int(depth_row.get("best_bid"), executable_bid)
-                == executable_bid
-            and _safe_float(depth_row.get("observed_epoch"), 0.0)
-                == quote_received_at
-            and str(depth_row.get("item") or "")
-                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_item") or "")
-            and str(depth_row.get("market_route") or "")
-                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_route") or "")
-        )
-    else:
-        bid_identity_proven = bool(
-            quote_receipt.get("source_type") in {"0B", "0D"}
-            and quote_receipt.get("item")
-            and quote_receipt.get("market_route")
-            and quote_receipt.get("transport_epoch") is not None
-            and _safe_int(quote_receipt.get("best_bid"), 0) == executable_bid
-            and depth_receipt.get("item") == quote_receipt.get("item")
-            and depth_receipt.get("market_route") == quote_receipt.get("market_route")
-            and depth_receipt.get("transport_epoch")
-                == quote_receipt.get("transport_epoch")
-            and _safe_float(depth_receipt.get("observed_epoch"), 0.0)
-                == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
-            and depth_row is not None
-        )
-    grid_source_complete = bool(
-        market_type and exit_allowed_by_clock and bid_received_at is not None
-        and decision.price_usable and executable_bid_qty > 0
-        and bid_identity_proven
-        and not stock.get("scalp_trailing_arm_persist_gap")
-        and quote_state_for_tuning not in {
-            "", "missing", "diverged", "blocked", "stale", "conflict",
-            "invalid", "unavailable",
-        }
-        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
-    )
-    # Reuse the same validated quote. One source receipt per second per position
-    # bounds telemetry; missing cadence remains explicit in the causal replay.
-    if (stock.get("strategy") == "SCALPING" and _safe_int(stock.get("buy_qty"), 0) > 0
-            and not _is_scalp_simulated_position(stock, "SCALPING")
-            and now_ts - _safe_float(stock.get("main_stop_source_at"), 0) >= 1.0):
-        stock['main_stop_source_at'] = now_ts
-        try:
-            from src.engine.scalping.main_stop_policy import source_row, enqueue_source
-            from src.engine.ai.holding_vote_replay_source import runtime_source
-            _main_stop_values(stock, now_ts)
-            vote_source = runtime_source(stock,
-                position_key=_scalp_holding_source_position_key(stock, code),
-                buy_fill_identity=buy_fill_identity_from_runtime(stock),
-                market=market_type, now=now_ts,
-                policy=_holding_path_policy_for("EXIT_SOFT_STOP", market_type),
-                data_root=DATA_DIR, model=str(getattr(TRADING_RULES,"OPENAI_HOLDING_EXIT_VOTE_MODEL","gpt-5.4-nano")),
-                path_id="EXIT_SOFT_STOP")
-            post_add_vote_source = runtime_source(stock,
-                position_key=_scalp_holding_source_position_key(stock, code),
-                buy_fill_identity=buy_fill_identity_from_runtime(stock),
-                market=market_type, now=now_ts,
-                policy=_holding_path_policy_for('EXIT_POST_ADD_FAIL', market_type),
-                data_root=DATA_DIR, model=vote_source['model'], path_id='EXIT_POST_ADD_FAIL')
-            features=stock.get('last_reversal_features') or {}
-            post_add_inputs=dict(active=stock.get('reversal_add_state')=='POST_ADD_EVAL',
-                executed_at=stock.get('reversal_add_executed_at'),
-                floor=float(stock.get('reversal_add_profit_floor',-1.0)),
-                eval_sec=_rule_int('REVERSAL_ADD_POST_EVAL_SEC',25),
-                feature_usable=not bool(reversal_feature_source_quality(features).get('reversal_feature_stale')) if features else True,
-                large_sell_print=features.get('large_sell_print_detected',False),
-                tick_acceleration=features.get('tick_acceleration_ratio',1.0))
-            row = source_row(stock, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
-                quote=quote_receipt, coverage_complete=grid_source_complete,
-                cost_model=stock.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
-                post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
-                preset_stop=_main_stop_preset_observation(stock, now_ts=now_ts, evaluator=evaluator),
-                decision_profit_pct=holding_profit_rate_at_eval,
-                automatic_management_allowed=not bool(stock.get("manual_control_exclusion_blocked")
-                    or stock.get("manual_control_hard_stop_handoff_pending")
-                    or stock.get("manual_control_hard_stop_handoff_inflight")),
-                runtime_flags=dict(
-                    grace_enabled=_rule_bool("SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)
-                        and not bool(stock.get("main_stop_pin_persistence") or stock.get("main_stop_clock_unobserved")),
-                    protect_enabled=_env_or_rule_bool("SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True),
-                    handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False),
-                    vote_max_worsen_pct=_rule("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.8)))
-            if not enqueue_source(stock,code,row):
-                stock['main_stop_source_gap']='observation_queue_rejected'
-                stock['main_stop_source_rejected_count']=stock.get('main_stop_source_rejected_count',0)+1
-            stock["main_stop_source_at"] = now_ts
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            stock['main_stop_source_gap'] = type(exc).__name__
+    stop_context = _main_stop_quote_context(stock, code, snapshot=snapshot,
+        quote_receipt=quote_receipt, executable_bid=executable_bid, bid_source=bid_source,
+        rest_snapshot=rest_snapshot, quality=quality, nxt_quality=nxt_quality,
+        quote_received_at=quote_received_at, bid_received_at=bid_received_at,
+        market_type=market_type, exit_allowed_by_clock=exit_allowed_by_clock,
+        price_usable=decision.price_usable, now_ts=now_ts, evaluator=evaluator,
+        holding_profit_rate_at_eval=holding_profit_rate_at_eval)
+    executable_bid_qty = stop_context['bid_qty']
+    grid_source_complete = stop_context['complete']
+    bid_identity_proven = stop_context['bid_identity_proven']
+    quote_state_for_tuning = stop_context['quote_state_for_tuning']
+    _store_main_stop_quote_context(stock, stop_context)
+    _capture_main_stop_observation(stock, code, stop_context)
     grid_decisions = {
         str(candidate): evaluate_trailing_take_profit(
             peak_price=peak_price,
@@ -30056,18 +30503,10 @@ def _observe_scalp_trailing_input_transition(
             nxt_trailing_bid_guard_ws_0d_route=nxt_quality.get(
                 "nxt_trailing_bid_guard_ws_0d_route"
             ),
-            operational_ws_0d_best_bid=(
-                _safe_int(depth_row.get("best_bid"), 0) if depth_row else None
-            ),
-            operational_ws_0d_best_bid_qty=(
-                exact_bid_depth(depth_row, _safe_int(depth_row.get("best_bid"), 0))
-                if depth_row else None
-            ),
+            operational_ws_0d_best_bid=stop_context['operational_ws_0d_best_bid'],
+            operational_ws_0d_best_bid_qty=stop_context['operational_ws_0d_best_bid_qty'],
             operational_rest_best_bid=(rest_snapshot or {}).get("best_bid"),
-            operational_rest_best_bid_qty=exact_bid_depth(
-                rest_snapshot or {},
-                _safe_int((rest_snapshot or {}).get("best_bid"), 0),
-            ) if rest_snapshot else None,
+            operational_rest_best_bid_qty=stop_context['operational_rest_best_bid_qty'],
             operational_executable_spread_bps=spread_bps,
             operational_quote_warn_tick_floor_bps=quote_warn_tick_floor_bps,
             operational_mark_to_bid_gap_bps=operational_shadow_row[
@@ -30484,10 +30923,17 @@ def _evaluate_and_dispatch_fast_scalp_exit(
     if hard_stop_pct is None:
         hard_stop_pct = _main_stop_values(stock, observed_at).hard_stop_pct
     held_sec = _resolve_holding_elapsed_sec(stock, now_ts=observed_at)
+    stop_handoff_enabled = _env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False)
     safety = safety_decision(profit_pct=profit_rate, hard_pct=hard_stop_pct,
         emergency_pct=emergency_pct, protect_pct=protect_pct,
         held_sec=held_sec, preset_grace_sec=_safe_float(stock.get("hard_stop_grace_sec"), 0),
-        handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False))
+        handoff_enabled=stop_handoff_enabled)
+    if fast_stop_enabled:
+        _observe_main_stop_preset_evaluation(stock, code, at=observed_at, evaluator='fast',
+            decision_price=decision_price, decision_price_basis=('executable_bid' if trusted_bid > 0 and decision_price == trusted_bid else 'mark_price'), profit_rate=profit_rate,
+            hard_pct=hard_stop_pct, emergency_pct=emergency_pct,
+            grace_sec=_safe_float(stock.get("hard_stop_grace_sec"), 0), held_sec=held_sec,
+            handoff_enabled=stop_handoff_enabled)
     if fast_stop_enabled and safety.disposition in {"exit_candidate", "manual_handoff"}:
         exit_rule = safety.rule
         trigger_kind = {"scalp_hard_stop_emergency": "emergency_stop", "scalp_protect_profit_stop": "protect_stop"}.get(exit_rule, "hard_stop")
@@ -30730,6 +31176,11 @@ def _evaluate_and_dispatch_fast_scalp_exit(
         buy_price=buy_price, now_ts=observed_at, source_stage="fast_stop"):
         return False
 
+    # Capture the exact already validated normal-exit quote before the claim
+    # turns pending_exit on. This has no effect on the claim/order result.
+    if exit_rule == 'scalp_trailing_take_profit' and not retry_pending:
+        _main_stop_normal_exit_fields(stock, code, at=observed_at,
+            mark_price=mark_price, exit_rule=exit_rule, evaluator='fast')
     exit_token = existing_exit_token or uuid4().hex
     with ENTRY_LOCK:
         if stock.get("manual_control_hard_stop_handoff_inflight") or stock.get("manual_control_exclusion_blocked"):
@@ -46488,6 +46939,11 @@ def _finalize_entry_split_probe_partial_position(
         filled_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
         if not 0 < filled_qty < requested_qty:
             return False
+        try:
+            from src.engine.scalping.main_stop_quantity_source import retain_quantity_source
+            retain_quantity_source(stock, at=time.time())
+        except Exception as exc:
+            stock['main_stop_quantity_source_gap'] = type(exc).__name__
         move_orders_to_terminal(stock, reason="entry_split_probe_partial_complete")
         _mutate_stock_state(
             stock,
@@ -73400,6 +73856,11 @@ def _clear_pending_entry_meta(stock, *, preserve_probe_runtime=False):
                 reason='entry_attempt_cleared_without_position'):
             _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
     with ENTRY_LOCK:
+        try:
+            from src.engine.scalping.main_stop_quantity_source import retain_quantity_source
+            retain_quantity_source(stock, at=time.time())
+        except Exception as exc:
+            stock['main_stop_quantity_source_gap'] = type(exc).__name__
         move_orders_to_terminal(stock, reason="pending_entry_meta_cleared")
         clear_keys = [
             "pending_entry_orders",
@@ -86403,6 +86864,10 @@ def handle_holding_state(
         )
         return
 
+    if daily_limit_up_triggered and strategy == "SCALPING":
+        _prepare_main_stop_limit_up_quote(stock, code, ws_data=ws_data,
+            quote_fields=holding_quote_fields, now_ts=now_ts, profit_rate=profit_rate)
+
     if stock.get("exit_mode") == "SCALP_PRESET_TP":
         if daily_limit_up_triggered:
             log_info(
@@ -86461,6 +86926,13 @@ def handle_holding_state(
         )
         preset_held_sec = _resolve_holding_elapsed_sec(stock, now_ts=now_ts)
         preset_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
+        _prepare_main_stop_limit_up_quote(stock, code, ws_data=ws_data,
+            quote_fields=holding_quote_fields, now_ts=now_ts, profit_rate=profit_rate)
+        _observe_main_stop_preset_evaluation(stock, code, at=now_ts, evaluator='normal',
+            decision_price=curr_p, decision_price_basis='mark_price', profit_rate=profit_rate,
+            hard_pct=preset_hard_stop_pct, emergency_pct=preset_hard_stop_emergency_pct,
+            grace_sec=preset_hard_stop_grace_sec, held_sec=preset_held_sec,
+            legacy=legacy_broker_recovered)
 
         if legacy_broker_recovered:
             _mutate_stock_state(
@@ -87207,6 +87679,22 @@ def handle_holding_state(
             )
             exit_rule = "scalp_hard_stop_pct"
 
+        if not is_sell_signal:
+            predecessor = stock.get('_main_stop_normal_preset_evaluation')
+            if not isinstance(predecessor, dict) or predecessor.get('at') != now_ts:
+                predecessor = None
+            _observe_main_stop_evaluation(stock, code, at=now_ts, evaluator='normal',
+                stage='common_soft', decision_price=curr_p, decision_price_basis='mark_price',
+                decision_profit_pct=profit_rate, preset_predecessor=predecessor,
+                legacy_broker_recovered=bool(legacy_broker_recovered),
+                decision_inputs=dict(
+                    grace_enabled=_rule_bool('SCALP_SOFT_STOP_MICRO_GRACE_ENABLED', True)
+                        and not bool(stock.get('main_stop_pin_persistence') or stock.get('main_stop_clock_unobserved')),
+                    after_add=bool(stock.get('reversal_add_used')) or stock.get('reversal_add_state') == 'POST_ADD_EVAL',
+                    handoff_enabled=_env_or_rule_bool('HARD_STOP_MANUAL_HANDOFF_ENABLED', False),
+                    protect_enabled=_env_or_rule_bool('SCALP_PROTECT_TRAILING_SMOOTH_ENABLED', True),
+                    vote_max_worsen_pct=_rule('HOLDING_FLOW_OVERRIDE_WORSEN_PCT', 0.8),
+                    soft_stop_micro_grace_started_at=stock.get('soft_stop_micro_grace_started_at')))
         if not is_sell_signal and profit_rate <= dynamic_stop_pct:
             from src.engine.scalping.main_stop_policy import soft_decision
             stop_values = _main_stop_values(stock, now_ts)
@@ -87699,6 +88187,8 @@ def handle_holding_state(
         )
         _mutate_stock_state(stock, set_fields={"last_exit_reason": reason})
         exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+        exit_extra_fields.update(_main_stop_normal_exit_fields(stock, code, at=now_ts,
+            mark_price=curr_p, exit_rule=exit_rule))
         _log_holding_pipeline(
             stock,
             code,

@@ -3,9 +3,26 @@
 Observation and replay only; no new exit rule, order, or account request.
 """
 
+from datetime import datetime
+
 from .main_stop_policy import digest, finite
-from .main_stop_replay import cost_known_epoch
 from .position_peak_ledger import position_cycle_id
+
+
+def cost_known_epoch(value):
+    """Interpret native aware ISO or legacy epoch without changing source bytes."""
+    if finite(value):
+        return float(value) if value > 0 else None
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            return None
+        epoch = stamp.timestamp()
+        return epoch if finite(epoch) and epoch > 0 else None
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def post_add_failure(
@@ -29,17 +46,20 @@ def record_generation(stock, receipt, *, at, completed):
     """Called by the existing authoritative ADD receipt consumer."""
     stock.pop("post_add_economic_generation", None)
     model = stock.get("_trailing_entry_cost_model") or {}
-    known_at = cost_known_epoch(model.get("known_at"))
+    if not isinstance(model, dict) or not isinstance(receipt, dict):
+        return None
     qty, basis = stock.get("buy_qty"), stock.get("buy_price")
+    known_at = cost_known_epoch(model.get("known_at"))
     if (
         not completed
+        or not finite(at)
+        or at <= 0
         or receipt.get("economics_complete") is not True
         or stock.get("pending_add_type") != "AVG_DOWN"
         or type(qty) is not int
         or qty <= 0
         or not finite(basis)
         or basis <= 0
-        or not finite(at)
         or known_at is None
         or known_at > at
         or not finite(model.get("buy_cost_krw"))

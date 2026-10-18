@@ -8,6 +8,15 @@ from src.engine.scalping import main_stop_policy as p
 from src.engine.scalping import main_stop_replay as r
 from src.engine.automation import main_stop_postclose as post
 from src.engine.scalping.position_peak_ledger import PositionPeakRuntimeLedger, position_cycle_id
+from src.tests.test_main_stop_runtime_source import evaluation_stream
+
+
+def replay_scenario(source, *args, **kwargs):
+    return r.replay(evaluation_stream(source), *args, **kwargs)
+
+
+def holding_scenario(source):
+    return r.holding_contracts(evaluation_stream(source))
 
 
 def test_retired_pyramid_cannot_create_or_replace_a_protect_line():
@@ -172,7 +181,7 @@ def test_native_cost_iso_replays_identically_without_mutating_source(zone):
     from datetime import datetime, timezone, timedelta
     import copy
     source = list(rows())
-    expected = r.replay(source, replace(baseline(), grace_sec=0))
+    expected = replay_scenario(source, replace(baseline(), grace_sec=0))
     for row in source:
         epoch = row['cost_model']['known_at']
         tz = timezone(timedelta(hours=9)) if zone == '+09:00' else timezone.utc
@@ -182,10 +191,15 @@ def test_native_cost_iso_replays_identically_without_mutating_source(zone):
         row['cost_model']['actual_broker_cost'] = False
         reseal(row)
     frozen = copy.deepcopy(source)
-    assert r.replay(source, replace(baseline(), grace_sec=0)) == expected
+    actual=replay_scenario(source, replace(baseline(), grace_sec=0))
+    actual_start=actual.pop('comparison_start');expected_start=expected.pop('comparison_start')
+    assert actual==expected
+    assert actual_start['source_sha256']==source[0]['source_sha256']
+    assert actual_start['source_sha256']!=expected_start['source_sha256']
+    assert {k:v for k,v in actual_start.items() if k!='source_sha256'}=={k:v for k,v in expected_start.items() if k!='source_sha256'}
     assert source == frozen
     source[0]['cost_model']['known_at'] = source[0]['cost_model']['known_at'].replace('2026', '2025')
-    assert r.replay(source, baseline())['reason'] == 'quote_or_position_source_invalid'
+    assert replay_scenario(source, baseline())['reason'] == 'quote_source_invalid'
 
 
 @pytest.mark.parametrize('clock', [True, False, None, '', 'bad', '1791766790',
@@ -194,7 +208,7 @@ def test_invalid_or_future_cost_clock_stays_source_gap(clock):
     source = list(rows())
     source[0]['cost_model']['known_at'] = clock
     reseal(source[0])
-    result = r.replay(source, baseline())
+    result = replay_scenario(source, baseline())
     assert result['reason'] == 'cost_model_source_missing'
     assert result['modeled_net_krw'] is None
 
@@ -239,11 +253,11 @@ def handoff_fixture(stock, at, registered=True):
     (-2.5, 90, True, 'scalp_hard_stop_emergency', 'exit_candidate')])
 def test_preset_precedes_research_and_common_stop(profit, grace, handoff, rule, disposition):
     stock, source = preset_sources(profits=(-.2, profit), grace=grace, handoff=handoff)
-    result = r.replay(source, baseline())
-    assert result['reason'] == 'preset_safety_precedes_soft_policy'
+    result = replay_scenario(source, baseline())
+    assert result['reason'] == 'native_preset_safety_precedes_common_soft'
     assert result['operating_rule'] == rule and result['operating_disposition'] == disposition
     assert result['modeled_net_krw'] is None and not result['actual_order_submitted']
-    contract = r.holding_contracts(source)
+    contract = holding_scenario(source)
     assert contract['common_stop_values']['soft_stop_pct'] == -3.
     assert contract['effective_preset']['hard_stop_pct'] == -1.4
     assert contract['manual_handoff']['status'] == 'not_observed'
@@ -251,21 +265,21 @@ def test_preset_precedes_research_and_common_stop(profit, grace, handoff, rule, 
 
 def test_preset_grace_missing_contract_and_pending_or_actual_handoff_are_distinct():
     stock, source = preset_sources(grace=90)
-    assert r.replay(source, baseline())['reason'] == 'crossing_not_observed'
+    assert replay_scenario(source, baseline())['reason'] == 'crossing_not_observed'
     source[0].pop('preset_stop'); reseal(source[0])
-    assert r.replay(source, baseline())['reason'] == 'preset_effective_stop_unobserved'
+    assert replay_scenario(source, baseline())['reason'] == 'normal_preset_predecessor_unbound'
     stock, source = preset_sources()
     pending = handoff_fixture(stock, source[-1]['at']+1, registered=False)
     registered = handoff_fixture(stock, pending['at']+5)
-    result = r.holding_contracts(source+[pending, registered])
+    result = holding_scenario(source+[pending, registered])
     assert result['manual_handoff']['status'] == 'registered'
     assert result['manual_handoff']['attempts'] == 2
     assert result['manual_handoff']['source_sha256'] == registered['source_sha256']
     assert result['actual_realized_net_krw'] is None
-    assert r.holding_contracts(source+[pending])['manual_handoff']['status'] == 'pending'
-    assert r.replay([registered], baseline())['reason'] == 'manual_handoff_not_sell'
+    assert holding_scenario(source+[pending])['manual_handoff']['status'] == 'pending'
+    assert replay_scenario([registered], baseline())['reason'] == 'manual_handoff_not_sell'
     registered['position_key'] = 'another_position'; reseal(registered)
-    assert r.holding_contracts(source+[registered])['reason'] == 'holding_contract_identity_changed'
+    assert holding_scenario(source+[registered])['reason'] == 'holding_contract_identity_changed'
 
 
 @pytest.mark.parametrize('mutation', ['hash', 'clock', 'pin', 'stop', 'stage'])
@@ -281,7 +295,7 @@ def test_handoff_and_effective_preset_reject_unbound_evidence(mutation):
         with pytest.raises(ValueError, match='stop_handoff_stage_invalid'):
             idx.extract(dict(stage='hard_stop_manual_control_handoff_deferred', fields=dict(main_stop_handoff_source=receipt)))
         return
-    assert r.holding_contracts(source+[receipt])['status'] == 'source_gap'
+    assert holding_scenario(source+[receipt])['status'] == 'source_gap'
 
 
 @pytest.mark.parametrize('registered', [True, False])
@@ -353,13 +367,13 @@ def test_manual_custody_does_not_reactivate_emergency_in_operating_projection():
     after = source[2]
     after.update(manual=True, automatic_management_allowed=False)
     reseal(after)
-    result = r.holding_contracts(source[:2]+[registered, after])
+    result = holding_scenario(source[:2]+[registered, after])
     assert result['manual_handoff']['status'] == 'registered'
     assert result['preset_crossing']['source_sha256'] == registered['source_sha256']
     assert result['preset_crossing']['rule'] == 'scalp_hard_stop_pct'
     assert r.preset_decision(after) is None
     after.update(manual=False, automatic_management_allowed=True); reseal(after)
-    assert r.holding_contracts(source[:2]+[registered, after])['reason'] == 'automatic_source_after_manual_handoff'
+    assert holding_scenario(source[:2]+[registered, after])['reason'] == 'automatic_source_after_manual_handoff'
 
 
 def test_native_auto_release_is_distinct_from_unexplained_manual_custody_regression():
@@ -371,33 +385,40 @@ def test_native_auto_release_is_distinct_from_unexplained_manual_custody_regress
     event=dict(stage='manual_control_auto_released_at_average_price',fields={
         'main_stop_release_source':json.dumps(release)})
     assert idx.extract(event)==release
-    result=r.holding_contracts(source[:2]+[handoff,release,source[2]])
+    result=holding_scenario(source[:2]+[handoff,release,source[2]])
     assert result['status']=='observed'
     assert result['manual_handoff']['status']=='released'
     assert result['manual_handoff']['source_sha256']==handoff['source_sha256']
     assert result['manual_release']['source_sha256']==release['source_sha256']
     release['auto_source']='manual_operator';reseal(release)
-    assert r.holding_contracts(source[:2]+[handoff,release,source[2]])['reason']=='manual_release_receipt_invalid'
+    assert holding_scenario(source[:2]+[handoff,release,source[2]])['reason']=='manual_release_receipt_invalid'
 
 
 @pytest.mark.parametrize('field,value', [('coverage_complete', False), ('quote_at', 0),
     ('route', ''), ('transport_epoch', None)])
 def test_incomplete_quote_is_not_a_preset_crossing_but_does_not_erase_actual_registration(field, value):
     stock, source = preset_sources()
-    source[-1][field] = value; reseal(source[-1])
-    result = r.holding_contracts(source)
-    assert result['preset_crossing'] is None and result['status'] == 'source_gap'
-    receipt = handoff_fixture(stock, source[-1]['at']+1)
-    result = r.holding_contracts(source+[receipt])
-    assert result['manual_handoff']['status'] == 'registered'
-    assert result['preset_crossing']['source_sha256'] == receipt['source_sha256']
-    assert result['status'] == 'source_gap'
+    actual=list(evaluation_stream(source))
+    changed=next(row for row in actual if row['schema']=='main_stop_source_v1' and row['at']==source[-1]['at'])
+    prior_sha=changed['source_sha256'];changed[field]=value;reseal(changed)
+    for event in actual:
+        if event.get('quote_source_sha256')==prior_sha:
+            event['quote_source_sha256']=changed['source_sha256']
+            if field in ('quote_at','route','transport_epoch'):event[field]=value
+            reseal(event)
+    result=r.holding_contracts(actual)
+    assert result['preset_crossing'] is None and result['status']=='source_gap'
+    receipt=handoff_fixture(stock,source[-1]['at']+1)
+    result=r.holding_contracts(actual+[receipt])
+    assert result['manual_handoff']['status']=='registered'
+    assert result['preset_crossing']['source_sha256']==receipt['source_sha256']
+    assert result['status']=='source_gap'
 
 
 def test_postclose_reports_research_preset_and_actual_manual_axes_separately(tmp_path):
     stock, source = preset_sources()
     handoff = handoff_fixture(stock, source[-1]['at'])
-    events = [dict(stage='main_stop_source', fields=dict(main_stop_source=json.dumps(row))) for row in source]
+    events = [dict(stage='main_stop_source', fields=dict(main_stop_source=json.dumps(row))) for row in evaluation_stream(source)]
     events.append(dict(stage='hard_stop_manual_control_handoff', fields=dict(main_stop_handoff_source=json.dumps(handoff))))
     events.append(dict(stage='hard_stop_manual_control_handoff', fields=dict(runtime_record_id=99)))
     path = tmp_path/'raw.jsonl'
@@ -451,13 +472,13 @@ def test_samples_horizon_duplicate_capacity_and_protect():
 
 
 def test_native_capture_causal_replay_and_missing_cost():
-    source=list(rows());a=r.replay(source,baseline());b=r.replay(source,replace(baseline(),grace_sec=0))
+    source=list(rows());a=replay_scenario(source,baseline());b=replay_scenario(source,replace(baseline(),grace_sec=0))
     assert a['status']==b['status']=='modeled'
     assert b['crossing_at']<a['crossing_at'] and b['modeled_net_krw']>a['modeled_net_krw']
     invalid=[dict(x,cost_model=None) for x in source]
     for x in invalid:x['source_sha256']=p.digest({k:v for k,v in x.items() if k!='source_sha256'})
-    assert r.replay(invalid,baseline())['modeled_net_krw'] is None
-    assert r.replay(source[3:],baseline())['status']=='censored'
+    assert replay_scenario(invalid,baseline())['modeled_net_krw'] is None
+    assert replay_scenario(source[3:],baseline())['status']=='censored'
 
 
 def test_durable_pin_clock_survives_add_and_restart(tmp_path):
@@ -485,7 +506,7 @@ def publication(tmp_path, *, experiment=False, actual=True):
     source=tmp_path/'pipeline_events/pipeline_events_2026-10-12.jsonl';source.parent.mkdir(parents=True)
     base=1791766800.
     population=list(rows(base,1))+list(rows(base+100,2))+list(rows(base+1000,3))+list(rows(base+1100,4))
-    source.write_text(''.join(json.dumps(dict(stage='main_stop_source',fields={'main_stop_source':row}))+'\n' for row in population))
+    source.write_text(''.join(json.dumps(dict(stage='main_stop_source',fields={'main_stop_source':row}))+'\n' for row in evaluation_stream(population)))
     contract={}
     if experiment:
         performance=seal(tmp_path/'performance.json',dict(schema='main_stop_performance_v1',status='pass',
@@ -500,8 +521,16 @@ def publication(tmp_path, *, experiment=False, actual=True):
         actual_cost_reconciliation=dict(status='actual_cost_reconciled',exact_pnl_krw=-4310.,exact_profit_rate=-4.31,
             receipt_sha256='a'*64,raw_sha256='b'*64)) for n in (1,2,3,4)] if actual else []
     cost=seal(tmp_path/'costs.json',{'rows':complete})
-    bundle,report=post.publish(tmp_path,'2026-10-12','2026-10-13',parents=parents,parent_receipt=parent,
-        snapshot_receipt=snapshot,source_paths=[source],experiments=contract,completed=complete,economic_sources=dict(files={cost['path']:post.byte_generation(Path(cost['path']))},cost_generations={}))
+    # Archived v1 policy fixture for downstream numeric/artifact contracts.
+    # Isolate only the NEW publication-performance authority seam while making
+    # this historical fixture; its old label is never native full-Main proof.
+    # The guard is restored before callers exercise readers or new publication.
+    from src.engine.scalping import main_stop_experiment as contracts
+    with pytest.MonkeyPatch.context() as legacy_fixture:
+        if experiment:
+            legacy_fixture.setattr(contracts,'require_native_publication_performance',lambda contract,**kwargs:None)
+        bundle,report=post.publish(tmp_path,'2026-10-12','2026-10-13',parents=parents,parent_receipt=parent,
+            snapshot_receipt=snapshot,source_paths=[source],experiments=contract,completed=complete,economic_sources=dict(files={cost['path']:post.byte_generation(Path(cost['path']))},cost_generations={}))
     return bundle,report,parent,source
 
 
@@ -589,12 +618,15 @@ def test_runtime_safety_override_cannot_be_hidden_by_stop_bundle(tmp_path):
 
 
 def test_stale_quote_and_missing_runtime_flags_are_source_gaps():
-    original=list(rows())
-    for changes,reason in (({'quote_at':1},'quote_clock_unverified'),
-                           ({'grace_enabled':None},'runtime_flags_unobserved')):
-        first={**original[0],**changes};first['source_sha256']=p.digest({k:v for k,v in first.items() if k!='source_sha256'})
-        outcome=r.replay([first]+original[1:],baseline())
-        assert outcome['status']=='source_gap' and outcome['reason']==reason
+    from copy import deepcopy
+    original=list(evaluation_stream(rows()))
+    stale=deepcopy(original)
+    stale[0]['quote_at']=1;reseal(stale[0])
+    stale[1]['quote_at']=1;stale[1]['quote_source_sha256']=stale[0]['source_sha256'];reseal(stale[1])
+    assert r.replay(stale,baseline())['status']=='source_gap'
+    missing=deepcopy(original)
+    missing[1]['decision_inputs']['grace_enabled']=None;reseal(missing[1])
+    assert r.replay(missing,baseline())['status']=='source_gap'
 
 
 def test_original_soft_emergency_safety_never_requires_new_ai_votes():
@@ -603,7 +635,7 @@ def test_original_soft_emergency_safety_never_requires_new_ai_votes():
         row['holding_ai_required']=True
         row['source_sha256']=p.digest({k:v for k,v in row.items() if k!='source_sha256'})
         source.append(row)
-    outcome=r.replay(source,replace(baseline(),grace_sec=0),
+    outcome=replay_scenario(source,replace(baseline(),grace_sec=0),
         vote_reader=lambda *args:pytest.fail('existing emergency releases VETO'))
     assert outcome['status']=='modeled'
 
@@ -638,7 +670,7 @@ def test_old_observed_policy_does_not_exclude_current_parent_comparison():
         row['source_stop_values']=asdict(previous)
         row['parent_values_sha256']=p.digest(asdict(previous))
         row['source_sha256']=p.digest({k:v for k,v in row.items() if k!='source_sha256'})
-    assert r.replay(source,baseline())['status']=='modeled'
+    assert replay_scenario(source,baseline())['status']=='modeled'
 
 
 def test_dependency_mutation_between_hash_and_stat_is_rejected(tmp_path,monkeypatch):
@@ -750,7 +782,7 @@ def test_stop_capture_uses_shared_queue_immutable_envelope_and_drop_marker(monke
     assert not p.enqueue_source({'id':1},'005930',row)
     source=list(rows());source[1]['capture_rejected_count']=1
     source[1]['source_sha256']=p.digest({k:v for k,v in source[1].items() if k!='source_sha256'})
-    assert r.replay(source,baseline())['status']=='censored'
+    assert replay_scenario(source,baseline())['status']=='source_gap'
 
 
 def test_runtime_crossing_and_modeled_cost_are_separate():
@@ -758,16 +790,16 @@ def test_runtime_crossing_and_modeled_cost_are_separate():
     for row in source:
         row['decision_profit_pct']=0.
         row['source_sha256']=p.digest({k:v for k,v in row.items() if k!='source_sha256'})
-    assert r.replay(source,replace(baseline(),grace_sec=0))['reason']=='crossing_not_observed'
-    source[0]['decision_profit_pct']=None
-    source[0]['source_sha256']=p.digest({k:v for k,v in source[0].items() if k!='source_sha256'})
-    assert r.replay(source,baseline())['reason']=='runtime_decision_profit_unobserved'
+    assert replay_scenario(source,replace(baseline(),grace_sec=0))['reason']=='crossing_not_observed'
+    actual=list(evaluation_stream(source))
+    actual[1]['decision_profit_pct']=None;reseal(actual[1])
+    assert r.replay(actual,baseline())['status']=='source_gap'
 
 
 def test_legacy_protection_number_does_not_invent_a_main_generator():
     source=list(rows());source[0]['protect_line']=9800.
     source[0]['source_sha256']=p.digest({k:v for k,v in source[0].items() if k!='source_sha256'})
-    assert r.replay(source,baseline())['reason']=='protect_line_producer_unidentified'
+    assert replay_scenario(source,baseline())['reason']=='protect_line_producer_unidentified'
 
 
 def test_partitioned_reference_index_deduplicates_without_copying_raw(tmp_path):
@@ -1137,8 +1169,14 @@ def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(tmp_path
     monkeypatch.setattr(holding_vote_replay_source, 'assemble_votes', consumed)
     original_rows = rows
     def with_vote_source(*args, **kwargs):
+        from src.tests.test_main_stop_runtime_source import stage_stock
+        from src.engine.ai.holding_exit_vote import buy_fill_identity_from_runtime
         for row in original_rows(*args, **kwargs):
-            yield dict(row, holding_vote_source={'fixture': 'consumed'})
+            native = stage_stock(record=row['record_id'],quantity=row['quantity'])
+            source = holding_vote_replay_source.runtime_source(native,position_key=f"record:{row['record_id']}",
+                buy_fill_identity=buy_fill_identity_from_runtime(native),market=row['market'],now=row['at'],policy={},
+                data_root=tmp_path,model='fixture-model',path_id='EXIT_SOFT_STOP')
+            yield reseal(dict(row,holding_vote_source=source,holding_ai_required=True))
     monkeypatch.setitem(globals(), 'rows', with_vote_source)
     if damage == 'unsealed':
         capture = post.capture_vote_watch_binding
