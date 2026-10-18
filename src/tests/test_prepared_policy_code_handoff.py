@@ -237,6 +237,7 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
                 reviewed.add(H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES[name][1])
             if name in H.REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES:
                 reviewed.add(H.REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES[name][1])
+            reviewed.update(pair[1] for pair in H.REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ()))
             assert current in reviewed
 
 
@@ -345,7 +346,7 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     trigger_sha=H._sha(canonical/trigger)
     dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha]
     if generation in {'issued_startup','current_startup'}:
-        variants=(H.REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS if generation=='current_startup'
+        variants=(H.REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS if generation=='current_startup'
                   else H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS)
         variant=variants[(trigger,trigger_sha)]
         if generation=='current_startup':
@@ -383,9 +384,14 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     for name, pair in H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.items():
         final_pair = H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(name,
             H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(name, pair))
-        assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == final_pair[1]
+        expected_sha = (variant['dependencies'].get(name, final_pair[1])
+                        if generation == 'current_startup' else final_pair[1])
+        assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == expected_sha
     if generation == 'current_startup':
-        for name in ('src/engine/infrastructure/startup_validation_code_context.py',
+        for name in ('src/engine/sniper_execution_receipts.py',
+                     'src/engine/lifecycle/holding_research_cost.py',
+                     'src/engine/automation/main_trailing_source_assembler.py',
+                     'src/engine/infrastructure/startup_validation_code_context.py',
                      'src/engine/scalping/reversal_auxiliary_next_session.py',
                      'src/engine/scalping/reversal_auxiliary_source_handoff.py'):
             dependency = fixture/name

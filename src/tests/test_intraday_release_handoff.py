@@ -1207,7 +1207,7 @@ def completed_research_git_candidate(tmp_path):
     # This fixture copies current source bytes. Bind the entire exact current
     # preparation generation, rather than combining its selector with the
     # historical 59-file closure (historical generations have separate tests).
-    variant = handoff.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS[(
+    variant = handoff.REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS[(
         handler, handoff._sha(canonical/handler))]
     assert handoff._sha(canonical/variant['selector_path']) == variant['selector_sha256']
     dependencies = variant['dependencies']
@@ -1322,11 +1322,16 @@ def test_budget_extension_cannot_change_the_original_policy_inventory(
     root,commit,inventories,digests=completed_research_git_candidate
     origin='7f2552aedde8fec6ef904a43105827907e50dfc8'
     key=(origin,digests[family]);name='src/engine/lifecycle/research_input_budget.py'
-    extensions=dict(handoff.REVIEWED_DELAY_CONTRACT_EXTENSIONS[key])
+    trigger='src/engine/sniper_state_handlers.py'
+    variant=handoff.REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS[
+        (trigger,handoff._sha(root/trigger))]
+    # The fixture owns the current complete generation, including its family
+    # extensions. Mutating a historical fallback would not exercise this gate.
+    extensions=dict(variant['contract_extensions'][key])
     paths=dict(inventories[family]);expected=digests[family]
     if fault=='missing_extension':extensions.pop(name)
     elif fault=='wrong_hash':extensions[name]='0'*64
     elif fault=='wrong_family':expected=digests['holding_vote' if family=='main_stop' else 'main_stop']
-    monkeypatch.setitem(handoff.REVIEWED_DELAY_CONTRACT_EXTENSIONS,key,extensions)
+    monkeypatch.setitem(variant['contract_extensions'],key,extensions)
     with pytest.raises(ValueError):
         handoff._verify_entry_code_delta(root,commit,origin,paths,expected)
