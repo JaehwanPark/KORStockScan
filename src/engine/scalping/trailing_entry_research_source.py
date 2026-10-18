@@ -18,6 +18,21 @@ AUTHORITY = dict(actual_order_submitted=False, allowed_runtime_apply=False,
                  runtime_effect=False, decision_authority="research_source_only")
 
 
+def runtime_account_scope():
+    """Local real-provider journal namespace, never a broker-number/token hash."""
+    try:
+        from src.trading.order.owner_custody_registry import broker_account_key
+        from src.utils import kiwoom_utils
+        if kiwoom_utils.KIWOOM_BASE_URL != 'https://api.kiwoom.com':return None
+        source=getattr(kiwoom_utils,'KIWOOM_BASE_URL_PROVENANCE',None)
+        if (not isinstance(source,dict) or source.get('status')!='observed' or source.get('explicit_origin') is not True
+                or source.get('credential_present') is not True
+                or source.get('origin')!=kiwoom_utils.KIWOOM_BASE_URL):return None
+        return digest(['broker_account',broker_account_key(require_explicit=True)])
+    except (ValueError,RuntimeError,OSError,TypeError,AttributeError,ImportError):
+        return None
+
+
 def epoch(value):
     if isinstance(value, str):
         parsed = datetime.fromisoformat(value)
@@ -78,7 +93,7 @@ def validate(value):
 
 
 def capture(*, symbol, position_key, action_receipt, sizing_fields, cap_context, cost_model,
-            entry_context, known_at):
+            entry_context, known_at, account_scope_sha256=None):
     """Freeze supplied, already-issued inputs; no data access or execution."""
     try:
         if (action_receipt.get("entry_mechanistic_action") != "ENTER_NOW"
@@ -92,7 +107,8 @@ def capture(*, symbol, position_key, action_receipt, sizing_fields, cap_context,
             known_at=epoch(known_at), execution_plan=sizing_fields.get("entry_execution_sizing_plan"),
             execution_plan_sha256=sizing_fields.get("entry_execution_sizing_plan_sha256"),
             ask_depth_source=(cap_context or {}).get("ask_depth_source"),
-            cost_model=cost_model, entry_context=entry_context, **AUTHORITY)
+            cost_model=cost_model, entry_context=entry_context,
+            account_scope_sha256=account_scope_sha256, **AUTHORITY)
         # Round-trip detaches the mutable runtime dictionaries and validates
         # finite JSON before they are handed to the existing logger.
         body = json.loads(json.dumps(body, allow_nan=False))
@@ -115,7 +131,8 @@ def install(stock, receipt):
             position_key=receipt['position_key'], plan_known_at=receipt['known_at'])
 
 
-def holding_link(stock, *, position_key, buy_fill_identity, known_at):
+def holding_link(stock, *, position_key, buy_fill_identity, known_at,
+                 account_scope_sha256=None, automatic_management_allowed=None):
     """Bind only the initial actual BUY generation; ADD/reentry never inherit it."""
     binding = stock.get('_trailing_entry_plan_binding')
     if not isinstance(binding, dict):
@@ -137,9 +154,12 @@ def holding_link(stock, *, position_key, buy_fill_identity, known_at):
             binding['generation'] = generation
         elif tuple(binding['generation']) != generation:
             raise ValueError('trailing_plan_holding_generation_changed')
-        link = dict(schema='main_trailing_plan_holding_link_v1', plan_receipt_sha256=binding['plan'],
+        link = dict(schema='main_trailing_plan_holding_link_v2', plan_receipt_sha256=binding['plan'],
             position_key=position_key, buy_fill_identity=buy_fill_identity, first_buy_at=bought,
-            known_at=epoch(known_at), **AUTHORITY)
+            known_at=epoch(known_at), account_scope_sha256=account_scope_sha256,
+            buy_qty=stock.get('buy_qty'), buy_price=stock.get('buy_price'),
+            entry_cost_model=stock.get('_trailing_entry_cost_model'),
+            automatic_management_allowed=automatic_management_allowed, **AUTHORITY)
         link['sha256'] = digest(link)
         return link
     except (ValueError, TypeError, KeyError, OverflowError):
@@ -149,7 +169,7 @@ def holding_link(stock, *, position_key, buy_fill_identity, known_at):
 
 def validate_holding_link(link, *, receipt, quote):
     link = decode(link)
-    if (link.get('schema') != 'main_trailing_plan_holding_link_v1'
+    if (link.get('schema') not in {'main_trailing_plan_holding_link_v1','main_trailing_plan_holding_link_v2'}
             or link.get('sha256') != digest({k:v for k,v in link.items() if k != 'sha256'})
             or link.get('plan_receipt_sha256') != receipt['receipt_sha256']
             or link.get('position_key') != receipt['position_key']
@@ -160,6 +180,52 @@ def validate_holding_link(link, *, receipt, quote):
             or not epoch(receipt['known_at']) <= epoch(link.get('first_buy_at')) <= epoch(link['known_at'])):
         raise ValueError('trailing_plan_holding_link_invalid')
     return link
+
+
+def equivalent_holding_link(link, *, receipt, position, original, source):
+    """Prove original holding inputs belong to this unchanged modeled entry.
+
+    A record/BUY-generation alias alone does not make a hypothetical entry
+    equivalent to the original position. Missing historical v2 context is a
+    research gap, never permission to reuse a different AI question.
+    """
+    if link.get('schema') != 'main_trailing_plan_holding_link_v2':
+        raise ValueError('cf_holding_context_unobserved')
+    if (not _sha(receipt.get('account_scope_sha256'))
+            or link.get('account_scope_sha256') != receipt['account_scope_sha256']):
+        raise ValueError('cf_holding_account_mismatch')
+    if (link.get('automatic_management_allowed') is not True
+            or original.get('automatic_management_allowed') is not True
+            or original.get('owner') != 'main'):
+        raise ValueError('cf_holding_custody_unproven')
+    if (not isinstance(source,dict) or source.get('position_key') != link['position_key']
+            or source.get('buy_fill_identity') != link['buy_fill_identity']
+            or source.get('required') is not True
+            or source.get('path_id','EXIT_TRAILING_TP') != 'EXIT_TRAILING_TP'):
+        raise ValueError('cf_holding_vote_identity_mismatch')
+    if (epoch(link['first_buy_at']) != position['entry_at']
+            or original.get('entry_at') != position['entry_at']):
+        raise ValueError('cf_holding_entry_clock_mismatch')
+    if (type(link.get('buy_qty')) is not int or link['buy_qty'] != position['qty']
+            or type(original.get('qty')) is not int or original['qty'] != position['qty']):
+        raise ValueError('cf_holding_quantity_mismatch')
+    price=link.get('buy_price')
+    if (type(price) not in (int,float) or not math.isfinite(price)
+            or price*link['buy_qty'] != position['buy_basis_krw']
+            or original.get('buy_basis_krw') != position['buy_basis_krw']):
+        raise ValueError('cf_holding_basis_mismatch')
+    if (original.get('route') != position['route'] or original.get('item') != position['item']):
+        raise ValueError('cf_holding_route_mismatch')
+    def cost(value):
+        if not isinstance(value,dict):raise ValueError('cf_holding_cost_mismatch')
+        # Preserve every original model field; only the supported ISO/epoch
+        # clock normalization differs between the two existing consumers.
+        normalized={k:v for k,v in value.items() if k != 'known_at_original'}
+        normalized['known_at']=epoch(normalized.get('known_at'))
+        return normalized
+    if cost(link.get('entry_cost_model')) != cost(position['cost_model']) or cost(original.get('cost_model')) != cost(position['cost_model']):
+        raise ValueError('cf_holding_cost_mismatch')
+    return True
 
 
 def model_entry(receipt, *, symbol, attempt, observation_sha, bundle_sha, route,

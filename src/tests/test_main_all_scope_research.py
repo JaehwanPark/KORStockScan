@@ -9,7 +9,7 @@ from src.engine.lifecycle.broker_cost_reconciliation import receipt_path
 from src.engine.lifecycle.research_input_budget import Claim, LIMIT_BYTES, health
 from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
 from src.engine.scalping.pre_submit_delay_initial_policy import digest
-from src.tests.test_main_all_scope_trailing import position, quote
+from src.tests.test_main_all_scope_trailing import position, quote, at, vector
 
 
 def write(path, value):
@@ -201,3 +201,85 @@ def test_streamed_checkpoints_equal_resident_comparison_and_release_budget(tmp_p
     assert 'scopes' not in large['scope']
     assert sum(p['count'] for p in large['scope']['partitions'])==601*8
     assert health()['used_bytes']==before
+
+
+def entry_window_fixture(tmp_path, evidence, offset):
+    """A valid terminal path carried across the declared window boundary."""
+    root, output = fixture(tmp_path)
+    manifest = research._sealed(root/'manifest.json')
+    part = manifest['partitions'][0]
+    payload = research._sealed(root/part['path'])
+    row = payload['positions'][0]
+    row.update(entry_at=at('2026-10-07T00:00:00')+offset,evidence_kind=evidence)
+    # The opening quote alone would fail the independent forward-path gate.
+    # Preserve a first observed quote within two seconds and a closed-session
+    # transition to the first exit-enabled clock instead of relaxing coverage.
+    payload['paths']['main:0']=[quote(1,'2026-10-07T00:00:01'),quote(2,'2026-10-07T08:00:00')]
+    if evidence == 'enter_pass_opportunity_cf':
+        row.update(entry_action='ENTER_NOW',auxiliary_effective_verdict='PASS',
+            machine_observation_sha256='a'*64,native_evaluation_id='native:0',
+            execution_plan_sha256='b'*64,entry_depth_verified=True)
+    from src.engine.scalping.universal_trailing_replay import replay
+    # Establish that only the research-window guard removes this usable path.
+    assert replay(row,payload['paths']['main:0'],vector())['status']=='modeled_full_exit'
+    payload.pop('artifact_sha256');part['artifact_sha256']=write(root/part['path'],payload)
+    manifest.pop('artifact_sha256');write(root/'manifest.json',manifest)
+    return root, output
+
+
+@pytest.mark.parametrize('evidence',['actual_completed','actual_entry_alternative_exit','enter_pass_opportunity_cf'])
+@pytest.mark.parametrize('offset',[-1,0])
+def test_entry_window_censors_carry_preserves_census_and_resume(tmp_path,evidence,offset):
+    root,out=entry_window_fixture(tmp_path,evidence,offset)
+    sources={p.name:p.read_bytes() for p in root.iterdir()}
+    first=research.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False)
+    expected=['main:1'] if offset<0 else ['main:0','main:1']
+    assert first['population_ids']==['main:0','main:1']
+    assert first['common_population_evaluation']['common_ids']==expected
+    checkpoint=Path(first['partition_results'][0]['path'])
+    original=checkpoint.read_bytes();result=research._sealed(checkpoint)['result']
+    context=result['population_context']['main:0']
+    assert context['entry_at']==at('2026-10-07T00:00:00')+offset
+    assert context['research_entry_window_start_at']==at('2026-10-07T00:00:00')
+    assert context['research_entry_window_exclusion']==('entry_before_research_window' if offset<0 else None)
+    if offset<0:
+        assert first['counters']['entry_before_research_window']==1
+        assert all(r['status']=='source_gap' and r['reason']=='entry_before_research_window'
+            and r['modeled_net_pnl_krw'] is None and r['actual_pnl_krw'] is None
+            for r in result['minimal_results']['main:0'].values())
+    again=research.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False,resume=True)
+    clean=research.run(root/'manifest.json',input_root=root,output_root=tmp_path/'clean',dry_run=False)
+    assert again['counters']=={'checkpoint_reused':2}
+    assert first['common_population_evaluation']==again['common_population_evaluation']==clean['common_population_evaluation']
+    assert checkpoint.read_bytes()==original
+    assert sources=={p.name:p.read_bytes() for p in root.iterdir()}
+
+
+def test_entry_window_helper_uses_kst_clean_floor_and_keeps_original_gap():
+    from src.engine.scalping.universal_trailing_replay import research_entry_window_start,apply_research_entry_window
+    start=research_entry_window_start(['2026-06-06','2026-06-04'])
+    assert start==at('2026-06-05T00:00:00')
+    original=dict(position_key='carry',entry_at=start-1,source_gap='original_path_missing')
+    guarded=apply_research_entry_window(original,window_start_at=start)
+    assert guarded['source_gap']=='original_path_missing'
+    assert guarded['research_entry_window_exclusion']=='entry_before_research_window'
+    assert guarded['entry_at']==original['entry_at'] and guarded['position_key']=='carry'
+    assert 'research_entry_window_exclusion' not in original
+    for dates in ([],None,['20261007'],['2026-10-07T00:00:00'],[None]):
+        with pytest.raises(ValueError,match='research_entry_window_dates_invalid'):
+            research_entry_window_start(dates)
+
+
+def test_changed_global_entry_boundary_invalidates_unchanged_v1_partition(tmp_path):
+    root,out=fixture(tmp_path)
+    first=research.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False)
+    manifest=research._sealed(root/'manifest.json')
+    # Both rows still have identical source bytes/dependencies. Adding an
+    # earlier declared consumed day changes the global research boundary.
+    manifest['consumed_dates'].insert(0,'2026-10-06')
+    manifest.pop('artifact_sha256');write(root/'manifest.json',manifest)
+    changed=research.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False,resume=True)
+    assert changed['counters'].get('checkpoint_reused',0)==0
+    assert changed['population_ids']==first['population_ids']
+    result=research._sealed(Path(changed['partition_results'][0]['path']))['result']
+    assert result['population_context']['main:0']['research_entry_window_start_at']==at('2026-10-06T00:00:00')

@@ -9,7 +9,8 @@ from src.engine.automation import main_trailing_all_scope_research as owner
 from src.engine.automation import main_trailing_partitioned_research as research
 from src.engine.automation.main_trailing_population_aggregation import aggregate
 from src.engine.scalping.universal_trailing_replay import common_evaluation
-from src.tests.test_main_all_scope_research import fixture,write
+from src.tests.test_main_all_scope_research import fixture,write,entry_window_fixture
+from src.tests.test_main_all_scope_trailing import at
 
 
 @pytest.mark.parametrize('damage', [None, 'code', 'target', 'source', 'extension', 'bytes'])
@@ -36,8 +37,8 @@ def test_bounded_trailing_observation_detects_stale_generation_without_replaying
     assert bool(result['findings']) == (damage is not None)
 
 
-def sharded(tmp_path):
-    root,out=fixture(tmp_path)
+def sharded(tmp_path,source_fixture=fixture):
+    root,out=source_fixture(tmp_path)
     manifest=owner._sealed(root/'manifest.json');refs=[]
     for part in manifest.pop('partitions'):
         payload=owner._sealed(root/part['path'])
@@ -71,6 +72,36 @@ def test_v2_replay_resume_and_source_pin(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='manifest_changed'):
         owner.run(root/'manifest.json',input_root=root,output_root=tmp_path/'bad',dry_run=False)
     assert not (tmp_path/'bad'/'initial_policy_2026-10-12.json').exists()
+
+
+@pytest.mark.parametrize('evidence',['actual_completed','actual_entry_alternative_exit','enter_pass_opportunity_cf'])
+@pytest.mark.parametrize('offset',[-1,0])
+def test_v2_entry_window_censors_carry_preserves_census_and_resume(tmp_path,evidence,offset):
+    root,out=sharded(tmp_path,lambda path:entry_window_fixture(path,evidence,offset))
+    sources={str(p.relative_to(root)):byte_generation(p) for p in root.rglob('*') if p.is_file()}
+    first=owner.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False)
+    refs=list(storage.iter_tree(out,first['partition_results_ref']))
+    checkpoint=out/refs[0]['path'];original=checkpoint.read_bytes()
+    results=list(research.checkpoint_results(owner._sealed(checkpoint),out))
+    assert results[0]['population_context']['main:0']['entry_at']==at('2026-10-07T00:00:00')+offset
+    assert results[0]['population_context']['main:0']['research_entry_window_start_at']==at('2026-10-07T00:00:00')
+    assert results[0]['common_ids']==([] if offset<0 else ['main:0'])
+    assert first['missing_population_ids_ref']['count']==0
+    assert first['assembly_census']=={'source_gaps':{}}
+    if offset<0:
+        assert first['counters']['entry_before_research_window']==1
+        assert all(r['status']=='source_gap' and r['reason']=='entry_before_research_window'
+            and r['modeled_net_pnl_krw'] is None and r['actual_pnl_krw'] is None
+            for r in results[0]['minimal_results']['main:0'].values())
+    again=owner.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False,resume=True)
+    clean_out=tmp_path/'clean'
+    clean=owner.run(root/'manifest.json',input_root=root,output_root=clean_out,dry_run=False)
+    clean_ref=next(storage.iter_tree(clean_out,clean['partition_results_ref']))
+    assert list(research.checkpoint_results(owner._sealed(clean_out/clean_ref['path']),clean_out))==results
+    assert again['counters']=={'checkpoint_reused':2,'complete_report_reused':1}
+    assert first['common_population_evaluation']==again['common_population_evaluation']
+    assert checkpoint.read_bytes()==original
+    assert sources=={str(p.relative_to(root)):byte_generation(p) for p in root.rglob('*') if p.is_file()}
 
 
 def test_independent_handoff_recomputes_pair_metrics_not_just_tree_bytes(tmp_path):

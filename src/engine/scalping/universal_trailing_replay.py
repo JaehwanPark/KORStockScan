@@ -6,7 +6,7 @@ The trading decision and M1 classifier are shared with runtime.
 """
 from collections import Counter
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import date, datetime
 import math
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,37 @@ MAX_POSITIONS = 20000
 SLIPPAGE_BPS = (0, 30, 100)
 MAX_QUOTE_ENVELOPE_BYTES = 12 * 1024
 WS_PROJECTION_SCHEMA = 'main_m1_route_touch_tape_projection_v1'
+
+
+def research_entry_window_start(consumed_dates):
+    """Derive the entry boundary from the declared consumed source window.
+
+    A completion file can contain an older carried position. Its presence is
+    census evidence, not permission to tune on an entry before this window.
+    """
+    if not isinstance(consumed_dates, (list, tuple)) or not consumed_dates:
+        raise ValueError('research_entry_window_dates_invalid')
+    try:
+        dates = [date.fromisoformat(day) for day in consumed_dates]
+        if any(day.isoformat() != raw for day, raw in zip(dates, consumed_dates)):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError('research_entry_window_dates_invalid') from None
+    start = max(min(dates), date(2026, 6, 5))
+    return datetime(start.year, start.month, start.day, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+
+
+def apply_research_entry_window(position, *, window_start_at):
+    """Keep original IDs, clocks and gaps while censoring pre-window entries."""
+    if type(window_start_at) not in (int, float) or not math.isfinite(window_start_at):
+        raise ValueError('research_entry_window_start_invalid')
+    row = {**position, 'research_entry_window_start_at': window_start_at}
+    entry = number(position.get('entry_at'))
+    if entry is not None and entry < window_start_at:
+        row['research_entry_window_exclusion'] = 'entry_before_research_window'
+        if not row.get('source_gap'):
+            row['source_gap'] = 'entry_before_research_window'
+    return row
 
 
 def quote_source_digest(event):
@@ -800,7 +831,8 @@ def _summarize_partitions(positions, paths, candidates, *, incumbent, typed_poli
         prepared_paths = {}
         context[identity] = {key:position.get(key) for key in (
             'entry_at', 'evidence_kind', 'symbol', 'buy_basis_krw', 'entry_context', 'completion_at',
-            'situation_pin', 'operating_ai_required')}
+            'situation_pin', 'operating_ai_required', 'research_entry_window_start_at',
+            'research_entry_window_exclusion')}
         if context[identity]['entry_context'] is not None:
             import json
             if len(json.dumps(context[identity]['entry_context'], allow_nan=False).encode()) > 2048:

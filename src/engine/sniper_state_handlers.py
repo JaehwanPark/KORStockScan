@@ -29890,9 +29890,15 @@ def _observe_scalp_trailing_input_transition(
     from src.engine.scalping.universal_trailing_replay import quote_source_digest
     if universal_quote.get('kind') == 'QUOTE':
         universal_quote['source_sha256'] = quote_source_digest(universal_quote)
-    from src.engine.scalping.trailing_entry_research_source import holding_link as trailing_holding_link
+    from src.engine.scalping.trailing_entry_research_source import holding_link as trailing_holding_link, runtime_account_scope
     trailing_link = trailing_holding_link(stock, position_key=position_key,
-        buy_fill_identity=holding_generation, known_at=now_ts)
+        buy_fill_identity=holding_generation, known_at=now_ts,
+        account_scope_sha256=runtime_account_scope(),
+        automatic_management_allowed=not bool(stock.get('manual_control_exclusion_blocked')
+            or stock.get('manual_control_hard_stop_handoff_pending')
+            or stock.get('manual_control_hard_stop_handoff_inflight')
+            or stock.get('manual_control_auto_open_loss_blocked')
+            or stock.get('manual_control_auto_hard_stop_blocked')))
     try:
         _log_holding_pipeline(
             stock,
@@ -70761,13 +70767,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             now_ts=cap_observed_at)
         trailing_plan_source = None
         if _safe_int(stock.get('buy_qty'), 0) <= 0:
-            from src.engine.scalping.trailing_entry_research_source import capture as capture_trailing_plan
+            from src.engine.scalping.trailing_entry_research_source import capture as capture_trailing_plan, runtime_account_scope
             trailing_plan_source = capture_trailing_plan(
                 symbol=code, position_key=_scalp_holding_source_position_key(stock, code),
                 action_receipt=machine_action_receipt or {},
                 sizing_fields=entry_execution_sizing_fields, cap_context=cap_source,
                 cost_model=stock.get('_trailing_entry_cost_model'),
-                entry_context=stock.get('trailing_entry_context'), known_at=cap_observed_at)
+                entry_context=stock.get('trailing_entry_context'), known_at=cap_observed_at,
+                account_scope_sha256=runtime_account_scope())
             # This pointer is diagnostic only. A failed capture clears the
             # previous attempt instead of attributing a later holding to it.
             from src.engine.scalping.trailing_entry_research_source import install as install_trailing_plan

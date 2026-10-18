@@ -19,7 +19,10 @@ from src.engine.scalping.trailing_mechanical_policy import classifier_hash
 from src.engine.scalping.trailing_mechanical_strength import StrengthDecision
 from src.engine.scalping.trailing_situation_policy import initial_bundle
 from .main_trailing_situation_aggregation import research as research_registered_grid
-from src.engine.scalping.universal_trailing_replay import PreparedPath, PreparedVariants, summarize_partitions
+from src.engine.scalping.universal_trailing_replay import (
+    PreparedPath, PreparedVariants, summarize_partitions,
+    research_entry_window_start, apply_research_entry_window,
+)
 from .main_trailing_path_projection import EventSequence, stream_pairs
 from .main_trailing_population_aggregation import aggregate
 from src.engine.lifecycle.research_disk_budget import use, reclaim_missing
@@ -125,6 +128,7 @@ def run(manifest_path,*,input_root,output_root=None,dry_run=True,resume=False):
 
 def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,manifest_generation):
     counters=Counter();parent=manifest['approved_parent_receipt'];candidates=manifest.get('candidates',{})
+    entry_window_start=research_entry_window_start(manifest['consumed_dates'])
     contract=owner.code_contract()
     report_path=out/f"research_{manifest['source_date']}.json"
     if resume and report_path.exists():
@@ -149,7 +153,8 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
     def result_refs():
         for part in storage.iter_tree(root,manifest['partitions_ref']):
             path=owner._source_path(root,part['path']);generation=byte_generation(path)
-            key=digest([part,generation,window['input_window_generation_sha256'],parent,candidates,contract,manifest['as_of']])
+            key=digest([part,generation,window['input_window_generation_sha256'],parent,candidates,contract,
+                        manifest['as_of'],entry_window_start])
             cache=out/'partitions'/f'{key}.json'
             if resume and cache.exists():
                 try:
@@ -189,7 +194,11 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
                                 quota=quota,counters=counters)
                     paths[identity]=PreparedVariants(variants)
                 from src.engine.scalping.universal_trailing_replay import actual_cost_available_epoch
-                positions=payload['positions']
+                positions=[apply_research_entry_window(p,window_start_at=entry_window_start)
+                           for p in payload['positions']]
+                entry_window_excluded=sum(bool(p.get('research_entry_window_exclusion')) for p in positions)
+                if entry_window_excluded:
+                    counters['entry_before_research_window']+=entry_window_excluded
                 positions = [{**p, 'actual_cost_reconciliation':{}}
                     if p.get('evidence_kind') == 'actual_completed' and (
                         actual_cost_available_epoch(p.get('actual_cost_reconciliation') or {}) is None
