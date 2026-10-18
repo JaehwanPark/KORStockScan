@@ -25,7 +25,8 @@ NATIVE_SELECTION = handoff._selection
                                   'src/engine/automation/main_stop_postclose.py',
                                   'src/engine/automation/runtime_policy_bootstrap.py',
                                   'src/engine/lifecycle/holding_window_generation.py'])
-@pytest.mark.parametrize('review_map', ['REVIEWED_DELAY_RESEARCH_SOURCES', 'REVIEWED_POST_AUX_GUARD_SOURCES',
+@pytest.mark.parametrize('review_map', ['REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES',
+                                     'REVIEWED_DELAY_RESEARCH_SOURCES', 'REVIEWED_POST_AUX_GUARD_SOURCES',
                                      'REVIEWED_AUXILIARY_PRODUCTION_INPUT_SOURCES',
                                      'REVIEWED_NONFIXED_QUOTE_DELIVERY_SOURCES',
                                      'REVIEWED_ENTRY_CONSUMER_SOURCES',
@@ -1188,3 +1189,84 @@ def test_delay_contract_added_dependencies_keep_exact_original_digest(tmp_path,m
         with pytest.raises(ValueError):handoff._verify_entry_code_delta(tmp_path,NEW,OLD,{original:original,added:added},expected)
     else:
         assert handoff._verify_entry_code_delta(tmp_path,NEW,OLD,{original:original,added:added},expected)==[added]
+
+
+@pytest.fixture
+def completed_research_git_candidate(tmp_path):
+    """Real Git objects bind the original policy and final integrated sources."""
+    import os
+    import subprocess
+    from src.engine.scalping import main_stop_policy as stop
+    from src.engine.scalping import holding_vote_experiment as holding
+    from src.engine.scalping import pre_submit_delay_initial_policy as delay
+    canonical = Path(handoff.__file__).resolve().parents[3]
+    root = tmp_path/'candidate'
+    subprocess.run(['git', 'clone', '--shared', '--no-checkout', '-q', str(canonical), str(root)], check=True)
+    own = 'src/engine/automation/intraday_release_handoff.py'
+    handler = 'src/engine/sniper_state_handlers.py'
+    dependencies = handoff.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[handler][handoff._sha(canonical/handler)]
+    inventories = {
+        'main_stop': {key: 'src/engine/'+key for key in stop.implementation_paths()},
+        'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()},
+        'pre_submit_delay': {key: key for key in delay.CONTRACT_PATHS},
+    }
+    names = {own, *dependencies, *(name for paths in inventories.values() for name in paths.values())}
+    for name in names:
+        path = root/name;path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((canonical/name).read_bytes())
+    subprocess.run(['git', '-C', str(root), 'add', '--force', *sorted({os.path.normpath(n) for n in names})], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test',
+                    'commit', '-qm', 'frozen integrated native source fixture'], check=True)
+    commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    digests = dict(main_stop='687c06b51d0e4b581f1927151b31483d5f979e438cc67a726e6718f84bead533',
+        holding_vote='6c664915b34289cddceeaf20399cce45f5e9e3f3373fdeae885910043f343112',
+        pre_submit_delay='bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256')
+    return root, commit, inventories, digests
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+def test_completed_research_preserves_original_policy_digest_with_real_git(completed_research_git_candidate, family):
+    root, commit, inventories, digests = completed_research_git_candidate
+    before = {str(p): handoff._sha(p) for p in (root/'src').rglob('*.py')}
+    changed = handoff._verify_entry_code_delta(root, commit,
+        '7f2552aedde8fec6ef904a43105827907e50dfc8', inventories[family], digests[family])
+    assert 'src/engine/sniper_state_handlers.py' in changed
+    if family == 'main_stop':
+        assert len(inventories[family]) == 43
+        extensions = handoff.REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
+            '7f2552aedde8fec6ef904a43105827907e50dfc8', digests[family])]
+        assert len(extensions) == 26 and set(extensions) <= set(changed)
+    assert before == {str(p): handoff._sha(p) for p in (root/'src').rglob('*.py')}
+
+
+@pytest.mark.parametrize('source', ['src/engine/scalping/main_stop_runtime_source.py',
+    'src/engine/lifecycle/holding_research_cost.py', 'src/engine/infrastructure/main_prompt_policy_loading.py'])
+@pytest.mark.parametrize('fault', ['changed_committed', 'changed_dirty', 'git_object_changed',
+                                   'missing', 'symlink', 'parent_symlink'])
+def test_completed_research_rejects_changed_or_unbound_transitive_source(
+        completed_research_git_candidate, source, fault):
+    import subprocess
+    root, commit, inventories, digests = completed_research_git_candidate
+    path = root/source
+    if fault in {'changed_committed', 'changed_dirty', 'git_object_changed'}:
+        original = path.read_bytes()
+        path.write_bytes(original+b'\nUNREVIEWED = True\n')
+        if fault in {'changed_committed', 'git_object_changed'}:
+            subprocess.run(['git', '-C', str(root), 'add', source], check=True)
+            subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test',
+                            'commit', '-qm', 'unreviewed source change'], check=True)
+            commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+            if fault == 'git_object_changed':
+                path.write_bytes(original)
+    elif fault == 'missing': path.unlink()
+    elif fault == 'symlink':
+        saved = path.with_suffix('.saved');path.rename(saved);path.symlink_to(saved)
+    else:
+        directory = path.parent;saved = directory.with_name(directory.name+'_saved')
+        directory.rename(saved);directory.symlink_to(saved, target_is_directory=True)
+    # Delay's old inventory omits these files; the exact handler trigger must
+    # still close their native transitive source contract.
+    with pytest.raises(ValueError, match='reviewed_dependency_dirty' if fault == 'git_object_changed' else ''):
+        handoff._verify_entry_code_delta(root, commit,
+            '7f2552aedde8fec6ef904a43105827907e50dfc8',
+            inventories['pre_submit_delay'], digests['pre_submit_delay'])

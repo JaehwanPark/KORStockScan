@@ -17,7 +17,8 @@ NOW = datetime(2026,10,17,12,tzinfo=ZoneInfo('Asia/Seoul'))
 
 
 @pytest.fixture
-def prepared(tmp_path, monkeypatch):
+def prepared(tmp_path, monkeypatch, request):
+    family = getattr(request, 'param', 'pre_submit_delay')
     data=tmp_path/'data'; data.mkdir()
     root=tmp_path/'release'; root.mkdir()
     source=root/'consumer.py'; source.write_text('reviewed code\n')
@@ -29,7 +30,7 @@ def prepared(tmp_path, monkeypatch):
         path.write_text(json.dumps(value)); return path
     env=tmp_path/'env'; env.write_text('export TEST=true\n')
     manifest={'target_date':DAY,'selected_release_sha':ORIGIN,
-              'pre_submit_delay_handoff':{'target_date':DAY,'policy_sha256':'policy'}}
+              C.FAMILIES[family][0]:{'target_date':DAY,C.FAMILIES[family][1]:'policy'}}
     manifest['manifest_sha256']=C._digest(manifest)
     mp=write('manifest.json',manifest)
     vp=write('verify.json',{'status':'pass','findings':[], 'manifest_sha256':manifest['manifest_sha256']})
@@ -53,7 +54,7 @@ def prepared(tmp_path, monkeypatch):
     monkeypatch.setattr(O,'_session_absent',lambda: True)
     import subprocess
     monkeypatch.setattr(subprocess,'check_output',lambda *a,**kw: COMMIT+'\n')
-    args=dict(family='pre_submit_delay',policy_sha='policy',expected='expected',paths=paths)
+    args=dict(family=family,policy_sha='policy',expected='expected',paths=paths)
     receipt=C.issue(data,DAY,**args,release_root=root,prepared_receipt=pp,
                     origin_verification=vp,confirm=C.AUTHORITY)
     return data,root,args,actual,receipt,pp
@@ -176,6 +177,8 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
                 reviewed.add(H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES[name][1])
             if name in H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES:
                 reviewed.add(H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES[name][1])
+            if name in H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES:
+                reviewed.add(H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES[name][1])
             assert current in reviewed
 
 
@@ -278,7 +281,8 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     canonical = Path(H.__file__).resolve().parents[3]
     fixture = tmp_path/'code'
     own = 'src/engine/automation/intraday_release_handoff.py'
-    dependencies = next(iter(H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES['src/engine/sniper_state_handlers.py'].values()))
+    dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES['src/engine/sniper_state_handlers.py'][
+        H._sha(canonical/'src/engine/sniper_state_handlers.py')]
     for name in (*CONTRACT_PATHS,own,*dependencies):
         destination=fixture/name
         destination.parent.mkdir(parents=True,exist_ok=True)
@@ -297,7 +301,8 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     changed = H._verify_entry_code_delta(fixture,candidate,origin,paths,expected)
     assert set(H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES).issubset(changed)
     for name, pair in H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.items():
-        assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == pair[1]
+        final_pair = H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(name, pair)
+        assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == final_pair[1]
     # Model a clean committed candidate with an unknown replacement. The Git
     # fixture returns those same bytes, so rejection must be semantic/code-pair,
     # rather than the dirty-worktree check.
@@ -310,3 +315,31 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     new_helper.write_text(new_helper.read_text()+'\nUNKNOWN_HELPER_CHANGE = True\n')
     with pytest.raises(ValueError,match='entry_consumer_contract_extension_unreviewed'):
         H._verify_entry_code_delta(fixture,candidate,origin,paths,expected)
+
+
+@pytest.mark.parametrize('prepared', ['main_stop', 'holding_vote'], indirect=True)
+@pytest.mark.parametrize('fault', [None, 'missing', 'extra', 'full_key', 'normalized_key',
+                                   'bad_extension_prefix', 'other_family'])
+def test_engine_relative_extension_preserves_native_family_keys(prepared, monkeypatch, fault):
+    data, root, args, selector = _origin_resolution_arguments(prepared)
+    addition = 'src/engine/../utils/new_source.py'
+    extensions = {addition: 'd'*64}
+    monkeypatch.setitem(H.REVIEWED_DELAY_CONTRACT_EXTENSIONS, (ORIGIN, args['expected']), extensions)
+    args['paths'] = {**args['paths'], '../utils/new_source.py': addition}
+    if fault == 'missing': args['paths'].pop('../utils/new_source.py')
+    elif fault == 'extra': args['paths']['unreviewed.py'] = 'src/engine/unreviewed.py'
+    elif fault == 'full_key': args['paths'] = {'consumer.py': 'consumer.py', addition: addition}
+    elif fault == 'normalized_key': args['paths'] = {'consumer.py': 'consumer.py', 'src/utils/new_source.py': addition}
+    elif fault == 'bad_extension_prefix':
+        monkeypatch.setitem(H.REVIEWED_DELAY_CONTRACT_EXTENSIONS, (ORIGIN, args['expected']),
+                            {'src/utils/new_source.py': 'd'*64})
+    elif fault == 'other_family': args['family'] = 'pre_submit_delay'
+    before = {str(p): p.read_bytes() for p in data.rglob('*') if p.is_file()}
+    if fault:
+        with pytest.raises(ValueError): C.resolve_prepared_code_origin(data, DAY, **args)
+    else:
+        result = C.resolve_prepared_code_origin(data, DAY, **args)
+        assert result['selected_paths'] == prepared[2]['paths']
+        assert result['reviewed_extension_hashes'] == extensions
+        assert result['original_code_sha256'] == args['expected']
+    assert before == {str(p): p.read_bytes() for p in data.rglob('*') if p.is_file()}

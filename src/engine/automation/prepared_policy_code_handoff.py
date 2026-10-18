@@ -215,7 +215,21 @@ def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, pat
             raise ValueError('prepared_code_origin_handoff_changed')
         extensions = H.REVIEWED_DELAY_CONTRACT_EXTENSIONS.get((proof['origin_commit'], expected), {})
         expected_paths = dict(selected_paths)
-        expected_paths.update({name:name for name in extensions if name not in selected_paths.values()})
+        for name in extensions:
+            if name in selected_paths.values():
+                continue
+            # Historical policy keys are part of their frozen digest. Stop and
+            # holding use engine-relative keys (including ../utils), whereas
+            # delay uses repository-relative keys. Only values are Git paths.
+            if family in {'main_stop', 'holding_vote'}:
+                if not name.startswith('src/engine/'):
+                    raise ValueError('prepared_code_origin_inventory_extension_unreviewed')
+                key = name[len('src/engine/'):]
+            else:
+                key = name
+            if key in expected_paths:
+                raise ValueError('prepared_code_origin_inventory_extension_unreviewed')
+            expected_paths[key] = name
         if paths != expected_paths:
             raise ValueError('prepared_code_origin_inventory_extension_unreviewed')
         sources[str(path)] = receipt_sha

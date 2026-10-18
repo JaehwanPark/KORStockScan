@@ -1016,6 +1016,141 @@ REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
 }
 
 
+# Completed stop/holding research integrated with the native startup loader.
+# Exact original 7f-to-reviewed bytes only. Preserve all earlier source pairs;
+# this admits incumbent policy carry, never the CPU-blocked grace=0 candidate.
+# Review: docs/audits/main-research-integrated-p5-p6-deployment-review-2026-10-18.md.
+REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES = {'src/engine/automation/main_stop_postclose.py': ('531f1498332196f0e54d17b76ed8d30295009a5e5ee9363ad9397613f0740ad2',
+                                                  'c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5'),
+ 'src/engine/automation/main_stop_source_index.py': ('791fd757311aa8c0a96b2373165a52a560b026492992e46e9fe386996eb605ff',
+                                                     '89155d656e6c28a6eaa045d206a68897f04d1825fdb339a818053579f049b559'),
+ 'src/engine/automation/main_trailing_source_assembler.py': ('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                             'e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa'),
+ 'src/engine/kiwoom_orders.py': ('53da4d99d98a956b16a9c6b26d256bb95c2625f09381b729666573f6035a82b3',
+                                 '3d31672f0dfab9080cfca4623aa280c1e2f850db43435241c5d0b8b669ce5702'),
+ 'src/engine/kiwoom_sniper_v2.py': ('ab335b38a3aff9362bd17a29fde787b425a4478f60e0d328c7b60553800cc21e',
+                                    'd3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da'),
+ 'src/engine/lifecycle/broker_cost_source.py': ('75cf069ff4529e3d2ae429112e105028f51d757eb87378af15a6e97dba16711c',
+                                                '62a88c219868754055c8754a43fb5976c453aa70c81422fd97e410a8ae995c86'),
+ 'src/engine/log_archive_service.py': ('a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
+                                       'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3'),
+ 'src/engine/monitoring/runtime_performance.py': ('767fe6bb4e874d8d2e6b56a693f028ecebc02f30ea8cf96a050e47ca6b76ebf8',
+                                                  '80089ba158ce24d79df5f37de8d521321bc2a40f988d5f394e354db637cce78d'),
+ 'src/engine/pipeline_event_summary.py': ('8500f48239f82c9959ece854b6358df1502ff43d7ce7ec5336dc06853959b2e4',
+                                          'fc39f13b5b026c628345268953daec046cf1277f88b9f3b1bcef4833f34e99af'),
+ 'src/engine/scalping/holding_vote_exit_models.py': ('ae90fb096a17677d313e6d3865d03468b6375f8a1fabe78749ee5aa48190de90',
+                                                     '084f6e6036bc9a3807fe68f2b389fc02d628905d7ba0b08d58e451667547c481'),
+ 'src/engine/scalping/initial_quantity_bundle_state.py': ('52571601eb807862733b6c878df0a38e2060e4c17a72b097281987813e0253f8',
+                                                          '3dd0ad1be14e821d9b402184aba9b68ee989cf7d8ee45fb47206bdcf3e39da70'),
+ 'src/engine/scalping/main_stop_policy.py': ('74600db4eb6897546f266ee87cd3f7001d5562ca8668dbd08ba15371484cafad',
+                                             '8d7bcb0bf87db0dc2a44c99f41e67249831463af8157d23688f0c82e5362bc07'),
+ 'src/engine/scalping/main_stop_replay.py': ('a9351c17a3b9a7cd84a4be7c6672a801ff77f2c537459d95a9eb18b4eca6ff15',
+                                             '4121f176553433e2d07cdc1b8466c4a54edfa6cf00bbe09bde4e12a74258730d'),
+ 'src/engine/scalping/universal_trailing_replay.py': ('7e8826902ef8a93320455fc5136184834709775629e2f0677445562d7733726e',
+                                                      '70055c43944d7dac085826c416fd6fffb42bd0a38bde96e928c5ed5b550a4b4f'),
+ 'src/engine/sniper_execution_receipts.py': ('179948c3eb4a0bd7bab6d121ae6d90a0817b82dbef557dea72a25db62c0b8e05',
+                                             '978dcd47d83709b245dfe8e2983b450d6559f39c9716fe47cce5a475b1eee4b6'),
+ 'src/engine/sniper_state_handlers.py': ('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                         '5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf'),
+ 'src/utils/threshold_cycle_registry.py': ('41c0a941d66a66bd1e6827960e225439e4af185f1d5635939a362f8345096541',
+                                           '5e914fc73837324d312a97672b0aa7d8bd49c788bcd54ff7e0a6ab3c0d08ce8a')}
+
+# The original stop digest covers 17 keys. Added current implementation keys
+# are verified separately, without rewriting that sealed historical digest.
+REVIEWED_DELAY_CONTRACT_EXTENSIONS[(
+    '7f2552aedde8fec6ef904a43105827907e50dfc8',
+    '687c06b51d0e4b581f1927151b31483d5f979e438cc67a726e6718f84bead533',
+)] = {'src/engine/../database/db_manager.py': '6577bc9847a7decace8ad701f2ea628e6f49e687e30296aa0c4c977212b82672',
+ 'src/engine/../database/models.py': '7afc7e63a5fdb334df889c5d6ed0a91dd16b1ca077cdf498558f8289077ad784',
+ 'src/engine/../trading/market/session_contract.py': '3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
+ 'src/engine/../trading/order/owner_custody_registry.py': '95bd5b8696115567a3549f99532d072cd57b0773f7537a41f7272ff773669001',
+ 'src/engine/../utils/constants.py': '72021194611922de3e7c4399770fa98b488035753b24a9fce62f12115bb1c0c6',
+ 'src/engine/../utils/pipeline_event_logger.py': '58dd5b4ba0ce91a248cebf8a608974caba13080226e139e779f512500b4b4c5f',
+ 'src/engine/automation/main_stop_performance.py': '692e986c6379d24591e390db04407de78ac43fe5acdf7ccf06fa595f132923d4',
+ 'src/engine/automation/main_stop_runtime_workload.py': '9f3acc7324e3a218c430a96b751245d5610cedc5a33cb912f7ab870efe8beb38',
+ 'src/engine/automation/main_stop_source_projection.py': 'd02e54b9f3a1233b4c2c7e0462916e3e8b789c3dd6afe0b6e35a4230856250cb',
+ 'src/engine/dashboard_data_repository.py': 'fa291db63c49d3e6fd8161c3369b114aba0dd4f6e1d28f1a075478fe7123ec84',
+ 'src/engine/kiwoom_orders.py': '3d31672f0dfab9080cfca4623aa280c1e2f850db43435241c5d0b8b669ce5702',
+ 'src/engine/kiwoom_sniper_v2.py': 'd3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da',
+ 'src/engine/lifecycle/broker_cost_allocation.py': 'f2ce924c4239f51e4d267e56c1ffae92978600b400796a935b6d30994e9f7783',
+ 'src/engine/lifecycle/broker_cost_reconciliation.py': 'db9f1d2db58d6e766b9a18db22e643c4bdc748c8580d8b364cc36d6066b129d5',
+ 'src/engine/lifecycle/broker_cost_source.py': '62a88c219868754055c8754a43fb5976c453aa70c81422fd97e410a8ae995c86',
+ 'src/engine/lifecycle/main_stop_research_cost.py': '0b76f9039325382ce8aa685e069b8783c333021ac1b9dc82f24f452b2b2768c7',
+ 'src/engine/log_archive_service.py': 'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
+ 'src/engine/monitoring/runtime_performance.py': '80089ba158ce24d79df5f37de8d521321bc2a40f988d5f394e354db637cce78d',
+ 'src/engine/scalping/exit_safety_monitor.py': 'a7dac48b1659431f15e187021856d5482d4d13426c442b73aba40d8918622b4c',
+ 'src/engine/scalping/holding_vote_exit_models.py': '084f6e6036bc9a3807fe68f2b389fc02d628905d7ba0b08d58e451667547c481',
+ 'src/engine/scalping/initial_quantity_bundle_state.py': '3dd0ad1be14e821d9b402184aba9b68ee989cf7d8ee45fb47206bdcf3e39da70',
+ 'src/engine/scalping/main_stop_experiment.py': 'd7a23d1742d1b73ddd75af876839eb03500f8ef4baad23d33f0d007102720ffa',
+ 'src/engine/scalping/main_stop_quantity_source.py': 'dd49bd2d6543adfa0e653974e31c37be7aed752b6e279a58e33ceca846ea240e',
+ 'src/engine/scalping/main_stop_runtime_source.py': 'fb32767aee777ed660ec0db018b5419e6f12f09a5644882425f79a954bd32978',
+ 'src/engine/sniper_execution_receipts.py': '978dcd47d83709b245dfe8e2983b450d6559f39c9716fe47cce5a475b1eee4b6',
+ 'src/engine/sniper_trade_utils.py': 'c816ae517e1557d9b79dd9338658458f3fde5929467b7a7879c64c70a42611ac'}
+
+# All three native families include this exact handler. Bind its integrated
+# source/quantity/reader and holding/helper closure on every verification;
+# another handler generation gains no exception through this dependency map.
+REVIEWED_HOLDING_RESEARCH_DEPENDENCIES['src/engine/sniper_state_handlers.py']['5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf'] = {'src/database/db_manager.py': '6577bc9847a7decace8ad701f2ea628e6f49e687e30296aa0c4c977212b82672',
+ 'src/database/models.py': '7afc7e63a5fdb334df889c5d6ed0a91dd16b1ca077cdf498558f8289077ad784',
+ 'src/engine/ai/holding_exit_vote.py': '9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b',
+ 'src/engine/ai/holding_vote_replay_source.py': '51a90688f175c9fc242367811e4aab8c2509d1287e8b92d3cdf340badc68421a',
+ 'src/engine/ai_prompt_contracts.py': '53c589056f5732e550616a371fa95fd63fdcb92341d50216d18d91795aa4c1e5',
+ 'src/engine/ai_response_contracts.py': 'f94031a3776b4aba1045593ee0f9fd2f5432b88f68b97faad43e549f0b83004b',
+ 'src/engine/automation/main_holding_allocated_cost_diagnostics.py': '7f1bf1c32568b004f2913bf8e1705d8b003e21dc6f8916784282df202291c313',
+ 'src/engine/automation/main_stop_performance.py': '692e986c6379d24591e390db04407de78ac43fe5acdf7ccf06fa595f132923d4',
+ 'src/engine/automation/main_stop_postclose.py': 'c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5',
+ 'src/engine/automation/main_stop_runtime_workload.py': '9f3acc7324e3a218c430a96b751245d5610cedc5a33cb912f7ab870efe8beb38',
+ 'src/engine/automation/main_stop_source_index.py': '89155d656e6c28a6eaa045d206a68897f04d1825fdb339a818053579f049b559',
+ 'src/engine/automation/main_stop_source_projection.py': 'd02e54b9f3a1233b4c2c7e0462916e3e8b789c3dd6afe0b6e35a4230856250cb',
+ 'src/engine/automation/main_trailing_all_scope_research.py': 'a51359c9c0864e055c4c71cb240760f11ca7de265530aa22ac378a70c30af01b',
+ 'src/engine/automation/main_trailing_source_assembler.py': 'e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+ 'src/engine/dashboard_data_repository.py': 'fa291db63c49d3e6fd8161c3369b114aba0dd4f6e1d28f1a075478fe7123ec84',
+ 'src/engine/holding_exit_observation_report.py': '8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db',
+ 'src/engine/infrastructure/main_policy_loading.py': 'da58eb3fc403b5117cba011d6bb92f6e15790248d181ada4b73b263d38e073db',
+ 'src/engine/infrastructure/main_prompt_policy_loading.py': '563976e1aa7a8867a330a1db0e897023ab87f9c56784264841029bdf8a6cb4f1',
+ 'src/engine/kiwoom_orders.py': '3d31672f0dfab9080cfca4623aa280c1e2f850db43435241c5d0b8b669ce5702',
+ 'src/engine/kiwoom_sniper_v2.py': 'd3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da',
+ 'src/engine/lifecycle/broker_cost_allocation.py': 'f2ce924c4239f51e4d267e56c1ffae92978600b400796a935b6d30994e9f7783',
+ 'src/engine/lifecycle/broker_cost_reconciliation.py': 'db9f1d2db58d6e766b9a18db22e643c4bdc748c8580d8b364cc36d6066b129d5',
+ 'src/engine/lifecycle/broker_cost_source.py': '62a88c219868754055c8754a43fb5976c453aa70c81422fd97e410a8ae995c86',
+ 'src/engine/lifecycle/holding_research_cost.py': 'ef309953ea56261e38e1238ed2c61a4bcbd5e77f61677ee01fa30433bc077dd3',
+ 'src/engine/lifecycle/holding_window_generation.py': '52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
+ 'src/engine/lifecycle/main_stop_research_cost.py': '0b76f9039325382ce8aa685e069b8783c333021ac1b9dc82f24f452b2b2768c7',
+ 'src/engine/lifecycle/research_input_budget.py': 'a29ba8caeddd652e764e1a760218006038cc83ebc9aec89e5b78055598eedcf2',
+ 'src/engine/lifecycle/research_json_stream.py': 'fbca117c876a62659255914b5771772cdcbdb3e58a904e566a402959379f3df0',
+ 'src/engine/lifecycle/research_storage.py': 'bc936e55d483e9e58995924b139cd13f423ce911e60a50c6b63859855f711f3e',
+ 'src/engine/lifecycle/snapshot_archive.py': '9b1a0ac18db7fde52f609db45950b9fb631376f401fa565088a9831dd80ad42a',
+ 'src/engine/log_archive_service.py': 'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
+ 'src/engine/monitoring/runtime_performance.py': '80089ba158ce24d79df5f37de8d521321bc2a40f988d5f394e354db637cce78d',
+ 'src/engine/scalping/entry_setup_live_policy.py': '7899aff816388574b57dd51d44156547b433f3fc153f1ea69bfde15b04d82512',
+ 'src/engine/scalping/entry_setup_scalping_rollout.py': '368f9007ea9f3d248bc2242e660f3e8d4f589dcb90a26993303b61ded3aba0d9',
+ 'src/engine/scalping/entry_split_order_plan.py': 'aa1e130239521229201759708c9ebf1e156a20ba1f88704c3607992043a65617',
+ 'src/engine/scalping/exit_safety_monitor.py': 'a7dac48b1659431f15e187021856d5482d4d13426c442b73aba40d8918622b4c',
+ 'src/engine/scalping/holding_path_vote_policy.py': 'bbac620a904ee015a9245a0d032dcbf3f615984b2c0c5e7c13dc904092dcc1aa',
+ 'src/engine/scalping/holding_prompt_live_policy.py': 'b8229b59d6633a27b025427a07485bbe759a798452bebac45c97c8298deed1bd',
+ 'src/engine/scalping/holding_vote_exit_models.py': '084f6e6036bc9a3807fe68f2b389fc02d628905d7ba0b08d58e451667547c481',
+ 'src/engine/scalping/initial_quantity_bundle_state.py': '3dd0ad1be14e821d9b402184aba9b68ee989cf7d8ee45fb47206bdcf3e39da70',
+ 'src/engine/scalping/main_stop_experiment.py': 'd7a23d1742d1b73ddd75af876839eb03500f8ef4baad23d33f0d007102720ffa',
+ 'src/engine/scalping/main_stop_policy.py': '8d7bcb0bf87db0dc2a44c99f41e67249831463af8157d23688f0c82e5362bc07',
+ 'src/engine/scalping/main_stop_quantity_source.py': 'dd49bd2d6543adfa0e653974e31c37be7aed752b6e279a58e33ceca846ea240e',
+ 'src/engine/scalping/main_stop_replay.py': '4121f176553433e2d07cdc1b8466c4a54edfa6cf00bbe09bde4e12a74258730d',
+ 'src/engine/scalping/main_stop_runtime_source.py': 'fb32767aee777ed660ec0db018b5419e6f12f09a5644882425f79a954bd32978',
+ 'src/engine/scalping/position_sizing_allocator.py': 'c3decb9a56f14d81c27e7628034468185876c1c06c2b3aae1d5baf17da9b8029',
+ 'src/engine/scalping/reversal_evaluation_context.py': '109bf1d154bf12c0656fcf1694567f4fefe0cd6e6f85d98cdaa8b9439f13ed59',
+ 'src/engine/scalping/trailing_entry_research_source.py': 'b5e66cf46adbf666ca73271fea1c775ef68874849fdd06fd723b88334233ad41',
+ 'src/engine/scalping/trailing_exit_decision.py': '11221ba40df78f181b1c5a8236a8481bd7dad75351c94f36d2ce84a53a8ca61a',
+ 'src/engine/scalping/universal_trailing_replay.py': '70055c43944d7dac085826c416fd6fffb42bd0a38bde96e928c5ed5b550a4b4f',
+ 'src/engine/sniper_execution_receipts.py': '978dcd47d83709b245dfe8e2983b450d6559f39c9716fe47cce5a475b1eee4b6',
+ 'src/engine/sniper_trade_utils.py': 'c816ae517e1557d9b79dd9338658458f3fde5929467b7a7879c64c70a42611ac',
+ 'src/engine/strategy_position_performance_report.py': '00dc2d63df6ef91ff258507696efd3b348650f7b36db1ad6f789e9e3294d6bd4',
+ 'src/trading/market/session_contract.py': '3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
+ 'src/trading/order/owner_custody_registry.py': '95bd5b8696115567a3549f99532d072cd57b0773f7537a41f7272ff773669001',
+ 'src/utils/constants.py': '72021194611922de3e7c4399770fa98b488035753b24a9fce62f12115bb1c0c6',
+ 'src/utils/kiwoom_utils.py': 'ecef123abab917af0a8a9de934d927b40e561ec1b91836f010814ca9b9117120',
+ 'src/utils/market_day.py': 'ef42333260854caa6c69b12488b62d16e6ea58c1e32b8edc48ffeefd66206ca8',
+ 'src/utils/pipeline_event_logger.py': '58dd5b4ba0ce91a248cebf8a608974caba13080226e139e779f512500b4b4c5f'}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1031,24 +1166,37 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         'src/engine/scalping/holding_vote_experiment.py': {'_code_paths', 'code_sha'},
         'src/engine/scalping/holding_path_vote_policy.py': {'validate_successor', 'verify_source_handoff'},
     }
-    def revision_bytes(revision, name):
+    def repository_name(name):
         # Contract inventories retain their original keys, including ../utils.
         # Git object paths require a canonical repository-relative spelling.
         normalized = os.path.normpath(name)
         if os.path.isabs(normalized) or normalized == '..' or normalized.startswith('../'):
             raise ValueError('entry_consumer_code_path_outside_release')
+        return normalized
+    def candidate_bytes(name):
+        normalized = repository_name(name)
+        path = root
+        for part in Path(normalized).parts:
+            path = path / part
+            if path.is_symlink():
+                raise ValueError('entry_consumer_code_source_symlink:' + name)
+        if not path.is_file():
+            raise ValueError('entry_consumer_code_source_missing:' + name)
+        return path.read_bytes()
+    def revision_bytes(revision, name):
+        normalized = repository_name(name)
         try:
             return subprocess.check_output(['git', '-C', str(root), 'show', revision + ':' + normalized],
                                            stderr=subprocess.DEVNULL, timeout=10)
         except (OSError, subprocess.SubprocessError) as exc:
             raise ValueError('entry_consumer_code_source_missing') from exc
     own_name = 'src/engine/automation/intraday_release_handoff.py'
-    if (root / own_name).read_bytes() != revision_bytes(commit, own_name):
+    if candidate_bytes(own_name) != revision_bytes(commit, own_name):
         raise ValueError('entry_consumer_dirty_verifier')
     original_hashes, changed, runtime_hashes = {}, [], {}
     extensions = REVIEWED_DELAY_CONTRACT_EXTENSIONS.get((origin, expected), {})
     for key, name in paths.items():
-        after = (root / name).read_bytes()
+        after = candidate_bytes(name)
         runtime_hashes[os.path.normpath(name)] = hashlib.sha256(after).hexdigest()
         if name in extensions:
             if hashlib.sha256(after).hexdigest() != extensions[name] or after != revision_bytes(commit, name):
@@ -1062,7 +1210,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if pair in (REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES.get(name),
+        if pair in (REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(repository_name(name)),
+                    REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES.get(name),
                     REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES.get(name),
                     REVIEWED_QUANTITY_RESEARCH_COST_SOURCES.get(name),
                     REVIEWED_DELAY_RESEARCH_SOURCES.get(name),
@@ -1133,7 +1282,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             path = root / name
             if path.is_symlink() or not path.is_file():
                 raise ValueError('entry_consumer_reviewed_dependency_missing:' + name)
-            raw = path.read_bytes()
+            raw = candidate_bytes(name)
             if hashlib.sha256(raw).hexdigest() != expected_sha:
                 raise ValueError('entry_consumer_reviewed_dependency_unreviewed:' + name)
             if raw != revision_bytes(commit, name):
