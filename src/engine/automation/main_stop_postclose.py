@@ -61,14 +61,34 @@ def dependency_stat(path):
     return list(source_stat(path.stat()))
 
 
-def verified_dependency_stats(inventory):
+def _indexed_vote_generation(expected):
+    return expected.get('schema') in {
+        'main_trailing_indexed_source_v1:generation',
+        'main_trailing_historical_vote_inventory_v1',
+    }
+
+
+def _dependency_generation_matches(path, expected, *, root=None, day=None):
+    if not _indexed_vote_generation(expected):
+        return byte_generation(path) == expected
+    if root is None or day is None:
+        return False
+    source_day = expected.get('source_date', day)
+    if date.fromisoformat(source_day).isoformat() != source_day or source_day > day:
+        return False
+    from .main_trailing_source_assembler import source_generation_matches
+    return source_generation_matches(root, source_day, path, expected)
+
+
+def verified_dependency_stats(inventory, *, root=None, day=None):
     """Bind stat identities to the bytes verified in that same read window."""
     result = {}
     for name, expected in inventory.items():
         path = Path(name)
         before = dependency_stat(path)
-        if byte_generation(path) != expected or dependency_stat(path) != before:
-            raise ValueError('stop_source_changed_during_read')
+        if (not _dependency_generation_matches(path, expected, root=root, day=day)
+                or dependency_stat(path) != before):
+            raise ValueError('stop_source_changed_during_read:' + name)
         result[name] = before
     return result
 
@@ -571,8 +591,10 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
         sealed_sources = all(
             (ref := binding.get(name, {})).get('path') == name
             and ref.get('stat') == report['dependency_stats'].get(name)
-            and ref.get('decoded_sha256') == source.get('sha256')
-            and ref.get('decoded_bytes') == source.get('size')
+            and (bool(ref.get('decoded_sha256')) and type(ref.get('decoded_bytes')) is int
+                 if _indexed_vote_generation(source) else
+                 ref.get('decoded_sha256') == source.get('sha256')
+                 and ref.get('decoded_bytes') == source.get('size'))
             for name, source in vote_sources.items())
         observed_votes = verify_vote_watch_binding(root, day, report.get('vote_watch_binding'),
             future_unconsumed=(not verify_full and sealed_sources
@@ -596,6 +618,9 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     for path, expected in expected_files.items():
         before = report['dependency_stats'].get(path)
         physical = Path(path)
+        indexed_vote = path in report.get('vote_source_inventory', {}) and _indexed_vote_generation(expected)
+        if indexed_vote and not _dependency_generation_matches(physical, expected, root=root, day=day):
+            raise ValueError('stop_native_source_bytes_changed')
         if physical.parent == Path(root)/'report/monitor_snapshots' and not physical.exists():
             if dependency_stat(physical) != before or byte_generation(physical) != expected:
                 raise ValueError('stop_native_source_bytes_changed')
@@ -606,12 +631,15 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
             continue
         if path in report.get('vote_source_inventory', {}) and not physical.exists():
             ref = (report.get('vote_watch_binding') or {}).get(path) or {}
+            raw_sha = ref.get('decoded_sha256') if indexed_vote else expected.get('sha256')
+            raw_size = ref.get('decoded_bytes') if indexed_vote else expected.get('size')
             if (physical.is_symlink() or ref.get('path') != path or ref.get('stat') != before
-                    or ref.get('decoded_sha256') != expected.get('sha256')
-                    or ref.get('decoded_bytes') != expected.get('size')):
+                    or not raw_sha or type(raw_size) is not int
+                    or ref.get('decoded_sha256') != raw_sha
+                    or ref.get('decoded_bytes') != raw_size):
                 raise ValueError('stop_native_source_generation_changed')
-            sha, size, _ = _vote_watch_content(Path(path+'.gz'), max_bytes=expected['size'])
-            if sha != expected['sha256'] or size != expected['size']:
+            sha, size, _ = _vote_watch_content(Path(path+'.gz'), max_bytes=raw_size)
+            if sha != raw_sha or size != raw_size:
                 raise ValueError('stop_native_source_bytes_changed')
             continue
         current_stat = list(source_stat(physical.stat()))
@@ -631,7 +659,7 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
                     or observed_votes.get(path) != list(source_stat(Path(path).stat()))
                     or not sealed_sources or verify_full):
                 raise ValueError('stop_native_source_generation_changed')
-        if verify_full and byte_generation(Path(path)) != expected:
+        if verify_full and not indexed_vote and byte_generation(Path(path)) != expected:
             raise ValueError('stop_native_source_bytes_changed')
     economic = report.get('economic_sources') or {}
     if economic.get('native_selection'):
@@ -1006,7 +1034,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     if policy.digest([str(p) for p in sources(root,day)])!=source_catalog_sha:
         raise ValueError('stop_raw_source_set_changed')
     dependency_stats = verified_dependency_stats({**inventory, **vote_sources,
-                                                  **economic_sources.get('files',{})})
+                                                  **economic_sources.get('files',{})}, root=root, day=day)
     if any(dependency_stats[name]!=value for name,value in input_stat_identity.items()):
         raise ValueError('stop_source_changed_during_research')
     research=dict(schema='main_stop_research_v1',source_date=day,target_date=target,source_sha256=source_sha,
@@ -1121,7 +1149,7 @@ def commit_prepared_policy(root, preparation, *, experiments):
                         and path.name.endswith('.jsonl') and not path.exists()):
                     _archived_pipeline_source(path,expected,verify_full=True)
                     observed[name]=research['dependency_stats'][name]
-                else:observed.update(verified_dependency_stats({name:expected}))
+                else:observed.update(verified_dependency_stats({name:expected}, root=root, day=day))
             if observed!=research['dependency_stats']:
                 raise ValueError('stop_preparation_dependency_changed')
             for key in ('parent_receipt','snapshot_receipt'):

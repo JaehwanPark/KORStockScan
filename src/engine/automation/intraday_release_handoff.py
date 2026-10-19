@@ -2579,6 +2579,26 @@ REVIEWED_STOP_FORWARD_STREAM_PAIRS = {
     for name, after in REVIEWED_STOP_FORWARD_STREAM_HASHES.items()
 }
 
+# The stop consumer validates each indexed vote with its native generation owner.
+REVIEWED_STOP_INDEXED_VOTE_HASHES = {'src/engine/automation/main_stop_postclose.py': '616a22f236d89de67e18001dbb3564aca6ed5b87e1b26ade3a119a711e1ab057'}
+REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_stop_postclose.py',
+        'selector_sha256': REVIEWED_STOP_INDEXED_VOTE_HASHES['src/engine/automation/main_stop_postclose.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_STOP_INDEXED_VOTE_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_STOP_INDEXED_VOTE_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_STOP_INDEXED_VOTE_PAIRS = {
+    name: tuple((before, after) for before in sorted(
+        {pair[0] for pair in REVIEWED_STOP_SHARED_POSITION_PAIRS[name]}
+        | {REVIEWED_STOP_SHARED_POSITION_HASHES[name]}))
+    for name, after in REVIEWED_STOP_INDEXED_VOTE_HASHES.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2632,7 +2652,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS,
+                         REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS,
                          REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS,
                          REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS,
@@ -2713,7 +2734,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_STOP_FORWARD_STREAM_PAIRS.get(name, ())
+        if (pair in REVIEWED_STOP_INDEXED_VOTE_PAIRS.get(name, ())
+                or pair in REVIEWED_STOP_FORWARD_STREAM_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_SHARED_POSITION_PAIRS.get(name, ())
                 or pair in REVIEWED_CALENDAR_PHYSICAL_PAIRS.get(name, ())
                 or pair in REVIEWED_ASSEMBLER_BUDGET_PAIRS.get(name, ())

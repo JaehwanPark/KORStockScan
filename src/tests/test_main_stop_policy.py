@@ -800,6 +800,36 @@ def test_dependency_mutation_between_hash_and_stat_is_rejected(tmp_path,monkeypa
         post.verified_dependency_stats({str(path):expected})
 
 
+@pytest.mark.parametrize('kind', ['scoped', 'indexed'])
+@pytest.mark.parametrize('damage', [None, 'source', 'future_scope'])
+def test_native_indexed_vote_dependency_uses_its_original_generation(tmp_path, monkeypatch, kind, damage):
+    from datetime import datetime
+    from src.tests.test_holding_path_vote_replay import _events
+    from src.engine.ai import holding_exit_vote as votes
+    from src.engine.automation import main_trailing_source_store as store
+    at = datetime.fromisoformat('2026-10-16T09:00:00+09:00').timestamp()
+    path = votes.path_vote_store_path(tmp_path, 'record:7')
+    monkeypatch.setattr(votes.time, 'time', lambda: at + 20)
+    values = _events('EXIT_TRAILING_TP', 'REGULAR', base_at=at, session_key='2026-10-16')
+    assert votes.append_path_events_file(path, 'record:7', values)[1] == 'appended'
+    expected = (store.scoped_vote_generation(tmp_path, path, '2026-10-16')
+                if kind == 'scoped' else store.input_generation(tmp_path, path))
+    assert expected != post.byte_generation(path)
+    if damage == 'source':
+        with path.open('ab') as handle:
+            handle.write(b'{}\n')
+    elif damage == 'future_scope':
+        expected = {**expected, 'source_date': '2026-10-19'}
+    if damage:
+        with pytest.raises((ValueError, OSError)):
+            post.verified_dependency_stats({str(path): expected}, root=tmp_path, day='2026-10-16')
+    else:
+        result = post.verified_dependency_stats({str(path): expected}, root=tmp_path, day='2026-10-16')
+        assert result[str(path)] == post.dependency_stat(path)
+        with pytest.raises(ValueError):
+            post.verified_dependency_stats({str(path): expected})
+
+
 def test_restart_without_original_touch_never_gets_new_grace(tmp_path,monkeypatch):
     from src.engine import sniper_state_handlers as handlers
     p.preload({})
@@ -1268,16 +1298,28 @@ def test_vote_tail_cannot_relax_consumed_source_or_incomplete_original(tmp_path)
     with pytest.raises(ValueError):post.verify_vote_watch_binding(tmp_path,'2026-10-12',bound)
 
 
+@pytest.mark.parametrize('kind', ['bytes', 'scoped'])
 @pytest.mark.parametrize('damage', [None, 'prefix', 'past', 'partial', 'replace', 'race', 'unsealed'])
-def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(tmp_path, monkeypatch, damage):
+def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(tmp_path, monkeypatch, damage, kind):
     from src.engine.ai.holding_exit_vote import path_vote_store_path
+    def vote_bytes(day='2026-10-13'):
+        if kind == 'bytes':
+            return _later_vote_bytes(day)
+        from datetime import datetime
+        from src.tests.test_holding_path_vote_replay import _events
+        at = datetime.fromisoformat(day + 'T10:00:00+09:00').timestamp()
+        event = _events('EXIT_SOFT_STOP', 'REGULAR', position_key='record:91',
+                        session_key=day, base_at=at)[0]
+        return json.dumps(event).encode() + b'\n'
     path = path_vote_store_path(tmp_path, 'record:91')
     path.parent.mkdir(parents=True)
-    original = _later_vote_bytes('2026-10-12')
+    original = vote_bytes('2026-10-12')
     path.write_bytes(original)
     # Exercise the native publisher with a consumed, hashed vote dependency.
     def consumed(root, directory, source, inventory):
-        inventory[str(path)] = post.byte_generation(path)
+        from src.engine.automation.main_trailing_source_assembler import historical_vote_generation
+        inventory[str(path)] = (historical_vote_generation(path, '2026-10-12')
+                               if kind == 'scoped' else post.byte_generation(path))
         return None
     from src.engine.ai import holding_vote_replay_source
     monkeypatch.setattr(holding_vote_replay_source, 'assemble_votes', consumed)
@@ -1301,7 +1343,7 @@ def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(tmp_path
         monkeypatch.setattr(post, 'capture_vote_watch_binding', legacy_binding)
     bundle, report, _, _ = publication(tmp_path)
     assert str(path) in report['vote_source_inventory']
-    suffix = _later_vote_bytes('2026-10-12' if damage == 'past' else '2026-10-13')
+    suffix = vote_bytes('2026-10-12' if damage == 'past' else '2026-10-13')
     if damage == 'partial': suffix = suffix.rstrip(b'\n')
     if damage == 'prefix': path.write_bytes(original.replace(b'record:91', b'record:92'))
     if damage == 'replace':
@@ -1312,7 +1354,7 @@ def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(tmp_path
         verify = post.verify_vote_watch_binding
         def append_after_verification(*args, **kwargs):
             observed = verify(*args, **kwargs)
-            with path.open('ab') as out: out.write(_later_vote_bytes())
+            with path.open('ab') as out: out.write(vote_bytes())
             return observed
         monkeypatch.setattr(post, 'verify_vote_watch_binding', append_after_verification)
     if damage is None:
