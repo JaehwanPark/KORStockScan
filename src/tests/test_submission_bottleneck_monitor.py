@@ -4607,25 +4607,61 @@ def test_feature_gap_rejects_invalid_signed_trade_count(signed_trades):
     assert monitor._probe_verified_pending(row, feature_gap=True) is None
 
 
+@pytest.mark.parametrize('duration', [149.5, 0, 0.0, -1, float('nan'), float('inf'), True, False])
 @pytest.mark.parametrize('defect', [None, 'zero_history','current','pid','epoch','bad_counts'])
-def test_history_receipt_is_separate_from_current_source_and_cannot_grant_coverage(tmp_path, defect):
+def test_history_receipt_is_separate_from_current_source_and_cannot_grant_coverage(tmp_path, defect, duration):
     now = monitor.stamp('2026-10-16T14:56:50+09:00')
     row = _native_no_match_probe(now, receipt_format='dict'); f = row['fields']; r = f['native_observation_receipt']
     f.update(zero_base_probe_result='observation_incomplete',
              zero_base_probe_reason='native_history_observed_current_source_stale')
-    r.update(native_source_current=False, source_censored_count=0,
+    r.update(native_source_current=False, source_censored_count=1, observed_seconds=duration,
              selected_lifecycle_counts={'G1':{'FALSE':20},'G2':{'FALSE':10}})
     if defect == 'zero_history': r['selected_lifecycle_counts'] = {'G1':{'UNKNOWN':1},'G2':{'UNKNOWN':2}}
     if defect == 'current': r['native_source_current'] = True
     if defect == 'pid': r['process_pid'] = 999
     if defect == 'epoch': r['native_epoch'] = 0
     if defect == 'bad_counts': r['selected_lifecycle_counts']['G1']['FALSE'] = True
-    assert (monitor._probe_verified_history(row) is not None) == (defect is None)
+    valid = defect is None and type(duration) in (int, float) and duration >= 0 and duration != float('inf')
+    assert (monitor._probe_verified_history(row) is not None) == valid
     assert monitor._probe_verified_no_match(row) is False
+    assert monitor._probe_verified_pending(row) is None
     _source_gap_files(tmp_path, now, probes=[row]); gap = monitor.source_gap_semantics(tmp_path,now)
     assert gap['probe_route_source_covered_counts'] == {}
-    assert gap['native_history_observations']['verified_count'] == int(defect is None)
+    assert gap['native_history_observations']['verified_count'] == int(valid)
     assert gap['native_history_observations']['current_source_coverage_proven'] is False
+
+
+def test_reset_segment_history_keeps_diagnostic_without_observer_contract_failure(tmp_path):
+    result = _observation_health_fixture(); now = monitor.stamp(result['as_of'])
+    rows = []
+    for index, (duration, known) in enumerate(((0, 4), (72.37, 6), (114.9, 5), (0, 41))):
+        row = _native_no_match_probe(now, receipt_format='dict'); fields = row['fields']
+        fields.update(zero_base_probe_result='observation_incomplete',
+            zero_base_probe_reason='native_history_observed_current_source_stale',
+            physical_probe_lease_id=f'history-{index}')
+        fields['native_observation_receipt'].update(observed_seconds=duration,
+            native_source_current=False, source_censored_count=int(duration == 0),
+            reason='required_window_incomplete', selected_branch_truth={'G4':'UNKNOWN'},
+            selected_lifecycle_counts={'G4':{'FALSE':known,'UNKNOWN':2}})
+        rows.append(row)
+    duplicate = json.loads(json.dumps(rows[0]))
+    duplicate['fields']['evaluation_attempt_id'] = 'different-summary-label-same-native-lease'
+    rows.append(duplicate)
+    _source_gap_files(tmp_path, now, probes=rows)
+    actual = monitor.source_gap_semantics(tmp_path, now); gap = result['source_gap_semantics']
+    for key in ('observed','diagnostics','diagnostics_by_scope','native_history_observations',
+                'probe_route_counts','probe_route_assessed_counts','probe_route_source_covered_counts',
+                'probe_route_native_no_match_counts'):
+        gap[key] = actual[key]
+    gap['status'] = 'gap_observed'; gap['sources']['probe']['recent_count'] = 4
+    assert gap['native_history_observations']['verified_count'] == 4
+    assert gap['native_history_observations']['known_count'] == 56
+    assert gap['diagnostics'] == {'machine_probe:native_history_observed_current_source_stale':4}
+    assert gap['probe_route_source_covered_counts'] == gap['probe_route_native_no_match_counts'] == {}
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'warning_pending', health
+    assert health['unmet_conditions'] == []
+    assert health['current_observation_verified'] is health['full_coverage_proven'] is False
 
 
 def test_delay_signal_observation_complete_has_no_submit_terminal_requirement(tmp_path):

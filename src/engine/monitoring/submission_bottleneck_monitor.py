@@ -817,6 +817,17 @@ def _native_preassessment_terminal_valid(row, actor, bundle):
         and _reversal_lifecycle_diagnostic(proof) is not None)
 
 
+def _probe_identity(row):
+    """Use the same native probe identity for census and diagnostic counts."""
+    fields = row.get('fields') if isinstance(row.get('fields'), dict) else {}
+    lease = str(fields.get('physical_probe_lease_id') or '')
+    return (str(fields.get('zero_base_producer_pid') or ''), str(row.get('stock_code')),
+            str(fields.get('zero_base_route')),
+            lease if lease.lower() not in {'', '-', 'none', 'null'} else
+            (str(row.get('emitted_at')), str(fields.get('zero_base_probe_result') or ''),
+             str(fields.get('zero_base_probe_reason') or '')))
+
+
 def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False, historical=False):
     """A native FALSE observation proves coverage, never machine/AI acceptance."""
     import ast
@@ -914,9 +925,11 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False, 
                     for k in ('native_epoch', 'native_sequence'))
             and type(receipt.get('observed_seconds')) in (int, float)
             and math.isfinite(receipt['observed_seconds'])
-            # A first exact trade has a zero-duration interval. It can prove
-            # missing features, never a complete no-match observation.
-            and (receipt['observed_seconds'] >= 0 if feature_gap else receipt['observed_seconds'] > 0)
+            # This clock covers the current continuous segment, not lifetime
+            # counts. A reset can leave verified history with a zero interval;
+            # it proves neither current coverage nor a complete no-match.
+            and (receipt['observed_seconds'] >= 0 if feature_gap or historical
+                 else receipt['observed_seconds'] > 0)
             and int(fields.get('zero_base_ws_exact_0b_count', 0)) > 0
             # A missing-feature receipt may itself lack a signed trade.
             # Require an explicit nonnegative count; ordinary no-match and
@@ -1136,6 +1149,8 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
             reason = "unclassified_source_gap"
         identity = (stage, attempt or row.get("decision_trace_id") or row.get("emitted_at"),
                     code or row.get("stock_code"), route or row.get("market_data_route"), reason)
+        if stage == 'machine_probe':
+            identity = (stage, _probe_identity(row), reason)
         if identity in seen:
             return
         seen.add(identity)
@@ -1252,10 +1267,7 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
         result = str(fields.get("zero_base_probe_result") or "")
         reason = str(fields.get("zero_base_probe_reason") or "")
         route = fields.get("zero_base_route")
-        lease = str(fields.get('physical_probe_lease_id') or '')
-        identity = (str(fields.get('zero_base_producer_pid') or ''), str(row.get('stock_code')),
-                    str(route), lease if lease.lower() not in {'', '-', 'none', 'null'} else
-                    (str(row.get('emitted_at')), result, reason))
+        identity = _probe_identity(row)
         if identity in seen_probes:
             continue
         seen_probes.add(identity)

@@ -1927,6 +1927,23 @@ REVIEWED_STARTUP_RETRY_DEPENDENCY_VARIANTS = {
 }
 REVIEWED_STARTUP_RETRY_PAIRS = {'src/engine/scalping/reversal_evaluation_context.py': (('351efbbfae4c3a0a2f91d3c2edb9166d961d65dc44c680375f238a21b3045dcf', 'fb5d1ffb46da13d69390c84c3d2e83de03842bebb3978d3a22bbf6fb6bb4d654'),)}
 
+# Report-only history counters survive a zero-duration continuous segment.
+# Preserve the preceding startup and index generations for native predecessor checks.
+REVIEWED_HISTORY_SEGMENT_HASHES = {'src/engine/monitoring/submission_bottleneck_monitor.py': 'b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18'}
+REVIEWED_HISTORY_SEGMENT_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': REVIEWED_HISTORY_SEGMENT_HASHES['src/engine/monitoring/submission_bottleneck_monitor.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_HISTORY_SEGMENT_HASHES},
+        'contract_extensions': {origin: {path: REVIEWED_HISTORY_SEGMENT_HASHES.get(path, sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key,value in REVIEWED_STARTUP_RETRY_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_HISTORY_SEGMENT_PAIRS = {
+    name: tuple((before, sha) for before, _ in REVIEWED_TRAILING_REUSE_PAIRS.get(name, ()))
+    for name, sha in REVIEWED_HISTORY_SEGMENT_HASHES.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1980,7 +1997,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_STARTUP_RETRY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_HISTORY_SEGMENT_DEPENDENCY_VARIANTS,
+                         REVIEWED_STARTUP_RETRY_DEPENDENCY_VARIANTS,
                          REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
                          REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS,
                          REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS,
@@ -2039,7 +2057,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_STARTUP_RETRY_PAIRS.get(name, ())
+        if (pair in REVIEWED_HISTORY_SEGMENT_PAIRS.get(name, ())
+                or pair in REVIEWED_STARTUP_RETRY_PAIRS.get(name, ())
                 or pair in REVIEWED_TRAILING_REUSE_PAIRS.get(name, ())
                 or pair in REVIEWED_PARTIAL_CLOCK_PAIRS.get(name, ())
                 or pair in REVIEWED_CAUSAL_QUANTITY_PAIRS.get(name, ())
