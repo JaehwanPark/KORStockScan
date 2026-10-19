@@ -883,3 +883,22 @@ def test_intraday_origin_is_rebound_inside_real_os_isolation(request_fixture, fa
     _write_request(f, request)
     result = _child(f, 'install_validation_code_context(request)\n'+CALL)
     assert (result.returncode == 0) is (fault is None), result.stderr
+
+
+@pytest.mark.parametrize('fault', [None, 'missing_bundle', 'unknown_scope', 'origin', 'basis'])
+def test_intraday_main_closure_requires_fresh_full_native_evidence(request_fixture, monkeypatch, fault):
+    f = request_fixture
+    main = _main_fixture(f, monkeypatch)
+    request = f['request']; proof = main['proof']; native = proof['native_verification']
+    native.update(validation_scope='intraday_preserved_historical_generation',
+        preserved_preopen_commit=f['original_commit'],
+        handoff_basis='intraday_preserved_preopen_generation_current_postclose_resealed')
+    proof['delegation_basis'] = 'same_invocation_selected_intraday_native_validation'
+    request['manifest']['selected_release_sha'] = f['original_commit']
+    if fault == 'missing_bundle': proof['closure']['bundles'] = {}
+    if fault == 'unknown_scope': native['validation_scope'] = 'sealed_generation'
+    if fault == 'origin': native['preserved_preopen_commit'] = '0'*40
+    if fault == 'basis': proof['delegation_basis'] = 'same_invocation_selected_native_full_verification'
+    _write_request(f, request)
+    result = _child(f, MAIN_CHILD_SETUP+'\nassert_no_forbidden_attempts()\n')
+    assert (result.returncode == 0) is (fault is None), result.stderr

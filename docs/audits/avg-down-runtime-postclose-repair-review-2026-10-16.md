@@ -145,3 +145,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 사용자가 전달한 artifact_freshness alert도 보존했다.18:21~18:22 관측은 선택34798/PID1889422의 scanner current source coverage 결손이며, fixed-watch20과 scanner0을 구분한다.0B 지연/결손·route snapshot 결손·유효 no-match는 각각 원 진단으로 남기고 report partial을 full 또는 주문 실패로 바꾸지 않는다. 해당 health artifact의 operational mutation은0이다. 이 관측을 새 AVG_DOWN 코드/PID의 자연 소비로 간주하지 않는다.
 
 최종 보완 검증: native 정책 인계·격리 child·P5 네 파일 **2,770 PASS /90.51초**, 앞서 통합 런타임16파일1,864 PASS(합4,634), 현 코드 generation capability4개431 PASS·Python25파일 compile·print-only parser·diff PASS다. 마지막 수정 후 자체 리뷰 범위 미해결0이다. 범위34798 대비 source 13파일 +322/-22 (순증300), tests 12파일 +564/-37 (순증527), docs 3파일 +202/-0 (순증202)(이 문단 전 집계)이며 module 이동/신규 CLI는 없다. source 순증은 필수 vote 입력과 실제 source generation을 유지한 안전한 정책 인계·격리 소비를 위해 사용했다.
+
+
+### 보존 PREOPEN scope와 현재 native Main closure
+
+399b05164의4개 pre-stop gate도 PASS였다. 다음 P5는 `startup_main_native_full_validation_required`로 차단됐다. native readiness는 원 PREOPEN/checklist를 보존하는 장중 scope를 명시하고, 이번 호출에서 Main의 N.validate·aux manifest·frozen validation·원천 digest는 실제로 다시 검증한다. 기존 P5가 readiness 전체의 scope를 current_full 하나로 한정했던 결함을 보완했다. scope 원문은 유지하며 독립 `same_invocation_selected_intraday_native_validation` basis로 선택본·원 PREOPEN commit과 이번 호출의 전체 Main closure를 검증한다. 단순 sealed-generation PASS나 과거 PASS 재사용은 계속 거부한다.
+
+새 누락 회귀에서 child가 native bundle 관측 누락을 독립 재검사하지 않는 것도 확인했다. child가 실제 policy의 family SHA·target·bundle 관측과 full closure를 다시 결속하도록 수정했다. 이 누락·알 수 없는 scope·원본 commit 불일치·basis 바꿔치기를 포함한 격리86회귀 PASS/36.49초다. 기존 immutable 후보 및 P5 실패 영수증은 보존했다. native4gate PASS가 P5 또는 실제 기동 성공은 아니라는 구분을 유지한다.

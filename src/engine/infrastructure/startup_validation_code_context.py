@@ -521,6 +521,20 @@ def _attest_delay_inventory(selected, commit, records, sources):
         declaration_sha256=inventory[_DELAY_CONTRACT_OWNER], contract_paths=paths, code_hashes=inventory)
 
 
+def _native_main_basis(native):
+    """Keep PREOPEN custody scope distinct from this invocation's Main closure."""
+    if native.get('status') != 'pass' or native.get('findings'):
+        return None
+    if native.get('validation_scope') == 'current_full_contract':
+        return 'same_invocation_selected_native_full_verification'
+    if (native.get('validation_scope') == 'intraday_preserved_historical_generation'
+            and native.get('handoff_basis') in {'intraday_preserved_preopen_generation',
+                'intraday_preserved_preopen_generation_current_postclose_resealed'}
+            and _hex(native.get('preserved_preopen_commit'), 40)):
+        return 'same_invocation_selected_intraday_native_validation'
+    return None
+
+
 def bind_main_preparation(root, commit, data_root, intake):
     """Parent-only Git attestation after this invocation's full native verify."""
     import subprocess
@@ -532,8 +546,10 @@ def bind_main_preparation(root, commit, data_root, intake):
     closure = native.get('native_machine_closure')
     day = intake['manifest']['target_date']
     if (native.get('status') != 'pass' or native.get('findings')
-            or native.get('validation_scope') != 'current_full_contract'
+            or _native_main_basis(native) is None
             or native.get('target_date') != day or native.get('selected_release_commit') != original_commit
+            or (native.get('validation_scope') == 'intraday_preserved_historical_generation'
+                and native.get('preserved_preopen_commit') != intake['manifest'].get('selected_release_sha'))
             or not isinstance(closure, dict)):
         raise ValueError('startup_main_native_full_validation_required')
     policy = data_root / 'runtime/mechanistic_entry_policy/candidates' / ('policy_' + day + '.json')
@@ -627,7 +643,7 @@ def bind_main_preparation(root, commit, data_root, intake):
         historical_semantic_code_sources=histories,
         source_hashes=sources, closure=closure,
         native_verification={k: v for k, v in native.items() if k != 'native_machine_closure'},
-        delegation_basis='same_invocation_selected_native_full_verification',
+        delegation_basis=_native_main_basis(native),
         policy_effect='unchanged', runtime_effect=False, allowed_runtime_apply=False,
         actual_pid_consumed=False)
     _check_native_closure(proof)
@@ -645,7 +661,7 @@ def _check_native_closure(proof):
     io = native.get('native_validation_io') or {}
     if (closure.get('schema') != 'startup_native_machine_closure_v1' or not _hex(closure.get('run_id'), 32)
             or native.get('status') != 'pass' or native.get('findings')
-            or native.get('validation_scope') != 'current_full_contract'
+            or _native_main_basis(native) is None
             or native.get('target_date') != proof['target_date']
             or native.get('selected_release_commit') != proof['selected_release_commit']
             or binding.get('role') != 'postclose' or binding.get('day') != native.get('source_date')
@@ -655,6 +671,12 @@ def _check_native_closure(proof):
             or io.get('remaining_entries') != 0
             or binding.get('boot_id') != _read('/proc/sys/kernel/random/boot_id', maximum=128).decode().strip()):
         raise ValueError('startup_main_native_closure_invalid')
+    bundles = closure.get('bundles')
+    bundle = _json(proof['policy_path'])
+    if (not isinstance(bundles, dict) or not 1 <= len(bundles) <= 16
+            or bundles.get(proof['policy_sha256']) != dict(target_date=proof['target_date'],
+                family_sha256=bundle['continuous_reversal']['family_sha256'])):
+        raise ValueError('startup_main_native_bundle_unobserved')
     _delay_selection_records(proof)
     entries = closure.get('digest_entries')
     if (not isinstance(entries, dict) or len(entries) > 4096
@@ -724,8 +746,8 @@ def _native_logical_sources(proof, *, verify_ledger=False):
     from src.engine.ai import offline_comparison_store as S
     native = proof['native_verification']
     if (native.get('status') != 'pass' or native.get('findings')
-            or native.get('validation_scope') != 'current_full_contract'
-            or proof.get('delegation_basis') != 'same_invocation_selected_native_full_verification'):
+            or _native_main_basis(native) is None
+            or proof.get('delegation_basis') != _native_main_basis(native)):
         raise ValueError('startup_logical_native_validation_required')
     result = {}
     observed_manifests = proof['closure']['manifests']
@@ -800,7 +822,10 @@ def _main_proof(proof, request):
             or proof.get('execution_release_commit') != request['execution_release_commit']
             or proof.get('closure', {}).get('run_id') != request['run_id']
             or proof.get('policy_effect') != 'unchanged'
-            or proof.get('delegation_basis') != 'same_invocation_selected_native_full_verification'
+            or proof.get('delegation_basis') != _native_main_basis(proof.get('native_verification') or {})
+            or _native_main_basis(proof.get('native_verification') or {}) is None
+            or (proof.get('native_verification', {}).get('validation_scope') == 'intraday_preserved_historical_generation'
+                and proof['native_verification'].get('preserved_preopen_commit') != request['manifest'].get('selected_release_sha'))
             or any(proof.get(k) is not False for k in ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))
             or any((request.get('expected_policy_hashes') or {}).get(k) != proof.get('policy_sha256')
                    for k in ('main_machine', 'main_auxiliary'))):
