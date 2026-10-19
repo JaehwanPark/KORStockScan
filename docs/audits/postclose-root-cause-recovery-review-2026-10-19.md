@@ -43,3 +43,12 @@ Non-test source:109 additions/29 deletions; tests:101 additions/20 deletions bef
 Code review and targeted tests precede expensive regeneration. Immutable candidate source/code handoff checks, preserved source-date recovery, downstream quantity/holding/EV/summary/tower/checklist/strict/controller and next-session preparation are still pending. Scheduled controller/tuning waiters are pinned to the original release; do not switch their code while they run. Main was stopped by the native postclose owner; no manual trading restart is required by this report repair.
 
 Apply this root-cause standard to every newly observed2026-10-19 postclose error: repair the owning producer/consumer contract, test recurrence, regenerate affected descendants, and verify the intended last consumer. An irreversible historical source gap stays separately owned and is not a reason to replay unchanged input forever. Do not declare next-session readiness before exact-date native verification; prepared policy is not future PREOPEN/PID consumption or economics.
+
+
+## Native handoff supplemental review
+
+The first immutable candidate's native fixed workload matched128 scopes/76,800 rows/598 confirmation hits with identical signal SHA and no changed native decision module. Active-policy validation passed; delay validation correctly refused the new archive dependency. Original refusal remains in `tmp/postclose-monitoring-20261019/native-preflight-execution.log`.
+
+Extend the existing `intraday_release_handoff` owner with one exact complete dependency successor of the approved AVG_DOWN generation. Only the reviewed report/archive hashes change; original digests, all other dependencies and historical branches remain bound. The current and historical two origins are covered across delay/stop/holding families; changed report, missing archive and unrelated dependency fail.2,567 native-handoff tests pass. This is an extension of the existing verifier, with no additional validator, bypass, CLI or execution authority. The incumbent policy/current pointer stays unchanged.
+
+Supplemental delta relative to the first repair commit: non-test source31 additions/2 deletions; tests37 additions before import cleanup; this owning review updated. Baseline-to-final git numstat remains authoritative. Final immutable candidate validation and actual recovery remain separately pending.

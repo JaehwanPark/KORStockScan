@@ -1531,3 +1531,40 @@ def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
         if family == 'holding_vote':
             assert 'src/engine/scalping/holding_decision_context.py' in changed
             assert 'src/engine/scalping/ai_market_snapshot.py' in changed
+
+
+@pytest.mark.parametrize('origin', ['7f2552aedde8fec6ef904a43105827907e50dfc8',
+                                    '8940ea4ad0d3b64d30f67f986a75715ee24c1d95'])
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'changed_report', 'missing_archive', 'unrelated_dependency'])
+def test_completion_census_handoff_binds_exact_complete_generation(
+        avg_down_input_git_candidate, origin, family, fault):
+    import hashlib
+    import subprocess
+    root, _, inventories, digests = avg_down_input_git_candidate
+    canonical = Path(handoff.__file__).resolve().parents[3]
+    for name, expected in handoff.REVIEWED_COMPLETION_CENSUS_HASHES.items():
+        raw = (canonical/name).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == expected
+        (root/name).write_bytes(raw)
+    subprocess.run(['git', '-C', str(root), 'add', *handoff.REVIEWED_COMPLETION_CENSUS_HASHES], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture',
+                    '-c', 'user.email=fixture@example.test', 'commit', '-qm',
+                    'reviewed completion census source generation'], check=True)
+    commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    if origin.startswith('8940'):
+        digests = dict(main_stop='12103eeb4e6c84bdef55013e914cd64784cce0650b045e6f25c05a8101a97b45',
+            holding_vote='c34bc30c734591c1c97c0ed770744c273e206de14dbd0b02382ef71a88265693',
+            pre_submit_delay='90572ff4ba7dbbff01f559e353f4f2a9cc910d1b068880db459749b918a267de')
+    if fault == 'missing_archive':
+        (root/'src/engine/log_archive_service.py').unlink()
+    elif fault:
+        name = ('src/engine/sniper_trade_review_report.py' if fault == 'changed_report'
+                else 'src/engine/scalping/holding_decision_context.py')
+        path = root/name
+        path.write_bytes(path.read_bytes()+b'\nUNREVIEWED = True\n')
+    if fault:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root, commit, origin, inventories[family], digests[family])
+    else:
+        handoff._verify_entry_code_delta(root, commit, origin, inventories[family], digests[family])
