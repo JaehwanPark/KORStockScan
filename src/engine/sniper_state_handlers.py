@@ -61933,7 +61933,7 @@ def _main_initial_physical_send_context(
                          for branch in surviving_snapshot[0]["branch_signals"]}
             if not remaining.intersection(assessment["matched_policy_refs"]):
                 raise ValueError("reversal_all_requested_signals_invalidated")
-        from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
+        from src.engine.scalping.reversal_evaluation_context import validate_submit
         validate_submit(DATA_DIR, current, now=time.time())
         bundle_hash = current.get("machine_bundle_sha256") or current.get("policy_bundle_hash")
         if bundle_hash:
@@ -71004,7 +71004,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         confirmed_epoch = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
         final_ai_age = time.time() - confirmed_epoch if confirmed_epoch > 0 else None
         try:
-            from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
+            from src.engine.scalping.reversal_evaluation_context import validate_submit
             from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
             mark_signal(machine_signal_id(stock.get('last_watching_ai_machine_primary_fields')), 'pre_submit')
             validate_submit(DATA_DIR, stock.get("last_watching_ai_machine_primary_fields") or {}, now=time.time())

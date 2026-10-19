@@ -1806,10 +1806,11 @@ REVIEWED_TRAILING_REUSE_HASHES = {'src/engine/../utils/pipeline_event_logger.py'
  'src/engine/scalping/ai_decision_trace.py': 'ea62bfe70f124e71a59b74cf0b885326217ceb019b00da9f8af45c37105ca17e',
  'src/engine/scalping/holding_vote_experiment.py': '79c76fda32ff00a5e2518109906cbcb23305ba15523e74e4f92876424027fdce',
  'src/engine/scalping/pre_submit_delay_observation.py': 'c4d8765a72a398b045b924d96367f5b3a0876711265134515dd4bd4fcb4199f1',
- 'src/engine/scalping/reversal_auxiliary_intraday.py': 'f39deef39b030f2f00031e6c63a725e8e0333441f750fb80a3143171bb02adbc',
+ 'src/engine/scalping/reversal_evaluation_context.py': '351efbbfae4c3a0a2f91d3c2edb9166d961d65dc44c680375f238a21b3045dcf',
+ 'src/engine/sniper_state_handlers.py': 'ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38',
  'src/utils/pipeline_event_logger.py': '02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416'}
 REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS = {
-    key: {**value,
+    (key[0], REVIEWED_TRAILING_REUSE_HASHES.get(key[0],key[1])): {**value,
         'selector_path': 'src/engine/automation/main_trailing_source_reuse.py',
         'selector_sha256': REVIEWED_TRAILING_REUSE_HASHES['src/engine/automation/main_trailing_source_reuse.py'],
         'dependencies': {**value['dependencies'], **REVIEWED_TRAILING_REUSE_HASHES},
@@ -1903,10 +1904,14 @@ REVIEWED_TRAILING_REUSE_PAIRS = {'src/engine/../utils/pipeline_event_logger.py':
                                                           'c4d8765a72a398b045b924d96367f5b3a0876711265134515dd4bd4fcb4199f1'),
                                                          ('aff325d1d6f49496bb4548295cae57431980f7d28efb43156cffc61b44bfafa9',
                                                           'c4d8765a72a398b045b924d96367f5b3a0876711265134515dd4bd4fcb4199f1')),
- 'src/engine/scalping/reversal_auxiliary_intraday.py': (('2830130cdf8353036ac55b1c68719b94a1f5c5695fadd6c21b6c527581b280f7',
-                                                         'f39deef39b030f2f00031e6c63a725e8e0333441f750fb80a3143171bb02adbc'),
-                                                        ('f4e59f492decd157b4e81df67ff485d3ed949c243278d16b49dad73b78918e97',
-                                                         'f39deef39b030f2f00031e6c63a725e8e0333441f750fb80a3143171bb02adbc')),
+ 'src/engine/scalping/reversal_evaluation_context.py': (('b5753ae20f5d8385f7ccf942131d591d5b4feb2dd1f7c278903c74f504201d72',
+                                                         '351efbbfae4c3a0a2f91d3c2edb9166d961d65dc44c680375f238a21b3045dcf'),
+                                                        ('c3d732d937787fd881ebf8f47437f4164ba01582611bc332fe23fd784ed3fc43',
+                                                         '351efbbfae4c3a0a2f91d3c2edb9166d961d65dc44c680375f238a21b3045dcf')),
+ 'src/engine/sniper_state_handlers.py': (('5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf',
+                                          'ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38'),
+                                         ('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                          'ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38')),
  'src/utils/pipeline_event_logger.py': (('58dd5b4ba0ce91a248cebf8a608974caba13080226e139e779f512500b4b4c5f',
                                          '02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416'),)}
 

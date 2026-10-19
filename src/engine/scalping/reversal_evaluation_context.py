@@ -61,6 +61,23 @@ def _prepared_v6_claim(policy, active, *, data_root, day):
         return valid
 
 
+def validate_submit(data_root,fields,*,now):
+    """Read-only final boundary; preserve frozen auxiliary reader contracts."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from contextlib import ExitStack
+    from src.engine.monitoring.runtime_performance import entry_stage
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    assessment=fields.get('entry_mechanistic_policy_decision') or {}
+    if not assessment.get('auxiliary_registry_sha256'):return
+    day=datetime.fromtimestamp(now,ZoneInfo('Asia/Seoul')).date().isoformat()
+    with N.signature_pass(),ExitStack() as boundary:
+        with entry_stage('entry_submit_native_load'):
+            active=boundary.enter_context(N.verified_evaluation(data_root=Path(data_root),target_date=day))
+        with entry_stage('entry_submit_auxiliary'):
+            auxiliary.validate_decision(data_root,dict(continuous_reversal_assessment=assessment),active,now=now)
+
+
 def validate_before_provider(policy, *, data_root, model):
     """Fresh final guards on one loader-owned view, before any provider I/O.
 

@@ -25,6 +25,7 @@ from src.engine.ai_engine_openai import (
 def test_submit_boundary_uses_immutable_view_and_keeps_all_independent_guards(monkeypatch, fault):
     from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import reversal_evaluation_context as context
     calls = []
     bundle = native._freeze({'bundle_sha256':'a'*64, 'nested':{'values':[1]}})
     @contextmanager
@@ -49,9 +50,9 @@ def test_submit_boundary_uses_immutable_view_and_keeps_all_independent_guards(mo
     fields = {'entry_mechanistic_policy_decision': {'auxiliary_registry_sha256':'b'*64}}
     if fault:
         with pytest.raises(ValueError):
-            auxiliary.validate_submit(Path('fixture'), fields, now=100.)
+            context.validate_submit(Path('fixture'), fields, now=100.)
     else:
-        auxiliary.validate_submit(Path('fixture'), fields, now=100.)
+        context.validate_submit(Path('fixture'), fields, now=100.)
     assert calls == ['fresh_native_load','fresh_auxiliary_and_original_deadline','pointer_exit_check']
     assert native._SIGNATURE_PASS.get() is None
 
