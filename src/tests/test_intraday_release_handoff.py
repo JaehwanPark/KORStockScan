@@ -1256,9 +1256,12 @@ def test_new_index_selector_may_be_absent_only_from_a_preexisting_git_generation
 
 @pytest.fixture
 def completed_research_git_candidate(tmp_path):
-    """Real Git objects bind the original policy and final integrated sources."""
+    """Real Git objects bind the approved quantity-history generation."""
+    import hashlib
+    import io
     import os
     import subprocess
+    import tarfile
     from src.engine.scalping import main_stop_policy as stop
     from src.engine.scalping import holding_vote_experiment as holding
     from src.engine.scalping import pre_submit_delay_initial_policy as delay
@@ -1267,12 +1270,12 @@ def completed_research_git_candidate(tmp_path):
     subprocess.run(['git', 'clone', '--shared', '--no-checkout', '-q', str(canonical), str(root)], check=True)
     own = 'src/engine/automation/intraday_release_handoff.py'
     handler = 'src/engine/sniper_state_handlers.py'
-    # This fixture copies current source bytes. Bind the entire exact current
-    # preparation generation, rather than combining its selector with the
-    # historical 59-file closure (historical generations have separate tests).
+    # Approval belongs to this immutable generation. A later import/logging
+    # cleanup is a new candidate, not an already issued production handoff.
+    approved = 'e7f4e2e8fb8c76ef29f389cd1274fa0bbff22597'
+    handler_bytes = subprocess.check_output(['git', '-C', str(canonical), 'show', approved+':'+handler])
     variant = handoff.REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS[(
-        handler, handoff._sha(canonical/handler))]
-    assert handoff._sha(canonical/variant['selector_path']) == variant['selector_sha256']
+        handler, hashlib.sha256(handler_bytes).hexdigest())]
     dependencies = variant['dependencies']
     assert len(dependencies) == 95
     inventories = {
@@ -1281,9 +1284,18 @@ def completed_research_git_candidate(tmp_path):
         'pre_submit_delay': {key: key for key in delay.CONTRACT_PATHS},
     }
     names = {own, *dependencies, *(name for paths in inventories.values() for name in paths.values())}
-    for name in names:
-        path = root/name;path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes())
+    archive = subprocess.check_output(['git', '-C', str(canonical), 'archive', approved,
+        *sorted({os.path.normpath(name) for name in names})])
+    with tarfile.open(fileobj=io.BytesIO(archive)) as sources:
+        for name in names:
+            raw = sources.extractfile(os.path.normpath(name)).read()
+            if name in dependencies:
+                assert hashlib.sha256(raw).hexdigest() == dependencies[name]
+            if name == own:
+                assert raw == (canonical/name).read_bytes()
+            path = root/name;path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+    assert handoff._sha(root/variant['selector_path']) == variant['selector_sha256']
     subprocess.run(['git', '-C', str(root), 'add', '--force', *sorted({os.path.normpath(n) for n in names})], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test',
                     'commit', '-qm', 'frozen integrated native source fixture'], check=True)
@@ -1292,6 +1304,25 @@ def completed_research_git_candidate(tmp_path):
         holding_vote='6c664915b34289cddceeaf20399cce45f5e9e3f3373fdeae885910043f343112',
         pre_submit_delay='bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256')
     return root, commit, inventories, digests
+
+
+def test_cleanup_candidate_requires_its_own_native_code_handoff(completed_research_git_candidate):
+    import subprocess
+    canonical = Path(handoff.__file__).resolve().parents[3]
+    root, _, inventories, digests = completed_research_git_candidate
+    names = ('src/engine/kiwoom_sniper_v2.py', 'src/engine/ai_engine_openai.py',
+             'src/engine/sniper_state_handlers.py')
+    for name in names:
+        assert (root/name).read_bytes() != (canonical/name).read_bytes()
+        (root/name).write_bytes((canonical/name).read_bytes())
+    subprocess.run(['git', '-C', str(root), 'add', *names], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test',
+                    'commit', '-qm', 'new cleanup candidate without issued handoff'], check=True)
+    commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    with pytest.raises(ValueError, match='entry_consumer_(contract_extension_unreviewed|producer_changed)'):
+        handoff._verify_entry_code_delta(root, commit,
+            '7f2552aedde8fec6ef904a43105827907e50dfc8',
+            inventories['pre_submit_delay'], digests['pre_submit_delay'])
 
 
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
