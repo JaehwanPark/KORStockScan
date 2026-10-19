@@ -1593,9 +1593,11 @@ def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch,
         "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
         record_id=47860, fields=fields,
     )
-    assert "pre_submit_delay:raw_generation_changed" in handoff.stage_receipt_issues(
-        report_dir, day, "pre_submit_delay", code_hash="fixture-code"
-    )
+    issues = handoff.stage_receipt_issues(report_dir, day, "pre_submit_delay", code_hash="fixture-code")
+    # Native v2 detects the changed partition inside its lineage validator;
+    # legacy ledgers expose the same rejection through raw generation checks.
+    assert set(issues) & {"pre_submit_delay:raw_generation_changed",
+                          "pre_submit_delay:family_source_ledger_missing_or_invalid"}
     logger_mod._flush_producer_summary_at_exit()
 
 

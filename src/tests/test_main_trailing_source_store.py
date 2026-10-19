@@ -5,6 +5,14 @@ import pytest
 from src.engine.automation import main_trailing_source_store as store
 
 
+@pytest.fixture(autouse=True)
+def explicit_migration_only(monkeypatch):
+    # Tests drive catch-up and resident retries explicitly; a daemon from a
+    # temporary writer must not prepare another test's cache concurrently.
+    monkeypatch.setattr(store, 'maintain', lambda *a: None)
+    monkeypatch.setattr(store, '_MAINTENANCE_REQUEST', None)
+
+
 def source(root):
     path=root/'ai_decision_trace/ai_decision_trace_2026-10-19.jsonl'
     path.parent.mkdir(parents=True);path.touch()
@@ -290,3 +298,103 @@ def test_native_writer_reopens_its_own_connection_after_fork(tmp_path):
     append(tmp_path,path,row('parent-after'))
     assert [v['row']['decision_trace_id'] for v,_ in store.read_rows(tmp_path,path)]==[
         'parent-before','child','parent-after']
+
+
+
+def _broken_pipeline_index(root):
+    path = root/'pipeline_events/pipeline_events_2026-10-19.jsonl'
+    path.parent.mkdir(parents=True); path.touch()
+    from src.utils.pipeline_event_logger import _pipeline_event_partition_lock_path
+    _pipeline_event_partition_lock_path(path).touch()
+    def event(qty):
+        return dict(stage='order_leg_sent',stock_code='005930',emitted_at='2026-10-19T18:37:00+09:00',
+                    fields=dict(qty=qty,actual_order_submitted=True))
+    append(root, path, event(1))
+    for qty in (2, 3):
+        before=store.signature(path.stat()); raw=json.dumps(event(qty)).encode()+b'\n'
+        with path.open('ab') as handle:handle.write(raw)
+        if qty == 3:
+            assert not store.record_append(root,path,before=before,after=store.signature(path.stat()),raw=raw,row=event(qty))
+    return path, event
+
+
+@pytest.mark.parametrize('queued_retry', [False, True])
+def test_pipeline_gap_archives_failed_cache_then_verifies_whole_raw_prefix(tmp_path, monkeypatch, queued_retry):
+    import sqlite3
+    path, event = _broken_pipeline_index(tmp_path)
+    before_bytes = path.read_bytes()
+    if queued_retry:
+        from types import SimpleNamespace
+        signature=path.stat(); raw=json.dumps(event(3)).encode()+b'\n'
+        prior=SimpleNamespace(**{key:getattr(signature,key) for key in (
+            'st_dev','st_ino','st_mode','st_mtime_ns','st_ctime_ns')},st_size=signature.st_size-len(raw))
+        assert store._queue_append(tmp_path,path,prior,signature,raw)
+    original=Path.open
+    def guard(self,*a,**kw):
+        if self==path:pytest.fail('cache recovery scanned the raw source')
+        return original(self,*a,**kw)
+    with monkeypatch.context() as local:
+        local.setattr(Path,'open',guard)
+        recovered=store._recover_append_gap(tmp_path,path)
+    assert recovered['status']=='rebuild_pending'
+    assert path.read_bytes()==before_bytes
+    with sqlite3.connect(recovered['archive']) as archive:
+        assert archive.execute('SELECT invalid FROM sources WHERE path=?',(str(path),)).fetchone()[0]=='append_chain_gap'
+        assert archive.execute('SELECT COUNT(*) FROM rows').fetchone()[0]==1
+    with pytest.raises(store.InputPending):list(store.read_rows(tmp_path,path))
+    assert str(path) not in store._PENDING_APPENDS
+    # A late retry from another writer is covered by the explicit raw prefix;
+    # it must not invalidate the new generation or duplicate its minute rows.
+    if queued_retry:
+        assert store._queue_append(tmp_path,path,prior,signature,raw)
+        store._drain_pending(tmp_path)
+    append(tmp_path,path,event(4))
+    assert store.build_step(tmp_path,path)['complete']
+    rows=list(store.read_rows(tmp_path,path))
+    assert [value['row']['fields']['qty'] for value,_ in rows]==[1,2,3,4]
+
+
+@pytest.mark.parametrize('fault',['partition_busy','source_busy','source_replaced','archive_failure','archive_untrusted'])
+def test_pipeline_gap_recovery_preserves_invalid_cache_when_custody_fails(tmp_path, monkeypatch, fault):
+    import os,fcntl
+    from src.utils.pipeline_event_logger import _pipeline_event_partition_lock_path
+    path,_=_broken_pipeline_index(tmp_path); lock=None
+    if fault=='partition_busy':
+        lock=os.open(_pipeline_event_partition_lock_path(path),os.O_RDWR)
+        fcntl.flock(lock,fcntl.LOCK_EX)
+    elif fault=='source_busy':
+        lock=os.open(path,os.O_RDONLY);fcntl.flock(lock,fcntl.LOCK_EX)
+    elif fault=='archive_untrusted':
+        import hashlib
+        with store._database(tmp_path,path,readonly=True) as (db,_,_):
+            state=db.execute('SELECT * FROM sources WHERE path=?',(str(path),)).fetchone()
+        target=store._location(tmp_path,path)[2]
+        archive=target.with_name(target.stem+'.append-gap-'+hashlib.sha256(store.encode(state)).hexdigest()[:24]+'.sqlite')
+        archive.symlink_to(target)
+    elif fault=='source_replaced':
+        replacement=path.with_suffix('.replacement');replacement.write_bytes(path.read_bytes());replacement.replace(path)
+    else:
+        monkeypatch.setattr(store.os,'link',lambda *a,**kw:(_ for _ in ()).throw(OSError('archive_write_failed')))
+    try:
+        if fault=='archive_failure':
+            with pytest.raises(OSError,match='archive_write_failed'):store._recover_append_gap(tmp_path,path)
+        elif fault=='archive_untrusted':
+            with pytest.raises(store.InputPending,match='archive_untrusted'):store._recover_append_gap(tmp_path,path)
+        else:assert store._recover_append_gap(tmp_path,path) is False
+    finally:
+        if lock is not None:os.close(lock)
+    with store._database(tmp_path,path,readonly=True) as (db,_,_):
+        assert db.execute('SELECT invalid FROM sources WHERE path=?',(str(path),)).fetchone()[0]=='append_chain_gap'
+    with pytest.raises(store.InputPending):list(store.read_rows(tmp_path,path))
+
+
+
+def test_background_maintenance_restarts_invalid_pipeline_as_pending(tmp_path):
+    path,_=_broken_pipeline_index(tmp_path)
+    turn=store.STREAM_NAMESPACES.index('pipeline_events')
+    store._maintain_once(tmp_path,'2026-10-19',turn=turn)
+    observed=store._MAINTENANCE_STATUS[str(path)]
+    assert observed['complete'] is False
+    assert observed['recovery']['status']=='rebuild_pending'
+    assert Path(observed['recovery']['archive']).is_file()
+    with pytest.raises(store.InputPending):list(store.read_rows(tmp_path,path))

@@ -317,7 +317,7 @@ def _cf_original_ai_pipeline(tmp_path,monkeypatch,*,fault=None,verdict='PASS',or
                     drawdown_from_peak_pct=0,held_sec=int(clock-known),reversal_add_state=None,reversal_add_executed_at=None),
                 requested_paths=('EXIT_TRAILING_TP',),position_key='record:7',buy_fill_identity=identity,
                 market='REGULAR',session_key=DAY,route='KRX',transport_epoch='1',source_generation='original:'+str(n),
-                quote_observed_at=clock-.1,holding_context=dict(schema='holding_decision_context_v1',
+                quote_observed_at=clock-.1,holding_context=dict(schema='holding_decision_context_v1',enabled=True,
                     ai_market_snapshot_v1=dict(ai_input_preflight_v1=dict(allowed=True,status='allowed',blockers=[])),
                     microstructure=dict(best_bid=102,best_ask=102),
                     execution_pnl=dict(executable_sell_price=102,estimated_net_executable_pnl_pct=-.23),

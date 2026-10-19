@@ -118,7 +118,7 @@ def capture_native_append(path, *, before, after, raw, row=None):
                 _REPORTED_FAILURES.pop(next(iter(_REPORTED_FAILURES)))
             try:
                 from src.utils.logger import log_error
-                log_error('[TRAILING_SOURCE_INDEX_GAP] source='+str(path)+' reason='+type(exc).__name__)
+                log_error('[TRAILING_SOURCE_INDEX_GAP] source='+str(path)+' reason='+type(exc).__name__+' detail='+str(exc)[:160])
             except Exception:
                 pass  # Coverage still fails closed; original native append wins.
 
@@ -140,7 +140,7 @@ def _queue_append(root,path,before,after,raw):
 
 
 def _drain_pending(root):
-    """Bounded retry of resident native bytes; source gaps are never repaired."""
+    """Retry resident bytes; an explicit prefix migration owns earlier bytes."""
     global _PENDING_BYTES
     started=time.monotonic();count=0
     with _PENDING_LOCK:
@@ -154,8 +154,12 @@ def _drain_pending(root):
                 receipt=pending[0]
             before,after,raw=receipt
             try:
+                with _database(root, name, readonly=True) as (db, _, _):
+                    prefix = db.execute('SELECT signature,catchup_end,invalid FROM sources WHERE path=?', (name,)).fetchone()
+                covered_prefix = (prefix and not prefix[2] and json.loads(prefix[0])[:2] == list(after)[:2]
+                                  and after[2] <= prefix[1])
                 rows=[json.loads(line) for line in raw.splitlines()]
-                if not record_append(root,name,before=before,after=after,
+                if not covered_prefix and not record_append(root,name,before=before,after=after,
                         raw=raw,row=rows,existing_only=True):return
             except (InputPending,OSError,ValueError,sqlite3.Error):
                 return
@@ -188,6 +192,104 @@ def capture_native_rotation(path,segment,*,before,after):
             log_error('[TRAILING_SOURCE_INDEX_ROTATION_GAP] '+type(exc).__name__)
         except Exception:
             pass
+
+
+def _recover_append_gap(data_root, path):
+    """Preserve a stuck cache, then restart bounded full-prefix verification.
+
+    Snapshot I/O happens outside the native writer locks. The short reset is
+    source-only; build_step must verify every prefix byte before consumption.
+    """
+    import fcntl
+    path, namespace, target = _location(data_root, path)
+    if namespace != 'pipeline_events' or not target.is_file():
+        return False
+    snapshot_deadline = time.monotonic() + .5
+    with _database(data_root, path, readonly=True) as (db, _, _):
+        state = db.execute('SELECT * FROM sources WHERE path=?', (str(path),)).fetchone()
+        if state is None or state[6] != 'append_chain_gap':
+            return False
+        current = source_signature(data_root, path)
+        if current[:2] != json.loads(state[1])[:2] or current[2] < state[4]:
+            return False
+        if db.execute('PRAGMA page_count').fetchone()[0] * db.execute('PRAGMA page_size').fetchone()[0] > 64*1024*1024:
+            raise InputPending('trailing_index_recovery_snapshot_budget_exceeded')
+        archive = target.with_name(target.stem+'.append-gap-'+hashlib.sha256(encode(state)).hexdigest()[:24]+'.sqlite')
+        if archive.is_symlink():
+            raise InputPending('trailing_index_recovery_archive_untrusted')
+        if not archive.exists():
+            temporary = archive.with_name(archive.name+'.'+str(os.getpid())+'.tmp')
+            fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            os.close(fd)
+            snapshot = None
+            try:
+                snapshot = sqlite3.connect(temporary)
+                def progress(*_):
+                    if time.monotonic() >= snapshot_deadline:
+                        raise InputPending('trailing_index_recovery_snapshot_pending')
+                db.backup(snapshot, pages=64, progress=progress, sleep=0)
+                snapshot.close(); snapshot = None
+                try: os.link(temporary, archive, follow_symlinks=False)
+                except FileExistsError: pass
+            finally:
+                if snapshot is not None: snapshot.close()
+                temporary.unlink(missing_ok=True)
+    metadata = archive.lstat()
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
+        raise InputPending('trailing_index_recovery_archive_untrusted')
+    saved = sqlite3.connect('file:'+str(archive)+'?mode=ro', uri=True, timeout=0)
+    try:
+        saved.set_progress_handler(lambda: int(time.monotonic() >= snapshot_deadline), 1000)
+        if (saved.execute('PRAGMA quick_check').fetchone()[0] != 'ok'
+                or saved.execute('SELECT * FROM sources WHERE path=?', (str(path),)).fetchone() != state):
+            raise InputPending('trailing_index_recovery_archive_invalid')
+    finally:
+        saved.close()
+    from src.utils.pipeline_event_logger import _pipeline_event_partition_lock_path
+    descriptor = os.open(_pipeline_event_partition_lock_path(path),
+        os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    source_descriptor = None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise InputPending('trailing_index_recovery_partition_lock_invalid')
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            source_descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            if not stat.S_ISREG(os.fstat(source_descriptor).st_mode):
+                raise InputPending('trailing_index_source_not_regular')
+            fcntl.flock(source_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        deadline = time.monotonic() + .05
+        with _database(data_root, path, writer=True, existing_only=True) as (db, _, _):
+            name = str(path)
+            if (db.execute('SELECT * FROM sources WHERE path=?', (name,)).fetchone() != state
+                    or signature(archive.lstat()) != signature(metadata)):
+                raise InputPending('trailing_index_recovery_generation_changed')
+            current = source_signature(data_root, path)
+            if current[:2] != json.loads(state[1])[:2] or current[2] < state[4]:
+                return False
+            db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+            try:
+                with db:
+                    db.execute('DELETE FROM rows WHERE source=?', (name,))
+                    db.execute('DELETE FROM minutes WHERE source=?', (name,))
+                    db.execute('DELETE FROM sources WHERE path=?', (name,))
+                    db.execute('INSERT INTO sources VALUES(?,?,?,?,?,?,?,?,?,?)',
+                        (name, encode(current).decode(), current[2], 0, current[2], 0, None, ZERO_SHA, ZERO_SHA, 0))
+            finally:
+                db.set_progress_handler(None, 0)
+            global _PENDING_BYTES
+            with _PENDING_LOCK:
+                old = _PENDING_APPENDS.pop(name, [])
+                _PENDING_BYTES -= sum(len(receipt[2]) for receipt in old)
+        result = dict(status='rebuild_pending', archive=str(archive), catchup_end=current[2])
+    finally:
+        if source_descriptor is not None: os.close(source_descriptor)
+        os.close(descriptor)
+    from src.utils.logger import log_info
+    log_info('[TRAILING_SOURCE_INDEX_RECOVERY] source='+name+' status=rebuild_pending archive='+str(archive))
+    return result
 
 
 def prepare_for_day(data_root,day):
@@ -240,7 +342,14 @@ def _maintain_once(data_root, day, turn=0):
             if progress['complete']:
                 with _MAINTENANCE_LOCK:_VOTE_BACKFILL.pop(str(path),None)
         except (InputPending,sqlite3.OperationalError) as exc:
-            _MAINTENANCE_STATUS[str(path)]=dict(complete=False,reason=str(exc)[:160],observed_epoch=time.time())
+            recovery = None
+            if isinstance(exc, InputPending) and str(exc) == 'trailing_index_source_generation_changed':
+                try:
+                    recovery = _recover_append_gap(data_root, path)
+                except (InputPending, OSError, sqlite3.Error) as pending:
+                    recovery = dict(status='pending', reason=str(pending)[:160])
+            _MAINTENANCE_STATUS[str(path)]=dict(complete=False,reason=str(exc)[:160],
+                recovery=recovery,observed_epoch=time.time())
             while len(_MAINTENANCE_STATUS)>12:_MAINTENANCE_STATUS.popitem(last=False)
 
 

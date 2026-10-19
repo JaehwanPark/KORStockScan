@@ -59,6 +59,12 @@ MAIN_PROOF_SCHEMA = 'startup_main_preparation_code_handoff_v1'
 # Preserve both the issued preparation and its reviewed same-day stopped carry.
 # Evidence: docs/audits/preopen-alert-repair-2026-10-19.md.
 REVIEWED_PREPARATION_HISTORY = {
+    # Reviewed Main SOR eligibility union; exact native signal parity is
+    # required separately by the active-policy handoff before any drain.
+    'src/trading/market/session_contract.py': {
+        ('3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
+         'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c'),
+    },
     # Startup log consolidation only; fixed compact model selection is unchanged.
     'src/engine/ai_engine_openai.py': {
         ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
@@ -594,8 +600,11 @@ def bind_main_preparation(root, commit, data_root, intake):
                 raise ValueError('startup_main_origin_inventory_conflict')
         for field in ('next_session_code_hashes', 'reader_code_hashes'):
             for name, value in manifest[field].items():
-                if expected.setdefault(_code_path(name), value) != value:
-                    raise ValueError('startup_main_origin_inventory_conflict')
+                relative = _code_path(name)
+                selected_hash = _sha(selected / relative)
+                if (value != selected_hash and not reviewed_preparation_pair(relative, value, selected_hash)
+                        or expected.setdefault(relative, selected_hash) != selected_hash):
+                    raise ValueError('startup_main_origin_inventory_conflict:' + relative)
     # These entry/configuration owners are not all in the historical inventory.
     # Bind their exact original/current bytes without adding retroactive keys.
     for relative in REVIEWED_PREPARATION_SOURCES:
@@ -875,8 +884,11 @@ def _main_proof(proof, request):
                 raise ValueError('startup_main_origin_inventory_conflict')
         for field in ('next_session_code_hashes', 'reader_code_hashes'):
             for name, value in manifest[field].items():
-                if required.setdefault(_code_path(name), value) != value:
-                    raise ValueError('startup_main_origin_inventory_conflict')
+                relative = _code_path(name)
+                selected_hash = _sha(selected / relative)
+                if (value != selected_hash and not reviewed_preparation_pair(relative, value, selected_hash)
+                        or required.setdefault(relative, selected_hash) != selected_hash):
+                    raise ValueError('startup_main_origin_inventory_conflict:' + relative)
     for relative in REVIEWED_PREPARATION_SOURCES:
         old = _sha(selected / relative)
         if required.setdefault(relative, old) != old:

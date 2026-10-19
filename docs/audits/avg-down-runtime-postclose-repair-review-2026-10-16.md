@@ -152,3 +152,18 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 399b05164의4개 pre-stop gate도 PASS였다. 다음 P5는 `startup_main_native_full_validation_required`로 차단됐다. native readiness는 원 PREOPEN/checklist를 보존하는 장중 scope를 명시하고, 이번 호출에서 Main의 N.validate·aux manifest·frozen validation·원천 digest는 실제로 다시 검증한다. 기존 P5가 readiness 전체의 scope를 current_full 하나로 한정했던 결함을 보완했다. scope 원문은 유지하며 독립 `same_invocation_selected_intraday_native_validation` basis로 선택본·원 PREOPEN commit과 이번 호출의 전체 Main closure를 검증한다. 단순 sealed-generation PASS나 과거 PASS 재사용은 계속 거부한다.
 
 새 누락 회귀에서 child가 native bundle 관측 누락을 독립 재검사하지 않는 것도 확인했다. child가 실제 policy의 family SHA·target·bundle 관측과 full closure를 다시 결속하도록 수정했다. 이 누락·알 수 없는 scope·원본 commit 불일치·basis 바꿔치기를 포함한 격리86회귀 PASS/36.49초다. 기존 immutable 후보 및 P5 실패 영수증은 보존했다. native4gate PASS가 P5 또는 실제 기동 성공은 아니라는 구분을 유지한다.
+
+
+### 보조 reader 계보와 18:37 원천 색인 경고 보완
+
+8e90f15f1의 P5는 보조 reader의 원 c32689f5와 선택 cleanup eacdffe2를 같은 origin inventory로 합치면서 차단됐다. 원 manifest/code inventory와 현재 selected bytes를 각각 유지하고 이미 등록된 exact reviewed pair만 건너도록 parent와 child를 함께 보완했다. 실제 진단 trace는 `final-8e90f15f1/inventory-conflict-diagnostic.log`에 보존했다. 같은 native parity에 포함된 SOR session source3a4b68c7→dfd0ff3b도 P5의 exact reviewed history에 결속했다. native 신호128scope/76,800행/598hit parity는 별도 사전 gate로 계속 필수다.
+
+사용자가18:37 전달한 TRAILING_SOURCE_INDEX_GAP은 실제 invalid=`append_chain_gap` 고착이었다. index의 source signature는17:41의1,227,927,333바이트, 검증 prefix cursor는801,760,912바이트였고 원본은18:39에1,484,851,207바이트였다. 현재 source를 pending으로 보고하지 않고 정상 완료로 오인하는 조치는 하지 않았다.
+
+기존 `main_trailing_source_store`에만 복구를 확장했다. 기존 background 유지보수가 pipeline append-chain invalid에 한해서 최대64MiB cache의 SQLite snapshot을 보존·검증하고, 원 writer의 partition/physical file lock에서 exact state·inode·archive를 재검사한 뒤 전체 prefix migration을0부터 다시 시작한다. 큰 snapshot I/O는 native writer lock 밖에서 최대0.5초로 제한하고, lock 안의 reset은50ms progress budget을 둔다. 원문 JSONL은 읽거나 변경하지 않는 reset이며 실제 raw 재검증은 기존8MiB/50ms build_step이 수행한다. 완료 전 read_rows/generation은 계속 pending이다. archive 생성/검증 실패·잠금 경합·원본 교체·세대 변경은 invalid를 보존한다. 기존 queued append의 bytes가 명시적 prefix 범위에 이미 포함되면 backfill owner에 맡겨 이중 집계·재무효화를 방지한다. 로그에는 InputPending의 상세 사유를 함께 기록한다.
+
+교체·제거: 기존 sticky append-gap 상태는 archive+전체 prefix 재검증으로 consolidated, 다른 invalid/namespace는 기존 fail-closed reader가 현재 소비하므로 retained다. 기존 raw writer·파일/SQLite schema·CLI·스케줄·매매 판단은 retained이며 새 module/producer framework/임시 wrapper는 없다. failed index snapshot과 raw bytes는 보존한다. 복구 시작은 검증 완료나 경제성 승격이 아니다.
+
+회귀는 writer·색인·장후 재생·격리4파일292 PASS/75.28초, 추가 custody25 PASS/4.81초, 최종 source/native114 PASS/43.18초다. 과거 재생 fixture가 새 live enabled 계약을 누락한 부분을 보완했다. writer drain의 v2 오류 사유 차이는 수정 전 b54에서도 동일하게 실패함을 재현했고, 원문 변경에 대한 native/legacy 두 정식 거부를 검증하도록 fixture를 보완했다. 운영 source guard는 완화하지 않았다. 원 검증 실패 로그는 보존했다.
+
+최종 source/native114 PASS 및 현재 generation 인계18 PASS/17.86초, Python29개 compile·diff·print-only parser PASS 후 리뷰 미해결0이다. baseline34798 대비 현재 전체 범위는 source 14파일 +483/-36 (순증447), tests 15파일 +720/-42 (순증678), docs 3파일 +228/-0 (순증228)(이 문단 전 집계)다. 추가 source 순증은 기존 P5의 실제 장중 source 계보·격리 경계와 고착 색인의 보존/검증 복구에 사용했다. package/CLI/스케줄 이동은 없다.

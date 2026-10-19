@@ -624,7 +624,8 @@ def test_ordinary_digest_session_does_not_opt_in_new_reporting_consumers(tmp_pat
     finally:D.ACTIVE.reset(token)
 
 
-def test_nested_native_inventories_keep_distinct_git_origins(tmp_path,tmp_path_factory,monkeypatch):
+@pytest.mark.parametrize('reader_generation', ['original', 'reviewed', 'unreviewed'])
+def test_nested_native_inventories_keep_distinct_git_origins(tmp_path,tmp_path_factory,monkeypatch,reader_generation):
     """Parent native semantics are isolated; actual two-generation Git bytes
     and per-bundle validation stay real, including an old embedded V4 parent.
     """
@@ -645,6 +646,10 @@ def test_nested_native_inventories_keep_distinct_git_origins(tmp_path,tmp_path_f
     proof=fixture['proof']; policy=Path(proof['policy_path']);policy.write_text(json.dumps(bundle))
     previous=fixture['manifest']; manifest=P.seal({**previous,'base_bundle_sha256':bundle['bundle_sha256'],
         'semantic_code_hashes':{'reversal_path_runtime.py':old}})
+    if reader_generation != 'original':
+        reader_hash = new if reader_generation == 'reviewed' else 'f'*64
+        manifest = P.seal({**manifest, 'reader_code_hashes': {Path(owner).name:reader_hash}})
+        monkeypatch.setattr(C, 'REVIEWED_PREPARATION_HISTORY', {owner:{(new, old)}})
     observed=next(iter(proof['closure']['manifests'].values()))
     Path(observed['path']).write_text(json.dumps(manifest))
     observed.update(bundle_sha256=bundle['bundle_sha256'],sha256=C._sha(observed['path']))
@@ -659,7 +664,14 @@ def test_nested_native_inventories_keep_distinct_git_origins(tmp_path,tmp_path_f
     # SQLite metadata semantics are exercised by native auxiliary tests.
     from src.engine.scalping import reversal_auxiliary_next_session as A
     monkeypatch.setattr(A,'_database_signature',lambda manifest:None)
+    if reader_generation == 'unreviewed':
+        with pytest.raises(ValueError, match='origin_inventory_conflict'):
+            C.bind_main_preparation(r['root'],commit,Path(f['request']['data_root']),intake)
+        return
     result=C.bind_main_preparation(r['root'],commit,Path(f['request']['data_root']),intake)
+    if reader_generation == 'reviewed':
+        assert manifest['reader_code_hashes'][Path(owner).name] == new
+        assert result['original_code_hashes'][owner] == old
     assert result['inventories'][0]['expected']['reversal_path_runtime.py']==new
     assert result['inventories'][1]['expected']['reversal_path_runtime.py']==old
     assert result['inventory_git_attestations'][parent['bundle_sha256']]['origin_commit']==r['original_commit']
@@ -902,3 +914,13 @@ def test_intraday_main_closure_requires_fresh_full_native_evidence(request_fixtu
     _write_request(f, request)
     result = _child(f, MAIN_CHILD_SETUP+'\nassert_no_forbidden_attempts()\n')
     assert (result.returncode == 0) is (fault is None), result.stderr
+
+
+
+def test_reviewed_sor_scope_keeps_original_code_pin_and_rejects_other_bytes():
+    name='src/trading/market/session_contract.py'
+    old='3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0'
+    current=C._sha(ROOT/name)
+    C._pairs({name:old},{name:current})
+    with pytest.raises(ValueError,match='unreviewed'):
+        C._pairs({name:old},{name:'0'*64})
