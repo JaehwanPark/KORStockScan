@@ -1981,6 +1981,17 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 continue
             selector = variant['selector_path']
             path = root / selector
+            if (variants is REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS
+                    and not path.exists() and not path.is_symlink()):
+                try:
+                    revision_bytes(commit,selector)
+                except ValueError as exc:
+                    if str(exc)=='entry_consumer_code_source_missing':
+                        # A verified predecessor predates this new selector.
+                        # A candidate whose Git tree owns it must retain it.
+                        continue
+                    raise
+                raise ValueError('entry_consumer_reviewed_dependency_missing:' + selector)
             if (variants in (REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
                              REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS)
                     and not path.exists() and not path.is_symlink()):

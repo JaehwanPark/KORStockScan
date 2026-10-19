@@ -1227,6 +1227,33 @@ def test_delay_contract_added_dependencies_keep_exact_original_digest(tmp_path,m
         assert handoff._verify_entry_code_delta(tmp_path,NEW,OLD,{original:original,added:added},expected)==[added]
 
 
+@pytest.mark.parametrize('git_owns_selector',[False,True])
+def test_new_index_selector_may_be_absent_only_from_a_preexisting_git_generation(tmp_path,monkeypatch,git_owns_selector):
+    import hashlib
+    trigger='src/engine/scalping/fixture.py';selector='src/engine/automation/main_trailing_source_reuse.py'
+    own='src/engine/automation/intraday_release_handoff.py';raw=b'original=1\n';verifier=b'# frozen\n'
+    sha=lambda value:hashlib.sha256(value).hexdigest()
+    for name,value in ((trigger,raw),(own,verifier)):
+        path=tmp_path/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(value)
+    variant=dict(selector_path=selector,selector_sha256=sha(b'new helper'),
+        dependencies={trigger:sha(raw),selector:sha(b'new helper')},contract_extensions={})
+    monkeypatch.setattr(handoff,'REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS',{(trigger,sha(raw)):variant})
+    monkeypatch.setattr(handoff,'REVIEWED_HOLDING_RESEARCH_DEPENDENCIES',{trigger:{sha(raw):{trigger:sha(raw)}}})
+    def show(command,**kwargs):
+        name=command[-1].split(':',1)[1]
+        if name==selector:
+            if git_owns_selector:return b'new helper'
+            raise handoff.subprocess.CalledProcessError(128,command)
+        return verifier if name==own else raw
+    monkeypatch.setattr(handoff.subprocess,'check_output',show)
+    expected=sha(json.dumps({trigger:sha(raw)},sort_keys=True,separators=(',',':')).encode())
+    if git_owns_selector:
+        with pytest.raises(ValueError,match='reviewed_dependency_missing'):
+            handoff._verify_entry_code_delta(tmp_path,NEW,OLD,{trigger:trigger},expected)
+    else:
+        assert handoff._verify_entry_code_delta(tmp_path,NEW,OLD,{trigger:trigger},expected)==[]
+
+
 @pytest.fixture
 def completed_research_git_candidate(tmp_path):
     """Real Git objects bind the original policy and final integrated sources."""
