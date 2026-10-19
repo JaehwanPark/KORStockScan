@@ -75,7 +75,7 @@ from src.engine.sniper_time import (
     is_scalping_buy_time_allowed,
     scalping_buy_time_block_reason,
 )
-from src.engine.sniper_condition_handlers_big_bite import (
+from src.engine.sniper_condition_handlers import (
     build_tick_data_from_ws,
     arm_big_bite_if_triggered,
     confirm_big_bite_follow_through,

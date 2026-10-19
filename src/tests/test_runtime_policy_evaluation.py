@@ -280,7 +280,7 @@ def test_full_ws_snapshot_and_signal_projection_equal_legacy_copy(monkeypatch):
     from collections import deque
     from src.engine import kiwoom_websocket as W
     from src.engine.infrastructure import snapshot_copy as C
-    from src.engine.sniper_condition_handlers_big_bite import build_tick_data_from_ws
+    from src.engine.sniper_condition_handlers import build_tick_data_from_ws
     manager=W.KiwoomWSManager('offline');target=manager._ensure_target_defaults('005930')
     target.update(curr=1000,v_pw=130,price_history=deque(range(500),maxlen=500),
                   strength_momentum_history=deque([{'ts':1.,'price':1000,'v_pw':130,'nested':[1]}]*2000),

@@ -95,6 +95,37 @@
   - 증감(parent 대비): non-test source/shell `+30/-56`(순감 26줄, wrapper 4파일 제거), 기존 tests `+163/-33`; 문서는 runbook 2행 이관과 이 완료 기록이다. 새 source/test 파일·보고서·검증 프레임워크는 추가하지 않았다.
   - 종결/권한: 이 branch의 clean 후보 commit과 작업본 검증으로 완료한다. 기본 작업본 운영 shell·선택 포인터·PID를 유지한다. 실제 sampler/backfill/provider 호출·배포·재기동·정책/주문 변경은 실행하지 않았다. 원래 선택본의 공유 data/docs mount 상태를 후보 코드 변경으로 복제하지 않았으며, 배포/PID 소비를 주장하지 않는다.
 
+## 이번 리팩터링의 확정 범위
+
+- [x] `[CodeCleanupScope1019] 후속 제거·통합 후보 조사와 유한한 구현 목록 확정` (`Due: 2026-10-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 후속 범위·종료점 확정까지`, `Track: CodeQuality`)
+  - 기준: clean 후보 `01636f953e63cd0693cb388750a572ddbdd9bc16`, 선택본 `18e1bba21a1b9f2e7717c65d4837e571b3e9a858`. 아래 대상 7파일의 후보/선택본 SHA가 동일함을 확인했다. 기본 작업본의 `sniper_state_handlers.py`는 다른 세대이므로 파일 전체 복사나 기존 변경의 중복 이관을 금한다. 조사 hash·호출자·삭제 block은 `/tmp/refactor-scope-20261019-sjn8sofo/`에 보존한다.
+  - 발견 방법: 후보의 engine Python 579파일에서 짧은 forwarding/retired surface, import·CLI·동적 참조와 AST 함수 동일성/내부 의존성을 조사하고 `src`·`deploy`·`configs`·workflow 및 설치 crontab·systemd/cron 설정을 교차 확인했다. 18줄 이상 top-level 함수의 AST 중복 32그룹은 구조 후보 수이며 제거 가능 판정이 아니다. 저장소 밖 임의 스크립트의 미사용까지 증명한 것은 아니다.
+  - 확정 목록: **완료한 `CodeCleanupCandidate1019` + 아래 Big-Bite·overnight 2묶음, 총 3묶음**으로 닫는다. 후속 구현은 기존 후보에 누적하고 구현 직전 선택본 변경 여부를 재확인한다. 이번 요청은 조사·checklist 확정까지이며 source 구현·배포·재기동 권한을 추가하지 않는다.
+  - 예상 제거량: Big-Bite wrapper 19줄, overnight 전용 helper 8개 401줄과 도달하지 않는 dispatch 145줄, 합계 565줄의 기존 block을 특정했다. 이는 순감 실적/할당량이 아니다. 구현 후 source·test·doc 증감을 따로 계산하며 줄 압축·파일 이동을 제거 성과로 세지 않는다.
+  - 조사 검증: 자체 리뷰에서 AST 동일 함수라도 다른 전역 필드 우선순위/코드 세대에 결속된 sentinel 통합을 보류하고 범위를 2건으로 제한했다. link·stable ID·상수 False gate/17개 보존 의존성 확인, print-only parser OPEN 25건(기존 23 + 신규 2, 신규 owner 각 1), `git diff --check` PASS. 이번 변경은 이 checklist에만 있으며 후보는 clean이다. source 구현·거래 회귀·배포는 수행하지 않았다.
+
+| 후보 | 이번 판정·남길 owner | 실제 소비와 경계 |
+| --- | --- | --- |
+| `sniper_condition_handlers_big_bite.py` | 후보에서 `removed`: shim/allowlist 1개씩; `consolidated`: [기존 condition 구현](../../src/engine/sniper_condition_handlers.py) 직접 import | production `sniper_state_handlers.py`·`signal_radar.py`와 test `test_runtime_policy_evaluation.py`의 구경로를 이관했다. 구현 4함수는 byte 동일이며 기본 작업본/선택본의 구경로는 운영 미반영 상태로 보존한다. |
+| [퇴역 overnight 실행부](../../src/engine/sniper_overnight_gatekeeper.py) | `removed` 예정: 전용 실행부의 대체 owner `none`; False 반환 진입점·기존 검사 대상 helper 의존성은 `retained` | `_overnight_gatekeeper_enabled()`는 상수 False, Main import/bind/dispatch와 설치 cron/systemd 직접 참조 0. 실제 module 소비는 `test_sniper_overnight_gatekeeper.py`·`test_holding_flow_override.py`이며 검사 helper를 모두 없애는 작업이 아니다. |
+| BUY/HOLDING sentinel scope 정규화 | `deferred`: 두 report owner 유지 | `_explicit_event_scope` 등 함수 몸체가 같아도 venue/session 필드 우선순위가 다르고 summary의 코드 hash 계약이 있다. 재검토 조건은 우선순위·세대 계약을 보존하는 별도 통합 범위와 parity 검증 확정이다. 이번 3묶음의 닫힘 조건에 넣지 않는다. |
+| entry observation/archive reader 중복·12개 retired compatibility CLI | `retained`: 현재 observation owner와 역사 reader/retirement owner 유지 | 현재 판단과 과거 자료 해석·퇴역 응답의 역할이 다르다. 구조 중복/짧은 파일만으로 삭제하지 않는다. 별도 문서 owner가 역사 명령 폐기와 모든 reader 이관을 확정하기 전에는 CLI 일괄 삭제를 범위에 넣지 않는다. |
+| native v4/v5/successor dispatch·운영 shell·활성 주문/provider 구현 | `retained`: 기존 policy/runtime/automation owner | immutable 정책 코드 결속, lock·복구·일정 계약을 보존한다. 이번 조사로 재설계·퇴역 해제·새 framework를 열지 않는다. |
+
+- [x] `[CodeCleanupBigBite1019] Big-Bite 호출자 직접 이관과 shim 제거` (`Due: 2026-10-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 확정 범위의 첫 후속 구현`, `Track: CodeQuality`)
+  - Source/owner: `src/engine/sniper_condition_handlers.py`; 수정 목록은 `sniper_state_handlers.py`·`signal_radar.py`의 import, `test_runtime_policy_evaluation.py`, `test_engine_location_gate.py`, shim 삭제와 이 checklist다. 판단식·등록·구독·주문 동작은 보존한다. 새 wrapper/공통 module을 만들지 않는다.
+  - Acceptance: `build_tick_data_from_ws`·`detect_big_bite_trigger`·`arm_big_bite_if_triggered`·`confirm_big_bite_follow_through`의 canonical identity/입출력·상태 갱신 보존, 순환 import 없음, 구경로 caller 0, shim 1개와 allowlist 1개 제거. 기존 runtime-policy/location-gate 및 관련 Big-Bite 호출 경로 회귀를 이용한다. 자체 리뷰→보완→재리뷰·영향 pytest·compile·diff 검사 후 후보 commit으로 남긴다.
+  - 구현/제거 결과: 후보 parent `01636f953`에서 import 3곳만 canonical 경로로 치환하고 shim 19줄·allowlist 1항목을 제거했다. 기존 4함수와 canonical 파일 SHA `c405cb33d19f9d9f857efd122f9175e1c0cc8f6614c53b574ab6aaa466bd7b6b`를 보존했다. non-test source `+2/-21`(순감 19줄), 기존 tests `+1/-2`(순감 1줄); 새 구현·테스트·framework 파일 0. 문서는 이 확정 범위/결과 기록만 후보 checklist에 이관한다.
+  - 검증 결과: 기존 영향 5파일(runtime policy evaluation·engine location gate·state handler fast signatures·REST call reduction·Main REST/WS latency) pytest `429 PASS`(14.69초, 제외/skip 0). 기존 pandas_ta의 pandas deprecation 경고 1건은 남아 있다. 네트워크를 차단한 별도 검증에서 wrapper export 4개/consumer identity 5개, 입력·출력·상태 10개 관측값의 변경 전후 일치, 두 consumer-first cold import와 구 module 미해결을 확인했다. compile 5파일·정적/동적 import·CLI/등록 참조 0·문서 parser·diff 검사 PASS. shell 미변경으로 이번 묶음의 bash/shell 재검사는 생략한다. 증거 `/tmp/big-bite-cleanup-20261019-x8y7gvl3/`.
+  - 리뷰/종결: 구현→자가 리뷰→기존 helper byte/consumer-only diff 확인→재리뷰 범위 내 미해결 결함 0. 후보 clean commit으로 이 묶음을 닫으며 마지막 overnight 묶음은 OPEN으로 유지한다. 기본 작업본 운영 코드·선택 포인터·PID·cron과 앞선 후보 변경을 보존했다. 실제 provider·주문 호출·배포·재기동은 실행하지 않았다.
+
+- [ ] `[CodeCleanupOvernight1019] 영구 비활성 overnight의 도달 불가 실행부 제거` (`Due: 2026-10-19`, `Slot: IMPLEMENTATION`, `TimeWindow: Big-Bite 이후 마지막 후속 구현`, `Track: CodeQuality`)
+  - Source/owner: `src/engine/sniper_overnight_gatekeeper.py`, retirement `scalping_overnight_retirement_20260906`. 상수 False gate 뒤 `run_scalping_overnight_gatekeeper`의 실행 tail(기준 1033–1177행), `bind_overnight_dependencies`, `_find_active_target_by_code`, `_calc_held_minutes`, `_build_scalping_overnight_ctx`, `_build_overnight_holding_context`, `_publish_scalping_overnight_decision`, `_execute_scalping_sell_today`, `_execute_scalping_hold_overnight`와 이들만 쓰는 import/binding을 제거한다. 같은 이름의 다른 module 함수는 범위 밖이다.
+  - `retained`: False 반환/비활성 로그·true override 거절, `_snapshot_record`·`_apply_overnight_flow_override`·`_submit_overnight_dual_persona_shadow` 등 기존 테스트가 직접 소비하는 helper와 그 내부 의존성 17개. Main의 현행 holding/terminal-exit, 정책·broker API/parser·과거 영수증은 그대로 둔다. 삭제 실행부의 계좌/주문/취소 callsite를 편집하기 전에는 Official Kiwoom Reference Gate를 적용하고 근거를 이 항목에 남긴다.
+  - Acceptance: default/true env·config에서도 진입점은 False이고 AI·DB·주문·취소·Telegram 실행 0, 제거 8helper의 caller 0, 보존 helper 계약/기존 active holding·same-session terminal 회귀 동일. 기존 `test_sniper_overnight_gatekeeper.py`·`test_holding_flow_override.py`·`test_holding_decision_context.py`를 활용하며 삭제 편의를 위해 기존 안전 검사를 없애지 않는다. 자체 리뷰→보완→재리뷰·영향 pytest·compile·diff 검사 후 후보 commit으로 남긴다.
+
+종료점: 확정한 후속 2묶음(Big-Bite 완료·overnight OPEN)을 구현하고 완료 후보의 기존 419회귀와 새 영향 회귀를 제외 없이 통합 검증한 clean 후보 commit을 확정하면 **이번 리팩터링 구현은 종결**한다. sampler shell 계약·`bash -n`, 문서 parser·`git diff --check`도 확인한다. 배포/재기동·자연 소비는 이후 별도 승인 작업이며 이번 구현을 계속 늘리는 조건으로 사용하지 않는다. 새로운 결손은 증거와 owner만 남기고 이 목록에 자동 편입하지 않는다. 조사 단계 검증은 문서 owner/link/권한·print-only parser·diff 검사이며 거래 pytest·실제 sampler/backfill·provider 호출은 실행하지 않는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
