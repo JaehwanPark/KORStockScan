@@ -227,7 +227,9 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
     def run(args, limit):
         remaining = min(limit, deadline - monotonic() - 5)
         if remaining < 1:
-            return 75
+            # No child ran. Do not confuse exhausted startup time with a
+            # failed source producer and overwrite a current full observation.
+            return None
         with log.open('ab') as output:
             child = subprocess.Popen([str(root/'.venv/bin/python'), '-B', '-m', *args],
                 cwd=root, env={**os.environ, 'PYTHONPATH': str(root)},
@@ -263,6 +265,9 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                 return dict(receipt, reason='startup_observer_identity_changed')
             producer = run(['src.engine.buy_funnel_sentinel', '--date', day,
                             '--use-cache', '--use-summary'], max(0., deadline-monotonic()-45))
+            if producer is None:
+                return dict(receipt, reason='startup_observer_deadline_expired',
+                            producer_started=False, publication_attempted=False)
             remaining = min(120., deadline - monotonic() - 5)
             if remaining < 20:
                 return dict(receipt, reason='startup_observer_deadline_expired', producer_exit=producer)
@@ -272,6 +277,9 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
             if producer != 0:
                 observer.append('--source-only')
             code = run(observer, remaining)
+            if code is None:
+                return dict(receipt, reason='startup_observer_deadline_expired',
+                            producer_exit=producer, publication_attempted=False)
             # The full detector immediately verifies generation, completeness
             # and semantic failures. Exit zero alone is not a health receipt.
             return dict(receipt, status='attempted', producer_exit=producer, observer_exit=code)

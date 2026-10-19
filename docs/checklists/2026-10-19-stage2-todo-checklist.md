@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-19`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 10/19 10:22 기동 관측기: lock 대기로 producer가 미실행인데 source-only 보고서를 게시하여 현재 full 보고서를 덮은 결함을 수리한다. 미실행은 원 deadline 실패로 남기며 게시하지 않고, 실제 생성 실패의 진단과 첫 detector의 검증은 유지한다. 현재 PID 보고서 복구 후 수정 코드·다음 PID의 첫 health를 검증한다. [검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 10/19 09:30 observer 수리: 이전 PID 스캐너 사건은 exact 원본 해시/6필드/actor/출생시각으로만 현재 health에서 분리하고 원 active/경제성 결손을 보존한다. native 입력 deadline의 안전한 무호출·무주문 DROP은 지연 차단 진단으로 유지한다. 실제09:30 격리 재검증은 warning이며 live 배포/PID/자연 detector 수용은 별도 확인한다. [검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 첫 장중 코드 전환은 이미 소비된 prepared delay의 원 commit과 source를 사전검증하고 drain 후 selector 게시 전에 정식 영수증을 승계한다. 실패 시 새 선택/기동을 진행하지 않으며 기존 정책 수치와 원 PREOPEN을 유지한다.
   - 코드 전환 뒤 trailing 연구의 현재성은 원 PREOPEN holding 원문을 유지한 별도 native 재검증 영수증으로 확인한다. 날짜·scope·원 parent policy 일치, 새 전체 원천/산술 검증, 현재 코드/세대 결속이 필수이며 보고서 전용 영수증은 runtime apply 권한이 아니다. 재기동 observer는 기준일 raw inode 변경을 정식 요약 재생성 후 다시 검증한다.

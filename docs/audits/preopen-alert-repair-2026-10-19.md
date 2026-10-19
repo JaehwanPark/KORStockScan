@@ -99,3 +99,12 @@ trailing 재생성 b2afe3d3…은20,840scope complete다. 기존 snapshot과 정
 수량5건 중49294의1,411개와49293의1,547개는 같은 native SELL 영수증 재관측이었다. 기존 검증기가UNKNOWN venue 및 native_entry 영수증 유형을 지원하지 않아 중복체결로 제외했다. 원 producer의 순수 custody identity 검증과 전체 payload/원 broker 시각 동일성으로 재검증하며, venue·실제 비용·실주문 권한은 승격하지 않는다. fresh allocator의 실패 결과는 성공 영수증 검증기에 넣어 원인을 덮지 않고 원 reason/dependency를 유지한다.49268/49293/49294의 격리 연구 비용 복원이 확인됐고 운영 report 갱신은 후속 검증 대상이다.49013의9/30 공식 일별비용980원은 주문 없는 조회로 별도증거경로에 확보했지만 Main custody 결속이 없으며,49266의 원 SELL execution_no는 비어 있다. 기존8건 중5건의 정책 영수증 결속도 partial이다. 비용 복원만으로 initial_quantity 경고 전체가 해소된다고 주장하지 않는다.
 
 관련475개 및 정확한 의존성 세대 handoff2,503개 회귀 통과. 원 정책 digest와77개 의존성을 함께 보존하는 I/O 수정 세대를 검증했다. 추가 archive 검사159PASS/1FAIL 중 legacy gzip fixture1건은 선택40b21 원 코드에서도 동일 실패를 재현했으며 이번 변경의 회귀가 아니다. 원 archive identity/manifest 검증을 완화하지 않았다. 코드 리뷰→보완→재리뷰 후 이번 변경 범위 지적0이며 Python compile/diff/문서 parser 및 native active/delay/stop/holding 사전검사를 배포 전에 확인한다. live 적용·현재PID·정기 실행 수용은 별도 영수증으로 후행 기록한다.
+
+
+10:21:07 I/O 수정 e5b3c5b8e ordered 전환은 PASS/complete, PID588224/start1734275는10:20:42 실제 소비를 확인했다.10:20 정기 intraday_light는 trade_review3.681초/308,300KiB, 전체9.341초로 완료됐다. 원09:55 작업의534.149초/5,528,364KiB와 비교했고 source gap은 보존했다.10:22 full detector의 process_health/log_scanner는PASS, I/O wait9.88%였으나 artifact 검사는 자원 경합으로 deferred였다. 근거: tmp/preopen-alert-repair-20261019/io-natural-cron-completion.json, ordered-io-final.json, io-final-health.json.
+
+## 10:22 기동 관측기의 정상 보고서 덮어쓰기
+
+수동 배포 후 native producer/lock 갱신 f51c8910…은 현재 PID full 관측을 게시했다. 같은 lock을 기다린 Main 기동 작업은 원150초 예산에서 producer 몫이 남지 않아 subprocess를 시작하지 않았는데75를 실제 실패로 해석했다.10:21:51 source_only3afdc4a4…가 빈 입력·필수 semantic 부재인 결과를 게시해 full 결과를 덮었고10:22:49 경보가 이를 탐지했다. 경보가 참조한 원 보고서와 기동 로그는 보존했다. 코드의 원인이며 정상 원천으로 재분류할 사안이 아니다.
+
+run의 미실행을None으로 구분해 producer가 시작되지 않았으면 deadline 실패/미게시로 반환한다. 실제 실행한 producer의0/1/75 경로와 source-only 실패 진단은 유지하고, 원150초·주문·정책·수동보유 가드는 바꾸지 않는다. retained 보고서의 현재PID·원천·semantic 여부는 기존 첫 detector가 검증한다.20개 scheduler 회귀는 미실행 시 기존 보고서 보존과 실제 실패 시 진단 게시를 확인했다.10:25:22 현재PID native 보고서를 복구한9f1b4fa4…는full/warning_pending, unmet_conditions0이다. 코드 배포/다음PID 수용은 별도 후속 영수증으로 기록한다.

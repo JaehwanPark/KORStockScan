@@ -371,7 +371,7 @@ def test_error_detection_loop_writes_each_health_report_but_logs_one_incident(mo
     assert alerts[0][1]['audience'] == 'ADMIN_ONLY'
 
 
-@pytest.mark.parametrize('producer', [0, 1])
+@pytest.mark.parametrize('producer', [0, 1, 75])
 def test_startup_observer_uses_existing_owners_and_no_notification(tmp_path, monkeypatch, producer):
     (tmp_path/'tmp').mkdir()
     calls=[]
@@ -402,3 +402,20 @@ def test_startup_observer_busy_or_expired_never_starts_unowned_child(tmp_path, m
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         result=bot_main._refresh_startup_observer(identity,monotonic=lambda:130.,heartbeat=lambda:None)
     assert result['reason']=='startup_observer_owner_busy'
+
+
+@pytest.mark.parametrize('elapsed', [104.5, 110., 125.])
+def test_startup_observer_unstarted_producer_cannot_replace_completed_report(tmp_path, monkeypatch, elapsed):
+    (tmp_path/'tmp').mkdir()
+    report=tmp_path/'data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json'
+    report.parent.mkdir(parents=True)
+    original=b'{"execution_status":"completed","execution_mode":"full","run_id":"current-pid"}\n'
+    report.write_bytes(original)
+    identity=dict(process_started_monotonic=0.,workspace=tmp_path,release_root=tmp_path,
+                  target_date='2026-10-19',pid=123)
+    monkeypatch.setattr(bot_main,'_startup_consumption_check',lambda identity:dict(status='ready'))
+    monkeypatch.setattr(bot_main.subprocess,'Popen',lambda *a,**k:pytest.fail('no source-only child for unstarted producer'))
+    result=bot_main._refresh_startup_observer(identity,monotonic=lambda:elapsed,heartbeat=lambda:None)
+    assert result['status']=='failed' and result['reason']=='startup_observer_deadline_expired'
+    assert result['producer_started'] is False and result['publication_attempted'] is False
+    assert report.read_bytes()==original
