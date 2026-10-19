@@ -157,6 +157,10 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
         DATA_DIR / "runtime" / "trade_pause_state.json",
         DATA_DIR.parent / "pause.flag",
         registry_path(),
+        # ENTRY replay imports this catalog inside the frozen-file sandbox.
+        # Its source must travel with the policy, never be read from live disk.
+        Path(__file__).with_name("reversal_cumulative_data.json"),
+        Path(__file__).with_name("reversal_price_progress_data.json"),
     }
     for key, value in {**rules, **environment}.items():
         if (

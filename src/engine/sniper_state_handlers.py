@@ -71068,6 +71068,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             },
         )
+        # Bind before sequential legs and immutable sizing/price hashes are
+        # created. A final-request-only repair would leave a different plan.
+        if any(not _bind_main_entry_order_request(stock, order) for order in planned_orders):
+            _log_entry_pipeline(
+                stock, code, "main_entry_order_route_invalid",
+                actual_order_submitted=False, broker_order_forbidden=True,
+            )
+            _set_async_terminal(stock, "main_entry_order_route_invalid")
+            return False
         try:
             sequential_plan = _initial_quantity_sequential_plan(
                 stock, planned_orders, requested_qty, entry_split_fields)
@@ -71690,9 +71699,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             default_order_type_code=order_type_code,
             default_price=final_price,
         )
-        if not _bind_zero_base_order_request(stock, request):
+        if not _bind_main_entry_order_request(stock, request):
             _log_entry_pipeline(
-                stock, code, "zero_base_order_route_invalid",
+                stock, code, "main_entry_order_route_invalid",
                 actual_order_submitted=False, broker_order_forbidden=True,
             )
             continue
@@ -82374,11 +82383,43 @@ def _entry_order_venue_eligibility(code: str, *, now=None):
         return None
 
 
-def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
-    """Bind zero-base orders to the exact observed session route."""
-    if not str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:"):
+def _bind_main_entry_order_request(stock: dict, request: dict, *, now_ts=None) -> bool:
+    """Preserve the observed Main route; never overwrite a conflicting plan."""
+    explicit = {
+        str(request[key]).strip().upper()
+        for key in ("dmst_stex_tp", "domestic_exchange_type", "exchange", "stex_tp", "broker_route")
+        if request.get(key) not in (None, "")
+    }
+    if len(explicit) > 1 or explicit - {"KRX", "NXT", "SOR"}:
+        return False
+    fixed = main_fixed_watch.is_fixed_watch(stock)
+    zero_base = str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:")
+    if not fixed and not zero_base:
         return True
-    now_kst = datetime.now(_KST)
+    decision_source = stock.get("last_watching_ai_machine_primary_fields") or {}
+    if not isinstance(decision_source, dict):
+        return False
+    decision_route = decision_source.get("ai_trace_broker_route")
+    now_kst = datetime.now(_KST) if now_ts is None else datetime.fromtimestamp(now_ts, _KST)
+    if fixed:
+        try:
+            route = _fixed_watch_entry_source_route(stock, now_kst.timestamp())
+        except ValueError:
+            return False
+        if route is None or not is_scalping_buy_time_allowed(now_kst.time()):
+            return False
+        canonical = main_fixed_watch.session_route(now_kst.timestamp(), str(stock.get("code") or "")[:6])
+        if (stock.get("market_data_route") != canonical["route"]
+                or stock.get("effective_venue") != canonical["venue"]
+                or str(stock.get("market_session_bucket") or "").upper() != canonical["bucket"].upper()):
+            return False
+        broker = route["broker_route"]
+        if decision_route and decision_route != broker:
+            return False
+        if explicit and explicit != {broker}:
+            return False
+        request["dmst_stex_tp"] = broker
+        return True
     context = session_contract.resolve_market_session(now_kst)
     if not is_scalping_buy_time_allowed(now_kst.time()):
         return False
@@ -82403,6 +82444,10 @@ def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
             return False
     else:
         return False
+    if decision_route and decision_route != broker:
+        return False
+    if explicit and explicit != {broker}:
+        return False
     request["dmst_stex_tp"] = broker
     return True
 
@@ -82410,6 +82455,14 @@ def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
 def _resolve_live_entry_order_request(
     strategy, planned_order, default_order_type_code, default_price
 ):
+    route_fields = {
+        key: planned_order[key]
+        for key in ("dmst_stex_tp", "domestic_exchange_type", "exchange", "stex_tp", "broker_route")
+        if planned_order.get(key) not in (None, "")
+    }
+    aliases = ("dmst_stex_tp", "domestic_exchange_type", "exchange", "stex_tp")
+    if not any(key in route_fields for key in aliases) and "broker_route" in route_fields:
+        route_fields["dmst_stex_tp"] = route_fields["broker_route"]
     tif = str(planned_order.get("tif", "DAY") or "DAY").upper()
     tag = str(planned_order.get("tag", "normal") or "normal")
     qty = int(planned_order.get("qty", 0) or 0)
@@ -82417,6 +82470,7 @@ def _resolve_live_entry_order_request(
 
     if strategy == "SCALPING" and planned_order.get("initial_quantity_probe_market") is True:
         return {
+            **route_fields,
             "qty": qty, "price": 0, "guard_price": price,
             "order_type_code": "3", "tif": "DAY", "tag": tag,
         }
@@ -82442,6 +82496,7 @@ def _resolve_live_entry_order_request(
             or 0
         )
         return {
+            **route_fields,
             "qty": qty,
             "price": 0,
             "guard_price": guard_price,
@@ -82452,6 +82507,7 @@ def _resolve_live_entry_order_request(
 
     if tif == "IOC":
         return {
+            **route_fields,
             "qty": qty,
             "price": 0,
             "guard_price": price,
@@ -82462,6 +82518,7 @@ def _resolve_live_entry_order_request(
 
     if strategy == "SCALPING":
         return {
+            **route_fields,
             "qty": qty,
             "price": price,
             "guard_price": price,
@@ -82471,6 +82528,7 @@ def _resolve_live_entry_order_request(
         }
 
     return {
+        **route_fields,
         "qty": qty,
         "price": int(default_price or 0),
         "guard_price": int(default_price or 0),

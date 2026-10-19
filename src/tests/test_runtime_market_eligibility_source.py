@@ -249,3 +249,38 @@ def test_closed_date_never_fetches_and_startup_hook_precedes_workers(tmp_path, d
     assert text.index('market_eligibility_source.tick(db_manager)') < text.index('target=kiwoom_sniper_v2.run_sniper')
     assert text.count('market_eligibility_source.tick(db_manager)') == 2
     assert 'update_kospi' not in Path(source.__file__).read_text()
+
+
+@pytest.mark.parametrize("krx,observed_delta,expected", [
+    (True,0,True),(False,0,False),(None,0,False),(True,1,False),(True,-24,False),
+])
+def test_current_krx_source_reaches_sor_consumer_without_nxt_inference(
+    monkeypatch,krx,observed_delta,expected):
+    from src.engine import sniper_state_handlers as handlers
+    from src.trading.market import session_contract as contract
+    now=datetime(2026,10,19,17,0,tzinfo=source.KST)
+    row=dict(stock_code="036930",trade_date=now.date().isoformat(),
+        source_api_id="verified-krx-source-fixture",source_revision="a"*40,
+        payload_sha256="b"*64,observed_at_kst=(now+timedelta(hours=observed_delta)).isoformat(),
+        krx_regular_eligible=True,krx_aftermarket_eligible=krx,nxt_eligible=False,
+        quality_state="VALID",market_code="10")
+    # Match the PostgreSQL aware-datetime boundary, as in the existing NXT
+    # consumer proof. SQLite intentionally cannot preserve this TZ contract.
+    records = {}
+    def merge(model):
+        records[model.stock_code] = {
+            column.name: getattr(model,column.name) for column in model.__table__.columns}
+    source.store_market_eligibility_rows(SimpleNamespace(merge=merge),
+        trade_date=now.date(),source_rows={"036930":row})
+    db=SimpleNamespace(get_security_market_eligibility=lambda code,day:records.get(code))
+    monkeypatch.setattr(handlers,"DB",db)
+    evidence=handlers._entry_order_venue_eligibility("036930",now=now)
+    result=contract.resolve_order_type_preflight(contract.resolve_market_session(now),
+        "SOR","buy","00",eligibility=evidence)
+    assert result.allowed is expected
+    original=db.get_security_market_eligibility("036930",now.date())
+    assert original["nxt_eligible"] is False
+    assert original["krx_aftermarket_eligible"] is krx
+    if expected:
+        assert evidence.source_id == row["source_api_id"]
+        assert evidence.source_sha256 == row["payload_sha256"]

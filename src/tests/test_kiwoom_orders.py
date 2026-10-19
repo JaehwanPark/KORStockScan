@@ -1967,3 +1967,31 @@ def test_real_deposit_cache_retains_its_own_receipt_and_original_clock(monkeypat
     assert cached["deposit_source_receipt"] == first
     assert cached["deposit_source_receipt"]["observed_epoch"] == 1000
     assert len(posts) == 1
+
+
+@pytest.mark.parametrize("krx,nxt,current_policy,allowed", [
+    (True,False,True,True),(False,True,True,True),
+    (False,False,True,False),(None,True,True,False),
+    (True,None,True,False),(True,False,False,False),
+])
+def test_sor_single_venue_keeps_exact_date_policy_and_unknown_guards(
+    monkeypatch,tmp_path,krx,nxt,current_policy,allowed):
+    _allow_buy_time_guards(monkeypatch)
+    _install_aftermarket_runtime_policy(monkeypatch,tmp_path,
+        active_date="2026-09-15" if current_policy else "2026-09-14")
+    monkeypatch.setattr(kiwoom_orders,"_aftermarket_sor_canary_approval_path",lambda _day:tmp_path/"missing-canary.json")
+    calls=[]
+    def post(url,headers,payload,api_id,timeout=5):
+        calls.append(dict(payload))
+        return type("Response",(),{"status_code":200})(),{"return_code":"0","ord_no":"B-SOR"}
+    monkeypatch.setattr(kiwoom_orders,"_post_kiwoom_with_auth_retry",post)
+    result=kiwoom_orders.send_buy_order_market("005930",2,"fixture",
+        order_type="00",price=10000,dmst_stex_tp="SOR",owner_context=_main_owner_context(),
+        now=datetime(2026,9,15,17,0,tzinfo=session_contract.KST),
+        venue_eligibility=_aftermarket_eligibility(krx=krx,nxt=nxt,target_date=date(2026,9,15)))
+    assert bool(calls) is allowed
+    if allowed:
+        assert calls == [dict(dmst_stex_tp="SOR",stk_cd="005930",ord_qty="2",ord_uv="10000",trde_tp="00",cond_uv="")]
+        assert result["aftermarket_sor_runtime_policy_valid"] is True
+    else:
+        assert not result.get("ord_no")
