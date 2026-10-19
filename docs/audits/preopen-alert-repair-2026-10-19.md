@@ -151,3 +151,25 @@ run의 미실행을None으로 구분해 producer가 시작되지 않았으면 de
 정식 trailing 재생성은38.106초/20,840scope complete, 원 추출 provenance 보존·현재 전체 산술 검증·semantic verdict 재사용false로 완료됐다. full hash18,824,751B, normalized/검증 포함 rchar535,686,246B/disk126,214,144B/최대RSS182776KiB다. report adfcad8b… 및 currentness7884f735…를 발행했으며 원 정책/holding/PREOPEN은 미변경이다. 최초4c7a71245 후보 preflight는 이전 ac4 Git 세대에 없는 새 selector를 요구하여 Main drain 전에 거부됐다. 후보가 Git에서 소유하는 selector 삭제는 계속 거부하고, 원 Git에도 없는 이전 세대만 historical closure로 검증하도록 고친 뒤2505 PASS다. 실패 로그와 후보를 보존했다. 근거: tmp/artifact-source-repair-20261019-1050/index-trailing-native-generation.log, index-native-preflight.log, index-predecessor-fix-tests.log.
 
 최종 제출 경계 최적화는 frozen auxiliary reader5개를 바꾸지 않도록 `reversal_evaluation_context.validate_submit` 및 두 native 호출부로 이동했다. 원 reader/등록 바인딩/next-session manifest bytes를 유지하고 최신 revocation·5초·독립 전송 guard를 재실행한다. 이전 fa751d3c5용 reader 호환 초안은 미선택 후보의 증거로 보존하며 기존 overlay/manifest를 재발행하지 않는다. 최종 source/handoff/reuse 검사2531 PASS, submit/auxiliary 계약192 PASS다. 별도 auxiliary readiness mock2건은 ac4에서도 같은 missing current-pointer 예외로 실패하여 baseline 증거로 구분한다. 실제 candidate readiness는 정식 현재 pointer와 기존 source/reader 호환 영수증으로 다시 검증한다.
+
+교체/잔존 리뷰(기준ac4aa4417→65854f300): non-test source26파일 +2560/-152, tests11파일 +662/-5, docs3파일 +66/-3이며 파일 이동은 없다. 새3모듈은 automation 안의 단일 source-index I/O, native completed tree, explicit frozen-input replay를 소유한다. 기존 assembler가 native writer/holding 모듈을 다시 import하는 순환과 정책 orchestration을 피하며, 기존 digest/window/storage 및 원 writer lease를 재사용한다. 코드 순증은 최초 기록 색인·회전/압축·bounded migration·검증 경로 추가이며 축약이나 파일 이동을 단순화 성과로 계산하지 않는다. 새 source-only worker2개(index maintenance,50ms local-depth sampler), explicit CLI2개가 추가되고 cron/provider/order entrypoint는 추가하지 않았다.
+
+| 기존 경로 | 최종 처분/소비자 |
+| --- | --- |
+| assembler raw3종·holding 원 요청 scan | consolidated: open_input/read_rows/read_at로 정상 입력의 직접 색인 소비; 원 offset/SHA 유지 |
+| completed snapshot 재직렬화/전체 readback | consolidated: 원 writer resident rows→불변 tree/census manifest, native assembler 소비 |
+| delay 원 raw 반복 cursor | retained: 색인이 pending인 legacy만 기존32MiB fallback; normal 관측은 writer minute/원ID 색인 |
+| Main 방문 기반 quote 관측 | retained: Main fallback과 새 sampler가 동일 registry/claim lock·단일 관측 함수를 공유하며 중복 소비 방지 |
+| 두 native auxiliary submit import | removed: watching·physical submit 모두 reversal_evaluation_context.validate_submit로 교체 |
+| 원 auxiliary_intraday.validate_submit wrapper | deferred: 현재 next-session manifest가 reader 파일 전체를 pin한다. 원 policy/source bytes 보존을 위해 역사 표면만 유지, active 두 dispatch 없음. DirectFamilyPreopenPolicyHandoff가 새 native reader 세대 이관 후 current/prepared consumer pin 부재·binding parity·readiness·기존 wrapper active caller0으로 제거를 수용한다. |
+| small legacy raw/gzip/vote reader | retained: 기존 PREOPEN/역사 증거의 native contract 소비; 큰 미색인 원천은 pending이며 inline 전체 재읽기 금지 |
+
+정확한 caller/authority·교체 표·미해결 baseline 증거는 tmp/artifact-source-repair-20261019-1050/indexed-review.json에 함께 보존했다. 공유 AGENTS.md의 동시 편집은 이 변경에 포함하거나 덮어쓰지 않았다.
+
+## 14:52 Main policy startup selector race
+
+65854f300/PID1243824(start3363415)의 ordered transition은complete/PASS이고14:54:01 observer는 현재 actor의warning_pending/unmet0이었다. 별도로14:52:41 Main의 첫 `prepare`는 `machine_policy_consumer_source_changed`로 실패했다. 변경 가능한 첫8개 source 중 selector만14:52:36.980에 원생성 런처가 같은 root/commit의 actual_pid_consumed·정확한 PID 영수증을 게시했다. 원 policy pointer·reader·handoff·predecessor bytes는 그 시간창에서 바뀌지 않았다. 이 경합이 최초 서명을 무효화한 것을 현재 소유권 영수증/mtime 및 코드 경계로 확인했다. 소비 영수증·프로세스 생존과 이 첫 추가 reader 판정을 분리한다.
+
+수정은 기존 `prepare`의 단일 호출을 최대2회의 전체 native 호출로 교체한다. 최초 consumer-source-changed에서 CONFIGURED/CONSUMED를 버린 뒤 정확히1회 새 source/PID/handoff/selector/auxiliary 검증을 수행하며 원 verdict를 재사용하지 않는다. 이미 열린 provider/submit 평가 뷰 안에서는 재시도하지 않는다. 실제 source hash·pointer·dependency 오류와 두 번째 경합은 그대로 실패한다. 실패한 startup 로그는 보존한다. 새 validator/module/receipt producer 없이 기존 runtime orchestration owner를 확장했고, 원 source-change 검사와 frozen auxiliary reader는 retained다. 현재658 이전 세대와 새 E helper 세대를 별도 exact selector/dependency 표로 유지해 혼합을 거부한다.
+
+재리뷰·추가 회귀·최종2576 PASS와 실제 현재658 predecessor code generation 검증PASS, compile/diff/parser를 확인한다. 새로운 Main 정지 전에 활성/지연/손절/보유·auxiliary readiness를 다시 검증하며 기존 trailing native generation4c8d16f5…는 report code-contract2b52c5c6…가 같으므로 재생성하지 않는다. 근거: tmp/artifact-source-repair-20261019-1050/startup-reader-race-final-gate.log 및 startup-reader-race-predecessor-code.json. 새 PID의 startup verified 및 첫 health는 후속 별도 수용이다.

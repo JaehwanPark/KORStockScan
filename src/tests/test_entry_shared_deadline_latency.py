@@ -467,6 +467,48 @@ def test_failed_ancestor_recheck_cannot_retain_configuration_receipt(monkeypatch
     assert E._CONFIGURED is None and E._CONSUMED is None
 
 
+@pytest.mark.parametrize('second_failure',[None,'machine_policy_consumer_source_changed',
+    'machine_policy_consumer_dependency_changed','source_hash_invalid'])
+def test_startup_publication_race_retries_only_after_discarding_the_entire_first_pass(monkeypatch,second_failure):
+    from src.engine.scalping import reversal_evaluation_context as E
+    calls=[];active=object()
+    @contextmanager
+    def fresh_pass():
+        calls.append('enter');yield;calls.append('exit')
+    def prepare(**kw):
+        assert E._CONFIGURED is E._CONSUMED is None
+        calls.append('full_native_prepare')
+        E._CONFIGURED=E._CONSUMED='first pass must never survive'
+        if calls.count('full_native_prepare')==1:
+            raise ValueError('machine_policy_consumer_source_changed')
+        if second_failure:raise ValueError(second_failure)
+        return active
+    monkeypatch.setattr(E.N,'signature_pass',fresh_pass)
+    monkeypatch.setattr(E,'_CONFIGURED',None);monkeypatch.setattr(E,'_CONSUMED',None)
+    monkeypatch.setattr(E,'_prepare_verified',prepare)
+    if second_failure:
+        with pytest.raises(ValueError,match=second_failure):E.prepare(data_root='fixture',day='2026-10-19')
+        assert E._CONFIGURED is E._CONSUMED is None
+    else:assert E.prepare(data_root='fixture',day='2026-10-19') is active
+    assert calls.count('enter')==calls.count('full_native_prepare')==2
+
+
+@pytest.mark.parametrize('fault,nested',[('source_hash_invalid',False),
+    ('machine_policy_generation_changed_during_evaluation',False),
+    ('machine_policy_consumer_source_changed',True)])
+def test_invalid_source_or_an_existing_evaluation_never_gets_a_startup_retry(monkeypatch,fault,nested):
+    from src.engine.scalping import reversal_evaluation_context as E
+    calls=[]
+    def fail(**kw):
+        calls.append(kw);raise ValueError(fault)
+    monkeypatch.setattr(E,'_prepare_verified',fail)
+    token=E.N._VERIFIED_EVALUATION.set(('existing view',) if nested else None)
+    try:
+        with pytest.raises(ValueError,match=fault):E.prepare(data_root='fixture',day='2026-10-19')
+    finally:E.N._VERIFIED_EVALUATION.reset(token)
+    assert len(calls)==1 and E._CONFIGURED is E._CONSUMED is None
+
+
 def test_native_predecessor_proof_change_invalidates_the_consumption_dependencies(tmp_path):
     from src.engine.scalping import reversal_evaluation_context as E
     day, commit = '2026-10-13', 'a' * 40

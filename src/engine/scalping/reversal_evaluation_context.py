@@ -141,19 +141,30 @@ def _identities(paths):
 
 def prepare(*, data_root, day):
     global _CONFIGURED, _CONSUMED
+    allow_retry=N._VERIFIED_EVALUATION.get() is None
     # Share ancestor resolution only inside this synchronous validation. Every
     # file signature is still read, and the pass rechecks symlink/dir custody.
     # Never extend the pass across provider I/O or the next evaluation boundary.
-    try:
-        with N.signature_pass():
-            return _prepare_verified(data_root=data_root, day=day)
-    except BaseException:
-        if _LOCK.acquire(blocking=False):
-            try:
-                _CONFIGURED = _CONSUMED = None
-            finally:
-                _LOCK.release()
-        raise
+    for attempt in range(2):
+        try:
+            with N.signature_pass():
+                return _prepare_verified(data_root=data_root, day=day)
+        except BaseException as exc:
+            cleared=False
+            if _LOCK.acquire(blocking=False):
+                try:
+                    _CONFIGURED = _CONSUMED = None
+                    cleared=True
+                finally:
+                    _LOCK.release()
+            if (attempt==0 and allow_retry and cleared and isinstance(exc,ValueError)
+                    and str(exc)=='machine_policy_consumer_source_changed'):
+                # Launcher PID attestation can publish the selector during
+                # first consumption. Discard that entire pass and validate
+                # every source, handoff and guard afresh exactly once. No old
+                # view, receipt or decision survives into the retry.
+                continue
+            raise
 
 
 def configure_policy_content(bundle, *, data_root, day, read_only=False):
