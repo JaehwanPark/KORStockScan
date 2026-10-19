@@ -1664,6 +1664,20 @@ REVIEWED_ARTIFACT_SOURCE_PAIRS = {
 }
 
 
+# Source bytes revalidation after evidence-only inode metadata changes.
+# Preserve the exact preceding source repair as its own complete generation.
+REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_stop_postclose.py',
+        'selector_sha256': '98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772',
+        'dependencies': {**value['dependencies'], 'src/engine/automation/main_stop_postclose.py': '98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772'},
+        'contract_extensions': {origin: {path: ('98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772' if path == 'src/engine/automation/main_stop_postclose.py' else sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_SNAPSHOT_METADATA_PAIRS = {'src/engine/automation/main_stop_postclose.py': (('531f1498332196f0e54d17b76ed8d30295009a5e5ee9363ad9397613f0740ad2', '98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772'), ('c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5', '98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772'),)}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1717,7 +1731,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS,
+                         REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS,
                          REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS,
                          REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS,
                          REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
@@ -1759,7 +1774,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_ARTIFACT_SOURCE_PAIRS.get(name, ())
+        if (pair in REVIEWED_SNAPSHOT_METADATA_PAIRS.get(name, ())
+                or pair in REVIEWED_ARTIFACT_SOURCE_PAIRS.get(name, ())
                 or pair in REVIEWED_PRIOR_SNAPSHOT_IO_PAIRS.get(name, ())
                 or pair in REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ())

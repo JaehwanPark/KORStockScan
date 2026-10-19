@@ -867,8 +867,9 @@ class StoppedDeploymentRecovery(Deployment):
                 or failed.get('candidate_commit') != failed_commit
                 or failed.get('candidate_root') != str(failed_root)
                 or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
-                or failed.get('failed_phase') != 'selected'
-                or failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
+                or (failed.get('failed_phase'), failed.get('error')) not in {
+                    ('selected', 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'),
+                    ('starting', 'deployment_pid_attestation_timeout')}
                 or failed.get('policy_effect') != 'unchanged'
                 or hold != dict(schema='ordered_deployment_startup_hold_v1', authority=CONFIRM,
                     transition=str(failed_path), target_date=self.day,

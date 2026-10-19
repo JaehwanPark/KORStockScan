@@ -586,6 +586,7 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     # checks its sealed dependency identities without rescanning raw ledgers.
     expected_files = {**report.get('source_inventory', {}), **report.get('vote_source_inventory', {}),
                       **(report.get('economic_sources') or {}).get('files', {})}
+    verified_stats = dict(report['dependency_stats'])
     for path, expected in expected_files.items():
         before = report['dependency_stats'].get(path)
         physical = Path(path)
@@ -607,8 +608,20 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
             if sha != expected['sha256'] or size != expected['size']:
                 raise ValueError('stop_native_source_bytes_changed')
             continue
-        if before != list(source_stat(Path(path).stat())):
-            if (path not in report.get('vote_source_inventory', {})
+        current_stat = list(source_stat(physical.stat()))
+        if before != current_stat:
+            # Preserving an evidence inode with another hard link changes
+            # ctime while leaving every source byte and mtime intact. Require
+            # the complete originally sealed hash before admitting that sole
+            # metadata difference; replacement, content and clock changes fail.
+            if (physical.parent == Path(root)/'report/monitor_snapshots'
+                    and isinstance(before, list) and len(before) == 5
+                    and current_stat[:4] == before[:4]
+                    and not physical.is_symlink()
+                    and byte_generation(physical) == expected
+                    and list(source_stat(physical.stat())) == current_stat):
+                verified_stats[path] = current_stat
+            elif (path not in report.get('vote_source_inventory', {})
                     or observed_votes.get(path) != list(source_stat(Path(path).stat()))
                     or not sealed_sources or verify_full):
                 raise ValueError('stop_native_source_generation_changed')
@@ -640,7 +653,7 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     # All bytes were verified above in full mode. Routine mode uses the native
     # publisher's exact identities/archive custody. Both avoid a second raw
     # scan during semantic validation and approved consumer-code handoff.
-    with published_source_context(inventory,report['dependency_stats']):
+    with published_source_context(inventory,verified_stats):
         if report.get('code_sha256')!=code_sha():
             policy.verify_runtime_code_contract(bundle,bundle['target_date'])
         policy.validate_bundle(bundle,bundle['target_date'])

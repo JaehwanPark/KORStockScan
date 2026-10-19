@@ -1145,3 +1145,19 @@ def test_prepared_inheritance_happens_after_drain_before_selection(driver,monkey
     else:
         d.publish();assert d.phase=='selected' and d.selection.read_bytes()!=before
     assert calls==[True]
+
+
+@pytest.mark.parametrize('phase,error,valid', [
+    ('starting','deployment_pid_attestation_timeout',True),
+    ('starting','deployment_validation_failed:src.engine.automation.intraday_release_handoff',False),
+    ('selected','deployment_pid_attestation_timeout',False)])
+def test_stopped_startup_timeout_recovery_keeps_exact_phase_and_error(stopped_recovery,phase,error,valid):
+    d,path,_=stopped_recovery
+    value=D.H._read(path);value.update(failed_phase=phase,error=error);path.write_bytes(D._json_bytes(value))
+    before=path.read_bytes(),d.hold.read_bytes()
+    if valid:
+        d.preflight()
+        assert d.state['failed_hold_adoption']['source_failure']==error
+    else:
+        with pytest.raises(ValueError,match='stopped_recovery_source_invalid'):d.preflight()
+    assert before==(path.read_bytes(),d.hold.read_bytes())

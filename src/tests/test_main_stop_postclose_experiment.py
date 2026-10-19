@@ -453,3 +453,26 @@ def test_legacy_no_selection_preparation_carries_parent_without_new_performance_
         lambda *a,**k:pytest.fail('baseline carry acquired new numeric performance gate'))
     bundle,_=post.commit_prepared_policy(tmp_path,reference,experiments={'SCANNER|REGULAR':carried})
     assert all(cell['status']!='selected' and cell['values']==cell['parent_values'] for cell in bundle['cells'].values())
+
+
+@pytest.mark.parametrize('mutation', ['hardlink', 'content', 'replacement', 'mtime'])
+def test_snapshot_metadata_change_requires_complete_original_bytes(tmp_path,monkeypatch,mutation):
+    import os
+    report,parent,source,contract=prepared(tmp_path,monkeypatch)
+    snapshot=tmp_path/'report/monitor_snapshots/trade_review_2026-10-12.json'
+    snapshot.parent.mkdir(parents=True);snapshot.write_text('{"original":true}')
+    report['economic_sources']['files'][str(snapshot)]=post.byte_generation(snapshot)
+    republish(tmp_path,report,parent,source,contract)
+    before=snapshot.stat()
+    if mutation=='hardlink':os.link(snapshot,snapshot.with_suffix('.preserved'))
+    elif mutation=='content':
+        snapshot.write_text('{"original":null}')
+        os.utime(snapshot,ns=(before.st_atime_ns,before.st_mtime_ns))
+    elif mutation=='replacement':
+        new=snapshot.with_suffix('.new');new.write_bytes(snapshot.read_bytes())
+        os.utime(new,ns=(before.st_atime_ns,before.st_mtime_ns));new.replace(snapshot)
+    else:os.utime(snapshot,ns=(before.st_atime_ns,before.st_mtime_ns+1000000))
+    if mutation=='hardlink':post.read_committed(tmp_path,'2026-10-12')
+    else:
+        with pytest.raises(ValueError,match='stop_native_source_generation_changed'):
+            post.read_committed(tmp_path,'2026-10-12')
