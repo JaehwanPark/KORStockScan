@@ -174,3 +174,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 3eedb6e5c의 네 native pre-stop gate는 PASS였지만 P5는 `startup_main_manifest_dependency_set_changed`로 차단됐다. 실제 native reader는 manifest의 원천/ledger/baseline 외에 선택본의 Python reader 의존성16개를 반환하고, 기존 격리 consumer는 그 추가 집합을 누락했다. 기존 owner에서 관측 목록을 선택본 Git 원문·실제 파일 SHA에 결속하고, child가 정확한 의존성 집합·signature·source hash를 독립 재검사하도록 보완했다. 원 manifest와 역사 code inventory를 변경하지 않는다. selected/src 밖·symlink·누락·signature 변조를 거부한다. 기존 manifest reader는 retained이며 중복 구현이나 새 module은 추가하지 않았다.
 
 격리 child를 포함한 해당93회귀 PASS/41.64초다. 새 후보에서 P5를 다시 수행하며 통과 전 incumbent1889422를 유지한다. 네 gate의 PASS와 P5·실제 PID 소비는 각각 별도다. 실패 영수증 `7564ee7ada914cfb94df5bb0229c8d7a`와 원본 의존성 bytes는 보존했다.
+
+
+### Prepared/live manifest의 소비 경계
+
+eab2c040d의 P5는 intake와 native Main closure를 통과하고 실제 격리 child에 도달했으나 `startup_code_context_intraday_manifest_changed`로 거부됐다. 준비 manifest와 실제 기동 manifest는 생성 시각·env 파일 위치·direct-family 선택 기록이 각각 다르다. 기존 child가 두 원문 전체를 동일시한 결함을 수정했다. 각각 content seal·원 파일 source SHA·소비 handoff를 유지하고, family policy receipt·전체 env overrides·날짜·원본 release 계보를 정확히 비교한다. 원 manifest를 재발행하지 않는다. 생성 metadata 차이는 통과하되 sealed env 변경과 manifest seal 변조는 거부하는 OS 격리 회귀를 포함하여 해당95개 PASS다. 기존 source/receipt readers는 각 generation의 현재 소비자로 retained이며 새 경로나 wrapper는 없다. 실패43506176045f4df3b1bc11e61385e861의 원문과 현재 incumbent를 보존한 채 새 후보 P5를 수행한다.

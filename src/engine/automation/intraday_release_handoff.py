@@ -2001,7 +2001,7 @@ REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/ai/holding_exit_vote.py': '69f1a9a
  'src/engine/automation/main_startup_validation.py': 'b4475bf2671a8e5c1206c588ec265b736c7a082cb721f65d7dc3c1a8c87baec9',
  'src/engine/automation/main_trailing_source_store.py': 'f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
  'src/engine/automation/prepared_policy_code_handoff.py': '9ef09608077aa02c25bdd40d8bc33344bf0e10dbde18cae0fdcf434b0c6efaf8',
- 'src/engine/infrastructure/startup_validation_code_context.py': '398a03182c9d2498ac09aef8bd3fa425118a73c3db60f2b1deb65b63e927ddf8',
+ 'src/engine/infrastructure/startup_validation_code_context.py': 'bbfc3b34d207dd2dde9a9ef61bff4e83d5ea5e4c7b94fb59588f15c38ed62ae8',
  'src/engine/scalping/ai_market_snapshot.py': 'e4a4ae29cca5d452b1bcfa4c54684e8d4bc8702224f6034231a4a4a12235881d',
  'src/engine/scalping/avg_down_replay_capture.py': 'dbb163f2f23c678f4a2343e8501b405166bd18f30b94b0de64f98e76c0a2645a',
  'src/engine/scalping/holding_decision_context.py': '783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898',

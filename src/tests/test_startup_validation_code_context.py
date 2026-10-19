@@ -858,7 +858,7 @@ def test_cleanup_ai_preparation_pair_is_exact(fault):
     assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
 
 
-@pytest.mark.parametrize('fault', [None, 'custody', 'pid', 'manifest', 'authority', 'date'])
+@pytest.mark.parametrize('fault', [None, 'custody', 'pid', 'manifest', 'authority', 'date', 'prepared_metadata', 'env_change'])
 def test_intraday_origin_is_rebound_inside_real_os_isolation(request_fixture, fault):
     f = request_fixture
     request = f['request']
@@ -892,9 +892,15 @@ def test_intraday_origin_is_rebound_inside_real_os_isolation(request_fixture, fa
         intraday_consumed_path=str(cp),intraday_consumed_sha256=C._sha(cp))
     origin['sources'].update(extra);proof['source_hashes'].update(extra);request['source_hashes'].update(extra)
     if fault == 'manifest': request['manifest'] = {**manifest, 'manifest_sha256':'0'*64}
+    elif fault in {'prepared_metadata', 'env_change'}:
+        prepared = json.loads(json.dumps(manifest))
+        prepared.update(generated_at='2026-10-19T07:39:45+09:00', env_file='prepared/original.env')
+        if fault == 'env_change': prepared['env_overrides'] = {'UNAPPROVED': 'true'}
+        prepared['manifest_sha256'] = C._digest({k:v for k,v in prepared.items() if k!='manifest_sha256'})
+        request['manifest'] = prepared
     _write_request(f, request)
     result = _child(f, 'install_validation_code_context(request)\n'+CALL)
-    assert (result.returncode == 0) is (fault is None), result.stderr
+    assert (result.returncode == 0) is (fault in {None, 'prepared_metadata'}), result.stderr
 
 
 @pytest.mark.parametrize('fault', [None, 'missing_bundle', 'unknown_scope', 'origin', 'basis'])

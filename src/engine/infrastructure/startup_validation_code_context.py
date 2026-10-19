@@ -275,7 +275,17 @@ def _origin(proof, request):
         handoff, consumed = _json(handoff_path), _json(consumed_path)
         manifest_path = Path(request['data_root'])/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+proof['target_date']+'.json')
         _bound_source(sources, manifest_path)
-        if _json(manifest_path) != request['manifest']:
+        live_manifest, prepared_manifest = _json(manifest_path), request['manifest']
+        field, _ = _FAMILIES[proof['family']]
+        # Prepared and consumed manifests keep distinct generation metadata.
+        # Bind both seals and the exact policy/env values this consumer loads.
+        if (any(value.get('manifest_sha256') != _digest({k: v for k, v in value.items()
+                                                       if k != 'manifest_sha256'})
+                for value in (live_manifest, prepared_manifest))
+                or live_manifest.get('target_date') != proof['target_date']
+                or live_manifest.get(field) != prepared_manifest.get(field)
+                or live_manifest.get('env_overrides') != prepared_manifest.get('env_overrides')
+                or live_manifest.get('selected_release_sha') != prepared_manifest.get('selected_release_sha')):
             raise ValueError('startup_code_context_intraday_manifest_changed')
         identity = origin.get('pid_identity') or {}
         if (handoff.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
@@ -294,9 +304,9 @@ def _origin(proof, request):
                 or any(sources.get(name) != sha for name, sha in handoff.get('frozen_files', {}).items())
                 or not isinstance(handoff.get('frozen_files'), dict) or not handoff['frozen_files']
                 or handoff['frozen_files'].get(str(manifest_path)) != sources[str(manifest_path)]
-                or handoff.get('manifest_sha256') != request['manifest']['manifest_sha256']
+                or handoff.get('manifest_sha256') != live_manifest['manifest_sha256']
                 or not isinstance(identity.get('pid'), int) or identity['pid'] <= 0
-                or consumed.get('manifest_sha256') != request['manifest']['manifest_sha256']
+                or consumed.get('manifest_sha256') != live_manifest['manifest_sha256']
                 or request['manifest'].get('selected_release_sha') != origin['origin_commit']):
             raise ValueError('startup_code_context_intraday_handoff_invalid')
     else:
