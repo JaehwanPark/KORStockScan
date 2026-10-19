@@ -1540,7 +1540,7 @@ def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
             assert 'src/engine/scalping/ai_market_snapshot.py' in changed
 
 
-@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision', 'postclose_readers', 'archive_authority', 'legacy_archive_authority', 'auxiliary_data_root', 'completed_offline', 'completed_empty', 'native_empty_cohorts'])
+@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision', 'postclose_readers', 'archive_authority', 'legacy_archive_authority', 'auxiliary_data_root', 'completed_offline', 'completed_empty', 'native_empty_cohorts','assembler_budget'])
 @pytest.mark.parametrize('origin', ['7f2552aedde8fec6ef904a43105827907e50dfc8',
                                     '8940ea4ad0d3b64d30f67f986a75715ee24c1d95'])
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
@@ -1553,25 +1553,28 @@ def test_completion_census_handoff_binds_exact_complete_generation(
     canonical = Path(handoff.__file__).resolve().parents[3]
     hashes = (handoff.REVIEWED_COMPLETION_CENSUS_HASHES if generation == 'producer_census'
               else handoff.REVIEWED_COMPLETION_CONSUMER_HASHES)
-    if generation in {'prefix_code_binding','late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts'}:
+    if generation in {'prefix_code_binding','late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_PREFIX_PRODUCER_HASHES}
-    if generation in {'late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts'}:
+    if generation in {'late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_LATE_COST_HASHES}
-    if generation in {'postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts'}:
+    if generation in {'postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_POSTCLOSE_READER_HASHES}
-    if generation in {'archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts'}:
+    if generation in {'archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_ARCHIVE_AUTHORITY_HASHES}
-    if generation in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts'}:
+    if generation in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_LEGACY_ARCHIVE_AUTHORITY_HASHES}
-    if generation in {'auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts'}:
+    if generation in {'auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_AUXILIARY_DATA_ROOT_HASHES}
-    if generation in {'completed_offline','completed_empty','native_empty_cohorts'}:
+    if generation in {'completed_offline','completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_COMPLETED_OFFLINE_HASHES}
-    if generation in {'completed_empty','native_empty_cohorts'}:
+    if generation in {'completed_empty','native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_COMPLETED_EMPTY_HASHES}
-    if generation == 'native_empty_cohorts':
+    if generation in {'native_empty_cohorts','assembler_budget'}:
         hashes = {**hashes, **handoff.REVIEWED_NATIVE_EMPTY_HASHES}
-    revision = ('260fe4848' if generation == 'completed_empty' else
+    if generation == 'assembler_budget':
+        hashes = {**hashes, **handoff.REVIEWED_ASSEMBLER_BUDGET_HASHES}
+    revision = ('a10f6d013' if generation == 'native_empty_cohorts' else
+                '260fe4848' if generation == 'completed_empty' else
                 'ca557bc6f' if generation == 'completed_offline' else
                 '146ca0b2b' if generation == 'auxiliary_data_root' else
                 '037b23a7c' if generation == 'legacy_archive_authority' else
@@ -1581,12 +1584,12 @@ def test_completion_census_handoff_binds_exact_complete_generation(
                 '7df7ea3b9' if generation == 'late_cost_revision' else
                 '082234567' if generation == 'prefix_code_binding' else 'bf8465b5d')
     for name, expected in hashes.items():
-        raw = ((canonical/name).read_bytes() if generation == 'native_empty_cohorts' else
+        raw = ((canonical/name).read_bytes() if generation == 'assembler_budget' else
                subprocess.check_output(['git', '-C', str(canonical), 'show', revision+':'+name]))
         assert hashlib.sha256(raw).hexdigest() == expected
         (root/name).write_bytes(raw)
     for name in handoff.REVIEWED_POSTCLOSE_READER_HASHES:
-        if generation not in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts'} and name not in hashes:
+        if generation not in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget'} and name not in hashes:
             (root/name).write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',revision+':'+name]))
     subprocess.run(['git', '-C', str(root), 'add', *hashes,*handoff.REVIEWED_POSTCLOSE_READER_HASHES], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture',

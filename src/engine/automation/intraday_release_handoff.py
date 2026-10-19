@@ -2441,6 +2441,43 @@ REVIEWED_NATIVE_EMPTY_PAIRS = {'src/engine/automation/main_trailing_completed_st
                                                             ('fc047ceddd40d963659fcba7f36f7d28bdbc74c3dfa799322f163fb4f3683a30',
                                                              '2fc12700ccf64fa03667a0a859e13dc40515e932cc68da23ed9b3d962bdfdd5a'))}
 
+# Bounded source reads reserve admitted chunks within the existing shared budget.
+REVIEWED_ASSEMBLER_BUDGET_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc',
+ 'src/engine/lifecycle/research_storage.py': '18c0644ea2a6805b9027b2bce4bc7a1b89dbc5e10925d104b38a05a9423b4c35'}
+REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_assembler.py',
+        'selector_sha256': REVIEWED_ASSEMBLER_BUDGET_HASHES['src/engine/automation/main_trailing_source_assembler.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_ASSEMBLER_BUDGET_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_ASSEMBLER_BUDGET_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_ASSEMBLER_BUDGET_PAIRS = {'src/engine/automation/main_trailing_source_assembler.py': (('242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('39449970d0024236ccaaed2eb996b8b1222f9ec804450071c090dd6eb4bd2955',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('ea7039a171b5a3d07883b0549ba763100900cfdec7cb6c14172e0fb887f6b804',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc'),
+                                                             ('f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1',
+                                                              '552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc')),
+ 'src/engine/lifecycle/research_storage.py': (('bc936e55d483e9e58995924b139cd13f423ce911e60a50c6b63859855f711f3e',
+                                               '18c0644ea2a6805b9027b2bce4bc7a1b89dbc5e10925d104b38a05a9423b4c35'),
+                                              ('fa93d4ac728999184e3d238d9050cb51898b9f62780e80929786385421b719af',
+                                               '18c0644ea2a6805b9027b2bce4bc7a1b89dbc5e10925d104b38a05a9423b4c35'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2494,7 +2531,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS,
+                         REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS,
                          REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS,
@@ -2571,7 +2609,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_NATIVE_EMPTY_PAIRS.get(name, ())
+        if (pair in REVIEWED_ASSEMBLER_BUDGET_PAIRS.get(name, ())
+                or pair in REVIEWED_NATIVE_EMPTY_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETED_EMPTY_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETED_OFFLINE_PAIRS.get(name, ())
                 or pair in REVIEWED_AUXILIARY_DATA_ROOT_PAIRS.get(name, ())

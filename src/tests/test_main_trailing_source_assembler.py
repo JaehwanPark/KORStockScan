@@ -904,6 +904,62 @@ def _original_partial_calendar_source(root,day,*,holding_events=0):
     return raw,physical,value
 
 
+@pytest.mark.parametrize('compressed',[False,True])
+@pytest.mark.parametrize('reader',['metadata','calendar'])
+def test_small_source_reads_share_resident_research_budget(tmp_path,monkeypatch,compressed,reader):
+    from src.engine.lifecycle import research_input_budget as budget
+    path=tmp_path/('source.json.gz' if compressed else 'source.json')
+    expected={'original_source':True,'payload':'x'*2048}
+    raw=json.dumps(expected).encode()
+    original=gzip.compress(raw,mtime=0) if compressed else raw
+    path.write_bytes(original)
+    before=budget.health();peaks=[];grow=budget.Claim.grow
+    def tracked_grow(claim,size):
+        grow(claim,size);peaks.append(budget.health()['used_bytes'])
+    monkeypatch.setattr(budget.Claim,'grow',tracked_grow)
+    with budget.Claim(34_551_288):
+        resident=budget.health()
+        value,generation=(source.read(path) if reader=='metadata' else source._bounded_calendar_source(path))
+        assert value==expected
+        assert budget.health()==resident
+        assert max(peaks)-resident['used_bytes']<2*1024*1024
+        if reader=='metadata':assert generation==source.byte_generation(path)
+        else:
+            import hashlib
+            assert generation==dict(path=path.name,size=len(original),sha256=hashlib.sha256(original).hexdigest())
+    assert budget.health()==before and path.read_bytes()==original
+
+
+@pytest.mark.parametrize('reader',['metadata','calendar'])
+def test_small_source_reader_still_refuses_exhausted_shared_budget(tmp_path,reader):
+    from src.engine.lifecycle import research_input_budget as budget
+    path=tmp_path/'source.json';path.write_text('{"original":true}')
+    before=budget.health()
+    with budget.Claim(before['limit_bytes']-before['used_bytes']-32):
+        resident=budget.health()
+        with pytest.raises(ValueError,match='shared_research_budget_partition_resume_required'):
+            (source.read(path) if reader=='metadata' else source._bounded_calendar_source(path))
+        assert budget.health()==resident
+    assert budget.health()==before
+
+
+@pytest.mark.parametrize('mutation',['oversize','crc','truncated','second_member_crc'])
+def test_metadata_chunk_reader_keeps_decode_size_and_gzip_integrity_guards(tmp_path,mutation):
+    from src.engine.lifecycle import research_input_budget as budget
+    path=tmp_path/'source.json.gz'
+    raw=b' '* (4*1024*1024+1) if mutation=='oversize' else b'{"original":true}'
+    original=gzip.compress(raw,mtime=0)
+    if mutation=='truncated':original=original[:-1]
+    elif mutation in ('crc','second_member_crc'):
+        damaged=bytearray(gzip.compress(b' ',mtime=0) if mutation=='second_member_crc' else original)
+        damaged[-8]^=1
+        original=original+damaged if mutation=='second_member_crc' else damaged
+    path.write_bytes(original);before=budget.health()
+    with pytest.raises((ValueError,OSError,EOFError)):
+        source.read(path)
+    assert budget.health()==before and path.read_bytes()==original
+
+
 @pytest.mark.parametrize('day,trading,holding_events',[('2026-10-05',False,0),('2026-10-09',False,2),
     ('2026-10-11',False,0),('2026-10-01',True,0)])
 def test_partial_nontrading_calendar_diagnostic_never_upgrades_raw_census(tmp_path,monkeypatch,day,trading,holding_events):

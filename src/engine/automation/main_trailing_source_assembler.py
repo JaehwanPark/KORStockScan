@@ -203,13 +203,29 @@ def inventory_matches(root, source_date, original, current):
                old['path'], old['generation']) for old, new in zip(original, current))
 
 
+def _bounded_json(handle, *, overflow, **decode_options):
+    """Admit bounded chunks before allocating or decoding source bytes."""
+    limit=4*1024*1024
+    with Claim(0) as claim:
+        raw=bytearray()
+        while True:
+            requested=min(64*1024,limit+1-len(raw))
+            claim.grow(requested*8)
+            chunk=handle.read(requested)
+            raw.extend(chunk)
+            if len(raw)>limit:
+                raise ValueError(overflow)
+            if not chunk:
+                break
+        # Reading through EOF also validates every gzip member and its CRC.
+        return json.loads(raw,**decode_options)
+
+
 def read(path):
     before = byte_generation(path)
     opener = gzip.open if path.suffix=='.gz' else open
-    with Claim(4*1024*1024*8),opener(path,'rb') as handle:
-        raw=handle.read(4*1024*1024+1)
-        if len(raw)>4*1024*1024: raise ValueError('all_scope_source_partition_required')
-        value=json.loads(raw)
+    with opener(path,'rb') as handle:
+        value=_bounded_json(handle,overflow='all_scope_source_partition_required')
     if byte_generation(path)!=before: raise ValueError('all_scope_source_changed')
     return value,before
 
@@ -227,27 +243,19 @@ def _bounded_calendar_source(path):
     before=path.lstat()
     if not stat.S_ISREG(before.st_mode) or before.st_size>limit:
         raise ValueError('all_scope_calendar_source_unbounded_or_nonregular')
-    with Claim(limit*10+1):
+    with Claim(before.st_size*2+1):
         fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
         try:
             opened=os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode) or source_stat(opened)!=source_stat(before):
                 raise ValueError('all_scope_calendar_source_changed')
             with os.fdopen(fd,'rb',closefd=False) as handle:
-                physical=handle.read(limit+1)
+                physical=handle.read(before.st_size+1)
             if (len(physical)!=before.st_size or source_stat(os.fstat(fd))!=source_stat(before)
                     or source_stat(path.lstat())!=source_stat(before)):
                 raise ValueError('all_scope_calendar_source_changed')
         finally:
             os.close(fd)
-        if path.suffix=='.gz':
-            with gzip.GzipFile(fileobj=io.BytesIO(physical)) as handle:
-                raw=handle.read(limit+1)
-            # Reading through EOF validates every gzip member and its CRC.
-            if len(raw)>limit:
-                raise ValueError('all_scope_calendar_decoded_source_unbounded')
-        else:
-            raw=physical
         def unique_pairs(pairs):
             result={}
             for key,value in pairs:
@@ -255,7 +263,15 @@ def _bounded_calendar_source(path):
                     raise ValueError('all_scope_calendar_duplicate_key')
                 result[key]=value
             return result
-        value=json.loads(raw,object_pairs_hook=unique_pairs)
+        opener=gzip.GzipFile if path.suffix=='.gz' else None
+        with io.BytesIO(physical) as physical_stream:
+            if opener:
+                with opener(fileobj=physical_stream) as handle:
+                    value=_bounded_json(handle,overflow='all_scope_calendar_decoded_source_unbounded',
+                                        object_pairs_hook=unique_pairs)
+            else:
+                value=_bounded_json(physical_stream,overflow='all_scope_calendar_decoded_source_unbounded',
+                                    object_pairs_hook=unique_pairs)
         if source_stat(path.lstat())!=source_stat(before):
             raise ValueError('all_scope_calendar_source_changed')
         return value,dict(path=path.name,size=len(physical),sha256=hashlib.sha256(physical).hexdigest())
