@@ -90,6 +90,9 @@ trailing 재생성 b2afe3d3…은20,840scope complete다. 기존 snapshot과 정
 원09:30:25 보고서의 source/hash를 보관하고 native 원천으로 격리 재검증했을 때 warning_pending/bounded_source_quality_observation으로 판정됐다. 수량 정책의 native bounded chain은 유효하며 완료13건 중8건은 연구 배분 비용 표본,49013·49266·49268·49293은 terminal 비용/수량 결손,49294는 연구 비용 검증 결손이다. 실제 비용 완전성 false·실제 순손익null을 유지한다. 근거: tmp/preopen-alert-repair-20261019/scanner-incident-native-shadow.json 및 quantity-0925-native-observation.json. 배포/PID와 자연 detector 결과는 후속 영수증으로 확인한다.
 
 
+09:43:02 승인된 ordered 전환은40b21f360cfd1652f9f26c4aff32c0921e68ba1f/PID470886/start1502213에서 pass/complete다. active/delay/stop/holding4개 native 사전검사,3,993개 회귀, compile/diff와 문서 parser가 통과했다.09:42:34 launcher의 실제 PID 소비와 원 bootstrap5c9cce5f… 보존을 확인했다.09:43/09:45 자연 observer는 현재 PID의 warning_pending이며 health projection이 소비자의 재계산과 일치한다.09:44:40/09:45:42 실제 full detector에서 submission_bottleneck_monitor의 artifact ERROR는 제거됐고 process_health/log_scanner PASS다. 과거 스캐너 incident2개 active와 원 결손은 그대로 보존했다. 최초 startup observer는 기존 producer lock 대기로 owner_busy였으나 같은 배포의 기존 producer/lock에서 현재 PID 보고서를 먼저 게시한 뒤 full sweep이 이를 검증했다. I/O wait39.65% 단발 FAIL은 다음09:45 sweep에서 해소됐으며 tmp 용량·initial_quantity 비용·trailing/source 정책 경고는 별도 잔여다. 근거: tmp/preopen-alert-repair-20261019/observer-history-final-verification.json 및 ordered-observer-history-final.json. 전체 경제성/원천 정상으로 해석하지 않는다.
+
+
 ## 10:01 I/O 경보와 수량 원천 후속 수리
 
 10:01:20 full detector는 I/O wait46.32%, swap 사용8,329.9MiB를 관측했다. 선택40b21f360의 정기 intraday_light PID513723은09:55:18~10:04:23 실행했고 trade_review534.149초/최대RSS5,528,364KiB였다. 직전 실행도556.267초/5,742,652KiB였다. 알테오젠49346의10/16→10/19 완료 연결에서2.1GiB의10/16 원 snapshot을 전부 디코드한 뒤 historical open census 결손으로 폐기했다. /proc 관측상 해당 worker 누적실제읽기9,995,083,776bytes와 host swap/page-in을 확인했다. 당시 다른 정기작업 및 이 세션의09:52/09:56 원천 읽기도 중첩되었으므로46.32% 전체를 한 PID에 정량 귀속하지 않는다.
@@ -124,3 +127,23 @@ run의 미실행을None으로 구분해 producer가 시작되지 않았으면 de
 5d6ee3354 복구 전환은 Main PID785358/start2145429의 실제 소비와 complete/PASS를 확인했다. 원 bootstrap SHA는 5c9cce5fd3a2edf5045cc38536ded48addca84b78d1c8412a779a010954ef470로 유지됐다. 같은 ctime 차이를 만난 과거 fact/holding/quantity source reader는 봉인된 source SHA 또는 native 원 manifest 전체 SHA로 원문을 재검증한다. 정상 보관·gzip 경로의 bounded 읽기는 유지한다. 실제09/30·10/15·10/16 fact와 holding 세 날짜 모두 원문 보존 상태에서 검증됐으며 관련484회귀가 통과했다. 활성 stop 정책이 봉인한 과거 snapshot/cost index는 덮어쓰지 않는다. 수량 refresh 자체와 trailing 현재성 연구만 별도 새 세대로 생성하며 비용 원천 복원과 정책 소스 교체는 구분한다.
 
 정식 수량 refresh 27dc2f14...는 원문/비용 index를 유지한 채 완료8건·125초·peak RSS162384KiB·swap0으로 생성됐다. 5개 큰 실행 행 중 49340/49343 정책 결속이 복원됐고 1주3건은 broker 초 단위 체결시각과 그 초의 microsecond 결정 비교로 남아 있었다. 해당 경우 exact plan/attempt의 유일 요청→전송→원 주문 전체 체결·수신 bracket이 있어야만 결정 선행을 증명한다. 원 체결시각은 변경하지 않으며 증명 누락/충돌/다른 주문/다음 초/부분체결은 계속 제외한다. 관련298회귀가 통과했다. 원문 보존 후 trailing의 대용량 소비자에 남은 직접 identity 비교도 native 원문 검증으로 연결한다.
+
+## Trailing 재생성의 대용량 반복 읽기
+
+12:07:09 ac4aa4417/PID910016/start2377635의 정책 소비와12:08:47 ordered 전환 완료를 확인했다. 정식 quantity refresh58c2c41a…/stage5a345fcc…는8개 비용 적격 표본의 정책 결속8/8, carry_parent,107초/최대RSS158556KiB/swap0이다. `initial_quantity_stage_invalid:ValueError`는 없어졌고 실제 비용/수량/terminal 결손5건의 경고는 유지한다. 원 bootstrap5c9cce5f…와 holding e665c46b…는 그대로다.
+
+이후 trailing 전체 재조립26f37c07…는 약6분 동안 수십GB를 읽은 뒤 당일 holding vote append 때문에 `all_scope_assembly_inventory_changed`로 실패했다.12:10:45 I/O wait40.98%를 다시 관측했고 해당 전체 재시도는 중단했다. 미래100–200GB 원천에도 이 방식을 반복하는 것은 허용 가능한 설계가 아니다. 실패 산출물과 원 보고서/정책은 보존했다.
+
+수리는 이미 승인된4ffbfa60…의39MiB 정규화 입력만 별도 세대로 복사하고, 원 추출 코드·모든 필드·원 결손을 보존하며 현재 native replay와 독립 산술을 수행한다. 대용량 원천은 원 full-SHA와 동일 byte epoch에 결속된 native stop/market-weakness/보존 재검증 영수증으로 확인한다. 이는 semantic verdict 캐시가 아니다. 증명이 없거나 바뀐 큰 파일은 전체 읽기로 fallback하지 않고 pending으로 실패한다. 미증명 원천 합계32MiB, 별도 vote 파일 합계32MiB, invocation 전체 hash 읽기32MiB를 먼저 제한한다. 총 프로세스 읽기에는 정규화 트리·원장 검증·코드/metadata가 추가되므로 총I/O32MiB라고 주장하지 않는다.
+
+원 historical byte prefix·native 원장 체인을 보존하면서 원 연구의 실제 참조 owner를 고정한다. 19일의49344/49346 이월 청산처럼16일 완료 연구에 없는 owner의 새 주문은 과거 입력을 무효화하지 않는다. 원 연구 owner 변경·과거 날짜의 추가/변조·새 전역 disposition·잘못된 dateless terminal proof는 계속 거부한다. future vote도 native 세션/요청시각/position 결속이 유효할 때만 과거 inventory에서 분리한다. 원 custody·실주문·정책·보유는 변경하지 않는다.
+
+실제 native 사전검사는6.395초, full-hash17,139,911B, 논리 rchar169,488,726B, 실제 disk read2,187,264B, peakRSS154612KiB였다. 대용량 proof42개를 두 검사에서 재확인했고 원 source-window hash48b3bea8…가 일치했다. 준비/검증은 native 전체 산술 완료, 배포, 현재PID 수용과 다르다. 근거: tmp/artifact-source-repair-20261019-1050/reuse-native-preflight.json 및 reuse-window-probe.log.
+
+후속 사용자 지시에 따라 미래 원천 writer→색인→consumer까지 구현했다. AI payload/trace/prompt/request, pipeline raw와 보유 vote는 기존 append lease 안에서 원 offset/size/SHA·projection SHA·native hash chain을 기록한다. 완료 snapshot은 쓰는 바이트를 해시하고 resident completed 행을 immutable normalized tree와 census/cost/원 snapshot 결속 manifest로 발행한다. Trailing 조립·원 요청 검증·날짜/보유별 vote·압축 뒤 논리 소비와 delay 원천 관측기는 이를 직접 읽는다. 미증명 대형 legacy/gzip은 원본 전체 읽기로 fallback하지 않고 pending이며 explicit migration은최대8MiB/기본1초의 재개 가능한 단계다. 현재 일자 background catch-up은0.5초 turn/회전 namespace, checkpoint는 최대 분당1회다. Native append 경합은 resident 원 바이트의16MiB/128건 제한 재시도로 처리하고, 경합·누락·변조·원천 결손을 complete로 바꾸지 않는다.
+
+호가 관측은 기존0D local cache만 읽는50ms sampler로0·1·3·5초 horizon을 Main 방문 주기에서 분리했다. 원 route/epoch·0.7초 신선도·0.25초 short tolerance와 실제 관측시각을 유지하며 provider/구독/주문을 추가하지 않는다. PASS 후 최종 auxiliary 검증은 현재 정책 불변 뷰를 사용하고 pointer 출구 검사·최신 revocation·원5초 경계는 계속 실행한다. 같은 live bundle의 읽기 전용 warm 중앙값은 기존 복사31.4ms→불변 뷰7.3ms다. 이는 해당 로딩 구간 측정이며 실제 broker 제출/순익 개선 증명이 아니다.
+
+재리뷰에서 기존 pipeline archive 영수증 발행 조건 축소, 날짜 없는 legacy vote consumer, native vote source-generation 비교와 completed cohort 밖 원장 혼입을 수정했다. 대형 raw 재열기 금지·200GiB sparse 입력·회전/압축·future event·native busy 재시도·기존 deadline/안전 가드를 회귀로 확인한다. 최종 exact94-file handoff·색인·writer 검사2521개 PASS, 구현/consumer/회귀 결과와 새 후보·native 생성·PID 수용은 아래 후속 영수증으로 구분한다. 근거: tmp/artifact-source-repair-20261019-1050/index-handoff-regression.log, index-native-final-edges.log, index-review-second-pass.log, index-archive-final-fix.log, policy-view-latency-probe.json.
+
+최종 검증: index-consumer-final-review의1062 PASS 뒤 archive 회귀6건의 원인(기존 pipeline 파일명 계약 축소)을 고쳐53 PASS, writer parent 회귀는 Main 사전 준비를 포함해17 PASS, 최종 handoff/index/fork/busy writer2521 PASS다. 추가 계약 검사는530 PASS/2 FAIL/1 deselected였으며 새 parent 준비 회귀는 수정·재검증했다. 잔여 pipeline `test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage`는 원 ac4 baseline에서도 같은 family ledger 분류 차이로 실패하는 기존 항목이다. legacy gzip fixture1건도 기존 baseline 실패로 제외했다. 이 두 기존 실패를 PASS로 바꾸거나 최신 결과에 합산하지 않는다.36개 변경/신규 Python compile·diff·print-only parser23 owner PASS. 테스트 결과는 중복이 있어 합산하지 않는다.

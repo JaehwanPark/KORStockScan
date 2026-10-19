@@ -678,7 +678,8 @@ def _native_research(root, day, *, trailing_assembly=None, skip_experiment=False
                 policy=arms[chosen["selected"]], receipt=receipt
             )
     for path, generation in {**inventory, **vote_sources}.items():
-        if byte_generation(Path(path)) != generation:
+        from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+        if not source_generation_matches(root, generation.get('source_date',day), Path(path), generation):
             raise ValueError("holding_vote_source_changed_during_research")
     if any(source_generation(root, d) != g for d, g in cost_generations.items()):
         raise ValueError("holding_vote_cost_generation_changed_during_research")

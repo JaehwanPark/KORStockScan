@@ -130,7 +130,8 @@ def _request_index(root, output, day, sources):
         for namespace,stem in (('ai_decision_payloads','ai_decision_payloads'),
             ('ai_decision_prompts','ai_decision_prompts'),('ai_decision_requests','ai_decision_requests')):
             for original in original_request_paths(root,namespace,day):
-                if str(original) not in sources:sources[str(original)]=byte_generation(original)
+                from src.engine.automation.main_trailing_source_store import input_generation
+                if str(original) not in sources:sources[str(original)]=input_generation(root,original)
                 originals.append((str(original),sources[str(original)]))
         generation=input_snapshot_id(originals)
         loaded=db.execute('SELECT generation FROM loaded').fetchone()
@@ -142,7 +143,16 @@ def _request_index(root, output, day, sources):
                 ('ai_decision_requests','ai_decision_requests','request','request_id')):
                 for original in original_request_paths(root,namespace,day):
                     before=sources[str(original)]
-                    for row, pointer in _records(original):
+                    from src.engine.automation import main_trailing_source_store as indexed
+                    if before.get('schema')==indexed.SCHEMA+':generation':
+                        selected=indexed.read_rows(root,original,kinds=['holding_'+kind])
+                        records=((value['row'],dict(path=reference['path'],offset=reference['decoded_offset'],
+                            line_sha256=reference['sha256'],native_source_index_schema=indexed.SCHEMA))
+                            for value,reference in selected)
+                    else:
+                        indexed.claim_legacy_bytes(before['size'])
+                        records=_records(original)
+                    for row, pointer in records:
                         if row.get('endpoint')!='holding_path_vote':continue
                         content_sha256=input_snapshot_id(row)
                         encoded=storage.encoded({**pointer,'generation':before,'content_sha256':content_sha256}).decode()
@@ -152,7 +162,8 @@ def _request_index(root, output, day, sources):
                             previous_sha=previous.get('content_sha256') or input_snapshot_id(_source_row(previous))
                             if previous_sha!=content_sha256:raise ValueError('holding_request_alias_conflict')
                         db.execute('INSERT OR IGNORE INTO original VALUES (?,?,?)',(kind,row[key],encoded))
-                    if byte_generation(original)!=before:raise ValueError('holding_request_changed')
+                    from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+                    if not source_generation_matches(root,day,original,before):raise ValueError('holding_request_changed')
             db.execute('INSERT INTO loaded VALUES (?)',(generation,));db.commit()
     except BaseException:
         db.close()
@@ -169,6 +180,14 @@ def _verified_generation(path, fingerprint):
 
 def _source_row(pointer):
     path=Path(pointer['path'])
+    if pointer.get('native_source_index_schema'):
+        from src.engine.automation.main_trailing_source_store import read_at,SCHEMA
+        if pointer['native_source_index_schema']!=SCHEMA:
+            raise ValueError('holding_request_index_schema_changed')
+        value,raw_sha=read_at(path.parent.parent,path,pointer['offset'],pointer['generation'])
+        if raw_sha!=pointer['line_sha256'] or input_snapshot_id(value)!=pointer['content_sha256']:
+            raise ValueError('holding_request_reference_invalid')
+        return value
     if _verified_generation(str(path),source_stat(path.stat()))!=pointer['generation']:raise ValueError('holding_request_reference_changed')
     import gzip
     opener=gzip.open if path.suffix=='.gz' else open
@@ -282,19 +301,37 @@ def assemble_votes(root, output, source, sources):
         if path.name!=source.get('store_name'):raise ValueError('holding_vote_path_mismatch')
         if not path.exists() and not list(path.parent.glob(path.name+'.segment-*')):
             raise ValueError('holding_vote_store_missing')
-        def rows():
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        source_date=(datetime.fromtimestamp(source['observed_at'],ZoneInfo('Asia/Seoul')).date().isoformat()
+            if source.get('observed_at') is not None else None)
+        from src.engine.automation.main_trailing_source_store import vote_rows,scoped_vote_generation,InputPending,claim_legacy_bytes
+        def original_votes():
+            # Prove complete index coverage before emitting any row. A later
+            # typed index failure is not allowed to duplicate an emitted prefix.
+            try:
+                bound=scoped_vote_generation(root,path,source_date) if source_date else None
+            except InputPending:
+                bound=None
+            if bound is not None:
+                sources[str(path)]=bound
+                yield from vote_rows(root,path,source['position_key'],source_date=source_date)
+                return
             for segment in sorted(path.parent.glob(path.name+'.segment-*'))+[path]:
                 if not segment.exists():continue
                 before=byte_generation(segment);sources[str(segment)]=before
-                for vote in iter_path_events_file(segment,source['position_key']):
-                    if (source.get('path_id','EXIT_TRAILING_TP') is not None
-                        and vote.get('path_id')!=source.get('path_id','EXIT_TRAILING_TP')):continue
-                    try:
-                        ref=_verified_request(root,output,vote,sources) if vote['status']=='VALID' else None
-                        yield {**vote,'actual_input_ref':ref,'actual_input_verified':ref is not None}
-                    except (ValueError,OSError,KeyError,TypeError):
-                        yield {**vote,'actual_input_verified':False}
+                claim_legacy_bytes(before['size'])
+                yield from iter_path_events_file(segment,source['position_key'])
                 if byte_generation(segment)!=before:raise ValueError('holding_vote_segment_changed')
+        def rows():
+            for vote in original_votes():
+                if (source.get('path_id','EXIT_TRAILING_TP') is not None
+                    and vote.get('path_id')!=source.get('path_id','EXIT_TRAILING_TP')):continue
+                try:
+                    ref=_verified_request(root,output,vote,sources) if vote['status']=='VALID' else None
+                    yield {**vote,'actual_input_ref':ref,'actual_input_verified':ref is not None}
+                except (ValueError,OSError,KeyError,TypeError):
+                    yield {**vote,'actual_input_verified':False}
         reference=storage.write_tree(output,rows())
         return dict(schema=SCHEMA,root=str(output.resolve()),events_ref=reference,
                     original_position_key=source['position_key'],status='source_bound')

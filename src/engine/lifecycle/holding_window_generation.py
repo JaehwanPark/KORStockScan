@@ -81,20 +81,35 @@ def cached_code_generation(paths):
     return value
 
 
-def seal_dependency_receipt(sidecar, payload, *, fact_projection=None):
+def seal_dependency_receipt(sidecar, payload, *, fact_projection=None,
+                            projection_generation=None,trailing_completed_index=None):
     """Only the existing, census-verified projection writer calls this."""
     from src.engine.sniper_trade_review_report import verify_completed_census_manifest
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
     if verify_completed_census_manifest(payload, payload['date']) is not None:
         raise ValueError('window_dependency_census_invalid')
+    if projection_generation is not None:
+        from src.engine.infrastructure.validation_digest_session import _native_bytes
+        proof=_native_bytes(Path(sidecar).parent.parent.parent,sidecar)
+        if proof is None or proof['generation']!=projection_generation:
+            raise ValueError('window_dependency_native_writer_proof_missing')
+    observed_projection=projection_generation or byte_generation(sidecar)
+    if projection_generation is None and (Path(sidecar).parent.name=='monitor_snapshots'
+            and Path(sidecar).parent.parent.name=='report'):
+        # Legacy native producers may explicitly seal a fully read generation.
+        # This is a writer action, never an inline consumer repair.
+        from src.engine.infrastructure.validation_digest_session import publish_native_bytes
+        publish_native_bytes(Path(sidecar).parent.parent.parent,sidecar,observed_projection)
     body = {'schema':'holding_projection_dependency_receipt_v1', 'date':payload['date'],
-            'projection':byte_generation(sidecar), 'snapshot_identity':payload['snapshot_identity'],
+            'projection':observed_projection, 'snapshot_identity':payload['snapshot_identity'],
             'census_sha256':digest(payload['meta']['completed_census_manifest']),
             'meta':{k:payload['meta'].get(k) for k in (
                 'actual_cost_source_generation', 'knowledge_cutoff', 'snapshot_profile')},
             'completed_count':len(payload['sections']['completed_trade_projection'])}
     if fact_projection is not None:
         body['fact_projection'] = byte_generation(fact_projection)
+    if trailing_completed_index is not None:
+        body['trailing_completed_index']=trailing_completed_index
     body['artifact_sha256'] = digest(body)
     if len(json.dumps(body).encode()) > MAX_METADATA_BYTES:
         raise ValueError('window_dependency_metadata_budget_exceeded')

@@ -5948,6 +5948,23 @@ class KiwoomWSManager:
             snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
         return self._finish_snapshot(snapshot) if snapshot else {}
 
+    def get_pre_submit_delay_depth(self, code):
+        """Source-only copy of existing route-owned 0D; no protocol operation.
+
+        Excludes accumulated trades, candles and quote normalization. The
+        observation consumer still checks exact route/epoch and depth age.
+        """
+        code = self._normalize_code(code)
+        with self._snapshot_lock():
+            target = self.realtime_data.get(code, {})
+            partitions = target.get('realtime_type_snapshots_by_route') or {}
+            if not isinstance(partitions, dict) or len(partitions) > 16:
+                return {}
+            return dict(market_data_transport_epoch=getattr(self, '_market_data_transport_epoch', None),
+                realtime_type_snapshots_by_route={route: {'0D': copy.deepcopy(value['0D'])}
+                    for route, value in partitions.items()
+                    if isinstance(value, dict) and isinstance(value.get('0D'), dict)})
+
     def get_exact_item_data(self, code, item):
         """Read the registered item's owning view without mixing route stores."""
         code = self._normalize_code(code)

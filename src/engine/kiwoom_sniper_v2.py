@@ -15899,8 +15899,15 @@ def run_sniper(is_test_mode=False):
         observed_at=policy_clock, data_root=DATA_DIR, env=os.environ)
     run_sniper.pre_submit_delay_preparation = run_sniper.policy_loading['delay_preparation']
     run_sniper.trailing_situation_preparation = run_sniper.policy_loading['trailing_preparation']
-    from src.engine.scalping.pre_submit_delay_observation import configure_sink
+    from src.engine.automation.main_trailing_source_store import prepare_for_day
+    try:
+        prepare_for_day(DATA_DIR,policy_clock.date().isoformat())
+    except Exception as exc:
+        log_error('[TRAILING_SOURCE_INDEX_PREPARATION] '+type(exc).__name__)
+    from src.engine.scalping.pre_submit_delay_observation import configure_sink, configure_sampler
     configure_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    configure_sampler(lambda code: WS_MANAGER.get_pre_submit_delay_depth(code) if WS_MANAGER else {},
+                      sniper_state_handlers.observe_pre_submit_delay_quote)
     from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
     configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit,recover_pending=True)
     from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink

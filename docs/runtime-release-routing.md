@@ -49,6 +49,28 @@ The `error-detection` router target runs the selected immutable release's full d
 
 Periodic handoff monitoring uses the native read-only `generation_only` checks: sealed strict/controller identity, current summary/checklist/stage generation, selected-release preparation and bootstrap hashes. Current Main hashes retain the existing bounded validation. Pre-cutover summary reads use the sealed historical archive only for the original bytes; the archive never authorizes a producer rerun or a current/future source date. This is not a new whole-chain verification or trading approval. Preparation, finalization and PREOPEN retain full current-contract rechecks by default; the lightweight option is not exposed by their CLI. Selector changes require freshly prepared and fully verified next-startup receipts. Source gaps remain separate from normal carry and future PID consumption.
 
+## Closed-session trailing regeneration
+
+Use `src.engine.automation.main_trailing_source_reuse` for an already approved frozen holding/input epoch after a report-code repair. It preserves the original extraction contract, every normalized field and source gap, the original holding/PREOPEN/policy bytes, and the parent-equivalent bundle. Current replay, complete partition/census checks and independent arithmetic validation still run. It reuses native byte/identity attestations only; it never reuses an old semantic verdict or grants runtime apply authority.
+
+The native report must bind each SHA to its exact current device/inode/size/mtime/ctime, or an earlier native identity observation must bracket the original sealed full-SHA publication in the same unchanged epoch. Metadata-only preservation repairs require a separate native full-byte attestation. A changed/expired proof cannot fall back to a large full-file read. Unproved sources are capped at32MiB before intake, with a separate32MiB vote-journal population cap. The digest session has a32MiB cumulative full-hash budget; normalized tree reads, bounded journal validation and code/metadata reads are separately accounted. This is not a claim that total process I/O is32MiB.
+
+Historical vote inventory binds only native events through the source session. The registry retains its exact original byte prefix and complete native hash chain; later-session orders for owners outside the frozen research cohort do not invalidate it. Late historical events, cohort-owner changes, unknown/global custody changes, altered prefixes and invalid native terminal proofs still block. No live custody or journal is written.
+
+Example, with the actual source/target dates and an isolated normalized input root:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.automation.main_trailing_source_reuse --data-root /home/ubuntu/KORStockScan/data --source-date 2026-10-16 --target-date 2026-10-19 --input-output-root /home/ubuntu/KORStockScan/data-research-inputs/main_trailing/reused-2026-10-16
+```
+
+The default is byte-proof preflight only. `--write` explicitly performs the admitted native regeneration and issues the report-only currentness receipt after full native verification. It never edits the selector or restarts Main. A new report code generation requires the usual reviewed candidate, active/delay/stop/holding handoffs and authorized ordered transition before live observation.
+
+New AI payload/trace/prompt/request, pipeline raw and holding-vote append owners also publish indexed compact rows and native offset/size/SHA hash chains. Completed snapshot writers hash bytes while writing and publish resident normalized trees with a sealed census/cost/snapshot manifest. Normal trailing assembly, original holding-request lookup, position/date-scoped votes, archived-source readers and the delay source observer consume those projections. This is byte/source acceleration, not a cached semantic verdict. Missing, interrupted or stale coverage stays pending; a changed source never silently reuses its old index.
+
+Use `src.engine.automation.main_trailing_source_store --data-root <data> --source <plain-jsonl>` for one explicit resumable historical migration step (at most8MiB, default1second; native background catch-up uses50ms per0.5second rotating turn). No report reader launches migration. Monolithic legacy gzip requires a separate offline migration; normal reports/retries must not scan full100–200GB sources or rewind gzip. Native append callbacks never scan history or checkpoint; busy writes use a bounded resident-byte retry queue. WAL checkpoints run outside the native append lease at most once per minute.
+
+The pre-submit observation sampler reads only existing route-owned0D cache every50ms. It preserves real observation time, route/transport epoch, quote freshness and horizon tolerance; it creates no subscription, provider or order call. Final auxiliary submit validation shares a verified immutable policy view, rechecks the pointer at exit and retains latest revocation and the original five-second signal boundary. Deployment, exact PID consumption, natural coverage and actual submission remain separate acceptance under the current checklist owners.
+
 ## Cross-session deployment gate
 
 Before a coordinated release transition, run `bash deploy/run_runtime_release.sh --check-release-set`. The read-only check serializes against transitions, validates the selected Main release and rejects a running retired service. A valid empty installed-unit inventory is expected after removal. Verify web `WorkingDirectory`, effective `ExecStart`, commit pin and actual PID separately. A routing PASS does not establish functional health, policy consumption or economic results.

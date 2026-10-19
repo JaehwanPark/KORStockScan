@@ -41,7 +41,12 @@ def native_stage_runner(command, *, env, cwd):
 
 def verify_report(path, *, target_date, parent_sha256=None):
     from src.engine.lifecycle.research_input_budget import Claim
-    with Claim(0) as memo_budget:
+    from .main_trailing_all_scope_research import _sealed
+    from .main_trailing_source_reuse import replay_session
+    report = _sealed(Path(path))
+    manifest_path = Path(report['input_manifest_path'])
+    manifest = _sealed(manifest_path)
+    with replay_session(manifest, manifest_path.parent), Claim(0) as memo_budget:
         return _verify_report(path,target_date=target_date,parent_sha256=parent_sha256,memo_budget=memo_budget)
 
 

@@ -23,14 +23,75 @@ from src.engine.scalping.universal_trailing_replay import (
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 
 SCHEMA = 'main_all_scope_exit_automatic_source_v1'
+VOTE_INVENTORY_SCHEMA = 'main_trailing_historical_vote_inventory_v1'
 
 
-def input_inventory(root,days,master_path,parent_path,*,cost_data_root=None):
+def historical_vote_generation(path, source_date):
+    """Date-scoped native events, never a claim about the full journal bytes.
+
+    Current-session appends cannot invalidate a closed-session input. A late
+    historical event or a changed historical field still changes this digest.
+    Unknown/malformed files remain physical dependencies at inventory intake.
+    """
+    import os
+    import stat
+    from src.engine.ai.holding_exit_vote import (
+        PATH_MAX_STORE_BYTES, _iter_path_events, path_vote_store_path,
+    )
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    path = Path(path)
+    date.fromisoformat(source_date)
+    from .main_trailing_source_store import scoped_vote_generation,InputPending
+    try:
+        return scoped_vote_generation(path.parent.parent.parent,path,source_date)
+    except InputPending:
+        pass
+    if (path.is_symlink() or any(p.is_symlink() for p in path.parents)
+            or path.parent.name != 'holding_path_votes'):
+        raise ValueError('historical_vote_path_invalid')
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > PATH_MAX_STORE_BYTES:
+        raise ValueError('historical_vote_partition_required')
+    sha, count, size = hashlib.sha256(), 0, 0
+    record_limit = 2 * 1024 * 1024
+    with Claim(record_limit * 8), path.open('r', encoding='utf-8') as handle:
+        if source_stat(os.fstat(handle.fileno())) != source_stat(before):
+            raise ValueError('historical_vote_source_changed')
+        first = json.loads(handle.readline(record_limit + 1))
+        position = first['position_key']
+        basename = path_vote_store_path(Path('.'), position).name
+        if path.name != basename and not path.name.startswith(basename + '.segment-'):
+            raise ValueError('historical_vote_position_path_invalid')
+        class BoundedReader:
+            def fileno(self): return handle.fileno()
+            def seek(self, offset): return handle.seek(offset)
+            def readline(self, limit): return handle.readline(min(limit, record_limit + 1))
+        for event in _iter_path_events(BoundedReader(), position):
+            session = event.get('session_key')
+            requested_day = datetime.fromtimestamp(event['requested_at'], ZoneInfo('Asia/Seoul')).date().isoformat()
+            if (not isinstance(session, str) or date.fromisoformat(session).isoformat() != session
+                    or session != requested_day):
+                raise ValueError('historical_vote_session_invalid')
+            if session > source_date:
+                continue
+            raw = storage.encoded(event) + b'\n'
+            sha.update(raw); count += 1; size += len(raw)
+        if (source_stat(os.fstat(handle.fileno())) != source_stat(before)
+                or source_stat(path.stat()) != source_stat(before)):
+            raise ValueError('historical_vote_source_changed')
+    if not count:
+        return None
+    return dict(schema=VOTE_INVENTORY_SCHEMA, path=path.name,
+                source_date=source_date, event_count=count, size=size, sha256=sha.hexdigest())
+
+
+def input_inventory(root,days,master_path,parent_path,*,cost_data_root=None,include_legacy_auxiliary=False):
     if not days: raise ValueError('all_scope_assembly_date_window_empty')
     paths={Path(master_path),Path(parent_path)}
     for day in days:
-        for namespace,stem in (('ai_decision_trace','ai_decision_trace'),('ai_decision_payloads','ai_decision_payloads'),('ai_decision_prompts','ai_decision_prompts'),
-                               ('ai_decision_requests','ai_decision_requests'), ('pipeline_events','pipeline_events')):
+        namespaces=['ai_decision_trace','ai_decision_payloads','pipeline_events',
+            'ai_decision_prompts','ai_decision_requests']
+        for namespace,stem in ((name,name) for name in namespaces):
             paths.update((Path(root)/namespace).glob(stem+'_'+day+'.jsonl*'))
         from src.engine.lifecycle.snapshot_archive import logical_path, identity_available
         for path in (Path(root)/'report/monitor_snapshots').glob('trade_review_'+day+'*.json*'):
@@ -40,16 +101,60 @@ def input_inventory(root,days,master_path,parent_path,*,cost_data_root=None):
     from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory
     paths.update(cost_inventory(cost_data_root or root, days))
     paths.add(Path(root)/'runtime/order_owner_registry.jsonl')
-    paths.update(p for p in (Path(root)/'runtime/holding_path_votes').glob('*.jsonl*')
-                 if p.name.endswith(('.jsonl', '.jsonl.gz')))
+    votes = Path(root)/'runtime/holding_path_votes'
+    # Claims/locks are execution coordination, not replay input. Native replay
+    # consumes the base journal and its immutable rotation segments.
+    vote_paths = {p for p in votes.glob('*.jsonl*') if
+        (p.name.endswith(('.jsonl', '.jsonl.gz')) or '.jsonl.segment-' in p.name)
+        and not p.name.endswith(('.claims.jsonl', '.lock'))}
+    from .main_trailing_completed_store import vote_store_names
+    cohort_votes=vote_store_names(root,days)
+    if cohort_votes is not None:
+        vote_paths={p for p in vote_paths if p.name.split('.segment-',1)[0] in cohort_votes}
     paths.update((Path(root)/'runtime/mechanistic_entry_policy/decisions'/days[-1]).glob('*/*.json'))
     from src.engine.lifecycle.snapshot_archive import present
-    return [{'path':str(p.resolve()),'generation':byte_generation(p)} for p in sorted(paths)
-            if p.is_file() or (p.parent.name=='monitor_snapshots' and present(p))]
+    from .main_trailing_source_store import input_generation,NAMESPACES
+    indexed={}
+    for p in sorted(paths):
+        if not p.is_file() and not (p.parent.name=='monitor_snapshots' and present(p)):
+            continue
+        raw_stream=p.parent.name in NAMESPACES and p.name.endswith(('.jsonl','.jsonl.gz'))
+        generation=input_generation(root,p) if raw_stream else byte_generation(p)
+        canonical=(p.parent/generation['path'] if generation.get('schema')=='main_trailing_indexed_source_v1:generation' else p)
+        name=str(canonical.resolve())
+        if name in indexed and indexed[name]!=generation:
+            raise ValueError('all_scope_source_alias_conflict')
+        indexed[name]=generation
+    result=[{'path':name,'generation':generation} for name,generation in indexed.items()]
+    from .main_trailing_source_store import generation as indexed_generation,InputPending
+    legacy_bytes=0
+    for path in sorted(vote_paths):
+        try:indexed_generation(root,path)
+        except (ValueError,OSError):
+            legacy_bytes+=path.stat().st_size
+            if legacy_bytes>32*1024*1024:
+                raise InputPending('trailing_scoped_vote_index_required')
+        try:
+            generation = historical_vote_generation(path, days[-1])
+        except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
+            if str(exc) == 'historical_vote_source_changed':
+                from src.engine.infrastructure.validation_digest_session import ValidationDeferred
+                raise ValidationDeferred('validation_deferred:historical_vote_source_changed') from exc
+            generation = byte_generation(path)
+        if generation is not None:
+            canonical=(path.parent/generation['path'] if generation.get('schema')==VOTE_INVENTORY_SCHEMA else path)
+            item=dict(path=str(canonical.resolve()),generation=generation)
+            prior=next((row for row in result if row['path']==item['path']),None)
+            if prior is not None and prior!=item:raise ValueError('all_scope_vote_alias_conflict')
+            if prior is None:result.append(item)
+    return sorted(result, key=lambda row: row['path'])
 
 
 def verify_inventory(manifest, assembly_root):
     """Detect new files as well as changes to previously consumed sources."""
+    if manifest.get('reuse_origin'):
+        from .main_trailing_source_reuse import verify_frozen_inventory
+        return verify_frozen_inventory(manifest,assembly_root)
     if 'assembly_inventory_ref' not in manifest:
         return  # Historical manually normalized manifests retain their contract.
     from .main_trailing_all_scope_research import code_contract
@@ -66,6 +171,23 @@ def verify_inventory(manifest, assembly_root):
 
 
 def source_generation_matches(root, source_date, path, generation):
+    from .main_trailing_source_store import SCHEMA as INDEX_SCHEMA,generation as index_generation
+    if generation.get('schema') == INDEX_SCHEMA+':generation':
+        try:
+            return index_generation(root,path)==generation
+        except (OSError,ValueError):
+            return False
+    if generation.get('schema') == VOTE_INVENTORY_SCHEMA:
+        try:
+            return (generation.get('source_date') == source_date
+                    and historical_vote_generation(path, source_date) == generation)
+        except (OSError, ValueError, TypeError, KeyError, OverflowError):
+            return False
+    if Path(path) == Path(root)/'runtime/order_owner_registry.jsonl':
+        from .main_trailing_source_reuse import frozen_registry_matches
+        frozen = frozen_registry_matches(root, source_date, path, generation)
+        if frozen is not None:
+            return frozen
     if byte_generation(path) == generation:
         return True
     if Path(path) != Path(root)/'runtime/order_owner_registry.jsonl':
@@ -212,17 +334,32 @@ def universe(root, day):
 def select_stream(root,namespace,day,sources):
     plain=Path(root)/namespace/f'{namespace}_{day}.jsonl'
     aliases=[p for p in (plain,Path(str(plain)+'.gz')) if p.exists()]
+    if not plain.exists() and Path(str(plain)+'.gz').exists():
+        from .main_trailing_source_store import input_generation,InputPending
+        try:
+            archived=input_generation(root,plain)
+        except InputPending:
+            archived=None
+        if archived is not None and archived.get('schema'):
+            aliases=[plain]
     if not aliases:return None
     hashes=[]
     for path in aliases:
-        generation=byte_generation(path);sources[str(path)]=generation
-        if path.suffix=='.gz':
+        from .main_trailing_source_store import input_generation
+        generation=input_generation(root,path);sources[str(path)]=generation
+        if generation.get('schema'):
+            hashes.append(generation['sha256'])
+        elif path.suffix=='.gz':
             sha=hashlib.sha256()
             with gzip.open(path,'rb') as handle:
-                for block in iter(lambda:handle.read(65536),b''):sha.update(block)
+                decoded=handle.read(4*1024*1024+1)
+                if len(decoded)>4*1024*1024:
+                    from .main_trailing_source_store import InputPending
+                    raise InputPending('trailing_index_offline_archive_migration_required')
+                sha.update(decoded)
             hashes.append(sha.hexdigest())
         else:hashes.append(generation['sha256'])
-        if byte_generation(path)!=generation:raise ValueError('all_scope_stream_changed')
+        if not source_generation_matches(root,day,path,generation):raise ValueError('all_scope_stream_changed')
     if len(set(hashes))!=1:raise ValueError('all_scope_plain_gzip_conflict')
     return aliases[0]
 
@@ -236,7 +373,8 @@ def _native_index(root,days,sources,gaps,db):
         generation=sources[str(path)]
         opener=gzip.open if path.suffix=='.gz' else open
         limit=2*1024*1024
-        with opener(path,'rb') as handle,Claim(limit*8):
+        from .main_trailing_source_store import open_input,row_reference
+        with open_input(root,path,generation,gaps) as handle,Claim(limit*8):
             while True:
                 offset=handle.tell();raw=handle.readline(limit+1)
                 if not raw:break
@@ -247,7 +385,8 @@ def _native_index(root,days,sources,gaps,db):
                     row=json.loads(raw)
                     if row.get('schema')!='mechanistic_entry_observation_v1':continue
                     identity=row['machine_observation_sha256']
-                    if hashlib.sha256(_json_bytes({k:v for k,v in row.items() if k!='machine_observation_sha256'})).hexdigest()!=identity:
+                    if (not getattr(handle,'native_capture_verified',False) and
+                        hashlib.sha256(_json_bytes({k:v for k,v in row.items() if k!='machine_observation_sha256'})).hexdigest()!=identity):
                         raise ValueError('native_observation_hash_invalid')
                     source=row['source'];assessment=source['assessment'];event=assessment.get('event') or {}
                     if assessment.get('action')!='ENTER_NOW':continue
@@ -258,7 +397,7 @@ def _native_index(root,days,sources,gaps,db):
                         'machine_observation_sha256':identity,'evaluation_attempt_id':row['label_context']['evaluation_attempt_id'],
                         'symbol':row['label_context']['stock_code'],'bundle_sha256':row['bundle_sha256'],
                         'captured_at':row['captured_at'],'fields':fields,
-                        'source_reference':{'path':str(path),'decoded_offset':offset,'sha256':hashlib.sha256(raw).hexdigest()}}
+                        'source_reference':row_reference(handle,path,offset,raw)}
                     body=storage.encoded(minimal).decode()
                     if len(body.encode())>storage.RECORD_BYTES:raise ValueError('native_projection_partition_required')
                     semantic=digest({k:v for k,v in minimal.items() if k!='source_reference'})
@@ -267,7 +406,7 @@ def _native_index(root,days,sources,gaps,db):
                         'body=CASE WHEN native.semantic=excluded.semantic AND excluded.body<native.body '
                         'THEN excluded.body ELSE native.body END',(identity,body,semantic))
                 except (ValueError,TypeError,KeyError,AttributeError):gaps['native_payload_binding_invalid']+=1
-        if byte_generation(path)!=generation:raise ValueError('all_scope_native_payload_changed')
+        if not source_generation_matches(root,day,path,generation):raise ValueError('all_scope_native_payload_changed')
 
 
 def _entry_plan_index(root, days, sources, gaps, db):
@@ -290,7 +429,8 @@ def _entry_plan_index(root, days, sources, gaps, db):
         if path is None: continue
         generation = sources[str(path)]
         opener = gzip.open if path.suffix == '.gz' else open
-        with opener(path, 'rb') as handle, Claim(limit*8):
+        from .main_trailing_source_store import open_input,row_reference
+        with open_input(root,path,generation,gaps) as handle, Claim(limit*8):
             while True:
                 offset=handle.tell(); raw=handle.readline(limit+1)
                 if not raw: break
@@ -302,7 +442,7 @@ def _entry_plan_index(root, days, sources, gaps, db):
                 if not relevant: continue
                 try:
                     event=json.loads(raw);fields=event.get('fields') or {}
-                    reference=dict(path=str(path),decoded_offset=offset,sha256=hashlib.sha256(raw).hexdigest())
+                    reference=row_reference(handle,path,offset,raw)
                     if event.get('stage')=='order_leg_sent':
                         record=str(event.get('record_id') or '')
                         account=str(fields.get('buy_account_key') or '').strip()
@@ -351,7 +491,7 @@ def _entry_plan_index(root, days, sources, gaps, db):
                             plan,quote['known_at'],quote['sequence'],quote['source_sha256'],storage.encoded(value).decode()))
                 except (ValueError,TypeError,KeyError,AttributeError):
                     gaps['trailing_plan_source_invalid']+=1
-        if byte_generation(path)!=generation: raise ValueError('trailing_plan_pipeline_changed')
+        if not source_generation_matches(root,day,path,generation): raise ValueError('trailing_plan_pipeline_changed')
 
 
 def _cf_original_holding(db, receipt, output):
@@ -517,11 +657,12 @@ def _trace_rows(root, days, sources, gaps, exclude=lambda *args:None,db=None,as_
         # row limit. Decode one bounded complete envelope and retain primitives
         # only; larger records are drained and explicitly quarantined.
         envelope_limit=2*1024*1024
-        with opener(path,'rb') as handle,Claim(envelope_limit*8):
+        from .main_trailing_source_store import open_input,row_reference
+        with open_input(root,path,generation,gaps) as handle,Claim(envelope_limit*8):
             while True:
                 start=handle.tell();raw=handle.readline(envelope_limit+1)
                 if not raw: break
-                reference={'path':str(path),'decoded_offset':start,'encoding':'gzip' if path.suffix=='.gz' else 'plain'}
+                reference=row_reference(handle,path,start,raw)
                 if len(raw)>envelope_limit or not raw.endswith(b'\n'):
                     while raw and not raw.endswith(b'\n'): raw=handle.readline(storage.RECORD_BYTES)
                     gaps['native_trace_oversize_or_partial']+=1
@@ -576,14 +717,13 @@ def _trace_rows(root, days, sources, gaps, exclude=lambda *args:None,db=None,as_
                     entry_reference_ask=None,entry_reference_role='native_entry_ask_price_path_only',
                     execution_plan_sha256=None,entry_depth_verified=False,
                     entry_context=event.get('trailing_entry_context'),operating_ai_required=True,
-                    source_reference={'path':str(path),'decoded_offset':start,'size':handle.tell()-start,
-                        'encoding':'gzip' if path.suffix=='.gz' else 'plain','sha256':hashlib.sha256(raw).hexdigest()})
+                    source_reference=reference)
                 if not path_events: gaps['native_forward_path_unobserved']+=1
                 if db is not None:
                     bound_path=_bound_entry_plan(db,position,projected,as_of=as_of,gaps=gaps,output=output)
                     if bound_path is not None: path_events=bound_path
                 yield position,path_events
-        if byte_generation(path)!=generation: raise ValueError('all_scope_native_trace_changed')
+        if not source_generation_matches(root,day,path,generation): raise ValueError('all_scope_native_trace_changed')
 
 
 def _operating(root, day, sources, gaps):
@@ -637,17 +777,30 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
                 sources[str(manifest_path)]={**original_manifest,'path':manifest_path.name}
     else:
         receipt,receipt_generation=read(receipt_path)
+    recorded_cost=(receipt.get('meta') or {}).get('actual_cost_source_generation')
+    cost_matches=(recorded_cost==dependency['cost_generation'] or (recorded_cost is None
+        and dependency['cost_generation'].get('count')==0
+        and not dependency['cost_generation'].get('official_source_sha256')))
     if (not retained and (receipt.get('schema')!='holding_projection_dependency_receipt_v1'
         or receipt.get('date')!=day or receipt.get('projection')!=generation
         or receipt.get('artifact_sha256')!=digest({k:v for k,v in receipt.items() if k!='artifact_sha256'})
         or not receipt.get('census_sha256') or receipt.get('meta',{}).get('snapshot_profile')!='postclose_exit'
-        or receipt.get('meta',{}).get('actual_cost_source_generation')!=dependency['cost_generation'])):
+        or not cost_matches)):
         raise ValueError('all_scope_large_completed_receipt_invalid')
     from src.engine.lifecycle.snapshot_archive import snapshot_identity_matches
     if raw.is_symlink() or (not retained and not snapshot_identity_matches(raw,receipt.get('snapshot_identity'))):
         raise ValueError('all_scope_large_completed_snapshot_changed')
     count=0
-    for trade,quote_ref in completed_rows(sidecar,output):
+    if receipt.get('trailing_completed_index'):
+        from .main_trailing_completed_store import read as completed_index_rows
+        cohort=completed_index_rows(root,receipt,output)
+    else:
+        # Native future sources always publish an index. Large unindexed
+        # historical files belong to explicit, resumable offline migration.
+        from .main_trailing_source_store import claim_legacy_bytes
+        claim_legacy_bytes(generation['size'])
+        cohort=completed_rows(sidecar,output)
+    for trade,quote_ref in cohort:
         count+=1
         quotes=lambda:storage.iter_tree(output,quote_ref)
         first=next(quotes(),{})
@@ -714,10 +867,22 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
 
 
 def assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False, cost_data_root=None):
+    root=Path(root).resolve(strict=True)
     from src.engine.lifecycle.research_disk_budget import use
     from src.engine.lifecycle.holding_research_cost import Source
-    with use(output),storage.compact_trees(),Source(root,cost_data_root=cost_data_root,knowledge_cutoff=as_of,
+    from .main_trailing_source_store import native_input_session,input_generation
+    with native_input_session(root,source_date),use(output),storage.compact_trees(),Source(root,cost_data_root=cost_data_root,knowledge_cutoff=as_of,
                                                   registry_source_date=source_date) as costs:
+        # Reject missing large raw indexes before capture_window can consume
+        # snapshot/cost sources. Migration is an explicit separate command.
+        cursor=date.fromisoformat(max(start_date,'2026-09-29'))
+        while cursor<=date.fromisoformat(source_date):
+            from .main_trailing_source_store import STREAM_NAMESPACES
+            for namespace in STREAM_NAMESPACES:
+                for path in (Path(root)/namespace).glob(namespace+'_'+cursor.isoformat()+'.jsonl*'):
+                    if path.name.endswith(('.jsonl','.jsonl.gz')):
+                        input_generation(root,path)
+            cursor+=timedelta(days=1)
         return _assemble(root,output,source_date=source_date,target_date=target_date,
             start_date=start_date,as_of=as_of,immutable=immutable,costs=costs)
 
@@ -783,10 +948,14 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
                 continue
             sidecar=raw.with_suffix('.completed_projection.json')
             projection=sidecar if present(sidecar) else raw
+            dependency_path=Path(str(projection)+'.dependencies.json')
+            native_completed_index=(read(dependency_path)[0].get('trailing_completed_index')
+                if dependency_path.is_file() else None)
             empty_archive=(dependency.get('projection') or {}).get('source_basis')=='current_native_gzip_empty_postclose'
             if not empty_archive and not identity_available(projection):
                 gaps['completed_snapshot_unverified']+=1;continue
-            if not empty_archive and identity_available(raw) and byte_generation(projection)['size']>4*1024*1024:
+            if not empty_archive and identity_available(raw) and (
+                    native_completed_index or byte_generation(projection)['size']>4*1024*1024):
                 sources[str(projection)]=byte_generation(projection)
                 receipt=Path(str(projection)+'.dependencies.json')
                 if receipt.is_file():sources[str(receipt)]=byte_generation(receipt)
@@ -901,6 +1070,7 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
         consumed_dates=days,partitions_ref=partition_ref,population_ids_ref=population_ref,
         source_data_root=str(root),holding_research_cost_data_root=str(costs.cost_root),source_generations_ref=source_ref,
         assembly_code_contract_sha256=code,assembly_input_generation_sha256=signature,
+        assembly_source_index_version='main_trailing_indexed_source_v1',
         assembly_inventory_ref=inventory_ref,input_window_generation_sha256=window['input_window_generation_sha256'],
         assembly_census={'source_gaps':dict(gaps),'quarantined':quarantined_ref,'excluded_native_sources_ref':excluded_ref,
             'publication_due_diagnostics':publication_diagnostics},

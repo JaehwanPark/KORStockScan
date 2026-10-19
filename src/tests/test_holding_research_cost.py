@@ -83,6 +83,27 @@ def test_closed_registry_prefix_accepts_only_unrelated_future_owners(tmp_path, m
             assert prepared.sources[str(path)] == generation
 
 
+@pytest.mark.parametrize('protected,expected', [(None, False),
+    (frozenset({'main_scalping:1'}), False),
+    (frozenset({'main_scalping:2'}), True), (set(), False)])
+def test_frozen_report_registry_scope_preserves_unrelated_carry_owners(
+        tmp_path, monkeypatch, protected, expected):
+    """An open carry's later order is not a closed research cohort member."""
+    from datetime import date, timedelta
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerOrderContext
+    data, _, trade, _ = fixture(tmp_path, monkeypatch)
+    path = data/'runtime/order_owner_registry.jsonl'
+    generation = adapter.byte_generation(path)
+    owner = 'main_scalping:1'
+    context = OwnerOrderContext(owner_type='main_scalping', owner_id=owner,
+        position_id=owner, client_intent_id='later-carry-order')
+    OrderOwnerRegistry(path).reserve(context=context, symbol=trade['code'], side='SELL',
+        quantity=1, route='KRX',
+        order_date=(date.fromisoformat(DAY)+timedelta(days=1)).isoformat())
+    assert adapter.historical_registry_generation_matches(path, generation, DAY,
+        protected_owners=protected) is expected
+
+
 
 @pytest.mark.parametrize('case', ['prefix_terminal', 'prefix_retirement', 'future_terminal',
     'historical_terminal', 'orphan_terminal', 'changed_proof', 'new_retirement'])

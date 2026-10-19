@@ -41,6 +41,63 @@ def test_silent_symbol_expires_without_tick_or_new_worker():
     assert observer.health()['writer_not_prepared'] == 1
 
 
+def test_source_sampler_observes_short_horizons_without_a_main_target_visit(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+    clock = [10.]
+    emitted = []
+    monkeypatch.setattr(observer.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event',
+        lambda *a, **kw: emitted.append(kw) or True)
+    depth = dict(item='123456_AL', market_route='KRX_NXT_INTEGRATED',
+        transport_epoch=1, orderbook={'asks':[{'price':100,'volume':10}],
+                                    'bids':[{'price':99,'volume':10}]})
+    def read(code):
+        assert code == '123456'
+        return dict(market_data_transport_epoch=1,
+            realtime_type_snapshots_by_route={'integrated': {'0D':
+                dict(depth, observed_epoch=clock[0]-.01)}})
+    value = state('short')
+    value.update(remaining_sec=[0, 1, 3, 5],
+                 observation_grid_version=observer.OBSERVATION_GRID_VERSION)
+    observer.register('123456', value)
+    for when in (10.02, 11.02, 13.02, 15.02):
+        clock[0] = when
+        assert observer.sample_due(read, handlers.observe_pre_submit_delay_quote) == 1
+    assert [v['target_delay_sec'] for v in emitted] == [0,1,3,5]
+    assert all(v['quote_valid'] for v in emitted)
+    assert observer.health()['active'] == 0
+
+
+def test_sampler_never_backdates_a_slow_or_stale_snapshot(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+    clock = [11.]
+    emitted = []
+    monkeypatch.setattr(observer.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event',
+        lambda *a, **kw: emitted.append(kw) or True)
+    value = state('late')
+    value.update(remaining_sec=[1], observation_grid_version=observer.OBSERVATION_GRID_VERSION)
+    observer.register('123456', value)
+    def read(code):
+        clock[0] = 11.8
+        return {}
+    observer.sample_due(read, handlers.observe_pre_submit_delay_quote)
+    assert emitted[0]['quote_valid'] is False
+    assert emitted[0]['quote_source_reason'] == 'horizon_late_or_early'
+    assert emitted[0]['quote_observed_at_epoch'] == 11.8
+
+
+def test_sampling_cannot_escape_before_its_commit_is_admitted(monkeypatch):
+    seen = []
+    def sink(*a, **k):
+        seen.extend(observer.take_due('123456', 10))
+        return {'status':'queued'}
+    observer.configure_sink(sink)
+    assert observer.register('123456', state('exact'), commit={'id':'exact'})
+    assert not seen
+    assert len(observer.take_due('123456', 10)) == 1
+
+
 def test_same_symbol_due_intents_share_exact_depth_without_sharing_identity(monkeypatch):
     from src.engine import sniper_state_handlers as h
     scans, emitted = [], []

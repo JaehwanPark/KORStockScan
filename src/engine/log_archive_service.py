@@ -330,12 +330,17 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     tmp_path = Path(temp_name)
     try:
         with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            from src.engine.infrastructure.validation_digest_session import NativeJSONWriter
+            native_writer=NativeJSONWriter(handle)
+            json.dump(payload, native_writer, ensure_ascii=False, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)
     finally:
         tmp_path.unlink(missing_ok=True)
+    from src.engine.infrastructure.validation_digest_session import publish_native_bytes
+    if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
+        publish_native_bytes(path.parent.parent.parent,path,native_writer.generation(path))
     if (kind == "trade_review"
         and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"
         and isinstance((payload.get("meta") or {}).get(
@@ -390,18 +395,30 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
     temporary = Path(name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(body, handle, ensure_ascii=False, separators=(",", ":"))
+            from src.engine.infrastructure.validation_digest_session import NativeJSONWriter
+            native_writer=NativeJSONWriter(handle)
+            json.dump(body, native_writer, ensure_ascii=False, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
+    from src.engine.infrastructure.validation_digest_session import publish_native_bytes
+    if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
+        publish_native_bytes(path.parent.parent.parent,destination,native_writer.generation(destination))
     # Dependency consumers need the sealed metadata, not another decode of
     # every timeline. This receipt is emitted by the verified projection
     # producer and bound to the independently verifiable exact file bytes.
     from src.engine.lifecycle.holding_window_generation import seal_dependency_receipt
     fact_projection = _save_trade_review_fact_projection(path, payload, body)
-    seal_dependency_receipt(destination, body, fact_projection=fact_projection)
+    native_generation=None;trailing_index=None
+    if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
+        from src.engine.automation.main_trailing_completed_store import publish
+        native_generation=native_writer.generation(destination)
+        trailing_index=publish(path.parent.parent.parent,destination,body,
+            projection_generation=native_generation)
+    seal_dependency_receipt(destination, body, fact_projection=fact_projection,
+        projection_generation=native_generation,trailing_completed_index=trailing_index)
     return destination
 
 

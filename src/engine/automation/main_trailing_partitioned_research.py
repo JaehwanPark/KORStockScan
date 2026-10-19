@@ -98,7 +98,7 @@ def run(manifest_path,*,input_root,output_root=None,dry_run=True,resume=False):
     if manifest.get('schema')!='main_all_scope_exit_input_manifest_v2': raise ValueError('all_scope_input_manifest_invalid')
     with Claim(len(storage.encoded(manifest))*8),Claim(0) as scope_budget:
         scope=owner.preflight_header(manifest,root,scope_budget=scope_budget)
-        from .main_trailing_source_assembler import verify_inventory
+        from .main_trailing_source_assembler import verify_inventory, source_generation_matches
         verify_inventory(manifest,root)
         data_root=Path(manifest['source_data_root']).resolve()
         window=capture_window(data_root,manifest['consumed_dates'])
@@ -109,7 +109,7 @@ def run(manifest_path,*,input_root,output_root=None,dry_run=True,resume=False):
             manifest.get('holding_research_cost_data_root') or data_root,manifest['consumed_dates'])}
         for source in storage.iter_tree(root,manifest['source_generations_ref']):
             path=Path(source['path']);generation=source['generation']
-            if (not path.resolve().is_relative_to(data_root) and path.resolve() not in cost_paths) or byte_generation(path)!=generation:
+            if (not path.resolve().is_relative_to(data_root) and path.resolve() not in cost_paths) or not source_generation_matches(data_root,manifest['source_date'],path,generation):
                 raise ValueError('all_scope_automatic_source_generation_invalid')
         if output_root is None:
             # Full inventory validation is still bounded and source-only.
@@ -259,10 +259,10 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
         source_date=manifest['source_date'],target_date=manifest['target_date'],
         parent_classifier_parameters=parent['classifier_parameters'],classifier=type_research.get('classifier'))
     verify_window(data_root,window)
-    from .main_trailing_source_assembler import verify_inventory
+    from .main_trailing_source_assembler import verify_inventory, source_generation_matches
     verify_inventory(manifest,root)
     for source in storage.iter_tree(root,manifest['source_generations_ref']):
-        if byte_generation(Path(source['path']))!=source['generation']:
+        if not source_generation_matches(data_root,manifest['source_date'],source['path'],source['generation']):
             raise ValueError('all_scope_source_changed_before_publication')
     if byte_generation(manifest_path)!=manifest_generation:
         raise ValueError('all_scope_manifest_changed_during_research')

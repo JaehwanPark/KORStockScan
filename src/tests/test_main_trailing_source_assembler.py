@@ -74,6 +74,49 @@ def test_inventory_ignores_vote_locks_but_keeps_native_vote_bytes(tmp_path):
     assert source.input_inventory(root, [DAY], master, parent) != before
 
 
+def _native_inventory_vote(root, day, *, position='record:7'):
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    from datetime import datetime
+    at = datetime.fromisoformat(day+'T09:00:00+09:00').timestamp()
+    path = path_vote_store_path(root, position)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = dict(schema='holding_path_vote_v10', position_key=position,
+        path_id='EXIT_TRAILING_TP', purpose='EXIT_PERMISSION', status='INSUFFICIENT',
+        path_policy_sha256='a'*64, buy_fill_identity='b'*64, session_key=day,
+        requested_at=at, received_at=at+.1, persisted_at=at+.2)
+    with path.open('a') as handle:
+        handle.write(json.dumps(row)+'\n')
+    return path, row
+
+
+def test_historical_inventory_is_stable_after_current_session_appends(tmp_path):
+    root=tmp_path/'source';fixture(root)
+    master=next((root/'report/micro_reversion_economic_reference').glob('*.json'))
+    parent=root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{DAY}.json'
+    path, row=_native_inventory_vote(root, DAY)
+    before=source.input_inventory(root, [DAY], master, parent)
+    generation=next(r['generation'] for r in before if r['path']==str(path))
+    assert generation['schema']==source.VOTE_INVENTORY_SCHEMA
+    _native_inventory_vote(root, TARGET)
+    _native_inventory_vote(root, TARGET, position='record:8')
+    assert source.input_inventory(root, [DAY], master, parent)==before
+    assert source.source_generation_matches(root,DAY,path,generation)
+    # Late historical observations are still a changed input, even if their
+    # original receipt clocks happen to duplicate an earlier row.
+    with path.open('a') as handle:handle.write(json.dumps(row)+'\n')
+    assert source.input_inventory(root,[DAY],master,parent)!=before
+    assert not source.source_generation_matches(root,DAY,path,generation)
+
+
+@pytest.mark.parametrize('field,value', [('status','VALID'), ('session_key',TARGET),
+    ('position_key','record:8'), ('persisted_at',0), ('path_policy_sha256','changed')])
+def test_historical_inventory_does_not_hide_invalid_or_rewritten_votes(tmp_path,field,value):
+    path,row=_native_inventory_vote(tmp_path,DAY)
+    generation=source.historical_vote_generation(path,DAY)
+    path.write_text(json.dumps({**row,field:value})+'\n')
+    assert not source.source_generation_matches(tmp_path,DAY,path,generation)
+
+
 def test_automatic_native_binding_warm_reuse_and_new_file_invalidation(tmp_path,monkeypatch):
     root=tmp_path/'source';path,native=fixture(root);assembly=tmp_path/'assembly';out=tmp_path/'research'
     manifest=source.assemble(root,assembly,source_date=DAY,target_date=TARGET,start_date=DAY)

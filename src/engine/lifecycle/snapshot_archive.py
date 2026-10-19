@@ -66,6 +66,23 @@ def archived_receipt(path):
     if len(raw) > MAX_RECEIPT_BYTES:
         raise ValueError('snapshot_archive_receipt_unbounded')
     receipt = json.loads(raw)
+    seal=receipt.get('artifact_content_sha256')
+    if seal is not None:
+        expected=hashlib.sha256(json.dumps({k:v for k,v in receipt.items() if k!='artifact_content_sha256'},
+            ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+        if seal!=expected:
+            raise ValueError('snapshot_archive_receipt_seal_invalid')
+        # A new native archiver has already verified SHA, size and CRC to EOF.
+        # Reuse only that exact unchanged compressed byte epoch; semantic
+        # census/cost/policy validation still runs in every native consumer.
+        from src.engine.infrastructure.validation_digest_session import ACTIVE
+        session=ACTIVE.get()
+        bound=receipt.get('archive_generation') or {}
+        if (session is not None and session.binding['role']=='postclose'
+                and bound==before and receipt.get('schema')==SCHEMA):
+            session.admit_native_generation(archived,
+                dict(path=archived.name,size=before['size'],sha256=receipt.get('archive_sha256')),
+                [before[key] for key in ('device','inode','size','mtime_ns','ctime_ns')],proof_sha256=seal)
     original = receipt.get('original_identity') or {}
     logical_size = receipt.get('logical_size_bytes')
     if (receipt.get('schema') != SCHEMA

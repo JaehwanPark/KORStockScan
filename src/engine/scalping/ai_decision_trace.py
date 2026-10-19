@@ -381,6 +381,7 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
                 existing.st_mtime_ns,
             ):
                 raise OSError(f"trace file changed before append: {generation.logical}")
+            trailing_source_before = os.fstat(descriptor)
             os.fchmod(descriptor, 0o600)
             written = 0
             while written < len(encoded):
@@ -402,6 +403,9 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
                 from src.engine.scalping import trace_dedup
                 trace_dedup.appended(path, index_field, payload, descriptor,
                     previous_identity=opened_identity, encoded=encoded)
+            from src.engine.automation.main_trailing_source_store import capture_native_append
+            capture_native_append(path, before=trailing_source_before,
+                after=os.fstat(descriptor), raw=encoded, row=payload)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -415,6 +419,11 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
     if not trace_enabled():
         return {}
     day = target_date or _date_text()
+    payload_path = _payload_path(day)
+    if (payload_path.parent.name == 'ai_decision_payloads'
+            and _trace_path(day).parent.parent == payload_path.parent.parent):
+        from src.engine.automation.main_trailing_source_store import maintain
+        maintain(payload_path.parent.parent, day)
     indexes = ((_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
                (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
                (_SEEN_REQUEST_IDS, _request_path, "request_id"),

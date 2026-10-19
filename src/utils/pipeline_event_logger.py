@@ -922,6 +922,10 @@ def _append_partition_jsonl(
                 if created or durable_every_append:
                     os.fsync(descriptor)
                     _fsync_parent_directory(parent_descriptor, target=physical_path)
+                if physical_path.parent.name == 'pipeline_events':
+                    from src.engine.automation.main_trailing_source_store import capture_native_append
+                    capture_native_append(physical_path, before=metadata,
+                        after=os.fstat(descriptor), raw=payload)
             finally:
                 try:
                     fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -1102,11 +1106,13 @@ def emit_pipeline_event(
     try:
         with _WRITE_LOCK:
             raw_append_attempted = True
-            _append_pipeline_event_jsonl(
-                _event_path(storage_partition_date),
-                raw_line,
-                late_partition=storage_partition_date != emitted_date,
-            )
+            from src.engine.automation.main_trailing_source_store import append_record
+            with append_record(event_payload):
+                _append_pipeline_event_jsonl(
+                    _event_path(storage_partition_date),
+                    raw_line,
+                    late_partition=storage_partition_date != emitted_date,
+                )
             raw_append_succeeded = True
             if compact_line is not None:
                 compact_append_attempted = True

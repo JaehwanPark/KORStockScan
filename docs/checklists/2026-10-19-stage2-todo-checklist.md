@@ -42,15 +42,27 @@
 
 ## 실행 항목
 
+- [ ] `[SubmissionMonitorSyncLineage1019] 제출병목 관측기의 동기 요청 신원 결속 수리·후속 반영` (`Due: 2026-10-19`, `Slot: INTRADAY`, `TimeWindow: 코드 리뷰 종결 후 승인된 후속 배포 시`, `Track: RuntimeStability`)
+  - 10/19 추가 사용자 구현 지시: raw 관측기는 writer-owned minute/원 ID 색인을 소비하고,50ms local-depth sampler로 짧은 horizon을 수집한다. PASS 최종 검증의 중복 정책 복사를 제거하고 현재 pointer/revocation·원5초·계좌/수량/호가/전송 guard를 유지한다. 코드 검증과 자연 PASS→실제 제출·원천 결손 해소는 분리한다. [검토](../audits/preopen-alert-repair-2026-10-19.md#trailing-재생성의-대용량-반복-읽기).
+  - Source: 사용자08:30까지 제출병목 모니터링 지시, [source-only 수리 검토](../audits/submission-monitor-sync-lineage-review-2026-10-19.md).
+  - 코드 완료: async 신원은 null이지만 native request capture가 존재하는 실제08:03 timeout에서 원894 prepared0/issues1/gap1을 재현했다. exact native actor·정책·event·input/prompt·logical/wire 결속을 추가하고884 PASS/compile/diff·자체 리뷰→수정→재리뷰를 확인했다. 격리 재검증은 prepared1/issues0/gap0이며 실제 전송1·timeout1·PASS0을 보존한다.
+  - Acceptance/다음 단계: 후속 통합본의 frozen source/code handoff·선택본/PID를 검증하고 자연 request/trace의 동기·async 결속을 대사한다. request 준비·전송·응답·Main 수용·주문을 구분하며 symbol/time 추정과 timeout 삭제는 금지한다. 현재 배포894는 미변경이므로 deployment_pending이다.
+  - 권한/분리: 이번 수리는 source-only 관측 코드다. Provider·deadline·정책·주문/취소·수량/수탁·Main 재기동은 변경하지 않는다. 두산·알테오젠 수동관리 결속은 다른 세션이 담당하며 큐리옥스 SELL cancel-intent 반복은 별도 runtime 주문 lifecycle 문제로 남긴다.
+
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-19`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 코드 전환 뒤 trailing 연구의 현재성은 원 PREOPEN holding 원문을 유지한 별도 native 재검증 영수증으로 확인한다. 날짜·scope·원 parent policy 일치, 새 전체 원천/산술 검증, 현재 코드/세대 결속이 필수이며 보고서 전용 영수증은 runtime apply 권한이 아니다. 재기동 observer는 기준일 raw inode 변경을 정식 요약 재생성 후 다시 검증한다.
+  - 첫 장중 코드 전환은 이미 소비된 prepared delay의 원 commit과 source를 사전검증하고 drain 후 selector 게시 전에 정식 영수증을 승계한다. 실패 시 새 선택/기동을 진행하지 않으며 기존 정책 수치와 원 PREOPEN을 유지한다.
+  - 10/19 trailing 반복 읽기 수리: 봉인된 원 입력·추출 provenance·결손을 보존하고 native 바이트/identity 증명과 현재 replay/독립 산술로 재검증한다. 전체 원본 해시 재읽기 fallback은 증명 경로에서 금지하고 미증명 원천32MiB/별도 vote32MiB 사전 한도를 둔다. 실제 과거 입력 사전검사6.4초/전체 해시 읽기17.1MB이며 배포·native 최종 생성·현재PID 수용은 후속 증거로 구분한다. 새 원천의 native append 색인·완료 resident tree/manifest와 조립/요청/vote/압축/관측 consumer를 구현했다.8MiB/50ms explicit migration·bounded background catch-up·미증명 대형 원천 pending을 유지한다. exact94-file handoff2503회귀 PASS이며 native 최종 생성·배포/PID·자연 입력 수용은 별도 확인한다. [운영 절차](../runtime-release-routing.md#closed-session-trailing-regeneration), [검토](../audits/preopen-alert-repair-2026-10-19.md#trailing-재생성의-대용량-반복-읽기).
   - 10/19 10:22 기동 관측기: lock 대기로 producer가 미실행인데 source-only 보고서를 게시하여 현재 full 보고서를 덮은 결함을 수리한다. 미실행은 원 deadline 실패로 남기며 게시하지 않고, 실제 생성 실패의 진단과 첫 detector의 검증은 유지한다. 820b422df/PID625590의10:32:26 첫 자연 full health에서 해당 ERROR 해소·full 보고서 보존을 확인했다. 기존 원천·경제성 경고는 별도 OPEN이다. [검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 10/19 09:30 observer 수리: 이전 PID 스캐너 사건은 exact 원본 해시/6필드/actor/출생시각으로만 현재 health에서 분리하고 원 active/경제성 결손을 보존한다. native 입력 deadline의 안전한 무호출·무주문 DROP은 지연 차단 진단으로 유지한다. 실제09:30 격리 재검증은 warning이며 live 배포/PID/자연 detector 수용은 별도 확인한다. [검토](../audits/preopen-alert-repair-2026-10-19.md).
-  - 첫 장중 코드 전환은 이미 소비된 prepared delay의 원 commit과 source를 사전검증하고 drain 후 selector 게시 전에 정식 영수증을 승계한다. 실패 시 새 선택/기동을 진행하지 않으며 기존 정책 수치와 원 PREOPEN을 유지한다.
-  - 코드 전환 뒤 trailing 연구의 현재성은 원 PREOPEN holding 원문을 유지한 별도 native 재검증 영수증으로 확인한다. 날짜·scope·원 parent policy 일치, 새 전체 원천/산술 검증, 현재 코드/세대 결속이 필수이며 보고서 전용 영수증은 runtime apply 권한이 아니다. 재기동 observer는 기준일 raw inode 변경을 정식 요약 재생성 후 다시 검증한다.
+  - 09:45 실제 수용:40b21f360/PID470886/start1502213 ordered complete·native4gate·3,993회귀 PASS.09:44/09:45 full에서 제출병목 ERROR 제거, 현재 PID warning_pending 재계산 일치·process/log PASS. 비용5건·trailing 원천 및 tmp 경고는 계속 OPEN이다. [실행 영수증](../../tmp/preopen-alert-repair-20261019/observer-history-final-verification.json).
   - Source: [runtime_approval_summary_2026-10-16.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-16.json)
   - 판정 기준: source_date=`2026-10-16`, apply_date=`2026-10-19`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=False, handoff=blocked); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=e6d31662f21d7785c3ddcc7e5e361482e3d7e03486216403f3491542f3238f7b, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
   - 금지: bootstrap 생성·선택을 실제 PID 소비, 자연 행동 또는 비용 후 EV 개선으로 보고하지 않는다.
+
+  - 10/19 장중 수리/PID 수용:795dacfbd/PID404085(start ticks1340713) ordered pass/complete, 실제 정책·delay·stop·holding4개 native gate와2,881개 회귀 PASS. 원 PREOPEN/정책/strict 문서 bytes 및 다른 세션 owner를 보존했다. 큐리옥스49362는 사용자 직접 매도2주+기존1주를 broker 영수증으로 대사한 뒤 drain 후 COMPLETED/원장0을 확정했다.445680·196170 수동 지정은 사용자 정정으로 해제했고 두산 지정은 유지한다. [수리·검증 근거](../audits/preopen-alert-repair-2026-10-19.md).
+  - 잔여 Acceptance: trailing20,840scope 재생성 자체는 complete이나 후속 registry/holding-vote 변경으로 currentness full 검증은 OPEN이다. native event ancestry/닫힌 날짜 prefix를 보존한 검증과 현재 PID observer 의미 상태를 확인한다. 원 비용/first-crossing 결손은 각 기존 원천 owner에 유지하며 GREEN으로 덮지 않는다.
 
 - [ ] `[DirectFamilySourceRepairEntryCancelWait] entry_cancel_wait 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-16.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-16.json)
@@ -93,8 +105,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
-  - 재기동 복구: 보존 hard link가 원문 바이트 변경 없이 ctime을 변경하여 99e158af1 기동의 Main stop 검증이 실패했다. 실패 전환·시작 보류를 보존하고 원문 전체 hash 검증 및 정확한 starting/timeout 복구를 새 검토 릴리스로 수행한다. 원 정책/PREOPEN/strict/controller는 수정하지 않는다.
   - 10:50 후속: 큰 실행 행의 bounded 필드 복원·이월 snapshot의 native SHA 검증 후 부분 디코드·과거 registry prefix의 날짜 없는 native 대사 이벤트를 수리했다. 431+3,132회귀 PASS와 정식 완료 prefix→fact→수량 재생성/현재 trailing 연구/PID 수용은 분리한다. [진행 근거](../audits/preopen-alert-repair-2026-10-19.md#1050-원천-계약-경보-후속-수리).
+  - 재기동 복구: 보존 hard link가 원문 바이트 변경 없이 ctime을 변경하여 99e158af1 기동의 Main stop 검증이 실패했다. 실패 전환·시작 보류를 보존하고 원문 전체 hash 검증 및 정확한 starting/timeout 복구를 새 검토 릴리스로 수행한다. 원 정책/PREOPEN/strict/controller는 수정하지 않는다.
   - 10:01 후속: 이월 snapshot 전체 디코드로 인한 swap/I/O 경보와 SELL 재관측 중복 판정을 함께 수리한다. 연구 비용3건의 격리 복원·475회귀 통과와 운영 재생성/PID 수용을 분리하며 원 비용·custody·정책 결속 결손은 유지한다. [후속 근거](../audits/preopen-alert-repair-2026-10-19.md#1001-io-경보와-수량-원천-후속-수리).
   - 10/19 추가 경고: 기존 완료13건의 비용/수량 결손과 운영 research-cost index 부재를 확인했다. native completion prefix→fact→quantity를 재생성하고 연구 배분/실제 비용/복구 불가 결손을 구분한다. [실행 검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 재개 근거: [10/17 수량 정밀 점검](../audits/initial-quantity-runtime-postclose-result-review-2026-10-17.md)의 IQ171~IQ175와 [전체 장후 후속 수리](../audits/postclose-complete-semantic-repair-2026-10-17.md). 기존 계획의 완료 이력은 보존하고 새로 재현된 producer/consumer·유효 빈 모집단 오판만 재개한다.
@@ -124,6 +136,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 비용 원천 부재·자연 표본 0은 코드 결함과 분리하며 신규 EV gate·SELL/retry·재기동 권한을 만들지 않는다.
   - 이관: 10/14 미종결 Acceptance/History를 보존해 10/15 동일 ID로 인계했다. 코드·장후 준비를 미래 자연 수용/비용 후 성과로 닫지 않는다.
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
+
+  - 10/19 09:18 현재 보유 경계: 알테오젠196170의 사용자 수동 지정은 해제했으나09:15:08 기존 hard-stop 규칙이-1.51%에서 새 auto_hard_stop_handoff를 생성했다. operator 수동 소유권으로 재등록하지 않으며 hard safety를 임의 해제하지 않는다. 큐리옥스49362 직접 청산은 별도 broker1+2주 영수증/원장0/DB COMPLETED로 닫았다. 최종 observer는 semantic partial, full artifact 검사는 resource contention deferred이므로 전체 건강 완료와 구분한다.
 
 - [ ] `[OperationalLogRetentionRepair1016] 작성자 로그 회전·보관·역사 원천 압축 적용 확인` (`Due: 2026-10-19`, `Slot: INTRADAY`, `TimeWindow: 통합 배포 후`, `Track: RuntimeStability`)
   - detector 후행 실패 복구는 원 controller/strict/cleanup 세대와 실제 완료 시각을 보존하고 검증된 suffix만 재실행한다. 원 실패·정리 영수증을 별도 보관하며 새 full detector와 동일 세대 검증이 통과해야 정식 finalization DONE을 발행한다. PREOPEN 이후 원천을 다시 쓰거나 실패를 수동 완료로 바꾸지 않는다.

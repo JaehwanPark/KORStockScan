@@ -13,6 +13,24 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 _SESSION_ROUTE_REQUIRED = KiwoomWSManager._integrated_aftermarket_route_required
 
 
+def test_delay_depth_reader_copies_only_existing_0d_and_current_transport():
+    manager = KiwoomWSManager('test-token')
+    manager._market_data_transport_epoch = 7
+    class History:
+        def __deepcopy__(self, memo):
+            pytest.fail('delay sampler traversed accumulated history')
+    book = {'asks':[{'price':100,'volume':2}], 'bids':[{'price':99,'volume':2}]}
+    manager.realtime_data['005930'] = dict(price_history=History(),
+        realtime_type_snapshots_by_route={'integrated': {'0D': dict(orderbook=book,
+            item='005930_AL', market_route='KRX_NXT_INTEGRATED', transport_epoch=7,
+            observed_epoch=10.), '0B': {'history': History()}}})
+    value = manager.get_pre_submit_delay_depth('005930')
+    assert value['market_data_transport_epoch'] == 7
+    assert set(value) == {'market_data_transport_epoch','realtime_type_snapshots_by_route'}
+    value['realtime_type_snapshots_by_route']['integrated']['0D']['orderbook']['asks'][0]['price'] = 999
+    assert book['asks'][0]['price'] == 100
+
+
 def test_retired_vcp_and_s15_conditions_are_absent_from_ws_bootstrap():
     keywords = set(kiwoom_websocket.SCALP_CONDITION_KEYWORDS)
     assert not keywords.intersection({

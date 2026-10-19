@@ -21,6 +21,74 @@ TRADE_FIELDS=frozenset(('id','record_id','strategy','stock_code','code','status'
     'position_residual_qty','terminal_decision_authority','sell_time_forbidden_for_intraday_horizon'))
 
 
+def resident_completed_rows(trades,output_root):
+    """The census writer projects its resident rows before discarding them.
+
+    This is the same structural projection as completed_rows, with no source
+    file serialization/readback. Timelines and complete fill sets become
+    independently verified immutable trees at their native production time.
+    """
+    from src.engine.scalping.holding_path_vote_replay import compact_signal
+    for original in trades:
+        if not isinstance(original,dict):
+            raise ValueError('research_native_completed_row_invalid')
+        body={};quotes=None;signals=[];signal_bytes=0
+        def bounded(value,limit):
+            try:
+                raw=storage.encoded(value)
+            except ValueError:
+                # Legacy native snapshot JSON can contain IEEE nonfinite
+                # diagnostic values. Preserve them as missing, never as zero
+                # or observed fees/PnL; original bytes remain in provenance.
+                import math
+                def missing(item):
+                    if isinstance(item,float) and not math.isfinite(item):return None
+                    if isinstance(item,dict):return {key:missing(child) for key,child in item.items()}
+                    if isinstance(item,list):return [missing(child) for child in item]
+                    return item
+                value=missing(value);raw=storage.encoded(value)
+                body['native_nonfinite_normalization']='missing_not_zero'
+            if len(raw)>limit:
+                body['projection_source_gap']='normalized_field_unbounded'
+                return None
+            return value
+        for key,value in original.items():
+            if key=='timeline':
+                def events():
+                    nonlocal signal_bytes
+                    for event in value:
+                        event=bounded(event,2*1024*1024)
+                        if event is None:
+                            yield dict(kind='SOURCE_GAP',known_at=None,reason='normalized_event_unbounded')
+                            continue
+                        if not isinstance(event,dict):
+                            raise ValueError('research_legacy_timeline_invalid')
+                        if event.get('stage')=='holding_path_signal_snapshot':
+                            signal=compact_signal(event);signal_bytes+=len(storage.encoded(signal))
+                            if signal_bytes<=1024*1024:signals.append(signal)
+                            else:
+                                signals.clear();body['holding_path_projection_gap']='signal_projection_capacity_exceeded'
+                        if event.get('stage')!='scalp_trailing_input_transition':continue
+                        fields=event.get('fields') or {};quote=fields.get('universal_trailing_quote')
+                        if isinstance(quote,str):quote=json.loads(quote)
+                        if isinstance(quote,dict) and quote.get('kind')=='QUOTE':
+                            if body.get('holding_vote_source') is None:
+                                body['holding_vote_source']=quote.get('holding_vote_source')
+                            yield quote
+                        for name in ('trailing_entry_context','trailing_situation_pin'):
+                            context=fields.get(name)
+                            if isinstance(context,str):context=json.loads(context)
+                            if context is not None and body.get(name) is None:body[name]=context
+                quotes=storage.write_tree(output_root,events());body['timeline']=[]
+            elif key in ('buy_fill_legs','sell_fill_legs'):
+                body[key+'_ref']=storage.write_tree(output_root,
+                    (bounded(leg,storage.RECORD_BYTES) for leg in value))
+            elif key in TRADE_FIELDS:
+                body[key]=bounded(value,storage.RECORD_BYTES)
+        body['holding_path_signal_snapshots_ref']=storage.write_tree(output_root,signals)
+        yield body,quotes or storage.write_tree(output_root,[])
+
+
 class Reader:
     def __init__(self,handle):
         self.handle=handle;self.buffer='';self.offset=0;self.eof=False

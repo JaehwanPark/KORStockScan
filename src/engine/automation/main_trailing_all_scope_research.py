@@ -40,6 +40,10 @@ CODE_PATHS = ('ai/holding_exit_vote.py','ai/holding_vote_replay_source.py',
               'automation/main_trailing_path_projection.py',
               'lifecycle/research_input_budget.py', 'lifecycle/research_admission.py',
               'lifecycle/research_storage.py', 'automation/main_trailing_source_assembler.py',
+              'automation/main_trailing_source_reuse.py', 'automation/main_trailing_source_store.py',
+              'automation/main_trailing_completed_store.py',
+              'log_archive_service.py','compress_db_backfilled_files.py',
+              'infrastructure/validation_digest_session.py',
               'lifecycle/research_json_stream.py', 'lifecycle/snapshot_archive.py',
               'lifecycle/research_disk_budget.py',
               'automation/main_trailing_population_aggregation.py', 'automation/main_trailing_partitioned_research.py',
@@ -182,7 +186,9 @@ def run(manifest_path, *, input_root, output_root=None, dry_run=True, resume=Fal
     manifest=_sealed(Path(manifest_path))
     if manifest.get('schema')=='main_all_scope_exit_input_manifest_v2':
         from src.engine.automation.main_trailing_partitioned_research import run as run_partitioned
-        return run_partitioned(manifest_path,input_root=input_root,output_root=output_root,dry_run=dry_run,resume=resume)
+        from src.engine.automation.main_trailing_source_reuse import replay_session
+        with replay_session(manifest, input_root):
+            return run_partitioned(manifest_path,input_root=input_root,output_root=output_root,dry_run=dry_run,resume=resume)
     with ExitStack() as budget:
         budget.enter_context(Claim(Path(manifest_path).stat().st_size * 8))
         return _run(manifest_path, input_root=input_root, output_root=output_root,

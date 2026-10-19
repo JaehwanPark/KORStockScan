@@ -24,7 +24,7 @@ SCOPE = 'main_holding_exit_research_only'
 MAX_REGISTRY_BYTES = 4 * 1024 * 1024
 
 
-def historical_registry_generation_matches(path, generation, source_date):
+def historical_registry_generation_matches(path, generation, source_date, *, protected_owners=None):
     """Accept only a verified original prefix plus unrelated later-day owners.
 
     Historical orders, existing historical owners, rewrites, invalid hash chains
@@ -58,6 +58,15 @@ def historical_registry_generation_matches(path, generation, source_date):
                 row.get('owner_id') for row in state.values()
                 if date.fromisoformat(row['order_date']) <= cutoff
             }
+            if protected_owners is not None:
+                if not isinstance(protected_owners, frozenset) or any(
+                        not isinstance(owner, str) or not owner.startswith('main_scalping:')
+                        for owner in protected_owners):
+                    return False
+                historical_owners = historical_owners.intersection(protected_owners)
+                # A later order for a frozen completed owner also invalidates
+                # that report, even if its original registry intent is absent.
+                historical_owners.update(protected_owners)
             for row in events[count:]:
                 resolved = row
                 if row.get('event') == 'TERMINAL_RECONCILIATION_RECORDED':

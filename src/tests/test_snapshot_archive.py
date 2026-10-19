@@ -104,8 +104,9 @@ def test_archive_digest_is_reused_only_inside_explicit_native_session(snapshot, 
         first = byte_generation(snapshot)
         second = byte_generation(snapshot)
     assert first == second
-    assert session.stats['full_reads'] == session.stats['reused_reads'] == 1
-    assert session.stats['full_bytes'] < 3*1024*1024
+    assert session.stats['full_reads'] == 0
+    assert session.stats['reused_reads'] == 2
+    assert session.stats['admitted_native_proofs'] == 2
     archived = Path(str(snapshot)+'.gz')
     archived.write_bytes(archived.read_bytes()[:-2])
     with pytest.raises(ValueError):

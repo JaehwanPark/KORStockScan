@@ -9,6 +9,20 @@ from src.engine.automation import main_trailing_all_scope_research as owner
 from src.tests.test_main_trailing_source_assembler import fixture,DAY,TARGET
 
 
+def test_resident_native_projection_matches_legacy_stream_without_raw_read(tmp_path):
+    from src.engine.lifecycle.research_json_stream import resident_completed_rows
+    row=dict(id='native',strategy='SCALPING',status='COMPLETED',stock_code='123456',
+        buy_fill_legs=[dict(at=DAY+'T09:00:00',qty=2,amount_krw=200)],
+        sell_fill_legs=[dict(at=DAY+'T09:01:00',qty=2,amount_krw=202)],
+        timeline=[dict(stage='scalp_trailing_input_transition',fields={
+            'universal_trailing_quote':quote(1,DAY+'T09:00:01')})],
+        unused_display='x'*100000)
+    path=tmp_path/'legacy.json';path.write_text(json.dumps({'sections':{'completed_trade_projection':[row]}}))
+    old=list(completed_rows(path,tmp_path/'old'))
+    new=list(resident_completed_rows([row],tmp_path/'new'))
+    assert storage.logical_value(old)==storage.logical_value(new)
+
+
 def test_stream_keeps_every_timeline_and_fill_without_large_display_fields(tmp_path):
     event={'stage':'scalp_trailing_input_transition','fields':{'universal_trailing_quote':json.dumps(quote(1,DAY+'T09:00:01'))}}
     trade={'id':'main:1','strategy':'SCALPING','buy_filled_qty':10,'buy_fill_amount':1000,'irrelevant':'x'*(5*1024*1024),'buy_fill_legs':[{'at':DAY+'T09:00:00','qty':10,'amount_krw':1000}],

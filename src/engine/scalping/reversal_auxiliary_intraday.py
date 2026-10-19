@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import fcntl
 import hashlib
 import json
@@ -498,8 +498,17 @@ def validate_submit(data_root,fields,*,now):
     a=fields.get('entry_mechanistic_policy_decision') or {}
     if not a.get('auxiliary_registry_sha256'):return
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
-    active=N.load_effective(data_root=Path(data_root),target_date=datetime.fromtimestamp(now,K.KST).date().isoformat())
-    validate_decision(data_root,dict(continuous_reversal_assessment=a),active,now=now)
+    from src.engine.monitoring.runtime_performance import entry_stage
+    day = datetime.fromtimestamp(now,K.KST).date().isoformat()
+    # The submit validator is read-only. Share the loader's immutable view and
+    # ancestor-resolution pass instead of copying the full verified bundle.
+    # The pointer is checked again at exit; overlay revocation and the original
+    # five-second claim still execute independently at this submit boundary.
+    with N.signature_pass(), ExitStack() as boundary:
+        with entry_stage('entry_submit_native_load'):
+            active = boundary.enter_context(N.verified_evaluation(data_root=Path(data_root), target_date=day))
+        with entry_stage('entry_submit_auxiliary'):
+            validate_decision(data_root,dict(continuous_reversal_assessment=a),active,now=now)
 
 
 @contextmanager

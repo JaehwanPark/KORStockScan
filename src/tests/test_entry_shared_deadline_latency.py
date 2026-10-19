@@ -21,6 +21,41 @@ from src.engine.ai_engine_openai import (
 )
 
 
+@pytest.mark.parametrize('fault', [None, 'revoked', 'expired', 'pointer'])
+def test_submit_boundary_uses_immutable_view_and_keeps_all_independent_guards(monkeypatch, fault):
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    calls = []
+    bundle = native._freeze({'bundle_sha256':'a'*64, 'nested':{'values':[1]}})
+    @contextmanager
+    def view(**kw):
+        assert native._SIGNATURE_PASS.get() is not None
+        calls.append('fresh_native_load')
+        try:
+            yield bundle
+        finally:
+            calls.append('pointer_exit_check')
+            if fault == 'pointer':
+                raise ValueError('machine_policy_generation_changed_during_evaluation')
+    def check(root, policy, active, *, now):
+        assert active is bundle and now == 100.
+        with pytest.raises(TypeError):
+            active['nested']['values'].append(2)
+        calls.append('fresh_auxiliary_and_original_deadline')
+        if fault in {'revoked','expired'}:
+            raise ValueError(fault)
+    monkeypatch.setattr(native, 'verified_evaluation', view)
+    monkeypatch.setattr(auxiliary, 'validate_decision', check)
+    fields = {'entry_mechanistic_policy_decision': {'auxiliary_registry_sha256':'b'*64}}
+    if fault:
+        with pytest.raises(ValueError):
+            auxiliary.validate_submit(Path('fixture'), fields, now=100.)
+    else:
+        auxiliary.validate_submit(Path('fixture'), fields, now=100.)
+    assert calls == ['fresh_native_load','fresh_auxiliary_and_original_deadline','pointer_exit_check']
+    assert native._SIGNATURE_PASS.get() is None
+
+
 @pytest.mark.parametrize('version', ['v5', 'v6'])
 @pytest.mark.parametrize('failure', [None, 'model', 'claim', 'changed_refs', 'auxiliary', 'definition_missing', 'exit'])
 def test_final_native_boundary_keeps_all_guards_and_closes_before_provider(monkeypatch, version, failure):

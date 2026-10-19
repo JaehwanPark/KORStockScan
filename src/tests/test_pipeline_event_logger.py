@@ -516,6 +516,11 @@ def test_pipeline_event_writer_pins_parent_directory_across_path_swap(
 
 def test_append_revalidates_existing_parent_without_repeated_mkdir(monkeypatch, tmp_path):
     from pathlib import Path
+    from src.engine.automation.main_trailing_source_store import _database
+    # Main prepares its index before collection. This regression exercises
+    # the same warm append boundary while preserving native raw-parent checks.
+    prepared=tmp_path/'pipeline_events/pipeline_events_2026-10-10.jsonl'
+    with _database(tmp_path,prepared,writer=True):pass
     original = Path.mkdir
     created = []
 

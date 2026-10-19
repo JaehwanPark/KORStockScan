@@ -1233,18 +1233,66 @@ def append_path_events_file(
         if size+len(raw)>PATH_MAX_STORE_BYTES:
             # Prior sealed segments are immutable evidence, never discarded.
             segment=Path(str(path)+'.segment-'+str(time.time_ns()))
+            index_before=path.stat()
             os.replace(path,segment)
+            from src.engine.automation.main_trailing_source_store import capture_native_rotation
+            capture_native_rotation(path,segment,before=index_before,after=segment.stat())
             directory=os.open(path.parent,os.O_RDONLY)
             try:os.fsync(directory)
             finally:os.close(directory)
         fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_APPEND|getattr(os,'O_NOFOLLOW',0),0o600)
         with os.fdopen(fd,'ab') as handle:
+            index_before=os.fstat(handle.fileno())
             handle.write(raw);handle.flush();os.fsync(handle.fileno())
+            from src.engine.automation.main_trailing_source_store import capture_native_append
+            capture_native_append(path,before=index_before,after=os.fstat(handle.fileno()),raw=raw,row=to_write)
         if size==0 or size+len(raw)>PATH_MAX_STORE_BYTES:
             directory=os.open(path.parent,os.O_RDONLY)
             try:os.fsync(directory)
             finally:os.close(directory)
         return (prior+to_write)[-PATH_MAX_EVENTS:],'appended'
+
+
+def validate_path_event(item, position_key):
+    if (isinstance(item, dict) and item.get('path_id') == 'EXIT_BAD_ENTRY_REFINED'
+            and item.get('prompt_version') == 'holding_path_vote_v10'):
+        return None  # Original retired path has no consumer.
+    if (not isinstance(item, dict) or item.get("schema") != PATH_SCHEMA
+            or item.get("position_key") != position_key
+            or item.get("path_id") not in PATH_IDS
+            or item.get("status") not in {"VALID", "INSUFFICIENT"}
+            or not isinstance(item.get("path_policy_sha256"), str)
+            or len(item["path_policy_sha256"]) != 64
+            or item.get("purpose") != (
+                "ADD_PERMISSION" if item.get("path_id") == "ADD_REBOUND"
+                else "EXIT_PERMISSION"
+            )
+            or not isinstance(item.get("buy_fill_identity"), str)
+            or any(not isinstance(item.get(key), (int, float))
+                   or isinstance(item[key], bool)
+                   or not math.isfinite(item[key])
+                   for key in ("requested_at", "received_at"))
+            or item.get("status") == "VALID" and (
+                len(item["buy_fill_identity"]) != 64
+                or buy_fill_identity_from_legs(item.get("buy_fill_legs"))
+                != item["buy_fill_identity"]
+                or not isinstance(item.get("quote_observed_at"), (int, float))
+                or isinstance(item.get("quote_observed_at"), bool)
+                or not math.isfinite(item["quote_observed_at"])
+                or not 0 <= item["requested_at"] - item["quote_observed_at"] <= 3.0)
+            or not isinstance(item.get("persisted_at"), (int, float))
+            or isinstance(item.get("persisted_at"), bool)
+            or not math.isfinite(item["persisted_at"])
+            or item["requested_at"] > item["received_at"]
+            or item["received_at"] > item["persisted_at"]
+            or (item.get("status") == "VALID" and (
+                item.get("provider_called") is not True
+                or not item.get("input_snapshot_id")
+                or item.get("verdict") not in VERDICTS
+                or item.get("conviction") not in CONVICTIONS
+            ))):
+        raise ValueError("path_vote_store_contract_corrupt")
+    return item
 
 
 def _iter_path_events(handle, position_key: str):
@@ -1260,45 +1308,8 @@ def _iter_path_events(handle, position_key: str):
             item = json.loads(line)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("path_vote_store_json_corrupt") from exc
-        if (isinstance(item, dict) and item.get('path_id') == 'EXIT_BAD_ENTRY_REFINED'
-                and item.get('prompt_version') == 'holding_path_vote_v10'):
-            continue  # Original bytes remain intact; the retired path has no consumer.
-        if (not isinstance(item, dict) or item.get("schema") != PATH_SCHEMA
-                or item.get("position_key") != position_key
-                or item.get("path_id") not in PATH_IDS
-                or item.get("status") not in {"VALID", "INSUFFICIENT"}
-                or not isinstance(item.get("path_policy_sha256"), str)
-                or len(item["path_policy_sha256"]) != 64
-                or item.get("purpose") != (
-                    "ADD_PERMISSION" if item.get("path_id") == "ADD_REBOUND"
-                    else "EXIT_PERMISSION"
-                )
-                or not isinstance(item.get("buy_fill_identity"), str)
-                or any(not isinstance(item.get(key), (int, float))
-                       or isinstance(item[key], bool)
-                       or not math.isfinite(item[key])
-                       for key in ("requested_at", "received_at"))
-                or item.get("status") == "VALID" and (
-                    len(item["buy_fill_identity"]) != 64
-                    or buy_fill_identity_from_legs(item.get("buy_fill_legs"))
-                    != item["buy_fill_identity"]
-                    or not isinstance(item.get("quote_observed_at"), (int, float))
-                    or isinstance(item.get("quote_observed_at"), bool)
-                    or not math.isfinite(item["quote_observed_at"])
-                    or not 0 <= item["requested_at"] - item["quote_observed_at"] <= 3.0)
-                or not isinstance(item.get("persisted_at"), (int, float))
-                or isinstance(item.get("persisted_at"), bool)
-                or not math.isfinite(item["persisted_at"])
-                or item["requested_at"] > item["received_at"]
-                or item["received_at"] > item["persisted_at"]
-                or (item.get("status") == "VALID" and (
-                    item.get("provider_called") is not True
-                    or not item.get("input_snapshot_id")
-                    or item.get("verdict") not in VERDICTS
-                    or item.get("conviction") not in CONVICTIONS
-                ))):
-            raise ValueError("path_vote_store_contract_corrupt")
-        yield item
+        item=validate_path_event(item,position_key)
+        if item is not None:yield item
 
 
 
@@ -1307,6 +1318,18 @@ def _read_path_events(handle, position_key):
 
 
 def iter_path_events_file(path, position_key):
+    # Native indexes are optional evidence acceleration. Coverage is proven
+    # before yielding, so a pending index cannot duplicate a returned prefix.
+    from src.engine.automation.main_trailing_source_store import generation, vote_rows, InputPending
+    path=Path(path)
+    if path.parent.name=='holding_path_votes':
+        try:
+            generation(path.parent.parent.parent,path)
+        except InputPending:
+            pass
+        else:
+            yield from vote_rows(path.parent.parent.parent,path,position_key,segments=False)
+            return
     fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
     with os.fdopen(fd, 'r', encoding='utf-8') as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)

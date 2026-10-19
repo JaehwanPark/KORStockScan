@@ -1752,48 +1752,72 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
         diagnostics['raw_cursor_contract_migrated'] += 1
     issue_scopes, healthy_scopes = Counter(), Counter()
     raw_status = "unobservable"
+    indexed=None
+    import sqlite3
     try:
-        stat_before = raw_path.stat()
-        same_file = (previous.get("device"), previous.get("inode")) == (stat_before.st_dev, stat_before.st_ino)
-        # Inode/size alone do not identify a raw generation. A same-size
-        # rewrite (including restored mtime) invalidates retained observations.
-        if same_file and (previous.get('source_size') is None or (
-            stat_before.st_size == previous.get('source_size') and
-            (stat_before.st_mtime_ns, stat_before.st_ctime_ns) !=
-            (previous.get('source_mtime_ns'), previous.get('source_ctime_ns')))):
-            same_file = False
-            diagnostics['raw_generation_rewritten_or_legacy_cursor'] += 1
-        if same_file and 0 <= previous.get("offset", -1) <= stat_before.st_size:
-            cursor.update({key: copy.deepcopy(previous.get(key)) for key in
-                           ("offset", "coverage_started_at", "minutes", "delay_events")})
+        from src.engine.automation import main_trailing_source_store as raw_index
+        indexed=raw_index.window(data_root,raw_path,cutoff=(now-timedelta(
+            seconds=DELAY_WINDOW_SEC+DELAY_SUMMARY_GRACE_SEC+60)).isoformat())
+    except (OSError,ValueError,sqlite3.Error) as exc:
+        diagnostics['raw_native_index_pending:'+type(exc).__name__]+=1
+    try:
+        if indexed is not None:
+            from types import SimpleNamespace
+            metadata=indexed['generation']['source_stat']
+            stat_before=SimpleNamespace(st_dev=metadata[0],st_ino=metadata[1],st_size=metadata[2],
+                st_mtime_ns=metadata[3],st_ctime_ns=metadata[4])
+            same_file=True;start=end=metadata[2]
+            cursor.update(offset=metadata[2],device=metadata[0],inode=metadata[1],
+                source_size=metadata[2],source_mtime_ns=metadata[3],source_ctime_ns=metadata[4],
+                coverage_started_at=indexed['coverage_started_at'],minutes=indexed['minutes'],delay_events=[],
+                native_raw_index_generation=indexed['generation'])
+            payload=b''.join(json.dumps(row,ensure_ascii=False,separators=(',',':')).encode()+b'\n'
+                for row in indexed['rows'])
+            diagnostics['raw_native_index_used']+=1
+            if indexed['verified_append_after_snapshot']:
+                diagnostics['raw_native_append_after_snapshot']+=1
         else:
-            reset_generation = prior_today
-            cursor["coverage_started_at"] = (
-                f"{day}T00:00:00+09:00" if not reset_generation and stat_before.st_size <= DELAY_RAW_BUDGET
-                else now.isoformat())
-            cursor["offset"] = 0 if stat_before.st_size <= DELAY_RAW_BUDGET else stat_before.st_size - DELAY_RAW_BUDGET
-        cursor.update(device=stat_before.st_dev, inode=stat_before.st_ino,
-                      source_size=stat_before.st_size, source_mtime_ns=stat_before.st_mtime_ns,
-                      source_ctime_ns=stat_before.st_ctime_ns)
-        start = cursor["offset"]
-        end = min(stat_before.st_size, start + DELAY_RAW_BUDGET)
-        with raw_path.open("rb") as handle:
-            handle.seek(start)
-            payload = handle.read(end - start)
-        stat_after = raw_path.stat()
-        if (stat_before.st_dev, stat_before.st_ino) != (stat_after.st_dev, stat_after.st_ino) or stat_after.st_size < end:
-            raise ValueError("raw_generation_changed")
-        if (stat_after.st_size == stat_before.st_size
-                and (stat_after.st_mtime_ns, stat_after.st_ctime_ns)
-                    != (stat_before.st_mtime_ns, stat_before.st_ctime_ns)):
-            raise ValueError('raw_generation_changed')
-        if start and not same_file:
-            if b"\n" not in payload:
-                raise ValueError("raw_tail_boundary_missing")
-            payload = payload.partition(b"\n")[2]
-            start = end - len(payload)
+            stat_before = raw_path.stat()
+            same_file = (previous.get("device"), previous.get("inode")) == (stat_before.st_dev, stat_before.st_ino)
+            # Inode/size alone do not identify a raw generation. A same-size
+            # rewrite (including restored mtime) invalidates retained observations.
+            if same_file and (previous.get('source_size') is None or (
+                stat_before.st_size == previous.get('source_size') and
+                (stat_before.st_mtime_ns, stat_before.st_ctime_ns) !=
+                (previous.get('source_mtime_ns'), previous.get('source_ctime_ns')))):
+                same_file = False
+                diagnostics['raw_generation_rewritten_or_legacy_cursor'] += 1
+            if same_file and 0 <= previous.get("offset", -1) <= stat_before.st_size:
+                cursor.update({key: copy.deepcopy(previous.get(key)) for key in
+                               ("offset", "coverage_started_at", "minutes", "delay_events")})
+            else:
+                reset_generation = prior_today
+                cursor["coverage_started_at"] = (
+                    f"{day}T00:00:00+09:00" if not reset_generation and stat_before.st_size <= DELAY_RAW_BUDGET
+                    else now.isoformat())
+                cursor["offset"] = 0 if stat_before.st_size <= DELAY_RAW_BUDGET else stat_before.st_size - DELAY_RAW_BUDGET
+            cursor.update(device=stat_before.st_dev, inode=stat_before.st_ino,
+                          source_size=stat_before.st_size, source_mtime_ns=stat_before.st_mtime_ns,
+                          source_ctime_ns=stat_before.st_ctime_ns)
+            start = cursor["offset"]
+            end = min(stat_before.st_size, start + DELAY_RAW_BUDGET)
+            with raw_path.open("rb") as handle:
+                handle.seek(start)
+                payload = handle.read(end - start)
+            stat_after = raw_path.stat()
+            if (stat_before.st_dev, stat_before.st_ino) != (stat_after.st_dev, stat_after.st_ino) or stat_after.st_size < end:
+                raise ValueError("raw_generation_changed")
+            if (stat_after.st_size == stat_before.st_size
+                    and (stat_after.st_mtime_ns, stat_after.st_ctime_ns)
+                        != (stat_before.st_mtime_ns, stat_before.st_ctime_ns)):
+                raise ValueError('raw_generation_changed')
+            if start and not same_file:
+                if b"\n" not in payload:
+                    raise ValueError("raw_tail_boundary_missing")
+                payload = payload.partition(b"\n")[2]
+                start = end - len(payload)
         complete_bytes = payload.rfind(b"\n") + 1
-        malformed = 0
+        malformed = indexed['source_gaps'] if indexed is not None else 0
         for line in payload[:complete_bytes].splitlines():
             try:
                 row = json.loads(line)
@@ -1813,11 +1837,12 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                 # Intent analysis below uses only rows visible at this as-of.
                 if at > now:
                     diagnostics['raw_future_events_deferred'] += 1
-                minute = event.emitted_at.replace(second=0, microsecond=0).isoformat()
-                key = f"{minute}|{event.stage}"
-                item = cursor["minutes"].setdefault(key, {"count": 0, "identity_sum": "0" * 64})
-                item["count"] += 1
-                item["identity_sum"] = f"{(int(item['identity_sum'], 16) + event.evidence_hash) % IDENTITY_MODULUS:064x}"
+                if indexed is None:
+                    minute = event.emitted_at.replace(second=0, microsecond=0).isoformat()
+                    key = f"{minute}|{event.stage}"
+                    item = cursor["minutes"].setdefault(key, {"count": 0, "identity_sum": "0" * 64})
+                    item["count"] += 1
+                    item["identity_sum"] = f"{(int(item['identity_sum'], 16) + event.evidence_hash) % IDENTITY_MODULUS:064x}"
                 if event.stage in DELAY_STAGES:
                     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
                     cursor["delay_events"].append({"stage": event.stage, "at": at.isoformat(),
@@ -1859,7 +1884,7 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                         "terminal_finished_at_epoch": fields.get("terminal_finished_at_epoch")})
             except (ValueError, TypeError, UnicodeDecodeError, KeyError):
                 malformed += 1
-        cursor["offset"] = start + complete_bytes
+        cursor["offset"] = stat_before.st_size if indexed is not None else start + complete_bytes
         cutoff = now - timedelta(seconds=DELAY_WINDOW_SEC + DELAY_SUMMARY_GRACE_SEC + 60)
         cursor["minutes"] = {key: value for key, value in cursor["minutes"].items()
                              if (stamp(key.split("|", 1)[0]) or now) >= cutoff}

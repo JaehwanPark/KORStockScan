@@ -1,7 +1,8 @@
 """Bounded same-symbol PASS/price-ready observation using Main's existing WS.
 
-The registry contains scalars, never stocks/WS objects. No subscriptions,
-workers, REST calls or order authority are created here.
+The registry contains scalars, never stocks/WS objects. A bounded source-only
+sampler reads the existing local depth cache independently from Main visits.
+It creates no subscription, REST/provider call or order authority.
 """
 from collections import Counter, OrderedDict
 from collections.abc import Mapping
@@ -27,6 +28,11 @@ _COUNTERS = Counter()
 _SINK = None
 _EXPIRIES = []
 _RECENT = OrderedDict()
+_SAMPLER = None
+_SAMPLER_STOP = threading.Event()
+_SAMPLER_WAKE = threading.Event()
+SAMPLE_INTERVAL_SEC = .05
+MAX_SYMBOLS_PER_SAMPLE = 8
 
 
 def observation_contract():
@@ -94,7 +100,56 @@ def signal_reference_fields(result, *, machine_sha256=None, evaluation_attempt_i
 
 def configure_sink(sink):
     global _SINK
+    if sink is None:
+        stop_sampler()
     _SINK = sink
+
+
+def sample_due(read_depth, observe, *, now=None):
+    """Bounded local-cache reads; occurrence time is after the snapshot read."""
+    now = time.time() if now is None else now
+    with _LOCK:
+        due = sorted((heap[0][0], code) for code, heap in _HEAPS.items()
+                     if heap and heap[0][0] <= now)[:MAX_SYMBOLS_PER_SAMPLE]
+    for _, code in due:
+        try:
+            snapshot = read_depth(code)
+            observed = time.time()
+            observe({'code': code}, code, snapshot or {}, now_ts=observed)
+        except Exception:
+            with _LOCK:
+                _COUNTERS['sampler_source_unobservable'] += 1
+    return len(due)
+
+
+def configure_sampler(read_depth, observe):
+    """One sampling thread; no storage writes or Main/order callbacks."""
+    global _SAMPLER
+    if not stop_sampler():
+        return False
+    _SAMPLER_STOP.clear(); _SAMPLER_WAKE.clear()
+    def run():
+        while not _SAMPLER_STOP.is_set():
+            count = sample_due(read_depth, observe)
+            _SAMPLER_WAKE.wait(.005 if count == MAX_SYMBOLS_PER_SAMPLE else SAMPLE_INTERVAL_SEC)
+            _SAMPLER_WAKE.clear()
+    _SAMPLER = threading.Thread(target=run, name='pre-submit-delay-sample', daemon=True)
+    _SAMPLER.start()
+
+
+def stop_sampler():
+    global _SAMPLER
+    worker = _SAMPLER
+    if worker is not None:
+        _SAMPLER_STOP.set(); _SAMPLER_WAKE.set()
+        if worker is not threading.current_thread():
+            worker.join(timeout=1)
+        if worker.is_alive():
+            with _LOCK:
+                _COUNTERS['sampler_shutdown_pending'] += 1
+            return False
+        _SAMPLER = None
+    return True
 
 
 def append(code, name, stage, fields):
@@ -119,6 +174,7 @@ def append(code, name, stage, fields):
 
 
 def shutdown():
+    stop_sampler()
     with _LOCK:
         codes = {key[0] for key in _ACTIVE}
     for code in codes:
@@ -138,6 +194,7 @@ def register(code, state, *, name=None, commit=None):
         value = dict(state)
         value["remaining_sec"] = list(state["remaining_sec"])
         value["name"] = str(name or code)
+        value["_commit_admitted"] = commit is None
         _ACTIVE[key] = value
         _RECENT[key] = True
         while len(_RECENT) > 2 * MAX_ACTIVE:
@@ -159,6 +216,10 @@ def register(code, state, *, name=None, commit=None):
                     _HEAPS.pop(str(code), None)
                 _COUNTERS['commit_queue_rejected'] += 1
             return False
+    with _LOCK:
+        if key in _ACTIVE:
+            _ACTIVE[key]['_commit_admitted'] = True
+    _SAMPLER_WAKE.set()
     return True
 
 
@@ -174,8 +235,11 @@ def take_due(code, now):
     with _LOCK:
         heap = _HEAPS.get(str(code), [])
         while heap and heap[0][0] <= now and len(result) < MAX_DUE_PER_TURN:
-            _, identity = heapq.heappop(heap)
+            _, identity = heap[0]
             state = _ACTIVE.get((str(code), identity))
+            if state is not None and not state.get('_commit_admitted', True):
+                break
+            heapq.heappop(heap)
             if state is not None:
                 result.append(state)
         if not heap:

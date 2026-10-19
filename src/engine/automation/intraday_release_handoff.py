@@ -1780,6 +1780,136 @@ REVIEWED_PARTIAL_CLOCK_PAIRS = {'src/engine/scalping/initial_quantity_policy.py'
                                                                 ('5311174d8495ed9560ff6421027700ff7acf89bd43315ba1c63484bb50bfb3e9',
                                                                  '921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43'))}
 
+
+# Exact reviewed writer/index/consumer, source sampler and immutable submit view.
+# Every dependency is one complete Git-bound generation; no per-file alternatives.
+REVIEWED_TRAILING_REUSE_HASHES = {'src/engine/../utils/pipeline_event_logger.py': '02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416',
+ 'src/engine/ai/holding_exit_vote.py': '16960922bda613851599ad47870ac7c3820f04cc94440e395d9d29b0169988ce',
+ 'src/engine/ai/holding_vote_replay_source.py': '52a1e362c6ac8ad551428a840f96e100a5bb7ee679555ebe2933dfa2f5b95559',
+ 'src/engine/automation/main_trailing_all_scope_research.py': 'a4433ef1560280d8cfc198bb95357414f01373ba55757c4197315a2b3d0f2dab',
+ 'src/engine/automation/main_trailing_completed_store.py': '6cd944f303ba9851761ca0166bd757dd1f3210f0abeda3468510979142fd25da',
+ 'src/engine/automation/main_trailing_partitioned_research.py': '142ef75169de9fc68664a7e556f0a4cbb2e79918b450a5c7a8156bc50586dd4f',
+ 'src/engine/automation/main_trailing_research_handoff.py': '4c2d49eb51c2087bbf0853273275bac2bf7d85ac3cba40e0b46f1e770a0009fe',
+ 'src/engine/automation/main_trailing_source_assembler.py': 'aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd',
+ 'src/engine/automation/main_trailing_source_reuse.py': 'c190554546468617b2963e2ba013473e992f4d4ad638a5f4aee2f71027bc58ef',
+ 'src/engine/automation/main_trailing_source_store.py': '19feaff3f7870392506c01e2712c195fa7f1f81c71b352e82fa055bd905d15c6',
+ 'src/engine/compress_db_backfilled_files.py': '3d1f34d4f8128e6e9b0b1aa9a3e0095bef1394314a731bd8a9c1eec8ea816f7c',
+ 'src/engine/infrastructure/validation_digest_session.py': '655b6f32ed1f14cb7c00e7c85b4b2f3917d55e00cfdefc905160a039d585a4f1',
+ 'src/engine/kiwoom_sniper_v2.py': 'b7cec7cbec7082c9c98a8861638485432ee20346ce687dbd06d82196551548bb',
+ 'src/engine/kiwoom_websocket.py': '5016a58492f59a0728d9bbf979d76cc59a10de4681e92a5fcac21bf6c1cffde2',
+ 'src/engine/lifecycle/holding_research_cost.py': '3979cab1f18b2bd32933985d9e7c86068aa1284dc76dc278bbc171c0c4704911',
+ 'src/engine/lifecycle/holding_window_generation.py': 'ee13b6cc48e1842c1710f6971703712e984ca636fe6f2378f068fb8fd5121092',
+ 'src/engine/lifecycle/research_json_stream.py': 'f886a7510dbabda0db35cf264a9ea61aa7e50ddeb0a5cac407a2b479d7c4c944',
+ 'src/engine/lifecycle/snapshot_archive.py': '6046cf2f9ec83e74ee8f70985ecbd8a4f22c51bc2c703d72f5183f7b73a47b67',
+ 'src/engine/log_archive_service.py': 'f084d07f81e84a2bc868ae39277af2800fa246475d0c11c734687c844d393ff2',
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': 'a5e4d0f76287b6a1fa6a454e0cf11b66f67050ba359cf1797078f2dd1340945f',
+ 'src/engine/scalping/ai_decision_trace.py': 'ea62bfe70f124e71a59b74cf0b885326217ceb019b00da9f8af45c37105ca17e',
+ 'src/engine/scalping/holding_vote_experiment.py': '79c76fda32ff00a5e2518109906cbcb23305ba15523e74e4f92876424027fdce',
+ 'src/engine/scalping/pre_submit_delay_observation.py': 'c4d8765a72a398b045b924d96367f5b3a0876711265134515dd4bd4fcb4199f1',
+ 'src/engine/scalping/reversal_auxiliary_intraday.py': 'f39deef39b030f2f00031e6c63a725e8e0333441f750fb80a3143171bb02adbc',
+ 'src/utils/pipeline_event_logger.py': '02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416'}
+REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_reuse.py',
+        'selector_sha256': REVIEWED_TRAILING_REUSE_HASHES['src/engine/automation/main_trailing_source_reuse.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_TRAILING_REUSE_HASHES},
+        'contract_extensions': {origin: {**{path: REVIEWED_TRAILING_REUSE_HASHES.get(path, sha)
+            for path, sha in paths.items()},
+            'src/engine/automation/main_trailing_source_reuse.py': REVIEWED_TRAILING_REUSE_HASHES[
+                'src/engine/automation/main_trailing_source_reuse.py']}
+            for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_TRAILING_REUSE_PAIRS = {'src/engine/../utils/pipeline_event_logger.py': (('58dd5b4ba0ce91a248cebf8a608974caba13080226e139e779f512500b4b4c5f',
+                                                   '02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416'),),
+ 'src/engine/ai/holding_exit_vote.py': (('9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b',
+                                         '16960922bda613851599ad47870ac7c3820f04cc94440e395d9d29b0169988ce'),),
+ 'src/engine/ai/holding_vote_replay_source.py': (('51a90688f175c9fc242367811e4aab8c2509d1287e8b92d3cdf340badc68421a',
+                                                  '52a1e362c6ac8ad551428a840f96e100a5bb7ee679555ebe2933dfa2f5b95559'),
+                                                 ('6aa1db742f4f2354c17ed9bd24cfb1bcfaace5e0130a8d0dceef84343ea6a428',
+                                                  '52a1e362c6ac8ad551428a840f96e100a5bb7ee679555ebe2933dfa2f5b95559')),
+ 'src/engine/automation/main_trailing_all_scope_research.py': (('a51359c9c0864e055c4c71cb240760f11ca7de265530aa22ac378a70c30af01b',
+                                                                'a4433ef1560280d8cfc198bb95357414f01373ba55757c4197315a2b3d0f2dab'),
+                                                               ('f704dcc16a4bb8434cb255168074a493a215feaac3b1c30372053c11c6babdcc',
+                                                                'a4433ef1560280d8cfc198bb95357414f01373ba55757c4197315a2b3d0f2dab')),
+ 'src/engine/automation/main_trailing_completed_store.py': (),
+ 'src/engine/automation/main_trailing_partitioned_research.py': (('093f392a0ef7afc060515b5173ca62270846fb886fcb48bec03a74cabf441a81',
+                                                                  '142ef75169de9fc68664a7e556f0a4cbb2e79918b450a5c7a8156bc50586dd4f'),
+                                                                 ('90432e60f32bbc8dbc489655ea3f25a97511542f39c1fbb5f655e542495f9208',
+                                                                  '142ef75169de9fc68664a7e556f0a4cbb2e79918b450a5c7a8156bc50586dd4f')),
+ 'src/engine/automation/main_trailing_research_handoff.py': (('23b05aac5bbf6bf20d4463ccdc4f9ffc290c759cfab269540d1afefbbea0a117',
+                                                              '4c2d49eb51c2087bbf0853273275bac2bf7d85ac3cba40e0b46f1e770a0009fe'),
+                                                             ('7220a496df445299ce758f8d79eee0205fa51e1fdacc9440503f1854c9fda677',
+                                                              '4c2d49eb51c2087bbf0853273275bac2bf7d85ac3cba40e0b46f1e770a0009fe'),
+                                                             ('f0e4cbe8ba222e361f9726fea04408dfe9b2dc2b40ac7db23106f4d543e2eda6',
+                                                              '4c2d49eb51c2087bbf0853273275bac2bf7d85ac3cba40e0b46f1e770a0009fe')),
+ 'src/engine/automation/main_trailing_source_assembler.py': (('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              'aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd'),
+                                                             ('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              'aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd'),
+                                                             ('f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1',
+                                                              'aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd')),
+ 'src/engine/automation/main_trailing_source_reuse.py': (),
+ 'src/engine/automation/main_trailing_source_store.py': (),
+ 'src/engine/compress_db_backfilled_files.py': (('16a3fdffeeacd25a0a1a61c057da8ad9a5e5fe86f9faa823ff991108b960e7f2',
+                                                 '3d1f34d4f8128e6e9b0b1aa9a3e0095bef1394314a731bd8a9c1eec8ea816f7c'),),
+ 'src/engine/infrastructure/validation_digest_session.py': (('bfdcbf093652783bea5d2c72bf10e1dc910b5d3cdca9c702279ee75a15ec77b9',
+                                                             '655b6f32ed1f14cb7c00e7c85b4b2f3917d55e00cfdefc905160a039d585a4f1'),),
+ 'src/engine/kiwoom_sniper_v2.py': (('ab335b38a3aff9362bd17a29fde787b425a4478f60e0d328c7b60553800cc21e',
+                                     'b7cec7cbec7082c9c98a8861638485432ee20346ce687dbd06d82196551548bb'),
+                                    ('d3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da',
+                                     'b7cec7cbec7082c9c98a8861638485432ee20346ce687dbd06d82196551548bb')),
+ 'src/engine/kiwoom_websocket.py': (('63293b9abbd511ade33dccca9598eba3e0e32e0eefa06c33a2ba5c411c67a130',
+                                     '5016a58492f59a0728d9bbf979d76cc59a10de4681e92a5fcac21bf6c1cffde2'),
+                                    ('b760d5aa69b20f31060a00a5dc81670d29f1c7760c19a775499609d90e867363',
+                                     '5016a58492f59a0728d9bbf979d76cc59a10de4681e92a5fcac21bf6c1cffde2')),
+ 'src/engine/lifecycle/holding_research_cost.py': (('12e76859310d617dc7cdb2c0f758f935f8d7c6619c76cdf02f92aefa92a0627a',
+                                                    '3979cab1f18b2bd32933985d9e7c86068aa1284dc76dc278bbc171c0c4704911'),
+                                                   ('ef309953ea56261e38e1238ed2c61a4bcbd5e77f61677ee01fa30433bc077dd3',
+                                                    '3979cab1f18b2bd32933985d9e7c86068aa1284dc76dc278bbc171c0c4704911')),
+ 'src/engine/lifecycle/holding_window_generation.py': (('52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
+                                                        'ee13b6cc48e1842c1710f6971703712e984ca636fe6f2378f068fb8fd5121092'),
+                                                       ('925904f2505a15a0b179aeca4a8ecb6badac76130c50fe6d29973eb76b8cf2d1',
+                                                        'ee13b6cc48e1842c1710f6971703712e984ca636fe6f2378f068fb8fd5121092')),
+ 'src/engine/lifecycle/research_json_stream.py': (('fbca117c876a62659255914b5771772cdcbdb3e58a904e566a402959379f3df0',
+                                                   'f886a7510dbabda0db35cf264a9ea61aa7e50ddeb0a5cac407a2b479d7c4c944'),
+                                                  ('ff07214148fce486e68e1db048469dd7a657553894cb3472960fea59c7ee09dc',
+                                                   'f886a7510dbabda0db35cf264a9ea61aa7e50ddeb0a5cac407a2b479d7c4c944')),
+ 'src/engine/lifecycle/snapshot_archive.py': (('9b1a0ac18db7fde52f609db45950b9fb631376f401fa565088a9831dd80ad42a',
+                                               '6046cf2f9ec83e74ee8f70985ecbd8a4f22c51bc2c703d72f5183f7b73a47b67'),
+                                              ('f2a8eb56daf861d1ffb10bae945a9753e77ed5e0ed2c935cc1382b17c18f79c3',
+                                               '6046cf2f9ec83e74ee8f70985ecbd8a4f22c51bc2c703d72f5183f7b73a47b67')),
+ 'src/engine/log_archive_service.py': (('a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
+                                        'f084d07f81e84a2bc868ae39277af2800fa246475d0c11c734687c844d393ff2'),
+                                       ('f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
+                                        'f084d07f81e84a2bc868ae39277af2800fa246475d0c11c734687c844d393ff2'),
+                                       ('fd5cb478cb40b70ee2dd7fdcc5bc1ef18afa7cef1659e6be9eaaabab1084eca4',
+                                        'f084d07f81e84a2bc868ae39277af2800fa246475d0c11c734687c844d393ff2')),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': (('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e',
+                                                             'a5e4d0f76287b6a1fa6a454e0cf11b66f67050ba359cf1797078f2dd1340945f'),
+                                                            ('5a3861b05149893db38be6cc7c56a0f4cbf93911e0a209d31edf222b3b3943bf',
+                                                             'a5e4d0f76287b6a1fa6a454e0cf11b66f67050ba359cf1797078f2dd1340945f'),
+                                                            ('60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23',
+                                                             'a5e4d0f76287b6a1fa6a454e0cf11b66f67050ba359cf1797078f2dd1340945f')),
+ 'src/engine/scalping/ai_decision_trace.py': (('39ac65845ac18e6bbc9313e29175a31c0138254b8e323838552d361b08f5130c',
+                                               'ea62bfe70f124e71a59b74cf0b885326217ceb019b00da9f8af45c37105ca17e'),
+                                              ('4ca36bfcf257cb8dc39738cff5e71b3da32f458e8e9febabc31f4acef1277bc4',
+                                               'ea62bfe70f124e71a59b74cf0b885326217ceb019b00da9f8af45c37105ca17e')),
+ 'src/engine/scalping/holding_vote_experiment.py': (('0086eb212c3187c5b89e8680adacb28d96aad56d7f45e96788839f0824bdeaae',
+                                                     '79c76fda32ff00a5e2518109906cbcb23305ba15523e74e4f92876424027fdce'),
+                                                    ('93633c0a9cea34837dd3bea2297dcb5305eb23651133e67d3788bc4fa2ad1007',
+                                                     '79c76fda32ff00a5e2518109906cbcb23305ba15523e74e4f92876424027fdce')),
+ 'src/engine/scalping/pre_submit_delay_observation.py': (('5128d73f6d45777c5671fd26a774dae5d4839203035607b5bb53a9bcc860e964',
+                                                          'c4d8765a72a398b045b924d96367f5b3a0876711265134515dd4bd4fcb4199f1'),
+                                                         ('aff325d1d6f49496bb4548295cae57431980f7d28efb43156cffc61b44bfafa9',
+                                                          'c4d8765a72a398b045b924d96367f5b3a0876711265134515dd4bd4fcb4199f1')),
+ 'src/engine/scalping/reversal_auxiliary_intraday.py': (('2830130cdf8353036ac55b1c68719b94a1f5c5695fadd6c21b6c527581b280f7',
+                                                         'f39deef39b030f2f00031e6c63a725e8e0333441f750fb80a3143171bb02adbc'),
+                                                        ('f4e59f492decd157b4e81df67ff485d3ed949c243278d16b49dad73b78918e97',
+                                                         'f39deef39b030f2f00031e6c63a725e8e0333441f750fb80a3143171bb02adbc')),
+ 'src/utils/pipeline_event_logger.py': (('58dd5b4ba0ce91a248cebf8a608974caba13080226e139e779f512500b4b4c5f',
+                                         '02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416'),)}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1833,7 +1963,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
+                         REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS,
                          REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS,
                          REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS,
                          REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS,
@@ -1879,7 +2010,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_PARTIAL_CLOCK_PAIRS.get(name, ())
+        if (pair in REVIEWED_TRAILING_REUSE_PAIRS.get(name, ())
+                or pair in REVIEWED_PARTIAL_CLOCK_PAIRS.get(name, ())
                 or pair in REVIEWED_CAUSAL_QUANTITY_PAIRS.get(name, ())
                 or pair in REVIEWED_PRESERVED_SNAPSHOT_PAIRS.get(name, ())
                 or pair in REVIEWED_SNAPSHOT_METADATA_PAIRS.get(name, ())

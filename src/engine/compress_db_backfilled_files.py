@@ -334,17 +334,21 @@ def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=No
             logical_size_bytes=original_size, original_identity=original_identity,
             archive_generation=file_identity(gz_path.stat()), archive_sha256=archive_sha,
             runtime_effect=False, allowed_runtime_apply=False)
+        archive_receipt['artifact_content_sha256']=content_sha256(archive_receipt)
         if _attempt is not None:
             _attempt['receipt_content_sha256']=content_sha256(archive_receipt)
         write_json_object_generation_safe(
             Path(f'{gz_path}.archive_receipt.json'),archive_receipt)
-    if path.name.startswith("pipeline_events_") and path.suffix == ".jsonl":
+    pipeline_raw=path.name.startswith('pipeline_events_') and path.suffix=='.jsonl'
+    if pipeline_raw or (path.parent.name in {'ai_decision_trace','ai_decision_payloads',
+            'ai_decision_prompts','ai_decision_requests'} and path.suffix=='.jsonl'):
         from src.engine.scalping.micro_reversion.economic_reference import content_sha256
         stat = gz_path.stat()
         if file_identity(stat) != published_identity:
             raise ValueError('archive_generation_changed_before_receipt')
         archive_receipt = {
-            "schema": "pipeline_raw_archive_identity_v1",
+            "schema": ("pipeline_raw_archive_identity_v1" if pipeline_raw
+                       else "native_raw_archive_identity_v1"),
             "logical_path": str(path),
             "logical_content_sha256": logical_digest.hexdigest(),
             "logical_size_bytes": original_size,
@@ -358,6 +362,19 @@ def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=No
             "verification_contract": "logical_sha256_size_crc_to_eof_v1",
             "runtime_effect": False, "allowed_runtime_apply": False,
         }
+        # Bind the writer-owned index to the exact native compression attempt.
+        # Missing legacy coverage is preserved; archive does not rebuild it.
+        from src.engine.automation.main_trailing_source_store import generation as indexed_generation,InputPending
+        try:
+            indexed=(indexed_generation(path.parent.parent,path) if path.parent.name in {
+                'pipeline_events','ai_decision_trace','ai_decision_payloads',
+                'ai_decision_prompts','ai_decision_requests'} else None)
+        except (InputPending,OSError):
+            indexed=None
+        if indexed is not None:
+            archive_receipt['trailing_source_identity']=[original_identity[key]
+                for key in ('device','inode','size','mtime_ns','ctime_ns')]
+            archive_receipt['trailing_source_index']=indexed
         archive_receipt['artifact_content_sha256'] = content_sha256(archive_receipt)
         if _attempt is not None:
             _attempt['receipt_content_sha256'] = content_sha256(archive_receipt)
