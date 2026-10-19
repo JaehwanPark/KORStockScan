@@ -1549,14 +1549,16 @@ def _policy_clock_interval_proof(trade, path, decision, first_fill):
     """Prove pre-submit policy custody inside a second-resolution fill clock.
 
     A broker second is an interval. Only an exact request -> acknowledged
-    order -> full fill join can resolve its subsecond ordering; no grace or
+    order -> original fill join can resolve its subsecond ordering; no grace or
     inferred execution timestamp is introduced.
     """
-    entry = _timestamp(trade.get('entry_at_fact_buy_time'))
-    if (entry is None or not first_fill or decision.get('stage') != 'entry_execution_sizing_plan'
+    fact_entry = _timestamp(trade.get('entry_at_fact_buy_time'))
+    entry = first_fill.get('at') if first_fill else None
+    if (entry is None or fact_entry is None or fact_entry < entry
+            or fact_entry.date() != entry.date() or not first_fill or decision.get('stage') != 'entry_execution_sizing_plan'
             or first_fill.get('clock_source') != 'broker_execution_observed_at'
-            or first_fill.get('clock_precision_sec') != 1 or first_fill.get('at') != entry
-            or first_fill.get('qty') != trade.get('buy_qty')
+            or first_fill.get('clock_precision_sec') != 1
+            or type(first_fill.get('qty')) is not int or not 0 < first_fill['qty'] <= trade.get('buy_qty',0)
             or not first_fill.get('order_no') or not first_fill.get('execution_no')
             or not entry < decision['at'] < entry + timedelta(seconds=1)):
         return None
@@ -1610,7 +1612,7 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         if decision:
             fields["reference_time"] = fields.get("reference_time") or decision["at"].isoformat()
         clock_proof = _policy_clock_interval_proof(trade,path,decision,first_fill) if decision else None
-        classification_upper = entry_at + timedelta(seconds=1,microseconds=-1) if clock_proof else entry_at
+        classification_upper = first_fill["at"] + timedelta(seconds=1,microseconds=-1) if clock_proof else entry_at
         quantity_type = (_type_from_decision_receipt(
             fields, decision_at=decision["at"], entry_at=classification_upper)
             if decision and entry_at else "SAFE_UNKNOWN")

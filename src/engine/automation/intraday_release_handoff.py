@@ -1755,6 +1755,31 @@ REVIEWED_CAUSAL_QUANTITY_PAIRS = {'src/engine/scalping/initial_quantity_policy.p
                                                     '6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9'))}
 
 
+# Preserve position quantity separately from the first acknowledged BUY fill.
+REVIEWED_PARTIAL_CLOCK_HASHES = {'src/engine/scalping/initial_quantity_policy.py': '99656408f2e1dd095686f4ce3b8cdea8364baaf98b62664e53104186c3db62f4',
+ 'src/engine/scalping/initial_quantity_refresh_evaluation.py': '921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43'}
+REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_policy.py',
+        'selector_sha256': REVIEWED_PARTIAL_CLOCK_HASHES['src/engine/scalping/initial_quantity_policy.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_PARTIAL_CLOCK_HASHES},
+        'contract_extensions': {origin: {path: REVIEWED_PARTIAL_CLOCK_HASHES.get(path, sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_PARTIAL_CLOCK_PAIRS = {'src/engine/scalping/initial_quantity_policy.py': (('dbd20ac53e9ebb59dbb6b465a214558eb838b8f012636eda73cb02f65c5304c6',
+                                                     '99656408f2e1dd095686f4ce3b8cdea8364baaf98b62664e53104186c3db62f4'),
+                                                    ('2710cc18ab0289b1318cb53af8cd45bebcbd9ad9354d82ba2fa180ed3eb9fd90',
+                                                     '99656408f2e1dd095686f4ce3b8cdea8364baaf98b62664e53104186c3db62f4'),
+                                                    ('6c4e28dc699c2d0b5c12be791c3bf64b721a78a9cb344a3b5f42f79fcf89ed51',
+                                                     '99656408f2e1dd095686f4ce3b8cdea8364baaf98b62664e53104186c3db62f4')),
+ 'src/engine/scalping/initial_quantity_refresh_evaluation.py': (('779a0d679ec1b7e1704ad368d8896d166a545e358438fda8e2f51ef0dde800fa',
+                                                                 '921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43'),
+                                                                ('798f15352dc47787bc3d3bd571f45fbed2911cdaafbdcab5487998745442bbe4',
+                                                                 '921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43'),
+                                                                ('5311174d8495ed9560ff6421027700ff7acf89bd43315ba1c63484bb50bfb3e9',
+                                                                 '921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1808,7 +1833,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS,
+                         REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS,
                          REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS,
                          REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS,
                          REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS,
@@ -1853,7 +1879,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_CAUSAL_QUANTITY_PAIRS.get(name, ())
+        if (pair in REVIEWED_PARTIAL_CLOCK_PAIRS.get(name, ())
+                or pair in REVIEWED_CAUSAL_QUANTITY_PAIRS.get(name, ())
                 or pair in REVIEWED_PRESERVED_SNAPSHOT_PAIRS.get(name, ())
                 or pair in REVIEWED_SNAPSHOT_METADATA_PAIRS.get(name, ())
                 or pair in REVIEWED_ARTIFACT_SOURCE_PAIRS.get(name, ())

@@ -1243,7 +1243,7 @@ def completed_research_git_candidate(tmp_path):
     # This fixture copies current source bytes. Bind the entire exact current
     # preparation generation, rather than combining its selector with the
     # historical 59-file closure (historical generations have separate tests).
-    variant = handoff.REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS[(
+    variant = handoff.REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS[(
         handler, handoff._sha(canonical/handler))]
     assert handoff._sha(canonical/variant['selector_path']) == variant['selector_sha256']
     dependencies = variant['dependencies']
@@ -1359,7 +1359,7 @@ def test_budget_extension_cannot_change_the_original_policy_inventory(
     origin='7f2552aedde8fec6ef904a43105827907e50dfc8'
     key=(origin,digests[family]);name='src/engine/lifecycle/research_input_budget.py'
     trigger='src/engine/sniper_state_handlers.py'
-    variant=handoff.REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS[
+    variant=handoff.REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS[
         (trigger,handoff._sha(root/trigger))]
     # The fixture owns the current complete generation, including its family
     # extensions. Mutating a historical fallback would not exercise this gate.

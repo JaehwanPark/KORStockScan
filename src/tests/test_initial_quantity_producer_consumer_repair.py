@@ -2063,7 +2063,7 @@ def test_serialized_completion_context_accepts_compression_without_full_snapshot
 
 
 @pytest.mark.parametrize('fault',[None,'no_request','duplicate_request','different_plan','different_order',
-    'late_decision','next_second','proxy_clock','exact_clock','partial_fill','sent_after_receipt'])
+    'late_decision','next_second','proxy_clock','exact_clock','quantity_conflict','sent_after_receipt','partial_position'])
 def test_same_broker_second_policy_requires_exact_causal_request_sent_full_fill(fault):
     from copy import deepcopy
     from datetime import timedelta
@@ -2088,10 +2088,12 @@ def test_same_broker_second_policy_requires_exact_causal_request_sent_full_fill(
     elif fault=='next_second':decision['at']=at+timedelta(seconds=1)
     elif fault=='proxy_clock':fill['clock_source']='position_rebased_emitted_at_proxy'
     elif fault=='exact_clock':fill['clock_precision_sec']=0
-    elif fault=='partial_fill':trade['buy_qty']=2
+    elif fault=='quantity_conflict':fill['qty']=2
+    elif fault=='partial_position':
+        trade['buy_qty']=2;trade['entry_at_fact_buy_time']=(at+timedelta(seconds=2)).isoformat()
     elif fault=='sent_after_receipt':sent['at']=fill['emitted_at']+timedelta(milliseconds=1)
     parent=policy._paired_candidate(trade,path,'parent')
-    if fault:
+    if fault and fault!='partial_position':
         assert parent['applied_policy_file_sha256'] is None
         assert 'policy_decision_clock_proof' not in parent
         return
@@ -2102,10 +2104,10 @@ def test_same_broker_second_policy_requires_exact_causal_request_sent_full_fill(
         'shapes':{'parent':deepcopy(parent)},
         'cap_source':dict(attempt_id='attempt',plan_sha256='a'*64,
                          fills=[dict(at=at.isoformat(),qty=1)])}
-    fact=dict(buy_time=at.isoformat(),buy_qty=1)
+    fact=dict(buy_time=trade['entry_at_fact_buy_time'],buy_qty=trade['buy_qty'])
     assert policy_decision_precedes_fill(row,fact)
     for field,value in [('proof_sha256','0'*64),('request_at',(at-timedelta(seconds=1)).isoformat()),
-                        ('order_no','wrong'),('fill_qty',2)]:
+                        ('order_no','wrong'),('fill_qty',3)]:
         broken=deepcopy(row);broken['policy_decision_clock_proof'][field]=value
         if field!='proof_sha256':
             proof=broken['policy_decision_clock_proof'];proof['proof_sha256']=policy._digest({k:v for k,v in proof.items()if k!='proof_sha256'})

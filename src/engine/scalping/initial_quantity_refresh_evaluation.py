@@ -322,7 +322,9 @@ def policy_decision_precedes_fill(row, fact):
             and proof.get('broker_precision_sec') == row.get('entry_fill_clock_precision_sec') == 1
             and row.get('entry_fill_clock_source') == 'broker_execution_observed_at'
             and kst_timestamp(proof['decision_at']) == decision
-            and kst_timestamp(proof['fill_at']) == fill == kst_timestamp(fact['buy_time'])
+            and kst_timestamp(proof['fill_at']) == fill
+            and kst_timestamp(fact['buy_time']) is not None and fill <= kst_timestamp(fact['buy_time'])
+            and fill.date() == kst_timestamp(fact['buy_time']).date()
             and decision < fill + timedelta(seconds=1)
             and request is not None and sent is not None and received is not None
             and decision <= request <= sent <= received
@@ -334,8 +336,8 @@ def policy_decision_precedes_fill(row, fact):
             and proof['order_no'] == row['entry_fill_order_no'] and proof['order_no']
             and proof['execution_no'] == row['entry_fill_execution_no'] and proof['execution_no']
             and proof['request_tag'] and type(proof['fill_qty']) is int and proof['fill_qty'] > 0
-            and proof['fill_qty'] == fact['buy_qty']
-            and len(source['fills']) == 1 and source['fills'][0]['qty'] == fact['buy_qty']
+            and proof['fill_qty'] <= fact['buy_qty']
+            and len(source['fills']) >= 1 and source['fills'][0]['qty'] == proof['fill_qty']
             and kst_timestamp(source['fills'][0]['at']) == fill)
     except (KeyError,TypeError,ValueError):return False
 
