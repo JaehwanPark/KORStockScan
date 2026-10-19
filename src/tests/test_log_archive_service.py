@@ -477,6 +477,10 @@ def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_
     snapshots, sources = holding._load_saved_snapshots("trade_review", [day])
     assert len(snapshots) == 1
     assert snapshots[0]["schema"] == "trade_review_completed_projection_sidecar_v1"
+    collected, gaps = holding._collect_completed_trade_rows(snapshots, data_root=tmp_path)
+    assert len(collected) == int(database_only)
+    assert gaps == ([{"date": day, "reason": "completion_day_terminal_receipt_missing"}]
+                    if database_only else [])
     assert sources == [str(path.with_suffix(".completed_projection.json"))]
     sidecar = path.with_suffix(".completed_projection.json")
     observed = {p: (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns, p.stat().st_ctime_ns)

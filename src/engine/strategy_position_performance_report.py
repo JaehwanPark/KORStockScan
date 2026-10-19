@@ -23,7 +23,7 @@ from src.engine.log_archive_service import load_monitor_snapshot
 from src.engine.sniper_position_tags import normalize_position_tag, normalize_strategy
 from src.engine.sniper_trade_review_report import (
     COMPLETED_CENSUS_CONTRACT_FROM, build_trade_review_report,
-    verify_completed_census_manifest,
+    verify_completed_census_manifest, completed_census_projection_ids,
 )
 from src.engine.trade_profit import (
     calculate_net_profit_rate,
@@ -829,9 +829,13 @@ def _load_completion_fact_projection(target_date: str, completion_snapshot: Path
     from src.engine.lifecycle.broker_cost_reconciliation import digest
     from src.engine.lifecycle.research_input_budget import Claim
     expected = Path(DATA_DIR) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
-    path = logical_path(completion_snapshot)
-    if not path.is_absolute() or path.is_symlink() or path.resolve() != expected.resolve():
+    requested_path = logical_path(completion_snapshot)
+    if (not requested_path.is_absolute() or requested_path.is_symlink()
+            or requested_path.resolve() != expected.resolve()):
         raise FactSyncSourceError('completion_snapshot_path_invalid')
+    # Managed releases mount the canonical data directory. Native archive
+    # readers forbid symlink ancestors, so pass the verified canonical spelling.
+    path = requested_path.resolve()
     sidecar = path.with_suffix('.completed_projection.json')
     fact_path = path.with_suffix('.fact_projection.json')
     receipt_path = Path(str(sidecar) + '.dependencies.json')
@@ -893,9 +897,10 @@ def _load_completion_fact_projection(target_date: str, completion_snapshot: Path
                 or len(completed) != census.get('projected_count')
                 or any(not isinstance(row, dict) or row.get('completion_observed_date') != target_date
                        or row.get('status') != 'COMPLETED' for row in completed)
-                or sorted(str(row.get('id') or '') for row in completed) != sorted(census.get('raw_terminal_ids') or [])):
+                or sorted(str(row.get('id') or '') for row in completed) != completed_census_projection_ids(census)):
             raise FactSyncSourceError('completion_snapshot_fact_projection_contract_invalid')
-        if before != _completion_source_signature(sources):
+        if (requested_path.resolve() != path
+                or before != _completion_source_signature(sources)):
             raise FactSyncSourceError('completion_snapshot_changed_during_read')
         value['_native_source_proof'] = dict(schema='strategy_position_fact_snapshot_source_v1',
             source_date=target_date, projection=native['projection'], fact_projection=fact_generation,

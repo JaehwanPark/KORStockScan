@@ -150,6 +150,7 @@ def _native_projection(root, day):
 
 
 def _native_projection_read(root, day, claims, transient_claims):
+    from src.engine.sniper_trade_review_report import completed_census_projection_ids
     raw = root / "report/monitor_snapshots" / f"trade_review_{day}.json"
     sidecar = raw.with_suffix(".completed_projection.json")
     dependency = Path(str(sidecar) + ".dependencies.json")
@@ -262,7 +263,7 @@ def _native_projection_read(root, day, claims, transient_claims):
             or census.get("source_date") != day or census.get("profile") != "postclose_exit"
             or census.get("projected_count") != len(rows) or len(rows) > MAX_RECORDS
             or (value.get("metrics") or {}).get("canonical_completed_trades") != len(rows)
-            or sorted(ids) != sorted(census.get("raw_terminal_ids") or []) or len(set(ids)) != len(ids)
+            or sorted(ids) != completed_census_projection_ids(census) or len(set(ids)) != len(ids)
             or any(row.get("status") != "COMPLETED" or row.get("completion_observed_date") != day for row in rows)):
         raise ValueError("stop_research_native_completion_invalid")
     census_rows = {str(row.get("id")): row for row in census.get("rows", [])}

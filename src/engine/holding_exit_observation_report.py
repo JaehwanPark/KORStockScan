@@ -20,6 +20,7 @@ from src.engine.automation.source_quality_clean_baseline import (
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import (
     COMPLETED_CENSUS_CONTRACT_FROM, verify_completed_census_manifest,
+    completed_census_projection_ids,
 )
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
@@ -500,10 +501,14 @@ def _collect_completed_trade_rows(
         declared = _safe_int(metrics.get(count_key), -1)
         ids = [_trade_id(row) for row in completed]
         if isinstance(projection, list):
-            raw_event_ids = (snapshot.get("meta") or {}).get("sell_completed_event_ids")
-            if not isinstance(raw_event_ids, list) or {
-                str(item) for item in raw_event_ids
-            } != set(ids):
+            meta = snapshot.get("meta") or {}
+            try:
+                expected_ids = (completed_census_projection_ids(meta["completed_census_manifest"])
+                                if isinstance(meta.get("completed_census_manifest"), dict)
+                                else meta.get("sell_completed_event_ids"))
+            except ValueError:
+                expected_ids = None
+            if not isinstance(expected_ids, list) or {str(item) for item in expected_ids} != set(ids):
                 gaps.append(
                     {
                         "date": snapshot.get("date"),

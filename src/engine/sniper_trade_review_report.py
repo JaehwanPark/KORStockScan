@@ -3690,6 +3690,31 @@ def completed_census_manifest(report: dict) -> dict:
     return manifest
 
 
+
+def completed_census_projection_ids(census: dict) -> list[str]:
+    """Read the full sealed population, preserving the native-terminal subset."""
+    if not isinstance(census, dict) or census.get("schema") != "trade_review_completed_census_v1":
+        raise ValueError("completed_census_population_invalid")
+    rows = census.get("rows")
+    raw = census.get("raw_terminal_ids")
+    database = census.get("database_completed_ids", [])
+    if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+            or not isinstance(raw, list) or not isinstance(database, list)
+            or type(census.get("projected_count")) is not int
+            or len(rows) != census["projected_count"]
+            or type(census.get("raw_terminal_count")) is not int
+            or len(raw) != census["raw_terminal_count"]):
+        raise ValueError("completed_census_population_invalid")
+    ids = [str(row.get("id") or "") for row in rows]
+    for values in (ids, raw, database):
+        if (any(not isinstance(value, str) or not value for value in values)
+                or len(set(values)) != len(values)):
+            raise ValueError("completed_census_population_invalid")
+    if set(ids) != set(raw) | set(database):
+        raise ValueError("completed_census_population_invalid")
+    return sorted(ids)
+
+
 def verify_completed_census_manifest(report: dict, expected_date: str) -> str | None:
     """Return an explicit source gap; never accept a rewritten projection on an old seal."""
     if report.get("date") != expected_date:
@@ -3704,6 +3729,10 @@ def verify_completed_census_manifest(report: dict, expected_date: str) -> str | 
         return "completed_census_manifest_missing"
     if manifest != completed_census_manifest(report):
         return "completed_census_generation_mismatch"
+    try:
+        completed_census_projection_ids(manifest)
+    except ValueError:
+        return "completed_census_id_mismatch"
     ids = [str(row.get("id") or "").strip() for row in rows]
     raw_ids = [str(item) for item in
                (report.get("meta") or {}).get("sell_completed_event_ids") or []]
@@ -4050,10 +4079,6 @@ def build_trade_review_report(
         for row in completed_projection
     )
     declared_completed_ids = sell_completed_event_ids | set(database_completed_by_id)
-    database_only_ids = projected_completed_ids - sell_completed_event_ids
-    if database_only_ids:
-        warnings.append("DB completed observations without native sell_completed: "
-                        f"ids={sorted(database_only_ids)}; economic eligibility excluded")
     if declared_completed_ids != projected_completed_ids:
         warnings.append(
             "sell_completed 이벤트와 완료 projection ID 불일치: "

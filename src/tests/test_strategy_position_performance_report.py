@@ -23,14 +23,14 @@ def test_main_synchronizes_target_date_without_building_provider_or_runtime_work
     assert calls == ["2026-08-25"]
 
 
-def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope='entered', completion_counts=None):
+def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope='entered', completion_counts=None, database_only=False):
     from src.engine import log_archive_service as archive
     from src.engine.sniper_trade_review_report import completed_census_manifest, strategy_fact_projection_rows
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     day = '2026-10-08'
     monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', tmp_path/'report/monitor_snapshots')
     monkeypatch.setattr(report_mod, 'DATA_DIR', tmp_path)
-    monkeypatch.setattr(report_mod, '_FACT_SYNC_STATUS_DIR', tmp_path/'report/fact_sync')
+    monkeypatch.setattr(report_mod, '_FACT_SYNC_STATUS_DIR', tmp_path/'report/strategy_position_fact_sync')
     monkeypatch.setattr(report_mod, '_enrich_scanner_provenance', lambda facts, *a, **k: facts)
     rows = [dict(id=i+1, rec_date=day, code='005930', name='native', status='HOLDING',
         strategy='SCALPING', position_tag='SCANNER', buy_price=1000, buy_qty=1,
@@ -55,6 +55,14 @@ def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope
         metrics=dict(total_trades=len(rows), canonical_completed_trades=len(completed)),
         sections=dict(recent_trades=rows[:300], strategy_position_fact_projection=strategy_fact_projection_rows(rows),
                       completed_trade_projection=completed, open_scalp_position_projection=[]))
+    if database_only:
+        from src.engine.sniper_trade_review_report import _completed_census_sha256
+        witness = _completed_census_sha256(rows[0])
+        payload['meta'].update(sell_completed_event_ids=[], database_completed_sources=[dict(
+            id=1, status='COMPLETED', sell_time=rows[0]['sell_time'], source_row_sha256=witness)])
+        completed[0].update(database_completion_source_sha256=witness,
+            completion_source_status='database_completed_native_terminal_unobserved',
+            strict_completion_reasons=['source_gap_native_sell_completed_event_missing'])
     payload['meta']['completed_census_manifest'] = completed_census_manifest(payload)
     return day, archive.save_monitor_snapshot('trade_review', day, payload)
 
@@ -1825,3 +1833,36 @@ def test_legacy_raw_original_archive_first_requires_native_receipt_crc_decoded_s
         report_mod._load_completion_fact_projection(day,path)
     assert not path.exists()
     assert not list(report_mod._FACT_SYNC_STATUS_DIR.glob('legacy_sources/*/*.json'))
+
+
+@pytest.mark.parametrize('database_only', [False, True])
+@pytest.mark.parametrize('release_alias', [False, True])
+def test_one_native_census_reaches_fact_quantity_and_stop_consumers(tmp_path, monkeypatch, database_only, release_alias):
+    from src.engine.scalping.initial_quantity_source_cache import _completion_day
+    from src.engine.lifecycle.main_stop_research_cost import _native_projection
+    day, path = _native_fact_projection(tmp_path, monkeypatch, large=False, database_only=database_only)
+    if release_alias:
+        mounted = tmp_path.parent/(tmp_path.name+'-release')
+        mounted.mkdir()
+        (mounted/'data').symlink_to(tmp_path, target_is_directory=True)
+        path = mounted/'data/report/monitor_snapshots'/path.name
+    native = report_mod._load_completion_fact_projection(day, path)
+    census = native['meta']['completed_census_manifest']
+    assert census['raw_terminal_count'] == int(not database_only)
+    assert census['projected_count'] == 1
+    quality = {}
+    facts, warnings = report_mod._build_trade_fact_rows(day, completion_snapshot=path, completion_census_quality=quality)
+    assert len(facts) == 2 and not warnings
+    report_mod._write_status(day, dict(status='succeeded', consumer_ready=True, completed_census_run_ids=[quality['run_id']],
+        completed_census_projection_sha256=[quality['projection_sha256']],
+        actual_cost_source_generation=quality['actual_cost_source_generation'],
+        completion_snapshot_source=quality['completion_snapshot_source']))
+    quantity, generation = _completion_day(tmp_path, day)
+    stop, stop_proof, _ = _native_projection(tmp_path, day)
+    assert len(quantity) == len(stop) == 1
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    assert stop_proof['census_sha256'] == digest(census)
+    assert generation['completion_snapshot_source'] == quality['completion_snapshot_source']
+    assert next(iter(stop.values()))['strict_completion_status'] == 'excluded'
+    assert next(iter(stop.values()))['realized_pnl_krw'] is None
+    assert quantity[0]['realized_pnl_krw'] is None

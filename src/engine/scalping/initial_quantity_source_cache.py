@@ -339,6 +339,7 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
     """Join small native fact seals, without revisiting a historical timeline."""
     import re
     from src.engine import strategy_position_performance_report as facts
+    from src.engine.sniper_trade_review_report import completed_census_projection_ids
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, MAX_PROJECTION_BYTES
     from src.engine.lifecycle.snapshot_archive import snapshot_identity
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation, digest
@@ -450,7 +451,7 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
             or any(not isinstance(row, dict) or row.get('status') != 'COMPLETED'
                    or row.get('completion_observed_date') != day for row in completed)
             or len({str(row.get('id')) for row in completed}) != len(completed)
-            or sorted(str(row.get('id')) for row in completed) != sorted(census.get('raw_terminal_ids') or [])):
+            or sorted(str(row.get('id')) for row in completed) != completed_census_projection_ids(census)):
         raise ValueError('quantity_completion_projection_binding_invalid')
     census_rows = census.get('rows')
     if (not isinstance(census_rows, list) or len(census_rows) != len(completed)
