@@ -2,6 +2,7 @@ import ast
 import inspect
 from datetime import datetime, time as datetime_time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy.orm.exc import DetachedInstanceError
@@ -53,14 +54,48 @@ def test_overnight_gatekeeper_default_disabled(monkeypatch):
     assert _overnight_gatekeeper_enabled() is False
 
 
-def test_overnight_gatekeeper_ignores_runtime_true_override(monkeypatch):
+@pytest.mark.parametrize(
+    "true_config,true_env",
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_overnight_gatekeeper_ignores_runtime_true_override(
+    monkeypatch, true_config, true_env
+):
+    from src.engine import sniper_overnight_gatekeeper as overnight
+
     monkeypatch.setattr(
-        "src.engine.sniper_overnight_gatekeeper.TRADING_RULES",
-        SimpleNamespace(SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=True),
+        overnight,
+        "TRADING_RULES",
+        SimpleNamespace(SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=True)
+        if true_config else SimpleNamespace(),
     )
+    env_key = "KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_ENABLED"
+    if true_env:
+        monkeypatch.setenv(env_key, "true")
+    else:
+        monkeypatch.delenv(env_key, raising=False)
+    external = Mock(side_effect=AssertionError("retired overnight side effect"))
+    # Even supplied legacy runtime dependencies must never be consumed.
+    for name, value in {
+        "DB": SimpleNamespace(get_session=external),
+        "WS_MANAGER": SimpleNamespace(get_latest_data=external),
+        "ACTIVE_TARGETS": [{"id": 1, "code": "005930", "status": "HOLDING"}],
+        "event_bus": SimpleNamespace(publish=external),
+        "DUAL_PERSONA_ENGINE": SimpleNamespace(submit=external),
+        "_confirm_cancel_or_reload_remaining": external,
+        "_send_market_exit_now": external,
+        "process_sell_cancellation": external,
+    }.items():
+        monkeypatch.setattr(overnight, name, value, raising=False)
+    messages = []
+    monkeypatch.setattr(overnight, "log_info", messages.append)
+    ai = SimpleNamespace(evaluate_scalping_overnight_decision=external)
 
     assert _overnight_gatekeeper_enabled() is False
-    assert run_scalping_overnight_gatekeeper(ai_engine=object()) is False
+    assert run_scalping_overnight_gatekeeper(ai_engine=ai) is False
+    assert external.mock_calls == []
+    assert len(messages) == 1
+    assert "비활성화" in messages[0] and f"{env_key}=false" in messages[0]
 
 
 def test_same_session_terminal_exit_uses_last_executable_venue_window(monkeypatch):
