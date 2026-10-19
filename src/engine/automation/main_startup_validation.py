@@ -701,6 +701,28 @@ def _validate_child_result(child, expected_ids, expected_policy_hashes):
             raise ValueError('startup_child_wrong_policy:' + name)
 
 
+def _validate_native_delegation(delegation, proof, request):
+    """Bind the child to this invocation's authenticated native scope."""
+    from src.engine.infrastructure.startup_validation_code_context import _native_main_basis
+    expected_basis = _native_main_basis(proof['native_verification'])
+    run_id, target_date = request['run_id'], request['target_date']
+    if (expected_basis is None or proof.get('delegation_basis') != expected_basis
+            or delegation.get('schema') != 'startup_native_validation_delegation_v1'
+            or delegation.get('run_id') != run_id
+            or delegation.get('request_sha256') != request['request_sha256']
+            or delegation.get('policy_sha256') != proof['policy_sha256']
+            or delegation.get('target_date') != target_date
+            or delegation.get('source_native_pid') != proof['closure']['digest_binding']['pid']
+            or delegation.get('basis') != proof['delegation_basis']
+            or delegation.get('parent_validation_scope') != proof['native_verification']['validation_scope']
+            or delegation.get('child_semantic_validation') != 'native_validators_executed'
+            or set(delegation.get('auxiliary_manifests', [])) != set(proof['closure']['manifests'])
+            or any(type(delegation.get(k)) is not int or delegation[k] < 0
+                   for k in ('digest_reused_reads', 'digest_reused_bytes'))
+            or any(delegation.get(k) is not False for k in ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))):
+        raise ValueError('startup_child_native_delegation_invalid')
+
+
 def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=False, timeout=120):
     workspace = Path(workspace).resolve(strict=True)
     if not 1 <= timeout <= 300:
@@ -802,20 +824,7 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
         if binding.get('main_preparation') is not None:
             delegation = child.get('native_validation_delegation') or {}
             proof = binding['main_preparation']
-            if (delegation.get('schema') != 'startup_native_validation_delegation_v1'
-                    or delegation.get('run_id') != run_id
-                    or delegation.get('request_sha256') != request['request_sha256']
-                    or delegation.get('policy_sha256') != proof['policy_sha256']
-                    or delegation.get('target_date') != target_date
-                    or delegation.get('source_native_pid') != proof['closure']['digest_binding']['pid']
-                    or delegation.get('basis') != proof['delegation_basis']
-                    or delegation.get('parent_validation_scope') != 'current_full_contract'
-                    or delegation.get('child_semantic_validation') != 'native_validators_executed'
-                    or set(delegation.get('auxiliary_manifests', [])) != set(proof['closure']['manifests'])
-                    or any(type(delegation.get(k)) is not int or delegation[k] < 0
-                           for k in ('digest_reused_reads', 'digest_reused_bytes'))
-                    or any(delegation.get(k) is not False for k in ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))):
-                raise ValueError('startup_child_native_delegation_invalid')
+            _validate_native_delegation(delegation, proof, request)
             final['native_validation_delegation'] = delegation
             from src.engine.infrastructure.startup_validation_code_context import verify_preparation_delay_delegation
             verify_preparation_delay_delegation(proof, delegation, request,

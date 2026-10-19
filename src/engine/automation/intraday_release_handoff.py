@@ -1998,7 +1998,7 @@ REVIEWED_CLEANUP_DEPENDENCY_VARIANTS = {
 # original policy digests and the predecessor dependency closure. The two added
 # holding inputs are exact reviewed extensions, never fallback policy authority.
 REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/ai/holding_exit_vote.py': '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81',
- 'src/engine/automation/main_startup_validation.py': 'b4475bf2671a8e5c1206c588ec265b736c7a082cb721f65d7dc3c1a8c87baec9',
+ 'src/engine/automation/main_startup_validation.py': '190855a642ca713fe53257eae2268eeb5786990c474f2b63904ace41b66c9661',
  'src/engine/automation/main_trailing_source_store.py': 'f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
  'src/engine/automation/prepared_policy_code_handoff.py': '9ef09608077aa02c25bdd40d8bc33344bf0e10dbde18cae0fdcf434b0c6efaf8',
  'src/engine/infrastructure/startup_validation_code_context.py': '4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',

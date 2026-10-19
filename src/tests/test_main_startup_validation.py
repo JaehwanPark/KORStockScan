@@ -836,3 +836,30 @@ def test_parent_child_source_recheck_keeps_cap_and_independent_digest_authority(
     raw.write_bytes(b'b'*2048)
     with pytest.raises(ValueError,match='delegated_source_changed'):
         validation._recheck({str(raw):expected},main_preparation=proof)
+
+
+@pytest.mark.parametrize('scope', ['current_full_contract', 'intraday_preserved_historical_generation'])
+@pytest.mark.parametrize('fault', [None, 'unknown_scope', 'scope_mismatch', 'basis', 'native_pid', 'manifest', 'authority'])
+def test_parent_native_delegation_binds_authenticated_scope(scope, fault):
+    from src.engine.infrastructure.startup_validation_code_context import _native_main_basis
+    native=dict(status='pass',findings=[],validation_scope=scope,
+        handoff_basis='intraday_preserved_preopen_generation',preserved_preopen_commit='a'*40)
+    proof=dict(native_verification=native,delegation_basis=_native_main_basis(native),policy_sha256='b'*64,
+        closure=dict(digest_binding={'pid':123},manifests={'c'*64:{}}))
+    request=dict(run_id='d'*32,target_date='2026-10-19',request_sha256='e'*64)
+    delegation=dict(schema='startup_native_validation_delegation_v1',run_id=request['run_id'],
+        target_date=request['target_date'],request_sha256=request['request_sha256'],policy_sha256=proof['policy_sha256'],
+        source_native_pid=123,basis=proof['delegation_basis'],parent_validation_scope=scope,
+        child_semantic_validation='native_validators_executed',auxiliary_manifests=['c'*64],
+        digest_reused_reads=1,digest_reused_bytes=32,runtime_effect=False,allowed_runtime_apply=False,actual_pid_consumed=False)
+    if fault=='unknown_scope':native['validation_scope']='cached_generation'
+    elif fault=='scope_mismatch':delegation['parent_validation_scope']='changed'
+    elif fault=='basis':proof['delegation_basis']=delegation['basis']='unverified'
+    elif fault=='native_pid':delegation['source_native_pid']=999
+    elif fault=='manifest':delegation['auxiliary_manifests']=[]
+    elif fault=='authority':delegation['runtime_effect']=True
+    if fault:
+        with pytest.raises(ValueError,match='startup_child_native_delegation_invalid'):
+            validation._validate_native_delegation(delegation,proof,request)
+    else:
+        validation._validate_native_delegation(delegation,proof,request)

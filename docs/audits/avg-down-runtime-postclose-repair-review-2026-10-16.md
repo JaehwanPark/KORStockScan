@@ -188,3 +188,12 @@ eab2c040d의 P5는 intake와 native Main closure를 통과하고 실제 격리 c
 기존 P5 owner에서 원 semantic source와 충돌하지 않는 manifest의 next-session/reader 원본 hash를 그대로 전달한다. child의 exact reviewed-pair·Git/source/manifest 검증은 유지한다. stop의 기존 미래 tail reader를 공통 snapshot 함수로 통합하고, 실제 OS 격리·현재 Main proof·정확한 stop policy/source/target/data-root를 재검증한 child만 운영 잠금 없이 같은 native snapshot 검사를 실행한다. partial·과거 행·scope/position·inode/stat/prefix 변경은 계속 거부한다. 일반 runtime/research reader는 기존 native writer lock을 유지한다. `_future_unconsumed_vote_tail_locked`는 removed, 공통 `_future_unconsumed_vote_tail_snapshot`은 consolidated이며 기존 wrapper와 격리 branch가 현재 소비자다. 새 module·CLI·스케줄·운영 허용 flag는 없다.
 
 해당 C/stop 묶음은 최초271 PASS/2 fixture 실패였고, 새 fixture의 Path import와 공유 dictionary alias를 보완했다. 같은 실제 OS 격리의 신규6개는 모두 PASS/8.78초이며 negative case는 각각 의도한 native 사유도 확인한다. 기존 writer lock·tail·source 및 격리 회귀를 포함한 고유273개가 통과했다. exact 두 원본/세 family 인계18개 PASS/17.08초다. 새 stop 코드 generation의 holding capability를 정식 fixture producer로 다시 검증·게시한 후 새 P5를 실행한다. 원 정책·PREOPEN·현재 PID는 계속 보존한다.
+
+
+### Parent의 scope 영수증 대사와 검증 시간
+
+2dd0b5df5의 기본120초 격리 시도는 금지 동작0건 상태에서 timeout5acb60e5c25a4d4da036899311e3cf87이었다. 기존 CLI의 허용 범위인300초로 별도 재실행37f9d1ecac634dfc998434e82fc4b857을 수행했고, 실제 child의12개 consumer가 모두 loaded/승인 parent-only였으며 findings와 금지 동작은0이었다. 원 실패 bytes는 유지한다. 300초는 read-only 격리 검증 예산이며 runtime 주문·시세·AI deadline 변경은 없다.
+
+Parent의 마지막 delegation 대사에 남아 있던 current_full 전용 조건이 실제 intraday scope를 거부했다. 같은 기존 owner에서 해당 대사를 함수 하나로 이관하고, 검증된 native basis·scope를 그대로 비교하도록 보완했다. run/request·Main 정책·native PID·manifest 정확한 집합·해시 재사용 수치·authority false 검사는 모두 유지한다. 기존 inline 검사는 removed, `_validate_native_delegation`으로 consolidated했으며 run_validation의 현재 소비자 하나다. 새 module/CLI/validator framework는 없다. Parent의 나머지 delay·request/consumer 원천·logical source 대사도 기존 native 함수로 독립 점검하여 모두 PASS였다. 이 진단을 P5 완료로 승격하지 않고 새 immutable 후보의 전체 P5를 재수행한다.
+
+두 scope와 변경 scope/basis/PID/manifest/authority 거부를 포함한 parent86개 PASS/8.60초다. source30개 compile·전체 diff 검사도 통과했다. 자체 리뷰에서 확인된 변경은 수정했으며 실제 배포는 전체 P5 성공 후에만 수행한다.
