@@ -237,7 +237,7 @@ def test_postclose_controller_cli_reruns_semantics_and_uses_no_persistent_pass(
     assert second['status'] == 'blocked_direct_evidence_gap'
 
 
-def test_prepare_cli_only_shares_digests_verify_keeps_default_full(
+def test_prepare_and_full_verify_cli_share_only_invocation_digests(
         tmp_path, source, monkeypatch, capsys):
     from src.engine.automation import next_preopen_readiness as N
     monkeypatch.setattr(N, 'DATA_DIR', tmp_path)
@@ -246,7 +246,10 @@ def test_prepare_cli_only_shares_digests_verify_keeps_default_full(
         assert D.reused_digest(source)
         return dict(status='prepared_verified', actual_pid_consumed=False)
     def verify(day, **kwargs):
-        assert D.ACTIVE.get() is None
+        assert kwargs == {'require_today': False}
+        assert D.ACTIVE.get() is not None
+        assert D.reused_digest(source)
+        assert D.reused_digest(source)
         return dict(status='pass')
     monkeypatch.setattr(N, 'prepare', prepare)
     monkeypatch.setattr(N, 'verify_prepared', verify)
@@ -255,7 +258,11 @@ def test_prepare_cli_only_shares_digests_verify_keeps_default_full(
     assert result['validation_io']['reused_reads'] == 1
     assert result['actual_pid_consumed'] is False
     assert N.main(['--verify', '--target-date', '2026-10-15']) == 0
-    assert json.loads(capsys.readouterr().out) == dict(status='pass')
+    verification = json.loads(capsys.readouterr().out)
+    assert verification['status'] == 'pass'
+    assert verification['validation_io']['full_reads'] == 1
+    assert verification['validation_io']['reused_reads'] == 1
+    assert D.ACTIVE.get() is None
 
 
 @pytest.mark.parametrize('mutation', ['rewrite', 'replace', 'append', 'truncate', 'chmod'])

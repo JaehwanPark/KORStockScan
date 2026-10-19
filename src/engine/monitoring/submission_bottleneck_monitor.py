@@ -3808,7 +3808,8 @@ def observation_health_projection(result):
     Consumers recompute this projection from the same bounded report and compare
     it exactly. WARNING means current decision coverage is still unknown. It is
     neither valid-empty, source-health PASS, nor a policy/PID/economic receipt.
-    Unknown, missing, malformed or contradictory evidence never qualifies.
+    Unknown, malformed or contradictory evidence never qualifies. Exact lazy
+    journal absence may qualify only before the native morning entry window.
     """
     failed = []
 
@@ -4483,10 +4484,30 @@ def observation_health_projection(result):
         and set(failed) == {'source_window_not_complete:pending'}
         and count(observed.get('entry_traces', 0), maximum=0))
 
+    # These journals are append-created by the first assessment. Before the
+    # native morning entry window, their absence is observation-not-due, not
+    # a broken reader. This never proves an empty population or source health.
+    # The morning bound prevents an afternoon closed window from forgiving
+    # sources that should already have existed during regular trading.
+    pre_entry_absence = (quiet_report_valid and event_marker
+        and inp.get('sentinel_classification') == 'NOT_YET_DUE'
+        and context is not None and context.entry_allowed_by_clock is False
+        and now.hour < 9 and counts_valid and n == provider_n == 0
+        and observed_valid and not any(observed.values()) and not diagnostics
+        and all(not rows for rows in route_counts) and not lineage and attempts == []
+        and gap.get('async_pass_projection') == [] and gap.get('async_transition_projection') == []
+        and count(gap.get('async_pass_unmapped_count'), maximum=0)
+        and all(obj(source).get('status') in ('complete','unobservable') for source in sources.values())
+        and count(machine.get('source_invalid_count'), maximum=0)
+        and count(machine.get('required_feature_guard_count'), maximum=0)
+        and machine.get('source_invalid_blockers') == {}
+        and any(obj(source).get('reason') == 'FileNotFoundError' for source in sources.values()))
+
     def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC, source_name=None):
         source=obj(source); identity=obj(source.get('source_identity'))
         if ((source_name in ('pending','requests') and lazy_auxiliary_absence
-                or source_name == 'pending' and quiet_pending_absence)
+                or source_name == 'pending' and quiet_pending_absence
+                or source_name in ('probe','trace','pending') and pre_entry_absence)
                 and source.get('status') == 'unobservable'):
             return (set(source) == {'status','tail_truncated','window_covered','recent_count','reason'}
                 and source.get('reason') == 'FileNotFoundError'
@@ -4551,7 +4572,9 @@ def observation_health_projection(result):
             and all(count(value,minimum=1,maximum=1) for value in (*aggregate.values(),*scoped_aggregate.values())))
         stages_clean=((gap.get('issues') == {} and gap.get('issues_by_scope',{}) == {} or coverage_quality)
             and all(stage.get('issues') == {} and stage.get('issues_by_scope',{}) == {} for stage in (machine,execution))
-            and all(all(stage.get(k) in (None,'') for k in ('selection_status','source_status','error','errors','reason'))
+            and all(all(stage.get(k) in (None,'') or stage is machine and k == 'source_status'
+                        and pre_entry_absence and stage[k] == 'unobservable:FileNotFoundError'
+                        for k in ('selection_status','source_status','error','errors','reason'))
                     for stage in stages) and result.get('issues',{}) == {} and result.get('diagnostics',{}) == {}
             and all(stage.get('provider_lineage_source_status') in (None,'') for stage in (gap,execution))
             and machine.get('provider_lineage_source_status') in (None,'','partial_source_gap')
@@ -4572,7 +4595,9 @@ def observation_health_projection(result):
             and publication.get('status') == 'native_frozen_family_verified' and publication.get('effective_date') == day
             and sha(machine.get('current_bundle_sha256')) and 0 < len(selections) <= 512
             and all(obj(row).get('score_contract_valid') is True for row in selections.values())
-            and count(machine.get('read_count'),minimum=1,maximum=1)
+            and (pre_entry_absence and machine.get('source_status') == 'unobservable:FileNotFoundError'
+                 and all(k not in machine for k in ('read_count','bytes_read','source_bytes','window_coverage'))
+                 or count(machine.get('read_count'),minimum=1,maximum=1)
             and count(machine.get('read_limit_bytes'),minimum=1,maximum=8*1024*1024)
             and count(machine.get('bytes_read'),minimum=1,maximum=machine['read_limit_bytes']
                       if count(machine.get('read_limit_bytes')) else 0)
@@ -4580,7 +4605,7 @@ def observation_health_projection(result):
                       if count(machine.get('bytes_read')) else 1)
             and machine.get('window_coverage') in ('bounded_suffix','complete_file_prefix')
             and (machine.get('window_coverage') != 'bounded_suffix' or machine.get('tail_truncated') is True
-                and machine['source_bytes'] > machine['bytes_read'])
+                and machine['source_bytes'] > machine['bytes_read']))
             and machine.get('action_replay_performed') is False)
         lineage_shape=True
         if lineage:
@@ -4659,7 +4684,8 @@ def observation_health_projection(result):
         'schema': 'submission_monitor_observation_health_v1',
         'status': 'not_eligible' if failed and not bounded else 'warning_pending',
         'severity': 'unchanged' if failed and not bounded else 'warning',
-        'reason': ('bounded_source_quality_observation' if bounded else 'health_conditions_not_met' if failed else 'recorded_guard_or_cohort_pending'
+        'reason': ('native_pre_entry_observation_not_due' if bounded and pre_entry_absence
+                   else 'bounded_source_quality_observation' if bounded else 'health_conditions_not_met' if failed else 'recorded_guard_or_cohort_pending'
                    if counts_valid and n or diagnostics or any(observed.values())
                    else 'bounded_no_applicable_observations'),
         'unmet_conditions': failed, 'current_observation_verified': False,
@@ -4812,6 +4838,7 @@ def evaluate(report, state, now):
         "latest_event_status": source.get('latest_event_status'),
         "loaded_recent_event_count": source.get('loaded_recent_event_count'),
         "snapshot_age_seconds": (now-as_of).total_seconds() if as_of else None,
+        "sentinel_classification": (report.get('classification') or {}).get('primary'),
         "latest_event_age_seconds": (now-latest).total_seconds() if latest else None,
         "row_count": len(source["rows"]) if isinstance(source.get("rows"), list) else None,
         "identity_missing_events": source.get('identity_missing_events'),

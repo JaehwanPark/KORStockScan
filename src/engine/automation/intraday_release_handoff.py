@@ -2599,6 +2599,22 @@ REVIEWED_STOP_INDEXED_VOTE_PAIRS = {
     for name, after in REVIEWED_STOP_INDEXED_VOTE_HASHES.items()
 }
 
+# One complete report-only pre-entry observer generation. Preserve every
+# historical generation; no runtime entry-clock or policy behavior changes.
+REVIEWED_PRE_ENTRY_OBSERVER_HASHES = {'src/engine/monitoring/submission_bottleneck_monitor.py': '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'}
+REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': REVIEWED_PRE_ENTRY_OBSERVER_HASHES['src/engine/monitoring/submission_bottleneck_monitor.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_PRE_ENTRY_OBSERVER_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_PRE_ENTRY_OBSERVER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_PRE_ENTRY_OBSERVER_PAIRS = {'src/engine/monitoring/submission_bottleneck_monitor.py': (('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e', '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'), ('60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23', '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'), ('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18', '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2652,7 +2668,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS,
+                         REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS,
                          REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS,
@@ -2734,7 +2751,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_STOP_INDEXED_VOTE_PAIRS.get(name, ())
+        if (pair in REVIEWED_PRE_ENTRY_OBSERVER_PAIRS.get(name, ())
+                or pair in REVIEWED_STOP_INDEXED_VOTE_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_FORWARD_STREAM_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_SHARED_POSITION_PAIRS.get(name, ())
                 or pair in REVIEWED_CALENDAR_PHYSICAL_PAIRS.get(name, ())

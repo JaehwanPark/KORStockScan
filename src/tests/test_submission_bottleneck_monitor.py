@@ -3279,6 +3279,74 @@ def test_complete_current_quiet_cohort_with_only_lazy_pending_missing_is_warning
     assert health['allowed_runtime_apply'] is False and health['runtime_effect'] is False
     assert json.dumps(result,sort_keys=True)==before
 
+@pytest.mark.parametrize('hour,missing',[(hour,missing) for hour in ('07:55','08:44','09:00','16:10') for missing in ('all','aux')])
+@pytest.mark.parametrize('damage',[None,'entry_open','classification','io','empty','malformed',
+    'birth','selection','assessment','provider','bootstrap','stale','incident','async','source_partial'])
+def test_native_pre_entry_lazy_sources_are_pending_without_proving_coverage(monkeypatch, hour, missing, damage):
+    from copy import deepcopy
+    result=_observation_health_fixture()
+    old=monitor.stamp(result['as_of']);now=old.replace(hour=int(hour[:2]),minute=int(hour[3:]))
+    delta=now-old
+    def shift(value):
+        if isinstance(value,dict):return {k:shift(v) for k,v in value.items()}
+        if isinstance(value,list):return [shift(v) for v in value]
+        if isinstance(value,str) and len(value)>10 and value[10]=='T' and monitor.stamp(value):
+            return (monitor.stamp(value)+delta).isoformat()
+        return value
+    result=shift(result)
+    inp=result['input_provenance'];at=monitor.stamp(inp['snapshot_as_of'])
+    inp.update(sentinel_classification='NOT_YET_DUE',latest_event_status='no_recent_loaded_events',
+        loaded_recent_event_count=0,latest_event_at=(at-timedelta(days=1)).isoformat(),
+        latest_event_age_seconds=(now-at).total_seconds()+86400)
+    actor=['9','900'];proof,generation=_health_birth_fixture(now,actor)
+    generation.update(status='current',generation_current=True,selector_reported_actual_pid_consumed=True)
+    result['observer_generation']=generation
+    from src.trading.market import session_contract
+    context=session_contract.resolve_market_session(now)
+    result['source_gap_semantics']['fixed_watch_waits'].update(count=0,session_boundary_wait_count=0,
+        reason_counts={},native_session_regime=context.session_regime,
+        native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name];token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(deepcopy(original),actor,now)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    gap=result['source_gap_semantics']['current_health_cohort']['view']
+    machine=result['machine_semantics']['current_health_cohort']['view']
+    absent=dict(status='unobservable',tail_truncated=False,window_covered=False,recent_count=0,reason='FileNotFoundError')
+    for name in (('probe','trace','pending') if missing=='all' else ('trace','pending')):
+        gap['sources'][name]=deepcopy(absent)
+    gap['async_pass_projection_coverage']='partial'
+    if missing=='all':
+        machine['source_status']='unobservable:FileNotFoundError'
+        for key in ('read_count','bytes_read','source_bytes','window_coverage','read_limit_bytes'):
+            machine.pop(key,None)
+    else:machine['tail_truncated']=True
+    if damage=='entry_open':
+        from dataclasses import replace
+        monkeypatch.setattr(session_contract,'resolve_market_session',lambda _: replace(context,entry_allowed_by_clock=True))
+    if damage=='classification':inp.pop('sentinel_classification')
+    elif damage=='io':gap['sources']['trace']['reason']='PermissionError'
+    elif damage=='empty':gap['sources']['trace']['reason']='empty_source'
+    elif damage=='malformed':gap['sources']['trace']['malformed_rows']=1
+    elif damage=='birth':proof['boot_epoch']+=1
+    elif damage=='selection':machine['selection']['representative']['score_contract_valid']=False
+    elif damage=='assessment':gap['observed']['entry_traces']=1
+    elif damage=='provider':machine['observation_count']=1
+    elif damage=='bootstrap':result['entry_execution_tuning_semantics']['bootstrap']['status']='missing'
+    elif damage=='stale':inp['snapshot_age_seconds']+=1
+    elif damage=='incident':result['incidents']['new']=dict(status='active',last_seen=now.isoformat(),issues={'unknown':1})
+    elif damage=='async':gap['async_pass_unmapped_count']=1
+    elif damage=='source_partial':gap['sources']['trace']['status']='partial'
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    expected=damage is None and int(hour[:2]) < 9
+    assert health['status']==('warning_pending' if expected else 'not_eligible'),health
+    if expected:assert health['reason']=='native_pre_entry_observation_not_due'
+    assert not any(health[k] for k in ('current_observation_verified','full_coverage_proven',
+        'runtime_effect','allowed_runtime_apply'))
+    assert json.dumps(result,sort_keys=True)==before
+
+
 def _derived_coverage_health_fixture(route='krx_nxt_integrated'):
     result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=False)
     gap.update(status='gap_observed',issues={'machine_probe:coverage_degraded:'+route:1},
