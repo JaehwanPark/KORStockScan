@@ -2337,6 +2337,61 @@ REVIEWED_AUXILIARY_DATA_ROOT_PAIRS = {'src/engine/scalping/reversal_auxiliary_so
     for before in ('f114eaa85987d72d2361a25e7d5aa2fa41ac5fcf6ad74992c0fe40658e038d82',
                    'f5724a19f06ef4417226c801259e00378217b8e6ebd49355cad2d21e4ad15c0f'))}
 
+# Enroll original completed projections once; consumers keep the source budget.
+# Preserve each issued full generation and select this exact successor as a unit.
+REVIEWED_COMPLETED_OFFLINE_HASHES = {'src/engine/automation/main_trailing_completed_store.py': 'fc047ceddd40d963659fcba7f36f7d28bdbc74c3dfa799322f163fb4f3683a30',
+ 'src/engine/automation/main_trailing_source_store.py': '3e7893cab9a61cf3ff9e08242a9786d2d8f24cc69dd42c7f9943bd90bcf116ae',
+ 'src/engine/automation/main_trailing_source_assembler.py': '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e',
+ 'src/engine/holding_exit_observation_report.py': '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255',
+ 'src/engine/lifecycle/research_json_stream.py': '1ea671f8ba5b5397257c2d1da513dee653b05379133073d1412ee4edf7a07a11'}
+REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_completed_store.py',
+        'selector_sha256': REVIEWED_COMPLETED_OFFLINE_HASHES['src/engine/automation/main_trailing_completed_store.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_COMPLETED_OFFLINE_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_COMPLETED_OFFLINE_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_COMPLETED_OFFLINE_PAIRS = {'src/engine/automation/main_trailing_completed_store.py': (('6cd944f303ba9851761ca0166bd757dd1f3210f0abeda3468510979142fd25da',
+                                                             'fc047ceddd40d963659fcba7f36f7d28bdbc74c3dfa799322f163fb4f3683a30'),),
+ 'src/engine/automation/main_trailing_source_store.py': (('19feaff3f7870392506c01e2712c195fa7f1f81c71b352e82fa055bd905d15c6',
+                                                          '3e7893cab9a61cf3ff9e08242a9786d2d8f24cc69dd42c7f9943bd90bcf116ae'),
+                                                         ('5790bc3a11fef051c1e3dfdc1ff6e9c0f603c280509253ebd53c10227bd6998a',
+                                                          '3e7893cab9a61cf3ff9e08242a9786d2d8f24cc69dd42c7f9943bd90bcf116ae'),
+                                                         ('e50e6e30840c030ad6823e0eebb5a4fa1ea8733518c66a79a4189a6426898266',
+                                                          '3e7893cab9a61cf3ff9e08242a9786d2d8f24cc69dd42c7f9943bd90bcf116ae'),
+                                                         ('f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
+                                                          '3e7893cab9a61cf3ff9e08242a9786d2d8f24cc69dd42c7f9943bd90bcf116ae'),
+                                                         ('fea1b901d47c2ba32cdc7f66f97904738fbdc1affd089da44012bb80fdc39ec7',
+                                                          '3e7893cab9a61cf3ff9e08242a9786d2d8f24cc69dd42c7f9943bd90bcf116ae')),
+ 'src/engine/automation/main_trailing_source_assembler.py': (('242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2',
+                                                              '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e'),
+                                                             ('a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b',
+                                                              '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e'),
+                                                             ('aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd',
+                                                              '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e'),
+                                                             ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e'),
+                                                             ('ea7039a171b5a3d07883b0549ba763100900cfdec7cb6c14172e0fb887f6b804',
+                                                              '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e'),
+                                                             ('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e'),
+                                                             ('f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1',
+                                                              '500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e')),
+ 'src/engine/holding_exit_observation_report.py': (('108fcdffa626abec4e90b263c12780e78c7f77e222b950e2407b0b00d462fa4f',
+                                                    '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255'),
+                                                   ('6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9',
+                                                    '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255'),
+                                                   ('8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db',
+                                                    '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255'),
+                                                   ('bd366b341b5515a0d7dcc2b4da47cf71320a0d703b617057037044d52b8c06e3',
+                                                    '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255'),
+                                                   ('fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5',
+                                                    '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2390,7 +2445,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS,
+                         REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS,
                          REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
                          REVIEWED_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
                          REVIEWED_POSTCLOSE_READER_DEPENDENCY_VARIANTS,
@@ -2464,7 +2520,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_AUXILIARY_DATA_ROOT_PAIRS.get(name, ())
+        if (pair in REVIEWED_COMPLETED_OFFLINE_PAIRS.get(name, ())
+                or pair in REVIEWED_AUXILIARY_DATA_ROOT_PAIRS.get(name, ())
                 or pair in REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
                 or pair in REVIEWED_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
                 or pair in REVIEWED_POSTCLOSE_READER_PAIRS.get(name, ())

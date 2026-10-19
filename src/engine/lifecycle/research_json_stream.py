@@ -4,6 +4,7 @@ This lifecycle adapter understands JSON structure, not broker/API semantics.
 Only the original producer's byte-bound dependency receipt grants provenance.
 Large timelines become content-addressed normalized events in a private root.
 """
+import hashlib
 import json
 from pathlib import Path
 from .research_input_budget import Claim
@@ -90,12 +91,16 @@ def resident_completed_rows(trades,output_root):
 
 
 class Reader:
-    def __init__(self,handle):
+    def __init__(self,handle,expected_generation=None):
+        self.expected_generation=expected_generation;self.source_sha=hashlib.sha256();self.source_size=0
         self.handle=handle;self.buffer='';self.offset=0;self.eof=False
         self.decoder=json.JSONDecoder()
     def fill(self):
         self.buffer=self.buffer[self.offset:];self.offset=0
-        text=self.handle.read(65536);self.buffer+=text;self.eof=not text
+        text=self.handle.read(65536)
+        if self.expected_generation is not None:
+            raw=text.encode('utf-8');self.source_sha.update(raw);self.source_size+=len(raw)
+        self.buffer+=text;self.eof=not text
         return bool(text)
     def peek(self):
         while self.offset==len(self.buffer):
@@ -182,7 +187,7 @@ class Reader:
         if not found[0]:raise ValueError('research_legacy_json_target_missing')
 
 
-def completed_rows(path,output_root):
+def completed_rows(path,output_root,*,expected_generation=None):
     """Yield original trade metadata and a separate complete quote path ref."""
     def trade(reader):
         body={};reference=None
@@ -241,8 +246,12 @@ def completed_rows(path,output_root):
     logical = logical_path(path)
     path = logical if logical.exists() else Path(str(logical)+'.gz')
     opener = gzip.open if path.suffix == '.gz' else open
-    with opener(path, 'rt', encoding='utf-8') as handle:
-        reader=Reader(handle)
+    with opener(path, 'rt', encoding='utf-8',newline='') as handle:
+        reader=Reader(handle,expected_generation)
         yield from reader.target(('sections','completed_trade_projection'),trade)
         reader.spaces()
         if reader.peek():raise ValueError('research_legacy_json_trailing_content')
+        if expected_generation is not None and (
+                reader.source_size!=expected_generation.get('size')
+                or reader.source_sha.hexdigest()!=expected_generation.get('sha256')):
+            raise ValueError('research_legacy_json_logical_generation_changed')

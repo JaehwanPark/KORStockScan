@@ -575,3 +575,204 @@ def test_background_maintenance_restarts_invalid_pipeline_as_pending(tmp_path):
     assert observed['recovery']['status']=='rebuild_pending'
     assert Path(observed['recovery']['archive']).is_file()
     with pytest.raises(store.InputPending):list(store.read_rows(tmp_path,path))
+
+
+def _original_completed_source(root,monkeypatch,kind,compressed):
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine import compress_db_backfilled_files as archive
+    if kind=='retained':
+        from src.tests.test_holding_window_generation import _retained_original_window
+        day,raw,_=_retained_original_window(root,monkeypatch)
+    else:
+        from src.tests.test_strategy_position_performance_report import _native_fact_projection
+        day,raw=_native_fact_projection(root,monkeypatch,large=False)
+        receipt=Path(str(raw.with_suffix('.completed_projection.json'))+'.dependencies.json')
+        dependency=json.loads(receipt.read_bytes());dependency.pop('trailing_completed_index')
+        dependency['artifact_sha256']=completed.digest({k:v for k,v in dependency.items()if k!='artifact_sha256'})
+        receipt.write_text(json.dumps(dependency))
+    sidecar=raw.with_suffix('.completed_projection.json')
+    if compressed:
+        monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',sidecar.parent)
+        assert archive._gzip_file(sidecar,dry_run=False)[0]
+    return day,raw,sidecar
+
+
+@pytest.mark.parametrize('kind',['native','retained'])
+@pytest.mark.parametrize('compressed',[False,True])
+def test_explicit_completed_enrollment_preserves_originals_and_warm_reader(kind,compressed,tmp_path,monkeypatch):
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.lifecycle import research_json_stream as stream,research_storage as storage
+    from src.engine.lifecycle.holding_window_generation import byte_generation,verified_legacy_projection_dependency
+    root=tmp_path/'source';day,raw,sidecar=_original_completed_source(root,monkeypatch,kind,compressed)
+    originals={p:p.read_bytes()for p in (root/'report/monitor_snapshots').iterdir()if p.is_file()}
+    legacy_output=tmp_path/'legacy';expected=list(stream.completed_rows(sidecar,legacy_output))
+    result=store.prepare_window(root,day,start_date=day)
+    assert any(r.get('status')=='offline_index_prepared'for r in result),result
+    generation=byte_generation(sidecar);receipt=Path(str(sidecar)+'.dependencies.json')
+    dependency=(completed._metadata(receipt)if receipt.exists()else
+        verified_legacy_projection_dependency(root,day,projection_generation=generation)[0])
+    assert completed.binding(root,dependency,projection_generation=generation)
+    def no_source(*a,**k):pytest.fail('normal completed reader reopened original rows')
+    monkeypatch.setattr(stream,'completed_rows',no_source)
+    monkeypatch.setattr(store,'claim_legacy_bytes',no_source)
+    output=tmp_path/'indexed';actual=list(completed.read(root,dependency,output,projection_generation=generation))
+    assert len(actual)==len(expected)==1
+    def expanded(trade,base):
+        return {k:(list(storage.iter_tree(base,v))if isinstance(v,dict)and v.get('schema')==storage.SCHEMA else v)
+            for k,v in trade.items()}
+    assert expanded(actual[0][0],output)==expanded(expected[0][0],legacy_output)
+    assert list(storage.iter_tree(output,actual[0][1]))==list(storage.iter_tree(legacy_output,expected[0][1]))
+    assert completed.vote_store_names(root,[day])==set()
+    assert completed.prepare_window(root,[day])[0]['status']=='offline_index_ready'
+    assert originals=={p:p.read_bytes()for p in originals}
+    # Historical enrollment also gives the existing inventory an exact cohort;
+    # an unrelated journal must not force a scan or a larger legacy budget.
+    from src.engine.automation import main_trailing_source_assembler as assembly
+    unrelated=root/'runtime/holding_path_votes'/('a'*64+'.jsonl')
+    unrelated.parent.mkdir(parents=True,exist_ok=True)
+    with unrelated.open('wb')as handle:handle.truncate(200*1024**3)
+    master=root/'master.json';master.write_text('{}')
+    parent=root/'parent.json';parent.write_text('{}')
+    original_open=Path.open
+    def guarded(path,*args,**kwargs):
+        if path==unrelated:pytest.fail('unrelated vote history reopened')
+        return original_open(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',guarded)
+    inventory=assembly.input_inventory(root,[day],master,parent)
+    assert str(unrelated)not in {r['path']for r in inventory}
+
+
+@pytest.mark.parametrize('mutation',['projection','dependency','code','manifest'])
+def test_completed_offline_cache_refuses_changed_sources_and_code(tmp_path,monkeypatch,mutation):
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    root=tmp_path/'source';day,_,sidecar=_original_completed_source(root,monkeypatch,'native',False)
+    completed.prepare_window(root,[day]);generation=byte_generation(sidecar)
+    receipt=Path(str(sidecar)+'.dependencies.json');dependency=completed._metadata(receipt)
+    bound=completed.binding(root,dependency,projection_generation=generation)
+    if mutation=='projection':sidecar.write_bytes(sidecar.read_bytes()+b' ')
+    elif mutation=='dependency':receipt.write_bytes(receipt.read_bytes()+b' ')
+    elif mutation=='code':monkeypatch.setattr(completed,'_offline_code',lambda:'0'*64)
+    else:
+        path=Path(bound['manifest_path']);body=json.loads(path.read_bytes());body['runtime_effect']=True
+        body['artifact_sha256']=completed.digest({k:v for k,v in body.items()if k!='artifact_sha256'})
+        path.write_text(json.dumps(body))
+    with pytest.raises((ValueError,OSError)):
+        list(completed.read(root,dependency,tmp_path/'reader',projection_generation=generation))
+
+
+def test_completed_enrollment_refuses_source_change_before_publication(tmp_path,monkeypatch):
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.lifecycle import research_json_stream as stream
+    root=tmp_path/'source';day,_,sidecar=_original_completed_source(root,monkeypatch,'native',False)
+    original=stream.completed_rows
+    def changed(*args,**kwargs):
+        yield from original(*args,**kwargs)
+        sidecar.write_bytes(sidecar.read_bytes()+b' ')
+    monkeypatch.setattr(stream,'completed_rows',changed)
+    with pytest.raises(ValueError,match='offline_source_changed'):
+        completed.prepare_window(root,[day])
+    assert list((root/'report/main_trailing_completed_source'/day/'generations').glob('offline-*.json'))==[]
+
+
+def test_completed_enrollment_does_not_promote_invalid_original_receipt(tmp_path,monkeypatch):
+    from src.engine.automation import main_trailing_completed_store as completed
+    root=tmp_path/'source';day,_,sidecar=_original_completed_source(root,monkeypatch,'native',False)
+    path=Path(str(sidecar)+'.dependencies.json');body=json.loads(path.read_bytes());body['completed_count']=-1
+    body['artifact_sha256']=completed.digest({k:v for k,v in body.items()if k!='artifact_sha256'})
+    path.write_text(json.dumps(body));before=path.read_bytes()
+    result=completed.prepare_window(root,[day])
+    assert result[0]['status']=='source_gap'
+    assert completed.offline_binding(root,day)==(None,None)
+    assert path.read_bytes()==before
+
+
+def test_completed_enrollment_checks_full_gzip_crc_before_publishing(tmp_path,monkeypatch):
+    import gzip,hashlib
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.lifecycle.snapshot_archive import file_identity
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    root=tmp_path/'source';day,_,sidecar=_original_completed_source(root,monkeypatch,'native',True)
+    packed=Path(str(sidecar)+'.gz');blob=bytearray(packed.read_bytes());blob[-8]^=1;packed.write_bytes(blob)
+    # A negative fixture retains the original logical declaration while making
+    # its small physical metadata match a CRC-damaged stream. Parsing to EOF
+    # must still reject it; metadata alone cannot enroll the source.
+    path=Path(str(packed)+'.archive_receipt.json');receipt=json.loads(path.read_bytes())
+    receipt.update(archive_generation=file_identity(packed.stat()),archive_sha256=hashlib.sha256(blob).hexdigest())
+    receipt['artifact_content_sha256']=content_sha256({k:v for k,v in receipt.items()if k!='artifact_content_sha256'})
+    path.write_text(json.dumps(receipt))
+    with pytest.raises((gzip.BadGzipFile,EOFError)):
+        completed.prepare_window(root,[day])
+    assert list((root/'report/main_trailing_completed_source'/day/'generations').glob('offline-*.json'))==[]
+
+
+@pytest.mark.parametrize('kind',['native','retained'])
+def test_completed_cache_survives_only_verified_lossless_compression(tmp_path,monkeypatch,kind):
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine import compress_db_backfilled_files as archive
+    from src.engine.lifecycle.holding_window_generation import byte_generation,verified_legacy_projection_dependency
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    root=tmp_path/'source';day,raw,sidecar=_original_completed_source(root,monkeypatch,kind,False)
+    completed.prepare_window(root,[day]);generation=byte_generation(sidecar)
+    receipt=Path(str(sidecar)+'.dependencies.json')
+    dependency=(completed._metadata(receipt)if receipt.exists()else
+        verified_legacy_projection_dependency(root,day,projection_generation=generation)[0])
+    before=completed.binding(root,dependency,projection_generation=generation)
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',sidecar.parent)
+    assert archive._gzip_file(sidecar,dry_run=False)[0]
+    if kind=='native':assert archive._gzip_file(raw,dry_run=False)[0]
+    assert byte_generation(sidecar)==generation
+    assert completed.binding(root,dependency,projection_generation=generation)==before
+    assert len(list(completed.read(root,dependency,tmp_path/'read',projection_generation=generation)))==1
+    assert completed.prepare_window(root,[day])[0]['status']=='offline_index_ready'
+    # An apparently well-formed archive cannot bind a different logical source.
+    path=Path(str(sidecar)+'.gz.archive_receipt.json');body=json.loads(path.read_bytes())
+    body['logical_content_sha256']='0'*64
+    body['artifact_content_sha256']=content_sha256({k:v for k,v in body.items()if k!='artifact_content_sha256'})
+    path.write_text(json.dumps(body))
+    with pytest.raises(ValueError,match='logical_source_changed'):
+        completed.binding(root,dependency,projection_generation=generation)
+
+
+def test_completed_enrollment_admits_only_same_epoch_postclose_byte_hashes(tmp_path,monkeypatch):
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.engine.infrastructure.validation_digest_session import postclose_session,ValidationDeferred
+    root=tmp_path/'source';day,raw,sidecar=_original_completed_source(root,monkeypatch,'native',False)
+    completed.prepare_window(root,[day]);expected={p:byte_generation(p)for p in (raw,sidecar)}
+    assert completed.admit_window(root,day,start_date=day)==0
+    original=Path.open
+    def guarded(path,*args,**kwargs):
+        if path in expected:pytest.fail('native byte proof reread original snapshot')
+        return original(path,*args,**kwargs)
+    with postclose_session(root,day)as session:
+        assert completed.admit_window(root,day,start_date=day)==2
+        before=session.stats['full_bytes']
+        monkeypatch.setattr(Path,'open',guarded)
+        assert {p:byte_generation(p)for p in expected}==expected
+        assert session.stats['full_bytes']==before
+        with pytest.raises(ValueError,match='owner_mismatch'):
+            completed.admit_window(root,'2026-10-19',start_date=day)
+        monkeypatch.setattr(Path,'open',original)
+        sidecar.write_bytes(sidecar.read_bytes()+b' ')
+        with pytest.raises(ValidationDeferred,match='proof_epoch_changed'):
+            byte_generation(sidecar)
+
+
+def test_completed_enrollment_refuses_crc_valid_changed_logical_gzip(tmp_path,monkeypatch):
+    import gzip,hashlib
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.lifecycle.snapshot_archive import file_identity
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    root=tmp_path/'source';day,_,sidecar=_original_completed_source(root,monkeypatch,'native',True)
+    packed=Path(str(sidecar)+'.gz');original=gzip.decompress(packed.read_bytes())
+    # Keep valid JSON, row count and CRC; the original logical SHA is still
+    # authoritative even if changed packed bytes have matching metadata.
+    packed.write_bytes(gzip.compress(original+b' '))
+    path=Path(str(packed)+'.archive_receipt.json');body=json.loads(path.read_bytes())
+    body.update(archive_generation=file_identity(packed.stat()),archive_sha256=hashlib.sha256(packed.read_bytes()).hexdigest())
+    body['artifact_content_sha256']=content_sha256({k:v for k,v in body.items()if k!='artifact_content_sha256'})
+    path.write_text(json.dumps(body))
+    with pytest.raises(ValueError,match='logical_generation_changed'):
+        completed.prepare_window(root,[day])
+    assert list((root/'report/main_trailing_completed_source'/day/'generations').glob('offline-*.json'))==[]

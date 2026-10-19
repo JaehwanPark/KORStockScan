@@ -2713,6 +2713,9 @@ def build_holding_exit_observation_report(
     """
     root_token = _SOURCE_ROOT.set(Path(input_root).resolve() if input_root is not None else None)
     try:
+        if all_scope_research:
+            from src.engine.automation.main_trailing_completed_store import admit_window
+            admit_window(_data_root(),target_date,start_date=month_start)
         with ExitStack() as budget:
             token = _INPUT_BUDGET.set(budget)
             try:

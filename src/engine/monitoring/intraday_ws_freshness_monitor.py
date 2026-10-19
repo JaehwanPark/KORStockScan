@@ -62,7 +62,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v19"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v20"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
@@ -221,7 +221,9 @@ WS_AGE_FIELDS_MS = (
     "ws_last_0f_age_ms",
 )
 
-PROVIDER_FIELD_TOKENS = ("provider", "ai_provider", "model_provider")
+PROVIDER_IDENTITY_FIELDS = frozenset(
+    {"provider", "ai_provider", "model_provider", "provider_actual", "ai_provider_actual"}
+)
 
 
 def _to_float(value: Any, default: float | None = None) -> float | None:
@@ -4708,11 +4710,14 @@ def _snapshot_rows(
 
 
 def _row_provider_none(row: dict[str, Any]) -> bool:
+    """Count explicit provider identities, preserving unknown provenance.
+
+    Activity flags and response IDs are not provider identities. JSON null is
+    unknown, even though str(None) happens to spell the explicit route 'none'.
+    """
     for key, value in row.items():
-        key_l = str(key).lower()
-        if not any(token in key_l for token in PROVIDER_FIELD_TOKENS):
-            continue
-        if str(value).strip().lower() == "none":
+        if (str(key).lower() in PROVIDER_IDENTITY_FIELDS
+                and isinstance(value, str) and value.strip().lower() == "none"):
             return True
     return False
 

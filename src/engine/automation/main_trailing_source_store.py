@@ -1061,6 +1061,11 @@ def prepare_window(data_root,day,*,start_date=DEFAULT_START_DATE):
                     bound=generation(data_root,logical)
             results.append(dict(path=str(logical),generation=bound))
         cursor+=timedelta(days=1)
+    from .main_trailing_completed_store import prepare_window as prepare_completed_window
+    cursor=date.fromisoformat(max(start_date,DEFAULT_START_DATE));days=[]
+    while cursor<=end:
+        days.append(cursor.isoformat());cursor+=timedelta(days=1)
+    results.extend(prepare_completed_window(data_root,days))
     return results
 
 
@@ -1277,6 +1282,8 @@ def native_input_session(data_root,day):
     """Bound normal indexed research; native writer proofs admit large files."""
     from src.engine.infrastructure.validation_digest_session import postclose_session
     with postclose_session(data_root,day) as session:
+        from .main_trailing_completed_store import admit_window
+        admit_window(data_root,day)
         token=None
         if _COMPAT_DECODE.get() is None:
             token=_COMPAT_DECODE.set(dict(remaining=32*1024*1024))

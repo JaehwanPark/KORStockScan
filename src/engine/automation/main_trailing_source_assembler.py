@@ -792,9 +792,11 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
     if raw.is_symlink() or (not retained and not snapshot_identity_matches(raw,receipt.get('snapshot_identity'))):
         raise ValueError('all_scope_large_completed_snapshot_changed')
     count=0
-    if receipt.get('trailing_completed_index'):
-        from .main_trailing_completed_store import read as completed_index_rows
-        cohort=completed_index_rows(root,receipt,output)
+    from .main_trailing_completed_store import binding as completed_binding,read as completed_index_rows
+    bound=completed_binding(root,receipt,projection_generation=generation)
+    if bound:
+        if sources is not None:sources[bound['manifest_path']]=bound['manifest_generation']
+        cohort=completed_index_rows(root,receipt,output,projection_generation=generation)
     else:
         # Native future sources always publish an index. Large unindexed
         # historical files belong to explicit, resumable offline migration.

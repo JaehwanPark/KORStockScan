@@ -1540,7 +1540,7 @@ def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
             assert 'src/engine/scalping/ai_market_snapshot.py' in changed
 
 
-@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision', 'postclose_readers', 'archive_authority', 'legacy_archive_authority', 'auxiliary_data_root'])
+@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision', 'postclose_readers', 'archive_authority', 'legacy_archive_authority', 'auxiliary_data_root', 'completed_offline'])
 @pytest.mark.parametrize('origin', ['7f2552aedde8fec6ef904a43105827907e50dfc8',
                                     '8940ea4ad0d3b64d30f67f986a75715ee24c1d95'])
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
@@ -1553,30 +1553,34 @@ def test_completion_census_handoff_binds_exact_complete_generation(
     canonical = Path(handoff.__file__).resolve().parents[3]
     hashes = (handoff.REVIEWED_COMPLETION_CENSUS_HASHES if generation == 'producer_census'
               else handoff.REVIEWED_COMPLETION_CONSUMER_HASHES)
-    if generation in {'prefix_code_binding','late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root'}:
+    if generation in {'prefix_code_binding','late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline'}:
         hashes = {**hashes, **handoff.REVIEWED_PREFIX_PRODUCER_HASHES}
-    if generation in {'late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root'}:
+    if generation in {'late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline'}:
         hashes = {**hashes, **handoff.REVIEWED_LATE_COST_HASHES}
-    if generation in {'postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root'}:
+    if generation in {'postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline'}:
         hashes = {**hashes, **handoff.REVIEWED_POSTCLOSE_READER_HASHES}
-    if generation in {'archive_authority','legacy_archive_authority','auxiliary_data_root'}:
+    if generation in {'archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline'}:
         hashes = {**hashes, **handoff.REVIEWED_ARCHIVE_AUTHORITY_HASHES}
-    if generation in {'legacy_archive_authority','auxiliary_data_root'}:
+    if generation in {'legacy_archive_authority','auxiliary_data_root','completed_offline'}:
         hashes = {**hashes, **handoff.REVIEWED_LEGACY_ARCHIVE_AUTHORITY_HASHES}
-    if generation == 'auxiliary_data_root':
+    if generation in {'auxiliary_data_root','completed_offline'}:
         hashes = {**hashes, **handoff.REVIEWED_AUXILIARY_DATA_ROOT_HASHES}
-    revision = ('6c9117791' if generation == 'archive_authority' else
+    if generation == 'completed_offline':
+        hashes = {**hashes, **handoff.REVIEWED_COMPLETED_OFFLINE_HASHES}
+    revision = ('146ca0b2b' if generation == 'auxiliary_data_root' else
+                '037b23a7c' if generation == 'legacy_archive_authority' else
+                '6c9117791' if generation == 'archive_authority' else
                 '9e5e7ce56' if generation == 'postclose_readers' else
                 'a5831f833' if generation == 'producer_census' else
                 '7df7ea3b9' if generation == 'late_cost_revision' else
                 '082234567' if generation == 'prefix_code_binding' else 'bf8465b5d')
     for name, expected in hashes.items():
-        raw = ((canonical/name).read_bytes() if generation in {'legacy_archive_authority','auxiliary_data_root'} else
+        raw = ((canonical/name).read_bytes() if generation == 'completed_offline' else
                subprocess.check_output(['git', '-C', str(canonical), 'show', revision+':'+name]))
         assert hashlib.sha256(raw).hexdigest() == expected
         (root/name).write_bytes(raw)
     for name in handoff.REVIEWED_POSTCLOSE_READER_HASHES:
-        if generation not in {'legacy_archive_authority','auxiliary_data_root'} and name not in hashes:
+        if generation not in {'legacy_archive_authority','auxiliary_data_root','completed_offline'} and name not in hashes:
             (root/name).write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',revision+':'+name]))
     subprocess.run(['git', '-C', str(root), 'add', *hashes,*handoff.REVIEWED_POSTCLOSE_READER_HASHES], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture',
@@ -1616,7 +1620,8 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         normalized=os.path.normpath(name)
         raw=subprocess.check_output(['git','-C',str(canonical),'show',origin+':'+normalized])
         original[normalized]=hashlib.sha256(raw).hexdigest()
-        if normalized in handoff.REVIEWED_ARCHIVE_AUTHORITY_HASHES:raw=(canonical/normalized).read_bytes()
+        if normalized in handoff.REVIEWED_ARCHIVE_AUTHORITY_HASHES:
+            raw=subprocess.check_output(['git','-C',str(canonical),'show','6c9117791:'+normalized])
         path=root/normalized;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
     expected=hashlib.sha256(json.dumps({key:original[os.path.normpath(name)] for key,name in inventory.items()},
         sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False).encode('ascii')).hexdigest()

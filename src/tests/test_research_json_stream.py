@@ -128,3 +128,16 @@ def test_identifiable_oversized_field_isolated_and_next_trade_retained(tmp_path)
     assert [r[0]['id'] for r in rows]==['bad','healthy']
     assert rows[0][0]['projection_source_gap']=='normalized_field_unbounded'
     assert 'projection_source_gap' not in rows[1][0]
+
+
+@pytest.mark.parametrize('compressed',[False,True])
+def test_original_stream_hashes_exact_utf8_and_crlf_without_second_read(tmp_path,compressed):
+    import gzip,hashlib
+    text=json.dumps({'sections':{'completed_trade_projection':[{'id':'unicode-가','status':'COMPLETED'}]}},ensure_ascii=False,indent=2)
+    raw=text.replace('\n','\r\n').encode('utf-8');path=tmp_path/'original.json'
+    if compressed:path.with_suffix('.json.gz').write_bytes(gzip.compress(raw))
+    else:path.write_bytes(raw)
+    generation=dict(path=path.name,size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+    assert len(list(completed_rows(path,tmp_path/'out',expected_generation=generation)))==1
+    with pytest.raises(ValueError,match='logical_generation_changed'):
+        list(completed_rows(path,tmp_path/'changed',expected_generation={**generation,'sha256':'0'*64}))
