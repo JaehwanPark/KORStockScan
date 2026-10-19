@@ -183,6 +183,9 @@
   - 정지 전 추가 보완: 후속 `07155d515`의 active/delay/stop/holding은 PASS였지만 auxiliary 원천 carry가 AI 로그 파일의 미등록 세대로 차단됐다. 해당 시도는 `tmp/wrapper-cleanup-native-deploy-20261019/preflight.log`에 보존했다. `startup_validation_code_context.REVIEWED_PREPARATION_HISTORY`에 정확한 AI `194f9dcd…`→`703bc5e3…`만 추가하고 변경한 준비 reader도 기존98파일 closure에 결속했다. 사용자 재수리·배포 승인 범위이며 정지·정책 reseal·원 영수증 변경은 하지 않았다. 새 코드 쌍의 미등록 실패1→동세대 수용·다른 source/target/path 거절, 역사 cold-preparation Git894 고정, preparation/activation 날짜 fixture 분리를 검증했다.
   - 최종 검증: startup context75·auxiliary readiness53 PASS; native handoff2,523·auxiliary source33 PASS를 더해 이번 수리 영향 테스트는 **4,026 PASS / 제외·skip0**다. compile·Ruff·parser·diff PASS, 재리뷰 미해결 결함0. release/PID는 다음 운영 결과에 기록한다. 네 family의 현재 capability fixture **431 PASS**(133/86/128/84, network attempt0)와 원 보고서 보존/현재 capability 4개 verified를 확인했다. 후보 변경 후 fresh active-policy parity·handoff와 모든 native gate를 다시 확인하며 중간 후보의 영수증을 최종 후보 증거로 재사용하지 않는다.
 
+  - 최종 reader 계약 수리: `d154d3169`는 원천 carry 검증 뒤 next-session semantic reader에서 발급 당시 runtime SHA만 수용해 재차 차단됐다. 원 정책·manifest·carry bytes를 보존하며 검증된 carry의 원/발급 세대에서 명시적으로 승인된 현재 reader만 허용하도록 두 소비자를 결속했다. 역사 `next_session_code_hashes`와 원 코드 경로는 유지하고 cache에는 실제 reader/registry bytes도 추가했다. 무등록/원천 변조/검증 뒤 현재 reader 변경은 거절하며 기존 OS 격리 위임·publish·future guard는 유지한다. `working-carry-preflight.json`은 실제 10/19 원천 읽기 전용 PASS이고 당시 selector/PID·정책·shell·manual exclusion baseline 차이0이다.
+  - 최종 범위 검증: native/carry **2,745 PASS** + capability/ordered **1,002 PASS** + 역사 closure **340 PASS** = **4,087 PASS**, 제외·skip0. compile·diff·문서 parser PASS; 기존 `reversal_auxiliary_next_session`의 사용하지 않는 registry import F401은 변경하지 않았으며 신규 변경 줄의 미정의 이름0이다. 동일 코드 세대 capability fixture431 PASS를 보존한다. 후보 native parity/handoff는 최종 commit으로 다시 발급하고 실제 배포 결과는 기존 OPEN owner에 기록한다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

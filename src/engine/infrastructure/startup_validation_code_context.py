@@ -65,6 +65,8 @@ REVIEWED_PREPARATION_HISTORY = {
          '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07'),
     },
     'src/engine/scalping/reversal_auxiliary_next_session.py': {
+        ('c32689f592a5f6558d3404bd9b5495330aefc45715feddf8e579c171d74901c1',
+         'eacdffe20114a954e7111026b02ff9c8bdaeb03383e8effa2f78a45a5566e02f'),
         ('c1dffd84447b3b8d5d23eece11d0e48fece8e0467dc439c6f2458ca6fd89b726',
          '301bbe9cc29efa2be9ed9f84b4d919ab1f9adaeae7b2e36ec45a58f3842bdefa'),
         ('301bbe9cc29efa2be9ed9f84b4d919ab1f9adaeae7b2e36ec45a58f3842bdefa',

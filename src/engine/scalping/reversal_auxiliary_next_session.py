@@ -127,8 +127,10 @@ def _validation_code_pair(path, expected, actual, proof):
     if not path.resolve(strict=True).is_relative_to(root / 'src'):
         return False
     relative = str(path.resolve().relative_to(root))
-    return (proof['original_code_hashes'].get(relative) == expected
-            and proof['runtime_code_hashes'].get(relative) == actual)
+    from src.engine.infrastructure.startup_validation_code_context import reviewed_preparation_pair
+    issued = proof['runtime_code_hashes'].get(relative)
+    return (expected in (proof['original_code_hashes'].get(relative), issued)
+            and (issued == actual or reviewed_preparation_pair(relative, issued, actual)))
 
 
 def _validation_code_inventory(expected, actual, proof):
@@ -295,8 +297,10 @@ def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
             _reference(target_bundle_path), _reference(prepared_path)] + source['sources'] + baseline_sources
     for path, digest in inventory.items():
         refs.append(dict(path=path, sha256=digest))
-    next_code = (_code_hashes() if validation_proof is None else _validation_manifest['next_session_code_hashes'])
-    _require(_validation_code_inventory(next_code, _code_hashes(), validation_proof), 'next_session_code_changed')
+    next_code = (_validation_manifest['next_session_code_hashes'] if validation_proof is not None
+                 else {name: _hash(_source_path(code_origin_root, name)) for name in _code_hashes()}
+                 if source_code_handoff is not None else _code_hashes())
+    _require(_validation_code_inventory(next_code, _code_hashes(), code_proof), 'next_session_code_changed')
     refs.extend(_code_reference(frozen_root if source_code_handoff else code_origin_root, name, digest)
                 for name, digest in semantic.items())
     refs.extend(_code_reference(code_origin_root, name, digest) for name, digest in next_code.items())
@@ -329,6 +333,12 @@ def prepare(data_root, *, source_manifest_path, source_bundle_path, frozen_root,
 def _dependencies(manifest):
     paths = {ref['path'] for ref in manifest['sources']}
     paths.update(manifest['ledger_pack_paths']); paths.update(manifest['baseline_dependency_paths'])
+    # Historical sources stay frozen; the cache also observes the actual reader.
+    root = Path(__file__).resolve().parents[3]
+    paths.update(str(_source_path(root, name)) for name in {*_code_hashes(), *J.code_hashes(), *I.code_hashes()})
+    paths.update(str(root/name) for name in (
+        'src/engine/infrastructure/startup_validation_code_context.py',
+        'src/engine/scalping/reversal_auxiliary_source_handoff.py'))
     return [(path, N._signature(Path(path))) for path in sorted(paths)]
 
 
@@ -342,12 +352,20 @@ def _database_signature(manifest):
 def validate_manifest(data_root, manifest, bundle, *, cached_only=False):
     from src.engine.infrastructure.startup_validation_code_context import validation_auxiliary_preparation
     delegation = validation_auxiliary_preparation(manifest, bundle, data_root)
+    code_proof = delegation
+    if (delegation is None and manifest.get('source_code_handoff') is not None
+            and manifest.get('next_session_code_hashes') != _code_hashes()):
+        from src.engine.scalping import reversal_auxiliary_source_handoff as H
+        code_proof = H.validate(data_root, _read_reference({k: manifest['source_code_handoff'][k]
+            for k in ('path', 'sha256')}), source_manifest_path=manifest['source_manifest']['path'],
+            source_bundle_path=manifest['source_bundle']['path'], target_bundle_path=manifest['target_bundle']['path'],
+            frozen_root=manifest['frozen_validator_root'])
     _require(manifest.get('schema') == SCHEMA and manifest.get('status') == 'prepared'
         and manifest.get('artifact_content_sha256') == P.seal(manifest)['artifact_content_sha256']
         and manifest.get('policy_data_root') == str(Path(data_root).resolve())
         and manifest.get('base_bundle_sha256') == bundle['bundle_sha256']
         and manifest.get('bundle_target_date') == bundle['target_date']
-        and _validation_code_inventory(manifest.get('next_session_code_hashes'), _code_hashes(), delegation)
+        and _validation_code_inventory(manifest.get('next_session_code_hashes'), _code_hashes(), code_proof)
         and manifest.get('reader_code_hashes') == I.code_hashes()
         and manifest.get('wire_contract') == W.contract(), 'manifest_invalid')
     key = (str(Path(data_root).resolve()), manifest['artifact_content_sha256'], bundle['bundle_sha256'])
