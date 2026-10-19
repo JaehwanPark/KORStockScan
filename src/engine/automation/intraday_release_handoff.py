@@ -2231,6 +2231,54 @@ REVIEWED_LATE_COST_PAIRS = {'src/engine/automation/main_trailing_all_scope_resea
                                                           ('aeabf97ec5bd69578e6e66fc4b2eb14945fbe7a34e59658e12fe1b9cf9732ecd',
                                                            '77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704'))}
 
+# Report-only rejection census and invocation-local native source reuse.
+# The issued late-cost generation remains an independent historical branch.
+REVIEWED_POSTCLOSE_READER_HASHES = {'src/engine/automation/entry_cancel_wait_tuning.py': 'e3d227354e85ec9d2dc19cb96e533d1b9f4cb54c5cd2338f7c671eae84a91582',
+ 'src/engine/scalping/entry_split_order_plan.py': 'c4a3938c0196d678bdaacc5911dde768d815d7f6d2ed31eabd9e44db87166ed2',
+ 'src/engine/scalping/initial_quantity_policy.py': '806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34',
+ 'src/engine/lifecycle/snapshot_archive.py': '9d5ec9e5bfe87461341c440d573f90c2d44a5780b5206d3bd17bdb8d9fc618d8',
+ 'src/engine/automation/main_trailing_source_store.py': 'e50e6e30840c030ad6823e0eebb5a4fa1ea8733518c66a79a4189a6426898266',
+ 'src/engine/automation/main_trailing_source_assembler.py': '242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2'}
+REVIEWED_POSTCLOSE_READER_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/entry_cancel_wait_tuning.py',
+        'selector_sha256': REVIEWED_POSTCLOSE_READER_HASHES['src/engine/automation/entry_cancel_wait_tuning.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_POSTCLOSE_READER_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_POSTCLOSE_READER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_LATE_COST_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_POSTCLOSE_READER_PAIRS = {'src/engine/automation/entry_cancel_wait_tuning.py': (('a1f577f964a00ea156fbf29bd5b815bf11ac74172d78f3d025e81ef30c1bf27e',
+                                                        'e3d227354e85ec9d2dc19cb96e533d1b9f4cb54c5cd2338f7c671eae84a91582'),),
+ 'src/engine/scalping/entry_split_order_plan.py': (('23df522d2a729c24696e93e3f6d456223da042cec8f60424d99d970638dff838',
+                                                    'c4a3938c0196d678bdaacc5911dde768d815d7f6d2ed31eabd9e44db87166ed2'),
+                                                   ('aa1e130239521229201759708c9ebf1e156a20ba1f88704c3607992043a65617',
+                                                    'c4a3938c0196d678bdaacc5911dde768d815d7f6d2ed31eabd9e44db87166ed2')),
+ 'src/engine/scalping/initial_quantity_policy.py': (('2710cc18ab0289b1318cb53af8cd45bebcbd9ad9354d82ba2fa180ed3eb9fd90',
+                                                     '806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34'),
+                                                    ('366541bd4f1dd717c75fa5ae9ae4297aafe5950e1d7f0a72afd050b57252d68d',
+                                                     '806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34'),
+                                                    ('99656408f2e1dd095686f4ce3b8cdea8364baaf98b62664e53104186c3db62f4',
+                                                     '806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34'),
+                                                    ('dbd20ac53e9ebb59dbb6b465a214558eb838b8f012636eda73cb02f65c5304c6',
+                                                     '806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34')),
+ 'src/engine/lifecycle/snapshot_archive.py': (('6046cf2f9ec83e74ee8f70985ecbd8a4f22c51bc2c703d72f5183f7b73a47b67',
+                                               '9d5ec9e5bfe87461341c440d573f90c2d44a5780b5206d3bd17bdb8d9fc618d8'),
+                                              ('9b1a0ac18db7fde52f609db45950b9fb631376f401fa565088a9831dd80ad42a',
+                                               '9d5ec9e5bfe87461341c440d573f90c2d44a5780b5206d3bd17bdb8d9fc618d8')),
+ 'src/engine/automation/main_trailing_source_store.py': (('f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
+                                                          'e50e6e30840c030ad6823e0eebb5a4fa1ea8733518c66a79a4189a6426898266'),),
+ 'src/engine/automation/main_trailing_source_assembler.py': (('a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b',
+                                                              '242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2'),
+                                                             ('aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd',
+                                                              '242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2'),
+                                                             ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              '242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2'),
+                                                             ('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              '242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2284,7 +2332,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_LATE_COST_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_POSTCLOSE_READER_DEPENDENCY_VARIANTS,
+                         REVIEWED_LATE_COST_DEPENDENCY_VARIANTS,
                          REVIEWED_PREFIX_PRODUCER_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETION_CONSUMER_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETION_CENSUS_DEPENDENCY_VARIANTS,
@@ -2354,7 +2403,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_LATE_COST_PAIRS.get(name, ())
+        if (pair in REVIEWED_POSTCLOSE_READER_PAIRS.get(name, ())
+                or pair in REVIEWED_LATE_COST_PAIRS.get(name, ())
                 or pair in REVIEWED_PREFIX_PRODUCER_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETION_CONSUMER_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETION_CENSUS_PAIRS.get(name, ())

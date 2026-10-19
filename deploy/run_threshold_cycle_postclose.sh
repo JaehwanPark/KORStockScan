@@ -2365,6 +2365,8 @@ if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECI
       --stage wait --wait-stage "$stage" --date "$TARGET_DATE" --timeout-sec 14400
   done
 fi
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.main_trailing_source_store \
+  --data-root "$PROJECT_DIR/data" --prepare-window --date "$TARGET_DATE"
 wait_for_postclose_resources "scalp_trailing_postclose_exit_snapshot"
 scalp_exit_snapshot_manifest="$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit.json"
 if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ] && PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$PREPARED_EFFECTIVE_DATE" <<'PY'

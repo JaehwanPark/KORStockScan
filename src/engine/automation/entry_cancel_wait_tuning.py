@@ -415,6 +415,63 @@ def _sequential_terminal_proof_valid(actual):
         and all(proof.get(field)==actual.get(field) for field in fields))
 
 
+def _rejected_without_order(row, fills=()):
+    """A definite rejected reservation is not an accepted broker order.
+
+    The native verified journal forbids ORDER_BOUND/AMBIGUOUS -> REJECTED.
+    Keep the rejected attempt and its reason as evidence, without requiring a
+    nonexistent broker terminal or pretending transport was never attempted.
+    """
+    return (row.get('state') == 'INTENT_REJECTED'
+            and not str(row.get('broker_order_no') or '').strip()
+            and row.get('filled_qty',0) == 0 and row.get('fill_amount',0) == 0
+            and not fills)
+
+
+def _reprice_sources(target_date, inventory, joined):
+    """Classify accepted reprices under their proven original Main parent.
+
+    The native client identity explicitly names ENTRY_REPRICE_BUY and its
+    parent order. This never certifies terminal, costs or exposure as zero.
+    """
+    from collections import defaultdict,deque
+    import re
+    by_order=defaultdict(list)
+    for key,row in inventory.items():
+        identity=tuple(str(row.get(k) or '') for k in (
+            'order_date','account_key','owner_id','symbol','broker_order_no'))
+        by_order[identity].append(key)
+    children=defaultdict(list)
+    for key,row in inventory.items():
+        if row.get('order_date')!=target_date:continue
+        parts=str(row.get('client_intent_id') or '').split(':')
+        if (len(parts)!=6 or parts[0]!='main_scalping' or not parts[1].isdigit()
+                or parts[2]!=parts[1] or parts[3]!='ENTRY_REPRICE_BUY'
+                or not parts[4].isdigit() or not parts[4].strip('0')
+                or re.fullmatch('[0-9a-f]{32}',parts[5]) is None
+                or row.get('owner_id')!='main_scalping:'+parts[1]
+                or not str(row.get('broker_order_no') or '').isdigit()
+                or not str(row['broker_order_no']).strip('0') or not row.get('account_key')):
+            continue
+        parents=by_order.get((target_date,str(row['account_key']),row['owner_id'],
+                              str(row.get('symbol') or ''),parts[4]),[])
+        if len(parents)!=1 or parents[0]==key:continue
+        children[parents[0]].append((key,dict(intent_id=key,parent_intent_id=parents[0],
+            parent_broker_order_no=parts[4],record_id=parts[1],source_date=target_date,
+            symbol=row.get('symbol'),broker_order_no=row['broker_order_no'],
+            account_scope_sha256=_digest(['broker_account',row['account_key']]),
+            operation='ENTRY_REPRICE_BUY',economic_eligible=False,
+            terminal_or_cost_inferred=False)))
+    result={};queue=deque((key,key) for key in joined)
+    while queue:
+        parent,root=queue.popleft()
+        for key,proof in children.get(parent,[]):
+            if key in result or key in joined:continue
+            result[key]={**proof,'root_submission_intent_id':root}
+            queue.append((key,root))
+    return result
+
+
 def _parents(target_date, events, registry, *, details=None):
     from src.engine.scalping.entry_split_order_plan import _safe_bool
     from src.trading.order.owner_custody_registry import OrderOwnerRegistry
@@ -638,6 +695,8 @@ def _parents(target_date, events, registry, *, details=None):
         unclassified.add(('uncertain_sequential_submit',*key))
     uncertain_client_ids={context.get('owner_client_intent_id')
         for context in unresolved_uncertain.values()}
+    reprices=_reprice_sources(target_date,inventory,joined)
+    rejected = []
     for identity,actual in inventory.items():
         if actual.get('order_date')!=target_date or identity in joined:
             continue
@@ -645,6 +704,13 @@ def _parents(target_date, events, registry, *, details=None):
         if client and client in uncertain_client_ids:
             continue
         if ':AVG_DOWN:' in client or ':PYRAMID:' in client:continue
+        if identity in reprices:continue
+        if _rejected_without_order(actual, fills.get(identity, ())):
+            if any(str((event.get('fields') or {}).get('owner_registry_intent_id') or '') == identity
+                    and _safe_bool((event.get('fields') or {}).get('actual_order_submitted')) for event in events):
+                raise ValueError('rejected_intent_submission_source_conflict')
+            rejected.append(identity)
+            continue
         # Missing producer events, unknown actions and rejected/ambiguous owner
         # attempts remain in the census; a verified projection zero is not enough.
         no=str(actual.get('broker_order_no') or '')
@@ -660,6 +726,12 @@ def _parents(target_date, events, registry, *, details=None):
             str(fields.get('buy_account_key') or ''),no) if no else ('projection',_digest(event))
         if no and (str(event.get('record_id') or ''),no) in joined_sent:
             continue
+        reprice=reprices.get(str(fields.get('owner_registry_intent_id') or ''))
+        if (reprice is not None and no==reprice['broker_order_no']
+                and str(event.get('record_id') or '')==reprice['record_id']
+                and event.get('stock_code')==reprice['symbol']
+                and _digest(['broker_account',fields.get('buy_account_key')])==reprice['account_scope_sha256']):
+            continue
         unclassified.add(key)
     if details is not None:
         details.update(response_uncertain_attempt_count=len(uncertain_contexts),
@@ -671,6 +743,8 @@ def _parents(target_date, events, registry, *, details=None):
                 p.get('timeout_owner')=='entry_split_probe_residual_runtime' for p in parents.values()),
             economic_parent_count=sum(
                 p.get('economic_eligible') is True for p in parents.values()),
+            rejected_without_order_intent_ids=sorted(rejected),
+            excluded_reprice_order_sources=[reprices[key] for key in sorted(reprices)],
             unclassified_identities=sorted(_digest(list(key)) for key in unclassified))
     return list(parents.values()),len(unclassified)
 
@@ -963,6 +1037,7 @@ def _unresolved_prior_custody(target_date, registry, parents, outcomes, *, detai
         if event.get('owner_type')=='main_scalping' and event.get('side')=='BUY' and event.get('action')=='NEW':
             inventory.setdefault(event.get('intent_id'),{}).update(event)
     unresolved = [key for key,row in inventory.items() if '2026-06-05' <= str(row.get('order_date','')) < target_date
+        and not _rejected_without_order(row)
         and (not _sequential_terminal_proof_valid(row)
              or (row.get('filled_qty',0)>0 and parent_by_intent.get(key) not in completed))]
     for parent in parents:
@@ -1072,6 +1147,10 @@ def _reconcile_history(target_date, events, registry, parents, outcomes, source,
             unclassified_submission_count=len(unknown), coverage_verified=verified,
             blocker=reason or ('historical_source_binding_missing' if not verified else
                               'actual_dispatch_or_parent_lineage_unclassified' if unknown else None))
+        if 'rejected_without_order_intent_ids' in details:
+            by_date[day]['rejected_without_order_intent_ids'] = details['rejected_without_order_intent_ids']
+        if 'excluded_reprice_order_sources' in details:
+            by_date[day]['excluded_reprice_order_sources'] = details['excluded_reprice_order_sources']
     required = sorted(day for day in by_date if day < target_date)
     missing = [day for day in required if not by_date[day]['coverage_verified']]
     unknown = sorted({key for day in required for key in by_date[day]['unclassified_identities']})
@@ -1435,6 +1514,10 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
         previous_thresholds=previous,recommended_thresholds=dict(previous),incumbent_source=incumbent_source,
         registered_count=len(parents),invalid_row_count=unclassified,diagnostic_proxy_row_count=None,
         submission_census=dict(submitted_parent_count=counts.get(target_date),unclassified_count=unclassified,
+            rejected_without_order_count=(len(parent_details['rejected_without_order_intent_ids'])
+                if 'rejected_without_order_intent_ids' in parent_details else None),
+            excluded_reprice_order_count=(len(parent_details['excluded_reprice_order_sources'])
+                if 'excluded_reprice_order_sources' in parent_details else None),
             economic_parent_count=parent_details.get('economic_parent_count'),
             excluded_sequential_timeout_owner_count=parent_details.get('sequential_source_only_parent_count'),
             excluded_residual_timeout_owner_count=parent_details.get('residual_source_only_parent_count'),
@@ -1720,7 +1803,24 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
         missing, unknown = [], set()
         for d, row in by_date.items():
             keys = row['unclassified_identities']
+            rejected_ids=row.get('rejected_without_order_intent_ids')
+            if rejected_ids is not None and (not isinstance(rejected_ids,list)
+                    or any(not isinstance(key,str) or not key for key in rejected_ids)
+                    or len(set(rejected_ids))!=len(rejected_ids)):
+                findings.append('cancel_wait_rejected_intent_census_invalid')
             parents = [p for p in state['parents'] if p['source_date'] == d]
+            reprice_sources=row.get('excluded_reprice_order_sources')
+            if reprice_sources is not None:
+                joined={key for parent in parents for key in parent['children']}
+                if (not isinstance(reprice_sources,list) or any(not isinstance(item,dict)
+                        or not isinstance(item.get('intent_id'),str) or not item['intent_id']
+                        or not isinstance(item.get('root_submission_intent_id'),str)
+                        or item.get('source_date')!=d or item.get('operation')!='ENTRY_REPRICE_BUY'
+                        or item.get('economic_eligible') is not False or item.get('terminal_or_cost_inferred') is not False
+                        or item.get('root_submission_intent_id') not in joined
+                        for item in reprice_sources)
+                        or len({item.get('intent_id') for item in reprice_sources})!=len(reprice_sources)):
+                    findings.append('cancel_wait_reprice_scope_census_invalid')
             identities = sorted(p['parent_id'] for p in parents)
             count = row['classified_parent_count']
             source_count = state['source_counts'].get(d)
@@ -1780,6 +1880,18 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             or history['zero_is_verified'] != (coverage and not unresolved)):
             findings.append('cancel_wait_false_historical_zero')
         current = by_date[day]
+        rejected=current.get('rejected_without_order_intent_ids')
+        if 'rejected_without_order_count' in census and (
+                (rejected is None and census['rejected_without_order_count'] is not None)
+                or rejected is not None and (type(census['rejected_without_order_count']) is not int
+                    or census['rejected_without_order_count'] != len(rejected))):
+            findings.append('cancel_wait_rejected_intent_census_invalid')
+        reprices=current.get('excluded_reprice_order_sources')
+        if 'excluded_reprice_order_count' in census and (
+                (reprices is None and census['excluded_reprice_order_count'] is not None)
+                or reprices is not None and (type(census['excluded_reprice_order_count']) is not int
+                    or census['excluded_reprice_order_count']!=len(reprices))):
+            findings.append('cancel_wait_reprice_scope_census_invalid')
         count = state['source_counts'].get(day)
         daily_coverage = current['coverage_verified'] and not current['unclassified_identities']
         zero = daily_coverage and count == 0
@@ -1916,6 +2028,26 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             report_tail=payload['source_contract']['registry'].get('tail_hash')
             hashes=[e.get('event_hash') for e in registry]
             ancestor=registry[:hashes.index(report_tail)+1] if report_tail in hashes else []
+            states=OrderOwnerRegistry._state(ancestor)
+            inventory={key:row for key,row in states.items() if row.get('owner_type')=='main_scalping'
+                and row.get('side')=='BUY' and row.get('action')=='NEW'}
+            for source_day, record in by_date.items():
+                if 'excluded_reprice_order_sources' in record:
+                    joined={key for parent in state['parents'] if parent['source_date']==source_day
+                            for key in parent['children']}
+                    expected_repr=_reprice_sources(source_day,inventory,joined)
+                    if record['excluded_reprice_order_sources'] != [expected_repr[key] for key in sorted(expected_repr)]:
+                        findings.append('cancel_wait_reprice_scope_census_invalid')
+                if 'rejected_without_order_intent_ids' not in record:
+                    continue
+                expected_rejected=sorted(key for key,row in states.items()
+                    if row.get('owner_type')=='main_scalping' and row.get('side')=='BUY'
+                    and row.get('action')=='NEW' and row.get('order_date')==source_day
+                    and ':AVG_DOWN:' not in str(row.get('client_intent_id') or '')
+                    and ':PYRAMID:' not in str(row.get('client_intent_id') or '')
+                    and _rejected_without_order(row))
+                if record['rejected_without_order_intent_ids'] != expected_rejected:
+                    findings.append('cancel_wait_rejected_intent_census_invalid')
             if isinstance(split_population,dict) and split_population.get('custody_checkpoint') is not None:
                 from src.engine.scalping import main_custody_checkpoint as custody_source
                 verified=custody_source.view(split_population['custody_checkpoint'],ancestor,by_date,day=day,

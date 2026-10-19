@@ -109,7 +109,8 @@ def test_cost_source_precedes_fact_and_quantity_generation_without_new_hard_gate
     last_ai_launch = script.index('for stage in legacy_machine_report main_auxiliary_policy; do')
     upstream_wait = script.index('for stage in main_machine_policy legacy_machine_report main_auxiliary_policy; do')
     stop = script.index('--stage main_stop_confirmation --date')
-    assert fact < quantity < last_ai_launch < upstream_wait < suffix < stop
+    enrollment=script.index('--prepare-window --date "$TARGET_DATE"')
+    assert fact < quantity < last_ai_launch < upstream_wait < enrollment < suffix < stop
     assert 'MONITOR_SNAPSHOT_POSTCLOSE_PHASE=completion_prefix' in script[snapshot:fact]
     assert 'verified_postclose_exit_prefix_manifest' in script[snapshot:fact]
     assert 'verified_postclose_exit_snapshot_manifest' not in script[snapshot:fact]

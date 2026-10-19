@@ -119,6 +119,10 @@ def _block_io_wait_ms() -> float | None:
 
 
 def _file_sha256(path: Path) -> str:
+    from src.engine.infrastructure.validation_digest_session import reused_digest
+    reused = reused_digest(path)
+    if reused is not None:
+        return reused
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
@@ -325,7 +329,7 @@ def _quantity_original_fact_generation_issue(day):
         receipt, _ = _completion_json(_status_path(day), MAX_METADATA_BYTES)
         proof = receipt.get('completion_snapshot_source') or {}
         original = receipt.get('actual_cost_source_generation')
-        if proof.get('source_basis') == 'native_bounded_fact_projection' and isinstance(original, dict):
+        if proof.get('source_basis') in {'native_bounded_fact_projection', 'native_original_snapshot_stream'} and isinstance(original, dict):
             return _quantity_fact_generation_issue(day, original_cost_generation=original)
     except (OSError, ValueError, TypeError, KeyError):
         pass
@@ -3272,6 +3276,7 @@ def main(argv: list[str] | None = None) -> int:
     import sys
     from src.engine.lifecycle.research_admission import direct_job
     from src.engine.lifecycle.research_disk_budget import use
+    from src.engine.infrastructure.validation_digest_session import postclose_session
     probe = argparse.ArgumentParser(add_help=False)
     probe.add_argument("--as-of")
     probe.add_argument("--replay", type=Path)
@@ -3284,7 +3289,7 @@ def main(argv: list[str] | None = None) -> int:
     root = args.output_dir or args.data_dir / "report/initial_entry_quantity_type_policy"
     # Match the existing dispatcher admission deadline. Another heavy owner
     # legitimately reserves both slots for longer than the direct CLI's 60s.
-    with direct_job(args.data_dir, "initial_entry_quantity_refresh", day, timeout=14400), use(root), use(args.data_dir / "report/initial_entry_quantity_type_policy"):
+    with direct_job(args.data_dir, "initial_entry_quantity_refresh", day, timeout=14400), postclose_session(args.data_dir, day), use(root), use(args.data_dir / "report/initial_entry_quantity_type_policy"):
         return _main_impl(argv)
 
 

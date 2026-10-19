@@ -267,7 +267,8 @@ def test_native_snapshot_cli_scopes_reuse_and_closes_session_on_failure(tmp_path
 
 @pytest.mark.parametrize('authority',['sealed_hash','native_manifest'])
 @pytest.mark.parametrize('mutation',['hardlink','content','replacement','mtime','wrong_hash'])
-def test_preserved_inode_requires_original_identity_and_complete_source_bytes(snapshot,authority,mutation):
+@pytest.mark.parametrize('compressed',[False,True])
+def test_preserved_inode_requires_original_identity_and_complete_source_bytes(snapshot,authority,mutation,compressed):
     import os,hashlib
     before=source.snapshot_identity(snapshot)
     sha=hashlib.sha256(snapshot.read_bytes()).hexdigest()
@@ -286,5 +287,8 @@ def test_preserved_inode_requires_original_identity_and_complete_source_bytes(sn
     elif mutation=='wrong_hash':
         sha='0'*64;value=json.loads(manifest.read_text());value['snapshot_sha256']['trade_review']=sha
         manifest.write_text(json.dumps(value))
+    if compressed:
+        assert archive._gzip_file(snapshot,dry_run=False)[0]
+        assert not snapshot.exists()
     assert source.snapshot_identity_matches(snapshot,before,
         **({'expected_sha256':sha} if authority=='sealed_hash' else {})) is (mutation=='hardlink')

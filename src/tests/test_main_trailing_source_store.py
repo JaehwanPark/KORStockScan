@@ -106,6 +106,91 @@ def test_archive_backfill_requires_a_separate_offline_worker(tmp_path):
         store.build_step(tmp_path,path)
 
 
+def test_offline_archive_enrollment_preserves_source_and_never_restores_plain(tmp_path,monkeypatch):
+    import gzip,hashlib
+    path=source(tmp_path);raw=json.dumps(row()).encode()+b'\n';path.unlink()
+    archive=Path(str(path)+'.gz');archive.write_bytes(gzip.compress(raw))
+    receipt=Path(str(archive)+'.archive_receipt.json');receipt.write_bytes(b'original receipt bytes')
+    before=archive.read_bytes();identity=store.signature(archive.stat())
+    with pytest.raises(store.InputPending):store.generation(tmp_path,path)
+    bound=store.migrate_frozen_source(tmp_path,path)
+    assert not path.exists() and archive.read_bytes()==before
+    assert store.signature(archive.stat())==identity and receipt.read_bytes()==b'original receipt bytes'
+    assert bound['source_stat']==identity and bound['size']==len(raw)
+    assert store.input_generation(tmp_path,archive)==bound
+    original=Path.open
+    def no_raw(self,*args,**kwargs):
+        if self in (path,archive):pytest.fail('indexed reader reopened compressed source')
+        return original(self,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',no_raw)
+    values=list(store.read_rows(tmp_path,path))
+    assert values[0][0]['row']['decision_trace_id']=='trace-1'
+    assert values[0][1]['sha256']==hashlib.sha256(raw).hexdigest()
+    assert store.migrate_frozen_source(tmp_path,path)==bound
+
+
+@pytest.mark.parametrize('corruption',['crc','partial','changed','symlink'])
+def test_archive_enrollment_does_not_publish_failed_or_foreign_sources(tmp_path,monkeypatch,corruption):
+    import gzip
+    path=source(tmp_path);path.unlink();archive=Path(str(path)+'.gz')
+    raw=json.dumps(row()).encode()+ (b'' if corruption=='partial' else b'\n')
+    packed=gzip.compress(raw)
+    archive.write_bytes(packed[:-5] if corruption=='crc' else packed)
+    if corruption=='symlink':
+        other=archive.with_name('foreign.gz');archive.rename(other);archive.symlink_to(other)
+    if corruption=='changed':
+        original=store._put
+        def change(*args):
+            result=original(*args);archive.write_bytes(packed);return result
+        monkeypatch.setattr(store,'_put',change)
+    with pytest.raises((ValueError,EOFError,store.InputPending)):
+        store.migrate_frozen_source(tmp_path,path)
+    assert not store._location(tmp_path,path)[2].exists() and not path.exists()
+
+
+def test_window_preparation_enrolls_once_and_keeps_future_sources_out(tmp_path,monkeypatch):
+    import gzip
+    path=source(tmp_path);path.write_bytes(json.dumps(row()).encode()+b'\n')
+    old=path.with_name('ai_decision_trace_2026-10-16.jsonl.gz')
+    old.write_bytes(gzip.compress(json.dumps(row('old')).encode()+b'\n'))
+    path.with_name('ai_decision_trace_2026-10-20.jsonl.gz').write_bytes(b'invalid future source')
+    result=store.prepare_window(tmp_path,'2026-10-19')
+    assert len(result)==2
+    monkeypatch.setattr(store,'build_step',lambda *a,**k:pytest.fail('repeated migration'))
+    monkeypatch.setattr(store,'migrate_frozen_source',lambda *a,**k:pytest.fail('repeated migration'))
+    assert store.prepare_window(tmp_path,'2026-10-19')==result
+
+
+def test_frozen_generation_replacement_preserves_prior_cache_and_append_inode(tmp_path):
+    import sqlite3
+    path=source(tmp_path);append(tmp_path,path,row('old'))
+    target=store._location(tmp_path,path)[2];inode=target.stat().st_ino
+    path.write_bytes(json.dumps(row('new')).encode()+b'\n')
+    result=store.prepare_window(tmp_path,'2026-10-19')
+    assert result[0]['generation']==store.generation(tmp_path,path)
+    assert target.stat().st_ino==inode
+    assert [v['row']['decision_trace_id'] for v,_ in store.read_rows(tmp_path,path)]==['new']
+    saved=list(target.parent.glob('*.before-offline-*.sqlite'));assert len(saved)==1
+    with sqlite3.connect(saved[0]) as db:
+        assert json.loads(db.execute('SELECT body FROM rows').fetchone()[0])['row']['decision_trace_id']=='old'
+    append(tmp_path,path,row('later'))
+    assert [v['row']['decision_trace_id'] for v,_ in store.read_rows(tmp_path,path)]==['new','later']
+
+
+def test_archive_oversize_row_is_identified_without_blocking_other_rows(tmp_path):
+    import gzip,hashlib
+    path=source(tmp_path);path.unlink()
+    huge=json.dumps(dict(padding='x'*(store.MAX_ROW_BYTES+100))).encode()+b'\n'
+    raw=huge+json.dumps(row()).encode()+b'\n'
+    Path(str(path)+'.gz').write_bytes(gzip.compress(raw))
+    store.migrate_frozen_source(tmp_path,path)
+    values=list(store.read_rows(tmp_path,path))
+    assert values[0][0]['reason']=='source_record_budget_exceeded'
+    assert values[0][1]['size']==len(huge) and values[0][1]['sha256']==hashlib.sha256(huge).hexdigest()
+    assert values[1][1]['decoded_offset']==len(huge)
+    assert values[1][0]['row']['decision_trace_id']=='trace-1'
+
+
 def test_selected_projection_tamper_is_not_native_success(tmp_path):
     path=source(tmp_path);append(tmp_path,path,row())
     with store._database(tmp_path,path) as (db,_,_),db:
@@ -114,7 +199,8 @@ def test_selected_projection_tamper_is_not_native_success(tmp_path):
         list(store.read_rows(tmp_path,path))
 
 
-def test_native_indexes_feed_full_assembly_replay_and_handoff_without_raw_reads(tmp_path,monkeypatch):
+@pytest.mark.parametrize('offline_archives',[False,True])
+def test_native_indexes_feed_full_assembly_replay_and_handoff_without_raw_reads(tmp_path,monkeypatch,offline_archives):
     from src.tests.test_main_trailing_source_assembler import fixture,DAY,TARGET
     from src.engine.automation import main_trailing_source_assembler as source
     from src.engine.automation import main_trailing_all_scope_research as research
@@ -124,10 +210,16 @@ def test_native_indexes_feed_full_assembly_replay_and_handoff_without_raw_reads(
     baseline=research.run(plain,input_root=plain.parent,output_root=tmp_path/'baseline',dry_run=False)
     raw_paths=list(data.glob('*/*.jsonl'))
     for path in raw_paths:
-        assert store.build_step(data,path)['complete']
+        if offline_archives:
+            import gzip
+            Path(str(path)+'.gz').write_bytes(gzip.compress(path.read_bytes()));path.unlink()
+            store.migrate_frozen_source(data,path)
+        else:
+            assert store.build_step(data,path)['complete']
     original=Path.open
     def guard(self,*args,**kwargs):
-        if self in raw_paths:pytest.fail('indexed normal report opened a raw stream')
+        if self in raw_paths or self in [Path(str(p)+'.gz') for p in raw_paths]:
+            pytest.fail('indexed normal report opened a raw stream')
         return original(self,*args,**kwargs)
     monkeypatch.setattr(Path,'open',guard)
     manifest=source.assemble(data,tmp_path/'indexed',source_date=DAY,target_date=TARGET,start_date=DAY)

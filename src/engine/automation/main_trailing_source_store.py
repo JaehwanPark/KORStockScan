@@ -16,6 +16,7 @@ from collections import OrderedDict
 from contextvars import ContextVar
 
 SCHEMA = 'main_trailing_indexed_source_v1'
+DEFAULT_START_DATE = '2026-09-29'
 ZERO_SHA = '0' * 64
 MAX_ROW_BYTES = 2 * 1024 * 1024
 MAX_STEP_BYTES = 8 * 1024 * 1024
@@ -603,19 +604,21 @@ def _leaf(offset, raw, body):
         hashlib.sha256(body).hexdigest() if body else None])).hexdigest()
 
 
-def _put(db, source, offset, raw, value):
+def _put(db, source, offset, raw, value, *, raw_identity=None):
     body=_encoded_projection(value)
-    leaf=_leaf(offset,raw,body)
+    size,raw_sha=raw_identity or (len(raw),hashlib.sha256(raw).hexdigest())
+    leaf=hashlib.sha256(encode([offset,size,raw_sha,
+        hashlib.sha256(body).hexdigest() if body else None])).hexdigest()
     if value is None:
         return leaf
     old=db.execute('SELECT raw_sha,body_sha FROM rows WHERE source=? AND offset=?',
         (source,offset)).fetchone()
-    pair=(hashlib.sha256(raw).hexdigest(),hashlib.sha256(body).hexdigest())
+    pair=(raw_sha,hashlib.sha256(body).hexdigest())
     if old is not None and old!=pair:
         raise ValueError('trailing_index_record_conflict')
     row=value.get('row') or {}
     db.execute('INSERT OR IGNORE INTO rows VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-        (source,offset,len(raw),*pair,value['kind'],value.get('identity'),
+        (source,offset,size,*pair,value['kind'],value.get('identity'),
          row.get('stock_code') or row.get('symbol'),row.get('stage'),row.get('emitted_at') or row.get('session_key'),body))
     return leaf
 
@@ -765,7 +768,7 @@ def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, sta
         start_generation=generation(data_root,path)
         state = db.execute('SELECT signature,catchup_end,cursor,producer_end,invalid FROM sources WHERE path=?', (name,)).fetchone()
         if (state is None or state[4] or state[1] != state[2]
-                or json.loads(state[0]) != source_signature(data_root,path) or state[3] != source_signature(data_root,path)[2]):
+                or json.loads(state[0]) != source_signature(data_root,path) or state[3] != start_generation['size']):
             raise InputPending('trailing_index_coverage_incomplete')
         query, args = 'SELECT offset,size,raw_sha,body_sha,body FROM rows WHERE source=?', [name]
         for column, values in (('kind', kinds), ('identity', identities), ('symbol', symbols), ('stage', stages)):
@@ -793,26 +796,49 @@ def generation(data_root, path):
     """O(1) native coverage/chain identity, explicitly not a full-file SHA."""
     with _database(data_root,path,readonly=True) as (db,path,namespace):
         current=source_signature(data_root,path)
+        archived=None if path.is_file() else _archive_generation(data_root,path)
+        logical_size=current[2] if archived is None else archived['size']
         state=db.execute('SELECT signature,catchup_end,cursor,producer_end,records,invalid,'
             'prefix_sha,append_sha,selected_records FROM sources WHERE path=?',(str(path),)).fetchone()
-        if (state is None or state[5] or state[1]!=state[2] or state[3]!=current[2]
+        if (state is None or state[5] or state[1]!=state[2] or state[3]!=logical_size
                 or json.loads(state[0])!=current):
             raise InputPending('trailing_index_coverage_incomplete')
-        body=dict(schema=SCHEMA+':generation',path=path.name,size=current[2],
+        body=dict(schema=SCHEMA+':generation',path=path.name,size=logical_size,
             namespace=namespace,source_stat=current,catchup_end=state[1],
             raw_records=state[4],selected_records=state[8],prefix_chain_sha256=state[6],
             append_chain_sha256=state[7],whole_file_sha256=False)
         if source_signature(data_root,path)!=current:
             raise InputPending('trailing_index_source_generation_changed')
         result={**body,'sha256':hashlib.sha256(encode(body)).hexdigest()}
-        if not path.is_file() and _archive_generation(data_root,path)!=result:
+        if archived is not None and _archive_generation(data_root,path)!=result:
             raise ValueError('trailing_index_archive_source_head_changed')
         return result
 
 
 def _archive_generation(data_root,path):
-    path,_,_=_location(data_root,path)
+    path,_,target=_location(data_root,path)
     receipt=Path(str(path)+'.gz.archive_receipt.json');physical=Path(str(path)+'.gz')
+    # Offline enrollment owns a physical gzip identity, not an invented old
+    # plain-file inode. Its SQLite metadata is published only after CRC EOF.
+    if target.is_file():
+        with _database(data_root,path,readonly=True) as (db,_,_):
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='archive_migrations'").fetchone():
+                saved=db.execute('SELECT body FROM archive_migrations WHERE path=?',(str(path),)).fetchone()
+                if saved:
+                    value=json.loads(saved[0]);bound=value['generation']
+                    if (physical.is_symlink() or path.exists()
+                            or signature(physical.stat())!=bound['source_stat']
+                            or value.get('schema')!='trailing_archive_migration_v1'
+                            or value.get('source_identity_kind')!='physical_gzip'
+                            or value.get('verification_contract')!='logical_sha256_size_crc_to_eof_v1'
+                            or value.get('runtime_effect') is not False or value.get('allowed_runtime_apply') is not False
+                            or any(not isinstance(value.get(key),str) or len(value[key])!=64
+                                   for key in ('logical_content_sha256','archive_sha256'))
+                            or value.get('logical_size_bytes')!=bound['size']
+                            or value.get('artifact_content_sha256')!=hashlib.sha256(encode({
+                                k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()):
+                        raise ValueError('trailing_index_archive_migration_changed')
+                    return bound
     if (not receipt.is_file() or receipt.is_symlink() or receipt.stat().st_size>128*1024
             or physical.is_symlink()):
         raise InputPending('trailing_index_native_archive_binding_missing')
@@ -831,6 +857,159 @@ def _archive_generation(data_root,path):
             or signature(receipt.stat())!=before):
         raise ValueError('trailing_index_native_archive_binding_invalid')
     return generation
+
+
+def migrate_frozen_source(data_root,path):
+    """Explicit one-pass frozen enrollment; never called by a report reader.
+
+    Original gzip/receipts remain byte-identical. A private SQLite generation
+    retains decoded row offsets, raw hashes and a full logical SHA/CRC proof.
+    The logical source is never restored to disk. Failed private builds remain
+    available for diagnosis and cannot advertise complete coverage.
+    """
+    import gzip
+    import uuid
+    from src.utils.jsonl_io import jsonl_artifact_generation_lock
+    from src.engine.lifecycle.research_input_budget import Claim
+    logical,namespace,target=_location(data_root,path)
+    archived=not logical.exists()
+    physical=Path(str(logical)+'.gz') if archived else logical
+    with jsonl_artifact_generation_lock(logical,exclusive=True),Claim(MAX_ROW_BYTES*12):
+        if logical.is_symlink() or physical.is_symlink() or (archived and logical.exists()):
+            raise ValueError('trailing_archive_migration_source_invalid')
+        metadata=physical.stat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid!=os.getuid():
+            raise ValueError('trailing_archive_migration_source_invalid')
+        if target.is_symlink():raise ValueError('trailing_index_database_path_invalid')
+        if target.exists():
+            try:return generation(data_root,logical)
+            except InputPending:pass
+        if any(p.is_symlink() for p in target.parents):
+            raise ValueError('trailing_index_database_path_invalid')
+        current=signature(metadata);target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+        temporary=target.with_name(target.name+'.archive-'+uuid.uuid4().hex+'.tmp')
+        db=_open_database(temporary,readonly=False,writer=False)
+        name=str(logical);offset=records=selected=0;chain=ZERO_SHA;logical_sha=hashlib.sha256()
+        try:
+            with physical.open('rb') as raw:
+                archive_sha=hashlib.file_digest(raw,'sha256').hexdigest() if archived else None
+                if archived:raw.seek(0)
+                if signature(os.fstat(raw.fileno()))!=current:
+                    raise ValueError('trailing_archive_migration_source_changed')
+                from contextlib import nullcontext
+                with (gzip.GzipFile(fileobj=raw,mode='rb') if archived else nullcontext(raw)) as handle:
+                    while line:=handle.readline(MAX_ROW_BYTES+1):
+                        logical_sha.update(line)
+                        size=len(line)
+                        if size>MAX_ROW_BYTES:
+                            raw_digest=hashlib.sha256(line)
+                            while not line.endswith(b'\n'):
+                                line=handle.readline(MAX_ROW_BYTES+1)
+                                if not line:raise InputPending('trailing_archive_migration_partial_record')
+                                logical_sha.update(line);raw_digest.update(line);size+=len(line)
+                            value=dict(kind='source_gap',reason='source_record_budget_exceeded');summary=None
+                            leaf=_put(db,name,offset,b'',value,raw_identity=(size,raw_digest.hexdigest()))
+                        else:
+                            if not line.endswith(b'\n'):
+                                raise InputPending('trailing_archive_migration_partial_record')
+                            try:
+                                row=json.loads(line);value=project(namespace,row);summary=_summary(namespace,row)
+                            except (ValueError,TypeError,KeyError,AttributeError):
+                                value=dict(kind='source_gap',reason='source_record_invalid');summary=None
+                            leaf=_put(db,name,offset,line,value)
+                        chain=hashlib.sha256(encode([chain,leaf])).hexdigest()
+                        if summary:_summary_merge(db,name,*summary[:2],1,summary[2])
+                        offset+=size;records+=1;selected+=value is not None
+                        if records%128==0:db.commit()
+                if signature(os.fstat(raw.fileno()))!=current or signature(physical.stat())!=current:
+                    raise ValueError('trailing_archive_migration_source_changed')
+            body=dict(schema=SCHEMA+':generation',path=logical.name,size=offset,
+                namespace=namespace,source_stat=current,catchup_end=offset,raw_records=records,
+                selected_records=selected,prefix_chain_sha256=chain,append_chain_sha256=ZERO_SHA,
+                whole_file_sha256=False)
+            bound={**body,'sha256':hashlib.sha256(encode(body)).hexdigest()}
+            proof=dict(schema='trailing_archive_migration_v1',generation=bound,
+                source_identity_kind='physical_gzip' if archived else 'physical_plain',logical_size_bytes=offset,
+                logical_content_sha256=logical_sha.hexdigest(),archive_sha256=archive_sha,
+                verification_contract='logical_sha256_size_crc_to_eof_v1',
+                runtime_effect=False,allowed_runtime_apply=False)
+            proof['artifact_content_sha256']=hashlib.sha256(encode(proof)).hexdigest()
+            with db:
+                db.execute('INSERT INTO sources VALUES(?,?,?,?,?,?,?,?,?,?)',
+                    (name,encode(current).decode(),offset,offset,offset,records,None,chain,ZERO_SHA,selected))
+                if archived:
+                    db.execute('CREATE TABLE archive_migrations(path TEXT PRIMARY KEY,body BLOB)')
+                    db.execute('INSERT INTO archive_migrations VALUES(?,?)',(name,encode(proof)))
+            db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        finally:
+            db.close()
+        if signature(physical.stat())!=current or (archived and logical.exists()):
+            raise ValueError('trailing_archive_migration_source_changed')
+        with temporary.open('rb') as stream:os.fsync(stream.fileno())
+        if target.exists():
+            # Preserve the complete old cache with SQLite's native backup,
+            # including WAL contents. Keep the inode for resident append owners;
+            # readers see one atomic replacement of the source's SQL rows.
+            with _database(data_root,logical) as (existing,_,_):
+                prior=existing.execute('SELECT * FROM sources ORDER BY path').fetchall()
+                saved=target.with_name(target.stem+'.before-offline-'+uuid.uuid4().hex+'.sqlite')
+                descriptor=os.open(saved,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(descriptor)
+                saved_db=sqlite3.connect(saved)
+                try:existing.backup(saved_db)
+                finally:saved_db.close()
+                if saved.is_symlink():raise ValueError('trailing_index_recovery_archive_untrusted')
+                preserved=sqlite3.connect('file:'+str(saved)+'?mode=ro',uri=True)
+                try:
+                    if preserved.execute('PRAGMA quick_check').fetchone()[0]!='ok' or preserved.execute(
+                            'SELECT * FROM sources ORDER BY path').fetchall()!=prior:
+                        raise ValueError('trailing_index_recovery_archive_invalid')
+                finally:preserved.close()
+                existing.execute('ATTACH DATABASE ? AS migration',(str(temporary),))
+                try:
+                    with existing:
+                        existing.execute('BEGIN IMMEDIATE')
+                        if (signature(physical.stat())!=current or existing.execute(
+                                'SELECT * FROM sources ORDER BY path').fetchall()!=prior):
+                            raise ValueError('trailing_archive_migration_source_changed')
+                        for table,column in (('rows','source'),('minutes','source'),('sources','path')):
+                            existing.execute('DELETE FROM '+table+' WHERE '+column+'=?',(name,))
+                            existing.execute('INSERT INTO '+table+' SELECT * FROM migration.'+table+' WHERE '+column+'=?',(name,))
+                        existing.execute('CREATE TABLE IF NOT EXISTS archive_migrations(path TEXT PRIMARY KEY,body BLOB)')
+                        existing.execute('DELETE FROM archive_migrations WHERE path=?',(name,))
+                        if archived:existing.execute('INSERT INTO archive_migrations SELECT * FROM migration.archive_migrations')
+                finally:existing.execute('DETACH DATABASE migration')
+        else:
+            os.link(temporary,target,follow_symlinks=False)  # Exclusive publication, never overwrite.
+        temporary.unlink()
+        descriptor=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(descriptor)
+        finally:os.close(descriptor)
+        return generation(data_root,logical)
+
+
+def prepare_window(data_root,day,*,start_date=DEFAULT_START_DATE):
+    """The postclose predecessor owns enrollment, not holding consumers."""
+    from datetime import date,timedelta
+    end=date.fromisoformat(day);cursor=date.fromisoformat(max(start_date,DEFAULT_START_DATE));results=[]
+    if cursor>end:raise ValueError('trailing_index_window_invalid')
+    while cursor<=end:
+        for namespace in STREAM_NAMESPACES:
+            logical=Path(data_root)/namespace/(namespace+'_'+cursor.isoformat()+'.jsonl')
+            if not logical.exists() and not Path(str(logical)+'.gz').exists():continue
+            try:
+                bound=generation(data_root,logical)
+            except InputPending:
+                if not logical.exists():bound=migrate_frozen_source(data_root,logical)
+                else:
+                    try:
+                        while not build_step(data_root,logical,seconds=30)['complete']:pass
+                    except InputPending as exc:
+                        if str(exc)!='trailing_index_source_generation_changed':raise
+                        migrate_frozen_source(data_root,logical)
+                    bound=generation(data_root,logical)
+            results.append(dict(path=str(logical),generation=bound))
+        cursor+=timedelta(days=1)
+    return results
 
 
 def source_signature(data_root,path):
@@ -1064,11 +1243,19 @@ def main(argv=None):
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root',type=Path,required=True)
-    parser.add_argument('--source',type=Path,required=True)
+    group=parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--source',type=Path)
+    group.add_argument('--prepare-window',action='store_true')
+    parser.add_argument('--date')
     parser.add_argument('--max-bytes',type=int,default=MAX_STEP_BYTES)
     parser.add_argument('--seconds',type=float,default=1.)
     args=parser.parse_args(argv)
-    print(json.dumps(build_step(args.data_root,args.source,max_bytes=args.max_bytes,seconds=args.seconds)))
+    if args.prepare_window:
+        if not args.date:parser.error('--prepare-window requires --date')
+        result=prepare_window(args.data_root,args.date)
+    else:
+        result=build_step(args.data_root,args.source,max_bytes=args.max_bytes,seconds=args.seconds)
+    print(json.dumps(result))
     return 0
 
 

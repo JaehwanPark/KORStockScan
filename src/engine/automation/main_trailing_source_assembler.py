@@ -867,16 +867,18 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
         raise ValueError('all_scope_large_completed_source_changed')
 
 
-def assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False, cost_data_root=None):
+def assemble(root, output, *, source_date, target_date, start_date=None, as_of=None, immutable=False, cost_data_root=None):
     root=Path(root).resolve(strict=True)
     from src.engine.lifecycle.research_disk_budget import use
     from src.engine.lifecycle.holding_research_cost import Source
     from .main_trailing_source_store import native_input_session,input_generation
+    from .main_trailing_source_store import DEFAULT_START_DATE
+    start_date=max(start_date or DEFAULT_START_DATE,DEFAULT_START_DATE)
     with native_input_session(root,source_date),use(output),storage.compact_trees(),Source(root,cost_data_root=cost_data_root,knowledge_cutoff=as_of,
                                                   registry_source_date=source_date) as costs:
         # Reject missing large raw indexes before capture_window can consume
         # snapshot/cost sources. Migration is an explicit separate command.
-        cursor=date.fromisoformat(max(start_date,'2026-09-29'))
+        cursor=date.fromisoformat(start_date)
         while cursor<=date.fromisoformat(source_date):
             from .main_trailing_source_store import STREAM_NAMESPACES
             for namespace in STREAM_NAMESPACES:
@@ -888,12 +890,12 @@ def assemble(root, output, *, source_date, target_date, start_date='2026-09-29',
             start_date=start_date,as_of=as_of,immutable=immutable,costs=costs)
 
 
-def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29', as_of=None, immutable=False, costs):
+def _assemble(root, output, *, source_date, target_date, start_date, as_of=None, immutable=False, costs):
     root,output=Path(root).resolve(),Path(output).resolve()
     if output==root or output.is_relative_to(root):
         raise ValueError('all_scope_isolated_assembly_required')
     output.mkdir(parents=True,exist_ok=True)
-    days=[];cursor=date.fromisoformat(max(start_date,'2026-09-29'))
+    days=[];cursor=date.fromisoformat(start_date)
     while cursor<=date.fromisoformat(source_date): days.append(cursor.isoformat());cursor+=timedelta(days=1)
     if not days: raise ValueError('all_scope_assembly_date_window_empty')
     entry_window_start=research_entry_window_start(days)

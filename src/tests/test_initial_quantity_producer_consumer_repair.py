@@ -902,6 +902,47 @@ def test_quantity_fact_validator_never_decodes_oversized_legacy_timeline(monkeyp
     assert policy._quantity_fact_generation_issue('2026-09-30')=='fact_snapshot_requires_bounded_native_projection'
 
 
+def test_quantity_raw_hash_reuses_only_invocation_local_verified_bytes(tmp_path):
+    import os
+    from src.engine.infrastructure import validation_digest_session as digests
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    path=tmp_path/'pipeline_events/day.jsonl';path.parent.mkdir()
+    path.write_bytes(b'a'*(digests.MIN_BYTES+1))
+    with digests.postclose_session(tmp_path,'2026-10-19') as session:
+        expected=policy._file_sha256(path)
+        assert policy._file_sha256(path)==expected
+        assert byte_generation(path)['sha256']==expected
+        assert session.stats['full_reads']==1 and session.stats['reused_reads']==2
+        before=path.stat();path.write_bytes(b'b'*before.st_size)
+        os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
+        assert policy._file_sha256(path)!=expected
+        assert session.stats['full_reads']==2
+    assert digests.ACTIVE.get() is None
+    assert not (tmp_path/'runtime/validation_digests').exists()
+
+
+def test_quantity_cli_establishes_digest_scope_after_native_admission(tmp_path,monkeypatch):
+    from contextlib import contextmanager
+    from src.engine.infrastructure import validation_digest_session as digests
+    from src.engine.lifecycle import research_admission,research_disk_budget
+    @contextmanager
+    def admitted(*args,**kwargs):
+        assert digests.ACTIVE.get() is None
+        yield
+    @contextmanager
+    def no_output(*args,**kwargs):yield
+    monkeypatch.setattr(research_admission,'direct_job',admitted)
+    monkeypatch.setattr(research_disk_budget,'use',no_output)
+    def run(argv):
+        session=digests.ACTIVE.get()
+        assert session is not None and session.binding['role']=='postclose'
+        assert session.data_root==tmp_path
+        return 0
+    monkeypatch.setattr(policy,'_main_impl',run)
+    assert policy.main(['--as-of','2026-10-19','--data-dir',str(tmp_path)])==0
+    assert digests.ACTIVE.get() is None
+
+
 def _native_quantity_fact_source(tmp_path, monkeypatch, *, large=True):
     from src.engine import log_archive_service as archive
     from src.engine import strategy_position_performance_report as fact
@@ -1522,6 +1563,44 @@ def _overlay_for_test(tmp_path, rows, *, as_of='2026-10-08', issue=None):
     from src.engine.scalping.initial_quantity_source_cache import completion_overlay
     return completion_overlay(rows, as_of=as_of, data_dir=tmp_path, entry_on_or_after='2026-09-29',
         entry_generations={'2026-10-08':{'issue':issue}}, validate_day=lambda day:None)
+
+
+@pytest.mark.parametrize('fault',[None,'missing_manifest','archive_changed'])
+def test_original_stream_entry_seal_survives_preservation_then_compression(tmp_path,monkeypatch,fault):
+    import os,hashlib
+    from src.engine import strategy_position_performance_report as facts
+    from src.engine import compress_db_backfilled_files as compression
+    from src.engine.lifecycle.holding_window_generation import seal_dependency_receipt
+    day='2026-10-08'
+    _,path=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,day=day)
+    sidecar=path.with_suffix('.completed_projection.json');projection=json.loads(sidecar.read_bytes())
+    # Older native entry batches have an original stream proof and no scalar
+    # projection. Reproduce that native producer/consumer contract unchanged.
+    seal_dependency_receipt(sidecar,projection)
+    path.with_suffix('.fact_projection.json').unlink()
+    source=facts._load_completion_fact_projection(day,path)
+    assert source['_native_source_proof']['source_basis']=='native_original_snapshot_stream'
+    census=projection['meta']['completed_census_manifest']
+    facts._write_status(day,dict(status='valid_empty',consumer_ready=True,
+        completed_census_run_ids=[census['run_id']],
+        completed_census_projection_sha256=[census['projection_sha256']],
+        actual_cost_source_generation=projection['meta']['actual_cost_source_generation'],
+        completion_snapshot_source=source['_native_source_proof']))
+    original_status=facts._status_path(day).read_bytes()
+    sha=hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest=path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    manifest.parent.mkdir(exist_ok=True)
+    manifest.write_text(json.dumps(dict(target_date=day,profile='postclose_exit',
+        snapshot_paths={'trade_review':str(path)},snapshot_sha256={'trade_review':sha})))
+    os.link(path,path.with_suffix('.preserved'))
+    monkeypatch.setattr(compression,'MONITOR_SNAPSHOT_DIR',path.parent)
+    assert compression._gzip_file(path,dry_run=False)[0]
+    if fault=='missing_manifest':manifest.unlink()
+    elif fault=='archive_changed':
+        archived=Path(str(path)+'.gz');archived.write_bytes(archived.read_bytes()+b'x')
+    issue=policy._quantity_original_fact_generation_issue(day)
+    assert (issue is None) is (fault is None)
+    assert facts._status_path(day).read_bytes()==original_status
 
 
 @pytest.mark.parametrize('missing_source', [False, True])

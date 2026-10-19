@@ -1488,9 +1488,16 @@ def avg_down_input_git_candidate(cleanup_git_candidate):
         path = root/name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((canonical/name).read_bytes())
+    # This older immutable release already contained the report. The new
+    # selector must see its original bytes, not a synthetic missing module or
+    # this working tree's newer report implementation.
+    original_readers=tuple(handoff.REVIEWED_POSTCLOSE_READER_HASHES)
+    for name in original_readers:
+        (root/name).write_bytes(subprocess.check_output(
+            ['git','-C',str(canonical),'show','deb996a22:'+name]))
     inventories['holding_vote'] = {key: 'src/engine/'+key for key in _code_paths()}
     subprocess.run(['git', '-C', str(root), 'add', '--force',
-                    *handoff.REVIEWED_AVG_DOWN_INPUT_HASHES], check=True)
+                    *handoff.REVIEWED_AVG_DOWN_INPUT_HASHES,*original_readers], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture',
                     '-c', 'user.email=fixture@example.test', 'commit', '-qm',
                     'reviewed AVG_DOWN input and SOR integration'], check=True)
@@ -1533,7 +1540,7 @@ def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
             assert 'src/engine/scalping/ai_market_snapshot.py' in changed
 
 
-@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision'])
+@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision', 'postclose_readers'])
 @pytest.mark.parametrize('origin', ['7f2552aedde8fec6ef904a43105827907e50dfc8',
                                     '8940ea4ad0d3b64d30f67f986a75715ee24c1d95'])
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
@@ -1546,18 +1553,24 @@ def test_completion_census_handoff_binds_exact_complete_generation(
     canonical = Path(handoff.__file__).resolve().parents[3]
     hashes = (handoff.REVIEWED_COMPLETION_CENSUS_HASHES if generation == 'producer_census'
               else handoff.REVIEWED_COMPLETION_CONSUMER_HASHES)
-    if generation in {'prefix_code_binding','late_cost_revision'}:
+    if generation in {'prefix_code_binding','late_cost_revision','postclose_readers'}:
         hashes = {**hashes, **handoff.REVIEWED_PREFIX_PRODUCER_HASHES}
-    if generation == 'late_cost_revision':
+    if generation in {'late_cost_revision','postclose_readers'}:
         hashes = {**hashes, **handoff.REVIEWED_LATE_COST_HASHES}
+    if generation == 'postclose_readers':
+        hashes = {**hashes, **handoff.REVIEWED_POSTCLOSE_READER_HASHES}
     revision = ('a5831f833' if generation == 'producer_census' else
+                '7df7ea3b9' if generation == 'late_cost_revision' else
                 '082234567' if generation == 'prefix_code_binding' else 'bf8465b5d')
     for name, expected in hashes.items():
-        raw = ((canonical/name).read_bytes() if generation == 'late_cost_revision' else
+        raw = ((canonical/name).read_bytes() if generation == 'postclose_readers' else
                subprocess.check_output(['git', '-C', str(canonical), 'show', revision+':'+name]))
         assert hashlib.sha256(raw).hexdigest() == expected
         (root/name).write_bytes(raw)
-    subprocess.run(['git', '-C', str(root), 'add', *hashes], check=True)
+    for name in handoff.REVIEWED_POSTCLOSE_READER_HASHES:
+        if generation != 'postclose_readers' and name not in hashes:
+            (root/name).write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',revision+':'+name]))
+    subprocess.run(['git', '-C', str(root), 'add', *hashes,*handoff.REVIEWED_POSTCLOSE_READER_HASHES], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture',
                     '-c', 'user.email=fixture@example.test', 'commit', '-qm',
                     'reviewed completion census source generation'], check=True)

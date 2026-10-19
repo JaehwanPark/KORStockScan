@@ -85,6 +85,35 @@ def test_registry_only_attempt_cannot_be_verified_zero():
     assert not parents and unclassified==1
 
 
+@pytest.mark.parametrize('state,order,filled,expected', [
+    ('INTENT_REJECTED','',0,0), ('INTENT_AMBIGUOUS','',0,1),
+    ('INTENT_RESERVED','',0,1), ('INTENT_REJECTED','000123',0,1),
+    ('INTENT_REJECTED','',1,1), ('ORDER_TERMINAL','000123',0,1)])
+def test_rejected_reservation_is_preserved_separately_from_submitted_orders(state,order,filled,expected):
+    row=dict(intent_id='rejected',owner_type='main_scalping',owner_id='main_scalping:1',
+        side='BUY',action='NEW',order_date='2026-10-16',client_intent_id='main:1:ENTRY_BUY:1',
+        state=state,broker_order_no=order,filled_qty=filled,fill_amount=filled*100,
+        reason='original_entry_deadline_expired')
+    details={};parents,unknown=mod._parents('2026-10-16',[],[row],details=details)
+    assert parents==[] and unknown==expected
+    assert details['rejected_without_order_intent_ids']==(['rejected'] if not expected else [])
+    unresolved=mod._unresolved_prior_custody('2026-10-19',[row],[],[])
+    assert ('rejected' in unresolved) is bool(expected)
+    assert row['reason']=='original_entry_deadline_expired'
+
+
+def test_rejected_reservation_cannot_hide_a_native_submission_or_fill():
+    row=dict(intent_id='rejected',owner_type='main_scalping',owner_id='main_scalping:1',
+        side='BUY',action='NEW',order_date='2026-10-16',state='INTENT_REJECTED')
+    event=dict(stage='order_leg_sent',emitted_date='2026-10-16',record_id=1,
+        fields=dict(actual_order_submitted=True,broker_order_no='000123',owner_registry_intent_id='rejected'))
+    with pytest.raises(ValueError,match='rejected_intent_submission_source_conflict'):
+        mod._parents('2026-10-16',[event],[row])
+    fill={**row,'event':'FILL_RECORDED','filled_qty':1,'fill_amount':100}
+    _,unknown=mod._parents('2026-10-16',[],[row,fill])
+    assert unknown==1
+
+
 def test_residual_receipt_classifies_native_order_without_timeout_tuning_authority():
     from datetime import datetime
     from types import SimpleNamespace
@@ -231,6 +260,38 @@ def test_sequential_first_leg_is_source_only_parent_not_unclassified():
     changed['fields']['initial_quantity_schedule_sha256'] = 'b' * 64
     with pytest.raises(ValueError, match='sequential_schedule'):
         mod._parents(day, [changed], registry)
+
+
+@pytest.mark.parametrize('fault',[None,'account','symbol','owner','date','unknown_parent','operation','ambiguous_parent'])
+def test_reprice_scope_requires_native_parent_and_preserves_custody(fault):
+    day,_,sent,registry=_sequential_first_fixture()
+    sent['fields'].update(broker_order_no='00010',buy_child_id='attempt-42:00010')
+    registry[0]['broker_order_no']='00010'
+    reprice={**registry[0],'intent_id':'R1','broker_order_no':'00011',
+        'client_intent_id':'main_scalping:42:42:ENTRY_REPRICE_BUY:00010:'+'c'*32}
+    if fault in {'account','symbol','owner','date'}:
+        field={'account':'account_key','symbol':'symbol','owner':'owner_id','date':'order_date'}[fault]
+        reprice[field]={'account':'other','symbol':'654321','owner':'main_scalping:43','date':'2026-09-29'}[fault]
+    elif fault=='unknown_parent':reprice['client_intent_id']=reprice['client_intent_id'].replace('00010:','00099:')
+    elif fault=='operation':reprice['client_intent_id']=reprice['client_intent_id'].replace('ENTRY_REPRICE_BUY','ENTRY_BUY')
+    elif fault=='ambiguous_parent':registry.append({**registry[0],'intent_id':'duplicate'})
+    details={};parents,unknown=mod._parents(day,[sent],[*registry,reprice],details=details)
+    if fault:
+        assert details['excluded_reprice_order_sources']==[]
+        if fault!='date':assert unknown>0
+        return
+    assert unknown==0 and len(parents)==1
+    proof=details['excluded_reprice_order_sources'][0]
+    assert proof['intent_id']=='R1' and proof['root_submission_intent_id']=='I1'
+    assert proof['parent_broker_order_no']=='00010' and proof['economic_eligible'] is False
+    assert proof['terminal_or_cost_inferred'] is False
+    # Scope classification cannot reconcile a real order or its costs.
+    assert mod._unresolved_prior_custody('2026-10-19',[*registry,reprice],parents,[])==['I1','R1']
+    chained={**reprice,'intent_id':'R2','broker_order_no':'00012',
+        'client_intent_id':'main_scalping:42:42:ENTRY_REPRICE_BUY:00011:'+'d'*32}
+    details={};_,unknown=mod._parents(day,[sent],[*registry,reprice,chained],details=details)
+    assert unknown==0
+    assert {x['root_submission_intent_id'] for x in details['excluded_reprice_order_sources']}=={'I1'}
 
 
 def test_sequential_first_uncertain_attempt_stays_out_of_submitted_parents():
