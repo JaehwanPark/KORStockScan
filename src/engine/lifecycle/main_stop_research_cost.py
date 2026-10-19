@@ -24,7 +24,6 @@ from .holding_window_generation import (MAX_METADATA_BYTES, MAX_PROJECTION_BYTES
                                          byte_generation, source_stat)
 from .research_json_stream import Reader
 from .research_input_budget import Claim
-from .snapshot_archive import snapshot_identity
 
 SCHEMA = "main_stop_research_cost_v1"
 SCOPE = "main_stop_research_only"
@@ -252,12 +251,13 @@ def _native_projection_read(root, day, claims, transient_claims):
         proof = {"projection": generation, "dependency_receipt": byte_generation(dependency),
                  "dependency_artifact_sha256": receipt["artifact_sha256"]}
     census = (value.get("meta") or {}).get("completed_census_manifest") or {}
-    identity = snapshot_identity(raw)
+    from src.engine.lifecycle.snapshot_archive import snapshot_identity_matches
+    identity = value.get('snapshot_identity')
     ids = [allocation._record(row.get("id")) for row in rows]
     if (value.get("schema") != "trade_review_completed_projection_sidecar_v1"
             or value.get("date") != day or value.get("code") or value.get("since")
             or (value.get("meta") or {}).get("snapshot_profile") != "postclose_exit"
-            or value.get("snapshot_identity") != identity
+            or not snapshot_identity_matches(raw, value.get("snapshot_identity"))
             or census.get("schema") != "trade_review_completed_census_v1"
             or census.get("source_date") != day or census.get("profile") != "postclose_exit"
             or census.get("projected_count") != len(rows) or len(rows) > MAX_RECORDS

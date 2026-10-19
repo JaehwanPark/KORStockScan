@@ -2060,3 +2060,54 @@ def test_serialized_completion_context_accepts_compression_without_full_snapshot
     _,rebuilt=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,
         fact_rows=serialized['input_fact_rows'],entry_on_or_after='2026-10-07',source_census=serialized)
     assert rebuilt==serialized
+
+
+@pytest.mark.parametrize('fault',[None,'no_request','duplicate_request','different_plan','different_order',
+    'late_decision','next_second','proxy_clock','exact_clock','partial_fill','sent_after_receipt'])
+def test_same_broker_second_policy_requires_exact_causal_request_sent_full_fill(fault):
+    from copy import deepcopy
+    from datetime import timedelta
+    from src.engine.scalping.initial_quantity_refresh_evaluation import policy_decision_precedes_fill
+    at=policy._timestamp('2026-10-16T12:31:28+09:00')
+    fields=dict(entry_submit_attempt_id='attempt',entry_execution_sizing_plan_sha256='a'*64,
+        position_sizing_policy_status='initial_policy_v2_loaded',position_sizing_policy_sha256='b'*64,
+        initial_quantity_runtime_pid='123',quantity_type='KRX_THIN_HIGH_TICK',
+        quantity_type_classifier_version=policy.CLASSIFIER_VERSION,reference_time=at.isoformat())
+    decision=dict(at=at+timedelta(milliseconds=100),stage='entry_execution_sizing_plan',fields=fields)
+    request=dict(at=at+timedelta(milliseconds=200),attempt_id='attempt',plan_sha='a'*64,tag='entry_probe')
+    sent={**request,'at':at+timedelta(milliseconds=300),'order_no':'11'}
+    fill=dict(at=at,emitted_at=at+timedelta(seconds=2),clock_precision_sec=1,
+        clock_source='broker_execution_observed_at',qty=1,price=100000,order_no='11',execution_no='1')
+    trade=dict(entry_at_fact_buy_time=at.isoformat(),buy_qty=1,profit_rate=1,realized_net_pnl_krw=1000)
+    path=dict(decisions=[decision],order_requests=[request],order_sent=[sent],fills=[fill])
+    if fault=='no_request':path['order_requests']=[]
+    elif fault=='duplicate_request':path['order_requests'].append(deepcopy(request))
+    elif fault=='different_plan':sent['plan_sha']='c'*64
+    elif fault=='different_order':sent['order_no']='12'
+    elif fault=='late_decision':decision['at']=request['at']+timedelta(milliseconds=1)
+    elif fault=='next_second':decision['at']=at+timedelta(seconds=1)
+    elif fault=='proxy_clock':fill['clock_source']='position_rebased_emitted_at_proxy'
+    elif fault=='exact_clock':fill['clock_precision_sec']=0
+    elif fault=='partial_fill':trade['buy_qty']=2
+    elif fault=='sent_after_receipt':sent['at']=fill['emitted_at']+timedelta(milliseconds=1)
+    parent=policy._paired_candidate(trade,path,'parent')
+    if fault:
+        assert parent['applied_policy_file_sha256'] is None
+        assert 'policy_decision_clock_proof' not in parent
+        return
+    assert parent['applied_policy_file_sha256']=='b'*64
+    assert parent['quantity_type']=='KRX_THIN_HIGH_TICK'
+    row={**parent, 'entry_fill_at':at.isoformat(),'entry_fill_clock_source':fill['clock_source'],
+        'entry_fill_clock_precision_sec':1,'entry_fill_order_no':'11','entry_fill_execution_no':'1',
+        'shapes':{'parent':deepcopy(parent)},
+        'cap_source':dict(attempt_id='attempt',plan_sha256='a'*64,
+                         fills=[dict(at=at.isoformat(),qty=1)])}
+    fact=dict(buy_time=at.isoformat(),buy_qty=1)
+    assert policy_decision_precedes_fill(row,fact)
+    for field,value in [('proof_sha256','0'*64),('request_at',(at-timedelta(seconds=1)).isoformat()),
+                        ('order_no','wrong'),('fill_qty',2)]:
+        broken=deepcopy(row);broken['policy_decision_clock_proof'][field]=value
+        if field!='proof_sha256':
+            proof=broken['policy_decision_clock_proof'];proof['proof_sha256']=policy._digest({k:v for k,v in proof.items()if k!='proof_sha256'})
+        broken['shapes']['parent']['policy_decision_clock_proof']=deepcopy(broken['policy_decision_clock_proof'])
+        assert not policy_decision_precedes_fill(broken,fact)

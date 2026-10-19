@@ -416,7 +416,6 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
             content, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         ).encode("utf-8")).hexdigest()
         identity = projected.get("snapshot_identity") or {}
-        expected_identity = snapshot_identity(path)
         if (projected.get("schema") != "trade_review_completed_projection_sidecar_v1"
             or projected.get("date") != target_date
             or projected.get("code") or projected.get("since")

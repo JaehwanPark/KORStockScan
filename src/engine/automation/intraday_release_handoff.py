@@ -1710,6 +1710,47 @@ REVIEWED_PRESERVED_SNAPSHOT_PAIRS = {'src/engine/lifecycle/snapshot_archive.py':
                                                            'b746d9c9d131ab2795953f3e2401f2fe367525dc0d7dc2c85051fdaac73af97c'))}
 
 
+# Exact native request/sent/full-fill proof resolves subsecond policy ordering.
+# Original fill timestamps, execution guards and every earlier generation remain.
+REVIEWED_CAUSAL_QUANTITY_HASHES = {'src/engine/scalping/initial_quantity_policy.py': '6c4e28dc699c2d0b5c12be791c3bf64b721a78a9cb344a3b5f42f79fcf89ed51',
+ 'src/engine/scalping/initial_quantity_refresh_evaluation.py': '5311174d8495ed9560ff6421027700ff7acf89bd43315ba1c63484bb50bfb3e9',
+ 'src/engine/automation/main_trailing_source_assembler.py': 'f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1',
+ 'src/engine/lifecycle/main_stop_research_cost.py': 'a6ad1dc12223a07b33a3d6b3748b33c120dd531a3c5e7baa22fa902385966054',
+ 'src/engine/lifecycle/holding_window_generation.py': '925904f2505a15a0b179aeca4a8ecb6badac76130c50fe6d29973eb76b8cf2d1',
+ 'src/engine/holding_exit_observation_report.py': '6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9'}
+REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_policy.py',
+        'selector_sha256': REVIEWED_CAUSAL_QUANTITY_HASHES['src/engine/scalping/initial_quantity_policy.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_CAUSAL_QUANTITY_HASHES},
+        'contract_extensions': {origin: {path: REVIEWED_CAUSAL_QUANTITY_HASHES.get(path, sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_CAUSAL_QUANTITY_PAIRS = {'src/engine/scalping/initial_quantity_policy.py': (('dbd20ac53e9ebb59dbb6b465a214558eb838b8f012636eda73cb02f65c5304c6',
+                                                     '6c4e28dc699c2d0b5c12be791c3bf64b721a78a9cb344a3b5f42f79fcf89ed51'),
+                                                    ('a6e57b600500e10b20ebf1ca2ac097a2433fbd5f8696e28f8ec1ef97601b627a',
+                                                     '6c4e28dc699c2d0b5c12be791c3bf64b721a78a9cb344a3b5f42f79fcf89ed51')),
+ 'src/engine/scalping/initial_quantity_refresh_evaluation.py': (('779a0d679ec1b7e1704ad368d8896d166a545e358438fda8e2f51ef0dde800fa',
+                                                                 '5311174d8495ed9560ff6421027700ff7acf89bd43315ba1c63484bb50bfb3e9'),
+                                                                ('798f15352dc47787bc3d3bd571f45fbed2911cdaafbdcab5487998745442bbe4',
+                                                                 '5311174d8495ed9560ff6421027700ff7acf89bd43315ba1c63484bb50bfb3e9')),
+ 'src/engine/automation/main_trailing_source_assembler.py': (('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              'f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1'),
+                                                             ('ea7039a171b5a3d07883b0549ba763100900cfdec7cb6c14172e0fb887f6b804',
+                                                              'f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1')),
+ 'src/engine/lifecycle/main_stop_research_cost.py': (('0b76f9039325382ce8aa685e069b8783c333021ac1b9dc82f24f452b2b2768c7',
+                                                      'a6ad1dc12223a07b33a3d6b3748b33c120dd531a3c5e7baa22fa902385966054'),),
+ 'src/engine/lifecycle/holding_window_generation.py': (('52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
+                                                        '925904f2505a15a0b179aeca4a8ecb6badac76130c50fe6d29973eb76b8cf2d1'),
+                                                       ('b31337f09b51d7d1ad1b06b24f92eda3bc2b19b0f160166e25d603708940926c',
+                                                        '925904f2505a15a0b179aeca4a8ecb6badac76130c50fe6d29973eb76b8cf2d1')),
+ 'src/engine/holding_exit_observation_report.py': (('8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db',
+                                                    '6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9'),
+                                                   ('108fcdffa626abec4e90b263c12780e78c7f77e222b950e2407b0b00d462fa4f',
+                                                    '6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9'))}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1763,7 +1804,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_CAUSAL_QUANTITY_DEPENDENCY_VARIANTS,
+                         REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS,
                          REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS,
                          REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS,
                          REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS,
@@ -1807,7 +1849,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_PRESERVED_SNAPSHOT_PAIRS.get(name, ())
+        if (pair in REVIEWED_CAUSAL_QUANTITY_PAIRS.get(name, ())
+                or pair in REVIEWED_PRESERVED_SNAPSHOT_PAIRS.get(name, ())
                 or pair in REVIEWED_SNAPSHOT_METADATA_PAIRS.get(name, ())
                 or pair in REVIEWED_ARTIFACT_SOURCE_PAIRS.get(name, ())
                 or pair in REVIEWED_PRIOR_SNAPSHOT_IO_PAIRS.get(name, ())

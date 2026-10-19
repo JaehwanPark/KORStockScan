@@ -1544,12 +1544,55 @@ def _cap_candidate_trade(
             "cost_model": COST_MODEL}
 
 
+
+def _policy_clock_interval_proof(trade, path, decision, first_fill):
+    """Prove pre-submit policy custody inside a second-resolution fill clock.
+
+    A broker second is an interval. Only an exact request -> acknowledged
+    order -> full fill join can resolve its subsecond ordering; no grace or
+    inferred execution timestamp is introduced.
+    """
+    entry = _timestamp(trade.get('entry_at_fact_buy_time'))
+    if (entry is None or not first_fill or decision.get('stage') != 'entry_execution_sizing_plan'
+            or first_fill.get('clock_source') != 'broker_execution_observed_at'
+            or first_fill.get('clock_precision_sec') != 1 or first_fill.get('at') != entry
+            or first_fill.get('qty') != trade.get('buy_qty')
+            or not first_fill.get('order_no') or not first_fill.get('execution_no')
+            or not entry < decision['at'] < entry + timedelta(seconds=1)):
+        return None
+    fields = decision['fields']
+    identity = (fields.get('entry_submit_attempt_id'),fields.get('entry_execution_sizing_plan_sha256'))
+    if (not isinstance(identity[0],str) or not identity[0]
+            or re.fullmatch(r'[0-9a-f]{64}',str(identity[1] or '')) is None):return None
+    sent = [row for row in path.get('order_sent', []) if row['order_no'] == first_fill['order_no']]
+    if (len(sent) != 1 or (sent[0]['attempt_id'],sent[0]['plan_sha']) != identity
+            or sent[0]['at'] > first_fill.get('emitted_at',entry)):
+        return None
+    sent = sent[0]
+    requests = [row for row in path.get('order_requests', [])
+        if (row['attempt_id'],row['plan_sha'],row['tag']) == (*identity,sent['tag'])]
+    if (len(requests) != 1 or not decision['at'] <= requests[0]['at'] <= sent['at']
+            or not requests[0]['at'] < entry + timedelta(seconds=1)
+            or (sent['at']-requests[0]['at']).total_seconds() > 120):
+        return None
+    proof = dict(schema='initial_quantity_policy_clock_interval_v1', broker_precision_sec=1,
+        decision_at=decision['at'].isoformat(), request_at=requests[0]['at'].isoformat(),
+        sent_at=sent['at'].isoformat(), fill_at=entry.isoformat(),
+        fill_received_at=first_fill['emitted_at'].isoformat(), order_no=first_fill['order_no'],
+        execution_no=first_fill['execution_no'],attempt_id=identity[0],plan_sha256=identity[1],
+        request_tag=sent['tag'],fill_qty=first_fill['qty'])
+    return {**proof,'proof_sha256':_digest(proof)}
+
+
 def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -> dict[str, Any]:
     if shape == "parent":
         entry_at = _timestamp(trade.get("entry_at_fact_buy_time"))
+        first_fill = min(path.get("fills") or [], key=lambda item: item["at"], default=None)
+        def before_entry(item):
+            return item["at"] <= entry_at or _policy_clock_interval_proof(trade,path,item,first_fill) is not None
         decisions = [item for item in path.get("decisions") or []
                      if entry_at and abs((item["at"] - entry_at).total_seconds()) <= 3600
-                     and (item["at"] <= entry_at or item["stage"] == "order_bundle_submitted"
+                     and (before_entry(item) or item["stage"] == "order_bundle_submitted"
                           and (item["at"] - entry_at).total_seconds() <= 30)]
         # The submitted bundle is often closer to the fill than the sizing
         # decision.  It is an execution event, not proof of which policy
@@ -1557,7 +1600,7 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         # research, but bind a refresh trade to the actual sizing event.
         sizing_decisions = [item for item in decisions
                             if item["stage"] == "entry_execution_sizing_plan"
-                            and item["at"] <= entry_at]
+                            and before_entry(item)]
         decision = (max(sizing_decisions, key=lambda item: item["at"])
                     if sizing_decisions else
                     min(decisions, key=lambda item: abs((item["at"] - entry_at).total_seconds()))
@@ -1566,11 +1609,11 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         fields["effective_venue"] = fields.get("effective_venue") or fields.get("sizing_venue_at_allocation")
         if decision:
             fields["reference_time"] = fields.get("reference_time") or decision["at"].isoformat()
+        clock_proof = _policy_clock_interval_proof(trade,path,decision,first_fill) if decision else None
+        classification_upper = entry_at + timedelta(seconds=1,microseconds=-1) if clock_proof else entry_at
         quantity_type = (_type_from_decision_receipt(
-            fields, decision_at=decision["at"], entry_at=entry_at)
+            fields, decision_at=decision["at"], entry_at=classification_upper)
             if decision and entry_at else "SAFE_UNKNOWN")
-        first_fill = min(path.get("fills") or [], key=lambda item: item["at"],
-                         default=None)
         order_no = str(first_fill.get("order_no") or "") if first_fill else ""
         sent = [item for item in path.get("order_sent") or []
                 if order_no and item["order_no"] == order_no]
@@ -1627,6 +1670,7 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
                                             if bound_decision and sent_identity else None),
                 **({"applied_cap_research_context": cap_context}
                    if cap_context is not None else {}),
+                **({"policy_decision_clock_proof":clock_proof} if clock_proof else {}),
                 "fixed_exit_assumption": False}
     if path.get("source_gap"):
         return {"status": "path_source_gap",
@@ -1872,6 +1916,11 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                         if "applied_cap_research_context" in parent else {}),
                      "policy_decision_stage": parent.get("policy_decision_stage"),
                      "policy_decision_at": parent.get("policy_decision_at"),
+                     **({"policy_decision_clock_proof": parent["policy_decision_clock_proof"],
+                         "entry_fill_clock_precision_sec":first_fill["clock_precision_sec"],
+                         "entry_fill_order_no":first_fill["order_no"],
+                         "entry_fill_execution_no":first_fill["execution_no"]}
+                        if parent.get("policy_decision_clock_proof") and first_fill else {}),
                      "entry_order_start_at": (matched_starts[0]["at"].isoformat()
                                               if len(matched_starts) == 1 else None),
                      "modeled_parent_net_pnl_krw": trade["modeled_parent_net_pnl_krw"],

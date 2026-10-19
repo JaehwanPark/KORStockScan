@@ -304,6 +304,42 @@ def replay_valid(report):
     except (TypeError,ValueError,KeyError,OverflowError):return False
 
 
+
+def policy_decision_precedes_fill(row, fact):
+    """Verify either exact chronology or the native same-second submit proof."""
+    from src.engine.scalping.initial_quantity_policy import _digest
+    decision, fill = kst_timestamp(row.get('policy_decision_at')),kst_timestamp(row.get('entry_fill_at'))
+    if decision is None or fill is None:return False
+    if decision <= fill:return True
+    try:
+        proof = row['policy_decision_clock_proof']
+        body = {k:v for k,v in proof.items() if k != 'proof_sha256'}
+        source = row['cap_source']
+        request,sent,received = (kst_timestamp(proof[k]) for k in ('request_at','sent_at','fill_received_at'))
+        return bool(proof.get('schema') == 'initial_quantity_policy_clock_interval_v1'
+            and proof.get('proof_sha256') == _digest(body)
+            and (row.get('shapes') or {}).get('parent',{}).get('policy_decision_clock_proof') == proof
+            and proof.get('broker_precision_sec') == row.get('entry_fill_clock_precision_sec') == 1
+            and row.get('entry_fill_clock_source') == 'broker_execution_observed_at'
+            and kst_timestamp(proof['decision_at']) == decision
+            and kst_timestamp(proof['fill_at']) == fill == kst_timestamp(fact['buy_time'])
+            and decision < fill + timedelta(seconds=1)
+            and request is not None and sent is not None and received is not None
+            and decision <= request <= sent <= received
+            and request < fill + timedelta(seconds=1) and sent-request <= timedelta(seconds=120)
+            and proof['attempt_id'] == source['attempt_id'] and proof['attempt_id']
+            and proof['plan_sha256'] == source['plan_sha256'] and proof['plan_sha256']
+            and isinstance(proof['plan_sha256'],str) and len(proof['plan_sha256']) == 64
+            and all(c in '0123456789abcdef' for c in proof['plan_sha256'])
+            and proof['order_no'] == row['entry_fill_order_no'] and proof['order_no']
+            and proof['execution_no'] == row['entry_fill_execution_no'] and proof['execution_no']
+            and proof['request_tag'] and type(proof['fill_qty']) is int and proof['fill_qty'] > 0
+            and proof['fill_qty'] == fact['buy_qty']
+            and len(source['fills']) == 1 and source['fills'][0]['qty'] == fact['buy_qty']
+            and kst_timestamp(source['fills'][0]['at']) == fill)
+    except (KeyError,TypeError,ValueError):return False
+
+
 def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, following_bars=None,
              timeout_research=None, parent_policy_file_sha256=None, enforce_trade_lineage=True,
              evaluation_algorithm=None):
@@ -329,10 +365,11 @@ def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, 
                        else 'initial_policy_v2_loaded' if parent_policy.get('schema_version') == 'initial_entry_quantity_runtime_v2'
                        else 'initial_policy_loaded')
     bound=[];excluded=[]
+    facts={str(r['recommendation_id']):r for r in report['census']['input_fact_rows']}
     for row in report['trades']:
         dt=kst_timestamp(row.get('policy_decision_at'))
         ok=(row.get('applied_policy_status')==expected_status and row.get('policy_decision_stage')=='entry_execution_sizing_plan' and row.get('applied_policy_file_sha256')==parent_policy_file_sha256
-            and dt is not None and kst_timestamp(row.get('entry_fill_at')) is not None and dt<=kst_timestamp(row['entry_fill_at'])
+            and dt is not None and policy_decision_precedes_fill(row,facts[str(row['record_id'])])
             and any(p.get('entry_date')==row['entry_date'] and str(p.get('pid'))==str(row.get('applied_policy_runtime_pid'))
                     and kst_timestamp(p.get('verified_at')) is not None and kst_timestamp(p['verified_at'])<=dt for p in receipts))
         if ok or not enforce_trade_lineage:bound.append(row)

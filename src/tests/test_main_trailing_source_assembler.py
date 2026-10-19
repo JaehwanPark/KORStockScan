@@ -747,7 +747,8 @@ def test_immutable_source_successors_preserve_prior_manifest(tmp_path):
     assert successor!=first and first.read_bytes()==original
 
 
-def test_retained_original_projection_flows_from_native_metadata_to_completed_population(tmp_path,monkeypatch):
+@pytest.mark.parametrize('preserved',[False,True])
+def test_retained_original_projection_flows_from_native_metadata_to_completed_population(tmp_path,monkeypatch,preserved):
     from src.tests.test_holding_window_generation import _retained_original_window
     from src.engine.lifecycle.holding_window_generation import capture_window
     root=tmp_path/'source';day,raw,fact=_retained_original_window(root,monkeypatch)
@@ -757,6 +758,9 @@ def test_retained_original_projection_flows_from_native_metadata_to_completed_po
     write(root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{day}.json',parent)
     sidecar=raw.with_suffix('.completed_projection.json')
     originals={p:p.read_bytes() for p in (raw,sidecar)}
+    if preserved:
+        import os
+        for path in originals:os.link(path,path.with_suffix(path.suffix+'.preserved'))
     monkeypatch.setattr(fact,'_legacy_original_stream',lambda *a:pytest.fail('original canonical validation repeated'))
     dependency=capture_window(root,[day])['dependencies'][day]
     assert dependency['status']=='observed'

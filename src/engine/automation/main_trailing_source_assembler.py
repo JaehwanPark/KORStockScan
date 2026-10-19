@@ -643,9 +643,8 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
         or not receipt.get('census_sha256') or receipt.get('meta',{}).get('snapshot_profile')!='postclose_exit'
         or receipt.get('meta',{}).get('actual_cost_source_generation')!=dependency['cost_generation'])):
         raise ValueError('all_scope_large_completed_receipt_invalid')
-    from src.engine.lifecycle.snapshot_archive import snapshot_identity
-    identity=snapshot_identity(raw)
-    if raw.is_symlink() or receipt.get('snapshot_identity')!=identity:
+    from src.engine.lifecycle.snapshot_archive import snapshot_identity_matches
+    if raw.is_symlink() or (not retained and not snapshot_identity_matches(raw,receipt.get('snapshot_identity'))):
         raise ValueError('all_scope_large_completed_snapshot_changed')
     count=0
     for trade,quote_ref in completed_rows(sidecar,output):

@@ -493,7 +493,8 @@ def _capture_day_inputs(root, directory, day, budget):
                 generation, content = _file_generation(sidecar)
                 value = decode(content)
         identity = snapshot_identity(raw)
-        if raw.is_symlink() or not snapshot_identity_matches(raw, value.get("snapshot_identity")):
+        if raw.is_symlink() or ('legacy_validation' not in generation
+                and not snapshot_identity_matches(raw, value.get("snapshot_identity"))):
             raise ValueError("window_dependency_snapshot_binding_invalid")
         generation["snapshot_identity"] = value["snapshot_identity"]
         if not receipt.is_file() and 'legacy_validation' not in generation:
