@@ -971,6 +971,57 @@ def _with_state_lock():
     return STATE_LOCK if STATE_LOCK is not None else _DummyLock()
 
 
+def _restore_registered_partial_sell(record, target, code, remaining_qty, mismatch):
+    """Reconcile an owner's remainder with its exact durable SELL ledger."""
+    import copy
+    from src.engine import sniper_execution_receipts as receipts
+
+    if (not isinstance(target, dict)
+            or str(getattr(record, "status", "")).upper() != "SELL_ORDERED"
+            or str(target.get("status", "")).upper() != "SELL_ORDERED"
+            or evaluate_main_bot_control_exclusion(code).excluded
+            or target.get("id") != getattr(record, "id", None)
+            or str(target.get("code") or "").strip()[:6] != code
+            or not 0 < remaining_qty < _to_int(getattr(record, "buy_qty", 0))):
+        return None
+    with _with_state_lock():
+        prior_conflict = target.get("sell_cancel_reconciliation_source")
+        if target.get("broker_symbol_allocation_conflict") and prior_conflict != mismatch:
+            return None
+        if target.get("sell_cancel_reconciliation_required") and prior_conflict not in {
+                mismatch, "durable_pending_sell_submit_exact_rehydration",
+                "durable_sell_receipt_journal_exact_match"}:
+            return None
+        state, reason = receipts.load_sell_receipt_recovery(
+            target_id=record.id, code=code, position_qty=_to_int(record.buy_qty),
+            broker_remaining_qty=remaining_qty)
+        if (not isinstance(state, dict) or reason != "journal_exact_match"
+                or state.get("final") is not False
+                or state.get("quantity_contract_complete") is not True):
+            return None
+        probe = copy.deepcopy(target)
+        probe.update(_sell_execution_receipt_state=state, status="SELL_ORDERED",
+                     sell_odno=state.get("order_no"))
+        if (not receipts._restore_pending_sell_submit_custody_retry_snapshot(probe)
+                or probe.get("sell_submit_pending") is not False
+                or not receipts._active_partial_sell_receipt(probe, str(state.get("order_no") or ""))
+                or receipts._validated_sell_order_context(probe)[0] is None):
+            return None
+        restored, reason = _restore_sell_receipt_recovery(
+            target_stock=target, record=record, code=code,
+            broker_remaining_qty=remaining_qty)
+        if restored is None:
+            return None
+        # Only this exact mismatch belongs to this recovery. Other allocation,
+        # cancel, manual and pending-order interlocks retain their own owners.
+        if prior_conflict == mismatch:
+            target.pop("broker_symbol_allocation_conflict", None)
+        return dict(order_no=restored.get("order_no"),
+                    position_qty=_to_int(record.buy_qty), remaining_qty=remaining_qty,
+                    filled_qty=_to_int(record.buy_qty)-remaining_qty,
+                    source=reason)
+
+
 def _preserve_coexistence_owner_inventory(
     *,
     record,
@@ -1014,6 +1065,10 @@ def _preserve_coexistence_owner_inventory(
 
     real_qty = _to_int((real_codes.get(code) or {}).get("qty", 0))
     reconciliation = None
+    main_qty = None
+    target = next((item for item in (ACTIVE_TARGETS or [])
+        if str(item.get("code", "")).strip()[:6] == code
+        and item.get("id") == getattr(record, "id", None)), None)
     try:
         if decision is not None and decision.coexistence_enabled:
             if not registry.decision_activation_matches(decision):
@@ -1030,10 +1085,16 @@ def _preserve_coexistence_owner_inventory(
             if str(position_id) == main_position_id
         )
         if main_qty != _to_int(getattr(record, "buy_qty", 0)):
-            reconciliation_errors.append(
+            mismatch = (
                 "main_owner_registry_quantity_mismatch:"
                 f"registry={main_qty}:db={_to_int(getattr(record, 'buy_qty', 0))}"
             )
+            partial = (_restore_registered_partial_sell(record, target, code, main_qty, mismatch)
+                       if not reconciliation_errors else None)
+            if partial is None:
+                reconciliation_errors.append(mismatch)
+            else:
+                reconciliation["main_partial_sell_receipt"] = partial
     except OwnerRegistryError as exc:
         reconciliation_errors.append(str(exc))
     reconciliation_error = "|".join(dict.fromkeys(reconciliation_errors))
@@ -1086,7 +1147,7 @@ def _preserve_coexistence_owner_inventory(
     else:
         log_info(
             f"[COEXISTENCE_INVENTORY_PRESERVED] {getattr(record, 'stock_name', code)}({code}) "
-            f"source={source} main_qty={getattr(record, 'buy_qty', 0)} "
+            f"source={source} main_qty={main_qty} db_position_qty={getattr(record, 'buy_qty', 0)} "
             f"broker_aggregate_qty={real_qty} external_remainder="
             f"{reconciliation.get('external_manual_remainder', 0)}"
         )

@@ -59,3 +59,11 @@ de3e541d9의4개 native gate 및2,757개 회귀는 PASS였다. ordered preflight
 4acb4ade4 전환은08:47:28 원 Main/PID274478을 정상 종료한 뒤49362의 원 문맥을 native writer로 복원했다. 이어 selected 단계의 보조 정책 검증이 `auxiliary_source_handoff_target_generation_invalid`로 실패해 원 startup hold를 유지했다. 원 발행894의 receipt를 새 실행 root로 다시 만들던 reader 결함이다. 역사 proof는 원 실행 root/commit에서 모든 source와 baseline 경로를 재검증하고, 현재 reader의 각 의미 코드가 동일하거나 기존 검토된 정확한 쌍인지 별도로 검사하도록 수리했다. 원 manifest/128binding/승인2변경 및 정책은 재발행하지 않았다. 실제 원 보조 manifest `efe327d2…`의 full native 검증이 PASS했으며 과거/현재 원천 변조·다른 root/commit 거부를 포함한2,796개 회귀가 통과했다.
 
 복구는 기존 `StoppedDeploymentRecovery`의 정확한 failed-selected/hold/native predecessor 증명을 사용한다. 복구 사전검사에도 active-policy 검사를 추가하고, 검증된 prepared delay 원천의 동결·정식 publisher 승계를 일반 ordered 배포와 동일하게 유지한다. 실패 선택본/hold/원 증거는 별도 보존하며 보류 파일을 임의 삭제하거나 원래 주문·정책을 다시 만들지 않는다.
+
+08:56 native stopped recovery는 cbbea8d9d/PID349913(start ticks1228560)에서 complete였다. 첫 PID 관측은 기존 producer lock 아래 게시했으나 sentinel source가 아직 없어 semantic partial이며 full health로 보지 않는다.
+
+08:56 후속 수량 불일치는 공존 원장이 부분 매도 잔량2를, DB가 종결 전 원수량3을 보존하면서 기존 동기화가 receipt 복원 전에 반환한 결함이다. 정확한 owner·주문·제출 문맥·내구 체결 영수증의 일치와 전체 symbol 수량 대사를 먼저 검증해 owner 잔량만 복원한다. 다른 소유자 수량, manual veto, 다른 cancel/allocation interlock은 해제하지 않는다. DB 원수량은 보존한다.
+
+사용자가09:01:54 잔여2주를 직접 매도했다. `kt00007` 두 번의 동일 주문 이력과 완료된 `ka10075` 미체결0건에서 원 IOC0002471의1주/72,000원·잔량0과 영웅문S#0008606의2주/72,900원·잔량0을 검증했다. 격리 원장 사본에서 먼저 검증하고 native transition/manual-exit reconciliation을 이용해 원 Main custody를 보존한 채 잔량0을 기록했다. DB49362는 buy_qty3을 유지한 COMPLETED/가중매도가72,600원이며 비용 미확인 순수익률은 null이다. manual-exit execution attribution은 수동 관리 편입이 아니다. 일시 추가했던445680 manual_operator 항목은 사용자 정정에 따라 정확한 추가 행만 제거했다. 후속 사용자 지시로196170 manual_operator도 제거했고 현재 두 종목은 제외 파일에 없다.034020 기존 지정은 유지했다. 원 receipt·취소 실패 이력은 보존하며 원 종결에 취소 ACK를 만들어 넣지 않는다. 근거는 `tmp/preopen-alert-repair-20261019/sell49362-manual-exact-terminal-source.json`과 `sell49362-manual-exact-terminal-applied.json`이다.
+
+trailing 재생성 b2afe3d3…은20,840scope complete다. 기존 snapshot과 정책·scope tree·source는 같고 native 관측시각 및 그 시각을 포함한 snapshot hash만 다르다. report-only currentness는 두 원천 manifest와 native scope 재구성·전체 tree·각 digest를 발행 시 검증하고, 시간 외 모든 scope 필드를 동일하게 유지할 때만 인정한다. 원 policy/PREOPEN/holding snapshot은 보존한다. 범위·universe·hash·시각 변조 거부 회귀를 추가했다. 이 후속 수정의 새 release/PID 적용은 별도 native transition 결과로 확인한다.

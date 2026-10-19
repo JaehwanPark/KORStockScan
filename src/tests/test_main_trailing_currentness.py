@@ -94,3 +94,38 @@ def test_other_contract_failure_cannot_use_refresh_receipt(bundle):
     holding['all_scope_trailing_research']=None
     result=monitor.observe(data,holding,target_date=TARGET)
     assert result['status']=='source_invalid'
+
+
+@pytest.mark.parametrize('damage', [None, 'digest', 'universe', 'source', 'membership', 'clock'])
+def test_reobservation_clock_requires_exact_native_scope_and_sealed_universe(bundle, damage):
+    from src.engine.scalping.main_exit_scope import build_scope
+    from src.engine.lifecycle import research_storage as storage
+    data, holding_path, holding, current, _ = bundle
+    old = Path(holding['all_scope_trailing_research']['report_path'])
+    for path, clock in ((old, 1000), (current, 2000)):
+        manifest = dict(source_data_root=str(data), universe=[dict(symbol='005930', known_at=1, tradable=True)],
+                        as_of=clock, universe_source_sha256='a'*64)
+        scope = build_scope(manifest['universe'], as_of=clock, universe_source_sha256='a'*64)
+        ref = storage.write_tree(path.parent, scope.pop('scopes'))
+        scope['scopes_ref'] = ref
+        if path == current:
+            if damage == 'digest': scope['universe_snapshot_sha256'] = '0'*64
+            elif damage == 'universe': manifest['universe'][0]['symbol'] = '000660'
+            elif damage == 'source': manifest['universe_source_sha256'] = 'b'*64
+            elif damage == 'membership': scope['symbol_count'] += 1
+            elif damage == 'clock': scope['as_of'] = -1
+        manifest_path = path.parent/'manifest.json'
+        seal(manifest_path, manifest)
+        body=json.loads(path.read_bytes())
+        body.update(scope=scope,input_manifest_path=str(manifest_path),input_manifest_generation=byte_generation(manifest_path))
+        seal(path, body)
+    holding['all_scope_trailing_research'] = monitor._extension(json.loads(old.read_bytes()),old,byte_generation(old))
+    holding_path.write_text(json.dumps(holding))
+    before=holding_path.read_bytes()
+    if damage:
+        with pytest.raises(ValueError):
+            monitor.issue(data, source_date=SOURCE,target_date=TARGET,report_path=current)
+    else:
+        monitor.issue(data, source_date=SOURCE,target_date=TARGET,report_path=current)
+        assert monitor.observe(data,holding,target_date=TARGET)['status']=='generation_current'
+    assert holding_path.read_bytes()==before

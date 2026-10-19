@@ -6,6 +6,7 @@ bootstrap, or controller, and its receipt is not accepted by runtime consumers.
 from datetime import date, datetime
 import fcntl
 import json
+import math
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,37 @@ from src.engine.lifecycle.holding_window_generation import byte_generation
 from src.engine.scalping.pre_submit_delay_initial_policy import _atomic, digest
 
 SCHEMA = 'main_trailing_monitor_currentness_v1'
+
+
+def _same_scope_identity(old, current):
+    if old == current:
+        return True
+    clocks = [value.get('as_of') for value in (old, current)]
+    if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in clocks):
+        return False
+    return all(value.get('schema') == 'main_exit_scope_snapshot_v1' for value in (old, current)) and (
+        {k:v for k,v in old.items() if k not in {'as_of', 'universe_snapshot_sha256'}} ==
+        {k:v for k,v in current.items() if k not in {'as_of', 'universe_snapshot_sha256'}})
+
+
+def _verify_scope_clock(report, path):
+    """Verify the clock-dependent digest against the sealed native universe."""
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.scalping.main_exit_scope import build_scope, validate_scope
+    manifest_path = Path(report['input_manifest_path'])
+    if byte_generation(manifest_path) != report['input_manifest_generation']:
+        raise ValueError('trailing_monitor_scope_manifest_changed')
+    manifest = _sealed(manifest_path)
+    scope = dict(report['scope'])
+    if not 0 < scope['scope_count'] <= 80000:
+        raise ValueError('trailing_monitor_scope_unbounded')
+    scope['scopes'] = list(storage.iter_tree(path.parent, scope.pop('scopes_ref')))
+    validate_scope(scope)
+    expected = build_scope(manifest['universe'], as_of=manifest['as_of'],
+        universe_source_sha256=manifest['universe_source_sha256'],
+        operating=manifest.get('operating'), coverage=manifest.get('coverage'), custody=manifest.get('custody'))
+    if scope != expected:
+        raise ValueError('trailing_monitor_scope_manifest_mismatch')
 
 
 def _paths(data, source, target):
@@ -77,8 +109,11 @@ def issue(data, *, source_date, target_date, report_path):
         manifest = _sealed(Path(report['input_manifest_path']))
         if (report['source_date'] != source_date or Path(manifest['source_data_root']).resolve() != data
                 or old['initial_policy'] != report['initial_policy']
-                or old['scope'] != report['scope']):
+                or not _same_scope_identity(old['scope'], report['scope'])):
             raise ValueError('trailing_monitor_parent_or_scope_changed')
+        if old['scope'] != report['scope']:
+            _verify_scope_clock(old, Path(original['report_path']))
+            _verify_scope_clock(report, path)
         extension = _extension(report, path, generation)
         checked = native.observe_extension(dict(date=source_date, all_scope_trailing_research=extension),
                                            target_date=target_date, required=True)
@@ -88,6 +123,7 @@ def issue(data, *, source_date, target_date, report_path):
                        generated_at=datetime.now(ZoneInfo('Asia/Seoul')).isoformat(),
                        original=original, extension=extension, code_contract_sha256=code_contract(),
                        full_native_validation=True, original_policy_preserved=True,
+                       scope_identity_verified=True,
                        allowed_runtime_apply=False, runtime_effect=False, actual_pid_consumed=False)
         receipt['artifact_sha256'] = digest(receipt)
         if destination.exists():
@@ -117,6 +153,7 @@ def observe(data, holding, *, target_date):
                 or receipt.get('code_contract_sha256') != code_contract()
                 or receipt.get('full_native_validation') is not True
                 or receipt.get('original_policy_preserved') is not True
+                or receipt.get('scope_identity_verified') is not True
                 or any(receipt.get(key) is not False for key in
                        ('allowed_runtime_apply','runtime_effect','actual_pid_consumed'))):
             raise ValueError('trailing_monitor_receipt_invalid')
@@ -125,7 +162,7 @@ def observe(data, holding, *, target_date):
         if not path.is_relative_to(Path(data).resolve()/'report/main_all_scope_trailing'/holding['date']/'generations'):
             raise ValueError('trailing_monitor_report_path_invalid')
         report = _sealed(path)
-        if old['initial_policy'] != report['initial_policy'] or old['scope'] != report['scope']:
+        if old['initial_policy'] != report['initial_policy'] or not _same_scope_identity(old['scope'], report['scope']):
             raise ValueError('trailing_monitor_parent_or_scope_changed')
         result = native.observe_extension(dict(date=holding['date'], all_scope_trailing_research=ext),
                                           target_date=target_date, required=True)

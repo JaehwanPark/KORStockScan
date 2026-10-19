@@ -1794,6 +1794,49 @@ def test_partial_sell_retains_cancel_custody_across_restart(monkeypatch):
         restarted, code=stock["code"], order_no="0000456")
 
 
+@pytest.mark.parametrize('damage', [None, 'wrong_owner', 'missing_journal',
+                                   'checksum', 'foreign_conflict', 'incomplete_quantity',
+                                   'foreign_cancel', 'manual_veto'])
+def test_coexistence_restores_exact_partial_sell_without_overwriting_db_or_external_owner(monkeypatch, damage):
+    stock=_partial_sell_cancel_stock(monkeypatch)
+    state=stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]
+    state['quantity_contract_complete']=damage!='incomplete_quantity'
+    assert execution_receipts._persist_sell_receipt_recovery_or_interlock(stock,code=stock['code'],reason='fixture')
+    path=execution_receipts._sell_receipt_recovery_path(stock['id'])
+    if damage=='missing_journal':path.unlink()
+    elif damage=='checksum':path.write_text('{}')
+    mismatch='main_owner_registry_quantity_mismatch:registry=1:db=2'
+    target=dict(id=stock['id'],code=stock['code'],status='SELL_ORDERED',buy_qty=2,
+        sell_submit_pending=True,broker_symbol_allocation_conflict=True,
+        sell_cancel_reconciliation_required=True,sell_cancel_reconciliation_source=(
+            'multiple_active_records_share_symbol' if damage=='foreign_conflict' else mismatch))
+    if damage == 'foreign_cancel':
+        target.update(broker_symbol_allocation_conflict=False, sell_cancel_reconciliation_source='unknown_pending_cancel')
+    monkeypatch.setattr(sniper_sync, 'evaluate_main_bot_control_exclusion',
+                        lambda code: SimpleNamespace(excluded=damage == 'manual_veto'))
+    record=SimpleNamespace(id=stock['id'],stock_name='fixture',status='SELL_ORDERED',buy_qty=2,scale_in_locked=True)
+    owner='main_scalping:'+str(stock['id'] if damage!='wrong_owner' else 999)
+    registry=SimpleNamespace(symbol_registered=lambda code:True,
+        decision_activation_matches=lambda decision:True,
+        reconcile_symbol_quantity=lambda **kw:dict(position_quantities={owner:1,'manual_operator:other':3},external_manual_remainder=0))
+    monkeypatch.setattr(sniper_sync,'ACTIVE_TARGETS',[target])
+    monkeypatch.setattr(sniper_sync,'default_order_owner_registry',lambda:registry)
+    monkeypatch.setattr(sniper_sync,'resolve_symbol_owner_policy',lambda code:SimpleNamespace(
+        coexistence_enabled=True,policy_id='fixture',policy_hash='a'*64))
+    errors=[];monkeypatch.setattr(sniper_sync,'log_error',errors.append)
+    assert sniper_sync._preserve_coexistence_owner_inventory(record=record,code=stock['code'],
+        real_codes={stock['code']:dict(qty=4)},source='startup_balance_sync')
+    assert record.buy_qty==2 and record.status=='SELL_ORDERED'
+    if damage:
+        assert errors and target['broker_symbol_allocation_conflict'] is True
+        assert target['sell_cancel_reconciliation_required'] is True
+    else:
+        assert not errors and target['buy_qty']==1 and target['broker_holding_qty']==4
+        assert target['sell_submit_pending'] is False and target['sell_odno']=='0000456'
+        assert not target.get('broker_symbol_allocation_conflict')
+        assert execution_receipts.persist_pending_sell_cancel_intent_custody(target,order_no='0000456',broker_route='SOR')
+
+
 @pytest.mark.parametrize("field,value", [
     ("id", 999), ("code", "999999"), ("status", "HOLDING"),
     ("sell_odno", "0009999"), ("sell_submit_generation", "a" * 32),
