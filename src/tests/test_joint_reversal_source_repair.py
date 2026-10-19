@@ -601,8 +601,9 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
     assert frozen=={p:p.read_bytes() for p in frozen}
 
 
+@pytest.mark.parametrize('postclose',[False,True])
 @pytest.mark.parametrize('damage',[None,'selection_changed','observed_selection_changed'])
-def test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(tmp_path,monkeypatch,damage):
+def test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(tmp_path,monkeypatch,damage,postclose):
     import json
     from pathlib import Path
     from src.engine.scalping import reversal_code_handoff as H, continuous_reversal_policy_v6 as V
@@ -629,12 +630,22 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
         return json.dumps(dict(bundle_sha256='bundle',source_hashes={str(source):P.file_hash(source),
             str(selector):'0'*64 if damage=='observed_selection_changed' else initial_sha}))
     monkeypatch.setattr(H.subprocess,'check_output',inspect)
+    options={}
+    if postclose:
+        from datetime import timedelta
+        source_day=(datetime.fromisoformat(day).date()-timedelta(days=1)).isoformat()
+        def postclose_origin(*args):
+            assert args[2]==source_day
+            result=json.loads(inspect());result['verification_basis']='verified_previous_day_postclose_native_code_ancestry'
+            return result
+        monkeypatch.setattr(H,'_postclose_origin_receipt',postclose_origin)
+        options['postclose_source_date']=source_day
     if damage:
         with pytest.raises(ValueError,match='parent_changed|selection_changed'):
-            H.issue(data,day,origin_root=origin,release_root=root,parity_path=parity,confirm=H.AUTHORITY)
+            H.issue(data,day,origin_root=origin,release_root=root,parity_path=parity,confirm=H.AUTHORITY,**options)
         assert not H.path(data,day,commit,'bundle').exists()
         return
-    receipt=H.issue(data,day,origin_root=origin,release_root=root,parity_path=parity,confirm=H.AUTHORITY)
+    receipt=H.issue(data,day,origin_root=origin,release_root=root,parity_path=parity,confirm=H.AUTHORITY,**options)
     assert receipt['origin_selection_sha256']==initial_sha and str(selector) not in receipt['source_hashes']
     assert receipt['source_hashes'][str(source)]==P.file_hash(source)
     # The actual authorized selection changes, including the PID attestation;
@@ -644,6 +655,60 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     selector.write_text(json.dumps(dict(git_commit='c'*40,release_root=str(root))))
     with pytest.raises(ValueError,match='selection_changed'):
         H.validate(bundle,data,original_error=ValueError('code_changed'))
+
+
+@pytest.mark.parametrize('damage',[None,'source_date','main_live','session_live','restart','hold',
+    'consumed','source_selection','next_date','eod_date','eod_status','eod_rows','failed_commit','failed_status',
+    'failed_run','failed_exit','ancestry','changed'])
+def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_path,monkeypatch,damage):
+    import json
+    from datetime import timedelta
+    from src.engine.scalping import reversal_code_handoff as H,continuous_reversal_postclose as P
+    from src.engine.automation import ordered_intraday_deploy as D
+    data=tmp_path/'data';origin=tmp_path/'origin';origin.mkdir()
+    day=datetime.now(P.KST).date().isoformat();source=(datetime.fromisoformat(day).date()-timedelta(days=1)).isoformat()
+    selection=data/'runtime/runtime_release_selection.json';selection.parent.mkdir(parents=True)
+    selected=dict(git_commit='a'*40,release_root=str(origin),source_date=source,approved_by='user',
+        approval_scope='after_postclose_deploy_for_next_regular_start',actual_pid_consumed=False,next_operating_date=day)
+    if damage=='consumed':selected['actual_pid_consumed']=True
+    if damage=='source_selection':selected['source_date']=day
+    if damage=='next_date':selected['next_operating_date']='invalid'
+    selection.write_text(json.dumps(selected))
+    eod=data/'runtime/update_kospi_status'/('update_kospi_'+source+'.json');eod.parent.mkdir()
+    eod_body=dict(schema_version=1,target_date=day if damage=='eod_date' else source,status='running' if damage=='eod_status' else 'completed_with_warnings',
+        failed_steps=[],db_state=dict(latest_quote_date=source,rows_on_latest_date=0 if damage=='eod_rows' else 4))
+    eod.write_text(json.dumps(eod_body,indent=3)+'\n')
+    status=data/'report/threshold_cycle_postclose_status'/('threshold_cycle_postclose_'+source+'.status.json');status.parent.mkdir(parents=True)
+    status.write_text(json.dumps(dict(schema_version=2,run_id='invalid' if damage=='failed_run' else 'd'*32,
+        exit_code=0 if damage=='failed_exit' else 1,report_type='threshold_cycle_postclose_status',target_date=source,
+        status='running' if damage=='failed_status' else 'failed',code_commit='b'*40 if damage=='failed_commit' else 'a'*40,runtime_effect=False)))
+    if damage=='restart':(tmp_path/'restart.flag').touch()
+    if damage=='hold':(data/'runtime/operator_startup_hold.json').write_text('{}')
+    monkeypatch.setattr(D,'_main_pids',lambda:[42] if damage=='main_live' else [])
+    monkeypatch.setattr(D,'_session_absent',lambda:damage!='session_live')
+    monkeypatch.setattr(H,'_validated_origin_receipt',lambda *a:None if damage=='ancestry' else dict(
+        bundle_sha256='bundle',source_hashes={str(data/'old.json'):'0'*64}))
+    original=D._owned_metadata;reads=[]
+    def inspect(path):
+        if damage=='changed' and path==eod and reads:
+            eod.write_text(json.dumps({**eod_body,'changed':True}))
+        result=original(path)
+        if path==eod:reads.append(True)
+        return result
+    monkeypatch.setattr(D,'_owned_metadata',inspect)
+    before=eod.read_bytes(),status.read_bytes()
+    args=(data,day,day if damage=='source_date' else source,origin,'a'*40,'bundle','pointer','c'*40)
+    if damage:
+        with pytest.raises(ValueError,match='active_policy_postclose_'):H._postclose_origin_receipt(*args)
+        assert not H.path(data,day,'c'*40,'bundle').exists()
+        return
+    proof=H._postclose_origin_receipt(*args)
+    frozen=H.path(data,day,'c'*40,'bundle').with_suffix('')/'postclose_origin'
+    assert (frozen/eod.name).read_bytes()==before[0] and (frozen/status.name).read_bytes()==before[1]
+    assert str(eod) not in proof['source_hashes'] and str(status) not in proof['source_hashes']
+    assert proof['verification_basis']=='verified_previous_day_postclose_native_code_ancestry'
+    assert all(P.file_hash(name)==sha for name,sha in proof['source_hashes'].items() if name!=str(data/'old.json'))
+    assert eod.read_bytes()==before[0] and status.read_bytes()==before[1]
 
 
 @pytest.mark.parametrize('anchor,expected',[(10200,'TRUE'),(9900,'FALSE'),(None,'UNKNOWN')])

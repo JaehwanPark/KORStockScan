@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import subprocess
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from src.engine.scalping import continuous_reversal_postclose as P
 
@@ -208,12 +208,84 @@ def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_s
     return checked
 
 
-def issue(data_root,day,*,origin_root,release_root,parity_path,confirm,recover_stopped_origin=False):
+def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commit,bundle_sha,pointer_sha,release_commit):
+    """Bridge one midnight using exact stopped postclose/native ancestry.
+
+    This is code-only custody for the unchanged active parent. It neither
+    requires nor fabricates the downstream next-session policy/PREOPEN.
+    """
+    from src.engine.automation import ordered_intraday_deploy as D
+    root=Path(data_root).resolve();workspace=root.parent
+    if source_date!=(datetime.fromisoformat(day).date()-timedelta(days=1)).isoformat():
+        raise ValueError('active_policy_postclose_source_date_invalid')
+    selected,selected_raw,_=D._owned_metadata(root/'runtime/runtime_release_selection.json')
+    next_day=selected.get('next_operating_date')
+    try:
+        canonical=datetime.fromisoformat(next_day).date().isoformat()
+    except (TypeError,ValueError):
+        raise ValueError('active_policy_postclose_next_date_invalid') from None
+    def stopped():
+        return (not D._main_pids() and D._session_absent()
+                and not (workspace/'restart.flag').exists() and not (workspace/'restart.flag').is_symlink()
+                and not (root/'runtime/operator_startup_hold.json').exists()
+                and not (root/'runtime/operator_startup_hold.json').is_symlink())
+    if (not stopped() or selected.get('git_commit')!=origin_commit
+            or selected.get('release_root')!=str(origin_root)
+            or selected.get('source_date')!=source_date or selected.get('approved_by')!='user'
+            or selected.get('approval_scope')!='after_postclose_deploy_for_next_regular_start'
+            or selected.get('actual_pid_consumed') is not False
+            or next_day!=canonical or next_day<day):
+        raise ValueError('active_policy_postclose_stopped_origin_invalid')
+    paths=[root/'runtime/update_kospi_status'/('update_kospi_'+source_date+'.json'),
+           root/'report/threshold_cycle_postclose_status'/('threshold_cycle_postclose_'+source_date+'.status.json')]
+    observed=[D._owned_metadata(p) for p in paths];eod,failed=(v[0] for v in observed)
+    state=eod.get('db_state') or {}
+    import re
+    if (eod.get('schema_version')!=1 or eod.get('target_date')!=source_date
+            or eod.get('status') not in {'completed','completed_with_warnings'}
+            or eod.get('failed_steps')!=[] or state.get('latest_quote_date')!=source_date
+            or type(state.get('rows_on_latest_date')) is not int or state['rows_on_latest_date']<=0
+            or failed.get('report_type')!='threshold_cycle_postclose_status'
+            or failed.get('target_date')!=source_date or failed.get('status')!='failed'
+            or failed.get('schema_version')!=2
+            or not isinstance(failed.get('run_id'),str) or re.fullmatch('[0-9a-f]{32}',failed['run_id']) is None
+            or type(failed.get('exit_code')) is not int or failed['exit_code']==0
+            or failed.get('code_commit')!=origin_commit or failed.get('runtime_effect') is not False):
+        raise ValueError('active_policy_postclose_terminal_evidence_invalid')
+    checked=_validated_origin_receipt(root,source_date,origin_root,origin_commit,bundle_sha,pointer_sha)
+    if checked is None:raise ValueError('active_policy_postclose_native_ancestry_missing')
+    # Mutable observed aliases must not invalidate the issued code handoff when
+    # the repaired postclose producer naturally publishes its next attempt.
+    frozen=path(root,day,release_commit,bundle_sha).with_suffix('')/'postclose_origin'
+    if any(p.is_symlink() for p in (frozen,*frozen.parents)):
+        raise ValueError('active_policy_postclose_evidence_path_invalid')
+    frozen.mkdir(parents=True,exist_ok=True)
+    refs={}
+    for original,(_,raw,identity) in zip(paths,observed):
+        destination=frozen/original.name
+        if destination.exists() or destination.is_symlink():
+            if D._owned_metadata(destination)[1]!=raw:
+                raise ValueError('active_policy_postclose_frozen_evidence_conflict')
+        else:
+            with destination.open('xb') as handle:
+                os.fchmod(handle.fileno(),0o600);handle.write(raw);handle.flush();os.fsync(handle.fileno())
+        if D._owned_metadata(original)[1:]!=(raw,identity):
+            raise ValueError('active_policy_postclose_evidence_changed')
+        refs[str(destination)]=D._digest(raw)
+    if D._owned_metadata(root/'runtime/runtime_release_selection.json')[1]!=selected_raw or not stopped():
+        raise ValueError('active_policy_postclose_origin_changed')
+    checked['source_hashes'].update(refs)
+    checked['verification_basis']='verified_previous_day_postclose_native_code_ancestry'
+    return checked
+
+
+def issue(data_root,day,*,origin_root,release_root,parity_path,confirm,recover_stopped_origin=False,postclose_source_date=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import continuous_reversal_policy_v6 as V
     from src.engine.scalping import reversal_extended_catalog as C
     from src.engine.infrastructure.runtime_release_router import selected_release,validate_release,git
-    if confirm!=AUTHORITY or day!=datetime.now(P.KST).date().isoformat():
+    if (confirm!=AUTHORITY or day!=datetime.now(P.KST).date().isoformat()
+            or postclose_source_date is not None and recover_stopped_origin is not False):
         raise ValueError('active_policy_code_handoff_authority_required')
     workspace=Path(data_root).resolve().parent;origin_root=Path(origin_root).resolve();release_root=Path(release_root).resolve()
     selected,previous=selected_release(workspace)
@@ -240,6 +312,9 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm,recover_s
         checked = _stopped_origin_receipt(data_root,day,origin_root,previous,bundle['bundle_sha256'],P.file_hash(pointer))
     elif recover_stopped_origin is not False:
         raise ValueError('active_policy_stopped_recovery_flag_invalid')
+    if postclose_source_date is not None:
+        checked=_postclose_origin_receipt(data_root,day,postclose_source_date,origin_root,previous,
+            bundle['bundle_sha256'],P.file_hash(pointer),commit)
     if checked is None:
         output=subprocess.check_output([str(origin_root/'.venv/bin/python'),'-B','-c',_ORIGIN_SCRIPT,str(Path(data_root).resolve()),day],
             cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=120)
@@ -266,7 +341,8 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm,recover_s
         pipeline_source_validation=N.PIPELINE_REFERENCE_VALIDATION,
         origin_verification_basis=checked.get('verification_basis','native_origin_validator'),
         pipeline_source_reference_count=sum(N.is_pipeline_source_reference(p,data_root=data_root) for p in sources),
-        policy_reselected=False,provider_called=False,actual_pid_consumed=False,source_semantics_repair=True))
+        policy_reselected=False,provider_called=False,actual_pid_consumed=False,source_semantics_repair=True,
+        **({'postclose_source_date':postclose_source_date} if postclose_source_date is not None else {})))
     dest=path(data_root,day,commit,bundle['bundle_sha256']);dest.parent.mkdir(parents=True,exist_ok=True)
     if dest.exists() and N._read(dest)!=r:raise ValueError('active_policy_code_handoff_receipt_conflict')
     N._atomic_write_json(dest,r)
