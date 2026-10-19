@@ -1761,6 +1761,150 @@ def test_runtime_fetch_request_code_matches_actual_holding_venue(monkeypatch):
     )
 
 
+@pytest.mark.parametrize('case', ['current', 'missing', 'stale', 'rejected', 'hash', 'source_date'])
+def test_dated_vote_policy_activates_only_its_mandatory_context(monkeypatch, case):
+    now = datetime(2026, 10, 19, 10, tzinfo=KST)
+    receipt = dict(status='verified_incumbent_loaded', source_date='2026-10-16',
+                   target_date='2026-10-19', bundle_sha256='a'*64)
+    if case == 'missing': receipt = {}
+    if case == 'stale': receipt['target_date'] = '2026-10-16'
+    if case == 'rejected': receipt['status'] = 'baseline_policy_load_rejected'
+    if case == 'hash': receipt['bundle_sha256'] = 'bad'
+    if case == 'source_date': receipt['source_date'] = '2026-10-19'
+    monkeypatch.setattr(holding_context_module, 'promotion_activation_state',
+                        lambda _: dict(activation_source='none', promotion_artifact_required=True))
+    monkeypatch.setenv('KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED', 'false')
+    for kind in ('holding_path_vote', 'holding_score', 'holding_flow', 'overnight'):
+        for venue, session in (('KRX','krx_regular'), ('NXT','nxt_aftermarket'),
+                               ('PREMARKET_KRX_LIKE','krx_like_premarket')):
+            assert holding_decision_context_enabled(venue=venue,session=session,
+                decision_kind=kind,now_ts=now,vote_policy_receipt=receipt) is (
+                    case == 'current' and kind == 'holding_path_vote')
+
+
+@pytest.mark.parametrize('session,hour,suffix,route,broker,market', [
+    ('krx_like_premarket',8,'_NX','nxt_only','NXT','PREMARKET'),
+    ('krx_regular',10,'_AL','krx_nxt_integrated','SOR','REGULAR'),
+    ('krx_nxt_aftermarket',17,'_AL','krx_nxt_integrated','SOR','INTEGRATED_AFTERMARKET'),
+])
+def test_vote_context_builds_fresh_input_with_overlay_off(monkeypatch, tmp_path, session, hour, suffix, route, broker, market):
+    from src.engine.ai.holding_exit_vote import (
+        build_path_vote_input, path_vote_input_gaps, normalize_path_vote_bundle, PATH_REASON_PREFIX,
+    )
+    from src.engine.ai.hot_path_ai_symbol_budget import HotPathAISymbolBudget
+    now = datetime(2026,10,19,hour,30,30,tzinfo=KST)
+    for name in ('HOLDING_DECISION_CONTEXT_ENABLED','HOLDING_FLOW_CONTEXT_ENABLED',
+                 'HOLDING_SCORE_CONTEXT_ENABLED','MULTI_TIMEFRAME_AI_CONTEXT_ENABLED'):
+        monkeypatch.setenv('KORSTOCKSCAN_'+name,'false')
+    monkeypatch.setattr(holding_context_module, 'promotion_activation_state',
+                        lambda _: dict(activation_source='none', promotion_artifact_required=True))
+    receipt=dict(status='verified_incumbent_loaded',source_date='2026-10-16',
+                 target_date='2026-10-19',bundle_sha256='a'*64)
+    monkeypatch.setattr(state_handlers,'_HOLDING_PATH_POLICY_RECEIPT',receipt)
+    ws=_ws(now,price=9990,suffix=suffix,route=route)
+    ws.update(orderbook=dict(bids=[dict(price=9989,volume=200)],asks=[dict(price=9991,volume=100)]),
+        last_realtime_type_ts={'0B':now.timestamp()-.1,'0D':now.timestamp()-.2},
+        last_realtime_type_item={'0B':'000660'+suffix,'0D':'000660'+suffix},
+        last_realtime_type_market_suffix={'0B':suffix,'0D':suffix},
+        last_realtime_type_market_route={'0B':route,'0D':route})
+    stock=dict(_stock(),id=7,name='TEST',strategy='SCALPING',status='HOLDING',
+        buy_price=10000,code='000660',entry_execution_broker_route=broker,
+        _entry_receipt_filled_by_order_no={'BUY-1':20},
+        _entry_receipt_executions_by_order_no={'BUY-1':{'FILL-1':dict(cumulative_qty=20)}},
+        broker_snapshot_at=now.timestamp(),open_buy_qty=0,open_sell_qty=0,
+        estimated_fee_tax_pct=.2,estimated_slippage_bps=1)
+    position=dict(buy_price=10000,curr_price=9990,profit_rate=-.3,peak_profit=0,
+                  drawdown_from_peak_pct=.3,held_sec=60)
+    candles=_candles(30,start=now.replace(minute=0,second=0))
+    assert state_handlers._resolve_holding_context_request_code('000660',ws_data=ws,
+        position_ctx=stock,decision_kind='holding_path_vote',now_ts=now.timestamp())=='000660'+suffix
+    requests=[]
+    def fetch(token,code,**kw):
+        requests.append((code,kw))
+        return candles,dict(api_id='ka10080',entry_candle_request_code=code)
+    monkeypatch.setattr(kiwoom_utils,'get_minute_candles_ka10080_with_meta',fetch)
+    fetched,meta=state_handlers._get_holding_minute_candles_with_meta('000660',limit=60,
+        ws_data=ws,position_ctx=stock,decision_kind='holding_path_vote',now_ts=now.timestamp())
+    assert fetched==candles and requests[0][0]=='000660'+suffix
+    assert requests[0][1]['explicit_request_code'] is True
+    assert requests[0][1]['limit'] == 60
+    assert meta['multi_timeframe_auxiliary_fetch'] is False
+    def build(at):
+        return state_handlers._build_holding_ai_decision_context(stock=stock,code='000660',
+            ws_data=ws,decision_kind='holding_path_vote',now_ts=at,recent_candles=candles,
+            candle_meta=dict(api_id='ka10080',received_count=30,entry_candle_request_code='000660'+suffix,
+                             multi_timeframe_auxiliary_fetch=False),
+            recent_ticks=ws['recent_trade_ticks'],position_ctx=position,include_disabled_forensics=True)
+    context=build(now.timestamp())
+    active,forensic=state_handlers._holding_context_call_views(context)
+    assert active is context and forensic is None
+    assert context['vote_input_policy']==receipt
+    assert context['source_quality']['hold_defer_allowed'] is False
+    preflight=snapshot_module.ai_input_preflight(context)
+    assert preflight['allowed'] is True, preflight
+    common=dict(stock_code='000660',ws_data=ws,recent_ticks=ws['recent_trade_ticks'],recent_candles=candles,
+        position_ctx=position,requested_paths=('ADD_REBOUND',),market=market,session_key='2026-10-19',
+        position_key='record:7',buy_fill_identity='b'*64,route=route,transport_epoch='1',
+        source_generation='native:1',quote_observed_at=now.timestamp()-.2)
+    payload=build_path_vote_input(**common,holding_context=context)
+    assert path_vote_input_gaps(payload)=={'ADD_REBOUND':()}, payload['source_quality']
+    assert 'multi_timeframe_context' not in payload['flow']['candle']
+    assert payload['flow']['execution_pnl']['estimated_net_executable_pnl_pct'] is not None
+    # The old disabled forensic object cannot become a voter input.
+    for bad in (dict(context,enabled=False,forensic_context_only=True),
+                dict(context,enabled=True,forensic_context_only=True)):
+        rejected=build_path_vote_input(**common,holding_context=bad)
+        assert rejected['flow']=={} and rejected['source_quality']['allowed'] is False
+    blocked=build_path_vote_input(**common,holding_context=dict(context,
+        source_quality=dict(status='blocked',blockers=['active_exit_token'])))
+    assert 'source_preflight_blocked' in path_vote_input_gaps(blocked)['ADD_REBOUND']
+    assert 'holding_context_source_quality_blocked' in blocked['source_quality']['blockers']
+    malformed=build_path_vote_input(**common,holding_context=dict(context,source_quality='invalid'))
+    assert malformed['source_quality']['allowed'] is False
+    # Existing collector, cadence owner, durable ledger and signal consumer.
+    clock=[now.timestamp()]
+    monkeypatch.setattr(state_handlers.time,'time',lambda:clock[0])
+    monkeypatch.setattr(state_handlers,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(state_handlers,'_log_holding_pipeline',lambda *a,**k:None)
+    monkeypatch.setattr(state_handlers,'DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET',HotPathAISymbolBudget())
+    monkeypatch.setattr(state_handlers,'ws_quote_source_receipt',lambda *a,**k:dict(
+        item='000660'+suffix,observed_epoch=clock[0]-.2,market_route=route,
+        transport_epoch='1',route_sequence=int(clock[0])))
+    calls=[]
+    class AI:
+        def evaluate_scalping_holding_path_votes(self,*args,**kw):
+            calls.append(kw)
+            requested=clock[0];clock[0]+=.2
+            sid='snapshot-'+str(len(calls))
+            rows=normalize_path_vote_bundle(dict(input_snapshot_id=sid,votes=[dict(
+                path_id=path,verdict='PASS',conviction='FIRM',
+                reason_codes=[PATH_REASON_PREFIX[path]+'fixture']) for path in kw['requested_paths']]),
+                requested_paths=kw['requested_paths'],expected_snapshot_id=sid,
+                position_key=kw['position_key'],market=kw['market'],session_key=kw['session_key'],
+                model='gpt-5.4-nano',route=kw['route'],transport_epoch=kw['transport_epoch'],
+                source_generation=kw['source_generation'],requested_at=requested,received_at=clock[0],
+                quote_observed_at=kw['quote_observed_at'],buy_fill_identity=kw['buy_fill_identity'],
+                buy_fill_legs=kw['buy_fill_legs'])
+            return [dict(row,provider_called=True,
+                         path_decision_input_sha256=kw['expected_path_hashes'][row['path_id']]) for row in rows]
+    for cycle in range(2):
+        if cycle:
+            clock[0]=now.timestamp()+10
+            ws['v_pw']=81
+            ws['last_ws_update_ts']=clock[0]
+            ws['last_realtime_type_ts']={'0B':clock[0]-.1,'0D':clock[0]-.2}
+            for tick in ws['recent_trade_ticks']:tick['received_at_ms']+=10000
+            context=build(clock[0])
+        assert state_handlers._collect_holding_path_votes(stock=stock,code='000660',ai_engine=AI(),
+            ws_data=ws,recent_ticks=ws['recent_trade_ticks'],recent_candles=candles,position_ctx=position,
+            holding_context=context,now_ts=clock[0],min_interval_sec=1)=='appended'
+        snapshot=state_handlers._holding_path_signal_decision(stock,'000660',path_id='ADD_REBOUND',
+            signal_id=f'rebound-{cycle}',signal_at=clock[0]+.1)
+        assert snapshot['vote_count']==cycle+1
+        assert snapshot['decision']==('PASS' if cycle else 'INSUFFICIENT')
+    assert len(calls)==2
+
+
 def test_disabled_holding_context_builds_only_explicit_forensic_source(monkeypatch):
     calls = []
 

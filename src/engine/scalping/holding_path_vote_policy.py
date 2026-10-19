@@ -461,6 +461,28 @@ def runtime_policy_from_env(
                       "source_date": bundle["source_date"]}
 
 
+def runtime_vote_input_enabled(receipt: Any, *, active_date: str) -> bool:
+    """Use the native loader's dated receipt for its mandatory vote inputs.
+
+    Baseline fallback and stale/rejected loads cannot activate this consumer.
+    This receipt permits input construction, never a signal or order.
+    """
+    if not isinstance(receipt, dict) or receipt.get("status") not in {
+        "estimated_provisional_loaded", "validated_successor_loaded", "verified_incumbent_loaded",
+    }:
+        return False
+    try:
+        valid_dates = (date.fromisoformat(active_date).isoformat() == active_date
+            and receipt.get("target_date") == active_date
+            and START_DATE <= receipt["source_date"] < active_date
+            and date.fromisoformat(receipt["source_date"]).isoformat() == receipt["source_date"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    bundle = receipt.get("bundle_sha256")
+    return bool(valid_dates and isinstance(bundle, str) and len(bundle) == 64
+                and all(char in "0123456789abcdef" for char in bundle))
+
+
 SUCCESSOR_SCHEMA='holding_path_vote_selected_policy_v2'
 
 

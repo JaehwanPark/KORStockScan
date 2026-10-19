@@ -19864,6 +19864,16 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
     from src.engine.scalping import mechanistic_entry_runtime_policy
 
+    # A refresh under suite load uses the metadata API, not the legacy
+    # wrapper mocked below. Keep the same fixture bars on both paths.
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils, "get_minute_candles_ka10080_with_meta",
+        lambda _token, code, **kwargs: (
+            _micro_vwap_candles(price=10_020),
+            {"api_id": "ka10080", "entry_candle_request_code": code},
+        ),
+    )
+
     # This synthetic fixture exercises latency price handling, independent
     # of the live dated machine bundle installed on the test host.
     monkeypatch.setattr(

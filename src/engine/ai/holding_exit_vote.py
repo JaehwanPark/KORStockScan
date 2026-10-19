@@ -382,7 +382,15 @@ def build_path_vote_input(
         except (TypeError, ValueError, OverflowError):
             return None
 
-    preflight = ai_input_preflight(holding_context)
+    runtime_context = (holding_context if isinstance(holding_context, dict)
+                       and holding_context.get("enabled") is True
+                       and not holding_context.get("forensic_context_only") else None)
+    preflight = ai_input_preflight(runtime_context)
+    context_quality = runtime_context.get("source_quality") if runtime_context is not None else None
+    if context_quality is not None and (not isinstance(context_quality, dict)
+            or context_quality.get("status") in {"blocked", "disabled"}):
+        preflight = {**preflight, "allowed": False, "status": "blocked",
+                     "blockers": list(preflight.get("blockers") or []) + ["holding_context_source_quality_blocked"]}
     return {
         "input_schema": PATH_PROMPT_VERSION,
         "requested_paths": list(paths),
@@ -403,8 +411,8 @@ def build_path_vote_input(
                        if isinstance(tick, dict)],
         "last_candles": [dict(candle) for candle in list(recent_candles or [])[-20:]
                          if isinstance(candle, dict)],
-        "flow": holding_decision_context_model_payload(holding_context)
-                if isinstance(holding_context, dict) else {},
+        "flow": holding_decision_context_model_payload(runtime_context)
+                if runtime_context is not None else {},
         "source_quality": {"allowed": preflight.get("allowed") is True,
                            "status": preflight.get("status"),
                            "blockers": preflight.get("blockers")},
@@ -425,6 +433,7 @@ def path_vote_gap_source(payload, hashes, *, context_source=None):
         return [str(item)[:160] for item in value[:32]]
 
     source=context_source if isinstance(context_source,dict) else {}
+    vote_policy=source.get('vote_input_policy') if isinstance(source.get('vote_input_policy'),dict) else {}
     quality=source.get('source_quality') if isinstance(source.get('source_quality'),dict) else {}
     preflight=payload.get('source_quality') or {}
     body=dict(schema='holding_path_input_gap_source_v1',
@@ -433,6 +442,8 @@ def path_vote_gap_source(payload, hashes, *, context_source=None):
         decision_input_sha256=hashes.get('decision_input_sha256'),
         context_present=bool(source),context_schema=source.get('schema'),
         context_enabled=source.get('enabled'),forensic_context_only=source.get('forensic_context_only'),
+        vote_input_policy={k:vote_policy.get(k)
+            for k in ('status','source_date','target_date','bundle_sha256')},
         context_quality_status=quality.get('status'),
         context_blockers=blockers(quality.get('blockers')),
         input_preflight_status=preflight.get('status'),

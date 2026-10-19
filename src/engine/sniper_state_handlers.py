@@ -26061,11 +26061,16 @@ def _build_holding_ai_decision_context(
     ws = ws_data if isinstance(ws_data, dict) else {}
     session = resolve_entry_candle_session(now_ts=now_ts)
     venue = resolve_entry_candle_venue(ws, session=session)
+    if decision_kind == "holding_path_vote":
+        venue = resolve_entry_candle_venue(ws, venue=venue, session=session)
+    vote_policy = ({"vote_policy_receipt": _HOLDING_PATH_POLICY_RECEIPT}
+                   if decision_kind == "holding_path_vote" else {})
     context_enabled = holding_decision_context_enabled(
         venue=venue,
         session=session,
         decision_kind=decision_kind,
         now_ts=now_ts,
+        **vote_policy,
     )
     if not context_enabled and not include_disabled_forensics:
         return None
@@ -26073,7 +26078,7 @@ def _build_holding_ai_decision_context(
     combined.update(position_ctx or {})
     try:
         context = build_holding_decision_context(
-            KIWOOM_TOKEN,
+            None if decision_kind == "holding_path_vote" else KIWOOM_TOKEN,
             code,
             ws,
             combined,
@@ -26086,7 +26091,8 @@ def _build_holding_ai_decision_context(
             recent_candles=recent_candles or [],
             candle_meta=candle_meta or {},
             recent_ticks=recent_ticks or [],
-            include_investor_source=context_enabled,
+            include_investor_source=context_enabled and decision_kind != "holding_path_vote",
+            **vote_policy,
         )
         if not context_enabled:
             context = dict(context or {})
@@ -26152,6 +26158,8 @@ def _resolve_holding_context_request_code(
         position=position_ctx,
         decision_kind=decision_kind,
         now_ts=now_ts,
+        **({"vote_policy_receipt": _HOLDING_PATH_POLICY_RECEIPT}
+           if decision_kind == "holding_path_vote" else {}),
     )
 
 
@@ -26172,6 +26180,8 @@ def _get_holding_minute_candles_with_meta(
         session=session,
         decision_kind=decision_kind,
         now_ts=now_ts,
+        **({"vote_policy_receipt": _HOLDING_PATH_POLICY_RECEIPT}
+           if decision_kind == "holding_path_vote" else {}),
     )
     if not context_enabled:
         try:
@@ -26194,12 +26204,13 @@ def _get_holding_minute_candles_with_meta(
         candles, metadata = kiwoom_utils.get_minute_candles_ka10080_with_meta(
             KIWOOM_TOKEN,
             request_code,
-            limit=max(int(limit), SOURCE_BAR_LIMIT),
+            limit=(max(1, int(limit)) if decision_kind == "holding_path_vote"
+                   else max(int(limit), SOURCE_BAR_LIMIT)),
             explicit_request_code=True,
         )
         resolved_metadata = dict(metadata or {})
         resolved_metadata["holding_context_request_code"] = request_code
-        resolved_metadata["multi_timeframe_auxiliary_fetch"] = True
+        resolved_metadata["multi_timeframe_auxiliary_fetch"] = decision_kind != "holding_path_vote"
         return list(candles or []), resolved_metadata
     except Exception as exc:
         return [], {
@@ -87269,7 +87280,7 @@ def handle_holding_state(
                         _begin_holding_vote_coverage(stock,time.time())
                         request_code = _resolve_holding_context_request_code(
                             code, ws_data=ws_data, position_ctx=stock,
-                            decision_kind="holding_score", now_ts=now_ts,
+                            decision_kind="holding_path_vote", now_ts=now_ts,
                         )
                         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
                             KIWOOM_TOKEN, request_code, limit=10,
@@ -87281,7 +87292,7 @@ def handle_holding_state(
                         recent_candles, recent_candle_meta = (
                             _get_holding_minute_candles_with_meta(
                                 code, limit=60, legacy_limit=40, ws_data=ws_data,
-                                position_ctx=stock, decision_kind="holding_score",
+                                position_ctx=stock, decision_kind="holding_path_vote",
                                 now_ts=now_ts,
                             )
                         )
@@ -89829,6 +89840,8 @@ def handle_holding_state(
         assessment = (stock.get("_main_rebound_entry_assessment") or {}) if gate.get("allowed") else {}
         _log_holding_pipeline(stock, code, "avg_down_shared_rebound_blocked",
             reason=gate.get("reason") if not gate.get("allowed") else assessment.get("reason", "shared_main_rebound_source_unavailable"),
+            last_assessment_reason=(stock.get("_main_rebound_entry_assessment") or {}).get("reason"),
+            last_assessment_at=stock.get("_main_rebound_entry_assessed_at"),
             machine_action=assessment.get("machine_action"),
             structure_phase_family=assessment.get("structure_phase_family"),
             source_signal_id=assessment.get("source_signal_id"),
@@ -90764,6 +90777,8 @@ def _evaluate_scale_in_signal(
         return None
     if curr_price <= 0 or curr_price >= _safe_float(stock.get("buy_price"), 0):
         return None
+    now_ts = time.time() if now_ts is None else float(now_ts)
+    stock["_main_rebound_entry_assessed_at"] = now_ts
     stop_guard_pct = (_rule_float("SCALP_STOP", -1.5) if stop_guard_pct is None
         else _safe_float(stop_guard_pct, float("nan")))
     if (not math.isfinite(stop_guard_pct)
@@ -90771,7 +90786,6 @@ def _evaluate_scale_in_signal(
                 <= max(stop_guard_pct, _rule_float("SCALP_HARD_STOP", -2.5))):
         stock["_main_rebound_entry_assessment"] = {"reason": "common_stop_has_priority"}
         return None
-    now_ts = time.time() if now_ts is None else float(now_ts)
     stock["_main_rebound_entry_assessment"] = {"reason": "shared_main_rebound_source_unavailable"}
     source = stock.get("_main_rebound_entry_source") or {}
     if (source.get("code") != code

@@ -319,7 +319,7 @@ def test_runtime_collection_uses_one_path_bundle_and_one_vote_is_insufficient(mo
         position_ctx={"buy_price": 100, "curr_price": 99,
                       "profit_rate": -1, "peak_profit": 0,
                       "drawdown_from_peak_pct": 1, "held_sec": 10},
-        holding_context={}, now_ts=10.0, min_interval_sec=1.0,
+        holding_context={"enabled": True}, now_ts=10.0, min_interval_sec=1.0,
     ) == "appended"
     assert calls == [("EXIT_TRAILING_TP", "ADD_REBOUND")]
     assert len(stock["holding_path_vote_ledger"]) == 2
@@ -332,7 +332,7 @@ def test_runtime_collection_uses_one_path_bundle_and_one_vote_is_insufficient(mo
         position_ctx={"buy_price": 100, "curr_price": 99,
                       "profit_rate": -1, "peak_profit": 0,
                       "drawdown_from_peak_pct": 1, "held_sec": 10},
-        holding_context={}, now_ts=10.0, min_interval_sec=1.0,
+        holding_context={"enabled": True}, now_ts=10.0, min_interval_sec=1.0,
     ) == "unchanged_input_skip"
     assert len(calls) == 1
     assert handlers._collect_holding_path_votes(
@@ -344,7 +344,7 @@ def test_runtime_collection_uses_one_path_bundle_and_one_vote_is_insufficient(mo
         position_ctx={"buy_price": 100, "curr_price": 99,
                       "profit_rate": -1, "peak_profit": 0,
                       "drawdown_from_peak_pct": 1, "held_sec": 11},
-        holding_context={}, now_ts=10.0, min_interval_sec=1.0,
+        holding_context={"enabled": True}, now_ts=10.0, min_interval_sec=1.0,
     ) == "duplicate_quote_generation_skip"
     assert len(stock["holding_path_vote_ledger"]) == 2
     snapshot = handlers._holding_path_signal_decision(
@@ -512,7 +512,7 @@ def test_each_path_has_a_complete_projected_input_in_each_market(
         buy_fill_identity=BUY_IDENTITY,
         route="KRX" if market == "REGULAR" else "NXT",
         transport_epoch="1", source_generation="item:1",
-        quote_observed_at=20, holding_context={},
+        quote_observed_at=20, holding_context={"enabled": True},
     )
     assert payload["quote"]["bid_total_depth"] == 1000
     assert payload["quote"]["ask_total_depth"] == 900

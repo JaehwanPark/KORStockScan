@@ -154,10 +154,15 @@ def holding_decision_context_enabled(
     session: str,
     decision_kind: str,
     now_ts: Any = None,
+    vote_policy_receipt: dict | None = None,
 ) -> bool:
     if str(decision_kind or "").strip().lower().startswith("overnight"):
         return False
     now = _now_kst(now_ts)
+    if str(decision_kind or "").lower() == "holding_path_vote":
+        from .holding_path_vote_policy import runtime_vote_input_enabled
+        if runtime_vote_input_enabled(vote_policy_receipt, active_date=now.date().isoformat()):
+            return True
     activation = promotion_activation_state(now)
     if activation.get("activation_source") == "atomic_promotion_artifact":
         return True
@@ -700,17 +705,21 @@ def resolve_holding_context_request_code(
     position: dict[str, Any] | None,
     decision_kind: str,
     now_ts: Any,
+    vote_policy_receipt: dict | None = None,
 ) -> str:
     """Resolve REST symbol from the same holding execution-view owner."""
 
     now = _now_kst(now_ts)
     session = resolve_entry_candle_session(now_ts=now)
     venue = resolve_entry_candle_venue(ws_data or {}, session=session)
+    if decision_kind == "holding_path_vote":
+        venue = resolve_entry_candle_venue(ws_data or {}, venue=venue, session=session)
     if not holding_decision_context_enabled(
         venue=venue,
         session=session,
         decision_kind=decision_kind,
         now_ts=now,
+        vote_policy_receipt=vote_policy_receipt,
     ):
         return code
     broker_route, _source, _authority = _holding_execution_route(
@@ -745,6 +754,7 @@ def build_holding_decision_context(
     recent_ticks: list[dict[str, Any]] | None = None,
     rest_signed_ticks: list[dict[str, Any]] | None = None,
     include_investor_source: bool = False,
+    vote_policy_receipt: dict | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     now = _now_kst(now_ts)
@@ -822,6 +832,7 @@ def build_holding_decision_context(
         session=str(candle.get("session") or ""),
         decision_kind=decision_kind,
         now_ts=now,
+        vote_policy_receipt=vote_policy_receipt,
     )
     request_suffix = _request_suffix(str(candle.get("request_code") or ""))
     ws_suffix = str(candle.get("ws_suffix") or "").upper()
@@ -1385,6 +1396,12 @@ def build_holding_decision_context(
         and not active_exit_token
         and not order_conflict
     )
+    if str(decision_kind or "").lower() == "holding_path_vote":
+        from .holding_path_vote_policy import runtime_vote_input_enabled
+        if runtime_vote_input_enabled(vote_policy_receipt, active_date=now.date().isoformat()):
+            context["vote_input_policy"] = dict(vote_policy_receipt)
+            # A mandatory voter input cannot acquire ordinary HOLD deferral.
+            context["source_quality"]["hold_defer_allowed"] = False
     context["flow_signature"] = _flow_signature(context)
     return context
 
@@ -1456,6 +1473,7 @@ def holding_decision_context_model_payload(
             "schema",
             "enabled",
             "decision_kind",
+            "vote_input_policy",
             "venue",
             "session",
             "market_data_route",

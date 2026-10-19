@@ -70,3 +70,43 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 - receipt v2는 새 reader가 v1과 함께 읽는다. v1 전용 옛 코드로 rollback하면 새 v2 receipt의 복원이 거부된다. rollback 시에는 이 reader 호환성을 포함해야 하며 원 receipt 삭제·과거 체결 재생성으로 맞추지 않는다.
 - 자연 실행 수용은 동일 보유의 반등 신호 → 유효 ADD 투표 → 실제 submit/accepted/fill → 청산/실비용으로 확인한다. 현재 paired ADD/NO_ADD 경제성은 관측되지 않았으며 `null`을 유지한다. 완료 보유의 PnL만으로 물타기의 추가 효과를 주장하지 않는다.
 - S15·VCP·PYRAMID 신규 판단/튜닝은 복원하지 않았다. 과거 미결 주문의 복구·정산 소비는 유지했다. 주문·provider·threshold·env·정책 selector·프로세스에 대한 실제 변경은 이 작업에 없다.
+
+## 2026-10-19 후속: 필수 투표 입력의 활성 계약 복구
+
+### 기준과 확인된 결함
+
+사용자의 정상작동 점검 후 다음 액션·구현·코드리뷰·수정보완 지시를 수행했다. 기준 선택본은 다른 세션이 17:30에 배포한 `34798c60c43984ab9fb97b07e224f9a29883503d`, PID `1889422`, 시작 ticks `4311591`이다. 격리 branch `fix/avg-down-vote-input-20261019`에서 수정했으며 원 workspace의 문서·wrapper 정리·수동관리 변경은 포함하지 않았다.
+
+직전 선택본 `e7f4e2e8f`의 17:24 KST까지 ADD 검토는 삼성전자49350 71건, 알테오젠49375 125건, 주성49374 17건이 모두 INSUFFICIENT/AI 호출0이었다. 보유 컨텍스트·holding flow의 OFF가 `forensic_context_only=true` → `ai_market_snapshot_missing` / `holding_flow_evidence_missing` / `rebound_tape_or_quote_flow_missing`으로 이어졌다. 10/16 코드 수정은 배포되어 있었으나 필수 투표 입력이 optional context 활성 계약에 종속되어 실제 작동을 막았다. 이 통계는 실제 AI 응답 수가 아니다.
+
+### 구현과 교체·제거 처분
+
+| 기존 함수/dispatch | 처분 | 대체 또는 현재 소비자·이유 |
+| --- | --- | --- |
+| vote worker의 `holding_score` 조회 dispatch 2곳 | removed | 동일 worker의 `holding_path_vote`로 이관. 기존 tick/분봉 조회 owner·호출 주기 안에서 exact request code와 metadata를 사용한다. 퇴역 score endpoint는 호출하지 않는다 |
+| 투표 입력이 전역 context OFF에만 종속된 판단 | consolidated | `holding_path_vote_policy.runtime_vote_input_enabled`가 기존 native loader의 당일 loaded receipt·source/target 날짜·bundle hash를 검사한다. 기존 holding context builder를 재사용하며 새 모듈/별도 builder/활성화 파일은 만들지 않는다 |
+| `holding_decision_context_enabled`의 일반 holding/flow/overnight 계약 | retained | 일반 holding/flow 소비자와 기존 promotion/시장별/stage env 계약에 필요하다. 새 receipt는 정확히 `holding_path_vote` 입력에만 적용하며 overnight는 계속 퇴역이다 |
+| `_holding_context_call_views`와 disabled forensic reader | retained | 일반 AI 소비자·원 입력 결손 진단에서 runtime/forensic 분리를 유지한다. 과거 forensic 객체의 재사용·승격은 하지 않는다 |
+| `build_path_vote_input`의 무조건 context projection | removed | enabled runtime context만 투영하고 forensic 및 blocked/disabled/잘못된 source-quality 입력을 거부한다. typed gap에는 원 입력 정책 receipt를 보존한다 |
+| 정규장 SOR 실행 뷰의 기존 stage 집합 | consolidated | 기존 `_integrated_sor_execution_view_proof`에 현재 vote stage를 등록했다. 동일 source·route·수량·시세 증명을 통과해야 하며 기초 거래소를 추정하지 않는다 |
+| 일반 disabled 분봉 legacy 조회 분기 | retained | 활성화되지 않은 일반 holding 소비자가 사용한다. 투표는 당일 정책이 유효할 때 기존 exact-route metadata 조회로 이동한다 |
+| 30초 차단 로그에서 판단 잠금만 보이는 경로 | retained | 현재 gate 사유를 보존하며 마지막 실제 반등 평가 사유·시각을 함께 기록한다. 진단 필드는 주문 판단에 쓰지 않는다 |
+
+별도 validator/CLI/wrapper/registry/스케줄은 추가하지 않았다. 기존 호출의 동적 import와 역할 package 소비자를 대조했다. 정책의 source-code contract에는 현재 필수 입력을 만드는 `holding_decision_context.py`와 SOR 증명 owner `ai_market_snapshot.py`를 추가했다. 유예된 제거 항목은 없다. 기준34798 대비 non-test source 6파일 `+79/-11`(순증68), 기존 test 3파일 `+158/-4`(순증154), 기존 review 문서 1파일 `+40/-0`이다. 파일 이동·새 source/test 파일은 없으며 순증은 당일 정책에 결속한 입력 활성·진단과 3시장 통합 회귀에 사용했다.
+
+### 활성 범위와 안전 계약
+
+- 활성화 근거는 이미 native 로더가 source/strict handoff까지 검증한 당일 보유 투표 정책이다. baseline fallback, rejected, 만료, 잘못된 hash/date 영수증은 새 입력 경로를 활성화하지 않는다. 일반 holding/flow 및 전역 multi-timeframe promotion을 켜지 않는다.
+- 해당 builder는 원 WS/분봉·기존 broker snapshot cache를 재사용한다. 투표 분봉 조회는 호출자가 선언한60개를 사용하며 일반 context의430개 범위를 상속하지 않는다. token 없이 구축하고 investor/추가 tape/멀티타임프레임 auxiliary fetch를 하지 않는다. HOLD deferral 권한은 false다. 필수 입력이 유효해진 이후의 provider 호출은 기존 due worker·symbol cadence·동일 모델/endpoint 안에서 진행한다.
+- stale/충돌/source blocker·실행 가능한 호가·매수 identity·보유 변경·공통 stop·수동/퇴역 owner·주문/계좌/수량/한도 검사는 유지한다. 두 유효 투표는 permission이며 Main 반등 신호를 만들거나 주문을 직접 허가하지 않는다.
+- 이 변경은 필수 입력의 활성 의미를 바꾼다. 별도 배포 세션은 새 code contract와 실제 당일 정책의 검증된 handoff를 정식으로 준비해야 한다. 새 정책 로더의 거부를 env 강제 설정이나 과거 영수증 재사용으로 해소하지 않는다.
+
+### 공식 API 확인과 검증
+
+2026-10-19 `17:33:28+09:00`에 공식 HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`를 다시 확인하고 새 checkout에서 `kiwoom/specs.py`, `kiwoom/_data/kiwoom_api_spec.json`의 ka10003/ka10080 request·response, `kiwoom/core/client.py`, Postman PRD/MOCK를 대조했다. `kiwoom_docs`는 해당 commit에 없다. 두 POST endpoint(`/api/dostk/stkinfo`, `/api/dostk/chart`)와 `stk_cd`의 KRX/NXT/SOR suffix, 시간·원/주 단위, auth/continuation/오류 계약을 유지한다. SDK JSON/Postman query 차이는 기존 gap으로 보존하며 wire/parser/auth/REG/주문을 변경하지 않는다.
+
+최종 묶음 **11파일 1,558 PASS / 57.04초**다. 장전·정규장·장후의 전역 context OFF + 유효 당일 receipt에서 정상 input → 기존 collector → durable ledger → 첫 투표 INSUFFICIENT → 독립 두 번째 투표 PASS를 검증했다. malformed/expired/rejected receipt, forensic 및 source-quality 차단 입력, 일반 holding/overnight 비활성 유지도 포함한다. 최종 재리뷰의60개 조회 제한 후 context/분봉6개, 평가 시각 정합성 후 반등/공통stop/expiry28개를 추가 검증했다. 최초 확대 검증의 진입 가격 fixture1건은 metadata 조회 mock 누락으로 실패했고 기준/수정본 개별 실행은 모두 PASS였다. 동일 입력을 metadata refresh에도 공급하도록 기존 fixture만 보완한 뒤 전체 묶음을 통과했다. 실 API는 테스트 차단기가 거부했으며 실제 통신으로 채우지 않았다.
+
+대상 파일: `test_holding_decision_context.py`, `test_holding_exit_vote.py`, `test_holding_path_vote_replay.py`, `test_ai_market_snapshot.py`, `test_sniper_scale_in.py`, `test_avg_down_rebound.py`, `test_holding_vote_numeric_successor.py`, `test_holding_flow_override.py`, `test_multi_timeframe_context.py`, `test_engine_location_gate.py`, `test_ai_engine_openai_transport.py`. 변경 Python9개 compile, 문서 상대 링크5개/owner/authority, print-only parser(exit0) 및 diff 검사도 통과했다. Shell·스케줄은 변경하지 않아 bash 검사는 생략했다. 최종 자체 리뷰 범위의 미해결 결함은0이며 운영 배포·현재 PID 소비·자연 체결 수용은 별도다.
+
+이번 후속은 코드·대상 검증·배포 인계까지다. 실제 provider/broker 호출, 배포·Main 재기동·env/정책 변경·장후 보고서 재생성·external sync는 수행하지 않는다. 자연 소비는 [10/19 checklist](../checklists/2026-10-19-stage2-todo-checklist.md)의 기존 `DirectFamilyPreopenPolicyHandoff` owner에서 새 PID의 정상 입력·자연 요청/응답·유효 투표와 반등/주문/체결을 확인한다. 과거 INSUFFICIENT 원문과 경제성 null은 보존한다.

@@ -40,6 +40,8 @@ def _code_paths():
         "scalping/holding_vote_experiment.py",
         "scalping/holding_vote_exit_models.py",
         "scalping/holding_path_vote_policy.py",
+        "scalping/holding_decision_context.py",
+        "scalping/ai_market_snapshot.py",
         "scalping/holding_path_vote_replay.py",
         "scalping/main_stop_replay.py",
         "scalping/main_stop_policy.py",
