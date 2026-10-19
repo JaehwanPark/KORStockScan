@@ -238,12 +238,17 @@ def prepare_window(data_root,days):
         window=capture_window(root,days,allow_cost_revision=True)
         for day in pending:
             window_day=window['dependencies'][day]
-            if (window_day['status']=='valid_empty' and (window_day.get('projection') or {}).get(
-                    'source_basis')=='current_native_gzip_empty_postclose'):
-                # The original manifest proves this empty cohort without an
-                # invented archive identity. Its existing reader remains owner.
+            if window_day['status']=='valid_empty':
+                generation=window_day.get('projection') or {}
+                proven=(window_day.get('profile')=='postclose_exit' and (
+                    generation.get('source_basis')=='current_native_gzip_empty_postclose'
+                    or isinstance(generation.get('snapshot_identity'),dict)))
+                # Existing native sidecar/empty-archive validators own the
+                # completed census. Zero rows need no legacy fact migration.
                 result.append(dict(path=str(directory/f'trade_review_{day}.json'),
-                    status='original_archived_empty_verified',generation=window_day['projection']))
+                    status='original_empty_verified' if proven else 'source_gap',
+                    reason=None if proven else 'trailing_completed_empty_original_contract_unverified',
+                    generation=generation,scope='completed_cohort_only'))
                 continue
             if window_day['status'] not in {'observed','valid_empty'}:
                 result.append(dict(path=str(directory/f'trade_review_{day}.json'),status='source_gap',

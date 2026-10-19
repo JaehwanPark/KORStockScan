@@ -787,7 +787,7 @@ def test_preparation_reuses_original_verified_empty_gzip_without_new_archive_rec
     originals={p:p.read_bytes()for p in(physical,sidecar,manifest)}
     monkeypatch.setattr(stream,'completed_rows',lambda *a,**k:pytest.fail('empty cohort must retain its existing reader'))
     result=store.prepare_window(tmp_path,day,start_date=day)
-    assert result[0]['status']=='original_archived_empty_verified'
+    assert result[0]['status']=='original_empty_verified'
     assert result[0]['generation']['source_basis']=='current_native_gzip_empty_postclose'
     assert completed.offline_binding(tmp_path,day)==(None,None)
     assert not raw.exists()and not Path(str(physical)+'.archive_receipt.json').exists()
@@ -818,6 +818,42 @@ def test_empty_archive_does_not_abort_normal_original_cohort_enrollment(tmp_path
     days=[];cursor=date.fromisoformat(empty)
     while cursor<=date.fromisoformat(day):days.append(cursor.isoformat());cursor+=timedelta(days=1)
     result=completed.prepare_window(root,days)
-    assert result[0]['status']=='original_archived_empty_verified'
+    assert result[0]['status']=='original_empty_verified'
     assert result[-1]['status']=='offline_index_prepared'
     assert completed.offline_binding(root,day)[0]is not None
+
+
+def test_native_plain_empty_sidecar_does_not_require_large_legacy_fact_migration(tmp_path):
+    from src.tests.test_holding_window_generation import _old_empty_projection
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.lifecycle.holding_window_generation import capture_window
+    day='2026-10-02';raw,sidecar,_=_old_empty_projection(tmp_path,day)
+    originals={p:p.read_bytes()for p in(raw,sidecar)}
+    assert capture_window(tmp_path,[day])['dependencies'][day]['status']=='valid_empty'
+    result=completed.prepare_window(tmp_path,[day])
+    assert result[0]['status']=='original_empty_verified'
+    assert completed.offline_binding(tmp_path,day)==(None,None)
+    assert {p:p.read_bytes()for p in originals}==originals
+
+
+def test_empty_unsealed_raw_claim_is_isolated_without_ready_cache(tmp_path):
+    from src.tests.test_holding_window_generation import _old_empty_projection
+    from src.engine.automation import main_trailing_completed_store as completed
+    day='2026-10-02';raw,sidecar,value=_old_empty_projection(tmp_path,day)
+    sidecar.unlink();raw.write_text(json.dumps(value));original=raw.read_bytes()
+    result=completed.prepare_window(tmp_path,[day])
+    assert result[0]['status']=='source_gap'
+    assert result[0]['reason']=='trailing_completed_empty_original_contract_unverified'
+    assert completed.offline_binding(tmp_path,day)==(None,None)
+    assert raw.read_bytes()==original
+
+
+def test_empty_native_sidecar_identity_mismatch_remains_source_gap(tmp_path):
+    from src.tests.test_holding_window_generation import _old_empty_projection
+    from src.engine.automation import main_trailing_completed_store as completed
+    day='2026-10-02';_,sidecar,value=_old_empty_projection(tmp_path,day)
+    value['snapshot_identity']['inode']+=1
+    value['artifact_sha256']=completed.digest({k:v for k,v in value.items()if k!='artifact_sha256'})
+    sidecar.write_text(json.dumps(value))
+    assert completed.prepare_window(tmp_path,[day])[0]['status']=='source_gap'
+    assert completed.offline_binding(tmp_path,day)==(None,None)

@@ -2421,6 +2421,26 @@ REVIEWED_COMPLETED_EMPTY_PAIRS = {'src/engine/automation/main_trailing_completed
                                                        ('ee13b6cc48e1842c1710f6971703712e984ca636fe6f2378f068fb8fd5121092',
                                                         'c21d4793499158dcb7a9af25f59e5e49c0cfde49234f77669788746645ac3875'))}
 
+# Native empty sidecars retain their own census/identity proof and reader.
+REVIEWED_NATIVE_EMPTY_HASHES = {'src/engine/automation/main_trailing_completed_store.py': '2fc12700ccf64fa03667a0a859e13dc40515e932cc68da23ed9b3d962bdfdd5a'}
+REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_completed_store.py',
+        'selector_sha256': REVIEWED_NATIVE_EMPTY_HASHES['src/engine/automation/main_trailing_completed_store.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_NATIVE_EMPTY_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_NATIVE_EMPTY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_NATIVE_EMPTY_PAIRS = {'src/engine/automation/main_trailing_completed_store.py': (('6cd944f303ba9851761ca0166bd757dd1f3210f0abeda3468510979142fd25da',
+                                                             '2fc12700ccf64fa03667a0a859e13dc40515e932cc68da23ed9b3d962bdfdd5a'),
+                                                            ('d8ab6595b4a803abb8d7440bb0a83617fc22faa4f93558c197323320a62e1a1c',
+                                                             '2fc12700ccf64fa03667a0a859e13dc40515e932cc68da23ed9b3d962bdfdd5a'),
+                                                            ('fc047ceddd40d963659fcba7f36f7d28bdbc74c3dfa799322f163fb4f3683a30',
+                                                             '2fc12700ccf64fa03667a0a859e13dc40515e932cc68da23ed9b3d962bdfdd5a'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2474,7 +2494,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS,
+                         REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS,
                          REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS,
                          REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
@@ -2550,7 +2571,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_COMPLETED_EMPTY_PAIRS.get(name, ())
+        if (pair in REVIEWED_NATIVE_EMPTY_PAIRS.get(name, ())
+                or pair in REVIEWED_COMPLETED_EMPTY_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETED_OFFLINE_PAIRS.get(name, ())
                 or pair in REVIEWED_AUXILIARY_DATA_ROOT_PAIRS.get(name, ())
                 or pair in REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
