@@ -595,6 +595,15 @@ def _postclose_pipeline_guard(data_root, day):
     return {'schema': 'postclose_prefix_raw_generation_v1', 'partitions': generations}
 
 
+
+def _postclose_prefix_producer_code_generation():
+    """Bind reuse to the code that computes and publishes the three reports."""
+    engine = Path(__file__).resolve().parent
+    return {name: _sha256_file(engine / name) for name in (
+        'log_archive_service.py', 'sniper_trade_review_report.py',
+        'sniper_post_sell_feedback.py', 'sniper_missed_entry_counterfactual.py')}
+
+
 def _postclose_prefix_guard(data_root,day,manifest_path=None):
     from src.engine.lifecycle.holding_window_generation import source_stat
     directory=Path(data_root)/'report/monitor_snapshots'
@@ -610,6 +619,7 @@ def _postclose_prefix_guard(data_root,day,manifest_path=None):
         if path.is_symlink():raise ValueError('postclose_exit_prefix_path_invalid')
         result[str(path)]=source_stat(path.stat()) if path.exists() else None
     result['raw_pipeline_generation'] = _postclose_pipeline_guard(data_root, day)
+    result['producer_code_generation'] = _postclose_prefix_producer_code_generation()
     return result
 
 
@@ -631,7 +641,7 @@ def _postclose_prefix_native_proof(data_root,day):
     return dict(native_trade_generation=native,fact_projection=fact)
 
 
-def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_generation):
+def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_generation,producer_code_generation):
     from src.engine.lifecycle.broker_cost_reconciliation import digest
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
     if set(snapshots)!=POSTCLOSE_PREFIX_KINDS:
@@ -639,6 +649,8 @@ def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_gen
     before=_postclose_prefix_guard(DATA_DIR,target_date)
     if before['raw_pipeline_generation'] != raw_pipeline_generation:
         raise ValueError('postclose_exit_prefix_pipeline_changed_during_build')
+    if before['producer_code_generation'] != producer_code_generation:
+        raise ValueError('postclose_exit_prefix_producer_changed_during_build')
     proof=_postclose_prefix_native_proof(DATA_DIR,target_date)
     payload=dict(schema='monitor_snapshot_completion_prefix_v1',target_date=target_date,
         profile='postclose_exit',postclose_phase='completion_prefix',
@@ -647,6 +659,7 @@ def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_gen
         snapshot_paths=dict(snapshots),snapshot_sha256={key:_sha256_file(Path(value)) for key,value in snapshots.items()},
         actual_cost_source_generation=proof['native_trade_generation']['cost_generation'],
         raw_pipeline_generation=raw_pipeline_generation,
+        producer_code_generation=producer_code_generation,
         native_source_proof=proof)
     if _postclose_prefix_guard(DATA_DIR,target_date)!=before:
         raise ValueError('postclose_exit_prefix_changed_during_publication')
@@ -674,6 +687,8 @@ def _read_verified_postclose_exit_prefix(target_date,*,data_root):
             or set(body.get('snapshot_paths') or {})!=POSTCLOSE_PREFIX_KINDS
             or set(body.get('snapshot_sha256') or {})!=POSTCLOSE_PREFIX_KINDS):
         raise ValueError('postclose_exit_prefix_manifest_invalid')
+    if body.get('producer_code_generation') != before['producer_code_generation']:
+        raise ValueError('postclose_exit_prefix_producer_generation_changed')
     if body.get('raw_pipeline_generation') != before['raw_pipeline_generation']:
         raise ValueError('postclose_exit_prefix_pipeline_generation_changed')
     for kind in POSTCLOSE_PREFIX_KINDS:
@@ -1018,6 +1033,8 @@ def save_monitor_snapshots_for_date_with_profile(
     if trend_max_dates is not None:
         result["trend_max_dates"] = str(trend_max_dates)
 
+    producer_before = (_postclose_prefix_producer_code_generation()
+                       if postclose_phase == 'completion_prefix' else None)
     selected_kinds = allowed_by_profile[normalized_profile]
     if postclose_phase=='completion_prefix':selected_kinds=POSTCLOSE_PREFIX_KINDS
     elif postclose_phase=='holding_suffix':selected_kinds={'holding_exit_observation'}
@@ -1078,7 +1095,7 @@ def save_monitor_snapshots_for_date_with_profile(
         if postclose_phase=='completion_prefix':
             manifest=save_postclose_exit_prefix_manifest(target_date,
                 snapshots={key:result[key] for key in POSTCLOSE_PREFIX_KINDS},
-                raw_pipeline_generation=pipeline_before)
+                raw_pipeline_generation=pipeline_before,producer_code_generation=producer_before)
             result['snapshot_manifest']=str(manifest)
             return result
         if prefix_guard is not None and _postclose_prefix_guard(DATA_DIR,target_date,prefix_manifest)!=prefix_guard:

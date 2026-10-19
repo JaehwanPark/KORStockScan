@@ -2127,6 +2127,29 @@ REVIEWED_COMPLETION_CONSUMER_PAIRS = {'src/engine/log_archive_service.py': (('a7
                                                            'aeabf97ec5bd69578e6e66fc4b2eb14945fbe7a34e59658e12fe1b9cf9732ecd'))}
 
 
+
+# Prefix reuse now includes the exact producer code generation. The prior
+# full-consumer generation remains native evidence for its issued receipts.
+REVIEWED_PREFIX_PRODUCER_HASHES = {'src/engine/log_archive_service.py': '48243d6d40dc68e5d8023208b9c8c38be6d92c5326f8702a9a3d2060e1efcebb'}
+REVIEWED_PREFIX_PRODUCER_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/log_archive_service.py',
+        'selector_sha256': REVIEWED_PREFIX_PRODUCER_HASHES['src/engine/log_archive_service.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_PREFIX_PRODUCER_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_PREFIX_PRODUCER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_COMPLETION_CONSUMER_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_PREFIX_PRODUCER_PAIRS = {
+    'src/engine/log_archive_service.py': tuple(
+        (origin, REVIEWED_PREFIX_PRODUCER_HASHES['src/engine/log_archive_service.py'])
+        for origin in ('a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
+                       'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
+                       '3698af57301e2db4ba868bb75df878fc47441e16e4e831dfe4c90b31111a6cab')),
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2180,7 +2203,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_COMPLETION_CONSUMER_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_PREFIX_PRODUCER_DEPENDENCY_VARIANTS,
+                         REVIEWED_COMPLETION_CONSUMER_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETION_CENSUS_DEPENDENCY_VARIANTS,
                          REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS,
                          REVIEWED_CLEANUP_DEPENDENCY_VARIANTS,
@@ -2248,7 +2272,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_COMPLETION_CONSUMER_PAIRS.get(name, ())
+        if (pair in REVIEWED_PREFIX_PRODUCER_PAIRS.get(name, ())
+                or pair in REVIEWED_COMPLETION_CONSUMER_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETION_CENSUS_PAIRS.get(name, ())
                 or pair in REVIEWED_CLEANUP_PAIRS.get(name, ())
                 or pair in REVIEWED_HISTORY_SEGMENT_PAIRS.get(name, ())

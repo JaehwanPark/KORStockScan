@@ -1106,3 +1106,26 @@ def test_cost_only_revision_invalidates_sidecar_and_manifest_without_pipeline_ch
     assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == manifest
     cost_path.write_text('{"revision":2}')
     assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'changed_current_code', 'changed_recorded_code'])
+def test_prefix_reuse_requires_original_current_producer_generation(tmp_path, monkeypatch, mutation):
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    day, _, _, _ = _postclose_phase_fixture(tmp_path, monkeypatch)
+    result = service.save_monitor_snapshots_for_date_with_profile(
+        day, profile='postclose_exit', postclose_phase='completion_prefix')
+    path = Path(result['snapshot_manifest'])
+    assert service.verified_postclose_exit_prefix_manifest(day, data_root=tmp_path) == path
+    before = path.read_bytes()
+    if mutation == 'changed_current_code':
+        code = dict(service._postclose_prefix_producer_code_generation())
+        code['sniper_trade_review_report.py'] = 'f' * 64
+        monkeypatch.setattr(service, '_postclose_prefix_producer_code_generation', lambda: code)
+    else:
+        body = json.loads(before)
+        if mutation == 'missing': body.pop('producer_code_generation')
+        else: body['producer_code_generation']['sniper_trade_review_report.py'] = 'f' * 64
+        body['artifact_sha256'] = digest({k:v for k,v in body.items() if k != 'artifact_sha256'})
+        path.write_text(json.dumps(body))
+    assert service.verified_postclose_exit_prefix_manifest(day, data_root=tmp_path) is None
+    if mutation == 'changed_current_code': assert path.read_bytes() == before
