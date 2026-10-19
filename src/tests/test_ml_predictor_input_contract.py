@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from src.engine import ml_predictor
+from src.engine.swing import ml_predictor
 
 
 class _ConstantModel:

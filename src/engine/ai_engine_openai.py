@@ -127,7 +127,7 @@ from src.engine.scalping.holding_decision_context import (  # noqa: E402
     holding_decision_context_model_payload,
 )
 from src.utils.logger import log_error, log_info
-from src.utils.constants import TRADING_RULES
+from src.utils.constants import TRADING_RULES, TradingConfig
 from src.engine.macro_briefing_complete import build_scanner_data_input
 from src.engine.ai_prompt_contracts import (
     AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
@@ -1212,10 +1212,7 @@ class GPTSniperEngine:
         )
 
         if announce_startup:
-            print(
-                f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
-                f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
-            )
+            self._announce_model_configuration()
 
     # ==========================================
     # 클라이언트/키 관리
@@ -1292,10 +1289,30 @@ class GPTSniperEngine:
             self.deep_model_name = self.model_tier3_deep
         self.current_model_name = self.model_tier1_fast
         if announce:
-            print(
-                f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
-                f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
-            )
+            self._announce_model_configuration()
+
+    @staticmethod
+    def _get_compact_auxiliary_model():
+        # Fixed request contract; generic entry overrides cannot change it.
+        return "gpt-5.4-nano"
+
+    def _announce_model_configuration(self):
+        entry_other = str(getattr(TRADING_RULES, "OPENAI_SCALPING_ENTRY_MODEL",
+                                  self._get_tier1_model()) or self._get_tier1_model()).strip()
+        roles = [("ENTRY_AUX(compact/registry)", self._get_compact_auxiliary_model()),
+                 ("ENTRY_OTHER", entry_other)]
+        for label, rule in (("HOLDING_SCORE", "OPENAI_HOLDING_SCORE_MODEL"),
+                            ("EXIT_VOTE", "OPENAI_HOLDING_EXIT_VOTE_MODEL"),
+                            ("HOLDING_FLOW(OpenAI)", "OPENAI_HOLDING_FLOW_MODEL")):
+            roles.append((label, str(getattr(TRADING_RULES, rule, None)
+                                     or getattr(TradingConfig, rule))))
+        print(
+            f"🧠 OpenAI 엔진 설정 (등록 키: {len(self.api_keys)}개)\n"
+            f"  기본 tier: FAST: {self._get_tier1_model()} / "
+            f"REPORT: {self._get_tier2_model()} / DEEP: {self._get_tier3_model()}\n"
+            f"  역할별 설정: {' / '.join(f'{label}: {model}' for label, model in roles)}\n"
+            "  호출 여부·성공은 개별 요청 기록 기준"
+        )
 
     def _get_tier1_model(self):
         return getattr(
@@ -5473,7 +5490,7 @@ class GPTSniperEngine:
             selected_prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
         )
         target_model = (
-            "gpt-5.4-nano"
+            self._get_compact_auxiliary_model()
             if compact_auxiliary_call
             else (model_override if model_override else self.current_model_name)
         )
@@ -10834,7 +10851,7 @@ class GPTSniperEngine:
                         )
                     )
                 target_model = (
-                    "gpt-5.4-nano"
+                    self._get_compact_auxiliary_model()
                     if prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
                     else (
                         str(

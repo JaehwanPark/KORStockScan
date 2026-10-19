@@ -157,6 +157,81 @@ def _build_engine():
     return engine
 
 
+@pytest.mark.parametrize("via_main", [False, True])
+def test_startup_announces_configuration_once_without_provider_claims(
+    monkeypatch, capsys, via_main
+):
+    import ast
+    from pathlib import Path
+    from src.engine.scalping import mechanistic_entry_runtime_policy
+
+    rules = SimpleNamespace(
+        GPT_FAST_MODEL="configured-fast", GPT_REPORT_MODEL="configured-report",
+        GPT_DEEP_MODEL="configured-deep", OPENAI_SCALPING_ENTRY_MODEL="other-entry",
+        OPENAI_HOLDING_SCORE_MODEL="score-model",
+        OPENAI_HOLDING_EXIT_VOTE_MODEL="vote-model",
+        OPENAI_HOLDING_FLOW_MODEL="flow-model",
+    )
+    monkeypatch.setattr(openai_module, "TRADING_RULES", rules)
+    monkeypatch.setattr(GPTSniperEngine, "_rotate_client", lambda self: None)
+    monkeypatch.setattr(mechanistic_entry_runtime_policy, "load_effective", lambda **kw: None)
+    keys = ["private-key-one", "private-key-two"]
+    if via_main:
+        # Execute Main's actual initialization branch, without starting Main/WS.
+        source = Path(openai_module.__file__).with_name("kiwoom_sniper_v2.py").read_text()
+        branch = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.If)
+                      and ast.unparse(n.test) == "runtime_role == 'main' and openai_api_keys")
+        def unexpected_error(message):
+            pytest.fail(message)
+        namespace = dict(runtime_role="main", openai_api_keys=keys,
+                         GPTSniperEngine=GPTSniperEngine, TRADING_RULES=rules,
+                         is_test_mode=True, log_error=unexpected_error)
+        exec(compile(ast.Module(body=[branch], type_ignores=[]), "main-ai-init", "exec"), namespace)
+        engine = namespace["ai_engine"]
+    else:
+        engine = GPTSniperEngine(keys, initialize_entry_policy=False)
+    try:
+        output = capsys.readouterr().out
+        assert output.count("OpenAI 엔진 설정") == 1
+        assert "등록 키: 2개" in output
+        assert "FAST: configured-fast" in output
+        assert "REPORT: configured-report" in output
+        assert "DEEP: configured-deep" in output
+        assert "ENTRY_AUX(compact/registry): gpt-5.4-nano" in output
+        assert "ENTRY_OTHER: other-entry" in output
+        assert "HOLDING_SCORE: score-model" in output
+        assert "EXIT_VOTE: vote-model" in output
+        assert "HOLDING_FLOW(OpenAI): flow-model" in output
+        assert "고정 완료" not in output and "가동!" not in output
+        assert not any(key in output for key in keys)
+    finally:
+        engine._http_deadline_executor.shutdown(wait=True)
+
+
+def test_model_configuration_announcement_follows_updated_engine_and_role_settings(
+    monkeypatch, capsys
+):
+    engine = _build_engine()
+    monkeypatch.setattr(openai_module, "TRADING_RULES", SimpleNamespace(
+        OPENAI_SCALPING_ENTRY_MODEL="changed-entry",
+        OPENAI_HOLDING_SCORE_MODEL="changed-score",
+        OPENAI_HOLDING_EXIT_VOTE_MODEL="changed-vote",
+        OPENAI_HOLDING_FLOW_MODEL="changed-flow",
+    ))
+    engine.set_model_names(fast_model="new-fast", report_model="new-report",
+                           deep_model="new-deep", announce=False)
+    assert capsys.readouterr().out == ""
+    before = dict(engine.__dict__)
+    engine.set_model_names()
+    output = capsys.readouterr().out
+    for text in ("FAST: new-fast", "REPORT: new-report", "DEEP: new-deep",
+                 "ENTRY_OTHER: changed-entry", "HOLDING_SCORE: changed-score",
+                 "EXIT_VOTE: changed-vote", "HOLDING_FLOW(OpenAI): changed-flow",
+                 "ENTRY_AUX(compact/registry): gpt-5.4-nano"):
+        assert text in output
+    assert engine.__dict__ == before
+
+
 def test_entry_price_context_uses_frozen_packet_without_rebuild(monkeypatch):
     engine = _build_engine()
     monkeypatch.setattr(

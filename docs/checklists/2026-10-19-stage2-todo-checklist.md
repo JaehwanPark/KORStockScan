@@ -84,6 +84,17 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 코드 정리 통합 후보
+
+- [x] `[CodeCleanupCandidate1019] wrapper 4개 제거·AI 기동 로그 통합 후보 확정` (`Due: 2026-10-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 검증된 clean 후보 commit까지`, `Track: CodeQuality`)
+  - 기준: 실행 시 선택 릴리스 `native-history-20261019-18e1bba21`, parent `18e1bba21a1b9f2e7717c65d4837e571b3e9a858`에서 [격리 후보](/home/ubuntu/KORStockScan-worktrees/wrapper-ai-startup-candidate-20261019)를 만들었다. branch `codex/wrapper-ai-startup-candidate-20261019`. 이전 `7d6565f1d` 작업본의 정리 관련 16파일 patch만 이관했고 AGENTS·운영 수리·release-routing 등 상속 변경은 반입하지 않았다. 최신 Main 코드 변경을 유지하고 중복 print 4줄만 제거했다.
+  - `removed`: root `error_detector_coverage.py`, `ml_predictor.py`, `ofi_ai_smoothing.py`, `system_metric_sampler.py`와 allowlist 4항목. `consolidated`: 각각 기존 monitoring·swing·lifecycle·monitoring 구현으로 테스트/import/CLI/운영 링크를 이관했다. 원 canonical 4파일과 sampler의 lock·출력·CPU profile·설치 cron bytes를 보존하고 구경로 import/CLI 참조 0을 확인했다.
+  - `consolidated`: 엔진 생성자·setter의 설정 요약 owner 1개, Main 중복 출력 0. 등록 키 수·기본 tier·역할별 모델 표시 및 변경값 추종을 확인했다. compact/registry 보조평가의 고정 모델이 일반 entry 설정보다 우선한다. 실제 모델 선택·registry 검증·provider 동작은 보존하고 API 키 원문/호출 성공/역할 활성 주장은 출력하지 않는다.
+  - 테스트 현행화: `test_backfill_routes_dynamic_smoothing_journal_family`의 수정 전 실패를 재현했다. 첫 whipsaw 3행은 offset만 소비하고 partition/유효 분모에서 제외, 다음 holding-flow 3행은 동일 identity·시각·fields로 수집하며 원본 6행을 보존한다. 기존 `unroutable_stage_count=3/status=fail` 진단과 구 checkpoint 결손 검사는 유지했다. registry/퇴역 기능은 변경하지 않았다.
+  - 검증: 영향 pytest 9파일 `419 PASS`(15.99초, 제외/skip 0), Python 14파일 compile, `bash -n deploy/run_system_metric_sampler_cron.sh`, 가짜 child의 성공/실패·affinity shell 계약, AST/import/동적 호출 검색, 링크/owner·print-only parser·`git diff --check` PASS. 자체 리뷰→projection 신원 검사 보완→재리뷰 범위 내 미해결 결함 0. 테스트/검증 로그는 `/tmp/wrapper-ai-candidate-20261019-r1y7ja75/`에 보존했다.
+  - 증감(parent 대비): non-test source/shell `+30/-56`(순감 26줄, wrapper 4파일 제거), 기존 tests `+163/-33`; 문서는 runbook 2행 이관과 이 완료 기록이다. 새 source/test 파일·보고서·검증 프레임워크는 추가하지 않았다.
+  - 종결/권한: 이 branch의 clean 후보 commit과 작업본 검증으로 완료한다. 기본 작업본 운영 shell·선택 포인터·PID를 유지한다. 실제 sampler/backfill/provider 호출·배포·재기동·정책/주문 변경은 실행하지 않았다. 원래 선택본의 공유 data/docs mount 상태를 후보 코드 변경으로 복제하지 않았으며, 배포/PID 소비를 주장하지 않는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

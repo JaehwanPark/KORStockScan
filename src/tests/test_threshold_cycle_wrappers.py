@@ -8,6 +8,46 @@ def _text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("exit_code,with_affinity", [(0, False), (0, True), (23, True)])
+def test_system_sampler_wrapper_routes_canonical_cli_and_preserves_markers(
+    tmp_path, exit_code, with_affinity
+):
+    import json
+    import subprocess
+    import sys
+
+    project = tmp_path / "project"
+    python = project / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    # The child is a recording stub; never import or execute the real sampler.
+    python.write_text(f"#!{sys.executable}\nimport json,os,sys\n"
+                      "print(json.dumps({'argv':sys.argv[1:], 'cwd':os.getcwd(), "
+                      "'pythonpath':os.environ.get('PYTHONPATH')}))\n"
+                      f"sys.exit({exit_code})\n")
+    python.chmod(0o700)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    taskset = bin_dir / "taskset"
+    taskset.write_text('#!/bin/bash\nprintf "affinity=%s\\n" "$2"\nshift 2\nexec "$@"\n')
+    taskset.chmod(0o700)
+    script = ROOT / "deploy/run_system_metric_sampler_cron.sh"
+    result = subprocess.run(
+        ["bash", str(script), "2026-10-19"], capture_output=True, text=True,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "PROJECT_DIR": str(project),
+             "KORSTOCKSCAN_NPROC_OVERRIDE": "4" if with_affinity else "1",
+             "SYSTEM_METRIC_SAMPLER_CPU_AFFINITY": "3" if with_affinity else ""},
+    )
+    assert result.returncode == exit_code, result.stderr
+    lines = result.stdout.splitlines()
+    assert any(line.startswith('[START] system_metric_sampler target_date=2026-10-19 ') for line in lines)
+    assert any(line.startswith('[DONE] system_metric_sampler ') for line in lines) == (exit_code == 0)
+    assert any(line.startswith('[FAIL] system_metric_sampler ') for line in lines) == (exit_code != 0)
+    assert ("affinity=3" in lines) == with_affinity
+    call = next(json.loads(line) for line in lines if line.startswith('{'))
+    assert call == {"argv": ["-m", "src.engine.monitoring.system_metric_sampler"],
+                    "cwd": str(project), "pythonpath": "."}
+
+
 def test_rising_feedback_consumes_post_exclusion_preflight_generation(tmp_path):
     import subprocess
 

@@ -16160,10 +16160,6 @@ def run_sniper(is_test_mode=False):
                     )
             except Exception as warmup_error:
                 log_error(f"[AI_TRANSPORT_WARMUP_START_FAILED] type={type(warmup_error).__name__}")
-            print(
-                "🧠 메인 OpenAI AI 엔진 고정 완료 "
-                f"(FAST: {fast_model} / DEEP: {deep_model} / REPORT: {report_model})"
-            )
         except Exception as e:
             log_error(f"🚨 OpenAI AI 엔진 초기화 실패: {e}")
             event_bus.publish(

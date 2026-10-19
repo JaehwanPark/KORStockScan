@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.engine.error_detector_coverage import (
+from src.engine.monitoring.error_detector_coverage import (
     DETECTOR_COVERAGE_EXEMPTIONS,
     REQUIRED_ARTIFACT_IDS,
     REQUIRED_CRON_JOB_IDS,
