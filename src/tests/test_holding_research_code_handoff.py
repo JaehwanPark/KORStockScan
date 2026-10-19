@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +12,7 @@ from src.engine.automation import prepared_policy_code_handoff as C
 from src.engine.scalping.main_stop_policy import implementation_paths
 from src.engine.scalping.holding_vote_experiment import _code_paths
 from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
-from src.tests.test_prepared_policy_code_handoff import prepared
+from src.tests.test_prepared_policy_code_handoff import prepared  # noqa: F401 -- shared pytest fixture
 
 ORIGIN = '7f2552aedde8fec6ef904a43105827907e50dfc8'
 OWN = 'src/engine/automation/intraday_release_handoff.py'
@@ -33,7 +34,7 @@ GENERATIONS = {
     'historical_9d': '9d2201141aeae409fe960ff7795a1340718a7146',
     'historical_a8': 'a8f063105bbb1d8a3676e55ad5377990a87594df',
     'historical_8a8': '8a8fd0ba1845a69b0a829f5c4bcd551a602aea7e',
-    'completed_current': REAL_GIT(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
+    'completed_current': '958d35b2b03f0a37462c1c0121fc14c108e709b8',  # frozen 76-source parent
 }
 PAIRS = {
     'historical_9d': H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES,
@@ -84,7 +85,7 @@ def digest(value):
 
 @pytest.fixture(params=tuple(GENERATIONS))
 def candidate(tmp_path, monkeypatch, request):
-    """Use exact historical/current Git objects, never current bytes under an old label."""
+    """Use exact historical Git objects; current cleanup has its own native fixture."""
     generation = request.param
     commit = GENERATIONS[generation]
     pairs = PAIRS[generation]
@@ -94,20 +95,12 @@ def candidate(tmp_path, monkeypatch, request):
     if generation != 'historical_9d':
         names.update(os.path.normpath(name) for paths in FAMILY_PATHS.values() for name in paths.values())
     git_root=ROOT
-    if generation=='completed_current':
-        # A real private commit permits validation before the caller commits
-        # its final candidate. Historical 9d still reads only original objects.
-        # This never labels dirty working-tree bytes as an old Git generation.
-        import subprocess
-        git_root=tmp_path/'current-git'
-        subprocess.run(['git','clone','--shared','--no-checkout','-q',str(ROOT),str(git_root)],check=True)
-        for name in names:
-            path=git_root/name;path.parent.mkdir(parents=True,exist_ok=True)
-            path.write_bytes((ROOT/name).read_bytes())
-        subprocess.run(['git','-C',str(git_root),'add','--force',*sorted(names)],check=True)
-        subprocess.run(['git','-C',str(git_root),'-c','user.name=fixture','-c','user.email=fixture@example.test',
-                        'commit','-qm','frozen current reviewed dependency generation'],check=True)
-        commit=REAL_GIT(['git','-C',str(git_root),'rev-parse','HEAD'],text=True).strip()
+    # Current verifier checks newer selectors before choosing a historical
+    # closure. Supply their real historical bytes if that Git tree owns them.
+    owned = set(REAL_GIT(['git', '-C', str(ROOT), 'ls-tree', '-r', '--name-only', commit], text=True).splitlines())
+    for name, variants in vars(H).items():
+        if name.endswith('_DEPENDENCY_VARIANTS'):
+            names.update(v['selector_path'] for v in variants.values() if v['selector_path'] in owned)
     committed = {name: REAL_GIT(['git', '-C', str(git_root), 'show', commit+':'+name])
                  for name in names}
     for name, raw in committed.items():
@@ -119,6 +112,8 @@ def candidate(tmp_path, monkeypatch, request):
     def revision(command, **kwargs):
         ref, name = command[-1].split(':', 1)
         if ref == commit:
+            if name not in committed:
+                raise subprocess.CalledProcessError(128, command)
             return committed[name]
         assert ref == ORIGIN
         if name not in original:

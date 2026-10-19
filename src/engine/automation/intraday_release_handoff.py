@@ -1957,6 +1957,41 @@ REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS = {
     for key, value in REVIEWED_HISTORY_SEGMENT_DEPENDENCY_VARIANTS.items()
 }
 
+
+# Reviewed cleanup 336e0a79d: import relocation, startup summary and unreachable
+# overnight removal. Preserve the full predecessor closure and bind the new
+# direct owners as well. Historical variants remain independently verifiable.
+REVIEWED_CLEANUP_HASHES = {'src/engine/ai_engine_openai.py': '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07',
+ 'src/engine/kiwoom_sniper_v2.py': '647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713',
+ 'src/engine/sniper_condition_handlers.py': 'c405cb33d19f9d9f857efd122f9175e1c0cc8f6614c53b574ab6aaa466bd7b6b',
+ 'src/engine/sniper_overnight_gatekeeper.py': 'de9fac6b1dc43b7bc42db22a2e4fa699c2c17d1c12fff8da4738704c8fbc2292',
+ 'src/engine/sniper_state_handlers.py': 'f79445872ae7b091f494d9e0ee7880b0476f20cd009492803261e44bd70f3c42'}
+REVIEWED_CLEANUP_PAIRS = {'src/engine/ai_engine_openai.py': (('b5c8b6e262678c5354ced1fd30ae4d20b974e50fbb01187b4ab2a9df61a010d7',
+                                     '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07'),
+                                    ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
+                                     '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07')),
+ 'src/engine/kiwoom_sniper_v2.py': (('ab335b38a3aff9362bd17a29fde787b425a4478f60e0d328c7b60553800cc21e',
+                                     '647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713'),
+                                    ('d3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da',
+                                     '647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713')),
+ 'src/engine/sniper_state_handlers.py': (('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                          'f79445872ae7b091f494d9e0ee7880b0476f20cd009492803261e44bd70f3c42'),
+                                         ('5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf',
+                                          'f79445872ae7b091f494d9e0ee7880b0476f20cd009492803261e44bd70f3c42'))}
+REVIEWED_CLEANUP_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_CLEANUP_HASHES[trigger]): {
+        **value,
+        'dependencies': {**value['dependencies'], **REVIEWED_CLEANUP_HASHES},
+        'contract_extensions': {
+            key: {name: REVIEWED_CLEANUP_HASHES.get(name, sha) for name, sha in paths.items()}
+            for key, paths in value['contract_extensions'].items()
+        },
+    }
+    for (trigger, sha), value in REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS.items()
+    if trigger == 'src/engine/sniper_state_handlers.py'
+    and sha == 'ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38'
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2010,7 +2045,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_CLEANUP_DEPENDENCY_VARIANTS,
+                         REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS,
                          REVIEWED_HISTORY_SEGMENT_DEPENDENCY_VARIANTS,
                          REVIEWED_STARTUP_RETRY_DEPENDENCY_VARIANTS,
                          REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
@@ -2051,6 +2087,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             if path.is_symlink() or not path.is_file():
                 raise ValueError('entry_consumer_reviewed_dependency_missing:' + selector)
             selector_sha = hashlib.sha256(candidate_bytes(selector)).hexdigest()
+            if (variants is REVIEWED_CLEANUP_DEPENDENCY_VARIANTS
+                    and selector_sha != variant['selector_sha256']):
+                raise ValueError('entry_consumer_reviewed_dependency_unreviewed:' + selector)
             if selector_sha == variant['selector_sha256']:
                 dependencies = variant['dependencies']
                 extensions = variant['contract_extensions'].get((origin, expected), extensions)
@@ -2071,7 +2110,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_HISTORY_SEGMENT_PAIRS.get(name, ())
+        if (pair in REVIEWED_CLEANUP_PAIRS.get(name, ())
+                or pair in REVIEWED_HISTORY_SEGMENT_PAIRS.get(name, ())
                 or pair in REVIEWED_STARTUP_RETRY_PAIRS.get(name, ())
                 or pair in REVIEWED_TRAILING_REUSE_PAIRS.get(name, ())
                 or pair in REVIEWED_PARTIAL_CLOCK_PAIRS.get(name, ())

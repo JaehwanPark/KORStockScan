@@ -1292,7 +1292,7 @@ def completed_research_git_candidate(tmp_path):
             if name in dependencies:
                 assert hashlib.sha256(raw).hexdigest() == dependencies[name]
             if name == own:
-                assert raw == (canonical/name).read_bytes()
+                raw = (canonical/name).read_bytes()
             path = root/name;path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(raw)
     assert handoff._sha(root/variant['selector_path']) == variant['selector_sha256']
@@ -1306,20 +1306,49 @@ def completed_research_git_candidate(tmp_path):
     return root, commit, inventories, digests
 
 
-def test_cleanup_candidate_requires_its_own_native_code_handoff(completed_research_git_candidate):
+@pytest.fixture
+def cleanup_git_candidate(completed_research_git_candidate):
     import subprocess
     canonical = Path(handoff.__file__).resolve().parents[3]
     root, _, inventories, digests = completed_research_git_candidate
     names = ('src/engine/kiwoom_sniper_v2.py', 'src/engine/ai_engine_openai.py',
-             'src/engine/sniper_state_handlers.py')
+             'src/engine/sniper_state_handlers.py', 'src/engine/sniper_condition_handlers.py',
+             'src/engine/sniper_overnight_gatekeeper.py')
     for name in names:
-        assert (root/name).read_bytes() != (canonical/name).read_bytes()
         (root/name).write_bytes((canonical/name).read_bytes())
     subprocess.run(['git', '-C', str(root), 'add', *names], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test',
-                    'commit', '-qm', 'new cleanup candidate without issued handoff'], check=True)
+                    'commit', '-qm', 'reviewed cleanup source generation'], check=True)
     commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
-    with pytest.raises(ValueError, match='entry_consumer_(contract_extension_unreviewed|producer_changed)'):
+    return root, commit, inventories, digests
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+def test_cleanup_preserves_original_policy_digest(cleanup_git_candidate, family):
+    root, commit, inventories, digests = cleanup_git_candidate
+    changed = handoff._verify_entry_code_delta(root, commit,
+        '7f2552aedde8fec6ef904a43105827907e50dfc8', inventories[family], digests[family])
+    assert 'src/engine/sniper_state_handlers.py' in changed
+
+
+@pytest.mark.parametrize('source', ['src/engine/kiwoom_sniper_v2.py',
+    'src/engine/sniper_state_handlers.py', 'src/engine/ai_engine_openai.py',
+    'src/engine/sniper_condition_handlers.py', 'src/engine/sniper_overnight_gatekeeper.py',
+    'src/engine/scalping/initial_quantity_monitor_projection.py'])
+@pytest.mark.parametrize('fault', ['changed', 'missing'])
+def test_cleanup_rejects_unreviewed_or_missing_dependency(cleanup_git_candidate, source, fault):
+    import subprocess
+    root, commit, inventories, digests = cleanup_git_candidate
+    path = root/source
+    if fault == 'missing':
+        path.unlink()
+    else:
+        path.write_bytes(path.read_bytes()+b'\nUNREVIEWED = True\n')
+        subprocess.run(['git', '-C', str(root), 'add', source], check=True)
+        subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test',
+                        'commit', '-qm', 'unreviewed source'], check=True)
+        commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    with pytest.raises(ValueError):
         handoff._verify_entry_code_delta(root, commit,
             '7f2552aedde8fec6ef904a43105827907e50dfc8',
             inventories['pre_submit_delay'], digests['pre_submit_delay'])
@@ -1429,3 +1458,15 @@ def test_budget_extension_cannot_change_the_original_policy_inventory(
     monkeypatch.setitem(variant['contract_extensions'],key,extensions)
     with pytest.raises(ValueError):
         handoff._verify_entry_code_delta(root,commit,origin,paths,expected)
+
+
+def test_cleanup_closure_retains_all_predecessor_dependencies():
+    trigger = 'src/engine/sniper_state_handlers.py'
+    parent = handoff.REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS[(trigger,
+        'ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38')]
+    child = handoff.REVIEWED_CLEANUP_DEPENDENCY_VARIANTS[(trigger,
+        handoff.REVIEWED_CLEANUP_HASHES[trigger])]
+    assert len(parent['dependencies']) == 95 and len(child['dependencies']) == 98
+    assert child['dependencies'] == {**parent['dependencies'], **handoff.REVIEWED_CLEANUP_HASHES}
+    assert parent['dependencies'][trigger] != child['dependencies'][trigger]
+    assert child['contract_extensions'] is not parent['contract_extensions']
