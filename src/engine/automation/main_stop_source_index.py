@@ -216,11 +216,16 @@ class Position:
         self.source_sha256=digest.hexdigest()
 
     def rows(self):
+        references=self.db.execute('SELECT id,body,conflicted FROM records WHERE id>=? AND id<=? ORDER BY id',
+                                   (self.low,self.high))
+        for _,row in self._validated_rows(references):yield row
+
+    def _validated_rows(self,references):
         handles=OrderedDict()
         try:
-            for body,conflict in self.db.execute('SELECT body,conflicted FROM records WHERE id>=? AND id<=? ORDER BY id',(self.low,self.high)):
+            for identity,body,conflict in references:
                 self.checkpoint()
-                if conflict:yield {};continue
+                if conflict:yield identity,{};continue
                 ref=json.loads(body);name=ref['path']
                 if name not in handles:
                     if len(handles)>=8:handles.popitem(last=False)[1].close()
@@ -231,15 +236,25 @@ class Position:
                     raise ValueError('stop_source_reference_changed')
                 row=extract(json.loads(line))
                 if policy.digest(row)!=ref['content_sha256']:raise ValueError('stop_source_reference_invalid')
-                yield row
+                yield identity,row
         finally:
             for handle in handles.values():handle.close()
 
     @contextmanager
     def materialized(self,directory):
-        """Decode a changed position once for the finite candidate block."""
+        """Read source offsets forward once, then restore original event order."""
         with storage.index(directory) as db:
-            for n,row in enumerate(self.rows()):storage.put(db,f'{n:020d}',row)
+            db.execute('CREATE TABLE source_refs (id TEXT PRIMARY KEY,path TEXT,offset_length INTEGER,offset_text TEXT,body TEXT,conflicted INTEGER)')
+            for identity,body,conflict in self.db.execute(
+                    'SELECT id,body,conflicted FROM records WHERE id>=? AND id<=? ORDER BY id',
+                    (self.low,self.high)):
+                ref=json.loads(body);offset=ref['offset']
+                if type(offset) is not int or offset<0:raise ValueError('stop_source_reference_offset_invalid')
+                text=str(offset)
+                db.execute('INSERT INTO source_refs VALUES(?,?,?,?,?,?)',
+                           (identity,ref['path'],len(text),text,body,conflict))
+            references=db.execute('SELECT id,body,conflicted FROM source_refs ORDER BY path,offset_length,offset_text,id')
+            for identity,row in self._validated_rows(references):storage.put(db,identity,row)
             def rows():
                 for raw, in db.execute('SELECT body FROM records ORDER BY id'):
                     self.checkpoint()

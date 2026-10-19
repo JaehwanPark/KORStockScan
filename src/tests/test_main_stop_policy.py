@@ -534,6 +534,85 @@ def publication(tmp_path, *, experiment=False, actual=True):
     return bundle,report,parent,source
 
 
+@pytest.mark.parametrize('cached',[False,True])
+def test_publication_decodes_each_position_once_for_all_native_consumers(tmp_path,monkeypatch,cached):
+    from collections import Counter
+    from src.engine.automation.main_stop_source_index import Position
+    calls=Counter();original=Position._validated_rows
+    def tracked(position,*args,**kwargs):
+        calls[position.key]+=1
+        yield from original(position,*args,**kwargs)
+    monkeypatch.setattr(Position,'_validated_rows',tracked)
+    _,report,parent,source=publication(tmp_path)
+    if cached:
+        calls.clear()
+        with source.open('a')as handle:handle.write('{"stage":"unrelated_diagnostic"}\n')
+        completed=json.loads((tmp_path/'costs.json').read_text())['rows']
+        post.publish(tmp_path,'2026-10-12','2026-10-13',
+            parents={f'{role}|{market}':baseline()for role in p.ROLES for market in p.MARKETS},
+            parent_receipt=parent,snapshot_receipt=report['snapshot_receipt'],source_paths=[source],
+            completed=completed,economic_sources=report['economic_sources'])
+    assert len(calls)==4 and set(calls.values())=={1}
+
+
+def test_materialized_gzip_reads_forward_and_preserves_original_event_order(tmp_path,monkeypatch):
+    import gzip
+    from collections import Counter
+    from src.engine.automation import main_stop_source_index as index
+    p.preload({})
+    events=[dict(stage='main_stop_source',fields={'main_stop_source':row})
+            for row in reversed(list(evaluation_stream(list(rows()))))]
+    source=tmp_path/'pipeline_events_2026-10-12.jsonl.gz'
+    source.write_bytes(gzip.compress((''.join(json.dumps(event)+'\n'for event in events)).encode()))
+    census=Counter();prepared=index.prepare(tmp_path/'indexes',
+        {str(source):post.byte_generation(source)},post.source_events,census)
+    positions=index.positions(prepared,tmp_path/'positions',census)
+    try:
+        position=next(positions);expected=list(position.rows());rewinds=[];opened=index.open_text_auto
+        class Tracked:
+            def __init__(self,handle):self.handle=handle
+            def seek(self,offset):
+                if offset<self.handle.tell():rewinds.append(offset)
+                return self.handle.seek(offset)
+            def __getattr__(self,name):return getattr(self.handle,name)
+        monkeypatch.setattr(index,'open_text_auto',lambda *args,**kwargs:Tracked(opened(*args,**kwargs)))
+        with position.materialized(tmp_path/'materialized')as supplied:
+            assert list(supplied())==expected
+            assert list(supplied())==expected
+        assert not rewinds
+    finally:positions.close()
+
+
+@pytest.mark.parametrize('consumer',['prepare_terminal_prefix','vote_assembly_source'])
+def test_shared_position_closes_its_budget_and_scratch_on_consumer_failure(tmp_path,monkeypatch,consumer):
+    from src.engine.lifecycle.research_input_budget import health
+    before=health()
+    def failed(*args,**kwargs):raise RuntimeError('native_consumer_failure')
+    monkeypatch.setattr(r,consumer,failed)
+    with pytest.raises(RuntimeError,match='native_consumer_failure'):
+        publication(tmp_path)
+    assert health()==before
+    assert not list(tmp_path.rglob('.sort-*'))
+    assert not post.committed_path(tmp_path,'2026-10-12').exists()
+
+
+def test_shared_position_still_rejects_source_change_before_publication(tmp_path,monkeypatch):
+    from src.engine.lifecycle.research_input_budget import health
+    before=health();original=r.prepare_terminal_prefix;changed=[]
+    def mutate(*args,**kwargs):
+        result=original(*args,**kwargs)
+        if not changed:
+            source=tmp_path/'pipeline_events/pipeline_events_2026-10-12.jsonl'
+            with source.open('a')as handle:handle.write('{"stage":"concurrent_append"}\n')
+            changed.append(True)
+        return result
+    monkeypatch.setattr(r,'prepare_terminal_prefix',mutate)
+    with pytest.raises(ValueError,match='stop_source_changed_during_(read|research)'):
+        publication(tmp_path)
+    assert changed and health()==before
+    assert not post.committed_path(tmp_path,'2026-10-12').exists()
+
+
 def test_actual_producer_publication_loader_pin_and_partial_cells(tmp_path):
     bundle,report,_,_=publication(tmp_path,experiment=True)
     assert bundle['cells']['SCANNER|REGULAR']['status']=='selected'

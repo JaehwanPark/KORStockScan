@@ -2512,6 +2512,53 @@ REVIEWED_CALENDAR_PHYSICAL_PAIRS = {'src/engine/automation/main_trailing_source_
                                                              ('f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1',
                                                               '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'))}
 
+# Share one bounded native position across all independent stop consumers.
+REVIEWED_STOP_SHARED_POSITION_HASHES = {'src/engine/automation/main_stop_postclose.py': 'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7',
+ 'src/engine/automation/main_stop_source_index.py': '7c91f86956a2e4f5fbab57f05517ce3f50cd7c322dca54bd429e60e3f35ea45b'}
+REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_stop_postclose.py',
+        'selector_sha256': REVIEWED_STOP_SHARED_POSITION_HASHES['src/engine/automation/main_stop_postclose.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_STOP_SHARED_POSITION_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_STOP_SHARED_POSITION_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_STOP_SHARED_POSITION_PAIRS = {'src/engine/automation/main_stop_postclose.py': (('0a33ccf900e7d512ff03ee62923efa95842ea87caeb2987fbd1b479aa18f8258',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('360573dc170d91617cbaec7f1c8713b769c403b22e52449e11434019360a6224',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('531f1498332196f0e54d17b76ed8d30295009a5e5ee9363ad9397613f0740ad2',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('68628fd7c9758946344c5841b90d8073929665d2b61eba40041c74fabc843255',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('72334470389eed899eed84da5fb3d157bd8ae6078e2d38bfb10b0bc96b79ba6f',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('c3aa703f54661aeae94143fb36afd2d2ac7a4337c1ba346062c21ca2be12a9cc',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('cce1f797bd17f5ddde0aa5eec68cdb285c224e198fea7bb184d03a444ff32c05',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('d78ae70b6b125355bfd3d2c4ee7e511a4171b933219efedb80900afd6c3781c9',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('e9ab07117a0200610e19f4b24ea0000579203628a887e16387b24189b8734a13',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7'),
+                                                  ('efb6eefeeca91b6a91891dffee06cfff996f47095ef70aa637d9afb0f0613a7d',
+                                                   'b170f3537578b817944ad839b93f2eaa23abd577ecb6d41bfefa870e36ba00a7')),
+ 'src/engine/automation/main_stop_source_index.py': (('791fd757311aa8c0a96b2373165a52a560b026492992e46e9fe386996eb605ff',
+                                                      '7c91f86956a2e4f5fbab57f05517ce3f50cd7c322dca54bd429e60e3f35ea45b'),
+                                                     ('802a8f3878f5d9d2fd299c79a57f9b84db6bf1de52017f0e995958b65145381d',
+                                                      '7c91f86956a2e4f5fbab57f05517ce3f50cd7c322dca54bd429e60e3f35ea45b'),
+                                                     ('89155d656e6c28a6eaa045d206a68897f04d1825fdb339a818053579f049b559',
+                                                      '7c91f86956a2e4f5fbab57f05517ce3f50cd7c322dca54bd429e60e3f35ea45b'),
+                                                     ('ddaab50afeee7a47c4a49565f27dc699532aabf8197e5276eb0d57cf974dfdce',
+                                                      '7c91f86956a2e4f5fbab57f05517ce3f50cd7c322dca54bd429e60e3f35ea45b'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2565,7 +2612,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS,
+                         REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS,
                          REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS,
                          REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS,
@@ -2644,7 +2692,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_CALENDAR_PHYSICAL_PAIRS.get(name, ())
+        if (pair in REVIEWED_STOP_SHARED_POSITION_PAIRS.get(name, ())
+                or pair in REVIEWED_CALENDAR_PHYSICAL_PAIRS.get(name, ())
                 or pair in REVIEWED_ASSEMBLER_BUDGET_PAIRS.get(name, ())
                 or pair in REVIEWED_NATIVE_EMPTY_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETED_EMPTY_PAIRS.get(name, ())

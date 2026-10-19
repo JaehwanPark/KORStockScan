@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from copy import deepcopy
+from contextlib import ExitStack
 from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import date, timedelta
@@ -795,7 +796,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
     if len(experiments or {}) > 1:raise ValueError("stop_one_cell_experiment_required")
     census=Counter();cells={};evidence=[]
     vote_sources={}
-    with storage.index(directory) as db:
+    with storage.index(directory) as db, ExitStack() as position_sources:
         db.execute('CREATE TABLE census (id TEXT PRIMARY KEY, body TEXT)')
         db.execute('CREATE TABLE actual (id TEXT PRIMARY KEY, body TEXT, day TEXT)')
         for row in completed:
@@ -839,6 +840,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
             work[cell]=(grid,counts,stats,contract,grade_stats)
         observed_bounds = {}
         for position in source_index.positions(prepared_sources,directory,census,checkpoint=checkpoint):
+            position_sources.close()
             checkpoint()
             cell,key,first,last=position.cell,position.key,position.first,position.last
             if cell not in work:
@@ -855,7 +857,9 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                     previous_bounds = observed_bounds.get(cell, (first,last))
                     observed_bounds[cell] = (min(first,previous_bounds[0]),max(last,previous_bounds[1]))
                 else:counts['outside_registered_experiment_window'] += 1
-            path_rows=position.rows
+            # Terminal, votes and candidate replay share the same validated
+            # bounded position; gzip offsets are decoded only once.
+            path_rows=position_sources.enter_context(position.materialized(directory))
             from src.engine.ai.holding_vote_replay_source import assemble_votes, PreparedVotes
             first_row = next(path_rows(), {})
             actual_row=db.execute('SELECT body FROM actual WHERE id=?',(str(first_row.get('record_id')),)).fetchone()
@@ -894,15 +898,14 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
                                 return dict(snap,source_verified=True)
                             except (ValueError, OSError, TypeError, KeyError):
                                 return dict(source_verified=False)
-                        with position.materialized(directory) as prepared_rows:
-                            # Prefix selection uses an original exact decision
-                            # row; no post-terminal quotes or interpolation.
-                            from src.engine.scalping.main_stop_replay import terminal_prefix
-                            def replay_rows():return terminal_prefix(prepared_rows(),terminal)
-                            operating_contract=holding_contracts(replay_rows())
-                            outcomes={name:replay(replay_rows(),value, vote_reader=vote_reader,
-                                terminal_outcome=terminal,support_soft_threshold=support_soft_threshold)
-                                for name,value in grid.items()}
+                        # Prefix selection uses an original exact decision
+                        # row; no post-terminal quotes or interpolation.
+                        from src.engine.scalping.main_stop_replay import terminal_prefix
+                        def replay_rows():return terminal_prefix(path_rows(),terminal)
+                        operating_contract=holding_contracts(replay_rows())
+                        outcomes={name:replay(replay_rows(),value, vote_reader=vote_reader,
+                            terminal_outcome=terminal,support_soft_threshold=support_soft_threshold)
+                            for name,value in grid.items()}
                     finally:prepared.close()
                 cached=dict(cache_key=cache_key,outcomes=outcomes,operating_contract=operating_contract)
                 cached['sha256']=policy.digest(cached)
@@ -964,6 +967,7 @@ def _publish(root, day, target, *, parents, parent_receipt, source_paths, snapsh
             db.execute('INSERT INTO census VALUES (?,?)',(key,storage.encoded(summary).decode()))
             evidence.append(summary)
             if len(evidence)>64:evidence.pop(0)
+        position_sources.close()
         for cell,parent in parents.items():
             grid,counts,stats,contract,grade_stats=work[cell]
             cost_selection=None
