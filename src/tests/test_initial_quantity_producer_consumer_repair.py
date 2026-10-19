@@ -16,6 +16,20 @@ from src.tests.test_initial_quantity_policy import _cap_context, _quality, _fact
 from src.tests.test_initial_quantity_timeout import _research_trade_path
 
 
+@pytest.mark.parametrize('population', ['source_quality_by_entry_date', 'source_quality_by_exit_date'])
+def test_refresh_refuses_preflight_replaced_by_final_quality(tmp_path, population):
+    source = tmp_path / 'quality.json'
+    source.write_text(json.dumps(dict(status='warning', tuning_input_allowed=True, phase='preflight')))
+    binding = dict(artifact=str(source), sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+    report = dict(census={population: {'2026-10-19': binding}})
+    policy.verify_refresh_source_generations(report)
+    source.write_text(json.dumps(dict(status='warning', tuning_input_allowed=True, phase='final')))
+    with pytest.raises(ValueError, match='quantity_source_quality_generation_changed'):
+        policy.verify_refresh_source_generations(report)
+    binding['sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+    policy.verify_refresh_source_generations(report)
+
+
 @pytest.mark.parametrize('late_identity', [False, True])
 @pytest.mark.parametrize('padding', ['x' * 150000, '\uac00' * 30000])
 def test_oversized_unrelated_pipeline_row_preserves_next_record(late_identity, padding):

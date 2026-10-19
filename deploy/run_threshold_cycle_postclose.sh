@@ -1915,42 +1915,6 @@ INITIAL_QUANTITY_REFRESH_DIR=""
 if [[ "$RESUME_FINAL_HANDOFF" == "true" ]]; then
   INITIAL_QUANTITY_REFRESH_DIR="$PROJECT_DIR/data/report/initial_entry_quantity_type_policy/refresh_postclose_${TARGET_DATE}"
 else
-if env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$INITIAL_QUANTITY_CURRENT" <<'PY'
-import json
-import sys
-from datetime import date
-from pathlib import Path
-
-from src.engine.scalping.initial_quantity_activation import selected_initial_quantity_env
-
-try:
-    target = date.fromisoformat(sys.argv[1])
-    current_path = Path(sys.argv[2])
-    current = json.loads(current_path.read_text())
-    if target < date.fromisoformat(current["effective_from"]):
-        raise SystemExit(1)
-    selected_initial_quantity_env(current_path, target.isoformat())
-except (OSError, ValueError, KeyError, TypeError) as exc:
-    print(f"[threshold-cycle] initial_quantity_current_invalid: {type(exc).__name__}",
-          file=sys.stderr)
-    raise SystemExit(2)
-PY
-then
-  INITIAL_QUANTITY_REFRESH_DIR="$PROJECT_DIR/data/report/initial_entry_quantity_type_policy/refresh_postclose_${TARGET_DATE}"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.initial_quantity_policy \
-    --as-of "$TARGET_DATE" \
-    --parent-current "$INITIAL_QUANTITY_CURRENT" \
-    --output-dir "$INITIAL_QUANTITY_REFRESH_DIR"
-  wait_for_json_artifact \
-    "$INITIAL_QUANTITY_REFRESH_DIR/committed_stage.json" \
-    "initial_quantity_refresh_stage_reference"
-else
-  INITIAL_QUANTITY_REFRESH_STATUS=$?
-  if [ "$INITIAL_QUANTITY_REFRESH_STATUS" -ne 1 ]; then
-    echo "[threshold-cycle] initial_quantity_current_validation_failed status=$INITIAL_QUANTITY_REFRESH_STATUS" >&2
-    exit "$INITIAL_QUANTITY_REFRESH_STATUS"
-  fi
-fi
 if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" = "1" ]; then
   wait_for_postclose_resources "swing_daily_simulation"
   run_postclose_cmd bash "$PROJECT_DIR/deploy/run_swing_daily_simulation_report.sh" "$TARGET_DATE"
@@ -2175,8 +2139,43 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
       "observation_source_quality_audit"
   fi
 fi
-# These candidates bind the audit's exact file hash. Build them once after the
-# final audit, not against the preflight generation that the final audit replaces.
+# Initial quantity seals the final audit hash; the preflight path is replaced above.
+if env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$INITIAL_QUANTITY_CURRENT" <<'PY'
+import json
+import sys
+from datetime import date
+from pathlib import Path
+
+from src.engine.scalping.initial_quantity_activation import selected_initial_quantity_env
+
+try:
+    target = date.fromisoformat(sys.argv[1])
+    current_path = Path(sys.argv[2])
+    current = json.loads(current_path.read_text())
+    if target < date.fromisoformat(current["effective_from"]):
+        raise SystemExit(1)
+    selected_initial_quantity_env(current_path, target.isoformat())
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"[threshold-cycle] initial_quantity_current_invalid: {type(exc).__name__}",
+          file=sys.stderr)
+    raise SystemExit(2)
+PY
+then
+  INITIAL_QUANTITY_REFRESH_DIR="$PROJECT_DIR/data/report/initial_entry_quantity_type_policy/refresh_postclose_${TARGET_DATE}"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.initial_quantity_policy \
+    --as-of "$TARGET_DATE" \
+    --parent-current "$INITIAL_QUANTITY_CURRENT" \
+    --output-dir "$INITIAL_QUANTITY_REFRESH_DIR"
+  wait_for_json_artifact \
+    "$INITIAL_QUANTITY_REFRESH_DIR/committed_stage.json" \
+    "initial_quantity_refresh_stage_reference"
+else
+  INITIAL_QUANTITY_REFRESH_STATUS=$?
+  if [ "$INITIAL_QUANTITY_REFRESH_STATUS" -ne 1 ]; then
+    echo "[threshold-cycle] initial_quantity_current_validation_failed status=$INITIAL_QUANTITY_REFRESH_STATUS" >&2
+    exit "$INITIAL_QUANTITY_REFRESH_STATUS"
+  fi
+fi
 
 
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then

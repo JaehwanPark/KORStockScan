@@ -126,6 +126,55 @@ def test_cost_source_precedes_fact_and_quantity_generation_without_new_hard_gate
     assert ('preserve source gap' in result.stderr) == (cost_exit != 0)
 
 
+@pytest.mark.parametrize('quality_enabled,final_exit', [(True, 0), (False, 0), (True, 47)])
+def test_quantity_pins_final_quality_before_last_consumer(tmp_path, quality_enabled, final_exit):
+    import os
+    import subprocess
+
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    quality_start = script.rindex('if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT"')
+    quality_end = script.index('\nfi\n', quality_start) + 4
+    quantity_start = script.index('if env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$INITIAL_QUANTITY_CURRENT"')
+    quantity_end = script.index('\nfi\n', quantity_start) + 4
+    blocks = sorted([(quality_start, script[quality_start:quality_end]),
+                     (quantity_start, script[quantity_start:quantity_end])])
+    source = tmp_path / 'quality-generation'
+    source.write_text('preflight')
+    consumed = tmp_path / 'quantity-consumed'
+    python = tmp_path / 'python'
+    python.write_text('#!/bin/sh\nexit 0\n')
+    python.chmod(0o700)
+    prefix = '''set -eu
+automation_trigger_decision() { AUTOMATION_TRIGGER_DECISION_RESULT=run; }
+wait_for_postclose_resources() { :; }
+wait_for_report_artifact() { :; }
+wait_for_json_artifact() { :; }
+run_postclose_cmd() {
+  case "$*" in
+    *src.engine.observation_source_quality_audit*)
+      [[ "$FINAL_EXIT" == 0 ]] || return "$FINAL_EXIT"
+      printf final > "$SOURCE_GENERATION" ;;
+    *src.engine.scalping.initial_quantity_policy*)
+      cp "$SOURCE_GENERATION" "$QUANTITY_CONSUMED" ;;
+    *) return 43 ;;
+  esac
+}
+'''
+    command = prefix + '\n'.join(body for _, body in blocks) + '\ncmp "$SOURCE_GENERATION" "$QUANTITY_CONSUMED"\n'
+    result = subprocess.run(['bash', '-c', command], capture_output=True, text=True,
+        env={**os.environ, 'VENV_PY': str(python), 'PROJECT_DIR': str(tmp_path),
+             'TARGET_DATE': '2026-10-19', 'INITIAL_QUANTITY_CURRENT': str(tmp_path / 'current'),
+             'RUN_OBSERVATION_SOURCE_QUALITY_AUDIT': str(quality_enabled).lower(),
+             'RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION': 'false',
+             'FINAL_EXIT': str(final_exit), 'SOURCE_GENERATION': str(source),
+             'QUANTITY_CONSUMED': str(consumed)})
+    assert result.returncode == final_exit, result.stdout + result.stderr
+    if final_exit:
+        assert not consumed.exists()
+    else:
+        assert consumed.read_text() == source.read_text() == ('final' if quality_enabled else 'preflight')
+
+
 @pytest.mark.parametrize("exit_code", [0, 47])
 @pytest.mark.parametrize("shared_mount", [False, True])
 def test_entry_split_verification_hook_uses_bounded_child_and_propagates_failure(tmp_path, exit_code, shared_mount):
