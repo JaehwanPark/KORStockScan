@@ -583,6 +583,41 @@ def test_materialized_gzip_reads_forward_and_preserves_original_event_order(tmp_
     finally:positions.close()
 
 
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+@pytest.mark.parametrize('large_gap', [False, True])
+def test_materialized_gzip_never_repositions_with_utf8_and_disjoint_gaps(tmp_path,monkeypatch,newline,large_gap):
+    import gzip
+    from collections import Counter
+    from src.engine.automation import main_stop_source_index as index
+    p.preload({})
+    events=[dict(stage='main_stop_source',fields={'main_stop_source':row})
+            for row in reversed(list(evaluation_stream(list(rows()))))]
+    gap=dict(stage='entry_ai_economic_plan_observed',fields={'unused':'\ud55c\uae00'*(600000 if large_gap else 3)})
+    content=newline.join(json.dumps(value,ensure_ascii=False)for event in events for value in (gap,event))+newline
+    source=tmp_path/'pipeline_events_2026-10-12.jsonl.gz'
+    source.write_bytes(gzip.compress(content.encode()))
+    census=Counter();prepared=index.prepare(tmp_path/'indexes',
+        {str(source):post.byte_generation(source)},post.source_events,census)
+    positions=index.positions(prepared,tmp_path/'positions',census)
+    try:
+        position=next(positions);expected=list(position.rows());seeks=[];rewinds=[];original=gzip.GzipFile.seek
+        def tracked(handle,*args,**kwargs):
+            if args!=(0,1):seeks.append(args)  # GzipFile.tell delegates to seek(0, SEEK_CUR).
+            return original(handle,*args,**kwargs)
+        original_rewind=gzip._GzipReader._rewind
+        def rewind(handle):
+            rewinds.append(handle._pos)
+            return original_rewind(handle)
+        monkeypatch.setattr(gzip.GzipFile,'seek',tracked)
+        monkeypatch.setattr(gzip._GzipReader,'_rewind',rewind)
+        with position.materialized(tmp_path/'materialized')as supplied:
+            assert list(supplied())==expected
+            assert list(supplied())==expected
+        assert not seeks
+        assert not rewinds
+    finally:positions.close()
+
+
 @pytest.mark.parametrize('consumer',['prepare_terminal_prefix','vote_assembly_source'])
 def test_shared_position_closes_its_budget_and_scratch_on_consumer_failure(tmp_path,monkeypatch,consumer):
     from src.engine.lifecycle.research_input_budget import health

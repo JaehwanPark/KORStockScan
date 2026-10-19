@@ -220,8 +220,9 @@ class Position:
                                    (self.low,self.high))
         for _,row in self._validated_rows(references):yield row
 
-    def _validated_rows(self,references):
+    def _validated_rows(self,references,*,forward_only=False):
         handles=OrderedDict()
+        previous=None
         try:
             for identity,body,conflict in references:
                 self.checkpoint()
@@ -231,7 +232,27 @@ class Position:
                     if len(handles)>=8:handles.popitem(last=False)[1].close()
                     handles[name]=open_text_auto(Path(name),errors='strict')
                 handle=handles[name];handles.move_to_end(name)
-                handle.seek(ref['offset']);line=handle.readline(2*1024*1024+1)
+                offset=ref['offset']
+                if forward_only and previous and previous[:2]==(name,offset):
+                    line=previous[2]
+                else:
+                    if forward_only:
+                        # TextIO seek can rewind gzip's decoder even when its
+                        # logical offset increases. Consume intervening lines.
+                        current=handle.tell()
+                        while current<offset:
+                            self.checkpoint()
+                            part=handle.readline(2*1024*1024+1)
+                            if not part:raise ValueError('stop_source_reference_offset_invalid')
+                            while not part.endswith('\n'):
+                                self.checkpoint()
+                                part=handle.readline(2*1024*1024+1)
+                                if not part:raise ValueError('stop_source_reference_offset_invalid')
+                            current=handle.tell()
+                        if current!=offset:raise ValueError('stop_source_reference_offset_invalid')
+                    else:handle.seek(offset)
+                    line=handle.readline(2*1024*1024+1)
+                    previous=(name,offset,line)
                 if hashlib.sha256(line.encode()).hexdigest()!=ref['line_sha256']:
                     raise ValueError('stop_source_reference_changed')
                 row=extract(json.loads(line))
@@ -254,7 +275,7 @@ class Position:
                 db.execute('INSERT INTO source_refs VALUES(?,?,?,?,?,?)',
                            (identity,ref['path'],len(text),text,body,conflict))
             references=db.execute('SELECT id,body,conflicted FROM source_refs ORDER BY path,offset_length,offset_text,id')
-            for identity,row in self._validated_rows(references):storage.put(db,identity,row)
+            for identity,row in self._validated_rows(references,forward_only=True):storage.put(db,identity,row)
             def rows():
                 for raw, in db.execute('SELECT body FROM records ORDER BY id'):
                     self.checkpoint()

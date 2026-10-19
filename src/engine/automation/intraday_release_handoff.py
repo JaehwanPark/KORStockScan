@@ -2559,6 +2559,26 @@ REVIEWED_STOP_SHARED_POSITION_PAIRS = {'src/engine/automation/main_stop_postclos
                                                      ('ddaab50afeee7a47c4a49565f27dc699532aabf8197e5276eb0d57cf974dfdce',
                                                       '7c91f86956a2e4f5fbab57f05517ce3f50cd7c322dca54bd429e60e3f35ea45b'))}
 
+# Consume sorted native references without repositioning the gzip text decoder.
+REVIEWED_STOP_FORWARD_STREAM_HASHES = {'src/engine/automation/main_stop_source_index.py': 'a3f7a3d8c29308845e74015208ad02642df906c199d8ed60edeadc75680a7fde'}
+REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_stop_source_index.py',
+        'selector_sha256': REVIEWED_STOP_FORWARD_STREAM_HASHES['src/engine/automation/main_stop_source_index.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_STOP_FORWARD_STREAM_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_STOP_FORWARD_STREAM_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_STOP_FORWARD_STREAM_PAIRS = {
+    name: tuple((before, after) for before in sorted(
+        {pair[0] for pair in REVIEWED_STOP_SHARED_POSITION_PAIRS[name]}
+        | {REVIEWED_STOP_SHARED_POSITION_HASHES[name]}))
+    for name, after in REVIEWED_STOP_FORWARD_STREAM_HASHES.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2612,7 +2632,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS,
+                         REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS,
                          REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS,
                          REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS,
                          REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS,
@@ -2692,7 +2713,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_STOP_SHARED_POSITION_PAIRS.get(name, ())
+        if (pair in REVIEWED_STOP_FORWARD_STREAM_PAIRS.get(name, ())
+                or pair in REVIEWED_STOP_SHARED_POSITION_PAIRS.get(name, ())
                 or pair in REVIEWED_CALENDAR_PHYSICAL_PAIRS.get(name, ())
                 or pair in REVIEWED_ASSEMBLER_BUDGET_PAIRS.get(name, ())
                 or pair in REVIEWED_NATIVE_EMPTY_PAIRS.get(name, ())
