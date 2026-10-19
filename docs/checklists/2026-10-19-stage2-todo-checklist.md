@@ -180,6 +180,9 @@
   - 현재 capability: 10/16 보존 보고서의 원 코드 세대에서 cleanup 현재 세대로 직접 연결하는 네 family pair를 추가했다. 원 fixture와 현재 독립 network-denied fixture를 모두 검증하고 원천/비용/관측 상태와 runtime authority를 보존한다. 준비 중인 새 release에서만 fresh parity·handoff와 active/delay/stop/holding 4gate를 확인한 뒤 기존 ordered driver를 실행한다.
   - 수리 회귀/자가 리뷰: 새 세대 수용 실패 3건을 먼저 재현했다. native handoff **2,521 PASS**, capability·ordered deployment **1,002 PASS**; 원/후속 source identity·완전한 closure·누락/변조/구세대/date/fixture 거절을 검증했다. 기존 3,538 통합 회귀는 새 결손 범위 외이므로 반복하지 않았다. 역사 fixture **340 PASS**(제외·skip 0), 합계 **3,863 PASS**. compile5·미정의/미사용 Ruff·sampler `bash -n`·parser24 OPEN/owner1·diff PASS; 재리뷰 범위 내 미해결 결함 0. 실제 release/PID 결과는 실행 증거 `tmp/wrapper-cleanup-native-deploy-20261019/`와 이 OPEN owner에 이어 기록한다. 배포 전 review 재확인과 preflight 실패 시 incumbent 유지 원칙을 적용한다.
 
+  - 정지 전 추가 보완: 후속 `07155d515`의 active/delay/stop/holding은 PASS였지만 auxiliary 원천 carry가 AI 로그 파일의 미등록 세대로 차단됐다. 해당 시도는 `tmp/wrapper-cleanup-native-deploy-20261019/preflight.log`에 보존했다. `startup_validation_code_context.REVIEWED_PREPARATION_HISTORY`에 정확한 AI `194f9dcd…`→`703bc5e3…`만 추가하고 변경한 준비 reader도 기존98파일 closure에 결속했다. 사용자 재수리·배포 승인 범위이며 정지·정책 reseal·원 영수증 변경은 하지 않았다. 새 코드 쌍의 미등록 실패1→동세대 수용·다른 source/target/path 거절, 역사 cold-preparation Git894 고정, preparation/activation 날짜 fixture 분리를 검증했다.
+  - 최종 검증: startup context75·auxiliary readiness53 PASS; native handoff2,523·auxiliary source33 PASS를 더해 이번 수리 영향 테스트는 **4,026 PASS / 제외·skip0**다. compile·Ruff·parser·diff PASS, 재리뷰 미해결 결함0. release/PID는 다음 운영 결과에 기록한다. 네 family의 현재 capability fixture **431 PASS**(133/86/128/84, network attempt0)와 원 보고서 보존/현재 capability 4개 verified를 확인했다. 후보 변경 후 fresh active-policy parity·handoff와 모든 native gate를 다시 확인하며 중간 후보의 영수증을 최종 후보 증거로 재사용하지 않는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

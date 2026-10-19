@@ -348,7 +348,11 @@ def test_main_preparation_rejects_changed_generation_without_full_read(request_f
 def test_reviewed_main_code_pairs_are_exact_and_origin_is_not_relabelled():
     assert len(C.REVIEWED_PREPARATION_SOURCES)>=13
     for path,(old,new) in C.REVIEWED_PREPARATION_SOURCES.items():
-        assert C._sha(ROOT/path)==new
+        # The cold-preparation registration belongs to this immutable parent;
+        # later dependency generations are checked by their own native closure.
+        raw = subprocess.check_output(['git', '-C', str(ROOT), 'show',
+            '8940ea4ad0d3b64d30f67f986a75715ee24c1d95:'+path])
+        assert hashlib.sha256(raw).hexdigest()==new
         C._pairs({path:old},{path:new})
         with pytest.raises(ValueError,match='unreviewed'):
             C._pairs({path:old},{path:'0'*64})
@@ -828,3 +832,15 @@ def test_delay_inventory_declaration_is_literal_unique_and_canonical(expression)
     if expression == '(OWNER,)': declaration = '(dynamic_path,)'
     with pytest.raises(ValueError):
         C._delay_contract_paths(('CONTRACT_PATHS = ' + declaration).encode())
+
+
+@pytest.mark.parametrize('fault', [None, 'source', 'target', 'path'])
+def test_cleanup_ai_preparation_pair_is_exact(fault):
+    relative = 'src/engine/ai_engine_openai.py'
+    old = '194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584'
+    current = '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07'
+    assert C._sha(Path(C.__file__).resolve().parents[3]/relative) == current
+    if fault == 'source': old = '0'*64
+    elif fault == 'target': current = '0'*64
+    elif fault == 'path': relative = 'src/engine/kiwoom_sniper_v2.py'
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)

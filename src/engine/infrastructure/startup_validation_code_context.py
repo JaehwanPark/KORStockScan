@@ -59,6 +59,11 @@ MAIN_PROOF_SCHEMA = 'startup_main_preparation_code_handoff_v1'
 # Preserve both the issued preparation and its reviewed same-day stopped carry.
 # Evidence: docs/audits/preopen-alert-repair-2026-10-19.md.
 REVIEWED_PREPARATION_HISTORY = {
+    # Startup log consolidation only; fixed compact model selection is unchanged.
+    'src/engine/ai_engine_openai.py': {
+        ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
+         '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07'),
+    },
     'src/engine/scalping/reversal_auxiliary_next_session.py': {
         ('c1dffd84447b3b8d5d23eece11d0e48fece8e0467dc439c6f2458ca6fd89b726',
          '301bbe9cc29efa2be9ed9f84b4d919ab1f9adaeae7b2e36ec45a58f3842bdefa'),

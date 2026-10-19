@@ -1961,7 +1961,8 @@ REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS = {
 # Reviewed cleanup 336e0a79d: import relocation, startup summary and unreachable
 # overnight removal. Preserve the full predecessor closure and bind the new
 # direct owners as well. Historical variants remain independently verifiable.
-REVIEWED_CLEANUP_HASHES = {'src/engine/ai_engine_openai.py': '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07',
+REVIEWED_CLEANUP_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '6f6a9b95b159cc72291ee6256eefa9396d3eb58a705afb7d36e36863be72a9c1',
+ 'src/engine/ai_engine_openai.py': '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07',
  'src/engine/kiwoom_sniper_v2.py': '647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713',
  'src/engine/sniper_condition_handlers.py': 'c405cb33d19f9d9f857efd122f9175e1c0cc8f6614c53b574ab6aaa466bd7b6b',
  'src/engine/sniper_overnight_gatekeeper.py': 'de9fac6b1dc43b7bc42db22a2e4fa699c2c17d1c12fff8da4738704c8fbc2292',

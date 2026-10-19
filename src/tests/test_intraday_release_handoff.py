@@ -1313,7 +1313,8 @@ def cleanup_git_candidate(completed_research_git_candidate):
     root, _, inventories, digests = completed_research_git_candidate
     names = ('src/engine/kiwoom_sniper_v2.py', 'src/engine/ai_engine_openai.py',
              'src/engine/sniper_state_handlers.py', 'src/engine/sniper_condition_handlers.py',
-             'src/engine/sniper_overnight_gatekeeper.py')
+             'src/engine/sniper_overnight_gatekeeper.py',
+             'src/engine/infrastructure/startup_validation_code_context.py')
     for name in names:
         (root/name).write_bytes((canonical/name).read_bytes())
     subprocess.run(['git', '-C', str(root), 'add', *names], check=True)
@@ -1334,7 +1335,8 @@ def test_cleanup_preserves_original_policy_digest(cleanup_git_candidate, family)
 @pytest.mark.parametrize('source', ['src/engine/kiwoom_sniper_v2.py',
     'src/engine/sniper_state_handlers.py', 'src/engine/ai_engine_openai.py',
     'src/engine/sniper_condition_handlers.py', 'src/engine/sniper_overnight_gatekeeper.py',
-    'src/engine/scalping/initial_quantity_monitor_projection.py'])
+    'src/engine/scalping/initial_quantity_monitor_projection.py',
+    'src/engine/infrastructure/startup_validation_code_context.py'])
 @pytest.mark.parametrize('fault', ['changed', 'missing'])
 def test_cleanup_rejects_unreviewed_or_missing_dependency(cleanup_git_candidate, source, fault):
     import subprocess

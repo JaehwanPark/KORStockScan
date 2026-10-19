@@ -22,6 +22,13 @@ def _sealed(path, body):
 
 @pytest.fixture
 def source_pair(tmp_path, monkeypatch):
+    # Preparation precedes activation. Same-day successor tests install their
+    # own target-day clock and active pointer explicitly.
+    class PreparationClock(real_datetime):
+        @classmethod
+        def now(cls, zone):
+            return real_datetime(2026, 10, 18, 20, 0, tzinfo=zone)
+    monkeypatch.setattr(gate, 'datetime', PreparationClock)
     data = tmp_path / 'data'
     old = tmp_path / 'old' / Path(reader.__file__).name
     old.parent.mkdir()
