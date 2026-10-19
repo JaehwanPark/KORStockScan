@@ -262,10 +262,98 @@ def _observation(stage, report, evaluation, data_root):
         stage['source_date'], stage, report, evaluation, bounded_read)
 
 
-def publish(stage_path, stage, report, *, data_root):
-    """Publish only for oversized children, after full native validation."""
-    if not any(Path(stage[name+'_path']).stat().st_size > CHILD_LIMIT
-               for name in ('report', 'timeout_research') if name+'_path' in stage):
+def _historical_exclusions(stage, observation, disposition, input_manifest):
+    """Classify an explicitly accepted, isolated historical population only.
+
+    The original gap, economic exclusions and null economics remain evidence.
+    Source/code freshness is still checked by the enclosing native projection.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    rows = disposition.get('excluded_rows', [])
+    accepted = datetime.fromisoformat(disposition['accepted_at'])
+    counts = Counter(row['reason'] for row in rows)
+    if (disposition.get('schema') != 'initial_quantity_historical_exclusions_v1'
+            or disposition.get('disposition') != 'excluded_from_economic_sample'
+            or disposition.get('source_date') != stage.get('source_date')
+            or disposition.get('stage_content_sha256') != stage.get('receipt_content_sha256')
+            or disposition.get('report_content_sha256') != stage.get('report_content_sha256')
+            or disposition.get('input_manifest_sha256') != input_manifest
+            or accepted.tzinfo is None or accepted > datetime.now(ZoneInfo('Asia/Seoul'))
+            or stage['source_date'] >= accepted.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
+            or stage.get('generation_kind') != 'refresh'
+            or stage.get('stage_status') != 'complete_source_only' or stage.get('terminal') is not True
+            or any(stage.get(key) is not False for key in
+                   ('runtime_apply_allowed', 'runtime_effect', 'actual_order_submitted'))
+            or stage.get('decision') != 'carry_parent'
+            or observation.get('economic_sample_status') != 'cost_eligible'
+            or observation.get('trade_policy_binding_status') != 'bound'
+            or observation.get('postclose_completed_trade_count', 0) <= 0
+            or observation.get('postclose_semantic_findings') != ['initial_quantity_economic_source_gap']
+            or not rows or len({row['record_id'] for row in rows}) != len(rows)
+            or any(not row['record_id'] or not row['stock_code']
+                   or len(row['fact_sha256']) != 64 for row in rows)
+            or set(counts) - {'terminal_cost_or_quantity_missing', 'quantity_research_cost_invalid'}
+            or dict(counts) != observation.get('postclose_source_gap_reasons')
+            or dict(counts) != disposition.get('exclusion_counts')):
+        raise ValueError('quantity_historical_exclusions_binding_invalid')
+    return {**observation, 'postclose_semantic_findings': [],
+        'postclose_historical_diagnostics': observation['postclose_semantic_findings'],
+        'postclose_attention_status': 'historical_exclusions_recorded',
+        'postclose_historical_exclusions': disposition}
+
+
+def _exclusion_disposition(stage_path, stage, report, observation, data_root, record_ids):
+    """Reuse an exact prior acknowledgement, or issue one on explicit request."""
+    from src.engine.scalping import initial_quantity_policy as native
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    disposition = None
+    if record_ids is None and manifest_path(stage_path).exists():
+        pointer, _ = files._read(manifest_path(stage_path), 65536)
+        selected = Path(pointer['projection_path'])
+        if (selected.parent != Path(stage_path).parent/'monitor_generations'
+                or selected.name != pointer['projection_content_sha256']+'.projection.json'):
+            raise ValueError('quantity_monitor_projection_path_invalid')
+        previous, metadata = files._read(selected, MAX_BYTES)
+        if (metadata['sha256'] != pointer['projection_sha256']
+                or _digest(previous) != pointer['projection_content_sha256']):
+            raise ValueError('quantity_monitor_projection_invalid')
+        disposition = previous.get('historical_exclusion_disposition')
+    if record_ids is not None or disposition is not None:
+        rows = []
+        for fact in report['census']['input_fact_rows']:
+            _, census = native.completed_trade_fact_census(stage['source_date'],
+                fact_rows=[fact], data_dir=data_root,
+                entry_on_or_after=report['census'].get('entry_on_or_after'))
+            for reason, count in census['excluded'].items():
+                if reason in observation['postclose_source_gap_reasons']:
+                    if count != 1:
+                        raise ValueError('quantity_historical_exclusions_population_invalid')
+                    rows.append(dict(record_id=str(fact['recommendation_id']),
+                        stock_code=str(fact['stock_code']), fact_sha256=native._digest(fact), reason=reason))
+        rows.sort(key=lambda row: row['record_id'])
+        if record_ids is not None:
+            if sorted(map(str, record_ids)) != [row['record_id'] for row in rows]:
+                raise ValueError('quantity_historical_exclusions_population_invalid')
+            disposition = dict(schema='initial_quantity_historical_exclusions_v1',
+                disposition='excluded_from_economic_sample',
+                accepted_at=datetime.now(ZoneInfo('Asia/Seoul')).isoformat(),
+                source_date=stage['source_date'], stage_content_sha256=stage['receipt_content_sha256'],
+                report_content_sha256=stage['report_content_sha256'],
+                input_manifest_sha256=report['census']['input_manifest_sha256'],
+                exclusion_counts=dict(Counter(row['reason'] for row in rows)), excluded_rows=rows)
+        if disposition['excluded_rows'] != rows:
+            raise ValueError('quantity_historical_exclusions_population_changed')
+        _historical_exclusions(stage, observation, disposition, report['census']['input_manifest_sha256'])
+    return disposition
+
+
+def publish(stage_path, stage, report, *, data_root, accepted_historical_record_ids=None):
+    """Publish a native proof; historical exclusions require explicit acceptance."""
+    if (accepted_historical_record_ids is None and not manifest_path(stage_path).exists()
+            and not any(Path(stage[name+'_path']).stat().st_size > CHILD_LIMIT
+                        for name in ('report', 'timeout_research') if name+'_path' in stage)):
         return None
     from src.engine.scalping import initial_quantity_policy as native
     data_root = Path(data_root).resolve()
@@ -322,7 +410,6 @@ def publish(stage_path, stage, report, *, data_root):
             or directories_before != _directories(report, data_root) or code != _code()):
         raise ValueError('quantity_monitor_source_changed')
     base = Path(stage_path).parent/'monitor_generations'
-    ident = _digest(projection)
     base.mkdir(exist_ok=True)
     lock_path = Path(stage_path).parent/'.monitor.lock'
     with os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'a+b') as lock:
@@ -333,6 +420,15 @@ def publish(stage_path, stage, report, *, data_root):
             raise ValueError('quantity_monitor_source_changed')
         if costs != _costs(report, data_root) or cost_signature != _cost_signature(data_root, costs) or code != _code():
             raise ValueError('quantity_monitor_cost_generation_changed')
+        # Read the prior disposition under the same publisher lock: a refresh
+        # that started earlier must not erase a concurrently accepted population.
+        disposition = _exclusion_disposition(stage_path, stage, report, observation,
+            data_root, accepted_historical_record_ids)
+        if disposition is not None:
+            projection['historical_exclusion_disposition'] = disposition
+        if len(files._canonical(projection)) > MAX_BYTES:
+            raise ValueError('quantity_monitor_projection_budget')
+        ident = _digest(projection)
         path = base/(ident+'.projection.json')
         files._write_atomic(path, projection, MAX_BYTES, immutable=True)
         pointer = dict(schema=MANIFEST, source_date=stage['source_date'],
@@ -472,4 +568,8 @@ def read_verified(stage_path, stage, *, read, data_root=None, role='current_stag
             or current_cost_inventory() != inventory or code != _code()):
         raise ValueError('quantity_monitor_source_changed')
     _check_directories(value['source_directories'])
-    return {'issued': value['issued'], 'observation': value['observation']}
+    observation = value['observation']
+    if value.get('historical_exclusion_disposition') is not None:
+        observation = _historical_exclusions(stage, observation,
+            value['historical_exclusion_disposition'], coverage['input_manifest_sha256'])
+    return {'issued': value['issued'], 'observation': observation}

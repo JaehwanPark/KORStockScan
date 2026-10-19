@@ -193,3 +193,16 @@ run의 미실행을None으로 구분해 producer가 시작되지 않았으면 de
 적용 수용:18e1bba21a1b9f2e7717c65d4837e571b3e9a858 ordered 전환은15:25:12 complete/PASS다. 새 Main PID1355795/start3557005의15:24:48 startup reader verified와 원 bootstrap/holding/Main·quantity pointer5파일 SHA 불변을 확인했다. 정기 producer의15:26:03 현재 actor 관측에 대해15:26:53 자연 full detector가 pending_no_applicable_observations·선언/재계산 일치true·unmet0을 확인했고 해당 observer FAIL은 없다. process/log/auth/lock은PASS, 전체 artifact는 별도 policy-generation 미검증·quantity 경제성 원천결손5건 때문에WARNING이다.
 
 후속 producer5b32e00b…/15:27:04도 같은 현재 actor의partial/warning_pending/unmet0이다. 현재 세대는 적용 가능한 history 표본0이고 stale/noncurrent sentinel로 full coverage 미수용이며, 원4행의 verified4/4 증명은 별도 격리 원세대 replay다. 자연0건을 과거 결손 복원으로 계산하지 않는다. pipeline 최초 legacy migration은cursor=catchup_end801,760,912B로 완료됐고 native 신규 append producer_end841,598,332B·invalid없음을 확인했다.15:27:32 별도1초 I/O wait2.0%와 첫 full의33.37% 경고는 서로 다른 시점의 표본으로 보존한다. 자연 새 history/short horizon/PASS→submit 수용은 기존 owner OPEN을 유지하며 전체 health/매매 성과 GREEN을 주장하지 않는다. 근거: tmp/observer-history-proof-20261019-1512/final-verification.json, first-native-health.json, final-native-observer.json, ordered.json, successor-publication.log.
+
+
+## 16시 역사 수량 제외와 현재 장애 분리
+
+사용자 지시: 증거 부재로 제외한 과거 거래를 매번 현재 장애로 통보하는 동작을 고친다. 원16일 refresh의 native terminal/census는 유효하고 비용 유효8건/정책 bound/carry_parent이지만, detector가 제외 사유4+1건을 무조건 initial_quantity_economic_source_gap으로 변환했다. 원본 사실/PnL null/제외 사유는 정상 소스로 승격하지 않는다. 기존 SELL 재관측의 중복체결 오판은 현재18e1bba21의 sniper_trade_review_report._quantity_sell_receipt_observations에서 이미 수리됐고 동일 payload·원 broker 시각·native custody가 없는 충돌은 계속 제외한다.
+
+기존 scalping.initial_quantity_monitor_projection.publish를 확장해 사용자 지정 과거 ID를 full native stage 검증 뒤 원 stage/report/input_manifest와 각 fact SHA·제외 사유에 결속한다. 오직 과거 complete_source_only/terminal/carry_parent, cost_eligible 표본 존재, bound 정책, report-only 권한에 한해 historical_exclusions_recorded로 분리한다. 원 source_gap·제외 수·null 경제성은 보존하고 현재 semantic findings에서만 제거한다. 새 ID·새 세대·현재 날짜·원천/비용/코드 변경·partial binding·미종료·권한 누출은 기존 경보/실패를 유지한다. 원본 대용량 report/timeout 재생성은 하지 않는다. 동일 stage 재게시도 native 재검증 후 기존 정확한 처리를 유지하며, 기존 monitor publisher lock 안에서 읽어 동시 게시로 처리 기록을 덮어쓰지 않는다.
+
+기준 c309d7eac; 변경 owner는 기존 수량 monitor publisher와 정확한 release handoff 두 곳이다. 기존 무조건 경보 경로는 알려진 정확한 제외 모집단에 한해 대체(consolidated), 새/미확인 결손의 기존 경보 및 full native census는 현재 소비자가 있어 retained, issued_ancestry는 승인 당시 증거 보존 소비자로 retained다. 별도 모듈/producer/CLI/주문 분기/검증 프레임워크를 추가하지 않는다. 과거 immutable release/정책/비용 index/원 보고서는 retained이며 삭제/데이터 복원 승격은 이 변경의 대상이 아니다. 새로운95-file exact handoff는 이전94-file generation을 predecessor 검증용으로 보존한다. 단위 수량·분할·timeout·자동매매 guard·provider·실주문 권한은 변하지 않는다.
+
+코드 검토에서는 기존 본문을 보존하는 trusted-writer 경계, native census의 행별 제외 재산정, hash/date/ID/count 일치, 다음 세대의 미승계, 재게시 잠금 경합을 확인했다. 경합 보완 후 re-review/targeted regression 및 clean candidate 사전 검증을 수행한다. 정확한 적용/PID/자연 detector 결과는 다음 수용 기록으로 구분한다. 근거: tmp/quantity-cost-health-20261019-1530/. 원인 수리의 다음 자연 완료 비용 표본은 기존 InitialQuantityProducerConsumerRepair1010가 계속 소유한다.
+
+보완 뒤 최종 관련 회귀3,028 PASS, Python compile/diff와 print-only parser23 current owner를 확인했다. 기준 대비 source2파일 +121/-7, tests2파일 +116/-3, docs3파일 +14/-0이며 새 기능은 기존 native publisher API의 선택적 역사 제외 처리 하나다. 외부 sync·새 주문/provider/threshold 변경은 수행하지 않는다. 현재 Main1355795/start3557005와 SELL 원인 수리의 실행 소스 SHA는 cause-and-runtime-baseline.json에 고정했다.

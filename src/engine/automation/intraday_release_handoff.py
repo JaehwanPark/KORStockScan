@@ -1944,6 +1944,19 @@ REVIEWED_HISTORY_SEGMENT_PAIRS = {
     for name, sha in REVIEWED_HISTORY_SEGMENT_HASHES.items()
 }
 
+
+# Exact source-only historical exclusion disposition. Keep the prior 94-file
+# generation for immutable predecessor validation; bind its additional native
+# quantity publisher as part of the complete successor generation.
+REVIEWED_QUANTITY_EXCLUSIONS_HASHES = {'src/engine/scalping/initial_quantity_monitor_projection.py': 'd8e3ed265350afd2214dce5e06c7f3c8006ebc80b8d86435b705888edcff221f'}
+REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_monitor_projection.py',
+        'selector_sha256': 'd8e3ed265350afd2214dce5e06c7f3c8006ebc80b8d86435b705888edcff221f',
+        'dependencies': {**value['dependencies'], **REVIEWED_QUANTITY_EXCLUSIONS_HASHES}}
+    for key, value in REVIEWED_HISTORY_SEGMENT_DEPENDENCY_VARIANTS.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1997,7 +2010,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_HISTORY_SEGMENT_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS,
+                         REVIEWED_HISTORY_SEGMENT_DEPENDENCY_VARIANTS,
                          REVIEWED_STARTUP_RETRY_DEPENDENCY_VARIANTS,
                          REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
                          REVIEWED_PARTIAL_CLOCK_DEPENDENCY_VARIANTS,

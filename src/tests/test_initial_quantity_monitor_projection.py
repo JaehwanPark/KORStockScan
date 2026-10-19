@@ -254,3 +254,116 @@ def test_issued_ancestry_rejects_child_replaced_during_bounded_stage_read(tmp_pa
         return result
     with pytest.raises(ValueError, match='issued_source_changed'):
         projection.read_verified(path, stage, read=racing_read, data_root=data, role='issued_ancestry')
+
+
+def _historical_fixture(tmp_path, monkeypatch):
+    from src.engine.trade_profit import calculate_net_profit_rate, calculate_net_realized_pnl
+    data, path, stage, report, children = _fixture(tmp_path, monkeypatch)
+    # Genuine native census: one costed trade and one excluded null-cost row.
+    good = dict(recommendation_id='1', stock_code='005930', status='COMPLETED',
+        strategy='SCALPING', position_tag='SCANNER', buy_price=100, sell_price=110,
+        buy_qty=1, buy_time='2026-09-28T09:00:00+09:00', sell_time='2026-09-28T09:01:00+09:00',
+        profit_rate=calculate_net_profit_rate(100, 110),
+        realized_pnl_krw=calculate_net_realized_pnl(100, 110, 1))
+    missing = {**good, 'recommendation_id': '2', 'profit_rate': None, 'realized_pnl_krw': None}
+    report['trades'], report['census'] = native.completed_trade_fact_census(
+        stage['source_date'], fact_rows=[good, missing], data_dir=data)
+    assert len(report['trades']) == 1
+    stage.update(all_completed_initial_trades=1, terminal=True, stage_status='complete_source_only',
+        runtime_apply_allowed=False, runtime_effect=False, actual_order_submitted=False)
+    evaluation = json.loads(children['evaluation'].read_bytes())
+    evaluation.update(economic_sample_status='cost_eligible', trade_policy_binding_status='bound')
+    children['evaluation'].write_text(json.dumps(evaluation))
+    _reseal(path, stage, report, children)
+    return data, path, stage, report, children
+
+
+def test_explicit_historical_exclusion_stops_current_alert_and_preserves_gap_and_null_economics(tmp_path, monkeypatch):
+    data, path, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    projection.publish(path, stage, report, data_root=data)
+    original = projection.read_verified(path, stage, read=_read, data_root=data)['observation']
+    assert original['postclose_semantic_findings'] == ['initial_quantity_economic_source_gap']
+    frozen = {name: child.read_bytes() for name, child in children.items()}
+    projection.publish(path, stage, report, data_root=data, accepted_historical_record_ids=['2'])
+    observation = projection.read_verified(path, stage, read=_read, data_root=data)['observation']
+    assert observation['postclose_semantic_findings'] == []
+    assert observation['postclose_stage_status'] == 'source_gap'
+    assert observation['postclose_historical_diagnostics'] == ['initial_quantity_economic_source_gap']
+    assert observation['postclose_source_gap_reasons'] == {'terminal_cost_or_quantity_missing': 1}
+    assert report['census']['input_fact_rows'][1]['realized_pnl_krw'] is None
+    assert {name: child.read_bytes() for name, child in children.items()} == frozen
+    # A subsequent native proof refresh retains this exact acknowledgement.
+    projection.publish(path, stage, report, data_root=data)
+    assert projection.read_verified(path, stage, read=_read, data_root=data)['observation'] == observation
+
+
+@pytest.mark.parametrize('fault', ['wrong_id', 'extra_id', 'duplicate_id', 'new_row', 'new_reason',
+    'partial_binding', 'zero_eligible', 'current_date', 'nonterminal', 'runtime_authority'])
+def test_acknowledgement_cannot_hide_new_populations_or_current_contract_failures(tmp_path, monkeypatch, fault):
+    data, path, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    accepted = ['2']
+    if fault == 'wrong_id': accepted = ['99']
+    elif fault == 'extra_id': accepted = ['1', '2']
+    elif fault == 'duplicate_id': accepted = ['2', '2']
+    elif fault == 'new_row':
+        report['census']['input_fact_rows'].append({**report['census']['input_fact_rows'][1], 'recommendation_id': '3'})
+        report['census']['fact_rows_read'] += 1
+        report['census']['excluded']['terminal_cost_or_quantity_missing'] += 1
+    elif fault == 'new_reason':
+        report['census']['input_fact_rows'][1]['buy_time'] = None
+        report['census']['excluded'] = {'trade_clock_missing_or_invalid': 1}
+    elif fault == 'partial_binding':
+        evaluation = json.loads(children['evaluation'].read_bytes())
+        evaluation['trade_policy_binding_status'] = 'partial'
+        children['evaluation'].write_text(json.dumps(evaluation))
+    elif fault == 'zero_eligible':
+        report['trades'] = []
+        report['census']['input_fact_rows'] = report['census']['input_fact_rows'][1:]
+        report['census'].update(fact_rows_read=1, all_completed_initial_trades=0)
+        stage['all_completed_initial_trades'] = 0
+        evaluation = json.loads(children['evaluation'].read_bytes())
+        evaluation.update(economic_sample_status='cost_missing', trade_policy_binding_status='source_gap')
+        children['evaluation'].write_text(json.dumps(evaluation))
+    elif fault == 'current_date':
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        stage['source_date'] = report['source_date'] = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
+        evaluation = json.loads(children['evaluation'].read_bytes())
+        evaluation['source_date'] = stage['source_date']
+        children['evaluation'].write_text(json.dumps(evaluation))
+    elif fault == 'nonterminal': stage['terminal'] = False
+    else: stage['runtime_apply_allowed'] = True
+    report['census']['input_manifest_sha256'] = native._digest(report['census']['input_fact_rows'])
+    report['census']['as_of_completed_population_count'] = len(report['census']['input_fact_rows'])
+    _reseal(path, stage, report, children)
+    with pytest.raises(ValueError, match='quantity_historical_exclusions_'):
+        projection.publish(path, stage, report, data_root=data, accepted_historical_record_ids=accepted)
+    assert not projection.manifest_path(path).exists()
+
+
+@pytest.mark.parametrize('fault', ['new_stage', 'changed_report', 'changed_fact', 'changed_code'])
+def test_acknowledged_history_still_checks_full_current_source_and_native_proof(tmp_path, monkeypatch, fault):
+    data, path, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    projection.publish(path, stage, report, data_root=data, accepted_historical_record_ids=['2'])
+    if fault in {'new_stage', 'changed_fact'}:
+        if fault == 'new_stage': stage['following_bar_source_status'] = 'cap_profile_only'
+        else: report['census']['input_fact_rows'][1]['stock_code'] = '999999'
+        _reseal(path, stage, report, children)
+    elif fault == 'changed_report':
+        with children['report'].open('ab') as handle:
+            handle.write(b' ')
+    else:
+        code = projection._code()
+        monkeypatch.setattr(projection, '_code', lambda: {**code, 'new_source.py': 'a'*64})
+    with pytest.raises(ValueError):
+        projection.read_verified(path, stage, read=_read, data_root=data)
+
+
+def test_republication_cannot_inherit_an_acknowledgement_for_changed_fact_identity(tmp_path, monkeypatch):
+    data, path, stage, report, children = _historical_fixture(tmp_path, monkeypatch)
+    projection.publish(path, stage, report, data_root=data, accepted_historical_record_ids=['2'])
+    report['census']['input_fact_rows'][1]['recommendation_id'] = '3'
+    report['census']['input_manifest_sha256'] = native._digest(report['census']['input_fact_rows'])
+    _reseal(path, stage, report, children)
+    with pytest.raises(ValueError, match='quantity_historical_exclusions_population_changed'):
+        projection.publish(path, stage, report, data_root=data)
