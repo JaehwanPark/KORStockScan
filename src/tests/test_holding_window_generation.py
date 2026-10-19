@@ -481,3 +481,21 @@ def test_archived_empty_native_reader_binds_requested_logical_source_to_explicit
     foreign=tmp_path/'other-root'/raw.name;foreign.parent.mkdir()
     Path(str(foreign)+'.gz').write_bytes(physical.read_bytes())
     assert _verified_trade_review_projection(foreign,'2026-10-08',data_root=tmp_path) is None
+
+
+@pytest.mark.parametrize('compressed',[False,True])
+def test_intraday_light_empty_snapshot_is_not_terminal_postclose_evidence(tmp_path,compressed):
+    import gzip
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    day='2026-10-01';raw,sidecar,value=_old_empty_projection(tmp_path,day)
+    value['meta']['snapshot_profile']='intraday_light'
+    value['meta']['trailing_event_source_receipts']=[]
+    value['meta']['completed_census_manifest']=completed_census_manifest(value)
+    value.pop('artifact_sha256',None);value.pop('schema',None);value.pop('snapshot_identity',None)
+    raw.write_text(json.dumps(value));sidecar.unlink()
+    if compressed:
+        Path(str(raw)+'.gz').write_bytes(gzip.compress(raw.read_bytes()));raw.unlink()
+    dependency=capture_window(tmp_path,[day])['dependencies'][day]
+    assert dependency['status']=='source_gap'
+    assert dependency['reason']=='window_dependency_partial_snapshot_not_terminal'
+    assert dependency['cost_generation']['status']=='cost_source_unavailable'

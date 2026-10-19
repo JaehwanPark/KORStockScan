@@ -2392,6 +2392,35 @@ REVIEWED_COMPLETED_OFFLINE_PAIRS = {'src/engine/automation/main_trailing_complet
                                                    ('fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5',
                                                     '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255'))}
 
+# Preserve original manifest-verified empty gzip cohorts in the predecessor.
+REVIEWED_COMPLETED_EMPTY_HASHES = {'src/engine/automation/main_trailing_completed_store.py': 'd8ab6595b4a803abb8d7440bb0a83617fc22faa4f93558c197323320a62e1a1c',
+ 'src/engine/lifecycle/holding_window_generation.py': 'c21d4793499158dcb7a9af25f59e5e49c0cfde49234f77669788746645ac3875'}
+REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_completed_store.py',
+        'selector_sha256': REVIEWED_COMPLETED_EMPTY_HASHES['src/engine/automation/main_trailing_completed_store.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_COMPLETED_EMPTY_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_COMPLETED_EMPTY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_COMPLETED_EMPTY_PAIRS = {'src/engine/automation/main_trailing_completed_store.py': (('6cd944f303ba9851761ca0166bd757dd1f3210f0abeda3468510979142fd25da',
+                                                             'd8ab6595b4a803abb8d7440bb0a83617fc22faa4f93558c197323320a62e1a1c'),
+                                                            ('fc047ceddd40d963659fcba7f36f7d28bdbc74c3dfa799322f163fb4f3683a30',
+                                                             'd8ab6595b4a803abb8d7440bb0a83617fc22faa4f93558c197323320a62e1a1c')),
+ 'src/engine/lifecycle/holding_window_generation.py': (('52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
+                                                        'c21d4793499158dcb7a9af25f59e5e49c0cfde49234f77669788746645ac3875'),
+                                                       ('73276f9a219d8a0406092be145c793616a33ebc7d4cf86383fde932ae45c5973',
+                                                        'c21d4793499158dcb7a9af25f59e5e49c0cfde49234f77669788746645ac3875'),
+                                                       ('925904f2505a15a0b179aeca4a8ecb6badac76130c50fe6d29973eb76b8cf2d1',
+                                                        'c21d4793499158dcb7a9af25f59e5e49c0cfde49234f77669788746645ac3875'),
+                                                       ('b31337f09b51d7d1ad1b06b24f92eda3bc2b19b0f160166e25d603708940926c',
+                                                        'c21d4793499158dcb7a9af25f59e5e49c0cfde49234f77669788746645ac3875'),
+                                                       ('ee13b6cc48e1842c1710f6971703712e984ca636fe6f2378f068fb8fd5121092',
+                                                        'c21d4793499158dcb7a9af25f59e5e49c0cfde49234f77669788746645ac3875'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2445,7 +2474,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS,
+                         REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS,
                          REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS,
                          REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
                          REVIEWED_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
@@ -2520,7 +2550,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_COMPLETED_OFFLINE_PAIRS.get(name, ())
+        if (pair in REVIEWED_COMPLETED_EMPTY_PAIRS.get(name, ())
+                or pair in REVIEWED_COMPLETED_OFFLINE_PAIRS.get(name, ())
                 or pair in REVIEWED_AUXILIARY_DATA_ROOT_PAIRS.get(name, ())
                 or pair in REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
                 or pair in REVIEWED_ARCHIVE_AUTHORITY_PAIRS.get(name, ())

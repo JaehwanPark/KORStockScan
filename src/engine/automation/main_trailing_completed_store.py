@@ -238,6 +238,13 @@ def prepare_window(data_root,days):
         window=capture_window(root,days,allow_cost_revision=True)
         for day in pending:
             window_day=window['dependencies'][day]
+            if (window_day['status']=='valid_empty' and (window_day.get('projection') or {}).get(
+                    'source_basis')=='current_native_gzip_empty_postclose'):
+                # The original manifest proves this empty cohort without an
+                # invented archive identity. Its existing reader remains owner.
+                result.append(dict(path=str(directory/f'trade_review_{day}.json'),
+                    status='original_archived_empty_verified',generation=window_day['projection']))
+                continue
             if window_day['status'] not in {'observed','valid_empty'}:
                 result.append(dict(path=str(directory/f'trade_review_{day}.json'),status='source_gap',
                     reason=window_day.get('reason') or window_day['status']));continue

@@ -918,7 +918,9 @@ def test_partial_nontrading_calendar_diagnostic_never_upgrades_raw_census(tmp_pa
     write(root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{day}.json',parent)
     manifest=source.assemble(root,tmp_path/'assembly',source_date=day,target_date='2026-10-12',start_date=day)
     report=research._sealed(manifest);census=report['assembly_census']
-    assert census['source_gaps']['completed_snapshot_unverified']==1
+    assert prior['dependencies'][day]['status']=='source_gap'
+    assert prior['dependencies'][day]['reason']=='window_dependency_partial_snapshot_not_terminal'
+    assert census['source_gaps']['completed_snapshot_source_gap']==1
     assert report['population_ids_ref']['count']==0
     diagnostics=census['publication_due_diagnostics']
     if trading:assert diagnostics==[]

@@ -776,3 +776,48 @@ def test_completed_enrollment_refuses_crc_valid_changed_logical_gzip(tmp_path,mo
     with pytest.raises(ValueError,match='logical_generation_changed'):
         completed.prepare_window(root,[day])
     assert list((root/'report/main_trailing_completed_source'/day/'generations').glob('offline-*.json'))==[]
+
+
+@pytest.mark.parametrize('legacy,native_window',[(True,False),(False,False),(False,True)])
+def test_preparation_reuses_original_verified_empty_gzip_without_new_archive_receipt(tmp_path,monkeypatch,legacy,native_window):
+    from src.tests.test_holding_window_generation import _archived_empty_original
+    from src.engine.lifecycle import research_json_stream as stream
+    from src.engine.automation import main_trailing_completed_store as completed
+    day='2026-10-01';raw,physical,sidecar,manifest,_=_archived_empty_original(tmp_path,day=day,legacy=legacy,native_window=native_window)
+    originals={p:p.read_bytes()for p in(physical,sidecar,manifest)}
+    monkeypatch.setattr(stream,'completed_rows',lambda *a,**k:pytest.fail('empty cohort must retain its existing reader'))
+    result=store.prepare_window(tmp_path,day,start_date=day)
+    assert result[0]['status']=='original_archived_empty_verified'
+    assert result[0]['generation']['source_basis']=='current_native_gzip_empty_postclose'
+    assert completed.offline_binding(tmp_path,day)==(None,None)
+    assert not raw.exists()and not Path(str(physical)+'.archive_receipt.json').exists()
+    assert {p:p.read_bytes()for p in originals}==originals
+
+
+@pytest.mark.parametrize('fault',['manifest_missing','manifest_hash','corrupt_gzip'])
+def test_empty_gzip_preparation_preserves_identifiable_contract_gap(tmp_path,fault):
+    from src.tests.test_holding_window_generation import _archived_empty_original
+    from src.engine.automation import main_trailing_completed_store as completed
+    day='2026-10-01';_,physical,_,manifest,_=_archived_empty_original(tmp_path,day=day)
+    if fault=='manifest_missing':manifest.unlink()
+    elif fault=='manifest_hash':
+        body=json.loads(manifest.read_bytes());body['snapshot_sha256']['trade_review']='0'*64;manifest.write_text(json.dumps(body))
+    else:physical.write_bytes(b'not a gzip')
+    result=completed.prepare_window(tmp_path,[day])
+    assert result[0]['status']=='source_gap'
+    assert completed.offline_binding(tmp_path,day)==(None,None)
+    assert not Path(str(physical)+'.archive_receipt.json').exists()
+
+
+def test_empty_archive_does_not_abort_normal_original_cohort_enrollment(tmp_path,monkeypatch):
+    from datetime import date,timedelta
+    from src.tests.test_holding_window_generation import _archived_empty_original
+    from src.engine.automation import main_trailing_completed_store as completed
+    root=tmp_path/'source';empty='2026-10-01';_archived_empty_original(root,day=empty)
+    day,_,_=_original_completed_source(root,monkeypatch,'native',False)
+    days=[];cursor=date.fromisoformat(empty)
+    while cursor<=date.fromisoformat(day):days.append(cursor.isoformat());cursor+=timedelta(days=1)
+    result=completed.prepare_window(root,days)
+    assert result[0]['status']=='original_archived_empty_verified'
+    assert result[-1]['status']=='offline_index_prepared'
+    assert completed.offline_binding(root,day)[0]is not None

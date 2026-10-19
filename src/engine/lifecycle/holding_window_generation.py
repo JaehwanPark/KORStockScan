@@ -577,6 +577,8 @@ def _capture_day_inputs(root, directory, day, budget, *, original_cost_generatio
         census = meta.get("completed_census_manifest")
         cutoff = meta.get("knowledge_cutoff")
         profile = meta.get("snapshot_profile")
+        if profile == "intraday_light":
+            raise ValueError("window_dependency_partial_snapshot_not_terminal")
         census_sha = value.get('census_sha256') or (digest(census) if census else None)
         status = "observed" if (value.get('completed_count', 0) > 0 or (value.get("sections") or {}).get(
             "completed_trade_projection")) else "valid_empty" if census_sha else "unverified"
