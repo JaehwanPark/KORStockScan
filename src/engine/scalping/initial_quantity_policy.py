@@ -667,8 +667,41 @@ def _record_id(raw: str) -> str:
     return match.group(1) or match.group(2)
 
 
+_QUANTITY_PIPELINE_FIELDS = frozenset('''
+actual_execution_venue actual_order_submitted avg_buy_price binding_caps
+broker_execution_observed_at broker_order_no buy_pressure_10t
+cap_tick_depth_item cap_tick_item cap_tick_market_route cap_tick_observed_epoch
+cap_tick_price_krw cap_tick_quantity cap_tick_transport_epoch
+capture_clock_status capture_disposition capture_end_epoch capture_id
+capture_interruption_reason capture_order_start_epoch capture_planned_epoch
+capture_queue_rejected_count capture_queued_count capture_record_id
+capture_runtime_pid capture_runtime_start_ticks capture_source_date capture_stock_code
+classifier_route_key classifier_transport_epoch current_price decision_authority
+effective_qty effective_venue entry_cancel_wait_submission_context
+entry_execution_sizing_plan_sha256 entry_execution_sizing_valid entry_mode
+entry_split_order_leg_count entry_split_order_probe_first_applied entry_split_order_probe_qty
+entry_submit_attempt_id execution_no fill_price fill_qty
+initial_quantity_attempt_id initial_quantity_bundle_order_start_at
+initial_quantity_bundle_total_wait_sec initial_quantity_cap_research_context
+initial_quantity_leg_index initial_quantity_order_start_at initial_quantity_policy_file_sha256
+initial_quantity_runtime_pid initial_quantity_schedule_sha256 latest_price
+market_data_transport_epoch market_session_bucket observation_coverage order_no
+position_sizing_policy_sha256 position_sizing_policy_status pre_cap_qty
+quantity_type quantity_type_classifier_version quantity_type_policy_row
+quote_consistency_state quote_stale ratio reference_time requested_qty
+scalping_sizing_position_sizing_policy_sha256 scalping_sizing_position_sizing_policy_status
+scalping_sizing_quantity_type scalping_sizing_quantity_type_classifier_version
+scalping_sizing_quantity_type_policy_row sizing_venue_at_allocation source_signature
+tag tick_aggressor_pressure_usable tick_context_quality tier ws_age_ms ws_route
+'''.split())
+
+
 def _quantity_pipeline_rows(handle, records, receipt):
-    """Keep bounded rows and isolate identifiable oversized record gaps."""
+    """Project large native rows without losing their execution/policy fields.
+
+    Full raw generations remain byte-bound by the caller. Only fields consumed
+    by quantity path reconstruction enter this bounded offline projection.
+    """
     from src.engine.lifecycle.research_json_stream import Reader
 
     class Line:
@@ -690,7 +723,48 @@ def _quantity_pipeline_rows(handle, records, receipt):
         if len(raw.encode('utf-8')) <= 64 * 1024:
             yield raw
             continue
-        identity = {}
+        identity, projected = {}, {}
+        blocked = [False]
+
+        def project_fields(reader):
+            reader.spaces()
+            if reader.peek() != '{':
+                blocked[0] = True
+                reader.skip()
+                return None
+            # Runtime context rows have more fields than a small research
+            # object. Bound their keys while retaining only this consumer's
+            # execution contract; never materialize the large context values.
+            reader.take('{')
+            first, seen, result, retained_bytes = True, set(), {}, 0
+            while True:
+                reader.spaces()
+                if reader.peek() == '}':
+                    reader.offset += 1
+                    return result
+                if not first:
+                    reader.take(',')
+                key = reader.value(1024)
+                if not isinstance(key, str) or key in seen or len(seen) >= 4096:
+                    raise ValueError('quantity_pipeline_field_identity_invalid')
+                seen.add(key)
+                reader.take(':')
+                if key in _QUANTITY_PIPELINE_FIELDS and not blocked[0]:
+                    try:
+                        result[key] = reader.value(64 * 1024)
+                        retained_bytes += len(json.dumps({key: result[key]},
+                            ensure_ascii=False).encode('utf-8'))
+                        if retained_bytes > 64 * 1024:
+                            blocked[0] = True
+                            result.clear()
+                    except ValueError as exc:
+                        if str(exc) != 'research_legacy_json_field_partition_required':
+                            raise
+                        blocked[0] = True
+                        reader.skip()
+                else:
+                    reader.skip()
+                first = False
 
         def field(key, reader):
             if key == 'record_id':
@@ -698,6 +772,11 @@ def _quantity_pipeline_rows(handle, records, receipt):
                 if value is not None and (isinstance(value, bool) or not isinstance(value, (int, str))):
                     raise ValueError('quantity_pipeline_record_identity_invalid')
                 identity[key] = '' if value is None else str(value)
+                projected[key] = value
+            elif key in {'stage', 'stock_code', 'emitted_at'}:
+                projected[key] = reader.value(4096)
+            elif key == 'fields':
+                projected[key] = project_fields(reader)
             else:
                 reader.skip()
             return iter(())
@@ -709,6 +788,15 @@ def _quantity_pipeline_rows(handle, records, receipt):
         if reader.peek() or 'record_id' not in identity:
             raise ValueError('quantity_pipeline_record_partition_required')
         if identity['record_id'] in records:
+            if (not blocked[0] and isinstance(projected.get('fields'), dict)
+                    and all(isinstance(projected.get(key), str) and projected[key]
+                            for key in ('stage', 'stock_code', 'emitted_at'))):
+                encoded = json.dumps(projected, ensure_ascii=False) + '\n'
+                if len(encoded.encode('utf-8')) <= 64 * 1024:
+                    receipt['oversized_projected_rows'] = receipt.get('oversized_projected_rows', 0) + 1
+                    receipt['oversized_projection_contract'] = 'quantity_execution_fields_v1'
+                    yield encoded
+                    continue
             affected = receipt.setdefault('oversized_in_cohort_record_ids', [])
             if identity['record_id'] not in affected:
                 affected.append(identity['record_id'])

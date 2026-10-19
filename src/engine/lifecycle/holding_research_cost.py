@@ -49,15 +49,32 @@ def historical_registry_generation_matches(path, generation, source_date):
                 return False
             events = OrderOwnerRegistry(path).verified_events_snapshot(max_bytes=MAX_REGISTRY_BYTES)
             count = sum(bool(line.strip()) for line in prefix.splitlines())
+            # Native terminal-reconciliation rows refer to an existing intent
+            # and omit its date/owner. Global retired-owner disposition also
+            # has no order date. Fold the sealed prefix through its native
+            # projection instead of treating these valid events as bad dates.
+            state = OrderOwnerRegistry._state(events[:count])
             historical_owners = {
-                row.get('owner_id') for row in events[:count]
+                row.get('owner_id') for row in state.values()
                 if date.fromisoformat(row['order_date']) <= cutoff
             }
             for row in events[count:]:
-                if (date.fromisoformat(row['order_date']) <= cutoff
-                        or not row.get('owner_id') or row['owner_id'] in historical_owners
-                        or row.get('side') not in {'BUY', 'SELL'}):
+                resolved = row
+                if row.get('event') == 'TERMINAL_RECONCILIATION_RECORDED':
+                    from src.trading.order.owner_custody_registry import _terminal_proof
+                    current = state[row['intent_id']]
+                    proof = row['terminal_reconciliation']
+                    if (current.get('state') != 'ORDER_TERMINAL'
+                            or row.get('account_key') != current.get('account_key')
+                            or proof != _terminal_proof(current, proof['receipt_sha256'])):
+                        return False
+                    resolved = {**current, **row}
+                if (date.fromisoformat(resolved['order_date']) <= cutoff
+                        or not resolved.get('owner_id') or resolved['owner_id'] in historical_owners
+                        or resolved.get('side') not in {'BUY', 'SELL'}):
                     return False
+                if row.get('intent_id'):
+                    state.setdefault(row['intent_id'], {}).update(row)
         return source_stat(path.stat()) == source_stat(before)
     except (OSError, ValueError, KeyError, TypeError, OwnerRegistryError):
         return False

@@ -43,7 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-19`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
-  - 10/19 10:22 기동 관측기: lock 대기로 producer가 미실행인데 source-only 보고서를 게시하여 현재 full 보고서를 덮은 결함을 수리한다. 미실행은 원 deadline 실패로 남기며 게시하지 않고, 실제 생성 실패의 진단과 첫 detector의 검증은 유지한다. 현재 PID 보고서 복구 후 수정 코드·다음 PID의 첫 health를 검증한다. [검토](../audits/preopen-alert-repair-2026-10-19.md).
+  - 10/19 10:22 기동 관측기: lock 대기로 producer가 미실행인데 source-only 보고서를 게시하여 현재 full 보고서를 덮은 결함을 수리한다. 미실행은 원 deadline 실패로 남기며 게시하지 않고, 실제 생성 실패의 진단과 첫 detector의 검증은 유지한다. 820b422df/PID625590의10:32:26 첫 자연 full health에서 해당 ERROR 해소·full 보고서 보존을 확인했다. 기존 원천·경제성 경고는 별도 OPEN이다. [검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 10/19 09:30 observer 수리: 이전 PID 스캐너 사건은 exact 원본 해시/6필드/actor/출생시각으로만 현재 health에서 분리하고 원 active/경제성 결손을 보존한다. native 입력 deadline의 안전한 무호출·무주문 DROP은 지연 차단 진단으로 유지한다. 실제09:30 격리 재검증은 warning이며 live 배포/PID/자연 detector 수용은 별도 확인한다. [검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 첫 장중 코드 전환은 이미 소비된 prepared delay의 원 commit과 source를 사전검증하고 drain 후 selector 게시 전에 정식 영수증을 승계한다. 실패 시 새 선택/기동을 진행하지 않으며 기존 정책 수치와 원 PREOPEN을 유지한다.
   - 코드 전환 뒤 trailing 연구의 현재성은 원 PREOPEN holding 원문을 유지한 별도 native 재검증 영수증으로 확인한다. 날짜·scope·원 parent policy 일치, 새 전체 원천/산술 검증, 현재 코드/세대 결속이 필수이며 보고서 전용 영수증은 runtime apply 권한이 아니다. 재기동 observer는 기준일 raw inode 변경을 정식 요약 재생성 후 다시 검증한다.
@@ -93,6 +93,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
+  - 10:50 후속: 큰 실행 행의 bounded 필드 복원·이월 snapshot의 native SHA 검증 후 부분 디코드·과거 registry prefix의 날짜 없는 native 대사 이벤트를 수리했다. 431+3,132회귀 PASS와 정식 완료 prefix→fact→수량 재생성/현재 trailing 연구/PID 수용은 분리한다. [진행 근거](../audits/preopen-alert-repair-2026-10-19.md#1050-원천-계약-경보-후속-수리).
   - 10:01 후속: 이월 snapshot 전체 디코드로 인한 swap/I/O 경보와 SELL 재관측 중복 판정을 함께 수리한다. 연구 비용3건의 격리 복원·475회귀 통과와 운영 재생성/PID 수용을 분리하며 원 비용·custody·정책 결속 결손은 유지한다. [후속 근거](../audits/preopen-alert-repair-2026-10-19.md#1001-io-경보와-수량-원천-후속-수리).
   - 10/19 추가 경고: 기존 완료13건의 비용/수량 결손과 운영 research-cost index 부재를 확인했다. native completion prefix→fact→quantity를 재생성하고 연구 배분/실제 비용/복구 불가 결손을 구분한다. [실행 검토](../audits/preopen-alert-repair-2026-10-19.md).
   - 재개 근거: [10/17 수량 정밀 점검](../audits/initial-quantity-runtime-postclose-result-review-2026-10-17.md)의 IQ171~IQ175와 [전체 장후 후속 수리](../audits/postclose-complete-semantic-repair-2026-10-17.md). 기존 계획의 완료 이력은 보존하고 새로 재현된 producer/consumer·유효 빈 모집단 오판만 재개한다.

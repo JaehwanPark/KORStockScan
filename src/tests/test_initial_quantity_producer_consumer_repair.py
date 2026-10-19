@@ -57,6 +57,71 @@ def test_oversized_relevant_row_marks_only_identified_trade_unusable(tmp_path):
     assert receipts[day]['oversized_in_cohort_record_ids']==['1']
 
 
+@pytest.mark.parametrize('late_identity', [False, True])
+@pytest.mark.parametrize('padding', ['x' * 150000, '\uac00' * 50000])
+def test_large_native_quantity_row_preserves_policy_fields(late_identity, padding):
+    import io
+    fields = dict(entry_execution_sizing_valid=True,
+                  entry_submit_attempt_id='attempt', entry_execution_sizing_plan_sha256='a'*64,
+                  position_sizing_policy_status='initial_policy_v2_loaded',
+                  position_sizing_policy_sha256='b'*64, initial_quantity_runtime_pid='123',
+                  initial_quantity_cap_research_context=json.dumps(_cap_context()),
+                  unused_context=padding)
+    fields.update({f'unused_{n}': n for n in range(300)})
+    row = dict(record_id=7, stock_code='005930', stage='entry_execution_sizing_plan',
+               emitted_at='2026-10-16T09:00:00+09:00', fields=fields)
+    if late_identity:
+        row = dict(reversed(list(row.items())))
+    receipt = {}
+    parsed = [json.loads(value) for value in policy._quantity_pipeline_rows(
+        io.StringIO(json.dumps(row, ensure_ascii=False)+'\n'), {'7': []}, receipt)]
+    assert len(parsed)==1 and parsed[0]['record_id']==7
+    assert parsed[0]['fields']=={k:v for k,v in fields.items() if k in policy._QUANTITY_PIPELINE_FIELDS}
+    assert receipt==dict(oversized_projected_rows=1, oversized_projection_contract='quantity_execution_fields_v1')
+
+
+def test_large_quantity_decision_keeps_exact_sent_fill_policy_join(tmp_path):
+    day='2026-10-08'
+    _quality(tmp_path,day)
+    pipeline=tmp_path/'pipeline_events';pipeline.mkdir()
+    path=pipeline/f'pipeline_events_{day}.jsonl'
+    def event(stage, clock, **fields):
+        return dict(record_id=1,stock_code='005930',stage=stage,emitted_at=day+'T'+clock+'+09:00',fields=fields)
+    identity=dict(entry_submit_attempt_id='exact-attempt',entry_execution_sizing_plan_sha256='a'*64)
+    events=[event('entry_execution_sizing_plan','09:29:59',**identity,
+                  entry_execution_sizing_valid=True,position_sizing_policy_status='initial_policy_v2_loaded',
+                  position_sizing_policy_sha256='b'*64,initial_quantity_runtime_pid='123'),
+            event('order_leg_sent','09:29:59.500000',**identity,tag='entry_leg',
+                  actual_order_submitted=True,broker_order_no='11'),
+            event('position_rebased_after_fill','09:30:00',entry_mode='normal',
+                  fill_price=100000,fill_qty=1,order_no='11',execution_no='1',actual_execution_venue='KRX',
+                  broker_execution_observed_at=day+'T09:30:00+09:00')]
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    path.write_text(''.join(json.dumps(row)+'\n' for row in events))
+    expected=policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path)
+    events[0]['fields']['unused_large_context']='x'*200000
+    path.write_text(''.join(json.dumps(row)+'\n' for row in events))
+    receipts={}
+    actual=policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path,source_receipts=receipts)
+    assert actual==expected
+    joined=policy._paired_candidate(rows[0],actual['fact:1'],'parent')
+    assert joined['applied_policy_file_sha256']=='b'*64
+    assert joined['applied_policy_runtime_pid']=='123'
+    assert joined['policy_decision_stage']=='entry_execution_sizing_plan'
+    assert not actual['fact:1']['source_gap']
+    assert receipts[day]['oversized_projected_rows']==1
+
+
+def test_large_required_quantity_field_remains_an_identified_gap():
+    import io
+    row=dict(record_id=7,stock_code='005930',stage='entry_execution_sizing_plan',
+             emitted_at='2026-10-16T09:00:00+09:00',
+             fields=dict(initial_quantity_cap_research_context='x'*150000))
+    receipt={}
+    assert list(policy._quantity_pipeline_rows(io.StringIO(json.dumps(row)+'\n'),{'7':[]},receipt))==[]
+    assert receipt['oversized_in_cohort_record_ids']==['7']
+
+
 def test_native_fact_sync_preserves_null_real_zero_and_provenance(monkeypatch,tmp_path):
     from src.engine import strategy_position_performance_report as mod
     from src.engine.scalping import scale_in_split_order_plan as scale

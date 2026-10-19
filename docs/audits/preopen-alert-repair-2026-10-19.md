@@ -108,3 +108,13 @@ trailing 재생성 b2afe3d3…은20,840scope complete다. 기존 snapshot과 정
 수동 배포 후 native producer/lock 갱신 f51c8910…은 현재 PID full 관측을 게시했다. 같은 lock을 기다린 Main 기동 작업은 원150초 예산에서 producer 몫이 남지 않아 subprocess를 시작하지 않았는데75를 실제 실패로 해석했다.10:21:51 source_only3afdc4a4…가 빈 입력·필수 semantic 부재인 결과를 게시해 full 결과를 덮었고10:22:49 경보가 이를 탐지했다. 경보가 참조한 원 보고서와 기동 로그는 보존했다. 코드의 원인이며 정상 원천으로 재분류할 사안이 아니다.
 
 run의 미실행을None으로 구분해 producer가 시작되지 않았으면 deadline 실패/미게시로 반환한다. 실제 실행한 producer의0/1/75 경로와 source-only 실패 진단은 유지하고, 원150초·주문·정책·수동보유 가드는 바꾸지 않는다. retained 보고서의 현재PID·원천·semantic 여부는 기존 첫 detector가 검증한다.20개 scheduler 회귀는 미실행 시 기존 보고서 보존과 실제 실패 시 진단 게시를 확인했다.10:25:22 현재PID native 보고서를 복구한9f1b4fa4…는full/warning_pending, unmet_conditions0이다. 코드 배포/다음PID 수용은 별도 후속 영수증으로 기록한다.
+
+
+최종 수용:820b422dfe6daa896ec075f79bea0714c81465c9의 active/delay/stop/holding4개 native 검사와20개 scheduler 회귀, compile/diff/parser를 통과하고 ordered 전환을 완료했다.10:30:27 PID625590/start1793131의 실제 정책 소비와 bootstrap5c9cce5f… 보존을 확인했다. 기동 lock 대기가 다시 발생했지만 미실행 producer는 deadline 실패/producer_started=false/publication_attempted=false로 반환했고 현재 full0e77cd99… 보고서를 덮지 않았다.10:32:26 첫 자연 full detector는 artifact WARNING, process_health PASS이며 submission_bottleneck_monitor 오류가 없다. observer는 warning_pending/unmet0이고 스캐너 표본·원천 완전성은 미수용이다. I/O wait6.12%, available4,852.9MiB다. 원 수량·trailing·정책 검증·late cron·tmp 경고와 API_ERROR1개 log warning은 별도 잔여이며 전체GREEN을 주장하지 않는다. 근거: tmp/preopen-alert-repair-20261019/startup-observer-final-verification.json, startup-observer-final-native-health.json, startup-observer-final-native-observation.json.
+
+
+## 10:50 원천 계약 경보 후속 수리
+
+사용자 재지시 범위는 원천 계약 수리·정식 재생성·기존 정책을 보존하는 승인된 배포/재기동이다. 수량 연구가 64KiB 초과 실행 행을 통째로 버려 49340/49343/49345/49347/49351의 정책 결속을 잃는 것을 확인했다. 실행 소비 필드만 bounded projection으로 보존하고 필요한 필드 자체가 크거나 식별 불가하면 원 결손을 유지한다. 이월 보고서의 native manifest/원문 SHA를 모두 검증한 후 필요한 체결 timeline만 복원하며 전체 JSON 디코드를 피한다. 2026-10-15 원문 2,024,840,392B의 SHA c3a479611331319c335cf54b7b95913087fd7214d4f5b3def57bc30ae07c0864, 4개 보유 기록을 20.982초에 검증했다. 청크 중간 들여쓰기의 가짜 root 판독도 회귀로 차단했다.
+
+과거 원장 prefix는 native state fold로 날짜 없는 terminal reconciliation을 원 intent에 연결한다. 이미 봉인된 retired manual disposition은 보존하고, 이후 과거 owner/date 변경·신규 전역 disposition·알 수 없는 intent·증명 불일치는 거부한다. 관련 원천/현재성 431개, handoff/배포/검출기 3,132개 회귀가 통과했다. 새 코드 네 파일은 기존 전체 의존 세대의 정확한 후속으로 함께 고정하며 원 정책 해시를 바꾸지 않는다. 정식 재생성과 새 PID/검출기 수용은 아직 검증 중이다. 실제 비용 null과 원래 custody/체결 결손을 비용 0이나 가짜 완료로 바꾸지 않는다. 근거: tmp/artifact-source-repair-20261019-1050/.

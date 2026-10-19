@@ -1638,6 +1638,32 @@ REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS = {
 }
 
 
+# Exact reviewed historical-source repair. A single complete successor binds
+# bounded carry reads, quantity event projection and native registry folding.
+REVIEWED_ARTIFACT_SOURCE_HASHES = {'src/engine/log_archive_service.py': 'fd5cb478cb40b70ee2dd7fdcc5bc1ef18afa7cef1659e6be9eaaabab1084eca4',
+ 'src/engine/scalping/initial_quantity_policy.py': 'a6e57b600500e10b20ebf1ca2ac097a2433fbd5f8696e28f8ec1ef97601b627a',
+ 'src/engine/sniper_trade_review_report.py': '1c8ad45cc988a038935b3b7beab8e9ad9cc26257ea1c3597588e7802c2446adb',
+ 'src/engine/lifecycle/holding_research_cost.py': '12e76859310d617dc7cdb2c0f758f935f8d7c6619c76cdf02f92aefa92a0627a'}
+REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/log_archive_service.py',
+        'selector_sha256': REVIEWED_ARTIFACT_SOURCE_HASHES['src/engine/log_archive_service.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_ARTIFACT_SOURCE_HASHES},
+        'contract_extensions': {origin: {path: REVIEWED_ARTIFACT_SOURCE_HASHES.get(path, sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_ARTIFACT_SOURCE_PAIRS = {
+    'src/engine/log_archive_service.py': tuple((origin, REVIEWED_ARTIFACT_SOURCE_HASHES['src/engine/log_archive_service.py'])
+        for origin in ('a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
+                       'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
+                       'f3350ab07429f263dd16e534becccfbe47bb87c62cc97b1b43f096043743aad4')),
+    'src/engine/lifecycle/holding_research_cost.py': tuple((origin, REVIEWED_ARTIFACT_SOURCE_HASHES['src/engine/lifecycle/holding_research_cost.py'])
+        for origin in ('ef309953ea56261e38e1238ed2c61a4bcbd5e77f61677ee01fa30433bc077dd3',
+                       '07bfb6b81c0f304df8c6418b0e056bda3f710d5897bdab26496ef5582a9d6b4e')),
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1691,7 +1717,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS,
+                         REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS,
                          REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS,
                          REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
                          REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS,
@@ -1732,7 +1759,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_PRIOR_SNAPSHOT_IO_PAIRS.get(name, ())
+        if (pair in REVIEWED_ARTIFACT_SOURCE_PAIRS.get(name, ())
+                or pair in REVIEWED_PRIOR_SNAPSHOT_IO_PAIRS.get(name, ())
                 or pair in REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_PARTIAL_SELL_RESEARCH_SOURCE_PAIRS.get(name, ())

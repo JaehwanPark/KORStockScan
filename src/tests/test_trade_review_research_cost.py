@@ -549,3 +549,69 @@ def test_native_handoff_accepts_reserve_bind_exact_full_fill_and_keeps_conflicti
     result=review._buy_parent_handoff_projection("2026-10-08",[sent],conflict,fills,[trade])
     assert result["counts"]["valid"]==0
     assert result["rows"][0]["state"]=="quarantined"
+
+
+def _large_prior_snapshot(tmp_path, *, compressed=False, fault=None):
+    import gzip
+    import hashlib
+    import json
+    from pathlib import Path
+    day='2026-10-15'
+    directory=tmp_path/'report/monitor_snapshots';directory.mkdir(parents=True)
+    logical=directory/f'trade_review_{day}.json'
+    event=dict(stage='position_rebased_after_fill',timestamp=day+' 09:00:00',
+               fields=dict(id='7',order_no='11',execution_no='1',fill_qty=2,fill_price=100))
+    if fault=='field_order':event=dict(fields=event['fields'],stage=event['stage'],timestamp=event['timestamp'])
+    row=dict(id=7,code='005930',name='test',avg_down_rebound_blocker_summary=[],
+             timeline=[dict(stage='irrelevant_source',timestamp=day+' 09:00:00',fields={'unused':'x'*100000}),event])
+    snapshot=dict(date=day,meta={'warnings':[]},metrics=dict(
+        open_scalp_position_projection_status='current_db_census',
+        open_scalp_position_projection_count=1),sections=dict(
+        unused_body='x'*(9*1024*1024),nested={'artificial_root': 1},
+        open_scalp_position_projection=[row]))
+    # Place a nested key two spaces before the streaming overlap. Without a
+    # boundary sentinel its remaining indentation looks like a root key.
+    probe=json.dumps(snapshot,ensure_ascii=False,indent=2).encode('utf-8')
+    key_at=probe.index(b'      "artificial_root"')
+    delta=((1024*1024-256-4)-key_at)%(1024*1024)
+    snapshot['sections']['unused_body']+='x'*delta
+    if fault=='duplicate_id':
+        snapshot['sections']['open_scalp_position_projection'].append(deepcopy(row))
+        snapshot['metrics']['open_scalp_position_projection_count']=2
+    body=json.dumps(snapshot,ensure_ascii=False,indent=2).encode('utf-8')
+    physical=Path(str(logical)+'.gz') if compressed else logical
+    physical.write_bytes(gzip.compress(body) if compressed else body)
+    manifest=directory/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps(dict(target_date=day,profile='postclose_exit',
+        snapshot_paths={'trade_review':str(logical)},snapshot_sha256={'trade_review':
+            '0'*64 if fault=='hash' else hashlib.sha256(body).hexdigest()})))
+    if fault=='manifest_missing':manifest.unlink()
+    return snapshot,physical,manifest
+
+
+@pytest.mark.parametrize('compressed',[False,True])
+def test_large_prior_native_projection_preserves_fill_without_full_snapshot(tmp_path,monkeypatch,compressed):
+    snapshot,path,manifest=_large_prior_snapshot(tmp_path,compressed=compressed)
+    monkeypatch.setattr(review,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(review,'load_monitor_snapshot',lambda *a:pytest.fail('full large snapshot decode'))
+    events,receipts=review._prior_entry_fill_events(
+        [dict(id=7,rec_date='2026-10-15',status='COMPLETED')],'2026-10-16')
+    assert len(events['7'])==1 and events['7'][0].fields['execution_no']=='1'
+    receipt=receipts['2026-10-15']
+    assert receipt['status']=='sealed_entry_snapshot'
+    assert receipt['schema']=='prior_entry_fill_projection_v1'
+    assert receipt['source_path']==str(path) and receipt['manifest_path']==str(manifest)
+    assert len(receipt['source_decoded_sha256'])==64 and len(receipt['projection_sha256'])==64
+    assert 'logical_sha256' not in receipt
+
+
+@pytest.mark.parametrize('fault',['hash','manifest_missing','field_order','duplicate_id'])
+def test_large_prior_projection_never_promotes_invalid_provenance_or_census(tmp_path,monkeypatch,fault):
+    _large_prior_snapshot(tmp_path,fault=fault)
+    monkeypatch.setattr(review,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(review,'load_monitor_snapshot',lambda *a:pytest.fail('invalid source cannot trigger full decode'))
+    events,receipts=review._prior_entry_fill_events(
+        [dict(id=7,rec_date='2026-10-15',status='COMPLETED')],'2026-10-16')
+    assert not events
+    assert receipts['2026-10-15']['status']!='sealed_entry_snapshot'

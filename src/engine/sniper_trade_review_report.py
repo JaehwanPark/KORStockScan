@@ -3366,7 +3366,14 @@ def _prior_entry_fill_events(
         if rejected is not None:
             receipts[prior_date] = {"status": rejected}
             continue
-        snapshot = load_monitor_snapshot("trade_review", prior_date)
+        from src.engine.log_archive_service import load_prior_entry_projection
+        try:
+            projection = load_prior_entry_projection(prior_date, data_root=DATA_DIR)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            receipts[prior_date] = {"status": "source_gap_entry_snapshot_provenance", "reason": str(exc)}
+            continue
+        snapshot, projection_receipt = projection if projection is not None else (
+            load_monitor_snapshot("trade_review", prior_date), None)
         if not isinstance(snapshot, dict) or snapshot.get("date") != prior_date:
             receipts[prior_date] = {"status": "source_gap_entry_snapshot_missing"}
             continue
@@ -3384,12 +3391,9 @@ def _prior_entry_fill_events(
                 or _safe_int(metrics.get("open_scalp_position_projection_count"), -1) != len(rows)):
             receipts[prior_date] = {"status": "source_gap_entry_snapshot_census"}
             continue
-        receipts[prior_date] = {
-            "status": "sealed_entry_snapshot",
-            "logical_sha256": hashlib.sha256(json.dumps(
-                snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")).hexdigest(),
-        }
+        receipts[prior_date] = {"status": "sealed_entry_snapshot", **(projection_receipt or {
+            "logical_sha256": hashlib.sha256(json.dumps(snapshot, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()})}
         for row in rows:
             trade_id = str(row["id"])
             blocker_summary = row.get("avg_down_rebound_blocker_summary")

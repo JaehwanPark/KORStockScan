@@ -139,6 +139,167 @@ def prior_entry_snapshot_rejection(target_date: str, *, data_root: Path = DATA_D
     return None
 
 
+def load_prior_entry_projection(target_date: str, *, data_root: Path = DATA_DIR):
+    """Read a large, native-manifest-bound carry census without its full body.
+
+    The producer's exact byte hash grants provenance before the structural
+    timeline projection. The receipt names decoded source bytes explicitly;
+    it never claims the legacy canonical whole-object logical digest.
+    """
+    import codecs
+    import io
+    import re
+    import stat
+    from src.engine.lifecycle.research_json_stream import Reader
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    root = Path(data_root).resolve()
+    logical = root / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
+    path = logical if logical.exists() else Path(str(logical) + '.gz')
+    manifest_path = logical.parent/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
+    if not path.exists() or (path.stat().st_size <= 8 * 1024 * 1024
+            and not (path.suffix == '.gz' and manifest_path.exists())):
+        return None
+    for source in (path, manifest_path):
+        if source.is_symlink() or any(parent.is_symlink() for parent in source.parents):
+            raise ValueError('prior_entry_projection_source_symlink')
+    before, manifest_before = path.stat(), manifest_path.stat()
+    if (not stat.S_ISREG(before.st_mode) or not stat.S_ISREG(manifest_before.st_mode)
+            or manifest_before.st_size > 65536):
+        raise ValueError('prior_entry_projection_source_unbounded')
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    expected = (manifest.get('snapshot_sha256') or {}).get('trade_review')
+    if (manifest.get('target_date') != target_date or manifest.get('profile') != 'postclose_exit'
+            or (manifest.get('snapshot_paths') or {}).get('trade_review') != str(logical)
+            or not re.fullmatch('[0-9a-f]{64}', str(expected or ''))):
+        raise ValueError('prior_entry_projection_manifest_invalid')
+    pattern = re.compile(rb'(?m)^  "([^"\\\r\n]{1,128})":|^    "open_scalp_position_projection": \[')
+    keys, arrays, seen = [], [], set()
+    sha, offset, tail = hashlib.sha256(), 0, b''
+    allowed = {'position_rebased_after_fill', 'scale_in_executed',
+        'avg_down_shared_rebound_signal', 'holding_path_signal_snapshot',
+        'scale_in_order_submitted', 'scale_in_order_leg_submitted',
+        'entry_buy_order_terminal_confirmed', 'scale_in_buy_order_terminal_confirmed',
+        'sell_partial_fill_progress', 'nxt_rising_missed_tp1_partial_fill_progress',
+        'nxt_rising_missed_tp1_partial_sell_completed'}
+    projected_bytes = [0]
+    def event(reader):
+        item = {}
+        def field(key, source):
+            if key in {'stage', 'timestamp'}:
+                item[key] = source.value(4096)
+            elif key == 'fields':
+                if 'stage' not in item:
+                    raise ValueError('prior_entry_projection_timeline_field_order_invalid')
+                if item['stage'] in allowed:
+                    item[key] = source.value(2 * 1024 * 1024)
+                else:
+                    source.skip()
+            else:
+                source.skip()
+            return iter(())
+        for _ in reader.fields(field):
+            pass
+        return item if item.get('stage') in allowed else None
+    def position(reader):
+        row = {}
+        def field(key, source):
+            if key in {'id', 'name', 'code'}:
+                row[key] = source.value(4096)
+            elif key == 'avg_down_rebound_blocker_summary':
+                row[key] = source.value(256 * 1024)
+            elif key == 'timeline':
+                row[key] = []
+                for item in source.array(event):
+                    if item is not None:
+                        projected_bytes[0] += len(json.dumps(item, ensure_ascii=False).encode('utf-8'))
+                        if projected_bytes[0] > 16 * 1024 * 1024:
+                            raise ValueError('prior_entry_projection_event_budget')
+                        row[key].append(item)
+            else:
+                source.skip()
+            return iter(())
+        for _ in reader.fields(field):
+            pass
+        projected_bytes[0] += len(json.dumps({k:v for k,v in row.items() if k != 'timeline'},
+                                             ensure_ascii=False).encode('utf-8'))
+        if projected_bytes[0] > 16 * 1024 * 1024:
+            raise ValueError('prior_entry_projection_event_budget')
+        return row
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as raw:
+        if source_stat(os.fstat(raw.fileno())) != source_stat(before):
+            raise ValueError('prior_entry_projection_source_changed')
+        stream = gzip.GzipFile(fileobj=raw) if path.suffix == '.gz' else raw
+        try:
+            while block := stream.read(1024 * 1024):
+                sha.update(block)
+                # An overlap can start inside an indented JSON line. Prefix a
+                # non-newline byte so that its artificial start is never
+                # mistaken for a root key by the multiline anchors.
+                chunk = b'\x00' + tail + block
+                base = offset - len(tail) - 1
+                for match in pattern.finditer(chunk):
+                    absolute = base + match.start()
+                    if absolute in seen:
+                        continue
+                    seen.add(absolute)
+                    if match.group(1) is not None:
+                        keys.append((absolute, match.group(1).decode('ascii')))
+                        if len(keys) > 256:
+                            raise ValueError('prior_entry_projection_root_budget')
+                    else:
+                        arrays.append(base + match.end() - 1)
+                offset += len(block)
+                tail = chunk[-256:]
+            if sha.hexdigest() != expected:
+                raise ValueError('prior_entry_projection_source_hash_invalid')
+            sections = [at for at, key in keys if key == 'sections']
+            if len(sections) != 1:
+                raise ValueError('prior_entry_projection_sections_invalid')
+            upper = min((at for at, _ in keys if at > sections[0]), default=offset)
+            targets = [at for at in arrays if sections[0] < at < upper]
+            if len(targets) != 1:
+                raise ValueError('prior_entry_projection_array_invalid')
+            stream.seek(0)
+            prefix = codecs.getincrementaldecoder('utf-8')().decode(stream.read(256 * 1024), final=False)
+            header_reader = Reader(io.StringIO(prefix))
+            header = {}
+            def header_field(key, source):
+                if key in {'date', 'meta', 'metrics'}:
+                    yield key, source.value(256 * 1024)
+                else:
+                    source.skip()
+            for key, value in header_reader.fields(header_field):
+                header[key] = value
+                if set(header) == {'date', 'meta', 'metrics'}:
+                    break
+            if set(header) != {'date', 'meta', 'metrics'}:
+                raise ValueError('prior_entry_projection_header_invalid')
+            stream.seek(targets[0])
+            text = io.TextIOWrapper(stream, encoding='utf-8')
+            try:
+                rows = []
+                for row in Reader(text).array(position):
+                    if len(rows) >= 10000:
+                        raise ValueError('prior_entry_projection_census_budget')
+                    rows.append(row)
+            finally:
+                text.detach()
+        finally:
+            if stream is not raw:
+                stream.close()
+    if (source_stat(path.stat()) != source_stat(before)
+            or source_stat(manifest_path.stat()) != source_stat(manifest_before)):
+        raise ValueError('prior_entry_projection_source_changed')
+    snapshot = {**header, 'sections': {'open_scalp_position_projection': rows}}
+    receipt = dict(schema='prior_entry_fill_projection_v1', source_decoded_sha256=expected,
+        source_decoded_bytes=offset, source_path=str(path),
+        manifest_path=str(manifest_path), manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        projection_sha256=hashlib.sha256(json.dumps(snapshot, ensure_ascii=False,
+            sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest())
+    return snapshot, receipt
+
+
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     from src.engine.infrastructure.research_release_transition import journal_active
     if kind=='trade_review' and journal_active():

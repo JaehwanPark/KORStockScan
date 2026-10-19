@@ -83,6 +83,44 @@ def test_closed_registry_prefix_accepts_only_unrelated_future_owners(tmp_path, m
             assert prepared.sources[str(path)] == generation
 
 
+
+@pytest.mark.parametrize('case', ['prefix_terminal', 'prefix_retirement', 'future_terminal',
+    'historical_terminal', 'orphan_terminal', 'changed_proof', 'new_retirement'])
+def test_registry_prefix_resolves_native_dateless_events_without_ignoring_new_custody(tmp_path, monkeypatch, case):
+    from datetime import date, timedelta
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerOrderContext, _terminal_proof
+    data, _, trade, _ = fixture(tmp_path, monkeypatch)
+    path = data/'runtime/order_owner_registry.jsonl'
+    ledger = OrderOwnerRegistry(path)
+    historical = next(iter(ledger._state(ledger.verified_events_snapshot()).values()))
+    ledger.transition(historical['intent_id'], state='ORDER_TERMINAL', broker_order_no=historical['broker_order_no'])
+    def reconcile(intent, changed=False):
+        events = ledger.verified_events_snapshot()
+        current = ledger._state(events)[intent]
+        proof = _terminal_proof(current, 'a'*64)
+        if changed: proof['order_date'] = '2000-01-01'
+        ledger._append_locked(events, dict(event='TERMINAL_RECONCILIATION_RECORDED',
+            intent_id=intent, account_key=current['account_key'], terminal_reconciliation=proof))
+    if case == 'prefix_terminal': reconcile(historical['intent_id'])
+    if case == 'prefix_retirement': ledger.retire_automatic_owners_to_manual()
+    generation = adapter.byte_generation(path)
+    future = (date.fromisoformat(DAY)+timedelta(days=1)).isoformat()
+    context = OwnerOrderContext(owner_type='main_scalping',owner_id='main_scalping:2',
+        position_id='main_scalping:2',client_intent_id='future-owner')
+    intent = ledger.reserve(context=context,symbol=trade['code'],side='BUY',quantity=1,
+                            route='KRX',order_date=future)
+    ledger.transition(intent,state='ORDER_BOUND',broker_order_no='0000222')
+    ledger.transition(intent,state='ORDER_TERMINAL',broker_order_no='0000222')
+    if case in {'future_terminal', 'changed_proof'}: reconcile(intent, case=='changed_proof')
+    elif case == 'historical_terminal': reconcile(historical['intent_id'])
+    elif case == 'new_retirement': ledger.retire_automatic_owners_to_manual()
+    elif case == 'orphan_terminal':
+        ledger._append_locked(ledger.verified_events_snapshot(),dict(event='TERMINAL_RECONCILIATION_RECORDED',
+            intent_id='unknown',account_key='test_account',terminal_reconciliation={}))
+    assert adapter.historical_registry_generation_matches(path,generation,DAY) is (
+        case in {'prefix_terminal','prefix_retirement','future_terminal'})
+
+
 def test_native_registry_allocation_and_raw_source_are_bound_without_actual_mutation(tmp_path,monkeypatch):
     data,costs,trade,receipt = fixture(tmp_path,monkeypatch)
     original=deepcopy(trade);before=budget.health()['used_bytes']
