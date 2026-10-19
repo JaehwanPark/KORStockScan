@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[SubmissionMonitorSyncLineage1019] 제출병목 관측기의 동기 요청 신원 결속 수리·후속 반영` (`Due: 2026-10-19`, `Slot: INTRADAY`, `TimeWindow: 코드 리뷰 종결 후 승인된 후속 배포 시`, `Track: RuntimeStability`)
+  - 15:11 적용 수용: e200a7216/PID1307428/start3456859 ordered complete,15:08:02 startup reader verified 및 자연 process/log PASS다. 현재 actor observer는 partial/warning_pending/unmet0, full artifact는 I/O 경합으로 보류했다. trailing bounded 현재성 정상·quantity 실제 비용/terminal5건·pipeline 최초 legacy prefix 이관·자연 제출 개선 수용은 각각 별도 OPEN으로 유지한다. [실행 근거](../../tmp/artifact-source-repair-20261019-1050/consumer-retry-final-verification.json).
   - 14:52 추가 수리: 런처 PID 영수증 selector 게시와 최초 consumer 서명 검증의 경합을 확인했다. 실패 pass를 폐기한 전체 native 검증1회 재시도·기존 평가 뷰/실제 source 오류 거부를 검증하고2576 PASS다. 현재 정책·original PREOPEN 및 frozen reader는 보존하며 새 PID의 startup verified를 별도 확인한다. [검토](../audits/preopen-alert-repair-2026-10-19.md#1452-main-policy-startup-selector-race).
   - 10/19 추가 사용자 구현 지시: raw 관측기는 writer-owned minute/원 ID 색인을 소비하고,50ms local-depth sampler로 짧은 horizon을 수집한다. PASS 최종 검증의 중복 정책 복사를 제거하고 현재 pointer/revocation·원5초·계좌/수량/호가/전송 guard를 유지한다. 코드 검증과 자연 PASS→실제 제출·원천 결손 해소는 분리한다. [검토](../audits/preopen-alert-repair-2026-10-19.md#trailing-재생성의-대용량-반복-읽기).
   - Source: 사용자08:30까지 제출병목 모니터링 지시, [source-only 수리 검토](../audits/submission-monitor-sync-lineage-review-2026-10-19.md).
