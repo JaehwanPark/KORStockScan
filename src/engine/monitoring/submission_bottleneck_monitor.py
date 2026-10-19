@@ -760,6 +760,37 @@ def _reversal_lifecycle_diagnostic(row):
 
 
 
+def _entry_input_deadline_guard(row):
+    """A fully identified pre-provider deadline rejection is a latency miss."""
+    at = stamp(row.get('decision_ts'))
+    captured = stamp(row.get('input_source_clock_captured_at'))
+    deadline = row.get('async_origin_deadline_epoch')
+    return (row.get('schema') == 'ai_decision_trace_v1'
+        and row.get('decision_stage') == 'entry_screen'
+        and row.get('machine_evaluation_status') == 'assessment_contract_invalid'
+        and row.get('machine_contract_error') == 'entry_machine_input_deadline_expired'
+        and row.get('machine_source_gap_kind') in (None, '', 'entry_machine_input_deadline_expired')
+        and row.get('decision_evaluation_status') == 'not_evaluated_provider_or_preflight'
+        and row.get('result_source') == 'mechanistic_pre_adjudication_rejected'
+        and row.get('action') == 'DROP' and row.get('reason') == 'mechanistic_input_contract_invalid'
+        and all(row.get(k) is False for k in ('provider_called', 'actual_order_submitted',
+                                            'runtime_effect', 'allowed_runtime_apply'))
+        and row.get('broker_order_forbidden') is True
+        and row.get('machine_observation_sha256') is None
+        and row.get('request_capture_status') == 'missing'
+        and _row_actor(row) is not None
+        and all(isinstance(row.get(k), str) and 0 < len(row[k]) <= 256
+                and row[k].lower() not in {'none','null','unknown','-','0'}
+                for k in ('evaluation_attempt_id','decision_trace_id','async_request_id',
+                          'effective_venue','session_bucket','market_data_route'))
+        and isinstance(row.get('machine_bundle_sha256'), str)
+        and re.fullmatch('[0-9a-f]{64}', row['machine_bundle_sha256']) is not None
+        and type(deadline) in (int,float) and math.isfinite(deadline)
+        and at is not None and captured is not None
+        and captured.timestamp() <= deadline <= at.timestamp()
+        and 0 <= (at-captured).total_seconds() <= SOURCE_WINDOW_SEC)
+
+
 def _native_preassessment_terminal_valid(row, actor, bundle):
     """Recheck the original rejected claim; missing observations stay missing."""
     proof = row.get('native_preassessment_terminal')
@@ -1404,7 +1435,8 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
             if kind.startswith("Out of range float values are not JSON compliant:"):
                 kind = "machine_source_nonfinite"
             record("machine_trace", kind, row,
-                   diagnostic=bool(lifecycle) or kind == "trusted_tape_source_insufficient")
+                   diagnostic=bool(lifecycle) or _entry_input_deadline_guard(row)
+                              or kind == "trusted_tape_source_insufficient")
         elif row.get("machine_contract_error"):
             kind = str(row.get("machine_source_gap_kind") or row["machine_contract_error"])
             record("machine_trace", kind, row,
@@ -3090,7 +3122,73 @@ def _verified_machine_role_partition(partition, actor, now, bundle, n, invalid, 
     except (KeyError,TypeError,ValueError,AttributeError):return None
 
 
-def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
+def _scanner_observation_identity(observation):
+    """Exact native scanner identity; no symbol/time inference or validity claim."""
+    from src.engine.buy_funnel_sentinel import _canonical_session
+    context = observation.get('label_context')
+    if not isinstance(context, dict):
+        return None
+    parts = [observation.get('scanner_promotion_id'), context.get('evaluation_attempt_id'),
+             context.get('stock_code'), context.get('effective_venue'),
+             context.get('session_bucket'), observation.get('bundle_sha256')]
+    if (any(not isinstance(v, str) or not 0 < len(v) <= 256 or '|' in v
+            or v.lower() in {'none', 'null', 'unknown', '-', '0'} for v in parts)
+            or context.get('scanner_promotion_id') != parts[0]
+            or observation.get('watch_origin') == 'MAIN_FIXED_WATCH'):
+        return None
+    parts[3] = parts[3].upper()
+    parts[4] = _canonical_session(parts[4])
+    return 'machine:' + '|'.join(parts)
+
+
+def _historical_scanner_incident(incident_key, incident, observations, actor, birth, now):
+    """Prove prior-process membership, preserving unresolved source/economics."""
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    if (not isinstance(incident, dict) or not isinstance(observations, dict)
+            or len(observations) > 32 or len(_json_bytes(observations)) > 512*1024
+            or not actor or birth is None or now is None
+            or incident.get('rule') not in {'economic_producer_gap', 'source_or_submit_lineage_gap'}
+            or incident.get('category') != 'structural_evidence'
+            or incident.get('status') not in {'active', 'pending', 'historical_unresolved'}):
+        return False
+    ids = incident.get('evidence_ids')
+    scope = incident.get('scope')
+    if (not isinstance(scope, str) or not isinstance(ids, list) or not 0 < len(ids) <= 32
+            or any(not isinstance(v, str) for v in ids) or len(set(ids)) != len(ids)
+            or type(incident.get('count')) is not int or incident['count'] != len(ids)
+            or hashlib.sha256(f"{scope}|{incident['rule']}".encode()).hexdigest()[:24] != incident_key):
+        return False
+    for key in ids:
+        observation = observations.get(key)
+        if not isinstance(observation, dict):
+            return False
+        payload = _json_bytes(observation)
+        at = stamp(observation.get('captured_at'))
+        receipt = observation.get('runtime_consumption')
+        if (len(payload) > 128*1024 or observation.get('schema') != 'mechanistic_entry_observation_v1'
+                or observation.get('evaluation_role') != 'main_live'
+                or _scanner_observation_identity(observation) != key
+                or '|'.join(key.split('|')[-3:]) != scope
+                or at is None or at.date() != now.date() or not at.timestamp() < birth
+                or not isinstance(receipt, dict)):
+            return False
+        old_actor = [str(receipt.get(k) or '') for k in ('pid', 'process_start_ticks')]
+        if (not all(v.isdigit() and 0 < len(v) <= 20 and int(v) > 0 for v in old_actor)
+                or old_actor == actor or int(old_actor[1]) >= int(actor[1])
+                or receipt.get('bundle_sha256') != observation.get('bundle_sha256')
+                or stamp(receipt.get('consumed_at')) != at
+                or hashlib.sha256(_json_bytes({k:v for k,v in observation.items()
+                    if k != 'machine_observation_sha256'})).hexdigest() != observation.get('machine_observation_sha256')):
+            return False
+        native = receipt.get('continuous_reversal')
+        if isinstance(native, dict) and ([str(native.get(k) or '') for k in ('pid', 'process_start_ticks')] != old_actor
+                or stamp(native.get('captured_at')) != at):
+            return False
+    return True
+
+
+def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024, incident_evidence_ids=(),
+                      historical_scanner_observations=None, historical_scanner_conflicts=()):
     """Bounded receipt audit, not a replay, policy publisher or outcome estimator."""
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime
@@ -3152,6 +3250,18 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
     reversal_observations = []
     health_records = []
     pid_identities = {}
+    # Reuse this bounded native read. Include original signed observations,
+    # not an age-only exemption or a fabricated economic recovery receipt.
+    wanted = set(incident_evidence_ids) if len(incident_evidence_ids) <= 8192 else set()
+    historical, ambiguous = {}, set()
+    if isinstance(historical_scanner_conflicts, (list, tuple)) and len(historical_scanner_conflicts) <= 8192:
+        ambiguous = {v for v in historical_scanner_conflicts if isinstance(v, str) and v in wanted}
+    prior_observations = historical_scanner_observations
+    if (isinstance(prior_observations, dict) and len(prior_observations) <= 32
+            and len(_json_bytes(prior_observations)) <= 512*1024):
+        historical = {k:v for k,v in prior_observations.items()
+                      if k in wanted and k not in ambiguous and isinstance(v, dict)}
+    historical_bytes = len(_json_bytes(historical))
     try:
         with path.open("rb") as stream:
             before = os.fstat(stream.fileno())
@@ -3177,6 +3287,19 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                     continue
                 if not isinstance(observation, dict) or observation.get("schema") != "mechanistic_entry_observation_v1":
                     continue
+                evidence_id = _scanner_observation_identity(observation) if wanted else None
+                if evidence_id in wanted and evidence_id not in ambiguous:
+                    previous = historical.get(evidence_id)
+                    if previous is not None and previous != observation:
+                        historical.pop(evidence_id)
+                        ambiguous.add(evidence_id)
+                    elif previous is None:
+                        added_bytes = len(_json_bytes({evidence_id: observation}))
+                        if len(line) <= 128*1024 and historical_bytes + added_bytes <= 512*1024 and len(historical) < 32:
+                            historical[evidence_id] = observation
+                            historical_bytes += added_bytes
+                        else:
+                            ambiguous.add(evidence_id)
                 at = stamp(observation.get("captured_at"))
                 if not at or not 0 <= (now - at).total_seconds() <= WINDOW_SEC:
                     continue
@@ -3288,6 +3411,9 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
         if lineage.get('status') == 'partial_source_gap':
             result['provider_lineage_source_status'] = 'partial_source_gap'
     result['pid_identity_read_count'] = len(pid_identities)
+    if wanted:
+        result['historical_scanner_observations'] = historical
+        result['historical_scanner_conflicts'] = sorted(ambiguous)
     result["issues"] = dict(issues)
     if issues:
         result["status"] = "review_required"
@@ -3756,7 +3882,8 @@ def observation_health_projection(result):
     allowed_diagnostics.update('machine_trace:' + reason for reason in
         ('source_quality_blocked_before_assessment', 'required_feature_blocked_before_assessment'))
     allowed_diagnostics.update('machine_trace:' + reason for reason in
-        ('reversal_first_signal_invalidated', 'reversal_signal_generation_changed'))
+        ('reversal_first_signal_invalidated', 'reversal_signal_generation_changed',
+         'entry_machine_input_deadline_expired'))
     pending = obj(gap.get('native_pending_observations'))
     pending_n = obj(gap.get('observed')).get('probe_observation_incomplete', 0)
     valid_pending = (pending.get('schema') == 'submission_monitor_native_pending_census_v1'
@@ -4219,6 +4346,14 @@ def observation_health_projection(result):
             incident = obj(incident)
             status = incident.get('status')
             last = clock(incident.get('last_seen'))
+            scanner_birth = (_verified_health_actor_birth(projections[0].get('actor_birth_proof'),
+                actor, now, result.get('observer_generation')) if actor and now else None)
+            if (last is not None and now is not None and last <= now
+                    and _historical_scanner_incident(incident_key, incident,
+                        obj(result.get('machine_semantics')).get('historical_scanner_observations'),
+                        actor, scanner_birth, now)):
+                historical_incident_keys.add(incident_key)
+                continue
             owner = {'machine_auxiliary_intraday_source_gap':0, 'machine_policy_receipt_contract':1}.get(incident_key)
             birth_lower = (_verified_health_actor_birth(projections[owner].get('actor_birth_proof'),
                 actor, now, result.get('observer_generation')) if actor and owner is not None and now else None)
@@ -4563,6 +4698,9 @@ def attach_entry_execution_tuning_semantics(result, semantics):
 def attach_machine_semantics(result, semantics):
     """Persistent report-only receipt faults; absence never repairs old evidence."""
     result["machine_semantics"] = semantics
+    if 'historical_scanner_observations' in semantics:
+        result['historical_scanner_observations'] = semantics['historical_scanner_observations']
+        result['historical_scanner_conflicts'] = semantics.get('historical_scanner_conflicts', [])
     health = semantics.get('current_health_cohort')
     if isinstance(health, dict) and isinstance(health.get('view'), dict):
         semantics = health['view']
@@ -5239,7 +5377,8 @@ def _load_state(path):
 def _continuation_state(result):
     """Keep exact incident/cursor custody; bulky observations live in reports."""
     return dict({key:result[key] for key in ('schema','date','as_of','run_id','incidents',
-        'source_as_of','last_notification_at','pre_submit_delay_source_cursor') if key in result},
+        'source_as_of','last_notification_at','pre_submit_delay_source_cursor',
+        'historical_scanner_observations','historical_scanner_conflicts') if key in result},
         persistence_schema='submission_monitor_continuation_v1')
 
 
@@ -5295,6 +5434,9 @@ def main(argv=None):
             prior = _load_state(state_path)
             result = evaluate({} if args.source_only or args.delay_source_only else report,
                               prior, current)
+            if 'historical_scanner_observations' in prior:
+                result['historical_scanner_observations'] = prior['historical_scanner_observations']
+                result['historical_scanner_conflicts'] = prior.get('historical_scanner_conflicts', [])
             result["run_id"] = run_id
             result["execution_mode"] = ('delay_source_only' if args.delay_source_only else
                                         'source_only' if args.source_only else 'full')
@@ -5309,7 +5451,12 @@ def main(argv=None):
                     ("entry_execution_tuning_semantics", attach_entry_execution_tuning_semantics,
                      lambda: entry_execution_tuning_semantics(PROJECT_ROOT / "data", result["as_of"])),
                     ("machine_semantics", attach_machine_semantics,
-                     lambda: machine_semantics(PROJECT_ROOT / "data", result["as_of"]))]
+                     lambda: machine_semantics(PROJECT_ROOT / "data", result["as_of"],
+                         historical_scanner_observations=prior.get('historical_scanner_observations'),
+                         historical_scanner_conflicts=prior.get('historical_scanner_conflicts', []),
+                         incident_evidence_ids=tuple({identity for item in result['incidents'].values()
+                             if item.get('rule') in {'economic_producer_gap', 'source_or_submit_lineage_gap'}
+                             for identity in item.get('evidence_ids', []) if isinstance(identity, str)})))]
             if args.reuse_validation_digests:
                 session = DigestSession(PROJECT_ROOT / "data", current.date().isoformat(),
                                         role="observer", generation=code_generation())

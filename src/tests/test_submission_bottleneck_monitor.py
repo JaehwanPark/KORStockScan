@@ -3777,7 +3777,7 @@ def test_real_main_seals_final_generation_and_notification_before_health_publica
     monkeypatch.setattr(monitor,'datetime',Clock)
     monkeypatch.setattr(monitor,'PROJECT_ROOT',root)
     for key in ('source_gap_semantics','machine_semantics','entry_execution_tuning_semantics'):
-        def reader(*args,_key=key):
+        def reader(*args,_key=key,**kwargs):
             result=deepcopy(fixture[_key])
             if _key!='entry_execution_tuning_semantics':
                 result['current_health_cohort']=monitor._health_cohort(deepcopy(result),actor,now)
@@ -4925,3 +4925,128 @@ def test_delay_duplicate_actual_terminals_are_visible_without_losing_either_rece
     assert result['issues'] == {'intent_terminal_duplicate':1}
     assert sum(row['stage'] == 'pre_submit_delay_intent_terminal'
                for row in result['cursor']['delay_events']) == 2
+
+
+def _old_scanner_observation(now, birth, actor):
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    at=datetime.fromtimestamp(birth-60,monitor.KST).isoformat()
+    row=dict(schema='mechanistic_entry_observation_v1', evaluation_role='main_live',
+        captured_at=at, scanner_promotion_id='ZBPROM-exact', bundle_sha256='a'*64,
+        label_context=dict(scanner_promotion_id='ZBPROM-exact',evaluation_attempt_id='aims-old',
+            stock_code='376300',effective_venue='PREMARKET_KRX_LIKE',session_bucket='premarket_krx_like'),
+        runtime_consumption=dict(pid=8,process_start_ticks='800',consumed_at=at,bundle_sha256='a'*64),
+        source=dict(assessment={'action':'ENTER_NOW','original_missing_receipt':True}))
+    row['machine_observation_sha256']=hashlib.sha256(_json_bytes(row)).hexdigest()
+    return row
+
+
+@pytest.mark.parametrize('damage',[None,'hash','actor','start','at','date','scope','rule','count','missing',
+    'unknown','duplicate','promotion','new_issue','birth','oversize','conflicting_native'])
+def test_historical_scanner_health_requires_all_exact_original_evidence(damage):
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    result,_,_,_=_bounded_outcome_health_fixture(partial=False)
+    now=monitor.stamp(result['as_of']);generation=result['observer_generation']
+    birth=generation['actor_birth_proof']['birth_lower_bound_epoch']
+    actor=generation['actor_birth_proof']['actor']
+    row=_old_scanner_observation(now,birth,actor)
+    identity=monitor._scanner_observation_identity(row);scope='|'.join(identity.split('|')[-3:])
+    rule='economic_producer_gap';key=hashlib.sha256(f'{scope}|{rule}'.encode()).hexdigest()[:24]
+    item=dict(scope=scope,rule=rule,category='structural_evidence',status='active',
+        first_seen=row['captured_at'],last_seen=now.isoformat(),count=1,evidence_ids=[identity],
+        notified_status='active',examples=[{'economic_source':{'status':'source_gap'}}])
+    result['incidents'][key]=item
+    evidence={identity:row};result['machine_semantics']['historical_scanner_observations']=evidence
+    if damage=='hash':row['machine_observation_sha256']='f'*64
+    elif damage=='actor':row['runtime_consumption'].update(pid=actor[0],process_start_ticks=actor[1])
+    elif damage=='start':row['runtime_consumption']['process_start_ticks']=str(int(actor[1])+1)
+    elif damage=='at':row['captured_at']=now.isoformat()
+    elif damage=='date':row['captured_at']=(now-timedelta(days=1)).isoformat()
+    elif damage=='scope':item['scope']='unknown'
+    elif damage=='rule':item['rule']='unknown'
+    elif damage=='count':item['count']=True
+    elif damage=='missing':evidence.clear()
+    elif damage=='unknown':result['incidents']['unknown']=result['incidents'].pop(key)
+    elif damage=='duplicate':item['evidence_ids']*=2;item['count']=2
+    elif damage=='promotion':row['label_context']['scanner_promotion_id']='other'
+    elif damage=='new_issue':result['incidents']['new']={**item,'rule':'unknown'}
+    elif damage=='birth':generation['actor_birth_proof']['boot_epoch']+=1
+    elif damage=='oversize':row['extra']='x'*(128*1024)
+    elif damage=='conflicting_native':row['runtime_consumption']['continuous_reversal']={'pid':9}
+    if damage not in (None,'hash'):
+        row['machine_observation_sha256']=hashlib.sha256(_json_bytes({k:v for k,v in row.items()
+            if k!='machine_observation_sha256'})).hexdigest()
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    assert json.dumps(result,sort_keys=True)==before
+    assert item['status']=='active' and item['examples'][0]['economic_source']['status']=='source_gap'
+    assert health['runtime_effect'] is False and health['full_coverage_proven'] is False
+
+
+def test_machine_reader_preserves_exact_old_scanner_bytes_across_bounded_tail(tmp_path,monkeypatch):
+    observation,write=semantic_fixture(tmp_path,monkeypatch)
+    now=START+timedelta(hours=1)
+    row=_old_scanner_observation(now,START.timestamp()+60,['9','900'])
+    identity=monitor._scanner_observation_identity(row);write(row)
+    path=tmp_path/'ai_decision_payloads/ai_decision_payloads_2026-09-21.jsonl'
+    original=json.loads(path.read_bytes())
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity])
+    assert result['observation_count']==0
+    assert result['historical_scanner_observations']=={identity:original}
+    state={'schema':monitor.SCHEMA,'incidents':{}}
+    monitor.attach_machine_semantics(state,result)
+    cached=monitor._continuation_state(state)['historical_scanner_observations']
+    # The immutable original evidence survives ordinary bounded-tail expiry.
+    write(observation)
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity],
+        historical_scanner_observations=cached)
+    assert result['historical_scanner_observations']=={identity:original}
+    # A second native observation with the same exact key but changed bytes
+    # cannot replace or silently supersede the preserved original.
+    row['source']['assessment']['action']='BLOCK';write(row)
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity],
+        historical_scanner_observations=cached)
+    assert result['historical_scanner_observations']=={}
+    assert cached=={identity:original}
+    assert result['historical_scanner_conflicts']==[identity]
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity],
+        historical_scanner_observations={},historical_scanner_conflicts=[identity])
+    assert result['historical_scanner_observations']=={}
+
+
+@pytest.mark.parametrize('damage',[None,'provider','order','clock','snapshot','pid','attempt','hash',
+    'action','capture','authority','kind','missing_safety','future_snapshot'])
+def test_preprovider_input_deadline_is_diagnostic_only_with_exact_safe_terminal(tmp_path,damage):
+    now=START
+    row=dict(schema='ai_decision_trace_v1',decision_ts=now.isoformat(),decision_stage='entry_screen',
+        machine_evaluation_status='assessment_contract_invalid',
+        machine_contract_error='entry_machine_input_deadline_expired',
+        decision_evaluation_status='not_evaluated_provider_or_preflight',
+        result_source='mechanistic_pre_adjudication_rejected',action='DROP',
+        reason='mechanistic_input_contract_invalid',provider_called=False,actual_order_submitted=False,
+        runtime_effect=False,allowed_runtime_apply=False,broker_order_forbidden=True,
+        machine_observation_sha256=None,request_capture_status='missing',
+        async_producer_pid=9,async_producer_start_ticks='900',async_request_id='exact-async',
+        evaluation_attempt_id='exact-attempt',decision_trace_id='exact-trace',
+        effective_venue='KRX',session_bucket='krx_regular',market_data_route='krx_nxt_integrated',
+        machine_bundle_sha256='a'*64,async_origin_deadline_epoch=now.timestamp()-5,
+        input_source_clock_captured_at=(now-timedelta(seconds=10)).isoformat())
+    if damage=='provider':row['provider_called']=True
+    elif damage=='order':row['actual_order_submitted']=True
+    elif damage=='clock':row['async_origin_deadline_epoch']=now.timestamp()+1
+    elif damage=='snapshot':row.pop('input_source_clock_captured_at')
+    elif damage=='pid':row.pop('async_producer_start_ticks')
+    elif damage=='attempt':row.pop('evaluation_attempt_id')
+    elif damage=='hash':row['machine_bundle_sha256']='bad'
+    elif damage=='action':row['action']='BUY'
+    elif damage=='capture':row['machine_observation_sha256']='b'*64
+    elif damage=='authority':row['runtime_effect']=True
+    elif damage=='kind':row['machine_source_gap_kind']='source_route_conflict'
+    elif damage=='missing_safety':row.pop('broker_order_forbidden')
+    elif damage=='future_snapshot':row['input_source_clock_captured_at']=(now+timedelta(seconds=1)).isoformat()
+    assert bool(monitor._entry_input_deadline_guard(row))==(damage is None)
+    _source_gap_files(tmp_path,now,traces=[row])
+    result=monitor.source_gap_semantics(tmp_path,now)
+    key='machine_trace:'+row.get('machine_source_gap_kind','entry_machine_input_deadline_expired')
+    assert result['diagnostics'].get(key,0)==int(damage is None)
+    assert result['issues'].get(key,0)==int(damage is not None)

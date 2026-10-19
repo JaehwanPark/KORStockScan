@@ -1569,6 +1569,20 @@ REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS = {
             for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
     for key, value in REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS.items()
 }
+# Exact report-only historical incident/latency-guard observer successor.
+# Preserve every complete historical dependency generation and policy digest.
+REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': '5a3861b05149893db38be6cc7c56a0f4cbf93911e0a209d31edf222b3b3943bf',
+        'dependencies': {**value['dependencies'],
+            'src/engine/monitoring/submission_bottleneck_monitor.py': '5a3861b05149893db38be6cc7c56a0f4cbf93911e0a209d31edf222b3b3943bf'},
+        'contract_extensions': {origin: {path: ('5a3861b05149893db38be6cc7c56a0f4cbf93911e0a209d31edf222b3b3943bf'
+            if path == 'src/engine/monitoring/submission_bottleneck_monitor.py' else sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS.items()
+}
+
 REVIEWED_AUXILIARY_HISTORY_SOURCES = {'src/engine/scalping/reversal_auxiliary_source_handoff.py': (
     'f114eaa85987d72d2361a25e7d5aa2fa41ac5fcf6ad74992c0fe40658e038d82', 'f5724a19f06ef4417226c801259e00378217b8e6ebd49355cad2d21e4ad15c0f')}
 
@@ -1590,6 +1604,14 @@ REVIEWED_PARTIAL_SELL_RESEARCH_SOURCE_PAIRS = {'src/engine/automation/main_trail
 # Exact reviewed report-only synchronous lineage extension; see 2026-10-19 repair audit.
 REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS = {
     'src/engine/monitoring/submission_bottleneck_monitor.py': (('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e', '1c0746f95b03e908ad867540af945d0bfb1abd927d34a8d89954634e6c56baf4'), ('60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23', '1c0746f95b03e908ad867540af945d0bfb1abd927d34a8d89954634e6c56baf4'))
+}
+
+REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': tuple(
+        (origin, '5a3861b05149893db38be6cc7c56a0f4cbf93911e0a209d31edf222b3b3943bf') for origin in (
+            '082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e',
+            '60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23',
+            '1c0746f95b03e908ad867540af945d0bfb1abd927d34a8d89954634e6c56baf4'))
 }
 
 
@@ -1646,7 +1668,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS,
+                         REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
                          REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS,
                          REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS,
@@ -1685,7 +1708,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ())
+        if (pair in REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS.get(name, ())
+                or pair in REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_PARTIAL_SELL_RESEARCH_SOURCE_PAIRS.get(name, ())
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)

@@ -69,3 +69,22 @@ de3e541d9의4개 native gate 및2,757개 회귀는 PASS였다. ordered preflight
 trailing 재생성 b2afe3d3…은20,840scope complete다. 기존 snapshot과 정책·scope tree·source는 같고 native 관측시각 및 그 시각을 포함한 snapshot hash만 다르다. report-only currentness는 두 원천 manifest와 native scope 재구성·전체 tree·각 digest를 발행 시 검증하고, 시간 외 모든 scope 필드를 동일하게 유지할 때만 인정한다. 원 policy/PREOPEN/holding snapshot은 보존한다. 범위·universe·hash·시각 변조 거부 회귀를 추가했다. 이 후속 수정의 새 release/PID 적용은 별도 native transition 결과로 확인한다.
 
 49362의 원장 수량0과 broker terminal은 확정됐지만 incumbent 메모리의 SELL_ORDERED가 DB 상태를 다시 저장하는 경합을 확인했다.84472b8cd 배포 사전검사만 중단했고 Main은 계속 실행했다. 종결 DB 상태는 동일 원 수량/가격/비용-null·원장0의 CAS를 재검증해 native drain 직후 확정한다. 원 부분 체결·pending 파일은 그때 별도 bytes로 보존한 뒤 기존 exact-generation 정리 함수로 제거한다. 재기동 후 완료된 cycle을 다시 pending으로 복원하지 않는다. 이 실행 순서 보완은 새 주문·취소와 수동 관리 편입을 하지 않는다. 회귀2,881개, 실제 active/delay/stop/holding4개 gate PASS이며 실패 시도는 보존한다.
+
+
+최종 승인된 ordered 전환은795dacfbd3f547c2410632d5042cb8b8bb212223/PID404085(start ticks1340713)에서 pass/complete다.09:13:20 기존 PID349913을 정상 drain한 뒤49362 DB 종결을 CAS로 확정하고 원 부분 체결·pending 파일을 SHA 보관 후 native 정리했다. 신규 Main은09:14:20 기동했으며 알테오젠49346/1주의 startup/periodic 수량 대사도 정상이다. native custody 환경에서445680·196170의 operator_source는 비어 있고 exact-date 정책은 Main 관리를 허용한다. 두산034020 지정은 유지된다. 회귀2,881개 PASS, compile/diff/parser PASS이며 workspace의 다른 세션 변경은 보존했다. 근거: `tmp/preopen-alert-repair-20261019/ordered-partial-owner-scope-final.json`, `sell49362-completed-cycle-journal-cleanup.json`, `manual-exclusion-final-native-environment-read.json`.
+
+원 trailing b2afe3d3…의 full currentness 재검증은 현재 inventory 변경으로 차단됐다. 바뀐 원천은 owner registry와 holding vote383b163c…의 두 파일이다. registry 원 prefix SHA·native hash chain은 보존됐고 후속2개 주문 event는19일의49362뿐이다. 다만 기존 prefix의 날짜 없는 TERMINAL_RECONCILIATION_RECORDED7개를 historical helper가 상속 해석하지 못하며, 공유 holding vote도 재생성 이후 변경됐다. 원 바이트를 되돌리거나 검증을 생략하지 않고 `DirectFamilyPreopenPolicyHandoff`/`HoldingProfitExitSourceContractRepair`의 후속 원천 검증으로 유지한다. 다음 단계는 native event ancestry와 닫힌 날짜의 vote prefix를 정확히 결속한 뒤 동일 정책·scope의 full 재검증이다. initial_quantity 실제 비용5건 결손과 holding first-crossing5건도 현재 경고/OPEN으로 유지하며 수익률0으로 대체하지 않는다.
+
+
+09:16 새 PID observer run96b64b7333864fc095a92d5c546c9199은 completed/semantic partial이다. 현재 actor 수명으로 제한된 source 관측과 실제 deadline/source 진단을 보존했으며 이전 PID의 validated 보고서를 새 PID 완전 검증으로 재사용하지 않았다.09:17 full dry-run은 process_health/인증/stale-lock PASS, cron은 늦은 복구 warning, artifact는 resource contention으로 deferred, log scanner는 누적10건 오류로 fail, tmp budget warning이다. 따라서 전체 GREEN/오류0은 주장하지 않는다. 새 PID에 대한 보조정책 native consumed receipt도 확인했다. `final-health-795.json`/`final-runtime-custody-795.json`을 최종 근거로 사용한다.
+
+사용자196170 수동 지정 해제 후09:15:08 기존 preset hard-stop 규칙이 손실-1.51%에서 `auto_hard_stop_handoff`를 새로 기록했다.09:18:52 native 판정에서445680은 차단 없음,196170은 operator_source 없음/auto_source=auto_hard_stop_handoff다. 사용자 수동 지정을 다시 추가하지 않았고 새 hard-stop 가드도 임의 해제하지 않았다.49362는09:18:52에도 COMPLETED/원장0/원수량3/가중매도가72,600/순수익률null이며 원 pending 파일은 없다. 알테오젠의 신규 안전 인계와 실제 source/비용 경고는 별도 잔여 사항이다.
+
+
+### 09:30 제출병목 ERROR 판정 수리
+
+현재 PID404085의 관측기는 완료된 부분 관측을 게시했지만08:33:08 이전 PID274478/start867428의 스캐너 평가 aims-a094aebe8560a91a2d90에서 파생한 source/economic 사건2개를 현재 장애로 계산했다. 원본 machine observation17bc8252…의 전체 내용 해시, promotion·attempt·symbol·venue·session·bundle6필드, PID/start, 현재 PID 출생 이전 시각을 모두 재검증할 때만 현재 health의 장애 집계에서 분리한다. 원 incident active·원 실패 내용·비용 결손은 보존한다. 시간창 이탈만으로 복구시키지 않으며 원본을 bounded continuation에 보존하고 동일 신원 충돌은 영속 차단한다.
+
+09:27/09:28의 entry_machine_input_deadline_expired2건은 exact async PID·attempt·정책과 snapshot≤원 deadline≤종결시각, DROP, provider 미호출·주문 미실행·금지 영수증이 모두 있는 pre-adjudication terminal이다. 이 조건만 latency guard miss 진단으로 분류한다. 안전조건 누락·변조·다른 오류는 계속 오류다. deadline/guard/정책/주문 실행 코드는 변경하지 않는다. 원천의 stale/no-match/route gap·CAUTION/VETO·timeout·미결 join은 계속 보고하며 complete/source-health PASS를 주장하지 않는다.
+
+원09:30:25 보고서의 source/hash를 보관하고 native 원천으로 격리 재검증했을 때 warning_pending/bounded_source_quality_observation으로 판정됐다. 수량 정책의 native bounded chain은 유효하며 완료13건 중8건은 연구 배분 비용 표본,49013·49266·49268·49293은 terminal 비용/수량 결손,49294는 연구 비용 검증 결손이다. 실제 비용 완전성 false·실제 순손익null을 유지한다. 근거: tmp/preopen-alert-repair-20261019/scanner-incident-native-shadow.json 및 quantity-0925-native-observation.json. 배포/PID와 자연 detector 결과는 후속 영수증으로 확인한다.
