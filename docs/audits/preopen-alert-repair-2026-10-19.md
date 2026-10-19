@@ -88,3 +88,14 @@ trailing 재생성 b2afe3d3…은20,840scope complete다. 기존 snapshot과 정
 09:27/09:28의 entry_machine_input_deadline_expired2건은 exact async PID·attempt·정책과 snapshot≤원 deadline≤종결시각, DROP, provider 미호출·주문 미실행·금지 영수증이 모두 있는 pre-adjudication terminal이다. 이 조건만 latency guard miss 진단으로 분류한다. 안전조건 누락·변조·다른 오류는 계속 오류다. deadline/guard/정책/주문 실행 코드는 변경하지 않는다. 원천의 stale/no-match/route gap·CAUTION/VETO·timeout·미결 join은 계속 보고하며 complete/source-health PASS를 주장하지 않는다.
 
 원09:30:25 보고서의 source/hash를 보관하고 native 원천으로 격리 재검증했을 때 warning_pending/bounded_source_quality_observation으로 판정됐다. 수량 정책의 native bounded chain은 유효하며 완료13건 중8건은 연구 배분 비용 표본,49013·49266·49268·49293은 terminal 비용/수량 결손,49294는 연구 비용 검증 결손이다. 실제 비용 완전성 false·실제 순손익null을 유지한다. 근거: tmp/preopen-alert-repair-20261019/scanner-incident-native-shadow.json 및 quantity-0925-native-observation.json. 배포/PID와 자연 detector 결과는 후속 영수증으로 확인한다.
+
+
+## 10:01 I/O 경보와 수량 원천 후속 수리
+
+10:01:20 full detector는 I/O wait46.32%, swap 사용8,329.9MiB를 관측했다. 선택40b21f360의 정기 intraday_light PID513723은09:55:18~10:04:23 실행했고 trade_review534.149초/최대RSS5,528,364KiB였다. 직전 실행도556.267초/5,742,652KiB였다. 알테오젠49346의10/16→10/19 완료 연결에서2.1GiB의10/16 원 snapshot을 전부 디코드한 뒤 historical open census 결손으로 폐기했다. /proc 관측상 해당 worker 누적실제읽기9,995,083,776bytes와 host swap/page-in을 확인했다. 당시 다른 정기작업 및 이 세션의09:52/09:56 원천 읽기도 중첩되었으므로46.32% 전체를 한 PID에 정량 귀속하지 않는다.
+
+수리는 기존 log_archive_service 소유의256KiB 음성 사전검사다. 원 header가 이미 date/warning/historical-census 실패를 증명할 때만 같은 source_gap으로 조기 종료한다. 유효하거나 판독 불충분한 header는 기존 전체 row/ID 검증을 거친다. 실행하지 않을 stdin fallback snapshot의 선행 디코드도 제거했다. 이는 모든 유효 대형 snapshot의 읽기를 최적화했다는 주장이 아니다. 원본·기존 결손·거래소UNKNOWN·비용null을 보존한다. 실제당일입력 읽기 전용 리허설은1.778초/172,996KiB, 논리읽기319,843,970bytes/실제읽기54,190,080bytes, 기존49346 원천 결손 동일이다. 근거: tmp/preopen-alert-repair-20261019/io-native-rehearsal.json 및 원 worker attempt 로그.
+
+수량5건 중49294의1,411개와49293의1,547개는 같은 native SELL 영수증 재관측이었다. 기존 검증기가UNKNOWN venue 및 native_entry 영수증 유형을 지원하지 않아 중복체결로 제외했다. 원 producer의 순수 custody identity 검증과 전체 payload/원 broker 시각 동일성으로 재검증하며, venue·실제 비용·실주문 권한은 승격하지 않는다. fresh allocator의 실패 결과는 성공 영수증 검증기에 넣어 원인을 덮지 않고 원 reason/dependency를 유지한다.49268/49293/49294의 격리 연구 비용 복원이 확인됐고 운영 report 갱신은 후속 검증 대상이다.49013의9/30 공식 일별비용980원은 주문 없는 조회로 별도증거경로에 확보했지만 Main custody 결속이 없으며,49266의 원 SELL execution_no는 비어 있다. 기존8건 중5건의 정책 영수증 결속도 partial이다. 비용 복원만으로 initial_quantity 경고 전체가 해소된다고 주장하지 않는다.
+
+관련475개 및 정확한 의존성 세대 handoff2,503개 회귀 통과. 원 정책 digest와77개 의존성을 함께 보존하는 I/O 수정 세대를 검증했다. 추가 archive 검사159PASS/1FAIL 중 legacy gzip fixture1건은 선택40b21 원 코드에서도 동일 실패를 재현했으며 이번 변경의 회귀가 아니다. 원 archive identity/manifest 검증을 완화하지 않았다. 코드 리뷰→보완→재리뷰 후 이번 변경 범위 지적0이며 Python compile/diff/문서 parser 및 native active/delay/stop/holding 사전검사를 배포 전에 확인한다. live 적용·현재PID·정기 실행 수용은 별도 영수증으로 후행 기록한다.

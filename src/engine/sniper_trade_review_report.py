@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from src.engine.trade_profit import calculate_net_realized_pnl
 from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
-from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
+from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build, should_guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
@@ -2073,15 +2073,37 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
             native = wrappers[0].fields
             native_fields = {k: v for k, v in native.items() if k.startswith("native_receipt_")}
             record = str(native["id"])
-            if (native.get("native_receipt_identity_schema") != "broker_position_sell_receipt_v1"
-                    or native.get("native_receipt_position_key") != "record:" + record
+            schema = native.get("native_receipt_identity_schema")
+            identity_valid = (schema == "broker_position_sell_receipt_v1"
+                and native.get("native_receipt_position_key") == "record:" + record
+                and native.get("native_receipt_order_no") == key[1]
+                and native.get("native_receipt_execution_no") == key[2]
+                and native.get("native_receipt_buy_fill_identity") == native.get("holding_path_buy_fill_identity"))
+            observation_provenance_valid = str(native.get("broker_execution_provenance_complete")).lower() == "true"
+            if schema == "native_entry_sell_receipt_v1" or not observation_provenance_valid:
+                # Revalidate the producer's terminal custody identity. An unknown
+                # execution venue remains unknown; it does not make unchanged
+                # observations of one acknowledged receipt multiple fills.
+                from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
+                restored = {k: (True if v == "True" else False if v == "False" else v)
+                            for k, v in native.items() if not k.startswith("native_receipt_")}
+                received_at = datetime.fromisoformat(str(native.get("native_receipt_observed_at")))
+                stock = {"id": record, "code": key[0]}
+                terminal_identity = _native_sell_receipt_identity(
+                    stock, key[0], record, "sell_completed", restored, received_at)
+                if schema == "native_entry_sell_receipt_v1":
+                    stock["last_watching_ai_attempt_decision_trace_id"] = native.get("native_receipt_entry_trace_id")
+                identity = _native_sell_receipt_identity(
+                    stock, key[0], record, "sell_completed", restored, received_at)
+                identity_valid = bool(identity and set(identity) == set(native_fields)
+                    and all(str(native_fields[k]) == str(v) for k, v in identity.items()))
+                observation_provenance_valid = observation_provenance_valid or (
+                    terminal_identity.get("native_receipt_source_gap") == "actual_execution_venue_unresolved")
+            if (not identity_valid
                     or str(native.get("native_receipt_record_id")) != record
                     or native.get("native_receipt_stock_code") != key[0]
-                    or native.get("native_receipt_order_no") != key[1]
-                    or native.get("native_receipt_execution_no") != key[2]
-                    or native.get("native_receipt_buy_fill_identity") != native.get("holding_path_buy_fill_identity")
                     or not re.fullmatch(r"[0-9a-f]{64}", str(native.get("holding_path_buy_fill_identity") or ""))
-                    or str(native.get("broker_execution_provenance_complete")).lower() != "true"
+                    or not observation_provenance_valid
                     or native.get("broker_execution_time_source") != "official_fid_908"
                     or native.get("decision_authority") != "broker_sell_fill_observation_only"
                     or native.get("pipeline_lifecycle_population_scope") != "real_record_bound"
@@ -3339,6 +3361,11 @@ def _prior_entry_fill_events(
     events_by_id: dict[str, list[HoldingEvent]] = defaultdict(list)
     receipts: dict[str, dict] = {}
     for prior_date in sorted(prior_dates):
+        from src.engine.log_archive_service import prior_entry_snapshot_rejection
+        rejected = prior_entry_snapshot_rejection(prior_date, data_root=DATA_DIR)
+        if rejected is not None:
+            receipts[prior_date] = {"status": rejected}
+            continue
         snapshot = load_monitor_snapshot("trade_review", prior_date)
         if not isinstance(snapshot, dict) or snapshot.get("date") != prior_date:
             receipts[prior_date] = {"status": "source_gap_entry_snapshot_missing"}
@@ -3716,7 +3743,8 @@ def build_trade_review_report(
     guarded = guard_stdin_heavy_build(
         snapshot_kind="trade_review",
         target_date=target_date,
-        fallback_snapshot=load_monitor_snapshot("trade_review", target_date),
+        fallback_snapshot=(load_monitor_snapshot("trade_review", target_date)
+                           if should_guard_stdin_heavy_build(target_date) else None),
         request_details={
             "code": code,
             "since_time": since_time,
@@ -3879,6 +3907,12 @@ def build_trade_review_report(
         if position["status"] != "COMPLETED":
             continue
         record = position["record_id"]
+        produced = allocated.get(record)
+        if isinstance(produced, dict) and produced.get("status") in {"research_cost_invalid", "research_cost_pending"}:
+            # This is the fresh allocator's failure, not a receipt to validate.
+            # Keep its original cause and dependency dates for bounded recovery.
+            research_costs[record] = dict(produced)
+            continue
         research_costs[record] = validate_research_cost(allocated.get(record),
             record_id=record, symbol=position["symbol"],
             buy_legs=position["buy_legs"], sell_legs=position["sell_legs"],

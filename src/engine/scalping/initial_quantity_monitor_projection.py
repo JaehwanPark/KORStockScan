@@ -64,13 +64,16 @@ lifecycle/broker_cost_source.py
 lifecycle/holding_window_generation.py
 lifecycle/research_storage.py
 lifecycle/research_input_budget.py
+lifecycle/research_json_stream.py
 lifecycle/research_disk_budget.py
 lifecycle/snapshot_archive.py
 infrastructure/validation_digest_session.py
 strategy_position_performance_report.py
 sniper_trade_review_report.py
+sniper_execution_receipts.py
 sniper_position_tags.py
 log_archive_service.py
+monitor_snapshot_runtime.py
 trade_profit.py
 error_detectors/artifact_freshness.py'''.split())
     from src.engine.scalping.initial_quantity_refresh_evaluation import EXECUTION_READERS
@@ -78,6 +81,7 @@ error_detectors/artifact_freshness.py'''.split())
     paths = [engine/name for name in sorted(names)]
     paths.extend(engine.parent/relative for relative in (
         'trading/order/tick_utils.py', 'trading/order/split_execution_math.py',
+        'trading/market/execution_venue.py',
         'utils/jsonl_io.py'))
     observed = cached_code_generation(paths)
     return {str(path.relative_to(engine.parent)): observed[str(path)] for path in paths}

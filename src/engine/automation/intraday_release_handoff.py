@@ -1614,6 +1614,29 @@ REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS = {
             '1c0746f95b03e908ad867540af945d0bfb1abd927d34a8d89954634e6c56baf4'))
 }
 
+# Negative-only carry-census header preflight. The existing full validation,
+# archival writer, stop policy and execution paths are unchanged.
+REVIEWED_PRIOR_SNAPSHOT_IO_PAIRS = {
+    'src/engine/log_archive_service.py': tuple(
+        (origin, 'f3350ab07429f263dd16e534becccfbe47bb87c62cc97b1b43f096043743aad4') for origin in (
+            'a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
+            'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3'))
+}
+
+# Select one complete successor of the scanner-history generation. This keeps
+# the original policy digest and every other dependency hash bound together.
+REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/log_archive_service.py',
+        'selector_sha256': 'f3350ab07429f263dd16e534becccfbe47bb87c62cc97b1b43f096043743aad4',
+        'dependencies': {**value['dependencies'],
+            'src/engine/log_archive_service.py': 'f3350ab07429f263dd16e534becccfbe47bb87c62cc97b1b43f096043743aad4'},
+        'contract_extensions': {origin: {path: ('f3350ab07429f263dd16e534becccfbe47bb87c62cc97b1b43f096043743aad4'
+            if path == 'src/engine/log_archive_service.py' else sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS.items()
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -1668,7 +1691,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS,
+                         REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS,
                          REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS,
                          REVIEWED_PARTIAL_SELL_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_STOPPED_PREOPEN_DEPENDENCY_VARIANTS,
@@ -1708,7 +1732,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS.get(name, ())
+        if (pair in REVIEWED_PRIOR_SNAPSHOT_IO_PAIRS.get(name, ())
+                or pair in REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_PARTIAL_SELL_RESEARCH_SOURCE_PAIRS.get(name, ())
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):

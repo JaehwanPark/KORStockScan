@@ -77,6 +77,68 @@ def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
     return load_monitor_snapshot_file_first(kind, target_date)
 
 
+def prior_entry_snapshot_rejection(target_date: str, *, data_root: Path = DATA_DIR) -> str | None:
+    """Reject a known unusable carry census before decoding its large body.
+
+    This bounded header is a negative preflight only. None grants no validation:
+    the original full reader and all row/identity checks must still run.
+    """
+    import codecs
+    import io
+    import stat
+    import zlib
+    from src.engine.lifecycle.research_json_stream import Reader
+    path = Path(data_root) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
+    if not path.exists() and Path(str(path) + '.gz').exists():
+        path = Path(str(path) + '.gz')
+    if not path.exists():
+        return None
+    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+        return 'source_gap_entry_snapshot_missing'
+    try:
+        before = path.stat()
+        if not stat.S_ISREG(before.st_mode):
+            return 'source_gap_entry_snapshot_missing'
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as handle:
+            opened = os.fstat(handle.fileno())
+            stream = gzip.GzipFile(fileobj=handle) if path.suffix == '.gz' else handle
+            try:
+                prefix = stream.read(256 * 1024)
+            finally:
+                if stream is not handle:
+                    stream.close()
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                   value.st_mtime_ns, value.st_ctime_ns)
+        if identity(before) != identity(opened) or identity(before) != identity(path.stat()):
+            return 'source_gap_entry_snapshot_missing'
+        text = codecs.getincrementaldecoder('utf-8')().decode(prefix, final=False)
+        reader = Reader(io.StringIO(text))
+        header = {}
+        def visit(key, source):
+            if key in {'date', 'meta', 'metrics'}:
+                yield key, source.value(256 * 1024)
+            else:
+                source.skip()
+        for key, value in reader.fields(visit):
+            header[key] = value
+            if set(header) == {'date', 'meta', 'metrics'}:
+                break
+        if set(header) != {'date', 'meta', 'metrics'}:
+            return None
+        if header['date'] != target_date:
+            return 'source_gap_entry_snapshot_missing'
+        if not isinstance(header['meta'], dict) or not isinstance(header['metrics'], dict):
+            return None
+        if header['meta'].get('warnings'):
+            return 'source_gap_entry_snapshot_warning'
+        if header['metrics'].get('open_scalp_position_projection_status') != 'current_db_census':
+            return 'source_gap_entry_snapshot_census'
+    except (OSError, ValueError, TypeError, EOFError, zlib.error):
+        # An incomplete header cannot certify either the body or a specific gap.
+        return None
+    return None
+
+
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     from src.engine.infrastructure.research_release_transition import journal_active
     if kind=='trade_review' and journal_active():
