@@ -2478,6 +2478,40 @@ REVIEWED_ASSEMBLER_BUDGET_PAIRS = {'src/engine/automation/main_trailing_source_a
                                               ('fa93d4ac728999184e3d238d9050cb51898b9f62780e80929786385421b719af',
                                                '18c0644ea2a6805b9027b2bce4bc7a1b89dbc5e10925d104b38a05a9423b4c35'))}
 
+# Calendar diagnostics bind physical bytes separately from logical archives.
+REVIEWED_CALENDAR_PHYSICAL_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'}
+REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_assembler.py',
+        'selector_sha256': REVIEWED_CALENDAR_PHYSICAL_HASHES['src/engine/automation/main_trailing_source_assembler.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_CALENDAR_PHYSICAL_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_CALENDAR_PHYSICAL_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_CALENDAR_PHYSICAL_PAIRS = {'src/engine/automation/main_trailing_source_assembler.py': (('242285e71a822a7e77c0d0fcc75dfb3109b0ae7e8c0c861244f982eef6bd55c2',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('39449970d0024236ccaaed2eb996b8b1222f9ec804450071c090dd6eb4bd2955',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('500b678cdebef30499e2f990ef7061b0de3b331348bef62a3c9961aec036b75e',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('552eee99e36db1fd314a6b92e6533201cc3181993bb4c7bba08666c1a165d0bc',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('ea7039a171b5a3d07883b0549ba763100900cfdec7cb6c14172e0fb887f6b804',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'),
+                                                             ('f61e20d7bfba4b8b743dca601b2ff81255752602b5093d6e4df56d076b5abcf1',
+                                                              '4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2531,7 +2565,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_CALENDAR_PHYSICAL_DEPENDENCY_VARIANTS,
+                         REVIEWED_ASSEMBLER_BUDGET_DEPENDENCY_VARIANTS,
                          REVIEWED_NATIVE_EMPTY_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETED_EMPTY_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETED_OFFLINE_DEPENDENCY_VARIANTS,
@@ -2609,7 +2644,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_ASSEMBLER_BUDGET_PAIRS.get(name, ())
+        if (pair in REVIEWED_CALENDAR_PHYSICAL_PAIRS.get(name, ())
+                or pair in REVIEWED_ASSEMBLER_BUDGET_PAIRS.get(name, ())
                 or pair in REVIEWED_NATIVE_EMPTY_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETED_EMPTY_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETED_OFFLINE_PAIRS.get(name, ())

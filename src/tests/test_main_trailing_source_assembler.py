@@ -926,7 +926,8 @@ def test_small_source_reads_share_resident_research_budget(tmp_path,monkeypatch,
         if reader=='metadata':assert generation==source.byte_generation(path)
         else:
             import hashlib
-            assert generation==dict(path=path.name,size=len(original),sha256=hashlib.sha256(original).hexdigest())
+            assert generation==dict(schema=source.CALENDAR_GENERATION_SCHEMA,path=path.name,
+                                    size=len(original),sha256=hashlib.sha256(original).hexdigest())
     assert budget.health()==before and path.read_bytes()==original
 
 
@@ -1083,11 +1084,55 @@ def test_calendar_diagnostic_generation_hashes_exact_bounded_original_bytes(tmp_
         raw.write_bytes(gzip.decompress(physical.read_bytes()));physical.unlink();physical=raw
     original=physical.read_bytes()
     result=source.partial_publication_calendar_diagnostic(root,day)
-    assert result['source_generation']==dict(path=physical.name,size=len(original),sha256=hashlib.sha256(original).hexdigest())
+    assert result['source_generation']==dict(schema=source.CALENDAR_GENERATION_SCHEMA,path=physical.name,
+        size=len(original),sha256=hashlib.sha256(original).hexdigest())
     assert result['original_holding_event_count']==2
     assert result['original_source_receipts']==value['meta']['trailing_event_source_receipts']
     assert result['source_gap_preserved'] is True and result['native_postclose_valid_empty'] is False
     assert physical.read_bytes()==original
+
+
+def test_partial_calendar_archive_keeps_physical_and_logical_generations_distinct(tmp_path,monkeypatch):
+    from src.engine import compress_db_backfilled_files as archive
+    from src.utils import market_day
+    monkeypatch.setattr(market_day,'get_krx_trading_day_status',lambda _: (False,'weekend'))
+    root=tmp_path/'source';day='2026-10-18'
+    raw,physical,value=_original_partial_calendar_source(root,day)
+    logical=gzip.decompress(physical.read_bytes());raw.write_bytes(logical);physical.unlink()
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',raw.parent)
+    assert archive._gzip_file(raw,dry_run=False)[0]
+    original=physical.read_bytes()
+    _,generation=source._bounded_calendar_source(physical)
+    assert source.byte_generation(physical)['path']==raw.name
+    assert source.source_generation_matches(root,'2026-10-19',physical,generation)
+    write(root/'report/micro_reversion_economic_reference/micro_reversion_symbol_master_2026-08-25.json',_master_payload())
+    parent=dict(target_date=day,scalp_trailing_mechanical_policy_receipt=baseline_receipt({},source='operator_directed_m1_baseline'))
+    parent['manifest_sha256']=_digest_json(parent)
+    write(root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{day}.json',parent)
+    manifest=source.assemble(root,tmp_path/'assembly',source_date=day,target_date='2026-10-19',start_date=day)
+    report=research._sealed(manifest)
+    assert report['assembly_census']['source_gaps']['completed_snapshot_source_gap']==1
+    assert report['population_ids_ref']['count']==0
+    assert physical.read_bytes()==original
+    assert not source.source_generation_matches(tmp_path/'different-owner','2026-10-19',physical,generation)
+    assert not source.source_generation_matches(root,'2026-10-17',physical,generation)
+    physical.write_bytes(gzip.compress(logical,mtime=2))
+    assert not source.source_generation_matches(root,'2026-10-19',physical,generation)
+
+
+def test_calendar_plain_generation_handoff_requires_verified_native_archive(tmp_path,monkeypatch):
+    from src.engine import compress_db_backfilled_files as archive
+    root=tmp_path/'source';day='2026-10-18'
+    raw,physical,_=_original_partial_calendar_source(root,day)
+    raw.write_bytes(gzip.decompress(physical.read_bytes()));physical.unlink()
+    _,generation=source._bounded_calendar_source(raw)
+    assert source.source_generation_matches(root,'2026-10-19',raw,generation)
+    monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',raw.parent)
+    assert archive._gzip_file(raw,dry_run=False)[0]
+    assert not raw.exists()
+    assert source.source_generation_matches(root,'2026-10-19',raw,generation)
+    Path(str(physical)+'.archive_receipt.json').unlink()
+    assert not source.source_generation_matches(root,'2026-10-19',raw,generation)
 
 
 def test_plain_original_with_unproven_bare_sidecar_archive_is_an_identified_gap(tmp_path):

@@ -24,6 +24,7 @@ from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMast
 
 SCHEMA = 'main_all_scope_exit_automatic_source_v1'
 VOTE_INVENTORY_SCHEMA = 'main_trailing_historical_vote_inventory_v1'
+CALENDAR_GENERATION_SCHEMA = SCHEMA + ':calendar_physical_generation'
 
 
 def historical_vote_generation(path, source_date):
@@ -172,6 +173,27 @@ def verify_inventory(manifest, assembly_root):
 
 def source_generation_matches(root, source_date, path, generation):
     from .main_trailing_source_store import SCHEMA as INDEX_SCHEMA,generation as index_generation
+    if generation.get('schema') == CALENDAR_GENERATION_SCHEMA:
+        import zlib
+        path=Path(path).absolute()
+        try:
+            stem=path.name.removesuffix('.gz').removesuffix('.json')
+            day=stem.removeprefix('trade_review_')
+            if (path.parent!=Path(root).resolve()/'report/monitor_snapshots'
+                    or path.name not in ('trade_review_'+day+'.json','trade_review_'+day+'.json.gz')
+                    or date.fromisoformat(day).isoformat()!=day or day>source_date):
+                return False
+            if path.suffix=='.json' and not path.exists():
+                # A plain original's bytes may move through the native archive
+                # contract; an already-gzipped physical proof stays exact.
+                from src.engine.lifecycle.snapshot_archive import generation as archive_generation
+                value,_=_bounded_calendar_source(Path(str(path)+'.gz'))
+                current=dict(schema=CALENDAR_GENERATION_SCHEMA,**archive_generation(path))
+            else:
+                value,current=_bounded_calendar_source(path)
+            return isinstance(value,dict) and value.get('date')==day and current==generation
+        except (OSError,ValueError,TypeError,EOFError,zlib.error):
+            return False
     if generation.get('schema') == INDEX_SCHEMA+':generation':
         try:
             return index_generation(root,path)==generation
@@ -274,7 +296,8 @@ def _bounded_calendar_source(path):
                                     object_pairs_hook=unique_pairs)
         if source_stat(path.lstat())!=source_stat(before):
             raise ValueError('all_scope_calendar_source_changed')
-        return value,dict(path=path.name,size=len(physical),sha256=hashlib.sha256(physical).hexdigest())
+        return value,dict(schema=CALENDAR_GENERATION_SCHEMA,path=path.name,
+                          size=len(physical),sha256=hashlib.sha256(physical).hexdigest())
 
 
 def partial_publication_calendar_diagnostic(root, day):
