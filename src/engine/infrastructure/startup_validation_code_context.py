@@ -978,6 +978,23 @@ def _main_context(*, digest_only=False):
         raise
 
 
+def validation_future_vote_snapshot(data_root, source_date):
+    """Permit only a native future-tail snapshot inside the isolated child."""
+    if _CONTEXT is None:
+        return False
+    _main_context()
+    request = _CONTEXT['request']
+    proof = request['candidate_code_handoffs'].get('main_stop')
+    if not isinstance(proof, dict):
+        raise ValueError('startup_stop_snapshot_policy_required')
+    _proof(proof, 'main_stop', request)
+    receipt = request['manifest']['main_stop_confirmation_receipt']
+    if (str(Path(data_root).resolve()) != request['data_root']
+            or receipt.get('source_date') != source_date or not source_date < request['target_date']):
+        raise ValueError('startup_stop_snapshot_scope_invalid')
+    return True
+
+
 def _delay_selection_records(proof):
     from src.engine.infrastructure.validation_digest_session import identity
     records = proof['closure'].get('delay_selections', {})
@@ -1190,6 +1207,11 @@ def validation_auxiliary_preparation(manifest, bundle, data_root):
         _CONTEXT['delegation']['auxiliary_manifests'].append(ident)
     historical = proof['historical_semantic_code_sources'][ident]
     original = {**proof['original_code_hashes'], **{name: ref['sha256'] for name, ref in historical.items()}}
+    for field in ('next_session_code_hashes', 'reader_code_hashes'):
+        for name, digest in manifest[field].items():
+            relative = _code_path(name)
+            if relative not in historical:
+                original[relative] = digest
     return dict(manifest=manifest, frozen_inventory=manifest['frozen_inventory'],
         frozen_validation=manifest['frozen_validation'],
         original_code_hashes=original, runtime_code_hashes=proof['runtime_code_hashes'],

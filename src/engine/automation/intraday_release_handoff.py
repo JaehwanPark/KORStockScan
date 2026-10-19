@@ -2001,7 +2001,7 @@ REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/ai/holding_exit_vote.py': '69f1a9a
  'src/engine/automation/main_startup_validation.py': 'b4475bf2671a8e5c1206c588ec265b736c7a082cb721f65d7dc3c1a8c87baec9',
  'src/engine/automation/main_trailing_source_store.py': 'f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
  'src/engine/automation/prepared_policy_code_handoff.py': '9ef09608077aa02c25bdd40d8bc33344bf0e10dbde18cae0fdcf434b0c6efaf8',
- 'src/engine/infrastructure/startup_validation_code_context.py': 'bbfc3b34d207dd2dde9a9ef61bff4e83d5ea5e4c7b94fb59588f15c38ed62ae8',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',
  'src/engine/scalping/ai_market_snapshot.py': 'e4a4ae29cca5d452b1bcfa4c54684e8d4bc8702224f6034231a4a4a12235881d',
  'src/engine/scalping/avg_down_replay_capture.py': 'dbb163f2f23c678f4a2343e8501b405166bd18f30b94b0de64f98e76c0a2645a',
  'src/engine/scalping/holding_decision_context.py': '783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898',
@@ -2009,7 +2009,8 @@ REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/ai/holding_exit_vote.py': '69f1a9a
  'src/engine/scalping/holding_vote_experiment.py': '23d8ec40b586f6db69027c8fd5b4e949a3d0ee1ca102f45a064b0c874c517843',
  'src/engine/scalping/strategy_owner_replay.py': '7ea25642e08cb77f95840373dc8fb16fadcee37bb0aa2c03a9234212ac12b878',
  'src/engine/sniper_state_handlers.py': '885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
- 'src/trading/market/session_contract.py': 'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c'}
+ 'src/trading/market/session_contract.py': 'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c',
+ 'src/engine/automation/main_stop_postclose.py': 'd78ae70b6b125355bfd3d2c4ee7e511a4171b933219efedb80900afd6c3781c9'}
 REVIEWED_AVG_DOWN_INPUT_SOURCES = {'src/engine/ai/holding_exit_vote.py': (('9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b',
                                          '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81'),),
  'src/engine/scalping/ai_market_snapshot.py': (('77f151a72094486b9b84e9a56fcba92aac6760648b58124a06250bf58dd6d650',
@@ -2031,7 +2032,11 @@ REVIEWED_AVG_DOWN_INPUT_SOURCES = {'src/engine/ai/holding_exit_vote.py': (('9d51
                                          ('5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf',
                                           '885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4')),
  'src/trading/market/session_contract.py': (('3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
-                                             'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c'),)}
+                                             'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c'),),
+ 'src/engine/automation/main_stop_postclose.py': (('531f1498332196f0e54d17b76ed8d30295009a5e5ee9363ad9397613f0740ad2',
+                                                   'd78ae70b6b125355bfd3d2c4ee7e511a4171b933219efedb80900afd6c3781c9'),
+                                                  ('c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5',
+                                                   'd78ae70b6b125355bfd3d2c4ee7e511a4171b933219efedb80900afd6c3781c9'))}
 REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS = {
     (trigger, REVIEWED_AVG_DOWN_INPUT_HASHES[trigger]): {
         **value,

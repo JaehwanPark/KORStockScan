@@ -949,3 +949,63 @@ def test_native_reader_dependencies_bind_selected_code_inside_isolation(request_
     _write_request(f,request)
     result=_child(f,MAIN_CHILD_SETUP+'\nassert_no_forbidden_attempts()\n')
     assert (result.returncode==0) is (fault is None),result.stderr
+
+
+@pytest.mark.parametrize('fault', [None, 'past', 'partial', 'source_date', 'no_policy'])
+def test_isolated_stop_future_snapshot_preserves_native_tail_validation(request_fixture, monkeypatch, fault):
+    import copy
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    f=request_fixture;_main_fixture(f,monkeypatch);request=f['request'];data=Path(request['data_root'])
+    stop=copy.deepcopy(request['candidate_code_handoffs']['pre_submit_delay']);stop['family']='main_stop'
+    request['candidate_code_handoffs']['main_stop']=stop
+    request['manifest']['main_stop_confirmation_receipt']=dict(target_date=DAY,source_date='2026-10-16',policy_sha256=stop['policy_sha256'])
+    if fault=='source_date':request['manifest']['main_stop_confirmation_receipt']['source_date']='2026-10-15'
+    if fault=='no_policy':request['candidate_code_handoffs'].pop('main_stop')
+    day='2026-10-16' if fault=='past' else DAY
+    row=dict(schema='holding_path_vote_v10',position_key='record:91',session_key=day,
+        requested_at=datetime.fromisoformat(day+'T10:00:00').replace(tzinfo=ZoneInfo('Asia/Seoul')).timestamp())
+    path=path_vote_store_path(data,'record:91');path.parent.mkdir(parents=True)
+    raw=json.dumps(row).encode()+(b'' if fault=='partial' else b'\n');path.write_bytes(raw)
+    _write_request(f,request)
+    result=_child(f,MAIN_CHILD_SETUP+f"""
+from pathlib import Path
+from src.engine.automation import main_stop_postclose as post
+post._future_unconsumed_vote_tail(Path(request['data_root']), '2026-10-16', Path({str(path)!r}), None)
+assert_no_forbidden_attempts()
+""")
+    assert (result.returncode==0) is (fault is None),result.stderr
+    if fault:
+        reason={'past':'stop_vote_future_tail_scope_invalid','partial':'stop_vote_future_tail_invalid',
+                'source_date':'startup_stop_snapshot_scope_invalid','no_policy':'startup_stop_snapshot_policy_required'}[fault]
+        assert reason in result.stderr,result.stderr
+    assert path.read_bytes()==raw and not Path(str(path)+'.lock').exists()
+
+
+def test_auxiliary_inventory_keeps_reviewed_manifest_reader_origin(request_fixture, monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    f=request_fixture;main=_main_fixture(f,monkeypatch);proof=main['proof'];request=f['request']
+    relative='src/engine/scalping/reversal_auxiliary_next_session.py';name=Path(relative).name
+    old='c32689f592a5f6558d3404bd9b5495330aefc45715feddf8e579c171d74901c1'
+    current=C._sha(f['selected']/relative)
+    manifest=P.seal({**main['manifest'],'next_session_code_hashes':{name:old}})
+    original=next(iter(proof['closure']['manifests']));observed=proof['closure']['manifests'].pop(original)
+    Path(observed['path']).write_text(json.dumps(manifest));observed['sha256']=C._sha(observed['path'])
+    ident=manifest['artifact_content_sha256'];proof['closure']['manifests'][ident]=observed
+    proof['historical_semantic_code_sources'][ident]=proof['historical_semantic_code_sources'].pop(original)
+    proof['original_code_hashes']={**proof['original_code_hashes'],relative:current}
+    proof['runtime_code_hashes']={**proof['runtime_code_hashes'],relative:current}
+    for p in (f['selected']/relative,f['root']/relative,Path(observed['path'])):
+        proof['source_hashes'][str(p)]=C._sha(p);request['source_hashes'][str(p)]=C._sha(p)
+    _write_request(f,request)
+    result=_child(f,MAIN_CHILD_SETUP+f"""
+from pathlib import Path
+manifest=json.loads(Path({observed['path']!r}).read_bytes())
+bundle=json.loads(Path(request['main_preparation_code_handoff']['policy_path']).read_bytes())
+proof=C.validation_auxiliary_preparation(manifest,bundle,Path(request['data_root']))
+assert A._validation_code_inventory(manifest['next_session_code_hashes'], {{{name!r}:{current!r}}}, proof)
+assert not A._validation_code_inventory({{{name!r}:'0'*64}}, {{{name!r}:{current!r}}}, proof)
+assert_no_forbidden_attempts()
+""")
+    assert result.returncode==0,result.stderr

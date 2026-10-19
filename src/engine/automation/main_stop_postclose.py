@@ -217,6 +217,11 @@ def _future_unconsumed_vote_tail(root, day, path, row):
     if (path.parent != Path(root)/'runtime/holding_path_votes' or path.suffix != '.jsonl'
             or len(path.stem) != 64 or any(c not in '0123456789abcdef' for c in path.stem)):
         raise ValueError('stop_vote_source_set_changed')
+    from src.engine.infrastructure.startup_validation_code_context import validation_future_vote_snapshot
+    if validation_future_vote_snapshot(root, day):
+        # The child cannot acquire operational locks. This same native reader
+        # rejects partial tails, changed inode/stat and any non-future row.
+        return _future_unconsumed_vote_tail_snapshot(root, day, path, row)
     lock_path = Path(str(path)+'.lock')
     fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     with os.fdopen(fd, 'rb') as lock:
@@ -238,14 +243,14 @@ def _future_unconsumed_vote_tail(root, day, path, row):
                     and (current.st_dev,current.st_ino)==(identity.st_dev,identity.st_ino))
         try:
             if not same_lock():raise ValueError('stop_vote_writer_lock_changed')
-            result = _future_unconsumed_vote_tail_locked(root, day, path, row)
+            result = _future_unconsumed_vote_tail_snapshot(root, day, path, row)
             if not same_lock():raise ValueError('stop_vote_writer_lock_changed')
             return result
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _future_unconsumed_vote_tail_locked(root, day, path, row):
+def _future_unconsumed_vote_tail_snapshot(root, day, path, row):
     """Partition a later observation tail; never attest unconsumed old bytes.
 
     Only carried policies with no consumed vote sources may use this check.

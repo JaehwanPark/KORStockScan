@@ -179,3 +179,12 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 ### Prepared/live manifest의 소비 경계
 
 eab2c040d의 P5는 intake와 native Main closure를 통과하고 실제 격리 child에 도달했으나 `startup_code_context_intraday_manifest_changed`로 거부됐다. 준비 manifest와 실제 기동 manifest는 생성 시각·env 파일 위치·direct-family 선택 기록이 각각 다르다. 기존 child가 두 원문 전체를 동일시한 결함을 수정했다. 각각 content seal·원 파일 source SHA·소비 handoff를 유지하고, family policy receipt·전체 env overrides·날짜·원본 release 계보를 정확히 비교한다. 원 manifest를 재발행하지 않는다. 생성 metadata 차이는 통과하되 sealed env 변경과 manifest seal 변조는 거부하는 OS 격리 회귀를 포함하여 해당95개 PASS다. 기존 source/receipt readers는 각 generation의 현재 소비자로 retained이며 새 경로나 wrapper는 없다. 실패43506176045f4df3b1bc11e61385e861의 원문과 현재 incumbent를 보존한 채 새 후보 P5를 수행한다.
+
+
+### 실제 child의 보조 reader와 손절 미래 관측 소비
+
+5dea19f3d의 P5는 격리 설치를 통과한 뒤 native Main 로더12개를 실제로 실행했다. 보조 reader는 검증된 manifest의 reader 원본c326를 delegation에 전달하지 않아 거부됐고, stop은 carry 정책의 미래 미소비 vote tail 검증에서 운영 writer flock을 시도하여 격리 장벽이 거부했다. 이후 consumer의 context_invalid는 그 금지 시도에 따른 후속 결과였다. 실패1b960c16cd90463e8c4583bfd34ebceb와 isolation 원문은 보존했다.
+
+기존 P5 owner에서 원 semantic source와 충돌하지 않는 manifest의 next-session/reader 원본 hash를 그대로 전달한다. child의 exact reviewed-pair·Git/source/manifest 검증은 유지한다. stop의 기존 미래 tail reader를 공통 snapshot 함수로 통합하고, 실제 OS 격리·현재 Main proof·정확한 stop policy/source/target/data-root를 재검증한 child만 운영 잠금 없이 같은 native snapshot 검사를 실행한다. partial·과거 행·scope/position·inode/stat/prefix 변경은 계속 거부한다. 일반 runtime/research reader는 기존 native writer lock을 유지한다. `_future_unconsumed_vote_tail_locked`는 removed, 공통 `_future_unconsumed_vote_tail_snapshot`은 consolidated이며 기존 wrapper와 격리 branch가 현재 소비자다. 새 module·CLI·스케줄·운영 허용 flag는 없다.
+
+해당 C/stop 묶음은 최초271 PASS/2 fixture 실패였고, 새 fixture의 Path import와 공유 dictionary alias를 보완했다. 같은 실제 OS 격리의 신규6개는 모두 PASS/8.78초이며 negative case는 각각 의도한 native 사유도 확인한다. 기존 writer lock·tail·source 및 격리 회귀를 포함한 고유273개가 통과했다. exact 두 원본/세 family 인계18개 PASS/17.08초다. 새 stop 코드 generation의 holding capability를 정식 fixture producer로 다시 검증·게시한 후 새 P5를 실행한다. 원 정책·PREOPEN·현재 PID는 계속 보존한다.
