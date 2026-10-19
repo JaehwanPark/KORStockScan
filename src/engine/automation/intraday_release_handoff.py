@@ -1678,6 +1678,38 @@ REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS = {
 REVIEWED_SNAPSHOT_METADATA_PAIRS = {'src/engine/automation/main_stop_postclose.py': (('531f1498332196f0e54d17b76ed8d30295009a5e5ee9363ad9397613f0740ad2', '98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772'), ('c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5', '98cbaef223ee161a0fef7547161ffd07f09741842a8675ac1d3c1b787d689772'),)}
 
 
+# Original snapshot identities may survive evidence-only ctime changes only
+# after native complete-byte revalidation. Keep one exact complete generation.
+REVIEWED_PRESERVED_SNAPSHOT_HASHES = {'src/engine/lifecycle/snapshot_archive.py': 'f2a8eb56daf861d1ffb10bae945a9753e77ed5e0ed2c935cc1382b17c18f79c3',
+ 'src/engine/lifecycle/holding_window_generation.py': 'b31337f09b51d7d1ad1b06b24f92eda3bc2b19b0f160166e25d603708940926c',
+ 'src/engine/strategy_position_performance_report.py': '714c9351f73008f06affe988e67fdd104fd0d8d3c23eb8657635b3fa8ff79082',
+ 'src/engine/holding_exit_observation_report.py': '108fcdffa626abec4e90b263c12780e78c7f77e222b950e2407b0b00d462fa4f',
+ 'src/engine/scalping/initial_quantity_source_cache.py': 'b746d9c9d131ab2795953f3e2401f2fe367525dc0d7dc2c85051fdaac73af97c'}
+REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/lifecycle/snapshot_archive.py',
+        'selector_sha256': REVIEWED_PRESERVED_SNAPSHOT_HASHES['src/engine/lifecycle/snapshot_archive.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_PRESERVED_SNAPSHOT_HASHES},
+        'contract_extensions': {origin: {path: REVIEWED_PRESERVED_SNAPSHOT_HASHES.get(path, sha)
+            for path, sha in paths.items()} for origin, paths in value['contract_extensions'].items()}}
+    for key, value in REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_PRESERVED_SNAPSHOT_PAIRS = {'src/engine/lifecycle/snapshot_archive.py': (('9b1a0ac18db7fde52f609db45950b9fb631376f401fa565088a9831dd80ad42a',
+                                               'f2a8eb56daf861d1ffb10bae945a9753e77ed5e0ed2c935cc1382b17c18f79c3'),),
+ 'src/engine/lifecycle/holding_window_generation.py': (('52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
+                                                        'b31337f09b51d7d1ad1b06b24f92eda3bc2b19b0f160166e25d603708940926c'),),
+ 'src/engine/strategy_position_performance_report.py': (('4b7e718a1f8a2e9838095b618067729a94901cc41423e274a9ef07ee464d8bd4',
+                                                         '714c9351f73008f06affe988e67fdd104fd0d8d3c23eb8657635b3fa8ff79082'),
+                                                        ('00dc2d63df6ef91ff258507696efd3b348650f7b36db1ad6f789e9e3294d6bd4',
+                                                         '714c9351f73008f06affe988e67fdd104fd0d8d3c23eb8657635b3fa8ff79082')),
+ 'src/engine/holding_exit_observation_report.py': (('8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db',
+                                                    '108fcdffa626abec4e90b263c12780e78c7f77e222b950e2407b0b00d462fa4f'),),
+ 'src/engine/scalping/initial_quantity_source_cache.py': (('4dfa3c22640ee0f94fdac37633e7adbb0b6be4ecdaa14efe25ca04d840c799a7',
+                                                           'b746d9c9d131ab2795953f3e2401f2fe367525dc0d7dc2c85051fdaac73af97c'),
+                                                          ('910f1a50b7191cf47815b6707dae489847d25f1e45f1b40104a0c38d20eaa846',
+                                                           'b746d9c9d131ab2795953f3e2401f2fe367525dc0d7dc2c85051fdaac73af97c'))}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -1731,7 +1763,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS,
+                         REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS,
                          REVIEWED_ARTIFACT_SOURCE_DEPENDENCY_VARIANTS,
                          REVIEWED_PRIOR_SNAPSHOT_IO_DEPENDENCY_VARIANTS,
                          REVIEWED_SCANNER_HISTORY_DEPENDENCY_VARIANTS,
@@ -1774,7 +1807,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_SNAPSHOT_METADATA_PAIRS.get(name, ())
+        if (pair in REVIEWED_PRESERVED_SNAPSHOT_PAIRS.get(name, ())
+                or pair in REVIEWED_SNAPSHOT_METADATA_PAIRS.get(name, ())
                 or pair in REVIEWED_ARTIFACT_SOURCE_PAIRS.get(name, ())
                 or pair in REVIEWED_PRIOR_SNAPSHOT_IO_PAIRS.get(name, ())
                 or pair in REVIEWED_SCANNER_HISTORY_OBSERVER_PAIRS.get(name, ())

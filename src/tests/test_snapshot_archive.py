@@ -262,3 +262,28 @@ def test_native_snapshot_cli_scopes_reuse_and_closes_session_on_failure(tmp_path
     else:assert result['validation_io'] is None
     if fails:assert result['error']=='original_producer_failure' and result['snapshots']=={}
     else:assert result['snapshots']=={'snapshot_manifest':'unchanged-native-manifest'}
+
+
+@pytest.mark.parametrize('authority',['sealed_hash','native_manifest'])
+@pytest.mark.parametrize('mutation',['hardlink','content','replacement','mtime','wrong_hash'])
+def test_preserved_inode_requires_original_identity_and_complete_source_bytes(snapshot,authority,mutation):
+    import os,hashlib
+    before=source.snapshot_identity(snapshot)
+    sha=hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    manifest=snapshot.parent/'manifests/monitor_snapshot_manifest_2026-10-08_postclose_exit.json'
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps(dict(target_date='2026-10-08',profile='postclose_exit',
+        snapshot_paths={'trade_review':str(snapshot)},snapshot_sha256={'trade_review':sha})))
+    os.link(snapshot,snapshot.with_suffix('.preserved'))
+    if mutation=='content':
+        original=snapshot.stat();raw=snapshot.read_bytes();snapshot.write_bytes(raw.replace(b'"a"',b'"b"'))
+        os.utime(snapshot,ns=(original.st_atime_ns,original.st_mtime_ns))
+    elif mutation=='replacement':
+        original=snapshot.stat();new=snapshot.with_suffix('.new');new.write_bytes(snapshot.read_bytes())
+        os.utime(new,ns=(original.st_atime_ns,original.st_mtime_ns));new.replace(snapshot)
+    elif mutation=='mtime':os.utime(snapshot,ns=(snapshot.stat().st_atime_ns,before['mtime_ns']+1000000))
+    elif mutation=='wrong_hash':
+        sha='0'*64;value=json.loads(manifest.read_text());value['snapshot_sha256']['trade_review']=sha
+        manifest.write_text(json.dumps(value))
+    assert source.snapshot_identity_matches(snapshot,before,
+        **({'expected_sha256':sha} if authority=='sealed_hash' else {})) is (mutation=='hardlink')

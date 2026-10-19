@@ -141,7 +141,10 @@ def test_quantity_cost_handoff_requires_exact_original_and_reviewed_sources(tmp_
     own = 'src/engine/automation/intraday_release_handoff.py'
     before = subprocess.check_output(['git', '-C', str(root), 'show',
         '7f2552aedde8fec6ef904a43105827907e50dfc8:' + name])
-    after = (root / name).read_bytes()
+    # This exercises the preserved original quantity-cost generation. Current
+    # successor source bytes are covered by the complete-generation Git tests.
+    after = subprocess.check_output(['git', '-C', str(root), 'show',
+        '99e158af1c4c743d32662630e0397b58c1f7338e:' + name])
     verifier = (root / own).read_bytes()
     pair = handoff.REVIEWED_QUANTITY_RESEARCH_COST_SOURCES[name]
     assert pair == (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
@@ -1240,11 +1243,11 @@ def completed_research_git_candidate(tmp_path):
     # This fixture copies current source bytes. Bind the entire exact current
     # preparation generation, rather than combining its selector with the
     # historical 59-file closure (historical generations have separate tests).
-    variant = handoff.REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS[(
+    variant = handoff.REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS[(
         handler, handoff._sha(canonical/handler))]
     assert handoff._sha(canonical/variant['selector_path']) == variant['selector_sha256']
     dependencies = variant['dependencies']
-    assert len(dependencies) == 79
+    assert len(dependencies) == 80
     inventories = {
         'main_stop': {key: 'src/engine/'+key for key in stop.implementation_paths()},
         'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()},
@@ -1356,7 +1359,7 @@ def test_budget_extension_cannot_change_the_original_policy_inventory(
     origin='7f2552aedde8fec6ef904a43105827907e50dfc8'
     key=(origin,digests[family]);name='src/engine/lifecycle/research_input_budget.py'
     trigger='src/engine/sniper_state_handlers.py'
-    variant=handoff.REVIEWED_SNAPSHOT_METADATA_DEPENDENCY_VARIANTS[
+    variant=handoff.REVIEWED_PRESERVED_SNAPSHOT_DEPENDENCY_VARIANTS[
         (trigger,handoff._sha(root/trigger))]
     # The fixture owns the current complete generation, including its family
     # extensions. Mutating a historical fallback would not exercise this gate.

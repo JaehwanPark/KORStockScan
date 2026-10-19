@@ -93,6 +93,43 @@ def snapshot_identity(path):
     return archived_receipt(path)['original_identity']
 
 
+def snapshot_identity_matches(path, expected, *, expected_sha256=None):
+    """Revalidate unchanged bytes when evidence preservation changed ctime.
+
+    The expected identity comes from a sealed native projection. A sole ctime
+    change additionally requires its sealed full source SHA, or the original
+    native postclose manifest. This grants no semantic or policy approval.
+    """
+    path = logical_path(path)
+    current = snapshot_identity(path)
+    if current == expected:
+        return True
+    if (not isinstance(expected, dict) or set(expected) != set(current)
+            or any(current[key] != expected[key] for key in current if key != 'ctime_ns')
+            or not path.is_file() or path.is_symlink()):
+        return False
+    manifest_path = None
+    if expected_sha256 is None:
+        from datetime import date
+        day = path.name.removeprefix('trade_review_').removesuffix('.json')
+        if path.name != f'trade_review_{date.fromisoformat(day).isoformat()}.json':
+            return False
+        manifest_path = path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+        manifest_before = _regular(manifest_path)
+        if manifest_before['size'] > MAX_RECEIPT_BYTES:
+            return False
+        manifest = json.loads(manifest_path.read_bytes())
+        if (manifest.get('target_date') != day or manifest.get('profile') != 'postclose_exit'
+                or (manifest.get('snapshot_paths') or {}).get('trade_review') != str(path)):
+            return False
+        expected_sha256 = (manifest.get('snapshot_sha256') or {}).get('trade_review')
+    if (not isinstance(expected_sha256, str) or len(expected_sha256) != 64
+            or any(c not in '0123456789abcdef' for c in expected_sha256)
+            or _digest(path) != expected_sha256 or snapshot_identity(path) != current):
+        return False
+    return manifest_path is None or _regular(manifest_path) == manifest_before
+
+
 def generation(path):
     """Return the same logical generation before and after native compression."""
     path = logical_path(path)

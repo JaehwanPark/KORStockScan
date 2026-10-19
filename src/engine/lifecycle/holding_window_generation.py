@@ -344,7 +344,7 @@ def _verified_legacy_projection_dependency(data_root, day, *, projection_generat
     import os
     import stat
     from src.engine.strategy_position_performance_report import _legacy_original_generation_issue, _legacy_source_json
-    from .snapshot_archive import snapshot_identity
+    from .snapshot_archive import snapshot_identity, snapshot_identity_matches
     root = Path(data_root).resolve()
     directory = root / 'report/monitor_snapshots'
     raw = directory / f'trade_review_{day}.json'
@@ -372,7 +372,7 @@ def _verified_legacy_projection_dependency(data_root, day, *, projection_generat
     generation = projection_generation or byte_generation(projection)
     expected = proof['projection']
     if (generation != dict(path=projection.name, size=expected['identity']['size'], sha256=expected['sha256'])
-            or snapshot_identity(raw) != proof['snapshot']['identity']):
+            or not snapshot_identity_matches(raw, proof['snapshot']['identity'], expected_sha256=proof['snapshot']['sha256'])):
         raise ValueError('window_dependency_legacy_original_generation_changed')
     # Native snapshots put the metadata before the large section. Bound this
     # read independently; a different layout needs an explicit partition.
@@ -466,7 +466,7 @@ def _capture_day_inputs(root, directory, day, budget):
     sidecar = raw.with_suffix(".completed_projection.json")
     # The bounded sidecar is authoritative only with its original snapshot
     # identity. Preserve that binding as well as the sidecar's bytes.
-    from .snapshot_archive import present, snapshot_identity, identity_available
+    from .snapshot_archive import present, snapshot_identity, identity_available, snapshot_identity_matches
     if identity_available(raw) and present(sidecar):
         receipt = Path(str(sidecar) + '.dependencies.json')
         if receipt.is_file():
@@ -493,9 +493,9 @@ def _capture_day_inputs(root, directory, day, budget):
                 generation, content = _file_generation(sidecar)
                 value = decode(content)
         identity = snapshot_identity(raw)
-        if raw.is_symlink() or value.get("snapshot_identity") != identity:
+        if raw.is_symlink() or not snapshot_identity_matches(raw, value.get("snapshot_identity")):
             raise ValueError("window_dependency_snapshot_binding_invalid")
-        generation["snapshot_identity"] = identity
+        generation["snapshot_identity"] = value["snapshot_identity"]
         if not receipt.is_file() and 'legacy_validation' not in generation:
             payload = {k: v for k, v in value.items() if k != 'artifact_sha256'}
             expected = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'),

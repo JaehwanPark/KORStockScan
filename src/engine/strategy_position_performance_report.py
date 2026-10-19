@@ -497,7 +497,7 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
         validated_proof.clear()
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-    from src.engine.lifecycle.snapshot_archive import snapshot_identity, archived_receipt
+    from src.engine.lifecycle.snapshot_archive import snapshot_identity, archived_receipt, snapshot_identity_matches
     root = Path(DATA_DIR if data_dir is None else data_dir).resolve()
     status_root = (_FACT_SYNC_STATUS_DIR if root == Path(DATA_DIR).resolve()
                    else root/'report/strategy_position_fact_sync')
@@ -573,7 +573,7 @@ def _legacy_original_generation_issue(target_date, receipt=None, *, data_dir=Non
                                else directory/f'trade_review_{target_date}.completed_projection.json')):
             generation = body.get(role) or {}
             identity = snapshot_identity(logical)
-            if (generation.get('identity') != identity or generation.get('path') != str(logical)
+            if (not snapshot_identity_matches(logical, generation.get('identity'), expected_sha256=generation.get('sha256')) or generation.get('path') != str(logical)
                     or not re.fullmatch(r'[0-9a-f]{64}', str(generation.get('sha256') or ''))):
                 raise FactSyncSourceError('legacy_fact_original_generation_changed')
             if not logical.exists():

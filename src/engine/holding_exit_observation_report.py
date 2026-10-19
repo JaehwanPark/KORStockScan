@@ -357,7 +357,7 @@ def _load_saved_snapshots(
 
 def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path | None = None,
                                       metadata_only: bool = False, source_generations: dict | None = None) -> dict | None:
-    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity, identity_available
+    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity, identity_available, snapshot_identity_matches
     path = logical_path(path)
     data_root = _data_root() if data_root is None else data_root
     sidecar = path.with_suffix(".completed_projection.json")
@@ -420,7 +420,7 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
         if (projected.get("schema") != "trade_review_completed_projection_sidecar_v1"
             or projected.get("date") != target_date
             or projected.get("code") or projected.get("since")
-            or identity != expected_identity or declared != actual
+            or not snapshot_identity_matches(path, identity) or declared != actual
             or completed_projection_census_issue(projected, target_date, costs=costs) is not None
             or not isinstance((projected.get("sections") or {}).get(
                 "open_scalp_position_projection"), list)):

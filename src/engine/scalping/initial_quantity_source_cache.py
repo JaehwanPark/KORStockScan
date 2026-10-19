@@ -407,6 +407,10 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
                     or re.fullmatch(r'[0-9a-f]{64}', str(archive.get('logical_content_sha256') or '')) is None):
                 raise ValueError('quantity_completion_archive_metadata_invalid')
             original_identity = archive.get('original_identity')
+    from src.engine.lifecycle.snapshot_archive import snapshot_identity_matches
+    if (original_identity != dependency.get('snapshot_identity')
+            and snapshot_identity_matches(raw_path, dependency.get('snapshot_identity'))):
+        original_identity = dependency['snapshot_identity']
     costs = source_generation(Path(data_dir), day)
     projection = dict(proof.get('projection') or {})
     sealed_dependency = projection.pop('dependency_receipt', None)
