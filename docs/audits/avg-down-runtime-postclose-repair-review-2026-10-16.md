@@ -134,3 +134,14 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 격리 P5 첫 시도도 intake에서 `startup_native_machine_closure_invalid`로 실패했다. native verification 자체는 PASS였고193개 source·aux manifest/frozen inventory·delay2개가 관측됐지만, 장중 verifier가 `load` 대신 이미 읽은 bundle의 `validate`를 호출하여 bundle 관측만0이었다. 기존 P5 owner에서 두 native 경계를 함께 관측하고 semantic validate 성공 후에만 기록하도록 보완했다. 새 generator나 캐시 PASS는 만들지 않았다. 거부된 native validate는 계속 실패하며 원 실패 영수증과 diagnostic bytes를 보존한다. 기존 load 관측은 현재 preopen 소비자 때문에 retained, validate 관측은 같은 verifier의 현재 intraday 소비를 보완한다. 운영 정책과 runtime apply 권한은 변경하지 않는다.
 
 재리뷰 후 native 인계·P5 회귀2파일 **2,615 PASS /60.17초**다. 그중 native bundle load/validate 정상과 validate 거부를 포함한다. 보완4개 Python compile 및 diff 검사 PASS이며 배포 gate를 다시 실행한다. 첫 후보와 실패 영수증은 삭제하지 않는다.
+
+
+### 현재 장중 인계의 격리 소비 보완
+
+6b199823e의4개 native pre-stop gate는 모두 PASS였지만 P5는 `prepared_code_source_not_regular_bounded`로 차단됐다. 현재 PID의 stop/holding은 원894 정책을 이미 소비한 intraday handoff가 owner이며 두 family의 별도 prepared-code receipt는 발행되지 않았다. 기존 resolver가 준비용 receipt만 찾던 경로를 같은 owner에서 보완했다. source/selector/원 manifest·policy·정책 코드 inventory와 실제 소비된 handoff·consumption·현재 PID/start/cwd를 검증한 뒤 기존 read-only validation proof로 전달한다. 기존 prepared-origin 분기는 미래/준비 소비 때문에 retained이며 runtime receipt를 새로 발행하거나 Main 정지로 증거를 만들지 않는다.
+
+격리 child도 source hash·정확한 handoff 경로·원 manifest·정책/날짜·소비 receipt·PID identity·frozen 원문 결속을 독립 검증한다. parent는 child 종료 후 동일 PID identity를 다시 확인한다. 신규 apply/주문/PID 소비 권한은 false이며 기존 Main/수동/퇴역 custody와 OS 격리는 유지한다. 실제 source 파일이 없는 축약 역사 fixture는 원 Git tree가 소유하던 selector 파일을 복원하여 검증하고, 현 generation과 섞지 않았다. 과거59·76-source와 현재 전체 generation을 각각 보존했다.
+
+사용자가 전달한 artifact_freshness alert도 보존했다.18:21~18:22 관측은 선택34798/PID1889422의 scanner current source coverage 결손이며, fixed-watch20과 scanner0을 구분한다.0B 지연/결손·route snapshot 결손·유효 no-match는 각각 원 진단으로 남기고 report partial을 full 또는 주문 실패로 바꾸지 않는다. 해당 health artifact의 operational mutation은0이다. 이 관측을 새 AVG_DOWN 코드/PID의 자연 소비로 간주하지 않는다.
+
+최종 보완 검증: native 정책 인계·격리 child·P5 네 파일 **2,770 PASS /90.51초**, 앞서 통합 런타임16파일1,864 PASS(합4,634), 현 코드 generation capability4개431 PASS·Python25파일 compile·print-only parser·diff PASS다. 마지막 수정 후 자체 리뷰 범위 미해결0이다. 범위34798 대비 source 13파일 +322/-22 (순증300), tests 12파일 +564/-37 (순증527), docs 3파일 +202/-0 (순증202)(이 문단 전 집계)이며 module 이동/신규 CLI는 없다. source 순증은 필수 vote 입력과 실제 source generation을 유지한 안전한 정책 인계·격리 소비를 위해 사용했다.

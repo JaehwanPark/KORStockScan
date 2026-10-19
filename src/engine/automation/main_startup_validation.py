@@ -850,6 +850,12 @@ def run_validation(*, workspace, target_date, execution_root=ROOT, candidate=Fal
         _recheck(sources)
         for row in final['consumer_results'].values():
             _recheck(row.get('source_hashes') or {}, main_preparation=binding.get('main_preparation'))
+        from src.engine.automation.intraday_release_handoff import _identity as live_identity
+        for contract in binding['contracts'].values():
+            origin = contract['origin']
+            if (origin['basis'] == 'verified_selected_intraday_code_handoff'
+                    and live_identity(origin['pid_identity']['pid']) != origin['pid_identity']):
+                raise ValueError('startup_intraday_origin_pid_changed')
         final.update(status='passed', load_check_passed=True, protected_sources_unchanged=True,
                      failure_phase=None)
     except (OSError, ValueError, TypeError, KeyError, ImportError, subprocess.SubprocessError) as exc:

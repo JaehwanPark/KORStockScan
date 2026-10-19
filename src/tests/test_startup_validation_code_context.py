@@ -844,3 +844,42 @@ def test_cleanup_ai_preparation_pair_is_exact(fault):
     elif fault == 'target': current = '0'*64
     elif fault == 'path': relative = 'src/engine/kiwoom_sniper_v2.py'
     assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize('fault', [None, 'custody', 'pid', 'manifest', 'authority', 'date'])
+def test_intraday_origin_is_rebound_inside_real_os_isolation(request_fixture, fault):
+    f = request_fixture
+    request = f['request']
+    proof = request['candidate_code_handoffs']['pre_submit_delay']
+    origin = proof['origin']
+    data = Path(request['data_root']); commit = origin['selected_release_commit']
+    manifest = request['manifest']
+    manifest['selected_release_sha'] = origin['origin_commit']
+    manifest['manifest_sha256'] = C._digest(manifest)
+    mp = data/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+DAY+'.json')
+    mp.parent.mkdir(parents=True); mp.write_text(json.dumps(manifest))
+    folder = data/'runtime/policy_bootstrap/intraday_handoff'/DAY; folder.mkdir(parents=True)
+    hp, cp = folder/(commit+'.json'), folder/(commit+'.consumed.json')
+    identity = dict(pid=123, start_ticks='456', cwd=str(f['selected']/'src'))
+    common = dict(target_date=DAY, selected_release_commit=commit, release_root=str(f['selected']),
+                  manifest_sha256=manifest['manifest_sha256'])
+    handoff = dict(**common, schema='intraday_policy_preserving_release_handoff_v1',
+        authority='APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF', status='prepared_verified',
+        actual_pid_consumed=False, policy_effect='unchanged', frozen_files={str(mp):C._sha(mp)})
+    if fault == 'authority': handoff['authority'] = 'unapproved'
+    hp.write_text(json.dumps(handoff))
+    consumed = dict(**common, schema='intraday_policy_preserving_consumption_v1',status='pass',
+        actual_pid_consumed=True,handoff_sha256=C._sha(hp),pid_identity=identity)
+    if fault == 'custody': consumed['handoff_sha256'] = '0'*64
+    if fault == 'pid': consumed['pid_identity'] = {**identity, 'start_ticks':'999'}
+    if fault == 'date': consumed['target_date'] = '2026-10-16'
+    cp.write_text(json.dumps(consumed))
+    extra = {str(p):C._sha(p) for p in (mp,hp,cp)}
+    origin.update(basis='verified_selected_intraday_code_handoff', pid_identity=identity,
+        intraday_handoff_path=str(hp),intraday_handoff_sha256=C._sha(hp),
+        intraday_consumed_path=str(cp),intraday_consumed_sha256=C._sha(cp))
+    origin['sources'].update(extra);proof['source_hashes'].update(extra);request['source_hashes'].update(extra)
+    if fault == 'manifest': request['manifest'] = {**manifest, 'manifest_sha256':'0'*64}
+    _write_request(f, request)
+    result = _child(f, 'install_validation_code_context(request)\n'+CALL)
+    assert (result.returncode == 0) is (fault is None), result.stderr

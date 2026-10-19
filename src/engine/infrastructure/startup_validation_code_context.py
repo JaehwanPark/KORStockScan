@@ -254,6 +254,45 @@ def _origin(proof, request):
         _check_sources(native_sources)
         if any(sources.get(name) != sha for name, sha in native_sources.items()):
             raise ValueError('startup_code_context_native_handoff_sources_not_bound')
+    elif basis == 'verified_selected_intraday_code_handoff':
+        handoff_path = Path(origin.get('intraday_handoff_path') or '')
+        consumed_path = Path(origin.get('intraday_consumed_path') or '')
+        expected = Path(request['data_root'])/'runtime/policy_bootstrap/intraday_handoff'/proof['target_date']
+        if (handoff_path != expected/(commit+'.json')
+                or consumed_path != expected/(commit+'.consumed.json')):
+            raise ValueError('startup_code_context_intraday_path_invalid')
+        for path, key in ((handoff_path, 'intraday_handoff_sha256'),
+                          (consumed_path, 'intraday_consumed_sha256')):
+            _bound_source(sources, path)
+            if _sha(path) != origin.get(key):
+                raise ValueError('startup_code_context_intraday_source_changed')
+        handoff, consumed = _json(handoff_path), _json(consumed_path)
+        manifest_path = Path(request['data_root'])/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+proof['target_date']+'.json')
+        _bound_source(sources, manifest_path)
+        if _json(manifest_path) != request['manifest']:
+            raise ValueError('startup_code_context_intraday_manifest_changed')
+        identity = origin.get('pid_identity') or {}
+        if (handoff.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+                or handoff.get('authority') != 'APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF'
+                or handoff.get('status') != 'prepared_verified'
+                or handoff.get('actual_pid_consumed') is not False
+                or handoff.get('policy_effect') != 'unchanged'
+                or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+                or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+                or consumed.get('handoff_sha256') != origin['intraday_handoff_sha256']
+                or consumed.get('pid_identity') != identity or not identity.get('start_ticks')
+                or identity.get('cwd') != str(selected/'src')
+                or any(row.get('target_date') != proof['target_date']
+                       or row.get('selected_release_commit') != commit
+                       or row.get('release_root') != str(selected) for row in (handoff, consumed))
+                or any(sources.get(name) != sha for name, sha in handoff.get('frozen_files', {}).items())
+                or not isinstance(handoff.get('frozen_files'), dict) or not handoff['frozen_files']
+                or handoff['frozen_files'].get(str(manifest_path)) != sources[str(manifest_path)]
+                or handoff.get('manifest_sha256') != request['manifest']['manifest_sha256']
+                or not isinstance(identity.get('pid'), int) or identity['pid'] <= 0
+                or consumed.get('manifest_sha256') != request['manifest']['manifest_sha256']
+                or request['manifest'].get('selected_release_sha') != origin['origin_commit']):
+            raise ValueError('startup_code_context_intraday_handoff_invalid')
     else:
         raise ValueError('startup_code_context_origin_basis_invalid')
 

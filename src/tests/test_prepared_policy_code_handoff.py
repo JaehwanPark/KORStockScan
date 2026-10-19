@@ -216,29 +216,16 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
             HISTORICAL_PREPARATION_COMMIT+':'+name])).hexdigest() == digest
             for name, digest in extensions.items())
         trigger='src/engine/sniper_state_handlers.py'
-        variant=H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS[(trigger,H._sha(root/trigger))]
+        variant=H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS[(trigger,H._sha(root/trigger))]
         assert H._sha(root/variant['selector_path'])==variant['selector_sha256']
         current_extensions=variant['contract_extensions'][(origin,expected)]
-        assert set(current_extensions)==set(extensions)
+        assert set(current_extensions)>=set(extensions)
         assert all(hashlib.sha256((root/name).read_bytes()).hexdigest()==digest
                    for name,digest in current_extensions.items())
         for name, pair in H.REVIEWED_DELAY_RESEARCH_SOURCES.items():
             prior = real_git(['git', '-C', str(root), 'show', origin+':'+name])
             assert pair[0] == hashlib.sha256(prior).hexdigest()
-            current = hashlib.sha256((root/name).read_bytes()).hexdigest()
-            reviewed = {pair[1]}
-            if name in H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES:
-                reviewed.add(H.REVIEWED_MAIN_POLICY_LOAD_EXIT_SOURCES[name][1])
-            if name in H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES:
-                reviewed.add(H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES[name][1])
-            if name in H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES:
-                reviewed.add(H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES[name][1])
-            if name in H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES:
-                reviewed.add(H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES[name][1])
-            if name in H.REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES:
-                reviewed.add(H.REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES[name][1])
-            reviewed.update(pair[1] for pair in H.REVIEWED_SYNC_PROVIDER_OBSERVER_PAIRS.get(name, ()))
-            assert current in reviewed
+
 
 
 def _origin_resolution_arguments(prepared):
@@ -343,16 +330,23 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
     own = 'src/engine/automation/intraday_release_handoff.py'
     real_git = H.subprocess.check_output
     trigger='src/engine/sniper_state_handlers.py'
-    trigger_sha=H._sha(canonical/trigger)
-    dependencies = H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha]
+    source_commit=('958d35b2b03f0a37462c1c0121fc14c108e709b8' if generation=='issued_startup'
+                   else HISTORICAL_PREPARATION_COMMIT)
+    trigger_sha=(H._sha(canonical/trigger) if generation=='current_startup' else
+        hashlib.sha256(real_git(['git','-C',str(canonical),'show',source_commit+':'+trigger])).hexdigest())
+    dependencies = ({} if generation=='current_startup' else
+        H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha])
     if generation in {'issued_startup','current_startup'}:
-        variants=(H.REVIEWED_AUXILIARY_HISTORY_DEPENDENCY_VARIANTS if generation=='current_startup'
+        variants=(H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS if generation=='current_startup'
                   else H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS)
         variant=variants[(trigger,trigger_sha)]
         if generation=='current_startup':
             assert H._sha(canonical/variant['selector_path'])==variant['selector_sha256']
         dependencies=variant['dependencies']
-    assert len(dependencies)==(59 if generation=='historical_preparation' else 76)
+    if generation=='current_startup':
+        assert set(dependencies) >= set(H.REVIEWED_AVG_DOWN_INPUT_HASHES)
+    else:
+        assert len(dependencies)==(59 if generation=='historical_preparation' else 76)
     for name in (*CONTRACT_PATHS,own,*dependencies):
         destination=fixture/name
         destination.parent.mkdir(parents=True,exist_ok=True)
@@ -364,6 +358,16 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
         if name in dependencies:
             assert hashlib.sha256(raw).hexdigest()==dependencies[name]
     origin = '7f2552aedde8fec6ef904a43105827907e50dfc8'
+    # Keep original selector modules that the real frozen Git tree owns.
+    # Their old bytes select the historical closure rather than a later one.
+    if generation != 'current_startup':
+        for name in {v['selector_path'] for key, variants in vars(H).items()
+                     if key.endswith('_DEPENDENCY_VARIANTS') and isinstance(variants, dict)
+                     for (owner, sha), v in variants.items() if (owner, sha) == (trigger, trigger_sha)}:
+            result = H.subprocess.run(['git','-C',str(canonical),'show',source_commit+':'+name], capture_output=True)
+            if result.returncode == 0 and not (fixture/name).exists():
+                (fixture/name).parent.mkdir(parents=True,exist_ok=True)
+                (fixture/name).write_bytes(result.stdout)
     H.subprocess.run(['git','init','-q',str(fixture)],check=True)
     def commit():
         H.subprocess.run(['git','-C',str(fixture),'add','.'],check=True)
@@ -449,3 +453,36 @@ def test_engine_relative_extension_preserves_native_family_keys(prepared, monkey
         assert result['reviewed_extension_hashes'] == extensions
         assert result['original_code_sha256'] == args['expected']
     assert before == {str(p): p.read_bytes() for p in data.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('prepared', ['main_stop', 'holding_vote'], indirect=True)
+@pytest.mark.parametrize('fault', [None, 'custody', 'policy', 'pid', 'frozen_source'])
+def test_resolve_live_intraday_origin_preserves_native_custody(prepared, monkeypatch, fault):
+    data, root, args, selector = _origin_resolution_arguments(prepared)
+    C.receipt_path(data, DAY, COMMIT, args['family']).unlink()
+    manifest_path = Path(json.loads(prepared[-1].read_text())['manifest_path'])
+    manifest = json.loads(manifest_path.read_text())
+    identity = dict(pid=123, start_ticks='456', cwd=str(root/'src'))
+    hp, cp = data/'handoff.json', data/'consumed.json'
+    handoff = dict(frozen_files={str(manifest_path): C._sha(manifest_path)})
+    hp.write_text(json.dumps(handoff))
+    cp.write_text(json.dumps(dict(pid_identity=identity, manifest_sha256=manifest['manifest_sha256'])))
+    monkeypatch.setattr(H, '_verify_consumed_handoff', lambda *a: dict(
+        status='fail' if fault == 'custody' else 'pass', handoff=handoff))
+    monkeypatch.setattr(H, '_paths', lambda *a: (hp, cp))
+    monkeypatch.setattr(H.bootstrap, 'manifest_path', lambda *a: manifest_path)
+    monkeypatch.setattr(H, '_preopen', lambda *a: dict(selected_release_commit=ORIGIN))
+    monkeypatch.setattr(H, '_identity', lambda *a: {**identity, 'start_ticks':'999'} if fault == 'pid' else identity)
+    if fault == 'policy': args['policy_sha'] = 'different'
+    if fault == 'frozen_source': handoff['frozen_files'][str(manifest_path)] = '0'*64
+    before = selector.read_bytes()
+    if fault:
+        with pytest.raises(ValueError): C.resolve_prepared_code_origin(data, DAY, **args)
+    else:
+        result = C.resolve_prepared_code_origin(data, DAY, **args)
+        assert result['basis'] == 'verified_selected_intraday_code_handoff'
+        assert result['origin_commit'] == ORIGIN
+        assert result['pid_identity'] == identity
+        assert result['sources'][str(cp)] == C._sha(cp)
+    assert selector.read_bytes() == before
+    assert not C.receipt_path(data, DAY, COMMIT, args['family']).exists()

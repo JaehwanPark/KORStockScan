@@ -1997,8 +1997,10 @@ REVIEWED_CLEANUP_DEPENDENCY_VARIANTS = {
 # Reviewed AVG_DOWN input activation and Main SOR integration. Preserve the
 # original policy digests and the predecessor dependency closure. The two added
 # holding inputs are exact reviewed extensions, never fallback policy authority.
-REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/automation/main_startup_validation.py': '034f5dcadb8d14d161e86a7e718bd05707fe9d48c91078fdb8e789005f668e65',
- 'src/engine/ai/holding_exit_vote.py': '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81',
+REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/ai/holding_exit_vote.py': '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81',
+ 'src/engine/automation/main_startup_validation.py': 'b4475bf2671a8e5c1206c588ec265b736c7a082cb721f65d7dc3c1a8c87baec9',
+ 'src/engine/automation/prepared_policy_code_handoff.py': '9ef09608077aa02c25bdd40d8bc33344bf0e10dbde18cae0fdcf434b0c6efaf8',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '4c072cbaba6a98f18926aa36eaded4dd607d1d696dfabcbfbb3a7efe7018b586',
  'src/engine/scalping/ai_market_snapshot.py': 'e4a4ae29cca5d452b1bcfa4c54684e8d4bc8702224f6034231a4a4a12235881d',
  'src/engine/scalping/avg_down_replay_capture.py': 'dbb163f2f23c678f4a2343e8501b405166bd18f30b94b0de64f98e76c0a2645a',
  'src/engine/scalping/holding_decision_context.py': '783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898',

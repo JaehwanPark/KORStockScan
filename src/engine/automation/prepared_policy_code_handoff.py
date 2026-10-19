@@ -198,6 +198,45 @@ def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, pat
     if actual != expected:
         from src.engine.automation import intraday_release_handoff as H
         path = receipt_path(data, day, selected_commit, family)
+        if not path.exists() and not path.is_symlink():
+            # A live intraday carry has its own consumed native custody. Do not
+            # require or manufacture an unissued prepared-policy receipt.
+            checked = H._verify_consumed_handoff(day, selected_commit)
+            if checked.get('status') != 'pass':
+                raise ValueError('prepared_code_intraday_custody_invalid')
+            handoff_path, consumed_path = H._paths(day, selected_commit)
+            handoff, consumed = _read(handoff_path), _read(consumed_path)
+            manifest_path = H.bootstrap.manifest_path(day)
+            manifest = _read(manifest_path)
+            origin = manifest.get('selected_release_sha')
+            policy_path, policy_code = _policy(data, day, family, manifest)
+            if (handoff != checked.get('handoff')
+                    or _bound(manifest, family) != policy_sha or policy_code != expected
+                    or consumed.get('manifest_sha256') != manifest.get('manifest_sha256')
+                    or origin != H._preopen(day).get('selected_release_commit')):
+                raise ValueError('prepared_code_intraday_policy_binding_invalid')
+            candidate = Path(H.__file__).resolve().parents[3]
+            trigger = 'src/engine/sniper_state_handlers.py'
+            variant = H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS.get(
+                (trigger, _sha(candidate / trigger)), {})
+            extensions = variant.get('contract_extensions', {}).get((origin, expected), {})
+            selected_paths = {key: name for key, name in paths.items() if name not in extensions}
+            code_hashes = selected_hashes(selected_paths)
+            actual = _digest(code_hashes)
+            H._verify_entry_code_delta(root, selected_commit, origin, selected_paths, expected)
+            sources.update(handoff['frozen_files'])
+            sources.update({str(p): _sha(p) for p in (handoff_path, consumed_path, manifest_path, policy_path)})
+            sources.update({str(root / name): code_hashes[key] for key, name in selected_paths.items()})
+            identity = consumed['pid_identity']
+            if (H._identity(identity['pid']) != identity or _sha(selector) != selector_sha
+                    or any(_sha(name) != sha for name, sha in sources.items())):
+                raise ValueError('prepared_code_intraday_generation_changed')
+            result.update(origin_commit=origin, basis='verified_selected_intraday_code_handoff',
+                selected_runtime_code_sha256=actual, selected_paths=selected_paths, sources=sources,
+                intraday_handoff_path=str(handoff_path), intraday_handoff_sha256=_sha(handoff_path),
+                intraday_consumed_path=str(consumed_path), intraday_consumed_sha256=_sha(consumed_path),
+                pid_identity=identity, reviewed_extension_hashes=extensions)
+            return result
         receipt_sha = _sha(path)
         receipt = _read(path)
         selected_paths = receipt.get('paths')
