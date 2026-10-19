@@ -815,6 +815,40 @@ def generation(data_root, path):
         return result
 
 
+def _archive_logical_authority(path):
+    """Keep an existing archiver's full logical seal authoritative."""
+    receipt=Path(str(path)+'.gz.archive_receipt.json')
+    if not receipt.exists() and not receipt.is_symlink():return None
+    metadata=receipt.lstat();before=signature(metadata)
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid!=os.getuid()
+            or metadata.st_size>128*1024):
+        raise ValueError('trailing_index_native_archive_binding_invalid')
+    fd=os.open(receipt,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+    with os.fdopen(fd,'rb') as stream:
+        if signature(os.fstat(stream.fileno()))!=before:
+            raise ValueError('trailing_index_archive_receipt_changed')
+        raw=stream.read(128*1024+1)
+        if signature(os.fstat(stream.fileno()))!=before or signature(receipt.lstat())!=before:
+            raise ValueError('trailing_index_archive_receipt_changed')
+    value=json.loads(raw)
+    import re
+    required=('device','inode','size_bytes','mtime_ns','ctime_ns')
+    if (len(raw)!=metadata.st_size or not isinstance(value,dict)
+            or value.get('schema') not in {'pipeline_raw_archive_identity_v1','native_raw_archive_identity_v1'}
+            or value.get('logical_path')!=str(path)
+            or value.get('artifact_content_sha256')!=hashlib.sha256(encode({
+                k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()
+            or value.get('verification_contract')!='logical_sha256_size_crc_to_eof_v1'
+            or value.get('runtime_effect') is not False or value.get('allowed_runtime_apply') is not False
+            or type(value.get('logical_size_bytes')) is not int or value['logical_size_bytes']<0
+            or not isinstance(value.get('archive_generation'),dict)
+            or any(type(value['archive_generation'].get(k)) is not int or value['archive_generation'][k]<0 for k in required)
+            or not isinstance(value.get('logical_content_sha256'),str)
+            or re.fullmatch('[0-9a-f]{64}',value['logical_content_sha256']) is None):
+        raise ValueError('trailing_index_native_archive_binding_invalid')
+    return value,before
+
+
 def _archive_generation(data_root,path):
     path,_,target=_location(data_root,path)
     receipt=Path(str(path)+'.gz.archive_receipt.json');physical=Path(str(path)+'.gz')
@@ -826,6 +860,10 @@ def _archive_generation(data_root,path):
                 saved=db.execute('SELECT body FROM archive_migrations WHERE path=?',(str(path),)).fetchone()
                 if saved:
                     value=json.loads(saved[0]);bound=value['generation']
+                    authority=_archive_logical_authority(path)
+                    if authority is not None and any(value.get(key)!=authority[0].get(key)
+                            for key in ('logical_size_bytes','logical_content_sha256')):
+                        raise ValueError('trailing_index_archive_logical_authority_changed')
                     if (physical.is_symlink() or path.exists()
                             or signature(physical.stat())!=bound['source_stat']
                             or value.get('schema')!='trailing_archive_migration_v1'
@@ -839,19 +877,14 @@ def _archive_generation(data_root,path):
                                 k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()):
                         raise ValueError('trailing_index_archive_migration_changed')
                     return bound
-    if (not receipt.is_file() or receipt.is_symlink() or receipt.stat().st_size>128*1024
-            or physical.is_symlink()):
+    authority=_archive_logical_authority(path)
+    if authority is None or physical.is_symlink():
         raise InputPending('trailing_index_native_archive_binding_missing')
-    before=signature(receipt.stat());raw=receipt.read_bytes();value=json.loads(raw)
+    value,before=authority
     generation=value.get('trailing_source_index') or {}
     actual=signature(physical.stat());bound=value.get('archive_generation') or {}
     observed=[bound.get(key) for key in ('device','inode','size_bytes','mtime_ns','ctime_ns')]
-    if (value.get('schema') not in {'pipeline_raw_archive_identity_v1','native_raw_archive_identity_v1'}
-            or value.get('logical_path')!=str(path) or value.get('artifact_content_sha256')!=hashlib.sha256(
-                encode({k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()
-            or value.get('verification_contract')!='logical_sha256_size_crc_to_eof_v1'
-            or value.get('runtime_effect') is not False or value.get('allowed_runtime_apply') is not False
-            or generation.get('schema')!=SCHEMA+':generation' or generation.get('path')!=path.name
+    if (generation.get('schema')!=SCHEMA+':generation' or generation.get('path')!=path.name
             or generation.get('source_stat')!=value.get('trailing_source_identity')
             or generation.get('size')!=value.get('logical_size_bytes') or observed!=actual
             or signature(receipt.stat())!=before):
@@ -887,6 +920,7 @@ def migrate_frozen_source(data_root,path):
         if any(p.is_symlink() for p in target.parents):
             raise ValueError('trailing_index_database_path_invalid')
         current=signature(metadata);target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+        authority=_archive_logical_authority(logical) if archived else None
         temporary=target.with_name(target.name+'.archive-'+uuid.uuid4().hex+'.tmp')
         db=_open_database(temporary,readonly=False,writer=False)
         name=str(logical);offset=records=selected=0;chain=ZERO_SHA;logical_sha=hashlib.sha256()
@@ -923,6 +957,12 @@ def migrate_frozen_source(data_root,path):
                         if records%128==0:db.commit()
                 if signature(os.fstat(raw.fileno()))!=current or signature(physical.stat())!=current:
                     raise ValueError('trailing_archive_migration_source_changed')
+            if archived:
+                if _archive_logical_authority(logical)!=authority:
+                    raise ValueError('trailing_archive_migration_receipt_changed')
+                if authority is not None and (authority[0]['logical_content_sha256']!=logical_sha.hexdigest()
+                        or authority[0]['logical_size_bytes']!=offset):
+                    raise ValueError('trailing_archive_migration_logical_authority_mismatch')
             body=dict(schema=SCHEMA+':generation',path=logical.name,size=offset,
                 namespace=namespace,source_stat=current,catchup_end=offset,raw_records=records,
                 selected_records=selected,prefix_chain_sha256=chain,append_chain_sha256=ZERO_SHA,
@@ -943,7 +983,8 @@ def migrate_frozen_source(data_root,path):
             db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         finally:
             db.close()
-        if signature(physical.stat())!=current or (archived and logical.exists()):
+        if (signature(physical.stat())!=current or (archived and logical.exists())
+                or archived and _archive_logical_authority(logical)!=authority):
             raise ValueError('trailing_archive_migration_source_changed')
         with temporary.open('rb') as stream:os.fsync(stream.fileno())
         if target.exists():
@@ -968,7 +1009,8 @@ def migrate_frozen_source(data_root,path):
                 try:
                     with existing:
                         existing.execute('BEGIN IMMEDIATE')
-                        if (signature(physical.stat())!=current or existing.execute(
+                        if (signature(physical.stat())!=current
+                                or archived and _archive_logical_authority(logical)!=authority or existing.execute(
                                 'SELECT * FROM sources ORDER BY path').fetchall()!=prior):
                             raise ValueError('trailing_archive_migration_source_changed')
                         for table,column in (('rows','source'),('minutes','source'),('sources','path')):

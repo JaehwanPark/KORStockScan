@@ -10368,8 +10368,12 @@ def build_main_mechanistic_report(
         "hierarchical_entry_quality": hierarchical,
         **OFFLINE_CONTRACT,
     }
-    from src.engine.scalping.main_submit_drought_research import refresh_daily_projection
-    report['submission_drought_price_comparison'] = refresh_daily_projection(data_root, target_date, incumbent)
+    # The continuous-reversal family owns its native comparison in the
+    # mandatory main_machine_policy stage. Its captures have no legacy raw
+    # setup recipe; do not feed them to the older KRX recipe comparator.
+    if not (incumbent or {}).get('continuous_reversal'):
+        from src.engine.scalping.main_submit_drought_research import refresh_daily_projection
+        report['submission_drought_price_comparison'] = refresh_daily_projection(data_root, target_date, incumbent)
     return _with_artifact_content_sha256(report)
 
 

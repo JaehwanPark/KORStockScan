@@ -107,15 +107,17 @@ def test_archive_backfill_requires_a_separate_offline_worker(tmp_path):
 
 
 def test_offline_archive_enrollment_preserves_source_and_never_restores_plain(tmp_path,monkeypatch):
-    import gzip,hashlib
-    path=source(tmp_path);raw=json.dumps(row()).encode()+b'\n';path.unlink()
-    archive=Path(str(path)+'.gz');archive.write_bytes(gzip.compress(raw))
-    receipt=Path(str(archive)+'.archive_receipt.json');receipt.write_bytes(b'original receipt bytes')
+    import hashlib
+    from src.engine.compress_db_backfilled_files import _gzip_file
+    path=source(tmp_path);raw=json.dumps(row()).encode()+b'\n';path.write_bytes(raw)
+    assert _gzip_file(path,dry_run=False)[0]
+    archive=Path(str(path)+'.gz')
+    receipt=Path(str(archive)+'.archive_receipt.json');original_receipt=receipt.read_bytes()
     before=archive.read_bytes();identity=store.signature(archive.stat())
     with pytest.raises(store.InputPending):store.generation(tmp_path,path)
     bound=store.migrate_frozen_source(tmp_path,path)
     assert not path.exists() and archive.read_bytes()==before
-    assert store.signature(archive.stat())==identity and receipt.read_bytes()==b'original receipt bytes'
+    assert store.signature(archive.stat())==identity and receipt.read_bytes()==original_receipt
     assert bound['source_stat']==identity and bound['size']==len(raw)
     assert store.input_generation(tmp_path,archive)==bound
     original=Path.open
@@ -127,6 +129,56 @@ def test_offline_archive_enrollment_preserves_source_and_never_restores_plain(tm
     assert values[0][0]['row']['decision_trace_id']=='trace-1'
     assert values[0][1]['sha256']==hashlib.sha256(raw).hexdigest()
     assert store.migrate_frozen_source(tmp_path,path)==bound
+
+
+@pytest.mark.parametrize('damage',['seal','logical_sha','logical_size','path','authority','generation','concurrent'])
+def test_archive_enrollment_cannot_discard_existing_native_logical_authority(tmp_path,monkeypatch,damage):
+    import hashlib
+    from src.engine.compress_db_backfilled_files import _gzip_file
+    path=source(tmp_path);path.write_bytes(json.dumps(row()).encode()+b'\n')
+    assert _gzip_file(path,dry_run=False)[0]
+    receipt=Path(str(path)+'.gz.archive_receipt.json');value=json.loads(receipt.read_bytes())
+    if damage in {'seal','logical_sha'}:value['logical_content_sha256']='0'*64
+    elif damage=='logical_size':value['logical_size_bytes']+=1
+    elif damage=='path':value['logical_path']=str(path.with_name('foreign.jsonl'))
+    elif damage=='authority':value['allowed_runtime_apply']=True
+    elif damage=='generation':value['archive_generation']={}
+    if damage!='seal':
+        value['artifact_content_sha256']=hashlib.sha256(store.encode({
+            k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()
+    receipt.write_bytes(store.encode(value));before=receipt.read_bytes()
+    if damage=='concurrent':
+        original=store._put
+        def change(*args,**kwargs):
+            result=original(*args,**kwargs);receipt.write_bytes(before);return result
+        monkeypatch.setattr(store,'_put',change)
+    with pytest.raises(ValueError,match='archive.*(invalid|mismatch|changed)'):
+        store.migrate_frozen_source(tmp_path,path)
+    assert not store._location(tmp_path,path)[2].exists() and not path.exists()
+    assert receipt.read_bytes()==before
+
+
+@pytest.mark.parametrize('present_at_enrollment',[False,True])
+def test_indexed_gzip_rechecks_declared_logical_seal_without_raw_decode(tmp_path,monkeypatch,present_at_enrollment):
+    import hashlib
+    from src.engine.compress_db_backfilled_files import _gzip_file
+    path=source(tmp_path);path.write_bytes(json.dumps(row()).encode()+b'\n')
+    assert _gzip_file(path,dry_run=False)[0]
+    receipt=Path(str(path)+'.gz.archive_receipt.json');original=receipt.read_bytes()
+    if not present_at_enrollment:receipt.unlink()
+    bound=store.migrate_frozen_source(tmp_path,path)
+    if not present_at_enrollment:receipt.write_bytes(original)
+    opened=Path.open
+    def guard(self,*args,**kwargs):
+        if self==Path(str(path)+'.gz'):pytest.fail('indexed authority check decoded the archive')
+        return opened(self,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',guard)
+    assert store.generation(tmp_path,path)==bound
+    value=json.loads(original);value['logical_content_sha256']='0'*64
+    value['artifact_content_sha256']=hashlib.sha256(store.encode({
+        k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()
+    receipt.write_bytes(store.encode(value))
+    with pytest.raises(ValueError,match='logical_authority_changed'):store.generation(tmp_path,path)
 
 
 @pytest.mark.parametrize('corruption',['crc','partial','changed','symlink'])
