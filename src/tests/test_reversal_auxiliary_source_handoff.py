@@ -139,6 +139,32 @@ def test_native_source_owner_is_readonly_and_runtime_validation_spawns_nothing(s
     assert before=={p:p.read_bytes() for p in f.data.rglob('*') if p.is_file()}
 
 
+@pytest.mark.parametrize('relative', [False, True])
+def test_shared_data_mount_preserves_original_baseline_paths(source, monkeypatch, relative):
+    f=source
+    # Model the native baseline's absolute dependency paths, which preserve
+    # the caller spelling until the source-handoff owner pins the root.
+    def bindings(data_root, bundle):
+        path=Path(data_root)/'runtime/mechanistic_entry_policy/generations'/(bundle['bundle_sha256']+'.json')
+        return f.bindings,[A._reference(path)],[str(path.absolute())]
+    monkeypatch.setattr(A,'_bindings',bindings)
+    value=build(f)
+    alias=f.current/'data';alias.symlink_to(f.data,target_is_directory=True)
+    monkeypatch.chdir(f.current)
+    root=Path('data') if relative else alias
+    actual=H.build(root,previous_manifest_path=f.previous_path,previous_overlay_path=f.overlay_path,
+                   target_bundle_path=f.target_path)
+    assert actual==value
+    assert H.validate(root,value,source_manifest_path=f.source_path,source_bundle_path=f.original_path,
+                      target_bundle_path=f.target_path,frozen_root=f.frozen)==value
+    assert all(not Path(p).is_relative_to(alias) for p in value['baseline_dependency_paths'])
+    # Canonicalizing a shared root never admits a changed immutable source.
+    f.target_path.write_bytes(f.target_path.read_bytes()+b' ')
+    with pytest.raises(ValueError,match='artifact_or_source_changed'):
+        H.validate(root,value,source_manifest_path=f.source_path,source_bundle_path=f.original_path,
+                   target_bundle_path=f.target_path,frozen_root=f.frozen)
+
+
 @pytest.mark.parametrize('damage', [None, 'current_semantics', 'historical_semantics',
                                    'historical_commit', 'historical_root', 'target_commit'])
 def test_historical_issue_survives_reader_move_only_with_exact_sources(source, monkeypatch, tmp_path, damage):

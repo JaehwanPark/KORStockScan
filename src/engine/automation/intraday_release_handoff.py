@@ -2317,6 +2317,26 @@ REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS = {'src/engine/automation/main_trailing_
                                                          ('f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
                                                           'fea1b901d47c2ba32cdc7f66f97904738fbdc1affd089da44012bb80fdc39ec7'))}
 
+# Shared data mounts preserve the original auxiliary source dependency paths.
+# Keep the issued archive generation and select this complete successor only
+# through the repaired source-handoff owner.
+REVIEWED_AUXILIARY_DATA_ROOT_HASHES = {'src/engine/scalping/reversal_auxiliary_source_handoff.py': '36a89f137bd81f4453024241f68a70eec268520a0806e9ce59103bd0ae50b1d3'}
+REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/reversal_auxiliary_source_handoff.py',
+        'selector_sha256': REVIEWED_AUXILIARY_DATA_ROOT_HASHES['src/engine/scalping/reversal_auxiliary_source_handoff.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_AUXILIARY_DATA_ROOT_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_AUXILIARY_DATA_ROOT_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_AUXILIARY_DATA_ROOT_PAIRS = {'src/engine/scalping/reversal_auxiliary_source_handoff.py': tuple(
+    (before, '36a89f137bd81f4453024241f68a70eec268520a0806e9ce59103bd0ae50b1d3')
+    for before in ('f114eaa85987d72d2361a25e7d5aa2fa41ac5fcf6ad74992c0fe40658e038d82',
+                   'f5724a19f06ef4417226c801259e00378217b8e6ebd49355cad2d21e4ad15c0f'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2370,7 +2390,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_AUXILIARY_DATA_ROOT_DEPENDENCY_VARIANTS,
+                         REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
                          REVIEWED_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
                          REVIEWED_POSTCLOSE_READER_DEPENDENCY_VARIANTS,
                          REVIEWED_LATE_COST_DEPENDENCY_VARIANTS,
@@ -2443,7 +2464,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
+        if (pair in REVIEWED_AUXILIARY_DATA_ROOT_PAIRS.get(name, ())
+                or pair in REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
                 or pair in REVIEWED_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
                 or pair in REVIEWED_POSTCLOSE_READER_PAIRS.get(name, ())
                 or pair in REVIEWED_LATE_COST_PAIRS.get(name, ())

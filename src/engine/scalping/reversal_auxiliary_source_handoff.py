@@ -255,6 +255,9 @@ def inspect_previous(data_root, *, previous_manifest_path, previous_overlay_path
 
 def _build(data_root, previous_manifest_path, previous_overlay_path, target_bundle_path, *, check_git, execution_root=None):
     from src.engine.scalping import reversal_auxiliary_next_session as A
+    # The CLI's relative data root can be a managed release's shared mount.
+    # Use the same physical root for inspection and baseline dependency paths.
+    data_root = Path(data_root).resolve(strict=True)
     body = _inspect(data_root, previous_manifest_path, previous_overlay_path, check_git=check_git,
                     execution_root=execution_root)
     target, ref = _read(target_bundle_path)
