@@ -1,14 +1,4 @@
 005930 # machine_owner_scope samsung_electronics
-034020 # machine_owner_scope main_fixed_watch_owner
 042660 # machine_owner_scope hanwha_widget_and_episode_independent_owners
-010140 # machine_owner_scope samsung_heavy_low_price_two_leg_owner
 475150 # machine_owner_scope sk_eternix_low_price_two_leg_owner
-006800 # machine_owner_scope mirae_asset_low_price_two_leg_owner
-015760 # machine_owner_scope kepco_low_price_two_leg_owner
-028050 # machine_owner_scope samsung_ea_low_price_two_leg_owner
-137310 # machine_owner_scope sd_biosensor_low_price_two_leg_owner
-028670 # machine_owner_scope fan_ocean_low_price_two_leg_owner
-011170 # machine_owner_scope lotte_chemical_low_price_two_leg_owner
-108320 # machine_owner_scope lx_semicon_low_price_two_leg_owner
-456010 # operator_manual_control
 005930 # auto_hard_stop_handoff source=preset_hard_stop_after_quote_confirmation exit=scalp_preset_hard_stop_pct profit=-1.47% peak=-0.23%

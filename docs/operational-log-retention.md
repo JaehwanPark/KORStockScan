@@ -4,6 +4,13 @@ This owner covers ordinary logs and explicitly closed temporary runs. Pipeline,
 policy, research, broker/order and manual custody evidence retain their native
 owners. No age/name-only deletion is authorized.
 
+The generic interpreter/tool cache census prunes `.venv`, `.git`, `data`,
+`logs`, `tmp` and `docs` at the workspace boundary. It neither traverses nor
+deletes caches embedded in policy/research evidence or preserved private
+deployment workdirs, including intentionally inaccessible OS-isolation trees.
+Those trees retain their native storage owner. Enumeration failures inside the
+remaining cache scope still fail cleanup; permission errors are not suppressed.
+
 Module writers rotate their own file at 20 MiB under the existing process flock.
 The closed inode receives a `closed_operational_log_v1` manifest in
 `logs/.retention`. Cron stdout uses `deploy/run_with_owned_log.sh` before opening
