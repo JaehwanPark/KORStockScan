@@ -670,7 +670,7 @@ def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route(monkey
         "market_session_bucket": "KRX_NXT_AFTERMARKET",
     }
     request = {"qty": 1, "price": 10000, "order_type_code": "00"}
-    assert handlers._bind_zero_base_order_request(stock, request)
+    assert handlers._bind_main_entry_order_request(stock, request)
     assert request["dmst_stex_tp"] == "SOR"
     assert kiwoom_orders.describe_buy_order_resolution(
         "00", price=10000, dmst_stex_tp=request["dmst_stex_tp"],
@@ -679,7 +679,7 @@ def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route(monkey
                          ("market_data_route", "nxt_only"),
                          ("effective_venue", "NXT"),
                          ("market_session_bucket", "krx_regular")):
-        assert not handlers._bind_zero_base_order_request(
+        assert not handlers._bind_main_entry_order_request(
             {**stock, field: value}, {},
         )
 
@@ -703,14 +703,14 @@ def test_zero_base_sor_order_rejects_stale_session_cohort(monkeypatch):
         "market_data_route": "krx_nxt_integrated", "broker_route": "SOR",
         "effective_venue": "KRX", "market_session_bucket": "krx_regular",
     }
-    assert handlers._bind_zero_base_order_request(stock, {})
+    assert handlers._bind_main_entry_order_request(stock, {})
     clock.update(hour=16, minute=10)
-    assert not handlers._bind_zero_base_order_request(stock, {})
+    assert not handlers._bind_main_entry_order_request(stock, {})
     stock.update(effective_venue="KRX_NXT_INTEGRATED",
                  market_session_bucket="KRX_NXT_AFTERMARKET")
-    assert handlers._bind_zero_base_order_request(stock, {})
+    assert handlers._bind_main_entry_order_request(stock, {})
     clock.update(hour=19, minute=42)
-    assert not handlers._bind_zero_base_order_request(stock, {})
+    assert not handlers._bind_main_entry_order_request(stock, {})
 
 
 def test_zero_base_watch_expires_on_session_transition():
@@ -754,12 +754,12 @@ def test_zero_base_premarket_entry_binds_nxt_only_during_buy_window(monkeypatch)
         "market_session_bucket": "krx_like_premarket",
     }
     request = {"qty": 1, "price": 10000, "order_type_code": "00"}
-    assert handlers._bind_zero_base_order_request(stock, request)
+    assert handlers._bind_main_entry_order_request(stock, request)
     assert request["dmst_stex_tp"] == "NXT"
     for field, value in (("broker_route", "SOR"),
                          ("market_data_route", "krx_nxt_integrated"),
                          ("effective_venue", "NXT")):
-        assert not handlers._bind_zero_base_order_request({**stock, field: value}, {})
+        assert not handlers._bind_main_entry_order_request({**stock, field: value}, {})
 
 
 def test_enter_now_failure_expires_provisional_row(monkeypatch):
@@ -1016,3 +1016,126 @@ def test_native_main_handoff_retains_exact_source_to_precheck_and_original_claim
     assert refresh['_zero_base_source_continuity'] == target['_zero_base_source_continuity']
     refresh['_zero_base_source_continuity']['adopted_epoch'] += 1
     assert refresh['_zero_base_source_continuity'] != target['_zero_base_source_continuity']
+
+
+def _fixed_route_stock(at, code="036930"):
+    fixed = handlers.main_fixed_watch
+    route = fixed.session_route(at, code)
+    return dict(code=code, strategy="SCALPING", watch_origin="MAIN_FIXED_WATCH",
+        watch_generation_id=fixed.generation_id(at, route),
+        market_data_route=route["route"], market_session_bucket=route["bucket"],
+        effective_venue=route["venue"], broker_route="NXT" if route["route"] == "nxt_only" else "SOR")
+
+
+@pytest.mark.parametrize("hour,route", [(8,"NXT"),(10,"SOR"),(17,"SOR")])
+@pytest.mark.parametrize("leg", ["normal", "initial_probe", "market_first", "ioc"])
+def test_fixed_watch_route_survives_plan_request_and_cancel(monkeypatch, hour, route, leg):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    at = datetime(2026,10,19,hour,10,tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    stock = _fixed_route_stock(at)
+    planned = dict(qty=2,price=10000,tag="normal")
+    if leg == "initial_probe": planned["initial_quantity_probe_market"] = True
+    elif leg == "market_first":
+        planned.update(entry_split_order_market_first_leg_applied=True,
+            entry_split_order_execution_mode="market_first",entry_split_order_leg_index=1)
+    elif leg == "ioc": planned["tif"] = "IOC"
+    monkeypatch.setattr(handlers,"is_scalping_buy_time_allowed",lambda _t:True)
+    assert handlers._bind_main_entry_order_request(stock, planned, now_ts=at)
+    request = handlers._resolve_live_entry_order_request("SCALPING",planned,"00",10000)
+    assert request["dmst_stex_tp"] == route
+    assert handlers._bind_main_entry_order_request(stock,request,now_ts=at)
+    resolution = kiwoom_orders.describe_buy_order_resolution(
+        request["order_type_code"],price=request["price"],tif=request["tif"],
+        dmst_stex_tp=request["dmst_stex_tp"],now=datetime.fromtimestamp(at,ZoneInfo("Asia/Seoul")))
+    assert resolution["effective_dmst_stex_tp"] == route
+    assert resolution["broker_route_resolution"] == "explicit_request"
+    assert handlers._entry_order_cancel_dmst_stex_tp({**request,"dmst_stex_tp_source":"request"}) == route
+    assert stock["broker_route"] == route
+
+
+@pytest.mark.parametrize("route_request", [
+    {"dmst_stex_tp":"NXT"}, {"broker_route":"KRX"},
+    {"dmst_stex_tp":"SOR","exchange":"NXT"}, {"dmst_stex_tp":"INVALID"}, {"dmst_stex_tp":0}, {"dmst_stex_tp":False},
+])
+def test_fixed_watch_rejects_conflicting_route_without_rewriting(monkeypatch, route_request):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    at=datetime(2026,10,19,17,10,tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    stock=_fixed_route_stock(at)
+    monkeypatch.setattr(handlers,"is_scalping_buy_time_allowed",lambda _t:True)
+    original=dict(route_request)
+    assert not handlers._bind_main_entry_order_request(stock,route_request,now_ts=at)
+    assert route_request == original
+
+
+def test_fixed_watch_rejects_stale_session_generation_and_closed_buy(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    zone=ZoneInfo("Asia/Seoul")
+    before=datetime(2026,10,19,10,10,tzinfo=zone).timestamp()
+    after=datetime(2026,10,19,17,10,tzinfo=zone).timestamp()
+    stock=_fixed_route_stock(before)
+    monkeypatch.setattr(handlers,"is_scalping_buy_time_allowed",lambda _t:True)
+    assert not handlers._bind_main_entry_order_request(stock,{},now_ts=after)
+    monkeypatch.setattr(handlers,"is_scalping_buy_time_allowed",lambda _t:False)
+    assert not handlers._bind_main_entry_order_request(_fixed_route_stock(after),{},now_ts=after)
+
+
+@pytest.mark.parametrize("route", ["KRX","NXT","SOR"])
+def test_ordinary_explicit_plan_retains_route_without_changing_auto_default(route):
+    request=handlers._resolve_live_entry_order_request(
+        "SCALPING",dict(qty=1,price=10000,broker_route=route),"00",10000)
+    assert request["dmst_stex_tp"] == route
+    assert handlers._bind_main_entry_order_request({},request)
+    auto=handlers._resolve_live_entry_order_request("SCALPING",dict(qty=1,price=10000),"00",10000)
+    assert "dmst_stex_tp" not in auto
+
+
+@pytest.mark.parametrize("field,value", [
+    ("market_data_route","nxt_only"),("effective_venue","KRX"),
+    ("market_session_bucket","krx_regular"),("watch_generation_id","old"),
+    ("last_watching_ai_machine_primary_fields",{"ai_trace_broker_route":"NXT"}),
+    ("last_watching_ai_machine_primary_fields","invalid-source"),
+])
+def test_fixed_watch_order_rejects_lost_or_conflicting_source_identity(monkeypatch,field,value):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    at=datetime(2026,10,19,17,10,tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    stock=_fixed_route_stock(at);stock[field]=value
+    monkeypatch.setattr(handlers,"is_scalping_buy_time_allowed",lambda _t:True)
+    assert not handlers._bind_main_entry_order_request(stock,{},now_ts=at)
+
+
+@pytest.mark.parametrize("hour,decision_route,allowed", [
+    (8,"NXT",True),(10,"SOR",True),(17,"SOR",True),(17,"NXT",False),
+])
+def test_frozen_operating_route_matches_current_watch_and_decision(monkeypatch,hour,decision_route,allowed):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import strategy_owner_replay as replay,avg_down_replay_capture as capture
+    from src.engine.lifecycle import avg_down_policy_replay as lifecycle
+    from src.engine import sniper_execution_receipts as receipts
+    at=datetime(2026,10,19,hour,10,tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    stock=_fixed_route_stock(at)
+    stock["last_watching_ai_machine_primary_fields"]={"ai_trace_broker_route":decision_route}
+    monkeypatch.setattr(handlers,"is_scalping_buy_time_allowed",lambda _t:True)
+    monkeypatch.setattr(handlers,"_is_any_simulated_position",lambda *_:False)
+    monkeypatch.setattr(handlers,"_holding_sell_nxt_enabled_status",lambda *_:(False,"fixture"))
+    monkeypatch.setattr(capture,"_cached_policy",lambda *_:{"rules":{}})
+    monkeypatch.setattr(capture,"compact_policy_snapshot",lambda *_:{})
+    monkeypatch.setattr(capture,"holding_state",lambda *_:{"stock":{}})
+    monkeypatch.setattr(capture,"micro_state",lambda *_:{})
+    monkeypatch.setattr(lifecycle,"snapshot_version",lambda *_:"fixture")
+    monkeypatch.setattr(receipts,"initial_main_entry_exit_fields",lambda *_a,**_k:{})
+    monkeypatch.setattr(replay,"entry_operating_model_identity",lambda:"a"*64)
+    sizing=SimpleNamespace(budget_base_krw=10000,safety_ratio=1.,absolute_budget_cap_krw=0)
+    if not allowed:
+        with pytest.raises(ValueError,match="main_route_invalid|decision_route_conflict"):
+            replay.freeze_entry_operating_context(handlers,stock,sizing,now_ts=at,strict=True)
+        assert not handlers._bind_main_entry_order_request(stock,{},now_ts=at)
+    else:
+        frozen=replay.freeze_entry_operating_context(handlers,stock,sizing,now_ts=at,strict=True)
+        assert frozen["broker_route"] == decision_route
+        from src.engine.scalping.strategy_owner_components import digest
+        assert frozen["sha256"] == digest({k:v for k,v in frozen.items() if k!="sha256"})

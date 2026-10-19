@@ -15898,8 +15898,14 @@ def test_scale_in_exit_authority_blocks_gate_ai_and_broker(monkeypatch):
     assert broker_calls == []
     assert pipeline_logs == []
 
+@pytest.mark.parametrize("hour, expected_route", [(8, "NXT"), (10, "SOR"), (17, "NXT")])
 @pytest.mark.parametrize("resolved_stop_blocked", [False, True])
-def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, resolved_stop_blocked):
+def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, resolved_stop_blocked, hour, expected_route):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    native_route = state_handlers.kiwoom_orders.describe_order_route_resolution
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_order_route_resolution",
+        lambda: native_route(now=datetime(2026, 10, 19, hour, 30, tzinfo=ZoneInfo("Asia/Seoul"))))
     monkeypatch.setattr(state_handlers, "_pre_submit_refresh_real_ws_snapshot", lambda code, ws, strategy: (ws, {}))
     monkeypatch.setattr(state_handlers, "_pre_submit_input_snapshot_needs_rest_orderbook_recheck", lambda ws: False)
     import requests
@@ -15976,6 +15982,7 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, 
     send_calls = []
 
     def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
+        assert kwargs["dmst_stex_tp"] == expected_route
         if not send_calls:
             assert stock["pending_add_order"] is True
             assert stock["pending_add_qty"] == 4

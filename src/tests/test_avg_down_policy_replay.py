@@ -535,3 +535,21 @@ def test_frozen_files_reject_expansion_and_unknown_data_reads(tmp_path):
         files.open(path)
     with pytest.raises(policy.ReplayInputGap, match="unrecorded_file_read"):
         files.open(str(tmp_path / "not-recorded"))
+
+
+def test_frozen_policy_preserves_both_immutable_entry_catalog_sources():
+    import base64,gzip,hashlib
+    from pathlib import Path
+    from src.engine.scalping import reversal_cumulative_catalog as catalog
+    observation,_=policy_fixture()
+    snapshot=observation["policy_snapshot"]
+    for name,expected in (
+        ("reversal_cumulative_data.json",catalog.DATA_SHA256),
+        ("reversal_price_progress_data.json",catalog.PROGRESS_DATA_SHA256),
+    ):
+        path=Path(capture.__file__).with_name(name).absolute()
+        frozen=snapshot["files"][str(path)]
+        raw=gzip.decompress(base64.b64decode(frozen["content_gzip_b64"]))
+        assert len(raw)==frozen["size"]
+        assert hashlib.sha256(raw).hexdigest()==expected
+    assert len(str(snapshot).encode()) <= capture.MAX_SNAPSHOT_BYTES

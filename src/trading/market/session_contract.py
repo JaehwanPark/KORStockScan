@@ -446,7 +446,10 @@ def _aftermarket_buy_eligibility_blocker(
         )
     if any(value is None for value in route_eligibility):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
-    if not all(route_eligibility):
+    # SOR selects an eligible venue; it does not require both venues to
+    # accept the symbol. Unknown axes above remain fail-closed.
+    route_allowed = any(route_eligibility) if route == BROKER_ORDER_ROUTE_SOR else all(route_eligibility)
+    if not route_allowed:
         return ORDER_TYPE_PREFLIGHT_ROUTE_INELIGIBLE
     return None
 

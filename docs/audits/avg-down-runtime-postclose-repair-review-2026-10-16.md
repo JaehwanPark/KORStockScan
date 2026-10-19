@@ -110,3 +110,18 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 대상 파일: `test_holding_decision_context.py`, `test_holding_exit_vote.py`, `test_holding_path_vote_replay.py`, `test_ai_market_snapshot.py`, `test_sniper_scale_in.py`, `test_avg_down_rebound.py`, `test_holding_vote_numeric_successor.py`, `test_holding_flow_override.py`, `test_multi_timeframe_context.py`, `test_engine_location_gate.py`, `test_ai_engine_openai_transport.py`. 변경 Python9개 compile, 문서 상대 링크5개/owner/authority, print-only parser(exit0) 및 diff 검사도 통과했다. Shell·스케줄은 변경하지 않아 bash 검사는 생략했다. 최종 자체 리뷰 범위의 미해결 결함은0이며 운영 배포·현재 PID 소비·자연 체결 수용은 별도다.
 
 이번 후속은 코드·대상 검증·배포 인계까지다. 실제 provider/broker 호출, 배포·Main 재기동·env/정책 변경·장후 보고서 재생성·external sync는 수행하지 않는다. 자연 소비는 [10/19 checklist](../checklists/2026-10-19-stage2-todo-checklist.md)의 기존 `DirectFamilyPreopenPolicyHandoff` owner에서 새 PID의 정상 입력·자연 요청/응답·유효 투표와 반등/주문/체결을 확인한다. 과거 INSUFFICIENT 원문과 경제성 null은 보존한다.
+
+
+## 2026-10-19 통합: 세 시장 AVG_DOWN과 승인된 배포
+
+사용자는 `1a9e00396`와 통합·리뷰·수정보완 및 배포·재기동을 승인했고, 추가로 장전·정규장·애프터마켓 모두 물타기가 가동되도록 지시했다. 기준은 선택본34798c60c/PID1889422/start4311591이며, 격리 `deploy/avg-down-sor-integrated-20261019`에서 b54fe963f의 필수 입력 복구와1a9e00396의 Main SOR 진입 수리를 통합했다. 앞 절의 배포 미실행 표기는 당시 결과이며 이번 승인과 실행은 별도로 기록한다.
+
+- 세 시장 모두 당일 native holding-vote receipt에 결속한 입력 구축·collector·durable vote ledger를 사용한다. 기존 buy window는08:03~08:40,09:03~15:10,16:00~19:40이며 세션 내 휴장·종목 eligibility와 hard guard를 유지한다. 모든 보유에 무조건 ADD하지 않는다.
+- 실제 추가매수 submit owner의 기본 route는 장전NXT·정규장SOR·애프터마켓NXT다. 세 시각을 기존 split-submit fixture에 매개변수로 넣어 broker 직전 route와 stop 우선 차단을 확인한다. Main 최초 진입의 SOR binding과 AVG_DOWN의 기본 route owner는 각각 현재 소비자를 유지한다.
+- frozen holding 연구 계약에 필수 context/SOR proof source 두 개가 추가된 만큼, 기존 `intraday_release_handoff`의 exact Git source pair·전체 dependency generation·family별 extension으로 인계한다. 원 PREOPEN 정책 digest·source·threshold는 재발행하지 않는다. 장후 연구는 현재 입력과 실제 완료·비용 근거를 계속 분리하며 이번 수리만으로 paired 경제성은 인정하지 않는다.
+- 교체/제거: 기존 Main route binder는1a9의 공통 binder로 consolidated, vote dispatch 두 곳은b54에서 removed, 기존 code-handoff generation은 과거 immutable receipt 소비를 위해 retained, 새 exact generation은 현재 candidate의 native pre-stop/selected 소비자가 사용한다. 새 module·CLI·wrapper·schedule·retired trading authority·임시 호환 경로는 추가하지 않았다. 기존 audit와`DirectFamilyPreopenPolicyHandoff` owner를 재사용한다.
+- 리뷰 범위: merged source→context→vote→permit→각 시장 route→broker guard 및 frozen 정책→현재 source generation→native handoff. 역사 fixture의 inventory와 cleanup bytes는 원 generation에 고정하여 현재 입력 목록 확대가 과거 증거를 변형하지 않도록 했다. 새 입력 변조·family extension 누락은 거부한다.
+
+검증·실제 배포 및 PID 소비 근거는 `tmp/avg-down-sor-deploy-20261019/`에 따로 보존한다. 실제 체결과 비용 경제성은 자연 evidence가 있을 때만 수용한다.
+
+통합 검증: 대상16파일 **1,864 PASS /103.71초**, native 인계 회귀 **2,534 PASS /46.09초**(합4,398), Python19파일 compile 및 diff·print-only parser PASS. 기존 fixture의6개 세션/stop 조합도 PASS다. 기준34798 대비 통합 범위 규모(이 결과 문단 전 집계)는 source 10파일 +215/-21 (순증194), tests 9파일 +446/-16 (순증430), docs 3파일 +178/-0 (순증178)이다. 파일 이동은 없으며 순증은 필수 입력 복구·SOR source 결속·당일 정책 인계 및 실패 회귀에 사용했다. 현재 자체 리뷰 미해결 사항은0이다. 원 workspace 변경은 포함하지 않았다.

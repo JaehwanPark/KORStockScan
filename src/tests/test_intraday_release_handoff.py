@@ -1280,7 +1280,8 @@ def completed_research_git_candidate(tmp_path):
     assert len(dependencies) == 95
     inventories = {
         'main_stop': {key: 'src/engine/'+key for key in stop.implementation_paths()},
-        'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()},
+        'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()
+            if key not in {'scalping/holding_decision_context.py', 'scalping/ai_market_snapshot.py'}},
         'pre_submit_delay': {key: key for key in delay.CONTRACT_PATHS},
     }
     names = {own, *dependencies, *(name for paths in inventories.values() for name in paths.values())}
@@ -1317,7 +1318,8 @@ def cleanup_git_candidate(completed_research_git_candidate):
              'src/engine/infrastructure/startup_validation_code_context.py',
              'src/engine/scalping/reversal_auxiliary_next_session.py')
     for name in names:
-        (root/name).write_bytes((canonical/name).read_bytes())
+        (root/name).write_bytes(subprocess.check_output(
+            ['git', '-C', str(canonical), 'show', '34798c60c43984ab9fb97b07e224f9a29883503d:'+name]))
     subprocess.run(['git', '-C', str(root), 'add', *names], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test',
                     'commit', '-qm', 'reviewed cleanup source generation'], check=True)
@@ -1474,3 +1476,50 @@ def test_cleanup_closure_retains_all_predecessor_dependencies():
     assert child['dependencies'] == {**parent['dependencies'], **handoff.REVIEWED_CLEANUP_HASHES}
     assert parent['dependencies'][trigger] != child['dependencies'][trigger]
     assert child['contract_extensions'] is not parent['contract_extensions']
+
+
+@pytest.fixture
+def avg_down_input_git_candidate(cleanup_git_candidate):
+    import subprocess
+    from src.engine.scalping.holding_vote_experiment import _code_paths
+    canonical = Path(handoff.__file__).resolve().parents[3]
+    root, _, inventories, digests = cleanup_git_candidate
+    for name in handoff.REVIEWED_AVG_DOWN_INPUT_HASHES:
+        path = root/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((canonical/name).read_bytes())
+    inventories['holding_vote'] = {key: 'src/engine/'+key for key in _code_paths()}
+    subprocess.run(['git', '-C', str(root), 'add', '--force',
+                    *handoff.REVIEWED_AVG_DOWN_INPUT_HASHES], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture',
+                    '-c', 'user.email=fixture@example.test', 'commit', '-qm',
+                    'reviewed AVG_DOWN input and SOR integration'], check=True)
+    commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    return root, commit, inventories, digests
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'input_changed', 'extension_missing'])
+def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
+        avg_down_input_git_candidate, monkeypatch, family, fault):
+    root, commit, inventories, digests = avg_down_input_git_candidate
+    origin = '7f2552aedde8fec6ef904a43105827907e50dfc8'
+    if fault == 'input_changed':
+        path = root/'src/engine/scalping/holding_decision_context.py'
+        path.write_bytes(path.read_bytes()+b'\nUNREVIEWED = True\n')
+    elif fault == 'extension_missing':
+        trigger = 'src/engine/sniper_state_handlers.py'
+        variant = handoff.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS[(trigger, handoff._sha(root/trigger))]
+        key = (origin, digests[family])
+        extensions = dict(variant['contract_extensions'][key])
+        extensions.pop(next(iter(extensions)))
+        monkeypatch.setitem(variant['contract_extensions'], key, extensions)
+    if fault:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root, commit, origin, inventories[family], digests[family])
+    else:
+        changed = handoff._verify_entry_code_delta(root, commit, origin, inventories[family], digests[family])
+        assert 'src/engine/sniper_state_handlers.py' in changed
+        if family == 'holding_vote':
+            assert 'src/engine/scalping/holding_decision_context.py' in changed
+            assert 'src/engine/scalping/ai_market_snapshot.py' in changed
