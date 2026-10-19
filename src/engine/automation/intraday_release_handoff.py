@@ -2064,12 +2064,10 @@ REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS = {
 
 # Reviewed completion-source contract and validation-before-publication repair.
 # Select one complete dependency generation; every unrelated hash stays pinned.
-REVIEWED_COMPLETION_CENSUS_HASHES = {'src/engine/log_archive_service.py': '3698af57301e2db4ba868bb75df878fc47441e16e4e831dfe4c90b31111a6cab',
- 'src/engine/sniper_trade_review_report.py': 'de4dd6cfc135d5d6c53f757151f32753f13ff780caca285886dba2dc285890d8',
- 'src/engine/strategy_position_performance_report.py': 'af859017afe90f9865ec6ead86fd39a0255c36d3df23047e43c63b34e44a2c7a',
- 'src/engine/holding_exit_observation_report.py': 'bd366b341b5515a0d7dcc2b4da47cf71320a0d703b617057037044d52b8c06e3',
- 'src/engine/lifecycle/main_stop_research_cost.py': '998f989d19979464bde492b14bd651d1bb7ff26abdfd6c5eaa454c2ebf994694',
- 'src/engine/scalping/initial_quantity_source_cache.py': 'aeabf97ec5bd69578e6e66fc4b2eb14945fbe7a34e59658e12fe1b9cf9732ecd'}
+REVIEWED_COMPLETION_CENSUS_HASHES = {
+    'src/engine/log_archive_service.py': '3698af57301e2db4ba868bb75df878fc47441e16e4e831dfe4c90b31111a6cab',
+    'src/engine/sniper_trade_review_report.py': 'a7a7bda98e911626a62ffff472bcf263296e2bacac841f91341823298cb7a8eb',
+}
 REVIEWED_COMPLETION_CENSUS_DEPENDENCY_VARIANTS = {
     key: {**value,
         'selector_path': 'src/engine/log_archive_service.py',
@@ -2081,7 +2079,33 @@ REVIEWED_COMPLETION_CENSUS_DEPENDENCY_VARIANTS = {
             for origin, paths in value['contract_extensions'].items()},
     } for key, value in REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS.items()
 }
-REVIEWED_COMPLETION_CENSUS_PAIRS = {'src/engine/log_archive_service.py': (('a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
+REVIEWED_COMPLETION_CENSUS_PAIRS = {
+    'src/engine/log_archive_service.py': tuple(
+        (origin, REVIEWED_COMPLETION_CENSUS_HASHES['src/engine/log_archive_service.py'])
+        for origin in ('a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
+                       'f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3')),
+}
+
+# Exact full-consumer successor; preserve the already-issued producer-only
+# generation for native prepared-code ancestry verification.
+REVIEWED_COMPLETION_CONSUMER_HASHES = {'src/engine/log_archive_service.py': '3698af57301e2db4ba868bb75df878fc47441e16e4e831dfe4c90b31111a6cab',
+ 'src/engine/sniper_trade_review_report.py': 'de4dd6cfc135d5d6c53f757151f32753f13ff780caca285886dba2dc285890d8',
+ 'src/engine/strategy_position_performance_report.py': 'af859017afe90f9865ec6ead86fd39a0255c36d3df23047e43c63b34e44a2c7a',
+ 'src/engine/holding_exit_observation_report.py': 'bd366b341b5515a0d7dcc2b4da47cf71320a0d703b617057037044d52b8c06e3',
+ 'src/engine/lifecycle/main_stop_research_cost.py': '998f989d19979464bde492b14bd651d1bb7ff26abdfd6c5eaa454c2ebf994694',
+ 'src/engine/scalping/initial_quantity_source_cache.py': 'aeabf97ec5bd69578e6e66fc4b2eb14945fbe7a34e59658e12fe1b9cf9732ecd'}
+REVIEWED_COMPLETION_CONSUMER_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_trade_review_report.py',
+        'selector_sha256': REVIEWED_COMPLETION_CONSUMER_HASHES['src/engine/sniper_trade_review_report.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_COMPLETION_CONSUMER_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_COMPLETION_CONSUMER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_COMPLETION_CONSUMER_PAIRS = {'src/engine/log_archive_service.py': (('a7b6b2fc09ba260ce2e9da11ed9ff9a9f1bf51085eb79c2184a27796b2a83280',
                                         '3698af57301e2db4ba868bb75df878fc47441e16e4e831dfe4c90b31111a6cab'),
                                        ('f0edcf09c4327ba2fc17e432e1ffe01c77185ee69cb0b66109d73fac408c02f3',
                                         '3698af57301e2db4ba868bb75df878fc47441e16e4e831dfe4c90b31111a6cab')),
@@ -2156,7 +2180,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_COMPLETION_CENSUS_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_COMPLETION_CONSUMER_DEPENDENCY_VARIANTS,
+                         REVIEWED_COMPLETION_CENSUS_DEPENDENCY_VARIANTS,
                          REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS,
                          REVIEWED_CLEANUP_DEPENDENCY_VARIANTS,
                          REVIEWED_QUANTITY_EXCLUSIONS_DEPENDENCY_VARIANTS,
@@ -2223,7 +2248,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_COMPLETION_CENSUS_PAIRS.get(name, ())
+        if (pair in REVIEWED_COMPLETION_CONSUMER_PAIRS.get(name, ())
+                or pair in REVIEWED_COMPLETION_CENSUS_PAIRS.get(name, ())
                 or pair in REVIEWED_CLEANUP_PAIRS.get(name, ())
                 or pair in REVIEWED_HISTORY_SEGMENT_PAIRS.get(name, ())
                 or pair in REVIEWED_STARTUP_RETRY_PAIRS.get(name, ())
