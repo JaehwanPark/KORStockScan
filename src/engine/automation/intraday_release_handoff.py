@@ -2297,6 +2297,26 @@ REVIEWED_ARCHIVE_AUTHORITY_PAIRS = {'src/engine/automation/main_trailing_source_
                                                          ('f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
                                                           '5790bc3a11fef051c1e3dfdc1ff6e9c0f603c280509253ebd53c10227bd6998a'))}
 
+# Original v1 archive receipts require full CRC enrollment before indexed reuse.
+REVIEWED_LEGACY_ARCHIVE_AUTHORITY_HASHES = {'src/engine/automation/main_trailing_source_store.py': 'fea1b901d47c2ba32cdc7f66f97904738fbdc1affd089da44012bb80fdc39ec7'}
+REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_store.py',
+        'selector_sha256': REVIEWED_LEGACY_ARCHIVE_AUTHORITY_HASHES['src/engine/automation/main_trailing_source_store.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_LEGACY_ARCHIVE_AUTHORITY_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_LEGACY_ARCHIVE_AUTHORITY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS = {'src/engine/automation/main_trailing_source_store.py': (('5790bc3a11fef051c1e3dfdc1ff6e9c0f603c280509253ebd53c10227bd6998a',
+                                                          'fea1b901d47c2ba32cdc7f66f97904738fbdc1affd089da44012bb80fdc39ec7'),
+                                                         ('e50e6e30840c030ad6823e0eebb5a4fa1ea8733518c66a79a4189a6426898266',
+                                                          'fea1b901d47c2ba32cdc7f66f97904738fbdc1affd089da44012bb80fdc39ec7'),
+                                                         ('f052d476022f65f0b4742f7cc3c59cb647885a9224f5ba6791802616e546a9a7',
+                                                          'fea1b901d47c2ba32cdc7f66f97904738fbdc1affd089da44012bb80fdc39ec7'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2350,7 +2370,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_LEGACY_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
+                         REVIEWED_ARCHIVE_AUTHORITY_DEPENDENCY_VARIANTS,
                          REVIEWED_POSTCLOSE_READER_DEPENDENCY_VARIANTS,
                          REVIEWED_LATE_COST_DEPENDENCY_VARIANTS,
                          REVIEWED_PREFIX_PRODUCER_DEPENDENCY_VARIANTS,
@@ -2422,7 +2443,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
+        if (pair in REVIEWED_LEGACY_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
+                or pair in REVIEWED_ARCHIVE_AUTHORITY_PAIRS.get(name, ())
                 or pair in REVIEWED_POSTCLOSE_READER_PAIRS.get(name, ())
                 or pair in REVIEWED_LATE_COST_PAIRS.get(name, ())
                 or pair in REVIEWED_PREFIX_PRODUCER_PAIRS.get(name, ())

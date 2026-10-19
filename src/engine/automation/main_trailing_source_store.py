@@ -815,7 +815,7 @@ def generation(data_root, path):
         return result
 
 
-def _archive_logical_authority(path):
+def _archive_logical_authority(path,*,allow_legacy=False):
     """Keep an existing archiver's full logical seal authoritative."""
     receipt=Path(str(path)+'.gz.archive_receipt.json')
     if not receipt.exists() and not receipt.is_symlink():return None
@@ -832,17 +832,24 @@ def _archive_logical_authority(path):
             raise ValueError('trailing_index_archive_receipt_changed')
     value=json.loads(raw)
     import re
-    required=('device','inode','size_bytes','mtime_ns','ctime_ns')
-    if (len(raw)!=metadata.st_size or not isinstance(value,dict)
+    if not isinstance(value,dict):raise ValueError('trailing_index_native_archive_binding_invalid')
+    legacy=(allow_legacy and value.get('schema')=='pipeline_raw_archive_identity_v1'
+        and set(value)<=set(('schema','logical_path','logical_content_sha256','logical_size_bytes',
+            'storage_custody','storage_disposition','archive_generation','runtime_effect','allowed_runtime_apply')))
+    required=('device','inode','size_bytes','mtime_ns')+(() if legacy else ('ctime_ns',))
+    declared=value.get('logical_size_bytes');physical=value.get('archive_generation')
+    if (len(raw)!=metadata.st_size
             or value.get('schema') not in {'pipeline_raw_archive_identity_v1','native_raw_archive_identity_v1'}
             or value.get('logical_path')!=str(path)
-            or value.get('artifact_content_sha256')!=hashlib.sha256(encode({
+            or not legacy and (value.get('artifact_content_sha256')!=hashlib.sha256(encode({
                 k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()
-            or value.get('verification_contract')!='logical_sha256_size_crc_to_eof_v1'
+                or value.get('verification_contract')!='logical_sha256_size_crc_to_eof_v1')
             or value.get('runtime_effect') is not False or value.get('allowed_runtime_apply') is not False
-            or type(value.get('logical_size_bytes')) is not int or value['logical_size_bytes']<0
-            or not isinstance(value.get('archive_generation'),dict)
-            or any(type(value['archive_generation'].get(k)) is not int or value['archive_generation'][k]<0 for k in required)
+            or ('logical_size_bytes' in value or not legacy) and (type(declared) is not int or declared<0)
+            or not isinstance(physical,dict)
+            or any(type(physical.get(k)) is not int or physical[k]<0 for k in required)
+            or legacy and (set(physical) not in (set(required),set(required)|{'ctime_ns'})
+                or 'ctime_ns' in physical and (type(physical['ctime_ns']) is not int or physical['ctime_ns']<0))
             or not isinstance(value.get('logical_content_sha256'),str)
             or re.fullmatch('[0-9a-f]{64}',value['logical_content_sha256']) is None):
         raise ValueError('trailing_index_native_archive_binding_invalid')
@@ -860,9 +867,9 @@ def _archive_generation(data_root,path):
                 saved=db.execute('SELECT body FROM archive_migrations WHERE path=?',(str(path),)).fetchone()
                 if saved:
                     value=json.loads(saved[0]);bound=value['generation']
-                    authority=_archive_logical_authority(path)
-                    if authority is not None and any(value.get(key)!=authority[0].get(key)
-                            for key in ('logical_size_bytes','logical_content_sha256')):
+                    authority=_archive_logical_authority(path,allow_legacy=True)
+                    if authority is not None and (value['logical_content_sha256']!=authority[0]['logical_content_sha256']
+                            or 'logical_size_bytes' in authority[0] and value['logical_size_bytes']!=authority[0]['logical_size_bytes']):
                         raise ValueError('trailing_index_archive_logical_authority_changed')
                     if (physical.is_symlink() or path.exists()
                             or signature(physical.stat())!=bound['source_stat']
@@ -877,10 +884,13 @@ def _archive_generation(data_root,path):
                                 k:v for k,v in value.items() if k!='artifact_content_sha256'})).hexdigest()):
                         raise ValueError('trailing_index_archive_migration_changed')
                     return bound
-    authority=_archive_logical_authority(path)
+    authority=_archive_logical_authority(path,allow_legacy=True)
     if authority is None or physical.is_symlink():
         raise InputPending('trailing_index_native_archive_binding_missing')
     value,before=authority
+    if not value.get('trailing_source_index'):
+        raise InputPending('trailing_index_offline_archive_migration_required')
+    _archive_logical_authority(path)  # O(1) native index reuse still requires the modern writer proof.
     generation=value.get('trailing_source_index') or {}
     actual=signature(physical.stat());bound=value.get('archive_generation') or {}
     observed=[bound.get(key) for key in ('device','inode','size_bytes','mtime_ns','ctime_ns')]
@@ -920,7 +930,7 @@ def migrate_frozen_source(data_root,path):
         if any(p.is_symlink() for p in target.parents):
             raise ValueError('trailing_index_database_path_invalid')
         current=signature(metadata);target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-        authority=_archive_logical_authority(logical) if archived else None
+        authority=_archive_logical_authority(logical,allow_legacy=True) if archived else None
         temporary=target.with_name(target.name+'.archive-'+uuid.uuid4().hex+'.tmp')
         db=_open_database(temporary,readonly=False,writer=False)
         name=str(logical);offset=records=selected=0;chain=ZERO_SHA;logical_sha=hashlib.sha256()
@@ -958,10 +968,10 @@ def migrate_frozen_source(data_root,path):
                 if signature(os.fstat(raw.fileno()))!=current or signature(physical.stat())!=current:
                     raise ValueError('trailing_archive_migration_source_changed')
             if archived:
-                if _archive_logical_authority(logical)!=authority:
+                if _archive_logical_authority(logical,allow_legacy=True)!=authority:
                     raise ValueError('trailing_archive_migration_receipt_changed')
                 if authority is not None and (authority[0]['logical_content_sha256']!=logical_sha.hexdigest()
-                        or authority[0]['logical_size_bytes']!=offset):
+                        or 'logical_size_bytes' in authority[0] and authority[0]['logical_size_bytes']!=offset):
                     raise ValueError('trailing_archive_migration_logical_authority_mismatch')
             body=dict(schema=SCHEMA+':generation',path=logical.name,size=offset,
                 namespace=namespace,source_stat=current,catchup_end=offset,raw_records=records,
@@ -984,7 +994,7 @@ def migrate_frozen_source(data_root,path):
         finally:
             db.close()
         if (signature(physical.stat())!=current or (archived and logical.exists())
-                or archived and _archive_logical_authority(logical)!=authority):
+                or archived and _archive_logical_authority(logical,allow_legacy=True)!=authority):
             raise ValueError('trailing_archive_migration_source_changed')
         with temporary.open('rb') as stream:os.fsync(stream.fileno())
         if target.exists():
@@ -1010,7 +1020,7 @@ def migrate_frozen_source(data_root,path):
                     with existing:
                         existing.execute('BEGIN IMMEDIATE')
                         if (signature(physical.stat())!=current
-                                or archived and _archive_logical_authority(logical)!=authority or existing.execute(
+                                or archived and _archive_logical_authority(logical,allow_legacy=True)!=authority or existing.execute(
                                 'SELECT * FROM sources ORDER BY path').fetchall()!=prior):
                             raise ValueError('trailing_archive_migration_source_changed')
                         for table,column in (('rows','source'),('minutes','source'),('sources','path')):

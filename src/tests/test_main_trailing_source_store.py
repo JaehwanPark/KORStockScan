@@ -181,6 +181,39 @@ def test_indexed_gzip_rechecks_declared_logical_seal_without_raw_decode(tmp_path
     with pytest.raises(ValueError,match='logical_authority_changed'):store.generation(tmp_path,path)
 
 
+@pytest.mark.parametrize('legacy_kind',['hash_only_four_stat','sized_four_stat','sized_five_stat'])
+@pytest.mark.parametrize('damage',[None,'sha','size','partial_modern'])
+def test_original_legacy_pipeline_archive_requires_full_crc_enrollment(tmp_path,monkeypatch,legacy_kind,damage):
+    from src.engine.compress_db_backfilled_files import _gzip_file
+    path=tmp_path/'pipeline_events/pipeline_events_2026-10-19.jsonl';path.parent.mkdir()
+    raw=json.dumps(dict(stage='order_leg_sent',stock_code='005930',fields={})).encode()+b'\n'
+    path.write_bytes(raw);assert _gzip_file(path,dry_run=False)[0]
+    receipt=Path(str(path)+'.gz.archive_receipt.json');value=json.loads(receipt.read_bytes())
+    for key in ('artifact_content_sha256','verification_contract'):value.pop(key)
+    if legacy_kind!='sized_five_stat':value['archive_generation'].pop('ctime_ns')
+    if legacy_kind=='hash_only_four_stat':
+        for key in ('logical_size_bytes','storage_custody','storage_disposition'):value.pop(key)
+    if damage=='sha':value['logical_content_sha256']='0'*64
+    elif damage=='size':value['logical_size_bytes']=(value['logical_size_bytes']+1 if 'logical_size_bytes' in value else None)
+    elif damage=='partial_modern':value['verification_contract']='logical_sha256_size_crc_to_eof_v1'
+    receipt.write_text(json.dumps(value,indent=3)+'\n');before=receipt.read_bytes()
+    with pytest.raises(ValueError):store._archive_logical_authority(path)
+    if damage:
+        with pytest.raises(ValueError,match='archive.*(invalid|mismatch)'):store.migrate_frozen_source(tmp_path,path)
+        assert not store._location(tmp_path,path)[2].exists()
+    else:
+        bound=store.migrate_frozen_source(tmp_path,path)
+        assert bound['size']==len(raw) and bound['raw_records']==1
+        original=Path.open
+        def guard(self,*args,**kwargs):
+            if self==Path(str(path)+'.gz'):pytest.fail('cached legacy source decoded raw gzip')
+            return original(self,*args,**kwargs)
+        monkeypatch.setattr(Path,'open',guard)
+        assert store.generation(tmp_path,path)==bound
+        assert len(list(store.read_rows(tmp_path,path)))==1
+    assert receipt.read_bytes()==before and not path.exists()
+
+
 @pytest.mark.parametrize('corruption',['crc','partial','changed','symlink'])
 def test_archive_enrollment_does_not_publish_failed_or_foreign_sources(tmp_path,monkeypatch,corruption):
     import gzip
