@@ -437,7 +437,8 @@ def test_snapshot_date_header_survives_sorted_payload_roundtrip(tmp_path, monkey
     assert next(iter(payload)) == 'a_large'
 
 
-def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("database_only", [False, True])
+def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_path, monkeypatch, database_only):
     from src.engine import holding_exit_observation_report as holding
     from src.engine.sniper_trade_review_report import completed_census_manifest
 
@@ -457,6 +458,18 @@ def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_
         "sections": {"completed_trade_projection": [],
                      "open_scalp_position_projection": []},
     }
+    if database_only:
+        witness = "a" * 64
+        payload["meta"]["database_completed_sources"] = [dict(
+            id=49362, status="COMPLETED", sell_time=day + " 09:44:00", source_row_sha256=witness)]
+        payload["sections"]["completed_trade_projection"] = [dict(
+            id=49362, status="COMPLETED", completion_observed_date=day, profit_rate=None,
+            database_completion_source_sha256=witness,
+            completion_source_status="database_completed_native_terminal_unobserved",
+            strict_completion_status="excluded",
+            strict_completion_reasons=["source_gap_native_sell_completed_event_missing"])]
+        payload["metrics"].update(canonical_completed_trades=1,
+            native_sell_completed_trade_count=0, database_only_completed_trade_count=1)
     payload["meta"]["completed_census_manifest"] = completed_census_manifest(payload)
     path = service.save_monitor_snapshot("trade_review", day, payload)
     monkeypatch.setattr(holding, "_monitor_snapshot_path",
@@ -466,8 +479,21 @@ def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_
     assert snapshots[0]["schema"] == "trade_review_completed_projection_sidecar_v1"
     assert sources == [str(path.with_suffix(".completed_projection.json"))]
     sidecar = path.with_suffix(".completed_projection.json")
+    observed = {p: (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns, p.stat().st_ctime_ns)
+                for p in (path, sidecar)}
+    for mutation in ("ids", "census_missing", "open_missing", "wrong_date"):
+        invalid = json.loads(json.dumps(payload))
+        if mutation == "ids": invalid["meta"]["sell_completed_event_ids"] = [49363]
+        elif mutation == "census_missing": invalid["meta"].pop("completed_census_manifest")
+        elif mutation == "open_missing": invalid["sections"].pop("open_scalp_position_projection")
+        else: invalid["date"] = "2026-10-01"
+        with pytest.raises(ValueError, match="trade_review_(completed_projection_invalid|open_position_projection_missing)"):
+            service.save_monitor_snapshot("trade_review", day, invalid)
+        for source, before in observed.items():
+            assert (source.read_bytes(), source.stat().st_ino,
+                    source.stat().st_mtime_ns, source.stat().st_ctime_ns) == before
     altered = json.loads(sidecar.read_text())
-    altered["metrics"]["canonical_completed_trades"] = 1
+    altered["metrics"]["canonical_completed_trades"] += 1
     sidecar.write_text(json.dumps(altered))
     assert holding._verified_trade_review_projection(path, day) is None
 
@@ -553,7 +579,8 @@ def test_completed_census_seals_actual_saved_profile(tmp_path, monkeypatch):
         "meta": {"sell_completed_event_ids": [],
                  "trailing_event_source_receipts": []},
         "metrics": {"canonical_completed_trades": 0},
-        "sections": {"completed_trade_projection": []},
+        "sections": {"completed_trade_projection": [],
+                     "open_scalp_position_projection": []},
     }
     payload["meta"]["completed_census_manifest"] = completed_census_manifest(payload)
     prior_run = payload["meta"]["completed_census_manifest"]["run_id"]
@@ -903,15 +930,24 @@ def test_save_monitor_snapshots_for_date_includes_expected_snapshot_sources(
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
 
+    from src.engine.sniper_trade_review_report import (
+        completed_census_manifest, verify_completed_census_manifest,
+    )
+
+    def empty_trade_review(**kwargs):
+        body = {"date": kwargs["target_date"],
+                "meta": {"sell_completed_event_ids": []},
+                "metrics": {"canonical_completed_trades": 0},
+                "sections": {"completed_trade_projection": [],
+                             "open_scalp_position_projection": []}}
+        body["meta"]["completed_census_manifest"] = completed_census_manifest(body)
+        return body
+
     monkeypatch.setitem(
-        sys.modules,
-        "src.engine.sniper_trade_review_report",
-        types.SimpleNamespace(
-            build_trade_review_report=lambda **kwargs: {
-                "date": kwargs["target_date"],
-                "meta": {},
-            }
-        ),
+        sys.modules, "src.engine.sniper_trade_review_report",
+        types.SimpleNamespace(build_trade_review_report=empty_trade_review,
+                              completed_census_manifest=completed_census_manifest,
+                              verify_completed_census_manifest=verify_completed_census_manifest),
     )
     monkeypatch.setitem(
         sys.modules,

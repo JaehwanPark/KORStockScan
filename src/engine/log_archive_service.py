@@ -12,7 +12,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from src.utils.constants import DATA_DIR
 from src.engine.dashboard_data_repository import (
@@ -323,35 +323,38 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     from src.engine.infrastructure.research_release_transition import journal_json
     if journal_json(path,payload,ensure_ascii=False,indent=2):
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    file_descriptor, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    tmp_path = Path(temp_name)
-    try:
-        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
-            from src.engine.infrastructure.validation_digest_session import NativeJSONWriter
-            native_writer=NativeJSONWriter(handle)
-            json.dump(payload, native_writer, ensure_ascii=False, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    from src.engine.infrastructure.validation_digest_session import publish_native_bytes
-    if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
-        publish_native_bytes(path.parent.parent.parent,path,native_writer.generation(path))
+    def publish_snapshot():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        tmp_path = Path(temp_name)
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+                from src.engine.infrastructure.validation_digest_session import NativeJSONWriter
+                native_writer=NativeJSONWriter(handle)
+                json.dump(payload, native_writer, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        from src.engine.infrastructure.validation_digest_session import publish_native_bytes
+        if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
+            publish_native_bytes(path.parent.parent.parent,path,native_writer.generation(path))
     if (kind == "trade_review"
-        and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"
-        and isinstance((payload.get("meta") or {}).get(
-            "completed_census_manifest"), dict)
-        and isinstance((payload.get("sections") or {}).get(
-            "open_scalp_position_projection"), list)):
-        _save_trade_review_completed_projection(path, payload)
+            and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"):
+        if payload.get("date") != target_date:
+            raise ValueError("trade_review_completed_projection_invalid:completed_census_source_date_mismatch")
+        _save_trade_review_completed_projection(path, payload, publish_snapshot=publish_snapshot)
+    else:
+        publish_snapshot()
     return path
 
 
-def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
+def _save_trade_review_completed_projection(
+    path: Path, payload: dict, *, publish_snapshot: Callable[[], None] | None = None,
+) -> Path:
     """Seal the small holding/exit input beside a potentially huge snapshot."""
     from src.engine.sniper_trade_review_report import verify_completed_census_manifest
 
@@ -362,6 +365,8 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
     sections = payload.get("sections") or {}
     if not isinstance(sections.get("open_scalp_position_projection"), list):
         raise ValueError("trade_review_open_position_projection_missing")
+    if publish_snapshot is not None:
+        publish_snapshot()
     stat = path.stat()
     body = {
         "schema": "trade_review_completed_projection_sidecar_v1",
@@ -386,6 +391,11 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
             "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
         },
     }
+    if "database_completed_sources" in (payload.get("meta") or {}):
+        body["meta"]["database_completed_sources"] = payload["meta"]["database_completed_sources"]
+    for key in ("native_sell_completed_trade_count", "database_only_completed_trade_count"):
+        if key in (payload.get("metrics") or {}):
+            body["metrics"][key] = payload["metrics"][key]
     body["artifact_sha256"] = hashlib.sha256(json.dumps(
         body, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode("utf-8")).hexdigest()

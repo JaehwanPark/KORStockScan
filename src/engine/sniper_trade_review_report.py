@@ -3647,7 +3647,7 @@ def completed_census_manifest(report: dict) -> dict:
     } for row in rows]
     source_sha = _completed_census_sha256(receipts) if receipts else None
     output_sha = _completed_census_sha256(rows)
-    return {
+    manifest = {
         "schema": "trade_review_completed_census_v1",
         "source_date": report.get("date"),
         "profile": meta.get("snapshot_profile") or "unobserved_report_build",
@@ -3682,6 +3682,13 @@ def completed_census_manifest(report: dict) -> dict:
         "rows": row_receipts,
     }
 
+    if "database_completed_sources" in meta:
+        sources = meta["database_completed_sources"]
+        manifest["database_completed_sources_sha256"] = _completed_census_sha256(sources)
+        manifest["database_completed_ids"] = sorted(str(row.get("id") or "")
+            for row in sources if isinstance(row, dict)) if isinstance(sources, list) else []
+    return manifest
+
 
 def verify_completed_census_manifest(report: dict, expected_date: str) -> str | None:
     """Return an explicit source gap; never accept a rewritten projection on an old seal."""
@@ -3700,8 +3707,41 @@ def verify_completed_census_manifest(report: dict, expected_date: str) -> str | 
     ids = [str(row.get("id") or "").strip() for row in rows]
     raw_ids = [str(item) for item in
                (report.get("meta") or {}).get("sell_completed_event_ids") or []]
+    expected_ids = set(raw_ids)
+    database_sources = (report.get("meta") or {}).get("database_completed_sources")
+    if "database_completed_sources" in (report.get("meta") or {}):
+        if not isinstance(database_sources, list):
+            return "completed_census_database_source_invalid"
+        database_by_id = {}
+        for source in database_sources:
+            if not isinstance(source, dict):
+                return "completed_census_database_source_invalid"
+            identity = source.get("id")
+            identity_text = str(identity or "")
+            digest = source.get("source_row_sha256")
+            if (isinstance(identity, bool) or not identity_text.isdecimal()
+                    or int(identity_text) <= 0 or identity_text in database_by_id
+                    or str(source.get("status") or "").upper() != "COMPLETED"
+                    or _parse_dt(source.get("sell_time")) is None
+                    or str(source.get("sell_time") or "")[:10] != expected_date
+                    or not isinstance(digest, str) or len(digest) != 64
+                    or any(char not in "0123456789abcdef" for char in digest)):
+                return "completed_census_database_source_invalid"
+            database_by_id[identity_text] = source
+        expected_ids.update(database_by_id)
+        for row, identity in zip(rows, ids):
+            source = database_by_id.get(identity)
+            if source is not None and row.get("database_completion_source_sha256") != source["source_row_sha256"]:
+                return "completed_census_database_row_binding_invalid"
+            if identity not in raw_ids and (
+                    source is None
+                    or row.get("completion_source_status") != "database_completed_native_terminal_unobserved"
+                    or row.get("strict_completion_status") != "excluded"
+                    or "source_gap_native_sell_completed_event_missing" not in (row.get("strict_completion_reasons") or [])):
+                return "completed_census_database_only_authority_invalid"
     if (not all(ids) or len(set(ids)) != len(ids)
-            or sorted(ids) != sorted(raw_ids)
+            or len(set(raw_ids)) != len(raw_ids)
+            or set(ids) != expected_ids
             or len(rows) != (report.get("metrics") or {}).get("canonical_completed_trades")):
         return "completed_census_id_mismatch"
     if any(row.get("completion_observed_date") != expected_date
@@ -3850,6 +3890,19 @@ def build_trade_review_report(
         row for row in open_census_rows
         if _safe_int(row.get("id")) not in existing_ids
     )
+    # DB completion observations and native terminal events are different
+    # source populations. Preserve the original DB row witness without
+    # manufacturing a sell_completed event or granting economic eligibility.
+    database_completed_sources = [{
+        "id": row.get("id"), "status": row.get("status"),
+        "sell_time": str(row.get("sell_time") or ""),
+        "source_row_sha256": _completed_census_sha256(row),
+    } for row in trade_rows
+        if str(row.get("status") or "").upper() == "COMPLETED"
+        and str(row.get("sell_time") or "")[:10] == target_date]
+    database_completed_by_id = {
+        _safe_int(row["id"]): row for row in database_completed_sources
+    }
     buy_parent_handoff = _load_buy_parent_handoff_projection(
         target_date, structured_projection_events, trade_rows,
         trailing_source_status,
@@ -3970,6 +4023,15 @@ def build_trade_review_report(
                     day: receipt for day, receipt in prior_entry_receipts.items()
                     if prior_date <= day < target_date
                 }
+            database_source = database_completed_by_id.get(_safe_int(trade.get("id")))
+            if database_source is not None:
+                projected["database_completion_source_sha256"] = database_source["source_row_sha256"]
+            if _safe_int(trade.get("id")) not in sell_completed_event_ids:
+                projected["completion_source_status"] = "database_completed_native_terminal_unobserved"
+                projected["strict_completion_status"] = "excluded"
+                projected["strict_completion_reasons"] = sorted(set(
+                    projected.get("strict_completion_reasons") or []) | {
+                    "source_gap_native_sell_completed_event_missing"})
             completed_projection.append(projected)
         open_projected = _open_scalp_position_projection(trade, matched)
         if open_projected is not None:
@@ -3987,7 +4049,12 @@ def build_trade_review_report(
             or "source_gap_signal_missing")
         for row in completed_projection
     )
-    if sell_completed_event_ids != projected_completed_ids:
+    declared_completed_ids = sell_completed_event_ids | set(database_completed_by_id)
+    database_only_ids = projected_completed_ids - sell_completed_event_ids
+    if database_only_ids:
+        warnings.append("DB completed observations without native sell_completed: "
+                        f"ids={sorted(database_only_ids)}; economic eligibility excluded")
+    if declared_completed_ids != projected_completed_ids:
         warnings.append(
             "sell_completed 이벤트와 완료 projection ID 불일치: "
             f"event_only={sorted(sell_completed_event_ids - projected_completed_ids)[:20]} "
@@ -4082,6 +4149,7 @@ def build_trade_review_report(
                 value.get("status") for value in research_costs.values())),
             "quantity_research_cost_persisted": write_research_costs,
             "sell_completed_event_ids": sorted(sell_completed_event_ids),
+            "database_completed_sources": database_completed_sources,
             "completion_event_id_count": len(completion_event_ids),
             "completion_event_unresolved_id_count": len(unresolved_completion_ids),
             "available_stocks": available_stocks,
@@ -4109,6 +4177,8 @@ def build_trade_review_report(
             "total_trades": len(visible_rows),
             "completed_trades": len(realized),
             "canonical_completed_trades": len(completed_projection),
+            "native_sell_completed_trade_count": len(sell_completed_event_ids),
+            "database_only_completed_trade_count": len(projected_completed_ids - sell_completed_event_ids),
             "exit_signal_binding_counts": dict(exit_signal_binding_counts),
             "open_scalp_position_projection_count": len(open_projection),
             "avg_down_rebound_position_count": len(avg_down_rebound_lineage_rows),

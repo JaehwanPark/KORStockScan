@@ -36,7 +36,8 @@ def _native_fact_projection(tmp_path, monkeypatch, *, count=2, large=True, scope
         strategy='SCALPING', position_tag='SCANNER', buy_price=1000, buy_qty=1,
         buy_time=day+' 09:00:00', sell_time=None, sell_price=None, profit_rate=None,
         add_count=0, avg_down_count=0, pyramid_count=0,
-        timeline='x'*(5*1024*1024) if large and i == 0 else []) for i in range(count)]
+        timeline=[{'stage': 'unused_fact_timeline', 'fields': {'payload': 'x'*(1024*1024)}}
+                  for _ in range(5)] if large and i == 0 else []) for i in range(count)]
     if rows:
         rows[0].update(status='COMPLETED', sell_price=1010, sell_time=day+' 09:10:00')
     completed = [{**rows[0], 'completion_observed_date': day, 'terminal_population_scope': 'real_record_bound',

@@ -215,8 +215,7 @@ def test_stop_cli_reuses_digests_without_persistent_validator_state(tmp_path, mo
     assert not (tmp_path/'runtime/validation_digests').exists()
 
 
-def test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract(snapshot, monkeypatch):
-    import hashlib
+def test_unbound_legacy_gzip_with_sidecar_remains_source_gap(snapshot, monkeypatch):
     from src.engine import log_archive_service as snapshots
     from src.engine.sniper_trade_review_report import completed_census_manifest
     monkeypatch.setattr(snapshots,'MONITOR_SNAPSHOT_DIR',snapshot.parent)
@@ -230,10 +229,11 @@ def test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract(sna
     snapshot.unlink()
     window=capture_window(snapshot.parents[2],['2026-10-08'])
     day=window['dependencies']['2026-10-08']
-    assert day['status']=='valid_empty'
-    assert day['projection']==dict(path=archived.name,size=archived.stat().st_size,
-        sha256=hashlib.sha256(archived.read_bytes()).hexdigest())
-    assert 'snapshot_identity' not in day['projection']
+    # A gzip file and sidecar do not supply the required original full-profile
+    # manifest and structured-source proof. Compression cannot invent them.
+    assert day['status'] == 'source_gap'
+    assert day['reason'] == 'window_archived_empty_contract_invalid'
+    assert archived.name in day['projection']
 
 
 @pytest.mark.parametrize('profile',['postclose_exit','intraday_light'])
