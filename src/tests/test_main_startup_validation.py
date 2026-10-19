@@ -754,7 +754,8 @@ def test_parent_independently_rejects_malformed_or_unbound_child_semantics(defec
         validation._validate_child_result(child, CONSUMER_IDS, expected)
 
 
-def test_native_cli_closure_is_collected_from_executed_native_boundaries(native_preparation_cli):
+@pytest.mark.parametrize("boundary", ["load", "validate", "validate_rejected"])
+def test_native_cli_closure_is_collected_from_executed_native_boundaries(native_preparation_cli, boundary):
     code,data=native_preparation_cli
     package=code/'src/engine/scalping';package.mkdir();(package/'__init__.py').touch()
     (code/'src/engine/automation/pre_submit_delay_partitioned_research.py').write_text('def validate(*a,**k): return None\n')
@@ -764,6 +765,8 @@ import json
 
 def load(*args,**kwargs):
     return json.loads((DATA_DIR/'bundle.json').read_text())
+def validate(bundle,**kwargs):
+    if bundle.get('reject'):raise ValueError('native_bundle_rejected')
 ''')
     ident='a'*64;bundle=dict(bundle_sha256='b'*64,target_date=DAY,continuous_reversal={'family_sha256':'c'*64})
     (data/'bundle.json').write_text(json.dumps(bundle))
@@ -791,8 +794,18 @@ def validate_manifest(data_root,manifest,bundle,**kwargs):
     b=N.load(data_root=DATA_DIR,target_date=target_date)
     A.validate_manifest(DATA_DIR,A.I.read({str(path)!r}),b)
 '''
+    if boundary != 'load':
+        calls = calls.replace('b=N.load(data_root=DATA_DIR,target_date=target_date)',
+            'b=__import__("json").loads((DATA_DIR/"bundle.json").read_text()); N.validate(b,target_date=target_date)')
+    if boundary == 'validate_rejected':
+        bundle['reject'] = True
+        (data/'bundle.json').write_text(json.dumps(bundle))
     assert marker in text;cli.write_text(text.replace(marker,calls+marker,1))
     run_id='1'*32
+    if boundary == 'validate_rejected':
+        with pytest.raises(ValueError, match='startup_native_preparation_failed'):
+            validation._native_preparation_check(code,DAY,'2026-10-16',run_id)
+        return
     result=validation._native_preparation_check(code,DAY,'2026-10-16',run_id)
     closure=result['native_machine_closure']
     assert closure['run_id']==run_id

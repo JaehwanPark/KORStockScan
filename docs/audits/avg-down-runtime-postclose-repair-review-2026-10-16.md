@@ -125,3 +125,12 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 검증·실제 배포 및 PID 소비 근거는 `tmp/avg-down-sor-deploy-20261019/`에 따로 보존한다. 실제 체결과 비용 경제성은 자연 evidence가 있을 때만 수용한다.
 
 통합 검증: 대상16파일 **1,864 PASS /103.71초**, native 인계 회귀 **2,534 PASS /46.09초**(합4,398), Python19파일 compile 및 diff·print-only parser PASS. 기존 fixture의6개 세션/stop 조합도 PASS다. 기준34798 대비 통합 범위 규모(이 결과 문단 전 집계)는 source 10파일 +215/-21 (순증194), tests 9파일 +446/-16 (순증430), docs 3파일 +178/-0 (순증178)이다. 파일 이동은 없으며 순증은 필수 입력 복구·SOR source 결속·당일 정책 인계 및 실패 회귀에 사용했다. 현재 자체 리뷰 미해결 사항은0이다. 원 workspace 변경은 포함하지 않았다.
+
+
+### 배포 gate 재리뷰
+
+첫 후보d37a67dc7의 active Main parity는128scope/76,800행/598hit·신호 hash 일치였다. 그러나 live bootstrap은8940ea4ad 계보(holding code c34bc30c, stop code12103eeb)를 소비하고, delay는 원7f prepared-code handoff를 유지한다. 첫 pre-stop은 새 handler의894 source pair 미등록으로 차단됐다. 두 원본의 exact pair를 결속하고894 holding inventory의 새 입력2개에만 extension을 추가했다. 두 원본·세 family의 정상/입력 변조/extension 실패18회귀를 통과했다. 원 manifest/PREOPEN/policy/selector 및 PID1889422는 변경하지 않았다.
+
+격리 P5 첫 시도도 intake에서 `startup_native_machine_closure_invalid`로 실패했다. native verification 자체는 PASS였고193개 source·aux manifest/frozen inventory·delay2개가 관측됐지만, 장중 verifier가 `load` 대신 이미 읽은 bundle의 `validate`를 호출하여 bundle 관측만0이었다. 기존 P5 owner에서 두 native 경계를 함께 관측하고 semantic validate 성공 후에만 기록하도록 보완했다. 새 generator나 캐시 PASS는 만들지 않았다. 거부된 native validate는 계속 실패하며 원 실패 영수증과 diagnostic bytes를 보존한다. 기존 load 관측은 현재 preopen 소비자 때문에 retained, validate 관측은 같은 verifier의 현재 intraday 소비를 보완한다. 운영 정책과 runtime apply 권한은 변경하지 않는다.
+
+재리뷰 후 native 인계·P5 회귀2파일 **2,615 PASS /60.17초**다. 그중 native bundle load/validate 정상과 validate 거부를 포함한다. 보완4개 Python compile 및 diff 검사 PASS이며 배포 gate를 다시 실행한다. 첫 후보와 실패 영수증은 삭제하지 않는다.

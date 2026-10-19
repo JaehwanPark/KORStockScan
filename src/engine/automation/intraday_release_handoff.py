@@ -1997,7 +1997,8 @@ REVIEWED_CLEANUP_DEPENDENCY_VARIANTS = {
 # Reviewed AVG_DOWN input activation and Main SOR integration. Preserve the
 # original policy digests and the predecessor dependency closure. The two added
 # holding inputs are exact reviewed extensions, never fallback policy authority.
-REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/ai/holding_exit_vote.py': '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81',
+REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/automation/main_startup_validation.py': '034f5dcadb8d14d161e86a7e718bd05707fe9d48c91078fdb8e789005f668e65',
+ 'src/engine/ai/holding_exit_vote.py': '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81',
  'src/engine/scalping/ai_market_snapshot.py': 'e4a4ae29cca5d452b1bcfa4c54684e8d4bc8702224f6034231a4a4a12235881d',
  'src/engine/scalping/avg_down_replay_capture.py': 'dbb163f2f23c678f4a2343e8501b405166bd18f30b94b0de64f98e76c0a2645a',
  'src/engine/scalping/holding_decision_context.py': '783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898',
@@ -2006,24 +2007,28 @@ REVIEWED_AVG_DOWN_INPUT_HASHES = {'src/engine/ai/holding_exit_vote.py': '69f1a9a
  'src/engine/scalping/strategy_owner_replay.py': '7ea25642e08cb77f95840373dc8fb16fadcee37bb0aa2c03a9234212ac12b878',
  'src/engine/sniper_state_handlers.py': '885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
  'src/trading/market/session_contract.py': 'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c'}
-REVIEWED_AVG_DOWN_INPUT_SOURCES = {'src/engine/ai/holding_exit_vote.py': ('9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b',
-                                        '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81'),
- 'src/engine/scalping/ai_market_snapshot.py': ('77f151a72094486b9b84e9a56fcba92aac6760648b58124a06250bf58dd6d650',
-                                               'e4a4ae29cca5d452b1bcfa4c54684e8d4bc8702224f6034231a4a4a12235881d'),
- 'src/engine/scalping/avg_down_replay_capture.py': ('67ff5887f46f24972ad5adb1d8051947a974697c38b2a16db5ed7635a34d3214',
-                                                    'dbb163f2f23c678f4a2343e8501b405166bd18f30b94b0de64f98e76c0a2645a'),
- 'src/engine/scalping/holding_decision_context.py': ('e3590eebd7d40c295730f3579ec87ea57737d7ed5022ec32aea357c38bf57c44',
-                                                     '783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898'),
- 'src/engine/scalping/holding_path_vote_policy.py': ('bbac620a904ee015a9245a0d032dcbf3f615984b2c0c5e7c13dc904092dcc1aa',
-                                                     'f66fa049d9f15c51169015bd44c0464d4de540726d164d0c610e8fb9c51d8c85'),
- 'src/engine/scalping/holding_vote_experiment.py': ('0086eb212c3187c5b89e8680adacb28d96aad56d7f45e96788839f0824bdeaae',
-                                                    '23d8ec40b586f6db69027c8fd5b4e949a3d0ee1ca102f45a064b0c874c517843'),
- 'src/engine/scalping/strategy_owner_replay.py': ('bd080261d91243ab9f2ef2a69eeef07830edb3a9178be94ecd069912cc0343c9',
-                                                  '7ea25642e08cb77f95840373dc8fb16fadcee37bb0aa2c03a9234212ac12b878'),
- 'src/engine/sniper_state_handlers.py': ('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
-                                         '885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4'),
- 'src/trading/market/session_contract.py': ('3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
-                                            'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c')}
+REVIEWED_AVG_DOWN_INPUT_SOURCES = {'src/engine/ai/holding_exit_vote.py': (('9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b',
+                                         '69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81'),),
+ 'src/engine/scalping/ai_market_snapshot.py': (('77f151a72094486b9b84e9a56fcba92aac6760648b58124a06250bf58dd6d650',
+                                                'e4a4ae29cca5d452b1bcfa4c54684e8d4bc8702224f6034231a4a4a12235881d'),),
+ 'src/engine/scalping/avg_down_replay_capture.py': (('67ff5887f46f24972ad5adb1d8051947a974697c38b2a16db5ed7635a34d3214',
+                                                     'dbb163f2f23c678f4a2343e8501b405166bd18f30b94b0de64f98e76c0a2645a'),),
+ 'src/engine/scalping/holding_decision_context.py': (('e3590eebd7d40c295730f3579ec87ea57737d7ed5022ec32aea357c38bf57c44',
+                                                      '783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898'),),
+ 'src/engine/scalping/holding_path_vote_policy.py': (('bbac620a904ee015a9245a0d032dcbf3f615984b2c0c5e7c13dc904092dcc1aa',
+                                                      'f66fa049d9f15c51169015bd44c0464d4de540726d164d0c610e8fb9c51d8c85'),),
+ 'src/engine/scalping/holding_vote_experiment.py': (('0086eb212c3187c5b89e8680adacb28d96aad56d7f45e96788839f0824bdeaae',
+                                                     '23d8ec40b586f6db69027c8fd5b4e949a3d0ee1ca102f45a064b0c874c517843'),
+                                                    ('93633c0a9cea34837dd3bea2297dcb5305eb23651133e67d3788bc4fa2ad1007',
+                                                     '23d8ec40b586f6db69027c8fd5b4e949a3d0ee1ca102f45a064b0c874c517843')),
+ 'src/engine/scalping/strategy_owner_replay.py': (('bd080261d91243ab9f2ef2a69eeef07830edb3a9178be94ecd069912cc0343c9',
+                                                   '7ea25642e08cb77f95840373dc8fb16fadcee37bb0aa2c03a9234212ac12b878'),),
+ 'src/engine/sniper_state_handlers.py': (('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                          '885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4'),
+                                         ('5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf',
+                                          '885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4')),
+ 'src/trading/market/session_contract.py': (('3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
+                                             'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c'),)}
 REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS = {
     (trigger, REVIEWED_AVG_DOWN_INPUT_HASHES[trigger]): {
         **value,
@@ -2038,6 +2043,12 @@ REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS = {
                    if key[1] == '6c664915b34289cddceeaf20399cce45f5e9e3f3373fdeae885910043f343112'
                    else {}),
             } for key, paths in value['contract_extensions'].items()
+        } | {
+            ('8940ea4ad0d3b64d30f67f986a75715ee24c1d95',
+             'c34bc30c734591c1c97c0ed770744c273e206de14dbd0b02382ef71a88265693'):
+                {name: REVIEWED_AVG_DOWN_INPUT_HASHES[name] for name in (
+                    'src/engine/scalping/holding_decision_context.py',
+                    'src/engine/scalping/ai_market_snapshot.py')},
         },
     } for (trigger, sha), value in REVIEWED_CLEANUP_DEPENDENCY_VARIANTS.items()
 }
@@ -2177,8 +2188,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)
             continue
-        if pair in (REVIEWED_AVG_DOWN_INPUT_SOURCES.get(repository_name(name)),
-                    REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES.get(repository_name(name)),
+        if (pair in REVIEWED_AVG_DOWN_INPUT_SOURCES.get(repository_name(name), ())
+                or pair in (REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES.get(repository_name(name)),
                     REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(repository_name(name)),
                     REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(repository_name(name)),
                     REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES.get(name),
@@ -2233,7 +2244,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     REVIEWED_POSTCLOSE_READ_SOURCES.get(name),
                     REVIEWED_CARRIED_VOTE_PREFIX_SOURCES.get(name),
                     REVIEWED_OVERNIGHT_SELL_RECEIPT_SOURCES.get(name),
-                    REVIEWED_PREASSESSMENT_OBSERVER_SOURCES.get(name)):
+                    REVIEWED_PREASSESSMENT_OBSERVER_SOURCES.get(name))):
             changed.append(name)
             continue
         if name not in allowed:

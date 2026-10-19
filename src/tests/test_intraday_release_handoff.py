@@ -1498,12 +1498,17 @@ def avg_down_input_git_candidate(cleanup_git_candidate):
     return root, commit, inventories, digests
 
 
+@pytest.mark.parametrize('origin', ['7f2552aedde8fec6ef904a43105827907e50dfc8',
+                                    '8940ea4ad0d3b64d30f67f986a75715ee24c1d95'])
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
 @pytest.mark.parametrize('fault', [None, 'input_changed', 'extension_missing'])
 def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
-        avg_down_input_git_candidate, monkeypatch, family, fault):
+        avg_down_input_git_candidate, monkeypatch, family, fault, origin):
     root, commit, inventories, digests = avg_down_input_git_candidate
-    origin = '7f2552aedde8fec6ef904a43105827907e50dfc8'
+    if origin.startswith('8940'):
+        digests = dict(main_stop='12103eeb4e6c84bdef55013e914cd64784cce0650b045e6f25c05a8101a97b45',
+            holding_vote='c34bc30c734591c1c97c0ed770744c273e206de14dbd0b02382ef71a88265693',
+            pre_submit_delay='90572ff4ba7dbbff01f559e353f4f2a9cc910d1b068880db459749b918a267de')
     if fault == 'input_changed':
         path = root/'src/engine/scalping/holding_decision_context.py'
         path.write_bytes(path.read_bytes()+b'\nUNREVIEWED = True\n')
@@ -1511,9 +1516,12 @@ def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
         trigger = 'src/engine/sniper_state_handlers.py'
         variant = handoff.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS[(trigger, handoff._sha(root/trigger))]
         key = (origin, digests[family])
-        extensions = dict(variant['contract_extensions'][key])
-        extensions.pop(next(iter(extensions)))
-        monkeypatch.setitem(variant['contract_extensions'], key, extensions)
+        if key in variant['contract_extensions']:
+            extensions = dict(variant['contract_extensions'][key])
+            extensions.pop(next(iter(extensions)))
+            monkeypatch.setitem(variant['contract_extensions'], key, extensions)
+        else:
+            digests[family] = '0'*64
     if fault:
         with pytest.raises(ValueError):
             handoff._verify_entry_code_delta(root, commit, origin, inventories[family], digests[family])

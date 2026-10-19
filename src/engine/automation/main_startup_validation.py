@@ -199,6 +199,7 @@ if capture:
     from src.engine.automation import pre_submit_delay_partitioned_research as D
     from src.engine.scalping import pre_submit_delay_initial_policy as I
     original_load=N.load
+    original_validate=N.validate
     original_inventory=A._frozen_inventory
     original_frozen=A._verify_frozen
     original_manifest=A.validate_manifest
@@ -208,6 +209,13 @@ if capture:
         if result:
             closure['bundles'][result['bundle_sha256']]=dict(target_date=result['target_date'],
                 family_sha256=result['continuous_reversal']['family_sha256'])
+        return result
+    def validate(bundle,*args,**kwargs):
+        result=original_validate(bundle,*args,**kwargs)
+        # Intraday preserved generations validate already-read bundles without
+        # calling load. Record only after the same native semantic check passes.
+        closure['bundles'][bundle['bundle_sha256']]=dict(target_date=bundle['target_date'],
+            family_sha256=bundle['continuous_reversal']['family_sha256'])
         return result
     def inventory(root):
         result=original_inventory(root)
@@ -271,6 +279,7 @@ if capture:
             raise ValueError('startup_native_delay_selection_conflict')
         return result
     N.load=load
+    N.validate=validate
     A._frozen_inventory=inventory
     A._verify_frozen=frozen
     A.validate_manifest=manifest
