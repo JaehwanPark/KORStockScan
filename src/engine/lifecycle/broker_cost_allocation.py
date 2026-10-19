@@ -417,7 +417,119 @@ def validate_research_fact_cost(receipt, *, record_id, symbol, buy_qty, buy_pric
         return _missing(exc)
 
 
-def persist_research_costs(data_root, completion_date, receipts, required_dates):
+def refresh_native_research_costs(data_root, completion_date, *, completion_source):
+    """Reallocate late costs from original native fills without resealing facts.
+
+    The quantity owner verifies the original fact/projection seal before this
+    call. A changed dated source refreshes only this derived allocation index;
+    canonical PnL, policy receipts and original report bytes remain immutable.
+    """
+    from . import main_stop_research_cost as native
+    from .research_input_budget import Claim
+    root = Path(data_root)
+    claims = []
+    try:
+        paths = native._admit_cost_inputs(root, completion_date, claims)
+        registry = root / 'runtime/order_owner_registry.jsonl'
+        if registry.exists():
+            if registry.stat().st_size > native.MAX_REGISTRY_BYTES:
+                raise ValueError('stop_research_registry_partition_required')
+            claims.append(Claim(registry.stat().st_size * 12))
+        paths.append(registry)
+        before = native._signature(paths)
+        return _refresh_native_research_costs(root, completion_date,
+            completion_source=completion_source, input_paths=paths, input_signature=before)
+    finally:
+        for claim in claims:
+            claim.close()
+
+
+def _refresh_native_research_costs(root, completion_date, *, completion_source, input_paths, input_signature):
+    from . import main_stop_research_cost as native
+    from src.engine.sniper_trade_review_report import (
+        _quantity_registry_index, _quantity_registry_fill_custody)
+    directory = root / 'runtime/initial_quantity_research_costs' / completion_date
+    index_path = directory / 'index.json'
+    previous = native._read(index_path, 4 * 1024 * 1024) if index_path.exists() else {}
+    if previous and (previous.get('schema') != INDEX_SCHEMA
+            or previous.get('completion_date') != completion_date
+            or previous.get('index_sha256') != digest({k:v for k,v in previous.items() if k != 'index_sha256'})):
+        raise ValueError('research_cost_index_invalid')
+    dates = previous.get('source_dates', [completion_date])
+    if not isinstance(dates, list) or len(dates) > MAX_DATES:
+        raise ValueError('research_cost_dependency_dates_invalid')
+    sources = {}
+    for day in dates:
+        if (not isinstance(day, str) or _clock(day + 'T00:00:00+09:00').date().isoformat() != day
+                or day > completion_date):
+            raise ValueError('research_cost_dependency_dates_invalid')
+        try:
+            sources[day] = load_source(root, day)
+        except (OSError, ValueError, TypeError, KeyError):
+            sources[day] = None
+    registry, registry_generation, registry_path = native._registry(root)
+    revision = dict(schema='initial_quantity_late_cost_revision_v1',
+        completion_source_sha256=digest(completion_source), registry=registry_generation,
+        official_sources={day:(source or {}).get('source_sha256') for day,source in sources.items()},
+        allocation_algorithm=ALGORITHM)
+    if previous.get('native_revision') == revision:
+        if input_signature != native._signature(input_paths):
+            raise ValueError('research_cost_revision_source_changed')
+        return previous
+    rows, proof, paths = native._native_projection(root, completion_date)
+    try:
+        # The original native reader verifies bytes and census. Join its
+        # original generation to the exact fact seal supplied by the caller.
+        original_projection = dict(completion_source.get('projection') or {})
+        original_projection.pop('dependency_receipt', None)
+        original_projection.pop('snapshot_identity', None)
+        if (completion_source.get('source_date') != completion_date
+                or original_projection != proof.get('projection')
+                or completion_source.get('actual_cost_source_generation') != proof.get('original_cost_generation')):
+            raise ValueError('research_cost_original_completion_binding_invalid')
+        paths = paths + input_paths
+        before = native._signature(paths)
+        registry_index = _quantity_registry_index(registry)
+        positions = []
+        cost_only = {'source_gap_sell_leg_configured_cost', 'source_gap_profit_rate_unreconciled',
+                     'source_gap_exact_cost_missing', 'source_gap_broker_actual_cost_missing'}
+        for record, row in rows.items():
+            buy, sell = row.get('buy_fill_legs'), row.get('sell_fill_legs')
+            custody = _quantity_registry_fill_custody(row, {'buy_fill_legs':buy}, registry,
+                registry_generation, registry_index=registry_index)
+            positions.append(dict(record_id=record, symbol=row['code'], status='COMPLETED',
+                buy_legs=buy, sell_legs=sell, custody_rows=custody,
+                completion_observed_date=completion_date,
+                completed_at=row.get('exact_sell_fill_time') or max(
+                    (leg['at'] for leg in (sell or [])), key=_clock, default=None),
+                terminal_observed=(row.get('terminal_decision_authority') == 'broker_sell_fill_observation_only'
+                    and row.get('terminal_population_scope') == 'real_record_bound'
+                    and row.get('sell_quantity_conserved') is True and row.get('position_residual_qty') == 0),
+                fact_buy_price=row.get('buy_price'), fact_sell_price=row.get('sell_price'),
+                execution_source_quality_reasons=sorted(set(row.get('strict_completion_reasons') or []) - cost_only)))
+        needed = {completion_date}
+        for item in positions:
+            for leg in (item['buy_legs'] or []) + (item['sell_legs'] or []):
+                needed.add(_clock(leg['at']).date().isoformat())
+        if needed - set(dates):
+            raise ValueError('research_cost_original_dependency_dates_missing')
+        allocated = build_research_cost_allocations(sources, positions)
+        receipts = {}
+        for item in positions:
+            record = item['record_id']; produced = allocated.get(record)
+            receipts[record] = (produced if isinstance(produced, dict) and produced.get('status') in {
+                'research_cost_invalid', 'research_cost_pending'} else validate_research_cost(produced,
+                    record_id=record, symbol=item['symbol'], buy_legs=item['buy_legs'], sell_legs=item['sell_legs'],
+                    custody_rows=item['custody_rows'], completion_date=completion_date))
+        if before != native._signature(paths) or input_signature != native._signature(input_paths):
+            raise ValueError('research_cost_revision_source_changed')
+        return persist_research_costs(root, completion_date, receipts, dates, native_revision=revision)
+    finally:
+        for claim in rows.budget_claims:
+            claim.close()
+
+
+def persist_research_costs(data_root, completion_date, receipts, required_dates, *, native_revision=None):
     """Publish research receipts independently from immutable exact-cost receipts."""
     day = _clock(completion_date + "T00:00:00+09:00").date().isoformat()
     dates = sorted(set(required_dates))
@@ -457,10 +569,10 @@ def persist_research_costs(data_root, completion_date, receipts, required_dates)
                         observed = current.get(part["source_date"])
                         if observed is None or observed["source_sha256"] != part["source_sha256"]:
                             raise ValueError("research_cost_source_changed_before_publication")
-            return _persist_locked(directory, day, receipts, dates)
+            return _persist_locked(directory, day, receipts, dates, native_revision=native_revision)
 
 
-def _persist_locked(directory, day, receipts, dates):
+def _persist_locked(directory, day, receipts, dates, *, native_revision=None):
     if not isinstance(receipts, dict) or len(receipts) > MAX_RECORDS:
         raise ValueError("research_cost_population_limit")
     refs = {}
@@ -488,12 +600,30 @@ def _persist_locked(directory, day, receipts, dates):
         refs[record] = digest(receipt)
     index = {"schema": INDEX_SCHEMA, "completion_date": day,
              "source_dates": dates, "receipts": refs}
+    if native_revision is not None:
+        index['native_revision'] = native_revision
     index["index_sha256"] = digest(index)
     path = directory / "index.json"
     if path.is_symlink():
         raise ValueError("research_cost_index_symlink")
     if path.exists() and path.stat().st_size > 4 * 1024 * 1024:
         raise ValueError("research_cost_index_size_limit")
+    if path.exists() and json.loads(path.read_bytes()) != index:
+        # Retain the exact prior index bytes, in addition to its immutable
+        # receipt bodies. A later cost correction is a new generation.
+        import hashlib
+        raw = path.read_bytes()
+        history = directory / 'index_generations'
+        if history.is_symlink():
+            raise ValueError('research_cost_index_history_symlink')
+        history.mkdir(exist_ok=True)
+        archived = history / (hashlib.sha256(raw).hexdigest() + '.json')
+        if archived.exists():
+            if archived.is_symlink() or archived.read_bytes() != raw:
+                raise ValueError('research_cost_index_history_collision')
+        else:
+            with os.fdopen(os.open(archived, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as handle:
+                handle.write(raw); handle.flush(); os.fsync(handle.fileno())
     if not path.exists() or json.loads(path.read_bytes()) != index:
         atomic(path, index)
     return index

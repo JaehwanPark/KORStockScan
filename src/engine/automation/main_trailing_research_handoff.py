@@ -67,7 +67,7 @@ def _verify_report(path, *, target_date, parent_sha256, memo_budget):
     if manifest['target_date']!=target_date or manifest['source_date']!=report['source_date']:
         raise ValueError('main_trailing_research_dates_invalid')
     data_root=Path(manifest['source_data_root']).resolve()
-    window=capture_window(data_root,manifest['consumed_dates'])
+    window=capture_window(data_root,manifest['consumed_dates'],allow_cost_revision=True)
     if window['input_window_generation_sha256']!=report['input_window_generation_sha256']:
         raise ValueError('main_trailing_research_cost_window_changed')
     from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory

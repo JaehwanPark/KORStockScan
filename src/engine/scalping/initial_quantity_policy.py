@@ -246,7 +246,7 @@ def _quantity_compact_fact_issue(day, sidecar, dependency):
     return None
 
 
-def _quantity_fact_generation_issue(day):
+def _quantity_fact_generation_issue(day, *, original_cost_generation=None):
     """Validate the native fact seal without loading historical timelines.
 
     Oversized legacy snapshots need the original bounded native projection;
@@ -275,7 +275,8 @@ def _quantity_fact_generation_issue(day):
                         ) + (Path(str(sidecar) + '.dependencies.json'),)
         try:
             before = tuple((str(p), source_stat(p.stat()) if p.exists() else None) for p in sources)
-            dependency = _capture_day(DATA_DIR, directory, day)
+            dependency = _capture_day(DATA_DIR, directory, day,
+                                      original_cost_generation=original_cost_generation)
             issue = _quantity_compact_fact_issue(day, sidecar, dependency)
             after = tuple((str(p), source_stat(p.stat()) if p.exists() else None) for p in sources)
             if before != after:
@@ -311,6 +312,26 @@ def _quantity_fact_generation_issue(day):
         return 'fact_snapshot_native_projection_invalid'
 
 
+def _quantity_original_fact_generation_issue(day):
+    """Verify original facts independently of a later official cost revision.
+
+    This does not admit the original economics as current. The completion
+    adapter binds current costs separately and clears superseded actual PnL.
+    """
+    from src.engine.strategy_position_performance_report import _status_path
+    from src.engine.scalping.initial_quantity_source_cache import _completion_json
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    try:
+        receipt, _ = _completion_json(_status_path(day), MAX_METADATA_BYTES)
+        proof = receipt.get('completion_snapshot_source') or {}
+        original = receipt.get('actual_cost_source_generation')
+        if proof.get('source_basis') == 'native_bounded_fact_projection' and isinstance(original, dict):
+            return _quantity_fact_generation_issue(day, original_cost_generation=original)
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return _quantity_fact_generation_issue(day)
+
+
 def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> list[dict[str, Any]]:
     """Read the completed-trade fact owner without mutating its database."""
     from sqlalchemy import or_
@@ -342,10 +363,8 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
         generations = {}
         for day in days:
             path = _status_path(day)
-            issue = _quantity_fact_generation_issue(day)
+            issue = _quantity_original_fact_generation_issue(day)
             costs=source_generation(DATA_DIR,day)
-            if issue is None and json.loads(path.read_bytes()).get('actual_cost_source_generation')!=costs:
-                issue='persisted_fact_cost_generation_stale'
             generations[day] = {"path":str(path), "sha256":_file_sha256(path) if path.is_file() else None,
                                 "issue":issue,"cost_generation":costs}
         rows=[]
@@ -364,7 +383,7 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
         from src.engine.scalping.initial_quantity_source_cache import completion_overlay
         overlaid = completion_overlay(rows, as_of=as_of, data_dir=DATA_DIR,
             entry_on_or_after=start.isoformat(), entry_generations=generations,
-            validate_day=_quantity_fact_generation_issue)
+            validate_day=_quantity_original_fact_generation_issue)
         for day, gen in generations.items():
             path = Path(gen['path'])
             if (gen['sha256'] != (_file_sha256(path) if path.exists() else None)
@@ -2634,9 +2653,7 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
     for day, gen in census.get("persisted_fact_generations", {}).items():
         if gen.get("sha256") and _file_sha256(Path(gen["path"])) != gen["sha256"]:
             raise ValueError("quantity_fact_source_generation_changed")
-        current_issue=_quantity_fact_generation_issue(day)
-        if current_issue is None and json.loads(Path(gen['path']).read_bytes()).get('actual_cost_source_generation')!=gen.get('cost_generation'):
-            current_issue='persisted_fact_cost_generation_stale'
+        current_issue=_quantity_original_fact_generation_issue(day)
         if current_issue != gen.get("issue") or gen.get('cost_generation')!=source_generation(DATA_DIR,day):
             raise ValueError("quantity_fact_cost_generation_changed")
     from src.engine.scalping.initial_quantity_source_cache import verify_completion_overlay_generations
@@ -3155,6 +3172,13 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 or report["census"].get("entry_on_or_after") != refresh_window(parent)):
             raise ValueError("existing_replay_refresh_window_invalid")
     else:
+        if args.output_dir or args.output or args.policy_output:
+            # Publication prepares late-cost derivatives before pinning the
+            # batch. Read-only census/observer/replay consumers never publish.
+            from src.engine.scalping.initial_quantity_source_cache import prepare_completion_cost_revisions
+            prepare_completion_cost_revisions(args.data_dir.resolve(),
+                refresh_window(parent) if parent else BASELINE.isoformat(), args.as_of,
+                validate_day=_quantity_original_fact_generation_issue)
         report = build_initial_quantity_replay(
             args.as_of, data_dir=args.data_dir, performance=performance,
             entry_on_or_after=refresh_window(parent) if parent else None,

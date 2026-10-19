@@ -234,7 +234,8 @@ def _costs(report, data_root):
         if isinstance(generation, dict) and isinstance(generation.get('cost_generation'), dict):
             expected.append({'source_date': day, 'generation': generation['cost_generation']})
     for day, generation in census.get('completion_overlay_generations', {}).items():
-        costs = (generation.get('completion_snapshot_source') or {}).get('actual_cost_source_generation')
+        costs = generation.get('current_cost_generation',
+            (generation.get('completion_snapshot_source') or {}).get('actual_cost_source_generation'))
         if isinstance(costs, dict):
             expected.append({'source_date': day, 'generation': costs})
     expected = list({(item['source_date'], _digest(item['generation'])): item

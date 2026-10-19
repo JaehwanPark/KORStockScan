@@ -101,7 +101,7 @@ def run(manifest_path,*,input_root,output_root=None,dry_run=True,resume=False):
         from .main_trailing_source_assembler import verify_inventory, source_generation_matches
         verify_inventory(manifest,root)
         data_root=Path(manifest['source_data_root']).resolve()
-        window=capture_window(data_root,manifest['consumed_dates'])
+        window=capture_window(data_root,manifest['consumed_dates'],allow_cost_revision=True)
         if window['input_window_generation_sha256']!=manifest['input_window_generation_sha256']:
             raise ValueError('all_scope_cost_window_changed_reassemble_required')
         from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory

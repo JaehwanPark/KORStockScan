@@ -222,7 +222,7 @@ def _run(manifest_path, *, input_root, output_root, dry_run, resume, budget):
         del block
         scope_claim.close()
         budget.enter_context(Claim(len(json.dumps(scope).encode()) * 8))
-    window = capture_window(root, manifest['consumed_dates'])
+    window = capture_window(root, manifest['consumed_dates'], allow_cost_revision=True)
     entry_window_start = research_entry_window_start(manifest['consumed_dates'])
     contract = code_contract()
     parent = manifest['approved_parent_receipt']

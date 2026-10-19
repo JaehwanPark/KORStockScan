@@ -335,6 +335,29 @@ def completion_source_paths(data_dir, day):
                     Path(str(sidecar)+'.dependencies.json')]
 
 
+def prepare_completion_cost_revisions(data_dir, first_day, as_of, *, validate_day):
+    """Refresh late-cost derivatives once, before the quantity batch is pinned."""
+    import re
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    from src.engine.lifecycle.broker_cost_allocation import refresh_native_research_costs
+    directory = Path(data_dir) / 'report/strategy_position_fact_sync'
+    for path in sorted(directory.glob('strategy_position_fact_sync_*.status.json')):
+        match = re.fullmatch(r'strategy_position_fact_sync_(\d{4}-\d{2}-\d{2})\.status\.json', path.name)
+        if not match or not first_day <= match[1] <= as_of:
+            continue
+        day = match[1]
+        receipt, _ = _completion_json(path, MAX_METADATA_BYTES)
+        proof = receipt.get('completion_snapshot_source') or {}
+        if (proof.get('source_basis') != 'native_bounded_fact_projection'
+                or receipt.get('actual_cost_source_generation') == source_generation(Path(data_dir), day)):
+            continue
+        issue = validate_day(day)
+        if issue is not None:
+            raise ValueError('quantity_completion_native_source_invalid:' + day + ':' + str(issue))
+        refresh_native_research_costs(Path(data_dir), day, completion_source=proof)
+
+
 def _completion_day(data_dir, day, *, read=None, expected=None):
     """Join small native fact seals, without revisiting a historical timeline."""
     import re
@@ -342,7 +365,7 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
     from src.engine.sniper_trade_review_report import completed_census_projection_ids
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES, MAX_PROJECTION_BYTES
     from src.engine.lifecycle.snapshot_archive import snapshot_identity
-    from src.engine.lifecycle.broker_cost_reconciliation import source_generation, digest
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation, digest, record_source_projector
     directory = Path(data_dir) / 'report/monitor_snapshots'
     raw_path = directory / f'trade_review_{day}.json'
     sidecar = raw_path.with_suffix('.completed_projection.json')
@@ -413,13 +436,22 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
             and snapshot_identity_matches(raw_path, dependency.get('snapshot_identity'))):
         original_identity = dependency['snapshot_identity']
     costs = source_generation(Path(data_dir), day)
+    original_costs = receipt.get('actual_cost_source_generation')
+    if any(not isinstance(generation, dict)
+            or generation.get('schema') != 'holding_actual_cost_source_generation_v1'
+            or generation.get('completion_date') != day
+            or type(generation.get('count')) is not int or generation['count'] < 0
+            or re.fullmatch(r'[0-9a-f]{64}', str(generation.get('sha256') or '')) is None
+            for generation in (costs, original_costs)):
+        raise ValueError('quantity_completion_cost_generation_invalid')
     projection = dict(proof.get('projection') or {})
     sealed_dependency = projection.pop('dependency_receipt', None)
     identity = projection.pop('snapshot_identity', None)
     body = {k:v for k,v in value.items() if k != 'artifact_sha256'} if isinstance(value, dict) else {}
     census = (value.get('meta') or {}).get('completed_census_manifest') if isinstance(value, dict) else None
     completed = (value.get('sections') or {}).get('completed_trade_projection') if isinstance(value, dict) else None
-    if (proof.get('schema') != 'strategy_position_fact_snapshot_source_v1' or proof.get('source_date') != day
+    if (not isinstance(original_costs, dict)
+            or proof.get('schema') != 'strategy_position_fact_snapshot_source_v1' or proof.get('source_date') != day
             or projection != dependency.get('projection')
             or projection.get('path') != sidecar.name
             or type(projection.get('size')) is not int or projection['size'] < 0
@@ -437,12 +469,12 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
             or not isinstance(census, dict) or census.get('source_date') != day
             or census.get('schema') != 'trade_review_completed_census_v1'
             or digest(census) != dependency.get('census_sha256')
-            or census.get('actual_cost_source_generation') != costs
+            or census.get('actual_cost_source_generation') != original_costs
             or (dependency.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'
             or (value.get('meta') or {}).get('snapshot_profile') != 'postclose_exit'
             or receipt.get('completed_census_run_ids') != [census.get('run_id')]
             or receipt.get('completed_census_projection_sha256') != [census.get('projection_sha256')]
-            or any(g != costs for g in (receipt.get('actual_cost_source_generation'), proof.get('actual_cost_source_generation'),
+            or any(g != original_costs for g in (proof.get('actual_cost_source_generation'),
                        (value.get('meta') or {}).get('actual_cost_source_generation'),
                        (dependency.get('meta') or {}).get('actual_cost_source_generation')))
             or not isinstance(completed, list) or len(completed) != census.get('projected_count')
@@ -479,6 +511,14 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
     native = dict(schema='initial_quantity_completion_generation_v1', source_date=day,
                   fact_receipt=status_ref, dependency_receipt=dependency_ref,
                   completion_snapshot_source=proof)
+    revised = costs != original_costs
+    if revised:
+        native['current_cost_generation'] = costs
+    project_costs = record_source_projector(costs) if revised else None
+    current_refs = (costs.get('quantity_research_cost_generation') or {}).get('receipts', [])
+    current_refs_by_id = {ref['record_id']:ref for ref in current_refs}
+    if len(current_refs_by_id) != len(current_refs):
+        raise ValueError('quantity_completion_cost_receipt_population_invalid')
     projected = facts._trade_fact_rows_from_report(day, {
         'meta': value['meta'], 'sections': {'recent_trades': converted,
                                           'completed_trade_projection': converted}})
@@ -487,6 +527,23 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
         source = originals[str(terminal['recommendation_id'])]
         if 'quantity_research_cost' in source:
             terminal['quantity_research_cost'] = source['quantity_research_cost']
+        if revised:
+            # An original terminal remains a fact after costs change, but its
+            # old actual economics cannot be relabeled as current. Only the
+            # current immutable research receipt may supply research money.
+            terminal.update(profit_rate=None, realized_pnl_krw=None,
+                broker_actual_fees_taxes_krw=None, economics_source_status='actual_cost_revision_pending',
+                actual_cost_reconciliation_status='actual_cost_unallocated')
+            terminal.pop('quantity_research_cost', None)
+            ref = current_refs_by_id.get(str(source['id']))
+            if ref is not None:
+                path = Path(data_dir) / 'runtime/initial_quantity_research_costs' / day / 'generations' / (ref['content_sha256'] + '.json')
+                current, reference = metadata(path, 256 * 1024)
+                if (digest(current) != ref['content_sha256']
+                        or reference is not None and reference['sha256'] != ref['sha256']):
+                    raise ValueError('quantity_completion_cost_receipt_changed')
+                terminal['quantity_research_cost'] = current
+            terminal['actual_cost_source_generation'] = project_costs(str(source['id']), terminal.get('quantity_research_cost'))
         for key in ('add_count', 'avg_down_count', 'pyramid_count'):
             if key not in source:
                 terminal.pop(key, None)

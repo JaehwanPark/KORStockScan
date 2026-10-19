@@ -2150,6 +2150,87 @@ REVIEWED_PREFIX_PRODUCER_PAIRS = {
                        '3698af57301e2db4ba868bb75df878fc47441e16e4e831dfe4c90b31111a6cab')),
 }
 
+# Original native fills and current late costs have independent generations.
+# Exact reviewed report/research bytes; every issued predecessor stays intact.
+REVIEWED_LATE_COST_HASHES = {'src/engine/automation/main_trailing_all_scope_research.py': '1385571ec3fea2b9ff5815f11d76c6132fd26a15633d8809fbb36c9c28781061',
+ 'src/engine/automation/main_trailing_partitioned_research.py': 'f94e55e7be8bb9cb2f0b4b03af8ae740ceb07e3e51053bf085358c7b50ab6f28',
+ 'src/engine/automation/main_trailing_research_handoff.py': '87b07feb6284f09f8abb2c04bfe8ad15064b2aac9dc8975c92c31d394adb2edc',
+ 'src/engine/automation/main_trailing_source_assembler.py': 'a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b',
+ 'src/engine/automation/scalp_trailing_mechanical_policy_apply.py': 'd5a8170e5d9f66ea16dede5b02135f35e508421173af3a22c3a517b9b7f0b6f3',
+ 'src/engine/holding_exit_observation_report.py': 'fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5',
+ 'src/engine/lifecycle/broker_cost_allocation.py': 'e392d3e79ad63fe1502a7921aca590ce93c3134d9d3e4d488d42775dd20cf349',
+ 'src/engine/lifecycle/holding_window_generation.py': '73276f9a219d8a0406092be145c793616a33ebc7d4cf86383fde932ae45c5973',
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': '252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947',
+ 'src/engine/scalping/initial_quantity_policy.py': '366541bd4f1dd717c75fa5ae9ae4297aafe5950e1d7f0a72afd050b57252d68d',
+ 'src/engine/scalping/initial_quantity_source_cache.py': '77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704'}
+REVIEWED_LATE_COST_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_source_cache.py',
+        'selector_sha256': REVIEWED_LATE_COST_HASHES['src/engine/scalping/initial_quantity_source_cache.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_LATE_COST_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_LATE_COST_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_PREFIX_PRODUCER_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_LATE_COST_PAIRS = {'src/engine/automation/main_trailing_all_scope_research.py': (('f704dcc16a4bb8434cb255168074a493a215feaac3b1c30372053c11c6babdcc',
+                                                                '1385571ec3fea2b9ff5815f11d76c6132fd26a15633d8809fbb36c9c28781061'),
+                                                               ('a51359c9c0864e055c4c71cb240760f11ca7de265530aa22ac378a70c30af01b',
+                                                                '1385571ec3fea2b9ff5815f11d76c6132fd26a15633d8809fbb36c9c28781061'),
+                                                               ('a4433ef1560280d8cfc198bb95357414f01373ba55757c4197315a2b3d0f2dab',
+                                                                '1385571ec3fea2b9ff5815f11d76c6132fd26a15633d8809fbb36c9c28781061')),
+ 'src/engine/automation/main_trailing_partitioned_research.py': (('90432e60f32bbc8dbc489655ea3f25a97511542f39c1fbb5f655e542495f9208',
+                                                                  'f94e55e7be8bb9cb2f0b4b03af8ae740ceb07e3e51053bf085358c7b50ab6f28'),
+                                                                 ('093f392a0ef7afc060515b5173ca62270846fb886fcb48bec03a74cabf441a81',
+                                                                  'f94e55e7be8bb9cb2f0b4b03af8ae740ceb07e3e51053bf085358c7b50ab6f28'),
+                                                                 ('142ef75169de9fc68664a7e556f0a4cbb2e79918b450a5c7a8156bc50586dd4f',
+                                                                  'f94e55e7be8bb9cb2f0b4b03af8ae740ceb07e3e51053bf085358c7b50ab6f28')),
+ 'src/engine/automation/main_trailing_research_handoff.py': (('7220a496df445299ce758f8d79eee0205fa51e1fdacc9440503f1854c9fda677',
+                                                              '87b07feb6284f09f8abb2c04bfe8ad15064b2aac9dc8975c92c31d394adb2edc'),
+                                                             ('23b05aac5bbf6bf20d4463ccdc4f9ffc290c759cfab269540d1afefbbea0a117',
+                                                              '87b07feb6284f09f8abb2c04bfe8ad15064b2aac9dc8975c92c31d394adb2edc'),
+                                                             ('4c2d49eb51c2087bbf0853273275bac2bf7d85ac3cba40e0b46f1e770a0009fe',
+                                                              '87b07feb6284f09f8abb2c04bfe8ad15064b2aac9dc8975c92c31d394adb2edc')),
+ 'src/engine/automation/main_trailing_source_assembler.py': (('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              'a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b'),
+                                                             ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              'a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b'),
+                                                             ('aee4636b6f5c5bad90a9f79d29c3d8cb8ebf93a0bf6613e377b2a2619781eedd',
+                                                              'a44afcfac3661e43038d7848eb4e512a5c6bc74bfbfa2a9024e93941ce3cee0b')),
+ 'src/engine/automation/scalp_trailing_mechanical_policy_apply.py': (('cf3cabe421126d38f5d5969ea3155bd5d0a27a49027484dceb2ab1ce6a02af6e',
+                                                                      'd5a8170e5d9f66ea16dede5b02135f35e508421173af3a22c3a517b9b7f0b6f3'),),
+ 'src/engine/holding_exit_observation_report.py': (('8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db',
+                                                    'fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5'),
+                                                   ('6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9',
+                                                    'fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5'),
+                                                   ('bd366b341b5515a0d7dcc2b4da47cf71320a0d703b617057037044d52b8c06e3',
+                                                    'fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5')),
+ 'src/engine/lifecycle/broker_cost_allocation.py': (('f2ce924c4239f51e4d267e56c1ffae92978600b400796a935b6d30994e9f7783',
+                                                     'e392d3e79ad63fe1502a7921aca590ce93c3134d9d3e4d488d42775dd20cf349'),),
+ 'src/engine/lifecycle/holding_window_generation.py': (('52c641abbec603cd419cda1f42121e461cff7487888888df6294b573a52e62ac',
+                                                        '73276f9a219d8a0406092be145c793616a33ebc7d4cf86383fde932ae45c5973'),
+                                                       ('ee13b6cc48e1842c1710f6971703712e984ca636fe6f2378f068fb8fd5121092',
+                                                        '73276f9a219d8a0406092be145c793616a33ebc7d4cf86383fde932ae45c5973')),
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': (('128c119d988fb2865e4c4fbbaa7864fc28b037e5b50da0f85703879929345c9d',
+                                                                 '252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947'),
+                                                                ('d8e3ed265350afd2214dce5e06c7f3c8006ebc80b8d86435b705888edcff221f',
+                                                                 '252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947')),
+ 'src/engine/scalping/initial_quantity_policy.py': (('dbd20ac53e9ebb59dbb6b465a214558eb838b8f012636eda73cb02f65c5304c6',
+                                                     '366541bd4f1dd717c75fa5ae9ae4297aafe5950e1d7f0a72afd050b57252d68d'),
+                                                    ('2710cc18ab0289b1318cb53af8cd45bebcbd9ad9354d82ba2fa180ed3eb9fd90',
+                                                     '366541bd4f1dd717c75fa5ae9ae4297aafe5950e1d7f0a72afd050b57252d68d'),
+                                                    ('99656408f2e1dd095686f4ce3b8cdea8364baaf98b62664e53104186c3db62f4',
+                                                     '366541bd4f1dd717c75fa5ae9ae4297aafe5950e1d7f0a72afd050b57252d68d')),
+ 'src/engine/scalping/initial_quantity_source_cache.py': (('4dfa3c22640ee0f94fdac37633e7adbb0b6be4ecdaa14efe25ca04d840c799a7',
+                                                           '77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704'),
+                                                          ('910f1a50b7191cf47815b6707dae489847d25f1e45f1b40104a0c38d20eaa846',
+                                                           '77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704'),
+                                                          ('b746d9c9d131ab2795953f3e2401f2fe367525dc0d7dc2c85051fdaac73af97c',
+                                                           '77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704'),
+                                                          ('aeabf97ec5bd69578e6e66fc4b2eb14945fbe7a34e59658e12fe1b9cf9732ecd',
+                                                           '77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2203,7 +2284,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PREFIX_PRODUCER_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_LATE_COST_DEPENDENCY_VARIANTS,
+                         REVIEWED_PREFIX_PRODUCER_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETION_CONSUMER_DEPENDENCY_VARIANTS,
                          REVIEWED_COMPLETION_CENSUS_DEPENDENCY_VARIANTS,
                          REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS,
@@ -2272,7 +2354,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_PREFIX_PRODUCER_PAIRS.get(name, ())
+        if (pair in REVIEWED_LATE_COST_PAIRS.get(name, ())
+                or pair in REVIEWED_PREFIX_PRODUCER_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETION_CONSUMER_PAIRS.get(name, ())
                 or pair in REVIEWED_COMPLETION_CENSUS_PAIRS.get(name, ())
                 or pair in REVIEWED_CLEANUP_PAIRS.get(name, ())

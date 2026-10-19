@@ -778,9 +778,10 @@ def large_completed_sources(root,raw,day,output,dependency,*,sources=None):
     else:
         receipt,receipt_generation=read(receipt_path)
     recorded_cost=(receipt.get('meta') or {}).get('actual_cost_source_generation')
-    cost_matches=(recorded_cost==dependency['cost_generation'] or (recorded_cost is None
-        and dependency['cost_generation'].get('count')==0
-        and not dependency['cost_generation'].get('official_source_sha256')))
+    original_cost=dependency.get('original_cost_generation',dependency['cost_generation'])
+    cost_matches=(recorded_cost==original_cost or (recorded_cost is None
+        and original_cost.get('count')==0
+        and not original_cost.get('official_source_sha256')))
     if (not retained and (receipt.get('schema')!='holding_projection_dependency_receipt_v1'
         or receipt.get('date')!=day or receipt.get('projection')!=generation
         or receipt.get('artifact_sha256')!=digest({k:v for k,v in receipt.items() if k!='artifact_sha256'})
@@ -897,7 +898,7 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
     if not days: raise ValueError('all_scope_assembly_date_window_empty')
     entry_window_start=research_entry_window_start(days)
     rows,master_source=universe(root,source_date)
-    window=capture_window(root,days)
+    window=capture_window(root,days,allow_cost_revision=True)
     parent_path=root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{source_date}.json'
     parent,parent_generation=read(parent_path)
     from .main_trailing_all_scope_research import code_contract
@@ -962,7 +963,8 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
                 cohort=large_completed_sources(root,raw,day,output,dependency,sources=sources)
             else:
                 original_sources={}
-                projection=_verified_trade_review_projection(raw,day,data_root=root,source_generations=original_sources)
+                projection=_verified_trade_review_projection(raw,day,data_root=root,source_generations=original_sources,
+                    original_cost_generation=dependency.get('original_cost_generation'))
                 if projection is None: gaps['completed_snapshot_unverified']+=1;continue
                 if original_sources:sources.update(original_sources)
                 else:sources[str(sidecar)]=byte_generation(sidecar)
@@ -977,6 +979,11 @@ def _assemble(root, output, *, source_date, target_date, start_date='2026-09-29'
             for trade,position,events in cohort:
                 if str(trade.get('strategy') or '').upper() not in {'SCALP','SCALPING'}:
                     gaps['non_main_trade']+=1;continue
+                if 'original_cost_generation' in dependency:
+                    position['actual_cost_reconciliation'] = {
+                        'status':'actual_cost_unallocated', 'reason':'late_cost_revision'}
+                    position['original_cost_generation_sha256'] = digest(dependency['original_cost_generation'])
+                    position['current_cost_generation_sha256'] = digest(dependency['cost_generation'])
                 position['holding_research_cost']=costs.record(trade,completion_date=day,assembly_root=output)
                 from src.engine.ai.holding_vote_replay_source import assemble_votes
                 from src.engine.scalping.holding_path_vote_replay import freeze_replay_trade

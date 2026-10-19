@@ -1524,6 +1524,112 @@ def _overlay_for_test(tmp_path, rows, *, as_of='2026-10-08', issue=None):
         entry_generations={'2026-10-08':{'issue':issue}}, validate_day=lambda day:None)
 
 
+@pytest.mark.parametrize('missing_source', [False, True])
+def test_late_cost_revision_reallocates_without_resealing_original_facts(tmp_path, monkeypatch, missing_source):
+    from copy import deepcopy
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle import broker_cost_source as official
+    from src.engine.lifecycle import broker_cost_reconciliation as costs
+    from src.engine.lifecycle import main_stop_research_cost as native_cost
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    from src.engine.scalping import initial_quantity_monitor_projection as monitor
+    from src.tests.test_broker_cost_allocation import source, position
+    from src.tests.test_main_stop_research_cost import registry
+    day = '2026-10-08'
+    item = position(1)
+    observed = source(tmp_path)
+    official.atomic(official.source_path(tmp_path, day), observed)
+    registry(tmp_path, [item])
+    receipts = allocation.build_research_cost_allocations({day:observed}, [item])
+    allocation.persist_research_costs(tmp_path, day, receipts, [day])
+    original, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, identity=dict(
+        rec_date=day, buy_time=day+'T10:00:00+09:00', sell_time=day+'T10:01:00+09:00',
+        buy_qty=2, buy_price=10000, sell_price=10100, buy_fill_legs=item['buy_legs'],
+        sell_fill_legs=item['sell_legs'], sell_quantity_conserved=True, position_residual_qty=0,
+        exact_sell_fill_time=item['completed_at'],
+        terminal_decision_authority='broker_sell_fill_observation_only',
+        strict_completion_reasons=['source_gap_broker_actual_cost_missing'], quantity_research_cost=receipts['1']))
+    original.update(rec_date=day, buy_time=day+'T10:00:00+09:00', buy_qty=2, buy_price=10000)
+    immutable = [path, path.with_suffix('.completed_projection.json'),
+                 path.with_suffix('.fact_projection.json'),
+                 Path(str(path.with_suffix('.completed_projection.json'))+'.dependencies.json'),
+                 tmp_path/'report/strategy_position_fact_sync'/f'strategy_position_fact_sync_{day}.status.json']
+    before = {p:p.read_bytes() for p in immutable}
+    index_path = tmp_path/'runtime/initial_quantity_research_costs'/day/'index.json'
+    index_before = index_path.read_bytes()
+    revised = deepcopy(observed)
+    revised['observations']['ka10170']['pages'][0]['tdy_trde_diary'][0]['cmsn_alm_tax'] = '41'
+    revised['source_sha256'] = costs.digest({k:v for k,v in revised.items() if k != 'source_sha256'})
+    official.atomic(official.source_path(tmp_path, day), revised)
+    if missing_source:
+        official.source_path(tmp_path, day).unlink()
+    assert policy._quantity_fact_generation_issue(day) == 'fact_snapshot_native_projection_invalid'
+    assert policy._quantity_original_fact_generation_issue(day) is None
+    calls = []
+    full_read = native_cost._native_projection
+    def counted(*args, **kwargs):
+        calls.append(args[1])
+        return full_read(*args, **kwargs)
+    monkeypatch.setattr(native_cost, '_native_projection', counted)
+    for _ in range(2):
+        cache.prepare_completion_cost_revisions(tmp_path, day, day,
+            validate_day=policy._quantity_original_fact_generation_issue)
+    assert calls == [day]
+    assert {p:p.read_bytes() for p in immutable} == before
+    import hashlib
+    assert (index_path.parent/'index_generations'/(hashlib.sha256(index_before).hexdigest()+'.json')).read_bytes() == index_before
+    rows = _overlay_for_test(tmp_path, [original])
+    current = rows[0]
+    assert current['profit_rate'] is None and current['realized_pnl_krw'] is None
+    assert current['economics_source_status'] != 'broker_actual_cost_reconciled'
+    receipt = policy._quantity_research_fact_cost(current)
+    if missing_source:
+        assert receipt['status'] == 'research_cost_invalid'
+        assert receipt.get('allocated_net_pnl_krw') is None
+    else:
+        assert receipt['status'] == 'research_cost_allocated'
+        assert receipt['allocated_fees_taxes_krw'] == 21
+        assert receipt['sources'][0]['source_sha256'] == revised['source_sha256']
+        assert receipt['actual_execution_cost'] is False
+    report = {'census':{'completion_overlay_generations':rows.completion_generations}}
+    assert monitor._costs(report, tmp_path) == [{'source_date':day, 'generation':costs.source_generation(tmp_path,day)}]
+    cache.verify_completion_overlay_generations(rows.completion_generations, data_dir=tmp_path)
+    from src.engine.lifecycle import holding_window_generation as window
+    current_window = window.capture_window(tmp_path, [day], allow_cost_revision=True)
+    dependency = current_window['dependencies'][day]
+    assert dependency['status'] == 'observed'
+    assert dependency['original_cost_generation'] == json.loads(before[immutable[2]])['meta']['actual_cost_source_generation']
+    assert dependency['cost_generation'] == costs.source_generation(tmp_path, day)
+    window.verify_window(tmp_path, current_window)
+    assert window.capture_window(tmp_path, [day])['dependencies'][day]['status'] == 'source_gap'
+    from src.tests.test_main_trailing_source_assembler import fixture as trailing_fixture
+    from src.engine.automation import main_trailing_source_assembler as assembler
+    from src.engine.automation import main_trailing_all_scope_research as research
+    from src.engine.lifecycle import research_storage as storage
+    trailing_fixture(tmp_path)
+    manifest_path = assembler.assemble(tmp_path, tmp_path.parent/(tmp_path.name+'-trailing'),
+        source_date=day, target_date='2026-10-12', start_date=day)
+    manifest = research._sealed(manifest_path)
+    positions = [position for part in storage.iter_tree(manifest_path.parent, manifest['partitions_ref'])
+                 for position in research._sealed(manifest_path.parent/part['path'])['positions']
+                 if position['evidence_kind'] == 'actual_completed']
+    assert [position['position_key'] for position in positions] == ['1']
+    assert manifest['assembly_census']['source_gaps'].get('completed_snapshot_source_gap',0) == 0
+    assert positions[0]['actual_cost_reconciliation'] == {'status':'actual_cost_unallocated', 'reason':'late_cost_revision'}
+    assert positions[0]['current_cost_generation_sha256'] == costs.digest(dependency['cost_generation'])
+    index_after = index_path.read_bytes()
+    # A further source revision invalidates the derivative, never the original
+    # terminal bytes. No observer may silently refresh it while validating.
+    if not missing_source:
+        revised['observations']['ka10170']['pages'][0]['tdy_trde_diary'][0]['cmsn_alm_tax'] = '43'
+        revised['source_sha256'] = costs.digest({k:v for k,v in revised.items() if k != 'source_sha256'})
+        official.atomic(official.source_path(tmp_path,day), revised)
+        with pytest.raises(ValueError, match='quantity_completion_generation_changed'):
+            cache.verify_completion_overlay_generations(rows.completion_generations, data_dir=tmp_path)
+    assert {p:p.read_bytes() for p in immutable} == before
+    assert index_path.read_bytes() == index_after
+
+
 @pytest.mark.parametrize('fractional', [False, True])
 def test_bounded_completion_projection_retains_quantity_receipt_without_global_pnl(monkeypatch, tmp_path, fractional):
     from src.engine import strategy_position_performance_report as native
