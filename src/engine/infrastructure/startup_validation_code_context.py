@@ -585,13 +585,31 @@ def bind_main_preparation(root, commit, data_root, intake):
         raise ValueError('startup_main_manifest_closure_required')
     sources = {str(policy): _sha(policy),
         str(data_root / 'runtime/runtime_release_selection.json'): _sha(data_root / 'runtime/runtime_release_selection.json')}
-    histories = {}
+    histories, native_readers = {}, {}
     for ident, observed in manifests.items():
         manifest = _json(observed['path'])
         if (manifest.get('artifact_content_sha256') != ident or _sha(observed['path']) != observed['sha256']
                 or observed['bundle_sha256'] != bundle['bundle_sha256'] or observed['target_date'] != day):
             raise ValueError('startup_main_manifest_closure_changed')
         sources[observed['path']] = observed['sha256']
+        declared = {ref['path'] for ref in manifest['sources']}
+        declared.update(manifest['ledger_pack_paths']); declared.update(manifest['baseline_dependency_paths'])
+        dependencies = observed.get('dependencies')
+        if not isinstance(dependencies, list) or len(dependencies) > 8192:
+            raise ValueError('startup_main_manifest_dependency_set_changed')
+        for dependency, _ in dependencies:
+            path = Path(dependency)
+            if dependency in declared:
+                continue
+            if not path.is_relative_to(selected/'src') or path.resolve(strict=True) != path or path.suffix != '.py':
+                raise ValueError('startup_main_native_reader_path_invalid')
+            relative = str(path.relative_to(selected))
+            digest = hashlib.sha256(subprocess.check_output(
+                ['git', '-C', str(selected), 'show', original_commit+':'+relative])).hexdigest()
+            if _sha(path) != digest or len(native_readers) >= 128 and relative not in native_readers:
+                raise ValueError('startup_main_native_reader_git_changed')
+            native_readers[relative] = digest
+            sources[str(path)] = digest
         histories[ident] = _historical_code_refs(manifest)
         for relative, ref in histories[ident].items():
             sources[ref['path']] = ref['sha256']
@@ -649,7 +667,7 @@ def bind_main_preparation(root, commit, data_root, intake):
         original_code_hashes=expected, runtime_code_hashes=actual, inventories=inventories,
         inventory_git_attestations=inventory_attestations,
         delay_inventory_git_attestation=delay_inventory,
-        historical_semantic_code_sources=histories,
+        historical_semantic_code_sources=histories, native_reader_code_sources=native_readers,
         source_hashes=sources, closure=closure,
         native_verification={k: v for k, v in native.items() if k != 'native_machine_closure'},
         delegation_basis=_native_main_basis(native),
@@ -715,6 +733,17 @@ def _check_native_closure(proof):
             raise ValueError('startup_main_manifest_binding_invalid')
         paths = {ref['path'] for ref in manifest['sources']}
         paths.update(manifest['ledger_pack_paths']); paths.update(manifest['baseline_dependency_paths'])
+        readers = proof.get('native_reader_code_sources', {})
+        if not isinstance(readers, dict) or len(readers) > 128:
+            raise ValueError('startup_main_native_reader_sources_invalid')
+        selected = Path(proof['selected_release_root'])
+        for relative, digest in readers.items():
+            path = selected / relative
+            if (not relative.startswith('src/') or '..' in Path(relative).parts
+                    or path.resolve(strict=True) != path or path.suffix != '.py'
+                    or proof['source_hashes'].get(str(path)) != digest or _sha(path) != digest):
+                raise ValueError('startup_main_native_reader_source_changed')
+            paths.add(str(path))
         dependencies = observed.get('dependencies')
         if (not isinstance(dependencies, list) or len(dependencies) > 8192
                 or len(dependencies) != len(paths) or {v[0] for v in dependencies} != paths):

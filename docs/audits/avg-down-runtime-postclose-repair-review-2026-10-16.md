@@ -167,3 +167,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/pytes
 회귀는 writer·색인·장후 재생·격리4파일292 PASS/75.28초, 추가 custody25 PASS/4.81초, 최종 source/native114 PASS/43.18초다. 과거 재생 fixture가 새 live enabled 계약을 누락한 부분을 보완했다. writer drain의 v2 오류 사유 차이는 수정 전 b54에서도 동일하게 실패함을 재현했고, 원문 변경에 대한 native/legacy 두 정식 거부를 검증하도록 fixture를 보완했다. 운영 source guard는 완화하지 않았다. 원 검증 실패 로그는 보존했다.
 
 최종 source/native114 PASS 및 현재 generation 인계18 PASS/17.86초, Python29개 compile·diff·print-only parser PASS 후 리뷰 미해결0이다. baseline34798 대비 현재 전체 범위는 source 14파일 +483/-36 (순증447), tests 15파일 +720/-42 (순증678), docs 3파일 +228/-0 (순증228)(이 문단 전 집계)다. 추가 source 순증은 기존 P5의 실제 장중 source 계보·격리 경계와 고착 색인의 보존/검증 복구에 사용했다. package/CLI/스케줄 이동은 없다.
+
+
+### Native reader 추가 의존성 결속
+
+3eedb6e5c의 네 native pre-stop gate는 PASS였지만 P5는 `startup_main_manifest_dependency_set_changed`로 차단됐다. 실제 native reader는 manifest의 원천/ledger/baseline 외에 선택본의 Python reader 의존성16개를 반환하고, 기존 격리 consumer는 그 추가 집합을 누락했다. 기존 owner에서 관측 목록을 선택본 Git 원문·실제 파일 SHA에 결속하고, child가 정확한 의존성 집합·signature·source hash를 독립 재검사하도록 보완했다. 원 manifest와 역사 code inventory를 변경하지 않는다. selected/src 밖·symlink·누락·signature 변조를 거부한다. 기존 manifest reader는 retained이며 중복 구현이나 새 module은 추가하지 않았다.
+
+격리 child를 포함한 해당93회귀 PASS/41.64초다. 새 후보에서 P5를 다시 수행하며 통과 전 incumbent1889422를 유지한다. 네 gate의 PASS와 P5·실제 PID 소비는 각각 별도다. 실패 영수증 `7564ee7ada914cfb94df5bb0229c8d7a`와 원본 의존성 bytes는 보존했다.

@@ -924,3 +924,22 @@ def test_reviewed_sor_scope_keeps_original_code_pin_and_rejects_other_bytes():
     C._pairs({name:old},{name:current})
     with pytest.raises(ValueError,match='unreviewed'):
         C._pairs({name:old},{name:'0'*64})
+
+
+
+@pytest.mark.parametrize('fault', [None, 'missing', 'outside', 'signature'])
+def test_native_reader_dependencies_bind_selected_code_inside_isolation(request_fixture, monkeypatch, fault):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    f=request_fixture; main=_main_fixture(f,monkeypatch);proof=main['proof'];request=f['request']
+    relative='src/engine/scalping/ai_decision_quality.py';path=f['selected']/relative
+    digest=C._sha(path)
+    observed=next(iter(proof['closure']['manifests'].values()))
+    observed['dependencies'].append([str(path),json.loads(json.dumps(N._signature(path)))])
+    proof['native_reader_code_sources']={relative:digest}
+    proof['source_hashes'][str(path)]=digest;request['source_hashes'][str(path)]=digest
+    if fault=='missing':proof['native_reader_code_sources']={}
+    elif fault=='outside':proof['native_reader_code_sources']={'../outside.py':digest}
+    elif fault=='signature':observed['dependencies'][-1][1]=['changed']
+    _write_request(f,request)
+    result=_child(f,MAIN_CHILD_SETUP+'\nassert_no_forbidden_attempts()\n')
+    assert (result.returncode==0) is (fault is None),result.stderr
