@@ -202,7 +202,8 @@ def test_execution_review_keeps_every_unlinked_trade_and_null_economics(tmp_path
     assert result["policy_reselected"] is False
 
 
-@pytest.mark.parametrize("fault", [None, "outer_hash_absent", "attempt", "machine", "position", "hash"])
+@pytest.mark.parametrize("fault", [None, "outer_hash_absent", "attempt", "machine", "position", "hash",
+                                  "quote_hash", "stale_quote"])
 def test_execution_join_requires_native_plan_identity_not_symbol_and_time(tmp_path, monkeypatch, fault):
     from src.tests.test_main_trailing_source_assembler import _issued_trailing_receipt, DAY
     from src.engine.scalping import pre_submit_delay_tuning as owner
@@ -211,7 +212,7 @@ def test_execution_join_requires_native_plan_identity_not_symbol_and_time(tmp_pa
         auxiliary_effective_action="PASS", original_machine_observation_sha256=receipt["machine_observation_sha256"],
         original_evaluation_attempt_id=receipt["evaluation_attempt_id"], planned_qty=2,
         decision_committed_at_epoch=known, market_session_bucket="REGULAR",
-        anchor_kind="price_ready", route="KRX_NXT_INTEGRATED")
+        anchor_kind="price_ready", route="KRX_NXT_INTEGRATED", quote_transport_epoch=7)
     if fault in ("attempt", "machine"):
         key = "original_evaluation_attempt_id" if fault == "attempt" else "original_machine_observation_sha256"
         commit[key] = "other" if fault == "attempt" else "f"*64
@@ -225,10 +226,29 @@ def test_execution_join_requires_native_plan_identity_not_symbol_and_time(tmp_pa
     if fault == "outer_hash_absent":
         plan["fields"].pop("trailing_entry_plan_receipt_sha256")
     event = dict(stage="pre_submit_delay_committed", stock_code="005930", emitted_date=DAY, fields=commit)
-    rows, _, _, _ = review._timing_opportunities([(event, {}), (plan, {})])
+    quote = dict(delay_intent_id="intent", decision_source_sha256=commit["decision_source_sha256"],
+        target_delay_sec=180, actual_offset_sec=180, quote_observed_at_epoch=known+180,
+        quote_transport_epoch=7, route=commit["route"], quote_route=commit["route"],
+        ask_price=90, best_bid=89, ask_qty=5, ws_last_0d_epoch=known+179.8,
+        quote_valid=True, quote_consistency_state="single_source", route_depth_source_sha256="a"*64)
+    if fault == "stale_quote":
+        quote["ws_last_0d_epoch"] = known+170
+    quote["quote_source_sha256"] = owner.quote_source_sha256(quote)
+    if fault == "quote_hash":
+        quote["quote_source_sha256"] = "f"*64
+    observation = dict(event, stage="pre_submit_delay_quote_observed", fields=quote)
+    rows, quotes, _, _ = review._timing_opportunities([(event, {}), (plan, {}), (observation, {"offset": 99})])
     assert len(rows) == 1
-    assert rows[0]["record_id"] == ("7" if fault in (None, "outer_hash_absent") else None)
+    assert rows[0]["record_id"] == ("7" if fault in (None, "outer_hash_absent", "quote_hash", "stale_quote") else None)
     assert rows[0]["modeled_fill"] is None
+    # The native delay sampler remains useful after the trailing observer has
+    # stopped. Preserve its actual timestamp and reject bad source/plan links.
+    if fault in (None, "outer_hash_absent"):
+        assert quotes["7"][0]["ask"] == 90
+        assert quotes["7"][0]["known_at"] == known+180
+        assert quotes["7"][0]["source"] == {"offset": 99}
+    else:
+        assert not quotes
 
 
 def test_execution_source_invalidated_mid_read_discards_partial_day(tmp_path, monkeypatch):

@@ -897,12 +897,12 @@ def _timing_opportunities(events):
     commits = {(r["emitted_date"], r["stock_code"], r["fields"]["delay_intent_id"]): r["fields"]
                for r in delays if r["stage"] == "pre_submit_delay_committed"}
     terminals, quote_fields = {}, {}
-    for row in delays:
+    for row, reference in events:
         if row["stage"] == "pre_submit_delay_quote_observed":
             fields = row["fields"]
             key = (row["emitted_date"], row["stock_code"], fields["delay_intent_id"])
             horizon = initial.number(fields.get("target_delay_sec"))
-            quote_fields.setdefault(key, {}).setdefault(horizon, {})[initial.digest(fields)] = fields
+            quote_fields.setdefault(key, {}).setdefault(horizon, {})[initial.digest(fields)] = (fields, reference)
         if row["stage"] == "pre_submit_delay_intent_terminal":
             fields = row["fields"]
             key = (row["emitted_date"], row["stock_code"], fields["delay_intent_id"])
@@ -915,6 +915,25 @@ def _timing_opportunities(events):
         key = (*alias[:2], commit.get("original_machine_observation_sha256"), attempt)
         matches = plans_by_attempt.get(key, {})
         rid, plan = next(iter(matches.values())) if len(matches) == 1 else (None, None)
+        # Delay observations may outlive a position's trailing observer. Use
+        # those exact, validated quotes too; otherwise a later price decline
+        # disappears merely because the position was already closed.
+        if rid is not None:
+            from src.engine.scalping.pre_submit_delay_tuning import _quote_source_issue
+            for observations in quote_fields.get(alias, {}).values():
+                if len(observations) != 1:
+                    continue
+                q, reference = next(iter(observations.values()))
+                known = initial.number(q.get("quote_observed_at_epoch"))
+                ask, bid = initial.number(q.get("ask_price")), initial.number(q.get("best_bid"))
+                if (known is None or ask is None or bid is None or not 0 < bid <= ask
+                        or str(q.get("quote_valid")).lower() not in {"true", "1"}
+                        or _quote_source_issue(commit, q)):
+                    continue
+                quotes.setdefault(rid, []).append(dict(symbol=alias[1], known_at=known, ask=ask, bid=bid,
+                    midpoint=(ask+bid)/2, source_sha256=q["quote_source_sha256"], source=reference,
+                    source_stage="pre_submit_delay_quote_observed", delay_intent_id=alias[2],
+                    native_plan_sha256=plan["receipt_sha256"]))
         terminal = terminals.get(alias, [])
         unique = {initial.digest(t): t for t in terminal}
         terminal = next(iter(unique.values())) if len(unique) == 1 else {}
@@ -926,7 +945,7 @@ def _timing_opportunities(events):
         cap, qty = initial.number(first_leg.get("numeric_price")), initial.number(first_leg.get("qty"))
         for horizon, improvement in sorted(pairs.items(), key=lambda x: float(x[0])):
             observed = quote_fields.get(alias, {}).get(float(horizon), {})
-            q = next(iter(observed.values())) if len(observed) == 1 else {}
+            q = next(iter(observed.values()))[0] if len(observed) == 1 else {}
             ask, depth = initial.number(q.get("ask_price")), initial.number(q.get("ask_qty"))
             comparisons.append(dict(delay_sec=float(horizon), price_improvement_bp=improvement,
                 ask_price=ask, ask_qty=depth, quote_source_sha256=q.get("quote_source_sha256"),
