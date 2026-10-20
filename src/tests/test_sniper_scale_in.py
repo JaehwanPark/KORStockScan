@@ -16527,66 +16527,6 @@ def test_pending_scale_in_revalidation_flags_missing_feature_context():
     assert "tick_acceleration_deteriorated" in decision["reason"]
 
 
-def test_recent_exit_candidate_pyramid_block_context_blocks_within_window():
-    rules = replace(
-        CONFIG,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED=True,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC=180,
-    )
-    original_rules = state_handlers.TRADING_RULES
-    state_handlers.TRADING_RULES = rules
-    try:
-        now_ts = time.time()
-        stock = {
-            "strategy": "SCALPING",
-            "recent_scale_in_exit_candidate_rule": "protect_trailing_stop",
-            "recent_scale_in_exit_candidate_stage": "exit_signal",
-            "recent_scale_in_exit_candidate_ts": now_ts - 60,
-        }
-        decision = state_handlers._recent_exit_candidate_pyramid_block_context(
-            stock,
-            strategy="SCALPING",
-            add_type="PYRAMID",
-            now_ts=now_ts,
-        )
-    finally:
-        state_handlers.TRADING_RULES = original_rules
-
-    assert decision is not None
-    assert decision["exit_rule"] == "protect_trailing_stop"
-    assert decision["elapsed_sec"] == 60
-
-
-def test_recent_exit_candidate_pyramid_block_not_skipped_by_holding_exit_tuning():
-    rules = replace(
-        CONFIG,
-        HOLDING_EXIT_LIVE_TUNING_SELECTED=True,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED=True,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC=180,
-    )
-    original_rules = state_handlers.TRADING_RULES
-    state_handlers.TRADING_RULES = rules
-    try:
-        now_ts = time.time()
-        decision = state_handlers._recent_exit_candidate_pyramid_block_context(
-            {
-                "strategy": "SCALPING",
-                "recent_scale_in_exit_candidate_rule": "protect_trailing_stop",
-                "recent_scale_in_exit_candidate_stage": "exit_signal",
-                "recent_scale_in_exit_candidate_ts": now_ts - 60,
-            },
-            strategy="SCALPING",
-            add_type="PYRAMID",
-            now_ts=now_ts,
-        )
-    finally:
-        state_handlers.TRADING_RULES = original_rules
-
-    assert decision is not None
-    assert decision["exit_rule"] == "protect_trailing_stop"
-    assert decision["elapsed_sec"] == 60
-
-
 
 
 
@@ -31277,56 +31217,38 @@ def test_shallow_avg_down_pending_lineage_requires_exact_observation_context():
         state_handlers._AVG_DOWN_ROUTE_CONTEXT.reset(token)
 
 
-def test_pyramid_decision_lineage_carries_only_exact_scanner_position():
+def test_historical_pyramid_pending_lineage_requires_exact_scanner_position():
     stock = {
         "id": 171,
         "buy_price": 10000,
         "buy_qty": 10,
         "scanner_promotion_id": "promotion-171",
     }
+    # Existing receipts remain readable after the PYRAMID producer is retired.
     action = {
         "add_type": "PYRAMID",
-        "reason": "scalping_pyramid_ok",
-        "configured_min_profit_pct": 1.1,
-        "effective_min_profit_pct": 1.1,
+        "position_episode_id": main_lifecycle_journal.mint_main_lifecycle_id(
+            record_id=171, stock_code="123456", attempt_id="promotion-171",
+        ),
+        "scale_in_decision_id": "pyr-decision-" + "a" * 32,
     }
-
-    lineage = state_handlers._pyramid_scale_in_decision_lineage(
-        stock,
-        "A123456",
-        action,
-        now_ts=1_778_000_000.125,
-    )
-
-    assert lineage == state_handlers._pyramid_scale_in_decision_lineage(
-        stock,
-        "123456",
-        action,
-        now_ts=1_778_000_000.125,
-    )
-    assert lineage["pyramid_decision_lineage_schema"] == (
-        "pyramid_scale_in_decision_lineage_v1"
-    )
-    assert lineage["scale_in_decision_id"].startswith("pyr-decision-")
-    assert lineage["pyramid_evaluation_id"].startswith("pyr-eval-")
-    assert state_handlers._scale_in_pending_lineage(
-        stock,
-        "123456",
-        {**action, **lineage},
-    ) == {
-        "pending_add_position_episode_id": lineage["position_episode_id"],
-        "pending_add_scale_in_decision_id": lineage["scale_in_decision_id"],
-    }
-    assert not state_handlers._pyramid_scale_in_decision_lineage(
-        {"id": 171, "buy_price": 10000, "buy_qty": 10},
-        "123456",
-        action,
-        now_ts=1_778_000_000.125,
-    )
+    for code in ("123456", "A123456"):
+        assert state_handlers._scale_in_pending_lineage(stock, code, action) == {
+            "pending_add_position_episode_id": action["position_episode_id"],
+            "pending_add_scale_in_decision_id": action["scale_in_decision_id"],
+        }
     assert not state_handlers._scale_in_pending_lineage(
         {**stock, "scanner_promotion_id": "different-promotion"},
         "123456",
-        {**action, **lineage},
+        action,
+    )
+    assert not state_handlers._scale_in_pending_lineage(
+        {key: value for key, value in stock.items() if key != "scanner_promotion_id"},
+        "123456",
+        action,
+    )
+    assert not state_handlers._scale_in_pending_lineage(
+        stock, "123456", {**action, "scale_in_decision_id": ""},
     )
 
 
@@ -39577,40 +39499,6 @@ def test_first_touch_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_pa
     )
 
 
-def test_pyramid_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_path):
-    monkeypatch.setattr(state_handlers, "_PYRAMID_RUNTIME_PRIOR_REPORT_DIR", tmp_path)
-    state_handlers._PYRAMID_RUNTIME_PRIOR_CACHE.clear()
-    now_dt = datetime(2026, 7, 6, 9, 5, tzinfo=state_handlers._KST)
-    path = tmp_path / "scalping_pyramid_intraday_feedback_2026-07-06.json"
-    path.write_text(
-        json.dumps(
-            {
-                "generated_at": now_dt.isoformat(),
-                "source_quality": {"status": "pressure_provenance_unusable"},
-                "pyramid_feedback_rows": [
-                    {
-                        "record_id": "p1",
-                        "stock_code": "000002",
-                        "pyramid_feedback_label": "pyramid_would_have_helped",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    prior = state_handlers._pyramid_runtime_prior_context(
-        {"record_id": "p1"},
-        "000002",
-        now_dt.timestamp(),
-    )["pyramid_runtime_prior_context"]
-
-    assert prior["status"] == "source_quality_blocked"
-    assert prior["signal"] == "neutral"
-    assert prior["sample_count"] == 0
-    assert prior["reason"] == "prior_report_source_quality_pressure_provenance_unusable"
-
-
 
 
 
@@ -40131,9 +40019,13 @@ def test_scale_in_budget_source_never_enters_order_recovery(monkeypatch, pending
 
 
 @pytest.mark.parametrize("strategy", ["SCALPING", "KOSPI_ML", "KOSDAQ_ML"])
-def test_shared_rebound_retirement_pyramid_cannot_submit(monkeypatch, strategy):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_ENABLE_PYRAMID", "true")
+@pytest.mark.parametrize("enabled", [False, True])
+def test_shared_rebound_retirement_pyramid_cannot_submit(monkeypatch, strategy, enabled):
+    for key in ("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID", "KORSTOCKSCAN_SWING_ENABLE_PYRAMID"):
+        if enabled:
+            monkeypatch.setenv(key, "true")
+        else:
+            monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order",
         lambda *a, **k: pytest.fail("retired PYRAMID cannot call broker"))
     assert not scale_in.evaluate_scalping_pyramid({}, 10, 10, True)["should_add"]

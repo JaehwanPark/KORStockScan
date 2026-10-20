@@ -314,3 +314,27 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Acceptance 유지/확장: 원 short clock/P0/미래·과거 호가/회차예산/만료·예외·불확실/과거 projection hash/후보 pair·고정 split·0초 fallback/출력 한도 반례를 유지한다. f6/f7만 통합하고 다른 prompt/risk/model/validator는 분리하며, 정상 append snapshot과 미영수 append/재작성을 구분한다. 실제 시간별 coverage·정확 fill leg·successor/terminal 및 정책 근거를 같은 native ID로 대사한다.
   - 재인수: 병행 운영 전환0ce816f7c를 격리 merge fd7071c0f에 보존했고 통합 회귀1,511개와 최종 보고서49개가 통과했다. 후보 값·원 정책/PREOPEN은 같고 이번 수리의 운영 반영은 미실행이다.
   - 다음: 정식 코드·정책 인계 승인 범위에서 `DirectFamilyPreopenPolicyHandoff`의 원 정책/현재 PID 보존 검증과 새 정책 준비를 진행한다. 실제 배포·PREOPEN·PID·자연1/3/5초 선택/재점검은 미실행이며 자료 부족만으로 초기정책의 추가 경제성 승인 gate를 만들지 않는다. 과거 결손569건과 비용후 EV null은 현재 코드 수리와 별개로 남긴다.
+## PYRAMID 전용 helper 제거 — CodeRefactorPyramidHelpers1020
+
+- [x] **CodeRefactorPyramidHelpers1020** — 후속 조사 1번 묶음만 제거하고 격리 후보 검증으로 종결.
+  - Source: 사용자 `다음액션 실행`; 직전 합의의 helper 8개·전용 변수 제거, 기존 테스트 보존/정리, 리뷰·검증·clean 후보 커밋. Opening Rotation·entry reader 통합은 이번 범위 밖이다.
+  - Owner: `sniper_state_handlers`/scale-in. 기준 commit `0ce816f7c1e2c495c24fc11fd4ab0a7d837c56ca`, 선택 경로 `/home/ubuntu/KORStockScan-runtime-releases/clean-sqlite-integration-20261020-0ce816f7c`; 시작 시 selector 상태는 `pid_receipt_attested`. 후보 `/home/ubuntu/KORStockScan-worktrees/refactor-pyramid-helpers-20261020`, branch `codex/refactor-pyramid-helpers-20261020`.
+  - 종료점: 제거 이름의 source/test/CLI/등록 참조 0, 보존 소스 AST 동일, 활성 AVG_DOWN·보유·청산과 역사 lineage·정책 세대 계약 검증, clean 후보 커밋. 기본 작업본의 병행 편집·shell·선택 포인터·PID·정책은 이 작업에서 수정하지 않는다.
+
+### 대체·제거와 소비 근거
+
+| 기존 대상 | 대체 | 판정·근거 |
+| --- | --- | --- |
+| `_pyramid_runtime_prior_default`, `_pyramid_runtime_prior_report_date`, `_load_pyramid_runtime_prior_payload`, `_pyramid_runtime_prior_is_stale`, `_pyramid_prior_rows_stats`, `_pyramid_runtime_prior_context` | none | removed; 퇴역 PYRAMID 원천 reader 내부 호출만 존재. 외부 실행 dispatch 없음 |
+| `_pyramid_scale_in_decision_lineage`, `_recent_exit_candidate_pyramid_block_context` | none | removed; 외부 참조는 전용 테스트뿐. module alias/getattr·dependency binding·Main 진입점·CLI/shell/등록 경로 조사에서도 실행 호출 없음 |
+| `_PYRAMID_RUNTIME_PRIOR_REPORT_DIR`, `_PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC`, `_PYRAMID_RUNTIME_PRIOR_CACHE` | none | removed; 삭제 함수 전용. 조사 시 기재한 경로·캐시 외에 최대 유효시간 상수도 같은 소유 범위임을 확인 |
+| 전용 테스트 3개, lineage 생산 helper 테스트 1개 | 역사 pending lineage 직접 검증 | removed 3 / consolidated 1; 역사 journal ID의 정확한 record·symbol·promotion 인계와 누락·다른 promotion·결정 ID 부재 거절은 보존. 기본값/true override × 전략 3개에서 영구 퇴역·주문 차단 검증 |
+| PYRAMID 퇴역 public 진입점, 역사 필드/reader, 활성 AVG_DOWN·보유·청산, shared import | 기존 구현 | retained; 현재 Main·역사 receipt·replay/test 소비자. 삭제 대상을 제외한 모듈 AST 전체가 기준본과 동일하며 추가로 고아가 된 import/global 없음 |
+
+### 리뷰·검증 및 경계
+
+- 자체 리뷰→보완→재리뷰: helper 삭제 테스트 중 역사 pending 인계 검증을 보존했다. handoff 테스트가 과거 AVG_DOWN 세대에 현재 파일을 혼합하는 문제를 확인했다(최초 후보 4 FAIL, 변경 전 기준본에서도 2 FAIL). 기존 테스트 입력을 실제 발행 commit `deb996a22689ac08e171ea38966d070d63d236ee`의 원본 Git bytes·103개 dependency·selector에 결속하고, 미검토 변경/누락 거절 검증을 유지했다. 생산 verifier·allowlist·정책·원 영수증은 변경하지 않았다.
+- 영향 검증: 8파일 **1,506 PASS**, 제외/skip 0. 수정 handoff 파일 전체 **74 PASS**, 역사 holding handoff 파일 **340 PASS**로 총 10파일 **1,920 PASS**. 네트워크 connect/send는 기존 seccomp runner로 차단했고 provider·실주문 호출은 없다. 최초 실패와 수정 전후 로그는 후보의 `tmp/refactor-pyramid-helpers-20261020/`에 보존한다.
+- Python compile 3파일, 제거 심볼 참조 0, 보존 AST 동등성, 문서 링크/owner/print-only parser·`git diff --check` 통과. Ruff `F811/F821` 0; 기존 두 파일의 `F401` 18건은 기준본과 동일하며 신규 지적 0. 수정 handoff 테스트는 `F401/F811/F821` 통과. 기존 pandas 경고 1건은 그대로다. shell/cron 변경이 없어 shell 계약·`bash -n`은 해당 없음.
+- 증감(base `0ce816f7c`): non-test source **+0/-368**, test **+81/-165**(순감84), docs **+25/-0**. 새 모듈·wrapper·framework·보고서 producer·파일 이동 없음. 테스트 추가는 역사 입력 고정과 퇴역 경계 보존에 사용했다.
+- 코드 세대 경계: `avg_down_policy_replay`는 삭제한 함수도 loaded-code identity에 포함했으므로 원 역사 fingerprint/정책 영수증은 그대로 보존한다. 현재 snapshot 수용과 변경된 implementation 거절 회귀는 통과했지만 이 후보용 운영 handoff를 발행한 것은 아니다. 향후 배포 준비 owner는 해당 시점의 incumbent·정책·후보 commit에 대한 새 native parity/delay/stop/holding handoff를 검증해야 한다. 기존 PASS 재사용·hash 치환·실제 배포/재기동·자연 소비 완료는 이번 종료점에 포함하지 않는다.

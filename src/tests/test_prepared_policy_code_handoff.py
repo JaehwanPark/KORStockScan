@@ -15,6 +15,7 @@ COMMIT = 'b'*40
 ORIGIN = 'a'*40
 NOW = datetime(2026,10,17,12,tzinfo=ZoneInfo('Asia/Seoul'))
 HISTORICAL_PREPARATION_COMMIT = 'a8f063105bbb1d8a3676e55ad5377990a87594df'
+REVIEWED_AVG_DOWN_INPUT_COMMIT = 'deb996a22689ac08e171ea38966d070d63d236ee'
 
 
 @pytest.fixture
@@ -184,22 +185,46 @@ def test_native_code_inventory_accepts_utils_paths_and_rejects_escape(tmp_path):
     ('holding_vote', '6c664915b34289cddceeaf20399cce45f5e9e3f3373fdeae885910043f343112'),
     ('main_stop', '687c06b51d0e4b581f1927151b31483d5f979e438cc67a726e6718f84bead533'),
 ])
-def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch, family, expected):
+def test_delay_research_exact_original_policy_inventory_is_preserved(
+        tmp_path, monkeypatch, family, expected):
     """Bind reviewed bytes to the real frozen origin, without issuing a receipt."""
     import hashlib
+    import os
     from src.engine.scalping import pre_submit_delay_initial_policy as delay
     from src.engine.scalping import holding_vote_experiment as holding
     from src.engine.scalping import main_stop_policy as stop
-    root = Path(H.__file__).resolve().parents[3]
+    canonical = Path(H.__file__).resolve().parents[3]
+    root = tmp_path/'reviewed_source'
     origin = '7f2552aedde8fec6ef904a43105827907e50dfc8'
     candidate = 'b' * 40
     paths = ({name:name for name in delay.CONTRACT_PATHS} if family == 'pre_submit_delay'
              else {name:'src/engine/'+name for name in
                    (holding._code_paths() if family == 'holding_vote' else stop.implementation_paths())})
     real_git = H.subprocess.check_output
+    trigger = 'src/engine/sniper_state_handlers.py'
+    variant = H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS[
+        (trigger, H.REVIEWED_AVG_DOWN_INPUT_HASHES[trigger])]
+    # An issued generation must not silently follow the current working tree.
+    for name in set(paths.values()) | set(variant['dependencies']):
+        path = root/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(real_git(['git', '-C', str(canonical), 'show',
+                                   REVIEWED_AVG_DOWN_INPUT_COMMIT+':'+os.path.normpath(name)]))
+    for name in {v['selector_path'] for key, variants in vars(H).items()
+                 if key.endswith('_DEPENDENCY_VARIANTS') and isinstance(variants, dict)
+                 for (owner, sha), v in variants.items()
+                 if (owner, sha) == (trigger, H.REVIEWED_AVG_DOWN_INPUT_HASHES[trigger])}:
+        result = H.subprocess.run(['git', '-C', str(canonical), 'show',
+                                  REVIEWED_AVG_DOWN_INPUT_COMMIT+':'+name], capture_output=True)
+        if result.returncode == 0 and not (root/name).exists():
+            (root/name).parent.mkdir(parents=True, exist_ok=True)
+            (root/name).write_bytes(result.stdout)
+    own = root/'src/engine/automation/intraday_release_handoff.py'
+    own.write_bytes(Path(H.__file__).read_bytes())
     def fixture_revision(command, **kwargs):
         revision, name = command[-1].split(':', 1)
-        return (root/name).read_bytes() if revision == candidate else real_git(command, **kwargs)
+        return ((root/name).read_bytes() if revision == candidate else
+                real_git(['git', '-C', str(canonical), 'show', command[-1]], **kwargs))
     monkeypatch.setattr(H.subprocess, 'check_output', fixture_revision)
     before = {name:(root/name).read_bytes() for name in paths.values()}
     changed = H._verify_entry_code_delta(root, candidate, origin, paths, expected)
@@ -210,20 +235,18 @@ def test_delay_research_exact_original_policy_inventory_is_preserved(monkeypatch
         assert set(extensions) == {'src/engine/pipeline_event_summary.py', 'src/utils/threshold_cycle_registry.py',
                                    'src/engine/infrastructure/main_policy_loading.py'}
         # The original 59-source generation retains its original extension.
-        # Current cold-start preparation is a separate complete 76-source
-        # generation; never relabel current bytes as that historical source.
-        assert all(hashlib.sha256(real_git(['git','-C',str(root),'show',
+        # Reviewed AVG_DOWN input has its own complete dependency generation;
+        # never relabel current working bytes as that historical source.
+        assert all(hashlib.sha256(real_git(['git','-C',str(canonical),'show',
             HISTORICAL_PREPARATION_COMMIT+':'+name])).hexdigest() == digest
             for name, digest in extensions.items())
-        trigger='src/engine/sniper_state_handlers.py'
-        variant=H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS[(trigger,H._sha(root/trigger))]
         assert H._sha(root/variant['selector_path'])==variant['selector_sha256']
         current_extensions=variant['contract_extensions'][(origin,expected)]
         assert set(current_extensions)>=set(extensions)
         assert all(hashlib.sha256((root/name).read_bytes()).hexdigest()==digest
                    for name,digest in current_extensions.items())
         for name, pair in H.REVIEWED_DELAY_RESEARCH_SOURCES.items():
-            prior = real_git(['git', '-C', str(root), 'show', origin+':'+name])
+            prior = real_git(['git', '-C', str(canonical), 'show', origin+':'+name])
             assert pair[0] == hashlib.sha256(prior).hexdigest()
 
 
@@ -321,53 +344,53 @@ def test_resolve_origin_rejects_selector_change_during_native_verification(prepa
         C.resolve_prepared_code_origin(data,DAY,**args)
 
 
-@pytest.mark.parametrize('generation',['historical_preparation','issued_startup','current_startup'])
+@pytest.mark.parametrize('generation', [
+    'historical_preparation', 'issued_startup', 'reviewed_avg_down_input'])
 def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_path, monkeypatch,generation):
     import hashlib
+    import os
     from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
     canonical = Path(H.__file__).resolve().parents[3]
     fixture = tmp_path/'code'
     own = 'src/engine/automation/intraday_release_handoff.py'
     real_git = H.subprocess.check_output
     trigger='src/engine/sniper_state_handlers.py'
-    source_commit=('958d35b2b03f0a37462c1c0121fc14c108e709b8' if generation=='issued_startup'
-                   else HISTORICAL_PREPARATION_COMMIT)
-    trigger_sha=(H._sha(canonical/trigger) if generation=='current_startup' else
-        hashlib.sha256(real_git(['git','-C',str(canonical),'show',source_commit+':'+trigger])).hexdigest())
-    dependencies = ({} if generation=='current_startup' else
+    source_commit = {
+        'issued_startup': '958d35b2b03f0a37462c1c0121fc14c108e709b8',
+        'historical_preparation': HISTORICAL_PREPARATION_COMMIT,
+        'reviewed_avg_down_input': REVIEWED_AVG_DOWN_INPUT_COMMIT,
+    }[generation]
+    trigger_sha = hashlib.sha256(real_git(
+        ['git','-C',str(canonical),'show',source_commit+':'+trigger])).hexdigest()
+    dependencies = ({} if generation=='reviewed_avg_down_input' else
         H.REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[trigger][trigger_sha])
-    if generation in {'issued_startup','current_startup'}:
-        variants=(H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS if generation=='current_startup'
+    if generation in {'issued_startup','reviewed_avg_down_input'}:
+        variants=(H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS if generation=='reviewed_avg_down_input'
                   else H.REVIEWED_DELAY_PARENT_VERIFICATION_DEPENDENCY_VARIANTS)
         variant=variants[(trigger,trigger_sha)]
-        if generation=='current_startup':
-            assert H._sha(canonical/variant['selector_path'])==variant['selector_sha256']
         dependencies=variant['dependencies']
-    if generation=='current_startup':
+    if generation=='reviewed_avg_down_input':
         assert set(dependencies) >= set(H.REVIEWED_AVG_DOWN_INPUT_HASHES)
     else:
         assert len(dependencies)==(59 if generation=='historical_preparation' else 76)
     for name in (*CONTRACT_PATHS,own,*dependencies):
         destination=fixture/name
         destination.parent.mkdir(parents=True,exist_ok=True)
-        source_commit=('958d35b2b03f0a37462c1c0121fc14c108e709b8' if generation=='issued_startup'
-                       else HISTORICAL_PREPARATION_COMMIT)
-        raw=((canonical/name).read_bytes() if generation=='current_startup' or name==own else
-             real_git(['git','-C',str(canonical),'show',source_commit+':'+name]))
+        raw=((canonical/name).read_bytes() if name==own else
+             real_git(['git','-C',str(canonical),'show',source_commit+':'+os.path.normpath(name)]))
         destination.write_bytes(raw)
         if name in dependencies:
             assert hashlib.sha256(raw).hexdigest()==dependencies[name]
     origin = '7f2552aedde8fec6ef904a43105827907e50dfc8'
     # Keep original selector modules that the real frozen Git tree owns.
     # Their old bytes select the historical closure rather than a later one.
-    if generation != 'current_startup':
-        for name in {v['selector_path'] for key, variants in vars(H).items()
-                     if key.endswith('_DEPENDENCY_VARIANTS') and isinstance(variants, dict)
-                     for (owner, sha), v in variants.items() if (owner, sha) == (trigger, trigger_sha)}:
-            result = H.subprocess.run(['git','-C',str(canonical),'show',source_commit+':'+name], capture_output=True)
-            if result.returncode == 0 and not (fixture/name).exists():
-                (fixture/name).parent.mkdir(parents=True,exist_ok=True)
-                (fixture/name).write_bytes(result.stdout)
+    for name in {v['selector_path'] for key, variants in vars(H).items()
+                 if key.endswith('_DEPENDENCY_VARIANTS') and isinstance(variants, dict)
+                 for (owner, sha), v in variants.items() if (owner, sha) == (trigger, trigger_sha)}:
+        result = H.subprocess.run(['git','-C',str(canonical),'show',source_commit+':'+name], capture_output=True)
+        if result.returncode == 0 and not (fixture/name).exists():
+            (fixture/name).parent.mkdir(parents=True,exist_ok=True)
+            (fixture/name).write_bytes(result.stdout)
     H.subprocess.run(['git','init','-q',str(fixture)],check=True)
     def commit():
         H.subprocess.run(['git','-C',str(fixture),'add','.'],check=True)
@@ -389,9 +412,10 @@ def test_new_startup_handoff_accepts_only_exact_reviewed_delay_source_pair(tmp_p
         final_pair = H.REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(name,
             H.REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(name, pair))
         expected_sha = (variant['dependencies'].get(name, final_pair[1])
-                        if generation == 'current_startup' else final_pair[1])
+                        if generation == 'reviewed_avg_down_input' else final_pair[1])
         assert hashlib.sha256((fixture/name).read_bytes()).hexdigest() == expected_sha
-    if generation == 'current_startup':
+    if generation == 'reviewed_avg_down_input':
+        assert H._sha(fixture/variant['selector_path']) == variant['selector_sha256']
         for name in ('src/engine/sniper_execution_receipts.py',
                      'src/engine/lifecycle/holding_research_cost.py',
                      'src/engine/automation/main_trailing_source_assembler.py',
