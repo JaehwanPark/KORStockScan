@@ -1054,9 +1054,19 @@ def migrate_frozen_source(data_root,path):
             raise ValueError('trailing_index_database_path_invalid')
         current=signature(metadata);target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
         authority=_archive_logical_authority(logical,allow_legacy=True) if archived else None
+        # A legacy compressor may omit the native archive receipt. Preserve
+        # the complete issued index's prefix/append boundary only by replaying
+        # both raw-record chains to EOF, never by trusting old metadata alone.
+        original_index=None
+        if archived and target.exists():
+            with _database(data_root,logical,readonly=True) as (existing,_,_):
+                saved=existing.execute('SELECT * FROM sources WHERE path=?',(str(logical),)).fetchone()
+            if saved and not saved[6] and saved[2]==saved[3]:
+                original_index=saved
         temporary=target.with_name(target.name+'.archive-'+uuid.uuid4().hex+'.tmp')
         db=_open_database(temporary,readonly=False,writer=False)
         name=str(logical);offset=records=selected=0;chain=ZERO_SHA;logical_sha=hashlib.sha256()
+        prefix_chain=append_chain=ZERO_SHA
         try:
             with physical.open('rb') as raw:
                 archive_sha=hashlib.file_digest(raw,'sha256').hexdigest() if archived else None
@@ -1085,6 +1095,14 @@ def migrate_frozen_source(data_root,path):
                                 value=dict(kind='source_gap',reason='source_record_invalid');summary=None
                             leaf=_put(db,name,offset,line,value)
                         chain=hashlib.sha256(encode([chain,leaf])).hexdigest()
+                        if original_index is not None:
+                            boundary=original_index[2]
+                            if offset<boundary<offset+size:
+                                raise ValueError('trailing_archive_original_index_boundary_invalid')
+                            if offset<boundary:
+                                prefix_chain=hashlib.sha256(encode([prefix_chain,leaf])).hexdigest()
+                            else:
+                                append_chain=hashlib.sha256(encode([append_chain,leaf])).hexdigest()
                         if summary:_summary_merge(db,name,*summary[:2],1,summary[2])
                         offset+=size;records+=1;selected+=value is not None
                         if records%128==0:db.commit()
@@ -1096,9 +1114,16 @@ def migrate_frozen_source(data_root,path):
                 if authority is not None and (authority[0]['logical_content_sha256']!=logical_sha.hexdigest()
                         or 'logical_size_bytes' in authority[0] and authority[0]['logical_size_bytes']!=offset):
                     raise ValueError('trailing_archive_migration_logical_authority_mismatch')
+            boundary=offset;prefix_chain,append_chain=(chain,ZERO_SHA) if original_index is None else (prefix_chain,append_chain)
+            if original_index is not None:
+                boundary=original_index[2]
+                if (offset!=original_index[4] or records!=original_index[5]
+                        or selected!=original_index[9] or prefix_chain!=original_index[7]
+                        or append_chain!=original_index[8]):
+                    raise ValueError('trailing_archive_original_index_mismatch')
             body=dict(schema=SCHEMA+':generation',path=logical.name,size=offset,
-                namespace=namespace,source_stat=current,catchup_end=offset,raw_records=records,
-                selected_records=selected,prefix_chain_sha256=chain,append_chain_sha256=ZERO_SHA,
+                namespace=namespace,source_stat=current,catchup_end=boundary,raw_records=records,
+                selected_records=selected,prefix_chain_sha256=prefix_chain,append_chain_sha256=append_chain,
                 whole_file_sha256=False)
             bound={**body,'sha256':hashlib.sha256(encode(body)).hexdigest()}
             proof=dict(schema='trailing_archive_migration_v1',generation=bound,
@@ -1109,7 +1134,7 @@ def migrate_frozen_source(data_root,path):
             proof['artifact_content_sha256']=hashlib.sha256(encode(proof)).hexdigest()
             with db:
                 db.execute('INSERT INTO sources VALUES(?,?,?,?,?,?,?,?,?,?)',
-                    (name,encode(current).decode(),offset,offset,offset,records,None,chain,ZERO_SHA,selected))
+                    (name,encode(current).decode(),boundary,boundary,offset,records,None,prefix_chain,append_chain,selected))
                 if archived:
                     db.execute('CREATE TABLE archive_migrations(path TEXT PRIMARY KEY,body BLOB)')
                     db.execute('INSERT INTO archive_migrations VALUES(?,?)',(name,encode(proof)))
@@ -1126,6 +1151,8 @@ def migrate_frozen_source(data_root,path):
             # readers see one atomic replacement of the source's SQL rows.
             with _database(data_root,logical) as (existing,_,_):
                 prior=existing.execute('SELECT * FROM sources ORDER BY path').fetchall()
+                if original_index is not None and original_index not in prior:
+                    raise ValueError('trailing_archive_original_index_changed')
                 saved=target.with_name(target.stem+'.before-offline-'+uuid.uuid4().hex+'.sqlite')
                 descriptor=os.open(saved,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(descriptor)
                 saved_db=sqlite3.connect(saved)

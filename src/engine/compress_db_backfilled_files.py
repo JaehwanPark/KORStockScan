@@ -240,6 +240,36 @@ def _gzip_file(path: Path, *, dry_run: bool, custody=None) -> tuple[bool, int]:
         raise
 
 
+def native_raw_archive_receipt(path, *, logical_sha256, logical_size,
+                               source_identity, archive_identity, indexed=None, custody=None):
+    """Shared receipt schema for verified compression owners, with no I/O.
+
+    Callers own the locked source, full decoded SHA/CRC verification and final
+    physical archive identity. A receipt never substitutes for those checks.
+    """
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    if (type(logical_size) is not int or logical_size < 0
+            or re.fullmatch('[0-9a-f]{64}', logical_sha256) is None):
+        raise ValueError('raw_archive_logical_binding_invalid')
+    source_stat=[source_identity[key] for key in ('device','inode','size','mtime_ns','ctime_ns')]
+    if indexed is not None and (indexed.get('source_stat') != source_stat
+            or indexed.get('size') != logical_size or indexed.get('path') != Path(path).name):
+        raise ValueError('raw_archive_index_source_changed')
+    value=dict(schema='pipeline_raw_archive_identity_v1' if Path(path).parent.name=='pipeline_events'
+               else 'native_raw_archive_identity_v1', logical_path=str(path),
+        logical_content_sha256=logical_sha256, logical_size_bytes=logical_size,
+        storage_custody=custody or [],
+        storage_disposition='verified_gzip_representation_original_receipts_preserved',
+        archive_generation={('size_bytes' if k=='size' else k):archive_identity[k]
+                            for k in ('device','inode','size','mtime_ns','ctime_ns')},
+        verification_contract='logical_sha256_size_crc_to_eof_v1',
+        runtime_effect=False, allowed_runtime_apply=False)
+    if indexed is not None:
+        value.update(trailing_source_identity=source_stat, trailing_source_index=indexed)
+    value['artifact_content_sha256']=content_sha256(value)
+    return value
+
+
 def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=None) -> tuple[bool, int]:
     """Return (compressed, saved_bytes_estimate)."""
     if not path.exists() or not path.is_file():
@@ -346,22 +376,6 @@ def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=No
         stat = gz_path.stat()
         if file_identity(stat) != published_identity:
             raise ValueError('archive_generation_changed_before_receipt')
-        archive_receipt = {
-            "schema": ("pipeline_raw_archive_identity_v1" if pipeline_raw
-                       else "native_raw_archive_identity_v1"),
-            "logical_path": str(path),
-            "logical_content_sha256": logical_digest.hexdigest(),
-            "logical_size_bytes": original_size,
-            "storage_custody": custody or [],
-            "storage_disposition": "verified_gzip_representation_original_receipts_preserved",
-            "archive_generation": {
-                "device": stat.st_dev, "inode": stat.st_ino,
-                "size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-                "ctime_ns": stat.st_ctime_ns,
-            },
-            "verification_contract": "logical_sha256_size_crc_to_eof_v1",
-            "runtime_effect": False, "allowed_runtime_apply": False,
-        }
         # Bind the writer-owned index to the exact native compression attempt.
         # Missing legacy coverage is preserved; archive does not rebuild it.
         from src.engine.automation.main_trailing_source_store import generation as indexed_generation,InputPending
@@ -371,11 +385,10 @@ def _gzip_file_unchecked(path: Path, *, dry_run: bool, custody=None, _attempt=No
                 'ai_decision_prompts','ai_decision_requests'} else None)
         except (InputPending,OSError):
             indexed=None
-        if indexed is not None:
-            archive_receipt['trailing_source_identity']=[original_identity[key]
-                for key in ('device','inode','size','mtime_ns','ctime_ns')]
-            archive_receipt['trailing_source_index']=indexed
-        archive_receipt['artifact_content_sha256'] = content_sha256(archive_receipt)
+        archive_receipt = native_raw_archive_receipt(path,
+            logical_sha256=logical_digest.hexdigest(), logical_size=original_size,
+            source_identity=original_identity, archive_identity=file_identity(stat),
+            indexed=indexed, custody=custody)
         if _attempt is not None:
             _attempt['receipt_content_sha256'] = content_sha256(archive_receipt)
         write_json_object_generation_safe(

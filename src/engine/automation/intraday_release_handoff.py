@@ -3398,11 +3398,17 @@ for (_trigger, _trigger_sha), _variant in REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_V
 
 # Exact immutable historical-diagnostic successor. Native archived policy/PID
 # validation affects report re-audit only; runtime policy gates stay strict.
-REVIEWED_HISTORICAL_RESOLUTION_HASHES = {'src/engine/scalping/holding_profit_exit_semantics.py': 'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a',
+REVIEWED_HISTORICAL_RESOLUTION_HASHES = {'src/engine/scalping/micro_reversion/storage_maintenance.py': '61282651dcdf8bda3a4311855c3e7d10b500f1f8ac3fbaef2d5a66b5f4bcc514',
+ 'src/engine/compress_db_backfilled_files.py': '501159d87c7901b2a9edb6e7cd8a04d99ef6c15aae12577f9344078cf76ace3f',
+ 'src/engine/automation/main_trailing_source_store.py': 'e9f596c589348c1090c54eb971ede6497f20d2ccb1a0fb45340b05797fd1e2b8',
+ 'src/engine/scalping/holding_profit_exit_semantics.py': 'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a',
  'src/engine/holding_exit_sentinel.py': 'a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb',
  'src/engine/error_detectors/artifact_freshness.py': '5badbc45d86f2426ce060c7420f2f1f428dd262a2d9c2ea14f41454c89d2d1b6',
  'src/engine/scalping/initial_quantity_monitor_projection.py': '81a69a5f6a4d512ab7578b196fcddcf08d56ceb791ee8d2d1d3a9bdfdb926327'}
-REVIEWED_HISTORICAL_RESOLUTION_PAIRS = {'src/engine/scalping/holding_profit_exit_semantics.py': (('586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de',
+REVIEWED_HISTORICAL_RESOLUTION_PAIRS = {'src/engine/scalping/micro_reversion/storage_maintenance.py': (('881d8a0d6e90dd73b753f73d28d3f8f1004edfc0ededf0928bfee8ef1397f098', '61282651dcdf8bda3a4311855c3e7d10b500f1f8ac3fbaef2d5a66b5f4bcc514'),),
+ 'src/engine/compress_db_backfilled_files.py': (('3d1f34d4f8128e6e9b0b1aa9a3e0095bef1394314a731bd8a9c1eec8ea816f7c', '501159d87c7901b2a9edb6e7cd8a04d99ef6c15aae12577f9344078cf76ace3f'),),
+ 'src/engine/automation/main_trailing_source_store.py': (('aca2d7dda4c8eda53f6634a73b133090e73c511cc62973584f31633245edd850', 'e9f596c589348c1090c54eb971ede6497f20d2ccb1a0fb45340b05797fd1e2b8'),),
+ 'src/engine/scalping/holding_profit_exit_semantics.py': (('586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de',
                                                            'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a'),
                                                           ('7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78',
                                                            'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a'),

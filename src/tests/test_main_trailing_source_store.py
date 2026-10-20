@@ -157,6 +157,35 @@ def test_offline_archive_enrollment_preserves_source_and_never_restores_plain(tm
     assert store.migrate_frozen_source(tmp_path,path)==bound
 
 
+@pytest.mark.parametrize('damage',[None,'prefix','append','extra','partial'])
+def test_legacy_archive_enrollment_preserves_original_prefix_and_append_chains(tmp_path,damage):
+    import gzip
+    from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+    path=source(tmp_path)
+    path.write_bytes(json.dumps(row('prefix')).encode()+b'\n')
+    assert store.build_step(tmp_path,path,seconds=10)['complete']
+    append(tmp_path,path,row('append'))
+    original=store.generation(tmp_path,path)
+    raw=path.read_bytes()
+    if damage in {'prefix','append'}:raw=raw.replace(damage.encode(),b'change')
+    elif damage=='extra':raw+=json.dumps(row('extra')).encode()+b'\n'
+    elif damage=='partial':raw=raw[:-1]
+    archive=Path(str(path)+'.gz');archive.write_bytes(gzip.compress(raw));path.unlink()
+    before=archive.read_bytes()
+    if damage:
+        with pytest.raises((ValueError,store.InputPending),match='original_index|partial_record'):
+            store.migrate_frozen_source(tmp_path,path)
+        assert not source_generation_matches(tmp_path,'2026-10-20',path,original)
+    else:
+        current=store.migrate_frozen_source(tmp_path,path)
+        assert current['catchup_end']==original['catchup_end']<current['size']
+        assert current['prefix_chain_sha256']==original['prefix_chain_sha256']
+        assert current['append_chain_sha256']==original['append_chain_sha256']
+        assert source_generation_matches(tmp_path,'2026-10-20',path,original)
+        assert len(list(store.read_rows(tmp_path,path)))==2
+    assert archive.read_bytes()==before and not path.exists()
+
+
 @pytest.mark.parametrize('damage',['seal','logical_sha','logical_size','path','authority','generation','concurrent'])
 def test_archive_enrollment_cannot_discard_existing_native_logical_authority(tmp_path,monkeypatch,damage):
     import hashlib
@@ -283,7 +312,11 @@ def test_frozen_plain_index_remains_bound_after_verified_gzip_enrollment(tmp_pat
     elif damage=='append':raw+=json.dumps(row('added')).encode()+b'\n'
     elif damage=='seal':original=dict(original,sha256='0'*64)
     Path(str(path)+'.gz').write_bytes(gzip.compress(raw));path.unlink()
-    store.migrate_frozen_source(tmp_path,path)
+    if damage in {'content','append'}:
+        with pytest.raises(ValueError,match='original_index_mismatch'):
+            store.migrate_frozen_source(tmp_path,path)
+    else:
+        store.migrate_frozen_source(tmp_path,path)
     assert source_generation_matches(tmp_path,'2026-10-19',path,original) is (damage is None)
 
 
