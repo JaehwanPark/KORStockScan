@@ -436,3 +436,10 @@ Combined diff versusa7c before this count record: {"agents": [40, 52], "docs": [
 - 실제 P5/runab23d496은 intake를 통과하고 실제 격리 child에서12 consumer를 실행했다. Main 기계/보조·수량·분할·지연·trailing는 로드했으나 main_stop의 과거 vote index SQLite 접근이 금지되어 실패했다. 해당 원천은2파일2,777,728B이고 첫 논리 세대 재검증은2,569,456B 원 JSONL이다. 기존 assembler의 canonical bounded raw reader를 P5의 검증된 source-date/root 문맥에서 선택하고 normal indexed reader는 유지한다. DB/네트워크/프로세스/쓰기 격리 완화·기존 source limit 확대·과거 semantic PASS 재사용은 없다. source/raw 변경은 기존 native generation 비교가 거절한다. 원 failed final/child/isolation은 불변 보존하며 별도 diagnostic만 추가했다.
 
 - P5/runb87d8e1b은 금지 접근0으로12 consumer를 모두 실행했으나10개 로드/parent-only, main_stop·holding_path_vote2개는 `_PreparationDigests.binding` 누락으로 실패했다. 기존 native reader가 postclose producer 여부를 확인할 때 발생했다. 기존 adapter에 검증 전용 `startup_validation` 역할만 제공하여 원천 enrollment를 허용하지 않고 parent의 동일 호출 byte 증명과 native 소비를 유지한다. 원 child/final/isolation은 보존하며120초 deadline을 늘리지 않는다.
+
+
+### 11:22 기동 후 observer 오류의 실제 생산자 계약
+
+- 23d30a55b/PID390249/start10739053의 기동·bootstrap·정책 소비와 P5는 통과했으나 첫 current observer는 fresh sentinel 부재로 unobservable였다. 실제 selected buy-funnel 생산자 실행은 `summary_contract_migration_parser_predecessor_unverified`에서 실패했다. 코드 기동 검증과 보고서 생산자 검증의 누락 경로이며 전체 건강 완료로 주장하지 않는다.
+- 0255의 pipeline_event_summary 변경은 `load_summary_rows`의 invocation-local projection reuse 인자 한 곳뿐이다. 원 parser/aggregation/callback 바이트는 같다. 기존 migration owner의 current parser pin이 fc39에 고정된 것이 원인이다. fc39→f305의 정확한 source-equivalent pair만 추가하고 기존 parser/callback/date/owner/checkpoint/raw offset/append32MiB/summary128MiB/변조·중단 거절을 유지한다. 원 summary/manifest는 native writer가 archive한 뒤 원 offset부터만 이어 쓴다. raw 전체 bootstrap·경보 억제·과거 PASS 승계는 하지 않는다.
+- startup 이후 sentinel→현재 observer→full health를 실제 마지막 consumer에서 재검증한다. 실행 중인 Main과 원 정책은 유지하고 source-only 수리 후 선택본 반영은 별도 native ordered 전환으로 기록한다.

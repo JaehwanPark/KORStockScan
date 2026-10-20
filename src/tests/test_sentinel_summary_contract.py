@@ -478,12 +478,12 @@ def test_recheck_parser_change_is_only_new_producer_stage():
     name = 'src/engine/pipeline_event_summary.py'
     previous = subprocess.check_output(['git', '-C', str(root), 'show',
         'c5aeda844dfab36146d04e6305cb29508cd47d4f:'+name])
-    current = Path(P.__file__).read_bytes()
+    current = subprocess.check_output(['git','-C',str(root),'show','a7c0b0dc5:'+name])
     addition = b'    "pre_submit_delay_recheck_observed",\n'
     assert current.count(addition) == 1 and addition not in previous
     assert current.replace(addition, b'') == previous
     assert hashlib.sha256(previous).hexdigest() == C.PRE_RECHECK_PARSER
-    assert hashlib.sha256(current).hexdigest() == C.CURRENT_PARSER
+    assert hashlib.sha256(current).hexdigest() == C.PRE_READ_REUSE_PARSER
     old_producer = subprocess.check_output(['git', '-C', str(root), 'show',
         'c5aeda844dfab36146d04e6305cb29508cd47d4f:src/engine/sniper_state_handlers.py'])
     assert b'pre_submit_delay_recheck_observed' not in old_producer
@@ -547,3 +547,42 @@ def test_new_parser_cannot_inherit_unproduced_intermediate_owner_pair(tmp_path):
     with pytest.raises(RuntimeError, match='callback_predecessor_unverified'):
         P.update_and_load_pipeline_event_summaries(**options)
     assert manifest.read_bytes() == original
+
+
+@pytest.mark.parametrize('parser_callback',[False,True])
+def test_projection_reader_successor_migrates_existing_prefix_without_raw_rebuild(tmp_path,monkeypatch,parser_callback):
+    raw,options,manifest,original,rows=predecessor(tmp_path,parser_callback=parser_callback,
+        parser_contract=C.PRE_READ_REUSE_PARSER,buy_owner=C.CURRENT_BUY_OWNER)
+    offset=raw.stat().st_size
+    with raw.open('a') as handle:handle.write(json.dumps(event(2))+'\n')
+    real_open=builtins.open
+    class SuffixOnly:
+        def __init__(self,f):self.f=f
+        def __getattr__(self,name):return getattr(self.f,name)
+        def __enter__(self):return self
+        def __exit__(self,*args):return self.f.__exit__(*args)
+        def readline(self,*args):
+            assert self.f.tell()>=offset
+            return self.f.readline(*args)
+    def guarded(path,*args,**kwargs):
+        f=real_open(path,*args,**kwargs)
+        return SuffixOnly(f) if Path(path)==raw and args and args[0]=='rb' else f
+    monkeypatch.setattr(builtins,'open',guarded)
+    result,metadata=P.update_and_load_pipeline_event_summaries(**options)
+    assert not metadata['rebuilt'] and metadata['start_raw_offset']==offset
+    assert sum(row['event_count']for row in result)==2
+    receipt=metadata['contract_migration']
+    assert receipt['from_parser']==C.PRE_READ_REUSE_PARSER and receipt['to_parser']==C.CURRENT_PARSER
+    assert Path(receipt['original_manifest_archive']).read_bytes()==original
+
+
+def test_projection_reuse_successor_preserves_all_parser_and_aggregation_source():
+    import subprocess
+    root=Path(P.__file__).resolve().parents[2]
+    previous=subprocess.check_output(['git','-C',str(root),'show','a7c0b0dc5:src/engine/pipeline_event_summary.py'])
+    current=Path(P.__file__).read_bytes()
+    old=b'    return _load_summary_rows(path, include_samples=include_samples, strict=strict)'
+    new=b'    return _load_summary_rows(path, include_samples=include_samples, strict=strict,\n                              _projection_reuse=not include_samples)'
+    assert previous.count(old)==1 and previous.replace(old,new)==current
+    assert hashlib.sha256(previous).hexdigest()==C.PRE_READ_REUSE_PARSER
+    assert hashlib.sha256(current).hexdigest()==C.CURRENT_PARSER
