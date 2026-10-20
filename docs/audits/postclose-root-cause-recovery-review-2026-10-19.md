@@ -487,3 +487,12 @@ Combined diff versusa7c before this count record: {"agents": [40, 52], "docs": [
 남은 warning은 기존 holding 원 BUY2결손, 기동 후 제한 관측, log_rotation_cleanup/postclose_finalization의06:50 이후 복구 이력, pinned 임시 증거 용량/증가 budget이다. 이를 이번 일반 artifact 오분류의 실패로 합치거나 원 손실·전체 원천/경제성 성공으로 지우지 않는다. 자연 request/source/PASS→실제 제출 수용은 동일 checklist owner OPEN을 유지한다. 배포 뒤 추가 source/test 변경은 없고 이 종결 기록만 보완한다.
 
 최종 기준a54b69e1c의 범위는8파일이며 source2파일 +23/-3, tests2파일 +28/-12, docs4파일 +35/-1이다. 배포041 이후 종결 기록은 source/tests0, docs2파일 +12/-0이다. 문서 순증은 원 실패·현재 PID 소비·표적 검증·owner 이관과 제거 disposition이고 새 production owner/분기/진입점은 없다.
+
+
+### ETF product intake integration
+
+- 사용자0aedc579d 통합 배포 지시에 따라 선택041caf05e/PID1054501/start11276382를 기준으로 기존 관측기 수리와 종결 문서96b011c49를 보존하고 merge했다. 원 작업의 [원인·공식 참조·원 실패·실제998큐 대조](../../tmp/exact-ws-no-receive-20261020-1238/report.md)는 불변이다. 이번 범위는 TIME 상품의 순수주식 유입 차단이며 기존14건 무수신 전부를 API 장애나 복구 완료로 묶지 않는다.
+- 리뷰: `is_non_equity_product_name` 하나를 기존 intake·prefetch·복원 queue claim이 공유한다. TIME 접두어와 SOMETIME/TIMEWORKS 일반명을 구분하고 기존 code/가격·source freshness·account/order/quantity·custody guard는 유지한다. restored product는 기존 name/hash/claim 이력을 보존하며 새 probe를 배정하지 않는다. request/parser/auth/order/realtime 함수의 나머지 AST가041 원문과 동일함을 확인했고 테스트용 provider 호출은0이다.
+- 기동 전 보완: 변경된 kiwoom_utils는 기존 handler의 exact dependency다. 이전 발행 세대와041의 incident-order profile은 유지하고 필터+두 소비자3파일의 정확한 완전 후속 세대만 기존 native handoff owner에 추가했다. helper만 변경·누락·dirty·committed mutation한 혼합 세대는 거절한다. 원 profile fixture는0255/99c/041의 실제 발행 바이트로 고정했다. 새 module/CLI/정책 parameter/provider·WS/REG 변경은 없다.
+- 자체 리뷰→보완→재리뷰 후 통합 source/restore/dispatcher/prefetch/census·발행/후속 handoff462회귀 PASS(121.44초), exact probe73회귀 PASS(8.04초), compile·diff PASS다. original 4실패 재현은 원 작업 기록에 보존했다. 새 검증은 공급자·주문·구독을 호출하지 않는다. 선택본 정상 기동과 자연 소비는 native parity/P5/ordered 및 새 PID 보고서로 후속 검증한다.
+- 대체/제거: 별도 LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS와 중복 이름 반복문 `removed`; 공통 상품 판정은 기존 kiwoom_utils로 `consolidated`; 가격/code 필터·queue ledger/기존 source dispatch는 현재 scanner/runtime consumers 때문에 `retained`; 모든 이전 complete profile은 과거 정책/P5/handoff consumers 때문에 `retained`다. wrapper/entrypoint/retired owner 복구·deferred removal은 없다. 기준96b011c49 대비 non-test source4파일 +46/-50, tests5파일 +42/-7이며 문서는 별도다. 소스 순감4는 중복 제거와 정확한 기동 세대 결속을 함께 반영한다.

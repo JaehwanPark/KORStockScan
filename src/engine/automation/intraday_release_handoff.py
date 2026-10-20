@@ -2844,6 +2844,21 @@ REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS.items()
 }
 
+# The shared product predicate and its two dispatch consumers form one exact
+# successor. Historical policies retain their original dependency profiles.
+REVIEWED_PRODUCT_INTAKE_HASHES = {
+    'src/utils/kiwoom_utils.py': 'a21607460d8bc4817b80499414a796bf4ac8a3e8af10846c2682e1daa12e152f',
+    'src/scanners/scalping_scanner.py': '3280979b86c4bb10231b7886f591aba239c453b3e37d1ba79b8c2fdb1d4f477f',
+    'src/scanners/zero_base_discovery_queue.py': '9bbcaa6181f9a3f46d9c6c3328dc857e774d5fd7800f2e297bae5d3ea17cb7c8',
+}
+REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/utils/kiwoom_utils.py',
+        'selector_sha256': REVIEWED_PRODUCT_INTAKE_HASHES['src/utils/kiwoom_utils.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_PRODUCT_INTAKE_HASHES},
+    } for key, value in REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2897,7 +2912,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
+                         REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS,
                          REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS,

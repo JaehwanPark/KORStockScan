@@ -1750,8 +1750,9 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
 @pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
 @pytest.mark.parametrize('generation,reader_path', [(generation,path)
-    for generation in ('source_reader','source_integration','original_gap','incident_order')
-    for path in (('src/engine/monitoring/submission_bottleneck_monitor.py',) if generation=='incident_order' else
+    for generation in ('source_reader','source_integration','original_gap','incident_order','product_intake')
+    for path in (tuple(handoff.REVIEWED_PRODUCT_INTAKE_HASHES) if generation=='product_intake' else
+        ('src/engine/monitoring/submission_bottleneck_monitor.py',) if generation=='incident_order' else
         ('src/engine/scalping/holding_profit_exit_semantics.py',) if generation=='original_gap' else
         ('src/engine/lifecycle/research_json_stream.py',
         'src/engine/automation/main_startup_validation.py','src/engine/automation/next_preopen_readiness.py',
@@ -1778,14 +1779,16 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('original_gap','incident_order','product_intake'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation=='product_intake':names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='incident_order' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='product_intake' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ('0255cb05f' if generation=='source_reader' else '99c51c85f')+':'+os.path.normpath(name)]))
+                 ({'source_reader':'0255cb05f','incident_order':'041caf05e'}.get(generation,'99c51c85f'))
+                 +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
         ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
         for key,name in inventory.items()}
