@@ -116,6 +116,32 @@ def test_legacy_absent_proof_is_not_generated_by_reader(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize('damage', [None, 'source', 'candidate_index', 'unknown_code'])
+def test_candidate_proof_preserves_selected_reader_and_rejects_new_loss(tmp_path, monkeypatch, damage):
+    data, path, stage, report, children = _fixture(tmp_path, monkeypatch)
+    selected_code = projection._code()
+    projection.publish(path, stage, report, data_root=data)
+    legacy = projection.manifest_path(path).read_bytes()
+    selected = projection.read_verified(path, stage, read=_read, data_root=data)
+    candidate_code = {**selected_code, 'candidate.py': 'a'*64}
+    monkeypatch.setattr(projection, '_code', lambda: candidate_code)
+    projection.publish(path, stage, report, data_root=data, publish_current=False)
+    assert projection.manifest_path(path).read_bytes() == legacy
+    assert projection.read_verified(path, stage, read=_read, data_root=data) == selected
+    monkeypatch.setattr(projection, '_code', lambda: selected_code)
+    assert projection.read_verified(path, stage, read=_read, data_root=data) == selected
+    monkeypatch.setattr(projection, '_code', lambda: candidate_code)
+    if damage == 'source':
+        children['report'].write_bytes(children['report'].read_bytes() + b' ')
+    elif damage == 'candidate_index':
+        projection.manifest_path(path, code=candidate_code).write_text('{bad')
+    elif damage == 'unknown_code':
+        monkeypatch.setattr(projection, '_code', lambda: {**candidate_code, 'unknown.py': 'b'*64})
+    if damage:
+        with pytest.raises((ValueError, AssertionError)):
+            projection.read_verified(path, stage, read=_read, data_root=data)
+
+
 def test_new_actual_or_research_cost_source_invalidates_warm_observation(tmp_path, monkeypatch):
     data, path, stage, report, children = _fixture(tmp_path, monkeypatch)
     from src.engine.lifecycle import broker_cost_reconciliation as costs

@@ -3400,7 +3400,8 @@ for (_trigger, _trigger_sha), _variant in REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_V
 # validation affects report re-audit only; runtime policy gates stay strict.
 REVIEWED_HISTORICAL_RESOLUTION_HASHES = {'src/engine/scalping/holding_profit_exit_semantics.py': 'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a',
  'src/engine/holding_exit_sentinel.py': 'a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb',
- 'src/engine/error_detectors/artifact_freshness.py': '5badbc45d86f2426ce060c7420f2f1f428dd262a2d9c2ea14f41454c89d2d1b6'}
+ 'src/engine/error_detectors/artifact_freshness.py': '5badbc45d86f2426ce060c7420f2f1f428dd262a2d9c2ea14f41454c89d2d1b6',
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': '81a69a5f6a4d512ab7578b196fcddcf08d56ceb791ee8d2d1d3a9bdfdb926327'}
 REVIEWED_HISTORICAL_RESOLUTION_PAIRS = {'src/engine/scalping/holding_profit_exit_semantics.py': (('586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de',
                                                            'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a'),
                                                           ('7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78',
@@ -3414,7 +3415,8 @@ REVIEWED_HISTORICAL_RESOLUTION_PAIRS = {'src/engine/scalping/holding_profit_exit
                                                       ('bc6c903c8a9ea08026103101bcefcaf8e18ea5a4e707408787bc26a15ebd150a',
                                                        '5badbc45d86f2426ce060c7420f2f1f428dd262a2d9c2ea14f41454c89d2d1b6'),
                                                       ('f8955d1d5f8fc807d0f1772e6a21ac682ff800b6668a00d551a1f4a8fd25983e',
-                                                       '5badbc45d86f2426ce060c7420f2f1f428dd262a2d9c2ea14f41454c89d2d1b6'))}
+                                                       '5badbc45d86f2426ce060c7420f2f1f428dd262a2d9c2ea14f41454c89d2d1b6')),
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': tuple((before, '81a69a5f6a4d512ab7578b196fcddcf08d56ceb791ee8d2d1d3a9bdfdb926327') for before in ('252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947', '28e2d8b4e06be95c5f91b36298cfe8015f0f2474419964c60f1db4fcc267a21f', '8dce560b2434f30912b39330c42932debfb4671d3b3689c10226ddcd18d083c4'))}
 REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS = {
     (trigger, REVIEWED_HISTORICAL_RESOLUTION_HASHES.get(os.path.normpath(trigger), sha)): {**value,
         'selector_path': 'src/engine/scalping/holding_profit_exit_semantics.py',

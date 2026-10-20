@@ -27,8 +27,9 @@ MAX_REFERENCES = 8192
 CHILD_LIMIT = 4 * 1024 * 1024
 
 
-def manifest_path(stage_path):
-    return Path(stage_path).with_suffix('.monitor.json')
+def manifest_path(stage_path, *, code=None):
+    suffix = '.monitor.json' if code is None else '.monitor.' + _digest(code) + '.json'
+    return Path(stage_path).with_suffix(suffix)
 
 
 def _digest(value):
@@ -405,7 +406,10 @@ def _exclusion_disposition(stage_path, stage, report, observation, data_root, re
     return disposition
 
 
-def publish(stage_path, stage, report, *, data_root, accepted_historical_record_ids=None):
+def publish(stage_path, stage, report, *, data_root, accepted_historical_record_ids=None,
+            publish_current=True):
+    if type(publish_current) is not bool:
+        raise ValueError('quantity_monitor_publication_mode_invalid')
     """Publish a native proof; historical exclusions require explicit acceptance."""
     if (accepted_historical_record_ids is None and not manifest_path(stage_path).exists()
             and not any(Path(stage[name+'_path']).stat().st_size > CHILD_LIMIT
@@ -496,7 +500,7 @@ def publish(stage_path, stage, report, *, data_root, accepted_historical_record_
             decision_authority='report_only', runtime_effect=False, runtime_apply_allowed=False,
             actual_order_submitted=False)
         previous = manifest_path(stage_path)
-        if previous.exists():
+        if publish_current and previous.exists():
             _, record = files._read(previous, 65536)
             with previous.open('rb') as original:
                 old = original.read(65537)
@@ -507,7 +511,12 @@ def publish(stage_path, stage, report, *, data_root, accepted_historical_record_
                 with archived.open('xb') as handle:
                     handle.write(old)
                     handle.flush(); os.fsync(handle.fileno())
-        files._write_atomic(previous, pointer, 65536)
+        # A reviewed candidate can prove its own generation before selection
+        # without replacing the incumbent reader's manifest. Both consumers
+        # retain the same native source, coverage and authority checks.
+        files._write_atomic(manifest_path(stage_path, code=code), pointer, 65536)
+        if publish_current:
+            files._write_atomic(previous, pointer, 65536)
         if (before != _dependencies(stage_path, stage, report, data_root)
                 or cost_signature != _cost_signature(data_root, costs)
                 or projection['source_directories'] != _directories(report, data_root) or code != _code()):
@@ -519,11 +528,13 @@ def read_verified(stage_path, stage, *, read, data_root=None, role='current_stag
     """Return a native proof or None for the unchanged bounded legacy reader."""
     if role not in {'current_stage', 'issued_ancestry'}:
         raise ValueError('quantity_monitor_role_invalid')
-    pointer_path = manifest_path(stage_path)
+    code = _code() if role == 'current_stage' else None
+    pointer_path = manifest_path(stage_path, code=code)
+    if code is not None and not pointer_path.exists() and not pointer_path.is_symlink():
+        pointer_path = manifest_path(stage_path)
     if not pointer_path.exists() and not pointer_path.is_symlink():
         return None
     pointer = read(pointer_path, limit=65536)
-    code = _code() if role == 'current_stage' else None
     if (pointer.get('schema') != MANIFEST or (role == 'current_stage' and pointer.get('code') != code)
             or pointer.get('source_date') != stage.get('source_date')
             or pointer.get('stage_content_sha256') != stage.get('receipt_content_sha256')):
