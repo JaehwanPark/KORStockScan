@@ -237,6 +237,18 @@ REVIEWED_SOURCE_READER_SUCCESSORS = {
                   'cc663fc62f34bd39f01591c15b13977aa50043f2fe1579291bf719ed3fb496e7'),
 }
 
+# Delay-v4 identity diagnostics and unreachable PYRAMID helper removal. Keep
+# issued pairs above; these exact successors require independent fresh fixtures
+# while preserving the original native report and its historical fixture.
+REVIEWED_DELAY_CLEANUP_SUCCESSORS = {
+    'rising_missed': ('1f524a5ad98e623501eaaa2d7c81773ac0ad6328237d72ea0c95c0c8cd1251bb',
+                      '8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d'),
+    'auxiliary': ('80497557e7be71c0eafcdaa4bd7256250c66899a791510efa2f98f81cbcbbc05',
+                  '4de7ce95386f5c05863e8e3fb56899c71ef16da99bdf75cd0e3aa426a150eeac'),
+    'holding_vote': ('69b00417b7396d7a15840c7f0a53ef91399d755d430fb3017a9d0596127d8b11',
+                     'b447ff4c7e39ed9f1d1884c3d032b567225d51b92d121c91e24c280c9e84c72b'),
+}
+
 
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -318,9 +330,10 @@ def current_fixture_observation(observed, data):
         pair = actual_pair
 
     reader = REVIEWED_SOURCE_READER_SUCCESSORS.get(family)
-    reader_match = reader is not None and actual_pair == reader
+    reader_match = ((reader is not None and actual_pair == reader)
+                    or actual_pair == REVIEWED_DELAY_CLEANUP_SUCCESSORS.get(family))
     if reader_match:
-        pair = reader
+        pair = actual_pair
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
