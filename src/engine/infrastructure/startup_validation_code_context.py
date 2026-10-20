@@ -1328,6 +1328,14 @@ def validation_auxiliary_preparation(manifest, bundle, data_root):
 
 class _PreparationDigests:
     """Read-only, process-bound reuse of bytes hashed by the same P5 intake."""
+    @property
+    def binding(self):
+        if _main_context() is None:
+            raise ValueError('startup_code_context_required')
+        # This adapter must never enroll source generations as a postclose
+        # producer; native readers still execute against the parent byte proof.
+        return {'role': 'startup_validation'}
+
     def digest(self, path):
         if _CONTEXT is None:
             return None

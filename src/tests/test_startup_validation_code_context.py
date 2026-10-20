@@ -1062,6 +1062,10 @@ proof=request['main_preparation_code_handoff']
 assert proof['closure']['manifests']=={}
 assert C.preparation_logical_sources()=={}
 assert C.validation_raw_vote_sources(request['data_root'],request['main_preparation_code_handoff']['native_verification']['source_date'])
+from src.engine.infrastructure.validation_digest_session import ACTIVE
+from src.engine.automation.main_trailing_completed_store import admit_window
+assert ACTIVE.get().binding['role']=='startup_validation'
+assert admit_window(request['data_root'],request['target_date'])==0
 assert_no_forbidden_attempts()
 ''')
     assert (result.returncode==0) is (fault is None),result.stderr

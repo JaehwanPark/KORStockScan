@@ -241,3 +241,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - P5/run6c360700의 추가 intake 실패는18,459B native gzip 증명과 기존1MiB delegation 하한의 불일치다. 작은 증명은 위임하지 않고 native child가 직접 읽도록 기존 수집 owner를 보완하며 원 실패/guard를 보존한다.
 
 - P5/runab23d496은 실제 격리 child의 main_stop vote-index DB 접근에서 차단됐다.2.8MB 원 JSONL을 기존 bounded canonical reader로 직접 검증하도록 기존 owner를 보완한다. native12 consumer의 성공·격리/금지 시도0·종료와 신규 정책/PID 수용은 새 영수증으로만 닫으며 원 실패는 보존한다.
+
+- P5/runb87d8e1b은 금지 접근0이나 native 캐시 adapter의 `binding` 누락으로12개 중 손절/holding2개 로드가 실패했다. 기존 adapter에 검증 전용 역할을 명시해 장후 producer admission은 계속 금지한다. 실제 새 P5와 배포/PID는 미완료다.
