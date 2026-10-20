@@ -123,6 +123,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 13:44 원인 조사: shared vote DB의 WAL98,921,232B·비상주 연결과 checkpoint 대상 누락을 확인했다. 선택 코드의 동일 readonly PRAGMA에서 격리 동시 조회12/16 SQLITE_BUSY_RECOVERY를 두 번 재현했고 연결 유지/사전 정리 대조군은 각각0/16이다. 원 Main 실패는 상세 DB 증거가 없어 동일 원인으로 확정하지 않는다. 기존 store의 checkpoint·읽기 session 수리는 미구현 OPEN이며 timeout/경보 완화·운영 DB 변경은0이다. 과거 BUY49389 복원은 현재 코드/원 체결로 재검증했고 원 신호 결손과 수량6건·cancel-wait/WS 결손은 분리 보존한다. [원인·범위·수리 수용검사](../audits/postclose-root-cause-recovery-review-2026-10-19.md#historical-source-gaps-and-sqlite-cold-open-investigation-2026-10-20).
   - 14:13 SQL 코드 수리: 기존 기동 준비/6 namespace PASSIVE checkpoint·DB별 날짜 전환 timer·검증 세션 내 최대6개 연결 재사용·실패 read transaction 정리·DB/단계/SQLite code 진단을 보완했다. 정확한 store/digest/진단3파일 후속 인계와 발행21d822a64 fixture를 분리해 혼합/누락/변조를 계속 거절한다. 핵심406·인계189 회귀 PASS, 같은 native generation의 동시 조회 실패12/16→0/16이다. 코드 리뷰/보완 수용이며 운영 재생성·배포·새 PID 소비는 미실행 OPEN, 원 BUY/수량/cancel-wait/WS 결손은 원 ID/null로 보존한다. [리뷰와 제거 disposition](../audits/postclose-root-cause-recovery-review-2026-10-19.md#shared-vote-sqlite-lifecycle-repair-2026-10-20). 코드 커밋 `c550a4c43b1070c29ccae89b9e70fbf4c1517c20`.
   - 14:36 통합 리뷰: 사용자 승인3d8abd012+c550a4c43를 선택21d822a64 기반으로 병합했다. 대표 파일만 구세대로 되돌려 검증 세대가 내려가는 결함6건을 재현하고 정리6파일 전체 결속으로 보완했다. 과거23파일 정책 fixture의 현재25파일 혼용도 원 발행 inventory로 수정했다. incumbent은 유지하며 전체 회귀→native currentness/parity/P5→ordered 새 PID 소비를 확인한다. [동일 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md#clean-refactor-and-sqlite-integration-2026-10-20).
+  - 14:59 기동 보완:0ce816f7c 통합1409 회귀/native parity·P5 12소비자·4인계/ordered PASS, PID2108660/start11987479를 확인했다. 첫 source-only/유예는 실패 시도로 보존했다. 원인은 남은150초 중 observer45초 예약으로 약46초 Sentinel을 조기 종료한 배분이다. 원 late-admission·observer 최소20초·정리5초는 유지하고 admitted 예약을30초로 보완, 원 코드 재현2 FAIL→기동 회귀27 PASS다. 새 후보의 첫 자연 startup producer/observer0·full health/PID 재확인까지 기존 owner에서 수용한다.
   - 12:26 신규 계약 결함: 구 PID 사건의 원문 증거가 유효한데 앞의 커버리지 사건에서 검사를 중단하여 순서에 따라 artifact 실패가 달라진다. 기존 최대256건 검사를 끝까지 수행하고 원천 품질 경고와 실제 current/unknown 실패를 보존한다. 원22 probe 중4 covered·비용 null은 복구로 간주하지 않는다. [원인·회귀·반영 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#submission-observer-incident-order-repair).
 
 ## 익절 원천 수리 인계
@@ -303,3 +304,13 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 구현 종료 후 불변 패키지를 준비하되 기본 작업본 shell·selector·PID·active policy는 변경하지 않는다. 현재 정책의 native confirmation parity, exact-date candidate handoff와 정지 전 최종 검사는 실제 실행 시점의 원천·commit·날짜에 결속해야 한다. 기존 영수증 재사용이나 정책 hash 치환은 허용하지 않는다.
 - 병행 편집 중인 기본 체크리스트를 후보의 과거 snapshot으로 덮지 않는다. 실제 배포 준비 시 그 시점의 운영 문서와 본 절을 합친 뒤 기존 strict-bound 원본·사용자 편집본을 모두 보존하고 CAS handoff를 수행한다. 그 변경으로 commit이 바뀌면 후보 결속 영수증도 다시 준비한다.
 - 역사 AVG_DOWN replay의 matrix 구현 SHA는 과거 영수증 그대로 유지한다. 새 코드의 자연 연구·PID 수용을 이 오프라인 동등성 검사로 대체하지 않는다. 새로운 원천/경제성 연구나 전체 원천 재생성은 이번 제거 묶음에 포함하지 않는다.
+
+
+## 매수 지연 근거 재검토 — 2026-10-20
+
+- [ ] `[PreSubmitDelaySituationResearch1017] 체결 기준 가격경로·단기 선택·정책 근거 수리의 자연 소비 확인` (`Due: 2026-10-21`, `Slot: PREOPEN`, `TimeWindow: 07:35~09:30`, `Track: RuntimeStability`)
+  - Source: 사용자 `다음액션 실행`, [기존 계획](../proposals/pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md#체결-이후-하락과-0초-선택-근거-재검토--2026-10-20), [원인·수리·회귀·재계산](../audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md#체결-기준-재검토와-단기-선정-보완--2026-10-20). 원10/17 완료/배포 이력은 보존하고 새 wire 별칭 해시·단기 선정/감시·체결 reader 결함만 재개한다.
+  - 구현/연구: 선택21d822a64 기준 격리 작업본 `pre-submit-delay-evidence-20261020`에서 보완했다. 포지션585건·기회357건, 정확 fill/owner13건을 보존하고 후보 v4는105개 price_ready cell 중 판단 불충분92개·관측 pair 즉시 우위11개·중복 부모/자식180초2개다. 현재0초를 최적 시간으로 판정하지 않는다. source10/19→effective10/21 후보는 별도 출력에만 존재한다.
+  - Acceptance 유지/확장: 원 short clock/P0/미래·과거 호가/회차예산/만료·예외·불확실/과거 projection hash/후보 pair·고정 split·0초 fallback/출력 한도 반례를 유지한다. f6/f7만 통합하고 다른 prompt/risk/model/validator는 분리하며, 정상 append snapshot과 미영수 append/재작성을 구분한다. 실제 시간별 coverage·정확 fill leg·successor/terminal 및 정책 근거를 같은 native ID로 대사한다.
+  - 재인수: 병행 운영 전환0ce816f7c를 격리 merge fd7071c0f에 보존했고 통합 회귀1,511개와 최종 보고서49개가 통과했다. 후보 값·원 정책/PREOPEN은 같고 이번 수리의 운영 반영은 미실행이다.
+  - 다음: 정식 코드·정책 인계 승인 범위에서 `DirectFamilyPreopenPolicyHandoff`의 원 정책/현재 PID 보존 검증과 새 정책 준비를 진행한다. 실제 배포·PREOPEN·PID·자연1/3/5초 선택/재점검은 미실행이며 자료 부족만으로 초기정책의 추가 경제성 승인 gate를 만들지 않는다. 과거 결손569건과 비용후 EV null은 현재 코드 수리와 별개로 남긴다.

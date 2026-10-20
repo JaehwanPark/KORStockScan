@@ -263,8 +263,15 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                     wait(.5)
             if _startup_consumption_check(identity).get('status') != 'ready':
                 return dict(receipt, reason='startup_observer_identity_changed')
+            # Preserve late admission: an unstarted producer must not replace
+            # an already completed current observation with source-only output.
+            if deadline - monotonic() - 45 < 1:
+                return dict(receipt, reason='startup_observer_deadline_expired',
+                            producer_started=False, publication_attempted=False)
+            # Keep 25 seconds for the observer plus its five-second cleanup.
+            # Attestation uses the same original 150-second process deadline.
             producer = run(['src.engine.buy_funnel_sentinel', '--date', day,
-                            '--use-cache', '--use-summary'], max(0., deadline-monotonic()-45))
+                            '--use-cache', '--use-summary'], max(0., deadline-monotonic()-30))
             if producer is None:
                 return dict(receipt, reason='startup_observer_deadline_expired',
                             producer_started=False, publication_attempted=False)
