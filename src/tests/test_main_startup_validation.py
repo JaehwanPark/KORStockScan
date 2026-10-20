@@ -189,8 +189,9 @@ def test_native_preparation_rejects_missing_context_diagnostics(tmp_path, monkey
         validation._native_preparation_check(tmp_path, DAY, '2026-10-16')
 
 
-@pytest.mark.parametrize('counter', [-1, True, '0', None])
-def test_native_preparation_rejects_invalid_semantic_reuse_counter(native_preparation_cli, monkeypatch, counter):
+@pytest.mark.parametrize('key', ['semantic_reused_reads', 'admitted_native_proofs', 'admitted_native_bytes'])
+@pytest.mark.parametrize('counter', [0, 7, -1, True, '0', None])
+def test_native_preparation_validates_native_reuse_counters(native_preparation_cli, monkeypatch, key, counter):
     code, _ = native_preparation_cli
     original = validation._run_native_validation
     def invalid(*args, **kwargs):
@@ -200,13 +201,17 @@ def test_native_preparation_rejects_invalid_semantic_reuse_counter(native_prepar
         for index, line in enumerate(lines):
             if line.startswith(prefix):
                 value = json.loads(line.removeprefix(prefix))
-                value['stats']['semantic_reused_reads'] = counter
+                value['stats'][key] = counter
                 lines[index] = prefix + json.dumps(value)
         result.stderr = '\n'.join(lines)
         return result
     monkeypatch.setattr(validation, '_run_native_validation', invalid)
-    with pytest.raises(ValueError, match='startup_native_preparation_diagnostics_invalid'):
-        validation._native_preparation_check(code, DAY, '2026-10-16')
+    if type(counter) is int and counter >= 0:
+        result = validation._native_preparation_check(code, DAY, '2026-10-16')
+        assert result['native_validation_io']['stats'][key] == counter
+    else:
+        with pytest.raises(ValueError, match='startup_native_preparation_diagnostics_invalid'):
+            validation._native_preparation_check(code, DAY, '2026-10-16')
 
 
 @pytest.mark.parametrize('failure', ['exit', 'findings'])

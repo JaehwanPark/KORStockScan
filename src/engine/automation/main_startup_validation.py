@@ -338,6 +338,7 @@ finally:
                 or diagnostics['source_date'] != source_date
                 or type(diagnostics['remaining_entries']) is not int or diagnostics['remaining_entries'] != 0
                 or set(stats) - {'full_reads', 'full_bytes', 'reused_reads', 'reused_bytes', 'semantic_reused_reads',
+                    'admitted_native_proofs', 'admitted_native_bytes',
                     'cache_status', 'role', 'generation_sha256', 'pid', 'wall_seconds',
                     'thread_io_delta', 'peak_process_rss_kib'}
                 or stats['role'] != 'postclose'
@@ -350,9 +351,9 @@ finally:
                 or any(type(stats[key]) is not int or stats[key] < 0
                        for key in ('full_reads', 'full_bytes', 'reused_reads', 'reused_bytes'))):
             raise ValueError('diagnostic_contract')
-        if ('semantic_reused_reads' in stats and
-                (type(stats['semantic_reused_reads']) is not int or stats['semantic_reused_reads'] < 0)):
-            raise ValueError('diagnostic_semantic_reuse')
+        for key in ('semantic_reused_reads', 'admitted_native_proofs', 'admitted_native_bytes'):
+            if key in stats and (type(stats[key]) is not int or stats[key] < 0):
+                raise ValueError('diagnostic_reuse_counter')
         if ('peak_process_rss_kib' in stats
                 and (type(stats['peak_process_rss_kib']) is not int or stats['peak_process_rss_kib'] < 0)):
             raise ValueError('diagnostic_rss')
