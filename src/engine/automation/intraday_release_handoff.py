@@ -3368,6 +3368,8 @@ REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/automation/main_startup_validation.
 REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/automation/main_startup_validation.py'] = tuple((old, 'b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54') for old, _ in REVIEWED_POSTCLOSE_REPAIR_PAIRS['src/engine/automation/main_startup_validation.py']) + (('af3f290c4e0ff97216e7c2351c06b0314967d87c9cc0c54176b5850a94e65c5b', 'b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54'),)
 REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/infrastructure/startup_validation_code_context.py'] = '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf'
 REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/infrastructure/startup_validation_code_context.py'] = tuple((old, '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf') for old, _ in REVIEWED_POSTCLOSE_REPAIR_PAIRS['src/engine/infrastructure/startup_validation_code_context.py']) + (('01c1d63084444119e0de2589099f20e758758d3699d0ffb59a43a3f76e5fab8c', '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf'),)
+# Exact actual selected source20 producer before the closed-reader repair.
+REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/automation/main_stop_postclose.py'] = (('d20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b', 'ad0eb4c9eea9b260fb63bed150ff8882671ae126500d005dc00af5f3361dd3ae'),)
 REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS = {
     (trigger, REVIEWED_LOGICAL_PIPELINE_HASHES.get(os.path.normpath(trigger), sha)): {**value,
         'selector_path': 'src/engine/scalping/initial_quantity_policy.py',

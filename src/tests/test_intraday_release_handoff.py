@@ -1985,3 +1985,20 @@ def test_postclose_repair_requires_complete_exact_reader_generation(tmp_path, fa
 def test_logical_pipeline_handoff_binds_exact_new_and_prior_owners(tmp_path, family, source, fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, source, 'logical_pipeline')
+
+
+@pytest.mark.parametrize('family', ['pre_submit_delay','main_stop','holding_vote'])
+def test_actual_selected_postclose_origin_matches_complete_native_contract(family):
+    import hashlib
+    import os
+    import subprocess
+    from src.engine.scalping import main_stop_policy as stop, holding_vote_experiment as vote
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    root=Path(handoff.__file__).resolve().parents[3]
+    origin='72617981be50cc900281fce313e37057f203b1bc'
+    paths=({name:name for name in CONTRACT_PATHS} if family=='pre_submit_delay' else
+           {name:'src/engine/'+name for name in (stop.implementation_paths() if family=='main_stop' else vote._code_paths())})
+    expected=stop.digest({key:hashlib.sha256(subprocess.check_output(
+        ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest() for key,name in paths.items()})
+    commit=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+    handoff._verify_entry_code_delta(root,commit,origin,paths,expected)
