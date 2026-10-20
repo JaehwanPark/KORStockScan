@@ -156,7 +156,6 @@ def test_selected_object_drains_large_census_without_resident_value():
 @pytest.mark.parametrize('raw', ['[1.25,2e-12,3.0]', '[123456789,1e+30,-2.2]', '{"value":1.23}'])
 def test_structural_reader_preserves_numbers_at_chunk_boundaries(raw):
     import io
-    from src.engine.lifecycle.research_json_stream import Reader
     class Chunks(io.StringIO):
         def read(self, size=-1):return super().read(min(size, 2))
     reader = Reader(Chunks(raw), budgeted=False)
@@ -177,3 +176,16 @@ def test_structural_projection_rejects_non_json_whitespace():
     from src.engine.lifecycle.research_json_stream import selected_object
     with pytest.raises(ValueError):
         selected_object(io.StringIO('{\v"meta":{}}'), {'meta': None})
+
+
+def test_large_single_json_value_uses_geometric_refill():
+    import io
+    class Measured(io.StringIO):
+        def __init__(self, text):super().__init__(text);self.reads = 0
+        def read(self, size=-1):self.reads += 1;return super().read(size)
+    value = {'evidence': 'x' * (2 * 1024 * 1024)}
+    handle = Measured(json.dumps(value))
+    reader = Reader(handle, budgeted=False)
+    assert reader.value(4 * 1024 * 1024) == value
+    reader.finish()
+    assert handle.reads < 12  # Fixed 64KiB retries previously read/decode >32 times.

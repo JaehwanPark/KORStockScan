@@ -4651,3 +4651,15 @@ def test_semantic_decode_reuse_is_invocation_bound_and_not_a_verdict(tmp_path, m
             owner._semantic_object(path, limit=1)
     owner._semantic_object(path)
     assert len(reads) == 4
+
+
+def test_semantic_reuse_caps_even_tiny_entries(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as owner
+    from src.engine.infrastructure import validation_digest_session as session_owner
+    monkeypatch.setattr(session_owner, 'MAX_ENTRIES', 2)
+    with session_owner.postclose_session(tmp_path, '2026-10-19') as session:
+        for i in range(3):
+            path = tmp_path / f'{i}.json'
+            path.write_text('{}')
+            assert owner._semantic_object(path)[0] == {}
+        assert len(session.semantic_objects) <= 2

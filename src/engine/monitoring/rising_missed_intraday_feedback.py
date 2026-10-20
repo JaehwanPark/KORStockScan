@@ -2992,7 +2992,8 @@ def _prior_daily_report(path, cache):
     after = path.stat()
     if stamp != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
         raise OSError('prior_report_changed_during_read')
-    if cache is not None and before.st_size <= 1024 * 1024 and len(cache) < 20:
+    if (cache is not None and before.st_size <= 1024 * 1024 and len(cache) < 20
+            and sum(item[0][2] for item in cache.values()) + before.st_size <= 4 * 1024 * 1024):
         cache[path] = (stamp, deepcopy(value))
     return value
 

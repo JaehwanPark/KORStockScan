@@ -1361,7 +1361,7 @@ def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
     Large objects retain the bounded streaming/hash path rather than a cache.
     """
     from copy import deepcopy
-    from src.engine.infrastructure.validation_digest_session import ACTIVE, identity
+    from src.engine.infrastructure.validation_digest_session import ACTIVE, MAX_ENTRIES, identity
     session = ACTIVE.get()
     if session is None or session.invocation_pid != os.getpid():
         return _read_semantic_object(path, limit=limit, hash_only=hash_only, observation=observation)
@@ -1380,7 +1380,7 @@ def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
     size = details['logical_bytes']
     if observation is not None: observation.update(details)
     if size <= 1024 * 1024:
-        if session.semantic_bytes + size > 4 * 1024 * 1024:
+        if session.semantic_bytes + size > 4 * 1024 * 1024 or len(session.semantic_objects) >= MAX_ENTRIES:
             session.semantic_objects.clear();session.semantic_bytes = 0
         session.semantic_objects[key] = (before, deepcopy(result), time.monotonic(), size)
         session.semantic_bytes += size

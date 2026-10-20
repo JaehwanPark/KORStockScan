@@ -97,9 +97,9 @@ class Reader:
         self.expected_generation=expected_generation;self.source_sha=hashlib.sha256();self.source_size=0
         self.handle=handle;self.buffer='';self.offset=0;self.eof=False
         self.decoder=json.JSONDecoder()
-    def fill(self):
+    def fill(self,size=65536):
         self.buffer=self.buffer[self.offset:];self.offset=0
-        text=self.handle.read(65536)
+        text=self.handle.read(size)
         if self.max_bytes is not None:
             self.read_bytes+=len(text.encode('utf-8'))
             if self.read_bytes>self.max_bytes:
@@ -136,7 +136,11 @@ class Reader:
                 except json.JSONDecodeError:
                     if len(self.buffer)-self.offset>limit:
                         raise ValueError('research_legacy_json_field_partition_required')
-                    if not self.fill():raise ValueError('research_legacy_json_incomplete') from None
+                    remaining=len(self.buffer)-self.offset
+                    # Geometric refill avoids quadratic re-decoding of a large
+                    # single row while keeping the caller's field/source cap.
+                    size=min(max(65536,remaining),max(1,limit-remaining+1))
+                    if not self.fill(size):raise ValueError('research_legacy_json_incomplete') from None
     def skip(self):
         """Drain irrelevant fields from a receipt-verified producer object."""
         self.spaces();start=self.peek()

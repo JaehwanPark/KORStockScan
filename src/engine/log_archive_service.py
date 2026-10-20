@@ -834,7 +834,7 @@ def _read_matching_lines(
 ) -> list[str]:
     if not path.exists() or not path.is_file():
         return []
-    from src.engine.infrastructure.validation_digest_session import ACTIVE, identity
+    from src.engine.infrastructure.validation_digest_session import ACTIVE, MAX_ENTRIES, identity
     import time
     session = ACTIVE.get()
     if session is not None and session.invocation_pid != os.getpid():
@@ -862,7 +862,7 @@ def _read_matching_lines(
                 else:
                     cached_lines = None
     if cached_lines is not None and identity(path) == before:
-        if session.semantic_bytes + cached_bytes > 4 * 1024 * 1024:
+        if session.semantic_bytes + cached_bytes > 4 * 1024 * 1024 or len(session.semantic_objects) >= MAX_ENTRIES:
             session.semantic_objects.clear();session.semantic_bytes = 0
         session.semantic_objects[key] = (before, cached_lines, time.monotonic(), cached_bytes)
         session.semantic_bytes += cached_bytes
