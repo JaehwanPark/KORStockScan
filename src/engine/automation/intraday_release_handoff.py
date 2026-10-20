@@ -366,6 +366,27 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     else:
         raise ValueError('entry_consumer_family_invalid')
     current_path, consumed_path = _paths(day, commit)
+    review = _PREDECESSOR_REVIEW.get()
+    if review is not None and origin == commit and not current_path.exists():
+        # First same-day transition from native PREOPEN has no intraday receipt
+        # yet. The outer verifier rechecks bootstrap, live env and frozen files;
+        # this branch proves only the candidate's exact code compatibility.
+        selection = _read(DATA_DIR / 'runtime/runtime_release_selection.json')
+        receipt = selection.get('actual_pid_receipt') or {}
+        identity = review['identity']
+        if (manifest.get('target_date') != day or selection.get('schema') != 'runtime_release_selection_v1'
+                or selection.get('actual_pid_consumed') is not True
+                or selection.get('release_root') != str(root) or selection.get('git_commit') != commit
+                or receipt.get('pid') != identity['pid']
+                or str(receipt.get('start_ticks')) != identity['start_ticks']
+                or receipt.get('process_cwd') != identity['cwd']
+                or identity['cwd'] != str(root / 'src')):
+            raise ValueError('entry_consumer_native_live_predecessor_invalid')
+        changed = _verify_entry_code_delta(code_root, code_commit, origin, paths, expected)
+        return dict(status='verified_intraday_consumer_repair', target_date=day,
+            policy_sha256=policy_sha, origin_commit=origin, release_commit=code_commit,
+            code_contract_sha256=expected, runtime_code_contract_sha256=actual,
+            changed_consumer_paths=changed, policy_effect='unchanged', candidate_pid_consumed=False)
     if current_path.exists():
         # A policy already consumed by this exact live PID keeps its sealed
         # authority when the editable work checklist changes. No new launch or
@@ -2615,6 +2636,21 @@ REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS = {
 }
 REVIEWED_PRE_ENTRY_OBSERVER_PAIRS = {'src/engine/monitoring/submission_bottleneck_monitor.py': (('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e', 'bed604f22ae510af223e3363ef2b482bcb4a8ce9fa51d8f9574a1fbf8fc7a37c'), ('60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23', 'bed604f22ae510af223e3363ef2b482bcb4a8ce9fa51d8f9574a1fbf8fc7a37c'), ('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18', 'bed604f22ae510af223e3363ef2b482bcb4a8ce9fa51d8f9574a1fbf8fc7a37c'))}
 
+# Native claim/lock journals are synchronization metadata, not vote inputs.
+REVIEWED_VOTE_METADATA_HASHES = {'src/engine/automation/main_stop_postclose.py': 'd20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b'}
+REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_stop_postclose.py',
+        'selector_sha256': REVIEWED_VOTE_METADATA_HASHES['src/engine/automation/main_stop_postclose.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_VOTE_METADATA_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_VOTE_METADATA_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_VOTE_METADATA_PAIRS = {'src/engine/automation/main_stop_postclose.py': (('531f1498332196f0e54d17b76ed8d30295009a5e5ee9363ad9397613f0740ad2', 'd20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b'), ('616a22f236d89de67e18001dbb3564aca6ed5b87e1b26ade3a119a711e1ab057', 'd20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b'), ('c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5', 'd20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2668,7 +2704,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS,
+                         REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_SHARED_POSITION_DEPENDENCY_VARIANTS,
@@ -2751,7 +2788,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_PRE_ENTRY_OBSERVER_PAIRS.get(name, ())
+        if (pair in REVIEWED_VOTE_METADATA_PAIRS.get(name, ())
+                or pair in REVIEWED_PRE_ENTRY_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_INDEXED_VOTE_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_FORWARD_STREAM_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_SHARED_POSITION_PAIRS.get(name, ())

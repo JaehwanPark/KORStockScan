@@ -121,6 +121,14 @@ def operator_sources(root, target):
                            {'KORSTOCKSCAN_'+policy.KEYS[k] for k in policy.TUNABLE}, target)
 
 
+def _vote_watch_metadata(root, path):
+    """Native dedup claims and append locks are not vote research inputs."""
+    import re
+    path = Path(path)
+    return (path.parent == Path(root)/'runtime/holding_path_votes'
+            and re.fullmatch(r'[0-9a-f]{64}(?:\.claims\.jsonl|\.jsonl\.lock)', path.name) is not None)
+
+
 def vote_watch(root, day):
     """Dependency discovery, including previously absent vote/request files.
 
@@ -140,6 +148,7 @@ def vote_watch(root, day):
             with os.scandir(directory) as entries:
                 for entry in entries:
                     if not entry.is_file(follow_symlinks=False):continue
+                    if _vote_watch_metadata(root, entry.path):continue
                     if directory.name!='holding_path_votes':
                         stem=entry.name[len(directory.name)+1:][:10]
                         if not '2026-09-29'<=stem<=day:continue
@@ -170,6 +179,8 @@ def _vote_watch_files(root, day):
                 if not entry.is_file(follow_symlinks=False):
                     continue
                 path = Path(entry.path)
+                if _vote_watch_metadata(root, path):
+                    continue
                 if directory.name != 'holding_path_votes':
                     if not '2026-09-29' <= entry.name[len(directory.name)+1:][:10] <= day:
                         continue
@@ -341,15 +352,9 @@ def verify_vote_watch_binding(root, day, binding, *, future_unconsumed=False):
     if not isinstance(binding, dict):
         raise ValueError('stop_vote_source_set_changed')
     files = _vote_watch_files(root, day)
-    # Locks are synchronization metadata, never native vote inputs. Keep the
-    # old strict watch for publication, but ignore new locks in carried reads.
-    if future_unconsumed:
-        is_lock = lambda name: (Path(name).parent == Path(root)/'runtime/holding_path_votes'
-                                and name.endswith('.jsonl.lock'))
-        files = {k:v for k,v in files.items() if not is_lock(k)}
-        binding = {k:v for k,v in binding.items() if not is_lock(k)}
-    else:
-        is_lock = lambda name: False
+    # Older publishers sealed native synchronization files in the watch. Keep
+    # those original receipts, but validate only actual vote/request inputs.
+    binding = {k:v for k,v in binding.items() if not _vote_watch_metadata(root, k)}
     if set(binding)-set(files) or (not future_unconsumed and set(files) != set(binding)):
         raise ValueError('stop_vote_source_set_changed')
     observed = {}
@@ -364,7 +369,7 @@ def verify_vote_watch_binding(root, day, binding, *, future_unconsumed=False):
         if row is None:
             raise ValueError('stop_vote_source_set_changed')
         if (row['path'] != logical or not logical.endswith('.jsonl')
-                or path.parent.name == 'holding_path_votes'
+                or path.parent == Path(root)/'runtime/holding_path_votes'
                 or str(path) != logical+'.gz'
                 or Path(logical).exists() or Path(logical).is_symlink()
                 or not isinstance(row.get('decoded_bytes'), int)):
@@ -373,7 +378,7 @@ def verify_vote_watch_binding(root, day, binding, *, future_unconsumed=False):
         observed[logical] = identity
         if sha != row.get('decoded_sha256') or size != row['decoded_bytes']:
             raise ValueError('stop_vote_compressed_content_changed')
-    if files != {k:v for k,v in _vote_watch_files(root, day).items() if not is_lock(k)}:
+    if files != _vote_watch_files(root, day):
         raise ValueError('stop_vote_source_set_changed')
     for key, path in files.items():
         current = list(source_stat(path.lstat()))

@@ -57,6 +57,30 @@ def test_vote_watch_ignores_unused_compression_companion_but_detects_source_chan
     assert post.vote_watch(tmp_path,'2026-10-12')!=compressed_only
 
 
+@pytest.mark.parametrize('kind', ['claims', 'lock', 'foreign', 'near_name'])
+@pytest.mark.parametrize('legacy_binding', [False,True])
+def test_vote_watch_tracks_decision_sources_but_not_native_claim_or_lock_metadata(tmp_path,kind,legacy_binding):
+    from src.engine.ai.holding_exit_vote import path_vote_claims_path, path_vote_store_path
+    folder=tmp_path/'runtime/holding_path_votes';folder.mkdir(parents=True)
+    if kind=='claims':path=path_vote_claims_path(tmp_path,'position')
+    elif kind=='lock':path=Path(str(path_vote_store_path(tmp_path,'position'))+'.lock')
+    elif kind=='foreign':path=tmp_path/'ai_decision_requests/ai_decision_requests_2026-10-08.jsonl';path.parent.mkdir()
+    else:path=folder/('a'*63+'.claims.jsonl')
+    watch=post.vote_watch(tmp_path,'2026-10-12');binding=post.capture_vote_watch_binding(tmp_path,'2026-10-12')
+    path.write_text('{"metadata":1}\n')
+    if legacy_binding and kind in ('claims','lock'):
+        binding[str(path)]=dict(path=str(path),stat=list(post.source_stat(path.stat())))
+    path.write_text('{"metadata":2}\n')
+    if kind in ('claims','lock'):
+        assert post.vote_watch(tmp_path,'2026-10-12')==watch
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding,future_unconsumed=True)
+    else:
+        assert post.vote_watch(tmp_path,'2026-10-12')!=watch
+        with pytest.raises(ValueError,match='source_set_changed'):
+            post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+
+
 def test_vote_watch_does_not_hide_gzip_behind_foreign_symlink(tmp_path):
     import gzip
     directory=tmp_path/'ai_decision_payloads';directory.mkdir()
