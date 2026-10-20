@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine import system_metric_sampler
+from src.engine.monitoring import system_metric_sampler
 from src.utils.constants import DATA_DIR
 
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"

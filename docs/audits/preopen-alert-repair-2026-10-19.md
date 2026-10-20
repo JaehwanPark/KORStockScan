@@ -114,3 +114,103 @@ run의 미실행을None으로 구분해 producer가 시작되지 않았으면 de
 
 
 최종 수용:820b422dfe6daa896ec075f79bea0714c81465c9의 active/delay/stop/holding4개 native 검사와20개 scheduler 회귀, compile/diff/parser를 통과하고 ordered 전환을 완료했다.10:30:27 PID625590/start1793131의 실제 정책 소비와 bootstrap5c9cce5f… 보존을 확인했다. 기동 lock 대기가 다시 발생했지만 미실행 producer는 deadline 실패/producer_started=false/publication_attempted=false로 반환했고 현재 full0e77cd99… 보고서를 덮지 않았다.10:32:26 첫 자연 full detector는 artifact WARNING, process_health PASS이며 submission_bottleneck_monitor 오류가 없다. observer는 warning_pending/unmet0이고 스캐너 표본·원천 완전성은 미수용이다. I/O wait6.12%, available4,852.9MiB다. 원 수량·trailing·정책 검증·late cron·tmp 경고와 API_ERROR1개 log warning은 별도 잔여이며 전체GREEN을 주장하지 않는다. 근거: tmp/preopen-alert-repair-20261019/startup-observer-final-verification.json, startup-observer-final-native-health.json, startup-observer-final-native-observation.json.
+
+
+## 10:50 원천 계약 경보 후속 수리
+
+사용자 재지시 범위는 원천 계약 수리·정식 재생성·기존 정책을 보존하는 승인된 배포/재기동이다. 수량 연구가 64KiB 초과 실행 행을 통째로 버려 49340/49343/49345/49347/49351의 정책 결속을 잃는 것을 확인했다. 실행 소비 필드만 bounded projection으로 보존하고 필요한 필드 자체가 크거나 식별 불가하면 원 결손을 유지한다. 이월 보고서의 native manifest/원문 SHA를 모두 검증한 후 필요한 체결 timeline만 복원하며 전체 JSON 디코드를 피한다. 2026-10-15 원문 2,024,840,392B의 SHA c3a479611331319c335cf54b7b95913087fd7214d4f5b3def57bc30ae07c0864, 4개 보유 기록을 20.982초에 검증했다. 청크 중간 들여쓰기의 가짜 root 판독도 회귀로 차단했다.
+
+과거 원장 prefix는 native state fold로 날짜 없는 terminal reconciliation을 원 intent에 연결한다. 이미 봉인된 retired manual disposition은 보존하고, 이후 과거 owner/date 변경·신규 전역 disposition·알 수 없는 intent·증명 불일치는 거부한다. 관련 원천/현재성 431개, handoff/배포/검출기 3,132개 회귀가 통과했다. 새 코드 네 파일은 기존 전체 의존 세대의 정확한 후속으로 함께 고정하며 원 정책 해시를 바꾸지 않는다. 정식 재생성과 새 PID/검출기 수용은 아직 검증 중이다. 실제 비용 null과 원래 custody/체결 결손을 비용 0이나 가짜 완료로 바꾸지 않는다. 근거: tmp/artifact-source-repair-20261019-1050/.
+
+재기동 실패 원인: 원본 보존용 hard link 생성이 내용·inode·mtime을 유지하면서 ctime을 변경해 정지손절 원천 검증에 실패했다. 최초 사전 검증 이후 발생한 보존 작업이므로 그 검증은 실제 기동을 보장하지 못했다. 실패한 99e158af1 전환/시작 보류를 보존했다. 후속 native reader는 monitor snapshot의 ctime만 달라진 경우 전체 원문 SHA/size를 원 봉인 세대와 다시 대조하고 안정된 현재 stat으로만 검증 context를 구성한다. 내용·mtime·inode·경로 변경은 계속 차단한다. 원 정책/PREOPEN/bootstrap/strict/controller 바이트는 수정하지 않는다.
+
+5d6ee3354 복구 전환은 Main PID785358/start2145429의 실제 소비와 complete/PASS를 확인했다. 원 bootstrap SHA는 5c9cce5fd3a2edf5045cc38536ded48addca84b78d1c8412a779a010954ef470로 유지됐다. 같은 ctime 차이를 만난 과거 fact/holding/quantity source reader는 봉인된 source SHA 또는 native 원 manifest 전체 SHA로 원문을 재검증한다. 정상 보관·gzip 경로의 bounded 읽기는 유지한다. 실제09/30·10/15·10/16 fact와 holding 세 날짜 모두 원문 보존 상태에서 검증됐으며 관련484회귀가 통과했다. 활성 stop 정책이 봉인한 과거 snapshot/cost index는 덮어쓰지 않는다. 수량 refresh 자체와 trailing 현재성 연구만 별도 새 세대로 생성하며 비용 원천 복원과 정책 소스 교체는 구분한다.
+
+정식 수량 refresh 27dc2f14...는 원문/비용 index를 유지한 채 완료8건·125초·peak RSS162384KiB·swap0으로 생성됐다. 5개 큰 실행 행 중 49340/49343 정책 결속이 복원됐고 1주3건은 broker 초 단위 체결시각과 그 초의 microsecond 결정 비교로 남아 있었다. 해당 경우 exact plan/attempt의 유일 요청→전송→원 주문 전체 체결·수신 bracket이 있어야만 결정 선행을 증명한다. 원 체결시각은 변경하지 않으며 증명 누락/충돌/다른 주문/다음 초/부분체결은 계속 제외한다. 관련298회귀가 통과했다. 원문 보존 후 trailing의 대용량 소비자에 남은 직접 identity 비교도 native 원문 검증으로 연결한다.
+
+## Trailing 재생성의 대용량 반복 읽기
+
+12:07:09 ac4aa4417/PID910016/start2377635의 정책 소비와12:08:47 ordered 전환 완료를 확인했다. 정식 quantity refresh58c2c41a…/stage5a345fcc…는8개 비용 적격 표본의 정책 결속8/8, carry_parent,107초/최대RSS158556KiB/swap0이다. `initial_quantity_stage_invalid:ValueError`는 없어졌고 실제 비용/수량/terminal 결손5건의 경고는 유지한다. 원 bootstrap5c9cce5f…와 holding e665c46b…는 그대로다.
+
+이후 trailing 전체 재조립26f37c07…는 약6분 동안 수십GB를 읽은 뒤 당일 holding vote append 때문에 `all_scope_assembly_inventory_changed`로 실패했다.12:10:45 I/O wait40.98%를 다시 관측했고 해당 전체 재시도는 중단했다. 미래100–200GB 원천에도 이 방식을 반복하는 것은 허용 가능한 설계가 아니다. 실패 산출물과 원 보고서/정책은 보존했다.
+
+수리는 이미 승인된4ffbfa60…의39MiB 정규화 입력만 별도 세대로 복사하고, 원 추출 코드·모든 필드·원 결손을 보존하며 현재 native replay와 독립 산술을 수행한다. 대용량 원천은 원 full-SHA와 동일 byte epoch에 결속된 native stop/market-weakness/보존 재검증 영수증으로 확인한다. 이는 semantic verdict 캐시가 아니다. 증명이 없거나 바뀐 큰 파일은 전체 읽기로 fallback하지 않고 pending으로 실패한다. 미증명 원천 합계32MiB, 별도 vote 파일 합계32MiB, invocation 전체 hash 읽기32MiB를 먼저 제한한다. 총 프로세스 읽기에는 정규화 트리·원장 검증·코드/metadata가 추가되므로 총I/O32MiB라고 주장하지 않는다.
+
+원 historical byte prefix·native 원장 체인을 보존하면서 원 연구의 실제 참조 owner를 고정한다. 19일의49344/49346 이월 청산처럼16일 완료 연구에 없는 owner의 새 주문은 과거 입력을 무효화하지 않는다. 원 연구 owner 변경·과거 날짜의 추가/변조·새 전역 disposition·잘못된 dateless terminal proof는 계속 거부한다. future vote도 native 세션/요청시각/position 결속이 유효할 때만 과거 inventory에서 분리한다. 원 custody·실주문·정책·보유는 변경하지 않는다.
+
+실제 native 사전검사는6.395초, full-hash17,139,911B, 논리 rchar169,488,726B, 실제 disk read2,187,264B, peakRSS154612KiB였다. 대용량 proof42개를 두 검사에서 재확인했고 원 source-window hash48b3bea8…가 일치했다. 준비/검증은 native 전체 산술 완료, 배포, 현재PID 수용과 다르다. 근거: tmp/artifact-source-repair-20261019-1050/reuse-native-preflight.json 및 reuse-window-probe.log.
+
+후속 사용자 지시에 따라 미래 원천 writer→색인→consumer까지 구현했다. AI payload/trace/prompt/request, pipeline raw와 보유 vote는 기존 append lease 안에서 원 offset/size/SHA·projection SHA·native hash chain을 기록한다. 완료 snapshot은 쓰는 바이트를 해시하고 resident completed 행을 immutable normalized tree와 census/cost/원 snapshot 결속 manifest로 발행한다. Trailing 조립·원 요청 검증·날짜/보유별 vote·압축 뒤 논리 소비와 delay 원천 관측기는 이를 직접 읽는다. 미증명 대형 legacy/gzip은 원본 전체 읽기로 fallback하지 않고 pending이며 explicit migration은최대8MiB/기본1초의 재개 가능한 단계다. 현재 일자 background catch-up은0.5초 turn/회전 namespace, checkpoint는 최대 분당1회다. Native append 경합은 resident 원 바이트의16MiB/128건 제한 재시도로 처리하고, 경합·누락·변조·원천 결손을 complete로 바꾸지 않는다.
+
+호가 관측은 기존0D local cache만 읽는50ms sampler로0·1·3·5초 horizon을 Main 방문 주기에서 분리했다. 원 route/epoch·0.7초 신선도·0.25초 short tolerance와 실제 관측시각을 유지하며 provider/구독/주문을 추가하지 않는다. PASS 후 최종 auxiliary 검증은 현재 정책 불변 뷰를 사용하고 pointer 출구 검사·최신 revocation·원5초 경계는 계속 실행한다. 같은 live bundle의 읽기 전용 warm 중앙값은 기존 복사31.4ms→불변 뷰7.3ms다. 이는 해당 로딩 구간 측정이며 실제 broker 제출/순익 개선 증명이 아니다.
+
+재리뷰에서 기존 pipeline archive 영수증 발행 조건 축소, 날짜 없는 legacy vote consumer, native vote source-generation 비교와 completed cohort 밖 원장 혼입을 수정했다. 대형 raw 재열기 금지·200GiB sparse 입력·회전/압축·future event·native busy 재시도·기존 deadline/안전 가드를 회귀로 확인한다. 최종 exact94-file handoff·색인·writer 검사2521개 PASS, 구현/consumer/회귀 결과와 새 후보·native 생성·PID 수용은 아래 후속 영수증으로 구분한다. 근거: tmp/artifact-source-repair-20261019-1050/index-handoff-regression.log, index-native-final-edges.log, index-review-second-pass.log, index-archive-final-fix.log, policy-view-latency-probe.json.
+
+최종 검증: index-consumer-final-review의1062 PASS 뒤 archive 회귀6건의 원인(기존 pipeline 파일명 계약 축소)을 고쳐53 PASS, writer parent 회귀는 Main 사전 준비를 포함해17 PASS, 최종 handoff/index/fork/busy writer2521 PASS다. 추가 계약 검사는530 PASS/2 FAIL/1 deselected였으며 새 parent 준비 회귀는 수정·재검증했다. 잔여 pipeline `test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage`는 원 ac4 baseline에서도 같은 family ledger 분류 차이로 실패하는 기존 항목이다. legacy gzip fixture1건도 기존 baseline 실패로 제외했다. 이 두 기존 실패를 PASS로 바꾸거나 최신 결과에 합산하지 않는다.36개 변경/신규 Python compile·diff·print-only parser23 owner PASS. 테스트 결과는 중복이 있어 합산하지 않는다.
+
+정식 trailing 재생성은38.106초/20,840scope complete, 원 추출 provenance 보존·현재 전체 산술 검증·semantic verdict 재사용false로 완료됐다. full hash18,824,751B, normalized/검증 포함 rchar535,686,246B/disk126,214,144B/최대RSS182776KiB다. report adfcad8b… 및 currentness7884f735…를 발행했으며 원 정책/holding/PREOPEN은 미변경이다. 최초4c7a71245 후보 preflight는 이전 ac4 Git 세대에 없는 새 selector를 요구하여 Main drain 전에 거부됐다. 후보가 Git에서 소유하는 selector 삭제는 계속 거부하고, 원 Git에도 없는 이전 세대만 historical closure로 검증하도록 고친 뒤2505 PASS다. 실패 로그와 후보를 보존했다. 근거: tmp/artifact-source-repair-20261019-1050/index-trailing-native-generation.log, index-native-preflight.log, index-predecessor-fix-tests.log.
+
+최종 제출 경계 최적화는 frozen auxiliary reader5개를 바꾸지 않도록 `reversal_evaluation_context.validate_submit` 및 두 native 호출부로 이동했다. 원 reader/등록 바인딩/next-session manifest bytes를 유지하고 최신 revocation·5초·독립 전송 guard를 재실행한다. 이전 fa751d3c5용 reader 호환 초안은 미선택 후보의 증거로 보존하며 기존 overlay/manifest를 재발행하지 않는다. 최종 source/handoff/reuse 검사2531 PASS, submit/auxiliary 계약192 PASS다. 별도 auxiliary readiness mock2건은 ac4에서도 같은 missing current-pointer 예외로 실패하여 baseline 증거로 구분한다. 실제 candidate readiness는 정식 현재 pointer와 기존 source/reader 호환 영수증으로 다시 검증한다.
+
+교체/잔존 리뷰(기준ac4aa4417→65854f300): non-test source26파일 +2560/-152, tests11파일 +662/-5, docs3파일 +66/-3이며 파일 이동은 없다. 새3모듈은 automation 안의 단일 source-index I/O, native completed tree, explicit frozen-input replay를 소유한다. 기존 assembler가 native writer/holding 모듈을 다시 import하는 순환과 정책 orchestration을 피하며, 기존 digest/window/storage 및 원 writer lease를 재사용한다. 코드 순증은 최초 기록 색인·회전/압축·bounded migration·검증 경로 추가이며 축약이나 파일 이동을 단순화 성과로 계산하지 않는다. 새 source-only worker2개(index maintenance,50ms local-depth sampler), explicit CLI2개가 추가되고 cron/provider/order entrypoint는 추가하지 않았다.
+
+| 기존 경로 | 최종 처분/소비자 |
+| --- | --- |
+| assembler raw3종·holding 원 요청 scan | consolidated: open_input/read_rows/read_at로 정상 입력의 직접 색인 소비; 원 offset/SHA 유지 |
+| completed snapshot 재직렬화/전체 readback | consolidated: 원 writer resident rows→불변 tree/census manifest, native assembler 소비 |
+| delay 원 raw 반복 cursor | retained: 색인이 pending인 legacy만 기존32MiB fallback; normal 관측은 writer minute/원ID 색인 |
+| Main 방문 기반 quote 관측 | retained: Main fallback과 새 sampler가 동일 registry/claim lock·단일 관측 함수를 공유하며 중복 소비 방지 |
+| 두 native auxiliary submit import | removed: watching·physical submit 모두 reversal_evaluation_context.validate_submit로 교체 |
+| 원 auxiliary_intraday.validate_submit wrapper | deferred: 현재 next-session manifest가 reader 파일 전체를 pin한다. 원 policy/source bytes 보존을 위해 역사 표면만 유지, active 두 dispatch 없음. DirectFamilyPreopenPolicyHandoff가 새 native reader 세대 이관 후 current/prepared consumer pin 부재·binding parity·readiness·기존 wrapper active caller0으로 제거를 수용한다. |
+| small legacy raw/gzip/vote reader | retained: 기존 PREOPEN/역사 증거의 native contract 소비; 큰 미색인 원천은 pending이며 inline 전체 재읽기 금지 |
+
+정확한 caller/authority·교체 표·미해결 baseline 증거는 tmp/artifact-source-repair-20261019-1050/indexed-review.json에 함께 보존했다. 공유 AGENTS.md의 동시 편집은 이 변경에 포함하거나 덮어쓰지 않았다.
+
+## 14:52 Main policy startup selector race
+
+65854f300/PID1243824(start3363415)의 ordered transition은complete/PASS이고14:54:01 observer는 현재 actor의warning_pending/unmet0이었다. 별도로14:52:41 Main의 첫 `prepare`는 `machine_policy_consumer_source_changed`로 실패했다. 변경 가능한 첫8개 source 중 selector만14:52:36.980에 원생성 런처가 같은 root/commit의 actual_pid_consumed·정확한 PID 영수증을 게시했다. 원 policy pointer·reader·handoff·predecessor bytes는 그 시간창에서 바뀌지 않았다. 이 경합이 최초 서명을 무효화한 것을 현재 소유권 영수증/mtime 및 코드 경계로 확인했다. 소비 영수증·프로세스 생존과 이 첫 추가 reader 판정을 분리한다.
+
+수정은 기존 `prepare`의 단일 호출을 최대2회의 전체 native 호출로 교체한다. 최초 consumer-source-changed에서 CONFIGURED/CONSUMED를 버린 뒤 정확히1회 새 source/PID/handoff/selector/auxiliary 검증을 수행하며 원 verdict를 재사용하지 않는다. 이미 열린 provider/submit 평가 뷰 안에서는 재시도하지 않는다. 실제 source hash·pointer·dependency 오류와 두 번째 경합은 그대로 실패한다. 실패한 startup 로그는 보존한다. 새 validator/module/receipt producer 없이 기존 runtime orchestration owner를 확장했고, 원 source-change 검사와 frozen auxiliary reader는 retained다. 현재658 이전 세대와 새 E helper 세대를 별도 exact selector/dependency 표로 유지해 혼합을 거부한다.
+
+재리뷰·추가 회귀·최종2576 PASS와 실제 현재658 predecessor code generation 검증PASS, compile/diff/parser를 확인한다. 새로운 Main 정지 전에 활성/지연/손절/보유·auxiliary readiness를 다시 검증하며 기존 trailing native generation4c8d16f5…는 report code-contract2b52c5c6…가 같으므로 재생성하지 않는다. 근거: tmp/artifact-source-repair-20261019-1050/startup-reader-race-final-gate.log 및 startup-reader-race-predecessor-code.json. 새 PID의 startup verified 및 첫 health는 후속 별도 수용이다.
+
+최종 적용: e200a721684a914cbb8b9b9243bfa0357589802c의 active/delay/stop/holding 및 auxiliary readiness를 모두 통과한 뒤 ordered 전환은15:08:31 complete/PASS다. 실제 Main PID1307428/start3456859, cwd consumer-retry-20261019-e200a7216/src의15:08:02 `current policy reader verified`를 확인했다. 최초 consumer-source-change 오류가 재현되지 않았고15:11:03 자연 full 검사에서 process/log/auth/lock PASS다. 해당 full artifact 검사는 resource contention으로 보류했으므로 전체 artifact PASS를 주장하지 않는다. I/O wait31.67% 경고를 보존한다. 원 bootstrap JSON/ENV·holding·Main/quantity pointer5파일은 baseline과 byte SHA가 모두 같다.
+
+현재 actor observer0d7cb084…는 completed/partial, warning_pending/unmet0이며 스캐너 machine 표본 부재로 full coverage/자연 주문 개선은 미수용이다. 별도 bounded 검증에서 trailing은 generation_current/findings0, quantity는 경제성 원천결손5건의 initial_quantity_economic_source_gap만 남고 stage ValueError는 없다. 최종 코드에 결속한 trailing native 세대4c8d16f5…는20,840scope/52.100초·full-hash18,824,751B·논리 rchar536,368,483B·실제 disk311,156,736B이며 이전38초 세대와 구분한다. 시작 경합 수정은 report code contract를 바꾸지 않아 이를 재생성하지 않았다.
+
+15:10:54 실제 writer 색인에서 AI4종은 prefix complete, pipeline의 기배포 전 원천 이관은471,355,479/801,760,912B로 진행 중이다. 새 append는 producer_end839,982,428B까지 원생성 시점에 색인됐고 invalid는 없다. 전체 과거 prefix가 완료된 것은 아니며 기존 bounded background 경로가 이어서 처리한다. 이는 매번 원천 전체를 다시 읽는 연구 경로가 아니라 최초 legacy migration이다. 이후 natural PASS→submit·short horizon 유효성·전체 원천 관측 수용은 SubmissionMonitorSyncLineage1019, 과거 비용/terminal5건은 InitialQuantityProducerConsumerRepair1010이 원 증거로 수용한다. 계좌/주문/provider/threshold/수동 custody는 변경하지 않았다. 근거: tmp/artifact-source-repair-20261019-1050/consumer-retry-final-verification.json, consumer-retry-first-native-health.json, ordered-consumer-retry.json, consumer-retry-successor-publication.log.
+
+## 15:12 Native history continuous-window contract
+
+15:12:25 경보의 원 observer 세대는15:10:46/현재PID1307428(start3456859)다. Native history4건 중003000·001510은 현재 segment의 observed_seconds0/source_censored1이지만 lifetime FALSE4/41을 유지했다. 원 producer는 last_received−segment_start를 현재 연속 구간 시간으로 기록하고 lifecycle counts는 원천 단절 뒤에도 남긴다. 관측기 공통 no-match 검증의 양수 구간 조건이 이를 history proof에도 적용해 verified2/4, known11, unclassified2로 오분류했고 세 가지 health 오류를 연쇄 발생시켰다. 원천이 실제 stale인 사실과 producer/관측 계약 결함을 구분한다.
+
+기존 history 경로만 유한·비음수 구간을 허용하고 정확한 PID/start/item/route/family/scope/epoch/sequence, 신선한 영수증과 양수 lifecycle known count를 계속 요구한다. 현재 no-match·pending은 기존 양수 구간을 유지한다. 음수·NaN·무한대·bool·잘못된 원천/모수는 거부한다. History는 current_source_coverage/machine_admission/pattern_no_match false이고 원 stale/source-censored 진단도 유지한다. 원 세대의4행으로 격리 재계산하면 verified4/4·known56·unclassified0, warning_pending/unmet0이며 원 source coverage는 그대로다. 운영 보고서를 격리 결과로 덮지 않았다.
+
+재리뷰에서 census는 physical_probe_lease_id로, diagnostics는 시간/attempt로 중복 제거해 같은 시각·종목의 서로 다른 lease가 건수 불일치를 낼 수 있음을 재현했다. 기존 두 dispatch를 _probe_identity로 consolidated하여 PID·symbol·route·lease(legacy는 원 시각/result/reason)를 공유한다. 원 history/no-match/pending verifier와 health predicate는 retained: 현 producer/검출기가 계속 소비하며 diagnostic을 PASS/주문 권한으로 승격하지 않는다. 새 module/validator/producer/worker/CLI/cron은 없고 exact94-file handoff에 새 전체 세대만 추가하며 이전 startup/index 세대는 predecessor/원 PREOPEN 소비를 위해 retained한다. 단계의 소유자는 기존 SubmissionMonitorSyncLineage1019다.
+
+최종 관련3437회귀 PASS, Python compile/diff와 원 세대 격리 replay를 확인했다. 원 policy/bootstrap/strict/controller/quantity/holding bytes와 자동매매의 deadline·호가·수량·provider·hard safety는 변경하지 않는다. 코드 기준은 d2f5de7bb(선택 e200a7216과 source 동일)이며 변경 source2파일 +40/-9, tests2파일 +42/-6이다. 이후 운영 문서3파일에 원인·절차·현재 owner를 기록하고 parser를 검증한다. 과거 immutable release는 보존하며 current source의 중복 identity 구현은 제거했다. 근거: tmp/observer-history-proof-20261019-1512/baseline-history-verification.json, isolated-original-generation-replay.json, final-regression-fixed.log. 배포·새PID·정기 observer/detector는 후속 별도 수용이다.
+
+적용 수용:18e1bba21a1b9f2e7717c65d4837e571b3e9a858 ordered 전환은15:25:12 complete/PASS다. 새 Main PID1355795/start3557005의15:24:48 startup reader verified와 원 bootstrap/holding/Main·quantity pointer5파일 SHA 불변을 확인했다. 정기 producer의15:26:03 현재 actor 관측에 대해15:26:53 자연 full detector가 pending_no_applicable_observations·선언/재계산 일치true·unmet0을 확인했고 해당 observer FAIL은 없다. process/log/auth/lock은PASS, 전체 artifact는 별도 policy-generation 미검증·quantity 경제성 원천결손5건 때문에WARNING이다.
+
+후속 producer5b32e00b…/15:27:04도 같은 현재 actor의partial/warning_pending/unmet0이다. 현재 세대는 적용 가능한 history 표본0이고 stale/noncurrent sentinel로 full coverage 미수용이며, 원4행의 verified4/4 증명은 별도 격리 원세대 replay다. 자연0건을 과거 결손 복원으로 계산하지 않는다. pipeline 최초 legacy migration은cursor=catchup_end801,760,912B로 완료됐고 native 신규 append producer_end841,598,332B·invalid없음을 확인했다.15:27:32 별도1초 I/O wait2.0%와 첫 full의33.37% 경고는 서로 다른 시점의 표본으로 보존한다. 자연 새 history/short horizon/PASS→submit 수용은 기존 owner OPEN을 유지하며 전체 health/매매 성과 GREEN을 주장하지 않는다. 근거: tmp/observer-history-proof-20261019-1512/final-verification.json, first-native-health.json, final-native-observer.json, ordered.json, successor-publication.log.
+
+
+## 16시 역사 수량 제외와 현재 장애 분리
+
+사용자 지시: 증거 부재로 제외한 과거 거래를 매번 현재 장애로 통보하는 동작을 고친다. 원16일 refresh의 native terminal/census는 유효하고 비용 유효8건/정책 bound/carry_parent이지만, detector가 제외 사유4+1건을 무조건 initial_quantity_economic_source_gap으로 변환했다. 원본 사실/PnL null/제외 사유는 정상 소스로 승격하지 않는다. 기존 SELL 재관측의 중복체결 오판은 현재18e1bba21의 sniper_trade_review_report._quantity_sell_receipt_observations에서 이미 수리됐고 동일 payload·원 broker 시각·native custody가 없는 충돌은 계속 제외한다.
+
+기존 scalping.initial_quantity_monitor_projection.publish를 확장해 사용자 지정 과거 ID를 full native stage 검증 뒤 원 stage/report/input_manifest와 각 fact SHA·제외 사유에 결속한다. 오직 과거 complete_source_only/terminal/carry_parent, cost_eligible 표본 존재, bound 정책, report-only 권한에 한해 historical_exclusions_recorded로 분리한다. 원 source_gap·제외 수·null 경제성은 보존하고 현재 semantic findings에서만 제거한다. 새 ID·새 세대·현재 날짜·원천/비용/코드 변경·partial binding·미종료·권한 누출은 기존 경보/실패를 유지한다. 원본 대용량 report/timeout 재생성은 하지 않는다. 동일 stage 재게시도 native 재검증 후 기존 정확한 처리를 유지하며, 기존 monitor publisher lock 안에서 읽어 동시 게시로 처리 기록을 덮어쓰지 않는다.
+
+기준 c309d7eac; 변경 owner는 기존 수량 monitor publisher와 정확한 release handoff 두 곳이다. 기존 무조건 경보 경로는 알려진 정확한 제외 모집단에 한해 대체(consolidated), 새/미확인 결손의 기존 경보 및 full native census는 현재 소비자가 있어 retained, issued_ancestry는 승인 당시 증거 보존 소비자로 retained다. 별도 모듈/producer/CLI/주문 분기/검증 프레임워크를 추가하지 않는다. 과거 immutable release/정책/비용 index/원 보고서는 retained이며 삭제/데이터 복원 승격은 이 변경의 대상이 아니다. 새로운95-file exact handoff는 이전94-file generation을 predecessor 검증용으로 보존한다. 단위 수량·분할·timeout·자동매매 guard·provider·실주문 권한은 변하지 않는다.
+
+코드 검토에서는 기존 본문을 보존하는 trusted-writer 경계, native census의 행별 제외 재산정, hash/date/ID/count 일치, 다음 세대의 미승계, 재게시 잠금 경합을 확인했다. 경합 보완 후 re-review/targeted regression 및 clean candidate 사전 검증을 수행한다. 정확한 적용/PID/자연 detector 결과는 다음 수용 기록으로 구분한다. 근거: tmp/quantity-cost-health-20261019-1530/. 원인 수리의 다음 자연 완료 비용 표본은 기존 InitialQuantityProducerConsumerRepair1010가 계속 소유한다.
+
+보완 뒤 최종 관련 회귀3,028 PASS, Python compile/diff와 print-only parser23 current owner를 확인했다. 기준 대비 source2파일 +121/-7, tests2파일 +116/-3, docs3파일 +14/-0이며 새 기능은 기존 native publisher API의 선택적 역사 제외 처리 하나다. 외부 sync·새 주문/provider/threshold 변경은 수행하지 않는다. 현재 Main1355795/start3557005와 SELL 원인 수리의 실행 소스 SHA는 cause-and-runtime-baseline.json에 고정했다.
+
+적용 수용: e7f4e2e8fb8c76ef29f389cd1274fa0bbff22597 ordered 전환은16:15:40 complete/PASS다. 새 Main1495185/start3859414의 current policy reader verified와 원 bootstrap env/manifest·holding·Main/quantity pointer5파일 SHA 불변을 확인했다. native 현재 observer는동일 actor로 게시됐고,16:17:04 수동 full 검사 및16:18:50 자연 full 검사에서 initial_quantity alert0건을 확인했다. 원 source_gap 이유4+1, 과거 ID49013/49266/49268/49293/49294, 비용 유효8건, 실제 PnL null은 보존되어 경제성 복원 완료를 주장하지 않는다. 후속 현재 수집/계약 실패와 다른 정책세대 검증 경고는 별도이며, 전체 건강 GREEN/자연 제출/수익 개선으로 확대하지 않는다.
+
+수량 proof 게시에는 기존 main_trailing_source_reuse.proof_session의 검증된 byte/identity proof를 재사용했다. 첫 무제한 native 사전 검증30.197초/full hash9,794,862,074B는 원 기록으로 보존했다. bounded 재검증은1.6초/추가 full hash60,106B로 같은 native 의미 검증을 통과했고 실제 게시1.522초, 논리 rchar75,173,134B·disk read23,756,800B다. full-hash60KB를 전체 I/O라고 부르지 않는다. 과거 원문/보고서/비용 index 재생성 없이42개 native byte proof를 현재 신원에 대조했으며 unproved32MiB 누적 예산을 유지했다. ordered bootstrap의 기존 첫 cold 검증은 별도 I/O이며 starting bootstrap 재검증은 full hash0/기존9,763,653,316B 재사용이다. 전환 중16:17 resource 검사35.06%와 resource contention으로 보류한 원 정기검사는 보존하고,16:18:50 자연검사 resource PASS 및16:19 sampler8.78% 회복을 별도로 기록했다.
+
+검토 기록의 docs 증감은 최종 기능 commit 기준3파일 +16/-0으로 정정한다. 위 적용 수용은 문서 후속 변경이며 실행 source는 e7f4e2e8f 그대로다. 근거: final-verification.json, first-natural-health.json, quantity-consumer.json, quantity-publication.json, native-preflight.json 및 원 failed preflight 로그를 포함하는 tmp/quantity-cost-health-20261019-1530/. 이번 수리의 미해결 코드 finding0, 다음 자연 완료 비용/행 원천 검증 owner InitialQuantityProducerConsumerRepair1010는 OPEN 유지다.
+
+후속 자연 확인:16:20 cron의 잠금 경합 보류는 성공으로 세지 않는다.16:21:59 현재 PID 자연 full에서 initial_quantity alert0, 현재 observer actor1495185/3859414, resource PASS를 재확인했다. 별도 policy_generation4개 family/현재 owner 검증 WARNING은 남아 있다. latest-natural-health.json/summary가 최종 근거다.

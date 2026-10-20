@@ -1,4 +1,4 @@
-from src.engine.ofi_ai_smoothing import (
+from src.engine.lifecycle.ofi_ai_smoothing import (
     INSUFFICIENT,
     NEUTRAL,
     OBSERVER_UNHEALTHY,

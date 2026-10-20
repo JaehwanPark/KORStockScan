@@ -78,6 +78,8 @@ New observation metrics consumed by the automation chain must declare `metric_ro
 
 ### 3.2 Automation-Chain Decision Principles
 
+Error diagnosis, causal repair, bounded recovery and recurrence acceptance follow [AGENTS §6 Error Resolution Procedure](../AGENTS.md#6-error-resolution-procedure). Stage-specific execution authority and closure remain with the intraday/postclose instructions and release-routing contract; alert silence is not repair acceptance.
+
 Postclose closure contract: final sources -> control tower -> final checklist -> verifier `--require-summary-handoff` -> controller DONE. Validate canonical byte hashes and the successful strict verifier command, not a stale PASS artifact after a failed command/recovery. Exclude verifier/controller self hashes from summary inputs to avoid cycles. After midnight retain the original source date; an unchanged cleanup/detector receipt may be reused only after read-only predecessor checks establish that the repaired scope did not invalidate it, with its original as-of time disclosed.
 
 Economic attribution contract: unreconciled/missing headline PnL remains null with a reason; matching counts alone do not prove exact costs. Validated source-only `avg_down_route_arbitration_observed` v2 rows are CF route observations, not actual ADD/NO_ADD transitions. Recovered historical realized PnL is not incremental profit from a repair. Irrecoverable historical source loss stays excluded; collect the next exact-date evidence rather than fabricate rows or repeat an unchanged replay.

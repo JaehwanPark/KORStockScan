@@ -1,4 +1,5 @@
-005930 # machine_owner_scope samsung_electronics
 042660 # machine_owner_scope hanwha_widget_and_episode_independent_owners
 475150 # machine_owner_scope sk_eternix_low_price_two_leg_owner
-005930 # auto_hard_stop_handoff source=preset_hard_stop_after_quote_confirmation exit=scalp_preset_hard_stop_pct profit=-1.47% peak=-0.23%
+005930 # auto_hard_stop_handoff source=preset_hard_stop_after_quote_confirmation exit=scalp_preset_hard_stop_pct profit=-1.58% peak=+0.67%
+196170 # auto_hard_stop_handoff source=preset_hard_stop_after_quote_confirmation exit=scalp_preset_hard_stop_pct profit=-1.48% peak=+0.19%
+403870 # auto_hard_stop_handoff source=preset_hard_stop_after_quote_confirmation exit=scalp_preset_hard_stop_pct profit=-1.40% peak=+0.16%

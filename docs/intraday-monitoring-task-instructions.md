@@ -222,14 +222,9 @@ process 이름이나 exit 0만으로 정상이라고 하지 않는다. `owner �
 
 ### 4.3 장중 수집 결손 즉시 대응
 
-실제 signal/attempt/episode가 있는데 필요한 원천이나 downstream join이 끊겼으면 장후까지 기다리지 않고 다음 순서로 처리한다.
+실제 signal/attempt/episode가 있는데 필요한 원천이나 downstream join이 끊겼으면 장후까지 기다리지 않고 [공통 에러처리 절차](../AGENTS.md#6-error-resolution-procedure)를 §7의 허용 범위에서 적용한다.
 
-1. target date/as-of, owner/symbol/venue/session, promotion·attempt·episode ID, PID/code/config, 마지막 정상 receipt와 최초 실패를 고정한다.
-2. `대상 선정/REG → REST/WS 수신 → callback → queue/worker → writer → parser/projection → exact join → intended consumer`에서 최초 단절을 찾는다.
-3. 원천 미수집, parser/schema·identity 유실, consumer/handoff 결함, 외부 제한·권한 결손을 분리한다.
-4. 허용된 source-only 결함은 최소 수정하고 review/fix/re-review와 targeted validation을 finding 0까지 반복한다.
-5. 실제 process 반영·재기동·live 설정 변경은 별도 권한을 확인한다. 권한이 없으면 `code_review_closed / deployment_pending`으로 분리한다.
-6. 새 자연 receipt가 같은 identity/hash로 저장되고 직접 consumer까지 도달했는지 확인한다. 과거 미수집 tick이나 체결시각은 합성하지 않는다.
+장중 추적 경로는 `대상 선정/REG → REST/WS 수신 → callback → queue/worker → writer → parser/projection → exact join → intended consumer`다. target date/as-of, symbol/venue/session, promotion·attempt·episode ID와 PID/code/config를 결속해 최초 단절을 재현하고, 수정된 생산 경로에서 새 자연 receipt가 같은 identity/hash로 직접 consumer까지 전달되는지 확인한다. 과거 미수집 tick이나 체결시각은 합성하지 않는다. 실제 process 반영 권한이나 자연 receipt가 없으면 코드 수리와 배포·자연 수용 대기를 분리한다.
 
 Kiwoom request/parser/FID/REG·재연결을 수정할 때는 [공식 API reference gate](./kiwoom-api-data-contract.md)를 먼저 적용한다. 호출량·retry·동시성 상향, source-only budget 침해나 safety 완화로 복구하지 않는다.
 
@@ -270,9 +265,7 @@ gate의 과도함은 action count가 아니라 성숙 outcome으로 판정한다
 
 ## 7. 보완·권한·검증 원칙
 
-결함은 다음 루프로 닫는다.
-
-`최초 원인 → 단일 owner·권한 → 최소 보완 → self review → 수정 → 재리뷰 → targeted validation → 직접 consumer → 배포/PID → 자연·경제성`
+[AGENTS §6](../AGENTS.md#6-error-resolution-procedure)이 공통 원인 수리·재발 판정 절차를 소유한다. 아래는 장중 수리에 적용되는 권한과 검증 범위다. 경보만 사라진 상태나 과거 결손 제외를 원인 코드 수리 완료로 판정하지 않는다.
 
 코드·문서 변경에는 `$korstockscan-review-gate`를 적용한다. Python은 관련 pytest와 compile, shell은 `bash -n`과 wrapper 계약, 문서는 owner·link·authority와 print-only parser, 모든 변경은 `git diff --check`를 확인한다.
 

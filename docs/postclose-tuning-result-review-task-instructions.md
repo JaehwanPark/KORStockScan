@@ -241,6 +241,8 @@ Source input allowed, decision CF input allowed, operational terminal reconciled
 
 ## 6. 실패 대응
 
+[AGENTS §6 공통 에러처리 절차](../AGENTS.md#6-error-resolution-procedure)에 따라 최초 계약 위반과 재현 근거를 확인하고, 원인 수리·과거 결손 처분·현재 consumer 검증을 구분한다. 이 절은 장후의 권한·재생성 순서·terminal closure를 소유한다. 동일 원인으로 다시 실패하면 기존 owner의 원인 가설과 Acceptance를 재검토하며, 같은 전체 실행을 반복하거나 이전 PASS로 완료 처리하지 않는다.
+
 읽기 전용 점검에서는 최초 영향 producer, affected row/window/scope, downstream 소비·승격 영향, blocker owner/artifact, 필요한 조치와 closure test를 기록한다. identifiable bad row/window는 제외하는 계약이 기본이며 전체 block은 invalid/missing preflight·격리 실패·특정 불가능한 high-volume contract loss일 때만 인정한다.
 
 수리·재실행이 이미 승인된 범위이면 `$korstockscan-review-gate`의 구현→review→finding 수리→re-review→targeted validation을 반복한다. 검증 후 **최초 영향 producer→직접 downstream→intended last consumer**만 같은 대상일/hash로 최소 재생성한다. stale해진 EV/summary/gap/lineage→tower→checklist→strict verifier `--require-summary-handoff`→controller/finalization을 해당 범위로 닫고, 이전 PASS로 최신 실패를 가리지 않는다.
