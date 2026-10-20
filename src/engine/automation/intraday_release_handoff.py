@@ -3027,6 +3027,31 @@ REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS = {
 for (_trigger, _trigger_sha), _variant in REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS.items():
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
+# The no-notification observer reserves publication time only. Preserve every
+# issued predecessor profile and bind the complete reviewed successor inputs.
+REVIEWED_STARTUP_BUDGET_HASHES = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': '9b6066255a77a38bd869bfcf2e3aacd4814bf7742f306428d04ed1f1741908d1',
+}
+REVIEWED_STARTUP_BUDGET_PAIRS = {
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        ('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18',
+         '9b6066255a77a38bd869bfcf2e3aacd4814bf7742f306428d04ed1f1741908d1'),),
+}
+REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': REVIEWED_STARTUP_BUDGET_HASHES['src/engine/monitoring/submission_bottleneck_monitor.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_STARTUP_BUDGET_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_STARTUP_BUDGET_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3089,7 +3114,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS,
+                         REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS,
                          REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS,
                          REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS,
                          REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS,
@@ -3195,7 +3221,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_ROLE_LATENCY_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_STARTUP_BUDGET_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_ROLE_LATENCY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_CLEANUP_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_VOTE_METADATA_PAIRS.get(name, ())
                 or pair in REVIEWED_PRE_ENTRY_OBSERVER_PAIRS.get(name, ())

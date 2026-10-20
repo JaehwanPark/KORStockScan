@@ -5527,6 +5527,12 @@ def main(argv=None):
                     semantic_status="unobservable", notification_status="not_attempted",
                     publication={}, status="unobservable", blocker=None)
     deadline = started + args.budget_seconds
+    # Notification can consume twelve seconds; startup never requests it.
+    # Keep publication time without reserving work that this invocation omits.
+    # The caller's total deadline and owned-child cleanup remain unchanged.
+    computation_reserve = 15 if args.notify else 5
+    terminal["execution_budget"] = dict(total_seconds=args.budget_seconds,
+        computation_reserve_seconds=computation_reserve, notification_requested=args.notify)
     result = None
     session = None
     try:
@@ -5543,6 +5549,7 @@ def main(argv=None):
             result["run_id"] = run_id
             result["execution_mode"] = ('delay_source_only' if args.delay_source_only else
                                         'source_only' if args.source_only else 'full')
+            result["execution_budget"] = dict(terminal["execution_budget"])
             deferred = False
             stages = [("pre_submit_delay_source_semantics", attach_pre_submit_delay_source_semantics,
                        lambda: pre_submit_delay_source_semantics(PROJECT_ROOT / "data", result["as_of"],
@@ -5565,7 +5572,7 @@ def main(argv=None):
                                         role="observer", generation=code_generation())
             for name, attach, read in stages:
                 try:
-                    with computation_budget(deadline-15):
+                    with computation_budget(deadline-computation_reserve):
                         with (session.activate() if session and name in {
                                 'entry_execution_tuning_semantics', 'machine_semantics'} else nullcontext()):
                             with _health_actor_scope(observer_generation):

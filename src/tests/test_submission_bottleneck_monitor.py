@@ -4050,6 +4050,61 @@ def test_main_defers_without_overwriting_when_selection_changes_before_publicati
     assert not list((root / "data/report/buy_funnel_sentinel").glob("*.json"))
 
 
+@pytest.mark.parametrize("with_notify,costs,expected,reserve", [
+    (False, (4, 5, 3), 0, 5),
+    (True, (4, 5, 3), 75, 15),
+    (False, (4, 9, 9), 75, 5),
+])
+def test_cli_reserves_only_requested_notification_work(
+        tmp_path, monkeypatch, capsys, with_notify, costs, expected, reserve):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from src.engine.monitoring import observation_budget
+
+    root, _, _, _ = _observer_selection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", root)
+    clock = [0.0]
+    monkeypatch.setattr(monitor, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    limits = []
+
+    @contextmanager
+    def computation_budget(deadline):
+        limits.append(deadline)
+        if clock[0] >= deadline:
+            raise observation_budget.ObservationDeadline("validation_deferred:deadline")
+        yield
+        if clock[0] > deadline:
+            raise observation_budget.ObservationDeadline("validation_deferred:deadline")
+
+    monkeypatch.setattr(observation_budget, "computation_budget", computation_budget)
+    for name, cost in zip(("source_gap_semantics", "entry_execution_tuning_semantics",
+                           "machine_semantics"), costs):
+        def read(*args, _cost=cost, **kwargs):
+            clock[0] += _cost
+            return dict(status="unobservable", issues={})
+        monkeypatch.setattr(monitor, name, read)
+        monkeypatch.setattr(monitor, "attach_" + name,
+                            lambda result, value, _name=name: result.update({_name: value}))
+    monkeypatch.setattr(monitor, "notify", lambda *args: None)
+    raw = root / "source.json"
+    raw.write_text("{}")
+    args = ["--report", str(raw), "--budget-seconds", "25"]
+    if with_notify:
+        args.append("--notify")
+    assert monitor.main(args) == expected
+    terminal = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert limits == [25 - reserve] * 3
+    assert terminal["execution_status"] == ("completed" if expected == 0 else "deferred")
+    report = json.loads((root / "data/report/buy_funnel_sentinel" /
+                         "submission_bottleneck_monitor_latest.json").read_text())
+    assert report["execution_status"] == terminal["execution_status"]
+    assert report["execution_budget"] == terminal["execution_budget"] == dict(
+        total_seconds=25, computation_reserve_seconds=reserve,
+        notification_requested=with_notify)
+    assert report["semantic_status"] == "partial"
+    assert clock[0] <= 25
+
+
 def test_observer_publication_lease_serializes_existing_selector_writer(tmp_path, monkeypatch):
     root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
     lock_path = path.with_suffix(".lock")
