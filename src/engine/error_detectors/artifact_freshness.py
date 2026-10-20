@@ -3576,6 +3576,17 @@ class ArtifactFreshnessDetector(BaseDetector):
                 artifact_day = today
                 artifact_now_total = now_total
                 artifact_past_source_day = past_source_day
+                artifact_trading_day = trading_day
+                if aid == observer_id and past_source_day:
+                    # A closed postclose source date cannot own live PID
+                    # observation. Validate today's producer after consumption;
+                    # all frozen research/controller inputs retain source_day.
+                    artifact_day = sweep_day
+                    artifact_past_source_day = False
+                    artifact_now_total = now_h * 60 + now_m
+                    artifact_trading_day = is_krx_trading_day(date.fromisoformat(sweep_day))
+                    details[f'{aid}_historical_source_date'] = today
+                    details[f'{aid}_live_observation_date'] = sweep_day
                 if aid == "runtime_policy_bootstrap" and past_source_day:
                     prepared = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "")
                     try:
@@ -3603,7 +3614,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                 ws = artifact.get("window_start")
                 we = artifact.get("window_end")
 
-                if trading_day_only and not trading_day:
+                if trading_day_only and not artifact_trading_day:
                     details[f"{aid}_status"] = "skip_non_trading_day"
                     continue
 
@@ -3997,7 +4008,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                     break
                 now_h, now_m = _kst_time_tuple(now_dt)
                 now_total = 24 * 60 if past_source_day else now_h * 60 + now_m
-                observer_path = PROJECT_ROOT / observer_artifact['path_template'].replace('{date}', today)
+                observer_path = PROJECT_ROOT / observer_artifact['path_template'].replace('{date}', sweep_day if past_source_day else today)
                 before = _submission_observer_input_identity(observer_path, PROJECT_ROOT)
                 check_registered_artifacts([observer_artifact])
                 after = _submission_observer_input_identity(observer_path, PROJECT_ROOT)

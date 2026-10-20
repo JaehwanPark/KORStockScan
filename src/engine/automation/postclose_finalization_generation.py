@@ -350,7 +350,50 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
     segment = log[log.rfind(start):] if start in log else ''
     lines = segment.splitlines()
     failure = f'[FAIL] postclose_finalization target_date={target_date} reason=final_detector_failed'
+    handoff = f'[INFO] postclose_finalization target_date={target_date} cleanup=done detector_handoff=started'
+    latest_started = lines[0] if lines else ''
+    anchor = frozen
+    native_prefix = None
+    prior_generation = None
+    reused = [line.split(' prefix_reused=', 1)[1] for line in lines
+              if line.startswith(f'[INFO] postclose_finalization target_date={target_date} prefix_reused=')]
+    if reused:
+        # A failed detector-only retry does not invalidate its original native
+        # controller/cleanup. Revalidate the immutable anchor and retain both
+        # failed attempts; never rerun producers or manufacture terminal lines.
+        if len(reused) != 1 or not lines or lines[-1] != failure or handoff not in lines:
+            raise FinalizationGenerationError('retry_suffix_chain_invalid')
+        reference = json.loads(reused[0])
+        base = data / 'report/postclose_finalization_recovery' / target_date
+        def preserved(ref, filename):
+            path = Path(ref['path'])
+            if (path.name != filename or path.parent.parent != base
+                    or not re.fullmatch('[0-9a-f]{32}', path.parent.name)
+                    or path.resolve() != path or path.parent.is_symlink()):
+                raise FinalizationGenerationError('retry_preserved_path_invalid')
+            raw = stable_read(path)
+            if hashlib.sha256(raw).hexdigest() != ref.get('sha256'):
+                raise FinalizationGenerationError('retry_preserved_hash_changed')
+            return raw
+        prior = json.loads(preserved(dict(path=reference['receipt_path'],
+            sha256=reference['receipt_sha256']), 'receipt.json'))
+        if (prior.get('schema') != 'postclose_detector_suffix_recovery_v1'
+                or prior.get('source_date') != target_date or prior.get('runtime_effect') is not False
+                or prior.get('allowed_runtime_apply') is not False or prior.get('actual_pid_consumed') is not False):
+            raise FinalizationGenerationError('retry_preserved_receipt_invalid')
+        native_prefix = prior.get('native_prefix') or prior['originals']
+        anchor = {name:preserved(native_prefix[name], name+'.original') for name in paths}
+        if (not frozen['finalization_log'].startswith(anchor['finalization_log'])
+                or frozen['cleanup_log'] != anchor['cleanup_log']):
+            raise FinalizationGenerationError('retry_native_prefix_changed')
+        prior_generation = prior['generation']
+        if (reference.get('chain_sha256') != prior_generation.get('chain_sha256')
+                or reference.get('snapshot_sha256') != prior_generation.get('snapshot_sha256')):
+            raise FinalizationGenerationError('retry_preserved_generation_invalid')
+        original_log = anchor['finalization_log'].decode()
+        lines = original_log[original_log.rfind(start):].splitlines() if start in original_log else []
     if (not lines or lines[-1] != failure or 'recovery=true' not in lines[0]
+            or 'recovery=true' not in latest_started
             or '[INFO] postclose_finalization controller_terminal_receipt={"issues": [], "status": "pass"}' not in lines
             or f'[INFO] postclose_finalization cleanup_done target_date={target_date}' not in lines
             or f'[INFO] postclose_finalization target_date={target_date} cleanup=done detector_handoff=started' not in lines):
@@ -372,8 +415,11 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
     started = stamp(lines[0], 'started_at')
     cleanup_started = stamp(cleanup[cleanup_starts[-1]], 'started_at')
     cleanup_finished = stamp(terminal, 'finished_at')
-    failed = json.loads(frozen['failed_detector'])
+    failed = json.loads(anchor['failed_detector'])
     failed_at = datetime.fromisoformat(failed['timestamp'])
+    latest_failed = json.loads(frozen['failed_detector'])
+    latest_failed_at = datetime.fromisoformat(latest_failed['timestamp'])
+    retry_started = stamp(latest_started, 'started_at')
     controller_path = data / 'report/postclose_done_controller' / f'postclose_done_controller_{target_date}.json'
     controller = _load(controller_path, 'retry_controller_missing')
     generated = datetime.fromisoformat(controller['generated_at'])
@@ -381,9 +427,15 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
             or failed.get('postclose_recovery') is not True or failed.get('summary_severity') != 'fail'
             or failed_at.tzinfo is None or generated.tzinfo is None
             or not started <= generated <= cleanup_started <= cleanup_finished <= failed_at
-            or failed_at.timestamp() > paths['finalization_log'].stat().st_mtime + 1):
+            or latest_failed.get('mode') != 'full' or latest_failed.get('target_date') != target_date
+            or latest_failed.get('postclose_recovery') is not True or latest_failed.get('summary_severity') != 'fail'
+            or latest_failed_at.tzinfo is None or not retry_started <= latest_failed_at
+            or native_prefix is not None and not failed_at <= retry_started
+            or latest_failed_at.timestamp() > paths['finalization_log'].stat().st_mtime + 1):
         raise FinalizationGenerationError('retry_prefix_clock_or_detector_invalid')
     generation = capture_finalization_generation(project, target_date)
+    if prior_generation is not None and prior_generation != generation:
+        raise FinalizationGenerationError('retry_native_generation_changed')
     issues = done_terminal_receipt_issues(controller_path, target_date, started_after_ns=0,
                                          generation_only=True)
     if issues:
@@ -403,6 +455,8 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
         selected_release_root=str(selected), selected_release_commit=commit,
         original_started_at=started.isoformat(), cleanup_finished_at=cleanup_finished.isoformat(),
         failed_detector_at=failed_at.isoformat(), originals=originals, generation=generation,
+        latest_failed_detector_at=latest_failed_at.isoformat(),
+        native_prefix=native_prefix or originals,
         controller_sha256=_sha(controller_path), recovery_code_sha256=_sha(Path(__file__)),
         runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False)
     destination = folder / 'receipt.json'

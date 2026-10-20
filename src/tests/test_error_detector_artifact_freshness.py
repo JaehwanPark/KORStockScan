@@ -3897,11 +3897,41 @@ def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(t
     assert path.read_bytes()==before and report['status']=='unobservable'
     assert report['entry_execution_tuning_semantics']['entry_split']['status']=='source_gap'
     assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+
     state={}
     prior=DetectionResult(detector_id='artifact_freshness',category='artifact',severity='fail',summary='prior genuine failure')
     assert len(list(iter_daemon_alert_events([prior],state,target_date='2026-10-14')))==1
     assert list(iter_daemon_alert_events([result],state,target_date='2026-10-14'))==[]
     assert 'artifact_freshness' in state
+
+@pytest.mark.parametrize('damage',[None,'missing_current','stale_current','wrong_pid','nontrading'])
+def test_closed_source_final_detector_uses_current_pid_observer_without_historical_fallback(tmp_path,monkeypatch,damage):
+    mod,root,now,path,report,sp,selection,seal=_quiet_current_observer_fixture(tmp_path,monkeypatch)
+    historical=path.with_name('submission_bottleneck_monitor_2026-10-13.json')
+    historical.write_text('{old pre-start report is not current evidence}')
+    if damage=='missing_current':path.unlink()
+    elif damage=='stale_current':os.utime(path,(now.timestamp()-4000,)*2)
+    elif damage=='wrong_pid':
+        selection['actual_pid_receipt']['pid']+=1;sp.write_text(json.dumps(selection))
+    elif damage=='nontrading':
+        monkeypatch.setattr(mod,'is_krx_trading_day',lambda day:day.isoformat()!='2026-10-14')
+    original=mod._observer_small_object;read_paths=[]
+    def read(candidate,**kwargs):
+        read_paths.append(Path(candidate));return original(candidate,**kwargs)
+    monkeypatch.setattr(mod,'_observer_small_object',read)
+    detector=mod.ArtifactFreshnessDetector(dry_run=True);detector.postclose_source_date='2026-10-13'
+    result=detector.check()
+    assert result.details['submission_bottleneck_monitor_historical_source_date']=='2026-10-13'
+    assert result.details['submission_bottleneck_monitor_live_observation_date']=='2026-10-14'
+    assert historical not in read_paths
+    assert historical.read_text()=='{old pre-start report is not current evidence}'
+    if damage=='nontrading':assert result.details['submission_bottleneck_monitor_status']=='skip_non_trading_day'
+    else:
+        assert result.severity==('warning' if damage is None else 'fail'),result.summary
+        if damage is None:
+            assert result.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+            assert result.details['submission_bottleneck_monitor_current_observation_verified'] is False
+
 
 
 @pytest.mark.parametrize('wrong_actor', [False, True])
@@ -4154,9 +4184,10 @@ def test_closed_postclose_observer_preserves_gaps_without_current_generation_cla
     detector=mod.ArtifactFreshnessDetector(dry_run=True)
     detector.postclose_source_date='2026-10-14'
     result=detector.check()
-    assert result.severity=='warning'
-    assert result.details['submission_bottleneck_monitor_status']=='historical_observation_only'
-    assert result.details['submission_bottleneck_monitor_historical_evidence']==assessment
+    assert result.severity=='fail'
+    assert result.details['submission_bottleneck_monitor_live_observation_date']=='2026-10-15'
+    assert result.details['submission_bottleneck_monitor_status']=='fail'
+    assert 'submission_bottleneck_monitor_historical_evidence' not in result.details
 
 
 @pytest.mark.parametrize("which", ["report", "selector", "transition"])
@@ -4339,7 +4370,8 @@ def test_observer_reads_publication_after_slow_semantics_with_current_clock(tmp_
 
 @pytest.mark.parametrize('replacement', ['valid', 'invalid_execution', 'invalid_projection', 'stale',
     'future', 'missing', 'symlink', 'oversize', 'wrong_selector', 'repeated_publication'])
-def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkeypatch, replacement):
+@pytest.mark.parametrize('closed_source',[False,True])
+def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkeypatch, replacement,closed_source):
     mod, root, now, path, report, selection_path, selection, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
     report['execution_status'] = 'failed'
     seal()
@@ -4375,7 +4407,9 @@ def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkey
                 selection_path.write_text(json.dumps({**selection, 'actual_pid_consumed': False}))
         return result
     monkeypatch.setattr(detector, '_validate_json_status', staticmethod(validate))
-    outcome = detector(dry_run=True).check()
+    instance=detector(dry_run=True)
+    if closed_source:instance.postclose_source_date='2026-10-13'
+    outcome = instance.check()
     assert outcome.severity == ('warning' if replacement == 'valid' else 'fail'), outcome.summary
     boundary = outcome.details['submission_bottleneck_monitor_publication_recheck']
     assert len(boundary['attempts']) == 2

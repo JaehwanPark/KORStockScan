@@ -57,6 +57,45 @@ def test_detector_suffix_retry_preserves_native_prefix_and_failure(tmp_path,monk
     assert Path(receipt['originals']['failed_detector']['path']).read_bytes()==before[failed]
 
 
+@pytest.mark.parametrize('defect',[None,'legacy_parent','anchor','cleanup','receipt_hash','generation','clock','not_failure'])
+def test_failed_suffix_can_retry_only_with_unchanged_original_native_anchor(tmp_path,monkeypatch,defect):
+    log,failed,_=_retry_fixture(tmp_path,monkeypatch)
+    first=capture_detector_retry_prefix(tmp_path,DAY)
+    first_receipt=json.loads(Path(first['receipt_path']).read_bytes())
+    if defect=='legacy_parent':
+        first_receipt.pop('native_prefix')
+        _write_json(Path(first['receipt_path']),first_receipt)
+        first['receipt_sha256']=hashlib.sha256(Path(first['receipt_path']).read_bytes()).hexdigest()
+    final=log/'postclose_finalization_cron.log'
+    with final.open('a')as out:
+        out.write(f'[START] postclose_finalization target_date={DAY} recovery=true started_at=2026-09-29T07:05:00+0900\n'
+            f'[INFO] postclose_finalization target_date={DAY} prefix_reused={json.dumps(first)}\n'
+            f'[INFO] postclose_finalization target_date={DAY} cleanup=done detector_handoff=started\n'
+            f'[FAIL] postclose_finalization target_date={DAY} reason=final_detector_failed\n')
+    body=json.loads(failed.read_bytes());body['timestamp']='2026-09-29T07:06:00+09:00';_write_json(failed,body)
+    if defect=='anchor':Path(first_receipt['native_prefix']['finalization_log']['path']).write_text('changed')
+    elif defect=='cleanup':(log/'log_rotation_cleanup_cron.log').write_text('changed')
+    elif defect=='receipt_hash':Path(first['receipt_path']).write_text('{}')
+    elif defect=='generation':
+        p=tmp_path/'data/report/postclose_done_controller'/f'postclose_done_controller_{DAY}.json'
+        d=json.loads(p.read_bytes());d['generated_at']='2026-09-29T07:01:01+09:00';_write_json(p,d)
+    elif defect=='clock':body['timestamp']='2026-09-29T07:04:30+09:00';_write_json(failed,body)
+    elif defect=='not_failure':body['summary_severity']='pass';_write_json(failed,body)
+    before={p:p.read_bytes()for p in (final,log/'log_rotation_cleanup_cron.log',failed)}
+    if defect not in (None,'legacy_parent'):
+        with pytest.raises((FinalizationGenerationError,KeyError,ValueError)):
+            capture_detector_retry_prefix(tmp_path,DAY)
+    else:
+        second=capture_detector_retry_prefix(tmp_path,DAY)
+        receipt=json.loads(Path(second['receipt_path']).read_bytes())
+        assert receipt['native_prefix']==first_receipt.get('native_prefix',first_receipt['originals'])
+        assert receipt['generation']==first_receipt['generation']
+        assert receipt['failed_detector_at']=='2026-09-29T07:04:00+09:00'
+        assert receipt['latest_failed_detector_at']=='2026-09-29T07:06:00+09:00'
+        assert Path(receipt['originals']['failed_detector']['path']).read_bytes()==before[failed]
+    assert all(p.read_bytes()==raw for p,raw in before.items())
+
+
 @pytest.mark.parametrize('defect',['cleanup_failed','new_cleanup','new_finalization','wrong_detector_date','changed_summary','late_controller','symlink'])
 def test_detector_suffix_retry_rejects_changed_or_incomplete_prefix(tmp_path,monkeypatch,defect):
     log,failed,_=_retry_fixture(tmp_path,monkeypatch)
