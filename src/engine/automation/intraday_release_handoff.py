@@ -2690,7 +2690,9 @@ REVIEWED_BROKER_CUSTODY_PAIRS = {'src/engine/ai/holding_exit_vote.py': (('69f1a9
 
 # SourceReadReduction1020: exact reviewed readers and unchanged policy ancestry.
 # Historical generations remain in their existing maps; no generic hash bypass.
-REVIEWED_SOURCE_READER_HASHES = {'src/engine/error_detectors/artifact_freshness.py': '47897e387407c5d6472735463107d8e0ce7697aededa723c724973e4efc173a4',
+REVIEWED_SOURCE_READER_HASHES = {'src/engine/automation/main_startup_validation.py': '00478533c196076f481b61809220626e766d357766d4ab26876144025b15a17a',
+ 'src/engine/automation/next_preopen_readiness.py': 'c7ba75db4fedb705bdbfc4b7c2bdd39ac527b44b111d33c9639e911adaded88e',
+ 'src/engine/error_detectors/artifact_freshness.py': '47897e387407c5d6472735463107d8e0ce7697aededa723c724973e4efc173a4',
  'src/engine/infrastructure/validation_digest_session.py': '40497e9bcb5d325bb0623631cd2149a0b2090c996bc54e3300b650f201a0e056',
  'src/engine/lifecycle/research_json_stream.py': '53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6',
  'src/engine/log_archive_service.py': '18e912bb93cf937548077466fc4fd510c13fff73823e2b1c2510a19481e980af',

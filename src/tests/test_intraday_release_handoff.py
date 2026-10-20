@@ -1741,7 +1741,9 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
 
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
 @pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
-def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault):
+@pytest.mark.parametrize('reader_path', ['src/engine/lifecycle/research_json_stream.py',
+    'src/engine/automation/main_startup_validation.py', 'src/engine/automation/next_preopen_readiness.py'])
+def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path):
     import hashlib
     import os
     import subprocess
@@ -1776,7 +1778,7 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
                         'commit','-qm','source reader generation'],check=True)
         return subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     revision = commit()
-    reader = root/'src/engine/lifecycle/research_json_stream.py'
+    reader = root/reader_path
     if fault == 'missing': reader.unlink()
     elif fault:
         reader.write_bytes(reader.read_bytes()+b'\nUNREVIEWED_READER = True\n')

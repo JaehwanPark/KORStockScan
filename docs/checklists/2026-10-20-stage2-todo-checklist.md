@@ -180,3 +180,4 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 새 module/wrapper/validator 생성 0. `next_preopen_readiness.main`의 중첩 세션과 `main_startup_validation`의 통계 판정은 **consolidated**; 원천·정책 native 검증/만료/프로세스 격리·이전 세대 영수증은 현재 소비자가 있어 **retained**. 실주문/provider·정책 동작 변경 없음.
 - 배포 전 baseline detector(10:04)의 stop/holding report source 경고, 기존 cron 지연 및 tmp 보존량 경고는 별도 원인으로 보존한다. 이번 candidate PID/observer 검증과 구분하며 전체 운영 경고 0으로 선언하지 않는다.
 - 현재 선택 기반 `a7c0b0dc5` 대비 최종 source +518/−180, tests +420/−4, docs +70/−0. 새 파일·이동 0. compile 4파일, 문서 parser, diff 검사 PASS; 수정 경로 재리뷰 미해결 결함 0. 후보 clean commit 후 native 사전 검증과 실제 PID 소비를 별도 기록한다.
+- 최종 startup 수정 후 pre-drain에서 `main_startup_validation.py`의 이전 dependency SHA가 남은 것을 확인(6f7f61905 실패 로그 보존), 기존 source-reader map을 검토한 startup 두 파일까지 총18개로 확장했다. 해당 reader/CLI/decoder의 missing·dirty·committed-change 거절과 정상3family를 36 PASS/19.78초로 검증. 코드 값/판정 우회는 없으며 실제 정지 전 결함이다.
