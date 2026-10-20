@@ -225,3 +225,51 @@ def test_frozen_inventory_delegates_large_future_journals_to_native_cohort_intak
         [0,0,200*1024**3,0,0] if Path(path)==unrelated else real_stat(path))
     reuse.verify_frozen_inventory(value,manifest.parent)
     assert seen==[True]
+
+
+@pytest.mark.parametrize('route', ['canonical', 'routed', 'child_link', 'foreign_mount',
+                                  'wrong_date', 'changed_seal'])
+def test_native_cursor_issuer_accepts_only_the_bound_data_mount(tmp_path, route):
+    data, origin, holding, _ = approved(tmp_path)
+    source = data/'ai_decision_trace'/f'ai_decision_trace_{DAY}.jsonl'
+    metadata = reuse.file_stat(source)
+    row = dict(path=str(source), **dict(zip(
+        ('device', 'inode', 'size', 'mtime_ns', 'ctime_ns'), metadata)))
+    descriptor = dict(source_date=DAY, sources=[row])
+    generation = digest(descriptor)
+    directory = data/'report/main_market_weakness_research'/DAY/generation
+    manifest = dict(schema='main_market_weakness_research_v1:source_manifest',
+                    source_date=DAY, sources=[row])
+    manifest['artifact_content_sha256'] = digest(manifest)
+    terminal = dict(source_date=DAY, generation=generation, status='completed',
+                    source_manifest_sha256=manifest['artifact_content_sha256'])
+    terminal['artifact_content_sha256'] = digest(terminal)
+    write(directory/'source_manifest.json', manifest)
+    write(directory/'terminal.json', terminal)
+    mount = data
+    if route != 'canonical':
+        mount = tmp_path/'release/data'; mount.parent.mkdir()
+        mount.symlink_to(data if route != 'foreign_mount' else tmp_path/'foreign')
+    routed = mount/directory.relative_to(data)
+    if route == 'child_link':
+        moved = directory.parent/'original'; directory.rename(moved)
+        directory.symlink_to(moved)
+    elif route == 'wrong_date':
+        routed = mount/'report/main_market_weakness_research'/TARGET/generation
+    elif route == 'changed_seal':
+        terminal['status'] = 'failed'; write(directory/'terminal.json', terminal)
+    cursor = dict(schema='main_market_weakness_research_v1:cursor', source_date=DAY,
+        source_descriptor=descriptor, generation=generation,
+        manifest_path=str(routed/'source_manifest.json'), terminal_path=str(routed/'terminal.json'))
+    write(directory.parent/'cursor.json', cursor)
+    # The original SHA publication follows this native identity observation.
+    original = origin.read_bytes(); origin.write_bytes(original)
+    before = holding.read_bytes()
+    if route in {'canonical', 'routed'}:
+        catalog = reuse.collect_proofs(data, origin)
+        assert catalog['proofs'][str(source)]['kind'] == 'prior_native_identity_and_original_hash_epoch'
+        assert catalog['proofs'][str(source)]['issuer_path'] == str(directory/'source_manifest.json')
+    else:
+        with pytest.raises((ValueError, OSError)):
+            reuse.collect_proofs(data, origin)
+    assert origin.read_bytes() == original and holding.read_bytes() == before

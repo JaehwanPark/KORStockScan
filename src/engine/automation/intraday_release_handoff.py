@@ -3083,6 +3083,31 @@ for (_trigger, _trigger_sha), _variant in REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VAR
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
 
+# Exact routed-data issuer reader; every issued shutdown generation stays valid.
+REVIEWED_ROUTED_REUSE_HASHES = {
+    'src/engine/automation/main_trailing_source_reuse.py': '272f0753cce9fc43324063a2d690394e844630f6eab8da7dace87596620ac0ab',
+}
+REVIEWED_ROUTED_REUSE_PAIRS = {
+    'src/engine/automation/main_trailing_source_reuse.py': (('c190554546468617b2963e2ba013473e992f4d4ad638a5f4aee2f71027bc58ef',
+        REVIEWED_ROUTED_REUSE_HASHES['src/engine/automation/main_trailing_source_reuse.py']),),
+}
+REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_ROUTED_REUSE_HASHES.get(os.path.normpath(trigger), sha)): {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_reuse.py',
+        'selector_sha256': REVIEWED_ROUTED_REUSE_HASHES['src/engine/automation/main_trailing_source_reuse.py'],
+        'dependencies': {**{name: REVIEWED_ROUTED_REUSE_HASHES.get(os.path.normpath(name), digest)
+                           for name, digest in value['dependencies'].items()},
+                         **REVIEWED_ROUTED_REUSE_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_ROUTED_REUSE_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3140,6 +3165,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     delay_shutdown_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_DELAY_SHUTDOWN_HASHES.items())
+    routed_reuse_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_ROUTED_REUSE_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3148,7 +3176,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS,
+                         REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS,
                          REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS,
                          REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS,
                          REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS,
@@ -3243,6 +3272,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if delay_shutdown_present:
             dependencies = {**dependencies, **REVIEWED_STARTUP_BUDGET_HASHES,
                             **REVIEWED_DELAY_SHUTDOWN_HASHES}
+        if routed_reuse_present:
+            dependencies = {**dependencies, **REVIEWED_STARTUP_BUDGET_HASHES,
+                            **REVIEWED_DELAY_SHUTDOWN_HASHES, **REVIEWED_ROUTED_REUSE_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3259,7 +3291,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_DELAY_SHUTDOWN_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_ROUTED_REUSE_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_DELAY_SHUTDOWN_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_STARTUP_BUDGET_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ROLE_LATENCY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_CLEANUP_PAIRS.get(repository_name(name), ())

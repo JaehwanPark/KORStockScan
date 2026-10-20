@@ -55,6 +55,23 @@ def sealed(path):
     return value,sha
 
 
+def _cursor_issuer_path(root, day, generation, path, filename):
+    """Resolve only the native data mount; reject links below that boundary."""
+    relative = Path('report/main_market_weakness_research')/day/generation/filename
+    path = Path(path)
+    if not path.is_absolute() or path.parts[-len(relative.parts):] != relative.parts:
+        raise ValueError('trailing_reuse_identity_issuer_path_invalid')
+    mount = path.parents[len(relative.parts)-1]
+    if mount.resolve(strict=True) != root:
+        raise ValueError('trailing_reuse_identity_issuer_path_invalid')
+    child = path
+    while child != mount:
+        if child.is_symlink():
+            raise ValueError('trailing_reuse_source_path_invalid')
+        child = child.parent
+    return root/relative
+
+
 def _receipt_stat(value):
     return [value[key] for key in ('device','inode','size','mtime_ns','ctime_ns')]
 
@@ -168,10 +185,10 @@ def collect_proofs(data_root, original_manifest_path):
                 or cursor.get('source_date')!=day or descriptor.get('source_date')!=day
                 or cursor.get('generation')!=digest(descriptor)):
             raise ValueError('trailing_reuse_identity_cursor_invalid')
-        proof_path=Path(cursor['manifest_path']);terminal_path=Path(cursor['terminal_path'])
-        if (not proof_path.resolve().is_relative_to(cursor_path.parent.resolve())
-                or not terminal_path.resolve().is_relative_to(cursor_path.parent.resolve())):
-            raise ValueError('trailing_reuse_identity_issuer_path_invalid')
+        proof_path = _cursor_issuer_path(root, day, cursor['generation'],
+            cursor['manifest_path'], 'source_manifest.json')
+        terminal_path = _cursor_issuer_path(root, day, cursor['generation'],
+            cursor['terminal_path'], 'terminal.json')
         observed,sha=sealed(proof_path);terminal,_=sealed(terminal_path)
         if (observed.get('schema')!='main_market_weakness_research_v1:source_manifest'
                 or observed.get('source_date')!=day or observed.get('sources')!=descriptor.get('sources')
