@@ -207,6 +207,11 @@ def test_ka10027_applies_pure_equity_filter_before_output_limit(monkeypatch):
                         "cur_prc": "9000",
                     },
                     {
+                        "stk_cd": "485810_AL",
+                        "stk_nm": "TIME 글로벌바이오액티브",
+                        "cur_prc": "10000",
+                    },
+                    {
                         "stk_cd": "005930",
                         "stk_nm": "삼성전자",
                         "cur_prc": "70000",
@@ -222,7 +227,7 @@ def test_ka10027_applies_pure_equity_filter_before_output_limit(monkeypatch):
     )
 
     assert [row["Code"] for row in rows] == ["005930"]
-    assert rows[0]["SourceRank"] == 3
+    assert rows[0]["SourceRank"] == 4
     assert rows[0]["PureEquityFilterApplied"] is True
 
 

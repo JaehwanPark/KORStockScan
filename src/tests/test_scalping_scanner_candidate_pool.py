@@ -623,13 +623,24 @@ def test_is_valid_stock_blocks_fund_prefix_products():
         "PLUS 삼성전자선물단일종목인버스2X",
         "ACE 삼성전자단일종목레버리지",
         "KIWOOM 200선물인버스2X",
+        "TIME 글로벌바이오액티브",
+        "time 글로벌바이오액티브",
     ]
 
     for idx, name in enumerate(blocked_names):
         assert (
-            kiwoom_utils.is_valid_stock(f"00{idx:04d}", name, current_price=10000)
+            kiwoom_utils.is_valid_stock(f"{idx + 1:05d}0", name, current_price=10000)
             is False
         )
+
+
+@pytest.mark.parametrize('name', ['TIME 글로벌바이오액티브', ' time 글로벌바이오액티브 ',
+                                 'SOMETIME TECH', 'TIMEWORKS'])
+def test_product_name_filter_agrees_with_prefetch_without_partial_time_match(name):
+    expected = not name.strip().upper().startswith('TIME ')
+    assert kiwoom_utils.is_valid_stock('485810', name, current_price=10000) is expected
+    assert scalping_scanner._is_low_rebound_prefetch_product_allowed(
+        {'Code': '485810', 'Name': name, 'Price': 10000}) is expected
 
 
 def test_is_valid_stock_allows_low_price_common_stock():
