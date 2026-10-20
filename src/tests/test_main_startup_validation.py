@@ -71,7 +71,7 @@ def native_preparation_cli(tmp_path):
                       if isinstance(node, ast.FunctionDef) and node.name == 'main')
     main_source = ast.get_source_segment(owner, dispatcher)
     prelude = f'''"""Private semantic fixture; original native CLI dispatcher below."""
-import argparse,json,subprocess,sys
+import argparse,json,os,subprocess,sys
 from src.utils.constants import DATA_DIR
 from src.engine.infrastructure import validation_digest_session as digest_owner
 def verify_prepared(target_date, *, require_today=False):
@@ -107,6 +107,7 @@ def test_native_preparation_context_keeps_cli_full_scope_and_cold_invocation_bou
         assert io['remaining_entries'] == 0
         assert io['stats']['cache_status'] == 'invocation_memory_only'
         assert io['stats']['full_reads'] == io['stats']['reused_reads'] == 1
+        assert io['stats']['semantic_reused_reads'] == 0
         assert io['stats']['full_bytes'] == io['stats']['reused_bytes'] == 2 * 1024 * 1024
         assert result['native_process_lifecycle']['child_terminated'] is True
         assert result['native_process_lifecycle']['descendants_drained'] is True
@@ -188,6 +189,26 @@ def test_native_preparation_rejects_missing_context_diagnostics(tmp_path, monkey
         validation._native_preparation_check(tmp_path, DAY, '2026-10-16')
 
 
+@pytest.mark.parametrize('counter', [-1, True, '0', None])
+def test_native_preparation_rejects_invalid_semantic_reuse_counter(native_preparation_cli, monkeypatch, counter):
+    code, _ = native_preparation_cli
+    original = validation._run_native_validation
+    def invalid(*args, **kwargs):
+        result = original(*args, **kwargs)
+        prefix = 'P5_NATIVE_VALIDATION_IO='
+        lines = result.stderr.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith(prefix):
+                value = json.loads(line.removeprefix(prefix))
+                value['stats']['semantic_reused_reads'] = counter
+                lines[index] = prefix + json.dumps(value)
+        result.stderr = '\n'.join(lines)
+        return result
+    monkeypatch.setattr(validation, '_run_native_validation', invalid)
+    with pytest.raises(ValueError, match='startup_native_preparation_diagnostics_invalid'):
+        validation._native_preparation_check(code, DAY, '2026-10-16')
+
+
 @pytest.mark.parametrize('failure', ['exit', 'findings'])
 def test_native_preparation_diagnostic_status_requires_full_result_contract(
         native_preparation_cli, monkeypatch, failure):
@@ -213,6 +234,11 @@ def test_native_preparation_diagnostic_status_requires_full_result_contract(
 
 @pytest.fixture
 def transaction(tmp_path, monkeypatch):
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromisoformat(DAY+'T10:00:00+09:00').astimezone(tz)
+    monkeypatch.setattr(validation, 'datetime', FixtureClock)
     workspace, code = tmp_path / "workspace", tmp_path / "code"
     workspace.mkdir()
     for item in CODE_FILES:
@@ -339,6 +365,19 @@ def test_real_early_child_terminates_with_exact_identity_and_nonempty_consumer_r
     assert (receipt.parent / "isolation.jsonl").read_bytes() == b""
     assert transaction["protected"].read_bytes() == before
     assert not (transaction["code"] / "logs").exists()
+
+
+def test_target_expiry_after_successful_child_never_becomes_parent_pass(transaction, monkeypatch):
+    class ExpiredClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromisoformat('2026-10-20T00:00:01+09:00').astimezone(tz)
+    monkeypatch.setattr(validation, 'datetime', ExpiredClock)
+    final, receipt = _run(transaction)
+    _assert_failed_terminal(final, receipt)
+    assert final['child_terminated'] is True
+    assert final['child_exit_code'] == 0
+    assert 'startup_target_expired_during_validation' in ' '.join(final['findings'])
 
 
 @pytest.mark.parametrize("mode", [

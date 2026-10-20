@@ -171,3 +171,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 기존 handoff owner에 검토한 reader 16파일의 정확한 원본/후속 SHA와 완전한 dependency 세대를 연결했다. 이전 세대 map은 과거 영수증의 현행 검증 소비자 때문에 **retained**하며 무조건 통과/새 wrapper는 없다. 같은 origin의 새 reader 허용 3건 실패 회귀 후 12건 통과(누락·dirty·새 commit으로 변조 거절 포함). rising/auxiliary는 원 보고서와 원 fixture를 보존하고 후속 독립 fixture를 요구하며 관련 20회귀 통과.
 - native 고정 workload 128 scopes / 76,800 rows / 598 hits의 기존·후속 signal SHA가 일치했다. 원천/정책 재생성이나 provider 호출은 없었다. 최종 후보 commit에 다시 결속한 proof만 배포에 사용한다. 임시 디스크는 108GiB 여유를 확인했고 실제 전체 장후 workload의 CPU/I/O 비용은 이전 측정 한계를 유지한다.
 - 재기동·router·bootstrap·auxiliary·startup isolation 기존 회귀와 최종 native 사전 검증을 진행 중이다. 결과와 실제 배포/PID 수용은 아래 후속 기록으로 확정한다.
+
+- 변경된 기본 작업본 `AGENTS.md` §6을 재확인해 원 실패 보존 → 최초 파손 계약 → 최소 수리 → 직접 소비 검증으로 후속 작업을 수행했다.
+- 재기동 회귀 첫 실행: 9파일 **4,513 PASS / 41 FAIL / 561.15초**. 실패 24건은 과거 broker fixture가 현재 reader를 원 코드로 사용한 오류, 2건은 capability 최신 세대 fixture, 나머지 15건은 시작 검증 세션·통계 및 과거 날짜 fixture 문제로 분리했다. 원 로그 `tmp/restart-review-pytest.txt`를 보존한다.
+- 실제 시작 검증 결함: P5의 source-date 세션과 내부 CLI의 target-date 세션이 갈라져 native digest closure가 빠졌다. 같은 PID·역할·data root의 상위 세션만 유지하도록 기존 CLI를 수정했고 다른 프로세스/원천 재사용을 추가하지 않았다. 캐시 producer의 `semantic_reused_reads`를 기존 시작 검증 reader가 거절한 문제도 정수·비음수 계약으로 결속했다. 구/신 field 호환은 기존 진단 reader 안에 있으며 판정 재사용은 없다.
+- 역사 fixture는 원 코드 commit `a7c0b0dc5`에 고정하고 transaction fixture는 명시한 날짜 clock을 사용한다. 실제 만료 가드는 유지하며 정상 child 뒤 날짜 만료 실패와 음수/bool/string/null 통계 거절 회귀를 추가했다. 원천 변경/실패·격리 실패·child 종료·native closure 검증도 그대로다.
+- 수정 후 검증: handoff source-reader/broker 36 PASS, capability 20 PASS; 최종 startup/readiness/digest/policy-generation **4파일 1,088 PASS / 20.17초**, 제외·skip 0. 겹치는 재검증 수는 합산하지 않는다. 처음 통과한 다른 회귀를 이유 없이 전량 반복하지 않는다.
+- 새 module/wrapper/validator 생성 0. `next_preopen_readiness.main`의 중첩 세션과 `main_startup_validation`의 통계 판정은 **consolidated**; 원천·정책 native 검증/만료/프로세스 격리·이전 세대 영수증은 현재 소비자가 있어 **retained**. 실주문/provider·정책 동작 변경 없음.
+- 배포 전 baseline detector(10:04)의 stop/holding report source 경고, 기존 cron 지연 및 tmp 보존량 경고는 별도 원인으로 보존한다. 이번 candidate PID/observer 검증과 구분하며 전체 운영 경고 0으로 선언하지 않는다.
+- 현재 선택 기반 `a7c0b0dc5` 대비 최종 source +518/−180, tests +420/−4, docs +70/−0. 새 파일·이동 0. compile 4파일, 문서 parser, diff 검사 PASS; 수정 경로 재리뷰 미해결 결함 0. 후보 clean commit 후 native 사전 검증과 실제 PID 소비를 별도 기록한다.

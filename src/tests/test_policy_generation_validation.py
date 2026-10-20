@@ -463,8 +463,13 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 
 
 @pytest.mark.parametrize('family', list(validation.PLANS))
-def test_cleanup_capability_pair_is_current_and_keeps_original_source(family):
+def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
+    if family in handoff.REVIEWED_SOURCE_READER_SUCCESSORS:
+        old, current = handoff.REVIEWED_SOURCE_READER_SUCCESSORS[family]
+        assert current == generation.code_generation(family)
+        assert old == handoff.REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS[family][0]
+        return
     old, current = handoff.REVIEWED_CLEANUP_SOURCE_SUCCESSORS[family]
     assert current == generation.code_generation(family)
     assert old == ( 'e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea'
