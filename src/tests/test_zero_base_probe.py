@@ -417,7 +417,9 @@ def test_existing_ws_owner_is_reused_without_changing_registration():
     assert calls == []
 
 
-def test_reused_observation_item_reads_exact_view_through_pre_machine_check(monkeypatch):
+@pytest.mark.parametrize("preparation_ms", [None, 0, 12.5])
+def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
+        monkeypatch, preparation_ms):
     import src.engine.scalping.zero_base_probe as module
 
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "SOR_AFTERMARKET")
@@ -436,6 +438,10 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(monk
             AssertionError("generic runtime view must not be used")
         ),
     )
+    timing = ({"entry_machine_input_as_of": 11,
+               "entry_machine_input_preparation_ms": preparation_ms,
+               "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5},
+               "response_ms": 43} if preparation_ms is not None else {})
     result = run_zero_base_probe(
         {"claim": {"code": "123456", "route": "krx_nxt_integrated",
                    "observed_epoch": 10},
@@ -444,6 +450,7 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(monk
         ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
             "machine_evaluation_status": "assessment_contract_invalid",
             "machine_contract_error": "missing_stock_code",
+            **timing,
         }),
         token="token", now=lambda: 11,
         tick_fetcher=lambda *_args, **_kwargs: [{
@@ -458,6 +465,13 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(monk
     )
     assert result["reason"] != "route_snapshot_missing"
     assert reads == [("123456", "123456_AL")] * 4
+    assert result["machine_evaluation_status"] == "assessment_contract_invalid"
+    assert result.get("machine_input_trace", {}) == timing
+    if timing:
+        timing["entry_machine_input_preparation_stages_ms"]["policy_resolve_ms"] = 99
+        assert result["machine_input_trace"]["entry_machine_input_preparation_stages_ms"] == {"policy_resolve_ms": 1.5}
+    else:
+        assert "machine_input_trace" not in result
 
 
 @pytest.mark.parametrize("fault", ["empty", "wrong_route", "stale"])

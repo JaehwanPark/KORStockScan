@@ -6913,6 +6913,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_tick_read_source": result.get("tick_read_source") or "-",
                     "zero_base_tick_read_selection_reason": result.get("tick_read_selection_reason") or "-",
                     "zero_base_machine_contract_error": result.get("machine_contract_error") or "-",
+                    "zero_base_machine_input_trace": result.get("machine_input_trace"),
                     "zero_base_machine_source_gap_kind": result.get("machine_source_gap_kind") or "-",
                     "zero_base_machine_evaluation_status": result.get("machine_evaluation_status") or "-",
                     "zero_base_machine_preflight_artifact_status": result.get("machine_preflight_artifact_status") or "-",
