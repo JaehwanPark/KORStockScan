@@ -117,6 +117,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 - [ ] `[SubmissionMonitorSyncLineage1019] 제출병목 관측기 계약 수리·정규 소비 수용` (`Due: 2026-10-20`, `Slot: INTRADAY`, `TimeWindow: 승인된 순차 반영과 후속 정규 관측`, `Track: RuntimeStability`)
   - 이전 [10/19 동일 ID의 Acceptance·이력](2026-10-19-stage2-todo-checklist.md#실행-항목)을 보존해 이관한다. 자연 request/trace 동기·async 결속, source/short-horizon/PASS→Main 제출은 정책·주문·경제성과 분리하여 OPEN을 유지한다.
+  - 12:54 코드 수용: 순서 결함041caf05e 배포·native P512consumer/금지0·ordered complete·실제PID1054501/start11276382와 기동 후 current observer/full health 재계산 일치·fail0을 확인했다. 원6순열 수리와 source gap/partial 보존은 [최종 소비 증명](../../tmp/submission-coverage-degraded-20261020/native/verification.json)으로 결속한다. 자연 source/short-horizon/PASS→제출·경제성 Acceptance는 기존 OPEN을 유지한다.
   - 12:26 신규 계약 결함: 구 PID 사건의 원문 증거가 유효한데 앞의 커버리지 사건에서 검사를 중단하여 순서에 따라 artifact 실패가 달라진다. 기존 최대256건 검사를 끝까지 수행하고 원천 품질 경고와 실제 current/unknown 실패를 보존한다. 원22 probe 중4 covered·비용 null은 복구로 간주하지 않는다. [원인·회귀·반영 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#submission-observer-incident-order-repair).
 
 ## 익절 원천 수리 인계

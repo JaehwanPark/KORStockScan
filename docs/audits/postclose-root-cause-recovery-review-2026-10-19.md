@@ -476,3 +476,14 @@ Combined diff versusa7c before this count record: {"agents": [40, 52], "docs": [
 수정 전 운영창은12:35:55에8/21 covered로 자연 증가하여 구 코드도 warning으로 돌아왔다. 이를 이번 수정의 효과로 주장하지 않는다. 보존12:25 실패 입력6순열·native negative 회귀와 새 코드/PID의 마지막 consumer 증명을 각각 사용한다. 초기 관측기/인계 회귀1927개 PASS(483.95초), 마지막 artifact/notifier 회귀450개 PASS이며 완전 후속 세대의 표적 검증은 별도로 기록한다. health 실패 집계는 실제 enum `fail`을 포함하며 ERROR/CRITICAL 문자열 부재를 건강 성공으로 쓰지 않는다.
 
 완전 후속/발행 원 세대 handoff 표적126개도 PASS(89.62초)다. compile·diff·문서 parser22개와 동일 ID current owner1개를 확인했다. 소비자 검증용 임시 스크립트만 기존 tmp 증거 디렉터리에 추가했고 새 production 경로는 없다.
+
+
+12:54 실제 소비 종결: code041caf05e3d71c0705ecc841d598a0310a4ab2f1을 clean immutable 후보로 만들고 native Main parity128scope/76800row/598hit·signal SHA958e47 일치, active/delay/stop/holding 사전검증 모두 PASS를 확인했다. native P5/afaf6665는12consumer·금지행위0·child 종료/load PASS이며 기존120초 child 한도를 유지했다. 기존 holding capability/currentness의 코드 계약은 불변이므로 불필요한 연구 재생성을 반복하지 않았다. 승인된 ordered 전환은12:51:18 complete/pass, 실제PID1054501/start11276382 소비다.0255cb05f·c608b02d5·c696890ed는 실제 ancestor로 유지된다.
+
+기동 후 기존 생산자 lock 아래 sentinel 성공·observer2a26774a/17.28초 completed·새 actor/코드e9905d86/날짜/선택 세대를 확인했다.12:54:03 native full health는 그 정확한 run을 읽고 declaration/recomputation 일치·실제 fail0이다. 현재 관측은 partial/warning_pending·unmet0이고 source/current cohort issue는 빈 배열이다. current probe1·covered0은 전 actor의22/4 분모와 다르며 관측/주문/경제성 성공으로 승격하지 않는다. 원래12:25 실패 입력의6순열 수리는 현재 코드 해시와 결속된다. [최종 소비 증명](../../tmp/submission-coverage-degraded-20261020/native/verification.json).
+
+검증 이력도 보존했다. 최초 마지막 점검은 시작 시 수동 보호목록 hash7788과 현재83c 차이를 거절했다. 파일은12:43:25에 변경됐으며 새 P5의 불변 request.source_hashes가 이미83c를 결속해 통과했고 현재도 동일하다. 시작 전 관측값 대신 실제 native P5 입력과 비교해 원 거절 로그를 별도 보존했으며 목록을 수정·되돌리지 않았다. bootstrap 원 bytes43363c8f는 불변이다. 원 checklist7a91512b는 native preserve_checklist로 다시 확인했으며 strict/PREOPEN/controller/실패 시도는 재작성하지 않았다.
+
+남은 warning은 기존 holding 원 BUY2결손, 기동 후 제한 관측, log_rotation_cleanup/postclose_finalization의06:50 이후 복구 이력, pinned 임시 증거 용량/증가 budget이다. 이를 이번 일반 artifact 오분류의 실패로 합치거나 원 손실·전체 원천/경제성 성공으로 지우지 않는다. 자연 request/source/PASS→실제 제출 수용은 동일 checklist owner OPEN을 유지한다. 배포 뒤 추가 source/test 변경은 없고 이 종결 기록만 보완한다.
+
+최종 기준a54b69e1c의 범위는8파일이며 source2파일 +23/-3, tests2파일 +28/-12, docs4파일 +35/-1이다. 배포041 이후 종결 기록은 source/tests0, docs2파일 +12/-0이다. 문서 순증은 원 실패·현재 PID 소비·표적 검증·owner 이관과 제거 disposition이고 새 production owner/분기/진입점은 없다.
