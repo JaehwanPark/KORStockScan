@@ -1156,6 +1156,18 @@ def run_zero_base_probe(
                       "machine_bundle_sha256"):
             if machine.get(field) is not None:
                 result[field] = machine[field]
+        # Keep the engine's measured input boundary on rejected assessments too.
+        # Missing timings stay absent; this projection cannot admit or retry.
+        machine_input_trace = {
+            field: deepcopy(machine[field]) for field in (
+                "entry_machine_input_as_of", "entry_machine_input_preparation_ms",
+                "entry_machine_input_preparation_stages_ms",
+                "entry_machine_input_feature_build_ms", "entry_local_stage_timings_ms",
+                "response_ms",
+            ) if machine.get(field) is not None
+        }
+        if machine_input_trace:
+            result["machine_input_trace"] = machine_input_trace
         if machine.get("ai_input_runtime_preflight_artifact_status") is not None:
             result["machine_preflight_artifact_status"] = machine[
                 "ai_input_runtime_preflight_artifact_status"]

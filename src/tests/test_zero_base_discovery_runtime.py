@@ -469,6 +469,9 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
         "machine_preflight_artifact_status": "artifact_missing",
         "evaluation_attempt_id": "machine-source-invalid-exact",
         "machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
+        "machine_input_trace": {"entry_machine_input_as_of": 11,
+                                "entry_machine_input_preparation_ms": 0,
+                                "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5}},
     }
     emitted = []
     monkeypatch.setattr(scanner, "ZeroBaseDiscoveryRuntime", lambda **_kwargs: type(
@@ -488,6 +491,7 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     assert payload["fields"]["evaluation_attempt_id"] == result["evaluation_attempt_id"]
     assert payload["fields"]["zero_base_machine_source_gap_kind"] == "runtime_preflight_artifact_not_ready"
     assert payload["fields"]["zero_base_machine_preflight_artifact_status"] == "artifact_missing"
+    assert payload["fields"]["zero_base_machine_input_trace"] == result["machine_input_trace"]
     assert payload["fields"]["machine_observation_sha256"] == "a" * 64
 
     result.update(result="source_unavailable", evaluation_attempt_id=None,
