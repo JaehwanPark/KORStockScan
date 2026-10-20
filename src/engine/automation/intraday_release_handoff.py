@@ -2859,6 +2859,25 @@ REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS.items()
 }
 
+# Reviewed retired-helper removal and report-parser consolidation. Bind the
+# complete predecessor generation; historical handoffs retain their own hashes.
+# Evidence: docs/checklists/2026-10-20-stage2-todo-checklist.md (CodeRefactorRetiredReview1020).
+REVIEWED_RETIRED_REVIEW_HASHES = {
+    'src/engine/sniper_overnight_gatekeeper.py': '0342a74e37f17540ad89329e0fe8d5ae78b5c71144c82947971ced995a9b9f54',
+    'src/engine/scalp_entry_adm_runtime.py': '4c17ed099fa378545ffad45a89a0cc3996022ab00400217df1333e6d23ebd3ca',
+    'src/engine/holding_exit_matrix_runtime.py': 'b3386f73fc5b6eb3b0e438c59cb6c2874ead1163011ecd93e53a15f83b7127bc',
+    'src/engine/automation/dual_candidate_review.py': '29642a08a59e4f08cca765934fd2d5fd27dd8e12f763bb216cba6e363bde3914',
+    'src/engine/automation/producer_gap_discovery.py': 'c66f911a67f75524148d0608a13b7b451d71917d9da5016bea5627a85eb9a6bd',
+    'src/engine/automation/stage_hook_workorder_discovery.py': 'd6079fd11abdcca5f69950e41f15ca49c26f014446004358f30e89316844df80',
+}
+REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_overnight_gatekeeper.py',
+        'selector_sha256': REVIEWED_RETIRED_REVIEW_HASHES['src/engine/sniper_overnight_gatekeeper.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_RETIRED_REVIEW_HASHES},
+    } for key, value in REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2912,7 +2931,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS,
+                         REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
                          REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS,
                          REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,

@@ -260,3 +260,42 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 12:11 통합 수용:99c51c85f에0255·c696과 원 holding 사건 식별 수리를 포함해 native P5/c992f414의12 consumer·격리·종료·load PASS 및 ordered complete/pass, PID782998/start11032230을 확인했다. `[MainPolicyLoadAndExitValidation1018]`의 보존 정책 P5 code/native/PID 수용은 완료한다. 원 실패 이력은 위에 유지한다. 기동 뒤 holding12:10:40을 full health12:11:47이 같은 SHA로 읽었고 새 source gap은0, 원49389 두 사유는 보존한다. `[HoldingProfitExitSourceContractRepair]`·수량/비용·자연 수용과 현재 partial 관측을 완료 처리하지 않는다. [최종 소비](../../tmp/postclose-monitoring-20261019/holding-probe-integration-native/verification.json).
 
 - 12:20 정규 통보 수용:`[HoldingProfitExitSourceContractRepair]`의 원49389 두 사유는 native source_gap으로 유지되며, 새 report 세대에서도 같은 사건 식별자를 받아 실제 재전송0을 확인했다(last_seen12:20:27, last_sent12:15:28). code/통합 배포/PID/중복 통보 수용을 원 자료 복구·자연 비용/관측 완료와 구분한다. [실제 정규 consumer](../../tmp/postclose-monitoring-20261019/holding-probe-integration-native/natural-duplicate-cycle-verification.json).
+
+
+## 리팩터링 후보 구현 — CodeRefactorRetiredReview1020
+
+- [x] **CodeRefactorRetiredReview1020** — 확정 우선순위 1~3의 제거·통합과 격리 후보 검증.
+  - Source: 사용자 `후보 우선순위 구현하고 코드리뷰 후 수정보완 반복하고 배포본 준비`; [운영 handoff 계약](../runtime-release-routing.md#authorized-intraday-policy-preserving-code-handoff).
+  - Scope/owner: matrix runtime·overnight retirement·automation dual review owner. 신규 정리 대상이나 framework 없이 기존 owner 안에서 구현한다. 배포 인프라 owner가 새 코드 세대의 선행 의존성 검사를 함께 담당한다.
+  - 기준: 선택 릴리스 `etf-product-intake-20261020-21d822a64`, commit `21d822a64a9f4b9047d06babab26febf59f6ae61`. 격리 작업본 `/home/ubuntu/KORStockScan-worktrees/refactor-retired-review-20261020`, branch `codex/refactor-retired-review-20261020`.
+  - 운영 분리: 확인한 Main PID `1175053`/start ticks `11403252`; selector SHA `7a80c567b8f9ca589b80d796b8a2d1d6d9a490fe401c23544bcabf0ea74e4d03`. 기본 작업본의 source·shell·선택 포인터·PID·정책은 변경하지 않는다. 병행 세션의 기본 체크리스트 편집도 덮지 않는다.
+  - Acceptance: 제거 함수의 실제 호출자 0, 보존 public 함수·False gate 출력 동일, family별 검토 schema/decision/provider 계약 동일, 기존 정책 digest 유지와 새 코드 의존성의 정확한 검증, 영향 테스트·compile·문서 parser·diff 검사, clean 후보 커밋 및 불변 릴리스 패키지. 실제 선택/PID/자연 소비는 이 구현 완료와 별개다.
+
+### 대체·제거 판정
+
+| 기존 경로/함수 | 대체 | 판정·소비 근거 |
+| --- | --- | --- |
+| `scalp_entry_adm_runtime._read_payload`, `_matched_bucket`, `_prompt_context` | none | removed; 퇴역 후 public builder에서 도달하지 않는다. 정적 import·module alias·getattr·CLI/등록 경로 검사와 기존 ADM 테스트로 검증 |
+| `holding_exit_matrix_runtime`의 `_safe_float/_safe_int/_safe_bool`, `_holding_matrix_ai_score_context`, `_holding_score_prior_fields`, `_holding_matrix_current_micro_support`, `_read_matrix_payload`, `_matched_entries`, `_prompt_context`, `_exit_to_hold_candidate_actions` 및 전용 상수/import | none | removed; 보존 함수의 AST는 기준본과 동일. Main/AI의 public builder·merge·scale-in safety veto는 retained |
+| `sniper_overnight_gatekeeper`의 `OvernightRecordSnapshot`과 나머지 퇴역 helper 14개 | none | removed; helper 전용 테스트 11개도 제거. `_eod_label`, `_overnight_gatekeeper_enabled`, `run_scalping_overnight_gatekeeper`는 retained: 비활성 로그·true override 거절 및 역사/회귀 consumer. 활성 Main holding·same-session terminal·manual custody 테스트 유지 |
+| 두 보고서의 `_parse_ai_review_response`·중첩 `_contract_validator` | 기존 `automation/dual_candidate_review.parse_candidate_review_response`·`validate_candidate_review_response` | consolidated; 직접 parser 호출 4곳과 provider callback 2곳 이관. 새 wrapper/module 없음. reviewer·decision enum·metadata·ensure_ascii·retry·오류 판정 유지 |
+| matrix public API·bucket/date reader·`TRADING_RULES` 테스트 표면 | 기존 구현 유지 | retained; `ai_engine_openai`, `sniper_state_handlers`, 역사 replay와 현행 retirement/true-override 테스트가 소비. 파일 전체 삭제로 확대하지 않음 |
+| 기존 native handoff의 이전 cleanup/product-intake 의존성 세대 | 새 정확한 `REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS` | retained + successor; 역사 SHA/정책 digest/contract extension은 수정하지 않고 검토한 6파일과 전체 선행 의존성을 결속. 새로운 코드 세대의 native gate 준비에 필요한 보완 |
+
+### 리뷰·검증
+
+- Official Kiwoom Reference Gate: `2026-10-20T14:05:26.447978+09:00`, upstream `Kiwoom-Securities/Kiwoom-REST-API` HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`. `kiwoom/specs.py`, `kiwoom/core/client.py`, `kiwoom/_data/kiwoom_api_spec.json`의 ka10003/ka10080 요청·응답, `postman/kiwoom-openapi.postman_collection.json` PRD/MOCK 확인. `kiwoom_docs`는 해당 revision에 없음. 퇴역 helper의 조회 callsite만 제거했으며 API/parser/실요청 변경 없음.
+- 자체 리뷰→수정→재리뷰: 격리 폴더명을 고정한 기존 테스트를 실제 project root 기준으로 수정했다. 새 부정 입력 fixture의 공유 `FORBIDDEN_USES` 변형이 뒤 테스트를 오염시키는 문제를 deepcopy로 수정했다. 불필요 import를 제거했다.
+- 배포 준비 회귀: 원 verifier가 새 overnight SHA를 `entry_consumer_reviewed_dependency_unreviewed`로 거절하는 실패를 먼저 재현했다. 기존 verifier에 정확한 후속 세대를 추가하고, 과거 product-intake fixture는 원 commit `21d822a64`로 고정하여 현재 파일과 섞이지 않게 했다.
+- 영향 회귀: 기존 12개 테스트 파일 **450 PASS**, skip/실행 제외 0. Main/AI cache·holding/context·retirement·두 report consumer·provider contract·위치 gate 포함. 실제 네트워크는 seccomp로 connect/send 계열을 차단했다. 기존 pandas 경고 1건은 별도이며 변경하지 않았다.
+- 기준본 차등 검증: matrix context 120개·merge 720개 결과 동일; 두 review parser 및 실제 provider callback은 family별 67개 입력의 반환/예외·전달 인자 동일. 일회성 parity 검증 **4 PASS**. 운영 입력/provider/주문 호출 없음.
+- native handoff 표적 회귀 **236 PASS**: 새 세대 72건과 기존 cleanup/reader 선행 세대 164건. 정상 수용·누락/dirty/커밋된 변조 거절 및 전체 선행 의존성 보존. 이 범위 실행에 skip 없음; 파일 내 비영향 3,030건은 수집 후 선택 제외했다. 앞선 450건과 합계 **686 PASS**이며 차등 검증 4건은 별도다.
+- Python compile **12파일 PASS**, Ruff `F401/F811/F821` PASS, 문서 print-only parser PASS(기존 OPEN 22건), AST import/alias/getattr 대사·diff 검사 PASS. sampler shell은 변경하지 않았고 `bash -n` PASS. 검토한 범위의 미해결 코드 결함 0; 전체 코드베이스 무결함을 뜻하지 않는다.
+- 증감(base `21d822a64`): non-test source 7파일 **+224/-1,263, 순감 1,039줄**; test 5파일 **+122/-292, 순감 170줄**; docs 2파일 **+41/-0**. 새 모듈·wrapper·검증 프레임워크 없음. 공유 parser로 중복을 없앤 증가와 정확한 native 의존성 세대 20줄 증가를 포함한 수치다.
+- 재현 로그·명령·원본 실패·일회성 차등 검증과 최종 패키지 검증은 `/home/ubuntu/KORStockScan/tmp/refactor-retired-review-20261020/`에 보존한다. 검증 자료를 운영 모듈이나 새 framework로 등록하지 않는다.
+
+### 배포 대기 경계
+
+- 구현 종료 후 불변 패키지를 준비하되 기본 작업본 shell·selector·PID·active policy는 변경하지 않는다. 현재 정책의 native confirmation parity, exact-date candidate handoff와 정지 전 최종 검사는 실제 실행 시점의 원천·commit·날짜에 결속해야 한다. 기존 영수증 재사용이나 정책 hash 치환은 허용하지 않는다.
+- 병행 편집 중인 기본 체크리스트를 후보의 과거 snapshot으로 덮지 않는다. 실제 배포 준비 시 그 시점의 운영 문서와 본 절을 합친 뒤 기존 strict-bound 원본·사용자 편집본을 모두 보존하고 CAS handoff를 수행한다. 그 변경으로 commit이 바뀌면 후보 결속 영수증도 다시 준비한다.
+- 역사 AVG_DOWN replay의 matrix 구현 SHA는 과거 영수증 그대로 유지한다. 새 코드의 자연 연구·PID 수용을 이 오프라인 동등성 검사로 대체하지 않는다. 새로운 원천/경제성 연구나 전체 원천 재생성은 이번 제거 묶음에 포함하지 않는다.

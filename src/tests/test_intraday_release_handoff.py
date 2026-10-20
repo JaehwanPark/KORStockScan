@@ -1556,6 +1556,14 @@ def test_cleanup_closure_retains_all_predecessor_dependencies():
     assert child['dependencies'] == {**parent['dependencies'], **handoff.REVIEWED_CLEANUP_HASHES}
     assert parent['dependencies'][trigger] != child['dependencies'][trigger]
     assert child['contract_extensions'] is not parent['contract_extensions']
+    for key, predecessor in handoff.REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS.items():
+        successor = handoff.REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS[key]
+        assert successor['dependencies'] == {
+            **predecessor['dependencies'], **handoff.REVIEWED_RETIRED_REVIEW_HASHES,
+        }
+        assert successor['contract_extensions'] == predecessor['contract_extensions']
+        assert predecessor['dependencies']['src/engine/sniper_overnight_gatekeeper.py'] != (
+            successor['dependencies']['src/engine/sniper_overnight_gatekeeper.py'])
 
 
 @pytest.fixture
@@ -1750,8 +1758,13 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
 @pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
 @pytest.mark.parametrize('generation,reader_path', [(generation,path)
-    for generation in ('source_reader','source_integration','original_gap','incident_order','product_intake')
-    for path in (tuple(handoff.REVIEWED_PRODUCT_INTAKE_HASHES) if generation=='product_intake' else
+    for generation in ('source_reader','source_integration','original_gap','incident_order','product_intake','retired_review')
+    for path in (('src/engine/sniper_overnight_gatekeeper.py',
+        'src/engine/scalp_entry_adm_runtime.py','src/engine/holding_exit_matrix_runtime.py',
+        'src/engine/automation/dual_candidate_review.py',
+        'src/engine/automation/producer_gap_discovery.py',
+        'src/engine/automation/stage_hook_workorder_discovery.py') if generation=='retired_review' else
+        tuple(handoff.REVIEWED_PRODUCT_INTAKE_HASHES) if generation=='product_intake' else
         ('src/engine/monitoring/submission_bottleneck_monitor.py',) if generation=='incident_order' else
         ('src/engine/scalping/holding_profit_exit_semantics.py',) if generation=='original_gap' else
         ('src/engine/lifecycle/research_json_stream.py',
@@ -1779,15 +1792,21 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation=='product_intake':names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','retired_review'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','retired_review'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation=='retired_review':
+        names.update(('src/engine/sniper_overnight_gatekeeper.py',
+            'src/engine/scalp_entry_adm_runtime.py','src/engine/holding_exit_matrix_runtime.py',
+            'src/engine/automation/dual_candidate_review.py',
+            'src/engine/automation/producer_gap_discovery.py',
+            'src/engine/automation/stage_hook_workorder_discovery.py'))
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='product_intake' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='retired_review' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'source_reader':'0255cb05f','incident_order':'041caf05e'}.get(generation,'99c51c85f'))
+                 ({'source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
         ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
