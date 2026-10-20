@@ -112,3 +112,53 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Acceptance: 완료거래 prefix→동일 세대 fact→수량 연구→AI writer 종료 후 holding suffix 순서를 검증한다. 표시 300건 제한 이전 전체 모집단, emitted_date 보존, 대용량/gzip 원천의 bounded native 계약, DB 교체 중 변경 rollback, 후보 시간창별 finished/interrupted 구분과 늦은 영수증 cache 무효화를 확인한다.
   - 원천 비용·terminal·과거 중단 자료 부재는 `null`/제외/명시적 `source_gap`으로 남기며 `valid_empty` 또는 0원으로 대체하지 않는다. 기존 6개 유형 10/15/20/25/25%와 분할·timeout 프로필을 보존하고 추가 경제성 승인 gate·주문·provider·threshold 변경을 만들지 않는다.
   - 코드/장후 재생성 완료와 다음 자연 수집 수용은 별개다. 새 배포 이후 실제 시작/종료/중단 영수증과 비용 원천의 정확한 대사를 확인하며, 10/19 PREOPEN·PID 소비는 기존 `DirectFamilyPreopenPolicyHandoff`만 소유한다.
+## 원천 reader 보완 후보 — SourceReadReduction1020
+
+- [x] `[SourceReadReduction1020] 활성 경로 1~8 보완·리뷰·격리 검증 후 배포 대기` (`Due: 2026-10-20`, `Slot: ADHOC`, `TimeWindow: 09:20~`, `Track: RuntimeStability`)
+  - 사용자 승인 범위: 활성 경로 1~8. 별도 작업본 구현·리뷰·수정·검증까지이며 운영 원천 재생성, provider/주문 호출, 정책 변경, 배포·재기동은 실행하지 않는다.
+  - 후보 작업본: `/home/ubuntu/KORStockScan-worktrees/source-read-reduction-20261020`; branch `codex/source-read-reduction-20261020`.
+  - 시작 기반 `4b278bbb3241a2ac5cb60fce52fe7da93391b1e4`; 작업 중 선택본이 `a98ff7a95d533b8ba33222c206bc77f941fffe99`로 변경되어 해당 기반으로 rebase했다. incoming 6파일 중 detector 및 그 테스트 2파일의 변경을 함께 보존했다. 기본 작업본·운영 shell·selector는 수정하지 않았다.
+  - 재확인 운영 PID `3964551`, start ticks `10071650`, cwd `/home/ubuntu/KORStockScan-runtime-releases/current-observer-finalization-20261020-a98ff7a95/src`. 이는 다른 배포의 상태이며 이 후보의 소비가 아니다.
+  - 코드 커밋 `9b45af5fd` → 최종 보완 `c30e4e5c2`; 선택본 체크리스트 원본 SHA `7a91512b9e36e795d20be0f68f1e44208ef9f5d289546626771b5ab982944996`는 원래 commit/release에 보존한다. 본 기록은 격리 후보 문서이며 현재 strict/checklist 영수증을 재작성하지 않는다.
+
+### 대체·제거와 유지 경계
+
+| 순위 | owner·대체 | disposition·검증 기준 |
+| --- | --- | --- |
+| 1 | `continuous_reversal_postclose.completed_bars`: `*/*/*.json` 전체 날짜 탐색 후 본문 필터 → `day/*/*.json` 선별 | **removed**: 다른 날짜 본문 읽기. embedded date·route·native 우선순위·원천 SHA 검사는 유지. 다른 날짜의 손상 파일도 open하지 않음. |
+| 2 | `rising_missed_intraday_feedback._PipelineReplay`: 단일 gzip 반복 전량 해제 → 최대 128행/약 1MiB 압축 블록과 stage/code index; rolling 3개 reader는 실행 내 과거 보고서 해석 공유 | **consolidated**: 무관 블록 반복 해제. 순서·unknown fields·raw prefix SHA·전체 결과 보존. 1,029행 중 선택 5행만 unpickle하는 회귀. **retained**: 매 실행 원본 prefix 1회 봉인과 전체 watermark/후행 관측 계산; 영속 offset/pending-state 계약이 없으므로 재시작 후 신규 raw만 읽는다고 주장하지 않음. |
+| 3 | `log_archive_service.load_monitor_snapshot(section_names=...)` → performance 첫 reader의 `recent_trades`/`meta` 구조 투영 | **removed**: 해당 소비자의 전체 completed census 객체화 및 투영 실패 시 전체 파일 fallback. 원본·gzip 우선순위와 필요한 row/경고 보존. **retained**: 전체 결과가 필요한 dashboard·custody reader의 기존 기본 API. |
+| 4 | `artifact_freshness._semantic_object` → 기존 `DigestSession`의 실행 내 작은 입력 재사용 | **consolidated**: 같은 파일·세대·limit·모드의 반복 해석. PID·TTL·inode/size/mtime/ctime/경로 identity 확인, 반환 복사 격리, 1MiB/항목·4MiB/실행 cap. 외부 의존성·validator 판정은 매번 실행; 큰 원천의 검증은 유지. |
+| 5 | `artifact_freshness._terminal_skip_status` → `tail_log_lines`; `log_archive_service._read_matching_lines` → 같은 실행의 날짜별 소규모 결과 재사용 | **removed**: 전체 `read_text().splitlines()[-5000:]`. **retained**: 날짜 interval/completeness가 없는 numeric/closed rotation의 최초 탐색과 raw 우선·archive fallback. 파일명이나 mtime만으로 과거 파일을 제외하지 않음. late/rotate·마지막 줄·한글·대규모 비선택 행 회귀. |
+| 6 | `_read_machine_projection` → 기존 `Reader`+`FrozenRows`; `FrozenRows` canonical bytes를 hash/copy에 직접 사용 | **removed**: 최대 1GiB 전체 bytes/JSON list와 동일 행의 hash용 decode/encode. kernel preflight·논리 크기 cap·generation/content hash 거절 유지; 추가 원천·정책 권한 없음. |
+| 7 | `continuous_reversal_source.iter_normalized_symbols` → population/operating/cumulative 세 reader | **removed**: 세 호출자의 `gzip.decompress(read_bytes())` 전체 symbol 객체화. 개인 임시 spool에서 한 종목 단위로 처리하며 원래 sorted-symbol 순서·모든 row·gzip CRC·generation 검사 보존. pickle은 현재 호출이 만든 비공개 임시 파일에만 사용. |
+| 8 | `pipeline_event_summary.load_summary_rows(include_samples=False)` → 기존 `slim_summary_projection`; `jsonl_io` strict receipt → 최초 읽기에서 물리/논리 SHA 결속 | **consolidated**: 같은 날짜·세대·strict 계약의 요약 반복 decode, strict 영수증의 두 번째 read/decompress/decode. 요약 변경·손상·읽는 중 교체는 재검증/거절. **retained**: audit의 raw 전체 분모와 family 의미 검증, 신규/late partition 봉인. sampling 요약을 원본 전체 모집단으로 대체하지 않음. |
+
+- 코드 증감(기반 `a98ff7a95` 대비): non-test source +422/−174 = **+248줄**; tests +323/−1 = +322줄. docs +51/−0줄(기존 체크리스트 1개). 이동 0, 다른 세션 변경 미포함.
+- 새 모듈·wrapper·validator framework·운영 스케줄 없음. 소스 증가분은 기존 owner 안의 구조 읽기·블록 index·세대 제한 재사용에 사용한다. 조건부 후보 9~11 및 과거 원천·정책·owner custody는 범위 밖이다.
+- 유지/후속 조건: (2) 영속 증분 전환은 producer의 정확한 prefix 세대/재시작·partial-line·pending-horizon 계약이 있을 때 rising-missed owner가 동일 cutoff 전체 결과 회귀로 닫는다. (5) 최초 날짜 무관 log open 제거는 log/archive owner가 원천 세대와 결속한 날짜 interval/completeness를 제공할 때 late/rotation 대사로 닫는다. 이번 후보의 절감 결과를 그 두 조건의 완료로 해석하지 않는다.
+
+### 리뷰·실패 재현·검증
+
+- 초기 실패: 다른 날짜 손상 bar open, 디스크 행 reader 미존재, strict receipt 공존본 decode 3회(2회가 계약), public slim summary 재해석 2회(1회로 감소).
+- 자체 리뷰 보완: reader import 위치 수정; 읽는 도중 summary 교체 시 혼합 세대 반환 제거; JSON 숫자의 소수점·지수 chunk 경계 및 비-JSON whitespace 회귀 후 수정; log cache의 비선택 대용량 행 상주를 1MiB 이내로 제한; CRC·논리 크기 초과·구 kernel·hash 변경 거절 확인.
+- 성능 리뷰 보완: snapshot 초기 구현 4.658초의 회귀를 발견하여 작은 JSON 값은 bounded native decoder로 검증하도록 수정(0.193초); FrozenRows hash/copy의 반복 decode/encode 제거.
+- 검증 결과: 최신 기반에서 **25파일 통합 1,930 PASS / 215.10초**, 마지막 보완 후 **9파일 780 PASS / 48.74초**. 후자는 겹치는 표적 재검증이며 합쳐서 고유 테스트 수로 보고하지 않는다. 제외·skip 0, Python compile 27파일 PASS, `git diff --check` PASS, print-only 문서 parser PASS. shell/cron 변경 0이므로 `bash -n`·배포 shell 실행은 대상 없음.
+- 추가 성능 보완: 단일 65MiB JSON 행의 반복 decode 회귀를 geometric refill로 해소하여 기존 회귀 테스트 42.30→2.05초. source/field 크기 cap은 그대로다. 빈/작은 객체가 많아도 4,096 cache entries를 초과하지 않으며 과거 보고서 cache도 합계 4MiB로 제한한다.
+- Ruff `F821/F822/F823/F811` 확인: 이번 변경 지적 0. `continuous_reversal_operating_postclose`의 기존 지역 alias `R` 재정의 F811 1건은 기반에도 있어 범위 밖으로 유지한다. 전체 Ruff clean 선언은 하지 않는다.
+- 최종 자체 재리뷰: 이번 변경의 producer/첫 consumer, 원천 변경·손상·압축 공존, 비용 null·전체 분모·결과 hash, 경로·쓰기·provider/주문 권한 경계에서 미해결 구현 결함 0. 운영 전체 원천 크기에서의 성능/임시 I/O와 실제 배포는 별도 gate다.
+
+### 동일 합성 입력의 비용 비교
+
+운영 데이터가 없는 격리 `tmp/reader-fixtures`만 사용했다. 아래 값은 OS page cache를 비우지 않은 개별 프로세스 1회 측정이며 운영 cold 성능/실제 10/19 전체 원천 성능의 증거가 아니다. 비교별 건수와 결과 digest는 동일하다. 전후 physical read가 달라 wall 차이만으로 운영 성능 향상을 확정하지 않는다. wall과 CPU는 초, RSS는 KiB.
+
+| 경로·분모 | wall 전→후 | CPU 전→후 | peak RSS 전→후 | I/O와 한계 |
+| --- | --- | --- | --- | --- |
+| machine 70,000 rows | 0.272→0.684 | 0.272→0.666 | 144,796→39,464 | 새 경로 임시 파일 약 26.2MB write/read. 메모리 절감과 CPU/I/O 증가를 구분. |
+| normalized 150,000 rows/30 symbols | 0.276→0.503 | 0.276→0.471 | 94,812→25,736 | 새 경로 임시 spool 약 9.9MB write; 종목별 완전한 label 입력 유지. |
+| snapshot recent 20 rows/전체 29.7MB | 0.209→0.193 | 0.148→0.192 | 152,836→36,604 | 전체 JSON 구조 검증 I/O는 유지; 큰 census 객체 상주 제거. |
+| rising 20,000 rows, 선택 20 rows × 3 | 0.297→0.178 | 0.297→0.143 | 48,908→39,428 | raw rchar 약 21.9MB 동일; 선택 reader 구간 0.163→0.00038초. 원본 1회 봉인 자체는 유지. |
+
+- 상세 rchar/physical `read_bytes`/`write_bytes`, 입력 SHA 및 명령 증거: 후보 작업본 `tmp/review-evidence.json`, `tmp/measurement-*.json`, `tmp/validation-commands.txt`; 실행 스크립트 `tmp/measure_readers.py` SHA `a02126cf4fb3549b2521b98c5b14a2762c36a5ecfd6bf4f496c2025111676b39`(일회성 검증 자료, 운영 코드/새 framework 아님).
+- 재현: 후보에서 `PYTHONPATH=. .venv/bin/python tmp/measure_readers.py prepare`, 이후 `... tmp/measure_readers.py {machine,symbols,snapshot,rising} {before,after}`를 각각 실행. baseline 함수는 `4b278bbb3`에서 읽으며 해당 측정 함수는 `a98ff7a95`와 동일하다.
+- 배포 전 남은 gate: 실행 시 selector·PID·active policy 재고정, 후보에 결속한 native parity/handoff 및 운영 크기 임시 디스크 여유 확인. 이 후보는 실제 릴리스 선택·PID·자연 장후 소비·비용 조정 수익성 완료 증거가 아니다.
