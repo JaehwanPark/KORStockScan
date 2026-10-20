@@ -199,6 +199,8 @@ def test_activity_adapter_keeps_source_only_contract_and_equity_filter(monkeypat
              "pred_pre_sig": "2"},
             {"stk_cd": "0010F0_AL", "stk_nm": "NON EQUITY", "cur_prc": "+10000",
              "flu_rt": "+2.00", "now_trde_qty": "6000", "sdnin_qty": "+5000"},
+            {"stk_cd": "485810_AL", "stk_nm": "TIME 글로벌바이오액티브", "cur_prc": "+10000",
+             "flu_rt": "+2.00", "now_trde_qty": "6000", "sdnin_qty": "+5000"},
         ]}], {"read_rate_control_status": "admitted",
               "rest_received_ts_ms": int((T0 + 1) * 1000)})
 

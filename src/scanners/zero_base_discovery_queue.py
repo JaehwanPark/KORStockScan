@@ -165,6 +165,8 @@ class DiscoveryQueue:
         deferred_active_codes: set[str] | None = None,
     ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
+        from src.utils.kiwoom_utils import is_non_equity_product_name
+
         if limit < 0 or min_interval_sec < 0:
             raise ValueError("negative queue budget")
         if type(activity_claims_per_gainer) is not int or activity_claims_per_gainer < 1:
@@ -174,7 +176,8 @@ class DiscoveryQueue:
         ready_by_cohort: dict[tuple[str, str, str], list[Candidate]] = {}
         cohort_claims: dict[tuple[str, str, str], int] = {}
         self.claim_eligibility = dict(eligible_due_count=0, active_target_deferred_count=0,
-            stale_count=0, in_flight_count=0, retry_not_due_count=0, route_ineligible_count=0)
+            stale_count=0, in_flight_count=0, retry_not_due_count=0, route_ineligible_count=0,
+            product_ineligible_count=0)
         eligible_wait = []
         for candidate in self._candidates.values():
             # Activity is a discovery hint, not an entry decision. Keep one
@@ -184,6 +187,8 @@ class DiscoveryQueue:
             cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
             if candidate.in_flight:
                 self.claim_eligibility['in_flight_count'] += 1
+            elif is_non_equity_product_name(candidate.name):
+                self.claim_eligibility['product_ineligible_count'] += 1
             elif eligible_routes is not None and candidate.route not in eligible_routes:
                 self.claim_eligibility['route_ineligible_count'] += 1
             elif max_observation_age_sec is not None and not (

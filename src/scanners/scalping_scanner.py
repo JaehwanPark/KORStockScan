@@ -133,30 +133,6 @@ PRIMARY_RISING_START_SOURCES = {
     MARKET_GAINER_SOURCE,
 }
 LOW_REBOUND_BASE_SOURCES = {"VOLUME_SURGE_RAW", "VALUE_TOP", "REALTIME_RANK_START"}
-LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS = (
-    "스팩",
-    "ETF",
-    "ETN",
-    "TIGER",
-    "KBSTAR",
-    "KODEX",
-    "KINDEX",
-    "ARIRANG",
-    "KOSEF",
-    "리츠",
-    "HANARO",
-    "SOL ",
-    "ACE ",
-    "RISE ",
-    "PLUS ",
-    "TIMEFOLIO",
-    "KIWOOM ",
-    "선물",
-    "레버리지",
-    "블룸버그",
-    "VIX",
-    "인버스",
-)
 
 
 def _resolve_scan_interval_sec(now_time):
@@ -6172,8 +6148,7 @@ def _merge_low_rebound_universe(universe, targets, source):
 
 
 def _is_low_rebound_prefetch_product_allowed(target):
-    name = str((target or {}).get("Name") or "").upper()
-    if any(keyword in name for keyword in LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS):
+    if kiwoom_utils.is_non_equity_product_name((target or {}).get("Name")):
         return False
     price = _safe_positive_int((target or {}).get("Price"))
     min_price = _safe_positive_int(getattr(TRADING_RULES, "MIN_PRICE", 0))

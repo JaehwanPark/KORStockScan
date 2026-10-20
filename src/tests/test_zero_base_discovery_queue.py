@@ -40,6 +40,20 @@ def test_unseen_candidates_rotate_and_recheck_does_not_starve_them():
     assert queue.claim(now_epoch=T0 + 6, limit=1) == []  # prior claim is in flight
 
 
+def test_restored_fund_does_not_reclaim_a_probe_and_preserves_ledger():
+    queue = DiscoveryQueue(DAY)
+    for code, name in [('485810', 'TIME 글로벌바이오액티브'), ('123450', 'SOMETIME TECH')]:
+        queue.observe(code=code, name=name, route='krx_nxt_integrated',
+            observed_epoch=T0, received_epoch=T0+1,
+            source_sha256=HASH_A, source_scope='observed_panel')
+    queue = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY)
+    claims = queue.claim(now_epoch=T0+2, limit=2)
+    assert [row['code'] for row in claims] == ['123450']
+    fund = queue._candidates[('485810', 'krx_nxt_integrated')]
+    assert fund.source_sha256 == HASH_A and fund.claim_count == 0 and not fund.in_flight
+    assert queue.claim_eligibility['product_ineligible_count'] == 1
+
+
 def test_active_target_deferral_does_not_consume_claim_or_rotation_and_releases_immediately():
     queue = DiscoveryQueue(DAY)
     _observe(queue, '000001', kind='activity')

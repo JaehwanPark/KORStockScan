@@ -5902,18 +5902,10 @@ def is_trading_day():
     return True, "정상거래일"
 
 
-def is_valid_stock(code, name, token=None, current_price=0):
-    """
-    [공통 필터] 불순물 종목을 걸러냅니다.
-    스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
-    가격/유동성 조건은 scanner priority 또는 submit safety guard에서 별도로 판단합니다.
-    """
-    name_upper = name.upper()
-
-    # ==========================================
-    # 1. 이름 기반 필터링 (KODEX 포함 제외 목록)
-    # ==========================================
-    invalid_keywords = [
+def is_non_equity_product_name(name):
+    """Share product exclusions across intake, restored probes and prefetch."""
+    name_upper = str(name or "").strip().upper()
+    invalid_keywords = (
         "스팩",
         "ETF",
         "ETN",
@@ -5931,24 +5923,32 @@ def is_valid_stock(code, name, token=None, current_price=0):
         "PLUS ",
         "TIMEFOLIO",
         "KIWOOM ",
-    ]
+        "선물",
+        "레버리지",
+        "블룸버그",
+        "VIX",
+        "인버스",
+    )
+    # TIME is the renamed ETF brand, not a substring exclusion for companies.
+    return name_upper.startswith("TIME ") or any(
+        keyword in name_upper for keyword in invalid_keywords
+    )
 
-    for keyword in invalid_keywords:
-        if keyword in name_upper:
-            return False
 
+def is_valid_stock(code, name, token=None, current_price=0):
+    """
+    [공통 필터] 불순물 종목을 걸러냅니다.
+    스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
+    가격/유동성 조건은 scanner priority 또는 submit safety guard에서 별도로 판단합니다.
+    """
+    if is_non_equity_product_name(name):
+        return False
     # 2. 우선주 필터링 (이름 끝자리 및 코드 번호 규칙)
     if name.endswith(("우", "우B", "우C")):
         return False
 
     if len(str(code)) == 6 and str(code)[-1] != "0":
         return False
-
-    # 3. 파생상품 및 기타 예외 처리
-    derivative_keywords = ["선물", "레버리지", "블룸버그", "VIX", "인버스"]
-    for keyword in derivative_keywords:
-        if keyword in name_upper:
-            return False
 
     return True
 
