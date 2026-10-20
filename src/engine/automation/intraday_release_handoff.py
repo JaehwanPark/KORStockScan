@@ -2689,7 +2689,7 @@ REVIEWED_BROKER_CUSTODY_PAIRS = {'src/engine/ai/holding_exit_vote.py': (('69f1a9
                                                'af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0'))}
 
 # Native frozen-source reuse and receipt census; prior generations stay sealed.
-REVIEWED_FROZEN_INPUT_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87',
+REVIEWED_FROZEN_INPUT_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '921fcb2621dfd444e029fe6ddd8bd9c1d933c4fbbc0f4dda2ec0b3ae97939fa8',
  'src/engine/automation/main_trailing_source_reuse.py': 'b2542e5924e87107b5d3319f7e9787d09b3b6bddf85639a6d5f305e4a3c83944',
  'src/engine/scalping/holding_profit_exit_semantics.py': '586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de',
  'src/engine/sniper_trade_review_report.py': 'afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b'}
@@ -2705,11 +2705,11 @@ REVIEWED_FROZEN_INPUT_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS.items()
 }
 REVIEWED_FROZEN_INPUT_PAIRS = {'src/engine/automation/main_trailing_source_assembler.py': (('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
-                                                              '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87'),
+                                                              '921fcb2621dfd444e029fe6ddd8bd9c1d933c4fbbc0f4dda2ec0b3ae97939fa8'),
                                                              ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
-                                                              '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87'),
+                                                              '921fcb2621dfd444e029fe6ddd8bd9c1d933c4fbbc0f4dda2ec0b3ae97939fa8'),
                                                              ('4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b',
-                                                              '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87')),
+                                                              '921fcb2621dfd444e029fe6ddd8bd9c1d933c4fbbc0f4dda2ec0b3ae97939fa8')),
  'src/engine/automation/main_trailing_source_reuse.py': (('c190554546468617b2963e2ba013473e992f4d4ad638a5f4aee2f71027bc58ef',
                                                           'b2542e5924e87107b5d3319f7e9787d09b3b6bddf85639a6d5f305e4a3c83944'),),
  'src/engine/scalping/holding_profit_exit_semantics.py': (('7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78',
@@ -2789,7 +2789,7 @@ REVIEWED_SOURCE_READER_PAIRS = {'src/engine/error_detectors/artifact_freshness.p
 # Combined0255 source readers, frozen census and actual P5 preserved closure.
 # Select one complete reviewed generation before any incumbent drain.
 REVIEWED_SOURCE_INTEGRATION_HASHES = {**REVIEWED_FROZEN_INPUT_HASHES, **{'src/engine/automation/main_startup_validation.py': '399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67',
- 'src/engine/infrastructure/startup_validation_code_context.py': 'c5df84bdf2ef6af0ab85d317aaafd4553064713871fe0c989a3f44659e01f2a2'}}
+ 'src/engine/infrastructure/startup_validation_code_context.py': '3c948965944e58104af6855f4f3d19ce449c43463dcea892af12ffc865c7e869'}}
 REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS = {
     key: {**value,
         'selector_path': 'src/engine/infrastructure/startup_validation_code_context.py',
@@ -2806,7 +2806,7 @@ REVIEWED_SOURCE_INTEGRATION_PAIRS = {'src/engine/automation/main_startup_validat
                                                       ('c39f9d5b8a68c297304c95b36a8ff7415fd413f3493e5584eb227adecc6ce84c',
                                                        '399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67')),
  'src/engine/infrastructure/startup_validation_code_context.py': (('4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',
-                                                                   'c5df84bdf2ef6af0ab85d317aaafd4553064713871fe0c989a3f44659e01f2a2'),)}
+                                                                   '3c948965944e58104af6855f4f3d19ce449c43463dcea892af12ffc865c7e869'),)}
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""

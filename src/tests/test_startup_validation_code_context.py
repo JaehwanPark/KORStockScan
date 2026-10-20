@@ -1061,6 +1061,7 @@ def test_isolated_preserved_native_closure_requires_consumption_full_bootstrap_a
 proof=request['main_preparation_code_handoff']
 assert proof['closure']['manifests']=={}
 assert C.preparation_logical_sources()=={}
+assert C.validation_raw_vote_sources(request['data_root'],request['main_preparation_code_handoff']['native_verification']['source_date'])
 assert_no_forbidden_attempts()
 ''')
     assert (result.returncode==0) is (fault is None),result.stderr

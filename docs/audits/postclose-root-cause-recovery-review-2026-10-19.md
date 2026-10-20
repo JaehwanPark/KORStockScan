@@ -432,3 +432,5 @@ Combined diff versusa7c before this count record: {"agents": [40, 52], "docs": [
 - 재생성된 source19 연구416c4c0a는20840 scope 전체 검증을45.38초에 완료했다. full hash21,942,769B, thread rchar770,828,808B, peak RSS174924KiB이며 의미 판정 재사용0이다. 준비·정책·strict/controller 원본은 보존했다.
 
 - 후속 실제 P5/run6c360700은 준비/활성 세대 구분을 통과했으나18,459B짜리 과거 gzip의 native hash 증명을 대용량 child 위임 목록에 포함해 intake가 실패했다. 기존 child의1MiB 하한은 유지하고 수집 owner에서 작은 증명을 제외하여 child가 원래 bounded native reader로 직접 읽게 한다. 실제 파일 변경·증명 오류는 없었으며 Main/원 정책은 불변이다. 원 final은 보존한다.
+
+- 실제 P5/runab23d496은 intake를 통과하고 실제 격리 child에서12 consumer를 실행했다. Main 기계/보조·수량·분할·지연·trailing는 로드했으나 main_stop의 과거 vote index SQLite 접근이 금지되어 실패했다. 해당 원천은2파일2,777,728B이고 첫 논리 세대 재검증은2,569,456B 원 JSONL이다. 기존 assembler의 canonical bounded raw reader를 P5의 검증된 source-date/root 문맥에서 선택하고 normal indexed reader는 유지한다. DB/네트워크/프로세스/쓰기 격리 완화·기존 source limit 확대·과거 semantic PASS 재사용은 없다. source/raw 변경은 기존 native generation 비교가 거절한다. 원 failed final/child/isolation은 불변 보존하며 별도 diagnostic만 추가했다.

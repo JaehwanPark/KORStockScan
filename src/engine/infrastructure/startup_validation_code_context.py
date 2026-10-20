@@ -1068,6 +1068,24 @@ def _main_context(*, digest_only=False):
         raise
 
 
+def validation_raw_vote_sources(data_root, source_date):
+    """Keep isolated native vote validation on its bounded raw JSONL reader.
+
+    Ordinary runtime/research retains the indexed reader. This selects I/O,
+    never a semantic verdict or an exception to the original raw guards.
+    """
+    if _CONTEXT is None:
+        return False
+    proof = _main_context()
+    request = _CONTEXT['request']
+    if (str(Path(data_root).resolve()) != request['data_root']
+            or date.fromisoformat(source_date).isoformat() != source_date
+            or source_date > proof['native_verification']['source_date']
+            or not source_date < request['target_date']):
+        raise ValueError('startup_raw_vote_source_scope_invalid')
+    return True
+
+
 def validation_future_vote_snapshot(data_root, source_date):
     """Permit only a native future-tail snapshot inside the isolated child."""
     if _CONTEXT is None:

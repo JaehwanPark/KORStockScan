@@ -239,3 +239,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 10:55 실제 P5/run2d922451은 원 준비본a45fe9f1과 활성본4e2e42eb를 같은 hash로 요구한 intake 결함으로 실패했다. 원 실패를 보존하고 기존 closure owner에서 두 세대를 각자의 native 원본에 결속한다. source19 연구416c4c0a/20840scope의 전체 현재 검증은 완료했으며 새 P5·ordered 배포·PID 수용은 미완료다. Main4094188/start10221444는 유지했다.
 
 - P5/run6c360700의 추가 intake 실패는18,459B native gzip 증명과 기존1MiB delegation 하한의 불일치다. 작은 증명은 위임하지 않고 native child가 직접 읽도록 기존 수집 owner를 보완하며 원 실패/guard를 보존한다.
+
+- P5/runab23d496은 실제 격리 child의 main_stop vote-index DB 접근에서 차단됐다.2.8MB 원 JSONL을 기존 bounded canonical reader로 직접 검증하도록 기존 owner를 보완한다. native12 consumer의 성공·격리/금지 시도0·종료와 신규 정책/PID 수용은 새 영수증으로만 닫으며 원 실패는 보존한다.

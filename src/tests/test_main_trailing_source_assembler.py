@@ -1145,3 +1145,15 @@ def test_plain_original_with_unproven_bare_sidecar_archive_is_an_identified_gap(
     assert report['assembly_census']['source_gaps']['completed_snapshot_source_gap']==1
     assert archived.exists() and raw.exists()
     assert not Path(str(archived)+'.archive_receipt.json').exists()
+
+
+def test_isolated_vote_reader_uses_identical_bounded_raw_semantics(tmp_path,monkeypatch):
+    from src.engine.infrastructure import startup_validation_code_context as context
+    from src.engine.automation import main_trailing_source_store as store
+    path,row=_native_inventory_vote(tmp_path,DAY)
+    expected=source.historical_vote_generation(path,DAY)
+    monkeypatch.setattr(context,'validation_raw_vote_sources',lambda *args:True)
+    monkeypatch.setattr(store,'scoped_vote_generation',lambda *args:pytest.fail('isolated SQLite access'))
+    assert source.historical_vote_generation(path,DAY)==expected
+    with path.open('a') as handle:handle.write(json.dumps(row)+'\n')
+    assert source.historical_vote_generation(path,DAY)!=expected

@@ -213,11 +213,11 @@ REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS = {'auxiliary': ('80497557e7be71c0eaf
 # Each historical source retains its own original fixture and semantic state.
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS = {'holding_vote': (
     ('69b00417b7396d7a15840c7f0a53ef91399d755d430fb3017a9d0596127d8b11',
-     'd23900de242886781b47158a016756bd8bbd56dab9a16ecef23ad8983713426f'),
+     '3eeed519ccccdc4f3f0285577f1a6a22c217a505b5157a64577fe09d8b2ffafc'),
     ('e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea',
-     'd23900de242886781b47158a016756bd8bbd56dab9a16ecef23ad8983713426f'),
+     '3eeed519ccccdc4f3f0285577f1a6a22c217a505b5157a64577fe09d8b2ffafc'),
     ('791757cb183525948b6378ee41deaa3ab03828ee4bdaea851bdfb653b804804b',
-     'd23900de242886781b47158a016756bd8bbd56dab9a16ecef23ad8983713426f'))}
+     '3eeed519ccccdc4f3f0285577f1a6a22c217a505b5157a64577fe09d8b2ffafc'))}
 
 # SourceReadReduction1020: preserved native reports need independent fixtures
 # for the exact report-reader successor, never a rewritten historical contract.

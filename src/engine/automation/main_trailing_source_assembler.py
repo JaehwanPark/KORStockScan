@@ -43,10 +43,12 @@ def historical_vote_generation(path, source_date):
     path = Path(path)
     date.fromisoformat(source_date)
     from .main_trailing_source_store import scoped_vote_generation,InputPending
-    try:
-        return scoped_vote_generation(path.parent.parent.parent,path,source_date)
-    except InputPending:
-        pass
+    from src.engine.infrastructure.startup_validation_code_context import validation_raw_vote_sources
+    if not validation_raw_vote_sources(path.parent.parent.parent, source_date):
+        try:
+            return scoped_vote_generation(path.parent.parent.parent,path,source_date)
+        except InputPending:
+            pass
     if (path.is_symlink() or any(p.is_symlink() for p in path.parents)
             or path.parent.name != 'holding_path_votes'):
         raise ValueError('historical_vote_path_invalid')
