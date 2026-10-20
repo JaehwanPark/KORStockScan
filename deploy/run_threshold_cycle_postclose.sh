@@ -2416,13 +2416,7 @@ if [[ "$TARGET_DATE" > "2026-10-11" ]]; then
 fi
 # Wait for asynchronous policy producers and consumers before hashing their
 # source generations into the runtime summary and next-day checklist.
-if [[ -f "$PROJECT_DIR/data/runtime/research/samsung_tick_transition/consumer-contract-v2.json" ]]; then
-  # Optional Main-only frozen research; no policy publication or startup gate.
-  if ! env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.samsung_frozen_postclose_validation \
-      --root "$PROJECT_DIR" --date "$TARGET_DATE"; then
-    echo "[threshold-cycle] optional Samsung frozen validation failed date=$TARGET_DATE" >&2
-  fi
-fi
+
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
   --stage wait --date "$TARGET_DATE" --timeout-sec 14400
 fi # Final handoff resume preserves the validated native analysis and snapshots.

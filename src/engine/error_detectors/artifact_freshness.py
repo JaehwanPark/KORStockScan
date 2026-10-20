@@ -2392,44 +2392,6 @@ def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_roo
 
 
 
-def _samsung_forward_semantics(root, source_date, *, current_main=False):
-    path = root / 'data/report/samsung_tick_transition_forward_validation' / source_date / 'latest.json'
-    if source_date < '2026-10-06':
-        return {'status': 'not_assessed', 'findings': [], 'source_date': source_date}
-    if not path.exists() and not path.is_symlink():
-        return dict(status='waiting_producer', findings=[], source_date=source_date,
-                    artifact=str(path), consumption='not_observed')
-    try:
-        from src.engine.scalping import samsung_tick_transition_forward_validation as native
-        index, sha = _semantic_object(path, limit=1024 * 1024)
-        if (index != native.A.seal(index) or index.get('schema') != 'samsung_frozen_postclose_index_v1'
-            or index.get('source_date') != source_date or index.get('candidate_id') != native.CANDIDATE
-            or index.get('runtime_effect') is not False or index.get('policy_publication') is not False
-            or index.get('actual_order_submitted') is not False
-            or index.get('owner') != 'SamsungFrozenCandidateValidation1006'
-            or index.get('decision_authority') != 'report_only'):
-            raise ValueError('samsung_forward_index_invalid')
-        result_path = Path(index['result_path'])
-        if (result_path.resolve().parent.parent != path.parent.resolve()
-            or result_path.parent.name != index.get('generation')
-            or (index.get('status') != 'failed' and native.S.digest(index.get('identity')) != index.get('generation'))):
-            raise ValueError('samsung_forward_result_path_invalid')
-        result, result_sha = _semantic_object(result_path)
-        if (result != native.A.seal(result) or result_sha != index['result_file_sha256']
-            or result.get('schema') != 'samsung_tick_transition_forward_result_v1'
-            or result.get('candidate_id') != native.CANDIDATE
-            or any(type(result.get(k)) is not type(v) or result.get(k) != v for k, v in native.AUTHORITY.items())
-            or result.get('day') != source_date or result.get('status') != index.get('status')
-            or index.get('status') not in {'failed', 'waiting_new_source_date', 'evaluated', 'valid_empty', 'source_quality_excluded_all'}):
-            raise ValueError('samsung_forward_result_invalid')
-        findings = ['samsung_forward_execution_failed'] if index['status'] == 'failed' else []
-        return dict(status='historical_diagnostic' if current_main else index['status'],
-            findings=[] if current_main else findings, historical_findings=findings if current_main else [], source_date=source_date,
-            artifact=str(path), report_sha256=sha, comparison=result.get('comparisons'),
-            source_quality=result.get('source_quality'), missing_source_paths=result.get('missing_source_paths'),
-            decision_authority='report_only')
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
 
 
 def _semantic_due_target(now):
@@ -2739,7 +2701,6 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'main_auxiliary_policy': 'DirectFamilySourceRepairCompactAuxiliary',
         'postclose_handoff': 'DirectFamilyPreopenPolicyHandoff',
         'entry_cancel_wait_tuning': 'DirectFamilySourceRepairEntryCancelWait',
-        'samsung_frozen_validation': 'SemanticMonitorProducerConsumerRefresh1007',
         'legacy_machine_report': 'DirectFamilySourceRepairMainMechanisticEntry',
         'holding_profit_exit': 'HoldingProfitExitSourceContractRepair',
         'initial_quantity': 'InitialQuantityProducerConsumerRepair1010',
@@ -2783,15 +2744,6 @@ def _semantic_alert_candidates(name, semantics, source_date):
             closure_test="native_complete_exact_date_scope_binding_and_original_reason_resolved")
             for reason in sorted(set(semantics.get("findings") or []))
             if reason != "economics_null"]
-    if name == 'samsung_frozen_validation':
-        if semantics.get('status') in {'not_assessed', 'unobservable', 'waiting_producer', 'future_due'}:
-            return []
-        return [dict(source_date=source_date, target_date=semantics.get('target_date'),
-            stage=name, scope='report', reason=reason, status=semantics['status'],
-            artifact=semantics.get('artifact'), generation=semantics.get('report_sha256'),
-            owner='SamsungFrozenCandidateValidation1006',
-            closure_test='exact_family_date_generation_source_policy_and_native_validator')
-            for reason in semantics.get('findings', [])]
     if name == "entry_cancel_wait_tuning":
         if semantics.get("status") != "source_invalid":
             return []
@@ -3962,8 +3914,6 @@ class ArtifactFreshnessDetector(BaseDetector):
             if not trading_day or semantic_day != today:
                 family_results.append(('initial_quantity', _initial_quantity_semantics(
                     PROJECT_ROOT, semantic_day, now_epoch=now_ts)))
-            family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(
-                PROJECT_ROOT, semantic_day, current_main=machine_semantics.get('selection_metric') == 'cumulative_raw_win_fraction')))
             for name, result in family_results:
                 details[name + '_semantics'] = result
                 if result['findings']:

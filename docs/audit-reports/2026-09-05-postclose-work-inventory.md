@@ -14,7 +14,7 @@
 | main_stop_confirmation | source date 2026-10-12 이후 기존 conditional stage; native Main stop 원천·검증된 parent carry/독립 연구 |
 | summary_handoff | summary/tower/checklist/strict/controller |
 
-공통 cron은 runtime selector로 EOD 20:05, postclose/controller/tuning 20:10, archive 20:50, finalization 05:35, PREOPEN 07:35, Main start 07:55를 실행한다. 삼성 frozen validation은 기존 Main wrapper의 선택적 report-only sidecar이며 정책 발행·startup gate가 아니다. 전용 episode final-refresh/auto-apply/fill notifier/확장 timer와 IPO cron은 제거한다. 10/8 이전 sealed stage 원 바이트는 과거 최종화 검증에 필요한 최소 증거로만 보존하며 새 stage나 미래 복구 owner를 만들지 않는다.
+공통 cron은 runtime selector로 EOD 20:05, postclose/controller/tuning 20:10, archive 20:50, finalization 05:35, PREOPEN 07:35, Main start 07:55를 실행한다. 삼성 선택연구는 원천의 의도적 삭제와 10/20 사용자 지시에 따라 자동 장후 실행·상시 의미 검증에서 제거했다. 원 등록·실패 보고서·과거 증거는 보존하며 원천 복원이나 검증 재실행을 하지 않는다. 전용 episode final-refresh/auto-apply/fill notifier/확장 timer와 IPO cron은 제거한다. 10/8 이전 sealed stage 원 바이트는 과거 최종화 검증에 필요한 최소 증거로만 보존하며 새 stage나 미래 복구 owner를 만들지 않는다.
 
 실행 근거와 삭제/배포 영수증은 [구현 검토](../audits/main-only-widget-episode-full-retirement-implementation-review-2026-10-08.md)에 기록한다. 과거 구성은 Git 이력이며 현행 설치 명령으로 사용하지 않는다.
 

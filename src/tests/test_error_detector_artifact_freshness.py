@@ -1353,7 +1353,8 @@ def test_semantic_object_rejects_replacement_fifo_before_read(tmp_path, monkeypa
     assert replaced == [True]
 
 
-def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monkeypatch):
+@pytest.mark.parametrize('retired_snapshot', [None, '{}', '{broken'])
+def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monkeypatch, retired_snapshot):
     from src.engine.error_detectors import artifact_freshness as mod
     from src.engine.monitoring import policy_generation_contract as generations
     class Clock(datetime):
@@ -1368,7 +1369,7 @@ def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monk
     monkeypatch.setattr(mod, '_completed_semantic_source', lambda *_: dict(
         status='receipt_selected', findings=[], source_date='2026-10-16', target_date='2026-10-19'))
     for name in ['_machine_result_semantics', '_auxiliary_result_semantics', '_main_stop_semantics',
-                 '_samsung_forward_semantics', '_postclose_handoff_semantics', '_optional_weakness_semantics']:
+                 '_postclose_handoff_semantics', '_optional_weakness_semantics']:
         monkeypatch.setattr(mod, name, lambda *a, **kw: dict(status='not_assessed', findings=[]))
     monkeypatch.setattr(mod, '_current_semantic_owners', lambda *_: {'InitialQuantityProducerConsumerRepair1010'})
     monkeypatch.setattr(generations, 'observations', lambda *a, **kw: [])
@@ -1378,7 +1379,17 @@ def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monk
         seen.append(day)
         return dict(status='source_gap', source_date=day, findings=['initial_quantity_economic_source_gap'])
     monkeypatch.setattr(mod, '_initial_quantity_semantics', quantity)
+    retired = tmp_path/'data/report/samsung_tick_transition_forward_validation/2026-10-16/latest.json'
+    if retired_snapshot is not None:
+        retired.parent.mkdir(parents=True);retired.write_text(retired_snapshot)
+    original_read=mod._semantic_object
+    def read(path, **kwargs):
+        assert 'samsung_tick_transition_forward_validation' not in str(path)
+        return original_read(path, **kwargs)
+    monkeypatch.setattr(mod,'_semantic_object',read)
     result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert 'samsung_frozen_validation_semantics' not in result.details
+    if retired_snapshot is not None:assert retired.read_text()==retired_snapshot
     assert seen == ['2026-10-16']
     assert result.details['initial_quantity_semantics']['status'] == 'source_gap'
     alert = next(a for a in result.details['semantic_alerts'] if a['stage']=='initial_quantity')
@@ -3748,7 +3759,7 @@ def _isolate_submission_artifact_check(mod, root, now, monkeypatch):
     monkeypatch.setattr(mod, 'is_krx_trading_day', lambda *args: True)
     monkeypatch.setattr(mod, 'load_installed_crontab', lambda: '')
     for name in ('_entry_cancel_wait_result_semantics', '_holding_profit_exit_semantics', '_machine_result_semantics',
-                 '_auxiliary_result_semantics', '_postclose_handoff_semantics', '_main_stop_semantics', '_samsung_forward_semantics',
+                 '_auxiliary_result_semantics', '_postclose_handoff_semantics', '_main_stop_semantics',
                  '_initial_quantity_semantics'):
         monkeypatch.setattr(mod, name, lambda *args, **kwargs: dict(status='not_assessed',findings=[]))
     monkeypatch.setattr(mod, '_completed_semantic_source', lambda *args: dict(status='not_assessed',findings=[],target_date=None))
@@ -4071,7 +4082,7 @@ def test_pending_is_warning_and_cannot_clear_prior_daemon_failure(tmp_path, monk
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda *args: True)
     monkeypatch.setattr(mod, "load_installed_crontab", lambda: "")
     for name in ("_entry_cancel_wait_result_semantics", "_holding_profit_exit_semantics", "_machine_result_semantics",
-                 "_auxiliary_result_semantics", "_postclose_handoff_semantics", "_main_stop_semantics", "_samsung_forward_semantics",
+                 "_auxiliary_result_semantics", "_postclose_handoff_semantics", "_main_stop_semantics",
                  "_initial_quantity_semantics"):
         monkeypatch.setattr(mod, name, lambda *args, **kwargs: {"status": "not_assessed", "findings": []})
     monkeypatch.setattr(mod, "_completed_semantic_source", lambda *args: {"status": "not_assessed", "findings": [], "target_date": None})
