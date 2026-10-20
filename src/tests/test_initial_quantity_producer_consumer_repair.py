@@ -952,6 +952,7 @@ def test_quantity_fact_validator_never_decodes_oversized_legacy_timeline(monkeyp
     from src.engine import log_archive_service as archive
     from src.engine import strategy_position_performance_report as fact
     from src.engine.lifecycle.holding_window_generation import MAX_PROJECTION_BYTES
+    monkeypatch.setattr(policy,'DATA_DIR',tmp_path)
     monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',tmp_path)
     monkeypatch.setattr(fact,'_saved_fact_generation_issue',lambda *a,**k:pytest.fail('unbounded snapshot decode'))
     path=tmp_path/'trade_review_2026-09-30.json'
