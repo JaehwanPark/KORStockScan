@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from typing import Any
 
@@ -173,3 +174,172 @@ def has_evidence_authority_violation(payload: dict[str, Any]) -> bool:
     ):
         return True
     return False
+
+
+def parse_candidate_review_response(
+    raw_response: Any | None,
+    *,
+    reviewer: str,
+    allowed_decisions: set[str],
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Parse the caller's review contract without sharing family authority."""
+    if raw_response in (None, ""):
+        return "missing", {}, ["ai_review_response_missing"]
+    if isinstance(raw_response, dict):
+        payload = raw_response
+    else:
+        try:
+            payload = json.loads(str(raw_response))
+        except Exception as exc:
+            return "parse_rejected", {}, [f"ai_review_json_parse_failed:{exc}"]
+    warnings: list[str] = []
+    if payload.get("schema_version") != 1:
+        warnings.append("ai_review_schema_version_invalid")
+    if payload.get("reviewer") != reviewer:
+        warnings.append("ai_review_reviewer_invalid")
+    if not isinstance(payload.get("candidate_reviews"), list):
+        warnings.append("ai_review_candidate_reviews_missing")
+    if not isinstance(payload.get("ai_tier2_proposals"), list):
+        warnings.append("ai_review_ai_tier2_proposals_missing")
+    if not isinstance(payload.get("comparative_reviews"), list):
+        warnings.append("ai_review_comparative_reviews_missing")
+    for item in payload.get("ai_tier2_proposals") or []:
+        if not isinstance(item, dict):
+            warnings.append("ai_review_ai_tier2_proposal_invalid")
+            continue
+        if str(item.get("proposal_decision") or "") not in allowed_decisions:
+            warnings.append(
+                f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}"
+            )
+        missing_contract = missing_metric_contract_fields(
+            item.get("required_source_fields")
+        )
+        if missing_contract:
+            warnings.append(
+                f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
+            )
+        if has_forbidden_runtime_leak(item):
+            warnings.append(
+                f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}"
+            )
+        if has_evidence_authority_violation(item):
+            warnings.append(
+                f"ai_review_ai_proposal_evidence_authority_violation:{item.get('candidate_id')}"
+            )
+    proposal_ids = {
+        str(item.get("candidate_id"))
+        for item in payload.get("ai_tier2_proposals") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+    review_ids = {
+        str(item.get("candidate_id"))
+        for item in payload.get("comparative_reviews") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+    if proposal_ids and proposal_ids - review_ids:
+        warnings.append("ai_review_comparative_review_missing_for_ai_proposal")
+    for item in payload.get("comparative_reviews") or []:
+        if not isinstance(item, dict):
+            warnings.append("ai_review_comparative_review_invalid")
+            continue
+        if str(item.get("selected_decision") or "") not in allowed_decisions:
+            warnings.append(
+                f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}"
+            )
+        if str(item.get("selected_source") or "") not in {
+            "deterministic",
+            "ai_tier2",
+            "hybrid",
+            "reject",
+        }:
+            warnings.append(
+                f"ai_review_comparative_source_invalid:{item.get('candidate_id')}"
+            )
+        missing_contract = missing_metric_contract_fields(
+            item.get("required_source_fields")
+        )
+        if missing_contract:
+            warnings.append(
+                f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
+            )
+        if has_forbidden_runtime_leak(item):
+            warnings.append(
+                f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}"
+            )
+        if has_evidence_authority_violation(item):
+            warnings.append(
+                f"ai_review_comparative_evidence_authority_violation:{item.get('candidate_id')}"
+            )
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+    if str(audit.get("status") or "") not in {
+        "pass",
+        "correction_required",
+        "insufficient_context",
+    }:
+        warnings.append("ai_review_audit_status_invalid")
+    if not isinstance(audit.get("forbidden_use_violations"), list):
+        warnings.append("ai_review_forbidden_use_violations_missing")
+    if warnings:
+        return "parse_rejected", payload, warnings
+    return "parsed", payload, []
+
+
+def validate_candidate_review_response(
+    raw_text: str,
+    *,
+    context: dict[str, Any],
+    reviewer: str,
+    allowed_decisions: set[str],
+) -> tuple[bool, str]:
+    """Bind a parsed review to the requesting family's candidate IDs."""
+    status, payload, warnings = parse_candidate_review_response(
+        raw_text, reviewer=reviewer, allowed_decisions=allowed_decisions
+    )
+    if status != "parsed":
+        return False, status
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+    expected_ids = {
+        str(item.get("candidate_id") or "")
+        for item in context.get("candidates", [])
+        if isinstance(item, dict)
+    }
+    review_rows = payload.get("candidate_reviews")
+    proposal_rows = payload.get("ai_tier2_proposals")
+    comparative_rows = payload.get("comparative_reviews")
+    if not isinstance(review_rows, list):
+        return False, "missing_candidate_reviews"
+    if not isinstance(proposal_rows, list):
+        return False, "missing_ai_tier2_proposals"
+    if not isinstance(comparative_rows, list):
+        return False, "missing_comparative_reviews"
+    if expected_ids:
+        review_ids = {
+            str(item.get("candidate_id") or "")
+            for item in review_rows
+            if isinstance(item, dict)
+        }
+        proposal_ids = {
+            str(item.get("candidate_id") or "")
+            for item in proposal_rows
+            if isinstance(item, dict)
+        }
+        comparative_ids = {
+            str(item.get("candidate_id") or "")
+            for item in comparative_rows
+            if isinstance(item, dict)
+        }
+        if review_ids != expected_ids:
+            return False, "candidate_reviews_id_mismatch"
+        if proposal_ids != expected_ids:
+            return False, "ai_tier2_proposals_id_mismatch"
+        if comparative_ids != expected_ids:
+            return False, "comparative_reviews_id_mismatch"
+    if audit.get("status") not in {
+        "pass",
+        "correction_required",
+        "insufficient_context",
+    }:
+        return False, "missing_audit_status"
+    if warnings:
+        return False, "warnings:" + ",".join(warnings[:3])
+    return True, ""

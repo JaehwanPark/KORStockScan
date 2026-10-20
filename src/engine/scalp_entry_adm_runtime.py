@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from src.engine.lifecycle.retirement import RETIREMENT_ID
 
-import json
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -284,30 +283,8 @@ def _latest_matrix_path_on_or_before(target_date: date) -> Path | None:
     return best_path
 
 
-def _read_payload(path: Path | None) -> dict[str, Any]:
-    if path is None or not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _bucket_token(buckets: dict[str, str]) -> str:
     return entry_adm_bucket_token(buckets)
-
-
-def _matched_bucket(payload: dict[str, Any], token: str) -> dict[str, Any]:
-    buckets = (
-        payload.get("bucket_summary")
-        if isinstance(payload.get("bucket_summary"), list)
-        else []
-    )
-    for item in buckets:
-        if isinstance(item, dict) and str(item.get("bucket_token") or "") == token:
-            return item
-    return {}
 
 
 def _bucket_lookup_status(
@@ -323,24 +300,6 @@ def _bucket_lookup_status(
     if sample <= 0 and joined <= 0:
         return "prior_bucket_present_but_runtime_sample_missing"
     return "matched_prior_bucket"
-
-
-def _prompt_context(
-    payload: dict[str, Any], bucket_token: str, bucket: dict[str, Any]
-) -> str:
-    return "\n".join(
-        [
-            "[Entry ADM Advisory Context]",
-            "- source: scalp entry action decision matrix. operator override may force WAIT/DROP, while existing safety guards always win.",
-            f"- matrix_version: {payload.get('matrix_version', '-')}",
-            f"- source_date: {payload.get('date', '-')}",
-            f"- bucket_token: {bucket_token}",
-            f"- matched_bucket_sample: {bucket.get('sample_count', 0)} / joined: {bucket.get('joined_sample', 0)}",
-            f"- dominant_action: {bucket.get('dominant_action', 'unmapped')}",
-            f"- source_quality_adjusted_ev_pct: {bucket.get('source_quality_adjusted_ev_pct')}",
-            "- rules: keep the existing BUY/WAIT/DROP schema; if quote/context is stale prefer WAIT_REQUOTE; do not bypass liquidity, overbought, stale quote, or latency pre-submit safety guards.",
-        ]
-    )
 
 
 def _alignment_for_action(action_label: str, bucket: dict[str, Any]) -> str:

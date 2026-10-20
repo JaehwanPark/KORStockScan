@@ -1,17 +1,100 @@
 import gzip
 import json
+from copy import deepcopy
 from pathlib import Path
+
+import pytest
 
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
     has_evidence_authority_violation,
 )
 from src.engine.automation import producer_gap_discovery as mod
+from src.engine.automation import stage_hook_workorder_discovery as hooks
 
 
 def test_project_root_resolves_repo_root_after_package_move():
-    assert mod.PROJECT_ROOT.name == "KORStockScan"
+    assert mod.PROJECT_ROOT == Path(__file__).resolve().parents[2]
     assert mod.POST_SELL_DIR == mod.PROJECT_ROOT / "data" / "post_sell"
+
+
+@pytest.mark.parametrize("family,decision,other_decision,ascii_output", [
+    (mod, "new_producer", "new_hook", False),
+    (hooks, "new_hook", "new_producer", True),
+])
+@pytest.mark.parametrize("case", [
+    "valid", "valid_empty", "other_reviewer", "other_decision", "missing",
+    "invalid_json", "schema", "candidate_ids", "proposal_ids",
+    "comparative_ids", "source_contract", "runtime_authority",
+])
+def test_shared_review_preserves_family_contract_and_provider_arguments(
+    monkeypatch, family, decision, other_decision, ascii_output, case
+):
+    from src.engine.ai import postclose_structured_review_provider as provider
+
+    payload = deepcopy(_ai_response([] if case == "valid_empty" else ["candidate_a"]))
+    payload["reviewer"] = family.AI_REVIEWER_NAME
+    for row in payload["ai_tier2_proposals"]:
+        row["proposal_decision"] = decision
+    for row in payload["comparative_reviews"]:
+        row["selected_decision"] = decision
+    context = {"candidates": [] if case == "valid_empty" else [
+        {"candidate_id": "candidate_a"}
+    ]}
+    if case == "other_reviewer":
+        payload["reviewer"] = (
+            hooks.AI_REVIEWER_NAME if family is mod else mod.AI_REVIEWER_NAME
+        )
+    elif case == "other_decision":
+        payload["ai_tier2_proposals"][0]["proposal_decision"] = other_decision
+    elif case == "schema":
+        payload["schema_version"] = 2
+    elif case == "candidate_ids":
+        payload["candidate_reviews"][0]["candidate_id"] = "other"
+    elif case == "proposal_ids":
+        # Change both sets so parsing remains valid; the request binding must fail.
+        payload["ai_tier2_proposals"][0]["candidate_id"] = "other"
+        payload["comparative_reviews"][0]["candidate_id"] = "other"
+    elif case == "comparative_ids":
+        payload["comparative_reviews"].append({
+            **payload["comparative_reviews"][0], "candidate_id": "other"
+        })
+    elif case == "source_contract":
+        payload["ai_tier2_proposals"][0]["required_source_fields"] = []
+    elif case == "runtime_authority":
+        payload["ai_tier2_proposals"][0]["forbidden_uses"].append(
+            "broker_order_allowed"
+        )
+    raw = None if case == "missing" else (
+        "{" if case == "invalid_json" else json.dumps(payload)
+    )
+    config = family._ai_review_config()
+    seen = []
+
+    def mock_provider(received, **kwargs):
+        assert received is context
+        assert kwargs["config"] is config
+        assert kwargs["schema_name"] == family.AI_REVIEW_SCHEMA_NAME
+        assert kwargs["metadata"] == {
+            "endpoint_name": family.AI_REVIEWER_NAME, "report_type": family.REPORT_TYPE
+        }
+        assert kwargs["instructions"] == family._build_ai_review_instructions()
+        assert kwargs["ensure_ascii"] is ascii_output
+        seen.append(kwargs["contract_validator"](raw))
+        return raw, {"status": "mock"}
+
+    monkeypatch.setattr(provider, "call_postclose_structured_review", mock_provider)
+    assert family._call_openai_ai_review(context, config=config) == (
+        raw, {"status": "mock"}
+    )
+    expected = {
+        "valid": (True, ""), "valid_empty": (True, ""),
+        "missing": (False, "missing"),
+        "candidate_ids": (False, "candidate_reviews_id_mismatch"),
+        "proposal_ids": (False, "ai_tier2_proposals_id_mismatch"),
+        "comparative_ids": (False, "comparative_reviews_id_mismatch"),
+    }.get(case, (False, "parse_rejected"))
+    assert seen == [expected]
 
 
 def test_real_anchor_detectors_have_sim_equivalent_contracts():
@@ -157,7 +240,10 @@ def test_producer_gap_ai_review_rejects_real_preapply_primary_ev_claim():
         "comparison_summary"
     ] = "Treat preapply_real primary_ev as decisive and merge_real_pnl_with_sim before policy enablement."
 
-    status, _, warnings = mod._parse_ai_review_response(payload)
+    status, _, warnings = mod.parse_candidate_review_response(
+        payload, reviewer=mod.AI_REVIEWER_NAME,
+        allowed_decisions=mod.PRODUCER_DUAL_DECISIONS,
+    )
 
     assert status == "parse_rejected"
     assert (

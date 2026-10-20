@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from src.engine.lifecycle.retirement import RETIREMENT_ID
 
-import json
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -12,7 +11,7 @@ from src.engine.lifecycle.neutral_decision_context import (
     apply_lifecycle_decision_to_payload,
     resolve_lifecycle_decision,
 )
-from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils.constants import DATA_DIR, TRADING_RULES as TRADING_RULES
 
 MATRIX_DIR = DATA_DIR / "report" / "holding_exit_decision_matrix"
 MATRIX_FILE_RE = re.compile(r"holding_exit_decision_matrix_(\d{4}-\d{2}-\d{2})\.json$")
@@ -48,265 +47,6 @@ def _volume_bucket(value: Any) -> str:
     if volume < 10_000_000:
         return "volume_2m_10m"
     return "volume_gte_10m"
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None:
-            return default
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in {"1", "true", "yes", "y", "on"}:
-            return True
-        if text in {"0", "false", "no", "n", "off", ""}:
-            return False
-        return default
-    return bool(value)
-
-
-_UNUSABLE_HOLDING_SCORE_SOURCES = {
-    "",
-    "-",
-    "none",
-    "null",
-    "missing",
-    "unknown",
-    "not_called",
-    "holding_ai_not_called",
-    "fallback",
-    "fallback_score_50",
-    "engine_disabled",
-    "lock_contention",
-    "timeout",
-    "exception",
-    "error",
-    "insufficient",
-    "source_quality_insufficient",
-    "watching_cooldown",
-}
-_UNUSABLE_HOLDING_SCORE_SOURCE_TOKENS = (
-    "fallback_score_50",
-    "engine_disabled",
-    "lock_contention",
-    "timeout",
-    "exception",
-    "error",
-    "insufficient",
-    "source_quality_insufficient",
-)
-
-
-def _holding_matrix_ai_score_context(
-    position_ctx: dict[str, Any] | None,
-) -> dict[str, Any]:
-    ctx = position_ctx if isinstance(position_ctx, dict) else {}
-    score = _safe_float(ctx.get("current_ai_score"), 50.0)
-    source = str(
-        ctx.get("holding_score_source")
-        or ctx.get("holding_ai_score_source")
-        or ctx.get("current_ai_score_source")
-        or ctx.get("ai_score_source")
-        or "-"
-    ).strip()
-    data_quality = (
-        str(ctx.get("holding_score_data_quality") or "insufficient").strip().lower()
-    )
-    if data_quality not in {"fresh", "partial", "stale", "insufficient"}:
-        data_quality = "insufficient"
-    has_explicit_quality = (
-        "holding_score_data_quality" in ctx or "holding_score_effective_usable" in ctx
-    )
-    microstructure_confirmed = (
-        _safe_bool(ctx.get("holding_score_role_microstructure_confirmed"), False)
-        or _safe_bool(ctx.get("microstructure_confirmed"), False)
-        or _safe_bool(ctx.get("tick_aggressor_pressure_usable"), False)
-        or _safe_int(ctx.get("tick_aggressor_trusted_count"), 0) > 0
-    )
-    usable = True
-    excluded_reason = "-"
-    source_l = str(source).lower()
-    if source_l in _UNUSABLE_HOLDING_SCORE_SOURCES or any(
-        token in source_l for token in _UNUSABLE_HOLDING_SCORE_SOURCE_TOKENS
-    ):
-        usable = False
-        excluded_reason = f"holding_score_source_{source or 'missing'}"
-    if data_quality in {"stale", "insufficient"}:
-        usable = False
-        excluded_reason = f"holding_score_data_quality_{data_quality}"
-    elif data_quality == "partial" and not microstructure_confirmed:
-        usable = False
-        excluded_reason = "holding_score_partial_requires_microstructure"
-    if "holding_score_effective_usable" in ctx and not _safe_bool(
-        ctx.get("holding_score_effective_usable"), False
-    ):
-        usable = False
-        excluded_reason = str(
-            ctx.get("holding_score_excluded_reason") or "holding_score_unusable"
-        )
-    if source_l == "holding_ai_not_called":
-        age_sec = _safe_float(ctx.get("holding_score_age_sec"), -1.0)
-        ttl = max(
-            1.0,
-            _safe_float(getattr(TRADING_RULES, "AI_HOLDING_MAX_COOLDOWN", 180), 180.0),
-        )
-        if not has_explicit_quality or age_sec < 0 or age_sec > ttl:
-            usable = False
-            excluded_reason = "holding_ai_not_called_expired_or_unproven"
-    return {
-        "current_ai_score": score,
-        "ai_score_usable": usable,
-        "ai_score_source": source or "-",
-        "ai_score_data_quality": data_quality or "-",
-        "ai_score_excluded_reason": excluded_reason,
-        "ai_score_microstructure_confirmed": bool(microstructure_confirmed),
-    }
-
-
-def _holding_score_prior_fields(
-    *,
-    current_ai_score: Any,
-    threshold: Any,
-    usable: bool,
-    prefix: str = "",
-) -> dict[str, Any]:
-    score = _safe_float(current_ai_score, 0.0)
-    min_score = _safe_float(threshold, 0.0)
-    if not usable:
-        band = "neutral_or_unknown"
-        weight = 0.0
-        confidence = 0.0
-        reason = "ai_score_unusable_neutral_prior"
-    elif score >= min_score:
-        band = "supportive"
-        weight = 0.6
-        confidence = 0.7
-        reason = "ai_score_supportive_prior"
-    else:
-        band = "low"
-        weight = -0.3
-        confidence = 0.5
-        reason = "ai_score_low_prior"
-    return {
-        f"{prefix}score_gate_converted_to_prior": True,
-        f"{prefix}hard_gate_veto": False,
-        f"{prefix}score_prior_band": band,
-        f"{prefix}ai_score_prior_weight": weight,
-        f"{prefix}score_prior_confidence": confidence,
-        f"{prefix}score_prior_reason": reason,
-    }
-
-
-def _holding_matrix_current_micro_support(
-    position_ctx: dict[str, Any] | None,
-) -> dict[str, Any]:
-    ctx = position_ctx if isinstance(position_ctx, dict) else {}
-    stale = any(
-        _safe_bool(ctx.get(key), False)
-        for key in (
-            "quote_stale",
-            "price_context_stale",
-            "micro_context_stale",
-            "reversal_feature_stale",
-            "source_quality_hard_gap",
-        )
-    )
-    pressure_usable = (
-        _safe_bool(ctx.get("tick_aggressor_pressure_usable"), False)
-        or _safe_bool(ctx.get("tick_aggressor_pressure_usable_bool"), False)
-        or _safe_int(ctx.get("tick_aggressor_trusted_count"), 0) > 0
-    )
-    buy_pressure = _safe_float(
-        ctx.get("buy_pressure_10t", ctx.get("buy_pressure")), 0.0
-    )
-    tick_accel = _safe_float(
-        ctx.get("tick_acceleration_ratio", ctx.get("tick_accel")), 0.0
-    )
-    micro_raw = ctx.get("curr_vs_micro_vwap_bp", ctx.get("micro_vwap_bp"))
-    micro_available = micro_raw not in (None, "") and str(micro_raw) != "-"
-    if "micro_vwap_available" in ctx:
-        micro_available = micro_available and _safe_bool(
-            ctx.get("micro_vwap_available"), False
-        )
-    micro_vwap_bp = _safe_float(micro_raw, -999.0)
-    large_sell = _safe_bool(ctx.get("large_sell_print_detected"), False)
-
-    min_buy_pressure = _safe_float(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_MIN_BUY_PRESSURE", 55.0),
-        55.0,
-    )
-    min_tick_accel = _safe_float(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_MIN_TICK_ACCEL", 0.5),
-        0.5,
-    )
-    min_micro_vwap_bp = _safe_float(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_MIN_MICRO_VWAP_BP", -10.0),
-        -10.0,
-    )
-    pressure_ok = pressure_usable and buy_pressure >= min_buy_pressure
-    tick_ok = tick_accel >= min_tick_accel
-    micro_ok = micro_available and micro_vwap_bp >= min_micro_vwap_bp
-    supported = bool(
-        (not stale)
-        and pressure_usable
-        and micro_ok
-        and (pressure_ok or tick_ok)
-        and not large_sell
-    )
-
-    support_signals = []
-    risk_signals = []
-    if pressure_ok:
-        support_signals.append("buy_pressure_ok")
-    elif not pressure_usable:
-        risk_signals.append("tick_aggressor_pressure_unusable")
-    else:
-        risk_signals.append("buy_pressure_below_min")
-    if tick_ok:
-        support_signals.append("tick_accel_ok")
-    else:
-        risk_signals.append("tick_accel_below_min")
-    if micro_ok:
-        support_signals.append("micro_vwap_ok")
-    elif not micro_available:
-        risk_signals.append("micro_vwap_missing")
-    else:
-        risk_signals.append("micro_vwap_below_min")
-    if stale:
-        risk_signals.append("source_or_quote_stale")
-    if large_sell:
-        risk_signals.append("large_sell_detected")
-
-    return {
-        "holding_exit_matrix_current_micro_support": supported,
-        "holding_exit_matrix_current_micro_support_signals": ",".join(support_signals)
-        or "-",
-        "holding_exit_matrix_current_micro_risk_signals": ",".join(risk_signals) or "-",
-        "holding_exit_matrix_buy_pressure_10t": round(buy_pressure, 4),
-        "holding_exit_matrix_tick_acceleration_ratio": round(tick_accel, 4),
-        "holding_exit_matrix_curr_vs_micro_vwap_bp": (
-            round(micro_vwap_bp, 4) if micro_available else "-"
-        ),
-        "holding_exit_matrix_micro_vwap_available": bool(micro_available),
-    }
 
 
 def _time_bucket(value: datetime | None) -> str:
@@ -351,16 +91,6 @@ def _latest_matrix_path_on_or_before(target_date: date) -> Path | None:
     return best_path
 
 
-def _read_matrix_payload(path: Path | None) -> dict[str, Any]:
-    if path is None or not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _resolve_intraday_volume(
     ws_data: dict[str, Any] | None, recent_candles: list[dict[str, Any]] | None
 ) -> Any:
@@ -377,64 +107,6 @@ def _resolve_intraday_volume(
             if value not in (None, "", 0, 0.0):
                 return value
     return 0
-
-
-def _matched_entries(
-    payload: dict[str, Any], buckets: dict[str, str]
-) -> list[dict[str, Any]]:
-    by_axis = {
-        str(entry.get("axis") or ""): entry
-        for entry in (payload.get("entries") or [])
-        if isinstance(entry, dict)
-    }
-    matched: list[dict[str, Any]] = []
-    for axis_name in ("price_bucket", "volume_bucket", "time_bucket"):
-        bucket = buckets.get(axis_name, f"{axis_name}_unknown")
-        entry = by_axis.get(axis_name)
-        if entry and str(entry.get("bucket") or "") == bucket:
-            matched.append(entry)
-            continue
-        matched.append(
-            {
-                "axis": axis_name,
-                "bucket": bucket,
-                "recommended_bias": "no_clear_edge",
-                "policy_hint": "runtime_bucket_unmapped",
-                "prompt_hint": f"{axis_name}={bucket} runtime bucket은 matrix entry가 없어 기존 보유/청산 원칙을 우선한다.",
-            }
-        )
-    return matched
-
-
-def _prompt_context(
-    payload: dict[str, Any], matched_entries: list[dict[str, Any]]
-) -> str:
-    if not payload:
-        return ""
-    hard_veto = (
-        ", ".join(str(item) for item in (payload.get("hard_veto") or [])[:4]) or "-"
-    )
-    lines = [
-        "[ADM Advisory Context]",
-        "- source: holding/exit decision matrix. operator override may force HOLD/EXIT or scale-in bias; hard veto and existing runtime safety always win.",
-        f"- matrix_version: {payload.get('matrix_version', '-')}",
-        f"- source_date: {payload.get('source_date', '-')}",
-        f"- hard_veto_first: {hard_veto}",
-        "- matched_buckets:",
-    ]
-    for entry in matched_entries:
-        lines.append(
-            "  - "
-            f"{entry.get('axis')}={entry.get('bucket')} / bias={entry.get('recommended_bias', '-')} / "
-            f"policy={entry.get('policy_hint', '-')}"
-        )
-    lines.append("- prompt_hints:")
-    for entry in matched_entries:
-        lines.append(f"  - {entry.get('prompt_hint', '-')}")
-    lines.append(
-        "- rules: keep the existing HOLD/TRIM/EXIT schema. if bias is no_clear_edge, prefer the baseline rule."
-    )
-    return "\n".join(lines)
 
 
 def _alignment_for_action(
@@ -539,13 +211,6 @@ def has_holding_exit_matrix_safety_veto(context: dict[str, Any] | None) -> bool:
             "provenance_missing",
         )
     )
-
-
-def _exit_to_hold_candidate_actions() -> set[str]:
-    actions = {"EXIT", "DROP", "SELL"}
-    if bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_TRIM_TO_HOLD_ENABLED", False)):
-        actions.add("TRIM")
-    return actions
 
 
 def _runtime_bias_from_entries(

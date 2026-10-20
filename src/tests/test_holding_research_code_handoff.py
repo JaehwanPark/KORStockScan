@@ -1,4 +1,5 @@
 """Reviewed generations retain exact source closure without new policy authority."""
+import ast
 import hashlib
 import json
 import os
@@ -10,7 +11,6 @@ import pytest
 from src.engine.automation import intraday_release_handoff as H
 from src.engine.automation import prepared_policy_code_handoff as C
 from src.engine.scalping.main_stop_policy import implementation_paths
-from src.engine.scalping.holding_vote_experiment import _code_paths
 from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
 from src.tests.test_prepared_policy_code_handoff import prepared  # noqa: F401 -- shared pytest fixture
 
@@ -20,10 +20,20 @@ TRIGGER = 'src/engine/sniper_state_handlers.py'
 ROOT = Path(H.__file__).resolve().parents[3]
 NATIVE_VERIFY = H._verify_entry_code_delta
 REAL_GIT = H.subprocess.check_output
+# This fixture certifies issued generations, not the expanding current inventory.
+# Load only the pure inventory function from its immutable historical owner.
+INVENTORY_COMMIT = '958d35b2b03f0a37462c1c0121fc14c108e709b8'
+_inventory_source = REAL_GIT(['git', '-C', str(ROOT), 'show',
+    INVENTORY_COMMIT+':src/engine/scalping/holding_vote_experiment.py'], text=True)
+_inventory_function = next(node for node in ast.parse(_inventory_source).body
+    if isinstance(node, ast.FunctionDef) and node.name == '_code_paths')
+_inventory_namespace = {}
+exec(compile(ast.Module(body=[_inventory_function], type_ignores=[]),
+    '<historical holding inventory>', 'exec'), _inventory_namespace)
 FAMILY_PATHS = {
     'pre_submit_delay': {name: name for name in CONTRACT_PATHS},
     'main_stop': {name: 'src/engine/'+name for name in implementation_paths()},
-    'holding_vote': {name: 'src/engine/'+name for name in _code_paths()},
+    'holding_vote': {name: 'src/engine/'+name for name in _inventory_namespace['_code_paths']()},
 }
 ORIGINAL_DIGESTS = {
     'pre_submit_delay': 'bd5767c2b6b9dcfe738d2b61740e5a980b965ccfdc2c11ebc197b839da4a4256',
@@ -34,7 +44,7 @@ GENERATIONS = {
     'historical_9d': '9d2201141aeae409fe960ff7795a1340718a7146',
     'historical_a8': 'a8f063105bbb1d8a3676e55ad5377990a87594df',
     'historical_8a8': '8a8fd0ba1845a69b0a829f5c4bcd551a602aea7e',
-    'completed_current': '958d35b2b03f0a37462c1c0121fc14c108e709b8',  # frozen 76-source parent
+    'completed_current': INVENTORY_COMMIT,  # frozen 76-source parent
 }
 PAIRS = {
     'historical_9d': H.REVIEWED_HOLDING_RESEARCH_INTEGRATION_SOURCES,
@@ -218,7 +228,7 @@ def test_old_handler_cannot_authorize_an_unknown_successor(candidate):
         c.verify()
 
 
-def test_prepared_verify_reexecutes_native_dependency_guard(prepared, candidate, monkeypatch):
+def test_prepared_verify_reexecutes_native_dependency_guard(prepared, candidate, monkeypatch):  # noqa: F811 -- imported pytest fixture
     data, root, args, actual, receipt, pp = prepared
     c = candidate
     calls = []
