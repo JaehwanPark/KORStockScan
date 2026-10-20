@@ -220,7 +220,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 이 진단은 전체 운영 원천 성능 측정이 아니다. 최초 native intake 30.42초/rchar3,257,008,127, 관측 보존 진단16.24초/rchar3,257,103,353; 동일 결정적 실패를 세 번째 전량 재실행하지 않는다. 정상 원천/정책을 삭제·재발행하거나 size/timeout을 늘리지 않는다.
 - **배포 gate는 BLOCKED**. 승인 철회/권한 대기가 아니라 필수 P5 증거 결손이다. incumbent `a7c0b0dc5`, PID4094188/start10221444를 보존했고 이번 작업의 stop·selector 전환·restart·provider/주문 실행은0이다. candidate fixture/PASS를 실제 새 PID나 자연 성능으로 보고하지 않는다.
 
-- [ ] `[MainPolicyLoadAndExitValidation1018] 현재 intraday 보존 정책의 P5 native closure 계약 복구` (`Due: 2026-10-20`, `Slot: ADHOC`, `TimeWindow: 10:20~`, `Track: RuntimeStability`)
+- [x] `[MainPolicyLoadAndExitValidation1018] 현재 intraday 보존 정책의 P5 native closure 계약 복구` (`Due: 2026-10-20`, `Slot: ADHOC`, `TimeWindow: 10:20~`, `Track: RuntimeStability`)
   - 기존 [정책 로딩 검증 owner](../proposals/main-policy-load-and-exit-validation-plan-2026-10-18.md)의 새 현재 실패로 재개. 원천 감소 1~8과 별도로 기존 P5 parent/직접 child context가 소유한다. 원 실패 run `09335ec448134a4e907e9a55506b2333`, source19/apply20, current bundle `5ac1768ad97ae21e1ea36f215c031e87df1045e9ee25c24773e6d73dac6644aa`.
   - 닫힘 검사: 실제 선택본의 native preserved-code-handoff 경로와 P5가 요구하는 auxiliary manifest 경계를 fixture로 재현하고 실제 소비 계약에 맞게 수정한다. 현재 source/code/policy/PID의 검증 가능한 원천 closure를 같은 invocation에 결속해야 한다. 빈 manifest 강제 허용·과거 PASS 재사용·새 정책 발행·불변 릴리스 편집은 금지한다. source/date/generation/원천 변경 거절을 유지하고 fresh clean 후보의 P512consumer·child 종료·무부작용 PASS를 확인한다. 그 후에만 새 exact handoff와 ordered 배포를 진행한다.
   - 남은 수용: 현재 code handoff가 제공하는 native 검증 범위와 P5 위임 범위의 호환 설계/회귀·실제 child는 미완료다. 전체 결함0·배포 가능·자연 수용 완료를 주장하지 않는다.
@@ -237,6 +237,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - source-reader842 PASS, P5/policy/reuse1152 PASS, source proof/currentness/census/quantity469 PASS(중복 suite 합산 아님). 새 typed preservation은 실제 격리 child의 양성/변조·누락11개와 native producer 수집/old a7c 중첩 session으로 검증했다. 원본을 다시 읽는 native 동작은 최소 source19 frozen-input 재검증과 실제 P5 후속에서만 수행하며 정지 전까지 incumbent PID4094188/start10221444를 유지한다.
 - 원천 reader 변경으로 extractor 코드 세대가 바뀐09/30·10/15·10/16의 기존 normalized cache만 명시적 native predecessor로 재검증한다. 원문/과거 cache/정책/strict/controller를 보존하며 normal32MiB reader budget을 늘리거나 inline migration하지 않는다. native 연구/currentness, clean 후보 P512consumer·child종료·보호 원천 불변과 ordered 배포/PID는 아직 실제 영수증으로 닫아야 한다.
 
+
 - 10:55 실제 P5/run2d922451은 원 준비본a45fe9f1과 활성본4e2e42eb를 같은 hash로 요구한 intake 결함으로 실패했다. 원 실패를 보존하고 기존 closure owner에서 두 세대를 각자의 native 원본에 결속한다. source19 연구416c4c0a/20840scope의 전체 현재 검증은 완료했으며 새 P5·ordered 배포·PID 수용은 미완료다. Main4094188/start10221444는 유지했다.
 
 - P5/run6c360700의 추가 intake 실패는18,459B native gzip 증명과 기존1MiB delegation 하한의 불일치다. 작은 증명은 위임하지 않고 native child가 직접 읽도록 기존 수집 owner를 보완하며 원 실패/guard를 보존한다.
@@ -245,4 +246,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 - P5/runb87d8e1b은 금지 접근0이나 native 캐시 adapter의 `binding` 누락으로12개 중 손절/holding2개 로드가 실패했다. 기존 adapter에 검증 전용 역할을 명시해 장후 producer admission은 계속 금지한다. 실제 새 P5와 배포/PID는 미완료다.
 
+
 - 11:22 23d30a55b/PID390249 기동 후 실제 observer는 sentinel parser 인계 실패로 unobservable다. `[MainPolicyLoadAndExitValidation1018]`의 현재 source-only 소비 후속으로 fc39→f305의 정확한 parser-equivalent migration을 수리하고 native sentinel→current observer→full health를 다시 검증한다. 기동/P5 성공을 전체 report 건강으로 대체하지 않는다.
+
+- 12:11 통합 수용:99c51c85f에0255·c696과 원 holding 사건 식별 수리를 포함해 native P5/c992f414의12 consumer·격리·종료·load PASS 및 ordered complete/pass, PID782998/start11032230을 확인했다. `[MainPolicyLoadAndExitValidation1018]`의 보존 정책 P5 code/native/PID 수용은 완료한다. 원 실패 이력은 위에 유지한다. 기동 뒤 holding12:10:40을 full health12:11:47이 같은 SHA로 읽었고 새 source gap은0, 원49389 두 사유는 보존한다. `[HoldingProfitExitSourceContractRepair]`·수량/비용·자연 수용과 현재 partial 관측을 완료 처리하지 않는다. [최종 소비](../../tmp/postclose-monitoring-20261019/holding-probe-integration-native/verification.json).
