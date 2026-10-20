@@ -870,9 +870,12 @@ def build_step(data_root, path, *, max_bytes=MAX_STEP_BYTES, seconds=1):
             complete=offset==end,selected_records=len(pending),wall_seconds=time.monotonic()-started)
 
 
-def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, stages=None, after=None):
-    """Read verified index rows only; missing coverage never scans the source."""
+def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, stages=None, after=None,
+              snapshot_receipt=None):
+    """Read verified rows; an explicit receipt may admit certified later appends."""
     with _database(data_root, path, readonly=True) as (db, path, namespace):
+        if snapshot_receipt is not None:
+            db.execute('BEGIN')
         name = str(path)
         start_generation=generation(data_root,path)
         state = db.execute('SELECT signature,catchup_end,cursor,producer_end,invalid FROM sources WHERE path=?', (name,)).fetchone()
@@ -897,8 +900,13 @@ def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, sta
             if value.get('schema')!=SCHEMA:
                 raise ValueError('trailing_index_projection_schema_invalid')
             yield value, dict(path=name, decoded_offset=offset, size=size, sha256=raw_sha)
-        if generation(data_root,path)!=start_generation:
+        end_generation = generation(data_root,path)
+        if end_generation != start_generation and (
+                snapshot_receipt is None or not _append_successor(start_generation, end_generation)):
             raise InputPending('trailing_index_source_generation_changed')
+        if snapshot_receipt is not None:
+            snapshot_receipt.update(generation=start_generation,
+                verified_append_after_snapshot=end_generation != start_generation)
 
 
 def generation(data_root, path):

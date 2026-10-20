@@ -70924,6 +70924,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 effective_venue=stock.get("effective_venue"),
                 delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
                 delay_policy_status=delay_policy["status"],
+                delay_selection_basis=delay_policy.get("selection_basis"),
+                delay_evidence_verdict=delay_policy.get("evidence_verdict", "indeterminate"),
+                delay_selected_cell_key=delay_policy.get("selected_cell_key"),
                 actual_order_submitted=False, broker_order_forbidden=True,
                 runtime_effect=False,
                 decision_authority="source_only_pre_submit_delay_observation")
@@ -70995,6 +70998,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 effective_venue=stock.get("effective_venue"),
                 delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
                 delay_policy_status=delay_policy["status"],
+                delay_selection_basis=delay_policy.get("selection_basis"),
+                delay_evidence_verdict=delay_policy.get("evidence_verdict", "indeterminate"),
+                delay_selected_cell_key=delay_policy.get("selected_cell_key"),
                 actual_order_submitted=False, broker_order_forbidden=True,
                 runtime_effect=False, decision_authority="source_only_pre_submit_delay_observation")
             try:

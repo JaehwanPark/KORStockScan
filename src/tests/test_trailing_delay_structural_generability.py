@@ -53,6 +53,36 @@ def test_provider_request_identity_is_captured_from_actual_wire_with_only_transp
     assert registry.provider_identity(base,context)['identity_sha256']==registry.provider_identity({**base,'text':other},context)['identity_sha256']
 
 
+def test_wire_fact_alias_is_request_provenance_not_a_new_timing_policy():
+    from src.engine.scalping import reversal_auxiliary_registry as registry
+    from src.engine.scalping import continuous_reversal_postclose as postclose
+    schema = {'format': {'schema': {'properties': {'screen': {'anyOf': [
+        {'properties': {'fact': {'type': 'string', 'enum': ['f6']},
+                        'risk': {'enum': ['NO_BLOCKING_RISK']},
+                        'verdict': {'enum': ['PASS']}}}]}}}}}
+    payload = dict(instructions='Same reviewed prompt', model='gpt-5.4-nano', text=schema)
+    context = dict(policy_version='continuous_reversal_policy_v6', registry_sha256='a'*64)
+    other = deepcopy(payload)
+    other['text']['format']['schema']['properties']['screen']['anyOf'][0]['properties']['fact']['enum'] = ['f7']
+    one = registry.provider_identity(payload, context)
+    two = registry.provider_identity(other, context)
+    assert one['identity_sha256'] == two['identity_sha256']
+    assert one['provenance']['response_schema_sha256'] != two['provenance']['response_schema_sha256']
+    # Historical identities remain immutable and valid. Only the additional
+    # research equivalence key normalizes their original request-local aliases.
+    historical = deepcopy(one)
+    historical['semantic']['response_contract'] = schema
+    historical['identity_sha256'] = postclose.digest(historical['semantic'])
+    original = deepcopy(historical)
+    assert registry.timing_compatibility_identity(historical) == one['identity_sha256']
+    assert historical == original
+    for field, value in [('risk', 'STALE_SOURCE'), ('verdict', 'VETO'), ('fact', 'literal_contract_fact')]:
+        changed = deepcopy(other)
+        changed['text']['format']['schema']['properties']['screen']['anyOf'][0]['properties'][field]['enum'] = [value]
+        assert registry.provider_identity(changed, context)['identity_sha256'] != one['identity_sha256']
+    assert registry.provider_identity({**payload, 'instructions': 'Other prompt'}, context)['identity_sha256'] != one['identity_sha256']
+
+
 @pytest.mark.parametrize('n',[60,240])
 def test_new_classifier_generation_does_not_require_future_hash_on_original_ai_holding_pin(tmp_path,n):
     from src.tests.test_main_trailing_partitioned_research import minimal

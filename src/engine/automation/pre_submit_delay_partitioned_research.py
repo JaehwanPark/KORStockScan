@@ -218,11 +218,11 @@ def _select_legacy(db, base, args):
         'validation_ids_sha256':_ids_digest(db,validation+f' AND p{best} IS NOT NULL',args)}
 
 
-def _select(db, base, args):
+def _select(db, base, args, *, horizons=initial.HORIZONS):
     train, validation = base+" AND split='train'", base+" AND split='validation'"
     train_n = db.execute('SELECT count(*) FROM population WHERE '+train,args).fetchone()[0]
     validation_n = db.execute('SELECT count(*) FROM population WHERE '+validation,args).fetchone()[0]
-    candidates = [d for d in initial.HORIZONS[1:] if db.execute(
+    candidates = [d for d in horizons[1:] if db.execute(
         f'SELECT 1 FROM population WHERE {train} AND p{d} IS NOT NULL LIMIT 1',args).fetchone()]
     metrics = {d:_stats(db,train,args,d,train_n) for d in candidates}
     empty = dict(delay_sec=None,selection_basis='unsupported',runtime_apply_allowed=False,
@@ -246,9 +246,10 @@ def _select(db, base, args):
 
 
 def _populate(db, projected, *, effective_date, algorithm):
+    horizons = initial.candidate_horizons(algorithm)[1:]
     db.execute('CREATE TABLE population (id TEXT PRIMARY KEY, body TEXT, gid TEXT, anchor TEXT, '
         'market TEXT, parents TEXT, kind TEXT, at REAL, end REAL, native INTEGER, p0 INTEGER, '
-        'p30 REAL,p60 REAL,p120 REAL,p180 REAL,split TEXT,eligible INTEGER) WITHOUT ROWID')
+        + ','.join(f'p{d} REAL' for d in horizons) + ',split TEXT,eligible INTEGER) WITHOUT ROWID')
     for row in projected:
         parents = row.get('parent_compatibility')
         pairs = row.get('pairs')
@@ -266,12 +267,12 @@ def _populate(db, projected, *, effective_date, algorithm):
                 or not isinstance(row.get('situation'),str) or len(row['situation'])>2048):
             raise ValueError('initial_delay_projection_invalid')
         group = [row['anchor_kind'],row['session'],row['parent_compatibility']]
-        pairs = row['pairs']
-        db.execute('INSERT INTO population VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        pairs = initial.selection_pairs(row, algorithm)
+        db.execute('INSERT INTO population VALUES (' + ','.join('?' for _ in range(13+len(horizons))) + ')',
             (row['identity'],storage.encoded(row).decode(),initial.digest(group),row['anchor_kind'],
              row['session'],storage.encoded(row['parent_compatibility']).decode(),row['situation'],
              row['committed_at'],row['observation_end_at'],int(row['native_evaluation_bound']),int(row['p0_valid']),
-             *(pairs.get(str(d),pairs.get(d)) for d in initial.HORIZONS[1:]), 'unqualified',
+             *(pairs.get(d) for d in horizons), 'unqualified',
              int(row['p0_valid'] and (algorithm==initial.LEGACY_ALGORITHM or initial.lineage_eligible(row,effective_date)))))
     db.execute('CREATE INDEX population_time ON population(gid,at,id)')
     db.execute('CREATE INDEX population_cells ON population(gid,kind,split)')
@@ -309,8 +310,9 @@ def _cell_rows(db, effective, algorithm):
         for kind in kinds:
             base,args = 'gid=? AND p0=1',(group,)
             if kind != 'ALL': base += ' AND kind=?'; args += (kind,)
-            selected = (_select_legacy if algorithm==initial.LEGACY_ALGORITHM else _select)(db,base,args)
-            if algorithm==initial.ALGORITHM and not db.execute(
+            selected = (_select_legacy(db,base,args) if algorithm==initial.LEGACY_ALGORITHM else
+                        _select(db,base,args,horizons=initial.candidate_horizons(algorithm)))
+            if algorithm!=initial.LEGACY_ALGORITHM and not db.execute(
                     'SELECT 1 FROM population WHERE gid=? AND eligible=1 LIMIT 1',(group,)).fetchone():
                 selected = {**selected,'delay_sec':0,'selection_basis':'unverified_lineage_immediate_default',
                             'runtime_apply_allowed':False}
@@ -330,7 +332,7 @@ def _cell_rows(db, effective, algorithm):
 def build(projected, census, *, output_root, source_date, publication_date, effective_date,
           source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None, _mapping_version=None):
     algorithm = _algorithm or initial.ALGORITHM
-    if algorithm not in (initial.ALGORITHM,initial.LEGACY_ALGORITHM):
+    if algorithm not in initial.ALGORITHMS:
         raise ValueError('initial_delay_algorithm_invalid')
     from datetime import date
     if not date.fromisoformat(source_date) <= date.fromisoformat(publication_date) < date.fromisoformat(effective_date):
@@ -351,7 +353,8 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
         projection_ref = storage.write_tree(root,(json.loads(b) for b, in db.execute('SELECT body FROM population ORDER BY id')))
         partitions_ref = storage.write_tree(root,_group_rows(db,root))
         cells_ref = storage.write_tree(root,_cell_rows(db,effective_date,algorithm))
-        price_pairs = db.execute('SELECT sum((p30 IS NOT NULL)+(p60 IS NOT NULL)+(p120 IS NOT NULL)+(p180 IS NOT NULL)) '
+        price_pairs = db.execute('SELECT sum(' + '+'.join(f'(p{d} IS NOT NULL)'
+            for d in initial.candidate_horizons(algorithm)[1:]) + ') '
             "FROM population WHERE anchor='price_ready'").fetchone()[0] or 0
     positive_n = sum(int(row['value']['anchor_kind']=='price_ready' and (row['value']['delay_sec'] or 0)>0)
                      for row in storage.iter_tree(root,cells_ref))
@@ -386,7 +389,7 @@ def validate(policy, report, *, target_date=None):
             or policy.get('runtime_apply_allowed') is not True or report.get('price_ready_pair_n',0)<1
             or policy.get('cells_ref')!=report.get('cells_ref') or policy.get('default_delay_sec')!=0
             or report.get('schema')!=initial.REPORT_SCHEMA or policy.get('schema')!=initial.POLICY_SCHEMA
-            or policy.get('algorithm') not in (initial.ALGORITHM,initial.LEGACY_ALGORITHM)
+            or policy.get('algorithm') not in initial.ALGORITHMS
             or policy.get('algorithm')!=report.get('algorithm')):
         raise ValueError('initial_delay_sharded_contract_invalid')
     root = getattr(report,'evidence_root',None)

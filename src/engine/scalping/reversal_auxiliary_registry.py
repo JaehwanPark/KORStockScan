@@ -28,6 +28,31 @@ def identity_json(value):
     return json.dumps(thaw(value),sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False)
 
 
+def response_contract_shape(value, path=()):
+    """Exclude request-local citation aliases while retaining risk/schema semantics."""
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            logical_fact = any(p in {'supporting_fact_ids', 'contradicting_fact_ids', 'fact_ids'} for p in path)
+            wire_fact = (path[-2:] == ('properties', 'fact') and isinstance(item, list)
+                         and bool(item) and all(isinstance(v, str) and re.fullmatch(r'f[1-9][0-9]*', v) for v in item))
+            result[key] = (['SOURCE_FACT_ID'] if key == 'enum' and (logical_fact or wire_fact)
+                           else response_contract_shape(item, path+(key,)))
+        return result
+    if isinstance(value, list):
+        return [response_contract_shape(v, path) for v in value]
+    return value
+
+
+def timing_compatibility_identity(value):
+    """Derive a research equivalence key; preserve the original identity/receipt."""
+    value = validate_identity(value)
+    semantic = copy.deepcopy(value['semantic'])
+    if 'reversal_auxiliary_wire.py' in semantic['projector_validator_sha256']:
+        semantic['response_contract'] = response_contract_shape(semantic.get('response_contract'))
+    return P.digest(semantic)
+
+
 def provider_identity(payload, context):
     """Freeze actual request semantics without request-specific fact enums.
 
@@ -50,14 +75,9 @@ def provider_identity(payload, context):
              sorted(set((modules[version], 'reversal_auxiliary_contract', 'continuous_reversal_policy')))]
     if context.get('registry_sha256'):
         paths.append(Path(__file__).with_name('reversal_auxiliary_wire.py'))
-    def schema_shape(value, path=()):
-        if isinstance(value,dict):
-            return {k:(['SOURCE_FACT_ID'] if k=='enum' and any(p in {'supporting_fact_ids','contradicting_fact_ids','fact_ids'} for p in path) else schema_shape(v,path+(k,))) for k,v in value.items()}
-        if isinstance(value,list):return [schema_shape(v,path) for v in value]
-        return value
     semantic = dict(schema=IDENTITY_SCHEMA, provider='openai',
         prompt=payload['instructions'], model=payload['model'],
-        response_contract=schema_shape(payload.get('text')),
+        response_contract=response_contract_shape(payload.get('text')),
         options={k:payload[k] for k in ('max_output_tokens','temperature','reasoning') if k in payload},
         input_contract=version, normalizer_version='continuous_reversal_effective_screen_v1',
         projector_validator_sha256={p.name:_source_hash(str(p), _signature(p)) for p in paths})
