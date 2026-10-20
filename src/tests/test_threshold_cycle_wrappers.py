@@ -248,6 +248,39 @@ def _native_final_resume_fixture(tmp_path):
     return namespace, day, status_path, status, log, metrics, prior
 
 
+@pytest.mark.parametrize('defect', [None, 'wrong_date', 'wrong_commit', 'incomplete',
+    'missing_prefix', 'scoped', 'stage_invalid', 'snapshot_invalid', 'quantity_invalid'])
+def test_final_resume_after_recovered_native_producer_requires_complete_current_inputs(tmp_path, defect):
+    import json
+    n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
+    status.update(scoped_resume=None, regeneration_scope='normal', reused_steps_receipt=None)
+    metrics[:] = [m for m in metrics if m['producer_module'] != 'src.engine.runtime_approval_summary']
+    metrics[-1].update(producer_module='src.engine.automation.postclose_summary_handoff',
+        target_date=day, code_commit=status['code_commit'], measurement_complete=True)
+    if defect == 'wrong_date': metrics[-1]['target_date'] = '2026-10-12'
+    if defect == 'wrong_commit': metrics[-1]['code_commit'] = 'b' * 40
+    if defect == 'incomplete': metrics[-1]['measurement_complete'] = False
+    if defect == 'missing_prefix': metrics.pop(0)
+    if defect == 'scoped': status['scoped_resume'] = {'resume_from': 'initial_quantity'}
+    n['active_stage_names'] = lambda d: ('main_machine_policy', 'main_stop_confirmation', 'summary_handoff')
+    if defect == 'stage_invalid': n['stage_receipt_issues'] = lambda *a: ['source_changed']
+    if defect == 'snapshot_invalid': n['verified_postclose_exit_snapshot_manifest'] = lambda *a, **k: None
+    if defect == 'quantity_invalid': n['refresh_quantity_stage_terminal_valid'] = lambda a: False
+    path.write_text(json.dumps(status))
+    log.write_text(''.join('[PERF] ' + json.dumps(m) + '\n' for m in metrics))
+    before = path.read_bytes()
+    if defect:
+        with pytest.raises(ValueError, match='final_resume_'):
+            n['final_handoff_resume'](tmp_path, day)
+    else:
+        proof = n['final_handoff_resume'](tmp_path, day)
+        assert proof['completed_command_receipts'] == metrics[:-1]
+        assert proof['recovered_native_producer'] is True
+        assert proof['failed_command_receipt'] == metrics[-1]
+        assert proof['runtime_effect'] is proof['allowed_runtime_apply'] is False
+    assert path.read_bytes() == before
+
+
 def test_final_resume_binds_native_prefix_and_preserves_previous_proof(tmp_path):
     import hashlib
     n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)

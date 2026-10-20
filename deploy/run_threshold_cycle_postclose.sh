@@ -967,7 +967,12 @@ def final_handoff_resume(project, day):
         lines = handle.read().decode(errors='replace').splitlines()
     metrics = [json.loads(line[7:]) for line in lines if line.startswith('[PERF] ')]
     metrics = [m for m in metrics if m.get('run_id') == status['run_id'] and m.get('phase') == 'command']
-    if (not metrics or (metrics[-1].get('producer_module'), metrics[-1].get('exit_code')) not in {
+    failed_command = metrics[-1] if metrics else {}
+    recovered_producer = (failed_command.get('producer_module') == 'src.engine.automation.postclose_summary_handoff'
+        and failed_command.get('exit_code') == 1 and failed_command.get('measurement_complete') is True
+        and failed_command.get('target_date') == day
+        and failed_command.get('code_commit') == status.get('code_commit'))
+    if (not recovered_producer and (failed_command.get('producer_module'), failed_command.get('exit_code')) not in {
             ('src.engine.automation.tuning_performance_control_tower', 1),
             ('src.engine.build_next_stage2_checklist', 1),
             ('src.engine.verify_threshold_cycle_postclose_chain', 2)}):
@@ -975,10 +980,17 @@ def final_handoff_resume(project, day):
     completed = [m for m in metrics if m.get('exit_code') == 0
         and m.get('measurement_complete') is True and m.get('target_date') == day
         and m.get('code_commit') == status.get('code_commit')]
-    required = {'src.engine.scalping.initial_quantity_policy', 'src.engine.runtime_approval_summary',
+    required = {'src.engine.scalping.initial_quantity_policy',
         'src.engine.observation_source_quality_audit', 'src.engine.monitoring.intraday_ws_freshness_monitor',
         'src.engine.pipeline_event_verbosity_report', 'src.engine.monitoring.rising_missed_classifier_prior'}
     prior = status.get('scoped_resume')
+    if recovered_producer:
+        # The last native producer precedes the first summary. Resume only a
+        # complete normal prefix after every stage and source below verifies.
+        if prior is not None:
+            raise ValueError('final_resume_native_producer_requires_normal_run')
+    else:
+        required.add('src.engine.runtime_approval_summary')
     if prior is None:
         # A full scheduled run already owns its native command prefix. Require
         # that prefix below; never synthesize an earlier scoped recovery.
@@ -1026,6 +1038,7 @@ def final_handoff_resume(project, day):
     if not refresh_quantity_stage_terminal_valid(json.loads(quantity.read_bytes())):
         raise ValueError('final_resume_quantity_stage_invalid')
     return dict(schema='postclose_final_handoff_resume_v1', source_date=day,
+        recovered_native_producer=recovered_producer, failed_command_receipt=failed_command,
         origin_run_id=status['run_id'], origin_code_commit=status['code_commit'],
         origin_status_sha256=hashlib.sha256(raw).hexdigest(), prior_scoped_resume=prior,
         completed_command_receipts=completed,
