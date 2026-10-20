@@ -609,8 +609,11 @@ def _preserved_native_sources(proof):
             or full.get('path')!=str(bootstrap) or _sha(bootstrap)!=full.get('sha256')
             or full.get('write') is not False or full.get('full_native_verification') is not True
             or checked.get('status')!='pass' or checked.get('findings')
-            or checked.get('target_date')!=day or checked.get('manifest_sha256')!=manifest_sha
-            or _json(bootstrap).get('manifest_sha256')!=manifest_sha):
+            or checked.get('target_date')!=day
+            or record.get('prepared_manifest_sha256')!=value.get('manifest_content_sha256')
+            or not _hex(value.get('manifest_content_sha256'))
+            or checked.get('manifest_sha256')!=value['manifest_content_sha256']
+            or _json(bootstrap).get('manifest_sha256')!=value['manifest_content_sha256']):
         raise ValueError('startup_preserved_full_bootstrap_unbound')
     refs[str(bootstrap)]=full['sha256']
     return refs

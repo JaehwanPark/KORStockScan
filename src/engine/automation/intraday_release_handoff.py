@@ -2788,8 +2788,8 @@ REVIEWED_SOURCE_READER_PAIRS = {'src/engine/error_detectors/artifact_freshness.p
 
 # Combined0255 source readers, frozen census and actual P5 preserved closure.
 # Select one complete reviewed generation before any incumbent drain.
-REVIEWED_SOURCE_INTEGRATION_HASHES = {**REVIEWED_FROZEN_INPUT_HASHES, **{'src/engine/automation/main_startup_validation.py': '9752417facdd0c3180ee38fc41b9aacddca41f8e3dd880170d7f5f208470f3f8',
- 'src/engine/infrastructure/startup_validation_code_context.py': 'b84c73c42bd86798621f0c577dd66f005b9d78cdb6a90f092f7fa3bc3c7cf0bd'}}
+REVIEWED_SOURCE_INTEGRATION_HASHES = {**REVIEWED_FROZEN_INPUT_HASHES, **{'src/engine/automation/main_startup_validation.py': 'e1fc157bf6befa1be828111484bc868d9aad75c06eb2ee7edac982611a2eeeb0',
+ 'src/engine/infrastructure/startup_validation_code_context.py': 'c5df84bdf2ef6af0ab85d317aaafd4553064713871fe0c989a3f44659e01f2a2'}}
 REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS = {
     key: {**value,
         'selector_path': 'src/engine/infrastructure/startup_validation_code_context.py',
@@ -2802,11 +2802,11 @@ REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS.items()
 }
 REVIEWED_SOURCE_INTEGRATION_PAIRS = {'src/engine/automation/main_startup_validation.py': (('190855a642ca713fe53257eae2268eeb5786990c474f2b63904ace41b66c9661',
-                                                       '9752417facdd0c3180ee38fc41b9aacddca41f8e3dd880170d7f5f208470f3f8'),
+                                                       'e1fc157bf6befa1be828111484bc868d9aad75c06eb2ee7edac982611a2eeeb0'),
                                                       ('c39f9d5b8a68c297304c95b36a8ff7415fd413f3493e5584eb227adecc6ce84c',
-                                                       '9752417facdd0c3180ee38fc41b9aacddca41f8e3dd880170d7f5f208470f3f8')),
+                                                       'e1fc157bf6befa1be828111484bc868d9aad75c06eb2ee7edac982611a2eeeb0')),
  'src/engine/infrastructure/startup_validation_code_context.py': (('4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',
-                                                                   'b84c73c42bd86798621f0c577dd66f005b9d78cdb6a90f092f7fa3bc3c7cf0bd'),)}
+                                                                   'c5df84bdf2ef6af0ab85d317aaafd4553064713871fe0c989a3f44659e01f2a2'),)}
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""

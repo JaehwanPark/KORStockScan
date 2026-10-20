@@ -260,6 +260,7 @@ if capture:
                         schema='startup_native_preserved_preopen_closure_v1',target_date=day,
                         selected_release_commit=commit,handoff_path=str(path),consumed_path=str(consumed),
                         sources=refs,manifest_sha256=result['handoff']['manifest_sha256'],
+                        prepared_manifest_sha256=json.loads(Path(result['handoff']['prepared_receipt_path']).read_bytes())['manifest_content_sha256'],
                         full_bootstrap=None)
             return result
         B.verify_bootstrap=bootstrap
@@ -354,7 +355,7 @@ try:
                 snapshot_session(session)
                 closure['digest_binding']=session.binding
                 for item in closure.get('preserved_generations',{}).values():
-                    item['full_bootstrap']=bootstrap_checks.get(item['manifest_sha256'])
+                    item['full_bootstrap']=bootstrap_checks.get(item['prepared_manifest_sha256'])
                 print('P5_NATIVE_MACHINE_CLOSURE='+json.dumps(closure,sort_keys=True),file=sys.stderr)
 finally:
     if session is not None:

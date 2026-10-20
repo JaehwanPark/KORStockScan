@@ -853,18 +853,20 @@ def validate_manifest(data_root,manifest,bundle,**kwargs):
         text=text.replace(ast.get_source_segment(text,copied_main),ast.get_source_segment(old_cli,old_main))
         text=text.replace("active.binding['day']=='2026-10-16'","active.binding['day']==target_date")
         consumed=data/'consumed.json';consumed.write_text('{}')
+        (data/'readiness.json').write_text(json.dumps({'manifest_content_sha256':'c'*64}))
         (code/'src/engine/automation/intraday_release_handoff.py').write_text('''
 from src.utils.constants import DATA_DIR
 import hashlib
 def _sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def _paths(day,commit):return DATA_DIR/'bundle.json',DATA_DIR/'consumed.json'
 def verify(day,commit):return dict(status='pass',findings=[],handoff=dict(
-    frozen_files={str(DATA_DIR/'source.bin'):_sha(DATA_DIR/'source.bin')},manifest_sha256='f'*64))
+    frozen_files={str(DATA_DIR/'source.bin'):_sha(DATA_DIR/'source.bin')},manifest_sha256='f'*64,
+    prepared_receipt_path=str(DATA_DIR/'readiness.json')))
 ''')
         (code/'src/engine/automation/runtime_policy_bootstrap.py').write_text('''
 from src.utils.constants import DATA_DIR
 def manifest_path(day,output_dir=None):return DATA_DIR/'bundle.json'
-def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],target_date=day,manifest_sha256='f'*64)
+def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],target_date=day,manifest_sha256='c'*64)
 ''')
         calls=calls.replace('    A.validate_manifest(DATA_DIR,A.I.read('+repr(str(path))+'),b)', '''    from src.engine.automation import intraday_release_handoff as H,runtime_policy_bootstrap as B
     H.verify(target_date,'d'*40)
