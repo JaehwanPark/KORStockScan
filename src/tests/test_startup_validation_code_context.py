@@ -1129,3 +1129,24 @@ assert C.validation_raw_vote_sources(request['data_root'],proof['native_verifica
 assert_no_forbidden_attempts()
 ''')
     assert (result.returncode==0) is (fault is None),result.stderr
+
+
+@pytest.mark.parametrize('consumed', [False,True])
+def test_isolated_policy_reader_never_runs_operational_main_probe(request_fixture,monkeypatch,consumed):
+    f=request_fixture;_main_fixture(f,monkeypatch)
+    result=_child(f,MAIN_CHILD_SETUP+f'''
+import types,subprocess
+from pathlib import Path
+from src.engine.automation import intraday_release_handoff as H
+probe=types.ModuleType('src.engine.error_detectors.artifact_freshness')
+probe._postclose_main_absent=lambda:subprocess.run(['/bin/false'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==1
+sys.modules['src.engine.error_detectors']=types.ModuleType('src.engine.error_detectors')
+sys.modules['src.engine.error_detectors.artifact_freshness']=probe
+H.DATA_DIR=Path(request['data_root'])
+original=H._read
+H._read=lambda p:dict(actual_pid_consumed={consumed!r}) if Path(p)==H.DATA_DIR/'runtime/runtime_release_selection.json' else original(p)
+with H.consumed_observation_scope(data_root=H.DATA_DIR):
+    assert C.validation_raw_vote_sources(H.DATA_DIR,request['main_preparation_code_handoff']['native_verification']['source_date'])
+assert_no_forbidden_attempts()
+''')
+    assert result.returncode==0,result.stderr

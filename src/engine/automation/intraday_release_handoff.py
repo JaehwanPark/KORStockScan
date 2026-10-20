@@ -385,13 +385,20 @@ def consumed_observation_scope(*, data_root=None):
             or _OBSERVER_CUSTODY.get() is not None):
         yield
         return
-    from src.engine.error_detectors.artifact_freshness import _postclose_main_absent
-    if not _postclose_main_absent():
-        yield
-        return
     selected = _read(DATA_DIR/'runtime/runtime_release_selection.json')
     if selected.get('actual_pid_consumed') is not True:
         # An unconsumed preparation retains its ordinary native launch checks.
+        yield
+        return
+    from src.engine.infrastructure.startup_validation_code_context import _main_context
+    if _main_context() is not None:
+        # Isolated P5 already binds the native source/code proof. The body
+        # still runs its exact consumer validator; no operational probe belongs
+        # inside this process- and write-denied loader.
+        yield
+        return
+    from src.engine.error_detectors.artifact_freshness import _postclose_main_absent
+    if not _postclose_main_absent():
         yield
         return
     proof = closed_consumption_observation()
