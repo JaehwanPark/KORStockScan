@@ -44,6 +44,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-20`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 22시 사용자 배포·재기동 테스트 승인: 정상 종료된 기존 소비 PID의 native 종료/EOD/정지/동결 원천을 읽기 전용으로 검증한 뒤 clean candidate의 정책 parity·4종 code·currentness·P5를 선행한다. ordered 전환과 실제 새 PID/start/cwd 소비·첫 observer/full health는 아직 미완료이며 기존 실패를 보존한다.
   - 09:35 신규 결함으로 재개: 소비 후 운영 체크리스트 변경 시 원 strict 세대와 launch snapshot의 조회 연결 누락을 수리한다. 403870/49389 매도는 주문0017685/체결9708/9주 terminal 이후 outbox ACK 결함이며 새 주문 없이 native 복구를 검증한다. 정수 잔고 표시가와 정확한 분할체결 평균가 사이의 매수 identity 복원 결함, fixture 상대경로·코드 세대 연결도 함께 리뷰한다. 새 선택/PID·원 finalization DONE 재검증 전에는 완료로 닫지 않는다.
   - 10/20 완료: 원07:35 실패 보존, native 복구08:36 종료·PREOPEN08:42:40 성공. 최종 코드 `a98ff7a95d533b8ba33222c206bc77f941fffe99`, PID3964551/start10071650의 같은 manifest `4e2e42ebe1e4c4eb7b929d80d726b275d155c2559e75152e6aca1e485ae63d78` 소비와09:30:34 현재 관측을 확인. source19 최종화·detector09:32:03 native DONE. 원 strict-bound 체크리스트는 native archive로 보존. 실제 진입/체결/비용 후 EV와 관측 full coverage는 이 완료에 포함하지 않는다. [전체 원인 수리·종료 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md)
   - Source: [runtime_approval_summary_2026-10-19.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-19.json)
@@ -99,6 +100,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 장후 원천·자연 수용 이관
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - 22시 후속 보수: 원 수량 proof의 raw→native gzip 변환은 논리 SHA/size/원 inode identity로 대조하고, 비용·다른 원천 변경은 계속 거부한다. source19 proof는 기존 publisher의 전체 native 검증 후만 재발행하며 과거 비용/terminal 결손은 null로 보존한다.
   - 10/20 이관: 기능 수리·리뷰·native 재생·source19 strict/controller·20일 정책/PID 소비 완료. 수량 stage `4f3e04811174fa6fe7c8559c65994103d26d99116c572f16b159a9bd1577e82c`의 실제 마지막 소비를 확인했다. 6유형 기존 10/15/20/25/25% 부모 정책 유지; 실제 비용·terminal이 없는 과거 행은 null/제외로 보존한다. 아래 기존 Acceptance·실패·자연 수용 이력은 보존하며 다음 자연 완료 비용 표본만 대조한다. 코드 완료를 새 EV/실주문 성과로 해석하지 않는다.
   - 10/20 07:30: R19 native holding 18.623s와 최종 원천검사 결속 수량86c16e96을 확인. 손절은18 position 계산 후 indexed vote와 raw byte 세대의 비교 결함으로 최종 게시 실패. 원 실패 보존 후 기존 native typed verifier로 수리 중이며21 focused/48 handoff PASS. 전체 회귀·새 선택·재생성·20-date PREOPEN/PID는 미완료. [원인 수리 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md)
   - 적용 수용: e7f4e2e8f/PID1495185/start3859414 ordered complete, 원 정책5파일 SHA 불변.16:18:50 자연 full에서 initial_quantity alert0·resource PASS, 과거 제외5/유효8/원 source_gap·null 보존. 새 결손·현재 수집 실패 경보 및 다음 자연 완료 비용 표본의 수용은 계속 유지한다.
@@ -116,6 +118,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 제출병목 관측기 계약 수리
 
 - [ ] `[SubmissionMonitorSyncLineage1019] 제출병목 관측기 계약 수리·정규 소비 수용` (`Due: 2026-10-20`, `Slot: INTRADAY`, `TimeWindow: 승인된 순차 반영과 후속 정규 관측`, `Track: RuntimeStability`)
+  - 22시 후속 보수: 장 종료/정상 정지된 실제 소비 세대의 원 증거를 대조하는 읽기 경로와 장후 단계 시작 전 대기 판정을 보완했다. 현재 실행 결손·혼합 세대는 계속 실패이며 새 PID 소비는 별도 검증한다. 원 실패/회귀: `tmp/main-errors-repair-20261020`; 배포·원 검사 재수용은 pending.
   - 20:10 신규 재발:현재88351/PID3835821·cbb 관측 실행은 완료됐으나20:00 정상 engine 종료 뒤 pending 판정에 장중 신선도를 계속 요구하는 detector 결함이다. 원본/종료 heartbeat 보존, 종료 시점 보고서14.95초·body32.23초/current actor·projection 대조와1632 회귀를 통과했다. 종료 구간의 검증 불가 warning만 보존하고 원 결손·full coverage false를 유지한다. EOD/postclose/controller/tuning 실행 중 selector 변경 금지로 후속 반영은 미실행이며 기존 승인은 유지된다. [재발 원인·수리·후속 수용](../audits/postclose-root-cause-recovery-review-2026-10-19.md#closed-window-empty-observer-recurrence-2026-10-20).
   - 승인 후68213 실제 전환 실패:최종 parity/4인계/report/P5 12consumer/금지0은 PASS이나19:37:24 starting PID 인계 timeout이다. Main3745840의 native 최종 검증에서 shared vote index configure SQLITE_BUSY가 발생했고 원 실패/보호 hold/선택 미소비 상태를 보존한다. 기존 ordered owner에 원천 readonly 연결의 drain→launch→attest 생존을 추가해 동일5ms/96MiB WAL 재현12/16 실패→0/16,323 회귀 PASS다. 새 후보 native/P5를 통과한 후 문서화된 stopped recovery로 같은 원인 수용을 진행한다. 원6e source coverage와19:40 비현행 observer 후속 경보는 원 ID/실패로 유지한다.
   - 후속 사용자 승인(리뷰·보완·배포·재기동):49ef의 fresh parity/4종 인계 PASS 뒤 필수 trailing 현재성에서 정지했다. native 재검증은 정상 release/data 경로를 금지 링크로 오인하는 cursor 소비 결함을 재현했다(1FAIL/5PASS). 기존 원천 재사용 owner만 정확 mount/날짜/세대 경계로 보완해187 회귀와 native6 proof/미증명21809006B 사전검사를 통과했다. 원 영수증/실패와6e PID를 보존하며 새 인계·정규 재검증·P5·ordered/PID/최초 observer/full health 수용을 진행한다.

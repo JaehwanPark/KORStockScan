@@ -26,9 +26,9 @@ class ProjectionReader(Reader):
         self.checkpoint = checkpoint
         self.active_key_bytes = 0
 
-    def fill(self):
+    def fill(self, size=65536):
         self.checkpoint()
-        return super().fill()
+        return super().fill(size)
 
     def spaces(self):
         # str.isspace() also accepts non-JSON whitespace such as NBSP/VT.

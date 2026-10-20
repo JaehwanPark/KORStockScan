@@ -76,7 +76,8 @@ def validate(bundle,data_root,*,original_error):
                 or review['commit'] != commit
                 or review['code_root'] != Path(__file__).resolve().parents[3]
                 or review['identity'].get('cwd') != str(root/'src')
-                or handoff._identity(review['identity']['pid']) != review['identity']):
+                or (handoff.closed_consumption_observation(day) != review['closed_observation']
+                    if review.get('closed_observation') else handoff._identity(review['identity']['pid']) != review['identity'])):
             raise ValueError('active_policy_code_reader_root_changed')
         root, commit = review['code_root'], review['code_commit']
     receipt_path=path(data_root,day,commit,bundle['bundle_sha256'])
@@ -103,7 +104,8 @@ def validate(bundle,data_root,*,original_error):
         raise ValueError('active_policy_code_handoff_pointer_changed')
     if review is not None and (selected_release(Path(data_root).resolve().parent) != (selected_root, selected_commit)
             or N._read(Path(data_root)/'runtime/runtime_release_selection.json') != selection
-            or handoff._identity(review['identity']['pid']) != review['identity']):
+            or (handoff.closed_consumption_observation(day) != review['closed_observation']
+                if review.get('closed_observation') else handoff._identity(review['identity']['pid']) != review['identity'])):
         raise ValueError('active_policy_predecessor_review_changed')
     return bundle
 

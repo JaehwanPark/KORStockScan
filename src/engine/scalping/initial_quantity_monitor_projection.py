@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from src.engine.scalping import entry_split_monitor_projection as files
@@ -173,6 +174,59 @@ def _directories(report, data_root):
             raise ValueError('quantity_monitor_lifecycle_budget')
         result[str(path)] = {'exists': path.exists(), 'files': names}
     return result
+
+
+def _snapshot_sources(dependencies, data_root):
+    """Cold publisher binds logical bytes once; warm readers use native custody."""
+    from src.engine.lifecycle import snapshot_archive as archive
+    parent = Path(data_root)/'report/monitor_snapshots'
+    result = {}
+    for name in dependencies:
+        path = Path(name)
+        if path.parent != parent or not re.fullmatch(
+                r'trade_review_\d{4}-\d{2}-\d{2}(?:\.completed_projection)?\.json', path.name):
+            continue
+        aliases = [str(path), str(path)+'.gz', str(path)+'.gz.archive_receipt.json']
+        if not all(alias in dependencies for alias in aliases):
+            continue
+        if path.exists():
+            generation = archive.generation(path)
+            identity = archive.file_identity(path.stat())
+        elif Path(aliases[1]).exists():
+            receipt = archive.archived_receipt(path)
+            generation = dict(path=path.name, size=receipt['logical_size_bytes'],
+                              sha256=receipt['logical_content_sha256'])
+            identity = receipt['original_identity']
+        else:
+            continue
+        result[name] = dict(generation=generation, original_identity=identity)
+    return result
+
+
+def _verified_dependencies(dependencies, snapshots, data_root):
+    """Accept only native lossless representation changes of cold-bound bytes."""
+    from src.engine.lifecycle import snapshot_archive as archive
+    observed = {name: _identity(Path(name)) for name in dependencies}
+    parent = Path(data_root)/'report/monitor_snapshots'
+    for name, bound in snapshots.items():
+        path = Path(name)
+        aliases = [name, name+'.gz', name+'.gz.archive_receipt.json']
+        if (path.parent != parent or not re.fullmatch(
+                r'trade_review_\d{4}-\d{2}-\d{2}(?:\.completed_projection)?\.json', path.name)
+                or not all(alias in dependencies for alias in aliases)):
+            raise ValueError('quantity_monitor_logical_source_path_invalid')
+        if all(observed[alias] == dependencies[alias] for alias in aliases):
+            continue
+        if observed[name] is not None or any(observed[alias] is None for alias in aliases[1:]):
+            raise ValueError('quantity_monitor_source_changed')
+        receipt = archive.archived_receipt(path, bound_logical_generation=bound['generation'])
+        if receipt['original_identity'] != bound['original_identity']:
+            raise ValueError('quantity_monitor_source_changed')
+        # Only these three physical names moved. All unrelated source, cost,
+        # directory and issued-stage identities retain their strict checks.
+        for alias in aliases:
+            observed[alias] = dependencies[alias]
+    return observed
 
 
 def _check_directories(expected):
@@ -381,6 +435,7 @@ def publish(stage_path, stage, report, *, data_root, accepted_historical_record_
             issued['candidate' if name == 'candidate_policy' else name] = value
     costs = _costs(report, data_root)
     cost_signature = _cost_signature(data_root, costs)
+    snapshots = _snapshot_sources(before, data_root)
     issued_sources = {str(Path(stage_path)): before[str(Path(stage_path))]}
     issued_hashes = {str(Path(stage_path)): stage_file['sha256']}
     for name, child in stage.items():
@@ -399,7 +454,8 @@ def publish(stage_path, stage, report, *, data_root, accepted_historical_record_
             status_counts=dict(Counter(str(row.get('status')) for row in report['census']['input_fact_rows'])),
             full_native_stage_validated=True, full_semantic_census_validated=True),
         native_validation_scope='full_stage_policy_timeout_census_and_native_completion',
-        dependencies=before, issued_sources=issued_sources, issued_file_sha256=issued_hashes,
+        dependencies=before, logical_snapshot_dependencies=snapshots,
+        issued_sources=issued_sources, issued_file_sha256=issued_hashes,
         cost_generations=[{'source_date': item['source_date'],
             'generation_sha256': _digest(item['generation'])} for item in costs],
         cost_source_inventory=cost_signature, source_directories=directories_before, code=code,
@@ -530,7 +586,10 @@ def read_verified(stage_path, stage, *, read, data_root=None, role='current_stag
         if issued_before != {name: _identity(Path(name)) for name in issued_sources}:
             raise ValueError('quantity_monitor_issued_source_changed')
         return {'issued': value['issued'], 'observation': value['observation']}
-    before = {name: _identity(Path(name)) for name in dependencies}
+    snapshots = value.get('logical_snapshot_dependencies', {})
+    if not isinstance(snapshots, dict) or len(snapshots) > MAX_REFERENCES:
+        raise ValueError('quantity_monitor_reference_budget')
+    before = _verified_dependencies(dependencies, snapshots, root)
     if before != dependencies:
         raise ValueError('quantity_monitor_source_changed')
     _check_directories(value['source_directories'])
@@ -565,7 +624,7 @@ def read_verified(stage_path, stage, *, read, data_root=None, role='current_stag
         return observed
     if current_cost_inventory() != inventory:
         raise ValueError('quantity_monitor_cost_generation_changed')
-    if (before != {name: _identity(Path(name)) for name in dependencies}
+    if (before != _verified_dependencies(dependencies, snapshots, root)
             or current_cost_inventory() != inventory or code != _code()):
         raise ValueError('quantity_monitor_source_changed')
     _check_directories(value['source_directories'])

@@ -50,8 +50,12 @@ def _digest(path):
     return value
 
 
-def archived_receipt(path):
-    """Verify physical archive bytes; never use the receipt as semantic approval."""
+def archived_receipt(path, *, bound_logical_generation=None):
+    """Verify bytes, or native custody of a cold-verified logical generation.
+
+    The latter requires the archiver's sealed exact physical epoch and the
+    consumer's independently cold-bound logical bytes. It grants no semantics.
+    """
     path = logical_path(path)
     archived = Path(str(path) + '.gz')
     if path.is_symlink():
@@ -85,6 +89,11 @@ def archived_receipt(path):
                 [before[key] for key in ('device','inode','size','mtime_ns','ctime_ns')],proof_sha256=seal)
     original = receipt.get('original_identity') or {}
     logical_size = receipt.get('logical_size_bytes')
+    bound = bound_logical_generation
+    if bound is not None and (seal is None or not isinstance(bound, dict)
+            or bound != dict(path=path.name, size=logical_size,
+                            sha256=receipt.get('logical_content_sha256'))):
+        raise ValueError('snapshot_archive_logical_generation_changed')
     if (receipt.get('schema') != SCHEMA
             or receipt.get('logical_path') != str(path)
             or receipt.get('archive_generation') != before
@@ -95,7 +104,10 @@ def archived_receipt(path):
             or set(original) != {'device','inode','size','mtime_ns','ctime_ns'}
             or not isinstance(receipt.get('logical_content_sha256'), str)
             or len(receipt['logical_content_sha256']) != 64
-            or _digest(archived) != receipt.get('archive_sha256')):
+            or not isinstance(receipt.get('archive_sha256'), str)
+            or len(receipt['archive_sha256']) != 64
+            or any(c not in '0123456789abcdef' for c in receipt['archive_sha256'])
+            or (bound is None and _digest(archived) != receipt.get('archive_sha256'))):
         raise ValueError('snapshot_archive_receipt_invalid')
     if _regular(archived) != before or _regular(receipt_path) != receipt_before:
         raise ValueError('snapshot_archive_changed_during_read')

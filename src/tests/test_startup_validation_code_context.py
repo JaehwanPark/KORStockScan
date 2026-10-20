@@ -850,7 +850,7 @@ def test_delay_inventory_declaration_is_literal_unique_and_canonical(expression)
 def test_cleanup_ai_preparation_pair_is_exact(fault):
     relative = 'src/engine/ai_engine_openai.py'
     old = '194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584'
-    current = '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07'
+    current = 'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185'
     assert C._sha(Path(C.__file__).resolve().parents[3]/relative) == current
     if fault == 'source': old = '0'*64
     elif fault == 'target': current = '0'*64
@@ -859,7 +859,8 @@ def test_cleanup_ai_preparation_pair_is_exact(fault):
 
 
 @pytest.mark.parametrize('fault', [None, 'custody', 'pid', 'manifest', 'authority', 'date', 'prepared_metadata', 'env_change'])
-def test_intraday_origin_is_rebound_inside_real_os_isolation(request_fixture, fault):
+@pytest.mark.parametrize('closed', [False, True])
+def test_intraday_origin_is_rebound_inside_real_os_isolation(request_fixture, fault, closed):
     f = request_fixture
     request = f['request']
     proof = request['candidate_code_handoffs']['pre_submit_delay']
@@ -890,6 +891,11 @@ def test_intraday_origin_is_rebound_inside_real_os_isolation(request_fixture, fa
     origin.update(basis='verified_selected_intraday_code_handoff', pid_identity=identity,
         intraday_handoff_path=str(hp),intraday_handoff_sha256=C._sha(hp),
         intraday_consumed_path=str(cp),intraday_consumed_sha256=C._sha(cp))
+    if closed:
+        origin.update(basis='verified_closed_intraday_code_handoff', closed_observation=dict(
+            schema='intraday_closed_consumption_observation_v1', target_date=DAY, release_commit=commit,
+            pid_identity=identity, source_hashes=extra, runtime_effect=False,
+            current_observation_verified=False, new_pid_consumption_claimed=False))
     origin['sources'].update(extra);proof['source_hashes'].update(extra);request['source_hashes'].update(extra)
     if fault == 'manifest': request['manifest'] = {**manifest, 'manifest_sha256':'0'*64}
     elif fault in {'prepared_metadata', 'env_change'}:

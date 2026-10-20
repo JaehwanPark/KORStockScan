@@ -199,6 +199,36 @@ def test_missing_reversal_execution_is_not_report_hash_corruption(tmp_path, comp
     assert alerts[0]['generation'] == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize('damage', [None, 'failed_parent', 'expired', 'old_date', 'failed_stage', 'no_process', 'terminal_log'])
+def test_unstarted_reversal_stage_wait_requires_native_bounded_parent(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import continuous_reversal_postclose as reports
+    from src.engine.scalping import continuous_reversal_operating_postclose as operating
+    from src.engine.error_detectors import artifact_freshness as detector
+    day = '2026-10-20'
+    path = tmp_path/'data/report/continuous_reversal'/day/'machine.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(reports.seal(dict(schema=operating.SCHEMA, source_date=day, status='completed'))))
+    parent = tmp_path/'data/report/threshold_cycle_postclose_status'/f'threshold_cycle_postclose_{day}.status.json'
+    parent.parent.mkdir(parents=True)
+    parent.write_text(json.dumps(dict(schema_version=1, report_type='threshold_cycle_postclose_status',
+        runtime_effect=False, status='failed' if damage=='failed_parent' else 'running',
+        target_date='2026-10-19' if damage=='old_date' else day, reason='started', exit_code=0,
+        started_at='2026-10-20T20:10:02+09:00')))
+    monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *a, **k:
+        dict(status='failed' if damage=='failed_stage' else 'not_assessed'))
+    monkeypatch.setattr(detector.CronCompletionDetector, '_read_once_markers', lambda *a:
+        '[START]\n[FAIL]' if damage=='terminal_log' else '[START]')
+    monkeypatch.setattr(detector.ArtifactFreshnessDetector, '_has_matching_live_process',
+        lambda *a, **k: damage!='no_process')
+    now=datetime(2026,10,20,23,20,tzinfo=ZoneInfo('Asia/Seoul')) if damage=='expired' else datetime(2026,10,20,21,20,tzinfo=ZoneInfo('Asia/Seoul'))
+    result=detector._continuous_reversal_result_semantics(tmp_path,day,'machine',now=now)
+    if damage is None:
+        assert result['status']=='unobservable' and result['findings']==[]
+        assert result['reason']=='native_postclose_stage_not_started'
+    else:
+        assert result['findings']==['continuous_reversal_execution_not_completed:main_machine_policy']
+
+
 def test_auxiliary_v4_frozen_same_day_contract_and_cost_isolation():
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
     day, scope = "2026-10-02", "KRX|KRX_REGULAR"
@@ -3905,12 +3935,12 @@ def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(t
     assert 'artifact_freshness' in state
 
 
-def _market_closed_quiet_observer_fixture(tmp_path, monkeypatch):
+def _market_closed_quiet_observer_fixture(tmp_path, monkeypatch, *, report_time='19:59:00'):
     from src.tests.test_submission_bottleneck_monitor import _observation_health_fixture
     from src.trading.market import session_contract
     def payload():
         original = _observation_health_fixture()
-        delta = datetime.fromisoformat('2026-10-14T19:59:00+09:00') - datetime.fromisoformat(original['as_of'])
+        delta = datetime.fromisoformat('2026-10-14T'+report_time+'+09:00') - datetime.fromisoformat(original['as_of'])
         def shift(value):
             if isinstance(value, dict): return {k: shift(v) for k, v in value.items()}
             if isinstance(value, list): return [shift(v) for v in value]
@@ -3925,6 +3955,7 @@ def _market_closed_quiet_observer_fixture(tmp_path, monkeypatch):
         return report
     fixture = _quiet_current_observer_fixture(tmp_path, monkeypatch, payload_factory=payload)
     mod, root, _, path, report, _, selection, _ = fixture
+    monkeypatch.setattr(mod, '_postclose_main_absent', lambda: False)
     now = datetime.fromisoformat('2026-10-14T20:10:27+09:00')
     heartbeat = root/'tmp/error_detector_heartbeat.json'
     heartbeat.parent.mkdir(parents=True, exist_ok=True)
@@ -4019,6 +4050,37 @@ def test_live_heartbeat_progress_does_not_invalidate_observer_publication(tmp_pa
     before = mod._submission_observer_input_identity(path, root)
     put(11)
     assert mod._submission_observer_input_identity(path, root) == before
+
+
+@pytest.mark.parametrize('report_time', ['19:59:00','20:00:10'])
+@pytest.mark.parametrize('fault', [None, 'missing_stop', 'wrong_actor', 'new_loss'])
+def test_exact_closed_consumption_retains_empty_observation_after_main_isolation(tmp_path, monkeypatch, report_time, fault):
+    from src.engine.automation import intraday_release_handoff as handoff
+    fixture, heartbeat, _ = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch, report_time=report_time)
+    mod, root, _, path, report, _, selection, seal = fixture
+    now=datetime.fromisoformat('2026-10-14T21:10:00+09:00')
+    state=json.loads(heartbeat.read_text());state['main_loop']['last_beat']='2026-10-14T20:57:32+09:00'
+    heartbeat.write_text(json.dumps(state))
+    receipt=selection['actual_pid_receipt']
+    proof=dict(schema='intraday_closed_consumption_observation_v1',
+        pid_identity=dict(pid=receipt['pid'],start_ticks='wrong' if fault=='wrong_actor' else receipt['start_ticks'],cwd=receipt['process_cwd']))
+    def closed(*a,**k):
+        if fault=='missing_stop':raise ValueError('native stop missing')
+        return proof
+    def absent(pid):raise FileNotFoundError('normal postclose isolation')
+    monkeypatch.setattr(handoff,'closed_consumption_observation',closed)
+    monkeypatch.setattr(mod,'_postclose_main_absent',lambda:True)
+    monkeypatch.setattr(mod,'_observer_live_identity',absent)
+    if fault=='new_loss':report['source_gap_semantics']['issues']={'new_loss':1};seal()
+    _isolate_submission_artifact_check(mod,root,now,monkeypatch)
+    result=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.details.get('submission_bottleneck_monitor_current_observation_verified') is not True
+    if fault:
+        assert result.severity=='fail'
+    else:
+        assert result.severity=='warning'
+        assert result.details['submission_bottleneck_monitor_status']=='closed_window_observation_only'
+        assert result.details['submission_bottleneck_monitor_observation_dimensions']['closed_window']['main_state']=='closed_consumption_verified'
 
 @pytest.mark.parametrize('damage',[None,'missing_current','stale_current','wrong_pid','nontrading'])
 def test_closed_source_final_detector_uses_current_pid_observer_without_historical_fallback(tmp_path,monkeypatch,damage):
@@ -4369,7 +4431,8 @@ def test_actual_artifact_check_and_status_reader_do_not_open_fifo(tmp_path, monk
 
 
 @pytest.mark.parametrize('tamper', [None, 'birth_lower_bound_epoch', 'boot_epoch'])
-def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, monkeypatch, tamper):
+@pytest.mark.parametrize('closed', [False, True])
+def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, monkeypatch, tamper, closed):
     import copy
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
     mod, root, now, path, report, _, selection, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
@@ -4397,6 +4460,21 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
         calls.append((generation['selector_reported_pid_receipt'], observed))
         return copy.deepcopy(native)
     monkeypatch.setattr(monitor, '_attest_health_actor_birth', attest)
+    if closed:
+        from src.engine.automation import intraday_release_handoff as handoff
+        def absent(pid): raise FileNotFoundError('normal close')
+        monkeypatch.setattr(mod, '_observer_live_identity', absent)
+        monkeypatch.setattr(handoff, 'closed_consumption_observation', lambda day: dict(
+            pid_identity=dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'], cwd=receipt['process_cwd'])))
+        original_bytes=monitor._observer_regular_bytes
+        def kernel(path, *, limit):
+            if path!=Path('/proc/stat'):
+                return original_bytes(path,limit=limit)
+            assert limit==256*1024
+            calls.append((receipt,at))
+            return ('btime '+str(boot)+'\n').encode()
+        monkeypatch.setattr(monitor, '_observer_regular_bytes', kernel)
+        monkeypatch.setattr(mod.os, 'sysconf', lambda key: hz)
     seal()
     report['observer_generation']['actor_birth_proof'] = declared
     for key in ('source_gap_semantics', 'machine_semantics'):

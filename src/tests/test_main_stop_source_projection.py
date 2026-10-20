@@ -78,6 +78,16 @@ class ChunkedInput(io.StringIO):
         return super().read(self.chunk if size < 0 else min(size, self.chunk))
 
 
+@pytest.mark.parametrize('padding', [65510, 65518, 131054])
+def test_native_buffer_boundary_refills_keys_and_stage_with_parent_reader_contract(padding):
+    text = '{"padding":"' + 'x'*padding + '","stage":"entry_ai_economic_plan_observed","fields":{}}'
+    calls = []
+    assert classify_disjoint_event(io.StringIO(text), checkpoint=lambda: calls.append(True)) == 'entry_ai_economic_plan_observed'
+    assert len(calls) >= 2
+    with pytest.raises(ValueError):
+        classify_disjoint_event(io.StringIO(text[:-1]))
+
+
 @pytest.mark.parametrize('chunk', [1, 2, 7, 65536])
 def test_escape_and_number_boundaries_preserve_whole_json_validation(chunk):
     value = dict(stage='entry_ai_economic_plan_observed', fields={
@@ -87,6 +97,43 @@ def test_escape_and_number_boundaries_preserve_whole_json_validation(chunk):
     assert classify_disjoint_event(ChunkedInput(text, chunk)) == value['stage']
     with pytest.raises(ValueError):
         classify_disjoint_event(ChunkedInput(text.replace('backslash ', 'bad\\q'), chunk))
+
+
+@pytest.mark.parametrize('fault', ['none', 'stop_field', 'invalid_escape'])
+def test_oversized_source_key_crossing_refill_keeps_census_and_scope(tmp_path, fault):
+    from src.engine.automation import main_stop_source_index as index
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    from src.tests.test_main_stop_runtime_source import stage_stock, research_quote
+
+    prefix = '{"stage":"entry_ai_economic_plan_observed","fields":{"padding":"'
+    # Split an object key at the native 64 KiB refill boundary, as in the
+    # postclose source-index failure, while retaining a complete oversized row.
+    text = prefix + 'p' * (65529 - len(prefix) - len('",'))
+    text += '","boundary_key":1,"body":"' + 'x' * (2 * 1024 * 1024)
+    text += ('\\q' if fault == 'invalid_escape' else '') + '"'
+    text += (',"main_stop_source":"{}"' if fault == 'stop_field' else '') + '}}'
+    quote = research_quote(stage_stock(), at=1000., bid=9990, profit=-.1)
+    path = tmp_path / 'mixed.jsonl'
+    original = (text + '\n' + json.dumps({
+        'stage': 'main_stop_source', 'fields': {'main_stop_source': quote}}) + '\n').encode()
+    path.write_bytes(original)
+    census = Counter()
+    prepared = index.prepare(tmp_path / 'index', {str(path): byte_generation(path)},
+                             source_events, census)
+    positions = index.positions(prepared, tmp_path / 'sort', Counter())
+    try:
+        assert list(next(positions).rows()) == [quote]
+        with pytest.raises(StopIteration):
+            next(positions)
+    finally:
+        positions.close()
+    assert path.read_bytes() == original
+    assert census['raw'] == 1
+    assert census['oversized_raw_rows'] == 1
+    assert census['isolated_disjoint_oversized_rows'] == (fault == 'none')
+    assert census['unidentifiable_raw_rows'] == (fault != 'none')
+    if fault == 'none':
+        assert census['isolated_disjoint_oversized_bytes'] == len((text + '\n').encode())
 
 
 def test_active_nested_key_budget_is_shared_and_released(monkeypatch):

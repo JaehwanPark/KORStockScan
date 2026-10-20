@@ -379,6 +379,29 @@ def driver(tmp_path, monkeypatch):
     return d
 
 
+@pytest.mark.parametrize('damage', [None, 'proof', 'main', 'supervisor', 'flag', 'hold', 'source'])
+def test_closed_predecessor_drain_rechecks_native_closure_without_stop_mutation(driver, monkeypatch, damage):
+    d=driver
+    proof=dict(schema='intraday_closed_consumption_observation_v1', pid_identity=d.identity)
+    d.closed_predecessor=dict(closed_observation=proof)
+    d.hold_bytes=b'owned'; d.hold.write_bytes(d.hold_bytes)
+    monkeypatch.setattr(D.H,'closed_consumption_observation',lambda *a: {} if damage=='proof' else proof)
+    monkeypatch.setattr(D,'_main_pids',lambda: [456] if damage=='main' else [])
+    monkeypatch.setattr(D,'_session_absent',lambda: damage!='supervisor')
+    if damage=='flag': d.flag.write_text('another owner')
+    if damage=='hold': d.hold.write_text('another owner')
+    if damage=='source': d.checklist.write_text('changed')
+    before={p:p.read_bytes() for p in (d.selection,d.hold,d.checklist)}
+    if damage:
+        with pytest.raises(ValueError): d.drain()
+        assert not (d.directory/'status.json').exists()
+    else:
+        d.drain()
+        assert d.state['drain_basis']=='native_postclose_stopped_consumption_verified'
+        assert d.phase=='drained' and not d.flag.exists()
+    assert {p:p.read_bytes() for p in before}==before
+
+
 @pytest.mark.parametrize('damage', [None, 'missing', 'malformed', 'symlink', 'future', 'failed', 'date', 'oversize', 'schema', 'run_id', 'duplicate', 'nonfinite', 'overflow', 'as_of_date', 'fifo'])
 def test_predecessor_observer_captures_only_exact_bounded_completed_source(tmp_path, damage):
     day = '2026-10-12'

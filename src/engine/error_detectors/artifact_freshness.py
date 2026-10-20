@@ -404,10 +404,19 @@ def _submission_observer_actor_issue(payload):
     if lineage is not None and (not isinstance(lineage, dict)
             or lineage.get('exact_pid_filter') != [str(receipt['pid']), receipt['start_ticks']]):
         return 'observer_current_main_lineage_mismatch'
+    closed = None
     try:
         if _observer_live_identity(receipt['pid']) != dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'],
                                                         cwd=receipt['process_cwd']):
             return 'observer_current_main_identity_changed'
+    except FileNotFoundError:
+        try:
+            from src.engine.automation.intraday_release_handoff import closed_consumption_observation
+            closed = closed_consumption_observation(payload['date'])
+            if closed['pid_identity'] != dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'], cwd=receipt['process_cwd']):
+                return 'observer_current_main_identity_changed'
+        except (OSError, ValueError, TypeError, KeyError):
+            return 'observer_current_main_not_running'
     except (OSError, ValueError, TypeError, KeyError, IndexError):
         return 'observer_current_main_not_running'
     # A report may bound its health window by this exact process lifetime only
@@ -421,9 +430,16 @@ def _submission_observer_actor_issue(payload):
     cohort_proofs = [value.get('actor_birth_proof') for value in cohorts if isinstance(value, dict)]
     if declared is not None or any(value is not None for value in cohort_proofs):
         try:
-            from src.engine.monitoring.submission_bottleneck_monitor import _attest_health_actor_birth
+            from src.engine.monitoring.submission_bottleneck_monitor import _attest_health_actor_birth, _observer_regular_bytes
             at = datetime.fromisoformat(str(payload.get('as_of')))
-            native = _attest_health_actor_birth(generation, at)
+            if closed:
+                # The consumed start ticks remain sealed after exit. The boot
+                # epoch and tick rate still require an independent kernel read.
+                boot = _observer_regular_bytes(Path('/proc/stat'), limit=256*1024).decode()
+                epoch = int(next((line.split()[1] for line in boot.splitlines() if line.startswith('btime ')), None))
+                native = dict(declared, boot_epoch=epoch, clock_ticks_per_second=os.sysconf('SC_CLK_TCK'))
+            else:
+                native = _attest_health_actor_birth(generation, at)
             if (not isinstance(declared, dict) or declared.get('status') != 'verified'
                     or native.get('status') != 'verified' or native != declared
                     or any(value != declared for value in cohort_proofs)):
@@ -1471,7 +1487,7 @@ def _semantic_stage_binding(root, day, stage, *, artifact=None, artifact_sha=Non
     return {"status": value.get("status"), "receipt_sha256": digest, 'off_reason': value.get('off_reason')}
 
 
-def _continuous_reversal_result_semantics(root, source_date, component):
+def _continuous_reversal_result_semantics(root, source_date, component, *, now=None):
     """Consume the native reversal contract, without legacy economics gates."""
     report_path = root / 'data/report/continuous_reversal' / source_date / (component + '.json')
     if not report_path.exists() and not report_path.is_symlink():
@@ -1505,6 +1521,13 @@ def _continuous_reversal_result_semantics(root, source_date, component):
             stage = _semantic_stage_binding(root, source_date, required)
             if stage['status'] in {'pending', 'running'}:
                 return dict(status='unobservable', findings=[], stage_id=stage_id, execution=stage)
+            if stage['status'] == 'not_assessed':
+                owner = next(item for item in ARTIFACT_REGISTRY if item['id'] == 'threshold_postclose_status')
+                parent = root / owner['path_template'].format(date=source_date)
+                if ArtifactFreshnessDetector._is_bounded_postclose_running(
+                        owner, parent, source_date, now or datetime.now(ZoneInfo('Asia/Seoul')), root=root):
+                    return dict(status='unobservable', findings=[], stage_id=stage_id, execution=stage,
+                                reason='native_postclose_stage_not_started')
             if stage['status'] != 'succeeded':
                 raise ValueError('continuous_reversal_execution_not_completed:' + required)
         if component == 'machine':
@@ -3539,17 +3562,29 @@ def _submission_observer_closed_window(payload, root, now, signature, *, window_
         beat, ended = _observer_clock(main.get('last_beat')), _observer_clock(terminal.get('last_beat'))
         started, completed = _observer_clock(payload.get('as_of')), _observer_clock(generation.get('completed_at'))
         mtime = signature[7]/1_000_000_000
+        closed = None
+        if _postclose_main_absent():
+            from src.engine.automation.intraday_release_handoff import closed_consumption_observation
+            closed = closed_consumption_observation(payload.get('date'), now=now)
+            if closed['pid_identity'] != dict(pid=receipt.get('pid'), start_ticks=receipt.get('start_ticks'),
+                                               cwd=receipt.get('process_cwd')):
+                return None
+        anchor = max(ended.timestamp(), completed.timestamp(), mtime) if ended and completed else None
         if (payload.get('date') != now.date().isoformat() or now < close
                 or type(receipt.get('pid')) is not int or main.get('pid') != receipt['pid']
                 or terminal.get('alive') is not False or type(terminal.get('unresolved_scalping_count')) is not int
                 or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
                 or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())
                 or any(at is None for at in (beat, ended, started, completed))
-                or not close <= ended <= beat <= now or not 0 <= (now-beat).total_seconds() <= max_staleness_sec
-                or not 0 <= (ended-completed).total_seconds() <= (ended-started).total_seconds() <= max_staleness_sec
-                or not 0 <= ended.timestamp()-mtime <= max_staleness_sec):
+                or not close <= ended <= beat <= now
+                or closed is None and not 0 <= (now-beat).total_seconds() <= max_staleness_sec
+                or not started <= completed <= now or mtime > now.timestamp()
+                or abs((started-ended).total_seconds()) > max_staleness_sec
+                or not 0 <= anchor-completed.timestamp() <= anchor-started.timestamp() <= max_staleness_sec
+                or not 0 <= anchor-mtime <= max_staleness_sec):
             return None
         return dict(status='native_market_close_observed', terminal_at=ended.isoformat(),
+            main_state='closed_consumption_verified' if closed else 'live',
             report_age_at_close_sec=ended.timestamp()-mtime, as_of_age_at_close_sec=(ended-started).total_seconds(),
             assessment='retained_close_time_observation', current_observation_verified=False,
             full_coverage_proven=False, runtime_effect=False, allowed_runtime_apply=False)
@@ -4190,7 +4225,7 @@ class ArtifactFreshnessDetector(BaseDetector):
 
     @staticmethod
     def _is_bounded_postclose_running(
-        artifact: dict[str, Any], artifact_path: Path, today: str, now: datetime
+        artifact: dict[str, Any], artifact_path: Path, today: str, now: datetime, *, root=None
     ) -> bool:
         # Only the postclose owner can be pending here, never a failed status,
         # a prior-day recovery, a generic live process, or an unbounded wait.
@@ -4229,7 +4264,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             return False
         # A live PID alone must not hide a newer FAIL/DONE or another date.
         markers = CronCompletionDetector._read_once_markers(
-            PROJECT_ROOT / config["log"], today
+            (root or PROJECT_ROOT) / config["log"], today
         )
         if not (
             ("[START]" in markers.upper() or "[BEGIN]" in markers.upper())

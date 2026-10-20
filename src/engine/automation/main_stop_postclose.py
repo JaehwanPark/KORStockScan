@@ -694,7 +694,9 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     # scan during semantic validation and approved consumer-code handoff.
     with published_source_context(inventory,verified_stats):
         if report.get('code_sha256')!=code_sha():
-            policy.verify_runtime_code_contract(bundle,bundle['target_date'])
+            from src.engine.automation.intraday_release_handoff import consumed_observation_scope
+            with consumed_observation_scope(data_root=root):
+                policy.verify_runtime_code_contract(bundle,bundle['target_date'])
         policy.validate_bundle(bundle,bundle['target_date'])
     return bundle,report,pointer,directory
 

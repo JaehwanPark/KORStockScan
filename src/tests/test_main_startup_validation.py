@@ -61,6 +61,8 @@ def native_preparation_cli(tmp_path):
     (code / '.venv').symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
     shutil.copyfile(ROOT / 'src/engine/infrastructure/validation_digest_session.py',
                     code / 'src/engine/infrastructure/validation_digest_session.py')
+    shutil.copyfile(ROOT / 'src/engine/automation/main_trailing_source_store.py',
+                    code / 'src/engine/automation/main_trailing_source_store.py')
     (code / 'src/utils/constants.py').write_text(f'from pathlib import Path\nDATA_DIR=Path({str(data)!r})\n')
     source = data / 'source.bin'
     source.write_bytes(b'a' * (2 * 1024 * 1024))
@@ -114,6 +116,40 @@ def test_native_preparation_context_keeps_cli_full_scope_and_cold_invocation_bou
         assert result['native_process_lifecycle']['cleanup_required'] is False
     assert results[0]['native_validation_io']['stats']['pid'] != results[1]['native_validation_io']['stats']['pid']
     assert not (data / 'runtime/validation_digests').exists()
+
+
+def test_closed_predecessor_uses_clean_candidate_full_native_cli(native_preparation_cli, monkeypatch):
+    from src.engine.automation import intraday_release_handoff as H
+    from src.engine.infrastructure import runtime_release_router as R
+    code,data=native_preparation_cli
+    selected=code.parent/'closed-selected'
+    proof=dict(schema='intraday_closed_consumption_observation_v1')
+    monkeypatch.setattr(validation,'ROOT',code)
+    monkeypatch.setattr(H,'closed_consumption_observation',lambda day: proof)
+    monkeypatch.setattr(validation,'_git',lambda *a: 'a'*40)
+    inspected=[]
+    monkeypatch.setattr(R,'validate_release',lambda workspace,value: inspected.append(value))
+    (code/'src/engine/automation/intraday_release_handoff.py').write_text(
+        'from contextlib import contextmanager\n@contextmanager\ndef closed_predecessor_review(day):\n'
+        f'    assert day=={DAY!r}\n    yield\n')
+    result=validation._native_preparation_check(selected,DAY,'2026-10-16')
+    assert result['status']=='pass' and result['validation_scope']=='current_full_contract'
+    assert result['actual_pid_consumed'] is False
+    assert len(inspected)==1 and inspected[0]['release_root']==str(code)
+    assert result['native_process_lifecycle']['child_terminated'] is True
+
+
+def test_invalid_closed_origin_cannot_choose_candidate_native_reader(native_preparation_cli, monkeypatch):
+    from src.engine.automation import intraday_release_handoff as H
+    code,_=native_preparation_cli; selected=code.parent/'original-selected'
+    monkeypatch.setattr(validation,'ROOT',code)
+    monkeypatch.setattr(H,'closed_consumption_observation',lambda day: (_ for _ in ()).throw(ValueError('bad_closure')))
+    def native(command, *, cwd, env):
+        assert cwd==selected and command[0]==str(selected/'.venv/bin/python')
+        raise ValueError('original_native_reader_retained')
+    monkeypatch.setattr(validation,'_run_native_validation',native)
+    with pytest.raises(ValueError,match='original_native_reader_retained'):
+        validation._native_preparation_check(selected,DAY,'2026-10-16')
 
 
 def test_native_timeout_terminates_owned_frozen_child_without_touching_unrelated_child(tmp_path):

@@ -202,6 +202,13 @@ def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, pat
             # A live intraday carry has its own consumed native custody. Do not
             # require or manufacture an unissued prepared-policy receipt.
             checked = H._verify_consumed_handoff(day, selected_commit)
+            closed = None
+            if checked.get('status') != 'pass':
+                try:
+                    closed = H.closed_consumption_observation(day)
+                    checked = H._verify_handoff(day, selected_commit, historical_observer=True)
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    raise ValueError('prepared_code_intraday_custody_invalid') from exc
             if checked.get('status') != 'pass':
                 raise ValueError('prepared_code_intraday_custody_invalid')
             handoff_path, consumed_path = H._paths(day, selected_commit)
@@ -228,10 +235,14 @@ def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, pat
             sources.update({str(p): _sha(p) for p in (handoff_path, consumed_path, manifest_path, policy_path)})
             sources.update({str(root / name): code_hashes[key] for key, name in selected_paths.items()})
             identity = consumed['pid_identity']
-            if (H._identity(identity['pid']) != identity or _sha(selector) != selector_sha
+            if (closed and closed['pid_identity'] != identity
+                    or not closed and H._identity(identity['pid']) != identity or _sha(selector) != selector_sha
                     or any(_sha(name) != sha for name, sha in sources.items())):
                 raise ValueError('prepared_code_intraday_generation_changed')
-            result.update(origin_commit=origin, basis='verified_selected_intraday_code_handoff',
+            if closed:
+                sources.update(closed['source_hashes'])
+            result.update(origin_commit=origin, basis=('verified_closed_intraday_code_handoff' if closed
+                else 'verified_selected_intraday_code_handoff'), closed_observation=closed,
                 selected_runtime_code_sha256=actual, selected_paths=selected_paths, sources=sources,
                 intraday_handoff_path=str(handoff_path), intraday_handoff_sha256=_sha(handoff_path),
                 intraday_consumed_path=str(consumed_path), intraday_consumed_sha256=_sha(consumed_path),

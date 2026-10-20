@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 from contextvars import ContextVar
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -288,6 +289,153 @@ def _identity(pid):
     return {"pid": int(pid), "start_ticks": fields[19], "cwd": str((proc / "cwd").resolve(strict=True))}
 
 
+def closed_consumption_observation(day=None, *, now=None):
+    """Authenticate an already consumed, normally closed Main for readers only.
+
+    The native market terminal, postclose stop and EOD completion are separate
+    evidence. This never verifies a new PID, launches Main or activates policy.
+    """
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.engine.error_detectors.artifact_freshness import _postclose_main_absent
+    from src.engine.error_detectors.process_health import _is_expected_thread_terminal
+    current = (now or datetime.now(KST)).astimezone(KST)
+    data = DATA_DIR.resolve()
+    paths = [data/'runtime/runtime_release_selection.json', data.parent/'tmp/error_detector_heartbeat.json',
+             data.parent/'tmp/postclose_bot_isolation.json']
+    records = [router._startup_receipt(p) for p in paths]
+    selected, heartbeat, isolation = [record[0] for record in records]
+    receipt = selected.get('actual_pid_receipt') or {}
+    recorded = datetime.fromisoformat(str(receipt.get('recorded_at_kst') or ''))
+    day = day or recorded.astimezone(KST).date().isoformat()
+    if (recorded.tzinfo is None or recorded.astimezone(KST).date().isoformat() != day
+            or day > current.date().isoformat() or selected.get('actual_pid_consumed') is not True):
+        raise ValueError('intraday_closed_consumption_scope_invalid')
+    root, commit = _selection(require_selected_cwd=False)
+    handoff_path, consumed_path = _paths(day, commit)
+    consumed, consumed_raw = router._startup_receipt(consumed_path)
+    identity = consumed.get('pid_identity') or {}
+    expected = dict(pid=receipt.get('pid'), start_ticks=receipt.get('start_ticks'), cwd=receipt.get('process_cwd'))
+    if (receipt.get('schema') != 'runtime_release_pid_receipt_v1'
+            or receipt.get('git_commit') != commit or receipt.get('release_root') != str(root)
+            or expected.get('cwd') != str(root/'src') or type(expected.get('pid')) is not int
+            or not isinstance(expected.get('start_ticks'), str) or not expected['start_ticks'].isdigit()
+            or identity != expected or consumed.get('target_date') != day
+            or consumed.get('selected_release_commit') != commit or consumed.get('release_root') != str(root)
+            or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+            or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+            or consumed.get('handoff_sha256') != _sha(handoff_path)):
+        raise ValueError('intraday_closed_consumption_receipt_invalid')
+    try:
+        _identity(identity['pid'])
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError('intraday_closed_consumption_pid_present')
+    if not _postclose_main_absent():
+        raise ValueError('intraday_closed_consumption_process_inventory_unknown')
+    beat = datetime.fromisoformat(str((heartbeat.get('main_loop') or {}).get('last_beat') or ''))
+    stopped = datetime.fromisoformat(str(isolation.get('started_at') or ''))
+    terminal = (heartbeat.get('threads') or {}).get('sniper_engine') or {}
+    circuit = heartbeat.get('ai_circuit') or {}
+    if (isolation.get('schema_version') != 1 or isolation.get('active') is not True
+            or isolation.get('target_date') != day or isolation.get('session') != 'bot'
+            or isolation.get('action') not in {'stop', 'restart'}
+            or isolation.get('reason') != 'threshold_cycle_postclose_resource_isolation'
+            or (heartbeat.get('main_loop') or {}).get('pid') != identity['pid']
+            or circuit.get('pid') != identity['pid'] or circuit.get('process_start_ticks') != identity['start_ticks']
+            or terminal.get('alive') is not False or terminal.get('unresolved_scalping_count') != 0
+            or type(terminal.get('unresolved_scalping_count')) is not int or terminal.get('unresolved_scalping_codes') != ''
+            or beat.tzinfo is None or stopped.tzinfo is None
+            or stopped.astimezone(KST).date().isoformat() != day
+            or not recorded <= beat <= stopped <= current or not 0 <= (stopped-beat).total_seconds() <= 600
+            or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=stopped.timestamp())):
+        raise ValueError('intraday_closed_consumption_terminal_invalid')
+    eod_path = data/'runtime/update_kospi_status'/f'update_kospi_{day}.json'
+    eod, eod_raw = router._startup_receipt(eod_path)
+    finished = datetime.fromisoformat(str(eod.get('finished_at') or ''))
+    if finished.tzinfo is None: finished = finished.replace(tzinfo=KST)
+    db = eod.get('db_state') or {}
+    manifest = _read(bootstrap.manifest_path(day))
+    checked = _verify_handoff(day, commit, now=current, historical_observer=True)
+    if (eod.get('target_date') != day or eod.get('status') not in {'completed','completed_with_warnings'}
+            or finished.astimezone(KST).date().isoformat() != day or finished > stopped
+            or db.get('latest_quote_date') != day or type(db.get('rows_on_latest_date')) is not int
+            or db['rows_on_latest_date'] <= 0 or consumed.get('manifest_sha256') != manifest.get('manifest_sha256')
+            or checked['status'] != 'pass'):
+        raise ValueError('intraday_closed_consumption_sources_invalid')
+    if (any(router._startup_receipt(p)[1] != record[1] for p, record in zip(paths, records))
+            or router._startup_receipt(consumed_path)[1] != consumed_raw
+            or router._startup_receipt(eod_path)[1] != eod_raw or not _postclose_main_absent()):
+        raise ValueError('intraday_closed_consumption_generation_changed')
+    sources = {str(p): hashlib.sha256(record[1]).hexdigest() for p, record in zip(paths, records)}
+    sources.update({str(consumed_path): hashlib.sha256(consumed_raw).hexdigest(),
+                    str(eod_path): hashlib.sha256(eod_raw).hexdigest(), str(handoff_path): _sha(handoff_path),
+                    **checked.get('handoff', {}).get('frozen_files', {})})
+    return dict(schema='intraday_closed_consumption_observation_v1', target_date=day, release_commit=commit,
+        pid_identity=identity, stopped_at=stopped.isoformat(), terminal_at=terminal['last_beat'],
+        selection_sha256=hashlib.sha256(records[0][1]).hexdigest(),
+        consumed_sha256=hashlib.sha256(consumed_raw).hexdigest(), source_hashes=sources, runtime_effect=False,
+        current_observation_verified=False, new_pid_consumption_claimed=False)
+
+
+@contextmanager
+def consumed_observation_scope(*, data_root=None):
+    """Existing diagnostic readers may inspect sealed custody after normal stop."""
+    if (data_root is not None and Path(data_root).resolve() != DATA_DIR.resolve()
+            or _OBSERVER_CUSTODY.get() is not None):
+        yield
+        return
+    from src.engine.error_detectors.artifact_freshness import _postclose_main_absent
+    if not _postclose_main_absent():
+        yield
+        return
+    selected = _read(DATA_DIR/'runtime/runtime_release_selection.json')
+    if selected.get('actual_pid_consumed') is not True:
+        # An unconsumed preparation retains its ordinary native launch checks.
+        yield
+        return
+    proof = closed_consumption_observation()
+    token = _OBSERVER_CUSTODY.set(proof)
+    try:
+        yield
+        if closed_consumption_observation(proof['target_date']) != proof:
+            raise ValueError('intraday_closed_consumption_generation_changed')
+    finally:
+        _OBSERVER_CUSTODY.reset(token)
+
+
+@contextmanager
+def closed_predecessor_review(day):
+    """A clean candidate revalidates the closed origin without claiming a PID."""
+    from src.engine.infrastructure import runtime_release_router as router
+    proof = closed_consumption_observation(day)
+    root, commit = _selection(require_selected_cwd=False)
+    candidate = Path(__file__).resolve().parents[3]
+    candidate_commit = router.git(candidate, 'rev-parse', 'HEAD')
+    router.validate_release(DATA_DIR.resolve().parent, dict(schema='runtime_release_selection_v1',
+        workspace=str(DATA_DIR.resolve().parent), release_root=str(candidate), git_commit=candidate_commit))
+    review = _PREDECESSOR_REVIEW.set(dict(day=day, root=root, commit=commit,
+        code_root=candidate, code_commit=candidate_commit, identity=proof['pid_identity'], closed_observation=proof))
+    custody = _OBSERVER_CUSTODY.set(proof)
+    try:
+        yield proof
+        if closed_consumption_observation(day) != proof:
+            raise ValueError('intraday_closed_predecessor_changed')
+    finally:
+        _OBSERVER_CUSTODY.reset(custody)
+        _PREDECESSOR_REVIEW.reset(review)
+
+
+def verify_closed_predecessor_consumption(day):
+    with closed_predecessor_review(day) as proof:
+        checked = _checked_bootstrap(day, None)
+        root, commit = _selection(require_selected_cwd=False)
+        return dict(schema='intraday_closed_predecessor_verification_v1', status='pass', target_date=day,
+            selected_release_commit=commit, release_root=str(root), pid_identity=proof['pid_identity'],
+            closed_observation=proof, manifest_sha256=checked['manifest_sha256'],
+            historical_consumption_verified=True, actual_pid_consumed=False, runtime_effect=False)
+
+
 def _selection(*, require_selected_cwd=True):
     root, commit = selected_release(DATA_DIR.parent)
     if require_selected_cwd and Path.cwd().resolve() not in (root, root / "src"):
@@ -334,14 +482,18 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
                                         expected=expected, paths=paths, actual=actual)
         if prepared is not None:
             return prepared
-    _today(day, None)
+    observer = _OBSERVER_CUSTODY.get()
+    closed = isinstance(observer, dict) and observer.get('schema') == 'intraday_closed_consumption_observation_v1'
+    if not closed or observer.get('target_date') != day:
+        _today(day, None)
     root, commit = _selection(require_selected_cwd=False)
     code_root, code_commit = root, commit
     if Path(__file__).resolve().parents[3] != root:
         review = _PREDECESSOR_REVIEW.get()
         if (not review or review['day'] != day or review['root'] != root
                 or review['commit'] != commit or review['code_root'] != Path(__file__).resolve().parents[3]
-                or _identity(review['identity']['pid']) != review['identity']):
+                or (closed_consumption_observation(day) != review['closed_observation']
+                    if review.get('closed_observation') else _identity(review['identity']['pid']) != review['identity'])):
             raise ValueError('entry_consumer_release_mismatch')
         code_root, code_commit = review['code_root'], review['code_commit']
     manifest = _read(bootstrap.manifest_path(day))
@@ -391,7 +543,8 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         # A policy already consumed by this exact live PID keeps its sealed
         # authority when the editable work checklist changes. No new launch or
         # policy activation uses this read-only proof.
-        checked = (_verify_consumed_handoff(day, commit) if consumed_path.exists()
+        checked = (_verify_handoff(day, commit, historical_observer=True) if closed
+                   else _verify_consumed_handoff(day, commit) if consumed_path.exists()
                    else verify(day, commit))
         if checked.get('status') != 'pass':
             raise ValueError('entry_consumer_handoff_invalid')
@@ -3148,6 +3301,55 @@ for (_trigger, _trigger_sha), _variant in REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VA
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
 
+# Exact postclose reader, archive and native stopped-origin restart repair.
+# Each observed member requires this entire reviewed source generation.
+REVIEWED_POSTCLOSE_REPAIR_HASHES = {'deploy/run_threshold_cycle_postclose.sh': 'e56ebd50f596b142083df248f301f8bce8a7d55ca67dbeb646224e5fb17dd9c5',
+ 'src/engine/automation/main_startup_validation.py': 'af3f290c4e0ff97216e7c2351c06b0314967d87c9cc0c54176b5850a94e65c5b',
+ 'src/engine/automation/main_stop_postclose.py': 'ad0eb4c9eea9b260fb63bed150ff8882671ae126500d005dc00af5f3361dd3ae',
+ 'src/engine/automation/main_stop_source_projection.py': '307192aac2897b8999dab43ff5c0183166df29d3a0d796882dc7308263f49006',
+ 'src/engine/automation/ordered_intraday_deploy.py': '2b25345a2cc0711a42a2a39898961c157dfb927c0b1eb4929b74fe3c624af626',
+ 'src/engine/automation/prepared_policy_code_handoff.py': '00d78a00a10ad6c3d4cdc68083b659a6e5d4b0230ff38b87d7c2d52648f47a0c',
+ 'src/engine/error_detectors/artifact_freshness.py': 'f8955d1d5f8fc807d0f1772e6a21ac682ff800b6668a00d551a1f4a8fd25983e',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '01c1d63084444119e0de2589099f20e758758d3699d0ffb59a43a3f76e5fab8c',
+ 'src/engine/lifecycle/snapshot_archive.py': '5194c082454e6c734cc4ef553ad78b32c11082fb504c33ffcd49242704735cb4',
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': '28e2d8b4e06be95c5f91b36298cfe8015f0f2474419964c60f1db4fcc267a21f',
+ 'src/engine/scalping/reversal_code_handoff.py': '16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d'}
+REVIEWED_POSTCLOSE_REPAIR_PAIRS = {'deploy/run_threshold_cycle_postclose.sh': (('594cd0a6613cbcd5c642ba818a8468fcafbeb4474a7cbd08e1b013ad0556911c',
+                                              'e56ebd50f596b142083df248f301f8bce8a7d55ca67dbeb646224e5fb17dd9c5'),),
+ 'src/engine/automation/main_startup_validation.py': (('190855a642ca713fe53257eae2268eeb5786990c474f2b63904ace41b66c9661',
+                                                       'af3f290c4e0ff97216e7c2351c06b0314967d87c9cc0c54176b5850a94e65c5b'),),
+ 'src/engine/automation/main_stop_postclose.py': (('616a22f236d89de67e18001dbb3564aca6ed5b87e1b26ade3a119a711e1ab057',
+                                                   'ad0eb4c9eea9b260fb63bed150ff8882671ae126500d005dc00af5f3361dd3ae'),),
+ 'src/engine/automation/main_stop_source_projection.py': (('d02e54b9f3a1233b4c2c7e0462916e3e8b789c3dd6afe0b6e35a4230856250cb',
+                                                           '307192aac2897b8999dab43ff5c0183166df29d3a0d796882dc7308263f49006'),),
+ 'src/engine/automation/ordered_intraday_deploy.py': (('4345d7b8ea95b13b7c7862bc54c24b9add92e6da79806190308bfb17b15ba3b9',
+                                                       '2b25345a2cc0711a42a2a39898961c157dfb927c0b1eb4929b74fe3c624af626'),),
+ 'src/engine/automation/prepared_policy_code_handoff.py': (('9ef09608077aa02c25bdd40d8bc33344bf0e10dbde18cae0fdcf434b0c6efaf8',
+                                                            '00d78a00a10ad6c3d4cdc68083b659a6e5d4b0230ff38b87d7c2d52648f47a0c'),),
+ 'src/engine/error_detectors/artifact_freshness.py': (('bc6c903c8a9ea08026103101bcefcaf8e18ea5a4e707408787bc26a15ebd150a',
+                                                       'f8955d1d5f8fc807d0f1772e6a21ac682ff800b6668a00d551a1f4a8fd25983e'),),
+ 'src/engine/infrastructure/startup_validation_code_context.py': (('4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',
+                                                                   '01c1d63084444119e0de2589099f20e758758d3699d0ffb59a43a3f76e5fab8c'),),
+ 'src/engine/lifecycle/snapshot_archive.py': (('9d5ec9e5bfe87461341c440d573f90c2d44a5780b5206d3bd17bdb8d9fc618d8',
+                                               '5194c082454e6c734cc4ef553ad78b32c11082fb504c33ffcd49242704735cb4'),),
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': (('252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947',
+                                                                 '28e2d8b4e06be95c5f91b36298cfe8015f0f2474419964c60f1db4fcc267a21f'),),
+ 'src/engine/scalping/reversal_code_handoff.py': (('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0',
+                                                   '16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d'),)}
+REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_POSTCLOSE_REPAIR_HASHES.get(os.path.normpath(trigger), sha)): {**value,
+        'selector_path': 'src/engine/error_detectors/artifact_freshness.py',
+        'selector_sha256': REVIEWED_POSTCLOSE_REPAIR_HASHES['src/engine/error_detectors/artifact_freshness.py'],
+        'dependencies': {**{name: REVIEWED_POSTCLOSE_REPAIR_HASHES.get(os.path.normpath(name), digest)
+                           for name, digest in value['dependencies'].items()}, **REVIEWED_POSTCLOSE_REPAIR_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_POSTCLOSE_REPAIR_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3214,6 +3416,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     closed_observer_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_CLOSED_OBSERVER_HASHES.items())
+    postclose_repair_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_POSTCLOSE_REPAIR_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3222,7 +3427,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS,
+                         REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS,
                          REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS,
                          REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS,
@@ -3328,6 +3534,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 **REVIEWED_DELAY_SHUTDOWN_HASHES, **REVIEWED_ROUTED_REUSE_HASHES, **REVIEWED_SOURCE_EPOCH_HASHES}
         if closed_observer_present:
             dependencies = {**dependencies, **REVIEWED_CLOSED_OBSERVER_HASHES}
+        if postclose_repair_present:
+            dependencies = {**dependencies, **REVIEWED_POSTCLOSE_REPAIR_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3344,7 +3552,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_CLOSED_OBSERVER_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_POSTCLOSE_REPAIR_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_CLOSED_OBSERVER_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_SOURCE_EPOCH_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ROUTED_REUSE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_SHUTDOWN_PAIRS.get(repository_name(name), ())
@@ -3824,7 +4033,12 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
     findings = []
     payload = {}
     try:
-        current = _today(day, now)
+        if historical_observer:
+            current = (now or datetime.now(KST)).astimezone(KST)
+            if day > current.date().isoformat() or datetime.fromisoformat(day).date().isoformat() != day:
+                raise ValueError('intraday_observer_source_scope_mismatch')
+        else:
+            current = _today(day, now)
         # Read-only consumers may run from their own reviewed immutable
         # report release. Prepare/consume keep the selected-root requirement.
         root, selected = _selection(require_selected_cwd=False)
@@ -4077,6 +4291,10 @@ def _historical_checklist_for_observer(project, source_date, *, now=None):
     if (Path(project) / 'data').resolve() != DATA_DIR.resolve():
         raise ValueError('intraday_observer_data_root_mismatch')
     root, commit = _selection(require_selected_cwd=False)
+    closed = None
+    if not _paths(day, commit)[0].exists():
+        closed = closed_consumption_observation(now=current)
+        day = closed['target_date']
     handoff_path, consumed_path = _paths(day, commit)
     handoff_sha = _sha(handoff_path)
     check = _verify_handoff(day, commit, now=current, historical_observer=True)
@@ -4104,16 +4322,23 @@ def _historical_checklist_for_observer(project, source_date, *, now=None):
             or consumed.get('handoff_sha256') != handoff_sha
             or consumed.get('target_date') != day or consumed.get('selected_release_commit') != commit
             or consumed.get('release_root') != str(root)
-            or identity.get('cwd') != str(root / 'src')
-            or _identity(identity['pid']) != identity):
+            or identity.get('cwd') != str(root / 'src')):
         raise ValueError('intraday_observer_current_pid_not_bound')
-    token = _OBSERVER_CUSTODY.set((day, commit))
     try:
-        bootstrap_check = _checked_bootstrap(day, identity['pid'])
+        live = _identity(identity['pid'])
+    except FileNotFoundError:
+        closed = closed_consumption_observation(day, now=current)
+        live = closed['pid_identity']
+    if live != identity:
+        raise ValueError('intraday_observer_current_pid_not_bound')
+    token = _OBSERVER_CUSTODY.set(closed or (day, commit))
+    try:
+        bootstrap_check = _checked_bootstrap(day, None if closed else identity['pid'])
     finally:
         _OBSERVER_CUSTODY.reset(token)
     if (consumed.get('manifest_sha256') != bootstrap_check.get('manifest_sha256')
-            or _identity(identity['pid']) != identity
+            or (closed_consumption_observation(day, now=current) != closed if closed
+                else _identity(identity['pid']) != identity)
             or _sha(handoff_path) != handoff_sha
             or _sha(consumed_path) != consumed_sha
             or _selection(require_selected_cwd=False) != (root, commit)):
@@ -4125,7 +4350,8 @@ def _historical_checklist_for_observer(project, source_date, *, now=None):
         handoff_path=str(handoff_path), handoff_sha256=handoff_sha,
         consumed_path=str(consumed_path), consumed_sha256=consumed_sha,
         delay_observer_validation=bootstrap_check.get('delay_observer_validation'),
-        pid_identity=identity, runtime_effect=False, new_finalization_claimed=False)
+        pid_identity=identity, pid_state='closed' if closed else 'live', closed_consumption=closed,
+        runtime_effect=False, new_finalization_claimed=False)
 
 
 def activate_main_v2(day,*,pid,confirm,now=None):

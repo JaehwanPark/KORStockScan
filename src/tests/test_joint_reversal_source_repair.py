@@ -536,9 +536,9 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,mo
 
 
 @pytest.mark.parametrize('predecessor_review,damage',
-    [(review,damage) for review in (False,True) for damage in
+    [(review,damage) for review in (False,True,'closed') for damage in
      (None,'code','source','pointer','date','authority','members','seal','selector','absent')]
-    + [(True,damage) for damage in ('review_missing','review_day','review_origin','review_pid','review_race','review_consumed')])
+    + [(review,damage) for review in (True,'closed') for damage in ('review_missing','review_day','review_origin','review_pid','review_race','review_consumed')])
 def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkeypatch,damage,predecessor_review):
     from pathlib import Path
     from src.engine.scalping import reversal_code_handoff as H, continuous_reversal_policy_v6 as V
@@ -567,9 +567,18 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
         monkeypatch.setattr(IH,'_identity',lambda pid:identity)
         context=IH._PREDECESSOR_REVIEW.set(dict(day=day,root=selected,commit=old_commit,
             code_root=root,code_commit=commit,identity=identity))
+        if predecessor_review=='closed':
+            closed=dict(schema='intraday_closed_consumption_observation_v1',pid_identity=identity)
+            IH._PREDECESSOR_REVIEW.get()['closed_observation']=closed
+            calls=[]
+            def closed_observation(day):
+                calls.append(day)
+                return {} if damage=='review_pid' or damage=='review_race' and len(calls)>1 else closed
+            monkeypatch.setattr(IH,'closed_consumption_observation',closed_observation)
+            monkeypatch.setattr(IH,'_identity',lambda pid: (_ for _ in ()).throw(AssertionError('closed origin is not live')))
         if damage == 'review_missing': IH._PREDECESSOR_REVIEW.set(None)
         if damage == 'review_day': IH._PREDECESSOR_REVIEW.get()['day'] = '2026-10-01'
-        if damage in ('review_pid','review_race'):
+        if predecessor_review!='closed' and damage in ('review_pid','review_race'):
             visits=[]
             def observed(pid):
                 visits.append(pid)

@@ -455,16 +455,26 @@ class Deployment:
         if self.flag.exists() or self.flag.is_symlink():
             raise ValueError('deployment_existing_restart_request')
         receipt = self.old.get('actual_pid_receipt') or {}
-        self.identity = H._identity(receipt.get('pid'))
+        self.closed_predecessor = None
+        try:
+            self.identity = H._identity(receipt.get('pid'))
+        except FileNotFoundError:
+            self.closed_predecessor = H.verify_closed_predecessor_consumption(self.day)
+            self.identity = self.closed_predecessor['pid_identity']
         if (self.old.get('actual_pid_consumed') is not True
                 or self.identity['cwd'] != str(self.previous / 'src')
-                or _main_pids() != [self.identity['pid']]):
+                or _main_pids() != ([] if self.closed_predecessor else [self.identity['pid']])):
             raise ValueError('deployment_predecessor_not_current_singleton')
-        parent = Path('/proc', str(self.identity['pid']), 'stat').read_text().rsplit(')', 1)[1].split()[1]
-        self.launcher = int(parent)
-        self.launcher_stat = Path('/proc', parent, 'stat').read_text().rsplit(')', 1)[1].split()[19]
-        if str(self.previous / 'src/run_bot.sh').encode() not in Path('/proc', parent, 'cmdline').read_bytes().split(b'\0'):
-            raise ValueError('deployment_predecessor_supervisor_unrecognized')
+        self.launcher = self.launcher_stat = None
+        if self.closed_predecessor:
+            if not _session_absent():
+                raise ValueError('deployment_closed_predecessor_supervisor_present')
+        else:
+            parent = Path('/proc', str(self.identity['pid']), 'stat').read_text().rsplit(')', 1)[1].split()[1]
+            self.launcher = int(parent)
+            self.launcher_stat = Path('/proc', parent, 'stat').read_text().rsplit(')', 1)[1].split()[19]
+            if str(self.previous / 'src/run_bot.sh').encode() not in Path('/proc', parent, 'cmdline').read_bytes().split(b'\0'):
+                raise ValueError('deployment_predecessor_supervisor_unrecognized')
         self.directory = self.workspace / 'data/runtime/release_transitions' / self.day / self.commit
         self.directory.mkdir(parents=True, exist_ok=False)
         self.state = dict(schema='ordered_intraday_deployment_v1', authority=CONFIRM,
@@ -476,9 +486,14 @@ class Deployment:
         _atomic(self.directory / 'selection-before.json', self.before)
         self.checkpoint('preflight')
         try:
-            check = self.run_json(self.previous, 'src.engine.automation.intraday_release_handoff',
+            if self.closed_predecessor:
+                check = self.closed_predecessor
+                self.state['closed_predecessor'] = check
+                _atomic(self.directory/'closed-predecessor.json', _json_bytes(check))
+            else:
+                check = self.run_json(self.previous, 'src.engine.automation.intraday_release_handoff',
                                   '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
-            self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
+                self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
                           '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
         except ValueError:
             if not getattr(self, 'preserve_editable_checklist', False):
@@ -714,6 +729,14 @@ class Deployment:
 
     def drain(self):
         self.assert_hold()
+        if getattr(self, 'closed_predecessor', None):
+            self.assert_unchanged()
+            if (H.closed_consumption_observation(self.day) != self.closed_predecessor['closed_observation']
+                    or _main_pids() or not _session_absent() or self.flag.exists()):
+                raise ValueError('deployment_closed_predecessor_changed')
+            self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat(),
+                drain_basis='native_postclose_stopped_consumption_verified')
+            return
         if H._identity(self.identity['pid']) != self.identity:
             raise ValueError('deployment_predecessor_identity_changed')
         if Path('/proc', str(self.launcher), 'stat').read_text().rsplit(')', 1)[1].split()[19] != self.launcher_stat:

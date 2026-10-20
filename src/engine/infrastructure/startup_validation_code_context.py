@@ -75,6 +75,9 @@ REVIEWED_PREPARATION_HISTORY = {
     'src/engine/ai_engine_openai.py': {
         ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
          '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07'),
+        # Issued role-latency successor, already bound by the active handoff.
+        ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
+         'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185'),
     },
     'src/engine/scalping/reversal_auxiliary_next_session.py': {
         ('c32689f592a5f6558d3404bd9b5495330aefc45715feddf8e579c171d74901c1',
@@ -266,7 +269,18 @@ def _origin(proof, request):
         _check_sources(native_sources)
         if any(sources.get(name) != sha for name, sha in native_sources.items()):
             raise ValueError('startup_code_context_native_handoff_sources_not_bound')
-    elif basis == 'verified_selected_intraday_code_handoff':
+    elif basis in {'verified_selected_intraday_code_handoff', 'verified_closed_intraday_code_handoff'}:
+        if basis == 'verified_closed_intraday_code_handoff':
+            closed = origin.get('closed_observation') or {}
+            if (closed.get('schema') != 'intraday_closed_consumption_observation_v1'
+                    or closed.get('target_date') != proof['target_date']
+                    or closed.get('release_commit') != commit
+                    or closed.get('pid_identity') != origin.get('pid_identity')
+                    or any(closed.get(key) is not False for key in
+                           ('runtime_effect','current_observation_verified','new_pid_consumption_claimed'))
+                    or not closed.get('source_hashes')
+                    or any(sources.get(name) != sha for name,sha in closed['source_hashes'].items())):
+                raise ValueError('startup_code_context_closed_origin_invalid')
         handoff_path = Path(origin.get('intraday_handoff_path') or '')
         consumed_path = Path(origin.get('intraday_consumed_path') or '')
         expected = Path(request['data_root'])/'runtime/policy_bootstrap/intraday_handoff'/proof['target_date']

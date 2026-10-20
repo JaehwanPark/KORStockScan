@@ -367,3 +367,39 @@ def test_republication_cannot_inherit_an_acknowledgement_for_changed_fact_identi
     _reseal(path, stage, report, children)
     with pytest.raises(ValueError, match='quantity_historical_exclusions_population_changed'):
         projection.publish(path, stage, report, data_root=data)
+
+
+@pytest.mark.parametrize('fault', [None, 'archive', 'receipt', 'logical', 'original', 'missing', 'symlink', 'unrelated'])
+def test_native_snapshot_compression_preserves_only_cold_bound_logical_sources(tmp_path, monkeypatch, fault):
+    from src.engine import compress_db_backfilled_files as archiver
+    from src.engine.lifecycle import snapshot_archive
+    data, path, stage, report, children = _fixture(tmp_path, monkeypatch)
+    directory = data/'report/monitor_snapshots'; directory.mkdir(parents=True)
+    raw = directory/'trade_review_2026-10-08.json'
+    raw.write_text(json.dumps(dict(date='2026-10-08', rows=[])))
+    report['census']['persisted_fact_generations'] = {'2026-10-08': {'issue':'explicit_source_gap'}}
+    _reseal(path, stage, report, children)
+    projection.publish(path, stage, report, data_root=data)
+    monkeypatch.setattr(archiver, 'MONITOR_SNAPSHOT_DIR', directory)
+    assert archiver._gzip_file(raw, dry_run=False)[0]
+    zipped = Path(str(raw)+'.gz'); receipt = Path(str(zipped)+'.archive_receipt.json')
+    if fault == 'archive': zipped.write_bytes(zipped.read_bytes()+b'x')
+    elif fault == 'receipt': receipt.write_text(receipt.read_text()+'broken')
+    elif fault in ('logical', 'original'):
+        value = json.loads(receipt.read_bytes())
+        if fault == 'logical': value['logical_content_sha256'] = 'f'*64
+        else: value['original_identity']['inode'] += 1
+        value['artifact_content_sha256'] = native._digest({k:v for k,v in value.items() if k!='artifact_content_sha256'})
+        receipt.write_text(json.dumps(value))
+    elif fault == 'missing': receipt.unlink()
+    elif fault == 'symlink':
+        other = zipped.with_suffix('.other'); zipped.rename(other); zipped.symlink_to(other)
+    elif fault == 'unrelated': children['evaluation'].write_text(children['evaluation'].read_text()+' ')
+    # No large raw or gzip hashing is needed by this warm proof consumer.
+    monkeypatch.setattr(snapshot_archive, '_digest', lambda *args: pytest.fail('warm archive byte rescan'))
+    if fault:
+        with pytest.raises((ValueError, OSError)):
+            projection.read_verified(path, stage, read=_read, data_root=data)
+    else:
+        result = projection.read_verified(path, stage, read=_read, data_root=data)
+        assert result['observation']['postclose_stage_status'] == 'valid_empty'

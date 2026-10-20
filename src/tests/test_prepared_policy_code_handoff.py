@@ -481,7 +481,8 @@ def test_engine_relative_extension_preserves_native_family_keys(prepared, monkey
 
 @pytest.mark.parametrize('prepared', ['main_stop', 'holding_vote'], indirect=True)
 @pytest.mark.parametrize('fault', [None, 'custody', 'policy', 'pid', 'frozen_source'])
-def test_resolve_live_intraday_origin_preserves_native_custody(prepared, monkeypatch, fault):
+@pytest.mark.parametrize('closed', [False, True])
+def test_resolve_live_intraday_origin_preserves_native_custody(prepared, monkeypatch, fault, closed):
     data, root, args, selector = _origin_resolution_arguments(prepared)
     C.receipt_path(data, DAY, COMMIT, args['family']).unlink()
     manifest_path = Path(json.loads(prepared[-1].read_text())['manifest_path'])
@@ -492,7 +493,14 @@ def test_resolve_live_intraday_origin_preserves_native_custody(prepared, monkeyp
     hp.write_text(json.dumps(handoff))
     cp.write_text(json.dumps(dict(pid_identity=identity, manifest_sha256=manifest['manifest_sha256'])))
     monkeypatch.setattr(H, '_verify_consumed_handoff', lambda *a: dict(
-        status='fail' if fault == 'custody' else 'pass', handoff=handoff))
+        status='fail' if closed or fault == 'custody' else 'pass', handoff=handoff))
+    proof = dict(pid_identity=({**identity, 'start_ticks':'999'} if fault == 'pid' else identity),
+                 source_hashes={str(manifest_path): C._sha(manifest_path)})
+    def closed_proof(*a):
+        if not closed or fault == 'custody': raise ValueError('closed_custody_invalid')
+        return proof
+    monkeypatch.setattr(H, 'closed_consumption_observation', closed_proof)
+    monkeypatch.setattr(H, '_verify_handoff', lambda *a, **kw: dict(status='pass', handoff=handoff))
     monkeypatch.setattr(H, '_paths', lambda *a: (hp, cp))
     monkeypatch.setattr(H.bootstrap, 'manifest_path', lambda *a: manifest_path)
     monkeypatch.setattr(H, '_preopen', lambda *a: dict(selected_release_commit=ORIGIN))
@@ -504,7 +512,7 @@ def test_resolve_live_intraday_origin_preserves_native_custody(prepared, monkeyp
         with pytest.raises(ValueError): C.resolve_prepared_code_origin(data, DAY, **args)
     else:
         result = C.resolve_prepared_code_origin(data, DAY, **args)
-        assert result['basis'] == 'verified_selected_intraday_code_handoff'
+        assert result['basis'] == ('verified_closed_intraday_code_handoff' if closed else 'verified_selected_intraday_code_handoff')
         assert result['origin_commit'] == ORIGIN
         assert result['pid_identity'] == identity
         assert result['sources'][str(cp)] == C._sha(cp)

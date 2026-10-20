@@ -1792,12 +1792,13 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
-    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
-    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):
-        for variant in (handoff.REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS if generation=='closed_observer' else
+    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):
+        for variant in (handoff.REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS if generation=='postclose_repair' else
+                handoff.REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS if generation=='closed_observer' else
                 handoff.REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS if generation=='source_epoch' else
                 handoff.REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS if generation=='routed_reuse' else
                 handoff.REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS if generation=='delay_shutdown' else
@@ -1808,10 +1809,10 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='closed_observer' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='postclose_repair' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
+                 ({'closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
                    'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c','delay_cleanup':'661260e5f'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
@@ -1827,7 +1828,7 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     reader = root/reader_path
     if fault == 'missing': reader.unlink()
     elif fault == 'parent_mix':
-        parent = (origin if generation == 'routed_reuse'
+        parent = ('04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
                   and reader_path in handoff.REVIEWED_ROUTED_REUSE_HASHES else '21d822a64')
         reader.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',parent+':'+reader_path]))
         revision=commit()
@@ -1895,3 +1896,79 @@ def test_source_epoch_handoff_requires_exact_deployment_owner(tmp_path, family, 
 def test_closed_observer_handoff_requires_exact_reader_and_source_epoch(tmp_path, family, source, fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, source, 'closed_observer')
+
+
+@pytest.mark.parametrize('fault', [None, 'midnight', 'pid_present', 'inventory_unknown', 'receipt_pid', 'receipt_start',
+    'heartbeat_pid', 'heartbeat_start', 'terminal', 'unresolved', 'isolation', 'stop_clock', 'eod', 'eod_date',
+    'eod_rows', 'manifest', 'handoff', 'changed_heartbeat'])
+def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consumption(tmp_path, monkeypatch, fault):
+    from src.engine.error_detectors import artifact_freshness as freshness
+    from src.engine.infrastructure import runtime_release_router as router
+    data = tmp_path/'data'; root = tmp_path/'release'; root.mkdir()
+    monkeypatch.setattr(handoff, 'DATA_DIR', data)
+    monkeypatch.setattr(handoff.bootstrap, 'manifest_path', lambda day: data/'runtime'/f'manifest_{day}.json')
+    monkeypatch.setattr(handoff, '_selection', lambda **kwargs: (root, NEW))
+    def absent(pid):
+        if fault == 'pid_present': return dict(pid=pid, start_ticks='42', cwd=str(root/'src'))
+        raise FileNotFoundError('stopped')
+    monkeypatch.setattr(handoff, '_identity', absent)
+    monkeypatch.setattr(freshness, '_postclose_main_absent', lambda: fault != 'inventory_unknown')
+    monkeypatch.setattr(handoff, '_verify_handoff', lambda *a, **k: dict(status='fail' if fault=='handoff' else 'pass'))
+    identity=dict(pid=3,start_ticks='42',cwd=str(root/'src'))
+    handoff_path, consumed_path = handoff._paths(DAY, NEW)
+    _json(handoff_path, dict(original=True))
+    consumed=dict(schema='intraday_policy_preserving_consumption_v1', status='pass', target_date=DAY,
+        selected_release_commit=NEW, release_root=str(root), handoff_sha256=handoff._sha(handoff_path),
+        pid_identity=identity, actual_pid_consumed=True, manifest_sha256='original')
+    receipt=dict(schema='runtime_release_pid_receipt_v1',pid=3,start_ticks='42',process_cwd=str(root/'src'),
+        release_root=str(root),git_commit=NEW,recorded_at_kst=DAY+'T19:58:00+09:00')
+    selected=dict(actual_pid_consumed=True,actual_pid_receipt=receipt)
+    terminal=dict(alive=False,terminal_reason='market_close',unresolved_scalping_count=0,
+        unresolved_scalping_codes='',last_beat=DAY+'T20:00:00+09:00')
+    heartbeat=dict(main_loop=dict(pid=3,last_beat=DAY+'T20:57:32+09:00'),
+        ai_circuit=dict(pid=3,process_start_ticks='42'),threads=dict(sniper_engine=terminal))
+    isolation=dict(schema_version=1,active=True,target_date=DAY,session='bot',action='stop',
+        reason='threshold_cycle_postclose_resource_isolation',started_at=DAY+'T20:57:32+09:00')
+    eod=dict(target_date=DAY,status='completed_with_warnings',finished_at=DAY+'T20:57:09',
+        db_state=dict(latest_quote_date=DAY,rows_on_latest_date=2621))
+    if fault=='receipt_pid': receipt['pid']=4
+    elif fault=='receipt_start': receipt['start_ticks']='43'
+    elif fault=='heartbeat_pid': heartbeat['main_loop']['pid']=4
+    elif fault=='heartbeat_start': heartbeat['ai_circuit']['process_start_ticks']='43'
+    elif fault=='terminal': terminal['alive']=True
+    elif fault=='unresolved': terminal['unresolved_scalping_count']=1
+    elif fault=='isolation': isolation['active']=False
+    elif fault=='stop_clock': isolation['started_at']=DAY+'T19:57:00+09:00'
+    elif fault=='eod': eod['status']='failed'
+    elif fault=='eod_date': eod['target_date']='2026-10-01'
+    elif fault=='eod_rows': eod['db_state']['rows_on_latest_date']=0
+    _json(consumed_path,consumed)
+    _json(data/'runtime/runtime_release_selection.json',selected)
+    _json(tmp_path/'tmp/error_detector_heartbeat.json',heartbeat)
+    _json(tmp_path/'tmp/postclose_bot_isolation.json',isolation)
+    _json(data/'runtime/update_kospi_status'/f'update_kospi_{DAY}.json',eod)
+    _json(handoff.bootstrap.manifest_path(DAY),dict(manifest_sha256='wrong' if fault=='manifest' else 'original'))
+    if fault=='changed_heartbeat':
+        original=router._startup_receipt;calls=0
+        def changed(path):
+            nonlocal calls
+            if Path(path).name=='error_detector_heartbeat.json':
+                calls+=1
+                if calls==2: _json(path,{**heartbeat,'changed':True})
+            return original(path)
+        monkeypatch.setattr(router,'_startup_receipt',changed)
+    now=NOW.replace(hour=22)+(timedelta(days=1) if fault=='midnight' else timedelta())
+    if fault not in (None,'midnight'):
+        with pytest.raises((ValueError,OSError)): handoff.closed_consumption_observation(now=now)
+        return
+    proof=handoff.closed_consumption_observation(now=now)
+    assert proof['pid_identity']==identity and proof['target_date']==DAY
+    assert proof['runtime_effect'] is proof['current_observation_verified'] is proof['new_pid_consumption_claimed'] is False
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('source', list(handoff.REVIEWED_POSTCLOSE_REPAIR_HASHES))
+@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change', 'parent_mix'])
+def test_postclose_repair_requires_complete_exact_reader_generation(tmp_path, family, source, fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, fault, source, 'postclose_repair')
