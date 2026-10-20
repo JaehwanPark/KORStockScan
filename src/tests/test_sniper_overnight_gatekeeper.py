@@ -5,21 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from sqlalchemy.orm.exc import DetachedInstanceError
 
-from src.database.models import RecommendationHistory
 from src.engine import kiwoom_sniper_v2, sniper_state_handlers
 from src.engine.sniper_overnight_gatekeeper import (
-    _apply_overnight_flow_override,
-    _clean_telegram_text,
     _eod_label,
-    _format_order_error,
-    _humanize_eod_action,
-    _retired_entry_overnight_forbidden,
     _overnight_gatekeeper_enabled,
     run_scalping_overnight_gatekeeper,
-    _snapshot_record,
-    _submit_overnight_dual_persona_shadow,
 )
 from src.engine.sniper_time import TIME_SCALPING_OVERNIGHT_DECISION
 
@@ -82,6 +73,9 @@ def test_overnight_gatekeeper_ignores_runtime_true_override(
         "ACTIVE_TARGETS": [{"id": 1, "code": "005930", "status": "HOLDING"}],
         "event_bus": SimpleNamespace(publish=external),
         "DUAL_PERSONA_ENGINE": SimpleNamespace(submit=external),
+        "kiwoom_utils": SimpleNamespace(get_tick_history_ka10003=external,
+                                        get_minute_candles_ka10080=external),
+        "send_telegram": external,
         "_confirm_cancel_or_reload_remaining": external,
         "_send_market_exit_now": external,
         "process_sell_cancellation": external,
@@ -89,7 +83,8 @@ def test_overnight_gatekeeper_ignores_runtime_true_override(
         monkeypatch.setattr(overnight, name, value, raising=False)
     messages = []
     monkeypatch.setattr(overnight, "log_info", messages.append)
-    ai = SimpleNamespace(evaluate_scalping_overnight_decision=external)
+    ai = SimpleNamespace(evaluate_scalping_overnight_decision=external,
+                         evaluate_scalping_holding_flow=external)
 
     assert _overnight_gatekeeper_enabled() is False
     assert run_scalping_overnight_gatekeeper(ai_engine=ai) is False
@@ -341,15 +336,6 @@ def test_live_holding_clock_produces_consumer_valid_terminal_hold(monkeypatch, n
     assert stock["status"] == "HOLDING" and stock["buy_qty"] == 1
 
 
-def test_retired_entry_source_preserves_legacy_overnight_custody_safety():
-    assert _retired_entry_overnight_forbidden(
-        {"source_signature": "PRICE_JUMP_START,LIMIT_DOWN_LIVE_UNLOCK"}
-    )
-    assert not _retired_entry_overnight_forbidden(
-        {"source_signature": "PRICE_JUMP_START"}
-    )
-
-
 def test_run_scalping_overnight_gatekeeper_returns_false_when_disabled(monkeypatch):
     monkeypatch.setattr(
         "src.engine.sniper_overnight_gatekeeper.TRADING_RULES",
@@ -386,171 +372,3 @@ def test_main_runtime_has_no_overnight_module_binding_or_gatekeeper_call():
 
     assert "bind_overnight_dependencies" not in source
     assert "run_scalping_overnight_gatekeeper" not in source
-
-
-def test_snapshot_record_survives_detached_instance():
-    record = RecommendationHistory(
-        id=101,
-        stock_code="005930",
-        stock_name="삼성전자",
-        status="HOLDING",
-        buy_qty=3,
-        buy_price=70100,
-        buy_time="09:10:00",
-    )
-
-    snapshot = _snapshot_record(record)
-
-    assert snapshot.id == 101
-    assert snapshot.stock_code == "005930"
-    assert snapshot.stock_name == "삼성전자"
-    assert snapshot.status == "HOLDING"
-    assert snapshot.buy_qty == 3.0
-    assert snapshot.buy_price == 70100.0
-    assert snapshot.buy_time == "09:10:00"
-
-
-def test_snapshot_record_can_be_built_before_detached_refresh_failure():
-    record = RecommendationHistory(
-        id=102,
-        stock_code="000660",
-        stock_name="SK하이닉스",
-        status="SELL_ORDERED",
-        buy_qty=1,
-        buy_price=201000,
-        buy_time="14:55:00",
-    )
-
-    snapshot = _snapshot_record(record)
-
-    # Simulate the practical guarantee we need: gatekeeper should rely on the
-    # immutable snapshot, not on the ORM instance after session teardown.
-    class DetachedRecord:
-        @property
-        def status(self):
-            raise DetachedInstanceError("detached")
-
-    detached = DetachedRecord()
-
-    assert snapshot.status == "SELL_ORDERED"
-    try:
-        _ = detached.status
-        raised = False
-    except DetachedInstanceError:
-        raised = True
-
-    assert raised is True
-
-
-def test_format_order_error_prefers_return_msg_and_code():
-    msg = _format_order_error(
-        {"return_msg": "[2000](521790:주문 불가능합니다.)", "return_code": 20}
-    )
-    assert msg == "[2000](521790:주문 불가능합니다.) (code=20)"
-
-
-def test_format_order_error_fallback_to_string():
-    assert _format_order_error("timeout") == "timeout"
-
-
-def test_format_order_error_unescapes_markdown_style_backslashes():
-    msg = _format_order_error(
-        {"return_msg": r"[2000]\(521790:주문 불가능합니다\.\)", "return_code": 20}
-    )
-    assert msg == "[2000](521790:주문 불가능합니다.) (code=20)"
-
-
-def test_humanize_eod_action_and_clean_text():
-    assert _humanize_eod_action("SELL_TODAY") == "당일 청산"
-    assert _humanize_eod_action("HOLD_OVERNIGHT") == "오버나이트 유지"
-    assert _clean_telegram_text(r"\[ABC\]\(test\)\.") == "[ABC](test)."
-
-
-def test_submit_overnight_dual_persona_shadow_is_disabled_when_dual_persona_off(
-    monkeypatch,
-):
-    submit_calls = []
-    monkeypatch.setattr(
-        "src.engine.sniper_overnight_gatekeeper.TRADING_RULES",
-        SimpleNamespace(OPENAI_DUAL_PERSONA_ENABLED=False),
-    )
-    monkeypatch.setattr(
-        "src.engine.sniper_overnight_gatekeeper.DUAL_PERSONA_ENGINE",
-        SimpleNamespace(
-            submit_overnight_shadow=lambda **kwargs: submit_calls.append(kwargs)
-        ),
-    )
-
-    _submit_overnight_dual_persona_shadow(
-        "테스트", "005930", {"curr_price": 70000}, {"action": "SELL_TODAY"}
-    )
-
-    assert submit_calls == []
-
-
-def test_overnight_flow_hold_cannot_override_sell_with_blocked_context(monkeypatch):
-    logs = []
-    monkeypatch.setattr(
-        "src.engine.sniper_overnight_gatekeeper._log_holding_pipeline",
-        lambda stock, code, stage, **fields: logs.append((stage, fields)),
-    )
-    blocked_context = {
-        "schema": "holding_decision_context_v1",
-        "enabled": True,
-        "source_quality": {
-            "status": "blocked",
-            "hold_defer_allowed": False,
-            "blockers": ["order_or_quantity_conflict"],
-        },
-        "flow_signature": {
-            "executable_pnl_pct": -0.4,
-            "candle_regime": "range",
-            "signed_tape_state": "missing",
-            "ofi_regime": "neutral",
-            "source_quality_status": "blocked",
-        },
-    }
-    ctx = {
-        "avg_price": 10_000,
-        "curr_price": 9_960,
-        "buy_qty": 3,
-        "pnl_pct": -0.4,
-        "_holding_decision_context": blocked_context,
-        "_holding_recent_ticks": [{"price": 9960, "volume": 10}],
-        "_holding_recent_candles": [{"현재가": 9960}],
-    }
-    record = SimpleNamespace(
-        stock_code="005930",
-        stock_name="테스트",
-        buy_price=10_000,
-        buy_qty=3,
-        status="HOLDING",
-    )
-
-    class HoldAI:
-        def evaluate_scalping_holding_flow(self, *args, **kwargs):
-            assert kwargs["holding_context"] is blocked_context
-            return {
-                "action": "HOLD",
-                "score": 80,
-                "flow_state": "absorption",
-                "reason": "hold",
-                "evidence": ["support"],
-                "ai_parse_fail": False,
-            }
-
-    decision = _apply_overnight_flow_override(
-        record,
-        {"buy_qty": 3},
-        {"curr": 9960},
-        ctx,
-        {"action": "SELL_TODAY", "confidence": 70, "reason": "sell"},
-        HoldAI(),
-    )
-
-    assert decision["action"] == "SELL_TODAY"
-    assert any(
-        stage == "overnight_flow_override_exit_confirmed"
-        and fields.get("force_reason") == "holding_context_cannot_defer"
-        for stage, fields in logs
-    )

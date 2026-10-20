@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.engine.lifecycle.retirement import retired_artifact, current_report_view
 
 import argparse
+from functools import partial
 import hashlib
 import json
 import os
@@ -17,11 +18,10 @@ from typing import Any
 
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
+    parse_candidate_review_response,
+    validate_candidate_review_response,
     REQUIRED_METRIC_CONTRACT_FIELDS,
     default_comparative_review,
-    has_evidence_authority_violation,
-    has_forbidden_runtime_leak,
-    missing_metric_contract_fields,
     proposal_counts,
     with_evidence_authority_forbidden_uses,
 )
@@ -1873,57 +1873,6 @@ def _call_openai_ai_review(
 ) -> tuple[Any | None, dict[str, Any]]:
     config = config or _ai_review_config()
 
-    def _contract_validator(raw_text: str) -> tuple[bool, str]:
-        status, payload, warnings = _parse_ai_review_response(raw_text)
-        if status != "parsed":
-            return False, status
-        audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-        expected_ids = {
-            str(item.get("candidate_id") or "")
-            for item in context.get("candidates", [])
-            if isinstance(item, dict)
-        }
-        review_rows = payload.get("candidate_reviews")
-        proposal_rows = payload.get("ai_tier2_proposals")
-        comparative_rows = payload.get("comparative_reviews")
-        if not isinstance(review_rows, list):
-            return False, "missing_candidate_reviews"
-        if not isinstance(proposal_rows, list):
-            return False, "missing_ai_tier2_proposals"
-        if not isinstance(comparative_rows, list):
-            return False, "missing_comparative_reviews"
-        if expected_ids:
-            review_ids = {
-                str(item.get("candidate_id") or "")
-                for item in review_rows
-                if isinstance(item, dict)
-            }
-            proposal_ids = {
-                str(item.get("candidate_id") or "")
-                for item in proposal_rows
-                if isinstance(item, dict)
-            }
-            comparative_ids = {
-                str(item.get("candidate_id") or "")
-                for item in comparative_rows
-                if isinstance(item, dict)
-            }
-            if review_ids != expected_ids:
-                return False, "candidate_reviews_id_mismatch"
-            if proposal_ids != expected_ids:
-                return False, "ai_tier2_proposals_id_mismatch"
-            if comparative_ids != expected_ids:
-                return False, "comparative_reviews_id_mismatch"
-        if audit.get("status") not in {
-            "pass",
-            "correction_required",
-            "insufficient_context",
-        }:
-            return False, "missing_audit_status"
-        if warnings:
-            return False, "warnings:" + ",".join(warnings[:3])
-        return True, ""
-
     from src.engine.ai.postclose_structured_review_provider import (
         call_postclose_structured_review,
     )
@@ -1934,113 +1883,12 @@ def _call_openai_ai_review(
         instructions=_build_ai_review_instructions(),
         config=config,
         metadata={"endpoint_name": AI_REVIEWER_NAME, "report_type": REPORT_TYPE},
-        contract_validator=_contract_validator,
+        contract_validator=partial(
+            validate_candidate_review_response, context=context,
+            reviewer=AI_REVIEWER_NAME, allowed_decisions=PRODUCER_DUAL_DECISIONS,
+        ),
         ensure_ascii=False,
     )
-
-
-def _parse_ai_review_response(
-    raw_response: Any | None,
-) -> tuple[str, dict[str, Any], list[str]]:
-    if raw_response in (None, ""):
-        return "missing", {}, ["ai_review_response_missing"]
-    if isinstance(raw_response, dict):
-        payload = raw_response
-    else:
-        try:
-            payload = json.loads(str(raw_response))
-        except Exception as exc:
-            return "parse_rejected", {}, [f"ai_review_json_parse_failed:{exc}"]
-    warnings: list[str] = []
-    if payload.get("schema_version") != 1:
-        warnings.append("ai_review_schema_version_invalid")
-    if payload.get("reviewer") != AI_REVIEWER_NAME:
-        warnings.append("ai_review_reviewer_invalid")
-    if not isinstance(payload.get("candidate_reviews"), list):
-        warnings.append("ai_review_candidate_reviews_missing")
-    if not isinstance(payload.get("ai_tier2_proposals"), list):
-        warnings.append("ai_review_ai_tier2_proposals_missing")
-    if not isinstance(payload.get("comparative_reviews"), list):
-        warnings.append("ai_review_comparative_reviews_missing")
-    for item in payload.get("ai_tier2_proposals") or []:
-        if not isinstance(item, dict):
-            warnings.append("ai_review_ai_tier2_proposal_invalid")
-            continue
-        if str(item.get("proposal_decision") or "") not in PRODUCER_DUAL_DECISIONS:
-            warnings.append(
-                f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}"
-            )
-        missing_contract = missing_metric_contract_fields(
-            item.get("required_source_fields")
-        )
-        if missing_contract:
-            warnings.append(
-                f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
-            )
-        if has_forbidden_runtime_leak(item):
-            warnings.append(
-                f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}"
-            )
-        if has_evidence_authority_violation(item):
-            warnings.append(
-                f"ai_review_ai_proposal_evidence_authority_violation:{item.get('candidate_id')}"
-            )
-    proposal_ids = {
-        str(item.get("candidate_id"))
-        for item in payload.get("ai_tier2_proposals") or []
-        if isinstance(item, dict) and item.get("candidate_id")
-    }
-    review_ids = {
-        str(item.get("candidate_id"))
-        for item in payload.get("comparative_reviews") or []
-        if isinstance(item, dict) and item.get("candidate_id")
-    }
-    if proposal_ids and proposal_ids - review_ids:
-        warnings.append("ai_review_comparative_review_missing_for_ai_proposal")
-    for item in payload.get("comparative_reviews") or []:
-        if not isinstance(item, dict):
-            warnings.append("ai_review_comparative_review_invalid")
-            continue
-        if str(item.get("selected_decision") or "") not in PRODUCER_DUAL_DECISIONS:
-            warnings.append(
-                f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}"
-            )
-        if str(item.get("selected_source") or "") not in {
-            "deterministic",
-            "ai_tier2",
-            "hybrid",
-            "reject",
-        }:
-            warnings.append(
-                f"ai_review_comparative_source_invalid:{item.get('candidate_id')}"
-            )
-        missing_contract = missing_metric_contract_fields(
-            item.get("required_source_fields")
-        )
-        if missing_contract:
-            warnings.append(
-                f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}"
-            )
-        if has_forbidden_runtime_leak(item):
-            warnings.append(
-                f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}"
-            )
-        if has_evidence_authority_violation(item):
-            warnings.append(
-                f"ai_review_comparative_evidence_authority_violation:{item.get('candidate_id')}"
-            )
-    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-    if str(audit.get("status") or "") not in {
-        "pass",
-        "correction_required",
-        "insufficient_context",
-    }:
-        warnings.append("ai_review_audit_status_invalid")
-    if not isinstance(audit.get("forbidden_use_violations"), list):
-        warnings.append("ai_review_forbidden_use_violations_missing")
-    if warnings:
-        return "parse_rejected", payload, warnings
-    return "parsed", payload, []
 
 
 def _load_ai_review_response(path: str | None) -> Any | None:
@@ -2375,7 +2223,10 @@ def build_producer_gap_discovery_report(
             context, config=primary_config
         )
         provider_status["retry_attempted"] = False
-    ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
+    ai_status, ai_payload, ai_warnings = parse_candidate_review_response(
+        raw_response, reviewer=AI_REVIEWER_NAME,
+        allowed_decisions=PRODUCER_DUAL_DECISIONS,
+    )
     audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
     audit_forbidden_use_violations = audit.get("forbidden_use_violations")
     if not isinstance(audit_forbidden_use_violations, list):
@@ -2424,7 +2275,10 @@ def build_producer_gap_discovery_report(
         raw_response, retry_provider_status = _call_openai_ai_review(
             context, config=retry_config
         )
-        ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
+        ai_status, ai_payload, ai_warnings = parse_candidate_review_response(
+            raw_response, reviewer=AI_REVIEWER_NAME,
+            allowed_decisions=PRODUCER_DUAL_DECISIONS,
+        )
         audit = (
             ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
         )

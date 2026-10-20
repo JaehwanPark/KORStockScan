@@ -401,7 +401,9 @@ class DigestSession:
         token = ACTIVE.set(self)
         started, io_before = time.monotonic(), _thread_io()
         try:
-            yield
+            from src.engine.automation.main_trailing_source_store import read_session
+            with read_session(self.data_root):
+                yield
         finally:
             ACTIVE.reset(token)
             self.semantic_objects.clear();self.semantic_bytes = 0

@@ -2859,6 +2859,54 @@ REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS.items()
 }
 
+# SQL connection lifecycle and its diagnostic consumer are one complete
+# successor. Issued product/observer profiles remain byte-bound independently.
+REVIEWED_SQLITE_LIFECYCLE_HASHES = {
+    'src/engine/automation/main_trailing_source_store.py': 'a27ce958c053023e920ac23e6369126bdc7d77eb2d73fd713cc5c109e212d593',
+    'src/engine/infrastructure/validation_digest_session.py': '87ea421cd28cd81d06fabecbfeed4c03d041b771f31dba6057857283a53828da',
+    'src/engine/error_detector.py': 'c4d2e89d6e257d4c9cd7d819a2592fd4e31a73fb3806662ab97911542c471f56',
+}
+REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_store.py',
+        'selector_sha256': REVIEWED_SQLITE_LIFECYCLE_HASHES['src/engine/automation/main_trailing_source_store.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_SQLITE_LIFECYCLE_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_SQLITE_LIFECYCLE_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS.items()
+}
+
+# Reviewed retired-helper removal and report-parser consolidation. Bind the
+# complete predecessor generation; historical handoffs retain their own hashes.
+# Evidence: docs/checklists/2026-10-20-stage2-todo-checklist.md (CodeRefactorRetiredReview1020).
+REVIEWED_RETIRED_REVIEW_HASHES = {
+    'src/engine/sniper_overnight_gatekeeper.py': '0342a74e37f17540ad89329e0fe8d5ae78b5c71144c82947971ced995a9b9f54',
+    'src/engine/scalp_entry_adm_runtime.py': '4c17ed099fa378545ffad45a89a0cc3996022ab00400217df1333e6d23ebd3ca',
+    'src/engine/holding_exit_matrix_runtime.py': 'b3386f73fc5b6eb3b0e438c59cb6c2874ead1163011ecd93e53a15f83b7127bc',
+    'src/engine/automation/dual_candidate_review.py': '29642a08a59e4f08cca765934fd2d5fd27dd8e12f763bb216cba6e363bde3914',
+    'src/engine/automation/producer_gap_discovery.py': 'c66f911a67f75524148d0608a13b7b451d71917d9da5016bea5627a85eb9a6bd',
+    'src/engine/automation/stage_hook_workorder_discovery.py': 'd6079fd11abdcca5f69950e41f15ca49c26f014446004358f30e89316844df80',
+}
+REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_overnight_gatekeeper.py',
+        'selector_sha256': REVIEWED_RETIRED_REVIEW_HASHES['src/engine/sniper_overnight_gatekeeper.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_RETIRED_REVIEW_HASHES},
+    } for key, value in REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS.items()
+}
+
+# The integrated cleanup/SQLite generation retains both independently issued
+# profiles. Match both selectors before selecting the complete merged contract.
+REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'additional_selector_path': 'src/engine/sniper_overnight_gatekeeper.py',
+        'additional_selector_sha256': REVIEWED_RETIRED_REVIEW_HASHES['src/engine/sniper_overnight_gatekeeper.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_RETIRED_REVIEW_HASHES},
+    } for key, value in REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2904,6 +2952,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     original_hashes, changed, runtime_hashes = {}, [], {}
     extensions = REVIEWED_DELAY_CONTRACT_EXTENSIONS.get((origin, expected), {})
     dependencies_by_trigger = {}
+    # A selector reverted alone must not downgrade the other cleanup files to
+    # an older dependency profile. Detect the reviewed group before selection;
+    # its first observed member requires the complete exact group below.
+    cleanup_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_RETIRED_REVIEW_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -2912,7 +2966,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS,
+                         REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS,
+                         REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS,
+                         REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
                          REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS,
                          REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,
@@ -2960,7 +3017,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 continue
             selector = variant['selector_path']
             path = root / selector
-            if (variants in (REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
+            if (variants in (REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS,
+                             REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS,
+                             REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
                              REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS)
                     and not path.exists() and not path.is_symlink()):
                 try:
@@ -2985,9 +3044,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                     and selector_sha != variant['selector_sha256']):
                 raise ValueError('entry_consumer_reviewed_dependency_unreviewed:' + selector)
             if selector_sha == variant['selector_sha256']:
+                additional = variant.get('additional_selector_path')
+                if additional and hashlib.sha256(candidate_bytes(additional)).hexdigest() != variant['additional_selector_sha256']:
+                    continue
                 dependencies = variant['dependencies']
                 extensions = variant['contract_extensions'].get((origin, expected), extensions)
                 break
+        if cleanup_present:
+            dependencies = {**dependencies, **REVIEWED_RETIRED_REVIEW_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
